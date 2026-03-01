@@ -715,7 +715,7 @@ ensure_worktree() {
     echo "$worktree_path"
 }
 
-# Create tmux session with standard template (using raw tmux commands)
+# Create tmux session using standard.yml tmuxinator template
 create_ai_session() {
     local worktree_path="$1"
     local branch="$2"
@@ -742,40 +742,13 @@ create_ai_session() {
 
     info "Creating session '$session_name'..."
 
-    # Create new detached session with 'ai' window
-    if ! tmux new-session -d -s "$session_name" -n "ai" -c "$worktree_path"; then
-        error "Failed to create session '$session_name'"
-    fi
-
-    # Write session name IMMEDIATELY so switch works even if pane setup fails
+    # Write session name IMMEDIATELY so switch works even if tmuxinator setup fails
     echo "$session_name" > "$SESSION_FILE"
 
-    # Get pane base index (default is 0, but tmux.conf may set to 1)
-    local pane_base
-    pane_base=$(tmux show-options -gv pane-base-index 2>/dev/null || echo 0)
-
-    # Split into 4 panes (tiled layout) - continue on error
-    tmux split-window -t "$session_name:ai" -h -c "$worktree_path" 2>/dev/null || true
-    tmux split-window -t "$session_name:ai.$pane_base" -v -c "$worktree_path" 2>/dev/null || true
-    tmux split-window -t "$session_name:ai.$((pane_base + 1))" -v -c "$worktree_path" 2>/dev/null || true
-    tmux select-layout -t "$session_name:ai" tiled 2>/dev/null || true
-
-    # Start Claude in each pane with staggered delays
-    tmux send-keys -t "$session_name:ai.$pane_base" "ccdev" C-m 2>/dev/null || true
-    tmux send-keys -t "$session_name:ai.$((pane_base + 1))" "sleep 2 && ccdev" C-m 2>/dev/null || true
-    tmux send-keys -t "$session_name:ai.$((pane_base + 2))" "sleep 4 && ccdev" C-m 2>/dev/null || true
-    tmux send-keys -t "$session_name:ai.$((pane_base + 3))" "sleep 6 && ccdev" C-m 2>/dev/null || true
-
-    # Add git window with lazygit
-    tmux new-window -t "$session_name" -n "git" -c "$worktree_path" 2>/dev/null || true
-    tmux send-keys -t "$session_name:git" "lazygit" C-m 2>/dev/null || true
-
-    # Add shell window
-    tmux new-window -t "$session_name" -n "shell" -c "$worktree_path" 2>/dev/null || true
-
-    # Select the ai window and first pane
-    tmux select-window -t "$session_name:ai" 2>/dev/null || true
-    tmux select-pane -t "$session_name:ai.$pane_base" 2>/dev/null || true
+    # Reuse standard.yml template (DRY - single source of truth for session layout)
+    if ! TMUXINATOR_SESSION_NAME="$session_name" tmuxinator start standard "$worktree_path"; then
+        error "Failed to create session '$session_name' via tmuxinator"
+    fi
 
     success "Created session '$session_name'"
     echo "Worktree: $worktree_path"
