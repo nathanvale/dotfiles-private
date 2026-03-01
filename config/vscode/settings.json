@@ -167,9 +167,9 @@
 	"terminal.integrated.startInInteractiveShell": false,
 	"window.commandCenter": false,
 	"workbench.colorTheme": "Night Owl",
-	// No preview tabs (prevents tab-jumping)
-	"workbench.editor.enablePreview": false,
-	"workbench.editor.enablePreviewFromQuickOpen": false,
+	// Preview tabs: single-click = temp tab (replaces on next click), double-click = permanent
+	"workbench.editor.enablePreview": true,
+	"workbench.editor.enablePreviewFromQuickOpen": true,
 	// Tabs easier to see + keep track of
 	"workbench.editor.highlightModifiedTabs": true,
 	"workbench.editor.wrapTabs": true,
@@ -207,5 +207,9 @@
 		"https://json.schemastore.org/": true,
 		"https://json-schema.org/": true,
 		"https://biomejs.dev": true
+	},
+	// Markdown files open in preview mode by default (click to read, not edit)
+	"workbench.editorAssociations": {
+		"*.md": "vscode.markdown.preview.editor"
 	}
 }
