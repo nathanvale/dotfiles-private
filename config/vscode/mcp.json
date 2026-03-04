@@ -32,28 +32,19 @@
 		"bun-runner": {
 			"type": "stdio",
 			"command": "bunx",
-			"args": [
-				"--bun",
-				"@side-quest/bun-runner"
-			],
+			"args": ["--bun", "@side-quest/bun-runner"],
 			"env": {}
 		},
 		"tsc-runner": {
 			"type": "stdio",
 			"command": "bunx",
-			"args": [
-				"--bun",
-				"@side-quest/tsc-runner"
-			],
+			"args": ["--bun", "@side-quest/tsc-runner"],
 			"env": {}
 		},
 		"biome-runner": {
 			"type": "stdio",
 			"command": "bunx",
-			"args": [
-				"--bun",
-				"@side-quest/biome-runner"
-			],
+			"args": ["--bun", "@side-quest/biome-runner"],
 			"env": {}
 		},
 		"kit": {
