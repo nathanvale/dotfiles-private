@@ -18,7 +18,7 @@
 	"pauseMediaPlayback": false,
 	"prompt": "",
 	"promptExamples": [],
-	"realtimeOutput": false,
+	"realtimeOutput": true,
 	"script": "",
 	"scriptEnabled": false,
 	"translateToEnglish": false,

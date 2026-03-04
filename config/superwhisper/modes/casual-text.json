@@ -1,6 +1,6 @@
 {
   "activationApps" : [
-
+    "Messages"
   ],
   "activationSites" : [
 
@@ -16,7 +16,7 @@
   "key" : "casual-text",
   "language" : "en",
   "languageModelEnabled" : true,
-  "languageModelID" : "sw-gpt-5.1",
+  "languageModelID" : "gpt-5.2",
   "literalPunctuation" : false,
   "name" : "Casual Text",
   "pauseMediaPlayback" : false,
@@ -24,12 +24,12 @@
   "promptExamples" : [
 
   ],
-  "realtimeOutput" : false,
+  "realtimeOutput" : true,
   "script" : "",
   "scriptEnabled" : false,
   "translateToEnglish" : false,
-  "type" : "custom",
+  "type" : "super",
   "useSystemAudio" : false,
   "version" : 1,
-  "voiceModelID" : "sw-ultra-cloud-v1-east"
+  "voiceModelID" : "nvidia_parakeet-v2_476MB"
 }
