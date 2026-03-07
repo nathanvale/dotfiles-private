@@ -1,0 +1,12 @@
+# Yazi keymap customizations
+# Extends defaults -- only overrides/additions listed here
+
+[[manager.prepend_keymap]]
+on = "g"
+run = 'shell "glow -p $0" --block --confirm'
+desc = "Preview current file with Glow"
+
+[[manager.prepend_keymap]]
+on = "G"
+run = 'shell "grip $0 -b" --confirm'
+desc = "Open in browser with Grip (GitHub-exact)"

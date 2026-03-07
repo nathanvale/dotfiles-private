@@ -1,0 +1,33 @@
+# Yazi configuration for terminal-native markdown workflow
+# Ghostty + tmux + Claude Code
+
+[manager]
+# Sort by modified time so Claude Code's latest edits bubble to top
+sort_by = "modified"
+sort_dir_first = true
+sort_reverse = true
+show_hidden = false
+show_symlink = true
+
+[preview]
+# Max preview width (chars) -- generous for ultrawide
+max_width = 1000
+max_height = 1000
+
+[opener]
+# Open markdown with glow for rendered preview
+markdown = [
+  { run = 'glow -p "$1"', block = true, desc = "Preview with Glow" },
+  { run = '${EDITOR:-vim} "$1"', block = true, desc = "Edit" },
+  { run = 'grip "$1" -b', desc = "GitHub preview (browser)" },
+]
+
+[open]
+rules = [
+  # Markdown files -> glow first, editor second
+  { name = "*.md", use = "markdown" },
+  { name = "*.markdown", use = "markdown" },
+
+  # Directories
+  { name = "*/", use = [ "edit", "open", "reveal" ] },
+]
