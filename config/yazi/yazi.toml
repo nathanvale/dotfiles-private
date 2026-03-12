@@ -1,5 +1,6 @@
 # Yazi configuration for terminal-native markdown workflow
 # Ghostty + tmux + Claude Code
+# Syntax: yazi v26.x (uses "url" not "name", "%s" not "$1")
 
 [manager]
 # Sort by modified time so Claude Code's latest edits bubble to top
@@ -9,25 +10,28 @@ sort_reverse = true
 show_hidden = false
 show_symlink = true
 
-[preview]
-# Max preview width (chars) -- generous for ultrawide
-max_width = 1000
-max_height = 1000
-
 [opener]
-# Open markdown with glow for rendered preview
+# Open markdown - Enter opens in editor (default), Shift-O for interactive picker
 markdown = [
-  { run = 'glow -p "$1"', block = true, desc = "Preview with Glow" },
-  { run = '${EDITOR:-vim} "$1"', block = true, desc = "Edit" },
-  { run = 'grip "$1" -b', desc = "GitHub preview (browser)" },
+  { run = 'vim %s', block = true, desc = "Edit in Vim" },
+  { run = 'mo --open %s; PAGER="less -R" glow -p %s', block = true, desc = "Glow + mo (terminal + browser)" },
+  { run = 'mo --open %s', desc = "mo (browser, dark mode)" },
+  { run = 'grip %s -b', desc = "grip (GitHub-exact)" },
+  { run = 'mdserve %s --open', desc = "mdserve (live reload)" },
 ]
 
 [open]
-rules = [
+# prepend_rules merges with defaults (keeps edit, open, reveal openers)
+# rules = [...] would REPLACE all defaults, breaking open --interactive
+prepend_rules = [
   # Markdown files -> glow first, editor second
-  { name = "*.md", use = "markdown" },
-  { name = "*.markdown", use = "markdown" },
-
-  # Directories
-  { name = "*/", use = [ "edit", "open", "reveal" ] },
+  { url = "*.md", use = "markdown" },
+  { url = "*.markdown", use = "markdown" },
 ]
+
+[plugin]
+# Disable image preloaders to avoid Chafa adapter crash in tmux
+# Keep previewers intact so text/code/directory previews still work
+# The Chafa crash is triggered by image preloading, not text preview
+# Re-enable once Ghostty 1.3+ is released and passthrough is stable
+preloaders = []

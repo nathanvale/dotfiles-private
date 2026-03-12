@@ -1,10 +1,10 @@
-# style name or JSON path (default "auto")
+# Glow configuration for terminal-native markdown workflow
 style: "auto"
-# mouse support (TUI-mode only)
-mouse: false
-# use pager to display markdown
-pager: false
-# word-wrap at width
-width: 120
-# show all files, including hidden and ignored.
+# Enable mouse for scrolling in tmux
+mouse: true
+# Enable pager so long docs don't fly past the screen
+pager: true
+# Word-wrap -- 0 = auto-detect terminal width (let tmux pane sizing control it)
+width: 0
+# Don't show hidden/ignored files in stash mode
 all: false
