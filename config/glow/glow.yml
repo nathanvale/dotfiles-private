@@ -1,0 +1,10 @@
+# Glow configuration for terminal-native markdown workflow
+style: "auto"
+# Enable mouse for scrolling in tmux
+mouse: true
+# Enable pager so long docs don't fly past the screen
+pager: true
+# Word-wrap -- 0 = auto-detect terminal width (let tmux pane sizing control it)
+width: 0
+# Don't show hidden/ignored files in stash mode
+all: false

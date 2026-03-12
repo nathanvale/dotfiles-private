@@ -1,6 +1,28 @@
 {
-	"favoriteModelIDs": [],
-	"modeKeys": ["default"],
-	"replacements": [],
-	"vocabulary": []
+  "favoriteModelIDs" : [
+    "nvidia_parakeet-v2_476MB"
+  ],
+  "modeKeys" : [
+    "default"
+  ],
+  "replacements" : [
+    {
+      "id" : "3B2FE680-1BA1-4F2A-B66A-DD45401C51DD",
+      "original" : " ut is it possible to produce a Lusian extensions, or is it too hard?",
+      "with" : " ut is it possible to produce a Ellucian extensions, or is it too hard?\n"
+    },
+    {
+      "id" : "E91B085D-5EAD-40F0-8A81-529B35D1E866",
+      "original" : "Lusian",
+      "with" : "Ellucian"
+    },
+    {
+      "id" : "BFA89187-DC87-4A2B-85B3-74631F019CD5",
+      "original" : "Lucien ",
+      "with" : "Ellucian"
+    }
+  ],
+  "vocabulary" : [
+
+  ]
 }

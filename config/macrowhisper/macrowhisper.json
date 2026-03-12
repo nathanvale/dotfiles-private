@@ -1,67 +1,104 @@
 {
-	"$schema": "file:///opt/homebrew/share/macrowhisper/macrowhisper-schema.json",
-	"defaults": {
-		"actionDelay": 0,
-		"activeAction": "",
-		"autoUpdateConfig": true,
-		"clipboardBuffer": 5,
-		"clipboardStacking": false,
-		"history": null,
-		"icon": "",
-		"moveTo": "",
-		"noEsc": false,
-		"noNoti": false,
-		"noUpdates": false,
-		"pressReturn": false,
-		"restoreClipboard": true,
-		"returnDelay": 0.1,
-		"scheduledActionTimeout": 5,
-		"simKeypress": false,
-		"watch": "/Users/nathanvale/Documents/superwhisper"
-	},
-	"inserts": {
-		"autoPaste": {
-			"action": ".autoPaste",
-			"actionDelay": null,
-			"icon": "•",
-			"moveTo": "",
-			"noEsc": null,
-			"pressReturn": null,
-			"restoreClipboard": null,
-			"simKeypress": null,
-			"triggerApps": "",
-			"triggerLogic": "and",
-			"triggerModes": "!Daily Note|!Email",
-			"triggerVoice": ""
-		}
-	},
-	"scriptsAS": {},
-	"scriptsShell": {
-		"dailyNoteCapture": {
-			"action": "/Users/nathanvale/code/dotfiles/bin/obsidian-daily-capture \"{{swResult}}\"",
-			"actionDelay": null,
-			"icon": "📝",
-			"moveTo": null,
-			"noEsc": true,
-			"restoreClipboard": null,
-			"triggerApps": "",
-			"triggerLogic": "or",
-			"triggerModes": "Daily Note",
-			"triggerVoice": ""
-		},
-		"emailComplete": {
-			"action": "/Users/nathanvale/code/dotfiles/bin/superwhisper-email-complete",
-			"actionDelay": null,
-			"icon": "📧",
-			"moveTo": null,
-			"noEsc": false,
-			"restoreClipboard": null,
-			"triggerApps": "",
-			"triggerLogic": "or",
-			"triggerModes": "Email",
-			"triggerVoice": ""
-		}
-	},
-	"shortcuts": {},
-	"urls": {}
+  "$schema" : "file:///opt/homebrew/share/macrowhisper/macrowhisper-schema.json",
+  "configVersion" : 2,
+  "defaults" : {
+    "actionDelay" : 0,
+    "activeAction" : "",
+    "autoUpdateConfig" : true,
+    "bypassModes" : "",
+    "clipboardBuffer" : 5,
+    "clipboardIgnore" : "",
+    "clipboardStacking" : false,
+    "disableUpdateCheck" : false,
+    "history" : null,
+    "icon" : "",
+    "moveTo" : "",
+    "muteNotifications" : false,
+    "muteTriggers" : false,
+    "nextAction" : "",
+    "redactedLogs" : true,
+    "restoreClipboard" : true,
+    "restoreClipboardDelay" : 0.3,
+    "returnDelay" : 0.1,
+    "scheduledActionTimeout" : 5,
+    "scriptAsync" : true,
+    "scriptWaitTimeout" : 3,
+    "simEsc" : true,
+    "simKeypress" : false,
+    "simReturn" : false,
+    "smartCasing" : true,
+    "smartPunctuation" : true,
+    "smartSpacing" : true,
+    "watch" : "/Users/nathanvale/Documents/superwhisper"
+  },
+  "inserts" : {
+    "autoPaste" : {
+      "action" : ".autoPaste",
+      "actionDelay" : null,
+      "icon" : "•",
+      "inputCondition" : null,
+      "moveTo" : null,
+      "nextAction" : null,
+      "restoreClipboard" : null,
+      "restoreClipboardDelay" : null,
+      "simEsc" : null,
+      "simKeypress" : null,
+      "simReturn" : null,
+      "smartCasing" : null,
+      "smartPunctuation" : null,
+      "smartSpacing" : null,
+      "triggerApps" : null,
+      "triggerLogic" : "and",
+      "triggerModes" : "!Daily Note|!Email",
+      "triggerUrls" : null,
+      "triggerVoice" : null
+    }
+  },
+  "scriptsAS" : {
+
+  },
+  "scriptsShell" : {
+    "dailyNoteCapture" : {
+      "action" : "/Users/nathanvale/code/dotfiles/bin/obsidian-daily-capture \"{{swResult}}\"",
+      "actionDelay" : null,
+      "icon" : "📝",
+      "inputCondition" : null,
+      "moveTo" : null,
+      "nextAction" : null,
+      "restoreClipboard" : null,
+      "restoreClipboardDelay" : null,
+      "scriptAsync" : null,
+      "scriptWaitTimeout" : null,
+      "simEsc" : false,
+      "triggerApps" : null,
+      "triggerLogic" : "or",
+      "triggerModes" : "Daily Note",
+      "triggerUrls" : null,
+      "triggerVoice" : null
+    },
+    "emailComplete" : {
+      "action" : "/Users/nathanvale/code/dotfiles/bin/superwhisper-email-complete",
+      "actionDelay" : null,
+      "icon" : "📧",
+      "inputCondition" : null,
+      "moveTo" : null,
+      "nextAction" : null,
+      "restoreClipboard" : null,
+      "restoreClipboardDelay" : null,
+      "scriptAsync" : null,
+      "scriptWaitTimeout" : null,
+      "simEsc" : true,
+      "triggerApps" : null,
+      "triggerLogic" : "or",
+      "triggerModes" : "Email",
+      "triggerUrls" : null,
+      "triggerVoice" : null
+    }
+  },
+  "shortcuts" : {
+
+  },
+  "urls" : {
+
+  }
 }
