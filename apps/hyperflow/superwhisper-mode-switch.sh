@@ -105,9 +105,7 @@ debug_log "Before mode switch - App: '$FOCUSED_APP', Window: '$WINDOW_TITLE'"
 map_process_to_app() {
     local process_name="$1"
     case "$process_name" in
-        "Electron")
-            echo "Visual Studio Code"
-            ;;
+        # Electron/Visual Studio Code mapping removed
         *)
             echo "$process_name"
             ;;
