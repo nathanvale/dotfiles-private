@@ -2,9 +2,9 @@
 # Ghostty + tmux + Claude Code
 # Syntax: yazi v26.x (uses "url" not "name", "%s" not "$1")
 
-[manager]
+[mgr]
 # Sort by modified time so Claude Code's latest edits bubble to top
-sort_by = "modified"
+sort_by = "mtime"
 sort_dir_first = true
 sort_reverse = true
 show_hidden = false
@@ -13,8 +13,8 @@ show_symlink = true
 [opener]
 # Open markdown - Enter opens in editor (default), Shift-O for interactive picker
 markdown = [
+  { run = 'PAGER="less -R" glow -p %s', block = true, desc = "Preview with Glow" },
   { run = 'vim %s', block = true, desc = "Edit in Vim" },
-  { run = 'mo --open %s; PAGER="less -R" glow -p %s', block = true, desc = "Glow + mo (terminal + browser)" },
   { run = 'mo --open %s', desc = "mo (browser, dark mode)" },
   { run = 'grip %s -b', desc = "grip (GitHub-exact)" },
   { run = 'mdserve %s --open', desc = "mdserve (live reload)" },

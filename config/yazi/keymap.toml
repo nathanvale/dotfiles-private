@@ -1,18 +1,32 @@
 # Yazi keymap customizations
 # Extends defaults -- only overrides/additions listed here
-# Syntax: yazi v26.x (uses "%s" not "$0")
+# Syntax: yazi v26.x (uses "mgr" not "manager", "%s" not "$0")
 
 # M = Markdown preview with Glow (avoids shadowing "g" prefix navigation)
 # "g" is a prefix key for: gg (top), gh (home), gc (config), gd (downloads),
 # g<Space> (zoxide jump), gf (follow symlink) -- do not override it
-[[manager.prepend_keymap]]
+[[mgr.prepend_keymap]]
 on = "M"
 run = 'shell "PAGER=\"less -R\" glow -p %s" --block --confirm'
 desc = "Preview current file with Glow"
 
-# Shift-G = Open in browser with Grip (GitHub-exact rendering)
-# Note: overrides default "G" (go to bottom) -- use "g g" opposite instead
-[[manager.prepend_keymap]]
-on = "G"
-run = 'shell "grip %s -b" --confirm'
-desc = "Open in browser with Grip (GitHub-exact)"
+# e = Edit in Vim (explicit binding, doesn't rely on $EDITOR)
+[[mgr.prepend_keymap]]
+on = "e"
+run = 'shell "vim %s" --block --confirm'
+desc = "Edit in Vim"
+
+# B = Browse with Mo (live-reload in browser with sidebar navigation)
+# On a folder: watches all .md files with live-reload
+# On a file: opens that single file
+# Logic lives in scripts/mo-browse.sh to avoid TOML quoting issues
+[[mgr.prepend_keymap]]
+on = "B"
+run = 'shell "~/.config/yazi/scripts/mo-browse.sh %h" --orphan --confirm'
+desc = "Browse with Mo (live reload)"
+
+# Shift-O = Reveal in Finder (opens the containing folder and selects the file)
+[[mgr.prepend_keymap]]
+on = "O"
+run = 'shell "open -R %s" --confirm'
+desc = "Reveal in Finder"

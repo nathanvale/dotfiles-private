@@ -23,6 +23,9 @@ windows:
   - git:
       panes:
         - lazygit
+  - files:
+      panes:
+        - yazi
   - shell:
       panes:
         - clear
