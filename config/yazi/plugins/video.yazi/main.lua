@@ -16,7 +16,6 @@ function M:peek(job)
 		:args({ "-v", "warning", "-hwaccel", "auto", "-threads", "1", "-an", "-sn", "-dn" })
 
 	if percent ~= 0 then
-		local meta = ya.preview_code and nil
 		-- Probe duration for seek position
 		local probe = Command("ffprobe")
 			:args({ "-v", "quiet", "-print_format", "json", "-show_format", tostring(job.file.url) })
@@ -43,6 +42,7 @@ function M:peek(job)
 
 	cmd:args({
 		"-vframes", "1",
+		"-c:v", "png",
 		"-f", "image2",
 		"-y", tostring(cache),
 	})

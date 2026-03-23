@@ -39,5 +39,4 @@ preloaders = []
 # Custom video previewer: drops -skip_frame for ffmpeg 8.x compat
 prepend_previewers = [
   { mime = "video/*", run = "video" },
-  { mime = "audio/*", run = "video" },
 ]
