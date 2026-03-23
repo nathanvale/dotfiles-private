@@ -35,3 +35,9 @@ prepend_rules = [
 # The Chafa crash is triggered by image preloading, not text preview
 # Re-enable once Ghostty 1.3+ is released and passthrough is stable
 preloaders = []
+
+# Custom video previewer: drops -skip_frame for ffmpeg 8.x compat
+prepend_previewers = [
+  { mime = "video/*", run = "video" },
+  { mime = "audio/*", run = "video" },
+]
