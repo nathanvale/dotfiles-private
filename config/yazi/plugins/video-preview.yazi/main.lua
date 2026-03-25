@@ -11,25 +11,48 @@ function M:peek(job)
 		return
 	end
 
+	-- Check if file has a video stream (audio-only files don't)
+	local probe = Command("ffprobe")
+		:args({
+			"-v", "quiet",
+			"-print_format", "json",
+			"-show_streams", "-show_format",
+			tostring(job.file.url),
+		})
+		:stdout(Command.PIPED)
+		:output()
+
+	if not probe or not probe.status or not probe.status.success then
+		return
+	end
+
+	local ok, data = pcall(ya.json_decode, probe.stdout)
+	if not ok or not data then
+		return
+	end
+
+	-- Bail if no video stream (e.g. audio-only .m4a, .mp3)
+	local has_video = false
+	if data.streams then
+		for _, stream in ipairs(data.streams) do
+			if stream.codec_type == "video" then
+				has_video = true
+				break
+			end
+		end
+	end
+	if not has_video then
+		return
+	end
+
 	local cmd = Command("ffmpeg")
 		:stderr(Command.PIPED)
 		:args({ "-v", "warning", "-hwaccel", "auto", "-threads", "1", "-an", "-sn", "-dn" })
 
-	if percent ~= 0 then
-		-- Probe duration for seek position
-		local probe = Command("ffprobe")
-			:args({ "-v", "quiet", "-print_format", "json", "-show_format", tostring(job.file.url) })
-			:stdout(Command.PIPED)
-			:output()
-
-		if probe and probe.status and probe.status.success then
-			local ok, data = pcall(ya.json_decode, probe.stdout)
-			if ok and data and data.format and data.format.duration then
-				local duration = tonumber(data.format.duration)
-				if duration and duration > 0 then
-					cmd:args({ "-ss", tostring(math.floor(duration * percent / 100)) })
-				end
-			end
+	if percent ~= 0 and data.format and data.format.duration then
+		local duration = tonumber(data.format.duration)
+		if duration and duration > 0 then
+			cmd:args({ "-ss", tostring(math.floor(duration * percent / 100)) })
 		end
 	end
 

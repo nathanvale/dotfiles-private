@@ -13,7 +13,7 @@ show_symlink = true
 [opener]
 # Open markdown - Enter opens in editor (default), Shift-O for interactive picker
 markdown = [
-  { run = 'PAGER="less -R" glow -p %s', block = true, desc = "Preview with Glow" },
+  { run = 'glow -p %s', block = true, desc = "Preview with Glow" },
   { run = 'vim %s', block = true, desc = "Edit in Vim" },
   { run = 'mo --open %s', desc = "mo (browser, dark mode)" },
   { run = 'grip %s -b', desc = "grip (GitHub-exact)" },
@@ -37,6 +37,8 @@ prepend_rules = [
 preloaders = []
 
 # Custom video previewer: drops -skip_frame for ffmpeg 8.x compat
+# audio/* must also be overridden to prevent built-in previewer using -skip_frame
 prepend_previewers = [
-  { mime = "video/*", run = "video" },
+  { mime = "video/*", run = "video-preview" },
+  { mime = "audio/*", run = "video-preview" },
 ]
