@@ -1,0 +1,89 @@
+_meta:
+  domain: "go.xero.com"
+  schema_version: 1
+  discovered_at: "2026-04-07"
+  last_validated_at: "2026-04-07"
+  last_validated_by: "nathanvale"
+  notes:
+    - "Candidate scaffold translated from legacy xero-cli reconcile recipes."
+    - "Do not hard-code a single BankRec URL until the first live /browse run resolves the tenant-specific route."
+
+canonical_assets:
+  browser_state:
+    state: candidate
+    allowed_flows:
+      - healthcheck
+      - reconcile-batch
+    refs:
+      - page_fingerprints.xero_shell
+      - page_fingerprints.bankrec
+    evidence: "Scaffolded from bootstrap-observe plus legacy reconcile notes on 2026-04-07."
+  bankrec_line_actions:
+    state: candidate
+    allowed_flows:
+      - reconcile-click-ok
+      - reconcile-fill
+      - reconcile-clear-and-fill
+      - reconcile-batch
+    refs:
+      - pages.bankrec
+    evidence: "Scaffolded from legacy CLICK_OK, FILL, and CLEAR_AND_FILL recipes on 2026-04-07."
+
+page_fingerprints:
+  xero_shell:
+    host_contains:
+      - "go.xero.com"
+    required_text:
+      - "Dashboard"
+  bankrec:
+    host_contains:
+      - "go.xero.com"
+    required_text:
+      - "Reconcile ("
+      - "Name of the contact"
+      - "Choose the account"
+
+gotchas:
+  refs_churn_after_every_mutation:
+    summary: "Take a fresh snapshot after every fill, clear, or OK click."
+  what_field_has_fill_vs_type_tension:
+    summary: "What may need type+Enter for React select, but UUID-like values must still avoid type."
+  bankrec_route_unresolved:
+    summary: "Do not depend on a single hard-coded BankRec URL until the first live /browse run settles the tenant-specific path."
+  no_parallel_workers:
+    summary: "Same-domain reconcile stays single-worker until upstream session isolation exists."
+
+pages:
+  bankrec:
+    route:
+      notes:
+        - "Match by page fingerprint instead of a single URL until the tenant-scoped route is confirmed."
+    regions:
+      header:
+        fields:
+          reconcile_tab:
+            interaction: read_only
+            locators:
+              - strategy: text
+                value: "Reconcile ("
+      statement_lines:
+        row_scope:
+          strategy: repeated_region
+          notes:
+            - "Rows are ordered visually; first visible line maps to the first actionable field set."
+        fields:
+          who:
+            interaction: fill
+            locators:
+              - strategy: placeholder
+                value: "Name of the contact..."
+          what:
+            interaction: choose_account_code
+            locators:
+              - strategy: text
+                value: "Choose the account..."
+          ok_button:
+            interaction: click
+            locators:
+              - strategy: text
+                value: "OK"

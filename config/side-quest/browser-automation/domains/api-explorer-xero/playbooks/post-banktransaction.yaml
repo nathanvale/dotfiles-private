@@ -1,0 +1,37 @@
+name: "post_banktransaction"
+version: 1
+status: "candidate"
+allowed_flows:
+  - "post-banktransaction"
+registry:
+  path: "~/.config/side-quest/browser-automation/domains/api-explorer-xero/selectors.yaml"
+  schema_version: 1
+page:
+  fingerprint: "api_explorer_shell"
+inputs:
+  body:
+    required: true
+    format: "json"
+preflight:
+  notes:
+    - "Caller owns body construction and JSON validation before browser dispatch."
+execution:
+  mode: "guided_browser"
+  helpers:
+    ensure_api_script: "~/.config/side-quest/browser-automation/domains/api-explorer-xero/scripts/ensure-api.js"
+    response_script: "~/.config/side-quest/browser-automation/domains/api-explorer-xero/scripts/copy-response.js"
+  steps:
+    - "Ensure API dropdown is set to Accounting."
+    - "Select BankTransactions endpoint."
+    - "Select the POST operation."
+    - "Paste the JSON body into the request body field."
+    - "Click Make request and capture the response."
+verification:
+  requires:
+    - "response_is_json"
+    - "response_contains_post_result"
+guardrails:
+  - "Do not mutate the request body inside the browser layer."
+  - "Keep the browser work synchronous and foreground."
+promotion:
+  notes: "Promote only after a dry-run-safe /browse replay confirms the DOM path and response capture."

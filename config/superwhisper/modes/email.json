@@ -15,7 +15,6 @@
   "iconName" : "",
   "key" : "email",
   "language" : "en",
-  "languageModelEnabled" : true,
   "languageModelID" : "sw-gpt-4o-mini",
   "literalPunctuation" : false,
   "name" : "Email",

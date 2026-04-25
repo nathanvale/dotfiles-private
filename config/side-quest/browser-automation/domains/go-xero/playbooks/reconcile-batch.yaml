@@ -1,0 +1,29 @@
+name: "reconcile_batch"
+version: 1
+status: "candidate"
+allowed_flows:
+  - "reconcile-batch"
+registry:
+  path: "~/.config/side-quest/browser-automation/domains/go-xero/selectors.yaml"
+  schema_version: 1
+page:
+  fingerprint: "bankrec"
+inputs:
+  batch:
+    required: true
+    type: "array"
+    notes:
+      - "Each entry must already be validated by the caller and declare one of CLICK_OK, FILL, or CLEAR_AND_FILL."
+execution:
+  mode: "guided_browser"
+  steps:
+    - "Run healthcheck first and stop on login-wall or fingerprint mismatch."
+    - "Process batch entries sequentially on the currently visible lines."
+    - "After every DOM mutation, take a fresh snapshot before the next entry."
+verification:
+  requires:
+    - "reconcile_count_updates_or_line_disappears"
+    - "no parallel worker session fan-out"
+guardrails:
+  - "Single-worker only; never attempt same-domain parallelism."
+  - "Surface NEEDS_HUMAN if the visible page no longer matches the expected reconcile batch."

@@ -1,7 +1,7 @@
 {
 	"explorer.compactFolders": false,
 	"[javascript]": {
-		"editor.defaultFormatter": "esbenp.prettier-vscode"
+		"editor.defaultFormatter": "vscode.typescript-language-features"
 	},
 	"[javascriptreact]": {
 		"editor.defaultFormatter": "esbenp.prettier-vscode"
@@ -210,7 +210,7 @@
 	// MARKDOWN PREVIEW ENHANCED — GitHub Dark Mode
 	// ============================================================================
 	"markdown-preview-enhanced.frontMatterRenderingOption": "table",
-	"markdown-preview-enhanced.previewTheme": "github-dark.css",
+	"markdown-preview-enhanced.previewTheme": "vscode.css",
 	"markdown-preview-enhanced.codeBlockTheme": "github-dark.css",
 	"markdown-preview-enhanced.previewColorScheme": "systemColorScheme",
 	"markdown-preview-enhanced.mermaidTheme": "dark",
