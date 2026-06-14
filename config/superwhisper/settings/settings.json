@@ -1,9 +1,18 @@
 {
   "favoriteModelIDs" : [
-    "nvidia_parakeet-v2_476MB"
+    "nvidia_parakeet-v2_476MB",
+    "vad-v1",
+    "seg-v1",
+    "emb-v1",
+    "vad-v2",
+    "speakerkit-coreml",
+    "canary-1b-v2_474MB",
+    "nvidia_parakeet-v3_494MB"
   ],
   "modeKeys" : [
-    "default"
+    "default",
+    "agent-prompt",
+    "daily-note"
   ],
   "replacements" : [
     {
@@ -40,6 +49,56 @@
       "id" : "1C654894-F0DF-44D2-9265-89C95B83C12D",
       "original" : "Millennium",
       "with" : "Melanie"
+    },
+    {
+      "id" : "F04A2CAC-E355-451C-AD98-2B6D9BBE9623",
+      "original" : "Prasadnia",
+      "with" : "Proceed now"
+    },
+    {
+      "id" : "ECC1F0E7-6176-4A8F-9B0D-D77D8EAC0B27",
+      "original" : "ACS file",
+      "with" : "zshrc file"
+    },
+    {
+      "id" : "1A7ABB7D-B1D8-4679-8D56-5DDB0E33B7EB",
+      "original" : "ZSH RC",
+      "with" : ".zshrc"
+    },
+    {
+      "id" : "ADC7010A-0D22-4C2F-B3F7-B2FD82FB38EE",
+      "original" : "T mux",
+      "with" : "tmux"
+    },
+    {
+      "id" : "ECBE1820-4A38-4E06-8C9E-A75B616D4F00",
+      "original" : "Tmax",
+      "with" : "tmux"
+    },
+    {
+      "id" : "F94FB980-ED56-4845-A642-B0324A73204C",
+      "original" : "Carabiner",
+      "with" : "Karabiner"
+    },
+    {
+      "id" : "7D22368C-83A9-411D-B880-DA080D8211E5",
+      "original" : "Code X",
+      "with" : "Codex"
+    },
+    {
+      "id" : "B0E17E4F-9A3D-4EAD-B857-E8E9FB6AEB13",
+      "original" : "Super Whisper",
+      "with" : "Superwhisper"
+    },
+    {
+      "id" : "F9CAC0BA-687C-4149-BCEF-2B42C4916C99",
+      "original" : "API's",
+      "with" : "APIs"
+    },
+    {
+      "id" : "4FB2DEDD-8F74-41C3-B06B-EC77C23FCAF2",
+      "original" : "fire call",
+      "with" : "firecrawl"
     }
   ],
   "vocabulary" : [

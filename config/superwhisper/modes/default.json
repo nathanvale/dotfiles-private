@@ -1,29 +1,38 @@
 {
-	"activationApps": [],
-	"activationSites": [],
-	"adjustOutputVolume": false,
-	"contextFromActiveApplication": false,
-	"contextFromClipboard": false,
-	"contextFromSelection": false,
-	"contextTemplate": "Use the copied text as context to complete this task.\n\nCopied text: ",
-	"description": "",
-	"diarize": false,
-	"iconName": "",
-	"key": "default",
-	"language": "en",
-	"languageModelEnabled": false,
-	"languageModelID": "",
-	"literalPunctuation": false,
-	"name": "Default",
-	"pauseMediaPlayback": false,
-	"prompt": "",
-	"promptExamples": [],
-	"realtimeOutput": true,
-	"script": "",
-	"scriptEnabled": false,
-	"translateToEnglish": false,
-	"type": "voice",
-	"useSystemAudio": false,
-	"version": 1,
-	"voiceModelID": "nvidia_parakeet-v2_476MB"
+  "activationApps" : [
+
+  ],
+  "activationSites" : [
+
+  ],
+  "autocapitalizeInsert" : true,
+  "contextFromActiveApplication" : false,
+  "contextFromClipboard" : false,
+  "contextFromSelection" : false,
+  "contextTemplate" : "Use the copied text as context to complete this task.\n\nCopied text: ",
+  "description" : "",
+  "diarize" : false,
+  "iconName" : "",
+  "key" : "default",
+  "language" : "auto",
+  "languageModelID" : "",
+  "literalPunctuation" : false,
+  "name" : "Default",
+  "playbackBehavior" : "keepPlaying",
+  "prompt" : "",
+  "promptExamples" : [
+
+  ],
+  "realtimeOutput" : true,
+  "script" : "",
+  "scriptEnabled" : false,
+  "shortcut" : {
+    "carbonKeyCode" : 61,
+    "carbonModifiers" : 2048
+  },
+  "translateToEnglish" : false,
+  "type" : "voice",
+  "useSystemAudio" : false,
+  "version" : 1,
+  "voiceModelID" : "nvidia_parakeet-v3_494MB"
 }

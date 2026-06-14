@@ -5,12 +5,30 @@
 
 set -euo pipefail
 
-MODE_KEY="$1"
+MODE_KEY="${1:-}"
+SUPERWHISPER_MODES_DIR="${SUPERWHISPER_MODES_DIR:-$HOME/Documents/superwhisper/modes}"
+
+available_modes() {
+    if [[ ! -d "$SUPERWHISPER_MODES_DIR" ]]; then
+        echo "(mode directory not found: $SUPERWHISPER_MODES_DIR)"
+        return
+    fi
+
+    find "$SUPERWHISPER_MODES_DIR" -maxdepth 1 -type f -name '*.json' -exec basename {} .json \; \
+        | sort \
+        | awk 'NR > 1 { printf ", " } { printf "%s", $0 } END { print "" }'
+}
 
 if [[ -z "$MODE_KEY" ]]; then
     echo "Usage: $0 <mode-key>"
-    echo "Available modes: default, casual-text, professional-engineer, email, melanie"
+    echo "Available modes: $(available_modes)"
     exit 1
+fi
+
+if [[ ! -f "$SUPERWHISPER_MODES_DIR/$MODE_KEY.json" ]]; then
+    echo "Unknown SuperWhisper mode: $MODE_KEY" >&2
+    echo "Available modes: $(available_modes)" >&2
+    exit 2
 fi
 
 # Configuration

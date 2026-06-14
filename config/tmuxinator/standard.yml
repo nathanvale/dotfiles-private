@@ -19,7 +19,6 @@ windows:
       layout: even-horizontal
       panes:
         - ccdev
-        - sleep 2 && codex
   - git:
       panes:
         - lazygit

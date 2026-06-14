@@ -293,11 +293,6 @@ windows:
           echo "Replace with: gemini"
         - |
           source ~/.config/tmuxinator/scripts/common-setup.sh
-          pane_setup "codex"
-          echo "🔶 Codex AI Agent"
-          echo "Replace with: codex"
-        - |
-          source ~/.config/tmuxinator/scripts/common-setup.sh
           pane_setup "shell"
           clear
 

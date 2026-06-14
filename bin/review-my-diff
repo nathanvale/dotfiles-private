@@ -1,0 +1,241 @@
+#!/usr/bin/env bash
+# review-my-diff - Summarize current git diff and likely review focus.
+
+set -euo pipefail
+
+VERSION="0.1.0"
+
+usage() {
+  cat <<'EOF'
+review-my-diff - summarize current git diff for review
+
+Usage:
+  review-my-diff
+  review-my-diff --staged
+  review-my-diff --json
+  review-my-diff --staged --json
+  review-my-diff --help
+  review-my-diff --version
+
+Output:
+  Default   Human-readable review summary.
+  --json    Structured summary for scripts or agents.
+
+Side effects:
+  Read-only. Does not run tests, stage files, or edit files.
+EOF
+}
+
+json_mode=0
+staged=0
+
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --version)
+      echo "review-my-diff $VERSION"
+      exit 0
+      ;;
+    --json)
+      json_mode=1
+      ;;
+    --staged|--cached)
+      staged=1
+      ;;
+    *)
+      echo "review-my-diff: unknown argument: $arg" >&2
+      echo "Try: review-my-diff --help" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if ! command -v git >/dev/null 2>&1 || ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  echo "review-my-diff: not inside a git worktree" >&2
+  exit 1
+fi
+
+repo_root="$(git rev-parse --show-toplevel)"
+mode="unstaged"
+if [[ "$staged" -eq 1 ]]; then
+  mode="staged"
+fi
+
+changed_files() {
+  if [[ "$staged" -eq 1 ]]; then
+    git -C "$repo_root" diff --cached --name-status 2>/dev/null
+  else
+    git -C "$repo_root" diff --name-status 2>/dev/null
+    untracked_summary
+  fi
+}
+
+untracked_summary() {
+  git -C "$repo_root" ls-files --others --exclude-standard 2>/dev/null | awk '
+    function key_for(path, parts, n) {
+      n = split(path, parts, "/")
+      if (n >= 2) return parts[1] "/" parts[2]
+      return path
+    }
+    {
+      key = key_for($0)
+      count[key]++
+      files[key, count[key]] = $0
+    }
+    END {
+      for (key in count) {
+        if (count[key] > 20 && key != files[key, 1]) {
+          printf "??\t%s/ (%d untracked files)\n", key, count[key]
+        } else {
+          for (i = 1; i <= count[key]; i++) {
+            printf "??\t%s\n", files[key, i]
+          }
+        }
+      }
+    }
+  '
+}
+
+diff_stat() {
+  if [[ "$staged" -eq 1 ]]; then
+    git -C "$repo_root" diff --cached --stat 2>/dev/null
+  else
+    git -C "$repo_root" diff --stat 2>/dev/null
+  fi
+}
+
+numstat() {
+  if [[ "$staged" -eq 1 ]]; then
+    git -C "$repo_root" diff --cached --numstat 2>/dev/null
+  else
+    git -C "$repo_root" diff --numstat 2>/dev/null
+  fi
+}
+
+package_scripts() {
+  if [[ -f "$repo_root/package.json" ]] && command -v jq >/dev/null 2>&1; then
+    jq -r '.scripts? // {} | keys[]' "$repo_root/package.json" 2>/dev/null
+  fi
+}
+
+recommended_checks() {
+  local scripts
+  scripts="$(package_scripts || true)"
+  if [[ -n "$scripts" ]]; then
+    for name in check test lint "format:check" typecheck "type-check"; do
+      if printf "%s\n" "$scripts" | grep -qx "$name"; then
+        printf "npm run %s\n" "$name"
+      fi
+    done
+  fi
+  if [[ -f "$repo_root/Makefile" ]]; then
+    printf "make test\n"
+  fi
+}
+
+risk_hints() {
+  local files
+  files="$(changed_files | awk '{ print $NF }')"
+  [[ -z "$files" ]] && return
+
+  if printf "%s\n" "$files" | grep -Eiq '(^|/)(package-lock|bun.lockb|pnpm-lock|yarn.lock|package.json|Brewfile)$'; then
+    echo "Dependency or package-manager surface changed."
+  fi
+  if printf "%s\n" "$files" | grep -Eiq '(^|/)(\\.env|.*secret|.*token|.*credential|settings.json|hosts.yml)'; then
+    echo "Config or secret-adjacent surface changed. Check for accidental secrets."
+  fi
+  if printf "%s\n" "$files" | grep -Eiq '(^|/)(AGENTS.md|CLAUDE.md|SKILL.md|rules/|CONTEXT.md)'; then
+    echo "Agent instruction or workflow surface changed. Check wording and trigger behavior."
+  fi
+  if printf "%s\n" "$files" | grep -Eiq '(^|/)(config/tmux|bin/tmux|tmuxinator)'; then
+    echo "Tmux workflow changed. Source tmux config and smoke-test bindings."
+  fi
+  if printf "%s\n" "$files" | grep -Eiq '(^|/)(config/superwhisper|superwhisper)'; then
+    echo "Superwhisper workflow changed. Parse JSON and verify mode/key behavior."
+  fi
+  if printf "%s\n" "$files" | grep -Eiq '(^|/)(config/karabiner|karabiner.json)'; then
+    echo "Keyboard binding changed. Verify no existing binding was removed."
+  fi
+  if printf "%s\n" "$files" | grep -Eiq '\\.(sh|bash|zsh)$|(^|/)bin/'; then
+    echo "Shell script changed. Run syntax checks and at least one smoke command."
+  fi
+}
+
+large_files() {
+  numstat | awk '($1 != "-" && $2 != "-" && ($1 + $2) >= 200) { print $3 " +" $1 "/-" $2 }'
+}
+
+file_count="$(changed_files | sed '/^$/d' | wc -l | tr -d ' ')"
+
+if [[ "$json_mode" -eq 1 ]]; then
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "review-my-diff: --json requires jq" >&2
+    exit 1
+  fi
+
+  jq -n \
+    --arg mode "$mode" \
+    --arg repoRoot "$repo_root" \
+    --argjson fileCount "$file_count" \
+    --argjson files "$(changed_files | jq -R . | jq -s .)" \
+    --argjson diffStat "$(diff_stat | jq -R . | jq -s .)" \
+    --argjson riskHints "$(risk_hints | jq -R . | jq -s .)" \
+    --argjson largeFiles "$(large_files | jq -R . | jq -s .)" \
+    --argjson checks "$(recommended_checks | awk '!seen[$0]++' | jq -R . | jq -s .)" \
+    '{mode:$mode, repoRoot:$repoRoot, fileCount:$fileCount, files:$files, diffStat:$diffStat, riskHints:$riskHints, largeFiles:$largeFiles, recommendedChecks:$checks}'
+  exit 0
+fi
+
+echo "Review My Diff"
+echo
+echo "Mode: $mode"
+echo "Repo: $repo_root"
+echo "Changed files: $file_count"
+
+if [[ "$file_count" -eq 0 ]]; then
+  echo
+  echo "No $mode diff found."
+  if [[ "$staged" -eq 0 ]]; then
+    echo "Use --staged to inspect staged changes."
+  fi
+  exit 0
+fi
+
+echo
+echo "Changed files:"
+changed_files | sed -n '1,40p' | sed 's/^/  /'
+
+stat="$(diff_stat)"
+if [[ -n "$stat" ]]; then
+  echo
+  echo "Diff stat:"
+  printf "%s\n" "$stat" | sed 's/^/  /'
+fi
+
+hints="$(risk_hints | awk '!seen[$0]++')"
+if [[ -n "$hints" ]]; then
+  echo
+  echo "Review focus:"
+  printf "%s\n" "$hints" | sed 's/^/- /'
+fi
+
+large="$(large_files)"
+if [[ -n "$large" ]]; then
+  echo
+  echo "Large files:"
+  printf "%s\n" "$large" | sed 's/^/- /'
+fi
+
+checks="$(recommended_checks | awk '!seen[$0]++')"
+if [[ -n "$checks" ]]; then
+  echo
+  echo "Likely checks:"
+  printf "%s\n" "$checks" | sed 's/^/- /'
+fi
+
+echo
+echo "Suggested review prompt:"
+echo "Review this $mode diff for bugs, regressions, missing tests, secret leaks, and workflow breakage. Preserve unrelated dirty work."

@@ -5,7 +5,7 @@
   "activationSites" : [
 
   ],
-  "adjustOutputVolume" : false,
+  "autocapitalizeInsert" : true,
   "contextFromActiveApplication" : false,
   "contextFromClipboard" : false,
   "contextFromSelection" : false,
@@ -15,11 +15,10 @@
   "iconName" : "",
   "key" : "casual-text",
   "language" : "en",
-  "languageModelEnabled" : true,
-  "languageModelID" : "gpt-5.2",
+  "languageModelID" : "sl-1",
   "literalPunctuation" : false,
   "name" : "Casual Text",
-  "pauseMediaPlayback" : false,
+  "playbackBehavior" : "keepPlaying",
   "prompt" : "Rewrite the user message into clean, casual text. Remove filler (um, uh, like, you know, sort of, kind of), repeats, and false starts; fix simple grammar and punctuation; keep contractions and the original voice. Break thoughts into short sentences and use blank lines between paragraphs when the topic shifts. Output only the cleaned text.",
   "promptExamples" : [
 

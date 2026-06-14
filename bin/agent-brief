@@ -1,0 +1,242 @@
+#!/usr/bin/env bash
+# agent-brief - Print a handoff-ready brief for a coding agent.
+
+set -euo pipefail
+
+VERSION="0.1.0"
+
+usage() {
+  cat <<'EOF'
+agent-brief - handoff-ready brief for a coding agent
+
+Usage:
+  agent-brief
+  agent-brief --json
+  agent-brief --help
+  agent-brief --version
+
+Output:
+  Default   Copy-pasteable plain-text brief.
+  --json    Structured context for scripts or agents.
+
+Side effects:
+  Read-only. No prompts, network calls, clipboard writes, or file edits.
+EOF
+}
+
+json_mode=0
+
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --version)
+      echo "agent-brief $VERSION"
+      exit 0
+      ;;
+    --json)
+      json_mode=1
+      ;;
+    *)
+      echo "agent-brief: unknown argument: $arg" >&2
+      echo "Try: agent-brief --help" >&2
+      exit 2
+      ;;
+  esac
+done
+
+cwd="$PWD"
+repo_root=""
+repo_name=""
+branch=""
+upstream=""
+dirty_count=0
+status_short=""
+
+if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  repo_name="$(basename "$repo_root")"
+  branch="$(git branch --show-current 2>/dev/null || true)"
+  if [[ -z "$branch" ]]; then
+    branch="$(git rev-parse --short HEAD 2>/dev/null || true)"
+  fi
+  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+  status_short="$(git status --short 2>/dev/null || true)"
+  if [[ -n "$status_short" ]]; then
+    dirty_count="$(printf "%s\n" "$status_short" | sed '/^$/d' | wc -l | tr -d ' ')"
+  fi
+fi
+
+context_base="$cwd"
+if [[ -n "$repo_root" ]]; then
+  context_base="$repo_root"
+fi
+
+scratchpad_path() {
+  local context_path="$context_base"
+  local slug hash
+  slug="$(basename "$context_path" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]_.-' '-' | sed 's/^-*//; s/-*$//')"
+  [[ -n "$slug" ]] || slug="workspace"
+  hash="$(printf "%s" "$context_path" | shasum -a 256 | awk '{ print substr($1, 1, 12) }')"
+  echo "${AGENT_SCRATCHPAD_DIR:-$HOME/.local/state/agent-scratchpads}/${slug}-${hash}.md"
+}
+
+context_files() {
+  local f
+  for f in AGENTS.md CLAUDE.md CONTEXT.md README.md package.json pyproject.toml Cargo.toml Makefile justfile docs/agents/README.md; do
+    [[ -e "$context_base/$f" ]] && printf "%s\n" "$f"
+  done
+  return 0
+}
+
+package_scripts() {
+  if [[ -f "$context_base/package.json" ]] && command -v jq >/dev/null 2>&1; then
+    jq -r '.scripts? // {} | keys[]' "$context_base/package.json" 2>/dev/null | sed -n '1,30p'
+  fi
+  return 0
+}
+
+recommended_checks() {
+  local scripts
+  scripts="$(package_scripts || true)"
+  if [[ -n "$scripts" ]]; then
+    for name in check test lint "format:check" typecheck "type-check"; do
+      if printf "%s\n" "$scripts" | grep -qx "$name"; then
+        printf "npm run %s\n" "$name"
+      fi
+    done
+  fi
+
+  if [[ -f "$context_base/Makefile" ]]; then
+    printf "make test\n"
+  fi
+}
+
+diff_stat() {
+  if [[ -n "$repo_root" ]]; then
+    git -C "$repo_root" diff --stat 2>/dev/null | sed -n '1,20p'
+  fi
+  return 0
+}
+
+status_preview() {
+  if [[ -n "$status_short" ]]; then
+    printf "%s\n" "$status_short" | sed -n '1,25p'
+  fi
+  return 0
+}
+
+scratchpad_excerpt() {
+  local path
+  path="$(scratchpad_path)"
+  if [[ -f "$path" ]]; then
+    sed -n '1,80p' "$path"
+  fi
+  return 0
+}
+
+tmux_context=""
+if [[ -n "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1; then
+  tmux_context="$(tmux display-message -p '#S | #W | pane #P | #{pane_current_path}' 2>/dev/null || true)"
+fi
+
+if [[ "$json_mode" -eq 1 ]]; then
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "agent-brief: --json requires jq" >&2
+    exit 1
+  fi
+
+  jq -n \
+    --arg cwd "$cwd" \
+    --arg repoRoot "$repo_root" \
+    --arg repoName "$repo_name" \
+    --arg branch "$branch" \
+    --arg upstream "$upstream" \
+    --argjson dirtyCount "$dirty_count" \
+    --arg tmux "$tmux_context" \
+    --arg scratchpad "$(scratchpad_path)" \
+    --argjson contextFiles "$(context_files | jq -R . | jq -s .)" \
+    --argjson statusPreview "$(status_preview | jq -R . | jq -s .)" \
+    --argjson diffStat "$(diff_stat | jq -R . | jq -s .)" \
+    --argjson checks "$(recommended_checks | jq -R . | jq -s .)" \
+    --argjson scratchpadExcerpt "$(scratchpad_excerpt | jq -R . | jq -s .)" \
+    '{
+      cwd:$cwd,
+      repoRoot:$repoRoot,
+      repoName:$repoName,
+      branch:$branch,
+      upstream:$upstream,
+      dirtyCount:$dirtyCount,
+      tmux:$tmux,
+      scratchpad:$scratchpad,
+      contextFiles:$contextFiles,
+      statusPreview:$statusPreview,
+      diffStat:$diffStat,
+      recommendedChecks:$checks,
+      scratchpadExcerpt:$scratchpadExcerpt
+    }'
+  exit 0
+fi
+
+echo "Agent Brief"
+echo
+echo "Goal:"
+echo "- Inspect this repo/session and continue from the current state."
+echo "- Preserve unrelated dirty work."
+echo "- Read local agent instructions before editing."
+echo
+echo "Context:"
+echo "- Path: $cwd"
+if [[ -n "$repo_root" ]]; then
+  echo "- Repo: $repo_name"
+  echo "- Root: $repo_root"
+  echo "- Branch: ${branch:-unknown}"
+  [[ -n "$upstream" ]] && echo "- Upstream: $upstream"
+  echo "- Dirty files: $dirty_count"
+else
+  echo "- Repo: not inside a git worktree"
+fi
+[[ -n "$tmux_context" ]] && echo "- Tmux: $tmux_context"
+echo "- Scratchpad: $(scratchpad_path)"
+
+files="$(context_files)"
+if [[ -n "$files" ]]; then
+  echo
+  echo "Read first:"
+  printf "%s\n" "$files" | sed 's/^/- /'
+fi
+
+status="$(status_preview)"
+if [[ -n "$status" ]]; then
+  echo
+  echo "Git status preview:"
+  printf "%s\n" "$status" | sed 's/^/  /'
+fi
+
+stat="$(diff_stat)"
+if [[ -n "$stat" ]]; then
+  echo
+  echo "Diff stat:"
+  printf "%s\n" "$stat" | sed 's/^/  /'
+fi
+
+checks="$(recommended_checks | awk '!seen[$0]++')"
+if [[ -n "$checks" ]]; then
+  echo
+  echo "Likely checks:"
+  printf "%s\n" "$checks" | sed 's/^/- /'
+fi
+
+scratch="$(scratchpad_excerpt)"
+if [[ -n "$scratch" ]]; then
+  echo
+  echo "Scratchpad excerpt:"
+  printf "%s\n" "$scratch" | sed 's/^/  /'
+fi
+
+echo
+echo "Next safe actions:"
+echo "- Run review-my-diff before PR or handoff."
+echo "- Run targeted tests after code changes."

@@ -1,0 +1,217 @@
+#!/usr/bin/env bash
+# agent-context - Print a compact repo/tmux map for coding agents.
+
+set -euo pipefail
+
+VERSION="0.1.0"
+
+usage() {
+  cat <<'EOF'
+agent-context - compact repo/tmux context for coding agents
+
+Usage:
+  agent-context
+  agent-context --json
+  agent-context --help
+  agent-context --version
+
+Output:
+  Default   Human-readable context summary.
+  --json    Stable JSON for scripts or agents.
+
+Side effects:
+  Read-only. No prompts, network calls, clipboard writes, or file edits.
+EOF
+}
+
+die_usage() {
+  echo "agent-context: $1" >&2
+  echo "Try: agent-context --help" >&2
+  exit 2
+}
+
+json_mode=0
+
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --version)
+      echo "agent-context $VERSION"
+      exit 0
+      ;;
+    --json)
+      json_mode=1
+      ;;
+    *)
+      die_usage "unknown argument: $arg"
+      ;;
+  esac
+done
+
+cwd="$PWD"
+repo_root=""
+repo_name=""
+branch=""
+upstream=""
+status_short=""
+dirty_count=0
+
+if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  repo_root="$(git rev-parse --show-toplevel 2>/dev/null || true)"
+  repo_name="$(basename "$repo_root")"
+  branch="$(git branch --show-current 2>/dev/null || true)"
+  if [[ -z "$branch" ]]; then
+    branch="$(git rev-parse --short HEAD 2>/dev/null || true)"
+  fi
+  upstream="$(git rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)"
+  status_short="$(git status --short 2>/dev/null || true)"
+  if [[ -n "$status_short" ]]; then
+    dirty_count="$(printf "%s\n" "$status_short" | sed '/^$/d' | wc -l | tr -d ' ')"
+  fi
+fi
+
+tmux_context=""
+if [[ -n "${TMUX:-}" ]] && command -v tmux >/dev/null 2>&1; then
+  tmux_context="$(tmux display-message -p '#S | #W | pane #P | #{pane_current_path}' 2>/dev/null || true)"
+fi
+
+context_base="$cwd"
+if [[ -n "$repo_root" ]]; then
+  context_base="$repo_root"
+fi
+
+context_files() {
+  local f
+  for f in \
+    AGENTS.md \
+    CLAUDE.md \
+    CONTEXT.md \
+    README.md \
+    package.json \
+    pyproject.toml \
+    Cargo.toml \
+    Makefile \
+    justfile \
+    docs/agents/README.md
+  do
+    if [[ -e "$context_base/$f" ]]; then
+      printf "%s\n" "$f"
+    fi
+  done
+  return 0
+}
+
+package_scripts() {
+  if [[ -f "$context_base/package.json" ]] && command -v jq >/dev/null 2>&1; then
+    jq -r '.scripts? // {} | keys[]' "$context_base/package.json" 2>/dev/null | sed -n '1,20p'
+  fi
+  return 0
+}
+
+status_preview() {
+  if [[ -n "$status_short" ]]; then
+    printf "%s\n" "$status_short" | sed -n '1,20p'
+  fi
+  return 0
+}
+
+status_remainder_count() {
+  if [[ "$dirty_count" -gt 20 ]]; then
+    echo $((dirty_count - 20))
+  else
+    echo 0
+  fi
+}
+
+if [[ "$json_mode" -eq 1 ]]; then
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "agent-context: --json requires jq" >&2
+    exit 1
+  fi
+
+  context_files_json="$(context_files | jq -R . | jq -s .)"
+  package_scripts_json="$(package_scripts | jq -R . | jq -s .)"
+  status_json="$(status_preview | jq -R . | jq -s .)"
+  status_remainder="$(status_remainder_count)"
+
+  jq -n \
+    --arg cwd "$cwd" \
+    --arg repoRoot "$repo_root" \
+    --arg repoName "$repo_name" \
+    --arg branch "$branch" \
+    --arg upstream "$upstream" \
+    --argjson dirtyCount "$dirty_count" \
+    --argjson statusRemainder "$status_remainder" \
+    --arg tmux "$tmux_context" \
+    --argjson contextFiles "$context_files_json" \
+    --argjson packageScripts "$package_scripts_json" \
+    --argjson status "$status_json" \
+    '{
+      cwd: $cwd,
+      repoRoot: $repoRoot,
+      repoName: $repoName,
+      branch: $branch,
+      upstream: $upstream,
+      dirtyCount: $dirtyCount,
+      tmux: $tmux,
+      contextFiles: $contextFiles,
+      packageScripts: $packageScripts,
+      statusPreview: $status,
+      statusRemainder: $statusRemainder
+    }'
+  exit 0
+fi
+
+echo "Agent Context"
+echo
+echo "Path: $cwd"
+
+if [[ -n "$repo_root" ]]; then
+  echo "Repo: $repo_name"
+  echo "Root: $repo_root"
+  echo "Branch: ${branch:-unknown}"
+  if [[ -n "$upstream" ]]; then
+    echo "Upstream: $upstream"
+  fi
+  echo "Dirty files: $dirty_count"
+else
+  echo "Repo: not inside a git worktree"
+fi
+
+if [[ -n "$tmux_context" ]]; then
+  echo "Tmux: $tmux_context"
+fi
+
+files="$(context_files)"
+if [[ -n "$files" ]]; then
+  echo
+  echo "Context files:"
+  printf "%s\n" "$files" | sed 's/^/- /'
+fi
+
+scripts="$(package_scripts)"
+if [[ -n "$scripts" ]]; then
+  echo
+  echo "Package scripts:"
+  printf "%s\n" "$scripts" | sed 's/^/- /'
+fi
+
+status="$(status_preview)"
+if [[ -n "$status" ]]; then
+  echo
+  echo "Git status preview:"
+  printf "%s\n" "$status" | sed 's/^/  /'
+  status_remainder="$(status_remainder_count)"
+  if [[ "$status_remainder" -gt 0 ]]; then
+    echo "  ... plus $status_remainder more"
+  fi
+fi
+
+echo
+echo "Next safe actions:"
+echo "- Read local agent instructions before editing."
+echo "- Run git status before changing files."
+echo "- Preserve unrelated dirty work."

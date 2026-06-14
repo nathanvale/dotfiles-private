@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+# agent-status - Show tmux sessions and obvious coding-agent panes.
+
+set -euo pipefail
+
+VERSION="0.1.0"
+D=$'\034'
+
+usage() {
+  cat <<'EOF'
+agent-status - show tmux agent panes and session context
+
+Usage:
+  agent-status
+  agent-status --json
+  agent-status --help
+  agent-status --version
+
+Output:
+  Default   Human-readable session and agent-pane summary.
+  --json    Stable JSON for scripts or agents.
+
+Side effects:
+  Read-only. No tmux sessions, windows, or panes are changed.
+EOF
+}
+
+json_mode=0
+
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --version)
+      echo "agent-status $VERSION"
+      exit 0
+      ;;
+    --json)
+      json_mode=1
+      ;;
+    *)
+      echo "agent-status: unknown argument: $arg" >&2
+      echo "Try: agent-status --help" >&2
+      exit 2
+      ;;
+  esac
+done
+
+if ! command -v tmux >/dev/null 2>&1; then
+  echo "agent-status: tmux not found" >&2
+  exit 1
+fi
+
+if ! tmux list-sessions >/dev/null 2>&1; then
+  if [[ "$json_mode" -eq 1 ]]; then
+    echo '{"sessions":[],"panes":[],"agentPanes":[]}'
+  else
+    echo "No tmux server is running."
+  fi
+  exit 0
+fi
+
+is_agent_command() {
+  case "$1" in
+    claude|ccdev|codex|gemini|openai)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+pane_rows() {
+  tmux list-panes -a -F "#{session_name}${D}#{window_index}${D}#{window_name}${D}#{pane_index}${D}#{pane_title}${D}#{pane_current_command}${D}#{pane_current_path}${D}#{pane_active}${D}#{session_attached}"
+}
+
+session_rows() {
+  tmux list-sessions -F "#{session_name}${D}#{session_attached}${D}#{session_windows}"
+}
+
+if [[ "$json_mode" -eq 1 ]]; then
+  if ! command -v jq >/dev/null 2>&1; then
+    echo "agent-status: --json requires jq" >&2
+    exit 1
+  fi
+
+  sessions_json="$(
+    session_rows | while IFS="$D" read -r session attached windows; do
+      jq -n \
+        --arg name "$session" \
+        --argjson attached "$attached" \
+        --argjson windows "$windows" \
+        '{name:$name, attached:$attached, windows:$windows}'
+    done | jq -s .
+  )"
+
+  panes_json="$(
+    pane_rows | while IFS="$D" read -r session window_index window_name pane_index title command path active attached; do
+      is_agent=false
+      if is_agent_command "$command" || is_agent_command "$title"; then
+        is_agent=true
+      fi
+      jq -n \
+        --arg session "$session" \
+        --argjson windowIndex "$window_index" \
+        --arg windowName "$window_name" \
+        --argjson paneIndex "$pane_index" \
+        --arg title "$title" \
+        --arg command "$command" \
+        --arg path "$path" \
+        --argjson active "$active" \
+        --argjson attached "$attached" \
+        --argjson isAgent "$is_agent" \
+        '{
+          session:$session,
+          windowIndex:$windowIndex,
+          windowName:$windowName,
+          paneIndex:$paneIndex,
+          title:$title,
+          command:$command,
+          path:$path,
+          active:$active,
+          attached:$attached,
+          isAgent:$isAgent
+        }'
+    done | jq -s .
+  )"
+
+  jq -n \
+    --argjson sessions "$sessions_json" \
+    --argjson panes "$panes_json" \
+    '{sessions:$sessions, panes:$panes, agentPanes:($panes | map(select(.isAgent)))}'
+  exit 0
+fi
+
+echo "Agent Status"
+echo
+
+agent_count=0
+agent_lines=""
+while IFS="$D" read -r session window_index window_name pane_index title command path active attached; do
+  if is_agent_command "$command" || is_agent_command "$title"; then
+    agent_count=$((agent_count + 1))
+    marker=" "
+    [[ "$active" -eq 1 ]] && marker="*"
+    label="$title"
+    [[ -n "$label" ]] || label="$command"
+    agent_lines+="$(printf "%s %-24s %-18s %-5s %-12s %-10s %s\n" "$marker" "$session" "$window_name" "$pane_index" "$label" "$command" "$path")"
+  fi
+done < <(pane_rows)
+
+echo "Agent panes:"
+if [[ "$agent_count" -eq 0 ]]; then
+  echo "  None found."
+else
+  printf "  %-24s %-18s %-5s %-12s %-10s %s\n" "session" "window" "pane" "title" "command" "path"
+  printf "%s" "$agent_lines" | sed 's/^/  /'
+fi
+
+echo
+echo "Sessions:"
+while IFS="$D" read -r session attached windows; do
+  printf "  %-28s attached:%-3s windows:%s\n" "$session" "$attached" "$windows"
+done < <(session_rows)

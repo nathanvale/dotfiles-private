@@ -5,7 +5,7 @@
   "activationSites" : [
 
   ],
-  "adjustOutputVolume" : false,
+  "autocapitalizeInsert" : true,
   "contextFromActiveApplication" : false,
   "contextFromClipboard" : false,
   "contextFromSelection" : false,
@@ -15,11 +15,10 @@
   "iconName" : "",
   "key" : "professional-engineer",
   "language" : "en",
-  "languageModelEnabled" : true,
   "languageModelID" : "gemini-3-flash-preview",
   "literalPunctuation" : false,
   "name" : "Professional Engineer",
-  "pauseMediaPlayback" : false,
+  "playbackBehavior" : "keepPlaying",
   "prompt" : "Transform the User Message into professional workplace communication with a senior engineer tone. Remove filler words (um, uh, like, you know, sort of, kind of), repeated words, and false starts. \n\nMaintain:\n- Clear, concise technical communication\n- Professional but approachable tone (not overly formal)\n- Confident, knowledgeable voice\n- Respectful and collaborative language\n\nDon't make it too stiff or corporate - keep it authentic to how a senior engineer would naturally communicate in a professional setting. Output only the polished text with no explanations.",
   "promptExamples" : [
 

@@ -8,16 +8,12 @@ set -e
 # CONFIGURATION
 # ============================================================================
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-
 # Colors for output (using tput for better terminal compatibility)
 if command -v tput &> /dev/null && [ -n "$TERM" ]; then
     RED=$(tput setaf 1)
     GREEN=$(tput setaf 2)
     YELLOW=$(tput setaf 3)
     BLUE=$(tput setaf 4)
-    CYAN=$(tput setaf 6)
-    BOLD=$(tput bold)
     NC=$(tput sgr0) # No Color
 else
     # Fallback to ANSI codes
@@ -25,7 +21,6 @@ else
     GREEN='\033[0;32m'
     YELLOW='\033[1;33m'
     BLUE='\033[0;34m'
-    CYAN='\033[0;36m'
     NC='\033[0m'
 fi
 
@@ -97,7 +92,6 @@ warning() {
 
 get_agent_command() {
     local agent_type="$1"
-    local pane_name="$2"
 
     case "$agent_type" in
         claude)
@@ -212,7 +206,8 @@ spawn_agent() {
     fi
 
     # Get current session name
-    local session_name=$(tmux display-message -p '#S')
+    local session_name
+    session_name=$(tmux display-message -p '#S')
 
     # Determine target window
     if [ "$window_name" = "new" ]; then
@@ -220,23 +215,29 @@ spawn_agent() {
         tmux new-window -t "$session_name" -n "ai-agents"
         local target_window="${session_name}:ai-agents"
     elif [ "$window_name" = "current" ]; then
-        local target_window=$(tmux display-message -p '#S:#I')
+        local target_window
+        target_window=$(tmux display-message -p '#S:#I')
     else
         local target_window="${session_name}:${window_name}"
     fi
 
     # Get the agent command
-    local agent_command=$(get_agent_command "$agent_type")
+    local agent_command
+    agent_command=$(get_agent_command "$agent_type")
 
     # Split pane based on direction
+    local new_pane
     if [ "$split_direction" = "vertical" ]; then
-        tmux split-window -t "$target_window" -v
+        new_pane=$(tmux split-window -t "$target_window" -v -P -F '#{pane_id}')
     else
-        tmux split-window -t "$target_window" -h
+        new_pane=$(tmux split-window -t "$target_window" -h -P -F '#{pane_id}')
     fi
 
+    # Name the pane so status popups remain useful after the shell takes over.
+    tmux select-pane -t "$new_pane" -T "$agent_type"
+
     # Send the command to the new pane
-    tmux send-keys -t "$target_window" "$agent_command" C-m
+    tmux send-keys -t "$new_pane" "$agent_command" C-m
 
     # Apply tiled layout to distribute space evenly
     tmux select-layout -t "$target_window" tiled

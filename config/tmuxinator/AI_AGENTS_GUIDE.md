@@ -1,12 +1,14 @@
 # AI Agent Spawning Guide
 
-**Multi-agent AI workflows in tmux** - spawn and navigate between AI agents with ease!
+**Agent workflows in tmux** - start with one primary agent, then add context, status, scratchpad, and extra agents on demand.
 
 ## Quick Reference
 
-### Default Setup (All Templates)
+### Default Setup
 
-All templates (standard, fullstack, nextjs) now start with **4 Claude agents** in a tiled 2x2 grid.
+The standard template starts with one primary `ccdev` pane plus git, files, and shell windows.
+
+Use dynamic spawning when you want Gemini, Codex, or another Claude pane.
 
 ### Accordion Navigation (Ctrl-g + number)
 
@@ -18,7 +20,7 @@ Ctrl-g 2    →  Jump to pane 2 + zoom
 Ctrl-g 3    →  Jump to pane 3 + zoom
 Ctrl-g 4    →  Jump to pane 4 + zoom
 Ctrl-g Space →  Toggle zoom (switch tiled ↔ accordion)
-Ctrl-g T    →  Force tiled layout (see all 4)
+Ctrl-g T    →  Force tiled layout
 ```
 
 ### Dynamic Agent Spawning (Ctrl-g A then letter)
@@ -32,15 +34,23 @@ Ctrl-g A x  →  Spawn Codex (horizontal split)
 Ctrl-g A o  →  Spawn OpenAI (legacy, horizontal)
 Ctrl-g A n  →  Create new AI window with Claude
 Ctrl-g A v  →  Spawn Claude (vertical split)
+Ctrl-g A i  →  Show agent context
+Ctrl-g A s  →  Show agent status
+Ctrl-g A p  →  Open agent scratchpad
+Ctrl-g A b  →  Show handoff-ready agent brief
+Ctrl-g A r  →  Review current diff
+Ctrl-g A l  →  Show worktree log
 ```
 
 **Example workflow:**
 1. Start your project: `tx ~/code/my-webapp`
-2. You have 4 Claude agents in tiled layout
-3. Press `Ctrl-g 1` to focus on agent 1 (accordion mode)
-4. Press `Ctrl-g Space` to see all 4 again
-5. Need Gemini? Press `Ctrl-g A g` to spawn one
-6. Now you have 5 agents in tiled layout!
+2. Start in the primary `ccdev` pane
+3. Press `Ctrl-g A i` to show repo context
+4. Press `Ctrl-g A p` to open the scratchpad
+5. Press `Ctrl-g A b` before handing work to another agent
+6. Press `Ctrl-g A r` before a PR or review pass
+7. Need Gemini? Press `Ctrl-g A g` to spawn one
+8. Need Codex? Press `Ctrl-g A x` to spawn one
 
 ## How It Works
 
@@ -66,7 +76,7 @@ gemini  # Can access all your project files
 
 ### Auto-Layout
 
-The script automatically uses **tiled layout**, which means:
+The spawn script automatically uses **tiled layout**, which means:
 - 2 panes = side-by-side (50/50)
 - 3 panes = one large, two small (grid)
 - 4 panes = perfect 2x2 grid
@@ -166,27 +176,30 @@ Use the AI project templates when creating new projects:
    Ctrl-g + A + g
    ```
 
-3. Spawn OpenAI:
+3. Spawn Codex:
    ```
-   Ctrl-g + A + o
+   Ctrl-g + A + x
    ```
 
 4. Now you have:
    - **Claude** (top-left): Primary development
    - **Gemini** (top-right): Security review
-   - **OpenAI** (bottom): Performance optimization
+   - **Codex** (bottom): Performance optimization or review
 
 All three can read your entire repository!
 
 ## Configuration Files
 
 ### Tmux Key Bindings
-`~/.config/tmux/tmux.conf:127-137`
+`~/.config/tmux/tmux.conf`
 ```tmux
 # AI Agent Spawning
 bind A switch-client -T ai-agents
 bind -T ai-agents c run-shell "...spawn-ai-agent.sh claude..."
 bind -T ai-agents g run-shell "...spawn-ai-agent.sh gemini..."
+bind -T ai-agents i display-popup "...agent-context..."
+bind -T ai-agents s display-popup "...agent-status..."
+bind -T ai-agents p display-popup "...agent-scratchpad..."
 # ... etc
 ```
 
@@ -209,7 +222,7 @@ If you get "command not found" errors:
 ```bash
 which claude  # Should show: /usr/local/bin/claude or similar
 which gemini
-which openai
+which codex
 ```
 
 **2. Check PATH:**
@@ -225,9 +238,9 @@ See "Supported AI Agents" section above for installation commands.
 
 If panes become too small with many agents:
 
-**Option 1: Create new window**
+**Option 1: Create or switch worktree session**
 ```
-Ctrl-g + A + w  # Creates dedicated AI agents window
+Ctrl-g + A + w
 ```
 
 **Option 2: Manual layout**
@@ -253,9 +266,13 @@ If an agent spawns in wrong directory:
 cd /path/to/your/project
 ```
 
-## Environment Variables
+## Secrets And Environment
 
-Add to your `~/.zshrc` or `~/.env.secrets`:
+Do not put long-lived API keys directly in `.zshrc`.
+
+Use `load-secrets` in the pane that needs API-backed tools.
+
+Expected variable names when a tool requires them:
 
 ```bash
 # Google Gemini
@@ -274,20 +291,20 @@ All tmuxinator templates automatically support dynamic spawning:
 
 ### Basic Template
 ```yaml
-# Start with: Claude + Git
+# Start with: primary agent + git + files + shell
 # Spawn: Gemini with Ctrl-g + A + g
 ```
 
 ### Standard Template
 ```yaml
-# Start with: Claude + Git + Shell
-# Spawn: OpenAI with Ctrl-g + A + o
+# Start with: primary agent + git + files + shell
+# Spawn: Codex with Ctrl-g + A + x
 ```
 
 ### Fullstack Template
 ```yaml
-# Start with: Claude + Git + Dev + Vault
-# Spawn: Gemini + OpenAI for multi-agent review
+# Start with: agents + git + dev + vault
+# Spawn: Gemini + Codex for multi-agent review
 ```
 
 ## Real-World Workflows
@@ -298,9 +315,9 @@ All tmuxinator templates automatically support dynamic spawning:
 # Start fullstack project
 tmuxinator start my-nextjs-app
 
-# Layout: Claude (primary), Gemini (reviewer), OpenAI (debugger)
+# Layout: Claude (primary), Gemini (reviewer), Codex (debugger)
 Ctrl-g + A + g   # Add Gemini
-Ctrl-g + A + o   # Add OpenAI
+Ctrl-g + A + x   # Add Codex
 
 # Now:
 # - Claude: Implement feature
@@ -311,12 +328,10 @@ Ctrl-g + A + o   # Add OpenAI
 ### Workflow 2: Rapid Prototyping
 
 ```bash
-# Start AI project template (pre-configured with 3 agents)
+# Start AI project template
 tmuxinator start ai-proto
 
-# Already have: Claude, Gemini, Codex
-# All can read your repo
-# All in tiled layout
+# Add agents as needed with Ctrl-g + A + c/g/x
 ```
 
 ### Workflow 3: On-Demand Consultation
@@ -353,6 +368,12 @@ Ctrl-g + x       # Close pane (standard tmux)
 | `Ctrl-g A o` | Spawn OpenAI (legacy) |
 | `Ctrl-g A n` | New AI window |
 | `Ctrl-g A v` | Spawn Claude (vertical) |
+| `Ctrl-g A i` | Show agent context |
+| `Ctrl-g A s` | Show agent status |
+| `Ctrl-g A p` | Open agent scratchpad |
+| `Ctrl-g A b` | Show agent brief |
+| `Ctrl-g A r` | Review current diff |
+| `Ctrl-g A l` | Show worktree log |
 
 ### General Tmux
 | Keys | Action |
@@ -366,12 +387,12 @@ Ctrl-g + x       # Close pane (standard tmux)
 
 1. **Install AI CLIs** - See "Supported AI Agents" section
 2. **Test spawning** - Press `Ctrl-g + A + c` in any tmux session
-3. **Add API keys** - Export environment variables
-4. **Try multi-agent** - Spawn multiple agents for code review
+3. **Load secrets only when needed** - Run `load-secrets` in the pane that needs API-backed tools
+4. **Try multi-agent** - Spawn Gemini or Codex for review
 
 ---
 
-**Last Updated:** 2025-11-21
+**Last Updated:** 2026-06-05
 **Related Files:**
 - `~/.config/tmux/tmux.conf` (key bindings)
 - `~/.config/tmuxinator/scripts/spawn-ai-agent.sh` (spawn logic)

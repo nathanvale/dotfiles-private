@@ -1,0 +1,8 @@
+#!/bin/bash
+# superwhisper-agent - Activate Agent Prompt mode and start recording
+#
+# Run manually first. Add a Karabiner shortcut only after the gesture feels right.
+
+open "superwhisper://mode?key=agent-prompt"
+sleep 0.2
+open "superwhisper://record"

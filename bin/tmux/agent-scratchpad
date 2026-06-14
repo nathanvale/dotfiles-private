@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+# agent-scratchpad - Open a per-repo scratchpad for agent handoffs and notes.
+
+set -euo pipefail
+
+VERSION="0.1.0"
+
+usage() {
+  cat <<'EOF'
+agent-scratchpad - open a per-repo agent scratchpad
+
+Usage:
+  agent-scratchpad
+  agent-scratchpad --print-path
+  agent-scratchpad --help
+  agent-scratchpad --version
+
+Side effects:
+  Creates a markdown note under ~/.local/state/agent-scratchpads when missing.
+  Does not write into the current repository.
+EOF
+}
+
+print_path=0
+
+for arg in "$@"; do
+  case "$arg" in
+    -h|--help)
+      usage
+      exit 0
+      ;;
+    --version)
+      echo "agent-scratchpad $VERSION"
+      exit 0
+      ;;
+    --print-path)
+      print_path=1
+      ;;
+    *)
+      echo "agent-scratchpad: unknown argument: $arg" >&2
+      echo "Try: agent-scratchpad --help" >&2
+      exit 2
+      ;;
+  esac
+done
+
+context_path="$PWD"
+if command -v git >/dev/null 2>&1 && git rev-parse --show-toplevel >/dev/null 2>&1; then
+  context_path="$(git rev-parse --show-toplevel)"
+fi
+
+slug="$(basename "$context_path" | tr '[:upper:]' '[:lower:]' | tr -cs '[:alnum:]_.-' '-' | sed 's/^-*//; s/-*$//')"
+if [[ -z "$slug" ]]; then
+  slug="workspace"
+fi
+hash="$(printf "%s" "$context_path" | shasum -a 256 | awk '{ print substr($1, 1, 12) }')"
+scratchpad_dir="${AGENT_SCRATCHPAD_DIR:-$HOME/.local/state/agent-scratchpads}"
+scratchpad="$scratchpad_dir/${slug}-${hash}.md"
+
+mkdir -p "$scratchpad_dir"
+
+if [[ ! -f "$scratchpad" ]]; then
+  {
+    echo "# Agent Scratchpad: $slug"
+    echo
+    echo "- Context: $context_path"
+    echo "- Created: $(date '+%Y-%m-%d %H:%M')"
+    echo
+    echo "## Notes"
+    echo
+  } > "$scratchpad"
+fi
+
+if [[ "$print_path" -eq 1 ]]; then
+  echo "$scratchpad"
+  exit 0
+fi
+
+editor_cmd="${VISUAL:-${EDITOR:-}}"
+if [[ -z "$editor_cmd" ]]; then
+  if command -v nvim >/dev/null 2>&1; then
+    editor_cmd="nvim"
+  elif command -v vim >/dev/null 2>&1; then
+    editor_cmd="vim"
+  else
+    editor_cmd="vi"
+  fi
+fi
+
+# Allow EDITOR/VISUAL values such as "code -w" or "nvim -O".
+exec $editor_cmd "$scratchpad"
