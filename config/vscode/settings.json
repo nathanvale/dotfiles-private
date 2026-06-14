@@ -216,10 +216,14 @@
 	"markdown-preview-enhanced.mermaidTheme": "dark",
 	"markdown-preview-enhanced.automaticallyShowPreviewOfMarkdownBeingEdited": true,
 	"markdown-preview-enhanced.enableScriptExecution": true,
-	// Markdown files open in MPE preview by default
-	// IMPORTANT: must be last setting in file (VS Code bug #192954)
-	// Also do "Reopen Editor With..." > MPE on a few .md files to prime the cache
+	"markdown.preview.doubleClickToSwitchToEditor": true,
+	// Markdown files open in VS Code's built-in preview by default
+	// Keep last: VS Code bug #192954
+	// Use "Reopen Editor With..." > Text Editor when editing one file directly
 	"workbench.editorAssociations": {
+		"*.md": "vscode.markdown.preview.editor",
 		"*.copilotmd": "vscode.markdown.preview.editor"
-	}
+	},
+	"diffEditor.renderSideBySide": false,
+	"workbench.editor.showTabs": "single"
 }

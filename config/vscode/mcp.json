@@ -15,14 +15,6 @@
 			"command": "npx",
 			"args": ["chrome-devtools-mcp@latest"]
 		},
-		"mcp-server-firecrawl": {
-			"command": "npx",
-			"args": ["-y", "firecrawl-mcp"],
-			"env": {
-				"FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}"
-			},
-			"type": "stdio"
-		},
 		"github/github-mcp-server": {
 			"type": "http",
 			"url": "https://api.githubcopilot.com/mcp/",
@@ -46,14 +38,6 @@
 			"command": "bunx",
 			"args": ["--bun", "@side-quest/biome-runner"],
 			"env": {}
-		},
-		"kit": {
-			"command": "bun",
-			"args": [
-				"run",
-				"/Users/nathanvale/code/side-quest-marketplace/plugins/kit/mcp/index.ts"
-			],
-			"cwd": "/Users/nathanvale/code/side-quest-marketplace"
 		}
 	},
 	"inputs": [
