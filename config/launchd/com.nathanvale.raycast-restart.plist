@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nathanvale.raycast-restart</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/nathanvale/code/dotfiles/bin/system/raycast_restart_if_bloated.sh</string>
+    </array>
+
+    <!-- Check every 2 hours. The script no-ops unless Raycast exceeds the RAM threshold. -->
+    <key>StartInterval</key>
+    <integer>7200</integer>
+
+    <!-- Do not run at load time; wait for the first interval. -->
+    <key>RunAtLoad</key>
+    <false/>
+
+    <key>StandardOutPath</key>
+    <string>/tmp/raycast-restart.log</string>
+    <key>StandardErrorPath</key>
+    <string>/tmp/raycast-restart.log</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
