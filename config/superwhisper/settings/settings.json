@@ -17,8 +17,8 @@
   "replacements" : [
     {
       "id" : "3B2FE680-1BA1-4F2A-B66A-DD45401C51DD",
-      "original" : " ut is it possible to produce a Lusian extensions, or is it too hard?",
-      "with" : " ut is it possible to produce a Ellucian extensions, or is it too hard?\n"
+      "original" : " ut is it possible to produce a Lusian extensions, or is it too hard?",
+      "with" : " ut is it possible to produce a Ellucian extensions, or is it too hard?\n"
     },
     {
       "id" : "E91B085D-5EAD-40F0-8A81-529B35D1E866",
@@ -99,9 +99,265 @@
       "id" : "4FB2DEDD-8F74-41C3-B06B-EC77C23FCAF2",
       "original" : "fire call",
       "with" : "firecrawl"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000001",
+      "original" : "cloud code",
+      "with" : "Claude Code"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000002",
+      "original" : "Cloud Code",
+      "with" : "Claude Code"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000003",
+      "original" : "Cloud code",
+      "with" : "Claude Code"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000004",
+      "original" : "clawed code",
+      "with" : "Claude Code"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000005",
+      "original" : "clawed",
+      "with" : "Claude"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000006",
+      "original" : "claud",
+      "with" : "Claude"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000007",
+      "original" : "work tree",
+      "with" : "worktree"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000008",
+      "original" : "Work Tree",
+      "with" : "worktree"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000009",
+      "original" : "Work tree",
+      "with" : "worktree"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000010",
+      "original" : "change set",
+      "with" : "changeset"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000011",
+      "original" : "fire crawl",
+      "with" : "firecrawl"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000012",
+      "original" : "Fire crawl",
+      "with" : "firecrawl"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000013",
+      "original" : "Fire Crawl",
+      "with" : "firecrawl"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000014",
+      "original" : "Fire Crow",
+      "with" : "firecrawl"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000015",
+      "original" : "Firecraw",
+      "with" : "firecrawl"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000016",
+      "original" : "firecraw",
+      "with" : "firecrawl"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000017",
+      "original" : "Farcrawl",
+      "with" : "firecrawl"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000018",
+      "original" : "Elysian",
+      "with" : "Ellucian"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000019",
+      "original" : "Lucian",
+      "with" : "Ellucian"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000020",
+      "original" : "Ellusian",
+      "with" : "Ellucian"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000021",
+      "original" : "Elucian",
+      "with" : "Ellucian"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000022",
+      "original" : "Aleucian",
+      "with" : "Ellucian"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000023",
+      "original" : "Alucian",
+      "with" : "Ellucian"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000024",
+      "original" : "Valucian",
+      "with" : "Ellucian"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000025",
+      "original" : "MA test",
+      "with" : "matest"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000026",
+      "original" : "MA Test",
+      "with" : "matest"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000027",
+      "original" : "Octa",
+      "with" : "Okta"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000028",
+      "original" : "OCTA",
+      "with" : "Okta"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000029",
+      "original" : "Octo",
+      "with" : "Okta"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000030",
+      "original" : "octa",
+      "with" : "Okta"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000031",
+      "original" : "bit bucket",
+      "with" : "Bitbucket"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000032",
+      "original" : "mono repo",
+      "with" : "monorepo"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000033",
+      "original" : "Monaripo",
+      "with" : "monorepo"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000034",
+      "original" : "play right",
+      "with" : "Playwright"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000035",
+      "original" : "cadex",
+      "with" : "Codex"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000036",
+      "original" : "TMUC",
+      "with" : "tmux"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000037",
+      "original" : "SSHRC",
+      "with" : ".zshrc"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000038",
+      "original" : "Melanade",
+      "with" : "Melanie"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000039",
+      "original" : "melany",
+      "with" : "Melanie"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000040",
+      "original" : "melancy",
+      "with" : "Melanie"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000041",
+      "original" : "Melie",
+      "with" : "Melanie"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000042",
+      "original" : "Menlane",
+      "with" : "Melanie"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000043",
+      "original" : "Elanie",
+      "with" : "Melanie"
+    },
+    {
+      "id" : "A1B2C3D4-0001-5000-8000-000000000044",
+      "original" : "Piatric",
+      "with" : "Patrick"
+    },
+    {
+      "id" : "F027629D-51D1-4F02-8D8D-AEF89D6356AE",
+      "original" : "MUA",
+      "with" : "MUI"
+    },
+    {
+      "id" : "79794DE3-EE4E-4E4D-A9D9-21B1F9FD75F0",
+      "original" : "Shad see",
+      "with" : "ShadCn"
     }
   ],
   "vocabulary" : [
-
+    "Ellucian",
+    "Ethos",
+    "SMSTSF",
+    "matest",
+    "authenticatedEthosFetch",
+    "SOAAROL",
+    "GTVSQRU",
+    "SPRIDEN",
+    "GOAFBPR",
+    "BPAPI",
+    "Okta",
+    "Bitbucket",
+    "Vitest",
+    "TanStack",
+    "Playwright",
+    "Storybook",
+    "Karabiner",
+    "Codex",
+    "firecrawl",
+    "pnpm",
+    "changeset",
+    "worktree",
+    "monorepo",
+    "webpack",
+    "Tailwind",
+    "portal-ui",
+    "Superwhisper"
   ]
 }
