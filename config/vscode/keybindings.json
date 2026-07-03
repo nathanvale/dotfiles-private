@@ -5,11 +5,11 @@
 
 [
 	{ "key": "ctrl+cmd+,", "command": "workbench.action.openSettingsJson" },
-	{ "key": "ctrl+g ;", "command": "workbench.action.openGlobalKeybindings" },
 	{
 		"key": "ctrl+backspace",
 		"command": "workbench.action.navigateToLastEditLocation"
 	},
+	// Ctrl+G leader bindings live in the Nathan ADHD Helper extension.
 
 	// ───────────────────────────────────────────────────────────────
 	// LAYOUT MODES (Laptop / Big Monitor)
@@ -24,16 +24,6 @@
 		"key": "ctrl+cmd+2",
 		"command": "extension.multiCommand.execute",
 		"args": { "command": "layout.bigMonitor" }
-	},
-	// ───────────────────────────────────────────────────────────────
-	// ZEN MODE
-	// ───────────────────────────────────────────────────────────────
-
-	{ "key": "ctrl+g z", "command": "workbench.action.toggleZenMode" },
-	{
-		"key": "ctrl+g z",
-		"command": "workbench.action.exitZenMode",
-		"when": "inZenMode"
 	},
 	{
 		"key": "escape escape",
@@ -83,15 +73,6 @@
 	{ "key": "ctrl-=", "command": "workbench.action.nextEditor" },
 
 	// ───────────────────────────────────────────────────────────────
-	// VMUX GROUP FOCUS (H J K L)
-	// ───────────────────────────────────────────────────────────────
-
-	{ "key": "ctrl+g h", "command": "workbench.action.focusLeftGroup" },
-	{ "key": "ctrl+g l", "command": "workbench.action.focusRightGroup" },
-	{ "key": "ctrl+g j", "command": "workbench.action.focusBelowGroup" },
-	{ "key": "ctrl+g k", "command": "workbench.action.focusAboveGroup" },
-
-	// ───────────────────────────────────────────────────────────────
 	// PANEL / SIDEBAR RESIZING
 	// ───────────────────────────────────────────────────────────────
 
@@ -99,123 +80,10 @@
 	{ "key": "ctrl+;", "command": "workbench.action.decreaseViewWidth" },
 
 	// ───────────────────────────────────────────────────────────────
-	// ACTION LAYER — CTRL+G .
-	// ───────────────────────────────────────────────────────────────
-
-	{
-		"key": "ctrl+g .",
-		"command": "editor.action.autoFix",
-		"when": "editorTextFocus && !editorReadonly"
-	},
-	{
-		"key": "ctrl+g .",
-		"command": "editor.action.quickFix",
-		"when": "editorHasCodeActionsProvider && textInputFocus"
-	},
-	{
-		"key": "ctrl+g .",
-		"command": "workbench.action.terminal.showQuickFixes",
-		"when": "terminalFocus"
-	},
-	{
-		"key": "ctrl+g .",
-		"command": "acceptSelectedCodeAction",
-		"when": "codeActionMenuVisible"
-	},
-	{
-		"key": "ctrl+g .",
-		"command": "editor.changeDropType",
-		"when": "dropWidgetVisible"
-	},
-	{
-		"key": "ctrl+g .",
-		"command": "problems.action.showQuickFixes",
-		"when": "problemFocus"
-	},
-
-	// ───────────────────────────────────────────────────────────────
-	// HOVER / INFO
-	// ───────────────────────────────────────────────────────────────
-
-	{
-		"key": "ctrl+g i",
-		"command": "editor.action.showHover",
-		"when": "editorTextFocus"
-	},
-	{
-		"key": "ctrl+g i",
-		"command": "workbench.action.terminal.focusHover",
-		"when": "terminalFocus"
-	},
-	{
-		"key": "ctrl+g i",
-		"command": "workbench.action.showTreeHover",
-		"when": "customTreeView && listFocus"
-	},
-	{
-		"key": "ctrl+g i",
-		"command": "editor.debug.action.showDebugHover",
-		"when": "editorTextFocus && inDebugMode"
-	},
-
-	// ───────────────────────────────────────────────────────────────
-	// NAVIGATION
-	// ───────────────────────────────────────────────────────────────
-
-	{ "key": "ctrl+g -", "command": "workbench.action.navigateBack" },
-	{ "key": "ctrl+g =", "command": "workbench.action.navigateForward" },
-	{ "key": "ctrl+g o", "command": "workbench.action.gotoSymbol" },
-	{ "key": "ctrl+g d", "command": "editor.action.revealDefinition" },
-
-	// ───────────────────────────────────────────────────────────────
 	// FILE / TAB / WINDOW
 	// ───────────────────────────────────────────────────────────────
 
-	{ "key": "ctrl+g w", "command": "workbench.action.closeAllEditors" },
 	{ "key": "ctrl+s w", "command": "workbench.action.switchWindow" },
-
-	// ───────────────────────────────────────────────────────────────
-	// VIEW SWITCHING
-	// ───────────────────────────────────────────────────────────────
-
-	{ "key": "ctrl+g g", "command": "workbench.view.scm" },
-	{ "key": "ctrl+g e", "command": "workbench.view.explorer" },
-	{ "key": "ctrl+g x", "command": "workbench.view.extensions" },
-	{ "key": "ctrl+g f", "command": "workbench.action.findInFiles" },
-
-	// ───────────────────────────────────────────────────────────────
-	// GIT / GITLENS
-	// ───────────────────────────────────────────────────────────────
-
-	{ "key": "ctrl+g u", "command": "git.undoCommit" },
-	{ "key": "ctrl+g a", "command": "git.stageAll" },
-	{ "key": "ctrl+g p", "command": "workbench.view.extension.gitlens" },
-
-	{
-		"key": "ctrl+g ,",
-		"command": "gitlens.diffWithPreviousInDiffLeft",
-		"when": "editorTextFocus && isInDiffEditor && !isInDiffRightEditor"
-	},
-	{
-		"key": "ctrl+g ,",
-		"command": "gitlens.diffWithPreviousInDiffRight",
-		"when": "editorTextFocus && isInDiffRightEditor"
-	},
-
-	// ───────────────────────────────────────────────────────────────
-	// AI / COPILOT
-	// ───────────────────────────────────────────────────────────────
-
-	{
-		"key": "ctrl+g i",
-		"command": "workbench.action.chat.openEditSession",
-		"when": "chatEditingParticipantRegistered"
-	},
-	{
-		"key": "ctrl+g i",
-		"command": "workbench.panel.chat",
-		"when": "workbench.panel.chat.view.copilot.active"
-	},
 
 	{
 		"key": "alt+space",
@@ -228,31 +96,10 @@
 	// ───────────────────────────────────────────────────────────────
 
 	{
-		"key": "ctrl+g t",
-		"command": "workbench.action.terminal.toggleTerminal",
-		"when": "terminal.active"
-	},
-	{
 		"key": "shift+enter",
 		"command": "workbench.action.terminal.sendSequence",
 		"args": { "text": "\\\r\n" },
 		"when": "terminalFocus"
-	},
-	{
-		"key": "ctrl+g c",
-		"command": "workbench.action.openChat",
-		"when": "chatIsEnabled"
-	},
-
-	// ───────────────────────────────────────────────────────────────
-	// TASKS
-	// ───────────────────────────────────────────────────────────────
-
-	{ "key": "ctrl+g r", "command": "workbench.action.tasks.runTask" },
-	{ "key": "ctrl+g shift+r", "command": "workbench.action.tasks.reRunTask" },
-	{
-		"key": "ctrl+g shift+t",
-		"command": "workbench.action.tasks.test"
 	},
 	{
 		"key": "cmd+n",
@@ -268,10 +115,5 @@
 		"key": "ctrl+l",
 		"command": "-workbench.action.chat.newChat",
 		"when": "chatIsEnabled && inChat && chatLocation == 'panel'"
-	},
-	{
-		"key": "ctrl+g m",
-		"command": "markdown.showSource",
-		"when": "activeCustomEditorId == 'vscode.markdown.preview.editor' || activeWebviewPanelId == 'markdown.preview'"
 	}
 ]
