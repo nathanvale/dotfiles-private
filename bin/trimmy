@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+trimmy_cli="/Applications/Trimmy.app/Contents/Helpers/TrimmyCLI"
+
+if [[ ! -x "$trimmy_cli" ]]; then
+  echo "trimmy: TrimmyCLI not found at $trimmy_cli" >&2
+  echo "trimmy: install Trimmy with: brew install --cask steipete/tap/trimmy" >&2
+  exit 127
+fi
+
+exec "$trimmy_cli" "$@"
