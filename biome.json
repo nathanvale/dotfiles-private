@@ -28,6 +28,10 @@
 					"allowTrailingCommas": true
 				}
 			}
+		},
+		{
+			"includes": ["config/karabiner/**/*.json"],
+			"formatter": { "enabled": false }
 		}
 	]
 }
