@@ -232,7 +232,6 @@
 	// Keep last: VS Code bug #192954
 	// Use "Reopen Editor With..." > Text Editor when editing one file directly
 	"workbench.editorAssociations": {
-		"*.md": "vscode.markdown.preview.editor",
 		"*.copilotmd": "vscode.markdown.preview.editor"
 	},
 	"diffEditor.renderSideBySide": true,
