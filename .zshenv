@@ -2,6 +2,10 @@
 #
 # Keep this file side-effect free. Interactive setup, version managers, secrets,
 # and launchctl sync belong in explicit shell helpers or login/interactive files.
+
+# Codex sandboxes block the default ~/.cache/clang path. Keep Swift module
+# compilation in OS-managed temporary storage available to sandboxed workers.
+export CLANG_MODULE_CACHE_PATH="${TMPDIR:-/tmp}/clang-module-cache"
 #
 # EXCEPTION: the 1Password service-account token is the bootstrap key that lets
 # `op read` fetch every other secret on demand. It must be present in ALL shells
