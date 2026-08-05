@@ -1,0 +1,208 @@
+#!/usr/bin/env bash
+# ghh - run GitHub CLI commands with a process-scoped authenticated account.
+
+set -euo pipefail
+
+VERSION="0.1.0"
+HOST="github.com"
+RUN_ID="ghh-$(date +%s)-$$-${RANDOM:-0}"
+
+usage() {
+  cat <<'EOF'
+ghh - run GitHub CLI commands with a process-scoped authenticated account
+
+Usage:
+  ghh check --account <login> [--json]
+  ghh exec --account <login> -- <gh arguments...>
+  ghh --help
+  ghh --version
+
+Commands:
+  check   Verify that a stored credential resolves to the requested login.
+  exec    Forward arguments to gh with that verified credential.
+
+Behavior:
+  Never changes the active gh account.
+  Removes ambient GitHub tokens while selecting the stored credential.
+  Sets GH_TOKEN only for the forwarded gh process.
+  Sets GH_PROMPT_DISABLED=1 for non-interactive agent use.
+  Preserves gh stdout, stderr, and exit status.
+  Leaves Git push identity to the repository remote and SSH configuration.
+
+Examples:
+  ghh check --account nathanvale --json
+  ghh exec --account nathanvale -- pr view 305
+  ghh exec --account myagentdojo -- issue list -R myagentdojo/example
+
+Exit codes:
+  0    Success.
+  64   Invalid invocation.
+  69   gh or the requested stored credential is unavailable.
+  70   The credential resolves to a different GitHub login.
+  other  Exit status from the forwarded gh command.
+
+Side effects:
+  check is read-only and safe to retry.
+  exec inherits the side effects and retry safety of the forwarded gh command.
+
+Smoke:
+  ghh check --account nathanvale --json
+EOF
+}
+
+emit_error() {
+  local status="$1"
+  local category="$2"
+  local message="$3"
+  local account="${4:-}"
+  local actual="${5:-}"
+  local json="${6:-false}"
+
+  if [[ "$json" == "true" ]]; then
+    printf '{"status":"error","category":"%s","message":"%s","account":"%s","actual":"%s","run_id":"%s","retry_safe":true}\n' \
+      "$category" "$message" "$account" "$actual" "$RUN_ID" >&2
+  else
+    echo "ghh: $message" >&2
+    echo "ghh: run_id=$RUN_ID" >&2
+  fi
+  exit "$status"
+}
+
+require_login_shape() {
+  local account="$1"
+  local json="$2"
+
+  if [[ ! "$account" =~ ^[A-Za-z0-9][A-Za-z0-9-]{0,38}$ || "$account" == *- ]]; then
+    emit_error 64 "invalid_account" "GitHub login has an invalid shape" "$account" "" "$json"
+  fi
+}
+
+resolve_token() {
+  local account="$1"
+  local json="$2"
+  local token
+
+  if ! command -v gh >/dev/null 2>&1; then
+    emit_error 69 "gh_unavailable" "gh is unavailable; install GitHub CLI and retry" "$account" "" "$json"
+  fi
+
+  if ! token="$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth token --hostname "$HOST" --user "$account" 2>/dev/null)"; then
+    emit_error 69 "account_unavailable" "No stored credential for $account; run gh auth login --hostname $HOST, then retry" "$account" "" "$json"
+  fi
+
+  if [[ -z "$token" ]]; then
+    emit_error 69 "account_unavailable" "Stored credential for $account was empty; authenticate again, then retry" "$account" "" "$json"
+  fi
+
+  printf '%s' "$token"
+}
+
+verify_identity() {
+  local account="$1"
+  local token="$2"
+  local json="$3"
+  local actual
+
+  if ! actual="$(env -u GITHUB_TOKEN GH_TOKEN="$token" GH_PROMPT_DISABLED=1 gh api user --jq .login 2>/dev/null)"; then
+    emit_error 69 "identity_unavailable" "Could not verify the stored credential for $account; check network access and retry" "$account" "" "$json"
+  fi
+
+  if [[ "$actual" != "$account" ]]; then
+    emit_error 70 "identity_mismatch" "Credential identity does not match requested account" "$account" "$actual" "$json"
+  fi
+}
+
+parse_account_flags() {
+  local json_allowed="$1"
+  shift
+  ACCOUNT=""
+  JSON_OUTPUT=false
+  FORWARDED_ARGS=()
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --account)
+        if [[ $# -lt 2 || -z "$2" ]]; then
+          emit_error 64 "invalid_usage" "--account requires a login" "" "" "$JSON_OUTPUT"
+        fi
+        ACCOUNT="$2"
+        shift 2
+        ;;
+      --json)
+        if [[ "$json_allowed" != "true" ]]; then
+          emit_error 64 "invalid_usage" "Place forwarded --json after the -- separator" "$ACCOUNT" "" false
+        fi
+        JSON_OUTPUT=true
+        shift
+        ;;
+      --)
+        shift
+        FORWARDED_ARGS=("$@")
+        return
+        ;;
+      *)
+        emit_error 64 "invalid_usage" "Unknown argument: $1; run ghh --help" "$ACCOUNT" "" "$JSON_OUTPUT"
+        ;;
+    esac
+  done
+}
+
+if [[ $# -eq 0 ]]; then
+  usage
+  exit 0
+fi
+
+case "$1" in
+  -h|--help|help)
+    usage
+    exit 0
+    ;;
+  --version)
+    echo "ghh $VERSION"
+    exit 0
+    ;;
+  check)
+    shift
+    parse_account_flags true "$@"
+    if [[ -z "$ACCOUNT" ]]; then
+      emit_error 64 "invalid_usage" "--account is required; run ghh --help" "" "" "$JSON_OUTPUT"
+    fi
+    if [[ ${#FORWARDED_ARGS[@]} -gt 0 ]]; then
+      emit_error 64 "invalid_usage" "check does not accept forwarded gh arguments" "$ACCOUNT" "" "$JSON_OUTPUT"
+    fi
+    require_login_shape "$ACCOUNT" "$JSON_OUTPUT"
+    TOKEN="$(resolve_token "$ACCOUNT" "$JSON_OUTPUT")"
+    verify_identity "$ACCOUNT" "$TOKEN" "$JSON_OUTPUT"
+    if [[ "$JSON_OUTPUT" == "true" ]]; then
+      printf '{"status":"ok","command":"check","account":"%s","host":"%s","side_effect":"read","retry_safe":true,"run_id":"%s"}\n' \
+        "$ACCOUNT" "$HOST" "$RUN_ID"
+    else
+      echo "ghh: verified $ACCOUNT on $HOST"
+    fi
+    ;;
+  exec)
+    shift
+    parse_account_flags false "$@"
+    if [[ -z "$ACCOUNT" ]]; then
+      emit_error 64 "invalid_usage" "--account is required; run ghh --help" "" "" false
+    fi
+    if [[ ${#FORWARDED_ARGS[@]} -eq 0 ]]; then
+      emit_error 64 "invalid_usage" "A gh command is required after --" "$ACCOUNT" "" false
+    fi
+    require_login_shape "$ACCOUNT" false
+    TOKEN="$(resolve_token "$ACCOUNT" false)"
+    verify_identity "$ACCOUNT" "$TOKEN" false
+    set +e
+    env -u GITHUB_TOKEN GH_TOKEN="$TOKEN" GH_PROMPT_DISABLED=1 gh "${FORWARDED_ARGS[@]}"
+    STATUS=$?
+    set -e
+    if [[ "$STATUS" -ne 0 ]]; then
+      echo "ghh: forwarded gh command failed; retry depends on the forwarded gh command" >&2
+      echo "ghh: run_id=$RUN_ID" >&2
+    fi
+    exit "$STATUS"
+    ;;
+  *)
+    emit_error 64 "invalid_usage" "Unknown command: $1; run ghh --help" "" "" false
+    ;;
+esac
