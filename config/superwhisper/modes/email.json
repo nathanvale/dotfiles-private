@@ -18,7 +18,6 @@
   "languageModelID" : "sw-gpt-4o-mini",
   "literalPunctuation" : false,
   "name" : "Email",
-  "playbackBehavior" : "keepPlaying",
   "prompt" : "Transform the User Message into a professional email. Remove filler words, repeated words, and false starts. Structure the content with:\n\n- Clear, professional greeting (if appropriate from context)\n- Well-organized paragraphs with proper flow\n- Professional but warm tone\n- Proper email formatting and punctuation\n- Clear action items or next steps (if applicable)\n- Professional closing (if appropriate from context)\n\nMaintain clarity and conciseness. Don't be overly formal - aim for professional yet personable. Output only the formatted email text with no explanations.",
   "promptExamples" : [
 

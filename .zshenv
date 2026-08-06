@@ -11,8 +11,8 @@ export CLANG_MODULE_CACHE_PATH="${TMPDIR:-/tmp}/clang-module-cache"
 # prefix available so remote tools resolve installed executables before
 # fallback path probes.
 case ":${PATH:-}:" in
-	*:/opt/homebrew/bin:*) ;;
-	*) export PATH="/opt/homebrew/bin:${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" ;;
+  *:/opt/homebrew/bin:*) ;;
+  *) export PATH="/opt/homebrew/bin:${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" ;;
 esac
 
 # EXCEPTION: the 1Password service-account token is the bootstrap key that lets
