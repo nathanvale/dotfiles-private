@@ -12,6 +12,8 @@
 			"!config/gspread",
 			"!config/notion-cli",
 			"!config/gogcli",
+			"!config/uv",
+			"!config/fish",
 			"!misc",
 			"!pnpm-lock.yaml",
 			"!PROJECT_INDEX.json"
