@@ -1,0 +1,371 @@
+{
+	"name": "diff-toggle",
+	"displayName": "Nathan ADHD Helper",
+	"description": "Visual chord HUD and ADHD-friendly feedback for VS Code actions.",
+	"version": "0.3.5",
+	"publisher": "nathanvale",
+	"engines": {
+		"vscode": "^1.90.0"
+	},
+	"categories": [
+		"Other"
+	],
+	"activationEvents": [
+		"onCommand:nathan.enterChordMode",
+		"onCommand:nathan.cycleChordHud",
+		"onCommand:nathan.pinChordHud",
+		"onCommand:nathan.expandChordHudForInspection",
+		"onCommand:nathan.showChordPalette",
+		"onCommand:nathan.exitChordMode",
+		"onCommand:nathan.runChordAction",
+		"onCommand:nathan.toggleGitDiff",
+		"onCommand:nathan.openSourceFromDiff",
+		"onCommand:nathan.showChangedFiles"
+	],
+	"main": "./extension.js",
+	"scripts": {
+		"test": "node --test test/*.test.js"
+	},
+	"files": [
+		"extension.js"
+	],
+	"contributes": {
+		"commands": [
+			{
+				"command": "nathan.enterChordMode",
+				"title": "Nathan ADHD Helper: Show Chord HUD"
+			},
+			{
+				"command": "nathan.cycleChordHud",
+				"title": "Nathan ADHD Helper: Cycle Chord HUD"
+			},
+			{
+				"command": "nathan.pinChordHud",
+				"title": "Nathan ADHD Helper: Pin Chord HUD"
+			},
+			{
+				"command": "nathan.showChordPalette",
+				"title": "Nathan ADHD Helper: Search Chord Actions"
+			},
+			{
+				"command": "nathan.expandChordHudForInspection",
+				"title": "Nathan ADHD Helper: Inspect Chord HUD"
+			},
+			{
+				"command": "nathan.exitChordMode",
+				"title": "Nathan ADHD Helper: Hide Chord HUD"
+			},
+			{
+				"command": "nathan.toggleGitDiff",
+				"title": "Nathan ADHD Helper: Toggle Git Diff"
+			},
+			{
+				"command": "nathan.showChangedFiles",
+				"title": "Nathan ADHD Helper: Show Changed Files"
+			}
+		],
+		"keybindings": [
+			{
+				"key": "ctrl+g",
+				"command": "nathan.enterChordMode",
+				"when": "!nathan.adhdChordMode"
+			},
+			{
+				"key": "ctrl+g",
+				"command": "nathan.cycleChordHud",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+/",
+				"command": "nathan.pinChordHud",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "space",
+				"command": "nathan.showChordPalette",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "escape",
+				"command": "nathan.exitChordMode",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "e",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "E",
+					"label": "Explorer",
+					"command": "workbench.view.explorer"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "d",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "D",
+					"label": "Diff/source toggle",
+					"command": "nathan.toggleGitDiff",
+					"receipt": false
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": ",",
+				"command": "nathan.showChangedFiles",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "g",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "G",
+					"label": "Source Control",
+					"command": "workbench.view.scm"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "f",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "F",
+					"label": "Find in files",
+					"command": "workbench.action.findInFiles"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "x",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "X",
+					"label": "Extensions",
+					"command": "workbench.view.extensions"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "o",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "O",
+					"label": "Symbols",
+					"command": "workbench.action.gotoSymbol"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "i",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "I",
+					"label": "Info/hover",
+					"command": "editor.action.showHover"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "t",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "T",
+					"label": "Terminal",
+					"command": "workbench.action.terminal.toggleTerminal"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "c",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "C",
+					"label": "Chat",
+					"command": "workbench.action.openChat"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "w",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "W",
+					"label": "Close all editors",
+					"command": "workbench.action.closeAllEditors"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "z",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "Z",
+					"label": "Zen mode",
+					"command": "workbench.action.toggleZenMode"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "h",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "H",
+					"label": "Focus left group",
+					"command": "workbench.action.focusLeftGroup"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "j",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "J",
+					"label": "Focus below group",
+					"command": "workbench.action.focusBelowGroup"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "k",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "K",
+					"label": "Focus above group",
+					"command": "workbench.action.focusAboveGroup"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "l",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "L",
+					"label": "Focus right group",
+					"command": "workbench.action.focusRightGroup"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "a",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "A",
+					"label": "Stage all changes",
+					"command": "git.stageAll"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "u",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "U",
+					"label": "Undo commit",
+					"command": "git.undoCommit"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "p",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "P",
+					"label": "GitLens",
+					"command": "workbench.view.extension.gitlens"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": ".",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": ".",
+					"label": "Quick fix",
+					"command": "editor.action.quickFix"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": ";",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": ";",
+					"label": "Keyboard shortcuts",
+					"command": "workbench.action.openGlobalKeybindings"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "m",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "M",
+					"label": "Markdown source",
+					"command": "markdown.showSource"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "r",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "R",
+					"label": "Run task",
+					"command": "workbench.action.tasks.runTask"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+r",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "Shift+R",
+					"label": "Rerun task",
+					"command": "workbench.action.tasks.reRunTask"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+t",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "Shift+T",
+					"label": "Test task",
+					"command": "workbench.action.tasks.test"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+d",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "Shift+D",
+					"label": "Go to definition",
+					"command": "editor.action.revealDefinition"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "-",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "-",
+					"label": "Back",
+					"command": "workbench.action.navigateBack"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "=",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "=",
+					"label": "Forward",
+					"command": "workbench.action.navigateForward"
+				},
+				"when": "nathan.adhdChordMode"
+			}
+		]
+	}
+}
