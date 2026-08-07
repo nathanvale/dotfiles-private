@@ -1,12 +1,9 @@
 {
-  "trustedtaps": [
-    "k1low/tap",
-    "ognistik/formulae",
-    "openclaw/tap",
-    "steipete/tap"
-  ],
-  "trustedformulae": [
-    "steipete/tap/mcporter",
-    "steipete/tap/peekaboo"
-  ]
+	"trustedtaps": [
+		"k1low/tap",
+		"ognistik/formulae",
+		"openclaw/tap",
+		"steipete/tap"
+	],
+	"trustedformulae": ["steipete/tap/mcporter", "steipete/tap/peekaboo"]
 }
