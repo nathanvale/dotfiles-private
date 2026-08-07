@@ -4,12 +4,15 @@
 		"includes": [
 			"**",
 			"!config/tmuxinator/*.yml",
-			"!config/opencode/",
-			"!config/superwhisper/",
-			"!config/para-obsidian/",
-			"!config/vault-manager/",
-			"!config/vscode/",
-			"!misc/",
+			"!config/opencode",
+			"!config/superwhisper",
+			"!config/para-obsidian",
+			"!config/vault-manager",
+			"!config/vscode",
+			"!config/gspread",
+			"!config/notion-cli",
+			"!config/gogcli",
+			"!misc",
 			"!pnpm-lock.yaml",
 			"!PROJECT_INDEX.json"
 		]

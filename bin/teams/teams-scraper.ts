@@ -11,8 +11,8 @@
  *   3. Script will capture, parse, and save messages
  */
 
+import { parseArgs } from "node:util";
 import { $ } from "bun";
-import { parseArgs } from "util";
 
 const DEBUG_REPLIES = false;
 
@@ -158,16 +158,16 @@ function parseDate(timestamp: string): Date | null {
 	if (!match) return null;
 
 	const [, day, month, year, hour, minute, ampm] = match;
-	let h = parseInt(hour);
+	let h = parseInt(hour, 10);
 	if (ampm.toLowerCase() === "pm" && h !== 12) h += 12;
 	if (ampm.toLowerCase() === "am" && h === 12) h = 0;
 
 	return new Date(
-		parseInt(year),
-		parseInt(month) - 1,
-		parseInt(day),
+		parseInt(year, 10),
+		parseInt(month, 10) - 1,
+		parseInt(day, 10),
 		h,
-		parseInt(minute),
+		parseInt(minute, 10),
 	);
 }
 
@@ -672,7 +672,7 @@ function parseTeamsStateMachine(raw: string): ScrapedData {
 						currentReactions.push({
 							emoji: trimmed,
 							name: countMatch[2].trim(),
-							count: parseInt(countMatch[1]),
+							count: parseInt(countMatch[1], 10),
 						});
 						i += 2; // Skip emoji line, count line, and the bare number line
 						continue;
@@ -849,7 +849,7 @@ function parseTeamsStateMachine(raw: string): ScrapedData {
 						currentReactions.push({
 							emoji: trimmed,
 							name: countMatch[2].trim(),
-							count: parseInt(countMatch[1]),
+							count: parseInt(countMatch[1], 10),
 						});
 						i += 2;
 						continue;
@@ -991,7 +991,7 @@ function createMessage(
 	replyTo?: TeamsMessage["replyTo"],
 ): TeamsMessage {
 	const [datePart] = timestamp.split(" ");
-	const timePart = timestamp.replace(datePart + " ", "");
+	const timePart = timestamp.replace(`${datePart} `, "");
 	const contentText = content.join("\n").trim();
 
 	return {

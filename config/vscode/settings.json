@@ -10,7 +10,7 @@
 		"editor.defaultFormatter": "esbenp.prettier-vscode"
 	},
 	"[jsonc]": {
-		"editor.defaultFormatter": "esbenp.prettier-vscode"
+		"editor.defaultFormatter": "vscode.json-language-features"
 	},
 	"[markdown]": {
 		"editor.defaultFormatter": "esbenp.prettier-vscode"
@@ -225,13 +225,14 @@
 	"markdown-preview-enhanced.codeBlockTheme": "github-dark.css",
 	"markdown-preview-enhanced.previewColorScheme": "systemColorScheme",
 	"markdown-preview-enhanced.mermaidTheme": "dark",
-	"markdown-preview-enhanced.automaticallyShowPreviewOfMarkdownBeingEdited": true,
+	"markdown-preview-enhanced.automaticallyShowPreviewOfMarkdownBeingEdited": false,
 	"markdown-preview-enhanced.enableScriptExecution": true,
 	"markdown.preview.doubleClickToSwitchToEditor": true,
 	// Markdown files open in VS Code's built-in preview by default
 	// Keep last: VS Code bug #192954
 	// Use "Reopen Editor With..." > Text Editor when editing one file directly
 	"workbench.editorAssociations": {
+		"*.md": "vscode.markdown.preview.editor",
 		"*.copilotmd": "vscode.markdown.preview.editor"
 	},
 	"diffEditor.renderSideBySide": true,

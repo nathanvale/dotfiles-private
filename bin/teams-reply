@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+# teams-reply — quote-reply to an existing Teams message.
+#
+#   teams-reply "Joshua Green can this be reviewed today" ./reply.txt
+#   echo "Thanks" | teams-reply "can this be reviewed today" -
+#
+# How it works: paste the message text into Teams search, click the top result to
+# jump to that message, then hover it and click the "Reply with quote" (99) icon.
+#
+# ⚠️ LESS ROBUST THAN teams-send. It depends on screen coordinates for the search
+# result and the hover toolbar, because Teams exposes no accessibility elements for
+# either. Coordinates are derived from the current window geometry, but a different
+# window size, zoom level, or Teams update can move them. ALWAYS check the
+# screenshot before sending. Prefer teams-send when a plain message will do.
+
+set -uo pipefail
+
+LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/teams-automation.sh"
+# shellcheck source=lib/teams-automation.sh
+. "$LIB" || { echo "cannot load $LIB" >&2; exit 1; }
+
+usage() {
+  cat >&2 <<'EOF'
+usage: teams-reply <search-text> <file|->
+
+  <search-text>  Distinctive text from the message you want to reply to.
+                 Use as much of the original message as you can: the exact
+                 match then sorts to the top of the results list, which is
+                 the position this script clicks.
+  <file|->       File containing your reply, or - to read stdin
+
+Staging only: the quote and your reply land in the compose box and stop there.
+EOF
+  exit 1
+}
+
+[ $# -eq 2 ] || usage
+QUERY="$1"; SRC="$2"
+
+if [ "$SRC" = "-" ]; then
+  MSG=$(cat)
+else
+  [ -f "$SRC" ] || { echo "no such file: $SRC" >&2; exit 1; }
+  MSG=$(cat "$SRC")
+fi
+[ -n "${MSG//[[:space:]]/}" ] || { echo "reply is empty" >&2; exit 1; }
+
+teams_require_focus || exit 2
+
+# --- geometry -------------------------------------------------------------
+# Derive click points from the actual window frame rather than hardcoding.
+# elem_1 is the web-content group and tracks the window.
+read -r WX WY WW WH < <(
+  timeout 30s peekaboo see --app "$TEAMS_APP" --json 2>/dev/null \
+    | jq -r '[ .. | objects | select(.id? == "elem_1") | .bounds ][0]
+             | "\(.x) \(.y) \(.width) \(.height)"'
+)
+if [ -z "${WX:-}" ] || [ "$WX" = "null" ]; then
+  echo "ABORT: could not read Teams window geometry." >&2
+  exit 2
+fi
+# Search field sits in the title bar, horizontally centred on the window.
+SEARCH_X=$(awk -v x="$WX" -v w="$WW" 'BEGIN{printf "%d", x + w/2}')
+SEARCH_Y=$(awk -v y="$WY" 'BEGIN{printf "%d", y - 31}')   # title bar sits above web content
+# First "Recent messages" row in the dropdown, measured 2026-08-04.
+RESULT_X=$(awk -v x="$WX" -v w="$WW" 'BEGIN{printf "%d", x + w/2 - 55}')
+RESULT_Y=$(awk -v y="$WY" 'BEGIN{printf "%d", y + 237}')
+
+echo "window      : ${WW}x${WH} @ ${WX},${WY}"
+echo "search box  : ${SEARCH_X},${SEARCH_Y}"
+echo "top result  : ${RESULT_X},${RESULT_Y}"
+
+# --- 1. search for the message -------------------------------------------
+timeout 20s peekaboo hotkey "cmd,e" >/dev/null 2>&1; sleep 2
+teams_require_focus || exit 2
+timeout 20s peekaboo hotkey "cmd,a" >/dev/null 2>&1; sleep 0.5
+printf '%s' "$QUERY" | pbcopy
+timeout 25s peekaboo paste >/dev/null 2>&1
+sleep 4
+
+SHOT1="${TMPDIR:-/tmp}/teams-reply-results-$(date +%s).png"
+teams_screenshot "$SHOT1" >/dev/null
+echo "results     : $SHOT1"
+
+# --- 2. click the top result ---------------------------------------------
+# Teams' search rows are custom-drawn, so a background AX press finds nothing;
+# a real foreground click is required.
+teams_require_focus || exit 2
+timeout 25s peekaboo click --coords "${RESULT_X},${RESULT_Y}" \
+  --app "$TEAMS_APP" --foreground --input-strategy synthOnly >/dev/null 2>&1 \
+  || { echo "ABORT: could not click the top search result." >&2; exit 2; }
+sleep 5
+
+echo "landed      : $(teams_window_title)"
+
+SHOT2="${TMPDIR:-/tmp}/teams-reply-landed-$(date +%s).png"
+teams_screenshot "$SHOT2" >/dev/null
+echo "after click : $SHOT2"
+
+cat <<EOF
+
+STAGED THE NAVIGATION ONLY.
+
+The script has jumped to the message. It has NOT clicked "Reply with quote",
+because the toolbar position depends on where the message rendered, and a wrong
+click here quote-replies to the wrong message in front of the whole channel.
+
+Next, by hand:
+  1. Open $SHOT2 and confirm the right message is highlighted.
+  2. Hover it, click the 99 (Reply with quote) icon.
+  3. Your reply is on the clipboard already — paste and send.
+
+Reply text has been copied to your clipboard.
+EOF
+
+printf '%s' "$MSG" | pbcopy

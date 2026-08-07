@@ -439,6 +439,23 @@ run_package_install() {
     fi
 }
 
+# Run repo-local worktree setup if present (e.g. symlink shared paths).
+# Returns 0 if a setup script was found and ran (caller can skip copy_untracked_files).
+# Returns 1 if no setup script exists (caller should fall back to copy_untracked_files).
+# Args: $1 = repo root, $2 = worktree path
+run_repo_setup() {
+    local repo_root="$1"
+    local worktree_path="$2"
+    local setup_script="$repo_root/scripts/worktree-setup.sh"
+
+    if [[ -f "$setup_script" ]]; then
+        info "Running repo worktree setup..." >&2
+        bash "$setup_script" "$worktree_path"
+        return 0
+    fi
+    return 1
+}
+
 # Check if package install should run (node_modules missing or stale)
 # Args: $1 = worktree path
 # Returns: 0 if install needed, 1 if up-to-date
@@ -607,6 +624,11 @@ ensure_worktree_cli() {
     created_path=$(jq -r '.path' <<< "$json_output")
     sidequest_log "cli" "create" "$branch" "0"
 
+    # Repo-local setup (symlinks) — replaces SideQuest's copies with symlinks
+    if [[ -d "$created_path" ]]; then
+        run_repo_setup "$repo_root" "$created_path"
+    fi
+
     # Install sequence: switch node -> verify -> install
     if [[ -d "$created_path" ]]; then
         switch_node_version "$created_path"
@@ -706,8 +728,10 @@ ensure_worktree() {
         fi
     fi
 
-    # Copy untracked files from main worktree to new worktree
-    copy_untracked_files "$repo_root" "$worktree_path"
+    # Repo-local setup (symlinks) or fallback to copying untracked files
+    if ! run_repo_setup "$repo_root" "$worktree_path"; then
+        copy_untracked_files "$repo_root" "$worktree_path"
+    fi
 
     # Install dependencies if this is a JS/TS project
     run_package_install "$worktree_path"
@@ -824,8 +848,10 @@ main() {
         local repo_root
         repo_root=$(get_repo_root)
 
-        # Copy untracked files (safe to re-run, skips existing)
-        copy_untracked_files "$repo_root" "$worktree_path"
+        # Repo-local setup (symlinks) or fallback to copying untracked files
+        if ! run_repo_setup "$repo_root" "$worktree_path"; then
+            copy_untracked_files "$repo_root" "$worktree_path"
+        fi
 
         # Only run install if node_modules is missing or stale
         if should_run_install "$worktree_path"; then
