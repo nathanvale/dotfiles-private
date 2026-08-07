@@ -3,7 +3,13 @@
 
   ],
   "modeKeys" : [
-
+    "message",
+    "agent-prompt",
+    "casual-text",
+    "daily-note",
+    "default",
+    "email",
+    "professional-engineer"
   ],
   "replacements" : [
     {
