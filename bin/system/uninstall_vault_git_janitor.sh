@@ -32,6 +32,7 @@ main() {
   local state_dir="$runtime_root/state"
   local config_dir="$runtime_root/config"
   local log_dir="$runtime_root/logs"
+  local lock_pid=''
   local index
 
   while [[ "$#" -gt 0 ]]; do
@@ -52,8 +53,18 @@ main() {
   done
 
   if [[ -d "$state_dir/run.lock" ]]; then
-    printf 'error=active-run message=Janitor-is-running repair=retry-after-the-current-run\n' >&2
-    return 1
+    # Reclaim only a verified-dead owner; refuse live or unverifiable owners.
+    if [[ -f "$state_dir/run.lock/pid" && ! -L "$state_dir/run.lock/pid" ]]; then
+      lock_pid="$(<"$state_dir/run.lock/pid")"
+    fi
+    if [[ "$lock_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      rm -f "$state_dir/run.lock/pid"
+      rmdir "$state_dir/run.lock" 2>/dev/null || true
+    fi
+    if [[ -d "$state_dir/run.lock" ]]; then
+      printf 'error=active-run message=Janitor-is-running repair=retry-after-the-current-run\n' >&2
+      return 1
+    fi
   fi
   if is_test_mode && [[ -n "${VAULT_GIT_JANITOR_LAUNCHCTL:-}" ]]; then
     launchctl_bin="$VAULT_GIT_JANITOR_LAUNCHCTL"

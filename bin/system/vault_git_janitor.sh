@@ -77,7 +77,7 @@ refuse() {
 
 cleanup() {
   if "$LOCK_HELD"; then
-    rm -f "$STATE_DIR/current-run-id"
+    rm -f "$STATE_DIR/current-run-id" "$STATE_DIR/run.lock/pid"
     rmdir "$STATE_DIR/run.lock" 2>/dev/null || true
   fi
 }
@@ -189,10 +189,12 @@ read_runtime_config() {
   local key
   local value
   local entrypoint_seen=false
+  local profile_seen=false
   local hour_seen=false
   local minute_seen=false
 
   ENTRYPOINT=''
+  MACHINE_PROFILE=''
   SCHEDULE_HOUR=''
   SCHEDULE_MINUTE=''
 
@@ -205,6 +207,11 @@ read_runtime_config() {
         "$entrypoint_seen" && return 1
         ENTRYPOINT="$value"
         entrypoint_seen=true
+        ;;
+      profile)
+        "$profile_seen" && return 1
+        MACHINE_PROFILE="$value"
+        profile_seen=true
         ;;
       hour)
         "$hour_seen" && return 1
@@ -222,7 +229,7 @@ read_runtime_config() {
     esac
   done <"$config_path"
 
-  "$entrypoint_seen" && "$hour_seen" && "$minute_seen"
+  "$entrypoint_seen" && "$profile_seen" && "$hour_seen" && "$minute_seen"
 }
 
 current_date() {
@@ -239,6 +246,12 @@ current_time() {
   else
     TZ="$REQUIRED_TIMEZONE" date +'%H:%M'
   fi
+}
+
+previous_local_date() {
+  local date_value="$1"
+
+  date -j -v-1d -f '%Y-%m-%d' "$date_value" +'%Y-%m-%d'
 }
 
 uptime_seconds() {
@@ -287,8 +300,14 @@ main() {
   local requested_trigger='auto'
   local timezone
   local now_time
+  local machine_profile_file
+  local machine_profile
+  local scheduled_time
+  local previous_day
+  local latest_ran
   local last_success=''
   local last_attempt=''
+  local lock_pid=''
   local command_status
 
   STATE_DIR="$runtime_root/state"
@@ -340,19 +359,34 @@ main() {
       ;;
   esac
 
+  if verify_private_directory "$LOG_DIR"; then
+    LOG_FILE="$LOG_DIR/janitor.log"
+  fi
+
   if [[ ! -d "$STATE_DIR" || -L "$STATE_DIR" ]]; then
-    printf 'timestamp=%s run_id=unknown status=refused trigger=unknown local_date=unknown error=state-dir-unsafe\n' "$(timestamp)"
+    refuse 'state-dir-unsafe'
     return 1
   fi
   if ! mkdir "$STATE_DIR/run.lock" 2>/dev/null; then
-    if [[ -f "$STATE_DIR/current-run-id" && ! -L "$STATE_DIR/current-run-id" ]]; then
-      RUN_ID="$(<"$STATE_DIR/current-run-id")"
+    if [[ -f "$STATE_DIR/run.lock/pid" && ! -L "$STATE_DIR/run.lock/pid" ]]; then
+      lock_pid="$(<"$STATE_DIR/run.lock/pid")"
     fi
-    summary 'singleton-noop'
-    return 0
+    if [[ "$lock_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
+      rm -f "$STATE_DIR/run.lock/pid"
+      rmdir "$STATE_DIR/run.lock" 2>/dev/null || true
+    fi
+    if ! mkdir "$STATE_DIR/run.lock" 2>/dev/null; then
+      if [[ -f "$STATE_DIR/current-run-id" && ! -L "$STATE_DIR/current-run-id" ]]; then
+        RUN_ID="$(<"$STATE_DIR/current-run-id")"
+      fi
+      summary 'singleton-noop'
+      return 0
+    fi
   fi
   LOCK_HELD=true
   trap cleanup EXIT INT TERM
+  printf '%s\n' "$$" >"$STATE_DIR/run.lock/pid"
+  chmod 600 "$STATE_DIR/run.lock/pid"
   RUN_ID="$(date +%s)-$$"
   atomic_state_write "$STATE_DIR/current-run-id" "$RUN_ID"
 
@@ -360,7 +394,6 @@ main() {
     refuse 'private-directory-unsafe'
     return 1
   fi
-  LOG_FILE="$LOG_DIR/janitor.log"
 
   timezone="$(system_timezone)"
   if [[ "$timezone" != "$REQUIRED_TIMEZONE" ]]; then
@@ -377,6 +410,23 @@ main() {
     return 1
   fi
 
+  # Re-verify the server profile on every run: the persisted install-time
+  # profile must be server, and the machine must still pass the same server
+  # check the installer used.
+  if [[ "$MACHINE_PROFILE" != 'server' ]]; then
+    refuse 'runtime-profile-not-server'
+    return 1
+  fi
+  machine_profile_file="${DOTFILES_STATE_DIR:-$HOME/.dotfiles_state}/profile"
+  machine_profile='desktop'
+  if [[ -f "$machine_profile_file" ]]; then
+    machine_profile="$(<"$machine_profile_file")"
+  fi
+  if [[ "$machine_profile" != 'server' ]]; then
+    refuse 'server-profile-required'
+    return 1
+  fi
+
   LOCAL_DATE="$(current_date)"
   now_time="$(current_time)"
   if [[ ! "$LOCAL_DATE" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || [[ ! "$now_time" =~ ^[0-9]{2}:[0-9]{2}$ ]]; then
@@ -388,7 +438,6 @@ main() {
   else
     TRIGGER_KIND="$requested_trigger"
   fi
-  atomic_state_write "$STATE_DIR/last-trigger-kind" "$TRIGGER_KIND"
 
   verify_admitted_entrypoint "$ENTRYPOINT" || return 1
 
@@ -407,6 +456,27 @@ main() {
     return 0
   fi
 
+  # Before today's configured window, today's run is not yet due: exit as a
+  # structured no-op WITHOUT recording the date so the calendar fire still
+  # runs. A missed previous day keeps catch-up eligible at any time.
+  printf -v scheduled_time '%02d:%02d' "$((10#$SCHEDULE_HOUR))" "$((10#$SCHEDULE_MINUTE))"
+  if [[ "$now_time" < "$scheduled_time" ]]; then
+    previous_day="$(previous_local_date "$LOCAL_DATE" 2>/dev/null || true)"
+    if [[ ! "$previous_day" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]]; then
+      refuse 'local-time-invalid'
+      return 1
+    fi
+    latest_ran="$last_success"
+    if [[ "$last_attempt" > "$latest_ran" ]]; then
+      latest_ran="$last_attempt"
+    fi
+    if [[ -z "$latest_ran" || ! "$latest_ran" < "$previous_day" ]]; then
+      summary 'pre-window-noop'
+      return 0
+    fi
+  fi
+
+  atomic_state_write "$STATE_DIR/last-trigger-kind" "$TRIGGER_KIND"
   atomic_state_write "$STATE_DIR/last-attempt-date" "$LOCAL_DATE"
   set +e
   "$ENTRYPOINT" janitor --no-input
