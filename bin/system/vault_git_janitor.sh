@@ -6,6 +6,13 @@ set -euo pipefail
 readonly REQUIRED_TIMEZONE='Australia/Melbourne'
 readonly LOG_MAX_BYTES=262144
 readonly LOG_KEEP=5
+# A nightly run that outlives this bound is treated as hung: it holds the
+# singleton lock, so leaving it alive blocks every later run indefinitely.
+readonly JANITOR_RUN_TIMEOUT_SECONDS=1800
+# A lock directory with no pid file is a run that has not written its pid yet.
+# Past this age it is an orphan from a kill in that window, which would
+# otherwise wedge the schedule permanently.
+readonly ORPHAN_LOCK_RECLAIM_SECONDS=3600
 LOCK_HELD=false
 STATE_DIR=''
 LOG_DIR=''
@@ -115,7 +122,10 @@ verify_private_directory() {
   if [[ ! -d "$path" || -L "$path" ]]; then
     return 1
   fi
-  read -r owner mode < <(/usr/bin/stat -f '%u %Lp' "$path")
+  read -r owner mode < <(/usr/bin/stat -f '%u %Lp' "$path") || return 1
+  # An empty mode would make the arithmetic below abort the whole run under
+  # set -e instead of returning a status the caller turns into a refusal.
+  [[ "$owner" =~ ^[0-9]+$ && "$mode" =~ ^[0-7]+$ ]] || return 1
   mode_value=$((8#$mode))
   [[ "$owner" == "$(id -u)" ]] && ((!(mode_value & 0077)))
 }
@@ -129,7 +139,10 @@ verify_private_file() {
   if [[ ! -f "$path" || -L "$path" ]]; then
     return 1
   fi
-  read -r owner mode < <(/usr/bin/stat -f '%u %Lp' "$path")
+  read -r owner mode < <(/usr/bin/stat -f '%u %Lp' "$path") || return 1
+  # An empty mode would make the arithmetic below abort the whole run under
+  # set -e instead of returning a status the caller turns into a refusal.
+  [[ "$owner" =~ ^[0-9]+$ && "$mode" =~ ^[0-7]+$ ]] || return 1
   mode_value=$((8#$mode))
   [[ "$owner" == "$(id -u)" ]] && ((!(mode_value & 0077)))
 }
@@ -170,7 +183,11 @@ verify_admitted_entrypoint() {
   current_uid="$(id -u)"
   current_path="$canonical"
   while :; do
-    read -r owner mode < <(/usr/bin/stat -f '%u %Lp' "$current_path")
+    if ! read -r owner mode < <(/usr/bin/stat -f '%u %Lp' "$current_path") \
+      || [[ ! "$owner" =~ ^[0-9]+$ || ! "$mode" =~ ^[0-7]+$ ]]; then
+      refuse 'entrypoint-path-unsafe'
+      return 1
+    fi
     mode_value=$((8#$mode))
     if [[ "$owner" != "$current_uid" && "$owner" != '0' ]] || ((mode_value & 0022)); then
       refuse 'entrypoint-path-unsafe'
@@ -261,7 +278,15 @@ uptime_seconds() {
     printf '%s\n' "$VAULT_GIT_JANITOR_UPTIME_SECONDS"
     return
   fi
-  boot_epoch="$(/usr/sbin/sysctl -n kern.boottime | sed -E 's/.*sec = ([0-9]+).*/\1/')"
+  boot_epoch="$(/usr/sbin/sysctl -n kern.boottime 2>/dev/null | sed -E 's/.*sec = ([0-9]+).*/\1/')"
+  # An unexpected sysctl format leaves a non-numeric value, and the arithmetic
+  # below would abort the run under set -e with no summary line -- the plist
+  # discards stderr, so that failure would surface nowhere. Report a long
+  # uptime instead, which classifies the trigger as an ordinary calendar run.
+  if [[ ! "$boot_epoch" =~ ^[0-9]+$ ]]; then
+    printf '%d\n' 86400
+    return
+  fi
   printf '%d\n' "$(($(date +%s) - boot_epoch))"
 }
 
@@ -308,6 +333,13 @@ main() {
   local last_success=''
   local last_attempt=''
   local lock_pid=''
+  local lock_mtime=''
+  local lock_age_seconds=0
+  local command_capture=''
+  local command_output=''
+  local command_pid=''
+  local waited=0
+  local timed_out=false
   local command_status
 
   STATE_DIR="$runtime_root/state"
@@ -367,6 +399,14 @@ main() {
     refuse 'state-dir-unsafe'
     return 1
   fi
+  # Ownership and mode must hold BEFORE the lock exists. Creating run.lock and
+  # writing this pid into a directory owned by another user would publish the
+  # run pid and let that user pre-create the lock to force a permanent
+  # singleton-noop.
+  if ! verify_private_directory "$STATE_DIR" || ! verify_private_directory "$LOG_DIR"; then
+    refuse 'private-directory-unsafe'
+    return 1
+  fi
   if ! mkdir "$STATE_DIR/run.lock" 2>/dev/null; then
     if [[ -f "$STATE_DIR/run.lock/pid" && ! -L "$STATE_DIR/run.lock/pid" ]]; then
       lock_pid="$(<"$STATE_DIR/run.lock/pid")"
@@ -374,6 +414,21 @@ main() {
     if [[ "$lock_pid" =~ ^[0-9]+$ ]] && ! kill -0 "$lock_pid" 2>/dev/null; then
       rm -f "$STATE_DIR/run.lock/pid"
       rmdir "$STATE_DIR/run.lock" 2>/dev/null || true
+    elif [[ ! -e "$STATE_DIR/run.lock/pid" ]]; then
+      # A pid-less lock is normally a run that has not written its pid yet, so
+      # it must stay a singleton no-op. But SIGKILL or a power loss in that
+      # window leaves it forever: no pid means the reclaim above can never
+      # fire, every later run reports singleton-noop and exits 0, and launchd
+      # records success while the janitor never runs again. Reclaim only once
+      # the directory is far older than that write window.
+      lock_age_seconds=0
+      if lock_mtime="$(/usr/bin/stat -f '%m' "$STATE_DIR/run.lock" 2>/dev/null)" \
+        && [[ "$lock_mtime" =~ ^[0-9]+$ ]]; then
+        lock_age_seconds=$(($(date +%s) - lock_mtime))
+      fi
+      if ((lock_age_seconds > ORPHAN_LOCK_RECLAIM_SECONDS)); then
+        rmdir "$STATE_DIR/run.lock" 2>/dev/null || true
+      fi
     fi
     if ! mkdir "$STATE_DIR/run.lock" 2>/dev/null; then
       if [[ -f "$STATE_DIR/current-run-id" && ! -L "$STATE_DIR/current-run-id" ]]; then
@@ -389,11 +444,6 @@ main() {
   chmod 600 "$STATE_DIR/run.lock/pid"
   RUN_ID="$(date +%s)-$$"
   atomic_state_write "$STATE_DIR/current-run-id" "$RUN_ID"
-
-  if ! verify_private_directory "$STATE_DIR" || ! verify_private_directory "$LOG_DIR"; then
-    refuse 'private-directory-unsafe'
-    return 1
-  fi
 
   timezone="$(system_timezone)"
   if [[ "$timezone" != "$REQUIRED_TIMEZONE" ]]; then
@@ -478,10 +528,44 @@ main() {
 
   atomic_state_write "$STATE_DIR/last-trigger-kind" "$TRIGGER_KIND"
   atomic_state_write "$STATE_DIR/last-attempt-date" "$LOCAL_DATE"
+  # Bound the run. --no-input stops credential prompts but not a network
+  # stall, and the wrapper holds the singleton lock for the whole run: a hung
+  # process stays alive, so the pid reclaim above never treats it as stale and
+  # every later run is blocked. Capture output too -- the plist sends stderr to
+  # /dev/null, so an unrecorded failure would surface nowhere.
+  command_capture="$STATE_DIR/last-run-output"
   set +e
-  "$ENTRYPOINT" janitor --no-input
+  "$ENTRYPOINT" janitor --no-input >"$command_capture" 2>&1 &
+  command_pid=$!
+  waited=0
+  timed_out=false
+  while kill -0 "$command_pid" 2>/dev/null; do
+    if [[ "$waited" -ge "$JANITOR_RUN_TIMEOUT_SECONDS" ]]; then
+      timed_out=true
+      kill -TERM "$command_pid" 2>/dev/null
+      sleep 5
+      kill -KILL "$command_pid" 2>/dev/null
+      break
+    fi
+    sleep 1
+    waited=$((waited + 1))
+  done
+  wait "$command_pid"
   command_status=$?
   set -e
+  chmod 600 "$command_capture" 2>/dev/null || true
+  command_output="$(<"$command_capture")"
+  if [[ "$timed_out" == true ]]; then
+    command_status=124
+  fi
+  if [[ -n "$command_output" && -n "$LOG_FILE" ]]; then
+    printf '%s run_id=%s janitor output: %s\n' \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$RUN_ID" "$command_output" >>"$LOG_FILE"
+  fi
+  if [[ "$command_status" -eq 124 ]]; then
+    summary 'failed' 'janitor-timeout'
+    return 1
+  fi
   if [[ "$command_status" -ne 0 ]]; then
     summary 'failed' "janitor-exit-$command_status"
     return "$command_status"
