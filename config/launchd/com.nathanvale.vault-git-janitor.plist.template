@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.nathanvale.vault-git-janitor</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>__WRAPPER_PATH__</string>
+        <string>--config</string>
+        <string>__CONFIG_PATH__</string>
+        <string>--state-dir</string>
+        <string>__STATE_DIR__</string>
+        <string>--log-dir</string>
+        <string>__LOG_DIR__</string>
+    </array>
+
+    <key>StartCalendarInterval</key>
+    <dict>
+        <key>Hour</key>
+        <integer>__HOUR__</integer>
+        <key>Minute</key>
+        <integer>__MINUTE__</integer>
+    </dict>
+
+    <!-- Evaluate one current-date catch-up when the user launchd domain loads. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- The wrapper owns private, bounded structured logs. -->
+    <key>StandardOutPath</key>
+    <string>/dev/null</string>
+    <key>StandardErrorPath</key>
+    <string>/dev/null</string>
+
+    <key>ProcessType</key>
+    <string>Background</string>
+</dict>
+</plist>
