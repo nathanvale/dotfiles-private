@@ -6,6 +6,7 @@
     "steipete/tap"
   ],
   "trustedformulae": [
+    "steipete/tap/imsg",
     "steipete/tap/mcporter",
     "steipete/tap/peekaboo",
     "steipete/tap/remindctl"
