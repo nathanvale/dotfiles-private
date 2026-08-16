@@ -23,12 +23,12 @@
   "promptExamples" : [
 
   ],
-  "realtimeOutput" : true,
+  "realtimeOutput" : false,
   "script" : "",
   "scriptEnabled" : false,
   "translateToEnglish" : false,
   "type" : "super",
   "useSystemAudio" : false,
   "version" : 1,
-  "voiceModelID" : "nvidia_parakeet-v2_476MB"
+  "voiceModelID" : "sv-1"
 }
