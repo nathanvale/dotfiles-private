@@ -60,10 +60,15 @@ else
   printf 'token_matches=\n'
 fi
 printf 'unrelated_present=%s\n' "${UNRELATED_SECRET:+yes}"
-if env | grep -q '^  --ansi='; then
+if /usr/bin/env | grep -q '^  --ansi='; then
   printf 'invalid_name_present=yes\n'
 else
   printf 'invalid_name_present=\n'
+fi
+if /usr/bin/env | grep -q 'NEWLINE_INHERITED_SENTINEL'; then
+  printf 'newline_name_present=yes\n'
+else
+  printf 'newline_name_present=\n'
 fi
 case "$(ps -o command= -p $$)" in
   *SERVICE_SENTINEL*) printf 'argv_has_token=yes\n' ;;
@@ -92,6 +97,26 @@ invalid_name_output="$(env '  --ansi=INHERITED_SENTINEL' DOTFILES_DIR="$fixture"
 assert_contains "$invalid_name_output" 'token_present=yes' 'op still receives the service token with a non-shell environment name'
 assert_contains "$invalid_name_output" 'invalid_name_present=' 'op receives no inherited non-shell environment name'
 assert_not_contains "$invalid_name_output" 'INHERITED_SENTINEL' 'non-shell environment value remains redacted'
+
+newline_name_output="$(/usr/bin/env $'INHERITED\nNAME=NEWLINE_INHERITED_SENTINEL' DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" op item get known-item --vault known-vault)"
+assert_contains "$newline_name_output" 'token_present=yes' 'op still receives the service token with a newline-bearing environment name'
+assert_contains "$newline_name_output" 'newline_name_present=' 'op receives no inherited newline-bearing environment name'
+assert_not_contains "$newline_name_output" 'newline_name_present=yes' 'newline-bearing environment name is removed explicitly'
+assert_not_contains "$newline_name_output" 'NEWLINE_INHERITED_SENTINEL' 'newline-bearing environment value remains redacted'
+
+shadow_env_fixture="$TEST_ROOT/shadow-env"
+make_fixture "$shadow_env_fixture"
+shadow_env_marker="$shadow_env_fixture/shadow-env-called"
+cat >"$shadow_env_fixture/bin/env" <<EOF
+#!/usr/bin/env bash
+: >"$shadow_env_marker"
+exit 88
+EOF
+chmod +x "$shadow_env_fixture/bin/env"
+shadow_env_output="$(DOTFILES_DIR="$shadow_env_fixture" PATH="$shadow_env_fixture/bin:$PATH" "$SUBJECT" op item get known-item --vault known-vault)"
+assert_contains "$shadow_env_output" 'token_matches=yes' 'trusted environment launcher forwards the wrapper token'
+[[ ! -e "$shadow_env_marker" ]] || fail 'PATH-shadowed env cannot intercept token-bearing execution'
+pass 'PATH-shadowed env cannot intercept token-bearing execution'
 
 global_op_output="$(DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" op --account known-account item get known-item)"
 assert_contains "$global_op_output" 'args=--account known-account item get known-item' 'ordinary op command after global options is preserved'
@@ -171,6 +196,13 @@ set -e
 [[ "$mode_status" -eq 3 ]] || fail 'unsafe mode exits with custody status'
 pass 'unsafe mode exits with custody status'
 assert_contains "$mode_error" 'token-file-mode' 'unsafe mode fails closed'
+assert_contains "$mode_error" '"status":"blocked"' 'unsafe mode reports a blocked repair envelope'
+assert_contains "$mode_error" '"preferred_method":"service-account-token"' 'repair envelope names the preferred token lane'
+assert_contains "$mode_error" '"fallback_candidate":"interactive-desktop-signin"' 'repair envelope names the user-present fallback candidate'
+assert_contains "$mode_error" '"fallback_requires_user_approval":true' 'repair envelope keeps fallback behind user approval'
+assert_contains "$mode_error" '"same_input_retry_safe":true' 'repair envelope says the failed check is safe to retry after repair'
+assert_contains "$mode_error" '"repair":"repair token custody through the dotfiles owner, then rerun check"' 'repair envelope gives the next safe action'
+assert_contains "$mode_error" '"run_id":"' 'repair envelope includes run correlation'
 assert_not_contains "$mode_error" 'SERVICE_SENTINEL' 'unsafe mode error redacts token bytes'
 
 ignore_fixture="$TEST_ROOT/ignore"
