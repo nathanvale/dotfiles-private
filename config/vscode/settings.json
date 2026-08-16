@@ -112,17 +112,6 @@
 	"git.inputValidation": true,
 	"git.inputValidationLength": 100,
 	"git.inputValidationSubjectLength": 100,
-	"github.copilot.chat.commitMessageGeneration.instructions": [
-		{
-			"text": "Generate Conventional Commit messages. Keep the subject under 72 characters."
-		},
-		{
-			"text": "Keep every commit body line under 100 characters to satisfy commitlint."
-		},
-		{
-			"text": "Use 2-3 short body lines. Do not put long component, file, or package lists on one line."
-		}
-	],
 	"github.copilot.chat.showWelcomeMessage": false,
 	"github.copilot.chat.view": "editor",
 	"github.copilot.editor.enableAutoCompletions": true,
