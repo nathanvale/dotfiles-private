@@ -268,9 +268,15 @@ cd /path/to/your/project
 
 ## Secrets And Environment
 
-Do not put long-lived API keys directly in `.zshrc`.
+Do not put long-lived API keys in `.zshrc`, and do not load them into a pane's
+shell environment.
 
-Use `load-secrets` in the pane that needs API-backed tools.
+Launch the tool that needs a key through the governed wrapper, so only that
+process receives it:
+
+```bash
+with-one-password-token inject <ENV_KEY> <op://reference> -- <command>
+```
 
 Expected variable names when a tool requires them:
 
@@ -387,7 +393,7 @@ Ctrl-g + x       # Close pane (standard tmux)
 
 1. **Install AI CLIs** - See "Supported AI Agents" section
 2. **Test spawning** - Press `Ctrl-g + A + c` in any tmux session
-3. **Load secrets only when needed** - Run `load-secrets` in the pane that needs API-backed tools
+3. **Deliver secrets per process** - Launch API-backed tools through `with-one-password-token inject`
 4. **Try multi-agent** - Spawn Gemini or Codex for review
 
 ---

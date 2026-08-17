@@ -1,106 +1,109 @@
 # API Key Management Reference
 
-Deep dive on 1Password integration and the `bin/env/` tools for managing API keys.
+How a secret reaches a process on this machine.
 
 ---
 
 ## Architecture
 
-API keys are stored in 1Password and synced to a local `.env.1password` file.
-This keeps secrets out of git while making them available in the shell.
+Secrets stay in 1Password. Nothing projects them to disk, and nothing sources
+them into a shell. One value is delivered to one child process at the moment it
+runs.
 
 ```
 1Password Vault "API Credentials"
         |
-        | (sync-api-keys)
+        | (with-one-password-token inject)
         v
-~/code/dotfiles/.env.1password  (git-ignored, auto-generated)
-        |
-        | (sourced by .zshrc)
-        v
-Shell environment variables
+exactly one child process, one variable
 ```
+
+The service-account token lives in `~/code/dotfiles/.env` and is readable only
+by `with-one-password-token`. The launcher removes it from the environment
+before exec'ing the target, so a child never inherits broker authority.
 
 ---
 
 ## Prerequisites
 
-1. 1Password account with an "API Credentials" vault
-2. A service account token stored in `~/code/dotfiles/.env`:
-   ```bash
-   export OP_SERVICE_ACCOUNT_TOKEN="ops_..."
-   ```
-3. 1Password CLI (`op`) installed via Brewfile: `cask "1password-cli"`
+1. A 1Password service account with read access to the required vault.
+2. Its token in `~/code/dotfiles/.env` as `OP_SERVICE_ACCOUNT_TOKEN`. The file
+   must be git-ignored, a regular non-symlink file, owned by you, mode 0600.
+3. The `op` CLI on PATH.
 
----
-
-## Tools (bin/env/)
-
-### sync-api-keys
-
-Pull all keys from 1Password and regenerate `.env.1password`.
+Check custody without touching a value:
 
 ```bash
-sync-api-keys            # Full sync
-sync-api-keys --dry-run  # Preview without writing
-```
-
-- Reads from 1Password vault "API Credentials"
-- Writes to `~/code/dotfiles/.env.1password`
-- The output file is auto-generated -- don't edit manually
-- Supports `.env.ignore` for excluding specific keys
-
-### ls-api-keys
-
-List all synced API keys by provider.
-
-```bash
-ls-api-keys
-```
-
-### add-api-key
-
-Add or update a key in 1Password.
-
-```bash
-add-api-key
-```
-
-### sync-docker-mcp
-
-Sync Docker MCP server environment variables.
-
-```bash
-sync-docker-mcp
+with-one-password-token check
 ```
 
 ---
 
-## .env File Roles
+## Delivering a secret
 
-| File | Committed | Source | Purpose |
-|------|-----------|--------|---------|
-| `.env` | Yes | Manual | Bootstrap token (`OP_SERVICE_ACCOUNT_TOKEN`) |
-| `.env.1password` | No | `sync-api-keys` | All API keys from 1Password |
-| `.env.ignore` | Yes | Manual | Keys to exclude from sync |
-| `~/.env.secrets` | No | Manual | Machine-specific secrets (`WORK_PROFILE`) |
+```bash
+with-one-password-token inject <ENV_KEY> <op://reference> -- <command> [args...]
+```
+
+Wiring an MCP server, from `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.context7]
+command = "/Users/nathanvale/code/dotfiles/bin/with-one-password-token"
+args = ["inject", "CONTEXT7_API_KEY",
+        "op://API Credentials/CONTEXT7_API_KEY/credential",
+        "--", "env", "npx", "-y", "@upstash/context7-mcp"]
+```
+
+Run one `op` command with a scrubbed environment:
+
+```bash
+with-one-password-token op item list --vault "API Credentials"
+```
+
+`op run` is rejected because it can forward the token to a child.
 
 ---
 
-## Adding a New API Key
+## .env file roles
 
-1. Add the key to 1Password vault "API Credentials"
-2. Run `sync-api-keys` to pull it locally
-3. Verify with `ls-api-keys`
-4. The key is now available in new shell sessions (after `source ~/.zshrc`)
+| File | Committed | Purpose |
+|------|-----------|---------|
+| `.env` | No, git-ignored, mode 0600 | Service-account token only |
+| `~/.env.secrets` | No | Machine-specific non-secret settings |
 
 ---
 
-## Common Issues
+## Adding or changing a key
+
+Edit the item in the 1Password app, or with `op item edit`. There is no wrapper
+script for this, deliberately: a helper that takes the value as a command
+argument writes a live credential into `~/.zsh_history`.
+
+Then reference the item from the consumer with an exact `op://` path. No sync
+step exists, so there is nothing to regenerate and no new shell session needed.
+
+---
+
+## Common issues
 
 | Issue | Fix |
 |-------|-----|
-| `sync-api-keys` fails with auth error | Check `OP_SERVICE_ACCOUNT_TOKEN` in `.env` |
-| Key not available in shell | Run `source ~/.zshrc` or open new terminal |
-| Key appears in `git diff` | Check `.gitignore` includes `.env.1password` |
-| `op` command not found | Run `brew install --cask 1password-cli` |
+| `check` reports blocked | Read the redacted JSON repair envelope on stderr; it names the cause |
+| Child cannot see the key | Confirm the `ENV_KEY` argument matches what the program reads |
+| `op://` reference fails | Verify vault, item title, and field label with `op item list` |
+| A config still calls `with-env` | Migrate it to `inject` with an exact reference |
+
+---
+
+## Retired workflow
+
+`add-api-key`, `sync-api-keys`, `ls-api-keys`, `with-env`, the `load-secrets`
+shell function, and the generated `.env.1password` file were removed on
+2026-08-18.
+
+Do not reintroduce them. `add-api-key` took the secret as a positional
+argument, so every invocation wrote a live credential into shell history, and
+it projected all values into one plain-text file that at removal held 30 live
+credentials, including supply-chain and billable keys. Any child of `with-env`
+inherited the entire set.
