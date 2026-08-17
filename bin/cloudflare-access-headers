@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# cloudflare-access-headers - Emit Cloudflare Access service-token headers as JSON.
+#
+# Claude Code `headersHelper` contract: run at connection time, print one JSON
+# object of headers to stdout, exit 0. Anything else fails the connection.
+#
+# The credential never reaches a config file, a shell environment, or argv. This
+# helper reads it through the governed launcher and writes it only to stdout,
+# which Claude Code consumes directly.
+
+set -euo pipefail
+set +x
+
+PROGRAM_NAME='cloudflare-access-headers'
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+while [[ -L "$SCRIPT_PATH" ]]; do
+  SCRIPT_PARENT="${SCRIPT_PATH%/*}"
+  [[ "$SCRIPT_PARENT" != "$SCRIPT_PATH" ]] || SCRIPT_PARENT='.'
+  SCRIPT_DIR="$(CDPATH='' cd "$SCRIPT_PARENT" && pwd -P)"
+  LINK_TARGET="$(/usr/bin/readlink "$SCRIPT_PATH")"
+  [[ "$LINK_TARGET" == /* ]] || LINK_TARGET="$SCRIPT_DIR/$LINK_TARGET"
+  SCRIPT_PATH="$LINK_TARGET"
+done
+SCRIPT_PARENT="${SCRIPT_PATH%/*}"
+[[ "$SCRIPT_PARENT" != "$SCRIPT_PATH" ]] || SCRIPT_PARENT='.'
+SCRIPT_DIR="$(CDPATH='' cd "$SCRIPT_PARENT" && pwd -P)"
+
+CREDENTIAL_WRAPPER="${CLOUDFLARE_ACCESS_HEADERS_WRAPPER:-$SCRIPT_DIR/with-one-password-token}"
+ITEM_TITLE="${CLOUDFLARE_ACCESS_HEADERS_ITEM:-CLOUDFLARE_ACCESS_MCP}"
+VAULT_NAME="${CLOUDFLARE_ACCESS_HEADERS_VAULT:-API Credentials}"
+
+fail() {
+  local code="$1"
+  local message="$2"
+  printf '%s:error:%s:%s\n' "$PROGRAM_NAME" "$code" "$message" >&2
+  exit "${3:-1}"
+}
+
+[[ "$#" -eq 0 ]] || fail 'usage-invalid' 'the helper takes no arguments' 2
+[[ -x "$CREDENTIAL_WRAPPER" ]] || fail 'wrapper-missing' 'restore bin/with-one-password-token' 4
+
+# One `op` call reads both fields, so the item is resolved once per connection.
+# `--format json` keeps the values off argv and out of any format string.
+item_json="$(
+  "$CREDENTIAL_WRAPPER" op item get "$ITEM_TITLE" \
+    --vault "$VAULT_NAME" \
+    --fields 'label=client_id,label=client_secret' \
+    --reveal --format json 2>/dev/null
+)" || fail 'credential-unavailable' "cannot read '$ITEM_TITLE' from '$VAULT_NAME'; run with-one-password-token check" 4
+
+[[ -n "$item_json" ]] || fail 'credential-empty' "'$ITEM_TITLE' returned no fields" 4
+
+# python3 both parses op's output and emits the header JSON, so no secret is
+# ever interpolated into a shell string.
+printf '%s' "$item_json" | /usr/bin/python3 -c '
+import json, sys
+
+try:
+    fields = json.load(sys.stdin)
+except ValueError:
+    sys.exit("unparsable")
+
+if isinstance(fields, dict):
+    fields = [fields]
+
+values = {}
+for field in fields:
+    label = field.get("label") or field.get("id")
+    value = field.get("value")
+    if label and value:
+        values[label] = value
+
+client_id = values.get("client_id")
+client_secret = values.get("client_secret")
+if not client_id or not client_secret:
+    sys.exit("incomplete")
+
+json.dump({
+    "CF-Access-Client-Id": client_id,
+    "CF-Access-Client-Secret": client_secret,
+}, sys.stdout)
+sys.stdout.write("\n")
+' || fail 'credential-incomplete' "'$ITEM_TITLE' needs both a client_id and a client_secret field" 4
