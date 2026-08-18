@@ -2,30 +2,20 @@
 
 - Install and update with `npx skills`. Read `--help` for command syntax.
 - Upstreams: `openclaw/gogcli`, `mattpocock/skills`, `vercel-labs/skills`.
-
-## Always scope the agent
-
-- Pass `-a claude-code,codex` on every `add`.
-- Without it the CLI installs to every agent it detects, including any whose
-  config directory merely exists. On 2026-08-19 an unscoped install wrote 69
-  symlinks into `config/crush`, `config/devin`, and `config/goose` inside this
-  repository, because `~/.config/` holds those three directories.
-- Scoped installs create no stray directories. Verified the same day.
+- Pass `-a claude-code,codex` on every `add`. Unscoped, the CLI installs to
+  every agent whose config directory exists, including ones you do not use, and
+  writes those directories into this repository.
 
 ## Lock file
 
 - Address: `~/.agents/.skill-lock.json`, a Tracking Link into
-  `config/agents/skills/`.
-- Break that link and every entry reports `Source: local`. Provenance is lost
-  and `npx skills update` has nothing to act on.
-- Symptom seen 2026-08-18: 164 entries local, 0 upstream. Restoring the link
-  returned 43 entries to their upstreams.
-- The link accepts writes, not only reads. `add` and `remove` on 2026-08-19
-  changed the lock from 49 entries to 72 to 66; each write landed in the
-  dotfiles working tree and the link survived.
+  `config/agents/skills/`. It accepts reads and writes.
+- Break the link and every entry reports `Source: local`. Provenance is lost and
+  `npx skills update` has nothing to act on. Restore the link to recover it.
 - Keep the lock describing the machine. A skill renamed upstream leaves a dead
-  entry that a restore would try to install. Six such entries were pruned on
-  2026-08-19.
+  entry that restore will try to install.
+- `experimental_install` restores every entry. Proven 2026-08-19 in a scratch
+  `HOME`: 66 of 66, none missing.
 
 ## No commit pinning
 
@@ -33,22 +23,14 @@
   content hash. No commit ref.
 - `add` accepts a branch or tag through a `#fragment`. A full commit SHA fails.
 - `experimental_install` never reads the stored hash. It clones current branch
-  HEAD, then overwrites the hash with whatever it fetched.
-- Restore therefore reproduces HEAD, not the reviewed commit.
+  HEAD, then overwrites the hash with what it fetched.
+- Restore reproduces HEAD, not the reviewed commit. Read the diff after
+  `npx skills update`. That is the whole practice.
 
-## Review after update
+## Why the diff matters
 
-- Read the diff after `npx skills update`. That is the whole practice.
 - Skills run with full agent permissions. A prompt injection reaches the agent
-  before it reaches you.
-- Snyk's ToxicSkills audit, 5 February 2026: 13.4 percent of 3,984 marketplace
-  skills carried a critical issue, and 91 percent of confirmed-malicious skills
-  paired prompt injection with the payload to defeat a skim. The curated
-  skills.sh top 100 scored zero. Named repositories with identifiable
-  maintainers sit closer to the curated set.
-- Free checks, all clean on 2026-08-18: threat actors `zaycv`, `Aslaep123`,
-  `pepe276`, `moonshine-100rze`, `aztr0nutzs`; `curl` piped to a shell;
-  password-protected archive installs; `ignore previous instructions`
-  phrasings; `SOUL.md` and `MEMORY.md` tampering.
-- `uvx snyk-agent-scan` now requires a Snyk account. The scanner named in that
-  audit is no longer free.
+  before it reaches you, and 91 percent of confirmed-malicious skills pair
+  injection with the payload to defeat a skim.
+- Evidence, scoping, and the checks that ran clean:
+  `my-second-brain-vault-spike/projects/user-scope-config-consolidation/reference/skills-supply-chain.md`.
