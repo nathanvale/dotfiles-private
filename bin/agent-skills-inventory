@@ -1,0 +1,110 @@
+#!/usr/bin/env python3
+"""Classify every entry in the two skills addresses by origin.
+
+Cutover step 2 of nathanvale/dotfiles-private#46 gates the skills repoint on
+this returning no orphans. An orphan is an entry that resolves to no
+repository and no lock file, so a machine loss takes it.
+
+Exit 0 when no orphan remains, 1 otherwise.
+"""
+
+import json
+import os
+import sys
+
+HOME = os.path.expanduser("~")
+ADDRESSES = [
+    os.path.join(HOME, ".claude", "skills"),
+    os.path.join(HOME, ".agents", "skills"),
+]
+LOCK = os.path.join(HOME, ".agents", ".skill-lock.json")
+DOTFILES_SOURCE = os.path.join(HOME, "code", "dotfiles", ".agents", "skills")
+RETIRING_REPO = os.path.join(HOME, "code", "claude-code-config")
+
+
+def lock_keys(path):
+    if not os.path.exists(path):
+        return set()
+    with open(path) as handle:
+        return set(json.load(handle).get("skills", {}))
+
+
+def classify(address, name, locked):
+    entry = os.path.join(address, name)
+
+    if os.path.islink(entry):
+        target = os.path.realpath(entry)
+        if target.startswith(RETIRING_REPO + os.sep):
+            return "claude-code-config-symlink"
+        if target.startswith(DOTFILES_SOURCE + os.sep):
+            return "dotfiles-symlink"
+        if not os.path.exists(target):
+            return "dangling-symlink"
+        return "foreign-symlink"
+
+    if name in locked:
+        return "lock-file"
+    if os.path.isdir(os.path.join(DOTFILES_SOURCE, name)):
+        return "dotfiles-source"
+    return "ORPHAN"
+
+
+def main():
+    locked = lock_keys(LOCK)
+    orphans = []
+    report = {}
+
+    for address in ADDRESSES:
+        counts = {}
+        names = sorted(os.listdir(address)) if os.path.isdir(address) else []
+        for name in names:
+            kind = classify(address, name, locked)
+            counts[kind] = counts.get(kind, 0) + 1
+            if kind == "ORPHAN":
+                orphans.append((address, name))
+        report[address] = (len(names), counts)
+
+    for address, (total, counts) in report.items():
+        print(f"{address}  ({total} entries)")
+        for kind in sorted(counts):
+            print(f"  {counts[kind]:>4}  {kind}")
+        print()
+
+    installed = sum(
+        1
+        for address in ADDRESSES[:1]
+        for name in (sorted(os.listdir(address)) if os.path.isdir(address) else [])
+        if not os.path.islink(os.path.join(address, name)) and name in locked
+    )
+    unused = sorted(
+        key
+        for key in locked
+        if not any(os.path.exists(os.path.join(a, key)) for a in ADDRESSES)
+    )
+    print(f"lock file: {len(locked)} keys, {installed} installed under {ADDRESSES[0]}")
+    if unused:
+        print(f"  locked but not installed ({len(unused)}): {', '.join(unused)}")
+    print()
+
+    only_claude = set(os.listdir(ADDRESSES[0])) - set(os.listdir(ADDRESSES[1]))
+    only_agents = set(os.listdir(ADDRESSES[1])) - set(os.listdir(ADDRESSES[0]))
+    if only_claude:
+        print(f"only under ~/.claude/skills: {', '.join(sorted(only_claude))}")
+    if only_agents:
+        print(f"only under ~/.agents/skills: {', '.join(sorted(only_agents))}")
+    if only_claude or only_agents:
+        print()
+
+    if not orphans:
+        print("INVENTORY EMPTY: every entry resolves to a repository or the lock file.")
+        return 0
+
+    names = sorted({name for _, name in orphans})
+    print(f"ORPHANS: {len(names)} distinct, {len(orphans)} entries across both addresses")
+    for name in names:
+        print(f"  {name}")
+    return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())
