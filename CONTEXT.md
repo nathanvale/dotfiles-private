@@ -70,6 +70,30 @@ The condition that loads a Rule File. Each Harness expresses this differently;
 Codex has no equivalent.
 _Avoid_: Paths frontmatter, glob, matcher
 
+### Branch guidance
+
+**Branch Document**:
+A file in `docs/agents/` holding guidance an agent needs on some runs and not
+others. Reached only by a Pointer, never loaded at startup.
+_Avoid_: Doc, reference, guide
+
+**Pointer**:
+A line in Startup Instructions naming a Branch Document and the condition for
+reading it. Its wording, not its target, decides whether the document is ever
+reached.
+_Avoid_: Link, reference, route
+
+**Branch**:
+One distinct case a document handles, so different runs take different paths
+through it. A Pointer earns its place by naming a Branch no other Pointer
+claims.
+_Avoid_: Case, path, scenario
+
+**Owner**:
+The single file or system that decides one contract. Other documents point at
+it rather than restating it.
+_Avoid_: Source of truth, authority; `OWNER` as a forge role is unrelated
+
 ### Ownership and tracking
 
 **User Scope**:
