@@ -17,16 +17,22 @@ ADDRESSES = [
     os.path.join(HOME, ".claude", "skills"),
     os.path.join(HOME, ".agents", "skills"),
 ]
-LOCK = os.path.join(HOME, ".agents", ".skill-lock.json")
 DOTFILES_SOURCE = os.path.join(HOME, "code", "dotfiles", ".agents", "skills")
+# Cutover step 3 moved the lock file into the dotfiles source. The old
+# address is still read so this runs on a machine before that move.
+LOCK_CANDIDATES = [
+    os.path.join(DOTFILES_SOURCE, ".skill-lock.json"),
+    os.path.join(HOME, ".agents", ".skill-lock.json"),
+]
 RETIRING_REPO = os.path.join(HOME, "code", "claude-code-config")
 
 
-def lock_keys(path):
-    if not os.path.exists(path):
-        return set()
-    with open(path) as handle:
-        return set(json.load(handle).get("skills", {}))
+def lock_keys(candidates):
+    for path in candidates:
+        if os.path.exists(path):
+            with open(path) as handle:
+                return set(json.load(handle).get("skills", {})), path
+    return set(), None
 
 
 def classify(address, name, locked):
@@ -50,7 +56,7 @@ def classify(address, name, locked):
 
 
 def main():
-    locked = lock_keys(LOCK)
+    locked, lock_path = lock_keys(LOCK_CANDIDATES)
     orphans = []
     report = {}
 
@@ -81,7 +87,9 @@ def main():
         for key in locked
         if not any(os.path.exists(os.path.join(a, key)) for a in ADDRESSES)
     )
-    print(f"lock file: {len(locked)} keys, {installed} installed under {ADDRESSES[0]}")
+    where = lock_path.replace(HOME, "~") if lock_path else "NOT FOUND"
+    print(f"lock file: {where}")
+    print(f"  {len(locked)} keys, {installed} installed under {ADDRESSES[0]}")
     if unused:
         print(f"  locked but not installed ({len(unused)}): {', '.join(unused)}")
     print()
