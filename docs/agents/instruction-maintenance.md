@@ -16,5 +16,8 @@
   contradictory, stale, or broader guidance.
 - Show the exact path-limited change, startup-context delta, proof, and
   rollback. Ask for approval before writing.
-- After approval, verify every changed pointer and run root and nested loading
-  canaries on supported agents.
+- After approval, verify every changed pointer.
+- The `Weekly agent instruction structure check` Codex automation owns file and
+  adapter proof.
+- The `Monthly agent instruction loading canary` Codex automation owns root and
+  nested runtime proof.
