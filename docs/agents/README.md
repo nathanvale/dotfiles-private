@@ -15,3 +15,4 @@ Scope, admission, and the edit rule:
 | [`issue-tracker.md`](issue-tracker.md) | Creating, reading, labelling, or closing an issue |
 | [`triage-labels.md`](triage-labels.md) | Applying a triage label |
 | [`domain.md`](domain.md) | Exploring the codebase, or naming a domain concept in output |
+| [`third-party-skills.md`](third-party-skills.md) | Installing or updating a skill you did not write |
