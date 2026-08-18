@@ -3,6 +3,15 @@
 - Install and update with `npx skills`. Read `--help` for command syntax.
 - Upstreams: `openclaw/gogcli`, `mattpocock/skills`, `vercel-labs/skills`.
 
+## Always scope the agent
+
+- Pass `-a claude-code,codex` on every `add`.
+- Without it the CLI installs to every agent it detects, including any whose
+  config directory merely exists. On 2026-08-19 an unscoped install wrote 69
+  symlinks into `config/crush`, `config/devin`, and `config/goose` inside this
+  repository, because `~/.config/` holds those three directories.
+- Scoped installs create no stray directories. Verified the same day.
+
 ## Lock file
 
 - Address: `~/.agents/.skill-lock.json`, a Tracking Link into
@@ -11,6 +20,12 @@
   and `npx skills update` has nothing to act on.
 - Symptom seen 2026-08-18: 164 entries local, 0 upstream. Restoring the link
   returned 43 entries to their upstreams.
+- The link accepts writes, not only reads. `add` and `remove` on 2026-08-19
+  changed the lock from 49 entries to 72 to 66; each write landed in the
+  dotfiles working tree and the link survived.
+- Keep the lock describing the machine. A skill renamed upstream leaves a dead
+  entry that a restore would try to install. Six such entries were pruned on
+  2026-08-19.
 
 ## No commit pinning
 
