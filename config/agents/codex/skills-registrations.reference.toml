@@ -1,0 +1,225 @@
+# Codex Skill Exclusions: Reference Copy
+#
+# NOT live config. Codex never reads this file. It is a recovery copy of the
+# `[[skills.config]]` blocks from `~/.codex/config.toml`, which is untracked
+# because Codex rewrites it during normal use.
+#
+# Captured 2026-08-18. Every block below is `enabled = false`. This is an
+# exclusion list, not a registration list: it records what you have turned OFF.
+# A machine with no config.toml runs every skill enabled, so losing this file
+# means unwanted skills return, not that skills go missing.
+#
+# To restore: append the blocks into `~/.codex/config.toml`, then fix paths.
+#
+# Two kinds of block, and they port differently.
+
+# ---------------------------------------------------------------------------
+# 1. NAME-KEYED (27 blocks). Portable. Paste unchanged.
+#    Keyed by plugin-qualified skill name. No filesystem path, so these work
+#    on any machine.
+#
+#    25 of these prune individual skills from `compound-engineering`, which is
+#    kept enabled at plugin level. Disabling that plugin instead would also
+#    remove the skills deliberately kept, so these do not collapse.
+#
+#    One entry was dropped from the captured set:
+#    `agent-plugin-playground:agent-attention`. Its plugin carries
+#    `[plugins."agent-plugin-playground@agent-plugin-playground"] enabled =
+#    false`, so the skill-level exclusion had no effect.
+# ---------------------------------------------------------------------------
+
+[[skills.config]]
+name = "chrome:control-chrome"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-brainstorm"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-compound"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-compound-refresh"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-debug"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-dogfood"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-explain"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-handoff"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-ideate"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-optimize"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-plan"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-polish"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-pov"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-product-pulse"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-promote"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-proof"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-retune"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-riffrec-feedback-analysis"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-setup"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-strategy"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-sweep"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-test-browser"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-test-xcode"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-work"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:ce-worktree"
+enabled = false
+
+[[skills.config]]
+name = "compound-engineering:lfg"
+enabled = false
+
+[[skills.config]]
+name = "superwhisper:superwhisper"
+enabled = false
+
+# ---------------------------------------------------------------------------
+# 2. PATH-KEYED (20 blocks). Portable via `~`, but paths are pre-retirement.
+#    Paths are written with `~`. Codex expands it: `SkillConfig.path` is typed
+#    `AbsolutePathBuf`, which expands the home directory on deserialization.
+#    So these port across machines, but the paths below still name the layout
+#    before retirement. Paths naming `claude-code-config` are stale.
+# ---------------------------------------------------------------------------
+
+[[skills.config]]
+path = "~/.agents/skills/browserclaw/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/.agents/skills/gog-analytics/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/.agents/skills/gog-chat/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/.agents/skills/gog-classroom/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/.agents/skills/gog-meet/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/ac-convergence/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/adhd-helper/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/bft-booking/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/ce-work-inspect/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/decision-mode/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/fix-microphone/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/ica-seam-swarm/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/lll-account-switch/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/newsroom-investigate/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/prompt-system-router/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/prompt-system-workflow/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/record-decision/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/skill-feedback/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/skill-self-audit-loop/SKILL.md"
+enabled = false
+
+[[skills.config]]
+path = "~/code/claude-code-config/skills/unit-closeout/SKILL.md"
+enabled = false
