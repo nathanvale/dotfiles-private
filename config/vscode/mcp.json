@@ -1,94 +1,99 @@
 {
-  "servers": {
-    "wallaby": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "-c",
-        "node ~/.wallaby/mcp/"
-      ],
-      "type": "stdio"
-    },
-    "context7": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@upstash/context7-mcp"
-      ]
-    },
-    "chrome-devtools": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "chrome-devtools-mcp@latest"
-      ]
-    },
-    "github/github-mcp-server": {
-      "type": "http",
-      "url": "https://api.githubcopilot.com/mcp/",
-      "gallery": "https://api.mcp.github.com/2025-09-15/v0/servers/ab12cd34-5678-90ef-1234-567890abcdef",
-      "version": "0.13.0"
-    },
-    "bun-runner": {
-      "type": "stdio",
-      "command": "bunx",
-      "args": [
-        "--bun",
-        "@side-quest/bun-runner"
-      ],
-      "env": {}
-    },
-    "tsc-runner": {
-      "type": "stdio",
-      "command": "bunx",
-      "args": [
-        "--bun",
-        "@side-quest/tsc-runner"
-      ],
-      "env": {}
-    },
-    "biome-runner": {
-      "type": "stdio",
-      "command": "bunx",
-      "args": [
-        "--bun",
-        "@side-quest/biome-runner"
-      ],
-      "env": {}
-    },
-    "plan": {
-      "type": "http",
-      "url": "https://plan.agent-native.com/_agent-native/mcp"
-    }
-  },
-  "inputs": [
-    {
-      "id": "browser_url",
-      "type": "promptString",
-      "description": "Optional: connect to an already-running Chrome (remote debugging / port-forward). Example: http://127.0.0.1:9222",
-      "password": false
-    },
-    {
-      "id": "headless",
-      "type": "promptString",
-      "description": "Run Chrome headless (true/false). Default: false",
-      "password": false,
-      "default": "false"
-    },
-    {
-      "id": "isolated",
-      "type": "promptString",
-      "description": "Use a temporary user-data-dir (true/false). Default: false",
-      "password": false,
-      "default": "false"
-    },
-    {
-      "id": "chrome_channel",
-      "type": "promptString",
-      "description": "Chrome channel: stable | canary | beta | dev (default: stable).",
-      "password": false,
-      "default": "stable"
-    }
-  ]
+	"servers": {
+		"wallaby": {
+			"command": "npx",
+			"args": [
+				"-y",
+				"-c",
+				"node ~/.wallaby/mcp/"
+			],
+			"type": "stdio"
+		},
+		"context7": {
+			"type": "stdio",
+			"command": "${userHome}/code/dotfiles/bin/with-one-password-token",
+			"args": [
+				"inject",
+				"CONTEXT7_API_KEY",
+				"op://API Credentials/CONTEXT7_API_KEY/credential",
+				"--",
+				"npx",
+				"-y",
+				"@upstash/context7-mcp"
+			]
+		},
+		"chrome-devtools": {
+			"type": "stdio",
+			"command": "npx",
+			"args": [
+				"chrome-devtools-mcp@latest"
+			]
+		},
+		"github/github-mcp-server": {
+			"type": "http",
+			"url": "https://api.githubcopilot.com/mcp/",
+			"gallery": "https://api.mcp.github.com/2025-09-15/v0/servers/ab12cd34-5678-90ef-1234-567890abcdef",
+			"version": "0.13.0"
+		},
+		"bun-runner": {
+			"type": "stdio",
+			"command": "bunx",
+			"args": [
+				"--bun",
+				"@side-quest/bun-runner"
+			],
+			"env": {}
+		},
+		"tsc-runner": {
+			"type": "stdio",
+			"command": "bunx",
+			"args": [
+				"--bun",
+				"@side-quest/tsc-runner"
+			],
+			"env": {}
+		},
+		"biome-runner": {
+			"type": "stdio",
+			"command": "bunx",
+			"args": [
+				"--bun",
+				"@side-quest/biome-runner"
+			],
+			"env": {}
+		},
+		"plan": {
+			"type": "http",
+			"url": "https://plan.agent-native.com/_agent-native/mcp"
+		}
+	},
+	"inputs": [
+		{
+			"id": "browser_url",
+			"type": "promptString",
+			"description": "Optional: connect to an already-running Chrome (remote debugging / port-forward). Example: http://127.0.0.1:9222",
+			"password": false
+		},
+		{
+			"id": "headless",
+			"type": "promptString",
+			"description": "Run Chrome headless (true/false). Default: false",
+			"password": false,
+			"default": "false"
+		},
+		{
+			"id": "isolated",
+			"type": "promptString",
+			"description": "Use a temporary user-data-dir (true/false). Default: false",
+			"password": false,
+			"default": "false"
+		},
+		{
+			"id": "chrome_channel",
+			"type": "promptString",
+			"description": "Chrome channel: stable | canary | beta | dev (default: stable).",
+			"password": false,
+			"default": "stable"
+		}
+	]
 }
