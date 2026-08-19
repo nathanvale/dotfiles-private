@@ -33,6 +33,6 @@ Codex re-approval step, not a file change.
 
 ## Owner
 
-- Startup instruction topology, including whether a hook is the right
-  instrument: `prompt-system-workflow`.
 - Existing hook scripts: `config/agents/claude/hooks/`.
+- Hook declarations: `config/agents/claude/hooks.json` and
+  `config/agents/codex/hooks.json`.
