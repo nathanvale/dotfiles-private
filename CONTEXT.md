@@ -50,6 +50,14 @@ Tokens a Startup Instruction spends on every turn, whether or not it changes
 behaviour. The cost the scoping model exists to control.
 _Avoid_: Token cost, context window usage, overhead
 
+**Gate**:
+A deterministic check that runs outside the context window and refuses an
+action until a condition holds. A hook, a test, a validator. Its refusal
+carries the repair path. A Gate does not decay as a session fills; a Clause
+does.
+_Avoid_: guard, check; and hook, when the enforcement role rather than the
+specific mechanism is meant
+
 ### Rules
 
 **Rule File**:

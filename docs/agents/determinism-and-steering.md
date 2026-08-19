@@ -1,151 +1,90 @@
 # Determinism and Steering
 
-Two ways to make an agent do the right thing. They fail differently, and the
-difference is what decides which one a rule needs.
+Two ways to make an agent do the right thing.
 
 **Steering** is an instruction that asks. A Clause in the Instruction Core, a
 Rule File, a line in a skill.
 
-**Determinism** is a check that runs. A hook, a test, a validator, a type.
-
-## Why steering weakens
-
-Startup Instructions load at position zero and stay there. The session grows
-around them. Their position does not change; their share of attention does.
-
-```
- 0%                                                            100%
-├──────────────────────────────────────────────────────────────┤
-│ Clauses │       work       │      more work     │  recency   │
-   ▲                                                    ▲
-   strong early                                  what gets attended to
-```
-
-This is the lost-in-the-middle effect. The beginning and the end of a context
-window carry more weight than the middle, so a long instruction set pushes its
-own later Clauses into the weakest position.
-
-Robert C. Martin, in [Uncle Bob on agents and clean
-code](https://youtu.be/zcLPGC-tvgk) (2026, at 13:30), after trying five to ten
-pages of authored rules. Quotes are from the published transcript, lightly
-cleaned of speech disfluency, and this is one practitioner's account rather
-than a controlled result:
-
-> The models treat those rules in the Pirates of the Caribbean sense. They're
-> more like guidelines.
-
-and on the mechanism:
-
-> As the context window builds up, the stuff at the very beginning and the
-> stuff at the very end have more prominence than the stuff in the middle.
-> Anything you say at the very beginning is going to get shoved into the middle
-> if it's long. Maybe the first three sentences remain as priority, but the 50th
-> and the 80th sentence, they're gone.
-
-> Deterministic tools don't disappear that way.
-
-A check runs outside the context window. It fires at 95 percent of a session
-exactly as it fires at 5 percent.
-
-His prescription is two-sided, and both sides matter: trim the initial prompt
-to its minimum so what remains sits in the priority zone, then add
-deterministic tools after the fact. Trimming alone removes guidance. Checking
-alone leaves an unreadable prompt in place.
+**Determinism** is a Gate: a check that runs. A hook, a test, a validator.
 
 ## Sorting a Clause
 
-The test is not "could this be automated". It is **must this hold late in a
-long session**.
+The test is **must this hold late in a long session**, not "could this be
+automated".
 
 | Character | Fate | Reason |
 | --- | --- | --- |
-| Irreversible, must hold at any depth | Gate | Decay here is unrecoverable, and long sessions are when it happens |
-| Shapes how work is done, cheap when missed | Clause | Attention decay costs a slightly worse outcome, not a lost one |
+| Irreversible, must hold at any depth | Gate | Unrecoverable when it fails |
+| Shapes how work is done, cheap when missed | Clause | Decay costs a worse outcome, not a lost one |
 | Restates default behaviour | Delete | It was doing no work at any depth |
 
-Destructive Git operations, credential access, and irreversible writes are the
-first row. Comment style, output verbosity, and scope discipline are the
-second. Anything that reads as a reminder to be careful is usually the third.
+Gate: destructive Git operations, credential access, irreversible writes.
+Clause: comment style, output verbosity, scope discipline.
+Delete: anything that reads as a reminder to be careful.
 
-## A gate is a loop, not a wall
+Sort every Clause you touch, not only the one you came to change. Name the
+fate and the destination file for each: a Clause that must reach both
+Harnesses goes in the Instruction Core, `config/agents/global.md`; a Rule
+File reaches Claude Code only.
 
-The check does not only refuse. It tells the agent what to change, and the
-agent runs again. Martin, at 16:15:
+Reinstating counts: a Clause parked in `rules-archived/` is a sorting decision
+deferred, not settled.
 
-> You're putting them into a loop and you're saying, okay, you must change the
-> code until this tool says that it's okay.
+## Why steering decays
 
-The loop closes only when each refusal carries the next action. A check that
-reports a violation and stops leaves the agent to guess, and a guessing agent
-improvises. This is why every failure names its cause **and** its repair path.
-Human handoff is the answer when no repair exists, and saying so is itself the
-repair path.
+Startup Instructions load at position zero and stay there. Their position does
+not change; their share of attention does. Lost in the middle: a long
+instruction set pushes its own later Clauses into the weakest position.
 
-`cli-author` owns the CLI form of this contract: exit codes, stderr shape, and
-the structure of a hint.
+A Gate runs outside the context window. It fires at 95 percent of a session
+exactly as it fires at 5 percent.
 
-## What a gate costs
+Trim, then gate. Either alone fails: trimming removes guidance, gating leaves
+an unreadable prompt in place.
 
-A gate is not free, and its failure mode is worse than a Clause's.
+## A Gate closes a loop
 
-A decayed Clause fails softly and occasionally. A gate that stops running fails
-completely and silently, and nothing reports the silence.
+A Gate refuses, names the change, and runs again. The loop closes only when
+each refusal carries the next action: its cause and its repair path. Where no
+repair exists, naming the human handoff is the repair path.
 
-Concrete cases on this machine:
+`cli-author` owns the CLI form: exit codes, stderr shape, and the structure of
+a hint.
 
-- **Codex trust hashes.** An unmanaged Codex hook runs only with an approved
-  trust status verified against its content hash. Edit the hook script and the
-  hash changes; the hook stops running until it is trusted again. Nothing
-  announces this.
+## What a Gate costs
+
+A decayed Clause fails softly and occasionally. A Gate that stops running fails
+completely and silently. Silence is its failure mode, and nothing reports
+silence, so a Gate needs its own liveness check. `hooks.md` owns the trust
+and teardown mechanics that cause the silence.
+
+Two live cases on this machine:
+
+- **A Codex hook stops running when its content hash changes.** It runs only
+  against an approved hash, and re-trusting is manual. Nothing announces the
+  gap.
 - **An installed skill is not a wired hook.** `git-guardrails-claude-code` is
-  installed and lock-file tracked, and is set `off` in `settings.json`. No
-  `hooks.json` on this machine declares the `PreToolUse` entry it exists to
-  create, so the guard it describes has never guarded anything. Presence of
-  the skill proves nothing about the gate.
+  installed and set `off`, and no `hooks.json` declares the `PreToolUse` entry
+  it exists to create. The guard has never guarded anything.
 
-So a gate needs its own liveness check. `hooks.md` states the general form:
-silence is the failure mode.
-
-There is also a throughput ceiling, and its location is not known. Martin, at
-16:00:
-
-> Obviously there has to be a case where there's too much. Eventually you will
-> slow the agents down to the point where they're slower than humans. And at
-> that point you've lost the game.
-
-He reports still running two to four times human throughput while slowing
-agents considerably, and describes finding that ceiling as unsolved work.
+Gates have a throughput ceiling and its location is unknown, so add one per
+irreversible action rather than by default.
 
 ## Which surfaces exist
 
-Not every Harness offers every gate. A rule enforced in one Harness and absent
-in the other is a rule that half your sessions ignore.
+A Clause that must reach both Harnesses needs a surface both offer.
 
 | Surface | Claude Code | Codex |
 | --- | --- | --- |
-| `PreToolUse` hook, blocking | yes | yes, same `hooks.json` shape |
+| `PreToolUse` hook, blocking | yes | in source, unproven on this build |
 | `PostToolUse`, `Stop` | yes | yes |
 | Rule Directory of authored Clauses | yes | none |
 | Startup Entry Point | `CLAUDE.md` | `AGENTS.md` |
-| Command policy engine | no | `execpolicy` |
+| Command policy engine | none | `execpolicy` |
 
-The Rule Directory row is the important one: a Rule File steers Claude Code
-only. A Clause that must reach both Harnesses belongs in the Instruction Core.
+`~/.codex/rules/` holds generated, machine-read `execpolicy` `prefix_rule`
+entries, not a Rule Directory.
 
-`~/.codex/rules/` exists and is not a counterexample. It holds `execpolicy`
-`prefix_rule` entries, generated and machine-read. It carries no authored
-Clause and no Scope Trigger.
-
-Codex hook support is confirmed in the published source. Whether the installed
-build on this machine fires them is a separate question and is not proven here.
-
-## When to reach for which
-
-Writing, editing, or reinstating an instruction that guards an irreversible
-action is the moment to ask which of the three fates applies. Reinstating
-counts: a Clause parked in `rules-archived/` is a sorting decision deferred,
-not settled.
-
-That moment is early in a session, which is exactly when steering still works.
-This document is reached by a Pointer for that reason: the Clause that sends
-you here has to survive only long enough to be read at design time.
+Source for the decay mechanism and the throughput ceiling: Robert C. Martin,
+[on agents and clean code](https://youtu.be/zcLPGC-tvgk), 2026, 13:30 to 16:15.
+One practitioner's account, not a controlled result.
