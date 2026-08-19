@@ -1,0 +1,32 @@
+{
+  "name": "@side-quest/browser-connect",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Browser Adapter attachment runtime: prove, inject, exec against Agent Chrome.",
+  "sideQuest": {
+    "sourceLinkedBin": true
+  },
+  "bin": {
+    "browser-connect": "./src/cli.ts"
+  },
+  "exports": {
+    "./cli": "./src/cli.ts",
+    "./contract": "./src/contract.ts",
+    "./adapters": "./src/adapters/registry.ts"
+  },
+  "scripts": {
+    "browser-connect": "bun run src/cli.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "@side-quest/cli-command-facade": "file:../cli-command-facade",
+    "@side-quest/mcporter-transport": "file:../mcporter-transport",
+    "@side-quest/warm-chrome": "file:../warm-chrome"
+  },
+  "devDependencies": {
+    "@side-quest/cli-test-fixtures": "file:../cli-test-fixtures",
+    "@types/bun": "1.3.14",
+    "typescript": "6.0.3"
+  }
+}
