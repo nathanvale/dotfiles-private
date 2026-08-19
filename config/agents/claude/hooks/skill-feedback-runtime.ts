@@ -1,10 +1,22 @@
-import {
-	createDefaultSkillFeedbackRuntime,
-	finalizeSkillFeedbackCorrelationWitness,
-	recordSkillFeedbackReceipt,
-	type CorrelationCloseoutCandidate,
-	type FinalizeCorrelationWitnessResult,
+import type {
+	CorrelationCloseoutCandidate,
+	FinalizeCorrelationWitnessResult,
 } from '../skills/skill-feedback/src/skill-feedback-runner'
+
+// Resolved at call time, not import time: the skill lives at ~/.claude/skills/,
+// not beside this hook, and $HOME does not expand inside a static import
+// specifier. Do not convert this back to a static import.
+type SkillFeedbackRunner =
+	typeof import('../skills/skill-feedback/src/skill-feedback-runner')
+
+let skillFeedbackRunnerPromise: Promise<SkillFeedbackRunner> | undefined
+
+function loadSkillFeedbackRunner(): Promise<SkillFeedbackRunner> {
+	skillFeedbackRunnerPromise ??= import(
+		`${process.env.HOME}/.claude/skills/skill-feedback/src/skill-feedback-runner`
+	) as Promise<SkillFeedbackRunner>
+	return skillFeedbackRunnerPromise
+}
 
 export type { CorrelationCloseoutCandidate }
 
@@ -156,6 +168,8 @@ export async function runSkillFeedbackRecord(
 	request: RecordRequest,
 ): Promise<HookRunResult> {
 	const telemetry = request.telemetry ?? {}
+	const { createDefaultSkillFeedbackRuntime, recordSkillFeedbackReceipt } =
+		await loadSkillFeedbackRunner()
 	const result = await recordSkillFeedbackReceipt(
 		{
 			skill: request.skill,
@@ -197,6 +211,10 @@ export async function runSkillFeedbackRecord(
 export async function runSkillFeedbackCorrelationWitness(
 	request: CorrelationWitnessRequest,
 ): Promise<FinalizeCorrelationWitnessResult> {
+	const {
+		createDefaultSkillFeedbackRuntime,
+		finalizeSkillFeedbackCorrelationWitness,
+	} = await loadSkillFeedbackRunner()
 	return finalizeSkillFeedbackCorrelationWitness(
 		{
 			skill: request.skill,
