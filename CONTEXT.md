@@ -60,9 +60,9 @@ _Avoid_: Rule, rules file, instruction file
 
 **Rule Directory**:
 A directory of Rule Files at a location a Harness discovers. `~/.claude/rules`
-is the user-scope Rule Directory; it resolves into `claude-code-config` until
-that repository retires. A repository's own `.claude/rules` is project scope and
-is never linked into user scope.
+is the user-scope Rule Directory; it resolves into
+`dotfiles/config/agents/claude/rules`. A repository's own `.claude/rules` is
+project scope and is never linked into user scope.
 _Avoid_: Rules folder, `.claude/rules`, when the scope distinction matters
 
 **Scope Trigger**:
