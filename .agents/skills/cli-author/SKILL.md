@@ -48,7 +48,9 @@ for the selected lane:
 - Output streams: primary data to stdout; diagnostics to stderr.
 - Output modes: human text, `--json`, `--plain`, or other stable modes.
 - Exit codes: baseline meanings; command-specific codes only when useful.
-- Error style: invalid usage, runtime failure, recovery guidance.
+- Error style: invalid usage, runtime failure. Specify the cause text, the
+  repair hint, and the stream each goes to; a refusal carrying no next action
+  stalls the caller.
 - Side-effect stance: read, check, write, destructive, auth, network, browser.
 - Safety gates: dry-run/check, confirmation, `--force`, `--no-input`.
 - Config/env behavior: flags, env, config files, precedence.
