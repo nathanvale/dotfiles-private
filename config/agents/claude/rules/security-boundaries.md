@@ -1,7 +1,3 @@
----
-alwaysApply: true
----
-
 ## Security Boundaries
 
 - Never read or write `~/.ssh`, `~/.aws`, `.env`, credential files, or wallet data

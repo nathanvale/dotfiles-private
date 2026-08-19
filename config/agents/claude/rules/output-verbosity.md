@@ -1,7 +1,3 @@
----
-alwaysApply: true
----
-
 ## Chat Output Verbosity (Claude conversational replies)
 
 - Default chat replies: **lean**.

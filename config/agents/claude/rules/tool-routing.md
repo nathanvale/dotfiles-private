@@ -1,12 +1,17 @@
----
-alwaysApply: true
----
+All MCP tools are machine-to-machine interfaces. **ALWAYS pass `response_format: "json"`** — markdown wastes tokens and is only for results shown directly to the user.
 
-All MCP tools are machine-to-machine interfaces optimized for token efficiency. **ALWAYS use `response_format: "json"`** for structured, token-efficient responses. Never use `"markdown"` unless showing results directly to user.
+- **Git reads** → MCP tools
+- **Git writes** → bash or `/git:*` slash commands
+- **Search** → Kit plugin
+- **History** → Atuin MCP
+- **Package execution** → prefer `bunx` over `npx`
 
-- **Git reads** → Use MCP tools with JSON format
-- **Git writes** → Use bash or `/git:*` slash commands
-- **Search** → Use Kit plugin with JSON format
-- **Tests/Lint/Type Check** → See `code-quality.md` rule
-- **History** → Use Atuin MCP with JSON format
-- **Package execution** → Prefer `bunx` over `npx` (faster, more reliable)
+## Code quality runners
+
+NEVER run raw `bun test`, `biome`, or `tsc` via Bash.
+
+- **Bun tests** → the `test-runner` skill; Agent Runner compact, repair, triage, detail, and coverage paths come from its `context/bun-runner.md`
+- **Biome** → `biome_lintCheck`, `biome_lintFix`, `biome_formatCheck`
+- **TypeScript** → `tsc_check`
+
+Exit code `2` is blocking — fix before proceeding. Never retry blindly or wrap in `|| true`.

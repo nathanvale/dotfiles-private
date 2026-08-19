@@ -1,7 +1,3 @@
----
-alwaysApply: true
----
-
 ## Scope Discipline
 
 - Change requested scope only.

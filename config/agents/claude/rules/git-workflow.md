@@ -1,7 +1,3 @@
----
-alwaysApply: true
----
-
 ## Git Workflow (Claude-specific enforcement)
 
 This rule reinforces the shared git policy in AGENTS.md with Claude-specific behavior.

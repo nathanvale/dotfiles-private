@@ -1,7 +1,3 @@
----
-alwaysApply: true
----
-
 ## Testing Policy
 
 - Always run tests after code changes

@@ -1,7 +1,3 @@
----
-alwaysApply: true
----
-
 ## Code Comments
 
 Before writing any comment, ask: **"if I delete this, what is lost?"**
