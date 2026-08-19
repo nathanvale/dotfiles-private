@@ -1,7 +1,8 @@
 # Diagnostic Traps
 
-Two shell checks that report confident, wrong answers. Both caused a real
-misdiagnosis. Prefer the correct command; do not trust the naive form.
+Commands and tools that report confident, wrong answers, or destroy state
+while succeeding. Each caused a real misdiagnosis or loss. Prefer the correct
+form; do not trust the naive one.
 
 ## Optional-value flags swallow the next argument
 
@@ -33,3 +34,27 @@ done
 - A link whose target is its own path never resolves. Read `readlink` output
   before judging a link broken.
 - Exclude `.worktrees` when scanning a repository. Its links are disposable.
+
+## The `/plugin` UI drops `skillOverrides`
+
+`/plugin` rewrites `~/.claude/settings.json` wholesale rather than merging.
+A session removing marketplaces on 2026-08-19 also removed the entire
+`skillOverrides` block, 73 entries, reported only as `✔ Removed 1
+marketplace`. The diff was 16 insertions, 91 deletions.
+
+The file has two writers that do not know about each other: dotfiles owns it
+as tracked config at `config/agents/claude/settings.json`; the harness owns it
+as runtime state. Unrecognised keys do not survive the harness write.
+
+Observed, not isolated: several removals happened in one session, so the
+triggering action is unconfirmed. Treat any `/plugin` use as able to destroy
+the block.
+
+- Commit a `skillOverrides` change before other work. Recovery is then
+  `git show <sha>:config/agents/claude/settings.json`.
+- After any `/plugin` use, run `git status` in dotfiles and confirm the block
+  is present with an unchanged entry count.
+- Plugin state also lives in untracked runtime files
+  (`~/.claude/plugins/known_marketplaces.json`, `installed_plugins.json`).
+  An `enabledPlugins` key with no matching install is inert: a session starts
+  clean, exit 0, no warning. The key declares; it does not restore.
