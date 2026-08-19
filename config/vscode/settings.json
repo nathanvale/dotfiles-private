@@ -226,5 +226,8 @@
 	},
 	"diffEditor.renderSideBySide": true,
 	"workbench.editor.showTabs": "single",
-	"diffEditor.experimental.showMoves": true
+	"diffEditor.experimental.showMoves": true,
+	"explorer.sortOrder": "modified",
+	"explorer.fileNesting.enabled": true,
+	"search.sortOrder": "modified"
 }

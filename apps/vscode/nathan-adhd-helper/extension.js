@@ -40,10 +40,11 @@ const chordActions = [
   { key: 'Shift+D', label: 'Go to definition', command: 'editor.action.revealDefinition' },
   { key: '-', label: 'Back', command: 'workbench.action.navigateBack' },
   { key: '=', label: 'Forward', command: 'workbench.action.navigateForward' },
+  { key: '/', label: 'Filter tree (Explorer)', command: 'list.find' },
 ]
 
 const chordGroups = [
-  { label: 'Views', keys: ['E', 'G', 'F', 'X'] },
+  { label: 'Views', keys: ['E', 'G', 'F', 'X', '/'] },
   { label: 'Git', keys: ['D', ',', 'A', 'U', 'P'] },
   { label: 'Nav', keys: ['-', '=', 'O', 'H', 'J', 'K', 'L'] },
   { label: 'Actions', keys: ['.', 'I', 'T', 'C', 'W', 'Z', 'R'] },

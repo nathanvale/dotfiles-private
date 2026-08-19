@@ -365,6 +365,16 @@
 					"command": "workbench.action.navigateForward"
 				},
 				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "/",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "/",
+					"label": "Filter tree (Explorer)",
+					"command": "list.find"
+				},
+				"when": "nathan.adhdChordMode"
 			}
 		]
 	}
