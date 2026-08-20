@@ -28,6 +28,8 @@ const CASES: ReadonlyArray<{
 		path: 'command_surface.mutations.audit',
 	},
 	{ fixture: 'missing-action-semantics', cause: 'semantic_missing_action_semantics', path: 'actions.catalog[1]' },
+	// The sealed "wait" kind carries a mandatory condition and Progress Owner.
+	{ fixture: 'missing-wait-semantics', cause: 'semantic_missing_action_semantics', path: 'actions.catalog[1]' },
 	{ fixture: 'competing-actions', cause: 'semantic_competing_actions', path: 'actions.catalog[2]' },
 	{
 		fixture: 'missing-authority-semantics',
