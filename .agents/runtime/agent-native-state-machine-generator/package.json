@@ -10,6 +10,7 @@
   "scripts": {
     "prototype:build": "bun build ./prototypes/vault-git-reimagined/index.html --target browser --outdir ./prototypes/vault-git-reimagined/dist",
     "prototype:dev": "bun --hot ./prototypes/vault-git-reimagined/dev.ts",
+    "test": "bun test ./tests",
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
