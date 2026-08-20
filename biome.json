@@ -16,8 +16,21 @@
 			"!config/fish",
 			"!misc",
 			"!pnpm-lock.yaml",
-			"!PROJECT_INDEX.json"
+			"!PROJECT_INDEX.json",
+			"!.worktrees",
+			"!.claude/worktrees",
+			"!config/raycast",
+			"!.agents"
 		]
+	},
+	"formatter": {
+		"indentStyle": "tab"
+	},
+	"javascript": {
+		"formatter": {
+			"semicolons": "asNeeded",
+			"quoteStyle": "single"
+		}
 	},
 	"vcs": {
 		"enabled": true,

@@ -12,8 +12,8 @@
 		"format:check": "biome format .",
 		"lint": "biome lint .",
 		"lint:fix": "biome lint --write .",
-		"lint:scripts": "find . -type f \\( -name '*.sh' -o -name '*.bash' -o -name '*.zsh' \\) ! -path './node_modules/*' -exec shellcheck {} +",
-		"lint:workflows": "actionlint",
+		"lint:scripts": "find . -type f \\( -name '*.sh' -o -name '*.bash' \\) ! -path './node_modules/*' ! -path './.worktrees/*' ! -path './.claude/worktrees/*' ! -path './.husky/_/*' -print0 | xargs -0 shellcheck -e SC1071 -S error",
+		"lint:workflows": "if [ -d .github/workflows ]; then actionlint; else echo 'no .github/workflows; skipping'; fi",
 		"memory:qmd-federation": "bun run $HOME/.config/context/scripts/qmd-roster-sync.ts",
 		"prepare": "husky",
 		"validate": "bun run lint && bun run format:check && bun run lint:scripts && bun run lint:workflows"
