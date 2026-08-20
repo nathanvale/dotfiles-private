@@ -252,9 +252,28 @@ function checkActionCatalog({ cursor, report, actionIds }: Context): void {
 
 }
 
+/**
+ * Builds the blocker-reference check shared by the reference and retry passes.
+ * Both resolve against the one `blockers` vocabulary the specification declares.
+ */
+function blockerResolver(
+	cursor: Cursor,
+	report: Context['report'],
+): (value: string | undefined, path: string, location: JsoncNode['loc'], label: string) => void {
+	const blockers = new Set(cursor.strings(['blockers']))
+	return (value, path, location, label) => {
+		if (value === undefined || blockers.has(value)) return
+		report(
+			'semantic_unresolved_reference',
+			`${label} references blocker ${JSON.stringify(value)}, which the blockers vocabulary does not declare.`,
+			path,
+			location,
+		)
+	}
+}
+
 /** Every cross-reference must resolve into the vocabulary that owns it. */
 function checkReferences({ cursor, report, actionIds }: Context): void {
-	const blockers = new Set(cursor.strings(['blockers']))
 	const resolveAction = (
 		value: string | undefined,
 		path: string,
@@ -269,20 +288,7 @@ function checkReferences({ cursor, report, actionIds }: Context): void {
 			location,
 		)
 	}
-	const resolveBlocker = (
-		value: string | undefined,
-		path: string,
-		location: JsoncNode['loc'],
-		label: string,
-	): void => {
-		if (value === undefined || blockers.has(value)) return
-		report(
-			'semantic_unresolved_reference',
-			`${label} references blocker ${JSON.stringify(value)}, which the blockers vocabulary does not declare.`,
-			path,
-			location,
-		)
-	}
+	const resolveBlocker = blockerResolver(cursor, report)
 
 	for (const entry of cursor.entries(['activation', 'cause_to_next_action'])) {
 		const path = ['activation', 'cause_to_next_action', entry.key] as const
@@ -420,21 +426,7 @@ function checkStateVocabularies({ cursor, report }: Context): void {
 
 /** Retry vocabulary, rule resolution, and unsafe default postures. */
 function checkRetryPosture({ cursor, report }: Context): void {
-	const blockers = new Set(cursor.strings(['blockers']))
-	const resolveBlocker = (
-		value: string | undefined,
-		path: string,
-		location: JsoncNode['loc'],
-		label: string,
-	): void => {
-		if (value === undefined || blockers.has(value)) return
-		report(
-			'semantic_unresolved_reference',
-			`${label} references blocker ${JSON.stringify(value)}, which the blockers vocabulary does not declare.`,
-			path,
-			location,
-		)
-	}
+	const resolveBlocker = blockerResolver(cursor, report)
 
 	const retryValues = cursor.strings(['retry_posture', 'values'])
 	for (const value of retryValues) {
