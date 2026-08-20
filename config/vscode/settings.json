@@ -112,6 +112,11 @@
 	"git.inputValidation": true,
 	"git.inputValidationLength": 100,
 	"git.inputValidationSubjectLength": 100,
+	// github.copilot.chat.commitMessageGeneration.instructions is intentionally unset:
+	// setting it at all (any content) makes the internal gpt-4o-mini utility model
+	// false-positive the RAI content filter, so the sparkle button 422s every time.
+	// See https://github.com/microsoft/vscode/issues/330331 and #327973 (unresolved upstream).
+	// commitlint's husky hook is the enforcement point for subject-case instead.
 	"github.copilot.chat.showWelcomeMessage": false,
 	"github.copilot.chat.view": "editor",
 	"github.copilot.editor.enableAutoCompletions": true,
@@ -229,5 +234,6 @@
 	"diffEditor.experimental.showMoves": true,
 	"explorer.sortOrder": "modified",
 	"explorer.fileNesting.enabled": true,
-	"search.sortOrder": "modified"
+	"search.sortOrder": "modified",
+	"workbench.activityBar.compact": true
 }
