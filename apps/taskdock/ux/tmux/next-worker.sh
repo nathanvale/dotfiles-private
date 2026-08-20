@@ -125,9 +125,6 @@ while true; do
                 echo -e "${RED}❌ Worktree creation failed${NC}"
                 stop_heartbeat
             fi
-        else
-            echo -e "${YELLOW}⏳ No task assigned (all tasks locked or none available)${NC}"
-        fi
     else
         echo -e "${YELLOW}⚠️  No tasks available; will retry in 30s${NC}"
     fi

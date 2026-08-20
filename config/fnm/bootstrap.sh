@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Shared fnm bootstrap for terminals, tmux panes, VS Code Git hooks, and scripts.
 #
 # Keep this POSIX-compatible: Husky sources ~/.config/husky/init.sh with /bin/sh.

@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Shared Husky init. Sourced by Husky before repo hooks.
 #
 # VS Code Source Control does not always inherit an interactive zsh environment,

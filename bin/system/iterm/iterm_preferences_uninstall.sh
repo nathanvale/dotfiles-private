@@ -1,3 +1,4 @@
+#!/usr/bin/env bash
 # Ensure the script is being run from the correct directory
 set -e  # Exit on error
 
