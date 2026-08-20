@@ -20,7 +20,10 @@
 		"onCommand:nathan.runChordAction",
 		"onCommand:nathan.toggleGitDiff",
 		"onCommand:nathan.openSourceFromDiff",
-		"onCommand:nathan.showChangedFiles"
+		"onCommand:nathan.showChangedFiles",
+		"onCommand:nathan.toggleSortOrder",
+		"onCommand:nathan.toggleFileNesting",
+		"onCommand:nathan.openGitLayout"
 	],
 	"main": "./extension.js",
 	"scripts": {
@@ -62,6 +65,18 @@
 			{
 				"command": "nathan.showChangedFiles",
 				"title": "Nathan ADHD Helper: Show Changed Files"
+			},
+			{
+				"command": "nathan.toggleSortOrder",
+				"title": "Nathan ADHD Helper: Toggle Explorer Sort Order"
+			},
+			{
+				"command": "nathan.toggleFileNesting",
+				"title": "Nathan ADHD Helper: Toggle File Nesting"
+			},
+			{
+				"command": "nathan.openGitLayout",
+				"title": "Nathan ADHD Helper: Open Git Layout"
 			}
 		],
 		"keybindings": [
@@ -121,8 +136,9 @@
 				"command": "nathan.runChordAction",
 				"args": {
 					"key": "G",
-					"label": "Source Control",
-					"command": "workbench.view.scm"
+					"label": "Git layout",
+					"command": "nathan.openGitLayout",
+					"receipt": false
 				},
 				"when": "nathan.adhdChordMode"
 			},
@@ -267,16 +283,6 @@
 				"when": "nathan.adhdChordMode"
 			},
 			{
-				"key": "p",
-				"command": "nathan.runChordAction",
-				"args": {
-					"key": "P",
-					"label": "GitLens",
-					"command": "workbench.view.extension.gitlens"
-				},
-				"when": "nathan.adhdChordMode"
-			},
-			{
 				"key": ".",
 				"command": "nathan.runChordAction",
 				"args": {
@@ -373,6 +379,28 @@
 					"key": "/",
 					"label": "Filter tree (Explorer)",
 					"command": "list.find"
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "s",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "S",
+					"label": "Explorer sort toggle",
+					"command": "nathan.toggleSortOrder",
+					"receipt": false
+				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "n",
+				"command": "nathan.runChordAction",
+				"args": {
+					"key": "N",
+					"label": "File nesting toggle",
+					"command": "nathan.toggleFileNesting",
+					"receipt": false
 				},
 				"when": "nathan.adhdChordMode"
 			}

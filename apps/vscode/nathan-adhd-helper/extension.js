@@ -25,7 +25,24 @@ const chordActions = [
 		command: 'nathan.showChangedFiles',
 		receipt: false,
 	},
-	{ key: 'G', label: 'Source Control', command: 'workbench.view.scm' },
+	{
+		key: 'S',
+		label: 'Explorer sort toggle',
+		command: 'nathan.toggleSortOrder',
+		receipt: false,
+	},
+	{
+		key: 'N',
+		label: 'File nesting toggle',
+		command: 'nathan.toggleFileNesting',
+		receipt: false,
+	},
+	{
+		key: 'G',
+		label: 'Git layout',
+		command: 'nathan.openGitLayout',
+		receipt: false,
+	},
 	{ key: 'F', label: 'Find in files', command: 'workbench.action.findInFiles' },
 	{ key: 'X', label: 'Extensions', command: 'workbench.view.extensions' },
 	{ key: 'O', label: 'Symbols', command: 'workbench.action.gotoSymbol' },
@@ -64,7 +81,6 @@ const chordActions = [
 	},
 	{ key: 'A', label: 'Stage all changes', command: 'git.stageAll' },
 	{ key: 'U', label: 'Undo commit', command: 'git.undoCommit' },
-	{ key: 'P', label: 'GitLens', command: 'workbench.view.extension.gitlens' },
 	{ key: '.', label: 'Quick fix', command: 'editor.action.quickFix' },
 	{
 		key: ';',
@@ -933,6 +949,133 @@ async function openSourceFromDiff() {
 	updateModeFrame('SOURCE')
 }
 
+const settingToggles = {
+	'explorer.sortOrder': {
+		label: 'Explorer sort',
+		values: ['modified', 'default'],
+		describe: {
+			modified: 'newest first',
+			default: 'alphabetical',
+		},
+	},
+	'explorer.fileNesting.enabled': {
+		label: 'File nesting',
+		values: [true, false],
+		describe: {
+			true: 'nested',
+			false: 'flat',
+		},
+	},
+}
+
+function nextToggleValue(toggle, current) {
+	const index = toggle.values.indexOf(current)
+
+	return index === -1 || index === toggle.values.length - 1
+		? toggle.values[0]
+		: toggle.values[index + 1]
+}
+
+function describeToggleValue(toggle, value) {
+	return toggle.describe[String(value)] ?? String(value)
+}
+
+function hasWorkspaceFolder() {
+	return (vscode.workspace.workspaceFolders?.length ?? 0) > 0
+}
+
+async function toggleSetting(section) {
+	const toggle = settingToggles[section]
+
+	if (!toggle) {
+		flash('Unknown setting toggle', undefined, 'warning')
+		return
+	}
+
+	const config = vscode.workspace.getConfiguration()
+	const inspected = config.inspect(section)
+	const workspace = hasWorkspaceFolder()
+
+	const current = workspace
+		? (inspected?.workspaceValue ??
+			inspected?.globalValue ??
+			inspected?.defaultValue)
+		: (inspected?.globalValue ?? inspected?.defaultValue)
+
+	const next = nextToggleValue(toggle, current)
+	const target = workspace
+		? vscode.ConfigurationTarget.Workspace
+		: vscode.ConfigurationTarget.Global
+
+	try {
+		await config.update(section, next, target)
+	} catch {
+		flash(
+			`${toggle.label} unchanged`,
+			undefined,
+			'warning',
+			'Settings file is not writable',
+		)
+		return
+	}
+
+	flash(
+		`${toggle.label}: ${describeToggleValue(toggle, next)}`,
+		undefined,
+		'success',
+		workspace ? undefined : 'Global: no folder open',
+	)
+}
+
+async function toggleSortOrder() {
+	await exitChordMode()
+	await toggleSetting('explorer.sortOrder')
+}
+
+async function toggleFileNesting() {
+	await exitChordMode()
+	await toggleSetting('explorer.fileNesting.enabled')
+}
+
+async function openGitLayout() {
+	await exitChordMode()
+
+	let graphOpened = false
+
+	try {
+		await vscode.commands.executeCommand('workbench.scm.history.open', {
+			preserveFocus: true,
+		})
+		graphOpened = true
+	} catch {
+		graphOpened = false
+	}
+
+	try {
+		await vscode.commands.executeCommand('workbench.view.scm')
+	} catch {
+		flash(
+			'Source Control unavailable',
+			undefined,
+			'warning',
+			'Open a folder with a Git repository',
+		)
+		return
+	}
+
+	if (!graphOpened) {
+		flash(
+			'Graph not restored',
+			undefined,
+			'warning',
+			'Drag Source Control Graph to the right panel once',
+		)
+		return
+	}
+
+	flash('Git layout restored', undefined, 'success')
+}
+
 function activate(context) {
 	const subscriptions = [
 		vscode.commands.registerCommand('nathan.enterChordMode', enterChordMode),
@@ -957,6 +1100,12 @@ function activate(context) {
 			'nathan.showChangedFiles',
 			showChangedFiles,
 		),
+		vscode.commands.registerCommand('nathan.toggleSortOrder', toggleSortOrder),
+		vscode.commands.registerCommand(
+			'nathan.toggleFileNesting',
+			toggleFileNesting,
+		),
+		vscode.commands.registerCommand('nathan.openGitLayout', openGitLayout),
 		vscode.window.onDidChangeActiveTextEditor(() => {
 			updateModeFrame()
 		}),
@@ -985,6 +1134,13 @@ module.exports = {
 	activate,
 	deactivate,
 	__test: {
+		openGitLayout,
+		describeToggleValue,
+		nextToggleValue,
+		settingToggles,
+		toggleFileNesting,
+		toggleSetting,
+		toggleSortOrder,
 		getActiveDiffSourceUri,
 		getActiveFileUri,
 		getChangedFileItems,

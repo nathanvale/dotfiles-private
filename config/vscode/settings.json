@@ -234,6 +234,11 @@
 	"diffEditor.experimental.showMoves": true,
 	"explorer.sortOrder": "modified",
 	"explorer.fileNesting.enabled": true,
+	// Keep the right-hand panel present so Ctrl+G G can restore the
+	// Source Control Graph into it. View placement itself is workbench
+	// state, not a setting, so a fresh machine needs one manual drag.
+	"workbench.secondarySideBar.defaultVisibility": "visible",
 	"search.sortOrder": "modified",
-	"workbench.activityBar.compact": true
+	"workbench.activityBar.compact": true,
+	"workbench.secondarySideBar.showLabels": false
 }

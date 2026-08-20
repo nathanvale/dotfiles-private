@@ -31,8 +31,13 @@ function createHarness({
 	quickPickTarget,
 	rejectSource = false,
 	renderedDiff = false,
+	rejectSettingUpdate = false,
+	settingsState = {},
+	workspaceFolders,
+	failingCommands = [],
 } = {}) {
 	const commands = new Map()
+	const settingsWrites = []
 	const executed = []
 	const openedDiffs = []
 	const shownDocuments = []
@@ -60,6 +65,10 @@ function createHarness({
 			},
 			async executeCommand(name, ...args) {
 				executed.push({ name, args })
+
+				if (failingCommands.includes(name)) {
+					throw new Error(`command unavailable: ${name}`)
+				}
 
 				if (commands.has(name)) {
 					return commands.get(name)(...args)
@@ -127,6 +136,32 @@ function createHarness({
 				return vscode.window.activeTextEditor
 			},
 		},
+		workspace: {
+			workspaceFolders: workspaceFolders ?? [{ uri: uri('/repo') }],
+			getConfiguration() {
+				return {
+					inspect(section) {
+						return settingsState[section]
+					},
+					async update(section, value, target) {
+						if (rejectSettingUpdate) {
+							throw new Error('read-only settings')
+						}
+
+						settingsWrites.push({ section, value, target })
+
+						const entry = settingsState[section] ?? {}
+						if (target === 2) {
+							entry.workspaceValue = value
+						} else {
+							entry.globalValue = value
+						}
+						settingsState[section] = entry
+					},
+				}
+			},
+		},
+		ConfigurationTarget: { Global: 1, Workspace: 2 },
 		MarkdownString: class {
 			appendMarkdown() {}
 		},
@@ -143,6 +178,8 @@ function createHarness({
 		gitApi,
 		openedDiffs,
 		repo,
+		settingsState,
+		settingsWrites,
 		shownDocuments,
 		vscode,
 	}
@@ -382,4 +419,178 @@ test('the changed-file picker reports an empty repository', async () => {
 
 	assert.deepEqual(harness.openedDiffs, [])
 	assert.deepEqual(harness.shownDocuments, [])
+})
+
+test('the sort toggle flips modified to default in workspace scope', async () => {
+	const harness = createHarness({
+		settingsState: { 'explorer.sortOrder': { globalValue: 'modified' } },
+	})
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.toggleSortOrder')()
+
+	assert.deepEqual(harness.settingsWrites, [
+		{ section: 'explorer.sortOrder', value: 'default', target: 2 },
+	])
+})
+
+test('the sort toggle returns to modified on the second press', async () => {
+	const harness = createHarness({
+		settingsState: { 'explorer.sortOrder': { globalValue: 'modified' } },
+	})
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.toggleSortOrder')()
+	await commands.get('nathan.toggleSortOrder')()
+
+	assert.deepEqual(
+		harness.settingsWrites.map(({ value }) => value),
+		['default', 'modified'],
+	)
+})
+
+test('a workspace value wins over a global value when toggling', async () => {
+	const harness = createHarness({
+		settingsState: {
+			'explorer.sortOrder': {
+				globalValue: 'modified',
+				workspaceValue: 'default',
+			},
+		},
+	})
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.toggleSortOrder')()
+
+	assert.equal(harness.settingsWrites[0].value, 'modified')
+})
+
+test('the nesting toggle flips true to false in workspace scope', async () => {
+	const harness = createHarness({
+		settingsState: { 'explorer.fileNesting.enabled': { globalValue: true } },
+	})
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.toggleFileNesting')()
+
+	assert.deepEqual(harness.settingsWrites, [
+		{ section: 'explorer.fileNesting.enabled', value: false, target: 2 },
+	])
+})
+
+test('a toggle falls back to global scope when no folder is open', async () => {
+	const harness = createHarness({
+		settingsState: { 'explorer.sortOrder': { globalValue: 'modified' } },
+		workspaceFolders: [],
+	})
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.toggleSortOrder')()
+
+	assert.deepEqual(harness.settingsWrites, [
+		{ section: 'explorer.sortOrder', value: 'default', target: 1 },
+	])
+})
+
+test('an unwritable settings file leaves the toggle unchanged', async () => {
+	const harness = createHarness({
+		settingsState: { 'explorer.sortOrder': { globalValue: 'modified' } },
+		rejectSettingUpdate: true,
+	})
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.toggleSortOrder')()
+
+	assert.deepEqual(harness.settingsWrites, [])
+})
+
+test('an unknown current value restarts the toggle at the first value', () => {
+	const harness = createHarness()
+	const extension = loadExtension(harness.vscode)
+	const { nextToggleValue, settingToggles } = extension.__test
+
+	const sort = settingToggles['explorer.sortOrder']
+
+	assert.equal(nextToggleValue(sort, 'type'), 'modified')
+	assert.equal(nextToggleValue(sort, undefined), 'modified')
+})
+
+test('toggle receipts name the state in plain words', () => {
+	const harness = createHarness()
+	const extension = loadExtension(harness.vscode)
+	const { describeToggleValue, settingToggles } = extension.__test
+
+	assert.equal(
+		describeToggleValue(settingToggles['explorer.sortOrder'], 'modified'),
+		'newest first',
+	)
+	assert.equal(
+		describeToggleValue(settingToggles['explorer.fileNesting.enabled'], false),
+		'flat',
+	)
+})
+
+test('the git layout chord restores the graph on the right', async () => {
+	const harness = createHarness()
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.openGitLayout')()
+
+	const open = harness.executed.find(
+		({ name }) => name === 'workbench.scm.history.open',
+	)
+
+	assert.ok(open, 'expected the graph view to be opened, not merely focused')
+	assert.deepEqual(open.args, [{ preserveFocus: true }])
+})
+
+test('the git layout chord opens source control and keeps focus left', async () => {
+	const harness = createHarness()
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.openGitLayout')()
+
+	const order = harness.executed
+		.map(({ name }) => name)
+		.filter((name) => name.startsWith('workbench.'))
+
+	assert.deepEqual(order, ['workbench.scm.history.open', 'workbench.view.scm'])
+})
+
+test('the git layout chord still opens the left panel when the graph fails', async () => {
+	const harness = createHarness({
+		failingCommands: ['workbench.scm.history.open'],
+	})
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.openGitLayout')()
+
+	assert.ok(
+		harness.executed.some(({ name }) => name === 'workbench.view.scm'),
+		'a missing graph must not cost Nathan the left panel too',
+	)
+})
+
+test('the git layout chord repeats without toggling a panel shut', async () => {
+	const harness = createHarness()
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.openGitLayout')()
+	await commands.get('nathan.openGitLayout')()
+
+	const toggles = harness.executed.filter(({ name }) =>
+		name.toLowerCase().includes('toggle'),
+	)
+
+	assert.deepEqual(toggles, [])
 })
