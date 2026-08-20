@@ -1,18 +1,32 @@
 #!/usr/bin/env zsh
 # ----------------------------------------------------------------------------
-# Say - ADHD-friendly macOS text-to-speech CLI
+# speak - ADHD-friendly macOS text-to-speech CLI
 # ----------------------------------------------------------------------------
 # Usage:
-#   say speak "text"           # Speak text aloud
-#   say speak "text" -v Alex   # Speak with specific voice
-#   say speak "text" -r 150    # Speak at specific rate (words/min)
-#   say voices                 # List all available voices
-#   say voices --lang en       # List voices for language
-#   say save "text" -o file    # Save speech to audio file
-#   say help                   # Show this help
+#   speak speak "text"           # Speak text aloud
+#   speak speak "text" -v Alex   # Speak with specific voice
+#   speak speak "text" -r 150    # Speak at specific rate (words/min)
+#   speak voices                 # List all available voices
+#   speak voices --lang en       # List voices for language
+#   speak save "text" -o file    # Save speech to audio file
+#   speak help                   # Show this help
 # ----------------------------------------------------------------------------
+#
+# This helper is deliberately NOT named `say`. It lives in a bin directory that
+# precedes /usr/bin on PATH, so naming it `say` made it shadow the platform
+# speech command and call itself. The native implementation is resolved by
+# absolute path below so the standard command keeps its standard meaning.
+# Contract: bin/test/zsh-effective-behavior-test.sh
 
 set -euo pipefail
+
+# Absolute path to the platform speech binary. Never a bare `say`.
+readonly NATIVE_SAY='/usr/bin/say'
+
+if [[ ! -x "$NATIVE_SAY" ]]; then
+  echo "Error: platform speech command not found at ${NATIVE_SAY}" >&2
+  exit 1
+fi
 
 # Colors (ADHD-friendly: minimal, clear)
 readonly GREEN='\033[0;32m'
@@ -65,12 +79,12 @@ cmd_speak() {
 
   if [[ -z "$text" ]]; then
     echo "${RED}Error: No text provided${RESET}" >&2
-    echo "Usage: say speak \"text\" [-v voice] [-r rate]" >&2
+    echo "Usage: speak speak \"text\" [-v voice] [-r rate]" >&2
     exit 1
   fi
 
   # Build command
-  local cmd=("say")
+  local cmd=("$NATIVE_SAY")
   [[ -n "$voice" ]] && cmd+=("-v" "$voice")
   [[ -n "$rate" ]] && cmd+=("-r" "$rate")
   cmd+=("$text")
@@ -102,7 +116,7 @@ cmd_voices() {
   if [[ -n "$lang_filter" ]]; then
     echo "${GRAY}Filtering by language: ${lang_filter}${RESET}"
     echo ""
-    say -v '?' | grep -i "${lang_filter}" | while IFS= read -r line; do
+    "$NATIVE_SAY" -v '?' | grep -i "${lang_filter}" | while IFS= read -r line; do
       local name=$(echo "$line" | awk '{print $1}')
       local lang=$(echo "$line" | awk '{print $2}')
       local desc=$(echo "$line" | cut -d'#' -f2 | sed 's/^ *//')
@@ -110,7 +124,7 @@ cmd_voices() {
       [[ -n "$desc" ]] && echo "  ${GRAY}${desc}${RESET}"
     done
   else
-    say -v '?' | while IFS= read -r line; do
+    "$NATIVE_SAY" -v '?' | while IFS= read -r line; do
       local name=$(echo "$line" | awk '{print $1}')
       local lang=$(echo "$line" | awk '{print $2}')
       echo "${GREEN}${name}${RESET} ${GRAY}(${lang})${RESET}"
@@ -118,7 +132,7 @@ cmd_voices() {
   fi
 
   echo ""
-  echo "${GRAY}Tip: Use 'say voices --lang en' for English voices${RESET}"
+  echo "${GRAY}Tip: Use 'speak voices --lang en' for English voices${RESET}"
 }
 
 cmd_save() {
@@ -160,7 +174,7 @@ cmd_save() {
 
   if [[ -z "$output" ]]; then
     echo "${RED}Error: No output file specified${RESET}" >&2
-    echo "Usage: say save \"text\" -o output.aiff [-v voice] [-r rate]" >&2
+    echo "Usage: speak save \"text\" -o output.aiff [-v voice] [-r rate]" >&2
     exit 1
   fi
 
@@ -171,7 +185,7 @@ cmd_save() {
   fi
 
   # Build command
-  local cmd=("say" "-o" "$output")
+  local cmd=("$NATIVE_SAY" "-o" "$output")
   [[ -n "$voice" ]] && cmd+=("-v" "$voice")
   [[ -n "$rate" ]] && cmd+=("-r" "$rate")
   cmd+=("$text")
@@ -183,10 +197,10 @@ cmd_save() {
 
 cmd_help() {
   cat <<EOF
-${BOLD}${BLUE}Say${RESET} - ADHD-friendly macOS text-to-speech CLI
+${BOLD}${BLUE}speak${RESET} - ADHD-friendly macOS text-to-speech CLI
 
 ${BOLD}USAGE:${RESET}
-  say <command> [options]
+  speak <command> [options]
 
 ${BOLD}COMMANDS:${RESET}
   ${GREEN}speak "text"${RESET}      Speak text aloud
@@ -204,11 +218,11 @@ ${BOLD}COMMANDS:${RESET}
   ${GREEN}help${RESET}              Show this help message
 
 ${BOLD}EXAMPLES:${RESET}
-  say speak "Hello world"                    # Basic speech
-  say speak "Hello" -v Daniel                # British accent
-  say speak "Slow down" -r 100               # Slow rate
-  say voices --lang en                       # English voices
-  say save "Podcast intro" -o intro.m4a      # Save to file
+  speak speak "Hello world"                  # Basic speech
+  speak speak "Hello" -v Daniel              # British accent
+  speak speak "Slow down" -r 100             # Slow rate
+  speak voices --lang en                     # English voices
+  speak save "Podcast intro" -o intro.m4a    # Save to file
 
 ${BOLD}POPULAR VOICES:${RESET}
   ${GRAY}Premium:${RESET}  Samantha (en_US), Alex (en_US), Daniel (en_GB)
@@ -231,7 +245,7 @@ main() {
     help|--help|-h) cmd_help ;;
     *)
       echo "${RED}Error: Unknown command '${cmd}'${RESET}" >&2
-      echo "Run 'say help' for usage information" >&2
+      echo "Run 'speak help' for usage information" >&2
       exit 1
       ;;
   esac

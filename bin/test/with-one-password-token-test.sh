@@ -2,7 +2,10 @@
 
 set -euo pipefail
 
-SUBJECT="$(cd "$(dirname "$0")/.." && pwd)/with-one-password-token"
+# CDPATH='' matches every sibling test here. Without it, an inherited CDPATH
+# makes `cd` echo the directory it resolved, and that extra line is captured
+# into SUBJECT, producing a two-line path that cannot be executed.
+SUBJECT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)/with-one-password-token"
 TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
@@ -124,6 +127,21 @@ assert_contains "$global_op_output" 'args=--account known-account item get known
 # The nested shell must evaluate these expressions.
 # shellcheck disable=SC2016
 child_output="$(DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" EXPERIENCE_EXTENSION_UPLOAD_TOKEN=AMBIENT_UPLOAD_SENTINEL UNRELATED_SECRET=LEAK_SENTINEL "$SUBJECT" inject EXPERIENCE_EXTENSION_UPLOAD_TOKEN op://known-vault/known-item/credential -- bash -c 'if [[ "$EXPERIENCE_EXTENSION_UPLOAD_TOKEN" == "UPLOAD_SECRET_SENTINEL" ]]; then printf "upload_matches=yes\\n"; else printf "upload_matches=\\n"; fi; printf "service_present=%s\\n" "${OP_SERVICE_ACCOUNT_TOKEN:+yes}"; printf "unrelated_present=%s\\n" "${UNRELATED_SECRET:+yes}"')"
+# The child-process credential-delivery boundary.
+#
+# These four rows are the ones issue 51 relies on when it claims credential
+# delivery reaches its target without broker authority or unrelated credentials.
+# Read together they say: the requested value arrives at the named child, the
+# broker's own service token does not follow it, an unrelated secret in the
+# caller's environment is not carried along, and none of the values are printed
+# in order to prove any of that.
+#
+# The startup half of the same criterion is proved separately, in
+# bin/test/zsh-work-profile-boundary-test.sh and
+# bin/test/codex-ambient-credential-boundary-test.sh: no shell startup sources a
+# secret, and GUI projection carries only allowlisted non-secret names. Neither
+# claim belongs here, because this file exercises the wrapper rather than a
+# shell.
 assert_contains "$child_output" 'upload_matches=yes' 'child receives the requested secret value'
 assert_contains "$child_output" 'service_present=' 'child does not receive the service token'
 assert_contains "$child_output" 'unrelated_present=' 'child does not receive unrelated secrets'

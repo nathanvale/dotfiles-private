@@ -230,10 +230,10 @@ with-one-password-token inject NPM_TOKEN "op://API Credentials/NPM_TOKEN/credent
 | 1Password `API Credentials` vault | API keys, service tokens | n/a |
 | 1Password `Personal` vault | Identity, payment cards, personal logins | n/a |
 | `~/code/dotfiles/.env` | The service-account token, nothing else | No, git-ignored, mode 0600 |
-| `~/.env.secrets` | Machine settings such as `WORK_PROFILE` | No |
 
-`~/.env.secrets` holds settings, not credentials. No file on this machine holds
-a projected set of secret values.
+No file on this machine holds a projected set of secret values, and shell
+startup sources none of them. Contract:
+`bin/test/codex-ambient-credential-boundary-test.sh`.
 
 ---
 

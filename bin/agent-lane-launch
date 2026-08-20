@@ -1,0 +1,235 @@
+#!/usr/bin/env bash
+#
+# Print the exact commands that launch each agent lane bound to a worktree's
+# repaired startup files.
+#
+# Every lane in the issue-54 matrix must read the SAME startup owners, or the
+# receipts are not comparable. The binding is a process-scoped ZDOTDIR: zsh
+# reads .zshenv/.zshrc from there instead of $HOME, so a lane captures the
+# repaired files while every canonical file stays untouched.
+#
+# WHY THIS PRINTS INSTEAD OF RUNS
+#
+# A lane must be started by its own operator in its own terminal. A wrapper that
+# spawned the product from here would produce a child of THIS process, inheriting
+# this environment and this session's snapshot, which is the precise confusion
+# the receipt tool exists to refuse.
+#
+# WHY THE LAUNCH IS SANITIZED
+#
+# `env -u CDPATH` is not decoration. A parent session can export CDPATH (this
+# repository's own pre-repair sessions export three entries), and the product
+# would inherit it, capture it, and hand every agent command a shell whose
+# relative `cd` resolves through an ambient search path. Unsetting it at the
+# launch boundary is what makes the lane a test of the repaired files rather
+# than of the launching terminal.
+#
+# WHY TASK START IS A LITERAL
+#
+# The receipt tool refuses a snapshot that is not strictly newer than the lane's
+# start, and that gate is only meaningful if the stamp predates the product.
+#
+# The stamp is resolved when this launcher runs and embedded as a literal in
+# both the launch command and the receipt command, because a Claude Bash lane
+# did not receive it through the environment: the receipt read an empty
+# --task-start and the gate quietly passed everything.
+#
+# Usage:
+#   bin/agent-lane-launch                 # every lane
+#   bin/agent-lane-launch codex-command   # one lane
+
+set -euo pipefail
+
+REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
+
+# The boundary must be a positive epoch or nothing at all. The receipt gate
+# refuses a snapshot whose mtime is at or before the boundary, and every real
+# mtime is greater than zero, so a zero boundary admits every pre-repair
+# snapshot while still reading as enforcement. When git cannot produce the
+# commit epoch, printing commands would hand every lane that vacuous gate;
+# refusing here is what keeps a printed command worth pasting.
+BOUNDARY_EPOCH="$(git -C "$REPO_ROOT" log -1 --format=%ct 2>/dev/null || printf '')"
+if ! [[ "$BOUNDARY_EPOCH" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'agent-lane-launch: no positive repair boundary: `git log -1 --format=%%ct` produced nothing usable in %s.\n' "$REPO_ROOT" >&2
+  printf 'agent-lane-launch: a zero boundary would admit every pre-repair snapshot, so no launch command is printed. Run from a git checkout with at least one commit.\n' >&2
+  exit 1
+fi
+
+# The lane's start time, resolved once, here.
+#
+# Claude Bash did not receive LANE_START from the environment, so a receipt run
+# inside the product read an empty --task-start and its ordering gate silently
+# did nothing. Environment inheritance is therefore not a mechanism this
+# launcher can rely on.
+#
+# The value is instead computed now and embedded as a LITERAL in both the launch
+# command and the printed receipt command. Both carry the same number, so the
+# gate compares the snapshot against the moment the operator asked for the lane,
+# whether or not any variable survives into the product.
+TASK_START_EPOCH="$(date +%s)"
+
+want="${1:-all}"
+
+emit() {
+  local lane="$1" note="$2" body="$3"
+  case "$want" in
+    all | "$lane") ;;
+    *) return 0 ;;
+  esac
+  printf '# ---- lane: %s ----\n' "$lane"
+  printf '# %s\n' "$note"
+  printf '%s\n\n' "$body"
+}
+
+cat <<HEADER
+# Agent lane launch commands
+#
+# Binding:  ZDOTDIR=$REPO_ROOT
+# Boundary: $BOUNDARY_EPOCH (a snapshot at or before this is refused as pre-repair)
+#
+# Run each lane from a FRESH product session started by the commands below.
+# Receipts land in \$XDG_STATE_HOME/agent-lane-receipts (default
+# ~/.local/state/agent-lane-receipts), mode 0600. No canonical file is modified.
+#
+# Task start: $TASK_START_EPOCH (embedded as a literal in both commands below;
+# a snapshot at or before it is refused as predating this lane).
+#
+# Lanes: codex-command, codex-terminal, claude-bash, claude-terminal,
+# claude-subagent. A command tool and an integrated terminal are separate lanes;
+# neither receipt substitutes for the other.
+
+HEADER
+
+# The receipt invocation shared by every lane. Printed as a continuation the
+# operator pastes inside the launched session.
+receipt_call() {
+  local lane="$1" product="$2" version_cmd="$3" contract="${4:-}"
+  # The trailing continuation is emitted only when another line follows, so the
+  # printed block is always paste-safe. An unconditional backslash on the last
+  # line would swallow the operator's next keystroke.
+  local tail_line='' version_suffix=''
+  if [[ "$contract" == 'contract' ]]; then
+    version_suffix=' \'
+    tail_line='#     --replay-contract'
+  fi
+  cat <<CALL
+#   $REPO_ROOT/bin/agent-lane-receipt \\
+#     --lane $lane --product $product \\
+#     --zdotdir $REPO_ROOT \\
+#     --task-start $TASK_START_EPOCH \\
+#     --boundary-epoch $BOUNDARY_EPOCH \\
+#     --product-version "\$($version_cmd)"$version_suffix
+CALL
+  [[ -n "$tail_line" ]] && printf '%s\n' "$tail_line"
+  return 0
+}
+
+# The environment every launched product receives.
+#
+# LANE_START is passed AT THE ENV BOUNDARY, not assigned as a preceding shell
+# variable. A bare `LANE_START=$(date +%s)` on its own line sets a variable in
+# the operator's shell that is never exported, so the product would start
+# without it and the in-session receipt would read an empty --task-start. Naming
+# it inside `env` is what actually places it in the child's environment.
+#
+# -u CDPATH removes an inherited search path; ZDOTDIR selects the repaired
+# startup owners. Both are process-scoped: no canonical file is touched.
+#
+# WHY CLAUDE LANES ALSO SET CLAUDE_CODE_SHELL
+#
+# ZDOTDIR alone does not reach Claude's snapshot. The installed Claude 2.1.237
+# runtime selects the config it snapshots with `path.join(os.homedir(),
+# '.zshrc')` and execs the selected shell to generate that snapshot, so the
+# file it captures is chosen from HOME and is not influenced by ZDOTDIR.
+# Overriding HOME does redirect the selection, but it also loses Claude's login,
+# so HOME stays untouched.
+#
+# CLAUDE_CODE_SHELL is the remaining seam: it names the shell Claude execs, so a
+# narrow wrapper can correct the one generated invocation that hardcodes the
+# canonical path. See bin/agent-lane-zsh for what that wrapper is allowed to do
+# and where it fails closed. Its filename must contain `zsh`, because the
+# runtime validates this variable by looking for a shell name in the path.
+#
+# Codex lanes take the binding alone. The wrapper exists for one product's
+# snapshot shape and is not applied where it was never proved.
+launch_env() {
+  local product="$1"
+  local shell_binding=''
+  if [[ "$product" == 'claude' ]]; then
+    shell_binding="CLAUDE_CODE_SHELL=$REPO_ROOT/bin/agent-lane-zsh "
+  fi
+  printf 'env -u CDPATH LANE_START=%s ZDOTDIR=%s %s%s' \
+    "$TASK_START_EPOCH" "$REPO_ROOT" "$shell_binding" "$product"
+}
+
+emit codex-command \
+  'Codex command tool. Start a fresh bound session, then run the tool through the command lane.' \
+  "$(launch_env codex)
+# then, inside that Codex session, run through its command tool:
+$(receipt_call codex-command codex 'codex --version' contract)"
+
+emit codex-terminal \
+  'Codex integrated terminal. A real TTY inside a bound session. Run at that terminal prompt, NOT through the command tool: they are separate lanes and one does not prove the other.' \
+  "$(launch_env codex)
+# then open the Codex integrated terminal and run at its prompt:
+$(receipt_call codex-terminal codex 'codex --version')"
+
+emit claude-bash \
+  'Claude Bash tool. Start a fresh bound session, then run through Bash.' \
+  "$(launch_env claude)
+# then, inside that Claude session, run through the Bash tool:
+$(receipt_call claude-bash claude 'claude --version' contract)"
+
+emit claude-terminal \
+  'Claude integrated terminal. A real TTY, proved separately from Bash: the Bash tool and a terminal are distinct lanes and one does not stand in for the other. If this product build exposes no distinct integrated terminal, record the limitation as a named gap rather than reusing the Bash receipt.' \
+  "$(launch_env claude)
+# then open the Claude integrated terminal and run at its prompt:
+$(receipt_call claude-terminal claude 'claude --version')"
+
+emit claude-subagent \
+  'Normal Claude subagent inside the bound session. Read-only: it runs the tool and reports; it does not edit.' \
+  "# inside the bound Claude session above, ask a normal subagent to run:
+$(receipt_call claude-subagent claude 'claude --version')"
+
+cat <<'FOOTER'
+# ---- reading the results ----
+#
+# A lane PASSES only when the tool exits 0 AND its receipt records
+# profile_binding=worktree. A receipt showing `unbound` or a non-zero exit is a
+# real observation of that lane, but it is not proof of the repaired profile.
+#
+# One failure mode is worth naming before it is misread. If a Claude lane's
+# probes fail on glob or argument semantics while its receipt still records
+# profile_binding=worktree, the startup files are not the cause. Claude selects
+# the config it snapshots from HOME, which ZDOTDIR does not influence, so the
+# capture read the canonical profile. That is what CLAUDE_CODE_SHELL corrects.
+# Check that the lane was launched with the wrapper before treating the result
+# as anything else.
+#
+# ---- auditing the set ----
+#
+# A per-lane receipt cannot see the other lanes, so a set of individually
+# passing receipts can still hide two failures: two separately launched lanes
+# carrying ONE snapshot, and a lane that produced no receipt at all. Read the
+# set with the auditor rather than by eye:
+#
+#   bin/agent-lane-audit
+#
+# It reports one row per lane as PASS, GAP, or REUSE, and exits zero only when
+# every lane is PASS.
+#
+#   REUSE  two lanes launched separately share a snapshot, so one launch is
+#          standing in for two lanes. Relaunch the second lane.
+#   GAP    the lane produced no receipt. A gap is truthful, and it is not a
+#          pass: it never clears the exit status.
+#
+# A lane this product build cannot expose is recorded as a named gap rather
+# than given a receipt from another lane:
+#
+#   bin/agent-lane-audit --gap 'claude-terminal=<why this lane cannot run here>'
+#
+# claude-subagent shares the claude-bash session by contract and is not reuse:
+# it has no launch line of its own above.
+FOOTER
+
+exit 0

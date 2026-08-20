@@ -1,0 +1,654 @@
+#!/usr/bin/env bash
+#
+# Produce one metadata-only receipt for an agent execution lane.
+#
+# Run this INSIDE the agent lane being proved: the Codex command tool, a Codex
+# TTY terminal, a Claude Bash call, a Claude subagent. It inspects the snapshot
+# that lane's harness captured, replays it, measures the effective shell state,
+# and writes a receipt that a supervisor can read without ever seeing the
+# snapshot's contents.
+#
+# The receipt answers five questions a supervisor must not have to take on
+# trust:
+#
+#   which files did this lane actually read      (zdotdir, profile_binding)
+#   which snapshot produced this verdict         (snapshot_path, mode, sha256)
+#   was that snapshot created after the repair   (admission against a boundary)
+#   did THIS lane cause that snapshot            (admission against task start)
+#   what is the lane's effective behaviour       (six named probes)
+#
+# WHY BINDING IS LOAD-BEARING
+#
+# The installed ~/.zshrc is a symlink into the canonical dotfiles checkout. An
+# ordinary agent session therefore captures the CANONICAL startup files, whose
+# snapshot still carries the hazards a worktree repair removed. Such a session
+# is not proof of the repair. To prove repaired files, a lane must be launched
+# with a process-scoped ZDOTDIR pointing at the worktree, so zsh reads the
+# repaired startup owners without any canonical file being modified:
+#
+#   ZDOTDIR=/path/to/worktree codex ...
+#   ZDOTDIR=/path/to/worktree claude ...
+#
+# A receipt with no binding is reported `profile_binding=unbound`. It is a real
+# receipt for that lane, but it is not evidence about the repaired profile, and
+# this tool will not let it pretend otherwise. A claimed binding is checked
+# against the process's real ZDOTDIR, so the claim cannot outrun the fact.
+#
+# DISCLOSURE
+#
+# Snapshot CONTENTS and environment values never reach either stream or the
+# stored receipt. The snapshot is replayed with both streams redirected to
+# /dev/null, and only derived facts (a hash, a mode, a PASS/FAIL) are emitted.
+#
+# The snapshot's PATH is stored, because issue 54 asks the receipt to carry
+# path, mode, and hash together. It is withheld from both streams: the receipt
+# file is private at mode 0600, while stdout is transcribed and pasted. See the
+# emit block for how the two sets differ.
+
+set -euo pipefail
+
+REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
+SHELL_CONTRACT="$REPO_ROOT/bin/test/zsh-effective-behavior-test.sh"
+
+die() {
+  printf 'agent-lane-receipt: %s\n' "$1" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'USAGE'
+Usage: agent-lane-receipt --lane NAME [options]
+
+Required:
+  --lane NAME               identity of the lane being proved; also the
+                            receipt's filename, so two lanes never collide
+  --task-start EPOCH        positive integer epoch captured BEFORE the product
+                            launched; the snapshot must be strictly newer
+  --boundary-epoch EPOCH    positive integer epoch; admit only snapshots newer
+                            than the repair boundary
+
+Options:
+  --snapshot PATH           snapshot to inspect; defaults to the newest
+                            post-boundary snapshot this product wrote
+  --product NAME            codex | claude | other; default: auto-detected
+  --product-version STRING  version string of the product running this lane
+  --zdotdir PATH            the ZDOTDIR this lane was launched with; must hold
+                            the startup owners whose repair is being proved,
+                            AND must match the running process's real ZDOTDIR
+  --replay-contract         also delegate to the repository's shell contract
+                            and carry its verdict and assertion count
+
+Environment:
+  AGENT_LANE_RECEIPT_BOUNDARY_EPOCH   default for --boundary-epoch
+  XDG_STATE_HOME                      private receipt root; default ~/.local/state
+  ZDOTDIR                             the real binding --zdotdir is checked against
+
+Both epochs are mandatory: they are the admission evidence, and a run that
+declined them would emit a PASS nobody had checked. Add --zdotdir for the
+receipt to count as proof of a repaired worktree profile; without it the run
+still produces a receipt, but it is reported `profile_binding=unbound` and is
+evidence only about whatever profile the lane happened to read.
+
+Exit status is 0 only when every probe passed, and any delegated contract
+passed. A refused admission writes no receipt at all.
+
+Receipts are written to $XDG_STATE_HOME/agent-lane-receipts/<lane>.receipt
+with mode 0600, created under umask 077. Snapshot contents and environment
+values are never printed. The stored receipt records snapshot_path; stdout
+carries every other field plus receipt_path, so a private location is never
+transcribed.
+USAGE
+}
+
+lane=''
+snapshot=''
+product=''
+product_version=''
+zdotdir=''
+task_start_epoch=''
+replay_contract=0
+boundary_epoch="${AGENT_LANE_RECEIPT_BOUNDARY_EPOCH:-}"
+
+# Refuse a value-taking flag that was given no value.
+#
+# WHY THIS EXISTS
+#
+# `shift 2` with only one argument remaining does not shift and does not
+# continue: under macOS's bash 3.2 the shift fails, `set -e` takes the failure,
+# and the process exits 1 having printed NOTHING. An operator who pasted a
+# truncated command, or whose trailing continuation was swallowed, would see a
+# non-zero status with no diagnostic and no receipt, which is the same shape as
+# a refused admission. A silent exit that mimics a refusal is worse than either
+# outcome, because it invites the operator to re-run rather than to fix the
+# command.
+#
+# So every value-taking flag proves its value is present BEFORE shifting, and
+# names itself when the value is absent. The flag is named rather than the
+# value described, so the diagnostic points at the exact token to repair.
+require_value() {
+  local flag="$1" count="$2"
+  [[ "$count" -ge 2 ]] || die "$flag requires a value, but none followed it"
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --lane) require_value "$1" $#; lane="$2"; shift 2 ;;
+    --snapshot) require_value "$1" $#; snapshot="$2"; shift 2 ;;
+    --product) require_value "$1" $#; product="$2"; shift 2 ;;
+    --product-version) require_value "$1" $#; product_version="$2"; shift 2 ;;
+    --zdotdir) require_value "$1" $#; zdotdir="$2"; shift 2 ;;
+    --task-start) require_value "$1" $#; task_start_epoch="$2"; shift 2 ;;
+    --boundary-epoch) require_value "$1" $#; boundary_epoch="$2"; shift 2 ;;
+    --replay-contract) replay_contract=1; shift ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
+[[ -n "$lane" ]] || die 'a --lane name is required'
+# The lane names a file. Refusing a path separator keeps a lane name from
+# escaping the receipt directory it is supposed to identify.
+[[ "$lane" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
+  die "lane name must be alphanumeric with . _ - (got: $lane)"
+
+# --- Freshness arguments are mandatory --------------------------------------
+#
+# Both epochs are required, and they are validated HERE: before any snapshot is
+# selected, any probe child is started, and any receipt is written.
+#
+# WHY MANDATORY RATHER THAN OPTIONAL
+#
+# These two values are the whole of the admission evidence. A run that omitted
+# them previously skipped both gates and still emitted `verdict=PASS`, so the
+# cheapest way to manufacture a passing receipt was to leave the flags off. The
+# receipt recorded `task_start_epoch=unset` and no reader could distinguish "this
+# lane's snapshot was proved newer than the repair" from "nobody checked". A
+# gate that any caller may decline is not a gate.
+#
+# WHY A DIGIT STRING IS NOT ENOUGH
+#
+# `^[0-9]+$` accepts `0`, and `0` is not a time this lane could have started.
+# Under `-le` every real snapshot mtime beats zero, so a zero epoch silently
+# satisfies both comparisons for every input: the gate stays present, keeps
+# reporting success, and admits everything. That is worse than an absent gate,
+# because it reads as enforcement. `00` and a leading-zero form are refused for
+# the same reason a lane name is constrained: one value, one spelling, so a
+# receipt field cannot carry two representations of the same instant.
+require_positive_epoch() {
+  local value="$1" flag="$2"
+  [[ -n "$value" ]] ||
+    die "$flag is required: without it no admission gate runs and a receipt cannot be proof"
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] ||
+    die "$flag must be a positive integer epoch (got: $value)"
+}
+
+require_positive_epoch "$task_start_epoch" '--task-start'
+require_positive_epoch "$boundary_epoch" '--boundary-epoch'
+
+# --- Product detection ------------------------------------------------------
+#
+# Detected from the harness's own marker variables rather than from a guess, so
+# a receipt names the product that actually ran it.
+if [[ -z "$product" ]]; then
+  if [[ -n "${CLAUDECODE:-}${CLAUDE_CODE_SIMPLE:-}" ]]; then
+    product='claude'
+  elif [[ -n "${CODEX_SANDBOX:-}${CODEX_HOME:-}" ]]; then
+    product='codex'
+  else
+    product='other'
+  fi
+fi
+
+# --- Snapshot directory per product ----------------------------------------
+snapshot_dir_for() {
+  case "$1" in
+    claude) printf '%s\n' "$HOME/.claude/shell-snapshots" ;;
+    codex) printf '%s\n' "${CODEX_HOME:-$HOME/.codex}/shell_snapshots" ;;
+    *) printf '\n' ;;
+  esac
+}
+
+# --- Snapshot selection -----------------------------------------------------
+#
+# When no snapshot is supplied, take the newest one this product wrote. That is
+# the snapshot the running lane was actually restored from.
+if [[ -z "$snapshot" ]]; then
+  dir="$(snapshot_dir_for "$product")"
+  [[ -n "$dir" && -d "$dir" ]] ||
+    die "no snapshot supplied and no snapshot directory for product: $product"
+  # Sorted by mtime through find/stat rather than by parsing ls, whose output is
+  # not a stable interface and which the operator has aliased to eza.
+  snapshot="$(
+    find "$dir" -type f -name '*.sh' -exec stat -f '%m %N' {} + 2>/dev/null |
+      sort -rn | head -1 | cut -d' ' -f2-
+  )"
+  [[ -n "$snapshot" ]] || die "no snapshot found in the $product snapshot directory"
+fi
+
+[[ -f "$snapshot" ]] || die "snapshot does not exist: $snapshot"
+[[ -r "$snapshot" ]] || die "snapshot is not readable: $snapshot"
+
+snapshot_mtime="$(stat -f '%m' "$snapshot")"
+snapshot_mode="$(stat -f '%Lp' "$snapshot")"
+snapshot_sha="$(shasum -a 256 "$snapshot" | awk '{print $1}')"
+
+# --- Admission --------------------------------------------------------------
+#
+# A snapshot older than the repair boundary cannot prove the repair, whatever
+# its contents say. Refusing it here is what stops pre-repair evidence from
+# being counted, and the refusal happens before any receipt is written so a
+# refused lane leaves nothing that could later be mistaken for proof.
+if [[ "$snapshot_mtime" -le "$boundary_epoch" ]]; then
+  die "snapshot predates the repair boundary and is pre-repair evidence (admitted: none)"
+fi
+
+# --- Admission: the snapshot must belong to THIS lane -----------------------
+#
+# Passing the repair boundary is not enough. Any lane started after the repair
+# clears it, including one that reused a snapshot captured by an EARLIER
+# post-repair session. That would let one product launch stand in for another
+# lane's evidence.
+#
+# The second gate is ordering: --task-start is captured by the launcher BEFORE
+# the product process exists, so a snapshot this lane genuinely caused must be
+# strictly newer. Equality is refused, not rounded down: a snapshot whose mtime
+# matches the recorded start to the second cannot be shown to have been caused
+# by the launch rather than to have preceded it.
+#
+# The value must be supplied rather than defaulted. Stamping it here, after the
+# product has already run, would compare the snapshot against a time drawn from
+# the wrong side of the launch and would admit exactly what this gate refuses.
+if [[ "$snapshot_mtime" -le "$task_start_epoch" ]]; then
+  die "snapshot is not newer than this lane's start; it predates the lane and is not its evidence"
+fi
+
+# --- Profile binding --------------------------------------------------------
+#
+# A written receipt records exactly two bindings. `worktree` means this lane
+# genuinely ran under the supplied ZDOTDIR. `unbound` means no ZDOTDIR was
+# claimed, so the lane read whatever the installed profile points at.
+#
+# A caller who names one directory while the process ran under another is
+# REFUSED, and so is a claim made with no ZDOTDIR in the environment. Neither
+# reaches the emit block, so no receipt carries a `mismatch` binding and a
+# reader never has to decide what a mismatched receipt would mean. The refusal
+# is the whole disposition: a lane whose binding cannot be confirmed produces
+# no evidence rather than evidence marked untrustworthy.
+#
+# The check compares the CALLER'S CLAIM against the PROCESS'S REAL ZDOTDIR.
+# Without that comparison `--zdotdir` is only a label: a lane launched with no
+# binding at all could pass the flag and produce a receipt asserting it had
+# proved the repaired profile. Reading the live environment is what turns the
+# binding from an assertion into a measurement.
+#
+# Both sides are canonicalised before comparison, because /var and /private/var,
+# a trailing slash, and an unresolved symlink all name the same directory and
+# none of those differences should read as a mismatch.
+canonical_dir() {
+  [[ -d "$1" ]] || return 1
+  (CDPATH='' cd -- "$1" 2>/dev/null && pwd -P)
+}
+
+if [[ -n "$zdotdir" ]]; then
+  [[ -d "$zdotdir" ]] || die "ZDOTDIR does not exist: $zdotdir"
+  missing=''
+  for owner in .zshenv .zshrc; do
+    [[ -f "$zdotdir/$owner" ]] || missing="$missing $owner"
+  done
+  [[ -z "$missing" ]] ||
+    die "ZDOTDIR holds no startup owners (missing:$missing): $zdotdir"
+
+  claimed_canonical="$(canonical_dir "$zdotdir")" ||
+    die "could not resolve the supplied ZDOTDIR: $zdotdir"
+
+  if [[ -z "${ZDOTDIR:-}" ]]; then
+    die "a worktree binding was claimed but this process has no ZDOTDIR; launch the lane with a process-scoped ZDOTDIR"
+  fi
+
+  actual_canonical="$(canonical_dir "${ZDOTDIR:-}")" ||
+    die "this process's ZDOTDIR does not resolve to a directory"
+
+  if [[ "$claimed_canonical" != "$actual_canonical" ]]; then
+    die "claimed ZDOTDIR does not match the ZDOTDIR this process actually ran under"
+  fi
+
+  profile_binding='worktree'
+  zdotdir="$claimed_canonical"
+else
+  profile_binding='unbound'
+fi
+
+# --- Probes -----------------------------------------------------------------
+#
+# Each probe runs in a real zsh child that first replays the snapshot, so what
+# is measured is the lane's effective post-replay state rather than the text of
+# any startup file.
+#
+# Both streams of the replay are discarded. That redirection is the only thing
+# keeping a snapshot body out of the receipt, and the contract test proves it by
+# planting an active printing marker inside a fixture snapshot.
+probe_root="$(mktemp -d)"
+trap 'rm -rf "$probe_root"' EXIT
+
+work="$probe_root/work"
+mkdir -p "$work"
+: >"$work/visible.txt"
+: >"$work/.hidden"
+
+nav_trap_parent="$probe_root/nav/trap_parent"
+nav_elsewhere="$probe_root/nav/elsewhere"
+mkdir -p "$nav_trap_parent/target" "$nav_elsewhere/present"
+
+# Scratch HOME for probe children. Startup owners initialise tools that write
+# state under HOME, and that state must land here rather than in the repository
+# or the operator's real home.
+probe_home="$probe_root/home"
+mkdir -p "$probe_home"
+
+# Run one probe body in a zsh child that has replayed the snapshot.
+# Sets probe_out, probe_err, and probe_status.
+#
+# `env -i` is load-bearing and was added after a probe went RED for the wrong
+# reason. The parent lane exports CDPATH, and a child that inherited it reported
+# ambient parent state as though the snapshot had established it. The claim this
+# tool makes is about what STARTUP AND THE SNAPSHOT establish, so the child is
+# given an empty environment plus exactly the fixture handles it needs. Without
+# this, a lane could fail on its parent's hazard, or pass because the parent
+# happened to be clean.
+#
+# ZDOTDIR is forwarded when the lane is bound, so the child reads the same
+# startup owners the lane under proof was launched against.
+run_probe() {
+  local body="$1"
+  local err_file="$probe_root/stderr"
+  : >"$err_file"
+  # HOME is a scratch directory, never the ZDOTDIR. zsh reads startup owners
+  # from ZDOTDIR, but the tools those owners initialise (fnm, atuin) write their
+  # state under HOME. Pointing HOME at the worktree made a probe deposit
+  # .config/ and .local/ into the repository, so the two are kept separate: the
+  # binding decides which files are READ, the scratch home absorbs what is
+  # WRITTEN.
+  local -a child_env=(
+    HOME="$probe_home"
+    PATH=/usr/bin:/bin:/usr/sbin:/sbin
+    TERM=dumb
+    LANE_SNAPSHOT="$snapshot"
+    LANE_WORK="$work"
+    LANE_NAV_TRAP_PARENT="$nav_trap_parent"
+    LANE_NAV_ELSEWHERE="$nav_elsewhere"
+  )
+  [[ -n "$zdotdir" ]] && child_env+=(ZDOTDIR="$zdotdir")
+  set +e
+  probe_out="$(
+    env -i "${child_env[@]}" \
+      /bin/zsh -c "source -- \"\$LANE_SNAPSHOT\" >/dev/null 2>&1; $body" 2>"$err_file"
+  )"
+  probe_status=$?
+  set -e
+  probe_err="$(<"$err_file")"
+}
+
+# The probe bodies below are single-quoted on purpose: the NESTED zsh evaluates
+# them, so expanding them here would substitute this shell's values instead.
+# Each probe function is dispatched indirectly as "probe_${probe}".
+# shellcheck disable=SC2016,SC2329
+
+# Argument semantics: an unquoted revision must survive as one literal argument.
+# EXTENDED_GLOB turns `^` into a pattern operator, which silently rewrites it.
+probe_argument() {
+  run_probe 'args=(HEAD^); print -r -- "argc=${#args[@]}"; print -r -- "first=${args[1]}"'
+  [[ "$probe_status" -eq 0 ]] || return 1
+  [[ "$(grep '^argc=' <<<"$probe_out")" == 'argc=1' ]] || return 1
+  [[ "$(grep '^first=' <<<"$probe_out")" == 'first=HEAD^' ]] || return 1
+  return 0
+}
+
+# Glob semantics: `*` must exclude dotfiles, and an unmatched glob must fail
+# visibly rather than vanish from the argument list.
+probe_glob() {
+  run_probe 'cd -- "$LANE_WORK"; matches=(*); print -r -- "wildcard=${matches[*]}"'
+  [[ "$probe_status" -eq 0 ]] || return 1
+  [[ "$(grep '^wildcard=' <<<"$probe_out")" == 'wildcard=visible.txt' ]] || return 1
+
+  run_probe 'print -r -- before; : nosuchprefix-*; print -r -- after'
+  [[ "$probe_status" -ne 0 ]] || return 1
+  [[ "$(grep -c '^after$' <<<"$probe_out" || true)" == '0' ]] || return 1
+  return 0
+}
+
+# Navigation: a relative cd must not resolve through an ambient search path,
+# while still resolving a real child.
+probe_navigation() {
+  run_probe '
+    print -r -- "cdpath_entries=${#cdpath[@]}"
+    builtin cd -- "$LANE_NAV_ELSEWHERE"
+    if cd target 2>/dev/null; then print -r -- "absent=resolved"; else print -r -- "absent=failed"; fi
+    builtin cd -- "$LANE_NAV_ELSEWHERE"
+    if cd present 2>/dev/null; then print -r -- "present=resolved"; else print -r -- "present=failed"; fi
+  '
+  [[ "$probe_status" -eq 0 ]] || return 1
+  [[ "$(grep '^cdpath_entries=' <<<"$probe_out")" == 'cdpath_entries=0' ]] || return 1
+  [[ "$(grep '^absent=' <<<"$probe_out")" == 'absent=failed' ]] || return 1
+  [[ "$(grep '^present=' <<<"$probe_out")" == 'present=resolved' ]] || return 1
+  return 0
+}
+
+# Command resolution: standard names must not be shadowed, and PATH must carry
+# no empty, current-directory, or writable temporary component.
+probe_command_resolution() {
+  run_probe '
+    for name in cd ls cat mv less; do
+      print -r -- "identity_${name}=${$(whence -w -- $name)##*: }"
+    done
+    for entry in $path; do print -r -- "pathentry=$entry"; done
+  '
+  [[ "$probe_status" -eq 0 ]] || return 1
+  [[ "$(grep '^identity_cd=' <<<"$probe_out")" == 'identity_cd=builtin' ]] || return 1
+  local name
+  for name in ls cat mv less; do
+    [[ "$(grep "^identity_${name}=" <<<"$probe_out")" == "identity_${name}=command" ]] || return 1
+  done
+  # A loop over zero rows passes every row it never ran.
+  #
+  # Every assertion below is a REFUSAL, so an empty `$path` satisfied all of
+  # them vacuously: no entry was empty, none was `.`, none was writable-temp,
+  # and the probe returned success for a lane whose command resolution was
+  # entirely broken. Counting the rows first turns "nothing was wrong" into
+  # "there was something to check", which is the difference between a
+  # measurement and an assumption. The identity rows currently fail too when
+  # `$path` is empty, but this guard keeps the path-list claim explicit and safe
+  # if the probe is reordered later.
+  local entry_count
+  entry_count="$(grep -c '^pathentry=' <<<"$probe_out" || true)"
+  [[ "$entry_count" -gt 0 ]] || return 1
+
+  local entry
+  while IFS= read -r entry; do
+    [[ -n "$entry" ]] || return 1
+    [[ "$entry" == '.' || "$entry" == './'* ]] && return 1
+    [[ "$entry" == /* ]] || return 1
+    case "$entry" in
+      /tmp|/tmp/*|/private/tmp|/private/tmp/*|/var/tmp|/var/tmp/*) return 1 ;;
+    esac
+  done < <(grep '^pathentry=' <<<"$probe_out" | sed 's/^pathentry=//')
+  return 0
+}
+
+# Output noise: a replayed lane must run an ordinary command without writing a
+# prompt, a terminal escape, or a startup diagnostic to stderr.
+probe_output_noise() {
+  run_probe 'print -r -- marker'
+  [[ "$probe_status" -eq 0 ]] || return 1
+  [[ "$(grep -c . <<<"$probe_err" || true)" == '0' ]] || return 1
+  [[ "$probe_out" == 'marker' ]] || return 1
+  return 0
+}
+
+# Repeated calls: each call is a separate process, so a lane must receive the
+# same baseline without depending on an export from a previous call.
+probe_repeated_call() {
+  local first second
+  run_probe 'print -r -- "nullglob=$options[nullglob]"; export LANE_LEAK=1'
+  [[ "$probe_status" -eq 0 ]] || return 1
+  first="$probe_out"
+  run_probe 'print -r -- "nullglob=$options[nullglob]"; print -r -- "leak=${LANE_LEAK:-absent}"'
+  [[ "$probe_status" -eq 0 ]] || return 1
+  second="$(grep '^nullglob=' <<<"$probe_out")"
+  [[ "$first" == "$second" ]] || return 1
+  [[ "$(grep '^leak=' <<<"$probe_out")" == 'leak=absent' ]] || return 1
+  return 0
+}
+
+verdict='PASS'
+declare -a probe_names=(argument glob navigation command_resolution output_noise repeated_call)
+declare -a probe_results=()
+
+for probe in "${probe_names[@]}"; do
+  if "probe_${probe}"; then
+    probe_results+=('PASS')
+  else
+    probe_results+=('FAIL')
+    verdict='FAIL'
+  fi
+done
+
+# --- Delegated shell contract ----------------------------------------------
+#
+# DIVISION OF LABOUR between this tool's probes and the sibling contract.
+#
+# These are not two opinions about one claim; they answer different questions,
+# and neither can answer the other's.
+#
+#   bin/test/zsh-effective-behavior-test.sh  OWNS zsh semantics. It runs the
+#     four startup modes under a hermetic HOME with the repository's own startup
+#     owners, so its verdict is about the FILES. It is the authority, and it is
+#     the reason this tool does not restate the four-mode matrix.
+#
+#   the six probes here  measure THIS LANE'S OWN PROCESS: the snapshot this
+#     product actually captured, replayed the way this product replays it. No
+#     external harness can observe that, because the snapshot only exists once a
+#     real lane has run. That is the per-lane observation issue 54 asks for.
+#
+# So the contract proves the repair is correct in principle; the probes prove
+# this lane received it in practice. When both run, the contract is the
+# authority: a contract FAIL makes the receipt FAIL regardless of probe rows,
+# because a lane cannot be sound on files the owner has judged unsound.
+contract_verdict=''
+contract_assertions=''
+if [[ "$replay_contract" -eq 1 ]]; then
+  if [[ -x "$SHELL_CONTRACT" ]]; then
+    contract_log="$probe_root/contract.tap"
+    if ZSH_CONTRACT_SNAPSHOT="$snapshot" "$SHELL_CONTRACT" >"$contract_log" 2>&1; then
+      contract_verdict='PASS'
+    else
+      contract_verdict='FAIL'
+      verdict='FAIL'
+    fi
+    # Carry the plan count only. The TAP body can name a HOME path, so it is
+    # summarised rather than echoed.
+    #
+    # A missing plan line is an error, not a zero. It means the contract died
+    # before emitting one, so there is no verdict to carry; reporting `0`
+    # alongside a FAIL would look like a contract that ran and found nothing
+    # rather than one that never completed.
+    contract_assertions="$(sed -n 's/^1\.\.\([0-9]*\)$/\1/p' "$contract_log" | tail -1)"
+    [[ -n "$contract_assertions" ]] ||
+      die "delegated shell contract emitted no plan line; it did not complete"
+    [[ "$contract_assertions" -gt 0 ]] ||
+      die "delegated shell contract reported a zero-assertion plan"
+  else
+    die "shell contract is not executable: $SHELL_CONTRACT"
+  fi
+fi
+
+# --- Emit -------------------------------------------------------------------
+state_root="${XDG_STATE_HOME:-$HOME/.local/state}"
+receipt_dir="$state_root/agent-lane-receipts"
+
+# Private from the instant it exists, not shortly afterwards.
+#
+# `mkdir` then `chmod` leaves a window between the two calls in which the
+# directory carries the caller's ambient umask. Under a permissive umask -- 022
+# is the macOS default and 002 is common on shared machines -- that window is
+# world-readable or group-writable, and a receipt written into it inherits the
+# same exposure before the mode is corrected. The window is short, but it is
+# real, and the fix does not need it to be measured: setting the umask FIRST
+# makes every subsequent creation private at birth, so there is no interval to
+# reason about.
+#
+# The old `chmod` calls are KEPT rather than replaced. umask only constrains
+# creation, so a directory or receipt left over from an earlier run under a
+# different umask would keep its old permissive mode forever. umask closes the
+# creation window; chmod repairs an inherited one. Neither covers the other.
+umask 077
+mkdir -p "$receipt_dir"
+chmod 700 "$receipt_dir" 2>/dev/null || true
+receipt_path="$receipt_dir/${lane}.receipt"
+
+[[ -n "$product_version" ]] || product_version='unknown'
+# The launcher's pre-launch stamp, which is the value the admission gate above
+# actually compared against. Recording the emit time instead would put a
+# different number in the receipt from the one that was enforced. No fallback
+# is needed or wanted: the epoch is mandatory and validated, so a run reaching
+# here always has one.
+task_start="$(date -u -r "$task_start_epoch" '+%Y-%m-%dT%H:%M:%SZ')"
+shell_id="$(/bin/zsh --version 2>/dev/null | head -1)"
+[[ -n "$shell_id" ]] || shell_id='zsh unknown'
+
+{
+  printf 'lane=%s\n' "$lane"
+  printf 'product=%s\n' "$product"
+  printf 'product_version=%s\n' "$product_version"
+  printf 'shell=%s\n' "$shell_id"
+  printf 'task_start=%s\n' "$task_start"
+  # The two epochs this run was admitted against, recorded as the raw integers
+  # that were compared. The audit re-runs the freshness comparison from these
+  # fields rather than trusting this tool's verdict, so a receipt that skipped
+  # or inverted a gate is caught by a reader that never saw the snapshot. Their
+  # presence is what makes the audit an independent check instead of an echo.
+  printf 'task_start_epoch=%s\n' "$task_start_epoch"
+  printf 'boundary_epoch=%s\n' "$boundary_epoch"
+  printf 'zdotdir=%s\n' "$zdotdir"
+  printf 'profile_binding=%s\n' "$profile_binding"
+  printf 'snapshot_path=%s\n' "$snapshot"
+  printf 'snapshot_mode=%s\n' "$snapshot_mode"
+  printf 'snapshot_sha256=%s\n' "$snapshot_sha"
+  printf 'snapshot_mtime=%s\n' "$snapshot_mtime"
+  index=0
+  for probe in "${probe_names[@]}"; do
+    printf 'probe_%s=%s\n' "$probe" "${probe_results[$index]}"
+    index=$((index + 1))
+  done
+  if [[ "$replay_contract" -eq 1 ]]; then
+    printf 'contract=bin/test/zsh-effective-behavior-test.sh\n'
+    printf 'contract_assertions=%s\n' "$contract_assertions"
+    printf 'contract_verdict=%s\n' "$contract_verdict"
+  fi
+  printf 'verdict=%s\n' "$verdict"
+} >"$receipt_path"
+chmod 600 "$receipt_path"
+
+# WHAT IS STORED AND WHAT IS EMITTED ARE DIFFERENT SETS
+#
+# Issue 54 requires the receipt to carry the snapshot's path, mode, and hash, so
+# `snapshot_path` stays in the mode-0600 file. That file is the private artefact:
+# it lives under XDG state, only its owner can read it, and a supervisor who
+# needs the full provenance opens it deliberately.
+#
+# stdout is not that. A lane's stdout is transcribed, pasted into issues, and
+# read by whoever is watching the session, so a snapshot path printed there
+# republishes a private location -- one naming the operator's home directory,
+# the product, and often the session -- to every reader of the transcript. The
+# receipt tool's whole disclosure claim is that derived facts travel and
+# locations do not.
+#
+# So the stored receipt is filtered on its way to stdout: every field except
+# `snapshot_path` is emitted, and the supervisor still receives the mode, the
+# SHA-256, the mtime, and the verdict. `receipt_path` is printed because it
+# names where to look, which is what a reader needs in order to open the
+# private file that holds the rest.
+grep -v '^snapshot_path=' -- "$receipt_path" || true
+printf 'receipt_path=%s\n' "$receipt_path"
+
+[[ "$verdict" == 'PASS' ]] || exit 1
+exit 0

@@ -3,6 +3,34 @@
 # Keep this file side-effect free. Interactive setup, version managers, secrets,
 # and launchctl sync belong in explicit shell helpers or login/interactive files.
 
+# ----------------------------------------------------------------------------
+# Glob and pattern baseline
+# ----------------------------------------------------------------------------
+# Issue 48 removed the `setopt` lines that ENABLED these options. That stops
+# this repository adding a hazard, but it does not remove one that arrives from
+# outside, and those are different guarantees.
+#
+# An agent harness can start zsh with options already set, so startup inherits
+# them and, having nothing to say about them, passes them straight through to
+# every agent command. A fresh bound Claude lane hit exactly this: EXTENDED_GLOB
+# was on after snapshot replay, and unquoted `HEAD^` expanded to a pattern that
+# NULL_GLOB then deleted, leaving the revision argument gone with no error.
+#
+# So the baseline is stated explicitly rather than assumed. It lives in .zshenv
+# because that is the only file every zsh invocation reads: a non-interactive
+# `zsh -c` agent command never reaches .zshrc, and it needs this guarantee most.
+#
+# NOMATCH is asserted on, not merely left alone, so an unmatched pattern fails
+# visibly instead of vanishing.
+#
+# A function that genuinely needs extended patterns takes a local baseline
+# (`setopt localoptions extendedglob`) so the option cannot escape into a
+# snapshot. See the Globbing section of .zshrc.
+#
+# Contract: bin/test/zsh-effective-behavior-test.sh
+unsetopt EXTENDED_GLOB NULL_GLOB GLOB_DOTS
+setopt NOMATCH
+
 # Codex sandboxes block the default ~/.cache/clang path. Keep Swift module
 # compilation in OS-managed temporary storage available to sandboxed workers.
 export CLANG_MODULE_CACHE_PATH="${TMPDIR:-/tmp}/clang-module-cache"

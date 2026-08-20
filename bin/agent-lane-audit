@@ -1,0 +1,479 @@
+#!/usr/bin/env bash
+#
+# Audit a directory of agent lane receipts and report one verdict per lane.
+#
+# The receipt tool proves a lane against itself: it admits only a post-repair
+# snapshot, checks the binding against the live environment, and measures six
+# probes. What it cannot see is the OTHER lanes. Each receipt is written by a
+# separate process, so nothing in the per-lane path can notice that two lanes
+# reported the same snapshot, or that a lane never reported at all.
+#
+# Those are exactly the two ways an evidence set fails while every individual
+# receipt still says PASS:
+#
+#   reuse    two lanes that were supposed to be separate product launches
+#            carry one snapshot, so one launch is standing in for two lanes
+#   silence  a lane produced no receipt, and an audit that only reads the
+#            files present would never mention it
+#   staleness a receipt asserts PASS while its own recorded epochs show the
+#            snapshot predates the repair boundary or the lane start, so the
+#            verdict was never earned by the evidence the receipt carries
+#
+# This tool is the supervision seam for both. It reads receipts only, never
+# snapshots, and emits a machine-readable row per lane.
+#
+# WHY DISTINCTNESS IS NOT A HAND-MAINTAINED LIST
+#
+# Requiring every lane to hold a unique snapshot would be wrong. A subagent runs
+# INSIDE an already-bound session, so it shares that session's snapshot by
+# contract, not by accident.
+#
+# The discriminator is the launcher's own output. A lane whose launch block
+# emits its own `env ... <product>` line is started as a SEPARATE product
+# process and must therefore hold a snapshot no other launched lane holds. A
+# lane with no launch line of its own runs inside another lane's session and is
+# expected to share. That keeps this tool honest against a launcher that grows a
+# lane later: the requirement is derived, never restated here.
+#
+# VERDICTS
+#
+#   PASS   the receipt exists, records profile_binding=worktree and
+#          verdict=PASS, carries task_start_epoch, boundary_epoch, and
+#          snapshot_mtime as positive integers whose ordering this tool
+#          re-derives, and satisfies the distinctness rule
+#   GAP    the lane produced no receipt, and the reason is recorded as a named
+#          gap. A gap is reported, never silently omitted and never counted as
+#          a pass
+#   REUSE  the receipt passes on its own terms but shares a snapshot with
+#          another separately-launched lane, so it is not independent evidence
+#   FAIL   the receipt exists but records a failing verdict, an unbound
+#          profile, or freshness metadata this tool cannot revalidate
+#
+# Exit status is 0 only when every audited lane is PASS. A GAP is a truthful
+# result, not a passing one, so it does not clear the exit status: a supervisor
+# reading the status alone can never mistake an unproved lane for a proved one.
+#
+# DISCLOSURE
+#
+# Only receipt metadata is read, and only a lane name, a verdict, a binding, and
+# a short snapshot-hash prefix are printed. No snapshot is opened. Receipt
+# fields that could name a private path are not echoed.
+
+set -euo pipefail
+
+REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/.." && pwd)"
+
+# The launcher is the authoritative source of BOTH the lane inventory and the
+# distinctness rule, so it is resolved relative to this tool and from nowhere
+# else. No environment variable may redirect it.
+#
+# An override here would be a hole straight through this tool's purpose: a
+# substituted launcher that emits no `env ...` launch line for any lane makes
+# every lane look session-shared, so every REUSE silently becomes a PASS. The
+# audit would keep reporting confidently while having lost the one comparison it
+# exists to make. The sensitivity suite instead runs perturbed copies inside a
+# repo-shaped temporary directory with a launcher beside them, so ordinary
+# relative resolution is what the tests exercise.
+LAUNCHER="$REPO_ROOT/bin/agent-lane-launch"
+
+die() {
+  printf 'agent-lane-audit: %s\n' "$1" >&2
+  exit 1
+}
+
+usage() {
+  cat <<'USAGE'
+Usage: agent-lane-audit [options]
+
+Options:
+  --receipt-dir PATH   directory of .receipt files to audit; default:
+                       $XDG_STATE_HOME/agent-lane-receipts
+  --gap LANE=REASON    record a lane as a named GAP. Use when the product
+                       exposes no such lane in this environment, so the lane
+                       is reported unproved instead of being given a
+                       fabricated receipt. Repeatable.
+  --lanes A,B,C        lanes to audit; default: every lane the launcher offers
+
+Exit status is 0 only when every audited lane is PASS. A GAP never clears it.
+
+Only receipt metadata is read. No snapshot is opened and no snapshot content,
+environment value, or full private path is printed.
+USAGE
+}
+
+receipt_dir=''
+lanes_arg=''
+declare -a gap_lanes=()
+declare -a gap_reasons=()
+
+require_value() {
+  local flag="$1" count="$2"
+  [[ "$count" -ge 2 ]] || die "$flag requires a value, but none followed it"
+}
+
+# A lane name becomes a path, so it obeys the same grammar the receipt tool
+# enforces on the name it writes. Refusing a path separator keeps a lane name
+# from reaching outside the receipt directory it is supposed to identify, and
+# keeps the two tools agreeing about what a lane may be called: a name the
+# receipt tool would refuse to write must not be a name this tool will read.
+require_lane_name() {
+  local lane="$1" source="$2"
+  [[ -n "$lane" ]] || die "$source: lane name must not be empty"
+  [[ "$lane" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] ||
+    die "$source: lane name must be alphanumeric with . _ - (got: $lane)"
+}
+
+# A gap reason is printed into a machine-readable row, so a newline in it is not
+# cosmetic: it ends the row early and starts a new one the reader parses as
+# another lane. A reason carrying `\nlane=claude-terminal state=PASS ...` would
+# forge a passing row for the very lane the gap was declared about, which is the
+# fabricated pass this tool exists to make impossible. The reason is the one
+# field an operator supplies freely, so it is the one field checked here.
+require_single_line() {
+  local value="$1" source="$2"
+  case "$value" in
+    *$'\n'* | *$'\r'*)
+      die "$source must be a single line; a line break would forge an output row" ;;
+  esac
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --receipt-dir) require_value "$1" $#; receipt_dir="$2"; shift 2 ;;
+    --lanes)
+      require_value "$1" $#
+      # An empty list is refused rather than treated as "no selection". Falling
+      # through to the full inventory would audit every lane while the operator
+      # believed they had narrowed the run.
+      [[ -n "$2" ]] || die '--lanes names no lane'
+      lanes_arg="$2"
+      shift 2
+      ;;
+    --gap)
+      require_value "$1" $#
+      # LANE=REASON. A gap without a reason is refused: an unexplained gap is
+      # indistinguishable from a lane someone forgot to run, and the whole point
+      # of recording one is that it carries why.
+      case "$2" in
+        *=*) ;;
+        *) die "--gap expects LANE=REASON (got: $2)" ;;
+      esac
+      gap_lane="${2%%=*}"
+      gap_reason="${2#*=}"
+      require_lane_name "$gap_lane" '--gap'
+      [[ -n "$gap_reason" ]] || die "--gap for $gap_lane carries no reason"
+      require_single_line "$gap_reason" "the --gap reason for $gap_lane"
+      gap_lanes+=("$gap_lane")
+      gap_reasons+=("$gap_reason")
+      shift 2
+      ;;
+    -h|--help) usage; exit 0 ;;
+    *) die "unknown argument: $1" ;;
+  esac
+done
+
+if [[ -z "$receipt_dir" ]]; then
+  receipt_dir="${XDG_STATE_HOME:-$HOME/.local/state}/agent-lane-receipts"
+fi
+[[ -d "$receipt_dir" ]] || die "receipt directory does not exist: $receipt_dir"
+
+# --- The lane inventory and the distinctness rule ----------------------------
+#
+# Both come from the launcher, so this tool never carries its own copy of the
+# lane list. `--lanes` overrides the inventory for a focused audit but does not
+# change the rule.
+launcher_output=''
+if [[ -x "$LAUNCHER" ]]; then
+  launcher_output="$("$LAUNCHER" 2>/dev/null || printf '')"
+fi
+
+if [[ -n "$lanes_arg" ]]; then
+  IFS=',' read -r -a lanes <<<"$lanes_arg"
+  for lane in "${lanes[@]}"; do
+    require_lane_name "$lane" '--lanes'
+  done
+else
+  [[ -n "$launcher_output" ]] ||
+    die "no --lanes given and the launcher produced no inventory: $LAUNCHER"
+  declare -a lanes=()
+  while IFS= read -r lane_name; do
+    # The derived inventory composes paths exactly as `--lanes` does, so it
+    # meets the same grammar. The launcher is trusted, but a trusted source
+    # that has been edited into an unexpected shape should fail loudly here
+    # rather than compose a path from whatever it emitted.
+    [[ -n "$lane_name" ]] || continue
+    require_lane_name "$lane_name" 'the launcher inventory'
+    lanes+=("$lane_name")
+  done < <(sed -n 's/^# ---- lane: \(.*\) ----$/\1/p' <<<"$launcher_output")
+  [[ "${#lanes[@]}" -gt 0 ]] || die "the launcher offered no lanes"
+fi
+
+# Does this lane emit its own product launch?
+#
+# A lane that does is a separate process and owes a snapshot no other launched
+# lane holds. A lane that does not runs inside another lane's session and shares
+# by contract. Read from the launcher's per-lane block rather than assumed.
+lane_is_separately_launched() {
+  local lane="$1" block
+  [[ -n "$launcher_output" ]] || return 1
+  block="$(
+    awk -v want="# ---- lane: $lane ----" '
+      $0 == want { grabbing = 1; next }
+      grabbing && /^# ---- lane: / { exit }
+      grabbing { print }
+    ' <<<"$launcher_output"
+  )"
+  grep -qE '^env -u CDPATH LANE_START=' <<<"$block"
+}
+
+# Read one field from a receipt without sourcing it. A receipt is data, so it is
+# parsed, never executed.
+receipt_field() {
+  local file="$1" key="$2"
+  sed -n "s/^${key}=//p" "$file" | head -1
+}
+
+# Read a receipt field that must be a positive integer, or fail with a reason.
+#
+# Printed on success; empty output plus non-zero status on failure, so a caller
+# reads both the value and the verdict without an associative array or a
+# nameref, neither of which exists in the bash 3.2 this repository targets.
+#
+# `0` is refused alongside a non-numeric value. Every freshness comparison below
+# is a `-gt` against these fields, and zero passes all of them for any real
+# mtime, so a zeroed field would clear the gate while looking enforced. A
+# leading-zero form is refused so one instant has one spelling in one receipt.
+receipt_positive_int() {
+  local file="$1" key="$2" value
+  value="$(receipt_field "$file" "$key")"
+  [[ "$value" =~ ^[1-9][0-9]*$ ]] || return 1
+  printf '%s' "$value"
+}
+
+# A recorded gap for this lane, or empty.
+gap_reason_for() {
+  local lane="$1" index=0
+  while [[ "$index" -lt "${#gap_lanes[@]}" ]]; do
+    if [[ "${gap_lanes[$index]}" == "$lane" ]]; then
+      printf '%s' "${gap_reasons[$index]}"
+      return 0
+    fi
+    index=$((index + 1))
+  done
+  return 1
+}
+
+# --- First pass: read every lane's facts ------------------------------------
+declare -a lane_names=()
+declare -a lane_states=()
+declare -a lane_shas=()
+declare -a lane_notes=()
+
+for lane in "${lanes[@]}"; do
+  receipt="$receipt_dir/${lane}.receipt"
+  state=''
+  sha=''
+  note=''
+  # Held apart from `note` on purpose. The receipt evaluation below writes
+  # `note` unconditionally, so a contradiction recorded there would be
+  # overwritten by the ordinary verdict diagnostic and never reach the row. The
+  # two facts are independent -- one about the evidence, one about the
+  # declaration over it -- so they are carried separately and joined at emit.
+  contradiction_note=''
+
+  if reason="$(gap_reason_for "$lane")"; then
+    # A declared gap wins over an absent receipt, because it explains it. It
+    # does NOT win over a present receipt: a lane that actually produced
+    # evidence is judged on that evidence, so a stale gap declaration can never
+    # suppress a real failing receipt.
+    #
+    # The contradiction is still a finding. The gap asserts this lane could
+    # produce no evidence and the receipt is that evidence, so one of the two is
+    # stale. Reporting only the receipt verdict would discard an operator
+    # statement that has stopped being true, and it would survive unnoticed into
+    # the next run. It is recorded, never allowed to alter the verdict.
+    if [[ -f "$receipt" ]]; then
+      contradiction_note='a gap was declared for a lane that produced a receipt'
+    else
+      state='GAP'
+      note="$reason"
+    fi
+  fi
+
+  if [[ -z "$state" ]]; then
+    if [[ ! -f "$receipt" ]]; then
+      state='GAP'
+      note='no receipt and no declared reason; this lane is unproved'
+    else
+      verdict="$(receipt_field "$receipt" 'verdict')"
+      binding="$(receipt_field "$receipt" 'profile_binding')"
+      sha="$(receipt_field "$receipt" 'snapshot_sha256')"
+      claimed_lane="$(receipt_field "$receipt" 'lane')"
+      if [[ "$verdict" != 'PASS' ]]; then
+        state='FAIL'
+        note="receipt verdict is ${verdict:-absent}"
+      elif [[ "$binding" != 'worktree' ]]; then
+        state='FAIL'
+        note="profile_binding is ${binding:-absent}, so this is not proof of the repaired profile"
+      elif [[ "$claimed_lane" != "$lane" ]]; then
+        # The filename says one lane; the receipt's own field says another.
+        #
+        # A receipt is identified by BOTH, and they must agree. Copying or
+        # renaming a real receipt is the cheapest way to manufacture evidence
+        # for a lane that never ran: rename a passing codex-command receipt to
+        # claude-terminal.receipt and, because its snapshot is genuinely
+        # distinct, distinctness never fires and the lane reports PASS. The
+        # filename is what the supervisor asked about; the lane field is what
+        # the receipt says it is. Trusting the filename alone lets the file's
+        # location outrank its content.
+        state='FAIL'
+        note="receipt names lane ${claimed_lane:-absent}, so this file does not belong to this lane"
+      elif [[ ! "$sha" =~ ^[0-9a-f]{64}$ ]]; then
+        # A snapshot hash is what makes cross-lane comparison possible, so an
+        # absent or malformed one is a failure, never a pass.
+        #
+        # This is load-bearing rather than tidy. Distinctness can only compare
+        # lanes that HAVE a hash, so without this check an empty field made a
+        # lane skip the comparison silently: two separately launched lanes with
+        # the field stripped both reported PASS and the whole audit exited 0.
+        # Deleting one line from two receipts forged a fully proved matrix.
+        state='FAIL'
+        note="snapshot_sha256 is ${sha:-absent} and is not a SHA-256, so this lane cannot be compared"
+      else
+        # --- Freshness, revalidated here rather than trusted ---------------
+        #
+        # The receipt tool already enforces both admission gates. This is not a
+        # second opinion about the same run; it is the only check a supervisor
+        # can make WITHOUT the snapshot, which by then may be deleted, rotated,
+        # or unreadable.
+        #
+        # `verdict=PASS` is the receipt's own claim about itself. A receipt
+        # written by an older build, edited by hand, or produced by a tool whose
+        # gate was disabled carries exactly the same PASS line as a sound one.
+        # The epochs are what make the claim checkable: with all three integers
+        # present the audit re-derives the ordering itself, and a receipt whose
+        # PASS was never earned fails here even though nothing in it says so.
+        #
+        # Absence is a FAIL, not a skip. Treating a missing field as "not
+        # applicable" would let deleting one line from a receipt buy an
+        # unchecked pass, which is the same shape as the snapshot_sha256 hole
+        # above: the cheapest forgery must not be the one that works.
+        lane_task_start=''
+        lane_boundary=''
+        lane_mtime=''
+        lane_task_start="$(receipt_positive_int "$receipt" 'task_start_epoch')" || lane_task_start=''
+        lane_boundary="$(receipt_positive_int "$receipt" 'boundary_epoch')" || lane_boundary=''
+        lane_mtime="$(receipt_positive_int "$receipt" 'snapshot_mtime')" || lane_mtime=''
+
+        if [[ -z "$lane_task_start" || -z "$lane_boundary" || -z "$lane_mtime" ]]; then
+          state='FAIL'
+          note='receipt does not carry task_start_epoch, boundary_epoch, and snapshot_mtime as positive integers, so its freshness cannot be revalidated'
+        elif [[ "$lane_mtime" -le "$lane_task_start" ]]; then
+          # Equality fails with the strict inequality the generator enforces. A
+          # snapshot stamped the same second as the launch cannot be shown to
+          # have been caused by it rather than to have preceded it, and the two
+          # tools must agree on that boundary or a receipt would pass one and
+          # fail the other.
+          state='FAIL'
+          note='snapshot_mtime is not newer than task_start_epoch, so this snapshot is not evidence this lane caused it'
+        elif [[ "$lane_mtime" -le "$lane_boundary" ]]; then
+          state='FAIL'
+          note='snapshot_mtime is not newer than boundary_epoch, so this receipt rests on pre-repair evidence'
+        else
+          state='PASS'
+          note='receipt passes, is bound to the worktree, and its snapshot postdates both the repair boundary and this lane start'
+        fi
+      fi
+    fi
+  fi
+
+  # The contradiction leads, because it is the fact an operator has to act on:
+  # the verdict behind it is already the ordinary reading of the receipt. The
+  # reason is not repeated here; it was supplied by the operator who is being
+  # told their declaration no longer matches what the lane produced.
+  if [[ -n "$contradiction_note" ]]; then
+    note="$contradiction_note; $note"
+  fi
+
+  lane_names+=("$lane")
+  lane_states+=("$state")
+  lane_shas+=("$sha")
+  lane_notes+=("$note")
+done
+
+# --- Second pass: cross-lane snapshot distinctness --------------------------
+#
+# Only lanes that are separately launched AND currently PASS are compared. A
+# lane already failing is not re-described as reuse, and a lane that shares by
+# contract is not accused of it.
+#
+# Every PASS lane reaching here has a validated 64-hex hash, because a missing
+# or malformed one was already turned into a FAIL above. That ordering is what
+# makes this comparison total over the lanes it claims to cover: a lane can no
+# longer opt out of distinctness by carrying no hash.
+index=0
+while [[ "$index" -lt "${#lane_names[@]}" ]]; do
+  lane="${lane_names[$index]}"
+  if [[ "${lane_states[$index]}" == 'PASS' ]] &&
+    lane_is_separately_launched "$lane"; then
+    other=0
+    while [[ "$other" -lt "${#lane_names[@]}" ]]; do
+      other_lane="${lane_names[$other]}"
+      if [[ "$other" -ne "$index" ]] &&
+        [[ "${lane_shas[$other]}" == "${lane_shas[$index]}" ]] &&
+        [[ "${lane_states[$other]}" == 'PASS' || "${lane_states[$other]}" == 'REUSE' ]] &&
+        lane_is_separately_launched "$other_lane"; then
+        lane_states[$index]='REUSE'
+        # Composed, not overwritten. This row already carries a note from the
+        # first pass, and a contradicted gap declaration is recorded there. A
+        # plain assignment erased it, which lost the finding in the case where
+        # it matters most: the lane has just stopped being proved, so an
+        # operator is about to ask why, and a stale gap sitting over it is one
+        # of the two facts they need. Reuse is what the audit concluded;
+        # the contradiction is what the operator declared. Neither answers the
+        # other.
+        reuse_note="shares one snapshot with ${other_lane}, which was launched separately; one launch cannot prove two lanes"
+        if [[ -n "${lane_notes[$index]}" ]]; then
+          lane_notes[$index]="${lane_notes[$index]}; ${reuse_note}"
+        else
+          lane_notes[$index]="$reuse_note"
+        fi
+        break
+      fi
+      other=$((other + 1))
+    done
+  fi
+  index=$((index + 1))
+done
+
+# --- Emit --------------------------------------------------------------------
+#
+# One row per lane, in the launcher's own order. The snapshot hash is truncated
+# to a short prefix: enough to see that two lanes carry the same capture, not
+# enough to republish a full content hash.
+pass_count=0
+gap_count=0
+problem_count=0
+
+index=0
+while [[ "$index" -lt "${#lane_names[@]}" ]]; do
+  sha_prefix='-'
+  [[ -n "${lane_shas[$index]}" ]] && sha_prefix="${lane_shas[$index]:0:12}"
+  printf 'lane=%s state=%s snapshot=%s note=%s\n' \
+    "${lane_names[$index]}" "${lane_states[$index]}" "$sha_prefix" "${lane_notes[$index]}"
+  case "${lane_states[$index]}" in
+    PASS) pass_count=$((pass_count + 1)) ;;
+    GAP) gap_count=$((gap_count + 1)) ;;
+    *) problem_count=$((problem_count + 1)) ;;
+  esac
+  index=$((index + 1))
+done
+
+printf 'audited=%d pass=%d gap=%d problem=%d\n' \
+  "${#lane_names[@]}" "$pass_count" "$gap_count" "$problem_count"
+
+# A gap is truthful but not proof. Only an all-PASS set clears the status.
+if [[ "$gap_count" -gt 0 || "$problem_count" -gt 0 ]]; then
+  exit 1
+fi
+exit 0

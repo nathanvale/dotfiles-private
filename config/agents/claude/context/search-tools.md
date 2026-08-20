@@ -34,8 +34,8 @@ Repo-owned research-tool contract for agents.
 - Check `codex mcp list` for configured server shape.
 - Check `codex doctor` for missing env vars or broken MCP config.
 - Check wrapper, keychain, and `op` readiness instead of inspecting secret values.
-- Use `$HOME/code/dotfiles/bin/with-env`, keychain wrappers, or 1Password-backed launchers for key-bearing MCPs.
-- Never source `.env` or print key prefixes to prove auth.
+- Deliver one key to one key-bearing MCP with `bin/with-one-password-token inject`. Owner: [`sensitive-material-access.md`](../../../../.claude/skills/dotfiles/references/sensitive-material-access.md).
+- Prove auth with `bin/with-one-password-token check`, which reports custody without a value.
 - Restart or reload the agent session after MCP config changes; existing sessions can hold stale tool metadata.
 
 ## Proof
@@ -43,7 +43,7 @@ Repo-owned research-tool contract for agents.
 - Context7 proof: resolve a known library, then query docs.
 - Firecrawl proof: run a one-result `firecrawl_search`, then send `firecrawl_search_feedback`.
 - Config proof: run `codex mcp list` and confirm `context7` and `firecrawl` are enabled.
-- Startup proof: run `scripts/agent-instructions.sh` after changing `AGENTS.md`.
+- Credential proof: run `bin/test/generic-credential-consumer-test.sh` after changing a key-bearing MCP launcher.
 
 ## Kit Repository Lookup
 

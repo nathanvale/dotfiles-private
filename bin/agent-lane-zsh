@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+#
+# A zsh shell wrapper that redirects ONE hardcoded config reference.
+#
+# Claude's snapshot generator selects the config it captures with
+# `path.join(os.homedir(), '.zshrc')` and execs the selected shell to generate
+# the snapshot. The chosen path comes from HOME, so ZDOTDIR does not influence
+# it, and a lane bound to a worktree still captures the canonical profile. That
+# is why a bound lane kept reporting EXTENDED_GLOB on and failing replay.
+#
+# Overriding HOME would redirect the selection but loses Claude's login, so the
+# remaining seam is CLAUDE_CODE_SHELL: Claude execs whatever shell it names.
+# This wrapper stands in that position and does exactly one thing.
+#
+# WHY THE FILENAME ENDS IN `zsh`
+#
+# The installed Claude runtime validates CLAUDE_CODE_SHELL by looking for
+# `bash` or `zsh` in the path string, so a wrapper named anything else is
+# rejected before it ever runs. The name is load-bearing, not cosmetic.
+#
+# WHAT IT DOES
+#
+# For the snapshot-creation invocation only, it rewrites the exact canonical
+# reference $HOME/.zshrc to $ZDOTDIR/.zshrc inside the generated script, then
+# runs the result through the real zsh. Every other invocation is passed through
+# to /bin/zsh unchanged, argv for argv.
+#
+# WHY IT FAILS CLOSED
+#
+# A wrapper that silently did nothing when its assumptions broke would hand back
+# a canonical snapshot that looks like a bound one, which is worse than no
+# wrapper at all: the lane would report a pass for the wrong profile. So when
+# the invocation looks like snapshot creation but the expected reference or the
+# binding is absent, this exits non-zero and says which assumption failed. A
+# refused lane is a visible gap; a wrong receipt is not.
+#
+# WHAT IT NEVER DOES
+#
+# It never prints the generated script or any snapshot content. Diagnostics name
+# the shape that failed, never the text that carried it.
+
+set -euo pipefail
+
+REAL_SHELL='/bin/zsh'
+
+die() {
+  printf 'agent-lane-zsh: %s\n' "$1" >&2
+  exit 1
+}
+
+# Replace every occurrence of an exact literal, with no pattern semantics.
+#
+# `${var//pattern/replacement}` treats its pattern as a glob, so a HOME
+# containing `[`, `]`, `*`, or `?` would match the wrong text or nothing at all.
+# Quoting the operands is not a fix on macOS's bash 3.2, where the quotes are
+# inserted into the result instead of protecting the operands.
+#
+# This walks the string instead, splitting on the first occurrence of the needle
+# and rejoining, so the comparison is always a plain string equality. Multiline
+# command text survives unchanged because nothing here re-splits on newlines.
+replace_all_literal() {
+  local haystack="$1" needle="$2" replacement="$3"
+  local out='' head
+  while true; do
+    head="${haystack%%"$needle"*}"
+    # No occurrence remains: `%%` returned the whole string unchanged.
+    if [[ "$head" == "$haystack" ]]; then
+      out+="$haystack"
+      break
+    fi
+    out+="$head$replacement"
+    haystack="${haystack:${#head}+${#needle}}"
+  done
+  printf '%s' "$out"
+}
+
+# Pass-through is the default. Only an invocation carrying an inline script is a
+# candidate for rewriting, and only then when that script actually references
+# the canonical config.
+#
+# FINDING THE SCRIPT
+#
+# zsh keeps parsing options after `-c`, so the script is the first NON-OPTION
+# argument, not whatever happens to follow `-c`. The live Claude invocation is
+# `["-c", "-l", SCRIPT]`, and an earlier version of this wrapper that took the
+# next argument selected `-l`, found no canonical reference in it, and passed
+# the whole invocation through untouched. The lane then captured the canonical
+# profile while reporting a worktree binding, which is the silent wrong answer
+# this wrapper exists to prevent.
+#
+# So the scan walks the arguments, skips every option, and stops at the first
+# operand. `--` ends option parsing explicitly and the operand follows it.
+script=''
+script_index=-1
+seen_c=0
+index=0
+end_of_options=0
+for arg in "$@"; do
+  index=$((index + 1))
+
+  if [[ "$end_of_options" -eq 0 ]]; then
+    if [[ "$arg" == '--' ]]; then
+      end_of_options=1
+      continue
+    fi
+    # An option bundle may carry `c` among other flags, as in `-lc`.
+    if [[ "$arg" == -* && "$arg" != '-' ]]; then
+      case "$arg" in
+        -*c*) seen_c=1 ;;
+      esac
+      continue
+    fi
+  fi
+
+  # First operand. Under `-c` this is the script zsh will run.
+  script_index="$index"
+  script="$arg"
+  break
+done
+
+# Without `-c` there is no inline script, whatever the operand happens to be.
+if [[ "$seen_c" -eq 0 ]]; then
+  script=''
+  script_index=-1
+fi
+
+# No inline script: ordinary invocation, hand it straight to the real shell.
+#
+# `-c` with no operand is left to zsh rather than refused here. It is a usage
+# error the real shell reports precisely, and this wrapper has no snapshot to
+# protect in that case, so intercepting it would only obscure the diagnostic.
+if [[ -z "$script" ]]; then
+  exec "$REAL_SHELL" "$@"
+fi
+
+# An inline script that does not name the canonical config is also ordinary.
+# Claude runs many commands through this shell and only one of them is snapshot
+# creation, so the reference itself is the discriminator.
+canonical_ref="$HOME/.zshrc"
+if [[ "$script" != *"$canonical_ref"* ]]; then
+  exec "$REAL_SHELL" "$@"
+fi
+
+# From here the invocation IS snapshot creation, so every assumption must hold.
+[[ -n "${ZDOTDIR:-}" ]] ||
+  die 'snapshot creation reached this wrapper with no ZDOTDIR binding'
+
+bound_ref="$ZDOTDIR/.zshrc"
+[[ -f "$bound_ref" ]] ||
+  die 'the bound ZDOTDIR holds no .zshrc to substitute'
+
+rewritten="$(replace_all_literal "$script" "$canonical_ref" "$bound_ref")"
+
+# The rewrite must have changed something. If the reference was present but the
+# substitution produced identical text, the assumption behind this wrapper no
+# longer holds and the lane must not proceed on a canonical snapshot.
+[[ "$rewritten" != "$script" ]] ||
+  die 'the canonical reference was present but no substitution occurred'
+
+# Rebuild argv with only the script argument replaced, preserving every other
+# argument and its order exactly.
+args=("$@")
+args[$((script_index - 1))]="$rewritten"
+
+exec "$REAL_SHELL" "${args[@]}"
