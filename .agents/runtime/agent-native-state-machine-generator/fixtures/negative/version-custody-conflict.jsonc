@@ -1,0 +1,51 @@
+// INVALID: version_custody is false yet the candidate declares an
+// incompatible-run refusal policy, inheriting machinery the product disabled.
+{
+	"spec_meta": { "product": "base", "input_schema_version": "1" },
+	"features": {
+		"durable_operations": false,
+		"liveness_evidence": false,
+		"cancellation": "not_supported",
+		"version_custody": false,
+		"remote_authority": false,
+		"feature_gates": [],
+	},
+	"entities": {},
+	"states": {
+		"run_status": { "values": ["ok", "blocked"], "terminal": ["ok", "blocked"] },
+	},
+	"transitions": [],
+	"invariants": [{ "id": "single_typed_result", "holds": "plain output derives from the json envelope" }],
+	"blockers": [],
+	"actions": {
+		"kinds": ["invoke", "needs_input", "needs_human", "none"],
+		"catalog": [
+			{ "id": "run-doctor", "kind": "invoke" },
+			{ "id": "none", "kind": "none", "stop_scope": "domain_terminal" },
+		],
+		"resolution": {
+			"missing_context": "unavailable_projection",
+			"unavailable_projection_retry_safety": "operator_required",
+			"unavailable_projection_stop": "agent_terminal",
+		},
+	},
+	"retry_posture": {
+		"values": ["same_input_safe", "same_input_unsafe", "operator_required"],
+		"rules": [{ "when": { "result_kind": "any_other" }, "then": "same_input_safe" }],
+		"never_auto_retry": [],
+	},
+	"acknowledgement": { "values": [], "unknown_policy": "not_applicable" },
+	"waits": { "wake_route": "caller_reinvocation", "budgets_ms": {}, "missed_deadline_causes": {} },
+	"cancellation": { "all": "not_supported" },
+	"authority": { "write_authority_owner": "operator_confirmation_marker" },
+	"command_surface": {
+		"commands": ["doctor", "audit"],
+		"exit_codes": { "0": "usable_evidence", "1": "blocked", "2": "invalid_usage" },
+		"output_modes_default": ["plain", "json"],
+		"output_modes_overrides": {},
+		"no_argument_behavior": "help",
+		"mutations": { "doctor": "read", "audit": "read" },
+		"result_contracts": { "lifecycle": { "id": "base.runner", "version": 1 } },
+	},
+	"versioning": { "records": {}, "incompatible_run_policy": { "blocker": "incompatible_run_version", "authority": "denied", "retry": "operator_required", "stop": "agent_terminal" } },
+}

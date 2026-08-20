@@ -85,6 +85,17 @@ const CASES: ReadonlyArray<{
 		cause: 'semantic_feature_machinery_conflict',
 		path: 'entities',
 	},
+	{
+		fixture: 'version-custody-conflict',
+		cause: 'semantic_feature_machinery_conflict',
+		path: 'versioning.incompatible_run_policy',
+	},
+	// No-argument behavior is sealed to read-only meanings; a write must not hide here.
+	{
+		fixture: 'free-text-no-argument-behavior',
+		cause: 'structure_value_not_permitted',
+		path: 'command_surface.no_argument_behavior',
+	},
 ]
 
 describe('invalid candidates are refused fail-closed', () => {

@@ -89,7 +89,7 @@ function entryOf(node: JsoncNode, key: string): JsoncEntry | undefined {
 }
 
 /** Shared state threaded through the individual semantic checks. */
-interface Context {
+interface SemanticCheckScope {
 	readonly cursor: Cursor
 	readonly report: (
 		cause: Diagnostic['cause'],
@@ -147,25 +147,29 @@ export function validateSemantics(
 			cursor.string(['features', 'cancellation']) ?? 'not_supported',
 	}
 
-	const context: Context = {
+	const scope: SemanticCheckScope = {
 		cursor,
 		report,
 		features,
 		actionIds: new Set<string>(),
 	}
 
-	checkActionCatalog(context)
-	checkReferences(context)
-	checkStateVocabularies(context)
-	checkRetryPosture(context)
-	checkAuthorityAndSideEffects(context)
-	checkIdentityAndFeatureConditioning(context)
+	checkActionCatalog(scope)
+	checkReferences(scope)
+	checkStateVocabularies(scope)
+	checkRetryPosture(scope)
+	checkAuthorityAndSideEffects(scope)
+	checkIdentityAndFeatureConditioning(scope)
 
 	return diagnostics
 }
 
-/** Action identity, per-kind mandatory semantics, and competing continuations. */
-function checkActionCatalog({ cursor, report, actionIds }: Context): void {
+/** Action identity, per-kind mandatory semantics, and competing Next Safe Actions. */
+function checkActionCatalog({
+	cursor,
+	report,
+	actionIds,
+}: SemanticCheckScope): void {
 	const catalog = cursor.items(['actions', 'catalog'])
 	const declaredKinds = new Set(cursor.strings(['actions', 'kinds']))
 
@@ -178,7 +182,7 @@ function checkActionCatalog({ cursor, report, actionIds }: Context): void {
 		if (actionIds.has(id)) {
 			report(
 				'semantic_duplicate_id',
-				`Duplicate action id ${JSON.stringify(id)}. Every Next Safe Action id must be unique; two entries competing for one id leave the continuation ambiguous.`,
+				`Duplicate action id ${JSON.stringify(id)}. Every Next Safe Action id must be unique; two entries competing for one id leave the Next Safe Action ambiguous.`,
 				`actions.catalog[${index}].id`,
 				cursor.loc([...base, 'id']),
 			)
@@ -259,7 +263,7 @@ function checkActionCatalog({ cursor, report, actionIds }: Context): void {
 		}
 	})
 
-	// A selectable continuation must exist, and exactly one terminal "none".
+	// A selectable Next Safe Action must exist, and exactly one terminal "none".
 	const noneEntries = catalog.flatMap((_item, index) => {
 		const kind = cursor.string(['actions', 'catalog', index, 'kind'])
 		const stop = cursor.string(['actions', 'catalog', index, 'stop_scope'])
@@ -270,7 +274,7 @@ function checkActionCatalog({ cursor, report, actionIds }: Context): void {
 		for (const index of rest) {
 			report(
 				'semantic_competing_actions',
-				`More than one action declares kind "none" with stop_scope "domain_terminal". Exactly one action owns the terminal continuation; competing terminal actions leave ranking undecided.`,
+				`More than one action declares kind "none" with stop_scope "domain_terminal". Exactly one action owns the terminal Next Safe Action; competing terminal actions leave ranking undecided.`,
 				`actions.catalog[${index}]`,
 				cursor.keyLoc(['actions', 'catalog', index, 'id']),
 			)
@@ -284,7 +288,7 @@ function checkActionCatalog({ cursor, report, actionIds }: Context): void {
  */
 function blockerResolver(
 	cursor: Cursor,
-	report: Context['report'],
+	report: SemanticCheckScope['report'],
 ): (
 	value: string | undefined,
 	path: string,
@@ -304,7 +308,11 @@ function blockerResolver(
 }
 
 /** Every cross-reference must resolve into the vocabulary that owns it. */
-function checkReferences({ cursor, report, actionIds }: Context): void {
+function checkReferences({
+	cursor,
+	report,
+	actionIds,
+}: SemanticCheckScope): void {
 	const resolveAction = (
 		value: string | undefined,
 		path: string,
@@ -429,7 +437,7 @@ function checkReferences({ cursor, report, actionIds }: Context): void {
 }
 
 /** State values, their declared subsets, and projection totality. */
-function checkStateVocabularies({ cursor, report }: Context): void {
+function checkStateVocabularies({ cursor, report }: SemanticCheckScope): void {
 	for (const stateEntry of cursor.entries(['states'])) {
 		const base = ['states', stateEntry.key] as const
 		const values = cursor.strings([...base, 'values'])
@@ -498,7 +506,7 @@ function checkStateVocabularies({ cursor, report }: Context): void {
 }
 
 /** Retry vocabulary, rule resolution, and unsafe default postures. */
-function checkRetryPosture({ cursor, report }: Context): void {
+function checkRetryPosture({ cursor, report }: SemanticCheckScope): void {
 	const resolveBlocker = blockerResolver(cursor, report)
 
 	const retryValues = cursor.strings(['retry_posture', 'values'])
@@ -641,7 +649,7 @@ function checkAuthorityAndSideEffects({
 	cursor,
 	report,
 	features,
-}: Context): void {
+}: SemanticCheckScope): void {
 	if (cursor.string(['authority', 'write_authority_owner']) === undefined) {
 		report(
 			'semantic_missing_authority_semantics',
@@ -742,7 +750,7 @@ function checkIdentityAndFeatureConditioning({
 	cursor,
 	report,
 	features,
-}: Context): void {
+}: SemanticCheckScope): void {
 	const seenInvariants = new Set<string>()
 	cursor.items(['invariants']).forEach((_item, index) => {
 		const id = cursor.string(['invariants', index, 'id'])
@@ -772,19 +780,6 @@ function checkIdentityAndFeatureConditioning({
 		}
 		seenDecisions.add(id)
 	})
-
-	const seenEntities = new Set<string>()
-	for (const entry of cursor.entries(['entities'])) {
-		if (seenEntities.has(entry.key)) {
-			report(
-				'semantic_duplicate_id',
-				`Duplicate entity ${JSON.stringify(entry.key)}.`,
-				`entities.${entry.key}`,
-				entry.keyLoc,
-			)
-		}
-		seenEntities.add(entry.key)
-	}
 
 	// Feature-conditioning, both directions. A product that disables durable
 	// machinery must not declare it; one that enables it must supply it.
@@ -819,6 +814,20 @@ function checkIdentityAndFeatureConditioning({
 			`features.durable_operations is true but acknowledgement.values is empty. A durable product must state how a Logical Operation is acknowledged, or unknown outcomes have no interpretation.`,
 			'acknowledgement.values',
 			cursor.keyLoc(['acknowledgement', 'values']),
+		)
+	}
+
+	// Version custody, like the other feature-conditioned sections, must agree
+	// with its flag in both directions.
+	if (
+		!features.versionCustody &&
+		cursor.node(['versioning', 'incompatible_run_policy'])?.kind === 'object'
+	) {
+		report(
+			'semantic_feature_machinery_conflict',
+			`features.version_custody is false but versioning.incompatible_run_policy declares a refusal policy. A product without version custody must not inherit version machinery.`,
+			'versioning.incompatible_run_policy',
+			cursor.keyLoc(['versioning', 'incompatible_run_policy']),
 		)
 	}
 
@@ -879,7 +888,7 @@ function checkIdentityAndFeatureConditioning({
 		)
 	})
 
-	// A projection that can fail must say how it fails, or it defaults to continuation.
+	// A projection that can fail must say how it fails, or it defaults to continuing.
 	if (cursor.has(['actions', 'resolution'])) {
 		for (const required of [
 			'unavailable_projection_retry_safety',
@@ -889,7 +898,7 @@ function checkIdentityAndFeatureConditioning({
 				continue
 			report(
 				'semantic_incomplete_projection',
-				`actions.resolution declares a missing-context path but no ${required}. An incomplete projection must deny authority and stop fail-closed rather than defaulting to continuation.`,
+				`actions.resolution declares a missing-context path but no ${required}. An incomplete projection must deny Authority and stop fail-closed rather than defaulting to a Next Safe Action that continues.`,
 				`actions.resolution.${required}`,
 				cursor.keyLoc(['actions', 'resolution']),
 			)

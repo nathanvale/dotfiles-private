@@ -45,10 +45,6 @@ function push(
 	)
 }
 
-function describe(node: JsoncNode): string {
-	return node.kind
-}
-
 /** Union members are tried silently; only a total failure is reported. */
 function matches(node: JsoncNode, shape: Shape): boolean {
 	const probe: Diagnostic[] = []
@@ -85,7 +81,7 @@ function walk(
 					diagnostics,
 					sourcePath,
 					'structure_type_mismatch',
-					`Expected a string at ${path}; found ${describe(node)}.`,
+					`Expected a string at ${path}; found ${node.kind}.`,
 					path,
 					node.loc,
 				)
@@ -121,7 +117,7 @@ function walk(
 					diagnostics,
 					sourcePath,
 					'structure_type_mismatch',
-					`Expected a number at ${path}; found ${describe(node)}.`,
+					`Expected a number at ${path}; found ${node.kind}.`,
 					path,
 					node.loc,
 				)
@@ -134,7 +130,7 @@ function walk(
 					diagnostics,
 					sourcePath,
 					'structure_type_mismatch',
-					`Expected a boolean at ${path}; found ${describe(node)}.`,
+					`Expected a boolean at ${path}; found ${node.kind}.`,
 					path,
 					node.loc,
 				)
@@ -147,7 +143,7 @@ function walk(
 					diagnostics,
 					sourcePath,
 					'structure_type_mismatch',
-					`Expected an array at ${path}; found ${describe(node)}.`,
+					`Expected an array at ${path}; found ${node.kind}.`,
 					path,
 					node.loc,
 				)
@@ -165,7 +161,7 @@ function walk(
 					diagnostics,
 					sourcePath,
 					'structure_type_mismatch',
-					`Expected an object at ${path}; found ${describe(node)}.`,
+					`Expected an object at ${path}; found ${node.kind}.`,
 					path,
 					node.loc,
 				)
@@ -189,7 +185,7 @@ function walk(
 					diagnostics,
 					sourcePath,
 					'structure_type_mismatch',
-					`Expected an object at ${path || '<root>'}; found ${describe(node)}.`,
+					`Expected an object at ${path || '<root>'}; found ${node.kind}.`,
 					path,
 					node.loc,
 				)
