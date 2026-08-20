@@ -6,6 +6,7 @@
 	"license": "ISC",
 	"private": true,
 	"workspaces": [
+		".agents/runtime/agent-native-state-machine-generator",
 		".agents/runtime/agent-worktree",
 		".agents/runtime/browser-connect",
 		".agents/runtime/browser-use-security",

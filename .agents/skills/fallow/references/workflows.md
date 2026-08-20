@@ -29,6 +29,8 @@
 - Use `audit` after implementation or before review.
 - Audit auto-detects the base branch for whole-branch review.
 - For current-task review on a dirty branch, run against `--base-ref HEAD` to isolate uncommitted work.
+- For a newly migrated or untracked target, run against `--baseline-tree <directory>` using its independent clean committed historical tree.
+- Confirm the emitted baseline path, repository, commit, and tree object before triaging attribution.
 - If `changed_files_count` is much larger than the task scope, stop triage and rerun with a narrower `--root`, `--base-ref`, or both.
 - Read the attribution split before triaging individual findings.
 - Treat pre-existing findings as separate cleanup unless the current task owns them.
@@ -93,6 +95,7 @@ with coverage before treating any as real.
 - "Look for dead code in this module" -> cleanup route; start with dead-code evidence.
 - "Can Fallow fix this?" -> preview route; stop before apply until safety allows mutation.
 - "This repo does not look like JS/TS" -> target-fit route; challenge or retarget before readiness checks.
+- "This package was migrated and Git marks the whole tree new" -> explicit baseline route; use the package's independent clean committed historical tree.
 
 ## Blocked Runs
 

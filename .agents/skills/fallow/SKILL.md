@@ -13,6 +13,7 @@ Fallow analyzer evidence.
 
 - Implemented work / PR prep: start with changed-code `audit --plain` when target fit and scope are plausible.
 - Current uncommitted task slice on a dirty branch: prefer scoped `--root` plus `--base-ref HEAD`; use default base for whole-branch PR review.
+- Newly migrated or untracked target with an independent historical owner: use `audit --baseline-tree <directory>` against one clean committed directory tree.
 - Blocked PR evidence: run `doctor`, follow the first safe repair hint, then retry the same evidence command.
 - Current-task reporting: list current-task findings first; keep pre-existing findings as count or status context.
 - Changed-code review: use `audit`; escalate to JSON only for issue references, repair planning, structured evidence, or before/after comparison.

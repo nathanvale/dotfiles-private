@@ -312,7 +312,7 @@ const auditFlags = {
 	},
 	"--baseline-tree": {
 		type: "path",
-		description: "Clean committed Git directory tree used for comparison.",
+		description: "Optional clean committed comparison directory.",
 	},
 	"--no-cache": {
 		type: "boolean",

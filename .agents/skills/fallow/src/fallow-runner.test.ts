@@ -473,7 +473,8 @@ describe("explicit baseline tree attribution", () => {
 				'const args = process.argv.slice(2);',
 				'const baseIndex = args.indexOf("--base");',
 				'const base = args[baseIndex + 1];',
-				'if (baseIndex < 0 || !base || !args.includes("--no-cache")) process.exit(41);',
+				'const branch = execFileSync("git", ["symbolic-ref", "--short", "HEAD"], { encoding: "utf-8" }).trim();',
+				'if (baseIndex < 0 || base !== "HEAD" || branch !== "baseline" || !args.includes("--no-cache")) process.exit(41);',
 				'const value = readFileSync("src/value.ts", "utf-8");',
 				'const changed = execFileSync("git", ["diff", "--cached", "--name-only", base, "--"], { encoding: "utf-8" });',
 				'if (!value.includes("target") || !changed.includes("src/value.ts") || !changed.includes("src/introduced.ts")) process.exit(42);',
@@ -499,16 +500,19 @@ describe("explicit baseline tree attribution", () => {
 			stderr: "pipe",
 		});
 
-		expect(result.exitCode).toBe(0);
-		expect(result.stderr.toString()).toBe("");
+		expect({
+			exitCode: result.exitCode,
+			stdout: result.stdout.toString(),
+			stderr: result.stderr.toString(),
+		}).toMatchObject({ exitCode: 0, stderr: "" });
 		const envelope = parseJson(result.stdout.toString());
 		expect(envelope.cwd).toBe(target);
 		expect(envelope.status).toBe("issues");
 		expect(envelope.summary).toMatchObject({ total_findings: 1 });
 		expect(envelope.baseline).toMatchObject({
 				kind: "git-tree",
-				path: baseline.packageRoot,
-				repository: baseline.repository,
+				path: await realpath(baseline.packageRoot),
+				repository: await realpath(baseline.repository),
 				commit: baseline.commit,
 				tree: baseline.tree,
 		});
@@ -1638,12 +1642,14 @@ describe("U6 output budget behavior", () => {
 describe("explicit baseline tree audit", () => {
 	async function makeBaselinePair(): Promise<{
 		baseline: string;
+		baselineRepo: string;
 		root: string;
 		tempHome: string;
 	}> {
 		const parent = await mkdtemp(join(tmpdir(), "fallow-baseline-pair-"));
 		cleanupPaths.push(parent);
-		const baseline = join(parent, "baseline");
+		const baselineRepo = join(parent, "baseline-repo");
+		const baseline = join(baselineRepo, "package");
 		const root = join(parent, "target");
 		const tempHome = join(parent, "tmp");
 		await mkdir(join(baseline, "src"), { recursive: true });
@@ -1654,12 +1660,17 @@ describe("explicit baseline tree audit", () => {
 		await writeFile(join(root, "package.json"), '{"name":"fixture"}\n');
 		await writeFile(join(baseline, "src", "value.ts"), "export const value = 1;\n");
 		await writeFile(join(root, "src", "value.ts"), "export const value = 2;\n");
+		runGit(parent, ["init", "--quiet", baselineRepo]);
+		runGit(baselineRepo, ["add", "package"]);
+		runGit(baselineRepo, ["commit", "--quiet", "-m", "baseline"]);
 		const fallowPath = join(root, "node_modules", ".bin", "fallow");
 		await writeFile(
 			fallowPath,
 			[
 				"#!/usr/bin/env bun",
-				"const diff = Bun.spawnSync({ cmd: ['git', 'diff', '--name-only', 'HEAD'], stdout: 'pipe' });",
+				"const args = process.argv.slice(2);",
+				"const base = args[args.indexOf('--base') + 1];",
+				"const diff = Bun.spawnSync({ cmd: ['git', 'diff', '--cached', '--name-only', base, '--'], stdout: 'pipe' });",
 				"const paths = new TextDecoder().decode(diff.stdout).trim().split('\\n').filter(Boolean);",
 				"process.stdout.write(JSON.stringify({ command: 'audit', verdict: paths.length ? 'fail' : 'pass', summary: { dead_code_issues: paths.length, complexity_findings: 0, duplication_clone_groups: 0 }, dead_code: { unused_exports: paths.map((path) => ({ path, export_name: 'value', introduced: true, actions: [{ kind: 'remove-export' }] })) }, complexity: { findings: [] }, duplication: { clone_groups: [] } }));",
 				"process.exit(paths.length ? 1 : 0);",
@@ -1668,7 +1679,7 @@ describe("explicit baseline tree audit", () => {
 			"utf-8",
 		);
 		await chmod(fallowPath, 0o755);
-		return { baseline, root, tempHome };
+		return { baseline, baselineRepo, root, tempHome };
 	}
 
 	function runBaselineCli(
@@ -1709,9 +1720,10 @@ describe("explicit baseline tree audit", () => {
 		}
 	});
 
-	test("public CLI compares against and reports the exact read-only baseline tree", async () => {
-		const { baseline, root, tempHome } = await makeBaselinePair();
+	test("public CLI reports the exact committed baseline and cleans isolated state", async () => {
+		const { baseline, baselineRepo, root, tempHome } = await makeBaselinePair();
 		const before = await readFile(join(baseline, "src", "value.ts"), "utf-8");
+		const indexBefore = await readFile(join(baselineRepo, ".git", "index"));
 
 		const result = runBaselineCli(root, baseline, tempHome);
 		const stdout = new TextDecoder().decode(result.stdout);
@@ -1722,17 +1734,25 @@ describe("explicit baseline tree audit", () => {
 		expect(stderr).toBe("");
 		expect(envelope).toMatchObject({
 			status: "issues",
-			cwd: await realpath(root),
+			cwd: root,
 			baseline: {
-				kind: "read-only-tree",
+				kind: "git-tree",
 				path: await realpath(baseline),
+				repository: await realpath(baselineRepo),
 			},
 			summary: { total_findings: 1 },
 		});
 		expect(await readFile(join(baseline, "src", "value.ts"), "utf-8")).toBe(
 			before,
 		);
-		expect(await readdir(tempHome)).toEqual([]);
+		expect(await readFile(join(baselineRepo, ".git", "index"))).toEqual(
+			indexBefore,
+		);
+		expect(
+			(await readdir(tempHome)).filter((name) =>
+				name.startsWith("fallow-baseline-"),
+			),
+		).toEqual([]);
 	});
 
 	test("plain output reports the exact baseline path", async () => {
@@ -1742,7 +1762,7 @@ describe("explicit baseline tree audit", () => {
 
 		expect(result.exitCode).toBe(0);
 		expect(stdout).toContain(
-			`baseline kind=read-only-tree path=${await realpath(baseline)}`,
+			`baseline kind=git-tree path=${await realpath(baseline)}`,
 		);
 	});
 
@@ -1793,10 +1813,12 @@ describe("explicit baseline tree audit", () => {
 	});
 
 	test("a baseline symlink escaping the tree is rejected as unsafe", async () => {
-		const { baseline, root, tempHome } = await makeBaselinePair();
+		const { baseline, baselineRepo, root, tempHome } = await makeBaselinePair();
 		const outside = join(baseline, "..", "outside.ts");
 		await writeFile(outside, "export const outside = true;\n");
 		await symlink(outside, join(baseline, "src", "escape.ts"));
+		runGit(baselineRepo, ["add", "package/src/escape.ts"]);
+		runGit(baselineRepo, ["commit", "--quiet", "-m", "symlink"]);
 		const result = runBaselineCli(root, baseline, tempHome);
 		const envelope = JSON.parse(new TextDecoder().decode(result.stdout));
 
@@ -1806,6 +1828,19 @@ describe("explicit baseline tree audit", () => {
 			failure_category: "input",
 			write_effect: "none",
 		});
+	});
+
+	test("non-Git and dirty baseline directories fail closed", async () => {
+		const { baseline, root, tempHome } = await makeBaselinePair();
+		await writeFile(join(baseline, "src", "value.ts"), "dirty\n");
+		const dirty = runBaselineCli(root, baseline, tempHome);
+		expect(dirty.exitCode).toBe(1);
+
+		const untracked = await mkdtemp(join(tmpdir(), "fallow-baseline-untracked-"));
+		cleanupPaths.push(untracked);
+		await writeFile(join(untracked, "package.json"), "{}\n");
+		const nonGit = runBaselineCli(root, untracked, tempHome);
+		expect(nonGit.exitCode).toBe(1);
 	});
 });
 

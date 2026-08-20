@@ -1,7 +1,15 @@
 #!/usr/bin/env bun
 
 import { constants } from "node:fs";
-import { access, lstat, mkdtemp, realpath, rm, stat } from "node:fs/promises";
+import {
+	access,
+	lstat,
+	mkdtemp,
+	mkdir,
+	realpath,
+	rm,
+	stat,
+} from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
@@ -175,8 +183,7 @@ type BaselineTreeEvidence = {
 
 type PreparedBaselineTree = {
 	evidence: BaselineTreeEvidence;
-	gitDir: string;
-	baseCommit: string;
+	workspaceRoot: string;
 	tempRoot: string;
 };
 
@@ -426,7 +433,11 @@ async function runParsedCommand(
 		return emitDoctor(parsed, readiness, runtime, stdout, runId);
 	}
 
-	const blockingHint = blockingReadinessHint(parsed.command, readiness);
+	const blockingHint = blockingReadinessHint(
+		parsed.command,
+		readiness,
+		parsed.baselineTree !== undefined,
+	);
 	if (blockingHint) {
 		writeEnvelope(
 			stdout,
@@ -506,8 +517,7 @@ async function runParsedCommand(
 		let result: CommandResult;
 		try {
 			result = await runtime.runCommand(invocation.command, invocation.args, {
-				cwd: root,
-				env: baseline ? comparisonEnvironment(runtime.env, baseline, root) : undefined,
+				cwd: baseline?.workspaceRoot ?? root,
 			});
 		} finally {
 			if (baseline) await rm(baseline.tempRoot, { recursive: true, force: true });
@@ -978,6 +988,7 @@ async function checkGitReadiness(
 function blockingReadinessHint(
 	command: FallowRunnerCommand,
 	readiness: ReadinessSummary,
+	hasBaselineTree = false,
 ): RepairHint | undefined {
 	if (readiness.repo_shape.status !== "ok") {
 		return repairHintFor("unsupported-root");
@@ -985,7 +996,11 @@ function blockingReadinessHint(
 	if (readiness.fallow_binary.status !== "ok") {
 		return repairHintFor("missing-fallow");
 	}
-	if (command === "audit" && readiness.git.status !== "ok") {
+	if (
+		command === "audit" &&
+		!hasBaselineTree &&
+		readiness.git.status !== "ok"
+	) {
 		return repairHintFor("git-readiness");
 	}
 	return undefined;
@@ -1028,21 +1043,17 @@ async function prepareBaselineTree(
 		return baselineFailure("Baseline directory is missing or unreadable.");
 	}
 
-	if (baselinePath !== requestedPath) {
-		return baselineFailure(
-			"Baseline path is ambiguous because a path component resolves through a symlink.",
-		);
-	}
 	if (pathsOverlap(baselinePath, targetPath)) {
 		return baselineFailure(
 			"Baseline and target overlap; choose an independent historical tree.",
 		);
 	}
+	const readOnlyGitEnv = readOnlyGitEnvironment(runtime.env);
 
 	const repoResult = await runtime.runCommand(
 		"git",
 		["-C", baselinePath, "rev-parse", "--show-toplevel"],
-		{ cwd: baselinePath },
+		{ cwd: baselinePath, env: readOnlyGitEnv },
 	);
 	if (repoResult.exitCode !== 0 || repoResult.stdout.trim() === "") {
 		return baselineFailure(
@@ -1067,7 +1078,7 @@ async function prepareBaselineTree(
 	const targetRepoResult = await runtime.runCommand(
 		"git",
 		["-C", targetPath, "rev-parse", "--show-toplevel"],
-		{ cwd: targetPath },
+		{ cwd: targetPath, env: readOnlyGitEnv },
 	);
 	if (targetRepoResult.exitCode === 0) {
 		try {
@@ -1082,45 +1093,58 @@ async function prepareBaselineTree(
 	}
 
 	const pathspec = repoRelative === "" ? "." : repoRelative;
-	const [commitResult, treeResult, statusResult] = await Promise.all([
-		runtime.runCommand(
-			"git",
-			["-C", repository, "rev-parse", "--verify", "HEAD^{commit}"],
-			{ cwd: repository },
-		),
-		runtime.runCommand(
-			"git",
-			[
-				"-C",
-				repository,
-				"rev-parse",
-				"--verify",
-				repoRelative === "" ? "HEAD^{tree}" : `HEAD:${repoRelative}`,
-			],
-			{ cwd: repository },
-		),
-		runtime.runCommand(
-			"git",
-			[
-				"-C",
-				repository,
-				"status",
-				"--porcelain=v1",
-				"--untracked-files=all",
-				"--",
-				pathspec,
-			],
-			{ cwd: repository },
-		),
-	]);
+	const commitResult = await runtime.runCommand(
+		"git",
+		["-C", repository, "rev-parse", "--verify", "HEAD^{commit}"],
+		{ cwd: repository, env: readOnlyGitEnv },
+	);
 	const commit = commitResult.stdout.trim();
-	const tree = treeResult.stdout.trim();
-	if (commitResult.exitCode !== 0 || treeResult.exitCode !== 0 || !commit || !tree) {
+	if (commitResult.exitCode !== 0 || !commit) {
 		return baselineFailure(
 			"Baseline is not one unambiguous directory tree at Git HEAD.",
 		);
 	}
-	if (statusResult.exitCode !== 0 || statusResult.stdout.trim() !== "") {
+	const treeResult = await runtime.runCommand(
+		"git",
+		[
+			"-C",
+			repository,
+			"rev-parse",
+			"--verify",
+			repoRelative === "" ? `${commit}^{tree}` : `${commit}:${repoRelative}`,
+		],
+		{ cwd: repository, env: readOnlyGitEnv },
+	);
+	const tree = treeResult.stdout.trim();
+	if (treeResult.exitCode !== 0 || !tree) {
+		return baselineFailure(
+			"Baseline is not one unambiguous directory tree at Git HEAD.",
+		);
+	}
+	const statusResult = await runtime.runCommand(
+		"git",
+		[
+			"-C",
+			repository,
+			"status",
+			"--porcelain=v1",
+			"--untracked-files=all",
+			"--",
+			pathspec,
+		],
+		{ cwd: repository, env: readOnlyGitEnv },
+	);
+	const finalHeadResult = await runtime.runCommand(
+		"git",
+		["-C", repository, "rev-parse", "--verify", "HEAD^{commit}"],
+		{ cwd: repository, env: readOnlyGitEnv },
+	);
+	if (
+		statusResult.exitCode !== 0 ||
+		statusResult.stdout.trim() !== "" ||
+		finalHeadResult.exitCode !== 0 ||
+		finalHeadResult.stdout.trim() !== commit
+	) {
 		return baselineFailure(
 			"Baseline directory is mutable because its working tree differs from Git HEAD.",
 		);
@@ -1128,7 +1152,7 @@ async function prepareBaselineTree(
 	const treeEntries = await runtime.runCommand(
 		"git",
 		["-C", repository, "ls-tree", "-r", tree],
-		{ cwd: repository },
+		{ cwd: repository, env: readOnlyGitEnv },
 	);
 	if (
 		treeEntries.exitCode !== 0 ||
@@ -1142,14 +1166,17 @@ async function prepareBaselineTree(
 	}
 
 	const tempRoot = await mkdtemp(join(tmpdir(), "fallow-baseline-"));
-	const gitDir = join(tempRoot, "comparison.git");
+	const workspaceRoot = join(tempRoot, "workspace");
+	await mkdir(workspaceRoot);
+	const gitDir = join(workspaceRoot, ".git");
 	const gitEnv = isolatedGitEnvironment(runtime.env);
 	try {
 		for (const [args, cwd] of [
-			[["init", "--quiet", "--bare", gitDir], tempRoot],
+			[["init", "--quiet", workspaceRoot], tempRoot],
 			[
 				[
-					`--git-dir=${gitDir}`,
+					"-C",
+					workspaceRoot,
 					"fetch",
 					"--quiet",
 					"--no-tags",
@@ -1170,7 +1197,7 @@ async function prepareBaselineTree(
 
 		const synthetic = await runtime.runCommand(
 			"git",
-			[`--git-dir=${gitDir}`, "commit-tree", tree, "-m", "fallow baseline tree"],
+			["-C", workspaceRoot, "commit-tree", tree, "-m", "fallow baseline tree"],
 			{ cwd: tempRoot, env: gitEnv },
 		);
 		const baseCommit = synthetic.stdout.trim();
@@ -1181,9 +1208,26 @@ async function prepareBaselineTree(
 			);
 		}
 
-		const comparisonEnv = comparisonEnvironment(runtime.env, { gitDir }, targetPath);
 		for (const args of [
-			["read-tree", baseCommit],
+			["-C", workspaceRoot, "update-ref", "refs/heads/baseline", baseCommit],
+			["-C", workspaceRoot, "symbolic-ref", "HEAD", "refs/heads/baseline"],
+			["-C", workspaceRoot, "read-tree", baseCommit],
+		] as const) {
+			const result = await runtime.runCommand("git", args, {
+				cwd: workspaceRoot,
+				env: gitEnv,
+			});
+			if (result.exitCode !== 0) {
+				return baselineFailureAfterCleanup(
+					tempRoot,
+					"Could not stage the target snapshot in isolated Git state.",
+				);
+			}
+		}
+
+		const targetEnv = comparisonEnvironment(runtime.env, gitDir, targetPath);
+		const stage = await runtime.runCommand(
+			"git",
 			[
 				"add",
 				"-A",
@@ -1193,17 +1237,28 @@ async function prepareBaselineTree(
 				":(exclude,glob)**/node_modules/**",
 				":(exclude,glob)**/.fallow/**",
 			],
-		] as const) {
-			const result = await runtime.runCommand("git", args, {
-				cwd: targetPath,
-				env: comparisonEnv,
-			});
-			if (result.exitCode !== 0) {
-				return baselineFailureAfterCleanup(
-					tempRoot,
-					"Could not stage the target snapshot in isolated Git state.",
-				);
-			}
+			{ cwd: targetPath, env: targetEnv },
+		);
+		if (stage.exitCode !== 0) {
+			return baselineFailureAfterCleanup(
+				tempRoot,
+				"Could not stage the target snapshot in isolated Git state.",
+			);
+		}
+
+		const materialize = await runtime.runCommand(
+			"git",
+			["checkout-index", "--all", "--force"],
+			{
+				cwd: workspaceRoot,
+				env: comparisonEnvironment(runtime.env, gitDir, workspaceRoot),
+			},
+		);
+		if (materialize.exitCode !== 0) {
+			return baselineFailureAfterCleanup(
+				tempRoot,
+				"Could not materialize the target snapshot in isolated Git state.",
+			);
 		}
 
 		return {
@@ -1216,8 +1271,7 @@ async function prepareBaselineTree(
 					commit,
 					tree,
 				},
-				gitDir,
-				baseCommit,
+				workspaceRoot,
 				tempRoot,
 			},
 		};
@@ -1250,7 +1304,7 @@ function isWithinOrSame(relativePath: string): boolean {
 		relativePath === "" ||
 		(!isAbsolute(relativePath) &&
 			relativePath !== ".." &&
-			!relativePath.startsWith(`..${delimiterForPath()}`))
+			!relativePath.startsWith(`..${sep}`))
 	);
 }
 
@@ -1258,7 +1312,7 @@ function isolatedGitEnvironment(
 	env: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
 	return {
-		...env,
+		...readOnlyGitEnvironment(env),
 		GIT_CONFIG_NOSYSTEM: "1",
 		GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
 		GIT_AUTHOR_NAME: "Fallow Baseline Adapter",
@@ -1268,14 +1322,20 @@ function isolatedGitEnvironment(
 	};
 }
 
+function readOnlyGitEnvironment(
+	env: Record<string, string | undefined>,
+): Record<string, string | undefined> {
+	return { ...env, GIT_OPTIONAL_LOCKS: "0" };
+}
+
 function comparisonEnvironment(
 	env: Record<string, string | undefined>,
-	baseline: Pick<PreparedBaselineTree, "gitDir">,
+	gitDir: string,
 	targetRoot: string,
 ): Record<string, string | undefined> {
 	return {
 		...isolatedGitEnvironment(env),
-		GIT_DIR: baseline.gitDir,
+		GIT_DIR: gitDir,
 		GIT_WORK_TREE: targetRoot,
 	};
 }
@@ -2288,7 +2348,7 @@ function fallowArgsFor(
 
 	const args = [parsed.command] as string[];
 	if (parsed.command === "audit" && (baseline || parsed.baseRef)) {
-		args.push("--base", baseline?.baseCommit ?? parsed.baseRef ?? "HEAD");
+		args.push("--base", baseline ? "HEAD" : (parsed.baseRef ?? "HEAD"));
 	}
 	if (parsed.command === "audit" && (parsed.noCache || baseline)) {
 		args.push("--no-cache");

@@ -45,6 +45,18 @@ bun run fallow-runner <subcommand> --help
 - Challenge or retarget suspect non-JS/TS roots before readiness checks.
 - Let `audit` use Fallow defaults for whole-branch or PR review.
 - Use `audit --base-ref HEAD` for an uncommitted current-task slice on a dirty branch.
+- Use `audit --baseline-tree <directory>` when the target is newly migrated or absent from its current repository history.
+- Choose an independent, clean, committed Git directory tree. The runner rejects missing, dirty, final-path symlinks, committed symlink or nested-repository entries, overlapping paths, same-repository inputs, and non-Git inputs.
+- Use either `--base-ref` or `--baseline-tree`, never both.
+- Read the top-level JSON `baseline` receipt or the plain `baseline` line for the canonical path, source repository, commit, and tree object.
+
+```bash
+bun run fallow-runner audit \
+  --root /path/to/current-package \
+  --baseline-tree /path/to/independent-history/package \
+  --plain
+```
+
 - Use explicit `--root <repo>` before `--base-ref` when the task owns a package or skill subfolder.
 - Use subcommand help for accepted inputs.
 - Treat unsupported control errors as input failures.

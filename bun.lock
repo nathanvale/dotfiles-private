@@ -17,6 +17,18 @@
         "lint-staged": "^16.2.7",
       },
     },
+    ".agents/runtime/agent-native-state-machine-generator": {
+      "name": "@side-quest/agent-native-state-machine-generator",
+      "version": "0.0.0",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "@types/react": "19.2.18",
+        "@types/react-dom": "19.2.4",
+        "react": "19.2.8",
+        "react-dom": "19.2.8",
+        "typescript": "catalog:",
+      },
+    },
     ".agents/runtime/agent-worktree": {
       "name": "agent-worktree",
       "version": "0.1.0",
@@ -357,6 +369,8 @@
 
     "@puppeteer/browsers": ["@puppeteer/browsers@2.11.0", "", { "dependencies": { "debug": "4.4.3", "extract-zip": "2.0.1", "progress": "2.0.3", "proxy-agent": "6.5.0", "semver": "7.7.3", "tar-fs": "3.1.1", "yargs": "17.7.2" }, "bin": { "browsers": "lib/cjs/main-cli.js" } }, "sha512-n6oQX6mYkG8TRPuPXmbPidkUbsSRalhmaaVAQxvH1IkQy63cwsH+kOjB3e4cpCDHg0aSvsiX9bQ4s2VB6mGWUQ=="],
 
+    "@side-quest/agent-native-state-machine-generator": ["@side-quest/agent-native-state-machine-generator@workspace:.agents/runtime/agent-native-state-machine-generator"],
+
     "@side-quest/browser-connect": ["@side-quest/browser-connect@workspace:.agents/runtime/browser-connect"],
 
     "@side-quest/browser-use-security": ["@side-quest/browser-use-security@workspace:.agents/runtime/browser-use-security"],
@@ -380,6 +394,10 @@
     "@types/conventional-commits-parser": ["@types/conventional-commits-parser@5.0.2", "", { "dependencies": { "@types/node": "24.10.1" } }, "sha512-BgT2szDXnVypgpNxOK8aL5SGjUdaQbC++WZNjF1Qge3Og2+zhHj+RWhmehLhYyvQwqAmvezruVfOf8+3m74W+g=="],
 
     "@types/node": ["@types/node@25.9.1", "", { "dependencies": { "undici-types": ">=7.24.0 <7.24.7" } }, "sha512-xfrlY7UD5rMJk3ZVJP8BNzS28J36YJg+xp+LPXV1TdWxr8uMH5A860QNxYDGQe/ylDSgjxE52Q9VnO7p75tJxg=="],
+
+    "@types/react": ["@types/react@19.2.18", "", { "dependencies": { "csstype": "^3.2.2" } }, "sha512-AnzbBERsrLKtk2XSfTbYRLjQPdy116Sty4q+T+Bp3IC4l6jNBvreVPAHmpq9qhXQM7CXZPjLVmGMw9sy+hxQ3w=="],
+
+    "@types/react-dom": ["@types/react-dom@19.2.4", "", { "peerDependencies": { "@types/react": "^19.2.0" } }, "sha512-Bsc+QHgp+P/F02XDzNCY9jnZNCUuLki36KT7VKrTXXLdHf+vHMNZnW1rVu5DNW/rCK+fya3DATySbLM4yhtKUw=="],
 
     "@types/yauzl": ["@types/yauzl@2.10.3", "", { "dependencies": { "@types/node": "24.10.1" } }, "sha512-oJoftv0LSuaDZE3Le4DbKX+KS9G36NzOeSap90UIK0yMA/NhKJhqlSGtNDORNRaIbQfzjXDrQa0ytJ6mNRGz/Q=="],
 
@@ -474,6 +492,8 @@
     "cosmiconfig": ["cosmiconfig@9.0.0", "", { "dependencies": { "env-paths": "2.2.1", "import-fresh": "3.3.1", "js-yaml": "4.1.1", "parse-json": "5.2.0" }, "optionalDependencies": { "typescript": "5.9.3" } }, "sha512-itvL5h8RETACmOTFc4UfIyB2RfEHi71Ax6E/PivVxq9NseKbOWpeyHEOIbmAw1rs8Ak0VursQNww7lf7YtUwzg=="],
 
     "cosmiconfig-typescript-loader": ["cosmiconfig-typescript-loader@6.2.0", "", { "dependencies": { "jiti": "2.6.1" }, "peerDependencies": { "@types/node": "24.10.1", "cosmiconfig": "9.0.0", "typescript": "5.9.3" } }, "sha512-GEN39v7TgdxgIoNcdkRE3uiAzQt3UXLyHbRHD6YoL048XAeOomyxaP+Hh/+2C6C2wYjxJ2onhJcsQp+L4YEkVQ=="],
+
+    "csstype": ["csstype@3.2.3", "", {}, "sha512-z1HGKcYy2xA8AGQfwrn0PAy+PB7X/GSj3UVJW9qKyn43xWa+gl5nXmU4qqLMRzWVLFC8KusUX8T/0kCiOYpAIQ=="],
 
     "dargs": ["dargs@8.1.0", "", {}, "sha512-wAV9QHOsNbwnWdNW2FYvE1P56wtgSbM+3SZcdGiWQILwVjACCXDCI3Ai8QlCjMDB8YK5zySiXZYBiwGmNY3lnw=="],
 
@@ -663,6 +683,10 @@
 
     "puppeteer-core": ["puppeteer-core@24.32.0", "", { "dependencies": { "@puppeteer/browsers": "2.11.0", "chromium-bidi": "11.0.0", "debug": "4.4.3", "devtools-protocol": "0.0.1534754", "typed-query-selector": "2.12.0", "webdriver-bidi-protocol": "0.3.9", "ws": "8.18.3" } }, "sha512-MqzLLeJjqjtHK9J44+KE3kjtXXhFpPvg+AvXl/oy/jB8MeeNH66/4MNotOTqGZ6MPaxWi51YJ1ASga6OIff6xw=="],
 
+    "react": ["react@19.2.8", "", {}, "sha512-PWaYA1L/q9u2u7xYQi+Y3L3Yfnie7XyLeaJICV1MGD6LprsBxcAqGjYyr0eY3p+QdsA+x/Irkt4Qif8D63+Sbw=="],
+
+    "react-dom": ["react-dom@19.2.8", "", { "dependencies": { "scheduler": "^0.27.0" }, "peerDependencies": { "react": "^19.2.8" } }, "sha512-rVprimfGBG3DR+Tq0IQG2DT5PxKth1WIGDmj5yPmlzr4YBe7uyE+Du4oVqTDXZSHGGGXRtTJEGSSePyQCMBglQ=="],
+
     "record-decision-scripts": ["record-decision-scripts@workspace:.agents/skills/record-decision"],
 
     "require-directory": ["require-directory@2.1.1", "", {}, "sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q=="],
@@ -674,6 +698,8 @@
     "restore-cursor": ["restore-cursor@5.1.0", "", { "dependencies": { "onetime": "7.0.0", "signal-exit": "4.1.0" } }, "sha512-oMA2dcrw6u0YfxJQXm342bFKX/E4sG9rbTzO9ptUcR/e8A33cHuvStiYOwH7fszkZlZ1z/ta9AAoPk2F4qIOHA=="],
 
     "rfdc": ["rfdc@1.4.1", "", {}, "sha512-q1b3N5QkRUWUl7iyylaaj3kOpIT0N2i9MqIEQXP73GVsN9cw3fdx8X63cEmWhJGi2PPCF23Ijp7ktmd39rawIA=="],
+
+    "scheduler": ["scheduler@0.27.0", "", {}, "sha512-eNv+WrVbKu1f3vbYJT/xtiF5syA5HPIMtf9IgY/nKg0sWqzAUEvqY/xm7OcZc/qafLx/iO9FgOmeSAp4v5ti/Q=="],
 
     "semver": ["semver@7.7.3", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-SdsKMrI9TdgjdweUSR9MweHA4EJ8YxHn8DFaDisvhVlUOe4BF1tLD7GAj0lIqWVl+dPb/rExr0Btby5loQm20Q=="],
 
