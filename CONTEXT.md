@@ -97,6 +97,21 @@ through it. A Pointer earns its place by naming a Branch no other Pointer
 claims.
 _Avoid_: Case, path, scenario
 
+**Pointer Scope**:
+The scope a Pointer's path resolves from. A Pointer in the Instruction Core has
+User Scope and writes an absolute path from `$HOME`. A Pointer in Repository
+Instructions writes a path relative to that repository root. Owned by
+[ADR 0001](docs/adr/0001-pointer-scope.md).
+_Avoid_: Path style, relative path, absolute path, when the scope rather than
+the notation is meant
+
+**Repository Instructions**:
+The `AGENTS.md` at a repository root. Loads only inside that repository, and
+holds only what is true of it. Content true in every repository belongs in the
+Instruction Core.
+_Avoid_: AGENTS.md, when speaking about the role rather than one file; repo
+rules, project instructions
+
 **Owner**:
 The single file or system that decides one contract. Other documents point at
 it rather than restating it.
