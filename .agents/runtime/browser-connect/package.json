@@ -20,12 +20,12 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
-    "@side-quest/cli-command-facade": "file:../cli-command-facade",
-    "@side-quest/mcporter-transport": "file:../mcporter-transport",
-    "@side-quest/warm-chrome": "file:../warm-chrome"
+    "@side-quest/cli-command-facade": "workspace:*",
+    "@side-quest/mcporter-transport": "workspace:*",
+    "@side-quest/warm-chrome": "workspace:*"
   },
   "devDependencies": {
-    "@side-quest/cli-test-fixtures": "file:../cli-test-fixtures",
+    "@side-quest/cli-test-fixtures": "workspace:*",
     "@types/bun": "1.3.14",
     "typescript": "6.0.3"
   }

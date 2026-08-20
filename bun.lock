@@ -17,6 +17,270 @@
         "lint-staged": "^16.2.7",
       },
     },
+    ".agents/runtime/agent-worktree": {
+      "name": "agent-worktree",
+      "version": "0.1.0",
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "1.3.14",
+        "typescript": "6.0.3",
+      },
+    },
+    ".agents/runtime/browser-connect": {
+      "name": "@side-quest/browser-connect",
+      "version": "0.1.0",
+      "bin": {
+        "browser-connect": "./src/cli.ts",
+      },
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+        "@side-quest/mcporter-transport": "workspace:*",
+        "@side-quest/warm-chrome": "workspace:*",
+      },
+      "devDependencies": {
+        "@side-quest/cli-test-fixtures": "workspace:*",
+        "@types/bun": "1.3.14",
+        "typescript": "6.0.3",
+      },
+    },
+    ".agents/runtime/browser-use-security": {
+      "name": "@side-quest/browser-use-security",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "1.3.14",
+        "typescript": "6.0.3",
+      },
+    },
+    ".agents/runtime/cli-command-facade": {
+      "name": "@side-quest/cli-command-facade",
+      "version": "0.1.0",
+      "dependencies": {
+        "@logtape/logtape": "^2.0.2",
+      },
+      "devDependencies": {
+        "@types/bun": "1.3.14",
+        "typescript": "6.0.3",
+      },
+    },
+    ".agents/runtime/cli-test-fixtures": {
+      "name": "@side-quest/cli-test-fixtures",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/runtime/mcporter-transport": {
+      "name": "@side-quest/mcporter-transport",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "1.3.14",
+        "typescript": "6.0.3",
+      },
+    },
+    ".agents/runtime/session-corpus": {
+      "name": "@side-quest/session-corpus",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "1.3.14",
+        "typescript": "6.0.3",
+      },
+    },
+    ".agents/runtime/warm-chrome": {
+      "name": "@side-quest/warm-chrome",
+      "version": "0.1.0",
+      "bin": {
+        "agent-chrome-install": "./app/install.ts",
+        "agent-chrome-profile-avatar": "./app/profile-avatar.ts",
+        "agent-chrome-profile-migrate": "./app/migrate-profile.ts",
+        "warm-chrome": "./src/cli.ts",
+      },
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "1.3.14",
+        "typescript": "6.0.3",
+      },
+    },
+    ".agents/skills/bft-booking": {
+      "name": "bft-booking-skill",
+      "version": "0.1.0",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/bitbucket": {
+      "name": "bitbucket-scripts",
+      "bin": {
+        "bb": "./src/cli.ts",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/browser-use": {
+      "name": "browser-use-scripts",
+      "version": "0.1.0",
+      "bin": {
+        "browser-use": "dist/browser-use.js",
+      },
+      "devDependencies": {
+        "@side-quest/browser-connect": "workspace:*",
+        "@side-quest/browser-use-security": "workspace:*",
+        "@side-quest/cli-command-facade": "workspace:*",
+        "@side-quest/mcporter-transport": "workspace:*",
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/browser-use-support-ticket": {
+      "name": "browser-use-support-ticket-scripts",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/ce-work-inspect": {
+      "name": "ce-work-inspect-scripts",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/classic-cinema": {
+      "name": "classic-cinema-scripts",
+      "version": "0.0.0",
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/cli-author": {
+      "name": "cli-author-scripts",
+      "version": "0.0.0",
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/cli-execution-auditor": {
+      "name": "cli-execution-auditor-scripts",
+      "version": "0.0.0",
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/domain-modeling-retrospective": {
+      "name": "domain-modeling-retrospective-scripts",
+      "dependencies": {
+        "@side-quest/session-corpus": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/fallow": {
+      "name": "fallow-scripts",
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/record-decision": {
+      "name": "record-decision-scripts",
+      "version": "0.0.0",
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/session-recovery": {
+      "name": "session-recovery-scripts",
+      "dependencies": {
+        "@side-quest/session-corpus": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/skill-feedback": {
+      "name": "skill-feedback-scripts",
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/skills-sync": {
+      "name": "skills-sync-runtime",
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/test-runner": {
+      "name": "test-runner-scripts",
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/vault-git": {
+      "name": "vault-git-skill",
+    },
+    ".agents/skills/worktree": {
+      "name": "worktree-scripts",
+      "version": "0.0.0",
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/bun": "catalog:",
+        "typescript": "catalog:",
+      },
+    },
+    ".agents/skills/xero": {
+      "name": "@local/xero-skill",
+      "bin": {
+        "quarter-ledger": "./scripts/quarter-ledger.ts",
+      },
+    },
+    "apps/vscode/nathan-adhd-helper": {
+      "name": "diff-toggle",
+      "version": "0.3.5",
+    },
+  },
+  "catalog": {
+    "@types/bun": "1.3.14",
+    "typescript": "6.0.3",
   },
   "packages": {
     "@babel/code-frame": ["@babel/code-frame@7.27.1", "", { "dependencies": { "@babel/helper-validator-identifier": "7.28.5", "js-tokens": "4.0.0", "picocolors": "1.1.1" } }, "sha512-cjQ7ZlQ0Mv3b47hABuTevyTuYN4i+loJKGeV9flcCgIK37cCXRh+L1bd3iBHlynerhQ7BhCkn2BPbQUL+rGqFg=="],
@@ -75,9 +339,29 @@
 
     "@commitlint/types": ["@commitlint/types@20.0.0", "", { "dependencies": { "@types/conventional-commits-parser": "5.0.2", "chalk": "5.6.2" } }, "sha512-bVUNBqG6aznYcYjTjnc3+Cat/iBgbgpflxbIBTnsHTX0YVpnmINPEkSRWymT2Q8aSH3Y7aKnEbunilkYe8TybA=="],
 
+    "@local/xero-skill": ["@local/xero-skill@workspace:.agents/skills/xero"],
+
+    "@logtape/logtape": ["@logtape/logtape@2.3.1", "", {}, "sha512-nYLsBWMKk0Llp62U6cDbQxNcEKc0E0s5hWbAxkmUM8ax6VchGkPSjPrVp3ixFQUuvUB9ku7MSgPzFhmVTSh2Jw=="],
+
     "@puppeteer/browsers": ["@puppeteer/browsers@2.11.0", "", { "dependencies": { "debug": "4.4.3", "extract-zip": "2.0.1", "progress": "2.0.3", "proxy-agent": "6.5.0", "semver": "7.7.3", "tar-fs": "3.1.1", "yargs": "17.7.2" }, "bin": { "browsers": "lib/cjs/main-cli.js" } }, "sha512-n6oQX6mYkG8TRPuPXmbPidkUbsSRalhmaaVAQxvH1IkQy63cwsH+kOjB3e4cpCDHg0aSvsiX9bQ4s2VB6mGWUQ=="],
 
+    "@side-quest/browser-connect": ["@side-quest/browser-connect@workspace:.agents/runtime/browser-connect"],
+
+    "@side-quest/browser-use-security": ["@side-quest/browser-use-security@workspace:.agents/runtime/browser-use-security"],
+
+    "@side-quest/cli-command-facade": ["@side-quest/cli-command-facade@workspace:.agents/runtime/cli-command-facade"],
+
+    "@side-quest/cli-test-fixtures": ["@side-quest/cli-test-fixtures@workspace:.agents/runtime/cli-test-fixtures"],
+
+    "@side-quest/mcporter-transport": ["@side-quest/mcporter-transport@workspace:.agents/runtime/mcporter-transport"],
+
+    "@side-quest/session-corpus": ["@side-quest/session-corpus@workspace:.agents/runtime/session-corpus"],
+
+    "@side-quest/warm-chrome": ["@side-quest/warm-chrome@workspace:.agents/runtime/warm-chrome"],
+
     "@tootallnate/quickjs-emscripten": ["@tootallnate/quickjs-emscripten@0.23.0", "", {}, "sha512-C5Mc6rdnsaJDjO3UpGW/CQTHtCKaYlScZTly4JIu97Jxo/odCiH0ITnDXSJPTOrEKk/ycSZ0AOgTmkDtkOsvIA=="],
+
+    "@types/bun": ["@types/bun@1.3.14", "", { "dependencies": { "bun-types": "1.3.14" } }, "sha512-h1hFqFVcvAvD9j9K7ZW7vd82aSA+rTdznZa+5bwvCwqSB1jmmfLcbIWhOLx1/+boy/xmjgCs/OMUL8hRJSmnPw=="],
 
     "@types/conventional-commits-parser": ["@types/conventional-commits-parser@5.0.2", "", { "dependencies": { "@types/node": "24.10.1" } }, "sha512-BgT2szDXnVypgpNxOK8aL5SGjUdaQbC++WZNjF1Qge3Og2+zhHj+RWhmehLhYyvQwqAmvezruVfOf8+3m74W+g=="],
 
@@ -88,6 +372,8 @@
     "JSONStream": ["JSONStream@1.3.5", "", { "dependencies": { "jsonparse": "1.3.1", "through": "2.3.8" }, "bin": { "JSONStream": "./bin.js" } }, "sha512-E+iruNOY8VV9s4JEbe1aNEm6MiszPRr/UfcHMz0TQh1BXSxHK+ASV1R6W4HpjBhSeS+54PIsAMCBmwD06LLsqQ=="],
 
     "agent-base": ["agent-base@7.1.4", "", {}, "sha512-MnA+YT8fwfJPgBx3m60MNqakm30XOkyIoH1y6huTQvC0PwZG7ki8NacLBcrPbNoo8vEZy7Jpuk7+jMO+CUovTQ=="],
+
+    "agent-worktree": ["agent-worktree@workspace:.agents/runtime/agent-worktree"],
 
     "ajv": ["ajv@8.17.1", "", { "dependencies": { "fast-deep-equal": "3.1.3", "fast-uri": "3.1.0", "json-schema-traverse": "1.0.0", "require-from-string": "2.0.2" } }, "sha512-B/gBuNg5SiMTrPkC+A2+cW0RszwxYmn6VYxB/inlBStS5nx6xHIt/ehKRhIMhqusl7a8LjQoZnjCs5vhwxOQ1g=="],
 
@@ -119,17 +405,35 @@
 
     "basic-ftp": ["basic-ftp@5.0.5", "", {}, "sha512-4Bcg1P8xhUuqcii/S0Z9wiHIrQVPMermM1any+MX5GeGD7faD3/msQUDGLol9wOcz4/jbg/WJnGqoJF6LiBdtg=="],
 
+    "bft-booking-skill": ["bft-booking-skill@workspace:.agents/skills/bft-booking"],
+
+    "bitbucket-scripts": ["bitbucket-scripts@workspace:.agents/skills/bitbucket"],
+
     "braces": ["braces@3.0.3", "", { "dependencies": { "fill-range": "7.1.1" } }, "sha512-yQbXgO/OSZVD2IsiLlro+7Hf6Q18EJrKSEsdoMzKePKXct3gvD8oLcOQdIzGupr5Fj+EDe8gO/lxc1BzfMpxvA=="],
+
+    "browser-use-scripts": ["browser-use-scripts@workspace:.agents/skills/browser-use"],
+
+    "browser-use-support-ticket-scripts": ["browser-use-support-ticket-scripts@workspace:.agents/skills/browser-use-support-ticket"],
 
     "buffer-crc32": ["buffer-crc32@0.2.13", "", {}, "sha512-VO9Ht/+p3SN7SKWqcrgEzjGbRSJYTx+Q1pTQC0wrWqHx0vpJraQ6GtHx8tvcg1rlK1byhU5gccxgOgj7B0TDkQ=="],
 
+    "bun-types": ["bun-types@1.3.14", "", { "dependencies": { "@types/node": "*" } }, "sha512-4N0ig0fEomHt5R0KCFWjovxow98rIoRwKolrYdCcknNwMekCXRnWEUvgu5soYV8QXtVsrUD8B95MBOZGPvr6KQ=="],
+
     "callsites": ["callsites@3.1.0", "", {}, "sha512-P8BjAsXvZS+VIDUI11hHCQEv74YT67YUi5JJFNWIqL235sBmjX4+qx9Muvls5ivyNENctx46xQLQ3aTuE7ssaQ=="],
+
+    "ce-work-inspect-scripts": ["ce-work-inspect-scripts@workspace:.agents/skills/ce-work-inspect"],
 
     "chalk": ["chalk@5.6.2", "", {}, "sha512-7NzBL0rN6fMUW+f7A6Io4h40qQlG+xGmtMxfbnH/K7TAtt8JQWVQK+6g0UXKMeVJoyV5EkkNsErQ8pVD3bLHbA=="],
 
     "chromium-bidi": ["chromium-bidi@11.0.0", "", { "dependencies": { "mitt": "3.0.1", "zod": "3.25.76" }, "peerDependencies": { "devtools-protocol": "0.0.1534754" } }, "sha512-cM3DI+OOb89T3wO8cpPSro80Q9eKYJ7hGVXoGS3GkDPxnYSqiv+6xwpIf6XERyJ9Tdsl09hmNmY94BkgZdVekw=="],
 
+    "classic-cinema-scripts": ["classic-cinema-scripts@workspace:.agents/skills/classic-cinema"],
+
+    "cli-author-scripts": ["cli-author-scripts@workspace:.agents/skills/cli-author"],
+
     "cli-cursor": ["cli-cursor@5.0.0", "", { "dependencies": { "restore-cursor": "5.1.0" } }, "sha512-aCj4O5wKyszjMmDT4tZj93kxyydN/K5zPWSCe6/0AV/AA1pqe5ZBIw0a2ZfPQV7lL5/yb5HsUreJ6UFAF1tEQw=="],
+
+    "cli-execution-auditor-scripts": ["cli-execution-auditor-scripts@workspace:.agents/skills/cli-execution-auditor"],
 
     "cli-truncate": ["cli-truncate@5.1.1", "", { "dependencies": { "slice-ansi": "7.1.2", "string-width": "8.1.0" } }, "sha512-SroPvNHxUnk+vIW/dOSfNqdy1sPEFkrTk6TUtqLCnBlo3N7TNYYkzzN7uSD6+jVjrdO4+p8nH7JzH6cIvUem6A=="],
 
@@ -167,6 +471,10 @@
 
     "devtools-protocol": ["devtools-protocol@0.0.1534754", "", {}, "sha512-26T91cV5dbOYnXdJi5qQHoTtUoNEqwkHcAyu/IKtjIAxiEqPMrDiRkDOPWVsGfNZGmlQVHQbZRSjD8sxagWVsQ=="],
 
+    "diff-toggle": ["diff-toggle@workspace:apps/vscode/nathan-adhd-helper"],
+
+    "domain-modeling-retrospective-scripts": ["domain-modeling-retrospective-scripts@workspace:.agents/skills/domain-modeling-retrospective"],
+
     "dot-prop": ["dot-prop@5.3.0", "", { "dependencies": { "is-obj": "2.0.0" } }, "sha512-QM8q3zDe58hqUqjraQOmzZ1LIH9SWQJTlEKCH4kJ2oQvLZk7RbQXvtDM2XEq3fwkV9CCvvH4LA0AV+ogFsBM2Q=="],
 
     "emoji-regex": ["emoji-regex@8.0.0", "", {}, "sha512-MSjYzcWNOA0ewAHpz0MxpYFvwg6yjy1NG3xteoqz644VCo/RPgnr1/GGt+ic3iJTzQ8Eu3TdM14SawnVUmGE6A=="],
@@ -194,6 +502,8 @@
     "events-universal": ["events-universal@1.0.1", "", { "dependencies": { "bare-events": "2.8.2" } }, "sha512-LUd5euvbMLpwOF8m6ivPCbhQeSiYVNb8Vs0fQ8QjXo0JTkEHpz8pxdQf0gStltaPpw0Cca8b39KxvK9cfKRiAw=="],
 
     "extract-zip": ["extract-zip@2.0.1", "", { "dependencies": { "debug": "4.4.3", "get-stream": "5.2.0", "yauzl": "2.10.0" }, "optionalDependencies": { "@types/yauzl": "2.10.3" }, "bin": { "extract-zip": "cli.js" } }, "sha512-GDhU9ntwuKyGXdZBUgTIe+vXnWj0fppUEtMDL0+idd5Sta8TGpHssn/eusA9mrPr9qNDym6SxAYZjNvCn/9RBg=="],
+
+    "fallow-scripts": ["fallow-scripts@workspace:.agents/skills/fallow"],
 
     "fast-deep-equal": ["fast-deep-equal@3.1.3", "", {}, "sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q=="],
 
@@ -339,6 +649,8 @@
 
     "puppeteer-core": ["puppeteer-core@24.32.0", "", { "dependencies": { "@puppeteer/browsers": "2.11.0", "chromium-bidi": "11.0.0", "debug": "4.4.3", "devtools-protocol": "0.0.1534754", "typed-query-selector": "2.12.0", "webdriver-bidi-protocol": "0.3.9", "ws": "8.18.3" } }, "sha512-MqzLLeJjqjtHK9J44+KE3kjtXXhFpPvg+AvXl/oy/jB8MeeNH66/4MNotOTqGZ6MPaxWi51YJ1ASga6OIff6xw=="],
 
+    "record-decision-scripts": ["record-decision-scripts@workspace:.agents/skills/record-decision"],
+
     "require-directory": ["require-directory@2.1.1", "", {}, "sha512-fGxEI7+wsG9xrvdjsrlmL22OMTTiHRwAMroiEeMgq8gzoLC/PQr7RsRDSTLUg/bZAZtF+TVIkHc6/4RIKrui+Q=="],
 
     "require-from-string": ["require-from-string@2.0.2", "", {}, "sha512-Xf0nWe6RseziFMu+Ap9biiUbmplq6S9/p+7w7YXP/JBHhrUDDUhwa+vANyubuqfZWTveU//DYVGsDG7RKL/vEw=="],
@@ -351,7 +663,13 @@
 
     "semver": ["semver@7.7.3", "", { "bin": { "semver": "bin/semver.js" } }, "sha512-SdsKMrI9TdgjdweUSR9MweHA4EJ8YxHn8DFaDisvhVlUOe4BF1tLD7GAj0lIqWVl+dPb/rExr0Btby5loQm20Q=="],
 
+    "session-recovery-scripts": ["session-recovery-scripts@workspace:.agents/skills/session-recovery"],
+
     "signal-exit": ["signal-exit@4.1.0", "", {}, "sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw=="],
+
+    "skill-feedback-scripts": ["skill-feedback-scripts@workspace:.agents/skills/skill-feedback"],
+
+    "skills-sync-runtime": ["skills-sync-runtime@workspace:.agents/skills/skills-sync"],
 
     "slice-ansi": ["slice-ansi@7.1.2", "", { "dependencies": { "ansi-styles": "6.2.3", "is-fullwidth-code-point": "5.1.0" } }, "sha512-iOBWFgUX7caIZiuutICxVgX1SdxwAVFFKwt1EvMYYec/NWO5meOJ6K5uQxhrYBdQJne4KxiqZc+KptFOWFSI9w=="],
 
@@ -377,6 +695,8 @@
 
     "tar-stream": ["tar-stream@3.1.7", "", { "dependencies": { "b4a": "1.7.3", "fast-fifo": "1.3.2", "streamx": "2.23.0" } }, "sha512-qJj60CXt7IU1Ffyc3NJMjh6EkuCFej46zUqJ4J7pqYlThyd9bO0XBTmcOIhSzZJVWfsLks0+nle/j538YAW9RQ=="],
 
+    "test-runner-scripts": ["test-runner-scripts@workspace:.agents/skills/test-runner"],
+
     "text-decoder": ["text-decoder@1.2.3", "", { "dependencies": { "b4a": "1.7.3" } }, "sha512-3/o9z3X0X0fTupwsYvR03pJ/DjWuqqrfwBgTQzdWDiQSm9KitAyz/9WqsT2JQW7KV2m+bC2ol/zqpW37NHxLaA=="],
 
     "text-extensions": ["text-extensions@2.4.0", "", {}, "sha512-te/NtwBwfiNRLf9Ijqx3T0nlqZiQ2XrrtBvu+cLL8ZRrGkO0NHTug8MYFKyoSrv/sHTaSKfilUkizV6XhxMJ3g=="],
@@ -391,13 +711,17 @@
 
     "typed-query-selector": ["typed-query-selector@2.12.0", "", {}, "sha512-SbklCd1F0EiZOyPiW192rrHZzZ5sBijB6xM+cpmrwDqObvdtunOHHIk9fCGsoK5JVIYXoyEp4iEdE3upFH3PAg=="],
 
-    "typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+    "typescript": ["typescript@6.0.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-y2TvuxSZPDyQakkFRPZHKFm+KKVqIisdg9/CZwm9ftvKXLP8NRWj38/ODjNbr43SsoXqNuAisEf1GdCxqWcdBw=="],
 
     "undici-types": ["undici-types@7.16.0", "", {}, "sha512-Zz+aZWSj8LE6zoxD+xrjh4VfkIG8Ya6LvYkZqtUQGJPZjYl53ypCaUwWqo7eI0x66KBGeRo+mlBEkMSeSZ38Nw=="],
 
     "unicorn-magic": ["unicorn-magic@0.1.0", "", {}, "sha512-lRfVq8fE8gz6QMBuDM6a+LO3IAzTi05H6gCVaUpir2E1Rwpo4ZUog45KpNXKC/Mn3Yb9UDuHumeFTo9iV/D9FQ=="],
 
+    "vault-git-skill": ["vault-git-skill@workspace:.agents/skills/vault-git"],
+
     "webdriver-bidi-protocol": ["webdriver-bidi-protocol@0.3.9", "", {}, "sha512-uIYvlRQ0PwtZR1EzHlTMol1G0lAlmOe6wPykF9a77AK3bkpvZHzIVxRE2ThOx5vjy2zISe0zhwf5rzuUfbo1PQ=="],
+
+    "worktree-scripts": ["worktree-scripts@workspace:.agents/skills/worktree"],
 
     "wrap-ansi": ["wrap-ansi@9.0.2", "", { "dependencies": { "ansi-styles": "6.2.3", "string-width": "7.2.0", "strip-ansi": "7.1.2" } }, "sha512-42AtmgqjV+X1VpdOfyTGOYRi0/zsoLqtXQckTmqTeybT+BDIbM/Guxo7x3pE2vtpr1ok6xRqM9OpBe+Jyoqyww=="],
 
@@ -422,6 +746,10 @@
     "cli-truncate/string-width": ["string-width@8.1.0", "", { "dependencies": { "get-east-asian-width": "1.4.0", "strip-ansi": "7.1.2" } }, "sha512-Kxl3KJGb/gxkaUMOjRsQ8IrXiGW75O4E3RPjFIINOVH8AMl2SQ/yWdTzWwF3FevIX9LcMAjJW+GRwAlAbTSXdg=="],
 
     "cliui/wrap-ansi": ["wrap-ansi@7.0.0", "", { "dependencies": { "ansi-styles": "4.3.0", "string-width": "4.2.3", "strip-ansi": "6.0.1" } }, "sha512-YVGIj2kamLSTxw6NsZjoBxfSwsn0ycdesmc4p+Q21c5zPuZ1pl+NfxVdxPtdHvmNVOQ6XSYG4AUtyt/Fi7D16Q=="],
+
+    "cosmiconfig/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
+
+    "cosmiconfig-typescript-loader/typescript": ["typescript@5.9.3", "", { "bin": { "tsc": "bin/tsc", "tsserver": "bin/tsserver" } }, "sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw=="],
 
     "import-fresh/resolve-from": ["resolve-from@4.0.0", "", {}, "sha512-pb/MYmXstAkysRFx8piNI1tGFNQIFA3vkE3Gq4EuA1dF6gHp/+vgZqsCGJapvy8N3Q+4o7FwvquPJcnZ7RYy4g=="],
 
