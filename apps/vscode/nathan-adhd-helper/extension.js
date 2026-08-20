@@ -52,7 +52,12 @@ const chordActions = [
 		label: 'Terminal',
 		command: 'workbench.action.terminal.toggleTerminal',
 	},
-	{ key: 'C', label: 'Chat', command: 'workbench.action.openChat' },
+	{
+		key: 'C',
+		label: 'Chat',
+		command: 'nathan.openChatRight',
+		receipt: false,
+	},
 	{
 		key: 'W',
 		label: 'Close all editors',
@@ -1037,6 +1042,39 @@ async function toggleFileNesting() {
 	await toggleSetting('explorer.fileNesting.enabled')
 }
 
+async function openWorkingTreeChanges() {
+	const api = await getGitApi()
+	const repo = api?.repositories[0]
+
+	if (!repo) {
+		return false
+	}
+
+	// Each git.view*Changes command shows a modal message when its group is
+	// empty, so only call the ones that actually have content.
+	const groups = [
+		{ command: 'git.viewStagedChanges', changes: repo.state.indexChanges },
+		{ command: 'git.viewChanges', changes: repo.state.workingTreeChanges },
+	]
+
+	let opened = false
+
+	for (const group of groups) {
+		if (!group.changes || group.changes.length === 0) {
+			continue
+		}
+
+		try {
+			await vscode.commands.executeCommand(group.command, repo)
+			opened = true
+		} catch {
+			// A refused group must not stop the remaining ones.
+		}
+	}
+
+	return opened
+}
+
 async function openGitLayout() {
 	await exitChordMode()
 
@@ -1063,6 +1101,8 @@ async function openGitLayout() {
 		return
 	}
 
+	const changesOpened = await openWorkingTreeChanges()
+
 	if (!graphOpened) {
 		flash(
 			'Graph not restored',
@@ -1073,7 +1113,46 @@ async function openGitLayout() {
 		return
 	}
 
-	flash('Git layout restored', undefined, 'success')
+	flash(
+		changesOpened ? 'Git layout: changes open' : 'Git layout restored',
+		undefined,
+		'success',
+	)
+}
+
+async function openChatRight() {
+	await exitChordMode()
+
+	try {
+		await vscode.commands.executeCommand(
+			'workbench.panel.chat.view.copilot.open',
+		)
+	} catch {
+		try {
+			await vscode.commands.executeCommand('workbench.action.openChat')
+		} catch {
+			flash('Chat unavailable', undefined, 'warning')
+			return
+		}
+
+		flash('Chat opened', undefined, 'success', 'Not placed on the right')
+		return
+	}
+
+	flash('Chat: right panel', undefined, 'success')
+}
+
+async function unboundChordKey() {
+	// VS Code has no hook for "any unbound key", so every printable key is
+	// bound to this handler while the chord HUD is open. Without it the key
+	// falls through and types itself into the document, silently.
+	await exitChordMode()
+	flash(
+		'No action on that key',
+		undefined,
+		'warning',
+		'Ctrl+G Space searches every action',
+	)
 }
 
 function activate(context) {
@@ -1106,6 +1185,8 @@ function activate(context) {
 			toggleFileNesting,
 		),
 		vscode.commands.registerCommand('nathan.openGitLayout', openGitLayout),
+		vscode.commands.registerCommand('nathan.openChatRight', openChatRight),
+		vscode.commands.registerCommand('nathan.unboundChordKey', unboundChordKey),
 		vscode.window.onDidChangeActiveTextEditor(() => {
 			updateModeFrame()
 		}),
@@ -1134,6 +1215,9 @@ module.exports = {
 	activate,
 	deactivate,
 	__test: {
+		unboundChordKey,
+		openChatRight,
+		openWorkingTreeChanges,
 		openGitLayout,
 		describeToggleValue,
 		nextToggleValue,

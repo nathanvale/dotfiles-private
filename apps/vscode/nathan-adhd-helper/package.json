@@ -23,7 +23,9 @@
 		"onCommand:nathan.showChangedFiles",
 		"onCommand:nathan.toggleSortOrder",
 		"onCommand:nathan.toggleFileNesting",
-		"onCommand:nathan.openGitLayout"
+		"onCommand:nathan.openGitLayout",
+		"onCommand:nathan.openChatRight",
+		"onCommand:nathan.unboundChordKey"
 	],
 	"main": "./extension.js",
 	"scripts": {
@@ -77,6 +79,14 @@
 			{
 				"command": "nathan.openGitLayout",
 				"title": "Nathan ADHD Helper: Open Git Layout"
+			},
+			{
+				"command": "nathan.openChatRight",
+				"title": "Nathan ADHD Helper: Open Chat in Right Panel"
+			},
+			{
+				"command": "nathan.unboundChordKey",
+				"title": "Nathan ADHD Helper: Unbound Chord Key"
 			}
 		],
 		"keybindings": [
@@ -198,7 +208,8 @@
 				"args": {
 					"key": "C",
 					"label": "Chat",
-					"command": "workbench.action.openChat"
+					"command": "nathan.openChatRight",
+					"receipt": false
 				},
 				"when": "nathan.adhdChordMode"
 			},
@@ -402,6 +413,221 @@
 					"command": "nathan.toggleFileNesting",
 					"receipt": false
 				},
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "b",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "p",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "q",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "v",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "y",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "0",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "1",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "2",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "3",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "4",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "5",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "6",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "7",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "8",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "9",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "`",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "[",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "]",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "\\",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "'",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+a",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+b",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+c",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+e",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+f",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+g",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+h",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+i",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+j",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+k",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+l",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+m",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+n",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+o",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+p",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+q",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+s",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+u",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+v",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+w",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+x",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+y",
+				"command": "nathan.unboundChordKey",
+				"when": "nathan.adhdChordMode"
+			},
+			{
+				"key": "shift+z",
+				"command": "nathan.unboundChordKey",
 				"when": "nathan.adhdChordMode"
 			}
 		]

@@ -594,3 +594,148 @@ test('the git layout chord repeats without toggling a panel shut', async () => {
 
 	assert.deepEqual(toggles, [])
 })
+
+test('the chat chord opens chat in the right panel', async () => {
+	const harness = createHarness()
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.openChatRight')()
+
+	assert.ok(
+		harness.executed.some(
+			({ name }) => name === 'workbench.panel.chat.view.copilot.open',
+		),
+		'expected the chat view to be opened into its pinned container',
+	)
+})
+
+test('the chat chord falls back when the right-panel view is missing', async () => {
+	const harness = createHarness({
+		failingCommands: ['workbench.panel.chat.view.copilot.open'],
+	})
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.openChatRight')()
+
+	assert.ok(
+		harness.executed.some(({ name }) => name === 'workbench.action.openChat'),
+		'a missing right-panel view must still open chat somewhere',
+	)
+})
+
+test('the git layout chord opens both staged and unstaged changes', async () => {
+	const harness = createHarness()
+	harness.repo.state.indexChanges.push({
+		uri: uri('/repo/staged.md'),
+		decorations: { tooltip: 'staged' },
+	})
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.openGitLayout')()
+
+	const diffs = harness.executed
+		.map(({ name }) => name)
+		.filter((name) => name.startsWith('git.view'))
+
+	assert.deepEqual(diffs, ['git.viewStagedChanges', 'git.viewChanges'])
+})
+
+test('the git layout chord opens staged changes when nothing is unstaged', async () => {
+	const harness = createHarness()
+	harness.repo.state.workingTreeChanges = []
+	harness.repo.state.indexChanges.push({
+		uri: uri('/repo/staged.md'),
+		decorations: { tooltip: 'staged' },
+	})
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.openGitLayout')()
+
+	const diffs = harness.executed
+		.map(({ name }) => name)
+		.filter((name) => name.startsWith('git.view'))
+
+	assert.deepEqual(diffs, ['git.viewStagedChanges'])
+})
+
+test('the git layout chord never opens an empty change group', async () => {
+	const harness = createHarness()
+	harness.repo.state.workingTreeChanges = []
+	harness.repo.state.indexChanges = []
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.openGitLayout')()
+
+	const diffs = harness.executed.filter(({ name }) =>
+		name.startsWith('git.view'),
+	)
+
+	assert.deepEqual(diffs, [], 'an empty group shows a modal message')
+	assert.ok(
+		harness.executed.some(({ name }) => name === 'workbench.view.scm'),
+		'the rest of the layout must still open',
+	)
+})
+
+test('a refused change group does not stop the other one', async () => {
+	const harness = createHarness({
+		failingCommands: ['git.viewStagedChanges'],
+	})
+	harness.repo.state.indexChanges.push({
+		uri: uri('/repo/staged.md'),
+		decorations: { tooltip: 'staged' },
+	})
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.openGitLayout')()
+
+	assert.ok(
+		harness.executed.some(({ name }) => name === 'git.viewChanges'),
+		'the working tree diff must still open',
+	)
+})
+
+test('every printable key is bound while the chord HUD is open', () => {
+	const manifest = require('../package.json')
+	const bound = new Set(
+		manifest.contributes.keybindings
+			.filter((entry) => entry.when === 'nathan.adhdChordMode')
+			.map((entry) => entry.key),
+	)
+
+	const printable = [
+		...'abcdefghijklmnopqrstuvwxyz',
+		...'0123456789',
+		...['`', '[', ']', '\\', "'", '-', '=', ',', '.', '/', ';'],
+	]
+
+	const unbound = printable.filter((key) => !bound.has(key))
+
+	assert.deepEqual(
+		unbound,
+		[],
+		'an unbound key types itself into the document instead of reporting',
+	)
+})
+
+test('an unbound chord key warns and leaves chord mode', async () => {
+	const harness = createHarness()
+	const extension = loadExtension(harness.vscode)
+	const commands = activate(extension, harness)
+
+	await commands.get('nathan.enterChordMode')()
+	await commands.get('nathan.unboundChordKey')()
+
+	assert.ok(
+		harness.executed.some(
+			({ name, args }) => name === 'setContext' && args[1] === false,
+		),
+		'chord mode must close so the next keystroke behaves normally',
+	)
+})
