@@ -66,7 +66,9 @@ export function digestSpecification(canonical: unknown): SpecificationDigest {
 		input_schema_version: INPUT_SCHEMA_VERSION,
 	})
 	return {
-		specificationDigest: createHash('sha256').update(envelope, 'utf8').digest('hex'),
+		specificationDigest: createHash('sha256')
+			.update(envelope, 'utf8')
+			.digest('hex'),
 		inputSchemaVersion: INPUT_SCHEMA_VERSION,
 		generatorContractVersion: GENERATOR_CONTRACT_VERSION,
 		canonicalForm: form,

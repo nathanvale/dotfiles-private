@@ -5,7 +5,7 @@
  * feature-conditioned where the ruling requires it: a product whose `features`
  * flags disable durable machinery is never asked to supply it.
  */
-import { type Diagnostic, diagnostic } from './diagnostics.ts'
+import type { Diagnostic } from './diagnostics.ts'
 import type { JsoncEntry, JsoncNode } from './jsonc.ts'
 import { NEXT_SAFE_ACTION_KINDS, RETRY_POSTURES } from './schema.ts'
 
@@ -28,7 +28,8 @@ class Cursor {
 				current = current.kind === 'array' ? current.items[step] : undefined
 				continue
 			}
-			current = current.kind === 'object' ? entryOf(current, step)?.value : undefined
+			current =
+				current.kind === 'object' ? entryOf(current, step)?.value : undefined
 		}
 		return current
 	}
@@ -51,7 +52,9 @@ class Cursor {
 	strings(path: readonly (string | number)[]): string[] {
 		const node = this.node(path)
 		if (node?.kind !== 'array') return []
-		return node.items.flatMap((item) => (item.kind === 'string' ? [item.value] : []))
+		return node.items.flatMap((item) =>
+			item.kind === 'string' ? [item.value] : [],
+		)
 	}
 
 	string(path: readonly (string | number)[]): string | undefined {
@@ -80,7 +83,9 @@ class Cursor {
 }
 
 function entryOf(node: JsoncNode, key: string): JsoncEntry | undefined {
-	return node.kind === 'object' ? node.entries.find((entry) => entry.key === key) : undefined
+	return node.kind === 'object'
+		? node.entries.find((entry) => entry.key === key)
+		: undefined
 }
 
 /** Shared state threaded through the individual semantic checks. */
@@ -110,7 +115,10 @@ interface Context {
  * the tree, and run in a fixed order so identity is established before the
  * reference checks that depend on it.
  */
-export function validateSemantics(root: JsoncNode, sourcePath?: string): Diagnostic[] {
+export function validateSemantics(
+	root: JsoncNode,
+	sourcePath?: string,
+): Diagnostic[] {
 	const diagnostics: Diagnostic[] = []
 	const cursor = new Cursor(root)
 
@@ -135,10 +143,16 @@ export function validateSemantics(root: JsoncNode, sourcePath?: string): Diagnos
 		livenessEvidence: cursor.bool(['features', 'liveness_evidence']) ?? false,
 		versionCustody: cursor.bool(['features', 'version_custody']) ?? false,
 		remoteAuthority: cursor.bool(['features', 'remote_authority']) ?? false,
-		cancellation: cursor.string(['features', 'cancellation']) ?? 'not_supported',
+		cancellation:
+			cursor.string(['features', 'cancellation']) ?? 'not_supported',
 	}
 
-	const context: Context = { cursor, report, features, actionIds: new Set<string>() }
+	const context: Context = {
+		cursor,
+		report,
+		features,
+		actionIds: new Set<string>(),
+	}
 
 	checkActionCatalog(context)
 	checkReferences(context)
@@ -181,7 +195,10 @@ function checkActionCatalog({ cursor, report, actionIds }: Context): void {
 		}
 
 		// Missing action semantics: each sealed kind carries a mandatory payload.
-		if (kind === 'none' && cursor.string([...base, 'stop_scope']) === undefined) {
+		if (
+			kind === 'none' &&
+			cursor.string([...base, 'stop_scope']) === undefined
+		) {
 			report(
 				'semantic_missing_action_semantics',
 				`Action ${JSON.stringify(id)} has kind "none" but declares no stop_scope. Stop Scope must state whether the product is domain_terminal or only the current agent is agent_terminal.`,
@@ -189,7 +206,10 @@ function checkActionCatalog({ cursor, report, actionIds }: Context): void {
 				cursor.keyLoc([...base, 'id']),
 			)
 		}
-		if (kind === 'needs_human' && cursor.string([...base, 'human_kind']) === undefined) {
+		if (
+			kind === 'needs_human' &&
+			cursor.string([...base, 'human_kind']) === undefined
+		) {
 			report(
 				'semantic_missing_action_semantics',
 				`Action ${JSON.stringify(id)} has kind "needs_human" but declares no human_kind.`,
@@ -211,7 +231,10 @@ function checkActionCatalog({ cursor, report, actionIds }: Context): void {
 		}
 
 		const requiresFeature = cursor.string([...base, 'requires_feature'])
-		if (requiresFeature !== undefined && !cursor.strings(['features', 'feature_gates']).includes(requiresFeature)) {
+		if (
+			requiresFeature !== undefined &&
+			!cursor.strings(['features', 'feature_gates']).includes(requiresFeature)
+		) {
 			report(
 				'semantic_unresolved_reference',
 				`Action ${JSON.stringify(id)} requires feature gate ${JSON.stringify(requiresFeature)}, which features.feature_gates does not declare.`,
@@ -222,7 +245,11 @@ function checkActionCatalog({ cursor, report, actionIds }: Context): void {
 
 		const externalOwners = cursor.strings(['actions', 'external_owners'])
 		const owner = cursor.string([...base, 'owner'])
-		if (owner !== undefined && externalOwners.length > 0 && !externalOwners.includes(owner)) {
+		if (
+			owner !== undefined &&
+			externalOwners.length > 0 &&
+			!externalOwners.includes(owner)
+		) {
 			report(
 				'semantic_unresolved_reference',
 				`Action ${JSON.stringify(id)} names owner ${JSON.stringify(owner)}, which actions.external_owners does not declare.`,
@@ -249,7 +276,6 @@ function checkActionCatalog({ cursor, report, actionIds }: Context): void {
 			)
 		}
 	}
-
 }
 
 /**
@@ -259,7 +285,12 @@ function checkActionCatalog({ cursor, report, actionIds }: Context): void {
 function blockerResolver(
 	cursor: Cursor,
 	report: Context['report'],
-): (value: string | undefined, path: string, location: JsoncNode['loc'], label: string) => void {
+): (
+	value: string | undefined,
+	path: string,
+	location: JsoncNode['loc'],
+	label: string,
+) => void {
 	const blockers = new Set(cursor.strings(['blockers']))
 	return (value, path, location, label) => {
 		if (value === undefined || blockers.has(value)) return
@@ -292,7 +323,9 @@ function checkReferences({ cursor, report, actionIds }: Context): void {
 
 	for (const entry of cursor.entries(['activation', 'cause_to_next_action'])) {
 		const path = ['activation', 'cause_to_next_action', entry.key] as const
-		if (!cursor.strings(['activation', 'restriction_causes']).includes(entry.key)) {
+		if (
+			!cursor.strings(['activation', 'restriction_causes']).includes(entry.key)
+		) {
 			report(
 				'semantic_unresolved_reference',
 				`activation.cause_to_next_action maps ${JSON.stringify(entry.key)}, which activation.restriction_causes does not declare.`,
@@ -330,8 +363,18 @@ function checkReferences({ cursor, report, actionIds }: Context): void {
 
 	for (const entry of cursor.entries(['authority', 'capability_errors'])) {
 		const base = ['authority', 'capability_errors', entry.key] as const
-		resolveBlocker(cursor.string([...base, 'blocker']), `${base.join('.')}.blocker`, cursor.loc([...base, 'blocker']), 'authority.capability_errors')
-		resolveAction(cursor.string([...base, 'next']), `${base.join('.')}.next`, cursor.loc([...base, 'next']), 'authority.capability_errors')
+		resolveBlocker(
+			cursor.string([...base, 'blocker']),
+			`${base.join('.')}.blocker`,
+			cursor.loc([...base, 'blocker']),
+			'authority.capability_errors',
+		)
+		resolveAction(
+			cursor.string([...base, 'next']),
+			`${base.join('.')}.next`,
+			cursor.loc([...base, 'next']),
+			'authority.capability_errors',
+		)
 		for (const role of cursor.entries([...base, 'next_by_role'])) {
 			resolveAction(
 				role.value.kind === 'string' ? role.value.value : undefined,
@@ -342,15 +385,34 @@ function checkReferences({ cursor, report, actionIds }: Context): void {
 		}
 	}
 
-	resolveBlocker(cursor.string(['authority', 'quarantine', 'blocker']), 'authority.quarantine.blocker', cursor.loc(['authority', 'quarantine', 'blocker']), 'authority.quarantine')
-	resolveAction(cursor.string(['authority', 'quarantine', 'next']), 'authority.quarantine.next', cursor.loc(['authority', 'quarantine', 'next']), 'authority.quarantine')
-	cursor.items(['authority', 'stale_lease_takeover', 'failure_blockers']).forEach((item, index) => {
-		if (item.kind !== 'string') return
-		resolveBlocker(item.value, `authority.stale_lease_takeover.failure_blockers[${index}]`, item.loc, 'authority.stale_lease_takeover')
-	})
+	resolveBlocker(
+		cursor.string(['authority', 'quarantine', 'blocker']),
+		'authority.quarantine.blocker',
+		cursor.loc(['authority', 'quarantine', 'blocker']),
+		'authority.quarantine',
+	)
+	resolveAction(
+		cursor.string(['authority', 'quarantine', 'next']),
+		'authority.quarantine.next',
+		cursor.loc(['authority', 'quarantine', 'next']),
+		'authority.quarantine',
+	)
+	cursor
+		.items(['authority', 'stale_lease_takeover', 'failure_blockers'])
+		.forEach((item, index) => {
+			if (item.kind !== 'string') return
+			resolveBlocker(
+				item.value,
+				`authority.stale_lease_takeover.failure_blockers[${index}]`,
+				item.loc,
+				'authority.stale_lease_takeover',
+			)
+		})
 
 	// Transitions must land on a declared phase of a declared state.
-	const phaseValues = new Set(cursor.strings(['states', 'transaction_phase', 'values']))
+	const phaseValues = new Set(
+		cursor.strings(['states', 'transaction_phase', 'values']),
+	)
 	if (phaseValues.size > 0) {
 		cursor.items(['transitions']).forEach((_item, index) => {
 			const toPhase = cursor.string(['transitions', index, 'to_phase'])
@@ -364,7 +426,6 @@ function checkReferences({ cursor, report, actionIds }: Context): void {
 			}
 		})
 	}
-
 }
 
 /** State values, their declared subsets, and projection totality. */
@@ -374,7 +435,9 @@ function checkStateVocabularies({ cursor, report }: Context): void {
 		const values = cursor.strings([...base, 'values'])
 		const valueSet = new Set(values)
 
-		const duplicates = values.filter((value, index) => values.indexOf(value) !== index)
+		const duplicates = values.filter(
+			(value, index) => values.indexOf(value) !== index,
+		)
 		for (const duplicate of duplicates) {
 			report(
 				'semantic_duplicate_id',
@@ -384,7 +447,13 @@ function checkStateVocabularies({ cursor, report }: Context): void {
 			)
 		}
 
-		for (const subset of ['terminal', 'human_terminal', 'absorbing', 'observation_sourced', 'durable_subset_excludes'] as const) {
+		for (const subset of [
+			'terminal',
+			'human_terminal',
+			'absorbing',
+			'observation_sourced',
+			'durable_subset_excludes',
+		] as const) {
 			cursor.items([...base, subset]).forEach((item, index) => {
 				if (item.kind !== 'string' || valueSet.has(item.value)) return
 				report(
@@ -399,7 +468,11 @@ function checkStateVocabularies({ cursor, report }: Context): void {
 		// A declared phase→state projection must be total over the source phases.
 		const projection = cursor.entries([...base, 'projection_from_phase'])
 		if (projection.length > 0) {
-			const sourcePhases = cursor.strings(['states', 'transaction_phase', 'values'])
+			const sourcePhases = cursor.strings([
+				'states',
+				'transaction_phase',
+				'values',
+			])
 			const covered = new Set(projection.map((entry) => entry.key))
 			for (const phase of sourcePhases) {
 				if (covered.has(phase)) continue
@@ -411,7 +484,8 @@ function checkStateVocabularies({ cursor, report }: Context): void {
 				)
 			}
 			for (const entry of projection) {
-				if (entry.value.kind !== 'string' || valueSet.has(entry.value.value)) continue
+				if (entry.value.kind !== 'string' || valueSet.has(entry.value.value))
+					continue
 				report(
 					'semantic_unresolved_reference',
 					`states.${stateEntry.key}.projection_from_phase maps ${JSON.stringify(entry.key)} to ${JSON.stringify(entry.value.value)}, which is not a declared value of that state.`,
@@ -421,7 +495,6 @@ function checkStateVocabularies({ cursor, report }: Context): void {
 			}
 		}
 	}
-
 }
 
 /** Retry vocabulary, rule resolution, and unsafe default postures. */
@@ -430,7 +503,8 @@ function checkRetryPosture({ cursor, report }: Context): void {
 
 	const retryValues = cursor.strings(['retry_posture', 'values'])
 	for (const value of retryValues) {
-		if (RETRY_POSTURES.includes(value as (typeof RETRY_POSTURES)[number])) continue
+		if (RETRY_POSTURES.includes(value as (typeof RETRY_POSTURES)[number]))
+			continue
 		report(
 			'semantic_free_text_branch_value',
 			`retry_posture.values declares ${JSON.stringify(value)}, which is outside the sealed retry posture vocabulary [${RETRY_POSTURES.join(', ')}].`,
@@ -477,7 +551,10 @@ function checkRetryPosture({ cursor, report }: Context): void {
 			`retry_posture.rules[${index}]`,
 		)
 		const command = cursor.string([...base, 'when', 'command'])
-		if (command !== undefined && !cursor.strings(['command_surface', 'commands']).includes(command)) {
+		if (
+			command !== undefined &&
+			!cursor.strings(['command_surface', 'commands']).includes(command)
+		) {
 			report(
 				'semantic_unresolved_reference',
 				`retry_posture.rules[${index}] branches on command ${JSON.stringify(command)}, which command_surface.commands does not declare.`,
@@ -490,7 +567,10 @@ function checkRetryPosture({ cursor, report }: Context): void {
 	// An effectful surface must not default to same-input-safe retry.
 	const writeCommands = cursor
 		.entries(['command_surface', 'mutations'])
-		.filter((entry) => entry.value.kind === 'string' && WRITE_MUTATIONS.has(entry.value.value))
+		.filter(
+			(entry) =>
+				entry.value.kind === 'string' && WRITE_MUTATIONS.has(entry.value.value),
+		)
 	if (writeCommands.length > 0) {
 		const catchAll = retryRules.findIndex((_item, index) => {
 			const when = cursor.entries(['retry_posture', 'rules', index, 'when'])
@@ -498,14 +578,26 @@ function checkRetryPosture({ cursor, report }: Context): void {
 			const isCatchAll =
 				when.length === 1 &&
 				when[0]?.key === 'result_kind' &&
-				cursor.string(['retry_posture', 'rules', index, 'when', 'result_kind']) === 'any_other'
+				cursor.string([
+					'retry_posture',
+					'rules',
+					index,
+					'when',
+					'result_kind',
+				]) === 'any_other'
 			return isCatchAll && then === 'same_input_safe'
 		})
 		if (catchAll !== -1) {
 			const guarded = retryRules.some((_item, index) => {
 				if (index >= catchAll) return false
 				const then = cursor.string(['retry_posture', 'rules', index, 'then'])
-				const command = cursor.string(['retry_posture', 'rules', index, 'when', 'command'])
+				const command = cursor.string([
+					'retry_posture',
+					'rules',
+					index,
+					'when',
+					'command',
+				])
 				return then !== 'same_input_safe' && command !== undefined
 			})
 			if (!guarded) {
@@ -528,11 +620,14 @@ function checkRetryPosture({ cursor, report }: Context): void {
 			item.loc,
 		)
 	})
-
 }
 
 /** Who may write, and what each command and exit actually means. */
-function checkAuthorityAndSideEffects({ cursor, report, features }: Context): void {
+function checkAuthorityAndSideEffects({
+	cursor,
+	report,
+	features,
+}: Context): void {
 	if (cursor.string(['authority', 'write_authority_owner']) === undefined) {
 		report(
 			'semantic_missing_authority_semantics',
@@ -543,7 +638,10 @@ function checkAuthorityAndSideEffects({ cursor, report, features }: Context): vo
 	}
 
 	// Feature-conditioned: only a remote-authority product must resolve leases.
-	if (features.remoteAuthority && !cursor.has(['authority', 'lease_expiry_grants'])) {
+	if (
+		features.remoteAuthority &&
+		!cursor.has(['authority', 'lease_expiry_grants'])
+	) {
 		report(
 			'semantic_missing_authority_semantics',
 			`features.remote_authority is true but authority.lease_expiry_grants is absent. A remote-authority product must state what lease expiry grants, so expiry never silently grants takeover.`,
@@ -564,7 +662,10 @@ function checkAuthorityAndSideEffects({ cursor, report, features }: Context): vo
 			)
 			continue
 		}
-		if (entry.value.kind === 'string' && !MUTATION_VALUES.has(entry.value.value)) {
+		if (
+			entry.value.kind === 'string' &&
+			!MUTATION_VALUES.has(entry.value.value)
+		) {
 			report(
 				'semantic_free_text_branch_value',
 				`command_surface.mutations.${entry.key} declares side effect ${JSON.stringify(entry.value.value)}, which is not one of the sealed effect kinds [${[...MUTATION_VALUES].sort().join(', ')}].`,
@@ -584,7 +685,10 @@ function checkAuthorityAndSideEffects({ cursor, report, features }: Context): vo
 		)
 	}
 
-	for (const entry of cursor.entries(['command_surface', 'output_modes_overrides'])) {
+	for (const entry of cursor.entries([
+		'command_surface',
+		'output_modes_overrides',
+	])) {
 		if (commands.includes(entry.key)) continue
 		report(
 			'semantic_unresolved_reference',
@@ -594,7 +698,9 @@ function checkAuthorityAndSideEffects({ cursor, report, features }: Context): vo
 		)
 	}
 
-	const duplicateCommands = commands.filter((value, index) => commands.indexOf(value) !== index)
+	const duplicateCommands = commands.filter(
+		(value, index) => commands.indexOf(value) !== index,
+	)
 	for (const duplicate of duplicateCommands) {
 		report(
 			'semantic_duplicate_id',
@@ -606,7 +712,8 @@ function checkAuthorityAndSideEffects({ cursor, report, features }: Context): vo
 
 	// Baseline exit meanings must be declared; an undeclared exit is unroutable.
 	for (const code of ['0', '1', '2'] as const) {
-		if (cursor.string(['command_surface', 'exit_codes', code]) !== undefined) continue
+		if (cursor.string(['command_surface', 'exit_codes', code]) !== undefined)
+			continue
 		report(
 			'semantic_missing_side_effect_semantics',
 			`command_surface.exit_codes does not declare exit ${code}. The baseline success, refusal and invalid-usage exits must each carry a stable meaning.`,
@@ -614,11 +721,14 @@ function checkAuthorityAndSideEffects({ cursor, report, features }: Context): vo
 			cursor.keyLoc(['command_surface', 'exit_codes']),
 		)
 	}
-
 }
 
 /** Unique ids, and machinery that agrees with the feature flags in both directions. */
-function checkIdentityAndFeatureConditioning({ cursor, report, features }: Context): void {
+function checkIdentityAndFeatureConditioning({
+	cursor,
+	report,
+	features,
+}: Context): void {
 	const seenInvariants = new Set<string>()
 	cursor.items(['invariants']).forEach((_item, index) => {
 		const id = cursor.string(['invariants', index, 'id'])
@@ -652,7 +762,12 @@ function checkIdentityAndFeatureConditioning({ cursor, report, features }: Conte
 	const seenEntities = new Set<string>()
 	for (const entry of cursor.entries(['entities'])) {
 		if (seenEntities.has(entry.key)) {
-			report('semantic_duplicate_id', `Duplicate entity ${JSON.stringify(entry.key)}.`, `entities.${entry.key}`, entry.keyLoc)
+			report(
+				'semantic_duplicate_id',
+				`Duplicate entity ${JSON.stringify(entry.key)}.`,
+				`entities.${entry.key}`,
+				entry.keyLoc,
+			)
 		}
 		seenEntities.add(entry.key)
 	}
@@ -693,7 +808,10 @@ function checkIdentityAndFeatureConditioning({ cursor, report, features }: Conte
 		)
 	}
 
-	if (!features.livenessEvidence && cursor.entries(['waits', 'budgets_ms']).length > 0) {
+	if (
+		!features.livenessEvidence &&
+		cursor.entries(['waits', 'budgets_ms']).length > 0
+	) {
 		report(
 			'semantic_feature_machinery_conflict',
 			`features.liveness_evidence is false but waits.budgets_ms declares deadlines. A product without liveness evidence must not inherit deadline machinery.`,
@@ -716,7 +834,11 @@ function checkIdentityAndFeatureConditioning({ cursor, report, features }: Conte
 	const cancellationEntries = cursor.entries(['cancellation'])
 	if (features.cancellation === 'not_supported') {
 		for (const entry of cancellationEntries) {
-			if (entry.value.kind === 'string' && entry.value.value === 'not_supported') continue
+			if (
+				entry.value.kind === 'string' &&
+				entry.value.value === 'not_supported'
+			)
+				continue
 			report(
 				'semantic_feature_machinery_conflict',
 				`features.cancellation is "not_supported" but cancellation.${entry.key} declares a lifecycle. An unsupported feature must not carry placeholder machinery.`,
@@ -729,7 +851,12 @@ function checkIdentityAndFeatureConditioning({ cursor, report, features }: Conte
 	// Sealed kind vocabulary: actions.kinds itself must not invent a kind.
 	cursor.items(['actions', 'kinds']).forEach((item, index) => {
 		if (item.kind !== 'string') return
-		if (NEXT_SAFE_ACTION_KINDS.includes(item.value as (typeof NEXT_SAFE_ACTION_KINDS)[number])) return
+		if (
+			NEXT_SAFE_ACTION_KINDS.includes(
+				item.value as (typeof NEXT_SAFE_ACTION_KINDS)[number],
+			)
+		)
+			return
 		report(
 			'semantic_free_text_branch_value',
 			`actions.kinds declares ${JSON.stringify(item.value)}, which is outside the sealed Next Safe Action vocabulary [${NEXT_SAFE_ACTION_KINDS.join(', ')}].`,
@@ -740,8 +867,12 @@ function checkIdentityAndFeatureConditioning({ cursor, report, features }: Conte
 
 	// A projection that can fail must say how it fails, or it defaults to continuation.
 	if (cursor.has(['actions', 'resolution'])) {
-		for (const required of ['unavailable_projection_retry_safety', 'unavailable_projection_stop'] as const) {
-			if (cursor.string(['actions', 'resolution', required]) !== undefined) continue
+		for (const required of [
+			'unavailable_projection_retry_safety',
+			'unavailable_projection_stop',
+		] as const) {
+			if (cursor.string(['actions', 'resolution', required]) !== undefined)
+				continue
 			report(
 				'semantic_incomplete_projection',
 				`actions.resolution declares a missing-context path but no ${required}. An incomplete projection must deny authority and stop fail-closed rather than defaulting to continuation.`,

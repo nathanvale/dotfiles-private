@@ -72,7 +72,9 @@ export interface CommandSurface {
 	readonly noArgumentBehavior: string
 	readonly flags: Readonly<Record<string, readonly string[]>>
 	readonly mutations: Readonly<Record<string, string>>
-	readonly resultContracts: Readonly<Record<string, { readonly id: string; readonly version: number }>>
+	readonly resultContracts: Readonly<
+		Record<string, { readonly id: string; readonly version: number }>
+	>
 }
 
 export interface SpecificationIr {

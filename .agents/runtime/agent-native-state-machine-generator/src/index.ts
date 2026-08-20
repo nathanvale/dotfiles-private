@@ -10,8 +10,9 @@
  * Compilation is not Specification Admission. A candidate that compiles has
  * no semantic authority until the product owner admits it explicitly.
  */
-import { digestSpecification, type SpecificationDigest } from './canonical.ts'
+
 import { buildIr } from './build-ir.ts'
+import { digestSpecification, type SpecificationDigest } from './canonical.ts'
 import { type Diagnostic, sortDiagnostics } from './diagnostics.ts'
 import type { SpecificationIr } from './ir.ts'
 import { parseJsonc, toPlainValue } from './jsonc.ts'
@@ -57,18 +58,26 @@ export function compileSpecificationCandidate(
 	const { sourcePath } = options
 
 	const parsed = parseJsonc(source, sourcePath)
-	if (!parsed.ok) return { ok: false, diagnostics: sortDiagnostics(parsed.diagnostics) }
+	if (!parsed.ok)
+		return { ok: false, diagnostics: sortDiagnostics(parsed.diagnostics) }
 
 	const structural = validateStructure(parsed.root, sourcePath)
-	if (structural.length > 0) return { ok: false, diagnostics: sortDiagnostics(structural) }
+	if (structural.length > 0)
+		return { ok: false, diagnostics: sortDiagnostics(structural) }
 
 	const semantic = validateSemantics(parsed.root, sourcePath)
-	if (semantic.length > 0) return { ok: false, diagnostics: sortDiagnostics(semantic) }
+	if (semantic.length > 0)
+		return { ok: false, diagnostics: sortDiagnostics(semantic) }
 
 	const document = toPlainValue(parsed.root)
 	const ir = buildIr(document)
 
-	return { ok: true, ir, digest: digestSpecification(document), diagnostics: [] }
+	return {
+		ok: true,
+		ir,
+		digest: digestSpecification(document),
+		diagnostics: [],
+	}
 }
 
 export {

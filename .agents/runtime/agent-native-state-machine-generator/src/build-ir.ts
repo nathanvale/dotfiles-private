@@ -17,14 +17,25 @@ import type {
 } from './ir.ts'
 import type { NextSafeActionKind, RetryPosture } from './schema.ts'
 
-type Doc = Record<string, any>
+/** A parsed JSON object. Validation has already proved each field's shape. */
+type Doc = Record<string, JsonValue>
+
+type JsonValue =
+	| string
+	| number
+	| boolean
+	| null
+	| JsonValue[]
+	| { [key: string]: JsonValue }
 
 function optional(value: unknown): string | undefined {
 	return typeof value === 'string' ? value : undefined
 }
 
 function strings(value: unknown): readonly string[] {
-	return Array.isArray(value) ? value.filter((item): item is string => typeof item === 'string') : []
+	return Array.isArray(value)
+		? value.filter((item): item is string => typeof item === 'string')
+		: []
 }
 
 export function buildIr(document: unknown): SpecificationIr {
@@ -36,10 +47,22 @@ export function buildIr(document: unknown): SpecificationIr {
 	const specMeta: SpecMeta = {
 		product: meta.product as string,
 		inputSchemaVersion: meta.input_schema_version as string,
-		...defined('productSpecificationRevision', optional(meta.product_specification_revision)),
-		...defined('stateMachineDefinitionVersion', optional(meta.state_machine_definition_version)),
-		...defined('publicResultSchemaVersion', optional(meta.public_result_schema_version)),
-		...defined('activationResultSchemaVersion', optional(meta.activation_result_schema_version)),
+		...defined(
+			'productSpecificationRevision',
+			optional(meta.product_specification_revision),
+		),
+		...defined(
+			'stateMachineDefinitionVersion',
+			optional(meta.state_machine_definition_version),
+		),
+		...defined(
+			'publicResultSchemaVersion',
+			optional(meta.public_result_schema_version),
+		),
+		...defined(
+			'activationResultSchemaVersion',
+			optional(meta.activation_result_schema_version),
+		),
 	}
 
 	const irFeatures: Features = {
@@ -63,25 +86,35 @@ export function buildIr(document: unknown): SpecificationIr {
 				observationSourced: strings(state.observation_sourced),
 				phases: strings(state.phases),
 				checkpoints: strings(state.checkpoints),
-				...defined('projectionFromPhase', state.projection_from_phase as Record<string, string> | undefined),
+				...defined(
+					'projectionFromPhase',
+					state.projection_from_phase as Record<string, string> | undefined,
+				),
 				...defined('role', optional(state.role)),
 			}
 		})
 		.sort((a, b) => a.name.localeCompare(b.name))
 
-	const transitions: TransitionEntry[] = ((doc.transitions ?? []) as Doc[]).map((raw) => ({
-		event: raw.event as string,
-		toPhase: raw.to_phase as string,
-		driver: raw.driver as string,
-		...defined('via', optional(raw.via)),
-	}))
+	const transitions: TransitionEntry[] = ((doc.transitions ?? []) as Doc[]).map(
+		(raw) => ({
+			event: raw.event as string,
+			toPhase: raw.to_phase as string,
+			driver: raw.driver as string,
+			...defined('via', optional(raw.via)),
+		}),
+	)
 
-	const catalog: ActionEntry[] = (((doc.actions as Doc).catalog ?? []) as Doc[]).map((raw) => ({
+	const catalog: ActionEntry[] = (
+		((doc.actions as Doc).catalog ?? []) as Doc[]
+	).map((raw) => ({
 		id: raw.id as string,
 		kind: raw.kind as NextSafeActionKind,
 		requiresContext: strings(raw.requires_context),
 		...defined('humanKind', optional(raw.human_kind)),
-		...defined('stopScope', optional(raw.stop_scope) as ActionEntry['stopScope']),
+		...defined(
+			'stopScope',
+			optional(raw.stop_scope) as ActionEntry['stopScope'],
+		),
 		...defined('owner', optional(raw.owner)),
 		...defined('condition', optional(raw.condition)),
 		...defined('inputContract', optional(raw.input_contract)),
@@ -94,6 +127,8 @@ export function buildIr(document: unknown): SpecificationIr {
 
 	const rules: RetryRule[] = ((retry.rules ?? []) as Doc[]).map((raw) => ({
 		when: canonicalize(raw.when) as RetryRule['when'],
+		// "then" is the retry rule's declared outcome field in Input Schema v1.
+		// biome-ignore lint/suspicious/noThenProperty: schema field name, not a thenable
 		then: raw.then as RetryPosture,
 	}))
 
@@ -102,11 +137,15 @@ export function buildIr(document: unknown): SpecificationIr {
 		exitCodes: (surface.exit_codes ?? {}) as Record<string, string>,
 		globalFlags: strings(surface.global_flags),
 		outputModesDefault: strings(surface.output_modes_default),
-		outputModesOverrides: (surface.output_modes_overrides ?? {}) as Record<string, readonly string[]>,
+		outputModesOverrides: (surface.output_modes_overrides ?? {}) as Record<
+			string,
+			readonly string[]
+		>,
 		noArgumentBehavior: surface.no_argument_behavior as string,
 		flags: (surface.flags ?? {}) as Record<string, readonly string[]>,
 		mutations: (surface.mutations ?? {}) as Record<string, string>,
-		resultContracts: (surface.result_contracts ?? {}) as CommandSurface['resultContracts'],
+		resultContracts: (surface.result_contracts ??
+			{}) as CommandSurface['resultContracts'],
 	}
 
 	return {
@@ -116,22 +155,35 @@ export function buildIr(document: unknown): SpecificationIr {
 		transitions,
 		blockers: strings(doc.blockers),
 		actions: {
-			kinds: strings((doc.actions as Doc).kinds) as readonly NextSafeActionKind[],
+			kinds: strings(
+				(doc.actions as Doc).kinds,
+			) as readonly NextSafeActionKind[],
 			catalog,
 			...defined(
 				'resolution',
 				resolution === undefined
 					? undefined
 					: {
-							...defined('missingContext', optional(resolution.missing_context)),
-							...defined('unavailableProjectionBlocker', optional(resolution.unavailable_projection_blocker)),
+							...defined(
+								'missingContext',
+								optional(resolution.missing_context),
+							),
+							...defined(
+								'unavailableProjectionBlocker',
+								optional(resolution.unavailable_projection_blocker),
+							),
 							...defined(
 								'unavailableProjectionRetrySafety',
-								optional(resolution.unavailable_projection_retry_safety) as RetryPosture | undefined,
+								optional(resolution.unavailable_projection_retry_safety) as
+									| RetryPosture
+									| undefined,
 							),
 							...defined(
 								'unavailableProjectionStop',
-								optional(resolution.unavailable_projection_stop) as 'domain_terminal' | 'agent_terminal' | undefined,
+								optional(resolution.unavailable_projection_stop) as
+									| 'domain_terminal'
+									| 'agent_terminal'
+									| undefined,
 							),
 						},
 			),
@@ -143,13 +195,20 @@ export function buildIr(document: unknown): SpecificationIr {
 		},
 		commandSurface,
 		entityNames: Object.keys((doc.entities ?? {}) as Doc).sort(),
-		invariantIds: ((doc.invariants ?? []) as Doc[]).map((raw) => raw.id as string),
-		unresolvedDecisionIds: ((doc.unresolved_decisions ?? []) as Doc[]).map((raw) => raw.id as string),
+		invariantIds: ((doc.invariants ?? []) as Doc[]).map(
+			(raw) => raw.id as string,
+		),
+		unresolvedDecisionIds: ((doc.unresolved_decisions ?? []) as Doc[]).map(
+			(raw) => raw.id as string,
+		),
 		canonical: canonicalize(document),
 	}
 }
 
 /** Omits a key entirely when undefined, so the IR has no `key: undefined` noise. */
-function defined<K extends string, V>(key: K, value: V | undefined): Record<K, V> | Record<string, never> {
+function defined<K extends string, V>(
+	key: K,
+	value: V | undefined,
+): Record<K, V> | Record<string, never> {
 	return value === undefined ? {} : ({ [key]: value } as Record<K, V>)
 }

@@ -6,16 +6,40 @@
  * diagnostic rather than silently coercing it. Values carry their own source
  * location so later stages can point at the exact offending element.
  */
-import { type Diagnostic, diagnostic, type SourceLocation } from './diagnostics.ts'
+import {
+	type Diagnostic,
+	diagnostic,
+	type SourceLocation,
+} from './diagnostics.ts'
 
 export type JsonPrimitive = string | number | boolean | null
 
 export type JsoncNode =
-	| { readonly kind: 'object'; readonly entries: readonly JsoncEntry[]; readonly loc: SourceLocation }
-	| { readonly kind: 'array'; readonly items: readonly JsoncNode[]; readonly loc: SourceLocation }
-	| { readonly kind: 'string'; readonly value: string; readonly loc: SourceLocation }
-	| { readonly kind: 'number'; readonly value: number; readonly loc: SourceLocation }
-	| { readonly kind: 'boolean'; readonly value: boolean; readonly loc: SourceLocation }
+	| {
+			readonly kind: 'object'
+			readonly entries: readonly JsoncEntry[]
+			readonly loc: SourceLocation
+	  }
+	| {
+			readonly kind: 'array'
+			readonly items: readonly JsoncNode[]
+			readonly loc: SourceLocation
+	  }
+	| {
+			readonly kind: 'string'
+			readonly value: string
+			readonly loc: SourceLocation
+	  }
+	| {
+			readonly kind: 'number'
+			readonly value: number
+			readonly loc: SourceLocation
+	  }
+	| {
+			readonly kind: 'boolean'
+			readonly value: boolean
+			readonly loc: SourceLocation
+	  }
 	| { readonly kind: 'null'; readonly loc: SourceLocation }
 
 export interface JsoncEntry {
@@ -53,7 +77,8 @@ export function parseJsonc(text: string, sourcePath?: string): ParseResult {
 		const root = parser.parseDocument()
 		return { ok: true, root, diagnostics: [] }
 	} catch (error) {
-		if (error instanceof ParseError) return { ok: false, diagnostics: [error.diagnostic] }
+		if (error instanceof ParseError)
+			return { ok: false, diagnostics: [error.diagnostic] }
 		throw error
 	}
 }
@@ -71,7 +96,10 @@ class Parser {
 		const root = this.parseValue()
 		this.skipTrivia()
 		if (this.index < this.text.length) {
-			this.fail('jsonc_syntax_error', `Unexpected trailing content ${this.describeHere()}.`)
+			this.fail(
+				'jsonc_syntax_error',
+				`Unexpected trailing content ${this.describeHere()}.`,
+			)
 		}
 		return root
 	}
@@ -96,11 +124,16 @@ class Parser {
 
 	private describeHere(): string {
 		const char = this.text[this.index]
-		return char === undefined ? 'at end of input' : `character ${JSON.stringify(char)}`
+		return char === undefined
+			? 'at end of input'
+			: `character ${JSON.stringify(char)}`
 	}
 
 	private fail(
-		cause: 'jsonc_syntax_error' | 'jsonc_duplicate_key' | 'jsonc_non_data_value',
+		cause:
+			| 'jsonc_syntax_error'
+			| 'jsonc_duplicate_key'
+			| 'jsonc_non_data_value',
 		message: string,
 		location: SourceLocation = this.here(),
 	): never {
@@ -111,7 +144,9 @@ class Parser {
 				message,
 				path: '',
 				location,
-				...(this.sourcePath === undefined ? {} : { sourcePath: this.sourcePath }),
+				...(this.sourcePath === undefined
+					? {}
+					: { sourcePath: this.sourcePath }),
 			}),
 		)
 	}
@@ -136,7 +171,8 @@ class Parser {
 			}
 			if (char === '/' && this.text[this.index + 1] === '*') {
 				const end = this.text.indexOf('*/', this.index + 2)
-				if (end === -1) this.fail('jsonc_syntax_error', 'Unterminated block comment.')
+				if (end === -1)
+					this.fail('jsonc_syntax_error', 'Unterminated block comment.')
 				this.index = end + 2
 				continue
 			}
@@ -148,7 +184,11 @@ class Parser {
 
 	private parseValue(): JsoncNode {
 		const char = this.text[this.index]
-		if (char === undefined) this.fail('jsonc_syntax_error', 'Unexpected end of input; expected a value.')
+		if (char === undefined)
+			this.fail(
+				'jsonc_syntax_error',
+				'Unexpected end of input; expected a value.',
+			)
 		if (char === '{') return this.parseObject()
 		if (char === '[') return this.parseArray()
 		if (char === '"') return this.parseString()
@@ -168,7 +208,10 @@ class Parser {
 				return { kind: 'object', entries, loc }
 			}
 			if (this.index >= this.text.length) {
-				this.fail('jsonc_syntax_error', 'Unexpected end of input inside an object.')
+				this.fail(
+					'jsonc_syntax_error',
+					'Unexpected end of input inside an object.',
+				)
 			}
 			if (this.text[this.index] !== '"') {
 				this.fail(
@@ -190,7 +233,10 @@ class Parser {
 			seen.set(key, keyLoc)
 			this.skipTrivia()
 			if (this.text[this.index] !== ':') {
-				this.fail('jsonc_syntax_error', `Expected ":" after object key ${JSON.stringify(key)}.`)
+				this.fail(
+					'jsonc_syntax_error',
+					`Expected ":" after object key ${JSON.stringify(key)}.`,
+				)
 			}
 			this.index += 1
 			this.skipTrivia()
@@ -206,7 +252,10 @@ class Parser {
 				this.index += 1
 				return { kind: 'object', entries, loc }
 			}
-			this.fail('jsonc_syntax_error', `Expected "," or "}" in object; found ${this.describeHere()}.`)
+			this.fail(
+				'jsonc_syntax_error',
+				`Expected "," or "}" in object; found ${this.describeHere()}.`,
+			)
 		}
 	}
 
@@ -221,7 +270,10 @@ class Parser {
 				return { kind: 'array', items, loc }
 			}
 			if (this.index >= this.text.length) {
-				this.fail('jsonc_syntax_error', 'Unexpected end of input inside an array.')
+				this.fail(
+					'jsonc_syntax_error',
+					'Unexpected end of input inside an array.',
+				)
 			}
 			items.push(this.parseValue())
 			this.skipTrivia()
@@ -234,7 +286,10 @@ class Parser {
 				this.index += 1
 				return { kind: 'array', items, loc }
 			}
-			this.fail('jsonc_syntax_error', `Expected "," or "]" in array; found ${this.describeHere()}.`)
+			this.fail(
+				'jsonc_syntax_error',
+				`Expected "," or "]" in array; found ${this.describeHere()}.`,
+			)
 		}
 	}
 
@@ -285,13 +340,21 @@ class Parser {
 			case 'u': {
 				const hex = this.text.slice(this.index, this.index + 4)
 				if (!/^[0-9a-fA-F]{4}$/.test(hex)) {
-					this.fail('jsonc_syntax_error', 'Invalid \\u escape sequence.', escapeLoc)
+					this.fail(
+						'jsonc_syntax_error',
+						'Invalid \\u escape sequence.',
+						escapeLoc,
+					)
 				}
 				this.index += 4
 				return String.fromCharCode(Number.parseInt(hex, 16))
 			}
 			default:
-				this.fail('jsonc_syntax_error', `Invalid escape sequence "\\${char ?? ''}".`, escapeLoc)
+				this.fail(
+					'jsonc_syntax_error',
+					`Invalid escape sequence "\\${char ?? ''}".`,
+					escapeLoc,
+				)
 		}
 	}
 
@@ -299,22 +362,38 @@ class Parser {
 		const loc = this.here()
 		const start = this.index
 		if (this.text[this.index] === '-') this.index += 1
-		while (this.index < this.text.length && DIGITS.has(this.text[this.index] as string)) this.index += 1
+		while (
+			this.index < this.text.length &&
+			DIGITS.has(this.text[this.index] as string)
+		)
+			this.index += 1
 		if (this.text[this.index] === '.') {
 			this.index += 1
-			while (this.index < this.text.length && DIGITS.has(this.text[this.index] as string)) this.index += 1
+			while (
+				this.index < this.text.length &&
+				DIGITS.has(this.text[this.index] as string)
+			)
+				this.index += 1
 		}
 		const exponent = this.text[this.index]
 		if (exponent === 'e' || exponent === 'E') {
 			this.index += 1
 			const sign = this.text[this.index]
 			if (sign === '+' || sign === '-') this.index += 1
-			while (this.index < this.text.length && DIGITS.has(this.text[this.index] as string)) this.index += 1
+			while (
+				this.index < this.text.length &&
+				DIGITS.has(this.text[this.index] as string)
+			)
+				this.index += 1
 		}
 		const raw = this.text.slice(start, this.index)
 		const value = Number(raw)
 		if (!Number.isFinite(value)) {
-			this.fail('jsonc_syntax_error', `Invalid number literal ${JSON.stringify(raw)}.`, loc)
+			this.fail(
+				'jsonc_syntax_error',
+				`Invalid number literal ${JSON.stringify(raw)}.`,
+				loc,
+			)
 		}
 		return { kind: 'number', value, loc }
 	}
@@ -328,7 +407,11 @@ class Parser {
 		const loc = this.here()
 		const match = /^[A-Za-z_$][A-Za-z0-9_$]*/.exec(this.text.slice(this.index))
 		if (match === null) {
-			this.fail('jsonc_syntax_error', `Unexpected ${this.describeHere()}; expected a value.`, loc)
+			this.fail(
+				'jsonc_syntax_error',
+				`Unexpected ${this.describeHere()}; expected a value.`,
+				loc,
+			)
 		}
 		const word = match[0]
 		this.index += word.length
@@ -348,7 +431,8 @@ export function toPlainValue(node: JsoncNode): unknown {
 	switch (node.kind) {
 		case 'object': {
 			const result: Record<string, unknown> = {}
-			for (const entry of node.entries) result[entry.key] = toPlainValue(entry.value)
+			for (const entry of node.entries)
+				result[entry.key] = toPlainValue(entry.value)
 			return result
 		}
 		case 'array':

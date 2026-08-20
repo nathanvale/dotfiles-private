@@ -6,9 +6,12 @@
  */
 import { type Diagnostic, diagnostic } from './diagnostics.ts'
 import type { JsoncNode } from './jsonc.ts'
-import { SPECIFICATION_SHAPE, type Shape } from './schema.ts'
+import { type Shape, SPECIFICATION_SHAPE } from './schema.ts'
 
-export function validateStructure(root: JsoncNode, sourcePath?: string): Diagnostic[] {
+export function validateStructure(
+	root: JsoncNode,
+	sourcePath?: string,
+): Diagnostic[] {
 	const diagnostics: Diagnostic[] = []
 	walk(root, SPECIFICATION_SHAPE, '', diagnostics, sourcePath)
 	return diagnostics
@@ -17,10 +20,18 @@ export function validateStructure(root: JsoncNode, sourcePath?: string): Diagnos
 function push(
 	diagnostics: Diagnostic[],
 	sourcePath: string | undefined,
-	cause: 'structure_missing_required' | 'structure_unknown_key' | 'structure_type_mismatch' | 'structure_value_not_permitted',
+	cause:
+		| 'structure_missing_required'
+		| 'structure_unknown_key'
+		| 'structure_type_mismatch'
+		| 'structure_value_not_permitted',
 	message: string,
 	path: string,
-	node: { readonly line: number; readonly column: number; readonly offset: number },
+	node: {
+		readonly line: number
+		readonly column: number
+		readonly offset: number
+	},
 ): void {
 	diagnostics.push(
 		diagnostic({
@@ -70,11 +81,25 @@ function walk(
 
 		case 'string': {
 			if (node.kind !== 'string') {
-				push(diagnostics, sourcePath, 'structure_type_mismatch', `Expected a string at ${path}; found ${describe(node)}.`, path, node.loc)
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_type_mismatch',
+					`Expected a string at ${path}; found ${describe(node)}.`,
+					path,
+					node.loc,
+				)
 				return
 			}
 			if (shape.nonEmpty === true && node.value.trim() === '') {
-				push(diagnostics, sourcePath, 'structure_value_not_permitted', `Value at ${path} must not be empty.`, path, node.loc)
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_value_not_permitted',
+					`Value at ${path} must not be empty.`,
+					path,
+					node.loc,
+				)
 				return
 			}
 			if (shape.enum !== undefined && !shape.enum.includes(node.value)) {
@@ -92,19 +117,40 @@ function walk(
 
 		case 'number':
 			if (node.kind !== 'number') {
-				push(diagnostics, sourcePath, 'structure_type_mismatch', `Expected a number at ${path}; found ${describe(node)}.`, path, node.loc)
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_type_mismatch',
+					`Expected a number at ${path}; found ${describe(node)}.`,
+					path,
+					node.loc,
+				)
 			}
 			return
 
 		case 'boolean':
 			if (node.kind !== 'boolean') {
-				push(diagnostics, sourcePath, 'structure_type_mismatch', `Expected a boolean at ${path}; found ${describe(node)}.`, path, node.loc)
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_type_mismatch',
+					`Expected a boolean at ${path}; found ${describe(node)}.`,
+					path,
+					node.loc,
+				)
 			}
 			return
 
 		case 'array': {
 			if (node.kind !== 'array') {
-				push(diagnostics, sourcePath, 'structure_type_mismatch', `Expected an array at ${path}; found ${describe(node)}.`, path, node.loc)
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_type_mismatch',
+					`Expected an array at ${path}; found ${describe(node)}.`,
+					path,
+					node.loc,
+				)
 				return
 			}
 			node.items.forEach((item, index) => {
@@ -115,18 +161,38 @@ function walk(
 
 		case 'map': {
 			if (node.kind !== 'object') {
-				push(diagnostics, sourcePath, 'structure_type_mismatch', `Expected an object at ${path}; found ${describe(node)}.`, path, node.loc)
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_type_mismatch',
+					`Expected an object at ${path}; found ${describe(node)}.`,
+					path,
+					node.loc,
+				)
 				return
 			}
 			for (const entry of node.entries) {
-				walk(entry.value, shape.of, join(path, entry.key), diagnostics, sourcePath)
+				walk(
+					entry.value,
+					shape.of,
+					join(path, entry.key),
+					diagnostics,
+					sourcePath,
+				)
 			}
 			return
 		}
 
 		case 'object': {
 			if (node.kind !== 'object') {
-				push(diagnostics, sourcePath, 'structure_type_mismatch', `Expected an object at ${path || '<root>'}; found ${describe(node)}.`, path, node.loc)
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_type_mismatch',
+					`Expected an object at ${path || '<root>'}; found ${describe(node)}.`,
+					path,
+					node.loc,
+				)
 				return
 			}
 			const present = new Set<string>()

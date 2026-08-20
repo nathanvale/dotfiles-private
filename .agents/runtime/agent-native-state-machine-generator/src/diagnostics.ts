@@ -61,7 +61,9 @@ export function diagnostic(input: Diagnostic): Diagnostic {
  * Deterministic diagnostic order: source position first, then cause, then path.
  * Callers that snapshot a diagnostic list depend on this being stable.
  */
-export function sortDiagnostics(diagnostics: readonly Diagnostic[]): Diagnostic[] {
+export function sortDiagnostics(
+	diagnostics: readonly Diagnostic[],
+): Diagnostic[] {
 	return [...diagnostics].sort(
 		(a, b) =>
 			a.location.offset - b.location.offset ||
