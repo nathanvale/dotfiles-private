@@ -83,6 +83,33 @@ function entryOf(node: JsoncNode, key: string): JsoncEntry | undefined {
 	return node.kind === 'object' ? node.entries.find((entry) => entry.key === key) : undefined
 }
 
+/** Shared state threaded through the individual semantic checks. */
+interface Context {
+	readonly cursor: Cursor
+	readonly report: (
+		cause: Diagnostic['cause'],
+		message: string,
+		path: string,
+		location: JsoncNode['loc'],
+	) => void
+	readonly features: {
+		readonly durableOperations: boolean
+		readonly livenessEvidence: boolean
+		readonly versionCustody: boolean
+		readonly remoteAuthority: boolean
+		readonly cancellation: string
+	}
+	/** Every action id the catalog declares; filled by the catalog check. */
+	readonly actionIds: Set<string>
+}
+
+/**
+ * Runs every semantic check and returns all diagnostics.
+ *
+ * The checks share a cursor and a report callback rather than each re-walking
+ * the tree, and run in a fixed order so identity is established before the
+ * reference checks that depend on it.
+ */
 export function validateSemantics(root: JsoncNode, sourcePath?: string): Diagnostic[] {
 	const diagnostics: Diagnostic[] = []
 	const cursor = new Cursor(root)
@@ -111,9 +138,20 @@ export function validateSemantics(root: JsoncNode, sourcePath?: string): Diagnos
 		cancellation: cursor.string(['features', 'cancellation']) ?? 'not_supported',
 	}
 
-	// --- action catalog: identity, semantics, competition -----------------------
+	const context: Context = { cursor, report, features, actionIds: new Set<string>() }
 
-	const actionIds = new Set<string>()
+	checkActionCatalog(context)
+	checkReferences(context)
+	checkStateVocabularies(context)
+	checkRetryPosture(context)
+	checkAuthorityAndSideEffects(context)
+	checkIdentityAndFeatureConditioning(context)
+
+	return diagnostics
+}
+
+/** Action identity, per-kind mandatory semantics, and competing continuations. */
+function checkActionCatalog({ cursor, report, actionIds }: Context): void {
 	const catalog = cursor.items(['actions', 'catalog'])
 	const declaredKinds = new Set(cursor.strings(['actions', 'kinds']))
 
@@ -212,8 +250,10 @@ export function validateSemantics(root: JsoncNode, sourcePath?: string): Diagnos
 		}
 	}
 
-	// --- reference resolution ---------------------------------------------------
+}
 
+/** Every cross-reference must resolve into the vocabulary that owns it. */
+function checkReferences({ cursor, report, actionIds }: Context): void {
 	const blockers = new Set(cursor.strings(['blockers']))
 	const resolveAction = (
 		value: string | undefined,
@@ -319,8 +359,10 @@ export function validateSemantics(root: JsoncNode, sourcePath?: string): Diagnos
 		})
 	}
 
-	// --- state vocabularies -----------------------------------------------------
+}
 
+/** State values, their declared subsets, and projection totality. */
+function checkStateVocabularies({ cursor, report }: Context): void {
 	for (const stateEntry of cursor.entries(['states'])) {
 		const base = ['states', stateEntry.key] as const
 		const values = cursor.strings([...base, 'values'])
@@ -374,7 +416,25 @@ export function validateSemantics(root: JsoncNode, sourcePath?: string): Diagnos
 		}
 	}
 
-	// --- retry posture ----------------------------------------------------------
+}
+
+/** Retry vocabulary, rule resolution, and unsafe default postures. */
+function checkRetryPosture({ cursor, report }: Context): void {
+	const blockers = new Set(cursor.strings(['blockers']))
+	const resolveBlocker = (
+		value: string | undefined,
+		path: string,
+		location: JsoncNode['loc'],
+		label: string,
+	): void => {
+		if (value === undefined || blockers.has(value)) return
+		report(
+			'semantic_unresolved_reference',
+			`${label} references blocker ${JSON.stringify(value)}, which the blockers vocabulary does not declare.`,
+			path,
+			location,
+		)
+	}
 
 	const retryValues = cursor.strings(['retry_posture', 'values'])
 	for (const value of retryValues) {
@@ -477,8 +537,10 @@ export function validateSemantics(root: JsoncNode, sourcePath?: string): Diagnos
 		)
 	})
 
-	// --- authority and side effects ---------------------------------------------
+}
 
+/** Who may write, and what each command and exit actually means. */
+function checkAuthorityAndSideEffects({ cursor, report, features }: Context): void {
 	if (cursor.string(['authority', 'write_authority_owner']) === undefined) {
 		report(
 			'semantic_missing_authority_semantics',
@@ -561,8 +623,10 @@ export function validateSemantics(root: JsoncNode, sourcePath?: string): Diagnos
 		)
 	}
 
-	// --- invariants, decisions, feature conditioning ------------------------------
+}
 
+/** Unique ids, and machinery that agrees with the feature flags in both directions. */
+function checkIdentityAndFeatureConditioning({ cursor, report, features }: Context): void {
 	const seenInvariants = new Set<string>()
 	cursor.items(['invariants']).forEach((_item, index) => {
 		const id = cursor.string(['invariants', index, 'id'])
@@ -694,6 +758,4 @@ export function validateSemantics(root: JsoncNode, sourcePath?: string): Diagnos
 			)
 		}
 	}
-
-	return diagnostics
 }

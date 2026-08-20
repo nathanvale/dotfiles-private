@@ -52,7 +52,7 @@ export function canonicalize(value: unknown): unknown {
 }
 
 /** Deterministic serialization of an already-canonicalized value. */
-export function canonicalForm(value: unknown): string {
+function canonicalForm(value: unknown): string {
 	return JSON.stringify(canonicalize(value))
 }
 
