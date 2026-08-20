@@ -9,7 +9,7 @@ Before reaching for a GoF or design-pattern name, name the pressure that earns i
 This gate owns the *pre-code* moment only. Once modules exist, the same vocabulary continues elsewhere:
 
 - Existing code, find seams → `improve-codebase-architecture` (ICA) runs the deletion test on live modules.
-- A pattern name gets claimed → `gof-pressure-lens` referees whether it is earned. GoF names are never an entry point; reach them only *through* this evidence, never as a recommendation.
+- A pattern name gets claimed → `pattern-referee` referees whether it is earned. GoF names are never an entry point; reach them only *through* this evidence, never as a recommendation.
 
 For any candidate pattern, state:
 

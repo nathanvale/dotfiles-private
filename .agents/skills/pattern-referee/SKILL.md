@@ -1,117 +1,112 @@
 ---
-name: gof-pressure-lens
-description: "GoF pattern naming, pattern referee, and pressure-earned design-pattern labels after ICA, plan, prototype, or decision evidence."
+name: pattern-referee
+description: "Referee a claimed software or AI-agent pattern name: pattern-fit dispute, proposed pattern label, or catalog identity check after architecture pressure exists."
 role: advisor
 ---
 
-# GoF Pressure Lens
+# Pattern Referee
 
-Use when the user asks whether GoF pattern names are earned by existing
-architecture pressure.
+Judge pattern names that someone already proposed. Architecture pressure
+arrives as evidence; this skill decides whether a name is earned.
 
 ## Boundary
 
-- Act as a pattern referee, not an architecture reviewer.
-- Treat GoF names as translation after evidence, not discovery before evidence.
-- Keep ICA as the owner of architecture pressure and deepening judgment.
+- Referee proposed names. Architecture discovery stays with its owner.
+- Treat a pattern name as translation after evidence.
 - Preserve `No pressure -> no pattern`.
-- Do not run a cold GoF scan.
-- Do not teach the GoF catalog unless needed to explain a verdict.
+- Return a Missing-Pressure Handoff when pressure evidence is absent.
+- Explain a catalog entry only to justify one verdict.
 
 ## Owner Map
 
-- Skill decision log: `docs/decisions/2026-06-13-001-gof-pressure-lens-skill-decision-log.md`.
-- ICA workflow owner: external `improve-codebase-architecture` skill.
-- ICA vocabulary owner: external `codebase-design` skill.
-- Skill authoring owner: `skills/skill-author/references/skill-design-decision-runbook.md`.
-- Deferred ICA output envelope: no owner path exists yet; use `skills/cli-author/SKILL.md` before adding one.
+- Pattern library: [`references/pattern-index.md`](references/pattern-index.md).
+- Architecture pressure workflow: external `improve-codebase-architecture` skill.
+- Design vocabulary: external `codebase-design` skill.
+- Pressure-gate semantics: `config/agents/claude/context/code-style.md`.
+- Skill authoring: `skills/skill-author/references/skill-design-decision-runbook.md`.
+- Project state and accepted decisions: vault project `pattern-referee-skill`.
 
-## Pick One
+## Three Gates
 
-- Artifact Mode: consume an existing pressure artifact.
-- Code Scan Mode: route existing code through ICA first.
-- Planning Mode: ask planned-ICA questions before naming pattern hypotheses.
-- Pattern Referee Mode: judge already-written pattern claims.
+Every kept verdict passes all three gates in order. A failed gate names the
+missing evidence and stops.
 
-## Pressure Gate
+### 1. Pressure Gate
 
-Before naming a pattern, collect:
+Read the Pressure Artifact and confirm each field:
 
 - Pressure source.
 - Seam.
-- Module / Interface pressure.
-- Deletion-test consequence.
-- Locality or leverage gain.
-- Next safe action.
+- Owner of that seam.
+- Useful consequence.
 
-If any field is absent, stop pattern naming and route:
+Accepted artifacts: architecture report, seam-swarm synthesis, plan pressure
+section, prototype verdict, decision log.
 
-- Existing code: run ICA first.
-- Planned code: ask planned-ICA questions first.
-- Existing artifact: ask for the missing field or mark the pattern deferred.
-- Drafted pattern section: reject claims that lack pressure proof.
+Consume the artifact as given. Rerun discovery only when the artifact is
+stale, self-contradictory, or silent on a gate field.
 
-## Artifact Mode
+When a field is absent, return a **Missing-Pressure Handoff**: name the absent
+fields, name the next evidence owner, and return control to the active
+workflow. For existing code, the handoff may recommend an explicit
+architecture run. For planned work, return the missing questions.
 
-Accepted pressure artifacts:
+### 2. Identity Gate
 
-- ICA report.
-- Seam-swarm synthesis.
-- Plan pressure section.
-- Prototype verdict.
-- Decision log.
+Route the candidate name to its family through
+[`references/pattern-index.md`](references/pattern-index.md), then confirm the
+library entry supplies:
 
-Consume the artifact by default. Do not rerun ICA unless the artifact is stale,
-contradictory, or missing the pressure gate.
+- Intent.
+- Applicability.
+- Participants and collaboration.
+- Consequences.
+- Nearest alternative.
+- Authoritative source.
 
-## Code Scan Mode
+Compare the candidate against its nearest alternative. Structural resemblance
+alone leaves the name unearned; the distinguishing field decides it.
 
-- Run ICA before GoF naming.
-- Pass only kept ICA candidates into this lens.
-- Reject pattern names attached to dropped or speculative ICA candidates.
-- Stop with `No pressure -> no pattern` when the user asks for GoF names without pressure evidence.
+### 3. Liveness Gate
 
-## Planning Mode
+Confirm the named seam and its owning decision remain active. Check the entry
+owner status and `last_verified`. A `superseded` entry produces a rejected
+verdict that names its successor.
 
-Ask planned-ICA questions before naming a pattern hypothesis:
+## Verdicts
 
-- Which seam will change?
-- How does caller complexity concentrate behind the Interface?
-- What deletion-test consequence would prove the Module earns its keep?
-- Which locality or leverage improves?
-- What second adapter, variation point, or future caller would make the seam real?
+- **Kept**: three gates pass and the entry is `admitted`.
+- **Rejected**: pressure is absent, the seam is vague, plain design vocabulary
+  already describes it, the entry is `rejected-as-pattern`, or the entry is
+  `superseded`.
+- **Deferred**: pressure exists and identity fits, and implementation proof,
+  a second adapter, or a second use case has not arrived. A `reference-only`
+  entry reaches deferred at best.
 
-Name patterns as hypotheses until implementation or artifact evidence exists.
+A **Local Label** is an accurate project-specific name offered as a more
+precise alternative. Return it as a verdict; it stays out of the library.
 
-## Pattern Referee Mode
+## Local Heuristics
 
-For each candidate pattern name:
+Apply each where it bears on the candidate:
 
-- Keep when pressure exists, the seam owner is named, and the deletion test passes.
-- Reject when pressure is absent, the seam is vague, ICA vocabulary is enough, or the name adds decorative abstraction.
-- Defer when pressure exists but a second adapter, second use case, or implementation proof has not arrived.
-
-Use non-GoF locality labels when the GoF catalog would misname the pressure.
+- Deletion test: when the claim rests on a module earning its keep.
+- Module and interface pressure: when the claim rests on concentrated
+  complexity behind one seam.
+- Second adapter: when the claim rests on a variation point.
 
 ## Output Shape
 
 Return:
 
-- Kept pattern names.
-- Rejected pattern names.
-- Deferred pattern names.
+- Kept names, each with its library entry and passing evidence.
+- Rejected names, each with the failing gate.
+- Deferred names, each with the arriving proof that would keep it.
 - Seam owner.
 - Pressure proof.
-- Deletion-test consequence.
 - Next safe action.
-
-## V2
-
-- Add a runtime validator only after repeated prose-gate failure or machine-readable output need.
-- Introduce an ICA facade-backed output envelope only through ICA and `cli-author`.
-- Overlay ICA references only if standalone discoverability creates duplicate-review behavior.
 
 ## Next Safe Action
 
-- If pressure exists, name kept, rejected, and deferred patterns.
-- If pressure is missing, route to ICA, planned-ICA questions, or a pressure-artifact request.
+- Pressure present: return the kept, rejected, and deferred verdicts.
+- Pressure absent: return the Missing-Pressure Handoff.
