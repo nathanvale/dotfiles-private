@@ -1,12 +1,12 @@
 #!/usr/bin/env bun
 
 import {
+	buildRecordRequest,
 	type HookRunResult,
 	type RecordRequest,
-	type SkillDetection,
-	buildRecordRequest,
 	resolveGitRoot,
 	runSkillFeedbackRecord,
+	type SkillDetection,
 } from './skill-feedback-runtime'
 
 export const CODEX_STOP_HOOK_COMMAND =
@@ -32,7 +32,9 @@ export interface CodexStopRuntime {
 	runRecord: (request: RecordRequest) => Promise<HookRunResult>
 }
 
-export function isCodexStopHookInput(value: unknown): value is CodexStopHookInput {
+export function isCodexStopHookInput(
+	value: unknown,
+): value is CodexStopHookInput {
 	if (!value || typeof value !== 'object' || Array.isArray(value)) return false
 	const input = value as Record<string, unknown>
 	if (typeof input.cwd !== 'string' || input.cwd.trim() === '') return false
@@ -45,7 +47,11 @@ export function isCodexStopHookInput(value: unknown): value is CodexStopHookInpu
 		'permission_mode',
 		'last_assistant_message',
 	] as const) {
-		if (field in input && input[field] !== undefined && typeof input[field] !== 'string') {
+		if (
+			field in input &&
+			input[field] !== undefined &&
+			typeof input[field] !== 'string'
+		) {
 			return false
 		}
 	}

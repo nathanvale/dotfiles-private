@@ -118,7 +118,9 @@ export function buildRecordRequest(
 
 function captureTelemetryForSource(
 	source: SkillFeedbackSource,
-): Required<Pick<DetectionTelemetry, 'capture_runtime' | 'skill_identity_provenance'>> {
+): Required<
+	Pick<DetectionTelemetry, 'capture_runtime' | 'skill_identity_provenance'>
+> {
 	switch (source) {
 		case 'claude-stop':
 			return {

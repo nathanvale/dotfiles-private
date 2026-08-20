@@ -3,29 +3,29 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
-	CODEX_STOP_HOOK_COMMAND,
-	detectSkillFromCodexStopInput,
-	handleSkillFeedbackCodexStop,
-	isCodexStopHookInput,
-} from './skill-feedback-codex-stop'
-import {
-	analyzeSkillFeedbackClaudeTranscriptText,
-	detectSkillFromClaudeTranscriptText,
-	handleSkillFeedbackStop,
-} from './skill-feedback-stop'
-import {
 	createDefaultCodexRuntime,
 	detectSkillFromCodexNotify,
 	dispatchCodexNotify,
 	parseNextCommand,
 	parseNotifyInvocation,
 } from './codex-notify-dispatcher'
+import {
+	CODEX_STOP_HOOK_COMMAND,
+	detectSkillFromCodexStopInput,
+	handleSkillFeedbackCodexStop,
+	isCodexStopHookInput,
+} from './skill-feedback-codex-stop'
 import type { RecordRequest } from './skill-feedback-runtime'
 import {
-	type CorrelationWitnessRequest,
 	buildRecordRequest,
+	type CorrelationWitnessRequest,
 	runBufferedProcess,
 } from './skill-feedback-runtime'
+import {
+	analyzeSkillFeedbackClaudeTranscriptText,
+	detectSkillFromClaudeTranscriptText,
+	handleSkillFeedbackStop,
+} from './skill-feedback-stop'
 
 const GENERATED_TS = '2026-06-11T10:00:00.000Z'
 const FIXTURE_PATH = join(
@@ -104,8 +104,7 @@ function closeoutToolResultContent(
 
 function closeoutCommandTranscriptLine(
 	toolUseId: string,
-	command =
-		'bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < /tmp/skill-feedback-closeout.json',
+	command = 'bun run skills/skill-feedback/src/skill-feedback-runner.ts closeout < /tmp/skill-feedback-closeout.json',
 ): string {
 	return JSON.stringify({
 		type: 'assistant',
@@ -146,7 +145,10 @@ function trustedCloseoutTranscriptLines(
 	content: string,
 	toolUseId: string,
 ): string[] {
-	return [closeoutCommandTranscriptLine(toolUseId), toolResultTranscriptLine(content, toolUseId)]
+	return [
+		closeoutCommandTranscriptLine(toolUseId),
+		toolResultTranscriptLine(content, toolUseId),
+	]
 }
 
 function createMemoryDedupe() {
@@ -170,8 +172,7 @@ describe('skill-feedback hooks', () => {
 			source: 'claude-stop',
 			skill: 'fallow',
 			outcome: 'ambiguous',
-			detectionId:
-				'session-fixture-skill-feedback:tool-result-fixture-fallow',
+			detectionId: 'session-fixture-skill-feedback:tool-result-fixture-fallow',
 		})
 	})
 
@@ -192,8 +193,7 @@ describe('skill-feedback hooks', () => {
 		expect(analysis.detection).toMatchObject({
 			source: 'claude-stop',
 			skill: 'fallow',
-			detectionId:
-				'session-fixture-skill-feedback:tool-result-fixture-fallow',
+			detectionId: 'session-fixture-skill-feedback:tool-result-fixture-fallow',
 		})
 		expect(analysis.closeoutCandidates).toEqual([
 			{
@@ -246,7 +246,9 @@ describe('skill-feedback hooks', () => {
 	})
 
 	test('Claude Stop absent closeout envelope leaves candidates empty', async () => {
-		const analysis = analyzeSkillFeedbackClaudeTranscriptText(await fixtureText())
+		const analysis = analyzeSkillFeedbackClaudeTranscriptText(
+			await fixtureText(),
+		)
 
 		expect(analysis.detection?.skill).toBe('fallow')
 		expect(analysis.closeoutCandidates).toEqual([])
@@ -262,15 +264,17 @@ describe('skill-feedback hooks', () => {
 			closeoutToolResultContent('closeout_after'),
 			'toolu_closeout_after',
 		)
-		const transcript = [...before, ...skillLaunchTranscript('fallow'), ...after].join(
-			'\n',
-		)
+		const transcript = [
+			...before,
+			...skillLaunchTranscript('fallow'),
+			...after,
+		].join('\n')
 
 		const analysis = analyzeSkillFeedbackClaudeTranscriptText(transcript)
 
-		expect(analysis.closeoutCandidates.map((candidate) => candidate.reportId)).toEqual([
-			'closeout_after',
-		])
+		expect(
+			analysis.closeoutCandidates.map((candidate) => candidate.reportId),
+		).toEqual(['closeout_after'])
 	})
 
 	test('Claude Stop returns ambiguous closeout candidates without choosing', () => {
@@ -288,10 +292,9 @@ describe('skill-feedback hooks', () => {
 
 		const analysis = analyzeSkillFeedbackClaudeTranscriptText(transcript)
 
-		expect(analysis.closeoutCandidates.map((candidate) => candidate.reportId)).toEqual([
-			'closeout_one',
-			'closeout_two',
-		])
+		expect(
+			analysis.closeoutCandidates.map((candidate) => candidate.reportId),
+		).toEqual(['closeout_one', 'closeout_two'])
 	})
 
 	test('Claude Stop ignores incomplete closeout envelopes and diagnoses malformed JSON', () => {
@@ -633,7 +636,10 @@ describe('skill-feedback hooks', () => {
 				}),
 				finalizeCorrelationWitness: async (request) => {
 					finalized.push(request)
-					return { status: 'blocked', diagnostics: request.closeoutDiagnostics ?? [] }
+					return {
+						status: 'blocked',
+						diagnostics: request.closeoutDiagnostics ?? [],
+					}
 				},
 			},
 		)
@@ -987,8 +993,16 @@ describe('skill-feedback hooks', () => {
 				cwd: () => '/fallback',
 				nowIso: () => GENERATED_TS,
 				resolveGitRoot: async (cwd) => cwd,
-				runNext: async () => ({ exitCode: 1, stdout: '', stderr: 'forward failed' }),
-				runRecord: async () => ({ exitCode: 1, stdout: '', stderr: 'record failed' }),
+				runNext: async () => ({
+					exitCode: 1,
+					stdout: '',
+					stderr: 'forward failed',
+				}),
+				runRecord: async () => ({
+					exitCode: 1,
+					stdout: '',
+					stderr: 'record failed',
+				}),
 			},
 		)
 
@@ -1010,10 +1024,7 @@ describe('skill-feedback hooks', () => {
 		})
 
 		expect(
-			parseNotifyInvocation(
-				['--next', 'handler', 'turn-ended', payload],
-				'',
-			),
+			parseNotifyInvocation(['--next', 'handler', 'turn-ended', payload], ''),
 		).toEqual({
 			payload,
 			nextCommand: ['handler', 'turn-ended'],

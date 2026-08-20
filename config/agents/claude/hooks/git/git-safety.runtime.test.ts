@@ -42,7 +42,8 @@ function createTempRepo(): { cwd: string; branch: string } {
 	runGit(cwd, ['add', 'README.md'])
 	runGit(cwd, ['commit', '-m', 'chore: init'])
 
-	const branch = runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || 'main'
+	const branch =
+		runGit(cwd, ['rev-parse', '--abbrev-ref', 'HEAD']).stdout || 'main'
 	return { cwd, branch }
 }
 

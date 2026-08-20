@@ -1,13 +1,13 @@
 #!/usr/bin/env bun
 
 import {
+	buildRecordRequest,
 	type HookRunResult,
 	type RecordRequest,
-	type SkillFeedbackOutcome,
-	buildRecordRequest,
 	resolveGitRoot,
 	runBufferedProcess,
 	runSkillFeedbackRecord,
+	type SkillFeedbackOutcome,
 } from './skill-feedback-runtime'
 
 export interface CodexSkillDetection {
@@ -21,7 +21,10 @@ export interface CodexNotifyRuntime {
 	cwd: () => string
 	nowIso: () => string
 	resolveGitRoot: (cwd: string) => Promise<string>
-	runNext: (command: readonly string[], payload: string) => Promise<HookRunResult>
+	runNext: (
+		command: readonly string[],
+		payload: string,
+	) => Promise<HookRunResult>
 	runRecord: (request: RecordRequest) => Promise<HookRunResult>
 }
 
@@ -49,7 +52,9 @@ export function parseNotifyInvocation(
 	const payload = argv[payloadIndex] ?? ''
 	return {
 		payload,
-		nextCommand: parseNextCommand(argv.filter((_, index) => index !== payloadIndex)),
+		nextCommand: parseNextCommand(
+			argv.filter((_, index) => index !== payloadIndex),
+		),
 	}
 }
 
@@ -94,21 +99,19 @@ export async function dispatchCodexNotify(
 			? runtime.runNext(nextCommand, payload)
 			: Promise.resolve({ exitCode: 0, stdout: '', stderr: '' })
 	const capture = detection
-		? runtime
-				.resolveGitRoot(detection.cwd)
-				.then((cwd) =>
-					runtime.runRecord(
-						buildRecordRequest(
-							cwd,
-							{
-								source: detection.source,
-								skill: detection.skill,
-								outcome: detection.outcome,
-							},
-							runtime.nowIso(),
-						),
+		? runtime.resolveGitRoot(detection.cwd).then((cwd) =>
+				runtime.runRecord(
+					buildRecordRequest(
+						cwd,
+						{
+							source: detection.source,
+							skill: detection.skill,
+							outcome: detection.outcome,
+						},
+						runtime.nowIso(),
 					),
-				)
+				),
+			)
 		: Promise.resolve({ exitCode: 0, stdout: '', stderr: '' })
 	const [forwardResult, captureResult] = await Promise.allSettled([
 		forward,
@@ -148,9 +151,7 @@ function parseJsonObject(text: string): Record<string, unknown> | null {
 	}
 }
 
-function runSucceeded(
-	result: PromiseSettledResult<HookRunResult>,
-): boolean {
+function runSucceeded(result: PromiseSettledResult<HookRunResult>): boolean {
 	return result.status === 'fulfilled' && result.value.exitCode === 0
 }
 
@@ -172,9 +173,7 @@ function stringAt(
 		}
 		current = (current as Record<string, unknown>)[part]
 	}
-	return typeof current === 'string' && current.trim() !== ''
-		? current
-		: null
+	return typeof current === 'string' && current.trim() !== '' ? current : null
 }
 
 function normalizeOutcome(value: string | null): SkillFeedbackOutcome {

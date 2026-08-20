@@ -1,16 +1,16 @@
 {
-  "hooks": {
-    "InstructionsLoaded": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bun run $HOME/code/dotfiles/config/agents/claude/hooks/instructions/log-instructions-loaded.ts",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
-  }
+	"hooks": {
+		"InstructionsLoaded": [
+			{
+				"matcher": "*",
+				"hooks": [
+					{
+						"type": "command",
+						"command": "bun run $HOME/code/dotfiles/config/agents/claude/hooks/instructions/log-instructions-loaded.ts",
+						"timeout": 5
+					}
+				]
+			}
+		]
+	}
 }

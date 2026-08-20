@@ -15,7 +15,12 @@ describe('event-bus-client', () => {
 
 	test('postEvent accepts optional correlationId', async () => {
 		await expect(
-			postEvent(process.cwd(), 'safety.blocked', { reason: 'test' }, 'test-correlation-123'),
+			postEvent(
+				process.cwd(),
+				'safety.blocked',
+				{ reason: 'test' },
+				'test-correlation-123',
+			),
 		).resolves.toBeUndefined()
 	})
 

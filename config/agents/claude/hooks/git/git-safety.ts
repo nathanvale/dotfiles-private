@@ -130,9 +130,7 @@ export function resolveEffectiveGitCwd(
 			}
 
 			// Skip other options-with-value (e.g. -c, --git-dir)
-			if (
-				['-c', '--git-dir', '--work-tree', '--namespace'].includes(word)
-			) {
+			if (['-c', '--git-dir', '--work-tree', '--namespace'].includes(word)) {
 				i += 2
 				continue
 			}
@@ -1184,7 +1182,10 @@ if (import.meta.main) {
 			safetyMode !== 'advisory' &&
 			(hasCommitAction || hasImplicitForceLeasePush)
 		) {
-			const effectiveCwd = resolveEffectiveGitCwd(command, input.cwd ?? process.cwd())
+			const effectiveCwd = resolveEffectiveGitCwd(
+				command,
+				input.cwd ?? process.cwd(),
+			)
 			const branch = await getCurrentBranch(effectiveCwd)
 			if (branch && PROTECTED_BRANCHES.includes(branch)) {
 				if (hasCommitAction) {

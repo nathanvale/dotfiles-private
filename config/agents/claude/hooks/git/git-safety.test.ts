@@ -13,7 +13,11 @@ import {
 	isCommitCommand,
 	resolveEffectiveGitCwd,
 } from './git-safety.ts'
-import { extractCommandHead, splitShellSegments, tokenizeShell } from './shell-tokenizer.ts'
+import {
+	extractCommandHead,
+	splitShellSegments,
+	tokenizeShell,
+} from './shell-tokenizer.ts'
 
 describe('git-safety worktree patterns', () => {
 	describe('git worktree remove --force', () => {
@@ -688,7 +692,9 @@ describe('issue 4: git global options do not bypass safety checks', () => {
 	})
 
 	test('commit message mentioning --no-verify does not count as bypass flag', () => {
-		const result = isCommitCommand('git commit -m "docs: explain when to use --no-verify"')
+		const result = isCommitCommand(
+			'git commit -m "docs: explain when to use --no-verify"',
+		)
 		expect(result.isCommit).toBe(true)
 		expect(result.hasNoVerify).toBe(false)
 	})
@@ -811,7 +817,9 @@ describe('issue 5: shell indirection does not bypass safety checks', () => {
 			'sh -c "sh -c \\"sh -c \\\\\\"sh -c \\\\\\\\\\\\\\"sh -c \\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"git reset --hard\\\\\\\\\\\\\\\\\\\\\\\\\\\\\\"\\\\\\\\\\\\\\"\\\\\\\\"\\\\""',
 		)
 		expect(result.blocked).toBe(true)
-		expect(result.reason ?? '').toMatch(/nesting too deep|Unbalanced shell input/i)
+		expect(result.reason ?? '').toMatch(
+			/nesting too deep|Unbalanced shell input/i,
+		)
 	})
 })
 
@@ -882,7 +890,9 @@ describe('tokenizeShell', () => {
 	})
 
 	test('quoted heredoc delimiter works', () => {
-		const { tokens, unbalanced } = tokenizeShell("cat <<'EOF'\nsome $variable\nEOF")
+		const { tokens, unbalanced } = tokenizeShell(
+			"cat <<'EOF'\nsome $variable\nEOF",
+		)
 		expect(unbalanced).toBe(false)
 		const heredocs = tokens.filter((t) => t.type === 'heredoc-body')
 		expect(heredocs).toHaveLength(1)
@@ -924,7 +934,9 @@ describe('splitShellSegments', () => {
 	})
 
 	test('heredoc body excluded from segments', () => {
-		const { segments } = splitShellSegments("git commit -F - <<'EOF'\n--no-verify in body\nEOF")
+		const { segments } = splitShellSegments(
+			"git commit -F - <<'EOF'\n--no-verify in body\nEOF",
+		)
 		// The heredoc body should not appear in any segment
 		for (const seg of segments) {
 			expect(seg).not.toContain('--no-verify in body')
@@ -992,22 +1004,34 @@ describe('checkFileEdit .git pattern', () => {
 describe('getGitSafetyMode', () => {
 	test('defaults to strict', () => {
 		expect(getGitSafetyMode({})).toBe('strict')
-		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: undefined })).toBe('strict')
+		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: undefined })).toBe(
+			'strict',
+		)
 	})
 
 	test('parses commit-guard', () => {
-		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: 'commit-guard' })).toBe('commit-guard')
-		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: ' COMMIT-GUARD ' })).toBe('commit-guard')
+		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: 'commit-guard' })).toBe(
+			'commit-guard',
+		)
+		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: ' COMMIT-GUARD ' })).toBe(
+			'commit-guard',
+		)
 	})
 
 	test('parses advisory', () => {
-		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: 'advisory' })).toBe('advisory')
-		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: ' Advisory ' })).toBe('advisory')
+		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: 'advisory' })).toBe(
+			'advisory',
+		)
+		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: ' Advisory ' })).toBe(
+			'advisory',
+		)
 	})
 
 	test('falls back to strict on unknown values', () => {
 		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: 'off' })).toBe('strict')
-		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: 'permissive' })).toBe('strict')
+		expect(getGitSafetyMode({ CLAUDE_GIT_SAFETY_MODE: 'permissive' })).toBe(
+			'strict',
+		)
 	})
 })
 
@@ -1018,7 +1042,10 @@ function simulateModeDecision(
 ): { denied: boolean; warned: boolean } {
 	const commandResult = checkCommand(command)
 	const commitCheck = isCommitCommand(command, commandResult.segments)
-	const hasCommitAction = hasProtectedBranchCommitAction(command, commandResult.segments)
+	const hasCommitAction = hasProtectedBranchCommitAction(
+		command,
+		commandResult.segments,
+	)
 	const hasImplicitForceLeasePush = hasImplicitProtectedBranchForceLeasePush(
 		command,
 		commandResult.segments,
@@ -1029,7 +1056,11 @@ function simulateModeDecision(
 		return { denied: true, warned: false }
 	}
 
-	if (mode !== 'advisory' && isProtected && (hasCommitAction || hasImplicitForceLeasePush)) {
+	if (
+		mode !== 'advisory' &&
+		isProtected &&
+		(hasCommitAction || hasImplicitForceLeasePush)
+	) {
 		return { denied: true, warned: false }
 	}
 
@@ -1045,19 +1076,31 @@ function simulateModeDecision(
 
 describe('runtime mode behavior', () => {
 	test('strict denies destructive commands', () => {
-		const result = simulateModeDecision('git reset --hard', 'strict', 'feature/foo')
+		const result = simulateModeDecision(
+			'git reset --hard',
+			'strict',
+			'feature/foo',
+		)
 		expect(result.denied).toBe(true)
 		expect(result.warned).toBe(false)
 	})
 
 	test('commit-guard allows destructive commands but warns', () => {
-		const result = simulateModeDecision('git reset --hard', 'commit-guard', 'feature/foo')
+		const result = simulateModeDecision(
+			'git reset --hard',
+			'commit-guard',
+			'feature/foo',
+		)
 		expect(result.denied).toBe(false)
 		expect(result.warned).toBe(true)
 	})
 
 	test('commit-guard blocks commits on protected branches', () => {
-		const result = simulateModeDecision('git commit -m "feat: x"', 'commit-guard', 'main')
+		const result = simulateModeDecision(
+			'git commit -m "feat: x"',
+			'commit-guard',
+			'main',
+		)
 		expect(result.denied).toBe(true)
 	})
 
@@ -1071,7 +1114,11 @@ describe('runtime mode behavior', () => {
 	})
 
 	test('advisory never denies protected-branch commit attempts', () => {
-		const result = simulateModeDecision('git commit -m "feat: x"', 'advisory', 'main')
+		const result = simulateModeDecision(
+			'git commit -m "feat: x"',
+			'advisory',
+			'main',
+		)
 		expect(result.denied).toBe(false)
 	})
 
@@ -1090,7 +1137,9 @@ describe('resolveEffectiveGitCwd', () => {
 	const FALLBACK = '/session/cwd'
 
 	test('returns fallback when no cd or -C is present', () => {
-		expect(resolveEffectiveGitCwd('git commit -m "test"', FALLBACK)).toBe(FALLBACK)
+		expect(resolveEffectiveGitCwd('git commit -m "test"', FALLBACK)).toBe(
+			FALLBACK,
+		)
 	})
 
 	test('extracts -C path from git invocation', () => {
@@ -1113,7 +1162,10 @@ describe('resolveEffectiveGitCwd', () => {
 
 	test('extracts cd path from preceding segment', () => {
 		expect(
-			resolveEffectiveGitCwd('cd /other/repo && git commit -m "test"', FALLBACK),
+			resolveEffectiveGitCwd(
+				'cd /other/repo && git commit -m "test"',
+				FALLBACK,
+			),
 		).toBe('/other/repo')
 	})
 
@@ -1133,9 +1185,9 @@ describe('resolveEffectiveGitCwd', () => {
 	})
 
 	test('ignores cd that is not followed by a git segment', () => {
-		expect(
-			resolveEffectiveGitCwd('cd /tmp && echo hello', FALLBACK),
-		).toBe(FALLBACK)
+		expect(resolveEffectiveGitCwd('cd /tmp && echo hello', FALLBACK)).toBe(
+			FALLBACK,
+		)
 	})
 
 	test('handles env -C prefix with git -C', () => {
@@ -1147,7 +1199,10 @@ describe('resolveEffectiveGitCwd', () => {
 
 	test('handles quoted paths in -C', () => {
 		expect(
-			resolveEffectiveGitCwd('git -C "/path with spaces" commit -m "test"', FALLBACK),
+			resolveEffectiveGitCwd(
+				'git -C "/path with spaces" commit -m "test"',
+				FALLBACK,
+			),
 		).toBe('/path with spaces')
 	})
 })

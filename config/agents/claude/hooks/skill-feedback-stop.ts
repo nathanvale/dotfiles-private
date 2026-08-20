@@ -5,16 +5,16 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative } from 'node:path'
 import {
-	type HookRunResult,
+	buildRecordRequest,
 	type CorrelationCloseoutCandidate,
 	type CorrelationWitnessRequest,
 	type FinalizeCorrelationWitnessResult,
+	type HookRunResult,
 	type RecordRequest,
-	type SkillDetection,
-	buildRecordRequest,
 	resolveGitRoot,
 	runSkillFeedbackCorrelationWitness,
 	runSkillFeedbackRecord,
+	type SkillDetection,
 } from './skill-feedback-runtime'
 
 export interface StopHookInput {
@@ -117,7 +117,8 @@ export function analyzeSkillFeedbackClaudeTranscriptText(
 				parsed,
 				closeoutCommandToolUseIds,
 			)) {
-				if (result.kind === 'candidate') closeoutCandidates.push(result.candidate)
+				if (result.kind === 'candidate')
+					closeoutCandidates.push(result.candidate)
 				else diagnostics.push(result.diagnostic)
 			}
 		}
@@ -226,7 +227,12 @@ function isSkillFeedbackCloseoutCommand(
 		'skills/skill-feedback/src/skill-feedback-runner.ts',
 		'./skills/skill-feedback/src/skill-feedback-runner.ts',
 	])
-	if (runtime !== 'bun' || run !== 'run' || !script || !runnerPaths.has(script)) {
+	if (
+		runtime !== 'bun' ||
+		run !== 'run' ||
+		!script ||
+		!runnerPaths.has(script)
+	) {
 		return false
 	}
 	if (subcommand !== 'closeout') return false
@@ -270,11 +276,16 @@ function jsonObjectsFromToolResultText(text: string): unknown[] {
 	}
 }
 
-function closeoutCandidateFromEnvelope(payload: unknown): CloseoutParseResult | null {
+function closeoutCandidateFromEnvelope(
+	payload: unknown,
+): CloseoutParseResult | null {
 	const envelope = objectFrom(payload)
 	if (!envelope) return null
 	if (envelope.malformedCloseoutEnvelope === true) {
-		return { kind: 'diagnostic', diagnostic: 'closeout_envelope_malformed_json' }
+		return {
+			kind: 'diagnostic',
+			diagnostic: 'closeout_envelope_malformed_json',
+		}
 	}
 	if (envelope.status !== 'ok') return null
 	const data = objectFrom(envelope.data)

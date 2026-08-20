@@ -1,4 +1,4 @@
-({
+;({
 	katexConfig: {
 		macros: {},
 	},
@@ -12,4 +12,4 @@
 	mermaidConfig: {
 		startOnLoad: false,
 	},
-});
+})

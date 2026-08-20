@@ -56,7 +56,11 @@ describe('parsePorcelainStatus', () => {
 	})
 
 	test('parses added files correctly', () => {
-		const output = ['## main', 'A  new-staged.ts', 'AM staged-then-modified.ts'].join('\n')
+		const output = [
+			'## main',
+			'A  new-staged.ts',
+			'AM staged-then-modified.ts',
+		].join('\n')
 		const result = parsePorcelainStatus(output)
 
 		expect(result.branch).toBe('main')
