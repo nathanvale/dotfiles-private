@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { basename, dirname, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 
-const repositoryRoot = resolve(import.meta.dir, "../../..");
+const repositoryRoot = resolve(import.meta.dir, "../../../..");
 const skillPath = resolve(import.meta.dir, "../SKILL.md");
 const skill = readFileSync(skillPath, "utf8");
 const match = skill.match(/^---\n(?<frontmatter>[\s\S]*?)\n---\n(?<body>[\s\S]*)$/u);
@@ -22,15 +22,21 @@ describe("vault-git skill contract", () => {
 	});
 
 	test("named runtime and invocation-proof owners exist", () => {
-		const ownerPaths = [
-			"runtime/vault-git-transaction-manager",
-			"scripts/command-entrypoint.integration.test.ts",
-		] as const;
+		const runtimeOwnerPath = ".agents/runtime/vault-git-transaction-manager";
+		const invocationProofPath = `${runtimeOwnerPath}/tests/vault-git.integration.test.ts`;
+		const ownerPaths = [runtimeOwnerPath, invocationProofPath] as const;
 
 		for (const ownerPath of ownerPaths) {
 			expect(skill).toContain(`\`${ownerPath}\``);
 			expect(existsSync(resolve(repositoryRoot, ownerPath))).toBe(true);
 		}
+
+		const invocationProof = readFileSync(
+			resolve(repositoryRoot, invocationProofPath),
+			"utf8",
+		);
+		expect(invocationProof).toContain("runCliProcess(");
+		expect(invocationProof).toContain("productionCliPath");
 	});
 
 	test("body binds the begin, mutate-admitted-paths, complete workflow in order", () => {

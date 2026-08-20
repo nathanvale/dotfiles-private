@@ -20,7 +20,7 @@ Check `${XDG_CONFIG_HOME:-$HOME/.config}/context/vault-git-paused` before invoki
 
 ### Pause Entry Inspection
 
-Before creating the marker, run the read-only package command `bun run --silent vault-git status --json` from `runtime/vault-git-transaction-manager`.
+Before creating the marker, run the read-only package command `bun run --silent vault-git status --json` from `.agents/runtime/vault-git-transaction-manager`.
 
 - Proceed only when the result proves transaction state `absent` or `closed` and reports no unknown publication.
 - Stop on every other state or blocker. Follow the emitted continuation; do not create the marker.
@@ -40,14 +40,14 @@ Pause mode freezes any existing transaction-manager receipt or lease evidence. R
 
 ## Transaction Manager Workflow
 
-1. From `runtime/vault-git-transaction-manager`, invoke the `vault-git` package entry with `bun run --silent vault-git`; use its discovery or help for command inputs. Invocation proof: repo-root `scripts/command-entrypoint.integration.test.ts`.
+1. From `.agents/runtime/vault-git-transaction-manager`, invoke the `vault-git` package entry with `bun run --silent vault-git`; use its discovery or help for command inputs. Invocation proof: `.agents/runtime/vault-git-transaction-manager/tests/vault-git.integration.test.ts`.
 2. Call `begin` with the semantic event and complete intended path set.
 3. Mutate only paths admitted by the transaction.
 4. Use `join` when a nested workflow needs more paths.
 5. Call `complete` with a semantic summary. Never infer completion from local state; skipping the runtime's completion checks strands the lease and leaves the transaction open.
 6. On any refusal, run `doctor` first, then follow the CLI's repair hint.
 
-Use `tidy now` only for explicit hygiene. Never create a visible hygiene task; `runtime/vault-git-transaction-manager` owns its workers.
+Use `tidy now` only for explicit hygiene. Never create a visible hygiene task; `.agents/runtime/vault-git-transaction-manager` owns its workers.
 
 Outside Direct Git Mode, never run raw Git against the vault; raw writes bypass single-writer fencing and corrupt transaction receipts. `activation_blocked`, `lease_active`, `remote_unavailable`, and every other refusal are not pause triggers; follow the repair hint unless the owner explicitly selects pause mode.
 

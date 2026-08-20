@@ -15,7 +15,7 @@ export const FALLOW_RUNNER_CONTRACT_ID = "fallow.runner" as const;
  *
  * Increment when agent-visible result semantics change.
  */
-export const FALLOW_RUNNER_SCHEMA_VERSION = "1" as const;
+export const FALLOW_RUNNER_SCHEMA_VERSION = "2" as const;
 
 /**
  * Default maximum envelope size before raw output is omitted.
@@ -310,6 +310,10 @@ const auditFlags = {
 		type: "string",
 		description: "Optional audit base ref.",
 	},
+	"--baseline-tree": {
+		type: "path",
+		description: "Clean committed Git directory tree used for comparison.",
+	},
 	"--no-cache": {
 		type: "boolean",
 		description: "Disable Fallow's reusable audit cache for this run.",
@@ -398,7 +402,7 @@ export const fallowRunnerContracts = defineCommandFacadeContract(
 			script: "fallow-runner",
 			summary: "Run Fallow changed-code risk evidence.",
 			usage: [
-				"audit [--root <repo>] [--base-ref <ref>] [--no-cache] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]",
+				"audit [--root <repo>] [--base-ref <ref> | --baseline-tree <directory>] [--no-cache] [--plain|--json] [--include-raw-output] [--max-output-bytes <bytes>]",
 			],
 			json: true,
 			audience: "agent",

@@ -13,6 +13,7 @@
 		".agents/runtime/cli-test-fixtures",
 		".agents/runtime/mcporter-transport",
 		".agents/runtime/session-corpus",
+		".agents/runtime/vault-git-transaction-manager",
 		".agents/runtime/warm-chrome",
 		".agents/skills/bft-booking",
 		".agents/skills/bitbucket",

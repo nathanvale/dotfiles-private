@@ -1,4 +1,14 @@
-import { chmod, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+	chmod,
+	mkdir,
+	mkdtemp,
+	readFile,
+	readdir,
+	realpath,
+	rm,
+	symlink,
+	writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, test } from "bun:test";
@@ -111,6 +121,25 @@ async function makeRepo(
 
 async function makeJsRepo(): Promise<string> {
 	return makeRepo();
+}
+
+function runGit(cwd: string, args: string[]): string {
+	const result = Bun.spawnSync(["git", ...args], {
+		cwd,
+		env: {
+			...process.env,
+			GIT_AUTHOR_NAME: "Fallow Test",
+			GIT_AUTHOR_EMAIL: "fallow-test@example.invalid",
+			GIT_COMMITTER_NAME: "Fallow Test",
+			GIT_COMMITTER_EMAIL: "fallow-test@example.invalid",
+		},
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	if (result.exitCode !== 0) {
+		throw new Error(result.stderr.toString());
+	}
+	return result.stdout.toString().trim();
 }
 
 function makeRuntime(
@@ -256,6 +285,40 @@ function expectEnvelope(
 	return parseJson(result.stdout);
 }
 
+async function makeCommittedBaselinePackage(): Promise<{
+	repository: string;
+	packageRoot: string;
+	commit: string;
+	tree: string;
+}> {
+	const repository = await mkdtemp(join(tmpdir(), "fallow-baseline-repo-"));
+	cleanupPaths.push(repository);
+	const packageRoot = join(repository, "package");
+	await mkdir(join(packageRoot, "src"), { recursive: true });
+	await writeFile(join(packageRoot, "package.json"), "{}\n", "utf-8");
+	await writeFile(
+		join(packageRoot, "src", "value.ts"),
+		'export const value = "baseline";\n',
+		"utf-8",
+	);
+	runGit(repository, ["init", "--quiet"]);
+	runGit(repository, ["config", "user.email", "fallow-test@example.invalid"]);
+	runGit(repository, ["config", "user.name", "Fallow Test"]);
+	runGit(repository, ["add", "package"]);
+	runGit(repository, ["commit", "--quiet", "-m", "baseline"]);
+	const commit = Bun.spawnSync({
+		cmd: ["git", "rev-parse", "HEAD"],
+		cwd: repository,
+		stdout: "pipe",
+	}).stdout.toString().trim();
+	const tree = Bun.spawnSync({
+		cmd: ["git", "rev-parse", "HEAD:package"],
+		cwd: repository,
+		stdout: "pipe",
+	}).stdout.toString().trim();
+	return { repository, packageRoot, commit, tree };
+}
+
 describe("U2 command contract", () => {
 	test("contract parses and exposes every accepted v1 subcommand", () => {
 		const result = parseCommandFacadeContract(fallowRunnerContracts, {
@@ -300,6 +363,9 @@ describe("U2 command contract", () => {
 		expect(Object.keys(fallowRunnerContracts.audit.flags)).toContain(
 			"--no-cache",
 		);
+		expect(Object.keys(fallowRunnerContracts.audit.flags)).toContain(
+			"--baseline-tree",
+		);
 
 		for (const command of ALL_COMMANDS.filter((item) => item !== "audit")) {
 			expect(Object.keys(fallowRunnerContracts[command].flags)).not.toContain(
@@ -307,6 +373,9 @@ describe("U2 command contract", () => {
 			);
 			expect(Object.keys(fallowRunnerContracts[command].flags)).not.toContain(
 				"--no-cache",
+			);
+			expect(Object.keys(fallowRunnerContracts[command].flags)).not.toContain(
+				"--baseline-tree",
 			);
 		}
 	});
@@ -376,6 +445,73 @@ describe("U2 command contract", () => {
 				"--confirm-current-task-apply",
 			);
 		}
+	});
+});
+
+describe("explicit baseline tree attribution", () => {
+	test("public CLI compares a migrated target against an immutable baseline tree", async () => {
+		const baseline = await makeCommittedBaselinePackage();
+		const target = await makeRepo({ localFallow: true });
+		await mkdir(join(target, "src"), { recursive: true });
+		await writeFile(
+			join(target, "src", "value.ts"),
+			'export const value = "target";\n',
+			"utf-8",
+		);
+		await writeFile(
+			join(target, "src", "introduced.ts"),
+			"export const introduced = true;\n",
+			"utf-8",
+		);
+		const fallowPath = join(target, "node_modules", ".bin", "fallow");
+		await writeFile(
+			fallowPath,
+			[
+				"#!/usr/bin/env bun",
+				'import { readFileSync } from "node:fs";',
+				'import { execFileSync } from "node:child_process";',
+				'const args = process.argv.slice(2);',
+				'const baseIndex = args.indexOf("--base");',
+				'const base = args[baseIndex + 1];',
+				'if (baseIndex < 0 || !base || !args.includes("--no-cache")) process.exit(41);',
+				'const value = readFileSync("src/value.ts", "utf-8");',
+				'const changed = execFileSync("git", ["diff", "--cached", "--name-only", base, "--"], { encoding: "utf-8" });',
+				'if (!value.includes("target") || !changed.includes("src/value.ts") || !changed.includes("src/introduced.ts")) process.exit(42);',
+				'process.stdout.write(JSON.stringify({ verdict: "fail", base_ref: "HEAD", changed_files_count: 2, attribution: { gate: "new-only", introduced: 1, inherited: 0 }, findings: [{ path: "src/introduced.ts", action: "add-tests", introduced: true }] }));',
+				"",
+			].join("\n"),
+			"utf-8",
+		);
+		await chmod(fallowPath, 0o755);
+
+		const result = Bun.spawnSync({
+			cmd: [
+				process.execPath,
+				join(import.meta.dir, "fallow-runner.ts"),
+				"audit",
+				"--root",
+				target,
+				"--baseline-tree",
+				baseline.packageRoot,
+			],
+			cwd: target,
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+
+		expect(result.exitCode).toBe(0);
+		expect(result.stderr.toString()).toBe("");
+		const envelope = parseJson(result.stdout.toString());
+		expect(envelope.cwd).toBe(target);
+		expect(envelope.status).toBe("issues");
+		expect(envelope.summary).toMatchObject({ total_findings: 1 });
+		expect(envelope.baseline).toMatchObject({
+				kind: "git-tree",
+				path: baseline.packageRoot,
+				repository: baseline.repository,
+				commit: baseline.commit,
+				tree: baseline.tree,
+		});
 	});
 });
 
@@ -1495,6 +1631,180 @@ describe("U6 output budget behavior", () => {
 		expect(JSON.parse(stdout)).toMatchObject({
 			status: "issues",
 			failure_category: "none",
+		});
+	});
+});
+
+describe("explicit baseline tree audit", () => {
+	async function makeBaselinePair(): Promise<{
+		baseline: string;
+		root: string;
+		tempHome: string;
+	}> {
+		const parent = await mkdtemp(join(tmpdir(), "fallow-baseline-pair-"));
+		cleanupPaths.push(parent);
+		const baseline = join(parent, "baseline");
+		const root = join(parent, "target");
+		const tempHome = join(parent, "tmp");
+		await mkdir(join(baseline, "src"), { recursive: true });
+		await mkdir(join(root, "src"), { recursive: true });
+		await mkdir(join(root, "node_modules", ".bin"), { recursive: true });
+		await mkdir(tempHome, { recursive: true });
+		await writeFile(join(baseline, "package.json"), '{"name":"fixture"}\n');
+		await writeFile(join(root, "package.json"), '{"name":"fixture"}\n');
+		await writeFile(join(baseline, "src", "value.ts"), "export const value = 1;\n");
+		await writeFile(join(root, "src", "value.ts"), "export const value = 2;\n");
+		const fallowPath = join(root, "node_modules", ".bin", "fallow");
+		await writeFile(
+			fallowPath,
+			[
+				"#!/usr/bin/env bun",
+				"const diff = Bun.spawnSync({ cmd: ['git', 'diff', '--name-only', 'HEAD'], stdout: 'pipe' });",
+				"const paths = new TextDecoder().decode(diff.stdout).trim().split('\\n').filter(Boolean);",
+				"process.stdout.write(JSON.stringify({ command: 'audit', verdict: paths.length ? 'fail' : 'pass', summary: { dead_code_issues: paths.length, complexity_findings: 0, duplication_clone_groups: 0 }, dead_code: { unused_exports: paths.map((path) => ({ path, export_name: 'value', introduced: true, actions: [{ kind: 'remove-export' }] })) }, complexity: { findings: [] }, duplication: { clone_groups: [] } }));",
+				"process.exit(paths.length ? 1 : 0);",
+				"",
+			].join("\n"),
+			"utf-8",
+		);
+		await chmod(fallowPath, 0o755);
+		return { baseline, root, tempHome };
+	}
+
+	function runBaselineCli(
+		root: string,
+		baseline: string,
+		tempHome: string,
+		extraArgs: string[] = [],
+	) {
+		return Bun.spawnSync({
+			cmd: [
+				"bun",
+				"run",
+				join(import.meta.dir, "fallow-runner.ts"),
+				"audit",
+				"--root",
+				root,
+				"--baseline-tree",
+				baseline,
+				...extraArgs,
+			],
+			env: { ...process.env, TMPDIR: tempHome },
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+	}
+
+	test("baseline tree is audit-only public contract", () => {
+		expect(Object.keys(fallowRunnerContracts.audit.flags)).toContain(
+			"--baseline-tree",
+		);
+		expect(fallowRunnerContracts.audit.usage.join("\n")).toContain(
+			"--baseline-tree <directory>",
+		);
+		for (const command of ALL_COMMANDS.filter((item) => item !== "audit")) {
+			expect(Object.keys(fallowRunnerContracts[command].flags)).not.toContain(
+				"--baseline-tree",
+			);
+		}
+	});
+
+	test("public CLI compares against and reports the exact read-only baseline tree", async () => {
+		const { baseline, root, tempHome } = await makeBaselinePair();
+		const before = await readFile(join(baseline, "src", "value.ts"), "utf-8");
+
+		const result = runBaselineCli(root, baseline, tempHome);
+		const stdout = new TextDecoder().decode(result.stdout);
+		const stderr = new TextDecoder().decode(result.stderr);
+		const envelope = JSON.parse(stdout) as Record<string, unknown>;
+
+		expect(result.exitCode).toBe(0);
+		expect(stderr).toBe("");
+		expect(envelope).toMatchObject({
+			status: "issues",
+			cwd: await realpath(root),
+			baseline: {
+				kind: "read-only-tree",
+				path: await realpath(baseline),
+			},
+			summary: { total_findings: 1 },
+		});
+		expect(await readFile(join(baseline, "src", "value.ts"), "utf-8")).toBe(
+			before,
+		);
+		expect(await readdir(tempHome)).toEqual([]);
+	});
+
+	test("plain output reports the exact baseline path", async () => {
+		const { baseline, root, tempHome } = await makeBaselinePair();
+		const result = runBaselineCli(root, baseline, tempHome, ["--plain"]);
+		const stdout = new TextDecoder().decode(result.stdout);
+
+		expect(result.exitCode).toBe(0);
+		expect(stdout).toContain(
+			`baseline kind=read-only-tree path=${await realpath(baseline)}`,
+		);
+	});
+
+	test("missing baseline tree fails closed before Fallow runs", async () => {
+		const { baseline, root, tempHome } = await makeBaselinePair();
+		await rm(baseline, { recursive: true });
+		const result = runBaselineCli(root, baseline, tempHome);
+		const envelope = JSON.parse(new TextDecoder().decode(result.stdout));
+
+		expect(result.exitCode).toBe(1);
+		expect(envelope).toMatchObject({
+			status: "blocked",
+			failure_category: "input",
+			write_effect: "none",
+		});
+	});
+
+	test("base ref plus baseline tree is rejected as ambiguous", async () => {
+		const { baseline, root, tempHome } = await makeBaselinePair();
+		const result = runBaselineCli(root, baseline, tempHome, [
+			"--base-ref",
+			"HEAD",
+		]);
+		const envelope = JSON.parse(new TextDecoder().decode(result.stdout));
+
+		expect(result.exitCode).toBe(2);
+		expect(envelope).toMatchObject({
+			status: "blocked",
+			failure_category: "input",
+		});
+	});
+
+	test("overlapping and self-referential trees fail closed", async () => {
+		const { baseline, root, tempHome } = await makeBaselinePair();
+		for (const [targetPath, baselinePath] of [
+			[root, root],
+			[root, join(root, "src")],
+			[baseline, join(baseline, "src")],
+		]) {
+			const result = runBaselineCli(targetPath, baselinePath, tempHome);
+			const envelope = JSON.parse(new TextDecoder().decode(result.stdout));
+			expect(result.exitCode).toBe(1);
+			expect(envelope).toMatchObject({
+				status: "blocked",
+				failure_category: "input",
+			});
+		}
+	});
+
+	test("a baseline symlink escaping the tree is rejected as unsafe", async () => {
+		const { baseline, root, tempHome } = await makeBaselinePair();
+		const outside = join(baseline, "..", "outside.ts");
+		await writeFile(outside, "export const outside = true;\n");
+		await symlink(outside, join(baseline, "src", "escape.ts"));
+		const result = runBaselineCli(root, baseline, tempHome);
+		const envelope = JSON.parse(new TextDecoder().decode(result.stdout));
+
+		expect(result.exitCode).toBe(1);
+		expect(envelope).toMatchObject({
+			status: "blocked",
+			failure_category: "input",
+			write_effect: "none",
 		});
 	});
 });
