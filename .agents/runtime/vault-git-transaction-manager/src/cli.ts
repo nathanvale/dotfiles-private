@@ -2554,26 +2554,28 @@ async function executeInvocation(
 				const doctorInvocation = invocation as VaultGitRuntimeInvocation & {
 					readonly command: "doctor";
 				};
-				const value =
-					taskId && launchGeneration
-						? await composeVaultGitDoctorFrontDoor(
-								composition,
-								now,
-								environment,
-							).runWorker({
-								taskId,
-								launchGeneration,
-								workerPid: process.pid,
-								diagnose: () =>
-									executeAuthoritativeDoctor(doctorInvocation, composition),
-							})
-						: await executeAuthoritativeDoctor(
-								doctorInvocation,
-								composition,
-							);
+				if (taskId && launchGeneration) {
+					const execution = await composeVaultGitDoctorFrontDoor(
+						composition,
+						now,
+						environment,
+					).runWorker({
+						taskId,
+						launchGeneration,
+						workerPid: process.pid,
+						diagnose: () =>
+							executeAuthoritativeDoctor(doctorInvocation, composition),
+					});
+					return execution.kind === "projected"
+						? { kind: "doctor_projection", value: execution.projection }
+						: { kind: "doctor", value: execution.result };
+				}
 				return {
 					kind: "doctor",
-					value,
+					value: await executeAuthoritativeDoctor(
+						doctorInvocation,
+						composition,
+					),
 				};
 			}
 		case "repair": {
@@ -3737,7 +3739,7 @@ function runtimeAction(input: {
  * Facade affordances for a next-action union, ready to spread into an envelope:
  *  - Runnable: one runtime action plus a continuation that references it by id.
  *  - Legitimate terminal none (`id === action_id`): no runtime action and no
- *    continuation — both fields are omitted (the facade rejects an empty
+ *    continuation; both fields are omitted (the facade rejects an empty
  *    `runtime_actions` array, so it must be absent, not `[]`).
  *  - Fail-closed unavailable: no runtime action, plus a `requires_operator`
  *    continuation carrying one sanitized `continuation_unavailable` constraint.
@@ -4014,5 +4016,8 @@ class BufferWriter implements CliWriter {
 }
 
 if (import.meta.main) {
-	process.exit(await main(Bun.argv.slice(2)));
+	// process.exit discards undrained stdout past the 64KiB pipe buffer, so a
+	// piped caller receives truncated JSON with a success exit. Set exitCode
+	// and let the runtime flush both streams on natural exit instead.
+	process.exitCode = await main(Bun.argv.slice(2));
 }

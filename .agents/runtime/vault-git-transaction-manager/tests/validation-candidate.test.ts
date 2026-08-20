@@ -407,6 +407,7 @@ describe("validation candidate runtime and environment", () => {
 			status: "failed",
 			failureClass: "candidate_setup",
 			stage: "candidate_setup",
+			setup: "proven_enrollment_defect",
 		});
 		expect(port.requests).toHaveLength(0);
 		expect(existsSync(fixture.candidatesRoot)).toBe(false);
@@ -491,6 +492,7 @@ describe("installed runtime runner", () => {
 			status: "failed",
 			failureClass: "candidate_setup",
 			stage: "candidate_setup",
+			setup: "proven_enrollment_defect",
 		});
 		expect(port.requests).toHaveLength(0);
 		expect(existsSync(fixture.candidatesRoot)).toBe(false);
@@ -520,6 +522,7 @@ describe("installed runtime runner", () => {
 			status: "failed",
 			failureClass: "candidate_setup",
 			stage: "candidate_setup",
+			setup: "proven_enrollment_defect",
 		});
 		expect(port.requests).toHaveLength(0);
 		expect(existsSync(fixture.candidatesRoot)).toBe(false);
@@ -597,6 +600,7 @@ describe("validation failure classes", () => {
 			status: "failed",
 			failureClass: "vault_content",
 			stage: "vault_check",
+			content: "insufficient",
 		});
 		expect(await candidateDirectories(fixture.candidatesRoot)).toEqual([]);
 		expect(await residueFiles(fixture.candidatesRoot)).toEqual([]);
@@ -632,6 +636,7 @@ describe("validation failure classes", () => {
 			status: "failed",
 			failureClass: "candidate_setup",
 			stage: "candidate_setup",
+			setup: "proven_candidate_integrity_defect",
 		});
 		expect(port.requests.filter(isCheckInvocation)).toHaveLength(0);
 		expect(await candidateDirectories(fixture.candidatesRoot)).toEqual([]);
@@ -667,6 +672,7 @@ describe("validation failure classes", () => {
 			status: "failed",
 			failureClass: "candidate_setup",
 			stage: "candidate_setup",
+			setup: "proven_candidate_integrity_defect",
 		});
 		expect(port.requests.filter(isCheckInvocation)).toHaveLength(0);
 		expect(existsSync(escapeMarker)).toBe(false);
@@ -1197,6 +1203,7 @@ describe("candidate residue", () => {
 				status: "failed",
 				failureClass: "candidate_setup",
 				stage: "candidate_setup",
+				setup: "proven_candidate_integrity_defect",
 			});
 			const entries = await readdir(fixture.candidatesRoot).catch(
 				() => [] as string[],
@@ -1240,6 +1247,7 @@ describe("candidate residue", () => {
 			status: "failed",
 			failureClass: "candidate_setup",
 			stage: "candidate_setup",
+			setup: "proven_candidate_integrity_defect",
 		});
 		expect(atCleanup.published).toBe(true);
 		expect(atCleanup.staged).toEqual([]);

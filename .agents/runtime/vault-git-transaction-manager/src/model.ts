@@ -542,6 +542,19 @@ export const VAULT_GIT_VALIDATION_FAILURE_CLASSES = [
 export type VaultGitValidationFailureClass =
 	(typeof VAULT_GIT_VALIDATION_FAILURE_CLASSES)[number];
 
+/** Closed candidate-setup proof owned by Validation and routed through Doctor. */
+export const VAULT_GIT_VALIDATION_SETUP_EVIDENCE = [
+	"proven_enrollment_defect",
+	"missing_private_enrollment_inputs",
+	"absent_external_ssh_prerequisites",
+	"proven_candidate_integrity_defect",
+	"insufficient",
+] as const;
+
+/** One candidate-setup proof retained with a Validation Failure. */
+export type VaultGitValidationSetupEvidence =
+	(typeof VAULT_GIT_VALIDATION_SETUP_EVIDENCE)[number];
+
 /**
  * Stage-classified validation failure carried for later Doctor routing.
  * A closed union so impossible class/stage pairings cannot be represented:
@@ -551,8 +564,19 @@ export type VaultGitValidationFailure =
 	| {
 			readonly failureClass: "candidate_setup";
 			readonly stage: "candidate_setup";
+			readonly setup: VaultGitValidationSetupEvidence;
 	  }
-	| { readonly failureClass: "vault_content"; readonly stage: "vault_check" }
+	| {
+			readonly failureClass: "vault_content";
+			readonly stage: "vault_check";
+			readonly content: "insufficient";
+	  }
+	| {
+			readonly failureClass: "vault_content";
+			readonly stage: "vault_check";
+			readonly content: "deterministic_with_admitted_repair";
+			readonly repairId: string;
+	  }
 	| {
 			readonly failureClass: "candidate_cleanup";
 			readonly stage: "candidate_cleanup";
@@ -733,17 +757,11 @@ export type VaultGitDoctorTaskCheckpoint =
 	| "terminal";
 
 /** Closed candidate_setup sub-evidence for the U4 validation route matrix. */
-export const VAULT_GIT_DOCTOR_SETUP_EVIDENCE = [
-	"proven_enrollment_defect",
-	"missing_private_enrollment_inputs",
-	"absent_external_ssh_prerequisites",
-	"proven_candidate_integrity_defect",
-	"insufficient",
-] as const;
+export const VAULT_GIT_DOCTOR_SETUP_EVIDENCE =
+	VAULT_GIT_VALIDATION_SETUP_EVIDENCE;
 
 /** One candidate_setup evidence classification. */
-export type VaultGitDoctorSetupEvidence =
-	(typeof VAULT_GIT_DOCTOR_SETUP_EVIDENCE)[number];
+export type VaultGitDoctorSetupEvidence = VaultGitValidationSetupEvidence;
 
 /** Closed Candidate Residue evidence for the U4 validation route matrix. */
 export const VAULT_GIT_DOCTOR_RESIDUE_EVIDENCE = [

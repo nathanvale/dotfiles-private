@@ -273,6 +273,7 @@ describe("vault-git CLI composition", () => {
 			validationFailure: {
 				failureClass: "candidate_setup",
 				stage: "candidate_setup",
+				setup: "proven_enrollment_defect",
 			},
 		});
 		expect(fixture.worker.exitCode).toBe(0);
@@ -285,7 +286,7 @@ describe("vault-git CLI composition", () => {
 					kind: "doctor_result",
 					validationEvidence: {
 						failureClass: "candidate_setup",
-						setup: "insufficient",
+						setup: "proven_enrollment_defect",
 					},
 				},
 			},
@@ -296,10 +297,42 @@ describe("vault-git CLI composition", () => {
 		}
 		expect(durable.state.terminalResult.repairAction).toBeUndefined();
 		expect(fixture.nextAction()).toMatchObject({
-			kind: "needs_human",
-			action_id: "escalate_validation_evidence",
-			owner: "vault_git_operator",
-			condition: "validation_evidence_required",
+			kind: "invoke",
+			action_id: "preview_host_enrollment_repair",
+			executable: "setup",
+			argv: ["sync", "--domain", "vault-git", "--check", "--json"],
+		});
+	});
+
+	test("production Doctor preserves deterministic content evidence while U5 execution stays gated", async () => {
+		const fixture = await runProductionDoctorEvidence({
+			validationFailure: {
+				failureClass: "vault_content",
+				stage: "vault_check",
+				content: "deterministic_with_admitted_repair",
+				repairId: "frontmatter.fix-title",
+			},
+		});
+		expect(fixture.worker.exitCode).toBe(0);
+		const durable = await fixture.readDoctorTask();
+		expect(durable).toMatchObject({
+			status: "loaded",
+			state: {
+				terminalResult: {
+					kind: "doctor_result",
+					nextActionId: "run_repair",
+					validationEvidence: {
+						failureClass: "vault_content",
+						content: "deterministic_with_admitted_repair",
+						repairId: "frontmatter.fix-title",
+					},
+				},
+			},
+		});
+		expect(fixture.nextAction()).toMatchObject({
+			kind: "none",
+			id: "apply_vault_content_repair",
+			action_id: "none",
 		});
 	});
 
@@ -346,6 +379,7 @@ describe("vault-git CLI composition", () => {
 			validationFailure: {
 				failureClass: "candidate_setup",
 				stage: "candidate_setup",
+				setup: "insufficient",
 			},
 		});
 		expect(fixture.worker.exitCode).toBe(0);
@@ -381,6 +415,7 @@ describe("vault-git CLI composition", () => {
 				validationFailure: {
 					failureClass: "candidate_setup",
 					stage: "candidate_setup",
+					setup: "insufficient",
 				},
 			});
 			expect(fixture.worker.exitCode).toBe(0);
@@ -409,6 +444,7 @@ describe("vault-git CLI composition", () => {
 			validationFailure: {
 				failureClass: "candidate_setup",
 				stage: "candidate_setup",
+				setup: "insufficient",
 			},
 		});
 		expect(fixture.worker.exitCode).toBe(0);
@@ -436,6 +472,7 @@ describe("vault-git CLI composition", () => {
 			validationFailure: {
 				failureClass: "candidate_setup",
 				stage: "candidate_setup",
+				setup: "insufficient",
 			},
 			diagnose: ({ receipt }) =>
 				Promise.resolve({
@@ -1336,6 +1373,7 @@ describe("vault-git CLI composition", () => {
 				validationFailure: {
 					failureClass: "vault_content",
 					stage: "vault_check",
+					content: "insufficient",
 				},
 			},
 		});
@@ -1369,6 +1407,7 @@ describe("vault-git CLI composition", () => {
 			validationFailure: {
 				failureClass: "vault_content",
 				stage: "vault_check",
+				content: "insufficient",
 			},
 		});
 		expect(run.stdout).toContain(state.leaseGeneration);
@@ -2105,6 +2144,7 @@ describe("vault-git U1 next_action union at the public CLI", () => {
 					validationFailure: {
 						failureClass: "vault_content",
 						stage: "vault_check",
+						content: "insufficient",
 					},
 				};
 			},
@@ -2151,6 +2191,7 @@ describe("vault-git U1 next_action union at the public CLI", () => {
 					validationFailure: {
 						failureClass: "vault_content",
 						stage: "vault_check",
+						content: "insufficient",
 					},
 				},
 			},

@@ -191,8 +191,16 @@ export interface VaultGitDoctorFrontDoor {
 		readonly workerPid: number;
 		/** Authoritative diagnosis seam; authority revalidation stays with the engine. */
 		readonly diagnose: () => Promise<VaultGitDoctorResult>;
-	}): Promise<VaultGitDoctorResult>;
+	}): Promise<VaultGitDoctorWorkerExecution>;
 }
+
+/** One worker completion owned and fully projected by the Deep Doctor module. */
+export type VaultGitDoctorWorkerExecution =
+	| { readonly kind: "diagnosed"; readonly result: VaultGitDoctorResult }
+	| {
+			readonly kind: "projected";
+			readonly projection: VaultGitDoctorFrontDoorProjection;
+	  };
 
 /** Observational heartbeat cadence for one acknowledged Doctor worker. */
 const DOCTOR_WORKER_HEARTBEAT_INTERVAL_MS = 5_000;
@@ -570,6 +578,12 @@ export function createVaultGitDoctorFrontDoor<SpawnContext>(
 				launchGeneration: input.launchGeneration,
 				workerPid: input.workerPid,
 			});
+			if (acknowledged.kind === "unavailable") {
+				return {
+					kind: "projected",
+					projection: unavailableDoctorTaskProjection(acknowledged.taskId),
+				};
+			}
 			if (acknowledged.kind !== "settled") {
 				throw new Error("Background Doctor acknowledgement refused");
 			}
@@ -625,14 +639,18 @@ export function createVaultGitDoctorFrontDoor<SpawnContext>(
 								: {}),
 						},
 					});
-					if (terminalized.kind !== "settled") {
-						throw new Error(
-							terminalized.kind === "unavailable"
-								? "Background Doctor continuation unavailable"
-								: "Background Doctor terminalization refused",
-						);
+					if (terminalized.kind === "unavailable") {
+						return {
+							kind: "projected",
+							projection: unavailableDoctorTaskProjection(
+								terminalized.taskId,
+							),
+						};
 					}
-					return result;
+					if (terminalized.kind !== "settled") {
+						throw new Error("Background Doctor terminalization refused");
+					}
+					return { kind: "diagnosed", result };
 				} catch (error) {
 					await lifecycle
 						.terminalizeWorker({
@@ -804,11 +822,9 @@ function withoutDiagnosisRepairAction(
 }
 
 /**
- * Map one durable Validation Failure Class to route evidence, using only what
- * durable state proves. The stored failure carries class and stage; it names
- * no Host Enrollment defect and no admitted checker Repair ID, so setup and
- * content collapse to their insufficient arms until richer durable evidence
- * exists. Cleanup consumes the real Candidate Residue observation.
+ * Map one durable Validation Failure to route evidence, using only its closed
+ * subtype proof. Legacy Completion Task records normalize to insufficient
+ * evidence; cleanup still consumes the live Candidate Residue observation.
  */
 async function deriveValidationRouteEvidence(
 	failure: VaultGitValidationFailure,
@@ -817,9 +833,15 @@ async function deriveValidationRouteEvidence(
 ): Promise<VaultGitDoctorValidationRouteEvidence> {
 	switch (failure.failureClass) {
 		case "candidate_setup":
-			return { failureClass: "candidate_setup", setup: "insufficient" };
+			return { failureClass: "candidate_setup", setup: failure.setup };
 		case "vault_content":
-			return { failureClass: "vault_content", content: "insufficient" };
+			return failure.content === "deterministic_with_admitted_repair"
+				? {
+						failureClass: "vault_content",
+						content: failure.content,
+						repairId: failure.repairId,
+					}
+				: { failureClass: "vault_content", content: "insufficient" };
 		case "stage_budget_exceeded":
 			if (failure.stage !== "candidate_cleanup") {
 				return {

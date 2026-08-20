@@ -541,7 +541,11 @@ describe("complete transaction", () => {
 
 	test("a candidate setup failure keeps the checking phase and routes to doctor, never deterministic repair", async () => {
 		const fixture = await engineRepositoryFixture({
-			checkFailure: { failureClass: "candidate_setup", stage: "candidate_setup" },
+			checkFailure: {
+				failureClass: "candidate_setup",
+				stage: "candidate_setup",
+				setup: "proven_enrollment_defect",
+			},
 		});
 		const begun = await fixture.engine.begin({
 			event: "note_created",
@@ -570,6 +574,7 @@ describe("complete transaction", () => {
 			validationFailure: {
 				failureClass: "candidate_setup",
 				stage: "candidate_setup",
+				setup: "proven_enrollment_defect",
 			},
 		});
 		const loaded = await fixture.store.load();
@@ -1400,6 +1405,7 @@ async function engineRepositoryFixture(options: EngineFixtureOptions = {}) {
 							status: "failed" as const,
 							failureClass: "vault_content" as const,
 							stage: "vault_check" as const,
+							content: "insufficient" as const,
 						}
 					: { status: "passed" as const, checkedPaths };
 			},

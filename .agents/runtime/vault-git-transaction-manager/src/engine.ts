@@ -1457,9 +1457,24 @@ function validationFailureOf(
 ): VaultGitValidationFailure {
 	switch (checked.failureClass) {
 		case "candidate_setup":
-			return { failureClass: "candidate_setup", stage: "candidate_setup" };
+			return {
+				failureClass: "candidate_setup",
+				stage: "candidate_setup",
+				setup: checked.setup,
+			};
 		case "vault_content":
-			return { failureClass: "vault_content", stage: "vault_check" };
+			return checked.content === "deterministic_with_admitted_repair"
+				? {
+						failureClass: "vault_content",
+						stage: "vault_check",
+						content: checked.content,
+						repairId: checked.repairId,
+					}
+				: {
+						failureClass: "vault_content",
+						stage: "vault_check",
+						content: "insufficient",
+					};
 		case "candidate_cleanup":
 			return { failureClass: "candidate_cleanup", stage: "candidate_cleanup" };
 		case "stage_budget_exceeded":

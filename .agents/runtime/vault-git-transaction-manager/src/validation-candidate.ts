@@ -267,7 +267,7 @@ export function createVaultOwnedCheckPort(
 			throw error;
 		}
 		// The rename published the record. A directory-sync failure after this
-		// point still throws, but must never remove the published JSON — the
+		// point still throws, but must never remove the published JSON; the
 		// record is what keeps an abandoned candidate owned.
 		await durability.syncDirectory(directory, "candidate_residue");
 	};
@@ -343,6 +343,7 @@ export function createVaultOwnedCheckPort(
 					status: "failed",
 					failureClass: "candidate_setup",
 					stage: "candidate_setup",
+					setup: "proven_enrollment_defect",
 				};
 			}
 			// A missing, redirected, or unusable admitted runner proves nothing
@@ -356,6 +357,7 @@ export function createVaultOwnedCheckPort(
 					status: "failed",
 					failureClass: "candidate_setup",
 					stage: "candidate_setup",
+					setup: "proven_enrollment_defect",
 				};
 			}
 			let candidateRoot: string | null = null;
@@ -499,6 +501,7 @@ export function createVaultOwnedCheckPort(
 								status: "failed",
 								failureClass: "vault_content",
 								stage: "vault_check",
+								content: "insufficient",
 							};
 			} catch (error) {
 				if (error instanceof StageBudgetExceededError) {
@@ -513,6 +516,7 @@ export function createVaultOwnedCheckPort(
 						status: "failed",
 						failureClass: "candidate_setup",
 						stage: "candidate_setup",
+						setup: "proven_candidate_integrity_defect",
 					};
 				}
 			}

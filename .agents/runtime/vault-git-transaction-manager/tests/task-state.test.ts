@@ -270,6 +270,79 @@ describe("durable task state", () => {
 		).toThrow();
 	});
 
+	test("preserves closed setup and content subtype evidence for Doctor routing", () => {
+		const record = (validationFailure: Record<string, unknown>) => ({
+			schemaVersion: 2,
+			taskId: "task_11111111111111111111111111111111",
+			receiptId: "receipt_22222222222222222222222222222222",
+			receiptRevision: 3,
+			transactionId: "txn_33333333333333333333333333333333",
+			leaseGeneration: "a".repeat(40),
+			revision: 7,
+			attemptNumber: 1,
+			state: "repair_needed",
+			phase: "terminal",
+			recordedAt: "2026-08-12T11:30:00.000Z",
+			updatedAt: "2026-08-12T11:31:00.000Z",
+			heartbeatAt: null,
+			checkpoint: "checking",
+			launchGeneration: "launch_44444444444444444444444444444444",
+			launchExpiresAt: null,
+			workerPid: null,
+			workerProcessIdentity: null,
+			launchAttempt: 1,
+			terminalResult: {
+				outcome: "refused",
+				phase: "checking",
+				changedState: "local",
+				blocker: "vault_check_failed",
+				retrySafety: "same_input_unsafe",
+				validationFailure,
+			},
+			previousTerminalResult: null,
+			repairReentryBlocked: false,
+			repairAuthorization: null,
+		});
+
+		const setup = parseVaultGitTaskState(
+			record({
+				failureClass: "candidate_setup",
+				stage: "candidate_setup",
+				setup: "proven_enrollment_defect",
+			}),
+		);
+		expect(setup.terminalResult?.validationFailure).toEqual({
+			failureClass: "candidate_setup",
+			stage: "candidate_setup",
+			setup: "proven_enrollment_defect",
+		});
+
+		const content = parseVaultGitTaskState(
+			record({
+				failureClass: "vault_content",
+				stage: "vault_check",
+				content: "deterministic_with_admitted_repair",
+				repairId: "frontmatter.fix-title",
+			}),
+		);
+		expect(content.terminalResult?.validationFailure).toEqual({
+			failureClass: "vault_content",
+			stage: "vault_check",
+			content: "deterministic_with_admitted_repair",
+			repairId: "frontmatter.fix-title",
+		});
+
+		expect(() =>
+			parseVaultGitTaskState(
+				record({
+					failureClass: "vault_content",
+					stage: "vault_check",
+					content: "deterministic_with_admitted_repair",
+				}),
+			),
+		).toThrow();
+	});
+
 	test("advances observational progress and a safe terminal result without changing task identity", () => {
 		const admitted = createVaultGitTaskState({
 			taskId: "task_11111111111111111111111111111111",

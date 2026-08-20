@@ -458,6 +458,9 @@ export function createVaultGitDoctorTaskLifecycle<SpawnContext>(
 			options.runtime.recordedAt().toISOString(),
 		);
 		if (admitted.launch === "refused") {
+			if (admitted.reason === "continuation_unavailable") {
+				return unavailableOutcome(admitted.state.taskId);
+			}
 			return {
 				kind: "refused",
 				reason: admitted.reason ?? "task_input_mismatch",

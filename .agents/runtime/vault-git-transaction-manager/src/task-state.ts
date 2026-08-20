@@ -9,10 +9,12 @@ import {
 	VAULT_GIT_RETRY_SAFETIES,
 	VAULT_GIT_TRANSACTION_PHASES,
 	VAULT_GIT_VALIDATION_STAGES,
+	VAULT_GIT_VALIDATION_SETUP_EVIDENCE,
 	type VaultGitTaskState,
 	type VaultGitTaskStateInput,
 	type VaultGitTaskRepairAuthorization,
 	type VaultGitTaskTerminalResult,
+	type VaultGitValidationFailure,
 } from "./model.ts";
 
 /** Mutable fields accepted by one monotonic task-state transition. */
@@ -568,10 +570,10 @@ export function parseVaultGitTaskState(value: unknown): VaultGitTaskState {
 		workerPid: record.workerPid as number | null,
 		workerProcessIdentity: record.workerProcessIdentity as string | null,
 		launchAttempt: record.launchAttempt as number,
-		terminalResult:
-			record.terminalResult as VaultGitTaskTerminalResult | null,
-		previousTerminalResult:
-			record.previousTerminalResult as VaultGitTaskTerminalResult | null,
+		terminalResult: normalizeTaskTerminalResult(record.terminalResult),
+		previousTerminalResult: normalizeTaskTerminalResult(
+			record.previousTerminalResult,
+		),
 		repairReentryBlocked: record.repairReentryBlocked,
 		repairAuthorization:
 			record.repairAuthorization as VaultGitTaskRepairAuthorization | null,
@@ -642,25 +644,95 @@ function isTaskValidationFailure(value: unknown): boolean {
 		return false;
 	}
 	const record = value as Record<string, unknown>;
-	if (
-		Object.keys(record).length !== 2 ||
-		!Object.hasOwn(record, "failureClass") ||
-		!Object.hasOwn(record, "stage")
-	) {
+	if (!Object.hasOwn(record, "failureClass") || !Object.hasOwn(record, "stage")) {
 		return false;
 	}
 	switch (record.failureClass) {
 		case "candidate_setup":
-			return record.stage === "candidate_setup";
+			return isTaskCandidateSetupFailure(record);
 		case "vault_content":
-			return record.stage === "vault_check";
+			return isTaskVaultContentFailure(record);
 		case "candidate_cleanup":
-			return record.stage === "candidate_cleanup";
+			return hasValidationKeys(record, 2) && record.stage === "candidate_cleanup";
 		case "stage_budget_exceeded":
-			return VAULT_GIT_VALIDATION_STAGES.includes(record.stage as never);
+			return (
+				hasValidationKeys(record, 2) &&
+				VAULT_GIT_VALIDATION_STAGES.includes(record.stage as never)
+			);
 		default:
 			return false;
 	}
+}
+
+function isTaskCandidateSetupFailure(record: Record<string, unknown>): boolean {
+	if (record.stage !== "candidate_setup") return false;
+	if (hasValidationKeys(record, 2)) return true;
+	return (
+		hasValidationKeys(record, 3) &&
+		typeof record.setup === "string" &&
+		VAULT_GIT_VALIDATION_SETUP_EVIDENCE.includes(record.setup as never)
+	);
+}
+
+function isTaskVaultContentFailure(record: Record<string, unknown>): boolean {
+	if (record.stage !== "vault_check") return false;
+	if (hasValidationKeys(record, 2)) return true;
+	if (record.content === "insufficient") return hasValidationKeys(record, 3);
+	return (
+		hasValidationKeys(record, 4) &&
+		record.content === "deterministic_with_admitted_repair" &&
+		typeof record.repairId === "string" &&
+		/^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/u.test(record.repairId)
+	);
+}
+
+function hasValidationKeys(
+	record: Readonly<Record<string, unknown>>,
+	count: number,
+): boolean {
+	return Object.keys(record).length === count;
+}
+
+/** Normalize pre-subtype private records to the fail-closed insufficient arm. */
+function normalizeTaskTerminalResult(
+	value: unknown,
+): VaultGitTaskTerminalResult | null {
+	if (value === null) return null;
+	const terminal = value as Omit<
+		VaultGitTaskTerminalResult,
+		"validationFailure"
+	> & {
+		readonly validationFailure?: Record<string, unknown>;
+	};
+	if (terminal.validationFailure === undefined) {
+		return terminal as VaultGitTaskTerminalResult;
+	}
+	return {
+		...terminal,
+		validationFailure: normalizeTaskValidationFailure(
+			terminal.validationFailure,
+		),
+	};
+}
+
+function normalizeTaskValidationFailure(
+	failure: Record<string, unknown>,
+): VaultGitValidationFailure {
+	if (failure.failureClass === "candidate_setup" && failure.setup === undefined) {
+		return {
+			failureClass: "candidate_setup",
+			stage: "candidate_setup",
+			setup: "insufficient",
+		};
+	}
+	if (failure.failureClass === "vault_content" && failure.content === undefined) {
+		return {
+			failureClass: "vault_content",
+			stage: "vault_check",
+			content: "insufficient",
+		};
+	}
+	return failure as unknown as VaultGitValidationFailure;
 }
 
 function isExactIsoTimestamp(value: string): boolean {

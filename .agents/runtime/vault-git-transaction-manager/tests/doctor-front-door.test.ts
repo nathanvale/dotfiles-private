@@ -948,7 +948,7 @@ describe("vault-git U4 deep Doctor: worker execution behind the front door", () 
 			workerPid,
 			diagnose: async () => diagnosis,
 		});
-		expect(result).toBe(diagnosis);
+		expect(result).toEqual({ kind: "diagnosed", result: diagnosis });
 
 		// Independent raw read: the NEW terminal write persists the semantic
 		// reattestation id only, with no run_doctor id and no legacy object.
@@ -997,12 +997,73 @@ describe("vault-git U4 deep Doctor: worker execution behind the front door", () 
 				transactionId: TXN_ID,
 			}),
 		});
-		expect(result.status).toBe("diagnosed");
+		expect(result).toMatchObject({
+			kind: "diagnosed",
+			result: { status: "diagnosed" },
+		});
 
 		const persisted = await latestPersistedTerminal(stateRoot, taskId);
 		const terminal = persisted.terminalResult as Record<string, unknown>;
 		expect(terminal.nextActionId).toBe("run_repair");
 		expect(terminal.nextAction).toBeUndefined();
+	});
+
+	test("worker acknowledgement unavailability returns the structured operator stop", async () => {
+		const stateRoot = await mkdtemp(join(tmpdir(), "vault-git-doctor-front-door-"));
+		roots.push(stateRoot);
+		const workerPid = 4244;
+		const taskId = await seedRegisteredLaunchingTask(stateRoot, workerPid);
+		const durableStore = createVaultGitDoctorTaskStore({
+			stateRoot,
+			repositoryId: REPO_ID,
+		});
+		const unavailableStore = {
+			...durableStore,
+			async transition(
+				...args: Parameters<typeof durableStore.transition>
+			) {
+				if (args[2].state === "in_progress") {
+					return {
+						status: "unavailable" as const,
+						reason: "continuation_unavailable" as const,
+						taskId: args[0],
+					};
+				}
+				return durableStore.transition(...args);
+			},
+		};
+		const frontDoor = createVaultGitDoctorFrontDoor({
+			store: createReceiptStore({
+				stateRoot,
+				repositoryIdentity: "doctor-front-door-test",
+			}),
+			taskStore: unavailableStore,
+			runtime: deterministicRuntime(),
+			spawnContext: null,
+			now: () => Date.parse("2026-08-14T02:00:00.000Z"),
+		});
+
+		const result = await frontDoor.runWorker({
+			taskId,
+			launchGeneration: LAUNCH_GENERATION,
+			workerPid,
+			diagnose: async () => {
+				throw new Error("diagnosis must not run without durable acknowledgement");
+			},
+		});
+
+		expect(result).toMatchObject({
+			kind: "projected",
+			projection: {
+				success: false,
+				errorCode: "continuation_unavailable",
+				payload: {
+					blockers: ["continuation_unavailable"],
+					retry_safety: "operator_required",
+					next_action: { kind: "none", action_id: "none" },
+				},
+			},
+		});
 	});
 });
 
