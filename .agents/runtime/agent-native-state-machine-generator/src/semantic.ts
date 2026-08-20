@@ -588,22 +588,36 @@ function checkRetryPosture({ cursor, report }: Context): void {
 			return isCatchAll && then === 'same_input_safe'
 		})
 		if (catchAll !== -1) {
-			const guarded = retryRules.some((_item, index) => {
-				if (index >= catchAll) return false
-				const then = cursor.string(['retry_posture', 'rules', index, 'then'])
-				const command = cursor.string([
-					'retry_posture',
-					'rules',
-					index,
-					'when',
-					'command',
-				])
-				return then !== 'same_input_safe' && command !== undefined
-			})
-			if (!guarded) {
+			// Guarding is per command: one covered command does not vouch for the
+			// rest. Every write-effect command needs its own earlier non-safe rule
+			// before a catch-all safe posture is legal.
+			const guardedCommands = new Set(
+				retryRules.flatMap((_item, index) => {
+					if (index >= catchAll) return []
+					const then = cursor.string(['retry_posture', 'rules', index, 'then'])
+					const command = cursor.string([
+						'retry_posture',
+						'rules',
+						index,
+						'when',
+						'command',
+					])
+					return then !== 'same_input_safe' && command !== undefined
+						? [command]
+						: []
+				}),
+			)
+			const unguarded = writeCommands.filter(
+				(entry) => !guardedCommands.has(entry.key),
+			)
+			if (unguarded.length > 0) {
 				report(
 					'semantic_unsafe_retry_declaration',
-					`retry_posture declares a catch-all "same_input_safe" posture while command_surface declares effectful commands [${writeCommands.map((entry) => entry.key).join(', ')}] with no earlier rule constraining them. Retry safety must be derived from durable evidence, never defaulted over an effectful surface.`,
+					`retry_posture declares a catch-all "same_input_safe" posture while command_surface declares effectful commands [${unguarded
+						.map((entry) => entry.key)
+						.join(
+							', ',
+						)}] with no earlier rule constraining them. Retry safety must be derived from durable evidence, never defaulted over an effectful surface.`,
 					`retry_posture.rules[${catchAll}]`,
 					cursor.keyLoc(['retry_posture', 'rules', catchAll, 'then']),
 				)

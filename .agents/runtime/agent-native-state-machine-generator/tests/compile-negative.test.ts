@@ -69,6 +69,12 @@ const CASES: ReadonlyArray<{
 		cause: 'semantic_unsafe_retry_declaration',
 		path: 'retry_posture.rules[0]',
 	},
+	// Guarding is per command: covering one write command does not vouch for another.
+	{
+		fixture: 'unsafe-retry-partial-guard',
+		cause: 'semantic_unsafe_retry_declaration',
+		path: 'retry_posture.rules[1]',
+	},
 	{
 		fixture: 'incomplete-projection',
 		cause: 'semantic_incomplete_projection',
