@@ -84,10 +84,17 @@ describe('one real-process smoke path', () => {
 		// The observed State Projection must be the meaning the generated
 		// semantic expectation row claims. The literal is the oracle; the join
 		// against the generated row proves the two artifacts agree with it.
-		const projection = (
-			envelope.data as { state_projection?: unknown } | undefined
-		)?.state_projection
-		expect(projection).toEqual({
+		// Structural narrowing, not a cast: the checker keeps judging the
+		// access, and the exact toEqual below still refuses extra fields.
+		const data: unknown = envelope.data
+		if (
+			typeof data !== 'object' ||
+			data === null ||
+			!('state_projection' in data)
+		) {
+			throw new Error('the ok envelope carries no state_projection')
+		}
+		expect(data.state_projection).toEqual({
 			actionId: 'inspect_status',
 			state: 'observed_success',
 			cause: 'read_success',

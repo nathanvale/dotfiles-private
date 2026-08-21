@@ -59,13 +59,18 @@ type PilotBinding =
 			readonly message: string
 	  }
 
+/** Derived from the generated contract record, so it cannot drift. */
+const DECLARED_COMMAND_LIST = Object.keys(vaultGitReimaginedCommandContracts)
+	.sort()
+	.join(' and ')
+
 function bindInvocation(argv: readonly string[]): PilotBinding {
 	if (argv.length === 0) return { ok: true, command: 'status', bare: true }
 	const [head, ...rest] = argv
 	if (head === undefined || !isPilotCommand(head)) {
 		return {
 			ok: false,
-			message: `Unknown command ${JSON.stringify(head ?? '')}; the declared commands are commands and status.`,
+			message: `Unknown command ${JSON.stringify(head ?? '')}; the declared commands are ${DECLARED_COMMAND_LIST}.`,
 		}
 	}
 	for (const argument of rest) {
@@ -142,10 +147,11 @@ function refusedOutcome(runId: string, command: PilotCommand): PilotOutcome {
 				state_projection: projection,
 				workspace_observable: false,
 			}),
-			// The facade allows retryable true only under recoverability retry:
-			// its retryable means "retry now, unchanged, may help", which a
-			// refusal awaiting repair cannot claim. Exact Same-Input Retry
-			// Safety is a different meaning and travels in the projection.
+			// The facade allows `retryable` true only under recoverability
+			// retry: its `retryable` means "retry now, unchanged, may help",
+			// which a refusal awaiting repair cannot claim. Exact Same-Input
+			// Retry Safety is a different meaning and travels in the
+			// projection.
 			error: createCliRuntimeError({
 				run_id: runId,
 				code: 'projection_unavailable',

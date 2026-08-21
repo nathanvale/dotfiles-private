@@ -3,9 +3,11 @@
  *
  * The generator derives these prefixes from the product name
  * `vault-git-reimagined`; the pilot restates them because the derivation
- * helpers are generator internals behind the package front door. The emission
- * test proves the generated catalog exports the symbols these prefixes
- * predict, so agreement is checked rather than trusted.
+ * helpers are generator internals behind the package front door.
+ * pilot-emission.test.ts checks the candidate's declared product against
+ * PILOT_PRODUCT and constructs each generated module's expected export names
+ * from these constants, proving every one exists, so agreement is checked
+ * rather than trusted.
  */
 export const PILOT_PRODUCT = 'vault-git-reimagined'
 

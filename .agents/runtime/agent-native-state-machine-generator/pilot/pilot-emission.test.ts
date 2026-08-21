@@ -18,6 +18,12 @@ import {
 	PILOT_DERIVATION_OPTIONS,
 	PILOT_EMITTERS,
 } from './generation/pilot-derivation.ts'
+import {
+	PILOT_CONSTANT_PREFIX,
+	PILOT_PRODUCT,
+	PILOT_SYMBOL_PREFIX,
+	PILOT_TYPE_PREFIX,
+} from './generation/pilot-naming.ts'
 
 const CANDIDATE_URL = new URL(
 	'./vault-git-reimagined.state-machine.jsonc',
@@ -168,15 +174,80 @@ describe('the pilot candidate emits within frozen Input Schema v1', () => {
 	})
 })
 
-describe('the generated catalog agrees with the pilot naming module', () => {
-	test('the predicted export names exist with the predicted station ids', async () => {
-		const catalog = await import('./generated/src/branch-station-catalog.ts')
-		expect(catalog.VAULT_GIT_REIMAGINED_STATION_IDS).toEqual([
-			...EXPECTED_STATION_IDS,
-		])
-		expect(typeof catalog.findVaultGitReimaginedBranchStationCatalogDrift).toBe(
-			'function',
-		)
-		expect(typeof catalog.projectVaultGitReimaginedStationMap).toBe('function')
+describe('the generated modules agree with the pilot naming module', () => {
+	test('the candidate declares the product the naming constants derive from', async () => {
+		const compiled = await compilePilot()
+		if (!compiled.ok) throw new Error('the pilot candidate failed to compile')
+		expect(compiled.ir.specMeta.product).toBe(PILOT_PRODUCT)
+	})
+
+	test('every export name constructed from the naming constants exists', async () => {
+		// Widened to a string-keyed record because the proof is runtime
+		// reflection over constructed names; the checker still judges every
+		// other use of these modules at their static import sites.
+		const catalog = (await import(
+			'./generated/src/branch-station-catalog.ts'
+		)) as Record<string, unknown>
+		const contracts = (await import(
+			'./generated/src/command-surface-contract.ts'
+		)) as Record<string, unknown>
+		const expectations = (await import(
+			'./generated/src/semantic-expectations.ts'
+		)) as Record<string, unknown>
+		const composer = (await import(
+			'./generated/src/projection-composer.ts'
+		)) as Record<string, unknown>
+
+		const cases = [
+			{
+				module: catalog,
+				name: `${PILOT_CONSTANT_PREFIX}_STATION_IDS`,
+				kind: 'object',
+			},
+			{
+				module: catalog,
+				name: `${PILOT_SYMBOL_PREFIX}BranchStationCatalog`,
+				kind: 'object',
+			},
+			{
+				module: catalog,
+				name: `find${PILOT_TYPE_PREFIX}BranchStationCatalogDrift`,
+				kind: 'function',
+			},
+			{
+				module: catalog,
+				name: `project${PILOT_TYPE_PREFIX}StationMap`,
+				kind: 'function',
+			},
+			{
+				module: contracts,
+				name: `${PILOT_SYMBOL_PREFIX}CommandContracts`,
+				kind: 'object',
+			},
+			{
+				module: expectations,
+				name: `${PILOT_SYMBOL_PREFIX}SemanticExpectations`,
+				kind: 'object',
+			},
+			{
+				module: composer,
+				name: `${PILOT_CONSTANT_PREFIX}_PROJECTION_TABLE`,
+				kind: 'object',
+			},
+			{
+				module: composer,
+				name: `select${PILOT_TYPE_PREFIX}Projection`,
+				kind: 'function',
+			},
+		] as const
+		expect(cases.length).toBeGreaterThan(0)
+		for (const row of cases) {
+			expect(typeof row.module[row.name], row.name).toBe(row.kind)
+		}
+
+		expect(
+			catalog[`${PILOT_CONSTANT_PREFIX}_STATION_IDS`],
+			`${PILOT_CONSTANT_PREFIX}_STATION_IDS`,
+		).toEqual([...EXPECTED_STATION_IDS])
 	})
 })
