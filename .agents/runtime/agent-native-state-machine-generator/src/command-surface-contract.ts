@@ -17,9 +17,9 @@ import type {
 	CommandFacadeOutputMode,
 	CommandFacadeSideEffect,
 } from '@side-quest/cli-command-facade'
-import { type EmitRefusal, emitRefusal } from './emit-contract.ts'
-import { resolveResultContract } from './emit-derivation.ts'
+import { resolveResultContract } from './derivation-facts.ts'
 import type { CommandSurface, SpecificationIr } from './ir.ts'
+import { type ArtifactRefusal, artifactRefusal } from './refusal.ts'
 import { isWriteImplyingMutation } from './schema.ts'
 
 /**
@@ -46,7 +46,7 @@ const MUTATION_SIDE_EFFECTS: Readonly<
 
 export interface CommandContractEmission {
 	readonly contracts: Readonly<Record<string, CommandFacadeContract>>
-	readonly refusals: readonly EmitRefusal[]
+	readonly refusals: readonly ArtifactRefusal[]
 }
 
 /**
@@ -60,13 +60,13 @@ export function deriveCommandContracts(
 	ir: SpecificationIr,
 ): CommandContractEmission {
 	const surface = ir.commandSurface
-	const refusals: EmitRefusal[] = []
+	const refusals: ArtifactRefusal[] = []
 	const contracts: Record<string, CommandFacadeContract> = {}
 
 	for (const code of BASELINE_EXIT_CODES) {
 		if (surface.exitCodes[code] === undefined) {
 			refusals.push(
-				emitRefusal({
+				artifactRefusal({
 					cause: 'emit_baseline_exit_missing',
 					subject: code,
 					message: `The Command Surface Contract omits baseline exit meaning ${code}.`,
@@ -87,7 +87,7 @@ export function deriveCommandContracts(
 		// product-owner decisions; surfacing the gap is the generator's job.
 		if (isWriteImplyingMutation(mutation)) {
 			refusals.push(
-				emitRefusal({
+				artifactRefusal({
 					cause: 'emit_write_preview_undeclarable',
 					subject: command,
 					message: `Command ${command} declares write-implying mutation ${mutation}, which owes a check or dry_run preview path, but Input Schema v1 declares no execution modes. Admit an execution-mode surface or a package-owned previewExemption reason for ${command}.`,

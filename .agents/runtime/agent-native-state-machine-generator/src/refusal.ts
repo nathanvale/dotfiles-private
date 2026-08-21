@@ -23,7 +23,7 @@
  * disagreements unexpressible rather than merely detected. A cause for an
  * impossible state would advertise a check nothing can raise.
  */
-export const EMIT_REFUSAL_CAUSES = [
+export const ARTIFACT_REFUSAL_CAUSES = [
 	/** A Branch Station id does not satisfy the facade's id grammar. */
 	'emit_station_id_invalid',
 	/** Two derived Branch Stations claim the same id. */
@@ -59,7 +59,7 @@ export const EMIT_REFUSAL_CAUSES = [
 	'emit_result_contract_undeclared',
 ] as const
 
-export type EmitRefusalCause = (typeof EMIT_REFUSAL_CAUSES)[number]
+export type ArtifactRefusalCause = (typeof ARTIFACT_REFUSAL_CAUSES)[number]
 
 /**
  * One fail-closed emit refusal.
@@ -69,13 +69,13 @@ export type EmitRefusalCause = (typeof EMIT_REFUSAL_CAUSES)[number]
  * without reading generator internals. Callers branch on `cause`, never on
  * `message`  -  the wording is contract surface but the identifier is the API.
  */
-export interface EmitRefusal {
-	readonly cause: EmitRefusalCause
+export interface ArtifactRefusal {
+	readonly cause: ArtifactRefusalCause
 	readonly subject: string
 	readonly message: string
 }
 
-export function emitRefusal(input: EmitRefusal): EmitRefusal {
+export function artifactRefusal(input: ArtifactRefusal): ArtifactRefusal {
 	return input
 }
 
@@ -84,8 +84,8 @@ export function emitRefusal(input: EmitRefusal): EmitRefusal {
  * snapshots a refusal list depends on this being stable across runs.
  */
 export function sortRefusals(
-	refusals: readonly EmitRefusal[],
-): readonly EmitRefusal[] {
+	refusals: readonly ArtifactRefusal[],
+): readonly ArtifactRefusal[] {
 	return [...refusals].sort(
 		(a, b) =>
 			a.cause.localeCompare(b.cause) || a.subject.localeCompare(b.subject),

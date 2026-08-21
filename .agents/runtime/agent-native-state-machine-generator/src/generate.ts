@@ -21,13 +21,13 @@ import type { Dirent } from 'node:fs'
 import { mkdir, mkdtemp, readdir, rename, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
-import type { SpecificationDigest } from './canonical.ts'
 import {
 	type ArtifactEmitter,
 	buildProvenanceManifest,
 	DEFAULT_EMITTERS,
 	PROVENANCE_MANIFEST_PATH,
-} from './emit.ts'
+} from './artifact-set.ts'
+import type { SpecificationDigest } from './canonical.ts'
 import type { SpecificationIr } from './ir.ts'
 
 export interface GenerationOptions {

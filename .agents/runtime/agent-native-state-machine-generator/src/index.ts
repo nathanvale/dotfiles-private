@@ -81,10 +81,33 @@ export function compileSpecificationCandidate(
 }
 
 export {
+	type DerivationFailure,
+	type DerivationOptions,
+	type DerivationResult,
+	type DerivationSuccess,
+	deriveArtifactSet,
+} from './artifact-derivation.ts'
+export {
+	type ArtifactEmitter,
+	type EmittedArtifacts,
+	PROVENANCE_MANIFEST_PATH,
+	type ProvenanceManifest,
+} from './artifact-set.ts'
+export {
+	type DerivedStation,
+	deriveStations,
+	type StationEmission,
+	stationIds,
+} from './branch-stations.ts'
+export {
 	GENERATOR_CONTRACT_VERSION,
 	INPUT_SCHEMA_VERSION,
 	type SpecificationDigest,
 } from './canonical.ts'
+export {
+	type CommandContractEmission,
+	deriveCommandContracts,
+} from './command-surface-contract.ts'
 export {
 	DIAGNOSTIC_CAUSES,
 	type Diagnostic,
@@ -93,32 +116,10 @@ export {
 	type SourceLocation,
 } from './diagnostics.ts'
 export {
-	type ArtifactEmitter,
-	type EmittedArtifacts,
-	PROVENANCE_MANIFEST_PATH,
-	type ProvenanceManifest,
-} from './emit.ts'
-export {
-	type CommandContractEmission,
-	deriveCommandContracts,
-} from './emit-command-contracts.ts'
-export {
-	EMIT_REFUSAL_CAUSES,
-	type EmitRefusal,
-	type EmitRefusalCause,
-} from './emit-contract.ts'
-export {
 	buildExpectationTable,
 	type ExpectationEmission,
 	type SemanticExpectationRow,
-} from './emit-expectations.ts'
-export {
-	type EmitFailure,
-	type EmitOptions,
-	type EmitResult,
-	type EmitSuccess,
-	emitFacadeArtifacts,
-} from './emit-facade.ts'
+} from './expectations.ts'
 export {
 	type DeclaredExtensionPoint,
 	EXTENSION_POINT_KINDS,
@@ -126,19 +127,7 @@ export {
 	type RegisteredExtension,
 	type RegistryReconciliation,
 	reconcileExtensionRegistry,
-} from './emit-registry.ts'
-export {
-	type RenderedModule,
-	renderCommandContracts,
-	renderExpectationTable,
-	renderStationCatalog,
-} from './emit-render.ts'
-export {
-	type DerivedStation,
-	deriveStations,
-	type StationEmission,
-	stationIds,
-} from './emit-stations.ts'
+} from './extension-registry.ts'
 export {
 	DRIFT_REASONS,
 	type DriftFinding,
@@ -168,6 +157,17 @@ export type {
 	StateDefinition,
 	TransitionEntry,
 } from './ir.ts'
+export {
+	ARTIFACT_REFUSAL_CAUSES,
+	type ArtifactRefusal,
+	type ArtifactRefusalCause,
+} from './refusal.ts'
+export {
+	type RenderedModule,
+	renderCommandContracts,
+	renderExpectationTable,
+	renderStationCatalog,
+} from './render.ts'
 export {
 	NEXT_SAFE_ACTION_KINDS,
 	type NextSafeActionKind,

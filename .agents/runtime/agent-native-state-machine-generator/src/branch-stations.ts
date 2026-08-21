@@ -13,9 +13,9 @@
  * order, with no dependence on object key insertion order.
  */
 import type { BranchStation } from '@side-quest/cli-command-facade'
-import { type EmitRefusal, emitRefusal } from './emit-contract.ts'
-import { BRANCH_FACTS, resolveResultContract } from './emit-derivation.ts'
+import { BRANCH_FACTS, resolveResultContract } from './derivation-facts.ts'
 import type { CommandSurface, SpecificationIr } from './ir.ts'
+import { type ArtifactRefusal, artifactRefusal } from './refusal.ts'
 import { type BranchKind, isWriteImplyingMutation } from './schema.ts'
 
 /**
@@ -64,7 +64,7 @@ export interface DerivedStation {
 
 export interface StationEmission {
 	readonly stations: readonly DerivedStation[]
-	readonly refusals: readonly EmitRefusal[]
+	readonly refusals: readonly ArtifactRefusal[]
 }
 
 /**
@@ -80,7 +80,7 @@ export interface StationEmission {
  */
 export function deriveStations(ir: SpecificationIr): StationEmission {
 	const surface = ir.commandSurface
-	const refusals: EmitRefusal[] = []
+	const refusals: ArtifactRefusal[] = []
 	const stations: DerivedStation[] = []
 	const seen = new Set<string>()
 
@@ -95,7 +95,7 @@ export function deriveStations(ir: SpecificationIr): StationEmission {
 
 			if (seen.has(id)) {
 				refusals.push(
-					emitRefusal({
+					artifactRefusal({
 						cause: 'emit_station_id_duplicate',
 						subject: id,
 						message: `Two derived Branch Stations claim the id ${id}.`,
@@ -107,7 +107,7 @@ export function deriveStations(ir: SpecificationIr): StationEmission {
 
 			if (!STATION_ID_PATTERN.test(id)) {
 				refusals.push(
-					emitRefusal({
+					artifactRefusal({
 						cause: 'emit_station_id_invalid',
 						subject: id,
 						message: `Branch Station id ${id} does not satisfy the facade id grammar.`,
@@ -130,7 +130,7 @@ export function deriveStations(ir: SpecificationIr): StationEmission {
 			// enforced at that one owner rather than restated per station.
 			if (contract === undefined) {
 				refusals.push(
-					emitRefusal({
+					artifactRefusal({
 						cause: 'emit_result_contract_undeclared',
 						subject: id,
 						message: `Branch Station ${id} has no result contract declared for command ${command}; the candidate declares neither a ${command} binding nor a lifecycle contract.`,
@@ -175,7 +175,7 @@ export function deriveStations(ir: SpecificationIr): StationEmission {
  */
 function deriveNoArgumentStation(ir: SpecificationIr): {
 	readonly station?: DerivedStation
-	readonly refusals: readonly EmitRefusal[]
+	readonly refusals: readonly ArtifactRefusal[]
 } {
 	const surface = ir.commandSurface
 	const behavior = surface.noArgumentBehavior
@@ -188,7 +188,7 @@ function deriveNoArgumentStation(ir: SpecificationIr): {
 	if (command === undefined) {
 		return {
 			refusals: [
-				emitRefusal({
+				artifactRefusal({
 					cause: 'emit_expectation_column_underivable',
 					subject: `no_argument_behavior:${behavior}`,
 					message: `The candidate declares no_argument_behavior ${behavior} but no declared command owns it, and Input Schema v1 has no binding from bare invocation to a command. Admit which command bare invocation dispatches to.`,
@@ -201,7 +201,7 @@ function deriveNoArgumentStation(ir: SpecificationIr): {
 	if (contract === undefined) {
 		return {
 			refusals: [
-				emitRefusal({
+				artifactRefusal({
 					cause: 'emit_result_contract_undeclared',
 					subject: `${command}.no_argument`,
 					message: `The no-argument behavior station on command ${command} has no declared result contract.`,

@@ -9,30 +9,35 @@
  *
  * Emission is not Specification Admission.
  */
+
+import {
+	type DerivedStation,
+	deriveStations,
+	stationIds,
+} from './branch-stations.ts'
 import {
 	type CommandContractEmission,
 	deriveCommandContracts,
-} from './emit-command-contracts.ts'
-import { type EmitRefusal, sortRefusals } from './emit-contract.ts'
-import { camel, screaming, usesLifecycleConvention } from './emit-derivation.ts'
+} from './command-surface-contract.ts'
+import {
+	camel,
+	screaming,
+	usesLifecycleConvention,
+} from './derivation-facts.ts'
 import {
 	buildExpectationTable,
 	type SemanticExpectationRow,
-} from './emit-expectations.ts'
+} from './expectations.ts'
+import type { SpecificationIr } from './ir.ts'
+import { type ArtifactRefusal, sortRefusals } from './refusal.ts'
 import {
 	type RenderedModule,
 	renderCommandContracts,
 	renderExpectationTable,
 	renderStationCatalog,
-} from './emit-render.ts'
-import {
-	type DerivedStation,
-	deriveStations,
-	stationIds,
-} from './emit-stations.ts'
-import type { SpecificationIr } from './ir.ts'
+} from './render.ts'
 
-export interface EmitOptions {
+export interface DerivationOptions {
 	/**
 	 * Consumer-relative catalog path. The auditor-skill constraint fixes this to
 	 * `src/branch-station-catalog.ts`, or a `branch-station-catalog.ts` under a
@@ -52,7 +57,7 @@ export interface EmitOptions {
  * Typed values and rendered source text sit side by side: a test asserts
  * against the values, and the generation pipeline writes the text.
  */
-export interface EmitSuccess {
+export interface DerivationSuccess {
 	readonly ok: true
 	readonly stations: readonly DerivedStation[]
 	readonly stationIds: readonly string[]
@@ -63,12 +68,12 @@ export interface EmitSuccess {
 }
 
 /** Fail-closed by construction: the failure variant carries no artifacts. */
-export interface EmitFailure {
+export interface DerivationFailure {
 	readonly ok: false
-	readonly refusals: readonly EmitRefusal[]
+	readonly refusals: readonly ArtifactRefusal[]
 }
 
-export type EmitResult = EmitSuccess | EmitFailure
+export type DerivationResult = DerivationSuccess | DerivationFailure
 
 const DEFAULT_CATALOG_PATH = 'src/branch-station-catalog.ts'
 
@@ -89,11 +94,11 @@ const DEFAULT_CATALOG_PATH = 'src/branch-station-catalog.ts'
  * derived, so a stateless product's output contains no durable-operation,
  * liveness, retry, Cancellation or version-custody surface to strip.
  */
-export function emitFacadeArtifacts(
+export function deriveArtifactSet(
 	ir: SpecificationIr,
 	digest: string,
-	options: EmitOptions = {},
-): EmitResult {
+	options: DerivationOptions = {},
+): DerivationResult {
 	const catalogPath = options.catalogPath ?? DEFAULT_CATALOG_PATH
 	const symbolPrefix = options.symbolPrefix ?? camel(ir.specMeta.product)
 	const constantPrefix = screaming(ir.specMeta.product)

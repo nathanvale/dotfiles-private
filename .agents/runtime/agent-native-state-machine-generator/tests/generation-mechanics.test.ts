@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DEFAULT_EMITTERS } from '../src/emit.ts'
+import { DEFAULT_EMITTERS } from '../src/artifact-set.ts'
 import type { ArtifactEmitter } from '../src/index.ts'
 import {
 	compileSpecificationCandidate,
