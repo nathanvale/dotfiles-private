@@ -45,7 +45,12 @@ writing-for-agents first. Routine status edits run this checklist alone.
    feature-branch HEAD, before step 4's deletion commit. Nathan's ruling
    2026-08-21: this file and `receipts/` feed a planned orchestration
    skill; keep both recoverable. `receipts/` is tracked and merges with
-   the branch.
+   the branch. Open design question for that harvest, 2026-08-21: the
+   orchestration skill owns the outer loop (charter, brief, gates,
+   review, ledger) and its stage briefs should name the existing
+   `implement` and `tdd` skills as the stage agent's inner loop; this
+   run's briefs bypassed `implement` entirely, so the composition is
+   undecided.
 2. Post the three out-of-scope repo defects as issues on
    nathanvale/dotfiles-private via ghh for Nathan: warm-chrome synthetic
    observed coverage, vault-git circular catalog oracle,
