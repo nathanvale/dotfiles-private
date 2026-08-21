@@ -439,7 +439,14 @@ export function toPlainValue(node: JsoncNode): unknown {
 			return node.items.map(toPlainValue)
 		case 'null':
 			return null
-		default:
+		case 'string':
+		case 'number':
+		case 'boolean':
 			return node.value
 	}
+	// A new JsoncNode kind must add its own case: the old catch-all would have
+	// returned its (possibly absent) `value` field straight into
+	// canonicalization and the specification digest.
+	const exhausted: never = node
+	return exhausted
 }

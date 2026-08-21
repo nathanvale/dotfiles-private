@@ -223,6 +223,9 @@ function walk(
 			return
 		}
 	}
+	// A new Shape variant must add its own case: without this check it would
+	// fall through and validate nothing while the build stayed green.
+	const _exhausted: never = shape
 }
 
 function join(path: string, key: string): string {
