@@ -100,13 +100,14 @@ writing-for-agents first. Routine status edits run this checklist alone.
    because the tracked repo-root HANDBACK.md (leaked by aw-draft unit
    commit 8ca6420, byte-identical to receipts/aw-draft/HANDBACK.md)
    rides into every stage worktree; that stale file stays until its
-   deletion is separately authorized. Worker: session a28f34ca stopped
-   by Nathan 2026-08-21 for model mismatch (its job state resolved to
-   claude-fable-5; the Handoff step requires claude-opus-5 at high
-   effort); it left zero changes and no completion file. Three
-   launches so far stopped with zero changes observed; writers never
-   overlapped. Relaunch per the Handoff step is next. AC binding:
-   issue stories 5, 6, 51, 52; the plan comment's stage-5 row.
+   deletion is separately authorized. Worker: claude-handoff session
+   a502bf27, name "Issue 55 Input Schema v2 worker", cwd that
+   worktree, admitted 2026-08-21 with job state resolving
+   claude-opus-5 at effort high per the Handoff step. Prior launches,
+   including a28f34ca stopped by Nathan for resolving claude-fable-5,
+   all ended with zero changes observed; writers never overlapped.
+   AC binding: issue stories 5, 6, 51, 52; the plan comment's
+   stage-5 row.
 4. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
    receipts/stage5-decision-packet.md, posted to issue 55) plus the
