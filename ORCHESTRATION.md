@@ -94,12 +94,20 @@ Delete this file when the feature branch is ready to merge to `main`.
   receipts/standards-research-community-2026-08.md. No community evidence
   contradicts the original twelve; candidate 7
   (exactOptionalPropertyTypes + noUncheckedIndexedAccess) is strengthened
-  (new tsc --init enables both by default). Pending: one fit review over
-  all twenty candidates validating each against witnessed in-package
-  evidence before any enters CODING_STANDARDS.md (three claimed live hits
-  to verify first: localeCompare in diagnostics.ts/build-ir.ts (semantic.ts
-  hit now stale), missing generated banner, missing tsconfig strictness
-  flags).
+  (new tsc --init enables both by default). Sibling-suite audits
+  2026-08-21 added seven candidates from vault-git-transaction-manager
+  (V1 to V7, receipts/standards-research-sibling-tests-vault-git.md) and
+  seven from browser-connect + warm-chrome + browser-use-security (B1 to
+  B7, receipts/standards-research-sibling-tests-browser.md). Pending: one
+  fit review over all 34 candidates validating each against witnessed
+  in-package evidence before any enters CODING_STANDARDS.md (three claimed
+  live hits to verify first: localeCompare in diagnostics.ts/build-ir.ts
+  (semantic.ts hit now stale), missing generated banner, missing tsconfig
+  strictness flags). The two sibling receipts also record defects in the
+  audited packages themselves (warm-chrome ships synthetic Observed
+  Branch Coverage on its public API; vault-git has one circular catalog
+  oracle; browser-use-security's custody proof is a source grep) - repo
+  repair items outside issue-55 scope, kept there for Nathan.
 - Stage 4 pilot, then stages 5-7 only with Nathan's go-ahead (stage 5 carries
   the 13-decision admission worklist).
 
