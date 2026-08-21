@@ -70,7 +70,15 @@ writing-for-agents first. Routine status edits run this checklist alone.
    the digest-moving invariant-prose fix, bare "branch" to Branch
    Station, bundles with the admission edit), and the stage 5 to 7
    go-ahead.
-2. Stage 5 carries the 13 unresolved decisions named in the plan
+2. IN FLIGHT 2026-08-21, the plan comment's two parallel tracks: (a)
+   the Agent Worktree candidate draft (schema insurance due before the
+   first admission hardens Input Schema v1), worktree
+   `.worktrees/issue-55-aw-draft`, branch
+   feat/issue-55-agent-worktree-draft, forked at 036cf54, brief at its
+   root, completion signal HANDBACK.md; (b) the stage-5 decision packet
+   (drafted resolutions for confirm/reject), assembled read-only for
+   supervisor review before it reaches issue 55.
+3. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row plus the build-added worklist below.
 
 Stage-5 admission worklist (build-added; the plan comment owns the 13
