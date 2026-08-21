@@ -120,9 +120,13 @@ Open findings, dispositions only (evidence at
 receipts/standards-fit-review-2026-08.md, "Findings for the supervisor"):
 
 - F2, cheap: the generated banner has no proving test.
-- F4: tests/ sits outside the typecheck project; exactOptionalPropertyTypes
-  and noUncheckedIndexedAccess are not yet enabled; enabling them surfaces
-  one error in tests.
+- F4, half closed at de1789d: tests/ joined the typecheck project and
+  its one error is repaired. The two strictness flags stay off,
+  measured 2026-08-21: enabling them surfaces seven errors in the
+  read-only cli-command-facade source and nine in the throwaway
+  prototype, both outside this package's authority. The facade errors
+  are real facade defects; route them to stage 5's separately reviewed
+  facade work.
 - F5, defect: the version-envelope assertion in
   tests/digest-determinism.test.ts restates the constants it checks. The
   global independent-oracle rule owns the policy; enforcement is missing.
