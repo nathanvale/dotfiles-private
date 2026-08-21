@@ -56,16 +56,33 @@ Delete this file when the feature branch is ready to merge to `main`.
   stage 2 kept src/emit.ts, stage 3's front door is src/emit-facade.ts
   pending the consolidation unit's contract-term rename. Ledger counts:
   19 src files, 18 index.ts export statements.
-- NEXT UNIT: the consolidation unit (task 7, coherence gate) runs before
-  stage 4: wire stage-3 emitters into DEFAULT_EMITTERS with a joint
+- RUNNING: the consolidation unit (task 7, coherence gate) launched
+  2026-08-21 before stage 4. Worktree `.worktrees/issue-55-consolidation`,
+  branch `feat/issue-55-consolidation-coherence` (forked at 915c122), Opus 5
+  background job `8645262c`, brief at the worktree root (AGENT-BRIEF.md).
+  Scope: wire stage-3 emitters into DEFAULT_EMITTERS with a joint
   generate/verify proof, contract-term renames (emit-facade.ts and the
-  emit-* family), confirm vocabulary hoists, dedupe residue.
+  emit-* family), vocabulary hoists, dedupe residue (semantic.ts
+  duplicate-id loops confirmed still present at fork). Completion signal
+  HANDBACK.md; then supervisor gate re-run, review, repair, merge.
+- Deferred-item audit at 915c122: the input_schema_version exact-match
+  check never landed in stage 2 (schema.ts requires nonEmpty only;
+  canonical.ts stamps the pinned constant regardless of the declared
+  value). Reassigned to the stage-5 admission worklist. For the standards
+  fit review: the localeCompare claim is now stale for semantic.ts (0
+  hits); diagnostics.ts (2) and build-ir.ts (1) remain live.
 - Standards research: twelve unfitted candidates archived at
-  receipts/standards-research.md. Pending: a fit review validating each
-  against witnessed in-package evidence before any enters
-  CODING_STANDARDS.md (three claimed live hits to verify first:
-  localeCompare in diagnostics.ts/build-ir.ts/semantic.ts, missing generated
-  banner, missing tsconfig strictness flags).
+  receipts/standards-research.md, plus eight community-sourced candidates
+  (C13 to C20, last30days pass 2026-08-21) at
+  receipts/standards-research-community-2026-08.md. No community evidence
+  contradicts the original twelve; candidate 7
+  (exactOptionalPropertyTypes + noUncheckedIndexedAccess) is strengthened
+  (new tsc --init enables both by default). Pending: one fit review over
+  all twenty candidates validating each against witnessed in-package
+  evidence before any enters CODING_STANDARDS.md (three claimed live hits
+  to verify first: localeCompare in diagnostics.ts/build-ir.ts (semantic.ts
+  hit now stale), missing generated banner, missing tsconfig strictness
+  flags).
 - Stage 4 pilot, then stages 5-7 only with Nathan's go-ahead (stage 5 carries
   the 13-decision admission worklist).
 
