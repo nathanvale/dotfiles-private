@@ -1,9 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import {
-	compileSpecificationCandidate,
-	emitFacadeArtifacts,
-} from '../src/index.ts'
+import { compileSpecificationCandidate } from '../src/index.ts'
 import { readCandidate } from './support/candidates.ts'
+import { emitAmended } from './support/emission.ts'
 
 /**
  * Gate 2: from the fallow candidate IR, emitted output contains zero
@@ -52,20 +50,8 @@ const DURABLE_MACHINERY_SURFACE = [
 ] as const
 
 async function emitFallow() {
-	const compiled = compileSpecificationCandidate(await readCandidate('fallow'))
-	if (!compiled.ok) throw new Error('fallow candidate failed to compile')
-	const emission = emitFacadeArtifacts(
-		compiled.ir,
-		compiled.digest.specificationDigest,
-	)
-	if (!emission.ok) {
-		throw new Error(
-			`fallow emission refused: ${emission.refusals
-				.map((refusal) => `${refusal.cause}@${refusal.subject}`)
-				.join(', ')}`,
-		)
-	}
-	return { compiled, emission }
+	const { ir, emission } = await emitAmended('fallow')
+	return { compiled: { ir }, emission }
 }
 
 describe('fallow emits no durable machinery', () => {

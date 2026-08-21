@@ -6,17 +6,24 @@
  * reachable causes the product owner admitted: missing, extra, stale and
  * orphaned. Wildcard and fallback bindings are compile-time schema refusals,
  * not reconciliation outcomes, and a signature mismatch is the type checker's
- * job — so none of the three appears here.
+ * job  -  so none of the three appears here.
  *
  * Reconciliation is a pure function over declared-versus-registered inputs. It
  * reads no filesystem, imports no product module, and executes no extension.
+ *
+ * It is a deliberately separate seam from `emitFacadeArtifacts`. An Extension
+ * Registry is reconciled against the product's real bindings, which the
+ * generator cannot see from a Specification Candidate alone; folding it into
+ * artifact emission would make emission appear to prove something it never
+ * observed. A caller reconciles the registry with its own inputs.
  */
 import { type EmitRefusal, emitRefusal, sortRefusals } from './emit-contract.ts'
 
 /**
  * The six feature-conditioned Handwritten Extension kinds the specification
  * permits. Nothing outside this list may bind, which is what keeps the seam
- * from becoming a generic policy escape hatch.
+ * from becoming a generic policy hook. A Handwritten Extension fulfils one
+ * declared Extension Point without adding or ranking state-machine meanings.
  */
 export const EXTENSION_POINT_KINDS = [
 	'fact_provider',
@@ -59,11 +66,11 @@ export interface RegistryReconciliation {
  *
  * The four causes are distinct and each names its own repair:
  *
- * - `missing`  — a declared point has no binding; author the extension.
- * - `extra`    — a binding names a point the specification never declared.
- * - `stale`    — a binding was authored against an older specification
+ * - `missing`   -  a declared point has no binding; author the extension.
+ * - `extra`     -  a binding names a point the specification never declared.
+ * - `stale`     -  a binding was authored against an older specification
  *                revision, so its meaning may no longer be the admitted one.
- * - `orphaned` — a binding survives for a point the specification withdrew.
+ * - `orphaned`  -  a binding survives for a point the specification withdrew.
  *
  * `extra` and `orphaned` differ by intent, not by shape: extra means the point
  * was never declared at this revision, orphaned means it was declared at the

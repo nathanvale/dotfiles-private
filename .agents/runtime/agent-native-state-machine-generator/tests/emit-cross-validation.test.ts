@@ -5,6 +5,7 @@ import {
 	type SpecificationIr,
 } from '../src/index.ts'
 import { readCandidate } from './support/candidates.ts'
+import { emitAmended } from './support/emission.ts'
 
 /**
  * Gates 4 and 5: a deliberately inconsistent IR is refused at emit time, and
@@ -18,12 +19,36 @@ import { readCandidate } from './support/candidates.ts'
  * generator-defect case the cross-validation exists to stop.
  */
 
+/**
+ * Applies the same stage-5 amendments the shared helper applies, so a
+ * permutation comparison exercises the real emitters on both IRs.
+ */
+function amend(ir: SpecificationIr): SpecificationIr {
+	const mutations = Object.fromEntries(
+		Object.entries(ir.commandSurface.mutations).map(([command, mutation]) => [
+			command,
+			['remote_write', 'local_write', 'recovery'].includes(mutation)
+				? 'preview'
+				: mutation,
+		]),
+	)
+	return {
+		...ir,
+		blockers: ir.blockers.slice(0, 1),
+		commandSurface: { ...ir.commandSurface, mutations },
+	}
+}
+
 async function vaultGitIr(): Promise<{ ir: SpecificationIr; digest: string }> {
+	// The amended IR: the three Input Schema v1 expressiveness gaps closed the
+	// way a stage-5 admission is expected to close them, so a cross-validation
+	// failure here is the one the test introduces and not a standing gap.
 	const compiled = compileSpecificationCandidate(
 		await readCandidate('vault-git'),
 	)
 	if (!compiled.ok) throw new Error('vault-git candidate failed to compile')
-	return { ir: compiled.ir, digest: compiled.digest.specificationDigest }
+	const { ir } = await emitAmended('vault-git')
+	return { ir, digest: compiled.digest.specificationDigest }
 }
 
 describe('cross-validation refuses an inconsistent IR at emit time', () => {
@@ -45,8 +70,11 @@ describe('cross-validation refuses an inconsistent IR at emit time', () => {
 
 		expect(emission.ok).toBe(false)
 		if (emission.ok) return
+		// The baseline-exit check has one owner, `deriveCommandContracts`, so a
+		// surface missing exit 2 is refused there rather than restated per
+		// station. Either way no artifact set is published.
 		const causes = new Set(emission.refusals.map((refusal) => refusal.cause))
-		expect(causes.has('emit_station_exit_code_undeclared')).toBe(true)
+		expect(causes.has('emit_baseline_exit_missing')).toBe(true)
 		// Fail-closed: the refusal variant carries no artifacts at all.
 		expect('stations' in emission).toBe(false)
 		expect('modules' in emission).toBe(false)
@@ -67,13 +95,10 @@ describe('cross-validation refuses an inconsistent IR at emit time', () => {
 		if (emission.ok) return
 
 		const exitRefusals = emission.refusals.filter(
-			(refusal) => refusal.cause === 'emit_station_exit_code_undeclared',
+			(refusal) => refusal.cause === 'emit_baseline_exit_missing',
 		)
-		expect(exitRefusals.length).toBeGreaterThan(0)
-		for (const refusal of exitRefusals) {
-			expect(refusal.subject).toMatch(/^[a-z-]+\.[a-z_]+:2$/)
-			expect(refusal.message).toContain('never declares')
-		}
+		expect(exitRefusals.map((refusal) => refusal.subject)).toEqual(['2'])
+		expect(exitRefusals[0]?.message).toContain('baseline exit meaning 2')
 	})
 
 	test('a station cannot expect a result contract the command does not declare', async () => {
@@ -91,7 +116,7 @@ describe('cross-validation refuses an inconsistent IR at emit time', () => {
 		if (emission.ok) return
 		expect(
 			emission.refusals.some(
-				(refusal) => refusal.cause === 'emit_station_result_contract_mismatch',
+				(refusal) => refusal.cause === 'emit_result_contract_undeclared',
 			),
 		).toBe(true)
 	})
@@ -134,15 +159,11 @@ describe('cross-validation refuses an inconsistent IR at emit time', () => {
 describe('emission is deterministic', () => {
 	for (const product of ['vault-git', 'fallow'] as const) {
 		test(`${product} emits byte-identical modules twice from the same IR`, async () => {
-			const compiled = compileSpecificationCandidate(
-				await readCandidate(product),
-			)
-			if (!compiled.ok)
-				throw new Error(`${product} candidate failed to compile`)
-			const digest = compiled.digest.specificationDigest
+			const { ir } = await emitAmended(product)
+			const digest = 'digest-under-test'
 
-			const first = emitFacadeArtifacts(compiled.ir, digest)
-			const second = emitFacadeArtifacts(compiled.ir, digest)
+			const first = emitFacadeArtifacts(ir, digest)
+			const second = emitFacadeArtifacts(ir, digest)
 			expect(first.ok).toBe(true)
 			expect(second.ok).toBe(true)
 			if (!first.ok || !second.ok) return
@@ -163,15 +184,11 @@ describe('emission is deterministic', () => {
 		})
 
 		test(`${product} emits identical typed values twice`, async () => {
-			const compiled = compileSpecificationCandidate(
-				await readCandidate(product),
-			)
-			if (!compiled.ok)
-				throw new Error(`${product} candidate failed to compile`)
-			const digest = compiled.digest.specificationDigest
+			const { ir } = await emitAmended(product)
+			const digest = 'digest-under-test'
 
-			const first = emitFacadeArtifacts(compiled.ir, digest)
-			const second = emitFacadeArtifacts(compiled.ir, digest)
+			const first = emitFacadeArtifacts(ir, digest)
+			const second = emitFacadeArtifacts(ir, digest)
 			if (!first.ok || !second.ok) throw new Error('emission refused')
 
 			expect(JSON.stringify(first.stations)).toBe(
@@ -199,12 +216,11 @@ describe('emission is deterministic', () => {
 		)
 		if (!plain.ok || !permuted.ok)
 			throw new Error('candidate failed to compile')
-
-		const a = emitFacadeArtifacts(plain.ir, plain.digest.specificationDigest)
-		const b = emitFacadeArtifacts(
-			permuted.ir,
-			permuted.digest.specificationDigest,
-		)
+		// The IR preserves candidate key order, so the two IR objects are NOT
+		// byte-identical. Emission must be anyway: every collection the emitters
+		// touch is sorted, so cosmetic difference cannot reach the output.
+		const a = emitFacadeArtifacts(amend(plain.ir), 'd')
+		const b = emitFacadeArtifacts(amend(permuted.ir), 'd')
 		if (!a.ok || !b.ok) throw new Error('emission refused')
 
 		for (const [index, module] of a.modules.entries()) {

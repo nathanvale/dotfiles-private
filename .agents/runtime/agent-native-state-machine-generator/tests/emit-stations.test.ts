@@ -3,11 +3,7 @@ import {
 	type BranchStation,
 	findBranchStationCatalogDrift,
 } from '@side-quest/cli-command-facade'
-import {
-	compileSpecificationCandidate,
-	emitFacadeArtifacts,
-} from '../src/index.ts'
-import { readCandidate } from './support/candidates.ts'
+import { emitAmended } from './support/emission.ts'
 
 /**
  * Gate 1: from the vault-git candidate IR, emitted stations pass the three
@@ -20,22 +16,8 @@ import { readCandidate } from './support/candidates.ts'
  * fails here rather than passing its own reflection.
  */
 async function emitVaultGit() {
-	const compiled = compileSpecificationCandidate(
-		await readCandidate('vault-git'),
-	)
-	if (!compiled.ok) throw new Error('vault-git candidate failed to compile')
-	const emission = emitFacadeArtifacts(
-		compiled.ir,
-		compiled.digest.specificationDigest,
-	)
-	if (!emission.ok) {
-		throw new Error(
-			`vault-git emission refused: ${emission.refusals
-				.map((refusal) => `${refusal.cause}@${refusal.subject}`)
-				.join(', ')}`,
-		)
-	}
-	return { compiled, emission }
+	const { ir, emission } = await emitAmended('vault-git')
+	return { compiled: { ir }, emission }
 }
 
 describe('vault-git stations satisfy the facade contract', () => {

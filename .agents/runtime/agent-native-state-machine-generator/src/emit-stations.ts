@@ -5,16 +5,18 @@
  * Branch Station is not an independently authored fact that could disagree
  * with the command surface. Every station here is derived from the one
  * Admitted State-Machine Specification, so the cross-validations the facade
- * declares but never delivers — a station expecting an exit code its command
+ * declares but never delivers - a station expecting an exit code its command
  * never declares, or a result contract id mismatching the command's
- * declaration — cannot be expressed rather than merely being caught.
+ * declaration - cannot be expressed rather than merely being caught.
  *
  * Derivation is total and ordered: same IR in, same stations out, in the same
  * order, with no dependence on object key insertion order.
  */
 import type { BranchStation } from '@side-quest/cli-command-facade'
 import { type EmitRefusal, emitRefusal } from './emit-contract.ts'
+import { BRANCH_FACTS, resolveResultContract } from './emit-derivation.ts'
 import type { CommandSurface, SpecificationIr } from './ir.ts'
+import { type BranchKind, isWriteImplyingMutation } from './schema.ts'
 
 /**
  * The facade's Branch Station id grammar, restated here so derivation refuses
@@ -25,32 +27,24 @@ import type { CommandSurface, SpecificationIr } from './ir.ts'
 const STATION_ID_PATTERN = /^[a-z][a-z0-9:-]*\.[a-z][a-z0-9_:-]*$/
 
 /**
- * Mutation values that imply a write. Derived from the two spike candidates'
- * `command_surface.mutations` vocabulary. A command whose mutation appears
- * here owes the facade's Write Preview Capability obligation.
+ * The no-argument behaviors a command can be identified by.
+ *
+ * The spec requires no-argument behavior to be help, get-started guidance, a
+ * read-only dashboard, or a repair path, and never a default write. Bare
+ * invocation dispatches to one real declared command, and the facade's third
+ * hard invariant requires every station's command to be in discovery, so the
+ * station must attach to that command rather than to a pseudo-command.
+ *
+ * Input Schema v1 does not say which command bare invocation dispatches to.
+ * Where the behavior's own name matches a declared command the binding is
+ * unambiguous; otherwise emission refuses and asks the owner to admit it.
  */
-const WRITE_IMPLYING_MUTATIONS = new Set([
-	'remote_write',
-	'local_write',
-	'recovery',
-])
-
-/** The branch every command reaches when its input parses and its work reads. */
-const SUCCESS_BRANCH = 'success'
-/** The branch a command reaches when the parser refuses before any state read. */
-const USAGE_BRANCH = 'invalid_usage'
-/** The branch a command reaches when it is blocked or refuses after reading. */
-const REFUSAL_BRANCH = 'refused'
-
-/**
- * The three baseline exit meanings, keyed by branch. The spec fixes success,
- * refusal-or-runtime-failure, and invalid usage as the baseline; a candidate
- * names them in `command_surface.exit_codes` but cannot renumber them.
- */
-const BRANCH_EXIT_CODES: Readonly<Record<string, number>> = {
-	[SUCCESS_BRANCH]: 0,
-	[REFUSAL_BRANCH]: 1,
-	[USAGE_BRANCH]: 2,
+const NO_ARGUMENT_COMMAND_BY_BEHAVIOR: Readonly<Record<string, string>> = {
+	help: 'help',
+	read_only_dashboard: 'status',
+	read_only_restricted_status_dashboard: 'status',
+	repair_path: 'repair',
+	get_started_guidance: 'setup',
 }
 
 /**
@@ -61,10 +55,11 @@ const BRANCH_EXIT_CODES: Readonly<Record<string, number>> = {
  */
 export interface DerivedStation {
 	readonly station: BranchStation
-	/** The branch identity within the command, e.g. `success`. */
-	readonly branch: string
+	readonly branch: BranchKind
 	/** The command's declared mutation from the Command Surface Contract. */
 	readonly mutation: string
+	/** True for the station derived from `command_surface.no_argument_behavior`. */
+	readonly noArgumentBehavior?: string
 }
 
 export interface StationEmission {
@@ -75,18 +70,19 @@ export interface StationEmission {
 /**
  * Derives the complete Branch Station set for one compiled specification.
  *
- * Every command in discovery contributes a success station. A command whose
- * declared flags admit operand or flag error contributes a usage station, and
- * a command that can be refused after reading state contributes a refusal
- * station. This is Declared Branch Coverage only: it claims the catalog is
- * complete, never that any station crossed a real public-process seam.
+ * Every command reaches success, invalid usage, and refusal. Refusal is not
+ * restricted to write-implying commands: a declared blocker can deny authority
+ * to a read as easily as to a write, so a read-only command that could never
+ * be refused would be an unproved claim rather than a derived one.
+ *
+ * This is Declared Branch Coverage only: it claims the catalog is complete,
+ * never that any station crossed a real public-process seam.
  */
 export function deriveStations(ir: SpecificationIr): StationEmission {
 	const surface = ir.commandSurface
 	const refusals: EmitRefusal[] = []
 	const stations: DerivedStation[] = []
 	const seen = new Set<string>()
-	const declaredExits = declaredExitCodes(surface)
 
 	// Sorted so the emitted order depends on the specification's content, not
 	// on the order keys happened to be written into the candidate file.
@@ -94,8 +90,8 @@ export function deriveStations(ir: SpecificationIr): StationEmission {
 		const mutation = surface.mutations[command] ?? 'read'
 		for (const branch of branchesFor(command, surface)) {
 			const id = `${command}.${branch}`
-			const exitCode = BRANCH_EXIT_CODES[branch] ?? 1
-			const resultContractId = resultContractFor(command, surface)
+			const facts = BRANCH_FACTS[branch]
+			const contract = resolveResultContract(command, surface)
 
 			if (seen.has(id)) {
 				refusals.push(
@@ -126,22 +122,18 @@ export function deriveStations(ir: SpecificationIr): StationEmission {
 			// claim a check the derivation makes structurally impossible. The
 			// facade re-checks both independently, and a test asserts its drift
 			// output is empty, so the invariants stay proved rather than assumed.
-			if (!declaredExits.has(exitCode)) {
+			//
+			// The exit code is likewise not checked against `surface.exit_codes`
+			// here: `BRANCH_FACTS` carries only the three baseline exits, and
+			// `deriveCommandContracts` refuses a surface that omits any of them, so
+			// a station cannot reach an undeclared exit. The cross-validation is
+			// enforced at that one owner rather than restated per station.
+			if (contract === undefined) {
 				refusals.push(
 					emitRefusal({
-						cause: 'emit_station_exit_code_undeclared',
-						subject: `${id}:${exitCode}`,
-						message: `Branch Station ${id} expects exit code ${exitCode}, which command ${command} never declares.`,
-					}),
-				)
-				continue
-			}
-			if (resultContractId === undefined) {
-				refusals.push(
-					emitRefusal({
-						cause: 'emit_station_result_contract_mismatch',
+						cause: 'emit_result_contract_undeclared',
 						subject: id,
-						message: `Branch Station ${id} has no result contract declared for command ${command}.`,
+						message: `Branch Station ${id} has no result contract declared for command ${command}; the candidate declares neither a ${command} binding nor a lifecycle contract.`,
 					}),
 				)
 				continue
@@ -154,93 +146,123 @@ export function deriveStations(ir: SpecificationIr): StationEmission {
 					id,
 					command,
 					classification: 'required',
-					intent: branch === SUCCESS_BRANCH ? 'success' : branch,
+					intent: branch,
 					trigger: triggerFor(command, branch, mutation),
-					expectedExitCode: exitCode,
-					expectedEnvelopeStatus: exitCode === 0 ? 'ok' : 'error',
-					expectedResultContractId: resultContractId,
+					expectedExitCode: facts.exitCode,
+					expectedEnvelopeStatus: facts.envelopeStatus,
+					expectedResultContractId: contract.id,
 					mutationExpectation: mutationExpectationFor(branch, mutation),
-					...(branch === USAGE_BRANCH
-						? { expectedErrorCode: 'invalid_usage' }
-						: {}),
+					...(facts.errorCode === undefined
+						? {}
+						: { expectedErrorCode: facts.errorCode }),
 				},
 			})
 		}
 	}
 
+	const noArgument = deriveNoArgumentStation(ir)
+	if (noArgument.station) stations.push(noArgument.station)
+	refusals.push(...noArgument.refusals)
+
 	return { stations, refusals }
 }
 
 /**
- * The exit codes a specification actually declares, as numbers.
+ * Derives the station proving the admitted no-argument behavior.
  *
- * `command_surface.exit_codes` is keyed by the decimal exit string, so a key
- * that is not a base-10 integer is not a declared exit and must not silently
- * widen the set a station may expect.
+ * The station asserts a read-only result: the spec forbids a default write, so
+ * the mutation expectation is the proof obligation, not a description.
  */
-function declaredExitCodes(surface: CommandSurface): ReadonlySet<number> {
-	const codes = new Set<number>()
-	for (const key of Object.keys(surface.exitCodes)) {
-		if (/^\d+$/.test(key)) codes.add(Number.parseInt(key, 10))
+function deriveNoArgumentStation(ir: SpecificationIr): {
+	readonly station?: DerivedStation
+	readonly refusals: readonly EmitRefusal[]
+} {
+	const surface = ir.commandSurface
+	const behavior = surface.noArgumentBehavior
+	const candidate = NO_ARGUMENT_COMMAND_BY_BEHAVIOR[behavior]
+	const command =
+		candidate !== undefined && surface.commands.includes(candidate)
+			? candidate
+			: undefined
+
+	if (command === undefined) {
+		return {
+			refusals: [
+				emitRefusal({
+					cause: 'emit_expectation_column_underivable',
+					subject: `no_argument_behavior:${behavior}`,
+					message: `The candidate declares no_argument_behavior ${behavior} but no declared command owns it, and Input Schema v1 has no binding from bare invocation to a command. Admit which command bare invocation dispatches to.`,
+				}),
+			],
+		}
 	}
-	return codes
+
+	const contract = resolveResultContract(command, surface)
+	if (contract === undefined) {
+		return {
+			refusals: [
+				emitRefusal({
+					cause: 'emit_result_contract_undeclared',
+					subject: `${command}.no_argument`,
+					message: `The no-argument behavior station on command ${command} has no declared result contract.`,
+				}),
+			],
+		}
+	}
+
+	return {
+		refusals: [],
+		station: {
+			branch: 'success',
+			mutation: 'read',
+			noArgumentBehavior: behavior,
+			station: {
+				id: `${command}.no_argument`,
+				command,
+				classification: 'required',
+				intent: 'success',
+				trigger: `bare invocation performs the admitted read-only ${behavior} and never a default write`,
+				expectedExitCode: BRANCH_FACTS.success.exitCode,
+				expectedEnvelopeStatus: BRANCH_FACTS.success.envelopeStatus,
+				expectedResultContractId: contract.id,
+				mutationExpectation: 'read_only_projection',
+			},
+		},
+	}
 }
 
 /**
  * The branches one command reaches.
  *
- * Every command reaches success. A command that accepts any flag can be
- * invoked wrongly, so it reaches invalid usage. A command whose mutation
- * implies a write can be refused after reading state — a read-only command
- * cannot, because there is no authority for it to be denied.
+ * Every command reaches success and refusal. A command that accepts any flag
+ * can additionally be invoked wrongly and reach invalid usage; a command with
+ * no flag surface at all cannot.
  */
 function branchesFor(
 	command: string,
 	surface: CommandSurface,
-): readonly string[] {
-	const branches = [SUCCESS_BRANCH]
+): readonly BranchKind[] {
+	const branches: BranchKind[] = ['success', 'refused']
 	const flags = surface.flags[command] ?? []
 	if (flags.length > 0 || surface.globalFlags.length > 0) {
-		branches.push(USAGE_BRANCH)
+		branches.push('invalid_usage')
 	}
-	if (WRITE_IMPLYING_MUTATIONS.has(surface.mutations[command] ?? 'read')) {
-		branches.push(REFUSAL_BRANCH)
-	}
-	return branches
-}
-
-/**
- * The result contract id a command's branches carry.
- *
- * A candidate keys `result_contracts` by role. `discovery` belongs to the
- * command that projects the command surface; `activation` to the activation
- * command; everything else carries the product's lifecycle contract. Selecting
- * here rather than at each station is what makes the station-to-contract
- * agreement structural.
- */
-function resultContractFor(
-	command: string,
-	surface: CommandSurface,
-): string | undefined {
-	const contracts = surface.resultContracts
-	const byRole = contracts[command] ?? contracts[roleFor(command)]
-	return (byRole ?? contracts.lifecycle)?.id
-}
-
-function roleFor(command: string): string {
-	if (command === 'commands') return 'discovery'
-	return command
+	return branches.sort()
 }
 
 /** A maintainer-readable trigger summary, never setup code. */
-function triggerFor(command: string, branch: string, mutation: string): string {
+function triggerFor(
+	command: string,
+	branch: BranchKind,
+	mutation: string,
+): string {
 	switch (branch) {
-		case SUCCESS_BRANCH:
+		case 'success':
 			return `${command} completes its declared ${mutation} work and returns its result contract`
-		case USAGE_BRANCH:
+		case 'invalid_usage':
 			return `${command} refuses an unknown flag or operand before reading any state`
-		default:
-			return `${command} is refused after reading state because its declared authority is denied`
+		case 'refused':
+			return `${command} is refused after reading state because a declared blocker denies its authority`
 	}
 }
 
@@ -251,12 +273,17 @@ function triggerFor(command: string, branch: string, mutation: string): string {
  * success branch on a write-implying command attempts its Declared Side
  * Effect; every other branch projects read-only.
  */
-function mutationExpectationFor(branch: string, mutation: string): string {
-	if (branch === USAGE_BRANCH) return 'no_runtime_state_read'
-	if (branch === REFUSAL_BRANCH) return 'refuses_before_mutation'
-	if (WRITE_IMPLYING_MUTATIONS.has(mutation)) return `attempts_${mutation}`
-	if (mutation === 'preview') return 'preview_only'
-	return 'read_only_projection'
+function mutationExpectationFor(branch: BranchKind, mutation: string): string {
+	switch (branch) {
+		case 'invalid_usage':
+			return 'no_runtime_state_read'
+		case 'refused':
+			return 'refuses_before_mutation'
+		case 'success':
+			if (isWriteImplyingMutation(mutation)) return `attempts_${mutation}`
+			if (mutation === 'preview') return 'preview_only'
+			return 'read_only_projection'
+	}
 }
 
 /**

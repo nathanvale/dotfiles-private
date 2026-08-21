@@ -1,26 +1,26 @@
 /**
  * Command Surface Contract emission.
  *
- * Produces `Record<Command, CommandFacadeContract>` — the single generated
+ * Produces `Record<Command, CommandFacadeContract>`, the single generated
  * static owner of one product's public CLI meaning. It is generated from the
  * same Admitted State-Machine Specification that generates the Branch
  * Stations, which is what closes the facade's declared-but-undelivered
  * cross-validation: neither side can name an exit code or result contract the
  * other does not.
  *
- * Two obligations are enforced here rather than left for the facade to report
- * as drift, because a generator that emits a contract the facade would refuse
- * has already failed: the Write Preview Capability obligation and the baseline
- * exit meanings.
+ * This module is the one owner of the baseline exit check, so a Branch Station
+ * never restates it. Where the candidate cannot satisfy a facade obligation,
+ * emission refuses and names the command; it never fills the gap itself.
  */
 import type {
 	CommandFacadeContract,
-	CommandFacadeExecutionMode,
 	CommandFacadeOutputMode,
 	CommandFacadeSideEffect,
 } from '@side-quest/cli-command-facade'
 import { type EmitRefusal, emitRefusal } from './emit-contract.ts'
+import { resolveResultContract } from './emit-derivation.ts'
 import type { CommandSurface, SpecificationIr } from './ir.ts'
+import { isWriteImplyingMutation } from './schema.ts'
 
 /**
  * The baseline exit meanings every agent-native command contract must declare:
@@ -43,13 +43,6 @@ const MUTATION_SIDE_EFFECTS: Readonly<
 	local_write: ['write'],
 	recovery: ['write'],
 }
-
-/** Mutations that owe the Write Preview Capability obligation. */
-const WRITE_IMPLYING_MUTATIONS = new Set([
-	'remote_write',
-	'local_write',
-	'recovery',
-])
 
 export interface CommandContractEmission {
 	readonly contracts: Readonly<Record<string, CommandFacadeContract>>
@@ -85,23 +78,29 @@ export function deriveCommandContracts(
 	for (const command of [...surface.commands].sort()) {
 		const mutation = surface.mutations[command] ?? 'read'
 		const sideEffects = MUTATION_SIDE_EFFECTS[mutation] ?? ['read']
-		const executionModes = executionModesFor(mutation)
-		const writeImplying = WRITE_IMPLYING_MUTATIONS.has(mutation)
-		const declaresPreview =
-			executionModes.includes('check') || executionModes.includes('dry_run')
 
-		if (writeImplying && !declaresPreview) {
+		// Input Schema v1 has no `execution_modes` field, so the generator has no
+		// admitted source for one. A write-implying command therefore cannot
+		// satisfy the facade's Write Preview Capability obligation from anything
+		// the candidate declares, and emission refuses rather than inventing a
+		// `check` mode or authoring a `previewExemption` reason. Both are
+		// product-owner decisions; surfacing the gap is the generator's job.
+		if (isWriteImplyingMutation(mutation)) {
 			refusals.push(
 				emitRefusal({
-					cause: 'emit_write_preview_missing',
+					cause: 'emit_write_preview_undeclarable',
 					subject: command,
-					message: `Command ${command} declares write-implying mutation ${mutation} but offers no check or dry_run execution mode and no previewExemption reason.`,
+					message: `Command ${command} declares write-implying mutation ${mutation}, which owes a check or dry_run preview path, but Input Schema v1 declares no execution modes. Admit an execution-mode surface or a package-owned previewExemption reason for ${command}.`,
 				}),
 			)
 			continue
 		}
 
-		const resultContract = resultContractFor(command, surface)
+		const declared = resolveResultContract(command, surface)
+		const resultContract =
+			declared === undefined
+				? undefined
+				: { id: declared.id, schema_version: declared.version }
 		contracts[command] = {
 			script: `src/cli.ts ${command}`,
 			summary: summaryFor(command, mutation),
@@ -110,7 +109,6 @@ export function deriveCommandContracts(
 			audience: 'agent',
 			mutation,
 			sideEffects,
-			executionModes,
 			outputModes: outputModesFor(command, surface),
 			...(resultContract === undefined ? {} : { resultContract }),
 			flags: flagsFor(command, surface),
@@ -119,22 +117,6 @@ export function deriveCommandContracts(
 	}
 
 	return { contracts, refusals }
-}
-
-/**
- * The execution modes a command offers.
- *
- * A write-implying mutation gets a `check` preview path so the Write Preview
- * Capability obligation is satisfied by construction; the generator never
- * emits a `previewExemption`, because an exemption is a narrow package-owned
- * judgement and a generator cannot author the product's reason for it.
- */
-function executionModesFor(
-	mutation: string,
-): readonly CommandFacadeExecutionMode[] {
-	if (WRITE_IMPLYING_MUTATIONS.has(mutation)) return ['normal', 'check']
-	if (mutation === 'preview') return ['dry_run']
-	return ['normal']
 }
 
 function outputModesFor(
@@ -168,17 +150,6 @@ function flagsFor(
 		flags[flag] = { type: 'boolean' }
 	}
 	return flags
-}
-
-function resultContractFor(
-	command: string,
-	surface: CommandSurface,
-): CommandFacadeContract['resultContract'] {
-	const contracts = surface.resultContracts
-	const role = command === 'commands' ? 'discovery' : command
-	const declared = contracts[command] ?? contracts[role] ?? contracts.lifecycle
-	if (declared === undefined) return undefined
-	return { id: declared.id, schema_version: declared.version }
 }
 
 function summaryFor(command: string, mutation: string): string {

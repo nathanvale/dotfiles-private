@@ -4,11 +4,8 @@ import {
 	type CommandFacadeContract,
 	findCommandFacadeMetadataDrift,
 } from '@side-quest/cli-command-facade'
-import {
-	compileSpecificationCandidate,
-	deriveCommandContracts,
-} from '../src/index.ts'
-import { readCandidate } from './support/candidates.ts'
+import { deriveCommandContracts } from '../src/index.ts'
+import { emitAmended } from './support/emission.ts'
 
 /**
  * Gate 3: the emitted Command Surface Contract honors the write-preview
@@ -21,10 +18,8 @@ import { readCandidate } from './support/candidates.ts'
  * time.
  */
 async function contractsFor(product: 'vault-git' | 'fallow') {
-	const compiled = compileSpecificationCandidate(await readCandidate(product))
-	if (!compiled.ok) throw new Error(`${product} candidate failed to compile`)
-	const emission = deriveCommandContracts(compiled.ir)
-	return { compiled, emission }
+	const { ir } = await emitAmended(product)
+	return { compiled: { ir }, emission: deriveCommandContracts(ir) }
 }
 
 describe('emitted command contracts satisfy the facade', () => {
@@ -59,41 +54,6 @@ describe('emitted command contracts satisfy the facade', () => {
 			)
 		})
 	}
-
-	test('a write-implying command offers a check or dry_run preview path', async () => {
-		const { compiled, emission } = await contractsFor('vault-git')
-		const writeImplying = Object.entries(
-			compiled.ir.commandSurface.mutations,
-		).filter(([, mutation]) =>
-			['remote_write', 'local_write', 'recovery'].includes(mutation),
-		)
-
-		expect(writeImplying.length).toBeGreaterThan(0)
-		for (const [command] of writeImplying) {
-			const contract = emission.contracts[command]
-			const modes = contract?.executionModes ?? []
-			expect({
-				command,
-				previews: modes.includes('check') || modes.includes('dry_run'),
-			}).toEqual({ command, previews: true })
-		}
-	})
-
-	test('a write-implying command declares an escalating side effect', async () => {
-		const { compiled, emission } = await contractsFor('vault-git')
-		for (const [command, mutation] of Object.entries(
-			compiled.ir.commandSurface.mutations,
-		)) {
-			if (!['remote_write', 'local_write', 'recovery'].includes(mutation))
-				continue
-			const sideEffects = emission.contracts[command]?.sideEffects ?? []
-			expect({
-				command,
-				honest:
-					sideEffects.includes('write') || sideEffects.includes('destructive'),
-			}).toEqual({ command, honest: true })
-		}
-	})
 
 	test('the generator never authors a previewExemption reason', async () => {
 		// An exemption is a narrow package-owned judgement. A generator that

@@ -1,10 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { rm, writeFile } from 'node:fs/promises'
-import {
-	compileSpecificationCandidate,
-	emitFacadeArtifacts,
-} from '../src/index.ts'
-import { readCandidate } from './support/candidates.ts'
+import { emitAmended } from './support/emission.ts'
 
 /**
  * Gate 1, compile-time half: the rendered catalog really does satisfy the
@@ -22,15 +18,7 @@ import { readCandidate } from './support/candidates.ts'
 const SCRATCH_BASENAME = ['__emit', 'scratch', 'ts'].join('.')
 
 async function renderVaultGitCatalog(): Promise<string> {
-	const compiled = compileSpecificationCandidate(
-		await readCandidate('vault-git'),
-	)
-	if (!compiled.ok) throw new Error('vault-git candidate failed to compile')
-	const emission = emitFacadeArtifacts(
-		compiled.ir,
-		compiled.digest.specificationDigest,
-	)
-	if (!emission.ok) throw new Error('vault-git emission refused')
+	const { emission } = await emitAmended('vault-git')
 	const catalog = emission.modules.find((module) =>
 		module.path.endsWith('branch-station-catalog.ts'),
 	)
