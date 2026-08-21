@@ -70,13 +70,12 @@ writing-for-agents first. Routine status edits run this checklist alone.
    the digest-moving invariant-prose fix, bare "branch" to Branch
    Station, bundles with the admission edit), and the stage 5 to 7
    go-ahead.
-2. Chartered, runnable before stage 5 (supervisor unit): admit the
-   staging-sweep rule (candidate 12; witnessed evidence at
-   receipts/stage4/HANDBACK.md: SIGKILL mid-generation stranded
-   staging siblings inside the repository tree, three of three runs)
-   into CODING_STANDARDS.md and implement the sweep paired with the
-   fixture self-test rule (V6). Candidate 11 (fsync) and V2
-   (mechanized RED) produced no stage-4 evidence and stay unadmitted.
+2. Chartered, runnable before stage 5 (supervisor unit): the open
+   findings repair (F2 banner test, F5 literal version oracle, F6
+   second-copy deletions, F8 scratch path, F9 the sealed-cause
+   iteration test the admitted candidate-10 rule demands plus the four
+   missing fixtures). Each is chartered by an admitted rule or a
+   receipt disposition; none needs Nathan.
 3. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row plus the build-added worklist below.
 
@@ -201,6 +200,15 @@ to Next or the stage-5 worklist.
   structural.ts walk and jsonc.ts toPlainValue end in `const _: never`
   checks. RED probes: a dummy variant in each sealed union fails
   typecheck at exactly the new check. Gate: 129 tests, digests unchanged.
+- Standards repair unit 3, staging sweep, admits candidates 12 and V6:
+  a3b642f. sweepStaleStagingSiblings runs before each staging mkdtemp;
+  the plant-both-kinds test proves the deleted half and the survivor
+  half; RED observed with the sweep disabled. Receipt verdicts moved
+  DEFER to ADMIT-PACKAGE (totals 12 admit, 11 already covered, 8
+  reject, 3 defer); candidates 11 and V2 found no stage-4 evidence and
+  stay unadmitted. Twelve rules now in CODING_STANDARDS.md. Gate: 140
+  tests, typecheck, Biome, pilot verify clean, spike digests
+  byte-identical.
 - Stage 4, Vault Git Reimagined pilot (learning only): MERGED 30d5bff
   (five stage commits 0eb9f12 through repair 070dc90, fixed point
   fbd2931). Gate: 139 tests, typecheck, Biome, verify clean (5
