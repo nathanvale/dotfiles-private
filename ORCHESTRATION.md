@@ -70,9 +70,10 @@ Delete this file when the feature branch is ready to merge to `main`.
   BaselineExitCode deleted (zero callers); GenerationFailure carries
   subject.
 - NEXT (in order): (a) package AGENTS.md reconciliation, worklist below;
-  (b) vault packet write-back (GOAL.md progress, README.md state, via
-  vault-git for commits); (c) standards fit review over all 34 candidates;
-  (d) stage 4 pilot. Stages 5-7 still need Nathan's go-ahead.
+  (b) DONE 2026-08-21: vault packet written back (GOAL.md progress and
+  next action, README.md current state; edits uncommitted in the vault,
+  vault-git owns the commit); (c) standards fit review over all 34
+  candidates; (d) stage 4 pilot. Stages 5-7 still need Nathan's go-ahead.
 - Post-merge AGENTS.md reconciliation worklist (package AGENTS.md, from the
   2026-08-21 writing-for-agents review; the unit already reconciled the Map
   rows for the renamed files): (1) delete the Checks sentence claiming
