@@ -592,8 +592,9 @@ describe('the fallow candidate across every lane', () => {
 	/**
 	 * Fallow is the mostly stateless product: it declares no durable
 	 * operations, no liveness evidence, no version custody and no
-	 * cancellation. Under feature-conditioning, none of that machinery may
-	 * reach its Generated Artifact Set.
+	 * cancellation. The machinery-absence claim on its emitted text is owned
+	 * by feature-conditioning.test.ts; these lanes prove the generation,
+	 * verification and regeneration mechanics on a stateless set.
 	 */
 	test('verification accepts, then refuses drift, on a fallow set', async () => {
 		const dir = await outputDir()
@@ -631,37 +632,6 @@ describe('the fallow candidate across every lane', () => {
 		expect(
 			await verifyArtifactSet(compiled.ir, compiled.digest, { outputDir: dir }),
 		).toMatchObject({ ok: true })
-	})
-
-	test('a fallow set carries no durable-work machinery', async () => {
-		const dir = await outputDir()
-		const compiled = await compile('fallow')
-		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
-
-		const written = await snapshot(dir)
-
-		// The whole Generated Artifact Set is scanned, not one artifact. A
-		// stateless product's output must contain no durable-operation,
-		// liveness, retry, Cancellation or version-custody surface anywhere:
-		// the omission is structural, so no artifact gets an exemption.
-		expect(written.size).toBeGreaterThan(1)
-		const generated = [...written.values()].join('\n')
-
-		for (const absent of [
-			'logical_operation',
-			'logicalOperation',
-			'acknowledgement',
-			'heartbeat',
-			'liveness',
-			'cancellation',
-			'operation_progress',
-			'progress_owner',
-			'incompatible_run_version',
-			'attempt',
-			'retry_posture',
-		]) {
-			expect(generated).not.toContain(absent)
-		}
 	})
 
 	test('repeat generation of a fallow set is byte-identical', async () => {

@@ -2,11 +2,10 @@ import { describe, expect, test } from 'bun:test'
 import {
 	compileSpecificationCandidate,
 	deriveArtifactSet,
-	isWriteImplyingMutation,
 	type SpecificationIr,
 } from '../src/index.ts'
 import { readCandidate } from './support/candidates.ts'
-import { emitAmended } from './support/emission.ts'
+import { amendForEmission, emitAmended } from './support/emission.ts'
 
 /**
  * Gates 4 and 5: a deliberately inconsistent IR is refused at emit time, and
@@ -19,24 +18,6 @@ import { emitAmended } from './support/emission.ts'
  * surface contradicts what a station would need. That is exactly the
  * generator-defect case the cross-validation exists to stop.
  */
-
-/**
- * Applies the same stage-5 amendments the shared helper applies, so a
- * permutation comparison exercises the real emitters on both IRs.
- */
-function amend(ir: SpecificationIr): SpecificationIr {
-	const mutations = Object.fromEntries(
-		Object.entries(ir.commandSurface.mutations).map(([command, mutation]) => [
-			command,
-			isWriteImplyingMutation(mutation) ? 'preview' : mutation,
-		]),
-	)
-	return {
-		...ir,
-		blockers: ir.blockers.slice(0, 1),
-		commandSurface: { ...ir.commandSurface, mutations },
-	}
-}
 
 async function vaultGitIr(): Promise<{ ir: SpecificationIr; digest: string }> {
 	// The amended IR: the three Input Schema v1 expressiveness gaps closed the
@@ -217,9 +198,11 @@ describe('emission is deterministic', () => {
 			throw new Error('candidate failed to compile')
 		// The IR preserves candidate key order, so the two IR objects are NOT
 		// byte-identical. Emission must be anyway: every collection the emitters
-		// touch is sorted, so cosmetic difference cannot reach the output.
-		const a = deriveArtifactSet(amend(plain.ir), 'd')
-		const b = deriveArtifactSet(amend(permuted.ir), 'd')
+		// touch is sorted, so cosmetic difference cannot reach the output. Both
+		// sides take the one shared amendment chain, so a divergence here is the
+		// emitters' and not an amendment artifact.
+		const a = deriveArtifactSet(amendForEmission(plain.ir), 'd')
+		const b = deriveArtifactSet(amendForEmission(permuted.ir), 'd')
 		if (!a.ok || !b.ok) throw new Error('emission refused')
 
 		for (const [index, module] of a.modules.entries()) {
