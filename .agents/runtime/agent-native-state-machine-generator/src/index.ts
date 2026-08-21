@@ -96,7 +96,6 @@ export {
 } from './artifact-set.ts'
 export {
 	type DerivedStation,
-	deriveStations,
 	type StationEmission,
 	stationIds,
 } from './branch-stations.ts'
@@ -116,10 +115,9 @@ export {
 	type DiagnosticStage,
 	type SourceLocation,
 } from './diagnostics.ts'
-export {
-	buildExpectationTable,
-	type ExpectationEmission,
-	type SemanticExpectationRow,
+export type {
+	ExpectationEmission,
+	SemanticExpectationRow,
 } from './expectations.ts'
 export {
 	type DeclaredExtensionPoint,
@@ -163,12 +161,7 @@ export {
 	type ArtifactRefusal,
 	type ArtifactRefusalCause,
 } from './refusal.ts'
-export {
-	type RenderedModule,
-	renderCommandContracts,
-	renderExpectationTable,
-	renderStationCatalog,
-} from './render.ts'
+export type { RenderedModule } from './render.ts'
 export {
 	BASELINE_EXIT_CODES,
 	type BaselineExitCode,
