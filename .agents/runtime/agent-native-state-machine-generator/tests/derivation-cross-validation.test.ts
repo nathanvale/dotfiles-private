@@ -121,6 +121,47 @@ describe('cross-validation refuses an inconsistent IR at emit time', () => {
 		).toBe(true)
 	})
 
+	test('a rule table matching no station leaves retry posture unresolved', async () => {
+		const { ir, digest } = await vaultGitIr()
+		// A declared rule keyed to a command no station carries: the table is
+		// non-empty and matches nothing, so Exact Same-Input Retry Safety cannot
+		// be derived for any complete row.
+		const inconsistent: SpecificationIr = {
+			...ir,
+			retryPosture: {
+				...ir.retryPosture,
+				rules: [
+					// biome-ignore lint/suspicious/noThenProperty: schema field name, not a thenable
+					{ when: { command: 'no_such_command' }, then: 'same_input_safe' },
+				],
+			},
+		}
+
+		const emission = deriveArtifactSet(inconsistent, digest)
+
+		expect(emission.ok).toBe(false)
+		if (emission.ok) return
+		// Exactly this cause: nothing else about the IR is inconsistent, so the
+		// fixture is not refused for another reason.
+		expect([
+			...new Set(emission.refusals.map((refusal) => refusal.cause)),
+		]).toEqual(['emit_retry_posture_unresolved'])
+		// Each refusal names its Branch Station; incomplete rows never consult
+		// the rule table, so no invalid-usage station appears here.
+		const subjects = emission.refusals.map((refusal) => refusal.subject)
+		expect(subjects.length).toBeGreaterThan(0)
+		expect(subjects).toContain('doctor.success')
+		for (const subject of subjects) {
+			expect({
+				subject,
+				isCompleteRow: !subject.endsWith('.invalid_usage'),
+			}).toEqual({ subject, isCompleteRow: true })
+		}
+		// Fail-closed: the refusal variant carries no artifacts at all.
+		expect('stations' in emission).toBe(false)
+		expect('modules' in emission).toBe(false)
+	})
+
 	test('refusals are deterministically ordered', async () => {
 		const { ir, digest } = await vaultGitIr()
 		const inconsistent: SpecificationIr = {
