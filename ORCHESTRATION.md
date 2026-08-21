@@ -15,23 +15,30 @@ Resume sources, in order:
    section.
 
 Resume step 0: run `git status` in this worktree and reconcile every dirty
-file against the queue head before any other action. Work can be in flight
-here; the ledger lags the tree.
+file against the queue head before any other action, then check
+`.worktrees/issue-55-*` for a stage worktree holding an AGENT-BRIEF.md
+without a HANDBACK.md (a live stage run; never re-charter over one). Work
+can be in flight; the ledger lags the tree, and the in-flight block under
+Next holds the pipeline position.
 
 ## At merge (checklist, in order)
 
-1. Create backup branch `archive/issue-55-orchestration` at the final
-   pre-merge commit. Nathan's ruling 2026-08-21: this file and `receipts/`
-   feed a planned orchestration skill; keep both recoverable. `receipts/`
-   is tracked and merges with the branch.
-2. Post the three out-of-scope repo defects to the tracker for Nathan:
-   warm-chrome synthetic observed coverage, vault-git circular catalog
-   oracle, browser-use-security grep-based custody proof (evidence in the
-   two sibling-suite receipts).
-3. Migrate any unfinished queue item to the vault packet's Next safe
-   action.
-4. Delete this file on the feature branch; remove its pointer from the
-   package AGENTS.md Authority section and reassign that maintenance line.
+1. Create backup branch `archive/issue-55-orchestration` at the current
+   feature-branch HEAD, before step 4's deletion commit. Nathan's ruling
+   2026-08-21: this file and `receipts/` feed a planned orchestration
+   skill; keep both recoverable. `receipts/` is tracked and merges with
+   the branch.
+2. Post the three out-of-scope repo defects as issues on
+   nathanvale/dotfiles-private via ghh for Nathan: warm-chrome synthetic
+   observed coverage, vault-git circular catalog oracle,
+   browser-use-security grep-based custody proof. Evidence:
+   receipts/standards-research-sibling-tests-browser.md and
+   receipts/standards-research-sibling-tests-vault-git.md.
+3. Migrate every unfinished item under Next, including the stage-5
+   worklist and open findings, to the vault packet's Next safe action.
+4. Delete this file on the feature branch; remove its pointer line from
+   the package AGENTS.md Authority section. The vault packet becomes the
+   build-state owner.
 
 ## Next
 
@@ -40,8 +47,50 @@ here; the ledger lags the tree.
    verify clean after the run. Pilot specification admission is Nathan's
    decision. Stage-4-owned defers: fsync (candidate 11), staging sweep
    (candidate 12), fixture self-test (V6), mechanized RED (V2).
-2. Stages 5 to 7 need Nathan's go-ahead. Stage 5 carries the plan
-   comment's 13 unresolved decisions plus the build-added worklist below.
+2. Stages 5 to 7 need Nathan's go-ahead. Stage 5 carries the 13
+   unresolved decisions named in the plan comment's stage-5 row plus the
+   build-added worklist below.
+
+### In flight: stage 4 pilot
+
+Fixed point (fork commit; review is invalid if HEAD moves): fbd2931.
+Stage worktree: `.worktrees/issue-55-stage4`, branch
+feat/issue-55-stage4-pilot. Launched 2026-08-21.
+
+AC lines, verbatim in AGENT-BRIEF.md there; tick one only when the gate
+proof covers it:
+
+- [ ] Pilot separated from qualification; retains generated semantic,
+      contract, registry, catalog, and drift checks plus one
+      real-process smoke path
+- [ ] Pilot used only for fast feedback; counted as no qualification
+      evidence
+- [ ] Real-process smoke matches a generated Branch Station expectation;
+      verify clean after the run
+
+Pipeline (mechanics owned by the code-review contract below):
+
+- [x] Brief grounded: issue 55 body and plan-comment row re-read;
+      gate-proof row and AC lines quoted in AGENT-BRIEF.md; brief opens
+      with the CONTEXT.md instruction
+- [ ] HANDBACK.md received
+- [ ] Stage gate re-run by the supervisor (bun test, typecheck, biome)
+- [ ] Both review axes plus cli-execution-auditor dispatched against the
+      fixed point above
+- [ ] Every finding dispositioned; repair packet delivered, or none
+      needed
+- [ ] Gate re-run after repair
+- [ ] Merged at <sha>
+
+After merge; tick only on proof, then delete this block:
+
+- [ ] Ledger entry written (shape rule at the Ledger heading)
+- [ ] Package AGENTS.md reconciled
+- [ ] Vault packet written back (GOAL.md and README.md, both `updated:`
+      fields)
+- [ ] Issue 55 progress comment posted via ghh
+- [ ] AGENT-BRIEF.md, HANDBACK.md, and reviews archived at
+      receipts/stage4/
 
 Stage-5 admission worklist (build-added; the plan comment owns the 13
 base decisions):
@@ -90,14 +139,24 @@ receipts/standards-fit-review-2026-08.md, "Findings for the supervisor"):
   here; nothing is pushed anywhere without Nathan's approval.
 - Stage worktrees branch from the feature branch at
   `.worktrees/issue-55-<unit>`, one background agent each, opened in VS
-  Code for Nathan. Agent contract: AGENT-BRIEF.md at the stage worktree
-  root; completion signal: HANDBACK.md. Both are untracked during the
-  run and archived with the reviews at `receipts/<unit>/`.
+  Code for Nathan. Launch recipe: historically `claude --bg --model
+  claude-opus-5 --effort high`; stage 4 runs on the supervisor
+  session's inherited model after the harness rejected that
+  model-effort combination on 2026-08-21. Review axes run as
+  report-only background sub-agents. Agent contract: AGENT-BRIEF.md at
+  the stage worktree root; completion signal: HANDBACK.md. Both are
+  untracked during the run, then archived at `receipts/<unit>/`
+  (stages 1 to 3 hold brief and handback only; their reviews were
+  delivered inline; consolidation/ also holds the review reports and
+  repair packet).
 
 ## Ledger (merged units)
 
 Bare filenames resolve under
-`.agents/runtime/agent-native-state-machine-generator/`.
+`.agents/runtime/agent-native-state-machine-generator/`. An entry records
+closed state only: merge hash, gate counts, the AC lines satisfied or
+left open, declines and repairs on record, receipts path. Open work moves
+to Next or the stage-5 worklist.
 
 - Stage 1, validator plus canonical digest: MERGED 98c9d8d. Gate: 25
   tests, typecheck, Biome. Decline on record: the `then` retry-rule key
@@ -126,15 +185,15 @@ Bare filenames resolve under
 - Standards fit review plus amendment: 9c9ae9d, 1f1d55d. All 34 research
   candidates ruled: 10 admit, 11 already covered, 8 reject, 5 defer. Ten
   rules entered CODING_STANDARDS.md. Receipt:
-  receipts/standards-fit-review-2026-08.md; research evidence in the five
+  receipts/standards-fit-review-2026-08.md; research evidence in the four
   receipts/standards-research*.md files.
 - Standards repair unit 1, codepoint order and NFC/LF digest input:
   8b7efa4. compareCodepoints in canonical.ts is the one comparator owner;
   every string reaching the digest, keys included, normalizes to NFC with
   LF. Two new digest guards went RED with normalization gutted. Gate: 129
   tests, typecheck, Biome. Charter correction: fixture digests did not
-  move; both spike candidates were already NFC with LF (vault-git
-  7f85428e, fallow c26764f0).
+  move; both spike candidates were already NFC with LF (digests:
+  vault-git 7f85428e, fallow c26764f0).
 - Standards repair unit 2, switch exhaustiveness, closes F7: ede5d87.
   structural.ts walk and jsonc.ts toPlainValue end in `const _: never`
   checks. RED probes: a dummy variant in each sealed union fails
@@ -147,13 +206,16 @@ Bare filenames resolve under
 - Ground every unit in the tracker acceptance criteria before chartering
   it: re-read the issue 55 body and the plan comment row the unit sits
   under. The unit's brief quotes its gate-proof row and the AC lines it
-  binds; both review axes receive those lines verbatim. At merge, the
-  ledger entry ticks off the AC lines the gate proof satisfied and names
-  any left open. GitHub Issues stays the mutable status owner.
+  binds; both review axes receive those lines verbatim. AC ticking
+  happens in the queue's in-flight block; at merge the ledger entry
+  records the AC outcome. GitHub Issues stays the mutable status owner.
   Standards-compliance units bind instead to the admitted
   CODING_STANDARDS.md rules that chartered them.
 - Every stage brief opens with "read the package CONTEXT.md first"
-  (vocabulary is contract surface).
+  (vocabulary is contract surface). Model briefs:
+  receipts/stage3/AGENT-BRIEF.md (feature stage),
+  receipts/consolidation/AGENT-BRIEF.md (supervisor-chartered gate
+  unit).
 - Maintain the package CODING_STANDARDS.md as the harvest of supervision:
   one rule per witnessed defect class, with its lesson. Rules enter only
   from witnessed findings; delete a rule once tooling enforces it. Naming
@@ -196,16 +258,21 @@ Bare filenames resolve under
      tooling enforces are skipped.
    - Spec: issue 55 body plus the plan comment's rulings, scoped to the
      stage's row and the AC lines quoted in the brief. Verify gate
-     proofs are real, hunt scope creep, re-derive questionable
-     implementations from the spec text.
+     proofs are real (fixtures genuinely falsifiable, nothing passing
+     for the wrong reason), hunt scope creep (invented schema surface,
+     facade edits, new dependencies, next-stage work), re-derive
+     questionable implementations from the spec text. Model reports:
+     receipts/consolidation/review-spec.md and review-standards.md
+     (differential probes; verified-claims table).
 4. Disposition is the supervisor's, per finding: must-fix (blocks
    merge), should-fix (done unless it destabilizes a green gate), or
    record-only (deferred with a named owning stage, written into this
    file). The implementing agent may decline a finding with reasons in
    HANDBACK.md; the supervisor arbitrates and records the ruling.
 5. One repair cycle per stage unless Nathan approves more, delivered as
-   one consolidated packet to the same stage agent. The supervisor
-   re-runs the gate after repair, before merging.
+   one consolidated packet to the same stage agent. Model packet:
+   receipts/consolidation/REPAIR-PACKET.md. The supervisor re-runs the
+   gate after repair, before merging.
 6. pattern-referee joins only when a diff defends structure by pattern
    name; cli-execution-auditor joins stage 4 and stage 5 reviews.
 7. Coherence gate, supervisor-owned; ran once at 3acce98, re-run after
@@ -224,7 +291,9 @@ Bare filenames resolve under
    meaning no existing file owns. Track src file and export counts in
    the ledger; unexplained growth is a finding, not a fact.
 
-Gate-run note: the root AGENTS.md on this branch predates main's 513ff2f
-and still claims `bun run lint` fails in `.worktrees/` checkouts; verified
-false here (lint completes). The package AGENTS.md Checks section owns
-the gate commands.
+## Gate-run note
+
+The root AGENTS.md on this branch predates main's 513ff2f and still
+claims `bun run lint` fails in `.worktrees/` checkouts; verified false
+here (lint completes). The package AGENTS.md Checks section owns the
+gate commands.
