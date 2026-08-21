@@ -380,6 +380,29 @@ to Next or the stage-5 worklist.
   owned by the facade ADD unit). AC outcome: stories 51 and 52
   satisfied; 5 and 6 satisfied for declared surfaces; gate 6 partial by
   record. Receipts at receipts/schema-v2/.
+- Manifest-read path safety (Stage 5, security boundary): MERGED
+  276efd2 (unit commit cb86b6a, receipts at 565a661). A provenance
+  manifest is untrusted input, and its declared outputs reached the
+  delete call unvalidated, so a declared `../victim.txt` would remove a
+  file outside the Generated Artifact Root. The merged tree refused only
+  because a materialisation check happened to test path safety and
+  answered "not present" to a question about safety; the worker proved
+  deletion is one line away by removing that line and observing
+  ok:true with the victim destroyed. Validation now happens where
+  untrusted paths enter, before any stat, write or delete, refusing
+  unsafe or duplicate entries with the new sealed cause
+  generation_unsafe_declared_output naming the offending path, and the
+  deletion site refuses again independently. Gate: 401 tests (19
+  added), typecheck, Biome, pilot verify clean, four pinned digests
+  byte-identical, draft inventory unchanged at 45. Supervisor attacked
+  six further path shapes not in the worker's set, including a
+  duplicate and a mid-path dot segment: all refuse with the victim
+  byte-intact. Two follow-ups on record: symlink escape is unproved
+  rather than safe (isSafeRelativePath is lexical; a realpath
+  containment check at the deletion site would close it), and the
+  second and third layers are fail-loud rather than
+  fail-closed-with-a-cause by design, marking an upstream defect.
+  Receipts at receipts/manifest-path-safety/.
 - Lesson on record from that unit, five witnessed instances: a custody
   gate that trusts one signal it never cross-checks passes its own
   tests. The reader took its contract version from the global; the IR
