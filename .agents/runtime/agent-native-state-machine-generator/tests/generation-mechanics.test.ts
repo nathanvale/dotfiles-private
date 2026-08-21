@@ -195,7 +195,7 @@ describe('verifying a Generated Artifact Set for drift', () => {
 		expect(result.ok).toBe(false)
 		if (result.ok) return
 		expect(result.cause).toBe('generated_drift')
-		expect(result.findings.map((finding) => finding.reason)).toContain(
+		expect(result.findings.map((finding) => finding.cause)).toContain(
 			'missing_artifact',
 		)
 	})
@@ -222,9 +222,9 @@ describe('verifying a Generated Artifact Set for drift', () => {
 		if (result.ok) return
 		expect(result.cause).toBe('generated_drift')
 		const unexpected = result.findings.filter(
-			(finding) => finding.reason === 'unexpected_artifact',
+			(finding) => finding.cause === 'unexpected_artifact',
 		)
-		expect(unexpected.map((finding) => finding.path)).toContain(
+		expect(unexpected.map((finding) => finding.subject)).toContain(
 			'retired-contract.json',
 		)
 	})
@@ -242,7 +242,7 @@ describe('verifying a Generated Artifact Set for drift', () => {
 
 		expect(result.ok).toBe(false)
 		if (result.ok) return
-		expect(result.findings.map((finding) => finding.reason)).toContain(
+		expect(result.findings.map((finding) => finding.cause)).toContain(
 			'modified_artifact',
 		)
 	})
@@ -268,7 +268,7 @@ describe('verifying a Generated Artifact Set for drift', () => {
 
 		expect(result.ok).toBe(false)
 		if (result.ok) return
-		expect(result.findings.map((finding) => finding.reason)).toContain(
+		expect(result.findings.map((finding) => finding.cause)).toContain(
 			'stale_artifact_set',
 		)
 	})
@@ -311,9 +311,11 @@ describe('verifying a Generated Artifact Set for drift', () => {
 		if (result.ok) return
 		expect(result.cause).toBe('generated_drift')
 		const unexpected = result.findings.filter(
-			(finding) => finding.reason === 'unexpected_artifact',
+			(finding) => finding.cause === 'unexpected_artifact',
 		)
-		expect(unexpected.map((finding) => finding.path)).toContain('orphan.json')
+		expect(unexpected.map((finding) => finding.subject)).toContain(
+			'orphan.json',
+		)
 	})
 
 	test('refuses a set with no provenance manifest at all', async () => {
@@ -328,7 +330,7 @@ describe('verifying a Generated Artifact Set for drift', () => {
 
 		expect(result.ok).toBe(false)
 		if (result.ok) return
-		expect(result.findings.map((finding) => finding.reason)).toContain(
+		expect(result.findings.map((finding) => finding.cause)).toContain(
 			'missing_manifest',
 		)
 	})
@@ -582,7 +584,7 @@ describe('the fallow candidate across every lane', () => {
 		expect(drifted.ok).toBe(false)
 		if (drifted.ok) return
 		expect(drifted.cause).toBe('generated_drift')
-		expect(drifted.findings.map((finding) => finding.reason)).toContain(
+		expect(drifted.findings.map((finding) => finding.cause)).toContain(
 			'modified_artifact',
 		)
 	})
@@ -717,8 +719,8 @@ describe('the real Generated Artifact Set reaches generation and verification', 
 		expect(result.cause).toBe('generated_drift')
 		expect(
 			result.findings
-				.filter((finding) => finding.reason === 'modified_artifact')
-				.map((finding) => finding.path),
+				.filter((finding) => finding.cause === 'modified_artifact')
+				.map((finding) => finding.subject),
 		).toContain('src/command-surface-contract.ts')
 
 		// Verification is read-only: the hand edit is still there, unrepaired.

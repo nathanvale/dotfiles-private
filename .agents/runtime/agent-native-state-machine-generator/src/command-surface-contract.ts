@@ -20,15 +20,7 @@ import type {
 import { resolveResultContract } from './derivation-facts.ts'
 import type { CommandSurface, SpecificationIr } from './ir.ts'
 import { type ArtifactRefusal, artifactRefusal } from './refusal.ts'
-import { isWriteImplyingMutation } from './schema.ts'
-
-/**
- * The baseline exit meanings every agent-native command contract must declare:
- * `0` success, `1` refusal or runtime failure, `2` invalid usage. Restated
- * from the facade's `COMMAND_FACADE_BASELINE_EXIT_CODES` so emission refuses
- * before publishing; a test proves the two lists agree.
- */
-const BASELINE_EXIT_CODES = ['0', '1', '2'] as const
+import { BASELINE_EXIT_CODES, isWriteImplyingMutation } from './schema.ts'
 
 /**
  * Declared mutation to facade side effects. A write-implying mutation must

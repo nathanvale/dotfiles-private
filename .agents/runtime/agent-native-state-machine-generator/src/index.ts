@@ -130,9 +130,9 @@ export {
 	reconcileExtensionRegistry,
 } from './extension-registry.ts'
 export {
-	DRIFT_REASONS,
+	DRIFT_CAUSES,
+	type DriftCause,
 	type DriftFinding,
-	type DriftReason,
 	GENERATION_FAILURE_CAUSES,
 	type GenerationFailure,
 	type GenerationFailureCause,
@@ -170,8 +170,13 @@ export {
 	renderStationCatalog,
 } from './render.ts'
 export {
+	BASELINE_EXIT_CODES,
+	type BaselineExitCode,
+	isWriteImplyingMutation,
 	NEXT_SAFE_ACTION_KINDS,
 	type NextSafeActionKind,
 	RETRY_POSTURES,
 	type RetryPosture,
+	WRITE_IMPLYING_MUTATIONS,
+	type WriteImplyingMutation,
 } from './schema.ts'

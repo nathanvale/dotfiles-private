@@ -3,6 +3,7 @@ import {
 	type DerivationOptions,
 	type DerivationSuccess,
 	deriveArtifactSet,
+	isWriteImplyingMutation,
 	type SpecificationIr,
 } from '../../src/index.ts'
 import { readCandidate } from './candidates.ts'
@@ -39,9 +40,7 @@ function withPreviewableMutations(ir: SpecificationIr): SpecificationIr {
 	const mutations = Object.fromEntries(
 		Object.entries(ir.commandSurface.mutations).map(([command, mutation]) => [
 			command,
-			['remote_write', 'local_write', 'recovery'].includes(mutation)
-				? 'preview'
-				: mutation,
+			isWriteImplyingMutation(mutation) ? 'preview' : mutation,
 		]),
 	)
 	return { ...ir, commandSurface: { ...ir.commandSurface, mutations } }

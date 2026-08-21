@@ -86,13 +86,13 @@ export interface GenerationFailure {
 export type GenerationResult = GenerationSuccess | GenerationFailure
 
 /**
- * Sealed reasons a Generated Artifact Set is refused as drifted. Each explains
- * one `generated_drift` refusal; callers branch on the cause and the reason,
- * never on a message.
+ * Sealed causes a Generated Artifact Set is refused as drifted. Each explains
+ * one `generated_drift` refusal; callers branch on the cause, never on a
+ * message.
  *
- * Adding a reason is a Generator Contract change.
+ * Adding a cause is a Generator Contract change.
  */
-export const DRIFT_REASONS = [
+export const DRIFT_CAUSES = [
 	/** A declared artifact is absent from the working tree. */
 	'missing_artifact',
 	/** The generator-owned output directory holds a file the set does not declare. */
@@ -105,12 +105,23 @@ export const DRIFT_REASONS = [
 	'missing_manifest',
 ] as const
 
-export type DriftReason = (typeof DRIFT_REASONS)[number]
+export type DriftCause = (typeof DRIFT_CAUSES)[number]
 
+/**
+ * One reason a Generated Artifact Set is refused as drifted.
+ *
+ * Follows the package's refusal shape: a sealed `cause` a caller branches on,
+ * a `subject` naming what the cause concerns, and a `message` that explains
+ * without carrying meaning a caller must parse. The cause vocabulary differs
+ * from ArtifactRefusalCause because the two answer different questions - one
+ * names why a set on disk disagrees with its regeneration, the other why a set
+ * could not be derived at all - but the shape is the same so a caller reads
+ * both refusals the same way.
+ */
 export interface DriftFinding {
-	readonly reason: DriftReason
+	readonly cause: DriftCause
 	/** The declared output this finding concerns; empty for a whole-set cause. */
-	readonly path: string
+	readonly subject: string
 	readonly message: string
 }
 
@@ -468,8 +479,8 @@ export async function verifyArtifactSet(
 			cause: DRIFT_CAUSE,
 			findings: [
 				{
-					reason: 'stale_artifact_set',
-					path: '',
+					cause: 'stale_artifact_set',
+					subject: '',
 					message: `the artifact set could not be regenerated for comparison: ${rendered.message}`,
 				},
 			],
@@ -501,15 +512,15 @@ export async function verifyArtifactSet(
 		const manifest = await readExistingManifest(options.outputDir)
 		if (!manifest.present)
 			findings.push({
-				reason: 'missing_manifest',
-				path: PROVENANCE_MANIFEST_PATH,
+				cause: 'missing_manifest',
+				subject: PROVENANCE_MANIFEST_PATH,
 				message:
 					'no provenance manifest: the artifact set on disk has no admitted origin',
 			})
 		else if (manifest.digest !== digest.specificationDigest)
 			findings.push({
-				reason: 'stale_artifact_set',
-				path: PROVENANCE_MANIFEST_PATH,
+				cause: 'stale_artifact_set',
+				subject: PROVENANCE_MANIFEST_PATH,
 				message: `the manifest records specification digest ${manifest.digest || '(unreadable)'}, but the admitted input digests to ${digest.specificationDigest}`,
 			})
 
@@ -530,8 +541,8 @@ export async function verifyArtifactSet(
 			const absolute = resolveOutput(options.outputDir, path)
 			if (!onDisk.has(path)) {
 				findings.push({
-					reason: 'missing_artifact',
-					path,
+					cause: 'missing_artifact',
+					subject: path,
 					message: `declared artifact "${path}" is absent from the working tree`,
 				})
 				continue
@@ -539,8 +550,8 @@ export async function verifyArtifactSet(
 			const actual = await Bun.file(absolute).text()
 			if (actual !== expected.get(path))
 				findings.push({
-					reason: 'modified_artifact',
-					path,
+					cause: 'modified_artifact',
+					subject: path,
 					message: `declared artifact "${path}" differs from its regeneration`,
 				})
 		}
@@ -548,8 +559,8 @@ export async function verifyArtifactSet(
 		for (const path of [...onDisk].sort()) {
 			if (!expected.has(path))
 				findings.push({
-					reason: 'unexpected_artifact',
-					path,
+					cause: 'unexpected_artifact',
+					subject: path,
 					message: `"${path}" is present in the generated output directory but is not part of the regenerated set`,
 				})
 		}

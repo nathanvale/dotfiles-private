@@ -8,6 +8,7 @@
 import type { Diagnostic } from './diagnostics.ts'
 import type { JsoncEntry, JsoncNode } from './jsonc.ts'
 import {
+	BASELINE_EXIT_CODES,
 	MUTATION_KINDS,
 	NEXT_SAFE_ACTION_KINDS,
 	RETRY_POSTURES,
@@ -741,7 +742,7 @@ function checkAuthorityAndSideEffects({
 	}
 
 	// Baseline exit meanings must be declared; an undeclared exit is unroutable.
-	for (const code of ['0', '1', '2'] as const) {
+	for (const code of BASELINE_EXIT_CODES) {
 		if (cursor.string(['command_surface', 'exit_codes', code]) !== undefined)
 			continue
 		report(

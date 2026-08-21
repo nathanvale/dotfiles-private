@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
 	compileSpecificationCandidate,
 	deriveArtifactSet,
+	isWriteImplyingMutation,
 } from '../src/index.ts'
 import { readCandidate } from './support/candidates.ts'
 
@@ -61,9 +62,7 @@ describe('the generator refuses rather than inventing an execution mode', () => 
 
 		// Oracle: the candidate's own mutation table, read independently.
 		const expected = Object.entries(compiled.ir.commandSurface.mutations)
-			.filter(([, mutation]) =>
-				['remote_write', 'local_write', 'recovery'].includes(mutation),
-			)
+			.filter(([, mutation]) => isWriteImplyingMutation(mutation))
 			.map(([command]) => command)
 			.sort()
 
