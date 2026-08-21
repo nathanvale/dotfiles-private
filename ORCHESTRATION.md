@@ -75,9 +75,12 @@ writing-for-agents first. Routine status edits run this checklist alone.
    first admission hardens Input Schema v1), worktree
    `.worktrees/issue-55-aw-draft`, branch
    feat/issue-55-agent-worktree-draft, forked at 036cf54, brief at its
-   root, completion signal HANDBACK.md; (b) the stage-5 decision packet
-   (drafted resolutions for confirm/reject), assembled read-only for
-   supervisor review before it reaches issue 55.
+   root, completion signal HANDBACK.md. Track (b), the stage-5
+   decision packet, is DONE 2026-08-21: all 13 decisions grounded in
+   the vault-git spike candidate's unresolved_decisions array
+   (fixtures/spike-candidates/vault-git.state-machine.jsonc), archived
+   at receipts/stage5-decision-packet.md, posted to issue 55 for
+   Nathan's confirm/reject.
 3. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row plus the build-added worklist below.
 
