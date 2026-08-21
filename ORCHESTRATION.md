@@ -25,18 +25,22 @@ Delete this file when the feature branch is ready to merge to `main`.
 
 ## Stage ledger
 
-- Stage 1 (validator + canonical digest): built on
-  `feat/issue-55-stage1-validator` in `.worktrees/issue-55-stage1`, gate
-  passed (21 tests), two-axis review done. Repair cycle 1 in progress:
-  6 must-fix (biome, CONTEXT.md vocabulary in diagnostics, unsafe-retry
-  guarded-clause escape + new negative fixture, sealed no_argument_behavior,
-  bidirectional version_custody, dead seenEntities check), 4 should-fix
-  (typed build-ir access, dedup extractions, selectors ruling,
-  competing-invoke detection). Deferred on record: input_schema_version
-  exact-match (stage 2 admission/provenance), typed-IR widening (stage 2).
-- Stages 2 ∥ 3: fan out after stage-1 merge (generation mechanics ∥ facade
-  emitters). Zero facade modification before stage 5; ADD-1/ADD-2 are
-  separately reviewed stage-5 prerequisites.
+- Stage 1 (validator + canonical digest): MERGED at 98c9d8d. Gate 25 tests,
+  typecheck, Biome clean; repair cycle 1 complete. Reasoned decline on
+  record: the `then` retry-rule key stays (candidate schema surface),
+  noThenProperty suppressed with reason. Root biome.json now includes the
+  package (blanket `!.agents` replaced by explicit sibling excludes).
+  Deferred to stage 2 on record: input_schema_version exact-match check,
+  typed-IR widening (acknowledgement/waits/cancellation/authority/versioning
+  absent from SpecificationIr; ir.canonical is complete), dedup extraction of
+  the three duplicate-id loops in semantic.ts.
+- Stages 2 ∥ 3: RUNNING in `.worktrees/issue-55-stage2`
+  (`feat/issue-55-stage2-generation`) and `.worktrees/issue-55-stage3`
+  (`feat/issue-55-stage3-contracts`), one Opus 5 bg agent each. Expected
+  merge conflict: both add exports to the package `src/index.ts`; supervisor
+  resolves at integration and wires stage 3 emitters into stage 2 generation
+  with a joint proof. Zero facade modification before stage 5; ADD-1/ADD-2
+  are separately reviewed stage-5 prerequisites.
 - Stage 4 pilot, then stages 5-7 only with Nathan's go-ahead (stage 5 carries
   the 13-decision admission worklist).
 
