@@ -1,10 +1,11 @@
 /**
- * The emit seam: one compiled specification in, facade-shaped artifacts out.
+ * The artifact derivation seam: one compiled specification in, the complete
+ * Generated Artifact Set or sealed artifact refusals out.
  *
  * Mirrors the compiler's front door. Callers pass the IR and digest that
  * `compileSpecificationCandidate` produced and receive either the complete
- * artifact set or a list of emit refusals  -  never both, and never a partial
- * set. The generation pipeline that writes files, records provenance and
+ * artifact set or a list of artifact refusals  -  never both, and never a
+ * partial set. The generation pipeline that writes files, records provenance and
  * verifies drift consumes this; it is not implemented here.
  *
  * Emission is not Specification Admission.
@@ -78,7 +79,7 @@ export type DerivationResult = DerivationSuccess | DerivationFailure
 const DEFAULT_CATALOG_PATH = 'src/branch-station-catalog.ts'
 
 /**
- * Emits the facade-shaped artifact set for one compiled specification.
+ * Derives the Generated Artifact Set for one compiled specification.
  *
  * Every artifact derivation runs before any refusal is reported, so a caller
  * sees the complete artifact repair list rather than only the first problem.

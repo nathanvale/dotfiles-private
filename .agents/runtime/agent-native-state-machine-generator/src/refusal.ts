@@ -1,9 +1,9 @@
 /**
- * The emit stage's own fail-closed vocabulary.
+ * The artifact refusal vocabulary: derivation's own fail-closed causes.
  *
  * Kept separate from the compiler's sealed `DiagnosticCause` list on purpose.
  * A compiler diagnostic points at a source location inside a Specification
- * Candidate; an emit refusal points at a derived artifact that the candidate
+ * Candidate; an artifact refusal points at a derived artifact the candidate
  * compiled cleanly into but that cannot be published without contradicting a
  * facade obligation. The two vocabularies answer different questions, so a
  * caller must be able to branch on them independently.
@@ -13,7 +13,8 @@
  */
 
 /**
- * Sealed emit refusal causes. Adding a cause is a Generator Contract change.
+ * Sealed artifact refusal causes; cause tokens keep their `emit_` spelling.
+ * Adding a cause is a Generator Contract change.
  *
  * Every cause here is reachable. The cross-validations the facade declares but
  * never delivers - a station expecting an exit code its command never

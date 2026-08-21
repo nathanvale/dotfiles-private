@@ -74,6 +74,13 @@ export interface GenerationSuccess {
 export interface GenerationFailure {
 	readonly ok: false
 	readonly cause: GenerationFailureCause
+	/**
+	 * The refusal's named subject: the offending emitter's name, the contested
+	 * path for a manifest collision, or the output directory for the
+	 * filesystem causes. Branchable context beside `cause`; `message` stays
+	 * prose.
+	 */
+	readonly subject: string
 	readonly message: string
 	/**
 	 * The sealed refusals behind a `generation_emit_refused` cause, so a caller
@@ -178,6 +185,7 @@ function renderArtifactSet(
 			return {
 				ok: false,
 				cause: 'generation_emitter_failure',
+				subject: emitter.name,
 				message: `emitter "${emitter.name}" failed: ${describe(error)}`,
 				refusals: [],
 			}
@@ -191,6 +199,7 @@ function renderArtifactSet(
 			return {
 				ok: false,
 				cause: 'generation_emit_refused',
+				subject: emitter.name,
 				message: `emitter "${emitter.name}" refused to derive its artifacts: ${emitted.refusals
 					.map((refusal) => `${refusal.cause} (${refusal.subject})`)
 					.join(', ')}`,
@@ -204,6 +213,7 @@ function renderArtifactSet(
 				return {
 					ok: false,
 					cause: 'generation_emitter_failure',
+					subject: emitter.name,
 					message: `emitter "${emitter.name}" re-declares the output "${path}"`,
 					refusals: [],
 				}
@@ -211,6 +221,7 @@ function renderArtifactSet(
 				return {
 					ok: false,
 					cause: 'generation_emitter_failure',
+					subject: emitter.name,
 					message: `emitter "${emitter.name}" declared the unsafe output path "${path}"`,
 					refusals: [],
 				}
@@ -223,6 +234,7 @@ function renderArtifactSet(
 		return {
 			ok: false,
 			cause: 'generation_emitter_failure',
+			subject: PROVENANCE_MANIFEST_PATH,
 			message: `an emitter re-declares the provenance manifest "${PROVENANCE_MANIFEST_PATH}"`,
 			refusals: [],
 		}
@@ -312,6 +324,7 @@ async function replaceArtifactSet(
 		return {
 			ok: false,
 			cause: 'generation_write_failure',
+			subject: outputDir,
 			message: `could not replace the artifact set: ${describe(error)}`,
 			refusals: [],
 		}
@@ -431,6 +444,7 @@ export async function regenerateArtifactSet(
 		return {
 			ok: false,
 			cause: 'generation_no_existing_set',
+			subject: options.outputDir,
 			message: `no provenance manifest in "${options.outputDir}": regeneration replaces an existing Generated Artifact Set, so use generation to create one`,
 			refusals: [],
 		}

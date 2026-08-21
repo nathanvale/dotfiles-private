@@ -2,11 +2,11 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DEFAULT_EMITTERS } from '../src/artifact-set.ts'
 import type { ArtifactEmitter } from '../src/index.ts'
 import {
 	ARTIFACT_REFUSAL_CAUSES,
 	compileSpecificationCandidate,
+	DEFAULT_EMITTERS,
 	generateArtifactSet,
 	regenerateArtifactSet,
 	verifyArtifactSet,
@@ -803,6 +803,9 @@ describe('an emit refusal fails generation closed', () => {
 		expect(result.ok).toBe(false)
 		if (result.ok) return
 		expect(result.cause).toBe('generation_emit_refused')
+		// The failure names its subject: the refusing emitter, not prose to
+		// parse out of message (repair S2).
+		expect(result.subject).toBe('refusing')
 		expect(result.refusals.map((refusal) => refusal.cause)).toEqual([
 			'emit_result_contract_undeclared',
 		])

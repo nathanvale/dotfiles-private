@@ -2,7 +2,6 @@ import { describe, expect, test } from 'bun:test'
 import {
 	compileSpecificationCandidate,
 	deriveArtifactSet,
-	isWriteImplyingMutation,
 } from '../src/index.ts'
 import { readCandidate } from './support/candidates.ts'
 
@@ -60,9 +59,14 @@ describe('the generator refuses rather than inventing an execution mode', () => 
 		expect(emission.ok).toBe(false)
 		if (emission.ok) return
 
-		// Oracle: the candidate's own mutation table, read independently.
+		// Deliberate independent oracle: the write-implying list restated as a
+		// literal. Do not hoist onto isWriteImplyingMutation - it is the same
+		// predicate the derivation branches on, and f(x) === f(x) proves
+		// nothing (repair M1).
 		const expected = Object.entries(compiled.ir.commandSurface.mutations)
-			.filter(([, mutation]) => isWriteImplyingMutation(mutation))
+			.filter(([, mutation]) =>
+				['remote_write', 'local_write', 'recovery'].includes(mutation),
+			)
 			.map(([command]) => command)
 			.sort()
 

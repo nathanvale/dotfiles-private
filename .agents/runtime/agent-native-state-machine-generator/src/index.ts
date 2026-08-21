@@ -89,6 +89,7 @@ export {
 } from './artifact-derivation.ts'
 export {
 	type ArtifactEmitter,
+	DEFAULT_EMITTERS,
 	type EmissionResult,
 	type EmittedArtifacts,
 	PROVENANCE_MANIFEST_PATH,
@@ -164,7 +165,6 @@ export {
 export type { RenderedModule } from './render.ts'
 export {
 	BASELINE_EXIT_CODES,
-	type BaselineExitCode,
 	isWriteImplyingMutation,
 	NEXT_SAFE_ACTION_KINDS,
 	type NextSafeActionKind,
