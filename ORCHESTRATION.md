@@ -56,19 +56,23 @@ Delete this file when the feature branch is ready to merge to `main`.
   stage 2 kept src/emit.ts, stage 3's front door is src/emit-facade.ts
   pending the consolidation unit's contract-term rename. Ledger counts:
   19 src files, 18 index.ts export statements.
-- RUNNING: the consolidation unit (task 7, coherence gate) launched
-  2026-08-21 before stage 4. Worktree `.worktrees/issue-55-consolidation`,
-  branch `feat/issue-55-consolidation-coherence` (forked at 915c122), Opus 5
-  background job `8645262c`, brief at the worktree root (AGENT-BRIEF.md).
-  Scope: wire stage-3 emitters into DEFAULT_EMITTERS with a joint
-  generate/verify proof, contract-term renames (emit-facade.ts and the
-  emit-* family), vocabulary hoists, dedupe residue (semantic.ts
-  duplicate-id loops confirmed still present at fork). Completion signal
-  HANDBACK.md; then supervisor gate re-run, review, repair, merge. Review
-  complete 2026-08-21: gate proofs all reproduced independently; repair
-  cycle 1 dispatched (REPAIR-PACKET.md at the consolidation worktree root:
-  must-fix M1 write-preview oracle tautology, six should-fix items;
-  generation_emit_refused and EmissionResult arbitrated in scope).
+- Consolidation unit (task 7, coherence gate): MERGED at 3acce98 (repair
+  commit e8bec06). Full receipts (brief, handback with repair section,
+  repair packet, both review reports) at receipts/consolidation/. Two-axis
+  review reproduced every gate proof independently; must-fix M1
+  (write-preview oracle tautology) plus six should-fix items all landed;
+  generation_emit_refused and EmissionResult arbitrated IN SCOPE. Repair
+  was executed by the supervisor because the stage agent's session stalled
+  on a cross-session message approval and was stopped. Post-repair gate:
+  127 tests, 0 fail, typecheck and Biome clean, fixture digests
+  byte-identical to 915c122. Ledger counts: 19 src files, 18 index.ts
+  export statements, 127 tests. DEFAULT_EMITTERS is now front-door;
+  BaselineExitCode deleted (zero callers); GenerationFailure carries
+  subject.
+- NEXT (in order): (a) package AGENTS.md reconciliation, worklist below;
+  (b) vault packet write-back (GOAL.md progress, README.md state, via
+  vault-git for commits); (c) standards fit review over all 34 candidates;
+  (d) stage 4 pilot. Stages 5-7 still need Nathan's go-ahead.
 - Post-merge AGENTS.md reconciliation worklist (package AGENTS.md, from the
   2026-08-21 writing-for-agents review; the unit already reconciled the Map
   rows for the renamed files): (1) delete the Checks sentence claiming
