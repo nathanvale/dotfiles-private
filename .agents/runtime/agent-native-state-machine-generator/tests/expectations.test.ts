@@ -72,6 +72,7 @@ describe('retry posture comes from the declared rule table', () => {
 			(rule) => rule.when.result_kind === 'success',
 		)
 		expect(declared).toBeDefined()
+		if (!declared) return
 
 		const successRows = emission.expectations.filter((row) =>
 			row.stationId.endsWith('.success'),
@@ -80,7 +81,7 @@ describe('retry posture comes from the declared rule table', () => {
 		for (const row of successRows) {
 			expect({ station: row.stationId, retry: row.retrySafety }).toEqual({
 				station: row.stationId,
-				retry: declared?.then,
+				retry: declared.then,
 			})
 		}
 	})
