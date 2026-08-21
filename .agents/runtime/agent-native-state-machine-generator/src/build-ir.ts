@@ -48,6 +48,18 @@ function optional(value: unknown): string | undefined {
 	return typeof value === 'string' ? value : undefined
 }
 
+/**
+ * A field the shape marks required, narrowed rather than cast.
+ *
+ * Structural validation has already refused a document missing it, so the
+ * empty-string fallback is unreachable through the compile pipeline. It is a
+ * narrowing rather than a cast so the checker keeps proving the type instead
+ * of being told to stop asking.
+ */
+function required(value: unknown): string {
+	return typeof value === 'string' ? value : ''
+}
+
 function strings(value: unknown): readonly string[] {
 	return Array.isArray(value)
 		? value.filter((item): item is string => typeof item === 'string')
@@ -95,16 +107,19 @@ function buildPositionalRoutes(value: unknown): readonly PositionalRoute[] {
 		positionals: canonicalize(
 			raw.positionals ?? {},
 		) as PositionalRoute['positionals'],
-		...defined('bareAlias', optional(raw.bare_alias)),
+		...defined('bareInvocationTarget', optional(raw.bare_invocation_target)),
 	}))
 }
 
 function buildCapabilities(value: unknown): readonly CapabilityAvailability[] {
+	// The three required fields are required by the shape, so structural
+	// validation has already refused a candidate missing any of them.
 	return namedEntries(value).map(([name, raw]) => ({
 		name,
-		available: raw.available === true,
-		...defined('unavailableBlocker', optional(raw.unavailable_blocker)),
-		...defined('unavailableAction', optional(raw.unavailable_action)),
+		availabilityEvidence: required(raw.availability_evidence),
+		unavailableBlocker: required(raw.unavailable_blocker),
+		unavailableAction: required(raw.unavailable_action),
+		...defined('availableAction', optional(raw.available_action)),
 	}))
 }
 

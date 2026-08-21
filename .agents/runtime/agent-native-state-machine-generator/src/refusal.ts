@@ -60,6 +60,30 @@ export const ARTIFACT_REFUSAL_CAUSES = [
 	/** The candidate declares no result contract usable for a command. */
 	'emit_result_contract_undeclared',
 	/**
+	 * A Contextual Rendering shares its identifier with a canonical action id.
+	 *
+	 * One resolver reads both namespaces, so a shared identifier makes the
+	 * resolved answer depend on which is looked up first rather than on what
+	 * the specification declared.
+	 */
+	'emit_contextual_rendering_collides',
+	/**
+	 * A Routing Table row targets a Branch Station id the derived catalog does
+	 * not contain.
+	 *
+	 * Distinct from the derived-station causes above, and expressible where
+	 * they are not: those judge a station this compilation built, so a station
+	 * naming an undeclared command cannot arise. This judges a *reference*
+	 * written by a candidate author, which can name anything at all. The
+	 * command prefix alone is not the check: a declared command with a branch
+	 * suffix no derivation emits resolves its prefix and still selects a
+	 * station that will never exist.
+	 *
+	 * It is an artifact refusal rather than a compile diagnostic because the
+	 * catalog it judges against does not exist until derivation builds it.
+	 */
+	'emit_route_station_unknown',
+	/**
 	 * Neither the candidate nor the consumer names the product's public entry
 	 * point, so the Command Surface Contract's mandatory `script` cannot be
 	 * derived. The entry is a per-product fact: an Input Schema v2 candidate

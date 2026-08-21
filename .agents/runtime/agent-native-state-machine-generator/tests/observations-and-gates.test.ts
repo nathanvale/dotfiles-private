@@ -79,8 +79,13 @@ const DECLARED_EVIDENCE_REFUSALS: ReadonlyArray<{
 	},
 	{
 		fixture: 'capability-unroutable',
-		cause: 'semantic_incomplete_projection',
-		claim: 'an unavailable capability routing nowhere selects nothing',
+		// Structural, not semantic: both routes are now required fields, so a
+		// capability declaring neither is refused before semantic validation
+		// runs. The old shape made them required only once an author wrote
+		// `available: false`, which is why the same fixture used to reach the
+		// semantic check.
+		cause: 'structure_missing_required',
+		claim: 'a capability routing nowhere selects nothing when it is absent',
 	},
 	{
 		fixture: 'capability-unknown-route',
@@ -230,7 +235,9 @@ describe('the declared gates carry their ruled meanings', () => {
 		const capability = result.ir.capabilities[0]
 		expect(capability).toBeDefined()
 		if (capability === undefined) return
-		expect(capability.available).toBe(false)
+		// No current value is carried: availability is runtime evidence a
+		// Liveness Evidence Provider supplies against this binding.
+		expect(capability.availabilityEvidence.length).toBeGreaterThan(0)
 		expect(capability.unavailableBlocker).toBe('capability_missing')
 
 		// The route lands on a needs_human action, which is what "operator-owned

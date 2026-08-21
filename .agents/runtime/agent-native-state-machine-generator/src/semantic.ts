@@ -239,7 +239,9 @@ export function validateSemantics(
 	checkReferences(scope)
 	checkTransitionTargets(scope)
 	checkRouting(scope)
-	checkDeclaredEvidence(scope)
+	checkObservations(scope)
+	checkCapabilities(scope)
+	checkPauseModes(scope)
 	checkCommandSurfaceV2(scope)
 	checkStateVocabularies(scope)
 	checkRetryPosture(scope)
@@ -633,7 +635,7 @@ function checkStateVocabularies({ cursor, report }: SemanticCheckScope): void {
 			})
 		}
 
-		// A declared phase→state projection must be total over the source phases.
+		// A declared phase-to-state projection must be total over the source phases.
 		const projection = cursor.entries([...base, 'projection_from_phase'])
 		if (projection.length > 0) {
 			// The source phases are the declared phase state's values. Totality
@@ -1107,13 +1109,13 @@ function checkCommandSurfaceV2({
 			)
 		}
 
-		const alias = cursor.string([...base, 'bare_alias'])
+		const alias = cursor.string([...base, 'bare_invocation_target'])
 		if (alias !== undefined && !actionIds.has(alias))
 			report(
 				'semantic_unresolved_reference',
 				`Bare invocation of ${JSON.stringify(entry.key)} selects action ${JSON.stringify(alias)}, which the action catalog does not declare.`,
-				`command_surface.positional_routes.${entry.key}.bare_alias`,
-				cursor.loc([...base, 'bare_alias']),
+				`command_surface.positional_routes.${entry.key}.bare_invocation_target`,
+				cursor.loc([...base, 'bare_invocation_target']),
 			)
 	}
 
@@ -1272,8 +1274,16 @@ function checkRouting(scope: SemanticCheckScope): void {
 				)
 			}
 			if (targetKind === 'branch_station') {
-				// A Branch Station id names its own command first, which is the
-				// facade's id grammar and the only part resolvable at compile.
+				// The command prefix is all this stage can resolve: the derived
+				// station catalog does not exist until `buildIr` has run, and
+				// this validation runs before it. The prefix check is therefore
+				// a partial one by construction, and it must not be read as
+				// resolving the target - `doctor.typo_no_such_station` passes it
+				// while naming a station no derivation emits.
+				//
+				// The whole target is checked against the derived catalog by
+				// `branch-stations.ts`, which owns that catalog, and refuses
+				// with `emit_route_station_unknown`.
 				const command = target.split('.')[0] ?? ''
 				if (!commands.has(command)) {
 					report(
@@ -1337,11 +1347,17 @@ function combinationsOf(
  * release is not human-owned, or a capability whose unavailability routes
  * nowhere would each publish a meaning the ruling settled differently.
  */
-function checkDeclaredEvidence(scope: SemanticCheckScope): void {
-	const { cursor, report, actionIds } = scope
+/**
+ * Observation Expiry and Wake Route resolution (ADR 0002).
+ *
+ * A declared observation names the cause it expires into and the route a
+ * waiting caller wakes through. Both must resolve against declared
+ * vocabularies, or an observation would expire into an unnamed cause and
+ * a caller would be told to wait for a signal nothing declares.
+ */
+function checkObservations(scope: SemanticCheckScope): void {
+	const { cursor, report } = scope
 	const blockers = new Set(cursor.strings(['blockers']))
-	const externalOwners = new Set(cursor.strings(['actions', 'external_owners']))
-
 	// An observation's declared expiry cause and Wake Route must resolve.
 	//
 	// Deliberately no uniqueness rule across observations. The recorded
@@ -1387,25 +1403,49 @@ function checkDeclaredEvidence(scope: SemanticCheckScope): void {
 				cursor.loc([...base, 'wake_route']),
 			)
 	}
+}
 
+/**
+ * Capability Availability routing.
+ *
+ * Capability Availability is an installed-surface fact, never Authority.
+ * The specification carries no current value, so both routes are checked
+ * for every declared capability: whichever a provider later observes, the
+ * declared routing already covers it.
+ */
+function checkCapabilities(scope: SemanticCheckScope): void {
+	const { cursor, report, actionIds } = scope
+	const blockers = new Set(cursor.strings(['blockers']))
 	for (const entry of cursor.entries(['capabilities'])) {
 		const base = ['capabilities', entry.key] as const
-		// An unavailable capability must route somewhere: the ruling sends it
-		// to an operator-owned escalation rather than letting the surface go
-		// quiet, so a declared blocker and action are both required once the
-		// capability is declared unavailable.
-		if (cursor.bool([...base, 'available']) !== false) continue
+		// Both routes are checked for every declared capability, never only
+		// for one an author wrote a value for. Availability is observed at
+		// runtime, so a capability whose routing depended on a design-time
+		// boolean could uninstall and route nowhere.
 		const blocker = cursor.string([...base, 'unavailable_blocker'])
 		const action = cursor.string([...base, 'unavailable_action'])
 		if (blocker === undefined || action === undefined) {
 			report(
 				'semantic_incomplete_projection',
-				`Capability ${JSON.stringify(entry.key)} is unavailable but declares no blocker and action to route to, so its absence selects nothing.`,
+				`Capability ${JSON.stringify(entry.key)} declares no blocker and action to route to when it is unavailable, so its absence selects nothing.`,
 				`capabilities.${entry.key}`,
 				cursor.keyLoc([...base]),
 			)
 			continue
 		}
+
+		// The route an available capability takes, when the product declares
+		// one, must resolve like any other. An absent one is not an error:
+		// most capabilities simply permit the work their command already does.
+		const availableAction = cursor.string([...base, 'available_action'])
+		if (availableAction !== undefined && !actionIds.has(availableAction))
+			report(
+				'semantic_unresolved_reference',
+				`Capability ${JSON.stringify(entry.key)} routes an available capability to action ${JSON.stringify(availableAction)}, which the action catalog does not declare.`,
+				`capabilities.${entry.key}.available_action`,
+				cursor.loc([...base, 'available_action']),
+			)
+
 		if (!blockers.has(blocker))
 			report(
 				'semantic_unresolved_reference',
@@ -1435,7 +1475,20 @@ function checkDeclaredEvidence(scope: SemanticCheckScope): void {
 				cursor.loc([...base, 'unavailable_action']),
 			)
 	}
+}
 
+/**
+ * Pause Mode ownership and release (ADR 0003).
+ *
+ * A Pause Mode is an externally owned gate whose release is a human-owned
+ * act. Its owner must be one the candidate declares, and its release
+ * action must be human-owned, so no product can declare a Pause it clears
+ * itself.
+ */
+function checkPauseModes(scope: SemanticCheckScope): void {
+	const { cursor, report, actionIds } = scope
+	const blockers = new Set(cursor.strings(['blockers']))
+	const externalOwners = new Set(cursor.strings(['actions', 'external_owners']))
 	for (const entry of cursor.entries(['pause_modes'])) {
 		const base = ['pause_modes', entry.key] as const
 		const blocker = cursor.string([...base, 'active_blocker'])

@@ -47,15 +47,25 @@ export interface RoutingTable {
 export interface PositionalRoute {
 	readonly command: string
 	readonly positionals: Readonly<Record<string, string>>
-	readonly bareAlias?: string
+	readonly bareInvocationTarget?: string
 }
 
-/** Whether a declared capability is installed, and where an absent one routes. */
+/**
+ * A declared capability, the evidence that observes it, and both routes.
+ *
+ * Carries no current value. Whether the capability is installed is runtime
+ * evidence a Liveness Evidence Provider supplies against
+ * `availabilityEvidence`; the specification declares only what is true either
+ * way, so routing is complete rather than conditional on an authored boolean.
+ */
 export interface CapabilityAvailability {
 	readonly name: string
-	readonly available: boolean
-	readonly unavailableBlocker?: string
-	readonly unavailableAction?: string
+	/** Extension Point id of the provider that observes this capability. */
+	readonly availabilityEvidence: string
+	/** Where an available capability routes, when the product declares one. */
+	readonly availableAction?: string
+	readonly unavailableBlocker: string
+	readonly unavailableAction: string
 }
 
 /** An externally owned gate; its release is human-owned. */

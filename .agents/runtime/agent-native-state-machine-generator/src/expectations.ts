@@ -19,12 +19,24 @@
  */
 
 import { type DerivedStation, sortStations } from './branch-stations.ts'
-import { BRANCH_FACTS, resolveRetryPosture } from './derivation-facts.ts'
-import type { RoutingRow, RoutingTable, SpecificationIr } from './ir.ts'
+import {
+	BRANCH_FACTS,
+	projectRetryable,
+	resolveRetryPosture,
+} from './derivation-facts.ts'
+import type {
+	ActionEntry,
+	ExpectationColumns,
+	RoutingRow,
+	RoutingTable,
+	SpecificationIr,
+} from './ir.ts'
 import { type ArtifactRefusal, artifactRefusal } from './refusal.ts'
 import type {
 	BranchKind,
+	ChangedState,
 	NextSafeActionKind,
+	ResultChannel,
 	RetryPosture,
 	RoutingRole,
 } from './schema.ts'
@@ -58,6 +70,28 @@ export interface SemanticExpectationRow {
 	readonly projectionCompleteness: 'complete' | 'incomplete'
 	readonly nextSafeAction: NextSafeActionKind
 	readonly stopScope?: 'domain_terminal' | 'agent_terminal'
+	/**
+	 * What the branch changed, and where its result arrives. Present only on
+	 * stations the candidate declares columns for.
+	 *
+	 * Absent means undeclared, never "nothing changed": `changed_state` has a
+	 * declared `unknown` value for the case a caller cannot tell, so a missing
+	 * column would otherwise publish `none` as though it were observed. A
+	 * product asserts these against a real process only where it admitted
+	 * them.
+	 */
+	readonly changedState?: ChangedState
+	readonly channel?: ResultChannel
+	/**
+	 * The facade's one-way `retryable` projection for this row (ADR 0006).
+	 *
+	 * Present only where the compiled specification settles every conjunct
+	 * `projectRetryable` requires. Absent means the specification does not
+	 * settle them, never "false": a consumer must not read an absent
+	 * projection as a decided negative, and `retrySafety` remains what
+	 * decides safety either way. Nothing reads this back as evidence.
+	 */
+	readonly retryable?: boolean
 }
 
 export interface ExpectationEmission {
@@ -87,6 +121,12 @@ export function buildExpectationTable(
 	const rows: SemanticExpectationRow[] = []
 	const catalog = new Map(ir.actions.catalog.map((entry) => [entry.id, entry]))
 	const resolution = ir.actions.resolution
+	// Keyed by the Branch Station id the candidate declared, so a column
+	// reaches a row only where the specification named that exact station.
+	// Nothing is inferred from the command, the branch, or the key's shape.
+	const declaredColumns = new Map(
+		ir.expectationColumns.map((entry) => [entry.name, entry]),
+	)
 
 	for (const derived of sortStations(stations)) {
 		const { station, branch } = derived
@@ -220,6 +260,7 @@ export function buildExpectationTable(
 			projectionCompleteness: facts.projectionCompleteness,
 			nextSafeAction: entry.kind,
 			...(stopScope === undefined ? {} : { stopScope }),
+			...columnsFor(declaredColumns.get(station.id)),
 		}
 
 		const violation = assertIncompleteProjection(row)
@@ -227,10 +268,103 @@ export function buildExpectationTable(
 			refusals.push(violation)
 			continue
 		}
-		rows.push(row)
+		// Whether a declared station_action binding chose this action, asked at
+		// the same seam that resolution uses, so the projection below reads a
+		// declaration rather than re-deriving one.
+		const stationAction = selectRoutingRow(ir, 'station_action', {
+			branch,
+			command: station.command,
+		})
+		const retryable = retryableFor({
+			row,
+			boundByStationAction:
+				stationAction !== undefined && 'row' in stationAction,
+			entry,
+			ir,
+		})
+		rows.push(retryable === undefined ? row : { ...row, retryable })
 	}
 
 	return { rows, refusals }
+}
+
+/**
+ * The `retryable` projection for one finished row, where the specification
+ * settles every conjunct ADR 0006 requires (S13).
+ *
+ * `sameInvocationAsNextSafeAction` is the conjunct that decides whether this
+ * can be answered at all. It asks whether the canonical Next Safe Action IS
+ * this station's own public invocation, and only a declared `station_action`
+ * binding says so: the action catalog carries no action-to-command binding,
+ * and `owner` is the Progress Owner, not the invoking command. Matching an
+ * action id against the command's spelling would be the naming-convention
+ * inference this package has already been bitten by.
+ *
+ * The remaining conjuncts, once a binding exists:
+ *
+ * - `posture` and `projectionCompleteness` are already on the row.
+ * - `noPrerequisite`: the action declares no required context and no feature
+ *   gate, so nothing must happen before repeating it.
+ * - `normalizedInputUnchanged`: a station IS one public invocation with one
+ *   normalized input, so repeating that station carries the same input by
+ *   construction.
+ * - `logicalOperationUnchanged`: settled only where the product declares no
+ *   durable operations, so no Logical Operation exists for a repeat to
+ *   change. A durable-operations product mints identity at runtime, which no
+ *   design-time specification decides.
+ *
+ * Withheld, never false, wherever a conjunct is unsettled. `false` is a
+ * decided negative: it says the specification ruled this not retryable.
+ * Publishing that from missing evidence is the same fail-open the predicate
+ * exists to prevent, read from the other side.
+ */
+function retryableFor(input: {
+	readonly row: SemanticExpectationRow
+	readonly boundByStationAction: boolean
+	readonly entry: ActionEntry
+	readonly ir: SpecificationIr
+}): boolean | undefined {
+	const { row, boundByStationAction, entry, ir } = input
+
+	// A repeat under durable operations may or may not carry the same Logical
+	// Operation; the specification carries no surface that decides it.
+	if (ir.features.durableOperations) return undefined
+
+	// Without a declared station_action binding nothing says the Next Safe
+	// Action is this same invocation, so the conjunction has no honest answer.
+	if (!boundByStationAction) return undefined
+
+	return projectRetryable({
+		posture: row.retrySafety,
+		projectionCompleteness: row.projectionCompleteness,
+		sameInvocationAsNextSafeAction: true,
+		normalizedInputUnchanged: true,
+		logicalOperationUnchanged: true,
+		noPrerequisite:
+			entry.requiresContext.length === 0 && entry.requiresFeature === undefined,
+	})
+}
+
+/**
+ * The declared per-station columns, spread onto a row.
+ *
+ * Each column is emitted only when the candidate declared that column for
+ * that exact station. An undeclared column is omitted rather than defaulted:
+ * `changed_state` has a declared `unknown` member for "the caller cannot
+ * tell", so filling an absent column with `none` would publish a claim the
+ * specification never made.
+ */
+function columnsFor(declared: ExpectationColumns | undefined): {
+	readonly changedState?: ChangedState
+	readonly channel?: ResultChannel
+} {
+	if (declared === undefined) return {}
+	return {
+		...(declared.changedState === undefined
+			? {}
+			: { changedState: declared.changedState }),
+		...(declared.channel === undefined ? {} : { channel: declared.channel }),
+	}
 }
 
 /**

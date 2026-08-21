@@ -192,7 +192,7 @@ describe('S3, S6, S8, S12: Routing Tables reach the IR', () => {
 			{
 				command: 'audit',
 				positionals: { inspect: 'inspect_work', repair: 'run_doctor' },
-				bareAlias: 'inspect_work',
+				bareInvocationTarget: 'inspect_work',
 			},
 		])
 	})
@@ -205,7 +205,7 @@ describe('S4: Capability Availability and Pause Mode reach the IR', () => {
 		expect(ir.capabilities).toEqual([
 			{
 				name: 'content_repair',
-				available: false,
+				availabilityEvidence: 'vault_git.content_repair_installed',
 				unavailableBlocker: 'capability_missing',
 				unavailableAction: 'escalate_to_operator',
 			},
@@ -398,7 +398,7 @@ describe('a v2 command-surface declaration resolves its references', () => {
 			claim: 'a positional selecting an undeclared action',
 		},
 		{
-			fixture: 'positional-unknown-bare-alias',
+			fixture: 'positional-unknown-bare-invocation-target',
 			cause: 'semantic_unresolved_reference',
 			claim: 'a bare alias selecting an undeclared action',
 		},
@@ -478,7 +478,6 @@ describe('a v2 command-surface declaration resolves its references', () => {
 		// needs_human: that would prove the fixture author's choice. The
 		// property under test is that the compiler refuses any other kind,
 		// which the capability-escalation-not-human fixture above holds.
-		expect(capability.available).toBe(false)
 		expect(capability.unavailableAction).toBeDefined()
 	})
 })

@@ -1,7 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { INPUT_SCHEMA_V1_SHAPE } from '../src/input-schema-v1.ts'
-import type { Shape } from '../src/schema.ts'
-import { addedPaths } from '../src/schema-difference.ts'
+import { addedPaths, INPUT_SCHEMA_V1_SHAPE, type Shape } from '../src/index.ts'
 
 /**
  * The version-custody delta sees every route by which surface can be added.

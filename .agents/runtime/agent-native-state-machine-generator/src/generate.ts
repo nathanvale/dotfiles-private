@@ -682,7 +682,8 @@ async function writeArtifactSet(
 			ok: false,
 			cause: 'generation_unreadable_manifest',
 			subject: options.outputDir,
-			message: `The provenance manifest in "${options.outputDir}" cannot be read, so the set it declares cannot be identified. Remove it and generate afresh.`,
+			message:
+				'The provenance manifest in the output directory cannot be read, so the set it declares cannot be identified. Remove it and generate afresh.',
 			refusals: [],
 		}
 
@@ -691,7 +692,8 @@ async function writeArtifactSet(
 			ok: false,
 			cause: 'generation_foreign_existing_set',
 			subject: options.outputDir,
-			message: `The Generated Artifact Set in "${options.outputDir}" records a different specification or generator identity, or declares outputs that are not present, so this compilation cannot replace it. Check the output directory.`,
+			message:
+				'The Generated Artifact Set in the output directory records a different specification or generator identity, or declares outputs that are not present, so this compilation cannot replace it. Check the output directory.',
 			refusals: [],
 		}
 
@@ -757,7 +759,8 @@ export async function regenerateArtifactSet(
 			ok: false,
 			cause: 'generation_no_existing_set',
 			subject: options.outputDir,
-			message: `no provenance manifest in "${options.outputDir}": regeneration replaces an existing Generated Artifact Set, so use generation to create one`,
+			message:
+				'no provenance manifest in the output directory: regeneration replaces an existing Generated Artifact Set, so use generation to create one',
 			refusals: [],
 		}
 

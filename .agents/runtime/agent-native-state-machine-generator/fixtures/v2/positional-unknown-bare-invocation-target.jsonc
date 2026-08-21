@@ -1,5 +1,4 @@
-// INVALID: a root branch rides an exit code the command surface never
-// declares.
+// INVALID: bare invocation of a command selects an undeclared action.
 {
 	"spec_meta": { "product": "surfaces", "input_schema_version": "2" },
 	"features": {
@@ -259,7 +258,7 @@
 		"positional_routes": {
 			"audit": {
 				"positionals": { "inspect": "inspect_work", "repair": "run_doctor" },
-				"bare_invocation_target": "inspect_work",
+				"bare_invocation_target": "inspect_nothing",
 			},
 		},
 		// S9: the real entry point, so a generated contract names a real path.
@@ -276,7 +275,7 @@
 		},
 		// S10, S11: front-door branches with distinct declared exit meanings.
 		"root_branches": {
-			"root_help": { "exit_code": "7", "meaning": "usable_evidence" },
+			"root_help": { "exit_code": "0", "meaning": "usable_evidence" },
 			"unknown_command": { "exit_code": "2", "meaning": "invalid_usage" },
 			"crash": {
 				"exit_code": "1",

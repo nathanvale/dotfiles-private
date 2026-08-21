@@ -67,17 +67,21 @@ describe('every sealed artifact refusal cause is observed at its real seam', () 
 		})
 	}
 
-	test('emit_expectation_action_unknown stays unreachable by plain IR amendment (pinned)', async () => {
-		// The catalog lookup and the action resolution read the same
-		// `ir.actions.catalog`, so a resolved action id is always found again;
-		// the guard behind this cause cannot fire through the derivation seam.
-		// The nearest amendment is refused one step earlier, and the
-		// member-for-member check above holds the unproducible list to exactly
-		// this cause. A src repair that makes the lookup missable must register
-		// a real producer and remove this pin.
-		expect(UNPRODUCIBLE_REFUSAL_CAUSES).toEqual([
-			'emit_expectation_action_unknown',
-		])
+	test('every sealed cause has a live producer, none is pinned unproducible', () => {
+		// This list was non-empty while `emit_expectation_action_unknown` was
+		// believed unreachable. Input Schema v2's routing bindings supply an
+		// action target directly, so that guard now has a real producer and
+		// the list is empty. A cause added without one belongs here with an
+		// argument, not silently skipped.
+		expect(UNPRODUCIBLE_REFUSAL_CAUSES).toEqual([])
+	})
+
+	test('removing an action from the catalog still refuses one step earlier', async () => {
+		// The amendment that used to be the nearest attempt at
+		// `emit_expectation_action_unknown`. It still refuses earlier, which
+		// is why a second producer was needed to reach the guard: action
+		// resolution and the catalog lookup do read the same catalog, and only
+		// a routing target bypasses that.
 		const observed = await attemptExpectationActionUnknown()
 		expect(observed.length).toBeGreaterThan(0)
 		expect([...new Set(observed.map((refusal) => refusal.cause))]).toEqual([

@@ -15,12 +15,20 @@
  * special case inside `canonical.ts`, which stamps the declared version
  * exactly for the version it owns.
  *
+ * Ownership is the whole algorithm, not the stamps alone. The bytes a digest
+ * is taken over are decided by text normalization, key ordering,
+ * serialization and envelope layout; a reader that called the current
+ * canonicalizer and overrode only its two version fields would freeze the
+ * stamps while inheriting all four. `frozen-canonical-v1.ts` holds the v1-era
+ * bodies so a reader's envelope is reproducible from the reader alone.
+ *
  * Reading is not admission, and a reader never migrates. Founding a new
  * Generated Artifact Set from a version a reader owns is refused by
  * `generate.ts`; the route forward is a Registered Migration, whose output is
  * an isolated candidate the product owner admits separately.
  */
-import { digestSpecification, type SpecificationDigest } from './canonical.ts'
+import type { SpecificationDigest } from './canonical.ts'
+import { digestSpecificationFrozenV1 } from './frozen-canonical-v1.ts'
 import { INPUT_SCHEMA_V1_SHAPE } from './input-schema-v1.ts'
 import type { Shape } from './schema.ts'
 
@@ -113,8 +121,13 @@ function frozenAtVersionOne(
 		// `phase_state` existed. Only one product ever declared it.
 		frozenPhaseState: 'transaction_phase',
 		acceptedShape: INPUT_SCHEMA_V1_SHAPE,
+		// The frozen canonicalizer, not the current one with two stamps
+		// overridden. Overriding stamps freezes the stamps and inherits the
+		// bytes; `frozen-canonical-v1.ts` owns the normalization, comparator,
+		// serialization and envelope layout this version was digested under, so
+		// no change to the current path can move an admitted identity.
 		digest: (canonical) =>
-			digestSpecification(canonical, {
+			digestSpecificationFrozenV1(canonical, {
 				generatorContractVersion: frozenGeneratorContractVersion,
 				inputSchemaVersion: frozenEnvelopeVersion,
 			}),
