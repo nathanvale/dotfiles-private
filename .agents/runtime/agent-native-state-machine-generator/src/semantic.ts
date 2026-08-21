@@ -7,12 +7,20 @@
  */
 import type { Diagnostic } from './diagnostics.ts'
 import type { JsoncEntry, JsoncNode } from './jsonc.ts'
-import { NEXT_SAFE_ACTION_KINDS, RETRY_POSTURES } from './schema.ts'
+import {
+	MUTATION_KINDS,
+	NEXT_SAFE_ACTION_KINDS,
+	RETRY_POSTURES,
+	WRITE_IMPLYING_MUTATIONS,
+} from './schema.ts'
 
-/** Mutation kinds that declare an externally meaningful effect. */
-const WRITE_MUTATIONS = new Set(['remote_write', 'local_write', 'recovery'])
-/** Every mutation value the two candidates use; a sealed branch vocabulary. */
-const MUTATION_VALUES = new Set([...WRITE_MUTATIONS, 'read', 'preview'])
+/**
+ * Mutation kinds that declare an externally meaningful effect, and the full
+ * sealed mutation vocabulary. Both are owned by `schema.ts` so validation and
+ * emission cannot disagree about which commands imply a write.
+ */
+const WRITE_MUTATIONS = new Set<string>(WRITE_IMPLYING_MUTATIONS)
+const MUTATION_VALUES = new Set<string>(MUTATION_KINDS)
 
 /** `result_kind` values the candidates branch on in the retry table. */
 const RESULT_KINDS = new Set(['inspection', 'success', 'refusal', 'any_other'])

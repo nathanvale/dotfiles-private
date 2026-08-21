@@ -13,6 +13,9 @@
 		"test": "bun test ./tests",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
+	"dependencies": {
+		"@side-quest/cli-command-facade": "workspace:*"
+	},
 	"devDependencies": {
 		"@types/bun": "catalog:",
 		"@types/react": "19.2.18",

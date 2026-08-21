@@ -1,0 +1,4 @@
+{
+	"extends": "./tsconfig.json",
+	"include": ["tests/__emit.scratch.ts"]
+}

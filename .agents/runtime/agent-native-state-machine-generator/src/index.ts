@@ -99,6 +99,47 @@ export {
 	type ProvenanceManifest,
 } from './emit.ts'
 export {
+	type CommandContractEmission,
+	deriveCommandContracts,
+} from './emit-command-contracts.ts'
+export {
+	EMIT_REFUSAL_CAUSES,
+	type EmitRefusal,
+	type EmitRefusalCause,
+} from './emit-contract.ts'
+export {
+	buildExpectationTable,
+	type ExpectationEmission,
+	type SemanticExpectationRow,
+} from './emit-expectations.ts'
+export {
+	type EmitFailure,
+	type EmitOptions,
+	type EmitResult,
+	type EmitSuccess,
+	emitFacadeArtifacts,
+} from './emit-facade.ts'
+export {
+	type DeclaredExtensionPoint,
+	EXTENSION_POINT_KINDS,
+	type ExtensionPointKind,
+	type RegisteredExtension,
+	type RegistryReconciliation,
+	reconcileExtensionRegistry,
+} from './emit-registry.ts'
+export {
+	type RenderedModule,
+	renderCommandContracts,
+	renderExpectationTable,
+	renderStationCatalog,
+} from './emit-render.ts'
+export {
+	type DerivedStation,
+	deriveStations,
+	type StationEmission,
+	stationIds,
+} from './emit-stations.ts'
+export {
 	DRIFT_REASONS,
 	type DriftFinding,
 	type DriftReason,
