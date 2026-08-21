@@ -61,6 +61,32 @@ A Handwritten Extension that obtains the value of a declared Observed Fact. It
 does not select state, Authority, retry posture, or continuation.
 _Avoid_: Policy evaluator, state resolver, fact author
 
+**Input Binder**:
+A Handwritten Extension that translates validated normalized input into one
+declared product invocation. It does not add, rank, or reinterpret input
+meaning.
+_Avoid_: Argument parser, input validator, command router
+
+**Effect Executor**:
+A Handwritten Extension that attempts one Declared Side Effect and returns a
+typed receipt. It cannot claim a Transition or an Observed Side Effect.
+_Avoid_: Transition author, effect confirmer, success reporter
+
+**Liveness Evidence Provider**:
+A Handwritten Extension that observes declared availability, checkpoints,
+progress, deadlines, and wake evidence. Its evidence never renews Authority.
+_Avoid_: Authority source, heartbeat authority, progress judge
+
+**Real Process Fixture**:
+A Handwritten Extension that prepares a declared environment and invokes the
+real public CLI. It cannot supply expected results.
+_Avoid_: Verdict author, expectation source, mocked process
+
+**Proof Adapter**:
+A Handwritten Extension that collects declared durable evidence. It cannot
+decide pass, coverage, Authority, or continuation.
+_Avoid_: Assertion owner, coverage judge, test verdict
+
 ### Runtime interpretation
 
 **State Projection**:

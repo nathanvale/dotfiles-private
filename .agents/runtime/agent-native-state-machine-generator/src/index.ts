@@ -110,8 +110,10 @@ export {
 	type GenerationSuccess,
 	generateArtifactSet,
 	regenerateArtifactSet,
+	VERIFICATION_FAILURE_CAUSES,
 	type VerificationClean,
 	type VerificationDrift,
+	type VerificationFailureCause,
 	type VerificationResult,
 	verifyArtifactSet,
 } from './generate.ts'

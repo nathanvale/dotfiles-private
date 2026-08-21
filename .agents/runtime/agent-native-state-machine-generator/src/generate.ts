@@ -37,12 +37,19 @@ export interface GenerationOptions {
 	readonly emitters?: readonly ArtifactEmitter[]
 }
 
-/** Sealed causes for a generation that produced nothing. */
+/**
+ * Sealed causes for a generation that produced nothing. Callers branch on
+ * `cause`, never on `message`.
+ *
+ * Adding a cause is a Generator Contract change.
+ */
 export const GENERATION_FAILURE_CAUSES = [
 	/** An emitter threw, or two emitters claimed the same declared path. */
 	'generation_emitter_failure',
 	/** The set could not be written or replaced on disk. */
 	'generation_write_failure',
+	/** Regeneration found no existing set to replace. */
+	'generation_no_existing_set',
 ] as const
 
 export type GenerationFailureCause = (typeof GENERATION_FAILURE_CAUSES)[number]
@@ -62,11 +69,17 @@ export interface GenerationFailure {
 
 export type GenerationResult = GenerationSuccess | GenerationFailure
 
-/** Sealed reasons a declared artifact set is refused as drifted. */
+/**
+ * Sealed reasons a Generated Artifact Set is refused as drifted. Each explains
+ * one `generated_drift` refusal; callers branch on the cause and the reason,
+ * never on a message.
+ *
+ * Adding a reason is a Generator Contract change.
+ */
 export const DRIFT_REASONS = [
 	/** A declared artifact is absent from the working tree. */
 	'missing_artifact',
-	/** The working tree holds a file the declared output set does not name. */
+	/** The generator-owned output directory holds a file the set does not declare. */
 	'unexpected_artifact',
 	/** A declared artifact's bytes differ from its regeneration. */
 	'modified_artifact',
@@ -90,10 +103,26 @@ export interface VerificationClean {
 	readonly declaredOutputs: readonly string[]
 }
 
+/**
+ * The sole sealed cause for a refused Generated Artifact Set. The literal is
+ * fixed by the specification, so it is held here rather than spelled inline.
+ *
+ * Its concept name in CONTEXT.md is Generated Artifact Drift; the token stays
+ * `generated_drift` because the specification fixes that exact string.
+ *
+ * Adding a cause is a Generator Contract change.
+ */
+export const VERIFICATION_FAILURE_CAUSES = ['generated_drift'] as const
+
+export type VerificationFailureCause =
+	(typeof VERIFICATION_FAILURE_CAUSES)[number]
+
+const [DRIFT_CAUSE] = VERIFICATION_FAILURE_CAUSES
+
 export interface VerificationDrift {
 	readonly ok: false
 	/** Stable cause; callers branch on this, never on a message. */
-	readonly cause: 'generated_drift'
+	readonly cause: VerificationFailureCause
 	readonly findings: readonly DriftFinding[]
 }
 
@@ -346,6 +375,19 @@ export async function regenerateArtifactSet(
 	digest: SpecificationDigest,
 	options: GenerationOptions,
 ): Promise<GenerationResult> {
+	// Regeneration is intentional replacement of a set that exists. A target
+	// with no provenance manifest has no set to replace, and treating it as an
+	// empty one would let a mistyped output directory quietly create a second
+	// Generated Artifact Set somewhere nobody is verifying. Creating a fresh
+	// target is what generateArtifactSet is for.
+	const existing = await readExistingManifest(options.outputDir)
+	if (!existing.present)
+		return {
+			ok: false,
+			cause: 'generation_no_existing_set',
+			message: `no provenance manifest in "${options.outputDir}": regeneration replaces an existing Generated Artifact Set, so use generation to create one`,
+		}
+
 	return await generateArtifactSet(ir, digest, options)
 }
 
@@ -387,7 +429,7 @@ export async function verifyArtifactSet(
 	if (!rendered.ok)
 		return {
 			ok: false,
-			cause: 'generated_drift',
+			cause: DRIFT_CAUSE,
 			findings: [
 				{
 					reason: 'stale_artifact_set',
@@ -468,8 +510,7 @@ export async function verifyArtifactSet(
 				})
 		}
 
-		if (findings.length > 0)
-			return { ok: false, cause: 'generated_drift', findings }
+		if (findings.length > 0) return { ok: false, cause: DRIFT_CAUSE, findings }
 		return { ok: true, declaredOutputs }
 	} finally {
 		await rm(isolated, { recursive: true, force: true })

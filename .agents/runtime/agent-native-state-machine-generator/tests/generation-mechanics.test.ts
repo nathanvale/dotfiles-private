@@ -499,3 +499,146 @@ describe('fail-closed across the compile seam', () => {
 		expect([...(await snapshot(dir)).keys()]).toEqual([])
 	})
 })
+
+describe('regeneration is distinct from generation', () => {
+	test('refuses a target that holds no existing set to replace', async () => {
+		const dir = await outputDir()
+		const compiled = await compile('vault-git')
+
+		const result = await regenerateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+		})
+
+		expect(result.ok).toBe(false)
+		if (result.ok) return
+		expect(result.cause).toBe('generation_no_existing_set')
+		// Nothing was created: regeneration replaces, it does not establish.
+		expect([...(await snapshot(dir)).keys()]).toEqual([])
+	})
+
+	test('generation establishes a fresh target that regeneration then replaces', async () => {
+		const dir = await outputDir()
+		const compiled = await compile('vault-git')
+
+		const created = await generateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+		})
+		expect(created.ok).toBe(true)
+
+		const replaced = await regenerateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+		})
+		expect(replaced.ok).toBe(true)
+		expect(
+			await verifyArtifactSet(compiled.ir, compiled.digest, { outputDir: dir }),
+		).toMatchObject({ ok: true })
+	})
+})
+
+describe('the fallow candidate across every lane', () => {
+	/**
+	 * Fallow is the mostly stateless product: it declares no durable
+	 * operations, no liveness evidence, no version custody and no
+	 * cancellation. Under feature-conditioning, none of that machinery may
+	 * reach its Generated Artifact Set.
+	 */
+	test('verification accepts, then refuses drift, on a fallow set', async () => {
+		const dir = await outputDir()
+		const compiled = await compile('fallow')
+		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
+
+		expect(
+			await verifyArtifactSet(compiled.ir, compiled.digest, { outputDir: dir }),
+		).toMatchObject({ ok: true })
+
+		await Bun.write(join(dir, 'specification-summary.json'), 'hand edited\n')
+		const drifted = await verifyArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+		})
+
+		expect(drifted.ok).toBe(false)
+		if (drifted.ok) return
+		expect(drifted.cause).toBe('generated_drift')
+		expect(drifted.findings.map((finding) => finding.reason)).toContain(
+			'modified_artifact',
+		)
+	})
+
+	test('regeneration replaces a fallow set as one unit', async () => {
+		const dir = await outputDir()
+		const compiled = await compile('fallow')
+		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
+		await Bun.write(join(dir, 'specification-summary.json'), 'stale\n')
+
+		const result = await regenerateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+		})
+
+		expect(result.ok).toBe(true)
+		expect(
+			await verifyArtifactSet(compiled.ir, compiled.digest, { outputDir: dir }),
+		).toMatchObject({ ok: true })
+	})
+
+	test('a fallow set carries no durable-work machinery', async () => {
+		const dir = await outputDir()
+		const compiled = await compile('fallow')
+		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
+
+		const written = await snapshot(dir)
+		const summary = JSON.parse(
+			written.get('specification-summary.json') as string,
+		)
+
+		// The omission is declared...
+		expect(summary.features).toMatchObject({
+			durableOperations: false,
+			livenessEvidence: false,
+			versionCustody: false,
+			cancellation: 'not_supported',
+		})
+
+		// ...and nothing outside that declaration contradicts it. The feature
+		// block is excluded from the scan on purpose: `livenessEvidence: false`
+		// is how the omission is *declared*, so matching on it would forbid the
+		// very evidence being asserted. Everything else must stay free of
+		// placeholder operation, liveness, retry, cancellation and version
+		// machinery.
+		const { features: _declaredFeatures, ...content } = summary
+		const generated = [
+			written.get('provenance.manifest.json') as string,
+			JSON.stringify(content),
+		].join('\n')
+
+		for (const absent of [
+			'logical_operation',
+			'logicalOperation',
+			'acknowledgement',
+			'heartbeat',
+			'liveness',
+			'cancellation',
+			'operation_progress',
+			'progress_owner',
+			'incompatible_run_version',
+			'attempt',
+			'retry_posture',
+		]) {
+			expect(generated).not.toContain(absent)
+		}
+	})
+
+	test('repeat generation of a fallow set is byte-identical', async () => {
+		const compiled = await compile('fallow')
+		const first = await outputDir()
+		const second = await outputDir()
+
+		await generateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: first,
+		})
+		await generateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: second,
+		})
+
+		expect(await snapshot(second)).toEqual(await snapshot(first))
+	})
+})
