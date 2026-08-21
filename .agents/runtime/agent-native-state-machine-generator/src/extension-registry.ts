@@ -11,13 +11,17 @@
  * Reconciliation is a pure function over declared-versus-registered inputs. It
  * reads no filesystem, imports no product module, and executes no extension.
  *
- * It is a deliberately separate seam from `emitFacadeArtifacts`. An Extension
+ * It is a deliberately separate seam from `deriveArtifactSet`. An Extension
  * Registry is reconciled against the product's real bindings, which the
  * generator cannot see from a Specification Candidate alone; folding it into
  * artifact emission would make emission appear to prove something it never
  * observed. A caller reconciles the registry with its own inputs.
  */
-import { type EmitRefusal, emitRefusal, sortRefusals } from './emit-contract.ts'
+import {
+	type ArtifactRefusal,
+	artifactRefusal,
+	sortRefusals,
+} from './refusal.ts'
 
 /**
  * The six feature-conditioned Handwritten Extension kinds the specification
@@ -57,7 +61,7 @@ export interface RegisteredExtension {
 
 export interface RegistryReconciliation {
 	readonly reconciled: boolean
-	readonly refusals: readonly EmitRefusal[]
+	readonly refusals: readonly ArtifactRefusal[]
 }
 
 /**
@@ -83,7 +87,7 @@ export function reconcileExtensionRegistry(input: {
 	/** The revision the current Admitted State-Machine Specification carries. */
 	readonly currentRevision: string
 }): RegistryReconciliation {
-	const refusals: EmitRefusal[] = []
+	const refusals: ArtifactRefusal[] = []
 	const declaredById = new Map(input.declared.map((point) => [point.id, point]))
 	const registeredById = new Map(
 		input.registered.map((binding) => [binding.extensionPointId, binding]),
@@ -92,7 +96,7 @@ export function reconcileExtensionRegistry(input: {
 	for (const point of input.declared) {
 		if (!registeredById.has(point.id)) {
 			refusals.push(
-				emitRefusal({
+				artifactRefusal({
 					cause: 'emit_registry_binding_missing',
 					subject: point.id,
 					message: `Extension Point ${point.id} is declared but no Handwritten Extension is bound to it.`,
@@ -112,7 +116,7 @@ export function reconcileExtensionRegistry(input: {
 					? 'emit_registry_binding_extra'
 					: 'emit_registry_binding_orphaned'
 			refusals.push(
-				emitRefusal({
+				artifactRefusal({
 					cause,
 					subject: binding.extensionPointId,
 					message:
@@ -125,7 +129,7 @@ export function reconcileExtensionRegistry(input: {
 		}
 		if (binding.specificationRevision !== input.currentRevision) {
 			refusals.push(
-				emitRefusal({
+				artifactRefusal({
 					cause: 'emit_registry_binding_stale',
 					subject: binding.extensionPointId,
 					message: `Handwritten Extension for ${binding.extensionPointId} was authored against specification revision ${binding.specificationRevision}, not the admitted ${input.currentRevision}.`,

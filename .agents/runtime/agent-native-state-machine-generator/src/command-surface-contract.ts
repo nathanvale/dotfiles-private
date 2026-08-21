@@ -17,18 +17,10 @@ import type {
 	CommandFacadeOutputMode,
 	CommandFacadeSideEffect,
 } from '@side-quest/cli-command-facade'
-import { type EmitRefusal, emitRefusal } from './emit-contract.ts'
-import { resolveResultContract } from './emit-derivation.ts'
+import { resolveResultContract } from './derivation-facts.ts'
 import type { CommandSurface, SpecificationIr } from './ir.ts'
-import { isWriteImplyingMutation } from './schema.ts'
-
-/**
- * The baseline exit meanings every agent-native command contract must declare:
- * `0` success, `1` refusal or runtime failure, `2` invalid usage. Restated
- * from the facade's `COMMAND_FACADE_BASELINE_EXIT_CODES` so emission refuses
- * before publishing; a test proves the two lists agree.
- */
-const BASELINE_EXIT_CODES = ['0', '1', '2'] as const
+import { type ArtifactRefusal, artifactRefusal } from './refusal.ts'
+import { BASELINE_EXIT_CODES, isWriteImplyingMutation } from './schema.ts'
 
 /**
  * Declared mutation to facade side effects. A write-implying mutation must
@@ -46,7 +38,7 @@ const MUTATION_SIDE_EFFECTS: Readonly<
 
 export interface CommandContractEmission {
 	readonly contracts: Readonly<Record<string, CommandFacadeContract>>
-	readonly refusals: readonly EmitRefusal[]
+	readonly refusals: readonly ArtifactRefusal[]
 }
 
 /**
@@ -60,13 +52,13 @@ export function deriveCommandContracts(
 	ir: SpecificationIr,
 ): CommandContractEmission {
 	const surface = ir.commandSurface
-	const refusals: EmitRefusal[] = []
+	const refusals: ArtifactRefusal[] = []
 	const contracts: Record<string, CommandFacadeContract> = {}
 
 	for (const code of BASELINE_EXIT_CODES) {
 		if (surface.exitCodes[code] === undefined) {
 			refusals.push(
-				emitRefusal({
+				artifactRefusal({
 					cause: 'emit_baseline_exit_missing',
 					subject: code,
 					message: `The Command Surface Contract omits baseline exit meaning ${code}.`,
@@ -87,7 +79,7 @@ export function deriveCommandContracts(
 		// product-owner decisions; surfacing the gap is the generator's job.
 		if (isWriteImplyingMutation(mutation)) {
 			refusals.push(
-				emitRefusal({
+				artifactRefusal({
 					cause: 'emit_write_preview_undeclarable',
 					subject: command,
 					message: `Command ${command} declares write-implying mutation ${mutation}, which owes a check or dry_run preview path, but Input Schema v1 declares no execution modes. Admit an execution-mode surface or a package-owned previewExemption reason for ${command}.`,

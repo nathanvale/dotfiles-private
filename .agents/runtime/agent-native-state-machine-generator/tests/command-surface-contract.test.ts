@@ -4,7 +4,7 @@ import {
 	type CommandFacadeContract,
 	findCommandFacadeMetadataDrift,
 } from '@side-quest/cli-command-facade'
-import { deriveCommandContracts } from '../src/index.ts'
+import { BASELINE_EXIT_CODES, deriveCommandContracts } from '../src/index.ts'
 import { emitAmended } from './support/emission.ts'
 
 /**
@@ -21,6 +21,14 @@ async function contractsFor(product: 'vault-git' | 'fallow') {
 	const { ir } = await emitAmended(product)
 	return { compiled: { ir }, emission: deriveCommandContracts(ir) }
 }
+
+test('the package baseline exit list is byte-identical to the facade baseline', () => {
+	// The schema.ts comment claims this alignment is proved by a test; this is
+	// that test (repair S3).
+	expect([...BASELINE_EXIT_CODES]).toEqual([
+		...COMMAND_FACADE_BASELINE_EXIT_CODES,
+	])
+})
 
 describe('emitted command contracts satisfy the facade', () => {
 	for (const product of ['vault-git', 'fallow'] as const) {

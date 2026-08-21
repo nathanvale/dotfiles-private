@@ -1,9 +1,9 @@
 /**
- * The emit stage's own fail-closed vocabulary.
+ * The artifact refusal vocabulary: derivation's own fail-closed causes.
  *
  * Kept separate from the compiler's sealed `DiagnosticCause` list on purpose.
  * A compiler diagnostic points at a source location inside a Specification
- * Candidate; an emit refusal points at a derived artifact that the candidate
+ * Candidate; an artifact refusal points at a derived artifact the candidate
  * compiled cleanly into but that cannot be published without contradicting a
  * facade obligation. The two vocabularies answer different questions, so a
  * caller must be able to branch on them independently.
@@ -13,7 +13,8 @@
  */
 
 /**
- * Sealed emit refusal causes. Adding a cause is a Generator Contract change.
+ * Sealed artifact refusal causes; cause tokens keep their `emit_` spelling.
+ * Adding a cause is a Generator Contract change.
  *
  * Every cause here is reachable. The cross-validations the facade declares but
  * never delivers - a station expecting an exit code its command never
@@ -23,7 +24,7 @@
  * disagreements unexpressible rather than merely detected. A cause for an
  * impossible state would advertise a check nothing can raise.
  */
-export const EMIT_REFUSAL_CAUSES = [
+export const ARTIFACT_REFUSAL_CAUSES = [
 	/** A Branch Station id does not satisfy the facade's id grammar. */
 	'emit_station_id_invalid',
 	/** Two derived Branch Stations claim the same id. */
@@ -59,7 +60,7 @@ export const EMIT_REFUSAL_CAUSES = [
 	'emit_result_contract_undeclared',
 ] as const
 
-export type EmitRefusalCause = (typeof EMIT_REFUSAL_CAUSES)[number]
+export type ArtifactRefusalCause = (typeof ARTIFACT_REFUSAL_CAUSES)[number]
 
 /**
  * One fail-closed emit refusal.
@@ -69,13 +70,13 @@ export type EmitRefusalCause = (typeof EMIT_REFUSAL_CAUSES)[number]
  * without reading generator internals. Callers branch on `cause`, never on
  * `message`  -  the wording is contract surface but the identifier is the API.
  */
-export interface EmitRefusal {
-	readonly cause: EmitRefusalCause
+export interface ArtifactRefusal {
+	readonly cause: ArtifactRefusalCause
 	readonly subject: string
 	readonly message: string
 }
 
-export function emitRefusal(input: EmitRefusal): EmitRefusal {
+export function artifactRefusal(input: ArtifactRefusal): ArtifactRefusal {
 	return input
 }
 
@@ -84,8 +85,8 @@ export function emitRefusal(input: EmitRefusal): EmitRefusal {
  * snapshots a refusal list depends on this being stable across runs.
  */
 export function sortRefusals(
-	refusals: readonly EmitRefusal[],
-): readonly EmitRefusal[] {
+	refusals: readonly ArtifactRefusal[],
+): readonly ArtifactRefusal[] {
 	return [...refusals].sort(
 		(a, b) =>
 			a.cause.localeCompare(b.cause) || a.subject.localeCompare(b.subject),

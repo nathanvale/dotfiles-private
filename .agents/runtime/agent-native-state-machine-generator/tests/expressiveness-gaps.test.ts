@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import {
 	compileSpecificationCandidate,
-	emitFacadeArtifacts,
+	deriveArtifactSet,
 } from '../src/index.ts'
 import { readCandidate } from './support/candidates.ts'
 
@@ -24,7 +24,7 @@ import { readCandidate } from './support/candidates.ts'
 async function emit(product: 'vault-git' | 'fallow') {
 	const compiled = compileSpecificationCandidate(await readCandidate(product))
 	if (!compiled.ok) throw new Error(`${product} candidate failed to compile`)
-	return emitFacadeArtifacts(compiled.ir, compiled.digest.specificationDigest)
+	return deriveArtifactSet(compiled.ir, compiled.digest.specificationDigest)
 }
 
 describe('the generator refuses rather than inventing an execution mode', () => {
@@ -52,14 +52,17 @@ describe('the generator refuses rather than inventing an execution mode', () => 
 			await readCandidate('vault-git'),
 		)
 		if (!compiled.ok) throw new Error('vault-git candidate failed to compile')
-		const emission = emitFacadeArtifacts(
+		const emission = deriveArtifactSet(
 			compiled.ir,
 			compiled.digest.specificationDigest,
 		)
 		expect(emission.ok).toBe(false)
 		if (emission.ok) return
 
-		// Oracle: the candidate's own mutation table, read independently.
+		// Deliberate independent oracle: the write-implying list restated as a
+		// literal. Do not hoist onto isWriteImplyingMutation - it is the same
+		// predicate the derivation branches on, and f(x) === f(x) proves
+		// nothing (repair M1).
 		const expected = Object.entries(compiled.ir.commandSurface.mutations)
 			.filter(([, mutation]) =>
 				['remote_write', 'local_write', 'recovery'].includes(mutation),
@@ -134,8 +137,8 @@ describe('refusals stay complete and deterministic', () => {
 		)
 		if (!compiled.ok) throw new Error('vault-git candidate failed to compile')
 		const digest = compiled.digest.specificationDigest
-		const first = emitFacadeArtifacts(compiled.ir, digest)
-		const second = emitFacadeArtifacts(compiled.ir, digest)
+		const first = deriveArtifactSet(compiled.ir, digest)
+		const second = deriveArtifactSet(compiled.ir, digest)
 		expect(JSON.stringify(first.refusals)).toBe(JSON.stringify(second.refusals))
 	})
 

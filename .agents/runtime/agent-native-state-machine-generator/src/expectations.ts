@@ -17,10 +17,11 @@
  * predicate, observes a fact, or selects a continuation at runtime; the one
  * product-local Projection Composer keeps sole ownership of that.
  */
-import { type EmitRefusal, emitRefusal } from './emit-contract.ts'
-import { BRANCH_FACTS, resolveRetryPosture } from './emit-derivation.ts'
-import type { DerivedStation } from './emit-stations.ts'
+
+import { type DerivedStation, sortStations } from './branch-stations.ts'
+import { BRANCH_FACTS, resolveRetryPosture } from './derivation-facts.ts'
 import type { SpecificationIr } from './ir.ts'
+import { type ArtifactRefusal, artifactRefusal } from './refusal.ts'
 import type { BranchKind, NextSafeActionKind, RetryPosture } from './schema.ts'
 
 /**
@@ -48,7 +49,7 @@ export interface SemanticExpectationRow {
 
 export interface ExpectationEmission {
 	readonly rows: readonly SemanticExpectationRow[]
-	readonly refusals: readonly EmitRefusal[]
+	readonly refusals: readonly ArtifactRefusal[]
 }
 
 /** The `result_kind` a branch presents to the declared retry rule table. */
@@ -69,14 +70,12 @@ export function buildExpectationTable(
 	ir: SpecificationIr,
 	stations: readonly DerivedStation[],
 ): ExpectationEmission {
-	const refusals: EmitRefusal[] = []
+	const refusals: ArtifactRefusal[] = []
 	const rows: SemanticExpectationRow[] = []
 	const catalog = new Map(ir.actions.catalog.map((entry) => [entry.id, entry]))
 	const resolution = ir.actions.resolution
 
-	for (const derived of [...stations].sort((a, b) =>
-		a.station.id.localeCompare(b.station.id),
-	)) {
+	for (const derived of sortStations(stations)) {
 		const { station, branch } = derived
 		const facts = BRANCH_FACTS[branch]
 		const incomplete = facts.projectionCompleteness === 'incomplete'
@@ -86,7 +85,7 @@ export function buildExpectationTable(
 		// generator has nothing to publish and must not invent the triple.
 		if (incomplete && resolution?.unavailableProjectionBlocker === undefined) {
 			refusals.push(
-				emitRefusal({
+				artifactRefusal({
 					cause: 'emit_expectation_column_underivable',
 					subject: `${station.id}:blocker`,
 					message: `Branch Station ${station.id} projects incompletely, but the candidate declares no actions.resolution.unavailable_projection_blocker to name why.`,
@@ -101,7 +100,7 @@ export function buildExpectationTable(
 
 		if (branch === 'refused' && blocker === undefined) {
 			refusals.push(
-				emitRefusal({
+				artifactRefusal({
 					cause: 'emit_expectation_column_underivable',
 					subject: `${station.id}:blocker`,
 					message: `Branch Station ${station.id} is a refusal, but the candidate declares no blockers, so no admitted refusal cause can be named.`,
@@ -124,7 +123,7 @@ export function buildExpectationTable(
 
 		if (retrySafety === undefined) {
 			refusals.push(
-				emitRefusal({
+				artifactRefusal({
 					cause: 'emit_retry_posture_unresolved',
 					subject: station.id,
 					message: `No declared retry_posture rule matches Branch Station ${station.id} (command ${station.command}, result_kind ${BRANCH_RESULT_KIND[branch]}); Exact Same-Input Retry Safety cannot be derived from exit status or prose.`,
@@ -136,7 +135,7 @@ export function buildExpectationTable(
 		const action = resolveAction(ir, derived, incomplete)
 		if (action === undefined) {
 			refusals.push(
-				emitRefusal({
+				artifactRefusal({
 					cause: 'emit_expectation_column_underivable',
 					subject: `${station.id}:expectedActionId`,
 					message: `Branch Station ${station.id} has no declared action: the candidate's action catalog names no entry this branch can reach, and Input Schema v1 has no per-station action binding.`,
@@ -148,7 +147,7 @@ export function buildExpectationTable(
 		const entry = catalog.get(action)
 		if (entry === undefined) {
 			refusals.push(
-				emitRefusal({
+				artifactRefusal({
 					cause: 'emit_expectation_action_unknown',
 					subject: `${station.id}:${action}`,
 					message: `Branch Station ${station.id} expects action ${action}, which the action catalog does not declare.`,
@@ -198,7 +197,7 @@ export function buildExpectationTable(
  */
 function assertIncompleteProjection(
 	row: SemanticExpectationRow,
-): EmitRefusal | undefined {
+): ArtifactRefusal | undefined {
 	if (row.projectionCompleteness !== 'incomplete') return undefined
 	const problems: string[] = []
 	if (row.authority !== 'denied') problems.push('grants Authority')
@@ -212,7 +211,7 @@ function assertIncompleteProjection(
 		problems.push(`stops ${row.stopScope ?? 'without a scope'}`)
 	}
 	if (problems.length === 0) return undefined
-	return emitRefusal({
+	return artifactRefusal({
 		cause: 'emit_expectation_column_underivable',
 		subject: row.stationId,
 		message: `Branch Station ${row.stationId} projects incompletely but ${problems.join(', ')}; an incomplete projection must deny Authority, use operator-owned retry posture, and stop agent-terminal none.`,

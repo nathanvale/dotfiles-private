@@ -1,7 +1,8 @@
 import { describe, expect, test } from 'bun:test'
 import {
 	compileSpecificationCandidate,
-	emitFacadeArtifacts,
+	deriveArtifactSet,
+	isWriteImplyingMutation,
 	type SpecificationIr,
 } from '../src/index.ts'
 import { readCandidate } from './support/candidates.ts'
@@ -27,9 +28,7 @@ function amend(ir: SpecificationIr): SpecificationIr {
 	const mutations = Object.fromEntries(
 		Object.entries(ir.commandSurface.mutations).map(([command, mutation]) => [
 			command,
-			['remote_write', 'local_write', 'recovery'].includes(mutation)
-				? 'preview'
-				: mutation,
+			isWriteImplyingMutation(mutation) ? 'preview' : mutation,
 		]),
 	)
 	return {
@@ -66,7 +65,7 @@ describe('cross-validation refuses an inconsistent IR at emit time', () => {
 			},
 		}
 
-		const emission = emitFacadeArtifacts(inconsistent, digest)
+		const emission = deriveArtifactSet(inconsistent, digest)
 
 		expect(emission.ok).toBe(false)
 		if (emission.ok) return
@@ -90,7 +89,7 @@ describe('cross-validation refuses an inconsistent IR at emit time', () => {
 			},
 		}
 
-		const emission = emitFacadeArtifacts(inconsistent, digest)
+		const emission = deriveArtifactSet(inconsistent, digest)
 		expect(emission.ok).toBe(false)
 		if (emission.ok) return
 
@@ -111,7 +110,7 @@ describe('cross-validation refuses an inconsistent IR at emit time', () => {
 			commandSurface: { ...ir.commandSurface, resultContracts: {} },
 		}
 
-		const emission = emitFacadeArtifacts(inconsistent, digest)
+		const emission = deriveArtifactSet(inconsistent, digest)
 		expect(emission.ok).toBe(false)
 		if (emission.ok) return
 		expect(
@@ -131,7 +130,7 @@ describe('cross-validation refuses an inconsistent IR at emit time', () => {
 			},
 		}
 
-		const emission = emitFacadeArtifacts(inconsistent, digest)
+		const emission = deriveArtifactSet(inconsistent, digest)
 		expect(emission.ok).toBe(false)
 		if (emission.ok) return
 		expect(
@@ -148,8 +147,8 @@ describe('cross-validation refuses an inconsistent IR at emit time', () => {
 			commandSurface: { ...ir.commandSurface, resultContracts: {} },
 		}
 
-		const first = emitFacadeArtifacts(inconsistent, digest)
-		const second = emitFacadeArtifacts(inconsistent, digest)
+		const first = deriveArtifactSet(inconsistent, digest)
+		const second = deriveArtifactSet(inconsistent, digest)
 		expect(first.ok).toBe(false)
 		expect(second.ok).toBe(false)
 		expect(JSON.stringify(first.refusals)).toBe(JSON.stringify(second.refusals))
@@ -162,8 +161,8 @@ describe('emission is deterministic', () => {
 			const { ir } = await emitAmended(product)
 			const digest = 'digest-under-test'
 
-			const first = emitFacadeArtifacts(ir, digest)
-			const second = emitFacadeArtifacts(ir, digest)
+			const first = deriveArtifactSet(ir, digest)
+			const second = deriveArtifactSet(ir, digest)
 			expect(first.ok).toBe(true)
 			expect(second.ok).toBe(true)
 			if (!first.ok || !second.ok) return
@@ -187,8 +186,8 @@ describe('emission is deterministic', () => {
 			const { ir } = await emitAmended(product)
 			const digest = 'digest-under-test'
 
-			const first = emitFacadeArtifacts(ir, digest)
-			const second = emitFacadeArtifacts(ir, digest)
+			const first = deriveArtifactSet(ir, digest)
+			const second = deriveArtifactSet(ir, digest)
 			if (!first.ok || !second.ok) throw new Error('emission refused')
 
 			expect(JSON.stringify(first.stations)).toBe(
@@ -219,8 +218,8 @@ describe('emission is deterministic', () => {
 		// The IR preserves candidate key order, so the two IR objects are NOT
 		// byte-identical. Emission must be anyway: every collection the emitters
 		// touch is sorted, so cosmetic difference cannot reach the output.
-		const a = emitFacadeArtifacts(amend(plain.ir), 'd')
-		const b = emitFacadeArtifacts(amend(permuted.ir), 'd')
+		const a = deriveArtifactSet(amend(plain.ir), 'd')
+		const b = deriveArtifactSet(amend(permuted.ir), 'd')
 		if (!a.ok || !b.ok) throw new Error('emission refused')
 
 		for (const [index, module] of a.modules.entries()) {
@@ -247,7 +246,7 @@ describe('station derivation refuses a command the facade grammar rejects', () =
 			},
 		}
 
-		const emission = emitFacadeArtifacts(inconsistent, digest)
+		const emission = deriveArtifactSet(inconsistent, digest)
 		expect(emission.ok).toBe(false)
 		if (emission.ok) return
 		expect(
@@ -270,7 +269,7 @@ describe('station derivation refuses a command the facade grammar rejects', () =
 			},
 		}
 
-		const emission = emitFacadeArtifacts(inconsistent, digest)
+		const emission = deriveArtifactSet(inconsistent, digest)
 		expect(emission.ok).toBe(false)
 		if (emission.ok) return
 		expect(
@@ -290,7 +289,7 @@ describe('station derivation refuses a command the facade grammar rejects', () =
 			},
 		}
 
-		const emission = emitFacadeArtifacts(inconsistent, digest)
+		const emission = deriveArtifactSet(inconsistent, digest)
 		expect(emission.ok).toBe(false)
 		if (emission.ok) return
 		expect(

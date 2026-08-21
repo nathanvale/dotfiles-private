@@ -1,8 +1,9 @@
 import {
 	compileSpecificationCandidate,
-	type EmitOptions,
-	type EmitSuccess,
-	emitFacadeArtifacts,
+	type DerivationOptions,
+	type DerivationSuccess,
+	deriveArtifactSet,
+	isWriteImplyingMutation,
 	type SpecificationIr,
 } from '../../src/index.ts'
 import { readCandidate } from './candidates.ts'
@@ -23,7 +24,7 @@ import { readCandidate } from './candidates.ts'
  */
 export interface AmendedEmission {
 	readonly ir: SpecificationIr
-	readonly emission: EmitSuccess
+	readonly emission: DerivationSuccess
 }
 
 /**
@@ -39,9 +40,7 @@ function withPreviewableMutations(ir: SpecificationIr): SpecificationIr {
 	const mutations = Object.fromEntries(
 		Object.entries(ir.commandSurface.mutations).map(([command, mutation]) => [
 			command,
-			['remote_write', 'local_write', 'recovery'].includes(mutation)
-				? 'preview'
-				: mutation,
+			isWriteImplyingMutation(mutation) ? 'preview' : mutation,
 		]),
 	)
 	return { ...ir, commandSurface: { ...ir.commandSurface, mutations } }
@@ -84,7 +83,7 @@ function withSingleBlocker(
 
 export async function emitAmended(
 	product: 'vault-git' | 'fallow',
-	options: EmitOptions = {},
+	options: DerivationOptions = {},
 ): Promise<AmendedEmission> {
 	const compiled = compileSpecificationCandidate(await readCandidate(product))
 	if (!compiled.ok) throw new Error(`${product} candidate failed to compile`)
@@ -101,7 +100,7 @@ export async function emitAmended(
 		withBinding,
 		compiled.ir.blockers[0] ?? 'runtime_unavailable',
 	)
-	const emission = emitFacadeArtifacts(
+	const emission = deriveArtifactSet(
 		ir,
 		compiled.digest.specificationDigest,
 		options,

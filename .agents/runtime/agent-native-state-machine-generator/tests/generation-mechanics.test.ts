@@ -2,15 +2,17 @@ import { afterEach, describe, expect, test } from 'bun:test'
 import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { DEFAULT_EMITTERS } from '../src/emit.ts'
 import type { ArtifactEmitter } from '../src/index.ts'
 import {
+	ARTIFACT_REFUSAL_CAUSES,
 	compileSpecificationCandidate,
+	DEFAULT_EMITTERS,
 	generateArtifactSet,
 	regenerateArtifactSet,
 	verifyArtifactSet,
 } from '../src/index.ts'
 import { readCandidate, readNegativeFixture } from './support/candidates.ts'
+import { emitAmended } from './support/emission.ts'
 
 /**
  * The package registry as tests see it. Held here so a test that adds or
@@ -48,12 +50,46 @@ async function snapshot(dir: string): Promise<ReadonlyMap<string, string>> {
 	return entries
 }
 
+/**
+ * A compiled candidate whose IR can actually generate.
+ *
+ * The raw candidates cannot: both refuse emission on the three sealed
+ * expressiveness refusals that Input Schema v1 cannot satisfy
+ * (`emit_write_preview_undeclarable`, `emit_expectation_column_underivable`,
+ * and the unbound no-argument binding), which is the correct recorded
+ * consequence and is pinned by `expressiveness-gaps.test.ts`. The
+ * amendment is IR-side only, standing in for what a stage-5 admitted surface
+ * will declare, so every emitter under test runs exactly as it will in
+ * production.
+ *
+ * The digest stays the real one from the unamended source: the manifest binds
+ * a set to the admitted input it came from, not to a test amendment.
+ */
 async function compile(product: 'vault-git' | 'fallow') {
 	const result = compileSpecificationCandidate(await readCandidate(product), {
 		sourcePath: `${product}.state-machine.jsonc`,
 	})
 	if (!result.ok) throw new Error('fixture candidate must compile')
-	return result
+	const { ir } = await emitAmended(product)
+	return { ...result, ir }
+}
+
+/**
+ * A declared output every generated set carries, used by drift tests that need
+ * some artifact to perturb. Named once so a change to the set's shape lands in
+ * one place rather than in every drift case.
+ */
+const A_DECLARED_ARTIFACT = 'src/branch-station-catalog.ts'
+
+/** A stub emitter that succeeds with the given declared outputs. */
+function emitting(
+	name: string,
+	artifacts: Readonly<Record<string, string>>,
+): ArtifactEmitter {
+	return {
+		name,
+		emit: () => ({ ok: true, artifacts: new Map(Object.entries(artifacts)) }),
+	}
 }
 
 describe('generating a Generated Artifact Set', () => {
@@ -150,7 +186,7 @@ describe('verifying a Generated Artifact Set for drift', () => {
 		const dir = await outputDir()
 		const compiled = await compile('vault-git')
 		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
-		await rm(join(dir, 'specification-summary.json'))
+		await rm(join(dir, A_DECLARED_ARTIFACT))
 
 		const result = await verifyArtifactSet(compiled.ir, compiled.digest, {
 			outputDir: dir,
@@ -159,7 +195,7 @@ describe('verifying a Generated Artifact Set for drift', () => {
 		expect(result.ok).toBe(false)
 		if (result.ok) return
 		expect(result.cause).toBe('generated_drift')
-		expect(result.findings.map((finding) => finding.reason)).toContain(
+		expect(result.findings.map((finding) => finding.cause)).toContain(
 			'missing_artifact',
 		)
 	})
@@ -173,10 +209,7 @@ describe('verifying a Generated Artifact Set for drift', () => {
 			// registry that no longer declares that output.
 			emitters: [
 				...DEFAULT_TEST_EMITTERS,
-				{
-					name: 'retired',
-					emit: () => new Map([['retired-contract.json', '{}\n']]),
-				},
+				emitting('retired', { 'retired-contract.json': '{}\n' }),
 			],
 		})
 
@@ -189,9 +222,9 @@ describe('verifying a Generated Artifact Set for drift', () => {
 		if (result.ok) return
 		expect(result.cause).toBe('generated_drift')
 		const unexpected = result.findings.filter(
-			(finding) => finding.reason === 'unexpected_artifact',
+			(finding) => finding.cause === 'unexpected_artifact',
 		)
-		expect(unexpected.map((finding) => finding.path)).toContain(
+		expect(unexpected.map((finding) => finding.subject)).toContain(
 			'retired-contract.json',
 		)
 	})
@@ -200,7 +233,7 @@ describe('verifying a Generated Artifact Set for drift', () => {
 		const dir = await outputDir()
 		const compiled = await compile('vault-git')
 		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
-		const target = join(dir, 'specification-summary.json')
+		const target = join(dir, A_DECLARED_ARTIFACT)
 		await Bun.write(target, `${await Bun.file(target).text()}// hand edit\n`)
 
 		const result = await verifyArtifactSet(compiled.ir, compiled.digest, {
@@ -209,7 +242,7 @@ describe('verifying a Generated Artifact Set for drift', () => {
 
 		expect(result.ok).toBe(false)
 		if (result.ok) return
-		expect(result.findings.map((finding) => finding.reason)).toContain(
+		expect(result.findings.map((finding) => finding.cause)).toContain(
 			'modified_artifact',
 		)
 	})
@@ -235,7 +268,7 @@ describe('verifying a Generated Artifact Set for drift', () => {
 
 		expect(result.ok).toBe(false)
 		if (result.ok) return
-		expect(result.findings.map((finding) => finding.reason)).toContain(
+		expect(result.findings.map((finding) => finding.cause)).toContain(
 			'stale_artifact_set',
 		)
 	})
@@ -278,9 +311,11 @@ describe('verifying a Generated Artifact Set for drift', () => {
 		if (result.ok) return
 		expect(result.cause).toBe('generated_drift')
 		const unexpected = result.findings.filter(
-			(finding) => finding.reason === 'unexpected_artifact',
+			(finding) => finding.cause === 'unexpected_artifact',
 		)
-		expect(unexpected.map((finding) => finding.path)).toContain('orphan.json')
+		expect(unexpected.map((finding) => finding.subject)).toContain(
+			'orphan.json',
+		)
 	})
 
 	test('refuses a set with no provenance manifest at all', async () => {
@@ -295,7 +330,7 @@ describe('verifying a Generated Artifact Set for drift', () => {
 
 		expect(result.ok).toBe(false)
 		if (result.ok) return
-		expect(result.findings.map((finding) => finding.reason)).toContain(
+		expect(result.findings.map((finding) => finding.cause)).toContain(
 			'missing_manifest',
 		)
 	})
@@ -304,7 +339,7 @@ describe('verifying a Generated Artifact Set for drift', () => {
 		const dir = await outputDir()
 		const compiled = await compile('vault-git')
 		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
-		const target = join(dir, 'specification-summary.json')
+		const target = join(dir, A_DECLARED_ARTIFACT)
 		await Bun.write(target, 'hand written garbage\n')
 		// Plant a file the set never declared, alongside the drifted artifact.
 		await Bun.write(
@@ -340,7 +375,7 @@ describe('regenerating a Generated Artifact Set', () => {
 		await mkdir(join(root, 'proof'), { recursive: true })
 		await Bun.write(join(root, 'proof', 'evidence.json'), '{"observed":true}\n')
 		// Drift both declared artifacts.
-		await Bun.write(join(dir, 'specification-summary.json'), 'stale\n')
+		await Bun.write(join(dir, A_DECLARED_ARTIFACT), 'stale\n')
 		await Bun.write(join(dir, 'provenance.manifest.json'), '{}\n')
 
 		const result = await regenerateArtifactSet(compiled.ir, compiled.digest, {
@@ -368,10 +403,7 @@ describe('regenerating a Generated Artifact Set', () => {
 			outputDir: dir,
 			emitters: [
 				...DEFAULT_TEST_EMITTERS,
-				{
-					name: 'retired',
-					emit: () => new Map([['retired-contract.json', '{}\n']]),
-				},
+				emitting('retired', { 'retired-contract.json': '{}\n' }),
 			],
 		})
 
@@ -405,7 +437,7 @@ describe('regenerating a Generated Artifact Set', () => {
 			outputDir: dir,
 			emitters: [
 				...DEFAULT_TEST_EMITTERS,
-				{ name: 'blocked', emit: () => new Map([['blocked.json', '{}\n']]) },
+				emitting('blocked', { 'blocked.json': '{}\n' }),
 			],
 		})
 
@@ -466,12 +498,7 @@ describe('fail-closed across the compile seam', () => {
 
 		const result = await generateArtifactSet(compiled.ir, compiled.digest, {
 			outputDir: dir,
-			emitters: [
-				{
-					name: 'escaping',
-					emit: () => new Map([['../escaped.json', '{}\n']]),
-				},
-			],
+			emitters: [emitting('escaping', { '../escaped.json': '{}\n' })],
 		})
 
 		expect(result.ok).toBe(false)
@@ -483,10 +510,8 @@ describe('fail-closed across the compile seam', () => {
 	test('two emitters declaring one path is refused, not silently resolved', async () => {
 		const dir = await outputDir()
 		const compiled = await compile('vault-git')
-		const collide = (name: string) => ({
-			name,
-			emit: () => new Map([['contested.json', `{"from":"${name}"}\n`]]),
-		})
+		const collide = (name: string) =>
+			emitting(name, { 'contested.json': `{"from":"${name}"}\n` })
 
 		const result = await generateArtifactSet(compiled.ir, compiled.digest, {
 			outputDir: dir,
@@ -551,7 +576,7 @@ describe('the fallow candidate across every lane', () => {
 			await verifyArtifactSet(compiled.ir, compiled.digest, { outputDir: dir }),
 		).toMatchObject({ ok: true })
 
-		await Bun.write(join(dir, 'specification-summary.json'), 'hand edited\n')
+		await Bun.write(join(dir, A_DECLARED_ARTIFACT), 'hand edited\n')
 		const drifted = await verifyArtifactSet(compiled.ir, compiled.digest, {
 			outputDir: dir,
 		})
@@ -559,7 +584,7 @@ describe('the fallow candidate across every lane', () => {
 		expect(drifted.ok).toBe(false)
 		if (drifted.ok) return
 		expect(drifted.cause).toBe('generated_drift')
-		expect(drifted.findings.map((finding) => finding.reason)).toContain(
+		expect(drifted.findings.map((finding) => finding.cause)).toContain(
 			'modified_artifact',
 		)
 	})
@@ -568,7 +593,7 @@ describe('the fallow candidate across every lane', () => {
 		const dir = await outputDir()
 		const compiled = await compile('fallow')
 		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
-		await Bun.write(join(dir, 'specification-summary.json'), 'stale\n')
+		await Bun.write(join(dir, A_DECLARED_ARTIFACT), 'stale\n')
 
 		const result = await regenerateArtifactSet(compiled.ir, compiled.digest, {
 			outputDir: dir,
@@ -586,29 +611,13 @@ describe('the fallow candidate across every lane', () => {
 		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
 
 		const written = await snapshot(dir)
-		const summary = JSON.parse(
-			written.get('specification-summary.json') as string,
-		)
 
-		// The omission is declared...
-		expect(summary.features).toMatchObject({
-			durableOperations: false,
-			livenessEvidence: false,
-			versionCustody: false,
-			cancellation: 'not_supported',
-		})
-
-		// ...and nothing outside that declaration contradicts it. The feature
-		// block is excluded from the scan on purpose: `livenessEvidence: false`
-		// is how the omission is *declared*, so matching on it would forbid the
-		// very evidence being asserted. Everything else must stay free of
-		// placeholder operation, liveness, retry, cancellation and version
-		// machinery.
-		const { features: _declaredFeatures, ...content } = summary
-		const generated = [
-			written.get('provenance.manifest.json') as string,
-			JSON.stringify(content),
-		].join('\n')
+		// The whole Generated Artifact Set is scanned, not one artifact. A
+		// stateless product's output must contain no durable-operation,
+		// liveness, retry, Cancellation or version-custody surface anywhere:
+		// the omission is structural, so no artifact gets an exemption.
+		expect(written.size).toBeGreaterThan(1)
+		const generated = [...written.values()].join('\n')
 
 		for (const absent of [
 			'logical_operation',
@@ -640,5 +649,168 @@ describe('the fallow candidate across every lane', () => {
 		})
 
 		expect(await snapshot(second)).toEqual(await snapshot(first))
+	})
+})
+
+/**
+ * The consolidation gate: the real emitters reach generation and verification.
+ *
+ * Until stage 3's derivation was wired into the emitter registry, generation
+ * wrote a placeholder summary while the station catalog, Command Surface
+ * Contract and expectation table were reachable only by calling the derivation
+ * directly. These cases cross `src/index.ts` exactly as a consumer does, so a
+ * regression that unwires the seam fails here rather than in a unit test that
+ * calls the derivation itself.
+ */
+describe('the real Generated Artifact Set reaches generation and verification', () => {
+	test('generate writes every derived contract, and verify accepts it', async () => {
+		const dir = await outputDir()
+		const compiled = await compile('vault-git')
+
+		const result = await generateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+		})
+
+		expect(result.ok).toBe(true)
+		if (!result.ok) return
+
+		// The declared set is the real one: every consumer-facing contract, plus
+		// the manifest that binds them to the admitted input.
+		expect([...result.declaredOutputs].sort()).toEqual([
+			'provenance.manifest.json',
+			'src/branch-station-catalog.ts',
+			'src/command-surface-contract.ts',
+			'src/semantic-expectations.ts',
+		])
+
+		// Read back independently: the bytes are on disk, not merely promised.
+		const written = await snapshot(dir)
+		expect([...written.keys()].sort()).toEqual([...result.declaredOutputs])
+		expect(written.get('src/branch-station-catalog.ts')).toContain(
+			'BranchStation',
+		)
+		expect(written.get('src/command-surface-contract.ts')).toContain(
+			'CommandFacadeContract',
+		)
+
+		// Verification is clean immediately after generation: the drift oracle
+		// agrees with what generation just wrote.
+		const verified = await verifyArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+		})
+		expect(verified.ok).toBe(true)
+	})
+
+	test('corrupting one derived contract makes verification refuse it', async () => {
+		const dir = await outputDir()
+		const compiled = await compile('vault-git')
+		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
+
+		const target = join(dir, 'src/command-surface-contract.ts')
+		const original = await Bun.file(target).text()
+		await Bun.write(target, `${original}\n// hand edited\n`)
+
+		const result = await verifyArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+		})
+
+		expect(result.ok).toBe(false)
+		if (result.ok) return
+		expect(result.cause).toBe('generated_drift')
+		expect(
+			result.findings
+				.filter((finding) => finding.cause === 'modified_artifact')
+				.map((finding) => finding.subject),
+		).toContain('src/command-surface-contract.ts')
+
+		// Verification is read-only: the hand edit is still there, unrepaired.
+		expect(await Bun.file(target).text()).toBe(`${original}\n// hand edited\n`)
+	})
+
+	test('generating the real set twice is byte-identical', async () => {
+		const compiled = await compile('vault-git')
+		const first = await outputDir()
+		const second = await outputDir()
+
+		await generateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: first,
+		})
+		await generateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: second,
+		})
+
+		const a = await snapshot(first)
+		expect(a.size).toBe(4)
+		expect(await snapshot(second)).toEqual(a)
+	})
+})
+
+describe('an emit refusal fails generation closed', () => {
+	for (const product of ['vault-git', 'fallow'] as const) {
+		test(`the unamended ${product} candidate writes nothing and refuses`, async () => {
+			const dir = await outputDir()
+			// The raw compiled IR, deliberately NOT amended: Input Schema v1
+			// cannot express what the derivation needs, so emission refuses.
+			const compiled = compileSpecificationCandidate(
+				await readCandidate(product),
+			)
+			if (!compiled.ok) throw new Error('fixture candidate must compile')
+
+			const result = await generateArtifactSet(compiled.ir, compiled.digest, {
+				outputDir: dir,
+			})
+
+			expect(result.ok).toBe(false)
+			if (result.ok) return
+
+			// A typed refusal, branchable on sealed causes rather than on prose.
+			expect(result.cause).toBe('generation_emit_refused')
+			expect(result.refusals.length).toBeGreaterThan(0)
+			for (const refusal of result.refusals) {
+				expect(ARTIFACT_REFUSAL_CAUSES).toContain(refusal.cause)
+			}
+
+			// Fail closed: not one byte reached the output directory, so no
+			// partial Generated Artifact Set can be mistaken for a usable one.
+			expect([...(await snapshot(dir)).keys()]).toEqual([])
+		})
+	}
+
+	test('a refusing emitter stops the set even beside emitters that succeed', async () => {
+		const dir = await outputDir()
+		const compiled = await compile('vault-git')
+
+		const result = await generateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+			emitters: [
+				emitting('willing', { 'willing.json': '{}\n' }),
+				{
+					name: 'refusing',
+					emit: () => ({
+						ok: false,
+						refusals: [
+							{
+								cause: 'emit_result_contract_undeclared' as const,
+								subject: 'some-command',
+								message: 'the candidate declares no result contract',
+							},
+						],
+					}),
+				},
+			],
+		})
+
+		expect(result.ok).toBe(false)
+		if (result.ok) return
+		expect(result.cause).toBe('generation_emit_refused')
+		// The failure names its subject: the refusing emitter, not prose to
+		// parse out of message (repair S2).
+		expect(result.subject).toBe('refusing')
+		expect(result.refusals.map((refusal) => refusal.cause)).toEqual([
+			'emit_result_contract_undeclared',
+		])
+		// The willing emitter's artifact is not on disk either: the set is
+		// replaced as one unit, so a partial set is never written.
+		expect([...(await snapshot(dir)).keys()]).toEqual([])
 	})
 })

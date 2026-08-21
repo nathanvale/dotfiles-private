@@ -53,6 +53,8 @@ describe('vault-git stations satisfy the facade contract', () => {
 		expect(emission.stations.length).toBeGreaterThan(0)
 
 		for (const { station } of emission.stations) {
+			// Deliberate independent oracle: the grammar restated as a literal so
+			// a change to STATION_ID_PATTERN in src must fail here. Do not hoist.
 			expect({
 				id: station.id,
 				matchesGrammar: /^[a-z][a-z0-9:-]*\.[a-z][a-z0-9_:-]*$/.test(
