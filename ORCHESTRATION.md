@@ -161,6 +161,16 @@ Delete this file when the feature branch is ready to merge to `main`.
 
 ## Standing supervisor rules
 
+- Ground every unit in the tracker acceptance criteria before chartering
+  it: re-read the issue 55 body (user stories, implementation and testing
+  decisions, out of scope) and the plan comment's stage row the unit sits
+  under. The unit's brief quotes its gate-proof row and the AC lines it
+  binds; both review axes receive those lines verbatim. At merge, the
+  unit's ledger entry ticks off the AC lines its gate proof satisfied and
+  names any it left open. GitHub Issues stays the mutable status owner;
+  the ledger records satisfaction evidence, never issue status.
+  Standards-compliance units (outside the stage table) bind to the
+  admitted CODING_STANDARDS.md rules that chartered them instead.
 - Maintain the package `CODING_STANDARDS.md` as the harvest of supervision:
   when a review or repair cycle surfaces a defect class a written rule would
   have prevented, add one rule stating the idiom (with the lesson it came
