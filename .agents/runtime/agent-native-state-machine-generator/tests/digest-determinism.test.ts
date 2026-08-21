@@ -56,6 +56,60 @@ describe('specification digest', () => {
 		)
 	})
 
+	test('digests NFC and NFD spellings of one visible string identically', async () => {
+		const source = await readCandidate('fallow')
+		// U+00E9 precomposed against U+0065 U+0301 decomposed: the same visible
+		// text in two forms an editor or filesystem can silently convert between.
+		const nfc = source.replace(
+			'observability metadata',
+			'observability caf\u00e9 metadata',
+		)
+		const nfd = source.replace(
+			'observability metadata',
+			'observability cafe\u0301 metadata',
+		)
+		expect(nfc).not.toBe(nfd)
+		expect(nfd.includes('\u0301')).toBe(true)
+
+		const first = compileSpecificationCandidate(nfc)
+		const second = compileSpecificationCandidate(nfd)
+		expect(first.ok && second.ok).toBe(true)
+		if (!first.ok || !second.ok) return
+		// Positive control: the mutated value genuinely reached the digest input.
+		expect(first.digest.canonicalForm.includes('caf\u00e9')).toBe(true)
+		expect(second.digest.canonicalForm).toBe(first.digest.canonicalForm)
+		expect(second.digest.specificationDigest).toBe(
+			first.digest.specificationDigest,
+		)
+	})
+
+	test('digests CRLF and LF line endings inside one value identically', async () => {
+		const source = await readCandidate('fallow')
+		const crlf = source.replace(
+			'observability metadata',
+			'observability\\r\\nmetadata',
+		)
+		const lf = source.replace(
+			'observability metadata',
+			'observability\\nmetadata',
+		)
+
+		const first = compileSpecificationCandidate(crlf)
+		const second = compileSpecificationCandidate(lf)
+		expect(first.ok && second.ok).toBe(true)
+		if (!first.ok || !second.ok) return
+		// Positive controls: the embedded line break reached the digest input as
+		// LF, and no carriage return survived into the serialized form.
+		expect(
+			first.digest.canonicalForm.includes('observability\\nmetadata'),
+		).toBe(true)
+		expect(first.digest.canonicalForm.includes('\\r')).toBe(false)
+		expect(second.digest.canonicalForm).toBe(first.digest.canonicalForm)
+		expect(second.digest.specificationDigest).toBe(
+			first.digest.specificationDigest,
+		)
+	})
+
 	test('envelope distinguishes input schema version from generator contract version', async () => {
 		const result = compileSpecificationCandidate(await readCandidate('fallow'))
 

@@ -13,6 +13,7 @@
  * order, with no dependence on object key insertion order.
  */
 import type { BranchStation } from '@side-quest/cli-command-facade'
+import { compareCodepoints } from './canonical.ts'
 import { BRANCH_FACTS, resolveResultContract } from './derivation-facts.ts'
 import type { CommandSurface, SpecificationIr } from './ir.ts'
 import { type ArtifactRefusal, artifactRefusal } from './refusal.ts'
@@ -309,5 +310,7 @@ export function stationIds(
 export function sortStations(
 	stations: readonly DerivedStation[],
 ): readonly DerivedStation[] {
-	return [...stations].sort((a, b) => a.station.id.localeCompare(b.station.id))
+	return [...stations].sort((a, b) =>
+		compareCodepoints(a.station.id, b.station.id),
+	)
 }

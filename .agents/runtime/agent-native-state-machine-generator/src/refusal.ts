@@ -11,6 +11,7 @@
  * Emission is not Specification Admission. A candidate whose artifacts emit
  * has no semantic authority until the product owner admits it explicitly.
  */
+import { compareCodepoints } from './canonical.ts'
 
 /**
  * Sealed artifact refusal causes; cause tokens keep their `emit_` spelling.
@@ -89,6 +90,7 @@ export function sortRefusals(
 ): readonly ArtifactRefusal[] {
 	return [...refusals].sort(
 		(a, b) =>
-			a.cause.localeCompare(b.cause) || a.subject.localeCompare(b.subject),
+			compareCodepoints(a.cause, b.cause) ||
+			compareCodepoints(a.subject, b.subject),
 	)
 }

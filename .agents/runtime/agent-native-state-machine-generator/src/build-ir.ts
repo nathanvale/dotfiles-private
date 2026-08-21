@@ -4,7 +4,7 @@
  * Only ever called after zero diagnostics, so every lookup here is total:
  * validation has already proved the shapes and resolved the references.
  */
-import { canonicalize } from './canonical.ts'
+import { canonicalize, compareCodepoints } from './canonical.ts'
 import type {
 	ActionEntry,
 	CommandSurface,
@@ -93,7 +93,7 @@ export function buildIr(document: unknown): SpecificationIr {
 				...defined('role', optional(state.role)),
 			}
 		})
-		.sort((a, b) => a.name.localeCompare(b.name))
+		.sort((a, b) => compareCodepoints(a.name, b.name))
 
 	const transitions: TransitionEntry[] = ((doc.transitions ?? []) as Doc[]).map(
 		(raw) => ({

@@ -2,6 +2,7 @@
  * Stable diagnostic vocabulary. Every cause identifier here is part of the
  * package's public contract: callers branch on `cause`, never on `message`.
  */
+import { compareCodepoints } from './canonical.ts'
 
 /** Sealed diagnostic causes. Adding a cause is a Generator Contract change. */
 export const DIAGNOSTIC_CAUSES = [
@@ -67,7 +68,7 @@ export function sortDiagnostics(
 	return [...diagnostics].sort(
 		(a, b) =>
 			a.location.offset - b.location.offset ||
-			a.cause.localeCompare(b.cause) ||
-			a.path.localeCompare(b.path),
+			compareCodepoints(a.cause, b.cause) ||
+			compareCodepoints(a.path, b.path),
 	)
 }
