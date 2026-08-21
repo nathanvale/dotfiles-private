@@ -46,6 +46,15 @@ Delete this file when the feature branch is ready to merge to `main`.
 
 ## Standing supervisor rules
 
+- After every stage merge (and any material change of plan), write the new
+  state back to the vault project packet
+  (`projects/agent-native-state-machine-generator/` in the configured vault):
+  GOAL.md progress and next safe action, README.md current state. Follow the
+  `ultragoal` packet discipline (durable state in the packet, evidence over
+  narration, no running activity log) and `writing-for-agents` prose rules
+  (single source of truth, no mutable git-state snapshots, link owners).
+  Leave vault commits to `vault-git`.
+
 - The code-review contract below runs at the end of every stage; supervisor
   re-runs gate proof independently before merging.
 
