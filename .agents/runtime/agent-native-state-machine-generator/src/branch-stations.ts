@@ -165,7 +165,46 @@ export function deriveStations(ir: SpecificationIr): StationEmission {
 	if (noArgument.station) stations.push(noArgument.station)
 	refusals.push(...noArgument.refusals)
 
+	refusals.push(...unresolvedRouteTargets(ir, stations))
+
 	return { stations, refusals }
+}
+
+/**
+ * Refuses every Routing Table row targeting a Branch Station the catalog does
+ * not contain.
+ *
+ * Runs here, and only here, because this module owns the catalog. Semantic
+ * validation cannot own it: `validateSemantics` runs on the parsed document
+ * before `buildIr`, so the derived station set does not exist yet, and the
+ * check it can afford there - that the target's prefix names a declared
+ * command - resolves `doctor.typo_no_such_station` while selecting a station
+ * no derivation emits.
+ *
+ * The whole target is compared against derived ids. A prefix, a shape, or a
+ * grammar match is not the test: only membership in the set this compilation
+ * actually built proves the route selects something.
+ */
+function unresolvedRouteTargets(
+	ir: SpecificationIr,
+	stations: readonly DerivedStation[],
+): readonly ArtifactRefusal[] {
+	const derived = new Set(stations.map((entry) => entry.station.id))
+	const refusals: ArtifactRefusal[] = []
+	for (const table of ir.routing) {
+		if (table.targetKind !== 'branch_station') continue
+		for (const row of table.rows) {
+			if (derived.has(row.target)) continue
+			refusals.push(
+				artifactRefusal({
+					cause: 'emit_route_station_unknown',
+					subject: `${table.name}:${row.target}`,
+					message: `Routing table ${table.name} targets Branch Station ${row.target}, which the derived catalog does not contain.`,
+				}),
+			)
+		}
+	}
+	return refusals
 }
 
 /**

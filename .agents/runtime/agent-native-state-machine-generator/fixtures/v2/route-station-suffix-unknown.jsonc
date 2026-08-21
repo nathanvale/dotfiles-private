@@ -1,4 +1,10 @@
-// INVALID: bare invocation of a command selects an undeclared action.
+// A synthetic Input Schema v2 candidate exercising every declared v2 surface
+// the stage-5 coverage matrix marks implement. Synthetic on purpose: it proves
+// validation, IR carriage and canonicalization mechanics, and it describes no
+// real product. UNADMITTED, and never schema surface for any product.
+//
+// The values are shaped after the recorded rulings so each surface carries the
+// meaning its ruling names, but no value here is a product's declaration.
 {
 	"spec_meta": { "product": "surfaces", "input_schema_version": "2" },
 	"features": {
@@ -171,6 +177,9 @@
 		},
 		// S8, G5: fact-to-branch selection targets a declared Branch Station,
 		// which is a different meaning from selecting a Next Safe Action.
+		// The single broken rule: "doctor" IS a declared command, so the
+		// target resolves its prefix. Only the branch suffix names a station no
+		// derivation emits, which is what a prefix-only check cannot see.
 		"facts": {
 			"role": "fact_branch",
 			"target_kind": "branch_station",
@@ -178,14 +187,14 @@
 			"requires_complete_coverage": true,
 			"rows": [
 				{ "key": { "work_present": "yes" }, "target": "doctor.success" },
-				{ "key": { "work_present": "no" }, "target": "doctor.refused" },
+				{ "key": { "work_present": "no" }, "target": "doctor.typo_no_such_station" },
 			],
 		},
 	},
 	// S4: Capability Availability is an installed-surface fact, never Authority.
 	"capabilities": {
 		"content_repair": {
-			"available": false,
+			"availability_evidence": "vault_git.content_repair_installed",
 			"unavailable_blocker": "capability_missing",
 			"unavailable_action": "escalate_to_operator",
 		},
@@ -232,8 +241,10 @@
 				"wake_route": "caller_reinvocation",
 				"missed_deadline_cause": "work_observation_expired",
 			},
-			// A second observation, so the split the ruling requires is
-			// exercised: two waits never share one expiry cause.
+			// A second observation, so an expiry cause per lifecycle is
+			// illustrated. Whether two observations may share a cause is
+			// deliberately unenforced; see the note in
+			// observations-and-gates.test.ts.
 			"doctor_task": {
 				"poll_after_ms": 5000,
 				"attempt_expiry_ms": 600000,
@@ -258,7 +269,7 @@
 		"positional_routes": {
 			"audit": {
 				"positionals": { "inspect": "inspect_work", "repair": "run_doctor" },
-				"bare_alias": "inspect_nothing",
+				"bare_invocation_target": "inspect_work",
 			},
 		},
 		// S9: the real entry point, so a generated contract names a real path.

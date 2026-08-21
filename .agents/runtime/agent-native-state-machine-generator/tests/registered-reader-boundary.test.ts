@@ -108,6 +108,33 @@ async function compiledSpike(product: 'vault-git' | 'fallow') {
 	return compiled
 }
 
+/**
+ * A genuinely compiled Input Schema v2 candidate: its IR and its digest come
+ * from one compilation, so the pair carries one identity and may found a set.
+ */
+async function compiledV2(): Promise<{
+	readonly ir: SpecificationIr
+	readonly digest: SpecificationDigest
+}> {
+	const source = await Bun.file(
+		new URL('../fixtures/v2/declared-surfaces.jsonc', import.meta.url),
+	).text()
+	const compiled = compileSpecificationCandidate(source)
+	if (!compiled.ok) throw new Error('v2 fixture failed to compile')
+	return { ir: compiled.ir, digest: compiled.digest }
+}
+
+/** The observed failure cause, or a marker naming the unexpected success. */
+function causeOf(result: {
+	readonly ok: boolean
+	readonly cause?: GenerationFailureCause
+}): GenerationFailureCause {
+	if (result.ok || result.cause === undefined) {
+		throw new Error('generation succeeded where a refusal was expected')
+	}
+	return result.cause
+}
+
 describe('the superseded versions are the ones the reader owns', () => {
 	test('the registered set is non-empty and excludes the generation version', () => {
 		expect(REGISTERED_READER_VERSIONS.length).toBeGreaterThan(0)
@@ -637,30 +664,164 @@ describe('an existing set on a superseded version stays checkable', () => {
  * that moved.
  */
 describe('every sealed generation failure cause is reached by a test', () => {
-	const PROVEN_BY: Readonly<Record<GenerationFailureCause, string>> = {
-		generation_emitter_failure: 'generation-mechanics.test.ts',
-		generation_emit_refused: 'generation-mechanics.test.ts',
-		generation_write_failure: 'generation-mechanics.test.ts',
-		generation_no_existing_set: 'generation-mechanics.test.ts',
-		generation_superseded_input_schema: 'registered-reader-boundary.test.ts',
-		generation_provenance_mismatch: 'registered-reader-boundary.test.ts',
-		generation_foreign_existing_set: 'registered-reader-boundary.test.ts',
-		generation_unreadable_manifest: 'registered-reader-boundary.test.ts',
-		generation_unsafe_declared_output: 'registered-reader-boundary.test.ts',
+	/**
+	 * One producer per sealed generation cause, each running the real verbs
+	 * against a real directory. The previous registry mapped each cause to the
+	 * NAME of the suite that proved it and asserted the string was non-empty,
+	 * which is a claim about a filename rather than about reachability: a
+	 * cause whose producer was deleted would keep passing.
+	 *
+	 * The Record type keeps this total, so a cause added to the sealed list
+	 * without a producer fails typecheck before it fails the suite.
+	 */
+	const PRODUCERS: Readonly<
+		Record<GenerationFailureCause, () => Promise<GenerationFailureCause>>
+	> = {
+		// A v1 candidate cannot found a new set.
+		generation_superseded_input_schema: async () => {
+			const compiled = await compiledSpike('vault-git')
+			const result = await generateArtifactSet(compiled.ir, compiled.digest, {
+				outputDir: await outputDir(),
+			})
+			return causeOf(result)
+		},
+		// Regeneration with nothing on disk to replace.
+		generation_no_existing_set: async () => {
+			const { ir, digest } = await compiledV2()
+			const result = await regenerateArtifactSet(ir, digest, {
+				outputDir: await outputDir(),
+			})
+			return causeOf(result)
+		},
+		// The IR and the digest disagree about which identity produced them.
+		generation_provenance_mismatch: async () => {
+			const { ir } = await compiledV2()
+			const foreign = await compiledSpike('vault-git')
+			const result = await generateArtifactSet(ir, foreign.digest, {
+				outputDir: await outputDir(),
+			})
+			return causeOf(result)
+		},
+		// A set on disk this compilation does not describe.
+		generation_foreign_existing_set: async () => {
+			const dir = await outputDir()
+			const spike = await compiledSpike('vault-git')
+			await seedLegacyArtifactSet(dir, amendForEmission(spike.ir), spike.digest)
+			const { ir, digest } = await compiledV2()
+			const result = await regenerateArtifactSet(ir, digest, {
+				outputDir: dir,
+			})
+			return causeOf(result)
+		},
+		// A manifest whose bytes cannot be parsed.
+		generation_unreadable_manifest: async () => {
+			const dir = await outputDir()
+			const { ir, digest } = await compiledV2()
+			await generateArtifactSet(ir, digest, { outputDir: dir })
+			await writeFile(join(dir, 'provenance.manifest.json'), 'not json', 'utf8')
+			const result = await regenerateArtifactSet(ir, digest, {
+				outputDir: dir,
+			})
+			return causeOf(result)
+		},
+		// A manifest declaring an output outside the set.
+		generation_unsafe_declared_output: async () => {
+			const dir = await outputDir()
+			const { ir, digest } = await compiledV2()
+			await generateArtifactSet(ir, digest, { outputDir: dir })
+			const manifestPath = join(dir, 'provenance.manifest.json')
+			const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+				declared_outputs: string[]
+			}
+			manifest.declared_outputs = [
+				...manifest.declared_outputs,
+				'../escaped.txt',
+			]
+			await writeFile(manifestPath, JSON.stringify(manifest), 'utf8')
+			const result = await regenerateArtifactSet(ir, digest, {
+				outputDir: dir,
+			})
+			return causeOf(result)
+		},
+		// An emitter that throws.
+		generation_emitter_failure: async () => {
+			const { ir, digest } = await compiledV2()
+			const result = await generateArtifactSet(ir, digest, {
+				outputDir: await outputDir(),
+				emitters: [
+					{
+						name: 'throwing-emitter',
+						emit: () => {
+							throw new Error('emitter probe')
+						},
+					},
+				],
+			})
+			return causeOf(result)
+		},
+		// An emitter that refuses because the specification declares too little.
+		generation_emit_refused: async () => {
+			const { ir, digest } = await compiledV2()
+			const result = await generateArtifactSet(
+				{ ...ir, blockers: [], routing: [] },
+				digest,
+				{ outputDir: await outputDir() },
+			)
+			return causeOf(result)
+		},
+		// The set could not be written: the output path is a file, not a
+		// directory, so staging cannot create anything beneath it.
+		generation_write_failure: async () => {
+			const dir = await outputDir()
+			const blocked = join(dir, 'blocked')
+			await writeFile(blocked, 'not a directory', 'utf8')
+			const { ir, digest } = await compiledV2()
+			const result = await generateArtifactSet(ir, digest, {
+				outputDir: join(blocked, 'set'),
+			})
+			return causeOf(result)
+		},
 	}
+
+	test('no generation refusal message carries an absolute path', async () => {
+		// The package rule: `message` is the human half of a contract, so a
+		// reader must not be able to tell which directory raised it. The
+		// output directory is a caller-supplied absolute path under mkdtemp
+		// here, which is exactly what must not appear.
+		expect(GENERATION_FAILURE_CAUSES.length).toBeGreaterThan(0)
+		const dir = await outputDir()
+		const { ir, digest } = await compiledV2()
+		const refused = await regenerateArtifactSet(ir, digest, {
+			outputDir: dir,
+		})
+		expect(refused.ok).toBe(false)
+		if (refused.ok) return
+		// Positive control: the directory really is an absolute path, so the
+		// absence below is the message being clean rather than the path being
+		// empty.
+		expect(dir.startsWith('/')).toBe(true)
+		expect(refused.message).not.toContain(dir)
+		expect(refused.message.length).toBeGreaterThan(0)
+	})
 
 	test('the registry covers the sealed list member for member', () => {
 		expect(GENERATION_FAILURE_CAUSES.length).toBeGreaterThan(0)
-		// Total by construction: a cause added to the sealed list without an
-		// owner here fails typecheck before it fails this assertion.
-		expect(Object.keys(PROVEN_BY).sort()).toEqual(
+		// Total by construction: a cause added to the sealed list without a
+		// producer here fails typecheck before it fails this assertion.
+		expect(Object.keys(PRODUCERS).sort()).toEqual(
 			[...GENERATION_FAILURE_CAUSES].sort(),
 		)
 	})
 
 	for (const cause of GENERATION_FAILURE_CAUSES) {
-		test(`${cause} names the suite that proves it`, () => {
-			expect(PROVEN_BY[cause].length).toBeGreaterThan(0)
+		test(`${cause} is raised by its producer`, async () => {
+			// Live reachability: the producer runs a real verb and the cause it
+			// observed is compared to the cause it claims. A guard deleted in
+			// src fails here rather than in a reviewer's memory.
+			expect({ cause, observed: await PRODUCERS[cause]() }).toEqual({
+				cause,
+				observed: cause,
+			})
 		})
 	}
 })

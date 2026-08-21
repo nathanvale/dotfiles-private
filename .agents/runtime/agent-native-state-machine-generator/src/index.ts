@@ -208,6 +208,7 @@ export {
 	type VerificationResult,
 	verifyArtifactSet,
 } from './generate.ts'
+export { INPUT_SCHEMA_V1_SHAPE } from './input-schema-v1.ts'
 export type {
 	ActionEntry,
 	CapabilityAvailability,
@@ -263,8 +264,10 @@ export {
 	ROUTING_ROLES,
 	type RouteTargetKind,
 	type RoutingRole,
+	type Shape,
 	V2_ONLY_SURFACE_PATHS,
 	type V2OnlySurfacePath,
 	WRITE_IMPLYING_MUTATIONS,
 	type WriteImplyingMutation,
 } from './schema.ts'
+export { addedPaths } from './schema-difference.ts'

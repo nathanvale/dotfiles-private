@@ -168,7 +168,7 @@
 	// S4: Capability Availability is an installed-surface fact, never Authority.
 	"capabilities": {
 		"content_repair": {
-			"available": false,
+			"availability_evidence": "vault_git.content_repair_installed",
 			"unavailable_blocker": "capability_missing",
 			"unavailable_action": "escalate_to_operator",
 		},
@@ -240,7 +240,7 @@
 		"positional_routes": {
 			"audit": {
 				"positionals": { "inspect": "inspect_work", "repair": "run_doctor" },
-				"bare_alias": "inspect_work",
+				"bare_invocation_target": "inspect_work",
 			},
 		},
 		// S9: the real entry point, so a generated contract names a real path.

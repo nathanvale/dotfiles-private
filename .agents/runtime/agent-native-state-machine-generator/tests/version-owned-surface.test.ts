@@ -31,7 +31,8 @@ import { readNegativeFixture } from './support/candidates.ts'
  * about a malformed value.
  */
 const V2_ONLY_FRAGMENTS: Readonly<Record<string, string>> = {
-	capabilities: '"capabilities": { "cap": { "available": true } },',
+	capabilities:
+		'"capabilities": { "cap": { "availability_evidence": "probe.installed", "unavailable_blocker": "b", "unavailable_action": "a" } },',
 	'command_surface.bare_invocation_command':
 		'"bare_invocation_command": "doctor",',
 	'command_surface.entry': '"entry": { "script": "src/cli.ts" },',

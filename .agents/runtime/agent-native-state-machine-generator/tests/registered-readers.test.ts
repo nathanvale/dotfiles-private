@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { createHash } from 'node:crypto'
 import {
 	compileSpecificationCandidate,
 	GENERATOR_CONTRACT_VERSION,
@@ -183,6 +184,85 @@ describe('the two version identities are independent', () => {
 					reader.frozenEnvelopeVersion === INPUT_SCHEMA_VERSION ||
 					reader.frozenGeneratorContractVersion === GENERATOR_CONTRACT_VERSION,
 			}).toEqual({ version, sameSource: false })
+		}
+	})
+})
+
+describe('a reader owns the algorithm, not only the stamps', () => {
+	/**
+	 * Deliberate independent oracle: a digest envelope recomputed here from
+	 * first principles, with this file's own sorting and hashing, over bytes
+	 * the reader never sees. Recomputing through `canonical.ts` would prove the
+	 * current path agrees with itself, which is precisely the coincidence that
+	 * let a reader look frozen while freezing nothing.
+	 */
+	function independentV1Digest(value: unknown): string {
+		function sortValue(node: unknown): unknown {
+			if (typeof node === 'string') return node.normalize('NFC')
+			if (Array.isArray(node)) return node.map(sortValue)
+			if (node !== null && typeof node === 'object') {
+				const out: Record<string, unknown> = {}
+				for (const key of Object.keys({ ...node }).sort()) {
+					out[key] = sortValue((node as Record<string, unknown>)[key])
+				}
+				return out
+			}
+			return node
+		}
+		const form = JSON.stringify(sortValue(value))
+		return createHash('sha256')
+			.update(
+				JSON.stringify({
+					canonical_form: form,
+					generator_contract_version: '1',
+					input_schema_version: '1',
+				}),
+				'utf8',
+			)
+			.digest('hex')
+	}
+
+	test('each reader reproduces a digest computed outside this package', () => {
+		// A document with keys deliberately out of order and a decomposed
+		// character, so key sorting and NFC normalization both have to fire for
+		// the two computations to agree. A reader that stopped canonicalizing
+		// would still return a digest; it would not return this one.
+		const document = {
+			zeta: 'last',
+			alpha: { nested_b: 2, nested_a: 1 },
+			cafe: 'cafe\u0301',
+			list: [3, 1, 2],
+		}
+		const expected = independentV1Digest(document)
+
+		expect(REGISTERED_READER_VERSIONS.length).toBeGreaterThan(0)
+		for (const version of REGISTERED_READER_VERSIONS) {
+			const reader = REGISTERED_READERS[version]
+			expect({
+				version,
+				digest: reader.digest(document).specificationDigest,
+			}).toEqual({ version, digest: expected })
+		}
+	})
+
+	test('the frozen envelope carries no current global', () => {
+		// The claim this module rests on: a reader's envelope is reproducible
+		// from the reader alone. Were the reader delegating to the current
+		// canonicalizer, its contract version would track
+		// GENERATOR_CONTRACT_VERSION, and a bump would move every admitted
+		// identity by half.
+		//
+		// Positive control: the current contract version really has moved past
+		// the frozen one, so this asserts a freeze rather than two constants
+		// that happen to agree.
+		expect(GENERATOR_CONTRACT_VERSION).not.toBe('1')
+		for (const version of REGISTERED_READER_VERSIONS) {
+			const stamped = REGISTERED_READERS[version].digest({ k: 'v' })
+			expect({
+				version,
+				input: stamped.inputSchemaVersion,
+				contract: stamped.generatorContractVersion,
+			}).toEqual({ version, input: '1', contract: '1' })
 		}
 	})
 })

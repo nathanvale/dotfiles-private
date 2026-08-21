@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import {
 	compileSpecificationCandidate,
 	type DiagnosticCause,
+	deriveArtifactSet,
 	projectRetryable,
 	RETRY_POSTURES,
 	type RetryableEvidence,
@@ -112,17 +113,41 @@ describe('a declared Routing Table compiles', () => {
 		}
 	})
 
-	test('each sealed role is either consumed by derivation or declared unconsumed', () => {
-		// The two derivation reads today, restated here rather than grepped:
-		// station_blocker supplies a refused station's blocker, station_action
-		// binds a success station. fact_branch and advisory are declared and
-		// validated but no emitter consumes them, which the schema comment
-		// says and this holds it to.
-		const CONSUMED = ['station_action', 'station_blocker']
-		const DECLARED_ONLY = ['advisory', 'fact_branch']
-		expect([...CONSUMED, ...DECLARED_ONLY].sort()).toEqual(
+	test('each sealed role has a named disposition at derivation', async () => {
+		// Three roles bind: station_blocker supplies a refused station's
+		// blocker, station_action binds a success station, and fact_branch
+		// emits its own selection table. `advisory` binds nothing by
+		// definition - a product declares it precisely so derivation reads no
+		// station meaning from it.
+		const BINDING = ['fact_branch', 'station_action', 'station_blocker']
+		const BINDS_NOTHING = ['advisory']
+		expect([...BINDING, ...BINDS_NOTHING].sort()).toEqual(
 			[...ROUTING_ROLES].sort(),
 		)
+
+		// Held against the real emission rather than two hand-kept lists: the
+		// fixture declares a fact_branch table and an advisory one, and only
+		// the first reaches a module.
+		const compiled = await compileV2('declared-surfaces')
+		expect(compiled.ok).toBe(true)
+		if (!compiled.ok) return
+		const emission = deriveArtifactSet(
+			compiled.ir,
+			compiled.digest.specificationDigest,
+		)
+		expect(emission.ok).toBe(true)
+		if (!emission.ok) return
+
+		const declaredRoles = new Set(
+			compiled.ir.routing.map((table) => table.role),
+		)
+		expect(declaredRoles.has('fact_branch')).toBe(true)
+		expect(declaredRoles.has('advisory')).toBe(true)
+		expect(
+			emission.modules.some((module) =>
+				module.path.endsWith('fact-branch-routing.ts'),
+			),
+		).toBe(true)
 	})
 
 	test('each table declares its target kind and closed discriminants', async () => {

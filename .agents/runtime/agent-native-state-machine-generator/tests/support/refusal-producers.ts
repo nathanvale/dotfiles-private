@@ -26,18 +26,24 @@ import { amendForEmission } from './emission.ts'
 export type RefusalProducer = () => Promise<readonly ArtifactRefusal[]>
 
 /**
- * Sealed causes no plain-data IR can currently reach through the derivation
- * seam. `buildExpectationTable` looks each resolved action up in a catalog
- * map built from the same `ir.actions.catalog` its own action resolution
- * chooses from, so the lookup cannot miss; only a self-mutating IR fake
- * could split the two reads, and a fake proves nothing about the pipeline.
- * The dead guard is recorded for a src-side repair. The coverage suite pins
- * this list exactly, so a repair that makes the cause reachable must
- * register a real producer here and remove the pin.
+ * Sealed causes no plain-data IR can reach through the derivation seam.
+ *
+ * Empty, and deliberately kept as a list rather than deleted: the coverage
+ * suite pins it exactly, so a future cause added without a producer has a
+ * declared place to be recorded and argued about rather than quietly
+ * skipped.
+ *
+ * `emit_expectation_action_unknown` was pinned here on the reasoning that
+ * action resolution and the catalog lookup read the same
+ * `ir.actions.catalog`, so a resolved id could never be missed. Input Schema
+ * v2 broke that: a `station_action` or `station_blocker` routing row supplies
+ * its target directly, and that target reaches the lookup without ever being
+ * drawn from the catalog. The guard is live, and it is the only thing
+ * standing between an IR-level routing target and an emitted row naming an
+ * action no catalog declares.
  */
-export const UNPRODUCIBLE_REFUSAL_CAUSES = [
-	'emit_expectation_action_unknown',
-] as const satisfies readonly ArtifactRefusalCause[]
+export const UNPRODUCIBLE_REFUSAL_CAUSES =
+	[] as const satisfies readonly ArtifactRefusalCause[]
 
 export type UnproducibleRefusalCause =
 	(typeof UNPRODUCIBLE_REFUSAL_CAUSES)[number]
@@ -118,6 +124,82 @@ export const REFUSAL_CAUSE_PRODUCERS: Readonly<
 		}
 		return deriveCommandContracts(stripped).refusals
 	},
+	/**
+	 * A routing row supplying an action id the catalog does not declare.
+	 *
+	 * The row's target reaches the expectation table's catalog lookup without
+	 * being drawn from the catalog, which is what makes this reachable at the
+	 * IR seam. Compile validation resolves the same target, so a real
+	 * candidate is refused earlier; this proves the derivation guard is a
+	 * genuine second owner rather than dead code.
+	 */
+	emit_expectation_action_unknown: () =>
+		refusalsFrom(({ ir }) => ({
+			...ir,
+			routing: [
+				...ir.routing,
+				{
+					name: 'unknown_action_binding',
+					role: 'station_action',
+					targetKind: 'action',
+					discriminants: {
+						branch: ['success'],
+						command: [ir.commandSurface.commands[0] ?? ''],
+					},
+					requiresCompleteCoverage: false,
+					rows: [
+						{
+							key: {
+								branch: 'success',
+								command: ir.commandSurface.commands[0] ?? '',
+							},
+							target: 'no_such_action',
+						},
+					],
+				},
+			],
+		})),
+	/**
+	 * A rendering sharing its identifier with a canonical action id, so one
+	 * resolver reading both namespaces has two answers for one identifier.
+	 */
+	emit_contextual_rendering_collides: () =>
+		refusalsFrom(({ ir }) => {
+			const canonical = ir.actions.catalog[0]?.id ?? 'none'
+			return {
+				...ir,
+				contextualRenderings: {
+					...ir.contextualRenderings,
+					[canonical]: [canonical],
+				},
+			}
+		}),
+	/**
+	 * A route targeting a Branch Station the catalog does not contain. The
+	 * command prefix is a genuinely declared command and only the branch
+	 * suffix is unknown, which is the case a prefix-only check resolves and
+	 * the whole-target check refuses.
+	 */
+	emit_route_station_unknown: () =>
+		refusalsFrom(({ ir }) => ({
+			...ir,
+			routing: [
+				...ir.routing,
+				{
+					name: 'unknown_station_route',
+					role: 'fact_branch',
+					targetKind: 'branch_station',
+					discriminants: { probe: ['only'] },
+					requiresCompleteCoverage: false,
+					rows: [
+						{
+							key: { probe: 'only' },
+							target: `${ir.commandSurface.commands[0]}.typo_no_such_station`,
+						},
+					],
+				},
+			],
+		})),
 	// A command name the facade's lowercase station id grammar cannot express.
 	emit_station_id_invalid: () =>
 		refusalsFrom(({ ir }) => ({

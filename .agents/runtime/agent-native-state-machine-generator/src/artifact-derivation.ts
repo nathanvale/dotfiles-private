@@ -21,6 +21,10 @@ import {
 	deriveCommandContracts,
 } from './command-surface-contract.ts'
 import {
+	type DerivedContextualRendering,
+	deriveContextualRenderings,
+} from './contextual-renderings.ts'
+import {
 	camel,
 	screaming,
 	usesLifecycleConvention,
@@ -33,8 +37,16 @@ import type { SpecificationIr } from './ir.ts'
 import { type ArtifactRefusal, sortRefusals } from './refusal.ts'
 import {
 	type RenderedModule,
+	renderActionRouting,
+	renderCapabilityGates,
 	renderCommandContracts,
+	renderContextualRenderings,
 	renderExpectationTable,
+	renderFactBranchRouting,
+	renderObservationBudgets,
+	renderPauseModes,
+	renderPositionalRoutes,
+	renderRootBranches,
 	renderStationCatalog,
 } from './render.ts'
 
@@ -76,6 +88,7 @@ export interface DerivationSuccess {
 	readonly stationIds: readonly string[]
 	readonly commandContracts: CommandContractEmission['contracts']
 	readonly expectations: readonly SemanticExpectationRow[]
+	readonly contextualRenderings: readonly DerivedContextualRendering[]
 	readonly modules: readonly RenderedModule[]
 	readonly refusals: readonly []
 }
@@ -130,11 +143,13 @@ export function deriveArtifactSet(
 		ir,
 		stationEmission.stations,
 	)
+	const renderingEmission = deriveContextualRenderings(ir)
 
 	const refusals = sortRefusals([
 		...stationEmission.refusals,
 		...contractEmission.refusals,
 		...expectationEmission.refusals,
+		...renderingEmission.refusals,
 	])
 	if (refusals.length > 0) return { ok: false, refusals }
 
@@ -179,12 +194,150 @@ export function deriveArtifactSet(
 		}),
 	]
 
+	// S4. Capability gates carry no installed value: a Liveness Evidence
+	// Provider observes that at runtime against the declared Extension Point,
+	// and the emitted selector routes on the evidence it is given.
+	if (ir.capabilities.length > 0) {
+		modules.push(
+			renderCapabilityGates({
+				ir,
+				digest,
+				conventions,
+				capabilities: ir.capabilities,
+				path: 'src/capability-gates.ts',
+				symbolPrefix,
+			}),
+		)
+	}
+
+	// S4. Pause Modes are externally owned gates; the emitted action requests
+	// release and never performs it.
+	if (ir.pauseModes.length > 0) {
+		modules.push(
+			renderPauseModes({
+				ir,
+				digest,
+				conventions,
+				pauseModes: ir.pauseModes,
+				path: 'src/pause-modes.ts',
+				symbolPrefix,
+			}),
+		)
+	}
+
+	// Action routing: which canonical action a complete key selects (ADR
+	// 0005). Every declared table whose rows target actions is published as
+	// data; the one Projection Composer still selects the public State
+	// Projection, so this adds no second action owner.
+	const actionRoutingTables = ir.routing.filter(
+		(table) => table.targetKind === 'action',
+	)
+	if (actionRoutingTables.length > 0) {
+		modules.push(
+			renderActionRouting({
+				ir,
+				digest,
+				conventions,
+				tables: actionRoutingTables,
+				path: 'src/action-routing.ts',
+				symbolPrefix,
+			}),
+		)
+	}
+
+	// Fact-to-branch selection: which station an observed fact reaches. Only
+	// the tables the product declared with that role, never every routing
+	// table - a table's role is what says derivation may read it this way,
+	// and reading one by its shape is how a branch becomes an action.
+	const factBranchTables = ir.routing.filter(
+		(table) => table.role === 'fact_branch',
+	)
+	if (factBranchTables.length > 0) {
+		modules.push(
+			renderFactBranchRouting({
+				ir,
+				digest,
+				conventions,
+				tables: factBranchTables,
+				path: 'src/fact-branch-routing.ts',
+				symbolPrefix,
+			}),
+		)
+	}
+
+	// Positional routes are parsing facts about the command surface, emitted
+	// beside the contract because the facade's contract type has no field
+	// that carries token-to-action routing.
+	if (ir.commandSurface.positionalRoutes.length > 0) {
+		modules.push(
+			renderPositionalRoutes({
+				ir,
+				digest,
+				conventions,
+				routes: ir.commandSurface.positionalRoutes,
+				path: 'src/positional-routes.ts',
+				symbolPrefix,
+			}),
+		)
+	}
+
+	// Root branches are front-door branches, so they are emitted beside the
+	// station catalog rather than inside it: a station names its owning
+	// command and these are reached before a command is selected.
+	if (ir.commandSurface.rootBranches.length > 0) {
+		modules.push(
+			renderRootBranches({
+				ir,
+				digest,
+				conventions,
+				rootBranches: ir.commandSurface.rootBranches,
+				path: 'src/root-branches.ts',
+				symbolPrefix,
+			}),
+		)
+	}
+
+	// Same rule as the renderings module below: emitted only for a product
+	// that declares observations, so a stateless product's set carries no
+	// wait surface to strip.
+	if (ir.observations.length > 0) {
+		modules.push(
+			renderObservationBudgets({
+				ir,
+				digest,
+				conventions,
+				observations: ir.observations,
+				path: 'src/observation-budgets.ts',
+				symbolPrefix,
+			}),
+		)
+	}
+
+	// Emitted only for a product that declares renderings. A product with no
+	// compatibility identifiers gets no module rather than an empty one: the
+	// Generated Artifact Set is replaced as one unit, and a file that exists
+	// only to say "nothing here" is a surface a consumer could come to depend
+	// on.
+	if (renderingEmission.renderings.length > 0) {
+		modules.push(
+			renderContextualRenderings({
+				ir,
+				digest,
+				conventions,
+				renderings: renderingEmission.renderings,
+				path: 'src/contextual-renderings.ts',
+				symbolPrefix,
+			}),
+		)
+	}
+
 	return {
 		ok: true,
 		stations: stationEmission.stations,
 		stationIds: stationIds(stationEmission.stations),
 		commandContracts: contractEmission.contracts,
 		expectations: expectationEmission.rows,
+		contextualRenderings: renderingEmission.renderings,
 		modules,
 		refusals: [],
 	}

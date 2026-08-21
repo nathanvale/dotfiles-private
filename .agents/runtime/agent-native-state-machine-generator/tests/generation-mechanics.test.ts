@@ -704,10 +704,25 @@ describe('the real Generated Artifact Set reaches generation and verification', 
 
 		// The declared set is the real one: every consumer-facing contract, plus
 		// the manifest that binds them to the admitted input.
+		//
+		// Eight of these are conditional, emitted only for a candidate that
+		// declares the surface they carry: action routing, capability gates,
+		// Contextual Renderings, fact-branch routing, observation budgets,
+		// Pause Modes, positional routes, and root branches. The v2 fixture
+		// these tests compile declares all eight. A candidate declaring none
+		// emits the three package modules and the manifest.
 		expect([...result.declaredOutputs].sort()).toEqual([
 			'provenance.manifest.json',
+			'src/action-routing.ts',
 			'src/branch-station-catalog.ts',
+			'src/capability-gates.ts',
 			'src/command-surface-contract.ts',
+			'src/contextual-renderings.ts',
+			'src/fact-branch-routing.ts',
+			'src/observation-budgets.ts',
+			'src/pause-modes.ts',
+			'src/positional-routes.ts',
+			'src/root-branches.ts',
 			'src/semantic-expectations.ts',
 		])
 
@@ -768,7 +783,10 @@ describe('the real Generated Artifact Set reaches generation and verification', 
 		})
 
 		const a = await snapshot(first)
-		expect(a.size).toBe(4)
+		// Twelve: the three package modules, the provenance manifest, and the
+		// eight conditional tables the v2 fixture declares surface for. A
+		// candidate declaring none of the eight emits four files.
+		expect(a.size).toBe(12)
 		expect(await snapshot(second)).toEqual(a)
 	})
 })
