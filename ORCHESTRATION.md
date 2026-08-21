@@ -43,13 +43,29 @@ Delete this file when the feature branch is ready to merge to `main`.
   its temp-dir regeneration (matches the spec's "regenerating in isolation"
   literally). Ledger counts at this merge: 11 src files, 11 index.ts
   export statements.
-- Stage 3 (facade contracts): repair cycle 1 in progress in
-  `.worktrees/issue-55-stage3` (`feat/issue-55-stage3-contracts`). Its merge
-  will conflict with stage 2 in `src/index.ts` and on the duplicate
-  `src/emit.ts` name; the supervisor resolves both, then the consolidation
-  unit (task 7) wires emitters into DEFAULT_EMITTERS with a joint proof
-  before stage 4. Zero facade modification before stage 5; ADD-1/ADD-2 are
-  separately reviewed stage-5 prerequisites.
+- Stage 3 (facade contracts): MERGED at 598f801. Post-repair gate 94 tests
+  alone, 120 merged, typecheck and Biome clean. Repair removed invented
+  policy and derived semantics from declared tables; consequence on record:
+  BOTH candidates now refuse emission via sealed causes
+  (emit_write_preview_undeclarable, emit_expectation_column_underivable, one
+  unbound no-argument binding). Three Input Schema v1 expressiveness gaps =
+  the stage-5 admission worklist: execution-mode surface (or per-command
+  previewExemption), blocker-to-command mapping (or declared stations),
+  bare-invocation binding. Positive gates run against an amended IR in
+  tests/support/emission.ts; amendment is IR-side only. Merge resolution:
+  stage 2 kept src/emit.ts, stage 3's front door is src/emit-facade.ts
+  pending the consolidation unit's contract-term rename. Ledger counts:
+  19 src files, 18 index.ts export statements.
+- NEXT UNIT: the consolidation unit (task 7, coherence gate) runs before
+  stage 4: wire stage-3 emitters into DEFAULT_EMITTERS with a joint
+  generate/verify proof, contract-term renames (emit-facade.ts and the
+  emit-* family), confirm vocabulary hoists, dedupe residue.
+- Standards research: twelve unfitted candidates archived at
+  receipts/standards-research.md. Pending: a fit review validating each
+  against witnessed in-package evidence before any enters
+  CODING_STANDARDS.md (three claimed live hits to verify first:
+  localeCompare in diagnostics.ts/build-ir.ts/semantic.ts, missing generated
+  banner, missing tsconfig strictness flags).
 - Stage 4 pilot, then stages 5-7 only with Nathan's go-ahead (stage 5 carries
   the 13-decision admission worklist).
 
