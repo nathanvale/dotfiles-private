@@ -17,9 +17,13 @@ Resume sources, in order:
 Resume step 0: run `git status` in this worktree and reconcile every dirty
 file against the queue head before any other action, then check
 `.worktrees/issue-55-*` for a stage worktree holding an AGENT-BRIEF.md
-without a HANDBACK.md (a live stage run; never re-charter over one). Work
+without its completion file (a live stage run; never re-charter over
+one). The completion file is HANDBACK.md unless the in-flight block
+under Next names a unit-specific signal; a tracked repo-root
+HANDBACK.md is inherited stale state, not a signal. Work
 can be in flight; the ledger lags the tree, and the in-flight block under
-Next holds the pipeline position.
+Next holds the pipeline position. Ways of work owns launch and
+replacement.
 
 ## Before committing an edit to this file (every edit)
 
@@ -88,14 +92,20 @@ writing-for-agents first. Routine status edits run this checklist alone.
    Runtime adoption, Specification Admission, Pause release,
    activation, extraction, and stages 6 to 7 each remain a separate
    ask to Nathan.
-3. In flight: the Input Schema v2 unit at
+3. In flight, HELD: the Input Schema v2 unit at
    `.worktrees/issue-55-schema-v2`, branch feat/issue-55-schema-v2,
    fixed point 518053f. The charter with the full coverage matrix is
    AGENT-BRIEF.md at that worktree root (archive to receipts/schema-v2/
-   at merge). The worker does not commit; the supervisor owns unit
-   commits, review (both axes plus cli-execution-auditor), and the
-   merge. AC binding: issue stories 5, 6, 51, 52; the plan comment's
-   stage-5 row.
+   at merge). Completion signal: SCHEMA-V2-HANDBACK.md, unit-specific
+   because the tracked repo-root HANDBACK.md (leaked by aw-draft unit
+   commit 8ca6420, byte-identical to receipts/aw-draft/HANDBACK.md)
+   rides into every stage worktree; that stale file stays until its
+   deletion is separately authorized. Worker state 2026-08-21: two
+   launches stopped with zero changes observed (an internal sub-agent,
+   then claude-handoff session 1f30863a); relaunch waits for Nathan's
+   reviewed contract requirements; run git status in that worktree
+   before relaunching. AC binding: issue stories 5, 6, 51, 52; the
+   plan comment's stage-5 row.
 4. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
    receipts/stage5-decision-packet.md, posted to issue 55) plus the
@@ -170,26 +180,41 @@ receipts/standards-fit-review-2026-08.md, "Findings for the supervisor"):
   sealed-cause iteration rule in CODING_STANDARDS.md has no implementing
   test yet.
 
-## Topology
+## Ways of work
 
-- Integration worktree: `.worktrees/issue-55-integration`, branch
-  feat/issue-55-state-machine-generator. Supervisor merges stage branches
-  here; nothing is pushed anywhere without Nathan's approval.
-- Stage worktrees branch from the feature branch at
-  `.worktrees/issue-55-<unit>`, one background agent each, opened in VS
-  Code for Nathan. Create them with an absolute path from the repo
-  root: a cwd-relative `git worktree add` nested one checkout inside
-  the integration package tree on 2026-08-21 (recovered; the branch
-  was unaffected). Launch recipe: historically `claude --bg --model
-  claude-opus-5 --effort high`; stage 4 runs on the supervisor
-  session's inherited model after the harness rejected that
-  model-effort combination on 2026-08-21. Review axes run as
-  report-only background sub-agents. Agent contract: AGENT-BRIEF.md at
-  the stage worktree root; completion signal: HANDBACK.md. Both are
-  untracked during the run, then archived at `receipts/<unit>/`
-  (stages 1 to 3 hold brief and handback only; their reviews were
-  delivered inline; consolidation/ also holds the review reports and
-  repair packet).
+1. Supervisor lane: work only from `.worktrees/issue-55-integration` on
+   feat/issue-55-state-machine-generator; reconcile resume step 0
+   before chartering. Complete when integration status and every
+   `.worktrees/issue-55-*` worktree are accounted for.
+2. Unit isolation: create `.worktrees/issue-55-<unit>` from the current
+   integration branch using an absolute path from the repo root.
+   Complete when exactly one implementation writer owns that unit
+   worktree.
+3. Charter: write AGENT-BRIEF.md at the unit root naming authoritative
+   sources, acceptance lines, gate proof, allowed paths, stop boundary,
+   and a collision-free completion file. Complete when the supervisor
+   has reviewed it, before launch.
+4. Handoff: from the unit worktree invoke the claude-handoff skill (it
+   owns the CLI mechanics) with a descriptive session name, referencing
+   the brief and owners rather than duplicating them, with a Suggested
+   skills section; record the real session name, short ID, cwd, and
+   completion signal in the in-flight block. Complete when
+   `claude agents` shows exactly one running implementation worker in
+   the intended cwd.
+5. Worker boundary: the worker edits only its unit worktree, writes the
+   named completion file, and never commits, pushes, merges, edits
+   integration, or edits main. The supervisor owns authorized unit
+   commits and integration merges. Complete when the completion file
+   exists and every mutation obeys those owners.
+6. Replacement: stop the prior worker, inspect and preserve its diff,
+   then launch exactly one replacement from the same unit worktree.
+   Complete when implementation writers never overlapped.
+7. Integration: verify the gate, commit the unit branch, apply the
+   Code-review contract, repair and re-verify, merge accepted work into
+   integration, archive the brief and completion receipt (untracked
+   during the run) under `receipts/<unit>/`, and update the ledger.
+   Complete when all of that is done with nothing pushed, absent
+   Nathan's approval.
 
 ## Ledger (merged units)
 
