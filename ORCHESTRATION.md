@@ -68,19 +68,12 @@ writing-for-agents first. Routine status edits run this checklist alone.
 1. Awaiting Nathan: the stage 5 to 7 go-ahead, and the stage-5 decision
    packet rulings (receipts/stage5-decision-packet.md, posted to issue
    55).
-2. IN FLIGHT 2026-08-21, the plan comment's two parallel tracks: (a)
-   the Agent Worktree candidate draft (schema insurance due before the
-   first admission hardens Input Schema v1), worktree
-   `.worktrees/issue-55-aw-draft`, branch
-   feat/issue-55-agent-worktree-draft, forked at 036cf54, brief at its
-   root, completion signal HANDBACK.md. Track (b), the stage-5
-   decision packet, is DONE 2026-08-21: all 13 decisions grounded in
-   the vault-git spike candidate's unresolved_decisions array
-   (fixtures/spike-candidates/vault-git.state-machine.jsonc), archived
-   at receipts/stage5-decision-packet.md, posted to issue 55 for
-   Nathan's confirm/reject.
-3. Stage 5 carries the 13 unresolved decisions named in the plan
-   comment's stage-5 row plus the build-added worklist below.
+2. Stage 5 carries the 13 unresolved decisions named in the plan
+   comment's stage-5 row (drafted resolutions in
+   receipts/stage5-decision-packet.md, posted to issue 55) plus the
+   build-added worklist below, now strengthened by the Agent Worktree
+   draft's 14 receipted schema gaps
+   (receipts/agent-worktree-draft-gaps.md).
 
 Stage-5 admission worklist (build-added; the plan comment owns the 13
 base decisions):
@@ -223,6 +216,22 @@ to Next or the stage-5 worklist.
   stay unadmitted. Twelve rules now in CODING_STANDARDS.md. Gate: 140
   tests, typecheck, Biome, pilot verify clean, spike digests
   byte-identical.
+- Agent Worktree draft candidate (schema insurance, plan-comment
+  parallel track): MERGED c01d7d9 (unit commit 8ca6420, pure
+  additions). The draft compiles under frozen Input Schema v1 (digest
+  5052805..) and derivation refuses fail-closed with 44 sealed
+  refusals, pinned by six tests with an observed RED. Fourteen schema
+  gaps receipted (receipts/agent-worktree-draft-gaps.md), including
+  surfaces the product already declares that v1 cannot express
+  (dry_run execution modes), blocker-to-action mapping, a fourth retry
+  class (inspect_first), and the changed_state recovery column. The
+  candidate stays UNADMITTED; 16 unresolved_decisions surfaced, none
+  invented. Gate: 182 tests, typecheck, Biome, pilot verify clean,
+  spike digests byte-identical. Receipts at receipts/aw-draft/.
+- Stage-5 decision packet (parallel track): delivered 2026-08-21. All
+  13 decisions grounded in the vault-git spike candidate's
+  unresolved_decisions array; archived at
+  receipts/stage5-decision-packet.md; posted to issue 55.
 - Pilot Specification Admission: 657045e, Nathan's explicit act
   2026-08-21 ("admit the pilot", this supervisor session; recorded in
   the candidate header and on issue 55). Bundled digest-moving edits:
