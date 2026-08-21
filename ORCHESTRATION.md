@@ -196,17 +196,20 @@ receipts/standards-fit-review-2026-08.md, "Findings for the supervisor"):
    sources, acceptance lines, gate proof, allowed paths, stop boundary,
    and a collision-free completion file. Complete when the supervisor
    has reviewed it, before launch.
-4. Handoff: from the unit worktree invoke the claude-handoff skill (it
-   owns the CLI mechanics) with a descriptive session name and
-   `--model opus --effort high`; every implementation worker runs
-   Opus 5 at high effort. Reference the brief and owners rather than
-   duplicating them, include a Suggested skills section, and record the
-   real session name, short ID, cwd, model, effort, and completion
-   signal in the in-flight block. Complete when `claude agents` shows
-   exactly one running implementation worker in the intended cwd and
-   its resolved job state proves claude-opus-5 at high effort; generic
-   Opus wording, an older Opus model, or any other model leaves the
-   worker unadmitted.
+4. Handoff: implementation writers launch through the claude-handoff
+   skill (it owns the CLI mechanics) from their dedicated unit
+   worktree, with a descriptive session name and
+   `--model opus --effort high`. Reference the brief and owners rather
+   than duplicating them, include a Suggested skills section, and
+   record the real session name, short ID, cwd, model, effort, and
+   completion signal in the in-flight block. Model admission, one rule
+   for every issue-55 worker or subagent (implementation, mapping, and
+   report-only review agents alike): its resolved job state proves
+   claude-opus-5 at high effort before admission; any other
+   resolution, Fable or an older Opus included, leaves the agent
+   unadmitted. Complete when `claude agents` shows exactly one running
+   implementation worker in the intended cwd with that proof in its
+   job state.
 5. Worker boundary: the worker edits only its unit worktree, writes the
    named completion file, and never commits, pushes, merges, edits
    integration, or edits main. The supervisor owns authorized unit
