@@ -297,3 +297,17 @@ export function stationIds(
 ): readonly string[] {
 	return stations.map((derived) => derived.station.id).sort()
 }
+
+/**
+ * Derived Branch Stations in their canonical order.
+ *
+ * One owner because every artifact that lists stations must list them the same
+ * way: the catalog, the expectation table joined to it, and `stationIds` all
+ * order by station id. Two copies of this comparison would let one artifact
+ * drift out of step with another and report that as regeneration drift.
+ */
+export function sortStations(
+	stations: readonly DerivedStation[],
+): readonly DerivedStation[] {
+	return [...stations].sort((a, b) => a.station.id.localeCompare(b.station.id))
+}

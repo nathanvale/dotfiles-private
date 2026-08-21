@@ -18,7 +18,7 @@
  * product-local Projection Composer keeps sole ownership of that.
  */
 
-import type { DerivedStation } from './branch-stations.ts'
+import { type DerivedStation, sortStations } from './branch-stations.ts'
 import { BRANCH_FACTS, resolveRetryPosture } from './derivation-facts.ts'
 import type { SpecificationIr } from './ir.ts'
 import { type ArtifactRefusal, artifactRefusal } from './refusal.ts'
@@ -75,9 +75,7 @@ export function buildExpectationTable(
 	const catalog = new Map(ir.actions.catalog.map((entry) => [entry.id, entry]))
 	const resolution = ir.actions.resolution
 
-	for (const derived of [...stations].sort((a, b) =>
-		a.station.id.localeCompare(b.station.id),
-	)) {
+	for (const derived of sortStations(stations)) {
 		const { station, branch } = derived
 		const facts = BRANCH_FACTS[branch]
 		const incomplete = facts.projectionCompleteness === 'incomplete'

@@ -118,6 +118,58 @@ interface SemanticCheckScope {
 }
 
 /**
+ * Reports every value a declared list repeats.
+ *
+ * The location is the list itself, not the repeat: a repeated entry has no
+ * distinguishing position a reader could act on, so pointing at the list is
+ * what makes the repair obvious.
+ */
+function reportRepeatedValues(
+	report: SemanticCheckScope['report'],
+	values: readonly string[],
+	describe: (duplicate: string) => string,
+	path: string,
+	location: JsoncNode['loc'],
+): void {
+	for (const [index, value] of values.entries()) {
+		if (values.indexOf(value) === index) continue
+		report('semantic_duplicate_id', describe(value), path, location)
+	}
+}
+
+/**
+ * Reports every item whose id was already claimed by an earlier item, and
+ * returns the ids it saw.
+ *
+ * Unlike a repeated list value, a duplicate id has a position worth naming, so
+ * each report points at the offending item rather than at the collection. The
+ * caller supplies `seen` when the ids must stay visible to later checks; the
+ * action catalog does this so reference checks can resolve against it.
+ */
+function reportDuplicateIds(
+	{ cursor, report }: SemanticCheckScope,
+	collection: readonly string[],
+	describe: (id: string) => string,
+	seen: Set<string> = new Set(),
+): Set<string> {
+	const path = collection.join('.')
+	cursor.items(collection).forEach((_item, index) => {
+		const id = cursor.string([...collection, index, 'id'])
+		if (id === undefined) return
+		if (seen.has(id)) {
+			report(
+				'semantic_duplicate_id',
+				describe(id),
+				`${path}[${index}].id`,
+				cursor.loc([...collection, index, 'id']),
+			)
+		}
+		seen.add(id)
+	})
+	return seen
+}
+
+/**
  * Runs every semantic check and returns all diagnostics.
  *
  * The checks share a cursor and a report callback rather than each re-walking
@@ -174,29 +226,28 @@ export function validateSemantics(
 }
 
 /** Action identity, per-kind mandatory semantics, and competing Next Safe Actions. */
-function checkActionCatalog({
-	cursor,
-	report,
-	actionIds,
-}: SemanticCheckScope): void {
+function checkActionCatalog(scope: SemanticCheckScope): void {
+	const { cursor, report, actionIds } = scope
 	const catalog = cursor.items(['actions', 'catalog'])
 	const declaredKinds = new Set(cursor.strings(['actions', 'kinds']))
+
+	// Identity first, and over every entry that declares an id: an entry whose
+	// `kind` is missing still competes for its id, and the per-kind checks below
+	// skip it. `actionIds` is threaded in so the reference checks that run after
+	// this one resolve against the catalog this call populates.
+	reportDuplicateIds(
+		scope,
+		['actions', 'catalog'],
+		(id) =>
+			`Duplicate action id ${JSON.stringify(id)}. Every Next Safe Action id must be unique; two entries competing for one id leave the Next Safe Action ambiguous.`,
+		actionIds,
+	)
 
 	catalog.forEach((_item, index) => {
 		const base = ['actions', 'catalog', index] as const
 		const id = cursor.string([...base, 'id'])
 		const kind = cursor.string([...base, 'kind'])
 		if (id === undefined || kind === undefined) return
-
-		if (actionIds.has(id)) {
-			report(
-				'semantic_duplicate_id',
-				`Duplicate action id ${JSON.stringify(id)}. Every Next Safe Action id must be unique; two entries competing for one id leave the Next Safe Action ambiguous.`,
-				`actions.catalog[${index}].id`,
-				cursor.loc([...base, 'id']),
-			)
-		}
-		actionIds.add(id)
 
 		if (!declaredKinds.has(kind)) {
 			report(
@@ -452,17 +503,14 @@ function checkStateVocabularies({ cursor, report }: SemanticCheckScope): void {
 		const values = cursor.strings([...base, 'values'])
 		const valueSet = new Set(values)
 
-		const duplicates = values.filter(
-			(value, index) => values.indexOf(value) !== index,
-		)
-		for (const duplicate of duplicates) {
-			report(
-				'semantic_duplicate_id',
+		reportRepeatedValues(
+			report,
+			values,
+			(duplicate) =>
 				`State ${JSON.stringify(stateEntry.key)} declares value ${JSON.stringify(duplicate)} more than once.`,
-				`states.${stateEntry.key}.values`,
-				cursor.loc([...base, 'values']),
-			)
-		}
+			`states.${stateEntry.key}.values`,
+			cursor.loc([...base, 'values']),
+		)
 
 		for (const subset of [
 			'terminal',
@@ -729,17 +777,14 @@ function checkAuthorityAndSideEffects({
 		)
 	}
 
-	const duplicateCommands = commands.filter(
-		(value, index) => commands.indexOf(value) !== index,
-	)
-	for (const duplicate of duplicateCommands) {
-		report(
-			'semantic_duplicate_id',
+	reportRepeatedValues(
+		report,
+		commands,
+		(duplicate) =>
 			`command_surface.commands lists ${JSON.stringify(duplicate)} more than once.`,
-			'command_surface.commands',
-			cursor.loc(['command_surface', 'commands']),
-		)
-	}
+		'command_surface.commands',
+		cursor.loc(['command_surface', 'commands']),
+	)
 
 	// Baseline exit meanings must be declared; an undeclared exit is unroutable.
 	for (const code of BASELINE_EXIT_CODES) {
@@ -755,40 +800,18 @@ function checkAuthorityAndSideEffects({
 }
 
 /** Unique ids, and machinery that agrees with the feature flags in both directions. */
-function checkIdentityAndFeatureConditioning({
-	cursor,
-	report,
-	features,
-}: SemanticCheckScope): void {
-	const seenInvariants = new Set<string>()
-	cursor.items(['invariants']).forEach((_item, index) => {
-		const id = cursor.string(['invariants', index, 'id'])
-		if (id === undefined) return
-		if (seenInvariants.has(id)) {
-			report(
-				'semantic_duplicate_id',
-				`Duplicate invariant id ${JSON.stringify(id)}.`,
-				`invariants[${index}].id`,
-				cursor.loc(['invariants', index, 'id']),
-			)
-		}
-		seenInvariants.add(id)
-	})
-
-	const seenDecisions = new Set<string>()
-	cursor.items(['unresolved_decisions']).forEach((_item, index) => {
-		const id = cursor.string(['unresolved_decisions', index, 'id'])
-		if (id === undefined) return
-		if (seenDecisions.has(id)) {
-			report(
-				'semantic_duplicate_id',
-				`Duplicate unresolved_decisions id ${JSON.stringify(id)}.`,
-				`unresolved_decisions[${index}].id`,
-				cursor.loc(['unresolved_decisions', index, 'id']),
-			)
-		}
-		seenDecisions.add(id)
-	})
+function checkIdentityAndFeatureConditioning(scope: SemanticCheckScope): void {
+	const { cursor, report, features } = scope
+	reportDuplicateIds(
+		scope,
+		['invariants'],
+		(id) => `Duplicate invariant id ${JSON.stringify(id)}.`,
+	)
+	reportDuplicateIds(
+		scope,
+		['unresolved_decisions'],
+		(id) => `Duplicate unresolved_decisions id ${JSON.stringify(id)}.`,
+	)
 
 	// Feature-conditioning, both directions. A product that disables durable
 	// machinery must not declare it; one that enables it must supply it.
