@@ -70,12 +70,14 @@ writing-for-agents first. Routine status edits run this checklist alone.
    the digest-moving invariant-prose fix, bare "branch" to Branch
    Station, bundles with the admission edit), and the stage 5 to 7
    go-ahead.
-2. Chartered, runnable before stage 5 (supervisor unit): the open
-   findings repair (F2 banner test, F5 literal version oracle, F6
-   second-copy deletions, F8 scratch path, F9 the sealed-cause
-   iteration test the admitted candidate-10 rule demands plus the four
-   missing fixtures). Each is chartered by an admitted rule or a
-   receipt disposition; none needs Nathan.
+2. IN FLIGHT 2026-08-21: the open findings repair (F2 banner test, F5
+   literal version oracle, F6 second-copy deletions, F8 scratch path,
+   F9 the sealed-cause iteration test the admitted candidate-10 rule
+   demands plus the missing fixtures). Chartered by admitted rules and
+   receipt dispositions; needs no owner decision. Worktree
+   `.worktrees/issue-55-findings-repair`, branch
+   feat/issue-55-findings-repair, forked at 7062fb1; brief at its
+   root; completion signal HANDBACK.md.
 3. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row plus the build-added worklist below.
 
