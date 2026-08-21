@@ -204,3 +204,92 @@ _Avoid_: Catalog completeness, unit coverage, synthetic coverage
 Non-executable explanation that helps interpret or investigate a result without
 introducing or contradicting the Next Safe Action.
 _Avoid_: Recovery action, command directive, continuation, Repair Path
+
+### Version identities
+
+Four identities the spec requires compatibility decisions to name correctly.
+Each answers a different question; none is derivable from another, and none is
+ordered for compatibility purposes.
+
+**Input Schema Version**:
+The identity of the declared input surface a Specification Candidate is
+written against. Compatibility is exact match against a supported set, never
+inferred from ordering, successful parsing, or structural similarity.
+_Avoid_: Schema version, semver, latest schema, compatible version
+
+**Generator Contract Version**:
+The identity of the compiler's own output contract: the intermediate
+representation shape, the canonicalization rules, and the sealed vocabularies.
+_Avoid_: Tool version, package version, build number
+
+**Product Specification Revision**:
+The identity of one product's specification content. Any change to admitted
+content creates a new revision and requires its own Specification Admission.
+_Avoid_: Spec version, digest, revision number
+
+**State-Machine Definition Version**:
+The identity a product declares for its own state-machine meaning, owned by
+the product rather than by the generator.
+_Avoid_: Input Schema Version, product version, runtime version
+
+### Declared v2 surfaces
+
+**Contextual Rendering**:
+A public compatibility identifier that resolves to exactly one canonical
+action identifier only when its context is supplied. It is never a second
+action vocabulary and is never persisted as authority.
+_Avoid_: Alias, synonym, second catalog, public action id
+
+**Wake Route**:
+The declared way a waiting caller learns that observation may usefully be
+repeated. It carries no Authority and never renews an expiry.
+_Avoid_: Poll loop, callback, heartbeat, wake signal
+
+**Observation Expiry**:
+The per-Attempt bound after which an observation no longer supports a safe
+State Projection. A new Attempt gets a fresh bound; polling never renews one.
+_Avoid_: Timeout, deadline extension, refreshed expiry, retry window
+
+**Capability Availability**:
+Whether a declared product capability is currently installed and usable. It is
+an installed-surface fact, never permission: an available capability grants no
+Authority, and an unavailable one routes to a declared escalation.
+_Avoid_: Authority, permission, feature flag, entitlement
+
+**Pause Mode**:
+An externally owned gate, declared in the product model, that suspends
+otherwise permitted work until its owner releases it. Its release is a
+human-owned act.
+_Avoid_: Lock, disabled feature, Authority denial, maintenance flag
+
+**Execution Mode**:
+The declared way one invocation of a command treats its Declared Side Effect:
+a normal attempt, or a non-mutating check or dry run.
+_Avoid_: Flag, option, mode flag, simulation
+
+**Preview Exemption**:
+The product owner's declared reason that one write-implying command owes no
+non-mutating Execution Mode.
+_Avoid_: Override, waiver, skip, suppression
+
+**Phase State**:
+The declared state whose values a Transition names as its target. The
+specification declares which state it is; it is never identified by its name
+or inferred from what the Transitions happen to cover.
+_Avoid_: Status field, phase enum, main state, inferred owner
+
+**Routing Table**:
+A declared, exhaustive mapping from a complete key to exactly one canonical
+action. A key it does not cover selects nothing rather than a default.
+_Avoid_: Lookup, fallback map, dispatch table, best match
+
+**Registered Migration**:
+A generator-owned operation that reads input written against an older Input
+Schema Version and produces an isolated Specification Candidate. Its output is
+unadmitted by construction.
+_Avoid_: Upgrade, automatic migration, best-effort conversion, in-place rewrite
+
+**Registered Reader**:
+The sole declared route by which input written against a superseded Input
+Schema Version is compiled. Input reaching no Registered Reader fails closed.
+_Avoid_: Fallback parser, legacy mode, compatibility shim, lenient reader

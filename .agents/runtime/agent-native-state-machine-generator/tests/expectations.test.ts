@@ -117,7 +117,7 @@ describe('every semantic value traces to something declared', () => {
 		for (const row of emission.expectations) {
 			expect({
 				station: row.stationId,
-				declared: declared.has(row.cause),
+				declared: declared.has(row.exitMeaning),
 			}).toEqual({ station: row.stationId, declared: true })
 		}
 	})

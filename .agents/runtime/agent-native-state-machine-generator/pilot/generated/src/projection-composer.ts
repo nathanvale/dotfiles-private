@@ -25,7 +25,7 @@ export const VAULT_GIT_REIMAGINED_PROJECTION_TABLE = {
 	"commands.invalid_usage": {
 		actionId: "none",
 		state: "input_refused",
-		cause: "invalid_usage",
+		exitMeaning: "invalid_usage",
 		blocker: "projection_unavailable",
 		authority: "denied",
 		retrySafety: "operator_required",
@@ -36,7 +36,7 @@ export const VAULT_GIT_REIMAGINED_PROJECTION_TABLE = {
 	"commands.refused": {
 		actionId: "none",
 		state: "blocked",
-		cause: "refused_projection_unavailable",
+		exitMeaning: "refused_projection_unavailable",
 		blocker: "projection_unavailable",
 		authority: "denied",
 		retrySafety: "same_input_safe",
@@ -47,7 +47,7 @@ export const VAULT_GIT_REIMAGINED_PROJECTION_TABLE = {
 	"commands.success": {
 		actionId: "inspect_commands",
 		state: "observed_success",
-		cause: "read_success",
+		exitMeaning: "read_success",
 		authority: "granted",
 		retrySafety: "same_input_safe",
 		projectionCompleteness: "complete",
@@ -56,7 +56,7 @@ export const VAULT_GIT_REIMAGINED_PROJECTION_TABLE = {
 	"status.invalid_usage": {
 		actionId: "none",
 		state: "input_refused",
-		cause: "invalid_usage",
+		exitMeaning: "invalid_usage",
 		blocker: "projection_unavailable",
 		authority: "denied",
 		retrySafety: "operator_required",
@@ -67,7 +67,7 @@ export const VAULT_GIT_REIMAGINED_PROJECTION_TABLE = {
 	"status.no_argument": {
 		actionId: "inspect_status",
 		state: "observed_success",
-		cause: "read_success",
+		exitMeaning: "read_success",
 		authority: "granted",
 		retrySafety: "same_input_safe",
 		projectionCompleteness: "complete",
@@ -76,7 +76,7 @@ export const VAULT_GIT_REIMAGINED_PROJECTION_TABLE = {
 	"status.refused": {
 		actionId: "none",
 		state: "blocked",
-		cause: "refused_projection_unavailable",
+		exitMeaning: "refused_projection_unavailable",
 		blocker: "projection_unavailable",
 		authority: "denied",
 		retrySafety: "same_input_safe",
@@ -87,7 +87,7 @@ export const VAULT_GIT_REIMAGINED_PROJECTION_TABLE = {
 	"status.success": {
 		actionId: "inspect_status",
 		state: "observed_success",
-		cause: "read_success",
+		exitMeaning: "read_success",
 		authority: "granted",
 		retrySafety: "same_input_safe",
 		projectionCompleteness: "complete",
@@ -98,7 +98,7 @@ export const VAULT_GIT_REIMAGINED_PROJECTION_TABLE = {
 	{
 		readonly actionId: string
 		readonly state: string
-		readonly cause: string
+		readonly exitMeaning: string
 		readonly blocker?: string
 		readonly authority: "denied" | "granted"
 		readonly retrySafety: "operator_required" | "same_input_safe" | "same_input_unsafe"

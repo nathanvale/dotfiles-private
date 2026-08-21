@@ -8,12 +8,20 @@ import { type Diagnostic, diagnostic } from './diagnostics.ts'
 import type { JsoncNode } from './jsonc.ts'
 import { type Shape, SPECIFICATION_SHAPE } from './schema.ts'
 
+/**
+ * `shape` is the surface the declared Input Schema Version accepts. A
+ * Registered Reader supplies its version's frozen surface; input on the
+ * current version is validated against the current shape. Passing the shape in
+ * is what keeps a legacy candidate from declaring a v2 field and still being
+ * read as its own version.
+ */
 export function validateStructure(
 	root: JsoncNode,
 	sourcePath?: string,
+	shape: Shape = SPECIFICATION_SHAPE,
 ): Diagnostic[] {
 	const diagnostics: Diagnostic[] = []
-	walk(root, SPECIFICATION_SHAPE, '', diagnostics, sourcePath)
+	walk(root, shape, '', diagnostics, sourcePath)
 	return diagnostics
 }
 

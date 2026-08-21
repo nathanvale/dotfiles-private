@@ -167,3 +167,68 @@ export function camel(product: string): string {
 export function screaming(product: string): string {
 	return product.replace(/-/g, '_').toUpperCase()
 }
+
+/**
+ * The evidence the facade's `retryable` boolean requires.
+ *
+ * One field per conjunct ADR 0006 rules, all required: an optional field
+ * would let missing evidence read as satisfied, which is the fail-open this
+ * predicate exists to prevent. Every field is a generator-internal fact
+ * derived from the compiled specification; none of it widens the input
+ * schema, because `retryable` is a projection out to a consumer rather than
+ * something a product declares.
+ */
+export interface RetryableEvidence {
+	/** Exact Same-Input Retry Safety for this result. */
+	readonly posture: RetryPosture
+	/** Whether the State Projection is complete enough to be acted on. */
+	readonly projectionCompleteness: 'complete' | 'incomplete'
+	/** The canonical Next Safe Action is this exact same public invocation. */
+	readonly sameInvocationAsNextSafeAction: boolean
+	/** The normalized input a repeat would carry is unchanged. */
+	readonly normalizedInputUnchanged: boolean
+	/** The Logical Operation identity a repeat would carry is unchanged. */
+	readonly logicalOperationUnchanged: boolean
+	/**
+	 * Nothing must happen first: no human handoff, no further input, no
+	 * repair, no waiting, no other declared prerequisite.
+	 */
+	readonly noPrerequisite: boolean
+}
+
+/**
+ * The facade's `retryable` boolean.
+ *
+ * True only for an immediately useful identical safe invocation (ADR 0006),
+ * which is the conjunction of every field above. Exact Same-Input Retry
+ * Safety alone is not enough: a `same_input_safe` result whose next action is
+ * a different command, or which needs input first, or whose repeat would
+ * carry a new Logical Operation, is safe to repeat and useless to repeat.
+ * Mapping every safe posture to true is the alternative the ruling rejected.
+ *
+ * Fixed by ruling, so it is generator-owned rather than declared: a candidate
+ * able to state this mapping could state `operator_required` as retryable.
+ *
+ * One way only. Nothing reads `retryable` back as evidence about retry
+ * safety, posture, or Projection Completeness: it is a projection out to a
+ * consumer, and Exact Same-Input Retry Safety remains what decides.
+ */
+export function projectRetryable(evidence: RetryableEvidence): boolean {
+	if (evidence.projectionCompleteness !== 'complete') return false
+	if (!evidence.sameInvocationAsNextSafeAction) return false
+	if (!evidence.normalizedInputUnchanged) return false
+	if (!evidence.logicalOperationUnchanged) return false
+	if (!evidence.noPrerequisite) return false
+
+	switch (evidence.posture) {
+		case 'same_input_safe':
+			return true
+		case 'same_input_unsafe':
+		case 'operator_required':
+			return false
+		default: {
+			const exhausted: never = evidence.posture
+			return exhausted
+		}
+	}
+}

@@ -20,9 +20,14 @@
 
 import { type DerivedStation, sortStations } from './branch-stations.ts'
 import { BRANCH_FACTS, resolveRetryPosture } from './derivation-facts.ts'
-import type { SpecificationIr } from './ir.ts'
+import type { RoutingRow, RoutingTable, SpecificationIr } from './ir.ts'
 import { type ArtifactRefusal, artifactRefusal } from './refusal.ts'
-import type { BranchKind, NextSafeActionKind, RetryPosture } from './schema.ts'
+import type {
+	BranchKind,
+	NextSafeActionKind,
+	RetryPosture,
+	RoutingRole,
+} from './schema.ts'
 
 /**
  * One semantic row: the complete State Projection meaning a Branch Station is
@@ -38,7 +43,15 @@ export interface SemanticExpectationRow {
 	/** The join key: the station's expected runtime action id. */
 	readonly expectedActionId: string
 	readonly state: string
-	readonly cause: string
+	/**
+	 * The product's own word for what this exit means, taken from the
+	 * candidate's declared exit codes.
+	 *
+	 * Deliberately not named `cause`: that word is the sealed refusal and
+	 * diagnostic discriminant everywhere else in the package, and one name for
+	 * two meanings made a row's product wording look branchable.
+	 */
+	readonly exitMeaning: string
 	readonly blocker?: string
 	readonly authority: 'granted' | 'denied'
 	readonly retrySafety: RetryPosture
@@ -94,16 +107,47 @@ export function buildExpectationTable(
 			continue
 		}
 
+		const selected = incomplete
+			? undefined
+			: blockerRowFor(branch, ir, station.command)
+
+		if (selected !== undefined && 'ambiguous' in selected) {
+			refusals.push(
+				artifactRefusal({
+					cause: 'emit_expectation_column_underivable',
+					subject: `${station.id}:blocker`,
+					message: `Branch Station ${station.id} matches more than one declared station_blocker row, so no single admitted refusal cause can be named.`,
+				}),
+			)
+			continue
+		}
+
+		// The selected row carries the blocker AND what that blocker routes
+		// to, so a mapping's action and posture are taken from the same match
+		// rather than resolved separately from a blocker name.
+		const routedAction =
+			selected !== undefined && 'row' in selected
+				? selected.row.target
+				: undefined
+		const routedPosture =
+			selected !== undefined && 'row' in selected
+				? selected.row.retrySafety
+				: undefined
+
 		const blocker = incomplete
 			? resolution?.unavailableProjectionBlocker
-			: blockerFor(branch, ir)
+			: selected === undefined
+				? undefined
+				: 'row' in selected
+					? selected.row.blocker
+					: selected.fallbackBlocker
 
 		if (branch === 'refused' && blocker === undefined) {
 			refusals.push(
 				artifactRefusal({
 					cause: 'emit_expectation_column_underivable',
 					subject: `${station.id}:blocker`,
-					message: `Branch Station ${station.id} is a refusal, but the candidate declares no blockers, so no admitted refusal cause can be named.`,
+					message: `Branch Station ${station.id} is a refusal, but no declared station_blocker mapping selects for it and the candidate declares no single blocker, so no admitted refusal cause can be named.`,
 				}),
 			)
 			continue
@@ -114,12 +158,15 @@ export function buildExpectationTable(
 				// A candidate that also declares it must agree; a disagreement is a
 				// specification defect rather than something to silently resolve.
 				(resolution?.unavailableProjectionRetrySafety ?? 'operator_required')
-			: resolveRetryPosture(ir, {
+			: // A declared route's posture is the admitted answer for that
+				// route; the rule table answers only where no route selected.
+				(routedPosture ??
+				resolveRetryPosture(ir, {
 					command: station.command,
 					resultKind: BRANCH_RESULT_KIND[branch],
 					...(blocker === undefined ? {} : { blocker }),
 					state: facts.state,
-				})
+				}))
 
 		if (retrySafety === undefined) {
 			refusals.push(
@@ -132,7 +179,7 @@ export function buildExpectationTable(
 			continue
 		}
 
-		const action = resolveAction(ir, derived, incomplete)
+		const action = routedAction ?? resolveAction(ir, derived, incomplete)
 		if (action === undefined) {
 			refusals.push(
 				artifactRefusal({
@@ -166,7 +213,7 @@ export function buildExpectationTable(
 			stationId: station.id,
 			expectedActionId: action,
 			state: facts.state,
-			cause: causeFor(branch, ir),
+			exitMeaning: exitMeaningFor(branch, ir),
 			...(blocker === undefined ? {} : { blocker }),
 			authority: facts.authority,
 			retrySafety,
@@ -240,8 +287,20 @@ function resolveAction(
 	// claiming a continuation the specification never named.
 	if (derived.branch === 'refused') return ids.has('none') ? 'none' : undefined
 
-	// A success branch continues only where the candidate declares a
-	// context-free, feature-unconditional invoke whose id names this command.
+	// A declared station-action binding is the admitted answer, and it is a
+	// separate claim from fact-to-branch selection: reaching a station says
+	// which branch happened, never what that station's Next Safe Action is
+	// (gap rows 4 and 5 are two bindings, not one).
+	const bound = selectRoutingRow(ir, 'station_action', {
+		branch: derived.branch,
+		command: derived.station.command,
+	})
+	if (bound !== undefined && 'ambiguous' in bound) return undefined
+	if (bound !== undefined) return bound.row.target
+
+	// No binding declared: v1's naming convention, which matches nothing on a
+	// product whose actions are named differently, and which is exactly the
+	// gap the declaration closes.
 	const match = ir.actions.catalog.find(
 		(entry) =>
 			entry.kind === 'invoke' &&
@@ -253,27 +312,94 @@ function resolveAction(
 	return ids.has('none') ? 'none' : undefined
 }
 
-function causeFor(branch: BranchKind, ir: SpecificationIr): string {
+function exitMeaningFor(branch: BranchKind, ir: SpecificationIr): string {
 	const declared = ir.commandSurface.exitCodes[
 		String(BRANCH_FACTS[branch].exitCode)
 	] as string | undefined
-	// The candidate names each exit's meaning; using it keeps the row's cause
-	// the product's own word rather than a generator-invented synonym.
+	// The candidate names each exit's meaning; using it keeps the row's
+	// wording the product's own rather than a generator-invented synonym.
 	return declared ?? branch
 }
 
 /**
- * The blocker a non-incomplete branch reports.
+ * What a declared `station_blocker` mapping says about this station.
  *
- * A success branch has none. A refusal takes the candidate's declared blocker
- * only when exactly one is declared: with several, v1 has no mapping from
- * command to blocker, so picking the first would publish an arbitrary choice
- * as an admitted meaning.
+ * Returns the selected row so the caller takes the blocker AND the action and
+ * posture that blocker routes to from one complete match, rather than reading
+ * a blocker name out of a key and resolving the action somewhere else.
  */
-function blockerFor(
+function blockerRowFor(
 	branch: BranchKind,
 	ir: SpecificationIr,
-): string | undefined {
+	command: string,
+):
+	| { readonly row: RoutingRow }
+	| { readonly ambiguous: true }
+	| { readonly fallbackBlocker: string }
+	| undefined {
 	if (branch !== 'refused') return undefined
-	return ir.blockers.length === 1 ? ir.blockers[0] : undefined
+
+	const selected = selectRoutingRow(ir, 'station_blocker', {
+		branch,
+		command,
+	})
+	if (selected !== undefined) return selected
+
+	// No declared mapping selects. v1's fallback answers only when the
+	// candidate leaves no choice to make.
+	const only = ir.blockers.length === 1 ? ir.blockers[0] : undefined
+	return only === undefined ? undefined : { fallbackBlocker: only }
+}
+
+/**
+ * The one routing row that selects for this station, under a declared role.
+ *
+ * The table is chosen by the role the product declared, never by its name or
+ * by which discriminants it happens to carry: a Finding table mentioning a
+ * blocker is not a blocker-to-action mapping.
+ *
+ * Every declared discriminant is evaluated. A discriminant naming a fact this
+ * station cannot supply makes the row ineligible rather than being skipped,
+ * so a row never selects on a key that was only partly read. More than one
+ * eligible row is ambiguity, which the caller refuses; there is no
+ * first-match-wins and no general-versus-specific fallback, both of which
+ * would let an ineligible row win by being listed first or last.
+ */
+function selectRoutingRow(
+	ir: SpecificationIr,
+	role: RoutingRole,
+	facts: Readonly<Record<string, string | undefined>>,
+): { readonly row: RoutingRow } | { readonly ambiguous: true } | undefined {
+	const tables = ir.routing.filter((table) => table.role === role)
+	const eligible: RoutingRow[] = []
+	for (const table of tables) {
+		for (const row of table.rows) {
+			if (matchesEveryDiscriminant(table, row, facts)) eligible.push(row)
+		}
+	}
+	if (eligible.length > 1) return { ambiguous: true }
+	const row = eligible[0]
+	return row === undefined ? undefined : { row }
+}
+
+/**
+ * Whether one row's complete key holds for the facts a station carries.
+ *
+ * Reads the table's declared discriminants rather than the row's own keys, so
+ * a row that omits one is judged on the full key the table declares. An
+ * unsupplied fact fails the row: derivation cannot evaluate it, so the row
+ * cannot be known to apply.
+ */
+function matchesEveryDiscriminant(
+	table: RoutingTable,
+	row: RoutingRow,
+	facts: Readonly<Record<string, string | undefined>>,
+): boolean {
+	for (const discriminant of Object.keys(table.discriminants)) {
+		const required = row.key[discriminant]
+		if (required === undefined) return false
+		const held = facts[discriminant]
+		if (held === undefined || held !== required) return false
+	}
+	return true
 }

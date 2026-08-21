@@ -114,7 +114,7 @@ describe('the pilot candidate emits within frozen Input Schema v1', () => {
 				stationId: 'status.success',
 				expectedActionId: 'inspect_status',
 				state: 'observed_success',
-				cause: 'read_success',
+				exitMeaning: 'read_success',
 				authority: 'granted',
 				retrySafety: 'same_input_safe',
 				projectionCompleteness: 'complete',
@@ -124,7 +124,7 @@ describe('the pilot candidate emits within frozen Input Schema v1', () => {
 				stationId: 'status.refused',
 				expectedActionId: 'none',
 				state: 'blocked',
-				cause: 'refused_projection_unavailable',
+				exitMeaning: 'refused_projection_unavailable',
 				blocker: 'projection_unavailable',
 				authority: 'denied',
 				retrySafety: 'same_input_safe',
@@ -136,7 +136,7 @@ describe('the pilot candidate emits within frozen Input Schema v1', () => {
 				stationId: 'status.invalid_usage',
 				expectedActionId: 'none',
 				state: 'input_refused',
-				cause: 'invalid_usage',
+				exitMeaning: 'invalid_usage',
 				blocker: 'projection_unavailable',
 				authority: 'denied',
 				retrySafety: 'operator_required',
@@ -249,5 +249,37 @@ describe('the generated modules agree with the pilot naming module', () => {
 			catalog[`${PILOT_CONSTANT_PREFIX}_STATION_IDS`],
 			`${PILOT_CONSTANT_PREFIX}_STATION_IDS`,
 		).toEqual([...EXPECTED_STATION_IDS])
+	})
+})
+
+/**
+ * The emitted script names a file that exists.
+ *
+ * Resolved on disk rather than compared as a string: the defect this catches
+ * was a contract naming `src/cli.ts` for a product whose front door is
+ * `pilot/cli.ts`, and every existing test asserted the string, which is why
+ * it survived three reviews. A path assertion cannot tell a true path from a
+ * plausible one; only the filesystem can.
+ */
+describe('the generated Command Surface Contract resolves its entry', () => {
+	test('every emitted script points at a file on disk', async () => {
+		const emitted = await Bun.file(
+			new URL('./generated/src/command-surface-contract.ts', import.meta.url),
+		).text()
+
+		const scripts = [...emitted.matchAll(/script:\s*"([^"]+)"/g)].map(
+			(match) => match[1] ?? '',
+		)
+		expect(scripts.length).toBeGreaterThan(0)
+
+		for (const script of scripts) {
+			// The contract names `<entry> <command>`; the entry is the path.
+			const entry = script.split(' ')[0] ?? ''
+			const resolved = new URL(`../${entry}`, import.meta.url)
+			expect({
+				script,
+				exists: await Bun.file(resolved).exists(),
+			}).toEqual({ script, exists: true })
+		}
 	})
 })

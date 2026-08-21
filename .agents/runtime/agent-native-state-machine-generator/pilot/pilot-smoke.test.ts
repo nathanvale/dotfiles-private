@@ -97,7 +97,7 @@ describe('one real-process smoke path', () => {
 		expect(data.state_projection).toEqual({
 			actionId: 'inspect_status',
 			state: 'observed_success',
-			cause: 'read_success',
+			exitMeaning: 'read_success',
 			authority: 'granted',
 			retrySafety: 'same_input_safe',
 			projectionCompleteness: 'complete',
@@ -112,7 +112,7 @@ describe('one real-process smoke path', () => {
 		if (row === undefined) return
 		expect(row.expectedActionId).toBe('inspect_status')
 		expect(row.state).toBe('observed_success')
-		expect(row.cause).toBe('read_success')
+		expect(row.exitMeaning).toBe('read_success')
 		expect(row.authority).toBe('granted')
 		expect(row.retrySafety).toBe('same_input_safe')
 		expect(row.projectionCompleteness).toBe('complete')

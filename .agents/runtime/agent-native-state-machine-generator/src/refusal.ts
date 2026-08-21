@@ -59,6 +59,14 @@ export const ARTIFACT_REFUSAL_CAUSES = [
 	'emit_retry_posture_unresolved',
 	/** The candidate declares no result contract usable for a command. */
 	'emit_result_contract_undeclared',
+	/**
+	 * Neither the candidate nor the consumer names the product's public entry
+	 * point, so the Command Surface Contract's mandatory `script` cannot be
+	 * derived. The entry is a per-product fact: an Input Schema v2 candidate
+	 * declares it, or the consumer supplies it at derivation. Emitting a
+	 * conventional default here would publish a path that need not resolve.
+	 */
+	'emit_entry_undeclarable',
 ] as const
 
 export type ArtifactRefusalCause = (typeof ARTIFACT_REFUSAL_CAUSES)[number]

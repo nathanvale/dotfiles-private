@@ -50,6 +50,18 @@ export interface DerivationOptions {
 	readonly symbolPrefix?: string
 	/** The consumer's discovery projection function to import in the catalog. */
 	readonly discoveryImport?: { readonly symbol: string; readonly from: string }
+	/**
+	 * The consumer's real public entry point, as an emitted Command Surface
+	 * Contract names it.
+	 *
+	 * A per-product fact, like the paths above: the entry lives wherever the
+	 * consumer put it, so neither the generator nor a version-owned reader can
+	 * know it. An Input Schema v2 candidate declares its own and wins over
+	 * this; a candidate that declares none and a consumer that supplies none
+	 * leave the contract's mandatory `script` underivable, and emission
+	 * refuses rather than naming a path that does not resolve.
+	 */
+	readonly entryScript?: string
 }
 
 /**
@@ -109,7 +121,11 @@ export function deriveArtifactSet(
 	}
 
 	const stationEmission = deriveStations(ir)
-	const contractEmission = deriveCommandContracts(ir)
+	const contractEmission = deriveCommandContracts(ir, {
+		...(options.entryScript === undefined
+			? {}
+			: { entryScript: options.entryScript }),
+	})
 	const expectationEmission = buildExpectationTable(
 		ir,
 		stationEmission.stations,

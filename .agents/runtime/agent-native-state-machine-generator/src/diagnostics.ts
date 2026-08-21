@@ -26,6 +26,8 @@ export const DIAGNOSTIC_CAUSES = [
 	'semantic_unsafe_retry_declaration',
 	'semantic_incomplete_projection',
 	'semantic_feature_machinery_conflict',
+	'semantic_unsupported_schema_version',
+	'semantic_missing_phase_state',
 ] as const
 
 export type DiagnosticCause = (typeof DIAGNOSTIC_CAUSES)[number]

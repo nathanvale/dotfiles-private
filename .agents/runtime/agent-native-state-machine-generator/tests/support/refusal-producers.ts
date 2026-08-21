@@ -4,6 +4,7 @@ import {
 	compileSpecificationCandidate,
 	type DeclaredExtensionPoint,
 	deriveArtifactSet,
+	deriveCommandContracts,
 	type RegisteredExtension,
 	reconcileExtensionRegistry,
 	type SpecificationIr,
@@ -104,6 +105,19 @@ function bind(id: string, revision = REVISION): RegisteredExtension {
 export const REFUSAL_CAUSE_PRODUCERS: Readonly<
 	Record<ProducibleRefusalCause, RefusalProducer>
 > = {
+	/**
+	 * Neither the candidate nor the consumer names the entry point. The
+	 * amended IR is the emission-ready one with its declared entry removed,
+	 * and no consumer option is supplied, so the only two sources are absent.
+	 */
+	emit_entry_undeclarable: async () => {
+		const { raw } = await emissionReadyVaultGit()
+		const stripped: SpecificationIr = {
+			...raw,
+			commandSurface: { ...raw.commandSurface },
+		}
+		return deriveCommandContracts(stripped).refusals
+	},
 	// A command name the facade's lowercase station id grammar cannot express.
 	emit_station_id_invalid: () =>
 		refusalsFrom(({ ir }) => ({

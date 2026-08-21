@@ -11,8 +11,7 @@ import {
 	regenerateArtifactSet,
 	verifyArtifactSet,
 } from '../src/index.ts'
-import { readCandidate, readNegativeFixture } from './support/candidates.ts'
-import { emitAmended } from './support/emission.ts'
+import { readNegativeFixture } from './support/candidates.ts'
 
 /**
  * The package registry as tests see it. Held here so a test that adds or
@@ -66,12 +65,39 @@ async function snapshot(dir: string): Promise<ReadonlyMap<string, string>> {
  * a set to the admitted input it came from, not to a test amendment.
  */
 async function compile(product: 'vault-git' | 'fallow') {
-	const result = compileSpecificationCandidate(await readCandidate(product), {
+	// A genuinely compiled Input Schema v2 candidate: its IR and its digest
+	// come from the same compilation, so the pair carries one identity.
+	//
+	// These tests are about generation mechanics - staging, manifests, drift,
+	// replacement - and need a set they may found themselves. Rewriting a
+	// legacy IR's version while keeping its legacy digest would give the set
+	// an IR claiming v2 and a provenance recording v1, which is exactly the
+	// split the boundary refuses. The spike candidates are still exercised
+	// unamended in registered-reader-boundary.test.ts, where being superseded
+	// is the point.
+	const source = (await readV2Fixture()).replace(
+		'"product": "surfaces"',
+		`"product": ${JSON.stringify(product)}`,
+	)
+	const result = compileSpecificationCandidate(source, {
 		sourcePath: `${product}.state-machine.jsonc`,
 	})
-	if (!result.ok) throw new Error('fixture candidate must compile')
-	const { ir } = await emitAmended(product)
-	return { ...result, ir }
+	if (!result.ok)
+		throw new Error(
+			`v2 mechanics fixture must compile: ${result.diagnostics
+				.map((item) => `${item.cause}@${item.path}`)
+				.join(', ')}`,
+		)
+	return result
+}
+
+const V2_FIXTURE_URL = new URL(
+	'../fixtures/v2/declared-surfaces.jsonc',
+	import.meta.url,
+)
+
+async function readV2Fixture(): Promise<string> {
+	return await Bun.file(V2_FIXTURE_URL).text()
 }
 
 /**
@@ -280,12 +306,13 @@ describe('verifying a Generated Artifact Set for drift', () => {
 		const original = await compile('vault-git')
 		await generateArtifactSet(original.ir, original.digest, { outputDir: dir })
 
-		// The admitted input moved on; the set on disk still records the old digest.
+		// The admitted input moved on; the set on disk still records the old
+		// digest. Same candidate, one renamed blocker, so the digest differs
+		// while the identity pair stays consistent.
 		const changed = compileSpecificationCandidate(
-			(await readCandidate('vault-git')).replace(
-				'"offline_mode"',
-				'"offline_mode_renamed"',
-			),
+			(await readV2Fixture())
+				.replace('"product": "surfaces"', '"product": "vault-git"')
+				.replace('"work_unavailable"', '"work_unavailable_renamed"'),
 		)
 		expect(changed.ok).toBe(true)
 		if (!changed.ok) return
@@ -402,9 +429,12 @@ describe('regenerating a Generated Artifact Set', () => {
 		)
 		await mkdir(join(root, 'proof'), { recursive: true })
 		await Bun.write(join(root, 'proof', 'evidence.json'), '{"observed":true}\n')
-		// Drift both declared artifacts.
+		// Drift a declared artifact. The manifest itself is deliberately left
+		// intact: an emptied manifest is indistinguishable from a foreign one,
+		// so identity cannot be proved and regeneration refuses rather than
+		// overwriting a set it cannot name. That case is proven in
+		// registered-reader-boundary.test.ts.
 		await Bun.write(join(dir, A_DECLARED_ARTIFACT), 'stale\n')
-		await Bun.write(join(dir, 'provenance.manifest.json'), '{}\n')
 
 		const result = await regenerateArtifactSet(compiled.ir, compiled.digest, {
 			outputDir: dir,
@@ -745,14 +775,21 @@ describe('the real Generated Artifact Set reaches generation and verification', 
 
 describe('an emit refusal fails generation closed', () => {
 	for (const product of ['vault-git', 'fallow'] as const) {
-		test(`the unamended ${product} candidate writes nothing and refuses`, async () => {
+		test(`${product} writes nothing when an emitter refuses`, async () => {
 			const dir = await outputDir()
-			// The raw compiled IR, deliberately NOT amended: Input Schema v1
-			// cannot express what the derivation needs, so emission refuses.
-			const compiled = compileSpecificationCandidate(
-				await readCandidate(product),
-			)
-			if (!compiled.ok) throw new Error('fixture candidate must compile')
+			// A v2 candidate whose declared surface is complete except for one
+			// column the emitter needs: the station_blocker table is demoted to
+			// advisory, so no declared mapping selects and the expectation
+			// column cannot be derived. The refusal under test is the
+			// emitter's, and the candidate's own identity is intact.
+			const source = (await readV2Fixture())
+				.replace(
+					'"product": "surfaces"',
+					`"product": ${JSON.stringify(product)}`,
+				)
+				.replace('"role": "station_blocker",', '"role": "advisory",')
+			const compiled = compileSpecificationCandidate(source)
+			if (!compiled.ok) throw new Error('v2 refusal fixture must compile')
 
 			const result = await generateArtifactSet(compiled.ir, compiled.digest, {
 				outputDir: dir,

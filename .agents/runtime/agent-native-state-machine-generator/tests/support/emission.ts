@@ -87,8 +87,16 @@ function withSingleBlocker(
  * rather than inlining a divergent copy.
  */
 export function amendForEmission(ir: SpecificationIr): SpecificationIr {
+	// A stage-5 admitted candidate declares its own entry; these fixtures are
+	// on a superseded version that has no such surface, so the amendment
+	// supplies what the admission would. The real per-product value comes from
+	// the consumer at derivation, which is what the pilot lane does.
+	const withEntry: SpecificationIr = {
+		...ir,
+		commandSurface: { ...ir.commandSurface, entryScript: 'src/cli.ts' },
+	}
 	const withBinding = withNoArgumentCommand(
-		withPreviewableMutations(ir),
+		withPreviewableMutations(withEntry),
 		// The behavior each candidate declares; `help` for fallow, the status
 		// dashboard for vault-git (whose `status` command already exists).
 		ir.commandSurface.noArgumentBehavior === 'help' ? 'help' : 'status',

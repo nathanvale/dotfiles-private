@@ -13,7 +13,7 @@ import type { CommandFacadeContract } from '@side-quest/cli-command-facade'
 /** The single generated static owner of this product's public CLI meaning. */
 export const vaultGitReimaginedCommandContracts = {
 	"commands": {
-		script: "src/cli.ts commands",
+		script: "pilot/cli.ts commands",
 		summary: "commands performs its declared read work and returns one typed result.",
 		usage: ["vault-git-reimagined commands"],
 		json: true,
@@ -32,7 +32,7 @@ export const vaultGitReimaginedCommandContracts = {
 		},
 	},
 	"status": {
-		script: "src/cli.ts status",
+		script: "pilot/cli.ts status",
 		summary: "status performs its declared read work and returns one typed result.",
 		usage: ["vault-git-reimagined status"],
 		json: true,
