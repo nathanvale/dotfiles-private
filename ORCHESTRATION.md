@@ -158,6 +158,14 @@ Delete this file when the feature branch is ready to merge to `main`.
      staged or modified files; leave edits uncommitted. Commits are
      `vault-git` work only.
 
+- The supervisor is the progress tracker. After every stage merge (and any
+  material disposition), post a progress comment on issue 55 via `ghh`
+  summarizing the merged unit and its observed gate proof, and keep the
+  spec-family issues honest: close a satisfied issue with its verdict
+  (precedent: #75 closed 2026-08-21). State plainly in each comment that
+  the work sits on the unpushed local feature branch. GitHub Issues owns
+  mutable tracker state; never mirror issue status back into this file or
+  the vault.
 - The code-review contract below runs at the end of every stage; supervisor
   re-runs gate proof independently before merging.
 
