@@ -5,7 +5,7 @@
 // Edit the specification and regenerate; a hand edit is Generated Artifact
 // Drift and will be refused.
 //
-// specification digest: 8e7ea8c063a2da5a66b0f42d71a9a069f2a421a67939df1e7a74ff6c4ffc9736
+// specification digest: af827747fde4d30b29919fadcf55b2d3b19c3c0b6646493fc325c49664b3e99a
 // input schema version: 1
 
 import {
