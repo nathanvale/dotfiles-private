@@ -92,7 +92,7 @@ writing-for-agents first. Routine status edits run this checklist alone.
    Runtime adoption, Specification Admission, Pause release,
    activation, extraction, and stages 6 to 7 each remain a separate
    ask to Nathan.
-3. In flight, HELD: the Input Schema v2 unit at
+3. In flight: the Input Schema v2 unit at
    `.worktrees/issue-55-schema-v2`, branch feat/issue-55-schema-v2,
    fixed point 518053f. The charter with the full coverage matrix is
    AGENT-BRIEF.md at that worktree root (archive to receipts/schema-v2/
@@ -100,12 +100,11 @@ writing-for-agents first. Routine status edits run this checklist alone.
    because the tracked repo-root HANDBACK.md (leaked by aw-draft unit
    commit 8ca6420, byte-identical to receipts/aw-draft/HANDBACK.md)
    rides into every stage worktree; that stale file stays until its
-   deletion is separately authorized. Worker state 2026-08-21: two
-   launches stopped with zero changes observed (an internal sub-agent,
-   then claude-handoff session 1f30863a); relaunch waits for Nathan's
-   reviewed contract requirements; run git status in that worktree
-   before relaunching. AC binding: issue stories 5, 6, 51, 52; the
-   plan comment's stage-5 row.
+   deletion is separately authorized. Worker: claude-handoff session
+   a28f34ca, name "Issue 55 Input Schema v2 worker", cwd that
+   worktree, launched 2026-08-21 after two prior launches were stopped
+   with zero changes observed; writers never overlapped. AC binding:
+   issue stories 5, 6, 51, 52; the plan comment's stage-5 row.
 4. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
    receipts/stage5-decision-packet.md, posted to issue 55) plus the
