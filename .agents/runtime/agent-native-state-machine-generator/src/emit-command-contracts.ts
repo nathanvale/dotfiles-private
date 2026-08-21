@@ -154,6 +154,10 @@ function outputModesFor(
  * spelling but not its type, so every declared flag is emitted as a boolean:
  * inventing a richer type the specification never admitted would make the
  * generated contract claim more than its authority supports.
+ *
+ * The facade keys flags by their full `--` spelling and refuses a bare name,
+ * so the candidate's spelling is carried through unchanged rather than
+ * normalized.
  */
 function flagsFor(
 	command: string,
@@ -161,7 +165,7 @@ function flagsFor(
 ): CommandFacadeContract['flags'] {
 	const flags: CommandFacadeContract['flags'] = {}
 	for (const flag of [...(surface.flags[command] ?? [])].sort()) {
-		flags[flag.replace(/^--/, '')] = { type: 'boolean' }
+		flags[flag] = { type: 'boolean' }
 	}
 	return flags
 }
