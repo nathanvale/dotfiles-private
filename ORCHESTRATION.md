@@ -96,10 +96,14 @@ Pipeline (mechanics owned by the code-review contract below):
 - [x] Brief grounded: issue 55 body and plan-comment row re-read;
       gate-proof row and AC lines quoted in AGENT-BRIEF.md; brief opens
       with the CONTEXT.md instruction
-- [ ] HANDBACK.md received
-- [ ] Stage gate re-run by the supervisor (bun test, typecheck, biome)
-- [ ] Both review axes plus cli-execution-auditor dispatched against the
-      fixed point above
+- [x] HANDBACK.md received (2026-08-21; four commits 0eb9f12, 56a241e,
+      73b6358, 4c2bf59; headline: the pilot emits within frozen Input
+      Schema v1)
+- [x] Stage gate re-run by the supervisor (typecheck clean; 138 tests 0
+      fail; Biome 45 files clean; verify clean, 5 outputs; smoke re-run
+      from a fresh temp workspace, exit 0)
+- [x] Both review axes plus cli-execution-auditor dispatched against the
+      fixed point above (2026-08-21)
 - [ ] Every finding dispositioned; repair packet delivered, or none
       needed
 - [ ] Gate re-run after repair
