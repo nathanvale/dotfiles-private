@@ -109,6 +109,20 @@ export const GENERATION_FAILURE_CAUSES = [
 	 * branching on cause is the only way to tell them apart.
 	 */
 	'generation_unreadable_manifest',
+	/**
+	 * The provenance manifest declares an output path the set may not own: one
+	 * that escapes the output directory, depends on platform separators, or
+	 * repeats a path already declared.
+	 *
+	 * Distinct from `generation_foreign_existing_set`, which judges whose set
+	 * is on disk. This judges the shape of a path a manifest asks the
+	 * generator to write or delete, and the two repairs are unrelated: a
+	 * foreign set means the output directory is wrong, while an unsafe
+	 * declared output means the manifest is not one this generator wrote.
+	 * `subject` is the offending path so a caller repairs it without parsing
+	 * `message`.
+	 */
+	'generation_unsafe_declared_output',
 ] as const
 
 export type GenerationFailureCause = (typeof GENERATION_FAILURE_CAUSES)[number]
@@ -308,6 +322,27 @@ function isSafeRelativePath(path: string): boolean {
 		.some((part) => part === '' || part === '.' || part === '..')
 }
 
+/**
+ * The first declared output a manifest may not own, or undefined.
+ *
+ * Duplicates count: two entries naming one path make the set's own declared
+ * list disagree with itself about what it contains, and a manifest this
+ * generator wrote never does that. Reporting the first offender rather than
+ * all of them keeps `subject` a single named path, which is what a caller
+ * branches to.
+ */
+function firstUnsafeDeclaredOutput(
+	declaredOutputs: readonly string[],
+): string | undefined {
+	const seen = new Set<string>()
+	for (const path of declaredOutputs) {
+		if (!isSafeRelativePath(path)) return path
+		if (seen.has(path)) return path
+		seen.add(path)
+	}
+	return undefined
+}
+
 function describe(error: unknown): string {
 	return error instanceof Error ? error.message : String(error)
 }
@@ -405,12 +440,30 @@ function resolveOutput(dir: string, path: string): string {
 	return join(dir, ...path.split('/'))
 }
 
-/** Removes exactly the named relative paths, and nothing else. */
+/**
+ * Removes exactly the named relative paths, and nothing else.
+ *
+ * Re-checks every path even though the manifest read already refused an
+ * unsafe one. This is not a guard for a structurally impossible state, which
+ * the package standards forbid: the state is reachable today by editing one
+ * caller. The paths originate in untrusted input, and this is the only place
+ * in the package that deletes a caller-named file, so the check belongs at
+ * the boundary that performs the irreversible act as well as at the one that
+ * admits the input. A future refactor that reorders or drops the earlier gate
+ * then cannot re-open the deletion. An unsafe path here is a defect upstream,
+ * so it throws rather than refusing quietly: `replaceArtifactSet` turns it
+ * into `generation_write_failure`, and the set on disk is already complete
+ * because the rename happened first.
+ */
 async function removeSupersededOutputs(
 	dir: string,
 	supersededOutputs: readonly string[],
 ): Promise<void> {
 	for (const path of supersededOutputs) {
+		if (!isSafeRelativePath(path))
+			throw new Error(
+				`refused to remove the superseded output ${JSON.stringify(path)}: it escapes the generated output directory`,
+			)
 		await rm(resolveOutput(dir, path), { force: true })
 	}
 }
@@ -427,6 +480,13 @@ async function removeSupersededOutputs(
  * Verification treats an unparsable manifest as drift, which is right, but
  * generation must not read it as a set worth replacing, so the two callers
  * branch on this rather than sharing one lenient answer.
+ *
+ * `unsafeDeclaredOutput` names the first declared path this manifest may not
+ * own. The manifest is untrusted input - any process can write one, and its
+ * digest is printed in every generated header - and its declared outputs
+ * reach both a write and a delete. Validating here, where the paths enter the
+ * program, is what makes the Generated Artifact Root boundary an invariant of
+ * the read rather than a consequence of which gate happens to run first.
  */
 async function readExistingManifest(outputDir: string): Promise<
 	| {
@@ -436,6 +496,7 @@ async function readExistingManifest(outputDir: string): Promise<
 			readonly inputSchemaVersion: string
 			readonly generatorContractVersion: string
 			readonly declaredOutputs: readonly string[]
+			readonly unsafeDeclaredOutput: string | undefined
 	  }
 	| { readonly present: false }
 > {
@@ -462,6 +523,7 @@ async function readExistingManifest(outputDir: string): Promise<
 			inputSchemaVersion: text(manifest.input_schema_version),
 			generatorContractVersion: text(manifest.generator_contract_version),
 			declaredOutputs: outputs,
+			unsafeDeclaredOutput: firstUnsafeDeclaredOutput(outputs),
 		}
 	} catch {
 		// An unparsable manifest declares nothing reliably. Verification still
@@ -474,6 +536,7 @@ async function readExistingManifest(outputDir: string): Promise<
 			inputSchemaVersion: '',
 			generatorContractVersion: '',
 			declaredOutputs: [],
+			unsafeDeclaredOutput: undefined,
 		}
 	}
 }
@@ -484,13 +547,23 @@ async function readExistingManifest(outputDir: string): Promise<
  * A manifest declaring outputs that do not exist describes a set that was
  * never materialised, or one since removed. Either way there is nothing to
  * replace, so the caller is founding rather than repairing.
+ *
+ * Answers only the materialisation question. It used to return `false` for an
+ * unsafe path too, which read as an answer to this question and was in fact
+ * the only thing keeping an escaping path out of the delete call: a
+ * misleading cause, and protection that would have vanished the moment the
+ * gates were reordered. Path safety is now decided at the manifest read, so
+ * this states that as a precondition rather than re-deciding it.
  */
 async function allOutputsPresent(
 	outputDir: string,
 	declaredOutputs: readonly string[],
 ): Promise<boolean> {
 	for (const path of declaredOutputs) {
-		if (!isSafeRelativePath(path)) return false
+		if (!isSafeRelativePath(path))
+			throw new Error(
+				`unsafe declared output ${JSON.stringify(path)} reached the materialisation check`,
+			)
 		if (!(await Bun.file(join(outputDir, path)).exists())) return false
 	}
 	return true
@@ -567,6 +640,24 @@ async function writeArtifactSet(
 	// manifest, or one belonging to another product or another specification,
 	// says nothing about whether this legacy version may replace it.
 	const declaredVersion = ir.specMeta.inputSchemaVersion
+	// Before every other judgement about the existing set, and before any
+	// write or delete: a declared output this set may not own refuses on its
+	// own cause.
+	//
+	// It runs first because it is the only gate that judges the paths
+	// themselves. Leaving it to a later gate is what made the boundary hold by
+	// accident: the materialisation check rejects an escaping path as "not
+	// present", which reports a misleading cause and stops protecting anything
+	// the moment the gates are reordered.
+	if (existing.present && existing.unsafeDeclaredOutput !== undefined)
+		return {
+			ok: false,
+			cause: 'generation_unsafe_declared_output',
+			subject: existing.unsafeDeclaredOutput,
+			message: `The provenance manifest declares the output ${JSON.stringify(existing.unsafeDeclaredOutput)}, which escapes the generated output directory or repeats another declared output. A Generated Artifact Set owns only forward-slashed relative paths inside its own directory, so this manifest was not written by this generator.`,
+			refusals: [],
+		}
+
 	// Identity AND materialisation. A manifest is a claim about a set, not the
 	// set: its digest is printed in every generated header, so anyone can
 	// write one. Requiring the declared outputs to exist means "this set is
