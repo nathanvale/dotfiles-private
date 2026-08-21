@@ -92,18 +92,24 @@ writing-for-agents first. Routine status edits run this checklist alone.
    Runtime adoption, Specification Admission, Pause release,
    activation, extraction, and stages 6 to 7 each remain a separate
    ask to Nathan.
-3. In flight: Input Schema v2 derivation consumers at
-   `.worktrees/issue-55-derivation-consumers`, branch
-   feat/issue-55-derivation-consumers, fixed point 855570f. Charter:
-   AGENT-BRIEF.md at that worktree root, four parts in order (custody
-   blockers, the nine consumers, the S4 remodel, rulings and standards
-   items); archive to receipts/derivation-consumers/ at merge.
-   Completion signal: DERIVATION-CONSUMERS-HANDBACK.md. Worker:
-   claude-handoff session ee33d43c, name "Issue 55 derivation consumers
-   worker", admitted 2026-08-22 with job state resolving claude-opus-5
-   at effort high. Partial handback at a coherent Part boundary is
-   chartered as acceptable; an honest partial beats an overstated
-   close. Scope: Scope, all inside the authorized Stage 5: the nine
+3. No unit in flight. Stage 5's schema half is complete: Input Schema
+   v2 is declared, validated, canonicalized and fully derived, under
+   version-owned custody with a safe manifest boundary. What remains in
+   Stage 5 is Vault Git qualification itself, which the plan comment's
+   stage-5 row owns: `qualify:vault-git` with declared and observed
+   coverage reported separately and introduced drift caught. That needs
+   Real Process Fixtures and Proof Adapters against the existing CLI,
+   and the plan's named risk 1 applies: if observational proof cannot
+   satisfy the formal claim, an adoption authorization ask surfaces at
+   the gate. Nathan decides when to charter it. Carried follow-ups for
+   whichever unit takes them next: the symlink-escape containment check
+   at the deletion site (lexical safety is proved, symlink escape is
+   not); the bare-string contextual-rendering fail-open, blocked on the
+   spike-digest ruling above; em-dashes in artifact-set.ts,
+   canonical.ts and generate.ts comments against the package ASCII
+   rule; and the 66 measured `as` casts in build-ir.ts, unassigned
+   debt, each needing its own argument. Previously carried and now
+   closed by the merged units: Scope, all inside the authorized Stage 5: the nine
    surfaces that derive nothing today (S1, S2, S3 as a binding, S4's
    two gates, S8's fact_branch table, S10, S11, S12, S13's emitter,
    S14); the S4 remodel to per-observation, which the accepted issue
@@ -390,6 +396,48 @@ to Next or the stage-5 worklist.
   owned by the facade ADD unit). AC outcome: stories 51 and 52
   satisfied; 5 and 6 satisfied for declared surfaces; gate 6 partial by
   record. Receipts at receipts/schema-v2/.
+- Input Schema v2 derivation consumers (Stage 5): MERGED 0df63aa (unit
+  commit ce8d4bf, receipts at 8a6c17d). GATE 6 NOW COMPLETE: 14 of 14
+  semantic rows reach derivation, against 5 at the unit's start. Eight
+  new modules emit only where a candidate declares the surface. Both
+  custody blockers closed: Registered Readers own their frozen
+  canonicalizer end to end (src/frozen-canonical-v1.ts), proven by a
+  standing test computing a reader's digest from first principles
+  outside the package, and a branch_station route resolves against the
+  whole derived catalog rather than its command prefix. S4 remodelled
+  to per-observation: the candidate-authored availability boolean is
+  gone, a capability declares its evidence Extension Point and both
+  routes, and missing routing now refuses structurally. W7's rename to
+  bare_invocation_target landed; the v2 fixture digest moved
+  deliberately to 8c9717e0. Gate: 443 tests (42 added), typecheck,
+  Biome, pilot verify clean, four pinned digests byte-identical, draft
+  inventory unmoved at 45, path-safety boundary re-verified by the
+  supervisor. Receipts at receipts/derivation-consumers/.
+- Two rulings from that unit. (a) W18 DELETION WITHDRAWN: the
+  supervisor had ruled emit_expectation_action_unknown structurally
+  unreachable and ordered its deletion; the worker reproduced the guard
+  firing, because Input Schema v2 broke the old premise. A
+  station_action row supplies its target directly, so the target
+  reaches the catalog lookup without being drawn from it, and the guard
+  is the only thing between an IR-level routing target and an emitted
+  row naming an undeclared action. A live producer replaced the pin;
+  UNPRODUCIBLE_REFUSAL_CAUSES is now empty. Supervisor verified the
+  producer runs in the sealed-cause suite and accepts the decline.
+  (b) outputDir is relativised out of all three generation refusal
+  messages, per the standards rule that a message carries no absolute
+  path; subject still carries it where a caller needs it.
+- OPEN, needs Nathan: the vault-git spike candidate declares the
+  contextual rendering "run_repair": "resolved_via_repair_action", and
+  that action id appears nowhere in its catalog (supervisor confirmed:
+  exactly one occurrence in the file, as the rendering target). The
+  cause is a validation fail-open, semantic.ts checks contextual
+  rendering targets only in the array form, so the bare-string form
+  skips the check. The one-line fix is written and reverted: applying
+  it, or fixing the fixture, stops the spike compiling and moves two
+  pinned digests. The plan comment already calls this spike's
+  renderings a drafting defect to correct at candidate-authoring time.
+  Ruling needed: may the two spike digests move, or does this wait for
+  candidate authoring? The fail-open stays open until then.
 - Manifest-read path safety (Stage 5, security boundary): MERGED
   276efd2 (unit commit cb86b6a, receipts at 565a661). A provenance
   manifest is untrusted input, and its declared outputs reached the
