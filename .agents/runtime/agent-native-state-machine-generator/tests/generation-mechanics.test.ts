@@ -240,6 +240,25 @@ describe('verifying a Generated Artifact Set for drift', () => {
 		)
 	})
 
+	test('accepts Handwritten Extensions living beside the declared set', async () => {
+		const dir = await outputDir()
+		const compiled = await compile('vault-git')
+		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
+
+		// Handwritten Extensions, fixtures and proof artifacts are required to
+		// live outside the Generated Artifact Set. They are not unexpected
+		// output, so their presence must not make a correct tree refuse.
+		await Bun.write(join(dir, 'my-fact-provider.ts'), 'export const f = 1\n')
+		await mkdir(join(dir, 'proof'), { recursive: true })
+		await Bun.write(join(dir, 'proof', 'evidence.json'), '{"observed":true}\n')
+
+		const result = await verifyArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+		})
+
+		expect(result).toMatchObject({ ok: true })
+	})
+
 	test('refuses a set with no provenance manifest at all', async () => {
 		const dir = await outputDir()
 		const compiled = await compile('vault-git')
