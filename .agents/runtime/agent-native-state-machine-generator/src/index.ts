@@ -92,6 +92,31 @@ export {
 	type DiagnosticStage,
 	type SourceLocation,
 } from './diagnostics.ts'
+export {
+	type ArtifactEmitter,
+	type EmittedArtifacts,
+	PROVENANCE_MANIFEST_PATH,
+	type ProvenanceManifest,
+} from './emit.ts'
+export {
+	DRIFT_REASONS,
+	type DriftFinding,
+	type DriftReason,
+	GENERATION_FAILURE_CAUSES,
+	type GenerationFailure,
+	type GenerationFailureCause,
+	type GenerationOptions,
+	type GenerationResult,
+	type GenerationSuccess,
+	generateArtifactSet,
+	regenerateArtifactSet,
+	VERIFICATION_FAILURE_CAUSES,
+	type VerificationClean,
+	type VerificationDrift,
+	type VerificationFailureCause,
+	type VerificationResult,
+	verifyArtifactSet,
+} from './generate.ts'
 export type {
 	ActionEntry,
 	CommandSurface,
