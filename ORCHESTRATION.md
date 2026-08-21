@@ -79,7 +79,11 @@ Delete this file when the feature branch is ready to merge to `main`.
   not "the shape every module reports in"; (4) reword "Generator Contract"
   in the diagnostics.ts row (term undefined in CONTEXT.md); (5) drop "sole"
   from the command-surface-contract.ts baseline-exit wording (semantic.ts
-  also validates exits at compile). Also record for stage 5:
+  also validates exits at compile); (6) point the package
+  CODING_STANDARDS.md at the new global standards Branch Document
+  (docs/agents/coding-standards.md on main, admitted 2d9b4c4) and drop any
+  package rule the global file now owns (one-owner-per-sealed-vocabulary
+  overlaps). Also record for stage 5:
   expectations.ts `cause: string` column shares a name with the sealed
   refusal discriminants (pre-existing, digest-frozen).
 - Deferred-item audit at 915c122: the input_schema_version exact-match
