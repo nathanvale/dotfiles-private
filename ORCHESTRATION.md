@@ -94,21 +94,28 @@ writing-for-agents first. Routine status edits run this checklist alone.
    ask to Nathan.
 3. No unit in flight. Stage 5's schema half is complete: Input Schema
    v2 is declared, validated, canonicalized and fully derived, under
-   version-owned custody with a safe manifest boundary. What remains in
-   Stage 5 is Vault Git qualification itself, which the plan comment's
-   stage-5 row owns: `qualify:vault-git` with declared and observed
-   coverage reported separately and introduced drift caught. That needs
-   Real Process Fixtures and Proof Adapters against the existing CLI,
-   and the plan's named risk 1 applies: if observational proof cannot
-   satisfy the formal claim, an adoption authorization ask surfaces at
-   the gate. Nathan decides when to charter it. Carried follow-ups for
-   whichever unit takes them next: the symlink-escape containment check
-   at the deletion site (lexical safety is proved, symlink escape is
-   not); the bare-string contextual-rendering fail-open, blocked on the
-   spike-digest ruling above; em-dashes in artifact-set.ts,
-   canonical.ts and generate.ts comments against the package ASCII
-   rule; and the 66 measured `as` casts in build-ir.ts, unassigned
-   debt, each needing its own argument. Previously carried and now
+   version-owned custody with a safe manifest boundary. Next unit,
+   AUTHORIZED 2026-08-22: Nathan authorized the narrow Contextual
+   Rendering repair. The two spike candidate digests may move only to
+   close the bare-string target-validation fail-open. The ruling grants
+   no Vault Git qualification, runtime adoption, Specification
+   Admission, Pause release, activation, extraction, push, or stage 6
+   or 7 authority. Dispatch through Ways of work only after issue 55
+   and the vault packet record this same scope.
+   After the repair is accepted, Vault Git qualification remains the
+   Stage 5 outcome, which the plan comment's stage-5 row owns:
+   `qualify:vault-git` with declared and observed coverage reported
+   separately and introduced drift caught. That needs Real Process
+   Fixtures and Proof Adapters against the existing CLI, and the plan's
+   named risk 1 applies: if observational proof cannot satisfy the
+   formal claim, an adoption authorization ask surfaces at the gate.
+   Nathan decides when to charter it. Carried follow-ups for whichever
+   unit takes them next: the symlink-escape containment check at the
+   deletion site (lexical safety is proved, symlink escape is not);
+   em-dashes in artifact-set.ts, canonical.ts and generate.ts comments
+   against the package ASCII rule; and the 66 measured `as` casts in
+   build-ir.ts, unassigned debt, each needing its own argument.
+   Previously carried and now
    closed by the merged units: Scope, all inside the authorized Stage 5: the nine
    surfaces that derive nothing today (S1, S2, S3 as a binding, S4's
    two gates, S8's fact_branch table, S10, S11, S12, S13's emitter,
@@ -426,18 +433,6 @@ to Next or the stage-5 worklist.
   (b) outputDir is relativised out of all three generation refusal
   messages, per the standards rule that a message carries no absolute
   path; subject still carries it where a caller needs it.
-- OPEN, needs Nathan: the vault-git spike candidate declares the
-  contextual rendering "run_repair": "resolved_via_repair_action", and
-  that action id appears nowhere in its catalog (supervisor confirmed:
-  exactly one occurrence in the file, as the rendering target). The
-  cause is a validation fail-open, semantic.ts checks contextual
-  rendering targets only in the array form, so the bare-string form
-  skips the check. The one-line fix is written and reverted: applying
-  it, or fixing the fixture, stops the spike compiling and moves two
-  pinned digests. The plan comment already calls this spike's
-  renderings a drafting defect to correct at candidate-authoring time.
-  Ruling needed: may the two spike digests move, or does this wait for
-  candidate authoring? The fail-open stays open until then.
 - Manifest-read path safety (Stage 5, security boundary): MERGED
   276efd2 (unit commit cb86b6a, receipts at 565a661). A provenance
   manifest is untrusted input, and its declared outputs reached the
