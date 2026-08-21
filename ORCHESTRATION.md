@@ -138,13 +138,25 @@ Delete this file when the feature branch is ready to merge to `main`.
   U+2013, U+2019, U+2026. At cycle end, remove the ORCHESTRATION.md pointer
   from its Authority section and reassign its maintenance line.
 - After every stage merge (and any material change of plan), write the new
-  state back to the vault project packet
-  (`projects/agent-native-state-machine-generator/` in the configured vault):
-  GOAL.md progress and next safe action, README.md current state. Follow the
-  `ultragoal` packet discipline (durable state in the packet, evidence over
-  narration, no running activity log) and `writing-for-agents` prose rules
-  (single source of truth, no mutable git-state snapshots, link owners).
-  Leave vault commits to `vault-git`.
+  state back to the vault project packet. The route:
+  1. Resolve the vault root through `$HOME/.config/context/vault.md`, then
+     follow its entry protocol (vault root AGENTS.md, root README, the
+     `projects/` family README) before writing. The packet is
+     `projects/agent-native-state-machine-generator/`.
+  2. Invoke the `ultragoal` skill (continue mode) and `writing-for-agents`
+     before editing; both disciplines bind: durable state in the packet,
+     evidence over narration, no running activity log, single source of
+     truth, link owners rather than copying, never store mutable git-state
+     snapshots (branch, HEAD, ahead/behind, PR/check status).
+  3. GOAL.md: add one Progress entry per merged unit stating the gate
+     proof observed (test count, digest stability) and any lesson worth a
+     rule, with its witness; rewrite Next safe action to the queue head.
+  4. README.md: correct the frontmatter `summary:` line if stage state
+     moved, extend Current state with what is now true, rewrite Next safe
+     action to match GOAL.md. Update `updated:` in both frontmatters.
+  5. Check `git status` in the vault first and preserve other sessions'
+     staged or modified files; leave edits uncommitted. Commits are
+     `vault-git` work only.
 
 - The code-review contract below runs at the end of every stage; supervisor
   re-runs gate proof independently before merging.
