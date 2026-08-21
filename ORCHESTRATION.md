@@ -96,6 +96,17 @@ Delete this file when the feature branch is ready to merge to `main`.
    supervisor re-runs the gate before merging.
 6. **pattern-referee** joins only when a diff defends structure by pattern
    name; **cli-execution-auditor** joins at stage 4 and 5 reviews.
+7. **Coherence gate (anti-slop), supervisor-owned.** Per-stage reviewers see
+   one diff; coherence debt lives between diffs. After merging parallel
+   stages, run one consolidation unit before the next stage starts, with its
+   own tight brief and review: one meaning per name (no two files or types
+   sharing a name with different meanings), one owner per sealed vocabulary
+   consumed cross-stage, one idiom for refusals/causes/discriminated unions,
+   zero dead guards, every export with a real caller, helper duplicates
+   hoisted. The package keeps ONE front door (`src/index.ts`); internal file
+   fan-out is challenged at each merge (a new file must own a meaning no
+   existing file owns). Track src file and export counts in the stage ledger;
+   unexplained growth is a finding, not a fact.
 - pattern-referee only if a diff defends structure by pattern name;
   cli-execution-auditor at stage 4/5 review.
 - Vault edits for this project exist uncommitted in the vault (another
