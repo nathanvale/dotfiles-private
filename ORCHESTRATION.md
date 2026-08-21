@@ -46,9 +46,39 @@ Delete this file when the feature branch is ready to merge to `main`.
 
 ## Standing supervisor rules
 
-- Two-axis code-review (Standards + Spec sub-agents) before every merge;
-  one repair cycle per stage unless Nathan approves more; supervisor re-runs
-  gate proof independently before merging.
+- The code-review contract below runs at the end of every stage; supervisor
+  re-runs gate proof independently before merging.
+
+## Code-review contract (every stage, before merge)
+
+1. **Order**: agent handback → supervisor re-runs the stage gate (bun test,
+   typecheck, biome) independently → review → repair → re-verify → merge.
+   Gate mechanics are preconditions, not review findings.
+2. **Fixed point**: the commit the stage branch forked from the feature
+   branch; diff is three-dot against it. Review is invalid if the worktree
+   HEAD moves while reviewers run.
+3. **Two axes, parallel, isolated** (Opus sub-agents, report-only, read-only;
+   findings never merged or reranked across axes):
+   - **Standards**: repo AGENTS.md, package CONTEXT.md (vocabulary is
+     contract surface; Avoid terms are refusals, including in diagnostics),
+     neighbouring-package idiom, and the Fowler smell baseline (judgement
+     calls; documented repo standards override; tooling-enforced rules
+     skipped).
+   - **Spec**: issue 55 body plus the plan comment's rulings, scoped to the
+     stage's row. Must verify gate proofs are real (fixtures genuinely
+     falsifiable, nothing passing for the wrong reason), hunt scope creep
+     (invented schema surface, facade edits, new dependencies, next-stage
+     work), and re-derive questionable implementations from the spec text.
+4. **Disposition** is the supervisor's, per finding: must-fix (blocks
+   merge), should-fix (done unless it destabilizes a green gate), or
+   record-only (deferred with a named owning stage, written into this file).
+   The implementing agent may decline a finding with reasons in HANDBACK.md;
+   the supervisor arbitrates and records the ruling.
+5. **One repair cycle** per stage unless Nathan approves more, delivered as
+   one consolidated packet to the same stage agent. After repair the
+   supervisor re-runs the gate before merging.
+6. **pattern-referee** joins only when a diff defends structure by pattern
+   name; **cli-execution-auditor** joins at stage 4 and 5 reviews.
 - pattern-referee only if a diff defends structure by pattern name;
   cli-execution-auditor at stage 4/5 review.
 - Vault edits for this project exist uncommitted in the vault (another
