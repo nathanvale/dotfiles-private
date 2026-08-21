@@ -1,6 +1,6 @@
 #!/bin/bash
 # bin/tmux/upgrade-ai-tools.sh
-# Close AI agent panes, upgrade tools via brew bundle, and respawn agents
+# Close AI agent panes, refresh Brewfile packages, and show agent CLI versions
 
 set -e
 
@@ -77,8 +77,9 @@ main() {
     fi
     echo ""
 
-    # Step 2: Upgrade via brew bundle
-    info "Step 2: Upgrading AI tools via brew..."
+    # Step 2: Refresh packages owned by the Brewfile. Claude Code and Codex
+    # use their native or managed update paths outside Homebrew.
+    info "Step 2: Refreshing Brewfile packages..."
     echo ""
 
     # Show current versions
@@ -93,15 +94,15 @@ main() {
     brew bundle --file="$BREWFILE" 2>&1 | sed 's/^/    /' || true
     echo ""
 
-    # Show new versions
-    echo "  ${BOLD}Updated versions:${NC}"
+    # Show versions after the Brewfile refresh
+    echo "  ${BOLD}Versions after Brewfile refresh:${NC}"
     claude --version 2>/dev/null | head -1 | sed 's/^/    claude: /' || echo "    claude: not installed"
     codex --version 2>/dev/null | head -1 | sed 's/^/    codex: /' || echo "    codex: not installed"
     gemini --version 2>/dev/null | head -1 | sed 's/^/    gemini: /' || echo "    gemini: not installed"
     echo ""
 
     success "========================================="
-    success "  Upgrade complete!"
+    success "  Brewfile refresh complete!"
     success "========================================="
     echo ""
     echo "  Use ${BOLD}Ctrl-g A c/g/x${NC} to spawn AI agents"

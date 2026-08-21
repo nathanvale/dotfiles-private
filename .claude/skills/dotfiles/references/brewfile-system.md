@@ -78,13 +78,16 @@ blueutil, m1ddc, poppler, grep, hl, ffmpeg, pandoc
 ### Shared Casks (all profiles)
 
 karabiner-elements, raycast, 1password, 1password-cli, ghostty, superwhisper,
-obsidian, codex, codexbar, gcloud-cli, visual-studio-code
+obsidian, codex-app, gcloud-cli, visual-studio-code
 
 ### Desktop-Only Casks
 
 slack, discord, zoom, microsoft-teams, microsoft-outlook, firefox, google-chrome,
 notion, chatgpt, claude, betterdisplay, cleanmymac, aldente, imazing,
-philips-hue-sync, raspberry-pi-imager
+philips-hue-sync, raspberry-pi-imager, codexbar
+
+The Claude Code and Codex CLIs are Phase 2 native or managed installs owned by
+`setup.sh`; the Brewfile owns only their desktop applications.
 
 ### Desktop-Only Formulae
 
