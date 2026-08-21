@@ -21,6 +21,24 @@ without a HANDBACK.md (a live stage run; never re-charter over one). Work
 can be in flight; the ledger lags the tree, and the in-flight block under
 Next holds the pipeline position.
 
+## Before committing an edit to this file (every edit)
+
+Structural rewrite (sections reordered, a contract changed): invoke
+writing-for-agents first. Routine status edits run this checklist alone.
+
+1. Each fact this edit touches is stated in exactly one place: edit the
+   existing line, then grep the fact's key term and delete survivors.
+2. Each numeral this edit writes is an observed receipt (a gate run, a
+   merge hash) or is replaced by a pointer to the list, glob, or receipt
+   that owns it; recount any that remain against their source now.
+3. Recorded lines carry closed state with a hash or date. Mutable state
+   (git status, other sessions' work, counts elsewhere on disk) appears
+   only as an instruction to look, resume-step-0 style.
+4. Every item under Next is live: work this edit closed moved to the
+   ledger or was deleted.
+5. A new ledger entry matches the shape rule at the Ledger heading, or
+   this edit rewrites that rule to match precedent and says so.
+
 ## At merge (checklist, in order)
 
 1. Create backup branch `archive/issue-55-orchestration` at the current
