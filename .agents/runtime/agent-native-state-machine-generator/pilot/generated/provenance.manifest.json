@@ -1,0 +1,13 @@
+{
+	"declared_outputs": [
+		"provenance.manifest.json",
+		"src/branch-station-catalog.ts",
+		"src/command-surface-contract.ts",
+		"src/projection-composer.ts",
+		"src/semantic-expectations.ts"
+	],
+	"generator_contract_version": "1",
+	"input_schema_version": "1",
+	"product": "vault-git-reimagined",
+	"specification_digest": "8e7ea8c063a2da5a66b0f42d71a9a069f2a421a67939df1e7a74ff6c4ffc9736"
+}
