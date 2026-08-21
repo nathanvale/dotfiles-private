@@ -240,23 +240,47 @@ describe('verifying a Generated Artifact Set for drift', () => {
 		)
 	})
 
-	test('accepts Handwritten Extensions living beside the declared set', async () => {
-		const dir = await outputDir()
+	test('accepts Handwritten Extensions living outside the output directory', async () => {
+		const root = await outputDir()
+		const dir = join(root, 'generated')
 		const compiled = await compile('vault-git')
 		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
 
-		// Handwritten Extensions, fixtures and proof artifacts are required to
-		// live outside the Generated Artifact Set. They are not unexpected
-		// output, so their presence must not make a correct tree refuse.
-		await Bun.write(join(dir, 'my-fact-provider.ts'), 'export const f = 1\n')
-		await mkdir(join(dir, 'proof'), { recursive: true })
-		await Bun.write(join(dir, 'proof', 'evidence.json'), '{"observed":true}\n')
+		// Handwritten Extensions, fixtures and proof artifacts live OUTSIDE the
+		// generator-owned output directory, as siblings of it. That placement
+		// is what lets them survive regeneration without the generator having
+		// to infer from a naming convention which files it may replace.
+		await Bun.write(join(root, 'my-fact-provider.ts'), 'export const f = 1\n')
+		await mkdir(join(root, 'proof'), { recursive: true })
+		await Bun.write(join(root, 'proof', 'evidence.json'), '{"observed":true}\n')
 
 		const result = await verifyArtifactSet(compiled.ir, compiled.digest, {
 			outputDir: dir,
 		})
 
 		expect(result).toMatchObject({ ok: true })
+	})
+
+	test('refuses an undeclared file dropped inside the output directory', async () => {
+		const dir = await outputDir()
+		const compiled = await compile('vault-git')
+		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
+
+		// The output directory is wholly generator-owned, so a file the set
+		// does not declare is refused even though no manifest ever named it.
+		await Bun.write(join(dir, 'orphan.json'), '{"hand":"dropped"}\n')
+
+		const result = await verifyArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+		})
+
+		expect(result.ok).toBe(false)
+		if (result.ok) return
+		expect(result.cause).toBe('generated_drift')
+		const unexpected = result.findings.filter(
+			(finding) => finding.reason === 'unexpected_artifact',
+		)
+		expect(unexpected.map((finding) => finding.path)).toContain('orphan.json')
 	})
 
 	test('refuses a set with no provenance manifest at all', async () => {
@@ -301,18 +325,20 @@ describe('verifying a Generated Artifact Set for drift', () => {
 })
 
 describe('regenerating a Generated Artifact Set', () => {
-	test('replaces the complete set and leaves non-declared files untouched', async () => {
-		const dir = await outputDir()
+	test('replaces the complete set and leaves files outside it untouched', async () => {
+		const root = await outputDir()
+		const dir = join(root, 'generated')
 		const compiled = await compile('vault-git')
 		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
 
-		// A Handwritten Extension and a proof artifact sharing the directory.
+		// A Handwritten Extension and a proof artifact, as siblings of the
+		// generator-owned output directory.
 		await Bun.write(
-			join(dir, 'handwritten-extension.ts'),
+			join(root, 'handwritten-extension.ts'),
 			'export const fact = 1\n',
 		)
-		await mkdir(join(dir, 'proof'), { recursive: true })
-		await Bun.write(join(dir, 'proof', 'evidence.json'), '{"observed":true}\n')
+		await mkdir(join(root, 'proof'), { recursive: true })
+		await Bun.write(join(root, 'proof', 'evidence.json'), '{"observed":true}\n')
 		// Drift both declared artifacts.
 		await Bun.write(join(dir, 'specification-summary.json'), 'stale\n')
 		await Bun.write(join(dir, 'provenance.manifest.json'), '{}\n')
@@ -327,10 +353,10 @@ describe('regenerating a Generated Artifact Set', () => {
 			await verifyArtifactSet(compiled.ir, compiled.digest, { outputDir: dir }),
 		).toMatchObject({ ok: true })
 		// ...and nothing outside the declared set was written, moved or removed.
-		expect(await Bun.file(join(dir, 'handwritten-extension.ts')).text()).toBe(
+		expect(await Bun.file(join(root, 'handwritten-extension.ts')).text()).toBe(
 			'export const fact = 1\n',
 		)
-		expect(await Bun.file(join(dir, 'proof', 'evidence.json')).text()).toBe(
+		expect(await Bun.file(join(root, 'proof', 'evidence.json')).text()).toBe(
 			'{"observed":true}\n',
 		)
 	})
@@ -361,6 +387,35 @@ describe('regenerating a Generated Artifact Set', () => {
 		expect(
 			await verifyArtifactSet(compiled.ir, compiled.digest, { outputDir: dir }),
 		).toMatchObject({ ok: true })
+	})
+
+	test('leaves the existing set intact when a new declared path cannot be written', async () => {
+		const dir = await outputDir()
+		const compiled = await compile('vault-git')
+		await generateArtifactSet(compiled.ir, compiled.digest, { outputDir: dir })
+		const before = await snapshot(dir)
+
+		// A declared path whose rename cannot complete: a non-empty directory
+		// already occupies the target name. This reaches the filesystem, unlike
+		// an emitter that throws before any write happens.
+		await mkdir(join(dir, 'blocked.json'), { recursive: true })
+		await Bun.write(join(dir, 'blocked.json', 'occupant.txt'), 'x\n')
+
+		const result = await regenerateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+			emitters: [
+				...DEFAULT_TEST_EMITTERS,
+				{ name: 'blocked', emit: () => new Map([['blocked.json', '{}\n']]) },
+			],
+		})
+
+		expect(result.ok).toBe(false)
+		// Fail closed: a replacement that cannot finish must not destroy the
+		// set it was replacing. Every previously declared artifact survives
+		// with its original bytes.
+		for (const [path, contents] of before) {
+			expect(await Bun.file(join(dir, path)).text()).toBe(contents)
+		}
 	})
 
 	test('leaves an existing set intact when regeneration fails', async () => {

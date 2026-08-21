@@ -183,7 +183,7 @@ async function writeArtifacts(
 	artifacts: ReadonlyMap<string, string>,
 ): Promise<void> {
 	for (const [path, contents] of artifacts) {
-		const absolute = join(dir, ...path.split('/'))
+		const absolute = resolveOutput(dir, path)
 		await mkdir(dirname(absolute), { recursive: true })
 		await Bun.write(absolute, contents)
 	}
@@ -200,7 +200,7 @@ async function writeArtifacts(
 async function replaceArtifactSet(
 	outputDir: string,
 	artifacts: ReadonlyMap<string, string>,
-	declaredOutputs: readonly string[],
+	supersededOutputs: readonly string[],
 ): Promise<GenerationFailure | undefined> {
 	const parent = dirname(outputDir)
 	let staging: string | undefined
@@ -210,16 +210,29 @@ async function replaceArtifactSet(
 		await writeArtifacts(staging, artifacts)
 
 		await mkdir(outputDir, { recursive: true })
-		// Remove only what the previous set declared. Handwritten Extensions,
-		// fixtures and proof artifacts that share the directory must survive an
-		// intentional regeneration untouched.
-		await removeDeclaredOutputs(outputDir, declaredOutputs)
 
+		// Move the new set into place BEFORE removing anything.
+		//
+		// Removing first would mean a rename that cannot complete — a target
+		// name already occupied by a directory, a permission failure — leaves
+		// neither the old set nor the new one on disk. Renaming first makes
+		// each declared path go straight from its old bytes to its new bytes,
+		// so a failure part-way through leaves a set that is still complete,
+		// just partly superseded, rather than a hole where an artifact was.
 		for (const path of artifacts.keys()) {
-			const target = join(outputDir, ...path.split('/'))
+			const target = resolveOutput(outputDir, path)
 			await mkdir(dirname(target), { recursive: true })
-			await rename(join(staging, ...path.split('/')), target)
+			await rename(resolveOutput(staging, path), target)
 		}
+
+		// Only now remove what the previous set declared and the new one does
+		// not: a retired artifact must not linger beside the set that replaced
+		// it. Paths the new set just wrote are excluded, or this would delete
+		// the artifacts written above.
+		await removeSupersededOutputs(
+			outputDir,
+			supersededOutputs.filter((path) => !artifacts.has(path)),
+		)
 		return undefined
 	} catch (error) {
 		return {
@@ -232,13 +245,18 @@ async function replaceArtifactSet(
 	}
 }
 
-/** Removes exactly the named relative paths, and no directory that still holds other files. */
-async function removeDeclaredOutputs(
+/** Resolves one forward-slashed declared output path against a directory. */
+function resolveOutput(dir: string, path: string): string {
+	return join(dir, ...path.split('/'))
+}
+
+/** Removes exactly the named relative paths, and nothing else. */
+async function removeSupersededOutputs(
 	dir: string,
-	declaredOutputs: readonly string[],
+	supersededOutputs: readonly string[],
 ): Promise<void> {
-	for (const path of declaredOutputs) {
-		await rm(join(dir, ...path.split('/')), { force: true })
+	for (const path of supersededOutputs) {
+		await rm(resolveOutput(dir, path), { force: true })
 	}
 }
 
@@ -387,10 +405,7 @@ export async function verifyArtifactSet(
 
 		const expected = new Map<string, string>()
 		for (const path of await listFiles(isolated)) {
-			expected.set(
-				path,
-				await Bun.file(join(isolated, ...path.split('/'))).text(),
-			)
+			expected.set(path, await Bun.file(resolveOutput(isolated, path)).text())
 		}
 
 		const findings: DriftFinding[] = []
@@ -411,16 +426,22 @@ export async function verifyArtifactSet(
 				message: `the manifest records specification digest ${manifest.digest || '(unreadable)'}, but the admitted input digests to ${digest.specificationDigest}`,
 			})
 
-		// Only the declared output set is inspected. Files the set never named
-		// are Handwritten Extensions or proof artifacts, not unexpected output.
+		// The output directory is wholly generator-owned: every file inside it
+		// belongs to the Generated Artifact Set. Handwritten Extensions, the
+		// Extension Registry, Real Process Fixtures and Proof Adapters live
+		// outside this directory, which is what lets them survive regeneration
+		// without the generator having to guess from a naming convention which
+		// files are safe to replace.
+		//
+		// So anything on disk that the regenerated set does not declare is
+		// unexpected, whether or not the manifest ever named it. A stale
+		// artifact left behind by a retired emitter and a hand-dropped file are
+		// the same refusal: generated output is never a second authority.
 		const onDisk = new Set(await listFiles(options.outputDir))
-		const claimed = new Set([
-			...declaredOutputs,
-			...(manifest.present ? manifest.declaredOutputs : []),
-		])
+		const previouslyDeclaredOutputs = new Set(onDisk)
 
 		for (const path of declaredOutputs) {
-			const absolute = join(options.outputDir, ...path.split('/'))
+			const absolute = resolveOutput(options.outputDir, path)
 			if (!onDisk.has(path)) {
 				findings.push({
 					reason: 'missing_artifact',
@@ -438,12 +459,12 @@ export async function verifyArtifactSet(
 				})
 		}
 
-		for (const path of [...claimed].sort()) {
-			if (!expected.has(path) && onDisk.has(path))
+		for (const path of [...previouslyDeclaredOutputs].sort()) {
+			if (!expected.has(path))
 				findings.push({
 					reason: 'unexpected_artifact',
 					path,
-					message: `"${path}" is declared by the manifest on disk but is not part of the regenerated set`,
+					message: `"${path}" is present in the generated output directory but is not part of the regenerated set`,
 				})
 		}
 
