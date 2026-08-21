@@ -1,0 +1,230 @@
+/**
+ * Structural validation: does the parsed tree match Input Schema v1?
+ *
+ * Collects every structural problem rather than stopping at the first, so an
+ * author repairing a candidate sees the whole structural picture in one run.
+ */
+import { type Diagnostic, diagnostic } from './diagnostics.ts'
+import type { JsoncNode } from './jsonc.ts'
+import { type Shape, SPECIFICATION_SHAPE } from './schema.ts'
+
+export function validateStructure(
+	root: JsoncNode,
+	sourcePath?: string,
+): Diagnostic[] {
+	const diagnostics: Diagnostic[] = []
+	walk(root, SPECIFICATION_SHAPE, '', diagnostics, sourcePath)
+	return diagnostics
+}
+
+function push(
+	diagnostics: Diagnostic[],
+	sourcePath: string | undefined,
+	cause:
+		| 'structure_missing_required'
+		| 'structure_unknown_key'
+		| 'structure_type_mismatch'
+		| 'structure_value_not_permitted',
+	message: string,
+	path: string,
+	node: {
+		readonly line: number
+		readonly column: number
+		readonly offset: number
+	},
+): void {
+	diagnostics.push(
+		diagnostic({
+			cause,
+			stage: 'structural',
+			message,
+			path,
+			location: node,
+			...(sourcePath === undefined ? {} : { sourcePath }),
+		}),
+	)
+}
+
+/** Union members are tried silently; only a total failure is reported. */
+function matches(node: JsoncNode, shape: Shape): boolean {
+	const probe: Diagnostic[] = []
+	walk(node, shape, '', probe, undefined)
+	return probe.length === 0
+}
+
+function walk(
+	node: JsoncNode,
+	shape: Shape,
+	path: string,
+	diagnostics: Diagnostic[],
+	sourcePath: string | undefined,
+): void {
+	switch (shape.t) {
+		case 'union': {
+			const winner = shape.of.find((candidate) => matches(node, candidate))
+			if (winner === undefined) {
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_type_mismatch',
+					`Value at ${path || '<root>'} does not match any permitted shape for this field.`,
+					path,
+					node.loc,
+				)
+			}
+			return
+		}
+
+		case 'string': {
+			if (node.kind !== 'string') {
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_type_mismatch',
+					`Expected a string at ${path}; found ${node.kind}.`,
+					path,
+					node.loc,
+				)
+				return
+			}
+			if (shape.nonEmpty === true && node.value.trim() === '') {
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_value_not_permitted',
+					`Value at ${path} must not be empty.`,
+					path,
+					node.loc,
+				)
+				return
+			}
+			if (shape.enum !== undefined && !shape.enum.includes(node.value)) {
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_value_not_permitted',
+					`Value ${JSON.stringify(node.value)} at ${path} is not in the sealed vocabulary [${shape.enum.join(', ')}].`,
+					path,
+					node.loc,
+				)
+			}
+			return
+		}
+
+		case 'number':
+			if (node.kind !== 'number') {
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_type_mismatch',
+					`Expected a number at ${path}; found ${node.kind}.`,
+					path,
+					node.loc,
+				)
+			}
+			return
+
+		case 'boolean':
+			if (node.kind !== 'boolean') {
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_type_mismatch',
+					`Expected a boolean at ${path}; found ${node.kind}.`,
+					path,
+					node.loc,
+				)
+			}
+			return
+
+		case 'array': {
+			if (node.kind !== 'array') {
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_type_mismatch',
+					`Expected an array at ${path}; found ${node.kind}.`,
+					path,
+					node.loc,
+				)
+				return
+			}
+			node.items.forEach((item, index) => {
+				walk(item, shape.of, `${path}[${index}]`, diagnostics, sourcePath)
+			})
+			return
+		}
+
+		case 'map': {
+			if (node.kind !== 'object') {
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_type_mismatch',
+					`Expected an object at ${path}; found ${node.kind}.`,
+					path,
+					node.loc,
+				)
+				return
+			}
+			for (const entry of node.entries) {
+				walk(
+					entry.value,
+					shape.of,
+					join(path, entry.key),
+					diagnostics,
+					sourcePath,
+				)
+			}
+			return
+		}
+
+		case 'object': {
+			if (node.kind !== 'object') {
+				push(
+					diagnostics,
+					sourcePath,
+					'structure_type_mismatch',
+					`Expected an object at ${path || '<root>'}; found ${node.kind}.`,
+					path,
+					node.loc,
+				)
+				return
+			}
+			const present = new Set<string>()
+			for (const entry of node.entries) {
+				present.add(entry.key)
+				const field = shape.fields[entry.key]
+				if (field === undefined) {
+					push(
+						diagnostics,
+						sourcePath,
+						'structure_unknown_key',
+						`Unknown key ${JSON.stringify(entry.key)} at ${path || '<root>'}. Input Schema v1 admits only the keys the admitted candidates use.`,
+						join(path, entry.key),
+						entry.keyLoc,
+					)
+					continue
+				}
+				walk(entry.value, field, join(path, entry.key), diagnostics, sourcePath)
+			}
+			for (const key of shape.required) {
+				if (!present.has(key)) {
+					push(
+						diagnostics,
+						sourcePath,
+						'structure_missing_required',
+						`Missing required key ${JSON.stringify(key)} at ${path || '<root>'}.`,
+						join(path, key),
+						node.loc,
+					)
+				}
+			}
+			return
+		}
+	}
+}
+
+function join(path: string, key: string): string {
+	return path === '' ? key : `${path}.${key}`
+}

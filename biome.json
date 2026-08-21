@@ -20,7 +20,18 @@
 			"!.worktrees",
 			"!.claude/worktrees",
 			"!config/raycast",
-			"!.agents"
+			"!.agents/skills",
+			"!.agents/runtime/agent-worktree",
+			"!.agents/runtime/browser-connect",
+			"!.agents/runtime/browser-use-security",
+			"!.agents/runtime/cli-command-facade",
+			"!.agents/runtime/cli-test-fixtures",
+			"!.agents/runtime/mcporter-transport",
+			"!.agents/runtime/session-corpus",
+			"!.agents/runtime/vault-git-transaction-manager",
+			"!.agents/runtime/warm-chrome",
+			"!.agents/runtime/agent-native-state-machine-generator/prototypes",
+			"!.agents/runtime/agent-native-state-machine-generator/fixtures"
 		]
 	},
 	"formatter": {

@@ -137,6 +137,11 @@ _Avoid_: Gate, Operation Progress, worker health, completion
 Authoritative evidence that accepted logical work is advancing.
 _Avoid_: Gate Availability, heartbeat alone, process existence
 
+**Progress Owner**:
+The party that authoritative evidence says is advancing accepted logical work.
+A `wait` names it so a caller knows who to observe rather than busy-polling.
+_Avoid_: Gate Availability, heartbeat alone, assignee
+
 **Cancellation**:
 A product-conditional lifecycle from request through delivery, effectiveness,
 cleanup, and terminal outcome, or an explicit declaration that cancellation is
