@@ -46,6 +46,13 @@ Delete this file when the feature branch is ready to merge to `main`.
 
 ## Standing supervisor rules
 
+- Maintain the package `CODING_STANDARDS.md` as the harvest of supervision:
+  when a review or repair cycle surfaces a defect class a written rule would
+  have prevented, add one rule stating the idiom (with the lesson it came
+  from), and point every subsequent Standards reviewer at the file. Rules
+  enter only from witnessed findings, never speculation; a rule tooling
+  starts enforcing is deleted. Naming stays in AGENTS.md, vocabulary in
+  CONTEXT.md; the standards file points rather than copies.
 - After every stage merge, reconcile the package
   `AGENTS.md` (`.agents/runtime/agent-native-state-machine-generator/AGENTS.md`):
   add or correct Map rows for files the stage introduced, update Invariants
