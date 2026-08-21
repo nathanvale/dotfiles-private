@@ -19,3 +19,4 @@ Scope, admission, and the edit rule:
 | [`hooks.md`](hooks.md) | Adding or changing a hook in either harness |
 | [`startup-prompt-budget.md`](startup-prompt-budget.md) | Trimming startup context, or setting a `disable*` key in `settings.json` |
 | [`determinism-and-steering.md`](determinism-and-steering.md) | Sorting a rule into gate, clause, or delete |
+| [`coding-standards.md`](coding-standards.md) | Authoring or reviewing code or tests |
