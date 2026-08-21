@@ -81,6 +81,21 @@ function withSingleBlocker(
 	return { ...ir, blockers: [blocker] }
 }
 
+/**
+ * The complete amendment chain as one owner, exported so a test that amends a
+ * compiled IR itself applies exactly the amendments `emitAmended` applies
+ * rather than inlining a divergent copy.
+ */
+export function amendForEmission(ir: SpecificationIr): SpecificationIr {
+	const withBinding = withNoArgumentCommand(
+		withPreviewableMutations(ir),
+		// The behavior each candidate declares; `help` for fallow, the status
+		// dashboard for vault-git (whose `status` command already exists).
+		ir.commandSurface.noArgumentBehavior === 'help' ? 'help' : 'status',
+	)
+	return withSingleBlocker(withBinding, ir.blockers[0] ?? 'runtime_unavailable')
+}
+
 export async function emitAmended(
 	product: 'vault-git' | 'fallow',
 	options: DerivationOptions = {},
@@ -88,18 +103,7 @@ export async function emitAmended(
 	const compiled = compileSpecificationCandidate(await readCandidate(product))
 	if (!compiled.ok) throw new Error(`${product} candidate failed to compile`)
 
-	const withBinding = withNoArgumentCommand(
-		withPreviewableMutations(compiled.ir),
-		// The behavior each candidate declares; `help` for fallow, the status
-		// dashboard for vault-git (whose `status` command already exists).
-		compiled.ir.commandSurface.noArgumentBehavior === 'help'
-			? 'help'
-			: 'status',
-	)
-	const ir = withSingleBlocker(
-		withBinding,
-		compiled.ir.blockers[0] ?? 'runtime_unavailable',
-	)
+	const ir = amendForEmission(compiled.ir)
 	const emission = deriveArtifactSet(
 		ir,
 		compiled.digest.specificationDigest,

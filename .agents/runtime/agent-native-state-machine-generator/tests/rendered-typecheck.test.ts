@@ -1,5 +1,7 @@
 import { describe, expect, test } from 'bun:test'
-import { rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { emitAmended } from './support/emission.ts'
 
 /**
@@ -9,9 +11,11 @@ import { emitAmended } from './support/emission.ts'
  * Asserting on the emitted values proves the shape this package built; it does
  * not prove that the *text* this package writes into a consumer compiles. Only
  * running the type checker over the rendered source proves that, so the
- * rendered modules are written to a scratch directory and checked there. The
- * scratch directory is outside any repository, and nothing is written into a
- * consumer.
+ * rendered module is written to a scratch directory under the system temp
+ * dir, outside any repository, and checked there. The scratch directory links
+ * this package's node_modules, so the facade package name and the workspace's
+ * type packages resolve exactly as they do for a consumer, and nothing is
+ * written into a consumer or into this repository.
  */
 
 /** Scratch file name, assembled so it is never a resolvable import. */
@@ -29,13 +33,10 @@ async function renderVaultGitCatalog(): Promise<string> {
 describe('the rendered catalog satisfies the facade types under tsc', () => {
 	test('const satisfies readonly BranchStation[] type-checks', async () => {
 		const contents = await renderVaultGitCatalog()
-		// Checked inside the package so the facade package name and the
-		// workspace's type packages resolve exactly as they do for a consumer.
-		// The file name is scratch-only and removed in `finally`; it is never a
-		// declared artifact and never committed.
-		// Built from parts so no static analyzer reads this as an import
-		// specifier: the file does not exist until this test writes it.
-		const file = new URL(`./${SCRATCH_BASENAME}`, import.meta.url).pathname
+		const packageRoot = new URL('..', import.meta.url).pathname
+		// The whole scratch directory is removed in `finally`; a crash strands it
+		// under the system temp dir, never inside a repository.
+		const dir = await mkdtemp(join(tmpdir(), 'asmg-rendered-typecheck-'))
 		try {
 			// The rendered catalog imports a consumer discovery module that does not
 			// exist here. Only that one import specifier is rewritten; every line
@@ -47,11 +48,33 @@ describe('the rendered catalog satisfies the facade types under tsc', () => {
 					'const projectDiscovery = () => ({ commands: {} })\n',
 				)
 				.replace(/project\w*CommandDiscoveryTree\(\)/g, 'projectDiscovery()')
-			await writeFile(file, checkable, 'utf8')
+			await writeFile(join(dir, SCRATCH_BASENAME), checkable, 'utf8')
+			// The package's module tree, linked rather than copied, so the facade
+			// resolves through its real package.json exports. `rm` removes the
+			// link itself, never the linked tree.
+			await symlink(
+				join(packageRoot, 'node_modules'),
+				join(dir, 'node_modules'),
+			)
+			// The package tsconfig's compiler options verbatim; only the input
+			// file set is overridden to exactly the scratch module.
+			await writeFile(
+				join(dir, 'tsconfig.json'),
+				`${JSON.stringify(
+					{
+						extends: join(packageRoot, 'tsconfig.json'),
+						include: [],
+						files: [`./${SCRATCH_BASENAME}`],
+					},
+					null,
+					'\t',
+				)}\n`,
+				'utf8',
+			)
 
 			const result = Bun.spawnSync(
-				['bunx', 'tsc', '--noEmit', '-p', 'tsconfig.emit-scratch.json'],
-				{ cwd: new URL('..', import.meta.url).pathname },
+				['bunx', 'tsc', '--noEmit', '-p', join(dir, 'tsconfig.json')],
+				{ cwd: packageRoot },
 			)
 			const output = `${result.stdout.toString()}${result.stderr.toString()}`
 			expect({ exitCode: result.exitCode, output }).toEqual({
@@ -59,7 +82,7 @@ describe('the rendered catalog satisfies the facade types under tsc', () => {
 				output: '',
 			})
 		} finally {
-			await rm(file, { force: true })
+			await rm(dir, { recursive: true, force: true })
 		}
 	}, 120_000)
 

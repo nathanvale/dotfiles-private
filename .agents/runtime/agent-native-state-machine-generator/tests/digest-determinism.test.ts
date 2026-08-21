@@ -1,9 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import {
-	compileSpecificationCandidate,
-	GENERATOR_CONTRACT_VERSION,
-	INPUT_SCHEMA_VERSION,
-} from '../src/index.ts'
+import { compileSpecificationCandidate } from '../src/index.ts'
 import { readCandidate, readPermutedCandidate } from './support/candidates.ts'
 
 describe('specification digest', () => {
@@ -110,14 +106,15 @@ describe('specification digest', () => {
 		)
 	})
 
-	test('envelope distinguishes input schema version from generator contract version', async () => {
+	test('envelope carries the pinned schema and contract versions', async () => {
 		const result = compileSpecificationCandidate(await readCandidate('fallow'))
 
 		expect(result.ok).toBe(true)
 		if (!result.ok) return
-		expect(result.digest.inputSchemaVersion).toBe(INPUT_SCHEMA_VERSION)
-		expect(result.digest.generatorContractVersion).toBe(
-			GENERATOR_CONTRACT_VERSION,
-		)
+		// Deliberate independent oracle: the pinned version literals restated, not
+		// the exported constants the envelope is stamped from. Asserting the
+		// imports back would move with any version bump and prove nothing.
+		expect(result.digest.inputSchemaVersion).toBe('1')
+		expect(result.digest.generatorContractVersion).toBe('1')
 	})
 })
