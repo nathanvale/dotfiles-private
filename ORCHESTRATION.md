@@ -64,7 +64,24 @@ Delete this file when the feature branch is ready to merge to `main`.
   generate/verify proof, contract-term renames (emit-facade.ts and the
   emit-* family), vocabulary hoists, dedupe residue (semantic.ts
   duplicate-id loops confirmed still present at fork). Completion signal
-  HANDBACK.md; then supervisor gate re-run, review, repair, merge.
+  HANDBACK.md; then supervisor gate re-run, review, repair, merge. Review
+  complete 2026-08-21: gate proofs all reproduced independently; repair
+  cycle 1 dispatched (REPAIR-PACKET.md at the consolidation worktree root:
+  must-fix M1 write-preview oracle tautology, six should-fix items;
+  generation_emit_refused and EmissionResult arbitrated in scope).
+- Post-merge AGENTS.md reconciliation worklist (package AGENTS.md, from the
+  2026-08-21 writing-for-agents review; the unit already reconciled the Map
+  rows for the renamed files): (1) delete the Checks sentence claiming
+  repo-level `bun run lint` fails (claim false, and the root AGENTS.md Proof
+  bullet it cites was deleted on main at 513ff2f); (2) replace the two
+  U+2014 em dashes in the generate.ts Map row; (3) reword the refusal.ts
+  row: it owns the artifact refusal shape and the idiom others converge on,
+  not "the shape every module reports in"; (4) reword "Generator Contract"
+  in the diagnostics.ts row (term undefined in CONTEXT.md); (5) drop "sole"
+  from the command-surface-contract.ts baseline-exit wording (semantic.ts
+  also validates exits at compile). Also record for stage 5:
+  expectations.ts `cause: string` column shares a name with the sealed
+  refusal discriminants (pre-existing, digest-frozen).
 - Deferred-item audit at 915c122: the input_schema_version exact-match
   check never landed in stage 2 (schema.ts requires nonEmpty only;
   canonical.ts stamps the pinned constant regardless of the declared
