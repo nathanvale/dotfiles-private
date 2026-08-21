@@ -92,8 +92,18 @@ writing-for-agents first. Routine status edits run this checklist alone.
    Runtime adoption, Specification Admission, Pause release,
    activation, extraction, and stages 6 to 7 each remain a separate
    ask to Nathan.
-3. Next unit, chartered but not launched: Input Schema v2 derivation
-   consumers. Scope, all inside the authorized Stage 5: the nine
+3. In flight: Input Schema v2 derivation consumers at
+   `.worktrees/issue-55-derivation-consumers`, branch
+   feat/issue-55-derivation-consumers, fixed point 855570f. Charter:
+   AGENT-BRIEF.md at that worktree root, four parts in order (custody
+   blockers, the nine consumers, the S4 remodel, rulings and standards
+   items); archive to receipts/derivation-consumers/ at merge.
+   Completion signal: DERIVATION-CONSUMERS-HANDBACK.md. Worker:
+   claude-handoff session ee33d43c, name "Issue 55 derivation consumers
+   worker", admitted 2026-08-22 with job state resolving claude-opus-5
+   at effort high. Partial handback at a coherent Part boundary is
+   chartered as acceptable; an honest partial beats an overstated
+   close. Scope: Scope, all inside the authorized Stage 5: the nine
    surfaces that derive nothing today (S1, S2, S3 as a binding, S4's
    two gates, S8's fact_branch table, S10, S11, S12, S13's emitter,
    S14); the S4 remodel to per-observation, which the accepted issue
