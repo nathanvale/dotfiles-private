@@ -34,13 +34,22 @@ Delete this file when the feature branch is ready to merge to `main`.
   typed-IR widening (acknowledgement/waits/cancellation/authority/versioning
   absent from SpecificationIr; ir.canonical is complete), dedup extraction of
   the three duplicate-id loops in semantic.ts.
-- Stages 2 ∥ 3: RUNNING in `.worktrees/issue-55-stage2`
-  (`feat/issue-55-stage2-generation`) and `.worktrees/issue-55-stage3`
-  (`feat/issue-55-stage3-contracts`), one Opus 5 bg agent each. Expected
-  merge conflict: both add exports to the package `src/index.ts`; supervisor
-  resolves at integration and wires stage 3 emitters into stage 2 generation
-  with a joint proof. Zero facade modification before stage 5; ADD-1/ADD-2
-  are separately reviewed stage-5 prerequisites.
+- Stage 2 (generation mechanics): MERGED at 6196783. Post-repair gate 51
+  tests, typecheck, Biome clean. Repair closed the delete-before-rename
+  fail-closed defect and applied the generator-owned outputDir ruling
+  (Handwritten Extensions live beside, never inside, the output directory).
+  `regenerateArtifactSet` now refuses a target with no manifest
+  (`generation_no_existing_set`). Reasoned decline on record: verify keeps
+  its temp-dir regeneration (matches the spec's "regenerating in isolation"
+  literally). Ledger counts at this merge: 11 src files, 11 index.ts
+  export statements.
+- Stage 3 (facade contracts): repair cycle 1 in progress in
+  `.worktrees/issue-55-stage3` (`feat/issue-55-stage3-contracts`). Its merge
+  will conflict with stage 2 in `src/index.ts` and on the duplicate
+  `src/emit.ts` name; the supervisor resolves both, then the consolidation
+  unit (task 7) wires emitters into DEFAULT_EMITTERS with a joint proof
+  before stage 4. Zero facade modification before stage 5; ADD-1/ADD-2 are
+  separately reviewed stage-5 prerequisites.
 - Stage 4 pilot, then stages 5-7 only with Nathan's go-ahead (stage 5 carries
   the 13-decision admission worklist).
 
