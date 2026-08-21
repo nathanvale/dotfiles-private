@@ -2,7 +2,10 @@
 
 Idioms this package's reviews enforce. Naming and operating invariants live in
 [`AGENTS.md`](AGENTS.md); vocabulary in [`CONTEXT.md`](CONTEXT.md). Biome and
-tsc own format and lint; nothing here restates them.
+tsc own format and lint; nothing here restates them. Cross-package rules live
+in the repository's global standards document
+([`docs/agents/coding-standards.md`](../../../docs/agents/coding-standards.md));
+this file holds package-specific idioms only and points rather than restates.
 
 ## Results and refusals
 
@@ -24,9 +27,8 @@ tsc own format and lint; nothing here restates them.
   derived from the schema), not casts. A cast defeating the checker is a
   defect, not a convenience.
 - Seal closed meanings as literal unions, never bare `string`, so tsc owns
-  exhaustiveness (the `BranchKind` lesson).
-- One owner per sealed vocabulary. A second copy in another file is a defect
-  (the write-implying-mutations lesson).
+  exhaustiveness (the `BranchKind` lesson). One owner per sealed vocabulary
+  is a global rule; the global standards document owns it.
 
 ## Control flow
 

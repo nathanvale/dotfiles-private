@@ -69,7 +69,7 @@ Delete this file when the feature branch is ready to merge to `main`.
   export statements, 127 tests. DEFAULT_EMITTERS is now front-door;
   BaselineExitCode deleted (zero callers); GenerationFailure carries
   subject.
-- NEXT (in order): (a) package AGENTS.md reconciliation, worklist below;
+- NEXT (in order): (a) DONE 2026-08-21: package AGENTS.md reconciled (worklist below closed);
   (b) DONE 2026-08-21: vault packet written back (GOAL.md progress and
   next action, README.md current state; edits uncommitted in the vault,
   vault-git owns the commit); (c) standards fit review over all 34
