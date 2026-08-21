@@ -441,6 +441,15 @@ export async function verifyArtifactSet(
 
 	// Isolation: the regeneration lands in a system temp directory, never in
 	// the working tree, and is removed before this function returns.
+	//
+	// The round-trip through the filesystem is deliberate, not ceremony.
+	// Comparing rendered strings against file bytes would skip whatever the
+	// filesystem does to content on the way through, and would not prove the
+	// rendered set can exist as a directory tree at all — which is exactly
+	// what generation will later attempt. Materialising here means
+	// verification exercises the same path generation does, and it matches
+	// the specification's "regenerating the complete output set in isolation"
+	// literally. The cost is one temp directory per verification.
 	const isolated = await mkdtemp(join(tmpdir(), 'asmg-verify-'))
 	try {
 		await writeArtifacts(isolated, rendered.artifacts)
@@ -480,7 +489,6 @@ export async function verifyArtifactSet(
 		// artifact left behind by a retired emitter and a hand-dropped file are
 		// the same refusal: generated output is never a second authority.
 		const onDisk = new Set(await listFiles(options.outputDir))
-		const previouslyDeclaredOutputs = new Set(onDisk)
 
 		for (const path of declaredOutputs) {
 			const absolute = resolveOutput(options.outputDir, path)
@@ -501,7 +509,7 @@ export async function verifyArtifactSet(
 				})
 		}
 
-		for (const path of [...previouslyDeclaredOutputs].sort()) {
+		for (const path of [...onDisk].sort()) {
 			if (!expected.has(path))
 				findings.push({
 					reason: 'unexpected_artifact',
