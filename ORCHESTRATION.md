@@ -65,11 +65,9 @@ writing-for-agents first. Routine status edits run this checklist alone.
 
 ## Next
 
-1. Awaiting Nathan, both recorded on issue 55 (comment 2026-08-21):
-   pilot Specification Admission (the candidate is an unadmitted draft;
-   the digest-moving invariant-prose fix, bare "branch" to Branch
-   Station, bundles with the admission edit), and the stage 5 to 7
-   go-ahead.
+1. Awaiting Nathan: the stage 5 to 7 go-ahead, and the stage-5 decision
+   packet rulings (receipts/stage5-decision-packet.md, posted to issue
+   55).
 2. IN FLIGHT 2026-08-21, the plan comment's two parallel tracks: (a)
    the Agent Worktree candidate draft (schema insurance due before the
    first admission hardens Input Schema v1), worktree
@@ -225,6 +223,15 @@ to Next or the stage-5 worklist.
   stay unadmitted. Twelve rules now in CODING_STANDARDS.md. Gate: 140
   tests, typecheck, Biome, pilot verify clean, spike digests
   byte-identical.
+- Pilot Specification Admission: 657045e, Nathan's explicit act
+  2026-08-21 ("admit the pilot", this supervisor session; recorded in
+  the candidate header and on issue 55). Bundled digest-moving edits:
+  the arbitrated invariant-prose fix and spec_meta identities to
+  revision 1. Set regenerated under admitted digest af827747..b3e99a
+  after the stale-set refusal fired correctly. Gate: 176 tests,
+  typecheck, Biome, verify clean, raw smoke exit 0. The pilot's
+  generated Admitted banner is now true; the pilot still claims nothing
+  toward qualification.
 - Findings repair (F2, F5, F6, F8, F9): MERGED 7dcd47c (five unit
   commits, fork 7062fb1, tests and fixtures only). Gate: 176 tests,
   typecheck, Biome, pilot verify clean, spike digests byte-identical;
