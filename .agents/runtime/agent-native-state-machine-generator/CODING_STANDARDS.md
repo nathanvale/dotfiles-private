@@ -46,6 +46,10 @@ this file holds package-specific idioms only and points rather than restates.
 - Derive meaning from declared candidate surface. Where the schema cannot
   express a required meaning, refuse with a sealed cause; never substitute a
   hardcoded default that masquerades as derivation.
+- A switch over a sealed union ends in an explicit exhaustiveness check
+  (`const _: never = value`), never a catch-all `default`. A non-optional
+  return type is not the proof: `walk` returns `void`, so a new `Shape`
+  variant compiles clean and validates nothing.
 
 ## Text
 

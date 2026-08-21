@@ -72,9 +72,14 @@ Delete this file when the feature branch is ready to merge to `main`.
 - NEXT (in order): (a) DONE 2026-08-21: package AGENTS.md reconciled (worklist below closed);
   (b) DONE 2026-08-21: vault packet written back (GOAL.md progress and
   next action, README.md current state; edits uncommitted in the vault,
-  vault-git owns the commit); (c) DONE 2026-08-21: standards fit review complete
-  (receipts/standards-fit-review-2026-08.md; verdicts 9 admit, 11 already
-  covered, 9 reject, 5 defer). Nine rules entered CODING_STANDARDS.md.
+  vault-git owns the commit); (c) DONE 2026-08-21: standards fit review complete,
+  amended same day (receipts/standards-fit-review-2026-08.md; verdicts 10
+  admit, 11 already covered, 8 reject, 5 defer; all 34 ruled; the totals
+  line at the first commit undercounted its own table). Ten rules entered
+  CODING_STANDARDS.md; the tenth (C16: a sealed-union switch ends in an
+  explicit exhaustiveness check, never a catch-all default) is backed by an
+  executed probe showing a new Shape variant compiles with zero errors while
+  structural.ts walk validates nothing.
   (d) stage 4 pilot. Stages 5-7 still need Nathan's go-ahead.
 - Standards compliance debt opened by the fit review (the admitted rules
   name target idioms the code currently violates; repairs need their own
@@ -82,7 +87,12 @@ Delete this file when the feature branch is ready to merge to `main`.
   (build-ir.ts:96, branch-stations.ts:312, render.ts:299,
   diagnostics.ts:70, refusal.ts:92) swap to codepoint order, and
   canonical.ts normalizes digest input to NFC with LF (proven divergent by
-  probe). Findings for follow-up: F1 the eleven-token stateless sweep is
+  probe). The C16 admission adds a second debt unit, no digest movement
+  expected: the two fail-open sealed-union switches (F7:
+  structural.ts:62 walk, void return, no exhaustiveness check;
+  jsonc.ts:431 toPlainValue catch-all default feeding the digest) get
+  explicit `const _: never` checks. Findings for follow-up: F1 the
+  eleven-token stateless sweep is
   vacuous (positive control blocked until durable-machinery surface emits,
   stage-5 worklist); F2 the generated banner has no proving test (cheap);
   F4 tests/ sits outside the typecheck project and the two strictness
@@ -90,7 +100,19 @@ Delete this file when the feature branch is ready to merge to `main`.
   owning stages: fsync (11), staging sweep (12) and fixture self-test (V6)
   and mechanized RED (V2) at stage 4; bounded diagnostics (C15) at stage
   5. F3 on record: 200 unknown keys produced 214 diagnostics, 21,303
-  message characters, no cap.
+  message characters, no cap. Amendment findings 2026-08-21: F5 the
+  version-envelope test at tests/digest-determinism.test.ts:64 asserts the
+  constants against themselves (the one genuine independent-oracle
+  violation; global rule owns it, enforcement missing); F6 two second
+  copies of single-owner fixtures (amend() in
+  derivation-cross-validation.test.ts with a false doc comment, and two
+  divergent durable-machinery term lists; delete the second list per F1);
+  F8 rendered-typecheck.test.ts scratch file lands inside the package
+  while its header claims outside (gitignored; crash leaves it behind);
+  F9 four more sealed causes have no fixture (structure_missing_required,
+  structure_type_mismatch, emit_expectation_action_unknown,
+  emit_retry_posture_unresolved) - product defects for the sealed-cause
+  iteration test to catch once B6's rule is applied.
 - Post-merge AGENTS.md reconciliation worklist (package AGENTS.md, from the
   2026-08-21 writing-for-agents review; the unit already reconciled the Map
   rows for the renamed files): (1) delete the Checks sentence claiming
