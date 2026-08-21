@@ -104,8 +104,11 @@ Pipeline (mechanics owned by the code-review contract below):
       from a fresh temp workspace, exit 0)
 - [x] Both review axes plus cli-execution-auditor dispatched against the
       fixed point above (2026-08-21)
-- [ ] Every finding dispositioned; repair packet delivered, or none
-      needed
+- [x] Every finding dispositioned; repair packet delivered (2026-08-21:
+      no must-fix on any axis; 2 should-fix plus 3 promoted trivial
+      repairs in the packet; the digest-moving "branch" wording bundles
+      with the admission edit; all other findings record-only on the
+      stage-5 worklist)
 - [ ] Gate re-run after repair
 - [ ] Merged at <sha>
 
