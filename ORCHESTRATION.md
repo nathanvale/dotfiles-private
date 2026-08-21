@@ -92,22 +92,25 @@ writing-for-agents first. Routine status edits run this checklist alone.
    Runtime adoption, Specification Admission, Pause release,
    activation, extraction, and stages 6 to 7 each remain a separate
    ask to Nathan.
-3. In flight: the Input Schema v2 unit at
-   `.worktrees/issue-55-schema-v2`, branch feat/issue-55-schema-v2,
-   fixed point 518053f. The charter with the full coverage matrix is
-   AGENT-BRIEF.md at that worktree root (archive to receipts/schema-v2/
-   at merge). Completion signal: SCHEMA-V2-HANDBACK.md, unit-specific
-   because the tracked repo-root HANDBACK.md (leaked by aw-draft unit
-   commit 8ca6420, byte-identical to receipts/aw-draft/HANDBACK.md)
-   rides into every stage worktree; that stale file stays until its
-   deletion is separately authorized. Worker: claude-handoff session
-   a502bf27, name "Issue 55 Input Schema v2 worker", cwd that
-   worktree, admitted 2026-08-21 with job state resolving
-   claude-opus-5 at effort high per the Handoff step. Prior launches,
-   including a28f34ca stopped by Nathan for resolving claude-fable-5,
-   all ended with zero changes observed; writers never overlapped.
-   AC binding: issue stories 5, 6, 51, 52; the plan comment's
-   stage-5 row.
+3. Next unit, chartered but not launched: Input Schema v2 derivation
+   consumers. Scope, all inside the authorized Stage 5: the nine
+   surfaces that derive nothing today (S1, S2, S3 as a binding, S4's
+   two gates, S8's fact_branch table, S10, S11, S12, S13's emitter,
+   S14); the S4 remodel to per-observation, which the accepted issue
+   body already settles (body lines 5, 88, 95, 111: liveness stays
+   handwritten, observed evidence stays outside the Generated Artifact
+   Set, Liveness Evidence Providers observe declared availability, and
+   independent liveness evidence feeds the one Projection Composer), so
+   the candidate declares the capability, its evidence binding and both
+   routes while a Handwritten Extension supplies the observed value;
+   W18's deletion of the structurally unreachable
+   emit_expectation_action_unknown guard and sealed cause, ruled by the
+   supervisor under the brief's delegation and riding the Generator
+   Contract Version 2 bump already taken; and two deferred standards
+   items, the bare_alias rename away from a CONTEXT.md Avoid term (21
+   fixtures, moves the v2 digest) and the checkDeclaredEvidence split.
+   Open the unit worktree from the current integration head per Ways of
+   work, with its own collision-free completion file.
 4. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
    receipts/stage5-decision-packet.md, posted to issue 55) plus the
@@ -345,6 +348,32 @@ to Next or the stage-5 worklist.
   findings moved to the stage-5 worklist. Headline on record: the
   pilot emits within frozen Input Schema v1, by design. Receipts at
   receipts/stage4/.
+- Input Schema v2 (Stage 5, first unit): MERGED b2e427d (unit commit
+  7b04ed7, receipts at 1baa94b). INCOMPLETE FOUNDATION, not a closed
+  row: fourteen v2 surfaces are declared, validated, IR-carried and
+  canonicalized, and five reach derivation (S5, S6, S7, S9, S8 in
+  part). The other nine are declarable and emit nothing; the
+  continuation unit owns their consumers. Gate: 382 tests, typecheck,
+  Biome, pilot verify clean, four pinned digests byte-identical, pilot
+  spec byte-identical. Generator Contract Version bumped to 2 with
+  Registered Readers owning each superseded version's frozen accepted
+  shape, frozen envelope identities and digest path. Agent Worktree
+  draft re-pinned 44 to 45, deliberately: its undeclarable entry point
+  was always a gap that a default naming a nonexistent file had hidden.
+  Review: three axes, five must-fix and eight should-fix, all closed;
+  one decline accepted (facade recoverability emission, record-only,
+  owned by the facade ADD unit). AC outcome: stories 51 and 52
+  satisfied; 5 and 6 satisfied for declared surfaces; gate 6 partial by
+  record. Receipts at receipts/schema-v2/.
+- Lesson on record from that unit, five witnessed instances: a custody
+  gate that trusts one signal it never cross-checks passes its own
+  tests. The reader took its contract version from the global; the IR
+  version was read without its digest; a manifest's existence stood in
+  for its identity; repair privilege was earned by that same presence;
+  and manifest identity stood in for the set existing. Each was green
+  under a suite that checked the first signal only. The package's
+  Control-flow rule already owns the class, so the harvest is
+  executable coverage, not new prose.
 - Package AGENTS.md reconciliation from the 2026-08-21 review: closed at
   432f243. Stage-4 reconciliation (pilot Map row, Checks) landed with
   the receipts archive at 1c7aec3.
