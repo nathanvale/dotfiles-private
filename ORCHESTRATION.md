@@ -72,8 +72,25 @@ Delete this file when the feature branch is ready to merge to `main`.
 - NEXT (in order): (a) DONE 2026-08-21: package AGENTS.md reconciled (worklist below closed);
   (b) DONE 2026-08-21: vault packet written back (GOAL.md progress and
   next action, README.md current state; edits uncommitted in the vault,
-  vault-git owns the commit); (c) standards fit review over all 34
-  candidates; (d) stage 4 pilot. Stages 5-7 still need Nathan's go-ahead.
+  vault-git owns the commit); (c) DONE 2026-08-21: standards fit review complete
+  (receipts/standards-fit-review-2026-08.md; verdicts 9 admit, 11 already
+  covered, 9 reject, 5 defer). Nine rules entered CODING_STANDARDS.md.
+  (d) stage 4 pilot. Stages 5-7 still need Nathan's go-ahead.
+- Standards compliance debt opened by the fit review (the admitted rules
+  name target idioms the code currently violates; repairs need their own
+  gated unit because they move fixture digests): five localeCompare sites
+  (build-ir.ts:96, branch-stations.ts:312, render.ts:299,
+  diagnostics.ts:70, refusal.ts:92) swap to codepoint order, and
+  canonical.ts normalizes digest input to NFC with LF (proven divergent by
+  probe). Findings for follow-up: F1 the eleven-token stateless sweep is
+  vacuous (positive control blocked until durable-machinery surface emits,
+  stage-5 worklist); F2 the generated banner has no proving test (cheap);
+  F4 tests/ sits outside the typecheck project and the two strictness
+  flags are free to enable (one error in tests would surface). Defers with
+  owning stages: fsync (11), staging sweep (12) and fixture self-test (V6)
+  and mechanized RED (V2) at stage 4; bounded diagnostics (C15) at stage
+  5. F3 on record: 200 unknown keys produced 214 diagnostics, 21,303
+  message characters, no cap.
 - Post-merge AGENTS.md reconciliation worklist (package AGENTS.md, from the
   2026-08-21 writing-for-agents review; the unit already reconciled the Map
   rows for the renamed files): (1) delete the Checks sentence claiming

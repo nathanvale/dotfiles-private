@@ -20,6 +20,10 @@ this file holds package-specific idioms only and points rather than restates.
   `command_surface_drift`) keep their spec spelling; note the CONTEXT.md
   concept name in a comment where they are declared.
 - Diagnostics carry a JSON path and a source location.
+- Diagnostic and refusal messages read as one voice: begin with a capital,
+  end with a full stop, name the construct and the sealed rule it broke, and
+  carry no absolute path (`message` is the human half of a contract, so a
+  reader must not be able to tell which file raised it).
 
 ## Types
 
@@ -29,6 +33,10 @@ this file holds package-specific idioms only and points rather than restates.
 - Seal closed meanings as literal unions, never bare `string`, so tsc owns
   exhaustiveness (the `BranchKind` lesson). One owner per sealed vocabulary
   is a global rule; the global standards document owns it.
+- Runtime-specific APIs (`Bun.*`, `bun:*`) live only in the module that owns
+  filesystem effects. Every other module is portable TypeScript (emitters are
+  pure by invariant; a runtime call in a rendering path is how that
+  invariant gets lost).
 
 ## Control flow
 
@@ -45,6 +53,16 @@ this file holds package-specific idioms only and points rather than restates.
   (generated consumer files inherit every byte).
 - Comments state constraints the code cannot show. No narration, no
   provenance, no restating the next line.
+- Order by codepoint in every comparator whose result reaches emitted bytes,
+  a digest input, or a caller-visible list: plain `<` on strings, or
+  `Array.prototype.sort()` with no comparator. No `localeCompare`, no `Intl`
+  (collation is host ICU data, so the same specification would regenerate to
+  different bytes on a different machine and regeneration-and-compare would
+  report drift that is not drift).
+- Normalize every string reaching the digest to NFC with LF line endings
+  before hashing (the canonical form claims cosmetic differences hash
+  identically; unnormalized text breaks that claim for two candidates a
+  reviewer cannot tell apart).
 
 ## Tests
 
@@ -56,3 +74,22 @@ this file holds package-specific idioms only and points rather than restates.
   guarding test fail, revert, re-run GREEN in the same harness.
 - Per-branch fixture reachability is the evidence for a sealed-vocabulary
   rule; a coverage percentage is not.
+- A test iterates each sealed cause list and fails on any member no fixture
+  reaches. The per-cause fixture rule is checked by the suite, not by a
+  reviewer's memory (four causes with live producers reached the
+  consolidation merge with no fixture).
+- An assertion that a token is absent from generated text is paired with a
+  positive control: some declared input under which that exact token appears.
+  Without it the guard passes because no emitter ever produced the token,
+  not because the emitter stopped (the eleven-token stateless sweep lesson).
+- A loop over cases asserts the case list is non-empty before the loop, and
+  each assertion names its row: pass a label to `expect`, or compare a
+  labelled object. A filter matching nothing must fail, and a failure must
+  say which row broke.
+- A refusal whose contract is "before writing" is proven by reading the
+  output directory back and asserting it is unchanged, not by the returned
+  cause alone (the returned value is silent about what the filesystem
+  already saw).
+- A test whose name quantifies over a sealed vocabulary iterates that
+  vocabulary's exported constant. Naming the set and asserting one member is
+  a claim the suite does not hold.
