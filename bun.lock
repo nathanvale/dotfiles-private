@@ -20,6 +20,9 @@
     ".agents/runtime/agent-native-state-machine-generator": {
       "name": "@side-quest/agent-native-state-machine-generator",
       "version": "0.0.0",
+      "dependencies": {
+        "@side-quest/cli-command-facade": "workspace:*",
+      },
       "devDependencies": {
         "@types/bun": "catalog:",
         "@types/react": "19.2.18",
