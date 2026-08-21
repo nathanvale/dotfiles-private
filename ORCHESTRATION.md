@@ -65,62 +65,20 @@ writing-for-agents first. Routine status edits run this checklist alone.
 
 ## Next
 
-1. Stage 4 pilot: Vault Git Reimagined, learning only. Gate proof:
-   real-process smoke matching a generated Branch Station expectation;
-   verify clean after the run. Pilot specification admission is Nathan's
-   decision. Stage-4-owned defers: fsync (candidate 11), staging sweep
-   (candidate 12), fixture self-test (V6), mechanized RED (V2).
-2. Stages 5 to 7 need Nathan's go-ahead. Stage 5 carries the 13
-   unresolved decisions named in the plan comment's stage-5 row plus the
-   build-added worklist below.
-
-### In flight: stage 4 pilot
-
-Fixed point (fork commit; review is invalid if HEAD moves): fbd2931.
-Stage worktree: `.worktrees/issue-55-stage4`, branch
-feat/issue-55-stage4-pilot. Launched 2026-08-21.
-
-AC lines, verbatim in AGENT-BRIEF.md there; tick one only when the gate
-proof covers it:
-
-- [ ] Pilot separated from qualification; retains generated semantic,
-      contract, registry, catalog, and drift checks plus one
-      real-process smoke path
-- [ ] Pilot used only for fast feedback; counted as no qualification
-      evidence
-- [ ] Real-process smoke matches a generated Branch Station expectation;
-      verify clean after the run
-
-Pipeline (mechanics owned by the code-review contract below):
-
-- [x] Brief grounded: issue 55 body and plan-comment row re-read;
-      gate-proof row and AC lines quoted in AGENT-BRIEF.md; brief opens
-      with the CONTEXT.md instruction
-- [x] HANDBACK.md received (2026-08-21; four commits 0eb9f12, 56a241e,
-      73b6358, 4c2bf59; headline: the pilot emits within frozen Input
-      Schema v1)
-- [x] Stage gate re-run by the supervisor (typecheck clean; 138 tests 0
-      fail; Biome 45 files clean; verify clean, 5 outputs; smoke re-run
-      from a fresh temp workspace, exit 0)
-- [x] Both review axes plus cli-execution-auditor dispatched against the
-      fixed point above (2026-08-21)
-- [x] Every finding dispositioned; repair packet delivered (2026-08-21:
-      no must-fix on any axis; 2 should-fix plus 3 promoted trivial
-      repairs in the packet; the digest-moving "branch" wording bundles
-      with the admission edit; all other findings record-only on the
-      stage-5 worklist)
-- [ ] Gate re-run after repair
-- [ ] Merged at <sha>
-
-After merge; tick only on proof, then delete this block:
-
-- [ ] Ledger entry written (shape rule at the Ledger heading)
-- [ ] Package AGENTS.md reconciled
-- [ ] Vault packet written back (GOAL.md and README.md, both `updated:`
-      fields)
-- [ ] Issue 55 progress comment posted via ghh
-- [ ] AGENT-BRIEF.md, HANDBACK.md, and reviews archived at
-      receipts/stage4/
+1. Awaiting Nathan, both recorded on issue 55 (comment 2026-08-21):
+   pilot Specification Admission (the candidate is an unadmitted draft;
+   the digest-moving invariant-prose fix, bare "branch" to Branch
+   Station, bundles with the admission edit), and the stage 5 to 7
+   go-ahead.
+2. Chartered, runnable before stage 5 (supervisor unit): admit the
+   staging-sweep rule (candidate 12; witnessed evidence at
+   receipts/stage4/HANDBACK.md: SIGKILL mid-generation stranded
+   staging siblings inside the repository tree, three of three runs)
+   into CODING_STANDARDS.md and implement the sweep paired with the
+   fixture self-test rule (V6). Candidate 11 (fsync) and V2
+   (mechanized RED) produced no stage-4 evidence and stay unadmitted.
+3. Stage 5 carries the 13 unresolved decisions named in the plan
+   comment's stage-5 row plus the build-added worklist below.
 
 Stage-5 admission worklist (build-added; the plan comment owns the 13
 base decisions):
@@ -139,6 +97,21 @@ base decisions):
   durable-machinery surface emits.
 - expectations.ts `cause: string` column shares a name with the sealed
   refusal discriminants (pre-existing, digest-frozen).
+- From the stage-4 review (evidence in receipts/stage4/): a
+  fact-to-branch selection surface (the pilot's fact-to-station mapping
+  stays handwritten because v1 declares none); a script/entry surface
+  (the generated `script` field derives a convention wrong on disk for
+  the pilot and absent from the rendered conventions header); banner
+  wording asserting "Admitted" on unadmitted output (src/render.ts
+  owner); root-level branches without stations (unknown command,
+  front-door crash, help; v1 has no root-command surface); the crash
+  path's undeclared exit-1 meaning; the never-fired blocker column in
+  invalid-usage rows (name it inside the blocker-mapping decision);
+  mechanical-auditor discoverability of the pilot's generated contract;
+  a ruled mapping between the facade's `retryable` and Exact Same-Input
+  Retry Safety; export STOP_SCOPES and sealed authority/completeness
+  lists from the front door; the expectations.ts plural-blocker prose
+  fix.
 
 Open findings, dispositions only (evidence at
 receipts/standards-fit-review-2026-08.md, "Findings for the supervisor"):
@@ -228,8 +201,24 @@ to Next or the stage-5 worklist.
   structural.ts walk and jsonc.ts toPlainValue end in `const _: never`
   checks. RED probes: a dummy variant in each sealed union fails
   typecheck at exactly the new check. Gate: 129 tests, digests unchanged.
+- Stage 4, Vault Git Reimagined pilot (learning only): MERGED 30d5bff
+  (five stage commits 0eb9f12 through repair 070dc90, fixed point
+  fbd2931). Gate: 139 tests, typecheck, Biome, verify clean (5
+  outputs), pilot digest 8e7ea8c0..9736 unchanged through repair; the
+  supervisor re-ran the gate and the raw smoke independently, twice.
+  AC outcome: all three bound lines satisfied (pilot separated from
+  qualification with generated checks plus one real-process smoke;
+  fast feedback only, no qualification evidence; smoke matched the
+  generated Branch Station expectation with verify clean after).
+  Review: no must-fix on any axis; repair packet R1-R5 closed; all
+  agent declines stood (no plain mode, one smoked station, retryable
+  decoupling, no git init in the fixture, no src edits). Record-only
+  findings moved to the stage-5 worklist. Headline on record: the
+  pilot emits within frozen Input Schema v1, by design. Receipts at
+  receipts/stage4/.
 - Package AGENTS.md reconciliation from the 2026-08-21 review: closed at
-  432f243.
+  432f243. Stage-4 reconciliation (pilot Map row, Checks) landed with
+  the receipts archive at 1c7aec3.
 
 ## Standing supervisor rules
 
