@@ -93,6 +93,34 @@ function emitting(
 }
 
 describe('generating a Generated Artifact Set', () => {
+	test('sweeps a stale staging sibling, and only that sibling, before staging', async () => {
+		const parent = await outputDir()
+		const dir = join(parent, 'generated')
+		const staleStaging = join(parent, '.asmg-staging-stranded')
+		const survivor = join(parent, 'unrelated-sibling')
+		await mkdir(staleStaging, { recursive: true })
+		await Bun.write(join(staleStaging, 'leftover.txt'), 'stranded bytes')
+		await mkdir(survivor, { recursive: true })
+		await Bun.write(join(survivor, 'keep.txt'), 'must survive')
+		const compiled = await compile('vault-git')
+
+		const result = await generateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+		})
+
+		expect(result.ok).toBe(true)
+		// Both halves in one test: the planted stale staging sibling must be
+		// deleted, and the non-matching sibling must survive with its bytes.
+		// A sweep that deletes siblings can over-delete; only a planted
+		// survivor holds that boundary.
+		const siblings = await readdir(parent)
+		expect(siblings.includes('.asmg-staging-stranded')).toBe(false)
+		expect(siblings.includes('unrelated-sibling')).toBe(true)
+		expect(await Bun.file(join(survivor, 'keep.txt')).text()).toBe(
+			'must survive',
+		)
+	})
+
 	for (const product of ['vault-git', 'fallow'] as const) {
 		test(`${product} writes a complete set plus one provenance manifest`, async () => {
 			const dir = await outputDir()

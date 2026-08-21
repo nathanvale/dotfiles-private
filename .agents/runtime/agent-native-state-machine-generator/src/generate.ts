@@ -283,6 +283,23 @@ async function writeArtifacts(
  * one. Staging is a sibling rather than a system temp dir so the final move
  * stays on one filesystem and is therefore atomic.
  */
+/**
+ * Removes staging siblings stranded by an interrupted earlier run. An
+ * abnormal exit between mkdtemp and the finally leaves `.asmg-staging-*`
+ * inside the consumer's tree, and survivors accumulate across runs
+ * (witnessed under SIGKILL, three of three stage-4 probe runs). Deleting
+ * only names carrying the staging prefix is what keeps the sweep from
+ * over-deleting; concurrent generation into one output directory is
+ * already outside the package's single-writer contract.
+ */
+async function sweepStaleStagingSiblings(parent: string): Promise<void> {
+	for (const entry of await readdir(parent)) {
+		if (entry.startsWith('.asmg-staging-')) {
+			await rm(join(parent, entry), { recursive: true, force: true })
+		}
+	}
+}
+
 async function replaceArtifactSet(
 	outputDir: string,
 	artifacts: ReadonlyMap<string, string>,
@@ -292,6 +309,7 @@ async function replaceArtifactSet(
 	let staging: string | undefined
 	try {
 		await mkdir(parent, { recursive: true })
+		await sweepStaleStagingSiblings(parent)
 		staging = await mkdtemp(join(parent, '.asmg-staging-'))
 		await writeArtifacts(staging, artifacts)
 

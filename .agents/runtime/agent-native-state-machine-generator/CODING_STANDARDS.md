@@ -50,6 +50,12 @@ this file holds package-specific idioms only and points rather than restates.
   (`const _: never = value`), never a catch-all `default`. A non-optional
   return type is not the proof: `walk` returns `void`, so a new `Shape`
   variant compiles clean and validates nothing.
+- Generation sweeps stale `.asmg-staging-*` siblings from the output
+  directory's parent before staging a new set. An abnormal exit between
+  staging and cleanup strands one inside the consumer's tree and
+  survivors accumulate (witnessed three of three SIGKILL probe runs at
+  stage 4). The sweep deletes only names carrying the staging prefix,
+  under the package's single-writer contract.
 
 ## Text
 
@@ -97,3 +103,7 @@ this file holds package-specific idioms only and points rather than restates.
 - A test whose name quantifies over a sealed vocabulary iterates that
   vocabulary's exported constant. Naming the set and asserting one member is
   a claim the suite does not hold.
+- A fixture or sweep that deletes filesystem entries proves its own
+  boundary: one test plants both what must be deleted and what must
+  survive, and asserts both outcomes. A sweep that deletes siblings can
+  over-delete, and only a planted survivor holds that line.
