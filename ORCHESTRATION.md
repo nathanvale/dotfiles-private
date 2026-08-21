@@ -65,16 +65,23 @@ writing-for-agents first. Routine status edits run this checklist alone.
 
 ## Next
 
-1. Awaiting Nathan's recorded rulings on issue 55: the stage-5 decision
-   packet and the stage 5 to 7 go-ahead. The vault GOAL.md (rewritten
-   2026-08-21) is explicit: until the rulings are recorded, the
-   implementation queue remains closed. A brief supervisor
-   misreading of an ambiguous "keep going" as the go-ahead was caught
-   by Nathan's interrupt and the vault rewrite before any stage-5 work
-   started; nothing was chartered.
-2. On recorded rulings: charter Input Schema v2 as the first stage-5
-   unit (packet section 2.1; the Agent Worktree gaps receipt feeds it).
-2. Stage 5 carries the 13 unresolved decisions named in the plan
+1. Semantic frontier CLOSED 2026-08-21: all 13 Vault Git candidate
+   decisions plus cancellation_scope, seven vocabulary collisions, and
+   fourteen derived Input Schema v2 requirements are recorded in the
+   issue 55 plan comment (appended under "Resolved Vault Git semantic
+   rulings", comment id 5362367950). Source: the 2026-08-21 Vault Git
+   specification grill outputs (decision ledger, doctor routing matrix,
+   ADRs 0001 to 0006), Nathan-confirmed, supervisor-reconciled against
+   runtime and candidate sources before recording. The record itself
+   grants no authority: no Stage 5 work, runtime adoption, candidate
+   edits, Specification Admission, commits toward stage 5, pushes, or
+   activation.
+2. Awaiting Nathan's separate approval: the stage 5 to 7 go-ahead. On
+   that approval, charter Input Schema v2 as the first stage-5 unit
+   from the fourteen recorded requirements (they supersede the
+   build-added worklist's schema items; the Agent Worktree gaps
+   receipt corroborates).
+3. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
    receipts/stage5-decision-packet.md, posted to issue 55) plus the
    build-added worklist below, now strengthened by the Agent Worktree
