@@ -12,8 +12,10 @@
  * make regeneration-and-compare report drift that is not drift, and
  * regeneration-and-compare is the only drift oracle this stage has.
  */
+import { deriveArtifactSet } from './artifact-derivation.ts'
 import type { SpecificationDigest } from './canonical.ts'
 import type { SpecificationIr } from './ir.ts'
+import type { ArtifactRefusal } from './refusal.ts'
 
 /**
  * One artifact's bytes, keyed by its path relative to the output directory.
@@ -22,13 +24,27 @@ import type { SpecificationIr } from './ir.ts'
  */
 export type EmittedArtifacts = ReadonlyMap<string, string>
 
+/**
+ * What one emitter produced: either its complete artifacts, or the sealed
+ * refusals that stopped it.
+ *
+ * A refusal is a returned value rather than a thrown error because
+ * `cause` is the branchable API. Throwing would flatten a sealed
+ * ArtifactRefusalCause into a message string, and a caller cannot branch on
+ * prose. The failure variant carries no artifacts, so a refusing emitter
+ * cannot contribute bytes to a partial set.
+ */
+export type EmissionResult =
+	| { readonly ok: true; readonly artifacts: EmittedArtifacts }
+	| { readonly ok: false; readonly refusals: readonly ArtifactRefusal[] }
+
 export interface ArtifactEmitter {
 	/** Stable identity, used to attribute a generation error to one emitter. */
 	readonly name: string
 	readonly emit: (
 		ir: SpecificationIr,
 		digest: SpecificationDigest,
-	) => EmittedArtifacts
+	) => EmissionResult
 }
 
 /** The provenance manifest's declared path. */
@@ -77,35 +93,31 @@ export function buildProvenanceManifest(
 }
 
 /**
- * A small deterministic projection of the IR.
+ * The Generated Artifact Set's emitter: every derived contract a consumer
+ * reads.
  *
- * Stage 2 needs at least one real artifact besides the manifest so the
- * mechanics are exercised against content that actually moves when the
- * specification moves. The semantic tables and typed contracts that consumers
- * will read are stage 3's emitters, added alongside this one.
+ * One emitter rather than one per rendered module, because `deriveArtifactSet`
+ * derives the whole set together and refuses it together. Splitting it would
+ * run the same derivation once per module and let one module publish while a
+ * sibling refused, which is exactly the partial set a Generated Artifact Set
+ * cannot be.
+ *
+ * The digest is passed as the specification digest string the rendered headers
+ * carry, not the whole envelope: a rendered artifact names the input it came
+ * from, never the generator's internal versioning record.
  */
-const specificationSummaryEmitter: ArtifactEmitter = {
-	name: 'specification-summary',
-	emit: (ir) =>
-		new Map([
-			[
-				'specification-summary.json',
-				renderJson({
-					actions: ir.actions.catalog.map((action) => ({
-						id: action.id,
-						kind: action.kind,
-					})),
-					blockers: ir.blockers,
-					commands: ir.commandSurface.commands,
-					features: ir.features,
-					product: ir.specMeta.product,
-					states: ir.states.map((state) => ({
-						name: state.name,
-						values: state.values,
-					})),
-				}),
-			],
-		]),
+const generatedArtifactSetEmitter: ArtifactEmitter = {
+	name: 'generated-artifact-set',
+	emit: (ir, digest) => {
+		const derived = deriveArtifactSet(ir, digest.specificationDigest)
+		if (!derived.ok) return { ok: false, refusals: derived.refusals }
+		return {
+			ok: true,
+			artifacts: new Map(
+				derived.modules.map((module) => [module.path, module.contents]),
+			),
+		}
+	},
 }
 
 /**
@@ -113,5 +125,5 @@ const specificationSummaryEmitter: ArtifactEmitter = {
  * a set — but a stable order keeps a collision error reproducible.
  */
 export const DEFAULT_EMITTERS: readonly ArtifactEmitter[] = [
-	specificationSummaryEmitter,
+	generatedArtifactSetEmitter,
 ]

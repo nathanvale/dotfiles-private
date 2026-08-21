@@ -25,10 +25,12 @@ import {
 	type ArtifactEmitter,
 	buildProvenanceManifest,
 	DEFAULT_EMITTERS,
+	type EmissionResult,
 	PROVENANCE_MANIFEST_PATH,
 } from './artifact-set.ts'
 import type { SpecificationDigest } from './canonical.ts'
 import type { SpecificationIr } from './ir.ts'
+import type { ArtifactRefusal } from './refusal.ts'
 
 export interface GenerationOptions {
 	/** Directory that holds the Generated Artifact Set. */
@@ -46,6 +48,14 @@ export interface GenerationOptions {
 export const GENERATION_FAILURE_CAUSES = [
 	/** An emitter threw, or two emitters claimed the same declared path. */
 	'generation_emitter_failure',
+	/**
+	 * An emitter refused to derive its artifacts. Distinct from
+	 * `generation_emitter_failure`: nothing malfunctioned, the specification
+	 * declares too little to derive a contract without inventing meaning. The
+	 * sealed ArtifactRefusalCause list says which, and the repair is the
+	 * specification rather than the generator.
+	 */
+	'generation_emit_refused',
 	/** The set could not be written or replaced on disk. */
 	'generation_write_failure',
 	/** Regeneration found no existing set to replace. */
@@ -65,6 +75,12 @@ export interface GenerationFailure {
 	readonly ok: false
 	readonly cause: GenerationFailureCause
 	readonly message: string
+	/**
+	 * The sealed refusals behind a `generation_emit_refused` cause, so a caller
+	 * repairs the specification without parsing `message`. Empty for every other
+	 * cause: nothing else in this file refuses on a derived artifact.
+	 */
+	readonly refusals: readonly ArtifactRefusal[]
 }
 
 export type GenerationResult = GenerationSuccess | GenerationFailure
@@ -144,7 +160,7 @@ function renderArtifactSet(
 	const artifacts = new Map<string, string>()
 
 	for (const emitter of emitters) {
-		let emitted: ReadonlyMap<string, string>
+		let emitted: EmissionResult
 		try {
 			emitted = emitter.emit(ir, digest)
 		} catch (error) {
@@ -152,10 +168,25 @@ function renderArtifactSet(
 				ok: false,
 				cause: 'generation_emitter_failure',
 				message: `emitter "${emitter.name}" failed: ${describe(error)}`,
+				refusals: [],
 			}
 		}
 
-		for (const [path, contents] of emitted) {
+		// A refusal stops the whole set here, before any path is claimed and long
+		// before anything reaches the filesystem. A Generated Artifact Set is
+		// replaced as one unit, so a set missing a refused contract has no valid
+		// consumer.
+		if (!emitted.ok)
+			return {
+				ok: false,
+				cause: 'generation_emit_refused',
+				message: `emitter "${emitter.name}" refused to derive its artifacts: ${emitted.refusals
+					.map((refusal) => `${refusal.cause} (${refusal.subject})`)
+					.join(', ')}`,
+				refusals: emitted.refusals,
+			}
+
+		for (const [path, contents] of emitted.artifacts) {
 			// One declared path has exactly one owner: a silent overwrite would
 			// make the winning emitter depend on registry order.
 			if (artifacts.has(path))
@@ -163,12 +194,14 @@ function renderArtifactSet(
 					ok: false,
 					cause: 'generation_emitter_failure',
 					message: `emitter "${emitter.name}" re-declares the output "${path}"`,
+					refusals: [],
 				}
 			if (!isSafeRelativePath(path))
 				return {
 					ok: false,
 					cause: 'generation_emitter_failure',
 					message: `emitter "${emitter.name}" declared the unsafe output path "${path}"`,
+					refusals: [],
 				}
 			artifacts.set(path, contents)
 		}
@@ -180,6 +213,7 @@ function renderArtifactSet(
 			ok: false,
 			cause: 'generation_emitter_failure',
 			message: `an emitter re-declares the provenance manifest "${PROVENANCE_MANIFEST_PATH}"`,
+			refusals: [],
 		}
 	const declared = [...artifacts.keys(), PROVENANCE_MANIFEST_PATH].sort()
 	artifacts.set(
@@ -268,6 +302,7 @@ async function replaceArtifactSet(
 			ok: false,
 			cause: 'generation_write_failure',
 			message: `could not replace the artifact set: ${describe(error)}`,
+			refusals: [],
 		}
 	} finally {
 		if (staging) await rm(staging, { recursive: true, force: true })
@@ -386,6 +421,7 @@ export async function regenerateArtifactSet(
 			ok: false,
 			cause: 'generation_no_existing_set',
 			message: `no provenance manifest in "${options.outputDir}": regeneration replaces an existing Generated Artifact Set, so use generation to create one`,
+			refusals: [],
 		}
 
 	return await generateArtifactSet(ir, digest, options)

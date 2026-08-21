@@ -89,6 +89,7 @@ export {
 } from './artifact-derivation.ts'
 export {
 	type ArtifactEmitter,
+	type EmissionResult,
 	type EmittedArtifacts,
 	PROVENANCE_MANIFEST_PATH,
 	type ProvenanceManifest,
