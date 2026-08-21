@@ -111,6 +111,21 @@ writing-for-agents first. Routine status edits run this checklist alone.
    fixtures, moves the v2 digest) and the checkDeclaredEvidence split.
    Open the unit worktree from the current integration head per Ways of
    work, with its own collision-free completion file.
+   Two further blockers from the 2026-08-22 review, both supervisor
+   confirmed against the merged tree, join that scope. (a) Registered
+   Readers freeze the envelope identities but not the canonicalization:
+   registered-readers.ts:116-120 calls the CURRENT digestSpecification,
+   so a future canonicalizer change moves every admitted v1 identity
+   while the reader's own header promises historical bytes. A reader
+   must own its frozen canonicalizer and digest path end to end, with a
+   RED perturbation proving current canonicalization can change while
+   all four historical digests stay exact. (b) A branch_station routing
+   target is validated only on its command prefix
+   (semantic.ts:1274-1285), so a ghost station compiles: perturbing a
+   declared target to doctor.typo_no_such_station compiles with no
+   refusal, observed. Validate against the derived Branch Station
+   catalog at the seam that owns it, with a public-boundary negative
+   and RED proof.
 4. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
    receipts/stage5-decision-packet.md, posted to issue 55) plus the
