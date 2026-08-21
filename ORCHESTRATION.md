@@ -92,16 +92,30 @@ writing-for-agents first. Routine status edits run this checklist alone.
    Runtime adoption, Specification Admission, Pause release,
    activation, extraction, and stages 6 to 7 each remain a separate
    ask to Nathan.
-3. No unit in flight. Stage 5's schema half is complete: Input Schema
-   v2 is declared, validated, canonicalized and fully derived, under
-   version-owned custody with a safe manifest boundary. Next unit,
-   AUTHORIZED 2026-08-22: Nathan authorized the narrow Contextual
-   Rendering repair. The two spike candidate digests may move only to
-   close the bare-string target-validation fail-open. The ruling grants
-   no Vault Git qualification, runtime adoption, Specification
-   Admission, Pause release, activation, extraction, push, or stage 6
-   or 7 authority. Dispatch through Ways of work only after issue 55
-   and the vault packet record this same scope.
+3. IN FLIGHT: the authorized Contextual Rendering repair, dispatched
+   2026-08-22. Stage 5's schema half is complete: Input Schema v2 is
+   declared, validated, canonicalized and fully derived, under
+   version-owned custody with a safe manifest boundary. Nathan's ruling
+   (issue 55 comment 5376428194, the vault packet, and this file all
+   recorded the same scope before dispatch): the two spike candidate
+   digests may move only to close the bare-string target-validation
+   fail-open. The ruling grants no Vault Git qualification, runtime
+   adoption, Specification Admission, Pause release, activation,
+   extraction, push, or stage 6 or 7 authority.
+   Worker: one claude background session "issue-55 contextual-rendering
+   repair", short ID 99625f6f, cwd
+   `.worktrees/issue-55-contextual-rendering`, branch
+   feat/issue-55-contextual-rendering, fixed point aa84864, model
+   claude-opus-5 at high effort (admission proof observed 2026-08-22:
+   the session record resolves "model":"claude-opus-5" and the job
+   banner reads "Opus 5 with high effort"). Charter: AGENT-BRIEF.md at
+   that worktree root; its ruled disposition closes the semantic.ts
+   bare-string gap, removes the defective run_repair entry, re-permutes
+   the twin fixture, and moves the one vault-git pin, while realizing
+   resume_interrupted_transaction stays parked candidate-authoring
+   work. Completion signal: CONTEXTUAL-RENDERING-HANDBACK.md at that
+   worktree root, untracked. Supervisor baseline observed 2026-08-22
+   at aa84864 before dispatch: 443 pass, 0 fail, typecheck clean.
    After the repair is accepted, Vault Git qualification remains the
    Stage 5 outcome, which the plan comment's stage-5 row owns:
    `qualify:vault-git` with declared and observed coverage reported
@@ -115,40 +129,6 @@ writing-for-agents first. Routine status edits run this checklist alone.
    em-dashes in artifact-set.ts, canonical.ts and generate.ts comments
    against the package ASCII rule; and the 66 measured `as` casts in
    build-ir.ts, unassigned debt, each needing its own argument.
-   Previously carried and now
-   closed by the merged units: Scope, all inside the authorized Stage 5: the nine
-   surfaces that derive nothing today (S1, S2, S3 as a binding, S4's
-   two gates, S8's fact_branch table, S10, S11, S12, S13's emitter,
-   S14); the S4 remodel to per-observation, which the accepted issue
-   body already settles (body lines 5, 88, 95, 111: liveness stays
-   handwritten, observed evidence stays outside the Generated Artifact
-   Set, Liveness Evidence Providers observe declared availability, and
-   independent liveness evidence feeds the one Projection Composer), so
-   the candidate declares the capability, its evidence binding and both
-   routes while a Handwritten Extension supplies the observed value;
-   W18's deletion of the structurally unreachable
-   emit_expectation_action_unknown guard and sealed cause, ruled by the
-   supervisor under the brief's delegation and riding the Generator
-   Contract Version 2 bump already taken; and two deferred standards
-   items, the bare_alias rename away from a CONTEXT.md Avoid term (21
-   fixtures, moves the v2 digest) and the checkDeclaredEvidence split.
-   Open the unit worktree from the current integration head per Ways of
-   work, with its own collision-free completion file.
-   Two further blockers from the 2026-08-22 review, both supervisor
-   confirmed against the merged tree, join that scope. (a) Registered
-   Readers freeze the envelope identities but not the canonicalization:
-   registered-readers.ts:116-120 calls the CURRENT digestSpecification,
-   so a future canonicalizer change moves every admitted v1 identity
-   while the reader's own header promises historical bytes. A reader
-   must own its frozen canonicalizer and digest path end to end, with a
-   RED perturbation proving current canonicalization can change while
-   all four historical digests stay exact. (b) A branch_station routing
-   target is validated only on its command prefix
-   (semantic.ts:1274-1285), so a ghost station compiles: perturbing a
-   declared target to doctor.typo_no_such_station compiles with no
-   refusal, observed. Validate against the derived Branch Station
-   catalog at the seam that owns it, with a public-boundary negative
-   and RED proof.
 4. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
    receipts/stage5-decision-packet.md, posted to issue 55) plus the
