@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import {
+	mkdir,
+	mkdtemp,
+	readdir,
+	readFile,
+	rm,
+	writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -49,6 +56,28 @@ afterEach(async () => {
 /** Independent reader: asks the filesystem, never the writer's return value. */
 async function entriesIn(dir: string): Promise<readonly string[]> {
 	return (await readdir(dir)).sort()
+}
+
+/**
+ * Independent deep reader: every file under a directory with its bytes.
+ *
+ * `entriesIn` is one level and names only, which is enough for a directory
+ * that must stay empty. A refusal that must leave an existing set untouched
+ * needs contents, because a file deleted and re-created empty has the same
+ * name.
+ */
+async function filesUnder(dir: string): Promise<ReadonlyMap<string, string>> {
+	const found = new Map<string, string>()
+	async function walk(current: string, prefix: string): Promise<void> {
+		for (const entry of await readdir(current, { withFileTypes: true })) {
+			const absolute = join(current, entry.name)
+			const relative = prefix === '' ? entry.name : `${prefix}/${entry.name}`
+			if (entry.isDirectory()) await walk(absolute, relative)
+			else found.set(relative, await readFile(absolute, 'utf8'))
+		}
+	}
+	await walk(dir, '')
+	return found
 }
 
 async function readAll(
@@ -350,6 +379,213 @@ describe('an unreadable manifest is its own refusal', () => {
 	}
 })
 
+/**
+ * A provenance manifest is untrusted input.
+ *
+ * Any process can write one: the specification digest is printed in every
+ * generated header, so identity is a claim the file makes about itself rather
+ * than evidence anyone checked. Its `declared_outputs` then reach a delete
+ * call, which means an unsafe path there is an instruction to remove a file
+ * outside the Generated Artifact Set.
+ *
+ * Generation never overwrites, merges, moves or deletes anything outside the
+ * set it owns. Holding that requires validating each declared path where it is
+ * read, not relying on a later gate that happens to reject the same input for
+ * another reason: a materialisation check reports "not fully present", which
+ * both names the wrong cause and stops protecting the moment the gates are
+ * reordered.
+ */
+describe('a manifest cannot declare an output outside the set', () => {
+	/**
+	 * Each planted manifest carries one legitimate in-set path beside the
+	 * offending one. Refusing the whole manifest is what keeps the legitimate
+	 * entry from being processed on its own, so the survivor is evidence about
+	 * the refusal rather than decoration.
+	 */
+	const UNSAFE_OUTPUTS: ReadonlyArray<{
+		readonly label: string
+		readonly offending: string
+	}> = [
+		{ label: 'a parent-escaping path', offending: '../victim.txt' },
+		{
+			label: 'a path escaping through a subdirectory',
+			offending: 'src/../../victim.txt',
+		},
+		{ label: 'an absolute path', offending: '/etc/victim.txt' },
+		{ label: 'a bare parent segment', offending: '..' },
+		{ label: 'a backslash-separated path', offending: '..\\victim.txt' },
+		{ label: 'a drive-letter path', offending: 'C:/victim.txt' },
+		{ label: 'a current-directory segment', offending: './victim.txt' },
+	]
+
+	test('the case list is non-empty', () => {
+		expect(UNSAFE_OUTPUTS.length).toBeGreaterThan(0)
+	})
+
+	for (const { label, offending } of UNSAFE_OUTPUTS) {
+		for (const { verb, call } of ENTRY_POINTS) {
+			test(`${label} refuses before any delete via ${verb}`, async () => {
+				const compiled = await compiledSpike('vault-git')
+				const ir = amendForEmission(compiled.ir)
+				const root = await outputDir()
+				const dir = join(root, 'out')
+				await mkdir(dir, { recursive: true })
+
+				// A real set, so identity and materialisation both genuinely
+				// hold and the manifest read is the only gate left standing.
+				const declared = await seedLegacyArtifactSet(dir, ir, compiled.digest)
+
+				// The sibling the offending path aims at, outside the set.
+				const victim = join(root, 'victim.txt')
+				await writeFile(victim, 'do not delete me', 'utf8')
+
+				const manifestPath = join(dir, 'provenance.manifest.json')
+				const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+					declared_outputs: string[]
+				}
+				await writeFile(
+					manifestPath,
+					JSON.stringify({
+						...manifest,
+						declared_outputs: [...manifest.declared_outputs, offending],
+					}),
+					'utf8',
+				)
+
+				const before = await filesUnder(dir)
+
+				const result = await call(ir, compiled.digest, { outputDir: dir })
+
+				expect({ label, verb, ok: result.ok }).toEqual({
+					label,
+					verb,
+					ok: false,
+				})
+				if (result.ok) return
+				// Not `generation_foreign_existing_set`: an attacker-shaped path
+				// and a set belonging to another product are different failures
+				// with different repairs, and a caller branches on cause.
+				expect({ label, verb, cause: result.cause }).toEqual({
+					label,
+					verb,
+					cause: 'generation_unsafe_declared_output',
+				})
+				// The refusal names the offending path, so a reader repairs the
+				// manifest without parsing prose.
+				expect({ label, verb, subject: result.subject }).toEqual({
+					label,
+					verb,
+					subject: offending,
+				})
+
+				// Byte-identical, read back independently: existence alone would
+				// pass against a file deleted and re-created empty.
+				expect({ label, verb, victim: await readFile(victim, 'utf8') }).toEqual(
+					{ label, verb, victim: 'do not delete me' },
+				)
+				expect({ label, verb, after: await filesUnder(dir) }).toEqual({
+					label,
+					verb,
+					after: before,
+				})
+				expect(declared.length).toBeGreaterThan(0)
+			})
+		}
+	}
+
+	for (const { verb, call } of ENTRY_POINTS) {
+		test(`a duplicate declared output refuses via ${verb}`, async () => {
+			const compiled = await compiledSpike('vault-git')
+			const ir = amendForEmission(compiled.ir)
+			const dir = await outputDir()
+			await seedLegacyArtifactSet(dir, ir, compiled.digest)
+
+			const manifestPath = join(dir, 'provenance.manifest.json')
+			const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+				declared_outputs: string[]
+			}
+			const [repeated] = manifest.declared_outputs
+			if (repeated === undefined) throw new Error('seed declared no outputs')
+			await writeFile(
+				manifestPath,
+				JSON.stringify({
+					...manifest,
+					declared_outputs: [...manifest.declared_outputs, repeated],
+				}),
+				'utf8',
+			)
+
+			const before = await filesUnder(dir)
+
+			const result = await call(ir, compiled.digest, { outputDir: dir })
+
+			expect({ verb, ok: result.ok }).toEqual({ verb, ok: false })
+			if (result.ok) return
+			expect({ verb, cause: result.cause }).toEqual({
+				verb,
+				cause: 'generation_unsafe_declared_output',
+			})
+			expect({ verb, subject: result.subject }).toEqual({
+				verb,
+				subject: repeated,
+			})
+			expect({ verb, after: await filesUnder(dir) }).toEqual({
+				verb,
+				after: before,
+			})
+		})
+	}
+
+	/**
+	 * Positive control for the survival assertions above.
+	 *
+	 * Without it those assertions could pass because this path never deletes
+	 * anything at all, rather than because the unsafe entry was refused. A
+	 * superseded output the new set does not declare must still be removed, so
+	 * the fixture plants both what must go and what must stay.
+	 */
+	test('a safe superseded output is still deleted, and its sibling survives', async () => {
+		const compiled = await compiledSpike('vault-git')
+		const ir = amendForEmission(compiled.ir)
+		const root = await outputDir()
+		const dir = join(root, 'out')
+		await mkdir(dir, { recursive: true })
+		await seedLegacyArtifactSet(dir, ir, compiled.digest)
+
+		const victim = join(root, 'victim.txt')
+		await writeFile(victim, 'do not delete me', 'utf8')
+
+		// A retired artifact: declared by the manifest, present on disk, and
+		// not part of what this compilation renders.
+		const retired = 'src/retired-artifact.ts'
+		await writeFile(join(dir, retired), '// retired\n', 'utf8')
+		const manifestPath = join(dir, 'provenance.manifest.json')
+		const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as {
+			declared_outputs: string[]
+		}
+		await writeFile(
+			manifestPath,
+			JSON.stringify({
+				...manifest,
+				declared_outputs: [...manifest.declared_outputs, retired],
+			}),
+			'utf8',
+		)
+
+		const result = await regenerateArtifactSet(ir, compiled.digest, {
+			outputDir: dir,
+		})
+
+		expect(result.ok).toBe(true)
+		// Deleted: the sweep genuinely reaches the filesystem here.
+		expect(await entriesIn(join(dir, 'src'))).not.toContain(
+			'retired-artifact.ts',
+		)
+		// Survived: byte-identical, outside the set.
+		expect(await readFile(victim, 'utf8')).toBe('do not delete me')
+	})
+})
+
 describe('an existing set on a superseded version stays checkable', () => {
 	test('verification and regeneration run byte-identically', async () => {
 		const compiled = await compiledSpike('vault-git')
@@ -410,6 +646,7 @@ describe('every sealed generation failure cause is reached by a test', () => {
 		generation_provenance_mismatch: 'registered-reader-boundary.test.ts',
 		generation_foreign_existing_set: 'registered-reader-boundary.test.ts',
 		generation_unreadable_manifest: 'registered-reader-boundary.test.ts',
+		generation_unsafe_declared_output: 'registered-reader-boundary.test.ts',
 	}
 
 	test('the registry covers the sealed list member for member', () => {
