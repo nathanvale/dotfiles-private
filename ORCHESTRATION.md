@@ -46,6 +46,14 @@ Delete this file when the feature branch is ready to merge to `main`.
 
 ## Standing supervisor rules
 
+- After every stage merge, reconcile the package
+  `AGENTS.md` (`.agents/runtime/agent-native-state-machine-generator/AGENTS.md`):
+  add or correct Map rows for files the stage introduced, update Invariants
+  and Checks that changed, and delete stale rows. It is a site map with
+  triggers, not a changelog; vocabulary stays in CONTEXT.md, contracts stay in
+  code. Invoke `writing-for-agents` before editing it, and scan for U+2014,
+  U+2013, U+2019, U+2026. At cycle end, remove the ORCHESTRATION.md pointer
+  from its Authority section and reassign its maintenance line.
 - After every stage merge (and any material change of plan), write the new
   state back to the vault project packet
   (`projects/agent-native-state-machine-generator/` in the configured vault):
