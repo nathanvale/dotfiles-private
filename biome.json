@@ -31,7 +31,9 @@
 			"!.agents/runtime/vault-git-transaction-manager",
 			"!.agents/runtime/warm-chrome",
 			"!.agents/runtime/agent-native-state-machine-generator/prototypes",
-			"!.agents/runtime/agent-native-state-machine-generator/fixtures"
+			"!.agents/runtime/agent-native-state-machine-generator/fixtures",
+			"!.agents/runtime/agent-native-state-machine-generator/pilot/*.jsonc",
+			"!.agents/runtime/agent-native-state-machine-generator/pilot/generated"
 		]
 	},
 	"formatter": {
