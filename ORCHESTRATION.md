@@ -65,9 +65,15 @@ writing-for-agents first. Routine status edits run this checklist alone.
 
 ## Next
 
-1. Awaiting Nathan: the stage 5 to 7 go-ahead, and the stage-5 decision
-   packet rulings (receipts/stage5-decision-packet.md, posted to issue
-   55).
+1. Awaiting Nathan's recorded rulings on issue 55: the stage-5 decision
+   packet and the stage 5 to 7 go-ahead. The vault GOAL.md (rewritten
+   2026-08-21) is explicit: until the rulings are recorded, the
+   implementation queue remains closed. A brief supervisor
+   misreading of an ambiguous "keep going" as the go-ahead was caught
+   by Nathan's interrupt and the vault rewrite before any stage-5 work
+   started; nothing was chartered.
+2. On recorded rulings: charter Input Schema v2 as the first stage-5
+   unit (packet section 2.1; the Agent Worktree gaps receipt feeds it).
 2. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
    receipts/stage5-decision-packet.md, posted to issue 55) plus the
