@@ -28,9 +28,17 @@ import {
 	type EmissionResult,
 	PROVENANCE_MANIFEST_PATH,
 } from './artifact-set.ts'
-import type { SpecificationDigest } from './canonical.ts'
+import {
+	GENERATOR_CONTRACT_VERSION,
+	INPUT_SCHEMA_VERSION,
+	type SpecificationDigest,
+} from './canonical.ts'
 import type { SpecificationIr } from './ir.ts'
 import type { ArtifactRefusal } from './refusal.ts'
+import {
+	isRegisteredReaderVersion,
+	registeredReaderFor,
+} from './registered-readers.ts'
 
 export interface GenerationOptions {
 	/** Directory that holds the Generated Artifact Set. */
@@ -60,6 +68,47 @@ export const GENERATION_FAILURE_CAUSES = [
 	'generation_write_failure',
 	/** Regeneration found no existing set to replace. */
 	'generation_no_existing_set',
+	/**
+	 * A new Generated Artifact Set was asked for from input on a superseded
+	 * Input Schema Version. Founding one would change consumer meaning through
+	 * an upgrade no product owner admitted, so the refusal names the Registered
+	 * Migration route instead. Verifying or regenerating an existing set on
+	 * that version stays supported: the Registered Reader owns it.
+	 */
+	'generation_superseded_input_schema',
+	/**
+	 * The compiled IR and the specification digest disagree about which
+	 * version identity produced them.
+	 *
+	 * Distinct from `generation_superseded_input_schema`: that names input the
+	 * generator can read but may not found a set from, while this names two
+	 * identities a caller supplied together that cannot both be true. A set
+	 * founded on them would carry an IR claiming one version and a provenance
+	 * manifest recording another, and no consumer could tell which it was
+	 * generated against.
+	 */
+	'generation_provenance_mismatch',
+	/**
+	 * The output directory already holds a Generated Artifact Set this
+	 * compilation does not describe, or a provenance manifest that cannot be
+	 * read at all.
+	 *
+	 * Distinct from the two version causes: those judge the input, while this
+	 * judges what is already on disk. Replacing a set whose identity cannot be
+	 * confirmed would overwrite another product's output, or a corrupt one, on
+	 * the strength of a filename.
+	 */
+	'generation_foreign_existing_set',
+	/**
+	 * The provenance manifest in the output directory cannot be read.
+	 *
+	 * Split from `generation_foreign_existing_set` because the repairs are
+	 * opposite: a corrupt manifest is repaired by deleting it and generating
+	 * afresh, while a manifest recording another identity means the output
+	 * directory is wrong. `subject` is the directory in both, so a caller
+	 * branching on cause is the only way to tell them apart.
+	 */
+	'generation_unreadable_manifest',
 ] as const
 
 export type GenerationFailureCause = (typeof GENERATION_FAILURE_CAUSES)[number]
@@ -366,11 +415,26 @@ async function removeSupersededOutputs(
 	}
 }
 
-/** Reads the declared output set of the manifest already on disk, if any. */
+/**
+ * Reads the provenance the manifest on disk records, if any.
+ *
+ * Carries both version identities, not only the digest and the output list: a
+ * caller deciding whether an existing set may be replaced has to know which
+ * specification and which generator contract produced it. Presence alone
+ * says a file exists, which is not the same claim.
+ *
+ * `readable` distinguishes a manifest that parsed from one that did not.
+ * Verification treats an unparsable manifest as drift, which is right, but
+ * generation must not read it as a set worth replacing, so the two callers
+ * branch on this rather than sharing one lenient answer.
+ */
 async function readExistingManifest(outputDir: string): Promise<
 	| {
 			readonly present: true
+			readonly readable: boolean
 			readonly digest: string
+			readonly inputSchemaVersion: string
+			readonly generatorContractVersion: string
 			readonly declaredOutputs: readonly string[]
 	  }
 	| { readonly present: false }
@@ -380,6 +444,8 @@ async function readExistingManifest(outputDir: string): Promise<
 	try {
 		const manifest = JSON.parse(await file.text()) as {
 			specification_digest?: unknown
+			input_schema_version?: unknown
+			generator_contract_version?: unknown
 			declared_outputs?: unknown
 		}
 		const outputs = Array.isArray(manifest.declared_outputs)
@@ -387,19 +453,47 @@ async function readExistingManifest(outputDir: string): Promise<
 					(entry): entry is string => typeof entry === 'string',
 				)
 			: []
+		const text = (value: unknown): string =>
+			typeof value === 'string' ? value : ''
 		return {
 			present: true,
-			digest:
-				typeof manifest.specification_digest === 'string'
-					? manifest.specification_digest
-					: '',
+			readable: true,
+			digest: text(manifest.specification_digest),
+			inputSchemaVersion: text(manifest.input_schema_version),
+			generatorContractVersion: text(manifest.generator_contract_version),
 			declaredOutputs: outputs,
 		}
 	} catch {
-		// An unparsable manifest still declares nothing reliably; treat it as
-		// present with no usable digest so verification reports it as drift.
-		return { present: true, digest: '', declaredOutputs: [] }
+		// An unparsable manifest declares nothing reliably. Verification still
+		// sees it as present so it reports drift; generation reads `readable`
+		// and refuses rather than replacing a set it cannot identify.
+		return {
+			present: true,
+			readable: false,
+			digest: '',
+			inputSchemaVersion: '',
+			generatorContractVersion: '',
+			declaredOutputs: [],
+		}
 	}
+}
+
+/**
+ * Whether every output a manifest declares is actually on disk.
+ *
+ * A manifest declaring outputs that do not exist describes a set that was
+ * never materialised, or one since removed. Either way there is nothing to
+ * replace, so the caller is founding rather than repairing.
+ */
+async function allOutputsPresent(
+	outputDir: string,
+	declaredOutputs: readonly string[],
+): Promise<boolean> {
+	for (const path of declaredOutputs) {
+		if (!isSafeRelativePath(path)) return false
+		if (!(await Bun.file(join(outputDir, path)).exists())) return false
+	}
+	return true
 }
 
 /**
@@ -413,6 +507,116 @@ export async function generateArtifactSet(
 	digest: SpecificationDigest,
 	options: GenerationOptions,
 ): Promise<GenerationResult> {
+	return await writeArtifactSet(ir, digest, options, false)
+}
+
+/**
+ * The shared writer behind both verbs.
+ *
+ * `repairing` is internal and never caller-supplied. It says the caller is
+ * restoring a set this compilation already owns, which is why a drifted
+ * manifest may be rewritten: on a set whose identity is otherwise proved, a
+ * corrupt manifest is drift like any other artifact.
+ *
+ * It is earned by proven identity, never by presence. A superseded version
+ * may repair only a set whose manifest matches its reader evidence, because
+ * "an existing legacy set" is a claim about which set is there, and a
+ * directory that merely contains a file with the manifest's name proves
+ * nothing about that.
+ */
+async function writeArtifactSet(
+	ir: SpecificationIr,
+	digest: SpecificationDigest,
+	options: GenerationOptions,
+	repairing: boolean,
+): Promise<GenerationResult> {
+	// Before rendering and before any write: the IR and the digest must agree
+	// about their own identity. `deriveArtifactSet` and the manifest read the
+	// two separately, so a caller that amends one and keeps the other would
+	// publish a set whose declared version and recorded provenance disagree.
+	// Checking one identity and trusting the other is how a fail-closed gate
+	// ends up trusting an input nothing cross-checks.
+	const irVersion = ir.specMeta.inputSchemaVersion
+	const reader = registeredReaderFor(irVersion)
+	const expectedInputSchemaVersion = reader?.frozenEnvelopeVersion ?? irVersion
+	const expectedGeneratorContractVersion =
+		reader?.frozenGeneratorContractVersion ?? GENERATOR_CONTRACT_VERSION
+	if (
+		digest.inputSchemaVersion !== expectedInputSchemaVersion ||
+		digest.generatorContractVersion !== expectedGeneratorContractVersion
+	)
+		return {
+			ok: false,
+			cause: 'generation_provenance_mismatch',
+			subject: irVersion,
+			message: `The compiled specification declares Input Schema Version ${JSON.stringify(irVersion)}, whose digest envelope names ${JSON.stringify(expectedInputSchemaVersion)} and Generator Contract Version ${JSON.stringify(expectedGeneratorContractVersion)}, but the supplied digest names ${JSON.stringify(digest.inputSchemaVersion)} and ${JSON.stringify(digest.generatorContractVersion)}. A Generated Artifact Set cannot record two identities.`,
+			refusals: [],
+		}
+
+	const existing = await readExistingManifest(options.outputDir)
+	// Before rendering and before any write: founding a NEW set from input the
+	// Registered Reader owns would give a consumer v2 meaning it never
+	// admitted. The route out is the Registered Migration, which produces an
+	// isolated candidate the product owner admits separately.
+	//
+	// Replacing a set that already exists is not founding one. The admitted
+	// pilot's set is pinned on a superseded version, so verifying and
+	// regenerating it must keep working; only the first write is refused.
+	// Legacy replacement is legitimate only when the set on disk IS the set
+	// this compilation describes. Presence is not provenance: a corrupt
+	// manifest, or one belonging to another product or another specification,
+	// says nothing about whether this legacy version may replace it.
+	const declaredVersion = ir.specMeta.inputSchemaVersion
+	// Identity AND materialisation. A manifest is a claim about a set, not the
+	// set: its digest is printed in every generated header, so anyone can
+	// write one. Requiring the declared outputs to exist means "this set is
+	// already here" is proven by the artifacts rather than asserted by a file
+	// that names them.
+	const identityMatches =
+		existing.present &&
+		existing.readable &&
+		existing.digest === digest.specificationDigest &&
+		existing.inputSchemaVersion === expectedInputSchemaVersion &&
+		existing.generatorContractVersion === expectedGeneratorContractVersion
+	const replacesOwnSet =
+		identityMatches &&
+		existing.declaredOutputs.length > 0 &&
+		(await allOutputsPresent(options.outputDir, existing.declaredOutputs))
+	// Identity is required whenever this compilation did not found what is
+	// already there. Repair does not waive it: `repairing` narrows what a
+	// caller may do to a set it already owns, and never widens it, so proving
+	// the set is not this compilation's is enough on its own.
+	if (existing.present && !existing.readable)
+		return {
+			ok: false,
+			cause: 'generation_unreadable_manifest',
+			subject: options.outputDir,
+			message: `The provenance manifest in "${options.outputDir}" cannot be read, so the set it declares cannot be identified. Remove it and generate afresh.`,
+			refusals: [],
+		}
+
+	if (existing.present && !replacesOwnSet)
+		return {
+			ok: false,
+			cause: 'generation_foreign_existing_set',
+			subject: options.outputDir,
+			message: `The Generated Artifact Set in "${options.outputDir}" records a different specification or generator identity, or declares outputs that are not present, so this compilation cannot replace it. Check the output directory.`,
+			refusals: [],
+		}
+
+	if (
+		!repairing &&
+		!replacesOwnSet &&
+		isRegisteredReaderVersion(declaredVersion)
+	)
+		return {
+			ok: false,
+			cause: 'generation_superseded_input_schema',
+			subject: declaredVersion,
+			message: `Input Schema Version ${JSON.stringify(declaredVersion)} is read-only. A new Generated Artifact Set is founded from version ${JSON.stringify(INPUT_SCHEMA_VERSION)}, so migrate the candidate and admit the result before generating.`,
+			refusals: [],
+		}
+
 	const emitters = options.emitters ?? DEFAULT_EMITTERS
 	const rendered = renderArtifactSet(ir, digest, emitters)
 	if (!rendered.ok) return rendered
@@ -420,7 +624,6 @@ export async function generateArtifactSet(
 	const declaredOutputs = [...rendered.artifacts.keys()].sort()
 	// Replace whatever the directory already declared, so a stale set's
 	// artifacts cannot survive alongside the new one.
-	const existing = await readExistingManifest(options.outputDir)
 	const supersededOutputs = existing.present
 		? [...new Set([...existing.declaredOutputs, ...declaredOutputs])]
 		: declaredOutputs
@@ -467,7 +670,12 @@ export async function regenerateArtifactSet(
 			refusals: [],
 		}
 
-	return await generateArtifactSet(ir, digest, options)
+	// A set exists. Whether this compilation may replace it is decided by the
+	// identity checks in `writeArtifactSet`, which repair does not waive: the
+	// manifest still has to name this specification and these version
+	// identities. Only a current-version set that this compilation owns can
+	// have its own drifted manifest rewritten.
+	return await writeArtifactSet(ir, digest, options, true)
 }
 
 /** Lists every file under a directory as forward-slashed relative paths. */

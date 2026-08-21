@@ -97,12 +97,20 @@ describe('derivation refuses with exactly the pinned gap inventory', () => {
 		for (const refusal of emission.refusals) {
 			counts[refusal.cause] = (counts[refusal.cause] ?? 0) + 1
 		}
-		// The pinned outcome observed on 2026-08-21: 13 commands times three
-		// underivable columns (refused blocker, invalid-usage blocker, success
-		// action binding), plus the bare-invocation binding gap, plus one
-		// write-preview refusal per write-implying command. Any drift means a
-		// schema gap opened or closed and the product owner must rule on it.
+		// The pinned outcome: 13 commands times three underivable columns
+		// (refused blocker, invalid-usage blocker, success action binding),
+		// plus the bare-invocation binding gap, plus one write-preview refusal
+		// per write-implying command. Any drift means a schema gap opened or
+		// closed and the product owner must rule on it.
+		//
+		// Re-pinned deliberately from 44 to 45 when the Command Surface
+		// Contract stopped inventing a `script` path: the draft declares no
+		// `command_surface.entry` and supplies no consumer entry, so its
+		// entry point is genuinely underivable. The gap was always there and
+		// the old count hid it behind a conventional default that named a
+		// file which need not exist. The 44 columns below are unchanged.
 		expect(counts).toEqual({
+			emit_entry_undeclarable: 1,
 			emit_expectation_column_underivable: 40,
 			emit_write_preview_undeclarable: 4,
 		})

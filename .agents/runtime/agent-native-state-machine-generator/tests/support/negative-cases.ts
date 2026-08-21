@@ -108,4 +108,16 @@ export const NEGATIVE_FIXTURE_CASES: ReadonlyArray<NegativeFixtureCase> = [
 		cause: 'structure_value_not_permitted',
 		path: 'command_surface.no_argument_behavior',
 	},
+	// Transitions need a declared phase state; the generator never picks one.
+	{
+		fixture: 'missing-phase-state',
+		cause: 'semantic_missing_phase_state',
+		path: 'phase_state',
+	},
+	// Input Schema Version custody: exact match against the supported set.
+	{
+		fixture: 'unsupported-schema-version',
+		cause: 'semantic_unsupported_schema_version',
+		path: 'spec_meta.input_schema_version',
+	},
 ]

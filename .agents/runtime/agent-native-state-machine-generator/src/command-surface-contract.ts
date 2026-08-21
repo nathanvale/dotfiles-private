@@ -50,10 +50,27 @@ export interface CommandContractEmission {
  */
 export function deriveCommandContracts(
 	ir: SpecificationIr,
+	options: { readonly entryScript?: string } = {},
 ): CommandContractEmission {
 	const surface = ir.commandSurface
+	// Declared beats supplied, and neither means refuse. The generator has no
+	// third source: a conventional default would name a path that need not
+	// exist, which is what an auditor found in every v1 contract.
+	const entryScript = ir.commandSurface.entryScript ?? options.entryScript
 	const refusals: ArtifactRefusal[] = []
 	const contracts: Record<string, CommandFacadeContract> = {}
+
+	// Collected, not short-circuited: the other columns are still checked so
+	// a candidate sees every underivable surface at once rather than one per
+	// run, which is the same shape the write-preview refusal already takes.
+	if (entryScript === undefined)
+		refusals.push(
+			artifactRefusal({
+				cause: 'emit_entry_undeclarable',
+				subject: ir.specMeta.product,
+				message: `Product ${ir.specMeta.product} names no public entry point: the candidate declares no command_surface.entry and the consumer supplied none, so every command contract's script would name a path the generator invented.`,
+			}),
+		)
 
 	for (const code of BASELINE_EXIT_CODES) {
 		if (surface.exitCodes[code] === undefined) {
@@ -71,18 +88,26 @@ export function deriveCommandContracts(
 		const mutation = surface.mutations[command] ?? 'read'
 		const sideEffects = MUTATION_SIDE_EFFECTS[mutation] ?? ['read']
 
-		// Input Schema v1 has no `execution_modes` field, so the generator has no
-		// admitted source for one. A write-implying command therefore cannot
-		// satisfy the facade's Write Preview Capability obligation from anything
-		// the candidate declares, and emission refuses rather than inventing a
-		// `check` mode or authoring a `previewExemption` reason. Both are
-		// product-owner decisions; surfacing the gap is the generator's job.
-		if (isWriteImplyingMutation(mutation)) {
+		// A write-implying command owes the facade's Write Preview Capability
+		// obligation: a non-mutating Execution Mode, or a declared reason it
+		// owes none. Both are product-owner decisions, so the generator reads
+		// what the candidate declared and refuses when it declared neither
+		// rather than inventing a `check` mode or authoring an exemption.
+		const declaredModes = surface.executionModes[command] ?? []
+		const previewable = declaredModes.some(
+			(mode) => mode === 'check' || mode === 'dry_run',
+		)
+		const exemption = surface.previewExemptions[command]
+		if (
+			isWriteImplyingMutation(mutation) &&
+			!previewable &&
+			exemption === undefined
+		) {
 			refusals.push(
 				artifactRefusal({
 					cause: 'emit_write_preview_undeclarable',
 					subject: command,
-					message: `Command ${command} declares write-implying mutation ${mutation}, which owes a check or dry_run preview path, but Input Schema v1 declares no execution modes. Admit an execution-mode surface or a package-owned previewExemption reason for ${command}.`,
+					message: `Command ${command} declares write-implying mutation ${mutation}, which owes a check or dry_run preview path, but declares no such execution mode and no preview exemption. Admit one or the other for ${command}.`,
 				}),
 			)
 			continue
@@ -94,7 +119,7 @@ export function deriveCommandContracts(
 				? undefined
 				: { id: declared.id, schema_version: declared.version }
 		contracts[command] = {
-			script: `src/cli.ts ${command}`,
+			script: `${entryScript ?? ''} ${command}`,
 			summary: summaryFor(command, mutation),
 			usage: [`${ir.specMeta.product} ${command}`],
 			json: outputModesFor(command, surface).includes('json'),

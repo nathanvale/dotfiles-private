@@ -41,7 +41,7 @@ describe('the generator refuses rather than inventing an execution mode', () => 
 			for (const refusal of previewRefusals) {
 				// The refusal names the command so the owner knows exactly what to
 				// admit, and points at the decision rather than a generator internal.
-				expect(refusal.message).toContain('execution modes')
+				expect(refusal.message).toContain('execution mode')
 				expect(refusal.message).toContain(refusal.subject)
 			}
 		})

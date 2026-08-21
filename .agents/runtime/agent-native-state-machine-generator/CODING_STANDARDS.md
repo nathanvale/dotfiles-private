@@ -19,6 +19,11 @@ this file holds package-specific idioms only and points rather than restates.
 - Spec-fixed cause tokens (`generated_drift`, `incompatible_run_version`,
   `command_surface_drift`) keep their spec spelling; note the CONTEXT.md
   concept name in a comment where they are declared.
+- A supported historical input compiles through its registered reader in
+  `registered-readers.ts`, which owns that version's frozen bytes and pinned
+  digest identity. When a change cannot reproduce that evidence, escalate to
+  the product owner with the observed digests; a pinned identity is evidence
+  about admitted history, so it stays fixed while the explanation moves.
 - Diagnostics carry a JSON path and a source location.
 - Diagnostic and refusal messages read as one voice: begin with a capital,
   end with a full stop, name the construct and the sealed rule it broke, and
@@ -46,6 +51,10 @@ this file holds package-specific idioms only and points rather than restates.
 - Derive meaning from declared candidate surface. Where the schema cannot
   express a required meaning, refuse with a sealed cause; never substitute a
   hardcoded default that masquerades as derivation.
+- A forbidden public transition refuses unconditionally, with the privilege
+  living in the seam rather than in an argument a caller chooses. Give a test
+  needing pre-existing privileged state a committed fixture or an unexported
+  helper under `tests/support/`, so production keeps one answer.
 - A switch over a sealed union ends in an explicit exhaustiveness check
   (`const _: never = value`), never a catch-all `default`. A non-optional
   return type is not the proof: `walk` returns `void`, so a new `Shape`

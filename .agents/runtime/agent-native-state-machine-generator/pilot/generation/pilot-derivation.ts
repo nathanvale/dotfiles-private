@@ -21,6 +21,10 @@ import { renderProjectionComposer } from './render-projection-composer.ts'
  * inside the root are wholly generator-owned and replaced as one unit.
  */
 export const PILOT_DERIVATION_OPTIONS: DerivationOptions = {
+	// The pilot's real front door, package-relative. The candidate is on a
+	// superseded Input Schema Version and declares no entry, so the consumer
+	// that owns the file names it.
+	entryScript: 'pilot/cli.ts',
 	discoveryImport: {
 		symbol: 'projectVaultGitReimaginedCommandDiscoveryTree',
 		from: '../../extensions/command-discovery.ts',

@@ -180,7 +180,15 @@ function deriveNoArgumentStation(ir: SpecificationIr): {
 } {
 	const surface = ir.commandSurface
 	const behavior = surface.noArgumentBehavior
-	const candidate = NO_ARGUMENT_COMMAND_BY_BEHAVIOR[behavior]
+
+	// A declared binding is the admitted answer. The naming convention below
+	// is the v1 fallback, and it matches nothing on a product whose commands
+	// are named differently, which is the gap the declaration closes.
+	const declared = surface.bareInvocationCommand
+	const candidate =
+		declared !== undefined
+			? declared
+			: NO_ARGUMENT_COMMAND_BY_BEHAVIOR[behavior]
 	const command =
 		candidate !== undefined && surface.commands.includes(candidate)
 			? candidate
@@ -192,7 +200,10 @@ function deriveNoArgumentStation(ir: SpecificationIr): {
 				artifactRefusal({
 					cause: 'emit_expectation_column_underivable',
 					subject: `no_argument_behavior:${behavior}`,
-					message: `The candidate declares no_argument_behavior ${behavior} but no declared command owns it, and Input Schema v1 has no binding from bare invocation to a command. Admit which command bare invocation dispatches to.`,
+					message:
+						declared === undefined
+							? `The candidate declares no_argument_behavior ${behavior} but no bare_invocation_command, and no declared command owns the behavior by convention. Admit which command bare invocation dispatches to.`
+							: `The candidate binds bare invocation to ${declared}, which command_surface.commands does not declare.`,
 				}),
 			],
 		}

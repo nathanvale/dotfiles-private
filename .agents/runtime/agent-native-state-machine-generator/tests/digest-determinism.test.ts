@@ -114,6 +114,11 @@ describe('specification digest', () => {
 		// Deliberate independent oracle: the pinned version literals restated, not
 		// the exported constants the envelope is stamped from. Asserting the
 		// imports back would move with any version bump and prove nothing.
+		//
+		// fallow is on a superseded Input Schema Version, so the Registered
+		// Reader's byte-frozen stamp applies and this stays "1" even though the
+		// candidate declares "spike-draft-1". The IR reports the declared value;
+		// only the envelope is frozen.
 		expect(result.digest.inputSchemaVersion).toBe('1')
 		expect(result.digest.generatorContractVersion).toBe('1')
 	})
