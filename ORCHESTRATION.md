@@ -76,12 +76,27 @@ writing-for-agents first. Routine status edits run this checklist alone.
    grants no authority: no Stage 5 work, runtime adoption, candidate
    edits, Specification Admission, commits toward stage 5, pushes, or
    activation.
-2. Awaiting Nathan's separate approval: the stage 5 to 7 go-ahead. On
-   that approval, charter Input Schema v2 as the first stage-5 unit
-   from the fourteen recorded requirements (they supersede the
-   build-added worklist's schema items; the Agent Worktree gaps
-   receipt corroborates).
-3. Stage 5 carries the 13 unresolved decisions named in the plan
+2. Stage 5 STARTED 2026-08-21: Nathan's explicit go-ahead, recorded
+   this session with two charter invariants. (a) The fourteen recorded
+   requirements and the fourteen Agent Worktree gap rows are distinct
+   sets; neither wholesale replaces the other; the first-unit charter
+   dispositions every row of both plus the stage 3 and stage 4 schema
+   worklist. (b) Exact version-identity custody: a v2 shape change
+   bumps the Input Schema Version; v1 fails closed outside the
+   registered reader and migration boundary; no silent pilot rewrite;
+   any new pilot digest needs separate Specification Admission.
+   Runtime adoption, Specification Admission, Pause release,
+   activation, extraction, and stages 6 to 7 each remain a separate
+   ask to Nathan.
+3. In flight: the Input Schema v2 unit at
+   `.worktrees/issue-55-schema-v2`, branch feat/issue-55-schema-v2,
+   fixed point 518053f. The charter with the full coverage matrix is
+   AGENT-BRIEF.md at that worktree root (archive to receipts/schema-v2/
+   at merge). The worker does not commit; the supervisor owns unit
+   commits, review (both axes plus cli-execution-auditor), and the
+   merge. AC binding: issue stories 5, 6, 51, 52; the plan comment's
+   stage-5 row.
+4. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
    receipts/stage5-decision-packet.md, posted to issue 55) plus the
    build-added worklist below, now strengthened by the Agent Worktree
