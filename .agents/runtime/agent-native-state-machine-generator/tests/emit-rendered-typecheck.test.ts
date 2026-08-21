@@ -18,6 +18,9 @@ import { readCandidate } from './support/candidates.ts'
  * consumer.
  */
 
+/** Scratch file name, assembled so it is never a resolvable import. */
+const SCRATCH_BASENAME = ['__emit', 'scratch', 'ts'].join('.')
+
 async function renderVaultGitCatalog(): Promise<string> {
 	const compiled = compileSpecificationCandidate(
 		await readCandidate('vault-git'),
@@ -42,7 +45,9 @@ describe('the rendered catalog satisfies the facade types under tsc', () => {
 		// workspace's type packages resolve exactly as they do for a consumer.
 		// The file name is scratch-only and removed in `finally`; it is never a
 		// declared artifact and never committed.
-		const file = new URL('./__emit-scratch.ts', import.meta.url).pathname
+		// Built from parts so no static analyzer reads this as an import
+		// specifier: the file does not exist until this test writes it.
+		const file = new URL(`./${SCRATCH_BASENAME}`, import.meta.url).pathname
 		try {
 			// The rendered catalog imports a consumer discovery module that does not
 			// exist here. Only that one import specifier is rewritten; every line

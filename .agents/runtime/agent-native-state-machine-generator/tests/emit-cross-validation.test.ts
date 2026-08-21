@@ -215,3 +215,72 @@ describe('emission is deterministic', () => {
 		}
 	})
 })
+
+describe('station derivation refuses a command the facade grammar rejects', () => {
+	test('an uppercase command name is refused, not silently emitted', async () => {
+		const { ir, digest } = await vaultGitIr()
+		// The facade's station id grammar is lowercase-only. A candidate may name
+		// a command the grammar cannot express, and emitting it would publish a
+		// catalog the facade refuses at projection time instead of at build time.
+		const inconsistent: SpecificationIr = {
+			...ir,
+			commandSurface: {
+				...ir.commandSurface,
+				commands: [...ir.commandSurface.commands, 'Begin'],
+				mutations: { ...ir.commandSurface.mutations, Begin: 'read' },
+			},
+		}
+
+		const emission = emitFacadeArtifacts(inconsistent, digest)
+		expect(emission.ok).toBe(false)
+		if (emission.ok) return
+		expect(
+			emission.refusals.some(
+				(refusal) =>
+					refusal.cause === 'emit_station_id_invalid' &&
+					refusal.subject.startsWith('Begin.'),
+			),
+		).toBe(true)
+	})
+
+	test('an underscore command name is refused by the same grammar check', async () => {
+		const { ir, digest } = await vaultGitIr()
+		const inconsistent: SpecificationIr = {
+			...ir,
+			commandSurface: {
+				...ir.commandSurface,
+				commands: [...ir.commandSurface.commands, '_hidden'],
+				mutations: { ...ir.commandSurface.mutations, _hidden: 'read' },
+			},
+		}
+
+		const emission = emitFacadeArtifacts(inconsistent, digest)
+		expect(emission.ok).toBe(false)
+		if (emission.ok) return
+		expect(
+			emission.refusals.some(
+				(refusal) => refusal.cause === 'emit_station_id_invalid',
+			),
+		).toBe(true)
+	})
+
+	test('a duplicate command declaration cannot emit two stations with one id', async () => {
+		const { ir, digest } = await vaultGitIr()
+		const inconsistent: SpecificationIr = {
+			...ir,
+			commandSurface: {
+				...ir.commandSurface,
+				commands: [...ir.commandSurface.commands, 'status'],
+			},
+		}
+
+		const emission = emitFacadeArtifacts(inconsistent, digest)
+		expect(emission.ok).toBe(false)
+		if (emission.ok) return
+		expect(
+			emission.refusals.some(
+				(refusal) => refusal.cause === 'emit_station_id_duplicate',
+			),
+		).toBe(true)
+	})
+})

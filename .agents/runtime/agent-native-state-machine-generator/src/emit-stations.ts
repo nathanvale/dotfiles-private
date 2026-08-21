@@ -87,7 +87,6 @@ export function deriveStations(ir: SpecificationIr): StationEmission {
 	const stations: DerivedStation[] = []
 	const seen = new Set<string>()
 	const declaredExits = declaredExitCodes(surface)
-	const commands = new Set(surface.commands)
 
 	// Sorted so the emitted order depends on the specification's content, not
 	// on the order keys happened to be written into the candidate file.
@@ -120,26 +119,13 @@ export function deriveStations(ir: SpecificationIr): StationEmission {
 				)
 				continue
 			}
-			if (id.split('.')[0] !== command) {
-				refusals.push(
-					emitRefusal({
-						cause: 'emit_station_id_command_mismatch',
-						subject: id,
-						message: `Branch Station id ${id} does not name its own command ${command}.`,
-					}),
-				)
-				continue
-			}
-			if (!commands.has(command)) {
-				refusals.push(
-					emitRefusal({
-						cause: 'emit_station_command_unknown',
-						subject: `${id}:${command}`,
-						message: `Branch Station ${id} names command ${command}, which discovery does not declare.`,
-					}),
-				)
-				continue
-			}
+			// The `id.split(".")[0] === command` invariant and command membership in
+			// discovery are not checked here: `id` is constructed as
+			// `${command}.${branch}` from a `command` drawn out of
+			// `surface.commands`, so neither can fail. Guarding them anyway would
+			// claim a check the derivation makes structurally impossible. The
+			// facade re-checks both independently, and a test asserts its drift
+			// output is empty, so the invariants stay proved rather than assumed.
 			if (!declaredExits.has(exitCode)) {
 				refusals.push(
 					emitRefusal({
