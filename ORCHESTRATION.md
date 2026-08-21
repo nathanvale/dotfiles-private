@@ -70,15 +70,7 @@ writing-for-agents first. Routine status edits run this checklist alone.
    the digest-moving invariant-prose fix, bare "branch" to Branch
    Station, bundles with the admission edit), and the stage 5 to 7
    go-ahead.
-2. IN FLIGHT 2026-08-21: the open findings repair (F2 banner test, F5
-   literal version oracle, F6 second-copy deletions, F8 scratch path,
-   F9 the sealed-cause iteration test the admitted candidate-10 rule
-   demands plus the missing fixtures). Chartered by admitted rules and
-   receipt dispositions; needs no owner decision. Worktree
-   `.worktrees/issue-55-findings-repair`, branch
-   feat/issue-55-findings-repair, forked at 7062fb1; brief at its
-   root; completion signal HANDBACK.md.
-3. Stage 5 carries the 13 unresolved decisions named in the plan
+2. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row plus the build-added worklist below.
 
 Stage-5 admission worklist (build-added; the plan comment owns the 13
@@ -112,7 +104,15 @@ base decisions):
   a ruled mapping between the facade's `retryable` and Exact Same-Input
   Retry Safety; export STOP_SCOPES and sealed authority/completeness
   lists from the front door; the expectations.ts plural-blocker prose
-  fix.
+  fix. From the findings repair: emit_expectation_action_unknown is
+  structurally unreachable through the derivation seam (the catalog
+  lookup and action resolution read the same ir.actions.catalog), which
+  contradicts refusal.ts's "every cause here is reachable" header;
+  decide between deleting the dead guard and its sealed cause (a
+  Generator Contract change) or declaring the surface that makes it
+  reachable. The pinned unproducible list in
+  tests/support/refusal-producers.ts fails loudly when a src change
+  makes it producible.
 
 Open findings, dispositions only (evidence at
 receipts/standards-fit-review-2026-08.md, "Findings for the supervisor"):
@@ -143,7 +143,10 @@ receipts/standards-fit-review-2026-08.md, "Findings for the supervisor"):
   here; nothing is pushed anywhere without Nathan's approval.
 - Stage worktrees branch from the feature branch at
   `.worktrees/issue-55-<unit>`, one background agent each, opened in VS
-  Code for Nathan. Launch recipe: historically `claude --bg --model
+  Code for Nathan. Create them with an absolute path from the repo
+  root: a cwd-relative `git worktree add` nested one checkout inside
+  the integration package tree on 2026-08-21 (recovered; the branch
+  was unaffected). Launch recipe: historically `claude --bg --model
   claude-opus-5 --effort high`; stage 4 runs on the supervisor
   session's inherited model after the harness rejected that
   model-effort combination on 2026-08-21. Review axes run as
@@ -211,6 +214,20 @@ to Next or the stage-5 worklist.
   stay unadmitted. Twelve rules now in CODING_STANDARDS.md. Gate: 140
   tests, typecheck, Biome, pilot verify clean, spike digests
   byte-identical.
+- Findings repair (F2, F5, F6, F8, F9): MERGED 7dcd47c (five unit
+  commits, fork 7062fb1, tests and fixtures only). Gate: 176 tests,
+  typecheck, Biome, pilot verify clean, spike digests byte-identical;
+  RED proven for the iteration test both ways (removed fixture row and
+  removed producer each fail naming their cause). Bound to the admitted
+  candidate-10, V3, V4, and independent-oracle rules: the sealed-cause
+  iteration now runs in-suite over both vocabularies with a shared
+  CASES registry and live refusal producers; two new negative fixtures
+  close structure_missing_required and structure_type_mismatch; the
+  vacuous durable-machinery sweep and the false-commented amendment
+  copy are deleted; the version envelope pins literal oracles; the
+  rendered-typecheck scratch lives outside the repository. Arbitrated
+  decline accepted: emit_expectation_action_unknown unreachable (queued
+  as a stage-5 worklist decision). Receipts at receipts/findings-repair/.
 - Stage 4, Vault Git Reimagined pilot (learning only): MERGED 30d5bff
   (five stage commits 0eb9f12 through repair 070dc90, fixed point
   fbd2931). Gate: 139 tests, typecheck, Biome, verify clean (5
