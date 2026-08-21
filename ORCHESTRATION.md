@@ -100,10 +100,12 @@ writing-for-agents first. Routine status edits run this checklist alone.
    because the tracked repo-root HANDBACK.md (leaked by aw-draft unit
    commit 8ca6420, byte-identical to receipts/aw-draft/HANDBACK.md)
    rides into every stage worktree; that stale file stays until its
-   deletion is separately authorized. Worker: claude-handoff session
-   a28f34ca, name "Issue 55 Input Schema v2 worker", cwd that
-   worktree, launched 2026-08-21 after two prior launches were stopped
-   with zero changes observed; writers never overlapped. AC binding:
+   deletion is separately authorized. Worker: session a28f34ca stopped
+   by Nathan 2026-08-21 for model mismatch (its job state resolved to
+   claude-fable-5; the Handoff step requires claude-opus-5 at high
+   effort); it left zero changes and no completion file. Three
+   launches so far stopped with zero changes observed; writers never
+   overlapped. Relaunch per the Handoff step is next. AC binding:
    issue stories 5, 6, 51, 52; the plan comment's stage-5 row.
 4. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
@@ -194,12 +196,16 @@ receipts/standards-fit-review-2026-08.md, "Findings for the supervisor"):
    and a collision-free completion file. Complete when the supervisor
    has reviewed it, before launch.
 4. Handoff: from the unit worktree invoke the claude-handoff skill (it
-   owns the CLI mechanics) with a descriptive session name, referencing
-   the brief and owners rather than duplicating them, with a Suggested
-   skills section; record the real session name, short ID, cwd, and
-   completion signal in the in-flight block. Complete when
-   `claude agents` shows exactly one running implementation worker in
-   the intended cwd.
+   owns the CLI mechanics) with a descriptive session name and
+   `--model opus --effort high`; every implementation worker runs
+   Opus 5 at high effort. Reference the brief and owners rather than
+   duplicating them, include a Suggested skills section, and record the
+   real session name, short ID, cwd, model, effort, and completion
+   signal in the in-flight block. Complete when `claude agents` shows
+   exactly one running implementation worker in the intended cwd and
+   its resolved job state proves claude-opus-5 at high effort; generic
+   Opus wording, an older Opus model, or any other model leaves the
+   worker unadmitted.
 5. Worker boundary: the worker edits only its unit worktree, writes the
    named completion file, and never commits, pushes, merges, edits
    integration, or edits main. The supervisor owns authorized unit
