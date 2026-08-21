@@ -184,19 +184,28 @@ receipts/standards-fit-review-2026-08.md, "Findings for the supervisor"):
 
 ## Ways of work
 
-1. Supervisor lane: work only from `.worktrees/issue-55-integration` on
+1. Authorization, only when crossing a stage or separately gated
+   boundary (today: stage 6, stage 7, runtime adoption, Specification
+   Admission, push, activation, Pause release, extraction; listing a
+   boundary here grants nothing): quote or point to Nathan's exact
+   grant with its exclusions, then record that narrow scope in issue
+   55, this file, and the vault packet before any dispatch. When
+   external or vault write authority is absent, stop and ask instead
+   of launching. Complete when all three owners state the same
+   authorized scope and the next closed boundary.
+2. Supervisor lane: work only from `.worktrees/issue-55-integration` on
    feat/issue-55-state-machine-generator; reconcile resume step 0
    before chartering. Complete when integration status and every
    `.worktrees/issue-55-*` worktree are accounted for.
-2. Unit isolation: create `.worktrees/issue-55-<unit>` from the current
+3. Unit isolation: create `.worktrees/issue-55-<unit>` from the current
    integration branch using an absolute path from the repo root.
    Complete when exactly one implementation writer owns that unit
    worktree.
-3. Charter: write AGENT-BRIEF.md at the unit root naming authoritative
+4. Charter: write AGENT-BRIEF.md at the unit root naming authoritative
    sources, acceptance lines, gate proof, allowed paths, stop boundary,
    and a collision-free completion file. Complete when the supervisor
    has reviewed it, before launch.
-4. Handoff: implementation writers launch through the claude-handoff
+5. Handoff: implementation writers launch through the claude-handoff
    skill (it owns the CLI mechanics) from their dedicated unit
    worktree, with a descriptive session name and
    `--model opus --effort high`. Reference the brief and owners rather
@@ -210,15 +219,15 @@ receipts/standards-fit-review-2026-08.md, "Findings for the supervisor"):
    unadmitted. Complete when `claude agents` shows exactly one running
    implementation worker in the intended cwd with that proof in its
    job state.
-5. Worker boundary: the worker edits only its unit worktree, writes the
+6. Worker boundary: the worker edits only its unit worktree, writes the
    named completion file, and never commits, pushes, merges, edits
    integration, or edits main. The supervisor owns authorized unit
    commits and integration merges. Complete when the completion file
    exists and every mutation obeys those owners.
-6. Replacement: stop the prior worker, inspect and preserve its diff,
+7. Replacement: stop the prior worker, inspect and preserve its diff,
    then launch exactly one replacement from the same unit worktree.
    Complete when implementation writers never overlapped.
-7. Integration: verify the gate, commit the unit branch, apply the
+8. Integration: verify the gate, commit the unit branch, apply the
    Code-review contract, repair and re-verify, merge accepted work into
    integration, archive the brief and completion receipt (untracked
    during the run) under `receipts/<unit>/`, and update the ledger.
