@@ -57,7 +57,7 @@ async function snapshot(dir: string): Promise<ReadonlyMap<string, string>> {
  * expressiveness refusals that Input Schema v1 cannot satisfy
  * (`emit_write_preview_undeclarable`, `emit_expectation_column_underivable`,
  * and the unbound no-argument binding), which is the correct recorded
- * consequence and is pinned by `emit-expressiveness-gaps.test.ts`. The
+ * consequence and is pinned by `expressiveness-gaps.test.ts`. The
  * amendment is IR-side only, standing in for what a stage-5 admitted surface
  * will declare, so every emitter under test runs exactly as it will in
  * production.
