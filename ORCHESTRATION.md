@@ -103,9 +103,14 @@ Delete this file when the feature branch is ready to merge to `main`.
    sharing a name with different meanings), one owner per sealed vocabulary
    consumed cross-stage, one idiom for refusals/causes/discriminated unions,
    zero dead guards, every export with a real caller, helper duplicates
-   hoisted. The package keeps ONE front door (`src/index.ts`); internal file
-   fan-out is challenged at each merge (a new file must own a meaning no
-   existing file owns). Track src file and export counts in the stage ledger;
+   hoisted. Ground every file, type, function, and sealed-vocabulary name in
+   CONTEXT.md language: grepping a contract term (Branch Station, Generated
+   Artifact Set, Projection Composer, Extension Registry) must land in the
+   file that owns it, and a name using a term CONTEXT.md does not define is
+   either renamed to the contract term or the term is added to CONTEXT.md
+   first (the Progress Owner precedent). The package keeps ONE front door
+   (`src/index.ts`); internal file fan-out is challenged at each merge (a new
+   file must own a meaning no existing file owns). Track src file and export counts in the stage ledger;
    unexplained growth is a finding, not a fact.
 - pattern-referee only if a diff defends structure by pattern name;
   cli-execution-auditor at stage 4/5 review.
