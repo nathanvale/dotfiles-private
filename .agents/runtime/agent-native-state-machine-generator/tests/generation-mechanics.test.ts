@@ -10,7 +10,7 @@ import {
 	regenerateArtifactSet,
 	verifyArtifactSet,
 } from '../src/index.ts'
-import { readCandidate } from './support/candidates.ts'
+import { readCandidate, readNegativeFixture } from './support/candidates.ts'
 
 /**
  * The package registry as tests see it. Held here so a test that adds or
@@ -366,5 +366,62 @@ describe('regenerating a Generated Artifact Set', () => {
 		// Fail closed: the previous complete set survives rather than being
 		// half-replaced by a set that could not be rendered.
 		expect(await snapshot(dir)).toEqual(before)
+	})
+})
+
+describe('fail-closed across the compile seam', () => {
+	test('a compile failure yields no IR to generate from, so no set is written', async () => {
+		const dir = await outputDir()
+		const invalid = compileSpecificationCandidate(
+			await readNegativeFixture('unresolved-reference'),
+		)
+
+		expect(invalid.ok).toBe(false)
+		if (invalid.ok) return
+		expect(invalid.diagnostics.length).toBeGreaterThan(0)
+
+		// The failure variant carries no `ir` and no `digest`, so generation is
+		// unreachable by construction rather than by a caller remembering to
+		// check. Nothing was written for the rejected candidate.
+		expect([...(await snapshot(dir)).keys()]).toEqual([])
+	})
+
+	test('an unsafe declared output path is refused before anything is written', async () => {
+		const dir = await outputDir()
+		const compiled = await compile('vault-git')
+
+		const result = await generateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+			emitters: [
+				{
+					name: 'escaping',
+					emit: () => new Map([['../escaped.json', '{}\n']]),
+				},
+			],
+		})
+
+		expect(result.ok).toBe(false)
+		if (result.ok) return
+		expect(result.cause).toBe('generation_emitter_failure')
+		expect([...(await snapshot(dir)).keys()]).toEqual([])
+	})
+
+	test('two emitters declaring one path is refused, not silently resolved', async () => {
+		const dir = await outputDir()
+		const compiled = await compile('vault-git')
+		const collide = (name: string) => ({
+			name,
+			emit: () => new Map([['contested.json', `{"from":"${name}"}\n`]]),
+		})
+
+		const result = await generateArtifactSet(compiled.ir, compiled.digest, {
+			outputDir: dir,
+			emitters: [collide('first'), collide('second')],
+		})
+
+		expect(result.ok).toBe(false)
+		if (result.ok) return
+		expect(result.cause).toBe('generation_emitter_failure')
+		expect([...(await snapshot(dir)).keys()]).toEqual([])
 	})
 })
