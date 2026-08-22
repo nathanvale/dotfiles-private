@@ -277,6 +277,36 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   tests/v2-derivation.test.ts; completion signal
   TEST-CUSTODY-REPAIR-HANDBACK.md, untracked. All digest custody
   constraints unchanged.
+  Repair handback received 2026-08-22 16:40 AEST and HELD. All five R1
+  items applied: the supply is bounded to the two reserved gaps with a
+  sorted-comparison throwing guard; the fabricated retry posture is
+  removed and both stations now emit the candidate's declared
+  same_input_unsafe; the target borrow stays on a proven type-contract
+  ground (RoutingRow.target is required in src/ir.ts and the
+  omit-both build fails tsc, observed error quoted in the handback)
+  with the comment stating the value arbitrary and unasserted; the
+  supply comment is rewritten truthfully; and the new pin test derives
+  the accepted candidate unamended asserting the exact cause and
+  subject sets with restated-literal oracles and in-memory sensitivity
+  controls on both axes. The frozen first handback is untouched
+  (f8812efa.. unchanged); the corrected 5.1/12 statements and the
+  widened exemplar ASCII exception (line 1 U+2014 plus line 96 U+2192,
+  both byte-identity-required) live in the repair handback. Post-repair
+  frozen diff sha256 d5a79e4d.. (38673 bytes, 14 files, +340/-95);
+  supervisor-proven the repair delta is confined to the two allowed
+  paths (the other 12 per-file diffs byte-identical to f115eb1f..).
+  Supervisor rerun confirms independently: 447 pass 0 fail across 27
+  files (446 plus the one new pin), typecheck, Biome (branch-snapshot
+  only) and pilot verify clean, 6cc10a52 pinned nowhere, all six
+  digest identities recomputed matching, candidate, twin and exemplar
+  byte-identities intact, the guard and pin present in the claimed
+  shapes.
+  Focused three-axis re-review of the repair delta dispatched
+  2026-08-22 16:44 AEST to the same three admitted reviewer sessions
+  (transcripts continued, first-cycle context intact): Spec 49bc6ce4,
+  Standards 411b337d, cli-execution-auditor 3a0c40cd, writing
+  REREVIEW-*.md at the unit root from REREVIEW-PACKET.md; the tree
+  must not move while they run.
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
