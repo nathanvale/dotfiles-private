@@ -4,7 +4,9 @@
 - JSON success writes one envelope line to stdout.
 - JSON errors write to stderr only.
 - Quiet mode has no noisy stderr on success.
-- Station Maps claim Declared Branch Coverage only.
+- Station Maps report Declared and Observed Branch Coverage separately.
+- Observed Branch Coverage counts only real-process evidence that matched its
+  expected result; synthetic or unlabelled evidence stays at Declared.
 - Missing, drifted, skipped, and declared-unreachable Branch Stations stay visible as data.
 
 ## Error and hints
