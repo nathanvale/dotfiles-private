@@ -92,22 +92,50 @@ writing-for-agents first. Routine status edits run this checklist alone.
    Runtime adoption, Specification Admission, Pause release,
    activation, extraction, and stages 6 to 7 each remain a separate
    ask to Nathan.
-3. No unit in flight. Stage 5's schema half is complete: Input Schema
-   v2 is declared, validated, canonicalized and fully derived, under
-   version-owned custody with a safe manifest boundary, and the
-   authorized Contextual Rendering repair is ACCEPTED and MERGED
-   2026-08-22 (ledger entry below; the 2026-08-22 grant is fully
-   consumed and grants nothing further). The open decision is Nathan's,
-   exactly one: charter Vault Git qualification now, or defer it.
-   Vault Git qualification remains the Stage 5 outcome, which the plan
-   comment's stage-5 row owns:
-   `qualify:vault-git` with declared and observed coverage reported
-   separately and introduced drift caught. That needs Real Process
-   Fixtures and Proof Adapters against the existing CLI, and the plan's
-   named risk 1 applies: if observational proof cannot satisfy the
-   formal claim, an adoption authorization ask surfaces at the gate.
-   Nathan decides when to charter it. Carried follow-ups for whichever
-   unit takes them next: the symlink-escape containment check at the
+3. Vault Git qualification CHARTERED 2026-08-22: Nathan's explicit Yes
+   and Go, recorded this session. Stage 5's schema half is complete
+   (Input Schema v2 declared, validated, canonicalized, fully derived,
+   version-owned custody, safe manifest boundary; ledger below). The
+   charter is observational qualification against the existing public
+   vault-git CLI. Binding gate, owned by the plan comment's stage-5
+   row: `qualify:vault-git` with Declared Branch Coverage and Observed
+   Branch Coverage reported separately and deliberately introduced
+   drift caught. Real Process Fixtures prepare declared environments
+   and invoke the public CLI, never supplying expected results; Proof
+   Adapters collect declared durable evidence, never deciding pass,
+   coverage, Authority, or continuation; generated contracts own every
+   verdict; the zero unsafe-retry regression baseline (accepted facade
+   ruling 2) is preserved. Closed under this charter, each a separate
+   ask to Nathan: Vault Git runtime edit or adoption, Specification
+   Admission, any Product Specification Candidate edit, Pause release,
+   activation, extraction, push, main merge, stage 6, stage 7. The
+   carried follow-ups below stay parked.
+4. Qualification blocker PROVEN 2026-08-22, supervisor probe through
+   the public front door (compileSpecificationCandidate then
+   deriveArtifactSet, probe kept outside the repo): the vault-git
+   spike candidate compiles clean at f22e836b.. under the v1
+   Registered Reader, and derivation refuses fail-closed with 16
+   sealed refusals: emit_entry_undeclarable, eleven
+   emit_expectation_column_underivable blocker rows (every *.refused
+   station), and emit_write_preview_undeclarable on begin, complete,
+   join, repair. No Generated Artifact Set exists for Vault Git, so no
+   Declared Branch Coverage exists to observe against, and the formal
+   qualify:vault-git gate cannot truthfully run inside this charter.
+   Closing the refusals requires the candidate re-authored against
+   Input Schema v2 per the recorded rulings (a Product Specification
+   Candidate edit, closed) and Specification Admission of the
+   resulting digest (closed). The one open ask to Nathan: authorize
+   the Vault Git candidate re-authoring unit. Specification Admission
+   stays its own later act on the validated digest that unit produces.
+5. First chartered unit, the truthful preparation inside the charter:
+   facade dual coverage, plan comment ADD-1 and ADD-2 (ADD-3 skipped
+   per the plan default), additive-optional, separately reviewed per
+   the spec's out-of-scope clause, claiming no admission and no
+   qualification evidence. Unit worktree
+   `.worktrees/issue-55-facade-coverage`; dispatch through Ways of
+   work after all three owners record this charter.
+6. Carried follow-ups for whichever unit takes them next: the
+   symlink-escape containment check at the
    deletion site (lexical safety is proved, symlink escape is not);
    em-dashes in artifact-set.ts, canonical.ts and generate.ts comments
    against the package ASCII rule; the 66 measured `as` casts in
@@ -117,7 +145,7 @@ writing-for-agents first. Routine status edits run this checklist alone.
    fixtures, both predating the Contextual Rendering unit); and
    schema.ts's own header comment still naming Input Schema v1 while
    the file owns the v2 shapes (src comment, needs a chartered unit).
-4. Stage 5 carries the 13 unresolved decisions named in the plan
+7. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
    receipts/stage5-decision-packet.md, posted to issue 55) plus the
    build-added worklist below, now strengthened by the Agent Worktree
