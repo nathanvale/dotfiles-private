@@ -29,450 +29,11 @@ all evidence; this file owns the queue, the contracts, and the pointers.
 ## Current pipeline state (2026-08-22)
 
 - Stage 5 is the active stage; stages 1 through 4 are closed (ledger).
-- UNIT ACCEPTED (Nathan, 2026-08-22), COMMITTED, HELD UNMERGED: unit
-  commit 9d1e91e on feat/issue-55-vault-git-candidate, parent a7fd5c6,
-  exactly the two fixture files; git diff a7fd5c6 9d1e91e reproduces
-  the frozen reviewed hash 42b86bec.. byte for byte, and the recompiled
-  digest after the commit is 6cc10a52.. on both files, UNADMITTED.
-  Full custody record and archived evidence:
-  receipts/vault-git-candidate/ (archive commit 39dd4d5; packet issue
-  comment 5378152063). Unit history below; dispatched 2026-08-22 after
-  the pre-launch hold reconciliation.
-  Worker: one claude background session "issue-55 vault-git candidate
-  re-author", short ID 2add7804, session
-  2add7804-f573-4bcd-ad2a-db994ddc68ec, cwd
-  `.worktrees/issue-55-vault-git-candidate`, branch
-  feat/issue-55-vault-git-candidate, fixed point a7fd5c6 (preserved on
-  the unit branch; tree-identical to lineage commit 7d5ec53 after
-  Nathan's 2026-08-22 VS Code rebase; see Notes), model
-  claude-opus-5 at high effort (admission proof observed 2026-08-22:
-  the session record resolves "model":"claude-opus-5" and the job
-  banner reads "Opus 5 with high effort"). Charter: AGENT-BRIEF.md at
-  that worktree root, allowed paths exactly the two vault-git fixture
-  files. Completion signal: VAULT-GIT-CANDIDATE-HANDBACK.md at that
-  worktree root, untracked. A first worker (1479e2c0) was stopped under
-  Nathan's hold with an empty diff; see Notes.
-  Handback received 2026-08-22 14:34 AEST and HELD unaccepted. The
-  frozen worker diff is sha256 59b061a5.. (52514 bytes, two fixture
-  files only). Supervisor gate re-run at a7fd5c6: core proof
-  independently reproduced (candidate and permuted twin compile on the
-  v2 path with no reader, identical digest af6cfef0.., exactly one
-  refusal, commands.refused, returned as a product-decision gap;
-  fallow, pilot and draft digests match their pins), typecheck, Biome
-  and pilot verify clean, bun test 426 pass 20 fail with the 20
-  matching the handback's enumerated identity-move consequences one
-  for one. Three-axis review dispatched 2026-08-22, each admitted
-  claude-opus-5 at high effort (session record plus banner observed):
-  Spec 83571e69, Standards 5653c2a6, cli-execution-auditor 7fc4efd8
-  (applicability ruling: the diff declares Command Surface Contract,
-  execution-mode, preview-exemption and station-blocker surface, the
-  source Station Maps derive from). Reviewers are read-only and
-  report-only, writing REVIEW-SPEC.md, REVIEW-STANDARDS.md and
-  REVIEW-CLI-EXECUTION.md at the unit worktree root; the tree must not
-  move while they run.
-  Review returned 2026-08-22 14:48; custody verified by all three
-  lanes, the frozen diff hash unmoved. Findings: Spec one MAJOR
-  (tidy/janitor rows declare human_kind "command" against their own
-  catalog and next-safe-action.ts:858-864) plus two lesser; Standards
-  one MINOR (three "earlier draft" provenance comment clauses) plus two
-  record-only; cli-execution-auditor one BLOCKER (the activation.refused
-  row names blocker activation_blocked, which that branch never emits)
-  plus two MAJOR, one MINOR, one record-only positive. The Spec and
-  auditor lanes contradicted each other on the activation row; the
-  supervisor re-verified the citations and sided with the auditor
-  (cli.ts:3040-3065 and :3261 emit human_capability_required on the
-  activation refused branch; branch-station-catalog.ts:51;
-  model.ts:123-126; the Spec lane's engine.ts:288 cite is the
-  activation gate on other commands).
-  Disposition (supervisor, 2026-08-22): must-fix R1 tidy/janitor
-  human_kind to external_prerequisite; R2 activation.refused blocker to
-  human_capability_required, target return_to_human_review, posture
-  operator_required; R3 the cause_to_next_action row for
-  human_capability_required reconciled to model.ts:123-126; R4 the
-  activation preview-exemption row added per command-contract.ts:386.
-  Should-fix R5 drop the three provenance clauses keeping each
-  constraint; R6 restate the positional-route comment truthfully
-  (review argv is shared by two catalog actions).
-  R2 and R3 AMENDED pre-repair (Nathan's semantic check, 2026-08-22,
-  delivered to the in-flight worker): human_capability_required is
-  owned by activation.restriction_causes, not the blocker vocabulary,
-  and station_blocker rows must resolve in blockers, so the worker
-  must prove one source-backed disposition: (a) legitimately dual-role
-  with direct schema, product and no-contrary-ruling evidence, or (b)
-  the {activation, refused} row is removed and activation.refused
-  returns as an exact Input Schema shape gap beside commands.refused
-  (refusal count 2 is then truthful). R3 reconciles against the
-  recorded rulings first, model.ts:123-126 second, and stops on
-  conflict. Never papered over to make derivation green. Record-only with
-  named owners: the handback's join-mutation prose slip (repair
-  handback); the availability_evidence naming (Specification
-  Admission); the stale spike-candidates README and package AGENTS.md
-  v1 framing (supervisor merge-time reconciliation); the 20
-  identity-move failures (the queued Nathan follow-up). Auditor
-  findings 2 (owned-paths id split) and 4 (refusal coverage versus the
-  handwritten catalog) are recorded and DECLINED as defects: the split
-  and the eleven blocker mappings are Nathan's recorded ruling and
-  grant scope, catalog widening is the closed runtime-adoption
-  boundary, and the auditor's dissent rides to Specification Admission
-  beside the known circular-catalog-oracle defect.
-  Evidence correction (Nathan, 2026-08-22; supervisor-verified by
-  exact-key count): the fixed point carries 13 unresolved_decisions
-  rows and the current candidate 8. The five removals are
-  single_action_vocabulary, vault_content_repair_gate_meaning,
-  completion_task_observation_deadline, owner_pause_mode and
-  observation_expired_blocker_overload, each citing its ruling;
-  cancellation_scope was a features comment at the fixed point, never
-  a row. The handback's "13 to 7" and "Removed 6, kept 7" and
-  REVIEW-SPEC's "thirteen rows to seven" are false as counts; the
-  Standards lane's "all 8 surviving rows" was correct. The
-  shrink-only-by-rulings acceptance criterion holds substantively;
-  stating the corrected delta is assigned to the repair handback, with
-  the frozen handback and reviews left untouched as evidence.
-  One repair cycle dispatched 2026-08-22 to replacement worker
-  1ef64f9b (charter REPAIR-BRIEF.md at the unit root; completion
-  signal VAULT-GIT-CANDIDATE-REPAIR-HANDBACK.md; admission proof
-  observed: session record resolves "model":"claude-opus-5" and the
-  job banner reads "with high effort") under the same two-file paths;
-  the digest moves again and stays UNADMITTED.
-  Repair handback received 2026-08-22 15:05 AEST and HELD. All six
-  items applied; R2 landed as disposition (b) on the worker's proof
-  (the product's closed vocabularies VAULT_GIT_BLOCKER_IDS,
-  model.ts:1077-1080, and VAULT_GIT_ACTIVATION_RESTRICTION_CAUSES,
-  model.ts:17-27, are disjoint on human_capability_required, and the
-  activation refusal envelope carries an errorCode with no blockers
-  field), so the {activation, refused} row is removed and
-  activation.refused returns as a second exact shape gap beside
-  commands.refused; both need one v2 shape addition, a refusal cause
-  that is an error code rather than a lifecycle blocker. R3 encoded
-  the product's return_to_human_review after proving no ruling
-  speaks. The two assigned evidence corrections are stated in the
-  repair handback; the mid-flight R2/R3 amendment was honored with a
-  full revert of the pre-amendment edit (superseded intermediate
-  digest 98ddbf64.., recorded nowhere). Post-repair frozen diff
-  sha256 42b86bec.. (68219 bytes, two fixtures only). Supervisor
-  rerun confirms independently: digest 6cc10a52.. identical on both
-  files, refusal count 2, custody digests intact, typecheck, Biome
-  (branch-snapshot only) and pilot verify clean, 426 pass 20 fail
-  with the failing set set-identical to pre-repair. Digest pair
-  af6cfef0.. and 6cc10a52.., both UNADMITTED, in no tracked file.
-  Focused three-axis re-review of the repaired diff dispatched
-  2026-08-22, each admitted claude-opus-5 at high effort (session
-  record plus banner observed): Spec 3c23031c, Standards d65c778d,
-  cli-execution-auditor 85b56894, writing REREVIEW-*.md at the unit
-  root; the declined auditor findings 2 and 4 are out of their
-  scope. Re-review returned 2026-08-22 15:15 AEST, custody held
-  (42b86bec.. unmoved): Spec zero findings with every claim
-  independently reproduced; cli-execution zero findings, the
-  vocabulary disjointness proven in strong form (intersection empty)
-  and no retry-posture change anywhere in the delta; Standards two
-  MINOR comment-style rows in the R2 replacement block (a missing
-  separator line and a narrating opening sentence), dispositioned
-  record-only and carried to the next authorized candidate-touching
-  unit, digest-neutral. Also recorded: the repair handback's
-  canonical-length prose slip (51374 versus observed 29911, with the
-  load-bearing equality claims verifying) and the REPAIR-BRIEF's own
-  stale step-2 sentence, superseded by the R2 amendment. Nathan
-  accepted 2026-08-22; the merge stays closed until the test-custody
-  follow-up closes the 20 enumerated failures and the full gate runs
-  green under the review contract. Last merges: facade
-  dual
-  coverage and cli-author dual-coverage teaching (merge commits e787db0
-  and dbe8679, linearized off the lineage by Nathan's 2026-08-22 VS
-  Code rebase; map in receipts/custody/rebase-2026-08-22-map.md).
-- UNIT ACCEPTED (Nathan, 2026-08-22 17:47 AEST), COMMITTED 5833091,
-  HELD UNMERGED: the test-custody follow-up unit, dispatched
-  2026-08-22. Worker: one claude background session "issue-55
-  test-custody worker", short ID c84f419e, cwd
-  `.worktrees/issue-55-test-custody`, branch feat/issue-55-test-custody,
-  fixed point 9d1e91e (the accepted candidate commit; forked from the
-  unit branch, not the integration head, per the grant's in-scope
-  note), model claude-opus-5 at high effort (admission proof observed
-  2026-08-22: the session record resolves "model":"claude-opus-5" and
-  the job banner reads "with high effort"). Charter: AGENT-BRIEF.md at
-  that worktree root; grant: the Authorized grant section below;
-  baseline at the fixed point 426 pass 20 fail. Completion signal:
-  TEST-CUSTODY-HANDBACK.md at that worktree root, untracked. The unit
-  stops at its reviewed handback.
-  Handback received 2026-08-22 16:07 AEST (TEST-CUSTODY-HANDBACK.md,
-  sha256 f8812efa.., 21177 bytes) and HELD unaccepted. The frozen
-  worker diff is sha256 f115eb1f.. (34767 bytes, tracked files only:
-  the 8 named test files, the 3 harness owners, the 2 fixture READMEs
-  and the package AGENTS.md, +262/-95), preserved at the unit root as
-  WORKER-DIFF-2026-08-22-c84f419e.patch; the one new untracked fixture
-  fixtures/spike-candidates/vault-git.v1-frozen.state-machine.jsonc is
-  sha256 676428c0.. (28912 bytes), byte-identical to the a7fd5c6
-  candidate (git show piped to diff, supervisor-run). Supervisor gate
-  re-run at the frozen tree, independent: full suite 446 pass 0 fail
-  across 27 files (Agent Runner, exit 0), typecheck clean, Biome
-  branch-snapshot clean (66 files), pilot verify clean, git grep
-  6cc10a52 empty, and all six digest identities recomputed through the
-  front door match their pins (candidate and twin 6cc10a52..,
-  exemplar f22e836b.. via input-schema-spike-draft-1, fallow
-  c26764f0.., pilot af827747.., draft 50528054..); candidate and twin
-  byte-identical to 9d1e91e. Worker conduct verified from the session
-  record: claude-opus-5 at high effort on every message, test-design
-  (05:52:38Z) before the first edit (05:54:19Z), zero subagents, zero
-  commits. The handback records a fresh-worktree baseline correction
-  (bun install needed before the 426/20 baseline reproduces; bun.lock
-  unmoved) and three source-material errata, all held for disposition
-  with the review.
-  Three-axis review dispatched 2026-08-22 16:20 AEST, each admitted
-  claude-opus-5 at high effort (session record plus launch flags
-  observed): Spec 49bc6ce4, Standards 411b337d, cli-execution-auditor
-  3a0c40cd (applicability ruling: the new exemplar declares a full
-  command_surface block and the harness now synthesizes
-  station_blocker rows carrying retry-safety values; the prior
-  cycle's declined auditor findings 2 and 4 and the two queued shape
-  gaps are out of its scope). Reviewers are read-only and
-  report-only, writing REVIEW-SPEC.md, REVIEW-STANDARDS.md and
-  REVIEW-CLI-EXECUTION.md at the unit worktree root from the packets
-  REVIEW-EVIDENCE.md and REVIEW-PACKET-*.md; the tree must not move
-  while they run.
-  Review returned 2026-08-22 16:26 AEST, custody verified by all three
-  lanes (f115eb1f.. unmoved, every pin recomputed). Findings:
-  cli-execution zero findings with two record-only rows (the supply's
-  blocker column uniquely load-bearing; the borrowed target
-  arbitrary); Standards one must-fix F1 (the harness supply hardcodes
-  retrySafety operator_required, overriding the candidate's declared
-  refusal rule same_input_unsafe through the routedPosture
-  precedence) plus one should-fix F2 (the supply comment cites a pin
-  that does not exist) and one record-only F3 (the v1SourceFor
-  mapping duplicated across two test files); Spec one should-fix S-1
-  (the supply is unbounded by absence, so a deleted genuine row is
-  silently backfilled and no test pins the candidate's own unamended
-  two-refusal gap) plus record-only S-2 (handback 5.1 and 12
-  overstate the pin), with the chartered outcome judged satisfied and
-  every decline legitimate. The supervisor independently re-verified
-  the F1 and S-1 citations (candidate rule refusal to
-  same_input_unsafe at fixture line 506; expectations.ts
-  routedPosture precedence; emission.ts lines 125 to 127 fabricated
-  values; the two cited v2-derivation tests run against synthetic
-  fixtures, not the candidate).
-  Disposition (supervisor, 2026-08-22): one must-fix repair R1 in the
-  harness owner consolidating F1, S-1, F2/S-2 and auditor R2: (a)
-  bound the supply to exactly the two reserved gaps, throwing on any
-  other absence; (b) stop fabricating the retry posture so the
-  declared rule answers; (c) omit or truthfully comment the borrowed
-  target; (d) rewrite the supply comment truthfully; (e) add one pin
-  test asserting the candidate's own unamended derivation refuses on
-  exactly activation.refused:blocker and commands.refused:blocker
-  (supervisor grant: placed in v2-derivation.test.ts under the
-  original brief's new-coverage-welcome line). Record-only with named
-  owners: F3 to the next candidate-touching test unit; auditor R1 to
-  the queued Input Schema shape decision; the archived checklist
-  mislabels (handback section 10) to the supervisor's archive-time
-  correction note; the biome check --write process note,
-  evidence-neutral per all three lanes, recorded here; the exemplar
-  ASCII exception restated accurately (line 1 U+2014 and line 96
-  U+2192, both byte-identity-required) to the repair handback; the
-  missing docs/agents/coding-standards.md on this branch (exists on
-  main at 2d9b4c4) to merge-time reconciliation.
-  Repair cycle dispatched 2026-08-22 16:35 AEST to the same admitted
-  worker, resumed as continuation session f6523298 (the c84f419e
-  session had exited after its boundary and was resumed by session
-  ID, carrying its full transcript forward; admission re-verified:
-  the continuation record resolves "model":"claude-opus-5" with
-  "effort":"high" on every message, launch flags --model opus
-  --effort high). Charter: TEST-CUSTODY-REPAIR-BRIEF.md at the unit
-  root; allowed paths exactly tests/support/emission.ts and
-  tests/v2-derivation.test.ts; completion signal
-  TEST-CUSTODY-REPAIR-HANDBACK.md, untracked. All digest custody
-  constraints unchanged.
-  Repair handback received 2026-08-22 16:40 AEST and HELD. All five R1
-  items applied: the supply is bounded to the two reserved gaps with a
-  sorted-comparison throwing guard; the fabricated retry posture is
-  removed and both stations now emit the candidate's declared
-  same_input_unsafe; the target borrow stays on a proven type-contract
-  ground (RoutingRow.target is required in src/ir.ts and the
-  omit-both build fails tsc, observed error quoted in the handback)
-  with the comment stating the value arbitrary and unasserted; the
-  supply comment is rewritten truthfully; and the new pin test derives
-  the accepted candidate unamended asserting the exact cause and
-  subject sets with restated-literal oracles and in-memory sensitivity
-  controls on both axes. The frozen first handback is untouched
-  (f8812efa.. unchanged); the corrected 5.1/12 statements and the
-  widened exemplar ASCII exception (line 1 U+2014 plus line 96 U+2192,
-  both byte-identity-required) live in the repair handback. Post-repair
-  frozen diff sha256 d5a79e4d.. (38673 bytes, 14 files, +340/-95);
-  supervisor-proven the repair delta is confined to the two allowed
-  paths (the other 12 per-file diffs byte-identical to f115eb1f..).
-  Supervisor rerun confirms independently: 447 pass 0 fail across 27
-  files (446 plus the one new pin), typecheck, Biome (branch-snapshot
-  only) and pilot verify clean, 6cc10a52 pinned nowhere, all six
-  digest identities recomputed matching, candidate, twin and exemplar
-  byte-identities intact, the guard and pin present in the claimed
-  shapes.
-  Focused three-axis re-review of the repair delta dispatched
-  2026-08-22 16:44 AEST to the same three admitted reviewer sessions
-  (transcripts continued, first-cycle context intact): Spec 49bc6ce4,
-  Standards 411b337d, cli-execution-auditor 3a0c40cd, writing
-  REREVIEW-*.md at the unit root from REREVIEW-PACKET.md; the tree
-  must not move while they run.
-  Re-review returned 2026-08-22 16:46 AEST, custody held (d5a79e4d..
-  unmoved; each lane independently proved the 12 non-repair per-file
-  diffs byte-identical to f115eb1f..). All three lanes recommend
-  ACCEPT: Spec S-1 and S-2 CLOSED with zero new findings (the
-  original failing probes reproduced against the repaired harness and
-  now fail loudly; the pin is sensitive in both directions and
-  oracle-independent); Standards F1 and F2 CLOSED, F3 correctly
-  declined and carried record-only, one new record-only N1 (the
-  throwing guard has no test of its own; loud failure mode, outside
-  this cycle's paths); cli-execution R1 posture half CLOSED with the
-  blocker residue record-only by design (owner: the queued shape
-  decision), R2 CLOSED on the verified type-contract ground, Duty 1
-  strengthened (no fabricated semantic value remains; zero
-  unsafe-retry baseline intact; posture histogram moved exactly
-  16/14/4 to 14/14/6, only the two reserved stations). The Standards
-  lane disclosed two temporary counterfactual probes, each restored
-  with the custody hash re-verified to d5a79e4d.. afterward. The unit
-  is at its reviewed handback boundary, HELD for Nathan's
-  accept-or-return; supervisor final custody check 16:47 AEST clean
-  (HEAD 9d1e91e, diff d5a79e4d.., first handback f8812efa..,
-  6cc10a52 pinned nowhere).
-  EXTENDED GATE (Nathan, 2026-08-22, before accepting): the stop
-  boundary is extended by one final whole-engine code-review gate;
-  the prior accept-or-return is deferred behind it. Exactly two
-  top-level reviewer sessions run SEQUENTIALLY, each brand-new and
-  admitted claude-fable-5 at xhigh effort, each explicitly invoking
-  the code-review skill on the complete engine at the repaired
-  custody fixed point 9d1e91e through the skill's work-in-progress
-  path (git diff 9d1e91e; the tree stays uncommitted; a reviewer
-  blocked on a committed three-dot diff stops and reports rather
-  than committing). The skill's own parallel Spec and Standards
-  subagents are permitted. Common packet FINAL-REVIEW-PACKET.md at
-  the unit root, sha256 14a02d82.. (repair handback hashed
-  fa71442d.. and carried in it). Reviewer A dispatched 16:52 AEST:
-  brand-new session "issue-55 final review A", short ID 2e42af86,
-  session 2e42af86-0369-4d17-a111-2c47dfd98d5c, admission verified
-  (launch flags --model fable --effort xhigh; the session record
-  resolves "model":"claude-fable-5" with "effort":"xhigh"), sole
-  write REVIEW-FINAL-A.md. Reviewer B launches only after A
-  completes, receives the packet plus A's full report, and must
-  verify, challenge, or extend A rather than repeat it, sole write
-  REVIEW-FINAL-B.md.
-  GATE CORRECTED (Nathan's staff audit, 2026-08-22 16:58 AEST): both
-  reviewer-A attempts are REJECTED as non-evidence, reason unit-only
-  Spec grounding and unit-only diff scope: session 2e42af86 (exited
-  16:55 before invoking the skill, zero output) and its relaunch
-  39f0dd7d (stopped before any report; supervisor confirmed no
-  REVIEW-FINAL-A.md from either). The gate is a WHOLE ENGINE review
-  over two layers reviewed as one result with layer-attributed
-  findings: layer 1, the committed engine, git diff 8bbe012..9d1e91e
-  (three-dot) over the package, supervisor-verified merge-base
-  8bbe012aad7ed35e825bd265750b40872caab02d = git merge-base main
-  9d1e91e, 134 files +31549/-25, diff sha256 5df34112.. (1230434
-  bytes); layer 2, the uncommitted test-custody WIP, git diff 9d1e91e
-  over the package plus the untracked frozen exemplar; no commit.
-  Supervisor-owned immutable spec snapshot written at the unit root
-  SPEC-SNAPSHOT-2026-08-22/ (fetched live via ghh: the full issue 55
-  body plus comments 5362367950, 5365237090, 5368129900, 5377730080,
-  5377751430, 5378226764, 5378270664, 5378677005 verbatim; the
-  ORCHESTRATION snapshot at f14f867; vault GOAL.md and README.md; the
-  main-branch repo coding standards; per-file sha256 in MANIFEST.md,
-  manifest sha256 7937f64f..). The superseded packet is preserved as
-  FINAL-REVIEW-PACKET-SUPERSEDED-14a02d82.md; the corrected packet
-  FINAL-REVIEW-PACKET.md is sha256 15ff26cd.. and requires the
-  code-review skill's Spec subagent prompt to name the snapshot, with
-  the supervisor verifying that grounding from the reviewer's
-  transcript before admitting output.
-  Corrected reviewer A dispatched 2026-08-22 17:01 AEST: brand-new
-  session "issue-55 final review A", short ID 891db3bf, session
-  891db3bf-2dad-4a38-a450-79b8796b69f4, admission verified (launch
-  flags --model fable --effort xhigh; the session record resolves
-  "model":"claude-fable-5" with "effort":"xhigh"), sole write
-  REVIEW-FINAL-A.md, two-layer whole-engine scope per the corrected
-  packet. Reviewer B waits for A's completed, admitted report.
-  Reviewer A returned 2026-08-22 17:15 AEST and is ADMITTED:
-  REVIEW-FINAL-A.md sha256 7cfb91f3.. (24776 bytes); the supervisor
-  verified from the session record that exactly one code-review Skill
-  invocation ran, its two skill-owned parallel subagents were the Spec
-  and Standards lanes, the Spec subagent's launched prompt names
-  SPEC-SNAPSHOT-2026-08-22/, its MANIFEST.md, the issue body file and
-  both layers, and the session resolves claude-fable-5 at xhigh on
-  all 118 messages; custody re-verified after return (HEAD 9d1e91e,
-  full diff d5a79e4d.. unmoved). A's result: custody and all four
-  gates reproduced on its own probes; no must-fix survives its
-  verification; four layer-1 should-fixes (render.ts banner asserting
-  Admitted on unadmitted output, already carried; build-ir.ts
-  totality-by-cast; generate.ts refusal-message voice with
-  absolute-path leak risk; the semantic.ts alias rename), the
-  Standards lane's sole reported must-fix (the pin-test title "the
-  accepted candidate's") challenged down to record-only on chartered
-  and recorded-vocabulary evidence, and six record-only rows;
-  recommendation ACCEPT both layers.
-  Reviewer B dispatched 2026-08-22 17:20 AEST, sequential, brand-new
-  session "issue-55 final review B", short ID 5d3ed7a8, session
-  5d3ed7a8-4c2a-4ab4-9ff5-fb3cf876b47e, admission verified (launch
-  flags --model fable --effort xhigh; the session record resolves
-  claude-fable-5 at xhigh), receiving the corrected packet plus A's
-  full report with the duty to verify, challenge, or extend A, sole
-  write REVIEW-FINAL-B.md, same Spec-grounding transcript check
-  before admission.
-  Reviewer B returned 2026-08-22 17:42 AEST and is ADMITTED:
-  REVIEW-FINAL-B.md sha256 06c37a53.. ; transcript verified (one
-  code-review Skill invocation, Spec subagent prompt names the
-  snapshot, manifest and both layers; claude-fable-5 at xhigh on all
-  149 messages); custody held (HEAD 9d1e91e, diff d5a79e4d..
-  unmoved). B CONFIRMS all of A's custody, gates, findings and the
-  title downgrade (B's own unseeded Standards lane declined to raise
-  the title at all), and CONTRADICTS A's no-must-fix headline with
-  one new verified layer-1 must-fix: the emitted Command Surface
-  Contract omits the declared executionModes and previewExemption
-  fields (src/command-surface-contract.ts contract literal), so the
-  facade's own oracle on UNAMENDED v2 contracts returns 8
-  command-write-preview-missing drift rows while Gate 3
-  (tests/command-surface-contract.test.ts) reports green off
-  amendment-recast evidence; the mask is
-  tests/support/emission.ts withPreviewableMutations plus the
-  entryScript overwrite applied unconditionally, erasing all 8
-  write-implying mutations from every amended v2 suite. The
-  supervisor re-verified the central citations directly in source
-  (the refusal check reads the declared surface at
-  command-surface-contract.ts:96-113; the emitted literal carries no
-  executionModes or previewExemption; the facade type declares both
-  optional at command-contract.ts:200,203; contractsFor derives from
-  emitAmended; the recast and overwrite are unconditional at
-  emission.ts:191,194). B attributes the defect to committed layer-1
-  src, read-only under the unit's grant, latent today (the two
-  reserved refusals block any full v2 set; the pilot is all-read),
-  and recommends ACCEPT for the layer-2 unit with the must-fix
-  recorded as a named engine precondition.
-  Final gate dispositions (supervisor, 2026-08-22): the layer-1
-  must-fix and its mask are assigned to a future bounded
-  generator-hardening unit (its own Nathan ask; see Carried work),
-  landed together because repairing the mask alone flips Gate 3 to
-  its honest red. Standing evidentiary caveats until that unit
-  closes: Gate 3 green is NOT proof of the write-preview obligation,
-  and mutating-station properties computed over amended v2 evidence
-  (including the zero-unsafe-retry leg of the first-cycle
-  cli-execution review) are vacuous for vault-git; the baseline
-  claim stands only as computed over recast evidence. Layer-2
-  findings across both reviewers are all record-only or trivially
-  additive and none touches the unit's semantics: the accepted
-  candidate pin-test title rename question, F3, N1, the dead arm,
-  the discriminants.command comment sentence, and the missing
-  CONTEXT.md exemplar term are carried to the next
-  candidate-touching test unit; the front-door deep imports in two
-  test files and the stale emission.ts header ride with the
-  hardening unit. Both reviewers recommend ACCEPT of the test-custody
-  unit; B states returning it could not repair any new finding.
-  ACCEPTANCE EXECUTED (supervisor, 2026-08-22 17:48 AEST): custody
-  re-verified at the boundary, then the supervisor-only unit commit
-  5833091 on feat/issue-55-test-custody (parent 9d1e91e, 15 files,
-  +854/-95): git diff 9d1e91e 5833091 excluding the new exemplar
-  reproduces the frozen reviewed hash d5a79e4d.. byte for byte, and
-  the committed exemplar blob recomputes 676428c0.. . An intermediate
-  commit 3a5b9d2 omitted tests/version-custody.test.ts by a
-  supervisor staging slip and was amended to 5833091 before any push
-  or record. Full custody record and archived evidence, including the
-  whole-engine gate packets, spec snapshot and both final reports:
-  receipts/test-custody/ (archive commit ebaf551; all 34 archived
-  files verified byte-identical to the unit-root originals). The
-  accepted re-authoring unit's merge precondition, the 20 failures
-  closed and the full gate green under the review contract, is
-  SATISFIED; the integration merge remains a separate supervisor act
-  awaiting Nathan's authorization, and the Gate 3 false-green caveat
-  stays explicit until the Generator hardening unit closes.
+- MERGED 2026-08-22 (merge 6fcf193): the accepted vault-git candidate
+  re-authoring (unit commit 9d1e91e) and its accepted test-custody
+  follow-up (unit commit 5833091). Full histories, custody records and
+  evidence: the ledger entries below, receipts/vault-git-candidate/
+  and receipts/test-custody/.
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
@@ -494,39 +55,28 @@ all evidence; this file owns the queue, the contracts, and the pointers.
 
 ## Nathan decision state
 
-ACCEPT RECORDED (Nathan, 2026-08-22): the re-authoring unit is
-accepted, committed as 9d1e91e on its unit branch, and held unmerged.
-AUTHORIZED (Nathan, 2026-08-22): the test-custody follow-up unit, one
-bounded unit under the grant below; it has now reached its
-independently re-reviewed handback. The extended whole-engine gate
-(Nathan, 2026-08-22) is COMPLETE: both sequential fable-xhigh
-reviewers admitted and returned, both recommend accepting the unit;
-reviewer B surfaced one new layer-1 must-fix, dispositioned to the
-carried Generator hardening unit as a named precondition for the
-Command Surface Alignment Proof, Specification Admission, and
-qualification. ACCEPT RECORDED (Nathan, 2026-08-22, issue comment
-5379074497 acceptance): the test-custody unit is accepted at its
-fully reviewed boundary, committed as 5833091 on its unit branch,
-held unmerged; the re-authoring merge precondition is satisfied.
-NEXT SINGLE DECISION with Nathan: authorize the integration merge
-(9d1e91e plus 5833091 into feat/issue-55-state-machine-generator).
-Queued after it: the Input Schema shape decision for the two
-surviving derivation gaps, then the generator-hardening grant (the
-whole-engine must-fix, with the Gate 3 false-green caveat explicit
-until it closes). The auditor output proposal below stays parked.
-Formal qualification stays blocked until both legs are ready: the
-candidate path through its own later Specification Admission, and
-truthful auditor output.
+MERGE EXECUTED (Nathan's step-7 grant, 2026-08-22): both accepted
+units (9d1e91e re-authoring, 5833091 test-custody) are merged as
+6fcf193; the acceptance and gate history is ledger-owned with
+receipts. NEXT SINGLE DECISION with Nathan: the Input Schema shape
+decision for the two surviving derivation gaps (activation.refused
+and commands.refused, each needing one v2 shape addition, a refusal
+cause that is an error code rather than a lifecycle blocker; pinned
+unamended by the v2-derivation pin test). Queued after it: the
+generator-hardening grant (the whole-engine MUST-FIX, with the Gate 3
+false-green caveat explicit until it closes). The auditor output
+proposal below stays parked. Formal qualification stays blocked until
+both legs are ready: the candidate path through its own later
+Specification Admission, and truthful auditor output.
 
 ## Next safe supervisor action
 
-STOPPED after executing Nathan's acceptance: unit commit 5833091,
-receipts archived at receipts/test-custody/ (ebaf551), owners
-written back. Present the integration-merge authorization ask to
-Nathan and wait; the merge, when authorized, follows operational
-contract step 7 (independent gate re-run, merge, ledger entry, issue
-comment, vault packet write-back). Reconcile owners and answer
-questions; nothing more.
+STOPPED after executing the authorized integration merge (6fcf193)
+with its ledger entries, issue comment, and vault packet write-back
+(Direct Git Mode, staged uncommitted). Present the Input Schema
+shape decision ask to Nathan and wait; dispatch nothing. The
+generator-hardening grant is queued after it. Reconcile owners and
+answer questions; nothing more.
 
 ## Authorized grant (Nathan, 2026-08-22): Vault Git test-custody follow-up
 
@@ -587,9 +137,11 @@ here, on issue 55, and in the vault packet. Ultragoal shape:
 
 ## Dispatch boundary
 
-The consumed re-authoring grant and the live test-custody grant each
-cover exactly one unit worker plus admitted reviewers and one repair
-cycle under the review contract. Beyond that, launch nothing: no other
+The re-authoring and test-custody grants are both CONSUMED (their
+units merged at 6fcf193); each covered exactly one unit worker plus
+admitted reviewers and one repair cycle under the review contract,
+and the test-custody unit additionally carried Nathan's extended
+whole-engine gate. Beyond a recorded grant, launch nothing: no other
 worker, subagent, probe, security test, or qualification run. Never
 infer authorization from a cleanup, reconciliation, or reporting
 request.
@@ -873,6 +425,23 @@ local archive branch archive/issue-55-pre-rebase-237efce.
   Design Gate in cli-author/references/cli-command-facade.md owns the
   facade design proof, including each coverage-reporting consumer's own
   output seam.
+
+- Vault Git candidate re-authoring: MERGED 6fcf193 (unit commit
+  9d1e91e, parent a7fd5c6, frozen reviewed diff 42b86bec..);
+  receipts/vault-git-candidate/. The candidate declares Input Schema
+  v2; its digest 6cc10a52.. stays UNADMITTED, appearing only in
+  supervision records, never as a pin; the two surviving derivation
+  refusals (activation.refused, commands.refused) are Nathan's queued
+  Input Schema shape decision; the f22e836b.. pin asserts frozen v1
+  history.
+- Vault Git test-custody follow-up: MERGED 6fcf193 (unit commit
+  5833091, reviewed diff d5a79e4d.., frozen v1 exemplar 676428c0..);
+  receipts/test-custody/. Gate 447 pass 0 fail at merge. Standing
+  caveat from the 2026-08-22 whole-engine gate: Gate 3 green is not
+  write-preview proof and amended-v2 mutating-station properties are
+  vacuous for vault-git until the carried Generator hardening
+  MUST-FIX closes; carried record-onlies are listed in
+  receipts/test-custody/CUSTODY.md.
 
 ## Notes
 
