@@ -92,32 +92,15 @@ writing-for-agents first. Routine status edits run this checklist alone.
    Runtime adoption, Specification Admission, Pause release,
    activation, extraction, and stages 6 to 7 each remain a separate
    ask to Nathan.
-3. IN FLIGHT: the authorized Contextual Rendering repair, dispatched
-   2026-08-22. Stage 5's schema half is complete: Input Schema v2 is
-   declared, validated, canonicalized and fully derived, under
-   version-owned custody with a safe manifest boundary. Nathan's ruling
-   (issue 55 comment 5376428194, the vault packet, and this file all
-   recorded the same scope before dispatch): the two spike candidate
-   digests may move only to close the bare-string target-validation
-   fail-open. The ruling grants no Vault Git qualification, runtime
-   adoption, Specification Admission, Pause release, activation,
-   extraction, push, or stage 6 or 7 authority.
-   Worker: one claude background session "issue-55 contextual-rendering
-   repair", short ID 99625f6f, cwd
-   `.worktrees/issue-55-contextual-rendering`, branch
-   feat/issue-55-contextual-rendering, fixed point aa84864, model
-   claude-opus-5 at high effort (admission proof observed 2026-08-22:
-   the session record resolves "model":"claude-opus-5" and the job
-   banner reads "Opus 5 with high effort"). Charter: AGENT-BRIEF.md at
-   that worktree root; its ruled disposition closes the semantic.ts
-   bare-string gap, removes the defective run_repair entry, re-permutes
-   the twin fixture, and moves the one vault-git pin, while realizing
-   resume_interrupted_transaction stays parked candidate-authoring
-   work. Completion signal: CONTEXTUAL-RENDERING-HANDBACK.md at that
-   worktree root, untracked. Supervisor baseline observed 2026-08-22
-   at aa84864 before dispatch: 443 pass, 0 fail, typecheck clean.
-   After the repair is accepted, Vault Git qualification remains the
-   Stage 5 outcome, which the plan comment's stage-5 row owns:
+3. No unit in flight. Stage 5's schema half is complete: Input Schema
+   v2 is declared, validated, canonicalized and fully derived, under
+   version-owned custody with a safe manifest boundary, and the
+   authorized Contextual Rendering repair is ACCEPTED and MERGED
+   2026-08-22 (ledger entry below; the 2026-08-22 grant is fully
+   consumed and grants nothing further). The open decision is Nathan's,
+   exactly one: charter Vault Git qualification now, or defer it.
+   Vault Git qualification remains the Stage 5 outcome, which the plan
+   comment's stage-5 row owns:
    `qualify:vault-git` with declared and observed coverage reported
    separately and introduced drift caught. That needs Real Process
    Fixtures and Proof Adapters against the existing CLI, and the plan's
@@ -127,8 +110,13 @@ writing-for-agents first. Routine status edits run this checklist alone.
    unit takes them next: the symlink-escape containment check at the
    deletion site (lexical safety is proved, symlink escape is not);
    em-dashes in artifact-set.ts, canonical.ts and generate.ts comments
-   against the package ASCII rule; and the 66 measured `as` casts in
-   build-ir.ts, unassigned debt, each needing its own argument.
+   against the package ASCII rule; the 66 measured `as` casts in
+   build-ir.ts, unassigned debt, each needing its own argument; the
+   inherited `alias` Avoid-term prose (one REFUSALS row in
+   tests/schema-v2-surfaces.test.ts and a comment shared by 30 v2
+   fixtures, both predating the Contextual Rendering unit); and
+   schema.ts's own header comment still naming Input Schema v1 while
+   the file owns the v2 shapes (src comment, needs a chartered unit).
 4. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
    receipts/stage5-decision-packet.md, posted to issue 55) plus the
@@ -447,7 +435,50 @@ to Next or the stage-5 worklist.
   executable coverage, not new prose.
 - Package AGENTS.md reconciliation from the 2026-08-21 review: closed at
   432f243. Stage-4 reconciliation (pilot Map row, Checks) landed with
-  the receipts archive at 1c7aec3.
+  the receipts archive at 1c7aec3. The 2026-08-22 Contextual Rendering
+  merge reconciliation corrected the schema.ts Map row to v2 and added
+  the six unmapped module rows and the fixtures/v2 row (inherited gap
+  from the two schema-v2 merges).
+- Contextual Rendering bare-string target validation (Stage 5,
+  authorized repair): MERGED 623edb4 (unit commit 614f9f4, fixed point
+  aa84864, receipts at 1f8f1d9). The compile seam validated rendering
+  targets only for the array form (semantic.ts skipped every non-array
+  value), so the vault-git spike's bare-string run_repair rendering
+  named an action no catalog declares, compiled clean, and derivation
+  silently dropped it: a published identifier resolving to nothing. The
+  repair validates the bare-string form through the same resolveAction
+  rule (bare string reports at the rendering key, array form at its
+  indexed path, each side now held by its own boundary test after the
+  one should-fix repair), removes the defective entry from the spike
+  and its permuted twin per the ruling that parks
+  resume_interrupted_transaction as future candidate-authoring, and
+  moves the one vault-git pin to f22e836b..5142f with truthful oracle
+  prose; 7f85428e is grep-empty across src, tests, fixtures and pilot.
+  Removal-only invariant proven: the derived resolution table is
+  identical before and after, re-derived independently by both review
+  axes. Gate: 446 tests (443 base, 2 unit, 1 repair split), typecheck,
+  Biome, pilot verify clean; pilot, fallow and draft digests
+  byte-identical; draft inventory 45; zero facade edits; no new
+  dependencies; no schema shape change; no version bump. Review: spec
+  axis no findings, with the falsifiability positive control decisive
+  (repairing only the fixture's one broken target compiles clean at the
+  declared-surfaces identity); standards axis one MEDIUM should-fix
+  (the asymmetry test held one side only), closed by RED both ways.
+  cli-execution-auditor ruled out of this review: no CLI-execution,
+  facade, or Station Map surface in the diff. Record-only notes carried
+  to Next: the inherited alias Avoid-term prose and schema.ts's stale
+  v1 header. Receipts at receipts/contextual-rendering/.
+- Admission incident from that unit, on record. The worker launched one
+  Explore subagent without pre-launch admission; the live monitor
+  caught it, its report was ruled unadmitted and rejected after one
+  consumption, and both consumed facts were re-established by the
+  worker's direct observation, recorded in the handback. The subagent's
+  own transcript resolves claude-opus-5 at high effort throughout, so
+  the guarded risk never materialized; the process gap is the lesson.
+  The original worker exited after handback; the R1 repair ran under
+  one admitted Opus 5 high replacement (both admission proofs observed
+  in session records). Harvest: unit briefs now carry an explicit
+  no-subagents line unless the supervisor admits one before launch.
 
 ## Standing supervisor rules
 
