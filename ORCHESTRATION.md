@@ -192,6 +192,41 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   baseline at the fixed point 426 pass 20 fail. Completion signal:
   TEST-CUSTODY-HANDBACK.md at that worktree root, untracked. The unit
   stops at its reviewed handback.
+  Handback received 2026-08-22 16:07 AEST (TEST-CUSTODY-HANDBACK.md,
+  sha256 f8812efa.., 21177 bytes) and HELD unaccepted. The frozen
+  worker diff is sha256 f115eb1f.. (34767 bytes, tracked files only:
+  the 8 named test files, the 3 harness owners, the 2 fixture READMEs
+  and the package AGENTS.md, +262/-95), preserved at the unit root as
+  WORKER-DIFF-2026-08-22-c84f419e.patch; the one new untracked fixture
+  fixtures/spike-candidates/vault-git.v1-frozen.state-machine.jsonc is
+  sha256 676428c0.. (28912 bytes), byte-identical to the a7fd5c6
+  candidate (git show piped to diff, supervisor-run). Supervisor gate
+  re-run at the frozen tree, independent: full suite 446 pass 0 fail
+  across 27 files (Agent Runner, exit 0), typecheck clean, Biome
+  branch-snapshot clean (66 files), pilot verify clean, git grep
+  6cc10a52 empty, and all six digest identities recomputed through the
+  front door match their pins (candidate and twin 6cc10a52..,
+  exemplar f22e836b.. via input-schema-spike-draft-1, fallow
+  c26764f0.., pilot af827747.., draft 50528054..); candidate and twin
+  byte-identical to 9d1e91e. Worker conduct verified from the session
+  record: claude-opus-5 at high effort on every message, test-design
+  (05:52:38Z) before the first edit (05:54:19Z), zero subagents, zero
+  commits. The handback records a fresh-worktree baseline correction
+  (bun install needed before the 426/20 baseline reproduces; bun.lock
+  unmoved) and three source-material errata, all held for disposition
+  with the review.
+  Three-axis review dispatched 2026-08-22 16:20 AEST, each admitted
+  claude-opus-5 at high effort (session record plus launch flags
+  observed): Spec 49bc6ce4, Standards 411b337d, cli-execution-auditor
+  3a0c40cd (applicability ruling: the new exemplar declares a full
+  command_surface block and the harness now synthesizes
+  station_blocker rows carrying retry-safety values; the prior
+  cycle's declined auditor findings 2 and 4 and the two queued shape
+  gaps are out of its scope). Reviewers are read-only and
+  report-only, writing REVIEW-SPEC.md, REVIEW-STANDARDS.md and
+  REVIEW-CLI-EXECUTION.md at the unit worktree root from the packets
+  REVIEW-EVIDENCE.md and REVIEW-PACKET-*.md; the tree must not move
+  while they run.
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
@@ -226,10 +261,10 @@ truthful auditor output.
 
 ## Next safe supervisor action
 
-Charter and dispatch the authorized test-custody follow-up unit under
-its grant below, supervise it to its reviewed handback, then stop and
-present accept-or-return to Nathan. Reconcile owners and answer
-questions; nothing more.
+Supervise the in-flight three-axis review of the test-custody handback
+to its return, verify custody held, disposition findings (one repair
+cycle if needed), then stop and present accept-or-return to Nathan.
+Reconcile owners and answer questions; nothing more.
 
 ## Authorized grant (Nathan, 2026-08-22): Vault Git test-custody follow-up
 
@@ -567,6 +602,19 @@ local archive branch archive/issue-55-pre-rebase-237efce.
 - A prior resume attempt (job a19b6b4b, 2026-08-22) resolved at high
   rather than the required xhigh supervisor effort and was stopped
   before any edit or admitted output; it is non-evidence.
+- Supervisor transfer (Nathan's order, 2026-08-22): the prior Fable
+  supervisor session f866f2d3-b0f9-4d54-9133-a475060e6b3b was ordered
+  stopped and replaced. The fresh supervisor is background session
+  "issue-55 test-custody fresh supervisor", short ID 49ce1ea3, session
+  49ce1ea3-5d56-4a88-b5fb-3fc8d1ab8b2a, this worktree, resolved
+  claude-fable-5 at xhigh effort (session record and launch flags
+  observed 2026-08-22). A direct relinquish notice was attempted at
+  16:06 AEST and was undeliverable: the prior session is absent from
+  the session registry and unreachable, so it is treated as already
+  stopped; any later output from it is non-authoritative. The fresh
+  supervisor completed resume step 0 (clean tree at 91f546e, exactly
+  one live unit brief, in .worktrees/issue-55-test-custody, and worker
+  c84f419e verified live on its own branch) before any queue action.
 - Dispatch incident (2026-08-22): worker session 1479e2c0 launched at
   13:52 AEST, crossed by Nathan's pre-dispatch hold, stopped at 13:59
   with zero file changes (tracked diff empty, sha256 e3b0c442.., only
