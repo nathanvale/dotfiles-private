@@ -328,6 +328,27 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   accept-or-return; supervisor final custody check 16:47 AEST clean
   (HEAD 9d1e91e, diff d5a79e4d.., first handback f8812efa..,
   6cc10a52 pinned nowhere).
+  EXTENDED GATE (Nathan, 2026-08-22, before accepting): the stop
+  boundary is extended by one final whole-engine code-review gate;
+  the prior accept-or-return is deferred behind it. Exactly two
+  top-level reviewer sessions run SEQUENTIALLY, each brand-new and
+  admitted claude-fable-5 at xhigh effort, each explicitly invoking
+  the code-review skill on the complete engine at the repaired
+  custody fixed point 9d1e91e through the skill's work-in-progress
+  path (git diff 9d1e91e; the tree stays uncommitted; a reviewer
+  blocked on a committed three-dot diff stops and reports rather
+  than committing). The skill's own parallel Spec and Standards
+  subagents are permitted. Common packet FINAL-REVIEW-PACKET.md at
+  the unit root, sha256 14a02d82.. (repair handback hashed
+  fa71442d.. and carried in it). Reviewer A dispatched 16:52 AEST:
+  brand-new session "issue-55 final review A", short ID 2e42af86,
+  session 2e42af86-0369-4d17-a111-2c47dfd98d5c, admission verified
+  (launch flags --model fable --effort xhigh; the session record
+  resolves "model":"claude-fable-5" with "effort":"xhigh"), sole
+  write REVIEW-FINAL-A.md. Reviewer B launches only after A
+  completes, receives the packet plus A's full report, and must
+  verify, challenge, or extend A rather than repeat it, sole write
+  REVIEW-FINAL-B.md.
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
@@ -353,25 +374,30 @@ ACCEPT RECORDED (Nathan, 2026-08-22): the re-authoring unit is
 accepted, committed as 9d1e91e on its unit branch, and held unmerged.
 AUTHORIZED (Nathan, 2026-08-22): the test-custody follow-up unit, one
 bounded unit under the grant below; it has now reached its
-independently re-reviewed handback. ONE DECISION WITH NATHAN
-(2026-08-22): accept or return the test-custody unit (all three
-review lanes recommend accept; evidence at the unit worktree root and
-the issue packet comment). After that decision, the Input Schema
-shape decision for the two surviving derivation gaps stays queued.
-The auditor output proposal below stays parked.
+independently re-reviewed handback. EXTENDED (Nathan, 2026-08-22):
+the accept-or-return ask is deferred behind one final whole-engine
+code-review gate (two sequential brand-new fable-xhigh top-level
+reviewers; see the in-flight block). No decision is currently with
+Nathan; the final accept-or-return returns after reviewer B and the
+supervisor dispositions. After that decision, the Input Schema shape
+decision for the two surviving derivation gaps stays queued. The
+auditor output proposal below stays parked.
 Formal qualification stays blocked until both legs are ready: the
 candidate path through its own later Specification Admission, and
 truthful auditor output.
 
 ## Next safe supervisor action
 
-STOPPED at the test-custody unit's independently reviewed handback.
-Present the accept-or-return packet to Nathan and wait. On accept,
-the supervisor owns the unit commit, receipts archive, ledger entry,
-issue comment, and vault write-back under the operational contract;
-the accepted re-authoring merge precondition is then satisfied but
-the merge itself stays a separate supervisor act after acceptance.
-Reconcile owners and answer questions; nothing more.
+Run Nathan's extended final gate: supervise reviewer A to its
+report, then launch reviewer B (brand-new, fable xhigh, sequential)
+with the packet plus A's full report; after B, disposition both
+reports, recheck custody, record truthfully, and stop at one final
+accept-or-return to Nathan. On accept, the supervisor owns the unit
+commit, receipts archive, ledger entry, issue comment, and vault
+write-back under the operational contract; the accepted re-authoring
+merge precondition is then satisfied but the merge itself stays a
+separate supervisor act after acceptance. Reconcile owners and
+answer questions; nothing more.
 
 ## Authorized grant (Nathan, 2026-08-22): Vault Git test-custody follow-up
 
