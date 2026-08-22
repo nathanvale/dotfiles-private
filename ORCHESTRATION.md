@@ -44,7 +44,25 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   that worktree root, allowed paths exactly the two vault-git fixture
   files. Completion signal: VAULT-GIT-CANDIDATE-HANDBACK.md at that
   worktree root, untracked. A first worker (1479e2c0) was stopped under
-  Nathan's hold with an empty diff; see Notes. Last merges: facade dual
+  Nathan's hold with an empty diff; see Notes.
+  Handback received 2026-08-22 14:34 AEST and HELD unaccepted. The
+  frozen worker diff is sha256 59b061a5.. (52514 bytes, two fixture
+  files only). Supervisor gate re-run at a7fd5c6: core proof
+  independently reproduced (candidate and permuted twin compile on the
+  v2 path with no reader, identical digest af6cfef0.., exactly one
+  refusal, commands.refused, returned as a product-decision gap;
+  fallow, pilot and draft digests match their pins), typecheck, Biome
+  and pilot verify clean, bun test 426 pass 20 fail with the 20
+  matching the handback's enumerated identity-move consequences one
+  for one. Three-axis review dispatched 2026-08-22, each admitted
+  claude-opus-5 at high effort (session record plus banner observed):
+  Spec 83571e69, Standards 5653c2a6, cli-execution-auditor 7fc4efd8
+  (applicability ruling: the diff declares Command Surface Contract,
+  execution-mode, preview-exemption and station-blocker surface, the
+  source Station Maps derive from). Reviewers are read-only and
+  report-only, writing REVIEW-SPEC.md, REVIEW-STANDARDS.md and
+  REVIEW-CLI-EXECUTION.md at the unit worktree root; the tree must not
+  move while they run. Last merges: facade dual
   coverage and cli-author dual-coverage teaching (merge commits e787db0
   and dbe8679, linearized off the lineage by Nathan's 2026-08-22 VS
   Code rebase; map in receipts/custody/rebase-2026-08-22-map.md).
