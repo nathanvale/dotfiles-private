@@ -127,51 +127,22 @@ writing-for-agents first. Routine status edits run this checklist alone.
    resulting digest (closed). The one open ask to Nathan: authorize
    the Vault Git candidate re-authoring unit. Specification Admission
    stays its own later act on the validated digest that unit produces.
-5. IN FLIGHT (Nathan's grant 2026-08-22; precondition met, the
-   facade dual-coverage unit merged and stable, ledger below): the
-   cli-author skill-document unit, dispatched 2026-08-22. Worker:
-   one claude background session "issue-55 cli-author skill docs",
-   short ID ff17dd49, cwd `.worktrees/issue-55-cli-author`, branch
-   feat/issue-55-cli-author, fixed point 5edb9ff, model
-   claude-opus-5 at high effort (admission proof observed
-   2026-08-22: session record resolves "model":"claude-opus-5",
-   banner "Opus 5 with high effort"). Charter: AGENT-BRIEF.md at
-   that worktree root, documents-only with a no-subagents line;
-   completion signal CLI-AUTHOR-HANDBACK.md there, untracked.
-   CLI-AUTHOR-HANDBACK.md received 2026-08-22; worker ff17dd49
-   stopped; four modified documents all inside allowed paths;
-   supervisor verified the grep proof (zero declared-only survivors),
-   router thinness (3 insertions 1 deletion), ASCII-clean additions,
-   truthfulness spot-checks against station-map.ts and testing.ts,
-   and both out-of-path findings at their named lines (auditor.ts
-   surfaces only the deprecated claim at 380, 438, 445, 481; the
-   auditor SKILL.md teaches declared-only at 30 and 65). Review in
-   flight, dispatched 2026-08-22 at fixed point 5edb9ff, isolated,
-   read-only, report-only, all admitted claude-opus-5 at high effort
-   with banner and session-record proof observed: Spec 3b25f3b8,
-   Standards 1afe34a3, cli-execution-auditor 733ebfa2; reports land
-   untracked at that unit root as REVIEW-SPEC.md,
-   REVIEW-STANDARDS.md, REVIEW-CLI-EXECUTION.md. Nothing is
-   accepted, committed, or merged before disposition.
-   Scope: update the cli-author skill using
-   skill-author, writing-for-agents, and
-   agent-reliability-guardrails. Keep cli-author/SKILL.md a thin
-   router; facade-only depth lives in its owned reference, never
-   copied runtime schemas. Reconcile the live contradiction:
-   cli-author/references/cli-command-facade.md still teaches
-   declared-only Station Map proof, and
-   agent-reliability-guardrails/references/test-matrix.md says
-   "Station Maps claim Declared Branch Coverage only." The updated
-   design gate must require Declared and Observed Branch Coverage
-   separately, real-process provenance for observed proof,
-   compatibility checks for every facade consumer including literal
-   constructors and merge paths, and a truthful typecheck plus
-   public-output proof. Proof: cli-author's
-   behavior-regression-checklist before and after, writing-for-agents
-   deletion and owner-path checks, and the reliability test matrix.
-   Its own unit worktree, brief, admitted Opus 5 high worker,
-   handback, review, commit, and merge boundary. Every other
-   boundary stays closed.
+5. PROPOSED, NEEDS NATHAN'S AUTHORIZATION: the auditor
+   dual-coverage output unit, from the cli-author review's should-fix
+   findings (receipts/cli-author/REVIEW-CLI-EXECUTION.md findings 1
+   and 3, supervisor-verified at the named lines): auditor.ts still
+   surfaces only the deprecated Declared claim in its result type
+   (line 380), status literal declared_branch_coverage_clean (438),
+   summary field (445), and plain rendering (481), while the JSON
+   envelope's station_map now carries both claims; the auditor
+   SKILL.md teaches declared-only at lines 30 and 65. The follow-up
+   must surface both claims in the result type and plain output,
+   distinguish absent coverage from zero (absent means the producer
+   predates the block), stop asserting cleanliness on the Declared
+   axis alone, reconcile the SKILL.md lines in the same pass, and
+   prove both the plain summary and the JSON envelope per the new
+   gate item 4. Bounded auditor source edit: a new grant, not covered
+   by the consumed 2026-08-22 repair grant.
 6. Carried follow-ups for whichever unit takes them next: the
    unenforced real_process stamp on CliProcessResult and drift-text
    sanitisation (facade hardening follow-up); the facade CONTEXT.md
@@ -584,6 +555,35 @@ to Next or the stage-5 worklist.
   vocabulary (all carried under Next). warm-chrome's synthetic
   coverage is now visible through the real front door: declared 18 of
   18, observed 0. Receipts at receipts/facade-coverage/.
+
+- cli-author dual-coverage teaching (Stage 5 skill-document unit,
+  Nathan's 2026-08-22 grant): MERGED dbe8679 (unit commit aefcf34,
+  fixed point 5edb9ff, receipts at 1306128). Documents only, four
+  files. The SKILL.md router gained one gate pointer and one Observed
+  Coverage clause (3 insertions, 1 deletion); the facade reference
+  carries the Dual Coverage Design Gate (separate claims;
+  real-process provenance with the fail-closed default; workspace-
+  enumerated consumer checks naming literal constructors and merge
+  paths; truthful typecheck plus public-output proof); the
+  behavior-regression checklist gained two markers and one gate row;
+  the guardrails test-matrix "Declared Branch Coverage only" row
+  became separate reporting plus the provenance rule. All five
+  chartered contradiction sites reconciled plus three found by the
+  worker's sweep; the declared-only grep returns zero across both
+  skill trees. Review: three axes at 5edb9ff, all admitted Opus 5
+  high (Spec 3b25f3b8, satisfied as delivered; Standards 1afe34a3,
+  meets standards; auditor lane 733ebfa2, engine-faithful with
+  probes matching all five counting rows). One in-path should-fix
+  closed by supervisor repair before commit: gate item 4 now requires
+  each coverage-reporting consumer's own public output to surface
+  both claims, the seam the auditor defect escaped through; grep and
+  ASCII proofs re-verified after the repair. Record-only accepted:
+  the handback's owner-path prose imprecision; no enumeration recipe
+  in the design gate (timelessness); the deprecated field described
+  by role, not name (the boundary rule outranks convenience). The
+  auditor's own output and SKILL.md remain declared-only, recorded
+  as the proposed follow-up unit under Next. Receipts at
+  receipts/cli-author/.
 
 ## Standing supervisor rules
 
