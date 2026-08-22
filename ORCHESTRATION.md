@@ -127,10 +127,18 @@ writing-for-agents first. Routine status edits run this checklist alone.
    resulting digest (closed). The one open ask to Nathan: authorize
    the Vault Git candidate re-authoring unit. Specification Admission
    stays its own later act on the validated digest that unit produces.
-5. AUTHORIZED, NOT STARTED (Nathan, 2026-08-22): a second bounded
-   skill-document unit. Its precondition is met: the facade
-   dual-coverage unit is merged and its charter stable (ledger
-   below). Scope: update the cli-author skill using
+5. IN FLIGHT (Nathan's grant 2026-08-22; precondition met, the
+   facade dual-coverage unit merged and stable, ledger below): the
+   cli-author skill-document unit, dispatched 2026-08-22. Worker:
+   one claude background session "issue-55 cli-author skill docs",
+   short ID ff17dd49, cwd `.worktrees/issue-55-cli-author`, branch
+   feat/issue-55-cli-author, fixed point 5edb9ff, model
+   claude-opus-5 at high effort (admission proof observed
+   2026-08-22: session record resolves "model":"claude-opus-5",
+   banner "Opus 5 with high effort"). Charter: AGENT-BRIEF.md at
+   that worktree root, documents-only with a no-subagents line;
+   completion signal CLI-AUTHOR-HANDBACK.md there, untracked.
+   Scope: update the cli-author skill using
    skill-author, writing-for-agents, and
    agent-reliability-guardrails. Keep cli-author/SKILL.md a thin
    router; facade-only depth lives in its owned reference, never
