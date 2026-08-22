@@ -2,7 +2,10 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { BranchStation } from "@side-quest/cli-command-facade";
 import {
+	assertStationEnvelope,
+	buildStationEvidence,
 	describeCliProcessRun,
 	parseCliProcessJson,
 	runCliProcess,
@@ -183,5 +186,40 @@ describe("CLI process testing helpers", () => {
 				cwd: await makeRoot(),
 			}),
 		).rejects.toThrow(/argv must include an executable/);
+	});
+});
+
+describe("Branch Station evidence provenance", () => {
+	test("evidence built from a real process run is stamped real_process", async () => {
+		const root = await makeRoot();
+		const script = await writeFixture(
+			root,
+			"station.ts",
+			'console.log(JSON.stringify({ status: "ok", data: { contract_id: "facade.station" } }));\n',
+		);
+		const station = {
+			id: "station.success",
+			command: "station",
+			classification: "required",
+			intent: "success",
+			trigger: "the fixture process emits one ok envelope",
+			expectedExitCode: 0,
+			expectedEnvelopeStatus: "ok",
+			expectedResultContractId: "facade.station",
+			mutationExpectation: "none",
+		} as const satisfies BranchStation;
+
+		const result = await runCliProcess({
+			label: "station fixture",
+			argv: [bun, "run", script],
+			cwd: root,
+		});
+		const envelope = assertStationEnvelope(station, result);
+		const evidence = buildStationEvidence(station, result, envelope);
+
+		// Independent oracle: the literal term, not the constant the source uses.
+		expect(evidence.provenance).toBe("real_process");
+		expect(evidence.status).toBe("covered");
+		expect(evidence.observedExitCode).toBe(0);
 	});
 });

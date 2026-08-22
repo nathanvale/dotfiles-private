@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -186,6 +186,55 @@ describe("Station Map engine", () => {
 			"app.success",
 		]);
 		expect(outcome.findings).toEqual([]);
+	});
+
+	test("merged front-door coverage counts only real-process rows", async () => {
+		// A real target inside the package, so the workspace facade import
+		// resolves; the audit runs its normal multi-front-door merge path.
+		const root = join(import.meta.dir, `.tmp-merged-coverage-${Date.now()}`);
+		cleanupPaths.push(root);
+		await cp(fixture("good-front-door-local"), root, { recursive: true });
+		const adminEvidence = join(
+			root,
+			"src",
+			"front-doors",
+			"admin",
+			"branch-station-evidence.ts",
+		);
+		await writeFile(
+			adminEvidence,
+			(await readFile(adminEvidence, "utf8")).replace(
+				'observedResultContractId: "fixture.admin",',
+				'observedResultContractId: "fixture.admin",\n\t\tprovenance: "real_process",',
+			),
+		);
+
+		const outcome = await runStationMapAudit({ targetRoot: root });
+
+		expect(outcome.frontDoors).toEqual(["admin", "app"]);
+		expect(
+			outcome.stationMap?.stations.map((station) => [
+				station.station_id,
+				station.evidence.provenance,
+			]),
+		).toEqual([
+			["admin.success", "real_process"],
+			["app.success", "synthetic"],
+		]);
+		// Independent oracle: two required stations declared across both front
+		// doors, one of them real-process covered. Written by hand.
+		expect(outcome.stationMap?.coverage).toEqual({
+			declared: {
+				claim: "declared_branch_coverage",
+				total: 2,
+				required: 2,
+			},
+			observed: {
+				claim: "observed_branch_coverage",
+				total: 1,
+				required: 1,
+			},
+		});
 	});
 
 	test("duplicate station ids across front-door catalogs become deterministic findings", async () => {
