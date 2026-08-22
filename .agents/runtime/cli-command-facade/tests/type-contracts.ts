@@ -1,4 +1,5 @@
 import {
+	aggregateStationMapCoverage,
 	type CliStructuredRuntimeErrorBuilderInput,
 	type CommandFacadeContract,
 	type CommandResultData,
@@ -8,6 +9,8 @@ import {
 	type createCliRetryRuntimeError,
 	type createCliUsageRuntimeError,
 	createCommandResultData,
+	type StationMap,
+	type StationMapCoverage,
 } from "@side-quest/cli-command-facade";
 import { assertJsonErrorEnvelope } from "@side-quest/cli-command-facade/testing";
 
@@ -340,4 +343,33 @@ assertJsonErrorEnvelope<{ total: number }>(
 		recoverability: "repair_state",
 		processExitCode: 1,
 	},
+);
+
+// A Station Map built outside `projectStationMap` compiles without `coverage`
+// and without a per-row `provenance`. This is the additive-optionality
+// contract: an existing consumer that constructs the type by hand keeps
+// compiling after the coverage block was added.
+const _oldShapeStationMap: StationMap = {
+	completeness_claim: "declared_branch_coverage",
+	commands: { record: { station_ids: ["record.success"] } },
+	stations: [
+		{
+			station_id: "record.success",
+			command: "record",
+			classification: "required",
+			intent: "Record a decision.",
+			trigger: "record --json",
+			mutation_expectation: "writes",
+			expected: {},
+			evidence: { status: "covered" },
+		},
+	],
+	drift: [],
+	findings: [],
+};
+
+// The aggregation helper accepts those same rows, so a merging consumer never
+// re-derives the counting rule.
+const _mergedCoverage: StationMapCoverage = aggregateStationMapCoverage(
+	_oldShapeStationMap.stations,
 );
