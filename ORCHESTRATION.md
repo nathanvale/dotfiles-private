@@ -29,8 +29,21 @@ all evidence; this file owns the queue, the contracts, and the pointers.
 ## Current pipeline state (2026-08-22)
 
 - Stage 5 is the active stage; stages 1 through 4 are closed (ledger).
-- NO UNIT IS IN FLIGHT. Last merges: facade dual coverage (e787db0) and
-  cli-author dual-coverage teaching (dbe8679).
+- IN FLIGHT: the authorized Vault Git candidate re-authoring unit,
+  dispatched 2026-08-22 after the pre-launch hold reconciliation.
+  Worker: one claude background session "issue-55 vault-git candidate
+  re-author", short ID 2add7804, session
+  2add7804-f573-4bcd-ad2a-db994ddc68ec, cwd
+  `.worktrees/issue-55-vault-git-candidate`, branch
+  feat/issue-55-vault-git-candidate, fixed point a7fd5c6, model
+  claude-opus-5 at high effort (admission proof observed 2026-08-22:
+  the session record resolves "model":"claude-opus-5" and the job
+  banner reads "Opus 5 with high effort"). Charter: AGENT-BRIEF.md at
+  that worktree root, allowed paths exactly the two vault-git fixture
+  files. Completion signal: VAULT-GIT-CANDIDATE-HANDBACK.md at that
+  worktree root, untracked. A first worker (1479e2c0) was stopped under
+  Nathan's hold with an empty diff; see Notes. Last merges: facade dual
+  coverage (e787db0) and cli-author dual-coverage teaching (dbe8679).
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
