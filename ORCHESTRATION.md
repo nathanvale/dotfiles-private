@@ -50,29 +50,34 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   repair). No Generated Artifact Set, so no Declared Branch Coverage,
   exists for Vault Git.
 
-## The one current Nathan decision
+## Nathan decision state
 
-Authorize or defer the Vault Git candidate re-authoring unit (proposed
-grant below). Nothing else is currently asked. Formal qualification stays
-blocked until both legs are ready: the candidate path through its own
-later Specification Admission, and truthful auditor output (parked
-proposal below).
+ANSWERED YES (Nathan, 2026-08-22): the Vault Git candidate re-authoring
+unit is authorized under the grant below, one unit, exclusions intact,
+recorded identically here, in issue 55 status comment 5377730080, and in
+the vault packet. No decision is currently with Nathan. The auditor
+output proposal below stays parked and returns as its own ask after this
+unit closes. Formal qualification stays blocked until both legs are
+ready: the candidate path through its own later Specification Admission,
+and truthful auditor output.
 
 ## Next safe supervisor action
 
-Present the proposed grant below to Nathan, or await his authorize/defer
-answer if already presented. Reconcile owners and answer questions;
-nothing more.
+Supervise the dispatched re-authoring unit to its handback, then run the
+code-review contract to merge or return. Reconcile owners and answer
+questions; nothing more.
 
-## No-dispatch boundary
+## Dispatch boundary
 
-Until Nathan answers, launch nothing: no worker, subagent, reviewer,
-probe, security test, or qualification run. Never infer authorization
-from a cleanup, reconciliation, or reporting request.
+The 2026-08-22 grant covers exactly one re-authoring unit worker plus
+its admitted reviewers under the review contract. Beyond that, launch
+nothing: no other worker, subagent, probe, security test, or
+qualification run. Never infer authorization from a cleanup,
+reconciliation, or reporting request.
 
-## Proposed grant, NOT AUTHORIZED: Vault Git candidate re-authoring
+## Authorized grant (Nathan, 2026-08-22): Vault Git candidate re-authoring
 
-Scope if authorized, one unit under the operational contract below:
+Scope, one unit under the operational contract below:
 
 - Edit exactly two fixture files:
   `fixtures/spike-candidates/vault-git.state-machine.jsonc` and its
@@ -105,9 +110,20 @@ express stops the unit and returns the exact gap); no auditor source
 edit; no Pause release, activation, extraction, push, main merge, stage
 6, or stage 7.
 
+Supervisor custody reading, recorded at charter time (2026-08-22): the
+one named digest-custody recording site, the vault-git pin row and its
+oracle prose in tests/version-custody.test.ts, moves with the digest,
+the same mechanism the Contextual Rendering grant used. Suites holding
+the live spike as their v1 exemplar (registered-readers.test.ts, the
+v1-refusal section of v2-derivation.test.ts, the emitAmended harness)
+are predictable version-identity consequences: the worker enumerates
+each in the handback without editing it, and each enumerated row
+returns to Nathan as an exact follow-up ask, never inferred scope.
+
 ## Parked proposal, NOT A CURRENT ASK: auditor dual-coverage output
 
-The next separate grant, raised only after the decision above is made.
+The next separate grant, raised after the authorized re-authoring unit
+above closes.
 Evidence: receipts/cli-author/REVIEW-CLI-EXECUTION.md findings 1 and 3,
 supervisor-verified. auditor.ts surfaces only the deprecated Declared
 claim (result type line 380, status literal
@@ -315,6 +331,9 @@ compressed to match.
 - The root AGENTS.md on this branch predates main's 513ff2f and still
   claims `bun run lint` fails in `.worktrees/` checkouts; verified false
   here. The package AGENTS.md Checks section owns the gate commands.
+- A prior resume attempt (job a19b6b4b, 2026-08-22) resolved at high
+  rather than the required xhigh supervisor effort and was stopped
+  before any edit or admitted output; it is non-evidence.
 - Known pre-existing failures a gate must not count as new: two ANSI
   stderr tests in cli-command-facade tests/process-testing.test.ts; one
   cli-execution-auditor station-asset test; two test-runner typecheck
