@@ -62,7 +62,57 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   source Station Maps derive from). Reviewers are read-only and
   report-only, writing REVIEW-SPEC.md, REVIEW-STANDARDS.md and
   REVIEW-CLI-EXECUTION.md at the unit worktree root; the tree must not
-  move while they run. Last merges: facade dual
+  move while they run.
+  Review returned 2026-08-22 14:48; custody verified by all three
+  lanes, the frozen diff hash unmoved. Findings: Spec one MAJOR
+  (tidy/janitor rows declare human_kind "command" against their own
+  catalog and next-safe-action.ts:858-864) plus two lesser; Standards
+  one MINOR (three "earlier draft" provenance comment clauses) plus two
+  record-only; cli-execution-auditor one BLOCKER (the activation.refused
+  row names blocker activation_blocked, which that branch never emits)
+  plus two MAJOR, one MINOR, one record-only positive. The Spec and
+  auditor lanes contradicted each other on the activation row; the
+  supervisor re-verified the citations and sided with the auditor
+  (cli.ts:3040-3065 and :3261 emit human_capability_required on the
+  activation refused branch; branch-station-catalog.ts:51;
+  model.ts:123-126; the Spec lane's engine.ts:288 cite is the
+  activation gate on other commands).
+  Disposition (supervisor, 2026-08-22): must-fix R1 tidy/janitor
+  human_kind to external_prerequisite; R2 activation.refused blocker to
+  human_capability_required, target return_to_human_review, posture
+  operator_required; R3 the cause_to_next_action row for
+  human_capability_required reconciled to model.ts:123-126; R4 the
+  activation preview-exemption row added per command-contract.ts:386.
+  Should-fix R5 drop the three provenance clauses keeping each
+  constraint; R6 restate the positional-route comment truthfully
+  (review argv is shared by two catalog actions). Record-only with
+  named owners: the handback's join-mutation prose slip (repair
+  handback); the availability_evidence naming (Specification
+  Admission); the stale spike-candidates README and package AGENTS.md
+  v1 framing (supervisor merge-time reconciliation); the 20
+  identity-move failures (the queued Nathan follow-up). Auditor
+  findings 2 (owned-paths id split) and 4 (refusal coverage versus the
+  handwritten catalog) are recorded and DECLINED as defects: the split
+  and the eleven blocker mappings are Nathan's recorded ruling and
+  grant scope, catalog widening is the closed runtime-adoption
+  boundary, and the auditor's dissent rides to Specification Admission
+  beside the known circular-catalog-oracle defect.
+  Evidence correction (Nathan, 2026-08-22; supervisor-verified by
+  exact-key count): the fixed point carries 13 unresolved_decisions
+  rows and the current candidate 8. The five removals are
+  single_action_vocabulary, vault_content_repair_gate_meaning,
+  completion_task_observation_deadline, owner_pause_mode and
+  observation_expired_blocker_overload, each citing its ruling;
+  cancellation_scope was a features comment at the fixed point, never
+  a row. The handback's "13 to 7" and "Removed 6, kept 7" and
+  REVIEW-SPEC's "thirteen rows to seven" are false as counts; the
+  Standards lane's "all 8 surviving rows" was correct. The
+  shrink-only-by-rulings acceptance criterion holds substantively;
+  stating the corrected delta is assigned to the repair handback, with
+  the frozen handback and reviews left untouched as evidence.
+  One repair cycle dispatched to a replacement worker under the same
+  two-file paths; the digest moves again and stays UNADMITTED. Last
+  merges: facade dual
   coverage and cli-author dual-coverage teaching (merge commits e787db0
   and dbe8679, linearized off the lineage by Nathan's 2026-08-22 VS
   Code rebase; map in receipts/custody/rebase-2026-08-22-map.md).
@@ -405,6 +455,18 @@ local archive branch archive/issue-55-pre-rebase-237efce.
   5377751430 are false as of 14:06 through Nathan's own sync action;
   the supervisor no-push rule was not crossed and still binds. Full
   receipt: receipts/custody/rebase-2026-08-22-map.md.
+- Biome owner boundary (Nathan, 2026-08-22): the canonical Biome
+  contract moved concurrently in the dotfiles main checkout (the
+  archived Claude Code Config contract selected; lint-only, read-only
+  semantics; exact .agents re-inclusion only for Browser Use, Browser
+  Connect and Warm Chrome; an authorized main writer holds uncommitted
+  changes there, which are not publication authority and are never
+  copied here). Every "66 files" Biome result this unit records is
+  truthful only for this frozen branch snapshot and is not proof
+  against the newer canonical main contract, under which this package
+  sits outside root re-inclusion. Integration boundary at merge time:
+  re-evaluate the package's Biome gate claim under the canonical
+  contract; do not reintroduce formatter-write gates.
 - Known pre-existing failures a gate must not count as new: two ANSI
   stderr tests in cli-command-facade tests/process-testing.test.ts; one
   cli-execution-auditor station-asset test; two test-runner typecheck
