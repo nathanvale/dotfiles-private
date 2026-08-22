@@ -126,7 +126,35 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   signal VAULT-GIT-CANDIDATE-REPAIR-HANDBACK.md; admission proof
   observed: session record resolves "model":"claude-opus-5" and the
   job banner reads "with high effort") under the same two-file paths;
-  the digest moves again and stays UNADMITTED. Last merges: facade
+  the digest moves again and stays UNADMITTED.
+  Repair handback received 2026-08-22 15:05 AEST and HELD. All six
+  items applied; R2 landed as disposition (b) on the worker's proof
+  (the product's closed vocabularies VAULT_GIT_BLOCKER_IDS,
+  model.ts:1077-1080, and VAULT_GIT_ACTIVATION_RESTRICTION_CAUSES,
+  model.ts:17-27, are disjoint on human_capability_required, and the
+  activation refusal envelope carries an errorCode with no blockers
+  field), so the {activation, refused} row is removed and
+  activation.refused returns as a second exact shape gap beside
+  commands.refused; both need one v2 shape addition, a refusal cause
+  that is an error code rather than a lifecycle blocker. R3 encoded
+  the product's return_to_human_review after proving no ruling
+  speaks. The two assigned evidence corrections are stated in the
+  repair handback; the mid-flight R2/R3 amendment was honored with a
+  full revert of the pre-amendment edit (superseded intermediate
+  digest 98ddbf64.., recorded nowhere). Post-repair frozen diff
+  sha256 42b86bec.. (68219 bytes, two fixtures only). Supervisor
+  rerun confirms independently: digest 6cc10a52.. identical on both
+  files, refusal count 2, custody digests intact, typecheck, Biome
+  (branch-snapshot only) and pilot verify clean, 426 pass 20 fail
+  with the failing set set-identical to pre-repair. Digest pair
+  af6cfef0.. and 6cc10a52.., both UNADMITTED, in no tracked file.
+  Focused three-axis re-review of the repaired diff dispatched
+  2026-08-22, each admitted claude-opus-5 at high effort (session
+  record plus banner observed): Spec 3c23031c, Standards d65c778d,
+  cli-execution-auditor 85b56894, writing REREVIEW-*.md at the unit
+  root; the declined auditor findings 2 and 4 are out of their
+  scope. Acceptance stays closed pending the re-review verdicts and
+  Nathan's follow-up rulings. Last merges: facade
   dual
   coverage and cli-author dual-coverage teaching (merge commits e787db0
   and dbe8679, linearized off the lineage by Nathan's 2026-08-22 VS
