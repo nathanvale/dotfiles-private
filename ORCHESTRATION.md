@@ -179,7 +179,8 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   coverage and cli-author dual-coverage teaching (merge commits e787db0
   and dbe8679, linearized off the lineage by Nathan's 2026-08-22 VS
   Code rebase; map in receipts/custody/rebase-2026-08-22-map.md).
-- IN FLIGHT: the authorized test-custody follow-up unit, dispatched
+- UNIT ACCEPTED (Nathan, 2026-08-22 17:47 AEST), COMMITTED 5833091,
+  HELD UNMERGED: the test-custody follow-up unit, dispatched
   2026-08-22. Worker: one claude background session "issue-55
   test-custody worker", short ID c84f419e, cwd
   `.worktrees/issue-55-test-custody`, branch feat/issue-55-test-custody,
@@ -455,6 +456,23 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   test files and the stale emission.ts header ride with the
   hardening unit. Both reviewers recommend ACCEPT of the test-custody
   unit; B states returning it could not repair any new finding.
+  ACCEPTANCE EXECUTED (supervisor, 2026-08-22 17:48 AEST): custody
+  re-verified at the boundary, then the supervisor-only unit commit
+  5833091 on feat/issue-55-test-custody (parent 9d1e91e, 15 files,
+  +854/-95): git diff 9d1e91e 5833091 excluding the new exemplar
+  reproduces the frozen reviewed hash d5a79e4d.. byte for byte, and
+  the committed exemplar blob recomputes 676428c0.. . An intermediate
+  commit 3a5b9d2 omitted tests/version-custody.test.ts by a
+  supervisor staging slip and was amended to 5833091 before any push
+  or record. Full custody record and archived evidence, including the
+  whole-engine gate packets, spec snapshot and both final reports:
+  receipts/test-custody/ (archive commit ebaf551; all 34 archived
+  files verified byte-identical to the unit-root originals). The
+  accepted re-authoring unit's merge precondition, the 20 failures
+  closed and the full gate green under the review contract, is
+  SATISFIED; the integration merge remains a separate supervisor act
+  awaiting Nathan's authorization, and the Gate 3 false-green caveat
+  stays explicit until the Generator hardening unit closes.
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
@@ -486,28 +504,29 @@ reviewers admitted and returned, both recommend accepting the unit;
 reviewer B surfaced one new layer-1 must-fix, dispositioned to the
 carried Generator hardening unit as a named precondition for the
 Command Surface Alignment Proof, Specification Admission, and
-qualification. ONE FINAL DECISION WITH NATHAN (2026-08-22): accept
-or return the test-custody unit at this fully reviewed boundary,
-with the whole-engine result and the hardening-unit ask in view.
-After that decision, the Input Schema shape decision for the two
-surviving derivation gaps stays queued and the generator-hardening
-grant becomes its own ask. The auditor output proposal below stays
-parked.
+qualification. ACCEPT RECORDED (Nathan, 2026-08-22, issue comment
+5379074497 acceptance): the test-custody unit is accepted at its
+fully reviewed boundary, committed as 5833091 on its unit branch,
+held unmerged; the re-authoring merge precondition is satisfied.
+NEXT SINGLE DECISION with Nathan: authorize the integration merge
+(9d1e91e plus 5833091 into feat/issue-55-state-machine-generator).
+Queued after it: the Input Schema shape decision for the two
+surviving derivation gaps, then the generator-hardening grant (the
+whole-engine must-fix, with the Gate 3 false-green caveat explicit
+until it closes). The auditor output proposal below stays parked.
 Formal qualification stays blocked until both legs are ready: the
 candidate path through its own later Specification Admission, and
 truthful auditor output.
 
 ## Next safe supervisor action
 
-STOPPED at the fully reviewed test-custody boundary: the extended
-whole-engine gate is complete and dispositioned. Present the one
-final accept-or-return to Nathan and wait. On accept, the supervisor
-owns the unit commit, receipts archive, ledger entry, issue comment,
-and vault write-back under the operational contract; the accepted
-re-authoring merge precondition is then satisfied but the merge
-itself stays a separate supervisor act after acceptance, and the
-generator-hardening grant is its own next ask. Reconcile owners and
-answer questions; nothing more.
+STOPPED after executing Nathan's acceptance: unit commit 5833091,
+receipts archived at receipts/test-custody/ (ebaf551), owners
+written back. Present the integration-merge authorization ask to
+Nathan and wait; the merge, when authorized, follows operational
+contract step 7 (independent gate re-run, merge, ledger entry, issue
+comment, vault packet write-back). Reconcile owners and answer
+questions; nothing more.
 
 ## Authorized grant (Nathan, 2026-08-22): Vault Git test-custody follow-up
 
