@@ -227,6 +227,56 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   REVIEW-CLI-EXECUTION.md at the unit worktree root from the packets
   REVIEW-EVIDENCE.md and REVIEW-PACKET-*.md; the tree must not move
   while they run.
+  Review returned 2026-08-22 16:26 AEST, custody verified by all three
+  lanes (f115eb1f.. unmoved, every pin recomputed). Findings:
+  cli-execution zero findings with two record-only rows (the supply's
+  blocker column uniquely load-bearing; the borrowed target
+  arbitrary); Standards one must-fix F1 (the harness supply hardcodes
+  retrySafety operator_required, overriding the candidate's declared
+  refusal rule same_input_unsafe through the routedPosture
+  precedence) plus one should-fix F2 (the supply comment cites a pin
+  that does not exist) and one record-only F3 (the v1SourceFor
+  mapping duplicated across two test files); Spec one should-fix S-1
+  (the supply is unbounded by absence, so a deleted genuine row is
+  silently backfilled and no test pins the candidate's own unamended
+  two-refusal gap) plus record-only S-2 (handback 5.1 and 12
+  overstate the pin), with the chartered outcome judged satisfied and
+  every decline legitimate. The supervisor independently re-verified
+  the F1 and S-1 citations (candidate rule refusal to
+  same_input_unsafe at fixture line 506; expectations.ts
+  routedPosture precedence; emission.ts lines 125 to 127 fabricated
+  values; the two cited v2-derivation tests run against synthetic
+  fixtures, not the candidate).
+  Disposition (supervisor, 2026-08-22): one must-fix repair R1 in the
+  harness owner consolidating F1, S-1, F2/S-2 and auditor R2: (a)
+  bound the supply to exactly the two reserved gaps, throwing on any
+  other absence; (b) stop fabricating the retry posture so the
+  declared rule answers; (c) omit or truthfully comment the borrowed
+  target; (d) rewrite the supply comment truthfully; (e) add one pin
+  test asserting the candidate's own unamended derivation refuses on
+  exactly activation.refused:blocker and commands.refused:blocker
+  (supervisor grant: placed in v2-derivation.test.ts under the
+  original brief's new-coverage-welcome line). Record-only with named
+  owners: F3 to the next candidate-touching test unit; auditor R1 to
+  the queued Input Schema shape decision; the archived checklist
+  mislabels (handback section 10) to the supervisor's archive-time
+  correction note; the biome check --write process note,
+  evidence-neutral per all three lanes, recorded here; the exemplar
+  ASCII exception restated accurately (line 1 U+2014 and line 96
+  U+2192, both byte-identity-required) to the repair handback; the
+  missing docs/agents/coding-standards.md on this branch (exists on
+  main at 2d9b4c4) to merge-time reconciliation.
+  Repair cycle dispatched 2026-08-22 16:35 AEST to the same admitted
+  worker, resumed as continuation session f6523298 (the c84f419e
+  session had exited after its boundary and was resumed by session
+  ID, carrying its full transcript forward; admission re-verified:
+  the continuation record resolves "model":"claude-opus-5" with
+  "effort":"high" on every message, launch flags --model opus
+  --effort high). Charter: TEST-CUSTODY-REPAIR-BRIEF.md at the unit
+  root; allowed paths exactly tests/support/emission.ts and
+  tests/v2-derivation.test.ts; completion signal
+  TEST-CUSTODY-REPAIR-HANDBACK.md, untracked. All digest custody
+  constraints unchanged.
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
