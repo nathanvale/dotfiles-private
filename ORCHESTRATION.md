@@ -307,6 +307,27 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   Standards 411b337d, cli-execution-auditor 3a0c40cd, writing
   REREVIEW-*.md at the unit root from REREVIEW-PACKET.md; the tree
   must not move while they run.
+  Re-review returned 2026-08-22 16:46 AEST, custody held (d5a79e4d..
+  unmoved; each lane independently proved the 12 non-repair per-file
+  diffs byte-identical to f115eb1f..). All three lanes recommend
+  ACCEPT: Spec S-1 and S-2 CLOSED with zero new findings (the
+  original failing probes reproduced against the repaired harness and
+  now fail loudly; the pin is sensitive in both directions and
+  oracle-independent); Standards F1 and F2 CLOSED, F3 correctly
+  declined and carried record-only, one new record-only N1 (the
+  throwing guard has no test of its own; loud failure mode, outside
+  this cycle's paths); cli-execution R1 posture half CLOSED with the
+  blocker residue record-only by design (owner: the queued shape
+  decision), R2 CLOSED on the verified type-contract ground, Duty 1
+  strengthened (no fabricated semantic value remains; zero
+  unsafe-retry baseline intact; posture histogram moved exactly
+  16/14/4 to 14/14/6, only the two reserved stations). The Standards
+  lane disclosed two temporary counterfactual probes, each restored
+  with the custody hash re-verified to d5a79e4d.. afterward. The unit
+  is at its reviewed handback boundary, HELD for Nathan's
+  accept-or-return; supervisor final custody check 16:47 AEST clean
+  (HEAD 9d1e91e, diff d5a79e4d.., first handback f8812efa..,
+  6cc10a52 pinned nowhere).
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
@@ -331,19 +352,25 @@ all evidence; this file owns the queue, the contracts, and the pointers.
 ACCEPT RECORDED (Nathan, 2026-08-22): the re-authoring unit is
 accepted, committed as 9d1e91e on its unit branch, and held unmerged.
 AUTHORIZED (Nathan, 2026-08-22): the test-custody follow-up unit, one
-bounded unit under the grant below; no decision is currently with
-Nathan. Next asks after that unit's reviewed handback: accept or
-return it, then the Input Schema shape decision for the two surviving
-derivation gaps. The auditor output proposal below stays parked.
+bounded unit under the grant below; it has now reached its
+independently re-reviewed handback. ONE DECISION WITH NATHAN
+(2026-08-22): accept or return the test-custody unit (all three
+review lanes recommend accept; evidence at the unit worktree root and
+the issue packet comment). After that decision, the Input Schema
+shape decision for the two surviving derivation gaps stays queued.
+The auditor output proposal below stays parked.
 Formal qualification stays blocked until both legs are ready: the
 candidate path through its own later Specification Admission, and
 truthful auditor output.
 
 ## Next safe supervisor action
 
-Supervise the in-flight three-axis review of the test-custody handback
-to its return, verify custody held, disposition findings (one repair
-cycle if needed), then stop and present accept-or-return to Nathan.
+STOPPED at the test-custody unit's independently reviewed handback.
+Present the accept-or-return packet to Nathan and wait. On accept,
+the supervisor owns the unit commit, receipts archive, ledger entry,
+issue comment, and vault write-back under the operational contract;
+the accepted re-authoring merge precondition is then satisfied but
+the merge itself stays a separate supervisor act after acceptance.
 Reconcile owners and answer questions; nothing more.
 
 ## Authorized grant (Nathan, 2026-08-22): Vault Git test-custody follow-up
