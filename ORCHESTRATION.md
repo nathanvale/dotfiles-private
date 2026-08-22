@@ -36,8 +36,8 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   2add7804-f573-4bcd-ad2a-db994ddc68ec, cwd
   `.worktrees/issue-55-vault-git-candidate`, branch
   feat/issue-55-vault-git-candidate, fixed point a7fd5c6 (preserved on
-  the unit branch; tree-identical to lineage commit 7d5ec53 after the
-  2026-08-22 external rebase; see Notes), model
+  the unit branch; tree-identical to lineage commit 7d5ec53 after
+  Nathan's 2026-08-22 VS Code rebase; see Notes), model
   claude-opus-5 at high effort (admission proof observed 2026-08-22:
   the session record resolves "model":"claude-opus-5" and the job
   banner reads "Opus 5 with high effort"). Charter: AGENT-BRIEF.md at
@@ -46,8 +46,8 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   worktree root, untracked. A first worker (1479e2c0) was stopped under
   Nathan's hold with an empty diff; see Notes. Last merges: facade dual
   coverage and cli-author dual-coverage teaching (merge commits e787db0
-  and dbe8679, linearized off the lineage by the 2026-08-22 external
-  rebase; map in receipts/custody/rebase-2026-08-22-map.md).
+  and dbe8679, linearized off the lineage by Nathan's 2026-08-22 VS
+  Code rebase; map in receipts/custody/rebase-2026-08-22-map.md).
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
@@ -297,8 +297,9 @@ decline, pin, or ruling that still binds. Git history and
 `receipts/<unit>/` own all further evidence. This shape rule was
 rewritten by the 2026-08-22 cleanup; earlier verbose entries were
 compressed to match. Hashes recorded before 2026-08-22 14:06 may no
-longer sit on the branch lineage: an external pull-rebase linearized
-the last 22 commits and dropped the three unit merge commits; each old
+longer sit on the branch lineage: Nathan's 2026-08-22 VS Code
+pull-rebase linearized the last 22 commits and dropped the three unit
+merge commits; each old
 hash resolves through receipts/custody/rebase-2026-08-22-map.md and the
 local archive branch archive/issue-55-pre-rebase-237efce.
 
@@ -370,19 +371,21 @@ local archive branch archive/issue-55-pre-rebase-237efce.
   version-custody pin misread as a worker path) are reconciled in this
   commit, an issue 55 correction comment posted with it, and the staged
   vault packet.
-- Custody event (2026-08-22, 14:05:57 to 14:06:01 AEST): a VS Code sync
-  (window23 exthost Git log) ran `git pull --tags` on this branch,
-  linearizing the 22 local commits (dropping the three unit merge
-  commits) and pushing the result, advancing origin fa1dd9f..ab81eaa.
-  Not a supervisor act; the supervisor transcript contains no pull or
-  push. Verified: range-diff all patch-identical; the a7fd5c6 and
+- Custody event (2026-08-22, 14:05:57 to 14:06:01 AEST): Nathan's own
+  VS Code sync click (his confirmation, 2026-08-22: "the push was me i
+  clicked it in vscode"; window23 exthost Git log) ran
+  `git pull --tags` on this branch, linearizing the 22 local commits
+  (dropping the three unit merge commits) and pushing the result,
+  advancing origin fa1dd9f..ab81eaa. Not a supervisor act; the
+  supervisor transcript contains no pull or push. Verified: range-diff
+  all patch-identical; the a7fd5c6 and
   237efce trees byte-identical to 7d5ec53 and ab81eaa; worker 2add7804
   unaffected on its own branch, its 14:13 diff snapshot hashed
   021f0be1.. (13755 bytes). Pre-rebase history preserved at local
   branch archive/issue-55-pre-rebase-237efce, never pushed. The
   "nothing is pushed" statements in issue comments 5377730080 and
-  5377751430 are false as of 14:06 through this external event; the
-  supervisor no-push rule itself was not crossed and still binds. Full
+  5377751430 are false as of 14:06 through Nathan's own sync action;
+  the supervisor no-push rule was not crossed and still binds. Full
   receipt: receipts/custody/rebase-2026-08-22-map.md.
 - Known pre-existing failures a gate must not count as new: two ANSI
   stderr tests in cli-command-facade tests/process-testing.test.ts; one
