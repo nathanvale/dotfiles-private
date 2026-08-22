@@ -138,6 +138,21 @@ writing-for-agents first. Routine status edits run this checklist alone.
    banner "Opus 5 with high effort"). Charter: AGENT-BRIEF.md at
    that worktree root, documents-only with a no-subagents line;
    completion signal CLI-AUTHOR-HANDBACK.md there, untracked.
+   CLI-AUTHOR-HANDBACK.md received 2026-08-22; worker ff17dd49
+   stopped; four modified documents all inside allowed paths;
+   supervisor verified the grep proof (zero declared-only survivors),
+   router thinness (3 insertions 1 deletion), ASCII-clean additions,
+   truthfulness spot-checks against station-map.ts and testing.ts,
+   and both out-of-path findings at their named lines (auditor.ts
+   surfaces only the deprecated claim at 380, 438, 445, 481; the
+   auditor SKILL.md teaches declared-only at 30 and 65). Review in
+   flight, dispatched 2026-08-22 at fixed point 5edb9ff, isolated,
+   read-only, report-only, all admitted claude-opus-5 at high effort
+   with banner and session-record proof observed: Spec 3b25f3b8,
+   Standards 1afe34a3, cli-execution-auditor 733ebfa2; reports land
+   untracked at that unit root as REVIEW-SPEC.md,
+   REVIEW-STANDARDS.md, REVIEW-CLI-EXECUTION.md. Nothing is
+   accepted, committed, or merged before disposition.
    Scope: update the cli-author skill using
    skill-author, writing-for-agents, and
    agent-reliability-guardrails. Keep cli-author/SKILL.md a thin
