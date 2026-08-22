@@ -349,6 +349,31 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   completes, receives the packet plus A's full report, and must
   verify, challenge, or extend A rather than repeat it, sole write
   REVIEW-FINAL-B.md.
+  GATE CORRECTED (Nathan's staff audit, 2026-08-22 16:58 AEST): both
+  reviewer-A attempts are REJECTED as non-evidence, reason unit-only
+  Spec grounding and unit-only diff scope: session 2e42af86 (exited
+  16:55 before invoking the skill, zero output) and its relaunch
+  39f0dd7d (stopped before any report; supervisor confirmed no
+  REVIEW-FINAL-A.md from either). The gate is a WHOLE ENGINE review
+  over two layers reviewed as one result with layer-attributed
+  findings: layer 1, the committed engine, git diff 8bbe012..9d1e91e
+  (three-dot) over the package, supervisor-verified merge-base
+  8bbe012aad7ed35e825bd265750b40872caab02d = git merge-base main
+  9d1e91e, 134 files +31549/-25, diff sha256 5df34112.. (1230434
+  bytes); layer 2, the uncommitted test-custody WIP, git diff 9d1e91e
+  over the package plus the untracked frozen exemplar; no commit.
+  Supervisor-owned immutable spec snapshot written at the unit root
+  SPEC-SNAPSHOT-2026-08-22/ (fetched live via ghh: the full issue 55
+  body plus comments 5362367950, 5365237090, 5368129900, 5377730080,
+  5377751430, 5378226764, 5378270664, 5378677005 verbatim; the
+  ORCHESTRATION snapshot at f14f867; vault GOAL.md and README.md; the
+  main-branch repo coding standards; per-file sha256 in MANIFEST.md,
+  manifest sha256 7937f64f..). The superseded packet is preserved as
+  FINAL-REVIEW-PACKET-SUPERSEDED-14a02d82.md; the corrected packet
+  FINAL-REVIEW-PACKET.md is sha256 15ff26cd.. and requires the
+  code-review skill's Spec subagent prompt to name the snapshot, with
+  the supervisor verifying that grounding from the reviewer's
+  transcript before admitting output.
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
