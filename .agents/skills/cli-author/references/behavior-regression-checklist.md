@@ -104,6 +104,10 @@ Use before and after meaningful edits to `cli-author`.
     payloads.
   - Includes all three test layers: unit tests, Branch Station catalog tests,
     and catalog-driven integration tests.
+  - Reports Declared and Observed Branch Coverage separately; treats catalog
+    completeness as Declared only.
+  - Applies the Dual Coverage Design Gate when the design touches Branch
+    Stations, Station Maps, or the facade surface.
 
 ### Skill Edit
 
@@ -139,4 +143,6 @@ Use before and after meaningful edits to `cli-author`.
 - Facade-backed prompt preserves result-data helper and structured-error helper
   guardrails without copying helper signatures.
 - Facade-backed prompt includes three test layers (unit, catalog, integration).
+- Facade-backed prompt keeps Declared and Observed Branch Coverage distinct and
+  sources Observed from real-process evidence only.
 - `SKILL.md` stays route-oriented.

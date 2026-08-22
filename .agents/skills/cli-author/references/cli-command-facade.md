@@ -81,8 +81,8 @@ runtime owner for machine-checkable contracts.
   diagnostics, and keep diagnostic output separate from primary stdout data.
 - Text safety: reject unsafe projected text before it reaches agent catalogs or
   runtime envelopes.
-- Station Map: publish declared branch-coverage evidence for agent-visible
-  command paths from package-owned Branch Station catalogs.
+- Station Map: publish Declared and Observed Branch Coverage separately for
+  agent-visible command paths from package-owned Branch Station catalogs.
 - Testing helpers: assert rendered help, public argv behavior, result contract
   metadata, error envelopes, process output, and runtime semantics.
 
@@ -132,9 +132,74 @@ runtime owner for machine-checkable contracts.
 - Cover public argv acceptance and rejection.
 - Cover command semantics through runtime probes.
 - Assert package-owned result vocabulary from package-owned constants.
-- For Branch Station work, prove the Station Map only claims Declared Branch
-  Coverage and reports missing, drifted, skipped, or declared-unreachable
-  stations mechanically.
+- For Branch Station work, prove the Station Map reports Declared and Observed
+  Branch Coverage separately, and reports missing, drifted, skipped, or
+  declared-unreachable stations mechanically. See Dual Coverage Design Gate.
+
+## Dual Coverage Design Gate
+
+Apply this gate whenever a design touches Branch Stations, Station Maps, or the
+facade surface those consume. It exists because catalog presence reads like
+product proof, and a Station Map that reports one number lets it pass as one.
+
+Vocabulary owner: `runtime/agent-native-state-machine-generator/CONTEXT.md`.
+Counting rule and shapes: `runtime/cli-command-facade/src/station-map.ts`.
+
+### 1. Report the two claims separately
+
+- Declared Branch Coverage is catalog presence. Observed Branch Coverage is the
+  real public-process seam crossed with a matching result.
+- The Station Map carries both, counted separately, in a coverage block the
+  projector always populates. Read the block; the older single-claim field
+  reports Declared only and is deprecated.
+- Design the surface so a reader sees which claim a number belongs to. State
+  catalog completeness as catalog completeness, never as product proof.
+
+### 2. Earn Observed Coverage from a real process
+
+- Only evidence produced by a real process run raises Observed Branch Coverage,
+  and only when the row also reconciles to covered. A real-process row that
+  drifted does not count.
+- Evidence declaring no provenance is read as synthetic, fail-closed. A value
+  outside the declared union coerces to the same default and raises a drift
+  record, so an unrecognised label cannot buy coverage either.
+- Synthetic evidence stays useful: it exercises the projector and proves the
+  catalog. Design it to raise Declared Coverage and leave Observed at zero.
+- The facade's process-result evidence builder stamps real-process provenance
+  because it holds a process result. Hand-built evidence rows carry the
+  synthetic default unless the author declares otherwise, which is the intended
+  direction of failure.
+
+### 3. Check every facade consumer, enumerated from the workspace
+
+- Enumerate consumers from the workspace manifest, not from a hand list. A hand
+  list omits the consumer that breaks; the enumeration cannot.
+- Two consumer shapes need naming because a suite run misses them:
+  - **Literal constructors**: a consumer that hand-builds a Station Map object
+    literal breaks on any new required field, by construction.
+  - **Merge paths**: a consumer that merges several Station Maps drops any
+    block it does not copy forward, so the merged output silently reports the
+    pre-change contract.
+- A merge path recounts from the merged station rows through the facade
+  aggregator rather than summing the inputs' coverage blocks. The facade owns
+  the counting rule; a consumer re-deriving it is how the two claims drift
+  apart.
+- Additive-optional means every consumer compiles and behaves unchanged until
+  it opts in. A new required field on a shared interface is not additive.
+
+### 4. Prove it with typecheck and public output
+
+- Run the typecheck for every enumerated consumer, not only its suite. Types
+  are stripped at runtime, so a suite stays green while typecheck is the only
+  instrument that sees a discarded block or a newly required field.
+- Prove the claim in the real emitted JSON envelope, not only in unit tests. A
+  block computed correctly and dropped before output fails at the public seam
+  that unit tests never cross.
+- For each enumerated consumer that reports coverage onward, prove its own
+  public output surfaces both claims. Additive-optional guarantees a consumer
+  stays silent, so an unchanged consumer summary after a coverage change is a
+  finding to disposition, never evidence of additivity.
+- Record both proofs. A green suite alone is not evidence for either.
 
 ## Testing Strategy
 
@@ -144,8 +209,8 @@ category of drift undetectable.
 | Layer | What it proves | Owner pattern |
 |-------|---------------|---------------|
 | **Unit tests** | In-process command semantics, readiness engine logic, contract validation | `<package>/tests/*.test.ts` using `runForTest()` or equivalent in-process harness |
-| **Branch Station catalog tests** | Catalog validates against live command discovery; synthetic evidence covers required stations; station map projects declared branch coverage | `<package>/tests/branch-station-catalog.test.ts` |
-| **Catalog-driven integration tests** | Real `bun run` process spawns prove exit codes, stdout/stderr separation, JSON envelope integrity, and station coverage through the process boundary | `<package>/tests/<name>.integration.test.ts` |
+| **Branch Station catalog tests** | Catalog validates against live command discovery; synthetic evidence exercises the projector and raises Declared Branch Coverage, leaving Observed at zero | `<package>/tests/branch-station-catalog.test.ts` |
+| **Catalog-driven integration tests** | Real `bun run` process spawns prove exit codes, stdout/stderr separation, JSON envelope integrity, and Observed Branch Coverage through the process boundary | `<package>/tests/<name>.integration.test.ts` |
 
 ### Catalog-driven integration test pattern
 
@@ -252,8 +317,8 @@ tool name.
   any command with multiple outcome branches. Scaffold alongside
   `branch-station-catalog.ts`.
 - **Catalog-driven integration test**: when the Branch Station catalog exists.
-  The integration test is the proof that the catalog's declared coverage is
-  real. Without it, the catalog is an assertion about tests that don't exist.
+  This layer is the only source of Observed Branch Coverage. Without it, the
+  catalog is an assertion about tests that don't exist.
 
 ### Repair guide for partially-aligned packages
 
@@ -274,6 +339,7 @@ Repair steps:
    `expectedResultContractId` from the existing test assertions.
 3. Create `branch-station-catalog.test.ts` that validates the catalog against
    live command discovery and projects a station map with synthetic evidence.
+   Expect Observed Branch Coverage of zero from this layer; step 4 supplies it.
 4. Create or refactor the integration test to use the catalog-driven pattern:
    station scenario map keyed by `StationId`, shared helpers from
    `@side-quest/cli-command-facade/testing`, evidence fed to the station map

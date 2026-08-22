@@ -83,6 +83,8 @@ for the selected lane:
   - Include all three test layers: unit tests, Branch Station catalog tests,
     and catalog-driven integration tests. See Testing Strategy in
     `references/cli-command-facade.md`.
+  - For Branch Station, Station Map, or facade-surface changes, apply the Dual
+    Coverage Design Gate in `references/cli-command-facade.md`.
 
 ## Next Safe Action
 
@@ -92,7 +94,7 @@ for the selected lane:
   smallest useful level.
 - Facade-backed → run the Command Surface Alignment Proof before shipping.
 - Facade-backed → scaffold catalog-driven integration test alongside Branch
-  Station catalog.
+  Station catalog; it is the only source of Observed Branch Coverage.
 - Design complete → hand the filled Minimum CLI Design Brief and lane-specific
   proof path to the implementer.
 
