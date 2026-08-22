@@ -163,23 +163,72 @@ writing-for-agents first. Routine status edits run this checklist alone.
    banner and session-record proof observed: Spec 814012ea, Standards
    39ba5305, cli-execution-auditor f666bc37. Reports land untracked at
    the unit root as REVIEW-SPEC.md, REVIEW-STANDARDS.md,
-   REVIEW-CLI-EXECUTION.md. Disposition, then any bounded repair or
-   Nathan decision, follow the reports; nothing is accepted,
-   committed, or merged before that.
-   Repair grant recorded 2026-08-22 (Nathan, this session): a bounded
-   fix to the cli-execution-auditor skill is authorized for this
-   unit's repair cycle, exactly and only to make the facade addition
-   truly additive and the auditor's merge and project dual coverage
-   truthful; the facade additive-optionality defect must not be
-   masked by an auditor-only patch. Review-first discipline holds:
-   the three reviews determine the owner split before the repair is
-   chartered; the repair is the smallest that satisfies both owners;
-   cli-execution-auditor skill verification is part of the repaired
-   gate. Every other boundary stays closed; no commit or merge until
-   the reviews and the repaired gates pass. Issue 55 and the vault
-   packet record this same scope with the repair charter, before
-   repair dispatch.
-6. Carried follow-ups for whichever unit takes them next: the
+   REVIEW-CLI-EXECUTION.md. Reviews COMPLETE 2026-08-22, all three
+   reports at the unit root, custody checks passed in each (diff and
+   handback hashes matched, HEAD at the fixed point). Verdicts: Spec,
+   satisfiable with bounded repair, one must-fix; Standards, meets
+   standards after bounded repair; auditor lane, one blocking defect
+   with the owner split named. Unanimous blocker, observation 4:
+   required StationMap.coverage breaks additive-optionality in fact
+   (cli-execution-auditor typecheck 3 errors against the worker tree,
+   clean at the fixed point), and the auditor's mergeStationMaps
+   builds its own StationMap literal and discards per-map coverage,
+   so a type-only fix would still ship untruthful merged output.
+   Supervisor dispositions of the five observations: 4 blocking,
+   repair chartered below; 3 should-fix as a repair-handback record
+   correction with the original handback frozen (predeclared one
+   failing guard, observed three, two purpose-built plus the updated
+   pre-existing pinned block); 1 non-blocking gate-text defect, the
+   repair gate re-chartered to no-new-failures against the
+   fixed-point baselines; 2 non-blocking, vacuous Biome leg recorded
+   with substitute formatting evidence verified by the Standards
+   axis; 5 not blocking (Spec measured 77 effective code lines
+   against the tilde-60; the unnamed surface judged necessary; the
+   required modifiers repair under R1). Repair grant recorded
+   2026-08-22 (Nathan, this session): a bounded fix to the
+   cli-execution-auditor skill, exactly and only to make the facade
+   addition truly additive and the auditor's merged and projected
+   dual coverage truthful; masking the facade defect with an
+   auditor-only patch is ruled out; cli-execution-auditor skill
+   verification joins the repaired gate; no commit or merge until
+   the reviews and the repaired gates pass. Repair packet R1 to R7
+   at the unit root (REPAIR-PACKET.md), one consolidated cycle per
+   the review contract: R1 StationMap.coverage and
+   StationMapEvidence.provenance become optional in type while the
+   projector always populates both; R2 a facade-owned coverage
+   aggregation helper owning the counting rule; R3 the auditor's
+   mergeStationMaps emits merged coverage through that helper; R4
+   one owner for the declared-coverage claim string; R5 projection
+   coerces an invalid provenance to the fail-closed default with the
+   drift still recorded; R6 the stale declared-coverage-runs limit
+   note; R7 the RED-record correction. Record-only, carried: the
+   unenforced real_process stamp and drift-text sanitisation (facade
+   hardening follow-up, with the facade CONTEXT.md station-vocabulary
+   gap); future additive gates enumerate consumers from the
+   workspace, not a hand list; auditor baseline observed by the
+   supervisor at the fixed point, 141 pass 1 pre-existing fail.
+6. AUTHORIZED, NOT STARTED (Nathan, 2026-08-22): a second bounded
+   skill-document unit, queued strictly behind a stable repair
+   charter for item 5. Scope: update the cli-author skill using
+   skill-author, writing-for-agents, and
+   agent-reliability-guardrails. Keep cli-author/SKILL.md a thin
+   router; facade-only depth lives in its owned reference, never
+   copied runtime schemas. Reconcile the live contradiction:
+   cli-author/references/cli-command-facade.md still teaches
+   declared-only Station Map proof, and
+   agent-reliability-guardrails/references/test-matrix.md says
+   "Station Maps claim Declared Branch Coverage only." The updated
+   design gate must require Declared and Observed Branch Coverage
+   separately, real-process provenance for observed proof,
+   compatibility checks for every facade consumer including literal
+   constructors and merge paths, and a truthful typecheck plus
+   public-output proof. Proof: cli-author's
+   behavior-regression-checklist before and after, writing-for-agents
+   deletion and owner-path checks, and the reliability test matrix.
+   Its own unit worktree, brief, admitted Opus 5 high worker,
+   handback, review, commit, and merge boundary. Every other
+   boundary stays closed.
+7. Carried follow-ups for whichever unit takes them next: the
    symlink-escape containment check at the
    deletion site (lexical safety is proved, symlink escape is not);
    em-dashes in artifact-set.ts, canonical.ts and generate.ts comments
@@ -190,7 +239,7 @@ writing-for-agents first. Routine status edits run this checklist alone.
    fixtures, both predating the Contextual Rendering unit); and
    schema.ts's own header comment still naming Input Schema v1 while
    the file owns the v2 shapes (src comment, needs a chartered unit).
-7. Stage 5 carries the 13 unresolved decisions named in the plan
+8. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
    receipts/stage5-decision-packet.md, posted to issue 55) plus the
    build-added worklist below, now strengthened by the Agent Worktree
