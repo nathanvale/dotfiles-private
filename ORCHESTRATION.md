@@ -407,6 +407,54 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   full report with the duty to verify, challenge, or extend A, sole
   write REVIEW-FINAL-B.md, same Spec-grounding transcript check
   before admission.
+  Reviewer B returned 2026-08-22 17:42 AEST and is ADMITTED:
+  REVIEW-FINAL-B.md sha256 06c37a53.. ; transcript verified (one
+  code-review Skill invocation, Spec subagent prompt names the
+  snapshot, manifest and both layers; claude-fable-5 at xhigh on all
+  149 messages); custody held (HEAD 9d1e91e, diff d5a79e4d..
+  unmoved). B CONFIRMS all of A's custody, gates, findings and the
+  title downgrade (B's own unseeded Standards lane declined to raise
+  the title at all), and CONTRADICTS A's no-must-fix headline with
+  one new verified layer-1 must-fix: the emitted Command Surface
+  Contract omits the declared executionModes and previewExemption
+  fields (src/command-surface-contract.ts contract literal), so the
+  facade's own oracle on UNAMENDED v2 contracts returns 8
+  command-write-preview-missing drift rows while Gate 3
+  (tests/command-surface-contract.test.ts) reports green off
+  amendment-recast evidence; the mask is
+  tests/support/emission.ts withPreviewableMutations plus the
+  entryScript overwrite applied unconditionally, erasing all 8
+  write-implying mutations from every amended v2 suite. The
+  supervisor re-verified the central citations directly in source
+  (the refusal check reads the declared surface at
+  command-surface-contract.ts:96-113; the emitted literal carries no
+  executionModes or previewExemption; the facade type declares both
+  optional at command-contract.ts:200,203; contractsFor derives from
+  emitAmended; the recast and overwrite are unconditional at
+  emission.ts:191,194). B attributes the defect to committed layer-1
+  src, read-only under the unit's grant, latent today (the two
+  reserved refusals block any full v2 set; the pilot is all-read),
+  and recommends ACCEPT for the layer-2 unit with the must-fix
+  recorded as a named engine precondition.
+  Final gate dispositions (supervisor, 2026-08-22): the layer-1
+  must-fix and its mask are assigned to a future bounded
+  generator-hardening unit (its own Nathan ask; see Carried work),
+  landed together because repairing the mask alone flips Gate 3 to
+  its honest red. Standing evidentiary caveats until that unit
+  closes: Gate 3 green is NOT proof of the write-preview obligation,
+  and mutating-station properties computed over amended v2 evidence
+  (including the zero-unsafe-retry leg of the first-cycle
+  cli-execution review) are vacuous for vault-git; the baseline
+  claim stands only as computed over recast evidence. Layer-2
+  findings across both reviewers are all record-only or trivially
+  additive and none touches the unit's semantics: the accepted
+  candidate pin-test title rename question, F3, N1, the dead arm,
+  the discriminants.command comment sentence, and the missing
+  CONTEXT.md exemplar term are carried to the next
+  candidate-touching test unit; the front-door deep imports in two
+  test files and the stale emission.ts header ride with the
+  hardening unit. Both reviewers recommend ACCEPT of the test-custody
+  unit; B states returning it could not repair any new finding.
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
@@ -432,29 +480,33 @@ ACCEPT RECORDED (Nathan, 2026-08-22): the re-authoring unit is
 accepted, committed as 9d1e91e on its unit branch, and held unmerged.
 AUTHORIZED (Nathan, 2026-08-22): the test-custody follow-up unit, one
 bounded unit under the grant below; it has now reached its
-independently re-reviewed handback. EXTENDED (Nathan, 2026-08-22):
-the accept-or-return ask is deferred behind one final whole-engine
-code-review gate (two sequential brand-new fable-xhigh top-level
-reviewers; see the in-flight block). No decision is currently with
-Nathan; the final accept-or-return returns after reviewer B and the
-supervisor dispositions. After that decision, the Input Schema shape
-decision for the two surviving derivation gaps stays queued. The
-auditor output proposal below stays parked.
+independently re-reviewed handback. The extended whole-engine gate
+(Nathan, 2026-08-22) is COMPLETE: both sequential fable-xhigh
+reviewers admitted and returned, both recommend accepting the unit;
+reviewer B surfaced one new layer-1 must-fix, dispositioned to the
+carried Generator hardening unit as a named precondition for the
+Command Surface Alignment Proof, Specification Admission, and
+qualification. ONE FINAL DECISION WITH NATHAN (2026-08-22): accept
+or return the test-custody unit at this fully reviewed boundary,
+with the whole-engine result and the hardening-unit ask in view.
+After that decision, the Input Schema shape decision for the two
+surviving derivation gaps stays queued and the generator-hardening
+grant becomes its own ask. The auditor output proposal below stays
+parked.
 Formal qualification stays blocked until both legs are ready: the
 candidate path through its own later Specification Admission, and
 truthful auditor output.
 
 ## Next safe supervisor action
 
-Run Nathan's extended final gate: supervise reviewer A to its
-report, then launch reviewer B (brand-new, fable xhigh, sequential)
-with the packet plus A's full report; after B, disposition both
-reports, recheck custody, record truthfully, and stop at one final
-accept-or-return to Nathan. On accept, the supervisor owns the unit
-commit, receipts archive, ledger entry, issue comment, and vault
-write-back under the operational contract; the accepted re-authoring
-merge precondition is then satisfied but the merge itself stays a
-separate supervisor act after acceptance. Reconcile owners and
+STOPPED at the fully reviewed test-custody boundary: the extended
+whole-engine gate is complete and dispositioned. Present the one
+final accept-or-return to Nathan and wait. On accept, the supervisor
+owns the unit commit, receipts archive, ledger entry, issue comment,
+and vault write-back under the operational contract; the accepted
+re-authoring merge precondition is then satisfied but the merge
+itself stays a separate supervisor act after acceptance, and the
+generator-hardening grant is its own next ask. Reconcile owners and
 answer questions; nothing more.
 
 ## Authorized grant (Nathan, 2026-08-22): Vault Git test-custody follow-up
@@ -693,6 +745,24 @@ for U+2014, U+2013, U+2019, U+2026 before committing.
 
 ## Carried work (one owner, one state each)
 
+- Generator hardening unit (future chartered unit; carried; raised by
+  the 2026-08-22 whole-engine final gate, REVIEW-FINAL-A.md and
+  REVIEW-FINAL-B.md at the test-custody unit root): MUST-FIX, emit the
+  declared executionModes and previewExemption into the Command
+  Surface Contract (plan emit target 3) and make the emission
+  harness's withPreviewableMutations and entryScript amendments
+  supply-if-absent, landed together; until then Gate 3 green is not
+  write-preview proof and amended-v2 mutating-station properties are
+  vacuous for vault-git. Precondition for the stage-5 Command Surface
+  Alignment Proof, Specification Admission, and any qualification
+  claim. Should-fix riders: build-ir.ts totality-by-cast,
+  generate.ts refusal-message voice with the describe(error)
+  absolute-path leak channels, the U+2014 source-comment sweep (19
+  lines, 5 files), the semantic.ts alias rename, and the
+  branch-stations.ts ?? 'read' mutation default (needs a product
+  ruling or a refusal cause; none found in the snapshot); record-only
+  riders: front-door deep imports in two test files, the stale
+  emission.ts header.
 - Facade hardening unit (future chartered unit; carried): enforce the
   real_process stamp on CliProcessResult; sanitise drift action text;
   add the facade CONTEXT.md Station Map vocabulary. Evidence:
