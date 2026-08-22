@@ -3,7 +3,7 @@ import {
 	compileSpecificationCandidate,
 	deriveArtifactSet,
 } from '../src/index.ts'
-import { readCandidate } from './support/candidates.ts'
+import { readCandidate, readFrozenV1Exemplar } from './support/candidates.ts'
 
 /**
  * Input Schema v1 expressiveness gaps, proved as refusals.
@@ -19,10 +19,21 @@ import { readCandidate } from './support/candidates.ts'
  * stage 5, these tests fail loudly and are replaced by the positive emission
  * gates they currently stand in for. That failure is the point: it forces the
  * decision back to the owner instead of letting a default paper over it.
+ *
+ * The vault-git subject here is the frozen v1 exemplar, not the live vault-git
+ * candidate. These are claims about what Input Schema v1 cannot express, so
+ * they need v1 input; the live candidate has since been re-authored against v2,
+ * which closes both gaps and would leave every row below asserting nothing.
  */
 
+async function v1SourceFor(product: 'vault-git' | 'fallow'): Promise<string> {
+	return product === 'vault-git'
+		? await readFrozenV1Exemplar()
+		: await readCandidate(product)
+}
+
 async function emit(product: 'vault-git' | 'fallow') {
-	const compiled = compileSpecificationCandidate(await readCandidate(product))
+	const compiled = compileSpecificationCandidate(await v1SourceFor(product))
 	if (!compiled.ok) throw new Error(`${product} candidate failed to compile`)
 	return deriveArtifactSet(compiled.ir, compiled.digest.specificationDigest)
 }
@@ -47,11 +58,9 @@ describe('the generator refuses rather than inventing an execution mode', () => 
 		})
 	}
 
-	test('vault-git names every write-implying command it cannot preview', async () => {
-		const compiled = compileSpecificationCandidate(
-			await readCandidate('vault-git'),
-		)
-		if (!compiled.ok) throw new Error('vault-git candidate failed to compile')
+	test('the frozen v1 exemplar names every write-implying command it cannot preview', async () => {
+		const compiled = compileSpecificationCandidate(await readFrozenV1Exemplar())
+		if (!compiled.ok) throw new Error('frozen v1 exemplar failed to compile')
 		const emission = deriveArtifactSet(
 			compiled.ir,
 			compiled.digest.specificationDigest,
@@ -98,14 +107,12 @@ describe('the generator refuses rather than choosing a blocker arbitrarily', () 
 		})
 	}
 
-	test('vault-git declares many blockers but no command mapping', async () => {
+	test('the frozen v1 exemplar declares many blockers but no command mapping', async () => {
 		// This is the shape of the gap: it is not that blockers are missing, but
 		// that v1 has no way to say which blocker refuses which command. Picking
 		// `blockers[0]` would publish an arbitrary choice as an admitted meaning.
-		const compiled = compileSpecificationCandidate(
-			await readCandidate('vault-git'),
-		)
-		if (!compiled.ok) throw new Error('vault-git candidate failed to compile')
+		const compiled = compileSpecificationCandidate(await readFrozenV1Exemplar())
+		if (!compiled.ok) throw new Error('frozen v1 exemplar failed to compile')
 		expect(compiled.ir.blockers.length).toBeGreaterThan(1)
 	})
 
@@ -132,10 +139,8 @@ describe('refusals stay complete and deterministic', () => {
 	})
 
 	test('the same candidate refuses identically twice', async () => {
-		const compiled = compileSpecificationCandidate(
-			await readCandidate('vault-git'),
-		)
-		if (!compiled.ok) throw new Error('vault-git candidate failed to compile')
+		const compiled = compileSpecificationCandidate(await readFrozenV1Exemplar())
+		if (!compiled.ok) throw new Error('frozen v1 exemplar failed to compile')
 		const digest = compiled.digest.specificationDigest
 		const first = deriveArtifactSet(compiled.ir, digest)
 		const second = deriveArtifactSet(compiled.ir, digest)

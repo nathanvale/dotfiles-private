@@ -118,10 +118,11 @@ export const REFUSAL_CAUSE_PRODUCERS: Readonly<
 	 */
 	emit_entry_undeclarable: async () => {
 		const { raw } = await emissionReadyVaultGit()
-		const stripped: SpecificationIr = {
-			...raw,
-			commandSurface: { ...raw.commandSurface },
-		}
+		// Deleted rather than merely omitted from the spread: the candidate
+		// declares its own entry now, so a spread copy still carries it and the
+		// producer would reach no refusal at all.
+		const { entryScript: _entryScript, ...commandSurface } = raw.commandSurface
+		const stripped: SpecificationIr = { ...raw, commandSurface }
 		return deriveCommandContracts(stripped).refusals
 	},
 	/**
@@ -256,21 +257,47 @@ export const REFUSAL_CAUSE_PRODUCERS: Readonly<
 			],
 			currentRevision: REVISION,
 		}).refusals,
-	// The candidate's own write-implying mutations restored onto the otherwise
-	// amended IR: v1 declares no execution mode that could satisfy the Write
-	// Preview Capability obligation.
-	emit_write_preview_undeclarable: () =>
-		refusalsFrom(({ ir, raw }) => ({
-			...ir,
-			commandSurface: {
-				...ir.commandSurface,
-				mutations: raw.commandSurface.mutations,
-			},
-		})),
-	// No declared blocker at all: a refusal station cannot name an admitted
-	// refusal cause, so its blocker column is underivable.
+	/**
+	 * A declared v2 candidate whose write-implying command carries neither a
+	 * non-mutating execution mode nor a Preview Exemption, so the Write Preview
+	 * obligation cannot be satisfied from anything it declares.
+	 *
+	 * The fixture reaches the cause on its own compiled IR, with no amendment
+	 * at all: the refusal is a property of what the candidate declares rather
+	 * than of a mutation map the harness restored.
+	 */
+	emit_write_preview_undeclarable: async () => {
+		const source = await Bun.file(
+			new URL(
+				'../../fixtures/v2/derivation-write-preview-undeclarable.jsonc',
+				import.meta.url,
+			),
+		).text()
+		const compiled = compileSpecificationCandidate(source)
+		if (!compiled.ok) {
+			throw new Error('write-preview fixture failed to compile')
+		}
+		const emission = deriveArtifactSet(
+			compiled.ir,
+			compiled.digest.specificationDigest,
+		)
+		return emission.ok ? [] : emission.refusals
+	},
+	/**
+	 * No declared blocker at all: a refusal station cannot name an admitted
+	 * refusal cause, so its blocker column is underivable.
+	 *
+	 * Both sources have to go. The candidate declares a `station_blocker`
+	 * routing table, and a row in that table supplies its station's blocker
+	 * directly, so emptying only `blockers` leaves every refusal station still
+	 * naming one and reaches no refusal.
+	 */
 	emit_expectation_column_underivable: () =>
-		refusalsFrom(({ ir }) => ({ ...ir, blockers: [] })),
+		refusalsFrom(({ ir }) => ({
+			...ir,
+			blockers: [],
+			routing: ir.routing.filter((table) => table.role !== 'station_blocker'),
+		})),
 	// A declared rule table that matches no station: retry posture cannot be
 	// derived from exit status or prose.
 	emit_retry_posture_unresolved: () =>

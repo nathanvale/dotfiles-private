@@ -1,0 +1,514 @@
+// Vault Git Transaction Manager — Specification Candidate (UNADMITTED DRAFT)
+// Spike artifact for nathanvale/dotfiles-private#75, criterion 1 (expressiveness)
+// and criterion 5 (authoring cost). Drafted from the source inventory of
+// .agents/runtime/vault-git-transaction-manager on 2026-08-21.
+//
+// Authoring rules honored (issue #55): data-only JSONC; comments explain meaning
+// and never select control flow; unresolved semantics are surfaced in
+// "unresolved_decisions" rather than invented.
+{
+	"spec_meta": {
+		"product": "vault-git",
+		"input_schema_version": "spike-draft-1",
+		"product_specification_revision": "unadmitted",
+		"state_machine_definition_version": "unadmitted",
+		"public_result_schema_version": "2",
+		"activation_result_schema_version": "3",
+	},
+
+	// Features condition which machinery is generated. Vault Git admits all of
+	// them; Fallow's candidate omits nearly all of them.
+	"features": {
+		"durable_operations": true,
+		"liveness_evidence": true,
+		"cancellation": "partial", // see unresolved_decisions.cancellation_scope
+		"version_custody": true,
+		"remote_authority": true,
+		"feature_gates": ["vault_content_repair"],
+	},
+
+	"entities": {
+		"transaction": {
+			"identity": { "field": "transactionId", "pattern": "^txn_[0-9a-f]{32}$" },
+			"fencing": { "field": "leaseGeneration", "owner": "remote_ledger" },
+		},
+		"receipt": {
+			"identity": { "field": "receiptId", "pattern": "^receipt_[0-9a-f]{32}$" },
+			"revision": { "field": "revision", "rule": "monotonic_append_only" },
+			"schema_version": 2,
+		},
+		"remote_lease": {
+			"identity": { "fields": ["transactionId", "generation"] },
+			"generation_chain": { "ref": "refs/heads/vault-system/transaction-ledger", "advance": "compare_and_swap" },
+		},
+		"completion_task": {
+			"identity": { "field": "taskId", "pattern": "^task_[0-9a-f]{32}$" },
+			"revision": { "field": "revision", "rule": "compare_and_swap" },
+			"logical_operation": { "field": "taskId" },
+			"attempt": { "field": "attemptNumber", "increment_only_by": "explicit_repair" },
+			"launch_attempt": { "field": "launchAttempt", "range": [0, 2], "creates_attempt": false },
+			"launch_generation": { "field": "launchGeneration", "pattern": "^launch_[0-9a-f]{32}$" },
+			"schema_version": 2,
+		},
+		"doctor_task": {
+			"identity": { "field": "taskId", "pattern": "^doctor_task_[0-9a-f]{32}$" },
+			"revision": { "field": "revision", "rule": "compare_and_swap" },
+			"schema_version": 1,
+			"grants_authority": false,
+		},
+		"activation_record": {
+			"identity": { "field": "evidenceId", "pattern": "^vault-git:prepared:v2:[0-9a-f]{64}$" },
+			"schema_version": 2,
+			"bindings": [
+				"repositoryIdentity", "remoteIdentity", "hostIdentity", "runtimeIdentity",
+				"executableIdentity", "privateStateIdentity", "localMainHead", "remoteMainHead",
+				"ledgerGeneration", "gitIdentity", "sshIdentity", "checkerClosure",
+			],
+		},
+		"capability": {
+			"roles": ["owner", "join"],
+			"delivery": "inherited_fd", // never argv bytes
+			"storage": "per_receipt_per_role",
+		},
+		"host_quarantine": { "record": "append_only" },
+		"candidate_residue": {
+			"identity": { "field": "candidateId", "pattern": "^candidate-" },
+			"schema_version": 1,
+		},
+	},
+
+	"states": {
+		"transaction_phase": {
+			"values": [
+				"unavailable", "inspecting", "intent_durable", "leased", "writing",
+				"checking", "committing", "push_pending", "repairable",
+				"human_required", "blocked", "closed",
+			],
+			"durable_subset_excludes": ["unavailable", "inspecting"],
+			"terminal": ["closed"],
+			"human_terminal": ["human_required"],
+		},
+		"transaction_read_state": {
+			"values": [
+				"absent", "active", "expired", "superseded", "unknown",
+				"push_pending", "repairable", "human_required", "closed",
+			],
+			// Total phase→read-state projection. The current implementation has two
+			// competing partial functions; this table is the single declared one.
+			// Rows marked "decision" resolve gaps the code leaves null.
+			"projection_from_phase": {
+				"unavailable": "unknown",     // decision: was unmapped
+				"inspecting": "unknown",      // decision: was unmapped
+				"intent_durable": "active",   // decision: was unmapped
+				"leased": "active",           // decision: was unmapped
+				"writing": "active",          // decision: was unmapped
+				"checking": "active",         // decision: was unmapped
+				"committing": "active",       // decision: was unmapped
+				"push_pending": "push_pending",
+				"repairable": "repairable",
+				"human_required": "human_required",
+				"blocked": "unknown",
+				"closed": "closed",
+			},
+			// absent / expired / superseded arise from ledger observation, not from
+			// a local phase; they are observation-sourced states.
+			"observation_sourced": ["absent", "expired", "superseded"],
+		},
+		"completion_task": {
+			"values": ["claimed", "launching", "in_progress", "closed", "repair_needed", "unknown"],
+			"phases": ["admitted", "running", "terminal"],
+			"legal_pairings": {
+				"admitted": ["claimed", "launching"],
+				"running": ["in_progress"],
+				"terminal": ["closed", "repair_needed", "unknown"],
+			},
+			"state_field_requirements": {
+				"launching": { "launchGeneration": "present", "launchExpiresAt": "present" },
+				"in_progress": { "launchGeneration": "present", "launchExpiresAt": "null" },
+			},
+			"terminal": ["closed", "repair_needed", "unknown"],
+			"absorbing": ["closed"],
+		},
+		"doctor_task": {
+			"values": ["claimed", "launching", "in_progress", "closed", "unknown"],
+			"phases": ["admitted", "running", "terminal"],
+			"terminal": ["closed", "unknown"],
+			"checkpoints": ["local_classified", "checking_remote", "terminal"],
+		},
+		"lease": { "values": ["held", "released"] },
+		"host_disposition": { "values": ["authoritative", "quarantined"] },
+		"quarantine_status": { "values": ["takeover_pending", "quarantined", "reconciled"] },
+		"push_outcome": { "values": ["not_attempted", "unknown", "closed", "host_contract_breach"] },
+		"write_permission": { "values": ["denied", "join", "owner"] },
+		"changed_state": { "values": ["none", "local", "remote", "committed", "partial"] },
+		"result_outcome": {
+			"values": [
+				"read_only", "discovered", "unavailable", "invalid_usage", "admitted",
+				"joined", "advanced", "completed", "repaired", "refused",
+			],
+		},
+		"activation_result_status": { "values": ["restricted", "deferred"] },
+	},
+
+	// Receipt transitions: the event vocabulary that moves durable state.
+	// driver: command = engine on a public invocation; repair = repair engine;
+	// observation = doctor/reconciliation reading authoritative evidence.
+	"transitions": [
+		{ "event": "acquisition_intent", "to_phase": "intent_durable", "driver": "command" },
+		{ "event": "lease_won", "to_phase": "leased", "driver": "command" },
+		{ "event": "lease_won", "to_phase": "leased", "driver": "repair", "via": "stale-lease-takeover" },
+		{ "event": "write_authority_granted", "to_phase": "writing", "driver": "command" },
+		{ "event": "write_authority_granted", "to_phase": "writing", "driver": "repair", "via": "resume" },
+		{ "event": "paths_joined", "to_phase": "writing", "driver": "command" },
+		{ "event": "completion_requested", "to_phase": "checking", "driver": "command" },
+		{ "event": "deterministic_repair_available", "to_phase": "repairable", "driver": "command" },
+		{ "event": "commit_candidate_frozen", "to_phase": "committing", "driver": "command" },
+		{ "event": "push_outcome_unknown", "to_phase": "push_pending", "driver": "command" },
+		{ "event": "push_outcome_unknown", "to_phase": "push_pending", "driver": "repair", "via": "retry-push" },
+		{ "event": "closed", "to_phase": "closed", "driver": "command" },
+		{ "event": "closed", "to_phase": "closed", "driver": "repair", "via": "close-verified" },
+		{ "event": "human_intervention_required", "to_phase": "human_required", "driver": "command" },
+		{ "event": "human_intervention_required", "to_phase": "human_required", "driver": "repair" },
+		{ "event": "superseded", "to_phase": "human_required", "driver": "observation", "note": "prior writer quarantined" },
+		{ "event": "quarantine_reconciled", "to_phase": "closed", "driver": "repair", "via": "reconcile-quarantine" },
+	],
+
+	// Task terminal refinement: currently a compound boolean plus a comment.
+	// Declared here as explicit transition permissions.
+	"task_refinement_rules": {
+		"allowed": [{ "from": "unknown", "to": "repair_needed", "driver": "observation" }],
+		"forbidden": [
+			{ "from": "closed", "to": "*", "reason": "closed absorbs" },
+			{ "from": "repair_needed", "to": "unknown", "reason": "doctor may refine, never decay" },
+		],
+	},
+
+	"monotonic_constraints": [
+		{ "entity": "completion_task", "field": "launchAttempt", "rule": "never_decreases" },
+		{ "entity": "completion_task", "field": "updatedAt", "rule": "never_decreases" },
+		{ "entity": "completion_task", "field": "repairReentryBlocked", "rule": "latch_true", "latched_by": "any observation of state unknown" },
+		{ "entity": "completion_task", "field": "repairAuthorization", "rule": "cleared_only_on_state", "state": "closed" },
+		{ "entity": "receipt", "field": "revision", "rule": "never_decreases" },
+	],
+
+	"invariants": [
+		{
+			"id": "repair_authorization_reachability",
+			"holds": "repairAuthorization present only when state repair_needed, phase terminal, repairReentryBlocked false",
+			"consequence": "a task that ever observed unknown can never hold a repair authorization",
+		},
+		{ "id": "one_writer", "holds": "exactly one ledger generation holds write authority; CAS append advances it" },
+		{ "id": "lease_expiry_grants_nothing", "holds": "lease expiry never grants takeover; takeover requires human attestation plus doctor token" },
+		{ "id": "heartbeat_not_authority", "holds": "heartbeatAt and worker identity are liveness evidence only" },
+		{ "id": "doctor_authority_free", "holds": "doctor grants no vault, git, lease, repair, or activation authority" },
+		{ "id": "commit_evidence_before_push", "holds": "push_pending with pushOutcome unknown is persisted before any push is attempted; append failure means push not attempted" },
+	],
+
+	"blockers": [
+		"runtime_unavailable", "activation_blocked", "vault_unconfigured", "remote_unavailable",
+		"task_not_found", "task_input_mismatch", "worker_launch_failed", "worker_launch_protocol_failed",
+		"worker_lost", "main_behind", "main_ahead", "main_diverged", "push_pending", "lease_active",
+		"lease_stale", "ledger_malformed", "lease_generation_stale", "lease_owner_unknown",
+		"remote_moved", "receipt_conflict", "host_contract_breach", "human_required", "offline_mode",
+		"receipt_corrupt", "capability_missing", "capability_invalid", "capability_role_mismatch",
+		"vault_identity_changed", "owned_path_not_admitted", "commit_subject_invalid",
+		"identity_label_invalid", "owned_path_changed", "unrelated_state_changed",
+		"completion_baseline_changed", "completion_interrupted", "empty_event", "vault_check_failed",
+		"transaction_mismatch", "doctor_proof_stale", "doctor_token_invalid", "host_quarantined",
+		"deterministic_repair_mismatch", "repair_action_required", "dirty_tree", "checker_unadmitted",
+		"checker_changed", "checker_output_invalid", "checker_repair_refused", "continuation_unavailable",
+		"doctor_observation_expired", // decision: split from continuation_unavailable (see unresolved note 15 resolution)
+	],
+
+	"activation": {
+		"restriction_causes": [
+			"configuration_missing", "admission_missing", "human_capability_required",
+			"evidence_changed", "binding_changed", "invalidated", "revoked", "revalidation_unavailable",
+		],
+		"stopped_actions": ["activation_preparation", "activation_admission", "vault_write", "activation_revocation"],
+		"configuration_fields": ["host_identity", "ssh_identity_file", "ssh_public_key", "ssh_known_hosts"],
+		"cause_to_next_action": {
+			"configuration_missing": "configure_activation_identity",
+			"admission_missing": "prepare_fresh",
+			"human_capability_required": "request_operator_review",
+			"evidence_changed": "prepare_fresh",
+			"binding_changed": "prepare_fresh",
+			"invalidated": "prepare_fresh",
+			"revoked": "prepare_fresh",
+			"revalidation_unavailable": "wait_for_runtime",
+		},
+	},
+
+	// Next Safe Action catalog: kind, owner, condition, gating, context needs.
+	// Exactly one catalog; the current code's second compat vocabulary becomes a
+	// derived rendering, never a second authority (see unresolved_decisions).
+	"actions": {
+		"kinds": ["invoke", "needs_input", "needs_human", "none"],
+		"needs_human_kinds": ["command", "external_prerequisite"],
+		"external_owners": [
+			"vault_git_operator", "repository_ssh_owner", "vault_git_performance_owner",
+			"transaction_owner", "join_owner", "private_launcher",
+		],
+		"catalog": [
+			{ "id": "reconcile_quarantine", "kind": "invoke" },
+			{ "id": "preview_host_enrollment_repair", "kind": "invoke" },
+			{ "id": "apply_vault_content_repair", "kind": "invoke", "requires_feature": "vault_content_repair" },
+			{ "id": "inspect_completion_task", "kind": "invoke", "requires_context": ["task_id"] },
+			{ "id": "run_janitor", "kind": "invoke" },
+			{ "id": "resume_vault_content_promotion", "kind": "invoke", "requires_feature": "vault_content_repair" },
+			{ "id": "resume_repaired_transaction", "kind": "invoke", "requires_context": ["transaction_id"] },
+			{ "id": "close_verified_publication", "kind": "invoke", "requires_context": ["transaction_id"] },
+			{ "id": "retry_proven_unpublished", "kind": "invoke", "requires_context": ["transaction_id"] },
+			{ "id": "inspect_doctor_task", "kind": "invoke", "requires_context": ["doctor_task_id"] },
+			{ "id": "inspect_transaction", "kind": "invoke", "requires_context": ["transaction_id"] },
+			{ "id": "inspect_remote_lease", "kind": "invoke" },
+			{ "id": "inspect_configured_vault", "kind": "invoke" },
+			{ "id": "inspect_commands", "kind": "invoke" },
+			{ "id": "run_doctor", "kind": "invoke" },
+			{ "id": "prepare_fresh", "kind": "invoke" },
+			{ "id": "retry_push", "kind": "invoke", "requires_context": ["transaction_id"] },
+			{ "id": "provide_host_enrollment_inputs", "kind": "needs_input", "input_contract": "setup.vault-git.host-enrollment" },
+			{ "id": "begin_transaction", "kind": "needs_input", "input_contract": "vault-git.begin" },
+			{ "id": "complete_transaction", "kind": "needs_input", "input_contract": "vault-git.complete" },
+			{ "id": "continue_transaction", "kind": "needs_input", "input_contract": "vault-git.join" },
+			{ "id": "resume_writing", "kind": "needs_input", "input_contract": "vault-git.join" },
+			{ "id": "run_owned_path_checks", "kind": "needs_input" },
+			{ "id": "change_commit_summary", "kind": "needs_input", "input_contract": "vault-git.complete" },
+			{ "id": "correct_completion_task_id", "kind": "needs_input", "input_contract": "vault-git.completion-task-id" },
+			{ "id": "correct_doctor_task_id", "kind": "needs_input", "input_contract": "vault-git.doctor-task-id" },
+			{ "id": "review_prepared", "kind": "needs_human", "human_kind": "command" },
+			{ "id": "return_to_human_review", "kind": "needs_human", "human_kind": "command" },
+			{ "id": "request_operator_takeover", "kind": "needs_human", "human_kind": "command" },
+			{ "id": "reattest_stale_lease_takeover", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "stale_lease_takeover_reattested" },
+			{ "id": "provision_repository_ssh", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "repository_ssh_owner", "condition": "dedicated_identity_ready" },
+			{ "id": "escalate_validation_evidence", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "validation_evidence_required" },
+			{ "id": "diagnose_validation_budget", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_performance_owner", "condition": "validation_stage_budget_diagnosed" },
+			{ "id": "restore_transaction_capability", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "transaction_owner", "condition": "transaction_owner_capability_available" },
+			{ "id": "reconcile_repair_promotion", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "repair_promotion_reconciliation_required" },
+			{ "id": "obtain_remote_evidence", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "remote_evidence_available" },
+			{ "id": "resolve_publication_conflict", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "publication_conflict_resolved" },
+			{ "id": "restore_remote_contract", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "remote_contract_restored" },
+			{ "id": "use_owner_capability", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "transaction_owner", "condition": "owner_capability_supplied" },
+			{ "id": "use_join_capability", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "join_owner", "condition": "join_capability_supplied" },
+			{ "id": "reload_capability", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "transaction_owner", "condition": "transaction_capability_reloaded" },
+			{ "id": "configure_activation_identity", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "activation_identity_configured" },
+			{ "id": "request_operator_review", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "operator_reviewed_evidence" },
+			{ "id": "inspect_private_receipt", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "transaction_owner", "condition": "private_receipt_inspected" },
+			{ "id": "preserve_local_edits", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "transaction_owner", "condition": "local_edits_preserved" },
+			{ "id": "capture_private_draft", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "transaction_owner", "condition": "local_edits_preserved" },
+			{ "id": "wait_for_runtime", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "private_launcher", "condition": "runtime_owner_available" },
+			{ "id": "continue_outer_transaction", "kind": "none", "stop_scope": "agent_terminal" },
+			{ "id": "none", "kind": "none", "stop_scope": "domain_terminal" },
+		],
+		// Contextual ids are renderings that require context to resolve to a
+		// catalog id; they are never persisted as authority.
+		"contextual_renderings": {
+			"inspect_status": ["inspect_completion_task", "inspect_doctor_task", "inspect_transaction"],
+			"retry_remote": ["begin_transaction", "inspect_configured_vault"],
+			"change_input": ["correct_completion_task_id", "correct_doctor_task_id"],
+			"change_owned_paths": ["begin_transaction", "continue_transaction"],
+		},
+		"resolution": {
+			"missing_context": "unavailable_projection",
+			"unavailable_projection_blocker": "continuation_unavailable",
+			"unavailable_projection_retry_safety": "operator_required",
+			"unavailable_projection_stop": "agent_terminal",
+		},
+	},
+
+	"selectors": {
+		"transaction_id": "^txn_[0-9a-f]{32}$",
+		"task_id": "^task_[0-9a-f]{32}$",
+		"doctor_task_id": "^doctor_task_[0-9a-f]{32}$",
+		"repair_id": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+	},
+
+	"retry_posture": {
+		"values": ["same_input_safe", "same_input_unsafe", "operator_required"],
+		// Ordered rule table; first match wins. One table for success and refusal
+		// results; the current code's divergent defaults are resolved here (see
+		// unresolved_decisions.retry_default_divergence).
+		"rules": [
+			{ "when": { "state_in": ["human_required", "superseded", "expired"] }, "then": "operator_required" },
+			{ "when": { "state_in": ["push_pending"] }, "then": "same_input_unsafe" },
+			{ "when": { "blocker": "continuation_unavailable" }, "then": "operator_required" },
+			{ "when": { "activation_cause_in": ["configuration_missing", "admission_missing", "revalidation_unavailable"] }, "then": "same_input_safe" },
+			{ "when": { "activation_cause_in": ["human_capability_required", "revoked"] }, "then": "operator_required" },
+			{ "when": { "activation_cause_in": ["evidence_changed", "binding_changed", "invalidated"] }, "then": "same_input_unsafe" },
+			{ "when": { "doctor_task_terminal_in": ["worker_failure", "observation_expired"] }, "then": "operator_required" },
+			{ "when": { "result_kind": "inspection" }, "then": "same_input_safe" },
+			{ "when": { "result_kind": "success" }, "then": "same_input_safe" },
+			{ "when": { "result_kind": "refusal" }, "then": "same_input_unsafe" },
+		],
+		"never_auto_retry": [
+			"unknown_publication_outcome",
+			"unknown_worker_outcome",
+			"checker_repair_after_interrupted_promotion",
+		],
+	},
+
+	"acknowledgement": {
+		"values": ["rejected", "accepted", "completed", "unknown"],
+		"cas_results": ["transitioned", "existing", "stale", "uncertain"],
+		"proof_carrier": "transitioned",
+		"unknown_policy": "reconcile_via_doctor_never_blind_retry",
+		"publication": {
+			"phases": ["evidence_persisted_before_push", "prepared_release_persisted", "atomic_close_observed"],
+			"append_failure_means": "push_not_attempted",
+		},
+	},
+
+	"waits": {
+		// All continuation is caller-driven re-invocation; there is no scheduler.
+		"wake_route": "caller_reinvocation",
+		"budgets_ms": {
+			"launch_acknowledgement_window": 1500,
+			"task_heartbeat_stale": 20000,
+			"doctor_launch_acknowledgement_window": 1500,
+			"doctor_task_heartbeat_stale": 20000,
+			"doctor_task_observation_expiry": 600000,
+			"doctor_task_poll_after": 5000,
+			"validation_stage_setup": 15000,
+			"validation_stage_vault_check": 30000,
+			"validation_stage_cleanup": 10000,
+			"candidate_residue_eligible_after": 3600000,
+		},
+		"missed_deadline_causes": {
+			"launch_acknowledgement_window": "expired_launch_recovered_without_new_attempt",
+			"doctor_task_observation_expiry": "doctor_observation_expired",
+		},
+	},
+
+	"cancellation": {
+		"transaction": "not_supported",
+		"activation_review": { "decisions": ["activate", "defer"], "defer_changes_state": false },
+		"activation_revoke": { "durable_record": true, "cause": "revoked", "next": "prepare_fresh" },
+		"preparation": { "internal_checkpoint_predicate": true, "public_surface": false },
+	},
+
+	"authority": {
+		"write_authority_owner": "remote_ledger_generation",
+		"lease_expiry_grants": "nothing",
+		"stale_lease_takeover": {
+			"kind": "needs_human_command_only",
+			"requires": ["human_attestation_flag", "single_use_doctor_token_on_fd", "proof_fingerprint_match"],
+			"failure_blockers": ["doctor_proof_stale", "doctor_token_invalid"],
+		},
+		"capability_errors": {
+			"missing": { "blocker": "capability_missing" },
+			"invalid": { "blocker": "capability_invalid", "next": "reload_capability" },
+			"role_mismatch": { "blocker": "capability_role_mismatch", "next_by_role": { "owner": "use_owner_capability", "join": "use_join_capability" } },
+		},
+		"quarantine": { "on": ["released_writer", "superseded_writer"], "blocker": "host_quarantined", "next": "reconcile_quarantine" },
+	},
+
+	"command_surface": {
+		"commands": ["begin", "join", "complete", "status", "activation", "preview", "doctor", "repair", "tidy", "janitor", "commands"],
+		"exit_codes": { "0": "read_or_discovery_success", "1": "refused_blocked_or_failed", "2": "invalid_usage_or_input" },
+		"global_flags": ["--run-id", "--quiet", "--verbose", "--debug"],
+		"output_modes_default": ["plain", "json"],
+		"output_modes_overrides": { "commands": ["json"] },
+		"no_argument_behavior": "read_only_restricted_status_dashboard",
+		"flags": {
+			"begin": ["--json", "--no-input", "--event", "--path"],
+			"join": ["--json", "--no-input", "--transaction-id", "--capability-fd", "--path"],
+			"complete": ["--json", "--no-input", "--transaction-id", "--capability-fd", "--summary"],
+			"status": ["--json", "--task-id"],
+			"activation": ["--json", "--no-input"],
+			"preview": ["--json", "--transaction-id"],
+			"doctor": ["--json", "--transaction-id", "--task-id"],
+			"repair": ["--json", "--no-input", "--transaction-id", "--capability-fd", "--prior-writer-stopped"],
+			"tidy": ["--json", "--no-input"],
+			"janitor": ["--json", "--no-input"],
+			"commands": ["--json"],
+		},
+		"activation_actions": ["inspect", "prepare", "review", "defer", "revoke"],
+		"repair_actions": ["resume", "retry-push", "close-verified", "stale-lease-takeover", "reconcile-quarantine"],
+		"mutations": {
+			"begin": "remote_write", "join": "remote_write", "complete": "remote_write",
+			"status": "read", "doctor": "read", "commands": "read",
+			"preview": "preview", "repair": "recovery",
+		},
+		"result_contracts": {
+			"lifecycle": { "id": "vault-git.lifecycle-result", "version": 2 },
+			"discovery": { "id": "vault-git.command-discovery", "version": 2 },
+			"activation": { "id": "vault-git.activation-result", "version": 3 },
+		},
+	},
+
+	"versioning": {
+		"records": {
+			"receipt": 2, "completion_task": 2, "doctor_task": 1, "worker_acknowledgement": 1,
+			"repair_authorization": 1, "activation_record": 2, "revocation": 1, "invalidation": 1,
+			"checker_admission": 1, "candidate_residue": 1,
+		},
+		"read_compatibility": {
+			"completion_task": ["current_23_key", "pre_receipt_revision_22_key", "legacy_18_key_v1"],
+			"matching": "exact_key_set_extra_fields_reject",
+		},
+		"incompatible_run_policy": {
+			"blocker": "incompatible_run_version",
+			"authority": "denied",
+			"retry": "operator_required",
+			"stop": "agent_terminal",
+		},
+	},
+
+	// Semantics the source could not decide. Issue #55 requires these surfaced,
+	// never invented. Each needs a product-owner decision before admission.
+	"unresolved_decisions": [
+		{
+			"id": "single_action_vocabulary",
+			"question": "Which vocabulary is authoritative: the 49-id semantic catalog or the 45-id public compat list? 9 semantic ids are not public; 5 public ids have no catalog entry.",
+			"drafted_resolution": "catalog is sole authority; compat ids become contextual renderings (encoded above); needs admission",
+		},
+		{
+			"id": "interrupted_repair_promotion_reachability",
+			"question": "Four catalog ids rehydrate to terminal none, making the ADR 0002 Interrupted Repair Promotion table unreachable outside tests. Intended?",
+		},
+		{
+			"id": "vault_content_repair_gate_meaning",
+			"question": "The feature gate has no enabling mechanism, yet doctor routes evidence to the gated id. Is the gate a permanent stop or a pending toggle, and should evidence routing follow gate state?",
+		},
+		{
+			"id": "doctor_finding_action_table",
+			"question": "The 21 doctor findings map to actions only through imperative call sites. The full declarative finding-to-action table must be authored and admitted; this draft does not invent it.",
+		},
+		{
+			"id": "completion_task_observation_deadline",
+			"question": "ADR 0002 requires poll_after and observation expiry on every inspection result, but completion tasks have neither constant. Add them, or amend the ADR?",
+		},
+		{
+			"id": "owner_pause_mode",
+			"question": "Owner Pause Mode is defined vocabulary with no implementation, marker, or blocker in this package. In scope for this spec or owned elsewhere?",
+		},
+		{
+			"id": "retry_default_divergence",
+			"question": "Success and refusal results currently apply different default retry postures for the same state. This draft unifies them in one ordered table; needs admission.",
+		},
+		{
+			"id": "lease_duration_load_bearing",
+			"question": "leaseDurationMs is documented as diagnostic-only but participates in exact intent binding, so a mismatch refuses. Diagnostic or binding?",
+		},
+		{
+			"id": "persisted_contextual_ids",
+			"question": "Receipts may persist contextual ids (inspect_status, run_repair, retry_remote) that fail to reproject without context, turning valid durable state into continuation_unavailable. Forbid persisting contextual ids?",
+		},
+		{
+			"id": "observation_expired_blocker_overload",
+			"question": "continuation_unavailable currently carries both projection failure and doctor observation expiry. This draft splits doctor_observation_expired; needs admission.",
+		},
+		{
+			"id": "stage_budget_provenance",
+			"question": "Validation stage budgets are admitted as not production-derived, contradicting ADR 0002. Re-measure or amend?",
+		},
+		{
+			"id": "reconciled_takeover_evidence",
+			"question": "Reconciled stale-lease takeover is inferred from a 4-field heuristic instead of the quarantine record's reconciled status. Read stored state instead?",
+		},
+		{
+			"id": "activation_action_routing",
+			"question": "The command contract declares activation actions but not how they are selected (positional routing lives only in the CLI). The contract should own the route shape.",
+		},
+	],
+}

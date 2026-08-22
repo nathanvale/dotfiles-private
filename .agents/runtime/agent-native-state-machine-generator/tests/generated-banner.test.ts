@@ -14,6 +14,18 @@ import { emitAmended } from './support/emission.ts'
  * that the banner really reached the artifact.
  */
 
+/**
+ * Deliberate independent oracle: the version literal each candidate text
+ * declares under `spec_meta.input_schema_version`, restated here rather than
+ * read back from the IR the banner is rendered from. The two candidates are on
+ * different Input Schema Versions, so one shared literal would assert the
+ * wrong identity for one of them.
+ */
+const DECLARED_SCHEMA_VERSIONS = {
+	'vault-git': '2',
+	fallow: 'spike-draft-1',
+} as const
+
 describe('every generated artifact carries the banner', () => {
 	for (const product of ['vault-git', 'fallow'] as const) {
 		test(`${product} modules open with the generator banner and its digest`, async () => {
@@ -38,11 +50,8 @@ describe('every generated artifact carries the banner', () => {
 					carriesDigest: module.contents.includes(
 						`// specification digest: ${compiled.digest.specificationDigest}\n`,
 					),
-					// The literal both candidate texts declare under
-					// spec_meta.input_schema_version, not a readback of the IR the
-					// banner is rendered from.
 					carriesSchemaVersion: module.contents.includes(
-						'// input schema version: spike-draft-1\n',
+						`// input schema version: ${DECLARED_SCHEMA_VERSIONS[product]}\n`,
 					),
 				}).toEqual({
 					path: module.path,

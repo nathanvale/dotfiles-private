@@ -5,7 +5,7 @@ import {
 	deriveArtifactSet,
 	type ResultChannel,
 } from '../src/index.ts'
-import { readCandidate } from './support/candidates.ts'
+import { readCandidate, readFrozenV1Exemplar } from './support/candidates.ts'
 
 /**
  * The declared v2 surfaces reach derivation, not just the IR.
@@ -1343,10 +1343,11 @@ describe('the Write Preview obligation reads what the candidate declared', () =>
 })
 
 describe('v1 input still refuses the columns it always refused', () => {
-	test('the vault-git spike refuses without the declared surfaces', async () => {
-		const compiled = compileSpecificationCandidate(
-			await readCandidate('vault-git'),
-		)
+	test('the frozen v1 exemplar refuses without the declared surfaces', async () => {
+		// The subject is v1 input, so it is the frozen v1 exemplar. The live
+		// vault-git candidate declares these surfaces now, which is the change
+		// this row must stay blind to.
+		const compiled = compileSpecificationCandidate(await readFrozenV1Exemplar())
 		expect(compiled.ok).toBe(true)
 		if (!compiled.ok) return
 
@@ -1363,5 +1364,46 @@ describe('v1 input still refuses the columns it always refused', () => {
 			'bareInvocationCommand',
 		)
 		expect(emission.ok).toBe(false)
+	})
+})
+
+describe("the accepted candidate's own reserved blocker gap", () => {
+	test('unamended derivation refuses on exactly the two reserved stations', async () => {
+		// The pin the emission harness cites. Its supply exists only because
+		// these two stations have no declared blocker, and a supply is only
+		// honest while the gap it fills is exactly this wide.
+		//
+		// Deliberate independent oracle: the cause and the two subjects are
+		// restated as literals. Reading them back from `ir.routing` would
+		// compute expected and actual from the same source and prove nothing.
+		// They are justified by the candidate's own bytes: `activation` is a
+		// declared discriminant value with no row, and `commands` is a declared
+		// command the discriminant list omits.
+		//
+		// No amendment: this is the accepted candidate exactly as it compiles,
+		// so the refusals are the candidate's own and not the harness's.
+		const compiled = compileSpecificationCandidate(
+			await readCandidate('vault-git'),
+		)
+		expect(compiled.ok).toBe(true)
+		if (!compiled.ok) return
+
+		const emission = deriveArtifactSet(
+			compiled.ir,
+			compiled.digest.specificationDigest,
+		)
+
+		expect(emission.ok).toBe(false)
+		if (emission.ok) return
+		// Exactly, not merely present: a `toContain` here would stay green if
+		// the gap widened to a third station, which is the regression this pin
+		// exists to catch.
+		expect([...new Set(emission.refusals.map((row) => row.cause))]).toEqual([
+			'emit_expectation_column_underivable',
+		])
+		expect(emission.refusals.map((row) => row.subject).sort()).toEqual([
+			'activation.refused:blocker',
+			'commands.refused:blocker',
+		])
 	})
 })
