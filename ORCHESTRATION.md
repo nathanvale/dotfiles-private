@@ -29,7 +29,9 @@ all evidence; this file owns the queue, the contracts, and the pointers.
 ## Current pipeline state (2026-08-22)
 
 - Stage 5 is the active stage; stages 1 through 4 are closed (ledger).
-- IN FLIGHT: the authorized Vault Git candidate re-authoring unit,
+- UNIT AT BOUNDARY, HELD FOR NATHAN: accept or return the completed
+  re-authoring unit (consolidated packet: issue comment 5378152063).
+  Unit history, custody, review, repair and re-review below;
   dispatched 2026-08-22 after the pre-launch hold reconciliation.
   Worker: one claude background session "issue-55 vault-git candidate
   re-author", short ID 2add7804, session
@@ -153,8 +155,21 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   record plus banner observed): Spec 3c23031c, Standards d65c778d,
   cli-execution-auditor 85b56894, writing REREVIEW-*.md at the unit
   root; the declined auditor findings 2 and 4 are out of their
-  scope. Acceptance stays closed pending the re-review verdicts and
-  Nathan's follow-up rulings. Last merges: facade
+  scope. Re-review returned 2026-08-22 15:15 AEST, custody held
+  (42b86bec.. unmoved): Spec zero findings with every claim
+  independently reproduced; cli-execution zero findings, the
+  vocabulary disjointness proven in strong form (intersection empty)
+  and no retry-posture change anywhere in the delta; Standards two
+  MINOR comment-style rows in the R2 replacement block (a missing
+  separator line and a narrating opening sentence), dispositioned
+  record-only and carried to the next authorized candidate-touching
+  unit, digest-neutral. Also recorded: the repair handback's
+  canonical-length prose slip (51374 versus observed 29911, with the
+  load-bearing equality claims verifying) and the REPAIR-BRIEF's own
+  stale step-2 sentence, superseded by the R2 amendment. Acceptance is
+  Nathan's current decision; unit commit and merge stay closed until
+  he answers and the test-custody follow-up closes the 20 enumerated
+  failures. Last merges: facade
   dual
   coverage and cli-author dual-coverage teaching (merge commits e787db0
   and dbe8679, linearized off the lineage by Nathan's 2026-08-22 VS
@@ -180,20 +195,25 @@ all evidence; this file owns the queue, the contracts, and the pointers.
 
 ## Nathan decision state
 
-ANSWERED YES (Nathan, 2026-08-22): the Vault Git candidate re-authoring
-unit is authorized under the grant below, one unit, exclusions intact,
-recorded identically here, in issue 55 status comment 5377730080, and in
-the vault packet. No decision is currently with Nathan. The auditor
-output proposal below stays parked and returns as its own ask after this
-unit closes. Formal qualification stays blocked until both legs are
-ready: the candidate path through its own later Specification Admission,
-and truthful auditor output.
+ONE CURRENT DECISION (2026-08-22): accept or return the completed
+re-authoring unit, held at its review boundary (evidence in the unit
+bullet above; consolidated packet in issue comment 5378152063; the
+grant it consumed was answered YES in comment 5377730080 and corrected
+in 5377751430). Queued next grants, in order, not co-equal asks: the
+test-custody follow-up unit (the 20 enumerated identity-move failures
+plus the stale spike-candidates README and package AGENTS.md v1
+framing; the merge of this unit waits on it), then the Input Schema
+shape decision for the two surviving derivation gaps. The auditor
+output proposal below stays parked. Formal qualification stays blocked
+until both legs are ready: the candidate path through its own later
+Specification Admission, and truthful auditor output.
 
 ## Next safe supervisor action
 
-Supervise the dispatched re-authoring unit to its handback, then run the
-code-review contract to merge or return. Reconcile owners and answer
-questions; nothing more.
+Await Nathan's accept-or-return answer. On accept: commit the unit work
+on its branch and hold it unmerged pending the test-custody follow-up
+grant and a green full gate. Reconcile owners and answer questions;
+nothing more.
 
 ## Dispatch boundary
 
