@@ -166,6 +166,19 @@ writing-for-agents first. Routine status edits run this checklist alone.
    REVIEW-CLI-EXECUTION.md. Disposition, then any bounded repair or
    Nathan decision, follow the reports; nothing is accepted,
    committed, or merged before that.
+   Repair grant recorded 2026-08-22 (Nathan, this session): a bounded
+   fix to the cli-execution-auditor skill is authorized for this
+   unit's repair cycle, exactly and only to make the facade addition
+   truly additive and the auditor's merge and project dual coverage
+   truthful; the facade additive-optionality defect must not be
+   masked by an auditor-only patch. Review-first discipline holds:
+   the three reviews determine the owner split before the repair is
+   chartered; the repair is the smallest that satisfies both owners;
+   cli-execution-auditor skill verification is part of the repaired
+   gate. Every other boundary stays closed; no commit or merge until
+   the reviews and the repaired gates pass. Issue 55 and the vault
+   packet record this same scope with the repair charter, before
+   repair dispatch.
 6. Carried follow-ups for whichever unit takes them next: the
    symlink-escape containment check at the
    deletion site (lexical safety is proved, symlink escape is not);
