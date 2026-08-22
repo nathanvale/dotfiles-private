@@ -4,8 +4,10 @@ import {
 	type BranchStation,
 	type BranchStationEvidence,
 	type CommandDiscoveryTree,
+	aggregateStationMapCoverage,
 	findBranchStationCatalogDrift,
 	projectStationMap,
+	type StationMapStation,
 } from "@side-quest/cli-command-facade";
 
 const discovery = {
@@ -331,6 +333,7 @@ describe("Station Map projection", () => {
 
 		expect(map.stations[0]?.evidence).toEqual({
 			status: "covered",
+			provenance: "synthetic",
 			observed: {
 				exit_code: 0,
 				envelope_status: "ok",
@@ -412,6 +415,406 @@ describe("Station Map projection", () => {
 			error_code: "package_owned_error",
 			action_id: "record_report",
 			continuation_id: "review_next",
+		});
+	});
+});
+
+describe("Station Map dual coverage", () => {
+	test("a real_process covered station raises observed coverage", () => {
+		const evidence = [
+			{
+				stationId: "record.success",
+				status: "covered",
+				provenance: "real_process",
+				observedExitCode: 0,
+				observedEnvelopeStatus: "ok",
+				observedResultContractId: "skill-feedback.record",
+			},
+		] as const satisfies readonly BranchStationEvidence[];
+
+		const map = projectStationMap({ discovery, catalog: [station], evidence });
+
+		expect(map.coverage.declared.total).toBe(1);
+		expect(map.coverage.observed.total).toBe(1);
+		expect(map.coverage.observed.required).toBe(1);
+	});
+
+	test("evidence with absent provenance never counts as observed", () => {
+		const evidence = [
+			{
+				stationId: "record.success",
+				status: "covered",
+				observedExitCode: 0,
+				observedEnvelopeStatus: "ok",
+				observedResultContractId: "skill-feedback.record",
+			},
+		] as const satisfies readonly BranchStationEvidence[];
+
+		const map = projectStationMap({ discovery, catalog: [station], evidence });
+
+		// Independent oracle: literals, not counts recomputed from the catalog.
+		expect(map.coverage.declared.total).toBe(1);
+		expect(map.coverage.observed.total).toBe(0);
+	});
+
+	test("an explicitly synthetic covered station never counts as observed", () => {
+		const evidence = [
+			{
+				stationId: "record.success",
+				status: "covered",
+				provenance: "synthetic",
+				observedExitCode: 0,
+				observedEnvelopeStatus: "ok",
+				observedResultContractId: "skill-feedback.record",
+			},
+		] as const satisfies readonly BranchStationEvidence[];
+
+		const map = projectStationMap({ discovery, catalog: [station], evidence });
+
+		expect(map.coverage.declared.total).toBe(1);
+		expect(map.coverage.observed.total).toBe(0);
+		expect(map.stations[0]?.evidence.status).toBe("covered");
+	});
+
+	test("a drifted real_process station never counts as observed", () => {
+		const evidence = [
+			{
+				stationId: "record.success",
+				status: "covered",
+				provenance: "real_process",
+				observedExitCode: 1,
+				observedEnvelopeStatus: "error",
+			},
+		] as const satisfies readonly BranchStationEvidence[];
+
+		const map = projectStationMap({ discovery, catalog: [station], evidence });
+
+		expect(map.stations[0]?.evidence.status).toBe("drifted");
+		expect(map.coverage.declared.total).toBe(1);
+		expect(map.coverage.observed.total).toBe(0);
+	});
+
+	test("a map fully covered by synthetic evidence reports observed zero", () => {
+		const reviewStation = {
+			id: "review.empty_inbox",
+			command: "review",
+			classification: "required",
+			intent: "success",
+			trigger: "empty inbox reports zero items",
+			expectedExitCode: 0,
+			expectedEnvelopeStatus: "ok",
+			mutationExpectation: "none",
+		} as const satisfies BranchStation;
+		const evidence = [
+			{
+				stationId: "record.success",
+				status: "covered",
+				observedExitCode: 0,
+				observedEnvelopeStatus: "ok",
+				observedResultContractId: "skill-feedback.record",
+			},
+			{
+				stationId: "review.empty_inbox",
+				status: "covered",
+				observedExitCode: 0,
+				observedEnvelopeStatus: "ok",
+			},
+		] as const satisfies readonly BranchStationEvidence[];
+
+		const map = projectStationMap({
+			discovery,
+			catalog: [station, reviewStation],
+			evidence,
+		});
+
+		// Every row reconciles covered, yet none crossed a real process seam.
+		expect(map.stations.map((entry) => entry.evidence.status)).toEqual([
+			"covered",
+			"covered",
+		]);
+		expect(map.coverage.declared.total).toBe(2);
+		expect(map.coverage.observed.total).toBe(0);
+		expect(map.findings).toEqual([]);
+	});
+
+	test("declared and observed counts stay separate in a mixed map", () => {
+		const reviewStation = {
+			id: "review.empty_inbox",
+			command: "review",
+			classification: "optional",
+			intent: "success",
+			trigger: "empty inbox reports zero items",
+			expectedExitCode: 0,
+			expectedEnvelopeStatus: "ok",
+			mutationExpectation: "none",
+		} as const satisfies BranchStation;
+		const evidence = [
+			{
+				stationId: "record.success",
+				status: "covered",
+				provenance: "real_process",
+				observedExitCode: 0,
+				observedEnvelopeStatus: "ok",
+				observedResultContractId: "skill-feedback.record",
+			},
+			{
+				stationId: "review.empty_inbox",
+				status: "covered",
+				provenance: "synthetic",
+				observedExitCode: 0,
+				observedEnvelopeStatus: "ok",
+			},
+		] as const satisfies readonly BranchStationEvidence[];
+
+		const map = projectStationMap({
+			discovery,
+			catalog: [station, reviewStation],
+			evidence,
+		});
+
+		expect(map.coverage).toEqual({
+			declared: {
+				claim: "declared_branch_coverage",
+				total: 2,
+				required: 1,
+			},
+			observed: {
+				claim: "observed_branch_coverage",
+				total: 1,
+				required: 1,
+			},
+		});
+	});
+
+	test("the deprecated completeness claim keeps its value alongside coverage", () => {
+		const map = projectStationMap({ discovery, catalog: [station] });
+
+		expect(map.completeness_claim).toBe("declared_branch_coverage");
+		expect(map.completeness_claim).toBe(STATION_MAP_COMPLETENESS_CLAIM);
+		expect(map.coverage.declared.claim).toBe("declared_branch_coverage");
+	});
+
+	test("an unknown provenance value produces deterministic drift", () => {
+		const drift = findBranchStationCatalogDrift({
+			discovery,
+			catalog: [station],
+			evidence: [
+				{
+					stationId: "record.success",
+					status: "covered",
+					provenance:
+						"assumed" as BranchStationEvidence["provenance"],
+				},
+			],
+		});
+
+		expect(drift.map((entry) => entry.category)).toEqual([
+			"branch-station-evidence-provenance-invalid",
+		]);
+	});
+
+	test("every projected map carries coverage and every row a provenance", () => {
+		const optionalStation = {
+			id: "record.optional",
+			command: "record",
+			classification: "optional",
+			intent: "success",
+			trigger: "missing receipt reports nothing",
+			expectedExitCode: 0,
+			expectedEnvelopeStatus: "ok",
+			mutationExpectation: "none",
+		} as const satisfies BranchStation;
+
+		// No evidence at all: the weakest input the projector accepts.
+		const map = projectStationMap({
+			discovery,
+			catalog: [station, optionalStation],
+		});
+
+		// Independent oracle: the type permits both to be absent, so the
+		// projector populating them is a behaviour claim, not a type claim.
+		expect(map.coverage).toBeDefined();
+		expect(map.stations).toHaveLength(2);
+		for (const projected of map.stations) {
+			expect(projected.evidence.provenance).toBe("synthetic");
+		}
+		expect(map.coverage).toEqual({
+			declared: {
+				claim: "declared_branch_coverage",
+				total: 2,
+				required: 1,
+			},
+			observed: {
+				claim: "observed_branch_coverage",
+				total: 0,
+				required: 0,
+			},
+		});
+	});
+
+	test("an out-of-union provenance projects the fail-closed default", () => {
+		const evidence = [
+			{
+				stationId: "record.success",
+				status: "covered",
+				observedExitCode: 0,
+				observedEnvelopeStatus: "ok",
+				observedResultContractId: "skill-feedback.record",
+				provenance: "REAL\u001b[31mPROC" as BranchStationEvidence["provenance"],
+			},
+		] as const satisfies readonly BranchStationEvidence[];
+
+		const map = projectStationMap({ discovery, catalog: [station], evidence });
+
+		// Independent oracle: the literal term, not the constant the source uses.
+		expect(map.stations[0].evidence.provenance).toBe("synthetic");
+		expect(JSON.stringify(map.stations)).not.toContain("REAL");
+		expect(map.coverage.observed.total).toBe(0);
+	});
+
+	test("an out-of-union provenance still reports drift after coercion", () => {
+		const evidence = [
+			{
+				stationId: "record.success",
+				status: "covered",
+				observedExitCode: 0,
+				observedEnvelopeStatus: "ok",
+				observedResultContractId: "skill-feedback.record",
+				provenance: "assumed" as BranchStationEvidence["provenance"],
+			},
+		] as const satisfies readonly BranchStationEvidence[];
+
+		const map = projectStationMap({ discovery, catalog: [station], evidence });
+
+		expect(map.drift.map((entry) => entry.category)).toEqual([
+			"branch-station-evidence-provenance-invalid",
+		]);
+		expect(map.stations[0].evidence.provenance).toBe("synthetic");
+	});
+});
+
+describe("Station Map coverage aggregation", () => {
+	const reviewStation = {
+		id: "review.empty_inbox",
+		command: "review",
+		classification: "required",
+		intent: "success",
+		trigger: "empty inbox reports zero items",
+		expectedExitCode: 0,
+		expectedEnvelopeStatus: "ok",
+		mutationExpectation: "none",
+	} as const satisfies BranchStation;
+	const optionalStation = {
+		id: "record.optional",
+		command: "record",
+		classification: "optional",
+		intent: "success",
+		trigger: "missing receipt reports nothing",
+		expectedExitCode: 0,
+		expectedEnvelopeStatus: "ok",
+		mutationExpectation: "none",
+	} as const satisfies BranchStation;
+
+	test("aggregating several maps counts only real_process covered rows", () => {
+		const realMap = projectStationMap({
+			discovery,
+			catalog: [station],
+			evidence: [
+				{
+					stationId: "record.success",
+					status: "covered",
+					provenance: "real_process",
+					observedExitCode: 0,
+					observedEnvelopeStatus: "ok",
+					observedResultContractId: "skill-feedback.record",
+				},
+			],
+		});
+		const syntheticMap = projectStationMap({
+			discovery,
+			catalog: [reviewStation, optionalStation],
+			evidence: [
+				{
+					stationId: "review.empty_inbox",
+					status: "covered",
+					provenance: "synthetic",
+					observedExitCode: 0,
+					observedEnvelopeStatus: "ok",
+				},
+				{
+					stationId: "record.optional",
+					status: "covered",
+					provenance: "real_process",
+					observedExitCode: 0,
+					observedEnvelopeStatus: "ok",
+				},
+			],
+		});
+
+		const merged = aggregateStationMapCoverage([
+			...realMap.stations,
+			...syntheticMap.stations,
+		]);
+
+		// Independent oracle: three stations, two required (record.success and
+		// review.empty_inbox); two real_process covered rows, of which one is
+		// required. Written out by hand, not recomputed from the maps.
+		expect(merged).toEqual({
+			declared: {
+				claim: "declared_branch_coverage",
+				total: 3,
+				required: 2,
+			},
+			observed: {
+				claim: "observed_branch_coverage",
+				total: 2,
+				required: 1,
+			},
+		});
+	});
+
+	test("rows from a producer that emitted no provenance count as synthetic", () => {
+		// A hand-built old-shape row: legal under the optional type, and the
+		// reason aggregation counts rows rather than summing coverage blocks.
+		const oldShapeRows = [
+			{
+				station_id: "record.success",
+				command: "record",
+				classification: "required",
+				intent: "success",
+				trigger: "valid receipt writes one report",
+				mutation_expectation: "writes_report",
+				expected: {},
+				evidence: { status: "covered" },
+			},
+		] as const satisfies readonly StationMapStation[];
+
+		expect(aggregateStationMapCoverage(oldShapeRows)).toEqual({
+			declared: {
+				claim: "declared_branch_coverage",
+				total: 1,
+				required: 1,
+			},
+			observed: {
+				claim: "observed_branch_coverage",
+				total: 0,
+				required: 0,
+			},
+		});
+	});
+
+	test("an empty station list aggregates to zero on both claims", () => {
+		expect(aggregateStationMapCoverage([])).toEqual({
+			declared: {
+				claim: "declared_branch_coverage",
+				total: 0,
+				required: 0,
+			},
+			observed: {
+				claim: "observed_branch_coverage",
+				total: 0,
+				required: 0,
+			},
 		});
 	});
 });
