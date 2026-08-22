@@ -201,30 +201,88 @@ all evidence; this file owns the queue, the contracts, and the pointers.
 ## Nathan decision state
 
 ACCEPT RECORDED (Nathan, 2026-08-22): the re-authoring unit is
-accepted, committed as 9d1e91e on its unit branch, and held unmerged;
-the acceptance authorized nothing else. ONE CURRENT DECISION: authorize
-or defer the test-custody follow-up unit (the 20 enumerated
-identity-move failures, receipts/vault-git-candidate/ handback section
-7, plus the stale spike-candidates README and package AGENTS.md v1
-framing; the merge of the accepted unit waits on it). Queued after it,
-not a co-equal ask: the Input Schema shape decision for the two
-surviving derivation gaps. The auditor output proposal below stays
-parked. Formal qualification stays blocked until both legs are ready:
-the candidate path through its own later Specification Admission, and
+accepted, committed as 9d1e91e on its unit branch, and held unmerged.
+AUTHORIZED (Nathan, 2026-08-22): the test-custody follow-up unit, one
+bounded unit under the grant below; no decision is currently with
+Nathan. Next asks after that unit's reviewed handback: accept or
+return it, then the Input Schema shape decision for the two surviving
+derivation gaps. The auditor output proposal below stays parked.
+Formal qualification stays blocked until both legs are ready: the
+candidate path through its own later Specification Admission, and
 truthful auditor output.
 
 ## Next safe supervisor action
 
-Present or await Nathan's authorize-or-defer answer on the test-custody
-follow-up unit. Reconcile owners and answer questions; nothing more.
+Charter and dispatch the authorized test-custody follow-up unit under
+its grant below, supervise it to its reviewed handback, then stop and
+present accept-or-return to Nathan. Reconcile owners and answer
+questions; nothing more.
+
+## Authorized grant (Nathan, 2026-08-22): Vault Git test-custody follow-up
+
+One bounded unit under the operational contract, recorded identically
+here, on issue 55, and in the vault packet. Ultragoal shape:
+
+- Objective, one observable outcome: the full package gate runs green
+  on top of the accepted candidate (unit commit 9d1e91e), with
+  historical Input Schema v1 evidence preserved as a frozen exemplar,
+  exactly the 20 enumerated identity-move failures repaired
+  (receipts/vault-git-candidate/VAULT-GIT-CANDIDATE-HANDBACK.md
+  section 7), and the stale spike-candidates README and package
+  AGENTS.md v1 framing corrected, without changing the accepted v2
+  candidate semantics.
+- Why now: the accepted unit's merge waits on exactly these failures,
+  and their contract-preserving repairs are already designed in the
+  archived handback.
+- In scope, exact paths: one new frozen v1 exemplar fixture under the
+  package fixtures/ tree (byte-identical to the a7fd5c6 candidate);
+  the test files the 20 failures name (version-custody,
+  registered-readers, registered-reader-boundary, v2-derivation's v1
+  section, schema-v2-surfaces, transition-targets, generated-banner,
+  expressiveness-gaps) and the harness owners tests/support/
+  candidates.ts, emission.ts, refusal-producers.ts;
+  fixtures/spike-candidates/README.md, fixtures/draft-candidates/
+  README.md where it mirrors the claim, and the package AGENTS.md v1
+  framing rows. The unit forks from 9d1e91e on the unit branch, not
+  the integration head, because the failures exist only against the
+  accepted candidate; the eventual integration merge takes both
+  together.
+- Exclusions, each its own later ask: no admission-owned version pin
+  moves and no new pin for the unadmitted 6cc10a52.. digest (the
+  f22e836b.. pin stays, repointed at frozen v1 history); no
+  Specification Admission claim; no expectation rewritten to bless new
+  behavior; no edit to the accepted candidate, its permuted twin,
+  src/, pilot/, or the facade; no schema shape change or Generator
+  Contract Version bump; no Input Schema shape work, auditor output
+  repair, qualification claim, runtime adoption, Pause release,
+  activation, extraction, push, main merge, stage 6, or stage 7; the
+  active-main Biome owner untouched and Biome reported as
+  branch-snapshot proof only; unrelated vault staging preserved.
+- Acceptance checks: bun run test all-green with counts reported;
+  typecheck, package Biome, and pilot verify clean; the frozen
+  exemplar byte-identical to the a7fd5c6 candidate and compiling
+  through the v1 Registered Reader to the pinned f22e836b.. identity;
+  the accepted candidate and twin byte-identical to 9d1e91e with
+  digest 6cc10a52.. recomputed unchanged and pinned nowhere; fallow,
+  pilot, and draft digests byte-identical; each of the 20 failures
+  repaired per its enumerated cause with no test deleted and no
+  assertion weakened; test-design before test or fixture edits and
+  test-runner for bun lanes.
+- Verifier: supervisor gate re-run plus independent admitted review at
+  the frozen fixed point under the code-review contract; one admitted
+  claude-opus-5 high worker, no unadmitted subagents; STOP at the
+  reviewed handback, accept-or-return returning to Nathan.
+- Next safe action: charter the unit worktree from 9d1e91e and
+  dispatch exactly one admitted worker.
 
 ## Dispatch boundary
 
-The 2026-08-22 grant covers exactly one re-authoring unit worker plus
-its admitted reviewers under the review contract. Beyond that, launch
-nothing: no other worker, subagent, probe, security test, or
-qualification run. Never infer authorization from a cleanup,
-reconciliation, or reporting request.
+The consumed re-authoring grant and the live test-custody grant each
+cover exactly one unit worker plus admitted reviewers and one repair
+cycle under the review contract. Beyond that, launch nothing: no other
+worker, subagent, probe, security test, or qualification run. Never
+infer authorization from a cleanup, reconciliation, or reporting
+request.
 
 ## Authorized grant (Nathan, 2026-08-22): Vault Git candidate re-authoring
 
