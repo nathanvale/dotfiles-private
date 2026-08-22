@@ -110,15 +110,19 @@ express stops the unit and returns the exact gap); no auditor source
 edit; no Pause release, activation, extraction, push, main merge, stage
 6, or stage 7.
 
-Supervisor custody reading, recorded at charter time (2026-08-22): the
-one named digest-custody recording site, the vault-git pin row and its
-oracle prose in tests/version-custody.test.ts, moves with the digest,
-the same mechanism the Contextual Rendering grant used. Suites holding
-the live spike as their v1 exemplar (registered-readers.test.ts, the
-v1-refusal section of v2-derivation.test.ts, the emitAmended harness)
-are predictable version-identity consequences: the worker enumerates
-each in the handback without editing it, and each enumerated row
-returns to Nathan as an exact follow-up ask, never inferred scope.
+Supervisor custody reading, corrected under Nathan's 2026-08-22
+pre-launch hold: the worker edits exactly the two named fixture files
+and nothing else. tests/version-custody.test.ts is NOT an allowed
+worker edit under this grant; if its vault-git pin row or oracle prose
+must move for the full gate, that move returns to Nathan as its own
+separate follow-up ask after the handback. Every gate failure caused by
+the identity move (the version-custody pin, the live-spike v1 exemplar
+assertions in registered-readers.test.ts, the v1-refusal section of
+v2-derivation.test.ts, the emitAmended harness) is enumerated in the
+handback, never edited, and returns to Nathan as an exact follow-up
+ask, never inferred scope. The unit reaches its handback boundary on
+the focused core proof; the full package gate plus supervisor re-run
+stays the merge precondition and waits on those follow-up rulings.
 
 ## Parked proposal, NOT A CURRENT ASK: auditor dual-coverage output
 
@@ -138,8 +142,10 @@ plain summary and the JSON envelope per the Dual Coverage Design Gate.
 ## Closed boundaries (each its own later ask to Nathan)
 
 Vault Git runtime edit or adoption; Specification Admission; any Product
-Specification Candidate edit; Pause release; activation; extraction;
-push; main merge; stage 6; stage 7. Standing version-identity custody: a
+Specification Candidate edit except the two vault-git fixture files
+exactly as the 2026-08-22 grant above names them (every other candidate
+file, and any edit to those two outside that grant, stays closed); Pause
+release; activation; extraction; push; main merge; stage 6; stage 7. Standing version-identity custody: a
 v2 shape change bumps the Input Schema Version; superseded input
 compiles only through its Registered Reader; any new pilot digest needs
 its own Specification Admission.
@@ -334,6 +340,15 @@ compressed to match.
 - A prior resume attempt (job a19b6b4b, 2026-08-22) resolved at high
   rather than the required xhigh supervisor effort and was stopped
   before any edit or admitted output; it is non-evidence.
+- Dispatch incident (2026-08-22): worker session 1479e2c0 launched at
+  13:52 AEST, crossed by Nathan's pre-dispatch hold, stopped at 13:59
+  with zero file changes (tracked diff empty, sha256 e3b0c442.., only
+  the supervisor-authored AGENT-BRIEF.md present, untracked). All its
+  output is unadmitted non-evidence. The owner contradictions it
+  exposed (the candidate-edit closed boundary versus the grant; the
+  version-custody pin misread as a worker path) are reconciled in this
+  commit, an issue 55 correction comment posted with it, and the staged
+  vault packet.
 - Known pre-existing failures a gate must not count as new: two ANSI
   stderr tests in cli-command-facade tests/process-testing.test.ts; one
   cli-execution-auditor station-asset test; two test-runner typecheck
