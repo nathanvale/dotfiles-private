@@ -110,9 +110,13 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   shrink-only-by-rulings acceptance criterion holds substantively;
   stating the corrected delta is assigned to the repair handback, with
   the frozen handback and reviews left untouched as evidence.
-  One repair cycle dispatched to a replacement worker under the same
-  two-file paths; the digest moves again and stays UNADMITTED. Last
-  merges: facade dual
+  One repair cycle dispatched 2026-08-22 to replacement worker
+  1ef64f9b (charter REPAIR-BRIEF.md at the unit root; completion
+  signal VAULT-GIT-CANDIDATE-REPAIR-HANDBACK.md; admission proof
+  observed: session record resolves "model":"claude-opus-5" and the
+  job banner reads "with high effort") under the same two-file paths;
+  the digest moves again and stays UNADMITTED. Last merges: facade
+  dual
   coverage and cli-author dual-coverage teaching (merge commits e787db0
   and dbe8679, linearized off the lineage by Nathan's 2026-08-22 VS
   Code rebase; map in receipts/custody/rebase-2026-08-22-map.md).
