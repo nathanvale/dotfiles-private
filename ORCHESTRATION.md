@@ -207,6 +207,20 @@ writing-for-agents first. Routine status edits run this checklist alone.
    gap); future additive gates enumerate consumers from the
    workspace, not a hand list; auditor baseline observed by the
    supervisor at the fixed point, 141 pass 1 pre-existing fail.
+   Repair dispatched 2026-08-22 after all three owners recorded the
+   repair scope (this file, issue 55 comment 5377163030, the vault
+   packet README staged uncommitted). Replacement worker: one claude
+   background session "issue-55 facade dual-coverage repair", short
+   ID 1471977e, same unit worktree and branch, prior worker stopped
+   first, model claude-opus-5 at high effort (admission proof
+   observed 2026-08-22: session record resolves
+   "model":"claude-opus-5", banner "Opus 5 with high effort").
+   Charter: REPAIR-PACKET.md at the unit root; frozen evidence
+   listed there must not move. Completion signal:
+   FACADE-COVERAGE-REPAIR-HANDBACK.md at the unit root, untracked.
+   After handback: supervisor re-runs the repaired gate, re-verifies
+   with the review axes as needed, and only then accepts, commits,
+   and merges.
 6. AUTHORIZED, NOT STARTED (Nathan, 2026-08-22): a second bounded
    skill-document unit, queued strictly behind a stable repair
    charter for item 5. Scope: update the cli-author skill using
