@@ -127,13 +127,26 @@ writing-for-agents first. Routine status edits run this checklist alone.
    resulting digest (closed). The one open ask to Nathan: authorize
    the Vault Git candidate re-authoring unit. Specification Admission
    stays its own later act on the validated digest that unit produces.
-5. First chartered unit, the truthful preparation inside the charter:
-   facade dual coverage, plan comment ADD-1 and ADD-2 (ADD-3 skipped
-   per the plan default), additive-optional, separately reviewed per
-   the spec's out-of-scope clause, claiming no admission and no
-   qualification evidence. Unit worktree
-   `.worktrees/issue-55-facade-coverage`; dispatch through Ways of
-   work after all three owners record this charter.
+5. IN FLIGHT: the facade dual-coverage unit, first chartered unit of
+   the qualification charter, dispatched 2026-08-22 after all three
+   owners recorded the same scope (this file at e318a4b, issue 55
+   comment 5376885160, the vault packet writeback staged and left
+   uncommitted for vault-git). Scope: plan comment ADD-1 and ADD-2
+   (ADD-3 skipped per the plan default), additive-optional, separately
+   reviewed per the spec's out-of-scope clause, claiming no admission
+   and no qualification evidence; edits only cli-command-facade;
+   warm-chrome's synthetic-coverage defect becomes visible but stays
+   unrepaired. Worker: one claude background session "issue-55 facade
+   dual-coverage", short ID a192007b, cwd
+   `.worktrees/issue-55-facade-coverage`, branch
+   feat/issue-55-facade-coverage, fixed point e318a4b, model
+   claude-opus-5 at high effort (admission proof observed 2026-08-22:
+   the session record resolves "model":"claude-opus-5" and the job
+   banner reads "Opus 5 with high effort"). Charter: AGENT-BRIEF.md at
+   that worktree root, carrying the no-subagents line. Completion
+   signal: FACADE-COVERAGE-HANDBACK.md at that worktree root,
+   untracked. Review at handback: both axes plus cli-execution-auditor
+   (stage 5 rule).
 6. Carried follow-ups for whichever unit takes them next: the
    symlink-escape containment check at the
    deletion site (lexical safety is proved, symlink escape is not);
