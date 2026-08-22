@@ -179,6 +179,19 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   coverage and cli-author dual-coverage teaching (merge commits e787db0
   and dbe8679, linearized off the lineage by Nathan's 2026-08-22 VS
   Code rebase; map in receipts/custody/rebase-2026-08-22-map.md).
+- IN FLIGHT: the authorized test-custody follow-up unit, dispatched
+  2026-08-22. Worker: one claude background session "issue-55
+  test-custody worker", short ID c84f419e, cwd
+  `.worktrees/issue-55-test-custody`, branch feat/issue-55-test-custody,
+  fixed point 9d1e91e (the accepted candidate commit; forked from the
+  unit branch, not the integration head, per the grant's in-scope
+  note), model claude-opus-5 at high effort (admission proof observed
+  2026-08-22: the session record resolves "model":"claude-opus-5" and
+  the job banner reads "with high effort"). Charter: AGENT-BRIEF.md at
+  that worktree root; grant: the Authorized grant section below;
+  baseline at the fixed point 426 pass 20 fail. Completion signal:
+  TEST-CUSTODY-HANDBACK.md at that worktree root, untracked. The unit
+  stops at its reviewed handback.
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
