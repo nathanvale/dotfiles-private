@@ -418,6 +418,11 @@ describe('a v2 command-surface declaration resolves its references', () => {
 			claim: 'expectation columns for a command that does not exist',
 		},
 		{
+			fixture: 'contextual-rendering-unknown-action',
+			cause: 'semantic_unresolved_reference',
+			claim: 'a bare-string rendering naming an undeclared action',
+		},
+		{
 			fixture: 'capability-escalation-not-human',
 			cause: 'semantic_missing_authority_semantics',
 			claim: 'an unavailable capability escalating to non-human work',
@@ -448,6 +453,84 @@ describe('a v2 command-surface declaration resolves its references', () => {
 			expect(result.diagnostics[0]?.location.line).toBeGreaterThan(0)
 		})
 	}
+
+	/**
+	 * Both declared forms resolve, and each reports where its author can look.
+	 *
+	 * A bare string is one target, so it reports at the rendering key itself.
+	 * An array carries an index, because naming the key alone would not say
+	 * which of several targets failed. Asserting only the bare-string half
+	 * leaves the index unheld: collapsing the array path to the bare key is a
+	 * change the rest of the suite does not notice.
+	 *
+	 * Both cases read off one candidate. The fixture's own `inspect` rendering
+	 * is a declared array whose targets resolve, so it doubles as the positive
+	 * control: it produces no diagnostic until this amendment breaks one item.
+	 */
+	const RENDERING_FIXTURE = new URL(
+		'../fixtures/v2/contextual-rendering-unknown-action.jsonc',
+		import.meta.url,
+	)
+
+	async function renderingDiagnostic(
+		amend: (source: string) => string = (source) => source,
+	) {
+		const result = compileSpecificationCandidate(
+			amend(await Bun.file(RENDERING_FIXTURE).text()),
+			{ sourcePath: 'contextual-rendering-unknown-action.jsonc' },
+		)
+
+		expect(result.ok).toBe(false)
+		if (result.ok) throw new Error('the amended candidate compiled')
+		expect(result).not.toHaveProperty('ir')
+		expect(result).not.toHaveProperty('digest')
+		return result.diagnostics
+	}
+
+	test('a bare-string rendering is resolved at the key', async () => {
+		const [diagnostic, ...rest] = await renderingDiagnostic()
+
+		expect(rest).toEqual([])
+		expect({
+			form: 'bare string',
+			path: diagnostic?.path,
+		}).toEqual({
+			form: 'bare string',
+			path: 'actions.contextual_renderings.repair',
+		})
+		expect(diagnostic?.message).toContain('"resolve_via_repair_action"')
+		expect(diagnostic?.location.line).toBeGreaterThan(0)
+		expect(diagnostic?.location.column).toBeGreaterThan(0)
+	})
+
+	test('an array-form rendering is resolved at its indexed path', async () => {
+		// The second item of the declared `inspect` array becomes undeclared,
+		// and the bare-string break is repaired to a catalog id, so the only
+		// remaining fault is the array item at index 1.
+		const [diagnostic, ...rest] = await renderingDiagnostic((source) =>
+			source
+				.replace(
+					'"inspect": ["inspect_work", "run_doctor"],',
+					'"inspect": ["inspect_work", "resolve_via_inspect_action"],',
+				)
+				.replace(
+					'"repair": "resolve_via_repair_action",',
+					'"repair": "escalate_to_operator",',
+				),
+		)
+
+		expect(rest).toEqual([])
+		expect({
+			form: 'array item',
+			path: diagnostic?.path,
+		}).toEqual({
+			form: 'array item',
+			path: 'actions.contextual_renderings.inspect[1]',
+		})
+		expect(diagnostic?.message).toContain('"resolve_via_inspect_action"')
+		expect(diagnostic?.location.line).toBeGreaterThan(0)
+		expect(diagnostic?.location.column).toBeGreaterThan(0)
+	})
 
 	test('an undeclared root exit code is refused by the sealed enum', async () => {
 		const result = compileSpecificationCandidate(

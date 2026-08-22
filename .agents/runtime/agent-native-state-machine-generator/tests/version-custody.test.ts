@@ -31,16 +31,29 @@ const DRAFT_URL = new URL(
  * literals. Recomputing them through the digest function under test would
  * prove f(x) === f(x) and nothing about byte identity.
  *
- * All four are historical identities and none of them moves. The Registered
+ * Pilot, fallow and draft are frozen history and do not move. The Registered
  * Reader's canonicalization is byte-frozen: a candidate on a superseded
  * Input Schema Version digests exactly as it always did. Declared-version
  * custody (worklist row W4) governs the versions the reader does not own, so
- * a v2 candidate stamps what it declares while these four stay put.
+ * a v2 candidate stamps what it declares while those three stay put.
+ *
+ * The vault-git identity moved exactly once, under the product owner's
+ * 2026-08-22 grant permitting the spike candidate digests to move only to
+ * close the bare-string target-validation fail-open. The superseded value is
+ * recorded in the grant and in git history, deliberately not restated here:
+ * one live literal per identity, so a search for a digest finds the pin that
+ * asserts it rather than prose about a digest nothing asserts. The spike
+ * declared a contextual rendering whose bare-string target no action catalog
+ * declares; the compile seam checked only the array form, so it compiled and
+ * derivation dropped the entry, leaving a published identifier resolving to
+ * nothing. Removing that entry is what moved these bytes. A pinned identity
+ * is still evidence about admitted history: this one moves only because its
+ * grant is recorded, and it stays fixed again now.
  */
 const PINNED_DIGESTS = {
 	pilot: 'af827747fde4d30b29919fadcf55b2d3b19c3c0b6646493fc325c49664b3e99a',
 	'vault-git':
-		'7f85428e61c82c3de7cf5477dd492f2be7da97c09bf8d4539b1843cb61392095',
+		'f22e836bcfc9bb9f623b9d2f7915bd0d8ed81c0506ed0803b01b537b74b5142f',
 	fallow: 'c26764f0957c51ae4a799e51766d44d5f40378b35a9c2b210b422c9a4d4a0a63',
 	draft: '505280541dacb973e4e4be96f7235fc92443e5e0895a399912bda3e353c63854',
 } as const

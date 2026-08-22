@@ -460,6 +460,18 @@ function checkReferences({
 	}
 
 	for (const entry of cursor.entries(['actions', 'contextual_renderings'])) {
+		// Both declared forms carry targets, so both resolve. A bare string is
+		// one target and reports at the key; only the array form indexes, to
+		// name which of several targets failed.
+		if (entry.value.kind === 'string') {
+			resolveAction(
+				entry.value.value,
+				`actions.contextual_renderings.${entry.key}`,
+				entry.value.loc,
+				'actions.contextual_renderings',
+			)
+			continue
+		}
 		if (entry.value.kind !== 'array') continue
 		entry.value.items.forEach((item, index) => {
 			if (item.kind !== 'string') return

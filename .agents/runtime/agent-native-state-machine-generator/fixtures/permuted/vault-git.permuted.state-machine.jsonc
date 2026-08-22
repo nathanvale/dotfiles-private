@@ -438,7 +438,6 @@
         "begin_transaction",
         "continue_transaction",
       ],
-      "run_repair": "resolved_via_repair_action",
       "change_input": [
         "correct_completion_task_id",
         "correct_doctor_task_id",
