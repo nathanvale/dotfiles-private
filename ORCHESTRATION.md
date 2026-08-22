@@ -85,7 +85,18 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   activation preview-exemption row added per command-contract.ts:386.
   Should-fix R5 drop the three provenance clauses keeping each
   constraint; R6 restate the positional-route comment truthfully
-  (review argv is shared by two catalog actions). Record-only with
+  (review argv is shared by two catalog actions).
+  R2 and R3 AMENDED pre-repair (Nathan's semantic check, 2026-08-22,
+  delivered to the in-flight worker): human_capability_required is
+  owned by activation.restriction_causes, not the blocker vocabulary,
+  and station_blocker rows must resolve in blockers, so the worker
+  must prove one source-backed disposition: (a) legitimately dual-role
+  with direct schema, product and no-contrary-ruling evidence, or (b)
+  the {activation, refused} row is removed and activation.refused
+  returns as an exact Input Schema shape gap beside commands.refused
+  (refusal count 2 is then truthful). R3 reconciles against the
+  recorded rulings first, model.ts:123-126 second, and stops on
+  conflict. Never papered over to make derivation green. Record-only with
   named owners: the handback's join-mutation prose slip (repair
   handback); the availability_evidence naming (Specification
   Admission); the stale spike-candidates README and package AGENTS.md
@@ -471,6 +482,18 @@ local archive branch archive/issue-55-pre-rebase-237efce.
   sits outside root re-inclusion. Integration boundary at merge time:
   re-evaluate the package's Biome gate claim under the canonical
   contract; do not reintroduce formatter-write gates.
+  Addendum (Nathan, 2026-08-22, read-only awareness): active biome.json
+  also excludes !**/actions/assets (Browser Use reviewed-action assets
+  are content-addressed; explicit check:write or lint:fix must not
+  mutate bytes without renaming SHA-derived filenames or registry
+  entries). Current-main evidence: root bun run validate GREEN, 389
+  files no fixes; Browser Use exact check 251 files no fixes; the
+  reviewed-action asset path is a 0-file ignored control; Browser Use
+  diff hash unchanged 4e957d7b..; the canonical docs now state both
+  bun run validate and bun run check are read-only and only bun run
+  check:write formats; git diff --check GREEN. None of that
+  uncommitted active-main work is copied here; the issue-branch
+  66-file result stays branch-snapshot evidence only.
 - Known pre-existing failures a gate must not count as new: two ANSI
   stderr tests in cli-command-facade tests/process-testing.test.ts; one
   cli-execution-auditor station-asset test; two test-runner typecheck
