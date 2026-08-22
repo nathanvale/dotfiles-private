@@ -6,61 +6,49 @@
  * moved (this block comment replaces the original line comments), and every
  * final array and object element carries a trailing comma.
  *
- * Stage 1's determinism gate requires this file to produce byte-identical
- * canonical form and an identical digest to the original.
+ * The determinism gate requires this file to produce byte-identical canonical
+ * form and an identical digest to the original. It carries no meaning of its
+ * own: read the original for what this candidate declares and why.
  */
 {
   "unresolved_decisions": [
     {
-      "drafted_resolution": "catalog is sole authority; compat ids become contextual renderings (encoded above); needs admission",
-      "question": "Which vocabulary is authoritative: the 49-id semantic catalog or the 45-id public compat list? 9 semantic ids are not public; 5 public ids have no catalog entry.",
-      "id": "single_action_vocabulary",
-    },
-    {
+      "drafted_resolution": "ruled unintended: all four accepted Repair Promotion routes stay publicly reachable under canonical ids. The routes that restore reachability are not yet authored, so the row survives until they are.",
       "question": "Four catalog ids rehydrate to terminal none, making the ADR 0002 Interrupted Repair Promotion table unreachable outside tests. Intended?",
       "id": "interrupted_repair_promotion_reachability",
     },
     {
-      "question": "The feature gate has no enabling mechanism, yet doctor routes evidence to the gated id. Is the gate a permanent stop or a pending toggle, and should evidence routing follow gate state?",
-      "id": "vault_content_repair_gate_meaning",
-    },
-    {
+      "drafted_resolution": "ruled: the complete key is Finding plus closed authoritative-evidence discriminants, and every complete row selects exactly one canonical action. The ruling fixes the table's shape; no source declares the evidence vocabulary or the per-row targets, so the table itself stays unauthored.",
       "question": "The 21 doctor findings map to actions only through imperative call sites. The full declarative finding-to-action table must be authored and admitted; this draft does not invent it.",
       "id": "doctor_finding_action_table",
     },
     {
-      "question": "ADR 0002 requires poll_after and observation expiry on every inspection result, but completion tasks have neither constant. Add them, or amend the ADR?",
-      "id": "completion_task_observation_deadline",
-    },
-    {
-      "question": "Owner Pause Mode is defined vocabulary with no implementation, marker, or blocker in this package. In scope for this spec or owned elsewhere?",
-      "id": "owner_pause_mode",
-    },
-    {
+      "drafted_resolution": "ruled: one ordered first-match-wins table across result classes, encoded above. Exact Same-Input Retry Safety stays a separate meaning. Needs admission.",
       "question": "Success and refusal results currently apply different default retry postures for the same state. This draft unifies them in one ordered table; needs admission.",
       "id": "retry_default_divergence",
     },
     {
+      "drafted_resolution": "ruled binding: an intent-bound liveness parameter whose mismatch refuses, while duration and expiry grant no Authority. The schema carries no field for an intent-binding parameter, so the ruling is recorded here rather than declared above.",
       "question": "leaseDurationMs is documented as diagnostic-only but participates in exact intent binding, so a mismatch refuses. Diagnostic or binding?",
       "id": "lease_duration_load_bearing",
     },
     {
+      "drafted_resolution": "ruled: new durable writes store canonical ids only, legacy contextual ids resolve through stored context without rewrite, and ambiguity fails closed. The rule governs durable writes rather than a declared surface, so it stays recorded here.",
       "question": "Receipts may persist contextual ids (inspect_status, run_repair, retry_remote) that fail to reproject without context, turning valid durable state into continuation_unavailable. Forbid persisting contextual ids?",
       "id": "persisted_contextual_ids",
     },
     {
-      "question": "continuation_unavailable currently carries both projection failure and doctor observation expiry. This draft splits doctor_observation_expired; needs admission.",
-      "id": "observation_expired_blocker_overload",
-    },
-    {
+      "drafted_resolution": "ruled: preserve the accepted product rule of package-owned monotonic stage budgets derived from production-shaped measurement. The existing numbers above require remeasurement before admission, so the row survives on missing evidence.",
       "question": "Validation stage budgets are admitted as not production-derived, contradicting ADR 0002. Re-measure or amend?",
       "id": "stage_budget_provenance",
     },
     {
+      "drafted_resolution": "ruled: the stored quarantine_status reconciled is authoritative, and heuristics may validate but never synthesize reconciliation. Needs the runtime read to change, which is outside this candidate.",
       "question": "Reconciled stale-lease takeover is inferred from a 4-field heuristic instead of the quarantine record's reconciled status. Read stored state instead?",
       "id": "reconciled_takeover_evidence",
     },
     {
+      "drafted_resolution": "ruled: the command contract declares positional actions, an explicit activation inspect, and a bare activation that binds to the same inspect action, all encoded above. Two of the five activation actions, defer and revoke, remain unrouted because no catalog action declares their argv.",
       "question": "The command contract declares activation actions but not how they are selected (positional routing lives only in the CLI). The contract should own the route shape.",
       "id": "activation_action_routing",
     },
@@ -74,11 +62,7 @@
     },
     "read_compatibility": {
       "matching": "exact_key_set_extra_fields_reject",
-      "completion_task": [
-        "current_23_key",
-        "pre_receipt_revision_22_key",
-        "legacy_18_key_v1",
-      ],
+      "completion_task": ["current_23_key", "pre_receipt_revision_22_key", "legacy_18_key_v1"],
     },
     "records": {
       "candidate_residue": 1,
@@ -109,102 +93,107 @@
       },
     },
     "mutations": {
-      "repair": "recovery",
-      "preview": "preview",
       "commands": "read",
-      "doctor": "read",
+      "janitor": "remote_write",
+      "tidy": "remote_write",
+      "repair": "recovery",
+      "doctor": "local_write",
+      "preview": "preview",
+      "activation": "local_write",
       "status": "read",
       "complete": "remote_write",
-      "join": "remote_write",
+      "join": "local_write",
       "begin": "remote_write",
     },
-    "repair_actions": [
-      "resume",
-      "retry-push",
-      "close-verified",
-      "stale-lease-takeover",
-      "reconcile-quarantine",
-    ],
-    "activation_actions": [
-      "inspect",
-      "prepare",
-      "review",
-      "defer",
-      "revoke",
-    ],
-    "flags": {
-      "commands": [
-        "--json",
-      ],
-      "janitor": [
-        "--json",
-        "--no-input",
-      ],
-      "tidy": [
-        "--json",
-        "--no-input",
-      ],
-      "repair": [
-        "--json",
-        "--no-input",
-        "--transaction-id",
-        "--capability-fd",
-        "--prior-writer-stopped",
-      ],
-      "doctor": [
-        "--json",
-        "--transaction-id",
-        "--task-id",
-      ],
-      "preview": [
-        "--json",
-        "--transaction-id",
-      ],
-      "activation": [
-        "--json",
-        "--no-input",
-      ],
-      "status": [
-        "--json",
-        "--task-id",
-      ],
-      "complete": [
-        "--json",
-        "--no-input",
-        "--transaction-id",
-        "--capability-fd",
-        "--summary",
-      ],
-      "join": [
-        "--json",
-        "--no-input",
-        "--transaction-id",
-        "--capability-fd",
-        "--path",
-      ],
-      "begin": [
-        "--json",
-        "--no-input",
-        "--event",
-        "--path",
-      ],
+    "repair_actions": ["resume", "retry-push", "close-verified", "stale-lease-takeover", "reconcile-quarantine"],
+    "activation_actions": ["inspect", "prepare", "review", "defer", "revoke"],
+    "root_branches": {
+      "crash": {
+        "action": "inspect_transaction",
+        "meaning": "unexpected_runtime_failure",
+        "exit_code": "1",
+      },
+      "unknown_command": {
+        "meaning": "invalid_usage_or_input",
+        "exit_code": "2",
+      },
+      "root_help": {
+        "meaning": "read_or_discovery_success",
+        "exit_code": "0",
+      },
     },
+    "positional_routes": {
+      "activation": {
+        "bare_invocation_target": "inspect_configured_vault",
+        "positionals": {
+          "review": "review_prepared",
+          "prepare": "prepare_fresh",
+          "inspect": "inspect_configured_vault",
+        },
+      },
+    },
+    "preview_exemptions": {
+      "janitor": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "tidy": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "repair": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "doctor": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "activation": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "complete": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "join": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "begin": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+    },
+    "execution_modes": {
+      "commands": ["check"],
+      "janitor": ["normal"],
+      "tidy": ["normal"],
+      "repair": ["normal"],
+      "doctor": ["normal"],
+      "preview": ["check"],
+      "activation": ["normal", "check"],
+      "status": ["check"],
+      "complete": ["normal"],
+      "join": ["normal"],
+      "begin": ["normal"],
+    },
+    "flags": {
+      "commands": ["--json"],
+      "janitor": ["--json", "--no-input"],
+      "tidy": ["--json", "--no-input"],
+      "repair": ["--json", "--no-input", "--transaction-id", "--capability-fd", "--prior-writer-stopped"],
+      "doctor": ["--json", "--transaction-id", "--task-id"],
+      "preview": ["--json", "--transaction-id"],
+      "activation": ["--json", "--no-input"],
+      "status": ["--json", "--task-id"],
+      "complete": ["--json", "--no-input", "--transaction-id", "--capability-fd", "--summary"],
+      "join": ["--json", "--no-input", "--transaction-id", "--capability-fd", "--path"],
+      "begin": ["--json", "--no-input", "--event", "--path"],
+    },
+    "entry": {
+      "script": "src/cli.ts",
+    },
+    "bare_invocation_command": "status",
     "no_argument_behavior": "read_only_restricted_status_dashboard",
     "output_modes_overrides": {
-      "commands": [
-        "json",
-      ],
+      "commands": ["json"],
     },
-    "output_modes_default": [
-      "plain",
-      "json",
-    ],
-    "global_flags": [
-      "--run-id",
-      "--quiet",
-      "--verbose",
-      "--debug",
-    ],
+    "output_modes_default": ["plain", "json"],
+    "global_flags": ["--run-id", "--quiet", "--verbose", "--debug"],
     "exit_codes": {
       "2": "invalid_usage_or_input",
       "1": "refused_blocked_or_failed",
@@ -228,10 +217,7 @@
     "quarantine": {
       "next": "reconcile_quarantine",
       "blocker": "host_quarantined",
-      "on": [
-        "released_writer",
-        "superseded_writer",
-      ],
+      "on": ["released_writer", "superseded_writer"],
     },
     "capability_errors": {
       "role_mismatch": {
@@ -250,41 +236,79 @@
       },
     },
     "stale_lease_takeover": {
-      "failure_blockers": [
-        "doctor_proof_stale",
-        "doctor_token_invalid",
-      ],
-      "requires": [
-        "human_attestation_flag",
-        "single_use_doctor_token_on_fd",
-        "proof_fingerprint_match",
-      ],
+      "failure_blockers": ["doctor_proof_stale", "doctor_token_invalid"],
+      "requires": ["human_attestation_flag", "single_use_doctor_token_on_fd", "proof_fingerprint_match"],
       "kind": "needs_human_command_only",
     },
     "lease_expiry_grants": "nothing",
     "write_authority_owner": "remote_ledger_generation",
   },
   "cancellation": {
-    "preparation": {
-      "public_surface": false,
-      "internal_checkpoint_predicate": true,
+    "all": "not_supported",
+  },
+  "pause_modes": {
+    "owner_pause": {
+      "release_action": "request_owner_pause_release",
+      "active_blocker": "owner_pause_active",
+      "owner": "vault_git_operator",
     },
-    "activation_revoke": {
-      "next": "prepare_fresh",
-      "cause": "revoked",
-      "durable_record": true,
+  },
+  "capabilities": {
+    "vault_content_repair": {
+      "unavailable_action": "escalate_validation_evidence",
+      "unavailable_blocker": "capability_missing",
+      "availability_evidence": "vault_git.vault_content_repair_installed",
     },
-    "activation_review": {
-      "defer_changes_state": false,
-      "decisions": [
-        "activate",
-        "defer",
-      ],
+  },
+  "expectation_columns": {
+    "preview.success": {
+      "channel": "stdout",
+      "changed_state": "none",
     },
-    "transaction": "not_supported",
+    "status.success": {
+      "channel": "stdout",
+      "changed_state": "none",
+    },
+    "commands.success": {
+      "channel": "stdout",
+      "changed_state": "none",
+    },
+    "activation.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "preview.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "doctor.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "status.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "repair.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "complete.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "join.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "begin.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
   },
   "waits": {
     "missed_deadline_causes": {
+      "task_observation_expiry": "completion_observation_expired",
       "doctor_task_observation_expiry": "doctor_observation_expired",
       "launch_acknowledgement_window": "expired_launch_recovered_without_new_attempt",
     },
@@ -293,6 +317,8 @@
       "validation_stage_cleanup": 10000,
       "validation_stage_vault_check": 30000,
       "validation_stage_setup": 15000,
+      "task_poll_after": 5000,
+      "task_observation_expiry": 600000,
       "doctor_task_poll_after": 5000,
       "doctor_task_observation_expiry": 600000,
       "doctor_task_heartbeat_stale": 20000,
@@ -300,31 +326,32 @@
       "task_heartbeat_stale": 20000,
       "launch_acknowledgement_window": 1500,
     },
+    "observations": {
+      "doctor_task": {
+        "missed_deadline_cause": "doctor_observation_expired",
+        "wake_route": "caller_reinvocation",
+        "attempt_expiry_ms": 600000,
+        "poll_after_ms": 5000,
+      },
+      "completion_task": {
+        "missed_deadline_cause": "completion_observation_expired",
+        "wake_route": "caller_reinvocation",
+        "attempt_expiry_ms": 600000,
+        "poll_after_ms": 5000,
+      },
+    },
+    "wake_routes": ["caller_reinvocation"],
     "wake_route": "caller_reinvocation",
   },
   "acknowledgement": {
     "publication": {
       "append_failure_means": "push_not_attempted",
-      "phases": [
-        "evidence_persisted_before_push",
-        "prepared_release_persisted",
-        "atomic_close_observed",
-      ],
+      "phases": ["evidence_persisted_before_push", "prepared_release_persisted", "atomic_close_observed"],
     },
     "unknown_policy": "reconcile_via_doctor_never_blind_retry",
     "proof_carrier": "transitioned",
-    "cas_results": [
-      "transitioned",
-      "existing",
-      "stale",
-      "uncertain",
-    ],
-    "values": [
-      "rejected",
-      "accepted",
-      "completed",
-      "unknown",
-    ],
+    "cas_results": ["transitioned", "existing", "stale", "uncertain"],
+    "values": ["rejected", "accepted", "completed", "unknown"],
   },
   "retry_posture": {
     "never_auto_retry": [
@@ -336,19 +363,13 @@
       {
         "then": "operator_required",
         "when": {
-          "state_in": [
-            "human_required",
-            "superseded",
-            "expired",
-          ],
+          "state_in": ["human_required", "superseded", "expired"],
         },
       },
       {
         "then": "same_input_unsafe",
         "when": {
-          "state_in": [
-            "push_pending",
-          ],
+          "state_in": ["push_pending"],
         },
       },
       {
@@ -360,39 +381,37 @@
       {
         "then": "same_input_safe",
         "when": {
-          "activation_cause_in": [
-            "configuration_missing",
-            "admission_missing",
-            "revalidation_unavailable",
-          ],
+          "activation_cause_in": ["configuration_missing", "admission_missing", "revalidation_unavailable"],
         },
       },
       {
         "then": "operator_required",
         "when": {
-          "activation_cause_in": [
-            "human_capability_required",
-            "revoked",
-          ],
+          "activation_cause_in": ["human_capability_required", "revoked"],
         },
       },
       {
         "then": "same_input_unsafe",
         "when": {
-          "activation_cause_in": [
-            "evidence_changed",
-            "binding_changed",
-            "invalidated",
-          ],
+          "activation_cause_in": ["evidence_changed", "binding_changed", "invalidated"],
         },
       },
       {
         "then": "operator_required",
         "when": {
-          "doctor_task_terminal_in": [
-            "worker_failure",
-            "observation_expired",
-          ],
+          "doctor_task_terminal_in": ["worker_failure", "observation_expired"],
+        },
+      },
+      {
+        "then": "operator_required",
+        "when": {
+          "blocker": "owner_pause_active",
+        },
+      },
+      {
+        "then": "same_input_safe",
+        "when": {
+          "blocker": "completion_observation_expired",
         },
       },
       {
@@ -414,17 +433,121 @@
         },
       },
     ],
-    "values": [
-      "same_input_safe",
-      "same_input_unsafe",
-      "operator_required",
-    ],
+    "values": ["same_input_safe", "same_input_unsafe", "operator_required"],
   },
   "selectors": {
     "repair_id": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
     "doctor_task_id": "^doctor_task_[0-9a-f]{32}$",
     "task_id": "^task_[0-9a-f]{32}$",
     "transaction_id": "^txn_[0-9a-f]{32}$",
+  },
+  "routing": {
+    "station_blockers": {
+      "rows": [
+        {
+          "retry_safety": "same_input_unsafe",
+          "target": "correct_begin_owned_paths",
+          "blocker": "owned_path_not_admitted",
+          "key": {
+            "branch": "refused",
+            "command": "begin",
+          },
+        },
+        {
+          "retry_safety": "same_input_unsafe",
+          "target": "correct_join_owned_paths",
+          "blocker": "owned_path_not_admitted",
+          "key": {
+            "branch": "refused",
+            "command": "join",
+          },
+        },
+        {
+          "human_kind": "external_prerequisite",
+          "retry_safety": "same_input_unsafe",
+          "target": "use_owner_capability",
+          "blocker": "capability_role_mismatch",
+          "key": {
+            "branch": "refused",
+            "command": "complete",
+          },
+        },
+        {
+          "human_kind": "external_prerequisite",
+          "retry_safety": "same_input_unsafe",
+          "target": "use_owner_capability",
+          "blocker": "capability_role_mismatch",
+          "key": {
+            "branch": "refused",
+            "command": "repair",
+          },
+        },
+        {
+          "retry_safety": "same_input_safe",
+          "target": "correct_completion_task_id",
+          "blocker": "task_not_found",
+          "key": {
+            "branch": "refused",
+            "command": "status",
+          },
+        },
+        {
+          "retry_safety": "same_input_safe",
+          "target": "correct_doctor_task_id",
+          "blocker": "task_not_found",
+          "key": {
+            "branch": "refused",
+            "command": "doctor",
+          },
+        },
+        {
+          "retry_safety": "operator_required",
+          "target": "inspect_transaction",
+          "blocker": "transaction_mismatch",
+          "key": {
+            "branch": "refused",
+            "command": "preview",
+          },
+        },
+        {
+          "human_kind": "external_prerequisite",
+          "retry_safety": "operator_required",
+          "target": "request_operator_review",
+          "blocker": "checker_repair_refused",
+          "key": {
+            "branch": "refused",
+            "command": "tidy",
+          },
+        },
+        {
+          "human_kind": "external_prerequisite",
+          "retry_safety": "operator_required",
+          "target": "request_operator_review",
+          "blocker": "checker_repair_refused",
+          "key": {
+            "branch": "refused",
+            "command": "janitor",
+          },
+        },
+      ],
+      "discriminants": {
+        "branch": ["refused"],
+        "command": [
+          "begin",
+          "join",
+          "complete",
+          "status",
+          "activation",
+          "preview",
+          "doctor",
+          "repair",
+          "tidy",
+          "janitor",
+        ],
+      },
+      "target_kind": "action",
+      "role": "station_blocker",
+    },
   },
   "actions": {
     "resolution": {
@@ -434,23 +557,17 @@
       "missing_context": "unavailable_projection",
     },
     "contextual_renderings": {
-      "change_owned_paths": [
-        "begin_transaction",
-        "continue_transaction",
+      "run_repair": [
+        "resume_interrupted_transaction",
+        "resume_repaired_transaction",
+        "retry_push",
+        "close_verified_publication",
+        "reconcile_quarantine",
       ],
-      "change_input": [
-        "correct_completion_task_id",
-        "correct_doctor_task_id",
-      ],
-      "retry_remote": [
-        "begin_transaction",
-        "inspect_configured_vault",
-      ],
-      "inspect_status": [
-        "inspect_completion_task",
-        "inspect_doctor_task",
-        "inspect_transaction",
-      ],
+      "change_owned_paths": ["correct_begin_owned_paths", "correct_join_owned_paths"],
+      "change_input": ["correct_completion_task_id", "correct_doctor_task_id"],
+      "retry_remote": ["begin_transaction", "inspect_remote_lease"],
+      "inspect_status": ["inspect_completion_task", "inspect_doctor_task", "inspect_transaction"],
     },
     "catalog": [
       {
@@ -467,9 +584,7 @@
         "id": "apply_vault_content_repair",
       },
       {
-        "requires_context": [
-          "task_id",
-        ],
+        "requires_context": ["task_id"],
         "kind": "invoke",
         "id": "inspect_completion_task",
       },
@@ -483,37 +598,32 @@
         "id": "resume_vault_content_promotion",
       },
       {
-        "requires_context": [
-          "transaction_id",
-        ],
+        "requires_context": ["transaction_id"],
         "kind": "invoke",
         "id": "resume_repaired_transaction",
       },
       {
-        "requires_context": [
-          "transaction_id",
-        ],
+        "requires_context": ["transaction_id"],
+        "kind": "invoke",
+        "id": "resume_interrupted_transaction",
+      },
+      {
+        "requires_context": ["transaction_id"],
         "kind": "invoke",
         "id": "close_verified_publication",
       },
       {
-        "requires_context": [
-          "transaction_id",
-        ],
+        "requires_context": ["transaction_id"],
         "kind": "invoke",
         "id": "retry_proven_unpublished",
       },
       {
-        "requires_context": [
-          "doctor_task_id",
-        ],
+        "requires_context": ["doctor_task_id"],
         "kind": "invoke",
         "id": "inspect_doctor_task",
       },
       {
-        "requires_context": [
-          "transaction_id",
-        ],
+        "requires_context": ["transaction_id"],
         "kind": "invoke",
         "id": "inspect_transaction",
       },
@@ -538,9 +648,7 @@
         "id": "prepare_fresh",
       },
       {
-        "requires_context": [
-          "transaction_id",
-        ],
+        "requires_context": ["transaction_id"],
         "kind": "invoke",
         "id": "retry_push",
       },
@@ -572,6 +680,16 @@
       {
         "kind": "needs_input",
         "id": "run_owned_path_checks",
+      },
+      {
+        "input_contract": "vault-git.begin",
+        "kind": "needs_input",
+        "id": "correct_begin_owned_paths",
+      },
+      {
+        "input_contract": "vault-git.join",
+        "kind": "needs_input",
+        "id": "correct_join_owned_paths",
       },
       {
         "input_contract": "vault-git.complete",
@@ -730,6 +848,13 @@
         "id": "wait_for_runtime",
       },
       {
+        "condition": "owner_pause_released",
+        "owner": "vault_git_operator",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "request_owner_pause_release",
+      },
+      {
         "stop_scope": "agent_terminal",
         "kind": "none",
         "id": "continue_outer_transaction",
@@ -748,16 +873,8 @@
       "join_owner",
       "private_launcher",
     ],
-    "needs_human_kinds": [
-      "command",
-      "external_prerequisite",
-    ],
-    "kinds": [
-      "invoke",
-      "needs_input",
-      "needs_human",
-      "none",
-    ],
+    "needs_human_kinds": ["command", "external_prerequisite"],
+    "kinds": ["invoke", "needs_input", "needs_human", "none"],
   },
   "activation": {
     "cause_to_next_action": {
@@ -766,22 +883,12 @@
       "invalidated": "prepare_fresh",
       "binding_changed": "prepare_fresh",
       "evidence_changed": "prepare_fresh",
-      "human_capability_required": "request_operator_review",
+      "human_capability_required": "return_to_human_review",
       "admission_missing": "prepare_fresh",
       "configuration_missing": "configure_activation_identity",
     },
-    "configuration_fields": [
-      "host_identity",
-      "ssh_identity_file",
-      "ssh_public_key",
-      "ssh_known_hosts",
-    ],
-    "stopped_actions": [
-      "activation_preparation",
-      "activation_admission",
-      "vault_write",
-      "activation_revocation",
-    ],
+    "configuration_fields": ["host_identity", "ssh_identity_file", "ssh_public_key", "ssh_known_hosts"],
+    "stopped_actions": ["activation_preparation", "activation_admission", "vault_write", "activation_revocation"],
     "restriction_causes": [
       "configuration_missing",
       "admission_missing",
@@ -844,6 +951,8 @@
     "checker_repair_refused",
     "continuation_unavailable",
     "doctor_observation_expired",
+    "completion_observation_expired",
+    "owner_pause_active",
   ],
   "invariants": [
     {
@@ -1015,12 +1124,10 @@
       "event": "quarantine_reconciled",
     },
   ],
+  "phase_state": "transaction_phase",
   "states": {
     "activation_result_status": {
-      "values": [
-        "restricted",
-        "deferred",
-      ],
+      "values": ["restricted", "deferred"],
     },
     "result_outcome": {
       "values": [
@@ -1037,80 +1144,32 @@
       ],
     },
     "changed_state": {
-      "values": [
-        "none",
-        "local",
-        "remote",
-        "committed",
-        "partial",
-      ],
+      "values": ["none", "local", "remote", "committed", "partial"],
     },
     "write_permission": {
-      "values": [
-        "denied",
-        "join",
-        "owner",
-      ],
+      "values": ["denied", "join", "owner"],
     },
     "push_outcome": {
-      "values": [
-        "not_attempted",
-        "unknown",
-        "closed",
-        "host_contract_breach",
-      ],
+      "values": ["not_attempted", "unknown", "closed", "host_contract_breach"],
     },
     "quarantine_status": {
-      "values": [
-        "takeover_pending",
-        "quarantined",
-        "reconciled",
-      ],
+      "values": ["takeover_pending", "quarantined", "reconciled"],
     },
     "host_disposition": {
-      "values": [
-        "authoritative",
-        "quarantined",
-      ],
+      "values": ["authoritative", "quarantined"],
     },
     "lease": {
-      "values": [
-        "held",
-        "released",
-      ],
+      "values": ["held", "released"],
     },
     "doctor_task": {
-      "checkpoints": [
-        "local_classified",
-        "checking_remote",
-        "terminal",
-      ],
-      "terminal": [
-        "closed",
-        "unknown",
-      ],
-      "phases": [
-        "admitted",
-        "running",
-        "terminal",
-      ],
-      "values": [
-        "claimed",
-        "launching",
-        "in_progress",
-        "closed",
-        "unknown",
-      ],
+      "checkpoints": ["local_classified", "checking_remote", "terminal"],
+      "terminal": ["closed", "unknown"],
+      "phases": ["admitted", "running", "terminal"],
+      "values": ["claimed", "launching", "in_progress", "closed", "unknown"],
     },
     "completion_task": {
-      "absorbing": [
-        "closed",
-      ],
-      "terminal": [
-        "closed",
-        "repair_needed",
-        "unknown",
-      ],
+      "absorbing": ["closed"],
+      "terminal": ["closed", "repair_needed", "unknown"],
       "state_field_requirements": {
         "in_progress": {
           "launchExpiresAt": "null",
@@ -1122,39 +1181,15 @@
         },
       },
       "legal_pairings": {
-        "terminal": [
-          "closed",
-          "repair_needed",
-          "unknown",
-        ],
-        "running": [
-          "in_progress",
-        ],
-        "admitted": [
-          "claimed",
-          "launching",
-        ],
+        "terminal": ["closed", "repair_needed", "unknown"],
+        "running": ["in_progress"],
+        "admitted": ["claimed", "launching"],
       },
-      "phases": [
-        "admitted",
-        "running",
-        "terminal",
-      ],
-      "values": [
-        "claimed",
-        "launching",
-        "in_progress",
-        "closed",
-        "repair_needed",
-        "unknown",
-      ],
+      "phases": ["admitted", "running", "terminal"],
+      "values": ["claimed", "launching", "in_progress", "closed", "repair_needed", "unknown"],
     },
     "transaction_read_state": {
-      "observation_sourced": [
-        "absent",
-        "expired",
-        "superseded",
-      ],
+      "observation_sourced": ["absent", "expired", "superseded"],
       "projection_from_phase": {
         "closed": "closed",
         "blocked": "unknown",
@@ -1182,16 +1217,9 @@
       ],
     },
     "transaction_phase": {
-      "human_terminal": [
-        "human_required",
-      ],
-      "terminal": [
-        "closed",
-      ],
-      "durable_subset_excludes": [
-        "unavailable",
-        "inspecting",
-      ],
+      "human_terminal": ["human_required"],
+      "terminal": ["closed"],
+      "durable_subset_excludes": ["unavailable", "inspecting"],
       "values": [
         "unavailable",
         "inspecting",
@@ -1222,10 +1250,7 @@
     "capability": {
       "storage": "per_receipt_per_role",
       "delivery": "inherited_fd",
-      "roles": [
-        "owner",
-        "join",
-      ],
+      "roles": ["owner", "join"],
     },
     "activation_record": {
       "bindings": [
@@ -1268,10 +1293,7 @@
       },
       "launch_attempt": {
         "creates_attempt": false,
-        "range": [
-          0,
-          2,
-        ],
+        "range": [0, 2],
         "field": "launchAttempt",
       },
       "attempt": {
@@ -1296,10 +1318,7 @@
         "ref": "refs/heads/vault-system/transaction-ledger",
       },
       "identity": {
-        "fields": [
-          "transactionId",
-          "generation",
-        ],
+        "fields": ["transactionId", "generation"],
       },
     },
     "receipt": {
@@ -1325,21 +1344,19 @@
     },
   },
   "features": {
-    "feature_gates": [
-      "vault_content_repair",
-    ],
+    "feature_gates": ["vault_content_repair"],
     "remote_authority": true,
     "version_custody": true,
-    "cancellation": "partial",
+    "cancellation": "not_supported",
     "liveness_evidence": true,
     "durable_operations": true,
   },
-  "spec_meta": { // relocated line comment
+  "spec_meta": {
     "activation_result_schema_version": "3",
     "public_result_schema_version": "2",
     "state_machine_definition_version": "unadmitted",
     "product_specification_revision": "unadmitted",
-    "input_schema_version": "spike-draft-1",
+    "input_schema_version": "2",
     "product": "vault-git",
   },
 }
