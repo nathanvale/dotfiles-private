@@ -127,103 +127,10 @@ writing-for-agents first. Routine status edits run this checklist alone.
    resulting digest (closed). The one open ask to Nathan: authorize
    the Vault Git candidate re-authoring unit. Specification Admission
    stays its own later act on the validated digest that unit produces.
-5. IN FLIGHT: the facade dual-coverage unit, first chartered unit of
-   the qualification charter, dispatched 2026-08-22 after all three
-   owners recorded the same scope (this file at e318a4b, issue 55
-   comment 5376885160, the vault packet writeback staged and left
-   uncommitted for vault-git). Scope: plan comment ADD-1 and ADD-2
-   (ADD-3 skipped per the plan default), additive-optional, separately
-   reviewed per the spec's out-of-scope clause, claiming no admission
-   and no qualification evidence; edits only cli-command-facade;
-   warm-chrome's synthetic-coverage defect becomes visible but stays
-   unrepaired. Worker: one claude background session "issue-55 facade
-   dual-coverage", short ID a192007b, cwd
-   `.worktrees/issue-55-facade-coverage`, branch
-   feat/issue-55-facade-coverage, fixed point e318a4b, model
-   claude-opus-5 at high effort (admission proof observed 2026-08-22:
-   the session record resolves "model":"claude-opus-5" and the job
-   banner reads "Opus 5 with high effort"). Charter: AGENT-BRIEF.md at
-   that worktree root, carrying the no-subagents line.
-   FACADE-COVERAGE-HANDBACK.md received 2026-08-22 and NOT accepted,
-   nothing committed, per Nathan's staff-engineer disposition. Worker
-   a192007b stopped after handback; the diff is preserved at the unit
-   root (WORKER-DIFF-2026-08-22-a192007b.patch, SHA-256 519c0271..,
-   hashes in REVIEW-EVIDENCE.md there). Supervisor gate re-run
-   observed 2026-08-22: facade 318 tests with the two pre-existing
-   process-testing fails, both typechecks clean, Biome vacuous at 0
-   files, ASMG 446 pass. Five verified observations await review
-   disposition (REVIEW-EVIDENCE.md): the unclean gate 1; the vacuous
-   Biome leg; the predeclared exactly-one RED prediction that observed
-   three fails, omitted from the handback; the proven additive-
-   optionality break (cli-execution-auditor typecheck, 3 errors
-   against the worker tree, clean at the fixed point); and 394
-   insertions against the plan's ~60 lines. Review in flight,
-   dispatched 2026-08-22 at fixed point e318a4b, isolated, read-only,
-   report-only, all three admitted claude-opus-5 at high effort with
-   banner and session-record proof observed: Spec 814012ea, Standards
-   39ba5305, cli-execution-auditor f666bc37. Reports land untracked at
-   the unit root as REVIEW-SPEC.md, REVIEW-STANDARDS.md,
-   REVIEW-CLI-EXECUTION.md. Reviews COMPLETE 2026-08-22, all three
-   reports at the unit root, custody checks passed in each (diff and
-   handback hashes matched, HEAD at the fixed point). Verdicts: Spec,
-   satisfiable with bounded repair, one must-fix; Standards, meets
-   standards after bounded repair; auditor lane, one blocking defect
-   with the owner split named. Unanimous blocker, observation 4:
-   required StationMap.coverage breaks additive-optionality in fact
-   (cli-execution-auditor typecheck 3 errors against the worker tree,
-   clean at the fixed point), and the auditor's mergeStationMaps
-   builds its own StationMap literal and discards per-map coverage,
-   so a type-only fix would still ship untruthful merged output.
-   Supervisor dispositions of the five observations: 4 blocking,
-   repair chartered below; 3 should-fix as a repair-handback record
-   correction with the original handback frozen (predeclared one
-   failing guard, observed three, two purpose-built plus the updated
-   pre-existing pinned block); 1 non-blocking gate-text defect, the
-   repair gate re-chartered to no-new-failures against the
-   fixed-point baselines; 2 non-blocking, vacuous Biome leg recorded
-   with substitute formatting evidence verified by the Standards
-   axis; 5 not blocking (Spec measured 77 effective code lines
-   against the tilde-60; the unnamed surface judged necessary; the
-   required modifiers repair under R1). Repair grant recorded
-   2026-08-22 (Nathan, this session): a bounded fix to the
-   cli-execution-auditor skill, exactly and only to make the facade
-   addition truly additive and the auditor's merged and projected
-   dual coverage truthful; masking the facade defect with an
-   auditor-only patch is ruled out; cli-execution-auditor skill
-   verification joins the repaired gate; no commit or merge until
-   the reviews and the repaired gates pass. Repair packet R1 to R7
-   at the unit root (REPAIR-PACKET.md), one consolidated cycle per
-   the review contract: R1 StationMap.coverage and
-   StationMapEvidence.provenance become optional in type while the
-   projector always populates both; R2 a facade-owned coverage
-   aggregation helper owning the counting rule; R3 the auditor's
-   mergeStationMaps emits merged coverage through that helper; R4
-   one owner for the declared-coverage claim string; R5 projection
-   coerces an invalid provenance to the fail-closed default with the
-   drift still recorded; R6 the stale declared-coverage-runs limit
-   note; R7 the RED-record correction. Record-only, carried: the
-   unenforced real_process stamp and drift-text sanitisation (facade
-   hardening follow-up, with the facade CONTEXT.md station-vocabulary
-   gap); future additive gates enumerate consumers from the
-   workspace, not a hand list; auditor baseline observed by the
-   supervisor at the fixed point, 141 pass 1 pre-existing fail.
-   Repair dispatched 2026-08-22 after all three owners recorded the
-   repair scope (this file, issue 55 comment 5377163030, the vault
-   packet README staged uncommitted). Replacement worker: one claude
-   background session "issue-55 facade dual-coverage repair", short
-   ID 1471977e, same unit worktree and branch, prior worker stopped
-   first, model claude-opus-5 at high effort (admission proof
-   observed 2026-08-22: session record resolves
-   "model":"claude-opus-5", banner "Opus 5 with high effort").
-   Charter: REPAIR-PACKET.md at the unit root; frozen evidence
-   listed there must not move. Completion signal:
-   FACADE-COVERAGE-REPAIR-HANDBACK.md at the unit root, untracked.
-   After handback: supervisor re-runs the repaired gate, re-verifies
-   with the review axes as needed, and only then accepts, commits,
-   and merges.
-6. AUTHORIZED, NOT STARTED (Nathan, 2026-08-22): a second bounded
-   skill-document unit, queued strictly behind a stable repair
-   charter for item 5. Scope: update the cli-author skill using
+5. AUTHORIZED, NOT STARTED (Nathan, 2026-08-22): a second bounded
+   skill-document unit. Its precondition is met: the facade
+   dual-coverage unit is merged and its charter stable (ledger
+   below). Scope: update the cli-author skill using
    skill-author, writing-for-agents, and
    agent-reliability-guardrails. Keep cli-author/SKILL.md a thin
    router; facade-only depth lives in its owned reference, never
@@ -242,7 +149,11 @@ writing-for-agents first. Routine status edits run this checklist alone.
    Its own unit worktree, brief, admitted Opus 5 high worker,
    handback, review, commit, and merge boundary. Every other
    boundary stays closed.
-7. Carried follow-ups for whichever unit takes them next: the
+6. Carried follow-ups for whichever unit takes them next: the
+   unenforced real_process stamp on CliProcessResult and drift-text
+   sanitisation (facade hardening follow-up); the facade CONTEXT.md
+   station-vocabulary gap; additive facade gates enumerate consumers
+   from the workspace, never a hand list; the
    symlink-escape containment check at the
    deletion site (lexical safety is proved, symlink escape is not);
    em-dashes in artifact-set.ts, canonical.ts and generate.ts comments
@@ -253,7 +164,7 @@ writing-for-agents first. Routine status edits run this checklist alone.
    fixtures, both predating the Contextual Rendering unit); and
    schema.ts's own header comment still naming Input Schema v1 while
    the file owns the v2 shapes (src comment, needs a chartered unit).
-8. Stage 5 carries the 13 unresolved decisions named in the plan
+7. Stage 5 carries the 13 unresolved decisions named in the plan
    comment's stage-5 row (drafted resolutions in
    receipts/stage5-decision-packet.md, posted to issue 55) plus the
    build-added worklist below, now strengthened by the Agent Worktree
@@ -615,6 +526,41 @@ to Next or the stage-5 worklist.
   one admitted Opus 5 high replacement (both admission proofs observed
   in session records). Harvest: unit briefs now carry an explicit
   no-subagents line unless the supervisor admits one before launch.
+
+- Facade dual coverage (Stage 5, first chartered unit of the Vault
+  Git qualification charter): MERGED e787db0 (unit commit 66ea98c,
+  fixed point e318a4b, receipts at 306eb62). Plan ADD-1 and ADD-2
+  landed additive in fact after one authorized repair cycle:
+  StationMap.coverage and projected provenance are optional in type
+  and always populated by the projector (the perturbation deleting
+  the projector's coverage stayed typecheck-clean while 9 tests
+  failed, proving the optionality real and the population claim
+  test-carried); aggregateStationMapCoverage owns the one counting
+  rule (observed counts only real_process AND covered) and the
+  auditor's mergeStationMaps emits merged coverage through it under
+  Nathan's bounded three-file grant; one literal owner for
+  declared_branch_coverage; invalid provenance coerces to the
+  fail-closed default with drift still recorded; the stale
+  declared-coverage-runs limit note updated. Gate, supervisor re-run
+  after repair: facade 322 pass with the two known ANSI fails, both
+  typechecks clean; auditor typecheck clean (3 errors at review),
+  suite 142 pass 1 known fail; workspace consumer sweep clean except
+  test-runner's two pre-existing errors reproduced at the fixed
+  point; skill verification observed the dual block in the auditor's
+  real JSON envelope (vault-git target declared 23 of 23, observed 0;
+  the worker's mixed temp target declared 2, observed 1); ASMG 446
+  pass, typecheck clean. Review: three isolated report-only axes at
+  e318a4b, all admitted Opus 5 high (Spec 814012ea, Standards
+  39ba5305, cli-execution-auditor f666bc37); unanimous blocker was
+  the required-field additive-optionality break plus the auditor
+  merge discarding coverage; repair packet R1 to R7 closed it, with
+  RED predictions recorded honestly (two misses reported as misses)
+  and the original handback's RED record corrected, not rewritten.
+  Declines on record: CliProcessResult branding, warm-chrome repair,
+  root biome.json, the two ANSI stderr tests, facade CONTEXT.md
+  vocabulary (all carried under Next). warm-chrome's synthetic
+  coverage is now visible through the real front door: declared 18 of
+  18, observed 0. Receipts at receipts/facade-coverage/.
 
 ## Standing supervisor rules
 
