@@ -124,10 +124,14 @@ writing-for-agents first. Routine status edits run this checklist alone.
    Closing the refusals requires the candidate re-authored against
    Input Schema v2 per the recorded rulings (a Product Specification
    Candidate edit, closed) and Specification Admission of the
-   resulting digest (closed). The one open ask to Nathan: authorize
-   the Vault Git candidate re-authoring unit. Specification Admission
-   stays its own later act on the validated digest that unit produces.
-5. PROPOSED, NEEDS NATHAN'S AUTHORIZATION: the auditor
+   resulting digest (closed). The current Nathan decision, exactly
+   one: authorize or defer the Vault Git candidate re-authoring unit.
+   Specification Admission stays its own later act on the validated
+   digest that unit produces. Formal qualification stays blocked
+   until both legs are ready: this candidate path through its own
+   admission, and the truthful auditor output parked at item 5.
+5. PROPOSED AND PARKED, not a current ask (the next separate grant,
+   raised only after the item 4 decision is made): the auditor
    dual-coverage output unit, from the cli-author review's should-fix
    findings (receipts/cli-author/REVIEW-CLI-EXECUTION.md findings 1
    and 3, supervisor-verified at the named lines): auditor.ts still
