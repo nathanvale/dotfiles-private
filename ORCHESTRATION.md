@@ -143,10 +143,29 @@ writing-for-agents first. Routine status edits run this checklist alone.
    claude-opus-5 at high effort (admission proof observed 2026-08-22:
    the session record resolves "model":"claude-opus-5" and the job
    banner reads "Opus 5 with high effort"). Charter: AGENT-BRIEF.md at
-   that worktree root, carrying the no-subagents line. Completion
-   signal: FACADE-COVERAGE-HANDBACK.md at that worktree root,
-   untracked. Review at handback: both axes plus cli-execution-auditor
-   (stage 5 rule).
+   that worktree root, carrying the no-subagents line.
+   FACADE-COVERAGE-HANDBACK.md received 2026-08-22 and NOT accepted,
+   nothing committed, per Nathan's staff-engineer disposition. Worker
+   a192007b stopped after handback; the diff is preserved at the unit
+   root (WORKER-DIFF-2026-08-22-a192007b.patch, SHA-256 519c0271..,
+   hashes in REVIEW-EVIDENCE.md there). Supervisor gate re-run
+   observed 2026-08-22: facade 318 tests with the two pre-existing
+   process-testing fails, both typechecks clean, Biome vacuous at 0
+   files, ASMG 446 pass. Five verified observations await review
+   disposition (REVIEW-EVIDENCE.md): the unclean gate 1; the vacuous
+   Biome leg; the predeclared exactly-one RED prediction that observed
+   three fails, omitted from the handback; the proven additive-
+   optionality break (cli-execution-auditor typecheck, 3 errors
+   against the worker tree, clean at the fixed point); and 394
+   insertions against the plan's ~60 lines. Review in flight,
+   dispatched 2026-08-22 at fixed point e318a4b, isolated, read-only,
+   report-only, all three admitted claude-opus-5 at high effort with
+   banner and session-record proof observed: Spec 814012ea, Standards
+   39ba5305, cli-execution-auditor f666bc37. Reports land untracked at
+   the unit root as REVIEW-SPEC.md, REVIEW-STANDARDS.md,
+   REVIEW-CLI-EXECUTION.md. Disposition, then any bounded repair or
+   Nathan decision, follow the reports; nothing is accepted,
+   committed, or merged before that.
 6. Carried follow-ups for whichever unit takes them next: the
    symlink-escape containment check at the
    deletion site (lexical safety is proved, symlink escape is not);
