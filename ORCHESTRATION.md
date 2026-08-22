@@ -374,6 +374,13 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   code-review skill's Spec subagent prompt to name the snapshot, with
   the supervisor verifying that grounding from the reviewer's
   transcript before admitting output.
+  Corrected reviewer A dispatched 2026-08-22 17:01 AEST: brand-new
+  session "issue-55 final review A", short ID 891db3bf, session
+  891db3bf-2dad-4a38-a450-79b8796b69f4, admission verified (launch
+  flags --model fable --effort xhigh; the session record resolves
+  "model":"claude-fable-5" with "effort":"xhigh"), sole write
+  REVIEW-FINAL-A.md, two-layer whole-engine scope per the corrected
+  packet. Reviewer B waits for A's completed, admitted report.
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
