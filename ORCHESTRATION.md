@@ -381,6 +381,32 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   "model":"claude-fable-5" with "effort":"xhigh"), sole write
   REVIEW-FINAL-A.md, two-layer whole-engine scope per the corrected
   packet. Reviewer B waits for A's completed, admitted report.
+  Reviewer A returned 2026-08-22 17:15 AEST and is ADMITTED:
+  REVIEW-FINAL-A.md sha256 7cfb91f3.. (24776 bytes); the supervisor
+  verified from the session record that exactly one code-review Skill
+  invocation ran, its two skill-owned parallel subagents were the Spec
+  and Standards lanes, the Spec subagent's launched prompt names
+  SPEC-SNAPSHOT-2026-08-22/, its MANIFEST.md, the issue body file and
+  both layers, and the session resolves claude-fable-5 at xhigh on
+  all 118 messages; custody re-verified after return (HEAD 9d1e91e,
+  full diff d5a79e4d.. unmoved). A's result: custody and all four
+  gates reproduced on its own probes; no must-fix survives its
+  verification; four layer-1 should-fixes (render.ts banner asserting
+  Admitted on unadmitted output, already carried; build-ir.ts
+  totality-by-cast; generate.ts refusal-message voice with
+  absolute-path leak risk; the semantic.ts alias rename), the
+  Standards lane's sole reported must-fix (the pin-test title "the
+  accepted candidate's") challenged down to record-only on chartered
+  and recorded-vocabulary evidence, and six record-only rows;
+  recommendation ACCEPT both layers.
+  Reviewer B dispatched 2026-08-22 17:20 AEST, sequential, brand-new
+  session "issue-55 final review B", short ID 5d3ed7a8, session
+  5d3ed7a8-4c2a-4ab4-9ff5-fb3cf876b47e, admission verified (launch
+  flags --model fable --effort xhigh; the session record resolves
+  claude-fable-5 at xhigh), receiving the corrected packet plus A's
+  full report with the duty to verify, challenge, or extend A, sole
+  write REVIEW-FINAL-B.md, same Spec-grounding transcript check
+  before admission.
 - The Vault Git qualification charter is recorded (Nathan, 2026-08-22):
   observational only, against the existing public vault-git CLI. Binding
   gate, owned by the plan comment's stage-5 row: `qualify:vault-git` with
