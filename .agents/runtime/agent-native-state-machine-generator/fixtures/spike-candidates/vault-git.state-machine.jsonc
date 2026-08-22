@@ -306,7 +306,6 @@
 			"inspect_status": ["inspect_completion_task", "inspect_doctor_task", "inspect_transaction"],
 			"retry_remote": ["begin_transaction", "inspect_configured_vault"],
 			"change_input": ["correct_completion_task_id", "correct_doctor_task_id"],
-			"run_repair": "resolved_via_repair_action",
 			"change_owned_paths": ["begin_transaction", "continue_transaction"],
 		},
 		"resolution": {
