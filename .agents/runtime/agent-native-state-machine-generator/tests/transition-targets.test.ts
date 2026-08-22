@@ -3,7 +3,10 @@ import {
 	compileSpecificationCandidate,
 	REGISTERED_READERS,
 } from '../src/index.ts'
-import { readCandidate, readNegativeFixture } from './support/candidates.ts'
+import {
+	readFrozenV1Exemplar,
+	readNegativeFixture,
+} from './support/candidates.ts'
 
 /**
  * Transition targets validate against the DECLARED phase state (Agent
@@ -207,8 +210,10 @@ describe('an unusable declaration fails closed', () => {
 })
 
 describe('legacy input keeps its frozen binding', () => {
-	test('the vault-git spike still compiles under its reader', async () => {
-		const source = await readCandidate('vault-git')
+	test('the frozen v1 exemplar still compiles under its reader', async () => {
+		// Legacy input means the frozen v1 exemplar. The live vault-git candidate
+		// is v2 input and reaches the current path, not a Registered Reader.
+		const source = await readFrozenV1Exemplar()
 		// Positive control: the frozen binding names the state this candidate
 		// declares, and the candidate declares no phase_state of its own.
 		expect(source).toContain('"transaction_phase"')
@@ -224,7 +229,7 @@ describe('legacy input keeps its frozen binding', () => {
 	})
 
 	test('a bad target in that candidate is still refused', async () => {
-		const source = (await readCandidate('vault-git')).replace(
+		const source = (await readFrozenV1Exemplar()).replace(
 			'{ "event": "lease_won", "to_phase": "leased", "driver": "command" }',
 			'{ "event": "lease_won", "to_phase": "not_a_phase", "driver": "command" }',
 		)

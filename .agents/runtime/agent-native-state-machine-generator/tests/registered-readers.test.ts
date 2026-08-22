@@ -9,7 +9,10 @@ import {
 	registeredReaderFor,
 	SUPPORTED_INPUT_SCHEMA_VERSIONS,
 } from '../src/index.ts'
-import { readCandidate, readNegativeFixture } from './support/candidates.ts'
+import {
+	readFrozenV1Exemplar,
+	readNegativeFixture,
+} from './support/candidates.ts'
 
 /**
  * The Registered Readers' own contract (issue 55, stories 51 and 52).
@@ -91,9 +94,10 @@ describe("a reader's envelope stamp is frozen at its historical value", () => {
 	}
 
 	test('the spike candidate digests under the frozen stamp, not its declaration', async () => {
-		const result = compileSpecificationCandidate(
-			await readCandidate('vault-git'),
-		)
+		// The frozen v1 exemplar, not the live vault-git candidate: this asserts
+		// what a superseded version's reader does, and the live candidate is on
+		// the current version whose envelope is not frozen.
+		const result = compileSpecificationCandidate(await readFrozenV1Exemplar())
 		expect(result.ok).toBe(true)
 		if (!result.ok) return
 
@@ -151,9 +155,7 @@ describe('the two version identities are independent', () => {
 	})
 
 	test('a legacy candidate carries the frozen pair, not the current one', async () => {
-		const result = compileSpecificationCandidate(
-			await readCandidate('vault-git'),
-		)
+		const result = compileSpecificationCandidate(await readFrozenV1Exemplar())
 
 		expect(result.ok).toBe(true)
 		if (!result.ok) return
@@ -269,7 +271,7 @@ describe('a reader owns the algorithm, not only the stamps', () => {
 
 describe('a compile result names the reader that produced it', () => {
 	const cases = [
-		{ label: 'vault-git spike', version: 'spike-draft-1' },
+		{ label: 'frozen vault-git v1 exemplar', version: 'spike-draft-1' },
 		{ label: 'pilot', version: '1' },
 		{ label: 'agent-worktree draft', version: '1' },
 	] as const
@@ -280,7 +282,7 @@ describe('a compile result names the reader that produced it', () => {
 
 	test('legacy input carries its reader name', async () => {
 		const sources = [
-			[cases[0], await readCandidate('vault-git')],
+			[cases[0], await readFrozenV1Exemplar()],
 			[cases[1], await Bun.file(PILOT_URL).text()],
 			[cases[2], await Bun.file(DRAFT_URL).text()],
 		] as const

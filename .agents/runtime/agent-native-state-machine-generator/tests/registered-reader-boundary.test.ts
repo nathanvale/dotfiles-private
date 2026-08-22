@@ -20,7 +20,7 @@ import {
 	type SpecificationIr,
 	verifyArtifactSet,
 } from '../src/index.ts'
-import { readCandidate } from './support/candidates.ts'
+import { readCandidate, readFrozenV1Exemplar } from './support/candidates.ts'
 import { amendForEmission } from './support/emission.ts'
 import { seedLegacyArtifactSet } from './support/legacy-set.ts'
 
@@ -102,8 +102,22 @@ const ENTRY_POINTS = [
 	{ verb: 'regenerate', call: regenerateArtifactSet },
 ] as const
 
+/**
+ * A live candidate on a superseded Input Schema Version, compiled through its
+ * Registered Reader.
+ *
+ * `vault-git` resolves to the frozen v1 exemplar rather than the live vault-git
+ * candidate, which has since been re-authored against Input Schema v2. Every
+ * refusal below is about what the boundary does with superseded input, so the
+ * subject has to be superseded input; the live candidate would prove the
+ * current path instead and every refusal here would go vacuous.
+ */
 async function compiledSpike(product: 'vault-git' | 'fallow') {
-	const compiled = compileSpecificationCandidate(await readCandidate(product))
+	const source =
+		product === 'vault-git'
+			? await readFrozenV1Exemplar()
+			: await readCandidate(product)
+	const compiled = compileSpecificationCandidate(source)
 	if (!compiled.ok) throw new Error(`${product} candidate failed to compile`)
 	return compiled
 }

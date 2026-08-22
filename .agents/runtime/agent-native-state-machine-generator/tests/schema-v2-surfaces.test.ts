@@ -5,7 +5,7 @@ import {
 	EXECUTION_MODES,
 	type SpecificationIr,
 } from '../src/index.ts'
-import { readCandidate } from './support/candidates.ts'
+import { readFrozenV1Exemplar } from './support/candidates.ts'
 
 /**
  * Input Schema v2 declared surfaces (issue 55 stage-5 charter).
@@ -314,9 +314,9 @@ describe('S14: changed_state and channel reach the IR', () => {
 
 describe('the v2 surfaces stay absent for v1 input', () => {
 	test('a v1 candidate carries every new surface empty, and none invented', async () => {
-		const result = compileSpecificationCandidate(
-			await readCandidate('vault-git'),
-		)
+		// The frozen v1 exemplar is the subject: this block is about what v1
+		// input carries, and the live vault-git candidate is now v2 input.
+		const result = compileSpecificationCandidate(await readFrozenV1Exemplar())
 
 		expect(result.ok).toBe(true)
 		if (!result.ok) return
@@ -339,9 +339,7 @@ describe('the v2 surfaces stay absent for v1 input', () => {
 	})
 
 	test('v1 contextual renderings still reach the IR', async () => {
-		const result = compileSpecificationCandidate(
-			await readCandidate('vault-git'),
-		)
+		const result = compileSpecificationCandidate(await readFrozenV1Exemplar())
 
 		expect(result.ok).toBe(true)
 		if (!result.ok) return

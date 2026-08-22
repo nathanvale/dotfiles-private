@@ -3,7 +3,11 @@ import {
 	compileSpecificationCandidate,
 	SUPPORTED_INPUT_SCHEMA_VERSIONS,
 } from '../src/index.ts'
-import { readCandidate, readNegativeFixture } from './support/candidates.ts'
+import {
+	readCandidate,
+	readFrozenV1Exemplar,
+	readNegativeFixture,
+} from './support/candidates.ts'
 
 /**
  * Input Schema Version custody (issue 55, stories 51 and 52).
@@ -31,24 +35,23 @@ const DRAFT_URL = new URL(
  * literals. Recomputing them through the digest function under test would
  * prove f(x) === f(x) and nothing about byte identity.
  *
- * Pilot, fallow and draft are frozen history and do not move. The Registered
- * Reader's canonicalization is byte-frozen: a candidate on a superseded
- * Input Schema Version digests exactly as it always did. Declared-version
- * custody (worklist row W4) governs the versions the reader does not own, so
- * a v2 candidate stamps what it declares while those three stay put.
+ * Every row here is frozen history and none of them move. Pilot, fallow and
+ * draft are candidates on a superseded Input Schema Version, and the
+ * Registered Reader's canonicalization is byte-frozen, so each digests
+ * exactly as it always did.
  *
- * The vault-git identity moved exactly once, under the product owner's
- * 2026-08-22 grant permitting the spike candidate digests to move only to
- * close the bare-string target-validation fail-open. The superseded value is
- * recorded in the grant and in git history, deliberately not restated here:
- * one live literal per identity, so a search for a digest finds the pin that
- * asserts it rather than prose about a digest nothing asserts. The spike
- * declared a contextual rendering whose bare-string target no action catalog
- * declares; the compile seam checked only the array form, so it compiled and
- * derivation dropped the entry, leaving a published identifier resolving to
- * nothing. Removing that entry is what moved these bytes. A pinned identity
- * is still evidence about admitted history: this one moves only because its
- * grant is recorded, and it stays fixed again now.
+ * The `vault-git` row is the frozen v1 exemplar, not the live vault-git
+ * candidate. Those were the same file until the candidate was re-authored
+ * against Input Schema v2; the exemplar holds its pre-re-authoring bytes, so
+ * this pin still asserts the same v1 identity it always asserted, through the
+ * same Registered Reader. A pinned identity is evidence about admitted
+ * history, so the evidence stays fixed and the subject names what the
+ * evidence is actually about.
+ *
+ * The live v2 candidate is deliberately absent. It is unadmitted, and an
+ * unadmitted candidate's digest is not history to pin: it gets an identity
+ * here only if its own Specification Admission gives it one. Pinning it now
+ * would assert as settled exactly the thing admission decides.
  */
 const PINNED_DIGESTS = {
 	pilot: 'af827747fde4d30b29919fadcf55b2d3b19c3c0b6646493fc325c49664b3e99a',
@@ -70,6 +73,7 @@ function declaredVersionOf(source: string): string | undefined {
 async function sourceFor(name: keyof typeof PINNED_DIGESTS): Promise<string> {
 	if (name === 'pilot') return await Bun.file(PILOT_URL).text()
 	if (name === 'draft') return await Bun.file(DRAFT_URL).text()
+	if (name === 'vault-git') return await readFrozenV1Exemplar()
 	return await readCandidate(name)
 }
 
