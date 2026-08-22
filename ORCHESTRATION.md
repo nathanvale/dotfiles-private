@@ -29,10 +29,15 @@ all evidence; this file owns the queue, the contracts, and the pointers.
 ## Current pipeline state (2026-08-22)
 
 - Stage 5 is the active stage; stages 1 through 4 are closed (ledger).
-- UNIT AT BOUNDARY, HELD FOR NATHAN: accept or return the completed
-  re-authoring unit (consolidated packet: issue comment 5378152063).
-  Unit history, custody, review, repair and re-review below;
-  dispatched 2026-08-22 after the pre-launch hold reconciliation.
+- UNIT ACCEPTED (Nathan, 2026-08-22), COMMITTED, HELD UNMERGED: unit
+  commit 9d1e91e on feat/issue-55-vault-git-candidate, parent a7fd5c6,
+  exactly the two fixture files; git diff a7fd5c6 9d1e91e reproduces
+  the frozen reviewed hash 42b86bec.. byte for byte, and the recompiled
+  digest after the commit is 6cc10a52.. on both files, UNADMITTED.
+  Full custody record and archived evidence:
+  receipts/vault-git-candidate/ (archive commit 39dd4d5; packet issue
+  comment 5378152063). Unit history below; dispatched 2026-08-22 after
+  the pre-launch hold reconciliation.
   Worker: one claude background session "issue-55 vault-git candidate
   re-author", short ID 2add7804, session
   2add7804-f573-4bcd-ad2a-db994ddc68ec, cwd
@@ -166,10 +171,10 @@ all evidence; this file owns the queue, the contracts, and the pointers.
   unit, digest-neutral. Also recorded: the repair handback's
   canonical-length prose slip (51374 versus observed 29911, with the
   load-bearing equality claims verifying) and the REPAIR-BRIEF's own
-  stale step-2 sentence, superseded by the R2 amendment. Acceptance is
-  Nathan's current decision; unit commit and merge stay closed until
-  he answers and the test-custody follow-up closes the 20 enumerated
-  failures. Last merges: facade
+  stale step-2 sentence, superseded by the R2 amendment. Nathan
+  accepted 2026-08-22; the merge stays closed until the test-custody
+  follow-up closes the 20 enumerated failures and the full gate runs
+  green under the review contract. Last merges: facade
   dual
   coverage and cli-author dual-coverage teaching (merge commits e787db0
   and dbe8679, linearized off the lineage by Nathan's 2026-08-22 VS
@@ -195,25 +200,23 @@ all evidence; this file owns the queue, the contracts, and the pointers.
 
 ## Nathan decision state
 
-ONE CURRENT DECISION (2026-08-22): accept or return the completed
-re-authoring unit, held at its review boundary (evidence in the unit
-bullet above; consolidated packet in issue comment 5378152063; the
-grant it consumed was answered YES in comment 5377730080 and corrected
-in 5377751430). Queued next grants, in order, not co-equal asks: the
-test-custody follow-up unit (the 20 enumerated identity-move failures
-plus the stale spike-candidates README and package AGENTS.md v1
-framing; the merge of this unit waits on it), then the Input Schema
-shape decision for the two surviving derivation gaps. The auditor
-output proposal below stays parked. Formal qualification stays blocked
-until both legs are ready: the candidate path through its own later
-Specification Admission, and truthful auditor output.
+ACCEPT RECORDED (Nathan, 2026-08-22): the re-authoring unit is
+accepted, committed as 9d1e91e on its unit branch, and held unmerged;
+the acceptance authorized nothing else. ONE CURRENT DECISION: authorize
+or defer the test-custody follow-up unit (the 20 enumerated
+identity-move failures, receipts/vault-git-candidate/ handback section
+7, plus the stale spike-candidates README and package AGENTS.md v1
+framing; the merge of the accepted unit waits on it). Queued after it,
+not a co-equal ask: the Input Schema shape decision for the two
+surviving derivation gaps. The auditor output proposal below stays
+parked. Formal qualification stays blocked until both legs are ready:
+the candidate path through its own later Specification Admission, and
+truthful auditor output.
 
 ## Next safe supervisor action
 
-Await Nathan's accept-or-return answer. On accept: commit the unit work
-on its branch and hold it unmerged pending the test-custody follow-up
-grant and a green full gate. Reconcile owners and answer questions;
-nothing more.
+Present or await Nathan's authorize-or-defer answer on the test-custody
+follow-up unit. Reconcile owners and answer questions; nothing more.
 
 ## Dispatch boundary
 
