@@ -134,6 +134,15 @@ const LOCKFILE_STALE_AFTER_MS = 10_000;
 /** The epoch record starts here when the file is absent. */
 const INITIAL_ACTIVATION_EPOCH = 1;
 
+// The activation epoch is the one global cross-process admission seam. A
+// fresh peer may briefly own it while committing a different narrow record.
+// The explicit 1,000 ms total is far below the 10 s stale-lock threshold and
+// inside the 15 s process-boundary deadline, while allowing scheduler and
+// fsync tails for the brief epoch plus registry transaction. Retry remains
+// isolated here; withExclusiveFileLock stays fail-fast for every other caller.
+const ACTIVATION_BARRIER_RETRY_DELAYS_MS = [25, 50, 100, 150, 200, 225, 250] as const;
+const ACTIVATION_BARRIER_RETRY_TOTAL_MS = 1_000;
+
 // Same-process callers for one admitted store queue before taking its
 // cross-process epoch lock. Independent roots retain independent concurrency.
 const activationBarrierTails = new Map<string, Promise<void>>();
@@ -291,6 +300,37 @@ function isLockFailure<T extends { ok: boolean }>(
 	outcome: T | { ok: false; failure: StoreFailure },
 ): outcome is { ok: false; failure: StoreFailure } {
 	return !outcome.ok && "failure" in outcome;
+}
+
+function isFreshActivationBarrierContention(
+	outcome: { ok: false; failure: StoreFailure },
+): boolean {
+	return (
+		outcome.failure.code === "store_lock_contended" &&
+		outcome.failure.message.startsWith("lock is held by another writer")
+	);
+}
+
+type ActivationEpochBarrierBodyResult<T> = {
+	kind: "body";
+	result: T;
+};
+
+type ActivationEpochBarrierOuterFailure = {
+	kind: "outer-failure";
+	failure: StoreFailure;
+};
+
+function isActivationEpochBarrierOuterFailure<T>(
+	outcome:
+		| ActivationEpochBarrierBodyResult<T>
+		| { ok: false; failure: StoreFailure },
+): outcome is { ok: false; failure: StoreFailure } {
+	return "failure" in outcome;
+}
+
+async function waitForActivationBarrierRetry(delayMs: number): Promise<void> {
+	await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
 }
 
 // --- Lease record path -------------------------------------------------------
@@ -680,21 +720,43 @@ export async function withActivationEpochBarrier<T extends { ok: boolean }>(
 	if (!dirs.ok) {
 		return { ok: false, code: "epoch_store_failed", message: dirs.message };
 	}
-	const outcome = await withLocalActivationBarrier(
+	const outcome: ActivationEpochBarrierBodyResult<T> | ActivationEpochBarrierOuterFailure =
+		await withLocalActivationBarrier(
 		epochLockPath(deps.paths),
-		async () =>
-			await withExclusiveFileLock<T>(
-				deps.fs,
-				{
-					lockPath: epochLockPath(deps.paths),
-					holderId: input.holderId,
-					staleAfterMs: LOCKFILE_STALE_AFTER_MS,
-					clock: deps.clock,
+		async (): Promise<
+			ActivationEpochBarrierBodyResult<T> | ActivationEpochBarrierOuterFailure
+		> => {
+			for (const delayMs of [0, ...ACTIVATION_BARRIER_RETRY_DELAYS_MS]) {
+				if (delayMs > 0) await waitForActivationBarrierRetry(delayMs);
+				const attempt = await withExclusiveFileLock<
+					ActivationEpochBarrierBodyResult<T>
+				>(
+					deps.fs,
+					{
+						lockPath: epochLockPath(deps.paths),
+						holderId: input.holderId,
+						staleAfterMs: LOCKFILE_STALE_AFTER_MS,
+						clock: deps.clock,
+					},
+					async () => ({ kind: "body", result: await body() }),
+				);
+				if (!isActivationEpochBarrierOuterFailure(attempt)) {
+					return { kind: "body", result: attempt.result };
+				}
+				if (!isFreshActivationBarrierContention(attempt)) {
+					return { kind: "outer-failure", failure: attempt.failure };
+				}
+			}
+			return {
+				kind: "outer-failure",
+				failure: {
+					code: "store_lock_contended" as const,
+					message: `activation epoch lock remained freshly contended across the ${ACTIVATION_BARRIER_RETRY_TOTAL_MS} ms bounded retry policy.`,
 				},
-				body,
-			),
+			};
+		},
 	);
-	if (isLockFailure(outcome)) {
+	if (outcome.kind === "outer-failure") {
 		return {
 			ok: false,
 			code: "epoch_store_failed",
@@ -703,7 +765,7 @@ export async function withActivationEpochBarrier<T extends { ok: boolean }>(
 			),
 		};
 	}
-	return outcome;
+	return outcome.result;
 }
 
 /**

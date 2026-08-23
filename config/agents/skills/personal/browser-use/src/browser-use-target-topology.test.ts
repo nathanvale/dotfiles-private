@@ -153,9 +153,9 @@ function topologyHarness(
 			}
 			await overlay.fs.syncDirectory(path);
 		},
-		async createExclusive(path: string, contents: string, mode: number) {
-			await overlay.fs.createExclusive(path, contents, mode);
-			if (path === `${STATE_PATH}.lock` && stateLockMutation !== undefined) {
+		async linkFileNoReplace(existingPath: string, newPath: string) {
+			await overlay.fs.linkFileNoReplace(existingPath, newPath);
+			if (newPath === `${STATE_PATH}.lock` && stateLockMutation !== undefined) {
 				const mutate = stateLockMutation;
 				stateLockMutation = undefined;
 				mutate();

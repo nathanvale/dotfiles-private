@@ -50,6 +50,14 @@ import {
 	SAFE_TAB_ID,
 } from "./browser-use-identifiers";
 import { safeJsonObject, isJsonObject, type RawPage } from "./browser-use-core";
+import { targetOperationPlanMatchesBoundOrigin } from "./browser-use-target-operations";
+import type {
+	BrowserUseTargetOperationAdapterRequest,
+	BrowserUseTargetOperationCleanupMethod,
+	BrowserUseTargetOperationResult,
+	BrowserUseTargetOperationStep,
+	BrowserUseTargetOperationStepOutcome,
+} from "./browser-use-target-operations";
 
 const HANDOFF_CONTRACT_ID = "browser-connect.verified-handoff";
 const HANDOFF_SCHEMA_VERSION = "2";
@@ -243,6 +251,7 @@ export async function runAgentBrowserTargetTopology(input: {
 			return undefined;
 		}
 	};
+
 	const data = await invoke(nativeArgs);
 	if (data === undefined) return { ok: false, code: "agent_browser_topology_unconfirmed" };
 	if (input.action.kind === "create") return { ok: true, kind: "create", data };
@@ -286,6 +295,225 @@ export async function runAgentBrowserTargetTopology(input: {
 		});
 	}
 	return { ok: true, kind: "list", tabs };
+}
+
+function targetPlanFailure(
+	request: BrowserUseTargetOperationAdapterRequest,
+	code:
+		| "target_operation_plan_failed"
+		| "target_operation_plan_unsupported"
+		| "target_operation_cleanup_incomplete"
+		| "target_operation_origin_mismatch",
+	message: string,
+	steps: readonly BrowserUseTargetOperationStepOutcome[] = [],
+	cleanup = { attempted: false, closed: false, visible_owned_surface_count: 0 },
+): BrowserUseTargetOperationResult {
+	return {
+		ok: false,
+		code,
+		message,
+		scope: "target-local",
+		focus: false,
+		capability_id: "agent-browser.exact-target-no-focus.v1",
+		plan_digest: request.plan_digest,
+		steps,
+		cleanup,
+	};
+}
+
+function planEnvelopeData(stdout: string): unknown | undefined {
+	const envelope = safeJsonObject(stdout);
+	return envelope?.success === true ? envelope.data : undefined;
+}
+
+function planObservationDigest(value: unknown): string {
+	return createHash("sha256").update(JSON.stringify(value) ?? "null").digest("hex");
+}
+
+function visibleValue(value: unknown): boolean | undefined {
+	if (!isJsonObject(value)) return undefined;
+	if (typeof value.value === "boolean") return value.value;
+	if (typeof value.visible === "boolean") return value.visible;
+	return undefined;
+}
+
+/**
+ * Execute the adapter-neutral target plan while retaining the exact pinned
+ * target proof. Native argv and response parsing stay entirely in this module;
+ * the generic operation receipt only receives neutral step outcomes.
+ */
+export async function runAgentBrowserTargetOperationPlan(
+	request: BrowserUseTargetOperationAdapterRequest,
+): Promise<BrowserUseTargetOperationResult> {
+	if (!SAFE_RUN_ID.test(request.handoff.run_id) || !SAFE_TAB_ID.test(request.target_id)) {
+		return targetPlanFailure(request, "target_operation_plan_failed", "The target operation identity is unsafe.");
+	}
+	if (request.lifecycle_ref !== deriveSessionName(request.handoff.run_id)) {
+		return targetPlanFailure(request, "target_operation_plan_failed", "The retained exact-target lifecycle does not match the run.");
+	}
+	if (
+		request.bound_origin !== undefined &&
+		!targetOperationPlanMatchesBoundOrigin(request.plan, request.bound_origin)
+	) {
+		return targetPlanFailure(
+			request,
+			"target_operation_origin_mismatch",
+			"The target plan navigation does not match the exact bound target origin.",
+		);
+	}
+	const native = async (args: readonly string[]) => {
+		try {
+			const result = await request.runtime.runCommand({
+				command: request.handoff.executable,
+				args: [
+					"--cdp",
+					request.handoff.endpoint_ws,
+					"--session",
+					deriveSessionName(request.handoff.run_id),
+					"--pin-tab",
+					...args,
+					"--json",
+				],
+				timeoutMs: COMMAND_TIMEOUT_MS,
+			});
+			if (result.timedOut === true || result.exitCode !== 0) return undefined;
+			return { result, data: planEnvelopeData(result.stdout) };
+		} catch {
+			return undefined;
+		}
+	};
+	const boundOrigin = request.bound_origin ?? (() => {
+		try {
+			return new URL(request.expected_url).origin;
+		} catch {
+			return undefined;
+		}
+	})();
+	const proveExactTarget = async (expectedUrl?: string): Promise<boolean> => {
+		if (boundOrigin === undefined) return false;
+		const pinned = await native(["tab", "list"]);
+		const pinnedData = pinned && isJsonObject(pinned.data) ? pinned.data : undefined;
+		const tabs = pinnedData && Array.isArray(pinnedData.tabs) ? pinnedData.tabs : undefined;
+		const active = tabs?.filter(
+			(tab) => isJsonObject(tab) && tab.active === true && tab.targetId === request.target_id,
+		);
+		if (active === undefined || active.length !== 1) return false;
+		const urlProof = await native(["get", "url"]);
+		const urlData = urlProof && isJsonObject(urlProof.data) ? urlProof.data : undefined;
+		if (!urlData || typeof urlData.url !== "string") return false;
+		try {
+			return new URL(urlData.url).origin === boundOrigin &&
+				(expectedUrl === undefined || urlData.url === expectedUrl);
+		} catch {
+			return false;
+		}
+	};
+	if (!(await proveExactTarget(request.expected_url))) {
+		return targetPlanFailure(request, "target_operation_plan_failed", "The exact target and bound origin proof failed.");
+	}
+	const outcomes: BrowserUseTargetOperationStepOutcome[] = [];
+	let cleanup: { attempted: boolean; closed: boolean; method?: BrowserUseTargetOperationCleanupMethod; visible_owned_surface_count: number } = {
+		attempted: false,
+		closed: false,
+		visible_owned_surface_count: 0,
+	};
+	for (let index = 0; index < request.plan.steps.length; index += 1) {
+		const step = request.plan.steps[index];
+		if (request.assert_custody !== undefined) {
+			const custody = await request.assert_custody();
+			if (!custody.ok) {
+				return targetPlanFailure(
+					request,
+					"target_operation_plan_failed",
+					custody.message ?? "The exact Target Operation Lease is no longer live.",
+					outcomes,
+					cleanup,
+				);
+			}
+		}
+		let args: string[] | undefined;
+		if (step.kind === "navigate") args = ["open", step.url];
+		else if (step.kind === "inspect") {
+			if (step.fields.some((field) => field === "focus" || field === "scroll")) {
+				return targetPlanFailure(request, "target_operation_plan_unsupported", "Agent Browser cannot truthfully observe the requested focus or scroll field.", outcomes, cleanup);
+			}
+			const observations: unknown[] = [];
+			for (const field of step.fields) {
+				const inspectArgs = field === "catalogue" ? ["snapshot", "-i"]
+					: field === "dom" ? ["get", "html", step.selector]
+					: field === "geometry" ? ["get", "box", step.selector]
+					: field === "computed-styles" ? ["get", "styles", step.selector]
+					: ["is", "visible", step.selector];
+				const inspected = await native(inspectArgs);
+				if (inspected === undefined) return targetPlanFailure(request, "target_operation_plan_failed", "A typed inspection failed.", outcomes, cleanup);
+				observations.push(inspected.data);
+			}
+			outcomes.push({ index, kind: step.kind, status: "confirmed", observation_digest: planObservationDigest(observations) });
+			continue;
+		}
+		else if (step.kind === "review-state") {
+			args = step.state === "hover" ? ["hover", step.selector]
+				: step.state === "focus" ? ["focus", step.selector]
+				: undefined;
+			if (args === undefined) return targetPlanFailure(request, "target_operation_plan_unsupported", `Agent Browser cannot truthfully establish the ${step.state} review state.`, outcomes, cleanup);
+		}
+		else if (step.kind === "input") {
+			args = step.action === "move" ? ["mouse", "move", String(step.x ?? 0), String(step.y ?? 0)]
+				: step.action === "click" ? ["click", step.selector ?? ""]
+				: step.action === "focus" ? ["focus", step.selector ?? ""]
+				: step.action === "scroll" ? undefined
+				: step.action === "release" ? ["mouse", "up"]
+				: ["press", step.key ?? ""];
+			if (args === undefined) return targetPlanFailure(request, "target_operation_plan_unsupported", "Agent Browser cannot truthfully express a numeric scroll delta.", outcomes, cleanup);
+		}
+		else {
+			cleanup = { attempted: true, closed: false, method: step.method, visible_owned_surface_count: 0 };
+			if (step.method !== "close-control" || step.selector === undefined) {
+				return targetPlanFailure(request, "target_operation_plan_unsupported", "Only selector-bound close-control cleanup has a provable owned surface.", outcomes, cleanup);
+			}
+			const countResult = await native(["count", step.selector]);
+			const countData = countResult && isJsonObject(countResult.data) ? countResult.data : undefined;
+			const count = countData && typeof countData.count === "number"
+				? countData.count
+				: countData && typeof countData.value === "number"
+					? countData.value
+					: undefined;
+			if (count !== 1) return targetPlanFailure(request, "target_operation_cleanup_incomplete", "The cleanup selector did not prove exactly one owned surface.", outcomes, cleanup);
+			const before = await native(["is", "visible", step.selector]);
+			const beforeVisible = before ? visibleValue(before.data) : undefined;
+			if (beforeVisible !== true) return targetPlanFailure(request, "target_operation_cleanup_incomplete", "The owned overlay surface was not uniquely visible before cleanup.", outcomes, cleanup);
+			cleanup.visible_owned_surface_count = 1;
+			const closed = await native(["click", step.selector]);
+			if (closed === undefined || !(await proveExactTarget())) {
+				if (closed !== undefined) {
+					outcomes.push({ index, kind: step.kind, status: "unknown", effect: "possibly-effectful" });
+				}
+				return targetPlanFailure(request, "target_operation_plan_failed", "Cleanup changed or lost the exact target or bound origin before confirmation.", outcomes, cleanup);
+			}
+			const after = await native(["is", "visible", step.selector]);
+			const afterVisible = after ? visibleValue(after.data) : undefined;
+			cleanup.closed = afterVisible === false;
+			if (!cleanup.closed) return targetPlanFailure(request, "target_operation_cleanup_incomplete", "The owned overlay surface did not prove closed.", outcomes, cleanup);
+			outcomes.push({ index, kind: step.kind, status: "confirmed" });
+			continue;
+		}
+		const result = await native(args);
+		if (result === undefined) return targetPlanFailure(request, "target_operation_plan_failed", "A typed target operation failed.", outcomes, cleanup);
+		if (!(await proveExactTarget(step.kind === "navigate" ? step.url : undefined))) {
+			outcomes.push({ index, kind: step.kind, status: "unknown", effect: "possibly-effectful" });
+			return targetPlanFailure(request, "target_operation_plan_failed", "The action changed or lost the exact target or bound origin before confirmation.", outcomes, cleanup);
+		}
+		outcomes.push({ index, kind: step.kind, status: "confirmed", observation_digest: planObservationDigest(result.data) });
+	}
+	return {
+		ok: true,
+		scope: "target-local",
+		focus: false,
+		capability_id: "agent-browser.exact-target-no-focus.v1",
+		plan_digest: request.plan_digest,
+		steps: outcomes,
+		cleanup,
+	};
 }
 
 function operationFailure(

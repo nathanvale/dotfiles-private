@@ -10177,5 +10177,5 @@ export const __confidentialDeliveryDriverForTest = {
 
 if (import.meta.main) {
 	const exitCode = await runBrowserUseCli(Bun.argv.slice(2));
-	process.exit(exitCode);
+	process.exitCode = exitCode;
 }

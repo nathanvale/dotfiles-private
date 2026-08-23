@@ -19,7 +19,7 @@ import type { AdapterCapability } from "./discovery-model";
 // Browser Operation classes authorized by route evidence (U2 R10, R11). Each
 // class maps to a routed capability; an operation is authorized only when its
 // capability is present in the route's authorized capability set.
-export type BrowserOperationClass = "snapshot" | "screenshot" | "emulate";
+export type BrowserOperationClass = "snapshot" | "screenshot" | "emulate" | "target";
 
 // ---------------------------------------------------------------------------
 // Operation capability mapping (U2 R10, R11). Each Browser Operation class
@@ -32,6 +32,7 @@ export const OPERATION_CLASS_CAPABILITY = {
 	snapshot: "snapshot_refs",
 	screenshot: "screenshot_media",
 	emulate: "viewport_emulation",
+	target: "element_actions",
 } as const satisfies Record<BrowserOperationClass, AdapterCapability>;
 
 export function authorizesOperationClass(

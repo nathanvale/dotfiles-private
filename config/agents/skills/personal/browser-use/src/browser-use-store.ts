@@ -25,6 +25,7 @@
 // per-process counter (the writeStateFileAtomically precedent).
 // ---------------------------------------------------------------------------
 
+import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 import { redactUnsafeText } from "./browser-use-core";
 import type { BrowserUsePlatformFs } from "./browser-use-paths";
@@ -48,10 +49,12 @@ const PRIVATE_FILE_MODE = 0o600;
 
 /** Temp-sibling suffix shape: `.tmp-<pid>-<seq>` (no randomness, no clock). */
 const TEMP_SUFFIX_PATTERN = /\.tmp-\d+-\d+$/;
+const PUBLISH_STAGE_SUFFIX_PATTERN = /\.publish-\d+-\d+-[a-f0-9]{32}$/;
 
 // Per-process monotonic sequence so concurrent writers in one process never
 // collide on a temp sibling; pid separates processes.
 let tempSequence = 0;
+const activePublishStages = new Set<string>();
 
 function storeFailure(
 	code: StoreFailure["code"],
@@ -282,16 +285,32 @@ async function acquireLockFile(
 			acquired_at_epoch_ms: input.clock(),
 			nonce,
 		})}\n`;
+		// Publish a fully flushed private sibling with a no-replace link. Unlike
+		// createExclusive, the public lock pathname never names a partially
+		// written file, so a concurrent stale-reclaimer cannot unlink an active
+		// publisher during its content/fsync window.
+		const publicationPath = `${input.lockPath}.publish-${process.pid}-${lockSequence}-${randomUUID().replaceAll("-", "")}`;
+		activePublishStages.add(publicationPath);
+		let publicationError: unknown;
 		try {
-			await fs.createExclusive(input.lockPath, contents, PRIVATE_FILE_MODE);
+			// Retain the historical exclusive-create write port for lock content,
+			// but apply it only to the private staging sibling. Callers' durable
+			// record write/fault seams therefore remain attached to their own
+			// record, while the public lock name is still published atomically.
+			await fs.createExclusive(publicationPath, contents, PRIVATE_FILE_MODE);
+			await fs.linkFileNoReplace(publicationPath, input.lockPath);
 			return { ok: true, nonce };
 		} catch (error) {
-			if (errorCode(error) !== "EEXIST") {
-				return storeFailure(
-					"store_flush_failed",
-					`lock file creation failed (${errorCode(error)}).`,
-				);
-			}
+			publicationError = error;
+		} finally {
+			activePublishStages.delete(publicationPath);
+			await unlinkBestEffort(fs, publicationPath);
+		}
+		if (errorCode(publicationError) !== "EEXIST") {
+			return storeFailure(
+				"store_flush_failed",
+				`lock file publication failed (${errorCode(publicationError)}).`,
+			);
 		}
 		if (attempt === 1) break;
 		const holder = await probeLockHolder(
@@ -577,7 +596,11 @@ export async function listOrphanTempFiles(
 				pending.push(entryPath);
 				continue;
 			}
-			if (stat.kind === "file" && TEMP_SUFFIX_PATTERN.test(entry)) {
+			if (
+				stat.kind === "file" &&
+				(TEMP_SUFFIX_PATTERN.test(entry) || PUBLISH_STAGE_SUFFIX_PATTERN.test(entry)) &&
+				!activePublishStages.has(entryPath)
+			) {
 				orphans.push(entryPath);
 			}
 		}

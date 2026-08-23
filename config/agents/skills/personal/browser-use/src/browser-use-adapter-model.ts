@@ -12,6 +12,10 @@
 // ---------------------------------------------------------------------------
 
 import { createHash } from "node:crypto";
+import type {
+	BrowserUseTargetOperationAdapterRequest,
+	BrowserUseTargetOperationResult,
+} from "./browser-use-target-operations";
 
 // Lane identity axis (R3): the envelope's attachment.adapter_id verbatim.
 // discovery-model re-exports this as BROWSER_USE_LIVE_ADAPTERS — one adapter
@@ -146,6 +150,10 @@ export type BrowserUseExactTargetOperationCapability = {
 		lifecycle_prepared: boolean;
 		retain_lifecycle: boolean;
 	}): Promise<BrowserUseExactTargetOperationResult>;
+	/** Execute a validated, target-local, adapter-neutral typed plan. */
+	runTargetPlan?: (
+		request: BrowserUseTargetOperationAdapterRequest,
+	) => Promise<BrowserUseTargetOperationResult>;
 };
 
 // Resolved identity drift (R3): these ids circulated in earlier vocabularies

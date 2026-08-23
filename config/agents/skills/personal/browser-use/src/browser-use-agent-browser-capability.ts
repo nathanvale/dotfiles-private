@@ -1,5 +1,6 @@
 import {
 	runAgentBrowserOperation,
+	runAgentBrowserTargetOperationPlan,
 	runAgentBrowserTargetTopology,
 	isAgentBrowserPinnedSessionForRun,
 } from "./browser-use-agent-browser";
@@ -119,6 +120,8 @@ export const exactTargetCapabilitiesForPrimaryLane: {
 							: "operation-failed",
 			};
 		},
+		runTargetPlan: async (request) =>
+			runAgentBrowserTargetOperationPlan(request),
 	},
 };
 

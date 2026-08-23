@@ -442,6 +442,7 @@ export const BROWSER_USE_OPERATE_SUBCOMMANDS = [
 	"snapshot",
 	"screenshot",
 	"emulate",
+	"target",
 ] as const;
 export type BrowserUseOperateSubcommand =
 	(typeof BROWSER_USE_OPERATE_SUBCOMMANDS)[number];
@@ -648,6 +649,7 @@ export type BrowserUseCommand =
 	| "operate-snapshot"
 	| "operate-screenshot"
 	| "operate-emulate"
+	| "operate-target"
 	| "task-list"
 	| "task-run"
 	| "lanes-list"
@@ -733,6 +735,11 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"browser_operation_target_no_match",
 	"browser_operation_target_missing",
 	"browser_operation_target_moved",
+	"browser_operation_target_plan_invalid",
+	"browser_operation_target_plan_failed",
+	"browser_operation_target_plan_unsupported",
+	"browser_operation_target_cleanup_incomplete",
+	"browser_operation_target_origin_mismatch",
 	// Browser Target Discovery (U5, evidence re-based on the Verified Handoff
 	// Envelope in migration U1). Distinct codes so empty / mismatched-evidence /
 	// missing-evidence outcomes each map to their own recovery, never to a wrong
@@ -1399,6 +1406,14 @@ const browserUseOperateCommonFlags = {
 } as const satisfies BrowserUseCommandContract["flags"];
 
 const browserUseSnapshotFlags = {
+	...browserUseOperateCommonFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseTargetOperationFlags = {
+	"--plan": {
+		type: "path",
+		description: "Private structured target-operation plan file.",
+	},
 	...browserUseOperateCommonFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
@@ -2450,6 +2465,28 @@ export const browserUseContracts = defineCommandFacadeContract(
 				failure: browserUseOperationFailureActions,
 			},
 			flags: browserUseEmulateFlags,
+			exitCodes: browserUseExitCodes,
+		},
+		"operate-target": {
+			script: "browser-use",
+			summary:
+				"Execute a bounded adapter-neutral target-local operation plan against the exact resolved Browser Target.",
+			usage: [
+				"operate target --plan <path> [--origin <origin>] [--state <path>] [--handoff <path>] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "browser",
+			sideEffects: ["check", "browser", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason: "Target-local plan validates binding and executes only typed adapter-owned steps.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUseOperationStateEnvVars,
+			resultContract: browserUseOperationResultContract,
+			flags: browserUseTargetOperationFlags,
 			exitCodes: browserUseExitCodes,
 		},
 		"task-list": {

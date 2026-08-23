@@ -76,9 +76,7 @@ if (import.meta.main) {
 		delete process.env[name];
 	}
 	const { runBrowserUseFrontDoor } = await import("./browser-use-qualification-wrapper");
-	process.exit(
-		await runBrowserUseFrontDoor(Bun.argv.slice(2), {
-			wrapperPath: import.meta.path,
-		}),
-	);
+	process.exitCode = await runBrowserUseFrontDoor(Bun.argv.slice(2), {
+		wrapperPath: import.meta.path,
+	});
 }

@@ -1,5 +1,15 @@
 import { describe, expect, test } from "bun:test";
 import {
+	existsSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
 	acquireBrowserLaneLease,
 	acquireTargetOperationLease,
 	browserAuthorityIdOf,
@@ -19,6 +29,7 @@ import {
 	acquireLease,
 	leaseRecordPath,
 	releaseLease,
+	withActivationEpochBarrier,
 } from "./browser-use-locks";
 import {
 	createDefaultPlatformFs,
@@ -117,6 +128,358 @@ const AUTHORITY = browserAuthorityIdOf({
 	environmentProfile: "default",
 	endpointHttp: "http://127.0.0.1:9242",
 	endpointWs: "ws://127.0.0.1:9242/devtools/browser/authority-a",
+});
+
+const PROCESS_AUTHORITY_ID =
+	"9b5c5cc60a2287adf6c93a0c32a4b4c3129b221c9bc242236e04e426ee8f62e8";
+const PROCESS_TARGET_REFS = {
+	alpha: "62b2ff88ecaded3b474e84521b2ebf7d2973bafa78516feb9277f28b41782941",
+	beta: "085a1f7015b32fcec44ed6948ffd83da6bb03a5ed9ff0428f86277e5f898262c",
+} as const;
+
+const PROCESS_CUSTODY_CHILD = `
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
+import { createDefaultPlatformFs, openBrowserUsePaths } from ${JSON.stringify(
+	join(import.meta.dir, "browser-use-paths.ts"),
+)};
+import { acquireBrowserLaneLease, acquireTargetOperationLease } from ${JSON.stringify(
+	join(import.meta.dir, "browser-use-browser-custody.ts"),
+)};
+
+const [mode, authorityId, runId, rawTargetId] = process.argv.slice(2);
+const opened = await openBrowserUsePaths(createDefaultPlatformFs(), process.env);
+if (!opened.ok) throw new Error("child paths refused");
+const realFs = createDefaultPlatformFs();
+const signal = process.env.BROWSER_USE_TEST_SIGNAL;
+const release = process.env.BROWSER_USE_TEST_RELEASE;
+const attempt = process.env.BROWSER_USE_TEST_ATTEMPT;
+let held = false;
+const fs = {
+	...realFs,
+	async linkFileNoReplace(existingPath, newPath) {
+		try {
+			await realFs.linkFileNoReplace(existingPath, newPath);
+		} catch (error) {
+			if (attempt && newPath.endsWith("activation-epoch.lock")) {
+				appendFileSync(attempt, "activation lock was contended\\n");
+			}
+			throw error;
+		}
+		if (!held && signal && release && newPath.endsWith("activation-epoch.lock")) {
+			held = true;
+			writeFileSync(signal, "activation transaction entered");
+			while (!existsSync(release)) await Bun.sleep(5);
+		}
+	},
+};
+const deps = { fs, paths: opened.paths, clock: () => 1_000 };
+const result = mode === "target"
+	? await acquireTargetOperationLease(deps, {
+		authorityId,
+		runId,
+		adapterId: "agent-browser",
+		rawTargetId,
+		operation: "read",
+		ttlMs: 30_000,
+		ownershipEvidence: {
+			kind: "adapter-creation-receipt",
+			adapter_id: "agent-browser",
+			run_id: runId,
+			raw_target_id: rawTargetId,
+		},
+	})
+	: await acquireBrowserLaneLease(deps, {
+		authorityId,
+		runId,
+		mutation: "domain-policy",
+		ttlMs: 30_000,
+	});
+process.stdout.write(JSON.stringify(result));
+`;
+
+async function waitForProcessMarker(path: string): Promise<void> {
+	for (let elapsedMs = 0; elapsedMs < 5_000; elapsedMs += 10) {
+		if (existsSync(path)) return;
+		await Bun.sleep(10);
+	}
+	throw new Error(`timed out waiting for child marker ${path}`);
+}
+
+function privateChildEnv(env: Record<string, string | undefined>): Record<string, string> {
+	const required = [
+		"HOME",
+		"XDG_CONFIG_HOME",
+		"XDG_DATA_HOME",
+		"XDG_STATE_HOME",
+		"XDG_CACHE_HOME",
+	] as const;
+	const result: Record<string, string> = {};
+	for (const name of required) {
+		const value = env[name];
+		if (value === undefined) throw new Error(`missing test environment ${name}`);
+		result[name] = value;
+	}
+	return result;
+}
+
+async function childResult(
+	child: ReturnType<typeof Bun.spawn>,
+): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+	if (!(child.stdout instanceof ReadableStream)) {
+		throw new Error("child stdout was not piped");
+	}
+	if (!(child.stderr instanceof ReadableStream)) {
+		throw new Error("child stderr was not piped");
+	}
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(child.stdout).text(),
+		new Response(child.stderr).text(),
+		child.exited,
+	]);
+	return { exitCode, stdout, stderr };
+}
+
+async function awaitChildExitAfterRelease(
+	child: ReturnType<typeof Bun.spawn> | undefined,
+	release: string,
+): Promise<void> {
+	if (child === undefined) return;
+	if (!existsSync(release)) writeFileSync(release, "release", "utf8");
+	const exited = await Promise.race([
+		child.exited.then(() => true),
+		Bun.sleep(1_000).then(() => false),
+	]);
+	if (exited) return;
+	child.kill();
+	const terminated = await Promise.race([
+		child.exited.then(() => true),
+		Bun.sleep(1_000).then(() => false),
+	]);
+	if (terminated) return;
+	child.kill("SIGKILL");
+	await child.exited;
+}
+
+async function runProcessCustodyRace(
+	mode: "target" | "lane",
+	input: { releaseAfterMs?: number } = {},
+) {
+	const xdg = makeTempXdgEnv();
+	const root = mkdtempSync(join(tmpdir(), "browser-use-process-custody-"));
+	const script = join(root, "child.ts");
+	const signal = join(root, "a-entered");
+	const release = join(root, "release-a");
+	const attempt = join(root, "b-contended");
+	writeFileSync(script, PROCESS_CUSTODY_CHILD, "utf8");
+	let first: ReturnType<typeof Bun.spawn> | undefined;
+	let second: ReturnType<typeof Bun.spawn> | undefined;
+	const childResults: Array<
+		Promise<{ exitCode: number; stdout: string; stderr: string }>
+	> = [];
+	try {
+		const baseEnv = privateChildEnv(xdg.env);
+		first = Bun.spawn(
+			[process.execPath, script, mode, PROCESS_AUTHORITY_ID, "Run-Alpha", "process-target-alpha"],
+			{
+				env: { ...baseEnv, BROWSER_USE_TEST_SIGNAL: signal, BROWSER_USE_TEST_RELEASE: release },
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		childResults.push(childResult(first));
+		await waitForProcessMarker(signal);
+		second = Bun.spawn(
+			[process.execPath, script, mode, PROCESS_AUTHORITY_ID, "Run-Beta", "process-target-beta"],
+			{
+				env: { ...baseEnv, BROWSER_USE_TEST_ATTEMPT: attempt },
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		childResults.push(childResult(second));
+		await waitForProcessMarker(attempt);
+		if (input.releaseAfterMs !== undefined) {
+			await Bun.sleep(input.releaseAfterMs);
+		}
+		writeFileSync(release, "release", "utf8");
+		const settledResults = await Promise.allSettled(childResults);
+		const rejected = settledResults.filter(
+			(outcome): outcome is PromiseRejectedResult => outcome.status === "rejected",
+		);
+		if (rejected.length > 0) {
+			throw new AggregateError(
+				rejected.map((outcome) => outcome.reason),
+				"custody child process result failed",
+			);
+		}
+		if (settledResults.length !== 2) {
+			throw new Error("custody child process cardinality was not two");
+		}
+		const [firstResult, secondResult] = settledResults.map((outcome) => {
+			if (outcome.status !== "fulfilled") {
+				throw new Error("settled custody child result was unexpectedly rejected");
+			}
+			return outcome.value;
+		});
+		const stateRoot = xdg.env.XDG_STATE_HOME;
+		if (stateRoot === undefined) throw new Error("missing test state root");
+		const registryPath = join(
+			stateRoot,
+			"browser-use",
+			"browser-custody",
+			"registry.json",
+		);
+		const leasesDir = join(stateRoot, "browser-use", "leases");
+		return {
+			firstResult,
+			secondResult,
+			registryRaw: existsSync(registryPath)
+				? readFileSync(registryPath, "utf8")
+				: undefined,
+			stateEntries: readdirSync(stateRoot),
+			contentionAttempts: readFileSync(attempt, "utf8")
+				.trim()
+				.split("\n")
+				.filter((entry) => entry !== "").length,
+			leaseRaws: (existsSync(leasesDir) ? readdirSync(leasesDir) : []).map(
+				(name) => readFileSync(join(stateRoot, "browser-use", "leases", name), "utf8"),
+			),
+		};
+	} finally {
+		await awaitChildExitAfterRelease(first, release);
+		await awaitChildExitAfterRelease(second, release);
+		await Promise.allSettled(childResults);
+		xdg.dispose();
+		rmSync(root, { recursive: true, force: true });
+	}
+}
+
+describe("Activation epoch barrier identity", () => {
+	test("a body fresh-contention-shaped result returns after one body call", async () => {
+		const state = await fixture();
+		try {
+			let calls = 0;
+			const bodyFailure = {
+				ok: false as const,
+				failure: {
+					code: "store_lock_contended" as const,
+					message: "lock is held by another writer (body-owned meaning).",
+				},
+			};
+			const result = await withActivationEpochBarrier(
+				state.deps,
+				{ holderId: "body-result-test" },
+				async () => {
+					calls += 1;
+					return bodyFailure;
+				},
+			);
+			expect(calls).toBe(1);
+			expect(result).toEqual(bodyFailure);
+		} finally {
+			await state.cleanup();
+		}
+	});
+
+	test("fresh outer contention exhausts without calling the body", async () => {
+		const state = await fixture();
+		const lockPath = join(
+			state.deps.paths.runtime.locksDir,
+			"activation-epoch.lock",
+		);
+		try {
+			await state.deps.fs.mkdir(state.deps.paths.runtime.locksDir, {
+				recursive: true,
+				mode: 0o700,
+			});
+			await state.deps.fs.createExclusive(
+				lockPath,
+				`${JSON.stringify({
+					holder_id: "external-fresh-holder",
+					acquired_at_epoch_ms: 1_000,
+					nonce: "test-external-lock",
+				})}\n`,
+				0o600,
+			);
+			let calls = 0;
+			const startedAt = performance.now();
+			const result = await withActivationEpochBarrier(
+				state.deps,
+				{ holderId: "exhaustion-test" },
+				async () => {
+					calls += 1;
+					return { ok: true as const };
+				},
+			);
+			expect(result).toMatchObject({ ok: false, code: "epoch_store_failed" });
+			expect(calls).toBe(0);
+			expect(performance.now() - startedAt).toBeLessThan(2_000);
+		} finally {
+			await state.deps.fs.unlink(lockPath);
+			await state.cleanup();
+		}
+	}, 3_000);
+});
+
+describe("Browser custody process admission", () => {
+	test("distinct target operations retry only the contended activation epoch and preserve both durable bindings", async () => {
+		const result = await runProcessCustodyRace("target");
+		expect(result.firstResult).toMatchObject({ exitCode: 0, stderr: "" });
+		expect(result.secondResult).toMatchObject({ exitCode: 0, stderr: "" });
+		expect(JSON.parse(result.firstResult.stdout)).toMatchObject({ ok: true });
+		expect(JSON.parse(result.secondResult.stdout)).toMatchObject({ ok: true });
+		if (result.registryRaw === undefined) {
+			throw new Error(`registry was not written; entries=${result.stateEntries.join(",")}`);
+		}
+		const registry = JSON.parse(result.registryRaw) as {
+			targets: Record<string, { owner_run_id: string; status: string }>;
+		};
+		expect(registry.targets).toMatchObject({
+			[PROCESS_TARGET_REFS.alpha]: { owner_run_id: "Run-Alpha", status: "owned" },
+			[PROCESS_TARGET_REFS.beta]: { owner_run_id: "Run-Beta", status: "owned" },
+		});
+		const leases = result.leaseRaws
+			.map((raw) => JSON.parse(raw) as { payload: { key: string; holder_id: string } })
+			.map((record) => record.payload);
+		expect(leases).toEqual(
+			expect.arrayContaining([
+				expect.objectContaining({ key: `browser-target-operation:${PROCESS_AUTHORITY_ID}:${PROCESS_TARGET_REFS.alpha}`, holder_id: "browser-target-run:Run-Alpha" }),
+				expect.objectContaining({ key: `browser-target-operation:${PROCESS_AUTHORITY_ID}:${PROCESS_TARGET_REFS.beta}`, holder_id: "browser-target-run:Run-Beta" }),
+			]),
+		);
+	}, 15_000);
+
+	test("distinct target operations survive multiple bounded admission backoffs", async () => {
+		const result = await runProcessCustodyRace("target", {
+			releaseAfterMs: 350,
+		});
+		expect(result.firstResult).toMatchObject({ exitCode: 0, stderr: "" });
+		expect(result.secondResult).toMatchObject({ exitCode: 0, stderr: "" });
+		expect(JSON.parse(result.firstResult.stdout)).toMatchObject({ ok: true });
+		expect(JSON.parse(result.secondResult.stdout)).toMatchObject({ ok: true });
+		expect(result.contentionAttempts).toBeGreaterThanOrEqual(4);
+		if (result.registryRaw === undefined) throw new Error("registry was not written");
+		const registry = JSON.parse(result.registryRaw) as {
+			targets: Record<string, { owner_run_id: string; status: string }>;
+		};
+		expect(registry.targets).toMatchObject({
+			[PROCESS_TARGET_REFS.alpha]: { owner_run_id: "Run-Alpha", status: "owned" },
+			[PROCESS_TARGET_REFS.beta]: { owner_run_id: "Run-Beta", status: "owned" },
+		});
+	}, 15_000);
+
+	test("the same authority Browser Lane remains exclusive after bounded activation admission", async () => {
+		const result = await runProcessCustodyRace("lane");
+		expect(result.firstResult).toMatchObject({ exitCode: 0, stderr: "" });
+		expect(JSON.parse(result.firstResult.stdout)).toMatchObject({ ok: true });
+		expect(result.secondResult).toMatchObject({ exitCode: 0, stderr: "" });
+		expect(JSON.parse(result.secondResult.stdout)).toMatchObject({
+			ok: false,
+			code: "browser_lane_held",
+		});
+		expect(result.secondResult.stdout).not.toContain("browser_lane_store_failed");
+		expect(result.secondResult.stdout).not.toContain("epoch_store_failed");
+	}, 15_000);
 });
 
 const OTHER_AUTHORITY = browserAuthorityIdOf({
@@ -608,6 +971,40 @@ describe("Browser custody", () => {
 			if (sameRun.ok) {
 				await releaseTargetOperationLease(state.deps, sameRun.lease);
 			}
+		} finally {
+			await state.cleanup();
+		}
+	});
+
+	test("an expired plan lease cannot renew after a same-target successor acquires custody", async () => {
+		const state = await fixture();
+		try {
+			const alpha = await acquireTargetOperationLease(state.deps, {
+				authorityId: AUTHORITY,
+				runId: "Alpha",
+				adapterId: "agent-browser",
+				rawTargetId: "target-plan-heartbeat",
+				operation: "action",
+				ttlMs: 100,
+				ownershipEvidence: creationReceipt("Alpha", "target-plan-heartbeat"),
+			});
+			if (!alpha.ok) throw new Error("alpha plan lease setup failed");
+			state.advance(101);
+			const bravo = await acquireTargetOperationLease(state.deps, {
+				authorityId: AUTHORITY,
+				runId: "Bravo",
+				adapterId: "agent-browser",
+				rawTargetId: "target-plan-heartbeat",
+				operation: "action",
+				ttlMs: 100,
+				ownershipEvidence: creationReceipt("Bravo", "target-plan-heartbeat"),
+			});
+			expect(bravo).toMatchObject({ ok: true, first_ownership: true });
+			const lost = await heartbeatTargetOperationLease(state.deps, alpha.lease, {
+				ttlMs: 100,
+			});
+			expect(lost).toMatchObject({ ok: false, code: "target_lease_lost" });
+			if (bravo.ok) await releaseTargetOperationLease(state.deps, bravo.lease);
 		} finally {
 			await state.cleanup();
 		}

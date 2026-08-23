@@ -27,6 +27,7 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"operate-snapshot",
 	"operate-screenshot",
 	"operate-emulate",
+	"operate-target",
 	"qualification-manifest",
 	"qualification-validate",
 	// Platform families (platform plan 2026-07-21-002 U1).

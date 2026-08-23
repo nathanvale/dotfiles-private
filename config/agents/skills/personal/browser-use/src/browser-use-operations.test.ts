@@ -474,6 +474,19 @@ function operationRuntime(input: {
 }
 
 describe("U7 operation gates", () => {
+	test("target plans reject raw/unknown steps before handoff or lease mutation", async () => {
+		const { runtime, calls } = operationRuntime({
+			files: { "/plan.json": JSON.stringify({ steps: [{ kind: "eval", script: "document.body" }] }) },
+		});
+		const result = await runForTest(
+			["operate", "target", "--plan", "/plan.json", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(2);
+		expect(parseJson(result.stdout).error).toMatchObject({ code: "browser_operation_target_plan_invalid" });
+		expect(calls).toHaveLength(0);
+	});
+
 	test("a foreign Target Lease refuses a chrome snapshot before operation dispatch", async () => {
 		const { runtime, calls } = operationRuntime();
 		const deps = await custodyDeps(runtime);

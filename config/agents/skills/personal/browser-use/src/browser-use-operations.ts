@@ -98,6 +98,15 @@ import type {
 	BrowserUseExactTargetHandoff,
 	BrowserUseExactTargetOperationCapability,
 } from "./browser-use-adapter-model";
+import {
+	parseBrowserUseTargetOperationPlan,
+	targetOperationPlanIsMutating,
+	targetOperationPlanMatchesBoundOrigin,
+	targetOperationPlanDigest,
+	type BrowserUseTargetOperationCleanupMethod,
+	type BrowserUseTargetOperationPlan,
+	type BrowserUseTargetOperationResult,
+} from "./browser-use-target-operations";
 import type { RunStoreDeps } from "./browser-use-runs";
 import {
 	type BrowserUsePathRefusal,
@@ -170,10 +179,26 @@ type OperationSideEffects = {
 	focus?: boolean;
 };
 
+/** Exact public target facts retained after pre-dispatch proof for a
+ * controlled post-dispatch refusal. Adapter-private lifecycle data stays out. */
+type OperationFailureReceiptContext = {
+	operation: BrowserOperationClass;
+	adapter: BrowserAdapterId;
+	handoff: HandoffFacts;
+	target: BrowserTargetCandidate;
+	canonicalTargetId: string;
+	targetSource: "hints" | "selected_state" | "single_candidate";
+	capabilityId?: string;
+	planDigest?: string;
+};
+
 type OperationExecutionEvidence = {
 	scope: "target-local" | "browser-wide";
 	focus: boolean;
 	capability_id?: string;
+	plan_digest?: string;
+	steps?: BrowserUseTargetOperationResult["steps"];
+	cleanup?: BrowserUseTargetOperationResult["cleanup"];
 };
 
 type TargetOperationLeaseInterval = {
@@ -187,6 +212,7 @@ type OperationExecutionPlan =
 	| {
 			scope: "target-local";
 			retainedLifecycle: "adapter-exact-target-lifecycle";
+			plan?: BrowserUseTargetOperationPlan;
 	  }
 	| {
 			scope: "browser-wide";
@@ -198,8 +224,25 @@ function operationExecutionPlan(input: {
 	operation: BrowserOperationClass;
 	retainedLifecycleRef?: string;
 	runId: string;
+	plan?: BrowserUseTargetOperationPlan;
 }): OperationExecutionPlan {
 	const resolved = resolveExactTargetOperationCapability(input.adapter);
+	if (
+		resolved.ok &&
+		input.operation === "target" &&
+		input.plan !== undefined &&
+		resolved.capability.runTargetPlan !== undefined &&
+		resolved.capability.retainedLifecycleIsValid(
+			input.retainedLifecycleRef,
+			input.runId,
+		)
+	) {
+		return {
+			scope: "target-local",
+			retainedLifecycle: "adapter-exact-target-lifecycle",
+			plan: input.plan,
+		};
+	}
 	if (
 		resolved.ok &&
 		input.operation === "snapshot" &&
@@ -437,6 +480,8 @@ type ViewportEmulation = {
 
 type OperationInputs = {
 	operation: BrowserOperationClass;
+	targetPlan?: BrowserUseTargetOperationPlan;
+	targetPlanDigest?: string;
 	screenshot?: ScreenshotArtifact;
 	viewport?: ViewportEmulation;
 };
@@ -481,28 +526,33 @@ export async function runOperate(input: {
 	// the success — carries it, so the top-level run_id agrees with
 	// binding.run_id.
 	let runId = input.runId;
+	let failureReceiptContext: OperationFailureReceiptContext | undefined;
 	const fail = (
 		failure: OperationFailure,
 		sideEffects: OperationSideEffects = {},
 		release?: BrowserUseAdapterLifecycleReleaseDebt,
+		targetPlan?: BrowserUseTargetOperationResult,
 	) =>
 		emitOperationFailure({
 			failure,
 			command: parsed.command,
 			sideEffects,
 			release,
+			targetPlan,
 			outputMode: parsed.outputMode,
 			stdout: input.stdout,
 			stderr: input.stderr,
 			runId,
 			durationMs: input.durationMs(),
+			context: failureReceiptContext,
 		});
 
-	const operationInputs = readOperationInputs({
+	const operationInputs = await readOperationInputs({
 		command: parsed.command,
 		flags,
 		env: runtime.env,
 		runId: input.runId,
+		runtime,
 	});
 	if (!operationInputs.ok) return fail(operationInputs.failure);
 
@@ -535,6 +585,18 @@ export async function runOperate(input: {
 	const selectedCapability = resolveExactTargetOperationCapability(
 		binding.context.handoff.adapter,
 	);
+	if (
+		operationInputs.inputs.operation === "target" &&
+		(!selectedCapability.ok || selectedCapability.capability.runTargetPlan === undefined)
+	) {
+		return fail({
+			code: "browser_operation_target_plan_unsupported",
+			message: "The verified adapter does not provide the target-operation plan capability.",
+			actionId: "change_operation_input",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
 	const retainedLifecycle =
 		selectedState.state?.ownership?.kind === "created-target"
 			? selectedState.state.ownership.retained_lifecycle
@@ -544,11 +606,7 @@ export async function runOperate(input: {
 		(!selectedCapability.ok ||
 			retainedLifecycle.adapter_id !== binding.context.handoff.adapter ||
 			retainedLifecycle.capability_id !==
-				selectedCapability.capability.capability_id ||
-			!selectedCapability.capability.retainedLifecycleIsValid(
-				retainedLifecycle.lifecycle_ref,
-				runId,
-			))
+				selectedCapability.capability.capability_id)
 	) {
 		return fail({
 			code: "target_state_mismatch",
@@ -559,6 +617,23 @@ export async function runOperate(input: {
 			recoverability: "change_input",
 		});
 	}
+	if (
+		retainedLifecycle !== undefined &&
+		selectedCapability.ok &&
+		!selectedCapability.capability.retainedLifecycleIsValid(
+			retainedLifecycle.lifecycle_ref,
+			runId,
+		)
+	) {
+		return fail({
+			code: "target_state_unreadable",
+			message:
+				"The selected target retained lifecycle cannot be read as this run's exact adapter lifecycle.",
+			actionId: "repair_target_state",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
 	const retainsExactTargetLifecycle =
 		selectedState.state?.ownership?.kind === "created-target" &&
 		selectedCapability.ok &&
@@ -566,6 +641,18 @@ export async function runOperate(input: {
 			retainedLifecycle?.lifecycle_ref,
 			runId,
 		);
+	if (
+		operationInputs.inputs.operation === "target" &&
+		(!retainsExactTargetLifecycle || !selectedCapability.ok || selectedCapability.capability.runTargetPlan === undefined)
+	) {
+		return fail({
+			code: "browser_operation_target_plan_unsupported",
+			message: "Target-local plans require a retained exact-target adapter lifecycle.",
+			actionId: "change_operation_input",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
 
 	const targetContext = await loadOperationTargetContext(runtime, binding.context, {
 		targetEnvelopeId,
@@ -613,6 +700,20 @@ export async function runOperate(input: {
 	if (!targetIdentity.ok) {
 		return fail(operationTargetProofFailure(targetIdentity.cause));
 	}
+	failureReceiptContext = {
+		operation: operationInputs.inputs.operation,
+		adapter: binding.context.handoff.adapter,
+		handoff: binding.context.handoff,
+		target: target.target.candidate,
+		canonicalTargetId: targetIdentity.target.target_id,
+		targetSource: target.target.source,
+		...(selectedCapability.ok
+			? { capabilityId: selectedCapability.capability.capability_id }
+			: {}),
+		...(operationInputs.inputs.targetPlanDigest === undefined
+			? {}
+			: { planDigest: operationInputs.inputs.targetPlanDigest }),
+	};
 	if (
 		target.target.createdOwnership !== undefined &&
 		targetRefOf(targetIdentity.target.target_id) !==
@@ -651,13 +752,18 @@ export async function runOperate(input: {
 			recoverability: "change_input",
 		});
 	}
-	const targetLease = await acquireTargetOperationLease(custodyDeps, {
+	const acquiredTargetLease = await acquireTargetOperationLease(custodyDeps, {
 		authorityId: browserAuthorityIdOf(binding.context.handoff),
 		runId,
 		adapterId: binding.context.handoff.adapter,
 		rawTargetId: targetIdentity.target.target_id,
 		operation:
-			operationInputs.inputs.operation === "emulate" ? "action" : "read",
+			operationInputs.inputs.operation === "emulate" ||
+			(operationInputs.inputs.operation === "target" &&
+				operationInputs.inputs.targetPlan !== undefined &&
+				targetOperationPlanIsMutating(operationInputs.inputs.targetPlan))
+				? "action"
+				: "read",
 		ttlMs:
 			createdOwnershipRemainingMs === undefined
 				? 120_000
@@ -675,13 +781,15 @@ export async function runOperate(input: {
 			},
 		},
 	});
-	if (!targetLease.ok) return fail(operationCustodyFailure(targetLease));
+	if (!acquiredTargetLease.ok) return fail(operationCustodyFailure(acquiredTargetLease));
+	let targetLease: Extract<TargetOperationLeaseResult, { ok: true }> = acquiredTargetLease;
 	const executionPlan = operationExecutionPlan({
 		adapter: binding.context.handoff.adapter,
 		operation: operationInputs.inputs.operation,
 		retainedLifecycleRef:
 			target.target.createdOwnership?.retainedLifecycleRef,
 		runId,
+		plan: operationInputs.inputs.targetPlan,
 	});
 	let browserLane: BrowserLaneLease | undefined;
 	const browserMutation =
@@ -733,6 +841,23 @@ export async function runOperate(input: {
 				expectedUrl: target.target.rawUrl,
 				lifecyclePrepared: executionPlan.scope === "target-local",
 				retainLifecycle: retainsExactTargetLifecycle,
+				targetPlan: executionPlan.scope === "target-local" ? executionPlan.plan : undefined,
+				planDigest: operationInputs.inputs.targetPlanDigest,
+				lifecycleRef: retainedLifecycle?.lifecycle_ref,
+				boundOrigin: target.target.candidate.origin,
+				assertCustody:
+					operationInputs.inputs.operation === "target"
+						? async () => {
+							const renewed = await heartbeatTargetOperationLease(
+								custodyDeps,
+								targetLease.lease,
+								{ ttlMs: 120_000 },
+							);
+							if (!renewed.ok) return { ok: false, message: renewed.message };
+							targetLease = { ...targetLease, lease: renewed.lease };
+							return { ok: true };
+						}
+						: undefined,
 			});
 		} catch {
 			operationCall = {
@@ -777,12 +902,14 @@ export async function runOperate(input: {
 				}),
 				{ focus: focusSideEffect },
 				operationCall.release,
+				operationCall.targetPlan,
 			);
 		}
 		return fail(
 			operationCall.failure,
 			{ focus: focusSideEffect },
 			operationCall.release,
+			operationCall.targetPlan,
 		);
 	}
 	if (operationCall.result.exitCode !== 0) {
@@ -798,12 +925,14 @@ export async function runOperate(input: {
 				}),
 				{ focus: focusSideEffect },
 				operationCall.release,
+				operationCall.targetPlan,
 			);
 		}
 		return fail(
 			primary,
 			{ focus: focusSideEffect },
 			operationCall.release,
+			operationCall.targetPlan,
 		);
 	}
 	if (cleanupDebt.length > 0) {
@@ -815,6 +944,7 @@ export async function runOperate(input: {
 			}),
 			{ focus: focusSideEffect },
 			operationCall.release,
+			operationCall.targetPlan,
 		);
 	}
 	let screenshotEvidence: ScreenshotArtifactEvidence | undefined;
@@ -862,31 +992,79 @@ export async function runOperate(input: {
 			? { viewport: operationInputs.inputs.viewport }
 			: {}),
 		focusSideEffect,
-			execution: {
+		execution: {
 				scope: executionPlan.scope,
 				focus: operationCall.focus,
 				...(selectedCapability.ok &&
-				operationInputs.inputs.operation === "snapshot" &&
-				executionPlan.scope === "target-local"
+					(executionPlan.scope === "target-local" &&
+						(operationInputs.inputs.operation === "snapshot" ||
+							operationInputs.inputs.operation === "target"))
 					? {
 							capability_id: selectedCapability.capability.capability_id,
 						}
 					: {}),
-			},
+				...(operationCall.targetPlan
+					? {
+							plan_digest: operationCall.targetPlan.plan_digest,
+							steps: operationCall.targetPlan.steps,
+							cleanup: operationCall.targetPlan.cleanup,
+						}
+					: {}),
+		},
+		targetPlan: operationCall.targetPlan,
 		targetLeaseInterval,
 		browserLaneInterval,
 	});
 }
 
-function readOperationInputs(input: {
+async function readOperationInputs(input: {
 	command: BrowserUseCommand;
 	flags: Record<string, string>;
 	env: Record<string, string | undefined>;
 	runId: string;
-}):
+	runtime: BrowserUseRuntime;
+}): Promise<
 	| { ok: true; inputs: OperationInputs }
-	| { ok: false; failure: OperationFailure } {
+	| { ok: false; failure: OperationFailure }
+> {
 	const operation = operationClassForCommand(input.command);
+	let targetPlan: BrowserUseTargetOperationPlan | undefined;
+	let targetPlanDigest: string | undefined;
+	if (input.command === "operate-target") {
+		const planPath = stringField(input.flags["--plan"]);
+		if (!planPath || !isAbsolute(planPath) || planPath.includes("\0")) {
+			return {
+				ok: false,
+				failure: {
+					code: "browser_operation_target_plan_invalid",
+					message: "operate target requires --plan <path>.",
+					actionId: "change_operation_input",
+					exitCode: USAGE_EXIT_CODE,
+					recoverability: "change_input",
+				},
+			};
+		}
+		try {
+			const planStat = await input.runtime.platformFs.lstat(planPath);
+			if (planStat?.kind !== "file" || (planStat.mode & 0o077) !== 0) {
+				throw new Error("target operation plan is not a private regular file");
+			}
+			const raw = await input.runtime.readTextFile(planPath);
+			targetPlan = parseBrowserUseTargetOperationPlan(JSON.parse(raw));
+			targetPlanDigest = targetOperationPlanDigest(targetPlan);
+		} catch {
+			return {
+				ok: false,
+				failure: {
+					code: "browser_operation_target_plan_invalid",
+					message: "The target-operation plan is not one valid private structured plan.",
+					actionId: "change_operation_input",
+					exitCode: USAGE_EXIT_CODE,
+					recoverability: "change_input",
+				},
+			};
+		}
+	}
 	const screenshot = input.command === "operate-screenshot"
 		? readScreenshotArtifact(input.flags, input.env, input.runId)
 		: undefined;
@@ -901,6 +1079,8 @@ function readOperationInputs(input: {
 		ok: true,
 		inputs: {
 			operation,
+			...(targetPlan === undefined ? {} : { targetPlan }),
+			...(targetPlanDigest === undefined ? {} : { targetPlanDigest }),
 			...(screenshot?.ok ? { screenshot: screenshot.artifact } : {}),
 			...(viewport?.ok ? { viewport: viewport.viewport } : {}),
 		},
@@ -1223,6 +1403,7 @@ function operationClassForCommand(command: BrowserUseCommand): BrowserOperationC
 	if (command === "operate-snapshot") return "snapshot";
 	if (command === "operate-screenshot") return "screenshot";
 	if (command === "operate-emulate") return "emulate";
+	if (command === "operate-target") return "target";
 	throw new Error(`Unsupported Browser Operation command: ${command}`);
 }
 
@@ -1678,6 +1859,11 @@ type OperationLaneInput = {
 	bringToFront: boolean;
 	lifecyclePrepared?: boolean;
 	retainLifecycle?: boolean;
+	targetPlan?: BrowserUseTargetOperationPlan;
+	planDigest?: string;
+	lifecycleRef?: string;
+	boundOrigin?: string;
+	assertCustody?: () => Promise<{ ok: boolean; message?: string }>;
 };
 
 type OperationLaneResult =
@@ -1685,6 +1871,7 @@ type OperationLaneResult =
 			ok: true;
 			result: McporterCommandResult;
 			focus: boolean;
+			targetPlan?: BrowserUseTargetOperationResult;
 			release?: BrowserUseAdapterLifecycleReleaseDebt;
 	  }
 	| {
@@ -1692,6 +1879,7 @@ type OperationLaneResult =
 			failure: OperationFailure;
 			focus: boolean;
 			release?: BrowserUseAdapterLifecycleReleaseDebt;
+			targetPlan?: BrowserUseTargetOperationResult;
 	  };
 
 async function runOperationLane(
@@ -1699,6 +1887,22 @@ async function runOperationLane(
 ): Promise<OperationLaneResult> {
 	const resolved = resolveExactTargetOperationCapability(input.handoff.adapter);
 	if (resolved.ok) {
+		if (input.operation === "target") {
+			if (input.targetPlan === undefined || input.planDigest === undefined || resolved.capability.runTargetPlan === undefined) {
+				return {
+					ok: false,
+					failure: {
+						code: "browser_operation_target_plan_unsupported",
+						message: "The adapter target-operation capability is unavailable.",
+						actionId: "change_operation_input",
+						exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+						recoverability: "change_input",
+					},
+					focus: false,
+				};
+			}
+			return runExactTargetPlanOperation(input, resolved.capability);
+		}
 		return runExactTargetOperation(input, resolved.capability);
 	}
 	return runChromeDevtoolsOperation(input);
@@ -1765,6 +1969,96 @@ async function runExactTargetOperation(
 		failure,
 		focus: outcome.focus,
 		...(outcome.release ? { release: outcome.release } : {}),
+	};
+}
+
+async function runExactTargetPlanOperation(
+	input: OperationLaneInput,
+	capability: BrowserUseExactTargetOperationCapability,
+): Promise<OperationLaneResult> {
+	if (input.targetPlan === undefined || input.planDigest === undefined || capability.runTargetPlan === undefined) {
+		return {
+			ok: false,
+			failure: {
+				code: "browser_operation_target_plan_unsupported",
+				message: "The adapter target-operation capability is unavailable.",
+				actionId: "change_operation_input",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: "change_input",
+			},
+			focus: false,
+		};
+	}
+	if (
+		input.boundOrigin === undefined ||
+		!targetOperationPlanMatchesBoundOrigin(input.targetPlan, input.boundOrigin)
+	) {
+		const outcome: BrowserUseTargetOperationResult = {
+			ok: false,
+			code: "target_operation_origin_mismatch",
+			message: "The target plan navigation does not match the exact bound target origin.",
+			scope: "target-local",
+			focus: false,
+			capability_id: capability.capability_id,
+			plan_digest: input.planDigest,
+			steps: [],
+			cleanup: { attempted: false, closed: false, visible_owned_surface_count: 0 },
+		};
+		return {
+			ok: false,
+			failure: targetPlanOperationFailure(outcome),
+			focus: false,
+			targetPlan: outcome,
+		};
+	}
+	const outcome = await capability.runTargetPlan({
+		runtime: input.runtime,
+		env: input.runtime.env,
+		handoff: exactTargetHandoff(input.handoff),
+		target_id: input.adapterPageRef,
+		expected_url: input.expectedUrl ?? "",
+		bound_origin: input.boundOrigin,
+		assert_custody: input.assertCustody,
+		plan: input.targetPlan,
+		plan_digest: input.planDigest,
+		lifecycle_ref: input.lifecycleRef,
+	});
+	if (!outcome.ok) {
+		return {
+			ok: false,
+			failure: targetPlanOperationFailure(outcome),
+			focus: false,
+			targetPlan: outcome,
+		};
+	}
+	return {
+		ok: true,
+		result: { exitCode: 0, stdout: "", stderr: "" },
+		focus: false,
+		targetPlan: outcome,
+	};
+}
+
+function targetPlanOperationFailure(
+	outcome: Extract<BrowserUseTargetOperationResult, { ok: false }>,
+): OperationFailure {
+	const code = outcome.code === "target_operation_plan_failed"
+		? "browser_operation_target_plan_failed"
+		: outcome.code === "target_operation_origin_mismatch"
+			? "browser_operation_target_origin_mismatch"
+			: outcome.code === "target_operation_cleanup_incomplete"
+			? "browser_operation_target_cleanup_incomplete"
+				: "browser_operation_target_plan_unsupported";
+	const unknownEffect = outcome.steps.some(
+		(step) => step.status === "unknown" && step.effect === "possibly-effectful",
+	);
+	return {
+		code,
+		message: outcome.message,
+		actionId: unknownEffect ? "repair_target_state" : "change_operation_input",
+		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+		recoverability: unknownEffect ? "repair_state" : "change_input",
+		...(unknownEffect ? { operationEffect: "unknown" as const } : {}),
 	};
 }
 
@@ -1962,11 +2256,13 @@ function emitOperationFailure(input: {
 	command: BrowserUseCommand;
 	sideEffects: OperationSideEffects;
 	release?: BrowserUseAdapterLifecycleReleaseDebt;
+	targetPlan?: BrowserUseTargetOperationResult;
 	outputMode: OutputMode;
 	stdout: CliWriter;
 	stderr: CliWriter;
 	runId: string;
 	durationMs: number;
+	context?: OperationFailureReceiptContext;
 }): number {
 	const { failure } = input;
 	if (input.outputMode === "plain") {
@@ -1987,6 +2283,9 @@ function emitOperationFailure(input: {
 			data: {
 				command: input.command,
 				result_kind: "browser_operation",
+				...(input.context === undefined
+					? {}
+					: operationFailureReceiptContext(input.context, input.runId)),
 				side_effects: { focus: input.sideEffects.focus === true },
 				...(failure.primaryCause === undefined
 					? {}
@@ -1998,6 +2297,9 @@ function emitOperationFailure(input: {
 					? {}
 					: { cleanup_debt: failure.cleanupDebt }),
 				...(input.release ? { release: input.release } : {}),
+				...(input.targetPlan
+					? { target_plan: targetPlanReceipt(input.targetPlan) }
+					: {}),
 			},
 			runtime_actions: [operationAction(failure.actionId)],
 			continuation: { next_action_id: failure.actionId },
@@ -2014,6 +2316,50 @@ function emitOperationFailure(input: {
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
 	return failure.exitCode;
+}
+
+function operationFailureReceiptContext(
+	context: OperationFailureReceiptContext,
+	runId: string,
+): Record<string, unknown> {
+	return {
+		contract: BROWSER_USE_OPERATION_CONTRACT_ID,
+		schema_version: BROWSER_USE_OPERATION_SCHEMA_VERSION,
+		operation: context.operation,
+		adapter: context.adapter,
+		binding: {
+			outer_run_id: runId,
+			run_id: context.handoff.runId,
+			handoff_evidence_id: context.handoff.handoffEvidenceId,
+			browser_authority_id: browserAuthorityIdOf(context.handoff),
+			target_candidate_id: context.target.candidate_id,
+		},
+		target_source: context.targetSource,
+		target: {
+			candidate_ordinal: context.target.candidate_ordinal,
+			candidate_id: context.target.candidate_id,
+			target_id: context.canonicalTargetId,
+			target_ref: targetRefOf(context.canonicalTargetId),
+			cdp_endpoint: context.handoff.endpointHttp,
+			origin: context.target.origin,
+			...(context.target.path_shape ? { path_shape: context.target.path_shape } : {}),
+			...(context.target.title ? { title: context.target.title } : {}),
+		},
+		...(context.operation !== "target"
+			? {}
+			: {
+					execution: {
+						scope: "target-local",
+						focus: false,
+						...(context.capabilityId === undefined
+							? {}
+							: { capability_id: context.capabilityId }),
+						...(context.planDigest === undefined
+							? {}
+							: { plan_digest: context.planDigest }),
+					},
+				}),
+	};
 }
 
 function emitOperationSuccess(input: {
@@ -2037,6 +2383,7 @@ function emitOperationSuccess(input: {
 	viewport?: ViewportEmulation;
 	focusSideEffect: boolean;
 	execution: OperationExecutionEvidence;
+	targetPlan?: BrowserUseTargetOperationResult;
 	targetLeaseInterval?: TargetOperationLeaseInterval;
 	browserLaneInterval?: BrowserLaneLeaseInterval;
 }): number {
@@ -2156,6 +2503,7 @@ function operationPayload(input: {
 	transportResult: McporterCommandResult;
 	screenshot?: ScreenshotArtifactEvidence;
 	viewport?: ViewportEmulation;
+	targetPlan?: BrowserUseTargetOperationResult;
 }): Record<string, unknown> {
 	switch (input.operation) {
 		case "snapshot":
@@ -2192,11 +2540,28 @@ function operationPayload(input: {
 						: undefined,
 				},
 			};
+		case "target":
+			return {
+				target_plan:
+					input.targetPlan === undefined
+						? undefined
+						: targetPlanReceipt(input.targetPlan),
+			};
 		default: {
 			const exhaustive: never = input.operation;
 			throw new Error(`Unsupported Browser Operation: ${exhaustive}`);
 		}
 	}
+}
+
+/** Closed public receipt projection; adapter-only result framing never crosses this seam. */
+function targetPlanReceipt(
+	result: BrowserUseTargetOperationResult,
+): {
+	steps: BrowserUseTargetOperationResult["steps"];
+	cleanup: BrowserUseTargetOperationResult["cleanup"];
+} {
+	return { steps: result.steps, cleanup: result.cleanup };
 }
 
 function normalizeSnapshot(stdout: string): Record<string, unknown> {
@@ -2237,6 +2602,131 @@ function hasExactQualificationKeys(
 	const expected = [...keys].sort();
 	return actual.length === expected.length &&
 		actual.every((key, index) => key === expected[index]);
+}
+
+type TargetPlanReceiptProjection = {
+	steps: readonly BrowserUseTargetOperationResult["steps"][number][];
+	cleanup: {
+		attempted: boolean;
+		closed: boolean;
+		method?: BrowserUseTargetOperationCleanupMethod;
+		visible_owned_surface_count: number;
+	};
+};
+
+function parseTargetPlanReceiptProjection(
+	value: unknown,
+): TargetPlanReceiptProjection | undefined {
+	const targetPlan = qualificationRecord(value);
+	const cleanup = qualificationRecord(targetPlan?.cleanup);
+	if (
+		!targetPlan ||
+		!hasExactQualificationKeys(targetPlan, ["steps", "cleanup"]) ||
+		!Array.isArray(targetPlan.steps) ||
+		!cleanup ||
+		!(
+			hasExactQualificationKeys(cleanup, ["attempted", "closed", "visible_owned_surface_count"]) ||
+			hasExactQualificationKeys(cleanup, ["attempted", "closed", "method", "visible_owned_surface_count"])
+		) ||
+		typeof cleanup.attempted !== "boolean" ||
+		typeof cleanup.closed !== "boolean" ||
+		(cleanup.method !== undefined &&
+			!(["close-control", "escape", "backdrop"] as unknown[]).includes(cleanup.method)) ||
+		!Number.isSafeInteger(cleanup.visible_owned_surface_count) ||
+		(cleanup.visible_owned_surface_count as number) < 0
+	) return undefined;
+	const steps: BrowserUseTargetOperationResult["steps"][number][] = [];
+	for (const rawStep of targetPlan.steps) {
+		const step = qualificationRecord(rawStep);
+		if (
+			!step ||
+			!Number.isSafeInteger(step.index) ||
+			(step.index as number) < 0 ||
+			!( ["navigate", "inspect", "review-state", "input", "overlay-cleanup"] as unknown[]).includes(step.kind)
+		) return undefined;
+		if (step.status === "confirmed") {
+			if (
+				!(hasExactQualificationKeys(step, ["index", "kind", "status"]) ||
+					hasExactQualificationKeys(step, ["index", "kind", "status", "observation_digest"])) ||
+				(step.observation_digest !== undefined && typeof step.observation_digest !== "string")
+			) return undefined;
+			steps.push({
+				index: step.index as number,
+				kind: step.kind as BrowserUseTargetOperationResult["steps"][number]["kind"],
+				status: "confirmed",
+				...(step.observation_digest === undefined ? {} : { observation_digest: step.observation_digest }),
+			});
+			continue;
+		}
+		if (
+			step.status !== "unknown" ||
+			!hasExactQualificationKeys(step, ["index", "kind", "status", "effect"]) ||
+			step.effect !== "possibly-effectful"
+		) return undefined;
+		steps.push({
+			index: step.index as number,
+			kind: step.kind as BrowserUseTargetOperationResult["steps"][number]["kind"],
+			status: "unknown",
+			effect: "possibly-effectful",
+		});
+	}
+	return {
+		steps,
+		cleanup: {
+			attempted: cleanup.attempted,
+			closed: cleanup.closed,
+			...(cleanup.method === undefined
+				? {}
+				: { method: cleanup.method as BrowserUseTargetOperationCleanupMethod }),
+			visible_owned_surface_count: cleanup.visible_owned_surface_count as number,
+		},
+	};
+}
+
+/** Parse the closed neutral target-plan evidence from either public receipt status. */
+export function parseBrowserOperationTargetPlanReceipt(
+	raw: string,
+): TargetPlanReceiptProjection | undefined {
+	try {
+		const receipt = qualificationRecord(JSON.parse(raw));
+		return parseTargetPlanReceiptProjection(qualificationRecord(receipt?.data)?.target_plan);
+	} catch {
+		return undefined;
+	}
+}
+
+/** Parse a controlled target-plan failure only when it retains exact public
+ * binding and target facts alongside the closed partial receipt projection. */
+export function parseBrowserOperationTargetPlanFailureReceipt(
+	raw: string,
+): { binding: Record<string, unknown>; target: Record<string, unknown>; targetPlan: TargetPlanReceiptProjection } | undefined {
+	try {
+		const receipt = qualificationRecord(JSON.parse(raw));
+		const data = qualificationRecord(receipt?.data);
+		const binding = qualificationRecord(data?.binding);
+		const target = qualificationRecord(data?.target);
+		const targetPlan = parseTargetPlanReceiptProjection(data?.target_plan);
+		if (
+			receipt?.status !== "error" ||
+			data?.contract !== BROWSER_USE_OPERATION_CONTRACT_ID ||
+			data.schema_version !== BROWSER_USE_OPERATION_SCHEMA_VERSION ||
+			data.operation !== "target" ||
+			!binding ||
+			typeof binding.outer_run_id !== "string" ||
+			typeof binding.run_id !== "string" ||
+			typeof binding.handoff_evidence_id !== "string" ||
+			typeof binding.browser_authority_id !== "string" ||
+			typeof binding.target_candidate_id !== "string" ||
+			!target ||
+			typeof target.target_id !== "string" ||
+			typeof target.target_ref !== "string" ||
+			typeof target.origin !== "string" ||
+			!targetPlan
+		) return undefined;
+		return { binding, target, targetPlan };
+	} catch {
+		return undefined;
+	}
 }
 
 /** Parse one complete public Browser Operation success receipt for qualification. */
@@ -2294,8 +2784,23 @@ export function parseBrowserOperationQualificationReceipt(
 	if (!exactCapability.ok) return undefined;
 	if (
 		!((command === "operate-snapshot" && operation === "snapshot") ||
-			(command === "operate-screenshot" && operation === "screenshot"))
+			(command === "operate-screenshot" && operation === "screenshot") ||
+			(command === "operate-target" && operation === "target"))
 	) return undefined;
+	if (operation === "target") {
+		const targetPlan = parseTargetPlanReceiptProjection(data.target_plan);
+		if (
+			execution.scope !== "target-local" ||
+			execution.focus !== false ||
+			sideEffects.focus !== false ||
+			execution.capability_id !== exactCapability.capability.capability_id ||
+			typeof execution.plan_digest !== "string" ||
+			!/^[a-f0-9]{64}$/.test(execution.plan_digest) ||
+			!targetPlan ||
+			targetPlan.steps.some((step) => step.status !== "confirmed")
+		) return undefined;
+		return { receipt, data, binding, target, execution, custody };
+	}
 	if (operation === "snapshot") {
 		const snapshot = qualificationRecord(data.snapshot);
 		const limits = qualificationRecord(snapshot?.limits);

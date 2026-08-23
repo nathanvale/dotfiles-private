@@ -16,6 +16,7 @@ import {
 	casRemoveRecord,
 	casReplaceRecord,
 	listOrphanTempFiles,
+	removeOrphanTempFiles,
 	readDurableFile,
 	withExclusiveFileLock,
 	writeDurableFile,
@@ -398,6 +399,82 @@ describe("exclusive lockfile (S9 contention + stale reclaim)", () => {
 		expect(result).toBe("won");
 	});
 
+	test("a slow publisher never exposes a torn lock or enters after its atomic-publish competitor", async () => {
+		const lockPath = join(lockDir, "slow-publisher.lock");
+		const clock = fixedClock(10_000);
+		let releasePublication!: () => void;
+		const publicationGate = new Promise<void>((resolve) => {
+			releasePublication = resolve;
+		});
+		let publicationReached!: () => void;
+		const publicationReachedPromise = new Promise<void>((resolve) => {
+			publicationReached = resolve;
+		});
+		let paused = false;
+		const pausedFs = {
+			...realFs,
+			async createExclusive(path: string, contents: string, mode: number): Promise<void> {
+				if (path === lockPath && !paused) {
+					paused = true;
+					await realFs.createExclusive(path, "", mode);
+					publicationReached();
+					await publicationGate;
+					await realFs.writeFileDurable(path, contents, mode);
+					return;
+				}
+				if (path.startsWith(`${lockPath}.publish-`) && !paused) {
+					paused = true;
+					publicationReached();
+					await publicationGate;
+				}
+				await realFs.createExclusive(path, contents, mode);
+			},
+		};
+		let publisherRan = false;
+		const slowPublisher = withExclusiveFileLock(
+			pausedFs,
+			{ lockPath, holderId: "slow-publisher", staleAfterMs: 5_000, clock: clock.now },
+			async () => {
+				publisherRan = true;
+				return "publisher";
+			},
+		);
+		await publicationReachedPromise;
+		expect(await readDurableFile(realFs, lockPath)).toEqual({ status: "missing" });
+		expect(
+			(await listOrphanTempFiles(realFs, lockDir)).filter((path) => path.includes(".publish-")),
+		).toEqual([]);
+		let releaseCompetitor!: () => void;
+		const competitorGate = new Promise<void>((resolve) => {
+			releaseCompetitor = resolve;
+		});
+		let competitorEntered!: () => void;
+		const competitorEnteredPromise = new Promise<void>((resolve) => {
+			competitorEntered = resolve;
+		});
+		let competitorRan = false;
+		const competitor = withExclusiveFileLock(
+			realFs,
+			{ lockPath, holderId: "competitor", staleAfterMs: 5_000, clock: clock.now },
+			async () => {
+				competitorRan = true;
+				competitorEntered();
+				await competitorGate;
+				return "competitor";
+			},
+		);
+		await competitorEnteredPromise;
+		expect(competitorRan).toBe(true);
+		releasePublication();
+		expect(await slowPublisher).toMatchObject({
+			ok: false,
+			failure: { code: "store_lock_contended" },
+		});
+		expect(publisherRan).toBe(false);
+		releaseCompetitor();
+		expect(await competitor).toBe("competitor");
+	});
+
 	test("a throwing body still releases the lock in finally", async () => {
 		const lockPath = join(lockDir, "throwing.lock");
 		const clock = fixedClock(10_000);
@@ -671,13 +748,18 @@ describe("listOrphanTempFiles repair projection", () => {
 			mode: 0o600,
 		});
 		writeFileSync(join(root, "nested", "x.json.tmp-9-1"), "x", { mode: 0o600 });
+		writeFileSync(join(root, "nested", "x.lock.publish-123-4-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"), "stage", { mode: 0o600 });
 		writeFileSync(join(root, "nested", "keep.txt"), "keep", { mode: 0o600 });
 		// A tmp-ish name without the pid-counter shape is NOT an orphan.
 		writeFileSync(join(root, "rec.json.tmp-abc"), "not-ours", { mode: 0o600 });
 		expect(await listOrphanTempFiles(realFs, root)).toEqual([
 			join(root, "nested", "x.json.tmp-9-1"),
+			join(root, "nested", "x.lock.publish-123-4-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
 			join(root, "rec.json.tmp-123-4"),
 		]);
+		expect(await removeOrphanTempFiles(realFs, root)).toEqual({ ok: true, removed: 3 });
+		expect(await realFs.lstat(join(root, "nested", "keep.txt"))).toMatchObject({ kind: "file" });
+		expect(await realFs.lstat(join(root, "nested", "x.lock.publish-123-4-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"))).toBeUndefined();
 	});
 
 	test("a missing directory is an empty projection, not an error", async () => {

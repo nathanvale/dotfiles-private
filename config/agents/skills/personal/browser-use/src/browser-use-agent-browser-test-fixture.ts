@@ -8,6 +8,8 @@ export function agentBrowserProcessFixtureSource(input: {
 	statePath: string;
 	callLogPath: string;
 	targetId: string;
+	snapshotPayload?: string;
+	snapshotDelayMs?: number;
 }): string {
 	return [
 		`#!${process.execPath}`,
@@ -27,7 +29,8 @@ export function agentBrowserProcessFixtureSource(input: {
 		'else if (has("tab") && has("list")) { const present = existsSync(statePath); const state = present ? JSON.parse(readFileSync(statePath, "utf8")) : undefined; data = { tabs: present ? [{ tabId: targetId, targetId, type: "page", active: true, url: state.url, title: "Qualification fixture" }] : [] }; }',
 		'else if (has("tab")) data = { selected: true };',
 		'else if (has("get") && has("url")) { const state = JSON.parse(readFileSync(statePath, "utf8")); data = { url: state.url }; }',
-		'else if (has("snapshot")) data = { snapshot: "fixture snapshot" };',
+		'else if (has("get") && has("html")) data = { html: "<main>fixture target</main>" };',
+		`else if (has("snapshot")) {${input.snapshotDelayMs === undefined ? "" : ` await Bun.sleep(${input.snapshotDelayMs});`} data = ${input.snapshotPayload === undefined ? '{ snapshot: "fixture snapshot" }' : JSON.stringify(input.snapshotPayload)}; }`,
 		"process.stdout.write(JSON.stringify({ success: true, data, error: null }));",
 	].join("\n");
 }
