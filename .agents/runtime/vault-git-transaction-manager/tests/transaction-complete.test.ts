@@ -39,6 +39,8 @@ import type {
 	VaultGitRuntimePort,
 	VaultGitValidationFailure,
 } from "../src/ports.ts";
+
+const vaultGitInProcessTestFence = { hold: async <T>(operation: () => Promise<T>) => operation() };
 import { createReceiptStore, type VaultGitReceiptStore } from "../src/store.ts";
 
 const roots: string[] = [];
@@ -1373,6 +1375,7 @@ async function engineRepositoryFixture(options: EngineFixtureOptions = {}) {
 		runtime,
 		repositoryIdentity: "fixture-vault",
 		activationAuthority: admittedActivationAuthorityForTest,
+		runtimeSelectionFence: vaultGitInProcessTestFence,
 		check: {
 			async run(request) {
 				// Freeze bindings before the racing writer runs, mirroring the

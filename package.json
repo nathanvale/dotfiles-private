@@ -15,6 +15,7 @@
 		".agents/runtime/cli-test-fixtures",
 		".agents/runtime/mcporter-transport",
 		".agents/runtime/session-corpus",
+		".agents/runtime/setup",
 		".agents/runtime/vault-git-transaction-manager",
 		".agents/runtime/warm-chrome",
 		"config/agents/skills/personal/bitbucket",
@@ -52,6 +53,7 @@
 		"yaml": "^2.8.1"
 	},
 	"devDependencies": {
+		"@side-quest/setup": "workspace:*",
 		"@biomejs/biome": "^2.3.8",
 		"@commitlint/cli": "^20.1.0",
 		"@commitlint/config-conventional": "^20.0.0",

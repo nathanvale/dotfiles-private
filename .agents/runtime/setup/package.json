@@ -1,0 +1,17 @@
+{
+  "name": "@side-quest/setup",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Flat Setup CLI for Vault Git Host Enrollment.",
+  "sideQuest": { "sourceLinkedBin": true },
+  "bin": { "setup": "./src/cli.ts" },
+  "exports": { ".": "./src/cli.ts" },
+  "scripts": {
+    "setup": "bun run src/cli.ts",
+    "test": "bun test ./tests/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": { "@side-quest/vault-git-transaction-manager": "workspace:*" },
+  "devDependencies": { "@types/bun": "1.3.14", "typescript": "6.0.3" }
+}

@@ -10,6 +10,8 @@ export * from "./activation-authority.ts";
 export * from "./activation-restriction.ts";
 export * from "./activation-result.ts";
 export * from "./activation-consumer-fixtures.ts";
+/** Cross-package Runtime Selection mutual-exclusion and durable-state seam. */
+export * from "./runtime-selection-fence.ts";
 /** Future engine port contracts. */
 export * from "./ports.ts";
 /** Evidence-backed recovery classification. */

@@ -34,6 +34,7 @@
 			".agents/runtime",
 			"!.agents/runtime/*",
 			".agents/runtime/browser-connect",
+			".agents/runtime/setup",
 			".agents/runtime/warm-chrome"
 		]
 	},

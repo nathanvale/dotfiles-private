@@ -58,6 +58,7 @@ import {
 	type VaultGitRepairInput,
 	type VaultGitRepairResult,
 } from "./repair.ts";
+import type { VaultGitRuntimeSelectionFence } from "./runtime-selection-fence.ts";
 
 /** Dependencies for the transaction state machine. */
 export interface VaultGitTransactionEngineOptions {
@@ -75,7 +76,13 @@ export interface VaultGitTransactionEngineOptions {
 	readonly check?: VaultGitCheckPort;
 	/** Live V2 activation revalidation before admission and fenced continuation. */
 	readonly activationAuthority: VaultGitActivationValidationPort;
+	/** Shared host fence held from admission through initial durable receipt publication. */
+	readonly runtimeSelectionFence: VaultGitRuntimeSelectionFence;
 }
+
+type VaultGitBeginPreparation =
+	| { readonly kind: "result"; readonly value: VaultGitEngineResult }
+	| { readonly kind: "initialized"; readonly receipt: VaultGitReceipt };
 
 /** Input for one transaction admission attempt. */
 export interface VaultGitBeginInput {
@@ -726,18 +733,19 @@ export function createVaultGitTransactionEngine(
 		},
 
 		async begin(input) {
+			const prepare = async (): Promise<VaultGitBeginPreparation> => {
 			validateBegin(input);
 			const existing = await loadReceipt();
-			if (existing !== null && "status" in existing) return existing;
+			if (existing !== null && "status" in existing) return { kind: "result", value: existing };
 			const restriction = await activationRestriction("continuation");
 			if (restriction) {
-				return activationRefusal(
+				return { kind: "result", value: activationRefusal(
 					restriction,
 					existing === null ? undefined : existing,
-				);
+				) };
 			}
 			if (input.offline) {
-				return refusal("absent", "blocked", "offline_mode", "capture_private_draft", "Keep the canonical vault read-only while offline.");
+				return { kind: "result", value: refusal("absent", "blocked", "offline_mode", "capture_private_draft", "Keep the canonical vault read-only while offline.") };
 			}
 			// Identity labels feed commit trailers later; refuse unsafe labels
 			// before any intent receipt or remote lease exists.
@@ -747,7 +755,7 @@ export function createVaultGitTransactionEngine(
 				validateVaultCommitLabel(actor).status === "refused" ||
 				validateVaultCommitLabel(host).status === "refused"
 			) {
-				return refusal("absent", "blocked", "identity_label_invalid", "inspect_status", "Configure non-secret single-line actor and host labels before beginning.");
+				return { kind: "result", value: refusal("absent", "blocked", "identity_label_invalid", "inspect_status", "Configure non-secret single-line actor and host labels before beginning.") };
 			}
 			if (existing !== null) {
 				if (existing.phase !== "closed") {
@@ -757,7 +765,7 @@ export function createVaultGitTransactionEngine(
 					const refusedAcquisition = existing.transactionId === null &&
 						(existing.phase === "blocked" || existing.phase === "human_required");
 					if (!refusedAcquisition) {
-						return refusal("active", existing.phase, "receipt_conflict", "inspect_status", "Inspect the active transaction before beginning another.");
+						return { kind: "result", value: refusal("active", existing.phase, "receipt_conflict", "inspect_status", "Inspect the active transaction before beginning another.") };
 					}
 					await options.store.append(nextVaultGitReceipt(existing, {
 						phase: "closed",
@@ -768,59 +776,59 @@ export function createVaultGitTransactionEngine(
 				}
 			}
 			const identity = await proveIdentity();
-			if ("status" in identity) return identity;
+			if ("status" in identity) return { kind: "result", value: identity };
 			// Fail closed: without the read-only capability probe, admission
 			// cannot prove the remote honors the two-ref atomic close (KTD4).
 			if (!options.ledger.git.probeAtomicPush) {
-				return refusal(
+				return { kind: "result", value: refusal(
 					"absent",
 					"blocked",
 					"host_contract_breach",
 					"request_operator_review",
 					"Compose a remote port with probeAtomicPush; admission refuses without an atomic-capability proof.",
-				);
+				) };
 			}
 			const atomicCapability = await options.ledger.git.probeAtomicPush(
 				input.remote,
 			);
 			if (atomicCapability.status === "refused") {
-				return refusal(
+				return { kind: "result", value: refusal(
 					"absent",
 					"blocked",
 					"host_contract_breach",
 					"request_operator_review",
 					`Use a remote with admitted atomic-push behavior; probe found ${atomicCapability.reason}.`,
-				);
+				) };
 			}
 			if (atomicCapability.status === "failed") {
-				return refusal(
+				return { kind: "result", value: refusal(
 					"absent",
 					"blocked",
 					"remote_unavailable",
 					"inspect_status",
 					"Inspect remote availability before admission.",
-				);
+				) };
 			}
 			const main = await options.ledger.git.inspectMain(input.remote);
 			if (main.status === "refused") {
-				return refusal(
+				return { kind: "result", value: refusal(
 					"absent",
 					"blocked",
 					"host_contract_breach",
 					"request_operator_review",
 					"Ask an operator to remove unsafe remote configuration before admission.",
-				);
+				) };
 			}
 			if (main.status === "failed" || main.alignment !== "aligned" || main.localHead === null || main.localHead !== identity.localMainHead) {
-				return refusal("absent", "blocked", main.status === "failed" ? "remote_unavailable" : alignmentBlocker(main.alignment), "inspect_status", "Inspect main alignment before admission.");
+				return { kind: "result", value: refusal("absent", "blocked", main.status === "failed" ? "remote_unavailable" : alignmentBlocker(main.alignment), "inspect_status", "Inspect main alignment before admission.") };
 			}
 			const admission = await options.repository.inspectOwnedPaths(input.requestedPaths);
 			if (admission.status === "refused") {
-				return refusal("absent", "blocked", "owned_path_not_admitted", "change_owned_paths", `Change the owned path set; admission found ${admission.reason}.`);
+				return { kind: "result", value: refusal("absent", "blocked", "owned_path_not_admitted", "change_owned_paths", `Change the owned path set; admission found ${admission.reason}.`) };
 			}
 			const observed = await observeRemoteLedger(options.ledger, { remote: input.remote });
 			if (observed.status === "refused") {
-				return refusal("absent", "blocked", observed.blocker, observed.nextAction.id, observed.nextAction.summary);
+				return { kind: "result", value: refusal("absent", "blocked", observed.blocker, observed.nextAction.id, observed.nextAction.summary) };
 			}
 			const receiptId = options.runtime.newReceiptId();
 			const receipt: VaultGitReceipt = {
@@ -851,10 +859,15 @@ export function createVaultGitTransactionEngine(
 				diagnosticsReference: `receipt:${receiptId}`,
 			};
 			await options.store.initialize(receipt);
+			return { kind: "initialized", receipt };
+			};
+			const preparation = await options.runtimeSelectionFence.hold(prepare);
+			if (preparation.kind === "result") return preparation.value;
+			const receipt = preparation.receipt;
 			options.runtime.interrupt("before_remote_cas");
 			const acquired = await acquireRemoteLease(options.ledger, {
 				remote: input.remote,
-				expectedGeneration: observed.generation,
+				expectedGeneration: receipt.expectedLeaseGeneration,
 				actor: receipt.actor,
 				host: receipt.host,
 				event: receipt.event,

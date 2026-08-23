@@ -12,10 +12,15 @@ import {
 	type VaultGitSetupSpawn,
 } from "../src/next-safe-action.ts";
 
-// The one public Setup executable lane: the repository-root `setup` script.
+// The one public Setup executable lane: the root-projected workspace bin.
 // Setup discovery must arrive through this real process, never a source import.
-const REPOSITORY_ROOT = join(import.meta.dir, "..", "..", "..");
-const SETUP_EXECUTABLE = join(REPOSITORY_ROOT, "setup");
+const REPOSITORY_ROOT = join(import.meta.dir, "..", "..", "..", "..");
+const SETUP_EXECUTABLE = join(
+	REPOSITORY_ROOT,
+	"node_modules",
+	".bin",
+	"setup",
+);
 
 interface PublicSetupDiscoveryContract {
 	readonly id: string;

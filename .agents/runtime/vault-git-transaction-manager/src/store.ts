@@ -1654,12 +1654,16 @@ function historyPath(directory: string, receipt: VaultGitReceipt): string {
 
 function parseReceipt(text: string): VaultGitReceipt | null {
 	try {
-		const value: unknown = JSON.parse(text);
-		validateReceipt(value);
-		return value;
+		return parseVaultGitReceipt(JSON.parse(text));
 	} catch {
 		return null;
 	}
+}
+
+/** Parse one exact durable receipt without accepting a partial phase projection. */
+export function parseVaultGitReceipt(value: unknown): VaultGitReceipt {
+	validateReceipt(value);
+	return value;
 }
 
 function validateReceipt(value: unknown): asserts value is VaultGitReceipt {

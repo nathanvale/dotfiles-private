@@ -121,6 +121,7 @@ import {
 	createVaultGitTaskStore,
 	type VaultGitTaskStore,
 } from "./task-store.ts";
+import { createVaultGitRuntimeSelectionFence } from "./runtime-selection-fence.ts";
 import {
 	createVaultGitTaskLifecycle,
 	VAULT_GIT_LAUNCH_ACK_WINDOW_MS,
@@ -584,6 +585,7 @@ async function createVaultGitCliCompositionFromSelection(
 		repositoryIdentity,
 		check,
 		activationAuthority: activationRuntime.validation,
+		runtimeSelectionFence: createVaultGitRuntimeSelectionFence(input.stateRoot),
 	});
 	const janitor = createVaultGitJanitor({
 		engine,
@@ -1155,6 +1157,7 @@ async function resolveDefaultComposition(
 	const activationIdentity = await resolveDefaultActivationIdentity(
 		process.env,
 		homedir(),
+		process.argv[0],
 	);
 	const allowedRemoteHosts = resolveDefaultAllowedRemoteHosts();
 	const input: VaultGitCliCompositionInput = {
