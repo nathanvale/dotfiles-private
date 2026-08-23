@@ -5,7 +5,9 @@
 		"includes": [
 			"**",
 			"!**/docs/**/*.html",
-			"!.agents/skills/browser-use/src/prototypes",
+			"!config/agents/skills/personal/classic-cinema/references/assets/ticket-template.html",
+			"!config/agents/skills/personal/browser-use/src/prototypes",
+			"!config/herdr/plugins",
 			"!**/actions/assets",
 			"!**/dist",
 			"!**/coverage",
@@ -29,7 +31,6 @@
 			"!.agents/*",
 			".agents/skills",
 			"!.agents/skills/*",
-			".agents/skills/browser-use",
 			".agents/runtime",
 			"!.agents/runtime/*",
 			".agents/runtime/browser-connect",

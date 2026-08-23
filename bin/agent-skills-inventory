@@ -1,117 +1,1062 @@
 #!/usr/bin/env python3
-"""Classify every entry in the two skills addresses by origin.
+"""Reconcile the declared agent-skill topology against live discovery roots."""
 
-Cutover step 2 of nathanvale/dotfiles-private#46 gates the skills repoint on
-this returning no orphans. An orphan is an entry that resolves to no
-repository and no lock file, so a machine loss takes it.
-
-Exit 0 when no orphan remains, 1 otherwise.
-"""
-
+import argparse
+import hashlib
 import json
 import os
+import stat
 import sys
+import tomllib
+from collections import Counter
+
 
 HOME = os.path.expanduser("~")
-ADDRESSES = [
-    os.path.join(HOME, ".claude", "skills"),
-    os.path.join(HOME, ".agents", "skills"),
-]
-DOTFILES_SOURCE = os.path.join(HOME, "code", "dotfiles", ".agents", "skills")
-# Cutover step 3 moved the lock file into the dotfiles source. The old
-# address is still read so this runs on a machine before that move.
+DOTFILES_ROOT = os.path.join(HOME, "code", "dotfiles")
+LEGACY_SOURCE = os.path.join(DOTFILES_ROOT, ".agents", "skills")
+PERSONAL_SOURCE = os.path.join(
+    DOTFILES_ROOT, "config", "agents", "skills", "personal"
+)
+THIRD_PARTY_SOURCE = os.path.join(
+    DOTFILES_ROOT, "config", "agents", "skills", "third-party"
+)
+TOPOLOGY_PATH = os.path.join(
+    DOTFILES_ROOT, "config", "agents", "skills", "topology.json"
+)
+CLAUDE_SETTINGS_PATH = os.path.join(
+    DOTFILES_ROOT, "config", "agents", "claude", "settings.json"
+)
+CODEX_CONFIG_PATH = os.path.join(HOME, ".codex", "config.toml")
+PLUGIN_CACHE = os.path.join(HOME, ".codex", "plugins", "cache")
+ADDRESSES = {
+    "dotfiles": LEGACY_SOURCE,
+    "agents": os.path.join(HOME, ".agents", "skills"),
+    "claude": os.path.join(HOME, ".claude", "skills"),
+    "codex": os.path.join(HOME, ".codex", "skills"),
+}
 LOCK_CANDIDATES = [
-    os.path.join(DOTFILES_SOURCE, ".skill-lock.json"),
+    os.path.join(LEGACY_SOURCE, ".skill-lock.json"),
     os.path.join(HOME, ".agents", ".skill-lock.json"),
 ]
-RETIRING_REPO = os.path.join(HOME, "code", "claude-code-config")
 
 
-def lock_keys(candidates):
-    for path in candidates:
-        if os.path.exists(path):
-            with open(path) as handle:
-                return set(json.load(handle).get("skills", {})), path
-    return set(), None
+def load_json(path):
+    with open(path, encoding="utf-8") as handle:
+        return json.load(handle)
 
 
-def classify(address, name, locked):
-    entry = os.path.join(address, name)
+def load_toml(path):
+    with open(path, "rb") as handle:
+        return tomllib.load(handle)
 
-    if os.path.islink(entry):
-        target = os.path.realpath(entry)
-        if target.startswith(RETIRING_REPO + os.sep):
-            return "claude-code-config-symlink"
-        if target.startswith(DOTFILES_SOURCE + os.sep):
-            return "dotfiles-symlink"
-        if not os.path.exists(target):
-            return "dangling-symlink"
-        return "foreign-symlink"
 
-    if name in locked:
-        return "lock-file"
-    if os.path.isdir(os.path.join(DOTFILES_SOURCE, name)):
-        return "dotfiles-source"
-    return "ORPHAN"
+def normalize_config_path(path):
+    return os.path.abspath(os.path.expanduser(path))
+
+
+def load_lock():
+    for candidate in LOCK_CANDIDATES:
+        if os.path.exists(candidate):
+            payload = load_json(candidate)
+            return payload.get("skills", {}), os.path.realpath(candidate)
+    return {}, None
+
+
+def git_object_hash(kind, payload):
+    header = f"{kind} {len(payload)}\0".encode()
+    return hashlib.sha1(header + payload).digest()
+
+
+def git_tree_digest(root):
+    rows = []
+    with os.scandir(root) as entries:
+        ordered = sorted(entries, key=lambda entry: os.fsencode(entry.name))
+    for entry in ordered:
+        path = entry.path
+        encoded_name = os.fsencode(entry.name)
+        entry_stat = os.lstat(path)
+        if stat.S_ISLNK(entry_stat.st_mode):
+            mode = b"120000"
+            digest = git_object_hash("blob", os.fsencode(os.readlink(path)))
+        elif stat.S_ISDIR(entry_stat.st_mode):
+            mode = b"40000"
+            digest = git_tree_digest(path)
+        elif stat.S_ISREG(entry_stat.st_mode):
+            mode = b"100755" if entry_stat.st_mode & 0o111 else b"100644"
+            with open(path, "rb") as handle:
+                digest = git_object_hash("blob", handle.read())
+        else:
+            return None
+        rows.append(mode + b" " + encoded_name + b"\0" + digest)
+    return git_object_hash("tree", b"".join(rows))
+
+
+def git_tree_hash(root):
+    try:
+        root_stat = os.lstat(root)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(root_stat.st_mode):
+        return None
+    digest = git_tree_digest(root)
+    return digest.hex() if digest else None
+
+
+def entry_count(root):
+    """Count entries, recursing into real directories only."""
+    try:
+        root_stat = os.lstat(root)
+    except OSError:
+        return None
+    if not stat.S_ISDIR(root_stat.st_mode):
+        return None
+    count = 0
+    try:
+        with os.scandir(root) as entries:
+            for entry in entries:
+                count += 1
+                try:
+                    entry_stat = entry.stat(follow_symlinks=False)
+                except OSError:
+                    return None
+                if stat.S_ISDIR(entry_stat.st_mode):
+                    nested = entry_count(entry.path)
+                    if nested is None:
+                        return None
+                    count += nested
+    except OSError:
+        return None
+    return count
+
+
+def path_kind(path):
+    if os.path.islink(path):
+        return "symlink"
+    if os.path.isdir(path):
+        return "directory"
+    if os.path.isfile(path):
+        return "file"
+    return "other"
+
+
+def is_within(path, root):
+    try:
+        return os.path.commonpath([path, root]) == root
+    except ValueError:
+        return False
+
+
+class Inventory:
+    def __init__(
+        self,
+        topology,
+        locked,
+        lock_path,
+        skill_overrides,
+        codex_skill_registrations,
+    ):
+        self.topology = topology
+        self.personal = topology.get("personal", {})
+        self.project_only = topology.get("projectOnly", {})
+        self.third_party = topology.get("thirdParty", {})
+        self.retired = set(topology.get("retired", []))
+        self.locked = locked
+        self.lock_path = lock_path
+        self.skill_overrides = skill_overrides
+        self.codex_skill_registrations = codex_skill_registrations
+        self.protected_manifest = topology.get("protectedHarness")
+        self.protected_harness = None
+        self.entries = []
+        self.issues = []
+
+    def codex_registration_states(self, name):
+        expected = normalize_config_path(
+            os.path.join(ADDRESSES["agents"], name, "SKILL.md")
+        )
+        return [
+            registration.get("enabled", True)
+            for registration in self.codex_skill_registrations
+            if normalize_config_path(registration.get("path", "")) == expected
+        ]
+
+    def codex_activation(self, name):
+        states = self.codex_registration_states(name)
+        return "disabled" if states and all(state is False for state in states) else "enabled"
+
+    def issue(self, code, address, name, message):
+        issue = {
+            "code": code,
+            "address": address,
+            "name": name,
+            "message": message,
+        }
+        self.issues.append(issue)
+        return issue
+
+    def agreement_with_lock(self, name, target):
+        expected = self.locked.get(name, {}).get("skillFolderHash")
+        actual = git_tree_hash(target)
+        if not expected or not actual:
+            return "unverified"
+        return "match" if expected == actual else "mismatch"
+
+    def third_party_source(self, name, declaration):
+        owner = declaration.get("owner") if isinstance(declaration, dict) else None
+        if not isinstance(owner, str) or not owner:
+            return None
+        normalized = os.path.normpath(owner)
+        if (
+            os.path.isabs(owner)
+            or normalized != owner
+            or normalized == ".."
+            or normalized.startswith(".." + os.sep)
+        ):
+            return None
+        return os.path.realpath(os.path.join(THIRD_PARTY_SOURCE, owner, name))
+
+    def project_path(self, relative_path):
+        if not isinstance(relative_path, str) or not relative_path:
+            return None
+        normalized = os.path.normpath(relative_path)
+        if (
+            os.path.isabs(relative_path)
+            or normalized != relative_path
+            or normalized == ".."
+            or normalized.startswith(".." + os.sep)
+        ):
+            return None
+        absolute = os.path.abspath(os.path.join(DOTFILES_ROOT, relative_path))
+        return absolute if is_within(absolute, DOTFILES_ROOT) else None
+
+    def project_only_source(self, name, declaration):
+        if not isinstance(declaration, dict):
+            return None
+        source = self.project_path(declaration.get("source"))
+        if source is None or os.path.basename(source) != name:
+            return None
+        forbidden_roots = (LEGACY_SOURCE, PERSONAL_SOURCE, THIRD_PARTY_SOURCE)
+        if any(is_within(source, root) for root in forbidden_roots):
+            return None
+        return source
+
+    def project_only_addresses(self, name, declaration):
+        if not isinstance(declaration, dict):
+            return None
+        addresses = declaration.get("projectAddresses")
+        if not isinstance(addresses, list) or not addresses:
+            return None
+        resolved = []
+        for address in addresses:
+            path = self.project_path(address)
+            if path is None or os.path.basename(path) != name:
+                return None
+            resolved.append(path)
+        return resolved if len(set(resolved)) == len(resolved) else None
+
+    def base_row(self, address, name, entry):
+        kind = path_kind(entry)
+        stored_target = os.readlink(entry) if kind == "symlink" else None
+        resolved_target = os.path.realpath(entry) if kind == "symlink" else entry
+        activation = (
+            "disabled"
+            if address == "claude" and self.skill_overrides.get(name) == "off"
+            else "enabled"
+        )
+        harness_activation = {address: activation} if address != "dotfiles" else {}
+        if address == "agents":
+            harness_activation["codex"] = self.codex_activation(name)
+        return {
+            "address": address,
+            "path": entry,
+            "name": name,
+            "filesystem_kind": kind,
+            "stored_target": stored_target,
+            "resolved_target": resolved_target,
+            "provenance": "unknown",
+            "source_owner": "unknown",
+            "source_path": None,
+            "content_agreement": "unverified",
+            "activation": activation,
+            "harness_activation": harness_activation,
+            "issues": [],
+        }
+
+    def attach(self, row, code, message):
+        issue = self.issue(code, row["address"], row["name"], message)
+        row["issues"].append(issue)
+
+    def classify_dotfiles(self, row):
+        name = row["name"]
+        target = row["resolved_target"]
+        if name == ".skill-lock.json":
+            row.update(
+                provenance="third-party-lock",
+                source_owner="dotfiles",
+                source_path=self.lock_path,
+                content_agreement="metadata",
+            )
+            return
+        if name in self.project_only:
+            declaration = self.project_only[name]
+            source = self.project_only_source(name, declaration)
+            addresses = self.project_only_addresses(name, declaration) or []
+            expected = os.path.realpath(source) if source else None
+            row.update(
+                provenance="project-only",
+                source_owner="dotfiles",
+                source_path=expected,
+                content_agreement="source" if expected and target == expected else "mismatch",
+            )
+            if row["filesystem_kind"] != "symlink":
+                self.attach(
+                    row,
+                    "project-only-not-tracking-link",
+                    "project-only address is not a Tracking Link",
+                )
+            if row["path"] not in addresses or expected is None or target != expected:
+                self.attach(
+                    row,
+                    "wrong-project-only-target",
+                    "project-only address does not resolve to its declared source",
+                )
+            return
+        if name in self.retired:
+            row.update(provenance="retired", source_owner="none")
+            self.attach(row, "retired-present", "retired skill still has a source")
+            return
+        if name in self.locked:
+            agreement = self.agreement_with_lock(name, target)
+            row.update(
+                provenance="third-party-legacy-source",
+                source_owner=self.locked[name].get("source", "unknown"),
+                source_path=target,
+                content_agreement=agreement,
+            )
+            self.attach(
+                row,
+                "third-party-legacy-source",
+                "locked third-party payload remains in the legacy source",
+            )
+            if agreement == "mismatch":
+                self.attach(row, "content-mismatch", "payload differs from lock hash")
+            if agreement == "unverified":
+                self.attach(row, "content-unverified", "lock content could not be verified")
+            return
+        row.update(
+            provenance="personal-legacy",
+            source_owner="dotfiles",
+            source_path=target,
+            content_agreement="source",
+        )
+        self.attach(row, "legacy-source", "personal skill remains in the legacy source")
+
+    def classify_live(self, row):
+        name = row["name"]
+        target = row["resolved_target"]
+        kind = row["filesystem_kind"]
+        if name in self.retired:
+            row.update(provenance="retired", source_owner="none")
+            self.attach(row, "retired-present", "retired skill still has a live address")
+            return
+        if name in self.project_only:
+            source = self.project_only_source(name, self.project_only[name])
+            expected = os.path.realpath(source) if source else None
+            row.update(
+                provenance="project-only",
+                source_owner="dotfiles",
+                source_path=expected,
+                content_agreement="source" if expected and target == expected else "mismatch",
+            )
+            self.attach(
+                row,
+                "project-only-user-address",
+                "project-only skill must not have a user-scope live address",
+            )
+            return
+        if kind == "symlink" and not os.path.exists(target):
+            row["content_agreement"] = "missing-target"
+            self.attach(row, "dangling-symlink", "live address has no resolved target")
+            return
+        if name in self.personal:
+            expected = os.path.realpath(os.path.join(PERSONAL_SOURCE, name))
+            row.update(
+                provenance="personal-transitional",
+                source_owner="dotfiles",
+                source_path=expected,
+                content_agreement="match" if target == expected else "mismatch",
+            )
+            if kind != "symlink":
+                self.attach(
+                    row,
+                    "personal-not-tracking-link",
+                    "personal live address is not a Tracking Link",
+                )
+            if target != expected:
+                self.attach(
+                    row,
+                    "wrong-personal-target",
+                    "personal live address resolves to the wrong source",
+                )
+            return
+        if name in self.third_party:
+            declaration = self.third_party[name]
+            expected = self.third_party_source(name, declaration)
+            owner = declaration.get("owner", "unknown")
+            agreement = self.agreement_with_lock(name, target)
+            row.update(
+                provenance="third-party-installed",
+                source_owner=owner,
+                source_path=expected,
+                content_agreement=agreement,
+            )
+            if kind != "symlink":
+                self.attach(
+                    row,
+                    "third-party-not-tracking-link",
+                    "installed third-party live address is not a Tracking Link",
+                )
+            if expected is None or target != expected:
+                self.attach(
+                    row,
+                    "wrong-third-party-target",
+                    "installed third-party live address resolves to the wrong source",
+                )
+            if agreement == "mismatch":
+                self.attach(row, "content-mismatch", "payload differs from lock hash")
+            if agreement == "unverified":
+                self.attach(row, "content-unverified", "lock content could not be verified")
+            return
+        if name in self.locked:
+            agreement = self.agreement_with_lock(name, target)
+            row.update(
+                provenance="third-party-locked",
+                source_owner=self.locked[name].get("source", "unknown"),
+                source_path=target,
+                content_agreement=agreement,
+            )
+            if agreement == "mismatch":
+                self.attach(row, "content-mismatch", "payload differs from lock hash")
+            if agreement == "unverified":
+                self.attach(row, "content-unverified", "lock content could not be verified")
+            return
+        if is_within(target, PERSONAL_SOURCE):
+            row.update(
+                provenance="personal-undeclared",
+                source_owner="dotfiles",
+                source_path=target,
+                content_agreement="match",
+            )
+            self.attach(
+                row,
+                "undeclared-personal-source",
+                "personal source has no topology declaration",
+            )
+            return
+        if is_within(target, THIRD_PARTY_SOURCE):
+            row.update(
+                provenance="third-party-reviewed",
+                source_owner="dotfiles-third-party-review",
+                source_path=target,
+                content_agreement="match",
+            )
+            self.attach(
+                row,
+                "undeclared-third-party-source",
+                "reviewed third-party live address has no topology declaration",
+            )
+            return
+        if is_within(target, LEGACY_SOURCE) or os.path.isdir(
+            os.path.join(LEGACY_SOURCE, name)
+        ):
+            source = os.path.join(LEGACY_SOURCE, name)
+            agreement = "match"
+            if os.path.isdir(source) and git_tree_hash(source) != git_tree_hash(target):
+                agreement = "mismatch"
+            row.update(
+                provenance="personal-legacy",
+                source_owner="dotfiles",
+                source_path=source,
+                content_agreement=agreement,
+            )
+            self.attach(
+                row,
+                "legacy-live-address",
+                "live address still uses the legacy personal source",
+            )
+            if agreement == "mismatch":
+                self.attach(row, "content-mismatch", "live copy differs from legacy source")
+            return
+        if is_within(target, PLUGIN_CACHE):
+            row.update(
+                provenance="plugin-owned",
+                source_owner="codex-plugin",
+                source_path=target,
+                content_agreement="owned",
+            )
+            return
+        self.attach(row, "unknown-provenance", "entry has no declared source owner")
+
+    def classify_codex(self, row):
+        if row["filesystem_kind"] == "symlink" and not os.path.exists(
+            row["resolved_target"]
+        ):
+            row["content_agreement"] = "missing-target"
+            self.attach(row, "dangling-symlink", "Codex-owned entry is dangling")
+        else:
+            row["content_agreement"] = "owned"
+        row.update(provenance="codex-owned", source_owner="codex")
+        row["source_path"] = row["resolved_target"]
+
+    def scan(self):
+        for address, root in ADDRESSES.items():
+            if not os.path.isdir(root):
+                self.issue("missing-address", address, None, f"missing discovery root: {root}")
+                continue
+            for name in sorted(os.listdir(root)):
+                entry = os.path.join(root, name)
+                row = self.base_row(address, name, entry)
+                if address == "dotfiles":
+                    self.classify_dotfiles(row)
+                elif address == "codex":
+                    self.classify_codex(row)
+                else:
+                    self.classify_live(row)
+                self.entries.append(row)
+        self.check_declarations()
+        self.check_codex_duplicates()
+        self.check_protected_harness()
+
+    def check_declarations(self):
+        allowed_addresses = {"agents", "claude"}
+        allowed_disabled_harnesses = {"codex"}
+        project_names = set(self.project_only)
+        for other_class, names in (
+            ("personal", set(self.personal)),
+            ("third-party", set(self.third_party)),
+            ("retired", self.retired),
+            ("third-party lock", set(self.locked)),
+        ):
+            for name in sorted(project_names & names):
+                self.issue(
+                    "project-only-owner-conflict",
+                    "topology",
+                    name,
+                    f"project-only skill also appears in {other_class}",
+                )
+        for name, declaration in sorted(self.project_only.items()):
+            source = self.project_only_source(name, declaration)
+            addresses = self.project_only_addresses(name, declaration)
+            if source is None or addresses is None:
+                self.issue(
+                    "invalid-project-only-declaration",
+                    "topology",
+                    name,
+                    "project-only source and addresses must be normalized repository-relative paths for this skill",
+                )
+                continue
+            if not os.path.isdir(source):
+                self.issue(
+                    "missing-project-only-source",
+                    "project-source",
+                    name,
+                    f"declared project-only source is missing: {source}",
+                )
+            expected = os.path.realpath(source)
+            for address in addresses:
+                if not os.path.lexists(address):
+                    self.issue(
+                        "missing-project-only-address",
+                        "project-address",
+                        name,
+                        f"declared project-only address is missing: {address}",
+                    )
+                    continue
+                if not os.path.islink(address):
+                    present = any(
+                        issue["code"] == "project-only-not-tracking-link"
+                        and issue["name"] == name
+                        for issue in self.issues
+                    )
+                    if not present:
+                        self.issue(
+                            "project-only-not-tracking-link",
+                            "project-address",
+                            name,
+                            "project-only address is not a Tracking Link",
+                        )
+                if os.path.realpath(address) != expected:
+                    present = any(
+                        issue["code"] == "wrong-project-only-target"
+                        and issue["name"] == name
+                        for issue in self.issues
+                    )
+                    if not present:
+                        self.issue(
+                            "wrong-project-only-target",
+                            "project-address",
+                            name,
+                            "project-only address does not resolve to its declared source",
+                        )
+            for address in ("agents", "claude", "codex"):
+                live = os.path.join(ADDRESSES[address], name)
+                if os.path.lexists(live):
+                    present = any(
+                        issue["code"] == "project-only-user-address"
+                        and issue["address"] == address
+                        and issue["name"] == name
+                        for issue in self.issues
+                    )
+                    if not present:
+                        self.issue(
+                            "project-only-user-address",
+                            address,
+                            name,
+                            "project-only skill must not have a user-scope live address",
+                        )
+        declared = set(self.personal)
+        if os.path.isdir(PERSONAL_SOURCE):
+            for name in sorted(os.listdir(PERSONAL_SOURCE)):
+                if name not in declared:
+                    self.issue(
+                        "undeclared-personal-source",
+                        "personal-source",
+                        name,
+                        "personal source has no topology declaration",
+                    )
+        for name, declaration in sorted(self.personal.items()):
+            source = os.path.realpath(os.path.join(PERSONAL_SOURCE, name))
+            if not os.path.isdir(source):
+                self.issue(
+                    "missing-personal-source",
+                    "personal-source",
+                    name,
+                    f"declared source is missing: {source}",
+                )
+            addresses = declaration.get("addresses", [])
+            disabled_addresses = set(declaration.get("disabledAddresses", []))
+            disabled_harnesses = set(declaration.get("disabledHarnesses", []))
+            if not disabled_addresses.issubset(set(addresses)):
+                self.issue(
+                    "disabled-address-not-live",
+                    "topology",
+                    name,
+                    "disabled address is not present in the live-address declaration",
+                )
+            unsupported_disabled = disabled_addresses - {"claude"}
+            for address in sorted(unsupported_disabled):
+                self.issue(
+                    "unsupported-disabled-address",
+                    address,
+                    name,
+                    "only Claude skillOverrides currently owns disabled skill state",
+                )
+            claude_disabled = self.skill_overrides.get(name) == "off"
+            declared_claude_disabled = "claude" in disabled_addresses
+            if claude_disabled and not declared_claude_disabled:
+                self.issue(
+                    "undeclared-disabled-address",
+                    "claude",
+                    name,
+                    "Claude disables this declared live address but the topology does not",
+                )
+            if declared_claude_disabled and not claude_disabled:
+                self.issue(
+                    "missing-disabled-override",
+                    "claude",
+                    name,
+                    "topology declares Claude disabled but skillOverrides does not",
+                )
+            unsupported_harnesses = disabled_harnesses - allowed_disabled_harnesses
+            for harness in sorted(unsupported_harnesses):
+                self.issue(
+                    "unsupported-disabled-harness",
+                    harness,
+                    name,
+                    "only Codex shared-agent activation is currently supported",
+                )
+            if "codex" in disabled_harnesses and "agents" not in addresses:
+                self.issue(
+                    "disabled-harness-not-live",
+                    "codex",
+                    name,
+                    "Codex activation requires a declared shared-agent address",
+                )
+            codex_states = self.codex_registration_states(name)
+            if len(set(codex_states)) > 1:
+                self.issue(
+                    "conflicting-harness-registration",
+                    "codex",
+                    name,
+                    "Codex has conflicting enabled states for the shared-agent path",
+                )
+            codex_disabled = self.codex_activation(name) == "disabled"
+            declared_codex_disabled = "codex" in disabled_harnesses
+            if codex_disabled and not declared_codex_disabled:
+                self.issue(
+                    "undeclared-disabled-harness",
+                    "codex",
+                    name,
+                    "Codex disables this shared-agent skill but the topology does not",
+                )
+            if declared_codex_disabled and not codex_disabled:
+                self.issue(
+                    "missing-disabled-harness-state",
+                    "codex",
+                    name,
+                    "topology declares Codex disabled but its registration does not",
+                )
+            for address in addresses:
+                if address not in allowed_addresses:
+                    self.issue(
+                        "unknown-live-address",
+                        address,
+                        name,
+                        "personal declaration names an unsupported address",
+                    )
+                    continue
+                live = os.path.join(ADDRESSES[address], name)
+                if not os.path.lexists(live):
+                    self.issue(
+                        "missing-live-address",
+                        address,
+                        name,
+                        "declared personal Tracking Link is missing",
+                    )
+            for address in allowed_addresses - set(addresses):
+                live = os.path.join(ADDRESSES[address], name)
+                if os.path.lexists(live):
+                    self.issue(
+                        "undeclared-live-address",
+                        address,
+                        name,
+                        "personal skill is live at an undeclared address",
+                    )
+        declared_third_party = set(self.third_party)
+        for name in sorted(set(self.locked) - declared_third_party):
+            self.issue(
+                "undeclared-third-party-lock",
+                "third-party-lock",
+                name,
+                "locked third-party skill has no topology declaration",
+            )
+        if os.path.isdir(THIRD_PARTY_SOURCE):
+            for root, directories, files in os.walk(THIRD_PARTY_SOURCE):
+                directories.sort()
+                if "SKILL.md" not in files:
+                    continue
+                name = os.path.basename(root)
+                if name not in declared_third_party:
+                    self.issue(
+                        "undeclared-third-party-source",
+                        "third-party-source",
+                        name,
+                        "reviewed third-party source has no topology declaration",
+                    )
+        for name, declaration in sorted(self.third_party.items()):
+            source = self.third_party_source(name, declaration)
+            owner = declaration.get("owner") if isinstance(declaration, dict) else None
+            if source is None:
+                self.issue(
+                    "invalid-third-party-owner",
+                    "topology",
+                    name,
+                    "third-party owner must be a normalized relative path",
+                )
+            elif not os.path.isdir(source):
+                self.issue(
+                    "missing-third-party-source",
+                    "third-party-source",
+                    name,
+                    f"declared source is missing: {source}",
+                )
+            if name not in self.locked:
+                self.issue(
+                    "missing-third-party-lock",
+                    "third-party-source",
+                    name,
+                    "declared third-party skill has no lock entry",
+                )
+            else:
+                lock_owner = self.locked[name].get("source")
+                if owner != lock_owner:
+                    self.issue(
+                        "third-party-owner-mismatch",
+                        "third-party-source",
+                        name,
+                        f"declared owner {owner!r} differs from lock owner {lock_owner!r}",
+                    )
+                if source and os.path.isdir(source):
+                    agreement = self.agreement_with_lock(name, source)
+                    if agreement == "mismatch":
+                        self.issue(
+                            "content-mismatch",
+                            "third-party-source",
+                            name,
+                            "reviewed source differs from lock hash",
+                        )
+                    if agreement == "unverified":
+                        self.issue(
+                            "content-unverified",
+                            "third-party-source",
+                            name,
+                            "reviewed source could not be verified against the lock",
+                        )
+            addresses = declaration.get("addresses", []) if isinstance(declaration, dict) else []
+            disabled_addresses = set(
+                declaration.get("disabledAddresses", [])
+                if isinstance(declaration, dict)
+                else []
+            )
+            if not disabled_addresses.issubset(set(addresses)):
+                self.issue(
+                    "disabled-address-not-live",
+                    "topology",
+                    name,
+                    "disabled address is not present in the live-address declaration",
+                )
+            unsupported_disabled = disabled_addresses - {"claude"}
+            for address in sorted(unsupported_disabled):
+                self.issue(
+                    "unsupported-disabled-address",
+                    address,
+                    name,
+                    "only Claude skillOverrides currently owns disabled skill state",
+                )
+            claude_disabled = self.skill_overrides.get(name) == "off"
+            declared_claude_disabled = "claude" in disabled_addresses
+            if claude_disabled and not declared_claude_disabled:
+                self.issue(
+                    "undeclared-disabled-address",
+                    "claude",
+                    name,
+                    "Claude disables this declared live address but the topology does not",
+                )
+            if declared_claude_disabled and not claude_disabled:
+                self.issue(
+                    "missing-disabled-override",
+                    "claude",
+                    name,
+                    "topology declares Claude disabled but skillOverrides does not",
+                )
+            for address in addresses:
+                if address not in allowed_addresses:
+                    self.issue(
+                        "unknown-live-address",
+                        address,
+                        name,
+                        "third-party declaration names an unsupported address",
+                    )
+                    continue
+                live = os.path.join(ADDRESSES[address], name)
+                if not os.path.lexists(live):
+                    self.issue(
+                        "missing-live-address",
+                        address,
+                        name,
+                        "declared third-party Tracking Link is missing",
+                    )
+            for address in allowed_addresses - set(addresses):
+                live = os.path.join(ADDRESSES[address], name)
+                if os.path.lexists(live):
+                    self.issue(
+                        "undeclared-live-address",
+                        address,
+                        name,
+                        "third-party skill is live at an undeclared address",
+                    )
+        for name in sorted(self.retired):
+            paths = [
+                os.path.join(LEGACY_SOURCE, name),
+                os.path.join(PERSONAL_SOURCE, name),
+                *(os.path.join(root, name) for root in ADDRESSES.values()),
+            ]
+            if os.path.isdir(THIRD_PARTY_SOURCE):
+                for root, directories, _files in os.walk(THIRD_PARTY_SOURCE):
+                    directories.sort()
+                    if os.path.basename(root) == name:
+                        paths.append(root)
+            if any(os.path.lexists(path) for path in paths):
+                present = any(
+                    issue["code"] == "retired-present" and issue["name"] == name
+                    for issue in self.issues
+                )
+                if not present:
+                    self.issue(
+                        "retired-present",
+                        "topology",
+                        name,
+                        "retired skill still has a source or live address",
+                    )
+
+    def check_codex_duplicates(self):
+        agents_names = {
+            row["name"] for row in self.entries if row["address"] == "agents"
+        }
+        codex_names = {
+            row["name"] for row in self.entries if row["address"] == "codex"
+        }
+        for name in sorted(agents_names & codex_names):
+            self.issue(
+                "codex-duplicate-name",
+                "codex",
+                name,
+                "name is visible from both shared and Codex-owned roots",
+            )
+
+    def check_protected_harness(self):
+        manifest = self.protected_manifest
+        if not manifest:
+            return
+        algorithm = manifest.get("algorithm")
+        version = manifest.get("version")
+        roots = manifest.get("roots")
+        if algorithm != "git-tree-sha1" or version != 1 or not isinstance(roots, list):
+            self.issue(
+                "protected-manifest-invalid",
+                "protected-harness",
+                None,
+                "protected Harness manifest must use git-tree-sha1 version 1 and a roots list",
+            )
+            return
+
+        observed_roots = []
+        for expected in roots:
+            relative_path = expected.get("path") if isinstance(expected, dict) else None
+            if not isinstance(relative_path, str) or not relative_path:
+                self.issue(
+                    "protected-manifest-invalid",
+                    "protected-harness",
+                    None,
+                    "protected Harness root must declare a relative home path",
+                )
+                continue
+            normalized = os.path.normpath(relative_path)
+            if (
+                os.path.isabs(relative_path)
+                or normalized != relative_path
+                or normalized == ".."
+                or normalized.startswith(".." + os.sep)
+            ):
+                self.issue(
+                    "protected-manifest-invalid",
+                    "protected-harness",
+                    relative_path,
+                    "protected Harness root path must stay relative to HOME",
+                )
+                continue
+
+            root = os.path.join(HOME, relative_path)
+            count = entry_count(root)
+            digest = git_tree_hash(root)
+            observed_roots.append(
+                {
+                    "path": relative_path,
+                    "entryCount": count,
+                    "gitTreeSha1": digest,
+                }
+            )
+            if count is None or digest is None:
+                self.issue(
+                    "protected-root-missing",
+                    "protected-harness",
+                    relative_path,
+                    f"protected Harness root is missing or unreadable: {root}",
+                )
+                continue
+            expected_count = expected.get("entryCount")
+            if count != expected_count:
+                self.issue(
+                    "protected-entry-count-drift",
+                    "protected-harness",
+                    relative_path,
+                    f"expected {expected_count} entries, observed {count}",
+                )
+            expected_digest = expected.get("gitTreeSha1")
+            if digest != expected_digest:
+                self.issue(
+                    "protected-tree-hash-drift",
+                    "protected-harness",
+                    relative_path,
+                    f"expected {expected_digest}, observed {digest}",
+                )
+        self.protected_harness = {
+            "algorithm": algorithm,
+            "version": version,
+            "roots": observed_roots,
+        }
+
+    def report(self):
+        ordered_issues = sorted(
+            self.issues,
+            key=lambda issue: (
+                issue["code"],
+                issue["address"] or "",
+                issue["name"] or "",
+            ),
+        )
+        report = {
+            "schema_version": 1,
+            "status": "issues" if ordered_issues else "ok",
+            "topology_path": TOPOLOGY_PATH,
+            "lock_path": self.lock_path,
+            "roots": ADDRESSES,
+            "entries": self.entries,
+            "issues": ordered_issues,
+        }
+        if self.protected_harness is not None:
+            report["protected_harness"] = self.protected_harness
+        return report
+
+
+def human_report(report):
+    for address, root in report["roots"].items():
+        rows = [row for row in report["entries"] if row["address"] == address]
+        counts = Counter(row["provenance"] for row in rows)
+        print(f"{address}: {root} ({len(rows)} entries)")
+        for provenance, count in sorted(counts.items()):
+            print(f"  {count:>4}  {provenance}")
+        print()
+    if report["issues"]:
+        print(f"TOPOLOGY ISSUES: {len(report['issues'])}")
+        for issue in report["issues"]:
+            name = issue["name"] or "-"
+            print(f"  {issue['code']}\t{issue['address']}\t{name}\t{issue['message']}")
+    else:
+        print("TOPOLOGY OK: every visible entry has one declared owner and agreement.")
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Reconcile declared agent-skill sources and live addresses."
+    )
+    parser.add_argument("--json", action="store_true", help="emit the full JSON report")
+    return parser.parse_args()
 
 
 def main():
-    locked, lock_path = lock_keys(LOCK_CANDIDATES)
-    orphans = []
-    report = {}
-
-    for address in ADDRESSES:
-        counts = {}
-        names = sorted(os.listdir(address)) if os.path.isdir(address) else []
-        for name in names:
-            kind = classify(address, name, locked)
-            counts[kind] = counts.get(kind, 0) + 1
-            if kind == "ORPHAN":
-                orphans.append((address, name))
-        report[address] = (len(names), counts)
-
-    for address, (total, counts) in report.items():
-        print(f"{address}  ({total} entries)")
-        for kind in sorted(counts):
-            print(f"  {counts[kind]:>4}  {kind}")
-        print()
-
-    installed = sum(
-        1
-        for address in ADDRESSES[:1]
-        for name in (sorted(os.listdir(address)) if os.path.isdir(address) else [])
-        if not os.path.islink(os.path.join(address, name)) and name in locked
+    args = parse_args()
+    try:
+        topology = load_json(TOPOLOGY_PATH)
+        locked, lock_path = load_lock()
+        claude_settings = load_json(CLAUDE_SETTINGS_PATH)
+        codex_config = load_toml(CODEX_CONFIG_PATH)
+    except (OSError, ValueError) as error:
+        print(f"agent-skills-inventory: {error}", file=sys.stderr)
+        return 2
+    inventory = Inventory(
+        topology,
+        locked,
+        lock_path,
+        claude_settings.get("skillOverrides", {}),
+        codex_config.get("skills", {}).get("config", []),
     )
-    unused = sorted(
-        key
-        for key in locked
-        if not any(os.path.exists(os.path.join(a, key)) for a in ADDRESSES)
-    )
-    where = lock_path.replace(HOME, "~") if lock_path else "NOT FOUND"
-    print(f"lock file: {where}")
-    print(f"  {len(locked)} keys, {installed} installed under {ADDRESSES[0]}")
-    if unused:
-        print(f"  locked but not installed ({len(unused)}): {', '.join(unused)}")
-    print()
-
-    only_claude = set(os.listdir(ADDRESSES[0])) - set(os.listdir(ADDRESSES[1]))
-    only_agents = set(os.listdir(ADDRESSES[1])) - set(os.listdir(ADDRESSES[0]))
-    if only_claude:
-        print(f"only under ~/.claude/skills: {', '.join(sorted(only_claude))}")
-    if only_agents:
-        print(f"only under ~/.agents/skills: {', '.join(sorted(only_agents))}")
-    if only_claude or only_agents:
-        print()
-
-    if not orphans:
-        print("INVENTORY EMPTY: every entry resolves to a repository or the lock file.")
-        return 0
-
-    names = sorted({name for _, name in orphans})
-    print(f"ORPHANS: {len(names)} distinct, {len(orphans)} entries across both addresses")
-    for name in names:
-        print(f"  {name}")
-    return 1
+    inventory.scan()
+    report = inventory.report()
+    if args.json:
+        print(json.dumps(report, indent=2, sort_keys=True))
+    else:
+        human_report(report)
+    return 1 if report["issues"] else 0
 
 
 if __name__ == "__main__":

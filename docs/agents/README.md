@@ -10,6 +10,7 @@ Scope, admission, and the edit rule:
 | Read this | When |
 |---|---|
 | [`instruction-maintenance.md`](instruction-maintenance.md) | Changing `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, or a document they point to |
+| [`skills.md`](skills.md) | Choosing a skill source, live address, migration, or retirement |
 | [`email.md`](email.md) | Answering a question about an accessible email |
 | [`diagnostic-traps.md`](diagnostic-traps.md) | Running `/plugin`, or a command reports a confident result that other evidence denies |
 | [`issue-tracker.md`](issue-tracker.md) | Creating, reading, labelling, or closing an issue |

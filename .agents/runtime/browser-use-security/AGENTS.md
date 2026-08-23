@@ -54,7 +54,7 @@ Gate routes to.
 Run after source-owner moves or Module Map changes.
 
 ```bash
-skills/test-runner/src/test-runner.sh run -- runtime/browser-use-security/tests/docs-drift.test.ts
+../config/agents/skills/personal/test-runner/src/test-runner.sh run -- runtime/browser-use-security/tests/docs-drift.test.ts
 ```
 
 The docs-drift test proves `src` modules and the `ARCHITECTURE.md` Module Map
@@ -74,6 +74,6 @@ agree in both directions, and that the maintainer doc set is present.
 ## Verification
 
 ```bash
-skills/test-runner/src/test-runner.sh run -- runtime/browser-use-security/tests/
+../config/agents/skills/personal/test-runner/src/test-runner.sh run -- runtime/browser-use-security/tests/
 bun --filter @side-quest/browser-use-security typecheck
 ```

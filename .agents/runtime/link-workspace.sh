@@ -5,10 +5,15 @@
 set -euo pipefail
 here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null 2>&1 && pwd -P)"
 skills="$here/../skills"
+personal="$here/../../config/agents/skills/personal"
 
 link_skill() { # <skill> <pkg>
   mkdir -p "$skills/$1/node_modules/@side-quest"
   ln -sfn "../../../../runtime/$2" "$skills/$1/node_modules/@side-quest/$2"
+}
+link_personal() { # <skill> <pkg>
+  mkdir -p "$personal/$1/node_modules/@side-quest"
+  ln -sfn "../../../../../../../.agents/runtime/$2" "$personal/$1/node_modules/@side-quest/$2"
 }
 link_runtime() { # <pkg> <dep>
   mkdir -p "$here/$1/node_modules/@side-quest"
@@ -16,11 +21,11 @@ link_runtime() { # <pkg> <dep>
 }
 
 for s in classic-cinema cli-author cli-execution-auditor fallow skill-feedback test-runner worktree; do
-  link_skill "$s" cli-command-facade
+  link_personal "$s" cli-command-facade
 done
-link_skill session-recovery session-corpus
+link_personal session-recovery session-corpus
 for p in cli-command-facade browser-connect warm-chrome browser-use-security mcporter-transport; do
-  link_skill browser-use "$p"
+  link_personal browser-use "$p"
 done
 
 link_runtime agent-worktree cli-command-facade

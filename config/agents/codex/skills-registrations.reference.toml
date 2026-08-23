@@ -145,10 +145,6 @@ enabled = false
 # ---------------------------------------------------------------------------
 
 [[skills.config]]
-path = "~/.agents/skills/browserclaw/SKILL.md"
-enabled = false
-
-[[skills.config]]
 path = "~/.agents/skills/gog-analytics/SKILL.md"
 enabled = false
 
@@ -165,10 +161,6 @@ path = "~/.agents/skills/gog-meet/SKILL.md"
 enabled = false
 
 [[skills.config]]
-path = "~/code/claude-code-config/skills/ac-convergence/SKILL.md"
-enabled = false
-
-[[skills.config]]
 path = "~/code/claude-code-config/skills/adhd-helper/SKILL.md"
 enabled = false
 
@@ -181,31 +173,11 @@ path = "~/code/claude-code-config/skills/ce-work-inspect/SKILL.md"
 enabled = false
 
 [[skills.config]]
-path = "~/code/claude-code-config/skills/decision-mode/SKILL.md"
-enabled = false
-
-[[skills.config]]
 path = "~/code/claude-code-config/skills/fix-microphone/SKILL.md"
 enabled = false
 
 [[skills.config]]
-path = "~/code/claude-code-config/skills/ica-seam-swarm/SKILL.md"
-enabled = false
-
-[[skills.config]]
 path = "~/code/claude-code-config/skills/lll-account-switch/SKILL.md"
-enabled = false
-
-[[skills.config]]
-path = "~/code/claude-code-config/skills/newsroom-investigate/SKILL.md"
-enabled = false
-
-[[skills.config]]
-path = "~/code/claude-code-config/skills/prompt-system-router/SKILL.md"
-enabled = false
-
-[[skills.config]]
-path = "~/code/claude-code-config/skills/prompt-system-workflow/SKILL.md"
 enabled = false
 
 [[skills.config]]
@@ -214,10 +186,6 @@ enabled = false
 
 [[skills.config]]
 path = "~/code/claude-code-config/skills/skill-feedback/SKILL.md"
-enabled = false
-
-[[skills.config]]
-path = "~/code/claude-code-config/skills/skill-self-audit-loop/SKILL.md"
 enabled = false
 
 [[skills.config]]

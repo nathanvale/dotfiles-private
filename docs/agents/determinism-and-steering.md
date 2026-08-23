@@ -63,9 +63,10 @@ Two live cases on this machine:
 - **A Codex hook stops running when its content hash changes.** It runs only
   against an approved hash, and re-trusting is manual. Nothing announces the
   gap.
-- **An installed skill is not a wired hook.** `git-guardrails-claude-code` is
-  installed and set `off`, and no `hooks.json` declares the `PreToolUse` entry
-  it exists to create. The guard has never guarded anything.
+- **An installed payload is not a wired hook by itself.**
+  `git-guardrails-claude-code` has declared shared-agent and Claude Code
+  Tracking Links. Its Claude override remains `off`, and no `hooks.json`
+  `PreToolUse` entry exists. The guard has never guarded anything.
 
 Gates have a throughput ceiling and its location is unknown, so add one per
 irreversible action rather than by default.

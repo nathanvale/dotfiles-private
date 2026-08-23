@@ -124,8 +124,8 @@ Check these package docs in the same pass:
 Pass/fail gates:
 
 ```bash
-skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/docs-drift.test.ts
-bun run skills/skill-author/scripts/check-owner-paths.ts --json runtime/warm-chrome/README.md runtime/warm-chrome/ARCHITECTURE.md runtime/warm-chrome/AGENTS.md runtime/warm-chrome/CONTEXT.md runtime/warm-chrome/TASKS.md runtime/warm-chrome/TASKS.archive.md
+../config/agents/skills/personal/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/docs-drift.test.ts
+bun run ../config/agents/skills/personal/skill-author/scripts/check-owner-paths.ts --json runtime/warm-chrome/README.md runtime/warm-chrome/ARCHITECTURE.md runtime/warm-chrome/AGENTS.md runtime/warm-chrome/CONTEXT.md runtime/warm-chrome/TASKS.md runtime/warm-chrome/TASKS.archive.md
 ```
 
 The docs-drift test proves `src` modules and the `ARCHITECTURE.md` Module Map
@@ -178,7 +178,7 @@ rg -ni 'runners/warm-chrome-runner|(fifteen|seventeen|15|17)[ -]station|\b(fifte
 Run package checks after source changes:
 
 ```bash
-skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
+../config/agents/skills/personal/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/
 bun --filter @side-quest/warm-chrome typecheck
 ```
 
@@ -194,6 +194,6 @@ Run docs checks after docs-only changes:
 
 ```bash
 git diff --check -- runtime/warm-chrome
-skills/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/docs-drift.test.ts
+../config/agents/skills/personal/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/docs-drift.test.ts
 bun run runtime/warm-chrome/src/cli.ts --help
 ```

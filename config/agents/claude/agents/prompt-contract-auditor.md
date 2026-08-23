@@ -2,8 +2,6 @@
 name: prompt-contract-auditor
 description: Read-only auditor that checks startup-instruction ADRs, health checks, skills, and runbooks still describe the same system. Use after architectural instruction-topology changes.
 model: sonnet
-skills:
-  - prompt-system-router
 disallowedTools:
   - Write
   - Edit
@@ -24,8 +22,7 @@ You audit alignment between these surfaces:
 1. **Decision:** `docs/adr/0011-lean-startup-instructions.md`
 2. **Implementation:** `setup`, `runtime/setup/`, `scripts/agent-instructions.sh`, `scripts/hooks/pre-commit`
 3. **Startup source:** `AGENTS.md`, `CLAUDE.md`
-4. **Workflow front doors:** `skills/prompt-system-router/SKILL.md`, `skills/prompt-system-workflow/SKILL.md`
-5. **Runbooks:** relevant `docs/runbooks/`, `runbooks/`, and skill references that describe instruction delivery, routing, or health checks
+4. **Runbooks:** relevant `docs/runbooks/`, `runbooks/`, and skill references that describe instruction delivery, routing, or health checks
 
 ## What You Catch That Scripts Do Not
 

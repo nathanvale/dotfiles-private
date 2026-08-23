@@ -59,7 +59,7 @@ Domain guards worth a negative control, by form:
 
 `bun test` is not run directly. Use dotfiles' native Test Runner with JSON output:
 
-- From `.agents/skills/test-runner`, use `bun run test-runner run --mode compact --format json --cwd <dotfiles-root> -- <file> [-t <name>]` for one file.
+- From `config/agents/skills/personal/test-runner`, use `bun run test-runner run --mode compact --format json --cwd <dotfiles-root> -- <file> [-t <name>]` for one file.
 - The smoke lane sets `setDefaultTimeout(180_000)` and spawns real subprocesses, so it can exceed the runner default. Run smoke files (or a `-t` phase filter) through that same native runner with `--timeout-ms 240000`; it honors the in-file timeout.
 - `package.json` owns the script surface. `test:pr` runs exact detached-worker cleanup, the bounded five-row public manifest, then performance. `test:live-acceptance` verifies the exact owner manifest before running all five workflows. `test:smoke` retains the full crash/stress lane. `test` composes every qualification lane while replacement ownership is being hosted and proven. Read exact commands there rather than trusting a copy.
 

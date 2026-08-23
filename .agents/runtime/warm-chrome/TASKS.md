@@ -70,8 +70,8 @@ No active P1 work. Identity-and-launch closeout moved to `TASKS.archive.md`.
       the runtime override routes most reasons to `inspect_listener` -
       single-action-per-station cannot express per-reason routing; (3) the
       pre-bind refusal reuses `launch.spawned_unverified` whose trigger and
-      mutation pins claim a spawn happened. Next: `record-decision` against
-      the catalog drift gate.
+      mutation pins claim a spawn happened. Next: record the accepted
+      resolution in the package decision log.
 - [ ] P3 Race-convergence follow-up Lane: Lifecycle. Done when: a calibration
       decision records whether the 15s launch readiness budget is the right
       window for real-Chrome startup contention. Next: fold into the manual
