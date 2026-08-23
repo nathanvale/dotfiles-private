@@ -1,0 +1,273 @@
+#!/usr/bin/env bun
+
+const VERSION = "0.3.0"
+const SCHEMA_VERSION = 2
+const DEFAULT_LIMIT = 20
+const MAX_LIMIT = 50
+const FIELD_SEPARATOR = "\u001f"
+
+function usage(): string {
+  return `atuin-agent-history - privacy-bounded shell history search for local agents
+
+Usage:
+  atuin-agent-history recent [--limit <1-${MAX_LIMIT}>] [--after <date>] [--before <date>] [--shell <name>] [--session]
+  atuin-agent-history search [--limit <1-${MAX_LIMIT}>] [--after <date>] [--before <date>] [--shell <name>] [--session] -- <query...>
+  atuin-agent-history --help
+  atuin-agent-history --version
+
+Output:
+  JSON Lines with time, numeric exit status, semantic outcome, program name,
+  option names, and argument count.
+  Raw commands, argument values, directories, hosts, and users are never
+  emitted.
+
+Safety:
+  Read-only. The underlying Atuin invocation uses only \`search\`; delete flags
+  and arbitrary Atuin arguments are not accepted. Results are limited to human
+  shell history (\`$all-user\`). Avoid putting secret values in the query itself.
+`
+}
+
+function fail(message: string, exitCode = 64): never {
+  console.error(`atuin-agent-history: ${message}`)
+  process.exit(exitCode)
+}
+
+function parsePositiveLimit(value: string | undefined): number {
+  if (value === undefined || !/^\d+$/.test(value)) {
+    fail(`--limit requires an integer from 1 to ${MAX_LIMIT}`)
+  }
+
+  const parsed = Number(value)
+  if (parsed < 1 || parsed > MAX_LIMIT) {
+    fail(`--limit requires an integer from 1 to ${MAX_LIMIT}`)
+  }
+  return parsed
+}
+
+type HistoryOptions = {
+  limit: number
+  after?: string
+  before?: string
+  shell?: string
+  session: boolean
+  query: string[]
+}
+
+function parseHistoryArguments(arguments_: string[], requireQuery: boolean): HistoryOptions {
+  const options: HistoryOptions = { limit: DEFAULT_LIMIT, session: false, query: [] }
+  let index = 0
+  let parsingOptions = true
+
+  while (index < arguments_.length) {
+    const argument = arguments_[index]
+    if (parsingOptions && argument === "--") {
+      parsingOptions = false
+      index += 1
+      continue
+    }
+
+    if (!parsingOptions) {
+      options.query.push(argument)
+      index += 1
+      continue
+    }
+
+    switch (argument) {
+      case "--limit":
+        options.limit = parsePositiveLimit(arguments_[index + 1])
+        index += 2
+        break
+      case "--session":
+        options.session = true
+        index += 1
+        break
+      case "--after":
+      case "--before":
+      case "--shell": {
+        const value = arguments_[index + 1]
+        if (value === undefined || value === "") {
+          fail(`${argument} requires a value`)
+        }
+        options[argument.slice(2) as "after" | "before" | "shell"] = value
+        index += 2
+        break
+      }
+      default:
+        fail(`unknown argument: ${argument}. Use -- before the query`)
+    }
+  }
+
+  if (requireQuery && options.query.length === 0) {
+    fail("search requires a query after --")
+  }
+  if (!requireQuery && options.query.length > 0) {
+    fail("recent does not accept a query")
+  }
+  return options
+}
+
+function tokenize(command: string): string[] {
+  const tokens: string[] = []
+  let token = ""
+  let quote: "'" | '"' | undefined
+  let escaped = false
+
+  const flush = () => {
+    if (token !== "") {
+      tokens.push(token)
+      token = ""
+    }
+  }
+
+  for (const character of command) {
+    if (escaped) {
+      token += character
+      escaped = false
+      continue
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true
+      continue
+    }
+    if (quote !== undefined) {
+      if (character === quote) {
+        quote = undefined
+      } else {
+        token += character
+      }
+      continue
+    }
+    if (character === "'" || character === '"') {
+      quote = character
+      continue
+    }
+    if (/\s/.test(character)) {
+      flush()
+      continue
+    }
+    token += character
+  }
+  if (escaped) token += "\\"
+  flush()
+  return tokens
+}
+
+function commandShape(command: string): {
+  program: string
+  optionNames: string[]
+  argumentCount: number
+} {
+  const tokens = tokenize(command)
+  let programIndex = 0
+  while (
+    programIndex < tokens.length &&
+    /^[A-Za-z_][A-Za-z0-9_]*=.*/.test(tokens[programIndex] ?? "")
+  ) {
+    programIndex += 1
+  }
+
+  const rawProgram = tokens[programIndex] ?? ""
+  const program = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,63}$/.test(rawProgram)
+    ? rawProgram
+    : "<other>"
+  const argumentTokens = tokens.slice(programIndex + 1)
+  const optionNames = [
+    ...new Set(
+      argumentTokens.flatMap((token) => {
+        const long = token.match(/^(--[A-Za-z0-9][A-Za-z0-9-]*)(?:=.*)?$/)
+        if (long?.[1] !== undefined) return [long[1]]
+        return /^-[A-Za-z]$/.test(token) ? [token] : []
+      }),
+    ),
+  ]
+
+  return { program, optionNames, argumentCount: argumentTokens.length }
+}
+
+function outcomeForExit(exit: number | null): "success" | "failure" | "unknown" {
+  if (exit === 0) return "success"
+  if (exit !== null && exit > 0) return "failure"
+  return "unknown"
+}
+
+function runHistory(options: HistoryOptions): void {
+  if (options.session && !process.env.ATUIN_SESSION) {
+    fail("ATUIN_SESSION is unavailable; run from an Atuin-initialized shell or omit --session")
+  }
+
+  const atuin = process.env.ATUIN_AGENT_HISTORY_BIN || "atuin"
+  const format = `{time}${FIELD_SEPARATOR}{exit}${FIELD_SEPARATOR}{command}`
+  const arguments_ = [
+    "search",
+    "--author",
+    "$all-user",
+    "--limit",
+    String(options.limit),
+    "--search-mode",
+    "fulltext",
+    "--format",
+    format,
+    "--print0",
+  ]
+  if (options.after !== undefined) arguments_.push("--after", options.after)
+  if (options.before !== undefined) arguments_.push("--before", options.before)
+  if (options.shell !== undefined) arguments_.push("--shell", options.shell)
+  if (options.session) arguments_.push("--filter-mode", "session")
+  if (options.query.length > 0) arguments_.push("--", ...options.query)
+
+  const result = Bun.spawnSync([atuin, ...arguments_], {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: process.env,
+  })
+  if (result.exitCode === 1 && result.stdout.byteLength === 0 && result.stderr.byteLength === 0) {
+    return
+  }
+  if (result.exitCode !== 0) {
+    fail(`Atuin search failed (exit ${result.exitCode})`, result.exitCode || 70)
+  }
+
+  const records = result.stdout.toString().split("\0").filter(Boolean)
+  for (const record of records) {
+    const firstSeparator = record.indexOf(FIELD_SEPARATOR)
+    const secondSeparator = record.indexOf(FIELD_SEPARATOR, firstSeparator + 1)
+    if (firstSeparator < 0 || secondSeparator < 0) {
+      fail("Atuin returned an unrecognized record", 70)
+    }
+
+    const time = record.slice(0, firstSeparator)
+    const exitText = record.slice(firstSeparator + 1, secondSeparator)
+    const command = record.slice(secondSeparator + 1)
+    const exit = /^-?\d+$/.test(exitText) ? Number(exitText) : null
+    process.stdout.write(
+      `${JSON.stringify({
+        schemaVersion: SCHEMA_VERSION,
+        time,
+        exit,
+        outcome: outcomeForExit(exit),
+        ...commandShape(command),
+      })}\n`,
+    )
+  }
+}
+
+const arguments_ = process.argv.slice(2)
+if (arguments_.length === 0 || arguments_[0] === "--help" || arguments_[0] === "-h") {
+  process.stdout.write(usage())
+  process.exit(0)
+}
+if (arguments_[0] === "--version") {
+  console.log(`atuin-agent-history ${VERSION}`)
+  process.exit(0)
+}
+switch (arguments_[0]) {
+  case "recent":
+    runHistory(parseHistoryArguments(arguments_.slice(1), false))
+    break
+  case "search":
+    runHistory(parseHistoryArguments(arguments_.slice(1), true))
+    break
+  default:
+    fail(`unknown command: ${arguments_[0]}`)
+}
