@@ -49,8 +49,15 @@ import {
 	stringField,
 	truncateText,
 } from "./browser-use-core";
+import type { BrowserUseRetainedLifecycle } from "./browser-use-adapter-model";
+import { migrateLegacyRetainedLifecycle } from "./browser-use-adapter-registry";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
-import { readHandoffFacts } from "./browser-use-discovery";
+import { type HandoffFacts, readHandoffFacts } from "./browser-use-discovery";
+import {
+	casRemoveRecord,
+	casReplaceRecord,
+	readDurableFile,
+} from "./browser-use-store";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
 
 // ---------------------------------------------------------------------------
@@ -91,7 +98,7 @@ const SELECTED_TARGET_STATE_CONTRACT_ID = BROWSER_USE_TARGETS_CONTRACT_ID;
 const SELECTED_TARGET_STATE_SCHEMA_VERSION = BROWSER_USE_TARGETS_SCHEMA_VERSION;
 // Short TTL: selected state binds to a live tab and a fresh proof; a stale
 // selection must be re-made rather than silently operated against.
-const SELECTED_TARGET_STATE_TTL_MS = 15 * 60_000;
+export const SELECTED_TARGET_STATE_TTL_MS = 15 * 60_000;
 
 type SelectionActionId =
 	| (typeof browserUseTargetSelectionFailureActions)[number]["id"]
@@ -133,7 +140,161 @@ export type SelectedTargetState = {
 	expires_at_ms: number;
 	// Redacted display facts (same projection as U5 candidates).
 	display: { origin: string; path_shape?: string; title?: string };
+	/** Opaque provenance for a target created by this run. Raw target ids never persist. */
+	ownership?: {
+		kind: "created-target";
+		target_ref: string;
+		retained_lifecycle?: BrowserUseRetainedLifecycle;
+	};
+	/** Private CAS revision. Legacy schema-2 records without it are revision 0. */
+	revision: number;
 };
+
+const SELECTED_STATE_LOCK_STALE_MS = 120_000;
+
+function selectedStateRevisionOf(raw: string): number | undefined {
+	return parseSelectedState(raw)?.revision;
+}
+
+async function currentSelectedStateRevision(input: {
+	runtime: BrowserUseRuntime;
+	path: string;
+	expectedRunId: string;
+	expectedAdapter: BrowserAdapterId;
+	expectedEndpointIdentity: string;
+	expectedHandoffEvidenceId: string;
+}): Promise<
+	| { ok: true; revision: number | null; raw?: string }
+	| { ok: false; message: string }
+> {
+	const current = await readDurableFile(input.runtime.platformFs, input.path);
+	if (current.status === "missing") return { ok: true, revision: null };
+	if (current.status === "unreadable") {
+		return { ok: false, message: "The selected-target state is unreadable." };
+	}
+	const state = parseSelectedState(current.raw);
+	if (!state)
+		return { ok: false, message: "The selected-target state is invalid." };
+	if (state.ownership?.kind === "created-target") {
+		return {
+			ok: false,
+			message:
+				"Close the open-created target before replacing its selected state.",
+		};
+	}
+	if (
+		state.run_id !== input.expectedRunId ||
+		state.selected_adapter_id !== input.expectedAdapter ||
+		state.verified_endpoint_identity !== input.expectedEndpointIdentity ||
+		state.handoff_evidence_id !== input.expectedHandoffEvidenceId
+	) {
+		return {
+			ok: false,
+			message:
+				"The standing selected-target state belongs to a different run or handoff binding.",
+		};
+	}
+	return { ok: true, revision: state.revision, raw: current.raw };
+}
+
+async function casPersistSelectedTargetState(input: {
+	runtime: BrowserUseRuntime;
+	path: string;
+	runId: string;
+	expectedRevision: number | null;
+	expectedRaw?: string;
+	state: SelectedTargetState;
+}) {
+	return await casReplaceRecord(input.runtime.platformFs, {
+		path: input.path,
+		lockPath: `${input.path}.lock`,
+		holderId: `selected-target:${input.runId}`,
+		staleAfterMs: SELECTED_STATE_LOCK_STALE_MS,
+		clock: input.runtime.now,
+		expectedRevision: input.expectedRevision,
+		...(input.expectedRaw === undefined
+			? {}
+			: { expectedRaw: input.expectedRaw }),
+		revisionOf: selectedStateRevisionOf,
+		nextContents: `${JSON.stringify(input.state)}\n`,
+	});
+}
+
+export async function removeSelectedTargetStateIfRevision(input: {
+	runtime: BrowserUseRuntime;
+	path: string;
+	runId: string;
+	expectedRevision: number;
+	expectedRaw: string;
+}) {
+	return await casRemoveRecord(input.runtime.platformFs, {
+		path: input.path,
+		lockPath: `${input.path}.lock`,
+		holderId: `selected-target:${input.runId}`,
+		staleAfterMs: SELECTED_STATE_LOCK_STALE_MS,
+		clock: input.runtime.now,
+		expectedRevision: input.expectedRevision,
+		expectedRaw: input.expectedRaw,
+		revisionOf: selectedStateRevisionOf,
+	});
+}
+
+/**
+ * Persist one open-created target through the same selected-state contract used
+ * by `operate` and `targets status`.
+ */
+export async function persistCreatedSelectedTargetState(input: {
+	runtime: BrowserUseRuntime;
+	path: string;
+	handoff: HandoffFacts;
+	targetEnvelopeId: string;
+	targetCandidateId: string;
+	selectedCandidateOrdinal: number;
+	targetRef: string;
+	retainedLifecycle: BrowserUseRetainedLifecycle;
+	display: SelectedTargetState["display"];
+}): Promise<
+	| { ok: true; state: SelectedTargetState; raw: string }
+	| {
+			ok: false;
+			state: SelectedTargetState;
+			raw: string;
+			failure: { code: string; message: string };
+		}
+> {
+	const emittedAtMs = input.runtime.now();
+	const state: SelectedTargetState = {
+		contract: SELECTED_TARGET_STATE_CONTRACT_ID,
+		schema_version: SELECTED_TARGET_STATE_SCHEMA_VERSION,
+		run_id: input.handoff.runId,
+		selected_adapter_id: input.handoff.adapter,
+		verified_endpoint_identity: input.handoff.verifiedEndpointIdentity,
+		handoff_evidence_id: input.handoff.handoffEvidenceId,
+		target_envelope_id: input.targetEnvelopeId,
+		target_candidate_id: input.targetCandidateId,
+		selected_candidate_ordinal: input.selectedCandidateOrdinal,
+		emitted_at_ms: emittedAtMs,
+		expires_at_ms: emittedAtMs + SELECTED_TARGET_STATE_TTL_MS,
+		display: input.display,
+		ownership: {
+			kind: "created-target",
+			target_ref: input.targetRef,
+			retained_lifecycle: input.retainedLifecycle,
+		},
+		revision: 1,
+	};
+	const raw = `${JSON.stringify(state)}\n`;
+	const committed = await casPersistSelectedTargetState({
+		runtime: input.runtime,
+		path: input.path,
+		runId: input.handoff.runId,
+		expectedRevision: null,
+		state,
+	});
+	return committed.ok
+		? { ok: true, state, raw }
+		: { ok: false, state, raw, failure: committed.failure };
+}
 
 // Handoff-bound discovery binding parsed from the supplied envelope. Every
 // field is required for an operation-ready selection.
@@ -244,7 +405,27 @@ export async function runTargetsSelect(input: {
 	);
 	if (!statePath.ok) return fail(statePath.failure);
 
-	// 5. Assemble and atomically write run-scoped selected state.
+	// 5. Snapshot the private revision, then CAS the short state mutation. The
+	// browser/adapter work (if any) never runs under this file lock.
+	const currentRevision = await currentSelectedStateRevision({
+		runtime,
+		path: statePath.path,
+		expectedRunId: envelope.binding.runId,
+		expectedAdapter: envelope.binding.selectedAdapter,
+		expectedEndpointIdentity: envelope.binding.verifiedEndpointIdentity,
+		expectedHandoffEvidenceId: envelope.binding.handoffEvidenceId,
+	});
+	if (!currentRevision.ok) {
+		return fail({
+			code: "target_selection_state_write_failed",
+			message: currentRevision.message,
+			actionId: "repair_target_state",
+			exitCode: TARGET_SELECTION_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
+
+	// 6. Assemble and CAS run-scoped selected state.
 	const emittedAtMs = runtime.now();
 	const state: SelectedTargetState = {
 		contract: SELECTED_TARGET_STATE_CONTRACT_ID,
@@ -263,11 +444,20 @@ export async function runTargetsSelect(input: {
 			...(candidate.path_shape ? { path_shape: candidate.path_shape } : {}),
 			...(candidate.title ? { title: candidate.title } : {}),
 		},
+		revision: (currentRevision.revision ?? 0) + 1,
 	};
 
-	try {
-		await runtime.writeTextFile(statePath.path, `${JSON.stringify(state)}\n`);
-	} catch {
+	const committed = await casPersistSelectedTargetState({
+		runtime,
+		path: statePath.path,
+		runId: envelope.binding.runId,
+		expectedRevision: currentRevision.revision,
+		...(currentRevision.raw === undefined
+			? {}
+			: { expectedRaw: currentRevision.raw }),
+		state,
+	});
+	if (!committed.ok) {
 		// Conflict / permission / IO failure on the write. The path itself is
 		// already redacted before it reaches output; do not echo the OS error.
 		return fail({
@@ -799,10 +989,22 @@ export function runScopedKey(runId: string): string {
 	return createHash("sha256").update(runId).digest("hex").slice(0, 32);
 }
 
+/** Canonical private selected-target state used by handoff-bound topology and operations. */
+export function canonicalRunSelectedStatePath(
+	stateRoot: string,
+	runId: string,
+): string {
+	return join(
+		stateRoot,
+		"target-selections",
+		`browser-use-target-state-${runScopedKey(runId)}.json`,
+	);
+}
+
 // --- State load + validation (status, and U7 operate reuse) ----------------
 
 type StateLoad =
-	| { ok: true; state: SelectedTargetState }
+	| { ok: true; state: SelectedTargetState; raw?: string }
 	| { ok: false; failure: SelectionFailure };
 
 // Load selected state and fail closed, distinctly, on every cause: missing,
@@ -926,6 +1128,69 @@ export async function loadSelectedState(
 	return { ok: true, state: parsed };
 }
 
+/**
+ * Cleanup-only loader: validates the complete private state and exact run but
+ * deliberately permits expiry so an abandoned created tab remains closeable.
+ * Callers must still re-prove target_ref and current custody before mutation.
+ */
+export async function loadSelectedStateForCleanup(
+	runtime: BrowserUseRuntime,
+	path: string,
+	check: { expectedRunId: string },
+): Promise<StateLoad> {
+	const durable = await readDurableFile(runtime.platformFs, path);
+	if (durable.status !== "present") {
+		return {
+			ok: false,
+			failure: {
+				code:
+					durable.status === "missing"
+						? "target_state_missing"
+						: "target_state_unreadable",
+				message:
+					durable.status === "missing"
+						? "No run-scoped selected-target state was found."
+						: "The selected-target state could not be read.",
+				actionId: "repair_target_state",
+				exitCode: TARGET_SELECTION_EXIT_CODE,
+				recoverability: "repair_state",
+			},
+		};
+	}
+	const raw = durable.raw;
+	const state = parseSelectedState(raw);
+	if (
+		!state ||
+		state.contract !== SELECTED_TARGET_STATE_CONTRACT_ID ||
+		state.schema_version !== SELECTED_TARGET_STATE_SCHEMA_VERSION
+	) {
+		return {
+			ok: false,
+			failure: {
+				code: "target_state_mismatch",
+				message:
+					"The selected-target cleanup state is invalid or incompatible.",
+				actionId: "repair_target_state",
+				exitCode: TARGET_SELECTION_EXIT_CODE,
+				recoverability: "repair_state",
+			},
+		};
+	}
+	if (state.run_id !== check.expectedRunId) {
+		return {
+			ok: false,
+			failure: {
+				code: "target_state_cross_run",
+				message: "The selected-target cleanup state belongs to another run.",
+				actionId: "repair_target_state",
+				exitCode: TARGET_SELECTION_EXIT_CODE,
+				recoverability: "change_input",
+			},
+		};
+	}
+	return { ok: true, state, raw };
+}
+
 // Parse persisted state strictly. Any missing/typewrong field returns undefined
 // (-> target_state_unreadable), never a partial state object.
 function parseSelectedState(raw: string): SelectedTargetState | undefined {
@@ -943,6 +1208,60 @@ function parseSelectedState(raw: string): SelectedTargetState | undefined {
 	const emittedAtMs = value.emitted_at_ms;
 	const expiresAtMs = value.expires_at_ms;
 	const display = isJsonObject(value.display) ? value.display : undefined;
+	const ownershipValue = value.ownership;
+	const revisionValue = value.revision;
+	const revision =
+		revisionValue === undefined
+			? 0
+			: typeof revisionValue === "number" &&
+					Number.isInteger(revisionValue) &&
+					revisionValue >= 0
+				? revisionValue
+				: undefined;
+	let ownership: SelectedTargetState["ownership"] | null;
+	if (ownershipValue === undefined) {
+		ownership = undefined;
+	} else if (
+		isJsonObject(ownershipValue) &&
+		ownershipValue.kind === "created-target" &&
+		typeof ownershipValue.target_ref === "string" &&
+		/^[a-f0-9]{64}$/.test(ownershipValue.target_ref)
+	) {
+		const retainedValue = ownershipValue.retained_lifecycle;
+		const retainedLifecycle =
+			isJsonObject(retainedValue) &&
+			isBrowserAdapterId(retainedValue.adapter_id) &&
+			typeof retainedValue.capability_id === "string" &&
+			retainedValue.capability_id.length > 0 &&
+			typeof retainedValue.lifecycle_ref === "string" &&
+			retainedValue.lifecycle_ref.length > 0
+				? {
+						adapter_id: retainedValue.adapter_id,
+						capability_id: retainedValue.capability_id,
+						lifecycle_ref: retainedValue.lifecycle_ref,
+					}
+				: retainedValue === undefined && runId && isBrowserAdapterId(selectedAdapter)
+					? migrateLegacyRetainedLifecycle({
+							adapterId: selectedAdapter,
+							value: ownershipValue,
+							runId,
+						})
+					: undefined;
+		if (retainedValue !== undefined && retainedLifecycle === undefined) {
+			return undefined;
+		}
+		ownership = {
+			kind: "created-target",
+			target_ref: ownershipValue.target_ref,
+			...(retainedLifecycle === undefined
+				? {}
+				: {
+						retained_lifecycle: retainedLifecycle,
+					}),
+		};
+	} else {
+		ownership = null;
+	}
 	if (
 		!contract ||
 		!schemaVersion ||
@@ -957,7 +1276,9 @@ function parseSelectedState(raw: string): SelectedTargetState | undefined {
 		ordinal < 1 ||
 		typeof emittedAtMs !== "number" ||
 		typeof expiresAtMs !== "number" ||
-		!display
+		!display ||
+		ownership === null ||
+		revision === undefined
 	) {
 		return undefined;
 	}
@@ -980,6 +1301,8 @@ function parseSelectedState(raw: string): SelectedTargetState | undefined {
 			...(safeDisplay.path_shape ? { path_shape: safeDisplay.path_shape } : {}),
 			...(safeDisplay.title ? { title: safeDisplay.title } : {}),
 		},
+		...(ownership === undefined ? {} : { ownership }),
+		revision,
 	};
 }
 
@@ -1009,7 +1332,11 @@ export type OperationResolutionInput = {
 };
 
 export type OperationResolution =
-	| { kind: "resolved"; source: "hints" | "selected_state" | "single_candidate"; candidate: BrowserTargetCandidate }
+	| {
+			kind: "resolved";
+			source: "hints" | "selected_state" | "single_candidate";
+			candidate: BrowserTargetCandidate;
+	  }
 	| { kind: "ambiguous"; matchCount: number }
 	// Per-operation hints matched no candidate (-> refine_target_hint in U7).
 	| { kind: "no_match" }
@@ -1199,6 +1526,13 @@ function selectedTargetView(state: SelectedTargetState): Record<string, unknown>
 		emitted_at_ms: state.emitted_at_ms,
 		expires_at_ms: state.expires_at_ms,
 		display: state.display,
+		...(state.ownership === undefined
+			? {}
+			: {
+					ownership: {
+						kind: state.ownership.kind,
+					},
+				}),
 	};
 }
 

@@ -20,12 +20,16 @@ attachment.
   `browser-connect connect <adapter> --json`. Save the verified handoff, run
   `browser-use targets list --mode handoff-bound --handoff <path> --json`, then
   dispatch supported work through `browser-use operate ... --handoff <path>`.
+  Missing exact page target: run
+  `browser-use targets open --url <exact-http(s)-url> --handoff <path>`; close
+  that open-created target with `browser-use targets close --handoff <path>`.
+  Both commands derive the same private run-scoped XDG state path from the
+  verified handoff; `--state` is an advanced override only.
   Switching target or tab keeps that stable identity: reselect from
   `targets list` and pass the same handoff; never re-derive a target by index.
-- Parallel agents: each run holds its own Target Lease and Browser Lane, so a
-  concurrent agent never borrows another's target. Release the lease when the
-  work finishes; a stale lease is a typed repair, not a reason to bypass
-  custody.
+- Parallel agents: each run holds its own Target Lease. The single Browser
+  Lane serializes browser-wide or target-topology turns. Release short leases
+  when work finishes; a stale lease is a typed repair, not a custody bypass.
 - Open-ended login wall: stop. Confidential credential delivery is a separate
   future bridge and is not part of this milestone. Report the wall, the target,
   and what remains blocked, then hand back to the user. Do not attempt to fill

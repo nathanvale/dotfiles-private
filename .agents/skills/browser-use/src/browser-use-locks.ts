@@ -21,6 +21,7 @@
 
 import { createHash } from "node:crypto";
 import { join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { redactUnsafeText } from "./browser-use-core";
 import type {
 	BrowserUseAdmittedPaths,
@@ -53,10 +54,12 @@ export type LeaseProjection = {
 	holder_id: string;
 	fencing_token: number;
 	activation_epoch: number;
+	acquired_at_epoch_ms: number;
 	heartbeat_at_epoch_ms: number;
 	expires_at_epoch_ms: number;
 	live: boolean;
 	recovered_from: BrowserUseLeasePayload["recovered_from"];
+	scope: BrowserUseLeasePayload["scope"];
 };
 
 /** Typed acquisition outcome (also the heartbeat success/held shape). */
@@ -105,7 +108,11 @@ export type LeaseHeartbeatResult =
 /** Advance outcome: CAS conflict and store failure are distinct codes. */
 export type ActivationEpochAdvanceResult =
 	| { ok: true; epoch: number }
-	| { ok: false; code: "epoch_conflict" | "epoch_store_failed"; message: string };
+	| {
+			ok: false;
+			code: "epoch_conflict" | "epoch_store_failed";
+			message: string;
+	  };
 
 /** Failure to enter the activation barrier shared by epoch advance and writes. */
 export type ActivationEpochBarrierFailure = {
@@ -173,6 +180,10 @@ function leaseKeyHash(key: string): string {
 	return createHash("sha256").update(key).digest("hex").slice(0, 32);
 }
 
+function releasedLeaseHolderId(key: string): string {
+	return `lease-released:${leaseKeyHash(key)}`;
+}
+
 function leaseLockPath(paths: BrowserUseAdmittedPaths, key: string): string {
 	return join(paths.runtime.locksDir, `lease-${leaseKeyHash(key)}.lock`);
 }
@@ -231,10 +242,12 @@ function projectionOf(
 		holder_id: lease.holder_id,
 		fencing_token: lease.fencing_token,
 		activation_epoch: lease.activation_epoch,
+		acquired_at_epoch_ms: lease.acquired_at_epoch_ms,
 		heartbeat_at_epoch_ms: lease.heartbeat_at_epoch_ms,
 		expires_at_epoch_ms: lease.expires_at_epoch_ms,
 		live: isLive(lease, nowEpochMs),
 		recovered_from: lease.recovered_from,
+		scope: lease.scope,
 	};
 }
 
@@ -427,7 +440,7 @@ export async function acquireLease(
 export async function heartbeatLease(
 	deps: LeaseDeps,
 	lease: BrowserUseLeasePayload,
-	input: { ttlMs: number },
+	input: { ttlMs: number; requireExactPayload?: boolean },
 ): Promise<LeaseHeartbeatResult> {
 	assertPositiveInteger(input.ttlMs, "ttlMs");
 	const dirs = await ensureLeaseDirs(deps);
@@ -454,6 +467,17 @@ export async function heartbeatLease(
 				const current = await readLeaseRecord(deps, lease.key);
 				if (current.status !== "present") {
 					return leaseStoreFailed("lease record vanished during heartbeat.");
+				}
+				if (
+					input.requireExactPayload === true &&
+					!isDeepStrictEqual(current.lease, lease)
+				) {
+					return {
+						ok: false,
+						code: "lease_fencing_stale",
+						message:
+							"presented lease payload does not exactly match the durable lease record.",
+					};
 				}
 				const now = deps.clock();
 				const extended: BrowserUseLeasePayload = {
@@ -488,22 +512,26 @@ export async function heartbeatLease(
  * Release a lease by marking its expiry at the current instant. Releasing an
  * already-released, expired, superseded, or missing lease is an idempotent
  * no-op success — it is NEVER an error to release stale (spec A4). The
- * durable record is never deleted (token monotonicity), and a failed release
- * write is swallowed: the lease then simply ages out through its ttl, which
- * the write gate already handles.
+ * durable record is never deleted (token monotonicity). A confirmed durable
+ * release reports its exact epoch; a failed or stale release remains an
+ * idempotent success without that timestamp so callers can surface cleanup
+ * debt without changing the lease owner's stale-release contract.
  *
  * @param deps - Injected fs, admitted paths, clock
  * @param lease - The holder's lease payload from acquisition
- * @returns Always ok
+ * @returns Always ok, with the durable release epoch only when confirmed
  */
 export async function releaseLease(
 	deps: LeaseDeps,
 	lease: BrowserUseLeasePayload,
-): Promise<{ ok: true }> {
+): Promise<{ ok: true; released_at_epoch_ms?: number }> {
 	const dirs = await ensureLeaseDirs(deps);
 	if (!dirs.ok) return { ok: true };
 	const releaseUnderLeaseLock = async () =>
-		await withExclusiveFileLock<{ ok: true }>(
+		await withExclusiveFileLock<{
+			ok: true;
+			released_at_epoch_ms?: number;
+		}>(
 			deps.fs,
 			{
 				lockPath: leaseLockPath(deps.paths, lease.key),
@@ -522,19 +550,22 @@ export async function releaseLease(
 				) {
 					return { ok: true };
 				}
-				await writeLeaseRecord(deps, {
+				const written = await writeLeaseRecord(deps, {
 					...current.lease,
+					holder_id: releasedLeaseHolderId(current.lease.key),
 					expires_at_epoch_ms: now,
 				});
-				return { ok: true };
+				return written.ok
+					? { ok: true, released_at_epoch_ms: now }
+					: { ok: true };
 			},
 		);
-	await withActivationEpochBarrier(
+	const outcome = await withActivationEpochBarrier(
 		deps,
 		{ holderId: `lease-release-${lease.holder_id}` },
 		releaseUnderLeaseLock,
 	);
-	return { ok: true };
+	return !outcome.ok ? { ok: true } : outcome;
 }
 
 // --- Write gate (R27) --------------------------------------------------------
@@ -610,7 +641,8 @@ export async function validateStoredLeaseForWrite(
 	deps: LeaseDeps,
 	input: { key: string; presented: LeaseWriteClaim },
 ): Promise<
-	LeaseWriteValidation | { ok: false; code: "lease_store_failed"; message: string }
+	| LeaseWriteValidation
+	| { ok: false; code: "lease_store_failed"; message: string }
 > {
 	const current = await readLeaseRecord(deps, input.key);
 	if (current.status === "corrupt") {
@@ -830,5 +862,7 @@ export async function listLeases(
 		if (!parsed.ok) continue;
 		projections.push(projectionOf(parsed.payload, now));
 	}
-	return projections.sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+	return projections.sort((a, b) =>
+		a.key < b.key ? -1 : a.key > b.key ? 1 : 0,
+	);
 }

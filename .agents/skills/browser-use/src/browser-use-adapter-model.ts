@@ -24,6 +24,130 @@ export const BROWSER_USE_ADAPTER_LANE_IDS = [
 export type BrowserUseAdapterLaneId =
 	(typeof BROWSER_USE_ADAPTER_LANE_IDS)[number];
 
+/** Adapter-neutral bounded command result used by exact-target capabilities. */
+export type BrowserUseAdapterCommandResult = {
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+	timedOut?: boolean;
+};
+
+export const BROWSER_USE_CANONICAL_TARGET_ID_PATTERN = /^[A-Za-z0-9._-]{1,128}$/;
+
+/** Adapter-neutral runtime required by an exact-target capability. */
+export type BrowserUseExactTargetRuntime = {
+	runCommand(input: {
+		command: string;
+		args: readonly string[];
+		timeoutMs: number;
+	}): Promise<BrowserUseAdapterCommandResult>;
+};
+
+/** Verified connection facts needed by an adapter implementation. */
+export type BrowserUseExactTargetHandoff = {
+	adapter_id: BrowserUseAdapterLaneId;
+	run_id: string;
+	executable: string;
+	endpoint_http: string;
+	endpoint_ws: string;
+};
+
+export type BrowserUseExactTargetInventoryEntry = {
+	adapter_target_ref: string;
+	canonical_target_id: string;
+	url: string;
+	title?: string;
+	active?: boolean;
+};
+
+/** Adapter-neutral durable reference to lifecycle custody retained by an adapter. */
+export type BrowserUseRetainedLifecycle = {
+	adapter_id: BrowserUseAdapterLaneId;
+	capability_id: string;
+	lifecycle_ref: string;
+};
+
+export type BrowserUseExactTargetTopologyAction =
+	| { kind: "inventory" }
+	| { kind: "create"; url: string }
+	| { kind: "close"; target_id: string }
+	| { kind: "retain-lifecycle"; target_id: string };
+
+export type BrowserUseExactTargetTopologyResult =
+	| {
+			ok: true;
+			kind: "inventory";
+			targets: readonly BrowserUseExactTargetInventoryEntry[];
+	  }
+	| {
+			ok: true;
+			kind: "create";
+			data: { canonical_target_id?: string };
+	  }
+	| { ok: true; kind: "close"; confirmed: true }
+	| { ok: true; kind: "retain-lifecycle"; lifecycle_ref: string }
+	| { ok: false; code: "exact_target_topology_unconfirmed" };
+
+export type BrowserUseAdapterLifecycleReleaseResult =
+	| { released: true }
+	| {
+			released: false;
+			cause: "command-failed" | "invalid-response" | "still-present";
+			detail: string;
+	  };
+
+export type BrowserUseAdapterLifecycleReleaseDebt = Extract<
+	BrowserUseAdapterLifecycleReleaseResult,
+	{ released: false }
+>;
+
+export type BrowserUseExactTargetTopologyCapability = {
+	adapter_id: BrowserUseAdapterLaneId;
+	capability_id: string;
+	run(input: {
+		runtime: BrowserUseExactTargetRuntime;
+		handoff: BrowserUseExactTargetHandoff;
+		action: BrowserUseExactTargetTopologyAction;
+	}): Promise<BrowserUseExactTargetTopologyResult>;
+	releaseLifecycle(input: {
+		env: Record<string, string | undefined>;
+		runtime: BrowserUseExactTargetRuntime;
+		handoff: BrowserUseExactTargetHandoff;
+	}): Promise<BrowserUseAdapterLifecycleReleaseResult>;
+};
+
+export type BrowserUseExactTargetOperationResult =
+	| {
+			ok: true;
+			result: BrowserUseAdapterCommandResult;
+			focus: boolean;
+			release?: BrowserUseAdapterLifecycleReleaseDebt;
+	  }
+	| {
+			ok: false;
+			code: "dependency-missing" | "timeout" | "operation-failed";
+			message: string;
+			focus: boolean;
+			release?: BrowserUseAdapterLifecycleReleaseDebt;
+	  };
+
+export type BrowserUseExactTargetOperationCapability = {
+	adapter_id: BrowserUseAdapterLaneId;
+	capability_id: string;
+	retainedLifecycleIsValid(lifecycleRef: string | undefined, runId: string): boolean;
+	run(request: {
+		runtime: BrowserUseExactTargetRuntime;
+		env: Record<string, string | undefined>;
+		handoff: BrowserUseExactTargetHandoff;
+		target_id: string;
+		expected_url?: string;
+		operation: "snapshot" | "screenshot";
+		screenshot?: { path?: string; full_page?: boolean };
+		lifecycle_prepared: boolean;
+		retain_lifecycle: boolean;
+	}): Promise<BrowserUseExactTargetOperationResult>;
+};
+
 // Resolved identity drift (R3): these ids circulated in earlier vocabularies
 // (the Router-era registry's bare chrome-devtools id; the Playwright CLI
 // product name) and are rejected as lane keys, never silently mapped. The
@@ -125,13 +249,14 @@ export const BROWSER_USE_ADAPTER_LANE_TABLE = {
 	"agent-browser": {
 		// The Agent Browser executor (browser-use-agent-browser.ts) proves a
 		// current-snapshot ref surface (snapshot -> snapshot_refs) and ref-scoped
-		// element mutation (click/fill -> element_actions). open (navigation) and
-		// evaluate (page JS) have no capability-vocabulary member, so they are not
-		// advertised here — the lane claims only what the executor proves.
+		// element mutation (click/fill -> element_actions), plus exact adapter-native
+		// tab creation/closure owned by the Browser Use target-topology seam.
+		// evaluate (page JS) remains outside the advertised vocabulary.
 		operation_capabilities: [
 			"snapshot_refs",
 			"screenshot_media",
 			"element_actions",
+			"target_topology",
 		],
 		native_implementation: {
 			implemented: true,

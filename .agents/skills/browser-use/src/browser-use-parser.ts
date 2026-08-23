@@ -238,6 +238,35 @@ export function parseBrowserUseArgv(
 			throw usageError("lanes show requires --adapter <id>.");
 		}
 	}
+	if (command === "targets-open") {
+		const url = stringField(flagValues["--url"]);
+		const handoff = stringField(flagValues["--handoff"]);
+		if (!url || url.startsWith("--")) {
+			throw usageError("targets open requires --url <exact-http(s)-url>.");
+		}
+		if (!handoff || handoff.startsWith("--")) {
+			throw usageError("targets open requires --handoff <path>.");
+		}
+	}
+	if (command === "targets-close") {
+		const handoff = stringField(flagValues["--handoff"]);
+		if (!handoff || handoff.startsWith("--")) {
+			throw usageError("targets close requires --handoff <path>.");
+		}
+	}
+	if (command === "qualification-validate") {
+		for (const flag of [
+			"--expected-manifest-digest",
+			"--evidence",
+		] as const) {
+			const value = stringField(flagValues[flag]);
+			if (!value || value.startsWith("--")) {
+				throw usageError(
+					`qualification validate requires ${flag} <value>.`,
+				);
+			}
+		}
+	}
 	// `task run` always attaches through a Verified Handoff Envelope (R3), and
 	// needs an intent to route OR a run id to resume (R23). A fresh --intent run
 	// mints the envelope internally when --handoff is absent (design brief D4);
@@ -728,7 +757,7 @@ const ROOT_HELP_GROUPS: ReadonlyArray<{
 	{ heading: "Recovery:", families: ["repair", "auth"] },
 	{
 		heading: "Advanced (platform internals):",
-		families: ["targets", "operate", "lanes", "migration"],
+		families: ["targets", "operate", "lanes", "qualification", "migration"],
 	},
 ];
 

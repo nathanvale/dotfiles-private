@@ -677,8 +677,49 @@ describe("U1 target discovery — empty set, transport, and envelope mapping", (
 		expect(json.status).toBe("error");
 		expect(json.error).toMatchObject({ code: "target_discovery_no_candidates" });
 		expect((json.continuation as Record<string, unknown>).next_action_id).toBe(
-			"open_browser_target",
+			"remint_agent_browser_handoff_for_target_open",
 		);
+	});
+
+	test("an empty Agent Browser inventory offers the native targets-open continuation", async () => {
+		const { runtime } = discoveryRuntime({
+			files: {
+				"/h.json": verifiedHandoffEnvelope((envelope) => {
+					envelope.data.attachment.adapter_id = "agent-browser";
+				}),
+			},
+			runCommand: async (call) => {
+				if (call.args.includes("close")) {
+					return okCommand(JSON.stringify({ success: true }));
+				}
+				if (call.args[0] === "session") {
+					return okCommand(
+						JSON.stringify({ success: true, data: { sessions: [] } }),
+					);
+				}
+				return okCommand(
+					JSON.stringify({ success: true, data: { tabs: [] } }),
+				);
+			},
+		});
+
+		const result = await runForTest(
+			[
+				"targets",
+				"list",
+				"--mode",
+				"handoff-bound",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).continuation).toMatchObject({
+			next_action_id: "open_browser_target",
+		});
 	});
 
 	test("a timed-out list_pages maps to a timeout envelope, never success", async () => {
@@ -1010,6 +1051,42 @@ describe("U1 target discovery — agent-browser CLI-subcommand transport", () =>
 
 		expect(discovery.ok).toBe(true);
 		expect(activeSessions).toEqual(new Set());
+	});
+
+	test("retains only an explicitly lifecycle-owned pinned discovery session", async () => {
+		const calls: McporterCommandInput[] = [];
+		const runtime = makeRuntime({
+			runCommand: async (call) => {
+				calls.push(call);
+				return okCommand(
+					tabListStdout([
+						{
+							tabId: "T-1",
+							url: "http://127.0.0.1:8912/",
+							active: true,
+						},
+					]),
+				);
+			},
+		});
+
+		const discovery = await discoverPages(runtime, AGENT_BROWSER_FACTS, {
+			retainLifecycle: true,
+		});
+
+		expect(discovery.ok).toBe(true);
+		expect(calls).toHaveLength(1);
+		expect(commandVector(calls[0])).toEqual([
+			AGENT_BROWSER_FACTS.probeExecutable,
+			"--cdp",
+			AGENT_BROWSER_FACTS.endpointWs,
+			"--session",
+			"browser-use-run-42",
+			"--pin-tab",
+			"tab",
+			"list",
+			"--json",
+		]);
 	});
 
 	test("keeps successful tab-list truth when session release fails", async () => {

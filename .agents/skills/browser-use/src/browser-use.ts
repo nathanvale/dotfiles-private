@@ -6,7 +6,7 @@
 // task/run/runbook/migration/artifact/repair command families.
 //
 // Command surfaces:
-//   targets list|select|status   — Browser Target Discovery/Selection (shell).
+//   targets list|select|status|open|close — Browser Target lifecycle (shell).
 //   operate snapshot|screenshot|emulate — Browser Operations (shell).
 //   task|run|runbook|migration|artifact|repair — Platform contracts.
 
@@ -45,6 +45,10 @@ import {
 	BROWSER_USE_AUTH_READINESS_CONTRACT_ID,
 	BROWSER_USE_MIGRATION_STATUS_CONTRACT_ID,
 	BROWSER_USE_AUTH_READINESS_SCHEMA_VERSION,
+	BROWSER_USE_QUALIFICATION_MANIFEST_CONTRACT_ID,
+	BROWSER_USE_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
+	BROWSER_USE_QUALIFICATION_VALIDATION_CONTRACT_ID,
+	BROWSER_USE_QUALIFICATION_VALIDATION_SCHEMA_VERSION,
 	BROWSER_USE_REPAIR_STATUS_CONTRACT_ID,
 	BROWSER_USE_REVIEWED_ACTION_AUTHORING_CONTRACT_ID,
 	BROWSER_USE_RUNBOOK_CATALOG_CONTRACT_ID,
@@ -73,6 +77,12 @@ import {
 	browserUseTaskRunFailureActions,
 	browserUseTaskRunSuccessActions,
 } from "./command-contract";
+import {
+	captureBrowserUseQualificationCustodyInventory,
+	validateBrowserUseQualificationEvidence,
+} from "./browser-use-qualification";
+import { currentBrowserUseQualificationSession } from "./browser-use-qualification-session";
+import { sealedQualificationRuntimeManifest } from "./browser-use-qualification-evidence";
 import {
 	type BrowserUseOpCredentialField,
 	type BrowserUseTokenRetrievalPort,
@@ -261,7 +271,7 @@ import {
 	heartbeatBrowserLaneLease,
 	heartbeatTargetOperationLease,
 	releaseBrowserLaneLease,
-	releaseRunTargetOwnership,
+	releaseExactTargetOwnershipByRef,
 	releaseTargetOperationLease,
 } from "./browser-use-browser-custody";
 import { semanticClickInputIsValid } from "./browser-use-agent-browser-semantics";
@@ -350,6 +360,7 @@ import {
 	runTargetsSelect,
 	runTargetsStatus,
 } from "./browser-use-selection";
+import { runTargetsClose, runTargetsOpen } from "./browser-use-target-topology";
 import {
 	captureBrowserUseScreenshotMedia,
 	runOperate,
@@ -596,6 +607,7 @@ const RESULT_KIND_BY_FAMILY: Record<BrowserUseFamily, ResultKind> = {
 	migration: "migration_status",
 	artifact: "artifact_manifest",
 	repair: "repair_status",
+	qualification: "qualification",
 	auth: "auth_readiness",
 };
 
@@ -652,6 +664,165 @@ async function executeCommand(input: {
 		input.stdout.write(guide);
 		return 0;
 	}
+	if (parsed.command === "qualification-manifest") {
+		try {
+			const manifest = sealedQualificationRuntimeManifest();
+			if (!manifest) throw new Error("sealed qualification runtime required");
+			if (parsed.outputMode === "plain") {
+				input.stdout.write(
+					`browser_use_qualification_manifest manifest_digest=${manifest.manifest_digest} adapter_capability_id=${manifest.adapter_capability_id}\n`,
+				);
+				return 0;
+			}
+			writeJsonEnvelope(
+				input.stdout,
+				createCliRuntimeSuccessEnvelope({
+					run_id: input.runId,
+					data: manifest,
+				}),
+				{ runId: input.runId, durationMs: input.durationMs() },
+			);
+			return 0;
+		} catch {
+			const message =
+				"The Browser Use implementation manifest could not be resolved from its code-owned inventory.";
+			if (parsed.outputMode === "plain") {
+				input.stderr.write(`browser_use qualification_manifest_unavailable: ${message}\n`);
+				return RUNTIME_FAILURE_EXIT_CODE;
+			}
+			writeJsonEnvelope(
+				input.stdout,
+				createCliRuntimeErrorEnvelope({
+					run_id: input.runId,
+					process_exit_code: RUNTIME_FAILURE_EXIT_CODE,
+					data: {
+						contract: BROWSER_USE_QUALIFICATION_MANIFEST_CONTRACT_ID,
+						schema_version: BROWSER_USE_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
+						result_kind: "qualification",
+					},
+					error: createCliRuntimeError({
+						run_id: input.runId,
+						code: "qualification_manifest_unavailable",
+						message,
+						exit_code: RUNTIME_FAILURE_EXIT_CODE,
+						severity: "error",
+						recoverability: "repair_state",
+						retryable: false,
+						failure_domain: "browser_use",
+					}),
+				}),
+				{ runId: input.runId, durationMs: input.durationMs() },
+			);
+			return RUNTIME_FAILURE_EXIT_CODE;
+		}
+	}
+	if (parsed.command === "qualification-validate") {
+		const expectedManifestDigest = stringField(
+			parsed.flagValues["--expected-manifest-digest"],
+		);
+		const manifest = sealedQualificationRuntimeManifest();
+		const evidencePath = stringField(parsed.flagValues["--evidence"]);
+		if (!expectedManifestDigest || !manifest || !evidencePath) {
+			throw usageError(
+				"qualification validate requires one admitted sealed bundle, --expected-manifest-digest <sha256>, and --evidence <path>.",
+			);
+		}
+		let evidence: unknown;
+		try {
+			evidence = JSON.parse(await runtime.readTextFile(evidencePath));
+		} catch {
+			evidence = undefined;
+		}
+		const observedFinalCustody = await captureBrowserUseQualificationCustodyInventory({
+			fs: runtime.platformFs,
+			env: runtime.env,
+			runCommand: runtime.runCommand,
+			clock: runtime.now,
+		});
+		const validated =
+			manifest === undefined || evidence === undefined
+				? {
+						ok: false as const,
+						code: "qualification_evidence_unreadable",
+						message:
+							"The exact qualification manifest or evidence file could not be read as one JSON document.",
+					}
+				: observedFinalCustody === undefined
+					? {
+							ok: false as const,
+							code: "qualification_custody_inventory_unavailable",
+							message:
+								"Browser Use could not exhaustively read the canonical custody registry and lease roots.",
+						}
+					: await validateBrowserUseQualificationEvidence({
+						manifest,
+						evidence,
+						expectedManifestDigest,
+						observedFinalCustody,
+						sessionAuthority: currentBrowserUseQualificationSession(),
+					});
+		if (!validated.ok) {
+			if (parsed.outputMode === "plain") {
+				input.stderr.write(
+					`browser_use ${validated.code}: ${validated.message}\n`,
+				);
+				return BINDING_FAIL_CLOSED_EXIT_CODE;
+			}
+			writeJsonEnvelope(
+				input.stdout,
+				createCliRuntimeErrorEnvelope({
+					run_id: input.runId,
+					process_exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+					data: {
+						contract: BROWSER_USE_QUALIFICATION_VALIDATION_CONTRACT_ID,
+						schema_version: BROWSER_USE_QUALIFICATION_VALIDATION_SCHEMA_VERSION,
+						result_kind: "qualification",
+						validated: false,
+					},
+					error: createCliRuntimeError({
+						run_id: input.runId,
+						code: validated.code,
+						message: validated.message,
+						exit_code: BINDING_FAIL_CLOSED_EXIT_CODE,
+						severity: "error",
+						recoverability: "change_input",
+						retryable: false,
+						failure_domain: "browser_use",
+					}),
+				}),
+				{ runId: input.runId, durationMs: input.durationMs() },
+			);
+			return BINDING_FAIL_CLOSED_EXIT_CODE;
+		}
+		if (parsed.outputMode === "plain") {
+			input.stdout.write(
+				`browser_use_qualification_validated manifest_digest=${validated.manifest_digest} run_count=${validated.run_ids.length}\n`,
+			);
+			return 0;
+		}
+		writeJsonEnvelope(
+			input.stdout,
+			createCliRuntimeSuccessEnvelope({
+				run_id: input.runId,
+				data: {
+					contract: BROWSER_USE_QUALIFICATION_VALIDATION_CONTRACT_ID,
+					schema_version: BROWSER_USE_QUALIFICATION_VALIDATION_SCHEMA_VERSION,
+					result_kind: "qualification",
+					validated: true,
+					threat_model: validated.threat_model,
+					manifest_digest: validated.manifest_digest,
+					expected_manifest_digest: validated.expected_manifest_digest,
+					observed_manifest_digest: validated.observed_manifest_digest,
+					sealed_artifact_sha256: validated.sealed_artifact_sha256,
+					run_ids: validated.run_ids,
+					custody_inventory_receipt:
+						validated.custody_inventory_receipt,
+				},
+			}),
+			{ runId: input.runId, durationMs: input.durationMs() },
+		);
+		return 0;
+	}
 	// `task run` and `runbook run` return the shared-run contract, not the family
 	// default catalog; every other command keys resultKind off its family.
 	const resultKind: ResultKind =
@@ -700,6 +871,28 @@ async function executeCommand(input: {
 				runIdExplicit: input.runIdExplicit,
 				durationMs: input.durationMs,
 			});
+	}
+	if (parsed.command === "targets-open") {
+		return runTargetsOpen({
+			parsed,
+			runtime,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			runIdExplicit: input.runIdExplicit,
+			durationMs: input.durationMs,
+		});
+	}
+	if (parsed.command === "targets-close") {
+		return runTargetsClose({
+			parsed,
+			runtime,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			runIdExplicit: input.runIdExplicit,
+			durationMs: input.durationMs,
+		});
 	}
 
 	// Task Intent catalog (platform plan U1): a live pure projection of the
@@ -3112,6 +3305,76 @@ async function acquireVerifiedHandoff(input: {
 	return { ok: true, handoff: parse.facts, rawHandoffData };
 }
 
+type TaskCustodyCleanupDebt =
+	| "target-operation-lease-release-failed"
+	| "target-ownership-release-failed"
+	| "browser-lane-release-failed";
+
+async function cleanupTaskCustody(input: {
+	deps: RunStoreDeps;
+	targetLease: TargetOperationLease;
+	firstOwnership: boolean;
+	browserLane?: BrowserLaneLease;
+}): Promise<readonly TaskCustodyCleanupDebt[]> {
+	const debt: TaskCustodyCleanupDebt[] = [];
+	try {
+		const released = await releaseTargetOperationLease(
+			input.deps,
+			input.targetLease,
+		);
+		if (released.released_at_epoch_ms === undefined) {
+			debt.push("target-operation-lease-release-failed");
+		}
+	} catch {
+		debt.push("target-operation-lease-release-failed");
+	}
+	if (input.firstOwnership) {
+		try {
+			const released = await releaseExactTargetOwnershipByRef(input.deps, {
+				authorityId: input.targetLease.authority_id,
+				runId: input.targetLease.run_id,
+				targetRef: input.targetLease.target_ref,
+			});
+			if (!released.ok || released.released !== true) {
+				debt.push("target-ownership-release-failed");
+			}
+		} catch {
+			debt.push("target-ownership-release-failed");
+		}
+	}
+	if (input.browserLane !== undefined) {
+		try {
+			const released = await releaseBrowserLaneLease(input.deps, input.browserLane);
+			if (released.released_at_epoch_ms === undefined) {
+				debt.push("browser-lane-release-failed");
+			}
+		} catch {
+			debt.push("browser-lane-release-failed");
+		}
+	}
+	return debt;
+}
+
+function taskCleanupFailureMapping(input: {
+	cleanupDebt: readonly TaskCustodyCleanupDebt[];
+	mutationDispatched: boolean;
+}): Extract<AgentBrowserDispatchMapping, { kind: "terminal" }> {
+	return {
+		kind: "terminal",
+		state: "not-achieved",
+		mutationDispatched: input.mutationDispatched,
+		failure: {
+			code: "task_run_cleanup_incomplete",
+			message:
+				"The task reached its primary outcome, but exact custody release remains unresolved.",
+			actionId: "inspect_task_run_result",
+			exitCode: RUNTIME_FAILURE_EXIT_CODE,
+			recoverability: "repair_state",
+			dataExtra: { cleanup_debt: input.cleanupDebt },
+		},
+	};
+}
+
 async function acquireTaskTargetCustody(input: {
 	runtime: BrowserUseRuntime;
 	deps: RunStoreDeps;
@@ -3126,6 +3389,7 @@ async function acquireTaskTargetCustody(input: {
 			ok: true;
 			target: BrowserUseCdpTargetIdentity;
 			lease: TargetOperationLease;
+			firstOwnership: boolean;
 			heartbeat: ReturnType<typeof startTargetOperationLeaseHeartbeat>;
 	  }
 	| { ok: false; mapping: AgentBrowserDispatchMapping }
@@ -3172,6 +3436,7 @@ async function acquireTaskTargetCustody(input: {
 		ok: true,
 		target: identity.target,
 		lease: acquired.lease,
+		firstOwnership: acquired.first_ownership,
 		heartbeat: startTargetOperationLeaseHeartbeat(
 			input.deps,
 			acquired.lease,
@@ -3505,6 +3770,7 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		let dispatchRun = run;
 		let mutationMarkerFailure: PlatformStoreFailure | undefined;
 		let targetHeartbeatFailure: PlatformStoreFailure | undefined;
+		let taskCleanupDebt: readonly TaskCustodyCleanupDebt[] = [];
 		let result: AgentBrowserExecutionResult;
 		try {
 			result = await executeAgentBrowserTask(
@@ -3537,8 +3803,26 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		} finally {
 			const currentTargetLease = await targetHeartbeat.stop();
 			targetHeartbeatFailure = targetHeartbeat.failure();
-			await releaseTargetOperationLease(store.deps, currentTargetLease);
-			await releaseRunTargetOwnership(store.deps, run.run_id);
+			taskCleanupDebt = await cleanupTaskCustody({
+				deps: store.deps,
+				targetLease: currentTargetLease,
+				firstOwnership: targetLease.first_ownership,
+			});
+		}
+		if (taskCleanupDebt.length > 0) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				dispatchRun,
+				route,
+				taskCleanupFailureMapping({
+					cleanupDebt: taskCleanupDebt,
+					mutationDispatched: result.mutation_dispatched,
+				}),
+				{
+					...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+				},
+			);
 		}
 		if (targetHeartbeatFailure !== undefined) {
 			return await recordTaskRunOutcome(
@@ -3645,6 +3929,7 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		let browserLaneHeartbeat:
 			| ReturnType<typeof startBrowserLaneLeaseHeartbeat>
 			| undefined;
+		let browserLaneLease: BrowserLaneLease | undefined;
 		if (producesArtifacts) {
 			const lane = await acquireBrowserLaneLease(store.deps, {
 				authorityId: browserAuthorityIdOf(handoff),
@@ -3654,8 +3939,26 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 			});
 			if (!lane.ok) {
 				const currentTargetLease = await custody.heartbeat.stop();
-				await releaseTargetOperationLease(store.deps, currentTargetLease);
-				await releaseRunTargetOwnership(store.deps, run.run_id);
+				const cleanupDebt = await cleanupTaskCustody({
+					deps: store.deps,
+					targetLease: currentTargetLease,
+					firstOwnership: custody.firstOwnership,
+				});
+				if (cleanupDebt.length > 0) {
+					return await recordTaskRunOutcome(
+						input,
+						store.deps,
+						run,
+						route,
+						taskCleanupFailureMapping({
+							cleanupDebt,
+							mutationDispatched: false,
+						}),
+						{
+							...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+						},
+					);
+				}
 				return await recordTaskRunOutcome(
 					input,
 					store.deps,
@@ -3672,10 +3975,12 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 				lane.lease,
 				120_000,
 			);
+			browserLaneLease = lane.lease;
 		}
 		let result: ChromeTaskExecutionResult;
 		let targetHeartbeatFailure: PlatformStoreFailure | undefined;
 		let laneHeartbeatFailure: PlatformStoreFailure | undefined;
+		let taskCleanupDebt: readonly TaskCustodyCleanupDebt[] = [];
 		try {
 			result = await executeChromeTask(
 				input.runtime,
@@ -3691,14 +3996,32 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 			);
 		} finally {
 			if (browserLaneHeartbeat !== undefined) {
-				const lane = await browserLaneHeartbeat.stop();
+				browserLaneLease = await browserLaneHeartbeat.stop();
 				laneHeartbeatFailure = browserLaneHeartbeat.failure();
-				await releaseBrowserLaneLease(store.deps, lane);
 			}
 			const targetLease = await custody.heartbeat.stop();
 			targetHeartbeatFailure = custody.heartbeat.failure();
-			await releaseTargetOperationLease(store.deps, targetLease);
-			await releaseRunTargetOwnership(store.deps, run.run_id);
+			taskCleanupDebt = await cleanupTaskCustody({
+				deps: store.deps,
+				targetLease,
+				firstOwnership: custody.firstOwnership,
+				...(browserLaneLease === undefined ? {} : { browserLane: browserLaneLease }),
+			});
+		}
+		if (taskCleanupDebt.length > 0) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				run,
+				route,
+				taskCleanupFailureMapping({
+					cleanupDebt: taskCleanupDebt,
+					mutationDispatched: false,
+				}),
+				{
+					...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+				},
+			);
 		}
 		if (targetHeartbeatFailure !== undefined) {
 			return await recordTaskRunOutcome(
@@ -3762,7 +4085,7 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 				store.deps,
 				run,
 				route,
-				targetProofRefusalMapping("target-proof-invalid"),
+				mapPlaywrightOutcome(selectedPage.failure),
 				{ ...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}) },
 			);
 		}
@@ -3791,6 +4114,7 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		let dispatchRun = run;
 		let mutationMarkerFailure: PlatformStoreFailure | undefined;
 		let targetHeartbeatFailure: PlatformStoreFailure | undefined;
+		let taskCleanupDebt: readonly TaskCustodyCleanupDebt[] = [];
 		let result: PlaywrightTaskResult;
 		try {
 			result = await executePlaywrightTask(
@@ -3823,8 +4147,27 @@ async function runTaskRun(input: PlatformCommandInput): Promise<number> {
 		} finally {
 			const targetLease = await custody.heartbeat.stop();
 			targetHeartbeatFailure = custody.heartbeat.failure();
-			await releaseTargetOperationLease(store.deps, targetLease);
-			await releaseRunTargetOwnership(store.deps, run.run_id);
+			taskCleanupDebt = await cleanupTaskCustody({
+				deps: store.deps,
+				targetLease,
+				firstOwnership: custody.firstOwnership,
+			});
+		}
+		if (taskCleanupDebt.length > 0) {
+			return await recordTaskRunOutcome(
+				input,
+				store.deps,
+				dispatchRun,
+				route,
+				taskCleanupFailureMapping({
+					cleanupDebt: taskCleanupDebt,
+					mutationDispatched:
+						result.ok ? result.mutation_dispatched : result.mutation_dispatched,
+				}),
+				{
+					...(taskRunGuard !== undefined ? { guard: taskRunGuard } : {}),
+				},
+			);
 		}
 		if (mutationMarkerFailure !== undefined) {
 			return emitPlatformStoreFailure(input, mutationMarkerFailure);
@@ -4324,6 +4667,7 @@ async function recordTaskRunOutcome(
 		structuredResults?: readonly BrowserUseRunStructuredResult[];
 		dataExtra?: Readonly<Record<string, unknown>>;
 		plainExtra?: readonly string[];
+		afterCommitBeforeEmit?: () => Promise<TaskRunFailure | undefined>;
 	} = {},
 ): Promise<number> {
 	const artifacts = options.artifacts ?? [];
@@ -4403,6 +4747,10 @@ async function recordTaskRunOutcome(
 	);
 	if (!updated.ok) {
 		return emitPlatformStoreFailure(input, updated.failure);
+	}
+	const postCommitFailure = await options.afterCommitBeforeEmit?.();
+	if (postCommitFailure !== undefined) {
+		return emitTaskRunFailure(input, updated.run.run_id, postCommitFailure);
 	}
 
 	const externalEffect =
@@ -6786,7 +7134,11 @@ async function runRunbookRun(
 				{ ok: true }
 		  >["lease"]
 		| undefined;
+	let runbookMutationDispatched = false;
+	let runbookOutcome: number;
+	const exceptionalCleanupDebt: TaskCustodyCleanupDebt[] = [];
 	try {
+		runbookOutcome = await (async (): Promise<number> => {
 		const targetLease = await acquireTargetOperationLease(store.deps, {
 			authorityId: browserAuthorityIdOf(handoff),
 			runId: run.run_id,
@@ -7144,6 +7496,7 @@ async function runRunbookRun(
 						return { ok: false };
 					}
 					dispatchRun = marked.run;
+					runbookMutationDispatched = true;
 					return { ok: true };
 				},
 			},
@@ -7256,6 +7609,32 @@ async function runRunbookRun(
 			runbookNextStep: nextStep,
 			heldClaim: dispatchClaim,
 			structuredResults: outcome.structured_results ?? [],
+			afterCommitBeforeEmit: async () => {
+				if (targetOperationHeartbeat !== undefined) {
+					targetOperationLease = await targetOperationHeartbeat.stop();
+					targetOperationHeartbeat = undefined;
+				}
+				if (targetOperationLease === undefined) return undefined;
+				let releasedAtEpochMs: number | undefined;
+				try {
+					const released = await releaseTargetOperationLease(
+						store.deps,
+						targetOperationLease,
+					);
+					releasedAtEpochMs = released.released_at_epoch_ms;
+				} catch {
+					releasedAtEpochMs = undefined;
+				}
+				targetOperationLease = undefined;
+				if (releasedAtEpochMs !== undefined) return undefined;
+				const cleanupMapping = taskCleanupFailureMapping({
+					cleanupDebt: ["target-operation-lease-release-failed"],
+					mutationDispatched: mapping.mutationDispatched ?? false,
+				});
+				return cleanupMapping.kind === "terminal"
+					? cleanupMapping.failure
+					: undefined;
+			},
 			...(runbookAccessLease === undefined
 				? {}
 				: {
@@ -7269,13 +7648,28 @@ async function runRunbookRun(
 						],
 					}),
 		},
-	);
-			} finally {
+		);
+		})();
+	} finally {
 				if (targetOperationHeartbeat !== undefined) {
 					targetOperationLease = await targetOperationHeartbeat.stop();
 				}
 				if (targetOperationLease !== undefined) {
-					await releaseTargetOperationLease(store.deps, targetOperationLease);
+					try {
+						const released = await releaseTargetOperationLease(
+							store.deps,
+							targetOperationLease,
+						);
+						if (released.released_at_epoch_ms === undefined) {
+							exceptionalCleanupDebt.push(
+								"target-operation-lease-release-failed",
+							);
+						}
+					} catch {
+						exceptionalCleanupDebt.push(
+							"target-operation-lease-release-failed",
+						);
+					}
 				}
 				await settleAuthCleanup("runbook-auth-access-lease", async () =>
 				await runbookAccessLease?.release(),
@@ -7285,6 +7679,14 @@ async function runRunbookRun(
 				await releaseLease(store.deps, currentDispatchLease);
 			});
 	}
+	if (exceptionalCleanupDebt.length > 0) {
+		const cleanupFailure = taskCleanupFailureMapping({
+			cleanupDebt: exceptionalCleanupDebt,
+			mutationDispatched: runbookMutationDispatched,
+		});
+		return emitTaskRunFailure(input, run.run_id, cleanupFailure.failure);
+	}
+	return runbookOutcome;
 }
 
 // New runs use first-class progress. Read the legacy continuation cursor only

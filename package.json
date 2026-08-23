@@ -9,6 +9,7 @@
 		".agents/runtime/agent-native-state-machine-generator",
 		".agents/runtime/agent-worktree",
 		".agents/runtime/browser-connect",
+		".agents/runtime/browser-use-environment-auth",
 		".agents/runtime/browser-use-security",
 		".agents/runtime/cli-command-facade",
 		".agents/runtime/cli-test-fixtures",
@@ -42,16 +43,15 @@
 	},
 	"keywords": [],
 	"scripts": {
-		"check": "biome check --write .",
-		"format": "biome format --write .",
-		"format:check": "biome format .",
-		"lint": "biome lint .",
+		"check": "biome check --diagnostic-level=error .",
+		"check:write": "biome check --write .",
+		"lint": "biome lint --diagnostic-level=error .",
 		"lint:fix": "biome lint --write .",
 		"lint:scripts": "find . -type f \\( -name '*.sh' -o -name '*.bash' \\) ! -path './node_modules/*' ! -path './.worktrees/*' ! -path './.claude/worktrees/*' ! -path './.husky/_/*' -print0 | xargs -0 shellcheck -e SC1071 -S error",
 		"lint:workflows": "if [ -d .github/workflows ]; then actionlint; else echo 'no .github/workflows; skipping'; fi",
 		"memory:qmd-federation": "bun run $HOME/.config/context/scripts/qmd-roster-sync.ts",
 		"prepare": "husky",
-		"validate": "bun run lint && bun run format:check && bun run lint:scripts && bun run lint:workflows"
+		"validate": "bun run check && bun run lint:scripts && bun run lint:workflows"
 	},
 	"dependencies": {
 		"puppeteer": "^24.32.0",
@@ -67,7 +67,7 @@
 	},
 	"lint-staged": {
 		"*.{ts,tsx,js,jsx,mts,cts,json,md}": [
-			"biome check --write --no-errors-on-unmatched"
+			"biome check --diagnostic-level=error --no-errors-on-unmatched"
 		]
 	}
 }

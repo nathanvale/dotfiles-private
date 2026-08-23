@@ -19,6 +19,7 @@ import {
 	loadSharedRun,
 } from "./browser-use-runs";
 import {
+	type BrowserUsePlatformFs,
 	createDefaultPlatformFs,
 	openBrowserUsePaths,
 } from "./browser-use-paths";
@@ -116,6 +117,21 @@ function adapterCdpFailure(): string {
 	});
 }
 
+function chromeMcpText(text: string): string {
+	return JSON.stringify({ content: [{ type: "text", text }] });
+}
+
+function playwrightPageProofResponses(url: string) {
+	return [
+		{ stdout: "" },
+		{ stdout: "" },
+		{
+			stdout: `### Page\n- Page URL: ${url}\n### Snapshot\n- heading "Target proof"\n`,
+		},
+		{ stdout: "" },
+	] as const;
+}
+
 function isTypedTabListResponse(response: {
 	stdout?: string;
 	exitCode?: number;
@@ -161,6 +177,7 @@ function taskRunRuntime(
 	env: Record<string, string | undefined>,
 	responses: readonly { stdout?: string; exitCode?: number; timedOut?: boolean }[],
 	onCall?: (call: readonly string[]) => Promise<void>,
+	platformFs: BrowserUsePlatformFs = createDefaultPlatformFs(),
 ) {
 	let index = 0;
 	let stableTabList:
@@ -173,7 +190,7 @@ function taskRunRuntime(
 		runtime: makeRuntime({
 			env,
 			now: () => 1_000,
-			platformFs: createDefaultPlatformFs(),
+			platformFs,
 			// The real handoff file is read through the default readTextFile; only
 			// the adapter command runner is scripted.
 			readTextFile: (path: string) =>
@@ -485,6 +502,171 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		expect(continuation.next_action_id).toBe("inspect_task_run_result");
 		// The executor actually attached and snapshotted through the handoff.
 		expect(calls[0]?.join(" ")).toContain("tab list");
+	});
+
+	test("task success is blocked when Target Lease or exact ownership release is unconfirmed", async () => {
+		for (const failureKind of ["target-lease", "ownership"] as const) {
+			const store = await makeStore();
+			const realFs = createDefaultPlatformFs();
+			const faultFs: BrowserUsePlatformFs = {
+				...realFs,
+				writeFileDurable: async (path, contents, mode) => {
+					let durablePayload: Record<string, unknown> = {};
+					try {
+						durablePayload = JSON.parse(contents);
+					} catch {
+						// Non-JSON writes are outside the injected custody seam.
+					}
+					const targetLeaseRelease =
+						failureKind === "target-lease" &&
+						path.includes("/leases/") &&
+						(durablePayload.payload as Record<string, unknown> | undefined)
+							?.expires_at_epoch_ms === 1_000;
+					const ownershipRelease =
+						failureKind === "ownership" &&
+						Object.values(
+							(durablePayload.targets as Record<string, Record<string, unknown>> | undefined) ?? {},
+						).some((binding) => binding.status === "released");
+					if (targetLeaseRelease || ownershipRelease) {
+						throw Object.assign(new Error("injected release failure"), {
+							code: "EIO",
+						});
+					}
+					await realFs.writeFileDurable(path, contents, mode);
+				},
+			};
+			const { runtime } = taskRunRuntime(
+				store.env,
+				[
+					{
+						stdout: adapterSuccess({
+							tabs: [
+								{
+									tabId: "t7",
+									targetId: "cdp-target-t7",
+									active: true,
+									type: "page",
+									url: "https://example.test/",
+								},
+							],
+						}),
+					},
+					{ stdout: adapterSuccess({}) },
+					{ stdout: adapterSuccess({ url: "https://example.test/" }) },
+					{ stdout: adapterSuccess({ snapshot: "@e1 button", refs: { e1: {} } }) },
+				],
+				undefined,
+				faultFs,
+			);
+			const result = await runForTest(
+				[
+					"task",
+					"run",
+					"--intent",
+					"routine-automation",
+					"--handoff",
+					store.handoffPath,
+					"--tab",
+					"t7",
+					"--allowed-origin",
+					"https://example.test",
+					"--json",
+				],
+				runtime,
+			);
+			expect(result.exitCode).toBe(1);
+			expect(parseJson(result.stdout)).toMatchObject({
+				status: "error",
+				data: {
+					cleanup_debt: expect.arrayContaining([
+						failureKind === "target-lease"
+							? "target-operation-lease-release-failed"
+							: "target-ownership-release-failed",
+					]),
+				},
+			});
+		}
+	});
+
+	test("browser-wide task success is blocked when Browser Lane release is unconfirmed", async () => {
+		const store = await makeStore();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(
+			store.handoffPath,
+			JSON.stringify(handoffFor("chrome-devtools-mcp")),
+			"utf8",
+		);
+		const realFs = createDefaultPlatformFs();
+		const faultFs: BrowserUsePlatformFs = {
+			...realFs,
+			writeFileDurable: async (path, contents, mode) => {
+				let leasePayload: { payload?: { key?: string; expires_at_epoch_ms?: number } } = {};
+				try {
+					leasePayload = JSON.parse(contents);
+				} catch {
+					// Non-JSON writes are outside this injected lease-release seam.
+				}
+				if (
+					path.includes("/leases/") &&
+					leasePayload.payload?.key?.startsWith("browser-lane:") === true &&
+					leasePayload.payload.expires_at_epoch_ms === 1_000
+				) {
+					throw Object.assign(new Error("injected Browser Lane release failure"), {
+						code: "EIO",
+					});
+				}
+				await realFs.writeFileDurable(path, contents, mode);
+			},
+		};
+		const { runtime, calls } = taskRunRuntime(
+			store.env,
+			[
+				{
+					stdout: chromeMcpText(
+						"## Pages\n1: Target (https://example.test/) [selected]",
+					),
+				},
+				{
+					stdout: chromeMcpText(
+						"## Pages\n1: Target (https://example.test/) [selected]",
+					),
+				},
+				{
+					stdout: chromeMcpText(
+						"## Pages\n1: Target (https://example.test/) [selected]",
+					),
+				},
+				{ stdout: chromeMcpText("trace started") },
+				{ stdout: chromeMcpText("trace stopped") },
+			],
+			undefined,
+			faultFs,
+		);
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"performance-profile",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"1",
+				"--allowed-origin",
+				"https://example.test",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode, `${result.stdout}\n${JSON.stringify(calls)}`).toBe(1);
+		expect(parseJson(result.stdout)).toMatchObject({
+			status: "error",
+			data: {
+				cleanup_debt: expect.arrayContaining([
+					"browser-lane-release-failed",
+				]),
+			},
+		});
 	});
 
 	test("routine automation resolves one current semantic target, clicks, and verifies its named postcondition", async () => {
@@ -1107,6 +1289,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 			"utf-8",
 		);
 		const { runtime, calls } = taskRunRuntime(store.env, [
+			...playwrightPageProofResponses("https://example.test/account"),
 			{ stdout: "" },
 			{ stdout: "" },
 			{
@@ -1140,6 +1323,14 @@ describe("task run CLI dispatch (F1, F7)", () => {
 			["--session=browser-use-run-playwright", "tab-select", "1"],
 			["--session=browser-use-run-playwright", "snapshot"],
 			["--session=browser-use-run-playwright", "detach"],
+			[
+				"attach",
+				"--cdp=http://127.0.0.1:9222",
+				"--session=browser-use-run-playwright",
+			],
+			["--session=browser-use-run-playwright", "tab-select", "1"],
+			["--session=browser-use-run-playwright", "snapshot"],
+			["--session=browser-use-run-playwright", "detach"],
 		]);
 	});
 
@@ -1155,6 +1346,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		const { runtime, calls } = taskRunRuntime(
 			store.env,
 			[
+				...playwrightPageProofResponses("https://example.test/account"),
 				{ stdout: "" },
 				{ stdout: "" },
 				{
@@ -1219,6 +1411,14 @@ describe("task run CLI dispatch (F1, F7)", () => {
 			],
 			["--session=browser-use-run-playwright-mutation", "tab-select", "1"],
 			["--session=browser-use-run-playwright-mutation", "snapshot"],
+			["--session=browser-use-run-playwright-mutation", "detach"],
+			[
+				"attach",
+				"--cdp=http://127.0.0.1:9222",
+				"--session=browser-use-run-playwright-mutation",
+			],
+			["--session=browser-use-run-playwright-mutation", "tab-select", "1"],
+			["--session=browser-use-run-playwright-mutation", "snapshot"],
 			["--session=browser-use-run-playwright-mutation", "click", "e7"],
 			[
 				"--session=browser-use-run-playwright-mutation",
@@ -1240,6 +1440,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 			"utf-8",
 		);
 		const { runtime, calls } = taskRunRuntime(store.env, [
+			...playwrightPageProofResponses("https://example.test/account"),
 			{ stdout: "" },
 			{ stdout: "" },
 			{
@@ -1297,6 +1498,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 			"utf-8",
 		);
 		const { runtime, calls } = taskRunRuntime(store.env, [
+			...playwrightPageProofResponses("https://example.test/account"),
 			{ stdout: "" },
 			{ stdout: "" },
 			{
@@ -1359,6 +1561,7 @@ describe("task run CLI dispatch (F1, F7)", () => {
 			"utf-8",
 		);
 		const { runtime } = taskRunRuntime(store.env, [
+			...playwrightPageProofResponses("https://example.test/account"),
 			{ stdout: "" },
 			{ stdout: "" },
 			{
@@ -1478,6 +1681,47 @@ describe("task run CLI dispatch (F1, F7)", () => {
 		);
 		expect(calls.at(-1)?.at(-1)).toBe("detach");
 		expect(JSON.stringify(json)).not.toContain("agent-browser");
+	});
+
+	test("Chrome target-proof refusal stays on the canonical target-proof mapping", async () => {
+		const store = await makeStore();
+		const { writeFileSync } = await import("node:fs");
+		writeFileSync(
+			store.handoffPath,
+			JSON.stringify(handoffFor("chrome-devtools-mcp", "run-chrome-proof")),
+			"utf-8",
+		);
+		const { runtime, calls } = taskRunRuntime(store.env, [
+			{
+				stdout: chromeMcpText(
+					"## Pages\n1: wrong origin (https://other.test/account) [selected]",
+				),
+			},
+		]);
+		const result = await runForTest(
+			[
+				"task",
+				"run",
+				"--intent",
+				"debug",
+				"--handoff",
+				store.handoffPath,
+				"--tab",
+				"1",
+				"--allowed-origin",
+				"https://example.test",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		const json = parseJson(result.stdout);
+		expect(json.error).toMatchObject({ code: "target-proof-invalid" });
+		expect((json.data as Record<string, unknown>).selected_lane).toBe(
+			"chrome-devtools-mcp",
+		);
+		expect(calls).toHaveLength(1);
 	});
 
 	// An unregistered --lane value (e.g. playwright-cli, not a registered adapter)

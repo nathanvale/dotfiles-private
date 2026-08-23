@@ -57,6 +57,10 @@
         "typescript": "6.0.3",
       },
     },
+    ".agents/runtime/browser-use-environment-auth": {
+      "name": "@side-quest/browser-use-environment-auth",
+      "version": "0.1.0",
+    },
     ".agents/runtime/browser-use-security": {
       "name": "@side-quest/browser-use-security",
       "version": "0.1.0",
@@ -372,6 +376,8 @@
     "@side-quest/agent-native-state-machine-generator": ["@side-quest/agent-native-state-machine-generator@workspace:.agents/runtime/agent-native-state-machine-generator"],
 
     "@side-quest/browser-connect": ["@side-quest/browser-connect@workspace:.agents/runtime/browser-connect"],
+
+    "@side-quest/browser-use-environment-auth": ["@side-quest/browser-use-environment-auth@workspace:.agents/runtime/browser-use-environment-auth"],
 
     "@side-quest/browser-use-security": ["@side-quest/browser-use-security@workspace:.agents/runtime/browser-use-security"],
 

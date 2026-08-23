@@ -100,5 +100,6 @@ shasum -a 256 config/agents/evaluation/schema/*.json \
   config/agents/evaluation/scenarios/*.json
 ```
 
-Repository-wide read-only validation remains `bun run validate`. Do not use
-`bun run check` here because that command writes formatting.
+Repository-wide read-only validation remains `bun run validate`. `bun run check`
+is also read-only; formatting writes require the explicit `bun run check:write`
+command.

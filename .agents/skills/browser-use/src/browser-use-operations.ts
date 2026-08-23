@@ -17,8 +17,8 @@
 // projects redacted candidates only, so a canonical id is published for the one
 // target actually operated on, never for every listed tab. Do not publish the
 // ws debugger URL here, and do not publish the derived Adapter Session Lease
-// name — that session is released before this envelope is emitted, so naming it
-// would hand the caller a dead pointer.
+// lifecycle reference — short-lived lifecycle custody is released before this
+// envelope is emitted, so naming it would hand the caller a dead pointer.
 // ---------------------------------------------------------------------------
 
 import { tmpdir } from "node:os";
@@ -32,17 +32,13 @@ import {
 	writeJsonEnvelope,
 } from "@side-quest/cli-command-facade";
 import {
-	type AdapterReleaseResult,
-	type AdapterSessionReleaseDebt,
-	findAdapterDefinition,
-} from "@side-quest/browser-connect/adapters";
-import {
 	BROWSER_USE_OPERATION_CONTRACT_ID,
 	BROWSER_USE_OPERATION_SCHEMA_VERSION,
 	type BrowserUseCommand,
 	browserUseOperationFailureActions,
 	browserUseOperationSuccessActions,
 } from "./command-contract";
+import { sealedQualificationRuntimeEvidence } from "./browser-use-qualification-evidence";
 import {
 	authorizesOperationClass,
 	type BrowserOperationClass,
@@ -66,7 +62,9 @@ import {
 	RUNTIME_FAILURE_EXIT_CODE,
 	USAGE_EXIT_CODE,
 	actionFor,
+	candidateMatchesHints,
 	isJsonObject,
+	navigableRawPages,
 	parseUrlSafe,
 	redactUnsafeText,
 	stringField,
@@ -85,29 +83,39 @@ import {
 	type OperationTargetHints,
 	type SelectedTargetState,
 	type SelectionFailure,
+	canonicalRunSelectedStatePath,
 	loadSelectedState,
 	resolveOperationTarget,
 	resolveStatePath,
 	runScopedKey,
 } from "./browser-use-selection";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
-import { deriveSessionName } from "./browser-use-adapter-session-lease";
-import { SAFE_RUN_ID, SAFE_TAB_ID } from "./browser-use-identifiers";
+import {
+	resolveExactTargetOperationCapability,
+} from "./browser-use-adapter-registry";
+import type {
+	BrowserUseAdapterLifecycleReleaseDebt,
+	BrowserUseExactTargetHandoff,
+	BrowserUseExactTargetOperationCapability,
+} from "./browser-use-adapter-model";
 import type { RunStoreDeps } from "./browser-use-runs";
 import {
 	type BrowserUsePathRefusal,
+	inspectBrowserUsePaths,
 	openBrowserUsePaths,
 } from "./browser-use-paths";
 import {
 	type BrowserCustodyRefusalCode,
 	type BrowserLaneLease,
+	type BrowserWideMutation,
 	type TargetOperationLease,
+	type TargetOperationLeaseResult,
 	acquireBrowserLaneLease,
 	acquireTargetOperationLease,
 	browserAuthorityIdOf,
 	heartbeatTargetOperationLease,
 	releaseBrowserLaneLease,
-	releaseRunTargetOwnership,
+	releaseExactTargetOwnershipByRef,
 	releaseTargetOperationLease,
 	targetRefOf,
 } from "./browser-use-browser-custody";
@@ -122,11 +130,12 @@ import type {
 // `browser-use operate snapshot|screenshot|emulate` runs one authorized live
 // browser operation. The pipeline reads inputs, loads the Verified Handoff
 // Envelope binding, loads the selected-target context, resolves an opaque
-// adapter page ref, and dispatches per lane. chrome-devtools-mcp runs the
-// envelope-derived mcporter transport (the operation args carry an integer
-// pageId via --experimentalPageIdRouting; an explicit select_page call happens
-// only for --bring-to-front). agent-browser runs the native CLI transport
-// (tab activation then snapshot; activation carries the focus side effect).
+// adapter page ref, and dispatches through one adapter-neutral execution plan.
+// A newly created target may use its run-owned retained exact-target lifecycle
+// for a no-focus target-local snapshot. Ordinary targets and every adapter
+// without its own exact-target no-focus proof remain
+// Browser-Lane serialized. Chrome DevTools MCP keeps its native pageId routing;
+// this module does not infer concurrency safety from that transport shape.
 // Every failure mode bridges down into the operation failure taxonomy
 // (handoff, selection, discovery, transport, resolution).
 // ---------------------------------------------------------------------------
@@ -146,11 +155,74 @@ const operationActionById = new Map(
 	operationActions.map((action) => [action.id, action]),
 );
 
-type OperationFailure = Failure<OperationActionId>;
+type OperationCleanupDebt =
+	| "browser-lane-release-failed"
+	| "target-operation-lease-release-failed"
+	| "target-ownership-release-failed";
+
+type OperationFailure = Failure<OperationActionId> & {
+	primaryCause?: string;
+	operationEffect?: "confirmed" | "not_started" | "unknown";
+	cleanupDebt?: readonly OperationCleanupDebt[];
+};
 
 type OperationSideEffects = {
 	focus?: boolean;
 };
+
+type OperationExecutionEvidence = {
+	scope: "target-local" | "browser-wide";
+	focus: boolean;
+	capability_id?: string;
+};
+
+type TargetOperationLeaseInterval = {
+	acquiredAtEpochMs: number;
+	releasedAtEpochMs: number;
+};
+
+type BrowserLaneLeaseInterval = TargetOperationLeaseInterval;
+
+type OperationExecutionPlan =
+	| {
+			scope: "target-local";
+			retainedLifecycle: "adapter-exact-target-lifecycle";
+	  }
+	| {
+			scope: "browser-wide";
+			mutation: BrowserWideMutation;
+	  };
+
+function operationExecutionPlan(input: {
+	adapter: BrowserAdapterId;
+	operation: BrowserOperationClass;
+	retainedLifecycleRef?: string;
+	runId: string;
+}): OperationExecutionPlan {
+	const resolved = resolveExactTargetOperationCapability(input.adapter);
+	if (
+		resolved.ok &&
+		input.operation === "snapshot" &&
+		resolved.capability.retainedLifecycleIsValid(
+			input.retainedLifecycleRef,
+			input.runId,
+		)
+	) {
+		return {
+			scope: "target-local",
+			retainedLifecycle: "adapter-exact-target-lifecycle",
+		};
+	}
+	return {
+		scope: "browser-wide",
+		mutation:
+			input.operation === "screenshot"
+				? "capture"
+				: input.operation === "emulate"
+					? "viewport"
+					: "snapshot",
+	};
+}
 
 type OperationTargetEntry = {
 	candidate: BrowserTargetCandidate;
@@ -158,6 +230,16 @@ type OperationTargetEntry = {
 	canonicalTargetId?: string;
 	rawUrl: string;
 };
+
+function exactTargetHandoff(facts: HandoffFacts): BrowserUseExactTargetHandoff {
+	return {
+		adapter_id: facts.adapter,
+		run_id: facts.runId,
+		executable: facts.probeExecutable,
+		endpoint_http: facts.endpointHttp,
+		endpoint_ws: facts.endpointWs,
+	};
+}
 
 /** Exact browser-level target resolver injected by the CLI driver. */
 export type BrowserOperationTargetIdentityResolver = (input: {
@@ -179,19 +261,27 @@ export type ScreenshotArtifact = {
 	fullPage: boolean;
 };
 
+type ScreenshotArtifactEvidence = ScreenshotArtifact & {
+	byteCount: number;
+	contentSha256: string;
+	mediaType: "image/png";
+};
+
 /** Result of adapter-agnostic screenshot-media capture for a bound target. */
 export type BrowserUseScreenshotMediaCaptureResult =
 	| {
 			ok: true;
 			artifact: ScreenshotArtifact;
 			focus: boolean;
-			release?: AdapterSessionReleaseDebt;
+			release?: BrowserUseAdapterLifecycleReleaseDebt;
 	  }
 	| {
 			ok: false;
 			code: string;
 			message: string;
-			release?: AdapterSessionReleaseDebt;
+			release?: BrowserUseAdapterLifecycleReleaseDebt;
+			primary_code?: string;
+			cleanup_debt?: readonly ["browser-lane-release-failed"];
 	  };
 
 /**
@@ -285,6 +375,7 @@ export async function captureBrowserUseScreenshotMedia(input: {
 		};
 	}
 	let captured: Awaited<ReturnType<typeof runOperationLane>>;
+	let browserLaneReleasedAtEpochMs: number | undefined;
 	try {
 		captured = await runOperationLane({
 			runtime: input.runtime,
@@ -296,13 +387,34 @@ export async function captureBrowserUseScreenshotMedia(input: {
 			bringToFront: false,
 		});
 	} finally {
-		await releaseBrowserLaneLease(input.custody.deps, browserLane.lease);
+		try {
+			const released = await releaseBrowserLaneLease(
+				input.custody.deps,
+				browserLane.lease,
+			);
+			browserLaneReleasedAtEpochMs = released.released_at_epoch_ms;
+		} catch {
+			browserLaneReleasedAtEpochMs = undefined;
+		}
+	}
+	if (browserLaneReleasedAtEpochMs === undefined) {
+		return {
+			ok: false,
+			code: "browser_operation_cleanup_incomplete",
+			message:
+				"Screenshot capture completed, but Browser Lane release is unconfirmed.",
+			primary_code: captured.ok
+				? "browser_operation_completed"
+				: captured.failure.code,
+			cleanup_debt: ["browser-lane-release-failed"],
+			...(captured.release ? { release: captured.release } : {}),
+		};
 	}
 	return captured.ok
 		? {
 				ok: true,
 				artifact: input.artifact,
-				focus: input.handoff.adapter === "agent-browser",
+				focus: captured.focus,
 				...(captured.release ? { release: captured.release } : {}),
 			}
 		: {
@@ -344,6 +456,11 @@ type ResolvedOperationTarget = {
 	adapterPageRef: string;
 	canonicalTargetId?: string;
 	rawUrl: string;
+	createdOwnership?: {
+		targetRef: string;
+		expiresAtMs: number;
+		retainedLifecycleRef?: string;
+	};
 };
 
 export async function runOperate(input: {
@@ -367,7 +484,7 @@ export async function runOperate(input: {
 	const fail = (
 		failure: OperationFailure,
 		sideEffects: OperationSideEffects = {},
-		release?: AdapterSessionReleaseDebt,
+		release?: BrowserUseAdapterLifecycleReleaseDebt,
 	) =>
 		emitOperationFailure({
 			failure,
@@ -398,19 +515,73 @@ export async function runOperate(input: {
 	});
 	if (!binding.ok) return fail(binding.failure);
 	runId = binding.context.handoff.runId;
+	const targetEnvelopeId = targetEnvelopeIdOf({
+		runId,
+		mode: "handoff-bound",
+		adapter: binding.context.handoff.adapter,
+		handoffEvidenceId: binding.context.handoff.handoffEvidenceId,
+	});
+	const selectedState = await loadOperationSelectedState({
+		runtime,
+		flags,
+		env: runtime.env,
+		runId,
+		runIdExplicit: input.runIdExplicit,
+		targetEnvelopeId,
+		handoff: binding.context.handoff,
+		now: runtime.now(),
+	});
+	if (!selectedState.ok) return fail(selectedState.failure);
+	const selectedCapability = resolveExactTargetOperationCapability(
+		binding.context.handoff.adapter,
+	);
+	const retainedLifecycle =
+		selectedState.state?.ownership?.kind === "created-target"
+			? selectedState.state.ownership.retained_lifecycle
+			: undefined;
+	if (
+		retainedLifecycle !== undefined &&
+		(!selectedCapability.ok ||
+			retainedLifecycle.adapter_id !== binding.context.handoff.adapter ||
+			retainedLifecycle.capability_id !==
+				selectedCapability.capability.capability_id ||
+			!selectedCapability.capability.retainedLifecycleIsValid(
+				retainedLifecycle.lifecycle_ref,
+				runId,
+			))
+	) {
+		return fail({
+			code: "target_state_mismatch",
+			message:
+				"The selected target retained lifecycle does not match the verified adapter capability.",
+			actionId: "rerun_handoff_bound_target_discovery",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
+	const retainsExactTargetLifecycle =
+		selectedState.state?.ownership?.kind === "created-target" &&
+		selectedCapability.ok &&
+		selectedCapability.capability.retainedLifecycleIsValid(
+			retainedLifecycle?.lifecycle_ref,
+			runId,
+		);
 
-	const targetContext = await loadOperationTargetContext(runtime, binding.context);
+	const targetContext = await loadOperationTargetContext(runtime, binding.context, {
+		targetEnvelopeId,
+		retainLifecycle: retainsExactTargetLifecycle,
+	});
 	if (!targetContext.ok) return fail(targetContext.failure);
 
 	const target = await resolveOperationTargetEntry({
 		runtime,
 		flags,
-		runId: input.runId,
+		runId,
 		runIdExplicit: input.runIdExplicit,
 		targetEnvelopeId: targetContext.context.targetEnvelopeId,
 		targetEntries: targetContext.context.targetEntries,
 		handoff: binding.context.handoff,
-		now: runtime.now(),
+		selectedState,
 	});
 	if (!target.ok) return fail(target.failure);
 
@@ -442,6 +613,20 @@ export async function runOperate(input: {
 	if (!targetIdentity.ok) {
 		return fail(operationTargetProofFailure(targetIdentity.cause));
 	}
+	if (
+		target.target.createdOwnership !== undefined &&
+		targetRefOf(targetIdentity.target.target_id) !==
+			target.target.createdOwnership.targetRef
+	) {
+		return fail({
+			code: "target_state_mismatch",
+			message:
+				"The re-discovered Browser target does not match the private created-target ownership reference.",
+			actionId: "refresh_target_selection",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "repair_state",
+		});
+	}
 	const openedPaths = await openBrowserUsePaths(runtime.platformFs, runtime.env);
 	if (!openedPaths.ok) return fail(operationPathFailure(openedPaths.refusal));
 	const custodyDeps: RunStoreDeps = {
@@ -449,6 +634,23 @@ export async function runOperate(input: {
 		paths: openedPaths.paths,
 		clock: runtime.now,
 	};
+	const createdOwnershipRemainingMs =
+		target.target.createdOwnership === undefined
+			? undefined
+			: target.target.createdOwnership.expiresAtMs - runtime.now();
+	if (
+		createdOwnershipRemainingMs !== undefined &&
+		createdOwnershipRemainingMs < 120_000
+	) {
+		return fail({
+			code: "target_state_stale",
+			message:
+				"The open-created target state lacks enough lifetime for a bounded operation and cleanup.",
+			actionId: "close_created_target",
+			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+			recoverability: "change_input",
+		});
+	}
 	const targetLease = await acquireTargetOperationLease(custodyDeps, {
 		authorityId: browserAuthorityIdOf(binding.context.handoff),
 		runId,
@@ -456,7 +658,10 @@ export async function runOperate(input: {
 		rawTargetId: targetIdentity.target.target_id,
 		operation:
 			operationInputs.inputs.operation === "emulate" ? "action" : "read",
-		ttlMs: 120_000,
+		ttlMs:
+			createdOwnershipRemainingMs === undefined
+				? 120_000
+				: createdOwnershipRemainingMs,
 		ownershipEvidence: {
 			kind: "explicit-adoption",
 			adapter_id: binding.context.handoff.adapter,
@@ -471,13 +676,18 @@ export async function runOperate(input: {
 		},
 	});
 	if (!targetLease.ok) return fail(operationCustodyFailure(targetLease));
+	const executionPlan = operationExecutionPlan({
+		adapter: binding.context.handoff.adapter,
+		operation: operationInputs.inputs.operation,
+		retainedLifecycleRef:
+			target.target.createdOwnership?.retainedLifecycleRef,
+		runId,
+	});
 	let browserLane: BrowserLaneLease | undefined;
 	const browserMutation =
-		operationInputs.inputs.operation === "screenshot"
-			? "capture"
-			: operationInputs.inputs.operation === "emulate"
-				? "viewport"
-				: undefined;
+		executionPlan.scope === "browser-wide"
+			? executionPlan.mutation
+			: undefined;
 	if (browserMutation !== undefined) {
 		const acquiredLane = await acquireBrowserLaneLease(custodyDeps, {
 			authorityId: browserAuthorityIdOf(binding.context.handoff),
@@ -486,47 +696,149 @@ export async function runOperate(input: {
 			ttlMs: 120_000,
 		});
 		if (!acquiredLane.ok) {
-			await releaseTargetOperationLease(custodyDeps, targetLease.lease);
-			await releaseRunTargetOwnership(custodyDeps, runId);
-			return fail(operationCustodyFailure(acquiredLane));
+			const primary = operationCustodyFailure(acquiredLane);
+			const released = await releaseOperationResources({
+				deps: custodyDeps,
+				targetLease,
+			});
+			return released.cleanupDebt.length === 0
+				? fail(primary)
+				: fail(
+						operationCleanupFailure({
+							primaryCause: primary.code,
+							operationEffect: "not_started",
+							cleanupDebt: released.cleanupDebt,
+						}),
+					);
 		}
 		browserLane = acquiredLane.lease;
 	}
 	let operationCall: Awaited<ReturnType<typeof runOperationLane>>;
+	let cleanupDebt: readonly OperationCleanupDebt[] = [];
+	let targetLeaseInterval: TargetOperationLeaseInterval | undefined;
+	let browserLaneInterval: BrowserLaneLeaseInterval | undefined;
 	try {
-		operationCall = await runOperationLane({
-			runtime,
-			handoff: binding.context.handoff,
-			adapterPageRef:
-				binding.context.handoff.adapter === "agent-browser"
+		try {
+			operationCall = await runOperationLane({
+				runtime,
+				handoff: binding.context.handoff,
+				adapterPageRef: selectedCapability.ok
 					? (target.target.canonicalTargetId ?? target.target.adapterPageRef)
 					: target.target.adapterPageRef,
-			operation: operationInputs.inputs.operation,
-			screenshot: operationInputs.inputs.screenshot,
-			viewport: operationInputs.inputs.viewport,
-			verbose: input.diagnosticVerbose,
-			bringToFront,
-		});
-	} finally {
-		if (browserLane !== undefined) {
-			await releaseBrowserLaneLease(custodyDeps, browserLane);
+				operation: operationInputs.inputs.operation,
+				screenshot: operationInputs.inputs.screenshot,
+				viewport: operationInputs.inputs.viewport,
+				verbose: input.diagnosticVerbose,
+				bringToFront,
+				expectedUrl: target.target.rawUrl,
+				lifecyclePrepared: executionPlan.scope === "target-local",
+				retainLifecycle: retainsExactTargetLifecycle,
+			});
+		} catch {
+			operationCall = {
+				ok: false,
+				failure: operationTransportExitedFailure(
+					"The adapter Browser Operation failed unexpectedly.",
+				),
+				focus: false,
+			};
 		}
-		await releaseTargetOperationLease(custodyDeps, targetLease.lease);
-		await releaseRunTargetOwnership(custodyDeps, runId);
+	} finally {
+		const released = await releaseOperationResources({
+			deps: custodyDeps,
+			targetLease,
+			browserLane,
+		});
+		cleanupDebt = released.cleanupDebt;
+		if (released.targetLeaseReleasedAtEpochMs !== undefined) {
+			targetLeaseInterval = {
+				acquiredAtEpochMs: targetLease.lease.lease.acquired_at_epoch_ms,
+				releasedAtEpochMs: released.targetLeaseReleasedAtEpochMs,
+			};
+		}
+		if (
+			browserLane !== undefined &&
+			released.browserLaneReleasedAtEpochMs !== undefined
+		) {
+			browserLaneInterval = {
+				acquiredAtEpochMs: browserLane.lease.acquired_at_epoch_ms,
+				releasedAtEpochMs: released.browserLaneReleasedAtEpochMs,
+			};
+		}
 	}
+	const focusSideEffect = operationCall.focus || bringToFront;
 	if (!operationCall.ok) {
+		if (cleanupDebt.length > 0) {
+			return fail(
+				operationCleanupFailure({
+					primaryCause: operationCall.failure.code,
+					operationEffect: "unknown",
+					cleanupDebt,
+				}),
+				{ focus: focusSideEffect },
+				operationCall.release,
+			);
+		}
 		return fail(
 			operationCall.failure,
-			{ focus: operationCall.focus },
+			{ focus: focusSideEffect },
 			operationCall.release,
 		);
 	}
 	if (operationCall.result.exitCode !== 0) {
+		const primary = operationTransportExitedFailure(
+			"The adapter Browser Operation call failed.",
+		);
+		if (cleanupDebt.length > 0) {
+			return fail(
+				operationCleanupFailure({
+					primaryCause: primary.code,
+					operationEffect: "unknown",
+					cleanupDebt,
+				}),
+				{ focus: focusSideEffect },
+				operationCall.release,
+			);
+		}
 		return fail(
-			operationTransportExitedFailure("The adapter Browser Operation call failed."),
-			{ focus: bringToFront },
+			primary,
+			{ focus: focusSideEffect },
 			operationCall.release,
 		);
+	}
+	if (cleanupDebt.length > 0) {
+		return fail(
+			operationCleanupFailure({
+				primaryCause: "browser_operation_completed",
+				operationEffect: "confirmed",
+				cleanupDebt,
+			}),
+			{ focus: focusSideEffect },
+			operationCall.release,
+		);
+	}
+	let screenshotEvidence: ScreenshotArtifactEvidence | undefined;
+	if (operationInputs.inputs.screenshot !== undefined) {
+		const screenshotStat = await runtime.platformFs.lstat(
+			operationInputs.inputs.screenshot.path,
+		);
+		if (screenshotStat?.kind !== "file" || screenshotStat.size < 0) {
+			return fail(
+				operationTransportExitedFailure(
+					"The screenshot artifact was not confirmed as one exact file.",
+				),
+				{ focus: focusSideEffect },
+				operationCall.release,
+			);
+		}
+		screenshotEvidence = {
+			...operationInputs.inputs.screenshot,
+			byteCount: screenshotStat.size,
+			contentSha256: await runtime.platformFs.hashFile(
+				operationInputs.inputs.screenshot.path,
+			),
+			mediaType: "image/png",
+		};
 	}
 
 	return emitOperationSuccess({
@@ -543,17 +855,26 @@ export async function runOperate(input: {
 		durationMs: input.durationMs(),
 		transportResult: operationCall.result,
 		release: operationCall.release,
-		...(operationInputs.inputs.screenshot
-			? { screenshot: operationInputs.inputs.screenshot }
+		...(screenshotEvidence
+			? { screenshot: screenshotEvidence }
 			: {}),
 		...(operationInputs.inputs.viewport
 			? { viewport: operationInputs.inputs.viewport }
 			: {}),
-		// agent-browser native tab activation always carries the window-focus
-		// side effect, so focus is truthfully reported even without
-		// --bring-to-front.
-		focusSideEffect:
-			binding.context.handoff.adapter === "agent-browser" || bringToFront,
+		focusSideEffect,
+			execution: {
+				scope: executionPlan.scope,
+				focus: operationCall.focus,
+				...(selectedCapability.ok &&
+				operationInputs.inputs.operation === "snapshot" &&
+				executionPlan.scope === "target-local"
+					? {
+							capability_id: selectedCapability.capability.capability_id,
+						}
+					: {}),
+			},
+		targetLeaseInterval,
+		browserLaneInterval,
 	});
 }
 
@@ -562,7 +883,9 @@ function readOperationInputs(input: {
 	flags: Record<string, string>;
 	env: Record<string, string | undefined>;
 	runId: string;
-}): { ok: true; inputs: OperationInputs } | { ok: false; failure: OperationFailure } {
+}):
+	| { ok: true; inputs: OperationInputs }
+	| { ok: false; failure: OperationFailure } {
 	const operation = operationClassForCommand(input.command);
 	const screenshot = input.command === "operate-screenshot"
 		? readScreenshotArtifact(input.flags, input.env, input.runId)
@@ -591,7 +914,8 @@ async function loadOperationBinding(input: {
 	runId: string;
 	runIdExplicit: boolean;
 }): Promise<
-	{ ok: true; context: OperationBindingContext } | { ok: false; failure: OperationFailure }
+	| { ok: true; context: OperationBindingContext }
+	| { ok: false; failure: OperationFailure }
 > {
 	const handoffPath = stringField(input.flags["--handoff"]);
 	if (!handoffPath) {
@@ -662,10 +986,17 @@ async function loadOperationBinding(input: {
 async function loadOperationTargetContext(
 	runtime: BrowserUseRuntime,
 	binding: OperationBindingContext,
+	input: {
+		targetEnvelopeId: string;
+		retainLifecycle: boolean;
+	},
 ): Promise<
-	{ ok: true; context: OperationTargetContext } | { ok: false; failure: OperationFailure }
+	| { ok: true; context: OperationTargetContext }
+	| { ok: false; failure: OperationFailure }
 > {
-	const discovery = await discoverPages(runtime, binding.handoff);
+	const discovery = await discoverPages(runtime, binding.handoff, {
+		retainLifecycle: input.retainLifecycle,
+	});
 	if (!discovery.ok) {
 		return { ok: false, failure: operationFailureFromDiscovery(discovery.failure) };
 	}
@@ -673,18 +1004,15 @@ async function loadOperationTargetContext(
 		return {
 			ok: false,
 			failure: operationTransportExitedFailure(
-				"The Agent Browser discovery session could not be released; operation custody was not admitted.",
+				"The adapter discovery lifecycle could not be released; operation custody was not admitted.",
 			),
 		};
 	}
 
-	const targetEnvelopeId = targetEnvelopeIdOf({
-		runId: binding.handoff.runId,
-		mode: "handoff-bound",
-		adapter: binding.handoff.adapter,
-		handoffEvidenceId: binding.handoff.handoffEvidenceId,
-	});
-	const targetEntries = operationTargetEntries(discovery.pages, targetEnvelopeId);
+	const targetEntries = operationTargetEntries(
+		discovery.pages,
+		input.targetEnvelopeId,
+	);
 	if (targetEntries.length === 0) {
 		return {
 			ok: false,
@@ -699,7 +1027,10 @@ async function loadOperationTargetContext(
 		};
 	}
 
-	return { ok: true, context: { targetEnvelopeId, targetEntries } };
+	return {
+		ok: true,
+		context: { targetEnvelopeId: input.targetEnvelopeId, targetEntries },
+	};
 }
 
 async function resolveOperationTargetEntry(input: {
@@ -710,23 +1041,107 @@ async function resolveOperationTargetEntry(input: {
 	targetEnvelopeId: string;
 	targetEntries: OperationTargetEntry[];
 	handoff: HandoffFacts;
-	now: number;
+	selectedState: Extract<OperationStateLoad, { ok: true }>;
 }): Promise<
-	{ ok: true; target: ResolvedOperationTarget } | { ok: false; failure: OperationFailure }
+	| { ok: true; target: ResolvedOperationTarget }
+	| { ok: false; failure: OperationFailure }
 > {
-	const selectedState = await loadOperationSelectedState({
-		runtime: input.runtime,
-		flags: input.flags,
-		env: input.runtime.env,
-		runId: input.runId,
-		runIdExplicit: input.runIdExplicit,
-		targetEnvelopeId: input.targetEnvelopeId,
-		handoff: input.handoff,
-		now: input.now,
-	});
-	if (!selectedState.ok) return { ok: false, failure: selectedState.failure };
+	const selectedState = input.selectedState;
 
 	const hints = readOperationHints(input.flags);
+	if (selectedState.state?.ownership?.kind === "created-target") {
+		const canonicalIds = input.targetEntries.map(
+			(entry) => entry.canonicalTargetId,
+		);
+		const validCanonicalIds = canonicalIds.filter(
+			(value): value is string =>
+				typeof value === "string" && value.length > 0 && value.length <= 512,
+		);
+		if (
+			validCanonicalIds.length !== canonicalIds.length ||
+			new Set(validCanonicalIds).size !== validCanonicalIds.length
+		) {
+			return {
+				ok: false,
+				failure: {
+					code: "target_state_mismatch",
+					message:
+						"Fresh target inventory contains malformed or duplicate canonical identities.",
+					actionId: "close_created_target",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				},
+			};
+		}
+		const ownedEntries = input.targetEntries.filter(
+			(entry) =>
+				entry.canonicalTargetId !== undefined &&
+				targetRefOf(entry.canonicalTargetId) ===
+					selectedState.state?.ownership?.target_ref,
+		);
+		if (
+			ownedEntries.length !== 1 ||
+			ownedEntries[0]?.adapterPageRef === undefined
+		) {
+			return {
+				ok: false,
+				failure: {
+					code: "target_state_mismatch",
+					message:
+						"Fresh discovery did not resolve exactly one target matching the private created-target ownership reference.",
+					actionId: "close_created_target",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				},
+			};
+		}
+		const owned = ownedEntries[0];
+		if (
+			parseUrlSafe(owned.rawUrl)?.origin !== selectedState.state.display.origin
+		) {
+			return {
+				ok: false,
+				failure: {
+					code: "target_state_mismatch",
+					message:
+						"The exact open-created target navigated away from its approved origin.",
+					actionId: "close_created_target",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "change_input",
+				},
+			};
+		}
+		if (
+			hasOperationHints(hints) &&
+			!candidateMatchesHints(owned.candidate, hints)
+		) {
+			return {
+				ok: false,
+				failure: operationFailureFromResolution({ kind: "no_match" }, true),
+			};
+		}
+		return {
+			ok: true,
+			target: {
+				candidate: owned.candidate,
+				source: "selected_state",
+				adapterPageRef: owned.adapterPageRef!,
+				canonicalTargetId: owned.canonicalTargetId,
+				rawUrl: owned.rawUrl,
+				createdOwnership: {
+					targetRef: selectedState.state.ownership.target_ref,
+					expiresAtMs: selectedState.state.expires_at_ms,
+					...(selectedState.state.ownership.retained_lifecycle === undefined
+						? {}
+						: {
+								retainedLifecycleRef:
+									selectedState.state.ownership.retained_lifecycle
+										.lifecycle_ref,
+							}),
+				},
+			},
+		};
+	}
 	const resolution = resolveOperationTarget({
 		hints,
 		candidates: input.targetEntries.map((entry) => entry.candidate),
@@ -835,8 +1250,7 @@ function operationTargetEntries(
 	pages: readonly RawPage[],
 	targetEnvelopeId: string,
 ): OperationTargetEntry[] {
-	return pages
-		.filter((page) => parseUrlSafe(page.url))
+	return navigableRawPages(pages)
 		.map((page, index) => ({
 			candidate: toCandidate(page, index, targetEnvelopeId, true),
 			adapterPageRef: page.id === "" ? undefined : page.id,
@@ -886,6 +1300,101 @@ function operationCustodyFailure(input: {
 	};
 }
 
+function operationCleanupFailure(input: {
+	primaryCause: string;
+	operationEffect: "confirmed" | "not_started" | "unknown";
+	cleanupDebt: readonly OperationCleanupDebt[];
+}): OperationFailure {
+	return {
+		code: "browser_operation_cleanup_incomplete",
+		message:
+			"The Browser Operation reached a primary outcome, but one or more custody releases remain unresolved.",
+		actionId: "inspect_operation_diagnostics",
+		exitCode: RUNTIME_FAILURE_EXIT_CODE,
+		recoverability: "none",
+		primaryCause: input.primaryCause,
+		operationEffect: input.operationEffect,
+		cleanupDebt: input.cleanupDebt,
+	};
+}
+
+async function releaseOperationResources(input: {
+	deps: RunStoreDeps;
+	targetLease: Extract<TargetOperationLeaseResult, { ok: true }>;
+	browserLane?: BrowserLaneLease;
+}): Promise<{
+	cleanupDebt: readonly OperationCleanupDebt[];
+	targetLeaseReleasedAtEpochMs?: number;
+	browserLaneReleasedAtEpochMs?: number;
+}> {
+	const cleanupDebt: OperationCleanupDebt[] = [];
+	const targetRelease = await releaseOperationTargetCustody(
+		input.deps,
+		input.targetLease,
+	);
+	cleanupDebt.push(...targetRelease.cleanupDebt);
+	let browserLaneReleasedAtEpochMs: number | undefined;
+	if (input.browserLane !== undefined) {
+		try {
+			const released = await releaseBrowserLaneLease(
+				input.deps,
+				input.browserLane,
+			);
+			browserLaneReleasedAtEpochMs = released.released_at_epoch_ms;
+			if (browserLaneReleasedAtEpochMs === undefined) {
+				cleanupDebt.push("browser-lane-release-failed");
+			}
+		} catch {
+			cleanupDebt.push("browser-lane-release-failed");
+		}
+	}
+	return {
+		cleanupDebt,
+		...(targetRelease.releasedAtEpochMs === undefined
+			? {}
+			: { targetLeaseReleasedAtEpochMs: targetRelease.releasedAtEpochMs }),
+		...(browserLaneReleasedAtEpochMs === undefined
+			? {}
+			: { browserLaneReleasedAtEpochMs }),
+	};
+}
+
+async function releaseOperationTargetCustody(
+	deps: RunStoreDeps,
+	acquired: Extract<TargetOperationLeaseResult, { ok: true }>,
+): Promise<{
+	cleanupDebt: readonly OperationCleanupDebt[];
+	releasedAtEpochMs?: number;
+}> {
+	const cleanupDebt: OperationCleanupDebt[] = [];
+	let releasedAtEpochMs: number | undefined;
+	try {
+		const released = await releaseTargetOperationLease(deps, acquired.lease);
+		releasedAtEpochMs = released.released_at_epoch_ms;
+		if (releasedAtEpochMs === undefined) {
+			cleanupDebt.push("target-operation-lease-release-failed");
+		}
+	} catch {
+		cleanupDebt.push("target-operation-lease-release-failed");
+	}
+	if (!acquired.first_ownership) {
+		return { cleanupDebt, releasedAtEpochMs };
+	}
+	try {
+		const ownership = await releaseExactTargetOwnershipByRef(deps, {
+			authorityId: acquired.lease.authority_id,
+			runId: acquired.lease.run_id,
+			targetRef: acquired.lease.target_ref,
+		});
+		if (!ownership.ok || ownership.released !== true) {
+			cleanupDebt.push("target-ownership-release-failed");
+		}
+	} catch {
+		cleanupDebt.push("target-ownership-release-failed");
+	}
+	return { cleanupDebt, releasedAtEpochMs };
+}
+
 type OperationStateLoad =
 	| { ok: true; state?: SelectedTargetState }
 	| { ok: false; failure: OperationFailure };
@@ -903,20 +1412,54 @@ async function loadOperationSelectedState(input: {
 	const hasStateSource =
 		stringField(input.flags["--state"]) !== undefined ||
 		stringField(input.env.BROWSER_USE_TARGET_STATE_DIR) !== undefined;
-	if (!hasStateSource) return { ok: true };
-
-	const statePath = resolveStatePath(
-		input.flags,
-		input.env,
-		input.runId,
-		input.runIdExplicit,
-	);
-	if (!statePath.ok) {
-		return { ok: false, failure: operationFailureFromSelection(statePath.failure) };
+	let statePath: string;
+	if (hasStateSource) {
+		const resolved = resolveStatePath(
+			input.flags,
+			input.env,
+			input.runId,
+			input.runIdExplicit,
+		);
+		if (!resolved.ok) {
+			return {
+				ok: false,
+				failure: operationFailureFromSelection(resolved.failure),
+			};
+		}
+		statePath = resolved.path;
+	} else {
+		const inspected = await inspectBrowserUsePaths(
+			input.runtime.platformFs,
+			input.env,
+		);
+		if (!inspected.ok) {
+			return { ok: false, failure: operationPathFailure(inspected.refusal) };
+		}
+		statePath = canonicalRunSelectedStatePath(
+			inspected.paths.resolution.roots.state,
+			input.handoff.runId,
+		);
+		try {
+			if ((await input.runtime.platformFs.lstat(statePath)) === undefined) {
+				return { ok: true };
+			}
+		} catch {
+			return {
+				ok: false,
+				failure: {
+					code: "target_state_unreadable",
+					message:
+						"The canonical run-scoped selected-target state could not be inspected.",
+					actionId: "refresh_target_selection",
+					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+					recoverability: "repair_state",
+				},
+			};
+		}
 	}
-	const load = await loadSelectedState(input.runtime, statePath.path, {
+	const load = await loadSelectedState(input.runtime, statePath, {
 		now: input.now,
-		expectedRunId: input.runIdExplicit ? input.runId : undefined,
+		expectedRunId: input.handoff.runId,
 	});
 	if (!load.ok) {
 		return { ok: false, failure: operationFailureFromSelection(load.failure) };
@@ -947,7 +1490,9 @@ function readScreenshotArtifact(
 	flags: Record<string, string>,
 	env: Record<string, string | undefined>,
 	runId: string,
-): { ok: true; artifact: ScreenshotArtifact } | { ok: false; failure: OperationFailure } {
+):
+	| { ok: true; artifact: ScreenshotArtifact }
+	| { ok: false; failure: OperationFailure } {
 	const raw = stringField(flags["--out"]);
 	if (!raw) {
 		return {
@@ -1067,7 +1612,9 @@ async function ensureScreenshotArtifactDirectory(
 
 function readViewportEmulation(
 	flags: Record<string, string>,
-): { ok: true; viewport: ViewportEmulation } | { ok: false; failure: OperationFailure } {
+):
+	| { ok: true; viewport: ViewportEmulation }
+	| { ok: false; failure: OperationFailure } {
 	const width = positiveIntFlag(flags["--width"]);
 	const height = positiveIntFlag(flags["--height"]);
 	const dpr = positiveNumberFlag(flags["--dpr"] ?? "1");
@@ -1123,53 +1670,36 @@ type OperationLaneInput = {
 	runtime: BrowserUseRuntime;
 	handoff: HandoffFacts;
 	adapterPageRef: string;
+	expectedUrl?: string;
 	operation: BrowserOperationClass;
 	screenshot?: ScreenshotArtifact;
 	viewport?: ViewportEmulation;
 	verbose: boolean;
 	bringToFront: boolean;
+	lifecyclePrepared?: boolean;
+	retainLifecycle?: boolean;
 };
 
 type OperationLaneResult =
 	| {
 			ok: true;
 			result: McporterCommandResult;
-			release?: AdapterSessionReleaseDebt;
+			focus: boolean;
+			release?: BrowserUseAdapterLifecycleReleaseDebt;
 	  }
 	| {
 			ok: false;
 			failure: OperationFailure;
 			focus: boolean;
-			release?: AdapterSessionReleaseDebt;
+			release?: BrowserUseAdapterLifecycleReleaseDebt;
 	  };
-
-async function releaseAgentBrowserOperationSession(
-	runtime: BrowserUseRuntime,
-	handoff: HandoffFacts,
-): Promise<AdapterReleaseResult> {
-	const releaseSession = findAdapterDefinition("agent-browser")?.releaseSession;
-	if (!releaseSession) {
-		return {
-			released: false,
-			cause: "command-failed",
-			detail: "The agent-browser adapter has no registered session release mechanic.",
-		};
-	}
-	return releaseSession(
-		{
-			env: runtime.env,
-			resolveExecutable: () => ({ resolved: true, path: handoff.probeExecutable }),
-			runCommand: (input) => runtime.runCommand(input),
-		},
-		{ sessionName: deriveSessionName(handoff.runId) },
-	);
-}
 
 async function runOperationLane(
 	input: OperationLaneInput,
 ): Promise<OperationLaneResult> {
-	if (input.handoff.adapter === "agent-browser") {
-		return runAgentBrowserOperation(input);
+	const resolved = resolveExactTargetOperationCapability(input.handoff.adapter);
+	if (resolved.ok) {
+		return runExactTargetOperation(input, resolved.capability);
 	}
 	return runChromeDevtoolsOperation(input);
 }
@@ -1190,176 +1720,51 @@ async function runChromeDevtoolsOperation(
 	return runOperationCalls(input, pageId);
 }
 
-async function runAgentBrowserOperation(
+async function runExactTargetOperation(
 	input: OperationLaneInput,
+	capability: BrowserUseExactTargetOperationCapability,
 ): Promise<OperationLaneResult> {
-	if (
-		!SAFE_RUN_ID.test(input.handoff.runId) ||
-		!SAFE_TAB_ID.test(input.adapterPageRef)
-	) {
-		return {
-			ok: false,
-			failure: {
-				code: "browser_operation_transport_failed",
-				message: "The agent-browser operation identifiers are unsafe.",
-				actionId: "change_operation_input",
-				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-				recoverability: "change_input",
-			},
-			focus: false,
-		};
-	}
-	const operationOutcome = await runAgentBrowserOperationSession(input);
-	const release = await releaseAgentBrowserOperationSession(
-		input.runtime,
-		input.handoff,
-	);
-	return release.released
-		? operationOutcome
-		: !operationOutcome.ok
-			? { ...operationOutcome, release }
-		: {
-				ok: false,
-				failure: operationTransportExitedFailure(
-					"The owning Agent Browser operation session could not be released; inspect custody before continuing.",
-				),
-				focus: true,
-				release,
-			};
-}
-
-async function runAgentBrowserOperationSession(
-	input: OperationLaneInput,
-): Promise<OperationLaneResult> {
-	const baseArgs = (strictTabBinding: boolean) => [
-		"--cdp",
-		input.handoff.endpointWs,
-		"--session",
-		deriveSessionName(input.handoff.runId),
-		...(strictTabBinding ? ["--pin-tab"] : []),
-	];
-	const call = async (
-		args: string[],
-		label: string,
-		strictTabBinding = true,
-	): Promise<
-		| { ok: true; result: McporterCommandResult; data: unknown }
-		| { ok: false; failure: OperationFailure }
-	> => {
-		let result: McporterCommandResult;
-		try {
-			result = await input.runtime.runCommand({
-				command: input.handoff.probeExecutable,
-				args: [...baseArgs(strictTabBinding), ...args, "--json"],
-				timeoutMs: 30_000,
-			});
-		} catch {
-			return {
-				ok: false,
-				failure: dependencyOperationFailure(
+	const outcome = await capability.run({
+		runtime: input.runtime,
+		env: input.runtime.env,
+		handoff: exactTargetHandoff(input.handoff),
+		target_id: input.adapterPageRef,
+		...(input.expectedUrl === undefined
+			? {}
+			: { expected_url: input.expectedUrl }),
+		operation: input.operation === "screenshot" ? "screenshot" : "snapshot",
+		...(input.screenshot === undefined
+			? {}
+			: {
+					screenshot: {
+						path: input.screenshot.path,
+						full_page: input.screenshot.fullPage,
+					},
+				}),
+		lifecycle_prepared: input.lifecyclePrepared === true,
+		retain_lifecycle: input.retainLifecycle === true,
+	});
+	if (outcome.ok) return outcome;
+	const failure =
+		outcome.code === "dependency-missing"
+			? dependencyOperationFailure(
 					"browser_operation_dependency_missing",
-					`The agent-browser ${label} call could not be started.`,
-				),
-			};
-		}
-		if (result.timedOut === true) {
-			return {
-				ok: false,
-				failure: {
-					code: "browser_operation_transport_timeout",
-					message: `The agent-browser ${label} call timed out.`,
-					actionId: "inspect_operation_diagnostics",
-					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-					recoverability: "retry",
-				},
-			};
-		}
-		if (result.exitCode !== 0) {
-			return {
-				ok: false,
-				failure: operationTransportExitedFailure(
-					`The agent-browser ${label} call failed.`,
-				),
-			};
-		}
-		let envelope: unknown;
-		try {
-			envelope = JSON.parse(result.stdout);
-		} catch {
-			return {
-				ok: false,
-				failure: operationTransportExitedFailure(
-					`The agent-browser ${label} call returned unparsable output.`,
-				),
-			};
-		}
-		if (!isJsonObject(envelope)) {
-			return {
-				ok: false,
-				failure: operationTransportExitedFailure(
-					"The adapter reported a failure response.",
-				),
-			};
-		}
-		if (envelope.success !== true) {
-			const errorText = "The adapter reported a failure response.";
-			return {
-				ok: false,
-				failure: operationTransportExitedFailure(errorText),
-			};
-		}
-		return { ok: true, result, data: envelope.data };
-	};
-
-	const activated = await call(
-		["tab", input.adapterPageRef],
-		"canonical target activation",
-		false,
-	);
-	if (!activated.ok) {
-		return { ok: false, failure: activated.failure, focus: false };
-	}
-	const pinnedProof = await call(["get", "url"], "strict target proof");
-	if (!pinnedProof.ok) {
-		return { ok: false, failure: pinnedProof.failure, focus: true };
-	}
-	if (input.operation === "screenshot") {
-		const screenshotArgs = [
-			"screenshot",
-			...(input.screenshot?.fullPage ? ["--full"] : []),
-			...(input.screenshot?.path === undefined ? [] : [input.screenshot.path]),
-		];
-		const screenshot = await call(screenshotArgs, "screenshot");
-		return screenshot.ok
-			? { ok: true, result: screenshot.result }
-			: { ok: false, failure: screenshot.failure, focus: true };
-	}
-	const snapshot = await call(["snapshot"], "snapshot");
-	if (!snapshot.ok) {
-		return { ok: false, failure: snapshot.failure, focus: true };
-	}
-	// agent-browser snapshot data is either a plain string or {snapshot, refs}.
-	const snapshotText =
-		typeof snapshot.data === "string"
-			? snapshot.data
-			: isJsonObject(snapshot.data) && typeof snapshot.data.snapshot === "string"
-				? snapshot.data.snapshot
-				: undefined;
-	if (snapshotText === undefined) {
-		return {
-			ok: false,
-			failure: operationTransportExitedFailure(
-				"The agent-browser snapshot call returned an unexpected payload shape.",
-			),
-			focus: true,
-		};
-	}
+					outcome.message,
+				)
+			: outcome.code === "timeout"
+				? {
+						code: "browser_operation_transport_timeout" as const,
+						message: outcome.message,
+						actionId: "inspect_operation_diagnostics" as const,
+						exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+						recoverability: "retry" as const,
+					}
+				: operationTransportExitedFailure(outcome.message);
 	return {
-		ok: true,
-		result: {
-			...snapshot.result,
-			stdout: snapshotText,
-		},
+		ok: false,
+		failure,
+		focus: outcome.focus,
+		...(outcome.release ? { release: outcome.release } : {}),
 	};
 }
 
@@ -1385,7 +1790,10 @@ async function runOperationCalls(
 			focus: input.bringToFront,
 		};
 	}
-	return operationCall;
+	return {
+		...operationCall,
+		focus: input.bringToFront,
+	};
 }
 
 // Run the operation tool through the envelope-derived transport. Each
@@ -1553,7 +1961,7 @@ function emitOperationFailure(input: {
 	failure: OperationFailure;
 	command: BrowserUseCommand;
 	sideEffects: OperationSideEffects;
-	release?: AdapterSessionReleaseDebt;
+	release?: BrowserUseAdapterLifecycleReleaseDebt;
 	outputMode: OutputMode;
 	stdout: CliWriter;
 	stderr: CliWriter;
@@ -1562,8 +1970,12 @@ function emitOperationFailure(input: {
 }): number {
 	const { failure } = input;
 	if (input.outputMode === "plain") {
+		const cleanupDetail =
+			failure.cleanupDebt === undefined
+				? ""
+				: ` primary_cause=${failure.primaryCause} operation_effect=${failure.operationEffect} cleanup_debt=${failure.cleanupDebt.join(",")}`;
 		input.stderr.write(
-			`browser_use ${failure.code}: ${redactUnsafeText(failure.message)} action=${failure.actionId} focus_side_effect=${input.sideEffects.focus === true} (run_id=${input.runId})\n`,
+			`browser_use ${failure.code}: ${redactUnsafeText(failure.message)} action=${failure.actionId} focus_side_effect=${input.sideEffects.focus === true}${cleanupDetail} (run_id=${input.runId})\n`,
 		);
 		return failure.exitCode;
 	}
@@ -1576,6 +1988,15 @@ function emitOperationFailure(input: {
 				command: input.command,
 				result_kind: "browser_operation",
 				side_effects: { focus: input.sideEffects.focus === true },
+				...(failure.primaryCause === undefined
+					? {}
+					: { primary_cause: failure.primaryCause }),
+				...(failure.operationEffect === undefined
+					? {}
+					: { operation_effect: failure.operationEffect }),
+				...(failure.cleanupDebt === undefined
+					? {}
+					: { cleanup_debt: failure.cleanupDebt }),
 				...(input.release ? { release: input.release } : {}),
 			},
 			runtime_actions: [operationAction(failure.actionId)],
@@ -1611,10 +2032,13 @@ function emitOperationSuccess(input: {
 	runId: string;
 	durationMs: number;
 	transportResult: McporterCommandResult;
-	release?: AdapterSessionReleaseDebt;
-	screenshot?: ScreenshotArtifact;
+	release?: BrowserUseAdapterLifecycleReleaseDebt;
+	screenshot?: ScreenshotArtifactEvidence;
 	viewport?: ViewportEmulation;
 	focusSideEffect: boolean;
+	execution: OperationExecutionEvidence;
+	targetLeaseInterval?: TargetOperationLeaseInterval;
+	browserLaneInterval?: BrowserLaneLeaseInterval;
 }): number {
 	if (input.outputMode === "plain") {
 		input.stdout.write(
@@ -1625,6 +2049,20 @@ function emitOperationSuccess(input: {
 				`target_source=${input.targetSource}`,
 				`candidate_ordinal=${input.target.candidate_ordinal}`,
 				`focus_side_effect=${input.focusSideEffect}`,
+				`execution_scope=${input.execution.scope}`,
+				`execution_focus=${input.execution.focus}`,
+				...(input.targetLeaseInterval
+					? [
+							`target_lease_acquired_at_epoch_ms=${input.targetLeaseInterval.acquiredAtEpochMs}`,
+							`target_lease_released_at_epoch_ms=${input.targetLeaseInterval.releasedAtEpochMs}`,
+						]
+					: []),
+				...(input.browserLaneInterval
+					? [
+							`browser_lane_acquired_at_epoch_ms=${input.browserLaneInterval.acquiredAtEpochMs}`,
+							`browser_lane_released_at_epoch_ms=${input.browserLaneInterval.releasedAtEpochMs}`,
+						]
+					: []),
 				"action=inspect_operation_result",
 				`run_id=${input.runId}`,
 				`duration_ms=${input.durationMs}`,
@@ -1643,9 +2081,12 @@ function emitOperationSuccess(input: {
 				result_kind: "browser_operation",
 				operation: input.operation,
 				adapter: input.adapter,
+				effect: "confirmed",
 				binding: {
+					outer_run_id: input.runId,
 					run_id: input.handoff.runId,
 					handoff_evidence_id: input.handoff.handoffEvidenceId,
+					browser_authority_id: browserAuthorityIdOf(input.handoff),
 					target_candidate_id: input.target.candidate_id,
 				},
 				target_source: input.targetSource,
@@ -1655,6 +2096,7 @@ function emitOperationSuccess(input: {
 					// Adapter-addressable identity (schema 3). Only the http endpoint
 					// form is published; the ws debugger URL stays unemitted (R32).
 					target_id: input.canonicalTargetId,
+					target_ref: targetRefOf(input.canonicalTargetId),
 					cdp_endpoint: input.handoff.endpointHttp,
 					origin: input.target.origin,
 					...(input.target.path_shape
@@ -1665,7 +2107,40 @@ function emitOperationSuccess(input: {
 				side_effects: {
 					focus: input.focusSideEffect,
 				},
+				execution: input.execution,
+				...(input.targetLeaseInterval || input.browserLaneInterval
+					? {
+							custody: {
+								...(input.targetLeaseInterval
+									? {
+											target_operation_lease: {
+												acquired_at_epoch_ms:
+													input.targetLeaseInterval.acquiredAtEpochMs,
+												released_at_epoch_ms:
+													input.targetLeaseInterval.releasedAtEpochMs,
+											},
+										}
+									: {}),
+								...(input.browserLaneInterval
+									? {
+											browser_lane: {
+												acquired_at_epoch_ms:
+													input.browserLaneInterval.acquiredAtEpochMs,
+												released_at_epoch_ms:
+													input.browserLaneInterval.releasedAtEpochMs,
+											},
+										}
+									: {}),
+							},
+						}
+					: {}),
 				...(input.release ? { release: input.release } : {}),
+				...(sealedQualificationRuntimeEvidence() === undefined
+					? {}
+					: {
+							qualification_runtime:
+								sealedQualificationRuntimeEvidence(),
+						}),
 				...operationPayload(input),
 			},
 			runtime_actions: [operationAction("inspect_operation_result")],
@@ -1679,7 +2154,7 @@ function emitOperationSuccess(input: {
 function operationPayload(input: {
 	operation: BrowserOperationClass;
 	transportResult: McporterCommandResult;
-	screenshot?: ScreenshotArtifact;
+	screenshot?: ScreenshotArtifactEvidence;
 	viewport?: ViewportEmulation;
 }): Record<string, unknown> {
 	switch (input.operation) {
@@ -1695,6 +2170,9 @@ function operationPayload(input: {
 								root: input.screenshot.root,
 								format: input.screenshot.format,
 								full_page: input.screenshot.fullPage,
+								byte_count: input.screenshot.byteCount,
+								content_sha256: input.screenshot.contentSha256,
+								media_type: input.screenshot.mediaType,
 							}
 						: undefined,
 				},
@@ -1734,6 +2212,157 @@ function normalizeSnapshot(stdout: string): Record<string, unknown> {
 			max_lines: SNAPSHOT_MAX_LINES,
 		},
 	};
+}
+
+type QualificationOperationReceipt = {
+	receipt: Record<string, unknown>;
+	data: Record<string, unknown>;
+	binding: Record<string, unknown>;
+	target: Record<string, unknown>;
+	execution: Record<string, unknown>;
+	custody: Record<string, unknown>;
+};
+
+function qualificationRecord(value: unknown): Record<string, unknown> | undefined {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+		? (value as Record<string, unknown>)
+		: undefined;
+}
+
+function hasExactQualificationKeys(
+	value: Record<string, unknown>,
+	keys: readonly string[],
+): boolean {
+	const actual = Object.keys(value).sort();
+	const expected = [...keys].sort();
+	return actual.length === expected.length &&
+		actual.every((key, index) => key === expected[index]);
+}
+
+/** Parse one complete public Browser Operation success receipt for qualification. */
+export function parseBrowserOperationQualificationReceipt(
+	raw: string,
+): QualificationOperationReceipt | undefined {
+	let receipt: Record<string, unknown> | undefined;
+	try {
+		receipt = qualificationRecord(JSON.parse(raw));
+	} catch {
+		return undefined;
+	}
+	const data = qualificationRecord(receipt?.data);
+	const binding = qualificationRecord(data?.binding);
+	const target = qualificationRecord(data?.target);
+	const execution = qualificationRecord(data?.execution);
+	const sideEffects = qualificationRecord(data?.side_effects);
+	const custody = qualificationRecord(data?.custody);
+	if (
+		receipt?.status !== "ok" ||
+		typeof receipt.run_id !== "string" ||
+		!Number.isSafeInteger(receipt.duration_ms) ||
+		!Array.isArray(receipt.runtime_actions) ||
+		!qualificationRecord(receipt.continuation) ||
+		data?.contract !== BROWSER_USE_OPERATION_CONTRACT_ID ||
+		data.schema_version !== BROWSER_USE_OPERATION_SCHEMA_VERSION ||
+		data.result_kind !== "browser_operation" ||
+		data.effect !== "confirmed" ||
+		!binding ||
+		typeof binding.outer_run_id !== "string" ||
+		typeof binding.run_id !== "string" ||
+		typeof binding.handoff_evidence_id !== "string" ||
+		typeof binding.browser_authority_id !== "string" ||
+		typeof binding.target_candidate_id !== "string" ||
+		!(["hints", "selected_state", "single_candidate"] as unknown[]).includes(data.target_source) ||
+		!target ||
+		!Number.isSafeInteger(target.candidate_ordinal) ||
+		typeof target.candidate_id !== "string" ||
+		typeof target.target_id !== "string" ||
+		typeof target.target_ref !== "string" ||
+		typeof target.cdp_endpoint !== "string" ||
+		typeof target.origin !== "string" ||
+		!execution ||
+		!sideEffects ||
+		typeof sideEffects.focus !== "boolean" ||
+		!custody
+	) return undefined;
+	const adapter = data.adapter;
+	const operation = data.operation;
+	const command = data.command;
+	if (typeof adapter !== "string") return undefined;
+	const exactCapability = resolveExactTargetOperationCapability(
+		adapter as BrowserAdapterId,
+	);
+	if (!exactCapability.ok) return undefined;
+	if (
+		!((command === "operate-snapshot" && operation === "snapshot") ||
+			(command === "operate-screenshot" && operation === "screenshot"))
+	) return undefined;
+	if (operation === "snapshot") {
+		const snapshot = qualificationRecord(data.snapshot);
+		const limits = qualificationRecord(snapshot?.limits);
+		if (
+			execution.scope !== "target-local" ||
+			execution.focus !== false ||
+			sideEffects.focus !== false ||
+			execution.capability_id !== exactCapability.capability.capability_id ||
+			!snapshot ||
+			!hasExactQualificationKeys(snapshot, [
+				"text",
+				"line_count",
+				"byte_count",
+				"truncated",
+				"limits",
+			]) ||
+			typeof snapshot.text !== "string" ||
+			!Number.isSafeInteger(snapshot.line_count) ||
+			(snapshot.line_count as number) < 0 ||
+			!Number.isSafeInteger(snapshot.byte_count) ||
+			(snapshot.byte_count as number) < 0 ||
+			Buffer.byteLength(snapshot.text, "utf8") !== snapshot.byte_count ||
+			typeof snapshot.truncated !== "boolean" ||
+			!limits ||
+			!hasExactQualificationKeys(limits, ["max_bytes", "max_lines"]) ||
+			!Number.isSafeInteger(limits.max_bytes) ||
+			(limits.max_bytes as number) < 1 ||
+			!Number.isSafeInteger(limits.max_lines) ||
+			(limits.max_lines as number) < 1
+		) return undefined;
+	} else {
+		const screenshot = qualificationRecord(data.screenshot);
+		const artifact = qualificationRecord(screenshot?.artifact);
+		if (
+			execution.scope !== "browser-wide" ||
+			execution.focus !== true ||
+			sideEffects.focus !== true ||
+			!artifact ||
+			!hasExactQualificationKeys(artifact, [
+				"path",
+				"relative_path",
+				"root",
+				"format",
+				"full_page",
+				"byte_count",
+				"content_sha256",
+				"media_type",
+			]) ||
+			typeof artifact.path !== "string" ||
+			typeof artifact.relative_path !== "string" ||
+			typeof artifact.root !== "string" ||
+			!isAbsolute(artifact.path) ||
+			!isAbsolute(artifact.root) ||
+			isAbsolute(artifact.relative_path) ||
+			normalize(resolve(artifact.root, artifact.relative_path)) !==
+				normalize(artifact.path) ||
+			relative(artifact.root, artifact.path).startsWith("..") ||
+			artifact.format !== "png" ||
+			typeof artifact.full_page !== "boolean" ||
+			!Number.isSafeInteger(artifact.byte_count) ||
+			(artifact.byte_count as number) < 0 ||
+			typeof artifact.content_sha256 !== "string" ||
+			!/^[a-f0-9]{64}$/.test(artifact.content_sha256) ||
+			artifact.media_type !== "image/png"
+		) return undefined;
+	}
+	return { receipt, data, binding, target, execution, custody };
 }
 
 function parseTransportOutput(stdout: string): unknown {

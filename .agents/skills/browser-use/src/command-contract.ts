@@ -80,6 +80,8 @@ export const BROWSER_ADAPTER_ROUTER_CAPABILITIES = [
 	// Runtime-owned viewport emulation capability (plan U2 R11). Routed evidence
 	// must declare it before `browser-use operate emulate` is authorized.
 	"viewport_emulation",
+	// Browser-wide exact target creation/closure through an adapter-native lane.
+	"target_topology",
 ] as const;
 export type BrowserAdapterRouterCapability =
 	(typeof BROWSER_ADAPTER_ROUTER_CAPABILITIES)[number];
@@ -283,6 +285,10 @@ export const BROWSER_USE_TARGETS_CONTRACT_ID =
 // tuple), the mode renamed route-bound -> handoff-bound (KTD2), and the
 // success envelope self-describes contract identity in data.
 export const BROWSER_USE_TARGETS_SCHEMA_VERSION = "2" as const;
+/** Mutation receipt for Browser Use-owned exact target creation/closure. */
+export const BROWSER_USE_TARGET_TOPOLOGY_CONTRACT_ID =
+	"browser-use.browser-target-topology" as const;
+export const BROWSER_USE_TARGET_TOPOLOGY_SCHEMA_VERSION = "2" as const;
 export const BROWSER_USE_OPERATION_CONTRACT_ID =
 	"browser-use.browser-operation" as const;
 // v2 (browser-use migration U1): operation binding fields derive from the
@@ -291,7 +297,47 @@ export const BROWSER_USE_OPERATION_CONTRACT_ID =
 // the verified http endpoint, so a caller can hand the exact tab it operated on
 // to the Browser Adapter's native surface. Widening a public contract, so the
 // version moves. The ws endpoint form is still never emitted (R32).
-export const BROWSER_USE_OPERATION_SCHEMA_VERSION = "3" as const;
+// v4: the operation receipt distinguishes serialized Browser-wide preparation
+// from a target-local phase and publishes the exact Target Operation Lease
+// interval. Independent commands can therefore prove real lease overlap rather
+// than inferring it from concurrent shell-process starts.
+// v5: every success binds the opaque canonical target reference and outer run;
+// Browser-wide work additionally reports a confirmed Browser Lane interval.
+export const BROWSER_USE_OPERATION_SCHEMA_VERSION = "5" as const;
+/** Static Browser Use implementation/custody qualification manifest. */
+export const BROWSER_USE_QUALIFICATION_MANIFEST_CONTRACT_ID =
+	"browser-use.qualification-manifest" as const;
+export const BROWSER_USE_QUALIFICATION_MANIFEST_SCHEMA_VERSION = "1" as const;
+/** Validation receipt for one private qualification evidence bundle. */
+export const BROWSER_USE_QUALIFICATION_VALIDATION_CONTRACT_ID =
+	"browser-use.qualification-validation" as const;
+export const BROWSER_USE_QUALIFICATION_VALIDATION_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_QUALIFICATION_EVIDENCE_CONTRACT_ID =
+	"browser-use.qualification-evidence" as const;
+export const BROWSER_USE_QUALIFICATION_EVIDENCE_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_QUALIFICATION_CUSTODY_INVENTORY_CONTRACT_ID =
+	"browser-use.qualification-custody-inventory" as const;
+export const BROWSER_USE_QUALIFICATION_CUSTODY_INVENTORY_SCHEMA_VERSION =
+	"1" as const;
+export const BROWSER_USE_QUALIFICATION_RUNTIME_EVIDENCE_CONTRACT_ID =
+	"browser-use.qualification-runtime-evidence" as const;
+export const BROWSER_USE_QUALIFICATION_RUNTIME_EVIDENCE_SCHEMA_VERSION =
+	"1" as const;
+export const BROWSER_USE_QUALIFICATION_HANDOFF_PRODUCER_CONTRACT_ID =
+	"browser-use.qualification-handoff-producer" as const;
+export const BROWSER_USE_QUALIFICATION_HANDOFF_PRODUCER_SCHEMA_VERSION =
+	"1" as const;
+export const BROWSER_USE_QUALIFICATION_SESSION_REQUEST_CONTRACT_ID =
+	"browser-use.qualification-session-request" as const;
+export const BROWSER_USE_QUALIFICATION_SESSION_REQUEST_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_QUALIFICATION_SESSION_RESULT_CONTRACT_ID =
+	"browser-use.qualification-session-result" as const;
+export const BROWSER_USE_QUALIFICATION_SESSION_RESULT_SCHEMA_VERSION = "1" as const;
+export const BROWSER_USE_QUALIFICATION_CAMPAIGN_RECEIPT_CONTRACT_ID =
+	"browser-use.qualification-campaign-receipt" as const;
+export const BROWSER_USE_QUALIFICATION_CAMPAIGN_RECEIPT_SCHEMA_VERSION = "1" as const;
+export const AGENT_BROWSER_EXACT_TARGET_NO_FOCUS_CAPABILITY_ID =
+	"agent-browser.exact-target-no-focus.v1" as const;
 
 // Platform result contracts (platform plan 2026-07-21-002 U1). One contract
 // id per new family; the shared-run projection is the one schema auth and
@@ -386,6 +432,8 @@ export const BROWSER_USE_TARGETS_SUBCOMMANDS = [
 	"list",
 	"select",
 	"status",
+	"open",
+	"close",
 ] as const;
 export type BrowserUseTargetsSubcommand =
 	(typeof BROWSER_USE_TARGETS_SUBCOMMANDS)[number];
@@ -466,6 +514,13 @@ const BROWSER_USE_REPAIR_SUBCOMMANDS = ["status", "apply"] as const;
 export type BrowserUseRepairSubcommand =
 	(typeof BROWSER_USE_REPAIR_SUBCOMMANDS)[number];
 
+export const BROWSER_USE_QUALIFICATION_SUBCOMMANDS = [
+	"manifest",
+	"validate",
+] as const;
+export type BrowserUseQualificationSubcommand =
+	(typeof BROWSER_USE_QUALIFICATION_SUBCOMMANDS)[number];
+
 // R27 auth repair surface (auth plan U3a; ADR 0028). Each repair subcommand name IS
 // the blocked-cause continuation id from BROWSER_USE_AUTH_BLOCKED_CAUSE_TABLE
 // (browser-use-auth-model.ts), so an agent holding a blocked run's
@@ -531,6 +586,7 @@ export const BROWSER_USE_FAMILIES = [
 	"migration",
 	"artifact",
 	"repair",
+	"qualification",
 	"auth",
 ] as const;
 export type BrowserUseFamily = (typeof BROWSER_USE_FAMILIES)[number];
@@ -549,6 +605,7 @@ export const BROWSER_USE_FAMILY_SUBCOMMANDS = {
 	migration: BROWSER_USE_MIGRATION_SUBCOMMANDS,
 	artifact: BROWSER_USE_ARTIFACT_SUBCOMMANDS,
 	repair: BROWSER_USE_REPAIR_SUBCOMMANDS,
+	qualification: BROWSER_USE_QUALIFICATION_SUBCOMMANDS,
 	auth: BROWSER_USE_AUTH_SUBCOMMANDS,
 } as const satisfies Record<BrowserUseFamily, readonly string[]>;
 
@@ -565,6 +622,8 @@ export const BROWSER_USE_FAMILY_SUMMARIES = {
 	migration: "Legacy corpus migration status.",
 	artifact: "Run artifact manifest.",
 	repair: "Platform repair status and bounded repair execution.",
+	qualification:
+		"Static implementation manifest and private concurrency evidence validation.",
 	auth: "Confidential browser authentication transactions, readiness, and typed repair.",
 } as const satisfies Record<BrowserUseFamily, string>;
 
@@ -584,6 +643,8 @@ export type BrowserUseCommand =
 	| "targets-list"
 	| "targets-select"
 	| "targets-status"
+	| "targets-open"
+	| "targets-close"
 	| "operate-snapshot"
 	| "operate-screenshot"
 	| "operate-emulate"
@@ -616,6 +677,8 @@ export type BrowserUseCommand =
 	| "artifact-list"
 	| "repair-status"
 	| "repair-apply"
+	| "qualification-manifest"
+	| "qualification-validate"
 	| "auth-login"
 	| "auth-enroll-browser-automation-token"
 	| "auth-repair-vault-grant"
@@ -655,6 +718,7 @@ export const BROWSER_USE_DIAGNOSTIC_CODES = [
 	"browser_operation_command_override_invalid",
 	"browser_operation_transport_timeout",
 	"browser_operation_transport_failed",
+	"browser_operation_cleanup_incomplete",
 	// Verified Handoff Envelope evidence failures (migration U1): an invalid,
 	// failed, or drift-rejected envelope and a caller run id disagreeing with
 	// the envelope run id each map to their own recovery.
@@ -848,8 +912,14 @@ export const browserUseTargetDiscoveryFailureActions = [
 	{
 		id: "open_browser_target",
 		summary:
-			"Open or navigate a Browser Target matching the task, then re-run targets list.",
-		sideEffects: ["check"],
+			"Create the exact target with browser-use targets open --url <url> --handoff <path>, then re-run targets list.",
+		sideEffects: ["browser", "write"],
+	},
+	{
+		id: "remint_agent_browser_handoff_for_target_open",
+		summary:
+			"Mint a verified Agent Browser handoff for the same Browser authority, then create the target with browser-use targets open; the current non-Agent-Browser handoff cannot authorize topology mutation.",
+		sideEffects: ["browser", "write"],
 	},
 	{
 		id: "configure_target_dependency",
@@ -979,6 +1049,12 @@ export const browserUseOperationFailureActions = [
 		summary:
 			"Re-run targets select to refresh the run-scoped selected-target state; the current state is stale or no longer valid.",
 		sideEffects: ["check"],
+	},
+	{
+		id: "close_created_target",
+		summary:
+			"Run browser-use targets close with the exact open-created state and handoff, then open or select again.",
+		sideEffects: ["browser", "write"],
 	},
 	{
 		id: "repair_target_state",
@@ -1277,6 +1353,29 @@ const browserUseTargetsStatusFlags = {
 	...browserUseOutputFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
+const browserUseTargetsOpenFlags = {
+	"--url": {
+		type: "string",
+		description:
+			"Exact HTTP(S) URL to open through the handoff-bound Agent Browser session.",
+	},
+	"--state": {
+		type: "path",
+		description:
+			"Run-scoped selected-target state file written after exact custody admission.",
+	},
+	...browserUseHandoffFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseTargetsCloseFlags = {
+	"--state": {
+		type: "path",
+		description:
+			"Run-scoped selected-target state for the exact created target to close.",
+	},
+	...browserUseHandoffFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
 // --verbose is facade-reserved (CLI diagnostic). Operations read its parsed
 // value from the diagnostic layer; it is not declared as a command flag.
 const browserUseOperateCommonFlags = {
@@ -1416,12 +1515,10 @@ const browserUsePlatformStoreEnvVars = [
 	...browserUseXdgEnvVars,
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
-// Run-scoped selected-target state path env vars (plan U6). `--state` wins; when
-// absent the state path is derived deterministically from this base directory
-// and the run id (BROWSER_USE_TARGET_STATE_DIR + run id). Shared by select
-// (writes), status (reads), and operate (reads: when set, operate enforces
-// run-scoped selected state instead of the single-candidate fallback); a state
-// file is never placed implicitly with neither a flag nor a base dir supplied.
+// Legacy selected-target state path env vars (plan U6). `--state` wins; select
+// and status may otherwise derive a path from this base plus an explicit run.
+// Operate continues to honor that compatibility source, while its canonical
+// handoff-only path is owned separately by the XDG state resolver below.
 const browserUseStateEnvVars = [
 	...browserUseEnvVars,
 	{
@@ -1431,8 +1528,13 @@ const browserUseStateEnvVars = [
 	},
 ] as const satisfies BrowserUseCommandContract["envVars"];
 
-const browserUseScreenshotEnvVars = [
+const browserUseOperationStateEnvVars = [
 	...browserUseStateEnvVars,
+	...browserUseXdgEnvVars,
+] as const satisfies BrowserUseCommandContract["envVars"];
+
+const browserUseScreenshotEnvVars = [
+	...browserUseOperationStateEnvVars,
 	{
 		name: "BROWSER_USE_ARTIFACT_ROOT",
 		description:
@@ -1467,11 +1569,61 @@ const browserUseTargetsResultContract = {
 	schema_version: BROWSER_USE_TARGETS_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
+const browserUseTargetTopologyResultContract = {
+	id: BROWSER_USE_TARGET_TOPOLOGY_CONTRACT_ID,
+	kind: "Browser target topology mutation receipt.",
+	schema_version: BROWSER_USE_TARGET_TOPOLOGY_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseTargetTopologyExitCodes = {
+	"0": "Exact target topology mutation completed and cleanup was confirmed.",
+	"1": "Runtime dependency or post-effect cleanup failed.",
+	"2": "Usage error.",
+	"20": "Handoff, capability, state, target identity, or custody binding failed closed.",
+} as const satisfies BrowserUseCommandContract["exitCodes"];
+
 const browserUseOperationResultContract = {
 	id: BROWSER_USE_OPERATION_CONTRACT_ID,
 	kind: "Normalized Browser Operation result.",
 	schema_version: BROWSER_USE_OPERATION_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseQualificationManifestResultContract = {
+	id: BROWSER_USE_QUALIFICATION_MANIFEST_CONTRACT_ID,
+	kind: "Browser Use static qualification manifest.",
+	schema_version: BROWSER_USE_QUALIFICATION_MANIFEST_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseQualificationValidationResultContract = {
+	id: BROWSER_USE_QUALIFICATION_VALIDATION_CONTRACT_ID,
+	kind: "Browser Use qualification evidence validation result.",
+	schema_version: BROWSER_USE_QUALIFICATION_VALIDATION_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseQualificationManifestFlags = {
+	...browserUseOutputFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseQualificationValidateFlags = {
+	"--expected-manifest-digest": {
+		type: "string",
+		description:
+			"Externally reviewed SHA-256 digest expected for the exact Browser Use qualification manifest.",
+	},
+	"--evidence": {
+		type: "path",
+		description:
+			"Private qualification evidence bundle containing run-bound handoffs, receipts, and final custody state.",
+	},
+	...browserUseOutputFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseQualificationExitCodes = {
+	"0": "Manifest emitted or evidence validated.",
+	"1": "Implementation manifest or evidence could not be read.",
+	"2": "Usage error.",
+	"20": "Manifest, handoff, receipt, interval, or custody evidence failed closed.",
+} as const satisfies BrowserUseCommandContract["exitCodes"];
 
 // ---------------------------------------------------------------------------
 // Platform families (platform plan 2026-07-21-002 U1): shared flags, exit
@@ -2174,6 +2326,52 @@ export const browserUseContracts = defineCommandFacadeContract(
 			flags: browserUseTargetsStatusFlags,
 			exitCodes: browserUseExitCodes,
 		},
+		"targets-open": {
+			script: "browser-use",
+			summary:
+				"Create one exact HTTP(S) target through the handoff-pinned Agent Browser session and persist its run-scoped selection.",
+			usage: [
+				"targets open --url <exact-http(s)-url> --handoff <path> [--state <path>] [--dry-run] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "browser",
+			sideEffects: ["browser", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Dry-run validates binding and capability; execution creates one exact target and writes run-scoped selection state.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseTargetTopologyResultContract,
+			flags: browserUseTargetsOpenFlags,
+			exitCodes: browserUseTargetTopologyExitCodes,
+		},
+		"targets-close": {
+			script: "browser-use",
+			summary:
+				"Close the exact open-created target selected in run-scoped state without affecting another run's target.",
+			usage: [
+				"targets close --handoff <path> [--state <path>] [--dry-run] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "browser",
+			sideEffects: ["browser", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Dry-run validates binding and selected-state ownership; execution closes only the exact owned target.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseTargetTopologyResultContract,
+			flags: browserUseTargetsCloseFlags,
+			exitCodes: browserUseTargetTopologyExitCodes,
+		},
 		"operate-snapshot": {
 			script: "browser-use",
 			summary:
@@ -2192,7 +2390,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			},
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUseStateEnvVars,
+			envVars: browserUseOperationStateEnvVars,
 			resultContract: browserUseOperationResultContract,
 			actionAffordances: {
 				success: browserUseOperationSuccessActions,
@@ -2245,7 +2443,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			},
 			outputModes: ["json", "plain"],
 			interactivity: "none",
-			envVars: browserUseStateEnvVars,
+			envVars: browserUseOperationStateEnvVars,
 			resultContract: browserUseOperationResultContract,
 			actionAffordances: {
 				success: browserUseOperationSuccessActions,
@@ -2781,6 +2979,42 @@ export const browserUseContracts = defineCommandFacadeContract(
 			},
 			flags: browserUsePlatformFlags,
 			exitCodes: browserUsePlatformExitCodes,
+		},
+		"qualification-manifest": {
+			script: "browser-use",
+			summary:
+				"Emit the immutable Browser Use implementation and adapter-capability manifest for qualification.",
+			usage: ["qualification manifest [--json|--plain]"],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformEnvVars,
+			resultContract: browserUseQualificationManifestResultContract,
+			flags: browserUseQualificationManifestFlags,
+			exitCodes: browserUseQualificationExitCodes,
+		},
+		"qualification-validate": {
+			script: "browser-use",
+			summary:
+				"Validate one private handoff/receipt/custody evidence bundle against this exact Browser Use implementation.",
+			usage: [
+				"qualification validate --expected-manifest-digest <sha256> --evidence <path> [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "check",
+			sideEffects: ["check"],
+			executionModes: ["check"],
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformEnvVars,
+			resultContract: browserUseQualificationValidationResultContract,
+			flags: browserUseQualificationValidateFlags,
+			exitCodes: browserUseQualificationExitCodes,
 		},
 		"auth-login": {
 			script: "browser-use",

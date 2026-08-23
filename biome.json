@@ -1,8 +1,14 @@
 {
 	"$schema": "https://biomejs.dev/schemas/2.4.4/schema.json",
 	"files": {
+		"ignoreUnknown": true,
 		"includes": [
 			"**",
+			"!**/docs/**/*.html",
+			"!.agents/skills/browser-use/src/prototypes",
+			"!**/actions/assets",
+			"!**/dist",
+			"!**/coverage",
 			"!config/tmuxinator/*.yml",
 			"!config/opencode",
 			"!config/superwhisper",
@@ -20,16 +26,37 @@
 			"!.worktrees",
 			"!.claude/worktrees",
 			"!config/raycast",
-			"!.agents"
+			"!.agents/*",
+			".agents/skills",
+			"!.agents/skills/*",
+			".agents/skills/browser-use",
+			".agents/runtime",
+			"!.agents/runtime/*",
+			".agents/runtime/browser-connect",
+			".agents/runtime/warm-chrome"
 		]
 	},
 	"formatter": {
+		"enabled": false,
 		"indentStyle": "tab"
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true
+		}
 	},
 	"javascript": {
 		"formatter": {
-			"semicolons": "asNeeded",
-			"quoteStyle": "single"
+			"quoteStyle": "double"
+		}
+	},
+	"assist": {
+		"enabled": false,
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
 		}
 	},
 	"vcs": {

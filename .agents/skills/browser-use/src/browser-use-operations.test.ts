@@ -1,4 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { dirname } from "node:path";
 import {
 	BROWSER_USE_OPERATION_CONTRACT_ID,
 	BROWSER_USE_OPERATION_SCHEMA_VERSION,
@@ -29,11 +31,22 @@ import {
 	verifiedHandoffEnvelope,
 } from "./browser-connect-handoff-fixtures";
 import { makeTempXdgEnv } from "./browser-use-platform-test-helpers";
-import { openBrowserUsePaths } from "./browser-use-paths";
 import {
+	type BrowserUsePlatformFs,
+	createDefaultPlatformFs,
+	openBrowserUsePaths,
+} from "./browser-use-paths";
+import { listLeases } from "./browser-use-locks";
+import { parseHandoffFacts } from "./browser-use-discovery";
+import { captureBrowserUseScreenshotMedia } from "./browser-use-operations";
+import { agentBrowserSuccess } from "./browser-use-agent-browser-test-fixture";
+import {
+	BROWSER_USE_CUSTODY_CONTRACT_ID,
+	BROWSER_USE_CUSTODY_SCHEMA_VERSION,
 	acquireBrowserLaneLease,
 	acquireTargetOperationLease,
 	browserAuthorityIdOf,
+	ownedTargetRefsForRun,
 	releaseBrowserLaneLease,
 	releaseRunTargetOwnership,
 	releaseTargetOperationLease,
@@ -67,6 +80,54 @@ const FIXTURE_TARGET_ENVELOPE_ID = targetEnvelopeIdOf({
 	handoffEvidenceId: FIXTURE_EVIDENCE_ID,
 });
 
+const AGENT_BROWSER_HANDOFF = verifiedHandoffEnvelope((envelope) => {
+	envelope.data.attachment.adapter_id = "agent-browser";
+});
+const AGENT_BROWSER_ENVELOPE = JSON.parse(AGENT_BROWSER_HANDOFF);
+const AGENT_BROWSER_EVIDENCE_ID = handoffEvidenceIdOf({
+	runId: AGENT_BROWSER_ENVELOPE.run_id,
+	environmentName: AGENT_BROWSER_ENVELOPE.data.environment.name,
+	environmentProfile: AGENT_BROWSER_ENVELOPE.data.environment.profile,
+	attachmentAdapterId: AGENT_BROWSER_ENVELOPE.data.attachment.adapter_id,
+	route: AGENT_BROWSER_ENVELOPE.data.attachment.route,
+	endpointHttp: AGENT_BROWSER_ENVELOPE.data.endpoint.http,
+	endpointWs: AGENT_BROWSER_ENVELOPE.data.endpoint.ws,
+	proofContractId: AGENT_BROWSER_ENVELOPE.data.proof.environment_contract_id,
+	proofSchemaVersion:
+		AGENT_BROWSER_ENVELOPE.data.proof.environment_schema_version,
+});
+const AGENT_BROWSER_TARGET_ENVELOPE_ID = targetEnvelopeIdOf({
+	runId: FIXTURE_RUN_ID,
+	mode: "handoff-bound",
+	adapter: "agent-browser",
+	handoffEvidenceId: AGENT_BROWSER_EVIDENCE_ID,
+});
+
+const CREATED_TARGET_REFS = {
+	"cdp-stable": "77b3f1d87d986c6c31cefee0e6d08448686b0c90e2aa8df16199f17b3839be19",
+	"cdp-owned": "c1a486b477487adb71688104ac33a692facd3507410583be08661e1cc016817c",
+	"cdp-target-a": "be34f4fc90ce224f4212af36bd682b5624256ecc60457c73abb00114d970859c",
+	"cdp-target-b": "b3a60a4104cfac57f82e6b8314e4ca724028610c436872c6ad071b0c6f74054c",
+} as const;
+
+// Independent test-owned SHA-256 oracles for the fixed raw target ids below.
+const OPERATION_CLEANUP_TARGET_REFS = {
+	"cdp-operation-a": "987f75f6601194a7b19beb6bae53c177e789f0e566d726da9a6ae22d7dffbe61",
+	"cdp-persistent-b": "d118f64511717054d803ee14ae4faf0dc0026a2170b6cc034bf73538afade7e2",
+} as const;
+
+function expectCleanupOutputRedacted(output: string, xdgBase: string): void {
+	for (const privateValue of [
+		"cdp-operation-a",
+		"cdp-persistent-b",
+		...Object.values(OPERATION_CLEANUP_TARGET_REFS),
+		xdgBase,
+		"/h.json",
+	]) {
+		expect(output).not.toContain(privateValue);
+	}
+}
+
 const operationXdgCleanups: Array<() => void> = [];
 afterAll(() => {
 	for (const cleanup of operationXdgCleanups) cleanup();
@@ -93,6 +154,70 @@ async function custodyDeps(runtime: BrowserUseRuntime) {
 	};
 }
 
+async function seedPersistentTarget(
+	runtime: BrowserUseRuntime,
+	rawTargetId: string,
+) {
+	const deps = await custodyDeps(runtime);
+	const persistent = await acquireTargetOperationLease(deps, {
+		authorityId: FIXTURE_BROWSER_AUTHORITY,
+		runId: FIXTURE_RUN_ID,
+		adapterId: "agent-browser",
+		rawTargetId,
+		operation: "read",
+		ttlMs: 30_000,
+		ownershipEvidence: {
+			kind: "adapter-creation-receipt",
+			adapter_id: "agent-browser",
+			run_id: FIXTURE_RUN_ID,
+			raw_target_id: rawTargetId,
+		},
+	});
+	if (!persistent.ok) throw new Error("fixture persistent ownership failed");
+	await releaseTargetOperationLease(deps, persistent.lease);
+	return deps;
+}
+
+async function seedPersistentTargetB(runtime: BrowserUseRuntime) {
+	return await seedPersistentTarget(runtime, "cdp-persistent-b");
+}
+
+async function targetOwnershipExpiry(
+	runtime: BrowserUseRuntime,
+	targetRef: string,
+): Promise<number> {
+	const deps = await custodyDeps(runtime);
+	const raw = await deps.fs.readTextFile(
+		`${deps.paths.resolution.roots.state}/browser-custody/registry.json`,
+	);
+	const registry = JSON.parse(raw) as {
+		targets: Record<string, { expires_at_epoch_ms: number }>;
+	};
+	return registry.targets[targetRef]?.expires_at_epoch_ms ?? -1;
+}
+
+async function ownedRegistryTargetRefs(
+	runtime: BrowserUseRuntime,
+): Promise<readonly string[]> {
+	const deps = await custodyDeps(runtime);
+	const raw = await deps.fs.readTextFile(
+		`${deps.paths.resolution.roots.state}/browser-custody/registry.json`,
+	);
+	const registry = JSON.parse(raw) as {
+		targets: Record<
+			string,
+			{ owner_run_id: string | null; status: "owned" | "released" }
+		>;
+	};
+	return Object.entries(registry.targets)
+		.filter(
+			([, binding]) =>
+				binding.owner_run_id === FIXTURE_RUN_ID && binding.status === "owned",
+		)
+		.map(([targetRef]) => targetRef)
+		.sort();
+}
+
 function selectedStateFile(overrides: Record<string, unknown> = {}): string {
 	return JSON.stringify({
 		contract: TARGETS_CONTRACT,
@@ -111,6 +236,32 @@ function selectedStateFile(overrides: Record<string, unknown> = {}): string {
 	});
 }
 
+function createdSelectedStateFile(
+	rawTargetId: keyof typeof CREATED_TARGET_REFS,
+	overrides: Record<string, unknown> = {},
+): string {
+	return selectedStateFile({
+		selected_adapter_id: "agent-browser",
+		handoff_evidence_id: AGENT_BROWSER_EVIDENCE_ID,
+		target_envelope_id: AGENT_BROWSER_TARGET_ENVELOPE_ID,
+		target_candidate_id: candidateIdOf(AGENT_BROWSER_TARGET_ENVELOPE_ID, [
+			"adapter_page_id",
+			"stale-session-tab",
+		]),
+		ownership: {
+			kind: "created-target",
+			target_ref: CREATED_TARGET_REFS[rawTargetId],
+			retained_lifecycle: {
+				adapter_id: "agent-browser",
+				capability_id: "agent-browser.exact-target-no-focus.v1",
+				lifecycle_ref: `browser-use-${FIXTURE_RUN_ID}`,
+			},
+		},
+		revision: 1,
+		...overrides,
+	});
+}
+
 function operationRuntime(input: {
 	files?: Record<string, string>;
 	pages?: Array<{
@@ -125,32 +276,71 @@ function operationRuntime(input: {
 	nativeResults?: McporterCommandResult[];
 	releaseResults?: McporterCommandResult[];
 	now?: () => number;
+	throwTargetLeaseReleaseAfterOperation?: boolean;
+	invalidateBrowserLaneAfterOperation?: boolean;
+	handoff?: string;
+	onCommand?: (
+		call: McporterCommandInput,
+		vector: readonly string[],
+	) => Promise<McporterCommandResult | undefined>;
 } = {}): {
 	runtime: BrowserUseRuntime;
 	calls: McporterCommandInput[];
 	ensuredDirectories: string[];
+	xdgBase: string;
+	failOwnershipWriteAfter(successfulRegistryWrites: number): void;
 } {
 	const calls: McporterCommandInput[] = [];
 	const ensuredDirectories: string[] = [];
 	const nativeResults = [...(input.nativeResults ?? [])];
 	const releaseResults = [...(input.releaseResults ?? [])];
+	const basePlatformFs = createDefaultPlatformFs();
+	let registryWritesBeforeFailure: number | undefined;
+	let throwNextClockRead = false;
+	let invalidateBrowserLaneAfterOperation =
+		input.invalidateBrowserLaneAfterOperation === true;
+	const platformFs: BrowserUsePlatformFs = {
+		...basePlatformFs,
+		async writeFileDurable(path, contents, mode) {
+			if (
+				path.includes("browser-custody/registry.json.tmp-") &&
+				registryWritesBeforeFailure !== undefined
+			) {
+				if (registryWritesBeforeFailure === 0) {
+					registryWritesBeforeFailure = undefined;
+					throw Object.assign(new Error("injected registry write failure"), {
+						code: "EIO",
+					});
+				}
+				registryWritesBeforeFailure -= 1;
+			}
+			await basePlatformFs.writeFileDurable(path, contents, mode);
+		},
+	};
 	const files: Record<string, string> = {
 		"/h.json":
-			input.adapter === "agent-browser"
-				? verifiedHandoffEnvelope((envelope) => {
-						envelope.data.attachment.adapter_id = "agent-browser";
-					})
-				: REAL_VERIFIED_HANDOFF_ENVELOPE,
+			input.handoff ?? (input.adapter === "agent-browser"
+				? AGENT_BROWSER_HANDOFF
+				: REAL_VERIFIED_HANDOFF_ENVELOPE),
 		...(input.files ?? {}),
 	};
 	const pages = input.pages ?? [
 		{ id: "1", url: "https://example.com/app", title: "App" },
 	];
+	let activeTargetId: string | undefined;
 	const xdg = makeTempXdgEnv();
 	operationXdgCleanups.push(xdg.dispose);
+	const clock = input.now ?? (() => 2_000);
 	const runtime = makeRuntime({
 		env: { ...xdg.env, ...(input.env ?? {}) },
-		now: input.now ?? (() => 2_000),
+		now: () => {
+			if (throwNextClockRead) {
+				throwNextClockRead = false;
+				throw new Error("injected operation-lease release failure");
+			}
+			return clock();
+		},
+		platformFs,
 		readTextFile: async (path) => {
 			if (path in files) return files[path];
 			throw enoent(path);
@@ -161,6 +351,43 @@ function operationRuntime(input: {
 		runCommand: async (call) => {
 			calls.push(call);
 			const vector = commandVector(call);
+			if (vector.includes("screenshot") || vector.includes("take_screenshot")) {
+				const nativePath = vector.find((entry) => entry.endsWith(".png"));
+				const jsonPath = commandJsonArgs(call).filePath;
+				const screenshotPath =
+					nativePath ?? (typeof jsonPath === "string" ? jsonPath : undefined);
+				if (screenshotPath !== undefined) {
+					mkdirSync(dirname(screenshotPath), { recursive: true, mode: 0o700 });
+					writeFileSync(screenshotPath, Buffer.from("PNG_FIXTURE"), {
+						mode: 0o600,
+					});
+				}
+			}
+			const intercepted = await input.onCommand?.(call, vector);
+			if (intercepted !== undefined) return intercepted;
+			if (
+				invalidateBrowserLaneAfterOperation &&
+				(vector.includes("take_snapshot") ||
+					vector.includes("snapshot") ||
+					vector.includes("screenshot"))
+			) {
+				invalidateBrowserLaneAfterOperation = false;
+				const deps = await custodyDeps(runtime);
+				const leases = await listLeases(deps);
+				const projection = leases.find(
+					(lease) => lease.live && lease.key.startsWith("browser-lane:"),
+				);
+				if (!projection) throw new Error("fixture Browser Lane missing");
+				const { live: _live, ...lease } = projection;
+				await releaseBrowserLaneLease(deps, {
+					contract: BROWSER_USE_CUSTODY_CONTRACT_ID,
+					schema_version: BROWSER_USE_CUSTODY_SCHEMA_VERSION,
+					authority_id: FIXTURE_BROWSER_AUTHORITY,
+					run_id: FIXTURE_RUN_ID,
+					mutation: "snapshot",
+					lease,
+				});
+			}
 			if (call.args.includes("close")) {
 				return (
 					releaseResults.shift() ??
@@ -177,16 +404,29 @@ function operationRuntime(input: {
 					JSON.stringify({
 						success: true,
 						data: {
-							tabs: pages.map((page) => ({
+							tabs: pages.map((page, index) => ({
 								tabId: page.id,
 								targetId:
 									page.targetId ?? `cdp-target-${page.id ?? "unknown"}`,
 								url: page.url,
 								title: page.title,
+								active:
+									activeTargetId === undefined
+										? index === 0
+										: activeTargetId ===
+											(page.targetId ??
+												`cdp-target-${page.id ?? "unknown"}`),
 							})),
 						},
 					}),
 				);
+			}
+			if (
+				vector.includes("tab") &&
+				!vector.includes("list") &&
+				vector[vector.indexOf("tab") + 1] !== undefined
+			) {
+				activeTargetId = vector[vector.indexOf("tab") + 1];
 			}
 			if (vector.includes("get") && vector.includes("url")) {
 				return okCommand(
@@ -198,7 +438,15 @@ function operationRuntime(input: {
 			}
 			if (input.adapter === "agent-browser" && nativeResults.length > 0) {
 				const nativeResult = nativeResults.shift();
-				if (nativeResult) return nativeResult;
+				if (nativeResult) {
+					if (
+						input.throwTargetLeaseReleaseAfterOperation === true &&
+						vector.includes("snapshot")
+					) {
+						throwNextClockRead = true;
+					}
+					return nativeResult;
+				}
 			}
 			// The envelope-derived argv names the tool via --tool (U3); route the
 			// fake on that token, mirroring the real ad-hoc invocation shape.
@@ -214,7 +462,15 @@ function operationRuntime(input: {
 			);
 		},
 	});
-	return { runtime, calls, ensuredDirectories };
+	return {
+		runtime,
+		calls,
+		ensuredDirectories,
+		xdgBase: xdg.base,
+		failOwnershipWriteAfter(successfulRegistryWrites) {
+			registryWritesBeforeFailure = successfulRegistryWrites;
+		},
+	};
 }
 
 describe("U7 operation gates", () => {
@@ -284,6 +540,95 @@ describe("U7 operation gates", () => {
 			expect(calls.some((call) => call.args.includes("screenshot"))).toBe(false);
 		} finally {
 			await releaseBrowserLaneLease(deps, held.lease);
+		}
+	});
+
+	test("an unqualified adapter snapshot remains Browser-Lane serialized", async () => {
+		const { runtime, calls } = operationRuntime();
+		const deps = await custodyDeps(runtime);
+		const held = await acquireBrowserLaneLease(deps, {
+			authorityId: FIXTURE_BROWSER_AUTHORITY,
+			runId: "other-run",
+			mutation: "domain-policy",
+			ttlMs: 30_000,
+		});
+		if (!held.ok) throw new Error("fixture Browser Lane failed");
+		try {
+			const result = await runForTest(
+				["operate", "snapshot", "--handoff", "/h.json", "--json"],
+				runtime,
+			);
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "browser_lane_held",
+			});
+			expect(
+				calls.some((call) => commandVector(call).includes("take_snapshot")),
+			).toBe(false);
+		} finally {
+			await releaseBrowserLaneLease(deps, held.lease);
+		}
+	});
+
+	test("a Browser Lane refusal preserves its primary cause when target cleanup also fails", async () => {
+		const {
+			runtime,
+			calls,
+			failOwnershipWriteAfter,
+			xdgBase,
+		} = operationRuntime({
+			adapter: "agent-browser",
+			pages: [
+				{
+					id: "tab-operation-a",
+					targetId: "cdp-operation-a",
+					url: "https://example.com/app",
+					title: "App",
+				},
+			],
+		});
+		const deps = await seedPersistentTargetB(runtime);
+		const held = await acquireBrowserLaneLease(deps, {
+			authorityId: FIXTURE_BROWSER_AUTHORITY,
+			runId: "other-run",
+			mutation: "domain-policy",
+			ttlMs: 30_000,
+		});
+		if (!held.ok) throw new Error("fixture Browser Lane failed");
+		failOwnershipWriteAfter(1);
+		try {
+			const result = await runForTest(
+				[
+					"operate",
+					"screenshot",
+					"--out",
+					"shot.png",
+					"--handoff",
+					"/h.json",
+					"--json",
+				],
+				runtime,
+			);
+			const output = `${result.stdout}\n${result.stderr}`;
+
+			expect(result.exitCode).toBe(1);
+			expect(parseJson(result.stdout)).toMatchObject({
+				error: { code: "browser_operation_cleanup_incomplete" },
+				data: {
+					primary_cause: "browser_lane_held",
+					operation_effect: "not_started",
+					cleanup_debt: ["target-ownership-release-failed"],
+				},
+			});
+			expect(calls.some((call) => call.args.includes("screenshot"))).toBe(false);
+			expect(await ownedRegistryTargetRefs(runtime)).toEqual([
+				OPERATION_CLEANUP_TARGET_REFS["cdp-operation-a"],
+				OPERATION_CLEANUP_TARGET_REFS["cdp-persistent-b"],
+			]);
+			expectCleanupOutputRedacted(output, xdgBase);
+		} finally {
+			await releaseBrowserLaneLease(deps, held.lease);
+			await releaseRunTargetOwnership(deps, FIXTURE_RUN_ID);
 		}
 	});
 
@@ -575,6 +920,475 @@ describe("U7 operation gates", () => {
 		expect(commandVector(calls[0])).toContain("list_pages");
 	});
 
+	test("open-created state re-resolves by private target ref when the session tab id changes", async () => {
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			files: {
+				"/state.json": createdSelectedStateFile("cdp-stable"),
+			},
+			pages: [
+				{
+					id: "fresh-session-tab",
+					targetId: "cdp-stable",
+					url: "https://example.com/app",
+					title: "App",
+				},
+			],
+			nativeResults: [
+				okCommand(
+					JSON.stringify({
+						success: true,
+						data: { snapshot: "Root\nButton", refs: {} },
+					}),
+				),
+			],
+		});
+
+		const result = await runForTest(
+			[
+				"operate",
+				"snapshot",
+				"--state",
+				"/state.json",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(0);
+		expect(
+			calls.some((call) => {
+				const vector = commandVector(call);
+				return vector.includes("tab") && vector.includes("cdp-stable");
+			}),
+		).toBe(false);
+		expect([result.stdout, result.stderr].join("\n")).not.toContain(
+			"stale-session-tab",
+		);
+	});
+
+	test("legacy created-target lifecycle state migrates only through the adapter owner", async () => {
+		const { runtime } = operationRuntime({
+			adapter: "agent-browser",
+			files: {
+				"/state.json": createdSelectedStateFile("cdp-stable", {
+					ownership: {
+						kind: "created-target",
+						target_ref: CREATED_TARGET_REFS["cdp-stable"],
+						adapter_session: {
+							kind: "agent-browser-pinned",
+							session_name: `browser-use-${FIXTURE_RUN_ID}`,
+						},
+					},
+				}),
+			},
+			pages: [
+				{
+					id: "fresh-session-tab",
+					targetId: "cdp-stable",
+					url: "https://example.com/app",
+					title: "App",
+				},
+			],
+			nativeResults: [
+				okCommand(
+					JSON.stringify({
+						success: true,
+						data: { snapshot: "Root", refs: {} },
+					}),
+				),
+			],
+		});
+		const result = await runForTest(
+			[
+				"operate",
+				"snapshot",
+				"--state",
+				"/state.json",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+	});
+
+	test("open-created state fails closed when no private target-ref match remains", async () => {
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			files: {
+				"/state.json": createdSelectedStateFile("cdp-owned"),
+			},
+			pages: [
+				{
+					id: "fresh-tab",
+					targetId: "cdp-other",
+					url: "https://example.com/app",
+					title: "App",
+				},
+			],
+		});
+
+		const result = await runForTest(
+			[
+				"operate",
+				"snapshot",
+				"--state",
+				"/state.json",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_state_mismatch",
+		});
+		expect(calls.some((call) => call.args.includes("snapshot"))).toBe(false);
+	});
+
+	test("open-created state fails closed when two tabs match the private target ref", async () => {
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			files: {
+				"/state.json": createdSelectedStateFile("cdp-owned"),
+			},
+			pages: [
+				{
+					id: "tab-one",
+					targetId: "cdp-owned",
+					url: "https://example.com/app",
+				},
+				{
+					id: "tab-two",
+					targetId: "cdp-owned",
+					url: "https://example.com/app",
+				},
+			],
+		});
+
+		const result = await runForTest(
+			[
+				"operate",
+				"snapshot",
+				"--state",
+				"/state.json",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_state_mismatch",
+		});
+		expect(calls.some((call) => call.args.includes("snapshot"))).toBe(false);
+	});
+
+	test("open-created state rejects malformed canonical target inventories", async () => {
+		const malformedInventories = [
+			{
+				label: "empty",
+				pages: [
+					{ id: "tab-empty", targetId: "", url: "https://example.com/app" },
+				],
+			},
+			{
+				label: "oversized",
+				pages: [
+					{
+						id: "tab-oversized",
+						targetId: "x".repeat(513),
+						url: "https://example.com/app",
+					},
+				],
+			},
+			{
+				label: "duplicate",
+				pages: [
+					{
+						id: "tab-one",
+						targetId: "cdp-other",
+						url: "https://example.com/a",
+					},
+					{
+						id: "tab-two",
+						targetId: "cdp-other",
+						url: "https://example.com/b",
+					},
+				],
+			},
+		];
+
+		for (const fixture of malformedInventories) {
+			const { runtime, calls } = operationRuntime({
+				adapter: "agent-browser",
+				files: {
+					"/state.json": createdSelectedStateFile("cdp-owned"),
+				},
+				pages: fixture.pages,
+			});
+			const result = await runForTest(
+				[
+					"operate",
+					"snapshot",
+					"--state",
+					"/state.json",
+					"--handoff",
+					"/h.json",
+					"--json",
+				],
+				runtime,
+			);
+
+			expect(result.exitCode, fixture.label).toBe(20);
+			expect(parseJson(result.stdout).error, fixture.label).toMatchObject({
+				code: "target_state_mismatch",
+			});
+			expect(
+				calls.some((call) => call.args.includes("snapshot")),
+				fixture.label,
+			).toBe(false);
+		}
+	});
+
+	test("open-created state rejects an explicit target hint that conflicts with its owned tab", async () => {
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			files: {
+				"/state.json": createdSelectedStateFile("cdp-owned"),
+			},
+			pages: [
+				{
+					id: "fresh-tab",
+					targetId: "cdp-owned",
+					url: "https://example.com/app",
+					title: "App",
+				},
+			],
+		});
+
+		const result = await runForTest(
+			[
+				"operate",
+				"snapshot",
+				"--title-contains",
+				"Different",
+				"--state",
+				"/state.json",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_target_no_match",
+		});
+		expect(calls.some((call) => call.args.includes("snapshot"))).toBe(false);
+	});
+
+	test("open-created state rejects the same target after cross-origin navigation", async () => {
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			files: {
+				"/state.json": createdSelectedStateFile("cdp-owned"),
+			},
+			pages: [
+				{
+					id: "fresh-tab",
+					targetId: "cdp-owned",
+					url: "https://different.example/app",
+					title: "App",
+				},
+			],
+		});
+
+		const result = await runForTest(
+			[
+				"operate",
+				"snapshot",
+				"--state",
+				"/state.json",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_state_mismatch",
+		});
+		expect(calls.some((call) => call.args.includes("snapshot"))).toBe(false);
+	});
+
+	test("open-created state rejects an opaque lifecycle identity from another run", async () => {
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			files: {
+				"/state.json": createdSelectedStateFile("cdp-owned", {
+					ownership: {
+						kind: "created-target",
+						target_ref: CREATED_TARGET_REFS["cdp-owned"],
+						retained_lifecycle: {
+							adapter_id: "agent-browser",
+							capability_id: "agent-browser.exact-target-no-focus.v1",
+							lifecycle_ref: "browser-use-foreign-run",
+						},
+					},
+				}),
+			},
+		});
+		const result = await runForTest(
+			[
+				"operate",
+				"snapshot",
+				"--state",
+				"/state.json",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_state_unreadable",
+		});
+		expect(calls.some((call) => call.args.includes("snapshot"))).toBe(false);
+	});
+
+	test.each([
+		[
+			"adapter",
+			{
+				adapter_id: "playwright-cdp",
+				capability_id: "agent-browser.exact-target-no-focus.v1",
+				lifecycle_ref: `browser-use-${FIXTURE_RUN_ID}`,
+			},
+		],
+		[
+			"capability",
+			{
+				adapter_id: "agent-browser",
+				capability_id: "foreign-capability",
+				lifecycle_ref: `browser-use-${FIXTURE_RUN_ID}`,
+			},
+		],
+	] as const)(
+		"open-created state rejects a wrong retained lifecycle %s identity",
+		async (_label, retainedLifecycle) => {
+			const { runtime, calls } = operationRuntime({
+				adapter: "agent-browser",
+				files: {
+					"/state.json": createdSelectedStateFile("cdp-owned", {
+						ownership: {
+							kind: "created-target",
+							target_ref: CREATED_TARGET_REFS["cdp-owned"],
+							retained_lifecycle: retainedLifecycle,
+						},
+					}),
+				},
+			});
+			const result = await runForTest(
+				[
+					"operate",
+					"snapshot",
+					"--state",
+					"/state.json",
+					"--handoff",
+					"/h.json",
+					"--json",
+				],
+				runtime,
+			);
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "target_state_mismatch",
+			});
+			expect(calls.some((call) => call.args.includes("snapshot"))).toBe(false);
+		},
+	);
+
+	test("near-expiry open-created state fails before operation effect and does not extend custody", async () => {
+		const rawTargetId = "cdp-owned";
+		const now = 2_000;
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			now: () => now,
+			files: {
+				"/state.json": createdSelectedStateFile(rawTargetId, {
+					expires_at_ms: now + 119_999,
+				}),
+			},
+			pages: [
+				{
+					id: "fresh-tab",
+					targetId: rawTargetId,
+					url: "https://example.com/app",
+					title: "App",
+				},
+			],
+		});
+		const deps = await custodyDeps(runtime);
+		const owned = await acquireTargetOperationLease(deps, {
+			authorityId: FIXTURE_BROWSER_AUTHORITY,
+			runId: FIXTURE_RUN_ID,
+			adapterId: "agent-browser",
+			rawTargetId,
+			operation: "read",
+			ttlMs: 30_000,
+			ownershipEvidence: {
+				kind: "adapter-creation-receipt",
+				adapter_id: "agent-browser",
+				run_id: FIXTURE_RUN_ID,
+				raw_target_id: rawTargetId,
+			},
+		});
+		if (!owned.ok) throw new Error("fixture target ownership failed");
+		await releaseTargetOperationLease(deps, owned.lease);
+		const expiresBefore = await targetOwnershipExpiry(
+			runtime,
+			CREATED_TARGET_REFS[rawTargetId],
+		);
+
+		const result = await runForTest(
+			[
+				"operate",
+				"snapshot",
+				"--state",
+				"/state.json",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_state_stale",
+		});
+		expect(calls.some((call) => call.args.includes("snapshot"))).toBe(false);
+		expect(
+			calls.some((call) => commandVector(call).includes(rawTargetId)),
+		).toBe(false);
+		expect(
+			await targetOwnershipExpiry(runtime, CREATED_TARGET_REFS[rawTargetId]),
+		).toBe(expiresBefore);
+	});
+
 	test("a v1 (Router-era) selected state fails with target_state_mismatch, never operates", async () => {
 		const { runtime, calls } = operationRuntime({
 			files: {
@@ -615,6 +1429,139 @@ describe("U7 operation gates", () => {
 });
 
 describe("U7 operation success and transport", () => {
+	test("ordinary operation releases only its exact first ownership and preserves another target for the same run", async () => {
+		const { runtime } = operationRuntime({
+			adapter: "agent-browser",
+			pages: [
+				{
+					id: "tab-operation-a",
+					targetId: "cdp-operation-a",
+					url: "https://example.com/app",
+					title: "App",
+				},
+			],
+			nativeResults: [
+				okCommand(JSON.stringify({ success: true, data: {} })),
+				okCommand(JSON.stringify({ success: true, data: "Root\nButton" })),
+			],
+		});
+		const deps = await seedPersistentTargetB(runtime);
+		try {
+			const result = await runForTest(
+				["operate", "snapshot", "--handoff", "/h.json", "--json"],
+				runtime,
+			);
+
+			expect(result.exitCode).toBe(0);
+			expect(
+				await ownedTargetRefsForRun(deps, {
+					authorityId: FIXTURE_BROWSER_AUTHORITY,
+					runId: FIXTURE_RUN_ID,
+					adapterId: "agent-browser",
+				}),
+			).toEqual({
+				ok: true,
+				targetRefs: [OPERATION_CLEANUP_TARGET_REFS["cdp-persistent-b"]],
+			});
+		} finally {
+			await releaseRunTargetOwnership(deps, FIXTURE_RUN_ID);
+		}
+	});
+
+	test("a thrown operation-lease release still attempts exact first-ownership cleanup and blocks success", async () => {
+		const { runtime, xdgBase } = operationRuntime({
+			adapter: "agent-browser",
+			pages: [
+				{
+					id: "tab-operation-a",
+					targetId: "cdp-operation-a",
+					url: "https://example.com/app",
+					title: "App",
+				},
+			],
+			nativeResults: [
+				okCommand(JSON.stringify({ success: true, data: {} })),
+				okCommand(JSON.stringify({ success: true, data: "Root\nButton" })),
+			],
+			throwTargetLeaseReleaseAfterOperation: true,
+		});
+		const deps = await seedPersistentTargetB(runtime);
+		try {
+			const result = await runForTest(
+				["operate", "snapshot", "--handoff", "/h.json", "--json"],
+				runtime,
+			);
+			const output = `${result.stdout}\n${result.stderr}`;
+
+			expect(result.exitCode).toBe(1);
+			expect(parseJson(result.stdout)).toMatchObject({
+				error: { code: "browser_operation_cleanup_incomplete" },
+				data: {
+					primary_cause: "browser_operation_completed",
+					operation_effect: "confirmed",
+					cleanup_debt: ["target-operation-lease-release-failed"],
+				},
+			});
+			expect(
+				await ownedTargetRefsForRun(deps, {
+					authorityId: FIXTURE_BROWSER_AUTHORITY,
+					runId: FIXTURE_RUN_ID,
+					adapterId: "agent-browser",
+				}),
+			).toEqual({
+				ok: true,
+				targetRefs: [OPERATION_CLEANUP_TARGET_REFS["cdp-persistent-b"]],
+			});
+			expectCleanupOutputRedacted(output, xdgBase);
+		} finally {
+			await releaseRunTargetOwnership(deps, FIXTURE_RUN_ID);
+		}
+	});
+
+	test("a typed exact-ownership release failure is public cleanup debt and preserves same-run B", async () => {
+		const { runtime, failOwnershipWriteAfter, xdgBase } = operationRuntime({
+			adapter: "agent-browser",
+			pages: [
+				{
+					id: "tab-operation-a",
+					targetId: "cdp-operation-a",
+					url: "https://example.com/app",
+					title: "App",
+				},
+			],
+			nativeResults: [
+				okCommand(JSON.stringify({ success: true, data: {} })),
+				okCommand(JSON.stringify({ success: true, data: "Root\nButton" })),
+			],
+		});
+		const deps = await seedPersistentTargetB(runtime);
+		failOwnershipWriteAfter(1);
+		try {
+			const result = await runForTest(
+				["operate", "snapshot", "--handoff", "/h.json", "--json"],
+				runtime,
+			);
+			const output = `${result.stdout}\n${result.stderr}`;
+
+			expect(result.exitCode).toBe(1);
+			expect(parseJson(result.stdout)).toMatchObject({
+				error: { code: "browser_operation_cleanup_incomplete" },
+				data: {
+					primary_cause: "browser_operation_completed",
+					operation_effect: "confirmed",
+					cleanup_debt: ["target-ownership-release-failed"],
+				},
+			});
+			expect(await ownedRegistryTargetRefs(runtime)).toEqual([
+				OPERATION_CLEANUP_TARGET_REFS["cdp-operation-a"],
+				OPERATION_CLEANUP_TARGET_REFS["cdp-persistent-b"],
+			]);
+			expectCleanupOutputRedacted(output, xdgBase);
+		} finally {
+			await releaseRunTargetOwnership(deps, FIXTURE_RUN_ID);
+		}
+	});
+
 	test("agent-browser releases its owned session after a successful operation", async () => {
 		const { runtime, calls } = operationRuntime({
 			adapter: "agent-browser",
@@ -782,6 +1729,421 @@ describe("U7 operation success and transport", () => {
 		expect(operationCalls[1]?.timeoutMs).toBe(30_000);
 		expect([result.stdout, result.stderr].join("\n")).not.toContain("tab-alpha");
 		expect(calls.some((call) => call.command === "mcporter")).toBe(false);
+	});
+
+	test("retained pinned sessions run no-focus snapshots with overlapping exact lease intervals", async () => {
+		const sharedXdg = makeTempXdgEnv();
+		operationXdgCleanups.push(sharedXdg.dispose);
+		const runB = "22222222-2222-4222-8222-222222222222";
+		const handoffB = verifiedHandoffEnvelope((envelope) => {
+			envelope.run_id = runB;
+			envelope.data.attachment.adapter_id = "agent-browser";
+		});
+		const envelopeB = JSON.parse(handoffB);
+		const evidenceB = handoffEvidenceIdOf({
+			runId: envelopeB.run_id,
+			environmentName: envelopeB.data.environment.name,
+			environmentProfile: envelopeB.data.environment.profile,
+			attachmentAdapterId: envelopeB.data.attachment.adapter_id,
+			route: envelopeB.data.attachment.route,
+			endpointHttp: envelopeB.data.endpoint.http,
+			endpointWs: envelopeB.data.endpoint.ws,
+			proofContractId: envelopeB.data.proof.environment_contract_id,
+			proofSchemaVersion: envelopeB.data.proof.environment_schema_version,
+		});
+		const targetEnvelopeB = targetEnvelopeIdOf({
+			runId: runB,
+			mode: "handoff-bound",
+			adapter: "agent-browser",
+			handoffEvidenceId: evidenceB,
+		});
+		let logicalNow = 10_000;
+		let activePreparations = 0;
+		let maxPreparations = 0;
+		let activeSnapshots = 0;
+		let maxSnapshots = 0;
+		let snapshotArrivals = 0;
+		let releaseSnapshots = () => {};
+		const bothSnapshotsReady = new Promise<void>((resolve) => {
+			releaseSnapshots = resolve;
+		});
+		const commandHarness = (targetId: string, url: string) =>
+			async (
+				_call: McporterCommandInput,
+				vector: readonly string[],
+			): Promise<McporterCommandResult | undefined> => {
+				if (vector.includes("tab") && vector.includes("list")) {
+					return okCommand(
+						JSON.stringify({
+							success: true,
+							data: {
+								tabs: [
+									{
+										tabId: `tab-${targetId}`,
+										targetId,
+										url,
+										title: targetId,
+										active: true,
+									},
+								],
+							},
+						}),
+					);
+				}
+				if (
+					vector.includes("tab") &&
+					vector.includes(targetId) &&
+					!vector.includes("list")
+				) {
+					activePreparations += 1;
+					maxPreparations = Math.max(maxPreparations, activePreparations);
+					await new Promise((resolve) => setTimeout(resolve, 25));
+					activePreparations -= 1;
+					return okCommand(JSON.stringify({ success: true, data: {} }));
+				}
+				if (vector.includes("snapshot")) {
+					activeSnapshots += 1;
+					maxSnapshots = Math.max(maxSnapshots, activeSnapshots);
+					snapshotArrivals += 1;
+					if (snapshotArrivals === 2) releaseSnapshots();
+					await Promise.race([
+						bothSnapshotsReady,
+						new Promise((resolve) => setTimeout(resolve, 250)),
+					]);
+					activeSnapshots -= 1;
+					return okCommand(
+						JSON.stringify({
+							success: true,
+							data: { snapshot: targetId, refs: {} },
+						}),
+					);
+				}
+				return undefined;
+			};
+		const runtimeA = operationRuntime({
+			adapter: "agent-browser",
+			env: sharedXdg.env,
+			now: () => logicalNow++,
+			files: {
+				"/state-a.json": createdSelectedStateFile("cdp-target-a", {
+					display: { origin: "https://a.example.test" },
+				}),
+			},
+			pages: [
+				{
+					id: "tab-a",
+					targetId: "cdp-target-a",
+					url: "https://a.example.test/",
+					title: "A",
+				},
+			],
+			onCommand: commandHarness(
+				"cdp-target-a",
+				"https://a.example.test/",
+			),
+		});
+		const runtimeB = operationRuntime({
+			adapter: "agent-browser",
+			handoff: handoffB,
+			env: sharedXdg.env,
+			now: () => logicalNow++,
+			files: {
+				"/state-b.json": createdSelectedStateFile("cdp-target-b", {
+					run_id: runB,
+					handoff_evidence_id: evidenceB,
+					target_envelope_id: targetEnvelopeB,
+					ownership: {
+						kind: "created-target",
+						target_ref: CREATED_TARGET_REFS["cdp-target-b"],
+						retained_lifecycle: {
+							adapter_id: "agent-browser",
+							capability_id: "agent-browser.exact-target-no-focus.v1",
+							lifecycle_ref: `browser-use-${runB}`,
+						},
+					},
+					display: { origin: "https://b.example.test" },
+				}),
+			},
+			pages: [
+				{
+					id: "tab-b",
+					targetId: "cdp-target-b",
+					url: "https://b.example.test/",
+					title: "B",
+				},
+			],
+			onCommand: commandHarness(
+				"cdp-target-b",
+				"https://b.example.test/",
+			),
+		});
+
+		const [resultA, resultB] = await Promise.all([
+			runForTest(
+				[
+					"operate",
+					"snapshot",
+					"--state",
+					"/state-a.json",
+					"--handoff",
+					"/h.json",
+					"--json",
+				],
+				runtimeA.runtime,
+			),
+			runForTest(
+				[
+					"operate",
+					"snapshot",
+					"--state",
+					"/state-b.json",
+					"--handoff",
+					"/h.json",
+					"--json",
+				],
+				runtimeB.runtime,
+			),
+		]);
+		expect([resultA.exitCode, resultB.exitCode]).toEqual([0, 0]);
+		expect(maxPreparations).toBe(0);
+		expect(maxSnapshots).toBe(2);
+		const dataA = parseJson(resultA.stdout).data as Record<string, unknown>;
+		const dataB = parseJson(resultB.stdout).data as Record<string, unknown>;
+		for (const data of [dataA, dataB]) {
+			expect(data).toMatchObject({
+				execution: {
+					scope: "target-local",
+					focus: false,
+				},
+				side_effects: { focus: false },
+			});
+		}
+		const intervalOf = (data: Record<string, unknown>) => {
+			const custody = data.custody as Record<string, unknown>;
+			const lease = custody.target_operation_lease as Record<string, number>;
+			return {
+				acquired: lease.acquired_at_epoch_ms,
+					released: lease.released_at_epoch_ms,
+			};
+		};
+		const intervalA = intervalOf(dataA);
+		const intervalB = intervalOf(dataB);
+		expect(
+			Math.max(intervalA.acquired, intervalB.acquired) <
+				Math.min(intervalA.released, intervalB.released),
+		).toBe(true);
+		expect(
+			[...runtimeA.calls, ...runtimeB.calls].some((call) => {
+				const vector = commandVector(call);
+				return vector.includes("session") && vector.includes("close");
+			}),
+		).toBe(false);
+	});
+
+	test("retained pinned session refuses active-target drift before snapshot and releases its operation lease", async () => {
+		let listCalls = 0;
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			files: {
+				"/state.json": createdSelectedStateFile("cdp-target-a"),
+			},
+			pages: [
+				{
+					id: "tab-a",
+					targetId: "cdp-target-a",
+					url: "https://example.com/app",
+					title: "A",
+				},
+			],
+			onCommand: async (_call, vector) => {
+				if (!(vector.includes("tab") && vector.includes("list"))) {
+					return undefined;
+				}
+				listCalls += 1;
+				if (listCalls === 1) return undefined;
+				return okCommand(
+					JSON.stringify({
+						success: true,
+						data: {
+							tabs: [
+								{
+									tabId: "tab-other",
+									targetId: "cdp-other",
+									url: "https://other.example.test/",
+									active: true,
+								},
+							],
+						},
+					}),
+				);
+			},
+		});
+		const deps = await seedPersistentTarget(runtime, "cdp-target-a");
+		const result = await runForTest(
+			[
+				"operate",
+				"snapshot",
+				"--state",
+				"/state.json",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_transport_failed",
+		});
+		expect(
+			calls.some((call) => commandVector(call).includes("snapshot")),
+		).toBe(false);
+		expect(
+			calls.some((call) => {
+				const vector = commandVector(call);
+				return vector.includes("session") && vector.includes("close");
+			}),
+		).toBe(false);
+		expect(
+			(await listLeases(deps)).filter(
+				(lease) =>
+					lease.live && lease.key.startsWith("browser-target-operation:"),
+			),
+		).toHaveLength(0);
+	});
+
+	test("retained pinned snapshot failure releases its operation lease but keeps lifecycle custody", async () => {
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			files: {
+				"/state.json": createdSelectedStateFile("cdp-target-a"),
+			},
+			pages: [
+				{
+					id: "tab-a",
+					targetId: "cdp-target-a",
+					url: "https://example.com/app",
+					title: "A",
+				},
+			],
+			nativeResults: [
+				{ exitCode: 1, stdout: "", stderr: "snapshot failed" },
+			],
+		});
+		const deps = await seedPersistentTarget(runtime, "cdp-target-a");
+		const result = await runForTest(
+			[
+				"operate",
+				"snapshot",
+				"--state",
+				"/state.json",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "browser_operation_transport_failed",
+		});
+		expect(
+			calls.some((call) => {
+				const vector = commandVector(call);
+				return vector.includes("session") && vector.includes("close");
+			}),
+		).toBe(false);
+		expect(await ownedRegistryTargetRefs(runtime)).toEqual([
+			CREATED_TARGET_REFS["cdp-target-a"],
+		]);
+		expect(
+			(await listLeases(deps)).filter(
+				(lease) =>
+					lease.live && lease.key.startsWith("browser-target-operation:"),
+			),
+		).toHaveLength(0);
+	});
+
+	test("browser-wide work on a created target retains its session for a later target-local snapshot", async () => {
+		const { runtime, calls } = operationRuntime({
+			adapter: "agent-browser",
+			files: {
+				"/state.json": createdSelectedStateFile("cdp-target-a"),
+			},
+			pages: [
+				{
+					id: "tab-a",
+					targetId: "cdp-target-a",
+					url: "https://example.com/app",
+					title: "A",
+				},
+			],
+			nativeResults: [
+				okCommand(JSON.stringify({ success: true, data: {} })),
+				okCommand(JSON.stringify({ success: true, data: {} })),
+				okCommand(
+					JSON.stringify({
+						success: true,
+						data: { snapshot: "Root", refs: {} },
+					}),
+				),
+			],
+			releaseResults: [
+				{ exitCode: 1, stdout: "", stderr: "must remain retained" },
+			],
+		});
+		const deps = await seedPersistentTarget(runtime, "cdp-target-a");
+		const screenshot = await runForTest(
+			[
+				"operate",
+				"screenshot",
+				"--out",
+				"shot.png",
+				"--state",
+				"/state.json",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+		const snapshot = await runForTest(
+			[
+				"operate",
+				"snapshot",
+				"--state",
+				"/state.json",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+		expect(parseJson(snapshot.stdout)).toMatchObject({ status: "ok" });
+		expect([screenshot.exitCode, snapshot.exitCode]).toEqual([0, 0]);
+		expect(parseJson(screenshot.stdout).data).toMatchObject({
+			execution: { scope: "browser-wide", focus: true },
+			side_effects: { focus: true },
+		});
+		expect(parseJson(snapshot.stdout).data).toMatchObject({
+			execution: { scope: "target-local", focus: false },
+			side_effects: { focus: false },
+		});
+		expect(
+			calls.some((call) => {
+				const vector = commandVector(call);
+				return vector.includes("session") && vector.includes("close");
+			}),
+		).toBe(false);
+		expect(await ownedRegistryTargetRefs(runtime)).toEqual([
+			CREATED_TARGET_REFS["cdp-target-a"],
+		]);
+		expect(
+			(await listLeases(deps)).filter(
+				(lease) =>
+					lease.live && lease.key.startsWith("browser-target-operation:"),
+			),
+		).toHaveLength(0);
 	});
 
 	test("agent-browser snapshot accepts plain string data", async () => {
@@ -1038,10 +2400,29 @@ describe("U7 operation success and transport", () => {
 			adapter: "chrome-devtools-mcp",
 			target_source: "selected_state",
 			binding: {
+				outer_run_id: FIXTURE_RUN_ID,
 				run_id: FIXTURE_RUN_ID,
 				handoff_evidence_id: FIXTURE_EVIDENCE_ID,
+				browser_authority_id:
+					"cf17a739b9cc02280d8015e2b2a92a3b244a5c997004754bfb5e5a5fcda16693",
 			},
 			side_effects: { focus: false },
+			execution: { scope: "browser-wide", focus: false },
+			target: {
+				target_ref:
+					"047728b9d44d2e7a88ab755236fa1a2edf8847b2e0a094c5913bef0a43d09aa4",
+				origin: "https://example.com",
+			},
+			custody: {
+				browser_lane: {
+					acquired_at_epoch_ms: expect.any(Number),
+					released_at_epoch_ms: expect.any(Number),
+				},
+				target_operation_lease: {
+					acquired_at_epoch_ms: expect.any(Number),
+					released_at_epoch_ms: expect.any(Number),
+				},
+			},
 		});
 		expect((json.data as Record<string, any>).snapshot.text).toContain("Root");
 		// Default operate path (U3): list_pages then the operation — no
@@ -1062,6 +2443,102 @@ describe("U7 operation success and transport", () => {
 		expect(snapshotVector).toContain(FIXTURE_ENVELOPE.data.endpoint.http);
 		expect(calls[1].env).toEqual({ MCPORTER_NO_KEEPALIVE: "*" });
 		expect(commandJsonArgs(calls[1])).toEqual({ pageId: 1 });
+	});
+
+	test("an unconfirmed Browser Lane release blocks a browser-wide success receipt", async () => {
+		const { runtime } = operationRuntime({
+			files: { "/state.json": selectedStateFile() },
+			invalidateBrowserLaneAfterOperation: true,
+		});
+		const result = await runForTest(
+			[
+				"operate",
+				"snapshot",
+				"--state",
+				"/state.json",
+				"--handoff",
+				"/h.json",
+				"--json",
+			],
+			runtime,
+		);
+		expect(result.exitCode).toBe(1);
+		expect(parseJson(result.stdout)).toMatchObject({
+			status: "error",
+			data: {
+				primary_cause: "browser_operation_completed",
+				cleanup_debt: ["browser-lane-release-failed"],
+			},
+			error: { code: "browser_operation_cleanup_incomplete" },
+		});
+	});
+
+	test("screenshot-media capture blocks success when Browser Lane release is unconfirmed", async () => {
+		const { runtime } = operationRuntime({
+			adapter: "agent-browser",
+			invalidateBrowserLaneAfterOperation: true,
+			nativeResults: [
+				okCommand(agentBrowserSuccess({ selected: true })),
+				okCommand(agentBrowserSuccess({ url: "https://example.com/app" })),
+				okCommand(agentBrowserSuccess({ captured: true })),
+			],
+			pages: [
+				{
+					id: "tab-shot",
+					targetId: "cdp-stable",
+					url: "https://example.com/app",
+					title: "App",
+				},
+			],
+		});
+		const parsed = parseHandoffFacts(AGENT_BROWSER_HANDOFF);
+		if (!parsed.ok || parsed.kind !== "verified") {
+			throw new Error("fixture handoff invalid");
+		}
+		const deps = await custodyDeps(runtime);
+		const acquired = await acquireTargetOperationLease(deps, {
+			authorityId: FIXTURE_BROWSER_AUTHORITY,
+			runId: FIXTURE_RUN_ID,
+			adapterId: "agent-browser",
+			rawTargetId: "cdp-stable",
+			operation: "read",
+			ttlMs: 30_000,
+			ownershipEvidence: {
+				kind: "adapter-creation-receipt",
+				adapter_id: "agent-browser",
+				run_id: FIXTURE_RUN_ID,
+				raw_target_id: "cdp-stable",
+			},
+		});
+		if (!acquired.ok) throw new Error("fixture target lease failed");
+		try {
+			const result = await captureBrowserUseScreenshotMedia({
+				runtime,
+				handoff: parsed.facts,
+				adapterPageRef: "cdp-stable",
+				artifact: {
+					path: `${runtime.env.XDG_STATE_HOME}/capture.png`,
+					relativePath: "capture.png",
+					root: runtime.env.XDG_STATE_HOME as string,
+					format: "png",
+					fullPage: false,
+				},
+				custody: {
+					deps,
+					rawTargetId: "cdp-stable",
+					targetLease: acquired.lease,
+					ttlMs: 30_000,
+				},
+			});
+			expect(result).toMatchObject({
+				ok: false,
+				code: "browser_operation_cleanup_incomplete",
+				cleanup_debt: ["browser-lane-release-failed"],
+			});
+		} finally {
+			await releaseTargetOperationLease(deps, acquired.lease);
+			await releaseRunTargetOwnership(deps, FIXTURE_RUN_ID);
+		}
 	});
 
 	test("--bring-to-front issues an explicit select_page focus call before the operation", async () => {
@@ -1140,6 +2617,10 @@ describe("U7 operation success and transport", () => {
 					root: "/tmp/browser-use-artifacts-test",
 					format: "png",
 					full_page: true,
+					byte_count: 11,
+					content_sha256:
+						"573837877e9e8d282ac2eb535ca9e7fc55caf7efd46d75ea96f588b7e1412f5e",
+					media_type: "image/png",
 				},
 			},
 		});

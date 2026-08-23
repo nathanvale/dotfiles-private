@@ -67,6 +67,18 @@ export function bunPreflightShim(input: {
 }
 
 if (import.meta.main) {
-	const { runBrowserUseCli } = await import("./browser-use");
-	process.exit(await runBrowserUseCli(Bun.argv.slice(2)));
+	for (const name of [
+		"BROWSER_USE_QUALIFICATION_EXPECTED_MANIFEST_DIGEST",
+		"BROWSER_USE_QUALIFICATION_OBSERVED_MANIFEST_DIGEST",
+		"BROWSER_USE_QUALIFICATION_SEALED_ARTIFACT_SHA256",
+		"BROWSER_USE_QUALIFICATION_SEALED_MANIFEST",
+	] as const) {
+		delete process.env[name];
+	}
+	const { runBrowserUseFrontDoor } = await import("./browser-use-qualification-wrapper");
+	process.exit(
+		await runBrowserUseFrontDoor(Bun.argv.slice(2), {
+			wrapperPath: import.meta.path,
+		}),
+	);
 }

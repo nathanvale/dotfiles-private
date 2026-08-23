@@ -116,7 +116,12 @@ export type BrowserUseLeasePayload = {
 		observed_expired_at_epoch_ms: number;
 	} | null;
 	/** Inspection-only facets (R27 vocabulary); NOT part of the key in U2. */
-	scope: { auth_context_ref?: string; target_id?: string; runbook_id?: string };
+	scope: {
+		auth_context_ref?: string;
+		target_id?: string;
+		runbook_id?: string;
+		topology_cleanup?: "adapter-creation";
+	};
 };
 
 /** Activation-epoch record (R27). The epoch starts at 1 and only advances. */
@@ -819,6 +824,12 @@ function leaseProblem(value: unknown): string | undefined {
 			return `payload.scope.${facet} must be a non-empty string when present.`;
 		}
 	}
+	if (
+		scope.topology_cleanup !== undefined &&
+		scope.topology_cleanup !== "adapter-creation"
+	) {
+		return "payload.scope.topology_cleanup must be adapter-creation when present.";
+	}
 	return undefined;
 }
 
@@ -1043,8 +1054,12 @@ const ARTIFACT_RETENTION_CLASS_SET: Record<BrowserUseArtifactRetentionClass, tru
 	export: true,
 };
 
-function isRetentionClass(value: unknown): value is BrowserUseArtifactRetentionClass {
-	return typeof value === "string" && Object.hasOwn(ARTIFACT_RETENTION_CLASS_SET, value);
+function isRetentionClass(
+	value: unknown,
+): value is BrowserUseArtifactRetentionClass {
+	return (
+		typeof value === "string" && Object.hasOwn(ARTIFACT_RETENTION_CLASS_SET, value)
+	);
 }
 
 function isRunState(value: unknown): value is BrowserUseRunState {

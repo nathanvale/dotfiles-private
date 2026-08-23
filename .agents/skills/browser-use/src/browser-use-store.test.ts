@@ -13,6 +13,7 @@ import {
 	type VolatileOverlayFs,
 } from "./browser-use-platform-test-helpers";
 import {
+	casRemoveRecord,
 	casReplaceRecord,
 	listOrphanTempFiles,
 	readDurableFile,
@@ -573,6 +574,61 @@ describe("casReplaceRecord (S9 two writers)", () => {
 			failure: { code: "store_record_corrupt" },
 		});
 		expect(await overlay.fs.readTextFile(path)).toBe('{"torn":');
+	});
+});
+
+describe("casRemoveRecord exact-content fence", () => {
+	async function makeRemoveStore() {
+		const overlay = makeOverlay();
+		await overlay.fs.mkdir("/store", { recursive: true, mode: 0o700 });
+		await overlay.fs.mkdir("/locks", { recursive: true, mode: 0o700 });
+		return {
+			overlay,
+			path: "/store/rec.json",
+			lockPath: "/locks/rec.lock",
+			clock: fixedClock(10_000),
+		};
+	}
+
+	test("removes only the exact caller-owned snapshot", async () => {
+		const { overlay, path, lockPath, clock } = await makeRemoveStore();
+		await overlay.fs.writeFileDurable(path, OLD_RECORD, 0o600);
+		const removed = await casRemoveRecord(overlay.fs, {
+			path,
+			lockPath,
+			holderId: "closer-a",
+			staleAfterMs: 60_000,
+			clock: clock.now,
+			expectedRevision: 1,
+			expectedRaw: OLD_RECORD,
+			revisionOf,
+		});
+		expect(removed).toEqual({ ok: true });
+		expect(await readDurableFile(overlay.fs, path)).toEqual({
+			status: "missing",
+		});
+		expect(await listOrphanTempFiles(overlay.fs, "/store")).toEqual([]);
+	});
+
+	test("preserves replacement bytes even when their numeric revision matches", async () => {
+		const { overlay, path, lockPath, clock } = await makeRemoveStore();
+		const replacement = '{"revision":1,"value":"replacement"}\n';
+		await overlay.fs.writeFileDurable(path, replacement, 0o600);
+		const removed = await casRemoveRecord(overlay.fs, {
+			path,
+			lockPath,
+			holderId: "closer-a",
+			staleAfterMs: 60_000,
+			clock: clock.now,
+			expectedRevision: 1,
+			expectedRaw: OLD_RECORD,
+			revisionOf,
+		});
+		expect(removed).toMatchObject({
+			ok: false,
+			failure: { code: "store_record_conflict" },
+		});
+		expect(await overlay.fs.readTextFile(path)).toBe(replacement);
 	});
 });
 

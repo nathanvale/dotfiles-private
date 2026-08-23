@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -112,6 +112,114 @@ describe("DDA-A19 unknown flag on a valid leaf is a typed usage error", () => {
 			expect(envelope.status).toBe("error");
 			expect(envelope.error.code).toBe("usage_error");
 			expect(envelope.error.message).toContain("--bogus");
+		},
+		SPAWN_TEST_TIMEOUT_MS,
+	);
+});
+
+describe("target-topology public argv stays aligned across the process boundary", () => {
+	test("target topology delegates native Agent Browser mechanics to the adapter owner", () => {
+		const topologySource = readFileSync(
+			join(dirname(fileURLToPath(import.meta.url)), "browser-use-target-topology.ts"),
+			"utf8",
+		);
+		for (const duplicatedMechanic of [
+			'"--pin-tab"',
+			'["tab", "list", "--json"]',
+		]) {
+			expect(topologySource).not.toContain(duplicatedMechanic);
+		}
+		expect(topologySource).toContain("resolveExactTargetTopologyCapability");
+		expect(topologySource).not.toMatch(/AgentBrowser|agent-browser/);
+	});
+
+	test("operations delegates every Agent Browser native mechanic to the adapter owner", () => {
+		const operationsSource = readFileSync(
+			join(dirname(fileURLToPath(import.meta.url)), "browser-use-operations.ts"),
+			"utf8",
+		);
+		for (const duplicatedMechanic of [
+			'"--pin-tab"',
+			'["tab", "list", "--json"]',
+			"parseAgentBrowserSuccess",
+			"runAgentBrowserOperationSession",
+		]) {
+			expect(operationsSource).not.toContain(duplicatedMechanic);
+		}
+		expect(operationsSource).toContain("resolveExactTargetOperationCapability");
+		expect(operationsSource).not.toMatch(/AgentBrowser|agent-browser/);
+	});
+
+	test("every non-owner production module is free of Agent Browser native mechanics", () => {
+		const sourceRoot = dirname(fileURLToPath(import.meta.url));
+		for (const moduleName of [
+			"browser-use-discovery.ts",
+			"browser-use-operations.ts",
+			"browser-use-target-topology.ts",
+		]) {
+			const source = readFileSync(join(sourceRoot, moduleName), "utf8");
+			for (const mechanic of [
+				'"--pin-tab"',
+				'["tab", "list", "--json"]',
+				"deriveSessionName(",
+				"parseSuccessData(",
+				"parseAgentBrowserSuccess(",
+			]) {
+				expect(source, `${moduleName} duplicates ${mechanic}`).not.toContain(mechanic);
+			}
+		}
+	});
+
+	test(
+		"documented open and close argv reach handoff preflight while unsupported --run stays a usage error",
+		async () => {
+			const handoff = join(neutralCwd, "missing-handoff.json");
+			const state = join(neutralCwd, "target.json");
+			const open = await spawnBrowserUse([
+				"targets",
+				"open",
+				"--url",
+				"http://127.0.0.1:6123/iframe.html?id=story",
+				"--handoff",
+				handoff,
+				"--state",
+				state,
+				"--dry-run",
+				"--json",
+			]);
+			const close = await spawnBrowserUse([
+				"targets",
+				"close",
+				"--state",
+				state,
+				"--handoff",
+				handoff,
+				"--dry-run",
+				"--json",
+			]);
+			const unsupportedRun = await spawnBrowserUse([
+				"targets",
+				"open",
+				"--url",
+				"http://127.0.0.1:6123/",
+				"--handoff",
+				handoff,
+				"--run",
+				"run-a",
+				"--json",
+			]);
+
+			for (const result of [open, close]) {
+				expect(result.exitCode).toBe(20);
+				expect(parseJson(result.stdout).error).toMatchObject({
+					code: "target_topology_handoff_unreadable",
+				});
+				expect(result.stderr).toBe("");
+			}
+			expect(unsupportedRun.exitCode).toBe(2);
+			expect(parseJson(unsupportedRun.stdout).error).toMatchObject({
+				code: "usage_error",
+			});
 		},
 		SPAWN_TEST_TIMEOUT_MS,
 	);

@@ -91,6 +91,8 @@ export type PlaywrightTaskResult =
 			mutation_dispatched: boolean;
 	  };
 
+type PlaywrightTaskFailure = Extract<PlaywrightTaskResult, { ok: false }>;
+
 /**
  * Execute one read-only Playwright snapshot through a verified CDP handoff.
  *
@@ -257,7 +259,7 @@ function validateTask(
 	task: PlaywrightTask,
 ):
 	| { ok: true; allowedOrigins: ReadonlySet<string> }
-	| { ok: false; failure: PlaywrightTaskResult } {
+	| { ok: false; failure: PlaywrightTaskFailure } {
 	if (
 		task.handoff.contract_id !== HANDOFF_CONTRACT_ID ||
 		task.handoff.schema_version !== HANDOFF_SCHEMA_VERSION ||
@@ -361,9 +363,14 @@ function normalizedHttpUrl(value: string): string | undefined {
 export async function resolvePlaywrightTaskPageUrl(
 	runtime: PlaywrightTaskRuntime,
 	task: PlaywrightTask,
-): Promise<{ ok: true; url: string } | { ok: false }> {
+): Promise<
+	| { ok: true; url: string }
+	| { ok: false; failure: PlaywrightTaskFailure }
+> {
 	const validated = validateTask(task);
-	if (!validated.ok) return { ok: false };
+	if (!validated.ok) {
+		return { ok: false, failure: validated.failure };
+	}
 	const session = `browser-use-${task.run_id}`;
 	const executable = task.handoff.attachment.probe_executable;
 	const attach = await runNative(runtime, {
@@ -371,7 +378,15 @@ export async function resolvePlaywrightTaskPageUrl(
 		args: ["attach", `--cdp=${task.handoff.endpoint.http}`, `--session=${session}`],
 		timeoutMs: COMMAND_TIMEOUT_MS,
 	});
-	if (!commandSucceeded(attach)) return { ok: false };
+	if (!commandSucceeded(attach)) {
+		return {
+			ok: false,
+			failure: failure(
+				"playwright_task_connection_unstable",
+				"Playwright CLI could not attach to the verified CDP endpoint.",
+			),
+		};
+	}
 	const selected = await runSessionCommand(runtime, executable, session, [
 		"tab-select",
 		String(task.target_tab_index),
@@ -380,12 +395,49 @@ export async function resolvePlaywrightTaskPageUrl(
 		? await runSessionCommand(runtime, executable, session, ["snapshot"])
 		: undefined;
 	const detached = await runSessionCommand(runtime, executable, session, ["detach"]);
-	if (!commandSucceeded(snapshot) || !commandSucceeded(detached)) return { ok: false };
+	if (!commandSucceeded(detached)) {
+		return {
+			ok: false,
+			failure: failure(
+				"playwright_task_detach_failed",
+				"Playwright CLI target proof completed but the named session did not detach cleanly.",
+			),
+		};
+	}
+	if (!commandSucceeded(selected)) {
+		return {
+			ok: false,
+			failure: failure(
+				"playwright_task_tab_unavailable",
+				"Playwright CLI could not select the requested tab index.",
+			),
+		};
+	}
+	if (!commandSucceeded(snapshot)) {
+		return {
+			ok: false,
+			failure: failure(
+				"playwright_task_command_failed",
+				"Playwright CLI could not capture fresh target proof.",
+			),
+		};
+	}
 	const url = pageUrlOf(snapshot?.stdout ?? "");
 	const origin = pageOriginOf(snapshot?.stdout ?? "");
-	return url !== undefined && origin !== undefined && validated.allowedOrigins.has(origin)
-		? { ok: true, url }
-		: { ok: false };
+	if (
+		url !== undefined &&
+		origin !== undefined &&
+		validated.allowedOrigins.has(origin)
+	) {
+		return { ok: true, url };
+	}
+	return {
+		ok: false,
+		failure: failure(
+			"playwright_task_origin_refused",
+			"Playwright CLI snapshot evidence did not prove an allowed page origin.",
+		),
+	};
 }
 
 function resolveUniqueSemanticRef(
@@ -413,9 +465,7 @@ function resolveUniqueSemanticRef(
 }
 
 function booleanTrueResult(stdout: string): boolean {
-	return stdout
-		.split("\n")
-		.some((line) => line.trim() === "true");
+	return stdout.split("\n").some((line) => line.trim() === "true");
 }
 
 async function runSessionCommand(
@@ -442,13 +492,9 @@ async function runNative(
 	}
 }
 
-function commandSucceeded(
-	result: McporterCommandResult | undefined,
-): boolean {
+function commandSucceeded(result: McporterCommandResult | undefined): boolean {
 	return (
-		result !== undefined &&
-		result.exitCode === 0 &&
-		result.timedOut !== true
+		result !== undefined && result.exitCode === 0 && result.timedOut !== true
 	);
 }
 
@@ -457,7 +503,7 @@ function failure(
 	message: string,
 	outcome: "not-achieved" | "unknown" = "not-achieved",
 	mutationDispatched = false,
-): PlaywrightTaskResult {
+): PlaywrightTaskFailure {
 	return {
 		ok: false,
 		outcome,

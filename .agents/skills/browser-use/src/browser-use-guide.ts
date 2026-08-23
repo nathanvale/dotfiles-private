@@ -82,11 +82,15 @@ Page-action lifecycle (one adapter, one continuity):
 Advanced: explicit target discovery and operations (platform internals):
 
   browser-use targets list --mode handoff-bound --adapter <id> --json
+  browser-use targets open --url <exact-http(s)-url> --handoff <path>
   browser-use targets list ... --json | browser-use targets select --candidate <n>
+  browser-use targets close --handoff <path>
   browser-use operate snapshot|screenshot|emulate
 
 - Handoff-bound discovery attaches automatically and derives adapter binary +
   endpoint from the fresh envelope. --handoff remains an advanced override.
+- targets open/close derive one private XDG selected-state path from the
+  verified handoff run. --state is an advanced override for those commands.
 - Run correlation: pass --run-id (or BROWSER_USE_RUN_ID) plus
   BROWSER_USE_TARGET_STATE_DIR (or --state <path>) so select/status/operate
   share run-scoped target state; select fails closed without it.

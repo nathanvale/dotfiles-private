@@ -22,9 +22,13 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"targets-list",
 	"targets-select",
 	"targets-status",
+	"targets-open",
+	"targets-close",
 	"operate-snapshot",
 	"operate-screenshot",
 	"operate-emulate",
+	"qualification-manifest",
+	"qualification-validate",
 	// Platform families (platform plan 2026-07-21-002 U1).
 	"task-list",
 	// Wave-2 task run front door (release contract R6-R11, R23; flows F1, F7).
@@ -144,6 +148,17 @@ describe("U3 command contract", () => {
 			expect(affordances?.failure?.map((a) => a.id)).toEqual(
 				browserUseOperationFailureActions.map((a) => a.id),
 			);
+		}
+	});
+
+	test("topology commands advertise canonical XDG state and not the legacy target-state directory", () => {
+		const tree = discoveryTree();
+		for (const command of ["targets-open", "targets-close"] as const) {
+			const envNames = tree.commands[command]?.env_vars?.map(
+				(entry) => entry.name,
+			);
+			expect(envNames).toContain("XDG_STATE_HOME");
+			expect(envNames).not.toContain("BROWSER_USE_TARGET_STATE_DIR");
 		}
 	});
 });

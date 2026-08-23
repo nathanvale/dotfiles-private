@@ -18,6 +18,9 @@ import {
 	type BrowserUseLaneEvidenceClass,
 	type BrowserUseLaneEvidenceReference,
 	type BrowserUseLaneNativeImplementation,
+	type BrowserUseExactTargetOperationCapability,
+	type BrowserUseExactTargetTopologyCapability,
+	type BrowserUseRetainedLifecycle,
 	BROWSER_USE_ADAPTER_LANE_IDS,
 	BROWSER_USE_ADAPTER_LANE_TABLE,
 	BROWSER_USE_LANE_AUTH_METHODS,
@@ -34,6 +37,79 @@ import {
 	BROWSER_CONNECT_HANDOFF_CONTRACT_ID,
 	BROWSER_CONNECT_HANDOFF_SCHEMA_VERSION,
 } from "./command-contract";
+import {
+	exactTargetCapabilitiesForPrimaryLane,
+	migrateLegacyRetainedLifecycleForPrimaryLane,
+} from "./browser-use-agent-browser-capability";
+
+const EXACT_TARGET_TOPOLOGY_CAPABILITIES = {
+	"agent-browser": {
+		...exactTargetCapabilitiesForPrimaryLane.topology,
+	},
+} as const satisfies Partial<
+	Record<BrowserUseAdapterLaneId, BrowserUseExactTargetTopologyCapability>
+>;
+
+const EXACT_TARGET_OPERATION_CAPABILITIES = {
+	"agent-browser": {
+		...exactTargetCapabilitiesForPrimaryLane.operation,
+	},
+} as const satisfies Partial<
+	Record<BrowserUseAdapterLaneId, BrowserUseExactTargetOperationCapability>
+>;
+
+export function resolveExactTargetTopologyCapability(
+	adapterId: BrowserUseAdapterLaneId,
+):
+	| { ok: true; capability: BrowserUseExactTargetTopologyCapability }
+	| {
+			ok: false;
+			failure: {
+				code: "exact_target_topology_unsupported";
+				adapter_id: BrowserUseAdapterLaneId;
+			};
+	  } {
+	const capability = EXACT_TARGET_TOPOLOGY_CAPABILITIES[adapterId as "agent-browser"];
+	return capability
+		? { ok: true, capability }
+		: {
+				ok: false,
+				failure: { code: "exact_target_topology_unsupported", adapter_id: adapterId },
+			};
+}
+
+export function resolveExactTargetOperationCapability(
+	adapterId: BrowserUseAdapterLaneId,
+):
+	| { ok: true; capability: BrowserUseExactTargetOperationCapability }
+	| {
+			ok: false;
+			failure: {
+				code: "exact_target_operation_unsupported";
+				adapter_id: BrowserUseAdapterLaneId;
+			};
+	  } {
+	const capability = EXACT_TARGET_OPERATION_CAPABILITIES[adapterId as "agent-browser"];
+	return capability
+		? { ok: true, capability }
+		: {
+				ok: false,
+				failure: { code: "exact_target_operation_unsupported", adapter_id: adapterId },
+			};
+}
+
+/** Decode retired adapter-owned lifecycle state without leaking native shape to callers. */
+export function migrateLegacyRetainedLifecycle(input: {
+	adapterId: BrowserUseAdapterLaneId;
+	value: unknown;
+	runId: string;
+}): BrowserUseRetainedLifecycle | undefined {
+	if (input.adapterId !== exactTargetCapabilitiesForPrimaryLane.operation.adapter_id) {
+		return undefined;
+	}
+	return migrateLegacyRetainedLifecycleForPrimaryLane(input.value, input.runId);
+}
+
 
 // --- Lane views ---------------------------------------------------------------
 
@@ -571,4 +647,3 @@ export function resolveAdapterLane(
 		},
 	};
 }
-

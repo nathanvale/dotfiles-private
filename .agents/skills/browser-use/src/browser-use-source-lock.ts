@@ -14,6 +14,14 @@ export type BrowserUseSourceLockOwner = {
 	pid: number;
 	/** Wall-clock acquisition time used to recover hung owners. */
 	acquired_at_epoch_ms: number;
+	/** Last cooperative liveness proof for long-running qualification guards. */
+	heartbeat_at_epoch_ms?: number;
+	/** Procedural source generation admitted by the qualification campaign. */
+	generation?: number;
+	/** Reviewed source fixed point checked by the cooperative drift guard. */
+	source_digest?: string;
+	/** Reviewed manifest fixed point checked by the cooperative drift guard. */
+	manifest_digest?: string;
 };
 
 /** One held authoring lock whose release is fenced to its owner token. */
@@ -22,7 +30,24 @@ export type BrowserUseSourceLockHandle = {
 	owner: BrowserUseSourceLockOwner;
 	/** Release only when the persisted owner still matches this handle. */
 	release: () => Promise<BrowserUseSourceLockReleaseResult>;
+	/** Prove that this exact persisted fence and fixed point are still current. */
+	validate: (binding?: BrowserUseSourceLockBinding) => Promise<BrowserUseSourceLockValidationResult>;
+	/** Refresh only this exact persisted fence under the canonical transition lock. */
+	heartbeat: () => Promise<BrowserUseSourceLockValidationResult>;
 };
+
+export type BrowserUseSourceLockBinding = {
+	generation: number;
+	source_digest: string;
+	manifest_digest: string;
+};
+
+export type BrowserUseSourceLockValidationResult =
+	| { ok: true; owner: BrowserUseSourceLockOwner }
+	| {
+			ok: false;
+			reason: "ownership-lost" | "generation-stale" | "source-drift" | "manifest-drift" | "refresh-failed";
+	  };
 
 /** Fenced release result, including any lock that may require manual repair. */
 export type BrowserUseSourceLockReleaseResult =
@@ -110,7 +135,12 @@ function pidIsDead(pid: number): boolean {
 }
 
 function ownerIsStale(owner: BrowserUseSourceLockOwner): boolean {
-	return pidIsDead(owner.pid) ||
+	if (pidIsDead(owner.pid)) return true;
+	// Long-running qualification guards carry heartbeat identity. A live owner
+	// is never reclaimed merely because two reviewed runs take longer than the
+	// authoring-lock timeout; cooperative holders validate the exact token and
+	// fixed point at every session boundary.
+	return owner.heartbeat_at_epoch_ms === undefined &&
 		Date.now() - owner.acquired_at_epoch_ms > SOURCE_LOCK_STALE_MS;
 }
 
@@ -160,16 +190,25 @@ async function removeIfOwned(path: string, raw: string): Promise<boolean> {
 	}
 }
 
-function newOwner(): BrowserUseSourceLockOwner {
+function newOwner(binding?: BrowserUseSourceLockBinding): BrowserUseSourceLockOwner {
+	const now = Date.now();
 	return {
 		token: randomUUID(),
 		pid: process.pid,
-		acquired_at_epoch_ms: Date.now(),
+		acquired_at_epoch_ms: now,
+		heartbeat_at_epoch_ms: now,
+		...(binding ?? {}),
 	};
 }
 
-function repairMessage(subject: string, lockPath: string): string {
-	return `another ${subject} source mutation holds the catalog lock. Dead owners and locks older than 5 minutes are reclaimed automatically. If the lock persists, verify no source mutation is running, then remove ${lockPath} and ${lockPath}.reclaim.`;
+function repairMessage(
+	subject: string,
+	lockPath: string,
+	driftGuard: boolean,
+): string {
+	return driftGuard
+		? `another ${subject} observation holds the private source drift guard. Dead owners and stale claims are reclaimed automatically. This guard does not prevent repository edits; if it persists, verify no qualification observation is running, then remove ${lockPath} and ${lockPath}.reclaim.`
+		: `another ${subject} source mutation holds the catalog lock. Dead owners and locks older than 5 minutes are reclaimed automatically. If the lock persists, verify no source mutation is running, then remove ${lockPath} and ${lockPath}.reclaim.`;
 }
 
 async function acquireTransition(
@@ -198,8 +237,50 @@ function handleFor(
 	repair: string,
 ): BrowserUseSourceLockHandle {
 	let released = false;
+	let exactOwner = owner;
+	let exactRaw = ownerRaw;
+	const validate = async (
+		binding?: BrowserUseSourceLockBinding,
+	): Promise<BrowserUseSourceLockValidationResult> => {
+		const current = await readOwnedFile(lockPath);
+		if (current.status !== "present" || current.raw !== exactRaw) {
+			return { ok: false, reason: "ownership-lost" };
+		}
+		if (binding !== undefined) {
+			if (exactOwner.generation !== binding.generation) {
+				return { ok: false, reason: "generation-stale" };
+			}
+			if (exactOwner.source_digest !== binding.source_digest) {
+				return { ok: false, reason: "source-drift" };
+			}
+			if (exactOwner.manifest_digest !== binding.manifest_digest) {
+				return { ok: false, reason: "manifest-drift" };
+			}
+		}
+		return { ok: true, owner: exactOwner };
+	};
 	return {
-		owner,
+		get owner() {
+			return exactOwner;
+		},
+		validate,
+		heartbeat: async () => {
+			const transition = await acquireTransition(`${lockPath}.reclaim`);
+			if (transition === undefined) return { ok: false, reason: "refresh-failed" };
+			try {
+				const valid = await validate();
+				if (!valid.ok) return valid;
+				const refreshed = { ...exactOwner, heartbeat_at_epoch_ms: Date.now() };
+				await writeSourceFileAtomically({ path: lockPath, bytes: ownerBytes(refreshed) });
+				exactOwner = refreshed;
+				exactRaw = ownerBytes(refreshed);
+				return { ok: true, owner: refreshed };
+			} catch {
+				return { ok: false, reason: "refresh-failed" };
+			} finally {
+				await transition.release();
+			}
+		},
 		release: async () => {
 			if (released) return { ok: true, status: "released" };
 			const transitionPath = `${lockPath}.reclaim`;
@@ -220,9 +301,9 @@ function handleFor(
 			try {
 				const current = await readOwnedFile(lockPath);
 				if (current.status === "missing" ||
-					(current.status === "present" && current.raw !== ownerRaw)) {
+					(current.status === "present" && current.raw !== exactRaw)) {
 					result = { ok: true, status: "ownership-changed" };
-				} else if (current.status === "present" && await removeIfOwned(lockPath, ownerRaw)) {
+				} else if (current.status === "present" && await removeIfOwned(lockPath, exactRaw)) {
 					result = { ok: true, status: "released" };
 				} else {
 					result = {
@@ -260,10 +341,15 @@ function handleFor(
 export async function acquireSourceLock(input: {
 	lockPath: string;
 	subject: string;
+	binding?: BrowserUseSourceLockBinding;
 }): Promise<BrowserUseSourceLockAcquireResult> {
 	const transitionPath = `${input.lockPath}.reclaim`;
-	const repair = repairMessage(input.subject, input.lockPath);
-	const owner = newOwner();
+	const repair = repairMessage(
+		input.subject,
+		input.lockPath,
+		input.binding !== undefined,
+	);
+	const owner = newOwner(input.binding);
 	const direct = await createOwnedFile(input.lockPath, owner);
 	if (direct.status === "created") {
 		if (!(await transitionIsAbsent(transitionPath))) {

@@ -1,12 +1,15 @@
 import { createHash } from "node:crypto";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import type { BrowserAdapterId } from "./discovery-model";
 import { candidateIdOf } from "./browser-use-core";
 import {
 	acquireLease,
 	heartbeatLease,
+	listLeases,
 	releaseLease,
 	type LeaseDeps,
+	validateStoredLeaseForWrite,
+	withActivationEpochBarrier,
 } from "./browser-use-locks";
 import type { RunStoreDeps } from "./browser-use-runs";
 import type { BrowserUseLeasePayload } from "./browser-use-schemas";
@@ -17,8 +20,11 @@ import {
 	writeDurableFile,
 } from "./browser-use-store";
 
-const CONTRACT = "browser-use.browser-custody";
-const SCHEMA_VERSION = "1";
+export const BROWSER_USE_CUSTODY_CONTRACT_ID =
+	"browser-use.browser-custody" as const;
+export const BROWSER_USE_CUSTODY_SCHEMA_VERSION = "1" as const;
+const CONTRACT = BROWSER_USE_CUSTODY_CONTRACT_ID;
+const SCHEMA_VERSION = BROWSER_USE_CUSTODY_SCHEMA_VERSION;
 const PRIVATE_DIRECTORY_MODE = 0o700;
 const LOCK_STALE_AFTER_MS = 10_000;
 const MAX_REGISTRY_BYTES = 1024 * 1024;
@@ -31,6 +37,8 @@ export type BrowserWideMutation =
 	| "capture"
 	| "device-scale"
 	| "domain-policy"
+	| "snapshot"
+	| "target-topology"
 	| "viewport";
 
 /** Exact first-ownership evidence admitted before a target can be leased. */
@@ -91,7 +99,20 @@ export type BrowserCustodyRefusalCode =
 /** Target Lease acquisition outcome. */
 export type TargetOperationLeaseResult =
 	| { ok: true; lease: TargetOperationLease; first_ownership: boolean }
-	| { ok: false; code: BrowserCustodyRefusalCode; message: string };
+	| {
+			ok: false;
+			code: BrowserCustodyRefusalCode;
+			message: string;
+			cleanup_debt?: readonly string[];
+	  }
+	| {
+			ok: false;
+			code: "target_lease_store_failed";
+			message: string;
+			failure_stage: "first_ownership_persistence_failed_after_no_live_binding";
+			/** Short exact lease retained only for immediate creator rollback. */
+			cleanup_lease: TargetOperationLease;
+	  };
 
 /** Browser Lane acquisition outcome. */
 export type BrowserLaneLeaseResult =
@@ -108,15 +129,16 @@ export type BrowserLaneLeaseHeartbeatResult =
 	| { ok: true; lease: BrowserLaneLease }
 	| { ok: false; code: BrowserCustodyRefusalCode; message: string };
 
-type TargetBinding = {
+export type TargetBinding = {
 	owner_run_id: string | null;
 	status: "owned" | "released";
 	adapters: BrowserAdapterId[];
+	ownership_provenance: TargetOwnershipEvidence["kind"] | "legacy-unknown";
 	expires_at_epoch_ms: number;
 	revision: number;
 };
 
-type CustodyRegistry = {
+export type BrowserCustodyRegistry = {
 	contract: typeof CONTRACT;
 	schema_version: typeof SCHEMA_VERSION;
 	authority_id: string;
@@ -126,7 +148,7 @@ type CustodyRegistry = {
 
 type RegistryRead =
 	| { status: "missing" }
-	| { status: "present"; registry: CustodyRegistry }
+	| { status: "present"; registry: BrowserCustodyRegistry }
 	| { status: "invalid" };
 
 function hash(parts: readonly string[]): string {
@@ -180,7 +202,9 @@ function isAdapterId(value: unknown): value is BrowserAdapterId {
 	);
 }
 
-function parseRegistry(raw: string): CustodyRegistry | undefined {
+export function parseBrowserCustodyRegistry(
+	raw: string,
+): BrowserCustodyRegistry | undefined {
 	if (Buffer.byteLength(raw, "utf8") > MAX_REGISTRY_BYTES) return undefined;
 	let value: unknown;
 	try {
@@ -203,13 +227,28 @@ function parseRegistry(raw: string): CustodyRegistry | undefined {
 	}
 	const targets: Record<string, TargetBinding> = {};
 	for (const [targetRef, rawBinding] of Object.entries(value.targets)) {
+		const ownershipProvenance =
+			rawBinding !== null &&
+			isRecord(rawBinding) &&
+			(rawBinding.ownership_provenance === "adapter-creation-receipt" ||
+				rawBinding.ownership_provenance === "explicit-adoption")
+				? rawBinding.ownership_provenance
+				: rawBinding !== null &&
+						isRecord(rawBinding) &&
+						rawBinding.ownership_provenance === undefined
+					? "legacy-unknown"
+					: undefined;
 		if (
 			!/^[a-f0-9]{64}$/.test(targetRef) ||
 			!isRecord(rawBinding) ||
 			(rawBinding.status !== "owned" && rawBinding.status !== "released") ||
 			!(rawBinding.owner_run_id === null || typeof rawBinding.owner_run_id === "string") ||
+			(rawBinding.status === "owned"
+				? typeof rawBinding.owner_run_id !== "string" || rawBinding.owner_run_id === ""
+				: rawBinding.owner_run_id !== null) ||
 			!Array.isArray(rawBinding.adapters) ||
 			!rawBinding.adapters.every(isAdapterId) ||
+			ownershipProvenance === undefined ||
 			typeof rawBinding.expires_at_epoch_ms !== "number" ||
 			!Number.isSafeInteger(rawBinding.expires_at_epoch_ms) ||
 			rawBinding.expires_at_epoch_ms < 0 ||
@@ -223,6 +262,7 @@ function parseRegistry(raw: string): CustodyRegistry | undefined {
 			owner_run_id: rawBinding.owner_run_id,
 			status: rawBinding.status,
 			adapters: [...new Set(rawBinding.adapters)],
+			ownership_provenance: ownershipProvenance,
 			expires_at_epoch_ms: rawBinding.expires_at_epoch_ms,
 			revision: rawBinding.revision,
 		};
@@ -243,6 +283,144 @@ function registryPaths(deps: RunStoreDeps) {
 		record: join(directory, "registry.json"),
 		lock: join(deps.paths.runtime.locksDir, "browser-custody.lock"),
 	};
+}
+
+type CustodyLockFailure = { ok: false; failure: StoreFailure };
+
+async function withCustodyRegistryLock<T extends { ok: boolean }>(
+	deps: RunStoreDeps,
+	holderId: string,
+	body: () => Promise<T>,
+): Promise<T | CustodyLockFailure> {
+	const paths = registryPaths(deps);
+	const outcome = await withActivationEpochBarrier(
+		deps,
+		{ holderId: `browser-custody-epoch-${holderId}` },
+		async () =>
+			await withExclusiveFileLock<T>(
+				deps.fs,
+				{
+					lockPath: paths.lock,
+					holderId,
+					staleAfterMs: LOCK_STALE_AFTER_MS,
+					clock: deps.clock,
+				},
+				body,
+			),
+	);
+	if (!outcome.ok && "code" in outcome && outcome.code === "epoch_store_failed") {
+		return {
+				ok: false,
+				failure: {
+					code: "store_lock_contended",
+					message: outcome.message,
+				},
+			};
+	}
+	return outcome as T | CustodyLockFailure;
+}
+
+export type BrowserCustodySnapshot = {
+	root_path: string;
+	root_realpath: string;
+	registry_path: string;
+	registry_raw: string;
+	lease_records: Array<{ name: string; raw: string }>;
+	native_proof_digest: string;
+};
+
+export type BrowserCustodyNoFollowSnapshot = {
+	root_path: string;
+	root_realpath: string;
+	registry_raw: string;
+	lease_records: Array<{ name: string; raw: string }>;
+	proof_digest: string;
+};
+
+function isContained(root: string, candidate: string): boolean {
+	const rel = relative(root, candidate);
+	return rel === "" || (!rel.startsWith("..") && resolve(root, rel) === candidate);
+}
+
+async function exactRegularPath(
+	deps: RunStoreDeps,
+	path: string,
+	kind: "file" | "directory",
+	root: string,
+): Promise<boolean> {
+	const stat = await deps.fs.lstat(path);
+	if (stat?.kind !== kind) return false;
+	const resolvedPath = await deps.fs.realpath(path);
+	return resolvedPath === path && isContained(root, resolvedPath);
+}
+
+/**
+ * Capture the complete custody registry and lease set under the same global
+ * activation barrier every canonical registry and lease mutation honors.
+ */
+export async function captureBrowserCustodySnapshot(
+	deps: RunStoreDeps & {
+		readNoFollowSnapshot: (
+			stateRoot: string,
+		) => Promise<BrowserCustodyNoFollowSnapshot | undefined>;
+	},
+): Promise<{ ok: true; snapshot: BrowserCustodySnapshot } | CustodyLockFailure> {
+	const paths = registryPaths(deps);
+	const rootPath = deps.paths.resolution.roots.state;
+	const rootRealpath = await deps.fs.realpath(rootPath);
+	if (rootRealpath !== rootPath) {
+		return {
+			ok: false,
+			failure: {
+				code: "store_record_corrupt",
+				message: "Browser custody root is aliased or unavailable.",
+			},
+		};
+	}
+	const outcome = await withActivationEpochBarrier(
+		deps,
+		{ holderId: "browser-custody-snapshot" },
+		async () => {
+			const snapshot = await deps.readNoFollowSnapshot(rootPath);
+			if (
+				!snapshot ||
+				snapshot.root_path !== rootPath ||
+				snapshot.root_realpath !== rootRealpath ||
+				!/^[a-f0-9]{64}$/.test(snapshot.proof_digest)
+			) {
+				return {
+					ok: false as const,
+					failure: {
+						code: "store_record_corrupt" as const,
+						message: "Browser custody no-follow snapshot was unavailable or malformed.",
+					},
+				};
+			}
+			return {
+				ok: true as const,
+				snapshot: {
+					root_path: rootPath,
+					root_realpath: rootRealpath,
+					registry_path: paths.record,
+					registry_raw: snapshot.registry_raw,
+					lease_records: snapshot.lease_records,
+					native_proof_digest: snapshot.proof_digest,
+				},
+			};
+		},
+	);
+	if (!outcome.ok && "code" in outcome && outcome.code === "epoch_store_failed") {
+		return {
+				ok: false,
+				failure: {
+					code: "store_lock_contended",
+					message: outcome.message,
+				},
+			};
+	}
+	return outcome as
+		| { ok: true; snapshot: BrowserCustodySnapshot }
+		| CustodyLockFailure;
 }
 
 async function ensureRegistryDirectories(
@@ -271,13 +449,13 @@ async function readRegistry(
 	const read = await readDurableFile(deps.fs, path);
 	if (read.status === "missing") return { status: "missing" };
 	if (read.status === "unreadable") return { status: "invalid" };
-	const registry = parseRegistry(read.raw);
+		const registry = parseBrowserCustodyRegistry(read.raw);
 	return registry === undefined
 		? { status: "invalid" }
 		: { status: "present", registry };
 }
 
-function emptyRegistry(authorityId: string): CustodyRegistry {
+function emptyRegistry(authorityId: string): BrowserCustodyRegistry {
 	return {
 		contract: CONTRACT,
 		schema_version: SCHEMA_VERSION,
@@ -333,36 +511,68 @@ function evidenceMatches(
 		: evidence.adapter_id === adapterId;
 }
 
+async function classifyAuthorityTransition(
+	deps: RunStoreDeps,
+	registry: BrowserCustodyRegistry,
+	nextAuthorityId: string,
+): Promise<
+	| { ok: true; transition: "same-authority" | "rehome-authority" }
+	| Extract<TargetOperationLeaseResult, { ok: false }>
+> {
+	if (registry.authority_id === nextAuthorityId) {
+		return { ok: true, transition: "same-authority" };
+	}
+	const now = deps.clock();
+	const hasLiveBinding = Object.values(registry.targets).some(
+		(binding) =>
+			binding.status === "owned" && binding.expires_at_epoch_ms > now,
+	);
+	const oldAuthorityId = registry.authority_id;
+	const hasLiveAuthorityLease = (await listLeases(deps)).some(
+		(lease) =>
+			lease.live &&
+			(lease.key.startsWith(
+				`browser-target-operation:${oldAuthorityId}:`,
+			) || lease.key === `browser-lane:${oldAuthorityId}`),
+	);
+	if (hasLiveBinding || hasLiveAuthorityLease) {
+		return {
+			ok: false,
+			code: "browser_authority_changed",
+			message:
+				"Agent Chrome Browser authority changed while old-authority target or Browser Lane custody remains live.",
+		};
+	}
+	return { ok: true, transition: "rehome-authority" };
+}
+
 async function bindOrAuthorizeTarget(
 	deps: RunStoreDeps,
 	input: {
 		authorityId: string;
 		runId: string;
 		adapterId: BrowserAdapterId;
-			rawTargetId: string;
-			ttlMs: number;
-			ownershipEvidence?: TargetOwnershipEvidence;
+		rawTargetId: string;
+		ttlMs: number;
+		ownershipEvidence?: TargetOwnershipEvidence;
 	},
 ): Promise<
 	| { ok: true; firstOwnership: boolean }
-	| Extract<TargetOperationLeaseResult, { ok: false }>
+	| (Extract<TargetOperationLeaseResult, { ok: false }> & {
+			firstOwnershipPersistenceFailedAfterNoLiveBinding?: true;
+	  })
 > {
 	const paths = registryPaths(deps);
 	if (!(await ensureRegistryDirectories(deps, paths.directory))) {
 		return storeFailure();
 	}
 	const targetRef = targetRefOf(input.rawTargetId);
-	const outcome = await withExclusiveFileLock<
+	const outcome = await withCustodyRegistryLock<
 		| { ok: true; firstOwnership: boolean }
 		| Extract<TargetOperationLeaseResult, { ok: false }>
 	>(
-		deps.fs,
-		{
-			lockPath: paths.lock,
-			holderId: `browser-custody-${input.runId}`,
-			staleAfterMs: LOCK_STALE_AFTER_MS,
-			clock: deps.clock,
-		},
+		deps,
+		`browser-custody-${input.runId}`,
 		async () => {
 			const read = await readRegistry(deps, paths.record);
 			if (read.status === "invalid") return storeFailure();
@@ -370,26 +580,19 @@ async function bindOrAuthorizeTarget(
 				read.status === "missing"
 					? emptyRegistry(input.authorityId)
 					: read.registry;
-			if (registry.authority_id !== input.authorityId) {
-				const now = deps.clock();
-				if (
-					Object.values(registry.targets).some(
-						(binding) =>
-							binding.status === "owned" &&
-							binding.expires_at_epoch_ms > now,
-					)
-				) {
-					return {
-						ok: false,
-						code: "browser_authority_changed",
-						message:
-							"Agent Chrome Browser authority changed while Target Leases remain owned.",
-					};
-				}
+			const authorityTransition = await classifyAuthorityTransition(
+				deps,
+				registry,
+				input.authorityId,
+			);
+			if (!authorityTransition.ok) return authorityTransition;
+			const registryAuthorityMatches =
+				authorityTransition.transition === "same-authority";
+			if (authorityTransition.transition === "rehome-authority") {
 				registry = emptyRegistry(input.authorityId);
 			}
 			const now = deps.clock();
-			const expiresAt = now + input.ttlMs;
+			const requestedExpiresAt = now + input.ttlMs;
 			const current = registry.targets[targetRef];
 			if (
 				current?.status === "owned" &&
@@ -402,21 +605,25 @@ async function bindOrAuthorizeTarget(
 						message: "The exact Browser target is owned by another run.",
 					};
 				}
+				const expiresAt = Math.max(
+					current.expires_at_epoch_ms,
+					requestedExpiresAt,
+				);
 				if (
 					!current.adapters.includes(input.adapterId) ||
 					current.expires_at_epoch_ms !== expiresAt
 				) {
-					const next: CustodyRegistry = {
+					const next: BrowserCustodyRegistry = {
 						...registry,
 						revision: registry.revision + 1,
 						targets: {
 							...registry.targets,
-								[targetRef]: {
-									...current,
-									adapters: current.adapters.includes(input.adapterId)
-										? current.adapters
-										: [...current.adapters, input.adapterId],
-									expires_at_epoch_ms: expiresAt,
+							[targetRef]: {
+								...current,
+								adapters: current.adapters.includes(input.adapterId)
+									? current.adapters
+									: [...current.adapters, input.adapterId],
+								expires_at_epoch_ms: expiresAt,
 								revision: current.revision + 1,
 							},
 						},
@@ -429,9 +636,11 @@ async function bindOrAuthorizeTarget(
 				}
 				return { ok: true, firstOwnership: false };
 			}
+			const ownershipEvidence = input.ownershipEvidence;
 			if (
+				ownershipEvidence === undefined ||
 				!evidenceMatches(
-					input.ownershipEvidence,
+					ownershipEvidence,
 					input.runId,
 					input.adapterId,
 					input.rawTargetId,
@@ -445,27 +654,41 @@ async function bindOrAuthorizeTarget(
 				};
 			}
 			const nextRevision = (current?.revision ?? 0) + 1;
-			const next: CustodyRegistry = {
+			const next: BrowserCustodyRegistry = {
 				...registry,
 				revision: registry.revision + 1,
 				targets: {
 					...registry.targets,
 					[targetRef]: {
-							owner_run_id: input.runId,
-							status: "owned",
-							adapters: [input.adapterId],
-							expires_at_epoch_ms: expiresAt,
+						owner_run_id: input.runId,
+						status: "owned",
+						adapters: [input.adapterId],
+						ownership_provenance: ownershipEvidence.kind,
+						expires_at_epoch_ms: requestedExpiresAt,
 						revision: nextRevision,
 					},
 				},
 			};
+			// The live-owner branch above has already returned. A missing, released,
+			// or expired record is therefore a proven no-live-owner first-ownership
+			// attempt. Authority drift remains ineligible for cleanup authority.
+			const noLiveStandingOwner = registryAuthorityMatches;
 			const written = await writeDurableFile(deps.fs, {
 				path: paths.record,
 				contents: `${JSON.stringify(next)}\n`,
 			});
 			return written.ok
 				? { ok: true, firstOwnership: true }
-				: storeFailure(written.failure);
+				: {
+						...storeFailure(written.failure),
+						...(noLiveStandingOwner &&
+						ownershipEvidence.kind === "adapter-creation-receipt"
+							? {
+									firstOwnershipPersistenceFailedAfterNoLiveBinding:
+										true as const,
+								}
+							: {}),
+					};
 		},
 	);
 	return !outcome.ok && "failure" in outcome
@@ -490,6 +713,7 @@ export async function acquireTargetOperationLease(
 		operation: TargetOperation;
 		ttlMs: number;
 		ownershipEvidence?: TargetOwnershipEvidence;
+		retainLeaseOnBindingFailure?: boolean;
 	},
 ): Promise<TargetOperationLeaseResult> {
 	const targetRef = targetRefOf(input.rawTargetId);
@@ -497,7 +721,13 @@ export async function acquireTargetOperationLease(
 		key: `browser-target-operation:${input.authorityId}:${targetRef}`,
 		holderId: `browser-target-run:${input.runId}`,
 		ttlMs: input.ttlMs,
-		scope: { target_id: targetRef },
+		scope: {
+			target_id: targetRef,
+			...(input.retainLeaseOnBindingFailure === true &&
+			input.ownershipEvidence?.kind === "adapter-creation-receipt"
+				? { topology_cleanup: "adapter-creation" as const }
+				: {}),
+		},
 	});
 	if (!operationLease.ok) {
 		return {
@@ -512,24 +742,135 @@ export async function acquireTargetOperationLease(
 					: operationLease.message,
 		};
 	}
+	const lease: TargetOperationLease = {
+		contract: CONTRACT,
+		schema_version: SCHEMA_VERSION,
+		authority_id: input.authorityId,
+		target_ref: targetRef,
+		run_id: input.runId,
+		adapter_id: input.adapterId,
+		operation: input.operation,
+		lease: operationLease.lease,
+	};
 	const binding = await bindOrAuthorizeTarget(deps, input);
 	if (!binding.ok) {
+		if (
+			input.retainLeaseOnBindingFailure === true &&
+			binding.firstOwnershipPersistenceFailedAfterNoLiveBinding === true
+		) {
+			return {
+				ok: false,
+				code: "target_lease_store_failed",
+				message: binding.message,
+				failure_stage:
+					"first_ownership_persistence_failed_after_no_live_binding",
+				cleanup_lease: lease,
+			};
+		}
 		await releaseLease(deps, operationLease.lease);
 		return binding;
 	}
 	return {
 		ok: true,
 		first_ownership: binding.firstOwnership,
-		lease: {
-			contract: CONTRACT,
-			schema_version: SCHEMA_VERSION,
-			authority_id: input.authorityId,
-			target_ref: targetRef,
-			run_id: input.runId,
+		lease,
+	};
+}
+
+/**
+ * Retry only the durable creator-ownership write while an exact cleanup lease
+ * from the narrow first-write failure is still held. This never performs a
+ * browser mutation and never admits conflict or invalid-evidence failures.
+ */
+export async function persistTargetOwnershipUnderCleanupLease(
+	deps: RunStoreDeps,
+	input: {
+		lease: TargetOperationLease;
+		authorityId: string;
+		runId: string;
+		adapterId: BrowserAdapterId;
+		rawTargetId: string;
+		ttlMs: number;
+	},
+): Promise<{ ok: true } | Extract<TargetOperationLeaseResult, { ok: false }>> {
+	if (
+		input.lease.authority_id !== input.authorityId ||
+		input.lease.run_id !== input.runId ||
+		input.lease.adapter_id !== input.adapterId ||
+		input.lease.target_ref !== targetRefOf(input.rawTargetId) ||
+		input.lease.lease.key !==
+			`browser-target-operation:${input.authorityId}:${input.lease.target_ref}` ||
+		input.lease.lease.holder_id !== `browser-target-run:${input.runId}` ||
+		input.lease.lease.scope.target_id !== input.lease.target_ref ||
+		input.lease.lease.scope.topology_cleanup !== "adapter-creation"
+	) {
+		return {
+			ok: false,
+			code: "target_ownership_evidence_invalid",
+			message: "Cleanup ownership retry does not match the exact held lease.",
+		};
+	}
+	const refreshed = await heartbeatLease(deps, input.lease.lease, {
+		ttlMs: input.ttlMs,
+		requireExactPayload: true,
+	});
+	if (!refreshed.ok) {
+		return {
+			ok: false,
+			code: "target_lease_lost",
+			message:
+				"The exact topology-cleanup lease is no longer live and current.",
+		};
+	}
+	input = {
+		...input,
+		lease: { ...input.lease, lease: refreshed.lease },
+	};
+	const refreshedPresented = {
+		fencing_token: input.lease.lease.fencing_token,
+		activation_epoch: input.lease.lease.activation_epoch,
+		holderId: input.lease.lease.holder_id,
+	};
+	const binding = await bindOrAuthorizeTarget(deps, {
+		authorityId: input.authorityId,
+		runId: input.runId,
+		adapterId: input.adapterId,
+		rawTargetId: input.rawTargetId,
+		ttlMs: input.ttlMs,
+		ownershipEvidence: {
+			kind: "adapter-creation-receipt",
 			adapter_id: input.adapterId,
-			operation: input.operation,
-			lease: operationLease.lease,
+			run_id: input.runId,
+			raw_target_id: input.rawTargetId,
 		},
+	});
+	if (!binding.ok) return binding;
+	const after = await validateStoredLeaseForWrite(deps, {
+		key: input.lease.lease.key,
+		presented: refreshedPresented,
+	});
+	if (after.ok) return { ok: true };
+	if (binding.firstOwnership) {
+		const rollback = await releaseExactTargetOwnershipByRef(deps, {
+			authorityId: input.authorityId,
+			runId: input.runId,
+			targetRef: input.lease.target_ref,
+		});
+		if (!rollback.ok || rollback.released !== true) {
+			return {
+				ok: false,
+				code: "target_lease_lost",
+				message:
+					"The topology-cleanup lease was lost and newly written ownership rollback is unresolved.",
+				cleanup_debt: ["target-ownership-rollback-failed"],
+			};
+		}
+	}
+	return {
+		ok: false,
+		code: "target_lease_lost",
+		message:
+			"The exact topology-cleanup lease was lost during ownership persistence; newly written ownership was rolled back.",
 	};
 }
 
@@ -543,7 +884,7 @@ export async function acquireTargetOperationLease(
 export async function releaseTargetOperationLease(
 	deps: LeaseDeps,
 	lease: TargetOperationLease,
-): Promise<{ ok: true }> {
+): Promise<{ ok: true; released_at_epoch_ms?: number }> {
 	return await releaseLease(deps, lease.lease);
 }
 
@@ -554,24 +895,17 @@ async function extendTargetBinding(
 		ttlMs: number;
 	},
 ): Promise<
-	| { ok: true }
-	| Extract<TargetOperationLeaseHeartbeatResult, { ok: false }>
+	{ ok: true } | Extract<TargetOperationLeaseHeartbeatResult, { ok: false }>
 > {
 	const paths = registryPaths(deps);
 	if (!(await ensureRegistryDirectories(deps, paths.directory))) {
 		return storeFailure();
 	}
-	const outcome = await withExclusiveFileLock<
-		| { ok: true }
-		| Extract<TargetOperationLeaseHeartbeatResult, { ok: false }>
+	const outcome = await withCustodyRegistryLock<
+		{ ok: true } | Extract<TargetOperationLeaseHeartbeatResult, { ok: false }>
 	>(
-		deps.fs,
-		{
-			lockPath: paths.lock,
-			holderId: `browser-custody-heartbeat-${input.lease.run_id}`,
-			staleAfterMs: LOCK_STALE_AFTER_MS,
-			clock: deps.clock,
-		},
+		deps,
+		`browser-custody-heartbeat-${input.lease.run_id}`,
 		async () => {
 			const read = await readRegistry(deps, paths.record);
 			if (read.status !== "present") return storeFailure();
@@ -596,14 +930,17 @@ async function extendTargetBinding(
 						"The exact Browser target is no longer owned by this run and adapter.",
 				};
 			}
-			const next: CustodyRegistry = {
+			const next: BrowserCustodyRegistry = {
 				...read.registry,
 				revision: read.registry.revision + 1,
 				targets: {
 					...read.registry.targets,
 					[input.lease.target_ref]: {
 						...binding,
-						expires_at_epoch_ms: deps.clock() + input.ttlMs,
+						expires_at_epoch_ms: Math.max(
+							binding.expires_at_epoch_ms,
+							deps.clock() + input.ttlMs,
+						),
 						revision: binding.revision + 1,
 					},
 				},
@@ -665,21 +1002,20 @@ export async function heartbeatTargetOperationLease(
 export async function releaseRunTargetOwnership(
 	deps: RunStoreDeps,
 	runId: string,
-): Promise<{ ok: true; released: number } | Extract<TargetOperationLeaseResult, { ok: false }>> {
+): Promise<
+	| { ok: true; released: number }
+	| Extract<TargetOperationLeaseResult, { ok: false }>
+> {
 	const paths = registryPaths(deps);
 	if (!(await ensureRegistryDirectories(deps, paths.directory))) {
 		return storeFailure();
 	}
-	const outcome = await withExclusiveFileLock<
-		{ ok: true; released: number } | Extract<TargetOperationLeaseResult, { ok: false }>
+	const outcome = await withCustodyRegistryLock<
+		| { ok: true; released: number }
+		| Extract<TargetOperationLeaseResult, { ok: false }>
 	>(
-		deps.fs,
-		{
-			lockPath: paths.lock,
-			holderId: `browser-custody-release-${runId}`,
-			staleAfterMs: LOCK_STALE_AFTER_MS,
-			clock: deps.clock,
-		},
+		deps,
+		`browser-custody-release-${runId}`,
 		async () => {
 			const read = await readRegistry(deps, paths.record);
 			if (read.status === "invalid") return storeFailure();
@@ -695,9 +1031,9 @@ export async function releaseRunTargetOwnership(
 						targetRef,
 						{
 							...binding,
-								owner_run_id: null,
-								status: "released" as const,
-								expires_at_epoch_ms: deps.clock(),
+							owner_run_id: null,
+							status: "released" as const,
+							expires_at_epoch_ms: deps.clock(),
 							revision: binding.revision + 1,
 						},
 					];
@@ -720,6 +1056,257 @@ export async function releaseRunTargetOwnership(
 	return !outcome.ok && "failure" in outcome
 		? storeFailure(outcome.failure)
 		: outcome;
+}
+
+/**
+ * Release one exact target binding owned by one run without affecting another
+ * target the same run or another run owns.
+ */
+export async function releaseExactTargetOwnershipByRef(
+	deps: RunStoreDeps,
+	input: { authorityId: string; runId: string; targetRef: string },
+): Promise<
+	| { ok: true; released: boolean }
+	| Extract<TargetOperationLeaseResult, { ok: false }>
+> {
+	const paths = registryPaths(deps);
+	if (!(await ensureRegistryDirectories(deps, paths.directory))) {
+		return storeFailure();
+	}
+	if (!/^[a-f0-9]{64}$/.test(input.targetRef)) return storeFailure();
+	const targetRef = input.targetRef;
+	const outcome = await withCustodyRegistryLock<
+		| { ok: true; released: boolean }
+		| Extract<TargetOperationLeaseResult, { ok: false }>
+	>(
+		deps,
+		`browser-custody-release-${input.runId}`,
+		async () => {
+			const read = await readRegistry(deps, paths.record);
+			if (read.status === "invalid") return storeFailure();
+			if (read.status === "missing") return { ok: true, released: false };
+			if (read.registry.authority_id !== input.authorityId) {
+				return {
+					ok: false,
+					code: "browser_authority_changed",
+					message:
+						"The exact Browser authority does not match the custody registry.",
+				};
+			}
+			const binding = read.registry.targets[targetRef];
+			if (binding?.status !== "owned" || binding.owner_run_id !== input.runId) {
+				return { ok: true, released: false };
+			}
+			const next: BrowserCustodyRegistry = {
+				...read.registry,
+				revision: read.registry.revision + 1,
+				targets: {
+					...read.registry.targets,
+					[targetRef]: {
+						...binding,
+						owner_run_id: null,
+						status: "released",
+						expires_at_epoch_ms: deps.clock(),
+						revision: binding.revision + 1,
+					},
+				},
+			};
+			const written = await writeDurableFile(deps.fs, {
+				path: paths.record,
+				contents: `${JSON.stringify(next)}\n`,
+			});
+			return written.ok
+				? { ok: true, released: true }
+				: storeFailure(written.failure);
+		},
+	);
+	return !outcome.ok && "failure" in outcome
+		? storeFailure(outcome.failure)
+		: outcome;
+}
+
+/** Private repair projection of opaque target refs still owned by one run. */
+export async function ownedTargetRefsForRun(
+	deps: RunStoreDeps,
+	input: {
+		authorityId: string;
+		runId: string;
+		adapterId: BrowserAdapterId;
+	},
+): Promise<
+	| { ok: true; targetRefs: readonly string[] }
+	| Extract<TargetOperationLeaseResult, { ok: false }>
+> {
+	const paths = registryPaths(deps);
+	if (!(await ensureRegistryDirectories(deps, paths.directory))) {
+		return storeFailure();
+	}
+	const read = await readRegistry(deps, paths.record);
+	if (read.status === "invalid") return storeFailure();
+	const authorityTransition =
+		read.status === "present"
+			? await classifyAuthorityTransition(
+					deps,
+					read.registry,
+					input.authorityId,
+				)
+			: { ok: true as const, transition: "same-authority" as const };
+	if (!authorityTransition.ok) return authorityTransition;
+	const registryRefs =
+		read.status === "present" &&
+		authorityTransition.transition === "same-authority"
+			? Object.entries(read.registry.targets)
+					.filter(
+						([, binding]) =>
+							binding.status === "owned" &&
+							binding.owner_run_id === input.runId &&
+							binding.adapters.includes(input.adapterId) &&
+							binding.ownership_provenance === "adapter-creation-receipt",
+					)
+					.map(([targetRef]) => targetRef)
+			: [];
+	const cleanupRefs = (await listLeases(deps))
+		.filter(
+			(lease) =>
+				lease.live &&
+				lease.holder_id === `browser-target-run:${input.runId}` &&
+				lease.key.startsWith(
+					`browser-target-operation:${input.authorityId}:`,
+				) &&
+				lease.scope.topology_cleanup === "adapter-creation" &&
+				typeof lease.scope.target_id === "string" &&
+				/^[a-f0-9]{64}$/.test(lease.scope.target_id),
+		)
+		.map((lease) => lease.scope.target_id as string);
+	return {
+		ok: true,
+		targetRefs: [...new Set([...registryRefs, ...cleanupRefs])].sort(),
+	};
+}
+
+/** Private exact check for a persistent adapter-created registry owner. */
+export async function hasExactCreatedTargetOwnership(
+	deps: RunStoreDeps,
+	input: {
+		authorityId: string;
+		runId: string;
+		adapterId: BrowserAdapterId;
+		targetRef: string;
+	},
+): Promise<
+	| { ok: true; owned: boolean }
+	| Extract<TargetOperationLeaseResult, { ok: false }>
+> {
+	const read = await readRegistry(deps, registryPaths(deps).record);
+	if (read.status === "invalid") return storeFailure();
+	if (read.status === "missing") return { ok: true, owned: false };
+	if (read.registry.authority_id !== input.authorityId) {
+		return {
+			ok: false,
+			code: "browser_authority_changed",
+			message:
+				"The exact Browser authority does not match the custody registry.",
+		};
+	}
+	const binding = read.registry.targets[input.targetRef];
+	return {
+		ok: true,
+		owned:
+			binding?.status === "owned" &&
+			binding.owner_run_id === input.runId &&
+			binding.adapters.includes(input.adapterId) &&
+			binding.ownership_provenance === "adapter-creation-receipt",
+	};
+}
+
+/** Resolve one exact retained topology-cleanup lease for canonical close. */
+export async function retainedTopologyCleanupLeaseForRun(
+	deps: RunStoreDeps,
+	input: { authorityId: string; runId: string; targetRef: string },
+): Promise<TargetOperationLease | undefined> {
+	const matches = (await listLeases(deps)).filter(
+		(lease) =>
+			lease.live &&
+			lease.holder_id === `browser-target-run:${input.runId}` &&
+			lease.key ===
+				`browser-target-operation:${input.authorityId}:${input.targetRef}` &&
+			lease.scope.target_id === input.targetRef &&
+			lease.scope.topology_cleanup === "adapter-creation",
+	);
+	if (matches.length !== 1) return undefined;
+	const lease = matches[0]!;
+	return {
+		contract: CONTRACT,
+		schema_version: SCHEMA_VERSION,
+		authority_id: input.authorityId,
+		target_ref: input.targetRef,
+		run_id: input.runId,
+		adapter_id: "agent-browser",
+		operation: "close",
+		lease: {
+			key: lease.key,
+			holder_id: lease.holder_id,
+			fencing_token: lease.fencing_token,
+			activation_epoch: lease.activation_epoch,
+			acquired_at_epoch_ms: lease.acquired_at_epoch_ms,
+			heartbeat_at_epoch_ms: lease.heartbeat_at_epoch_ms,
+			expires_at_epoch_ms: lease.expires_at_epoch_ms,
+			recovered_from: lease.recovered_from,
+			scope: lease.scope,
+		},
+	};
+}
+
+/** Revalidate and extend one exact retained topology-cleanup lease. */
+export async function heartbeatRetainedTopologyCleanupLease(
+	deps: RunStoreDeps,
+	lease: TargetOperationLease,
+	ttlMs: number,
+): Promise<TargetOperationLeaseResult> {
+	if (
+		lease.lease.key !==
+			`browser-target-operation:${lease.authority_id}:${lease.target_ref}` ||
+		lease.lease.holder_id !== `browser-target-run:${lease.run_id}` ||
+		lease.lease.scope.target_id !== lease.target_ref ||
+		lease.lease.scope.topology_cleanup !== "adapter-creation"
+	) {
+		return {
+			ok: false,
+			code: "target_ownership_evidence_invalid",
+			message: "Retained topology-cleanup lease identity is invalid.",
+		};
+	}
+	const heartbeat = await heartbeatLease(deps, lease.lease, {
+		ttlMs,
+		requireExactPayload: true,
+	});
+	if (!heartbeat.ok) {
+		return {
+			ok: false,
+			code:
+				heartbeat.code === "lease_store_failed"
+					? "target_lease_store_failed"
+					: "target_lease_lost",
+			message: "Retained topology-cleanup lease is no longer live and current.",
+		};
+	}
+	return {
+		ok: true,
+		first_ownership: false,
+		lease: { ...lease, lease: heartbeat.lease, operation: "close" },
+	};
+}
+
+/** Raw-id convenience wrapper; durable callers should prefer the opaque ref. */
+export async function releaseExactTargetOwnership(
+	deps: RunStoreDeps,
+	input: { authorityId: string; runId: string; rawTargetId: string },
+) {
+	return await releaseExactTargetOwnershipByRef(deps, {
+		authorityId: input.authorityId,
+		runId: input.runId,
+		targetRef: targetRefOf(input.rawTargetId),
+	});
 }
 
 /**
@@ -774,12 +1361,12 @@ export async function acquireBrowserLaneLease(
  *
  * @param deps - Durable lease dependencies
  * @param lease - Exact Browser Lane lease returned by acquisition
- * @returns Confirmation that the Browser Lane lease was removed
+ * @returns Exact durable release epoch when this holder's live lease was released
  */
 export async function releaseBrowserLaneLease(
 	deps: LeaseDeps,
 	lease: BrowserLaneLease,
-): Promise<{ ok: true }> {
+): Promise<{ ok: true; released_at_epoch_ms?: number }> {
 	return await releaseLease(deps, lease.lease);
 }
 

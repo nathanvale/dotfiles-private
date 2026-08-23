@@ -22,6 +22,44 @@ async function lockFixture(): Promise<{ root: string; lockPath: string }> {
 }
 
 describe("source authoring lock", () => {
+	test("qualification source drift guard rejects conflict, loss, stale generation, and fixed-point drift", async () => {
+		const { lockPath } = await lockFixture();
+		const binding = {
+			generation: 7,
+			source_digest: "a".repeat(64),
+			manifest_digest: "b".repeat(64),
+		};
+		const acquired = await acquireSourceLock({
+			lockPath,
+			subject: "Browser Use qualification",
+			binding,
+		});
+		expect(acquired.ok).toBe(true);
+		if (!acquired.ok) return;
+		expect(
+			await acquireSourceLock({ lockPath, subject: "competing writer", binding }),
+		).toMatchObject({ ok: false, reason: "contended" });
+		expect(await acquired.validate(binding)).toMatchObject({ ok: true });
+		expect(
+			await acquired.validate({ ...binding, generation: 8 }),
+		).toEqual({ ok: false, reason: "generation-stale" });
+		expect(
+			await acquired.validate({ ...binding, source_digest: "c".repeat(64) }),
+		).toEqual({ ok: false, reason: "source-drift" });
+		expect(
+			await acquired.validate({ ...binding, manifest_digest: "d".repeat(64) }),
+		).toEqual({ ok: false, reason: "manifest-drift" });
+		expect(await acquired.heartbeat()).toMatchObject({ ok: true });
+		await writeFile(
+			lockPath,
+			`${JSON.stringify({ token: "successor", pid: process.pid, acquired_at_epoch_ms: Date.now() })}\n`,
+		);
+		expect(await acquired.validate(binding)).toEqual({
+			ok: false,
+			reason: "ownership-lost",
+		});
+	});
+
 	test("records owner identity and refuses current-process contention", async () => {
 		const { lockPath } = await lockFixture();
 		const first = await acquireSourceLock({ lockPath, subject: "fixture" });

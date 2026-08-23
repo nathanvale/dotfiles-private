@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, symlinkSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import {
 	BROWSER_USE_ROOT_KINDS,
 	DARWIN_FULL_FSYNC_LIBRARY_PATH,
@@ -205,6 +205,160 @@ describe("root admission (R12; S4-S6)", () => {
 		expect(stat?.kind).toBe("directory");
 		expect(stat?.mode).toBe(0o700);
 		// The writability probe never leaves residue behind.
+		expect(await realFs.readDirectory(root)).toEqual([]);
+	});
+
+	test("concurrent admissions never report xdg_root_unwritable, use distinct same-root probes, and leave no residue", async () => {
+		const root = join(xdg.base, "concurrent-admission", "browser-use");
+		const probeWrites: Array<{ path: string; mode: number }> = [];
+		let unlinkCalls = 0;
+		let releaseWrites: () => void = () => {};
+		const bothWritesCompleted = new Promise<void>((resolve) => {
+			releaseWrites = resolve;
+		});
+		let releaseFirstUnlink: () => void = () => {};
+		const firstUnlinkCompleted = new Promise<void>((resolve) => {
+			releaseFirstUnlink = resolve;
+		});
+		const concurrentFs: BrowserUsePlatformFs = {
+			...realFs,
+			async writeFile(path, contents, mode) {
+				await realFs.writeFile(path, contents, mode);
+				probeWrites.push({ path, mode });
+				if (probeWrites.length === 2) releaseWrites();
+				await bothWritesCompleted;
+			},
+			async unlink(path) {
+				unlinkCalls += 1;
+				if (unlinkCalls === 1) {
+					try {
+						await realFs.unlink(path);
+					} finally {
+						releaseFirstUnlink();
+					}
+					return;
+				}
+				await firstUnlinkCompleted;
+				await realFs.unlink(path);
+			},
+		};
+
+		const admissions = await Promise.all([
+			admitBrowserUseRoot(concurrentFs, { kind: "config", path: root }),
+			admitBrowserUseRoot(concurrentFs, { kind: "config", path: root }),
+		]);
+
+		const unwritableAdmissions = admissions.filter(
+			(admission) =>
+				!admission.ok && admission.refusal.code === "xdg_root_unwritable",
+		);
+		expect(unwritableAdmissions).toHaveLength(0);
+		if (unwritableAdmissions.length > 0) return;
+
+		expect(admissions).toEqual([{ ok: true }, { ok: true }]);
+		expect(probeWrites).toHaveLength(2);
+		expect(new Set(probeWrites.map((write) => write.path)).size).toBe(2);
+		expect(probeWrites.every((write) => write.path.startsWith(`${root}/`))).toBe(
+			true,
+		);
+		expect(probeWrites.map((write) => write.mode)).toEqual([0o600, 0o600]);
+		expect(await realFs.readDirectory(root)).toEqual([]);
+	});
+
+	test("bounded real-filesystem parallel admissions all succeed without probe residue", async () => {
+		const root = join(xdg.base, "parallel-admission-stress", "browser-use");
+		mkdirSync(root, { recursive: true, mode: 0o700 });
+		chmodSync(root, 0o700);
+
+		const admissions = await Promise.all(
+			Array.from({ length: 50 }, () =>
+				admitBrowserUseRoot(realFs, { kind: "config", path: root }),
+			),
+		);
+
+		expect(admissions).toHaveLength(50);
+		expect(admissions.every((admission) => admission.ok)).toBe(true);
+		expect(await realFs.readDirectory(root)).toEqual([]);
+	});
+
+	test("an injected probe write failure fails closed and preserves another admission's probe", async () => {
+		const root = join(xdg.base, "injected-write-failure", "browser-use");
+		mkdirSync(root, { recursive: true, mode: 0o700 });
+		chmodSync(root, 0o700);
+		const otherProbePath = join(
+			root,
+			".browser-use-admission-probe-00000000-0000-4000-8000-000000000000",
+		);
+		await realFs.writeFile(otherProbePath, "other admission", 0o600);
+		const writeFailureFs: BrowserUsePlatformFs = {
+			...realFs,
+			async writeFile() {
+				throw Object.assign(new Error("injected admission write failure"), {
+					code: "EIO",
+				});
+			},
+		};
+
+		try {
+			const admitted = await admitBrowserUseRoot(writeFailureFs, {
+				kind: "config",
+				path: root,
+			});
+
+			expect(admitted.ok).toBe(false);
+			if (admitted.ok) throw new Error("unreachable");
+			expect(admitted.refusal.code).toBe("xdg_root_unwritable");
+			expect(await realFs.readDirectory(root)).toEqual([
+				basename(otherProbePath),
+			]);
+			expect(await realFs.readTextFile(otherProbePath)).toBe("other admission");
+		} finally {
+			await realFs.unlink(otherProbePath);
+		}
+		expect(await realFs.readDirectory(root)).toEqual([]);
+	});
+
+	test("an injected probe cleanup failure fails closed and exposes its exact cleanup debt", async () => {
+		const root = join(xdg.base, "injected-cleanup-failure", "browser-use");
+		mkdirSync(root, { recursive: true, mode: 0o700 });
+		chmodSync(root, 0o700);
+		let writtenPath: string | undefined;
+		let unlinkPath: string | undefined;
+		const cleanupFailureFs: BrowserUsePlatformFs = {
+			...realFs,
+			async writeFile(path, contents, mode) {
+				writtenPath = path;
+				await realFs.writeFile(path, contents, mode);
+			},
+			async unlink(path) {
+				unlinkPath = path;
+				throw Object.assign(new Error("injected admission cleanup failure"), {
+					code: "EIO",
+				});
+			},
+		};
+
+		try {
+			const admitted = await admitBrowserUseRoot(cleanupFailureFs, {
+				kind: "config",
+				path: root,
+			});
+
+			expect(admitted.ok).toBe(false);
+			if (admitted.ok) throw new Error("unreachable");
+			expect(admitted.refusal.code).toBe("xdg_root_unwritable");
+			expect(writtenPath).toBeDefined();
+			expect(unlinkPath).toBe(writtenPath);
+			if (writtenPath === undefined) throw new Error("unreachable");
+			expect(basename(writtenPath)).toMatch(
+				/^\.browser-use-admission-probe-[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+			);
+			expect(await realFs.readDirectory(root)).toEqual([basename(writtenPath)]);
+		} finally {
+			if (writtenPath !== undefined && (await realFs.lstat(writtenPath))) {
+				await realFs.unlink(writtenPath);
+			}
+		}
 		expect(await realFs.readDirectory(root)).toEqual([]);
 	});
 

@@ -47,6 +47,7 @@ export type ResultKind =
 	| "migration_status"
 	| "artifact_manifest"
 	| "repair_status"
+	| "qualification"
 	| "auth_readiness";
 
 // Generic structured failure carried by every region surface. Each surface
@@ -100,7 +101,10 @@ export function canonicalJsonStable(value: unknown): string {
 		return `{${Object.entries(value as Record<string, unknown>)
 			.filter(([, entry]) => entry !== undefined)
 			.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-			.map(([key, entry]) => `${JSON.stringify(key)}:${canonicalJsonStable(entry)}`)
+			.map(
+				([key, entry]) =>
+					`${JSON.stringify(key)}:${canonicalJsonStable(entry)}`,
+			)
 			.join(",")}}`;
 	const serialized = JSON.stringify(value);
 	return serialized === undefined ? "null" : serialized;
@@ -273,6 +277,15 @@ export type RawPage = {
 	url?: string;
 	type?: string;
 };
+
+/** Canonical operation-ready page filter used before dense ordinal assignment. */
+export function navigableRawPages(pages: readonly RawPage[]): RawPage[] {
+	return pages.filter(
+		(page) =>
+			parseUrlSafe(page.url) !== undefined &&
+			(page.type === undefined || page.type === "page"),
+	);
+}
 
 // Project one raw adapter page into a display-safe Browser Target Candidate. The
 // raw id is used only to derive a per-envelope candidate id (hashed, never

@@ -178,7 +178,7 @@ describe("DDA-D26 empty /json/list", () => {
 		expect(result.exitCode).toBe(20);
 		expect(json.error).toMatchObject({ code: "target_discovery_no_candidates" });
 		expect((json.continuation as { next_action_id?: string }).next_action_id).toBe(
-			"open_browser_target",
+			"remint_agent_browser_handoff_for_target_open",
 		);
 		// Empty candidates never became a bogus target.
 		expect(candidatesOf(result.stdout)).toHaveLength(0);

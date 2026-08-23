@@ -387,6 +387,8 @@ export async function casReplaceRecord(
 		staleAfterMs: number;
 		clock: () => number;
 		expectedRevision: number | null;
+		/** Optional full-record fence for lifecycle authorization above revision. */
+		expectedRaw?: string;
 		/** `undefined` classifies the standing record as corrupt. */
 		revisionOf: (raw: string) => number | undefined;
 		nextContents: string;
@@ -443,11 +445,91 @@ export async function casReplaceRecord(
 						`record revision ${revision} does not match expected ${input.expectedRevision}.`,
 					);
 				}
+				if (
+					input.expectedRaw !== undefined &&
+					current.raw !== input.expectedRaw
+				) {
+					return storeFailure(
+						"store_record_conflict",
+						"record contents changed after lifecycle authorization.",
+					);
+				}
 			}
 			return await writeDurableFile(fs, {
 				path: input.path,
 				contents: input.nextContents,
 			});
+		},
+	);
+}
+
+/** Remove a record only when its caller-owned revision still matches. */
+export async function casRemoveRecord(
+	fs: BrowserUsePlatformFs,
+	input: {
+		path: string;
+		lockPath: string;
+		holderId: string;
+		staleAfterMs: number;
+		clock: () => number;
+		expectedRevision: number;
+		expectedRaw: string;
+		revisionOf: (raw: string) => number | undefined;
+	},
+): Promise<{ ok: true } | { ok: false; failure: StoreFailure }> {
+	return await withExclusiveFileLock<
+		{ ok: true } | { ok: false; failure: StoreFailure }
+	>(
+		fs,
+		{
+			lockPath: input.lockPath,
+			holderId: input.holderId,
+			staleAfterMs: input.staleAfterMs,
+			clock: input.clock,
+		},
+		async () => {
+			const current = await readDurableFile(fs, input.path);
+			if (current.status === "missing") {
+				return storeFailure(
+					"store_record_missing",
+					`record is missing; expected revision ${input.expectedRevision}.`,
+				);
+			}
+			if (current.status === "unreadable") {
+				return storeFailure(
+					"store_record_corrupt",
+					"record exists but its bytes are unreadable.",
+				);
+			}
+			const revision = input.revisionOf(current.raw);
+			if (revision === undefined) {
+				return storeFailure(
+					"store_record_corrupt",
+					"record revision could not be extracted.",
+				);
+			}
+			if (revision !== input.expectedRevision) {
+				return storeFailure(
+					"store_record_conflict",
+					`record revision ${revision} does not match expected ${input.expectedRevision}.`,
+				);
+			}
+			if (current.raw !== input.expectedRaw) {
+				return storeFailure(
+					"store_record_conflict",
+					"record contents changed after the close snapshot.",
+				);
+			}
+			try {
+				await fs.unlink(input.path);
+				await fs.syncDirectory(dirname(input.path));
+				return { ok: true };
+			} catch (error) {
+				return storeFailure(
+					"store_flush_failed",
+					`durable remove failed (${errorCode(error)}).`,
+				);
+			}
 		},
 	);
 }

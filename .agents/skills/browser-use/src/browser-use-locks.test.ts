@@ -176,10 +176,12 @@ describe("acquireLease (R27)", () => {
 			holder_id: "holder-a",
 			fencing_token: 1,
 			activation_epoch: 1,
+			acquired_at_epoch_ms: 1_000,
 			heartbeat_at_epoch_ms: 1_000,
 			expires_at_epoch_ms: 6_000,
 			live: true,
 			recovered_from: null,
+			scope: {},
 		});
 		expect(second.continuation.next_action_id).toBe("wait_for_lease");
 		expect(second.continuation.summary).toContain("holder-a");
@@ -241,7 +243,9 @@ describe("acquireLease (R27)", () => {
 			ttlMs: TTL_MS,
 		});
 		expect(second.fencing_token).toBe(2);
-		expect(second.recovered_from?.holder_id).toBe("holder-a");
+		expect(second.recovered_from?.holder_id).toBe(
+			"lease-released:e0d822c36a429bf90f7eb4ba0a33902c",
+		);
 		// "Reboot": fresh fs adapter, fresh paths objects, fresh clock — only
 		// the durable state dir survives, and the token keeps increasing.
 		const rebootClock = fixedClock(60_000);
@@ -383,7 +387,10 @@ describe("releaseLease", () => {
 			ttlMs: TTL_MS,
 		});
 		clock.advance(1_000);
-		expect(await releaseLease(deps, lease)).toEqual({ ok: true });
+		expect(await releaseLease(deps, lease)).toEqual({
+			ok: true,
+			released_at_epoch_ms: 2_000,
+		});
 		const read = await readDurableFile(
 			deps.fs,
 			leaseRecordPath(deps.paths, "release/clean"),
@@ -393,6 +400,10 @@ describe("releaseLease", () => {
 		const parsed = parseDurableRecord(read.raw, "run-lease");
 		if (!parsed.ok) throw new Error("record must parse");
 		expect(parsed.payload.expires_at_epoch_ms).toBe(2_000);
+		expect(parsed.payload.holder_id).toBe(
+			"lease-released:a55490008faed5f841b1dadff0ea4118",
+		);
+		expect(parsed.payload.recovered_from).toBeNull();
 		// No wait needed: the release expired the record at the current instant.
 		const next = await acquireOk(deps, {
 			key: "release/clean",
@@ -410,7 +421,10 @@ describe("releaseLease", () => {
 			holderId: "holder-a",
 			ttlMs: TTL_MS,
 		});
-		expect(await releaseLease(deps, stale)).toEqual({ ok: true });
+		expect(await releaseLease(deps, stale)).toEqual({
+			ok: true,
+			released_at_epoch_ms: 1_000,
+		});
 		expect(await releaseLease(deps, stale)).toEqual({ ok: true });
 		const successor = await acquireOk(deps, {
 			key: "release/idempotent",

@@ -1,9 +1,7 @@
 import { createHash } from "node:crypto";
 import { isAbsolute } from "node:path";
-import {
-	type AdapterReleaseResult,
-	type AdapterSessionReleaseDebt,
-	findAdapterDefinition,
+import type {
+	AdapterSessionReleaseDebt,
 } from "@side-quest/browser-connect/adapters";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
 import { TRANSPORT_STDIN_MAX_BYTES } from "@side-quest/mcporter-transport";
@@ -30,6 +28,7 @@ import type {
 	McporterCommandResult,
 } from "./mcporter-transport";
 import { deriveSessionName } from "./browser-use-adapter-session-lease";
+import { releaseAgentBrowserSession } from "./browser-use-agent-browser-session";
 import {
 	projectAgentBrowserSnapshotRefs,
 	resolveUniqueSemanticRef,
@@ -44,12 +43,13 @@ import {
 	resolveAgentBrowserTarget,
 	selectAgentBrowserTarget,
 	verifyAgentBrowserPostcondition,
-} from "./browser-use-agent-browser-target";
+} from "./browser-use-agent-browser-native";
 import {
 	SAFE_BATCH_ITEM_KEY,
 	SAFE_RUN_ID,
 	SAFE_TAB_ID,
 } from "./browser-use-identifiers";
+import { safeJsonObject, isJsonObject, type RawPage } from "./browser-use-core";
 
 const HANDOFF_CONTRACT_ID = "browser-connect.verified-handoff";
 const HANDOFF_SCHEMA_VERSION = "2";
@@ -66,6 +66,428 @@ const METHOD_STEP_BY_FIELD: Readonly<
 };
 const COMMAND_TIMEOUT_MS = 30_000;
 const SAFE_REF = /^@e[1-9][0-9]*$/;
+
+/** Adapter-owned proof that one retained session is the exact run session. */
+export function isAgentBrowserPinnedSessionForRun(
+	sessionName: string | undefined,
+	runId: string,
+): boolean {
+	return sessionName !== undefined && sessionName === deriveSessionName(runId);
+}
+
+export type AgentBrowserTopologyTab = {
+	tabId: string;
+	targetId: string;
+	url: string;
+	title?: string;
+	active?: boolean;
+};
+
+export type AgentBrowserTopologyAction =
+	| { kind: "list" }
+	| { kind: "create"; url: string }
+	| { kind: "close"; targetId: string }
+	| { kind: "pin"; targetId: string };
+
+export type AgentBrowserTopologyResult =
+	| { ok: true; kind: "list"; tabs: readonly AgentBrowserTopologyTab[] }
+	| { ok: true; kind: "create"; data: Record<string, unknown> }
+	| { ok: true; kind: "close"; confirmed: true }
+	| { ok: true; kind: "pin"; sessionName: string }
+	| { ok: false; code: "agent_browser_topology_unconfirmed" };
+
+export type AgentBrowserOperationRequest = {
+	runtime: AgentBrowserExecutionRuntime;
+	env: Record<string, string | undefined>;
+	handoff: {
+		probeExecutable: string;
+		endpointWs: string;
+		runId: string;
+	};
+	targetId: string;
+	expectedUrl?: string;
+	operation: "snapshot" | "screenshot";
+	screenshot?: { path?: string; fullPage?: boolean };
+	targetPrepared: boolean;
+	retainSession: boolean;
+};
+
+export type AgentBrowserOperationResult =
+	| {
+			ok: true;
+			result: McporterCommandResult;
+			focus: boolean;
+			release?: AdapterSessionReleaseDebt;
+	  }
+	| {
+			ok: false;
+			code:
+				| "agent_browser_operation_identifiers_unsafe"
+				| "agent_browser_operation_dependency_missing"
+				| "agent_browser_operation_timeout"
+				| "agent_browser_operation_failed";
+			message: string;
+			focus: boolean;
+			release?: AdapterSessionReleaseDebt;
+	  };
+
+export type AgentBrowserDiscoveryResult =
+	| { ok: true; pages: RawPage[]; release?: AdapterSessionReleaseDebt }
+	| {
+			ok: false;
+			code: "unsafe-run-id" | "dependency-missing" | "timeout" | "transport-failed";
+			release?: AdapterSessionReleaseDebt;
+	  };
+
+/** Canonical Agent Browser discovery argv, envelope parsing, and session release. */
+export async function discoverAgentBrowserPages(input: {
+	runtime: Pick<AgentBrowserExecutionRuntime, "runCommand">;
+	env: Record<string, string | undefined>;
+	handoff: { probeExecutable: string; endpointWs: string; runId: string };
+	retainSession: boolean;
+}): Promise<AgentBrowserDiscoveryResult> {
+	if (!SAFE_RUN_ID.test(input.handoff.runId)) {
+		return { ok: false, code: "unsafe-run-id" };
+	}
+	let outcome: AgentBrowserDiscoveryResult;
+	try {
+		const result = await input.runtime.runCommand({
+			command: input.handoff.probeExecutable,
+			args: [
+				"--cdp",
+				input.handoff.endpointWs,
+				"--session",
+				deriveSessionName(input.handoff.runId),
+				...(input.retainSession ? ["--pin-tab"] : []),
+				"tab",
+				"list",
+				"--json",
+			],
+			timeoutMs: COMMAND_TIMEOUT_MS,
+		});
+		if (result.timedOut === true) outcome = { ok: false, code: "timeout" };
+		else if (result.exitCode !== 0) outcome = { ok: false, code: "transport-failed" };
+		else {
+			const envelope = safeJsonObject(result.stdout);
+			const data = envelope?.success === true && isJsonObject(envelope.data)
+				? envelope.data
+				: undefined;
+			if (!data || !Array.isArray(data.tabs)) {
+				outcome = { ok: false, code: "transport-failed" };
+			} else {
+				const pages: RawPage[] = [];
+				for (const rawTab of data.tabs) {
+					const tab = isJsonObject(rawTab) ? rawTab : undefined;
+					if (!tab) continue;
+					pages.push({
+						...(typeof tab.tabId === "string" ? { id: tab.tabId } : {}),
+						...(typeof tab.targetId === "string" ? { cdp_target_id: tab.targetId } : {}),
+						...(typeof tab.url === "string" ? { url: tab.url } : {}),
+						...(typeof tab.title === "string" ? { title: tab.title } : {}),
+						...(typeof tab.type === "string" ? { type: tab.type } : {}),
+					});
+				}
+				outcome = { ok: true, pages };
+			}
+		}
+	} catch {
+		outcome = { ok: false, code: "dependency-missing" };
+	}
+	if (input.retainSession) return outcome;
+	const release = await releaseAgentBrowserSession({
+		env: input.env,
+		runCommand: input.runtime.runCommand,
+		probeExecutable: input.handoff.probeExecutable,
+		runId: input.handoff.runId,
+	});
+	return release.released ? outcome : { ...outcome, release };
+}
+
+function topologyNativeData(result: McporterCommandResult): Record<string, unknown> | undefined {
+	if (result.exitCode !== 0 || result.timedOut === true) return undefined;
+	const envelope = safeJsonObject(result.stdout);
+	return envelope?.success === true && isJsonObject(envelope.data)
+		? envelope.data
+		: undefined;
+}
+
+/**
+ * Canonical Agent Browser target-topology mechanics. Browser Use topology owns
+ * policy and custody; this adapter module alone owns native argv, parsing,
+ * pinning, and session addressing.
+ */
+export async function runAgentBrowserTargetTopology(input: {
+	runtime: AgentBrowserExecutionRuntime;
+	handoff: { probeExecutable: string; endpointWs: string; runId: string };
+	action: AgentBrowserTopologyAction;
+}): Promise<AgentBrowserTopologyResult> {
+	const sessionName = deriveSessionName(input.handoff.runId);
+	const nativeArgs =
+		input.action.kind === "list"
+			? ["tab", "list", "--json"]
+			: input.action.kind === "create"
+				? ["tab", "new", input.action.url, "--json"]
+				: input.action.kind === "close"
+					? ["tab", "close", input.action.targetId, "--json"]
+					: ["--pin-tab", "tab", input.action.targetId, "--json"];
+	const invoke = async (args: readonly string[]) => {
+		try {
+			return topologyNativeData(
+				await input.runtime.runCommand({
+					command: input.handoff.probeExecutable,
+					args: ["--cdp", input.handoff.endpointWs, "--session", sessionName, ...args],
+					timeoutMs: COMMAND_TIMEOUT_MS,
+				}),
+			);
+		} catch {
+			return undefined;
+		}
+	};
+	const data = await invoke(nativeArgs);
+	if (data === undefined) return { ok: false, code: "agent_browser_topology_unconfirmed" };
+	if (input.action.kind === "create") return { ok: true, kind: "create", data };
+	if (input.action.kind === "close") return { ok: true, kind: "close", confirmed: true };
+	if (input.action.kind === "pin") {
+		const pinned = await invoke(["--pin-tab", "tab", "list", "--json"]);
+		if (!Array.isArray(pinned?.tabs)) {
+			return { ok: false, code: "agent_browser_topology_unconfirmed" };
+		}
+		const active = pinned.tabs
+			.filter((tab) => isJsonObject(tab) && tab.active === true)
+			.map((tab) => (isJsonObject(tab) ? tab.targetId : undefined))
+			.filter((value): value is string => typeof value === "string" && SAFE_TAB_ID.test(value));
+		return active.length === 1 && active[0] === input.action.targetId
+			? { ok: true, kind: "pin", sessionName }
+			: { ok: false, code: "agent_browser_topology_unconfirmed" };
+	}
+	if (!Array.isArray(data.tabs)) return { ok: false, code: "agent_browser_topology_unconfirmed" };
+	const tabs: AgentBrowserTopologyTab[] = [];
+	const targetIds = new Set<string>();
+	for (const raw of data.tabs) {
+		const tab = isJsonObject(raw) ? raw : undefined;
+		if (
+			!tab ||
+			typeof tab.tabId !== "string" ||
+			typeof tab.targetId !== "string" ||
+			typeof tab.url !== "string" ||
+			!SAFE_TAB_ID.test(tab.tabId) ||
+			!SAFE_TAB_ID.test(tab.targetId) ||
+			targetIds.has(tab.targetId)
+		) {
+			return { ok: false, code: "agent_browser_topology_unconfirmed" };
+		}
+		targetIds.add(tab.targetId);
+		tabs.push({
+			tabId: tab.tabId,
+			targetId: tab.targetId,
+			url: tab.url,
+			...(typeof tab.title === "string" ? { title: tab.title } : {}),
+			...(typeof tab.active === "boolean" ? { active: tab.active } : {}),
+		});
+	}
+	return { ok: true, kind: "list", tabs };
+}
+
+function operationFailure(
+	code: Extract<AgentBrowserOperationResult, { ok: false }>["code"],
+	message: string,
+	focus = false,
+): Extract<AgentBrowserOperationResult, { ok: false }> {
+	return { ok: false, code, message, focus };
+}
+
+async function callAgentBrowserOperation(input: {
+	request: AgentBrowserOperationRequest;
+	args: readonly string[];
+	label: string;
+	strictTabBinding?: boolean;
+}): Promise<
+	| { ok: true; result: McporterCommandResult; data: unknown }
+	| Extract<AgentBrowserOperationResult, { ok: false }>
+> {
+	let result: McporterCommandResult;
+	try {
+		result = await input.request.runtime.runCommand({
+			command: input.request.handoff.probeExecutable,
+			args: [
+				"--cdp",
+				input.request.handoff.endpointWs,
+				"--session",
+				deriveSessionName(input.request.handoff.runId),
+				...(input.strictTabBinding === false ? [] : ["--pin-tab"]),
+				...input.args,
+				"--json",
+			],
+			timeoutMs: COMMAND_TIMEOUT_MS,
+		});
+	} catch {
+		return operationFailure(
+			"agent_browser_operation_dependency_missing",
+			`The agent-browser ${input.label} call could not be started.`,
+		);
+	}
+	if (result.timedOut === true) {
+		return operationFailure(
+			"agent_browser_operation_timeout",
+			`The agent-browser ${input.label} call timed out.`,
+		);
+	}
+	if (result.exitCode !== 0) {
+		return operationFailure(
+			"agent_browser_operation_failed",
+			`The agent-browser ${input.label} call failed.`,
+		);
+	}
+	const envelope = safeJsonObject(result.stdout);
+	if (envelope?.success !== true) {
+		return operationFailure(
+			"agent_browser_operation_failed",
+			`The agent-browser ${input.label} call returned an invalid success envelope.`,
+		);
+	}
+	return { ok: true, result, data: envelope.data };
+}
+
+/** Canonical native operation/session mechanics for Agent Browser. */
+export async function runAgentBrowserOperation(
+	request: AgentBrowserOperationRequest,
+): Promise<AgentBrowserOperationResult> {
+	if (
+		!SAFE_RUN_ID.test(request.handoff.runId) ||
+		!SAFE_TAB_ID.test(request.targetId)
+	) {
+		return operationFailure(
+			"agent_browser_operation_identifiers_unsafe",
+			"The agent-browser operation identifiers are unsafe.",
+		);
+	}
+	const call = (
+		args: readonly string[],
+		label: string,
+		strictTabBinding = true,
+	) => callAgentBrowserOperation({ request, args, label, strictTabBinding });
+	let focus = false;
+	let outcome: AgentBrowserOperationResult;
+	if (request.targetPrepared) {
+		const pinned = await call(["tab", "list"], "pinned target proof");
+		if (!pinned.ok) outcome = pinned;
+		else {
+			const data = isJsonObject(pinned.data) ? pinned.data : undefined;
+			const activeTargetIds = Array.isArray(data?.tabs)
+				? data.tabs
+						.filter((tab) => isJsonObject(tab) && tab.active === true)
+						.map((tab) => (isJsonObject(tab) ? tab.targetId : undefined))
+						.filter(
+							(targetId): targetId is string =>
+								typeof targetId === "string" && SAFE_TAB_ID.test(targetId),
+						)
+				: undefined;
+			outcome =
+				activeTargetIds?.length === 1 && activeTargetIds[0] === request.targetId
+					? await executeAgentBrowserOperation(request, call, false)
+					: operationFailure(
+							"agent_browser_operation_failed",
+							"The retained Agent Browser session did not prove the exact canonical target.",
+						);
+		}
+	} else {
+		const activated = await call(
+			["tab", request.targetId],
+			"canonical target activation",
+			false,
+		);
+		focus = activated.ok;
+		outcome = activated.ok
+			? await executeAgentBrowserOperation(request, call, true)
+			: activated;
+	}
+	if (request.retainSession) return outcome;
+	let release: AdapterSessionReleaseDebt | undefined;
+	try {
+		const released = await releaseAgentBrowserSession({
+			env: request.env,
+			runCommand: request.runtime.runCommand,
+			probeExecutable: request.handoff.probeExecutable,
+			runId: request.handoff.runId,
+		});
+		if (!released.released) release = released;
+	} catch {
+		release = {
+			released: false,
+			cause: "command-failed",
+			detail: "The Agent Browser session release failed unexpectedly.",
+		};
+	}
+	if (release === undefined) return outcome;
+	return outcome.ok
+		? {
+				...operationFailure(
+					"agent_browser_operation_failed",
+					"The owning Agent Browser operation session could not be released.",
+					outcome.focus,
+				),
+				release,
+			}
+		: { ...outcome, release };
+}
+
+async function executeAgentBrowserOperation(
+	request: AgentBrowserOperationRequest,
+	call: (
+		args: readonly string[],
+		label: string,
+		strictTabBinding?: boolean,
+	) => ReturnType<typeof callAgentBrowserOperation>,
+	focus: boolean,
+): Promise<AgentBrowserOperationResult> {
+	const proof = await call(["get", "url"], "strict target proof");
+	if (!proof.ok) return { ...proof, focus };
+	const proofData = isJsonObject(proof.data) ? proof.data : undefined;
+	if (
+		request.expectedUrl !== undefined &&
+		proofData?.url !== request.expectedUrl
+	) {
+		return operationFailure(
+			"agent_browser_operation_failed",
+			"The pinned Agent Browser target URL did not match the selected target.",
+			focus,
+		);
+	}
+	if (request.operation === "screenshot") {
+		const result = await call(
+			[
+				"screenshot",
+				...(request.screenshot?.fullPage ? ["--full"] : []),
+				...(request.screenshot?.path ? [request.screenshot.path] : []),
+			],
+			"screenshot",
+		);
+		return result.ok
+			? { ok: true, result: result.result, focus }
+			: { ...result, focus };
+	}
+	const result = await call(["snapshot"], "snapshot");
+	if (!result.ok) return { ...result, focus };
+	const data = result.data;
+	const snapshotText =
+		typeof data === "string"
+			? data
+			: isJsonObject(data) && typeof data.snapshot === "string"
+				? data.snapshot
+				: undefined;
+	if (snapshotText === undefined) {
+		return operationFailure(
+			"agent_browser_operation_failed",
+			"The agent-browser snapshot call returned an unexpected payload shape.",
+			focus,
+		);
+	}
+	return {
+		ok: true,
+		focus,
+		result: { ...result.result, stdout: snapshotText },
+	};
+}
 
 /**
  * Verified Browser Connect payload pinned to the schema this consumer knows.
@@ -434,31 +856,6 @@ function failure(
 	};
 }
 
-async function releaseAgentBrowserTaskSession(
-	runtime: AgentBrowserExecutionRuntime,
-	task: AgentBrowserCommandContext,
-): Promise<AdapterReleaseResult> {
-	const releaseSession = findAdapterDefinition("agent-browser")?.releaseSession;
-	if (!releaseSession) {
-		return {
-			released: false,
-			cause: "command-failed",
-			detail: "The agent-browser adapter has no registered session release mechanic.",
-		};
-	}
-	return releaseSession(
-		{
-			env: {},
-			resolveExecutable: () => ({
-				resolved: true,
-				path: task.handoff.attachment.probe_executable,
-			}),
-			runCommand: (input) => runtime.runCommand(input),
-		},
-		{ sessionName: deriveSessionName(task.run_id) },
-	);
-}
-
 async function markMutationDispatch(
 	runtime: AgentBrowserExecutionRuntime,
 	task: AgentBrowserTask,
@@ -737,7 +1134,12 @@ export async function resolveAgentBrowserTaskTarget(
 		input,
 		validation.allowedOrigins,
 	);
-	const release = await releaseAgentBrowserTaskSession(runtime, input);
+	const release = await releaseAgentBrowserSession({
+		env: {},
+		runCommand: runtime.runCommand,
+		probeExecutable: input.handoff.attachment.probe_executable,
+		runId: input.run_id,
+	});
 	if (resolution.ok) {
 		return release.released
 			? resolution
@@ -1284,7 +1686,12 @@ export async function executeAgentBrowserTask(
 		};
 	}
 
-	const release = await releaseAgentBrowserTaskSession(runtime, task);
+	const release = await releaseAgentBrowserSession({
+		env: {},
+		runCommand: runtime.runCommand,
+		probeExecutable: task.handoff.attachment.probe_executable,
+		runId: task.run_id,
+	});
 	if (release.released) return taskOutcome;
 	if (!taskOutcome.ok) return { ...taskOutcome, release };
 	return withDelivery(

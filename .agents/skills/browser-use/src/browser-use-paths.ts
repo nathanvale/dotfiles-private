@@ -22,7 +22,7 @@
 // process.cwd().
 // ---------------------------------------------------------------------------
 
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import {
 	chmod as fsChmod,
@@ -159,8 +159,8 @@ const XDG_DEFAULT_SEGMENTS: Record<
 const PRIVATE_DIR_MODE = 0o700;
 /** Durable private file mode (R12). */
 const PRIVATE_FILE_MODE = 0o600;
-/** Writability probe filename created and unlinked during admission. */
-const ADMISSION_PROBE_NAME = ".browser-use-admission-probe";
+/** Writability probe filename prefix; every admission owns one unique probe. */
+const ADMISSION_PROBE_NAME_PREFIX = ".browser-use-admission-probe";
 /** Fallback directory name under the state root (R11). */
 const RUNTIME_FALLBACK_NAME = "runtime-fallback";
 
@@ -658,9 +658,14 @@ export async function admitBrowserUseRoot(
 			};
 		}
 	}
-	const probePath = join(path, ADMISSION_PROBE_NAME);
 	try {
+		const probePath = join(
+			path,
+			`${ADMISSION_PROBE_NAME_PREFIX}-${randomUUID()}`,
+		);
 		await fs.writeFile(probePath, "", PRIVATE_FILE_MODE);
+		// This admission owns exactly this unique path. Any unlink failure,
+		// including ENOENT, is cleanup debt and must remain fail-closed.
 		await fs.unlink(probePath);
 	} catch {
 		return {

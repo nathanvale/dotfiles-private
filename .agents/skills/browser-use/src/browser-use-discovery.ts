@@ -38,9 +38,7 @@ import type {
 } from "./discovery-model";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
 import {
-	type AdapterReleaseResult,
 	type AdapterSessionReleaseDebt,
-	findAdapterDefinition,
 } from "@side-quest/browser-connect/adapters";
 import type { ParsedBrowserUseCommand } from "./browser-use-parser";
 import {
@@ -53,6 +51,7 @@ import {
 	handoffEvidenceIdOf,
 	isBrowserAdapterId,
 	isJsonObject,
+	navigableRawPages,
 	parseUrlSafe,
 	redactUnsafeText,
 	safeJsonObject,
@@ -67,8 +66,7 @@ import {
 } from "./browser-use-transport";
 import type { BrowserUseRuntime } from "./browser-use-runtime";
 import { retryabilityForRecoverability } from "./runtime-error-retryability";
-import { deriveSessionName } from "./browser-use-adapter-session-lease";
-import { SAFE_RUN_ID } from "./browser-use-identifiers";
+import { discoverAgentBrowserPages as discoverAgentBrowserNativePages } from "./browser-use-agent-browser";
 
 // ---------------------------------------------------------------------------
 // `browser-use targets list` discovers Browser Target Candidates in two modes:
@@ -317,11 +315,7 @@ export async function runTargetsList(input: {
 	// http(s) url, so any listing that declares a target `type` must also be a
 	// `page` — a non-`page` type is never operation-ready (DDA-D28). An absent
 	// type (chrome-devtools-mcp text envelope) is treated as a navigable page.
-	const navigablePages = discovery.pages.filter(
-		(page) =>
-			parseUrlSafe(page.url) !== undefined &&
-			(page.type === undefined || page.type === "page"),
-	);
+	const navigablePages = navigableRawPages(discovery.pages);
 	const candidates = navigablePages.map((page, index) =>
 		toCandidate(page, index, targetEnvelopeId, showUrl),
 	);
@@ -332,7 +326,10 @@ export async function runTargetsList(input: {
 				code: "target_discovery_no_candidates",
 				message:
 					"No Browser Target Candidates were discovered through the attached adapter.",
-				actionId: "open_browser_target",
+				actionId:
+					requestedAdapter === "agent-browser"
+						? "open_browser_target"
+						: "remint_agent_browser_handoff_for_target_open",
 				exitCode: TARGET_DISCOVERY_EXIT_CODE,
 				recoverability: "retry",
 			},
@@ -661,28 +658,6 @@ type DiscoverResult =
 			release?: AdapterSessionReleaseDebt;
 	  };
 
-async function releaseAgentBrowserLease(
-	runtime: BrowserUseRuntime,
-	facts: EnvelopeTransportFacts,
-): Promise<AdapterReleaseResult> {
-	const releaseSession = findAdapterDefinition("agent-browser")?.releaseSession;
-	if (!releaseSession) {
-		return {
-			released: false,
-			cause: "command-failed",
-			detail: "The agent-browser adapter has no registered session release mechanic.",
-		};
-	}
-	return releaseSession(
-		{
-			env: runtime.env,
-			resolveExecutable: () => ({ resolved: true, path: facts.probeExecutable }),
-			runCommand: (input) => runtime.runCommand(input),
-		},
-		{ sessionName: deriveSessionName(facts.runId) },
-	);
-}
-
 // The envelope-derived invocation slots discovery needs (R1): the transport
 // gate keys on the adapter id; the spawn carries the pinned binary and the
 // verified endpoint verbatim. HandoffFacts satisfies this structurally.
@@ -691,13 +666,10 @@ export type EnvelopeTransportFacts = Pick<
 	"adapter" | "probeExecutable" | "endpointHttp" | "runId" | "endpointWs"
 >;
 
-// agent-browser tab-list command duration bound (mirror of COMMAND_TIMEOUT_MS
-// in the native executor; discovery only lists, but the CLI is the same).
-const AGENT_BROWSER_DISCOVERY_TIMEOUT_MS = 30_000;
-
 export async function discoverPages(
 	runtime: BrowserUseRuntime,
 	facts: EnvelopeTransportFacts,
+	options: { retainLifecycle?: boolean } = {},
 ): Promise<DiscoverResult> {
 	// The page-listing transport is implemented for chrome-devtools-mcp only. A
 	// handoff can attach another registry adapter (agent-browser has a native
@@ -726,7 +698,45 @@ export async function discoverPages(
 	// {success:true, data:{tabs:[{tabId, targetId, url, active, title?}]}}. Route it to
 	// that spawn instead of the chrome-devtools-mcp list_pages call shape.
 	if (facts.adapter === "agent-browser") {
-		return discoverAgentBrowserPages(runtime, facts);
+		const discovered = await discoverAgentBrowserNativePages({
+			runtime,
+			env: runtime.env,
+			handoff: facts,
+			retainSession: options.retainLifecycle === true,
+		});
+		if (discovered.ok) return discovered;
+		const failure = discovered.code === "unsafe-run-id"
+			? {
+					code: "target_discovery_transport_failed" as const,
+					message: "The agent-browser run id is not a safe session identifier.",
+					actionId: "change_target_discovery_input" as const,
+					exitCode: TARGET_DISCOVERY_EXIT_CODE,
+					recoverability: "change_input" as const,
+				}
+			: discovered.code === "dependency-missing"
+				? {
+						code: "target_discovery_dependency_missing" as const,
+						message: "The agent-browser adapter could not be started to list tabs; the pinned probe may be missing.",
+						actionId: "configure_target_dependency" as const,
+						exitCode: TARGET_DISCOVERY_DEPENDENCY_EXIT_CODE,
+						recoverability: "repair_state" as const,
+					}
+				: discovered.code === "timeout"
+					? {
+							code: "target_discovery_transport_timeout" as const,
+							message: "The agent-browser tab list call timed out before the browser targets were listed.",
+							actionId: "inspect_target_discovery_diagnostics" as const,
+							exitCode: TARGET_DISCOVERY_EXIT_CODE,
+							recoverability: "retry" as const,
+						}
+					: {
+							code: "target_discovery_transport_failed" as const,
+							message: "The agent-browser tab list call failed.",
+							actionId: "inspect_target_discovery_diagnostics" as const,
+							exitCode: TARGET_DISCOVERY_EXIT_CODE,
+							recoverability: "retry" as const,
+						};
+		return { ok: false, failure, ...(discovered.release ? { release: discovered.release } : {}) };
 	}
 	const transport = await runEnvelopeAdapterCall(runtime, {
 		probeExecutable: facts.probeExecutable,
@@ -767,159 +777,6 @@ export async function discoverPages(
 		};
 	}
 	return { ok: true, pages: extractRawPages(parsed) };
-}
-
-// agent-browser's CLI-subcommand discovery transport (distinct from the
-// mcporter list_pages call): `<probe> --cdp <ws> --session browser-use-<runId>
-// tab list --json`. Read-only — it only lists tabs, never navigates or mutates.
-async function discoverAgentBrowserPages(
-	runtime: BrowserUseRuntime,
-	facts: EnvelopeTransportFacts,
-): Promise<DiscoverResult> {
-	// A parse/protocol failure the operator can only inspect: retry after reading
-	// the diagnostic, never a dependency install or a browser re-entry.
-	const transportFailure = (message: string): DiscoverResult => ({
-		ok: false,
-		failure: {
-			code: "target_discovery_transport_failed",
-			message,
-			actionId: "inspect_target_discovery_diagnostics",
-			exitCode: TARGET_DISCOVERY_EXIT_CODE,
-			recoverability: "retry",
-		},
-	});
-	// The run id becomes the session name in the spawn argv; guard it before it
-	// reaches the subprocess, exactly as the native executor does. An unsafe run
-	// id is a caller-input fault, not a diagnosable transport failure, so it
-	// routes to change_input like the other invalid-input discovery failures.
-	if (!SAFE_RUN_ID.test(facts.runId)) {
-		return {
-			ok: false,
-			failure: {
-				code: "target_discovery_transport_failed",
-				message: "The agent-browser run id is not a safe session identifier.",
-				actionId: "change_target_discovery_input",
-				exitCode: TARGET_DISCOVERY_EXIT_CODE,
-				recoverability: "change_input",
-			},
-		};
-	}
-	let result: Awaited<ReturnType<BrowserUseRuntime["runCommand"]>> | undefined;
-	let outcome: DiscoverResult = transportFailure(
-		"The agent-browser tab list call failed.",
-	);
-	try {
-		result = await runtime.runCommand({
-			command: facts.probeExecutable,
-			args: [
-				"--cdp",
-				facts.endpointWs,
-				"--session",
-				deriveSessionName(facts.runId),
-				"tab",
-				"list",
-				"--json",
-			],
-			timeoutMs: AGENT_BROWSER_DISCOVERY_TIMEOUT_MS,
-		});
-	} catch {
-		// A throw here is a spawn failure (e.g. the pinned probe is missing):
-		// route to dependency recovery, matching the chrome-devtools
-		// dependency_missing mapping, not a generic retry.
-		outcome = {
-			ok: false,
-			failure: {
-				code: "target_discovery_dependency_missing",
-				message:
-					"The agent-browser adapter could not be started to list tabs; the pinned probe may be missing.",
-				actionId: "configure_target_dependency",
-				exitCode: TARGET_DISCOVERY_DEPENDENCY_EXIT_CODE,
-				recoverability: "repair_state",
-			},
-		};
-	}
-	if (result !== undefined) {
-		outcome = (() => {
-			// A timeout has its own taxonomy so the operator can distinguish a slow
-			// endpoint from a hard failure, mirroring the chrome-devtools timeout path.
-			if (result.timedOut === true) {
-				return {
-					ok: false,
-					failure: {
-						code: "target_discovery_transport_timeout",
-						message:
-							"The agent-browser tab list call timed out before the browser targets were listed.",
-						actionId: "inspect_target_discovery_diagnostics",
-						exitCode: TARGET_DISCOVERY_EXIT_CODE,
-						recoverability: "retry",
-					},
-				};
-			}
-			if (result.exitCode !== 0) {
-				return transportFailure("The agent-browser tab list call failed.");
-			}
-			if (result.stdout.trim() === "") return { ok: true, pages: [] };
-			let parsed: unknown;
-			try {
-				parsed = JSON.parse(result.stdout);
-			} catch {
-				return transportFailure(
-					"The agent-browser tab list call returned unparsable output.",
-				);
-			}
-			// agent-browser reports a dead/flaky CDP link as exit 0 with
-			// {success:false} (the native lane reads the same envelope as a connection
-			// signal). That is a transport failure, NOT an empty candidate set: letting
-			// it fall through to an empty page list would tell the caller "no targets,
-			// open a tab" when the real repair is to re-mint the handoff. Fail here
-			// before the mapper collapses it to [].
-			if (!agentBrowserEnvelopeSucceeded(parsed)) {
-				return transportFailure(
-					"The agent-browser tab list call reported a failure response.",
-				);
-			}
-			return { ok: true, pages: extractAgentBrowserPages(parsed) };
-		})();
-	}
-
-	const release = await releaseAgentBrowserLease(runtime, facts);
-	return release.released ? outcome : { ...outcome, release };
-}
-
-// True only for a well-formed agent-browser envelope that reports success. A
-// non-object, a missing flag, or an explicit {success:false} is a transport
-// failure, not an empty tab set.
-function agentBrowserEnvelopeSucceeded(value: unknown): boolean {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-	return (value as Record<string, unknown>).success === true;
-}
-
-// Map the agent-browser tab-list envelope ({success:true, data:{tabs:[…]}})
-	// onto RawPages: tabId -> id, targetId -> cdp_target_id, url/title verbatim. The `active` flag is not part
-// of RawPage and is dropped. Field names differ from the chrome text parser
-// (tabId vs id), so this mapper stays separate to avoid coupling the two.
-function extractAgentBrowserPages(value: unknown): RawPage[] {
-	if (!value || typeof value !== "object" || Array.isArray(value)) return [];
-	const envelope = value as Record<string, unknown>;
-	if (envelope.success !== true) return [];
-	const data = envelope.data;
-	if (!data || typeof data !== "object" || Array.isArray(data)) return [];
-	const tabs = (data as Record<string, unknown>).tabs;
-	if (!Array.isArray(tabs)) return [];
-	return tabs.flatMap((entry): RawPage[] => {
-		if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [];
-		const tab = entry as Record<string, unknown>;
-		return [
-			{
-				...(typeof tab.tabId === "string" ? { id: tab.tabId } : {}),
-				...(typeof tab.targetId === "string"
-					? { cdp_target_id: tab.targetId }
-					: {}),
-				...(typeof tab.title === "string" ? { title: tab.title } : {}),
-				...(typeof tab.url === "string" ? { url: tab.url } : {}),
-			},
-		];
-	});
 }
 
 function extractRawPages(value: unknown): RawPage[] {

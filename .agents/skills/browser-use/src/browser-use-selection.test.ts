@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { dirname } from "node:path";
 import {
 	type BrowserUseRuntime,
 	decodeStdinChunks,
@@ -17,6 +18,7 @@ import {
 	parsedWrite,
 	TARGETS_CONTRACT,
 } from "./browser-use-test-helpers";
+import { makeVolatileOverlayFs } from "./browser-use-platform-test-helpers";
 import {
 	REAL_VERIFIED_HANDOFF_ENVELOPE,
 	verifiedHandoffEnvelope,
@@ -137,12 +139,35 @@ function selectionRuntime(input: {
 } {
 	const writes: Array<{ path: string; contents: string }> = [];
 	const files = { ...(input.files ?? {}) };
+	const overlay = makeVolatileOverlayFs();
+	const platformFs = {
+		...overlay.fs,
+		createExclusive: async (path: string, contents: string, mode: number) => {
+			await overlay.fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
+			return await overlay.fs.createExclusive(path, contents, mode);
+		},
+		writeFileDurable: async (path: string, contents: string, mode: number) => {
+			await overlay.fs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
+			if (input.writeThrows && path.includes(".tmp-")) {
+				throw Object.assign(new Error("EACCES"), { code: "EACCES" });
+			}
+			await overlay.fs.writeFileDurable(path, contents, mode);
+			if (path.includes(".tmp-") && contents.includes(TARGETS_CONTRACT)) {
+				writes.push({ path: path.replace(/\.tmp-\d+-\d+$/, ""), contents });
+			}
+		},
+	};
 	const runtime = makeRuntime({
 		env: input.env ?? {},
 		now: input.now ?? (() => 1_000),
 		readStdin: async () => input.stdin ?? "",
 		readTextFile: async (path) => {
 			if (path in files) return files[path];
+			try {
+				return await overlay.fs.readTextFile(path);
+			} catch {
+				// Fall through to the canonical ENOENT fixture below.
+			}
 			// Mirror node:fs: a missing file rejects with an Error carrying
 			// code "ENOENT", so loadSelectedState can map it to target_state_missing
 			// rather than the unreadable branch.
@@ -153,6 +178,7 @@ function selectionRuntime(input: {
 			writes.push({ path, contents });
 			files[path] = contents;
 		},
+		platformFs,
 	});
 	return { runtime, writes };
 }
@@ -885,6 +911,60 @@ describe("U6 target selection — state write", () => {
 			expect(writes[0].contents).not.toContain(token);
 		}
 	});
+
+	test.each([
+		["same run", FIXTURE_RUN_ID],
+		["foreign run", "foreign-run"],
+	] as const)(
+		"%s cannot replace an open-created selected target",
+		async (_label, standingRunId) => {
+			const { runtime } = selectionRuntime({ stdin: targetsListEnvelope() });
+			const statePath = "/state.json";
+			const standing = `${JSON.stringify({
+				contract: TARGETS_CONTRACT,
+				schema_version: "2",
+				revision: 1,
+				run_id: standingRunId,
+				selected_adapter_id: "chrome-devtools-mcp",
+				verified_endpoint_identity: "127.0.0.1:9222",
+				handoff_evidence_id: FIXTURE_EVIDENCE_ID,
+				target_envelope_id: "env-created",
+				target_candidate_id: "cid-created",
+				selected_candidate_ordinal: 1,
+				emitted_at_ms: 1_000,
+				expires_at_ms: 901_000,
+				display: { origin: "https://example.com" },
+				ownership: {
+					kind: "created-target",
+					target_ref: "a".repeat(64),
+				},
+			})}\n`;
+			await runtime.platformFs.mkdir(dirname(statePath), {
+				recursive: true,
+				mode: 0o700,
+			});
+			await runtime.platformFs.writeFileDurable(statePath, standing, 0o600);
+
+			const result = await runForTest(
+				[
+					"targets",
+					"select",
+					"--candidate",
+					"1",
+					"--state",
+					statePath,
+					"--json",
+				],
+				runtime,
+			);
+
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "target_selection_state_write_failed",
+			});
+			expect(await runtime.platformFs.readTextFile(statePath)).toBe(standing);
+		},
+	);
 });
 
 describe("U6 target status — projection and distinct failures", () => {
