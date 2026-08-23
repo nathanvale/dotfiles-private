@@ -1,0 +1,128 @@
+/**
+ * The artifact refusal vocabulary: derivation's own fail-closed causes.
+ *
+ * Kept separate from the compiler's sealed `DiagnosticCause` list on purpose.
+ * A compiler diagnostic points at a source location inside a Specification
+ * Candidate; an artifact refusal points at a derived artifact the candidate
+ * compiled cleanly into but that cannot be published without contradicting a
+ * facade obligation. The two vocabularies answer different questions, so a
+ * caller must be able to branch on them independently.
+ *
+ * Emission is not Specification Admission. A candidate whose artifacts emit
+ * has no semantic authority until the product owner admits it explicitly.
+ */
+import { compareCodepoints } from './canonical.ts'
+
+/**
+ * Sealed artifact refusal causes; cause tokens keep their `emit_` spelling.
+ * Adding a cause is a Generator Contract change.
+ *
+ * Every cause here is reachable. The cross-validations the facade declares but
+ * never delivers - a station expecting an exit code its command never
+ * declares, a station id that does not name its own command, a station naming
+ * a command absent from discovery - have no cause in this list because one
+ * Admitted State-Machine Specification generates both sides, which makes those
+ * disagreements unexpressible rather than merely detected. A cause for an
+ * impossible state would advertise a check nothing can raise.
+ */
+export const ARTIFACT_REFUSAL_CAUSES = [
+	/** A Branch Station id does not satisfy the facade's id grammar. */
+	'emit_station_id_invalid',
+	/** Two derived Branch Stations claim the same id. */
+	'emit_station_id_duplicate',
+	/** The Command Surface Contract omits a baseline exit meaning. */
+	'emit_baseline_exit_missing',
+	/** A Branch Station's expectedActionId is absent from the action catalog. */
+	'emit_expectation_action_unknown',
+	/** A declared Extension Point has no Handwritten Extension bound. */
+	'emit_registry_binding_missing',
+	/** A Handwritten Extension is bound to no declared Extension Point. */
+	'emit_registry_binding_extra',
+	/** A binding names a specification revision that is no longer current. */
+	'emit_registry_binding_stale',
+	/** A binding survives for an Extension Point the specification withdrew. */
+	'emit_registry_binding_orphaned',
+	/**
+	 * A write-implying command's declared surface cannot satisfy the Write
+	 * Preview Capability obligation. The generator refuses rather than inventing
+	 * an execution mode or authoring a previewExemption reason: both are
+	 * product-owner decisions.
+	 */
+	'emit_write_preview_undeclarable',
+	/**
+	 * A required semantic column cannot be derived from anything the candidate
+	 * declares. Input Schema v1 has no surface for it, so emitting a default
+	 * would publish an invented meaning as though it were admitted.
+	 */
+	'emit_expectation_column_underivable',
+	/** No declared retry rule matches a Branch Station's facts. */
+	'emit_retry_posture_unresolved',
+	/** The candidate declares no result contract usable for a command. */
+	'emit_result_contract_undeclared',
+	/**
+	 * A Contextual Rendering shares its identifier with a canonical action id.
+	 *
+	 * One resolver reads both namespaces, so a shared identifier makes the
+	 * resolved answer depend on which is looked up first rather than on what
+	 * the specification declared.
+	 */
+	'emit_contextual_rendering_collides',
+	/**
+	 * A Routing Table row targets a Branch Station id the derived catalog does
+	 * not contain.
+	 *
+	 * Distinct from the derived-station causes above, and expressible where
+	 * they are not: those judge a station this compilation built, so a station
+	 * naming an undeclared command cannot arise. This judges a *reference*
+	 * written by a candidate author, which can name anything at all. The
+	 * command prefix alone is not the check: a declared command with a branch
+	 * suffix no derivation emits resolves its prefix and still selects a
+	 * station that will never exist.
+	 *
+	 * It is an artifact refusal rather than a compile diagnostic because the
+	 * catalog it judges against does not exist until derivation builds it.
+	 */
+	'emit_route_station_unknown',
+	/**
+	 * Neither the candidate nor the consumer names the product's public entry
+	 * point, so the Command Surface Contract's mandatory `script` cannot be
+	 * derived. The entry is a per-product fact: an Input Schema v2 candidate
+	 * declares it, or the consumer supplies it at derivation. Emitting a
+	 * conventional default here would publish a path that need not resolve.
+	 */
+	'emit_entry_undeclarable',
+] as const
+
+export type ArtifactRefusalCause = (typeof ARTIFACT_REFUSAL_CAUSES)[number]
+
+/**
+ * One fail-closed emit refusal.
+ *
+ * `subject` names the artifact that could not be published (a station id, a
+ * command, an Extension Point id) so a caller can repair the specification
+ * without reading generator internals. Callers branch on `cause`, never on
+ * `message`  -  the wording is contract surface but the identifier is the API.
+ */
+export interface ArtifactRefusal {
+	readonly cause: ArtifactRefusalCause
+	readonly subject: string
+	readonly message: string
+}
+
+export function artifactRefusal(input: ArtifactRefusal): ArtifactRefusal {
+	return input
+}
+
+/**
+ * Deterministic refusal order: cause first, then subject. A caller that
+ * snapshots a refusal list depends on this being stable across runs.
+ */
+export function sortRefusals(
+	refusals: readonly ArtifactRefusal[],
+): readonly ArtifactRefusal[] {
+	return [...refusals].sort(
+		(a, b) =>
+			compareCodepoints(a.cause, b.cause) ||
+			compareCodepoints(a.subject, b.subject),
+	)
+}

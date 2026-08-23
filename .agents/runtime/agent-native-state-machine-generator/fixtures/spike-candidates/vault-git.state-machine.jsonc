@@ -1,0 +1,849 @@
+// Vault Git Transaction Manager: Specification Candidate (UNADMITTED DRAFT)
+// Spike artifact for nathanvale/dotfiles-private#75, criterion 1 (expressiveness)
+// and criterion 5 (authoring cost). Drafted from the source inventory of
+// .agents/runtime/vault-git-transaction-manager on 2026-08-21, and re-authored
+// against Input Schema Version 2 on 2026-08-22 to state the recorded rulings.
+//
+// UNADMITTED. Compiling proves nothing about authority: Specification Admission
+// is an explicit product-owner act this candidate has not received, so both
+// product_specification_revision and state_machine_definition_version stay
+// "unadmitted" and the digest this file produces carries no authority.
+//
+// Authoring rules honored (issue #55): data-only JSONC; comments explain meaning
+// and never select control flow; unresolved semantics are surfaced in
+// "unresolved_decisions" rather than invented. Every declared surface below
+// states either what the real product exposes or what a recorded ruling says;
+// where neither answers, the decision survives unresolved.
+{
+	"spec_meta": {
+		"product": "vault-git",
+		"input_schema_version": "2",
+		"product_specification_revision": "unadmitted",
+		"state_machine_definition_version": "unadmitted",
+		"public_result_schema_version": "2",
+		"activation_result_schema_version": "3",
+	},
+
+	// Features condition which machinery is generated. Vault Git admits all of
+	// them; Fallow's candidate omits nearly all of them.
+	"features": {
+		"durable_operations": true,
+		"liveness_evidence": true,
+		// Ruling cancellation_scope: Vault Transaction cancellation is
+		// not_supported. Activation and preparation keep their own distinct
+		// meanings under "cancellation" below; neither is transaction cancellation.
+		"cancellation": "not_supported",
+		"version_custody": true,
+		"remote_authority": true,
+		"feature_gates": ["vault_content_repair"],
+	},
+
+	"entities": {
+		"transaction": {
+			"identity": { "field": "transactionId", "pattern": "^txn_[0-9a-f]{32}$" },
+			"fencing": { "field": "leaseGeneration", "owner": "remote_ledger" },
+		},
+		"receipt": {
+			"identity": { "field": "receiptId", "pattern": "^receipt_[0-9a-f]{32}$" },
+			"revision": { "field": "revision", "rule": "monotonic_append_only" },
+			"schema_version": 2,
+		},
+		"remote_lease": {
+			"identity": { "fields": ["transactionId", "generation"] },
+			"generation_chain": { "ref": "refs/heads/vault-system/transaction-ledger", "advance": "compare_and_swap" },
+		},
+		"completion_task": {
+			"identity": { "field": "taskId", "pattern": "^task_[0-9a-f]{32}$" },
+			"revision": { "field": "revision", "rule": "compare_and_swap" },
+			"logical_operation": { "field": "taskId" },
+			"attempt": { "field": "attemptNumber", "increment_only_by": "explicit_repair" },
+			"launch_attempt": { "field": "launchAttempt", "range": [0, 2], "creates_attempt": false },
+			"launch_generation": { "field": "launchGeneration", "pattern": "^launch_[0-9a-f]{32}$" },
+			"schema_version": 2,
+		},
+		"doctor_task": {
+			"identity": { "field": "taskId", "pattern": "^doctor_task_[0-9a-f]{32}$" },
+			"revision": { "field": "revision", "rule": "compare_and_swap" },
+			"schema_version": 1,
+			"grants_authority": false,
+		},
+		"activation_record": {
+			"identity": { "field": "evidenceId", "pattern": "^vault-git:prepared:v2:[0-9a-f]{64}$" },
+			"schema_version": 2,
+			"bindings": [
+				"repositoryIdentity", "remoteIdentity", "hostIdentity", "runtimeIdentity",
+				"executableIdentity", "privateStateIdentity", "localMainHead", "remoteMainHead",
+				"ledgerGeneration", "gitIdentity", "sshIdentity", "checkerClosure",
+			],
+		},
+		"capability": {
+			"roles": ["owner", "join"],
+			"delivery": "inherited_fd", // never argv bytes
+			"storage": "per_receipt_per_role",
+		},
+		"host_quarantine": { "record": "append_only" },
+		"candidate_residue": {
+			"identity": { "field": "candidateId", "pattern": "^candidate-" },
+			"schema_version": 1,
+		},
+	},
+
+	"states": {
+		"transaction_phase": {
+			"values": [
+				"unavailable", "inspecting", "intent_durable", "leased", "writing",
+				"checking", "committing", "push_pending", "repairable",
+				"human_required", "blocked", "closed",
+			],
+			"durable_subset_excludes": ["unavailable", "inspecting"],
+			"terminal": ["closed"],
+			"human_terminal": ["human_required"],
+		},
+		"transaction_read_state": {
+			"values": [
+				"absent", "active", "expired", "superseded", "unknown",
+				"push_pending", "repairable", "human_required", "closed",
+			],
+			// Total phase-to-read-state projection. The current implementation has two
+			// competing partial functions; this table is the single declared one.
+			// Rows marked "decision" resolve gaps the code leaves null.
+			"projection_from_phase": {
+				"unavailable": "unknown",     // decision: was unmapped
+				"inspecting": "unknown",      // decision: was unmapped
+				"intent_durable": "active",   // decision: was unmapped
+				"leased": "active",           // decision: was unmapped
+				"writing": "active",          // decision: was unmapped
+				"checking": "active",         // decision: was unmapped
+				"committing": "active",       // decision: was unmapped
+				"push_pending": "push_pending",
+				"repairable": "repairable",
+				"human_required": "human_required",
+				"blocked": "unknown",
+				"closed": "closed",
+			},
+			// absent / expired / superseded arise from ledger observation, not from
+			// a local phase; they are observation-sourced states.
+			"observation_sourced": ["absent", "expired", "superseded"],
+		},
+		"completion_task": {
+			"values": ["claimed", "launching", "in_progress", "closed", "repair_needed", "unknown"],
+			"phases": ["admitted", "running", "terminal"],
+			"legal_pairings": {
+				"admitted": ["claimed", "launching"],
+				"running": ["in_progress"],
+				"terminal": ["closed", "repair_needed", "unknown"],
+			},
+			"state_field_requirements": {
+				"launching": { "launchGeneration": "present", "launchExpiresAt": "present" },
+				"in_progress": { "launchGeneration": "present", "launchExpiresAt": "null" },
+			},
+			"terminal": ["closed", "repair_needed", "unknown"],
+			"absorbing": ["closed"],
+		},
+		"doctor_task": {
+			"values": ["claimed", "launching", "in_progress", "closed", "unknown"],
+			"phases": ["admitted", "running", "terminal"],
+			"terminal": ["closed", "unknown"],
+			"checkpoints": ["local_classified", "checking_remote", "terminal"],
+		},
+		"lease": { "values": ["held", "released"] },
+		"host_disposition": { "values": ["authoritative", "quarantined"] },
+		"quarantine_status": { "values": ["takeover_pending", "quarantined", "reconciled"] },
+		"push_outcome": { "values": ["not_attempted", "unknown", "closed", "host_contract_breach"] },
+		"write_permission": { "values": ["denied", "join", "owner"] },
+		"changed_state": { "values": ["none", "local", "remote", "committed", "partial"] },
+		"result_outcome": {
+			"values": [
+				"read_only", "discovered", "unavailable", "invalid_usage", "admitted",
+				"joined", "advanced", "completed", "repaired", "refused",
+			],
+		},
+		"activation_result_status": { "values": ["restricted", "deferred"] },
+	},
+
+	// The declared state whose values every transition's to_phase names. Declared
+	// rather than found by name: the generator never infers which state owns the
+	// phases, and vault-git's receipt phase is the one the engine advances.
+	"phase_state": "transaction_phase",
+
+	// Receipt transitions: the event vocabulary that moves durable state.
+	// driver: command = engine on a public invocation; repair = repair engine;
+	// observation = doctor/reconciliation reading authoritative evidence.
+	"transitions": [
+		{ "event": "acquisition_intent", "to_phase": "intent_durable", "driver": "command" },
+		{ "event": "lease_won", "to_phase": "leased", "driver": "command" },
+		{ "event": "lease_won", "to_phase": "leased", "driver": "repair", "via": "stale-lease-takeover" },
+		{ "event": "write_authority_granted", "to_phase": "writing", "driver": "command" },
+		{ "event": "write_authority_granted", "to_phase": "writing", "driver": "repair", "via": "resume" },
+		{ "event": "paths_joined", "to_phase": "writing", "driver": "command" },
+		{ "event": "completion_requested", "to_phase": "checking", "driver": "command" },
+		{ "event": "deterministic_repair_available", "to_phase": "repairable", "driver": "command" },
+		{ "event": "commit_candidate_frozen", "to_phase": "committing", "driver": "command" },
+		{ "event": "push_outcome_unknown", "to_phase": "push_pending", "driver": "command" },
+		{ "event": "push_outcome_unknown", "to_phase": "push_pending", "driver": "repair", "via": "retry-push" },
+		{ "event": "closed", "to_phase": "closed", "driver": "command" },
+		{ "event": "closed", "to_phase": "closed", "driver": "repair", "via": "close-verified" },
+		{ "event": "human_intervention_required", "to_phase": "human_required", "driver": "command" },
+		{ "event": "human_intervention_required", "to_phase": "human_required", "driver": "repair" },
+		{ "event": "superseded", "to_phase": "human_required", "driver": "observation", "note": "prior writer quarantined" },
+		{ "event": "quarantine_reconciled", "to_phase": "closed", "driver": "repair", "via": "reconcile-quarantine" },
+	],
+
+	// Task terminal refinement: currently a compound boolean plus a comment.
+	// Declared here as explicit transition permissions.
+	"task_refinement_rules": {
+		"allowed": [{ "from": "unknown", "to": "repair_needed", "driver": "observation" }],
+		"forbidden": [
+			{ "from": "closed", "to": "*", "reason": "closed absorbs" },
+			{ "from": "repair_needed", "to": "unknown", "reason": "doctor may refine, never decay" },
+		],
+	},
+
+	"monotonic_constraints": [
+		{ "entity": "completion_task", "field": "launchAttempt", "rule": "never_decreases" },
+		{ "entity": "completion_task", "field": "updatedAt", "rule": "never_decreases" },
+		{ "entity": "completion_task", "field": "repairReentryBlocked", "rule": "latch_true", "latched_by": "any observation of state unknown" },
+		{ "entity": "completion_task", "field": "repairAuthorization", "rule": "cleared_only_on_state", "state": "closed" },
+		{ "entity": "receipt", "field": "revision", "rule": "never_decreases" },
+	],
+
+	"invariants": [
+		{
+			"id": "repair_authorization_reachability",
+			"holds": "repairAuthorization present only when state repair_needed, phase terminal, repairReentryBlocked false",
+			"consequence": "a task that ever observed unknown can never hold a repair authorization",
+		},
+		{ "id": "one_writer", "holds": "exactly one ledger generation holds write authority; CAS append advances it" },
+		{ "id": "lease_expiry_grants_nothing", "holds": "lease expiry never grants takeover; takeover requires human attestation plus doctor token" },
+		{ "id": "heartbeat_not_authority", "holds": "heartbeatAt and worker identity are liveness evidence only" },
+		{ "id": "doctor_authority_free", "holds": "doctor grants no vault, git, lease, repair, or activation authority" },
+		{ "id": "commit_evidence_before_push", "holds": "push_pending with pushOutcome unknown is persisted before any push is attempted; append failure means push not attempted" },
+	],
+
+	"blockers": [
+		"runtime_unavailable", "activation_blocked", "vault_unconfigured", "remote_unavailable",
+		"task_not_found", "task_input_mismatch", "worker_launch_failed", "worker_launch_protocol_failed",
+		"worker_lost", "main_behind", "main_ahead", "main_diverged", "push_pending", "lease_active",
+		"lease_stale", "ledger_malformed", "lease_generation_stale", "lease_owner_unknown",
+		"remote_moved", "receipt_conflict", "host_contract_breach", "human_required", "offline_mode",
+		"receipt_corrupt", "capability_missing", "capability_invalid", "capability_role_mismatch",
+		"vault_identity_changed", "owned_path_not_admitted", "commit_subject_invalid",
+		"identity_label_invalid", "owned_path_changed", "unrelated_state_changed",
+		"completion_baseline_changed", "completion_interrupted", "empty_event", "vault_check_failed",
+		"transaction_mismatch", "doctor_proof_stale", "doctor_token_invalid", "host_quarantined",
+		"deterministic_repair_mismatch", "repair_action_required", "dirty_tree", "checker_unadmitted",
+		"checker_changed", "checker_output_invalid", "checker_repair_refused", "continuation_unavailable",
+		// Ruling observation_expired_blocker_overload: continuation_unavailable is
+		// reserved for projection failure, and each observation lifecycle expires
+		// into its own named cause.
+		"doctor_observation_expired", "completion_observation_expired",
+		// Ruling owner_pause_mode: the blocker an active Pause Mode emits.
+		"owner_pause_active",
+	],
+
+	"activation": {
+		"restriction_causes": [
+			"configuration_missing", "admission_missing", "human_capability_required",
+			"evidence_changed", "binding_changed", "invalidated", "revoked", "revalidation_unavailable",
+		],
+		"stopped_actions": ["activation_preparation", "activation_admission", "vault_write", "activation_revocation"],
+		"configuration_fields": ["host_identity", "ssh_identity_file", "ssh_public_key", "ssh_known_hosts"],
+		"cause_to_next_action": {
+			"configuration_missing": "configure_activation_identity",
+			"admission_missing": "prepare_fresh",
+			"human_capability_required": "return_to_human_review",
+			"evidence_changed": "prepare_fresh",
+			"binding_changed": "prepare_fresh",
+			"invalidated": "prepare_fresh",
+			"revoked": "prepare_fresh",
+			"revalidation_unavailable": "wait_for_runtime",
+		},
+	},
+
+	// Next Safe Action catalog: kind, owner, condition, gating, context needs.
+	// Exactly one catalog; the current code's second compat vocabulary becomes a
+	// derived rendering, never a second authority (see unresolved_decisions).
+	"actions": {
+		"kinds": ["invoke", "needs_input", "needs_human", "none"],
+		"needs_human_kinds": ["command", "external_prerequisite"],
+		"external_owners": [
+			"vault_git_operator", "repository_ssh_owner", "vault_git_performance_owner",
+			"transaction_owner", "join_owner", "private_launcher",
+		],
+		"catalog": [
+			{ "id": "reconcile_quarantine", "kind": "invoke" },
+			{ "id": "preview_host_enrollment_repair", "kind": "invoke" },
+			{ "id": "apply_vault_content_repair", "kind": "invoke", "requires_feature": "vault_content_repair" },
+			{ "id": "inspect_completion_task", "kind": "invoke", "requires_context": ["task_id"] },
+			{ "id": "run_janitor", "kind": "invoke" },
+			{ "id": "resume_vault_content_promotion", "kind": "invoke", "requires_feature": "vault_content_repair" },
+			{ "id": "resume_repaired_transaction", "kind": "invoke", "requires_context": ["transaction_id"] },
+			// Ruling "run_repair resume variant": one public spelling covers two
+			// canonical meanings. Doctor reaches the resume repair from a recovered
+			// local commit (a repaired transaction) and from an interrupted check or
+			// commit; the second is this id, distinct from the first.
+			{ "id": "resume_interrupted_transaction", "kind": "invoke", "requires_context": ["transaction_id"] },
+			{ "id": "close_verified_publication", "kind": "invoke", "requires_context": ["transaction_id"] },
+			{ "id": "retry_proven_unpublished", "kind": "invoke", "requires_context": ["transaction_id"] },
+			{ "id": "inspect_doctor_task", "kind": "invoke", "requires_context": ["doctor_task_id"] },
+			{ "id": "inspect_transaction", "kind": "invoke", "requires_context": ["transaction_id"] },
+			{ "id": "inspect_remote_lease", "kind": "invoke" },
+			{ "id": "inspect_configured_vault", "kind": "invoke" },
+			{ "id": "inspect_commands", "kind": "invoke" },
+			{ "id": "run_doctor", "kind": "invoke" },
+			{ "id": "prepare_fresh", "kind": "invoke" },
+			{ "id": "retry_push", "kind": "invoke", "requires_context": ["transaction_id"] },
+			{ "id": "provide_host_enrollment_inputs", "kind": "needs_input", "input_contract": "setup.vault-git.host-enrollment" },
+			{ "id": "begin_transaction", "kind": "needs_input", "input_contract": "vault-git.begin" },
+			{ "id": "complete_transaction", "kind": "needs_input", "input_contract": "vault-git.complete" },
+			{ "id": "continue_transaction", "kind": "needs_input", "input_contract": "vault-git.join" },
+			{ "id": "resume_writing", "kind": "needs_input", "input_contract": "vault-git.join" },
+			{ "id": "run_owned_path_checks", "kind": "needs_input" },
+			// Ruling "change_owned_paths": the public spelling is a compatibility
+			// rendering over these two canonical ids. The engine refuses an
+			// unadmitted path set separately when beginning a transaction and when
+			// joining one, and the two corrections take different input contracts,
+			// so one id could not name both.
+			{ "id": "correct_begin_owned_paths", "kind": "needs_input", "input_contract": "vault-git.begin" },
+			{ "id": "correct_join_owned_paths", "kind": "needs_input", "input_contract": "vault-git.join" },
+			{ "id": "change_commit_summary", "kind": "needs_input", "input_contract": "vault-git.complete" },
+			{ "id": "correct_completion_task_id", "kind": "needs_input", "input_contract": "vault-git.completion-task-id" },
+			{ "id": "correct_doctor_task_id", "kind": "needs_input", "input_contract": "vault-git.doctor-task-id" },
+			{ "id": "review_prepared", "kind": "needs_human", "human_kind": "command" },
+			{ "id": "return_to_human_review", "kind": "needs_human", "human_kind": "command" },
+			{ "id": "request_operator_takeover", "kind": "needs_human", "human_kind": "command" },
+			{ "id": "reattest_stale_lease_takeover", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "stale_lease_takeover_reattested" },
+			{ "id": "provision_repository_ssh", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "repository_ssh_owner", "condition": "dedicated_identity_ready" },
+			{ "id": "escalate_validation_evidence", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "validation_evidence_required" },
+			{ "id": "diagnose_validation_budget", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_performance_owner", "condition": "validation_stage_budget_diagnosed" },
+			{ "id": "restore_transaction_capability", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "transaction_owner", "condition": "transaction_owner_capability_available" },
+			{ "id": "reconcile_repair_promotion", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "repair_promotion_reconciliation_required" },
+			{ "id": "obtain_remote_evidence", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "remote_evidence_available" },
+			{ "id": "resolve_publication_conflict", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "publication_conflict_resolved" },
+			{ "id": "restore_remote_contract", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "remote_contract_restored" },
+			{ "id": "use_owner_capability", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "transaction_owner", "condition": "owner_capability_supplied" },
+			{ "id": "use_join_capability", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "join_owner", "condition": "join_capability_supplied" },
+			{ "id": "reload_capability", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "transaction_owner", "condition": "transaction_capability_reloaded" },
+			{ "id": "configure_activation_identity", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "activation_identity_configured" },
+			{ "id": "request_operator_review", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "operator_reviewed_evidence" },
+			{ "id": "inspect_private_receipt", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "transaction_owner", "condition": "private_receipt_inspected" },
+			{ "id": "preserve_local_edits", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "transaction_owner", "condition": "local_edits_preserved" },
+			{ "id": "capture_private_draft", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "transaction_owner", "condition": "local_edits_preserved" },
+			{ "id": "wait_for_runtime", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "private_launcher", "condition": "runtime_owner_available" },
+			// Ruling owner_pause_mode: an active Pause emits owner_pause_active and
+			// its release is human-owned. The product declares the request; it never
+			// declares an action that clears the gate on its own authority.
+			{ "id": "request_owner_pause_release", "kind": "needs_human", "human_kind": "external_prerequisite", "owner": "vault_git_operator", "condition": "owner_pause_released" },
+			{ "id": "continue_outer_transaction", "kind": "none", "stop_scope": "agent_terminal" },
+			{ "id": "none", "kind": "none", "stop_scope": "domain_terminal" },
+		],
+		// Contextual ids are renderings that require context to resolve to a
+		// catalog id; they are never persisted as authority.
+		"contextual_renderings": {
+			"inspect_status": ["inspect_completion_task", "inspect_doctor_task", "inspect_transaction"],
+			// Ruling "retry_remote inspect context": the inspect rendering resolves
+			// to inspect_remote_lease, matching the verified runtime binding.
+			"retry_remote": ["begin_transaction", "inspect_remote_lease"],
+			"change_input": ["correct_completion_task_id", "correct_doctor_task_id"],
+			// Ruling "change_owned_paths": a compatibility rendering over the two
+			// canonical corrections, never a third path-correction meaning.
+			"change_owned_paths": ["correct_begin_owned_paths", "correct_join_owned_paths"],
+			// Ruling "run_repair resume variant": the public repair spelling renders
+			// over the canonical repairs the doctor classification selects.
+			"run_repair": [
+				"resume_interrupted_transaction", "resume_repaired_transaction",
+				"retry_push", "close_verified_publication", "reconcile_quarantine",
+			],
+		},
+		"resolution": {
+			"missing_context": "unavailable_projection",
+			"unavailable_projection_blocker": "continuation_unavailable",
+			"unavailable_projection_retry_safety": "operator_required",
+			"unavailable_projection_stop": "agent_terminal",
+		},
+	},
+
+	// Declared Routing Tables. Each states what it selects and the closed key
+	// space it selects on; a key it does not cover selects nothing.
+	"routing": {
+		// Blocker-to-action mapping for every refused public branch. Each row is
+		// the refusal the real product actually reaches on that command, with the
+		// blocker it reports, the canonical action it routes to, and the posture
+		// that route takes. The blocker is the row's answer rather than part of
+		// its key, because a station asks which blocker refuses it.
+		"station_blockers": {
+			"role": "station_blocker",
+			"target_kind": "action",
+			"discriminants": {
+				"command": [
+					"begin", "join", "complete", "status", "activation", "preview",
+					"doctor", "repair", "tidy", "janitor",
+				],
+				"branch": ["refused"],
+			},
+			"rows": [
+				// The engine refuses an unadmitted owned-path set separately when
+				// beginning and when joining, and the two corrections take different
+				// input contracts. This is the pair the change_owned_paths
+				// compatibility rendering covers.
+				{
+					"key": { "command": "begin", "branch": "refused" },
+					"blocker": "owned_path_not_admitted",
+					"target": "correct_begin_owned_paths",
+					"retry_safety": "same_input_unsafe",
+				},
+				{
+					"key": { "command": "join", "branch": "refused" },
+					"blocker": "owned_path_not_admitted",
+					"target": "correct_join_owned_paths",
+					"retry_safety": "same_input_unsafe",
+				},
+				// Capability authorization refuses a join capability that attempts an
+				// owner action; the correction is to supply the owner capability, and
+				// no repeat of the same input is safe until it is.
+				{
+					"key": { "command": "complete", "branch": "refused" },
+					"blocker": "capability_role_mismatch",
+					"target": "use_owner_capability",
+					"retry_safety": "same_input_unsafe",
+					"human_kind": "external_prerequisite",
+				},
+				{
+					"key": { "command": "repair", "branch": "refused" },
+					"blocker": "capability_role_mismatch",
+					"target": "use_owner_capability",
+					"retry_safety": "same_input_unsafe",
+					"human_kind": "external_prerequisite",
+				},
+				// A named Completion Task that no longer exists: the id is the input to
+				// correct, so the same input with a correct id is safe to send.
+				{
+					"key": { "command": "status", "branch": "refused" },
+					"blocker": "task_not_found",
+					"target": "correct_completion_task_id",
+					"retry_safety": "same_input_safe",
+				},
+				// The Doctor Task lifecycle is separate, so its missing-task refusal
+				// corrects a different id.
+				{
+					"key": { "command": "doctor", "branch": "refused" },
+					"blocker": "task_not_found",
+					"target": "correct_doctor_task_id",
+					"retry_safety": "same_input_safe",
+				},
+				// Preview honors its transaction selector: naming another transaction
+				// refuses rather than echoing the current transaction's state.
+				{
+					"key": { "command": "preview", "branch": "refused" },
+					"blocker": "transaction_mismatch",
+					"target": "inspect_transaction",
+					"retry_safety": "operator_required",
+				},
+				// The {activation, refused} row is deliberately absent, and its
+				// derivation refusal is the truthful result rather than a gap papered
+				// over. The activation refusal branch carries no lifecycle blocker at
+				// all: it emits an error code taken from the restriction cause itself
+				// (human_capability_required), and that identifier belongs to the
+				// product's closed restriction-cause vocabulary, which is disjoint from
+				// its closed blocker vocabulary. A station_blocker row must name a
+				// blocker, so this branch cannot be stated on the current shape without
+				// declaring a blocker the product refuses to call one.
+				//
+				// activation_blocked is a different refusal and stays declared in
+				// blockers on its own evidence: the engine raises it when it gates
+				// other commands on activation. It is not this branch's blocker.
+				// The hygiene commands share one report path. A refused report is
+				// operator-owned, and its remote-retry route is deliberately not the
+				// hygiene command itself: a refusal never points back at its own
+				// command.
+				{
+					"key": { "command": "tidy", "branch": "refused" },
+					"blocker": "checker_repair_refused",
+					"target": "request_operator_review",
+					"retry_safety": "operator_required",
+					"human_kind": "external_prerequisite",
+				},
+				{
+					"key": { "command": "janitor", "branch": "refused" },
+					"blocker": "checker_repair_refused",
+					"target": "request_operator_review",
+					"retry_safety": "operator_required",
+					"human_kind": "external_prerequisite",
+				},
+			],
+		},
+	},
+
+	"selectors": {
+		"transaction_id": "^txn_[0-9a-f]{32}$",
+		"task_id": "^task_[0-9a-f]{32}$",
+		"doctor_task_id": "^doctor_task_[0-9a-f]{32}$",
+		"repair_id": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+	},
+
+	"retry_posture": {
+		"values": ["same_input_safe", "same_input_unsafe", "operator_required"],
+		// Ordered rule table; first match wins. One table for success and refusal
+		// results; the current code's divergent defaults are resolved here (see
+		// unresolved_decisions.retry_default_divergence).
+		"rules": [
+			{ "when": { "state_in": ["human_required", "superseded", "expired"] }, "then": "operator_required" },
+			{ "when": { "state_in": ["push_pending"] }, "then": "same_input_unsafe" },
+			{ "when": { "blocker": "continuation_unavailable" }, "then": "operator_required" },
+			{ "when": { "activation_cause_in": ["configuration_missing", "admission_missing", "revalidation_unavailable"] }, "then": "same_input_safe" },
+			{ "when": { "activation_cause_in": ["human_capability_required", "revoked"] }, "then": "operator_required" },
+			{ "when": { "activation_cause_in": ["evidence_changed", "binding_changed", "invalidated"] }, "then": "same_input_unsafe" },
+			{ "when": { "doctor_task_terminal_in": ["worker_failure", "observation_expired"] }, "then": "operator_required" },
+			// An externally owned gate is released by its owner, so no repeat of the
+			// same input can clear it.
+			{ "when": { "blocker": "owner_pause_active" }, "then": "operator_required" },
+			// An expired observation binds to the Attempt that made it. A fresh
+			// Attempt gets a fresh bound, so the same logical work is safe to send
+			// again; polling the expired one never renews it.
+			{ "when": { "blocker": "completion_observation_expired" }, "then": "same_input_safe" },
+			{ "when": { "result_kind": "inspection" }, "then": "same_input_safe" },
+			{ "when": { "result_kind": "success" }, "then": "same_input_safe" },
+			{ "when": { "result_kind": "refusal" }, "then": "same_input_unsafe" },
+		],
+		"never_auto_retry": [
+			"unknown_publication_outcome",
+			"unknown_worker_outcome",
+			"checker_repair_after_interrupted_promotion",
+		],
+	},
+
+	"acknowledgement": {
+		"values": ["rejected", "accepted", "completed", "unknown"],
+		"cas_results": ["transitioned", "existing", "stale", "uncertain"],
+		"proof_carrier": "transitioned",
+		"unknown_policy": "reconcile_via_doctor_never_blind_retry",
+		"publication": {
+			"phases": ["evidence_persisted_before_push", "prepared_release_persisted", "atomic_close_observed"],
+			"append_failure_means": "push_not_attempted",
+		},
+	},
+
+	"waits": {
+		// All continuation is caller-driven re-invocation; there is no scheduler.
+		"wake_route": "caller_reinvocation",
+		// The declared Wake Route vocabulary an observation resolves against. One
+		// member, because the product has no scheduler and no callback surface: a
+		// waiting caller learns to observe again only by invoking again.
+		"wake_routes": ["caller_reinvocation"],
+		// Ruling completion_task_observation_deadline: five-second poll-after and a
+		// ten-minute per-Attempt observation expiry on every inspection result. The
+		// bound is per Attempt; a new Attempt gets a fresh one, and neither polling
+		// nor a heartbeat renews one.
+		//
+		// Ruling observation_expired_blocker_overload: each lifecycle expires into
+		// its own cause, and continuation_unavailable stays reserved for projection
+		// failure.
+		"observations": {
+			"completion_task": {
+				"poll_after_ms": 5000,
+				"attempt_expiry_ms": 600000,
+				"wake_route": "caller_reinvocation",
+				"missed_deadline_cause": "completion_observation_expired",
+			},
+			"doctor_task": {
+				"poll_after_ms": 5000,
+				"attempt_expiry_ms": 600000,
+				"wake_route": "caller_reinvocation",
+				"missed_deadline_cause": "doctor_observation_expired",
+			},
+		},
+		"budgets_ms": {
+			"launch_acknowledgement_window": 1500,
+			"task_heartbeat_stale": 20000,
+			"doctor_launch_acknowledgement_window": 1500,
+			"doctor_task_heartbeat_stale": 20000,
+			"doctor_task_observation_expiry": 600000,
+			"doctor_task_poll_after": 5000,
+			// Ruling completion_task_observation_deadline resolved the ADR 0002 gap
+			// by adding the two constants the Completion Task lacked, rather than
+			// amending the ADR.
+			"task_observation_expiry": 600000,
+			"task_poll_after": 5000,
+			"validation_stage_setup": 15000,
+			"validation_stage_vault_check": 30000,
+			"validation_stage_cleanup": 10000,
+			"candidate_residue_eligible_after": 3600000,
+		},
+		"missed_deadline_causes": {
+			"launch_acknowledgement_window": "expired_launch_recovered_without_new_attempt",
+			"doctor_task_observation_expiry": "doctor_observation_expired",
+			"task_observation_expiry": "completion_observation_expired",
+		},
+	},
+
+	// Per-branch columns a real process asserts against: what the branch left
+	// changed, and which stream carried its result. Declared only for the
+	// branches whose values the product states. A plain refusal renders to
+	// stderr and a plain success to stdout, and every declared refusal below
+	// reports changed_state "none" because each is reached before its command
+	// attempts its Declared Side Effect.
+	"expectation_columns": {
+		"begin.refused": { "changed_state": "none", "channel": "stderr" },
+		"join.refused": { "changed_state": "none", "channel": "stderr" },
+		"complete.refused": { "changed_state": "none", "channel": "stderr" },
+		"repair.refused": { "changed_state": "none", "channel": "stderr" },
+		"status.refused": { "changed_state": "none", "channel": "stderr" },
+		"doctor.refused": { "changed_state": "none", "channel": "stderr" },
+		"preview.refused": { "changed_state": "none", "channel": "stderr" },
+		"activation.refused": { "changed_state": "none", "channel": "stderr" },
+		"commands.success": { "changed_state": "none", "channel": "stdout" },
+		"status.success": { "changed_state": "none", "channel": "stdout" },
+		"preview.success": { "changed_state": "none", "channel": "stdout" },
+	},
+
+	// Ruling vault_content_repair_gate_meaning: the gate is a pending installed
+	// capability, not a user toggle. Availability is an installed-surface fact
+	// and never Authority; an unavailable capability routes to the
+	// operator-owned validation escalation the product already declares.
+	//
+	// No design-time availability value is declared: whether the capability is
+	// installed is runtime evidence, so a Liveness Evidence Provider observes it
+	// and the declared routing covers whichever value it observes.
+	"capabilities": {
+		"vault_content_repair": {
+			"availability_evidence": "vault_git.vault_content_repair_installed",
+			"unavailable_blocker": "capability_missing",
+			"unavailable_action": "escalate_validation_evidence",
+		},
+	},
+
+	// Ruling owner_pause_mode: an externally owned gate declared in the product
+	// model. The skill owns marker reconciliation; the specification declares the
+	// blocker an active Pause emits and the human-owned request for its release,
+	// and never an action that clears the gate on the product's own authority.
+	"pause_modes": {
+		"owner_pause": {
+			"owner": "vault_git_operator",
+			"active_blocker": "owner_pause_active",
+			"release_action": "request_owner_pause_release",
+		},
+	},
+
+	// Ruling cancellation_scope: Vault Transaction cancellation is not_supported.
+	// The activation and preparation meanings are distinct from Cancellation and
+	// keep their own owners: the activation review
+	// decisions are command_surface.activation_actions, the revocation cause and
+	// its route are activation.restriction_causes plus
+	// activation.cause_to_next_action, and preparation's checkpoint predicate is
+	// internal with no public surface. None of them is a request-to-terminal
+	// cancellation lifecycle, so none belongs under this key.
+	"cancellation": { "all": "not_supported" },
+
+	"authority": {
+		"write_authority_owner": "remote_ledger_generation",
+		"lease_expiry_grants": "nothing",
+		"stale_lease_takeover": {
+			"kind": "needs_human_command_only",
+			"requires": ["human_attestation_flag", "single_use_doctor_token_on_fd", "proof_fingerprint_match"],
+			"failure_blockers": ["doctor_proof_stale", "doctor_token_invalid"],
+		},
+		"capability_errors": {
+			"missing": { "blocker": "capability_missing" },
+			"invalid": { "blocker": "capability_invalid", "next": "reload_capability" },
+			"role_mismatch": { "blocker": "capability_role_mismatch", "next_by_role": { "owner": "use_owner_capability", "join": "use_join_capability" } },
+		},
+		"quarantine": { "on": ["released_writer", "superseded_writer"], "blocker": "host_quarantined", "next": "reconcile_quarantine" },
+	},
+
+	"command_surface": {
+		"commands": ["begin", "join", "complete", "status", "activation", "preview", "doctor", "repair", "tidy", "janitor", "commands"],
+		"exit_codes": { "0": "read_or_discovery_success", "1": "refused_blocked_or_failed", "2": "invalid_usage_or_input" },
+		"global_flags": ["--run-id", "--quiet", "--verbose", "--debug"],
+		"output_modes_default": ["plain", "json"],
+		"output_modes_overrides": { "commands": ["json"] },
+		"no_argument_behavior": "read_only_restricted_status_dashboard",
+		// The command bare invocation dispatches to, declared rather than matched
+		// by the behavior's name. The restricted dashboard is the status command's.
+		"bare_invocation_command": "status",
+		// The real public entry point (package.json "vault-git" script runs
+		// src/cli.ts), so a generated contract names a path that exists on disk.
+		"entry": { "script": "src/cli.ts" },
+		"flags": {
+			"begin": ["--json", "--no-input", "--event", "--path"],
+			"join": ["--json", "--no-input", "--transaction-id", "--capability-fd", "--path"],
+			"complete": ["--json", "--no-input", "--transaction-id", "--capability-fd", "--summary"],
+			"status": ["--json", "--task-id"],
+			"activation": ["--json", "--no-input"],
+			"preview": ["--json", "--transaction-id"],
+			"doctor": ["--json", "--transaction-id", "--task-id"],
+			"repair": ["--json", "--no-input", "--transaction-id", "--capability-fd", "--prior-writer-stopped"],
+			"tidy": ["--json", "--no-input"],
+			"janitor": ["--json", "--no-input"],
+			"commands": ["--json"],
+		},
+		// Per-command Execution Modes as the real command contract declares them
+		// (src/command-contract.ts executionModes, one row per command).
+		"execution_modes": {
+			"begin": ["normal"],
+			"join": ["normal"],
+			"complete": ["normal"],
+			"status": ["check"],
+			"activation": ["normal", "check"],
+			"preview": ["check"],
+			"doctor": ["normal"],
+			"repair": ["normal"],
+			"tidy": ["normal"],
+			"janitor": ["normal"],
+			"commands": ["check"],
+		},
+		// The product owner's declared reason that a write-implying command owes no
+		// non-mutating Execution Mode, quoted from the single previewExemption the
+		// real command contract shares across every write-implying command
+		// (src/command-contract.ts previewExemption).
+		"preview_exemptions": {
+			"begin": { "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution." },
+			"join": { "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution." },
+			"complete": { "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution." },
+			// Activation declares a write side effect and discharges the preview
+			// obligation twice: it carries both the check Execution Mode above and
+			// this shared exemption, so both are stated here as the contract states
+			// them.
+			"activation": { "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution." },
+			"doctor": { "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution." },
+			"repair": { "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution." },
+			"tidy": { "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution." },
+			"janitor": { "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution." },
+		},
+		// Ruling activation_action_routing: the command contract owns the route
+		// shape. Activation declares positional actions, an explicit
+		// "activation inspect", and a bare "activation" that binds to the same
+		// inspect action.
+		//
+		// Each positional below names the canonical action reached by that exact
+		// argv path. The argv alone does not always discriminate: two catalog
+		// actions declare the ["activation", "review"] invocation, review_prepared
+		// and return_to_human_review. This route names review_prepared as the
+		// action reached by invoking that path, while return_to_human_review stays
+		// the target a refusal hands off to rather than an invocation route.
+		//
+		// Only three of the five activation actions have a declared argv at all:
+		// "defer" and "revoke" are reachable actions of the command surface, but no
+		// catalog action declares their argv, so routing them here would name a
+		// canonical action the product has not declared. They stay uncovered; see
+		// unresolved_decisions.activation_action_routing.
+		"positional_routes": {
+			"activation": {
+				"positionals": {
+					"inspect": "inspect_configured_vault",
+					"prepare": "prepare_fresh",
+					"review": "review_prepared",
+				},
+				"bare_invocation_target": "inspect_configured_vault",
+			},
+		},
+		// Front-door branches no single command owns, each with its own declared
+		// exit meaning so one exit never carries one word for two branches.
+		"root_branches": {
+			"root_help": { "exit_code": "0", "meaning": "read_or_discovery_success" },
+			"unknown_command": { "exit_code": "2", "meaning": "invalid_usage_or_input" },
+			// The unexpected-failure path refuses and directs the caller to inspect
+			// the transaction. Its runtime rendering is inspect_status carrying
+			// transaction_receipt context; the canonical id that context resolves to
+			// is named here, because a route never persists a rendering.
+			"crash": {
+				"exit_code": "1",
+				"meaning": "unexpected_runtime_failure",
+				"action": "inspect_transaction",
+			},
+		},
+		"activation_actions": ["inspect", "prepare", "review", "defer", "revoke"],
+		"repair_actions": ["resume", "retry-push", "close-verified", "stale-lease-takeover", "reconcile-quarantine"],
+		// The mutation each command declares in the real command contract
+		// (src/command-contract.ts, one "mutation" per command). Every row here is
+		// the product's own declaration, and each write-implying row carries either
+		// an Execution Mode that previews or a declared Preview Exemption above.
+		"mutations": {
+			"begin": "remote_write", "join": "local_write", "complete": "remote_write",
+			"status": "read", "activation": "local_write", "preview": "preview",
+			"doctor": "local_write", "repair": "recovery",
+			"tidy": "remote_write", "janitor": "remote_write", "commands": "read",
+		},
+		"result_contracts": {
+			"lifecycle": { "id": "vault-git.lifecycle-result", "version": 2 },
+			"discovery": { "id": "vault-git.command-discovery", "version": 2 },
+			"activation": { "id": "vault-git.activation-result", "version": 3 },
+		},
+	},
+
+	"versioning": {
+		"records": {
+			"receipt": 2, "completion_task": 2, "doctor_task": 1, "worker_acknowledgement": 1,
+			"repair_authorization": 1, "activation_record": 2, "revocation": 1, "invalidation": 1,
+			"checker_admission": 1, "candidate_residue": 1,
+		},
+		"read_compatibility": {
+			"completion_task": ["current_23_key", "pre_receipt_revision_22_key", "legacy_18_key_v1"],
+			"matching": "exact_key_set_extra_fields_reject",
+		},
+		"incompatible_run_policy": {
+			"blocker": "incompatible_run_version",
+			"authority": "denied",
+			"retry": "operator_required",
+			"stop": "agent_terminal",
+		},
+	},
+
+	// Semantics the source could not decide. Issue #55 requires these surfaced,
+	// never invented. Each needs a product-owner decision before admission.
+	//
+	// The recorded rulings of 2026-08-21 answered several of these, and each
+	// answer is now stated on the declared surface above rather than restated
+	// here: single_action_vocabulary (one catalog, compatibility spellings as
+	// contextual renderings), vault_content_repair_gate_meaning (a pending
+	// installed capability with an operator-owned unavailable route),
+	// completion_task_observation_deadline (the two constants added, with a
+	// per-Attempt expiry), owner_pause_mode (a declared Pause Mode with a
+	// human-owned release), observation_expired_blocker_overload (one cause per
+	// lifecycle, continuation_unavailable reserved for projection failure), and
+	// cancellation_scope (transaction cancellation not_supported).
+	//
+	// The rows below survive because each still needs something a ruling did not
+	// supply: a product decision, an authored table, or evidence.
+	"unresolved_decisions": [
+		{
+			"id": "interrupted_repair_promotion_reachability",
+			"question": "Four catalog ids rehydrate to terminal none, making the ADR 0002 Interrupted Repair Promotion table unreachable outside tests. Intended?",
+			"drafted_resolution": "ruled unintended: all four accepted Repair Promotion routes stay publicly reachable under canonical ids. The routes that restore reachability are not yet authored, so the row survives until they are.",
+		},
+		{
+			"id": "doctor_finding_action_table",
+			"question": "The 21 doctor findings map to actions only through imperative call sites. The full declarative finding-to-action table must be authored and admitted; this draft does not invent it.",
+			"drafted_resolution": "ruled: the complete key is Finding plus closed authoritative-evidence discriminants, and every complete row selects exactly one canonical action. The ruling fixes the table's shape; no source declares the evidence vocabulary or the per-row targets, so the table itself stays unauthored.",
+		},
+		{
+			"id": "retry_default_divergence",
+			"question": "Success and refusal results currently apply different default retry postures for the same state. This draft unifies them in one ordered table; needs admission.",
+			"drafted_resolution": "ruled: one ordered first-match-wins table across result classes, encoded above. Exact Same-Input Retry Safety stays a separate meaning. Needs admission.",
+		},
+		{
+			"id": "lease_duration_load_bearing",
+			"question": "leaseDurationMs is documented as diagnostic-only but participates in exact intent binding, so a mismatch refuses. Diagnostic or binding?",
+			"drafted_resolution": "ruled binding: an intent-bound liveness parameter whose mismatch refuses, while duration and expiry grant no Authority. The schema carries no field for an intent-binding parameter, so the ruling is recorded here rather than declared above.",
+		},
+		{
+			"id": "persisted_contextual_ids",
+			"question": "Receipts may persist contextual ids (inspect_status, run_repair, retry_remote) that fail to reproject without context, turning valid durable state into continuation_unavailable. Forbid persisting contextual ids?",
+			"drafted_resolution": "ruled: new durable writes store canonical ids only, legacy contextual ids resolve through stored context without rewrite, and ambiguity fails closed. The rule governs durable writes rather than a declared surface, so it stays recorded here.",
+		},
+		{
+			"id": "stage_budget_provenance",
+			"question": "Validation stage budgets are admitted as not production-derived, contradicting ADR 0002. Re-measure or amend?",
+			"drafted_resolution": "ruled: preserve the accepted product rule of package-owned monotonic stage budgets derived from production-shaped measurement. The existing numbers above require remeasurement before admission, so the row survives on missing evidence.",
+		},
+		{
+			"id": "reconciled_takeover_evidence",
+			"question": "Reconciled stale-lease takeover is inferred from a 4-field heuristic instead of the quarantine record's reconciled status. Read stored state instead?",
+			"drafted_resolution": "ruled: the stored quarantine_status reconciled is authoritative, and heuristics may validate but never synthesize reconciliation. Needs the runtime read to change, which is outside this candidate.",
+		},
+		{
+			"id": "activation_action_routing",
+			"question": "The command contract declares activation actions but not how they are selected (positional routing lives only in the CLI). The contract should own the route shape.",
+			"drafted_resolution": "ruled: the command contract declares positional actions, an explicit activation inspect, and a bare activation that binds to the same inspect action, all encoded above. Two of the five activation actions, defer and revoke, remain unrouted because no catalog action declares their argv.",
+		},
+	],
+}

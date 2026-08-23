@@ -224,7 +224,7 @@ export const LANE_CLAUSES: readonly LaneClause[] = [
 			"A check that declares N targets but invokes fewer yields a surface finding naming the unexercised targets.",
 		maskingNote: {
 			resistant: false,
-			limit: "v1 compares the declared target list against observed invocations; a check that narrows its DECLARED list to match what it actually runs would pass while still under-covering. The assertion binds declaration↔execution, not execution↔intent. Recorded as a limit; tightening requires an intent oracle (deferred branch-coverage instrumentation).",
+			limit: "v1 compares the declared target list against observed invocations; a check that narrows its DECLARED list to match what it actually runs would pass while still under-covering. The assertion binds declaration↔execution, not execution↔intent. Station Maps no longer carry declared-only proof: a merged map now reports Observed Branch Coverage beside Declared, so a catalog declaring stations it never really ran shows observed below declared. That block is a separate oracle from this clause, which still binds declaration↔execution only; tightening this clause to execution↔intent requires an intent oracle (deferred branch-coverage instrumentation).",
 		},
 	},
 	{

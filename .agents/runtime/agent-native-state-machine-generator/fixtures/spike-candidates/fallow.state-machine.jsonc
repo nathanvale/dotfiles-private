@@ -1,0 +1,132 @@
+// Fallow — Specification Candidate sketch (UNADMITTED DRAFT)
+// Spike artifact for nathanvale/dotfiles-private#75, criterion 2 (generality /
+// schema overlap). Drafted 2026-08-21 from the criterion 6 probe of
+// .agents/skills/fallow (contract src/command-contract.ts, runner
+// src/fallow-runner.ts). Sketch depth: enough to measure which schema sections
+// a mostly stateless product uses; not Vault Git-level completeness.
+{
+	"spec_meta": {
+		"product": "fallow",
+		"input_schema_version": "spike-draft-1",
+		"product_specification_revision": "unadmitted",
+		"state_machine_definition_version": "unadmitted",
+		"public_result_schema_version": "2", // envelope schema_version
+	},
+
+	// Nearly every durable-work feature is omitted. Under issue #55's
+	// feature-conditioning, none of the omitted machinery may be generated.
+	"features": {
+		"durable_operations": false,
+		"liveness_evidence": false,
+		"cancellation": "not_supported",
+		"version_custody": false,
+		"remote_authority": false,
+		"feature_gates": [],
+	},
+
+	// No durable entities. run_id is ephemeral and informational; the .fallow/
+	// performance cache carries no semantics and is excluded from all decisions.
+	"entities": {},
+
+	"states": {
+		"run_status": { "values": ["ok", "issues", "blocked"], "terminal": ["ok", "issues", "blocked"] },
+		"stderr_category": { "values": ["empty", "progress", "warning", "error"], "role": "observability_only" },
+		"failure_category": { "values": ["none", "setup", "input", "fallow", "parse", "budget", "safety"] },
+		"write_effect": { "values": ["none", "previewed", "applied"] },
+		"resolver_evidence": {
+			"values": ["referenced", "entry_point", "unreferenced_by_trace", "unresolved", "unavailable"],
+		},
+		"resolver_verdict": { "values": ["keep-export", "candidate-remove", "stop"] },
+	},
+
+	// Stateless: every invocation is a self-contained check. There are no
+	// durable transitions; the only state change any command can make is the
+	// fenced fix-apply source mutation, modeled as a write effect, not a state.
+	"transitions": [],
+	"task_refinement_rules": { "allowed": [], "forbidden": [] },
+	"monotonic_constraints": [],
+
+	"invariants": [
+		{ "id": "stderr_never_selects", "holds": "stderr_category is observability metadata; no behavior branches on stderr text" },
+		{ "id": "single_typed_result", "holds": "plain output derives from the same envelope as json; parity proven per command" },
+		{ "id": "apply_fenced", "holds": "fix-apply requires the explicit operator confirmation marker; every other command declares write_effect none or previewed" },
+	],
+
+	"blockers": [], // failure_category plus repair_hints carry refusal semantics
+
+	"actions": {
+		"kinds": ["invoke", "needs_input", "needs_human", "none"],
+		"catalog": [
+			{ "id": "run-doctor", "kind": "invoke" },
+			{ "id": "setup-fallow", "kind": "needs_human", "human_kind": "external_prerequisite" },
+			{ "id": "fix-input", "kind": "needs_input" },
+			{ "id": "inspect-config", "kind": "invoke" },
+			{ "id": "reduce-output", "kind": "needs_input" },
+			{ "id": "retry", "kind": "invoke", "note": "emitted only for classifier-detected transient failures" },
+			{ "id": "trace-export-reachability", "kind": "invoke", "requires_context": ["export_reference"] },
+			{ "id": "none", "kind": "none", "stop_scope": "domain_terminal" },
+		],
+		"resolution": {
+			"missing_context": "unavailable_projection",
+			"unavailable_projection_retry_safety": "operator_required",
+			"unavailable_projection_stop": "agent_terminal",
+		},
+	},
+
+	"retry_posture": {
+		"values": ["same_input_safe", "same_input_unsafe", "operator_required"],
+		"rules": [
+			{ "when": { "command": "fix-apply" }, "then": "same_input_unsafe" },
+			{ "when": { "result_kind": "any_other" }, "then": "same_input_safe" },
+		],
+		"per_hint_field": "retry_safe", // each repair hint carries its own boolean
+		"never_auto_retry": [],
+	},
+
+	// No acknowledgement machinery: there is nothing durable to acknowledge.
+	"acknowledgement": { "values": [], "unknown_policy": "not_applicable" },
+
+	"waits": {
+		"wake_route": "caller_reinvocation",
+		"budgets_ms": {}, // output_budget exists but is a size budget, not a deadline
+		"missed_deadline_causes": {},
+	},
+
+	"cancellation": { "all": "not_supported" },
+
+	"authority": {
+		"write_authority_owner": "operator_confirmation_marker",
+		"scope": "fix-apply only; every other command needs no authority",
+	},
+
+	"command_surface": {
+		"commands": ["audit", "dead-code", "dupes", "health", "fix-preview", "fix-apply", "doctor", "why"],
+		"exit_codes": { "0": "usable_evidence_including_issues", "1": "blocked_before_usable_evidence", "2": "invalid_usage" },
+		"output_modes_default": ["plain", "json"],
+		"output_modes_overrides": {},
+		"no_argument_behavior": "help",
+		"mutations": {
+			"audit": "read", "dead-code": "read", "dupes": "read", "health": "read",
+			"doctor": "read", "why": "read", "fix-preview": "preview", "fix-apply": "local_write",
+		},
+		"result_contracts": {
+			"lifecycle": { "id": "fallow.runner", "version": 2 },
+		},
+	},
+
+	"versioning": {
+		"records": {}, // no durable records
+		"incompatible_run_policy": "not_applicable",
+	},
+
+	"unresolved_decisions": [
+		{
+			"id": "runner_crash_stderr",
+			"question": "A Bun-level runner crash emits a raw stack trace on stderr outside the contract. Declare a crash exit contract, or accept the gap?",
+		},
+		{
+			"id": "fix_apply_interrupt",
+			"question": "An interrupted fix-apply leaves partially mutated source with git as the recovery story. Keep recovery outside Fallow's boundary, or add a journal?",
+		},
+	],
+}

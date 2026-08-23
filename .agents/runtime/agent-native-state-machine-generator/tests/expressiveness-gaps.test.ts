@@ -1,0 +1,160 @@
+import { describe, expect, test } from 'bun:test'
+import {
+	compileSpecificationCandidate,
+	deriveArtifactSet,
+} from '../src/index.ts'
+import { readCandidate, readFrozenV1Exemplar } from './support/candidates.ts'
+
+/**
+ * Input Schema v1 expressiveness gaps, proved as refusals.
+ *
+ * Repair cycle 1 removed two inventions: an execution mode no candidate
+ * declares, and a blocker chosen arbitrarily from a list with no
+ * command mapping. With both gone, neither spike candidate can currently emit
+ * a complete artifact set, and the generator says so with sealed causes rather
+ * than publishing an inferred meaning as an admitted one.
+ *
+ * These tests pin the gaps so they cannot be closed silently. When the product
+ * owner admits an execution-mode surface and a blocker-to-command mapping at
+ * stage 5, these tests fail loudly and are replaced by the positive emission
+ * gates they currently stand in for. That failure is the point: it forces the
+ * decision back to the owner instead of letting a default paper over it.
+ *
+ * The vault-git subject here is the frozen v1 exemplar, not the live vault-git
+ * candidate. These are claims about what Input Schema v1 cannot express, so
+ * they need v1 input; the live candidate has since been re-authored against v2,
+ * which closes both gaps and would leave every row below asserting nothing.
+ */
+
+async function v1SourceFor(product: 'vault-git' | 'fallow'): Promise<string> {
+	return product === 'vault-git'
+		? await readFrozenV1Exemplar()
+		: await readCandidate(product)
+}
+
+async function emit(product: 'vault-git' | 'fallow') {
+	const compiled = compileSpecificationCandidate(await v1SourceFor(product))
+	if (!compiled.ok) throw new Error(`${product} candidate failed to compile`)
+	return deriveArtifactSet(compiled.ir, compiled.digest.specificationDigest)
+}
+
+describe('the generator refuses rather than inventing an execution mode', () => {
+	for (const product of ['vault-git', 'fallow'] as const) {
+		test(`${product} write-implying commands are refused, not given a check mode`, async () => {
+			const emission = await emit(product)
+			expect(emission.ok).toBe(false)
+			if (emission.ok) return
+
+			const previewRefusals = emission.refusals.filter(
+				(refusal) => refusal.cause === 'emit_write_preview_undeclarable',
+			)
+			expect(previewRefusals.length).toBeGreaterThan(0)
+			for (const refusal of previewRefusals) {
+				// The refusal names the command so the owner knows exactly what to
+				// admit, and points at the decision rather than a generator internal.
+				expect(refusal.message).toContain('execution mode')
+				expect(refusal.message).toContain(refusal.subject)
+			}
+		})
+	}
+
+	test('the frozen v1 exemplar names every write-implying command it cannot preview', async () => {
+		const compiled = compileSpecificationCandidate(await readFrozenV1Exemplar())
+		if (!compiled.ok) throw new Error('frozen v1 exemplar failed to compile')
+		const emission = deriveArtifactSet(
+			compiled.ir,
+			compiled.digest.specificationDigest,
+		)
+		expect(emission.ok).toBe(false)
+		if (emission.ok) return
+
+		// Deliberate independent oracle: the write-implying list restated as a
+		// literal. Do not hoist onto isWriteImplyingMutation - it is the same
+		// predicate the derivation branches on, and f(x) === f(x) proves
+		// nothing (repair M1).
+		const expected = Object.entries(compiled.ir.commandSurface.mutations)
+			.filter(([, mutation]) =>
+				['remote_write', 'local_write', 'recovery'].includes(mutation),
+			)
+			.map(([command]) => command)
+			.sort()
+
+		const refused = emission.refusals
+			.filter((refusal) => refusal.cause === 'emit_write_preview_undeclarable')
+			.map((refusal) => refusal.subject)
+			.sort()
+
+		expect(refused).toEqual(expected)
+	})
+})
+
+describe('the generator refuses rather than choosing a blocker arbitrarily', () => {
+	for (const product of ['vault-git', 'fallow'] as const) {
+		test(`${product} refusal stations cannot name an admitted blocker`, async () => {
+			const emission = await emit(product)
+			expect(emission.ok).toBe(false)
+			if (emission.ok) return
+
+			const blockerRefusals = emission.refusals.filter(
+				(refusal) =>
+					refusal.cause === 'emit_expectation_column_underivable' &&
+					refusal.subject.endsWith(':blocker'),
+			)
+			expect(blockerRefusals.length).toBeGreaterThan(0)
+			for (const refusal of blockerRefusals) {
+				expect(refusal.subject).toContain('.refused:blocker')
+			}
+		})
+	}
+
+	test('the frozen v1 exemplar declares many blockers but no command mapping', async () => {
+		// This is the shape of the gap: it is not that blockers are missing, but
+		// that v1 has no way to say which blocker refuses which command. Picking
+		// `blockers[0]` would publish an arbitrary choice as an admitted meaning.
+		const compiled = compileSpecificationCandidate(await readFrozenV1Exemplar())
+		if (!compiled.ok) throw new Error('frozen v1 exemplar failed to compile')
+		expect(compiled.ir.blockers.length).toBeGreaterThan(1)
+	})
+
+	test('fallow declares no blockers at all', async () => {
+		const compiled = compileSpecificationCandidate(
+			await readCandidate('fallow'),
+		)
+		if (!compiled.ok) throw new Error('fallow candidate failed to compile')
+		expect(compiled.ir.blockers).toEqual([])
+	})
+})
+
+describe('refusals stay complete and deterministic', () => {
+	test('every refusal carries a sealed cause and a named subject', async () => {
+		for (const product of ['vault-git', 'fallow'] as const) {
+			const emission = await emit(product)
+			expect(emission.ok).toBe(false)
+			if (emission.ok) continue
+			for (const refusal of emission.refusals) {
+				expect(refusal.subject.length).toBeGreaterThan(0)
+				expect(refusal.message.length).toBeGreaterThan(0)
+			}
+		}
+	})
+
+	test('the same candidate refuses identically twice', async () => {
+		const compiled = compileSpecificationCandidate(await readFrozenV1Exemplar())
+		if (!compiled.ok) throw new Error('frozen v1 exemplar failed to compile')
+		const digest = compiled.digest.specificationDigest
+		const first = deriveArtifactSet(compiled.ir, digest)
+		const second = deriveArtifactSet(compiled.ir, digest)
+		expect(JSON.stringify(first.refusals)).toBe(JSON.stringify(second.refusals))
+	})
+
+	test('all derivations run before refusing, so the repair list is complete', async () => {
+		// Not first-problem-only: a caller must see every command needing an
+		// execution-mode decision in one pass, not discover them one rerun at a
+		// time.
+		const emission = await emit('vault-git')
+		expect(emission.ok).toBe(false)
+		if (emission.ok) return
+		const causes = new Set(emission.refusals.map((refusal) => refusal.cause))
+		expect(causes.size).toBeGreaterThan(1)
+	})
+})

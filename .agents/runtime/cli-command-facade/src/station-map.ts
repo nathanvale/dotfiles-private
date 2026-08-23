@@ -6,13 +6,64 @@ import type {
 import { validateProjectedFreeText } from "./runtime-text-safety";
 
 /**
+ * The claim that every required Branch Station is present in the catalog.
+ *
+ * Catalog presence only. It is not product proof, observed behavior, or
+ * tests passed.
+ *
+ * This is the sole owner of the literal. `STATION_MAP_COMPLETENESS_CLAIM` is
+ * defined from it so the two names cannot drift apart.
+ */
+export const STATION_MAP_DECLARED_COVERAGE_CLAIM =
+	"declared_branch_coverage" as const;
+
+/**
  * The only completeness claim a Station Map may make in v1.
  *
  * It names package-declared branch coverage, not TypeScript or whole-program
- * branch completeness.
+ * branch completeness. Same value as
+ * `STATION_MAP_DECLARED_COVERAGE_CLAIM`, kept as a separate name with its own
+ * lifecycle: this alias is removable later without touching the coverage
+ * block.
  */
 export const STATION_MAP_COMPLETENESS_CLAIM =
-	"declared_branch_coverage" as const;
+	STATION_MAP_DECLARED_COVERAGE_CLAIM;
+
+/**
+ * The claim that a Branch Station crossed the real public-process seam and
+ * matched its expected result.
+ *
+ * Never satisfied by catalog completeness, unit-only execution, or synthetic
+ * scenarios.
+ */
+export const STATION_MAP_OBSERVED_COVERAGE_CLAIM =
+	"observed_branch_coverage" as const;
+
+/**
+ * How a Branch Station evidence row was produced.
+ *
+ * `real_process` means a real public-process run produced the observed values.
+ * `synthetic` means anything else: catalog-derived rows, in-process fakes, or
+ * hand-written scenarios.
+ */
+export const BRANCH_STATION_EVIDENCE_PROVENANCES = [
+	"real_process",
+	"synthetic",
+] as const;
+
+/**
+ * Provenance of one Branch Station evidence row.
+ */
+export type BranchStationEvidenceProvenance =
+	(typeof BRANCH_STATION_EVIDENCE_PROVENANCES)[number];
+
+/**
+ * Provenance assumed when an evidence row declares none.
+ *
+ * Fail-closed: an unlabelled row cannot raise Observed Branch Coverage.
+ */
+export const DEFAULT_BRANCH_STATION_EVIDENCE_PROVENANCE =
+	"synthetic" as const satisfies BranchStationEvidenceProvenance;
 
 /**
  * Package-owned coverage classifications for Branch Stations.
@@ -131,6 +182,12 @@ export interface BranchStationEvidence {
 	observedErrorCode?: string;
 	/** Required rationale for skipped and declared-unreachable stations. */
 	rationale?: string;
+	/**
+	 * How this row was produced. Absent means `synthetic`.
+	 *
+	 * Only `real_process` rows can raise Observed Branch Coverage.
+	 */
+	provenance?: BranchStationEvidenceProvenance;
 }
 
 /**
@@ -171,6 +228,15 @@ export interface StationMapObservedResult {
 export interface StationMapEvidence {
 	/** Reconciled evidence state. */
 	status: BranchStationEvidenceStatus;
+	/**
+	 * How this row was produced.
+	 *
+	 * Optional so a map built outside `projectStationMap` still satisfies this
+	 * type. `projectStationMap` always populates it, so a reader can audit
+	 * which rows the observed count excluded; rows with no declared provenance
+	 * project `synthetic`. Absent is read as `synthetic`, fail-closed.
+	 */
+	provenance?: BranchStationEvidenceProvenance;
 	/** Rationale for skipped or declared-unreachable states. */
 	rationale?: string;
 	/** Observed result data used for drift reconciliation. */
@@ -224,11 +290,54 @@ export interface StationMapFinding {
 }
 
 /**
+ * Counts backing one coverage claim.
+ */
+export interface StationMapCoverageCount {
+	/** Stations counted against this claim. */
+	total: number;
+	/** Required-classification stations counted against this claim. */
+	required: number;
+}
+
+/**
+ * Declared and Observed Branch Coverage reported separately.
+ *
+ * The two claims are different kinds of evidence and never substitute for one
+ * another: `declared` counts catalog presence, `observed` counts stations a
+ * real process crossed and matched. Reading `declared` as product proof is the
+ * failure this split exists to prevent.
+ */
+export interface StationMapCoverage {
+	/** Catalog presence. Not product proof. */
+	declared: StationMapCoverageCount & {
+		claim: typeof STATION_MAP_DECLARED_COVERAGE_CLAIM;
+	};
+	/** Real-process stations that matched their expected result. */
+	observed: StationMapCoverageCount & {
+		claim: typeof STATION_MAP_OBSERVED_COVERAGE_CLAIM;
+	};
+}
+
+/**
  * Deterministic Station Map projection.
  */
 export interface StationMap {
-	/** Explicitly scoped completeness claim. */
+	/**
+	 * Explicitly scoped completeness claim.
+	 *
+	 * @deprecated Read `coverage` instead. This field reports Declared Branch
+	 * Coverage only and cannot express Observed Branch Coverage. It keeps its
+	 * value and type for existing consumers.
+	 */
 	completeness_claim: typeof STATION_MAP_COMPLETENESS_CLAIM;
+	/**
+	 * Declared and Observed Branch Coverage, counted separately.
+	 *
+	 * Optional so a map built outside `projectStationMap` still satisfies this
+	 * type. `projectStationMap` always populates it, so absent means the
+	 * producer predates this block, never that coverage is zero.
+	 */
+	coverage?: StationMapCoverage;
 	/** Commands from discovery plus package station declarations. */
 	commands: Readonly<Record<string, StationMapCommand>>;
 	/** Canonically sorted Branch Stations. */
@@ -257,6 +366,9 @@ const STATION_ID_PATTERN = /^[a-z][a-z0-9:-]*\.[a-z][a-z0-9_:-]*$/;
 const ALLOWED_CLASSIFICATIONS = new Set<string>(BRANCH_STATION_CLASSIFICATIONS);
 const ALLOWED_EVIDENCE_STATUSES = new Set<string>(
 	BRANCH_STATION_EVIDENCE_STATUSES,
+);
+const ALLOWED_EVIDENCE_PROVENANCES = new Set<string>(
+	BRANCH_STATION_EVIDENCE_PROVENANCES,
 );
 
 /**
@@ -344,6 +456,18 @@ export function findBranchStationCatalogDrift(
 			);
 		}
 		if (
+			evidence.provenance !== undefined &&
+			!ALLOWED_EVIDENCE_PROVENANCES.has(evidence.provenance)
+		) {
+			drift.push(
+				driftRecord(
+					path,
+					"branch-station-evidence-provenance-invalid",
+					`${evidence.stationId}:${evidence.provenance}`,
+				),
+			);
+		}
+		if (
 			(evidence.status === "skipped" ||
 				evidence.status === "declared-unreachable") &&
 			!evidence.rationale?.trim()
@@ -420,11 +544,80 @@ export function projectStationMap(input: ProjectStationMapInput): StationMap {
 
 	return {
 		completeness_claim: STATION_MAP_COMPLETENESS_CLAIM,
+		coverage: aggregateStationMapCoverage(stations),
 		commands,
 		stations,
 		drift: findBranchStationCatalogDrift(input),
 		findings,
 	};
+}
+
+/**
+ * Count Declared and Observed Branch Coverage separately over station rows.
+ *
+ * Declared counts every station given. Observed counts only stations whose
+ * evidence came from a real process and reconciled to `covered`: a synthetic
+ * row cannot raise it, and neither can a real-process row that drifted. A row
+ * declaring no provenance is read as `synthetic`, fail-closed.
+ *
+ * This is the single owner of the counting rule. A caller merging several
+ * Station Maps passes the merged station rows here rather than summing the
+ * maps' `coverage` blocks, so rows from a producer that emitted no `coverage`
+ * are still counted truthfully.
+ *
+ * @param stations - Projected station rows to count
+ * @returns Declared and Observed Branch Coverage for those rows
+ *
+ * @example
+ * ```typescript
+ * const coverage = aggregateStationMapCoverage(
+ *   maps.flatMap((map) => [...map.stations]),
+ * )
+ * ```
+ */
+export function aggregateStationMapCoverage(
+	stations: readonly StationMapStation[],
+): StationMapCoverage {
+	const observedStations = stations.filter(
+		(entry) =>
+			(entry.evidence.provenance ??
+				DEFAULT_BRANCH_STATION_EVIDENCE_PROVENANCE) === "real_process" &&
+			entry.evidence.status === "covered",
+	);
+	return {
+		declared: {
+			claim: STATION_MAP_DECLARED_COVERAGE_CLAIM,
+			total: stations.length,
+			required: countRequired(stations),
+		},
+		observed: {
+			claim: STATION_MAP_OBSERVED_COVERAGE_CLAIM,
+			total: observedStations.length,
+			required: countRequired(observedStations),
+		},
+	};
+}
+
+function countRequired(stations: readonly StationMapStation[]): number {
+	return stations.filter((entry) => entry.classification === "required").length;
+}
+
+/**
+ * Project the provenance of one evidence row, fail-closed.
+ *
+ * A row declaring no provenance, or a value outside
+ * `BRANCH_STATION_EVIDENCE_PROVENANCES`, projects the default so the emitted
+ * union stays honest and an unrecognised value cannot reach a consumer that
+ * trusts the declared type. An invalid value is reported separately by the
+ * `branch-station-evidence-provenance-invalid` drift record.
+ */
+function projectProvenance(
+	evidence: BranchStationEvidence | undefined,
+): BranchStationEvidenceProvenance {
+	const declared = evidence?.provenance;
+	return declared !== undefined && ALLOWED_EVIDENCE_PROVENANCES.has(declared)
+		? declared
+		: DEFAULT_BRANCH_STATION_EVIDENCE_PROVENANCE;
 }
 
 function projectStation(
@@ -444,6 +637,7 @@ function projectStation(
 		expected,
 		evidence: {
 			status,
+			provenance: projectProvenance(evidence),
 			...(evidence?.rationale ? { rationale: evidence.rationale } : {}),
 			...(Object.keys(observed).length > 0 ? { observed } : {}),
 		},

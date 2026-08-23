@@ -1,0 +1,270 @@
+// INVALID: the doctor table requires complete coverage but routes no row
+// for one declared Finding-plus-evidence combination.
+{
+	"spec_meta": { "product": "surfaces", "input_schema_version": "2" },
+	"features": {
+		"durable_operations": false,
+		"liveness_evidence": true,
+		"cancellation": "not_supported",
+		"version_custody": false,
+		"remote_authority": false,
+		"feature_gates": ["content_repair"],
+	},
+	"entities": {},
+	"states": {
+		"run_status": { "values": ["ok", "blocked"], "terminal": ["ok", "blocked"] },
+		"work_phase": {
+			"values": ["idle", "running", "settled"],
+			"terminal": ["settled"],
+		},
+	},
+	// S-row G14: the phase-bearing state is declared, never found by name.
+	"phase_state": "work_phase",
+	"transitions": [
+		{ "event": "started", "to_phase": "running", "driver": "command" },
+		{ "event": "finished", "to_phase": "settled", "driver": "command" },
+	],
+	"invariants": [
+		{ "id": "single_typed_result", "holds": "plain output derives from the json envelope" },
+	],
+	"blockers": [
+		"work_unavailable", "owner_pause_active", "capability_missing",
+		"work_observation_expired", "doctor_observation_expired",
+	],
+	"actions": {
+		"kinds": ["invoke", "wait", "needs_input", "needs_human", "none"],
+		"needs_human_kinds": ["operator_handoff", "owner_release"],
+		"external_owners": ["worker", "product_owner"],
+		"catalog": [
+			{ "id": "run_doctor", "kind": "invoke" },
+			{ "id": "inspect_work", "kind": "invoke" },
+			{ "id": "correct_input", "kind": "needs_input" },
+			{
+				"id": "wait_for_work",
+				"kind": "wait",
+				"condition": "work is advancing",
+				"owner": "worker",
+			},
+			{
+				"id": "request_owner_pause_release",
+				"kind": "needs_human",
+				"human_kind": "owner_release",
+			},
+			{
+				"id": "escalate_to_operator",
+				"kind": "needs_human",
+				"human_kind": "operator_handoff",
+			},
+			{ "id": "none", "kind": "none", "stop_scope": "domain_terminal" },
+		],
+		// S1: public compatibility identifiers resolving to canonical ids only
+		// once context is supplied. Never a second action vocabulary.
+		"contextual_renderings": {
+			"inspect": ["inspect_work", "run_doctor"],
+			"repair": "escalate_to_operator",
+		},
+		"resolution": {
+			"missing_context": "unavailable_projection",
+			"unavailable_projection_retry_safety": "operator_required",
+			"unavailable_projection_stop": "agent_terminal",
+		},
+	},
+	// S3, S6, S8, S12: every Routing Table declares what it selects and the
+	// closed key space it selects on. A complete key selects exactly one row;
+	// an uncovered key selects nothing.
+	"routing": {
+		// S3: Finding plus a closed authoritative-evidence discriminant set.
+		// Complete coverage is required, so unknown or missing evidence is a
+		// refusal rather than a silent gap (ADR 0005).
+		"doctor_findings": {
+			// Advisory: derivation binds no station from this table, so declaring
+			// a blocker discriminant here can never be read as station meaning.
+			"role": "advisory",
+			"target_kind": "action",
+			"discriminants": {
+				"finding": ["work_missing", "work_stale"],
+				"evidence": ["confirmed", "unreadable"],
+			},
+			"requires_complete_coverage": true,
+			"rows": [
+				{
+					"key": { "finding": "work_missing", "evidence": "confirmed" },
+					"target": "run_doctor",
+					"retry_safety": "same_input_safe",
+				},
+				{
+					"key": { "finding": "work_missing", "evidence": "unreadable" },
+					"target": "escalate_to_operator",
+					"retry_safety": "operator_required",
+					"human_kind": "operator_handoff",
+				},
+				{
+					"key": { "finding": "work_stale", "evidence": "confirmed" },
+					"target": "inspect_work",
+					"retry_safety": "same_input_safe",
+				},
+			],
+		},
+		// S6, G2, G9: a blocker routes to an action, carrying posture and an
+		// optional per-row handoff kind.
+		"blockers": {
+			"role": "station_blocker",
+			"target_kind": "action",
+			// Keyed on command as well as blocker: the gap this closes is that
+			// v1 could not say which blocker refuses which command, so every
+			// refused station shared one cause.
+			// Keyed on what a station holds; the blocker is the row's answer.
+			"discriminants": {
+				"command": ["doctor", "audit", "repair", "purge"],
+				"branch": ["refused"],
+			},
+			"rows": [
+				{
+					"key": { "command": "doctor", "branch": "refused" },
+					"blocker": "work_unavailable",
+					"target": "wait_for_work",
+					"retry_safety": "same_input_safe",
+				},
+				{
+					"key": { "command": "audit", "branch": "refused" },
+					"blocker": "work_unavailable",
+					"target": "wait_for_work",
+					"retry_safety": "same_input_safe",
+				},
+				{
+					"key": { "command": "repair", "branch": "refused" },
+					"blocker": "capability_missing",
+					"target": "escalate_to_operator",
+					"retry_safety": "operator_required",
+					"human_kind": "operator_handoff",
+				},
+				{
+					"key": { "command": "purge", "branch": "refused" },
+					"blocker": "owner_pause_active",
+					"target": "request_owner_pause_release",
+					"retry_safety": "operator_required",
+					"human_kind": "owner_release",
+				},
+			],
+		},
+		// S8, G5: fact-to-branch selection targets a declared Branch Station,
+		// which is a different meaning from selecting a Next Safe Action.
+		"facts": {
+			"role": "fact_branch",
+			"target_kind": "branch_station",
+			"discriminants": { "work_present": ["yes", "no"] },
+			"requires_complete_coverage": true,
+			"rows": [
+				{ "key": { "work_present": "yes" }, "target": "doctor.success" },
+				{ "key": { "work_present": "no" }, "target": "doctor.refused" },
+			],
+		},
+	},
+	// S4: Capability Availability is an installed-surface fact, never Authority.
+	"capabilities": {
+		"content_repair": {
+			"availability_evidence": "vault_git.content_repair_installed",
+			"unavailable_blocker": "capability_missing",
+			"unavailable_action": "escalate_to_operator",
+		},
+	},
+	// S4: an externally owned gate whose release is human-owned.
+	"pause_modes": {
+		"owner_pause": {
+			"owner": "product_owner",
+			"active_blocker": "owner_pause_active",
+			"release_action": "request_owner_pause_release",
+		},
+	},
+	"retry_posture": {
+		"values": ["same_input_safe", "same_input_unsafe", "operator_required"],
+		"rules": [
+			// Effectful commands are constrained before the catch-all: a write
+			// whose acknowledgement is unknown is never same-input safe.
+			{ "when": { "command": "repair" }, "then": "same_input_unsafe" },
+			{ "when": { "command": "purge" }, "then": "operator_required" },
+			{ "when": { "result_kind": "any_other" }, "then": "same_input_safe" },
+		],
+		"never_auto_retry": [],
+	},
+	// S14: per-branch columns a real process asserts against.
+	"expectation_columns": {
+		"doctor.success": { "changed_state": "none", "channel": "stdout" },
+		"doctor.refused": { "changed_state": "unknown", "channel": "stderr" },
+		"audit.success": { "changed_state": "partial", "channel": "both" },
+	},
+	"acknowledgement": { "values": [], "unknown_policy": "not_applicable" },
+	"waits": {
+		"wake_route": "caller_reinvocation",
+		// S2: the declared Wake Route vocabulary, so an observation resolves
+		// its route against a named list rather than free text.
+		"wake_routes": ["caller_reinvocation", "scheduler_callback"],
+		"budgets_ms": {},
+		"missed_deadline_causes": {},
+		// S2: poll-after, per-Attempt expiry anchor, and the Wake Route
+		// declared per observation rather than implied by key spelling.
+		"observations": {
+			"work_task": {
+				"poll_after_ms": 5000,
+				"attempt_expiry_ms": 600000,
+				"wake_route": "caller_reinvocation",
+				"missed_deadline_cause": "work_observation_expired",
+			},
+			// A second observation, so the split the ruling requires is
+			// exercised: two waits never share one expiry cause.
+			"doctor_task": {
+				"poll_after_ms": 5000,
+				"attempt_expiry_ms": 600000,
+				"wake_route": "caller_reinvocation",
+				"missed_deadline_cause": "doctor_observation_expired",
+			},
+		},
+	},
+	"cancellation": { "all": "not_supported" },
+	"authority": { "write_authority_owner": "operator_confirmation_marker" },
+	"command_surface": {
+		"commands": ["doctor", "audit", "repair", "purge"],
+		"exit_codes": { "0": "usable_evidence", "1": "blocked", "2": "invalid_usage" },
+		"output_modes_default": ["plain", "json"],
+		"output_modes_overrides": {},
+		"no_argument_behavior": "help",
+		// S7: bare invocation binds to a declared command, not a convention.
+		"bare_invocation_command": "doctor",
+		// S12: positional subcommand routing, an explicit positional action,
+		// and the bare-command inspect alias. Command-surface parsing facts,
+		// not evidence routing.
+		"positional_routes": {
+			"audit": {
+				"positionals": { "inspect": "inspect_work", "repair": "run_doctor" },
+				"bare_invocation_target": "inspect_work",
+			},
+		},
+		// S9: the real entry point, so a generated contract names a real path.
+		"entry": { "script": "src/cli.ts" },
+		// S5: per-command Execution Modes and declared Preview Exemptions.
+		"execution_modes": {
+			"doctor": ["normal", "check"],
+			"audit": ["normal"],
+			"repair": ["normal", "check"],
+			"purge": ["normal"],
+		},
+		"preview_exemptions": {
+			"purge": { "reason": "purge is irreversible by design and has no meaningful preview" },
+		},
+		// S10, S11: front-door branches with distinct declared exit meanings.
+		"root_branches": {
+			"root_help": { "exit_code": "0", "meaning": "usable_evidence" },
+			"unknown_command": { "exit_code": "2", "meaning": "invalid_usage" },
+			"crash": {
+				"exit_code": "1",
+				"meaning": "unexpected_failure",
+				"action": "escalate_to_operator",
+			},
+		},
+		// repair satisfies the Write Preview obligation with a declared check
+		// mode; purge satisfies it with a declared exemption reason.
+		"mutations": { "doctor": "read", "audit": "read", "repair": "local_write", "purge": "local_write" },
+		"result_contracts": { "lifecycle": { "id": "surfaces.runner", "version": 1 } },
+	},
+	"versioning": { "records": {}, "incompatible_run_policy": "not_applicable" },
+}

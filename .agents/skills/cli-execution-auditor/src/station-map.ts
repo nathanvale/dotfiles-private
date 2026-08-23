@@ -3,6 +3,7 @@
 import { existsSync } from "node:fs";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import {
+	aggregateStationMapCoverage,
 	type BranchStation,
 	type BranchStationEvidence,
 	projectCommandDiscoveryTree,
@@ -245,16 +246,20 @@ function mergeStationMaps(stationMaps: readonly StationMap[]): StationMap {
 			};
 		}
 	}
+	const stations = stationMaps
+		.flatMap((map) => [...map.stations])
+		.sort(
+			(left, right) =>
+				left.station_id.localeCompare(right.station_id) ||
+				left.command.localeCompare(right.command),
+		);
 	return {
 		completeness_claim: "declared_branch_coverage",
+		// The facade owns the counting rule. Aggregate from the merged rows so a
+		// front door whose producer emitted no coverage block still counts.
+		coverage: aggregateStationMapCoverage(stations),
 		commands: Object.fromEntries(Object.entries(commands).sort(([a], [b]) => a.localeCompare(b))),
-		stations: stationMaps
-			.flatMap((map) => [...map.stations])
-			.sort(
-				(left, right) =>
-					left.station_id.localeCompare(right.station_id) ||
-					left.command.localeCompare(right.command),
-			),
+		stations,
 		drift: stationMaps.flatMap((map) => [...map.drift]),
 		findings: stationMaps
 			.flatMap((map) => [...map.findings])

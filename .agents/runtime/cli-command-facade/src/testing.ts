@@ -658,6 +658,8 @@ export function buildStationEvidence(
 	return {
 		stationId: station.id,
 		status: "covered",
+		// A CliProcessResult is in hand, so this row crossed a real process seam.
+		provenance: "real_process",
 		...(result.exitCode !== null ? { observedExitCode: result.exitCode } : {}),
 		...(envelope.status ? { observedEnvelopeStatus: envelope.status } : {}),
 		...(contractId ? { observedResultContractId: contractId } : {}),

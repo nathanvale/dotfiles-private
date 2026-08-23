@@ -16,5 +16,11 @@
 		"noImplicitOverride": true,
 		"resolveJsonModule": true
 	},
-	"include": ["src/**/*.ts", "prototypes/**/*.ts", "prototypes/**/*.tsx"]
+	"include": [
+		"src/**/*.ts",
+		"pilot/**/*.ts",
+		"tests/**/*.ts",
+		"prototypes/**/*.ts",
+		"prototypes/**/*.tsx"
+	]
 }

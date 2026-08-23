@@ -1,0 +1,1362 @@
+/*
+ * Cosmetic permutation of vault-git.state-machine.jsonc.
+ *
+ * Same meaning, deliberately different surface: every object's keys are in
+ * reverse order, indentation is spaces rather than tabs, every comment has
+ * moved (this block comment replaces the original line comments), and every
+ * final array and object element carries a trailing comma.
+ *
+ * The determinism gate requires this file to produce byte-identical canonical
+ * form and an identical digest to the original. It carries no meaning of its
+ * own: read the original for what this candidate declares and why.
+ */
+{
+  "unresolved_decisions": [
+    {
+      "drafted_resolution": "ruled unintended: all four accepted Repair Promotion routes stay publicly reachable under canonical ids. The routes that restore reachability are not yet authored, so the row survives until they are.",
+      "question": "Four catalog ids rehydrate to terminal none, making the ADR 0002 Interrupted Repair Promotion table unreachable outside tests. Intended?",
+      "id": "interrupted_repair_promotion_reachability",
+    },
+    {
+      "drafted_resolution": "ruled: the complete key is Finding plus closed authoritative-evidence discriminants, and every complete row selects exactly one canonical action. The ruling fixes the table's shape; no source declares the evidence vocabulary or the per-row targets, so the table itself stays unauthored.",
+      "question": "The 21 doctor findings map to actions only through imperative call sites. The full declarative finding-to-action table must be authored and admitted; this draft does not invent it.",
+      "id": "doctor_finding_action_table",
+    },
+    {
+      "drafted_resolution": "ruled: one ordered first-match-wins table across result classes, encoded above. Exact Same-Input Retry Safety stays a separate meaning. Needs admission.",
+      "question": "Success and refusal results currently apply different default retry postures for the same state. This draft unifies them in one ordered table; needs admission.",
+      "id": "retry_default_divergence",
+    },
+    {
+      "drafted_resolution": "ruled binding: an intent-bound liveness parameter whose mismatch refuses, while duration and expiry grant no Authority. The schema carries no field for an intent-binding parameter, so the ruling is recorded here rather than declared above.",
+      "question": "leaseDurationMs is documented as diagnostic-only but participates in exact intent binding, so a mismatch refuses. Diagnostic or binding?",
+      "id": "lease_duration_load_bearing",
+    },
+    {
+      "drafted_resolution": "ruled: new durable writes store canonical ids only, legacy contextual ids resolve through stored context without rewrite, and ambiguity fails closed. The rule governs durable writes rather than a declared surface, so it stays recorded here.",
+      "question": "Receipts may persist contextual ids (inspect_status, run_repair, retry_remote) that fail to reproject without context, turning valid durable state into continuation_unavailable. Forbid persisting contextual ids?",
+      "id": "persisted_contextual_ids",
+    },
+    {
+      "drafted_resolution": "ruled: preserve the accepted product rule of package-owned monotonic stage budgets derived from production-shaped measurement. The existing numbers above require remeasurement before admission, so the row survives on missing evidence.",
+      "question": "Validation stage budgets are admitted as not production-derived, contradicting ADR 0002. Re-measure or amend?",
+      "id": "stage_budget_provenance",
+    },
+    {
+      "drafted_resolution": "ruled: the stored quarantine_status reconciled is authoritative, and heuristics may validate but never synthesize reconciliation. Needs the runtime read to change, which is outside this candidate.",
+      "question": "Reconciled stale-lease takeover is inferred from a 4-field heuristic instead of the quarantine record's reconciled status. Read stored state instead?",
+      "id": "reconciled_takeover_evidence",
+    },
+    {
+      "drafted_resolution": "ruled: the command contract declares positional actions, an explicit activation inspect, and a bare activation that binds to the same inspect action, all encoded above. Two of the five activation actions, defer and revoke, remain unrouted because no catalog action declares their argv.",
+      "question": "The command contract declares activation actions but not how they are selected (positional routing lives only in the CLI). The contract should own the route shape.",
+      "id": "activation_action_routing",
+    },
+  ],
+  "versioning": {
+    "incompatible_run_policy": {
+      "stop": "agent_terminal",
+      "retry": "operator_required",
+      "authority": "denied",
+      "blocker": "incompatible_run_version",
+    },
+    "read_compatibility": {
+      "matching": "exact_key_set_extra_fields_reject",
+      "completion_task": ["current_23_key", "pre_receipt_revision_22_key", "legacy_18_key_v1"],
+    },
+    "records": {
+      "candidate_residue": 1,
+      "checker_admission": 1,
+      "invalidation": 1,
+      "revocation": 1,
+      "activation_record": 2,
+      "repair_authorization": 1,
+      "worker_acknowledgement": 1,
+      "doctor_task": 1,
+      "completion_task": 2,
+      "receipt": 2,
+    },
+  },
+  "command_surface": {
+    "result_contracts": {
+      "activation": {
+        "version": 3,
+        "id": "vault-git.activation-result",
+      },
+      "discovery": {
+        "version": 2,
+        "id": "vault-git.command-discovery",
+      },
+      "lifecycle": {
+        "version": 2,
+        "id": "vault-git.lifecycle-result",
+      },
+    },
+    "mutations": {
+      "commands": "read",
+      "janitor": "remote_write",
+      "tidy": "remote_write",
+      "repair": "recovery",
+      "doctor": "local_write",
+      "preview": "preview",
+      "activation": "local_write",
+      "status": "read",
+      "complete": "remote_write",
+      "join": "local_write",
+      "begin": "remote_write",
+    },
+    "repair_actions": ["resume", "retry-push", "close-verified", "stale-lease-takeover", "reconcile-quarantine"],
+    "activation_actions": ["inspect", "prepare", "review", "defer", "revoke"],
+    "root_branches": {
+      "crash": {
+        "action": "inspect_transaction",
+        "meaning": "unexpected_runtime_failure",
+        "exit_code": "1",
+      },
+      "unknown_command": {
+        "meaning": "invalid_usage_or_input",
+        "exit_code": "2",
+      },
+      "root_help": {
+        "meaning": "read_or_discovery_success",
+        "exit_code": "0",
+      },
+    },
+    "positional_routes": {
+      "activation": {
+        "bare_invocation_target": "inspect_configured_vault",
+        "positionals": {
+          "review": "review_prepared",
+          "prepare": "prepare_fresh",
+          "inspect": "inspect_configured_vault",
+        },
+      },
+    },
+    "preview_exemptions": {
+      "janitor": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "tidy": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "repair": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "doctor": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "activation": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "complete": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "join": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+      "begin": {
+        "reason": "The separate read-only preview surface owns planning; the explicit non-interactive verb selects execution.",
+      },
+    },
+    "execution_modes": {
+      "commands": ["check"],
+      "janitor": ["normal"],
+      "tidy": ["normal"],
+      "repair": ["normal"],
+      "doctor": ["normal"],
+      "preview": ["check"],
+      "activation": ["normal", "check"],
+      "status": ["check"],
+      "complete": ["normal"],
+      "join": ["normal"],
+      "begin": ["normal"],
+    },
+    "flags": {
+      "commands": ["--json"],
+      "janitor": ["--json", "--no-input"],
+      "tidy": ["--json", "--no-input"],
+      "repair": ["--json", "--no-input", "--transaction-id", "--capability-fd", "--prior-writer-stopped"],
+      "doctor": ["--json", "--transaction-id", "--task-id"],
+      "preview": ["--json", "--transaction-id"],
+      "activation": ["--json", "--no-input"],
+      "status": ["--json", "--task-id"],
+      "complete": ["--json", "--no-input", "--transaction-id", "--capability-fd", "--summary"],
+      "join": ["--json", "--no-input", "--transaction-id", "--capability-fd", "--path"],
+      "begin": ["--json", "--no-input", "--event", "--path"],
+    },
+    "entry": {
+      "script": "src/cli.ts",
+    },
+    "bare_invocation_command": "status",
+    "no_argument_behavior": "read_only_restricted_status_dashboard",
+    "output_modes_overrides": {
+      "commands": ["json"],
+    },
+    "output_modes_default": ["plain", "json"],
+    "global_flags": ["--run-id", "--quiet", "--verbose", "--debug"],
+    "exit_codes": {
+      "2": "invalid_usage_or_input",
+      "1": "refused_blocked_or_failed",
+      "0": "read_or_discovery_success",
+    },
+    "commands": [
+      "begin",
+      "join",
+      "complete",
+      "status",
+      "activation",
+      "preview",
+      "doctor",
+      "repair",
+      "tidy",
+      "janitor",
+      "commands",
+    ],
+  },
+  "authority": {
+    "quarantine": {
+      "next": "reconcile_quarantine",
+      "blocker": "host_quarantined",
+      "on": ["released_writer", "superseded_writer"],
+    },
+    "capability_errors": {
+      "role_mismatch": {
+        "next_by_role": {
+          "join": "use_join_capability",
+          "owner": "use_owner_capability",
+        },
+        "blocker": "capability_role_mismatch",
+      },
+      "invalid": {
+        "next": "reload_capability",
+        "blocker": "capability_invalid",
+      },
+      "missing": {
+        "blocker": "capability_missing",
+      },
+    },
+    "stale_lease_takeover": {
+      "failure_blockers": ["doctor_proof_stale", "doctor_token_invalid"],
+      "requires": ["human_attestation_flag", "single_use_doctor_token_on_fd", "proof_fingerprint_match"],
+      "kind": "needs_human_command_only",
+    },
+    "lease_expiry_grants": "nothing",
+    "write_authority_owner": "remote_ledger_generation",
+  },
+  "cancellation": {
+    "all": "not_supported",
+  },
+  "pause_modes": {
+    "owner_pause": {
+      "release_action": "request_owner_pause_release",
+      "active_blocker": "owner_pause_active",
+      "owner": "vault_git_operator",
+    },
+  },
+  "capabilities": {
+    "vault_content_repair": {
+      "unavailable_action": "escalate_validation_evidence",
+      "unavailable_blocker": "capability_missing",
+      "availability_evidence": "vault_git.vault_content_repair_installed",
+    },
+  },
+  "expectation_columns": {
+    "preview.success": {
+      "channel": "stdout",
+      "changed_state": "none",
+    },
+    "status.success": {
+      "channel": "stdout",
+      "changed_state": "none",
+    },
+    "commands.success": {
+      "channel": "stdout",
+      "changed_state": "none",
+    },
+    "activation.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "preview.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "doctor.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "status.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "repair.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "complete.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "join.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+    "begin.refused": {
+      "channel": "stderr",
+      "changed_state": "none",
+    },
+  },
+  "waits": {
+    "missed_deadline_causes": {
+      "task_observation_expiry": "completion_observation_expired",
+      "doctor_task_observation_expiry": "doctor_observation_expired",
+      "launch_acknowledgement_window": "expired_launch_recovered_without_new_attempt",
+    },
+    "budgets_ms": {
+      "candidate_residue_eligible_after": 3600000,
+      "validation_stage_cleanup": 10000,
+      "validation_stage_vault_check": 30000,
+      "validation_stage_setup": 15000,
+      "task_poll_after": 5000,
+      "task_observation_expiry": 600000,
+      "doctor_task_poll_after": 5000,
+      "doctor_task_observation_expiry": 600000,
+      "doctor_task_heartbeat_stale": 20000,
+      "doctor_launch_acknowledgement_window": 1500,
+      "task_heartbeat_stale": 20000,
+      "launch_acknowledgement_window": 1500,
+    },
+    "observations": {
+      "doctor_task": {
+        "missed_deadline_cause": "doctor_observation_expired",
+        "wake_route": "caller_reinvocation",
+        "attempt_expiry_ms": 600000,
+        "poll_after_ms": 5000,
+      },
+      "completion_task": {
+        "missed_deadline_cause": "completion_observation_expired",
+        "wake_route": "caller_reinvocation",
+        "attempt_expiry_ms": 600000,
+        "poll_after_ms": 5000,
+      },
+    },
+    "wake_routes": ["caller_reinvocation"],
+    "wake_route": "caller_reinvocation",
+  },
+  "acknowledgement": {
+    "publication": {
+      "append_failure_means": "push_not_attempted",
+      "phases": ["evidence_persisted_before_push", "prepared_release_persisted", "atomic_close_observed"],
+    },
+    "unknown_policy": "reconcile_via_doctor_never_blind_retry",
+    "proof_carrier": "transitioned",
+    "cas_results": ["transitioned", "existing", "stale", "uncertain"],
+    "values": ["rejected", "accepted", "completed", "unknown"],
+  },
+  "retry_posture": {
+    "never_auto_retry": [
+      "unknown_publication_outcome",
+      "unknown_worker_outcome",
+      "checker_repair_after_interrupted_promotion",
+    ],
+    "rules": [
+      {
+        "then": "operator_required",
+        "when": {
+          "state_in": ["human_required", "superseded", "expired"],
+        },
+      },
+      {
+        "then": "same_input_unsafe",
+        "when": {
+          "state_in": ["push_pending"],
+        },
+      },
+      {
+        "then": "operator_required",
+        "when": {
+          "blocker": "continuation_unavailable",
+        },
+      },
+      {
+        "then": "same_input_safe",
+        "when": {
+          "activation_cause_in": ["configuration_missing", "admission_missing", "revalidation_unavailable"],
+        },
+      },
+      {
+        "then": "operator_required",
+        "when": {
+          "activation_cause_in": ["human_capability_required", "revoked"],
+        },
+      },
+      {
+        "then": "same_input_unsafe",
+        "when": {
+          "activation_cause_in": ["evidence_changed", "binding_changed", "invalidated"],
+        },
+      },
+      {
+        "then": "operator_required",
+        "when": {
+          "doctor_task_terminal_in": ["worker_failure", "observation_expired"],
+        },
+      },
+      {
+        "then": "operator_required",
+        "when": {
+          "blocker": "owner_pause_active",
+        },
+      },
+      {
+        "then": "same_input_safe",
+        "when": {
+          "blocker": "completion_observation_expired",
+        },
+      },
+      {
+        "then": "same_input_safe",
+        "when": {
+          "result_kind": "inspection",
+        },
+      },
+      {
+        "then": "same_input_safe",
+        "when": {
+          "result_kind": "success",
+        },
+      },
+      {
+        "then": "same_input_unsafe",
+        "when": {
+          "result_kind": "refusal",
+        },
+      },
+    ],
+    "values": ["same_input_safe", "same_input_unsafe", "operator_required"],
+  },
+  "selectors": {
+    "repair_id": "^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$",
+    "doctor_task_id": "^doctor_task_[0-9a-f]{32}$",
+    "task_id": "^task_[0-9a-f]{32}$",
+    "transaction_id": "^txn_[0-9a-f]{32}$",
+  },
+  "routing": {
+    "station_blockers": {
+      "rows": [
+        {
+          "retry_safety": "same_input_unsafe",
+          "target": "correct_begin_owned_paths",
+          "blocker": "owned_path_not_admitted",
+          "key": {
+            "branch": "refused",
+            "command": "begin",
+          },
+        },
+        {
+          "retry_safety": "same_input_unsafe",
+          "target": "correct_join_owned_paths",
+          "blocker": "owned_path_not_admitted",
+          "key": {
+            "branch": "refused",
+            "command": "join",
+          },
+        },
+        {
+          "human_kind": "external_prerequisite",
+          "retry_safety": "same_input_unsafe",
+          "target": "use_owner_capability",
+          "blocker": "capability_role_mismatch",
+          "key": {
+            "branch": "refused",
+            "command": "complete",
+          },
+        },
+        {
+          "human_kind": "external_prerequisite",
+          "retry_safety": "same_input_unsafe",
+          "target": "use_owner_capability",
+          "blocker": "capability_role_mismatch",
+          "key": {
+            "branch": "refused",
+            "command": "repair",
+          },
+        },
+        {
+          "retry_safety": "same_input_safe",
+          "target": "correct_completion_task_id",
+          "blocker": "task_not_found",
+          "key": {
+            "branch": "refused",
+            "command": "status",
+          },
+        },
+        {
+          "retry_safety": "same_input_safe",
+          "target": "correct_doctor_task_id",
+          "blocker": "task_not_found",
+          "key": {
+            "branch": "refused",
+            "command": "doctor",
+          },
+        },
+        {
+          "retry_safety": "operator_required",
+          "target": "inspect_transaction",
+          "blocker": "transaction_mismatch",
+          "key": {
+            "branch": "refused",
+            "command": "preview",
+          },
+        },
+        {
+          "human_kind": "external_prerequisite",
+          "retry_safety": "operator_required",
+          "target": "request_operator_review",
+          "blocker": "checker_repair_refused",
+          "key": {
+            "branch": "refused",
+            "command": "tidy",
+          },
+        },
+        {
+          "human_kind": "external_prerequisite",
+          "retry_safety": "operator_required",
+          "target": "request_operator_review",
+          "blocker": "checker_repair_refused",
+          "key": {
+            "branch": "refused",
+            "command": "janitor",
+          },
+        },
+      ],
+      "discriminants": {
+        "branch": ["refused"],
+        "command": [
+          "begin",
+          "join",
+          "complete",
+          "status",
+          "activation",
+          "preview",
+          "doctor",
+          "repair",
+          "tidy",
+          "janitor",
+        ],
+      },
+      "target_kind": "action",
+      "role": "station_blocker",
+    },
+  },
+  "actions": {
+    "resolution": {
+      "unavailable_projection_stop": "agent_terminal",
+      "unavailable_projection_retry_safety": "operator_required",
+      "unavailable_projection_blocker": "continuation_unavailable",
+      "missing_context": "unavailable_projection",
+    },
+    "contextual_renderings": {
+      "run_repair": [
+        "resume_interrupted_transaction",
+        "resume_repaired_transaction",
+        "retry_push",
+        "close_verified_publication",
+        "reconcile_quarantine",
+      ],
+      "change_owned_paths": ["correct_begin_owned_paths", "correct_join_owned_paths"],
+      "change_input": ["correct_completion_task_id", "correct_doctor_task_id"],
+      "retry_remote": ["begin_transaction", "inspect_remote_lease"],
+      "inspect_status": ["inspect_completion_task", "inspect_doctor_task", "inspect_transaction"],
+    },
+    "catalog": [
+      {
+        "kind": "invoke",
+        "id": "reconcile_quarantine",
+      },
+      {
+        "kind": "invoke",
+        "id": "preview_host_enrollment_repair",
+      },
+      {
+        "requires_feature": "vault_content_repair",
+        "kind": "invoke",
+        "id": "apply_vault_content_repair",
+      },
+      {
+        "requires_context": ["task_id"],
+        "kind": "invoke",
+        "id": "inspect_completion_task",
+      },
+      {
+        "kind": "invoke",
+        "id": "run_janitor",
+      },
+      {
+        "requires_feature": "vault_content_repair",
+        "kind": "invoke",
+        "id": "resume_vault_content_promotion",
+      },
+      {
+        "requires_context": ["transaction_id"],
+        "kind": "invoke",
+        "id": "resume_repaired_transaction",
+      },
+      {
+        "requires_context": ["transaction_id"],
+        "kind": "invoke",
+        "id": "resume_interrupted_transaction",
+      },
+      {
+        "requires_context": ["transaction_id"],
+        "kind": "invoke",
+        "id": "close_verified_publication",
+      },
+      {
+        "requires_context": ["transaction_id"],
+        "kind": "invoke",
+        "id": "retry_proven_unpublished",
+      },
+      {
+        "requires_context": ["doctor_task_id"],
+        "kind": "invoke",
+        "id": "inspect_doctor_task",
+      },
+      {
+        "requires_context": ["transaction_id"],
+        "kind": "invoke",
+        "id": "inspect_transaction",
+      },
+      {
+        "kind": "invoke",
+        "id": "inspect_remote_lease",
+      },
+      {
+        "kind": "invoke",
+        "id": "inspect_configured_vault",
+      },
+      {
+        "kind": "invoke",
+        "id": "inspect_commands",
+      },
+      {
+        "kind": "invoke",
+        "id": "run_doctor",
+      },
+      {
+        "kind": "invoke",
+        "id": "prepare_fresh",
+      },
+      {
+        "requires_context": ["transaction_id"],
+        "kind": "invoke",
+        "id": "retry_push",
+      },
+      {
+        "input_contract": "setup.vault-git.host-enrollment",
+        "kind": "needs_input",
+        "id": "provide_host_enrollment_inputs",
+      },
+      {
+        "input_contract": "vault-git.begin",
+        "kind": "needs_input",
+        "id": "begin_transaction",
+      },
+      {
+        "input_contract": "vault-git.complete",
+        "kind": "needs_input",
+        "id": "complete_transaction",
+      },
+      {
+        "input_contract": "vault-git.join",
+        "kind": "needs_input",
+        "id": "continue_transaction",
+      },
+      {
+        "input_contract": "vault-git.join",
+        "kind": "needs_input",
+        "id": "resume_writing",
+      },
+      {
+        "kind": "needs_input",
+        "id": "run_owned_path_checks",
+      },
+      {
+        "input_contract": "vault-git.begin",
+        "kind": "needs_input",
+        "id": "correct_begin_owned_paths",
+      },
+      {
+        "input_contract": "vault-git.join",
+        "kind": "needs_input",
+        "id": "correct_join_owned_paths",
+      },
+      {
+        "input_contract": "vault-git.complete",
+        "kind": "needs_input",
+        "id": "change_commit_summary",
+      },
+      {
+        "input_contract": "vault-git.completion-task-id",
+        "kind": "needs_input",
+        "id": "correct_completion_task_id",
+      },
+      {
+        "input_contract": "vault-git.doctor-task-id",
+        "kind": "needs_input",
+        "id": "correct_doctor_task_id",
+      },
+      {
+        "human_kind": "command",
+        "kind": "needs_human",
+        "id": "review_prepared",
+      },
+      {
+        "human_kind": "command",
+        "kind": "needs_human",
+        "id": "return_to_human_review",
+      },
+      {
+        "human_kind": "command",
+        "kind": "needs_human",
+        "id": "request_operator_takeover",
+      },
+      {
+        "condition": "stale_lease_takeover_reattested",
+        "owner": "vault_git_operator",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "reattest_stale_lease_takeover",
+      },
+      {
+        "condition": "dedicated_identity_ready",
+        "owner": "repository_ssh_owner",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "provision_repository_ssh",
+      },
+      {
+        "condition": "validation_evidence_required",
+        "owner": "vault_git_operator",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "escalate_validation_evidence",
+      },
+      {
+        "condition": "validation_stage_budget_diagnosed",
+        "owner": "vault_git_performance_owner",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "diagnose_validation_budget",
+      },
+      {
+        "condition": "transaction_owner_capability_available",
+        "owner": "transaction_owner",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "restore_transaction_capability",
+      },
+      {
+        "condition": "repair_promotion_reconciliation_required",
+        "owner": "vault_git_operator",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "reconcile_repair_promotion",
+      },
+      {
+        "condition": "remote_evidence_available",
+        "owner": "vault_git_operator",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "obtain_remote_evidence",
+      },
+      {
+        "condition": "publication_conflict_resolved",
+        "owner": "vault_git_operator",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "resolve_publication_conflict",
+      },
+      {
+        "condition": "remote_contract_restored",
+        "owner": "vault_git_operator",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "restore_remote_contract",
+      },
+      {
+        "condition": "owner_capability_supplied",
+        "owner": "transaction_owner",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "use_owner_capability",
+      },
+      {
+        "condition": "join_capability_supplied",
+        "owner": "join_owner",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "use_join_capability",
+      },
+      {
+        "condition": "transaction_capability_reloaded",
+        "owner": "transaction_owner",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "reload_capability",
+      },
+      {
+        "condition": "activation_identity_configured",
+        "owner": "vault_git_operator",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "configure_activation_identity",
+      },
+      {
+        "condition": "operator_reviewed_evidence",
+        "owner": "vault_git_operator",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "request_operator_review",
+      },
+      {
+        "condition": "private_receipt_inspected",
+        "owner": "transaction_owner",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "inspect_private_receipt",
+      },
+      {
+        "condition": "local_edits_preserved",
+        "owner": "transaction_owner",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "preserve_local_edits",
+      },
+      {
+        "condition": "local_edits_preserved",
+        "owner": "transaction_owner",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "capture_private_draft",
+      },
+      {
+        "condition": "runtime_owner_available",
+        "owner": "private_launcher",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "wait_for_runtime",
+      },
+      {
+        "condition": "owner_pause_released",
+        "owner": "vault_git_operator",
+        "human_kind": "external_prerequisite",
+        "kind": "needs_human",
+        "id": "request_owner_pause_release",
+      },
+      {
+        "stop_scope": "agent_terminal",
+        "kind": "none",
+        "id": "continue_outer_transaction",
+      },
+      {
+        "stop_scope": "domain_terminal",
+        "kind": "none",
+        "id": "none",
+      },
+    ],
+    "external_owners": [
+      "vault_git_operator",
+      "repository_ssh_owner",
+      "vault_git_performance_owner",
+      "transaction_owner",
+      "join_owner",
+      "private_launcher",
+    ],
+    "needs_human_kinds": ["command", "external_prerequisite"],
+    "kinds": ["invoke", "needs_input", "needs_human", "none"],
+  },
+  "activation": {
+    "cause_to_next_action": {
+      "revalidation_unavailable": "wait_for_runtime",
+      "revoked": "prepare_fresh",
+      "invalidated": "prepare_fresh",
+      "binding_changed": "prepare_fresh",
+      "evidence_changed": "prepare_fresh",
+      "human_capability_required": "return_to_human_review",
+      "admission_missing": "prepare_fresh",
+      "configuration_missing": "configure_activation_identity",
+    },
+    "configuration_fields": ["host_identity", "ssh_identity_file", "ssh_public_key", "ssh_known_hosts"],
+    "stopped_actions": ["activation_preparation", "activation_admission", "vault_write", "activation_revocation"],
+    "restriction_causes": [
+      "configuration_missing",
+      "admission_missing",
+      "human_capability_required",
+      "evidence_changed",
+      "binding_changed",
+      "invalidated",
+      "revoked",
+      "revalidation_unavailable",
+    ],
+  },
+  "blockers": [
+    "runtime_unavailable",
+    "activation_blocked",
+    "vault_unconfigured",
+    "remote_unavailable",
+    "task_not_found",
+    "task_input_mismatch",
+    "worker_launch_failed",
+    "worker_launch_protocol_failed",
+    "worker_lost",
+    "main_behind",
+    "main_ahead",
+    "main_diverged",
+    "push_pending",
+    "lease_active",
+    "lease_stale",
+    "ledger_malformed",
+    "lease_generation_stale",
+    "lease_owner_unknown",
+    "remote_moved",
+    "receipt_conflict",
+    "host_contract_breach",
+    "human_required",
+    "offline_mode",
+    "receipt_corrupt",
+    "capability_missing",
+    "capability_invalid",
+    "capability_role_mismatch",
+    "vault_identity_changed",
+    "owned_path_not_admitted",
+    "commit_subject_invalid",
+    "identity_label_invalid",
+    "owned_path_changed",
+    "unrelated_state_changed",
+    "completion_baseline_changed",
+    "completion_interrupted",
+    "empty_event",
+    "vault_check_failed",
+    "transaction_mismatch",
+    "doctor_proof_stale",
+    "doctor_token_invalid",
+    "host_quarantined",
+    "deterministic_repair_mismatch",
+    "repair_action_required",
+    "dirty_tree",
+    "checker_unadmitted",
+    "checker_changed",
+    "checker_output_invalid",
+    "checker_repair_refused",
+    "continuation_unavailable",
+    "doctor_observation_expired",
+    "completion_observation_expired",
+    "owner_pause_active",
+  ],
+  "invariants": [
+    {
+      "consequence": "a task that ever observed unknown can never hold a repair authorization",
+      "holds": "repairAuthorization present only when state repair_needed, phase terminal, repairReentryBlocked false",
+      "id": "repair_authorization_reachability",
+    },
+    {
+      "holds": "exactly one ledger generation holds write authority; CAS append advances it",
+      "id": "one_writer",
+    },
+    {
+      "holds": "lease expiry never grants takeover; takeover requires human attestation plus doctor token",
+      "id": "lease_expiry_grants_nothing",
+    },
+    {
+      "holds": "heartbeatAt and worker identity are liveness evidence only",
+      "id": "heartbeat_not_authority",
+    },
+    {
+      "holds": "doctor grants no vault, git, lease, repair, or activation authority",
+      "id": "doctor_authority_free",
+    },
+    {
+      "holds": "push_pending with pushOutcome unknown is persisted before any push is attempted; append failure means push not attempted",
+      "id": "commit_evidence_before_push",
+    },
+  ],
+  "monotonic_constraints": [
+    {
+      "rule": "never_decreases",
+      "field": "launchAttempt",
+      "entity": "completion_task",
+    },
+    {
+      "rule": "never_decreases",
+      "field": "updatedAt",
+      "entity": "completion_task",
+    },
+    {
+      "latched_by": "any observation of state unknown",
+      "rule": "latch_true",
+      "field": "repairReentryBlocked",
+      "entity": "completion_task",
+    },
+    {
+      "state": "closed",
+      "rule": "cleared_only_on_state",
+      "field": "repairAuthorization",
+      "entity": "completion_task",
+    },
+    {
+      "rule": "never_decreases",
+      "field": "revision",
+      "entity": "receipt",
+    },
+  ],
+  "task_refinement_rules": {
+    "forbidden": [
+      {
+        "reason": "closed absorbs",
+        "to": "*",
+        "from": "closed",
+      },
+      {
+        "reason": "doctor may refine, never decay",
+        "to": "unknown",
+        "from": "repair_needed",
+      },
+    ],
+    "allowed": [
+      {
+        "driver": "observation",
+        "to": "repair_needed",
+        "from": "unknown",
+      },
+    ],
+  },
+  "transitions": [
+    {
+      "driver": "command",
+      "to_phase": "intent_durable",
+      "event": "acquisition_intent",
+    },
+    {
+      "driver": "command",
+      "to_phase": "leased",
+      "event": "lease_won",
+    },
+    {
+      "via": "stale-lease-takeover",
+      "driver": "repair",
+      "to_phase": "leased",
+      "event": "lease_won",
+    },
+    {
+      "driver": "command",
+      "to_phase": "writing",
+      "event": "write_authority_granted",
+    },
+    {
+      "via": "resume",
+      "driver": "repair",
+      "to_phase": "writing",
+      "event": "write_authority_granted",
+    },
+    {
+      "driver": "command",
+      "to_phase": "writing",
+      "event": "paths_joined",
+    },
+    {
+      "driver": "command",
+      "to_phase": "checking",
+      "event": "completion_requested",
+    },
+    {
+      "driver": "command",
+      "to_phase": "repairable",
+      "event": "deterministic_repair_available",
+    },
+    {
+      "driver": "command",
+      "to_phase": "committing",
+      "event": "commit_candidate_frozen",
+    },
+    {
+      "driver": "command",
+      "to_phase": "push_pending",
+      "event": "push_outcome_unknown",
+    },
+    {
+      "via": "retry-push",
+      "driver": "repair",
+      "to_phase": "push_pending",
+      "event": "push_outcome_unknown",
+    },
+    {
+      "driver": "command",
+      "to_phase": "closed",
+      "event": "closed",
+    },
+    {
+      "via": "close-verified",
+      "driver": "repair",
+      "to_phase": "closed",
+      "event": "closed",
+    },
+    {
+      "driver": "command",
+      "to_phase": "human_required",
+      "event": "human_intervention_required",
+    },
+    {
+      "driver": "repair",
+      "to_phase": "human_required",
+      "event": "human_intervention_required",
+    },
+    {
+      "note": "prior writer quarantined",
+      "driver": "observation",
+      "to_phase": "human_required",
+      "event": "superseded",
+    },
+    {
+      "via": "reconcile-quarantine",
+      "driver": "repair",
+      "to_phase": "closed",
+      "event": "quarantine_reconciled",
+    },
+  ],
+  "phase_state": "transaction_phase",
+  "states": {
+    "activation_result_status": {
+      "values": ["restricted", "deferred"],
+    },
+    "result_outcome": {
+      "values": [
+        "read_only",
+        "discovered",
+        "unavailable",
+        "invalid_usage",
+        "admitted",
+        "joined",
+        "advanced",
+        "completed",
+        "repaired",
+        "refused",
+      ],
+    },
+    "changed_state": {
+      "values": ["none", "local", "remote", "committed", "partial"],
+    },
+    "write_permission": {
+      "values": ["denied", "join", "owner"],
+    },
+    "push_outcome": {
+      "values": ["not_attempted", "unknown", "closed", "host_contract_breach"],
+    },
+    "quarantine_status": {
+      "values": ["takeover_pending", "quarantined", "reconciled"],
+    },
+    "host_disposition": {
+      "values": ["authoritative", "quarantined"],
+    },
+    "lease": {
+      "values": ["held", "released"],
+    },
+    "doctor_task": {
+      "checkpoints": ["local_classified", "checking_remote", "terminal"],
+      "terminal": ["closed", "unknown"],
+      "phases": ["admitted", "running", "terminal"],
+      "values": ["claimed", "launching", "in_progress", "closed", "unknown"],
+    },
+    "completion_task": {
+      "absorbing": ["closed"],
+      "terminal": ["closed", "repair_needed", "unknown"],
+      "state_field_requirements": {
+        "in_progress": {
+          "launchExpiresAt": "null",
+          "launchGeneration": "present",
+        },
+        "launching": {
+          "launchExpiresAt": "present",
+          "launchGeneration": "present",
+        },
+      },
+      "legal_pairings": {
+        "terminal": ["closed", "repair_needed", "unknown"],
+        "running": ["in_progress"],
+        "admitted": ["claimed", "launching"],
+      },
+      "phases": ["admitted", "running", "terminal"],
+      "values": ["claimed", "launching", "in_progress", "closed", "repair_needed", "unknown"],
+    },
+    "transaction_read_state": {
+      "observation_sourced": ["absent", "expired", "superseded"],
+      "projection_from_phase": {
+        "closed": "closed",
+        "blocked": "unknown",
+        "human_required": "human_required",
+        "repairable": "repairable",
+        "push_pending": "push_pending",
+        "committing": "active",
+        "checking": "active",
+        "writing": "active",
+        "leased": "active",
+        "intent_durable": "active",
+        "inspecting": "unknown",
+        "unavailable": "unknown",
+      },
+      "values": [
+        "absent",
+        "active",
+        "expired",
+        "superseded",
+        "unknown",
+        "push_pending",
+        "repairable",
+        "human_required",
+        "closed",
+      ],
+    },
+    "transaction_phase": {
+      "human_terminal": ["human_required"],
+      "terminal": ["closed"],
+      "durable_subset_excludes": ["unavailable", "inspecting"],
+      "values": [
+        "unavailable",
+        "inspecting",
+        "intent_durable",
+        "leased",
+        "writing",
+        "checking",
+        "committing",
+        "push_pending",
+        "repairable",
+        "human_required",
+        "blocked",
+        "closed",
+      ],
+    },
+  },
+  "entities": {
+    "candidate_residue": {
+      "schema_version": 1,
+      "identity": {
+        "pattern": "^candidate-",
+        "field": "candidateId",
+      },
+    },
+    "host_quarantine": {
+      "record": "append_only",
+    },
+    "capability": {
+      "storage": "per_receipt_per_role",
+      "delivery": "inherited_fd",
+      "roles": ["owner", "join"],
+    },
+    "activation_record": {
+      "bindings": [
+        "repositoryIdentity",
+        "remoteIdentity",
+        "hostIdentity",
+        "runtimeIdentity",
+        "executableIdentity",
+        "privateStateIdentity",
+        "localMainHead",
+        "remoteMainHead",
+        "ledgerGeneration",
+        "gitIdentity",
+        "sshIdentity",
+        "checkerClosure",
+      ],
+      "schema_version": 2,
+      "identity": {
+        "pattern": "^vault-git:prepared:v2:[0-9a-f]{64}$",
+        "field": "evidenceId",
+      },
+    },
+    "doctor_task": {
+      "grants_authority": false,
+      "schema_version": 1,
+      "revision": {
+        "rule": "compare_and_swap",
+        "field": "revision",
+      },
+      "identity": {
+        "pattern": "^doctor_task_[0-9a-f]{32}$",
+        "field": "taskId",
+      },
+    },
+    "completion_task": {
+      "schema_version": 2,
+      "launch_generation": {
+        "pattern": "^launch_[0-9a-f]{32}$",
+        "field": "launchGeneration",
+      },
+      "launch_attempt": {
+        "creates_attempt": false,
+        "range": [0, 2],
+        "field": "launchAttempt",
+      },
+      "attempt": {
+        "increment_only_by": "explicit_repair",
+        "field": "attemptNumber",
+      },
+      "logical_operation": {
+        "field": "taskId",
+      },
+      "revision": {
+        "rule": "compare_and_swap",
+        "field": "revision",
+      },
+      "identity": {
+        "pattern": "^task_[0-9a-f]{32}$",
+        "field": "taskId",
+      },
+    },
+    "remote_lease": {
+      "generation_chain": {
+        "advance": "compare_and_swap",
+        "ref": "refs/heads/vault-system/transaction-ledger",
+      },
+      "identity": {
+        "fields": ["transactionId", "generation"],
+      },
+    },
+    "receipt": {
+      "schema_version": 2,
+      "revision": {
+        "rule": "monotonic_append_only",
+        "field": "revision",
+      },
+      "identity": {
+        "pattern": "^receipt_[0-9a-f]{32}$",
+        "field": "receiptId",
+      },
+    },
+    "transaction": {
+      "fencing": {
+        "owner": "remote_ledger",
+        "field": "leaseGeneration",
+      },
+      "identity": {
+        "pattern": "^txn_[0-9a-f]{32}$",
+        "field": "transactionId",
+      },
+    },
+  },
+  "features": {
+    "feature_gates": ["vault_content_repair"],
+    "remote_authority": true,
+    "version_custody": true,
+    "cancellation": "not_supported",
+    "liveness_evidence": true,
+    "durable_operations": true,
+  },
+  "spec_meta": {
+    "activation_result_schema_version": "3",
+    "public_result_schema_version": "2",
+    "state_machine_definition_version": "unadmitted",
+    "product_specification_revision": "unadmitted",
+    "input_schema_version": "2",
+    "product": "vault-git",
+  },
+}
