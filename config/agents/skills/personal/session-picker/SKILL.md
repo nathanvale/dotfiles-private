@@ -13,32 +13,44 @@ and archived sources.
 
 ## First Safe Action
 
-1. Exact session ID or chosen row: skip delegation. Read or open through the
-   current Codex app task tools.
+1. Exact session ID or chosen row: read or open through the current Codex app
+   task tools.
 2. Search request: query the private snapshot first:
 
 ```bash
 bun run "$session_picker_skill_dir/scripts/archived-sessions.ts" search --query "$query" --limit 12 --json
 ```
 
-3. Missing or stale snapshot: refresh it directly in the parent, then search it.
-   Agent startup and repair cost more than this bounded local command:
+3. Missing or stale snapshot: refresh it directly in the root, then search it:
 
 ```bash
 bun run "$session_picker_skill_dir/scripts/archived-sessions.ts" snapshot --limit 200 --json
 bun run "$session_picker_skill_dir/scripts/archived-sessions.ts" search --query "$query" --limit 8 --json
 ```
 
-4. Use the app task-list tool in the parent only when that source can change the
+4. Use the app task-list tool in the root only when that source can change the
    answer. Filter inside the tool orchestration before exposing results to the
    driver; keep at most eight matches. Otherwise skip it and label that coverage
-   unavailable. Isolated agents do not own this app capability.
+   unavailable.
 5. Merge by session ID. Prefer app metadata on duplicates. Exclude the current
    session and internal workers. Sort once, then keep 12.
 
 For an empty query, use the newest snapshot rows. If the snapshot adapter is
 unavailable, continue with app-visible results and label local coverage
 incomplete. Never imply that missing archived ChatGPT sessions were searched.
+
+## Agent Assignment
+
+Keep ordinary picker work in the root: snapshot search and refresh, app listing,
+source merge and filtering, preview, selection, navigation, and explicit register
+refresh.
+
+For a user-requested broad retrospective, the root may give one Luna / Max
+worker a bounded candidate set after removing private and auth-bearing content.
+The worker synthesizes only. The root verifies and presents the result. Keep app
+tools, session-store reads, navigation, and state writes in the root.
+
+If Luna is unavailable, the root completes the synthesis.
 
 ## Present
 
