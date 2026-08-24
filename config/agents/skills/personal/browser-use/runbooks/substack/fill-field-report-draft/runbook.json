@@ -1,0 +1,71 @@
+{
+  "contract": "browser-use.runbook",
+  "schema_version": "2",
+  "service_id": "substack",
+  "flow_id": "fill-field-report-draft",
+  "flow_name": "fill-field-report-draft",
+  "version": "1",
+  "summary": "Fill and verify one approved Substack field-report draft without continuing or publishing.",
+  "allowed_origins": [
+    "https://nathanvale.substack.com"
+  ],
+  "inputs": [
+    {
+      "id": "title",
+      "summary": "Approved public field-report title.",
+      "required": true,
+      "schema": {
+        "kind": "string",
+        "min_length": 1,
+        "max_length": 200
+      }
+    },
+    {
+      "id": "body",
+      "summary": "Approved public field-report body.",
+      "required": true,
+      "schema": {
+        "kind": "string",
+        "min_length": 1,
+        "max_length": 10000
+      }
+    }
+  ],
+  "steps": [
+    {
+      "kind": "snapshot",
+      "interactive": true
+    },
+    {
+      "kind": "fill",
+      "target": {
+        "role": "textbox",
+        "name": "title"
+      },
+      "sensitivity": "ordinary",
+      "value": "{{title}}",
+      "postcondition": {
+        "kind": "value-equals",
+        "selector": "[aria-label=\"title\"]",
+        "value": "{{title}}"
+      }
+    },
+    {
+      "kind": "fill",
+      "target": {
+        "role": "textbox",
+        "name": "Start writing..."
+      },
+      "sensitivity": "ordinary",
+      "value": "{{body}}",
+      "postcondition": {
+        "kind": "element-visible",
+        "selector": "[aria-label=\"Start writing...\"]"
+      }
+    },
+    {
+      "kind": "snapshot",
+      "interactive": true
+    }
+  ]
+}
