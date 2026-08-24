@@ -1,11 +1,13 @@
 ---
 name: test-design
-description: "Creating or changing tests, fixtures, mocks, snapshots, test helpers, or test harnesses; select a proportional pre-write Test Design Brief."
+description: "Design or change tests, fixtures, mocks, snapshots, helpers, or harnesses; audit test-writing anti-patterns; select a proportional brief or read-only verdict."
 ---
 
 # Test Design
 
-Use before creating or changing any repository-test artifact. Reading or running tests alone does not trigger this skill.
+Use before creating or changing any repository-test artifact, or when explicitly
+asked to audit test design, test-writing anti-patterns, or testing standards.
+Reading or running tests without an audit request does not trigger this skill.
 
 ## Route
 
@@ -13,6 +15,8 @@ Use before creating or changing any repository-test artifact. Reading or running
 2. Inspect the intended repository-test artifact change, approved seam, proof
    claim, existing regression, and focused command.
 3. Select one route:
+   - `audit`: explicit read-only review of existing tests, fixtures, plans, or
+     testing standards. Emit no brief and change no repository-test artifact.
    - `no-new-brief`: no repository-test artifact changes and the active workflow
      owns the existing regression proof. Return immediately.
    - `lightweight`: the edit preserves the repository-approved seam, oracle
@@ -20,7 +24,40 @@ Use before creating or changing any repository-test artifact. Reading or running
      and reuses an existing focused regression.
    - `full`: any seam, oracle, fixture, harness, claim, CLI contract, or test
      contract is new, changed, disputed, or unclear.
-4. Fail upward to `full` when the route is unclear.
+4. Fail upward to `full` when a write route is unclear.
+
+## Audit route
+
+1. Read `references/pattern-library.md` completely.
+2. Select every relevant profile, then read only the selected profile references
+   completely.
+3. Inspect the production consumer or workflow, claimed proof boundary, existing
+   tests, fixtures, doubles, helpers, harnesses, and testing guidance.
+4. Detect anti-patterns by testing the inverse of every applicable core pattern
+   and selected profile rule. Do not invent a parallel checklist.
+5. Return this read-only report:
+
+```text
+Test Design Audit
+Verdict: sound | fix-first | rethink
+Scope:
+Production consumer and claimed proof:
+Anti-pattern findings:
+Proof gaps:
+Smallest correction direction:
+Still unproved:
+```
+
+- `sound`: no blocking anti-pattern is supported by the inspected evidence.
+- `fix-first`: the seam and proof layer remain valid, but local corrections are
+  required before relying on the tests.
+- `rethink`: the seam, oracle, fixture, harness, or claim cannot support the
+  promised behaviour and needs a new design decision.
+- Name exact paths and lines when available. Separate observed evidence from
+  inference and state when evidence is missing.
+- During an audit, never edit tests or other repository-test artifacts. If the
+  user later requests corrections, re-enter `lightweight` or `full` before the
+  first mutation.
 
 ## Evidence gates
 
@@ -82,8 +119,11 @@ Do not accept a brief whose expected result restates the implementation. Do not 
   changes and the active workflow owns the existing regression proof.
 - Selected brief visible and complete before the first repository-test artifact edit.
 - A lightweight brief preserves its seam, oracle, fixture, harness, and claim.
+- An audit returns one exact verdict, anti-pattern findings, proof gaps, and the
+  smallest correction direction without changing repository-test artifacts.
 - Seam already approved, already selected, or awaiting explicit approval.
 - Handback to the active workflow explicit.
 - Remaining unproved boundary stated without hiding skips, disabled cases, or environmental gaps.
 
-Next safe action: return the completed brief to the current workflow.
+Next safe action: return the audit report or completed brief to the current
+workflow.

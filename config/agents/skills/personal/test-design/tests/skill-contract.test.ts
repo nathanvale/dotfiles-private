@@ -238,6 +238,31 @@ describe("agent-native testing skill contract", () => {
 		expect(testDesign).toContain("Handback to the active workflow explicit");
 	});
 
+	test("offers a read-only anti-pattern audit route", () => {
+		const testDesign = parseSkill(testDesignPath).body;
+		const audit = testDesign.match(
+			/## Audit route\n(?<audit>[\s\S]*?)(?=\n## |\s*$)/u,
+		)?.groups?.audit;
+
+		expect(audit).toBeDefined();
+		for (const contractTerm of [
+			"read-only",
+			"references/pattern-library.md",
+			"anti-pattern",
+			"sound",
+			"fix-first",
+			"rethink",
+			"Proof gaps:",
+			"Smallest correction direction:",
+		]) {
+			expect(audit).toContain(contractTerm);
+		}
+		expect(audit).toContain("read only the selected profile references");
+		expect(audit).toMatch(/never edit[^\n]*repository-test artifacts/u);
+		expect(audit).toMatch(/re-enter `lightweight` or `full`/u);
+		expect(audit).not.toContain("Test Design Brief");
+	});
+
 	test("freezes all valid factor pairs across artifacts, owners, profiles, operations, and seams", () => {
 		const scenarios = parseScenarios();
 		expect(scenarios).toHaveLength(42);
