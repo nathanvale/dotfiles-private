@@ -48,3 +48,19 @@ Lesson: ASMG declared its baseline exit codes in two files and restated a
 sealed mutation list in three fixtures; browser-connect's two copies of one
 fake runtime drifted on probe stderr; browser-use-security duplicated a
 manifest byte-for-byte across two test files.
+
+### Creation is not readiness
+
+A reply that proves a resource exists never proves it can accept the next
+dependent call. Before dispatching to a just-created resource, prove readiness
+through an owned observable, or treat the dependency's structured "not ready"
+rejection as a bounded same-identity retry, admitted only with evidence the
+rejection is pre-launch and side-effect-free. A rejection that outlives the
+bound is a classified failure, never an unknown outcome.
+
+Lesson: frontier-runner called `herdr agent start` 8ms after `pane split`
+returned ok; the split proved the pane existed, not that its shell was at a
+prompt. The same pane was ready in 5ms in one run and 220ms in another, so the
+race passed every local check and failed a native receipt-backed run with a
+misclassified unknown startup effect. (Admitted with single-package evidence
+on Nathan's instruction, 2026-08-24; two call sites witnessed.)
