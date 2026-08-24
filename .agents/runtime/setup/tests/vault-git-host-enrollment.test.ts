@@ -223,6 +223,56 @@ describe("Vault Git Host Enrollment", () => {
 		expect(JSON.stringify(preview)).not.toContain(privateInput.sshIdentityFilePath);
 	});
 
+	test("preview canonicalizes the macOS temp root when TMPDIR is absent", async () => {
+		const root = await mkdtemp(join(tmpdir(), "setup-vault-git-enrollment-"));
+		temporaryRoots.push(root);
+		const { sourceRepoRoot, runtimeEntrypoint } = await createSourceFixture(root);
+		const privateInput = await createSshFixture(root);
+		const configRoot = join(root, "config");
+		const dataRoot = join(root, "data");
+		const selectorPath = join(root, "bin", "vault-git");
+		const runner = join(root, "preview-without-tmpdir.ts");
+		const modulePath = join(import.meta.dir, "..", "src", "vault-git-host-enrollment.ts");
+		await writeFile(
+			runner,
+			`const { createVaultGitHostEnrollment } = await import(${JSON.stringify(modulePath)});\n` +
+				`const runtimeSelectionFence = { hold: async (operation) => operation() };\n` +
+				`const enrollment = createVaultGitHostEnrollment({\n` +
+				`  configRoot: ${JSON.stringify(configRoot)},\n` +
+				`  dataRoot: ${JSON.stringify(dataRoot)},\n` +
+				`  selectorPath: ${JSON.stringify(selectorPath)},\n` +
+				`  sourceRepoRoot: ${JSON.stringify(sourceRepoRoot)},\n` +
+				`  runtimeEntrypoint: ${JSON.stringify(runtimeEntrypoint)},\n` +
+				`  inspectWorkState: async () => "clear",\n` +
+				`  runtimeSelectionFence,\n` +
+				`});\n` +
+				`const result = await enrollment.preview(${JSON.stringify(privateInput)});\n` +
+				`console.log(JSON.stringify(result));\n`,
+		);
+		const child = Bun.spawnSync([process.execPath, runner], {
+			cwd: root,
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+			env: {
+				HOME: join(root, "home"),
+				PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+				LC_ALL: "C",
+			},
+		});
+
+		expect(child.exitCode, child.stderr.toString()).toBe(0);
+		expect(JSON.parse(child.stdout.toString())).toMatchObject({
+			state: "ready",
+			station: "vault_git.host_enrollment_ready",
+			installedRuntime: { digest: expect.stringMatching(/^[a-f0-9]{64}$/) },
+			mutationPlan: { operation: "install_and_select" },
+		});
+		for (const path of [configRoot, dataRoot, selectorPath]) {
+			expect(await Bun.file(path).exists()).toBe(false);
+		}
+	}, 60_000);
+
 	test("explicit apply installs and selects one content-addressed runtime", async () => {
 		const root = await mkdtemp(join(tmpdir(), "setup-vault-git-enrollment-"));
 		temporaryRoots.push(root);

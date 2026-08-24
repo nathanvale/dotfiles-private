@@ -820,7 +820,11 @@ async function compileFrozenRuntime(
 
 /** Compile an exact-source runtime plan in owner-private scratch; never publish it. */
 async function planRuntime(roots: VaultGitHostEnrollmentRoots): Promise<VaultGitRuntimeReference> {
-	const scratch = await mkdtemp(join(tmpdir(), "vault-git-runtime-plan-"));
+	// macOS exposes /tmp as a platform symlink to /private/tmp. A scrubbed
+	// process has no TMPDIR and therefore receives /tmp from node:os, while the
+	// owner-path guard correctly rejects symlink ancestors. Resolve the
+	// platform temp root before creating the private planning directory.
+	const scratch = await mkdtemp(join(await realpath(tmpdir()), "vault-git-runtime-plan-"));
 	try {
 		await chmod(scratch, 0o700);
 		const source = await materializeCleanMergedSource(roots, scratch);
