@@ -7,6 +7,44 @@
   every agent whose config directory exists, including ones you do not use, and
   writes those directories into this repository.
 
+## Install or update one skill
+
+1. **Fence.** Resolve the exact upstream skill path and intended local name.
+   Inventory the name across the reviewed source, lock, topology, and every
+   Harness address. Capture `~/.codex/config.toml` and the protected Harness
+   inventory before any live install or canary. Completion: current ownership,
+   activation, duplicates, and pre-existing protected drift are explicit.
+2. **Stage.** Run `npx skills add` without `-g` in a task-only scratch directory.
+   Pass only `claude-code,codex` and select the exact skill. Inspect every staged
+   file, mode, security warning, and dependency before live installation.
+   Completion: the reviewed payload and any unresolved warning are named.
+3. **Promote.** Run the same exact selection with `-g` so `npx skills` updates
+   the machine lock. Copy the reviewed bytes to
+   `config/agents/skills/third-party/<owner>/<skill>`, declare every persistent
+   address in `topology.json`, and replace generated installed copies with flat
+   same-skill Tracking Links. Completion: canonical source, lock, topology, and
+   stored and resolved link targets agree.
+4. **Verify.** Validate JSON, run path-limited `git diff --check`, compare the
+   canonical payload with the staged payload, and run
+   `bin/agent-skills-inventory --json`. Completion: every row for the skill is
+   enabled or deliberately disabled, content-matching, and issue-free.
+5. **Qualify.** Read invocation metadata before choosing a canary. A
+   model-invoked skill needs an ordinary registry canary. A skill with
+   `disable-model-invocation: true` or `allow_implicit_invocation: false` needs
+   an explicit-mention canary and is not expected in the ordinary registry.
+   Completion: the canary matches the skill's invocation contract.
+6. **Fence each Codex canary.** Resolve the active Codex app-server binary and
+   version, then compare it with the proposed canary binary. Use the
+   Harness-matched binary. If the active binary is unavailable or the versions
+   differ, stop and report Codex discovery as unqualified. Immediately before
+   and after each canary, compare `~/.codex/config.toml`, `~/.codex/skills`, and
+   the plugin cache with the captured fence. Completion: every protected value
+   is unchanged; any mutation stops the workflow without rebaselining.
+7. **Close.** Run fresh Claude Code and Codex discovery where the Harness is
+   available, remove task-only scratch state, and report install state separately
+   from discovery qualification. Completion: installation evidence, unavailable
+   proof, pre-existing drift, and the commit or push boundary are explicit.
+
 ## Lock file
 
 - Address: `~/.agents/.skill-lock.json`, a Tracking Link into
