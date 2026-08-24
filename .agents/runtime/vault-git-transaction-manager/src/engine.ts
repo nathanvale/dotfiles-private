@@ -58,7 +58,10 @@ import {
 	type VaultGitRepairInput,
 	type VaultGitRepairResult,
 } from "./repair.ts";
-import type { VaultGitRuntimeSelectionFence } from "./runtime-selection-fence.ts";
+import {
+	VaultGitRuntimeSelectionFenceBusyError,
+	type VaultGitRuntimeSelectionFence,
+} from "./runtime-selection-fence.ts";
 
 /** Dependencies for the transaction state machine. */
 export interface VaultGitTransactionEngineOptions {
@@ -861,7 +864,15 @@ export function createVaultGitTransactionEngine(
 			await options.store.initialize(receipt);
 			return { kind: "initialized", receipt };
 			};
-			const preparation = await options.runtimeSelectionFence.hold(prepare);
+			let preparation: VaultGitBeginPreparation;
+			try {
+				preparation = await options.runtimeSelectionFence.hold(prepare);
+			} catch (error) {
+				if (error instanceof VaultGitRuntimeSelectionFenceBusyError) {
+					return refusal("absent", "blocked", "runtime_unavailable", "wait_for_runtime", "Wait for the runtime owner before retrying admission.", "none", "same_input_safe");
+				}
+				throw error;
+			}
 			if (preparation.kind === "result") return preparation.value;
 			const receipt = preparation.receipt;
 			options.runtime.interrupt("before_remote_cas");

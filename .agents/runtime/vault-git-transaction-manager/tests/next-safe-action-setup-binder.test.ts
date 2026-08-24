@@ -88,7 +88,8 @@ const SECRET_PUBLIC = "/private/secret-fixture/id_ed25519.pub";
 const SECRET_KNOWN_HOSTS = '/private/secret-fixture/known_hosts "q\\b';
 
 const DISCOVERY: VaultGitSetupDiscoveryResult = {
-	action_argv: ["sync", "--domain", "vault-git"],
+	action_id: "provide_host_enrollment_inputs",
+	action_argv: ["sync", "--domain", "vault-git", "--check"],
 	input_contract_id: "setup.vault-git.host-enrollment",
 	fields: [
 		{ id: "ssh_identity_file_path", input_channel: "private_stdin" },
@@ -142,6 +143,7 @@ describe("vault-git private Setup binder", () => {
 			"sync",
 			"--domain",
 			"vault-git",
+			"--check",
 			"--input-stdin",
 			"setup.vault-git.host-enrollment",
 		]);
@@ -318,6 +320,7 @@ describe("vault-git private Setup binder", () => {
 			VALID_VALUES,
 			{
 				discovery: {
+					action_id: contract.action_id,
 					action_argv: contract.action_argv,
 					input_contract_id: contract.id,
 					fields: contract.fields,
@@ -330,6 +333,7 @@ describe("vault-git private Setup binder", () => {
 			"sync",
 			"--domain",
 			"vault-git",
+			"--check",
 			"--input-stdin",
 			"setup.vault-git.host-enrollment",
 		]);
@@ -369,6 +373,68 @@ describe("vault-git private Setup binder", () => {
 		}
 	}, 120_000);
 
+	test("Setup discovery admits the preview follow-up apply action through the same private contract", async () => {
+		const discovery = runPublicSetup(["commands", "--json"]);
+		expect(discovery.exitCode, discovery.stderr).toBe(0);
+		const envelope = JSON.parse(discovery.stdout) as {
+			status: string;
+			data?: { commands?: Record<string, PublicSetupSyncDiscovery> };
+		};
+		const contracts = envelope.data?.commands?.sync?.input_contracts ?? [];
+		const apply = contracts.find(
+			(contract) => contract.action_id === "apply_host_enrollment",
+		);
+		if (!apply) {
+			throw new Error("Setup discovery does not admit preview follow-up apply");
+		}
+		expect(apply).toMatchObject({
+			id: "setup.vault-git.host-enrollment",
+			action_argv: ["sync", "--domain", "vault-git"],
+			fields: [
+				{ id: "ssh_identity_file_path", input_channel: "private_stdin" },
+				{ id: "ssh_public_key_path", input_channel: "private_stdin" },
+				{ id: "ssh_known_hosts_path", input_channel: "private_stdin" },
+			],
+		});
+
+		const projection = projectVaultGitNextSafeAction({
+			action_id: apply.action_id,
+		});
+		expect(projection.availability).toBe("available");
+		expect(projection.continuation).toMatchObject({
+			kind: "needs_input",
+			action_id: "apply_host_enrollment",
+			input_contract_id: "setup.vault-git.host-enrollment",
+		});
+
+		const { spawn, calls } = recordingSpawn();
+		await bindVaultGitPrivateSetupInput(
+			{ action_id: apply.action_id },
+			VALID_VALUES,
+			{
+				discovery: {
+					action_id: apply.action_id,
+					action_argv: apply.action_argv,
+					input_contract_id: apply.id,
+					fields: apply.fields,
+				},
+				spawn,
+			},
+		);
+		expect(calls).toEqual([
+			{
+				argv: [
+					"sync",
+					"--domain",
+					"vault-git",
+					"--input-stdin",
+					"setup.vault-git.host-enrollment",
+				],
+				stdin: EXPECTED_STDIN,
+			},
+		]);
+	});
+
 	test("the projected Setup preview invoke is parser-accepted by the public Setup process", async () => {
 		const projection = projectVaultGitNextSafeAction({
 			action_id: "preview_host_enrollment_repair",
@@ -399,6 +465,7 @@ describe("vault-git private Setup binder", () => {
 
 	test("refuses a public (non-private) contract through the Setup lane before spawning", async () => {
 		const publicDiscovery: VaultGitSetupDiscoveryResult = {
+			action_id: "begin_transaction",
 			action_argv: ["begin"],
 			input_contract_id: "vault-git.begin",
 			fields: [{ id: "event", input_channel: "public" }],

@@ -528,6 +528,42 @@ const MATRIX: readonly MatrixRow[] = [
 		},
 	},
 	{
+		label: "apply_host_enrollment -> Setup private needs_input",
+		action_id: "apply_host_enrollment",
+		expect: {
+			kind: "needs_input",
+			input_contract_id: "setup.vault-git.host-enrollment",
+		},
+	},
+	{
+		label: "apply_runtime_rollback -> invoke Setup rollback",
+		action_id: "apply_runtime_rollback",
+		expect: {
+			kind: "invoke",
+			argv: ["sync", "--domain", "vault-git", "--rollback", "--json"],
+		},
+	},
+	{
+		label: "wait_for_vault_git_idle -> external prerequisite",
+		action_id: "wait_for_vault_git_idle",
+		expect: {
+			kind: "needs_human",
+			handoff_kind: "external_prerequisite",
+			owner: "vault_git_operator",
+			condition: "no_active_or_uncertain_work",
+		},
+	},
+	{
+		label: "reconcile_host_enrollment_evidence -> external prerequisite",
+		action_id: "reconcile_host_enrollment_evidence",
+		expect: {
+			kind: "needs_human",
+			handoff_kind: "external_prerequisite",
+			owner: "vault_git_operator",
+			condition: "host_enrollment_evidence_reconciled",
+		},
+	},
+	{
 		label: "provision_repository_ssh -> external prerequisite (repository_ssh_owner)",
 		action_id: "provision_repository_ssh",
 		expect: {

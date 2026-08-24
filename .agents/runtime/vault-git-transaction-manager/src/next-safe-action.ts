@@ -579,7 +579,7 @@ const CATALOG: Readonly<Record<string, CatalogEntry>> = {
 		kind: "needs_input",
 		summary: "Provide the Host Enrollment inputs.",
 		input_contract_id: "setup.vault-git.host-enrollment",
-		setupActionArgv: ["sync", "--domain", "vault-git"],
+		setupActionArgv: ["sync", "--domain", "vault-git", "--check"],
 		// All private: bound only through the private Setup binder's stdin lane,
 		// never the public binder. No argv flags, no public bind template.
 		fields: [
@@ -599,6 +599,54 @@ const CATALOG: Readonly<Record<string, CatalogEntry>> = {
 				validate: validatePrivateValue,
 			},
 		],
+	},
+	// Setup owns both enrollment entry points. A first host can supply inputs and
+	// apply immediately; a successful preview returns this separately admitted
+	// continuation so an agent never has to infer a write invocation from prose.
+	apply_host_enrollment: {
+		kind: "needs_input",
+		summary: "Apply the reviewed Host Enrollment plan.",
+		input_contract_id: "setup.vault-git.host-enrollment",
+		setupActionArgv: ["sync", "--domain", "vault-git"],
+		fields: [
+			{
+				id: "ssh_identity_file_path",
+				input_channel: "private_stdin",
+				validate: validatePrivateValue,
+			},
+			{
+				id: "ssh_public_key_path",
+				input_channel: "private_stdin",
+				validate: validatePrivateValue,
+			},
+			{
+				id: "ssh_known_hosts_path",
+				input_channel: "private_stdin",
+				validate: validatePrivateValue,
+			},
+		],
+	},
+	apply_runtime_rollback: {
+		kind: "invoke",
+		summary: "Apply the reviewed runtime rollback.",
+		executable: "setup",
+		argvPrefix: ["sync", "--domain", "vault-git", "--rollback"],
+		selectors: [],
+		argvSuffix: ["--json"],
+	},
+	wait_for_vault_git_idle: {
+		kind: "needs_human",
+		summary: "Wait until the transaction manager has no active or uncertain work.",
+		handoff_kind: "external_prerequisite",
+		owner: "vault_git_operator",
+		condition: "no_active_or_uncertain_work",
+	},
+	reconcile_host_enrollment_evidence: {
+		kind: "needs_human",
+		summary: "Reconcile the Host Enrollment evidence.",
+		handoff_kind: "external_prerequisite",
+		owner: "vault_git_operator",
+		condition: "host_enrollment_evidence_reconciled",
 	},
 	// begin needs an event plus one-or-more owned leaf paths; those are not
 	// permitted continuation selectors, so it is an all-public needs_input
@@ -962,6 +1010,8 @@ const WRITE_ACTION_IDS: ReadonlySet<VaultGitNextActionId> = new Set([
 	"complete_transaction",
 	"resume_writing",
 	"run_repair",
+	"apply_host_enrollment",
+	"apply_runtime_rollback",
 	"retry_push",
 	"retry_remote",
 	"begin_transaction",
@@ -1907,6 +1957,7 @@ export interface VaultGitPrivateSetupInputEntry {
  * it rather than hard-coding a command.
  */
 export interface VaultGitSetupDiscoveryResult {
+	readonly action_id: string;
 	readonly action_argv: readonly string[];
 	readonly input_contract_id: string;
 	readonly fields: readonly VaultGitInputFieldDescriptor[];
@@ -1990,6 +2041,9 @@ export async function bindVaultGitPrivateSetupInput(
 	// Divergence: injected discovery must match the authoritative catalog contract.
 	if (deps.discovery.input_contract_id !== needsInput.input_contract_id) {
 		fail("divergent discovery input_contract_id");
+	}
+	if (deps.discovery.action_id !== ref.action_id) {
+		fail("divergent discovery action_id");
 	}
 	const expectedArgv = needsInput.setupActionArgv;
 	if (

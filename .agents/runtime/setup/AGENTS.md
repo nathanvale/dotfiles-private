@@ -1,6 +1,6 @@
 # Setup Runtime
 
-- Keep one flat `setup` facade-backed CLI.
+- Keep one flat `setup` CLI; it is not Command Facade-backed.
 - Keep Vault Git Host Enrollment behind explicit `setup sync --domain vault-git`.
 - Keep private input on stdin, never argv or public output.
 - Keep runtime publication, selection, rollback, and Activation Configuration inside the Host Enrollment module.

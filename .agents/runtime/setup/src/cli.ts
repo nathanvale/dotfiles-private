@@ -32,7 +32,7 @@ export function createDefaultRuntime(overrides: Partial<SetupCliRuntime> = {}): 
   const env = overrides.env ?? process.env;
   const configRoot = join(env.XDG_CONFIG_HOME ?? join(homeDir, ".config"), "context", "vault-git");
   const dataRoot = join(env.XDG_DATA_HOME ?? join(homeDir, ".local", "share"), "context", "vault-git");
-  const stateRoot = env.XDG_STATE_HOME ?? join(homeDir, ".local", "state");
+  const stateRoot = env.VAULT_GIT_STATE_ROOT ?? env.XDG_STATE_HOME ?? join(homeDir, ".local", "state");
   const sourceRepoRoot = resolve(import.meta.dir, "../../../..");
   return {
     homeDir,
@@ -86,13 +86,18 @@ export async function main(argv: readonly string[], options: SetupCliOptions = {
 }
 
 function projectResult(result: VaultGitHostEnrollmentResult) {
-  const nextAction = "nextAction" in result ? result.nextAction.actionId : "setup_healthy";
+	const nextAction = "nextAction" in result
+		? result.nextAction.actionId
+		: result.station === "vault_git.rollback_ready"
+			? "apply_runtime_rollback"
+			: "none";
   const state = result.state === "ready" || result.state === "changes" ? "changes"
     : result.state === "needs_human" || result.state === "blocked" ? "blocked"
     : result.state === "not_enrolled" ? "clean_slate" : result.state;
   const station = result.station === "vault_git.host_enrollment_inputs_required" ? "sync.vault_git_inputs_required"
     : result.station === "vault_git.repository_ssh_prerequisite" ? "sync.vault_git_ssh_prerequisite"
     : result.station === "vault_git.host_enrollment_ready" ? "sync.vault_git_enrollment_ready"
+		: result.station === "vault_git.host_enrollment_reconciliation_required" ? "sync.vault_git_evidence_reconciliation_required"
     : result.station === "vault_git.runtime_selection_blocked" ? "sync.vault_git_selection_blocked"
     : result.station === "vault_git.rollback_ready" ? "sync.vault_git_rollback_ready"
     : result.station === "vault_git.rollback_applied" ? "sync.vault_git_rollback_applied"
@@ -106,7 +111,18 @@ function exitCode(result: VaultGitHostEnrollmentResult): 0 | 1 {
 }
 
 function renderPlain(data: ReturnType<typeof projectResult>): string {
-  return `Setup ${data.state}: ${data.station}\nNext action: ${data.next_action}\n`;
+  const lines = [`Setup ${data.state}: ${data.station}`, `Next action: ${data.next_action}`];
+	if ("nextAction" in data.vault_git && data.vault_git.nextAction.kind === "needs_human") {
+		lines.push(`Action owner: ${data.vault_git.nextAction.owner}`);
+		lines.push(`Required condition: ${data.vault_git.nextAction.condition}`);
+	}
+  if ("missingPrerequisites" in data.vault_git && "nextAction" in data.vault_git) {
+    lines.push(`Missing prerequisites: ${data.vault_git.missingPrerequisites.join(", ")}`);
+		for (const detail of data.vault_git.missingPrerequisiteDetails) {
+			lines.push(`Prerequisite ${detail.id}: ${detail.purpose}; ${detail.requirement}; ${detail.expectedOwner}; ${detail.expectedMode}`);
+		}
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 async function readVaultGitHostEnrollmentInput(runtime: SetupCliRuntime): Promise<VaultGitHostEnrollmentInput> {

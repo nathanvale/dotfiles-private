@@ -1,17 +1,24 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { Buffer } from "node:buffer";
 import {
 	chmod,
 	lstat,
 	mkdir,
+	mkdtemp,
 	open,
 	readFile,
+	readlink,
 	realpath,
 	rename,
 	rm,
 	symlink,
 } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
-import type { VaultGitRuntimeSelectionFence } from "@side-quest/vault-git-transaction-manager";
+import {
+	VaultGitRuntimeSelectionFenceBusyError,
+	type VaultGitRuntimeSelectionFence,
+} from "@side-quest/vault-git-transaction-manager";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const HOST_HANDLE_PATTERN = /^host_[a-f0-9]{32}$/u;
@@ -26,7 +33,20 @@ export interface VaultGitHostEnrollmentRoots {
 	readonly inspectWorkState?: () => Promise<"clear" | "active" | "uncertain">;
 	/** Vault Git-owned mutual exclusion covering the final selection publication. */
 	readonly runtimeSelectionFence: VaultGitRuntimeSelectionFence;
+	/** Test-only barrier after exact commit bytes are materialized. */
+	readonly onRuntimeSourceBound?: () => Promise<void>;
+	/** Test-only deterministic publication fault/barrier seam. */
+	readonly onPublicationStep?: (step: VaultGitHostEnrollmentPublicationStep) => Promise<void>;
+	/** Test-only executable used to capture the private-key derivation child argv. */
+	readonly sshKeygenPath?: string;
 }
+
+export type VaultGitHostEnrollmentPublicationStep =
+	| "apply_after_activation"
+	| "apply_after_selector"
+	| "apply_after_selection_record"
+	| "rollback_after_selector"
+	| "rollback_after_selection_record";
 
 export interface VaultGitHostEnrollmentInputField {
 	readonly id:
@@ -77,6 +97,20 @@ export type VaultGitSshPrerequisite =
 	| "ssh_public_key"
 	| "ssh_known_hosts";
 
+export interface VaultGitSshPrerequisiteDetail {
+	readonly id: VaultGitSshPrerequisite;
+	readonly purpose:
+		| "dedicated_repository_ssh_identity"
+		| "matching_repository_ssh_public_key"
+		| "reviewed_repository_ssh_known_hosts";
+	readonly requirement:
+		| "regular_current_owner_private_file"
+		| "regular_file_matching_identity"
+		| "nonempty_current_owner_private_file";
+	readonly expectedOwner: "current_user" | "any_user";
+	readonly expectedMode: "0400_or_0600" | "0600" | "any_mode";
+}
+
 export interface VaultGitHostEnrollmentPrerequisiteStatus {
 	readonly state: "needs_human";
 	readonly station: "vault_git.repository_ssh_prerequisite";
@@ -87,6 +121,21 @@ export interface VaultGitHostEnrollmentPrerequisiteStatus {
 		readonly condition: "dedicated_identity_ready";
 	};
 	readonly missingPrerequisites: readonly VaultGitSshPrerequisite[];
+	readonly missingPrerequisiteDetails: readonly VaultGitSshPrerequisiteDetail[];
+	readonly installedRuntime: null;
+	readonly selectedRuntime: null;
+	readonly priorRuntime: null;
+}
+
+export interface VaultGitHostEnrollmentReconciliationStatus {
+	readonly state: "blocked";
+	readonly station: "vault_git.host_enrollment_reconciliation_required";
+	readonly nextAction: {
+		readonly kind: "needs_human";
+		readonly actionId: "reconcile_host_enrollment_evidence";
+		readonly owner: "vault_git_operator";
+		readonly condition: "host_enrollment_evidence_reconciled";
+	};
 	readonly installedRuntime: null;
 	readonly selectedRuntime: null;
 	readonly priorRuntime: null;
@@ -101,9 +150,13 @@ export interface VaultGitHostEnrollmentReadyStatus {
 		readonly inputContractId: "setup.vault-git.host-enrollment";
 		readonly fields: readonly VaultGitHostEnrollmentInputField[];
 	};
-	readonly installedRuntime: null;
+	readonly installedRuntime: VaultGitRuntimeReference;
 	readonly selectedRuntime: null;
 	readonly priorRuntime: null;
+	readonly mutationPlan: {
+		readonly operation: "install_and_select";
+		readonly runtimeDigest: string;
+	};
 }
 
 export interface VaultGitRuntimeReference {
@@ -128,7 +181,7 @@ export interface VaultGitRuntimeSelectionBlockedStatus {
 		readonly owner: "vault_git_operator";
 		readonly condition: "no_active_or_uncertain_work";
 	};
-	readonly installedRuntime: VaultGitRuntimeReference;
+	readonly installedRuntime: VaultGitRuntimeReference | null;
 	readonly selectedRuntime: null;
 	readonly priorRuntime: null;
 }
@@ -159,27 +212,38 @@ export type VaultGitHostEnrollmentResult =
 	| VaultGitHostEnrollmentPrerequisiteStatus
 	| VaultGitHostEnrollmentReadyStatus
 	| VaultGitHostEnrollmentAppliedStatus
+	| VaultGitHostEnrollmentReconciliationStatus
 	| VaultGitRuntimeSelectionBlockedStatus
 	| VaultGitRuntimeRollbackStatus
 	| VaultGitRuntimeRollbackBlockedStatus;
 
 export interface VaultGitHostEnrollment {
 	inspect(): Promise<
-		VaultGitHostEnrollmentStatus | VaultGitHostEnrollmentEnrolledStatus
+		| VaultGitHostEnrollmentStatus
+		| VaultGitHostEnrollmentEnrolledStatus
+		| VaultGitHostEnrollmentReconciliationStatus
 	>;
 	preview(
 		input: VaultGitHostEnrollmentInput,
 	): Promise<
-		VaultGitHostEnrollmentPrerequisiteStatus | VaultGitHostEnrollmentReadyStatus
+		| VaultGitHostEnrollmentPrerequisiteStatus
+		| VaultGitHostEnrollmentReadyStatus
+		| VaultGitHostEnrollmentReconciliationStatus
 	>;
 	apply(input: VaultGitHostEnrollmentInput): Promise<
 		| VaultGitHostEnrollmentPrerequisiteStatus
 		| VaultGitHostEnrollmentAppliedStatus
 		| VaultGitRuntimeSelectionBlockedStatus
+		| VaultGitHostEnrollmentReconciliationStatus
 	>;
 	rollback(
 		check: boolean,
-	): Promise<VaultGitRuntimeRollbackStatus | VaultGitRuntimeRollbackBlockedStatus>;
+	): Promise<
+		| VaultGitRuntimeRollbackStatus
+		| VaultGitRuntimeRollbackBlockedStatus
+		| VaultGitRuntimeSelectionBlockedStatus
+		| VaultGitHostEnrollmentReconciliationStatus
+	>;
 }
 
 interface ValidatedEnrollmentInput {
@@ -246,12 +310,32 @@ function publicKeyMaterial(value: string): string | undefined {
 }
 
 async function matchingPublicKey(
+	roots: VaultGitHostEnrollmentRoots,
 	privateKeyPath: string,
 	publicKeyPath: string,
 ): Promise<boolean> {
+	let scratch: string | undefined;
 	try {
+		scratch = await mkdtemp(join(tmpdir(), "vault-git-identity-"));
+		await chmod(scratch, 0o700);
+		const scratchEntry = await lstat(scratch);
+		if (!scratchEntry.isDirectory() || scratchEntry.isSymbolicLink() || !isCurrentOwnerPrivate(scratchEntry, 0o700)) {
+			return false;
+		}
+		// The original private pathname is never given to a child process. A
+		// short-lived, owner-private copy gives ssh-keygen a generic child-visible
+		// path while preserving its ordinary file-based input contract.
+		const aliasPath = join(scratch, "identity");
+		const alias = await open(aliasPath, "wx", 0o600);
+		try {
+			await alias.writeFile(await readFile(privateKeyPath));
+			await alias.sync();
+		} finally {
+			await alias.close();
+		}
+		await chmod(aliasPath, 0o600);
 		const generated = Bun.spawnSync(
-			["/usr/bin/ssh-keygen", "-y", "-f", privateKeyPath],
+			[roots.sshKeygenPath ?? "/usr/bin/ssh-keygen", "-y", "-P", "", "-f", aliasPath],
 			{
 				stdin: "ignore",
 				stdout: "pipe",
@@ -267,10 +351,12 @@ async function matchingPublicKey(
 		return publicKeyMaterial(derived) === publicKeyMaterial(configured);
 	} catch {
 		return false;
+	} finally {
+		if (scratch) await rm(scratch, { recursive: true, force: true });
 	}
 }
 
-async function validateEnrollmentInput(input: VaultGitHostEnrollmentInput): Promise<{
+async function validateEnrollmentInput(roots: VaultGitHostEnrollmentRoots, input: VaultGitHostEnrollmentInput): Promise<{
 	readonly validated?: ValidatedEnrollmentInput;
 	readonly missingPrerequisites: readonly VaultGitSshPrerequisite[];
 }> {
@@ -296,7 +382,7 @@ async function validateEnrollmentInput(input: VaultGitHostEnrollmentInput): Prom
 	const checks = [
 		privateKeyPath !== undefined,
 		privateKeyPath !== undefined && publicKeyPath !== undefined
-			? await matchingPublicKey(privateKeyPath, publicKeyPath)
+			? await matchingPublicKey(roots, privateKeyPath, publicKeyPath)
 			: false,
 		knownHostsReady,
 	];
@@ -333,9 +419,40 @@ function prerequisiteStatus(
 			condition: "dedicated_identity_ready",
 		},
 		missingPrerequisites,
+		missingPrerequisiteDetails: missingPrerequisites.map(prerequisiteDetail),
 		installedRuntime: null,
 		selectedRuntime: null,
 		priorRuntime: null,
+	};
+}
+
+function prerequisiteDetail(
+	id: VaultGitSshPrerequisite,
+): VaultGitSshPrerequisiteDetail {
+	if (id === "ssh_identity_file") {
+		return {
+			id,
+			purpose: "dedicated_repository_ssh_identity",
+			requirement: "regular_current_owner_private_file",
+			expectedOwner: "current_user",
+			expectedMode: "0400_or_0600",
+		};
+	}
+	if (id === "ssh_public_key") {
+		return {
+			id,
+			purpose: "matching_repository_ssh_public_key",
+			requirement: "regular_file_matching_identity",
+			expectedOwner: "any_user",
+			expectedMode: "any_mode",
+		};
+	}
+	return {
+		id,
+		purpose: "reviewed_repository_ssh_known_hosts",
+		requirement: "nonempty_current_owner_private_file",
+		expectedOwner: "current_user",
+		expectedMode: "0600",
 	};
 }
 
@@ -359,9 +476,29 @@ function runChecked(
 	return result.stdout.toString().trim();
 }
 
+/** Run a fixed command and retain raw stdout for NUL-delimited Git records. */
+function runCheckedBytes(command: readonly string[], cwd: string): Uint8Array {
+	const result = Bun.spawnSync([...command], {
+		cwd,
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+		env: {
+			PATH: `${dirname(process.execPath)}:/usr/bin:/bin`,
+			LC_ALL: "C",
+		},
+	});
+	if (result.exitCode !== 0) {
+		throw new Error("Vault Git runtime source or compilation is not ready");
+	}
+	return result.stdout;
+}
+
 async function cleanMergedSource(roots: VaultGitHostEnrollmentRoots): Promise<{
 	readonly sourceRepoRoot: string;
-	readonly runtimeEntrypoint: string;
+	readonly entryRelative: string;
+	readonly commit: string;
+	readonly archivePaths: readonly string[];
 }> {
 	if (!roots.sourceRepoRoot || !roots.runtimeEntrypoint) {
 		throw new Error("Vault Git runtime source is not configured");
@@ -390,7 +527,125 @@ async function cleanMergedSource(roots: VaultGitHostEnrollmentRoots): Promise<{
 		sourceRepoRoot,
 	);
 	if (head !== merged) throw new Error("Vault Git runtime source is not merged to origin/main");
-	return { sourceRepoRoot, runtimeEntrypoint };
+	const archivePaths = archivePathsForEntrypoint(entryRelative);
+	const tree = runCheckedBytes(
+		["/usr/bin/git", "ls-tree", "-r", "-z", "--full-tree", head],
+		sourceRepoRoot,
+	);
+	if (containsUnsafeArchiveSymlink(tree, archivePaths)) {
+		throw new Error("Vault Git runtime source contains an unsafe archive symlink");
+	}
+	return { sourceRepoRoot, entryRelative, commit: head, archivePaths };
+}
+
+/**
+ * `git ls-tree -z` is an on-disk protocol, not display text: quoted newlines
+ * and tabs must remain literal path bytes until the record separator is read.
+ */
+function containsUnsafeArchiveSymlink(
+	tree: Uint8Array,
+	archivePaths: readonly string[],
+): boolean {
+	for (const record of Buffer.from(tree).toString("utf8").split("\0")) {
+		if (record.length === 0) continue;
+		const tab = record.indexOf("\t");
+		if (tab < 0 || !record.startsWith("120000 ")) continue;
+		if (archivePathIncludes(archivePaths, record.slice(tab + 1))) return true;
+	}
+	return false;
+}
+
+/**
+ * The Manager entrypoint is a workspace product, not an archive of every
+ * dotfiles projection. Archive its declared workspace closure so unrelated
+ * source-linked user configuration cannot influence frozen dependency install.
+ * Other source roots retain the whole-tree fixture contract.
+ */
+function archivePathsForEntrypoint(entryRelative: string): readonly string[] {
+	if (entryRelative !== ".agents/runtime/vault-git-transaction-manager/src/cli.ts") return [];
+	return [
+		"package.json",
+		"bun.lock",
+		".agents/runtime",
+		"config/agents/skills/personal",
+		"apps/vscode",
+	];
+}
+
+function archivePathIncludes(archivePaths: readonly string[], path: string): boolean {
+	return archivePaths.length === 0 || archivePaths.some((candidate) => path === candidate || path.startsWith(`${candidate}/`));
+}
+
+async function materializeCleanMergedSource(
+	roots: VaultGitHostEnrollmentRoots,
+	runtimesRoot: string,
+): Promise<{ readonly sourceRoot: string; readonly runtimeEntrypoint: string }> {
+	const source = await cleanMergedSource(roots);
+	const sourceRoot = join(runtimesRoot, `.source-${source.commit}-${randomUUID()}`);
+	await createFreshPrivateDirectory(sourceRoot);
+	try {
+		const archive = Bun.spawnSync(
+			["/usr/bin/git", "archive", "--format=tar", source.commit, "--", ...source.archivePaths],
+			{
+				cwd: source.sourceRepoRoot,
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+				env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+			},
+		);
+		if (archive.exitCode !== 0 || archive.stdout.byteLength === 0) {
+			throw new Error("Vault Git runtime source or compilation is not ready");
+		}
+		const extracted = Bun.spawnSync(["/usr/bin/tar", "-xf", "-", "-C", sourceRoot], {
+			stdin: archive.stdout,
+			stdout: "pipe",
+			stderr: "pipe",
+			env: { PATH: "/usr/bin:/bin", LC_ALL: "C" },
+		});
+		if (extracted.exitCode !== 0) {
+			throw new Error("Vault Git runtime source or compilation is not ready");
+		}
+		runChecked(
+			[
+				process.execPath,
+				"install",
+				"--frozen-lockfile",
+				"--ignore-scripts",
+				"--no-save",
+				"--backend",
+				"copyfile",
+				"--cache-dir",
+				join(sourceRoot, ".bun-cache"),
+				"--no-progress",
+				"--no-summary",
+			],
+			sourceRoot,
+		);
+		const runtimeEntrypoint = join(sourceRoot, source.entryRelative);
+		const [boundRoot, boundEntrypoint] = await Promise.all([
+			realpath(sourceRoot),
+			realpath(runtimeEntrypoint),
+		]);
+		const entryRelative = relative(boundRoot, boundEntrypoint);
+		if (entryRelative === "" || entryRelative === ".." || entryRelative.startsWith("../") || isAbsolute(entryRelative)) {
+			throw new Error("Vault Git runtime entrypoint escapes its bound source");
+		}
+		return { sourceRoot: boundRoot, runtimeEntrypoint: boundEntrypoint };
+	} catch (error) {
+		await rm(sourceRoot, { recursive: true, force: true });
+		throw error;
+	}
+}
+
+async function createFreshPrivateDirectory(path: string): Promise<void> {
+	await ensureTrustedDirectory(dirname(path));
+	await mkdir(path, { mode: 0o700 });
+	await chmod(path, 0o700);
+	const entry = await lstat(path);
+	if (!entry.isDirectory() || entry.isSymbolicLink() || !isCurrentOwnerPrivate(entry, 0o700)) {
+		throw new Error("Vault Git bound runtime source root is unsafe");
+	}
 }
 
 async function ensurePrivateDirectory(path: string): Promise<void> {
@@ -416,7 +671,11 @@ async function ensureTrustedDirectory(path: string): Promise<void> {
 			}
 		} catch (error) {
 			if (!isMissingPath(error)) throw error;
-			await mkdir(cursor, { mode: 0o700 });
+			try {
+				await mkdir(cursor, { mode: 0o700 });
+			} catch (createError) {
+				if (!isAlreadyExists(createError)) throw createError;
+			}
 			const created = await lstat(cursor);
 			if (created.isSymbolicLink() || !created.isDirectory()) {
 				throw new Error("Vault Git owner path creation is unsafe");
@@ -425,8 +684,40 @@ async function ensureTrustedDirectory(path: string): Promise<void> {
 	}
 }
 
+/**
+ * Read-only admission for evidence roots. Unlike ensureTrustedDirectory this
+ * never creates or chmods a path: existing evidence below a caller-controlled
+ * symlink is untrustworthy and must reconcile before any rollback or publish.
+ */
+async function hasTrustedExistingAncestors(path: string): Promise<boolean> {
+	if (!isAbsolute(path)) return false;
+	let cursor = "/";
+	for (const segment of resolve(path).split("/").filter(Boolean)) {
+		cursor = join(cursor, segment);
+		try {
+			const entry = await lstat(cursor);
+			const trustedPlatformAlias =
+				cursor === "/var" && entry.isSymbolicLink() && (await realpath(cursor)) === "/private/var";
+			if (!trustedPlatformAlias && (entry.isSymbolicLink() || !entry.isDirectory())) return false;
+		} catch (error) {
+			return isMissingPath(error);
+		}
+	}
+	return true;
+}
+
 function isMissingPath(error: unknown): boolean {
 	return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "ENOENT";
+}
+
+function isAlreadyExists(error: unknown): boolean {
+	return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EEXIST";
+}
+
+function isCurrentOwnerPrivate(entry: Awaited<ReturnType<typeof lstat>>, mode: number): boolean {
+	const owner = process.getuid?.();
+	const permissions = typeof entry.mode === "bigint" ? Number(entry.mode & 0o777n) : entry.mode & 0o777;
+	return permissions === mode && (owner === undefined || Number(entry.uid) === owner);
 }
 
 async function syncDirectory(path: string): Promise<void> {
@@ -460,48 +751,128 @@ async function writeOwnerFile(path: string, bytes: string): Promise<void> {
 
 async function compileRuntime(
 	roots: VaultGitHostEnrollmentRoots,
+	expectedPlan?: VaultGitRuntimeReference,
 ): Promise<VaultGitRuntimeReference> {
-	const source = await cleanMergedSource(roots);
 	const runtimesRoot = join(roots.dataRoot, "runtimes");
 	await ensurePrivateDirectory(roots.dataRoot);
 	await ensurePrivateDirectory(runtimesRoot);
+	const source = await materializeCleanMergedSource(roots, runtimesRoot);
 	const stagingRoot = join(runtimesRoot, `.staging-${randomUUID()}`);
 	const stagedExecutable = join(stagingRoot, "vault-git");
 	await ensurePrivateDirectory(stagingRoot);
 	try {
-		runChecked(
-			[
-				process.execPath,
-				"build",
-				source.runtimeEntrypoint,
-				"--compile",
-				"--outfile",
-				stagedExecutable,
-			],
-			stagingRoot,
-		);
-		const bytes = await readFile(stagedExecutable);
-		const digest = createHash("sha256").update(bytes).digest("hex");
+		const digest = await compileFrozenRuntime(roots, source, stagingRoot, true);
+		if (expectedPlan && expectedPlan.digest !== digest) {
+			throw new Error("Vault Git runtime plan changed before apply");
+		}
 		const runtimeRoot = join(runtimesRoot, digest);
-		const runtimeExecutable = join(runtimeRoot, "vault-git");
 		await chmod(stagedExecutable, 0o755);
 		await symlink("vault-git", join(stagingRoot, "bun"));
 		try {
 			await rename(stagingRoot, runtimeRoot);
 			await syncDirectory(runtimesRoot);
 		} catch {
-			if (!(await runtimeMatches(runtimeExecutable, digest))) {
+			if (!(await runtimeMatches(roots, digest))) {
 				throw new Error("Installed Vault Git runtime digest mismatch");
 			}
 		}
-		if (!(await runtimeMatches(runtimeExecutable, digest))) {
+		if (!(await runtimeMatches(roots, digest))) {
 			throw new Error("Installed Vault Git runtime digest mismatch");
 		}
-		await ensureRuntimeBunAlias(runtimeRoot);
+		await ensureRuntimeBunAlias(roots, digest);
 		return { digest };
 	} finally {
 		await rm(stagingRoot, { recursive: true, force: true });
+		await rm(source.sourceRoot, { recursive: true, force: true });
 	}
+}
+
+async function compileFrozenRuntime(
+	roots: VaultGitHostEnrollmentRoots,
+	source: { readonly sourceRoot: string; readonly runtimeEntrypoint: string },
+	stagingRoot: string,
+	notifySourceBound = false,
+): Promise<string> {
+	if (notifySourceBound) await roots.onRuntimeSourceBound?.();
+	const entryRelative = relative(source.sourceRoot, source.runtimeEntrypoint);
+	if (entryRelative === "" || entryRelative === ".." || entryRelative.startsWith("../") || isAbsolute(entryRelative)) {
+		throw new Error("Vault Git runtime entrypoint escapes its bound source");
+	}
+	const stagedExecutable = join(stagingRoot, "vault-git");
+	const buildMetadataPath = join(stagingRoot, "vault-git.metafile.json");
+	runChecked(
+		[
+			process.execPath,
+			"build",
+			entryRelative,
+			"--compile",
+			"--outfile",
+			stagedExecutable,
+			`--metafile=${buildMetadataPath}`,
+		],
+		source.sourceRoot,
+	);
+	await assertBuildInputsAreBound(source.sourceRoot, buildMetadataPath);
+	const bytes = await readFile(stagedExecutable);
+	await chmod(stagedExecutable, 0o755);
+	return createHash("sha256").update(bytes).digest("hex");
+}
+
+/** Compile an exact-source runtime plan in owner-private scratch; never publish it. */
+async function planRuntime(roots: VaultGitHostEnrollmentRoots): Promise<VaultGitRuntimeReference> {
+	const scratch = await mkdtemp(join(tmpdir(), "vault-git-runtime-plan-"));
+	try {
+		await chmod(scratch, 0o700);
+		const source = await materializeCleanMergedSource(roots, scratch);
+		const stagingRoot = join(scratch, `.plan-${randomUUID()}`);
+		await createFreshPrivateDirectory(stagingRoot);
+		try {
+			return { digest: await compileFrozenRuntime(roots, source, stagingRoot) };
+		} finally {
+			await rm(stagingRoot, { recursive: true, force: true });
+			await rm(source.sourceRoot, { recursive: true, force: true });
+		}
+	} finally {
+		await rm(scratch, { recursive: true, force: true });
+	}
+}
+
+/**
+ * Bun's resolver is the authoritative graph owner. Admit only a graph whose
+ * every resolved input remains inside the frozen exact-commit source root;
+ * this rejects a missing workspace dependency satisfied by an ancestor
+ * node_modules without guessing at package names or import syntax.
+ */
+async function assertBuildInputsAreBound(sourceRoot: string, metadataPath: string): Promise<void> {
+	let inputs: Record<string, unknown>;
+	try {
+		const metadata = JSON.parse(await readFile(metadataPath, "utf8")) as { inputs?: unknown };
+		if (typeof metadata.inputs !== "object" || metadata.inputs === null || Array.isArray(metadata.inputs)) {
+			throw new Error("invalid inputs");
+		}
+		inputs = metadata.inputs as Record<string, unknown>;
+	} catch {
+		throw new Error("Vault Git runtime source or compilation is not ready");
+	}
+	for (const input of Object.keys(inputs)) {
+		const lexical = resolve(sourceRoot, input);
+		if (!isContainedPath(sourceRoot, lexical)) {
+			throw new Error("Vault Git runtime source or compilation is not ready");
+		}
+		try {
+			if (!isContainedPath(sourceRoot, await realpath(lexical))) {
+				throw new Error("Vault Git runtime source or compilation is not ready");
+			}
+		} catch (error) {
+			if (error instanceof Error && error.message === "Vault Git runtime source or compilation is not ready") throw error;
+			throw new Error("Vault Git runtime source or compilation is not ready");
+		}
+	}
+}
+
+function isContainedPath(root: string, candidate: string): boolean {
+	const path = relative(root, candidate);
+	return path !== "" && path !== ".." && !path.startsWith("../") && !isAbsolute(path);
 }
 
 /**
@@ -511,43 +882,126 @@ async function compileRuntime(
  * the alias rather than trusting another binary; a pre-alias runtime
  * directory installed by an earlier Setup is repaired here on reinstall.
  */
-async function ensureRuntimeBunAlias(runtimeRoot: string): Promise<void> {
+async function trustedRuntimesRoot(
+	roots: VaultGitHostEnrollmentRoots,
+): Promise<string | undefined> {
+	if (!(await hasTrustedExistingAncestors(roots.dataRoot))) return undefined;
+	const runtimesRoot = join(roots.dataRoot, "runtimes");
+	try {
+		const entry = await lstat(runtimesRoot, { bigint: true });
+		if (!entry.isDirectory() || entry.isSymbolicLink() || !isCurrentOwnerPrivate(entry, 0o700)) return undefined;
+		const canonical = await realpath(runtimesRoot);
+		const resolved = await lstat(canonical, { bigint: true });
+		if (
+			!resolved.isDirectory() ||
+			resolved.isSymbolicLink() ||
+			resolved.dev !== entry.dev ||
+			resolved.ino !== entry.ino
+		) return undefined;
+		return canonical;
+	} catch {
+		return undefined;
+	}
+}
+
+async function trustedRuntimeExecutable(
+	roots: VaultGitHostEnrollmentRoots,
+	digest: string,
+): Promise<string | undefined> {
+	if (!SHA256_PATTERN.test(digest)) return undefined;
+	const runtimesRoot = join(roots.dataRoot, "runtimes");
+	const canonicalRuntimesRoot = await trustedRuntimesRoot(roots);
+	if (!canonicalRuntimesRoot) return undefined;
+	const runtimeRoot = join(runtimesRoot, digest);
+	try {
+		const runtimeEntry = await lstat(runtimeRoot, { bigint: true });
+		if (!runtimeEntry.isDirectory() || runtimeEntry.isSymbolicLink() || !isCurrentOwnerPrivate(runtimeEntry, 0o700)) return undefined;
+		const canonicalRuntimeRoot = await realpath(runtimeRoot);
+		const resolvedRuntime = await lstat(canonicalRuntimeRoot, { bigint: true });
+		if (
+			!resolvedRuntime.isDirectory() ||
+			resolvedRuntime.isSymbolicLink() ||
+			resolvedRuntime.dev !== runtimeEntry.dev ||
+			resolvedRuntime.ino !== runtimeEntry.ino ||
+			relative(canonicalRuntimesRoot, canonicalRuntimeRoot) !== digest
+		) return undefined;
+		const executable = join(runtimeRoot, "vault-git");
+		const executableEntry = await lstat(executable, { bigint: true });
+		if (!executableEntry.isFile() || executableEntry.isSymbolicLink() || (executableEntry.mode & 0o100n) === 0n) return undefined;
+		const canonicalExecutable = await realpath(executable);
+		const resolvedExecutable = await lstat(canonicalExecutable, { bigint: true });
+		if (
+			!resolvedExecutable.isFile() ||
+			resolvedExecutable.isSymbolicLink() ||
+			resolvedExecutable.dev !== executableEntry.dev ||
+			resolvedExecutable.ino !== executableEntry.ino ||
+			!isContainedPath(canonicalRuntimeRoot, canonicalExecutable)
+		) return undefined;
+		return canonicalExecutable;
+	} catch {
+		return undefined;
+	}
+}
+
+async function ensureRuntimeBunAlias(
+	roots: VaultGitHostEnrollmentRoots,
+	digest: string,
+): Promise<void> {
+	const executable = await trustedRuntimeExecutable(roots, digest);
+	if (!executable) throw new Error("Installed Vault Git runtime is unsafe");
+	const runtimeRoot = dirname(executable);
 	const aliasPath = join(runtimeRoot, "bun");
 	try {
 		await symlink("vault-git", aliasPath);
 	} catch (error) {
 		if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
 	}
-	const [alias, executable] = await Promise.all([
+	const [alias, resolvedExecutable] = await Promise.all([
 		realpath(aliasPath),
 		realpath(join(runtimeRoot, "vault-git")),
 	]);
-	if (alias !== executable) {
+	if (alias !== resolvedExecutable) {
 		throw new Error("Installed Vault Git runtime bun alias is invalid");
 	}
 }
 
-async function runtimeMatches(path: string, digest: string): Promise<boolean> {
+async function runtimeMatches(
+	roots: VaultGitHostEnrollmentRoots,
+	digest: string,
+): Promise<boolean> {
+	const executable = await trustedRuntimeExecutable(roots, digest);
+	if (!executable) return false;
 	try {
-		const entry = await lstat(path);
-		if (!entry.isFile() || entry.isSymbolicLink() || (entry.mode & 0o111) === 0) {
-			return false;
-		}
-		return createHash("sha256").update(await readFile(path)).digest("hex") === digest;
+		return createHash("sha256").update(await readFile(executable)).digest("hex") === digest;
 	} catch {
 		return false;
 	}
 }
 
-async function readJson(path: string): Promise<unknown | undefined> {
+type ActivationConfigurationEvidence =
+	| { readonly kind: "absent" }
+	| { readonly kind: "valid"; readonly value: ActivationConfiguration }
+	| { readonly kind: "invalid" };
+
+/**
+ * Absence is the only condition that permits Host Enrollment to mint an
+ * identity. An existing record that cannot be proven owner-private and valid
+ * is durable evidence, not an invitation to overwrite it.
+ */
+async function readActivationConfiguration(
+	path: string,
+): Promise<ActivationConfigurationEvidence> {
 	try {
 		const entry = await lstat(path);
-		if (!entry.isFile() || entry.isSymbolicLink() || (entry.mode & 0o077) !== 0) {
-			return undefined;
+			if (!entry.isFile() || entry.isSymbolicLink() || !isCurrentOwnerPrivate(entry, 0o600)) {
+			return { kind: "invalid" };
 		}
-		return JSON.parse(await readFile(path, "utf8"));
-	} catch {
-		return undefined;
+		const parsed = parseActivationConfiguration(
+			JSON.parse(await readFile(path, "utf8")),
+		);
+		return parsed === undefined ? { kind: "invalid" } : { kind: "valid", value: parsed };
+	} catch (error) {
+		return isMissingPath(error) ? { kind: "absent" } : { kind: "invalid" };
 	}
 }
 
@@ -570,11 +1024,34 @@ function parseActivationConfiguration(value: unknown): ActivationConfiguration |
 			candidate.ssh_identity_file_path,
 			candidate.ssh_public_key_path,
 			candidate.ssh_known_hosts_path,
-		].every((path) => typeof path === "string" && isAbsolute(path))
+			].every((path) => typeof path === "string" && isAbsolute(path) && !hasControlBytes(path))
 	) {
 		return undefined;
 	}
 	return candidate as unknown as ActivationConfiguration;
+}
+
+function hasControlBytes(value: string): boolean {
+	return [...value].some((character) => {
+		const code = character.codePointAt(0) ?? 0;
+		return code <= 0x1f || code === 0x7f;
+	});
+}
+
+type RuntimeSelectionEvidence =
+	| { readonly kind: "absent" }
+	| { readonly kind: "valid"; readonly value: RuntimeSelectionRecord }
+	| { readonly kind: "invalid" };
+
+async function readRuntimeSelection(path: string): Promise<RuntimeSelectionEvidence> {
+	try {
+		const entry = await lstat(path);
+		if (!entry.isFile() || entry.isSymbolicLink() || !isCurrentOwnerPrivate(entry, 0o600)) return { kind: "invalid" };
+		const parsed = parseRuntimeSelection(JSON.parse(await readFile(path, "utf8")));
+		return parsed === undefined ? { kind: "invalid" } : { kind: "valid", value: parsed };
+	} catch (error) {
+		return isMissingPath(error) ? { kind: "absent" } : { kind: "invalid" };
+	}
 }
 
 function parseRuntimeSelection(value: unknown): RuntimeSelectionRecord | undefined {
@@ -609,20 +1086,118 @@ async function selectRuntime(
 	roots: VaultGitHostEnrollmentRoots,
 	digest: string,
 ): Promise<void> {
-	const runtimeExecutable = join(roots.dataRoot, "runtimes", digest, "vault-git");
-	if (!(await runtimeMatches(runtimeExecutable, digest))) {
+	const runtimeExecutable = await trustedRuntimeExecutable(roots, digest);
+	if (!runtimeExecutable || !(await runtimeMatches(roots, digest))) {
 		throw new Error("Refusing to select an invalid Vault Git runtime");
 	}
-	await ensureTrustedDirectory(dirname(roots.selectorPath));
-	const temporaryPath = join(dirname(roots.selectorPath), `.vault-git.${randomUUID()}.tmp`);
+	await publishSelectorTarget(roots.selectorPath, runtimeExecutable);
+}
+
+async function publishSelectorTarget(selectorPath: string, target: string): Promise<void> {
+	await ensureTrustedDirectory(dirname(selectorPath));
+	const temporaryPath = join(dirname(selectorPath), `.vault-git.${randomUUID()}.tmp`);
 	try {
-		await symlink(runtimeExecutable, temporaryPath);
-		await rename(temporaryPath, roots.selectorPath);
-		await syncDirectory(dirname(roots.selectorPath));
+		await symlink(target, temporaryPath);
+		await rename(temporaryPath, selectorPath);
+		await syncDirectory(dirname(selectorPath));
 	} catch (error) {
 		await rm(temporaryPath, { force: true });
 		throw error;
 	}
+}
+
+type OwnerFileSnapshot =
+	| { readonly kind: "absent" }
+	| { readonly kind: "present"; readonly bytes: string };
+
+type SelectorSnapshot =
+	| { readonly kind: "absent" }
+	| { readonly kind: "present"; readonly target: string };
+
+interface PublicationSnapshot {
+	readonly activation: OwnerFileSnapshot;
+	readonly selection: OwnerFileSnapshot;
+	readonly selector: SelectorSnapshot;
+}
+
+async function ownerFileSnapshot(path: string): Promise<OwnerFileSnapshot> {
+	try {
+		return { kind: "present", bytes: await readFile(path, "utf8") };
+	} catch (error) {
+		if (isMissingPath(error)) return { kind: "absent" };
+		throw error;
+	}
+}
+
+async function publicationSnapshot(
+	roots: VaultGitHostEnrollmentRoots,
+	activationPath: string,
+	selectionPath: string,
+	selectorEvidence: SelectorEvidence,
+): Promise<PublicationSnapshot> {
+	if (selectorEvidence.kind === "invalid") throw new Error("Vault Git selector evidence is invalid");
+	const [activation, selection] = await Promise.all([
+		ownerFileSnapshot(activationPath),
+		ownerFileSnapshot(selectionPath),
+	]);
+	return {
+		activation,
+		selection,
+		selector: await selectorSnapshot(roots, selectorEvidence),
+	};
+}
+
+async function selectorSnapshot(
+	roots: VaultGitHostEnrollmentRoots,
+	evidence: Exclude<SelectorEvidence, { readonly kind: "invalid" }>,
+): Promise<SelectorSnapshot> {
+	if (evidence.kind === "valid") return readLiteralSelector(roots.selectorPath);
+	if (await isSourceLinkedSelector(roots)) return readLiteralSelector(roots.selectorPath);
+	return { kind: "absent" };
+}
+
+async function readLiteralSelector(path: string): Promise<SelectorSnapshot> {
+	try {
+		const entry = await lstat(path);
+		if (!entry.isSymbolicLink()) throw new Error("Vault Git selector evidence is invalid");
+		return { kind: "present", target: await readlink(path) };
+	} catch (error) {
+		if (isMissingPath(error)) return { kind: "absent" };
+		throw error;
+	}
+}
+
+async function restorePublication(
+	roots: VaultGitHostEnrollmentRoots,
+	activationPath: string,
+	selectionPath: string,
+	snapshot: PublicationSnapshot,
+): Promise<void> {
+	const restoreFile = async (path: string, file: OwnerFileSnapshot) => {
+		if (file.kind === "absent") await rm(path, { force: true });
+		else await writeOwnerFile(path, file.bytes);
+	};
+	const failures: unknown[] = [];
+	for (const restore of [
+		() => restoreFile(activationPath, snapshot.activation),
+		() => restoreFile(selectionPath, snapshot.selection),
+		() => restoreSelector(roots, snapshot.selector),
+	]) {
+		try { await restore(); } catch (error) { failures.push(error); }
+	}
+	if (failures.length === 1) throw failures[0];
+	if (failures.length > 1) throw new AggregateError(failures, "Vault Git Host Enrollment restoration failed");
+}
+
+async function restoreSelector(
+	roots: VaultGitHostEnrollmentRoots,
+	snapshot: SelectorSnapshot,
+): Promise<void> {
+	if (snapshot.kind === "absent") {
+		await rm(roots.selectorPath, { force: true });
+		return;
+	}
+	await publishSelectorTarget(roots.selectorPath, snapshot.target);
 }
 
 /** Selector digest proven by real-path containment alone; bytes may be broken. */
@@ -633,7 +1208,8 @@ async function managedSelectorPathDigest(
 		const entry = await lstat(roots.selectorPath);
 		if (!entry.isSymbolicLink()) return undefined;
 		const target = await realpath(roots.selectorPath);
-		const runtimesRoot = await realpath(join(roots.dataRoot, "runtimes"));
+		const runtimesRoot = await trustedRuntimesRoot(roots);
+		if (!runtimesRoot) return undefined;
 		const targetRelative = relative(runtimesRoot, target);
 		if (targetRelative.startsWith("..") || isAbsolute(targetRelative)) return undefined;
 		const parts = targetRelative.split("/");
@@ -649,8 +1225,7 @@ async function selectorDigest(
 ): Promise<string | undefined> {
 	const digest = await managedSelectorPathDigest(roots);
 	if (digest === undefined) return undefined;
-	const target = join(roots.dataRoot, "runtimes", digest, "vault-git");
-	return (await runtimeMatches(target, digest)) ? digest : undefined;
+	return (await runtimeMatches(roots, digest)) ? digest : undefined;
 }
 
 interface ReplaceableSelectorState {
@@ -687,16 +1262,18 @@ async function replaceableSelectorState(
 			: undefined;
 		return { pathDigest, ...(verifiedDigest ? { verifiedDigest } : {}) };
 	}
-	if (roots.runtimeEntrypoint) {
-		try {
-			if ((await realpath(roots.selectorPath)) === (await realpath(roots.runtimeEntrypoint))) {
-				return {};
-			}
-		} catch {
-			// A broken or racing link is not proven Setup ownership.
-		}
-	}
+	if (await isSourceLinkedSelector(roots)) return {};
 	throw new Error("Refusing to replace a foreign Vault Git selector");
+}
+
+async function isSourceLinkedSelector(roots: VaultGitHostEnrollmentRoots): Promise<boolean> {
+	if (!roots.runtimeEntrypoint) return false;
+	try {
+		return (await realpath(roots.selectorPath)) === (await realpath(roots.runtimeEntrypoint));
+	} catch {
+		// A broken or racing link is not proven Setup ownership.
+		return false;
+	}
 }
 
 /**
@@ -720,8 +1297,7 @@ async function distinctPriorDigest(
 		existingSelection?.prior_digest ?? undefined,
 	]) {
 		if (candidate === undefined || candidate === selectedDigest) continue;
-		const executable = join(roots.dataRoot, "runtimes", candidate, "vault-git");
-		if (await runtimeMatches(executable, candidate)) return candidate;
+		if (await runtimeMatches(roots, candidate)) return candidate;
 	}
 	return null;
 }
@@ -733,24 +1309,127 @@ async function holdRuntimeSelection<T>(
 	return roots.runtimeSelectionFence.hold(operation);
 }
 
+function runtimeSelectionBlocked(): VaultGitRuntimeSelectionBlockedStatus {
+	return {
+		state: "blocked",
+		station: "vault_git.runtime_selection_blocked",
+		nextAction: {
+			kind: "needs_human",
+			actionId: "wait_for_vault_git_idle",
+			owner: "vault_git_operator",
+			condition: "no_active_or_uncertain_work",
+		},
+		installedRuntime: null,
+		selectedRuntime: null,
+		priorRuntime: null,
+	};
+}
+
+function reconciliationRequired(): VaultGitHostEnrollmentReconciliationStatus {
+	return {
+		state: "blocked",
+		station: "vault_git.host_enrollment_reconciliation_required",
+		nextAction: {
+			kind: "needs_human",
+			actionId: "reconcile_host_enrollment_evidence",
+			owner: "vault_git_operator",
+			condition: "host_enrollment_evidence_reconciled",
+		},
+		installedRuntime: null,
+		selectedRuntime: null,
+		priorRuntime: null,
+	};
+}
+
+function inputRequired(): VaultGitHostEnrollmentStatus {
+	return {
+		state: "not_enrolled",
+		station: "vault_git.host_enrollment_inputs_required",
+		nextAction: {
+			kind: "needs_input",
+			actionId: "provide_host_enrollment_inputs",
+			inputContractId: "setup.vault-git.host-enrollment",
+			fields: VAULT_GIT_HOST_ENROLLMENT_INPUT_FIELDS,
+		},
+		installedRuntime: null,
+		selectedRuntime: null,
+		priorRuntime: null,
+	};
+}
+
+type SelectorEvidence =
+	| { readonly kind: "absent" }
+	| { readonly kind: "valid"; readonly pathDigest: string; readonly selectedBytesValid: boolean }
+	| { readonly kind: "invalid" };
+
+type EnrollmentEvidence =
+	| { readonly kind: "all_absent" }
+	| {
+		readonly kind: "coherent_enrolled";
+		readonly activation: ActivationConfiguration;
+		readonly selection: RuntimeSelectionRecord;
+		readonly selectorPathDigest: string;
+		readonly selectedBytesValid: boolean;
+	}
+	| { readonly kind: "invalid" };
+
+async function readSelectorEvidence(
+	roots: VaultGitHostEnrollmentRoots,
+): Promise<SelectorEvidence> {
+	try {
+		const selectorState = await replaceableSelectorState(roots);
+		if (selectorState.pathDigest === undefined) return { kind: "absent" };
+		return { kind: "valid", pathDigest: selectorState.pathDigest, selectedBytesValid: selectorState.verifiedDigest === selectorState.pathDigest };
+	} catch {
+		return { kind: "invalid" };
+	}
+}
+
+async function classifyEnrollmentEvidence(
+	roots: VaultGitHostEnrollmentRoots,
+): Promise<EnrollmentEvidence> {
+	if (
+		!(await hasTrustedExistingAncestors(roots.configRoot)) ||
+		!(await hasTrustedExistingAncestors(roots.dataRoot)) ||
+		!(await hasTrustedExistingAncestors(dirname(roots.selectorPath)))
+	) {
+		return { kind: "invalid" };
+	}
+	const [activation, selection, selector] = await Promise.all([
+		readActivationConfiguration(join(roots.configRoot, "activation.json")),
+		readRuntimeSelection(join(roots.configRoot, "runtime-selection.json")),
+		readSelectorEvidence(roots),
+	]);
+	if (activation.kind === "absent" && selection.kind === "absent" && selector.kind === "absent") {
+		return { kind: "all_absent" };
+	}
+	if (
+		activation.kind === "valid" &&
+		selection.kind === "valid" &&
+		selector.kind === "valid" &&
+		selector.pathDigest === selection.value.selected_digest
+	) {
+		return {
+			kind: "coherent_enrolled",
+			activation: activation.value,
+			selection: selection.value,
+			selectorPathDigest: selector.pathDigest,
+			selectedBytesValid: selector.selectedBytesValid,
+		};
+	}
+	return { kind: "invalid" };
+}
+
 /** Create the Setup-owned Host Enrollment boundary for one isolated host state. */
 export function createVaultGitHostEnrollment(
 	roots: VaultGitHostEnrollmentRoots,
 ): VaultGitHostEnrollment {
 	return {
 		async inspect() {
-			const activationPath = join(roots.configRoot, "activation.json");
-			const selectionPath = join(roots.configRoot, "runtime-selection.json");
-			const [activation, selection, selectedDigest] = await Promise.all([
-				readJson(activationPath).then(parseActivationConfiguration),
-				readJson(selectionPath).then(parseRuntimeSelection),
-				selectorDigest(roots),
-			]);
-			if (
-				activation &&
-				selection &&
-				selectedDigest === selection.selected_digest
-			) {
+			const evidence = await classifyEnrollmentEvidence(roots);
+			if (evidence.kind === "all_absent") return inputRequired();
+			if (evidence.kind === "coherent_enrolled" && evidence.selectedBytesValid) {
+				const { activation, selection } = evidence;
 				const selectedRuntime = { digest: selection.selected_digest };
 				return {
 					state: "enrolled",
@@ -763,23 +1442,14 @@ export function createVaultGitHostEnrollment(
 						: null,
 				};
 			}
-			return {
-				state: "not_enrolled",
-				station: "vault_git.host_enrollment_inputs_required",
-				nextAction: {
-					kind: "needs_input",
-					actionId: "provide_host_enrollment_inputs",
-					inputContractId: "setup.vault-git.host-enrollment",
-					fields: VAULT_GIT_HOST_ENROLLMENT_INPUT_FIELDS,
-				},
-				installedRuntime: null,
-				selectedRuntime: null,
-				priorRuntime: null,
-			};
+			return reconciliationRequired();
 		},
 		async preview(input) {
-			const validation = await validateEnrollmentInput(input);
+			const evidence = await classifyEnrollmentEvidence(roots);
+			if (evidence.kind === "invalid" || (evidence.kind === "coherent_enrolled" && !evidence.selectedBytesValid)) return reconciliationRequired();
+			const validation = await validateEnrollmentInput(roots, input);
 			if (validation.validated) {
+				const plannedRuntime = await planRuntime(roots);
 				return {
 					state: "ready",
 					station: "vault_git.host_enrollment_ready",
@@ -789,136 +1459,122 @@ export function createVaultGitHostEnrollment(
 						inputContractId: "setup.vault-git.host-enrollment",
 						fields: VAULT_GIT_HOST_ENROLLMENT_INPUT_FIELDS,
 					},
-					installedRuntime: null,
+					installedRuntime: plannedRuntime,
 					selectedRuntime: null,
 					priorRuntime: null,
+					mutationPlan: {
+						operation: "install_and_select",
+						runtimeDigest: plannedRuntime.digest,
+					},
 				};
 			}
 			return prerequisiteStatus(validation.missingPrerequisites);
 		},
 		async apply(input) {
-			const validation = await validateEnrollmentInput(input);
+			const initialEvidence = await classifyEnrollmentEvidence(roots);
+			if (
+				initialEvidence.kind === "invalid" ||
+				(initialEvidence.kind === "coherent_enrolled" && !initialEvidence.selectedBytesValid)
+			) {
+				return reconciliationRequired();
+			}
+			const validation = await validateEnrollmentInput(roots, input);
 			if (!validation.validated) {
 				return prerequisiteStatus(validation.missingPrerequisites);
 			}
 			const validated = validation.validated;
-			await ensureTrustedDirectory(roots.configRoot);
-			await ensureTrustedDirectory(roots.dataRoot);
-			await ensureTrustedDirectory(dirname(roots.selectorPath));
-			const installedRuntime = await compileRuntime(roots);
-			return holdRuntimeSelection(roots, async () => {
-			const workState = await roots.inspectWorkState?.();
-			if (workState !== "clear") {
-				return {
-					state: "blocked",
-					station: "vault_git.runtime_selection_blocked",
-					nextAction: {
-						kind: "needs_human",
-						actionId: "wait_for_vault_git_idle",
-						owner: "vault_git_operator",
-						condition: "no_active_or_uncertain_work",
-					},
-					installedRuntime,
-					selectedRuntime: null,
-					priorRuntime: null,
-				};
-			}
-			const activationPath = join(roots.configRoot, "activation.json");
-			const selectionPath = join(roots.configRoot, "runtime-selection.json");
-			const [existingActivation, existingSelection, selectorState] = await Promise.all([
-				readJson(activationPath).then(parseActivationConfiguration),
-				readJson(selectionPath).then(parseRuntimeSelection),
-				replaceableSelectorState(roots),
-			]);
-			const selectedDigest = selectorState.verifiedDigest;
-			const hostHandle = existingActivation?.host_handle ?? `host_${randomBytes(16).toString("hex")}`;
-			const activation: ActivationConfiguration = {
-				schema_version: 1,
-				host_handle: hostHandle,
-				ssh_identity_file_path: validated.sshIdentityFilePath,
-				ssh_public_key_path: validated.sshPublicKeyPath,
-				ssh_known_hosts_path: validated.sshKnownHostsPath,
-			};
-			const activationUnchanged = existingActivation !== undefined &&
-				JSON.stringify(existingActivation) === JSON.stringify(activation);
-			const selectionUnchanged =
-				existingSelection?.selected_digest === installedRuntime.digest &&
-				selectedDigest === installedRuntime.digest;
-			if (!activationUnchanged) {
-				await writeOwnerFile(activationPath, `${JSON.stringify(activation)}\n`);
-			}
-			if (!selectionUnchanged) {
-				const priorDigest = await distinctPriorDigest(
+			// Each apply has its own fresh plan. The preview result is advisory rather
+			// than a durable capability, so this detects a changed exact source before
+			// publication instead of trusting a stale cross-process result.
+			const plannedRuntime = await planRuntime(roots);
+			const installedRuntime = await compileRuntime(roots, plannedRuntime);
+			try {
+				return await holdRuntimeSelection(roots, async () => {
+				await ensureTrustedDirectory(roots.configRoot);
+				await ensureTrustedDirectory(roots.dataRoot);
+				await ensureTrustedDirectory(dirname(roots.selectorPath));
+				const activationPath = join(roots.configRoot, "activation.json");
+				const selectionPath = join(roots.configRoot, "runtime-selection.json");
+				const evidence = await classifyEnrollmentEvidence(roots);
+				if (evidence.kind === "invalid" || (evidence.kind === "coherent_enrolled" && !evidence.selectedBytesValid)) return reconciliationRequired();
+				if ((await roots.inspectWorkState?.()) !== "clear") {
+					return { ...runtimeSelectionBlocked(), installedRuntime };
+				}
+				const selectorEvidence: SelectorEvidence = evidence.kind === "coherent_enrolled"
+					? { kind: "valid", pathDigest: evidence.selectorPathDigest, selectedBytesValid: evidence.selectedBytesValid }
+					: { kind: "absent" };
+				const beforePublication = await publicationSnapshot(
 					roots,
-					installedRuntime.digest,
-					selectorState,
-					existingSelection,
+					activationPath,
+					selectionPath,
+					selectorEvidence,
 				);
-				await selectRuntime(roots, installedRuntime.digest);
-				const selection: RuntimeSelectionRecord = {
+				const existingActivation = evidence.kind === "coherent_enrolled" ? evidence.activation : undefined;
+				const existingSelection = evidence.kind === "coherent_enrolled" ? evidence.selection : undefined;
+				const selectorState = selectorEvidence.kind === "valid"
+					? { pathDigest: selectorEvidence.pathDigest, ...(selectorEvidence.selectedBytesValid ? { verifiedDigest: selectorEvidence.pathDigest } : {}) }
+					: {};
+				const hostHandle = existingActivation?.host_handle ?? `host_${randomBytes(16).toString("hex")}`;
+				const activation: ActivationConfiguration = {
 					schema_version: 1,
-					selected_digest: installedRuntime.digest,
-					prior_digest: priorDigest,
+					host_handle: hostHandle,
+					ssh_identity_file_path: validated.sshIdentityFilePath,
+					ssh_public_key_path: validated.sshPublicKeyPath,
+					ssh_known_hosts_path: validated.sshKnownHostsPath,
 				};
-				await writeOwnerFile(selectionPath, `${JSON.stringify(selection)}\n`);
-				return {
-					state: "applied",
-					station: "vault_git.runtime_selected",
-					hostHandle,
-					installedRuntime,
-					selectedRuntime: installedRuntime,
-					priorRuntime: selection.prior_digest
-						? { digest: selection.prior_digest }
-						: null,
-				};
+				const activationUnchanged = existingActivation !== undefined && JSON.stringify(existingActivation) === JSON.stringify(activation);
+				const selectionUnchanged = existingSelection?.selected_digest === installedRuntime.digest && "verifiedDigest" in selectorState && selectorState.verifiedDigest === installedRuntime.digest;
+				try {
+					if (!activationUnchanged) {
+						await writeOwnerFile(activationPath, `${JSON.stringify(activation)}\n`);
+						await roots.onPublicationStep?.("apply_after_activation");
+					}
+					if (!selectionUnchanged) {
+						const priorDigest = await distinctPriorDigest(roots, installedRuntime.digest, selectorState, existingSelection);
+						await selectRuntime(roots, installedRuntime.digest);
+						await roots.onPublicationStep?.("apply_after_selector");
+						const selection: RuntimeSelectionRecord = { schema_version: 1, selected_digest: installedRuntime.digest, prior_digest: priorDigest };
+						await writeOwnerFile(selectionPath, `${JSON.stringify(selection)}\n`);
+						await roots.onPublicationStep?.("apply_after_selection_record");
+						return { state: "applied", station: "vault_git.runtime_selected", hostHandle, installedRuntime, selectedRuntime: installedRuntime, priorRuntime: selection.prior_digest ? { digest: selection.prior_digest } : null };
+					}
+					return { state: activationUnchanged ? "noop" : "applied", station: "vault_git.runtime_selected", hostHandle, installedRuntime, selectedRuntime: installedRuntime, priorRuntime: existingSelection?.prior_digest ? { digest: existingSelection.prior_digest } : null };
+				} catch (operationError) {
+					try {
+						await restorePublication(roots, activationPath, selectionPath, beforePublication);
+					} catch (restoreError) {
+						throw new AggregateError([operationError, restoreError], "Vault Git Host Enrollment publication and restoration failed");
+					}
+					throw operationError;
+				}
+				});
+			} catch (error) {
+				if (error instanceof VaultGitRuntimeSelectionFenceBusyError) {
+					return { ...runtimeSelectionBlocked(), installedRuntime };
+				}
+				throw error;
 			}
-			return {
-				state: activationUnchanged ? "noop" : "applied",
-				station: "vault_git.runtime_selected",
-				hostHandle,
-				installedRuntime,
-				selectedRuntime: installedRuntime,
-				priorRuntime: existingSelection?.prior_digest
-					? { digest: existingSelection.prior_digest }
-					: null,
-			};
-			});
 		},
 		async rollback(check) {
-			const selectionPath = join(roots.configRoot, "runtime-selection.json");
-			const [selection, selectedPathDigest] = await Promise.all([
-				readJson(selectionPath).then(parseRuntimeSelection),
-				managedSelectorPathDigest(roots),
-			]);
-			if (!selection?.prior_digest) {
-				throw new Error("Vault Git prior Runtime Selection is unavailable");
-			}
-			const priorDigest = selection.prior_digest;
-			// Containment proof only: a selected runtime with broken bytes must
-			// remain rollback-eligible, while a foreign or drifted selector is not.
-			if (selection.selected_digest !== selectedPathDigest) {
-				throw new Error("Refusing rollback from an unproven Vault Git selector");
-			}
-			const priorExecutable = join(
-				roots.dataRoot,
-				"runtimes",
-				priorDigest,
-				"vault-git",
-			);
-			if (!(await runtimeMatches(priorExecutable, priorDigest))) {
-				throw new Error("Vault Git prior runtime is invalid");
-			}
-			const selectedRuntime = { digest: selection.selected_digest };
-			const priorRuntime = { digest: priorDigest };
-			if (check) {
-				return {
-					state: "changes",
-					station: "vault_git.rollback_ready",
-					selectedRuntime,
-					priorRuntime,
-				};
-			}
-			return holdRuntimeSelection(roots, async () => {
+			try {
+				return await holdRuntimeSelection(roots, async () => {
+				const activationPath = join(roots.configRoot, "activation.json");
+				const selectionPath = join(roots.configRoot, "runtime-selection.json");
+					const evidence = await classifyEnrollmentEvidence(roots);
+					if (evidence.kind !== "coherent_enrolled") return reconciliationRequired();
+					const { selection } = evidence;
+				if (!selection?.prior_digest) {
+					throw new Error("Vault Git prior Runtime Selection is unavailable");
+				}
+				const priorDigest = selection.prior_digest;
+				// Containment proof only: a selected runtime with broken bytes must
+				// remain rollback-eligible, while a foreign or drifted selector is not.
+				const selectorEvidence: SelectorEvidence = { kind: "valid", pathDigest: evidence.selectorPathDigest, selectedBytesValid: evidence.selectedBytesValid };
+				if (!(await runtimeMatches(roots, priorDigest))) {
+					throw new Error("Vault Git prior runtime is invalid");
+				}
+				const selectedRuntime = { digest: selection.selected_digest };
+				const priorRuntime = { digest: priorDigest };
 				if ((await roots.inspectWorkState?.()) !== "clear") {
 				return {
 					state: "blocked",
@@ -930,25 +1586,49 @@ export function createVaultGitHostEnrollment(
 						condition: "no_active_or_uncertain_work",
 					},
 					selectedRuntime,
-					priorRuntime,
-				};
+						priorRuntime,
+					};
+				}
+				if (check) {
+					return {
+						state: "changes",
+						station: "vault_git.rollback_ready",
+						selectedRuntime,
+						priorRuntime,
+					};
+				}
+				const beforePublication = await publicationSnapshot(roots, activationPath, selectionPath, selectorEvidence);
+				try {
+					await selectRuntime(roots, priorDigest);
+					await roots.onPublicationStep?.("rollback_after_selector");
+					await writeOwnerFile(
+						selectionPath,
+						`${JSON.stringify({
+							schema_version: 1,
+							selected_digest: priorDigest,
+							prior_digest: selection.selected_digest,
+						} satisfies RuntimeSelectionRecord)}\n`,
+					);
+					await roots.onPublicationStep?.("rollback_after_selection_record");
+					return {
+						state: "applied",
+						station: "vault_git.rollback_applied",
+						selectedRuntime: priorRuntime,
+						priorRuntime: selectedRuntime,
+					};
+				} catch (operationError) {
+					try {
+						await restorePublication(roots, activationPath, selectionPath, beforePublication);
+					} catch (restoreError) {
+						throw new AggregateError([operationError, restoreError], "Vault Git Host Enrollment publication and restoration failed");
+					}
+					throw operationError;
+				}
+				});
+			} catch (error) {
+				if (error instanceof VaultGitRuntimeSelectionFenceBusyError) return runtimeSelectionBlocked();
+				throw error;
 			}
-			await selectRuntime(roots, priorDigest);
-			await writeOwnerFile(
-				selectionPath,
-				`${JSON.stringify({
-					schema_version: 1,
-					selected_digest: priorDigest,
-					prior_digest: selection.selected_digest,
-				} satisfies RuntimeSelectionRecord)}\n`,
-			);
-			return {
-				state: "applied",
-				station: "vault_git.rollback_applied",
-				selectedRuntime: priorRuntime,
-				priorRuntime: selectedRuntime,
-			};
-			});
 		},
 	};
 }

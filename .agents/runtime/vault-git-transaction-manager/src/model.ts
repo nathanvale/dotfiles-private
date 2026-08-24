@@ -1196,6 +1196,7 @@ export const VAULT_GIT_ENGINE_NEXT_ACTION_IDS = [
 	...VAULT_GIT_RECEIPT_NEXT_ACTIONS,
 	"begin_transaction",
 	"capture_private_draft",
+	"wait_for_runtime",
 	"change_commit_summary",
 	"change_owned_paths",
 	"configure_activation_identity",
@@ -1218,7 +1219,6 @@ export type VaultGitEngineNextActionId =
 /** Stable next-action ids emitted by the complete CLI and transaction engine. */
 export const VAULT_GIT_NEXT_ACTION_IDS = [
 	...VAULT_GIT_ENGINE_NEXT_ACTION_IDS,
-	"wait_for_runtime",
 	"inspect_commands",
 	"change_input",
 	"run_janitor",
@@ -1228,6 +1228,10 @@ export const VAULT_GIT_NEXT_ACTION_IDS = [
 	// ADR-0002 U4 validation route matrix action ids.
 	"preview_host_enrollment_repair",
 	"provide_host_enrollment_inputs",
+	"apply_host_enrollment",
+	"apply_runtime_rollback",
+	"wait_for_vault_git_idle",
+	"reconcile_host_enrollment_evidence",
 	"provision_repository_ssh",
 	"escalate_validation_evidence",
 	"apply_vault_content_repair",

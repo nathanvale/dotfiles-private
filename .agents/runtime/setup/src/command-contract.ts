@@ -19,12 +19,20 @@ export const setupCommandDiscovery = {
         "--input-stdin": { type: "enum", values: [SETUP_INPUT_CONTRACT_ID] },
         "--json": { type: "boolean" },
       },
-      input_contracts: [{
-        id: SETUP_INPUT_CONTRACT_ID,
-        action_id: "provide_host_enrollment_inputs",
-        action_argv: ["sync", "--domain", "vault-git"],
-        fields: setupInputFields,
-      }],
+      input_contracts: [
+        {
+		  id: SETUP_INPUT_CONTRACT_ID,
+		  action_id: "provide_host_enrollment_inputs",
+		  action_argv: ["sync", "--domain", "vault-git", "--check"],
+          fields: setupInputFields,
+        },
+        {
+          id: SETUP_INPUT_CONTRACT_ID,
+          action_id: "apply_host_enrollment",
+          action_argv: ["sync", "--domain", "vault-git"],
+          fields: setupInputFields,
+        },
+      ],
     },
     commands: {
       script: "setup",

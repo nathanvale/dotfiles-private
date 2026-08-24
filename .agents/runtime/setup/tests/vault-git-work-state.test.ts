@@ -353,6 +353,16 @@ describe("Vault Git work-state evidence", () => {
 		expect(await inspectVaultGitWorkState(stateRoot)).toBe("uncertain");
 	});
 
+	test.each([
+		["manager directory", ["vault-git-transaction-manager"], 0o755],
+		["receipt", ["vault-git-transaction-manager", REPOSITORY_ID, "current.json"], 0o644],
+	] as const)("a widened %s mode is uncertain", async (_kind, relativePath, mode) => {
+		const stateRoot = await makeStateRoot();
+		await writeReceipt(stateRoot);
+		await chmod(join(stateRoot, ...relativePath), mode);
+		expect(await inspectVaultGitWorkState(stateRoot)).toBe("uncertain");
+	});
+
 	test("an unreadable manager root is uncertain", async () => {
 		if (process.getuid?.() === 0) return;
 		const stateRoot = await makeStateRoot();

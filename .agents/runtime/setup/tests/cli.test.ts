@@ -67,15 +67,28 @@ describe("Setup CLI Vault Git facade", () => {
         commands: {
           sync: {
             mutation: "write",
-            input_contracts: [{
-              id: "setup.vault-git.host-enrollment",
-              action_argv: ["sync", "--domain", "vault-git"],
-              fields: [
-                { id: "ssh_identity_file_path", input_channel: "private_stdin" },
-                { id: "ssh_public_key_path", input_channel: "private_stdin" },
-                { id: "ssh_known_hosts_path", input_channel: "private_stdin" },
-              ],
-            }],
+            input_contracts: [
+              {
+                id: "setup.vault-git.host-enrollment",
+                action_id: "provide_host_enrollment_inputs",
+                action_argv: ["sync", "--domain", "vault-git", "--check"],
+                fields: [
+                  { id: "ssh_identity_file_path", input_channel: "private_stdin" },
+                  { id: "ssh_public_key_path", input_channel: "private_stdin" },
+                  { id: "ssh_known_hosts_path", input_channel: "private_stdin" },
+                ],
+              },
+              {
+                id: "setup.vault-git.host-enrollment",
+                action_id: "apply_host_enrollment",
+                action_argv: ["sync", "--domain", "vault-git"],
+                fields: [
+                  { id: "ssh_identity_file_path", input_channel: "private_stdin" },
+                  { id: "ssh_public_key_path", input_channel: "private_stdin" },
+                  { id: "ssh_known_hosts_path", input_channel: "private_stdin" },
+                ],
+              },
+            ],
           },
         },
       },
@@ -101,6 +114,7 @@ describe("Setup CLI Vault Git facade", () => {
       station: "vault_git.repository_ssh_prerequisite",
       nextAction: { kind: "needs_human", actionId: "provision_repository_ssh", owner: "repository_ssh_owner", condition: "dedicated_identity_ready" },
       missingPrerequisites: ["ssh_identity_file"],
+			missingPrerequisiteDetails: [{ id: "ssh_identity_file", purpose: "dedicated_repository_ssh_identity", requirement: "regular_current_owner_private_file", expectedOwner: "current_user", expectedMode: "0400_or_0600" }],
       installedRuntime: null,
       selectedRuntime: null,
       priorRuntime: null,
@@ -152,6 +166,20 @@ describe("Setup CLI Vault Git facade", () => {
       runtime: runtime(owner({ rollback: async (value) => { check = value; return result; } })),
     })).toBe(1);
     expect(check).toBe(true);
-    expect(JSON.parse(io.stdout.text).data).toMatchObject({ station: "sync.vault_git_rollback_ready" });
+    expect(JSON.parse(io.stdout.text).data).toMatchObject({ station: "sync.vault_git_rollback_ready", next_action: "apply_runtime_rollback" });
+  });
+
+  test("terminal enrollment results project the manager-owned terminal action", async () => {
+    const io = capture();
+    const result: VaultGitHostEnrollmentResult = {
+      state: "enrolled",
+      station: "vault_git.runtime_selected",
+      hostHandle: "host_fixture",
+      installedRuntime: { digest: "a".repeat(64) },
+      selectedRuntime: { digest: "a".repeat(64) },
+      priorRuntime: null,
+    };
+    expect(await main(["sync", "--domain", "vault-git", "--json"], { ...io, runtime: runtime(owner({ inspect: async () => result })) })).toBe(0);
+    expect(JSON.parse(io.stdout.text).data.next_action).toBe("none");
   });
 });
