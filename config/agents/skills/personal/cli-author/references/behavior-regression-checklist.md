@@ -119,15 +119,16 @@ Use before and after meaningful edits to `cli-author`.
   - Patches only behavior that improves routing, structure, steering, or pruning.
   - Does not add copied contracts to `SKILL.md`.
 
-### Skill-Author Overlap
+### Writing-for-Agents and CLI-Author Overlap
 
 - **Prompt:** `create a skill that wraps a CLI with JSON output and durable writes.`
-- **Expected route:** `skill-author` owns skill creation; `cli-author` owns only
-  the CLI surface.
+- **Expected route:** The authoritative
+  `docs/agents/skills.md#skill-work-routing` map applies; `cli-author` owns only
+  the CLI and runtime surface.
 - **Expected markers:**
-  - Keeps skill frontmatter/body/safety gates with `skills/skill-author/SKILL.md`.
+  - Loads the authoritative skill-work routing map.
   - Uses `cli-author` only after the CLI surface is selected.
-  - Does not duplicate the skill-author workflow.
+  - Does not copy the routing map or another owner's workflow.
 
 ## Acceptance Gate
 
@@ -138,7 +139,7 @@ Use before and after meaningful edits to `cli-author`.
 - Multi-command agent-native prompt preserves implementation-shape guidance.
 - Stateful no-arg prompt uses state gates without making dashboards universal.
 - Facade-backed prompt follows facade path only when explicitly requested.
-- Skill-author overlap prompt keeps skill creation owned by `skill-author`.
+- Overlap prompt follows the authoritative skill-work routing map.
 - References point to owner paths for deterministic contract shape.
 - Facade-backed prompt preserves result-data helper and structured-error helper
   guardrails without copying helper signatures.

@@ -76,28 +76,28 @@ bun run config/agents/skills/personal/skill-feedback/src/skill-feedback-runner.t
 
 ```json
 {
-	"skill": "skill-author",
+	"skill": "writing-for-agents",
 	"outcome": "confirmed",
-	"goal": "Repair the skill authoring route.",
+	"goal": "Clarify the skill content route.",
 	"friction": {
 		"category": "missing_context",
-		"note": "The driver needed the decision runbook before editing."
+		"note": "The driver needed the content and local owners before editing."
 	},
 	"verification_burden": {
 		"level": "light",
-		"note": "YAML parse and owner-path checks were enough."
+		"note": "Writing review and local routing inspection were enough."
 	},
 	"touched_surfaces": [
-		{ "type": "path", "value": "skills/skill-author/SKILL.md" }
+		{ "type": "path", "value": "docs/agents/skills.md" }
 	],
 	"observations": [
 		{
 			"kind": "missing_context",
 			"target": {
 				"type": "path",
-				"value": "skills/skill-author/references/skill-design-decision-runbook.md"
+				"value": "docs/agents/skills.md"
 			},
-			"summary": "The route was ambiguous without the owner runbook.",
+			"summary": "The route was ambiguous without the local owner record.",
 			"evidence_basis": "driver_observed"
 		}
 	]

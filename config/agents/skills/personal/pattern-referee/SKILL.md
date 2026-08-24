@@ -23,7 +23,7 @@ arrives as evidence; this skill decides whether a name is earned.
 - Architecture pressure workflow: external `improve-codebase-architecture` skill.
 - Design vocabulary: external `codebase-design` skill.
 - Pressure-gate semantics: `config/agents/claude/context/code-style.md`.
-- Skill authoring: `skills/skill-author/references/skill-design-decision-runbook.md`.
+- Skill work routing: `docs/agents/skills.md#skill-work-routing`.
 - Project state and accepted decisions: vault project `pattern-referee-skill`.
 
 ## Three Gates

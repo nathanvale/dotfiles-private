@@ -102,12 +102,10 @@ Pass/fail gates:
 
 ```bash
 config/agents/skills/personal/test-runner/src/test-runner.sh run --cwd config/agents/skills/personal/skill-feedback -- src/docs-drift.test.ts
-bun run skills/skill-author/scripts/check-owner-paths.ts --json config/agents/skills/personal/skill-feedback/README.md config/agents/skills/personal/skill-feedback/ARCHITECTURE.md config/agents/skills/personal/skill-feedback/AGENTS.md config/agents/skills/personal/skill-feedback/SKILL.md config/agents/skills/personal/skill-feedback/CONTEXT.md config/agents/skills/personal/skill-feedback/references/report-shape.md config/agents/skills/personal/skill-feedback/docs/INDEX.md config/agents/skills/personal/skill-feedback/TASKS.md config/agents/skills/personal/skill-feedback/TASKS.archive.md
 ```
 
 The docs-drift test proves `src` modules and the `ARCHITECTURE.md` Module Map
-agree in both directions; the owner-path check proves every backticked local
-path in these docs exists. Stale-phrase inspection aid:
+agree in both directions. Stale-phrase inspection aid:
 
 ```bash
 rg -n 'Active Follow-Up|Active v2|reason ids only|runtime abstraction|witness read' config/agents/skills/personal/skill-feedback

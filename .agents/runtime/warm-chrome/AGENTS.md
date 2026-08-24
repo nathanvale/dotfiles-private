@@ -125,12 +125,10 @@ Pass/fail gates:
 
 ```bash
 ../config/agents/skills/personal/test-runner/src/test-runner.sh run -- runtime/warm-chrome/tests/docs-drift.test.ts
-bun run ../config/agents/skills/personal/skill-author/scripts/check-owner-paths.ts --json runtime/warm-chrome/README.md runtime/warm-chrome/ARCHITECTURE.md runtime/warm-chrome/AGENTS.md runtime/warm-chrome/CONTEXT.md runtime/warm-chrome/TASKS.md runtime/warm-chrome/TASKS.archive.md
 ```
 
 The docs-drift test proves `src` modules and the `ARCHITECTURE.md` Module Map
-agree in both directions. The owner-path check proves backticked repo-local
-owner paths exist.
+agree in both directions.
 
 Stale-phrase inspection aid:
 

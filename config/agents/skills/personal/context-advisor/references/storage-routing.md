@@ -4,7 +4,8 @@ Use this reference when a skill, agent, helper, or human needs durable context
 placement advice.
 
 Keep `skills/context-advisor/SKILL.md` as the advisor front door.
-Keep `skills/skill-author/references/skill-design-decision-runbook.md` as the skill design owner.
+Use `docs/agents/skills.md#skill-work-routing` when placement work crosses a
+skill content, topology, CLI, or runtime branch.
 
 This map advises context placement. It does not own content, mutate stores, or manage runtime state.
 
@@ -292,6 +293,7 @@ second vault as a fallback.
 - If the context is an accepted repo decision, name the repository's declared
   decision owner and return capture to the current driver.
 - If the context is project tracker state or unresolved work state, patch the scoped TASKS.md or project tracker.
-- If accepted storage choice requires a runtime-backed skill capability, use `skill-author`.
-- If storage requires a new or changed agent-facing CLI surface, use `cli-author` inside the `skill-author` runtime-backed path.
+- If accepted storage choice requires skill content, topology, a runtime-backed
+  capability, or a new or changed agent-facing CLI surface, follow
+  `docs/agents/skills.md#skill-work-routing`.
 - If the context is only hot startup guidance, patch hot startup guidance and point to the durable owner.

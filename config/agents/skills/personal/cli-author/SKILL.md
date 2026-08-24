@@ -12,14 +12,14 @@ safety, and validation depth.
 ## Do This First
 
 - If the request edits `cli-author`, its routing, or this `SKILL.md`,
-  `skills/skill-author/SKILL.md` owns the skill edit; run
+  follow `docs/agents/skills.md#skill-work-routing`; run
   `references/behavior-regression-checklist.md` before and after meaningful
   edits.
 - If there are no args, no command purpose, or only "make a CLI", ask the
   numbered router below; do not invent a spec.
 - If the request is to create or edit a skill that wraps a CLI,
-  `skills/skill-author/SKILL.md` owns the skill workflow; use this skill only
-  for the CLI surface.
+  follow `docs/agents/skills.md#skill-work-routing`; use this skill only for the
+  CLI and runtime surface.
 - Classify the lane:
   1. Basic CLI: humans first; scripts welcome; no advanced agent/runtime signal.
   2. Agent-native CLI: explicit agent-native, machine-readable, repairable,

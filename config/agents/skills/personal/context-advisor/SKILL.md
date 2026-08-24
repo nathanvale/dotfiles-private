@@ -14,17 +14,15 @@ Do not write content, mutate stores, manage runtime state, or replace accepted d
 ## Owner Paths
 
 - Storage routing map: `references/storage-routing.md`.
-- Skill authoring owner: `skills/skill-author/SKILL.md`.
-- Runtime-backed skill design owner: `skills/skill-author/references/agent-native-skill-design.md`.
-- CLI contract owner: `skills/cli-author/SKILL.md`.
+- Skill work routing: `docs/agents/skills.md#skill-work-routing`.
 - Decision owner: the repository's declared decision document or ADR index.
 
 ## Dependencies
 
 - `references/storage-routing.md`: bundled reference, hard dependency.
 - `~/.config/context/vault.md`: optional configured external context owner.
-- `skills/skill-author/SKILL.md`: optional handoff for skill-authoring routes.
-- `skills/cli-author/SKILL.md`: optional handoff for CLI-contract routes.
+- `docs/agents/skills.md#skill-work-routing`: optional handoff for skill-work
+  routes.
 - `grill-with-docs`: optional handoff for unresolved ownership choices.
 - Missing storage-routing map: blocked.
 - Missing optional handoff: continue by naming the owner path and next safe action.
@@ -45,7 +43,7 @@ Do not write content, mutate stores, manage runtime state, or replace accepted d
 
 ## Output
 
-- Status: recommend, ask, escalate-skill-author, escalate-cli-author, or blocked.
+- Status: recommend, ask, or blocked.
 - Recommendation: storage bucket and owner path.
 - Required facts: owner, kind, mutability, sensitivity, privacy, query, retention, deletion, recovery, write actor.
 - Assumptions: facts inferred from prompt.
@@ -53,7 +51,7 @@ Do not write content, mutate stores, manage runtime state, or replace accepted d
 - Truth stance: canonical source or recall layer.
 - Operations needed: none, status, refresh, repair, inspect, backup, migration, or deletion.
 - Not there: rejected nearby buckets.
-- Next: write path, decision route, skill-authoring route, config route, or runtime design route.
+- Next: write path, decision route, skill-work route, or config route.
 
 ## Safety
 
@@ -64,7 +62,9 @@ Do not write content, mutate stores, manage runtime state, or replace accepted d
 - Let delegated, background, or ambiguous agents propose durable changes unless
   their handoff explicitly grants owner-scoped write authority.
 - Treat logs, JSON, SQLite, projections, backups, and embeddings as durable sensitive stores.
-- Use `skill-author` runtime-backed guidance when storage introduces or changes helper commands, machine-readable output, durable writes, side effects, privacy, durability, status, refresh, repair, retry, or runtime recovery.
+- Follow `docs/agents/skills.md#skill-work-routing` when storage introduces or
+  changes skill content, topology, helper commands, durable writes, runtime
+  recovery, or a CLI surface.
 
 ## Next Safe Action
 
@@ -73,6 +73,7 @@ Do not write content, mutate stores, manage runtime state, or replace accepted d
 - If context is an accepted repo decision, name the repository's declared
   decision owner and return capture to the current driver.
 - If storage choice is unresolved and affects ownership, privacy, durability, or side effects, use `grill-with-docs`.
-- If accepted storage choice requires skill-authoring guidance, use `skill-author`.
-- If accepted storage choice requires a runtime-backed skill capability, use `skill-author`.
+- If accepted storage choice requires skill content, topology, a runtime-backed
+  capability, or a CLI surface, follow
+  `docs/agents/skills.md#skill-work-routing`.
 - If context is only hot startup guidance, patch hot startup guidance and point to the durable owner.

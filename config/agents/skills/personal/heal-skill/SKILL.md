@@ -9,10 +9,9 @@ disable-model-invocation: true
 
 ## Owner Paths
 
-- Skill authoring + repair contract owner: `skills/skill-author/SKILL.md`.
-- Skill design gate (read before any SKILL.md edit): `skills/skill-author/references/skill-design-decision-runbook.md`.
+- Skill work routing: `docs/agents/skills.md#skill-work-routing`.
 
-heal-skill applies in-context instruction repairs discovered during a skill's own execution. It does not own the heal/repair contract — `skill-author` does. For anything beyond a direct instruction fix (role, shape, owner-path, safety-gate, or reusable-rule change), defer to `skill-author`.
+heal-skill applies in-context instruction repairs discovered during a skill's own execution. It remains a user-invoked direct-fix workflow. For anything beyond a direct instruction fix (role, shape, owner path, safety gate, or reusable-rule change), follow the skill-work routing map.
 
 ## Objective
 
@@ -26,7 +25,7 @@ Skill detection: !`ls -1 ./skills/*/SKILL.md | head -5`
 
 ## Quick Start
 
-0. **Read the skill design gate** — `skills/skill-author/references/skill-design-decision-runbook.md` before any edit (AGENTS.md hard rule: never heal a SKILL.md without it)
+0. **Read the owners** - follow `docs/agents/skills.md#skill-work-routing` before any edit
 1. **Detect skill** from conversation context (invocation messages, recent SKILL.md references)
 2. **Reflect** on what went wrong and how you discovered the fix
 3. **Present** proposed changes with before/after diffs
@@ -35,9 +34,9 @@ Skill detection: !`ls -1 ./skills/*/SKILL.md | head -5`
 
 ## Process
 
-### Step 0: Read the skill design gate
+### Step 0: Read the owners
 
-Read `skills/skill-author/references/skill-design-decision-runbook.md` before touching any SKILL.md. AGENTS.md hard rule: never author, review, heal, or repair a SKILL.md before reading the runbook. Skipping it leaks copied contracts and multi-workflow drift.
+Follow `docs/agents/skills.md#skill-work-routing` before touching any SKILL.md. Apply every owner selected by that map.
 
 ### Step 1: Detect skill
 
