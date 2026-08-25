@@ -37,6 +37,34 @@ assert_not_contains() {
   pass "$label"
 }
 
+start_argv_sampler() {
+  local sentinel="$1"
+  local result="$2"
+
+  # Pass the sentinel only through the sampler's environment. Passing it as a
+  # positional argument would make the sampler itself a false positive.
+  SAMPLER_SENTINEL="$sentinel" SAMPLER_RESULT="$result" /bin/bash -c '
+    for ((round = 0; round < 35; round++)); do
+      while IFS= read -r process_command; do
+        case "$process_command" in
+          *"$SAMPLER_SENTINEL"*)
+            : >"$SAMPLER_RESULT"
+            exit 0
+            ;;
+        esac
+      done < <(ps -Ao command=)
+    done
+  ' >/dev/null 2>&1 &
+  ARGV_SAMPLER_PID="$!"
+}
+
+wait_for_pids() {
+  local pid
+  for pid in "$@"; do
+    wait "$pid" || fail 'held fixture process exits successfully'
+  done
+}
+
 make_fixture() {
   local fixture="$1"
   mkdir -p "$fixture/bin"
@@ -49,12 +77,31 @@ make_fixture() {
 #!/usr/bin/env bash
 set -euo pipefail
 if [[ "${1:-}" == 'read' ]]; then
-  [[ "$#" -eq 2 && "${2:-}" == 'op://known-vault/known-item/credential' ]] || exit 18
-  printf 'UPLOAD_SECRET_SENTINEL'
+  if [[ "${2:-}" == '--no-newline' ]]; then
+    [[ "$#" -eq 3 ]] || exit 18
+    reference="${3:-}"
+  else
+    [[ "$#" -eq 2 ]] || exit 18
+    reference="${2:-}"
+  fi
+  case "$reference" in
+    op://known-vault/known-item/credential)
+      printf 'UPLOAD_SECRET_SENTINEL'
+      ;;
+    op://known-vault/complex-item/credential)
+      [[ "${2:-}" == '--no-newline' ]] || exit 18
+      printf 'quote"slash\\tab\tcr\rline\nback\bform\ftrailing\n\n'
+      ;;
+    *) exit 18 ;;
+  esac
   exit 0
 fi
 if [[ "${1:-}" == 'fail' ]]; then
   exit 19
+fi
+if [[ "${1:-}" == 'hold' ]]; then
+  sleep 2
+  exit 0
 fi
 printf 'token_present=%s\n' "${OP_SERVICE_ACCOUNT_TOKEN:+yes}"
 if [[ "${OP_SERVICE_ACCOUNT_TOKEN:-}" == 'ops_SERVICE_SENTINEL' ]]; then
@@ -80,6 +127,113 @@ esac
 printf 'args=%s\n' "$*"
 EOF
   chmod +x "$fixture/bin/op"
+
+  cat >"$fixture/bin/hold-target" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+sleep 2
+EOF
+  chmod +x "$fixture/bin/hold-target"
+
+  cat >"$fixture/bin/agent-browser" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+fixture_bin="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
+[[ "$#" -eq 1 && "$1" == 'batch' ]] || : >"$fixture_bin/browser-argv-invalid"
+case "$*" in
+  *UPLOAD_SECRET_SENTINEL* | *quote*) : >"$fixture_bin/browser-secret-in-argv" ;;
+esac
+if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN+x}" ]]; then
+  : >"$fixture_bin/browser-service-token-in-environment"
+fi
+if [[ -n "${EXPERIENCE_EXTENSION_UPLOAD_TOKEN+x}" ]]; then
+  : >"$fixture_bin/browser-secret-in-environment"
+fi
+if [[ -n "${UNRELATED_SECRET+x}" ]]; then
+  : >"$fixture_bin/browser-unrelated-secret-in-environment"
+fi
+batch_payload="$(cat)"
+if [[ "$batch_payload" == '{"method":"fill","value":"quote\"slash\\tab\tcr\rline\nback\bform\ftrailing\n\n"}' ]]; then
+  : >"$fixture_bin/browser-batch-payload-exact"
+else
+  : >"$fixture_bin/browser-batch-payload-invalid"
+fi
+EOF
+  chmod +x "$fixture/bin/agent-browser"
+
+  cat >"$fixture/bin/stdin-browser-consumer" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+fixture_bin="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
+if [[ -n "${EXPERIENCE_EXTENSION_UPLOAD_TOKEN+x}" ]]; then
+  : >"$fixture_bin/stdin-consumer-secret-in-environment"
+fi
+if [[ -n "${OP_SERVICE_ACCOUNT_TOKEN+x}" ]]; then
+  : >"$fixture_bin/stdin-consumer-service-token-in-environment"
+fi
+if [[ -n "${UNRELATED_SECRET+x}" ]]; then
+  : >"$fixture_bin/stdin-consumer-unrelated-secret-in-environment"
+fi
+capture_marker=$'\034stdin-consumer-end\035'
+stdin_capture="$(cat; printf '%s' "$capture_marker")"
+stdin_secret="${stdin_capture%$capture_marker}"
+expected_secret=$'quote"slash\\tab\tcr\rline\nback\bform\ftrailing\n\n'
+if [[ "$stdin_secret" != "$expected_secret" ]]; then
+  : >"$fixture_bin/stdin-consumer-secret-invalid"
+  exit 24
+fi
+json_escape() {
+  local escaped="$1"
+  escaped="${escaped//\\/\\\\}"
+  escaped="${escaped//\"/\\\"}"
+  escaped="${escaped//$'\b'/\\b}"
+  escaped="${escaped//$'\f'/\\f}"
+  escaped="${escaped//$'\n'/\\n}"
+  escaped="${escaped//$'\r'/\\r}"
+  escaped="${escaped//$'\t'/\\t}"
+  printf '%s' "$escaped"
+}
+printf '{"method":"fill","value":"%s"}' "$(json_escape "$stdin_secret")" | agent-browser batch
+EOF
+  chmod +x "$fixture/bin/stdin-browser-consumer"
+
+  cat >"$fixture/bin/no-launch-target" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+fixture_bin="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
+: >"$fixture_bin/no-launch-target-called"
+EOF
+  chmod +x "$fixture/bin/no-launch-target"
+
+  cat >"$fixture/bin/stat" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+fixture_bin="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
+preflight_environment="$(/usr/bin/env)"
+case "$preflight_environment" in
+  *AMBIENT_PREFLIGHT_SENTINEL* | *UNRELATED_PREFLIGHT_SENTINEL* | *HOSTILE_PREFLIGHT_SENTINEL* | *INVALID_PREFLIGHT_SENTINEL* | *NEWLINE_PREFLIGHT_SENTINEL*)
+    : >"$fixture_bin/preflight-environment-leak"
+    ;;
+esac
+: >"$fixture_bin/preflight-stat-called"
+exec /usr/bin/stat "$@"
+EOF
+  chmod +x "$fixture/bin/stat"
+
+  cat >"$fixture/bin/id" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+fixture_bin="$(CDPATH='' cd "$(dirname "$0")" && pwd)"
+preflight_environment="$(/usr/bin/env)"
+case "$preflight_environment" in
+  *AMBIENT_PREFLIGHT_SENTINEL* | *UNRELATED_PREFLIGHT_SENTINEL* | *HOSTILE_PREFLIGHT_SENTINEL* | *INVALID_PREFLIGHT_SENTINEL* | *NEWLINE_PREFLIGHT_SENTINEL*)
+    : >"$fixture_bin/preflight-environment-leak"
+    ;;
+esac
+: >"$fixture_bin/preflight-id-called"
+exec /usr/bin/id "$@"
+EOF
+  chmod +x "$fixture/bin/id"
 }
 
 fixture="$TEST_ROOT/happy"
@@ -89,12 +243,89 @@ check_output="$(DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" che
 assert_contains "$check_output" '"status":"ok"' 'check reports ready without token bytes'
 assert_not_contains "$check_output" 'SERVICE_SENTINEL' 'check redacts service token'
 
+help_output="$("$SUBJECT" --help)"
+assert_contains "$help_output" 'inject-stdin <op://reference> -- <command> [args...]' 'help documents stdin-only delivery'
+
 op_output="$(DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" OP_SERVICE_ACCOUNT_TOKEN=ops_AMBIENT_SENTINEL UNRELATED_SECRET=LEAK_SENTINEL "$SUBJECT" op item get known-item --vault known-vault)"
 assert_contains "$op_output" 'token_present=yes' 'op receives the service token'
 assert_contains "$op_output" 'token_matches=yes' 'op receives the wrapper token instead of an ambient token'
 assert_contains "$op_output" 'unrelated_present=' 'op receives no unrelated environment secret'
 assert_contains "$op_output" 'argv_has_token=' 'service token is absent from op process arguments'
 assert_not_contains "$op_output" 'SERVICE_SENTINEL' 'op output does not expose service token bytes'
+
+preflight_output="$(/usr/bin/env \
+  OP_SERVICE_ACCOUNT_TOKEN=ops_AMBIENT_PREFLIGHT_SENTINEL \
+  OP_CONNECT_TOKEN=AMBIENT_PREFLIGHT_SENTINEL \
+  OP_CONNECT_HOST=AMBIENT_PREFLIGHT_SENTINEL \
+  UNRELATED_SECRET=UNRELATED_PREFLIGHT_SENTINEL \
+  TOKEN_VALUE=HOSTILE_PREFLIGHT_SENTINEL \
+  RESOLVED_STDIN_SECRET=HOSTILE_PREFLIGHT_SENTINEL \
+  secret_value=HOSTILE_PREFLIGHT_SENTINEL \
+  retained_value=HOSTILE_PREFLIGHT_SENTINEL \
+  capture=HOSTILE_PREFLIGHT_SENTINEL \
+  line=HOSTILE_PREFLIGHT_SENTINEL \
+  raw_value=HOSTILE_PREFLIGHT_SENTINEL \
+  WITH_ONE_PASSWORD_TOKEN_CLEAN_START=1 \
+  WITH_ONE_PASSWORD_TOKEN_CLEAN_PROOF=HOSTILE_PREFLIGHT_SENTINEL \
+  '  --ansi=INVALID_PREFLIGHT_SENTINEL' \
+  $'INVALID\nNAME=NEWLINE_PREFLIGHT_SENTINEL' \
+  DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" check)"
+assert_contains "$preflight_output" '"status":"ok"' 'clean preflight preserves check behavior'
+[[ -e "$fixture/bin/preflight-stat-called" ]] || fail 'preflight stat helper runs before token parsing'
+pass 'preflight stat helper runs before token parsing'
+[[ -e "$fixture/bin/preflight-id-called" ]] || fail 'preflight id helper runs before token parsing'
+pass 'preflight id helper runs before token parsing'
+[[ ! -e "$fixture/bin/preflight-environment-leak" ]] || fail 'preflight helpers receive no ambient secrets or hostile environment names'
+pass 'preflight helpers receive no ambient secrets or hostile environment names'
+
+# This is intentionally a real process-list race test. Before the launcher
+# hardening, /usr/bin/env briefly receives NAME=secret as an argument while it
+# prepares the final child process. Held children let the sampler overlap many
+# independent launches without teaching the fake op about the implementation.
+service_argv_result="$TEST_ROOT/service-argv-result"
+start_argv_sampler 'ops_SERVICE_SENTINEL' "$service_argv_result"
+service_sampler_pid="$ARGV_SAMPLER_PID"
+service_hold_pids=()
+for ((attempt = 0; attempt < 240; attempt++)); do
+  (
+    DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" op hold >/dev/null 2>&1
+  ) &
+  service_hold_pids+=("$!")
+done
+wait_for_pids "${service_hold_pids[@]}"
+wait "$service_sampler_pid"
+[[ ! -e "$service_argv_result" ]] || fail 'service token never appears in process arguments during held op launches'
+pass 'service token never appears in process arguments during held op launches'
+
+inject_argv_result="$TEST_ROOT/inject-argv-result"
+start_argv_sampler 'UPLOAD_SECRET_SENTINEL' "$inject_argv_result"
+inject_sampler_pid="$ARGV_SAMPLER_PID"
+inject_hold_pids=()
+for ((attempt = 0; attempt < 240; attempt++)); do
+  (
+    DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" inject EXPERIENCE_EXTENSION_UPLOAD_TOKEN op://known-vault/known-item/credential -- "$fixture/bin/hold-target" >/dev/null 2>&1
+  ) &
+  inject_hold_pids+=("$!")
+done
+wait_for_pids "${inject_hold_pids[@]}"
+wait "$inject_sampler_pid"
+[[ ! -e "$inject_argv_result" ]] || fail 'injected secret never appears in process arguments during held target launches'
+pass 'injected secret never appears in process arguments during held target launches'
+
+stdin_argv_result="$TEST_ROOT/stdin-argv-result"
+start_argv_sampler 'UPLOAD_SECRET_SENTINEL' "$stdin_argv_result"
+stdin_sampler_pid="$ARGV_SAMPLER_PID"
+stdin_hold_pids=()
+for ((attempt = 0; attempt < 240; attempt++)); do
+  (
+    DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" inject-stdin op://known-vault/known-item/credential -- "$fixture/bin/hold-target" >/dev/null 2>&1
+  ) &
+  stdin_hold_pids+=("$!")
+done
+wait_for_pids "${stdin_hold_pids[@]}"
+wait "$stdin_sampler_pid"
+[[ ! -e "$stdin_argv_result" ]] || fail 'stdin-delivered secret never appears in process arguments during held target launches'
+pass 'stdin-delivered secret never appears in process arguments during held target launches'
 
 invalid_name_output="$(env '  --ansi=INHERITED_SENTINEL' DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" op item get known-item --vault known-vault)"
 assert_contains "$invalid_name_output" 'token_present=yes' 'op still receives the service token with a non-shell environment name'
@@ -146,6 +377,54 @@ assert_contains "$child_output" 'upload_matches=yes' 'child receives the request
 assert_contains "$child_output" 'service_present=' 'child does not receive the service token'
 assert_contains "$child_output" 'unrelated_present=' 'child does not receive unrelated secrets'
 assert_not_contains "$child_output" 'UPLOAD_SECRET_SENTINEL' 'test output does not expose injected secret bytes'
+
+stdin_delivery_output="$(DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" EXPERIENCE_EXTENSION_UPLOAD_TOKEN=AMBIENT_UPLOAD_SENTINEL UNRELATED_SECRET=LEAK_SENTINEL "$SUBJECT" inject-stdin op://known-vault/complex-item/credential -- "$fixture/bin/stdin-browser-consumer")"
+[[ -e "$fixture/bin/browser-batch-payload-exact" ]] || fail 'stdin-only consumer forwards the exact secret bytes as browser batch stdin'
+pass 'stdin-only consumer forwards the exact secret bytes as browser batch stdin'
+[[ ! -e "$fixture/bin/browser-batch-payload-invalid" ]] || fail 'fake browser receives no altered batch stdin'
+pass 'fake browser receives no altered batch stdin'
+[[ ! -e "$fixture/bin/browser-argv-invalid" ]] || fail 'fake browser receives only the batch command argument'
+pass 'fake browser receives only the batch command argument'
+[[ ! -e "$fixture/bin/stdin-consumer-secret-in-environment" ]] || fail 'stdin-only consumer receives no requested-secret environment variable'
+pass 'stdin-only consumer receives no requested-secret environment variable'
+[[ ! -e "$fixture/bin/stdin-consumer-service-token-in-environment" ]] || fail 'stdin-only consumer receives no service token'
+pass 'stdin-only consumer receives no service token'
+[[ ! -e "$fixture/bin/stdin-consumer-unrelated-secret-in-environment" ]] || fail 'stdin-only consumer receives no unrelated inherited secret'
+pass 'stdin-only consumer receives no unrelated inherited secret'
+[[ ! -e "$fixture/bin/browser-secret-in-argv" ]] || fail 'fake browser receives no secret in argv'
+pass 'fake browser receives no secret in argv'
+[[ ! -e "$fixture/bin/browser-secret-in-environment" ]] || fail 'fake browser receives no secret in environment'
+pass 'fake browser receives no secret in environment'
+[[ ! -e "$fixture/bin/browser-service-token-in-environment" ]] || fail 'fake browser receives no service token'
+pass 'fake browser receives no service token'
+[[ ! -e "$fixture/bin/browser-unrelated-secret-in-environment" ]] || fail 'fake browser receives no unrelated inherited secret'
+pass 'fake browser receives no unrelated inherited secret'
+assert_not_contains "$stdin_delivery_output" 'UPLOAD_SECRET_SENTINEL' 'stdin-only delivery output does not expose injected secret bytes'
+
+set +e
+DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" inject-stdin op://known-vault/wrong-item/credential -- "$fixture/bin/no-launch-target" >/dev/null 2>&1
+stdin_failure_status=$?
+set -e
+[[ "$stdin_failure_status" -eq 18 ]] || fail 'stdin-only delivery preserves failed op read status'
+pass 'stdin-only delivery preserves failed op read status'
+[[ ! -e "$fixture/bin/no-launch-target-called" ]] || fail 'failed stdin-only lookup does not launch the child'
+pass 'failed stdin-only lookup does not launch the child'
+
+set +e
+stdin_child_failure_output="$(DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" inject-stdin op://known-vault/known-item/credential -- bash -c 'exit 23' 2>&1)"
+stdin_child_failure_status=$?
+set -e
+[[ "$stdin_child_failure_status" -eq 23 ]] || fail 'stdin-only delivery preserves child failure status'
+pass 'stdin-only delivery preserves child failure status'
+assert_not_contains "$stdin_child_failure_output" 'UPLOAD_SECRET_SENTINEL' 'stdin-only child failure redacts secret bytes'
+
+set +e
+stdin_reference_error="$(DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" inject-stdin not-an-op-reference -- true 2>&1)"
+stdin_reference_status=$?
+set -e
+[[ "$stdin_reference_status" -eq 2 ]] || fail 'stdin-only delivery rejects a non-op reference with usage status'
+pass 'stdin-only delivery rejects a non-op reference with usage status'
+assert_contains "$stdin_reference_error" 'reference-invalid' 'stdin-only delivery has a stable reference validation code'
 
 set +e
 DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" inject EXPERIENCE_EXTENSION_UPLOAD_TOKEN op://known-vault/wrong-item/credential -- true >/dev/null 2>&1
