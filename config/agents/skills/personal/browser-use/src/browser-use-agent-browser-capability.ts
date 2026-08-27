@@ -28,7 +28,17 @@ export const exactTargetCapabilitiesForPrimaryLane: {
 						? { kind: "create" as const, url: input.action.url }
 						: input.action.kind === "close"
 							? { kind: "close" as const, targetId: input.action.target_id }
-							: { kind: "pin" as const, targetId: input.action.target_id };
+							: input.action.kind === "retain-lifecycle"
+								? {
+									kind: "pin" as const,
+									targetId: input.action.target_id,
+									expectedUrl: input.action.expected_url,
+								}
+								: {
+									kind: "bind" as const,
+									targetId: input.action.target_id,
+									expectedUrl: input.action.expected_url,
+								};
 			const result = await runAgentBrowserTargetTopology({
 				runtime: input.runtime,
 				handoff: {
@@ -61,6 +71,9 @@ export const exactTargetCapabilitiesForPrimaryLane: {
 					data: {
 						...(typeof result.data.targetId === "string"
 							? { canonical_target_id: result.data.targetId }
+							: {}),
+						...(result.data.targetDisposition === "adopted-current"
+							? { target_disposition: "adopted-current" as const }
 							: {}),
 					},
 				};

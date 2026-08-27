@@ -1,6 +1,6 @@
 ---
 name: xero
-description: "Xero quarter reconciliation and BAS accountant-handoff ledger."
+description: "Coordinate one Xero BAS quarter cycle through reconciliation, handoff, and lodgment evidence."
 disable-model-invocation: true
 ---
 
@@ -8,10 +8,13 @@ disable-model-invocation: true
 
 Use only after explicit invocation for one named organisation and quarter.
 
-## Route
+## Quarter Cycle
 
-- Reconcile a quarter, inspect progress, or audit prepared, sent, lodged, and
-  payment state: read `references/quarter-reconciliation.md`.
+- Choose or reconcile a quarter, assess its BAS due date, or inspect prepared,
+  sent, lodged, and payment state: read
+  `references/quarter-reconciliation.md`.
+- For the standard quarterly BAS due-date reference: read
+  `references/ato-quarter-due-dates.md`.
 - Import a bank statement, run payroll, finalise a BAS workpaper, or export
   Excel data: read `references/capability-stubs.md` and stop at its handoff.
 
@@ -21,13 +24,15 @@ Use only after explicit invocation for one named organisation and quarter.
   evidence states.
 - Never infer accountant lodgment from Xero finalisation, an exported workbook,
   a Gmail draft, or a payment notice.
-- Use `xero-cli` for reconciliation intent, `skills/browser-use/SKILL.md` for
-  live Xero interaction, and `gog` for Gmail evidence.
+- Use `xero-cli` for deterministic reconciliation state, `skills/browser-use/SKILL.md`
+  for live Xero interaction, `gog` for Gmail evidence, and `quarter-ledger.ts`
+  as the cross-owner receipt spine.
 - Require current human approval before any financial or externally visible
   write. Ledger recording is local evidence, not write authority.
 
 ## Start
 
 Run `bun skills/xero/scripts/quarter-ledger.ts commands --json`, then `status
---json`. Follow the route for the oldest incomplete quarter. If no quarter is
-named, show the ledger table and ask for one exact quarter.
+--json`. If a quarter is named, inspect and continue only that quarter through
+the approved cycle. Never switch to another quarter. If no quarter is named,
+show the redacted ledger table and ask for one exact quarter.

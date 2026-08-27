@@ -965,6 +965,73 @@ describe("U6 target selection — state write", () => {
 			expect(await runtime.platformFs.readTextFile(statePath)).toBe(standing);
 		},
 	);
+
+	// Independent oracle: the adopted-target record below is written out by hand,
+	// including its retained lifecycle session name. Adoption binds a target this
+	// run did NOT create, so replacing its selection without releasing the
+	// binding would orphan a live pinned adapter session.
+	test.each([
+		["same run", FIXTURE_RUN_ID],
+		["foreign run", "foreign-run"],
+	] as const)(
+		"%s cannot replace an adopted selected target",
+		async (_label, standingRunId) => {
+			const { runtime } = selectionRuntime({ stdin: targetsListEnvelope() });
+			const statePath = "/state.json";
+			const standing = `${JSON.stringify({
+				contract: TARGETS_CONTRACT,
+				schema_version: "2",
+				revision: 1,
+				run_id: standingRunId,
+				selected_adapter_id: "agent-browser",
+				verified_endpoint_identity: "127.0.0.1:9222",
+				handoff_evidence_id: FIXTURE_EVIDENCE_ID,
+				target_envelope_id: "env-adopted",
+				target_candidate_id: "cid-adopted",
+				selected_candidate_ordinal: 1,
+				emitted_at_ms: 1_000,
+				expires_at_ms: 901_000,
+				display: { origin: "https://example.com" },
+				ownership: {
+					kind: "adopted-target",
+					target_ref: "b".repeat(64),
+					retained_lifecycle: {
+						adapter_id: "agent-browser",
+						capability_id: "agent-browser.exact-target-no-focus.v1",
+						lifecycle_ref: `browser-use-${standingRunId}`,
+					},
+				},
+			})}\n`;
+			await runtime.platformFs.mkdir(dirname(statePath), {
+				recursive: true,
+				mode: 0o700,
+			});
+			await runtime.platformFs.writeFileDurable(statePath, standing, 0o600);
+
+			const result = await runForTest(
+				["targets", "select", "--candidate", "1", "--state", statePath, "--json"],
+				runtime,
+			);
+
+			expect(result.exitCode).toBe(20);
+			expect(parseJson(result.stdout).error).toMatchObject({
+				code: "target_selection_state_write_failed",
+			});
+			expect(await runtime.platformFs.readTextFile(statePath)).toBe(standing);
+
+			// The refusal must come from the adoption guard, not from the record
+			// being unreadable: the same standing record still projects cleanly.
+			const status = await runForTest(
+				["targets", "status", "--state", statePath, "--json"],
+				runtime,
+			);
+			expect(status.exitCode).toBe(0);
+			expect(
+				(parseJson(status.stdout).data as Record<string, any>).selected_target
+					.ownership,
+			).toEqual({ kind: "adopted-target", lifecycle_retained: true });
+		},
+	);
 });
 
 describe("U6 target status — projection and distinct failures", () => {
@@ -1019,6 +1086,62 @@ describe("U6 target status — projection and distinct failures", () => {
 		expect(status.exitCode).toBe(0);
 		expect(status.stdout).toContain("browser_target_state");
 		expect(status.stdout).toContain(`run_id=${FIXTURE_RUN_ID}`);
+	});
+
+	// Independent oracle: the expected projection is written out here by hand.
+	// An agent choosing between the retained fast lane and a fresh attach needs
+	// to read whether a lifecycle is actually held, not infer it from the kind.
+	test("projects adopted ownership and its retained lifecycle", async () => {
+		const { runtime } = selectionRuntime({
+			files: {
+				"/state.json": stateFile({
+					selected_adapter_id: "agent-browser",
+					ownership: {
+						kind: "adopted-target",
+						target_ref: "b".repeat(64),
+						retained_lifecycle: {
+							adapter_id: "agent-browser",
+							capability_id: "agent-browser.exact-target-no-focus.v1",
+							lifecycle_ref: `browser-use-${FIXTURE_RUN_ID}`,
+						},
+					},
+				}),
+			},
+			now: () => 2_000,
+		});
+		const result = await runForTest(
+			["targets", "status", "--state", "/state.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		const data = parseJson(result.stdout).data as Record<string, any>;
+		expect(data.selected_target.ownership).toEqual({
+			kind: "adopted-target",
+			lifecycle_retained: true,
+		});
+		// The adapter session name is private custody state, never caller output.
+		expect(result.stdout).not.toContain("browser-use-" + FIXTURE_RUN_ID);
+	});
+
+	test("projects a created target with no retained lifecycle as not retained", async () => {
+		const { runtime } = selectionRuntime({
+			files: {
+				"/state.json": stateFile({
+					ownership: { kind: "created-target", target_ref: "a".repeat(64) },
+				}),
+			},
+			now: () => 2_000,
+		});
+		const result = await runForTest(
+			["targets", "status", "--state", "/state.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(0);
+		const data = parseJson(result.stdout).data as Record<string, any>;
+		expect(data.selected_target.ownership).toEqual({
+			kind: "created-target",
+			lifecycle_retained: false,
+		});
 	});
 
 	test("missing state fails with target_state_missing", async () => {

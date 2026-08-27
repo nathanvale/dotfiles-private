@@ -34,6 +34,11 @@ import {
 import {
 	BROWSER_USE_OPERATION_CONTRACT_ID,
 	BROWSER_USE_OPERATION_SCHEMA_VERSION,
+	BROWSER_USE_TARGET_OPERATION_OUTER_SCHEMA_VERSION,
+	BROWSER_USE_TARGET_OPERATION_RESULT_CONTRACT_ID,
+	BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSION,
+	BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSION_V3,
+	BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSIONS,
 	type BrowserUseCommand,
 	browserUseOperationFailureActions,
 	browserUseOperationSuccessActions,
@@ -99,11 +104,17 @@ import type {
 	BrowserUseExactTargetOperationCapability,
 } from "./browser-use-adapter-model";
 import {
+	BROWSER_USE_TARGET_OPERATION_MAX_EVIDENCE_BYTES,
+	BROWSER_USE_TARGET_OPERATION_MAX_STEPS,
+	parseBrowserUseTargetOperationFailureDetail,
 	parseBrowserUseTargetOperationPlan,
+	parsePublicBrowserUseStorybookDocumentDiagnostic,
+	parsePublicBrowserUseTargetOperationEvidence,
 	targetOperationPlanIsMutating,
 	targetOperationPlanMatchesBoundOrigin,
 	targetOperationPlanDigest,
 	type BrowserUseTargetOperationCleanupMethod,
+	type BrowserUseTargetOperationFailureDetail,
 	type BrowserUseTargetOperationPlan,
 	type BrowserUseTargetOperationResult,
 } from "./browser-use-target-operations";
@@ -173,6 +184,7 @@ type OperationFailure = Failure<OperationActionId> & {
 	primaryCause?: string;
 	operationEffect?: "confirmed" | "not_started" | "unknown";
 	cleanupDebt?: readonly OperationCleanupDebt[];
+	failureDetail?: BrowserUseTargetOperationFailureDetail;
 };
 
 type OperationSideEffects = {
@@ -190,6 +202,7 @@ type OperationFailureReceiptContext = {
 	targetSource: "hints" | "selected_state" | "single_candidate";
 	capabilityId?: string;
 	planDigest?: string;
+	targetLeaseInterval?: TargetOperationLeaseInterval;
 };
 
 type OperationExecutionEvidence = {
@@ -501,7 +514,7 @@ type ResolvedOperationTarget = {
 	adapterPageRef: string;
 	canonicalTargetId?: string;
 	rawUrl: string;
-	createdOwnership?: {
+	retainedOwnership?: {
 		targetRef: string;
 		expiresAtMs: number;
 		retainedLifecycleRef?: string;
@@ -597,10 +610,17 @@ export async function runOperate(input: {
 			recoverability: "change_input",
 		});
 	}
-	const retainedLifecycle =
-		selectedState.state?.ownership?.kind === "created-target"
-			? selectedState.state.ownership.retained_lifecycle
-			: undefined;
+	// Both ownership kinds can carry a retained lifecycle. They differ in what
+	// this run may do to the target, not in how the lifecycle is proven, so the
+	// lifecycle checks below are deliberately kind-agnostic; only the repair
+	// action distinguishes closing an open-created target from releasing an
+	// adopted one.
+	const ownershipKind = selectedState.state?.ownership?.kind;
+	const retainedLifecycle = selectedState.state?.ownership?.retained_lifecycle;
+	const retainedOwnershipRepairAction =
+		ownershipKind === "adopted-target"
+			? ("release_adopted_target" as const)
+			: ("close_created_target" as const);
 	if (
 		retainedLifecycle !== undefined &&
 		(!selectedCapability.ok ||
@@ -635,7 +655,7 @@ export async function runOperate(input: {
 		});
 	}
 	const retainsExactTargetLifecycle =
-		selectedState.state?.ownership?.kind === "created-target" &&
+		ownershipKind !== undefined &&
 		selectedCapability.ok &&
 		selectedCapability.capability.retainedLifecycleIsValid(
 			retainedLifecycle?.lifecycle_ref,
@@ -715,14 +735,14 @@ export async function runOperate(input: {
 			: { planDigest: operationInputs.inputs.targetPlanDigest }),
 	};
 	if (
-		target.target.createdOwnership !== undefined &&
+		target.target.retainedOwnership !== undefined &&
 		targetRefOf(targetIdentity.target.target_id) !==
-			target.target.createdOwnership.targetRef
+			target.target.retainedOwnership.targetRef
 	) {
 		return fail({
 			code: "target_state_mismatch",
 			message:
-				"The re-discovered Browser target does not match the private created-target ownership reference.",
+				"The re-discovered Browser target does not match the private retained-ownership reference.",
 			actionId: "refresh_target_selection",
 			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 			recoverability: "repair_state",
@@ -735,19 +755,19 @@ export async function runOperate(input: {
 		paths: openedPaths.paths,
 		clock: runtime.now,
 	};
-	const createdOwnershipRemainingMs =
-		target.target.createdOwnership === undefined
+	const retainedOwnershipRemainingMs =
+		target.target.retainedOwnership === undefined
 			? undefined
-			: target.target.createdOwnership.expiresAtMs - runtime.now();
+			: target.target.retainedOwnership.expiresAtMs - runtime.now();
 	if (
-		createdOwnershipRemainingMs !== undefined &&
-		createdOwnershipRemainingMs < 120_000
+		retainedOwnershipRemainingMs !== undefined &&
+		retainedOwnershipRemainingMs < 120_000
 	) {
 		return fail({
 			code: "target_state_stale",
 			message:
-				"The open-created target state lacks enough lifetime for a bounded operation and cleanup.",
-			actionId: "close_created_target",
+				"The run-owned target state lacks enough lifetime for a bounded operation and cleanup.",
+			actionId: retainedOwnershipRepairAction,
 			exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 			recoverability: "change_input",
 		});
@@ -765,9 +785,9 @@ export async function runOperate(input: {
 				? "action"
 				: "read",
 		ttlMs:
-			createdOwnershipRemainingMs === undefined
+			retainedOwnershipRemainingMs === undefined
 				? 120_000
-				: createdOwnershipRemainingMs,
+				: retainedOwnershipRemainingMs,
 		ownershipEvidence: {
 			kind: "explicit-adoption",
 			adapter_id: binding.context.handoff.adapter,
@@ -787,7 +807,7 @@ export async function runOperate(input: {
 		adapter: binding.context.handoff.adapter,
 		operation: operationInputs.inputs.operation,
 		retainedLifecycleRef:
-			target.target.createdOwnership?.retainedLifecycleRef,
+			target.target.retainedOwnership?.retainedLifecycleRef,
 		runId,
 		plan: operationInputs.inputs.targetPlan,
 	});
@@ -891,6 +911,9 @@ export async function runOperate(input: {
 			};
 		}
 	}
+	if (targetLeaseInterval !== undefined && failureReceiptContext !== undefined) {
+		failureReceiptContext = { ...failureReceiptContext, targetLeaseInterval };
+	}
 	const focusSideEffect = operationCall.focus || bringToFront;
 	if (!operationCall.ok) {
 		if (cleanupDebt.length > 0) {
@@ -899,6 +922,15 @@ export async function runOperate(input: {
 					primaryCause: operationCall.failure.code,
 					operationEffect: "unknown",
 					cleanupDebt,
+					...(operationCall.failure.actionId === "repair_target_state"
+						? {
+							actionId: operationCall.failure.actionId,
+							recoverability: operationCall.failure.recoverability,
+						}
+						: {}),
+					...(operationCall.failure.failureDetail === undefined
+						? {}
+						: { failureDetail: operationCall.failure.failureDetail }),
 				}),
 				{ focus: focusSideEffect },
 				operationCall.release,
@@ -1229,7 +1261,17 @@ async function resolveOperationTargetEntry(input: {
 	const selectedState = input.selectedState;
 
 	const hints = readOperationHints(input.flags);
-	if (selectedState.state?.ownership?.kind === "created-target") {
+	const selected = selectedState.state;
+	const ownership = selected?.ownership;
+	if (selected !== undefined && ownership !== undefined) {
+		// Identity discipline is identical for a created and an adopted target:
+		// exactly one freshly discovered row must match the private target ref,
+		// on the origin the selection was made from. Only the repair action
+		// differs — an adopted target is released, never closed.
+		const repairAction =
+			ownership.kind === "adopted-target"
+				? ("release_adopted_target" as const)
+				: ("close_created_target" as const);
 		const canonicalIds = input.targetEntries.map(
 			(entry) => entry.canonicalTargetId,
 		);
@@ -1247,7 +1289,7 @@ async function resolveOperationTargetEntry(input: {
 					code: "target_state_mismatch",
 					message:
 						"Fresh target inventory contains malformed or duplicate canonical identities.",
-					actionId: "close_created_target",
+					actionId: repairAction,
 					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 					recoverability: "repair_state",
 				},
@@ -1256,8 +1298,7 @@ async function resolveOperationTargetEntry(input: {
 		const ownedEntries = input.targetEntries.filter(
 			(entry) =>
 				entry.canonicalTargetId !== undefined &&
-				targetRefOf(entry.canonicalTargetId) ===
-					selectedState.state?.ownership?.target_ref,
+				targetRefOf(entry.canonicalTargetId) === ownership.target_ref,
 		);
 		if (
 			ownedEntries.length !== 1 ||
@@ -1268,8 +1309,8 @@ async function resolveOperationTargetEntry(input: {
 				failure: {
 					code: "target_state_mismatch",
 					message:
-						"Fresh discovery did not resolve exactly one target matching the private created-target ownership reference.",
-					actionId: "close_created_target",
+						"Fresh discovery did not resolve exactly one target matching the private retained-ownership reference.",
+					actionId: repairAction,
 					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 					recoverability: "repair_state",
 				},
@@ -1277,15 +1318,15 @@ async function resolveOperationTargetEntry(input: {
 		}
 		const owned = ownedEntries[0];
 		if (
-			parseUrlSafe(owned.rawUrl)?.origin !== selectedState.state.display.origin
+			parseUrlSafe(owned.rawUrl)?.origin !== selected.display.origin
 		) {
 			return {
 				ok: false,
 				failure: {
 					code: "target_state_mismatch",
 					message:
-						"The exact open-created target navigated away from its approved origin.",
-					actionId: "close_created_target",
+						"The exact run-owned target navigated away from its approved origin.",
+					actionId: repairAction,
 					exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 					recoverability: "change_input",
 				},
@@ -1308,15 +1349,14 @@ async function resolveOperationTargetEntry(input: {
 				adapterPageRef: owned.adapterPageRef!,
 				canonicalTargetId: owned.canonicalTargetId,
 				rawUrl: owned.rawUrl,
-				createdOwnership: {
-					targetRef: selectedState.state.ownership.target_ref,
-					expiresAtMs: selectedState.state.expires_at_ms,
-					...(selectedState.state.ownership.retained_lifecycle === undefined
+				retainedOwnership: {
+					targetRef: ownership.target_ref,
+					expiresAtMs: selected.expires_at_ms,
+					...(ownership.retained_lifecycle === undefined
 						? {}
 						: {
 								retainedLifecycleRef:
-									selectedState.state.ownership.retained_lifecycle
-										.lifecycle_ref,
+									ownership.retained_lifecycle.lifecycle_ref,
 							}),
 				},
 			},
@@ -1485,17 +1525,21 @@ function operationCleanupFailure(input: {
 	primaryCause: string;
 	operationEffect: "confirmed" | "not_started" | "unknown";
 	cleanupDebt: readonly OperationCleanupDebt[];
+	actionId?: OperationActionId;
+	recoverability?: OperationFailure["recoverability"];
+	failureDetail?: BrowserUseTargetOperationFailureDetail;
 }): OperationFailure {
 	return {
 		code: "browser_operation_cleanup_incomplete",
 		message:
 			"The Browser Operation reached a primary outcome, but one or more custody releases remain unresolved.",
-		actionId: "inspect_operation_diagnostics",
+		actionId: input.actionId ?? "inspect_operation_diagnostics",
 		exitCode: RUNTIME_FAILURE_EXIT_CODE,
-		recoverability: "none",
+		recoverability: input.recoverability ?? "none",
 		primaryCause: input.primaryCause,
 		operationEffect: input.operationEffect,
 		cleanupDebt: input.cleanupDebt,
+		...(input.failureDetail === undefined ? {} : { failureDetail: input.failureDetail }),
 	};
 }
 
@@ -2000,7 +2044,9 @@ async function runExactTargetPlanOperation(
 			scope: "target-local",
 			focus: false,
 			capability_id: capability.capability_id,
+			plan_schema_version: input.targetPlan.schema_version,
 			plan_digest: input.planDigest,
+			plan_step_count: input.targetPlan.steps.length,
 			steps: [],
 			cleanup: { attempted: false, closed: false, visible_owned_surface_count: 0 },
 		};
@@ -2046,9 +2092,13 @@ function targetPlanOperationFailure(
 		? "browser_operation_target_plan_failed"
 		: outcome.code === "target_operation_origin_mismatch"
 			? "browser_operation_target_origin_mismatch"
-			: outcome.code === "target_operation_cleanup_incomplete"
+		: outcome.code === "target_operation_cleanup_incomplete"
 			? "browser_operation_target_cleanup_incomplete"
-				: "browser_operation_target_plan_unsupported";
+				: outcome.code === "target_operation_evidence_truncated"
+					? "browser_operation_target_evidence_truncated"
+					: outcome.code === "target_operation_evidence_invalid"
+						? "browser_operation_target_evidence_invalid"
+						: "browser_operation_target_plan_unsupported";
 	const unknownEffect = outcome.steps.some(
 		(step) => step.status === "unknown" && step.effect === "possibly-effectful",
 	);
@@ -2059,6 +2109,7 @@ function targetPlanOperationFailure(
 		exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
 		recoverability: unknownEffect ? "repair_state" : "change_input",
 		...(unknownEffect ? { operationEffect: "unknown" as const } : {}),
+		...(outcome.failure_detail === undefined ? {} : { failureDetail: outcome.failure_detail }),
 	};
 }
 
@@ -2293,10 +2344,13 @@ function emitOperationFailure(input: {
 				...(failure.operationEffect === undefined
 					? {}
 					: { operation_effect: failure.operationEffect }),
-				...(failure.cleanupDebt === undefined
-					? {}
-					: { cleanup_debt: failure.cleanupDebt }),
-				...(input.release ? { release: input.release } : {}),
+					...(failure.cleanupDebt === undefined
+						? {}
+						: { cleanup_debt: failure.cleanupDebt }),
+					...(failure.failureDetail === undefined
+						? {}
+						: { failure_detail: failure.failureDetail }),
+					...(input.release ? { release: input.release } : {}),
 				...(input.targetPlan
 					? { target_plan: targetPlanReceipt(input.targetPlan) }
 					: {}),
@@ -2324,7 +2378,9 @@ function operationFailureReceiptContext(
 ): Record<string, unknown> {
 	return {
 		contract: BROWSER_USE_OPERATION_CONTRACT_ID,
-		schema_version: BROWSER_USE_OPERATION_SCHEMA_VERSION,
+		schema_version: context.operation === "target"
+			? BROWSER_USE_TARGET_OPERATION_OUTER_SCHEMA_VERSION
+			: BROWSER_USE_OPERATION_SCHEMA_VERSION,
 		operation: context.operation,
 		adapter: context.adapter,
 		binding: {
@@ -2340,7 +2396,9 @@ function operationFailureReceiptContext(
 			candidate_id: context.target.candidate_id,
 			target_id: context.canonicalTargetId,
 			target_ref: targetRefOf(context.canonicalTargetId),
-			cdp_endpoint: context.handoff.endpointHttp,
+			...(context.operation === "target"
+				? {}
+				: { cdp_endpoint: context.handoff.endpointHttp }),
 			origin: context.target.origin,
 			...(context.target.path_shape ? { path_shape: context.target.path_shape } : {}),
 			...(context.target.title ? { title: context.target.title } : {}),
@@ -2357,6 +2415,16 @@ function operationFailureReceiptContext(
 						...(context.planDigest === undefined
 							? {}
 							: { plan_digest: context.planDigest }),
+					},
+			}),
+		...(context.targetLeaseInterval === undefined
+			? {}
+			: {
+					custody: {
+						target_operation_lease: {
+							acquired_at_epoch_ms: context.targetLeaseInterval.acquiredAtEpochMs,
+							released_at_epoch_ms: context.targetLeaseInterval.releasedAtEpochMs,
+						},
 					},
 				}),
 	};
@@ -2423,7 +2491,9 @@ function emitOperationSuccess(input: {
 			run_id: input.runId,
 			data: {
 				contract: BROWSER_USE_OPERATION_CONTRACT_ID,
-				schema_version: BROWSER_USE_OPERATION_SCHEMA_VERSION,
+				schema_version: input.operation === "target"
+					? BROWSER_USE_TARGET_OPERATION_OUTER_SCHEMA_VERSION
+					: BROWSER_USE_OPERATION_SCHEMA_VERSION,
 				command: input.command,
 				result_kind: "browser_operation",
 				operation: input.operation,
@@ -2444,7 +2514,9 @@ function emitOperationSuccess(input: {
 					// form is published; the ws debugger URL stays unemitted (R32).
 					target_id: input.canonicalTargetId,
 					target_ref: targetRefOf(input.canonicalTargetId),
-					cdp_endpoint: input.handoff.endpointHttp,
+					...(input.operation === "target"
+						? {}
+						: { cdp_endpoint: input.handoff.endpointHttp }),
 					origin: input.target.origin,
 					...(input.target.path_shape
 						? { path_shape: input.target.path_shape }
@@ -2557,11 +2629,25 @@ function operationPayload(input: {
 /** Closed public receipt projection; adapter-only result framing never crosses this seam. */
 function targetPlanReceipt(
 	result: BrowserUseTargetOperationResult,
-): {
-	steps: BrowserUseTargetOperationResult["steps"];
-	cleanup: BrowserUseTargetOperationResult["cleanup"];
-} {
-	return { steps: result.steps, cleanup: result.cleanup };
+): Record<string, unknown> {
+	return {
+		contract: BROWSER_USE_TARGET_OPERATION_RESULT_CONTRACT_ID,
+		schema_version: result.plan_schema_version === "3"
+			? BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSION_V3
+			: BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSION,
+		plan_schema_version: result.plan_schema_version,
+		plan_digest: result.plan_digest,
+		plan_step_count: result.plan_step_count,
+		steps: result.steps,
+		cleanup: result.cleanup,
+		// Baseline evidence rides the receipt whenever the adapter produced it.
+		// The pre-dispatch proof admits a same-origin URL drift, so the caller
+		// must be able to SEE that the page was not on the URL discovery
+		// recorded; a relaxed proof that reported nothing would be a silent one.
+		...(result.ok && result.baseline !== undefined
+			? { baseline: result.baseline }
+			: {}),
+	};
 }
 
 function normalizeSnapshot(stdout: string): Record<string, unknown> {
@@ -2604,8 +2690,39 @@ function hasExactQualificationKeys(
 		actual.every((key, index) => key === expected[index]);
 }
 
+/** Parse the complete public Target Operation Lease release interval. */
+function parseTargetOperationLeaseCustody(
+	value: unknown,
+): TargetOperationLeaseInterval | undefined {
+	const custody = qualificationRecord(value);
+	const lease = qualificationRecord(custody?.target_operation_lease);
+	if (
+		!custody ||
+		!hasExactQualificationKeys(custody, ["target_operation_lease"]) ||
+		!lease ||
+		!hasExactQualificationKeys(lease, [
+			"acquired_at_epoch_ms",
+			"released_at_epoch_ms",
+		]) ||
+		!Number.isSafeInteger(lease.acquired_at_epoch_ms) ||
+		!Number.isSafeInteger(lease.released_at_epoch_ms) ||
+		(lease.acquired_at_epoch_ms as number) < 0 ||
+		(lease.released_at_epoch_ms as number) <
+			(lease.acquired_at_epoch_ms as number)
+	) return undefined;
+	return {
+		acquiredAtEpochMs: lease.acquired_at_epoch_ms as number,
+		releasedAtEpochMs: lease.released_at_epoch_ms as number,
+	};
+}
+
 type TargetPlanReceiptProjection = {
-	steps: readonly BrowserUseTargetOperationResult["steps"][number][];
+	contract: typeof BROWSER_USE_TARGET_OPERATION_RESULT_CONTRACT_ID;
+	schema_version: (typeof BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSIONS)[number];
+	plan_schema_version: "1" | "2" | "3";
+	plan_digest: string;
+	plan_step_count: number;
+	steps: readonly unknown[];
 	cleanup: {
 		attempted: boolean;
 		closed: boolean;
@@ -2614,6 +2731,11 @@ type TargetPlanReceiptProjection = {
 	};
 };
 
+function isTruncatedPublicEvidence(value: unknown): boolean {
+	const parsed = parsePublicBrowserUseTargetOperationEvidence(value);
+	return !parsed.ok && parsed.code === "target_operation_evidence_truncated";
+}
+
 function parseTargetPlanReceiptProjection(
 	value: unknown,
 ): TargetPlanReceiptProjection | undefined {
@@ -2621,8 +2743,23 @@ function parseTargetPlanReceiptProjection(
 	const cleanup = qualificationRecord(targetPlan?.cleanup);
 	if (
 		!targetPlan ||
-		!hasExactQualificationKeys(targetPlan, ["steps", "cleanup"]) ||
+		!(
+			hasExactQualificationKeys(targetPlan, ["contract", "schema_version", "plan_schema_version", "plan_digest", "plan_step_count", "steps", "cleanup"]) ||
+			hasExactQualificationKeys(targetPlan, ["contract", "schema_version", "plan_schema_version", "plan_digest", "plan_step_count", "steps", "cleanup", "baseline"])
+		) ||
+		targetPlan.contract !== BROWSER_USE_TARGET_OPERATION_RESULT_CONTRACT_ID ||
+		!BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSIONS.includes(
+			targetPlan.schema_version as (typeof BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSIONS)[number],
+		) ||
+		(targetPlan.plan_schema_version !== "1" && targetPlan.plan_schema_version !== "2" && targetPlan.plan_schema_version !== "3") ||
+		(targetPlan.plan_schema_version === "3") !==
+			(targetPlan.schema_version === BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSION_V3) ||
+		typeof targetPlan.plan_digest !== "string" || !/^[a-f0-9]{64}$/.test(targetPlan.plan_digest) ||
+		!Number.isSafeInteger(targetPlan.plan_step_count) ||
+		(targetPlan.plan_step_count as number) < 1 ||
+		(targetPlan.plan_step_count as number) > BROWSER_USE_TARGET_OPERATION_MAX_STEPS ||
 		!Array.isArray(targetPlan.steps) ||
+		targetPlan.steps.length > (targetPlan.plan_step_count as number) ||
 		!cleanup ||
 		!(
 			hasExactQualificationKeys(cleanup, ["attempted", "closed", "visible_owned_surface_count"]) ||
@@ -2635,27 +2772,77 @@ function parseTargetPlanReceiptProjection(
 		!Number.isSafeInteger(cleanup.visible_owned_surface_count) ||
 		(cleanup.visible_owned_surface_count as number) < 0
 	) return undefined;
-	const steps: BrowserUseTargetOperationResult["steps"][number][] = [];
-	for (const rawStep of targetPlan.steps) {
+	const planStepCount = targetPlan.plan_step_count as number;
+	const steps: unknown[] = [];
+	let evidenceBytes = 0;
+	for (let position = 0; position < targetPlan.steps.length; position += 1) {
+		const rawStep = targetPlan.steps[position];
 		const step = qualificationRecord(rawStep);
 		if (
 			!step ||
 			!Number.isSafeInteger(step.index) ||
-			(step.index as number) < 0 ||
+			step.index !== position ||
 			!( ["navigate", "inspect", "review-state", "input", "overlay-cleanup"] as unknown[]).includes(step.kind)
 		) return undefined;
 		if (step.status === "confirmed") {
+			const storybookDiagnostic = step.storybook_document_diagnostic === undefined
+				? undefined
+				: parsePublicBrowserUseStorybookDocumentDiagnostic(step.storybook_document_diagnostic);
+			const confirmedNavigate = step.kind === "navigate";
+			const observationDigest = step.observation_digest;
 			if (
-				!(hasExactQualificationKeys(step, ["index", "kind", "status"]) ||
-					hasExactQualificationKeys(step, ["index", "kind", "status", "observation_digest"])) ||
-				(step.observation_digest !== undefined && typeof step.observation_digest !== "string")
+				(confirmedNavigate
+					? !hasExactQualificationKeys(step, ["index", "kind", "status", "observation_digest"]) ||
+						typeof observationDigest !== "string" ||
+						!/^[a-f0-9]{64}$/.test(observationDigest)
+					: !(hasExactQualificationKeys(step, ["index", "kind", "status"]) ||
+					hasExactQualificationKeys(step, ["index", "kind", "status", "observation_digest"]) ||
+					 hasExactQualificationKeys(step, ["index", "kind", "status", "evidence"]) ||
+					 hasExactQualificationKeys(step, ["index", "kind", "status", "evidence", "storybook_document_diagnostic"])) ||
+					(observationDigest !== undefined &&
+						(typeof observationDigest !== "string" || !/^[a-f0-9]{64}$/.test(observationDigest)))) ||
+				(step.evidence !== undefined && !qualificationRecord(step.evidence)) ||
+				(step.evidence !== undefined &&
+					(targetPlan.plan_schema_version === "1" || step.kind !== "inspect" ||
+						!parsePublicBrowserUseTargetOperationEvidence(step.evidence).ok)) ||
+				(step.evidence === undefined && targetPlan.plan_schema_version !== "1" && step.kind === "inspect") ||
+				(step.storybook_document_diagnostic !== undefined &&
+					(targetPlan.plan_schema_version !== "3" || step.kind !== "inspect" || storybookDiagnostic === undefined))
 			) return undefined;
+			if (step.evidence !== undefined) {
+				evidenceBytes += Buffer.byteLength(JSON.stringify(step.evidence), "utf8");
+				if (evidenceBytes > BROWSER_USE_TARGET_OPERATION_MAX_EVIDENCE_BYTES) return undefined;
+			}
 			steps.push({
 				index: step.index as number,
-				kind: step.kind as BrowserUseTargetOperationResult["steps"][number]["kind"],
+				kind: step.kind,
 				status: "confirmed",
 				...(step.observation_digest === undefined ? {} : { observation_digest: step.observation_digest }),
+				...(step.evidence === undefined ? {} : { evidence: step.evidence }),
+				...(storybookDiagnostic === undefined ? {} : { storybook_document_diagnostic: storybookDiagnostic }),
 			});
+			continue;
+		}
+		if (
+			step.status === "blocked" &&
+			step.kind === "inspect" &&
+			(hasExactQualificationKeys(step, ["index", "kind", "status", "code"]) ||
+				hasExactQualificationKeys(step, ["index", "kind", "status", "code", "evidence"]) ||
+				hasExactQualificationKeys(step, ["index", "kind", "status", "code", "storybook_document_diagnostic"]) ||
+				hasExactQualificationKeys(step, ["index", "kind", "status", "code", "evidence", "storybook_document_diagnostic"])) &&
+			(step.code === "target_operation_evidence_invalid" || step.code === "target_operation_evidence_truncated") &&
+			((step.code === "target_operation_evidence_invalid" && step.evidence === undefined) ||
+				(step.code === "target_operation_evidence_truncated" && step.evidence !== undefined &&
+					isTruncatedPublicEvidence(step.evidence))) &&
+			(step.storybook_document_diagnostic === undefined ||
+				(targetPlan.plan_schema_version === "3" &&
+					parsePublicBrowserUseStorybookDocumentDiagnostic(step.storybook_document_diagnostic) !== undefined))
+		) {
+			if (step.evidence !== undefined) {
+				evidenceBytes += Buffer.byteLength(JSON.stringify(step.evidence), "utf8");
+				if (evidenceBytes > BROWSER_USE_TARGET_OPERATION_MAX_EVIDENCE_BYTES) return undefined;
+			}
+			steps.push(step);
 			continue;
 		}
 		if (
@@ -2665,12 +2852,17 @@ function parseTargetPlanReceiptProjection(
 		) return undefined;
 		steps.push({
 			index: step.index as number,
-			kind: step.kind as BrowserUseTargetOperationResult["steps"][number]["kind"],
+			kind: step.kind,
 			status: "unknown",
 			effect: "possibly-effectful",
 		});
 	}
 	return {
+		contract: BROWSER_USE_TARGET_OPERATION_RESULT_CONTRACT_ID,
+		schema_version: targetPlan.schema_version as TargetPlanReceiptProjection["schema_version"],
+		plan_schema_version: targetPlan.plan_schema_version,
+		plan_digest: targetPlan.plan_digest,
+		plan_step_count: planStepCount,
 		steps,
 		cleanup: {
 			attempted: cleanup.attempted,
@@ -2689,7 +2881,11 @@ export function parseBrowserOperationTargetPlanReceipt(
 ): TargetPlanReceiptProjection | undefined {
 	try {
 		const receipt = qualificationRecord(JSON.parse(raw));
-		return parseTargetPlanReceiptProjection(qualificationRecord(receipt?.data)?.target_plan);
+		const targetPlan = parseTargetPlanReceiptProjection(
+			qualificationRecord(receipt?.data)?.target_plan,
+		);
+		if (receipt?.status === "ok" && targetPlan?.steps.length !== targetPlan?.plan_step_count) return undefined;
+		return targetPlan;
 	} catch {
 		return undefined;
 	}
@@ -2699,31 +2895,85 @@ export function parseBrowserOperationTargetPlanReceipt(
  * binding and target facts alongside the closed partial receipt projection. */
 export function parseBrowserOperationTargetPlanFailureReceipt(
 	raw: string,
-): { binding: Record<string, unknown>; target: Record<string, unknown>; targetPlan: TargetPlanReceiptProjection } | undefined {
+): {
+	binding: Record<string, unknown>;
+	target: Record<string, unknown>;
+	targetPlan: TargetPlanReceiptProjection;
+	failureDetail?: BrowserUseTargetOperationFailureDetail;
+} | undefined {
 	try {
 		const receipt = qualificationRecord(JSON.parse(raw));
 		const data = qualificationRecord(receipt?.data);
+		const error = qualificationRecord(receipt?.error);
 		const binding = qualificationRecord(data?.binding);
 		const target = qualificationRecord(data?.target);
+		const execution = qualificationRecord(data?.execution);
+		const targetLeaseInterval = parseTargetOperationLeaseCustody(data?.custody);
 		const targetPlan = parseTargetPlanReceiptProjection(data?.target_plan);
+		const primaryCause = data?.primary_cause;
+		const evidenceFailure =
+			error?.code === "browser_operation_target_evidence_invalid" ||
+			error?.code === "browser_operation_target_evidence_truncated" ||
+			(error?.code === "browser_operation_cleanup_incomplete" &&
+				(primaryCause === "browser_operation_target_evidence_invalid" ||
+					primaryCause === "browser_operation_target_evidence_truncated"));
+		const targetPlanFailure =
+			error?.code === "browser_operation_target_plan_failed" ||
+			(error?.code === "browser_operation_cleanup_incomplete" &&
+				primaryCause === "browser_operation_target_plan_failed");
+		const failureDetail = data?.failure_detail === undefined
+			? undefined
+			: parseBrowserUseTargetOperationFailureDetail(data.failure_detail);
 		if (
 			receipt?.status !== "error" ||
 			data?.contract !== BROWSER_USE_OPERATION_CONTRACT_ID ||
-			data.schema_version !== BROWSER_USE_OPERATION_SCHEMA_VERSION ||
+			data.schema_version !== BROWSER_USE_TARGET_OPERATION_OUTER_SCHEMA_VERSION ||
 			data.operation !== "target" ||
+			!error ||
+			(evidenceFailure && failureDetail === undefined) ||
+			(!evidenceFailure && !targetPlanFailure && data.failure_detail !== undefined) ||
+			(data.failure_detail !== undefined && failureDetail === undefined) ||
 			!binding ||
 			typeof binding.outer_run_id !== "string" ||
 			typeof binding.run_id !== "string" ||
 			typeof binding.handoff_evidence_id !== "string" ||
+			binding.handoff_evidence_id.length === 0 ||
 			typeof binding.browser_authority_id !== "string" ||
+			binding.browser_authority_id.length === 0 ||
 			typeof binding.target_candidate_id !== "string" ||
+			binding.target_candidate_id.length === 0 ||
 			!target ||
+			target.candidate_id !== binding.target_candidate_id ||
 			typeof target.target_id !== "string" ||
 			typeof target.target_ref !== "string" ||
+			target.cdp_endpoint !== undefined ||
 			typeof target.origin !== "string" ||
+			target.target_ref !== targetRefOf(target.target_id) ||
+			binding.outer_run_id !== binding.run_id ||
+			receipt.run_id !== binding.run_id ||
+			!execution ||
+			execution.scope !== "target-local" ||
+			typeof execution.plan_digest !== "string" ||
+			execution.plan_digest !== targetPlan?.plan_digest ||
+			!targetLeaseInterval ||
 			!targetPlan
 		) return undefined;
-		return { binding, target, targetPlan };
+		if (targetPlan.plan_schema_version === "3" && failureDetail?.reason === "catalogue_metadata_failed") {
+			const match = /^\/steps\/(\d+)\/inspect\/evidence\//.exec(failureDetail.pointer);
+			const failedStep = match === null ? undefined : qualificationRecord(targetPlan.steps[Number(match[1])]);
+			if (
+				failedStep?.status !== "blocked" ||
+				parsePublicBrowserUseStorybookDocumentDiagnostic(
+					failedStep.storybook_document_diagnostic,
+				) === undefined
+			) return undefined;
+		}
+		return {
+			binding,
+			target,
+			targetPlan,
+			...(failureDetail === undefined ? {} : { failureDetail }),
+		};
 	} catch {
 		return undefined;
 	}
@@ -2745,6 +2995,14 @@ export function parseBrowserOperationQualificationReceipt(
 	const execution = qualificationRecord(data?.execution);
 	const sideEffects = qualificationRecord(data?.side_effects);
 	const custody = qualificationRecord(data?.custody);
+	let canonicalTargetRef: string | undefined;
+	if (typeof target?.target_id === "string") {
+		try {
+			canonicalTargetRef = targetRefOf(target.target_id);
+		} catch {
+			return undefined;
+		}
+	}
 	if (
 		receipt?.status !== "ok" ||
 		typeof receipt.run_id !== "string" ||
@@ -2752,7 +3010,8 @@ export function parseBrowserOperationQualificationReceipt(
 		!Array.isArray(receipt.runtime_actions) ||
 		!qualificationRecord(receipt.continuation) ||
 		data?.contract !== BROWSER_USE_OPERATION_CONTRACT_ID ||
-		data.schema_version !== BROWSER_USE_OPERATION_SCHEMA_VERSION ||
+		!(data.schema_version === BROWSER_USE_OPERATION_SCHEMA_VERSION ||
+			data.schema_version === BROWSER_USE_TARGET_OPERATION_OUTER_SCHEMA_VERSION) ||
 		data.result_kind !== "browser_operation" ||
 		data.effect !== "confirmed" ||
 		!binding ||
@@ -2760,15 +3019,21 @@ export function parseBrowserOperationQualificationReceipt(
 		typeof binding.run_id !== "string" ||
 		typeof binding.handoff_evidence_id !== "string" ||
 		typeof binding.browser_authority_id !== "string" ||
-		typeof binding.target_candidate_id !== "string" ||
+			typeof binding.target_candidate_id !== "string" ||
+			binding.outer_run_id !== binding.run_id ||
+			receipt.run_id !== binding.run_id ||
 		!(["hints", "selected_state", "single_candidate"] as unknown[]).includes(data.target_source) ||
 		!target ||
 		!Number.isSafeInteger(target.candidate_ordinal) ||
 		typeof target.candidate_id !== "string" ||
 		typeof target.target_id !== "string" ||
 		typeof target.target_ref !== "string" ||
-		typeof target.cdp_endpoint !== "string" ||
+		!canonicalTargetRef ||
+		(data.operation === "target"
+			? target.cdp_endpoint !== undefined
+			: typeof target.cdp_endpoint !== "string") ||
 		typeof target.origin !== "string" ||
+		target.target_ref !== canonicalTargetRef ||
 		!execution ||
 		!sideEffects ||
 		typeof sideEffects.focus !== "boolean" ||
@@ -2789,7 +3054,11 @@ export function parseBrowserOperationQualificationReceipt(
 	) return undefined;
 	if (operation === "target") {
 		const targetPlan = parseTargetPlanReceiptProjection(data.target_plan);
+		const targetLeaseInterval = parseTargetOperationLeaseCustody(data.custody);
 		if (
+			data.contract !== BROWSER_USE_OPERATION_CONTRACT_ID ||
+			data.schema_version !== BROWSER_USE_TARGET_OPERATION_OUTER_SCHEMA_VERSION ||
+			binding.target_candidate_id !== target.candidate_id ||
 			execution.scope !== "target-local" ||
 			execution.focus !== false ||
 			sideEffects.focus !== false ||
@@ -2797,11 +3066,17 @@ export function parseBrowserOperationQualificationReceipt(
 			typeof execution.plan_digest !== "string" ||
 			!/^[a-f0-9]{64}$/.test(execution.plan_digest) ||
 			!targetPlan ||
-			targetPlan.steps.some((step) => step.status !== "confirmed")
+			!targetLeaseInterval ||
+			targetPlan.plan_digest !== execution.plan_digest ||
+			targetPlan.steps.length !== targetPlan.plan_step_count ||
+			targetPlan.steps.some(
+				(step) => qualificationRecord(step)?.status !== "confirmed",
+			)
 		) return undefined;
 		return { receipt, data, binding, target, execution, custody };
 	}
 	if (operation === "snapshot") {
+		if (data.contract !== BROWSER_USE_OPERATION_CONTRACT_ID || data.schema_version !== BROWSER_USE_OPERATION_SCHEMA_VERSION) return undefined;
 		const snapshot = qualificationRecord(data.snapshot);
 		const limits = qualificationRecord(snapshot?.limits);
 		if (
@@ -2832,6 +3107,7 @@ export function parseBrowserOperationQualificationReceipt(
 			(limits.max_lines as number) < 1
 		) return undefined;
 	} else {
+		if (data.contract !== BROWSER_USE_OPERATION_CONTRACT_ID || data.schema_version !== BROWSER_USE_OPERATION_SCHEMA_VERSION) return undefined;
 		const screenshot = qualificationRecord(data.screenshot);
 		const artifact = qualificationRecord(screenshot?.artifact);
 		if (

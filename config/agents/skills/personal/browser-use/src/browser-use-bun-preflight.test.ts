@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterAll, describe, expect, test } from "bun:test";
 import {
 	BUN_PREFLIGHT_INSTALL_COMMAND,
@@ -117,6 +117,78 @@ describe("DDA-A21 bun runtime preflight on the installed entry", () => {
 		expect(result.stdout).toContain("bun-ran");
 		expect(result.stdout).toContain("/opt/browser-use/src/browser-use.ts");
 		expect(result.stdout).toContain("task list");
+	});
+
+	// LOADER POLICY (cwd .env containment). Bun auto-loads a `.env` from the
+	// invocation cwd. Without `--no-env-file` any directory the operator stands in
+	// can inject AUTH_TOKEN_FORBIDDEN_ENV_KEYS into the CLI process and trip the
+	// auth custody gate on token material nobody exported. These tests use an
+	// explicit non-secret SENTINEL only; no real credential is read or emitted.
+	test("the launcher keeps a cwd .env out of the CLI process", () => {
+		const base = sandbox();
+		const binDir = join(base, "bin");
+		const workdir = join(base, "workdir");
+		mkdirSync(binDir, { recursive: true });
+		mkdirSync(workdir, { recursive: true });
+		// A fixture `bun` that reports the forwarded flags and whether the real bun
+		// would have been asked to skip env-file loading.
+		const fakeBun = join(binDir, "bun");
+		writeFileSync(fakeBun, '#!/bin/sh\nprintf "flags %s\\n" "$*"\n');
+		chmodSync(fakeBun, 0o755);
+		writeFileSync(join(workdir, ".env"), "BROWSER_USE_TOKEN=SENTINEL_NOT_A_REAL_TOKEN\n");
+
+		const shimPath = join(base, "browser-use");
+		writeFileSync(
+			shimPath,
+			bunPreflightShim({ commandName: "browser-use", entryPath: "/opt/browser-use/src/browser-use.ts" }),
+		);
+		chmodSync(shimPath, 0o755);
+
+		const result = spawnSync(shimPath, ["auth", "install-token"], {
+			cwd: workdir,
+			env: { PATH: `${binDir}:${BUN_LESS_PATH}` },
+			encoding: "utf8",
+		});
+
+		// The shim asks bun to skip cwd .env loading, before the entry path.
+		expect(result.stdout).toContain("--no-env-file");
+		// The sentinel never reaches the child's argv.
+		expect(result.stdout).not.toContain("SENTINEL_NOT_A_REAL_TOKEN");
+	});
+
+	test("REAL bun: the checked-in entry ignores a cwd .env forbidden key but honours an inherited one", () => {
+		const base = sandbox();
+		const workdir = join(base, "workdir");
+		mkdirSync(workdir, { recursive: true });
+		writeFileSync(join(workdir, ".env"), "BROWSER_USE_TOKEN=SENTINEL_CWD_ONLY\n");
+		// A tiny entry that reports only the SHAPE of the forbidden key, never a value.
+		const probe = join(base, "probe.ts");
+		writeFileSync(
+			probe,
+			"console.log(process.env.BROWSER_USE_TOKEN === undefined ? 'absent' : 'present');\n",
+		);
+		const shimPath = join(base, "browser-use");
+		writeFileSync(shimPath, bunPreflightShim({ commandName: "browser-use", entryPath: probe }));
+		chmodSync(shimPath, 0o755);
+		const basePath = `${dirname(process.execPath)}:${BUN_LESS_PATH}`;
+
+		// cwd-only sentinel: Bun must NOT import it, so the custody gate cannot fire.
+		const cwdOnly = spawnSync(shimPath, [], {
+			cwd: workdir,
+			env: { PATH: basePath },
+			encoding: "utf8",
+		});
+		expect(cwdOnly.status).toBe(0);
+		expect(cwdOnly.stdout.trim()).toBe("absent");
+
+		// Genuinely INHERITED sentinel: still visible, so the fail-closed gate holds.
+		const inherited = spawnSync(shimPath, [], {
+			cwd: workdir,
+			env: { PATH: basePath, BROWSER_USE_TOKEN: "SENTINEL_INHERITED" },
+			encoding: "utf8",
+		});
+		expect(inherited.status).toBe(0);
+		expect(inherited.stdout.trim()).toBe("present");
 	});
 
 	test("the remedy string names the runtime, install command, and command name", () => {

@@ -29,7 +29,9 @@ import {
 	SELECTED_TARGET_STATE_TTL_MS,
 	canonicalRunSelectedStatePath,
 	loadSelectedStateForCleanup,
+	persistAdoptedSelectedTargetState,
 	persistCreatedSelectedTargetState,
+	persistReleasedSelectedTargetState,
 	removeSelectedTargetStateIfRevision,
 } from "./browser-use-selection";
 import {
@@ -44,6 +46,7 @@ import {
 	persistTargetOwnershipUnderCleanupLease,
 	heartbeatRetainedTopologyCleanupLease,
 	hasExactCreatedTargetOwnership,
+	hasExactTargetOwnership,
 	releaseBrowserLaneLease,
 	releaseExactTargetOwnership,
 	releaseExactTargetOwnershipByRef,
@@ -865,6 +868,7 @@ export async function runTargetsOpen(input: TopologyInput): Promise<number> {
 			BROWSER_USE_CANONICAL_TARGET_ID_PATTERN.test(created.canonical_target_id)
 				? created.canonical_target_id
 					: undefined;
+		const adoptedCurrent = created?.target_disposition === "adopted-current";
 		const beforeIds = new Set(
 			before.map((target) => target.canonical_target_id),
 		);
@@ -937,19 +941,51 @@ export async function runTargetsOpen(input: TopologyInput): Promise<number> {
 		const exact = newTargets.filter(
 			(target) => safeUrl(target.url)?.href === url.href,
 		);
+		const adoptedTarget =
+			adoptedCurrent &&
+			reportedTargetId !== undefined &&
+			newTargets.length === 0 &&
+			before.length === after.length &&
+			before.every((target) => afterIds.has(target.canonical_target_id))
+				? after.find(
+						(target) =>
+							target.canonical_target_id === reportedTargetId &&
+							// Origin, not exact href. By this point the adapter has
+							// already proven a stable identity for this exact target,
+							// plus correspondence with the requested origin. A page
+							// that rewrites its own query string as it loads must not
+							// undo that: the canonical target id above is the identity
+							// here, and a foreign origin is still refused.
+							safeUrl(target.url)?.origin === url.origin &&
+							before.some(
+								(previous) =>
+									previous.canonical_target_id === reportedTargetId,
+							),
+					)
+				: undefined;
 		const returnedIdDrift =
 			reportedTargetId !== undefined &&
 			exact.length === 1 &&
 			exact[0]?.canonical_target_id !== reportedTargetId;
+		const createdBindingValid =
+			!collateralMissing &&
+			newTargets.length === 1 &&
+			exact.length === 1 &&
+			!returnedIdDrift;
+		const adoptedBindingValid = !collateralMissing && adoptedTarget !== undefined;
 		if (
-			collateralMissing ||
-			newTargets.length !== 1 ||
-			exact.length !== 1 ||
-			returnedIdDrift
+			!createdBindingValid &&
+			!adoptedBindingValid
 		) {
 			const inventoryFullyReconciled =
 				!collateralMissing && newTargets.length === 1;
-			const independentlyIdentified = exact.length === 1 ? exact[0] : undefined;
+			const independentlyIdentified =
+				exact.length === 1
+					? exact[0]
+					: inventoryFullyReconciled &&
+							newTargets[0]?.canonical_target_id === reportedTargetId
+						? newTargets[0]
+						: undefined;
 			const cleanup =
 				independentlyIdentified === undefined
 					? undefined
@@ -1004,8 +1040,44 @@ export async function runTargetsOpen(input: TopologyInput): Promise<number> {
 				...(cleanup === undefined ? {} : { cleanup }),
 			});
 		}
-		const target = exact[0] as NativeTarget;
+		const target = (adoptedTarget ?? exact[0]) as NativeTarget;
 		createdTargetId = target.canonical_target_id;
+		const targetEnvelopeId = targetEnvelopeIdOf({
+			runId: handoff.facts.runId,
+			mode: "handoff-bound",
+			adapter: handoff.facts.adapter,
+			handoffEvidenceId: handoff.facts.handoffEvidenceId,
+		});
+		const canonicalPages = nativeTargetPages(after);
+		const selectedCandidateIndex = canonicalPages.findIndex(
+			(page) => page.cdp_target_id === target.canonical_target_id,
+		);
+		if (selectedCandidateIndex < 0) {
+			const cleanup = await exactCleanup(input, handoff, target.canonical_target_id);
+			releaseOwnershipAfterAbsence = cleanup.closed === true;
+			return failureOutcome(handoff.facts.runId, {
+				code: "target_topology_create_binding_failed",
+				message: "The exact created target is not a canonical navigable page.",
+				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
+				recoverability: cleanup.closed === true ? "change_input" : "none",
+				repairHint: "Use an exact navigable HTTP(S) page target.",
+				effect: cleanup.closed === true ? "confirmed" : "unknown",
+				targetMutated: true,
+				targetPresent: cleanup.closed === true ? false : "unknown",
+				cleanup,
+			});
+		}
+		const selectedCandidateOrdinal = selectedCandidateIndex + 1;
+		const selectedPage = canonicalPages[selectedCandidateIndex];
+		if (selectedPage === undefined) {
+			throw new Error("selected canonical target page disappeared");
+		}
+		const targetCandidateId = toCandidate(
+			selectedPage,
+			selectedCandidateIndex,
+			targetEnvelopeId,
+			false,
+		).candidate_id;
 		const acquired = await acquireTargetOperationLease(store.deps, {
 			authorityId,
 			runId: handoff.facts.runId,
@@ -1013,12 +1085,25 @@ export async function runTargetsOpen(input: TopologyInput): Promise<number> {
 			rawTargetId: target.canonical_target_id,
 			operation: "adopt",
 			ttlMs: SELECTED_TARGET_STATE_TTL_MS,
-			ownershipEvidence: {
-				kind: "adapter-creation-receipt",
-				adapter_id: handoff.facts.adapter,
-				run_id: handoff.facts.runId,
-				raw_target_id: target.canonical_target_id,
-			},
+			ownershipEvidence: adoptedBindingValid
+				? {
+						kind: "explicit-adoption",
+						adapter_id: handoff.facts.adapter,
+						run_id: handoff.facts.runId,
+						raw_target_id: target.canonical_target_id,
+						target_envelope_id: targetEnvelopeId,
+						target_candidate_id: targetCandidateId,
+						target_candidate_identity: {
+							kind: "adapter-page-id",
+							raw_adapter_page_id: target.adapter_target_ref,
+						},
+					}
+				: {
+						kind: "adapter-creation-receipt",
+						adapter_id: handoff.facts.adapter,
+						run_id: handoff.facts.runId,
+						raw_target_id: target.canonical_target_id,
+					},
 			retainLeaseOnBindingFailure: true,
 		});
 		if (!acquired.ok) {
@@ -1083,44 +1168,13 @@ export async function runTargetsOpen(input: TopologyInput): Promise<number> {
 			});
 		}
 		targetLease = acquired.lease;
-		const targetEnvelopeId = targetEnvelopeIdOf({
-			runId: handoff.facts.runId,
-			mode: "handoff-bound",
-			adapter: handoff.facts.adapter,
-			handoffEvidenceId: handoff.facts.handoffEvidenceId,
-		});
-		const canonicalPages = nativeTargetPages(after);
-		const selectedCandidateIndex = canonicalPages.findIndex(
-			(page) => page.cdp_target_id === target.canonical_target_id,
-		);
-		if (selectedCandidateIndex < 0) {
-			const cleanup = await exactCleanup(input, handoff, target.canonical_target_id);
-			releaseOwnershipAfterAbsence = cleanup.closed === true;
-			return failureOutcome(handoff.facts.runId, {
-				code: "target_topology_create_binding_failed",
-				message: "The exact created target is not a canonical navigable page.",
-				exitCode: BINDING_FAIL_CLOSED_EXIT_CODE,
-				recoverability: cleanup.closed === true ? "change_input" : "none",
-				repairHint: "Use an exact navigable HTTP(S) page target.",
-				effect: cleanup.closed === true ? "confirmed" : "unknown",
-				targetMutated: true,
-				targetPresent: cleanup.closed === true ? false : "unknown",
-				cleanup,
-			});
-		}
-		const selectedCandidateOrdinal = selectedCandidateIndex + 1;
-		const targetCandidateId = toCandidate(
-			canonicalPages[selectedCandidateIndex]!,
-			selectedCandidateIndex,
-			targetEnvelopeId,
-			false,
-		).candidate_id;
 		const retainedLifecycle = await handoff.capability.run({
 			runtime: input.runtime,
 			handoff: exactTargetHandoff(handoff.facts),
 			action: {
 				kind: "retain-lifecycle",
 				target_id: target.canonical_target_id,
+				expected_url: target.url,
 			},
 		});
 		if (!retainedLifecycle.ok || retainedLifecycle.kind !== "retain-lifecycle") {
@@ -1341,6 +1395,475 @@ export async function runTargetsOpen(input: TopologyInput): Promise<number> {
 	return emitOutcome(input, mergeReleaseDebt(outcome, cleanupDebt));
 }
 
+
+// ---------------------------------------------------------------------------
+// Target adoption: retained lifecycle custody for a target this run did not open.
+//
+// `targets open` was the only way to reach a retained exact-target adapter
+// lifecycle, because only a created target ever carried one. That made the
+// retained fast lane unreachable for the ordinary case — a page the user
+// already has open — so every operation on such a target paid a fresh adapter
+// attach, a tab activation, and a session teardown.
+//
+// Adoption closes that gap WITHOUT weakening custody: it takes the same
+// `adopt` Target Lease, supplies the same `explicit-adoption` first-ownership
+// evidence the custody owner already admits, and proves the same exact
+// canonical identity. What it deliberately does NOT take is the right to close
+// the target: this run did not open it, so `targets release` gives the binding
+// back and the tab is never touched.
+// ---------------------------------------------------------------------------
+
+/**
+ * Bind the run-scoped selected target into a retained exact-target lifecycle.
+ *
+ * @param input - Parsed command, runtime, writers, and run identity
+ * @returns Process exit code
+ */
+export async function runTargetsAdopt(input: TopologyInput): Promise<number> {
+	const handoffRead = await readTopologyHandoff(input);
+	if (!handoffRead.ok) return emitFailure(input, handoffRead.failure, input.runId);
+	const handoff = handoffRead.handoff;
+	const resolvedState = await resolveTopologyStatePath(input, handoff.facts.runId);
+	if (!resolvedState.ok)
+		return emitFailure(input, resolvedState.failure, handoff.facts.runId);
+	const statePath = resolvedState.path;
+	const loaded = await loadSelectedStateForCleanup(input.runtime, statePath, {
+		expectedRunId: handoff.facts.runId,
+	});
+	if (!loaded.ok) {
+		return emitFailure(
+			input,
+			{
+				...preflightFailure(
+					loaded.failure.code,
+					loaded.failure.message,
+					"Select a Browser Target with the same handoff before adopting it.",
+				),
+				recoverability: loaded.failure.recoverability,
+			},
+			handoff.facts.runId,
+		);
+	}
+	const selected = loaded.state;
+	const selectedRaw = loaded.raw;
+	if (selectedRaw === undefined) {
+		return emitFailure(
+			input,
+			preflightFailure(
+				"target_topology_state_unreadable",
+				"The run-scoped selected state could not be read for a compare-and-set write.",
+				"Repair the private selected-state path before adopting.",
+			),
+			handoff.facts.runId,
+		);
+	}
+	if (selected.ownership?.kind === "created-target") {
+		return emitFailure(
+			input,
+			preflightFailure(
+				"target_topology_state_mismatch",
+				"The selected target was created by this run and already owns its lifecycle.",
+				"Use the open-created selection as-is; adoption is only for a target this run did not open.",
+			),
+			handoff.facts.runId,
+		);
+	}
+	if (
+		selected.selected_adapter_id !== handoff.facts.adapter ||
+		selected.verified_endpoint_identity !== handoff.facts.verifiedEndpointIdentity ||
+		selected.handoff_evidence_id !== handoff.facts.handoffEvidenceId
+	) {
+		return emitFailure(
+			input,
+			preflightFailure(
+				"target_topology_state_mismatch",
+				"The selected state does not belong to this exact handoff-bound run.",
+				"Reselect the Browser Target with the same verified handoff before adopting it.",
+			),
+			handoff.facts.runId,
+		);
+	}
+	if (input.parsed.dryRun) {
+		return emitSuccess(input, handoff.facts.runId, {
+			effect: "not_started",
+			target_mutated: false,
+			adapter: handoff.facts.adapter,
+			planned_effect: "resolve-bind-retain-lifecycle",
+			state_path_source:
+				stringField(input.parsed.flagValues["--state"]) === undefined
+					? "run-scoped-xdg"
+					: "explicit",
+		});
+	}
+
+	// Fresh inventory is the identity source: the selected record holds redacted
+	// display facts and a candidate ordinal, never a raw target id, so the exact
+	// target is re-derived here and must still resolve to exactly one row.
+	const inventory = await listNativeTargets(input, handoff);
+	if (inventory === undefined) {
+		return emitFailure(
+			input,
+			preflightFailure(
+				"target_topology_inventory_unavailable",
+				"The attached adapter did not return a target inventory to adopt from.",
+				"Re-run handoff-bound target discovery before adopting.",
+			),
+			handoff.facts.runId,
+		);
+	}
+	const pages = nativeTargetPages(inventory);
+	const targetEnvelopeId = targetEnvelopeIdOf({
+		runId: handoff.facts.runId,
+		mode: "handoff-bound",
+		adapter: handoff.facts.adapter,
+		handoffEvidenceId: handoff.facts.handoffEvidenceId,
+	});
+	if (targetEnvelopeId !== selected.target_envelope_id) {
+		return emitFailure(
+			input,
+			preflightFailure(
+				"target_topology_state_mismatch",
+				"The selected target envelope does not match this handoff-bound discovery binding.",
+				"Re-run handoff-bound target discovery and reselect before adopting.",
+			),
+			handoff.facts.runId,
+		);
+	}
+	const matches = pages
+		.map((page, index) => ({ page, index }))
+		.filter(
+			({ page, index }) =>
+				toCandidate(page, index, targetEnvelopeId, false).candidate_id ===
+				selected.target_candidate_id,
+		);
+	const matched = matches.length === 1 ? matches[0] : undefined;
+	if (matched === undefined || matched.page.cdp_target_id === undefined) {
+		return emitFailure(
+			input,
+			preflightFailure(
+				"target_topology_target_mismatch",
+				"Fresh discovery did not resolve exactly one target matching the selected candidate.",
+				"Re-run handoff-bound target discovery and reselect the Browser Target before adopting.",
+			),
+			handoff.facts.runId,
+		);
+	}
+	const canonicalTargetId = matched.page.cdp_target_id;
+	const rawUrl = matched.page.url ?? "";
+	const url = safeUrl(rawUrl);
+	if (url === undefined || url.origin !== selected.display.origin) {
+		return emitFailure(
+			input,
+			preflightFailure(
+				"target_topology_target_mismatch",
+				"The selected target is no longer on the origin it was selected from.",
+				"Reselect the Browser Target; adoption never re-binds across an origin change.",
+			),
+			handoff.facts.runId,
+		);
+	}
+	if (!BROWSER_USE_CANONICAL_TARGET_ID_PATTERN.test(canonicalTargetId)) {
+		return emitFailure(
+			input,
+			preflightFailure(
+				"target_topology_target_mismatch",
+				"The adapter reported an unusable canonical target identity.",
+				"Re-run handoff-bound target discovery before adopting.",
+			),
+			handoff.facts.runId,
+		);
+	}
+
+	const store = await openCustodyStore(input);
+	if (!store.ok) return emitFailure(input, store.failure, handoff.facts.runId);
+	const authorityId = browserAuthorityIdOf(handoff.facts);
+	const targetRef = targetRefOf(canonicalTargetId);
+	let targetLease: TargetOperationLease | undefined;
+	// Adoption's first lease registers durable ownership of the target. Close
+	// recovery cannot reach it — that path admits `adapter-creation-receipt`
+	// ownership only — but a failed adoption should still not leave a claim
+	// behind that no state record names, so every path that does not end in a
+	// committed adoption hands the ownership back.
+	let keepOwnership = false;
+	let firstOwnership = false;
+	let outcome: TopologyOutcome;
+	try {
+		const acquired = await acquireTargetOperationLease(store.deps, {
+			authorityId,
+			runId: handoff.facts.runId,
+			adapterId: handoff.facts.adapter,
+			rawTargetId: canonicalTargetId,
+			operation: "adopt",
+			ttlMs: SELECTED_TARGET_STATE_TTL_MS,
+			ownershipEvidence: {
+				kind: "explicit-adoption",
+				adapter_id: handoff.facts.adapter,
+				run_id: handoff.facts.runId,
+				raw_target_id: canonicalTargetId,
+				target_envelope_id: targetEnvelopeId,
+				target_candidate_id: selected.target_candidate_id,
+				target_candidate_identity: {
+					kind: "adapter-page-id",
+					raw_adapter_page_id: matched.page.id ?? canonicalTargetId,
+				},
+			},
+		});
+		if (!acquired.ok) {
+			// No browser mutation has happened yet, so a refused lease leaves the
+			// target exactly as it was.
+			return emitFailure(
+				input,
+				{
+					...preflightFailure(
+						acquired.code,
+						acquired.message,
+						"Another run may hold this target; inspect custody before adopting it.",
+					),
+					recoverability: "repair_state",
+				},
+				handoff.facts.runId,
+			);
+		}
+		targetLease = acquired.lease;
+		firstOwnership = acquired.first_ownership;
+		const bound = await handoff.capability.run({
+			runtime: input.runtime,
+			handoff: exactTargetHandoff(handoff.facts),
+			action: {
+				kind: "bind-lifecycle",
+				target_id: canonicalTargetId,
+				expected_url: rawUrl,
+			},
+		});
+		if (!bound.ok || bound.kind !== "retain-lifecycle") {
+			// The bind sequence selects the tab before it proves the binding, so a
+			// refusal may have left the adapter session pointing somewhere. Release
+			// it rather than leaving an unnamed session behind, and report the
+			// focus side effect honestly.
+			const released = await releaseAdapterLifecycle(input, handoff);
+			outcome = failureOutcome(handoff.facts.runId, {
+				code: "target_topology_create_binding_failed",
+				message:
+					"The adapter could not retain exact-target lifecycle custody for the selected target.",
+				exitCode: RUNTIME_FAILURE_EXIT_CODE,
+				recoverability: released.released ? "retry" : "repair_state",
+				repairHint: released.released
+					? "Reselect the Browser Target and adopt again; no lifecycle was retained."
+					: "Inspect the adapter session; a lifecycle binding may still be held.",
+				effect: "not_started",
+				targetMutated: false,
+				targetPresent: true,
+				...(released.released
+					? {}
+					: { cleanupDebt: ["adapter-lifecycle-release-failed"] }),
+			});
+		} else {
+			const persisted = await persistAdoptedSelectedTargetState({
+				runtime: input.runtime,
+				path: statePath,
+				runId: handoff.facts.runId,
+				previous: selected,
+				previousRaw: selectedRaw,
+				targetRef,
+				retainedLifecycle: {
+					adapter_id: handoff.capability.adapter_id,
+					capability_id: handoff.capability.capability_id,
+					lifecycle_ref: bound.lifecycle_ref,
+				},
+			});
+			if (!persisted.ok) {
+				// The binding is live but nothing durable names it. Give it back
+				// rather than stranding a session no later command can release.
+				const released = await releaseAdapterLifecycle(input, handoff);
+				outcome = failureOutcome(handoff.facts.runId, {
+					code: "target_topology_state_write_failed",
+					message:
+						"The exact target was bound but run-scoped adoption state could not be committed.",
+					exitCode: RUNTIME_FAILURE_EXIT_CODE,
+					recoverability: released.released ? "repair_state" : "none",
+					repairHint: released.released
+						? "Repair the private selected-state path, then adopt again."
+						: "Inspect the adapter session; a lifecycle binding is held with no durable owner.",
+					effect: "not_started",
+					targetMutated: false,
+					targetPresent: true,
+					...(released.released
+						? {}
+						: { cleanupDebt: ["adapter-lifecycle-release-failed"] }),
+				});
+			} else {
+				keepOwnership = true;
+				outcome = successOutcome(handoff.facts.runId, {
+					effect: "confirmed",
+					// Adoption never creates, navigates, or closes anything. The one
+					// observable side effect is that binding the exact tab makes it
+					// current, which is reported rather than implied.
+					target_mutated: false,
+					target_present: true,
+					adapter: handoff.facts.adapter,
+					allowed_origin: url.origin,
+					target_candidate_id: selected.target_candidate_id,
+					ownership: { kind: "adopted-target", retained: true },
+					retained_lifecycle_confirmed: true,
+					focus: true,
+					qualification_eligible: false,
+				});
+			}
+		}
+	} catch {
+		// An unexpected fault leaves the binding effect unknown, so ownership is
+		// deliberately retained: `targets release` can still give it back, and
+		// retained ownership is what stops close-recovery from treating this
+		// target as a stray this run created.
+		keepOwnership = true;
+		outcome = failureOutcome(handoff.facts.runId, {
+			code: "target_topology_runtime_failed",
+			message: "An unexpected dependency failure interrupted target adoption.",
+			exitCode: RUNTIME_FAILURE_EXIT_CODE,
+			recoverability: "none",
+			repairHint:
+				"Inspect the adapter session and run-scoped state before adopting again; do not repeat blindly.",
+			effect: "unknown",
+			targetMutated: false,
+			targetPresent: "unknown",
+			cleanupDebt: ["adoption-effect-unknown"],
+		});
+	} finally {
+		if (!keepOwnership && firstOwnership) {
+			await releaseExactTargetOwnershipByRef(store.deps, {
+				authorityId,
+				runId: handoff.facts.runId,
+				targetRef,
+			});
+		}
+		if (targetLease !== undefined) {
+			await releaseTargetOperationLease(store.deps, targetLease);
+		}
+	}
+	return emitOutcome(input, outcome);
+}
+
+/**
+ * Give back a retained lifecycle binding without touching the adopted target.
+ *
+ * @param input - Parsed command, runtime, writers, and run identity
+ * @returns Process exit code
+ */
+export async function runTargetsRelease(input: TopologyInput): Promise<number> {
+	const handoffRead = await readTopologyHandoff(input);
+	if (!handoffRead.ok) return emitFailure(input, handoffRead.failure, input.runId);
+	const handoff = handoffRead.handoff;
+	const resolvedState = await resolveTopologyStatePath(input, handoff.facts.runId);
+	if (!resolvedState.ok)
+		return emitFailure(input, resolvedState.failure, handoff.facts.runId);
+	const statePath = resolvedState.path;
+	const loaded = await loadSelectedStateForCleanup(input.runtime, statePath, {
+		expectedRunId: handoff.facts.runId,
+	});
+	if (!loaded.ok) {
+		return emitFailure(
+			input,
+			{
+				...preflightFailure(
+					loaded.failure.code,
+					loaded.failure.message,
+					"Restore or repair the exact run-scoped state before releasing.",
+				),
+				recoverability: loaded.failure.recoverability,
+			},
+			handoff.facts.runId,
+		);
+	}
+	const selected = loaded.state;
+	const selectedRaw = loaded.raw;
+	if (selectedRaw === undefined) {
+		return emitFailure(
+			input,
+			preflightFailure(
+				"target_topology_state_unreadable",
+				"The run-scoped selected state could not be read for a compare-and-set write.",
+				"Repair the private selected-state path before releasing.",
+			),
+			handoff.facts.runId,
+		);
+	}
+	if (selected.ownership?.kind !== "adopted-target") {
+		return emitFailure(
+			input,
+			preflightFailure(
+				"target_topology_state_mismatch",
+				"No adopted target lifecycle is held by this run-scoped selection.",
+				selected.ownership?.kind === "created-target"
+					? "Use targets close for an open-created target; release only gives back an adopted binding."
+					: "Adopt a selected Browser Target before releasing it.",
+			),
+			handoff.facts.runId,
+		);
+	}
+	if (input.parsed.dryRun) {
+		return emitSuccess(input, handoff.facts.runId, {
+			effect: "not_started",
+			target_mutated: false,
+			adapter: handoff.facts.adapter,
+			planned_effect: "release-lifecycle-keep-target",
+		});
+	}
+	const store = await openCustodyStore(input);
+	if (!store.ok) return emitFailure(input, store.failure, handoff.facts.runId);
+	const released = await releaseAdapterLifecycle(input, handoff);
+	// The durable record is cleared even when the adapter release is unconfirmed:
+	// leaving a state that names a lifecycle nothing can prove would send every
+	// later operation down a target-local path with no live session behind it.
+	// The unconfirmed release is reported as debt instead.
+	const cleared = await persistReleasedSelectedTargetState({
+		runtime: input.runtime,
+		path: statePath,
+		runId: handoff.facts.runId,
+		previous: selected,
+		previousRaw: selectedRaw,
+	});
+	if (!cleared.ok) {
+		return emitFailure(
+			input,
+			{
+				...preflightFailure(
+					"target_topology_state_write_failed",
+					"The adopted lifecycle could not be cleared from run-scoped state.",
+					"Repair the private selected-state path; the adopted target itself was not touched.",
+				),
+				recoverability: "repair_state",
+				effect: released.released ? "confirmed" : "unknown",
+			},
+			handoff.facts.runId,
+		);
+	}
+	const ownershipReleased = await releaseExactTargetOwnershipByRef(store.deps, {
+		authorityId: browserAuthorityIdOf(handoff.facts),
+		runId: handoff.facts.runId,
+		targetRef: selected.ownership.target_ref,
+	});
+	return emitSuccess(input, handoff.facts.runId, {
+		effect: released.released ? "confirmed" : "unknown",
+		// Release never closes: the adopted target is the user's, and it stays.
+		target_mutated: false,
+		target_present: true,
+		adapter: handoff.facts.adapter,
+		lifecycle_released: released.released,
+		ownership_released: ownershipReleased.ok === true,
+		qualification_eligible: false,
+		...(released.released && ownershipReleased.ok === true
+			? {}
+			: {
+					cleanup_debt: [
+						...(released.released ? [] : ["adapter-lifecycle-release-failed"]),
+						...(ownershipReleased.ok === true
+							? []
+							: ["target-ownership-release-failed"]),
+					],
+				}),
+	});
+}
+
 export async function runTargetsClose(input: TopologyInput): Promise<number> {
 	const handoffRead = await readTopologyHandoff(input);
 	if (!handoffRead.ok)
@@ -1367,6 +1890,20 @@ export async function runTargetsClose(input: TopologyInput): Promise<number> {
 				),
 				recoverability: loaded.failure.recoverability,
 			},
+			handoff.facts.runId,
+		);
+	}
+	// Close is for a target THIS run opened. An adopted target belongs to the
+	// user, so it must never fall through to registry recovery, which would
+	// resolve this run's owned target ref and close a tab the run never opened.
+	if (loaded.ok && loaded.state.ownership?.kind === "adopted-target") {
+		return emitFailure(
+			input,
+			preflightFailure(
+				"target_topology_state_mismatch",
+				"The selected target was adopted, not opened by this run, so it must not be closed.",
+				"Use targets release to give back the adopted lifecycle; the target itself stays open.",
+			),
 			handoff.facts.runId,
 		);
 	}
@@ -1418,11 +1955,14 @@ export async function runTargetsClose(input: TopologyInput): Promise<number> {
 	const store = await openCustodyStore(input);
 	if (!store.ok) return emitFailure(input, store.failure, handoff.facts.runId);
 	const authorityId = browserAuthorityIdOf(handoff.facts);
-	const recoveryOwners = await ownedTargetRefsForRun(store.deps, {
-		authorityId,
-		runId: handoff.facts.runId,
-		adapterId: handoff.facts.adapter,
-	});
+	const recoveryOwners =
+		createdState === undefined
+			? await ownedTargetRefsForRun(store.deps, {
+					authorityId,
+					runId: handoff.facts.runId,
+					adapterId: handoff.facts.adapter,
+				})
+			: { ok: true as const, targetRefs: [] as readonly string[] };
 	if (!recoveryOwners.ok) {
 		return emitFailure(
 			input,
@@ -1441,9 +1981,7 @@ export async function runTargetsClose(input: TopologyInput): Promise<number> {
 		createdState?.ownership?.target_ref ?? recoveryOwners.targetRefs[0];
 	if (
 		targetRef === undefined ||
-		(createdState === undefined && recoveryOwners.targetRefs.length !== 1) ||
-		(createdState !== undefined &&
-			!recoveryOwners.targetRefs.includes(createdState.ownership!.target_ref))
+		(createdState === undefined && recoveryOwners.targetRefs.length !== 1)
 	) {
 		return emitFailure(
 			input,
@@ -1459,7 +1997,9 @@ export async function runTargetsClose(input: TopologyInput): Promise<number> {
 		store.deps,
 		{ authorityId, runId: handoff.facts.runId, targetRef },
 	);
-	const registryOwnership = await hasExactCreatedTargetOwnership(store.deps, {
+	const registryOwnership = await (createdState === undefined
+		? hasExactCreatedTargetOwnership
+		: hasExactTargetOwnership)(store.deps, {
 		authorityId,
 		runId: handoff.facts.runId,
 		adapterId: handoff.facts.adapter,
@@ -1477,6 +2017,17 @@ export async function runTargetsClose(input: TopologyInput): Promise<number> {
 		);
 	}
 	const registryOwnerPresent = registryOwnership.owned;
+	if (createdState !== undefined && !registryOwnerPresent) {
+		return emitFailure(
+			input,
+			preflightFailure(
+				"target_topology_recovery_owner_mismatch",
+				"The selected target state has no matching exact custody owner for this run.",
+				"Repair the selected state or custody registry before retrying close.",
+			),
+			handoff.facts.runId,
+		);
+	}
 	const targets = await listNativeTargets(input, handoff);
 	if (targets === undefined) {
 		return releaseLifecycleAndEmit(

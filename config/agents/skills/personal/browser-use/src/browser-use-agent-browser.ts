@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
-import { isAbsolute } from "node:path";
+import { chmod, mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { isAbsolute, join } from "node:path";
 import type {
 	AdapterSessionReleaseDebt,
 } from "@side-quest/browser-connect/adapters";
 import type { BrowserConnectHandoffPayload } from "@side-quest/browser-connect/contract";
+import { emitCliDiagnostic } from "@side-quest/cli-command-facade";
 import { TRANSPORT_STDIN_MAX_BYTES } from "@side-quest/mcporter-transport";
 import type { BrowserUseItemBinding } from "./browser-use-auth-bindings";
 import type { BrowserUseAuthMethodStep } from "./browser-use-auth-model";
@@ -50,12 +53,21 @@ import {
 	SAFE_TAB_ID,
 } from "./browser-use-identifiers";
 import { safeJsonObject, isJsonObject, type RawPage } from "./browser-use-core";
-import { targetOperationPlanMatchesBoundOrigin } from "./browser-use-target-operations";
+import {
+	BROWSER_USE_TARGET_OPERATION_MAX_EVIDENCE_BYTES,
+	buildBrowserUseStorybookDocumentDiagnostic,
+	parseBrowserUseTargetOperationEvidence,
+	targetOperationPlanMatchesBoundOrigin,
+} from "./browser-use-target-operations";
 import type {
 	BrowserUseTargetOperationAdapterRequest,
+	BrowserUseTargetOperationBaseline,
+	BrowserUseTargetOperationCleanupEvidence,
 	BrowserUseTargetOperationCleanupMethod,
+	BrowserUseTargetOperationFailureDetail,
+	BrowserUseTargetOperationInspectStepV2,
+	BrowserUseTargetOperationInspectStepV3,
 	BrowserUseTargetOperationResult,
-	BrowserUseTargetOperationStep,
 	BrowserUseTargetOperationStepOutcome,
 } from "./browser-use-target-operations";
 
@@ -73,6 +85,9 @@ const METHOD_STEP_BY_FIELD: Readonly<
 	"otp-current": "fill-otp",
 };
 const COMMAND_TIMEOUT_MS = 30_000;
+const STORYBOOK_TERMINAL_READINESS_TIMEOUT_MS = 28_000;
+const STORYBOOK_TERMINAL_READINESS_SELECTOR =
+	'[data-path-parity-catalogue-version][data-path-parity-interactions-ready="true"][data-path-parity-play-status="complete"],body.sb-show-nopreview,body.sb-show-errordisplay';
 const SAFE_REF = /^@e[1-9][0-9]*$/;
 
 /** Adapter-owned proof that one retained session is the exact run session. */
@@ -95,7 +110,8 @@ export type AgentBrowserTopologyAction =
 	| { kind: "list" }
 	| { kind: "create"; url: string }
 	| { kind: "close"; targetId: string }
-	| { kind: "pin"; targetId: string };
+	| { kind: "pin"; targetId: string; expectedUrl: string }
+	| { kind: "bind"; targetId: string; expectedUrl: string };
 
 export type AgentBrowserTopologyResult =
 	| { ok: true; kind: "list"; tabs: readonly AgentBrowserTopologyTab[] }
@@ -219,57 +235,228 @@ function topologyNativeData(result: McporterCommandResult): Record<string, unkno
 		: undefined;
 }
 
-/**
- * Canonical Agent Browser target-topology mechanics. Browser Use topology owns
- * policy and custody; this adapter module alone owns native argv, parsing,
- * pinning, and session addressing.
- */
-export async function runAgentBrowserTargetTopology(input: {
-	runtime: AgentBrowserExecutionRuntime;
-	handoff: { probeExecutable: string; endpointWs: string; runId: string };
-	action: AgentBrowserTopologyAction;
-}): Promise<AgentBrowserTopologyResult> {
-	const sessionName = deriveSessionName(input.handoff.runId);
-	const nativeArgs =
-		input.action.kind === "list"
-			? ["tab", "list", "--json"]
-			: input.action.kind === "create"
-				? ["tab", "new", input.action.url, "--json"]
-				: input.action.kind === "close"
-					? ["tab", "close", input.action.targetId, "--json"]
-					: ["--pin-tab", "tab", input.action.targetId, "--json"];
-	const invoke = async (args: readonly string[]) => {
-		try {
-			return topologyNativeData(
-				await input.runtime.runCommand({
-					command: input.handoff.probeExecutable,
-					args: ["--cdp", input.handoff.endpointWs, "--session", sessionName, ...args],
-					timeoutMs: COMMAND_TIMEOUT_MS,
-				}),
-			);
-		} catch {
-			return undefined;
-		}
-	};
+type AgentBrowserTopologyNativeFailureClass =
+	| "cdp-connection-failed"
+	| "daemon-unavailable"
+	| "session-invalid"
+	| "tab-gone"
+	| "target-connection-refused"
+	| "unclassified";
 
-	const data = await invoke(nativeArgs);
-	if (data === undefined) return { ok: false, code: "agent_browser_topology_unconfirmed" };
-	if (input.action.kind === "create") return { ok: true, kind: "create", data };
-	if (input.action.kind === "close") return { ok: true, kind: "close", confirmed: true };
-	if (input.action.kind === "pin") {
-		const pinned = await invoke(["--pin-tab", "tab", "list", "--json"]);
-		if (!Array.isArray(pinned?.tabs)) {
-			return { ok: false, code: "agent_browser_topology_unconfirmed" };
-		}
-		const active = pinned.tabs
-			.filter((tab) => isJsonObject(tab) && tab.active === true)
-			.map((tab) => (isJsonObject(tab) ? tab.targetId : undefined))
-			.filter((value): value is string => typeof value === "string" && SAFE_TAB_ID.test(value));
-		return active.length === 1 && active[0] === input.action.targetId
-			? { ok: true, kind: "pin", sessionName }
-			: { ok: false, code: "agent_browser_topology_unconfirmed" };
+const AGENT_BROWSER_TOPOLOGY_ERROR_TERMS = [
+	"browser",
+	"cdp",
+	"closed",
+	"connect",
+	"daemon",
+	"endpoint",
+	"invalid",
+	"launch",
+	"page",
+	"protocol",
+	"refused",
+	"renderer",
+	"session",
+	"socket",
+	"tab",
+	"target",
+	"timeout",
+	"websocket",
+] as const;
+
+function nativeEnvelopeError(raw: string): string | undefined {
+	const envelope = safeJsonObject(raw);
+	return typeof envelope?.error === "string" ? envelope.error : undefined;
+}
+
+function exactHref(value: string): string | undefined {
+	try {
+		return new URL(value).href;
+	} catch {
+		return undefined;
 	}
-	if (!Array.isArray(data.tabs)) return { ok: false, code: "agent_browser_topology_unconfirmed" };
+}
+
+function exactOrigin(value: string): string | undefined {
+	try {
+		return new URL(value).origin;
+	} catch {
+		return undefined;
+	}
+}
+
+/** Sanitized identity of one adapter tab: the id pair, never the URL. */
+type AgentBrowserTabIdentity = {
+	readonly tabId: string;
+	readonly targetId: string;
+};
+
+type CurrentTabResolution =
+	| { ok: true; identity: AgentBrowserTabIdentity }
+	| { ok: false; reason: "current-tab-ambiguous" | "current-tab-unconfirmed" };
+
+/**
+ * Name the one tab an inventory reports as current.
+ *
+ * Identity is the (tabId, targetId) pair. The URL is deliberately not consulted
+ * here: a page can rewrite its own URL the moment it loads, so a URL match is a
+ * race, not an identity.
+ */
+function resolveCurrentTab(
+	tabs: readonly AgentBrowserTopologyTab[],
+): CurrentTabResolution {
+	const active = tabs.filter((tab) => tab.active === true);
+	if (active.length > 1) return { ok: false, reason: "current-tab-ambiguous" };
+	const current = active[0];
+	if (current === undefined) {
+		return { ok: false, reason: "current-tab-unconfirmed" };
+	}
+	return {
+		ok: true,
+		identity: { tabId: current.tabId, targetId: current.targetId },
+	};
+}
+
+function topologyCleanupRunId(runId: string): string {
+	return `topology-cleanup-${createHash("sha256").update(runId).digest("hex").slice(0, 24)}`;
+}
+
+/**
+ * A CDP transport fault names the protocol or its socket. The bare term
+ * `connect` does not: a refused navigation to the requested target origin
+ * carries it too, so `connect` alone must never imply CDP.
+ */
+function isCdpTransportError(error: string | undefined): boolean {
+	return (
+		error !== undefined &&
+		(error.includes("cdp") ||
+			error.includes("devtools") ||
+			error.includes("websocket"))
+	);
+}
+
+function isConnectionRefusedError(error: string | undefined): boolean {
+	return (
+		error !== undefined &&
+		(error.includes("econnrefused") || error.includes("connection refused"))
+	);
+}
+
+function cdpEndpointAuthority(endpointWs: string): string | undefined {
+	try {
+		return new URL(endpointWs).host.toLowerCase();
+	} catch {
+		return undefined;
+	}
+}
+
+function classifyTargetTopologyNativeFailure(
+	result: McporterCommandResult,
+	cdpAuthority?: string,
+): {
+	failureClass: AgentBrowserTopologyNativeFailureClass;
+	errorTerms: readonly string[];
+} {
+	const rawValues = [result.stdout, result.stderr];
+	if (rawValues.some((raw) => nativeEnvelopeCode(raw) === "tab_gone")) {
+		return { failureClass: "tab-gone", errorTerms: ["tab", "target"] };
+	}
+	const error = rawValues
+		.map(nativeEnvelopeError)
+		.find((value): value is string => value !== undefined)
+		?.toLowerCase();
+	const errorTerms = error === undefined
+		? []
+		: AGENT_BROWSER_TOPOLOGY_ERROR_TERMS.filter((term) => error.includes(term));
+	if (error?.includes("session") && error.includes("invalid")) {
+		return { failureClass: "session-invalid", errorTerms };
+	}
+	if (error?.includes("daemon") || error?.includes("socket")) {
+		return { failureClass: "daemon-unavailable", errorTerms };
+	}
+	if (isCdpTransportError(error)) {
+		return { failureClass: "cdp-connection-failed", errorTerms };
+	}
+	if (isConnectionRefusedError(error)) {
+		// A refusal naming the verified CDP authority is a transport fault. Any
+		// other authority is the requested target origin refusing the load, and
+		// belongs to the target, not to Browser Connect.
+		return {
+			failureClass:
+				cdpAuthority !== undefined && error?.includes(cdpAuthority)
+					? "cdp-connection-failed"
+					: "target-connection-refused",
+			errorTerms,
+		};
+	}
+	return { failureClass: "unclassified", errorTerms };
+}
+
+function emitTargetTopologyFailure(
+	action: AgentBrowserTopologyAction["kind"],
+	phase: "native-command" | "native-envelope" | "inventory",
+	reason:
+		| "command-failed"
+		| "current-tab-ambiguous"
+		| "current-tab-identity-drift"
+		| "current-tab-origin-mismatch"
+		| "current-tab-ref-changed"
+		| "current-tab-unconfirmed"
+		| "dependency-failed"
+		| "invalid-envelope"
+		| "invalid-page-row"
+		| "missing-tabs"
+		| "session-release-failed"
+		| "timed-out",
+	nativeFailureClass?: AgentBrowserTopologyNativeFailureClass,
+	nativeErrorTerms: readonly string[] = [],
+): void {
+	emitCliDiagnostic(
+		["browser-use.cli", "agent-browser"],
+		"debug",
+		"target-topology-unconfirmed",
+		{
+			action_kind: action,
+			operation_phase: phase,
+			failure_class: reason,
+			...(nativeFailureClass === undefined
+				? {}
+				: { native_failure_class: nativeFailureClass }),
+			...(nativeErrorTerms.length === 0
+				? {}
+				: { native_error_terms: nativeErrorTerms }),
+		},
+	);
+}
+
+/**
+ * Record that the fallback adoption bound the target.
+ *
+ * Emitted only from the fallback success branch, after identity and origin are
+ * proven, so its presence is the signal and its absence means the native create
+ * already carried its own binding. Debug stderr only: the machine result is
+ * unchanged, and the payload is a bounded vocabulary carrying no url, id,
+ * session name, or endpoint.
+ */
+function emitTargetTopologyFallbackAdoption(
+	action: AgentBrowserTopologyAction["kind"],
+): void {
+	emitCliDiagnostic(
+		["browser-use.cli", "agent-browser"],
+		"debug",
+		"target-topology-fallback-adopted",
+		{ action_kind: action, operation_phase: "inventory" },
+	);
+}
+
+function parseAgentBrowserTopologyTabs(
+	action: AgentBrowserTopologyAction["kind"],
+	data: Record<string, unknown>,
+): readonly AgentBrowserTopologyTab[] | undefined {
+	if (!Array.isArray(data.tabs)) {
+		emitTargetTopologyFailure(action, "inventory", "missing-tabs");
+		return undefined;
+	}
 	const tabs: AgentBrowserTopologyTab[] = [];
 	const targetIds = new Set<string>();
 	for (const raw of data.tabs) {
@@ -283,7 +470,8 @@ export async function runAgentBrowserTargetTopology(input: {
 			!SAFE_TAB_ID.test(tab.targetId) ||
 			targetIds.has(tab.targetId)
 		) {
-			return { ok: false, code: "agent_browser_topology_unconfirmed" };
+			emitTargetTopologyFailure(action, "inventory", "invalid-page-row");
+			return undefined;
 		}
 		targetIds.add(tab.targetId);
 		tabs.push({
@@ -294,6 +482,292 @@ export async function runAgentBrowserTargetTopology(input: {
 			...(typeof tab.active === "boolean" ? { active: tab.active } : {}),
 		});
 	}
+	return tabs;
+}
+
+/**
+ * Canonical Agent Browser target-topology mechanics. Browser Use topology owns
+ * policy and custody; this adapter module alone owns native argv, parsing,
+ * pinning, and session addressing.
+ */
+export async function runAgentBrowserTargetTopology(input: {
+	runtime: AgentBrowserExecutionRuntime;
+	handoff: { probeExecutable: string; endpointWs: string; runId: string };
+	action: AgentBrowserTopologyAction;
+}): Promise<AgentBrowserTopologyResult> {
+	const usesCleanupSession =
+		input.action.kind === "list" || input.action.kind === "close";
+	const sessionRunId = usesCleanupSession
+		? topologyCleanupRunId(input.handoff.runId)
+		: input.handoff.runId;
+	const sessionName = deriveSessionName(sessionRunId);
+	let cleanupRuntimeDir: string | undefined;
+	if (usesCleanupSession) {
+		try {
+			const baseDirectory = process.platform === "win32" ? tmpdir() : "/tmp";
+			cleanupRuntimeDir = await mkdtemp(join(baseDirectory, "browser-use-topology-"));
+			await chmod(cleanupRuntimeDir, 0o700);
+		} catch {
+			emitTargetTopologyFailure(input.action.kind, "native-command", "dependency-failed");
+			return { ok: false, code: "agent_browser_topology_unconfirmed" };
+		}
+	}
+	const invoke = async (args: readonly string[]) => {
+		let data: Record<string, unknown> | undefined;
+		try {
+			const result = await input.runtime.runCommand({
+					command: input.handoff.probeExecutable,
+					args: ["--cdp", input.handoff.endpointWs, "--session", sessionName, ...args],
+					env:
+						cleanupRuntimeDir === undefined
+							? undefined
+							: {
+									AGENT_BROWSER_SOCKET_DIR: cleanupRuntimeDir,
+									MCPORTER_NO_KEEPALIVE: "*",
+								},
+					timeoutMs: COMMAND_TIMEOUT_MS,
+				});
+			if (result.timedOut === true) {
+				emitTargetTopologyFailure(input.action.kind, "native-command", "timed-out");
+			} else if (result.exitCode !== 0) {
+				const failure = classifyTargetTopologyNativeFailure(
+					result,
+					cdpEndpointAuthority(input.handoff.endpointWs),
+				);
+				emitTargetTopologyFailure(
+					input.action.kind,
+					"native-command",
+					"command-failed",
+					failure.failureClass,
+					failure.errorTerms,
+				);
+			} else {
+				data = topologyNativeData(result);
+				if (data === undefined) {
+					emitTargetTopologyFailure(
+						input.action.kind,
+						"native-envelope",
+						"invalid-envelope",
+					);
+				}
+			}
+		} catch {
+			emitTargetTopologyFailure(input.action.kind, "native-command", "dependency-failed");
+		}
+		if (usesCleanupSession) {
+			const release = await releaseAgentBrowserSession({
+				env: { AGENT_BROWSER_SOCKET_DIR: cleanupRuntimeDir },
+				runCommand: input.runtime.runCommand,
+				probeExecutable: input.handoff.probeExecutable,
+				runId: sessionRunId,
+			}).catch(() => ({ released: false as const }));
+			if (!release.released) {
+				emitTargetTopologyFailure(
+					input.action.kind,
+					"native-command",
+					"session-release-failed",
+				);
+				return undefined;
+			}
+			try {
+				await rm(cleanupRuntimeDir as string, { recursive: true, force: true });
+			} catch {
+				emitTargetTopologyFailure(
+					input.action.kind,
+					"native-command",
+					"session-release-failed",
+				);
+				return undefined;
+			}
+		}
+		return data;
+	};
+
+	// `bind` retains lifecycle custody of a target this run did NOT create.
+	//
+	// It is deliberately a THREE-call sequence, and the order is the contract:
+	//
+	//   1. UNPINNED `tab <targetId>`  — a pinned session with no binding opens a
+	//      fresh tab instead of adopting an existing one, so the exact tab must
+	//      be selected before the binding is made strict.
+	//   2. PINNED `tab list`          — proves the strict binding landed on the
+	//      exact canonical target and nothing else is current.
+	//   3. PINNED `get url`           — proves the bound tab is still the exact
+	//      expected page.
+	//
+	// Identity is proven before content: a wrong-tab binding is refused at step
+	// 2, before any page read. `pin` (post-create) keeps its own single-read
+	// shape; this action never reuses it, because a created target's session is
+	// already bound and an adopted target's session is not.
+	if (input.action.kind === "bind") {
+		const selected = await invoke(["tab", input.action.targetId, "--json"]);
+		if (selected === undefined) {
+			return { ok: false, code: "agent_browser_topology_unconfirmed" };
+		}
+		const inventory = await invoke(["--pin-tab", "tab", "list", "--json"]);
+		if (inventory === undefined) {
+			return { ok: false, code: "agent_browser_topology_unconfirmed" };
+		}
+		const boundTabs = parseAgentBrowserTopologyTabs(input.action.kind, inventory);
+		if (boundTabs === undefined) {
+			return { ok: false, code: "agent_browser_topology_unconfirmed" };
+		}
+		const current = resolveCurrentTab(boundTabs);
+		if (!current.ok) {
+			emitTargetTopologyFailure(input.action.kind, "inventory", current.reason);
+			return { ok: false, code: "agent_browser_topology_unconfirmed" };
+		}
+		if (current.identity.targetId !== input.action.targetId) {
+			emitTargetTopologyFailure(
+				input.action.kind,
+				"inventory",
+				"current-tab-identity-drift",
+			);
+			return { ok: false, code: "agent_browser_topology_unconfirmed" };
+		}
+		const urlData = await invoke(["--pin-tab", "get", "url", "--json"]);
+		if (urlData === undefined) {
+			return { ok: false, code: "agent_browser_topology_unconfirmed" };
+		}
+		const observed =
+			typeof urlData.url === "string" ? exactHref(urlData.url) : undefined;
+		if (observed === undefined || observed !== exactHref(input.action.expectedUrl)) {
+			emitTargetTopologyFailure(
+				input.action.kind,
+				"inventory",
+				"current-tab-origin-mismatch",
+			);
+			return { ok: false, code: "agent_browser_topology_unconfirmed" };
+		}
+		return { ok: true, kind: "pin", sessionName };
+	}
+
+	const nativeArgs =
+		input.action.kind === "list"
+			? ["tab", "list", "--json"]
+			: input.action.kind === "create"
+				? ["--pin-tab", "tab", "new", input.action.url, "--json"]
+				: input.action.kind === "close"
+					? ["tab", "close", input.action.targetId, "--json"]
+					: ["--pin-tab", "get", "url", "--json"];
+	const data = await invoke(nativeArgs);
+	if (data === undefined) return { ok: false, code: "agent_browser_topology_unconfirmed" };
+	if (input.action.kind === "create") {
+		let targetId =
+			typeof data.targetId === "string" && SAFE_TAB_ID.test(data.targetId)
+				? data.targetId
+				: undefined;
+		if (targetId === undefined) {
+			// A receiptless create must still name exactly which tab it acted on.
+			// Identity is carried as the (tabId, targetId) pair through
+			// adopt-then-pin on ONE session:
+			//
+			//   step 1  unpinned `tab list` -> the session names the current tab
+			//   step 2  pinned   `tab list` -> the same session makes it strict
+			//
+			// The URL is never the identity. A page can rewrite its own URL the
+			// instant it loads, so comparing hrefs loses the tab the open just
+			// acted on. The requested ORIGIN is still checked, as the minimal
+			// tie between the adopted tab and the request that survives a
+			// same-origin rewrite.
+			const expectedOrigin = exactOrigin(input.action.url);
+			if (expectedOrigin === undefined) {
+				emitTargetTopologyFailure(
+					input.action.kind,
+					"inventory",
+					"current-tab-unconfirmed",
+				);
+				return { ok: false, code: "agent_browser_topology_unconfirmed" };
+			}
+			const adoptedInventory = await invoke(["tab", "list", "--json"]);
+			if (adoptedInventory === undefined) {
+				return { ok: false, code: "agent_browser_topology_unconfirmed" };
+			}
+			const adoptedTabs = parseAgentBrowserTopologyTabs(
+				input.action.kind,
+				adoptedInventory,
+			);
+			if (adoptedTabs === undefined) {
+				return { ok: false, code: "agent_browser_topology_unconfirmed" };
+			}
+			const adopted = resolveCurrentTab(adoptedTabs);
+			if (!adopted.ok) {
+				emitTargetTopologyFailure(
+					input.action.kind,
+					"inventory",
+					adopted.reason,
+				);
+				return { ok: false, code: "agent_browser_topology_unconfirmed" };
+			}
+			const pinnedInventory = await invoke(["--pin-tab", "tab", "list", "--json"]);
+			if (pinnedInventory === undefined) {
+				return { ok: false, code: "agent_browser_topology_unconfirmed" };
+			}
+			const pinnedTabs = parseAgentBrowserTopologyTabs(
+				input.action.kind,
+				pinnedInventory,
+			);
+			if (pinnedTabs === undefined) {
+				return { ok: false, code: "agent_browser_topology_unconfirmed" };
+			}
+			const pinned = resolveCurrentTab(pinnedTabs);
+			if (!pinned.ok) {
+				emitTargetTopologyFailure(input.action.kind, "inventory", pinned.reason);
+				return { ok: false, code: "agent_browser_topology_unconfirmed" };
+			}
+			// A changed canonical target id means the session moved to another
+			// tab. An equal target id under a changed tab reference means the
+			// adapter re-derived its handle, which is not the same binding.
+			if (pinned.identity.targetId !== adopted.identity.targetId) {
+				emitTargetTopologyFailure(
+					input.action.kind,
+					"inventory",
+					"current-tab-identity-drift",
+				);
+				return { ok: false, code: "agent_browser_topology_unconfirmed" };
+			}
+			if (pinned.identity.tabId !== adopted.identity.tabId) {
+				emitTargetTopologyFailure(
+					input.action.kind,
+					"inventory",
+					"current-tab-ref-changed",
+				);
+				return { ok: false, code: "agent_browser_topology_unconfirmed" };
+			}
+			const confirmed = pinnedTabs.find(
+				(tab) => tab.targetId === pinned.identity.targetId,
+			);
+			if (
+				confirmed === undefined ||
+				exactOrigin(confirmed.url) !== expectedOrigin
+			) {
+				emitTargetTopologyFailure(
+					input.action.kind,
+					"inventory",
+					"current-tab-origin-mismatch",
+				);
+				return { ok: false, code: "agent_browser_topology_unconfirmed" };
+			}
+			emitTargetTopologyFallbackAdoption(input.action.kind);
+			targetId = pinned.identity.targetId;
+		}
+		return {
+			ok: true,
+			kind: "create",
+			data: { ...data, targetId, targetDisposition: "adopted-current" },
+		};
+	}
+	if (input.action.kind === "close") return { ok: true, kind: "close", confirmed: true };
+	if (input.action.kind === "pin") {
+		const observed = typeof data.url === "string" ? exactHref(data.url) : undefined;
+		const expected = exactHref(input.action.expectedUrl);
+		return observed !== undefined && observed === expected
+			? { ok: true, kind: "pin", sessionName }
+			: { ok: false, code: "agent_browser_topology_unconfirmed" };
+	}
+	const tabs = parseAgentBrowserTopologyTabs(input.action.kind, data);
+	if (tabs === undefined)
+		return { ok: false, code: "agent_browser_topology_unconfirmed" };
 	return { ok: true, kind: "list", tabs };
 }
 
@@ -303,10 +777,13 @@ function targetPlanFailure(
 		| "target_operation_plan_failed"
 		| "target_operation_plan_unsupported"
 		| "target_operation_cleanup_incomplete"
-		| "target_operation_origin_mismatch",
+		| "target_operation_origin_mismatch"
+		| "target_operation_evidence_invalid"
+		| "target_operation_evidence_truncated",
 	message: string,
 	steps: readonly BrowserUseTargetOperationStepOutcome[] = [],
 	cleanup = { attempted: false, closed: false, visible_owned_surface_count: 0 },
+	failureDetail?: BrowserUseTargetOperationFailureDetail,
 ): BrowserUseTargetOperationResult {
 	return {
 		ok: false,
@@ -315,15 +792,242 @@ function targetPlanFailure(
 		scope: "target-local",
 		focus: false,
 		capability_id: "agent-browser.exact-target-no-focus.v1",
+		plan_schema_version: request.plan.schema_version,
 		plan_digest: request.plan_digest,
+		plan_step_count: request.plan.steps.length,
 		steps,
 		cleanup,
+		...(failureDetail === undefined ? {} : { failure_detail: failureDetail }),
 	};
+}
+
+function targetEvidenceFailureAtStep(
+	index: number,
+	detail: BrowserUseTargetOperationFailureDetail,
+): BrowserUseTargetOperationFailureDetail {
+	return {
+		reason: detail.reason,
+		pointer: `/steps/${index}/inspect${detail.pointer}`,
+	};
+}
+
+function postReadinessFailureAtStep(
+	index: number,
+	reason: "target_custody_failed" | "exact_target_proof_failed",
+	proofReason?: Exclude<AgentBrowserExactTargetProofReason, "initial_active_target_attribution_failed">,
+): BrowserUseTargetOperationFailureDetail {
+	return {
+		reason,
+		pointer: reason === "target_custody_failed"
+			? `/steps/${index}/inspect/post-readiness`
+			: `/steps/${index}/inspect/post-readiness/${proofReason ?? "url_read_failed"}`,
+	};
+}
+
+type AgentBrowserPlayStatusClassification =
+	| "complete"
+	| "running"
+	| "failed"
+	| "missing"
+	| "invalid";
+type AgentBrowserPlaySettlementClassification =
+	| "sufficient"
+	| "insufficient"
+	| "missing"
+	| "invalid";
+type AgentBrowserPlayOverlayClassification = "zero" | "nonzero" | "missing" | "invalid";
+type AgentBrowserReadinessWaitClassification =
+	| "confirmed"
+	| "timed-out"
+	| "failed"
+	| "unavailable";
+type AgentBrowserPlayCheckpointClassification = number | "missing" | "invalid";
+
+const AGENT_BROWSER_PLAY_STATUS_VALUES = ["complete", "running", "failed"] as const;
+
+function classifyPlayStatus(value: unknown): AgentBrowserPlayStatusClassification {
+	if (value === undefined || value === null || value === "missing") return "missing";
+	return typeof value === "string" && (AGENT_BROWSER_PLAY_STATUS_VALUES as readonly string[]).includes(value)
+		? value as AgentBrowserPlayStatusClassification
+		: "invalid";
+}
+
+function classifyPlaySettlementFrames(value: unknown): AgentBrowserPlaySettlementClassification {
+	if (value === undefined || value === null) return "missing";
+	if (!Number.isSafeInteger(value) || (value as number) < 0) return "invalid";
+	return (value as number) >= 2 ? "sufficient" : "insufficient";
+}
+
+function classifyPlayVisibleOwnedOverlays(value: unknown): AgentBrowserPlayOverlayClassification {
+	if (value === undefined || value === null) return "missing";
+	if (!Number.isSafeInteger(value) || (value as number) < 0) return "invalid";
+	return value === 0 ? "zero" : "nonzero";
+}
+
+function classifyReadinessWait(
+	readinessWait: AgentBrowserNativeResult | undefined,
+): AgentBrowserReadinessWaitClassification {
+	if (readinessWait === undefined) return "unavailable";
+	if (readinessWait.ok) return "confirmed";
+	return readinessWait.timed_out === true ? "timed-out" : "failed";
+}
+
+function classifyPlayCheckpoint(value: unknown): AgentBrowserPlayCheckpointClassification {
+	if (value === undefined || value === null || value === "missing") return "missing";
+	if (!Number.isSafeInteger(value) || (value as number) < 0 || (value as number) > 255) return "invalid";
+	return value as number;
+}
+
+function emitPlayReadinessFailureDiagnostic(
+	value: unknown,
+	index: number,
+	readinessWait: AgentBrowserNativeResult | undefined,
+	checkpoint: unknown,
+): void {
+	const evidence = isJsonObject(value) ? value : undefined;
+	const rawPlayReadiness = evidence?.play_readiness;
+	const playReadiness = isJsonObject(rawPlayReadiness) ? rawPlayReadiness : undefined;
+	emitCliDiagnostic(
+		["browser-use.cli", "agent-browser"],
+		"error",
+		"target-plan-play-readiness-failed",
+		{
+			operation_phase: "target-plan",
+			step_index: index,
+			step_kind: "inspect",
+			play_status: rawPlayReadiness !== undefined && rawPlayReadiness !== null && !isJsonObject(rawPlayReadiness)
+				? "invalid"
+				: classifyPlayStatus(playReadiness?.status),
+			error_present: playReadiness?.error !== undefined && playReadiness.error !== null,
+			settlement_frames: classifyPlaySettlementFrames(playReadiness?.settlement_frames),
+			visible_owned_overlays: classifyPlayVisibleOwnedOverlays(playReadiness?.visible_owned_overlays),
+			interactions_ready: evidence?.interactions_ready === true,
+			readiness_wait: classifyReadinessWait(readinessWait),
+			play_checkpoint: classifyPlayCheckpoint(checkpoint),
+		},
+	);
 }
 
 function planEnvelopeData(stdout: string): unknown | undefined {
 	const envelope = safeJsonObject(stdout);
 	return envelope?.success === true ? envelope.data : undefined;
+}
+
+type AgentBrowserNativeFailureReason = "command_failed" | "tab_gone";
+
+type AgentBrowserNativeResult =
+	| { ok: true; result: McporterCommandResult; data: unknown }
+	| { ok: false; reason: AgentBrowserNativeFailureReason; timed_out?: boolean };
+
+type AgentBrowserExactTargetProofReason =
+	| "initial_active_target_attribution_failed"
+	| "tab_gone"
+	| "url_read_failed"
+	| "url_shape_failed"
+	| "origin_mismatch"
+	| "exact_url_mismatch";
+
+/**
+ * Sanitized shape of one post-navigation URL read that failed byte-exact
+ * equality. Reports structure only: never a URL, query value, or fragment.
+ */
+type AgentBrowserUrlMismatchRead = {
+	attempt: number;
+	origin_equal: boolean;
+	path_equal: boolean;
+	query_key_set_equal: boolean;
+	query_keys_only_in_actual: readonly string[];
+	query_keys_only_in_expected: readonly string[];
+	normalized_href_equal: boolean;
+	length_delta: number;
+};
+
+/**
+ * Separates a semantic URL rewrite (`normalized_href_equal` true) from a
+ * document that never arrived inside the read budget (false).
+ */
+type AgentBrowserUrlMismatchShape = {
+	reads: readonly AgentBrowserUrlMismatchRead[];
+	converged_by_final_read: boolean;
+};
+
+const URL_MISMATCH_MAX_KEYS = 8;
+const URL_MISMATCH_MAX_KEY_LENGTH = 64;
+const URL_MISMATCH_MAX_LENGTH_DELTA = 1024;
+
+function normalizedHref(url: URL): string {
+	const normalized = new URL(url.href);
+	normalized.hash = "";
+	normalized.searchParams.sort();
+	return normalized.href;
+}
+
+function queryKeysOnlyIn(from: URL, other: URL): string[] {
+	const exclude = new Set(other.searchParams.keys());
+	return [...new Set(from.searchParams.keys())]
+		.filter((key) => !exclude.has(key) && key.length <= URL_MISMATCH_MAX_KEY_LENGTH)
+		.sort()
+		.slice(0, URL_MISMATCH_MAX_KEYS);
+}
+
+function urlMismatchRead(attempt: number, actual: URL, expected: URL, lengthDelta: number): AgentBrowserUrlMismatchRead {
+	const actualKeys = new Set(actual.searchParams.keys());
+	const expectedKeys = new Set(expected.searchParams.keys());
+	return {
+		attempt,
+		origin_equal: actual.origin === expected.origin,
+		path_equal: actual.pathname === expected.pathname,
+		query_key_set_equal:
+			actualKeys.size === expectedKeys.size && [...actualKeys].every((key) => expectedKeys.has(key)),
+		query_keys_only_in_actual: queryKeysOnlyIn(actual, expected),
+		query_keys_only_in_expected: queryKeysOnlyIn(expected, actual),
+		normalized_href_equal: normalizedHref(actual) === normalizedHref(expected),
+		length_delta: Math.max(
+			-URL_MISMATCH_MAX_LENGTH_DELTA,
+			Math.min(URL_MISMATCH_MAX_LENGTH_DELTA, lengthDelta),
+		),
+	};
+}
+
+type AgentBrowserExactTargetProof =
+	| {
+			ok: true;
+			url: string;
+			drifted?: boolean;
+			drift_shape?: AgentBrowserUrlMismatchRead;
+			reads?: number;
+	  }
+	| {
+			ok: false;
+			reason: AgentBrowserExactTargetProofReason;
+			mismatch_shape?: AgentBrowserUrlMismatchShape;
+		};
+
+function nativeEnvelopeCode(raw: string): string | undefined {
+	const envelope = safeJsonObject(raw);
+	if (typeof envelope?.code === "string") return envelope.code;
+	const error = isJsonObject(envelope?.error) ? envelope.error : undefined;
+	if (typeof error?.code === "string") return error.code;
+	const data = isJsonObject(envelope?.data) ? envelope.data : undefined;
+	return typeof data?.code === "string" ? data.code : undefined;
+}
+
+function nativeFailureReason(
+	result: McporterCommandResult,
+	args: readonly string[],
+): AgentBrowserNativeFailureReason {
+	if (
+		args[0] === "get" &&
+		args[1] === "url" &&
+		[result.stdout, result.stderr].some((raw) => nativeEnvelopeCode(raw) === "tab_gone")
+	) {
+		return "tab_gone";
+	}
+	return "command_failed";
+}
+
+function exactTargetProofMessage(prefix: string, reason: AgentBrowserExactTargetProofReason): string {
+	return `${prefix} (${reason}).`;
 }
 
 function planObservationDigest(value: unknown): string {
@@ -335,6 +1039,69 @@ function visibleValue(value: unknown): boolean | undefined {
 	if (typeof value.value === "boolean") return value.value;
 	if (typeof value.visible === "boolean") return value.visible;
 	return undefined;
+}
+
+function cleanupBindingScript(input: {
+	surfaceSelector: string;
+	identity: string;
+	controlIdentity?: string;
+	controlSelector?: string;
+}): string {
+	return `(() => { const v=n=>{const s=getComputedStyle(n),b=n.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)!==0&&b.width>0&&b.height>0},surfaces=[...document.querySelectorAll(${JSON.stringify(input.surfaceSelector)})],visible=surfaces.filter(v);if(visible.length!==1)return {visible_owned_surface_count:visible.length,exact_target_bound:false,control_count:0};const surface=visible[0],controls=${input.controlSelector === undefined ? "[]" : `[...surface.querySelectorAll(${JSON.stringify(input.controlSelector)})]`};if(controls.length!==${input.controlSelector === undefined ? "0" : "1"})return {visible_owned_surface_count:1,exact_target_bound:false,control_count:controls.length};surface.setAttribute('data-browser-use-cleanup-target',${JSON.stringify(input.identity)});${input.controlIdentity === undefined ? "" : `controls[0].setAttribute('data-browser-use-cleanup-control',${JSON.stringify(input.controlIdentity)});`}return {visible_owned_surface_count:1,exact_target_bound:true,control_count:controls.length} })()`;
+}
+
+function cleanupClosedScript(identity: string): string {
+	return `(() => { const n=document.querySelector('[data-browser-use-cleanup-target="${identity}"]');if(!n)return {closed:true};const s=getComputedStyle(n),b=n.getBoundingClientRect(),closed=s.display==='none'||s.visibility==='hidden'||Number(s.opacity)===0||b.width===0||b.height===0;if(closed){const c=n.querySelector('[data-browser-use-cleanup-control]');if(c)c.removeAttribute('data-browser-use-cleanup-control');n.removeAttribute('data-browser-use-cleanup-target')}return {closed} })()`;
+}
+
+/** Fixed code-owned evaluation. Its only variable data comes from the parsed typed plan. */
+function typedEvidenceScript(step: BrowserUseTargetOperationInspectStepV2): string {
+	const request = JSON.stringify({
+		selector: step.selector,
+		fields: step.fields,
+		catalogue: step.fields.includes("catalogue"),
+		geometry: step.fields.includes("geometry"),
+		visibility: step.fields.includes("visibility"),
+		focus: step.fields.includes("focus"),
+		scroll: step.fields.includes("scroll"),
+		properties: step.computed_style_properties ?? [],
+		maxRows: step.max_rows ?? 128,
+	});
+	return `(() => { const r = ${request}; const a=(n,k)=>n.getAttribute('data-path-parity-'+k); const m=(n,o,p=r.properties)=>{const x={ordinal:o};if(r.geometry){const b=n.getBoundingClientRect();x.geometry={x:b.x,y:b.y,width:b.width,height:b.height,top:b.top,right:b.right,bottom:b.bottom,left:b.left};}if(r.visibility){const s=getComputedStyle(n);x.visibility=s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)!==0;}if(r.focus)x.focus={focused:document.activeElement===n,contains_focus:n.contains(document.activeElement)};if(r.scroll)x.scroll={scroll_left:n.scrollLeft,scroll_top:n.scrollTop,scroll_width:n.scrollWidth,scroll_height:n.scrollHeight,client_width:n.clientWidth,client_height:n.clientHeight};if(p.length){const s=getComputedStyle(n);x.computed_styles=Object.fromEntries(p.map(k=>[k,s.getPropertyValue(k)]));}return x;};const meta={fields:r.fields,computed_style_properties:r.properties,max_rows:r.maxRows};const root=document.querySelector(r.selector);if(!r.catalogue){const nodes=[...document.querySelectorAll(r.selector)],matches=nodes.slice(0,r.maxRows).map(m),out={kind:'selector-observation',selector:r.selector,...meta,total_match_count:nodes.length,matches};if(nodes.length>matches.length)out.truncation={reason:'max_rows_exceeded',observed_count:nodes.length,emitted_count:matches.length,limit:r.maxRows};return out;}const ready=document.readyState==='complete',incomplete=[...document.images].filter(image=>!image.complete).length;if(!root)return {kind:'scenario-catalogue',root_selector:r.selector,...meta,component:'missing',catalogue_version:'missing',document_ready:ready,interactions_ready:false,incomplete_image_count:incomplete,total_row_count:0,rows:[]};const rows=[];for(const scenario of root.querySelectorAll('[data-path-parity-scenario]')){const scenario_id=a(scenario,'scenario')||'default',implementations=[...scenario.querySelectorAll('[data-path-parity-implementation]')];for(const implementationNode of (implementations.length?implementations:[scenario])){const implementation=a(implementationNode,'implementation')||'control',layers=[...implementationNode.querySelectorAll('[data-path-parity-measurement-layer]')];for(const layerNode of (layers.length?layers:[implementationNode])){const layer_id=a(layerNode,'measurement-layer')||'control',selector=a(layerNode,'measurement-selector')||a(implementationNode,'target-selector')||a(scenario,'target-selector')||a(root,'target-selector')||r.selector,declared=(a(layerNode,'measurement-properties')||'').split(',').map(v=>v.trim()).filter(Boolean),properties=declared.length?declared:r.properties,target=layerNode.matches(selector)?layerNode:implementationNode.matches(selector)?implementationNode:implementationNode.querySelector(selector);if(!target)return {kind:'scenario-catalogue',root_selector:r.selector,...meta,component:'missing',catalogue_version:'missing',document_ready:ready,interactions_ready:false,incomplete_image_count:incomplete,total_row_count:0,rows:[]};rows.push({scenario_id,implementation,layer_id,selector,computed_style_properties:properties,target});}}}rows.sort((u,v)=>{const ku=[u.scenario_id,u.implementation,u.layer_id,u.selector].join('\u0000'),kv=[v.scenario_id,v.implementation,v.layer_id,v.selector].join('\u0000');return ku<kv?-1:ku>kv?1:0;});const emitted=rows.slice(0,r.maxRows).map((row,o)=>({ordinal:o,scenario_id:row.scenario_id,implementation:row.implementation,layer_id:row.layer_id,selector:row.selector,computed_style_properties:row.computed_style_properties,...m(row.target,o,row.computed_style_properties)})),out={kind:'scenario-catalogue',root_selector:r.selector,...meta,component:a(root,'component')||'unknown',catalogue_version:a(root,'catalogue-version')||'unknown',document_ready:ready,interactions_ready:a(root,'interactions-ready')==='true',incomplete_image_count:incomplete,total_row_count:rows.length,rows:emitted};if(rows.length>emitted.length)out.truncation={reason:'max_rows_exceeded',observed_count:rows.length,emitted_count:emitted.length,limit:r.maxRows};return out;})()`;
+}
+
+/** Schema-v2 Scenario Catalogue projections. The browser-only implementation stays fixed and private. */
+function typedEvidenceProjectionScript(step: BrowserUseTargetOperationInspectStepV2): string {
+	const request = JSON.stringify({
+		selector: step.selector,
+		fields: step.fields,
+		catalogue: step.fields.includes("catalogue"),
+		geometry: step.fields.includes("geometry"),
+		visibility: step.fields.includes("visibility"),
+		focus: step.fields.includes("focus"),
+		scroll: step.fields.includes("scroll"),
+		properties: step.computed_style_properties ?? [],
+		maxRows: step.max_rows ?? 128,
+	});
+	return `(() => { const r=${request},q='[data-docs-matrix] .scrollbar-table[role="region"]',a=(n,k)=>n.getAttribute('data-path-parity-'+k),v=n=>{const s=getComputedStyle(n),b=n.getBoundingClientRect();return s.display!=='none'&&s.visibility!=='hidden'&&Number(s.opacity)!==0&&b.width>0&&b.height>0},m=(n,o,p=r.properties)=>{const x={ordinal:o};if(r.geometry){const b=n.getBoundingClientRect();x.geometry={x:b.x,y:b.y,width:b.width,height:b.height,top:b.top,right:b.right,bottom:b.bottom,left:b.left}}if(r.visibility)x.visibility=v(n);if(r.focus)x.focus={focused:document.activeElement===n,contains_focus:n.contains(document.activeElement)};if(r.scroll)x.scroll={scroll_left:n.scrollLeft,scroll_top:n.scrollTop,scroll_width:n.scrollWidth,scroll_height:n.scrollHeight,client_width:n.clientWidth,client_height:n.clientHeight};if(p.length){const s=getComputedStyle(n);x.computed_styles=Object.fromEntries(p.map(k=>[k,s.getPropertyValue(k)]))}return x},meta={fields:r.fields,computed_style_properties:r.properties,max_rows:r.maxRows},root=document.querySelector(r.selector);if(!r.catalogue){const nodes=[...document.querySelectorAll(r.selector)],matches=nodes.slice(0,r.maxRows).map((node,ordinal)=>m(node,ordinal)),out={kind:'selector-observation',selector:r.selector,...meta,total_match_count:nodes.length,matches};if(nodes.length>matches.length)out.truncation={reason:'max_rows_exceeded',observed_count:nodes.length,emitted_count:matches.length,limit:r.maxRows};return out}const ready=document.readyState==='complete',incomplete=[...document.images].filter(i=>!i.complete).length,empty={kind:'scenario-catalogue',root_selector:r.selector,...meta,component:'missing',catalogue_version:'missing',document_ready:ready,interactions_ready:false,incomplete_image_count:incomplete,play_readiness:{status:'missing',error:null,settlement_frames:0,visible_owned_overlays:0,expanded:false},overlay_catalogue:{total_record_count:0,records:[]},matrix_regions:{total_region_count:0,regions:[]},total_row_count:0,rows:[]};if(!root)return empty;const rows=[],overlays=[];for(const scenario of root.querySelectorAll('[data-path-parity-scenario]')){const scenario_id=a(scenario,'scenario')||'default',impls=[...scenario.querySelectorAll('[data-path-parity-implementation]')];for(const node of(impls.length?impls:[scenario])){const implementation=a(node,'implementation')||'control',layers=[...node.querySelectorAll('[data-path-parity-measurement-layer]')];for(const layer of(layers.length?layers:[node])){const layer_id=a(layer,'measurement-layer')||'control',selector=a(layer,'measurement-selector')||a(node,'target-selector')||a(scenario,'target-selector')||a(root,'target-selector')||r.selector,declared=(a(layer,'measurement-properties')||'').split(',').map(x=>x.trim()).filter(Boolean),properties=declared.length?declared:r.properties,target=layer.matches(selector)?layer:node.matches(selector)?node:node.querySelector(selector);if(!target)return empty;rows.push({scenario_id,implementation,layer_id,selector,computed_style_properties:properties,target})}const overlay_selector=a(node,'overlay-selector');overlays.push({scenario_id,implementation,overlay_present:overlay_selector!==null,target_selector:overlay_selector===null?null:a(node,'target-selector'),overlay_selector,trigger_selector:a(node,'overlay-trigger-selector'),item_selector:a(node,'overlay-item-selector'),role:a(node,'overlay-role'),cleanup_strategy:a(node,'overlay-cleanup-strategy'),cleanup_selector:a(node,'overlay-cleanup-selector'),item_index:(x=>x===null?null:/^(?:0|[1-9][0-9]*)$/.test(x)?Number(x):x)(a(node,'overlay-item-index')),item_interaction:a(node,'overlay-item-interaction'),item_state:a(node,'overlay-item-state')})}}rows.sort((u,v)=>{const a=[u.scenario_id,u.implementation,u.layer_id,u.selector].join('\u0000'),b=[v.scenario_id,v.implementation,v.layer_id,v.selector].join('\u0000');return a<b?-1:a>b?1:0});overlays.sort((u,v)=>{const a=[u.scenario_id,u.implementation].join('\u0000'),b=[v.scenario_id,v.implementation].join('\u0000');return a<b?-1:a>b?1:0});const matrix=[...root.querySelectorAll(q)],regions=matrix.slice(0,r.maxRows).map((region,ordinal)=>{const targets=[...region.querySelectorAll('[data-path-parity-scenario][data-path-parity-implementation]')].map(node=>({scenario_id:a(node,'scenario'),implementation:a(node,'implementation'),target_selector:a(node,'target-selector')})).sort((u,v)=>{const a=[u.scenario_id,u.implementation,u.target_selector].join('\u0000'),b=[v.scenario_id,v.implementation,v.target_selector].join('\u0000');return a<b?-1:a>b?1:0}),emitted=targets.slice(0,r.maxRows),out={ordinal,selector:q,total_target_count:targets.length,targets:emitted,scroll_left:region.scrollLeft,scroll_width:region.scrollWidth,client_width:region.clientWidth,at_right_edge:region.scrollLeft>=region.scrollWidth-region.clientWidth};if(targets.length>emitted.length)out.target_truncation={reason:'max_rows_exceeded',observed_count:targets.length,emitted_count:emitted.length,limit:r.maxRows};return out}),matrix_regions={total_region_count:matrix.length,regions};if(matrix.length>regions.length)matrix_regions.truncation={reason:'max_rows_exceeded',observed_count:matrix.length,emitted_count:regions.length,limit:r.maxRows};const emitted=rows.slice(0,r.maxRows).map((row,ordinal)=>({ordinal,scenario_id:row.scenario_id,implementation:row.implementation,layer_id:row.layer_id,selector:row.selector,computed_style_properties:row.computed_style_properties,...m(row.target,ordinal,row.computed_style_properties)})),records=overlays.slice(0,r.maxRows),overlay_catalogue={total_record_count:overlays.length,records};if(overlays.length>records.length)overlay_catalogue.truncation={reason:'max_rows_exceeded',observed_count:overlays.length,emitted_count:records.length,limit:r.maxRows};const owner=root.closest('[data-path-parity-component]')||root,frames=a(root,'play-settlement-frames'),visible=a(root,'play-visible-owned-overlays'),out={kind:'scenario-catalogue',root_selector:r.selector,...meta,component:a(owner,'component')||'unknown',catalogue_version:a(root,'catalogue-version')||'unknown',document_ready:ready,interactions_ready:a(root,'interactions-ready')==='true',incomplete_image_count:incomplete,play_readiness:{status:a(root,'play-status')||'missing',error:a(root,'play-error'),settlement_frames:frames!==null&&/^(?:0|[1-9][0-9]*)$/.test(frames)?Number(frames):null,visible_owned_overlays:visible!==null&&/^(?:0|[1-9][0-9]*)$/.test(visible)?Number(visible):null,expanded:a(root,'expanded')==='true'},overlay_catalogue,matrix_regions,total_row_count:rows.length,rows:emitted};if(rows.length>emitted.length)out.truncation={reason:'max_rows_exceeded',observed_count:rows.length,emitted_count:emitted.length,limit:r.maxRows};return out})()`;
+}
+
+/** Fixed Storybook-only wrapper around the sealed Scenario Catalogue projection. */
+function typedStorybookEvidenceProjectionScript(
+	step: BrowserUseTargetOperationInspectStepV3 & {
+		storybook_diagnostic: NonNullable<BrowserUseTargetOperationInspectStepV3["storybook_diagnostic"]>;
+	},
+): string {
+	const evidence = typedEvidenceProjectionScript(step);
+	const expected = JSON.stringify({
+		component: step.storybook_diagnostic.expected_component,
+		catalogueVersion: step.storybook_diagnostic.expected_catalogue_version,
+	});
+	return `(() => {
+		const evidence=${evidence},expected=${expected},classify=(nodes,attribute,value)=>nodes.length===0?'missing':nodes.length!==1?'mismatch':nodes[0].getAttribute(attribute)===value?'expected':nodes[0].getAttribute(attribute)===null||nodes[0].getAttribute(attribute)===''?'unknown':'mismatch',components=[...document.querySelectorAll('[data-path-parity-component]')],catalogues=[...document.querySelectorAll('[data-path-parity-catalogue-version]')],body=document.body,state=body?.classList.contains('sb-show-nopreview')?'missing-story':body?.classList.contains('sb-show-errordisplay')?'runtime-error':body?.classList.contains('sb-show-preparing-story')||body?.classList.contains('sb-show-preparing-docs')?'loading':body?.classList.contains('sb-show-main')?'main':'unknown';
+		const checkpointAttribute=catalogues.length===1?catalogues[0].getAttribute('data-path-parity-play-checkpoint'):null,checkpointNumber=checkpointAttribute===null?Number.NaN:Number(checkpointAttribute),playCheckpoint=checkpointAttribute===null?null:/^(?:0|[1-9][0-9]*)$/.test(checkpointAttribute)&&Number.isSafeInteger(checkpointNumber)&&checkpointNumber<=255?checkpointNumber:'invalid';
+		return {evidence,play_checkpoint:playCheckpoint,storybook_document:{document_ready_state:['loading','interactive','complete'].includes(document.readyState)?document.readyState:'unknown',catalogue_version_count:catalogues.length,component_count:components.length,component_classification:classify(components,'data-path-parity-component',expected.component),catalogue_version_classification:classify(catalogues,'data-path-parity-catalogue-version',expected.catalogueVersion),storybook_state:state}};
+	})()`;
 }
 
 /**
@@ -361,7 +1128,10 @@ export async function runAgentBrowserTargetOperationPlan(
 			"The target plan navigation does not match the exact bound target origin.",
 		);
 	}
-	const native = async (args: readonly string[]) => {
+	const native = async (
+		args: readonly string[],
+		options: Readonly<{ env?: Record<string, string | undefined> }> = {},
+	): Promise<AgentBrowserNativeResult> => {
 		try {
 			const result = await request.runtime.runCommand({
 				command: request.handoff.executable,
@@ -374,12 +1144,19 @@ export async function runAgentBrowserTargetOperationPlan(
 					...args,
 					"--json",
 				],
+				...(options.env === undefined ? {} : { env: options.env }),
 				timeoutMs: COMMAND_TIMEOUT_MS,
 			});
-			if (result.timedOut === true || result.exitCode !== 0) return undefined;
-			return { result, data: planEnvelopeData(result.stdout) };
+			if (result.timedOut === true || result.exitCode !== 0) {
+				return {
+					ok: false,
+					reason: nativeFailureReason(result, args),
+					...(result.timedOut === true ? { timed_out: true } : {}),
+				};
+			}
+			return { ok: true, result, data: planEnvelopeData(result.stdout) };
 		} catch {
-			return undefined;
+			return { ok: false, reason: "command_failed" };
 		}
 	};
 	const boundOrigin = request.bound_origin ?? (() => {
@@ -389,30 +1166,128 @@ export async function runAgentBrowserTargetOperationPlan(
 			return undefined;
 		}
 	})();
-	const proveExactTarget = async (expectedUrl?: string): Promise<boolean> => {
-		if (boundOrigin === undefined) return false;
-		const pinned = await native(["tab", "list"]);
-		const pinnedData = pinned && isJsonObject(pinned.data) ? pinned.data : undefined;
-		const tabs = pinnedData && Array.isArray(pinnedData.tabs) ? pinnedData.tabs : undefined;
-		const active = tabs?.filter(
-			(tab) => isJsonObject(tab) && tab.active === true && tab.targetId === request.target_id,
-		);
-		if (active === undefined || active.length !== 1) return false;
-		const urlProof = await native(["get", "url"]);
-		const urlData = urlProof && isJsonObject(urlProof.data) ? urlProof.data : undefined;
-		if (!urlData || typeof urlData.url !== "string") return false;
-		try {
-			return new URL(urlData.url).origin === boundOrigin &&
-				(expectedUrl === undefined || urlData.url === expectedUrl);
-		} catch {
-			return false;
+	let lastProvenUrl: string | undefined;
+	const proveExactTarget = async (
+		expectedUrl?: string,
+		options: Readonly<{
+			initialAttribution?: boolean;
+			settleExactUrl?: boolean;
+			/**
+			 * Admit a same-origin URL difference instead of refusing.
+			 *
+			 * Only the pre-dispatch baseline sets this. Identity there is already
+			 * proven by the canonical target id (checked under initialAttribution)
+			 * and the bound origin, both of which stay fail-closed below. The URL
+			 * discovery recorded came from a DIFFERENT source than this live read
+			 * — the `tab list` inventory, not the page — so byte equality between
+			 * them was never an identity claim, and a single-page app that
+			 * rewrites its own query string breaks it without navigating.
+			 * A navigate step still asserts its own URL byte-exactly.
+			 */
+			admitSameOriginDrift?: boolean;
+		}> = {},
+	): Promise<AgentBrowserExactTargetProof> => {
+		if (boundOrigin === undefined) return { ok: false, reason: "origin_mismatch" };
+		if (options.initialAttribution === true) {
+			const pinned = await native(["tab", "list"]);
+			const pinnedData = pinned.ok && isJsonObject(pinned.data) ? pinned.data : undefined;
+			const tabs = pinnedData && Array.isArray(pinnedData.tabs) ? pinnedData.tabs : undefined;
+			const active = tabs?.filter(
+				(tab) => isJsonObject(tab) && tab.active === true && tab.targetId === request.target_id,
+			);
+			if (active === undefined || active.length !== 1) {
+				return { ok: false, reason: "initial_active_target_attribution_failed" };
+			}
 		}
+		const maxReads = options.settleExactUrl === true && expectedUrl !== undefined ? 3 : 1;
+		let expectedParsed: URL | undefined;
+		if (expectedUrl !== undefined) {
+			try {
+				expectedParsed = new URL(expectedUrl);
+			} catch {
+				expectedParsed = undefined;
+			}
+		}
+		const mismatchReads: AgentBrowserUrlMismatchRead[] = [];
+		const mismatchProof = (): AgentBrowserExactTargetProof =>
+			mismatchReads.length === 0
+				? { ok: false, reason: "exact_url_mismatch" }
+				: {
+						ok: false,
+						reason: "exact_url_mismatch",
+						mismatch_shape: { reads: mismatchReads, converged_by_final_read: false },
+					};
+		for (let attempt = 0; attempt < maxReads; attempt += 1) {
+			const urlProof = await native(["get", "url"]);
+			if (!urlProof.ok) {
+				return {
+					ok: false,
+					reason: urlProof.reason === "tab_gone" ? "tab_gone" : "url_read_failed",
+				};
+			}
+			const urlData = isJsonObject(urlProof.data) ? urlProof.data : undefined;
+			if (!urlData || typeof urlData.url !== "string") return { ok: false, reason: "url_shape_failed" };
+			let parsedUrl: URL;
+			try {
+				parsedUrl = new URL(urlData.url);
+			} catch {
+				return { ok: false, reason: "url_shape_failed" };
+			}
+				if (parsedUrl.origin !== boundOrigin) return { ok: false, reason: "origin_mismatch" };
+				if (expectedUrl !== undefined && urlData.url !== expectedUrl) {
+					if (expectedParsed !== undefined) {
+						mismatchReads.push(
+							urlMismatchRead(attempt + 1, parsedUrl, expectedParsed, urlData.url.length - expectedUrl.length),
+						);
+					}
+					if (attempt + 1 < maxReads) {
+						await new Promise<void>((resolve) => setTimeout(resolve, 250));
+						continue;
+					}
+					if (options.admitSameOriginDrift !== true) return mismatchProof();
+					// Origin already matched above, and the canonical target id was
+					// proven before the first read. Report the drift; never hide it.
+					lastProvenUrl = urlData.url;
+					return {
+						ok: true,
+						url: urlData.url,
+						drifted: true,
+						reads: attempt + 1,
+						...(mismatchReads.at(-1) === undefined
+							? {}
+							: { drift_shape: mismatchReads.at(-1) as AgentBrowserUrlMismatchRead }),
+					};
+				}
+			lastProvenUrl = urlData.url;
+			return { ok: true, url: urlData.url, reads: attempt + 1 };
+		}
+		return mismatchProof();
 	};
-	if (!(await proveExactTarget(request.expected_url))) {
-		return targetPlanFailure(request, "target_operation_plan_failed", "The exact target and bound origin proof failed.");
+	const initialProof = await proveExactTarget(request.expected_url, {
+		initialAttribution: true,
+		// A page still finishing its load gets the same settle window a navigate
+		// step gets, so a converging URL resolves cleanly instead of racing.
+		settleExactUrl: true,
+		admitSameOriginDrift: true,
+	});
+	if (!initialProof.ok) {
+		return targetPlanFailure(
+			request,
+			"target_operation_plan_failed",
+			exactTargetProofMessage("The exact target and bound origin proof failed", initialProof.reason),
+		);
 	}
+	const baseline: BrowserUseTargetOperationBaseline = {
+		url_drifted: initialProof.drifted === true,
+		settle_reads: initialProof.reads ?? 1,
+		...(initialProof.drift_shape === undefined
+			? {}
+			: { drift_shape: initialProof.drift_shape }),
+	};
 	const outcomes: BrowserUseTargetOperationStepOutcome[] = [];
-	let cleanup: { attempted: boolean; closed: boolean; method?: BrowserUseTargetOperationCleanupMethod; visible_owned_surface_count: number } = {
+	let admittedEvidenceBytes = 0;
+	let lastNavigation = { attempted: false, confirmed: false, changed_document: false };
+	let cleanup: BrowserUseTargetOperationCleanupEvidence = {
 		attempted: false,
 		closed: false,
 		visible_owned_surface_count: 0,
@@ -432,8 +1307,271 @@ export async function runAgentBrowserTargetOperationPlan(
 			}
 		}
 		let args: string[] | undefined;
-		if (step.kind === "navigate") args = ["open", step.url];
+		const beforeStepUrl = lastProvenUrl;
+		if (step.kind === "navigate" && step.url === request.expected_url) {
+			const nextStep = request.plan.steps[index + 1];
+			const catalogueInspect =
+				request.plan.schema_version === "2" &&
+				nextStep?.kind === "inspect" &&
+				nextStep.fields.includes("catalogue")
+					? nextStep
+					: undefined;
+			if (request.plan.schema_version === "3" && lastProvenUrl === step.url) {
+				const observed = await native(["get", "url"]);
+				const observedData = observed.ok && isJsonObject(observed.data)
+					? observed.data
+					: undefined;
+				if (observedData?.url !== step.url) {
+					return targetPlanFailure(
+						request,
+						"target_operation_plan_failed",
+						"The pinned target no longer exposes the exact requested Storybook URL.",
+						outcomes,
+						cleanup,
+					);
+				}
+				lastNavigation = { attempted: false, confirmed: true, changed_document: false };
+				outcomes.push({
+					index,
+					kind: step.kind,
+					status: "confirmed",
+					observation_digest: planObservationDigest(observedData),
+				});
+				continue;
+			}
+			if (catalogueInspect === undefined) {
+				// A healthy non-catalogue short circuit must still dispatch through the
+				// native adapter. The adapter result is the observation-backed digest;
+				// an identity-derived digest would falsely claim navigation evidence.
+				args = ["open", step.url];
+			} else {
+				const catalogueCountResult = await native(["get", "count", catalogueInspect.selector]);
+				const catalogueCountData =
+					catalogueCountResult.ok && isJsonObject(catalogueCountResult.data)
+						? catalogueCountResult.data
+						: undefined;
+				const catalogueCount =
+					catalogueCountData && typeof catalogueCountData.count === "number"
+						? catalogueCountData.count
+						: catalogueCountData && typeof catalogueCountData.value === "number"
+							? catalogueCountData.value
+							: undefined;
+				if (catalogueCount === 1) {
+					// The exact URL and the unique catalogue root together prove that the
+					// retained Storybook document is already the intended settled preview.
+					// Retain the genuine catalogue-count observation as its digest source.
+					lastNavigation = { attempted: false, confirmed: true, changed_document: false };
+					outcomes.push({
+						index,
+						kind: step.kind,
+						status: "confirmed",
+						observation_digest: planObservationDigest(catalogueCountData),
+					});
+					continue;
+				}
+				args = ["open", step.url];
+			}
+		}
+		else if (step.kind === "navigate") args = ["open", step.url];
 		else if (step.kind === "inspect") {
+			if (request.plan.schema_version !== "1") {
+				const typedStep = step as BrowserUseTargetOperationInspectStepV2;
+				const storybookStep = request.plan.schema_version === "3" &&
+					"storybook_diagnostic" in step && step.storybook_diagnostic !== undefined
+					? step as BrowserUseTargetOperationInspectStepV3 & {
+						storybook_diagnostic: NonNullable<BrowserUseTargetOperationInspectStepV3["storybook_diagnostic"]>;
+					}
+					: undefined;
+				let readinessWait: AgentBrowserNativeResult | undefined;
+				if (storybookStep !== undefined) {
+					readinessWait = await native(
+						["wait", STORYBOOK_TERMINAL_READINESS_SELECTOR],
+						{
+							env: {
+								...request.env,
+								AGENT_BROWSER_DEFAULT_TIMEOUT: `${STORYBOOK_TERMINAL_READINESS_TIMEOUT_MS}`,
+							},
+						},
+					);
+					if (request.assert_custody !== undefined) {
+						const custody = await request.assert_custody();
+						if (!custody.ok) {
+							return targetPlanFailure(
+								request,
+								"target_operation_plan_failed",
+								custody.message ?? "The exact Target Operation Lease is no longer live after the Storybook readiness wait.",
+								outcomes,
+								cleanup,
+								postReadinessFailureAtStep(index, "target_custody_failed"),
+							);
+						}
+					}
+					const expectedUrlAfterWait = lastProvenUrl;
+					const postWaitProof: AgentBrowserExactTargetProof = expectedUrlAfterWait === undefined
+						? { ok: false, reason: "exact_url_mismatch" }
+						: await proveExactTarget(expectedUrlAfterWait);
+					if (!postWaitProof.ok) {
+						return targetPlanFailure(
+							request,
+							"target_operation_plan_failed",
+							exactTargetProofMessage(
+								"The Storybook readiness wait changed or lost the exact target or bound origin before evaluation",
+								postWaitProof.reason,
+							),
+							outcomes,
+							cleanup,
+							postReadinessFailureAtStep(
+								index,
+								"exact_target_proof_failed",
+								postWaitProof.reason === "initial_active_target_attribution_failed"
+									? "url_read_failed"
+									: postWaitProof.reason,
+							),
+						);
+					}
+				}
+				const inspected = await native([
+					"eval",
+					"-b",
+						Buffer.from(
+							storybookStep === undefined
+								? typedEvidenceProjectionScript(typedStep)
+								: typedStorybookEvidenceProjectionScript(storybookStep),
+							"utf8",
+						).toString("base64"),
+				]);
+					if (
+						!inspected.ok ||
+						!isJsonObject(inspected.data) ||
+						!Object.hasOwn(inspected.data, "result")
+					) {
+						return targetPlanFailure(
+							request,
+							"target_operation_evidence_invalid",
+							"The typed inspection did not return one valid adapter result.",
+							outcomes,
+							cleanup,
+							{ reason: "adapter_eval_failed", pointer: `/steps/${index}/inspect/adapter_result` },
+						);
+					}
+					const inspectedResult = inspected.data.result;
+					const wrapped = storybookStep === undefined
+						? undefined
+						: isJsonObject(inspectedResult) && isJsonObject(inspectedResult.storybook_document)
+							? inspectedResult
+							: undefined;
+					const storybookDiagnostic = storybookStep === undefined || wrapped === undefined || lastProvenUrl === undefined
+						? undefined
+						: buildBrowserUseStorybookDocumentDiagnostic({
+							expectation: storybookStep.storybook_diagnostic,
+							effective_url: lastProvenUrl,
+							raw_projection: wrapped.storybook_document,
+							navigation: {
+								attempted: lastNavigation.attempted,
+								confirmed: lastNavigation.confirmed,
+								changed_document: lastNavigation.changed_document,
+							},
+						});
+					if (storybookStep !== undefined && storybookDiagnostic === undefined) {
+						return targetPlanFailure(
+							request,
+							"target_operation_evidence_invalid",
+							"The fixed Storybook document diagnostic was missing or malformed.",
+							outcomes,
+							cleanup,
+							{ reason: "adapter_eval_failed", pointer: `/steps/${index}/inspect/storybook_document_diagnostic` },
+						);
+					}
+					if (
+						storybookStep !== undefined &&
+						readinessWait?.ok === false &&
+						storybookDiagnostic?.storybook_document_classification !== "ready"
+					) {
+						const failureDetail: BrowserUseTargetOperationFailureDetail = {
+							reason: "adapter_eval_failed",
+							pointer: `/steps/${index}/inspect/storybook_document_diagnostic`,
+						};
+						outcomes.push({
+							index,
+							kind: "inspect",
+							status: "blocked",
+							code: "target_operation_evidence_invalid",
+							storybook_document_diagnostic: storybookDiagnostic,
+						});
+						return targetPlanFailure(
+							request,
+							"target_operation_evidence_invalid",
+							readinessWait.timed_out === true
+								? "The Storybook terminal readiness wait timed out before strict evaluation."
+								: "The Storybook terminal readiness wait did not confirm a ready document.",
+							outcomes,
+							cleanup,
+							failureDetail,
+						);
+					}
+						const typedProjection = wrapped?.evidence ?? inspectedResult;
+						const evidence = parseBrowserUseTargetOperationEvidence(typedProjection, typedStep);
+					if (!evidence.ok) {
+						if (evidence.failure_detail.reason === "play_readiness_failed") {
+							emitPlayReadinessFailureDiagnostic(
+								typedProjection,
+								index,
+								readinessWait,
+								wrapped?.play_checkpoint,
+							);
+						}
+						outcomes.push({ index, kind: "inspect", status: "blocked", code: evidence.code, ...(evidence.evidence === undefined ? {} : { evidence: evidence.evidence }), ...(storybookDiagnostic === undefined ? {} : { storybook_document_diagnostic: storybookDiagnostic }) });
+						return targetPlanFailure(
+							request,
+							evidence.code,
+							"The typed inspection evidence was incomplete or exceeded its explicit limit.",
+							outcomes,
+							cleanup,
+							targetEvidenceFailureAtStep(index, evidence.failure_detail),
+						);
+					}
+					if (
+						storybookStep !== undefined &&
+						readinessWait?.ok === true &&
+						storybookDiagnostic?.storybook_document_classification !== "ready"
+					) {
+						const failureDetail: BrowserUseTargetOperationFailureDetail = {
+							reason: "adapter_eval_failed",
+							pointer: `/steps/${index}/inspect/storybook_document_diagnostic`,
+						};
+						outcomes.push({
+							index,
+							kind: "inspect",
+							status: "blocked",
+							code: "target_operation_evidence_invalid",
+							evidence: evidence.evidence,
+							...(storybookDiagnostic === undefined ? {} : { storybook_document_diagnostic: storybookDiagnostic }),
+						});
+						return targetPlanFailure(
+							request,
+							"target_operation_evidence_invalid",
+							"The Storybook terminal readiness wait did not confirm a ready document.",
+							outcomes,
+							cleanup,
+							failureDetail,
+						);
+					}
+					const evidenceBytes = Buffer.byteLength(JSON.stringify(evidence.evidence), "utf8");
+				if (admittedEvidenceBytes + evidenceBytes > BROWSER_USE_TARGET_OPERATION_MAX_EVIDENCE_BYTES) {
+					outcomes.push({ index, kind: "inspect", status: "blocked", code: "target_operation_evidence_invalid" });
+						return targetPlanFailure(
+							request,
+							"target_operation_evidence_invalid",
+							"The complete typed evidence payload exceeded its public byte limit.",
+							outcomes,
+							cleanup,
+							{ reason: "evidence_budget_exceeded", pointer: `/steps/${index}/inspect/evidence` },
+						);
+				}
+				admittedEvidenceBytes += evidenceBytes;
+				outcomes.push({ index, kind: "inspect", status: "confirmed", evidence: evidence.evidence, ...(storybookDiagnostic === undefined ? {} : { storybook_document_diagnostic: storybookDiagnostic }) });
+				continue;
+			}
 			if (step.fields.some((field) => field === "focus" || field === "scroll")) {
 				return targetPlanFailure(request, "target_operation_plan_unsupported", "Agent Browser cannot truthfully observe the requested focus or scroll field.", outcomes, cleanup);
 			}
@@ -445,7 +1583,7 @@ export async function runAgentBrowserTargetOperationPlan(
 					: field === "computed-styles" ? ["get", "styles", step.selector]
 					: ["is", "visible", step.selector];
 				const inspected = await native(inspectArgs);
-				if (inspected === undefined) return targetPlanFailure(request, "target_operation_plan_failed", "A typed inspection failed.", outcomes, cleanup);
+				if (!inspected.ok) return targetPlanFailure(request, "target_operation_plan_failed", "A typed inspection failed.", outcomes, cleanup);
 				observations.push(inspected.data);
 			}
 			outcomes.push({ index, kind: step.kind, status: "confirmed", observation_digest: planObservationDigest(observations) });
@@ -458,50 +1596,123 @@ export async function runAgentBrowserTargetOperationPlan(
 			if (args === undefined) return targetPlanFailure(request, "target_operation_plan_unsupported", `Agent Browser cannot truthfully establish the ${step.state} review state.`, outcomes, cleanup);
 		}
 		else if (step.kind === "input") {
+			const scrollDelta = step.action === "scroll" ? step.delta : undefined;
 			args = step.action === "move" ? ["mouse", "move", String(step.x ?? 0), String(step.y ?? 0)]
 				: step.action === "click" ? ["click", step.selector ?? ""]
 				: step.action === "focus" ? ["focus", step.selector ?? ""]
-				: step.action === "scroll" ? undefined
+				: step.action === "scroll"
+					? typeof scrollDelta === "number" && Number.isFinite(scrollDelta) && scrollDelta !== 0
+						? ["scroll", scrollDelta > 0 ? "down" : "up", String(Math.abs(scrollDelta))]
+						: undefined
 				: step.action === "release" ? ["mouse", "up"]
 				: ["press", step.key ?? ""];
 			if (args === undefined) return targetPlanFailure(request, "target_operation_plan_unsupported", "Agent Browser cannot truthfully express a numeric scroll delta.", outcomes, cleanup);
 		}
 		else {
 			cleanup = { attempted: true, closed: false, method: step.method, visible_owned_surface_count: 0 };
-			if (step.method !== "close-control" || step.selector === undefined) {
-				return targetPlanFailure(request, "target_operation_plan_unsupported", "Only selector-bound close-control cleanup has a provable owned surface.", outcomes, cleanup);
-			}
-			const countResult = await native(["count", step.selector]);
-			const countData = countResult && isJsonObject(countResult.data) ? countResult.data : undefined;
-			const count = countData && typeof countData.count === "number"
-				? countData.count
-				: countData && typeof countData.value === "number"
-					? countData.value
-					: undefined;
-			if (count !== 1) return targetPlanFailure(request, "target_operation_cleanup_incomplete", "The cleanup selector did not prove exactly one owned surface.", outcomes, cleanup);
-			const before = await native(["is", "visible", step.selector]);
-			const beforeVisible = before ? visibleValue(before.data) : undefined;
-			if (beforeVisible !== true) return targetPlanFailure(request, "target_operation_cleanup_incomplete", "The owned overlay surface was not uniquely visible before cleanup.", outcomes, cleanup);
-			cleanup.visible_owned_surface_count = 1;
-			const closed = await native(["click", step.selector]);
-			if (closed === undefined || !(await proveExactTarget())) {
-				if (closed !== undefined) {
-					outcomes.push({ index, kind: step.kind, status: "unknown", effect: "possibly-effectful" });
+			if (request.plan.schema_version === "1") {
+				if (step.method !== "close-control" || step.selector === undefined) return targetPlanFailure(request, "target_operation_plan_unsupported", "Only selector-bound close-control cleanup has a provable owned surface.", outcomes, cleanup);
+				const countResult = await native(["get", "count", step.selector]);
+				const countData = countResult.ok && isJsonObject(countResult.data) ? countResult.data : undefined;
+				const count = countData && typeof countData.count === "number" ? countData.count : countData && typeof countData.value === "number" ? countData.value : undefined;
+				if (count !== 1) return targetPlanFailure(request, "target_operation_cleanup_incomplete", "The cleanup selector did not prove exactly one owned surface.", outcomes, cleanup);
+				const before = await native(["is", "visible", step.selector]);
+				if (!before.ok || visibleValue(before.data) !== true) return targetPlanFailure(request, "target_operation_cleanup_incomplete", "The owned overlay surface was not uniquely visible before cleanup.", outcomes, cleanup);
+				cleanup.visible_owned_surface_count = 1;
+				const closed = await native(["click", step.selector]);
+				const closedProof: AgentBrowserExactTargetProof = closed.ok
+					? await proveExactTarget()
+					: { ok: false, reason: "url_read_failed" };
+				const closedProofReason = !closed.ok ? "url_read_failed" : !closedProof.ok ? closedProof.reason : undefined;
+				if (closedProofReason !== undefined) {
+					if (closed.ok) outcomes.push({ index, kind: step.kind, status: "unknown", effect: "possibly-effectful" });
+					return targetPlanFailure(request, "target_operation_plan_failed", exactTargetProofMessage("Cleanup changed or lost the exact target or bound origin before confirmation", closedProofReason), outcomes, cleanup);
 				}
-				return targetPlanFailure(request, "target_operation_plan_failed", "Cleanup changed or lost the exact target or bound origin before confirmation.", outcomes, cleanup);
+				const after = await native(["is", "visible", step.selector]);
+				cleanup.closed = after.ok ? visibleValue(after.data) === false : false;
+				if (!cleanup.closed) return targetPlanFailure(request, "target_operation_cleanup_incomplete", "The owned overlay surface did not prove closed.", outcomes, cleanup);
+				outcomes.push({ index, kind: step.kind, status: "confirmed" });
+				continue;
 			}
-			const after = await native(["is", "visible", step.selector]);
-			const afterVisible = after ? visibleValue(after.data) : undefined;
-			cleanup.closed = afterVisible === false;
-			if (!cleanup.closed) return targetPlanFailure(request, "target_operation_cleanup_incomplete", "The owned overlay surface did not prove closed.", outcomes, cleanup);
+			if (step.method === "backdrop" || step.surface_selector === undefined || (step.method === "close-control" && step.control_selector === undefined)) return targetPlanFailure(request, "target_operation_plan_unsupported", "Only surface-bound close-control and escape cleanup are provable.", outcomes, cleanup);
+			cleanup = { ...cleanup, surface_selector: step.surface_selector, ...(step.control_selector === undefined ? {} : { control_selector: step.control_selector }) };
+			const identity = createHash("sha256").update(`${request.plan_digest}:${index}`).digest("hex").slice(0, 24);
+			const controlIdentity = step.method === "close-control"
+				? createHash("sha256").update(`${identity}:control`).digest("hex").slice(0, 24)
+				: undefined;
+			const bound = await native(["eval", "-b", Buffer.from(cleanupBindingScript({ surfaceSelector: step.surface_selector, identity, ...(step.control_selector === undefined ? {} : { controlSelector: step.control_selector }), ...(controlIdentity === undefined ? {} : { controlIdentity }) }), "utf8").toString("base64")]);
+			const binding = bound.ok && isJsonObject(bound.data) && isJsonObject(bound.data.result) ? bound.data.result : undefined;
+			if (!binding || typeof binding.visible_owned_surface_count !== "number" || typeof binding.exact_target_bound !== "boolean") return targetPlanFailure(request, "target_operation_cleanup_incomplete", "The owned overlay surface binding was incomplete.", outcomes, cleanup);
+			cleanup.visible_owned_surface_count = binding.visible_owned_surface_count;
+			cleanup.exact_target_bound = binding.exact_target_bound;
+			if (binding.visible_owned_surface_count !== 1 || binding.exact_target_bound !== true || (step.method === "close-control" && binding.control_count !== 1)) return targetPlanFailure(request, "target_operation_cleanup_incomplete", "The cleanup surface did not bind exactly one visible owned overlay.", outcomes, cleanup);
+			const dispatch = step.method === "close-control"
+				? await native(["click", `[data-browser-use-cleanup-control="${controlIdentity}"]`])
+				: await native(["press", "Escape"]);
+			const dispatchProof: AgentBrowserExactTargetProof = dispatch.ok
+				? await proveExactTarget()
+				: { ok: false, reason: "url_read_failed" };
+			const dispatchProofReason = !dispatch.ok ? "url_read_failed" : !dispatchProof.ok ? dispatchProof.reason : undefined;
+			if (dispatchProofReason !== undefined) {
+				if (dispatch.ok) outcomes.push({ index, kind: step.kind, status: "unknown", effect: "possibly-effectful" });
+				return targetPlanFailure(request, "target_operation_plan_failed", exactTargetProofMessage("Cleanup changed or lost the exact target or bound origin before confirmation", dispatchProofReason), outcomes, cleanup);
+			}
+			for (let attempt = 0; attempt < 3; attempt += 1) {
+				const polled = await native(["eval", "-b", Buffer.from(cleanupClosedScript(identity), "utf8").toString("base64")]);
+				const state = polled.ok && isJsonObject(polled.data) && isJsonObject(polled.data.result) ? polled.data.result : undefined;
+				if (!state || typeof state.closed !== "boolean") break;
+				if (state.closed) { cleanup.closed = true; break; }
+			}
+			if (!cleanup.closed) return targetPlanFailure(request, "target_operation_cleanup_incomplete", "The exact owned overlay surface did not prove closed.", outcomes, cleanup);
 			outcomes.push({ index, kind: step.kind, status: "confirmed" });
 			continue;
 		}
+		if (step.kind === "navigate") {
+			emitCliDiagnostic(
+				["browser-use.cli", "agent-browser"],
+				"debug",
+				"target-plan-navigation-dispatch",
+				{
+					operation_phase: "target-plan",
+					step_index: index,
+					step_kind: "navigate",
+					dispatch_stage: "before",
+				},
+			);
+		}
 		const result = await native(args);
-		if (result === undefined) return targetPlanFailure(request, "target_operation_plan_failed", "A typed target operation failed.", outcomes, cleanup);
-		if (!(await proveExactTarget(step.kind === "navigate" ? step.url : undefined))) {
+		if (!result.ok) return targetPlanFailure(request, "target_operation_plan_failed", "A typed target operation failed.", outcomes, cleanup);
+		const proof = await proveExactTarget(
+			step.kind === "navigate" ? step.url : undefined,
+			step.kind === "navigate" ? { settleExactUrl: true } : {},
+		);
+		if (!proof.ok) {
+			if (step.kind === "navigate") {
+				emitCliDiagnostic(
+					["browser-use.cli", "agent-browser"],
+					"error",
+					"target-plan-navigation-proof-lost",
+					{
+						operation_phase: "target-plan",
+						step_index: index,
+						step_kind: "navigate",
+						proof_stage: "post-navigation-exact-target",
+						native_result: "defined",
+						proof_outcome: "lost",
+						proof_reason: proof.reason,
+						...(proof.mismatch_shape === undefined ? {} : { mismatch_shape: proof.mismatch_shape }),
+					},
+				);
+			}
 			outcomes.push({ index, kind: step.kind, status: "unknown", effect: "possibly-effectful" });
-			return targetPlanFailure(request, "target_operation_plan_failed", "The action changed or lost the exact target or bound origin before confirmation.", outcomes, cleanup);
+			return targetPlanFailure(request, "target_operation_plan_failed", exactTargetProofMessage("The action changed or lost the exact target or bound origin before confirmation", proof.reason), outcomes, cleanup);
+		}
+		if (step.kind === "navigate") {
+			lastNavigation = {
+				attempted: true,
+				confirmed: true,
+				changed_document: beforeStepUrl !== lastProvenUrl,
+			};
 		}
 		outcomes.push({ index, kind: step.kind, status: "confirmed", observation_digest: planObservationDigest(result.data) });
 	}
@@ -510,9 +1721,12 @@ export async function runAgentBrowserTargetOperationPlan(
 		scope: "target-local",
 		focus: false,
 		capability_id: "agent-browser.exact-target-no-focus.v1",
+		plan_schema_version: request.plan.schema_version,
 		plan_digest: request.plan_digest,
+		plan_step_count: request.plan.steps.length,
 		steps: outcomes,
 		cleanup,
+		baseline,
 	};
 }
 

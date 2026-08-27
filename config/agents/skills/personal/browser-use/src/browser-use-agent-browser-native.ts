@@ -409,6 +409,17 @@ export function agentBrowserHasExactOrigin(
 	}
 }
 
+function agentBrowserUrlsShareExactOrigin(
+	left: string,
+	right: string,
+): boolean {
+	try {
+		return new URL(left).origin === new URL(right).origin;
+	} catch {
+		return false;
+	}
+}
+
 /**
  * Attach to the named tab with bounded connection-only retries.
  *
@@ -504,8 +515,22 @@ export async function selectAgentBrowserTarget(
 				);
 			}
 			const expectedTargetUrl = task.expected_target_url ?? target.url;
+			const authTarget = task.auth_delivery?.target;
+			const allowedSensitiveAuthNavigation =
+				task.auth_delivery?.in_sensitive_interval === true &&
+				authTarget?.run_id === task.run_id &&
+				authTarget.lane_id === "agent-browser" &&
+				authTarget.target_id === target.targetId &&
+				agentBrowserOriginIsAllowed(expectedTargetUrl, allowedOrigins) &&
+				agentBrowserOriginIsAllowed(reproved.url, allowedOrigins) &&
+				agentBrowserUrlsShareExactOrigin(reproved.url, expectedTargetUrl) &&
+				agentBrowserUrlsShareExactOrigin(
+					authTarget.top_level_origin,
+					expectedTargetUrl,
+				);
 			if (
-				reproved.url !== expectedTargetUrl ||
+				(reproved.url !== expectedTargetUrl &&
+					!allowedSensitiveAuthNavigation) ||
 				(!agentBrowserOriginIsAllowed(reproved.url, allowedOrigins) &&
 					!(
 						task.allow_neutral_target === true &&
@@ -589,18 +614,31 @@ export async function verifyAgentBrowserPostcondition(
 		if (!agentBrowserOriginIsAllowed(postcondition.url, allowedOrigins)) {
 			return "not-achieved";
 		}
-		const data = parseSuccessData(await run(["get", "url", "--json"]));
-		if (
-			typeof data?.url !== "string" ||
-			!agentBrowserOriginIsAllowed(data.url, allowedOrigins)
+		let observedAdmittedUrl = false;
+		for (
+			let attempt = 1;
+			attempt <= POSTCONDITION_VERIFICATION_ATTEMPTS;
+			attempt += 1
 		) {
-			return "unavailable";
+			const data = parseSuccessData(await run(["get", "url", "--json"]));
+			if (typeof data?.url === "string") {
+				if (!agentBrowserOriginIsAllowed(data.url, allowedOrigins)) {
+					return "unavailable";
+				}
+				observedAdmittedUrl = true;
+				const achieved =
+					postcondition.kind === "url-equals"
+						? data.url === postcondition.url
+						: data.url.startsWith(postcondition.url);
+				if (achieved) return "confirmed";
+			}
+			if (attempt < POSTCONDITION_VERIFICATION_ATTEMPTS) {
+				await new Promise((resolve) =>
+					setTimeout(resolve, POSTCONDITION_RETRY_DELAY_MS),
+				);
+			}
 		}
-		const achieved =
-			postcondition.kind === "url-equals"
-				? data.url === postcondition.url
-				: data.url.startsWith(postcondition.url);
-		return achieved ? "confirmed" : "not-achieved";
+		return observedAdmittedUrl ? "not-achieved" : "unavailable";
 	}
 	if (
 		postcondition.kind !== "value-equals" &&

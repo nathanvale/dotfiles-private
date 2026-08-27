@@ -804,24 +804,48 @@ export function resolveWarmChromeProfilePath(
 		: join(env.HOME, ".agent-warm-profile");
 }
 
+/**
+ * Resolve the directory holding the native token supervisor for this install shape.
+ *
+ * Two delivery shapes exist and this is their single reconciliation point, so
+ * repository-path knowledge never spreads to callers:
+ *   - BUNDLED: `dist/browser-use.js` reads its sibling `dist/bin/`, which
+ *     `build-dist.ts` populates from the release build.
+ *   - SOURCE / PATH-LINKED: `src/` walks out of the skill to the workspace
+ *     `.agents/runtime/browser-use-environment-auth/.build/release` where
+ *     `swift build -c release` leaves the binary. The hop count matches
+ *     `build-dist.ts` (skill root plus five parents), which is the shape the
+ *     dist build already proves on every `bun run build`.
+ *
+ * @returns Absolute directory expected to contain `browser-use-op-supervisor`
+ */
+function resolveNativeAuthBinRoot(): string {
+	if (import.meta.dir.endsWith("/dist")) return join(import.meta.dir, "bin");
+	return join(
+		import.meta.dir,
+		"..", // skill root (…/personal/browser-use)
+		"..", // …/skills/personal
+		"..", // …/agents/skills
+		"..", // …/config/agents
+		"..", // …/config
+		"..", // workspace root
+		".agents",
+		"runtime",
+		"browser-use-environment-auth",
+		".build",
+		"release",
+	);
+}
+
 function environmentTokenSupervisorDeps(
 	env: Record<string, string | undefined>,
 ): EnvironmentTokenSupervisorDeps | undefined {
 	const paths = resolveBrowserUsePaths(env);
 	if (!paths.ok) return undefined;
-	const nativeBinRoot = import.meta.dir.endsWith("/dist")
-		? join(import.meta.dir, "bin")
-		: join(
-				import.meta.dir,
-				"..",
-				"..",
-				"..",
-				"runtime",
-				"browser-use-environment-auth",
-				".build",
-				"release",
-			);
-	const supervisorPath = join(nativeBinRoot, "browser-use-op-supervisor");
+	const supervisorPath = join(
+		resolveNativeAuthBinRoot(),
+		"browser-use-op-supervisor",
+	);
 	if (!existsSync(supervisorPath)) return undefined;
 	const opPaths =
 		process.arch === "arm64"

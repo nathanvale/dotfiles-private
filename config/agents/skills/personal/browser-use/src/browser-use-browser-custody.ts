@@ -1219,6 +1219,40 @@ export async function hasExactCreatedTargetOwnership(
 	};
 }
 
+/** Private exact check for any persistent target owner proven by selected state. */
+export async function hasExactTargetOwnership(
+	deps: RunStoreDeps,
+	input: {
+		authorityId: string;
+		runId: string;
+		adapterId: BrowserAdapterId;
+		targetRef: string;
+	},
+): Promise<
+	| { ok: true; owned: boolean }
+	| Extract<TargetOperationLeaseResult, { ok: false }>
+> {
+	const read = await readRegistry(deps, registryPaths(deps).record);
+	if (read.status === "invalid") return storeFailure();
+	if (read.status === "missing") return { ok: true, owned: false };
+	if (read.registry.authority_id !== input.authorityId) {
+		return {
+			ok: false,
+			code: "browser_authority_changed",
+			message:
+				"The exact Browser authority does not match the custody registry.",
+		};
+	}
+	const binding = read.registry.targets[input.targetRef];
+	return {
+		ok: true,
+		owned:
+			binding?.status === "owned" &&
+			binding.owner_run_id === input.runId &&
+			binding.adapters.includes(input.adapterId),
+	};
+}
+
 /** Resolve one exact retained topology-cleanup lease for canonical close. */
 export async function retainedTopologyCleanupLeaseForRun(
 	deps: RunStoreDeps,

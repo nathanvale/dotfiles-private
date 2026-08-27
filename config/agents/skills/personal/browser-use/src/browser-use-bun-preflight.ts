@@ -1,5 +1,5 @@
 #!/bin/sh
-// 2>/dev/null; if ! command -v bun >/dev/null 2>&1; then printf '%s\n' 'browser-use: the Bun runtime is required but was not found on PATH.' 'Install it with: curl -fsSL https://bun.sh/install | bash' 'Then ensure '\''bun'\'' resolves on PATH and re-run browser-use.' >&2; exit 2; fi; exec bun "$0" "$@"
+// 2>/dev/null; if ! command -v bun >/dev/null 2>&1; then printf '%s\n' 'browser-use: the Bun runtime is required but was not found on PATH.' 'Install it with: curl -fsSL https://bun.sh/install | bash' 'Then ensure '\''bun'\'' resolves on PATH and re-run browser-use.' >&2; exit 2; fi; exec bun --no-env-file "$0" "$@"
 
 // ---------------------------------------------------------------------------
 // Bun runtime preflight for the installed front door (DDA-A21).
@@ -9,6 +9,14 @@
 // re-executing this module with bun; TypeScript sees the shell command as a
 // comment. A missing bun prints ONE actionable, named remedy to stderr and
 // exits with a typed code — never a bare `env: bun` error at exit 127.
+//
+// This module owns the Bun LOADER POLICY for the front door. Both the exec above
+// and the generated shim pass `--no-env-file`: without it Bun auto-loads a `.env`
+// from the invocation cwd into process.env, so any directory the operator happens
+// to stand in could inject `AUTH_TOKEN_FORBIDDEN_ENV_KEYS` and trip the auth
+// custody gate (`auth_token_input_rejected`) on token material the operator never
+// exported. Environment a caller GENUINELY inherits still arrives untouched, so
+// the fail-closed gate keeps rejecting real token authority in the environment.
 //
 // The exported renderer remains the contract owner for standalone launchers.
 // Process-boundary tests pin this checked-in entry to the same remedy and exit
@@ -39,7 +47,8 @@ export function bunPreflightRemedy(commandName: string): string {
  *   2. on absence prints {@link bunPreflightRemedy} to stderr and exits with
  *      {@link BUN_PREFLIGHT_MISSING_EXIT_CODE} — a typed remedy, not a raw
  *      `env: bun` error;
- *   3. otherwise `exec bun "<entry>" "$@"`, preserving args and exit status.
+ *   3. otherwise `exec bun --no-env-file "<entry>" "$@"`, preserving args and
+ *      exit status, and keeping cwd `.env` files out of the CLI process.
  *
  * @param input - The delivered command name and the absolute entry it fronts
  * @returns The shim script bytes (shebang included)
@@ -61,7 +70,7 @@ export function bunPreflightShim(input: {
 		`\tprintf '%s\\n' '${remedyLiteral}' >&2`,
 		`\texit ${BUN_PREFLIGHT_MISSING_EXIT_CODE}`,
 		"fi",
-		`exec bun '${entryLiteral}' "$@"`,
+		`exec bun --no-env-file '${entryLiteral}' "$@"`,
 		"",
 	].join("\n");
 }

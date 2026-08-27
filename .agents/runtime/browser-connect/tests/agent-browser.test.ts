@@ -158,6 +158,30 @@ describe("agent-browser releaseSession", () => {
 		expect(commands[1]?.args).toEqual(["session", "list", "--json"]);
 	});
 
+	test("keeps an adapter-owned socket directory on every release command", async () => {
+		const definition = findAdapterDefinition("agent-browser");
+		if (!definition?.releaseSession) throw new Error("releaseSession missing");
+		const { runtime, commands } = runtimeWith((input) => ({
+			exitCode: 0,
+			stdout: input.args.includes("close")
+				? JSON.stringify({ success: true })
+				: JSON.stringify({ success: true, data: { sessions: [] } }),
+			stderr: "",
+		}));
+		runtime.env.AGENT_BROWSER_SOCKET_DIR = "/private/browser-use-topology";
+
+		expect(await definition.releaseSession(runtime, { sessionName: SESSION_NAME })).toEqual({
+			released: true,
+		});
+		expect(commands).toHaveLength(2);
+		for (const command of commands) {
+			expect(command.env).toEqual({
+				AGENT_BROWSER_SOCKET_DIR: "/private/browser-use-topology",
+				MCPORTER_NO_KEEPALIVE: "*",
+			});
+		}
+	});
+
 	test("re-reads inventory until the owned name is absent", async () => {
 		const releaseSession = findAdapterDefinition("agent-browser")?.releaseSession;
 		if (!releaseSession) throw new Error("releaseSession missing");

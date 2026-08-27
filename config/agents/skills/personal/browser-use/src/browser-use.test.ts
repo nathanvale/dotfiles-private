@@ -7,6 +7,7 @@ import {
 import {
 	BROWSER_USE_OPERATION_CONTRACT_ID,
 	BROWSER_USE_OPERATION_SCHEMA_VERSION,
+	BROWSER_USE_TARGET_OPERATION_OUTER_SCHEMA_VERSION,
 	BROWSER_USE_TARGETS_CONTRACT_ID,
 	BROWSER_USE_TARGETS_SCHEMA_VERSION,
 	type BrowserUseCommand,
@@ -23,6 +24,10 @@ const ALL_COMMANDS: BrowserUseCommand[] = [
 	"targets-select",
 	"targets-status",
 	"targets-open",
+	// Retained exact-target lifecycle for a target this run did not open, and
+	// its release counterpart.
+	"targets-adopt",
+	"targets-release",
 	"targets-close",
 	"operate-snapshot",
 	"operate-screenshot",
@@ -135,6 +140,10 @@ describe("U3 command contract", () => {
 				schema_version: BROWSER_USE_OPERATION_SCHEMA_VERSION,
 			});
 		}
+		expect(tree.commands["operate-target"]?.result_contract).toMatchObject({
+			id: BROWSER_USE_OPERATION_CONTRACT_ID,
+			schema_version: BROWSER_USE_TARGET_OPERATION_OUTER_SCHEMA_VERSION,
+		});
 		expect(BROWSER_USE_TARGETS_CONTRACT_ID).toBe("browser-use.browser-targets");
 		expect(BROWSER_USE_OPERATION_CONTRACT_ID).toBe("browser-use.browser-operation");
 	});

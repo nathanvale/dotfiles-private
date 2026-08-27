@@ -140,12 +140,30 @@ export type SelectedTargetState = {
 	expires_at_ms: number;
 	// Redacted display facts (same projection as U5 candidates).
 	display: { origin: string; path_shape?: string; title?: string };
-	/** Opaque provenance for a target created by this run. Raw target ids never persist. */
-	ownership?: {
-		kind: "created-target";
-		target_ref: string;
-		retained_lifecycle?: BrowserUseRetainedLifecycle;
-	};
+	/**
+	 * Opaque provenance for a target this run holds custody of. Raw target ids
+	 * never persist — only the salted `target_ref`.
+	 *
+	 * `created-target` is a target this run opened, so this run may close it. Its
+	 * retained lifecycle is optional: a legacy record may predate lifecycle
+	 * retention.
+	 *
+	 * `adopted-target` is a target this run did NOT open. It exists only to carry
+	 * a retained exact-target adapter lifecycle, so the lifecycle is REQUIRED —
+	 * an adopted record with nothing retained would claim custody it is not
+	 * using. This run must never close an adopted target; it releases it.
+	 */
+	ownership?:
+		| {
+				kind: "created-target";
+				target_ref: string;
+				retained_lifecycle?: BrowserUseRetainedLifecycle;
+		  }
+		| {
+				kind: "adopted-target";
+				target_ref: string;
+				retained_lifecycle: BrowserUseRetainedLifecycle;
+		  };
 	/** Private CAS revision. Legacy schema-2 records without it are revision 0. */
 	revision: number;
 };
@@ -180,6 +198,16 @@ async function currentSelectedStateRevision(input: {
 			ok: false,
 			message:
 				"Close the open-created target before replacing its selected state.",
+		};
+	}
+	// An adopted target must not be closed — this run did not open it. Replacing
+	// its selection without releasing would orphan a live pinned adapter session
+	// that nothing else can name.
+	if (state.ownership?.kind === "adopted-target") {
+		return {
+			ok: false,
+			message:
+				"Release the adopted target before replacing its selected state.",
 		};
 	}
 	if (
@@ -294,6 +322,93 @@ export async function persistCreatedSelectedTargetState(input: {
 	return committed.ok
 		? { ok: true, state, raw }
 		: { ok: false, state, raw, failure: committed.failure };
+}
+
+/**
+ * Persist adoption of an already-selected target this run did NOT create.
+ *
+ * Unlike {@link persistCreatedSelectedTargetState}, this never mints a new
+ * selection: it CAS-replaces the record `targets select` already committed,
+ * keeping its envelope, candidate, ordinal, and display facts and adding the
+ * retained lifecycle. The bounded window is refreshed from the current clock,
+ * so re-adopting the same target renews it rather than stacking a second
+ * custody claim.
+ *
+ * @param input - Runtime, state path, the record being replaced, and the lifecycle
+ * @returns The committed state, or the CAS failure that left the record untouched
+ */
+export async function persistAdoptedSelectedTargetState(input: {
+	runtime: BrowserUseRuntime;
+	path: string;
+	runId: string;
+	previous: SelectedTargetState;
+	previousRaw: string;
+	targetRef: string;
+	retainedLifecycle: BrowserUseRetainedLifecycle;
+}): Promise<
+	| { ok: true; state: SelectedTargetState; raw: string }
+	| { ok: false; failure: { code: string; message: string } }
+> {
+	const emittedAtMs = input.runtime.now();
+	const state: SelectedTargetState = {
+		...input.previous,
+		emitted_at_ms: emittedAtMs,
+		expires_at_ms: emittedAtMs + SELECTED_TARGET_STATE_TTL_MS,
+		ownership: {
+			kind: "adopted-target",
+			target_ref: input.targetRef,
+			retained_lifecycle: input.retainedLifecycle,
+		},
+		revision: input.previous.revision + 1,
+	};
+	const raw = `${JSON.stringify(state)}\n`;
+	const committed = await casPersistSelectedTargetState({
+		runtime: input.runtime,
+		path: input.path,
+		runId: input.runId,
+		expectedRevision: input.previous.revision,
+		expectedRaw: input.previousRaw,
+		state,
+	});
+	return committed.ok ? { ok: true, state, raw } : { ok: false, failure: committed.failure };
+}
+
+/**
+ * Drop a retained lifecycle from the selected record without closing the target.
+ *
+ * Release is the adopted counterpart of `targets close`: the target belongs to
+ * the user, so the only thing this run gives up is its own binding. The
+ * selection itself survives, so the next operation re-attaches per action
+ * rather than failing.
+ *
+ * @param input - Runtime, state path, and the record being replaced
+ * @returns The committed state, or the CAS failure that left the record untouched
+ */
+export async function persistReleasedSelectedTargetState(input: {
+	runtime: BrowserUseRuntime;
+	path: string;
+	runId: string;
+	previous: SelectedTargetState;
+	previousRaw: string;
+}): Promise<
+	| { ok: true; state: SelectedTargetState; raw: string }
+	| { ok: false; failure: { code: string; message: string } }
+> {
+	const { ownership: _dropped, ...withoutOwnership } = input.previous;
+	const state: SelectedTargetState = {
+		...withoutOwnership,
+		revision: input.previous.revision + 1,
+	};
+	const raw = `${JSON.stringify(state)}\n`;
+	const committed = await casPersistSelectedTargetState({
+		runtime: input.runtime,
+		path: input.path,
+		runId: input.runId,
+		expectedRevision: input.previous.revision,
+		expectedRaw: input.previousRaw,
+		state,
+	});
+	return committed.ok ? { ok: true, state, raw } : { ok: false, failure: committed.failure };
 }
 
 // Handoff-bound discovery binding parsed from the supplied envelope. Every
@@ -1223,6 +1338,36 @@ function parseSelectedState(raw: string): SelectedTargetState | undefined {
 		ownership = undefined;
 	} else if (
 		isJsonObject(ownershipValue) &&
+		ownershipValue.kind === "adopted-target" &&
+		typeof ownershipValue.target_ref === "string" &&
+		/^[a-f0-9]{64}$/.test(ownershipValue.target_ref)
+	) {
+		// Adoption has no legacy shape to migrate and no optional arm: a record
+		// that cannot name its retained lifecycle is not an adopted target.
+		const retainedValue = ownershipValue.retained_lifecycle;
+		const retainedLifecycle =
+			isJsonObject(retainedValue) &&
+			isBrowserAdapterId(retainedValue.adapter_id) &&
+			typeof retainedValue.capability_id === "string" &&
+			retainedValue.capability_id.length > 0 &&
+			typeof retainedValue.lifecycle_ref === "string" &&
+			retainedValue.lifecycle_ref.length > 0
+				? {
+						adapter_id: retainedValue.adapter_id,
+						capability_id: retainedValue.capability_id,
+						lifecycle_ref: retainedValue.lifecycle_ref,
+					}
+				: undefined;
+		ownership =
+			retainedLifecycle === undefined
+				? null
+				: {
+						kind: "adopted-target",
+						target_ref: ownershipValue.target_ref,
+						retained_lifecycle: retainedLifecycle,
+					};
+	} else if (
+		isJsonObject(ownershipValue) &&
 		ownershipValue.kind === "created-target" &&
 		typeof ownershipValue.target_ref === "string" &&
 		/^[a-f0-9]{64}$/.test(ownershipValue.target_ref)
@@ -1531,6 +1676,10 @@ function selectedTargetView(state: SelectedTargetState): Record<string, unknown>
 			: {
 					ownership: {
 						kind: state.ownership.kind,
+						// Whether the retained fast lane is actually held. A caller
+						// choosing between a target-local operation and a fresh attach
+						// reads this; the adapter session name itself stays private.
+						lifecycle_retained: state.ownership.retained_lifecycle !== undefined,
 					},
 				}),
 	};

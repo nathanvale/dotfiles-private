@@ -46,6 +46,14 @@ function makeOverlay(): VolatileOverlayFs {
 	return overlay;
 }
 
+async function waitForStoreMarker(path: string): Promise<void> {
+	for (let elapsedMs = 0; elapsedMs < 5_000; elapsedMs += 10) {
+		if ((await realFs.lstat(path))?.kind === "file") return;
+		await Bun.sleep(10);
+	}
+	throw new Error("timed out waiting for publish-stage child marker");
+}
+
 // The store's revision seam: extract-or-corrupt over opaque record text.
 function revisionOf(raw: string): number | undefined {
 	try {
@@ -740,6 +748,63 @@ describe("private modes on the real filesystem (R12; V1)", () => {
 });
 
 describe("listOrphanTempFiles repair projection", () => {
+	test("does not list or remove a publish stage whose named publisher is live", async () => {
+		const root = join(xdg.base, "orphan-live-publisher");
+		mkdirSync(root, { recursive: true, mode: 0o700 });
+		const stage = join(
+			root,
+			`record.lock.publish-${process.pid}-1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`,
+		);
+		writeFileSync(stage, "stage", { mode: 0o600 });
+		expect(await listOrphanTempFiles(realFs, root)).toEqual([]);
+		expect(await removeOrphanTempFiles(realFs, root)).toEqual({ ok: true, removed: 0 });
+		expect(await realFs.lstat(stage)).toMatchObject({ kind: "file" });
+	});
+
+	test("a separate repair process cannot remove a live publisher stage, but repairs it after publisher death", async () => {
+		const root = join(xdg.base, "orphan-cross-process-publisher");
+		const lockPath = join(root, "record.lock");
+		const markerPath = join(root, "publisher-ready");
+		const scriptPath = join(root, "publisher.ts");
+		mkdirSync(root, { recursive: true, mode: 0o700 });
+		writeFileSync(
+			scriptPath,
+			[
+				`import { writeFileSync } from "node:fs";`,
+				`import { createDefaultPlatformFs } from ${JSON.stringify(join(import.meta.dir, "browser-use-paths.ts"))};`,
+				`import { withExclusiveFileLock } from ${JSON.stringify(join(import.meta.dir, "browser-use-store.ts"))};`,
+				`const lockPath = ${JSON.stringify(lockPath)};`,
+				`const markerPath = ${JSON.stringify(markerPath)};`,
+				"const fs = createDefaultPlatformFs();",
+				"await withExclusiveFileLock({ ...fs, async createExclusive(path, contents, mode) { await fs.createExclusive(path, contents, mode); if (path.startsWith(`${lockPath}.publish-`)) { writeFileSync(markerPath, path, { mode: 0o600 }); await new Promise<void>(() => {}); } } }, { lockPath, holderId: \"cross-process-publisher\", staleAfterMs: 60_000, clock: () => 1_000 }, async () => \"unreachable\");",
+			].join("\n"),
+			{ mode: 0o600 },
+		);
+		let child: ReturnType<typeof Bun.spawn> | undefined;
+		try {
+			child = Bun.spawn([process.execPath, scriptPath], {
+				stdout: "pipe",
+				stderr: "pipe",
+			});
+			await waitForStoreMarker(markerPath);
+			const stage = await realFs.readTextFile(markerPath);
+			expect(await listOrphanTempFiles(realFs, root)).toEqual([]);
+			expect(await removeOrphanTempFiles(realFs, root)).toEqual({ ok: true, removed: 0 });
+			expect(await realFs.lstat(stage)).toMatchObject({ kind: "file" });
+			child.kill("SIGKILL");
+			await child.exited;
+			child = undefined;
+			expect(await listOrphanTempFiles(realFs, root)).toEqual([stage]);
+			expect(await removeOrphanTempFiles(realFs, root)).toEqual({ ok: true, removed: 1 });
+			expect(await realFs.lstat(stage)).toBeUndefined();
+		} finally {
+			if (child !== undefined) {
+				child.kill("SIGKILL");
+				await child.exited;
+			}
+		}
+	});
+
 	test("walks the tree and lists only pid-counter temp siblings, sorted", async () => {
 		const root = join(xdg.base, "orphan-walk");
 		mkdirSync(join(root, "nested"), { recursive: true, mode: 0o700 });

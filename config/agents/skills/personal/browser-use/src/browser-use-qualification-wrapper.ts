@@ -15,10 +15,19 @@ import {
 import type { FileHandle } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import {
+	configureCliDiagnostics,
+	createCliDiagnosticContext,
+	emitCliDiagnostic,
+	parseCliDiagnosticArgv,
+	resetCliDiagnostics,
+	withCliDiagnosticContext,
+} from "@side-quest/cli-command-facade";
+import {
 	BROWSER_USE_LOCAL_QUALIFICATION_THREAT_MODEL,
 	createBrowserUseQualificationManifest,
 } from "./browser-use-qualification";
 import { acquireSourceLock } from "./browser-use-source-lock";
+import { quietDiagnosticWriter } from "./cli-diagnostics-bootstrap";
 import {
 	BROWSER_USE_QUALIFICATION_CAMPAIGN_RECEIPT_CONTRACT_ID,
 	BROWSER_USE_QUALIFICATION_CAMPAIGN_RECEIPT_SCHEMA_VERSION,
@@ -31,6 +40,11 @@ export const SEALED_ARTIFACT_NAME = "browser-use-qualification-runtime.js";
 export const SEALED_MANIFEST_NAME = "manifest.json";
 
 const SHA256 = /^[a-f0-9]{64}$/;
+const QUALIFICATION_DIAGNOSTIC_RUN_ID = /^[A-Za-z0-9._-]{1,64}$/;
+const QUALIFICATION_DIAGNOSTIC_CATEGORY = [
+	"browser-use",
+	"qualification",
+] as const;
 const SOURCE_ROOT = resolve(import.meta.dir, "../../../../../..");
 const RUNTIME_ENTRY =
 	"config/agents/skills/personal/browser-use/src/browser-use-qualification-runtime.ts";
@@ -47,7 +61,110 @@ class QualificationCampaignFailure extends Error {
 }
 
 function qualificationFailureCode(error: unknown): string {
-	return error instanceof Error ? error.message : "qualification_bundle_failed";
+	const message = error instanceof Error ? error.message : undefined;
+	return typeof message === "string" && /^qualification_[a-z0-9_]+$/.test(message)
+		? message
+		: "qualification_bundle_failed";
+}
+
+type QualificationFrontDoorCommand =
+	| "prepare"
+	| "manifest"
+	| "validate"
+	| "exec"
+	| "handoff"
+	| "session"
+	| "help"
+	| "unknown";
+
+type QualificationBundleRootClassification =
+	| "admitted"
+	| "missing_root"
+	| "non_directory"
+	| "symlink"
+	| "wrong_mode"
+	| "noncanonical_realpath"
+	| "unprepared_or_unsealed_root"
+	| "inspection_failed";
+
+type QualificationPrepareAdmission =
+	| "admitted"
+	| "non_absolute_output"
+	| "parent_unavailable"
+	| "parent_escape"
+	| "output_exists";
+
+type QualificationTerminalFailureKind =
+	| "bundle_input_invalid"
+	| "bundle_root_invalid"
+	| "bundle_verification_failed"
+	| "prepare_admission_failed"
+	| "source_guard_failed"
+	| "execution_failed"
+	| "cleanup_failed"
+	| "qualification_failed";
+
+type QualificationDiagnosticEvent =
+	| "qualification-front-door-dispatch"
+	| "qualification-prepare-admission"
+	| "qualification-prepare-created"
+	| "qualification-bundle-verification-started"
+	| "qualification-bundle-root-classified"
+	| "qualification-bundle-verification-completed"
+	| "qualification-cleanup-debt"
+	| "qualification-terminal-failure";
+
+function qualificationFrontDoorCommand(
+	subcommand: string | undefined,
+): QualificationFrontDoorCommand {
+	if (subcommand === undefined || subcommand === "--help") return "help";
+	return ["prepare", "manifest", "validate", "exec", "handoff", "session"].includes(
+		subcommand,
+	)
+		? (subcommand as Exclude<QualificationFrontDoorCommand, "help" | "unknown">)
+		: "unknown";
+}
+
+function qualificationTerminalFailureKind(
+	code: string,
+): QualificationTerminalFailureKind {
+	if (code === "qualification_bundle_input_invalid") return "bundle_input_invalid";
+	if (code === "qualification_bundle_root_invalid") return "bundle_root_invalid";
+	if (
+		code === "qualification_bundle_path_invalid" ||
+		code === "qualification_bundle_exists"
+	) {
+		return "prepare_admission_failed";
+	}
+	if (code.includes("cleanup") || code.includes("release_failed")) {
+		return "cleanup_failed";
+	}
+	if (code.includes("source_drift") || code.includes("source_identity")) {
+		return "source_guard_failed";
+	}
+	if (
+		code.includes("manifest") ||
+		code.includes("bundle_file") ||
+		code.includes("bundle_drift") ||
+		code.includes("identity_mismatch")
+	) {
+		return "bundle_verification_failed";
+	}
+	if (code.startsWith("qualification_")) return "execution_failed";
+	return "qualification_failed";
+}
+
+function emitQualificationDiagnostic(
+	level: "debug" | "warning" | "error",
+	event: QualificationDiagnosticEvent,
+	properties: Record<string, unknown> = {},
+): void {
+	emitCliDiagnostic(
+		QUALIFICATION_DIAGNOSTIC_CATEGORY,
+		level,
+		event,
+		properties,
+	);
 }
 
 function sha256(value: string | Uint8Array): string {
@@ -109,12 +226,35 @@ async function nativeSupervisorIdentity(): Promise<Record<string, unknown>> {
 	throw new Error("qualification_native_supervisor_unavailable");
 }
 
-async function exactSealedDirectory(path: string): Promise<boolean> {
-	const stat = await lstat(path).catch(() => undefined);
-	if (!stat?.isDirectory() || stat.isSymbolicLink() || (stat.mode & 0o777) !== 0o500) {
-		return false;
+async function classifySealedQualificationBundleRoot(
+	path: string,
+): Promise<QualificationBundleRootClassification> {
+	let stat: Awaited<ReturnType<typeof lstat>>;
+	try {
+		stat = await lstat(path);
+	} catch (error) {
+		return record(error)?.code === "ENOENT"
+			? "missing_root"
+			: "inspection_failed";
 	}
-	return (await realpath(path)) === path;
+	if (stat.isSymbolicLink()) return "symlink";
+	if (!stat.isDirectory()) return "non_directory";
+	if ((stat.mode & 0o777) !== 0o500) return "wrong_mode";
+	try {
+		if ((await realpath(path)) !== path) return "noncanonical_realpath";
+	} catch {
+		return "inspection_failed";
+	}
+	for (const name of [SEALED_ARTIFACT_NAME, SEALED_MANIFEST_NAME]) {
+		try {
+			await lstat(join(path, name));
+		} catch (error) {
+			return record(error)?.code === "ENOENT"
+				? "unprepared_or_unsealed_root"
+				: "inspection_failed";
+		}
+	}
+	return "admitted";
 }
 
 function contained(root: string, candidate: string): boolean {
@@ -129,10 +269,31 @@ export type SealedQualificationBundle = {
 	manifest: Record<string, unknown> & { manifest_digest: string };
 };
 
+/**
+ * Refuse the qualification workflow unless its bundler entrypoint is a real
+ * source file inside this checkout. A bundled `dist/` copy resolves
+ * `SOURCE_ROOT` elsewhere, so this gate stops the packaged bin from silently
+ * qualifying stale bytes.
+ */
+export async function assertBrowserUseQualificationRuntimeEntry(
+	sourceRoot: string = SOURCE_ROOT,
+): Promise<string> {
+	const entryPath = resolve(sourceRoot, RUNTIME_ENTRY);
+	if (!contained(sourceRoot, entryPath)) {
+		throw new Error("qualification_bundle_source_entry_unavailable");
+	}
+	const stat = await lstat(entryPath).catch(() => undefined);
+	if (!stat?.isFile()) {
+		throw new Error("qualification_bundle_source_entry_unavailable");
+	}
+	return entryPath;
+}
+
 async function buildSealedRuntime(): Promise<{
 	artifactBytes: Uint8Array;
 	metafile: { inputs: Record<string, unknown> };
 }> {
+	await assertBrowserUseQualificationRuntimeEntry();
 	const child = Bun.spawn(
 		[
 			process.execPath,
@@ -166,12 +327,45 @@ export async function prepareSealedQualificationBundle(input: {
 	agentBrowserExecutable?: string;
 	agentBrowserInstallLock?: string;
 }): Promise<SealedQualificationBundle> {
-	if (!isAbsolute(input.outputRoot)) throw new Error("qualification_bundle_path_invalid");
-	const parent = await realpath(dirname(input.outputRoot));
+	if (!isAbsolute(input.outputRoot)) {
+		emitQualificationDiagnostic("debug", "qualification-prepare-admission", {
+			admitted: false,
+			prepare_admission: "non_absolute_output" satisfies QualificationPrepareAdmission,
+		});
+		throw new Error("qualification_bundle_path_invalid");
+	}
+	let parent: string;
+	try {
+		parent = await realpath(dirname(input.outputRoot));
+	} catch (error) {
+		emitQualificationDiagnostic("debug", "qualification-prepare-admission", {
+			admitted: false,
+			prepare_admission: "parent_unavailable" satisfies QualificationPrepareAdmission,
+		});
+		throw error;
+	}
 	const outputRoot = resolve(input.outputRoot);
-	if (!contained(parent, outputRoot)) throw new Error("qualification_bundle_path_invalid");
+	if (!contained(parent, outputRoot)) {
+		emitQualificationDiagnostic("debug", "qualification-prepare-admission", {
+			admitted: false,
+			prepare_admission: "parent_escape" satisfies QualificationPrepareAdmission,
+		});
+		throw new Error("qualification_bundle_path_invalid");
+	}
 	const existing = await lstat(outputRoot).catch(() => undefined);
-	if (existing !== undefined) throw new Error("qualification_bundle_exists");
+	if (existing !== undefined) {
+		emitQualificationDiagnostic("debug", "qualification-prepare-admission", {
+			admitted: false,
+			prepare_admission: "output_exists" satisfies QualificationPrepareAdmission,
+		});
+		throw new Error("qualification_bundle_exists");
+	}
+	emitQualificationDiagnostic("debug", "qualification-prepare-admission", {
+		admitted: true,
+		prepare_admission: "admitted" satisfies QualificationPrepareAdmission,
+		agent_browser_identity_source:
+			input.agentBrowserExecutable === undefined ? "discovered" : "explicit",
+	});
 
 	const built = await buildSealedRuntime();
 	const artifactBytes = built.artifactBytes;
@@ -252,6 +446,14 @@ export async function prepareSealedQualificationBundle(input: {
 	const parentHandle = await open(parent, constants.O_RDONLY);
 	await parentHandle.sync();
 	await parentHandle.close();
+	emitQualificationDiagnostic("debug", "qualification-prepare-created", {
+		contract_id: BROWSER_USE_QUALIFICATION_BUNDLE_CONTRACT_ID,
+		schema_version: BROWSER_USE_QUALIFICATION_BUNDLE_SCHEMA_VERSION,
+		artifact_count: 2,
+		root_mode: 0o500,
+		artifact_mode: 0o500,
+		manifest_mode: 0o400,
+	});
 	return { root: outputRoot, artifactPath, manifestPath, manifest };
 }
 
@@ -260,11 +462,34 @@ export async function verifySealedQualificationBundle(input: {
 	expectedManifestDigest: string;
 	wrapperPath: string;
 }): Promise<SealedQualificationBundle> {
+	emitQualificationDiagnostic(
+		"debug",
+		"qualification-bundle-verification-started",
+		{
+			contract_id: BROWSER_USE_QUALIFICATION_BUNDLE_CONTRACT_ID,
+			schema_version: BROWSER_USE_QUALIFICATION_BUNDLE_SCHEMA_VERSION,
+		},
+	);
 	if (!SHA256.test(input.expectedManifestDigest) || !isAbsolute(input.bundleRoot)) {
 		throw new Error("qualification_bundle_input_invalid");
 	}
 	const root = resolve(input.bundleRoot);
-	if (!(await exactSealedDirectory(root))) throw new Error("qualification_bundle_root_invalid");
+	const rootClassification = await classifySealedQualificationBundleRoot(root);
+	emitQualificationDiagnostic(
+		"debug",
+		"qualification-bundle-root-classified",
+		{
+			bundle_root_state: rootClassification,
+			admitted: rootClassification === "admitted",
+			recommended_phase:
+				rootClassification === "admitted"
+					? "bundle_verification"
+					: "qualification_prepare",
+		},
+	);
+	if (rootClassification !== "admitted") {
+		throw new Error("qualification_bundle_root_invalid");
+	}
 	const artifactPath = join(root, SEALED_ARTIFACT_NAME);
 	const manifestPath = join(root, SEALED_MANIFEST_NAME);
 	for (const [path, mode] of [[artifactPath, 0o500], [manifestPath, 0o400]] as const) {
@@ -291,6 +516,15 @@ export async function verifySealedQualificationBundle(input: {
 	) {
 		throw new Error("qualification_bundle_drift");
 	}
+	emitQualificationDiagnostic(
+		"debug",
+		"qualification-bundle-verification-completed",
+		{
+			contract_id: BROWSER_USE_QUALIFICATION_BUNDLE_CONTRACT_ID,
+			schema_version: BROWSER_USE_QUALIFICATION_BUNDLE_SCHEMA_VERSION,
+			artifact_count: 2,
+		},
+	);
 	return { root, artifactPath, manifestPath, manifest: manifest as SealedQualificationBundle["manifest"] };
 }
 
@@ -728,6 +962,15 @@ export async function executeVerifiedSealedQualificationBundle(input: {
 			}
 		}
 		if (cleanupDebt.length > 0) {
+			emitQualificationDiagnostic("warning", "qualification-cleanup-debt", {
+				cleanup_debt_count: cleanupDebt.length,
+				handle_close_failed: cleanupDebt.includes(
+					"qualification_invocation_handle_close_failed",
+				),
+				invocation_root_remove_failed: cleanupDebt.includes(
+					"qualification_invocation_root_remove_failed",
+				),
+			});
 			throw new QualificationCampaignFailure(
 				primaryFailure === undefined
 					? "qualification_invocation_cleanup_failed"
@@ -770,6 +1013,79 @@ function writeQualificationHelp(subcommand?: string): void {
 	process.stdout.write(`Usage: ${usage}\n`);
 }
 
+function parseQualificationDiagnosticInvocation(argv: readonly string[]): {
+	argv: string[];
+	options: ReturnType<typeof parseCliDiagnosticArgv>["options"];
+} {
+	const separator = argv.indexOf("--");
+	const head = separator < 0 ? [...argv] : argv.slice(0, separator);
+	const tail = separator < 0 ? [] : argv.slice(separator + 1);
+	const diagnosticTokens: string[] = [];
+	const withoutModes = head.filter(
+		(arg) => arg !== "--quiet" && arg !== "--verbose" && arg !== "--debug",
+	);
+	const subcommand = withoutModes[1];
+	const runIdCandidates: Array<
+		| { index: number; inline: true; value: string }
+		| { index: number; inline: false; value: string }
+	> = [];
+	for (let index = 0; index < head.length; index += 1) {
+		const arg = head[index];
+		if (arg === "--run-id" && head[index + 1] !== undefined) {
+			runIdCandidates.push({
+				index,
+				inline: false,
+				value: head[index + 1] as string,
+			});
+			index += 1;
+		} else if (arg?.startsWith("--run-id=")) {
+			runIdCandidates.push({
+				index,
+				inline: true,
+				value: arg.slice("--run-id=".length),
+			});
+		}
+	}
+	const diagnosticRunId =
+		subcommand !== "handoff" &&
+		runIdCandidates.length === 1 &&
+		QUALIFICATION_DIAGNOSTIC_RUN_ID.test(runIdCandidates[0]?.value ?? "")
+			? runIdCandidates[0]
+			: undefined;
+	const strippedHead: string[] = [];
+	for (let index = 0; index < head.length; index += 1) {
+		const arg = head[index];
+		if (arg === "--quiet" || arg === "--verbose" || arg === "--debug") {
+			diagnosticTokens.push(arg);
+			continue;
+		}
+		if (diagnosticRunId?.index === index) {
+			diagnosticTokens.push(
+				diagnosticRunId.inline
+					? `--run-id=${diagnosticRunId.value}`
+					: "--run-id",
+			);
+			if (!diagnosticRunId.inline) {
+				diagnosticTokens.push(diagnosticRunId.value);
+				index += 1;
+			}
+			continue;
+		}
+		strippedHead.push(arg as string);
+	}
+	if (head.includes("--json") || head.includes("--jsonl")) {
+		diagnosticTokens.push("--json");
+	}
+	const parsed = parseCliDiagnosticArgv(diagnosticTokens);
+	return {
+		argv: [
+			...strippedHead,
+			...(separator < 0 ? [] : ["--", ...tail]),
+		],
+		options: parsed.options,
+	};
+}
+
 export async function runBrowserUseFrontDoor(
 	argv: readonly string[],
 	input: { wrapperPath: string },
@@ -778,6 +1094,42 @@ export async function runBrowserUseFrontDoor(
 		const { runBrowserUseCli } = await import("./browser-use");
 		return await runBrowserUseCli(argv);
 	}
+	const diagnostic = parseQualificationDiagnosticInvocation(argv);
+	configureCliDiagnostics({
+		categoryRoot: QUALIFICATION_DIAGNOSTIC_CATEGORY,
+		options: diagnostic.options,
+		diagnosticWriter: diagnostic.options.quiet
+			? quietDiagnosticWriter
+			: process.stderr,
+	});
+	const command = qualificationFrontDoorCommand(diagnostic.argv[1]);
+	const context = createCliDiagnosticContext(diagnostic.options, {
+		qualification_command: command,
+		qualification_contract_id: BROWSER_USE_QUALIFICATION_BUNDLE_CONTRACT_ID,
+		qualification_schema_version:
+			BROWSER_USE_QUALIFICATION_BUNDLE_SCHEMA_VERSION,
+	});
+	try {
+		return await withCliDiagnosticContext(context, async () => {
+			emitQualificationDiagnostic(
+				"debug",
+				"qualification-front-door-dispatch",
+				{
+					command,
+					machine_output: diagnostic.options.json,
+				},
+			);
+			return await runQualificationFrontDoor(diagnostic.argv, input);
+		});
+	} finally {
+		resetCliDiagnostics();
+	}
+}
+
+async function runQualificationFrontDoor(
+	argv: readonly string[],
+	input: { wrapperPath: string },
+): Promise<number> {
 	const subcommand = argv[1];
 	const wrapperPath = input.wrapperPath;
 	try {
@@ -890,6 +1242,7 @@ export async function runBrowserUseFrontDoor(
 			let postExecutionClosureDigest: string | undefined;
 			try {
 				if (subcommand === "session") {
+					await assertBrowserUseQualificationRuntimeEntry();
 					const admittedBundle = await verifySealedQualificationBundle({
 						bundleRoot,
 						expectedManifestDigest,
@@ -974,6 +1327,17 @@ export async function runBrowserUseFrontDoor(
 					},
 				});
 			}
+			if (executed.exitCode !== 0) {
+				emitQualificationDiagnostic(
+					"error",
+					"qualification-terminal-failure",
+					{
+						failure_kind: "execution_failed" satisfies QualificationTerminalFailureKind,
+						exit_code: executed.exitCode,
+						cleanup_debt_count: 0,
+					},
+				);
+			}
 			return executed.exitCode;
 		}
 		throw new Error("qualification_bundle_input_invalid");
@@ -981,6 +1345,14 @@ export async function runBrowserUseFrontDoor(
 		const code = error instanceof QualificationCampaignFailure
 			? error.primaryCode
 			: qualificationFailureCode(error);
+		emitQualificationDiagnostic("error", "qualification-terminal-failure", {
+			failure_kind: qualificationTerminalFailureKind(code),
+			exit_code: 20,
+			cleanup_debt_count:
+				error instanceof QualificationCampaignFailure
+					? error.cleanupDebt.length
+					: 0,
+		});
 		writeEnvelope({
 			status: "error",
 			...(error instanceof QualificationCampaignFailure

@@ -83,7 +83,7 @@ const OP_AUTHENTICATED =
 beforeAll(() => {
 	if (DARWIN && !existsSync(SUPERVISOR)) {
 		throw new Error(
-			`real supervisor binary missing; build it first: bun --cwd runtime/browser-use-environment-auth run build:release (${SUPERVISOR})`,
+			`real supervisor binary missing; build it first: bun --cwd .agents/runtime/browser-use-environment-auth run build:release (${SUPERVISOR})`,
 		);
 	}
 });
@@ -281,7 +281,7 @@ describe.skipIf(!DARWIN)("auth doctor real process boundary", () => {
 					"lane: unknown",
 					"gate            verdict  state",
 					"runtime         red      blocked cause=token-supervisor-unavailable",
-					"  repair: bun --cwd runtime/browser-use-environment-auth run build:release",
+					"  repair: bun --cwd .agents/runtime/browser-use-environment-auth run build:release",
 					"token_file      unknown  unknown",
 					"op              unknown  unknown",
 					"token           unknown  unknown",
@@ -291,6 +291,62 @@ describe.skipIf(!DARWIN)("auth doctor real process boundary", () => {
 					"",
 				].join("\n"),
 			);
+		},
+		TEST_TIMEOUT_MS,
+	);
+
+	test(
+		"source-linked CLI finds the built supervisor, so the runtime gate is not cold",
+		async () => {
+			// The mirror of AE5. AE5 proves a bundle WITHOUT `dist/bin/` renders the
+			// cold gate; this proves SOURCE-mode discovery reaches the real
+			// `.agents/runtime/browser-use-environment-auth/.build/release` binary in
+			// this repository layout. An obsolete relative walk resolves outside the
+			// workspace, silently degrading every auth command to
+			// `token-supervisor-unavailable`.
+			//
+			// Only the RUNTIME gate is asserted. The downstream custody gates depend on
+			// live operator state and stay free to report their own verdicts here.
+			const fixture = scratch("source-supervisor");
+			expect(existsSync(SUPERVISOR)).toBe(true);
+
+			const result = await runBrowserUse(fixture, ["auth", "doctor", "--json"]);
+
+			// Read the gate defensively: a cold runtime gate blocks BEFORE the
+			// evaluation detail exists, so reach through optional hops and assert on a
+			// named cause rather than letting a missing field throw an opaque TypeError.
+			const envelope = json(result.stdout);
+			expect(result.exitCode).toBe(20);
+			expect(envelope).toMatchObject({
+				status: "error",
+				data: {
+					contract: "browser-use.auth-readiness",
+					evaluation: {
+						status: "blocked",
+						detail: {
+							lane: {
+								selected: "environment-injected-op",
+								status: "blocked",
+							},
+						},
+					},
+				},
+				error: {
+					code: "auth_token_supervisor_failed",
+				},
+			});
+			const evaluation = (envelope.data as JsonRecord | undefined)?.evaluation as
+				| JsonRecord
+				| undefined;
+			const runtimeCause =
+				((
+					((evaluation?.detail as JsonRecord | undefined)?.checks as
+						| JsonRecord
+						| undefined)?.runtime as JsonRecord | undefined
+				)?.cause as string | undefined) ?? (evaluation?.blocked_cause as string | undefined);
+
+			expect(runtimeCause).not.toBe("token-supervisor-unavailable");
+			expect(result.stdout).not.toContain("build-token-supervisor");
 		},
 		TEST_TIMEOUT_MS,
 	);

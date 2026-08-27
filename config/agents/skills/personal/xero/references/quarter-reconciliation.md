@@ -6,19 +6,35 @@
 - Live browser connection and action: `skills/browser-use/SKILL.md`.
 - Gmail reads and drafts: the `gog gmail` command contract.
 - Quarter handoff evidence: `skills/xero/scripts/quarter-ledger.ts`.
+- Standard quarterly BAS due-date reference:
+  `references/ato-quarter-due-dates.md`.
 
 The ledger helper is a bundled Bun runtime. Missing Bun is blocked. `xero-cli`
 is a local-development dependency; missing command or blocked workspace state
 halts reconciliation but does not block read-only ledger status.
 
-## Start One Quarter
+## Approved Quarter Cycle
 
-1. Read the ledger command catalog and redacted status.
-2. Resolve one exact fiscal quarter and inclusive period boundaries.
-3. Run `xero-cli commands --json` and `xero-cli workspace status --json`.
-4. Follow only the returned `nextSafeAction`. Never inspect XDG state directly.
-5. If the Xero workspace, linked command, browser identity, or quarter scope is
-   blocked, report the cause and stop before writes.
+1. Choose one exact fiscal quarter and inclusive period boundaries. Read the
+   ledger command catalog and redacted status.
+2. Read the due-date reference. Prefer an entity-specific generated BAS date or
+   accountant-confirmed date when available.
+3. Verify and download the bound QIF.
+4. Verify its Xero import through Browser Use.
+5. Run `xero-cli commands --json` and `xero-cli workspace status --json`, then
+   follow only the returned `nextSafeAction`. Never inspect XDG state directly.
+6. Complete `xero-cli` reconciliation.
+7. Review the exact Xero Activity Statement.
+8. Read `references/capability-stubs.md`, then stop at its BAS finalise/export
+   handoff with the exact quarter and Activity Statement review gate until a
+   supported executable owner exists.
+9. Send the accountant handoff only with fresh, exact approval bound to the
+   specific recipients, message body, and attachments. Use `gog` evidence.
+10. Confirm lodgment from accountant or ATO evidence. Treat payment as a
+    separate follow-up.
+
+If the Xero workspace, linked command, browser identity, quarter scope, QIF,
+or due date is blocked, report the cause and stop before writes.
 
 ## Reconcile
 

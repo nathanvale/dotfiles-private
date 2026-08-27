@@ -84,8 +84,11 @@ Advanced: explicit target discovery and operations (platform internals):
   browser-use targets list --mode handoff-bound --adapter <id> --json
   browser-use targets open --url <exact-http(s)-url> --handoff <path>
   browser-use targets list ... --json | browser-use targets select --candidate <n>
-  browser-use targets close --handoff <path>
+  browser-use targets adopt --handoff <path>     # retain one exact-target lifecycle
+  browser-use targets release --handoff <path>   # give it back; target stays open
+  browser-use targets close --handoff <path>     # open-created targets only
   browser-use operate snapshot|screenshot|emulate
+  browser-use operate target --plan <path>       # needs a retained lifecycle
 
 - Handoff-bound discovery attaches automatically and derives adapter binary +
   endpoint from the fresh envelope. --handoff remains an advanced override.
@@ -94,8 +97,13 @@ Advanced: explicit target discovery and operations (platform internals):
 - Run correlation: pass --run-id (or BROWSER_USE_RUN_ID) plus
   BROWSER_USE_TARGET_STATE_DIR (or --state <path>) so select/status/operate
   share run-scoped target state; select fails closed without it.
-- operate starts a fresh adapter process per call: never carry an operate
-  snapshot ref into a separate mutation client.
+- Without a retained lifecycle, operate attaches, activates the tab, and tears
+  the adapter session down on every call: never carry an operate snapshot ref
+  into a separate mutation client.
+- More than one action on the same page: targets adopt once, then operate runs
+  target-local on the retained lifecycle with no per-action re-attach, and
+  operate target --plan runs a bounded multi-step plan inside it. targets
+  release gives the lifecycle back. Never targets close an adopted target.
 `;
 
 const RECOVERY_GUIDE = `browser-use guide — recovery

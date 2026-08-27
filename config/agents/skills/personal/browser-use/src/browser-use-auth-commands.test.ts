@@ -247,7 +247,7 @@ describe("token doctor repair groundwork", () => {
 			(cause) => AUTH_TOKEN_REPAIR_PATHS[cause].repairCommand,
 		);
 		expect(commands[0]).toBe(
-			"bun --cwd runtime/browser-use-environment-auth run build:release",
+			"bun --cwd .agents/runtime/browser-use-environment-auth run build:release",
 		);
 		expect(new Set(commands).size).toBe(3);
 		expect(AUTH_TOKEN_SUPERVISOR_DEGRADED_ACTIONS).toMatchObject({
@@ -441,7 +441,7 @@ describe("auth doctor renderer", () => {
 			[
 				"token-supervisor-unavailable",
 				"build-token-supervisor",
-				"bun --cwd runtime/browser-use-environment-auth run build:release",
+				"bun --cwd .agents/runtime/browser-use-environment-auth run build:release",
 			],
 			[
 				"op-path-unavailable",
@@ -846,7 +846,7 @@ describe("auth doctor renderer", () => {
 		expect(statusCalls).toBe(2);
 		expect(ownerCalls).toBe(0);
 		expect(result.stdout).toContain(
-			"bun --cwd runtime/browser-use-environment-auth run build:release",
+			"bun --cwd .agents/runtime/browser-use-environment-auth run build:release",
 		);
 	});
 

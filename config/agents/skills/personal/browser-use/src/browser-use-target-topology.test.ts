@@ -102,8 +102,10 @@ function topologyHarness(
 	const nativeThrows: string[] = [];
 	let lastInventoryTabs: NativeTab[] = [];
 	let pinnedTargetId: string | undefined;
+	let pinnedOpenUrl: string | undefined;
 	let sessionCloseResult: McporterCommandResult = ok({});
 	let sessionCloseCalls = 0;
+	let lastClosedSessionName: string | undefined;
 	let sessionListResult: McporterCommandResult = ok({ sessions: [] });
 	let pinResult: McporterCommandResult | undefined;
 	const handoffs = new Map<string, string>([
@@ -162,7 +164,10 @@ function topologyHarness(
 			}
 		},
 	};
+	let stdinText = "";
+	let liveUrl: string | undefined;
 	const runtime: BrowserUseRuntime = makeRuntime({
+		readStdin: async () => stdinText,
 		env: {
 			HOME: "/home/tester",
 			XDG_CONFIG_HOME: "/xdg/config",
@@ -195,30 +200,64 @@ function topologyHarness(
 			await platformFs.mkdir(dirname(path), { recursive: true, mode: 0o700 });
 			await platformFs.writeFileDurable(path, contents, 0o600);
 		},
-		runCommand: async (command) => {
-			commandVectors.push([command.command, ...command.args]);
-			const tabIndex = command.args.indexOf("tab");
-			if (tabIndex < 0) {
-				if (command.args.includes("close")) {
-					sessionCloseCalls += 1;
-					pinnedTargetId = undefined;
-					return sessionCloseResult;
-				}
-				if (command.args[0] === "session" && command.args[1] === "list") {
-					return sessionListResult;
+			runCommand: async (command) => {
+				commandVectors.push([command.command, ...command.args]);
+				const tabIndex = command.args.indexOf("tab");
+				if (tabIndex < 0) {
+					if (command.args.includes("close")) {
+						const sessionIndex = command.args.indexOf("--session");
+						lastClosedSessionName = command.args[sessionIndex + 1];
+						if (lastClosedSessionName?.startsWith("browser-use-topology-cleanup-")) {
+							return ok({});
+						}
+						sessionCloseCalls += 1;
+						pinnedTargetId = undefined;
+						return sessionCloseResult;
+					}
+					if (command.args[0] === "session" && command.args[1] === "list") {
+						if (lastClosedSessionName?.startsWith("browser-use-topology-cleanup-")) {
+							return ok({ sessions: [] });
+						}
+						return sessionListResult;
 				}
 				if (command.args.includes("snapshot")) return ok("Root\nButton");
 				if (command.args.includes("get") && command.args.includes("url")) {
+					if (pinResult !== undefined && command.args.includes("--pin-tab")) {
+						const result = pinResult;
+						pinResult = undefined;
+						return result;
+					}
+					if (liveUrl !== undefined) return ok({ url: liveUrl });
 					return ok({
-						url: lastInventoryTabs.find(
-							(tab) => tab.targetId === pinnedTargetId,
-						)?.url,
+						url:
+							lastInventoryTabs.find(
+								(tab) => tab.targetId === pinnedTargetId,
+							)?.url ?? pinnedOpenUrl,
 					});
 				}
 				return ok({});
 			}
 			const semantic = command.args.slice(tabIndex);
 			calls.push(semantic);
+			if (semantic[1] === "new") {
+				pinnedOpenUrl = semantic[2];
+				if (nativeThrows[0] === "open") {
+					nativeThrows.shift();
+					throw new Error("injected native open failure");
+				}
+				const result = creates.shift() ?? ok({ targetId: "target-new" });
+				try {
+					const envelope = JSON.parse(result.stdout) as {
+						data?: { targetId?: unknown };
+					};
+					if (typeof envelope.data?.targetId === "string") {
+						pinnedTargetId = envelope.data.targetId;
+					}
+				} catch {
+					// The production parser owns malformed create classification.
+				}
+				return result;
+			}
 			if (nativeThrows[0] === semantic[1]) {
 				nativeThrows.shift();
 				throw new Error(`injected native ${semantic[1]} failure`);
@@ -246,9 +285,6 @@ function topologyHarness(
 				}
 				return result;
 			}
-			if (semantic[1] === "new") {
-				return creates.shift() ?? ok({ targetId: "target-new" });
-			}
 			if (semantic[1] === "close") {
 				return closes.shift() ?? ok({});
 			}
@@ -256,14 +292,11 @@ function topologyHarness(
 				semantic.length === 2 ||
 				(semantic.length === 3 && semantic[2] === "--json")
 			) {
-				if (command.args.includes("--pin-tab")) {
-					if (pinResult !== undefined) {
-						const result = pinResult;
-						pinResult = undefined;
-						return result;
-					}
-					pinnedTargetId = semantic[1];
-				}
+				// `tab <id>` selects the tab in the session whether or not the call
+				// is pinned; --pin-tab only makes that binding strict. Adoption
+				// depends on the unpinned selection landing, because a pinned call
+				// on an unbound session opens a fresh tab instead of adopting one.
+				pinnedTargetId = semantic[1];
 				return ok({});
 			}
 			return failed({ stdout: "unexpected topology command" });
@@ -280,6 +313,13 @@ function topologyHarness(
 		},
 		overlay,
 		platformFs,
+		setStdin(value: string) {
+			stdinText = value;
+		},
+		/** Make the live page report a URL the tab inventory does not carry. */
+		setLiveUrl(value: string | undefined) {
+			liveUrl = value;
+		},
 		setHandoff(value: string) {
 			handoffs.set(HANDOFF_PATH, value);
 		},
@@ -298,7 +338,7 @@ function topologyHarness(
 		close(result: McporterCommandResult) {
 			closes.push(result);
 		},
-		throwNextNative(operation: "new" | "close") {
+		throwNextNative(operation: "open" | "close") {
 			nativeThrows.push(operation);
 		},
 		failSessionRelease(result: McporterCommandResult) {
@@ -745,7 +785,9 @@ describe("targets topology public admission", () => {
 				),
 			).toHaveLength(0);
 			expect(
-				harness.calls.filter((call) => call[1] === "new"),
+				harness.calls.filter(
+					(call) => call[0] === "tab" && call[1] === "new",
+				),
 			).toHaveLength(1);
 			expect(
 				harness.calls.filter((call) => call[1] === "close"),
@@ -862,10 +904,15 @@ describe("targets open inventory oracle and identity", () => {
 			harness.commandVectors.some(
 				(vector) =>
 					vector.includes("--pin-tab") &&
-					vector.includes("tab") &&
-					vector.includes("target-new"),
+					vector.includes("get") &&
+					vector.includes("url"),
 			),
 		).toBe(true);
+		expect(
+			harness.commandVectors.some(
+				(vector) => vector.includes("tab") && vector.includes("target-new"),
+			),
+		).toBe(false);
 		expect(harness.sessionCloseCalls).toBe(0);
 	});
 
@@ -878,6 +925,8 @@ describe("targets open inventory oracle and identity", () => {
 		harness.list();
 		harness.create(ok({ targetId: "target-new" }));
 		harness.list(wrong);
+		harness.close(ok({}));
+		harness.list();
 		const result = await runForTest(
 			[
 				"targets",
@@ -899,8 +948,329 @@ describe("targets open inventory oracle and identity", () => {
 		expect(envelopeError(result.stdout).code).toBe(
 			"target_topology_create_binding_failed",
 		);
-		expect(envelopeData(result.stdout).target_present).toBe("unknown");
+		expect(envelopeData(result.stdout)).toMatchObject({
+			effect: "confirmed",
+			target_present: false,
+			cleanup: { attempted: true, closed: true },
+		});
+		expect(envelopeError(result.stdout).recoverability).toBe("retry");
+		expect(
+			harness.calls.filter(
+				(call) => call[1] === "close" && call.includes("target-new"),
+			),
+		).toHaveLength(1);
+		expect(await stateExists(harness)).toBe(false);
+	});
+
+	test("retains recoverable ownership when the sole mismatched new target cannot be closed", async () => {
+		const harness = topologyHarness();
+		const wrong = tab(
+			"target-new",
+			"https://storybook.example.test/?path=/story/input--docs",
+		);
+		harness.list();
+		harness.create(ok({ targetId: "target-new" }));
+		harness.list(wrong);
+		harness.close(failed({ exitCode: 1 }));
+		harness.list(wrong);
+
+		const opened = await runOpen(harness);
+
+		expectExit(opened, 20);
+		expect(envelopeError(opened.stdout).code).toBe(
+			"target_topology_create_binding_failed",
+		);
+		expect(envelopeData(opened.stdout)).toMatchObject({
+			effect: "unknown",
+			target_present: "unknown",
+			cleanup: {
+				attempted: true,
+				closed: false,
+				cause: "native-close-failed-and-target-remains-visible",
+			},
+		});
+		expect(envelopeError(opened.stdout).recoverability).toBe("none");
+		expect(await stateExists(harness)).toBe(false);
+
+		const recovered = await closeTarget(harness, [wrong], ok({ tabs: [] }));
+
+		expectSuccess(recovered);
+		expect(envelopeData(recovered.stdout)).toMatchObject({
+			target_present: false,
+			ownership_released: true,
+		});
+	});
+
+	test("refuses cleanup ownership when the sole new target is not the adapter-reported target", async () => {
+		const harness = topologyHarness();
+		const wrong = tab(
+			"target-new",
+			"https://storybook.example.test/?path=/story/input--docs",
+		);
+		harness.list();
+		harness.create(ok({ targetId: "target-reported-elsewhere" }));
+		harness.list(wrong);
+
+		const result = await runOpen(harness);
+
+		expectExit(result, 20);
+		expect(envelopeError(result.stdout).code).toBe(
+			"target_topology_create_binding_failed",
+		);
+		expect(envelopeData(result.stdout)).toMatchObject({
+			effect: "unknown",
+			target_present: "unknown",
+		});
+		expect(envelopeData(result.stdout).cleanup).toBeUndefined();
 		expect(harness.calls.some((call) => call[1] === "close")).toBe(false);
+		expect(await stateExists(harness)).toBe(false);
+	});
+
+	test("refuses cleanup ownership when a pre-existing target disappeared alongside the create", async () => {
+		const harness = topologyHarness();
+		const existing = tab(
+			"target-existing",
+			"https://storybook.example.test/?path=/story/other--docs",
+		);
+		const wrong = tab(
+			"target-new",
+			"https://storybook.example.test/?path=/story/input--docs",
+		);
+		harness.list(existing);
+		harness.create(ok({ targetId: "target-new" }));
+		harness.list(wrong);
+
+		const result = await runOpen(harness);
+
+		expectExit(result, 20);
+		expect(envelopeError(result.stdout).code).toBe(
+			"target_topology_create_binding_failed",
+		);
+		expect(envelopeData(result.stdout)).toMatchObject({
+			effect: "unknown",
+			target_present: "unknown",
+		});
+		expect(envelopeData(result.stdout).cleanup).toBeUndefined();
+		expect(harness.calls.some((call) => call[1] === "close")).toBe(false);
+		expect(await stateExists(harness)).toBe(false);
+	});
+
+	test("refuses cleanup ownership when the create produced more than one new target", async () => {
+		const harness = topologyHarness();
+		const wrongFirst = tab(
+			"target-new-a",
+			"https://storybook.example.test/?path=/story/input--docs",
+		);
+		const wrongSecond = tab(
+			"target-new-b",
+			"https://storybook.example.test/?path=/story/other--docs",
+		);
+		harness.list();
+		harness.create(ok({ targetId: "target-new-a" }));
+		harness.list(wrongFirst, wrongSecond);
+
+		const result = await runOpen(harness);
+
+		expectExit(result, 20);
+		expect(envelopeError(result.stdout).code).toBe(
+			"target_topology_create_binding_failed",
+		);
+		expect(envelopeData(result.stdout)).toMatchObject({
+			effect: "unknown",
+			target_present: "unknown",
+		});
+		expect(envelopeData(result.stdout).cleanup).toBeUndefined();
+		expect(harness.calls.some((call) => call[1] === "close")).toBe(false);
+		expect(await stateExists(harness)).toBe(false);
+	});
+
+	// Seam fixture: agent-browser `--pin-tab tab new` can return exit 0 with a
+	// success envelope that carries no `targetId`. The native layer then reports
+	// `agent_browser_topology_unconfirmed`, so topology holds no create-returned
+	// identity and may correlate only by exact URL.
+	test("a receiptless create still binds when the exact inventory row is already visible", async () => {
+		const harness = topologyHarness();
+		const created = tab("target-new", REQUESTED_URL);
+		harness.list();
+		harness.create(ok({}));
+		// The adapter's receiptless fallback adopts before it pins, and only the
+		// unpinned read consumes a queued inventory.
+		harness.list(created);
+		harness.list(created);
+
+		const result = await runOpen(harness);
+
+		expectSuccess(result);
+		expect(envelopeData(result.stdout)).toMatchObject({
+			effect: "confirmed",
+			target_present: true,
+			command_outcome: "inventory-confirmed",
+			transport_warning: "native-create-output-unconfirmed",
+		});
+		expect((await readState(harness)).ownership.kind).toBe("created-target");
+	});
+
+	test("adopts one pinned new tab whose exact target id is preserved across navigation", async () => {
+		const harness = topologyHarness();
+		const before = tab("target-current", "https://example.test/");
+		const after = tab("target-current", REQUESTED_URL);
+		harness.list(before);
+		harness.create(ok({ targetId: "target-current" }));
+		harness.list(after);
+
+		const opened = await runOpen(harness);
+
+		expectSuccess(opened);
+		expect(envelopeData(opened.stdout)).toMatchObject({
+			effect: "confirmed",
+			target_present: true,
+			command_outcome: "adapter-confirmed",
+		});
+		expect((await readState(harness)).ownership.kind).toBe("created-target");
+		expect(
+			Object.values(custodyRecord(harness).value.targets)[0],
+		).toMatchObject({ ownership_provenance: "explicit-adoption" });
+
+		harness.close(ok({}));
+		const closed = await closeTarget(harness, [after], ok({ tabs: [] }));
+
+		expectSuccess(closed);
+		expect(envelopeData(closed.stdout)).toMatchObject({
+			target_present: false,
+			ownership_released: true,
+		});
+		expect(await stateExists(harness)).toBe(false);
+	});
+
+	// Storybook's manager appends to its own query string as soon as it boots.
+	// The adapter has already proven stable (tabId, targetId) identity plus
+	// requested-origin correspondence by this point, so topology must not throw
+	// that away on an exact-href comparison. Identity is asserted as an
+	// invariant across the two runs: rewriting the URL must not change which
+	// target was selected.
+	test("adopts a pinned new tab whose page rewrote its URL in place, with identity unchanged", async () => {
+		async function openWith(afterUrl: string) {
+			const harness = topologyHarness();
+			harness.list(
+				tab("target-current", "https://example.test/"),
+				tab("target-other", "https://storybook.example.test/other"),
+			);
+			harness.create(ok({ targetId: "target-current" }));
+			harness.list(
+				tab("target-current", afterUrl),
+				tab("target-other", "https://storybook.example.test/other"),
+			);
+			const opened = await runOpen(harness);
+			expectSuccess(opened);
+			return envelopeData(opened.stdout);
+		}
+
+		const exact = await openWith(REQUESTED_URL);
+		const rewritten = await openWith(`${REQUESTED_URL}&globals=`);
+
+		expect(rewritten).toMatchObject({
+			effect: "confirmed",
+			target_present: true,
+			command_outcome: "adapter-confirmed",
+			normalized_origin: "https://storybook.example.test",
+		});
+		// The selected target identity is URL-independent.
+		expect(rewritten.target_ref).toBe(exact.target_ref);
+		expect(rewritten.target_candidate_id).toBe(exact.target_candidate_id);
+	});
+
+	test("fails an adopted pinned new tab closed when it is serving another origin", async () => {
+		const harness = topologyHarness();
+		harness.list(tab("target-current", "https://example.test/"));
+		harness.create(ok({ targetId: "target-current" }));
+		harness.list(
+			tab("target-current", "https://elsewhere.example.test/?path=/story/button--docs"),
+		);
+
+		const opened = await runOpen(harness);
+
+		expectExit(opened, 20);
+		expect(envelopeError(opened.stdout)).toMatchObject({
+			code: "target_topology_create_binding_failed",
+		});
+		expect(await stateExists(harness)).toBe(false);
+	});
+
+	test("adopts and closes one already-exact current pinned new tab", async () => {
+		const harness = topologyHarness();
+		const current = tab("target-current", REQUESTED_URL);
+		harness.list(current);
+		harness.create(ok({ targetId: "target-current" }));
+		harness.list(current);
+
+		const opened = await runOpen(harness);
+
+		expectSuccess(opened);
+		expect(
+			Object.values(custodyRecord(harness).value.targets)[0],
+		).toMatchObject({ ownership_provenance: "explicit-adoption" });
+
+		harness.close(ok({}));
+		const closed = await closeTarget(harness, [current], ok({ tabs: [] }));
+
+		expectSuccess(closed);
+		expect(await stateExists(harness)).toBe(false);
+	});
+
+	test("a receiptless create whose row is not yet visible fails closed and takes no cleanup ownership", async () => {
+		const harness = topologyHarness();
+		const settled = tab("target-new", REQUESTED_URL);
+		harness.list();
+		harness.create(ok({}));
+		// The adapter's receiptless fallback adopts first, and only its unpinned
+		// read consumes a queued inventory.
+		harness.list();
+		harness.list();
+		// A later independent re-list would observe the exact row; topology never
+		// requests it, so this fixture stays unconsumed.
+		harness.list(settled);
+
+		const result = await runOpen(harness);
+
+		expectExit(result, 20);
+		expect(envelopeError(result.stdout).code).toBe(
+			"target_topology_create_binding_failed",
+		);
+		expect(envelopeData(result.stdout)).toMatchObject({
+			effect: "unknown",
+			target_mutated: false,
+			target_present: "unknown",
+		});
+		expect(envelopeData(result.stdout).cleanup).toBeUndefined();
+		expect(harness.calls.some((call) => call[1] === "close")).toBe(false);
+		// Pre-create inventory + same-session pinned identity + one independent
+		// post-create inventory. There is no extra topology retry.
+		expect(harness.calls.filter((call) => call[1] === "list")).toHaveLength(3);
+		expect(await stateExists(harness)).toBe(false);
+	});
+
+	test("a create-returned identity whose row is not yet visible fails closed without a bounded re-list", async () => {
+		const harness = topologyHarness();
+		const settled = tab("target-new", REQUESTED_URL);
+		harness.list();
+		harness.create(ok({ targetId: "target-new" }));
+		harness.list();
+		// The create-returned identity would correlate with this settled row.
+		harness.list(settled);
+
+		const result = await runOpen(harness);
+
+		expectExit(result, 20);
+		expect(envelopeError(result.stdout).code).toBe(
+			"target_topology_create_binding_failed",
+		);
+		expect(envelopeData(result.stdout)).toMatchObject({
+			effect: "unknown",
+			target_mutated: false,
+			target_present: "unknown",
+		});
+		expect(envelopeData(result.stdout).cleanup).toBeUndefined();
+		expect(harness.calls.filter((call) => call[1] === "list")).toHaveLength(2);
 		expect(await stateExists(harness)).toBe(false);
 	});
 
@@ -1865,7 +2235,7 @@ describe("targets topology ownership failure and run composition", () => {
 	test("thrown native create is contained and releases Browser Lane plus session", async () => {
 		const harness = topologyHarness();
 		harness.list();
-		harness.throwNextNative("new");
+		harness.throwNextNative("open");
 		harness.list();
 
 		const result = await runOpen(harness);
@@ -2425,5 +2795,703 @@ describe("targets topology ownership failure and run composition", () => {
 				binding.owner_run_id !== null && binding.status === "owned",
 		);
 		expect(ownersAfterRepair).toHaveLength(0);
+	});
+});
+
+describe("targets adopt / release — retained lifecycle for a target this run did not open", () => {
+	const ADOPTED_URL = "https://storybook.example.test/?path=/story/button--docs";
+
+	// Drive the real front door end to end: discover, select, then adopt. The
+	// selection is never hand-written, so the candidate identity the adopt path
+	// re-derives is the one `targets select` actually persisted.
+	async function selectExisting(
+		harness: Harness,
+		tabs: NativeTab[] = [tab("target-existing", ADOPTED_URL, { title: "Button docs" })],
+	) {
+		await harness.platformFs.mkdir(dirname(STATE_PATH), {
+			recursive: true,
+			mode: 0o700,
+		});
+		harness.list(...tabs);
+		const listed = await runForTest(
+			[
+				"targets",
+				"list",
+				"--mode",
+				"handoff-bound",
+				"--handoff",
+				HANDOFF_PATH,
+				"--run-id",
+				RUN_ID,
+				"--json",
+			],
+			harness.runtime,
+		);
+		expect(listed.exitCode).toBe(0);
+		harness.setStdin(listed.stdout);
+		const selected = await runForTest(
+			[
+				"targets",
+				"select",
+				"--candidate",
+				"1",
+				"--state",
+				STATE_PATH,
+				"--handoff",
+				HANDOFF_PATH,
+				"--run-id",
+				RUN_ID,
+				"--json",
+			],
+			harness.runtime,
+		);
+		expect(selected.exitCode).toBe(0);
+		harness.setStdin("");
+		return selected;
+	}
+
+	function runAdopt(harness: Harness, ...extra: string[]) {
+		return runForTest(
+			[
+				"targets",
+				"adopt",
+				"--handoff",
+				HANDOFF_PATH,
+				"--state",
+				STATE_PATH,
+				"--run-id",
+				RUN_ID,
+				"--json",
+				...extra,
+			],
+			harness.runtime,
+		);
+	}
+
+	function runRelease(harness: Harness, ...extra: string[]) {
+		return runForTest(
+			[
+				"targets",
+				"release",
+				"--handoff",
+				HANDOFF_PATH,
+				"--state",
+				STATE_PATH,
+				"--run-id",
+				RUN_ID,
+				"--json",
+				...extra,
+			],
+			harness.runtime,
+		);
+	}
+
+	test("adopts the selected target, retains its lifecycle, and never creates or closes a tab", async () => {
+		const harness = topologyHarness();
+		await selectExisting(harness);
+		harness.list(tab("target-existing", ADOPTED_URL, { title: "Button docs" }));
+		// Discovery already attaches and releases a run session of its own, so the
+		// meaningful number is what adoption adds on top of it.
+		const releasesBefore = harness.sessionCloseCalls;
+
+		const result = await runAdopt(harness);
+
+		expect(result.exitCode).toBe(0);
+		const data = parseJson(result.stdout).data as Record<string, any>;
+		expect(data).toMatchObject({
+			effect: "confirmed",
+			target_mutated: false,
+			target_present: true,
+			adapter: "agent-browser",
+			ownership: { kind: "adopted-target", retained: true },
+			retained_lifecycle_confirmed: true,
+			focus: true,
+		});
+
+		// Independent oracle: the adapter verbs adoption is allowed to use are
+		// listed here by hand. Creating or closing a tab is exactly what adoption
+		// must never do to a target the user owns.
+		const verbs = harness.calls.map((call) => call.slice(0, 2).join(" "));
+		expect(verbs).not.toContain("tab new");
+		expect(verbs).not.toContain("tab close");
+
+		// The lifecycle is held, so adoption released no session of its own.
+		expect(harness.sessionCloseCalls - releasesBefore).toBe(0);
+
+		const status = await runForTest(
+			["targets", "status", "--state", STATE_PATH, "--run-id", RUN_ID, "--json"],
+			harness.runtime,
+		);
+		expect(
+			(parseJson(status.stdout).data as Record<string, any>).selected_target
+				.ownership,
+		).toEqual({ kind: "adopted-target", lifecycle_retained: true });
+	});
+
+	test("release gives the lifecycle back and leaves the adopted target open", async () => {
+		const harness = topologyHarness();
+		await selectExisting(harness);
+		harness.list(tab("target-existing", ADOPTED_URL, { title: "Button docs" }));
+		expect((await runAdopt(harness)).exitCode).toBe(0);
+
+		const result = await runRelease(harness);
+
+		expect(result.exitCode).toBe(0);
+		expect(parseJson(result.stdout).data).toMatchObject({
+			effect: "confirmed",
+			target_mutated: false,
+			target_present: true,
+			lifecycle_released: true,
+		});
+		expect(
+			harness.calls.map((call) => call.slice(0, 2).join(" ")),
+		).not.toContain("tab close");
+
+		const status = await runForTest(
+			["targets", "status", "--state", STATE_PATH, "--run-id", RUN_ID, "--json"],
+			harness.runtime,
+		);
+		expect(status.exitCode).toBe(0);
+		expect(
+			(parseJson(status.stdout).data as Record<string, any>).selected_target
+				.ownership,
+		).toBeUndefined();
+	});
+
+	test("close refuses an adopted target instead of closing a tab this run never opened", async () => {
+		const harness = topologyHarness();
+		await selectExisting(harness);
+		harness.list(tab("target-existing", ADOPTED_URL, { title: "Button docs" }));
+		expect((await runAdopt(harness)).exitCode).toBe(0);
+
+		const result = await runForTest(
+			[
+				"targets",
+				"close",
+				"--handoff",
+				HANDOFF_PATH,
+				"--state",
+				STATE_PATH,
+				"--run-id",
+				RUN_ID,
+				"--json",
+			],
+			harness.runtime,
+		);
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_topology_state_mismatch",
+		});
+		expect(
+			harness.calls.map((call) => call.slice(0, 2).join(" ")),
+		).not.toContain("tab close");
+	});
+
+	test("refuses adoption when the selected target left the origin it was selected from", async () => {
+		const harness = topologyHarness();
+		await selectExisting(harness);
+		harness.list(tab("target-existing", "https://other.example.test/app"));
+		const releasesBefore = harness.sessionCloseCalls;
+
+		const result = await runAdopt(harness);
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_topology_target_mismatch",
+		});
+		// Refused before any binding, so there was nothing to give back.
+		expect(harness.sessionCloseCalls - releasesBefore).toBe(0);
+	});
+
+	test("refuses adoption of an open-created target and points at the selection it already owns", async () => {
+		const harness = topologyHarness();
+		expect((await openTarget(harness)).exitCode).toBe(0);
+
+		const result = await runAdopt(harness);
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_topology_state_mismatch",
+		});
+	});
+
+	test("refuses release when no adopted lifecycle is held", async () => {
+		const harness = topologyHarness();
+		await selectExisting(harness);
+
+		const result = await runRelease(harness);
+
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_topology_state_mismatch",
+		});
+	});
+
+	test("gives the lifecycle back when adoption cannot bind the exact target", async () => {
+		const harness = topologyHarness();
+		await selectExisting(harness, [
+			tab("target-existing", ADOPTED_URL, { title: "Button docs" }),
+			tab("target-other", "https://storybook.example.test/other"),
+		]);
+		harness.list(
+			tab("target-existing", ADOPTED_URL, { title: "Button docs" }),
+			tab("target-other", "https://storybook.example.test/other"),
+		);
+		// The pinned URL read leaves the exact page, so the binding is refused
+		// after the tab was already selected.
+		harness.failPin(ok({ url: "https://storybook.example.test/moved" }));
+		const releasesBefore = harness.sessionCloseCalls;
+
+		const result = await runAdopt(harness);
+
+		expect(result.exitCode).toBe(1);
+		expect(parseJson(result.stdout).error).toMatchObject({
+			code: "target_topology_create_binding_failed",
+		});
+		// The refused binding must not be left behind.
+		expect(harness.sessionCloseCalls - releasesBefore).toBe(1);
+
+		const status = await runForTest(
+			["targets", "status", "--state", STATE_PATH, "--run-id", RUN_ID, "--json"],
+			harness.runtime,
+		);
+		expect(
+			(parseJson(status.stdout).data as Record<string, any>).selected_target
+				.ownership,
+		).toBeUndefined();
+	});
+
+	// Close-recovery exists to clean up a target this run CREATED when its state
+	// record is gone. Adoption registers ownership through the same custody
+	// registry, so the guard that keeps recovery off an adopted target is the
+	// ownership provenance filter — not the state record, which by definition is
+	// missing on this path. Loosening that filter would let recovery close a tab
+	// the user opened, so it is pinned here from the public front door.
+	test.each([
+		["a refused adoption", true],
+		["a committed adoption whose state record is gone", false],
+	] as const)(
+		"close-recovery never acts on the ownership left by %s",
+		async (_label, refuseBinding) => {
+		const harness = topologyHarness();
+		await selectExisting(harness);
+		harness.list(tab("target-existing", ADOPTED_URL, { title: "Button docs" }));
+		if (refuseBinding) {
+			harness.failPin(ok({ url: "https://storybook.example.test/moved" }));
+			expect((await runAdopt(harness)).exitCode).toBe(1);
+		} else {
+			expect((await runAdopt(harness)).exitCode).toBe(0);
+			await harness.platformFs.unlink(STATE_PATH);
+		}
+
+		const closed = await runForTest(
+			[
+				"targets",
+				"close",
+				"--handoff",
+				HANDOFF_PATH,
+				"--state",
+				STATE_PATH,
+				"--run-id",
+				RUN_ID,
+				"--json",
+			],
+			harness.runtime,
+		);
+
+		expect(closed.exitCode).toBe(20);
+		expect(parseJson(closed.stdout).error).toMatchObject({
+			code: "target_topology_recovery_owner_mismatch",
+		});
+		expect(
+			harness.calls.map((call) => call.slice(0, 2).join(" ")),
+		).not.toContain("tab close");
+		},
+	);
+
+	test("release still works after the adopted window lapses, so no session is stranded", async () => {
+		const harness = topologyHarness();
+		await selectExisting(harness);
+		harness.list(tab("target-existing", ADOPTED_URL, { title: "Button docs" }));
+		expect((await runAdopt(harness)).exitCode).toBe(0);
+
+		// Past the bounded adoption window. Operations refuse from here, so the
+		// release path is the only way back — it must not also refuse, or the
+		// pinned adapter session would have no owner able to give it back.
+		harness.clock.advance(SELECTED_TARGET_STATE_TTL_MS + 1_000);
+
+		const result = await runRelease(harness);
+
+		expect(result.exitCode).toBe(0);
+		expect(parseJson(result.stdout).data).toMatchObject({
+			target_mutated: false,
+			target_present: true,
+			lifecycle_released: true,
+		});
+	});
+
+	test("dry-run adoption names its planned effect without any adapter call", async () => {
+		const harness = topologyHarness();
+		await selectExisting(harness);
+		const callsBefore = harness.calls.length;
+
+		const result = await runAdopt(harness, "--dry-run");
+
+		expect(result.exitCode).toBe(0);
+		expect(parseJson(result.stdout).data).toMatchObject({
+			effect: "not_started",
+			target_mutated: false,
+			planned_effect: "resolve-bind-retain-lifecycle",
+		});
+		expect(harness.calls.length).toBe(callsBefore);
+	});
+});
+
+describe("multi-step form flow stays on one adopted target", () => {
+	const FORM_URL = "https://storybook.example.test/?path=/story/form--docs";
+
+	// Independent oracle: the plan below is hand-written here, and so is every
+	// expected count. Nothing in this test asks the code under test what it
+	// should have done.
+	const FORM_PLAN = {
+		contract: "browser-use.target-operation-plan",
+		schema_version: "1",
+		steps: [
+			{ kind: "input", action: "focus", selector: "#given-name" },
+			{ kind: "input", action: "press", key: "Tab" },
+			{ kind: "input", action: "focus", selector: "#family-name" },
+			{ kind: "input", action: "press", key: "Tab" },
+		],
+	} as const;
+
+	const PLAN_PATH = "/private/form-plan.json";
+
+	/** Adapter invocations that tear down this run's own session. */
+	function sessionReleases(vectors: readonly string[][]): string[][] {
+		return vectors.filter((vector) => {
+			if (!vector.includes("close") || vector.includes("tab")) return false;
+			const sessionName = vector[vector.indexOf("--session") + 1] ?? "";
+			return !sessionName.startsWith("browser-use-topology-cleanup-");
+		});
+	}
+
+	/** Adapter invocations that re-point the session at a tab by id. */
+	function tabActivations(vectors: readonly string[][]): string[][] {
+		return vectors.filter((vector) => {
+			const index = vector.indexOf("tab");
+			const next = index < 0 ? undefined : vector[index + 1];
+			return (
+				next !== undefined &&
+				next !== "list" &&
+				next !== "new" &&
+				next !== "close"
+			);
+		});
+	}
+
+	async function harnessWithSelection() {
+		const harness = topologyHarness();
+		await harness.platformFs.mkdir(dirname(STATE_PATH), {
+			recursive: true,
+			mode: 0o700,
+		});
+		await harness.platformFs.writeFileDurable(
+			PLAN_PATH,
+			JSON.stringify(FORM_PLAN),
+			0o600,
+		);
+		harness.list(tab("target-form", FORM_URL, { title: "Form docs" }));
+		const listed = await runForTest(
+			[
+				"targets",
+				"list",
+				"--mode",
+				"handoff-bound",
+				"--handoff",
+				HANDOFF_PATH,
+				"--run-id",
+				RUN_ID,
+				"--json",
+			],
+			harness.runtime,
+		);
+		expect(listed.exitCode).toBe(0);
+		harness.setStdin(listed.stdout);
+		const selected = await runForTest(
+			[
+				"targets",
+				"select",
+				"--candidate",
+				"1",
+				"--state",
+				STATE_PATH,
+				"--handoff",
+				HANDOFF_PATH,
+				"--run-id",
+				RUN_ID,
+				"--json",
+			],
+			harness.runtime,
+		);
+		expect(selected.exitCode).toBe(0);
+		harness.setStdin("");
+		return harness;
+	}
+
+	function operate(harness: Harness, ...leaf: string[]) {
+		harness.list(tab("target-form", FORM_URL, { title: "Form docs" }));
+		return runForTest(
+			[
+				"operate",
+				...leaf,
+				"--state",
+				STATE_PATH,
+				"--handoff",
+				HANDOFF_PATH,
+				"--run-id",
+				RUN_ID,
+				"--json",
+			],
+			harness.runtime,
+		);
+	}
+
+	test("without adoption every action re-attaches and re-activates the tab", async () => {
+		const harness = await harnessWithSelection();
+		const before = harness.commandVectors.length;
+
+		const first = await operate(harness, "snapshot");
+		const second = await operate(harness, "snapshot");
+
+		expect([first.exitCode, second.exitCode]).toEqual([0, 0]);
+		const vectors = harness.commandVectors.slice(before);
+		// Two read-only actions cost FOUR session teardowns: discovery attaches
+		// and releases a session, then the operation attaches and releases
+		// another one. That is two full adapter attach cycles per action, plus a
+		// tab re-activation each time.
+		expect(sessionReleases(vectors)).toHaveLength(4);
+		expect(tabActivations(vectors)).toHaveLength(2);
+		// Pinned cost of the unretained path, hand-counted: 8 adapter invocations
+		// per semantic action. Lowering this number is a real improvement and
+		// raising it is a regression, so it is asserted rather than observed.
+		expect(vectors).toHaveLength(16);
+
+		// A target plan is not even reachable on this path.
+		const planned = await operate(harness, "target", "--plan", PLAN_PATH);
+		expect(planned.exitCode).toBe(20);
+		expect(parseJson(planned.stdout).error).toMatchObject({
+			code: "browser_operation_target_plan_unsupported",
+		});
+	});
+
+	test("after adoption a four-step form plan and a snapshot share one lifecycle", async () => {
+		const harness = await harnessWithSelection();
+		harness.list(tab("target-form", FORM_URL, { title: "Form docs" }));
+		const adopted = await runForTest(
+			[
+				"targets",
+				"adopt",
+				"--handoff",
+				HANDOFF_PATH,
+				"--state",
+				STATE_PATH,
+				"--run-id",
+				RUN_ID,
+				"--json",
+			],
+			harness.runtime,
+		);
+		expect(adopted.exitCode).toBe(0);
+		const afterAdoption = harness.commandVectors.length;
+
+		const planned = await operate(harness, "target", "--plan", PLAN_PATH);
+		const snapshot = await operate(harness, "snapshot");
+
+		expect([planned.exitCode, snapshot.exitCode]).toEqual([0, 0]);
+
+		const plannedData = parseJson(planned.stdout).data as Record<string, any>;
+		expect(plannedData.execution).toMatchObject({
+			scope: "target-local",
+			focus: false,
+		});
+		expect(plannedData.target_plan.plan_step_count).toBe(4);
+		expect(
+			plannedData.target_plan.steps.map((step: Record<string, unknown>) => step.status),
+		).toEqual(["confirmed", "confirmed", "confirmed", "confirmed"]);
+		expect((parseJson(snapshot.stdout).data as Record<string, any>).execution)
+			.toMatchObject({ scope: "target-local", focus: false });
+
+		const vectors = harness.commandVectors.slice(afterAdoption);
+		// The retained binding is what removes the per-action cost: four form
+		// steps plus a snapshot, and not one attach teardown or tab re-activation
+		// between them.
+		expect(sessionReleases(vectors)).toHaveLength(0);
+		expect(tabActivations(vectors)).toHaveLength(0);
+
+		// One session name and one canonical target for the whole workflow.
+		// Pinned cost of the retained path, hand-counted: four form steps plus a
+		// verification snapshot for 15 adapter invocations. The same five actions
+		// on the unretained path above cost 8 invocations EACH — 40 in total,
+		// with 10 session teardowns.
+		expect(vectors).toHaveLength(15);
+		const sessionNames = new Set(
+			vectors.map((vector) => vector[vector.indexOf("--session") + 1]),
+		);
+		expect(sessionNames).toEqual(new Set([`browser-use-${RUN_ID}`]));
+		expect(
+			(parseJson(snapshot.stdout).data as Record<string, any>).target
+				.candidate_id,
+		).toBe(plannedData.target.candidate_id);
+
+		// Every form step ran through the strict binding, never a loose call.
+		const formSteps = vectors.filter(
+			(vector) => vector.includes("focus") || vector.includes("press"),
+		);
+		expect(formSteps).toHaveLength(4);
+		for (const step of formSteps) expect(step).toContain("--pin-tab");
+	});
+
+	// Live canary, 2026-08-27: adoption and retained snapshots worked against a
+	// real Xero target, but every `operate target` plan came back
+	// browser_operation_target_plan_failed with plan_step_count set and
+	// steps: [] — the pre-dispatch baseline refusing before anything ran. The
+	// page rewrites its own query string, so the URL the tab inventory carried
+	// was not the URL the live page reported.
+	test("a plan runs when the page rewrites its own query string, and says so", async () => {
+		const harness = await harnessWithSelection();
+		harness.list(tab("target-form", FORM_URL, { title: "Form docs" }));
+		const adopted = await runForTest(
+			[
+				"targets",
+				"adopt",
+				"--handoff",
+				HANDOFF_PATH,
+				"--state",
+				STATE_PATH,
+				"--run-id",
+				RUN_ID,
+				"--json",
+			],
+			harness.runtime,
+		);
+		expect(adopted.exitCode).toBe(0);
+
+		// Same origin, same tab, same canonical target — a query string the app
+		// added to itself after discovery recorded the tab.
+		harness.setLiveUrl(`${FORM_URL}&sid=7f3a`);
+
+		const planned = await operate(harness, "target", "--plan", PLAN_PATH);
+
+		expect(planned.exitCode).toBe(0);
+		const data = parseJson(planned.stdout).data as Record<string, any>;
+		expect(data.target_plan.plan_step_count).toBe(4);
+		expect(
+			data.target_plan.steps.map((step: Record<string, unknown>) => step.status),
+		).toEqual(["confirmed", "confirmed", "confirmed", "confirmed"]);
+		// The relaxation is reported, never silent.
+		expect(data.target_plan.baseline).toMatchObject({ url_drifted: true });
+		// The drift evidence names the structure that differed, so the caller can
+		// tell "the app added a parameter" from "someone navigated the tab"...
+		expect(data.target_plan.baseline.drift_shape).toMatchObject({
+			origin_equal: true,
+			path_equal: true,
+			query_key_set_equal: false,
+			query_keys_only_in_actual: ["sid"],
+		});
+		// ...while the value itself never crosses the public seam.
+		expect(planned.stdout).not.toContain("7f3a");
+	});
+
+	test("a plan on a page that crossed origin is still refused before any step", async () => {
+		const harness = await harnessWithSelection();
+		harness.list(tab("target-form", FORM_URL, { title: "Form docs" }));
+		expect(
+			(
+				await runForTest(
+					[
+						"targets",
+						"adopt",
+						"--handoff",
+						HANDOFF_PATH,
+						"--state",
+						STATE_PATH,
+						"--run-id",
+						RUN_ID,
+						"--json",
+					],
+					harness.runtime,
+				)
+			).exitCode,
+		).toBe(0);
+		harness.setLiveUrl("https://elsewhere.example.test/form");
+		const before = harness.commandVectors.length;
+
+		const planned = await operate(harness, "target", "--plan", PLAN_PATH);
+
+		expect(planned.exitCode).not.toBe(0);
+		const envelope = parseJson(planned.stdout) as Record<string, any>;
+		expect(envelope.data.target_plan.steps).toEqual([]);
+		// Fail-closed: not one form verb dispatched.
+		const vectors = harness.commandVectors.slice(before);
+		expect(
+			vectors.filter(
+				(vector) => vector.includes("focus") || vector.includes("press"),
+			),
+		).toHaveLength(0);
+	});
+
+	test("release restores the per-action path without closing the target", async () => {
+		const harness = await harnessWithSelection();
+		harness.list(tab("target-form", FORM_URL, { title: "Form docs" }));
+		expect(
+			(
+				await runForTest(
+					[
+						"targets",
+						"adopt",
+						"--handoff",
+						HANDOFF_PATH,
+						"--state",
+						STATE_PATH,
+						"--run-id",
+						RUN_ID,
+						"--json",
+					],
+					harness.runtime,
+				)
+			).exitCode,
+		).toBe(0);
+		expect(
+			(
+				await runForTest(
+					[
+						"targets",
+						"release",
+						"--handoff",
+						HANDOFF_PATH,
+						"--state",
+						STATE_PATH,
+						"--run-id",
+						RUN_ID,
+						"--json",
+					],
+					harness.runtime,
+				)
+			).exitCode,
+		).toBe(0);
+		const afterRelease = harness.commandVectors.length;
+
+		const snapshot = await operate(harness, "snapshot");
+
+		expect(snapshot.exitCode).toBe(0);
+		const vectors = harness.commandVectors.slice(afterRelease);
+		// Back to the unretained cost: two teardowns and one re-activation for a
+		// single action.
+		expect(sessionReleases(vectors)).toHaveLength(2);
+		expect(tabActivations(vectors)).toHaveLength(1);
+		expect(
+			harness.calls.map((call) => call.slice(0, 2).join(" ")),
+		).not.toContain("tab close");
 	});
 });

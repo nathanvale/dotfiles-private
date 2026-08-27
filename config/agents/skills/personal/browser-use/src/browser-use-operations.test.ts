@@ -1,6 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import {
 	BROWSER_USE_OPERATION_CONTRACT_ID,
 	BROWSER_USE_OPERATION_SCHEMA_VERSION,
@@ -38,7 +39,10 @@ import {
 } from "./browser-use-paths";
 import { listLeases } from "./browser-use-locks";
 import { parseHandoffFacts } from "./browser-use-discovery";
-import { captureBrowserUseScreenshotMedia } from "./browser-use-operations";
+import {
+	captureBrowserUseScreenshotMedia,
+	parseBrowserOperationQualificationReceipt,
+} from "./browser-use-operations";
 import { agentBrowserSuccess } from "./browser-use-agent-browser-test-fixture";
 import {
 	BROWSER_USE_CUSTODY_CONTRACT_ID,
@@ -110,6 +114,135 @@ const CREATED_TARGET_REFS = {
 	"cdp-target-b": "b3a60a4104cfac57f82e6b8314e4ca724028610c436872c6ad071b0c6f74054c",
 } as const;
 
+// Independent test-owned SHA-256 oracles for the fixed parser fixture ids.
+const QUALIFICATION_RECEIPT_TARGET_REFS = {
+	"schema5-parser-target":
+		"58ea71b82c2df67eb663456a3f9b70c31a017ba292b4caa93a2207e4070fb134",
+	"schema6-parser-target":
+		"665d1f7e1fea477cdae056706fb6b5175f173e8294f274d7d19b06b4d23e3076",
+} as const;
+
+function schema7QualificationReceipt(): Record<string, unknown> {
+	const runId = "schema6-parser-run";
+	const targetId = "schema6-parser-target";
+	const planDigest = "a".repeat(64);
+	return {
+		status: "ok",
+		run_id: runId,
+		duration_ms: 1,
+		runtime_actions: [],
+		continuation: { next_action_id: "inspect_operation_result" },
+		data: {
+			contract: BROWSER_USE_OPERATION_CONTRACT_ID,
+			schema_version: "7",
+			command: "operate-target",
+			result_kind: "browser_operation",
+			operation: "target",
+			adapter: "agent-browser",
+			effect: "confirmed",
+			binding: {
+				outer_run_id: runId,
+				run_id: runId,
+				handoff_evidence_id: "handoff-evidence",
+				browser_authority_id: "browser-authority",
+				target_candidate_id: "candidate",
+			},
+			target_source: "selected_state",
+			target: {
+				candidate_ordinal: 0,
+				candidate_id: "candidate",
+				target_id: targetId,
+				target_ref:
+					QUALIFICATION_RECEIPT_TARGET_REFS["schema6-parser-target"],
+				origin: "https://example.test",
+			},
+			execution: {
+				scope: "target-local",
+				focus: false,
+				capability_id: "agent-browser.exact-target-no-focus.v1",
+				plan_digest: planDigest,
+			},
+			side_effects: { focus: false },
+			custody: {
+				target_operation_lease: {
+					acquired_at_epoch_ms: 10,
+					released_at_epoch_ms: 20,
+				},
+			},
+			target_plan: {
+				contract: "browser-use.target-operation-result",
+				schema_version: "2",
+				plan_schema_version: "1",
+				plan_digest: planDigest,
+				plan_step_count: 1,
+				steps: [{ index: 0, kind: "inspect", status: "confirmed" }],
+				cleanup: {
+					attempted: false,
+					closed: false,
+					visible_owned_surface_count: 0,
+				},
+			},
+		},
+	};
+}
+
+function schema5QualificationReceipt(): Record<string, unknown> {
+	const runId = "schema5-parser-run";
+	return {
+		status: "ok",
+		run_id: runId,
+		duration_ms: 1,
+		runtime_actions: [],
+		continuation: { next_action_id: "inspect_operation_result" },
+		data: {
+			contract: BROWSER_USE_OPERATION_CONTRACT_ID,
+			// Independent test-owned Schema 5 compatibility oracle.
+			schema_version: "5",
+			command: "operate-snapshot",
+			result_kind: "browser_operation",
+			operation: "snapshot",
+			adapter: "agent-browser",
+			effect: "confirmed",
+			binding: {
+				outer_run_id: runId,
+				run_id: runId,
+				handoff_evidence_id: "handoff-evidence",
+				browser_authority_id: "browser-authority",
+				target_candidate_id: "candidate",
+			},
+			target_source: "selected_state",
+			target: {
+				candidate_ordinal: 0,
+				candidate_id: "candidate",
+				target_id: "schema5-parser-target",
+				target_ref:
+					QUALIFICATION_RECEIPT_TARGET_REFS["schema5-parser-target"],
+				cdp_endpoint: "http://127.0.0.1:9222",
+				origin: "https://example.test",
+			},
+			execution: {
+				scope: "target-local",
+				focus: false,
+				capability_id: "agent-browser.exact-target-no-focus.v1",
+			},
+			side_effects: { focus: false },
+			custody: {
+				target_operation_lease: {
+					acquired_at_epoch_ms: 10,
+					released_at_epoch_ms: 20,
+				},
+			},
+			snapshot: {
+				text: "page",
+				line_count: 1,
+				byte_count: 4,
+				truncated: false,
+				limits: { max_bytes: 1, max_lines: 1 },
+			},
+		},
+	};
+}
+
 // Independent test-owned SHA-256 oracles for the fixed raw target ids below.
 const OPERATION_CLEANUP_TARGET_REFS = {
 	"cdp-operation-a": "987f75f6601194a7b19beb6bae53c177e789f0e566d726da9a6ae22d7dffbe61",
@@ -118,9 +251,8 @@ const OPERATION_CLEANUP_TARGET_REFS = {
 
 function expectCleanupOutputRedacted(output: string, xdgBase: string): void {
 	for (const privateValue of [
-		"cdp-operation-a",
 		"cdp-persistent-b",
-		...Object.values(OPERATION_CLEANUP_TARGET_REFS),
+		OPERATION_CLEANUP_TARGET_REFS["cdp-persistent-b"],
 		xdgBase,
 		"/h.json",
 	]) {
@@ -441,7 +573,7 @@ function operationRuntime(input: {
 				if (nativeResult) {
 					if (
 						input.throwTargetLeaseReleaseAfterOperation === true &&
-						vector.includes("snapshot")
+						(vector.includes("snapshot") || vector.includes("click"))
 					) {
 						throwNextClockRead = true;
 					}
@@ -474,6 +606,179 @@ function operationRuntime(input: {
 }
 
 describe("U7 operation gates", () => {
+	test("schema 7 qualification receipts require an exact Target Operation Lease custody interval", () => {
+		const valid = schema7QualificationReceipt();
+		expect(parseBrowserOperationQualificationReceipt(JSON.stringify(valid))).toBeDefined();
+
+		const emptyCustody = structuredClone(valid);
+		(emptyCustody.data as Record<string, unknown>).custody = {};
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(emptyCustody)),
+		).toBeUndefined();
+
+		const malformedCustody = structuredClone(valid);
+		(malformedCustody.data as Record<string, unknown>).custody = [];
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(malformedCustody)),
+		).toBeUndefined();
+
+		const malformedLease = structuredClone(valid);
+		((malformedLease.data as Record<string, unknown>)
+			.custody as Record<string, unknown>)
+			.target_operation_lease = [];
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(malformedLease)),
+		).toBeUndefined();
+
+		const extraCustodyKey = structuredClone(valid);
+		(extraCustodyKey.data as Record<string, unknown>).custody = {
+			...((extraCustodyKey.data as Record<string, unknown>)
+				.custody as Record<string, unknown>),
+			unexpected: true,
+		};
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(extraCustodyKey)),
+		).toBeUndefined();
+
+		const extraLeaseKey = structuredClone(valid);
+		(((extraLeaseKey.data as Record<string, unknown>)
+			.custody as Record<string, unknown>)
+			.target_operation_lease as Record<string, unknown>)
+			.unexpected = true;
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(extraLeaseKey)),
+		).toBeUndefined();
+
+		const missingAcquired = structuredClone(valid);
+		delete (((missingAcquired.data as Record<string, unknown>)
+			.custody as Record<string, unknown>)
+			.target_operation_lease as Record<string, unknown>)
+			.acquired_at_epoch_ms;
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(missingAcquired)),
+		).toBeUndefined();
+
+		const missingRelease = structuredClone(valid);
+		delete (((missingRelease.data as Record<string, unknown>)
+			.custody as Record<string, unknown>)
+			.target_operation_lease as Record<string, unknown>)
+			.released_at_epoch_ms;
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(missingRelease)),
+		).toBeUndefined();
+
+		const nonIntegerTimestamp = structuredClone(valid);
+		(((nonIntegerTimestamp.data as Record<string, unknown>)
+			.custody as Record<string, unknown>)
+			.target_operation_lease as Record<string, unknown>)
+			.acquired_at_epoch_ms = 10.5;
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(nonIntegerTimestamp)),
+		).toBeUndefined();
+
+		const nonFiniteTimestamp = JSON.stringify(valid).replace(
+			'"released_at_epoch_ms":20',
+			'"released_at_epoch_ms":1e400',
+		);
+		expect(nonFiniteTimestamp).toContain('"released_at_epoch_ms":1e400');
+		expect(
+			parseBrowserOperationQualificationReceipt(nonFiniteTimestamp),
+		).toBeUndefined();
+
+		const negativeAcquired = structuredClone(valid);
+		(((negativeAcquired.data as Record<string, unknown>)
+			.custody as Record<string, unknown>)
+			.target_operation_lease as Record<string, unknown>)
+			.acquired_at_epoch_ms = -1;
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(negativeAcquired)),
+		).toBeUndefined();
+
+		const negativeReleased = structuredClone(valid);
+		(((negativeReleased.data as Record<string, unknown>)
+			.custody as Record<string, unknown>)
+			.target_operation_lease as Record<string, unknown>)
+			.released_at_epoch_ms = -1;
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(negativeReleased)),
+		).toBeUndefined();
+
+		const unsafeIntegerTimestamp = structuredClone(valid);
+		(((unsafeIntegerTimestamp.data as Record<string, unknown>)
+			.custody as Record<string, unknown>)
+			.target_operation_lease as Record<string, unknown>)
+			.released_at_epoch_ms = Number.MAX_SAFE_INTEGER + 1;
+		expect(
+			parseBrowserOperationQualificationReceipt(
+				JSON.stringify(unsafeIntegerTimestamp),
+			),
+		).toBeUndefined();
+
+		const reversedInterval = structuredClone(valid);
+		(((reversedInterval.data as Record<string, unknown>)
+			.custody as Record<string, unknown>)
+			.target_operation_lease as Record<string, unknown>)
+			.released_at_epoch_ms = 9;
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(reversedInterval)),
+		).toBeUndefined();
+
+		const wrongRunBinding = structuredClone(valid);
+		((wrongRunBinding.data as Record<string, unknown>).binding as Record<string, unknown>)
+			.run_id = "other-run";
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(wrongRunBinding)),
+		).toBeUndefined();
+
+		const wrongTargetBinding = structuredClone(valid);
+		((wrongTargetBinding.data as Record<string, unknown>)
+			.binding as Record<string, unknown>)
+			.target_candidate_id = "other-candidate";
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(wrongTargetBinding)),
+		).toBeUndefined();
+
+		const mismatchedTargetRef = structuredClone(valid);
+		((mismatchedTargetRef.data as Record<string, unknown>)
+			.target as Record<string, unknown>)
+			.target_ref = QUALIFICATION_RECEIPT_TARGET_REFS["schema5-parser-target"];
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(mismatchedTargetRef)),
+		).toBeUndefined();
+
+		const emptyTargetId = structuredClone(valid);
+		((emptyTargetId.data as Record<string, unknown>)
+			.target as Record<string, unknown>)
+			.target_id = "";
+		expect(() =>
+			parseBrowserOperationQualificationReceipt(JSON.stringify(emptyTargetId)),
+		).not.toThrow();
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(emptyTargetId)),
+		).toBeUndefined();
+
+		const overlongTargetId = structuredClone(valid);
+		((overlongTargetId.data as Record<string, unknown>)
+			.target as Record<string, unknown>)
+			.target_id = "x".repeat(513);
+		expect(() =>
+			parseBrowserOperationQualificationReceipt(JSON.stringify(overlongTargetId)),
+		).not.toThrow();
+		expect(
+			parseBrowserOperationQualificationReceipt(JSON.stringify(overlongTargetId)),
+		).toBeUndefined();
+	});
+
+	test("schema 5 qualification receipts remain accepted", () => {
+		const receipt = schema5QualificationReceipt();
+		expect((receipt.data as Record<string, unknown>).schema_version).toBe("5");
+		expect(
+			parseBrowserOperationQualificationReceipt(
+				JSON.stringify(receipt),
+			),
+		).toBeDefined();
+	});
+
 	test("target plans reject raw/unknown steps before handoff or lease mutation", async () => {
 		const { runtime, calls } = operationRuntime({
 			files: { "/plan.json": JSON.stringify({ steps: [{ kind: "eval", script: "document.body" }] }) },
@@ -1531,6 +1836,119 @@ describe("U7 operation success and transport", () => {
 		}
 	});
 
+	test("combined target-plan unknown effect and Target Operation Lease debt retain same-target repair guidance", async () => {
+		const planDirectory = mkdtempSync(join(tmpdir(), "browser-use-target-plan-"));
+		const planPath = join(planDirectory, "plan.json");
+		const plan = JSON.stringify({
+			contract: "browser-use.target-operation-plan",
+			schema_version: "1",
+			steps: [
+				{
+					kind: "input",
+					action: "click",
+					selector: "button[type=submit]",
+				},
+			],
+		});
+		writeFileSync(planPath, plan, { encoding: "utf8", mode: 0o600 });
+		let clickDispatched = false;
+		try {
+			const { runtime } = operationRuntime({
+				adapter: "agent-browser",
+				files: {
+					[planPath]: plan,
+					"/state.json": createdSelectedStateFile("cdp-owned"),
+				},
+				pages: [
+					{
+						id: "fresh-tab",
+						targetId: "cdp-owned",
+						url: "https://example.com/app",
+						title: "App",
+					},
+				],
+				nativeResults: [okCommand(agentBrowserSuccess({ clicked: true }))],
+				throwTargetLeaseReleaseAfterOperation: true,
+				onCommand: async (_call, vector) => {
+					if (vector.includes("click")) clickDispatched = true;
+					if (
+						clickDispatched &&
+						vector.includes("tab") &&
+						vector.includes("list")
+					) {
+						return okCommand(agentBrowserSuccess({ tabs: [] }));
+					}
+					return undefined;
+				},
+			});
+
+			const result = await runForTest(
+				[
+					"operate",
+					"target",
+					"--plan",
+					planPath,
+					"--state",
+					"/state.json",
+					"--handoff",
+					"/h.json",
+					"--json",
+				],
+				runtime,
+			);
+
+			expect(result).toMatchObject({ exitCode: 1, stderr: "" });
+			expect(parseJson(result.stdout)).toMatchObject({
+				status: "error",
+				error: {
+					code: "browser_operation_cleanup_incomplete",
+					retryable: false,
+				},
+				data: {
+					operation_effect: "unknown",
+					primary_cause: "browser_operation_target_plan_failed",
+					cleanup_debt: ["target-operation-lease-release-failed"],
+					binding: {
+						outer_run_id: FIXTURE_RUN_ID,
+						run_id: FIXTURE_RUN_ID,
+						handoff_evidence_id: AGENT_BROWSER_EVIDENCE_ID,
+						browser_authority_id: FIXTURE_BROWSER_AUTHORITY,
+					},
+					target: {
+						target_id: "cdp-owned",
+						origin: "https://example.com",
+					},
+					target_plan: {
+						steps: [
+							{
+								index: 0,
+								kind: "input",
+								status: "unknown",
+								effect: "possibly-effectful",
+							},
+						],
+						cleanup: {
+							attempted: false,
+							closed: false,
+							visible_owned_surface_count: 0,
+						},
+					},
+				},
+				continuation: { next_action_id: "repair_target_state" },
+				runtime_actions: [
+					{
+						id: "repair_target_state",
+						summary:
+							"Inspect or repair the exact run-scoped selected-target state before any new Browser Operation input.",
+						side_effects: ["write"],
+					},
+				],
+			});
+		} finally {
+			rmSync(planDirectory, { recursive: true, force: true });
+		}
+	});
+
 	test("a typed exact-ownership release failure is public cleanup debt and preserves same-run B", async () => {
 		const { runtime, failOwnershipWriteAfter, xdgBase } = operationRuntime({
 			adapter: "agent-browser",
@@ -2193,9 +2611,10 @@ describe("U7 operation success and transport", () => {
 			code: "browser_operation_transport_failed",
 		});
 		// Discovery lists, closes, and verifies; the unsafe ref prevents any
-		// operation spawn after that terminal discovery seam.
+		// operation spawn after that terminal discovery seam, while schema-5
+		// retains the resolved public failure context.
 		expect(calls).toHaveLength(3);
-		expect(result.stdout).not.toContain("bad tab");
+		expect(result.stdout).toContain("cdp-target-bad tab");
 		expect(result.stderr).not.toContain("bad tab");
 	});
 
@@ -2695,6 +3114,28 @@ describe("U7 operation success and transport", () => {
 		// occurs unless --bring-to-front was passed.
 		expect(json.data).toMatchObject({
 			side_effects: { focus: false },
+		});
+	});
+
+	test("a resolved schema-5 failure retains its bound target endpoint projection", async () => {
+		const { runtime } = operationRuntime({
+			operationResult: { exitCode: 1, stdout: "", stderr: "", timedOut: true },
+		});
+		const result = await runForTest(
+			["operate", "snapshot", "--handoff", "/h.json", "--json"],
+			runtime,
+		);
+		expect(result.exitCode).toBe(20);
+		expect(parseJson(result.stdout).data).toMatchObject({
+			contract: BROWSER_USE_OPERATION_CONTRACT_ID,
+			schema_version: BROWSER_USE_OPERATION_SCHEMA_VERSION,
+			operation: "snapshot",
+			binding: { outer_run_id: FIXTURE_RUN_ID, run_id: FIXTURE_RUN_ID },
+			target: {
+				target_id: "cdp-target-test",
+				cdp_endpoint: FIXTURE_ENVELOPE.data.endpoint.http,
+				origin: "https://example.com",
+			},
 		});
 	});
 

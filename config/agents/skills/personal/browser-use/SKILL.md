@@ -27,6 +27,16 @@ attachment.
   verified handoff; `--state` is an advanced override only.
   Switching target or tab keeps that stable identity: reselect from
   `targets list` and pass the same handoff; never re-derive a target by index.
+- More than one action on the same page: run
+  `browser-use targets adopt --handoff <path>` once after `targets select`. It
+  retains one exact-target adapter lifecycle, so every later `operate` on that
+  target runs target-local instead of re-attaching, re-activating the tab, and
+  tearing the session down per action. Give it back with
+  `browser-use targets release --handoff <path>`; the target stays open.
+  `targets close` refuses an adopted target — this run did not open it.
+  With a lifecycle retained, `operate target --plan <path>` runs one bounded
+  multi-step plan (focus, click, press, scroll, inspect) inside that single
+  lifecycle. Without one, target plans are refused by contract.
 - Parallel agents: each run holds its own Target Lease. The single Browser
   Lane serializes browser-wide or target-topology turns. Release short leases
   when work finishes; a stale lease is a typed repair, not a custody bypass.

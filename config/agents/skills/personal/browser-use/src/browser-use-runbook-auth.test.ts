@@ -101,6 +101,7 @@ function persistedFragmentAt(
 		| "pre-submit"
 		| "submission-started"
 		| "post-submit-proof"
+		| "otp-required"
 		| "authenticated",
 ): BrowserUseAuthTransactionFragment {
 	const begun = beginAuthTransaction({
@@ -118,7 +119,7 @@ function persistedFragmentAt(
 			page_id: "target-fixture",
 			frame_id: "target-fixture",
 		},
-		method: "password",
+		method: stage === "otp-required" ? "otp" : "password",
 		attempt_limit: 3,
 		attempts_already_consumed: 0,
 	});
@@ -133,6 +134,12 @@ function persistedFragmentAt(
 		{ type: "method-step-complete", step: "fill-password" },
 	];
 	if (stage !== "pre-submit") events.push({ type: "submission-dispatched" });
+	if (stage === "otp-required") {
+		events.push(
+			{ type: "submit-outcome-observed", outcome: "otp-required" },
+			{ type: "cleanup-complete" },
+		);
+	}
 	if (stage === "post-submit-proof" || stage === "authenticated") {
 		events.push(
 			{ type: "submit-outcome-observed", outcome: "success" },
@@ -173,6 +180,9 @@ type FixtureOptions = {
 	initialFragment?: BrowserUseAuthTransactionFragment;
 	initialScreen?: BrowserUseAccessibilitySnapshot;
 	proofOwner?: boolean;
+	proofFailureCause?:
+		| "human-identity-attestation-required"
+		| "session-identity-proof-unavailable";
 	handoffEvidenceId?: string | null;
 	loginFormPersists?: boolean;
 	humanIdentityAttestation?: BrowserUseHumanIdentityAttestationDriver;
@@ -333,7 +343,12 @@ async function fixture(options: FixtureOptions) {
 								proofTransitions.push(transition);
 								return options.proof
 									? { proven: true as const, proof: { target_id, page_id: "page-authenticated", frame_id: "frame-authenticated", origin: proofOrigin, subject_reference: "subject-ref", account_reference: "account-ref", tenant_reference: "tenant-ref", identity_basis_digest: "basis-digest" } }
-									: { proven: false as const, cause: "human-identity-attestation-required" as const };
+									: {
+										proven: false as const,
+										cause:
+											options.proofFailureCause ??
+											"human-identity-attestation-required",
+									};
 							},
 						}),
 			},
@@ -605,6 +620,86 @@ describe("runbook auth route", () => {
 					attestation_digest: expect.stringMatching(/^[0-9a-f]{64}$/),
 					fresh_until_epoch_ms: 40_000,
 				},
+			},
+		});
+	});
+
+	test("routes unavailable session proof from OTP re-entry through human identity attestation", async () => {
+		let attestationCalls = 0;
+		const { result, proofCalls, proofTransitions } = await fixture({
+			proof: false,
+			proofFailureCause: "session-identity-proof-unavailable",
+			initialFragment: persistedFragmentAt("otp-required"),
+			initialScreen: welcome(),
+			observedUrl: "https://fixture.test/otp",
+			humanIdentityAttestation: async (input) => {
+				attestationCalls += 1;
+				return {
+					ok: true,
+					attestation: {
+						run_id: input.run.run_id,
+						handoff_evidence_id: "handoff-fixture",
+						lane_id: "agent-browser",
+						implementation_integrity_key: "fixture-integrity",
+						environment: "agent-chrome",
+						profile: "default",
+						target_id: "target-fixture",
+						page_id: "target-fixture",
+						frame_id: "target-fixture",
+						service_id: "fixture",
+						auth_context: "interactive-login",
+						subject_reference: "subject-ref",
+						account_reference: "account-ref",
+						tenant_reference: "tenant-ref",
+						identity_basis: "human-identity-attestation",
+						identity_basis_digest: "c".repeat(64),
+						observed_at_epoch_ms: 10_000,
+						fresh_until_epoch_ms: 40_000,
+					},
+				};
+			},
+		});
+
+		expect(attestationCalls).toBe(1);
+		expect(proofCalls).toBe(1);
+		expect(proofTransitions).toEqual(["pre-existing-session"]);
+		expect(result).toMatchObject({
+			ok: true,
+			run: {
+				state: "ready",
+				auth_fragment: {
+					fragment: {
+						terminal_outcome: "authenticated",
+						identity_basis: "human-identity-attestation",
+					},
+				},
+			},
+		});
+	});
+
+	test("does not promote unavailable session proof without a human identity attestation driver", async () => {
+		const { result, proofCalls, proofTransitions } = await fixture({
+			proof: false,
+			proofFailureCause: "session-identity-proof-unavailable",
+			initialFragment: persistedFragmentAt("otp-required"),
+			initialScreen: welcome(),
+			observedUrl: "https://fixture.test/otp",
+		});
+
+		expect(proofCalls).toBe(1);
+		expect(proofTransitions).toEqual(["pre-existing-session"]);
+		expect(result).toMatchObject({
+			ok: false,
+			run: {
+				state: "needs-human",
+				auth_fragment: {
+					fragment: {
+						blocked_cause: "capability-loss",
+					},
+				},
+			},
+			blocked: {
+				blocked_cause: "capability-loss",
 			},
 		});
 	});

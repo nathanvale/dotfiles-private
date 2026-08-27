@@ -49,12 +49,15 @@ const PRIVATE_FILE_MODE = 0o600;
 
 /** Temp-sibling suffix shape: `.tmp-<pid>-<seq>` (no randomness, no clock). */
 const TEMP_SUFFIX_PATTERN = /\.tmp-\d+-\d+$/;
-const PUBLISH_STAGE_SUFFIX_PATTERN = /\.publish-\d+-\d+-[a-f0-9]{32}$/;
+// Atomic lock publication stages are only valid for a lock-file leaf and name
+// their publisher pid, per-process sequence, and collision-resistant UUID.
+// The strict basename grammar keeps repair from treating arbitrary files as
+// store-owned stages.
+const PUBLISH_STAGE_PATTERN = /^(?:[A-Za-z0-9][A-Za-z0-9._-]*|\.[A-Za-z0-9][A-Za-z0-9._-]*)\.lock\.publish-([1-9][0-9]*)-([1-9][0-9]*)-[a-f0-9]{32}$/;
 
 // Per-process monotonic sequence so concurrent writers in one process never
 // collide on a temp sibling; pid separates processes.
 let tempSequence = 0;
-const activePublishStages = new Set<string>();
 
 function storeFailure(
 	code: StoreFailure["code"],
@@ -290,7 +293,6 @@ async function acquireLockFile(
 		// written file, so a concurrent stale-reclaimer cannot unlink an active
 		// publisher during its content/fsync window.
 		const publicationPath = `${input.lockPath}.publish-${process.pid}-${lockSequence}-${randomUUID().replaceAll("-", "")}`;
-		activePublishStages.add(publicationPath);
 		let publicationError: unknown;
 		try {
 			// Retain the historical exclusive-create write port for lock content,
@@ -303,7 +305,6 @@ async function acquireLockFile(
 		} catch (error) {
 			publicationError = error;
 		} finally {
-			activePublishStages.delete(publicationPath);
 			await unlinkBestEffort(fs, publicationPath);
 		}
 		if (errorCode(publicationError) !== "EEXIST") {
@@ -598,14 +599,30 @@ export async function listOrphanTempFiles(
 			}
 			if (
 				stat.kind === "file" &&
-				(TEMP_SUFFIX_PATTERN.test(entry) || PUBLISH_STAGE_SUFFIX_PATTERN.test(entry)) &&
-				!activePublishStages.has(entryPath)
+				(TEMP_SUFFIX_PATTERN.test(entry) || publishStagePublisherIsDead(entry))
 			) {
 				orphans.push(entryPath);
 			}
 		}
 	}
 	return orphans.sort();
+}
+
+/** A publish stage is removable only after the named publisher is positively
+ * proven absent. EPERM and every unknown liveness result fail closed. A pid
+ * reuse can therefore leave recoverable debris, but can never delete a live
+ * publisher's stage. */
+function publishStagePublisherIsDead(entry: string): boolean {
+	const match = PUBLISH_STAGE_PATTERN.exec(entry);
+	if (match === null) return false;
+	const publisherPid = Number(match[1]);
+	if (!Number.isSafeInteger(publisherPid) || publisherPid < 1) return false;
+	try {
+		process.kill(publisherPid, 0);
+		return false;
+	} catch (error) {
+		return errorCode(error) === "ESRCH";
+	}
 }
 
 /**

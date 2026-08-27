@@ -901,6 +901,25 @@ async function runBrowserUseAuthTransaction(
 		);
 		if (!engine.ok) {
 			let cause = engine.blocked.blocked_cause;
+			// The production structural proof owner reports its own unavailable
+			// capability, while reviewed runbooks may carry a separate human
+			// identity-attestation owner. Route that exact handoff through the
+			// presence gate before asking the transaction FSM to persist a block;
+			// session-identity-proof-unavailable is otherwise legal only after the
+			// sensitive interval has advanced to post-auth proof.
+			if (
+				cause === "session-identity-proof-unavailable" &&
+				input.entry_mode === "reviewed-runbook" &&
+				deps.humanIdentityAttestation !== undefined
+			) {
+				cause = "human-identity-attestation-required";
+			} else if (cause === "session-identity-proof-unavailable") {
+				// This cause belongs to post-auth proof and cannot be persisted while
+				// the transaction still owns the sensitive interval. Without the
+				// reviewed presence-backed driver, fail closed as capability loss;
+				// never promote an unavailable proof into human authorization.
+				cause = "capability-loss";
+			}
 			if (
 				fragment?.submission_started &&
 				(cause !== "human-identity-attestation-required" ||

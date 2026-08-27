@@ -360,7 +360,12 @@ import {
 	runTargetsSelect,
 	runTargetsStatus,
 } from "./browser-use-selection";
-import { runTargetsClose, runTargetsOpen } from "./browser-use-target-topology";
+import {
+	runTargetsAdopt,
+	runTargetsClose,
+	runTargetsOpen,
+	runTargetsRelease,
+} from "./browser-use-target-topology";
 import {
 	captureBrowserUseScreenshotMedia,
 	runOperate,
@@ -874,6 +879,28 @@ async function executeCommand(input: {
 	}
 	if (parsed.command === "targets-open") {
 		return runTargetsOpen({
+			parsed,
+			runtime,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			runIdExplicit: input.runIdExplicit,
+			durationMs: input.durationMs,
+		});
+	}
+	if (parsed.command === "targets-adopt") {
+		return runTargetsAdopt({
+			parsed,
+			runtime,
+			stdout: input.stdout,
+			stderr: input.stderr,
+			runId: input.runId,
+			runIdExplicit: input.runIdExplicit,
+			durationMs: input.durationMs,
+		});
+	}
+	if (parsed.command === "targets-release") {
+		return runTargetsRelease({
 			parsed,
 			runtime,
 			stdout: input.stdout,
@@ -8337,7 +8364,7 @@ export type AuthTokenRepairPath = {
 
 const BUILD_TOKEN_SUPERVISOR_REPAIR = {
 	repairCommand:
-		"bun --cwd runtime/browser-use-environment-auth run build:release",
+		"bun --cwd .agents/runtime/browser-use-environment-auth run build:release",
 	posture: "manual-only",
 	successSignal:
 		"The runtime gate can start the supervisor built from this worktree.",
@@ -9577,6 +9604,24 @@ async function runAuthBinding(input: PlatformCommandInput): Promise<number> {
 		) {
 			return emitBindingFailure(input, "binding_live_evidence_invalid", "the exact live item does not prove the requested active item identity and state.");
 		}
+		// Re-pointing a moved or replaced item is a REVISION of the standing
+		// binding, not a first binding. Read the active predecessor and advance
+		// exactly one revision past it; only a genuinely absent binding is
+		// revision 1 with a null predecessor. Emitting 1/null unconditionally
+		// made every re-point fail closed on binding_revision_conflict, which
+		// trapped the supported recovery loop.
+		const standing = await catalog.resolve(key);
+		if (!standing.ok) return emitBindingFailure(input, standing.code, standing.message);
+		const predecessor =
+			standing.status !== "missing"
+				? {
+						receipt_id: standing.receipt_id,
+						revision:
+							standing.status === "active"
+								? standing.binding.binding_revision
+								: standing.revision,
+					}
+				: undefined;
 		const binding: BrowserUseItemBinding = {
 			service_id: key.service_id,
 			auth_context: key.auth_context,
@@ -9585,13 +9630,13 @@ async function runAuthBinding(input: PlatformCommandInput): Promise<number> {
 			vault_id: live.item.vault_id,
 			item_id: live.item.item_id,
 			allowed_auth_methods: live.item.supported_methods,
-			binding_revision: 1,
+			binding_revision: predecessor === undefined ? 1 : predecessor.revision + 1,
 		};
 		const signed = await broker.issueBindingApproval({
 			disposition: "approved",
 			resolution_key: key,
 			binding,
-			predecessor_receipt_id: null,
+			predecessor_receipt_id: predecessor?.receipt_id ?? null,
 			display: [
 				`Service: ${key.service_id}`,
 				`Binding: ${key.binding_ref}`,

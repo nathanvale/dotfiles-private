@@ -390,7 +390,12 @@ export function createBindingCatalog(deps: {
 			const loadedReceipt = await loadApproval(entry.receipt_id);
 			if (!loadedReceipt.ok) return loadedReceipt;
 			return loadedReceipt.approval.disposition === "revoked"
-				? { ok: true as const, status: "revoked" as const, revision: loadedReceipt.approval.binding.binding_revision }
+				? {
+						ok: true as const,
+						status: "revoked" as const,
+						receipt_id: loadedReceipt.approval.approval_id,
+						revision: loadedReceipt.approval.binding.binding_revision,
+					}
 				: { ok: true as const, status: "active" as const, receipt_id: loadedReceipt.approval.approval_id, binding: loadedReceipt.approval.binding };
 		},
 

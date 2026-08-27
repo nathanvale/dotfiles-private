@@ -10,7 +10,9 @@ argument-hint: "<account>"
 
 1. `ghh check --account <login>` first; never infer the login from ambient state.
 2. `ghh exec --account <login> -- <gh arguments...>` for GitHub API work.
-3. Before clone, fetch, push, or remote change: `ssh -T -o BatchMode=yes git@<host>`
+3. `ghh run --account <login> -- <command...>` when a script calls `gh` directly
+   and you cannot edit it.
+4. Before clone, fetch, push, or remote change: `ssh -T -o BatchMode=yes git@<host>`
    → require `Hi <login>!`. Exit `1` is success; GitHub provides no shell.
 
 Target account not supplied: list the accounts and ask which one.

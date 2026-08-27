@@ -109,6 +109,18 @@ function waitForReleaseRetry(
 	return new Promise((resolve) => setTimeout(resolve, delayMs));
 }
 
+function agentBrowserReleaseEnvironment(
+	runtime: AdapterRuntime,
+): Record<string, string> {
+	const socketDirectory = runtime.env.AGENT_BROWSER_SOCKET_DIR;
+	return {
+		...(typeof socketDirectory === "string" && socketDirectory.length > 0
+			? { AGENT_BROWSER_SOCKET_DIR: socketDirectory }
+			: {}),
+		MCPORTER_NO_KEEPALIVE: "*",
+	};
+}
+
 function releaseDeadlineExceeded(
 	inventoryReads: number,
 	sessionName: string,
@@ -308,13 +320,14 @@ export const agentBrowserDefinition = {
 				0,
 				Math.min(RELEASE_TIMEOUT_MS, releaseDeadlineMs - now()),
 			);
+		const releaseEnvironment = agentBrowserReleaseEnvironment(runtime);
 
 		let close: AdapterCommandResult;
 		try {
 			close = await runtime.runCommand({
 				command: resolution.path,
 				args: ["--session", input.sessionName, "close", "--json"],
-				env: { MCPORTER_NO_KEEPALIVE: "*" },
+				env: releaseEnvironment,
 				timeoutMs: RELEASE_TIMEOUT_MS,
 			});
 		} catch (error) {
@@ -366,7 +379,7 @@ export const agentBrowserDefinition = {
 				inventory = await runtime.runCommand({
 					command: resolution.path,
 					args: ["session", "list", "--json"],
-					env: { MCPORTER_NO_KEEPALIVE: "*" },
+					env: releaseEnvironment,
 					timeoutMs: inventoryTimeoutMs,
 				});
 			} catch (error) {

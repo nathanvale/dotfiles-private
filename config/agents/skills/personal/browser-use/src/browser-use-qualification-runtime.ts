@@ -42,6 +42,14 @@ import { SEALED_ARTIFACT_NAME } from "./browser-use-qualification-wrapper";
 
 const SHA256 = /^[a-f0-9]{64}$/;
 
+const QUALIFICATION_FORBIDDEN_CHILD_ENVIRONMENT_KEYS = [
+	"OP_SERVICE_ACCOUNT_TOKEN",
+	"OP_CONNECT_HOST",
+	"OP_CONNECT_TOKEN",
+	"BROWSER_USE_TOKEN",
+	"BROWSER_USE_OP_TOKEN",
+] as const;
+
 type BrowserConnectWarmChromeMain = Awaited<
 	ReturnType<
 		(typeof import("@side-quest/browser-connect/cli"))["createProductionDeps"]
@@ -69,10 +77,14 @@ function manifestDigest(value: Record<string, unknown>): string {
 	return sha256(JSON.stringify(body));
 }
 
-function refusal(code: string): number {
+function refusal(
+	code: string,
+	data?: Readonly<Record<string, string>>,
+): number {
 	process.stdout.write(
 		`${JSON.stringify({
 			status: "error",
+			...(data === undefined ? {} : { data }),
 			error: {
 				code,
 				exit_code: 20,
@@ -83,6 +95,50 @@ function refusal(code: string): number {
 	return 20;
 }
 
+export type QualificationHandoffMintFailureStage =
+	| "producer-exit-nonzero"
+	| "producer-stderr-nonempty"
+	| "handoff-envelope-invalid"
+	| "handoff-not-verified"
+	| "adapter-mismatch"
+	| "run-mismatch"
+	| "probe-executable-mismatch";
+
+export type QualificationHandoffCommandPhase =
+	| "version"
+	| "attachment"
+	| "release"
+	| "inventory"
+	| "browser-connect-gate";
+
+export function qualificationHandoffCommandPhase(
+	args: readonly string[],
+): Exclude<QualificationHandoffCommandPhase, "browser-connect-gate"> {
+	if (args.includes("--version")) return "version";
+	if (args.includes("cdp-url")) return "attachment";
+	if (args.includes("close")) return "release";
+	return "inventory";
+}
+
+export function qualificationHandoffMintFailureStage(input: {
+	exitCode: number;
+	stderrNonempty: boolean;
+	parsed: boolean;
+	verified: boolean;
+	adapterMatches: boolean;
+	runMatches: boolean;
+	probeExecutableMatches: boolean;
+}): QualificationHandoffMintFailureStage | undefined {
+	if (input.exitCode !== 0) return "producer-exit-nonzero";
+	if (input.stderrNonempty) return "producer-stderr-nonempty";
+	if (!input.parsed) return "handoff-envelope-invalid";
+	if (!input.verified) return "handoff-not-verified";
+	if (!input.adapterMatches) return "adapter-mismatch";
+	if (!input.runMatches) return "run-mismatch";
+	if (!input.probeExecutableMatches) return "probe-executable-mismatch";
+	return undefined;
+}
+
 type AdmittedAgentBrowser = {
 	handoffPath: string;
 	handoffRaw: string;
@@ -90,6 +146,92 @@ type AdmittedAgentBrowser = {
 	agentCopyPath: string;
 	supervisorCopyPath: string;
 };
+
+export type QualificationHandoffCommandFailureReason =
+	| "command-not-admitted"
+	| "ambient-op-environment"
+	| "invalid-arguments"
+	| "descriptor-exec-input-invalid"
+	| "descriptor-exec-identity-mismatch"
+	| "descriptor-exec-spawn-failed"
+	| "descriptor-exec-wait-failed"
+	| "child-timeout"
+	| "child-exit-nonzero";
+
+export type QualificationHandoffCommandOutputClass =
+	| "version-output-valid"
+	| "permission-denied"
+	| "argument-invalid"
+	| "runtime-resolution-failed"
+	| "silent"
+	| "unclassified";
+
+const DESCRIPTOR_EXEC_FAILURE_REASONS = [
+	"ambient-op-environment",
+	"invalid-arguments",
+	"descriptor-exec-input-invalid",
+	"descriptor-exec-identity-mismatch",
+	"descriptor-exec-spawn-failed",
+	"descriptor-exec-wait-failed",
+] as const;
+
+export function qualificationHandoffCommandFailureReason(input: {
+	commandAdmitted: boolean;
+	exitCode: number;
+	timedOut: boolean;
+	stdout: string;
+	stderr: string;
+}): QualificationHandoffCommandFailureReason | undefined {
+	if (!input.commandAdmitted) return "command-not-admitted";
+	if (input.timedOut) return "child-timeout";
+	if (input.exitCode === 0) return undefined;
+	const output = `${input.stdout}\n${input.stderr}`;
+	return (
+		DESCRIPTOR_EXEC_FAILURE_REASONS.find((code) => output.includes(code)) ??
+		"child-exit-nonzero"
+	);
+}
+
+export function qualificationHandoffCommandOutputClass(input: {
+	phase: QualificationHandoffCommandPhase;
+	stdout: string;
+	stderr: string;
+}): QualificationHandoffCommandOutputClass {
+	if (
+		input.phase === "version" &&
+		/^agent-browser\s+\d+\.\d+\.\d+\s*$/u.test(input.stdout) &&
+		input.stderr === ""
+	) return "version-output-valid";
+	const output = `${input.stdout}\n${input.stderr}`.toLowerCase();
+	if (output.trim() === "") return "silent";
+	if (output.includes("permission denied") || output.includes("operation not permitted")) {
+		return "permission-denied";
+	}
+	if (output.includes("unknown option") || output.includes("invalid argument")) {
+		return "argument-invalid";
+	}
+	if (
+		output.includes("module not found") ||
+		output.includes("script not found") ||
+		output.includes("no such file")
+	) return "runtime-resolution-failed";
+	return "unclassified";
+}
+
+export function qualificationHandoffChildEnvironment(
+	base: Readonly<Record<string, string | undefined>>,
+	command: Readonly<Record<string, string | undefined>> = {},
+): Record<string, string> {
+	const child = Object.fromEntries(
+		Object.entries({ ...base, ...command }).filter(
+			(entry): entry is [string, string] => entry[1] !== undefined,
+		),
+	);
+	for (const key of QUALIFICATION_FORBIDDEN_CHILD_ENVIRONMENT_KEYS) {
+		delete child[key];
+	}
+	return child;
+}
 
 async function readProcessResult(child: ReturnType<typeof spawn>, timeoutMs: number) {
 	const stdout: Buffer[] = [];
@@ -199,10 +341,30 @@ sealedArtifactSha256: string,
 
 async function runAdmittedAgentBrowser(
 	admitted: AdmittedAgentBrowser,
-	input: { command: string; args: readonly string[]; timeoutMs: number },
-) {
+	input: {
+		command: string;
+		args: readonly string[];
+		timeoutMs: number;
+		env?: Record<string, string | undefined>;
+	},
+): Promise<{
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+	timedOut: boolean;
+	qualificationFailureReason?: QualificationHandoffCommandFailureReason;
+	qualificationFailureOutputClass?: QualificationHandoffCommandOutputClass;
+	qualificationFailureStdoutBytes?: string;
+	qualificationFailureStderrBytes?: string;
+}> {
 	if (input.command !== admitted.agentLogicalPath) {
-		return { exitCode: 20, stdout: "", stderr: "qualification command was not admitted", timedOut: false };
+		return {
+			exitCode: 20,
+			stdout: "",
+			stderr: "qualification command was not admitted",
+			timedOut: false,
+			qualificationFailureReason: "command-not-admitted",
+		};
 	}
 	const handle = await open(
 		admitted.agentCopyPath,
@@ -224,9 +386,38 @@ async function runAdmittedAgentBrowser(
 				admitted.agentLogicalPath,
 				...input.args,
 			],
-			{ stdio: ["ignore", "pipe", "pipe", handle.fd] },
+			{
+				stdio: ["ignore", "pipe", "pipe", handle.fd],
+				env: qualificationHandoffChildEnvironment(process.env, input.env),
+			},
 		);
-		return await readProcessResult(child, input.timeoutMs);
+		const result = await readProcessResult(child, input.timeoutMs);
+		const qualificationFailureReason =
+			qualificationHandoffCommandFailureReason({
+				commandAdmitted: true,
+				...result,
+			});
+		const failurePhase = qualificationHandoffCommandPhase(input.args);
+		return {
+			...result,
+			...(qualificationFailureReason === undefined
+				? {}
+				: {
+						qualificationFailureReason,
+						qualificationFailureOutputClass:
+							qualificationHandoffCommandOutputClass({
+								phase: failurePhase,
+								stdout: result.stdout,
+								stderr: result.stderr,
+							}),
+						qualificationFailureStdoutBytes: String(
+							Buffer.byteLength(result.stdout),
+						),
+						qualificationFailureStderrBytes: String(
+							Buffer.byteLength(result.stderr),
+						),
+					}),
+		};
 	} finally {
 		await handle.close();
 	}
@@ -249,11 +440,25 @@ async function mintBrowserConnectHandoff(input: {
 	runId: string;
 	agent: AdmittedAgentBrowser;
 	warmChromeMain?: BrowserConnectWarmChromeMain;
-}): Promise<{ exitCode: number; stdout: string; stderr: string }> {
+}): Promise<{
+	exitCode: number;
+	stdout: string;
+	stderr: string;
+	failurePhase?: QualificationHandoffCommandPhase;
+	failureReason?: QualificationHandoffCommandFailureReason;
+	failureOutputClass?: QualificationHandoffCommandOutputClass;
+	failureStdoutBytes?: string;
+	failureStderrBytes?: string;
+}> {
 	const cli = await import("@side-quest/browser-connect/cli");
 	const stdout = writer();
 	const stderr = writer();
 	const deps = await cli.createProductionDeps();
+	let failurePhase: QualificationHandoffCommandPhase | undefined;
+	let failureReason: QualificationHandoffCommandFailureReason | undefined;
+	let failureOutputClass: QualificationHandoffCommandOutputClass | undefined;
+	let failureStdoutBytes: string | undefined;
+	let failureStderrBytes: string | undefined;
 	const exitCode = await cli.main(
 		["connect", "agent-browser", "--run-id", input.runId, "--json"],
 		{
@@ -269,16 +474,48 @@ async function mintBrowserConnectHandoff(input: {
 					command === "agent-browser"
 						? { resolved: true as const, path: input.agent.agentLogicalPath }
 						: { resolved: false as const },
-				runCommand: async (command) =>
-					await runAdmittedAgentBrowser(input.agent, {
+				runCommand: async (command) => {
+					const result = await runAdmittedAgentBrowser(input.agent, {
 						command: command.command,
 						args: command.args,
 						timeoutMs: command.timeoutMs,
-					}),
+						env: command.env,
+					});
+					if (
+						failurePhase === undefined &&
+						(result.exitCode !== 0 || result.timedOut)
+					) {
+						failurePhase = qualificationHandoffCommandPhase(command.args);
+						failureReason = result.qualificationFailureReason;
+						failureOutputClass = result.qualificationFailureOutputClass;
+						failureStdoutBytes = result.qualificationFailureStdoutBytes;
+						failureStderrBytes = result.qualificationFailureStderrBytes;
+					}
+					return result;
+				},
 			},
 		},
 	);
-	return { exitCode, stdout: stdout.text(), stderr: stderr.text() };
+	return {
+		exitCode,
+		stdout: stdout.text(),
+		stderr: stderr.text(),
+		...(exitCode !== 0
+			? {
+					failurePhase: failurePhase ?? "browser-connect-gate",
+					...(failureReason === undefined ? {} : { failureReason }),
+					...(failureOutputClass === undefined
+						? {}
+						: { failureOutputClass }),
+					...(failureStdoutBytes === undefined
+						? {}
+						: { failureStdoutBytes }),
+					...(failureStderrBytes === undefined
+						? {}
+						: { failureStderrBytes }),
+				}
+			: {}),
+	};
 }
 
 function browserFreeWarmChromeFixture(
@@ -337,17 +574,44 @@ export async function produceSealedQualificationHandoff(input: {
 		runId,
 		agent: input.agent,
 	});
-	if (minted.exitCode !== 0 || minted.stderr !== "") {
-		return refusal("qualification_handoff_producer_failed");
-	}
 	const parsed = parseHandoffFacts(minted.stdout);
-	if (
-		!parsed.ok ||
-		parsed.kind !== "verified" ||
-		parsed.facts.adapter !== "agent-browser" ||
-		parsed.facts.runId !== runId ||
-		parsed.facts.probeExecutable !== input.agent.agentLogicalPath
-	) return refusal("qualification_handoff_producer_failed");
+	const verified = parsed.ok && parsed.kind === "verified" ? parsed : undefined;
+	const failureStage = qualificationHandoffMintFailureStage({
+		exitCode: minted.exitCode,
+		stderrNonempty: minted.stderr !== "",
+		parsed: parsed.ok,
+		verified: verified !== undefined,
+		adapterMatches: verified?.facts.adapter === "agent-browser",
+		runMatches: verified?.facts.runId === runId,
+		probeExecutableMatches:
+			verified?.facts.probeExecutable === input.agent.agentLogicalPath,
+	});
+	if (failureStage !== undefined) {
+		return refusal("qualification_handoff_producer_failed", {
+			failure_stage: failureStage,
+			...(minted.failurePhase === undefined
+				? {}
+				: { failure_phase: minted.failurePhase }),
+			...(minted.failureReason === undefined
+				? {}
+				: { failure_reason: minted.failureReason }),
+			...(minted.failureOutputClass === undefined
+				? {}
+				: { failure_output_class: minted.failureOutputClass }),
+			...(minted.failureStdoutBytes === undefined
+				? {}
+				: { failure_stdout_bytes: minted.failureStdoutBytes }),
+			...(minted.failureStderrBytes === undefined
+				? {}
+				: { failure_stderr_bytes: minted.failureStderrBytes }),
+		});
+	}
+	const facts = verified?.facts;
+	if (facts === undefined) {
+		return refusal("qualification_handoff_producer_failed", {
+			failure_stage: "handoff-envelope-invalid",
+		});
+	}
 	const closure = record(input.manifest.execution_closure);
 	const browserConnect = record(input.manifest.browser_connect);
 	const warmChrome = record(input.manifest.warm_chrome);
@@ -361,8 +625,8 @@ export async function produceSealedQualificationHandoff(input: {
 			adapter: "agent-browser",
 			run_id: runId,
 			handoff_sha256: sha256(minted.stdout),
-			handoff_evidence_id: parsed.facts.handoffEvidenceId,
-			browser_authority_id: browserAuthorityIdOf(parsed.facts),
+			handoff_evidence_id: facts.handoffEvidenceId,
+			browser_authority_id: browserAuthorityIdOf(facts),
 			expected_manifest_digest: input.expectedManifestDigest,
 			observed_manifest_digest: input.expectedManifestDigest,
 			sealed_artifact_sha256: input.sealedArtifactSha256,

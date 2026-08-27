@@ -11,6 +11,7 @@ import {
 	readFileSync,
 	realpathSync,
 	rmSync,
+	symlinkSync,
 	writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -20,22 +21,45 @@ import { verifiedHandoffEnvelope } from "./browser-connect-handoff-fixtures";
 import { agentBrowserProcessFixtureSource } from "./browser-use-agent-browser-test-fixture";
 import { parseBrowserOperationQualificationReceipt } from "./browser-use-operations";
 import { parseBrowserTargetTopologyQualificationReceipt } from "./browser-use-target-topology";
-import { produceSealedQualificationHandoff } from "./browser-use-qualification-runtime";
+import {
+	produceSealedQualificationHandoff,
+	qualificationHandoffChildEnvironment,
+	qualificationHandoffCommandFailureReason,
+	qualificationHandoffCommandOutputClass,
+	qualificationHandoffCommandPhase,
+	qualificationHandoffMintFailureStage,
+} from "./browser-use-qualification-runtime";
+import { BrowserUseQualificationSessionAuthority } from "./browser-use-qualification-session";
 import { acquireSourceLock } from "./browser-use-source-lock";
 import {
 	SEALED_ARTIFACT_NAME,
+	assertBrowserUseQualificationRuntimeEntry,
 	executeVerifiedSealedQualificationBundle,
 } from "./browser-use-qualification-wrapper";
 
 const SOURCE_DIR = dirname(fileURLToPath(import.meta.url));
 const PACKAGE_ROOT = resolve(SOURCE_DIR, "..");
-const REPO_ROOT = resolve(PACKAGE_ROOT, "../../..");
+const REPO_ROOT = resolve(PACKAGE_ROOT, "../../../../..");
 const NEUTRAL_CWD = realpathSync(
 	mkdtempSync(`${tmpdir()}/browser-use-qualification-cwd-`),
 );
 const RESOLVED_BROWSER_USE = Bun.which("browser-use");
+// Reviewed sealed digest. Refreshed for the final nested-spawn environment
+// scrub: command-specific variables are preserved, while OP and Browser Use
+// token variables are removed immediately before the sealed Agent Browser
+// supervisor starts. The failure projection remains bounded to safe stages,
+// phases, reasons, output classes, and byte counts.
+// Re-derived independently of this harness with `browser-use qualification
+// prepare` from the package root, the repo root, and a neutral temporary CWD
+// under a neutral HOME; all three agreed on the value below.
+// Prior reviewed values, newest first:
+// f15a8fce32213e8a585a0d9409e58622d12a1266089b71e74727aa88c4572e7f
+// 97b3d98696b18c0fd33efd7a04ce5e9870adc8e0cb5ecdf473ec1fcefeae5913
+// ea785d566008a93b8084166ebfae0611ba94ca3e55b00eaa5c5bd48ec7a6b0a0
+// 988882ee652cdd0ec763c8353435a40d41a9a4721b621cd3c960df10be720c8e
+// 4af8227d7b3747754a335f0bcf7378efaff9b032e7f1026be79bc1901c1e2433
 const REVIEWED_REPAIRED_MANIFEST_DIGEST =
-	"a0b10900a3692b6fe03d712dd43e26bc2ecd7940527cf78567326e7021aa6cb9";
+	"e6619ba5fbca3e22546ed2b920a8b982a0de8ba1aa08413604d8b59d4c5a6841";
 const RUN_ID = "qualification-run-a";
 const TARGET_REF =
 	"4114c9c79a4b77fb41067891c87621fd5646f883e160cd6a21f0d70ac9f48a4e";
@@ -506,6 +530,112 @@ async function sealedExec(input: {
 	return { stdout, stderr, exitCode };
 }
 
+function expectQualificationFailureDiagnosticTrail(input: {
+	stderr: string;
+	command: "session" | "validate";
+	verificationOutcomes: readonly ("completed" | "root_admitted")[];
+	failureKind:
+		| "source_guard_failed"
+		| "execution_failed"
+		| "bundle_verification_failed";
+	sensitiveValues?: readonly string[];
+}): void {
+	const records = input.stderr
+		.trimEnd()
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as Record<string, unknown>);
+	const diagnosticRecord = (
+		event: string,
+		level: "debug" | "error",
+		properties: Record<string, unknown>,
+	): Record<string, unknown> => ({
+		level,
+		category: ["browser-use", "qualification"],
+		message: event,
+		event,
+		qualification_command: input.command,
+		qualification_contract_id: "browser-use.qualification-bundle",
+		qualification_schema_version: "1",
+		...properties,
+	});
+	const expected: Record<string, unknown>[] = [
+		diagnosticRecord("qualification-front-door-dispatch", "debug", {
+			command: input.command,
+			machine_output: true,
+		}),
+	];
+	for (const outcome of input.verificationOutcomes) {
+		expected.push(
+			diagnosticRecord(
+				"qualification-bundle-verification-started",
+				"debug",
+				{
+					contract_id: "browser-use.qualification-bundle",
+					schema_version: "1",
+				},
+			),
+			diagnosticRecord("qualification-bundle-root-classified", "debug", {
+				bundle_root_state: "admitted",
+				admitted: true,
+				recommended_phase: "bundle_verification",
+			}),
+		);
+		if (outcome === "completed") {
+			expected.push(
+				diagnosticRecord(
+					"qualification-bundle-verification-completed",
+					"debug",
+					{
+						contract_id: "browser-use.qualification-bundle",
+						schema_version: "1",
+						artifact_count: 2,
+					},
+				),
+			);
+		}
+	}
+	expected.push(
+		diagnosticRecord("qualification-terminal-failure", "error", {
+			failure_kind: input.failureKind,
+			exit_code: 20,
+			cleanup_debt_count: 0,
+		}),
+	);
+
+	const metadata = records.map((record) => ({
+		timestamp: record.timestamp,
+		run_id: record.run_id,
+		started_at_ms: record.started_at_ms,
+	}));
+	for (const entry of metadata) {
+		expect(entry.timestamp).toBeString();
+		expect(Number.isNaN(Date.parse(String(entry.timestamp)))).toBe(false);
+		expect(entry.run_id).toBeString();
+		expect(String(entry.run_id)).toMatch(/^[A-Za-z0-9._-]{1,64}$/);
+		expect(entry.started_at_ms).toBeNumber();
+		expect(Number.isInteger(entry.started_at_ms)).toBe(true);
+	}
+	expect(new Set(metadata.map((entry) => entry.run_id)).size).toBe(1);
+	expect(new Set(metadata.map((entry) => entry.started_at_ms)).size).toBe(1);
+	expect(
+		records.map(
+			({ timestamp: _timestamp, run_id: _runId, started_at_ms: _startedAtMs, ...record }) =>
+				record,
+		),
+	).toEqual(expected);
+
+	for (const sensitive of [
+		NEUTRAL_CWD,
+		process.env.HOME,
+		...(input.sensitiveValues ?? []),
+	]) {
+		if (sensitive) expect(input.stderr).not.toContain(sensitive);
+	}
+	expect(input.stderr).not.toMatch(/https?:\/\/|wss?:\/\//i);
+	expect(input.stderr).not.toMatch(/authorization|bearer|cookie|token/i);
+}
+
 describe("qualification public process fixed point", () => {
 	test("sealed sessions stop on close-only, EOF-only, failed-request, and missing-validation lifecycles", async () => {
 		if (!RESOLVED_BROWSER_USE) throw new Error("browser-use is not resolved on PATH");
@@ -594,7 +724,20 @@ describe("qualification public process fixed point", () => {
 				child.exited,
 			]);
 			expect(exitCode, `${scenario.label}: ${stdout || stderr}`).toBe(20);
-			expect(stderr, scenario.label).toBe("");
+			expectQualificationFailureDiagnosticTrail({
+				stderr,
+				command: "session",
+				verificationOutcomes: ["completed", "completed"],
+				failureKind: "execution_failed",
+				sensitiveValues: [
+					root,
+					bundle.bundleRoot,
+					fakeAgent,
+					"http://127.0.0.1:49228",
+					"ws://127.0.0.1:49228/devtools/browser/browser-free-fixture",
+					scenario.stdin,
+				],
+			});
 			const envelopes = stdout
 				.trim()
 				.split("\n")
@@ -668,7 +811,13 @@ describe("qualification public process fixed point", () => {
 				child.exited,
 			]);
 			expect(exitCode, stdout || stderr).toBe(20);
-			expect(stderr).toBe("");
+			expectQualificationFailureDiagnosticTrail({
+				stderr,
+				command: "session",
+				verificationOutcomes: [],
+				failureKind: "source_guard_failed",
+				sensitiveValues: [root, bundle.bundleRoot, fakeAgent, callLog],
+			});
 			expect(JSON.parse(stdout)).toMatchObject({
 				status: "error",
 				error: { code: "qualification_source_drift_guard_conflict", exit_code: 20 },
@@ -947,7 +1096,11 @@ describe("qualification public process fixed point", () => {
 			.map((line) => JSON.parse(line) as string[]);
 		expect(calls.some((argv) => argv.includes("--version"))).toBe(true);
 		expect(calls.some((argv) => argv.includes("cdp-url"))).toBe(true);
-		expect(calls.some((argv) => argv.includes("new"))).toBe(true);
+		expect(
+			calls.some(
+				(argv) => argv.join("\0").includes("--pin-tab\0tab\0new"),
+			),
+		).toBe(true);
 		expect(calls.some((argv) => argv.includes("close"))).toBe(true);
 	}, 30_000);
 
@@ -1010,6 +1163,46 @@ describe("qualification public process fixed point", () => {
 			});
 			return await session.read();
 		};
+
+		{
+			const authority = new BrowserUseQualificationSessionAuthority();
+			const runId = "qualification-replayed-capability-run";
+			const handoffHandle = authority.admitHandoff({
+				runId,
+				raw: "test-owned-handoff",
+				producerReceiptRaw: "test-owned-producer-receipt",
+			});
+			const requestId = "replayed-capability-request";
+			const receiptCapabilities = [
+				{
+					handle: authority.admitReceipt({
+						handoffHandle,
+						runId,
+						requestId,
+						raw: "test-owned-receipt",
+					}),
+					request_id: requestId,
+				},
+			];
+			expect(
+				authority.consumeReceipts({
+					receiptCapabilities,
+					handoffHandle,
+					runId,
+				}),
+			).toMatchObject({ ok: true });
+			expect(
+				authority.consumeReceipts({
+					receiptCapabilities,
+					handoffHandle,
+					runId,
+				}),
+			).toEqual({
+				ok: false,
+				code: "qualification_receipt_capability_replayed",
+			});
+			authority.close();
+		}
 
 		{
 			const session = startBrowserFreeSession(fixture);
@@ -1124,31 +1317,36 @@ describe("qualification public process fixed point", () => {
 
 		{
 			const session = startBrowserFreeSession(fixture);
-			const runId = "qualification-replayed-run";
-			const handoffHandle = await mintSessionHandoff(session, runId);
-			const handles = await createSessionRunReceipts({
-				fixture,
-				session,
-				runId,
-				handoffHandle,
-				label: "replayed",
-			});
-			const invalidOrigin = testSessionEvidence({
-				digest: fixture.rewritten.manifest_digest,
-				runId,
-				handoffHandle,
-				receiptHandles: handles,
-				expectedOrigin: "https://wrong-origin.example.test",
-			});
-			expect(await validate(session, "consume-once", invalidOrigin)).toMatchObject({
-				status: "error",
-				error: { code: "qualification_origin_mismatch" },
-			});
-			expect(await validate(session, "replay", invalidOrigin)).toMatchObject({
-				status: "error",
-				error: { code: "qualification_receipt_capability_replayed" },
-			});
-			await closeStoppedSession(session);
+			try {
+				const runId = "qualification-replayed-run";
+				const handoffHandle = await mintSessionHandoff(session, runId);
+				const handles = await createSessionRunReceipts({
+					fixture,
+					session,
+					runId,
+					handoffHandle,
+					label: "replayed",
+				});
+				const invalidOrigin = testSessionEvidence({
+					digest: fixture.rewritten.manifest_digest,
+					runId,
+					handoffHandle,
+					receiptHandles: handles,
+					expectedOrigin: "https://wrong-origin.example.test",
+				});
+				expect(
+					await validate(session, "consume-once", invalidOrigin),
+				).toMatchObject({
+					status: "error",
+					error: { code: "qualification_origin_mismatch" },
+				});
+				expect(await validate(session, "replay", invalidOrigin)).toMatchObject({
+					status: "error",
+					error: { code: "qualification_session_terminal" },
+				});
+			} finally {
+				await closeStoppedSession(session);
+			}
 		}
 	}, 90_000);
 
@@ -1395,7 +1593,19 @@ describe("qualification public process fixed point", () => {
 				child.exited,
 			]);
 			expect(exitCode, stdout || stderr).toBe(20);
-			expect(stderr).toBe("");
+			expectQualificationFailureDiagnosticTrail({
+				stderr,
+				command: "session",
+				verificationOutcomes: ["completed", "completed"],
+				failureKind: "execution_failed",
+				sensitiveValues: [
+					root,
+					bundle.bundleRoot,
+					fakeAgent,
+					callLog,
+					"persisted-or-forged-handle",
+				],
+			});
 			const envelopes = stdout.trim().split("\n").map((line) => JSON.parse(line));
 			expect(envelopes[0]).toMatchObject({
 				status: "error",
@@ -1474,6 +1684,174 @@ describe("qualification public process fixed point", () => {
 			},
 		});
 	}, 30_000);
+
+	test("the sealed producer classifies only safe handoff failure stages", () => {
+		const accepted = {
+			exitCode: 0,
+			stderrNonempty: false,
+			parsed: true,
+			verified: true,
+			adapterMatches: true,
+			runMatches: true,
+			probeExecutableMatches: true,
+		};
+		expect(qualificationHandoffMintFailureStage(accepted)).toBeUndefined();
+		expect(
+			qualificationHandoffMintFailureStage({
+				...accepted,
+				exitCode: 20,
+			}),
+		).toBe("producer-exit-nonzero");
+		expect(
+			qualificationHandoffMintFailureStage({
+				...accepted,
+				stderrNonempty: true,
+			}),
+		).toBe("producer-stderr-nonempty");
+		expect(
+			qualificationHandoffMintFailureStage({ ...accepted, parsed: false }),
+		).toBe("handoff-envelope-invalid");
+		expect(
+			qualificationHandoffMintFailureStage({ ...accepted, verified: false }),
+		).toBe("handoff-not-verified");
+		expect(
+			qualificationHandoffMintFailureStage({
+				...accepted,
+				adapterMatches: false,
+			}),
+		).toBe("adapter-mismatch");
+		expect(
+			qualificationHandoffMintFailureStage({
+				...accepted,
+				runMatches: false,
+			}),
+		).toBe("run-mismatch");
+		expect(
+			qualificationHandoffMintFailureStage({
+				...accepted,
+				probeExecutableMatches: false,
+			}),
+		).toBe("probe-executable-mismatch");
+	});
+
+	test("the sealed producer classifies only bounded Browser Connect phases", () => {
+		expect(qualificationHandoffCommandPhase(["--version"])).toBe("version");
+		expect(
+			qualificationHandoffCommandPhase([
+				"--cdp",
+				"redacted-endpoint",
+				"get",
+				"cdp-url",
+			]),
+		).toBe("attachment");
+		expect(
+			qualificationHandoffCommandPhase(["--session", "redacted", "close"]),
+		).toBe("release");
+		expect(qualificationHandoffCommandPhase(["session", "list"])).toBe(
+			"inventory",
+		);
+	});
+
+	test("the sealed producer classifies only bounded command failures", () => {
+		const accepted = {
+			commandAdmitted: true,
+			exitCode: 0,
+			timedOut: false,
+			stdout: "agent-browser 0.34.0",
+			stderr: "",
+		};
+		expect(qualificationHandoffCommandFailureReason(accepted)).toBeUndefined();
+		expect(
+			qualificationHandoffCommandFailureReason({
+				...accepted,
+				commandAdmitted: false,
+			}),
+		).toBe("command-not-admitted");
+		expect(
+			qualificationHandoffCommandFailureReason({
+				...accepted,
+				exitCode: 20,
+				stdout: '{"error":{"code":"descriptor-exec-identity-mismatch"}}',
+			}),
+		).toBe("descriptor-exec-identity-mismatch");
+		expect(
+			qualificationHandoffCommandFailureReason({
+				...accepted,
+				exitCode: 20,
+				stdout: '{"error":{"code":"ambient-op-environment"}}',
+			}),
+		).toBe("ambient-op-environment");
+		expect(
+			qualificationHandoffCommandFailureReason({
+				...accepted,
+				exitCode: 20,
+				timedOut: true,
+			}),
+		).toBe("child-timeout");
+		expect(
+			qualificationHandoffCommandFailureReason({
+				...accepted,
+				exitCode: 7,
+			}),
+		).toBe("child-exit-nonzero");
+	});
+
+	test("the sealed producer exposes only allowlisted command output classes", () => {
+		expect(
+			qualificationHandoffCommandOutputClass({
+				phase: "version",
+				stdout: "agent-browser 0.34.0\n",
+				stderr: "",
+			}),
+		).toBe("version-output-valid");
+		expect(
+			qualificationHandoffCommandOutputClass({
+				phase: "version",
+				stdout: "",
+				stderr: "permission denied",
+			}),
+		).toBe("permission-denied");
+		expect(
+			qualificationHandoffCommandOutputClass({
+				phase: "version",
+				stdout: "",
+				stderr: "unknown option",
+			}),
+		).toBe("argument-invalid");
+		expect(
+			qualificationHandoffCommandOutputClass({
+				phase: "version",
+				stdout: "",
+				stderr: "",
+			}),
+		).toBe("silent");
+		expect(
+			qualificationHandoffCommandOutputClass({
+				phase: "version",
+				stdout: "",
+				stderr: "sensitive-looking arbitrary text",
+			}),
+		).toBe("unclassified");
+	});
+
+	test("the sealed producer scrubs forbidden child environment at the final spawn", () => {
+		expect(
+			qualificationHandoffChildEnvironment(
+				{
+					PATH: "/reviewed/bin",
+					OP_SERVICE_ACCOUNT_TOKEN: "must-not-cross",
+					BROWSER_USE_OP_TOKEN: "must-not-cross",
+				},
+				{
+					MCPORTER_NO_KEEPALIVE: "*",
+					OP_CONNECT_TOKEN: "must-not-cross-either",
+				},
+			),
+		).toEqual({
+			PATH: "/reviewed/bin",
+			MCPORTER_NO_KEEPALIVE: "*",
+		});
+	});
 
 	test("a bundle prepared for one Bun image rejects a different Bun pathname before sealed logic", async () => {
 		if (!RESOLVED_BROWSER_USE) throw new Error("browser-use is not resolved on PATH");
@@ -1695,7 +2073,9 @@ describe("qualification public process fixed point", () => {
 		});
 		expect(externalAdmissionObserved).toBe(true);
 		expect(opened.exitCode, opened.stdout || opened.stderr).toBe(0);
-		expect(readFileSync(reviewedCalls, "utf8")).toContain('"tab","new"');
+		expect(readFileSync(reviewedCalls, "utf8")).toContain(
+			'"--pin-tab","tab","new"',
+		);
 		expect(() => readFileSync(replacementCalls)).toThrow();
 		rmSync(fakeAgent, { force: true });
 		renameSync(reviewedAgent, fakeAgent);
@@ -2047,6 +2427,181 @@ describe("qualification public process fixed point", () => {
 		expect(await missingChildArgv.exited).toBe(20);
 	}, 30_000);
 
+	test("qualification bundle-root diagnostics classify every admission predicate without leaking inputs", async () => {
+		if (!RESOLVED_BROWSER_USE) throw new Error("browser-use is not resolved on PATH");
+		const fixtureRoot = resolve(NEUTRAL_CWD, "diagnostic-private-path-sentinel");
+		mkdirSync(fixtureRoot, { mode: 0o700 });
+		const nonDirectoryRoot = resolve(fixtureRoot, "non-directory");
+		writeFileSync(nonDirectoryRoot, "not-a-bundle\n", { mode: 0o500 });
+		const symlinkTarget = resolve(fixtureRoot, "symlink-target");
+		mkdirSync(symlinkTarget, { mode: 0o500 });
+		const symlinkRoot = resolve(fixtureRoot, "symlink-root");
+		symlinkSync(symlinkTarget, symlinkRoot);
+		const wrongModeRoot = resolve(fixtureRoot, "wrong-mode");
+		mkdirSync(wrongModeRoot, { mode: 0o700 });
+		const realParent = resolve(fixtureRoot, "real-parent");
+		mkdirSync(realParent, { mode: 0o700 });
+		const noncanonicalTarget = resolve(realParent, "noncanonical-root");
+		mkdirSync(noncanonicalTarget, { mode: 0o500 });
+		const aliasParent = resolve(fixtureRoot, "alias-parent");
+		symlinkSync(realParent, aliasParent);
+		const unpreparedRoot = resolve(fixtureRoot, "unprepared-root");
+		mkdirSync(unpreparedRoot, { mode: 0o500 });
+
+		const expectedEvents = [
+			"qualification-front-door-dispatch",
+			"qualification-bundle-verification-started",
+			"qualification-bundle-root-classified",
+			"qualification-terminal-failure",
+		];
+		const sensitiveValues = [
+			fixtureRoot,
+			"https://diagnostic-leak.invalid/private",
+			"diagnostic-token-sentinel",
+			"diagnostic-cookie-sentinel",
+			"diagnostic-env-sentinel",
+		];
+		const scenarios = [
+			{
+				label: "missing",
+				bundleRoot: resolve(fixtureRoot, "missing-root"),
+				expectedClassification: "missing_root",
+			},
+			{
+				label: "non-directory",
+				bundleRoot: nonDirectoryRoot,
+				expectedClassification: "non_directory",
+			},
+			{
+				label: "symlink",
+				bundleRoot: symlinkRoot,
+				expectedClassification: "symlink",
+			},
+			{
+				label: "wrong-mode",
+				bundleRoot: wrongModeRoot,
+				expectedClassification: "wrong_mode",
+			},
+			{
+				label: "noncanonical",
+				bundleRoot: resolve(aliasParent, "noncanonical-root"),
+				expectedClassification: "noncanonical_realpath",
+			},
+			{
+				label: "unprepared",
+				bundleRoot: unpreparedRoot,
+				expectedClassification: "unprepared_or_unsealed_root",
+			},
+		] as const;
+
+		const invoke = async (
+			scenario: (typeof scenarios)[number],
+			mode?: "--debug" | "--quiet",
+		) => {
+			const runId = `qualification-root-${scenario.label}${mode ?? "-default"}`;
+			const child = Bun.spawn(
+				[
+					RESOLVED_BROWSER_USE,
+					"qualification",
+					"manifest",
+					"--bundle",
+					scenario.bundleRoot,
+					"--expected-manifest-digest",
+					"a".repeat(64),
+					"--json",
+					"--run-id",
+					runId,
+					...(mode ? [mode] : []),
+				],
+				{
+					cwd: NEUTRAL_CWD,
+					env: {
+						...process.env,
+						BROWSER_USE_TEST_ENDPOINT:
+							"https://diagnostic-leak.invalid/private",
+						BROWSER_USE_TEST_TOKEN: "diagnostic-token-sentinel",
+						BROWSER_USE_TEST_COOKIE: "diagnostic-cookie-sentinel",
+						BROWSER_USE_TEST_ENV: "diagnostic-env-sentinel",
+					},
+					stdout: "pipe",
+					stderr: "pipe",
+				},
+			);
+			const [stdout, stderr, exitCode] = await Promise.all([
+				new Response(child.stdout).text(),
+				new Response(child.stderr).text(),
+				child.exited,
+			]);
+			return { runId, stdout, stderr, exitCode };
+		};
+
+		for (const scenario of scenarios) {
+			const result = await invoke(scenario);
+			expect(result.exitCode, result.stdout || result.stderr).toBe(20);
+			const stdoutLines = result.stdout.trimEnd().split("\n");
+			expect(stdoutLines).toHaveLength(1);
+			expect(JSON.parse(stdoutLines[0])).toEqual({
+				status: "error",
+				error: {
+					code: "qualification_bundle_root_invalid",
+					exit_code: 20,
+					message: "The sealed Browser Use qualification runtime was not admitted.",
+				},
+			});
+			const records = result.stderr
+				.trimEnd()
+				.split("\n")
+				.filter(Boolean)
+				.map((line) => JSON.parse(line) as Record<string, unknown>);
+			expect(records.map((record) => record.event)).toEqual(expectedEvents);
+			expect(records.every((record) => record.run_id === result.runId)).toBe(true);
+			expect(records).toContainEqual(
+					expect.objectContaining({
+					level: "debug",
+					category: ["browser-use", "qualification"],
+					event: "qualification-bundle-root-classified",
+					bundle_root_state: scenario.expectedClassification,
+					admitted: false,
+					recommended_phase: "qualification_prepare",
+				}),
+			);
+			for (const sensitive of sensitiveValues) {
+				expect(result.stderr).not.toContain(sensitive);
+			}
+		}
+
+		const debugResult = await invoke(scenarios[0], "--debug");
+		const debugEvents = debugResult.stderr
+			.trimEnd()
+			.split("\n")
+			.filter(Boolean)
+			.map((line) => (JSON.parse(line) as { event?: string }).event);
+		expect(debugEvents).toEqual(expectedEvents);
+
+		const quietResult = await invoke(scenarios[0], "--quiet");
+		expect(quietResult.exitCode).toBe(20);
+		expect(quietResult.stderr).toBe("");
+		expect(quietResult.stdout.trimEnd().split("\n")).toHaveLength(1);
+		expect(JSON.parse(quietResult.stdout).error?.code).toBe(
+			"qualification_bundle_root_invalid",
+		);
+
+		const successfulHelp = Bun.spawn(
+			[RESOLVED_BROWSER_USE, "qualification", "--help"],
+			{ cwd: NEUTRAL_CWD, stdout: "pipe", stderr: "pipe" },
+		);
+		const [helpStdout, helpStderr, helpExitCode] = await Promise.all([
+			new Response(successfulHelp.stdout).text(),
+			new Response(successfulHelp.stderr).text(),
+			successfulHelp.exited,
+		]);
+		expect(helpExitCode, helpStdout || helpStderr).toBe(0);
+		expect(helpStdout).toBe(
+			"Usage: browser-use qualification <prepare|manifest|validate|exec|handoff|session> --help\n",
+		);
+		expect(helpStderr).toBe("");
+	}, 30_000);
+
 	test("the resolved public front door emits one CWD-invariant manifest", async () => {
 		if (!RESOLVED_BROWSER_USE) throw new Error("browser-use is not resolved on PATH");
 		const manifests = await Promise.all(
@@ -2211,7 +2766,20 @@ describe("qualification public process fixed point", () => {
 		);
 		const [stdout, stderr, exitCode] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
 		expect(exitCode, stdout || stderr).toBe(20);
-		expect(stderr).toBe("");
+		expectQualificationFailureDiagnosticTrail({
+			stderr,
+			command: "validate",
+			verificationOutcomes: ["completed"],
+			failureKind: "execution_failed",
+			sensitiveValues: [
+				fixtureRoot,
+				manifest.bundle.bundleRoot,
+				handoffPath,
+				evidencePath,
+				"replayed-persisted-handle",
+				"https://storybook-a.example.test",
+			],
+		});
 		const validationEnvelope = JSON.parse(stdout) as {
 			status: string;
 			data?: Record<string, unknown>;
@@ -2281,10 +2849,128 @@ describe("qualification public process fixed point", () => {
 			child.exited,
 		]);
 		expect(exitCode, stdout || stderr).toBe(20);
-		expect(stderr).toBe("");
+		expectQualificationFailureDiagnosticTrail({
+			stderr,
+			command: "validate",
+			verificationOutcomes: ["root_admitted"],
+			failureKind: "bundle_verification_failed",
+			sensitiveValues: [fixtureRoot, manifest.bundle.bundleRoot, evidencePath],
+		});
 		expect(JSON.parse(stdout)).toMatchObject({
 			status: "error",
 			error: { code: "qualification_manifest_mismatch", exit_code: 20 },
 		});
+	}, 30_000);
+});
+
+describe("pre-live executable-bundle gate", () => {
+	test("session refuses before execution when the expected source digest is absent", async () => {
+		if (!RESOLVED_BROWSER_USE) throw new Error("browser-use is not resolved on PATH");
+		const child = Bun.spawn(
+			[
+				RESOLVED_BROWSER_USE,
+				"qualification",
+				"session",
+				"--bundle",
+				resolve(NEUTRAL_CWD, "gate-absent-digest-bundle"),
+				"--expected-manifest-digest",
+				"a".repeat(64),
+				"--jsonl",
+			],
+			{ cwd: NEUTRAL_CWD, env: { ...process.env, HOME: NEUTRAL_CWD }, stdout: "pipe", stderr: "pipe" },
+		);
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		expect(exitCode, stdout || stderr).toBe(20);
+		expect(JSON.parse(stdout.trim())).toMatchObject({
+			status: "error",
+			error: { code: "qualification_source_identity_invalid", exit_code: 20 },
+		});
+		// The refusal precedes any sealed child: no campaign receipt is emitted.
+		expect(stdout).not.toContain("child_exit_code");
+	}, 30_000);
+
+	test("session refuses a source digest that drifts from the sealed and current manifests", async () => {
+		if (!RESOLVED_BROWSER_USE) throw new Error("browser-use is not resolved on PATH");
+		const admitted = await manifestFrom(PACKAGE_ROOT, "gate-source-drift");
+		const child = Bun.spawn(
+			[
+				RESOLVED_BROWSER_USE,
+				"qualification",
+				"session",
+				"--bundle",
+				admitted.bundle.bundleRoot,
+				"--expected-manifest-digest",
+				admitted.envelope.data.manifest_digest,
+				"--expected-source-digest",
+				"b".repeat(64),
+				"--jsonl",
+			],
+			{ cwd: NEUTRAL_CWD, env: { ...process.env, HOME: NEUTRAL_CWD }, stdout: "pipe", stderr: "pipe" },
+		);
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+			child.exited,
+		]);
+		expect(exitCode, stdout || stderr).not.toBe(0);
+		expect(stdout).not.toContain("child_exit_code");
+	}, 60_000);
+
+	test("the exact freshly built artifact is admitted and bound by the sealed manifest", async () => {
+		const entryPath = await assertBrowserUseQualificationRuntimeEntry();
+		expect(entryPath).toBe(
+			resolve(
+				REPO_ROOT,
+				"config/agents/skills/personal/browser-use/src/browser-use-qualification-runtime.ts",
+			),
+		);
+		expect(lstatSync(entryPath).isFile()).toBe(true);
+
+		const admitted = await manifestFrom(PACKAGE_ROOT, "gate-fresh-artifact");
+		const artifactPath = resolve(admitted.bundle.bundleRoot, SEALED_ARTIFACT_NAME);
+		const builtSha256 = createHash("sha256")
+			.update(readFileSync(artifactPath))
+			.digest("hex");
+		const sealedRuntime = admitted.envelope.data.sealed_runtime as {
+			artifact_sha256: string;
+		};
+		expect(sealedRuntime.artifact_sha256).toBe(builtSha256);
+	}, 60_000);
+
+	test("a packaged bin root cannot bypass the gate to qualify stale dist bytes", async () => {
+		const packagedRoot = mkdtempSync(`${tmpdir()}/browser-use-packaged-bin-`);
+		const distDir = resolve(packagedRoot, "dist");
+		mkdirSync(distDir, { recursive: true, mode: 0o700 });
+		writeFileSync(resolve(distDir, "browser-use.js"), "// stale packaged bundle\n", {
+			mode: 0o600,
+		});
+		await expect(
+			assertBrowserUseQualificationRuntimeEntry(packagedRoot),
+		).rejects.toThrow("qualification_bundle_source_entry_unavailable");
+
+		// A symlinked entrypoint is not a real in-checkout source file either.
+		const symlinkedRoot = mkdtempSync(`${tmpdir()}/browser-use-symlinked-entry-`);
+		const entryDir = resolve(
+			symlinkedRoot,
+			"config/agents/skills/personal/browser-use/src",
+		);
+		mkdirSync(entryDir, { recursive: true, mode: 0o700 });
+		symlinkSync(
+			resolve(
+				REPO_ROOT,
+				"config/agents/skills/personal/browser-use/src/browser-use-qualification-runtime.ts",
+			),
+			resolve(entryDir, "browser-use-qualification-runtime.ts"),
+		);
+		await expect(
+			assertBrowserUseQualificationRuntimeEntry(symlinkedRoot),
+		).rejects.toThrow("qualification_bundle_source_entry_unavailable");
+
+		rmSync(packagedRoot, { recursive: true, force: true });
+		rmSync(symlinkedRoot, { recursive: true, force: true });
 	}, 30_000);
 });

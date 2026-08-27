@@ -304,6 +304,17 @@ export const BROWSER_USE_OPERATION_CONTRACT_ID =
 // v5: every success binds the opaque canonical target reference and outer run;
 // Browser-wide work additionally reports a confirmed Browser Lane interval.
 export const BROWSER_USE_OPERATION_SCHEMA_VERSION = "5" as const;
+/** Target operations retain the shipped outer Browser Operation contract. */
+export const BROWSER_USE_TARGET_OPERATION_OUTER_SCHEMA_VERSION = "7" as const;
+/** Nested target-plan result projection evolves independently from its outer receipt. */
+export const BROWSER_USE_TARGET_OPERATION_RESULT_CONTRACT_ID =
+	"browser-use.target-operation-result" as const;
+export const BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSION = "2" as const;
+export const BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSION_V3 = "3" as const;
+export const BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSIONS = [
+	BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSION,
+	BROWSER_USE_TARGET_OPERATION_RESULT_SCHEMA_VERSION_V3,
+] as const;
 /** Static Browser Use implementation/custody qualification manifest. */
 export const BROWSER_USE_QUALIFICATION_MANIFEST_CONTRACT_ID =
 	"browser-use.qualification-manifest" as const;
@@ -433,6 +444,8 @@ export const BROWSER_USE_TARGETS_SUBCOMMANDS = [
 	"select",
 	"status",
 	"open",
+	"adopt",
+	"release",
 	"close",
 ] as const;
 export type BrowserUseTargetsSubcommand =
@@ -645,6 +658,8 @@ export type BrowserUseCommand =
 	| "targets-select"
 	| "targets-status"
 	| "targets-open"
+	| "targets-adopt"
+	| "targets-release"
 	| "targets-close"
 	| "operate-snapshot"
 	| "operate-screenshot"
@@ -1064,9 +1079,15 @@ export const browserUseOperationFailureActions = [
 		sideEffects: ["browser", "write"],
 	},
 	{
+		id: "release_adopted_target",
+		summary:
+			"Run browser-use targets release with the exact adopted state and handoff, then select and adopt again. Never run targets close on a target this run did not open.",
+		sideEffects: ["browser", "write"],
+	},
+	{
 		id: "repair_target_state",
 		summary:
-			"Repair or remove the run-scoped selected-target state file, then re-run browser-use operate.",
+			"Inspect or repair the exact run-scoped selected-target state before any new Browser Operation input.",
 		sideEffects: ["write"],
 	},
 	{
@@ -1374,6 +1395,24 @@ const browserUseTargetsOpenFlags = {
 	...browserUseHandoffFlags,
 } as const satisfies BrowserUseCommandContract["flags"];
 
+const browserUseTargetsAdoptFlags = {
+	"--state": {
+		type: "path",
+		description:
+			"Run-scoped selected-target state holding the selection to adopt.",
+	},
+	...browserUseHandoffFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
+const browserUseTargetsReleaseFlags = {
+	"--state": {
+		type: "path",
+		description:
+			"Run-scoped selected-target state holding the adopted lifecycle to give back.",
+	},
+	...browserUseHandoffFlags,
+} as const satisfies BrowserUseCommandContract["flags"];
+
 const browserUseTargetsCloseFlags = {
 	"--state": {
 		type: "path",
@@ -1601,6 +1640,12 @@ const browserUseOperationResultContract = {
 	id: BROWSER_USE_OPERATION_CONTRACT_ID,
 	kind: "Normalized Browser Operation result.",
 	schema_version: BROWSER_USE_OPERATION_SCHEMA_VERSION,
+} as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
+
+const browserUseTargetOperationResultContract = {
+	id: BROWSER_USE_OPERATION_CONTRACT_ID,
+	kind: "Normalized Browser Operation target-plan result.",
+	schema_version: BROWSER_USE_TARGET_OPERATION_OUTER_SCHEMA_VERSION,
 } as const satisfies NonNullable<BrowserUseCommandContract["resultContract"]>;
 
 const browserUseQualificationManifestResultContract = {
@@ -2364,6 +2409,52 @@ export const browserUseContracts = defineCommandFacadeContract(
 			flags: browserUseTargetsOpenFlags,
 			exitCodes: browserUseTargetTopologyExitCodes,
 		},
+		"targets-adopt": {
+			script: "browser-use",
+			summary:
+				"Retain one exact-target adapter lifecycle for the run-scoped selected target so a bounded multi-step workflow stops re-attaching per action. Never creates, navigates, or closes a target.",
+			usage: [
+				"targets adopt --handoff <path> [--state <path>] [--dry-run] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "browser",
+			sideEffects: ["browser", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Dry-run validates binding, selection, and capability; execution binds one exact adapter lifecycle and rewrites run-scoped selection state.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseTargetTopologyResultContract,
+			flags: browserUseTargetsAdoptFlags,
+			exitCodes: browserUseTargetTopologyExitCodes,
+		},
+		"targets-release": {
+			script: "browser-use",
+			summary:
+				"Give back the adopted exact-target adapter lifecycle without closing the target. The counterpart of targets adopt; never use targets close on a target this run did not open.",
+			usage: [
+				"targets release --handoff <path> [--state <path>] [--dry-run] [--json|--plain]",
+			],
+			json: true,
+			audience: "agent",
+			mutation: "browser",
+			sideEffects: ["browser", "write"],
+			executionModes: ["normal"],
+			previewExemption: {
+				reason:
+					"Dry-run validates binding and adopted ownership; execution releases one adapter lifecycle and clears run-scoped adoption state.",
+			},
+			outputModes: ["json", "plain"],
+			interactivity: "none",
+			envVars: browserUsePlatformStoreEnvVars,
+			resultContract: browserUseTargetTopologyResultContract,
+			flags: browserUseTargetsReleaseFlags,
+			exitCodes: browserUseTargetTopologyExitCodes,
+		},
 		"targets-close": {
 			script: "browser-use",
 			summary:
@@ -2485,7 +2576,7 @@ export const browserUseContracts = defineCommandFacadeContract(
 			outputModes: ["json", "plain"],
 			interactivity: "none",
 			envVars: browserUseOperationStateEnvVars,
-			resultContract: browserUseOperationResultContract,
+			resultContract: browserUseTargetOperationResultContract,
 			flags: browserUseTargetOperationFlags,
 			exitCodes: browserUseExitCodes,
 		},

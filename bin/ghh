@@ -3,9 +3,15 @@
 
 set -euo pipefail
 
-VERSION="0.1.0"
+VERSION="0.2.0"
 HOST="github.com"
 RUN_ID="ghh-$(date +%s)-$$-${RANDOM:-0}"
+
+# Any executable carrying this marker routes back into ghh. Resolution skips it.
+SHIM_MARKER="ghh-shim-v1"
+# Legitimate nesting is run -> shim -> exec, plus gh extensions that call gh
+# again. Beyond this, gh routing is looping and must fail instead of forking.
+MAX_DEPTH=8
 
 usage() {
   cat <<'EOF'
@@ -14,12 +20,15 @@ ghh - run GitHub CLI commands with a process-scoped authenticated account
 Usage:
   ghh check --account <login> [--json]
   ghh exec --account <login> -- <gh arguments...>
+  ghh run --account <login> -- <command> [arguments...]
   ghh --help
   ghh --version
 
 Commands:
   check   Verify that a stored credential resolves to the requested login.
   exec    Forward arguments to gh with that verified credential.
+  run     Run any command so that every bare gh call inside it routes through
+          ghh with that verified credential.
 
 Behavior:
   Never changes the active gh account.
@@ -28,22 +37,37 @@ Behavior:
   Sets GH_PROMPT_DISABLED=1 for non-interactive agent use.
   Preserves gh stdout, stderr, and exit status.
   Leaves Git push identity to the repository remote and SSH configuration.
+  Resolves the real gh binary and never calls a gh shim that routes into ghh.
+  Refuses recursive gh routing instead of forking without bound.
+
+run:
+  Prepends a private directory holding a gh shim to PATH for the child command.
+  The shim calls this ghh by absolute path, so a restricted PATH still routes.
+  Verifies the account once per run; the child tree never receives the token.
+  Removes the shim directory when the child command exits.
+  Use it for repository-owned scripts that call gh directly and cannot be edited.
+
+Environment:
+  GHH_GH_BIN   Absolute path to the real gh binary. Overrides PATH resolution.
 
 Examples:
   ghh check --account nathanvale --json
   ghh exec --account nathanvale -- pr view 305
   ghh exec --account myagentdojo -- issue list -R myagentdojo/example
+  ghh run --account myagentdojo -- bun scripts/repository-readiness.ts
 
 Exit codes:
   0    Success.
   64   Invalid invocation.
   69   gh or the requested stored credential is unavailable.
   70   The credential resolves to a different GitHub login.
-  other  Exit status from the forwarded gh command.
+  71   gh routing is recursive; a gh shim on PATH calls ghh back.
+  other  Exit status from the forwarded gh or child command.
 
 Side effects:
   check is read-only and safe to retry.
   exec inherits the side effects and retry safety of the forwarded gh command.
+  run inherits the side effects and retry safety of the child command.
 
 Smoke:
   ghh check --account nathanvale --json
@@ -68,6 +92,45 @@ emit_error() {
   exit "$status"
 }
 
+# A gh that routes back into ghh cannot serve ghh's own credential lookup.
+is_shim() {
+  head -c 4096 "$1" 2>/dev/null | LC_ALL=C grep -Fq -- "$SHIM_MARKER"
+}
+
+# Resolve the real gh binary. Unlike command -v, this skips ghh shims and never
+# treats an empty PATH entry as the working directory.
+resolve_gh_binary() {
+  local json="$1"
+  local account="${2:-}"
+  local dir candidate
+
+  if [[ -n "${GHH_GH_BIN:-}" ]]; then
+    if [[ ! -x "$GHH_GH_BIN" || -d "$GHH_GH_BIN" ]]; then
+      emit_error 69 "gh_unavailable" "GHH_GH_BIN is not an executable gh binary; unset it or point it at gh, then retry" "$account" "" "$json"
+    fi
+    printf '%s' "$GHH_GH_BIN"
+    return 0
+  fi
+
+  local saved_ifs="$IFS"
+  IFS=:
+  for dir in ${PATH:-}; do
+    IFS="$saved_ifs"
+    [[ -n "$dir" ]] || continue
+    candidate="$dir/gh"
+    [[ -f "$candidate" && -x "$candidate" ]] || continue
+    if is_shim "$candidate"; then
+      IFS=:
+      continue
+    fi
+    printf '%s' "$candidate"
+    return 0
+  done
+  IFS="$saved_ifs"
+
+  emit_error 69 "gh_unavailable" "gh is unavailable; install GitHub CLI and retry" "$account" "" "$json"
+}
+
 require_login_shape() {
   local account="$1"
   local json="$2"
@@ -77,16 +140,27 @@ require_login_shape() {
   fi
 }
 
+# A nested ghh reports recursion as 71. Reclassify it here, or the loop
+# surfaces as a missing credential and sends the reader to gh auth login.
+reject_recursive_status() {
+  local status="$1"
+  local account="$2"
+  local json="$3"
+
+  if (( status == 71 )); then
+    emit_error 71 "recursive_routing" "gh on PATH routes back into ghh; the gh ghh resolved is itself a ghh wrapper. Set GHH_GH_BIN to the real gh binary, or remove that wrapper from PATH, then retry" "$account" "" "$json"
+  fi
+}
+
 resolve_token() {
   local account="$1"
   local json="$2"
   local token
+  local status=0
 
-  if ! command -v gh >/dev/null 2>&1; then
-    emit_error 69 "gh_unavailable" "gh is unavailable; install GitHub CLI and retry" "$account" "" "$json"
-  fi
-
-  if ! token="$(env -u GH_TOKEN -u GITHUB_TOKEN gh auth token --hostname "$HOST" --user "$account" 2>/dev/null)"; then
+  token="$(env -u GH_TOKEN -u GITHUB_TOKEN "$GH_BIN" auth token --hostname "$HOST" --user "$account" 2>/dev/null)" || status=$?
+  reject_recursive_status "$status" "$account" "$json"
+  if (( status != 0 )); then
     emit_error 69 "account_unavailable" "No stored credential for $account; run gh auth login --hostname $HOST, then retry" "$account" "" "$json"
   fi
 
@@ -103,7 +177,16 @@ verify_identity() {
   local json="$3"
   local actual
 
-  if ! actual="$(env -u GITHUB_TOKEN GH_TOKEN="$token" GH_PROMPT_DISABLED=1 gh api user --jq .login 2>/dev/null)"; then
+  # ghh run verifies once and marks its own process tree, so a script making
+  # many gh calls costs one identity round trip, not one per call.
+  if [[ -n "${GHH_VERIFIED_RUN:-}" && "${GHH_VERIFIED_ACCOUNT:-}" == "$account" ]]; then
+    return 0
+  fi
+
+  local status=0
+  actual="$(env -u GITHUB_TOKEN GH_TOKEN="$token" GH_PROMPT_DISABLED=1 "$GH_BIN" api user --jq .login 2>/dev/null)" || status=$?
+  reject_recursive_status "$status" "$account" "$json"
+  if (( status != 0 )); then
     emit_error 69 "identity_unavailable" "Could not verify the stored credential for $account; check network access and retry" "$account" "" "$json"
   fi
 
@@ -147,6 +230,21 @@ parse_account_flags() {
   done
 }
 
+write_shim() {
+  local shim_dir="$1"
+  local account="$2"
+
+  cat > "$shim_dir/gh" <<EOF
+#!/usr/bin/env bash
+# $SHIM_MARKER - route a bare gh call through ghh with a pinned account.
+# ghh resolution skips any executable carrying the marker above, so this shim
+# can sit first on PATH without ghh calling it back.
+set -euo pipefail
+exec "$GHH_BIN" exec --account "$account" -- "\$@"
+EOF
+  chmod 700 "$shim_dir/gh"
+}
+
 if [[ $# -eq 0 ]]; then
   usage
   exit 0
@@ -161,6 +259,19 @@ case "$1" in
     echo "ghh $VERSION"
     exit 0
     ;;
+esac
+
+# A foreign gh shim carries no marker, so resolution cannot skip it. Bound the
+# loop here: fail with a repair path instead of forking until the machine dies.
+GHH_DEPTH=$(( ${GHH_DEPTH:-0} + 1 ))
+export GHH_DEPTH
+if (( GHH_DEPTH > MAX_DEPTH )); then
+  emit_error 71 "recursive_routing" "gh on PATH routes back into ghh; a gh shim reached depth $GHH_DEPTH. Set GHH_GH_BIN to the real gh binary, or remove that shim from PATH, then retry" "" "" false
+fi
+
+GHH_BIN="$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)/$(basename "${BASH_SOURCE[0]}")"
+
+case "$1" in
   check)
     shift
     parse_account_flags true "$@"
@@ -171,6 +282,7 @@ case "$1" in
       emit_error 64 "invalid_usage" "check does not accept forwarded gh arguments" "$ACCOUNT" "" "$JSON_OUTPUT"
     fi
     require_login_shape "$ACCOUNT" "$JSON_OUTPUT"
+    GH_BIN="$(resolve_gh_binary "$JSON_OUTPUT" "$ACCOUNT")"
     TOKEN="$(resolve_token "$ACCOUNT" "$JSON_OUTPUT")"
     verify_identity "$ACCOUNT" "$TOKEN" "$JSON_OUTPUT"
     if [[ "$JSON_OUTPUT" == "true" ]]; then
@@ -190,14 +302,53 @@ case "$1" in
       emit_error 64 "invalid_usage" "A gh command is required after --" "$ACCOUNT" "" false
     fi
     require_login_shape "$ACCOUNT" false
+    GH_BIN="$(resolve_gh_binary false "$ACCOUNT")"
     TOKEN="$(resolve_token "$ACCOUNT" false)"
     verify_identity "$ACCOUNT" "$TOKEN" false
     set +e
-    env -u GITHUB_TOKEN GH_TOKEN="$TOKEN" GH_PROMPT_DISABLED=1 gh "${FORWARDED_ARGS[@]}"
+    env -u GITHUB_TOKEN GH_TOKEN="$TOKEN" GH_PROMPT_DISABLED=1 "$GH_BIN" "${FORWARDED_ARGS[@]}"
     STATUS=$?
     set -e
     if [[ "$STATUS" -ne 0 ]]; then
       echo "ghh: forwarded gh command failed; retry depends on the forwarded gh command" >&2
+      echo "ghh: run_id=$RUN_ID" >&2
+    fi
+    exit "$STATUS"
+    ;;
+  run)
+    shift
+    parse_account_flags false "$@"
+    if [[ -z "$ACCOUNT" ]]; then
+      emit_error 64 "invalid_usage" "--account is required; run ghh --help" "" "" false
+    fi
+    if [[ ${#FORWARDED_ARGS[@]} -eq 0 ]]; then
+      emit_error 64 "invalid_usage" "A command is required after --" "$ACCOUNT" "" false
+    fi
+    require_login_shape "$ACCOUNT" false
+    GH_BIN="$(resolve_gh_binary false "$ACCOUNT")"
+    TOKEN="$(resolve_token "$ACCOUNT" false)"
+    verify_identity "$ACCOUNT" "$TOKEN" false
+    unset TOKEN
+
+    SHIM_DIR="$(mktemp -d "${TMPDIR:-/tmp}/ghh-shim.XXXXXX")"
+    cleanup_shim() {
+      rm -rf "$SHIM_DIR"
+    }
+    trap cleanup_shim EXIT INT TERM
+    write_shim "$SHIM_DIR" "$ACCOUNT"
+
+    set +e
+    env -u GH_TOKEN -u GITHUB_TOKEN \
+      PATH="$SHIM_DIR:${PATH:-}" \
+      GHH_GH_BIN="$GH_BIN" \
+      GHH_VERIFIED_ACCOUNT="$ACCOUNT" \
+      GHH_VERIFIED_RUN="$RUN_ID" \
+      GH_PROMPT_DISABLED=1 \
+      "${FORWARDED_ARGS[@]}"
+    STATUS=$?
+    set -e
+    if [[ "$STATUS" -ne 0 ]]; then
+      echo "ghh: child command failed; retry depends on the child command" >&2
       echo "ghh: run_id=$RUN_ID" >&2
     fi
     exit "$STATUS"

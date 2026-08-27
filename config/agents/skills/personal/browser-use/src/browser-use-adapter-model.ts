@@ -75,7 +75,14 @@ export type BrowserUseExactTargetTopologyAction =
 	| { kind: "inventory" }
 	| { kind: "create"; url: string }
 	| { kind: "close"; target_id: string }
-	| { kind: "retain-lifecycle"; target_id: string };
+	| { kind: "retain-lifecycle"; target_id: string; expected_url: string }
+	/**
+	 * Retain lifecycle custody of an exact target this run did NOT create.
+	 * Distinct from `retain-lifecycle`, whose session the adapter already bound
+	 * during creation: this one must bind an existing target first, so an
+	 * adapter that can confirm a post-create binding cannot silently claim it.
+	 */
+	| { kind: "bind-lifecycle"; target_id: string; expected_url: string };
 
 export type BrowserUseExactTargetTopologyResult =
 	| {
@@ -86,7 +93,10 @@ export type BrowserUseExactTargetTopologyResult =
 	| {
 			ok: true;
 			kind: "create";
-			data: { canonical_target_id?: string };
+			data: {
+				canonical_target_id?: string;
+				target_disposition?: "adopted-current";
+			};
 	  }
 	| { ok: true; kind: "close"; confirmed: true }
 	| { ok: true; kind: "retain-lifecycle"; lifecycle_ref: string }
