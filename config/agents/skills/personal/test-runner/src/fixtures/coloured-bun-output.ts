@@ -1,0 +1,61 @@
+// Captured verbatim from Bun 1.3.14 (0d9b296a) on macOS arm64 by running
+// `FORCE_COLOR=3 bun test fixtures/top-level-mixed.test.ts` from this skill's
+// `src/` directory. Only the absolute worktree prefix on the stack-trace lines
+// was rewritten to `/repo/...` so the fixture stays portable; every escape
+// sequence, the U+2717 failure marker, and the line order are unmodified.
+//
+// Bun prints `(fail)` only when colour is off. With colour on it prints U+2717
+// wrapped in SGR escapes, which is the input this fixture exists to pin.
+
+export const COLOURED_BUN_OUTPUT = [
+	"\u001b[0m\u001b[1mbun test \u001b[0m\u001b[2mv1.3.14 (0d9b296a)\u001b[0m",
+	"\u001b[0m",
+	"fixtures/top-level-mixed.test.ts:",
+	"\u001b[0m\u001b[1m3 |\u001b[0m \u001b[0m\u001b[35mfunction\u001b[0m tokenBudget(): \u001b[0m\u001b[34mnumber\u001b[0m {",
+	"\u001b[0m\u001b[1m4 |\u001b[0m \t\u001b[0m\u001b[35mreturn\u001b[0m \u001b[0m\u001b[33m11\u001b[0m\u001b[0m\u001b[2m;\u001b[0m",
+	"\u001b[0m\u001b[1m5 |\u001b[0m }",
+	"\u001b[0m\u001b[1m6 |\u001b[0m ",
+	"\u001b[0m\u001b[1m7 |\u001b[0m test(\u001b[0m\u001b[32m\"top-level sibling failure\"\u001b[0m, () => {",
+	"\u001b[0m\u001b[1m8 |\u001b[0m \texpect(tokenBudget())\u001b[0m\u001b[3m\u001b[1m.toBe\u001b[0m(\u001b[0m\u001b[33m13\u001b[0m)\u001b[0m\u001b[2m;\u001b[0m",
+	"                           \u001b[31m\u001b[1m^\u001b[0m",
+	"\u001b[0m\u001b[31merror\u001b[0m\u001b[2m:\u001b[0m \u001b[1m\u001b[2mexpect(\u001b[0m\u001b[31mreceived\u001b[0m\u001b[2m).\u001b[0mtoBe\u001b[2m(\u001b[0m\u001b[32mexpected\u001b[0m\u001b[2m)\u001b[0m",
+	"",
+	"Expected: \u001b[32m13\u001b[0m",
+	"Received: \u001b[31m11\u001b[0m",
+	"\u001b[0m",
+	"\u001b[0m      \u001b[2mat \u001b[0m\u001b[0m\u001b[2m<anonymous>\u001b[0m\u001b[2m (\u001b[0m\u001b[0m\u001b[36m\u001b[2m/repo/config/agents/skills/personal/test-runner/src/\u001b[0m\u001b[36mfixtures/top-level-mixed.test.ts\u001b[0m\u001b[2m:\u001b[0m\u001b[33m8\u001b[0m\u001b[2m:\u001b[33m24\u001b[0m\u001b[2m)\u001b[0m",
+	"\u001b[0m\u001b[31m\u2717\u001b[0m\u001b[0m\u001b[1m top-level sibling failure\u001b[0m \u001b[0m\u001b[2m[0.14ms\u001b[0m\u001b[2m]\u001b[0m",
+	" \u001b[0m\u001b[1m7 |\u001b[0m test(\u001b[0m\u001b[32m\"top-level sibling failure\"\u001b[0m, () => {",
+	" \u001b[0m\u001b[1m8 |\u001b[0m \texpect(tokenBudget())\u001b[0m\u001b[3m\u001b[1m.toBe\u001b[0m(\u001b[0m\u001b[33m13\u001b[0m)\u001b[0m\u001b[2m;\u001b[0m",
+	" \u001b[0m\u001b[1m9 |\u001b[0m })\u001b[0m\u001b[2m;\u001b[0m",
+	"\u001b[0m\u001b[1m10 |\u001b[0m ",
+	"\u001b[0m\u001b[1m11 |\u001b[0m test(\u001b[0m\u001b[32m\"top-level [bracketed] sibling failure\"\u001b[0m, () => {",
+	"\u001b[0m\u001b[1m12 |\u001b[0m \texpect(tokenBudget())\u001b[0m\u001b[3m\u001b[1m.toBe\u001b[0m(\u001b[0m\u001b[33m15\u001b[0m)\u001b[0m\u001b[2m;\u001b[0m",
+	"                            \u001b[31m\u001b[1m^\u001b[0m",
+	"\u001b[0m\u001b[31merror\u001b[0m\u001b[2m:\u001b[0m \u001b[1m\u001b[2mexpect(\u001b[0m\u001b[31mreceived\u001b[0m\u001b[2m).\u001b[0mtoBe\u001b[2m(\u001b[0m\u001b[32mexpected\u001b[0m\u001b[2m)\u001b[0m",
+	"",
+	"Expected: \u001b[32m15\u001b[0m",
+	"Received: \u001b[31m11\u001b[0m",
+	"\u001b[0m",
+	"\u001b[0m      \u001b[2mat \u001b[0m\u001b[0m\u001b[2m<anonymous>\u001b[0m\u001b[2m (\u001b[0m\u001b[0m\u001b[36m\u001b[2m/repo/config/agents/skills/personal/test-runner/src/\u001b[0m\u001b[36mfixtures/top-level-mixed.test.ts\u001b[0m\u001b[2m:\u001b[0m\u001b[33m12\u001b[0m\u001b[2m:\u001b[33m24\u001b[0m\u001b[2m)\u001b[0m",
+	"\u001b[0m\u001b[31m\u2717\u001b[0m\u001b[0m\u001b[1m top-level [bracketed] sibling failure\u001b[0m \u001b[0m\u001b[2m[0.03ms\u001b[0m\u001b[2m]\u001b[0m",
+	"\u001b[0m\u001b[1m12 |\u001b[0m \texpect(tokenBudget())\u001b[0m\u001b[3m\u001b[1m.toBe\u001b[0m(\u001b[0m\u001b[33m15\u001b[0m)\u001b[0m\u001b[2m;\u001b[0m",
+	"\u001b[0m\u001b[1m13 |\u001b[0m })\u001b[0m\u001b[2m;\u001b[0m",
+	"\u001b[0m\u001b[1m14 |\u001b[0m ",
+	"\u001b[0m\u001b[1m15 |\u001b[0m describe(\u001b[0m\u001b[32m\"mixed fixture\"\u001b[0m, () => {",
+	"\u001b[0m\u001b[1m16 |\u001b[0m \ttest(\u001b[0m\u001b[32m\"nested sibling failure\"\u001b[0m, () => {",
+	"\u001b[0m\u001b[1m17 |\u001b[0m \t\texpect(tokenBudget())\u001b[0m\u001b[3m\u001b[1m.toBe\u001b[0m(\u001b[0m\u001b[33m17\u001b[0m)\u001b[0m\u001b[2m;\u001b[0m",
+	"                             \u001b[31m\u001b[1m^\u001b[0m",
+	"\u001b[0m\u001b[31merror\u001b[0m\u001b[2m:\u001b[0m \u001b[1m\u001b[2mexpect(\u001b[0m\u001b[31mreceived\u001b[0m\u001b[2m).\u001b[0mtoBe\u001b[2m(\u001b[0m\u001b[32mexpected\u001b[0m\u001b[2m)\u001b[0m",
+	"",
+	"Expected: \u001b[32m17\u001b[0m",
+	"Received: \u001b[31m11\u001b[0m",
+	"\u001b[0m",
+	"\u001b[0m      \u001b[2mat \u001b[0m\u001b[0m\u001b[2m<anonymous>\u001b[0m\u001b[2m (\u001b[0m\u001b[0m\u001b[36m\u001b[2m/repo/config/agents/skills/personal/test-runner/src/\u001b[0m\u001b[36mfixtures/top-level-mixed.test.ts\u001b[0m\u001b[2m:\u001b[0m\u001b[33m17\u001b[0m\u001b[2m:\u001b[33m25\u001b[0m\u001b[2m)\u001b[0m",
+	"\u001b[0m\u001b[31m\u2717\u001b[0m \u001b[0mmixed fixture\u001b[2m >\u001b[0m\u001b[1m nested sibling failure\u001b[0m \u001b[0m\u001b[2m[0.03ms\u001b[0m\u001b[2m]\u001b[0m",
+	"",
+	" 0 pass\u001b[0m",
+	"\u001b[0m\u001b[31m 3 fail\u001b[0m",
+	" 3 expect() calls",
+	"Ran 3 tests across 1 file. \u001b[0m\u001b[2m[\u001b[1m11.00ms\u001b[0m\u001b[2m]\u001b[0m",
+].join("\n");

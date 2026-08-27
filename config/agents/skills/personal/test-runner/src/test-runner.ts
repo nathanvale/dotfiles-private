@@ -1,11 +1,20 @@
 #!/usr/bin/env bun
 
 import { constants } from "node:fs";
-import { access, mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import {
+	access,
+	mkdir,
+	readFile,
+	readdir,
+	stat,
+	unlink,
+	writeFile,
+} from "node:fs/promises";
 import { basename, delimiter, join, resolve } from "node:path";
 import {
 	type CliWriter,
 	CliUsageError,
+	type CliStructuredRuntimeErrorBuilderInput,
 	type ParsedCliDiagnosticArgv,
 	createCliRuntimeError,
 	createCliRuntimeErrorEnvelope,
@@ -39,6 +48,8 @@ const MAX_CONTEXT_LINE_CHARS = 220;
 const MAX_DEBUG_CHARS = 2_000;
 const MAX_DETAIL_EXCERPT_LINES = 18;
 const DETAIL_TTL_MS = 24 * 60 * 60 * 1_000;
+const MAX_DETAIL_ARTIFACT_INSPECTIONS = 64;
+const MAX_DETAIL_ARTIFACT_DELETIONS = 16;
 const SKILL_ROOT = join(import.meta.dir, "..");
 const DETAIL_OUTPUT_DIR = join(SKILL_ROOT, "var", "runner-output");
 
@@ -183,6 +194,8 @@ export type TestRunnerRuntime = {
 	) => Promise<ProcessResult>;
 	writeText: (path: string, text: string) => Promise<void>;
 	readText: (path: string) => Promise<string>;
+	readDir: (path: string) => Promise<readonly string[]>;
+	removeFile: (path: string) => Promise<void>;
 	mkdir: (path: string) => Promise<void>;
 };
 
@@ -216,6 +229,8 @@ export function createDefaultTestRunnerRuntime(
 		runBunTest: runBunTestProcess,
 		writeText: writeFile,
 		readText: (path) => readFile(path, "utf-8"),
+		readDir: readdir,
+		removeFile: unlink,
 		mkdir: (path) => mkdir(path, { recursive: true }).then(() => undefined),
 		...overrides,
 	};
@@ -412,7 +427,9 @@ async function runBunTests(input: {
 		});
 	}
 
-	const combinedOutput = `${processResult.stdout}\n${processResult.stderr}`;
+	const combinedOutput = normalizeBunOutput(
+		`${processResult.stdout}\n${processResult.stderr}`,
+	);
 	const parsedOutput = parseBunOutput({
 		output: combinedOutput,
 		runId: input.runId,
@@ -489,6 +506,7 @@ async function persistFailureDetails(input: {
 	const expiresAtMs = createdAtMs + DETAIL_TTL_MS;
 	try {
 		await input.runtime.mkdir(DETAIL_OUTPUT_DIR);
+		await cleanupExpiredFailureDetails(input.runtime, createdAtMs);
 		for (const failure of input.failures) {
 			if (!failure.detail_handle) continue;
 			const detail: TestRunnerDetail = {
@@ -516,6 +534,55 @@ async function persistFailureDetails(input: {
 	} catch {
 		for (const failure of input.failures) failure.detail_handle = null;
 		return detailUnavailableDiagnostic();
+	}
+}
+
+async function cleanupExpiredFailureDetails(
+	runtime: TestRunnerRuntime,
+	nowMs: number,
+): Promise<void> {
+	let artifactNames: readonly string[];
+	try {
+		artifactNames = [...(await runtime.readDir(DETAIL_OUTPUT_DIR))].sort();
+	} catch {
+		return;
+	}
+
+	let inspections = 0;
+	let deletionAttempts = 0;
+	for (const artifactName of artifactNames) {
+		if (
+			inspections >= MAX_DETAIL_ARTIFACT_INSPECTIONS ||
+			deletionAttempts >= MAX_DETAIL_ARTIFACT_DELETIONS
+		) {
+			break;
+		}
+		inspections += 1;
+
+		const handle = detailHandleForArtifactName(artifactName);
+		if (!handle) continue;
+
+		let detail: unknown;
+		try {
+			detail = JSON.parse(await runtime.readText(detailPathForHandle(handle)));
+		} catch {
+			continue;
+		}
+		if (
+			!isDetailArtifact(detail) ||
+			detail.handle !== handle ||
+			!handle.includes(shortRunKey(detail.run_id)) ||
+			detail.expires_at_ms > nowMs
+		) {
+			continue;
+		}
+
+		deletionAttempts += 1;
+		try {
+			await runtime.removeFile(detailPathForHandle(handle));
+		} catch {
+			// Detail cleanup is best-effort and never replaces the primary test result.
+		}
 	}
 }
 
@@ -636,6 +703,10 @@ async function runBunTestProcess(input: {
 	const startedAt = performance.now();
 	const proc = Bun.spawn([input.bunCommand, "test", ...input.bunArgs], {
 		cwd: input.cwd,
+		// Bun only prints the "(fail)" marker when colour is off, and FORCE_COLOR beats
+		// NO_COLOR, so an agent session exporting FORCE_COLOR would otherwise change what
+		// this runner reads. Pin it off to keep the child output invocation-independent.
+		env: { ...process.env, FORCE_COLOR: "0" },
 		stdout: "pipe",
 		stderr: "pipe",
 	});
@@ -825,23 +896,7 @@ function writeResult(
 		createCliRuntimeErrorEnvelope({
 			run_id: result.run_id,
 			process_exit_code: result.exit_code,
-			error: createCliRuntimeError({
-				run_id: result.run_id,
-				code: result.diagnostic?.code ?? "invocation_error",
-				message: result.diagnostic?.message ?? "Test runner failed.",
-				exit_code: result.exit_code,
-				severity: result.status === "failed" ? "error" : "fatal",
-				recoverability: diagnosticRecoverability(result.diagnostic),
-				retryable: result.diagnostic?.retryable ?? false,
-				failure_domain:
-					result.status === "failed" ? "bun_test" : "runtime_diagnostics",
-				hint: {
-					summary:
-						result.diagnostic?.next_action ??
-						"Inspect the runner diagnostic and rerun with corrected input.",
-					action: diagnosticHintAction(result.diagnostic),
-				},
-			}),
+			error: createCliRuntimeError(runtimeErrorInputForResult(result)),
 			runtime_actions: runtimeActions,
 			continuation: continuationFor(runtimeActions),
 			data: result,
@@ -1171,6 +1226,21 @@ function formatPercent(value: number | null): string {
 	return value === null ? "-" : value.toFixed(2);
 }
 
+// Bun marks a failing test "(fail)" only when colour is off. With colour on it prints
+// U+2717 wrapped in SGR escapes, which no downstream matcher recognises, so every mode
+// renders an empty failure list while still exiting non-zero. Strip the escapes and fold
+// the coloured marker back onto "(fail)" so the parser keeps one marker vocabulary.
+const ANSI_SGR_PATTERN =
+	// biome-ignore lint/suspicious/noControlCharactersInRegex: the SGR introducer is the sequence being removed.
+	/\u001b\[[0-9;]*m/g;
+const COLOURED_FAIL_MARKER_PATTERN = /^\u2717 /gm;
+
+function normalizeBunOutput(output: string): string {
+	return output
+		.replace(ANSI_SGR_PATTERN, "")
+		.replace(COLOURED_FAIL_MARKER_PATTERN, "(fail) ");
+}
+
 function parseBunOutput(input: {
 	output: string;
 	runId: string;
@@ -1184,7 +1254,7 @@ function parseBunOutput(input: {
 		const fileMatch = line.match(/^(.+\.test\.[cm]?[tj]sx?):$/);
 		if (fileMatch?.[1]) currentFile = fileMatch[1];
 
-		const failMatch = line.match(/^\(fail\) (.+? > .+?)(?: \[[^\]]+\])?$/);
+		const failMatch = line.match(/^\(fail\) (.+?)(?: \[[^\]]+\])?$/);
 		if (!failMatch?.[1]) continue;
 
 		const testName = failMatch[1];
@@ -1392,6 +1462,14 @@ function shortRunKey(value: string): string {
 
 function detailPathForHandle(handle: string): string {
 	return join(DETAIL_OUTPUT_DIR, `${handle}.json`);
+}
+
+function detailHandleForArtifactName(artifactName: string): string | null {
+	if (basename(artifactName) !== artifactName || !artifactName.endsWith(".json")) {
+		return null;
+	}
+	const handle = artifactName.slice(0, -".json".length);
+	return validateDetailHandle(handle) ? null : handle;
 }
 
 function validateDetailHandle(
@@ -1705,27 +1783,41 @@ function emitCliError(input: {
 		);
 		return exitCode;
 	}
+	const structuredError = isUsage
+		? createCliRuntimeError({
+				run_id: input.runId,
+				code: "usage_error",
+				message,
+				exit_code: exitCode,
+				severity: "error",
+				recoverability: "change_input",
+				retryable: false,
+				failure_domain: "input",
+				hint: {
+					summary: "Correct runner arguments. Put test args after --.",
+					action: "change_input",
+				},
+			})
+		: createCliRuntimeError({
+				run_id: input.runId,
+				code: "invocation_error",
+				message,
+				exit_code: exitCode,
+				severity: "fatal",
+				recoverability: "none",
+				retryable: false,
+				failure_domain: "runtime_diagnostics",
+				hint: {
+					summary: "Inspect runtime diagnostics before retrying.",
+					action: "contact_support",
+				},
+			});
 	writeJsonEnvelope(
 		input.stdout,
 		createCliRuntimeErrorEnvelope({
 			run_id: input.runId,
 			process_exit_code: exitCode,
-			error: createCliRuntimeError({
-				run_id: input.runId,
-				code: isUsage ? "usage_error" : "invocation_error",
-				message,
-				exit_code: exitCode,
-				severity: isUsage ? "error" : "fatal",
-				recoverability: isUsage ? "change_input" : "none",
-				retryable: false,
-				failure_domain: isUsage ? "input" : "runtime_diagnostics",
-				hint: {
-					summary: isUsage
-						? "Correct runner arguments. Put test args after --."
-						: "Inspect runtime diagnostics before retrying.",
-					action: isUsage ? "change_input" : "contact_support",
-				},
-			}),
+			error: structuredError,
 		}),
 		{ runId: input.runId, durationMs: input.durationMs },
 	);
@@ -1807,20 +1899,53 @@ function diagnosticRecoverability(
 	return "none";
 }
 
-function diagnosticHintAction(
-	diagnostic: TestRunnerDiagnostic | undefined,
-): "retry" | "change_input" | "repair_state" | "contact_support" {
-	if (!diagnostic) return "contact_support";
-	if (diagnostic.retryable) return "retry";
-	if (diagnostic.code === "missing_bun") return "repair_state";
-	if (
-		diagnostic.code === "bun_tests_failed" ||
-		diagnostic.code === "invalid_cwd" ||
-		diagnostic.code.startsWith("detail_")
-	) {
-		return "change_input";
+function runtimeErrorInputForResult(
+	result: TestRunnerResult,
+): CliStructuredRuntimeErrorBuilderInput {
+	const severity: "error" | "fatal" =
+		result.status === "failed" ? "error" : "fatal";
+	const common = {
+		run_id: result.run_id,
+		code: result.diagnostic?.code ?? "invocation_error",
+		message: result.diagnostic?.message ?? "Test runner failed.",
+		exit_code: result.exit_code,
+		severity,
+		failure_domain:
+			result.status === "failed" ? "bun_test" : "runtime_diagnostics",
+	};
+	const summary =
+		result.diagnostic?.next_action ??
+		"Inspect the runner diagnostic and rerun with corrected input.";
+	switch (diagnosticRecoverability(result.diagnostic)) {
+		case "retry":
+			return {
+				...common,
+				recoverability: "retry",
+				retryable: true,
+				hint: { summary, action: "retry" },
+			};
+		case "change_input":
+			return {
+				...common,
+				recoverability: "change_input",
+				retryable: false,
+				hint: { summary, action: "change_input" },
+			};
+		case "repair_state":
+			return {
+				...common,
+				recoverability: "repair_state",
+				retryable: false,
+				hint: { summary, action: "repair_state" },
+			};
+		case "none":
+			return {
+				...common,
+				recoverability: "none",
+				retryable: false,
+				hint: { summary, action: "contact_support" },
+			};
 	}
-	return "contact_support";
 }
 
 function splitRunnerAndBunArgv(argv: readonly string[]): {

@@ -1,6 +1,6 @@
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { basename, join, relative, resolve } from "node:path";
 import { describe, expect, test } from "bun:test";
 import {
 	CLI_DIAGNOSTIC_FLAGS,
@@ -12,6 +12,7 @@ import {
 	TEST_RUNNER_SCHEMA_VERSION,
 	testRunnerContracts,
 } from "./command-contract";
+import { COLOURED_BUN_OUTPUT } from "./fixtures/coloured-bun-output";
 import { runBenchmark } from "./test-runner.benchmark";
 import {
 	createDefaultTestRunnerRuntime,
@@ -21,6 +22,9 @@ import {
 
 const scriptsDir = import.meta.dir;
 const BROAD_BENCHMARK_TIMEOUT_MS = 20_000;
+// An SGR escape or Bun's U+2717 failure marker surviving into rendered output.
+// biome-ignore lint/suspicious/noControlCharactersInRegex: detecting the SGR introducer is the assertion.
+const TERMINAL_COLOUR_ARTEFACT = /\u001b\[|\u2717/;
 
 async function makeBenchmarkOutputDir(label: string): Promise<string> {
 	return mkdtemp(join(tmpdir(), `test-runner-${label}-`));
@@ -55,6 +59,29 @@ function shortRunKey(value: string): string {
 		hash = Math.imul(hash, 16777619);
 	}
 	return (hash >>> 0).toString(36).padStart(6, "0").slice(0, 6);
+}
+
+function detailArtifact(input: {
+	handle: string;
+	runId: string;
+	expiresAtMs: number;
+}): string {
+	return `${JSON.stringify({
+		handle: input.handle,
+		run_id: input.runId,
+		failure_id: "failure-one",
+		file: "fixtures/fail.test.ts",
+		line: 9,
+		test_name: "failing fixture > calculates tax-inclusive price",
+		message: "error: expect(received).toBe(expected)",
+		assertion_signal: "expect(received).toBe(expected)",
+		expected: "13",
+		received: "11",
+		context: ["Expected: 13", "Received: 11"],
+		raw_excerpt: ["Expected: 13", "Received: 11"],
+		created_at_ms: 1,
+		expires_at_ms: input.expiresAtMs,
+	})}\n`;
 }
 
 describe("test runner command contract", () => {
@@ -621,6 +648,48 @@ describe("runner benchmark fidelity", () => {
 		expect(result.evidence.gate_result?.status).toBe("pass");
 	});
 
+	test("benchmark CLI resolves the documented relative local runner path", async () => {
+		const skillDir = resolve(scriptsDir, "..");
+		const proc = Bun.spawn(
+			[
+				"bun",
+				"run",
+				"test-runner-benchmark",
+				"--no-mcp-baseline",
+				"--local-runner",
+				"./src/test-runner.sh",
+				"--fixture",
+				"fail",
+				"--json",
+				"--run-id",
+				"unit-relative-local-runner",
+			],
+			{
+				cwd: skillDir,
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [stdout, stderr, exitCode] = await Promise.all([
+			new Response(proc.stdout).text(),
+			new Response(proc.stderr).text(),
+			proc.exited,
+		]);
+
+		expect(stdout).not.toContain("ENOENT");
+		expect(stderr).not.toContain("ENOENT");
+		expect(exitCode).toBe(0);
+		const evidence = JSON.parse(stdout);
+		const compact = evidence.rows.find(
+			(row: { variant: string }) => row.variant === "local-runner-compact",
+		);
+		expect(compact?.exit_correct).toBe(true);
+		const repair = evidence.rows.find(
+			(row: { variant: string }) => row.variant === "local-runner-repair",
+		);
+		expect(repair?.detail_roundtrip?.lookup_available).toBe(true);
+	});
+
 	test("benchmark CLI emits JSON errors when JSON is requested", async () => {
 		const proc = Bun.spawn(
 			[
@@ -850,6 +919,276 @@ describe("test runner runtime", () => {
 		expect(result.stderr.length).toBeLessThan(1_200);
 	});
 
+	test("top-level failure yields the same actionable fields as a nested failure", async () => {
+		const result = await runForTest([
+			"--cwd",
+			scriptsDir,
+			"--mode",
+			"repair",
+			"--run-id",
+			"top-level-scalar-packet",
+			"--",
+			"fixtures/top-level-fail.test.ts",
+		]);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stdout).toBe("");
+		expect(result.stderr).toStartWith("repair\n");
+		expect(result.stderr).toContain(
+			"top-level-fail.test.ts:8 top-level scalar failure expect(received).toBe(expected) Expected:13 Received:11 tr_",
+		);
+		expect(result.stderr).not.toContain("Non-zero test exit");
+
+		const handle = result.stderr.match(/tr_[a-z0-9._-]+/)?.[0];
+		expect(handle).toBeTruthy();
+		const detail = await runForTest(["detail", "--handle", handle ?? ""]);
+		expect(detail.exitCode).toBe(0);
+		expect(detail.stdout).toContain("test=top-level scalar failure");
+		expect(detail.stdout).toContain("target=fixtures/top-level-fail.test.ts:8");
+		expect(detail.stdout).toContain("expected=13");
+		expect(detail.stdout).toContain("received=11");
+		expect(detail.stdout).toContain("context:");
+	});
+
+	test("top-level failure JSON keeps the full failure record", async () => {
+		const result = await runForTest([
+			"--cwd",
+			scriptsDir,
+			"--json",
+			"--run-id",
+			"top-level-scalar-json",
+			"--",
+			"fixtures/top-level-fail.test.ts",
+		]);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result);
+		expect(envelope.data.summary.failed).toBe(1);
+		expect(envelope.data.failures).toHaveLength(1);
+		const failure = envelope.data.failures[0];
+		expect(failure.test_name).toBe("top-level scalar failure");
+		expect(failure.file).toBe("fixtures/top-level-fail.test.ts");
+		expect(failure.line).toBe(8);
+		expect(failure.navigation_target).toBe("fixtures/top-level-fail.test.ts:8");
+		expect(failure.navigation_context).toBe("expect(tokenBudget()).toBe(13);");
+		expect(failure.assertion_signal).toBe("expect(received).toBe(expected)");
+		expect(failure.expected).toBe("13");
+		expect(failure.received).toBe("11");
+		expect(failure.detail_handle).toStartWith("tr_");
+	});
+
+	test("top-level and nested failures in one file are all reported in order", async () => {
+		const result = await runForTest([
+			"--cwd",
+			scriptsDir,
+			"--json",
+			"--run-id",
+			"top-level-mixed-json",
+			"--",
+			"fixtures/top-level-mixed.test.ts",
+		]);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result);
+		expect(envelope.data.summary.failed).toBe(3);
+		expect(
+			envelope.data.failures.map((failure: { test_name: string }) => failure.test_name),
+		).toEqual([
+			"top-level sibling failure",
+			"top-level [bracketed] sibling failure",
+			"mixed fixture > nested sibling failure",
+		]);
+		expect(
+			envelope.data.failures.map((failure: { line: number | null }) => failure.line),
+		).toEqual([8, 12, 17]);
+		expect(
+			envelope.data.failures.map((failure: { expected: string | null }) => failure.expected),
+		).toEqual(["13", "15", "17"]);
+
+		const triage = await runForTest([
+			"--cwd",
+			scriptsDir,
+			"--mode",
+			"triage",
+			"--run-id",
+			"top-level-mixed-triage",
+			"--",
+			"fixtures/top-level-mixed.test.ts",
+		]);
+
+		expect(triage.exitCode).toBe(1);
+		expect(triage.stderr).toContain("test=top-level sibling failure");
+		expect(triage.stderr).toContain("test=top-level [bracketed] sibling failure");
+		expect(triage.stderr).toContain("test=mixed fixture > nested sibling failure");
+	});
+
+	test("coloured Bun output yields the same actionable failure records", async () => {
+		const runtime: TestRunnerRuntime = createDefaultTestRunnerRuntime({
+			cwd: () => scriptsDir,
+			findBun: async () => "bun",
+			runBunTest: async () => ({
+				exitCode: 1,
+				stdout: COLOURED_BUN_OUTPUT,
+				stderr: "",
+				timedOut: false,
+				wallTimeMs: 11,
+			}),
+		});
+
+		const result = await runForTest(
+			[
+				"--cwd",
+				scriptsDir,
+				"--json",
+				"--run-id",
+				"coloured-json",
+				"--",
+				"fixtures/top-level-mixed.test.ts",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result);
+		expect(envelope.data.summary.failed).toBe(3);
+		expect(envelope.data.summary.passed).toBe(0);
+		expect(envelope.data.failures).toHaveLength(3);
+		expect(
+			envelope.data.failures.map((failure: { test_name: string }) => failure.test_name),
+		).toEqual([
+			"top-level sibling failure",
+			"top-level [bracketed] sibling failure",
+			"mixed fixture > nested sibling failure",
+		]);
+		expect(
+			envelope.data.failures.map((failure: { line: number | null }) => failure.line),
+		).toEqual([8, 12, 17]);
+		expect(
+			envelope.data.failures.map((failure: { expected: string | null }) => failure.expected),
+		).toEqual(["13", "15", "17"]);
+		expect(
+			envelope.data.failures.map((failure: { received: string | null }) => failure.received),
+		).toEqual(["11", "11", "11"]);
+		for (const failure of envelope.data.failures) {
+			expect(failure.file).toBe("fixtures/top-level-mixed.test.ts");
+			expect(failure.assertion_signal).toBe("expect(received).toBe(expected)");
+			expect(failure.detail_handle).toStartWith("tr_");
+		}
+		expect(TERMINAL_COLOUR_ARTEFACT.test(result.stdout)).toBe(false);
+	});
+
+	test("coloured Bun output stays actionable in compact, repair, and triage", async () => {
+		const runtime: TestRunnerRuntime = createDefaultTestRunnerRuntime({
+			cwd: () => scriptsDir,
+			findBun: async () => "bun",
+			runBunTest: async () => ({
+				exitCode: 1,
+				stdout: COLOURED_BUN_OUTPUT,
+				stderr: "",
+				timedOut: false,
+				wallTimeMs: 11,
+			}),
+		});
+		const runMode = async (mode: string, format?: string) =>
+			runForTest(
+				[
+					"--cwd",
+					scriptsDir,
+					"--mode",
+					mode,
+					...(format ? ["--format", format] : []),
+					"--run-id",
+					`coloured-${mode}-${format ?? "plain"}`,
+					"--",
+					"fixtures/top-level-mixed.test.ts",
+				],
+				runtime,
+			);
+
+		const compact = await runMode("compact");
+		expect(compact.exitCode).toBe(1);
+		expect(compact.stderr).toContain("failed=3");
+		expect(compact.stderr).toContain(
+			"- fixtures/top-level-mixed.test.ts > top-level sibling failure",
+		);
+		expect(compact.stderr).toContain("Expected: 13");
+		expect(compact.stderr).toContain("Received: 11");
+		expect(compact.stderr).not.toContain("Non-zero test exit");
+
+		const repair = await runMode("repair");
+		expect(repair.stderr).toContain(
+			"top-level-mixed.test.ts:8 top-level sibling failure expect(received).toBe(expected) Expected:13 Received:11 tr_",
+		);
+		expect(repair.stderr).not.toContain("Non-zero test exit");
+
+		const triage = await runMode("triage");
+		expect(triage.stderr).toContain("test=top-level sibling failure");
+		expect(triage.stderr).toContain("test=mixed fixture > nested sibling failure");
+		expect(triage.stderr).toContain("expected=17");
+		expect(triage.stderr).not.toContain("Non-zero test exit");
+
+		// The reported symptom was an empty failure list in the agent-facing
+		// projections: "f":[] in json-compact and f[0] in TOON.
+		const jsonCompact = await runMode("compact", "json-compact");
+		const payload = JSON.parse(jsonCompact.stdout);
+		expect(payload.f).toHaveLength(3);
+		expect(payload.f[0][0]).toBe("fixtures/top-level-mixed.test.ts:8");
+		expect(payload.f[2][0]).toBe("fixtures/top-level-mixed.test.ts:17");
+
+		const toon = await runMode("compact", "toon");
+		expect(toon.stdout).toStartWith("f[3]{l,t,a,e,r,d}:\n");
+		expect(toon.stdout).not.toContain("f[0]");
+
+		for (const rendered of [
+			compact.stderr,
+			repair.stderr,
+			triage.stderr,
+			jsonCompact.stdout,
+			toon.stdout,
+		]) {
+			expect(TERMINAL_COLOUR_ARTEFACT.test(rendered)).toBe(false);
+		}
+	});
+
+	test("spawned Bun child emits no colour even when the session forces it", async () => {
+		const proc = Bun.spawn(
+			[
+				"bun",
+				"run",
+				join(scriptsDir, "test-runner.ts"),
+				"--cwd",
+				scriptsDir,
+				"--json",
+				"--debug-output",
+				"--run-id",
+				"forced-colour-child",
+				"--",
+				"fixtures/top-level-fail.test.ts",
+			],
+			{
+				cwd: scriptsDir,
+				env: { ...process.env, FORCE_COLOR: "3" },
+				stdout: "pipe",
+				stderr: "pipe",
+			},
+		);
+		const [stdout, exitCode] = await Promise.all([
+			new Response(proc.stdout).text(),
+			proc.exited,
+		]);
+
+		expect(exitCode).toBe(1);
+		const envelope = JSON.parse(stdout);
+		// Bun writes test results to stderr, and these samples are the untouched
+		// child bytes, so they fail if the child ever inherits the forced colour.
+		expect(envelope.data.debug.stderr_sample).toContain("(fail)");
+		expect(TERMINAL_COLOUR_ARTEFACT.test(envelope.data.debug.stderr_sample)).toBe(false);
+		expect(TERMINAL_COLOUR_ARTEFACT.test(envelope.data.debug.stdout_sample)).toBe(false);
+		expect(envelope.data.failures).toHaveLength(1);
+		expect(envelope.data.failures[0].test_name).toBe("top-level scalar failure");
+		expect(envelope.data.failures[0].line).toBe(8);
+	}, BROAD_BENCHMARK_TIMEOUT_MS);
+
 	test("detail lookup returns same-run detail without rerunning Bun", async () => {
 		let runCount = 0;
 		const runtime: TestRunnerRuntime = createDefaultTestRunnerRuntime({
@@ -1015,6 +1354,165 @@ describe("test runner runtime", () => {
 		expect(detail.stdout).toContain("lookup_run_id=");
 		expect(detail.stdout).toContain("context:");
 		expect(detail.stdout).not.toContain(scriptsDir);
+	});
+
+	test("detail lifecycle removes only bounded expired runner artifacts", async () => {
+		const nowMs = 10_000;
+		const ownedRunId = "owned-run";
+		const ownedHandles = Array.from(
+			{ length: 80 },
+			(_, index) =>
+				`tr_${shortRunKey(ownedRunId)}_${String(index).padStart(3, "0")}`,
+		);
+		const activeHandle = ownedHandles[0] ?? "missing";
+		const malformedHandle = ownedHandles[1] ?? "missing";
+		const mismatchedHandle = ownedHandles[2] ?? "missing";
+		const expiredHandles = [
+			ownedHandles[3] ?? "missing",
+			ownedHandles[60] ?? "missing",
+		];
+		const artifactNames = [
+			"../outside.json",
+			...ownedHandles.map((handle) => `${handle}.json`),
+		];
+		const artifacts = new Map(
+			ownedHandles.map((handle) => [
+				`${handle}.json`,
+				detailArtifact({
+					handle,
+					runId: ownedRunId,
+					expiresAtMs: nowMs + 1,
+				}),
+			]),
+		);
+		artifacts.set(`${malformedHandle}.json`, "{not json");
+		artifacts.set(
+			`${mismatchedHandle}.json`,
+			detailArtifact({
+				handle: activeHandle,
+				runId: ownedRunId,
+				expiresAtMs: nowMs,
+			}),
+		);
+		for (const handle of expiredHandles) {
+			artifacts.set(
+				`${handle}.json`,
+				detailArtifact({
+					handle,
+					runId: ownedRunId,
+					expiresAtMs: nowMs,
+				}),
+			);
+		}
+		const inspected: string[] = [];
+		const removed: string[] = [];
+		const written: string[] = [];
+		const runtime = createDefaultTestRunnerRuntime({
+			now: () => nowMs,
+			readDir: async () => artifactNames.toReversed(),
+			readText: async (path) => {
+				inspected.push(path);
+				const artifact = artifacts.get(basename(path));
+				if (!artifact) throw new Error("artifact unavailable");
+				return artifact;
+			},
+			removeFile: async (path) => {
+				removed.push(path);
+			},
+			writeText: async (path) => {
+				written.push(path);
+			},
+			mkdir: async () => undefined,
+		});
+
+		const result = await runForTest(
+			[
+				"--cwd",
+				scriptsDir,
+				"--json",
+				"--run-id",
+				"bounded-detail-cleanup",
+				"--",
+				"fixtures/fail.test.ts",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result);
+		expect(envelope.error.code).toBe("bun_tests_failed");
+		expect(envelope.data.failures[0].detail_handle).toStartWith("tr_");
+		expect(inspected.map((path) => basename(path))).toEqual(
+			ownedHandles.slice(0, 63).map((handle) => `${handle}.json`),
+		);
+		expect(removed.map((path) => basename(path))).toEqual(
+			expiredHandles.map((handle) => `${handle}.json`),
+		);
+		expect(removed.some((path) => basename(path) === `${activeHandle}.json`)).toBe(
+			false,
+		);
+		expect(written).toHaveLength(1);
+	});
+
+	test("detail cleanup failures keep the primary result and deletion bound", async () => {
+		const nowMs = 10_000;
+		const expiredRunIds = Array.from(
+			{ length: 30 },
+			(_, index) => `delete-failure-${index}`,
+		);
+		const expiredHandles = expiredRunIds.map(
+			(runId) => `tr_${shortRunKey(runId)}_1`,
+		);
+		const artifacts = new Map(
+			expiredHandles.map((handle, index) => [
+				`${handle}.json`,
+				detailArtifact({
+					handle,
+					runId: expiredRunIds[index] ?? "missing",
+					expiresAtMs: nowMs,
+				}),
+			]),
+		);
+		const removalAttempts: string[] = [];
+		const written: string[] = [];
+		const runtime = createDefaultTestRunnerRuntime({
+			now: () => nowMs,
+			readDir: async () => [...artifacts.keys()],
+			readText: async (path) => {
+				const artifact = artifacts.get(basename(path));
+				if (!artifact) throw new Error("artifact unavailable");
+				return artifact;
+			},
+			removeFile: async (path) => {
+				removalAttempts.push(path);
+				throw new Error("remove unavailable");
+			},
+			writeText: async (path) => {
+				written.push(path);
+			},
+			mkdir: async () => undefined,
+		});
+
+		const result = await runForTest(
+			[
+				"--cwd",
+				scriptsDir,
+				"--json",
+				"--run-id",
+				"failed-detail-cleanup",
+				"--",
+				"fixtures/fail.test.ts",
+			],
+			runtime,
+		);
+
+		expect(result.exitCode).toBe(1);
+		const envelope = parseEnvelope(result);
+		expect(envelope.error.code).toBe("bun_tests_failed");
+		expect(envelope.data.detail_available).toBe(true);
+		expect(envelope.data.failures[0].detail_handle).toStartWith("tr_");
+		expect(removalAttempts).toHaveLength(16);
+		expect(written).toHaveLength(1);
 	});
 
 	test("detail lookup distinguishes missing, malformed, wrong-run, and expired artifacts", async () => {

@@ -35,7 +35,7 @@ Agent Runner for Bun test context.
 - Inspect exact runner usage: `cd config/agents/skills/personal/test-runner`, then `bun run test-runner --help`.
 - Inspect benchmark usage: `cd config/agents/skills/personal/test-runner`, then `bun run test-runner-benchmark --help`.
 - Prove no-MCP Bun adoption: `cd config/agents/skills/personal/test-runner`, then `bun run test-runner-benchmark --no-mcp-baseline --local-runner ./src/test-runner.sh --mode fixed-gate --gate-preset bun-no-mcp`.
-- For runner routing, read `context/bun-runner.md`.
+- For runner routing, read `config/agents/claude/context/bun-runner.md`.
 
 ## Verification
 

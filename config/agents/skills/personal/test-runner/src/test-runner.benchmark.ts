@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 
 import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { basename, join, relative } from "node:path";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 
 const TOKEN_ESTIMATE_METHOD = "estimate: chars/4 rounded up" as const;
 const DEFAULT_MCP_BASELINE_PATH = "../var/benchmark-input/mcp-baseline.json";
@@ -430,6 +430,7 @@ export async function runBenchmark(
 	options: { cwd?: string; now?: Date } = {},
 ): Promise<{ exitCode: number; stdout: string; evidence: BenchmarkEvidence }> {
 	const cwd = options.cwd ?? import.meta.dir;
+	const invocationDir = options.cwd ?? process.cwd();
 	const args = parseArgs(argv);
 	if (args.help) return { exitCode: 0, stdout: renderHelp(), evidence: emptyEvidence(cwd, args) };
 
@@ -445,15 +446,11 @@ export async function runBenchmark(
 	}
 
 	if (args.localRunnerCommand) {
+		const localRunnerArgv = resolveLocalRunnerArgv(args.localRunnerCommand, invocationDir);
 		for (const fixture of fixtures) {
 			for (const projection of LOCAL_RUNNER_PROJECTIONS) {
 				rows.push(
-					await runLocalRunnerFixture(
-						cwd,
-						fixture,
-						args.localRunnerCommand,
-						projection,
-					),
+					await runLocalRunnerFixture(cwd, fixture, localRunnerArgv, projection),
 				);
 			}
 		}
@@ -614,7 +611,7 @@ async function runNativeBunFixture(
 async function runLocalRunnerFixture(
 	cwd: string,
 	fixture: BenchmarkFixture,
-	command: string,
+	command: readonly string[],
 	projection: LocalRunnerProjection,
 ): Promise<BenchmarkRow> {
 	const outputFormatArgs =
@@ -623,7 +620,7 @@ async function runLocalRunnerFixture(
 			: ["--format", projection.format];
 	const result = await runProcess(
 		[
-			...splitCommand(command),
+			...command,
 			"--cwd",
 			cwd,
 			...outputFormatArgs,
@@ -682,7 +679,7 @@ async function runProcess(command: string[], cwd: string): Promise<ProcessResult
 
 async function measureDetailRoundtrip(
 	cwd: string,
-	command: string,
+	command: readonly string[],
 	fixture: BenchmarkFixture,
 	result: ProcessResult,
 ): Promise<DetailRoundtripScore> {
@@ -707,10 +704,7 @@ async function measureDetailRoundtrip(
 			test_reruns: 0,
 		};
 	}
-	const lookup = await runProcess(
-		[...splitCommand(command), "detail", "--handle", handle],
-		cwd,
-	);
+	const lookup = await runProcess([...command, "detail", "--handle", handle], cwd);
 	const output = sanitizeBenchmarkOutput(`${lookup.stdout}\n${lookup.stderr}`);
 	return {
 		applicable: true,
@@ -1455,6 +1449,13 @@ function sanitizeBenchmarkOutput(text: string): string {
 		/\((?:[^()]*\/)?([^/()]+\.test\.[cm]?[tj]sx?:\d+:\d+)\)/g,
 		"($1)",
 	);
+}
+
+function resolveLocalRunnerArgv(command: string, invocationDir: string): string[] {
+	const argv = splitCommand(command);
+	const executable = argv[0];
+	if (!executable || isAbsolute(executable) || !executable.includes("/")) return argv;
+	return [resolve(invocationDir, executable), ...argv.slice(1)];
 }
 
 function splitCommand(command: string): string[] {
