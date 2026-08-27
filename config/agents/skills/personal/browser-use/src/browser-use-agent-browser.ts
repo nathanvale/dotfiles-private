@@ -85,9 +85,9 @@ const METHOD_STEP_BY_FIELD: Readonly<
 	"otp-current": "fill-otp",
 };
 const COMMAND_TIMEOUT_MS = 30_000;
-const STORYBOOK_TERMINAL_READINESS_TIMEOUT_MS = 28_000;
+const STORYBOOK_TERMINAL_READINESS_TIMEOUT_MS = COMMAND_TIMEOUT_MS - 5_000;
 const STORYBOOK_TERMINAL_READINESS_SELECTOR =
-	'[data-path-parity-catalogue-version][data-path-parity-interactions-ready="true"][data-path-parity-play-status="complete"],body.sb-show-nopreview,body.sb-show-errordisplay';
+	'[data-path-parity-catalogue-version][data-path-parity-interactions-ready="true"][data-path-parity-play-status="complete"],[data-path-parity-catalogue-version][data-path-parity-play-status="failed"],body.sb-show-nopreview,body.sb-show-errordisplay';
 const SAFE_REF = /^@e[1-9][0-9]*$/;
 
 /** Adapter-owned proof that one retained session is the exact run session. */
@@ -1271,10 +1271,19 @@ export async function runAgentBrowserTargetOperationPlan(
 		admitSameOriginDrift: true,
 	});
 	if (!initialProof.ok) {
+		// The reason travels as structured data, not only inside the message.
+		// A caller that gets `steps: []` has nothing else to dispatch on, and a
+		// reason readable only by parsing prose is a reason nobody parses.
 		return targetPlanFailure(
 			request,
 			"target_operation_plan_failed",
 			exactTargetProofMessage("The exact target and bound origin proof failed", initialProof.reason),
+			[],
+			{ attempted: false, closed: false, visible_owned_surface_count: 0 },
+			{
+				reason: "exact_target_proof_failed",
+				pointer: `/baseline/${initialProof.reason}`,
+			},
 		);
 	}
 	const baseline: BrowserUseTargetOperationBaseline = {

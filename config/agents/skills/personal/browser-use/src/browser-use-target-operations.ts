@@ -585,7 +585,17 @@ function publicFailurePointerMatches(
 		case "target_custody_failed":
 			return matches(String.raw`\/post-readiness`);
 		case "exact_target_proof_failed":
-			return matches(String.raw`\/post-readiness\/(?:origin_mismatch|url_read_failed|url_shape_failed|exact_url_mismatch|tab_gone)`);
+			// Two anchors, because this proof runs at two places. In-step, it is
+			// the post-readiness proof after a dispatched action. Pre-loop, it is
+			// the baseline proof, which refuses before any step exists to point
+			// at — so `/baseline` carries no step index, and it is the only
+			// anchor that can name an attribution failure.
+			return (
+				matches(String.raw`\/post-readiness\/(?:origin_mismatch|url_read_failed|url_shape_failed|exact_url_mismatch|tab_gone)`) ||
+				new RegExp(
+					String.raw`^\/baseline\/(?:initial_active_target_attribution_failed|origin_mismatch|url_read_failed|url_shape_failed|exact_url_mismatch|tab_gone)$`,
+				).test(pointer)
+			);
 		case "evidence_budget_exceeded":
 		case "serialization_failed":
 		case "non_object_payload":

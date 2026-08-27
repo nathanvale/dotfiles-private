@@ -3432,6 +3432,13 @@ describe("multi-step form flow stays on one adopted target", () => {
 		expect(planned.exitCode).not.toBe(0);
 		const envelope = parseJson(planned.stdout) as Record<string, any>;
 		expect(envelope.data.target_plan.steps).toEqual([]);
+		// A pre-loop refusal carries `steps: []`, so the proof reason is the only
+		// thing a caller can act on. It must survive the public envelope as
+		// structured data, not just as prose inside the message.
+		expect(envelope.data.failure_detail).toEqual({
+			reason: "exact_target_proof_failed",
+			pointer: "/baseline/origin_mismatch",
+		});
 		// Fail-closed: not one form verb dispatched.
 		const vectors = harness.commandVectors.slice(before);
 		expect(

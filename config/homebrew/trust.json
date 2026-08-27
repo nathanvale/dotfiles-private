@@ -1,15 +1,22 @@
 {
-	"trustedtaps": [
-		"k1low/tap",
-		"ognistik/formulae",
-		"openclaw/tap",
-		"steipete/tap"
-	],
-	"trustedformulae": [
-		"steipete/tap/imsg",
-		"steipete/tap/mcporter",
-		"steipete/tap/peekaboo",
-		"steipete/tap/remindctl"
-	],
-	"trustedcasks": ["steipete/tap/codexbar"]
+  "trustedtaps": [
+    "k1low/tap",
+    "ognistik/formulae",
+    "openclaw/tap",
+    "oven-sh/bun",
+    "steipete/tap"
+  ],
+  "trustedformulae": [
+    "anomalyco/tap/opencode",
+    "openclaw/tap/gogcli",
+    "oven-sh/bun/bun",
+    "steipete/tap/codexbar",
+    "steipete/tap/imsg",
+    "steipete/tap/mcporter",
+    "steipete/tap/peekaboo",
+    "steipete/tap/remindctl"
+  ],
+  "trustedcasks": [
+    "steipete/tap/codexbar"
+  ]
 }
