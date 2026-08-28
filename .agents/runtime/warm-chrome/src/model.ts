@@ -29,10 +29,37 @@ export const WARM_CHROME_CLI_NAME = "warm-chrome" as const;
  * `check` does not inject this default; launch and repair apply it only when
  * they must create or repair local Warm Chrome profile state.
  *
+ * RETIRED. The Agent Browser Profile Cutover reserved this exact profile for
+ * Warm Browser, so it is now the one entry of
+ * {@link WARM_CHROME_RETIRED_PROFILE_DIRS} and every route that would launch,
+ * repair, or claim it refuses. No replacement default was introduced: a
+ * lifecycle that needs a profile target and is given none refuses too.
+ *
  * @defaultValue "~/Library/Application Support/Agent Chrome/Chrome User Data"
  */
 export const WARM_CHROME_DEFAULT_PROFILE_DIR =
 	"~/Library/Application Support/Agent Chrome/Chrome User Data" as const;
+
+/**
+ * Profiles this package may no longer launch, repair, or claim.
+ *
+ * Each entry is one home-relative profile root reserved by another owner. A
+ * path equal to an entry, or under one, is refused by every route that could
+ * start Chrome on it, mutate its state, or hand its endpoint to a consumer as
+ * proof. Read-only reporting still names it; nothing acts on it.
+ *
+ * This list is the whole retirement, and it is the whole rollback: removing an
+ * entry restores exactly the behaviour every route had before, and nothing here
+ * deletes, moves, or repairs the profile it names.
+ *
+ * @example
+ * ```ts
+ * if (isRetiredProfilePath(path, env)) throw retiredProfileRefusal();
+ * ```
+ */
+export const WARM_CHROME_RETIRED_PROFILE_DIRS = [
+	WARM_CHROME_DEFAULT_PROFILE_DIR,
+] as const;
 
 /**
  * Chrome profile directory selected inside the dedicated user-data directory.
@@ -193,6 +220,7 @@ export const WARM_CHROME_CHECK_REASONS = {
 	],
 	unsafe_profile: [
 		"default_profile",
+		"retired_profile",
 		"throwaway_profile",
 		"unsafe_profile_permissions",
 		"invalid_profile_path",
@@ -235,6 +263,7 @@ export const WARM_CHROME_REPAIR_REASONS = {
 		"profile_path_noncanonical",
 		"profile_path_symlink",
 		"profile_path_invalid",
+		"profile_path_retired",
 		"profile_path_uninspectable",
 		"profile_locked",
 		"profile_login_data_present",

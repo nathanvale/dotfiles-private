@@ -14,6 +14,7 @@ import { basename, dirname } from "node:path";
 
 import {
 	WARM_CHROME_BROWSER_ENTRY_EXIT_CODE,
+	WARM_CHROME_RETIRED_PROFILE_DIRS,
 	type WarmChromeRuntimeActionId,
 } from "./model.ts";
 
@@ -316,6 +317,44 @@ export function expandHome(
 		return `${home}/${path.slice(2)}`;
 	}
 	return path;
+}
+
+/**
+ * Detect a profile this package may no longer launch, repair, or claim.
+ *
+ * The retirement is a list of home-relative roots, so this answers about an
+ * entry and about anything under one. With HOME present the comparison is
+ * exact. With HOME absent the exact root cannot be built, so it fails closed on
+ * the retired suffix instead of disabling the guard.
+ *
+ * @param path - Absolute profile path under inspection
+ * @param env - Environment carrying HOME
+ * @returns True when the path is reserved by another owner
+ *
+ * @example
+ * ```ts
+ * isRetiredProfilePath("/Users/x/Library/Application Support/Agent Chrome/Chrome User Data", env)
+ * ```
+ */
+export function isRetiredProfilePath(
+	path: string,
+	env: Record<string, string | undefined>,
+): boolean {
+	// Same trailing-slash hygiene as the default-profile guard: a HOME ending in
+	// "/" would otherwise build a root that never matches the real path and fail
+	// the guard open on exactly the profile it exists to protect.
+	const home = env.HOME?.replace(/\/+$/, "");
+	return WARM_CHROME_RETIRED_PROFILE_DIRS.some((retired) => {
+		const relative = retired.replace(/^~\//, "");
+		if (home) {
+			const root = `${home}/${relative}`;
+			return path === root || path.startsWith(`${root}/`);
+		}
+		// Without HOME the exact root cannot be built. Fail closed on any absolute
+		// path carrying the retired suffix rather than disabling the guard, which
+		// is the same posture the default-profile guard takes.
+		return path.endsWith(`/${relative}`) || path.includes(`/${relative}/`);
+	});
 }
 
 /**

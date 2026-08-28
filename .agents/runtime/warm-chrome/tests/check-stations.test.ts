@@ -48,8 +48,14 @@ import {
 } from "../src/runtime.ts";
 
 const HOME = "/Users/warm";
-const DEDICATED_PROFILE = `${HOME}/Library/Application Support/Agent Chrome/Chrome User Data`;
+// A dedicated profile that is NOT the retired Agent Chrome Profile. These
+// stations prove lifecycle mechanics, not one path: the Agent Browser Profile
+// Cutover reserved `Agent Chrome/Chrome User Data` for Warm Browser, and its
+// refusal on every route is proved in `retired-profile.test.ts`.
+const DEDICATED_PROFILE = `${HOME}/Library/Application Support/Side Quest/Chrome User Data`;
 const DEFAULT_PROFILE_ROOT = `${HOME}/Library/Application Support/Google/Chrome`;
+// The profile the Agent Browser Profile Cutover reserved for Warm Browser.
+const RETIRED_PROFILE = `${HOME}/Library/Application Support/Agent Chrome/Chrome User Data`;
 const BROWSER_WS = `ws://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}/devtools/browser/warm-chrome-token`;
 const OBSERVED_BUILD = "Chrome/138.0.7204.49";
 const HEADED_UA =
@@ -618,6 +624,29 @@ const failureScenarios: readonly FailureScenario[] = [
 		fixture: () => warmChromeFixture(),
 		code: "unsafe_profile",
 		reason: "default_profile",
+	},
+	{
+		label: "provided --profile points at the retired Agent Chrome Profile",
+		argv: ["check", "--profile", RETIRED_PROFILE],
+		fixture: () => warmChromeFixture(),
+		code: "unsafe_profile",
+		reason: "retired_profile",
+	},
+	{
+		// A verified ok envelope is endpoint authority for downstream consumers.
+		// Returning one about the reserved profile would claim it by proxy, so a
+		// healthy listener holding it is reported and refused rather than blessed.
+		label: "listener holds the retired Agent Chrome Profile",
+		fixture: () =>
+			warmChromeFixture({
+				listeners: {
+					[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({ profile: RETIRED_PROFILE }),
+				},
+				profiles: { [RETIRED_PROFILE]: profileStat(RETIRED_PROFILE) },
+				version: healthyVersion({ webSocketDebuggerUrl: BROWSER_WS }),
+			}),
+		code: "unsafe_profile",
+		reason: "retired_profile",
 	},
 	{
 		label: "listener uses a relative --user-data-dir",

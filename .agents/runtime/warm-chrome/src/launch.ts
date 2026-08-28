@@ -38,6 +38,7 @@ import {
 import {
 	expandHome,
 	isDefaultChromeProfilePath,
+	isRetiredProfilePath,
 	REAL_GOOGLE_CHROME_BINARY,
 	type SingletonLock,
 	type SpawnedChrome,
@@ -767,6 +768,24 @@ function assertLaunchProfilePosture(
 	runtime: WarmChromeRuntime,
 	context: LaunchContext,
 ): void {
+	// The retirement is checked first: it is the more specific verdict, and its
+	// repair is to use the owner that reserved the profile rather than to pick a
+	// different directory.
+	if (isRetiredProfilePath(path, runtime.env)) {
+		throw new WarmChromeRuntimeError(
+			"unsafe_profile",
+			"Warm Chrome cannot launch on a profile reserved by another owner.",
+			{
+				exitCode: WARM_CHROME_BROWSER_ENTRY_EXIT_CODE_NUMBER,
+				failureDomain: "input",
+				recoverability: "change_input",
+				hintAction: "change_input",
+				hintSummary:
+					"That profile is reserved for Warm Browser; use its own operator instead of Warm Chrome.",
+				data: { reason: "retired_profile", ...context },
+			},
+		);
+	}
 	if (isDefaultChromeProfilePath(path, runtime.env)) {
 		throw new WarmChromeRuntimeError(
 			"unsafe_profile",

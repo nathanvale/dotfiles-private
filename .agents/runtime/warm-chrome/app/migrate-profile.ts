@@ -14,6 +14,8 @@ import {
 import { hostname } from "node:os";
 import { join, relative, resolve } from "node:path";
 
+import { isRetiredProfilePath } from "../src/runtime.ts";
+
 const EXIT_BLOCKED = 20;
 const TRANSIENT_ROOT_ENTRIES = new Set([
 	"DevToolsActivePort",
@@ -358,6 +360,26 @@ async function main(argv: readonly string[]): Promise<number> {
 		"Agent Chrome",
 		"Chrome User Data",
 	);
+	// This migration's fixed destination is the profile the Agent Browser
+	// Profile Cutover reserved for Warm Browser. Applying it would create and
+	// populate that profile, which is a claim on it, so the writer is refused
+	// here: before the source or the destination is read at all, so neither
+	// profile is inspected, staged, promoted, or changed, and the legacy profile
+	// is left exactly as it was for a rollback to find. Preview is left alone,
+	// because reporting posture claims nothing; what it points at changes.
+	const destinationRetired = isRetiredProfilePath(destination, process.env);
+	if (destinationRetired && invocation.mode === "apply") {
+		emit(invocation.json, {
+			status: "blocked",
+			code: "destination_retired",
+			changed_state: "none",
+			source,
+			destination,
+			source_retained: true,
+			next_action: "use_warm_browser",
+		});
+		return EXIT_BLOCKED;
+	}
 	try {
 		await requireLegacyPosture(source);
 		await inspectOwnerRoot(resolve(destination, ".."));
@@ -372,7 +394,9 @@ async function main(argv: readonly string[]): Promise<number> {
 				source,
 				destination,
 				source_retained: true,
-				next_action: "apply_migration",
+				// A preview never points at a writer that is refused. When the
+				// destination is reserved, the next step is its owner, not an apply.
+				next_action: destinationRetired ? "use_warm_browser" : "apply_migration",
 			});
 			return 0;
 		}

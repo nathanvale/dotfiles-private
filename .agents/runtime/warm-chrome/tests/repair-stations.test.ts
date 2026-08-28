@@ -60,8 +60,14 @@ import {
 } from "../src/runtime.ts";
 
 const HOME = "/Users/warm";
-const DEDICATED_PROFILE = `${HOME}/Library/Application Support/Agent Chrome/Chrome User Data`;
+// A dedicated profile that is NOT the retired Agent Chrome Profile. These
+// stations prove lifecycle mechanics, not one path: the Agent Browser Profile
+// Cutover reserved `Agent Chrome/Chrome User Data` for Warm Browser, and its
+// refusal on every route is proved in `retired-profile.test.ts`.
+const DEDICATED_PROFILE = `${HOME}/Library/Application Support/Side Quest/Chrome User Data`;
 const ACTIVE_PORT_PATH = `${DEDICATED_PROFILE}/DevToolsActivePort`;
+// The profile the Agent Browser Profile Cutover reserved for Warm Browser.
+const RETIRED_PROFILE = `${HOME}/Library/Application Support/Agent Chrome/Chrome User Data`;
 const BROWSER_WS = `ws://127.0.0.1:${WARM_CHROME_DEFAULT_CDP_PORT}/devtools/browser/warm-chrome-token`;
 const BROWSER_WS_PATH = "/devtools/browser/warm-chrome-token";
 const OBSERVED_BUILD = "Chrome/138.0.7204.49";
@@ -127,6 +133,8 @@ type VersionStep = Record<string, unknown> | Error;
 type Script<T> = T | readonly T[];
 
 type RepairFixtureOptions = {
+	/** Environment overrides; naming a key with no value opts out of a default. */
+	env?: Record<string, string | undefined>;
 	listeners?: Record<string, Script<ListenerProcess | null>>;
 	/** Raw error thrown by findListener for the default resolved port. */
 	findListenerError?: Error;
@@ -197,7 +205,17 @@ function repairFixture(options: RepairFixtureOptions = {}): RepairFixture {
 	const state = { activePort: options.activePort ?? null };
 
 	const runtime = createDefaultRuntime({
-		env: { HOME },
+		// These stations prove repair mechanics, so they name their own dedicated
+		// profile rather than inheriting the product default, which the Agent
+		// Browser Profile Cutover retired. A case that says something about the
+		// default fallback names the variable itself and keeps whatever it set.
+		env: {
+			HOME,
+			...("WARM_CHROME_PROFILE_DIR" in (options.env ?? {})
+				? {}
+				: { WARM_CHROME_PROFILE_DIR: DEDICATED_PROFILE }),
+			...options.env,
+		},
 		now: () => Date.now(),
 		fetchJson: async (url) => {
 			calls.fetchJsonUrls.push(url);
@@ -951,17 +969,79 @@ describe("warm-chrome repair.repaired (U7): profile repair then re-prove", () =>
 		expectNoProcessAffectingCalls(fixture);
 	});
 
-	test("listenerless repair with no --profile targets the expanded dedicated default, not a literal tilde", async () => {
+	test("an explicit --profile naming the retired Agent Chrome Profile mutates nothing", async () => {
 		const fixture = repairFixture({
+			env: { WARM_CHROME_PROFILE_DIR: undefined },
 			version: new Error("connect ECONNREFUSED"),
 			listeners: {},
 			profiles: {},
 		});
-		await runRepair(["repair"], fixture);
 
-		// The documented listenerless default is Agent Chrome's Application Support directory under
-		// HOME; an un-expanded literal would mkdir a "./~" dir in cwd instead.
-		expect(fixture.calls.ensureProfileDirPaths).toEqual([DEDICATED_PROFILE]);
+		const run = await runRepair(
+			["repair", "--profile", RETIRED_PROFILE],
+			fixture,
+		);
+
+		const parsed = parseEnvelope(run);
+		expect(run.exitCode).toBe(20);
+		expect(parsed.error?.code).toBe("unrepairable");
+		expect(parsed.data?.reason).toBe("profile_path_retired");
+		expect(parsed.data?.profile_dir).toBe(RETIRED_PROFILE);
+		// Nothing was created, chmodded, or written on the reserved profile.
+		expect(fixture.calls.ensureProfileDirPaths).toEqual([]);
+		expect(fixture.calls.chmodPaths).toEqual([]);
+		expect(fixture.calls.writes).toEqual([]);
+		expectNoProcessAffectingCalls(fixture);
+	});
+
+	test("profile-only repair refuses the retired Agent Chrome Profile before inspecting it", async () => {
+		const fixture = repairFixture({
+			env: { WARM_CHROME_PROFILE_DIR: undefined },
+			version: new Error("connect ECONNREFUSED"),
+			listeners: {},
+			profiles: {},
+		});
+
+		const run = await runRepair(
+			["repair", "--profile-only", "--profile", RETIRED_PROFILE],
+			fixture,
+		);
+
+		const parsed = parseEnvelope(run);
+		expect(run.exitCode).toBe(20);
+		expect(parsed.error?.code).toBe("unrepairable");
+		expect(parsed.data?.reason).toBe("profile_path_retired");
+		expect(parsed.data?.profile_dir).toBe(RETIRED_PROFILE);
+		expect(fixture.calls.ensureProfileDirPaths).toEqual([]);
+		expect(fixture.calls.chmodPaths).toEqual([]);
+		expect(fixture.calls.writes).toEqual([]);
+		expect(fixture.calls.lstatPaths).toEqual([]);
+		expectNoProcessAffectingCalls(fixture);
+	});
+
+	test("listenerless repair with no --profile refuses the expanded retired default, not a literal tilde", async () => {
+		const fixture = repairFixture({
+			// A genuinely zero-flag, zero-environment repair: the harness default
+			// is opted out of by naming the variable with no value.
+			env: { WARM_CHROME_PROFILE_DIR: undefined },
+			version: new Error("connect ECONNREFUSED"),
+			listeners: {},
+			profiles: {},
+		});
+		const run = await runRepair(["repair"], fixture);
+
+		// The documented listenerless default is Agent Chrome's Application Support
+		// directory under HOME, and the Agent Browser Profile Cutover retired it.
+		// The refusal names the expanded path, which is what proves the fallback
+		// expanded at all: an un-expanded literal would name "~/..." instead.
+		const parsed = parseEnvelope(run);
+		expect(parsed.error?.code).toBe("unrepairable");
+		expect(parsed.data?.reason).toBe("profile_path_retired");
+		expect(parsed.data?.profile_dir).toBe(
+			`${HOME}/Library/Application Support/Agent Chrome/Chrome User Data`,
+		);
+		// Nothing was created: the refusal lands before the directory is touched.
+		expect(fixture.calls.ensureProfileDirPaths).toEqual([]);
 	});
 
 	test("stale DevToolsActivePort is rewritten from the live endpoint and the re-prove verifies", async () => {
@@ -1319,6 +1399,9 @@ const reemitScenarios: readonly ReemitScenario[] = [
 		reason: "throwaway_profile",
 		fixture: () =>
 			repairFixture({
+				// The listener supplies the profile under inspection, so the harness
+				// default is opted out of by naming the variable with no value.
+				env: { WARM_CHROME_PROFILE_DIR: undefined },
 				listeners: {
 					[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({
 						profile: "/tmp/warm-profile",

@@ -49,6 +49,7 @@ import {
 	expandHome,
 	extractUserDataDir,
 	isDefaultChromeProfilePath,
+	isRetiredProfilePath,
 	type ListenerProcess,
 	parseProcessCommand,
 	type ProfileStat,
@@ -231,10 +232,25 @@ export function createRepairCommandHandler(
 			explicitTarget ??
 			expandHome(WARM_CHROME_DEFAULT_PROFILE_DIR, runtime.env);
 
-		// Never mutate the everyday default profile or a throwaway temp path —
-		// the proof chain owns those verdicts and repair re-emits them untouched.
+		// Refused on the resolved target, whichever of the three supplied it: the
+		// listener's profile, an explicit --profile, or the retired product
+		// default. Naming the cause here beats silently performing no mutation,
+		// and it happens before the directory is created, stat'd, or chmodded.
+		if (isRetiredProfilePath(target, runtime.env)) {
+			throw unrepairableError(
+				"profile_path_retired",
+				"That profile is reserved for Warm Browser; repair it through its own operator.",
+				context,
+				{ profile_dir: target },
+			);
+		}
+
+		// Never mutate the everyday default profile, a retired profile another
+		// owner reserved, or a throwaway temp path. The proof chain owns those
+		// verdicts and repair re-emits them untouched.
 		const targetSafeToMutate = (path: string): boolean =>
 			!isDefaultChromeProfilePath(path, runtime.env) &&
+			!isRetiredProfilePath(path, runtime.env) &&
 			!runtime.isTemporaryPath(path);
 
 		const mutations: WarmChromeRepairMutation[] = [];
@@ -474,6 +490,16 @@ async function repairProfilePolicyOnly(
 		);
 	}
 	const homeDir = runtime.env.HOME?.replace(/\/+$/, "");
+	// Refused before any filesystem read: a profile another owner reserved is
+	// never inspected, created, chmodded, or written by profile-only repair.
+	if (isRetiredProfilePath(profileDir, runtime.env)) {
+		throw unrepairableError(
+			"profile_path_retired",
+			"That profile is reserved for Warm Browser; repair it through its own operator.",
+			context,
+			{ profile_dir: profileDir },
+		);
+	}
 	if (
 		profileDir === homeDir ||
 		isDefaultChromeProfilePath(profileDir, runtime.env)

@@ -57,6 +57,9 @@ Use the direct runner above for agent-operational examples.
   changes.
 - **Change repair lifecycle** -> `src/repair.ts`,
   `tests/repair-stations.test.ts`, and redaction tests when diagnostics move.
+- **Change which profiles are retired** -> `WARM_CHROME_RETIRED_PROFILE_DIRS` in
+  `src/model.ts`, then `tests/retired-profile.test.ts`; every route's refusal is
+  proved beside that route, never re-declared.
 - **Change redaction** -> `src/runtime.ts`, `src/cli.ts`,
   `tests/redaction.test.ts`, and station tests for the emitting branch.
 - **Change how browser entry consumes this package** ->
@@ -162,6 +165,11 @@ rg -ni 'runners/warm-chrome-runner|(fifteen|seventeen|15|17)[ -]station|\b(fifte
   endpoints are not proof.
 - One station has one canonical error code and one primary action.
 - Fine-grained cause lives in `data.reason`; agents do not route on it.
+- Never launch, repair, or claim a profile in the retired list; `check` returns
+  no endpoint authority about one. Inspection may still report its posture.
+- Keep the retirement one list with one reader: `WARM_CHROME_RETIRED_PROFILE_DIRS`
+  in `src/model.ts`, read only by `isRetiredProfilePath` in `src/runtime.ts`.
+  Removing an entry is the whole rollback.
 - Never terminate a listener the proof did not verify as Warm Chrome.
 - Foreign-listener diagnostics expose pid and process basename only.
 - `check` and `status` are read-only.

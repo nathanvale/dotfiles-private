@@ -53,8 +53,14 @@ import {
 } from "../src/runtime.ts";
 
 const HOME = "/Users/warm";
-const DEDICATED_PROFILE = `${HOME}/Library/Application Support/Agent Chrome/Chrome User Data`;
+// A dedicated profile that is NOT the retired Agent Chrome Profile. These
+// stations prove lifecycle mechanics, not one path: the Agent Browser Profile
+// Cutover reserved `Agent Chrome/Chrome User Data` for Warm Browser, and its
+// refusal on every route is proved in `retired-profile.test.ts`.
+const DEDICATED_PROFILE = `${HOME}/Library/Application Support/Side Quest/Chrome User Data`;
 const DEFAULT_PROFILE_ROOT = `${HOME}/Library/Application Support/Google/Chrome`;
+// The profile the Agent Browser Profile Cutover reserved for Warm Browser.
+const RETIRED_PROFILE = `${HOME}/Library/Application Support/Agent Chrome/Chrome User Data`;
 const OBSERVED_BUILD = "Chrome/138.0.7204.49";
 const HEADED_UA =
 	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36";
@@ -169,7 +175,7 @@ type LaunchFixtureOptions = {
 	/** Process-liveness answers keyed by pid; absent means alive. */
 	processAlive?: Record<number, boolean>;
 	/** Extra env vars merged over the fixture's HOME. */
-	env?: Record<string, string>;
+	env?: Record<string, string | undefined>;
 	/**
 	 * DevToolsActivePort file content; null means the file is absent. An array
 	 * is played per read (last entry sticks) so a stale value can settle across
@@ -272,7 +278,18 @@ function launchFixture(options: LaunchFixtureOptions = {}): Fixture {
 	let clock = startedAt;
 
 	const runtime = createDefaultRuntime({
-		env: { HOME, ...options.env },
+		// These stations prove launch mechanics, so they name their own dedicated
+		// profile rather than inheriting the product default, which the Agent
+		// Browser Profile Cutover retired. A case that says something about the
+		// default fallback names the variable itself and keeps whatever it set,
+		// including an empty or absent value.
+		env: {
+			HOME,
+			...("WARM_CHROME_PROFILE_DIR" in (options.env ?? {})
+				? {}
+				: { WARM_CHROME_PROFILE_DIR: DEDICATED_PROFILE }),
+			...options.env,
+		},
 		now: () => clock,
 		sleep: async (ms: number) => {
 			clock += ms;
@@ -694,6 +711,9 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 	test("zero-flag launch reuses any verified dedicated profile instead of injecting the default", async () => {
 		const otherProfile = `${HOME}/other-warm-profile`;
 		const fixture = launchFixture({
+			// A genuinely zero-flag, zero-environment launch: the harness default
+			// is opted out of by naming the variable with no value.
+			env: { WARM_CHROME_PROFILE_DIR: undefined },
 			listeners: {
 				[WARM_CHROME_DEFAULT_CDP_PORT]: chromeListener({
 					port: WARM_CHROME_DEFAULT_CDP_PORT,
@@ -728,14 +748,40 @@ describe("warm-chrome launch stations (U6): spawn lifecycle", () => {
 		expect(fixture.calls.spawnInputs[0]?.profileDir).toBe(envProfile);
 	});
 
-	test("explicitly-empty WARM_CHROME_PROFILE_DIR still falls back to the dedicated default profile", async () => {
+	test("an explicit --profile naming the retired Agent Chrome Profile never spawns", async () => {
+		// The profile is reserved for Warm Browser, so nothing is started on it,
+		// its directory is never created, and no lock is even read.
+		const fixture = launchFixture({ listeners: {}, versions: {} });
+		const run = await runWarmChrome(
+			["launch", "--profile", RETIRED_PROFILE],
+			fixture,
+		);
+
+		expect(run.exitCode).toBe(20);
+		const parsed = parseEnvelope(run);
+		expect(parsed.error?.code).toBe("unsafe_profile");
+		expect(parsed.data?.reason).toBe("retired_profile");
+		expect(parsed.continuation?.next_action_id).toBe("change_input");
+		expect(fixture.calls.spawnChrome).toBe(0);
+		expect(fixture.calls.ensureProfileDir).toBe(0);
+	});
+
+	test("explicitly-empty WARM_CHROME_PROFILE_DIR still falls back to the retired default profile", async () => {
+		// The fallback still fires: an explicitly empty value does not defeat it.
+		// What it falls back to is the product default the Agent Browser Profile
+		// Cutover retired, so the launch is refused instead of spawning, and the
+		// refusal is what proves the fallback resolved.
 		const fixture = launchFixture({
 			env: { WARM_CHROME_PROFILE_DIR: "" },
 		});
 		const run = await runWarmChrome(["launch"], fixture);
 
-		expect(run.exitCode).toBe(0);
-		expect(fixture.calls.spawnInputs[0]?.profileDir).toBe(DEDICATED_PROFILE);
+		expect(run.exitCode).toBe(20);
+		const parsed = parseEnvelope(run);
+		expect(parsed.error?.code).toBe("unsafe_profile");
+		expect(parsed.data?.reason).toBe("retired_profile");
+		expect(fixture.calls.spawnChrome).toBe(0);
+		expect(fixture.calls.spawnInputs).toEqual([]);
 	});
 
 	test("competing-instance guard (R10a): launch --port 9250 with healthy Warm Chrome on 9222 lands already_verified carrying the 9222 endpoint, no spawn", async () => {

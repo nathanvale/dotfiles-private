@@ -92,11 +92,14 @@ async function run(home: string, mode: "--check" | "--apply"): Promise<CommandRe
 }
 
 describe.skipIf(process.platform !== "darwin")("Agent Chrome profile migration", () => {
-	test("preview is read-only and apply atomically copies metadata without changing either protected source", async () => {
+	test("preview stays read-only and points at the reserved destination's owner", async () => {
 		const state = await fixture();
 		const sourceCookie = await readFile(join(state.legacy, "Default", "Cookies"));
 		const sourceLocalState = await readFile(join(state.legacy, "Local State"));
 
+		// Inspection is preserved: it reads posture and reports it, which claims
+		// nothing. What it points at changed, because the writer it used to point
+		// at is refused.
 		const preview = await run(state.home, "--check");
 		expect(preview.exitCode).toBe(0);
 		expect(JSON.parse(preview.stdout)).toMatchObject({
@@ -104,37 +107,39 @@ describe.skipIf(process.platform !== "darwin")("Agent Chrome profile migration",
 			changed_state: "none",
 			source: state.legacy,
 			destination: state.destination,
-			next_action: "apply_migration",
+			next_action: "use_warm_browser",
 		});
 		expect(await lstat(state.destination).catch(() => null)).toBeNull();
 
+		// Applying would create and populate the profile the Agent Browser
+		// Profile Cutover reserved for Warm Browser, which is a claim on it.
 		const apply = await run(state.home, "--apply");
-		expect(apply.exitCode).toBe(0);
-		const result = JSON.parse(apply.stdout) as Record<string, unknown>;
-		expect(result).toMatchObject({
-			status: "migrated",
-			changed_state: "profile_migrated",
+		expect(apply.exitCode).toBe(20);
+		expect(JSON.parse(apply.stdout)).toMatchObject({
+			status: "blocked",
+			code: "destination_retired",
+			changed_state: "none",
+			source: state.legacy,
+			destination: state.destination,
 			source_retained: true,
-			next_action: "prove_new_profile",
+			next_action: "use_warm_browser",
 		});
 		expect(apply.stdout).not.toContain("fixture-private-cookie-bytes");
-		expect((await lstat(state.destination)).isDirectory()).toBe(true);
-		expect((await lstat(state.destination)).mode & 0o777).toBe(0o700);
-		expect(await readFile(join(state.destination, "Default", "Cookies"))).toEqual(
-			sourceCookie,
-		);
-		expect(await readFile(join(state.destination, "Local State"))).toEqual(
-			sourceLocalState,
-		);
+		// Nothing was created, and the legacy profile is byte for byte what it
+		// was, so a rollback finds it exactly as it left it.
+		expect(await lstat(state.destination).catch(() => null)).toBeNull();
 		expect(await readFile(join(state.legacy, "Default", "Cookies"))).toEqual(
 			sourceCookie,
+		);
+		expect(await readFile(join(state.legacy, "Local State"))).toEqual(
+			sourceLocalState,
 		);
 		expect(await readFile(state.everydaySentinel, "utf8")).toBe(
 			"everyday-preserve\n",
 		);
 	});
 
-	test("a live legacy SingletonLock blocks migration without copying", async () => {
+	test("apply refuses the reserved destination without disturbing a live legacy lock", async () => {
 		const state = await fixture();
 		const lock = join(state.legacy, "SingletonLock");
 		await symlink(`${hostname()}-${process.pid}`, lock);
@@ -143,9 +148,9 @@ describe.skipIf(process.platform !== "darwin")("Agent Chrome profile migration",
 		expect(apply.exitCode).toBe(20);
 		expect(JSON.parse(apply.stdout)).toMatchObject({
 			status: "blocked",
-			code: "browser_running",
+			code: "destination_retired",
 			changed_state: "none",
-			next_action: "close_agent_chrome",
+			next_action: "use_warm_browser",
 		});
 		expect(await readlink(lock)).toBe(`${hostname()}-${process.pid}`);
 		expect(await lstat(state.destination).catch(() => null)).toBeNull();
@@ -174,9 +179,12 @@ describe.skipIf(process.platform !== "darwin")("Agent Chrome profile migration",
 
 		const apply = await run(state.home, "--apply");
 		expect(apply.exitCode).toBe(20);
+		// The retirement answers first, so the destination is not even inspected;
+		// the guarantee this case owns, that an existing destination is never
+		// overwritten, holds all the same and now holds one step earlier.
 		expect(JSON.parse(apply.stdout)).toMatchObject({
 			status: "blocked",
-			code: "destination_exists",
+			code: "destination_retired",
 			changed_state: "none",
 		});
 		expect(await readFile(join(state.destination, "preserve.txt"), "utf8")).toBe(
@@ -211,9 +219,12 @@ describe.skipIf(process.platform !== "darwin")("Agent Chrome profile migration",
 
 		const apply = await run(state.home, "--apply");
 		expect(apply.exitCode).toBe(20);
+		// Check still owns the symlinked-owner verdict. Apply never reaches it,
+		// because the reserved destination is refused before anything is read,
+		// and the foreign target is left exactly as it was either way.
 		expect(JSON.parse(apply.stdout)).toMatchObject({
 			status: "blocked",
-			code: "destination_owner_unsafe",
+			code: "destination_retired",
 			changed_state: "none",
 		});
 		expect((await lstat(foreignTarget)).mode & 0o777).toBe(0o755);

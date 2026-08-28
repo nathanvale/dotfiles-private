@@ -33,6 +33,7 @@ import {
 	expandHome,
 	extractUserDataDir,
 	isDefaultChromeProfilePath,
+	isRetiredProfilePath,
 	type ListenerProcess,
 	parseProcessCommand,
 	type ProfileStat,
@@ -622,6 +623,23 @@ export async function runWarmChromeCheckProof(
 			fail,
 		});
 	}
+	// A verified ok envelope is endpoint authority for downstream consumers.
+	// Returning one about a profile another owner reserved would claim that
+	// profile by proxy, so the listener is reported and refused rather than
+	// blessed. Both the textual
+	// user-data-dir and the resolved realpath are checked, because a symlink into
+	// the retired profile would otherwise pass the first and claim it anyway.
+	if (
+		isRetiredProfilePath(userDataDir, runtime.env) ||
+		isRetiredProfilePath(profile.realPath, runtime.env)
+	) {
+		throw fail(
+			"unsafe_profile",
+			"retired_profile",
+			"That profile is reserved for Warm Browser; Warm Chrome does not verify or claim it.",
+			listenerData,
+		);
+	}
 	if (
 		runtime.isTemporaryPath(userDataDir) ||
 		runtime.isTemporaryPath(profile.realPath)
@@ -673,7 +691,14 @@ export async function runWarmChromeCheckProof(
 	}
 	if (input.profileInput !== undefined) {
 		const providedPath = expandHome(input.profileInput, runtime.env);
-			if (isDefaultChromeProfilePath(providedPath, runtime.env)) {
+		if (isRetiredProfilePath(providedPath, runtime.env)) {
+			throw fail(
+				"unsafe_profile",
+				"retired_profile",
+				"That profile is reserved for Warm Browser; Warm Chrome does not verify or claim it.",
+			);
+		}
+		if (isDefaultChromeProfilePath(providedPath, runtime.env)) {
 			throw fail(
 				"unsafe_profile",
 				"default_profile",
@@ -702,6 +727,13 @@ export async function runWarmChromeCheckProof(
 				"unsafe_profile",
 				"default_profile",
 				"Warm Chrome cannot use the everyday default Chrome profile.",
+			);
+		}
+		if (isRetiredProfilePath(provided.realPath, runtime.env)) {
+			throw fail(
+				"unsafe_profile",
+				"retired_profile",
+				"That profile is reserved for Warm Browser; Warm Chrome does not verify or claim it.",
 			);
 		}
 		if (provided.realPath !== profile.realPath) {

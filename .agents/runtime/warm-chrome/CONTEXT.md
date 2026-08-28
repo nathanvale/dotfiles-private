@@ -199,6 +199,22 @@ _Developer example_: "`--endpoint http://127.0.0.1:9222` overrides
 _Avoid example_: "Accept `localhost` because it resolves to loopback on this
 machine."
 
+**Retired profile**:
+A profile path this package may no longer launch on, repair, or claim, because
+another owner reserved it. The Agent Browser Profile Cutover reserved
+`~/Library/Application Support/Agent Chrome/Chrome User Data` for Warm Browser,
+so it is the one entry of the retired list. `check`, `launch`, and `repair`
+refuse it, and profile branding and profile migration refuse to write it; no
+replacement default was introduced, so a lifecycle given no profile refuses too.
+Inspection still reports posture, because reporting claims nothing. Removing an
+entry from the list restores every route, and nothing in the retirement deletes,
+moves, or repairs the profile it names.
+_Avoid_: deprecated profile, fallback profile, migration target
+_Developer example_: "`launch` refuses the retired profile with
+`unsafe_profile`/`retired_profile` and never spawns."
+_Avoid example_: "The default profile moved, so point the launcher at the new
+one."
+
 **Mutation pin**:
 The per-station declaration of cross-tool-visible state change the drift gate
 checks: `check` stations are read-only; `launch.launched`,

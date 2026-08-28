@@ -95,9 +95,9 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
 - `package.json`: bin, exports, `test` and `typecheck` scripts, workspace
   facade contract.
 - `src/model.ts`: contract id, schema version, command ids, exit code `20`,
-  dedicated profile directory/name constants, runtime-action ids, the
-  `no_adapter_fallback` constraint id, and the closed check and repair
-  reason-detail unions plus repair mutation ids.
+  dedicated profile directory/name constants, the retired-profile list,
+  runtime-action ids, the `no_adapter_fallback` constraint id, and the closed
+  check and repair reason-detail unions plus repair mutation ids.
 - `src/command-contract.ts`: facade contract entries per command, flags,
   exit-code meanings, result contract, action affordances, preview notes,
   Command Discovery Tree projection.
@@ -109,19 +109,22 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
 - `src/runtime.ts`: the injectable runtime seam (env, listener probe, profile
   stat, spawn handle with explicit Chrome profile-directory selection,
   SingletonLock probe), `WarmChromeRuntimeError`, process command parsing, and
-  the websocket/listener redaction helpers.
+  the retired-profile guard (the one reader of the retired list), and the
+  websocket/listener redaction helpers.
 - `src/proof.ts`: the single check proof chain — loopback assertion, bounded
   attach probe, listener identity, default-profile foreignness (R6c),
+  retired-profile refusal,
   payload validation, CDP round-trips (headless and isolated-context rejects),
   profile posture, final listener consistency, and the suggested-explicit-port
   scan. `DevToolsActivePort` is non-authoritative hint material.
 - `src/launch.ts`: launch lifecycle — pre-spawn short-circuit, optional
   proof-first target creation, target verification, and post-open proof,
   competing 9222-instance guard,
-  fail-closed classification, SingletonLock pre-bind refusal, bounded readiness
-  poll, and the own-child race policy.
-- `src/repair.ts`: repair lifecycle — foreign-listener refusal (R11), profile
-  dir creation, ownership-gated chmod, diagnosed DevToolsActivePort hygiene
+  fail-closed classification, retired-profile refusal, SingletonLock pre-bind
+  refusal, bounded readiness poll, and the own-child race policy.
+- `src/repair.ts`: repair lifecycle: foreign-listener refusal (R11),
+  retired-profile refusal on the resolved target and in profile-only repair,
+  profile dir creation, ownership-gated chmod, diagnosed DevToolsActivePort hygiene
   with the never-follow-symlink guard, profile-policy inspection and mutation,
   and emission of model-owned repair reasons and mutation ids.
 - `src/cli.ts`: argv parsing, dispatch, diagnostics configuration and the
@@ -141,13 +144,15 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
 - `app/install.ts`: preview-first paired build, inside-out ad-hoc signing,
   strict verification, foreign-destination refusal, paired install/rollback,
   and private non-application retained backups.
-- `app/profile-avatar.ts`: preview-first, stopped-profile product branding;
+- `app/profile-avatar.ts`: preview-first, stopped-profile product branding with
+  its writer refused on a retired profile and its inspection preserved;
   installs the generated artwork through Chrome's persistent high-resolution
   local-avatar file and metadata owners, preserves browser-account artwork on
   signed-in profiles, and never accepts an Everyday Chrome path.
 - `app/migrate-profile.ts`: fixed-source, fixed-destination, stopped-Browser
   preserving migration with metadata verification and unchanged legacy
-  rollback state.
+  rollback state; its destination is retired, so the writer refuses and only
+  the preview remains.
 - `app/agent-chrome-info.plist`, `app/everyday-chrome-info.plist`, and
   `app/assets/`:
   installed bundle metadata and visual identity sources.
@@ -158,8 +163,9 @@ Input fallbacks: `WARM_CHROME_CDP_PORT`, `WARM_CHROME_PROFILE_DIR`,
   `docs-drift.test.ts` module-map drift, `agent-chrome-app.test.ts` paired
   labelled-action install and rollback proof, `native-runtime.test.ts`
   pid-custody proof,
-  `profile-avatar.test.ts` product-avatar isolation proof, and
-  `profile-migration.test.ts` preservation proof.
+  `profile-avatar.test.ts` product-avatar isolation proof,
+  `profile-migration.test.ts` preservation proof, and
+  `retired-profile.test.ts` retirement-list ownership and rollback proof.
 
 ## Proof Flow
 

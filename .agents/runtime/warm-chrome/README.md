@@ -90,8 +90,12 @@ unproven or unsafe condition fails closed with a typed refusal and manual step.
 
 `launch` selects Chrome's `Default` profile directory explicitly. The product
 default is
-`~/Library/Application Support/Agent Chrome/Chrome User Data`. Profile-only
-provisioning persists the visible `Agent Chrome` name. `launch --open` creates
+`~/Library/Application Support/Agent Chrome/Chrome User Data`, and the Agent
+Browser Profile Cutover retired it: that profile is reserved for Warm Browser,
+so `check`, `launch`, and `repair` refuse it and a lifecycle given no profile
+refuses with it. No replacement default was introduced. Every other dedicated
+profile behaves exactly as it did. Profile-only provisioning persists the
+visible `Agent Chrome` name. `launch --open` creates
 one `chrome://newtab/` target through the verbatim browser-level websocket,
 verifies the returned target id, then re-proves the same endpoint and profile.
 
@@ -125,11 +129,13 @@ Chrome is therefore a reliable human shortcut and crossover check, not global
 Finder, Dock, or external-link isolation. A distinct Chrome-family bundle is a
 separate product experiment.
 
-`agent-chrome-profile-migrate` previews or performs the fixed preserving move
-from legacy `~/.agent-warm-profile`. It requires the Browser stopped, refuses an
-existing destination, stages and verifies metadata, atomically promotes the
-copy, and retains the legacy profile unchanged for rollback. It never accepts
-an Everyday Chrome path. Browser Connect still consumes Warm Chrome proof and
+`agent-chrome-profile-migrate` previews the fixed preserving move from legacy
+`~/.agent-warm-profile`. Its destination is the retired profile, so `--apply`
+is refused before either profile is read and the preview points at Warm Browser
+instead. The writer it retains requires the Browser stopped, refuses an existing
+destination, stages and verifies metadata, atomically promotes the copy, and
+retains the legacy profile unchanged for rollback. It never accepts an Everyday
+Chrome path. Browser Connect still consumes Warm Chrome proof and
 injects only the verified endpoint into declared adapter routes.
 
 No-arg `warm-chrome` shows help. `warm-chrome help [command]` renders the same
@@ -229,7 +235,10 @@ cleanup U5/KTD6).
 - Preview migration and installation before applying either writer.
 - Apply profile-avatar candidates only to the exact dedicated path while
   stopped; preserve a browser-level Google account photo; require cold-start
-  visual proof before claiming the toolbar avatar changed.
+  visual proof before claiming the toolbar avatar changed. `--apply` is refused
+  on a retired profile; `--check` still inspects and reports it.
+- Never launch, repair, or claim a retired profile. Reporting its posture is
+  allowed; returning endpoint authority about it is not.
 - When the exact profile is already running, accept reuse only when its profile
   metadata still proves Agent Chrome branding; never rewrite the live profile.
 - Never judge Agent Chrome identity through bundle id `com.google.Chrome`

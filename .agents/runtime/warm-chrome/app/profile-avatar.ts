@@ -14,7 +14,7 @@ import {
 import { dirname, isAbsolute, join, normalize } from "node:path";
 
 import { WARM_CHROME_PROFILE_NAME } from "../src/model.ts";
-import { createDefaultRuntime } from "../src/runtime.ts";
+import { createDefaultRuntime, isRetiredProfilePath } from "../src/runtime.ts";
 
 const EXIT_BLOCKED = 20;
 const PROFILE_JSON_MAX_BYTES = 8 * 1_048_576;
@@ -133,6 +133,19 @@ function requireExactPath(actual: string, expected: string, code: string): void 
 		actual !== expected
 	) {
 		throw new AvatarFailure(code, "use_agent_chrome_path");
+	}
+}
+
+/**
+ * Refuse to brand a profile another owner reserved, before anything is written.
+ *
+ * Branding writes Chrome's avatar file, `Preferences`, and `Local State` inside
+ * the profile, which is a claim on it as much as a launch is. Inspection is
+ * left alone: `--check` reads and reports, and reporting claims nothing.
+ */
+function requireApplyNotRetired(mode: Invocation["mode"], profileDir: string): void {
+	if (mode === "apply" && isRetiredProfilePath(profileDir, process.env)) {
+		throw new AvatarFailure("profile_retired", "use_warm_browser");
 	}
 }
 
@@ -346,6 +359,7 @@ async function main(argv: readonly string[]): Promise<number> {
 	try {
 		const expectedProfile = expectedProfilePath();
 		requireExactPath(invocation.profileDir, expectedProfile, "profile_path_invalid");
+		requireApplyNotRetired(invocation.mode, invocation.profileDir);
 		requireExactPath(
 			invocation.avatarPath,
 			normalize(invocation.avatarPath),
