@@ -1,0 +1,126 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+die() {
+    printf 'worktree-recency: %s\n' "$*" >&2
+    exit 1
+}
+
+relative_age() {
+    local timestamp="$1"
+    local delta=$((now_epoch - timestamp))
+
+    if ((delta < 0)); then
+        delta=0
+    fi
+
+    if ((delta < 3600)); then
+        printf '%sm' "$((delta / 60))"
+    elif ((delta < 86400)); then
+        printf '%sh' "$((delta / 3600))"
+    elif ((delta < 604800)); then
+        printf '%sd' "$((delta / 86400))"
+    elif ((delta < 2592000)); then
+        printf '%sw' "$((delta / 604800))"
+    elif ((delta < 31536000)); then
+        printf '%smo' "$((delta / 2592000))"
+    else
+        local years=$((delta / 31536000))
+        if ((years > 999)); then
+            years=999
+        fi
+        printf '%sy' "$years"
+    fi
+}
+
+emit_worktree() {
+    local worktree_path="$1"
+    local branch_ref="$2"
+    local branch="${branch_ref#refs/heads/}"
+    local creation_epoch
+    local commit_epoch
+    local winning_epoch
+    local signal
+    local age
+
+    if [[ ! -d "$worktree_path" ]]; then
+        return 0
+    fi
+
+    if ! creation_epoch="$(stat -f %B "$worktree_path/.git" 2>/dev/null)"; then
+        return 0 # unreadable worktree: skip it, never kill the whole menu
+    fi
+    if [[ ! $creation_epoch =~ ^[0-9]+$ ]]; then
+        return 0 # unreadable worktree: skip it, never kill the whole menu
+    fi
+
+    if ! commit_epoch="$(git -C "$worktree_path" log -1 --format=%ct 2>/dev/null)"; then
+        return 0 # unborn/orphan branch has no commit: skip it
+    fi
+    if [[ ! $commit_epoch =~ ^-?[0-9]+$ ]]; then
+        return 0 # unborn/orphan branch has no commit: skip it
+    fi
+
+    if ((creation_epoch > commit_epoch)); then
+        winning_epoch="$creation_epoch"
+        signal='new'
+    else
+        winning_epoch="$commit_epoch"
+        signal='commit'
+    fi
+
+    age="$(relative_age "$winning_epoch")"
+    # Pad both narrow columns to a fixed width so the lazygit menu, which
+    # has no column layout of its own, still lines up. Longest age is "12mo",
+    # longest signal is "commit".
+    printf -v age '%-4s' "$age"
+    printf -v signal '%-6s' "$signal"
+    records+=("${winning_epoch}"$'\t'"${age}|${signal}|${branch}|${worktree_path}")
+}
+
+if ! worktrees="$(git worktree list --porcelain 2>/dev/null)"; then
+    die 'unable to list worktrees; run this command inside a Git repository'
+fi
+
+if ! now_epoch="$(date +%s 2>/dev/null)"; then
+    die 'unable to read the current time'
+fi
+if [[ ! $now_epoch =~ ^[0-9]+$ ]]; then
+    die 'invalid current time'
+fi
+
+declare -a records=()
+worktree_path=''
+branch_ref=''
+
+while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ -z "$line" ]]; then
+        if [[ -n "$worktree_path" && -n "$branch_ref" ]]; then
+            emit_worktree "$worktree_path" "$branch_ref"
+        fi
+        worktree_path=''
+        branch_ref=''
+        continue
+    fi
+
+    case "$line" in
+        worktree\ *) worktree_path="${line#worktree }" ;;
+        branch\ *) branch_ref="${line#branch }" ;;
+    esac
+done <<< "$worktrees"
+
+if [[ -n "$worktree_path" && -n "$branch_ref" ]]; then
+    emit_worktree "$worktree_path" "$branch_ref"
+fi
+
+if ((${#records[@]} > 0)); then
+    if ! sorted_records="$(printf '%s\n' "${records[@]}" | LC_ALL=C sort -t $'\t' -k1,1nr -k2,2)"; then
+        die 'failed to sort worktree records'
+    fi
+
+    while IFS=$'\t' read -r _ output || [[ -n "$output" ]]; do
+        [[ -n "$output" ]] || continue
+        printf '%s\n' "$output"
+    done <<< "$sorted_records"
+fi

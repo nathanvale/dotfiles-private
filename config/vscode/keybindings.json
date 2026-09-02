@@ -85,6 +85,15 @@
 
 	{ "key": "ctrl+s w", "command": "workbench.action.switchWindow" },
 
+	// Open lazygit. Uses the "lazygit" terminal profile defined in
+	// settings.json, and inherits terminal.integrated.defaultLocation
+	// ("editor"), so it opens as a full editor tab rather than in the panel.
+	{
+		"key": "ctrl+s g",
+		"command": "workbench.action.terminal.newWithProfile",
+		"args": { "profileName": "lazygit" }
+	},
+
 	{
 		"key": "alt+space",
 		"command": "editor.action.inlineSuggest.trigger",

@@ -20,7 +20,7 @@ No-args or unclear request: start at Workflow step 1 — name the owning capabil
 
 - Let `$HOME/code/dotfiles/bin/with-one-password-token` own token custody and process-scoped injection. Never read, source, create, or export its token source from this workflow; never place the token in shell rc, tmux/PTY environment, or ambient env.
 - Browser filling is out of scope: this wrapper delivers targeted `op` reads and single-value process injection, never a browser fill. Never fetch browser-login secrets or fill a browser through this skill.
-- Browser Use stays credential-neutral and stops at a login wall (M0); no confidential browser-fill bridge exists yet. A confidential browser-fill bridge is separate future work, not owned here.
+- Browser automation stays credential-neutral and stops at a login wall. A confidential browser-fill bridge is separate future work, not owned here.
 - Keep explicit vault listing and item create/update requests in this workflow.
 
 ## Workflow
@@ -47,4 +47,3 @@ No-args or unclear request: start at Workflow step 1 — name the owning capabil
 - `references/cli-examples.md` — safe create/edit, shape-only field reads, vault-scoped metadata search.
 - Vocabulary: `CONTEXT.md`.
 - Local compatibility owner: `$HOME/code/dotfiles/bin/with-one-password-token`; missing or failed `check` blocks unattended local access, not user-approved interactive fallback.
-- Unattended-vs-interactive semantics owner: `docs/plans/2026-07-21-003-feat-browser-use-cross-adapter-authentication-plan.md` (R7, R16); `docs/adr/0028-auth-u3-splits-pure-contract-from-signed-native-capability.md`.

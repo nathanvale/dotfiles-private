@@ -162,6 +162,32 @@
 	// Terminals open in editor tabs (stable, predictable, never shove panels around)
 	"terminal.integrated.defaultLocation": "editor",
 	"terminal.integrated.defaultProfile.osx": "zsh",
+	// VS Code inherits its environment from whatever launched it. When that is
+	// a non-interactive command runner, NO_COLOR=1 and TERM=dumb leak into the
+	// app process and then into every integrated terminal, so TUIs render
+	// monochrome. Interactive zsh already repairs this at .zshrc:73, but a
+	// terminal profile that runs a binary directly never sources .zshrc.
+	// Clearing it here fixes every terminal, shell or not.
+	// Documented since VS Code 1.18: null removes the variable.
+	"terminal.integrated.env.osx": {
+		"NO_COLOR": null
+	},
+	// Named terminal profile so a keybinding can launch lazygit directly.
+	// Merges with VS Code's built-in profiles; it does not replace them.
+	// Inherits terminal.integrated.defaultLocation ("editor") unless the
+	// keybinding overrides it.
+	"terminal.integrated.profiles.osx": {
+		"lazygit": {
+			"path": "lazygit",
+			"icon": "git-branch",
+			// This profile runs lazygit as the shell process, bypassing .zshrc,
+			// so it declares the terminal capability that .zshrc:74 exports.
+			"env": {
+				"TERM": "xterm-256color",
+				"COLORTERM": "truecolor"
+			}
+		}
+	},
 	// ============================================================================
 	// TERMINAL STABILITY — Prevent Focus Stealing + Predictable Layout
 	// ============================================================================
@@ -230,7 +256,7 @@
 		"*.md": "vscode.markdown.editor"
 	},
 	"diffEditor.renderSideBySide": true,
-	"workbench.editor.showTabs": "single",
+	"workbench.editor.showTabs": "multiple",
 	"diffEditor.experimental.showMoves": true,
 	"explorer.sortOrder": "modified",
 	"explorer.fileNesting.enabled": true,
@@ -240,5 +266,6 @@
 	"workbench.secondarySideBar.defaultVisibility": "visible",
 	"search.sortOrder": "modified",
 	"workbench.activityBar.compact": true,
-	"workbench.secondarySideBar.showLabels": false
+	"workbench.secondarySideBar.showLabels": false,
+	"editor.accessibilitySupport": "on"
 }

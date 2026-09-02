@@ -27,7 +27,7 @@ Load this file only after selecting a route in
 
 1. Require an explicit requested state. If automatic policy or trigger is
    missing, show the live choices and ask one question.
-2. Invoke `skills/browser-use/SKILL.md` for the live Codex settings UI. Let that
+2. Invoke the `browser-use` skill for the live Codex settings UI. Let that
    owner handle attachment, tabs, snapshots, actions, and retries.
 3. Turn on Code review for the exact repository.
 4. If requested, set Automatic reviews and the selected live trigger policy.

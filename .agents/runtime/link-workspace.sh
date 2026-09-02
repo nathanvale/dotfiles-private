@@ -24,15 +24,8 @@ for s in classic-cinema cli-author cli-execution-auditor fallow skill-feedback t
   link_personal "$s" cli-command-facade
 done
 link_personal session-recovery session-corpus
-for p in cli-command-facade browser-connect warm-chrome browser-use-security mcporter-transport; do
-  link_personal browser-use "$p"
-done
 
 link_runtime agent-worktree cli-command-facade
-link_runtime warm-chrome cli-command-facade
-for d in cli-command-facade mcporter-transport warm-chrome; do
-  link_runtime browser-connect "$d"
-done
 
 # cli-command-facade owns the only external dependency (@logtape/logtape).
 (cd -- "$here/cli-command-facade" >/dev/null 2>&1 && bun install --silent)

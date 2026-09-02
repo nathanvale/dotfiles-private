@@ -3,7 +3,7 @@
 ## Owners
 
 - Reconciliation contract and private Xero state: `xero-cli commands --json`.
-- Live browser connection and action: `skills/browser-use/SKILL.md`.
+- Live browser connection and action: the `browser-use` skill.
 - Gmail reads and drafts: the `gog gmail` command contract.
 - Quarter handoff evidence: `skills/xero/scripts/quarter-ledger.ts`.
 - Standard quarterly BAS due-date reference:
@@ -20,7 +20,7 @@ halts reconciliation but does not block read-only ledger status.
 2. Read the due-date reference. Prefer an entity-specific generated BAS date or
    accountant-confirmed date when available.
 3. Verify and download the bound QIF.
-4. Verify its Xero import through Browser Use.
+4. Verify its Xero import through `browser-use` in the user's Chrome.
 5. Run `xero-cli commands --json` and `xero-cli workspace status --json`, then
    follow only the returned `nextSafeAction`. Never inspect XDG state directly.
 6. Complete `xero-cli` reconciliation.
@@ -39,13 +39,15 @@ or due date is blocked, report the cause and stop before writes.
 ## Reconcile
 
 1. Ask `xero-cli` to prepare the named quarter.
-2. For each browser observation request, attach through
-   `browser-connect connect --json` and return only typed observations.
+2. For each browser observation request, invoke `browser-use`, select the exact
+   Xero tab, and return only the required observations. Page order is
+   portal-owned.
 3. Show the bound preview: trusted and exception counts, totals by account,
    compact exceptions, and the preview and intent-set digests.
 4. Obtain explicit approval for that exact trusted pass.
-5. Ask `xero-cli` for at most one intent. Validate its one-use permit immediately
-   before submit, perform that one browser action, and checkpoint the receipt.
+5. Ask `xero-cli` for at most one intent. Validate its one-use permit
+   immediately before submit, perform that one browser action through
+   `browser-use`, and checkpoint the receipt.
 6. Repeat from CLI status until the quarter is complete or blocked.
 7. Record `reconciled` only from a Xero receipt or explicit manual confirmation.
 

@@ -2,8 +2,8 @@
 
 - Install and update with `npx skills`. Read `--help` for command syntax.
 - Upstreams: `herdrdev/herdr`, `openclaw/gogcli`, `mattpocock/skills`,
-  `vercel-labs/skills`.
-- Pass `-a claude-code,codex` on every `add`. Unscoped, the CLI installs to
+  `steipete/agent-scripts`, `vercel-labs/skills`.
+- Pass `-a claude-code -a codex` on every `add`. Unscoped, the CLI installs to
   every agent whose config directory exists, including ones you do not use, and
   writes those directories into this repository.
 
@@ -15,7 +15,7 @@
    inventory before any live install or canary. Completion: current ownership,
    activation, duplicates, and pre-existing protected drift are explicit.
 2. **Stage.** Run `npx skills add` without `-g` in a task-only scratch directory.
-   Pass only `claude-code,codex` and select the exact skill. Inspect every staged
+   Pass only `-a claude-code -a codex` and select the exact skill. Inspect every staged
    file, mode, security warning, and dependency before live installation.
    Completion: the reviewed payload and any unresolved warning are named.
 3. **Promote.** Run the same exact selection with `-g` so `npx skills` updates
@@ -70,6 +70,9 @@
   persistent shared and Claude Code installation.
 - The `herdrdev/herdr` `herdr` payload is pinned to the installed Herdr
   release and accepted for persistent shared and Claude Code installation.
+- The locked `steipete/agent-scripts` `browser-use` payload is accepted for
+  persistent shared and Claude Code installation. Its reviewed payload contains
+  only `SKILL.md` and `mcporter-config.md`.
 - The 30 locked `openclaw/gogcli` skills are canonical under
   `config/agents/skills/third-party/openclaw/gogcli/<skill>`.
 - Each GOG skill is linked at `~/.agents/skills/<skill>` and

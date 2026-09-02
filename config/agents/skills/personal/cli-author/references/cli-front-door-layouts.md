@@ -25,9 +25,8 @@ my-package/
 
 Command Contract Locator discovers `src/command-contract.ts`.
 
-- Reference: `skills/browser-use/src/command-contract.ts` — one
-  `browserUseContracts` export (6 commands) behind one `browser-use` bin,
-  flat layout (post-migration surface, 2026-07-16).
+- Historical reference: the retired personal browser-use runtime had one
+  `browserUseContracts` export (6 commands) behind one bin in 2026-07.
 
 ## Multiple CLIs, Flat Contracts
 
@@ -55,10 +54,9 @@ my-package/
 - Each CLI's `commands --json` projects only its own contract surface.
 - Command Contract Locator discovers one `src/command-contract.ts` with
   multiple exports.
-- Historical reference: browser-use before the 2026-07 migration — 6 contract
-  exports across 5 CLI scripts in one `src/command-contract.ts`. Its surviving
-  surface is single-CLI (see "Single CLI, Flat" above); no current in-repo
-  exemplar of this layout remains.
+- Historical reference: browser-use before its 2026-07 migration had 6 contract
+  exports across 5 CLI scripts in one `src/command-contract.ts`. The personal
+  implementation is now retired; no current in-repo exemplar remains.
 
 **When to use:** CLIs share vocabulary (result literals, exit codes, action
 id enums, shared model types). Co-locating contracts makes shared imports

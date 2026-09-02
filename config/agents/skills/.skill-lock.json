@@ -630,6 +630,15 @@
       "skillFolderHash": "1ec4cd3fbcc62d57cd32cf1d907c4c4761355e2b",
       "installedAt": "2026-08-24T06:52:56.167Z",
       "updatedAt": "2026-08-24T06:52:56.167Z"
+    },
+    "browser-use": {
+      "source": "steipete/agent-scripts",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/steipete/agent-scripts.git",
+      "skillPath": "skills/browser-use/SKILL.md",
+      "skillFolderHash": "178d10de88c4832babf05e0769b8ea52765d511b",
+      "installedAt": "2026-09-02T01:09:53.876Z",
+      "updatedAt": "2026-09-02T01:09:53.876Z"
     }
   },
   "dismissed": {

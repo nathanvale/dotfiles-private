@@ -10,7 +10,7 @@
 //   4. raw `bun test` (its reporter names every (fail) with file:line)
 //
 // Usage:
-//   bun run skills/ci-testbed/scripts/ci-repro.ts --ref origin/main --test "skills/browser-use/src/"
+//   bun run skills/ci-testbed/scripts/ci-repro.ts --ref origin/main --test "skills/worktree/src/"
 //   bun run skills/ci-testbed/scripts/ci-repro.ts --ref origin/main --test "<path>" --keep
 //
 // Flags:
@@ -41,7 +41,7 @@ const json = has("json");
 
 if (!testPath) {
 	console.error("ci-repro: --test <path/glob> is required (what `bun test` runs).");
-	console.error('  e.g. --test "skills/browser-use/src/"');
+	console.error('  e.g. --test "skills/worktree/src/"');
 	process.exit(2);
 }
 

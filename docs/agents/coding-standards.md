@@ -49,6 +49,18 @@ sealed mutation list in three fixtures; browser-connect's two copies of one
 fake runtime drifted on probe stderr; browser-use-security duplicated a
 manifest byte-for-byte across two test files.
 
+### Import aliases are resolver contracts
+
+- Admit an alias through repository architecture before use.
+- Map a cross-Module alias only to the Module Interface.
+- Prefer runtime-owned package imports or self-references.
+- Use `compilerOptions.paths` only when the runtime or bundler owns the same
+  mapping.
+- Keep one canonical import spelling per seam.
+- Prove typecheck, tests, production build or execution, and architecture
+  tooling.
+- Preserve an accepted relative-import rule until its owning decision changes.
+
 ### Creation is not readiness
 
 A reply that proves a resource exists never proves it can accept the next

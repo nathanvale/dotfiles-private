@@ -6,7 +6,6 @@
 			"**",
 			"!**/docs/**/*.html",
 			"!config/agents/skills/personal/classic-cinema/references/assets/ticket-template.html",
-			"!config/agents/skills/personal/browser-use/src/prototypes",
 			"!config/herdr/plugins",
 			"!**/actions/assets",
 			"!**/dist",
@@ -33,9 +32,7 @@
 			"!.agents/skills/*",
 			".agents/runtime",
 			"!.agents/runtime/*",
-			".agents/runtime/browser-connect",
-			".agents/runtime/setup",
-			".agents/runtime/warm-chrome"
+			".agents/runtime/setup"
 		]
 	},
 	"formatter": {

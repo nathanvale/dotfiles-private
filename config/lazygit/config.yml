@@ -1,5 +1,78 @@
+# Lazygit user config.
+# Schema owner: `lazygit --config` prints every default key for the installed
+# version. Docs: https://github.com/jesseduffield/lazygit/blob/master/docs/Config.md
+#
+# Live path: lazygit reads $XDG_CONFIG_HOME/lazygit/config.yml, which resolves
+# to ~/.config/lazygit/config.yml. The legacy macOS path
+# "~/Library/Application Support/lazygit" is NOT read while XDG_CONFIG_HOME is set.
+
+os:
+  # Routes lazygit's editor actions through the running VS Code window:
+  #   `e` / `o` on a file    -> code --reuse-window --goto <file>:<line>
+  #   `o` on a worktree      -> opens that worktree folder in VS Code
+  #   rebase todo, commit msg -> VS Code, with --wait
+  editPreset: vscode
+
+gui:
+  # File tree rather than a flat list; easier to scan a wide agent changeset.
+  showFileTree: true
+  # Side-by-side diff. The old key `sideBySideDiff` does not exist in lazygit.
+  splitDiff: always
+  # Show ahead/behind against the base branch in the branches panel.
+  showDivergenceFromBaseBranch: arrowAndNumber
+
+git:
+  # Modern schema. Replaces the pre-0.5x `git.paging` object, where the key
+  # was named `pager` rather than `command`.
+  diffRenderers:
+    - colorArg: always
+      command: delta --paging=never
+
+worktree:
+  # Matches the in-repo layout this machine already uses.
+  defaultPath: .worktrees
+
 customCommands:
-  - key: "e" # you can choose any key you like
+  - key: "e"
     context: "localBranches"
-    command: "code ." # or any command to open your editor
+    command: "code ."
     description: "Open branch in VS Code"
+
+  # VS Code's two-pane diff editor for the selected file.
+  # Needs [difftool "vscode"] in ~/.gitconfig.
+  # NOT "D": that is the built-in files.viewResetOptions.
+  - key: "V"
+    context: "files"
+    command: 'git difftool --no-prompt --tool=vscode -- "{{.SelectedFile.Name}}"'
+    description: "Diff file in VS Code"
+    loadingText: "opening VS Code diff"
+    output: terminal
+
+  # VS Code's three-way merge editor for a conflicted file.
+  # Needs [mergetool "vscode"] in ~/.gitconfig.
+  # NOT "M": that is the built-in files.openMergeOptions.
+  - key: "<c-v>"
+    context: "files"
+    command: 'git mergetool --no-prompt --tool=vscode -- "{{.SelectedFile.Name}}"'
+    description: "Resolve conflict in VS Code merge editor"
+    loadingText: "opening VS Code merge editor"
+    output: terminal
+
+  # Lazygit has no worktree sort option: its `worktree` config block holds only
+  # defaultPath, and the worktrees panel follows git's own listing order.
+  # This lists every attached worktree newest-first by the newer of its
+  # creation time or branch commit time, and opens the chosen one in VS Code.
+  # Detached and stale worktrees are omitted by the script; the filter parses
+  # its age, signal, branch, and path fields.
+  # "s" mirrors the branches panel's sort key and is unbound in this context.
+  - key: "s"
+    context: "worktrees"
+    description: "Worktrees by recency, open in VS Code"
+    prompts:
+      - type: "menuFromCommand"
+        title: "Worktrees, most recent first"
+        command: "worktree-recency"
+        filter: '(?P<age>[^|]*)\|(?P<signal>[^|]*)\|(?P<branch>[^|]*)\|(?P<path>.+)'
+        valueFormat: '{{ .path }}'
+        labelFormat: '{{ .age | cyan }}  {{ .signal | yellow }}  {{ .branch | bold }}'
+    command: 'code "{{index .PromptResponses 0}}"'

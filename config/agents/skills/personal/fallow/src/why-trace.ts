@@ -11,10 +11,9 @@
 //   - transport-level offline/missing/timeout/spawn -> setup class
 //   - malformed/incomplete payload -> fail closed, never a deletion candidate
 //
-// The mcporter command vector follows the house override contract conceptually
-// (browser-use/scripts/mcporter-transport.ts) without importing it: a single
-// JSON-array env override, default `mcporter`, no shell eval, no auto package
-// runner. A shared utility is deferred until a third consumer exists (KTD5).
+// The mcporter command vector uses a single JSON-array env override, default
+// `mcporter`, no shell eval, and no automatic package runner. A shared utility
+// is deferred until a third consumer exists (KTD5).
 
 import {
 	FALLOW_EVIDENCE_GRADE_BY_KEY,

@@ -23,23 +23,11 @@ Adding a package under `.agents/` requires editing the root `package.json`. A
 new package that is not listed still installs cleanly and still fails to
 resolve its siblings, so the omission surfaces late, at import time.
 
-Two packages are deliberately excluded, both blocked by the same missing
-dependency. `@side-quest/browser-connect` declares
-`@side-quest/cli-test-fixtures` at `file:../cli-test-fixtures`, a package with
-no directory and no history in this repository. The `browser-use` skill depends
-on `browser-connect`, and additionally pins its local siblings by bare version
-(`"0.1.0"`) rather than `workspace:*`, which sends Bun to npm for private
-packages that are not published. Either package as a member fails the whole
-install, so both stay out until the fixtures package is restored or the
-dependency is removed.
-
-The three `adapter-install` manifests under `browser-connect` stay out by
-design. Each is a source-controlled install manifest with its own
-`package-lock.json`, read by an isolated installer that requires the full
-dependency-graph integrity that lockfile carries. Workspace hoisting would
-defeat their purpose. The literal-path rule keeps them out for free; a
-`.agents/runtime/*` glob would not have reached them either, but only by
-accident.
+The former personal browser automation workspace was later registered after
+its missing dependencies were repaired. It is now retired in favour of the
+reviewed `steipete/agent-scripts` `browser-use` skill, so `browser-connect`,
+Warm Chrome, the authentication and security packages, the transport adapter,
+and the personal skill no longer participate in this workspace.
 
 ## Evidence
 

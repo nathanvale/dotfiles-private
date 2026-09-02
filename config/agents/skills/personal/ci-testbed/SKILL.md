@@ -47,7 +47,7 @@ suite goes red in CI) and how to gate the specific cause.
   `CI=true` locally to surface these.
 - **Machine-dep hard-throws are a category, not one test.** A test that
   `throw`s when a local binary/adapter is missing (mcporter, a pinned
-  browser-connect adapter, `op`, a codesigning identity) fails the *whole file*
+  browser adapter, `op`, a codesigning identity) fails the *whole file*
   in CI. Find all of them at once (`grep -rlnE "throw.*is missing|not on PATH"`),
   not one CI cycle each.
 - **Never chase a CI-only failure by re-pushing.** If two local repro attempts
