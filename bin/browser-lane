@@ -191,7 +191,7 @@ Dashboard grouping:
 
 Commands:
   list      List declared lanes without browser content or account identifiers.
-  open      Open a new focused task tab in the declared Chrome profile without
+  open      Reuse an exact task tab or open it in the declared Chrome profile without
             checking relay health, tab admission, authentication, or page content.
   health    Check one lane's profile, extension, relay, and declared baseline.
   inspect   Report visible-page counts and exact-target readiness, without content.
@@ -217,12 +217,18 @@ Open contract:
   - The URL must be ordinary HTTP or HTTPS with no embedded user information.
   - Opening takes the lane's short command lease and preserves an attended-login
     reservation. A busy or reserved lane is reported before Chrome dispatch.
-  - LaunchServices starts a new Chrome invocation so profile and URL arguments
-    are delivered whether Chrome is running or closed. Chrome receives one
-    new-tab request for the declared user-data directory and profile.
+  - Before opening, a bounded native accessibility check selects the unique
+    profile window and briefly cycles its tab-strip controls to compare URL
+    metadata. It reads no page content and changes no tab grants.
+  - One exact URL match is focused and reused. No match permits a LaunchServices
+    new-tab request in the declared profile. Duplicate matches, an unidentifiable
+    running profile, hidden tabs, inaccessible metadata, or interrupted checks
+    stop without a new-tab request. No URL or tab title is retained or reported.
+  - macOS Accessibility and Automation permission are required for tab reuse.
+    BROWSER_LANE_OSASCRIPT_BIN is an explicit process-scoped native-host override.
   - The command does not call OpenClaw, MCPorter, or a browser adapter.
-  - A successful launcher dispatch does not prove visible tab focus, authentication,
-    or automation readiness. Repeating it can create a duplicate tab.
+  - Reuse reports exact_url_observed and focused. A new launcher dispatch reports
+    not_observed and requested. Neither proves authentication or automation readiness.
   - A failed or interrupted launcher dispatch has an uncertain effect. Inspect the
     visible profile before retrying.
 
@@ -1279,9 +1285,10 @@ emit_open_success() {
   local lane="$1" lane_value="$2" json="$3" run_id="$4" data
   data="$(jq -cn \
     --arg lane "$lane" \
+    --arg tab "$profile_open_tab" \
     --arg profile_display_name "$(jq -r '.profile_display_name' <<<"$lane_value")" '
       {command:"open",lane:$lane,profile_display_name:$profile_display_name,
-       opening:{dispatch:"accepted",verification:"not_observed",focus:"requested",tab:"new_requested"},
+       opening:{dispatch:"accepted",verification:(if $tab == "reused" then "exact_url_observed" else "not_observed" end),focus:(if $tab == "reused" then "focused" else "requested" end),tab:$tab},
        authentication:{state:"not_checked"},
        automation:{readiness:"not_checked",admission:"unchanged"},
        retry_safe:false}')"
@@ -1290,7 +1297,7 @@ emit_open_success() {
       '{status:"ok",run_id:$run_id,data:$data}'
   else
     jq -r '
-      "lane=\(.lane) profile=\(.profile_display_name) opening=dispatched verification=\(.opening.verification) authentication=\(.authentication.state) automation=\(.automation.readiness)"
+      "lane=\(.lane) profile=\(.profile_display_name) opening=\(if .opening.tab == "reused" then "reused" else "dispatched" end) tab=\(.opening.tab) verification=\(.opening.verification) authentication=\(.authentication.state) automation=\(.automation.readiness)"
     ' <<<"$data"
   fi
 }
@@ -1299,6 +1306,10 @@ profile_open_directory=''
 profile_open_chrome_root=''
 profile_open_bin=''
 profile_open_status=''
+profile_open_tab='new_requested'
+profile_open_display=''
+profile_open_helper=''
+profile_open_problem='native_check_unavailable'
 
 prepare_profile_open() {
   local lane="$1" lane_value="$2" account_role="$3" run_id="$4"
@@ -1330,10 +1341,48 @@ prepare_profile_open() {
       'the configured macOS browser opener is unavailable or unsafe' \
       'Restore the system open command, then retry.'
   profile_open_chrome_root="$(jq -r '.chrome_user_data_dir' "$registry")"
+  profile_open_display="$(jq -r '.profile_display_name' <<<"$lane_value")"
+  # Native window metadata identifies a display name, not a profile directory.
+  # A duplicate local name cannot prove which directory owns the visible tab.
+  [[ "$(jq -r --arg name "$profile_open_display" \
+    '[.profile.info_cache[] | select(.name == $name)] | length' \
+    "$profile_open_chrome_root/Local State")" == '1' ]] ||
+    emit_error "$EXIT_PROFILE_MISMATCH" 'profile_mapping_ambiguous' "$run_id" false \
+      'the native profile display name does not identify one local Chrome profile' \
+      'Give the intended Chrome profile a unique display name and reconcile its lane registry before retrying.'
+  require_command python3 "$run_id"
+  profile_open_helper="$(dirname "$(realpath "${BASH_SOURCE[0]}")")/lib/browser-lane-open.py"
+  [[ -f "$profile_open_helper" && ! -L "$profile_open_helper" &&
+     -f "${profile_open_helper%.py}.js" && ! -L "${profile_open_helper%.py}.js" ]] ||
+    emit_error "$EXIT_INVALID_REGISTRY" 'browser_opener_missing' "$run_id" true \
+      'the native tab-reuse helper is unavailable or unsafe' \
+      'Restore the browser-lane executable and its adjacent helpers from the same checkout.'
 }
 
 dispatch_profile_page() {
-  local page_url="$1"
+  local page_url="$1" native_result native_status
+  profile_open_tab='unknown'
+  profile_open_problem='native_check_unavailable'
+  set +e
+  native_result="$(python3 "$profile_open_helper" "$profile_open_display" "$page_url" 2>/dev/null)"
+  native_status=$?
+  set -e
+  # The adjacent transport returns only fixed, secret-neutral reason codes.
+  # Keep the host cause available without forwarding any native error text.
+  case "$(jq -r '.reason // empty' <<<"$native_result" 2>/dev/null)" in
+    exact_tab_ambiguous|profile_window_unavailable|profile_window_ambiguous|profile_window_changed|tab_inventory_unavailable|tab_inventory_changed|tab_selection_unavailable|tab_url_unavailable|native_access_unavailable|native_deadline|native_helper_unavailable|native_helper_failed|native_helper_timeout|native_helper_interrupted|invalid_native_result|chrome_process_ambiguous)
+      profile_open_problem="$(jq -r .reason <<<"$native_result")" ;;
+  esac
+  profile_open_status=1
+  [[ "$native_status" == '0' ]] || return 0
+  if jq -e '.state == "reused"' <<<"$native_result" >/dev/null 2>&1; then
+    profile_open_tab='reused'
+    profile_open_status=0
+    return 0
+  fi
+  jq -e '.state == "absent"' <<<"$native_result" >/dev/null 2>&1 || return 0
+  profile_open_tab='new_requested'
+  profile_open_problem='launcher_dispatch_uncertain'
   set +e
   "$profile_open_bin" -n -b com.google.Chrome --args \
     "--user-data-dir=$profile_open_chrome_root" \
@@ -1343,25 +1392,34 @@ dispatch_profile_page() {
   set -e
 }
 
-open_profile_page() {
-  local lane="$1" lane_value="$2" account_role="$3" page_url="$4" json="$5" run_id="$6"
+emit_profile_opening_uncertain() {
+  local lane="$1" run_id="$2"
   local error_data
-  prepare_profile_open "$lane" "$lane_value" "$account_role" "$run_id"
-  acquire_lease "$lane" "$run_id" "$DEFAULT_TTL_SECONDS"
-  trap 'release_lease "$lane" "$run_id"' EXIT HUP INT TERM
-  refuse_while_handoff "$lane" "$lane_value" "$run_id"
-  dispatch_profile_page "$page_url"
-  if [[ "$profile_open_status" != '0' ]]; then
-    error_data="$(jq -cn --arg lane "$lane" '
+  trap - HUP INT TERM
+    error_data="$(jq -cn --arg lane "$lane" --arg cause "$profile_open_problem" '
       {command:"open",lane:$lane,
+       preparation_failure:$cause,
        opening:{dispatch:"uncertain",verification:"not_observed",focus:"unknown",tab:"unknown"},
        authentication:{state:"not_checked"},
        automation:{readiness:"not_checked",admission:"unchanged"}}')"
     emit_error "$EXIT_BROWSER_OPENING_UNCERTAIN" 'browser_opening_uncertain' "$run_id" false \
-      'Chrome did not return a successful profile-opening dispatch' \
-      'Inspect the requested tab in the visible profile before retrying; a duplicate tab may already exist.' \
+      'Chrome tab preparation did not complete; the native check or opening dispatch was uncertain' \
+      'Inspect the visible profile and duplicate tabs, and verify macOS Accessibility and Automation permissions before retrying. No new tab is requested after an uncertain reuse check.' \
       "$error_data"
-  fi
+}
+
+open_profile_page() {
+  local lane="$1" lane_value="$2" account_role="$3" page_url="$4" json="$5" run_id="$6"
+  prepare_profile_open "$lane" "$lane_value" "$account_role" "$run_id"
+  acquire_lease "$lane" "$run_id" "$DEFAULT_TTL_SECONDS"
+  trap 'release_lease "$lane" "$run_id"' EXIT
+  # Bash waits for the foreground native transport to retire before handling
+  # this signal. Exit here so cancellation can never fall through to creation.
+  trap 'profile_open_problem=native_helper_interrupted; emit_profile_opening_uncertain "$lane" "$run_id"' HUP INT TERM
+  refuse_while_handoff "$lane" "$lane_value" "$run_id"
+  dispatch_profile_page "$page_url"
+  [[ "$profile_open_status" == '0' ]] || emit_profile_opening_uncertain "$lane" "$run_id"
+  trap 'release_lease "$lane" "$run_id"' HUP INT TERM
   emit_open_success "$lane" "$lane_value" "$json" "$run_id"
   exit 0
 }
@@ -1506,13 +1564,13 @@ emit_handoff_success() {
 
 pre_admission_handoff_data() {
   local dispatch="$1"
-  jq -c --arg dispatch "$dispatch" '
+  jq -c --arg dispatch "$dispatch" --arg tab "$profile_open_tab" --arg cause "$profile_open_problem" '
     . + {
-      opening:{dispatch:$dispatch,verification:"not_observed",focus:(if $dispatch == "accepted" then "requested" else "unknown" end),tab:(if $dispatch == "accepted" then "new_requested" else "unknown" end)},
+      opening:{dispatch:$dispatch,verification:(if $dispatch == "accepted" and $tab == "reused" then "exact_url_observed" else "not_observed" end),focus:(if $dispatch != "accepted" then "unknown" elif $tab == "reused" then "focused" else "requested" end),tab:(if $dispatch == "accepted" then $tab else "unknown" end)},
       authentication:{state:"waiting_for_human"},
       automation:{readiness:"blocked_by_handoff",admission:"not_requested"},
       retry_safe:false
-    }
+    } + (if $dispatch == "uncertain" then {preparation_failure:$cause} else {} end)
   ' <<<"$handoff_data"
 }
 
@@ -1521,7 +1579,7 @@ emit_pre_admission_opening_uncertain() {
   trap - HUP INT TERM
   error_data="$(pre_admission_handoff_data uncertain)"
   emit_error "$EXIT_BROWSER_OPENING_UNCERTAIN" 'browser_opening_uncertain' "$run_id" false \
-    'Chrome did not return a successful profile-opening dispatch; the attended-login reservation remains active' \
+    'Chrome tab preparation did not complete; the attended-login reservation remains active' \
     'Do not retry the opening. Inspect the visible profile, then use --nonce-file with the retained private token file to resume or release this reservation.' \
     "$error_data"
 }

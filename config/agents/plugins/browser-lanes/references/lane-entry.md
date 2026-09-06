@@ -62,11 +62,11 @@ but never grants itself access.
 
 When the user has requested a specific site and the ordinary, non-secret URL
 is known, run `browser-lane open --lane NAME --account-role ROLE --page-url URL
---json`. It requests a new focused task tab in the exact declared Chrome
-profile without relay health, tab admission, an adapter, or page-content
-access. A successful dispatch still reports visible verification,
+--json`. Follow the executable's native tab-reuse result: it prepares the task
+tab in the exact declared Chrome profile without relay health, tab admission,
+an adapter, or page-content access. A successful result still reports visible verification,
 authentication, and automation readiness separately. After an uncertain
-dispatch, inspect the visible profile before retrying. Stop if the profile is
+result, inspect the visible profile before retrying. Stop if the profile is
 ambiguous or the requested URL contains authentication material.
 
 When later automation needs admission, run health and name the profile from the lane table in
