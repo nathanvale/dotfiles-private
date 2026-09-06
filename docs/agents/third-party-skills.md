@@ -2,7 +2,7 @@
 
 - Install and update with `npx skills`. Read `--help` for command syntax.
 - Upstreams: `herdrdev/herdr`, `openclaw/gogcli`, `mattpocock/skills`,
-  `steipete/agent-scripts`, `vercel-labs/skills`.
+  `vercel-labs/skills`.
 - Pass `-a claude-code -a codex` on every `add`. Unscoped, the CLI installs to
   every agent whose config directory exists, including ones you do not use, and
   writes those directories into this repository.
@@ -18,8 +18,12 @@
    Pass only `-a claude-code -a codex` and select the exact skill. Inspect every staged
    file, mode, security warning, and dependency before live installation.
    Completion: the reviewed payload and any unresolved warning are named.
-3. **Promote.** Run the same exact selection with `-g` so `npx skills` updates
-   the machine lock. Copy the reviewed bytes to
+3. **Promote.** Establish a supported `npx skills` promotion route that consumes
+   the exact reviewed staged payload and retains its upstream provenance in
+   the machine lock. Verify payload hashes before creating active Harness
+   addresses; a fresh upstream resolution is not promotion of staged bytes.
+   Without that proof, leave the payload staged and report the missing
+   promotion capability. Copy the reviewed bytes to
    `config/agents/skills/third-party/<owner>/<skill>`, declare every persistent
    address in `topology.json`, and replace generated installed copies with flat
    same-skill Tracking Links. Completion: canonical source, lock, topology, and
@@ -45,16 +49,29 @@
    from discovery qualification. Completion: installation evidence, unavailable
    proof, pre-existing drift, and the commit or push boundary are explicit.
 
+## Restore installed addresses
+
+1. **Preflight.** Read `topology.json#thirdParty` and the lock. Resolve each
+   declared skill to its existing reviewed source under
+   `config/agents/skills/third-party/`. Inspect every declared address and its
+   ancestors. Stop on a missing source, lock/content mismatch, unsafe ancestor,
+   or conflicting installed content; resolve that conflict before mutation.
+2. **Restore.** Rebuild missing or incorrect declared addresses as flat
+   same-skill Tracking Links to that reviewed source. Preserve declared disabled
+   state. Restore uses these canonical bytes without fetching upstream or
+   rewriting the lock's hashes. Correct existing links need no change.
+3. **Verify.** Run `bin/agent-skills-inventory --json`. Completion: every
+   restored row has the declared enabled or disabled state, matching content,
+   correct stored and resolved link targets, and no inventory issues.
+
 ## Lock file
 
 - Address: `~/.agents/.skill-lock.json`, a Tracking Link into
   `config/agents/skills/`. It accepts reads and writes.
 - Break the link and every entry reports `Source: local`. Provenance is lost and
   `npx skills update` has nothing to act on. Restore the link to recover it.
-- Keep the lock describing the machine. A skill renamed upstream leaves a dead
-  entry that restore will try to install.
-- `experimental_install` restores every entry. Proven 2026-08-19 in a scratch
-  `HOME`: 66 of 66, none missing.
+- Keep the lock describing the machine. Reconcile renamed or retired entries
+  with their canonical source and topology declaration before restoration.
 
 ## Reviewed source and installed addresses
 
@@ -70,9 +87,6 @@
   persistent shared and Claude Code installation.
 - The `herdrdev/herdr` `herdr` payload is pinned to the installed Herdr
   release and accepted for persistent shared and Claude Code installation.
-- The locked `steipete/agent-scripts` `browser-use` payload is accepted for
-  persistent shared and Claude Code installation. Its reviewed payload contains
-  only `SKILL.md` and `mcporter-config.md`.
 - The 30 locked `openclaw/gogcli` skills are canonical under
   `config/agents/skills/third-party/openclaw/gogcli/<skill>`.
 - Each GOG skill is linked at `~/.agents/skills/<skill>` and
@@ -90,8 +104,11 @@
 - `add` accepts a branch or tag through a `#fragment`. A full commit SHA fails.
 - `experimental_install` never reads the stored hash. It clones current branch
   HEAD, then overwrites the hash with what it fetched.
-- Restore reproduces HEAD, not the reviewed commit. Read the diff after
-  `npx skills update`. That is the whole practice.
+- `experimental_install` is an upstream fetch, not a restoration of reviewed
+  bytes. Use [Restore installed addresses](#restore-installed-addresses) for
+  restoration; route upstream changes through
+  [Install or update one skill](#install-or-update-one-skill), including staged
+  review before live installation.
 
 ## Why the diff matters
 

@@ -3,7 +3,9 @@
 ## Owners
 
 - Reconciliation contract and private Xero state: `xero-cli commands --json`.
-- Live browser connection and action: the `browser-use` skill.
+- Live browser connection and action: the `browser-lanes`
+  plugin's `browser-use` entry skill in the `daily-driver` lane; Nathan
+  admits the one Xero tab through its admission handoff.
 - Gmail reads and drafts: the `gog gmail` command contract.
 - Quarter handoff evidence: `skills/xero/scripts/quarter-ledger.ts`.
 - Standard quarterly BAS due-date reference:
@@ -39,9 +41,9 @@ or due date is blocked, report the cause and stop before writes.
 ## Reconcile
 
 1. Ask `xero-cli` to prepare the named quarter.
-2. For each browser observation request, invoke `browser-use`, select the exact
-   Xero tab, and return only the required observations. Page order is
-   portal-owned.
+2. For each browser observation request, invoke `browser-use` with the exact
+   Xero page URL, let the lane resolve the one admitted Xero tab, and return
+   only the required observations. Page order is portal-owned.
 3. Show the bound preview: trusted and exception counts, totals by account,
    compact exceptions, and the preview and intent-set digests.
 4. Obtain explicit approval for that exact trusted pass.

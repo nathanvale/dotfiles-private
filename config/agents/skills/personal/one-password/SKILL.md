@@ -19,8 +19,15 @@ No-args or unclear request: start at Workflow step 1 — name the owning capabil
 ## Token custody
 
 - Let `$HOME/code/dotfiles/bin/with-one-password-token` own token custody and process-scoped injection. Never read, source, create, or export its token source from this workflow; never place the token in shell rc, tmux/PTY environment, or ambient env.
-- Browser filling is out of scope: this wrapper delivers targeted `op` reads and single-value process injection, never a browser fill. Never fetch browser-login secrets or fill a browser through this skill.
-- Browser automation stays credential-neutral and stops at a login wall. A confidential browser-fill bridge is separate future work, not owned here.
+- Browser filling is human-visible work in the 1Password browser extension.
+  This CLI workflow never fetches a browser-login secret, fills a browser,
+  transfers a credential through the clipboard, or puts authentication material
+  in an adapter plan.
+- At a browser login wall, invoke the `browser-use` skill's attended login
+  handoff. Its durable reservation keeps compliant browser automation off the
+  selected lane until the human finishes and the agent proves the same-origin
+  handback. The nonce authorizes resume or release; it is not a credential and
+  never belongs in a message to the human.
 - Keep explicit vault listing and item create/update requests in this workflow.
 
 ## Workflow

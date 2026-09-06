@@ -24,9 +24,10 @@ Use only after explicit invocation for one named organisation and quarter.
   evidence states.
 - Never infer accountant lodgment from Xero finalisation, an exported workbook,
   a Gmail draft, or a payment notice.
-- Use `xero-cli` for deterministic reconciliation state, the `browser-use`
-  skill for live Xero interaction, `gog` for Gmail evidence, and
-  `quarter-ledger.ts` as the cross-owner receipt spine.
+- Use `xero-cli` for deterministic reconciliation state, the `browser-lanes`
+  plugin's `browser-use` entry skill for live Xero interaction in the
+  `daily-driver` lane, `gog` for Gmail evidence, and `quarter-ledger.ts` as
+  the cross-owner receipt spine.
 - Require current human approval before any financial or externally visible
   write. Ledger recording is local evidence, not write authority.
 

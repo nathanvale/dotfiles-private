@@ -24,10 +24,12 @@ new package that is not listed still installs cleanly and still fails to
 resolve its siblings, so the omission surfaces late, at import time.
 
 The former personal browser automation workspace was later registered after
-its missing dependencies were repaired. It is now retired in favour of the
-reviewed `steipete/agent-scripts` `browser-use` skill, so `browser-connect`,
-Warm Chrome, the authentication and security packages, the transport adapter,
-and the personal skill no longer participate in this workspace.
+its missing dependencies were repaired. It was then retired in favour of the
+reviewed `steipete/agent-scripts` `browser-use` skill, which
+[ADR-0004](0004-browser-use-entry-ownership.md) in turn retired for the
+`browser-lanes` plugin's `browser-use` entry skill. `browser-connect`, Warm
+Chrome, the authentication and security packages, the transport adapter, and
+the personal skill no longer participate in this workspace.
 
 ## Evidence
 
