@@ -1,0 +1,8 @@
+#!/bin/sh
+set -eu
+case "$0" in
+*/*) launcher_dir=${0%/*} ;;
+*) launcher_dir=. ;;
+esac
+plugin_root=$(CDPATH='' cd -- "$launcher_dir/.." && pwd -P)
+exec bun "$plugin_root/runtime/vault-note-commits.js" "$@"

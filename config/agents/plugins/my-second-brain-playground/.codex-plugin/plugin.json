@@ -1,0 +1,22 @@
+{
+  "name": "my-second-brain-playground",
+  "version": "0.11.0+codex.20260906091555",
+  "description": "A local playground for building My Second Brain skills one vertical slice at a time.",
+  "author": {
+    "name": "Nathan Vale"
+  },
+  "skills": "./skills/",
+  "hooks": "./hooks/codex/hooks.json",
+  "interface": {
+    "displayName": "My Second Brain Playground",
+    "shortDescription": "Build and exercise one knowledge workflow at a time",
+    "longDescription": "A local scaffold for new My Second Brain skills, exercised against the separate synthetic playground repository one vertical slice at a time.",
+    "developerName": "Nathan Vale",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Commit a finished change to the My Second Brain playground without disturbing another agent's work."
+  }
+}

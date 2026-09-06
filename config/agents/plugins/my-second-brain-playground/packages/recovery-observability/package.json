@@ -1,0 +1,11 @@
+{
+  "name": "recovery-observability",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "main": "src/interface.ts",
+  "dependencies": {
+    "@logtape/logtape": "2.3.1",
+    "@logtape/redaction": "2.3.1"
+  }
+}

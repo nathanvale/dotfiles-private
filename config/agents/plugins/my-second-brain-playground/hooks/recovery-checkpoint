@@ -1,0 +1,13 @@
+#!/bin/sh
+set -u
+
+case "$0" in
+/*/hooks/recovery-checkpoint) plugin_root=${0%/hooks/recovery-checkpoint} ;;
+*) exit 1 ;;
+esac
+
+if command -v bun >/dev/null 2>&1 && [ -r "$plugin_root/runtime/recovery-observer.js" ]; then
+	exec bun "$plugin_root/runtime/recovery-observer.js" checkpoint "$@"
+fi
+
+exec /usr/bin/python3 -B "$plugin_root/packages/compaction-recovery/src/recovery.py" checkpoint "$@"

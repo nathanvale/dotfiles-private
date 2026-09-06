@@ -1,0 +1,9 @@
+{
+  "name": "my-second-brain-playground",
+  "version": "0.11.0",
+  "description": "A local playground for building My Second Brain skills one vertical slice at a time.",
+  "author": {
+    "name": "Nathan Vale"
+  },
+  "hooks": "./hooks/claude/hooks.json"
+}
