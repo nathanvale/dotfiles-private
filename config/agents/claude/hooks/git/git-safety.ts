@@ -12,8 +12,8 @@
  * timed-out safety check must deny (exit 2), not silently allow (exit 1).
  */
 
-import { existsSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
+import { existsSync, realpathSync } from 'node:fs'
+import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import { postEvent } from './event-bus-client'
 import { PROTECTED_BRANCHES } from './git-policy'
 import { getCurrentBranch, runGit } from './git-utils'
@@ -847,6 +847,23 @@ export function checkFileEdit(filePath: string): {
 	return { blocked: false }
 }
 
+/** Resolves symlinked existing parents while retaining a target's missing suffix. */
+function resolveFilePath(filePath: string): string {
+	let existingAncestor = resolve(filePath)
+	const missingSuffix: string[] = []
+	while (existingAncestor !== dirname(existingAncestor) && !existsSync(existingAncestor)) {
+		missingSuffix.unshift(basename(existingAncestor))
+		existingAncestor = dirname(existingAncestor)
+	}
+	if (!existsSync(existingAncestor)) return resolve(filePath)
+
+	try {
+		return resolve(realpathSync(existingAncestor), ...missingSuffix)
+	} catch {
+		return resolve(filePath)
+	}
+}
+
 /**
  * Checks whether a file edit would land in a main checkout rather than a
  * worktree. Resolves against the file's own directory, not the session cwd:
@@ -857,15 +874,28 @@ export function checkFileEdit(filePath: string): {
  * signature of a linked worktree). Non-repos and unreadable paths return
  * blocked: false — this hook guards worktree isolation, not file access.
  */
-export async function checkWorktreeIsolation(filePath: string): Promise<{
+export async function checkWorktreeIsolation(
+	filePath: string,
+	options: { scopeRoot?: string } = {},
+): Promise<{
 	blocked: boolean
 	reason?: string
 	branch?: string
 }> {
+	const resolvedFilePath = resolveFilePath(filePath)
+	if (options.scopeRoot) {
+		const scopeRoot = resolveFilePath(options.scopeRoot)
+		const target = resolvedFilePath
+		const relation = relative(scopeRoot, target)
+		if (relation === '..' || relation.startsWith(`..${sep}`) || isAbsolute(relation)) {
+			return { blocked: false }
+		}
+	}
+
 	// Walk up to the nearest existing ancestor: the target may be a new file in
 	// a directory that does not exist yet, and spawning git with a missing cwd
 	// throws ENOENT rather than returning a non-zero exit code.
-	let dir = dirname(resolve(filePath))
+	let dir = dirname(resolvedFilePath)
 	while (dir !== dirname(dir) && !existsSync(dir)) {
 		dir = dirname(dir)
 	}
@@ -1118,7 +1148,9 @@ if (import.meta.main) {
 				}
 			}
 
-			const isolation = await checkWorktreeIsolation(filePath)
+			const isolation = await checkWorktreeIsolation(filePath, {
+				scopeRoot: process.env.CLAUDE_GIT_SAFETY_WORKTREE_ROOT,
+			})
 			if (isolation.blocked) {
 				if (safetyMode === 'strict') {
 					await denyAndExit(
