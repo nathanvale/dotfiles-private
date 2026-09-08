@@ -31,11 +31,11 @@ LOCK_COUNT=$(get_lock_count)
 
 if [ "$LOCK_COUNT" -eq 0 ]; then
     # Green - no active locks
-    echo "#[fg=#82aaff,bg=#112630]🔓 $LOCK_COUNT"
+    echo "#[fg=#82aaff,bg=#0b253a]🔓 $LOCK_COUNT"
 elif [ "$LOCK_COUNT" -le 4 ]; then
     # Blue - normal operation
-    echo "#[fg=#82aaff,bg=#112630]🔒 $LOCK_COUNT"
+    echo "#[fg=#82aaff,bg=#0b253a]🔒 $LOCK_COUNT"
 else
     # Yellow - high concurrency
-    echo "#[fg=#f78c6c,bg=#112630]🔒 $LOCK_COUNT"
+    echo "#[fg=#c5e478,bg=#0b253a]🔒 $LOCK_COUNT"
 fi

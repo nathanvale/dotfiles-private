@@ -1,0 +1,58 @@
+# Night Owl. Palette owner: docs/night-owl-theme.md.
+[app]
+overall = { fg = "#D6DEEB", bg = "#011627" }
+
+[mgr]
+cwd = { fg = "#82AAFF" }
+border_style = { fg = "#5F7E97" }
+find_keyword = { fg = "#C5E478", bold = true }
+find_position = { fg = "#C792EA" }
+marker_copied = { fg = "#9CCC65", bg = "#9CCC65" }
+marker_cut = { fg = "#EF5350", bg = "#EF5350" }
+marker_marked = { fg = "#21C7A8", bg = "#21C7A8" }
+marker_selected = { fg = "#C5E478", bg = "#C5E478" }
+
+[tabs]
+active = { fg = "#D6DEEB", bg = "#7E57C2", bold = true }
+inactive = { fg = "#5F7E97", bg = "#0B253A" }
+
+[mode]
+normal_main = { fg = "#D6DEEB", bg = "#7E57C2", bold = true }
+normal_alt = { fg = "#D6DEEB", bg = "#0B253A" }
+select_main = { fg = "#011627", bg = "#C5E478", bold = true }
+select_alt = { fg = "#C5E478", bg = "#0B253A" }
+unset_main = { fg = "#011627", bg = "#EF5350", bold = true }
+unset_alt = { fg = "#EF5350", bg = "#0B253A" }
+
+[indicator]
+parent = { fg = "#D6DEEB", bg = "#1D3B53" }
+current = { fg = "#D6DEEB", bg = "#1D3B53", bold = true }
+preview = { underline = true }
+
+[status]
+overall = { fg = "#D6DEEB", bg = "#0B253A" }
+progress_normal = { fg = "#9CCC65", bg = "#011627" }
+progress_error = { fg = "#EF5350", bg = "#011627" }
+
+[input]
+border = { fg = "#7E57C2" }
+selected = { fg = "#D6DEEB", bg = "#1D3B53" }
+
+[pick]
+border = { fg = "#7E57C2" }
+active = { fg = "#C792EA", bold = true }
+
+[help]
+border = { fg = "#7E57C2" }
+chord = { fg = "#21C7A8" }
+hovered = { fg = "#D6DEEB", bg = "#1D3B53", bold = true }
+
+[filetype]
+rules = [
+  { url = "*", is = "orphan", fg = "#EF5350" },
+  { url = "*/", fg = "#82AAFF" },
+  { url = "*", is = "exec", fg = "#9CCC65" },
+  { mime = "image/*", fg = "#C5E478" },
+  { mime = "{audio,video}/*", fg = "#C792EA" },
+  { url = "*", fg = "#D6DEEB" },
+]

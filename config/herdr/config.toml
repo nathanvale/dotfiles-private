@@ -1,5 +1,9 @@
 onboarding = false
 
+[theme]
+# Inherit the terminal's Night Owl ANSI palette from Ghostty.
+name = "terminal"
+
 [keys]
 prefix = "ctrl+g"
 

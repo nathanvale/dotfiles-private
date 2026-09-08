@@ -1,0 +1,18 @@
+{
+  "workbench.activityBar.location": "hidden",
+  "workbench.statusBar.visible": false,
+  "workbench.editor.showTabs": "single",
+  "breadcrumbs.enabled": false,
+  "editor.minimap.enabled": false,
+  "editor.stickyScroll.enabled": false,
+  "editor.renderValidationDecorations": "off",
+  "editor.fontSize": 16,
+  "editor.lineHeight": 1.4,
+  "diffEditor.renderSideBySide": true,
+  "diffEditor.useInlineViewWhenSpaceIsLimited": true,
+  "diffEditor.wordWrap": "on",
+  "git.enabled": false,
+  "typescript.validate.enable": false,
+  "javascript.validate.enable": false,
+  "files.exclude": {"**/*": true}
+}

@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+"""Open persistent diff snapshots in one optional Terminal Code review pane."""
+import fcntl
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+
+
+def main():
+    if len(sys.argv) != 3:
+        raise SystemExit('Usage: tode-diff BEFORE AFTER')
+    if os.environ.get('HERDR_ENV') != '1':
+        raise SystemExit('tode-diff requires a Herdr pane; use git difftool --tool=vscode outside Herdr.')
+    sources = [Path(x).resolve(strict=True) for x in sys.argv[1:]]
+    root = Path(__file__).resolve().parent.parent
+    state = Path(os.environ.get('XDG_STATE_HOME', str(Path.home()/'.local/state')))
+    cache = Path(os.environ.get('XDG_CACHE_HOME', str(Path.home()/'.cache')))/'tode-review'
+    cache.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (cache/'launch.lock').open('w') as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        # Keep the workspace empty: snapshots live outside it, avoiding repo scans.
+        workspace = cache/'workspace'
+        settings = workspace/'.vscode'
+        settings.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(root/'config/tode/review-settings.json', settings/'settings.json')
+        snapshot = Path(tempfile.mkdtemp(prefix='diff-', dir=cache))
+        files = []
+        for label, source in zip(('before', 'after'), sources):
+            folder = snapshot/label
+            folder.mkdir()
+            dest = folder/source.name
+            shutil.copyfile(source, dest)
+            files.append(str(dest))
+        record = cache/'window.json'
+        window = None
+        if record.exists():
+            info = json.loads(record.read_text())
+            candidate = Path(info['socket'])
+            if candidate.is_socket() and candidate.stat().st_ino == info['inode']:
+                window = candidate
+        ipc = state/'tode/ipc'
+        before = set(ipc.glob('*.sock'))
+        env = os.environ.copy()
+        env.pop('TODE_IPC', None)
+        args = ['tode', '--diff', *files, '--timing']
+        if window:
+            env['TODE_IPC'] = str(window)
+        else:
+            args += ['--new-window', '--split', 'right']
+        started = time.monotonic()
+        # No wait needed: these copies outlive Git's temporary files.
+        subprocess.run(args, cwd=workspace, env=env, check=True)
+        if not window:
+            for _ in range(100):
+                candidates = set(ipc.glob('*.sock')) - before
+                if len(candidates) == 1:
+                    window = candidates.pop()
+                    record.write_text(json.dumps({'socket': str(window), 'inode': window.stat().st_ino}))
+                    break
+                time.sleep(0.1)
+            if not window:
+                raise SystemExit('Pane launched, but its socket was not uniquely identified; not retrying.')
+        subprocess.run(['tode', '--theme', str(root/'config/tode/night-owl.json')],
+                       cwd=workspace, env=env, check=True)
+        print(f'Review open acknowledged in {time.monotonic()-started:.2f}s; snapshots: {snapshot}', file=sys.stderr)
+
+
+if __name__ == '__main__':
+    main()

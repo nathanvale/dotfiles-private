@@ -9,7 +9,8 @@ font-size = 14
 font-family = "JetBrains Mono"
 font-thicken = false
 
-adjust-cell-width = -3%
+adjust-cell-width = 0
+adjust-cell-height = 8%
 adjust-underline-position = 40%
 adjust-underline-thickness = -60%
 
