@@ -21,6 +21,11 @@
 Repeat this section for meaningful steps. Suggested techniques may be adapted;
 completion criteria and authorized effects still govern the result.
 
+Use Agent Browser first for ordinary snapshots, observed controls, and observed
+in-page links. Record each step's preferred adapter, ordered fallbacks, success
+assertion, authority effect and scope, plus `observeBeforeReplay: true` and
+`noReplayIfUnknown: true`. See [hybrid recipe repairs](../references/hybrid-recipes.md).
+
 ### Step ID and intent
 
 - Starting conditions and dependencies:
@@ -43,3 +48,6 @@ For each script:
 
 - Tested scope and conditions that require fresh verification:
 - Independent handoff result and evidence:
+- Accepted candidate recipe/script hashes:
+- Post-acceptance metadata hashes and explicit metadata-only provenance:
+- Promoted destination paths and hashes:

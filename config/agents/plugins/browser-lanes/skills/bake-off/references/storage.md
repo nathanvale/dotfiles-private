@@ -61,3 +61,13 @@ vault; raw receipts and screenshots stay in private state.
 
 The plugin cache, skill source, vendor memory, and vault are not learned-state
 stores. Plugin upgrades must not overwrite user recipes.
+
+## Legacy and metadata changes
+
+Markdown-only and single-adapter recipes remain usable. Migrate a legacy record
+only with explicit complete step contracts that retain its ordered step IDs and
+adapter choices; write a new v2 candidate and leave the legacy recipe unchanged.
+An observed repair records its verified no-effect failure and exact fallback
+success in a new candidate revision. Record metadata-only provenance separately
+from accepted candidate and promoted-path hashes. Any execution change requires
+fresh independent acceptance.

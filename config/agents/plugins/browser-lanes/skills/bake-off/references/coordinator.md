@@ -54,6 +54,26 @@ resolved from this skill. Stop on a missing owner or unsupported syntax; do not
 guess a plugin-relative launcher or probe `--version` or another undocumented
 flag.
 
+## Token-efficient preparation
+
+- Run existing deterministic checks for hashes, versions, and required fields
+  first. Skip preparation agents when current evidence settles qualification.
+- For remaining evidence gaps, use one fresh Luna / Medium preparation agent
+  across the run, alongside the coordinator's brief preparation. Give it exact
+  files and relevant excerpts, not conversation history or site solutions.
+- Request at most 200 words: reuse decision, supporting evidence, missing
+  checks, and next safe action. Retain the result; refresh only changed evidence.
+- Escalate conflicting evidence or unclear adapter fit to Terra / High only
+  when Luna identifies that ambiguity. The coordinator owns the handoff; no
+  nested agents. Cap total preparation-agent work at two active minutes inside
+  the setup budget, including escalation. Return unresolved gaps at the cap.
+- Give preparation agents read-only evidence work, without browser authority.
+  The coordinator owns inputs, authority and acceptance; the browser worker
+  owns fresh baseline checks. Pass only qualification facts to contenders.
+- If the requested model is unavailable, report the gap without silently
+  substituting a more expensive model. Keep Sol for the named browser blocker
+  under the specialist policy below. Record exposed usage; do not infer savings.
+
 ## Worker routing and budget
 
 For a new run, use the plugin's `browser_bakeoff_worker` custom role, declared
@@ -81,13 +101,12 @@ and record it. If neither is available, return one concrete routing handoff.
 An explicit run requirement for verified runtime identity remains a release
 gate; retain its applicable exception. Continuing runs keep their agreed policy.
 
-Default to at most three learning attempts per adapter on one current app.
-Attempt one discovers a complete workflow; later attempts apply retained
-learning. Name one correction, optimization, or repeatability question before
-each later attempt. If no useful question remains, mark remaining maximum-count
-slots skipped with their reason. An explicit fixed count still runs those slots;
-use repeatability as the objective when no change is justified. Keep skipped,
-consumed, and successful attempts distinct.
+Give each relevant adapter one initial attempt to discover a complete candidate.
+Use a second or third only when no complete candidate exists or a named
+uncertainty remains. Name that question before release; otherwise skip the slot
+with its reason and reserve acceptance/reset time. An explicit fixed count runs
+its slots with repeatability as the objective. Keep skipped, consumed, and
+successful attempts distinct.
 
 Reuse scripts and concise cumulative learning instead of replaying exploration
 or passing entire transcripts. Reuse applicable setup qualification. Browser
@@ -109,10 +128,26 @@ worker verifies it within the same authority and remaining budget.
 
 For a new one-app run, default to 30 active minutes across setup, reasoning,
 browser calls, resets, synthesis, acceptance, and reporting. Allow at most five
-minutes for initial setup and five per learning attempt, including its handback.
-Reserve the last five run minutes for acceptance, reset, and delivery. Shorten
-or skip learning slots that cannot fit; maximum allocation is not a promise
-that every slot will run. Explain this budget with the initial allocation.
+minutes for initial setup; allocate five per learning attempt by default, including
+its handback.
+Reserve the last five run minutes for acceptance, reset, and delivery. Skip
+contenders that cannot fit a viable attempt; never recover a setup overrun by
+compressing every attempt. Keep five-minute attempt allocations, or a longer
+applicable proven duration. A broader task cannot justify a shorter cap.
+Explain reduced coverage; fixed contender counts require a budget handoff if
+they cannot fit. User-authorized shorter caps require the instruction reference.
+
+Before each dispatch and at closeout, update the report template's
+`browser-lanes-budget` record and run `report-closeout.mjs --file REPORT.md
+--require-budget` from this skill's scripts directory. Record allocations, not
+actual completion times. For dispatch, list only remaining attempt caps; at
+closeout, list all allocated caps. Setup overrun stops new dispatch and requires
+a budget handoff; keep the violation in the final report. Reduce contenders
+before exhausting setup or the acceptance reserve. Never change evidence to
+make validation pass. A rejected report still records the failed run honestly.
+Use prior duration only when authorized and applicable; blind contenders must
+not receive withheld runbook knowledge. With no authorized timing evidence,
+use the five-minute default.
 
 Record the start time, active time consumed, remaining budget, and any human
 handoff waiting separately. Check the remaining budget at each phase/attempt
@@ -143,6 +178,14 @@ start its timer at dispatch. It still follows fresh lane gates before browser
 actions. Only an explicit requirement for verified runtime identity needs a
 held preflight; resolve it once using supported own-worker metadata or its
 applicable exception. A task name is not a native agent UUID.
+
+Resolve an ambiguous input once during setup and record its interpretation.
+When task inputs, qualification, and baseline are ready, release the custom
+worker automatically.
+
+After each handback, inspect its application effect, uncertain effect, cleanup
+state, and exact next safe action. Repair or prove the baseline before releasing
+the next worker.
 
 Pass only the lead's routing fields and the applicable authorization into its
 brief, not raw agent/task-status responses containing other summaries. Apply
@@ -176,11 +219,19 @@ action.
 
 Patch the small mutable checkpoint and affected attempt/reset row. Keep stable
 brief and qualification facts once; reconcile stale delivery claims at closeout.
+Complete [post-run evaluation](post-run-evaluation.md) before final closeout,
+including on failure or Stop; after Stop this is report-only.
 
 Give progress only at meaningful transitions or blockers:
 
 > Phase: PHASE. App: APP. Active: ADAPTER attempt N, or none. Completed: X of Y.
 > Next: NEXT ACTION.
+
+Use concise phases: setup, adapter and attempt, application effect, baseline
+restored, acceptance, promotion, complete. If two active minutes pass without
+a checkpoint change, perform one bounded durable-state self-check. Do not poll.
+When browser work is complete, release workers and move directly to report-only
+closeout.
 
 Call qualification and baseline work setup. State "No scored attempts yet"
 until a contender is released. The dashboard reports lane calls; the report

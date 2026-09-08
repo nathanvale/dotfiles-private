@@ -7,10 +7,29 @@
 - Consumed/skipped allocation and next eligible pair:
 - Active time consumed/remaining; human wait:
 - Latest baseline/attempt evidence; any changed authority or qualification:
+- Setup interpretation for an ambiguous input, if resolved:
 - Known application effects and uncertain effects:
 - Lane custody, lease, and attended handoff evidence:
 - Adapter cleanup state:
 - Next permitted action:
+
+## Budget
+
+Update measured active seconds before each dispatch and closeout. Human waits
+are excluded. Attempt caps are allocations, not observed completion durations.
+Optional priorProvenSeconds uses only authorized timing evidence. Explicit
+user overrides use userAttemptCapSeconds or userSetupCapSeconds plus
+userBudgetEvidence. Run the closeout checker with --require-budget.
+
+```browser-lanes-budget
+{
+  "phase": "setup",
+  "setupSeconds": 0,
+  "remainingSeconds": 1800,
+  "reserveSeconds": 300,
+  "attemptCapsSeconds": [300, 300, 300, 300]
+}
+```
 
 ## Challenge
 
@@ -55,6 +74,8 @@ after qualification, each attempt or reset, and every stop or interruption.
 - One complete saved-draft verification per app, reported separately:
 - Cleanup and final baseline evidence:
 - Candidate or verified status for each recipe:
+- Accepted candidate hashes; post-acceptance metadata-only provenance/hashes;
+  promoted path hashes:
 
 ## Runbook comparison
 

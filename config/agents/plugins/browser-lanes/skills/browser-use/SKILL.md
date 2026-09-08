@@ -55,6 +55,6 @@ eligible choice before any action, or after outcome verification. Permission or
 custody failure stops. Do not replay an action with uncertain effects through a
 different engine.
 
-For a requested adapter comparison or recipe reuse, use
+For an adapter comparison, runbook selection/execution, or recipe repair, use
 [bake-off](../bake-off/SKILL.md). Its contender and evidence contract supplements
 these lane gates; it does not replace them.
