@@ -1,0 +1,11 @@
+# Personal defaults. This tracked source is inert until `toolchain update --apply`.
+[tools]
+node = "24.20.0"
+bun = "1.4.0"
+python = "3.11.9"
+
+[settings]
+idiomatic_version_file_enable_tools = ["node", "python"]
+lockfile = true
+not_found_auto_install = false
+not_found_system_fallback = false

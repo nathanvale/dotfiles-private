@@ -1,0 +1,1094 @@
+#!/usr/bin/env bash
+# Report the declared laptop toolchain baseline without changing machine state.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(CDPATH='' cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
+DOTFILES_ROOT="$(CDPATH='' cd "$SCRIPT_DIR/../.." && pwd -P)"
+MANIFEST="$DOTFILES_ROOT/config/toolchain/versions.tsv"
+MISE_CONFIG="$DOTFILES_ROOT/config/mise/source.toml"
+MISE_DATA_ROOT=''
+MISE_INSTALLS_ROOT=''
+MISE_SHIMS_ROOT=''
+APPLY_CONTRACT_VERSION='mise-revision-v1'
+RUN_ID="toolchain-$(date +%s)-$$-${RANDOM:-0}"
+SIDE_EFFECT='read'
+STATE=''
+REVISIONS=''
+LOCK=''
+LOCK_RECORDS=''
+LOCK_RECORD_PATH=''
+LOCK_RECORD_OWNED=false
+OWNER_TOKEN=''
+STAGING=''
+STAGING_OWNED=false
+PROCESS_CAPSULE=''
+PROCESS_CAPSULE_OWNED=false
+OWNERSHIP_TRANSITION=false
+LOCK_HELD=false
+CONTENT_ID=''
+CHILD_PID=''
+CHILD_PGID=''
+CHILD_STARTING=false
+PENDING_SIGNAL=''
+CHILD_GATE=''
+CHILD_GATE_OWNED=false
+TAKEOVER_CLAIM=''
+TAKEOVER_CLAIM_OWNED=false
+TAKEOVER_SERIALIZER=''
+TAKEOVER_SERIALIZER_HELD=false
+ADOPTED_STALE_RECORD=''
+ADOPTED_STALE_RECORD_OWNED=false
+TAKEOVER_DRAIN_REASON=''
+CURRENT_TMP=''
+CURRENT_TMP_OWNED=false
+
+usage() {
+	cat <<'EOF'
+Usage:
+  toolchain status [--json]
+  toolchain update --preview [--json]
+  toolchain update --apply [--retry] [--json]
+  toolchain recover --revision <content-id> [--json]
+
+Report or preview the declared Node, Bun, Python, Git, and npm baseline. Preview
+is read-only. Apply only publishes a verified Mise-managed revision; Git remains
+blocked and exact reconstruction remains unqualified.
+EOF
+}
+
+json_escape() (
+	local byte decimal octal
+	set -f
+	LC_ALL=C printf '%s' "$1" | od -v -An -tu1 | while IFS= read -r bytes; do
+		# `od` emits validated decimal fields. Bash 3.2 cannot safely expand an
+		# empty array under nounset, so split here with pathname expansion off.
+		# shellcheck disable=SC2086
+		set -- $bytes
+		for byte do
+			case "$byte" in
+				''|*[!0-9]*) return 1 ;;
+			esac
+			decimal=$((10#$byte))
+			(( decimal <= 255 )) || return 1
+			case "$decimal" in
+				34) printf '\\"' ;;
+				92) printf '%b' '\134\134' ;;
+				8) printf '\\b' ;;
+				9) printf '\\t' ;;
+				10) printf '\\n' ;;
+				12) printf '\\f' ;;
+				13) printf '\\r' ;;
+				0|1|2|3|4|5|6|7|11|14|15|16|17|18|19|20|21|22|23|24|25|26|27|28|29|30|31) printf '\\u%04x' "$decimal" ;;
+				*) octal="$(printf '%03o' "$decimal")"; printf '%b' "\\$octal" ;;
+			esac
+		done
+	done
+)
+
+emit_error() {
+	local code="$1" action="$2" retry_safe="$3" message="$4" exit_code="$5" status="$6"
+	if [[ "$JSON" == true ]]; then
+		printf '{"schema_version":1,"run_id":"%s","command":"%s","side_effect":"%s","status":"%s","retry_safe":%s,"error":{"code":"%s","action":"%s","retry_safe":%s,"message":"%s"}}\n' \
+			"$(json_escape "$RUN_ID")" "$OPERATION" "$SIDE_EFFECT" "$status" "$retry_safe" "$(json_escape "$code")" "$(json_escape "$action")" "$retry_safe" "$(json_escape "$message")"
+	fi
+	printf '%s\nNext action: %s\n' "$message" "$action" >&2
+	exit "$exit_code"
+}
+
+tool_version() {
+	local tool="$1" raw
+	case "$tool" in
+		node) raw="$(node --version 2>/dev/null)" || return 1; printf '%s\n' "${raw#v}" ;;
+		bun) bun --version 2>/dev/null ;;
+		python) raw="$(python --version 2>/dev/null)" || return 1; printf '%s\n' "${raw#Python }" ;;
+		git) raw="$(git --version 2>/dev/null)" || return 1; raw="${raw#git version }"; printf '%s\n' "${raw%% *}" ;;
+		npm) npm --version 2>/dev/null ;;
+		*) return 1 ;;
+	esac
+}
+
+mise_declaration_matches() {
+	local tool="$1" expected="$2" config="${3:-$MISE_CONFIG}" declared
+	case "$tool" in
+		node|bun|python)
+			[[ -r "$config" ]] || return 1
+			declared="$(awk -F '"' -v tool="$tool" '$1 ~ "^[[:space:]]*" tool "[[:space:]]*=" { print $2; exit }' "$config")"
+			[[ "$declared" == "$expected" ]]
+			;;
+		npm)
+			[[ -r "$config" && -n "$NODE_EXPECTED" ]] || return 1
+			! awk -F '"' '$1 ~ "^[[:space:]]*npm[[:space:]]*=" { found=1 } END { exit !found }' "$config" &&
+				mise_declaration_matches node "$NODE_EXPECTED" "$config"
+			;;
+		*) return 0 ;;
+	esac
+}
+
+observed_owner() {
+	local tool="$1" path="$2" mise_path routed_npm_path brew_prefix pyenv_path pyenv_root
+	[[ -n "$path" ]] || { printf 'unknown\n'; return; }
+	if [[ "$tool" == node || "$tool" == bun || "$tool" == python || "$tool" == npm ]]; then
+		if [[ "$tool" == npm ]]; then
+			if command -v mise >/dev/null 2>&1 && mise_path="$(MISE_DATA_DIR="$MISE_DATA_ROOT" MISE_INSTALLS_DIR="$MISE_INSTALLS_ROOT" MISE_SHIMS_DIR="$MISE_SHIMS_ROOT" mise which node 2>/dev/null)"; then
+				mise_path="${mise_path%/*}/npm"
+				routed_npm_path="$(MISE_DATA_DIR="$MISE_DATA_ROOT" MISE_INSTALLS_DIR="$MISE_INSTALLS_ROOT" MISE_SHIMS_DIR="$MISE_SHIMS_ROOT" mise which npm 2>/dev/null)" || routed_npm_path=''
+				[[ "$routed_npm_path" == "$mise_path" ]] || mise_path=''
+			else
+				mise_path=''
+			fi
+		elif command -v mise >/dev/null 2>&1; then
+			mise_path="$(MISE_DATA_DIR="$MISE_DATA_ROOT" MISE_INSTALLS_DIR="$MISE_INSTALLS_ROOT" MISE_SHIMS_DIR="$MISE_SHIMS_ROOT" mise which "$tool" 2>/dev/null)" || mise_path=''
+		fi
+		if [[ -n "$mise_path" ]]; then
+			[[ -n "$mise_path" && "$mise_path" == "$path" ]] && { printf 'mise\n'; return; }
+			[[ -n "$mise_path" && "$path" == "$MISE_SHIMS_ROOT/$tool" ]] && { printf 'mise\n'; return; }
+		fi
+		if [[ "$tool" == node || "$tool" == npm ]]; then
+			[[ "$path" == "$HOME/.local/share/fnm/"* || "$path" == "$HOME/.local/state/fnm_multishells/"* ]] && { printf 'fnm\n'; return; }
+		fi
+		if [[ "$tool" == python ]] && command -v pyenv >/dev/null 2>&1 && pyenv_path="$(pyenv which python 2>/dev/null)"; then
+			[[ -n "$pyenv_path" && "$pyenv_path" == "$path" ]] && { printf 'pyenv\n'; return; }
+			pyenv_root="${PYENV_ROOT:-$HOME/.pyenv}"
+			[[ "$path" == "$pyenv_root/shims/python" ]] && { printf 'pyenv\n'; return; }
+		fi
+	fi
+	if command -v brew >/dev/null 2>&1; then
+		if brew_prefix="$(brew --prefix 2>/dev/null)"; then
+			[[ -n "$brew_prefix" && "$path" == "$brew_prefix/bin/$tool" ]] && { printf 'homebrew\n'; return; }
+		fi
+	fi
+	[[ "$path" == "/usr/bin/$tool" ]] && { printf 'system\n'; return; }
+	printf 'unknown\n'
+}
+
+observe_npm_node_runtime() {
+	local effective_npm_path npm_path node_path npm_raw raw routed_npm_path
+	NPM_NODE_RUNTIME_STATUS='unobserved'
+	NPM_NODE_RUNTIME_VERSION=''
+	NPM_NODE_RUNTIME_NODE_PATH=''
+	NPM_NODE_RUNTIME_NPM_PATH=''
+	NPM_NODE_RUNTIME_NPM_VERSION=''
+	NPM_NODE_RUNTIME_ROUTED_NPM_PATH=''
+	NPM_NODE_RUNTIME_RELATIONSHIP='unobserved'
+	NPM_NODE_RUNTIME_MATCHES=false
+	command -v mise >/dev/null 2>&1 || return 1
+	node_path="$(MISE_DATA_DIR="$MISE_DATA_ROOT" MISE_INSTALLS_DIR="$MISE_INSTALLS_ROOT" MISE_SHIMS_DIR="$MISE_SHIMS_ROOT" mise which node 2>/dev/null)" || return 1
+	npm_path="${node_path%/*}/npm"
+	routed_npm_path="$(MISE_DATA_DIR="$MISE_DATA_ROOT" MISE_INSTALLS_DIR="$MISE_INSTALLS_ROOT" MISE_SHIMS_DIR="$MISE_SHIMS_ROOT" mise which npm 2>/dev/null)" || return 1
+	effective_npm_path="$(command -v npm 2>/dev/null)" || return 1
+	NPM_NODE_RUNTIME_NPM_PATH="$npm_path"
+	NPM_NODE_RUNTIME_NODE_PATH="$node_path"
+	NPM_NODE_RUNTIME_ROUTED_NPM_PATH="$routed_npm_path"
+	[[ -n "$npm_path" && -x "$npm_path" && -n "$node_path" && -x "$node_path" ]] || return 1
+	[[ "$routed_npm_path" == "$npm_path" ]] || return 1
+	[[ "$effective_npm_path" == "$npm_path" || "$effective_npm_path" == "$MISE_SHIMS_ROOT/npm" ]] || return 1
+	raw="$("$node_path" --version 2>/dev/null)" || return 1
+	NPM_NODE_RUNTIME_VERSION="${raw#v}"
+	[[ "$NPM_NODE_RUNTIME_VERSION" == "$NODE_EXPECTED" ]] || return 1
+	npm_raw="$("$npm_path" --version 2>/dev/null)" || return 1
+	NPM_NODE_RUNTIME_NPM_VERSION="$npm_raw"
+	[[ "$NPM_NODE_RUNTIME_NPM_VERSION" == "$NPM_EXPECTED" ]] || return 1
+	NPM_NODE_RUNTIME_STATUS='observed'
+	NPM_NODE_RUNTIME_RELATIONSHIP='same_mise_install_bin'
+	NPM_NODE_RUNTIME_MATCHES=true
+	return 0
+}
+
+preview_action() {
+	local tool="$1" version_ok="$2" declaration_ok="$3" selected_matches="$4" observed="$5"
+	if [[ "$tool" == git ]]; then printf 'blocked_exact_owner\n'
+	elif [[ "$declaration_ok" != true ]]; then printf 'repair_declaration\n'
+	elif [[ "$version_ok" == true && "$selected_matches" == true ]]; then printf 'no_change\n'
+	elif [[ "$observed" == unknown ]]; then printf 'install_or_select\n'
+	elif [[ "$selected_matches" != true ]]; then printf 'select_selected_owner\n'
+	else printf 'select_declared_version\n'; fi
+}
+
+emit_human() {
+	local overall="$1" qualification="$2" apply_availability
+	if [[ "$OPERATION" == update_preview ]]; then
+		if command -v mise >/dev/null 2>&1; then apply_availability='available'; else apply_availability='unavailable until Mise is installed'; fi
+		printf 'Toolchain update preview (read-only): %s\nApply availability: %s\n' "$overall" "$apply_availability"
+	else printf 'Toolchain baseline: %s\n' "$overall"; fi
+	printf 'Exact reconstruction qualification: %s\n' "$qualification"
+	printf '%-6s %-9s %-9s %-10s %-10s %-15s %s\n' 'TOOL' 'EXPECTED' 'EFFECTIVE' 'SELECTED' 'OBSERVED' 'QUALIFICATION' 'PATH'
+	for row in "${ROWS[@]}"; do
+		IFS='|' read -r tool expected selected observed selected_matches effective version_ok declaration_ok row_qualification path parent <<<"$row"
+		printf '%-6s %-9s %-9s %-10s %-10s %-15s %s\n' "$tool" "$expected" "$effective" "$selected" "$observed" "$row_qualification" "$path"
+		if [[ "$tool" == npm ]]; then
+				printf 'npm owning Node runtime: %s, Node %s, npm %s, node %s, npm path %s\n' \
+					"$NPM_NODE_RUNTIME_STATUS" "${NPM_NODE_RUNTIME_VERSION:-unknown}" \
+					"${NPM_NODE_RUNTIME_NPM_VERSION:-unknown}" "${NPM_NODE_RUNTIME_NODE_PATH:-unknown}" \
+					"${NPM_NODE_RUNTIME_NPM_PATH:-unknown}"
+		fi
+	done
+	[[ "$OPERATION" == update_preview ]] && printf 'Git exact owner: blocked and unresolved\n'
+	printf 'Next action: %s\n' "$NEXT_ACTION"
+}
+
+emit_json() {
+	local overall="$1" qualification="$2" separator='' action source_path
+	printf '{"schema_version":1,"run_id":"%s","command":"%s","side_effect":"%s","retry_safe":true,"status":"%s","exact_reconstruction":"%s"' \
+		"$(json_escape "$RUN_ID")" "$OPERATION" "$SIDE_EFFECT" "$overall" "$qualification"
+	if [[ "$OPERATION" == update_preview ]]; then
+		if command -v mise >/dev/null 2>&1; then apply_available=true; else apply_available=false; fi
+		printf ',"apply_available":%s,"planned_actions":[' "$apply_available"
+		for row in "${ROWS[@]}"; do
+			IFS='|' read -r tool expected selected observed selected_matches effective version_ok declaration_ok row_qualification path parent <<<"$row"
+			action="$(preview_action "$tool" "$version_ok" "$declaration_ok" "$selected_matches" "$observed")"
+			source_path="$MANIFEST"; [[ "$tool" == node || "$tool" == bun || "$tool" == python ]] && source_path="$MISE_CONFIG"
+			printf '%s{"tool":"%s","selected_owner":"%s","observed_owner":"%s","version":"%s","action":"%s","source_path":"%s"}' \
+				"$separator" "$(json_escape "$tool")" "$(json_escape "$selected")" "$(json_escape "$observed")" "$(json_escape "$expected")" "$(json_escape "$action")" "$(json_escape "$source_path")"
+			separator=','
+		done
+		printf ']'
+	fi
+	separator=''
+	printf ',"tools":['
+	for row in "${ROWS[@]}"; do
+		IFS='|' read -r tool expected selected observed selected_matches effective version_ok declaration_ok row_qualification path parent <<<"$row"
+		printf '%s{"name":"%s","expected_version":"%s","effective_version":"%s","selected_owner":"%s","observed_owner":"%s","selected_owner_matches":%s,"version_matches":%s,"declaration_matches":%s,"qualification":"%s","executable_path":"%s","parent_tool":"%s"' \
+			"$separator" "$(json_escape "$tool")" "$(json_escape "$expected")" "$(json_escape "$effective")" "$(json_escape "$selected")" "$(json_escape "$observed")" "$selected_matches" "$version_ok" "$declaration_ok" "$(json_escape "$row_qualification")" "$(json_escape "$path")" "$(json_escape "$parent")"
+		if [[ "$tool" == npm ]]; then
+				printf ',"declared_parent":{"tool":"node","declared_version":"%s","selected_owner":"%s"}' \
+					"$(json_escape "$NODE_EXPECTED")" "$(json_escape "$NODE_SELECTED")"
+				printf ',"owning_node_runtime":{"status":"%s","tool":"node","effective_version":"%s","executable_path":"%s","npm_effective_version":"%s","npm_executable_path":"%s","mise_routed_npm_path":"%s","relationship":"%s","matches_declared_parent":%s}' \
+					"$(json_escape "$NPM_NODE_RUNTIME_STATUS")" "$(json_escape "$NPM_NODE_RUNTIME_VERSION")" \
+					"$(json_escape "$NPM_NODE_RUNTIME_NODE_PATH")" "$(json_escape "$NPM_NODE_RUNTIME_NPM_VERSION")" "$(json_escape "$NPM_NODE_RUNTIME_NPM_PATH")" "$(json_escape "$NPM_NODE_RUNTIME_ROUTED_NPM_PATH")" \
+					"$(json_escape "$NPM_NODE_RUNTIME_RELATIONSHIP")" "$NPM_NODE_RUNTIME_MATCHES"
+		fi
+		printf '}'
+		separator=','
+	done
+	printf '],"next_action":"%s"}\n' "$(json_escape "$NEXT_ACTION")"
+}
+
+file_sha256() { shasum -a 256 "$1" | awk '{print $1}'; }
+regular_readable() { [[ -f "$1" && ! -L "$1" && -r "$1" ]]; }
+
+valid_content_id() { [[ "$1" =~ ^[0-9a-f]{64}$ ]]; }
+
+# Applied-revision protocol. These definitions intentionally sit together so
+# ownership, publication, verification, and recovery share one internal seam.
+state_init() {
+	local canonical_home requested_state
+	canonical_home="$(CDPATH='' cd "$HOME" && pwd -P)" || emit_error 'state_unavailable' 'repair_home_directory_access' false 'HOME could not be resolved' 73 'error'
+	requested_state="$canonical_home/.dotfiles_state/toolchain"
+	[[ ! -L "$canonical_home/.dotfiles_state" && ! -L "$requested_state" && ! -L "$requested_state/revisions" && ! -L "$requested_state/lock-records" ]] || emit_error 'state_unsafe' 'replace_toolchain_state_with_real_directories_under_home' false 'toolchain state may not traverse symbolic links' 73 'error'
+	mkdir -p "$requested_state/revisions" "$requested_state/lock-records" || emit_error 'state_unavailable' 'repair_toolchain_state_permissions' false 'toolchain state could not be created' 73 'error'
+	STATE="$(CDPATH='' cd "$requested_state" && pwd -P)" || emit_error 'state_unavailable' 'repair_toolchain_state_permissions' false 'toolchain state could not be resolved' 73 'error'
+	[[ "$STATE" == "$canonical_home/.dotfiles_state/toolchain" ]] || emit_error 'state_unsafe' 'replace_toolchain_state_with_real_directories_under_home' false 'toolchain state resolves outside HOME' 73 'error'
+	REVISIONS="$STATE/revisions"
+	LOCK_RECORDS="$STATE/lock-records"
+	LOCK="$STATE/run-lock"
+	TAKEOVER_SERIALIZER="$STATE/.takeover-serializer"
+	[[ -d "$REVISIONS" && ! -L "$REVISIONS" && -d "$LOCK_RECORDS" && ! -L "$LOCK_RECORDS" ]] || emit_error 'state_unsafe' 'replace_toolchain_state_with_real_directories' false 'toolchain state does not contain safe directories' 73 'error'
+	[[ ! -L "$TAKEOVER_SERIALIZER" && ( ! -e "$TAKEOVER_SERIALIZER" || -f "$TAKEOVER_SERIALIZER" ) ]] || emit_error 'state_unsafe' 'replace_the_toolchain_takeover_serializer_with_a_regular_file' false 'toolchain takeover serializer is unsafe' 73 'error'
+}
+
+remove_owned_tree() {
+	local path="$1" parent="$2" prefix="$3" base
+	[[ -n "$path" && "$(dirname "$path")" == "$parent" && ! -L "$path" ]] || return 1
+	base="$(basename "$path")"
+	[[ "$base" == "$prefix"* && "$base" != "$prefix" ]] || return 1
+	chmod -R u+w "$path" 2>/dev/null || true
+	rm -rf "$path"
+}
+
+release_lock() {
+	local token
+	[[ "$LOCK_HELD" == true ]] || return 0
+	lock_record "$LOCK" || { LOCK_HELD=false; return 1; }
+	token="$LOCK_RECORD_TOKEN"
+	[[ "$token" == "$OWNER_TOKEN" && "$LOCK" -ef "$LOCK_RECORD_PATH" ]] || { LOCK_HELD=false; return 1; }
+	rm "$LOCK" || { LOCK_HELD=false; return 1; }
+	LOCK_HELD=false
+	if [[ "$LOCK_RECORD_OWNED" == true ]]; then
+		rm -f "$LOCK_RECORD_PATH"
+		LOCK_RECORD_OWNED=false
+		LOCK_RECORD_PATH=''
+	fi
+}
+
+cleanup_owned() {
+	if [[ "$PROCESS_CAPSULE_OWNED" == true && -n "$PROCESS_CAPSULE" && -d "$PROCESS_CAPSULE" && ! -L "$PROCESS_CAPSULE" ]]; then
+		if remove_owned_tree "$PROCESS_CAPSULE" "$STATE" '.mise-operation-'; then
+			PROCESS_CAPSULE_OWNED=false
+			PROCESS_CAPSULE=''
+		fi
+	fi
+	if [[ "$STAGING_OWNED" == true && -n "$STAGING" && -d "$STAGING" && ! -L "$STAGING" ]]; then
+		if remove_owned_tree "$STAGING" "$REVISIONS" '.staging-'; then
+			STAGING_OWNED=false
+			STAGING=''
+		fi
+	fi
+	release_takeover_claim || true
+	release_takeover_serializer || true
+	release_lock || true
+	if [[ "$LOCK_RECORD_OWNED" == true && -n "$LOCK_RECORD_PATH" && "$(dirname "$LOCK_RECORD_PATH")" == "$LOCK_RECORDS" && ! -L "$LOCK_RECORD_PATH" ]]; then
+		rm -f "$LOCK_RECORD_PATH"
+		LOCK_RECORD_OWNED=false
+		LOCK_RECORD_PATH=''
+	fi
+	remove_adopted_stale_record || true
+	if [[ "$CHILD_GATE_OWNED" == true && -n "$CHILD_GATE" && "$(dirname "$CHILD_GATE")" == "$STATE" && "$(basename "$CHILD_GATE")" == .install-gate-* && ! -L "$CHILD_GATE" ]]; then
+		rm -f "$CHILD_GATE"
+		CHILD_GATE_OWNED=false
+		CHILD_GATE=''
+	fi
+	if [[ "$CURRENT_TMP_OWNED" == true && -n "$CURRENT_TMP" && -L "$CURRENT_TMP" && "$(dirname "$CURRENT_TMP")" == "$STATE" && "$(basename "$CURRENT_TMP")" == .current-* ]]; then
+		rm -f "$CURRENT_TMP"
+		CURRENT_TMP_OWNED=false
+		CURRENT_TMP=''
+	fi
+}
+
+begin_ownership_transition() {
+	OWNERSHIP_TRANSITION=true
+}
+
+finish_ownership_transition() {
+	local signal
+	OWNERSHIP_TRANSITION=false
+	signal="$PENDING_SIGNAL"
+	PENDING_SIGNAL=''
+	[[ -z "$signal" ]] || handle_signal "$signal"
+}
+
+create_process_capsule() {
+	local capsule_valid=false
+	PROCESS_CAPSULE_OWNED=false
+	PROCESS_CAPSULE="$STATE/.mise-operation-$OWNER_TOKEN"
+	[[ ! -e "$PROCESS_CAPSULE" && ! -L "$PROCESS_CAPSULE" ]] || emit_error 'capsule_conflict' 'inspect_toolchain_state_before_retrying' false 'owned Mise process capsule already exists' 73 'error'
+	begin_ownership_transition
+	if ! mkdir -m 0700 "$PROCESS_CAPSULE"; then
+		finish_ownership_transition
+		emit_error 'capsule_create_failed' 'repair_toolchain_state_permissions' false 'Mise process capsule could not be created' 73 'error'
+	fi
+	PROCESS_CAPSULE_OWNED=true
+	[[ -d "$PROCESS_CAPSULE" && ! -L "$PROCESS_CAPSULE" && "$(CDPATH='' cd "$PROCESS_CAPSULE" && pwd -P)" == "$PROCESS_CAPSULE" && "$(stat -f '%Lp' "$PROCESS_CAPSULE")" == 700 ]] && capsule_valid=true
+	finish_ownership_transition
+	[[ "$capsule_valid" == true ]] || emit_error 'capsule_unsafe' 'repair_toolchain_state_permissions' false 'Mise process capsule is not a private contained directory' 73 'error'
+}
+
+remove_process_capsule() {
+	[[ "$PROCESS_CAPSULE_OWNED" == true && -n "$PROCESS_CAPSULE" ]] || return 1
+	remove_owned_tree "$PROCESS_CAPSULE" "$STATE" '.mise-operation-' || return 1
+	PROCESS_CAPSULE_OWNED=false
+	PROCESS_CAPSULE=''
+}
+
+child_scope_live() {
+	if [[ -n "$CHILD_PGID" ]]; then kill -0 -- "-$CHILD_PGID" 2>/dev/null
+	elif [[ -n "$CHILD_PID" ]]; then kill -0 "$CHILD_PID" 2>/dev/null
+	else return 1
+	fi
+}
+
+handle_signal() {
+	local signal="$1" status
+	if [[ "$OWNERSHIP_TRANSITION" == true || "$CHILD_STARTING" == true ]]; then
+		PENDING_SIGNAL="$signal"
+		return 0
+	fi
+	case "$signal" in INT) status=130 ;; TERM) status=143 ;; *) status=1 ;; esac
+	trap - EXIT INT TERM
+	retire_child_scope "$signal"
+	cleanup_owned
+	exit "$status"
+}
+
+finish_child_starting() {
+	local signal
+	CHILD_STARTING=false
+	signal="$PENDING_SIGNAL"
+	PENDING_SIGNAL=''
+	[[ -z "$signal" ]] || handle_signal "$signal"
+}
+
+retire_child_scope() {
+	local signal="$1" attempt
+	if [[ -n "$CHILD_PGID" ]]; then kill -"$signal" -- "-$CHILD_PGID" 2>/dev/null || true
+	elif [[ -n "$CHILD_PID" ]]; then kill -"$signal" "$CHILD_PID" 2>/dev/null || true
+	fi
+	attempt=0
+	while child_scope_live && (( attempt < 20 )); do sleep 0.01; attempt=$((attempt + 1)); done
+	if child_scope_live; then
+		if [[ -n "$CHILD_PGID" ]]; then kill -TERM -- "-$CHILD_PGID" 2>/dev/null || true; else kill -TERM "$CHILD_PID" 2>/dev/null || true; fi
+	fi
+	attempt=0
+	while child_scope_live && (( attempt < 20 )); do sleep 0.01; attempt=$((attempt + 1)); done
+	if child_scope_live; then
+		if [[ -n "$CHILD_PGID" ]]; then kill -KILL -- "-$CHILD_PGID" 2>/dev/null || true; else kill -KILL "$CHILD_PID" 2>/dev/null || true; fi
+	fi
+	[[ -z "$CHILD_PID" ]] || wait "$CHILD_PID" 2>/dev/null || true
+	CHILD_PID=''; CHILD_PGID=''
+}
+
+install_staged_toolchain() {
+	local status observed_pgid gate gate_valid=false
+	PENDING_SIGNAL=''
+	CHILD_STARTING=true
+	gate="$STATE/.install-gate-$OWNER_TOKEN"
+	if [[ -e "$gate" || -L "$gate" ]]; then
+		finish_child_starting
+		return 70
+	fi
+	CHILD_GATE="$gate"
+	set -m
+	(
+		while [[ ! -f "$CHILD_GATE" ]]; do sleep 0.01; done
+		CDPATH='' cd "$PROCESS_CAPSULE" || exit 70
+		exec env -u MISE_NODE_VERSION -u MISE_BUN_VERSION -u MISE_PYTHON_VERSION -u MISE_NPM_VERSION -u MISE_CONFIG_FILE -u MISE_CONFIG_DIR -u MISE_DEFAULT_CONFIG_FILENAME MISE_DATA_DIR="$MISE_DATA_ROOT" MISE_INSTALLS_DIR="$MISE_INSTALLS_ROOT" MISE_SHIMS_DIR="$MISE_SHIMS_ROOT" MISE_GLOBAL_CONFIG_FILE="$STAGING/config.toml" MISE_CEILING_PATHS="$PROCESS_CAPSULE" mise install
+	) >&2 &
+	CHILD_PID=$!
+	CHILD_PGID="$CHILD_PID"
+	observed_pgid="$(ps -o pgid= -p "$CHILD_PID" 2>/dev/null | tr -d ' ')"
+	set +m
+	finish_child_starting
+	if [[ "$observed_pgid" != "$CHILD_PGID" ]]; then
+		retire_child_scope TERM
+		return 70
+	fi
+	begin_ownership_transition
+	if ! (set -o noclobber; : >"$CHILD_GATE") 2>/dev/null; then
+		finish_ownership_transition
+		retire_child_scope TERM
+		return 70
+	fi
+	CHILD_GATE_OWNED=true
+	gate_valid=false
+	[[ -f "$CHILD_GATE" && ! -L "$CHILD_GATE" && "$(dirname "$CHILD_GATE")" == "$STATE" ]] && gate_valid=true
+	finish_ownership_transition
+	[[ "$gate_valid" == true ]] || { retire_child_scope TERM; return 70; }
+	if wait "$CHILD_PID"; then status=0; else status=$?; fi
+	CHILD_PID=''; CHILD_PGID=''
+	rm -f "$CHILD_GATE"; CHILD_GATE_OWNED=false; CHILD_GATE=''
+	return "$status"
+}
+
+mise_with_config() {
+	local config="$1"
+	shift
+	(
+		CDPATH='' cd "$PROCESS_CAPSULE" || exit 70
+		exec env -u MISE_NODE_VERSION -u MISE_BUN_VERSION -u MISE_PYTHON_VERSION -u MISE_NPM_VERSION -u MISE_CONFIG_FILE -u MISE_CONFIG_DIR -u MISE_DEFAULT_CONFIG_FILENAME MISE_DATA_DIR="$MISE_DATA_ROOT" MISE_INSTALLS_DIR="$MISE_INSTALLS_ROOT" MISE_SHIMS_DIR="$MISE_SHIMS_ROOT" MISE_GLOBAL_CONFIG_FILE="$config" MISE_CEILING_PATHS="$PROCESS_CAPSULE" mise "$@"
+	)
+}
+
+lock_record() {
+	local record="$1" token pid staging operation
+	regular_readable "$record" || return 1
+	[[ "$(stat -f '%Lp' "$record")" == 444 ]] || return 1
+	[[ "$(wc -l <"$record" | tr -d ' ')" == 1 ]] || return 1
+	IFS='|' read -r token pid staging operation extra <"$record"
+	[[ -z "${extra:-}" ]] || return 1
+	[[ "$token" =~ ^[A-Za-z0-9-]+$ && "$pid" =~ ^[0-9]+$ && "$operation" =~ ^(apply|recover)$ ]] || return 1
+	[[ "$staging" == "$REVISIONS/.staging-$token" ]] || return 1
+	LOCK_RECORD_TOKEN="$token"
+	LOCK_RECORD_PID="$pid"
+	LOCK_RECORD_STAGING="$staging"
+}
+
+acquire_takeover_serializer() {
+	[[ "$TAKEOVER_SERIALIZER_HELD" == false && -n "$TAKEOVER_SERIALIZER" && ! -L "$TAKEOVER_SERIALIZER" ]] || return 1
+	if [[ ! -e "$TAKEOVER_SERIALIZER" ]]; then
+		(set -o noclobber; : >"$TAKEOVER_SERIALIZER") 2>/dev/null || true
+	fi
+	[[ -f "$TAKEOVER_SERIALIZER" && ! -L "$TAKEOVER_SERIALIZER" ]] || return 1
+	exec 9<>"$TAKEOVER_SERIALIZER" || return 1
+	if ! /usr/bin/lockf -s -t 0 9; then
+		exec 9>&-
+		return 1
+	fi
+	TAKEOVER_SERIALIZER_HELD=true
+}
+
+release_takeover_serializer() {
+	[[ "$TAKEOVER_SERIALIZER_HELD" == true ]] || return 0
+	exec 9>&-
+	TAKEOVER_SERIALIZER_HELD=false
+}
+
+remove_adopted_stale_record() {
+	[[ "$ADOPTED_STALE_RECORD_OWNED" == true ]] || return 0
+	[[ -n "$ADOPTED_STALE_RECORD" && "$(dirname "$ADOPTED_STALE_RECORD")" == "$LOCK_RECORDS" && -f "$ADOPTED_STALE_RECORD" && ! -L "$ADOPTED_STALE_RECORD" ]] || return 1
+	rm -f "$ADOPTED_STALE_RECORD" || return 1
+	ADOPTED_STALE_RECORD_OWNED=false
+	ADOPTED_STALE_RECORD=''
+}
+
+retire_stale_takeover_claim() {
+	local claim_token claim_pid claim_record
+	lock_record "$TAKEOVER_CLAIM" || return 1
+	claim_token="$LOCK_RECORD_TOKEN"
+	claim_pid="$LOCK_RECORD_PID"
+	claim_record="$LOCK_RECORDS/$claim_token"
+	if [[ -e "$claim_record" || -L "$claim_record" ]]; then
+		lock_record "$claim_record" || return 1
+		[[ "$LOCK_RECORD_TOKEN" == "$claim_token" && "$LOCK_RECORD_PID" == "$claim_pid" && "$TAKEOVER_CLAIM" -ef "$claim_record" ]] || return 1
+	fi
+	kill -0 "$claim_pid" 2>/dev/null && return 1
+	begin_ownership_transition
+	if [[ -e "$claim_record" || -L "$claim_record" ]]; then
+		if ! rm "$claim_record"; then finish_ownership_transition; return 1; fi
+	fi
+	if ! lock_record "$TAKEOVER_CLAIM" || [[ "$LOCK_RECORD_TOKEN" != "$claim_token" || "$LOCK_RECORD_PID" != "$claim_pid" ]] || kill -0 "$claim_pid" 2>/dev/null; then
+		finish_ownership_transition
+		return 1
+	fi
+	if ! rm "$TAKEOVER_CLAIM"; then
+		finish_ownership_transition
+		return 1
+	fi
+	finish_ownership_transition
+}
+
+publish_takeover_claim() {
+	local claim_valid=false
+	[[ ! -e "$TAKEOVER_CLAIM" && ! -L "$TAKEOVER_CLAIM" ]] || return 1
+	begin_ownership_transition
+	if ! ln "$LOCK_RECORD_PATH" "$TAKEOVER_CLAIM" 2>/dev/null; then
+		finish_ownership_transition
+		return 1
+	fi
+	if lock_record "$TAKEOVER_CLAIM" && [[ "$LOCK_RECORD_TOKEN" == "$OWNER_TOKEN" && "$TAKEOVER_CLAIM" -ef "$LOCK_RECORD_PATH" ]]; then claim_valid=true; fi
+	if [[ "$claim_valid" == true ]]; then TAKEOVER_CLAIM_OWNED=true; fi
+	finish_ownership_transition
+	[[ "$claim_valid" == true ]]
+}
+
+take_over_stale_lock() {
+	local stale_record stale_staging stale_capsule stale_gate stale_token stale_pid
+	lock_record "$LOCK" || return 1
+	kill -0 "$LOCK_RECORD_PID" 2>/dev/null && return 1
+	stale_token="$LOCK_RECORD_TOKEN"
+	stale_pid="$LOCK_RECORD_PID"
+	stale_record="$LOCK_RECORDS/$stale_token"
+	[[ -f "$stale_record" && ! -L "$stale_record" && "$LOCK" -ef "$stale_record" ]] || return 1
+	acquire_takeover_serializer || return 1
+	if ! lock_record "$LOCK" || [[ "$LOCK_RECORD_TOKEN" != "$stale_token" || "$LOCK_RECORD_PID" != "$stale_pid" || ! "$LOCK" -ef "$stale_record" ]] || kill -0 "$LOCK_RECORD_PID" 2>/dev/null; then
+		release_takeover_serializer
+		return 1
+	fi
+	TAKEOVER_CLAIM="$STATE/takeover-$stale_token"
+	TAKEOVER_CLAIM_OWNED=false
+	if [[ -e "$TAKEOVER_CLAIM" || -L "$TAKEOVER_CLAIM" ]]; then
+		if ! retire_stale_takeover_claim; then
+			release_takeover_serializer
+			return 1
+		fi
+	fi
+	if ! publish_takeover_claim; then
+		release_takeover_serializer
+		return 1
+	fi
+	lock_record "$LOCK" || return 1
+	[[ "$LOCK_RECORD_TOKEN" == "$stale_token" && "$LOCK_RECORD_PID" == "$stale_pid" && "$LOCK" -ef "$stale_record" ]] || return 1
+	kill -0 "$LOCK_RECORD_PID" 2>/dev/null && return 1
+	stale_staging="$LOCK_RECORD_STAGING"
+	if [[ -e "$stale_staging" || -L "$stale_staging" ]]; then
+		[[ -d "$stale_staging" && ! -L "$stale_staging" ]] || return 1
+		remove_owned_tree "$stale_staging" "$REVISIONS" '.staging-' || return 1
+	fi
+	stale_capsule="$STATE/.mise-operation-$stale_token"
+	if [[ -e "$stale_capsule" || -L "$stale_capsule" ]]; then
+		[[ -d "$stale_capsule" && ! -L "$stale_capsule" ]] || return 1
+		remove_owned_tree "$stale_capsule" "$STATE" '.mise-operation-' || return 1
+	fi
+	stale_gate="$STATE/.install-gate-$stale_token"
+	if [[ -e "$stale_gate" || -L "$stale_gate" ]]; then
+		[[ -f "$stale_gate" && ! -L "$stale_gate" ]] || return 1
+		rm "$stale_gate" || return 1
+	fi
+	lock_record "$LOCK" || return 1
+	[[ "$LOCK_RECORD_TOKEN" == "$stale_token" && "$LOCK_RECORD_PID" == "$stale_pid" && "$LOCK" -ef "$stale_record" ]] || return 1
+	begin_ownership_transition
+	if ! rm "$LOCK"; then
+		finish_ownership_transition
+		return 1
+	fi
+	ADOPTED_STALE_RECORD="$stale_record"
+	ADOPTED_STALE_RECORD_OWNED=true
+	finish_ownership_transition
+	remove_adopted_stale_record
+}
+
+release_takeover_claim() {
+	[[ "$TAKEOVER_CLAIM_OWNED" == true ]] || return 0
+	lock_record "$TAKEOVER_CLAIM" || return 1
+	[[ "$LOCK_RECORD_TOKEN" == "$OWNER_TOKEN" && "$TAKEOVER_CLAIM" -ef "$LOCK_RECORD_PATH" ]] || return 1
+	begin_ownership_transition
+	if ! rm "$TAKEOVER_CLAIM"; then
+		finish_ownership_transition
+		return 1
+	fi
+	TAKEOVER_CLAIM_OWNED=false
+	TAKEOVER_CLAIM=''
+	finish_ownership_transition
+}
+
+drain_orphaned_takeover_claims() {
+	local claim base stale_token claim_token claim_pid claim_record stale_record stale_pid index prior prior_index
+	local -a claims managed_claims claim_records claim_pids stale_records stale_pids
+	TAKEOVER_DRAIN_REASON=''
+	[[ ! -e "$LOCK" && ! -L "$LOCK" ]] || { TAKEOVER_DRAIN_REASON='canonical_present'; return 1; }
+	claims=("$STATE"/takeover-*)
+	if [[ "${claims[0]}" == "$STATE/takeover-*" && ! -e "${claims[0]}" && ! -L "${claims[0]}" ]]; then return 0; fi
+	(( ${#claims[@]} <= 16 )) || { TAKEOVER_DRAIN_REASON='claim_limit'; return 1; }
+	managed_claims=(); claim_records=(); claim_pids=(); stale_records=(); stale_pids=()
+	for claim in "${claims[@]}"; do
+		if [[ "$TAKEOVER_CLAIM_OWNED" == true && "$claim" == "$TAKEOVER_CLAIM" && -f "$claim" && ! -L "$claim" && "$claim" -ef "$LOCK_RECORD_PATH" ]]; then
+			continue
+		fi
+		base="$(basename "$claim")"
+		stale_token="${base#takeover-}"
+		[[ "$base" == "takeover-$stale_token" && "$stale_token" =~ ^[A-Za-z0-9-]+$ ]] || { TAKEOVER_DRAIN_REASON='claim_filename_invalid'; return 1; }
+		lock_record "$claim" || { TAKEOVER_DRAIN_REASON='claim_invalid'; return 1; }
+		claim_token="$LOCK_RECORD_TOKEN"
+		claim_pid="$LOCK_RECORD_PID"
+		claim_record="$LOCK_RECORDS/$claim_token"
+		if [[ -e "$claim_record" || -L "$claim_record" ]]; then
+			lock_record "$claim_record" || { TAKEOVER_DRAIN_REASON='claim_record_invalid'; return 1; }
+			[[ "$LOCK_RECORD_TOKEN" == "$claim_token" && "$LOCK_RECORD_PID" == "$claim_pid" && "$claim" -ef "$claim_record" ]] || { TAKEOVER_DRAIN_REASON='claim_identity_invalid'; return 1; }
+		fi
+		if kill -0 "$claim_pid" 2>/dev/null; then TAKEOVER_DRAIN_REASON='claim_live'; return 1; fi
+		for ((prior_index=0; prior_index<${#claim_records[@]}; prior_index++)); do
+			prior="${claim_records[$prior_index]}"
+			[[ "$prior" != "$claim_record" ]] || { TAKEOVER_DRAIN_REASON='claim_duplicate'; return 1; }
+		done
+		stale_record="$LOCK_RECORDS/$stale_token"
+		stale_pid=''
+		if [[ -e "$stale_record" || -L "$stale_record" ]]; then
+			lock_record "$stale_record" || { TAKEOVER_DRAIN_REASON='stale_record_invalid'; return 1; }
+			[[ "$LOCK_RECORD_TOKEN" == "$stale_token" && "$stale_record" != "$claim_record" ]] || { TAKEOVER_DRAIN_REASON='stale_record_identity_invalid'; return 1; }
+			stale_pid="$LOCK_RECORD_PID"
+			if kill -0 "$stale_pid" 2>/dev/null; then TAKEOVER_DRAIN_REASON='stale_record_live'; return 1; fi
+		fi
+		managed_claims+=("$claim")
+		claim_records+=("$claim_record")
+		claim_pids+=("$claim_pid")
+		stale_records+=("$stale_record")
+		stale_pids+=("$stale_pid")
+	done
+	[[ ! -e "$LOCK" && ! -L "$LOCK" ]] || { TAKEOVER_DRAIN_REASON='canonical_reappeared'; return 1; }
+	for ((index=0; index<${#managed_claims[@]}; index++)); do
+		claim="${managed_claims[$index]}"
+		claim_record="${claim_records[$index]}"
+		claim_pid="${claim_pids[$index]}"
+		lock_record "$claim" || { TAKEOVER_DRAIN_REASON='claim_changed'; return 1; }
+		[[ "$LOCK_RECORD_PID" == "$claim_pid" ]] || { TAKEOVER_DRAIN_REASON='claim_changed'; return 1; }
+		if [[ -e "$claim_record" || -L "$claim_record" ]]; then
+			lock_record "$claim_record" || { TAKEOVER_DRAIN_REASON='claim_record_changed'; return 1; }
+			[[ "$LOCK_RECORD_PID" == "$claim_pid" && "$claim" -ef "$claim_record" ]] || { TAKEOVER_DRAIN_REASON='claim_record_changed'; return 1; }
+		fi
+		kill -0 "$claim_pid" 2>/dev/null && { TAKEOVER_DRAIN_REASON='claim_became_live'; return 1; }
+		[[ ! -e "$LOCK" && ! -L "$LOCK" ]] || { TAKEOVER_DRAIN_REASON='canonical_reappeared'; return 1; }
+		begin_ownership_transition
+		if [[ -e "$claim_record" || -L "$claim_record" ]]; then
+			if ! rm "$claim_record"; then finish_ownership_transition; TAKEOVER_DRAIN_REASON='claim_record_remove_failed'; return 1; fi
+		fi
+		if ! lock_record "$claim" || [[ "$LOCK_RECORD_PID" != "$claim_pid" ]] || kill -0 "$claim_pid" 2>/dev/null; then
+			finish_ownership_transition
+			TAKEOVER_DRAIN_REASON='claim_changed_after_record_removal'
+			return 1
+		fi
+		if ! rm "$claim"; then finish_ownership_transition; TAKEOVER_DRAIN_REASON='claim_remove_failed'; return 1; fi
+		finish_ownership_transition
+		stale_record="${stale_records[$index]}"
+		stale_pid="${stale_pids[$index]}"
+		if [[ -e "$stale_record" || -L "$stale_record" ]]; then
+			lock_record "$stale_record" || { TAKEOVER_DRAIN_REASON='stale_record_changed'; return 1; }
+			[[ "$LOCK_RECORD_TOKEN" == "${claim##*/takeover-}" ]] || { TAKEOVER_DRAIN_REASON='stale_record_changed'; return 1; }
+			kill -0 "$stale_pid" 2>/dev/null && { TAKEOVER_DRAIN_REASON='stale_record_became_live'; return 1; }
+			ADOPTED_STALE_RECORD="$stale_record"
+			ADOPTED_STALE_RECORD_OWNED=true
+			remove_adopted_stale_record || { TAKEOVER_DRAIN_REASON='stale_record_remove_failed'; return 1; }
+		fi
+	done
+}
+
+publish_canonical_lock() {
+	[[ "$TAKEOVER_SERIALIZER_HELD" == true ]] || return 1
+	begin_ownership_transition
+	if ln "$LOCK_RECORD_PATH" "$LOCK" 2>/dev/null; then
+		LOCK_HELD=true
+		finish_ownership_transition
+		return 0
+	fi
+	finish_ownership_transition
+	return 1
+}
+
+acquire_lock() {
+	local operation="$1" lock_record_valid=false
+	OWNER_TOKEN="${RUN_ID#toolchain-}"
+	STAGING="$REVISIONS/.staging-$OWNER_TOKEN"
+	LOCK_RECORD_PATH="$LOCK_RECORDS/$OWNER_TOKEN"
+	LOCK_RECORD_OWNED=false
+	[[ "$OWNER_TOKEN" =~ ^[A-Za-z0-9-]+$ ]] || emit_error 'lock_identity_invalid' 'retry_the_toolchain_operation' true 'toolchain could not create a safe lock identity' 70 'error'
+	trap 'cleanup_owned' EXIT
+	trap 'handle_signal INT' INT
+	trap 'handle_signal TERM' TERM
+	[[ ! -e "$LOCK_RECORD_PATH" && ! -L "$LOCK_RECORD_PATH" ]] || emit_error 'lock_identity_conflict' 'inspect_toolchain_lock_records_and_retry' false 'toolchain lock record identity already exists' 73 'error'
+	acquire_takeover_serializer || emit_error 'apply_busy' 'wait_for_the_active_takeover_then_retry' true 'another toolchain operation owns takeover serialization' 75 'busy'
+	if [[ ! -e "$LOCK" && ! -L "$LOCK" ]] && ! drain_orphaned_takeover_claims; then
+		if [[ "$TAKEOVER_DRAIN_REASON" == claim_live || "$TAKEOVER_DRAIN_REASON" == claim_became_live || "$TAKEOVER_DRAIN_REASON" == stale_record_live || "$TAKEOVER_DRAIN_REASON" == stale_record_became_live ]]; then
+			emit_error 'apply_busy' 'wait_for_the_live_takeover_claimant_then_retry' true 'a live takeover claimant owns orphan recovery' 75 'busy'
+		fi
+		emit_error 'takeover_orphan_invalid' 'inspect_the_reported_toolchain_takeover_evidence_before_retrying' false "orphan takeover evidence could not be safely drained: $TAKEOVER_DRAIN_REASON" 73 'error'
+	fi
+	begin_ownership_transition
+	if ! (set -o noclobber; printf '%s|%s|%s|%s\n' "$OWNER_TOKEN" "$$" "$STAGING" "$operation" >"$LOCK_RECORD_PATH") 2>/dev/null; then
+		finish_ownership_transition
+		emit_error 'lock_write_failed' 'repair_toolchain_state_permissions' false 'toolchain could not record lock ownership' 73 'error'
+	fi
+	LOCK_RECORD_OWNED=true
+	lock_record_valid=false
+	chmod 0444 "$LOCK_RECORD_PATH" && regular_readable "$LOCK_RECORD_PATH" && lock_record_valid=true
+	finish_ownership_transition
+	[[ "$lock_record_valid" == true ]] || emit_error 'lock_write_failed' 'repair_toolchain_state_permissions' false 'toolchain lock ownership could not be sealed' 73 'error'
+	if publish_canonical_lock; then
+		release_takeover_serializer || emit_error 'lock_publish_failed' 'inspect_toolchain_state_before_retrying' false 'canonical publication serialization could not be released' 73 'error'
+	else
+		release_takeover_serializer || true
+		if [[ "$RETRY" == true ]] && take_over_stale_lock && publish_canonical_lock; then
+			release_takeover_claim || emit_error 'takeover_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'stale-lock takeover claim could not be released' 73 'error'
+			release_takeover_serializer || emit_error 'takeover_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'stale-lock takeover serialization could not be released' 73 'error'
+		elif [[ ! -e "$LOCK" && ! -L "$LOCK" ]]; then
+			emit_error 'lock_publish_failed' 'repair_toolchain_state_permissions_and_retry' true 'toolchain could not publish its complete lock record' 73 'error'
+		else
+			emit_error 'apply_busy' 'wait_for_the_active_operation_or_retry_a_valid_stale_apply' true 'another toolchain operation owns the revision lock' 75 'busy'
+		fi
+	fi
+}
+
+snapshot_sources() {
+	local staging_valid=false
+	STAGING_OWNED=false
+	[[ ! -e "$STAGING" && ! -L "$STAGING" ]] || emit_error 'staging_conflict' 'remove_only_the_reported_stale_staging_revision_then_retry' false 'owned staging path already exists' 73 'error'
+	begin_ownership_transition
+	if ! mkdir "$STAGING"; then
+		finish_ownership_transition
+		emit_error 'staging_create_failed' 'repair_toolchain_state_permissions' false 'toolchain staging could not be created' 73 'error'
+	fi
+	STAGING_OWNED=true
+	[[ -d "$STAGING" && ! -L "$STAGING" && "$(CDPATH='' cd "$STAGING" && pwd -P)" == "$STAGING" ]] && staging_valid=true
+	finish_ownership_transition
+	[[ "$staging_valid" == true ]] || emit_error 'staging_unsafe' 'repair_toolchain_state_permissions' false 'toolchain staging is not an owned contained directory' 73 'error'
+	regular_readable "$MANIFEST" || emit_error 'manifest_unreadable' 'restore_manifest' true "toolchain manifest is unreadable: $MANIFEST" 65 'error'
+	regular_readable "$MISE_CONFIG" || emit_error 'mise_source_unreadable' 'restore_mise_source' true "canonical Mise source is unreadable: $MISE_CONFIG" 65 'error'
+	cp "$MANIFEST" "$STAGING/manifest.tsv" || emit_error 'snapshot_failed' 'repair_source_read_permissions_and_retry' true 'toolchain manifest could not be snapshotted' 74 'error'
+	cp "$MISE_CONFIG" "$STAGING/config.toml" || emit_error 'snapshot_failed' 'repair_source_read_permissions_and_retry' true 'Mise source could not be snapshotted' 74 'error'
+	printf '%s\n' "$APPLY_CONTRACT_VERSION" >"$STAGING/contract.txt" || emit_error 'snapshot_failed' 'repair_toolchain_state_permissions' false 'application contract could not be snapshotted' 73 'error'
+}
+
+snapshot_is_valid() {
+	local manifest="$1" config="$2" tool expected selected qualification parent count declared
+	for tool in node bun python git npm; do
+		count="$(awk -F '|' -v tool="$tool" '$1 == tool { count++ } END { print count + 0 }' "$manifest")" || return 1
+		[[ "$count" == 1 ]] || return 1
+	done
+	while IFS='|' read -r tool expected selected qualification parent; do
+		[[ -z "$tool" || "$tool" == \#* ]] && continue
+		[[ -n "$expected" && -n "$selected" && -n "$qualification" && -n "$parent" && "$expected" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
+		case "$tool" in
+			node|bun|python) [[ "$selected" == mise && "$parent" == - ]] || return 1 ;;
+			npm) [[ "$selected" == mise && "$parent" == node ]] || return 1 ;;
+			git) [[ "$selected" == system && "$parent" == - ]] || return 1 ;;
+			*) return 1 ;;
+		esac
+		case "$qualification" in source_declared|unqualified) ;; *) return 1 ;; esac
+		case "$tool" in
+			node|bun|python)
+				declared="$(awk -F '"' -v tool="$tool" '$1 ~ "^[[:space:]]*" tool "[[:space:]]*=" { print $2; count++ } END { if (count != 1) exit 1 }' "$config")" || return 1
+				[[ "$declared" == "$expected" ]] || return 1
+				;;
+			npm)
+				! awk -F '"' '$1 ~ "^[[:space:]]*npm[[:space:]]*=" { found=1 } END { exit !found }' "$config" || return 1
+				;;
+		esac
+	done <"$manifest"
+}
+
+revision_content_id() {
+	local revision="$1" name digest
+	for name in contract.txt manifest.tsv config.toml mise.lock; do
+		digest="$(file_sha256 "$revision/$name")" || return 1
+		printf '%s_sha256=%s\n' "$name" "$digest"
+	done | shasum -a 256 | awk '{print $1}'
+}
+
+atomic_select() {
+	local current_tmp selection_valid=false
+	current_tmp="$STATE/.current-$OWNER_TOKEN"
+	CURRENT_TMP="$current_tmp"
+	CURRENT_TMP_OWNED=false
+	[[ ! -e "$current_tmp" && ! -L "$current_tmp" ]] || emit_error 'selection_conflict' 'inspect_toolchain_state_and_retry' false 'temporary selection path already exists' 73 'error'
+	[[ ! -e "$STATE/current" || -L "$STATE/current" ]] || emit_error 'selection_unsafe' 'replace_current_with_a_managed_symbolic_link' false 'toolchain current selection is not a symbolic link' 73 'error'
+	begin_ownership_transition
+	if ! ln -s "revisions/$CONTENT_ID" "$current_tmp"; then finish_ownership_transition; emit_error 'selection_failed' 'repair_toolchain_state_permissions' false 'toolchain selection link could not be created' 73 'error'; fi
+	CURRENT_TMP_OWNED=true
+	[[ -L "$current_tmp" && "$(readlink "$current_tmp")" == "revisions/$CONTENT_ID" ]] && selection_valid=true
+	finish_ownership_transition
+	[[ "$selection_valid" == true ]] || emit_error 'selection_failed' 'repair_toolchain_state_permissions' false 'toolchain selection link could not be validated' 73 'error'
+	begin_ownership_transition
+	if ! mv -f -h "$current_tmp" "$STATE/current"; then
+		finish_ownership_transition
+		rm -f "$current_tmp"; CURRENT_TMP_OWNED=false; CURRENT_TMP=''
+		emit_error 'selection_failed' 'repair_toolchain_state_permissions' false 'toolchain selection could not be replaced atomically' 73 'error'
+	fi
+	CURRENT_TMP_OWNED=false
+	CURRENT_TMP=''
+	finish_ownership_transition
+}
+
+revision_is_verified() {
+	local revision="$1" mode="${2:-published}" config lock receipt saved_manifest contract tool expected raw stored_id contract_hash manifest_hash config_hash lock_hash artifact node_path npm_path
+	config="$revision/config.toml"
+	lock="$revision/mise.lock"
+	receipt="$revision/receipt.json"
+	saved_manifest="$revision/manifest.tsv"
+	contract="$revision/contract.txt"
+	valid_content_id "$CONTENT_ID" && [[ -d "$revision" && ! -L "$revision" ]] || return 1
+	regular_readable "$config" && regular_readable "$lock" && [[ -s "$lock" ]] && regular_readable "$receipt" && regular_readable "$saved_manifest" && regular_readable "$contract" || return 1
+	if [[ "$mode" == published ]]; then
+		[[ "$(stat -f '%Lp' "$revision")" == 555 ]] || return 1
+		for artifact in "$config" "$lock" "$receipt" "$saved_manifest" "$contract"; do
+			[[ "$(stat -f '%Lp' "$artifact")" == 444 ]] || return 1
+		done
+	fi
+	[[ "$(cat "$contract")" == "$APPLY_CONTRACT_VERSION" ]] || return 1
+	stored_id="$(revision_content_id "$revision")"
+	[[ "$stored_id" == "$CONTENT_ID" ]] || return 1
+	snapshot_is_valid "$saved_manifest" "$config" || return 1
+	contract_hash="$(file_sha256 "$contract")"
+	manifest_hash="$(file_sha256 "$saved_manifest")"
+	config_hash="$(file_sha256 "$config")"
+	lock_hash="$(file_sha256 "$lock")"
+	[[ "$(wc -l <"$receipt" | tr -d ' ')" == 1 ]] || return 1
+	grep -Fqx "{\"schema_version\":\"1\",\"content_id\":\"$CONTENT_ID\",\"contract_sha256\":\"$contract_hash\",\"manifest_sha256\":\"$manifest_hash\",\"config_sha256\":\"$config_hash\",\"lock_sha256\":\"$lock_hash\",\"contract\":\"$APPLY_CONTRACT_VERSION\"}" "$receipt" || return 1
+	for tool in node bun python; do
+		expected="$(awk -F '"' -v tool="$tool" '$1 ~ "^[[:space:]]*" tool "[[:space:]]*=" { print $2; exit }' "$config")"
+		mise_with_config "$config" which "$tool" >/dev/null 2>&1 || return 1
+		case "$tool" in
+			node) raw="$(mise_with_config "$config" exec -- node --version 2>/dev/null)" || return 1; [[ "${raw#v}" == "$expected" ]] || return 1 ;;
+			bun) raw="$(mise_with_config "$config" exec -- bun --version 2>/dev/null)" || return 1; [[ "$raw" == "$expected" ]] || return 1 ;;
+			python) raw="$(mise_with_config "$config" exec -- python --version 2>/dev/null)" || return 1; [[ "${raw#Python }" == "$expected" ]] || return 1 ;;
+		esac
+	done
+	expected="$(awk -F '|' '$1 == "npm" { print $2; exit }' "$saved_manifest")"
+	node_path="$(mise_with_config "$config" which node 2>/dev/null)" || return 1
+	npm_path="${node_path%/*}/npm"
+	[[ -x "$npm_path" ]] || return 1
+	raw="$("$npm_path" --version 2>/dev/null)" || return 1
+	[[ "$raw" == "$expected" ]] || return 1
+}
+
+apply_revision() {
+	local contract_hash manifest_hash config_hash lock_hash destination
+	command -v mise >/dev/null 2>&1 || emit_error 'mise_unavailable' 'install_mise_through_the_declared_package_owner' true 'Mise is required to apply the managed subset' 69 'error'
+	SIDE_EFFECT='state_write'
+	state_init
+	acquire_lock apply
+	create_process_capsule
+	snapshot_sources
+	snapshot_is_valid "$STAGING/manifest.tsv" "$STAGING/config.toml" || emit_error 'snapshot_invalid' 'repair_the_manifest_and_mise_source_then_retry' true 'snapshotted toolchain declarations are inconsistent' 65 'error'
+	mise_with_config "$STAGING/config.toml" lock --global >&2 || emit_error 'mise_lock_failed' 'repair_mise_lock_inputs_and_retry' true 'Mise could not generate the staging lock' 70 'error'
+	regular_readable "$STAGING/mise.lock" && [[ -s "$STAGING/mise.lock" ]] || emit_error 'mise_lock_missing' 'repair_mise_lock_generation_and_retry' true 'Mise did not create a safe nonempty staging lock' 70 'error'
+	CONTENT_ID="$(revision_content_id "$STAGING")" || emit_error 'content_identity_invalid' 'repair_source_bytes' true 'unable to create a content identity' 65 'error'
+	valid_content_id "$CONTENT_ID" || emit_error 'content_identity_invalid' 'repair_source_bytes' true 'unable to create a valid content identity' 65 'error'
+	if [[ -L "$STATE/current" && "$(readlink "$STATE/current")" == "revisions/$CONTENT_ID" ]] && revision_is_verified "$REVISIONS/$CONTENT_ID"; then
+		remove_owned_tree "$STAGING" "$REVISIONS" '.staging-' || emit_error 'staging_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'no-change staging could not be cleaned' 73 'error'
+		STAGING_OWNED=false
+		STAGING=''
+		remove_process_capsule || emit_error 'capsule_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'no-change verification succeeded but process capsule cleanup failed' 73 'error'
+		release_lock || emit_error 'lock_release_failed' 'inspect_toolchain_state_before_retrying' false 'no-change verification succeeded but lock release failed' 73 'error'
+		trap - EXIT INT TERM
+		if [[ "$JSON" == true ]]; then printf '{"schema_version":1,"command":"update_apply","side_effect":"state_write","status":"no_change","content_id":"%s","exact_reconstruction":"not_qualified","git_exact_owner":"blocked"}\n' "$CONTENT_ID"; else printf 'Toolchain apply: no change. Git exact owner remains blocked; exact reconstruction remains not qualified.\n'; fi
+		return 0
+	fi
+	SIDE_EFFECT='state_write_and_tool_install'
+	install_staged_toolchain || emit_error 'mise_install_failed' 'repair_the_download_or_retry' true 'Mise could not install the managed toolchain' 70 'error'
+	contract_hash="$(file_sha256 "$STAGING/contract.txt")" || emit_error 'receipt_failed' 'repair_toolchain_state_permissions' false 'application contract digest could not be recorded' 73 'error'
+	manifest_hash="$(file_sha256 "$STAGING/manifest.tsv")" || emit_error 'receipt_failed' 'repair_toolchain_state_permissions' false 'toolchain manifest digest could not be recorded' 73 'error'
+	config_hash="$(file_sha256 "$STAGING/config.toml")" || emit_error 'receipt_failed' 'repair_toolchain_state_permissions' false 'Mise config digest could not be recorded' 73 'error'
+	lock_hash="$(file_sha256 "$STAGING/mise.lock")" || emit_error 'receipt_failed' 'repair_toolchain_state_permissions' false 'Mise lock digest could not be recorded' 73 'error'
+	printf '{"schema_version":"1","content_id":"%s","contract_sha256":"%s","manifest_sha256":"%s","config_sha256":"%s","lock_sha256":"%s","contract":"%s"}\n' "$CONTENT_ID" "$contract_hash" "$manifest_hash" "$config_hash" "$lock_hash" "$APPLY_CONTRACT_VERSION" >"$STAGING/receipt.json" || emit_error 'receipt_failed' 'repair_toolchain_state_permissions' false 'verification receipt could not be recorded' 73 'error'
+	revision_is_verified "$STAGING" staging || emit_error 'mise_verification_failed' 'repair_the_managed_runtime_and_retry' true 'Mise did not verify every exact managed version' 70 'error'
+	destination="$REVISIONS/$CONTENT_ID"
+	if [[ -e "$destination" || -L "$destination" ]]; then
+		if [[ ! -d "$destination" || -L "$destination" ]] || ! revision_is_verified "$destination"; then
+			emit_error 'revision_conflict' 'inspect_the_existing_revision_before_retrying' false 'an existing revision does not verify against its content identity' 73 'error'
+		fi
+		remove_owned_tree "$STAGING" "$REVISIONS" '.staging-' || emit_error 'staging_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'verified staging could not be cleaned before reuse' 73 'error'
+	else
+		chmod 0444 "$STAGING/config.toml" "$STAGING/manifest.tsv" "$STAGING/contract.txt" "$STAGING/mise.lock" "$STAGING/receipt.json" || emit_error 'revision_publish_failed' 'repair_toolchain_state_permissions' false 'revision artifacts could not be made read-only' 73 'error'
+		chmod 0555 "$STAGING" || emit_error 'revision_publish_failed' 'repair_toolchain_state_permissions' false 'revision directory could not be made read-only' 73 'error'
+		revision_is_verified "$STAGING" || emit_error 'revision_publish_failed' 'inspect_the_staged_revision_and_retry' false 'read-only revision did not verify before publication' 73 'error'
+		mv "$STAGING" "$destination" || emit_error 'revision_publish_failed' 'inspect_the_revision_store_and_retry' false 'verified revision could not be published' 73 'error'
+	fi
+	atomic_select
+	STAGING_OWNED=false
+	STAGING=''
+	remove_process_capsule || emit_error 'capsule_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'toolchain selection succeeded but process capsule cleanup failed' 73 'error'
+	release_lock || emit_error 'lock_release_failed' 'inspect_toolchain_state_before_retrying' false 'toolchain selection succeeded but lock release failed' 73 'error'
+	trap - EXIT INT TERM
+	if [[ "$JSON" == true ]]; then printf '{"schema_version":1,"command":"update_apply","side_effect":"state_write_and_tool_install","status":"applied","content_id":"%s","exact_reconstruction":"not_qualified","git_exact_owner":"blocked"}\n' "$CONTENT_ID"; else printf 'Toolchain apply: verified Mise revision %s selected. Git exact owner remains blocked; exact reconstruction remains not qualified.\n' "$CONTENT_ID"; fi
+}
+
+recover_revision() {
+	CONTENT_ID="$RECOVER_ID"
+	valid_content_id "$CONTENT_ID" || emit_error 'revision_invalid' 'use_a_lowercase_sha256_revision' true 'requested revision is not a valid content identity' 65 'error'
+	command -v mise >/dev/null 2>&1 || emit_error 'mise_unavailable' 'install_mise_through_the_declared_package_owner' true 'Mise is required to verify a recovery revision' 69 'error'
+	SIDE_EFFECT='state_write'
+	state_init
+	acquire_lock recover
+	create_process_capsule
+	[[ -d "$REVISIONS/$CONTENT_ID" && ! -L "$REVISIONS/$CONTENT_ID" ]] || emit_error 'revision_not_found' 'choose_an_existing_verified_revision' true 'requested revision does not exist' 65 'error'
+	revision_is_verified "$REVISIONS/$CONTENT_ID" || emit_error 'revision_unverified' 'choose_a_verified_revision_or_apply_again' true 'requested revision is incomplete or cannot verify exact managed tools' 65 'error'
+	atomic_select
+	STAGING_OWNED=false
+	STAGING=''
+	remove_process_capsule || emit_error 'capsule_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'recovery selection succeeded but process capsule cleanup failed' 73 'error'
+	release_lock || emit_error 'lock_release_failed' 'inspect_toolchain_state_before_retrying' false 'recovery selection succeeded but lock release failed' 73 'error'
+	trap - EXIT INT TERM
+	if [[ "$JSON" == true ]]; then printf '{"schema_version":1,"command":"recover","side_effect":"state_write","status":"recovered","content_id":"%s","exact_reconstruction":"not_qualified","git_exact_owner":"blocked"}\n' "$CONTENT_ID"; else printf 'Toolchain recovery selected verified revision %s. Git exact owner remains blocked; exact reconstruction remains not qualified.\n' "$CONTENT_ID"; fi
+}
+
+if [[ "${1:-}" == --help || "${1:-}" == -h ]]; then usage; exit 0; fi
+OPERATION=''
+JSON=false
+RETRY=false
+RECOVER_ID=''
+case "${1:-}" in
+	status) OPERATION='status'; shift; [[ "${1:-}" == --json ]] && { JSON=true; shift; } ;;
+	update)
+		shift
+		[[ "${1:-}" == --help || "${1:-}" == -h ]] && { usage; exit 0; }
+		case "${1:-}" in
+			--preview) OPERATION='update_preview'; shift ;;
+			--apply) OPERATION='update_apply'; shift ;;
+			*)
+				printf '%s\nNext action: run toolchain update --preview --json or toolchain update --apply --json.\n' 'toolchain update requires --preview or explicit --apply.' >&2
+				exit 78 ;;
+		esac
+		while [[ $# -gt 0 ]]; do
+			case "$1" in --retry) [[ "$OPERATION" == update_apply && "$RETRY" == false ]] || { usage >&2; exit 64; }; RETRY=true ;; --json) [[ "$JSON" == false ]] || { usage >&2; exit 64; }; JSON=true ;; *) [[ "$JSON" == true ]] && emit_error 'usage_invalid' 'show_usage' true 'unexpected arguments after JSON mode' 64 'usage_error'; usage >&2; exit 64 ;; esac
+			shift
+		done
+		;;
+	recover)
+		OPERATION='recover'; shift
+		[[ "${1:-}" == --revision ]] || { usage >&2; exit 64; }; RECOVER_ID="${2:-}"; [[ -n "$RECOVER_ID" ]] || { usage >&2; exit 64; }; shift 2
+		[[ "${1:-}" == --json ]] && { JSON=true; shift; }
+		[[ $# -eq 0 ]] || { [[ "$JSON" == true ]] && emit_error 'usage_invalid' 'show_usage' true 'unexpected arguments after JSON mode' 64 'usage_error'; usage >&2; exit 64; }
+		;;
+	*) usage >&2; exit 64 ;;
+esac
+if [[ $# -ne 0 ]]; then
+	if [[ "$JSON" == true ]]; then
+		emit_error 'usage_invalid' 'show_usage' true 'unexpected arguments after JSON mode' 64 'usage_error'
+	fi
+	usage >&2
+	exit 64
+fi
+canonical_home="$(CDPATH='' cd "$HOME" 2>/dev/null && pwd -P)" || emit_error 'home_unavailable' 'repair_home_directory_access' false 'HOME could not be resolved for Mise data ownership' 73 'error'
+MISE_DATA_ROOT="$canonical_home/.local/share/mise"
+MISE_INSTALLS_ROOT="$MISE_DATA_ROOT/installs"
+MISE_SHIMS_ROOT="$MISE_DATA_ROOT/shims"
+unset canonical_home
+[[ -r "$MANIFEST" ]] || emit_error 'manifest_unreadable' 'restore_manifest' true "toolchain manifest is unreadable: $MANIFEST" 65 'error'
+
+ROWS=()
+overall='ready'
+qualification='qualified'
+NEXT_ACTION='Run the full installation verifier for broader machine health.'
+node_seen=false
+bun_seen=false
+git_seen=false
+python_seen=false
+npm_seen=false
+NODE_EXPECTED=''
+NODE_SELECTED=''
+NPM_EXPECTED=''
+NPM_NODE_RUNTIME_STATUS='unobserved'
+NPM_NODE_RUNTIME_VERSION=''
+NPM_NODE_RUNTIME_NODE_PATH=''
+NPM_NODE_RUNTIME_NPM_PATH=''
+NPM_NODE_RUNTIME_NPM_VERSION=''
+NPM_NODE_RUNTIME_ROUTED_NPM_PATH=''
+NPM_NODE_RUNTIME_RELATIONSHIP='unobserved'
+NPM_NODE_RUNTIME_MATCHES=false
+MANIFEST_ROWS=()
+while IFS= read -r manifest_line || [[ -n "$manifest_line" ]]; do
+	[[ -z "$manifest_line" || "$manifest_line" == \#* ]] && continue
+	manifest_remainder="$manifest_line"
+	manifest_separator_count=0
+	while [[ "$manifest_remainder" == *'|'* ]]; do
+		manifest_remainder="${manifest_remainder#*|}"
+		manifest_separator_count=$((manifest_separator_count + 1))
+	done
+	[[ "$manifest_separator_count" -eq 4 ]] || emit_error 'manifest_invalid' 'repair_manifest' true 'toolchain manifest rows must contain exactly five fields' 65 'error'
+	IFS='|' read -r tool expected selected row_qualification parent <<<"$manifest_line"
+	[[ -n "$tool" && -n "$expected" && -n "$selected" && -n "$row_qualification" && -n "$parent" ]] || emit_error 'manifest_invalid' 'repair_manifest' true "invalid toolchain manifest row for $tool" 65 'error'
+	case "$tool" in
+		node) [[ "$node_seen" == false ]] || emit_error 'manifest_duplicate_tool' 'repair_manifest' true 'duplicate toolchain manifest row for node' 65 'error'; node_seen=true; [[ "$selected" == mise && "$parent" == - ]] || emit_error 'manifest_invalid' 'repair_manifest' true 'node must be Mise-owned and have no parent tool' 65 'error' ;;
+		bun) [[ "$bun_seen" == false ]] || emit_error 'manifest_duplicate_tool' 'repair_manifest' true 'duplicate toolchain manifest row for bun' 65 'error'; bun_seen=true; [[ "$selected" == mise && "$parent" == - ]] || emit_error 'manifest_invalid' 'repair_manifest' true 'bun must be Mise-owned and have no parent tool' 65 'error' ;;
+		python) [[ "$python_seen" == false ]] || emit_error 'manifest_duplicate_tool' 'repair_manifest' true 'duplicate toolchain manifest row for python' 65 'error'; python_seen=true; [[ "$selected" == mise && "$parent" == - ]] || emit_error 'manifest_invalid' 'repair_manifest' true 'python must be Mise-owned and have no parent tool' 65 'error' ;;
+		git) [[ "$git_seen" == false ]] || emit_error 'manifest_duplicate_tool' 'repair_manifest' true 'duplicate toolchain manifest row for git' 65 'error'; git_seen=true; [[ "$selected" == system && "$parent" == - ]] || emit_error 'manifest_invalid' 'repair_manifest' true 'git must use its unresolved system owner and have no parent tool' 65 'error' ;;
+		npm) [[ "$npm_seen" == false ]] || emit_error 'manifest_duplicate_tool' 'repair_manifest' true 'duplicate toolchain manifest row for npm' 65 'error'; npm_seen=true; [[ "$selected" == mise && "$parent" == node ]] || emit_error 'manifest_invalid' 'repair_manifest' true 'npm must be Mise-owned beneath node' 65 'error' ;;
+		*) emit_error 'manifest_unknown_tool' 'repair_manifest' true "unknown toolchain manifest tool: $tool" 65 'error' ;;
+	esac
+	case "$selected" in mise|fnm|homebrew|system) ;; *) emit_error 'manifest_invalid' 'repair_manifest' true "invalid selected owner for $tool: $selected" 65 'error' ;; esac
+	[[ "$expected" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || emit_error 'manifest_invalid' 'repair_manifest' true "toolchain manifest version for $tool must use exact three-part numeric syntax" 65 'error'
+	case "$row_qualification" in source_declared|unqualified) ;; qualified) emit_error 'manifest_invalid' 'repair_manifest' true "qualified toolchain manifest rows need an external qualification receipt; this source-only command accepts source_declared or unqualified" 65 'error' ;; *) emit_error 'manifest_invalid' 'repair_manifest' true "invalid qualification for $tool: $row_qualification" 65 'error' ;; esac
+	MANIFEST_ROWS+=("$tool|$expected|$selected|$row_qualification|$parent")
+done <"$MANIFEST"
+
+[[ "$node_seen" == true ]] || emit_error 'manifest_incomplete' 'repair_manifest' true 'toolchain manifest is missing node' 65 'error'
+[[ "$bun_seen" == true ]] || emit_error 'manifest_incomplete' 'repair_manifest' true 'toolchain manifest is missing bun' 65 'error'
+[[ "$python_seen" == true ]] || emit_error 'manifest_incomplete' 'repair_manifest' true 'toolchain manifest is missing python' 65 'error'
+[[ "$git_seen" == true ]] || emit_error 'manifest_incomplete' 'repair_manifest' true 'toolchain manifest is missing git' 65 'error'
+[[ "$npm_seen" == true ]] || emit_error 'manifest_incomplete' 'repair_manifest' true 'toolchain manifest is missing npm' 65 'error'
+
+case "$OPERATION" in
+	update_apply) apply_revision; exit $? ;;
+	recover) recover_revision; exit $? ;;
+esac
+
+for manifest_row in "${MANIFEST_ROWS[@]}"; do
+	IFS='|' read -r tool expected selected row_qualification parent <<<"$manifest_row"
+	path="$(command -v "$tool" 2>/dev/null || true)"
+	effective='missing'; [[ -n "$path" ]] && effective="$(tool_version "$tool" || printf 'unreadable')"
+	version_ok=false; [[ "$effective" == "$expected" ]] && version_ok=true
+	observed="$(observed_owner "$tool" "$path")"
+	selected_matches=false; [[ "$observed" == "$selected" ]] && selected_matches=true
+	declaration_ok=true; mise_declaration_matches "$tool" "$expected" || declaration_ok=false
+	[[ "$version_ok" == true && "$selected_matches" == true && "$declaration_ok" == true ]] || overall='not_ready'
+	[[ "$row_qualification" == qualified ]] || qualification='not_qualified'
+	if [[ "$tool" == node ]]; then
+		NODE_EXPECTED="$expected"
+		NODE_SELECTED="$selected"
+	elif [[ "$tool" == npm ]]; then
+		NPM_EXPECTED="$expected"
+	fi
+	ROWS+=("$tool|$expected|$selected|$observed|$selected_matches|$effective|$version_ok|$declaration_ok|$row_qualification|$path|$parent")
+done
+
+if ! observe_npm_node_runtime; then
+	overall='not_ready'
+	NEXT_ACTION='Repair npm and Node so Mise resolves both from one observed installation, then rerun this read-only command.'
+fi
+
+if [[ "$overall" != ready && "$NPM_NODE_RUNTIME_STATUS" == observed ]]; then NEXT_ACTION='Use the preview actions to repair the declared runtime selection, then rerun this read-only command.'
+elif [[ "$overall" == ready && "$qualification" != qualified ]]; then NEXT_ACTION='Qualify the declared toolchain on a clean no-cache machine before treating it as exact reconstruction.'; fi
+if [[ "$JSON" == true ]]; then
+	emit_json "$overall" "$qualification"
+else
+	emit_human "$overall" "$qualification"
+fi
+[[ "$overall" == ready ]] || exit 1
+[[ "$qualification" == qualified ]] || exit 2
