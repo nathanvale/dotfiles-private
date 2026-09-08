@@ -3,13 +3,11 @@
     "k1low/tap",
     "ognistik/formulae",
     "openclaw/tap",
-    "oven-sh/bun",
     "steipete/tap"
   ],
   "trustedformulae": [
     "anomalyco/tap/opencode",
     "openclaw/tap/gogcli",
-    "oven-sh/bun/bun",
     "steipete/tap/codexbar",
     "steipete/tap/imsg",
     "steipete/tap/mcporter",

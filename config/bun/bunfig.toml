@@ -1,0 +1,4 @@
+# Shared package-manager policy. Projects may override this locally, and CLI
+# flags take precedence over both global and local configuration.
+[install]
+auto = "disable"
