@@ -1,12 +1,10 @@
 #!/usr/bin/env bash
-# Ensure the script is being run from the correct directory
-set -e  # Exit on error
+set -e
 
-cd "$(dirname "$0")"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-# Source the colour_log.sh script
-source "./colour_log.sh"
+source "$SCRIPT_DIR/../../colour_log.sh"
 
-"log $INFO ""Attempting to add nerd fonts..."
+log "$INFO" "Adding JetBrains Mono fonts."
 
-./nerd_fonts_manage.sh --add
+"$SCRIPT_DIR/nerd_fonts_manage.sh" --add

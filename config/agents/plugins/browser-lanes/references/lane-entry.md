@@ -15,16 +15,21 @@ CLI's recovery text; do not interpret ordinary contention as a sharing failure.
 1. Run `browser-lane list --json`; select the declared lane and matching
    account role. Derive lane metadata from the machine guide and CLI, not this
    reference. Keep Xero serial with other daily-driver work.
-2. Run `browser-lane health --lane NAME --json`. Stop on every route or baseline
-   failure. A fresh authenticated access status is required. Unavailable, All
-   tabs, disabled, or transitioning status stops the route.
-   `effective_policy_check_unavailable` remains a gap, not a pass. Health does
-   not prove task-page access.
+2. Run `browser-lane health --lane NAME --json`. Continue to exact-page
+   inspection when the command exits zero with `status: ok`, `route: pass`, and
+   `baseline: pass` or `baseline: warning`; retain every warning in the
+   evidence. `effective_policy_check_unavailable` is a non-blocking proof gap
+   on provisioned lanes. It does not prove effective policy or task-page
+   access. Stop when health exits nonzero, route is not `pass`, or baseline is
+   `fail`. Unavailable, All tabs, disabled, or transitioning access stops the
+   route.
 3. Run `browser-lane inspect --lane NAME --account-role ROLE --page-url URL
    --json` before an adapter action. Proceed only when exact-target
-   `readiness` is `ready`. Exit 16 identifies an absent, mismatched, unselected,
-   or ambiguous target; use its reported counts and readiness. A zero-match
-   result with visible pages proves only that the requested URL did not match.
+   `readiness` is `ready`. Any nonzero inspect result stops adapter work,
+   including `page_list_unreadable`. Exit 16 can also identify an absent,
+   mismatched, unselected, or ambiguous target; use its reported counts and
+   readiness. A zero-match result with visible pages proves only that the
+   requested URL did not match.
    Resolve the intended tab through [Navigation recovery](#navigation-recovery);
    never guess URL variants or automate a different admitted page. With no
    visible task tab, follow the admission handoff below. Missing role or URL

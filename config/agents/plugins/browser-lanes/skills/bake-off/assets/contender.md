@@ -51,6 +51,8 @@ The coordinator owns replacement and attempt accounting.
 
 ## Return
 
+Every handback includes these fields, even when the outcome is blocked.
+
 - Outcome and independently observed assertions:
 - Elapsed/active time, script time, human waiting, worker usage:
 - New routing evidence or changes from the run's declared policy, if any:
@@ -58,3 +60,4 @@ The coordinator owns replacement and attempt accounting.
 - Script/recipe files and hashes:
 - Changes from the preceding attempt and next optimization:
 - Failure cause, uncertain effects, or required handoff:
+- Application effect, uncertain effect, cleanup state, and exact next safe action:

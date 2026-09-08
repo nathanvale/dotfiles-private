@@ -61,7 +61,7 @@
                 <key>settings</key>
                 <dict>
                     <key>foreground</key>
-                    <string>#AB69C6</string>
+                    <string>#82AAFF</string>
                 </dict>
             </dict>
             <dict>
@@ -126,7 +126,7 @@
                 <key>settings</key>
                 <dict>
                     <key>foreground</key>
-                    <string>#CBE386</string> <!-- Light green for attribute names -->
+                    <string>#C5E478</string> <!-- Night Owl attribute colour -->
                 </dict>
             </dict>
             <dict>
@@ -144,7 +144,7 @@
                 <key>settings</key>
                 <dict>
                     <key>foreground</key>
-                    <string>#E99273</string> <!-- Light yellow for tags -->
+                    <string>#7FDBCA</string> <!-- Night Owl tag colour -->
                 </dict>
             </dict>
             <dict>
@@ -171,7 +171,7 @@
                 <key>settings</key>
                 <dict>
                     <key>foreground</key>
-                    <string>#FF5F5F</string> <!-- Red for CSS property names inside JSX -->
+                    <string>#80CBC4</string> <!-- Night Owl property colour -->
                 </dict>
             </dict>
 

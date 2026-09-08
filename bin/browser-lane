@@ -171,7 +171,7 @@ Usage:
   browser-lane health --lane NAME [--json]
   browser-lane inspect --lane NAME --account-role ROLE [--run-id ID] [--ttl SECONDS] [--page-url URL] [--json]
   browser-lane run --lane NAME --account-role ROLE --run-id ID [--ttl SECONDS] [--page-url URL] -- mcporter call chrome-devtools.TOOL ...
-  browser-lane agent-browser --lane NAME --account-role ROLE --run-id ID [--ttl SECONDS] --page-url URL -- "COMMAND" ...
+  browser-lane agent-browser --lane NAME --account-role ROLE --run-id ID [--ttl SECONDS] --page-url URL [--next-page-url URL] -- "COMMAND"
   browser-lane playwright --lane NAME --account-role ROLE --run-id ID [--ttl SECONDS] --page-url URL --plan FILE
   browser-lane puppeteer --lane NAME --account-role ROLE --run-id ID [--ttl SECONDS] --page-url URL --plan FILE
   browser-lane handoff open --lane NAME --account-role ROLE --run-id ID --task-ref REF --nonce-output PATH [--page-url URL] [--window SECONDS] [--json]
@@ -233,6 +233,12 @@ Open contract:
     visible profile before retrying.
 
 Run contract:
+  - Agent Browser --next-page-url declares an observed, distinct same-origin
+    destination for exactly one action. Success requires the same stable tab
+    target ID and exact destination in a fresh pinned inventory, then retirement.
+    It reports navigation completion, not application Save success. Inspect the
+    destination and verify application state before continuing. Failed actions
+    and unreadable or replaced targets stop without replay.
   - The registry is fixed at $XDG_STATE_HOME/browser-lanes/registry.json.
   - The account role must match the selected lane's declared role.
   - Only `mcporter call chrome-devtools.*` is accepted.
@@ -560,7 +566,7 @@ live_access_status() {
   chmod 600 "$output_file"
   access_status_observed='unknown'
   access_status_state='unavailable'
-  if "$mcporter_bin" chrome-relay status --relay-url "http://127.0.0.1:$port" --timeout 5000 >"$output_file" 2>&1 &&
+  if env -u FORCE_COLOR -u NO_COLOR "$mcporter_bin" chrome-relay status --relay-url "http://127.0.0.1:$port" --timeout 5000 >"$output_file" 2>/dev/null &&
     status="$(jq -ce -s '
       if length == 1 and
         (.[0] | type == "object" and keys == ["accessStatus","command","error","ok","runId","schemaVersion"] and
@@ -676,7 +682,7 @@ read_admitted_pages() {
   MCPORTER_NO_KEEPALIVE='*' \
     MCPORTER_CHROME_DEVTOOLS_RELAY_POLICY='require' \
     MCPORTER_CHROME_DEVTOOLS_RELAY_URL="http://127.0.0.1:$port" \
-    "$mcporter_bin" call chrome-devtools.list_pages --args '{}' --output json >"$output_file" 2>&1 &
+    "$mcporter_bin" call chrome-devtools.list_pages --args '{}' --output json >"$output_file" 2>/dev/null &
   page_list_child_pid=$!
   page_list_child_pgid="$page_list_child_pid"
   set +m
@@ -694,7 +700,9 @@ read_admitted_pages() {
   fi
   # chrome-devtools-mcp reports pages as Markdown text inside the MCP content
   # envelope, one page per line: "IDX: TITLE (URL)" with a trailing
-  # " [selected]" on the relay's default selected page. Titles are
+  # " [selected]" on the relay's default selected page. An unavailable title
+  # produces "IDX: URL" instead. Only a complete whitespace-free URI is
+  # accepted in that form. Titles are
   # attacker-controlled and may contain parentheses, brackets, URL-like text,
   # and shell metacharacters, so every field is taken from a fixed terminal
   # position rather than a greedy pattern: the selected marker is an exact
@@ -715,7 +723,9 @@ read_admitted_pages() {
       | (.[($colon + 2):] | split_selected) as $split
       | $split.body as $body
       | ($body | rindex(" (")) as $open
-      | if $open == null or (($body | endswith(")")) | not)
+      | if $open == null and ($body | test("^[A-Za-z][A-Za-z0-9+.-]*:[^[:space:]]+$"))
+        then {id: $id, url: $body, selected: $split.selected}
+        elif $open == null or (($body | endswith(")")) | not)
         then error("unparseable_page_line")
         else {
           id: $id,
@@ -872,8 +882,8 @@ cleanup_agent_browser_temp_dir() {
 # already-admitted page. The runner stays within one authenticated MCPorter
 # handoff, keeping the endpoint private through bind, guard, work, and retirement.
 run_agent_browser_staged() {
-  local relay_url="$1" session_name="$2" page_url_hash="$3"
-  shift 3
+  local relay_url="$1" session_name="$2" page_url_hash="$3" next_page_url_hash="$4"
+  shift 4
   local runner outcome_file child_status phase outcome_status
   agent_cleanup_temp_dir="$(mktemp -d "$state_root/agent-cleanup.XXXXXX")"
   chmod 700 "$agent_cleanup_temp_dir"
@@ -885,6 +895,9 @@ set -u
 state_dir="$BROWSER_LANE_AGENT_STATE_DIR"
 session="$BROWSER_LANE_AGENT_SESSION"
 expected_hash="$BROWSER_LANE_AGENT_PAGE_SHA256"
+next_expected_hash="$BROWSER_LANE_AGENT_NEXT_PAGE_SHA256"
+expected_target_id=''
+navigation_observed=false
 outcome="$state_dir/outcome.json"
 info="$state_dir/info.json"
 attached="$state_dir/list.json"
@@ -907,6 +920,15 @@ if ! agent-browser --session "$session" tab list --json >"$attached" 2>/dev/null
     finish attach_cleanup_failed 17
   fi
   exit 85
+fi
+if [[ -n "$next_expected_hash" ]]; then
+  expected_target_id="$(jq -er 'if .success == true and (.data.tabs | type) == "array" and (.data.tabs | length) == 1 and (.data.tabs[0].targetId | type) == "string" and (.data.tabs[0].targetId | length) > 0 and (.data.tabs[0].url | type) == "string" then .data.tabs[0].targetId else error("invalid") end' "$attached" 2>/dev/null)" || {
+    if retire; then finish attach_failed 17; else finish attach_cleanup_failed 17; fi
+    exit 85
+  }
+  initial_attached_url="$(jq -er '.data.tabs[0].url' "$attached")" || exit 85
+  initial_attached_hash="$(printf '%s' "$initial_attached_url" | shasum -a 256 | awk '{print $1}')"
+  [[ "$initial_attached_hash" == "$expected_hash" ]] || { if retire; then finish url_mismatch 16; else finish url_mismatch_cleanup_failed 16; fi; exit 87; }
 fi
 # Pin only after the attachment established the sole admitted page. Each item
 # has its own pre/post URL proof; navigation stops the remaining batch.
@@ -937,25 +959,67 @@ if [[ "$actual_hash" != "$expected_hash" ]]; then
   exit 87
 fi
 }
+verify_transition() {
+  # A navigation event may reach the inventory after the click returns. Poll
+  # observations only, retaining the original target; never replay the action.
+  for transition_attempt in 1 2 3 4 5; do
+    if ! agent-browser --session "$session" --pin-tab tab list --json >"$state_dir/list.json" 2>/dev/null ||
+      ! jq -e --arg target "$expected_target_id" '
+        .success == true and (.data.tabs | type) == "array" and (.data.tabs | length) == 1 and
+        .data.tabs[0].targetId == $target and (.data.tabs[0].url | type) == "string"
+      ' "$state_dir/list.json" >/dev/null 2>&1; then
+      if retire; then finish transition_unreadable 16; else finish transition_unreadable_cleanup_failed 16; fi
+      exit 86
+    fi
+    transition_url="$(jq -er '.data.tabs[0].url' "$state_dir/list.json")"
+    transition_hash="$(printf '%s' "$transition_url" | shasum -a 256 | awk '{print $1}')"
+    if [[ "$transition_hash" == "$next_expected_hash" ]]; then navigation_observed=true; return 0; fi
+    [[ "$transition_hash" == "$expected_hash" ]] || break
+    # Tab inventory URLs may stay cached across a document navigation. Ask the
+    # pinned target for its current URL, then recheck its identity before success.
+    if [[ "$transition_hash" == "$expected_hash" ]] &&
+      agent-browser --session "$session" --pin-tab get url --json >"$url_file" 2>/dev/null; then
+      transition_url="$(jq -er 'select(.success == true) | (.data.url // .data.value // .data) | select(type == "string")' "$url_file" 2>/dev/null)" || transition_url=''
+      transition_hash="$(printf '%s' "$transition_url" | shasum -a 256 | awk '{print $1}')"
+      if [[ "$transition_hash" == "$next_expected_hash" ]] &&
+        agent-browser --session "$session" --pin-tab tab list --json >"$state_dir/list.json" 2>/dev/null &&
+        jq -e --arg target "$expected_target_id" '.success == true and (.data.tabs | length) == 1 and .data.tabs[0].targetId == $target' "$state_dir/list.json" >/dev/null 2>&1; then
+        navigation_observed=true; return 0
+      fi
+      [[ -z "$transition_url" || "$transition_hash" == "$expected_hash" ]] || break
+    fi
+    [[ "$transition_attempt" != 5 ]] || break
+    sleep 0.1
+  done
+  if retire; then finish url_mismatch 16; else finish url_mismatch_cleanup_failed 16; fi
+  exit 87
+}
+
 work_status=0
 for action in "$@"; do
   guard_page
   agent-browser --session "$session" --pin-tab batch --bail "$action"
   work_status=$?
   [[ "$work_status" == 0 ]] || break
-  guard_page
+  if [[ -n "$next_expected_hash" ]]; then verify_transition; else guard_page; fi
+  [[ "$navigation_observed" == true ]] && break
 done
 if ! retire; then
   finish cleanup_failed "$work_status"
   exit 88
 fi
-finish work "$work_status"
+if [[ "$navigation_observed" == true ]]; then
+  finish navigation "$work_status"
+else
+  finish work "$work_status"
+fi
 exit "$work_status"
 SH
   chmod 700 "$runner"
   BROWSER_LANE_AGENT_STATE_DIR="$agent_cleanup_temp_dir" \
     BROWSER_LANE_AGENT_SESSION="$session_name" \
     BROWSER_LANE_AGENT_PAGE_SHA256="$page_url_hash" \
+    BROWSER_LANE_AGENT_NEXT_PAGE_SHA256="$next_page_url_hash" \
     "$mcporter_bin" chrome-relay exec --relay-url "$relay_url" -- "$runner" "$@"
   child_status=$?
   phase="$(jq -r '.phase // "unknown"' "$outcome_file" 2>/dev/null || printf unknown)"
@@ -2436,7 +2500,7 @@ validate_recovery_usage() {
 
 main() {
   local command_name="${1:-}" json='false' lane='' account_role='' run_id='' run_id_set='false' ttl='' ttl_set='false'
-  local page_url='' page_url_set='false' child_tool='' resolved_page_id=''
+  local page_url='' page_url_set='false' next_page_url='' next_page_url_set='false' child_tool='' resolved_page_id=''
   local child_arg='' page_id_routed='false'
   local -a child_argv=()
   local recovery_action='' retention_days='' deletion_owner='' snapshot='' execute='false' recovery_flags='false'
@@ -2493,6 +2557,9 @@ main() {
       --page-url)
         [[ "$#" -ge 2 ]] || die_usage '--page-url requires a value'
         page_url="$2"; page_url_set='true'; shift 2 ;;
+      --next-page-url)
+        [[ "$#" -ge 2 ]] || die_usage '--next-page-url requires a value'
+        next_page_url="$2"; next_page_url_set='true'; shift 2 ;;
       --scenario)
         [[ "$#" -ge 2 && "$2" =~ ^[A-Za-z0-9._-]{1,80}$ ]] || die_usage '--scenario requires 1 through 80 letters, digits, dots, underscores, or hyphens'
         scenario="$2"; shift 2 ;;
@@ -2552,6 +2619,9 @@ main() {
     [[ "$run_id_set" == 'false' && "$ttl_set" == 'false' && "$plan_file_set" == 'false' && -z "$scenario" && "$recovery_flags" == 'false' && "$handoff_flags" == 'false' && "$#" -eq 0 ]] ||
       die_usage 'open accepts --lane, --account-role, --page-url, and --json only'
   fi
+
+  [[ "$command_name" == 'agent-browser' || "$next_page_url_set" == 'false' ]] ||
+    die_usage '--next-page-url is only accepted by agent-browser'
 
   # Handoff usage is settled before any state check so malformed invocations
   # cannot create private reservation state or contact the relay.
@@ -2839,6 +2909,15 @@ main() {
     [[ "$page_url_set" == 'true' ]] || die_usage 'agent-browser requires --page-url'
     [[ "$page_url" =~ ^https?://[^[:space:]]+$ ]] ||
       die_usage '--page-url must be an absolute http or https URL'
+    if [[ "$next_page_url_set" == 'true' ]]; then
+      [[ "$next_page_url" =~ ^https?://[^[:space:]]+$ ]] ||
+        die_usage '--next-page-url must be an absolute http or https URL'
+      [[ "$#" -eq 1 ]] || die_usage '--next-page-url requires exactly one terminal batch command'
+      start_origin="$(origin_from_page_url "$page_url")" || die_usage '--page-url has an unusable origin'
+      next_origin="$(origin_from_page_url "$next_page_url")" || die_usage '--next-page-url has an unusable origin'
+      [[ "$start_origin" == "$next_origin" && "$page_url" != "$next_page_url" ]] ||
+        die_usage '--next-page-url must be a different URL on the same origin as --page-url'
+    fi
     [[ "$#" -ge 1 ]] || die_usage 'agent-browser requires one or more batch commands after --'
     for child_arg in "$@"; do
       agent_browser_command_allowed "$child_arg" ||
@@ -2867,17 +2946,19 @@ main() {
     export BROWSER_LANE_NAME="$lane"
     export BROWSER_LANE_RUN_ID="$run_id"
     set +e
-    run_agent_browser_staged "http://127.0.0.1:$relay_port" "$session_name" "$page_url_hash" "$@"
+    next_page_hash=''
+    [[ "$next_page_url_set" == 'false' ]] || next_page_hash="$(printf '%s' "$next_page_url" | shasum -a 256 | awk '{print $1}')"
+    run_agent_browser_staged "http://127.0.0.1:$relay_port" "$session_name" "$page_url_hash" "$next_page_hash" "$@"
     child_status=$?
     set -e
     local action_outcome='unknown' cleanup_outcome='unknown' outcome_code="$child_status"
     case "${AGENT_BROWSER_STAGED_PHASE:-unknown}" in
-      work|cleanup_failed)
+      work|navigation|cleanup_failed)
         action_outcome='failed'; [[ "$AGENT_BROWSER_STAGED_STATUS" != '0' ]] || action_outcome='completed'
         cleanup_outcome='confirmed'; [[ "$AGENT_BROWSER_STAGED_PHASE" != cleanup_failed ]] || cleanup_outcome='unconfirmed'
         outcome_code="$AGENT_BROWSER_STAGED_STATUS"
         [[ "$cleanup_outcome" != unconfirmed || "$outcome_code" != 0 ]] || outcome_code=17 ;;
-      attach_failed|url_unreadable|url_mismatch) action_outcome='failed'; cleanup_outcome='confirmed'; outcome_code="$AGENT_BROWSER_STAGED_STATUS" ;;
+      attach_failed|url_unreadable|url_mismatch|transition_unreadable) action_outcome='failed'; cleanup_outcome='confirmed'; outcome_code="$AGENT_BROWSER_STAGED_STATUS" ;;
       *_cleanup_failed) action_outcome='failed'; cleanup_outcome='unconfirmed'; outcome_code="$AGENT_BROWSER_STAGED_STATUS" ;;
     esac
     record_lane_outcome "$action_outcome" "$cleanup_outcome" "$outcome_code"
@@ -2894,9 +2975,17 @@ main() {
         [[ "${AGENT_BROWSER_STAGED_PHASE:-}" != 'url_unreadable_cleanup_failed' ]] ||
           printf '%s: Agent Browser retirement remained unresolved after page-read failure\n' "$PROGRAM" >&2
         cleanup_agent_browser_temp_dir
-        emit_error "$EXIT_PAGE_UNRESOLVED" 'agent_browser_page_unreadable' "$run_id" true \
+        emit_error "$EXIT_PAGE_UNRESOLVED" 'agent_browser_page_unreadable' "$run_id" false \
           'Agent Browser could not read the page bound to its run-scoped session' \
           "Observe the intended tab's current ordinary URL in the declared profile, then inspect that exact URL and verify the action's effect. Do not replay an uncertain mutation or re-admit solely because navigation ended the old attachment. Honor Stop or revoked access."
+        ;;
+      transition_unreadable|transition_unreadable_cleanup_failed)
+        [[ "${AGENT_BROWSER_STAGED_PHASE:-}" != 'transition_unreadable_cleanup_failed' ]] ||
+          printf '%s: Agent Browser retirement remained unresolved after transition proof failure\n' "$PROGRAM" >&2
+        cleanup_agent_browser_temp_dir
+        emit_error "$EXIT_PAGE_UNRESOLVED" 'agent_browser_page_unreadable' "$run_id" false \
+          'Agent Browser could not prove the explicit destination after the action' \
+          "Observe the intended tab's current ordinary URL and verify the action's effect. Do not replay the action. Honor Stop or revoked access."
         ;;
       url_mismatch|url_mismatch_cleanup_failed)
         [[ "${AGENT_BROWSER_STAGED_PHASE:-}" != 'url_mismatch_cleanup_failed' ]] ||
@@ -2920,6 +3009,10 @@ main() {
         ;;
       work)
         child_status="$AGENT_BROWSER_STAGED_STATUS"
+        ;;
+      navigation)
+        child_status="$AGENT_BROWSER_STAGED_STATUS"
+        printf '%s\n' '{"status":"ok","action":"completed","page":"transitioned","remaining":0,"cleanup":"confirmed"}'
         ;;
       *)
         cleanup_agent_browser_temp_dir

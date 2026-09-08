@@ -14,10 +14,26 @@ os:
   editPreset: vscode
 
 gui:
+  # Shared palette: docs/night-owl-theme.md.
+  theme:
+    activeBorderColor: ['#7E57C2', bold]
+    inactiveBorderColor: ['#5F7E97']
+    searchingActiveBorderColor: ['#21C7A8', bold]
+    optionsTextColor: ['#82AAFF']
+    selectedLineBgColor: ['#1D3B53']
+    inactiveViewSelectedLineBgColor: ['#0B253A']
+    cherryPickedCommitFgColor: ['#D6DEEB']
+    cherryPickedCommitBgColor: ['#1D3B53']
+    markedBaseCommitFgColor: ['#011627']
+    markedBaseCommitBgColor: ['#C5E478']
+    unstagedChangesColor: ['#EF5350']
+    defaultFgColor: ['#D6DEEB']
+  authorColors:
+    '*': '#82AAFF'
   # File tree rather than a flat list; easier to scan a wide agent changeset.
   showFileTree: true
-  # Side-by-side diff. The old key `sideBySideDiff` does not exist in lazygit.
-  splitDiff: always
+  # Let the built-in renderer adapt too; Delta uses its pane width below.
+  splitDiff: auto
   # Show ahead/behind against the base branch in the branches panel.
   showDivergenceFromBaseBranch: arrowAndNumber
 
@@ -26,7 +42,10 @@ git:
   # was named `pager` rather than `command`.
   diffRenderers:
     - colorArg: always
-      command: delta --paging=never
+      name: Night Owl adaptive
+      # Lazygit supplies the available half-pane width, excluding gutters.
+      command: >-
+        sh -c 'if [ "$1" -ge 60 ]; then exec delta --paging=never --side-by-side; else exec delta --paging=never; fi' sh {{columnWidth}}
 
 worktree:
   # Matches the in-repo layout this machine already uses.

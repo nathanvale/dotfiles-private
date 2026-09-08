@@ -56,7 +56,13 @@
 	// FORMATTING — Prettier First, ESLint Beside It, No Conflicts
 	// ============================================================================
 	"editor.defaultFormatter": "esbenp.prettier-vscode",
-	"editor.fontFamily": "MesloLGS NF, Menlo, Monaco, 'Courier New', monospace",
+	"editor.fontFamily": "JetBrains Mono, Menlo, Monaco, 'Courier New', monospace",
+	"editor.fontSize": 18,
+	"editor.lineHeight": 1.4,
+	"editor.letterSpacing": 0,
+	"terminal.integrated.fontFamily": "JetBrains Mono",
+	"terminal.integrated.fontSize": 18,
+	"terminal.integrated.lineHeight": 1.15,
 	"editor.formatOnSave": true,
 	// Hover popups softened — less visual noise
 	"editor.hover.delay": 600,
@@ -256,6 +262,9 @@
 		"*.md": "vscode.markdown.editor"
 	},
 	"diffEditor.renderSideBySide": true,
+	"diffEditor.useInlineViewWhenSpaceIsLimited": true,
+	"diffEditor.renderSideBySideInlineBreakpoint": 1100,
+	"diffEditor.wordWrap": "on",
 	"workbench.editor.showTabs": "multiple",
 	"diffEditor.experimental.showMoves": true,
 	"explorer.sortOrder": "modified",

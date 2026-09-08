@@ -5,12 +5,12 @@
             "night-owl": {
                 "vars": {
                     "black": "#011627",
-                    "red": "#ff6868",
-                    "green": "#007f00",
-                    "yellow": "#cdcd00",
-                    "blue": "#5394ec",
-                    "magenta": "#ff70ff",
-                    "cyan": "#33cccc",
+                    "red": "#ef5350",
+                    "green": "#22da6e",
+                    "yellow": "#c5e478",
+                    "blue": "#82aaff",
+                    "magenta": "#c792ea",
+                    "cyan": "#21c7a8",
                     "white": "#d6deeb",
                     "semantic_highlight_color": "semantic()"
                 },
@@ -173,10 +173,10 @@
                         "color": "#676e95"
                     },
                     "doc-directive": {
-                        "color": "#addb67"
+                        "color": "#c5e478"
                     },
                     "variable": {
-                        "color": "#addb67"
+                        "color": "#c5e478"
                     },
                     "symbol": {
                         "color": "#82aaff"
@@ -191,10 +191,10 @@
                         "color": "$yellow"
                     },
                     "diff-delete": {
-                        "color": "#b03435"
+                        "color": "#ef5350"
                     },
                     "diff-add": {
-                        "color": "#264b33"
+                        "color": "#162c31"
                     },
                     "diff-section": {
                         "color": "$magenta"
@@ -232,7 +232,7 @@
                 },
                 "status-styles": {
                     "disabled-title": {
-                        "color": "#5394ec",
+                        "color": "#82aaff",
                         "background-color": "#353535",
                         "bold": true
                     },
@@ -262,7 +262,7 @@
                         "background-color": "#162d40"
                     },
                     "active": {
-                        "color": "#264b33",
+                        "color": "#162c31",
                         "background-color": "#162d40"
                     },
                     "inactive": {

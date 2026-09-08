@@ -2,21 +2,19 @@
 
 set -e
 
-# Directory containing the fonts
-FONT_DIR="$HOME/code/dotfiles/misc/mesloLGS_NF"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+FONT_DIR="$REPO_ROOT/misc/jetbrains-mono"
 DEST_DIR="$HOME/Library/Fonts"
 
-# Ensure the script is being run from the correct directory
-cd "$(dirname "$0")"
-
-# Source the colour_log.sh script
-source "./colour_log.sh"
+# Source the shared logger from the repository.
+source "$REPO_ROOT/bin/colour_log.sh"
 
 # Function to display usage
 usage() {
     echo "Usage: $0 [-a | --add] [-r | --remove] [-h | --help]"
-    echo "  -a, --add     Add nerd fonts"
-    echo "  -r, --remove  Remove nerd fonts"
+    echo "  -a, --add     Add JetBrains Mono fonts"
+    echo "  -r, --remove  Remove JetBrains Mono fonts"
     echo "  -h, --help    Display this help message"
     exit 1
 }
@@ -26,22 +24,22 @@ add_fonts() {
     mkdir -p "$DEST_DIR"
     cp "$FONT_DIR"/*.ttf "$DEST_DIR"
     if [ $? -eq 0 ]; then
-        "log $INFO ""Nerd fonts added successfully."
+        log "$INFO" "JetBrains Mono fonts added successfully."
         exit 0
     else
-        "log $ERROR ""Failed to add nerd fonts."
+        log "$ERROR" "Failed to add JetBrains Mono fonts."
         exit 1
     fi
 }
 
 # Function to remove fonts
 remove_fonts() {
-    rm -f "$DEST_DIR"/mesloLGS_NF_*.ttf
+    rm -f "$DEST_DIR"/JetBrainsMono-*.ttf
     if [ $? -eq 0 ]; then
-        "log $INFO ""Nerd fonts removed successfully."
+        log "$INFO" "JetBrains Mono fonts removed successfully."
         exit 0
     else
-        "log $ERROR ""Failed to remove nerd fonts."
+        log "$ERROR" "Failed to remove JetBrains Mono fonts."
         exit 1
     fi
 }
