@@ -6,7 +6,7 @@ window-width = 120
 window-height = 45
 
 font-size = 14
-font-family = "MesloLGS NF"
+font-family = "JetBrains Mono"
 font-thicken = false
 
 adjust-cell-width = -3%

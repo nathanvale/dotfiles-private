@@ -56,7 +56,7 @@
 	// FORMATTING — Prettier First, ESLint Beside It, No Conflicts
 	// ============================================================================
 	"editor.defaultFormatter": "esbenp.prettier-vscode",
-	"editor.fontFamily": "MesloLGS NF, Menlo, Monaco, 'Courier New', monospace",
+	"editor.fontFamily": "JetBrains Mono, Menlo, Monaco, 'Courier New', monospace",
 	"editor.formatOnSave": true,
 	// Hover popups softened — less visual noise
 	"editor.hover.delay": 600,
