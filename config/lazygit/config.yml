@@ -52,12 +52,6 @@ worktree:
   defaultPath: .worktrees
 
 customCommands:
-  - key: "<f6>"
-    context: "files"
-    command: 'git difftool --no-prompt --tool=tode -- {{.SelectedFile.Name | quote}}'
-    description: "Trial: diff in Terminal Code Herdr pane"
-    output: terminal
-
   - key: "e"
     context: "localBranches"
     command: "code ."

@@ -1,5 +1,10 @@
 # Development shortcuts
 
+Terminal Code trial shelved on 2026-09-09 due to flakiness. F6 and Git's `tode`
+difftool registration have been removed. Implementation retained on
+`feat/night-owl-dev-workflow` for later investigation. Terminal Code notes below
+are historical, not active bindings.
+
 Running reference for configured shortcuts. Update alongside each binding change.
 Checked against local configuration on 2026-09-09. Uppercase means Shift+letter.
 
@@ -27,7 +32,7 @@ actions below are installed Herdr defaults.
 | Files | e | Edit in VS Code (built-in editor preset) |
 | Files | V | Diff in desktop VS Code (custom) |
 | Files | Ctrl+V | Merge in desktop VS Code (custom) |
-| Files | F6 | Trial: diff in Terminal Code in a Herdr right pane (custom) |
+| Files | F6 | Unassigned; Terminal Code trial shelved |
 | Worktrees | s | Custom recency picker; retirement planned, still configured |
 | Local branches | e | Open current folder in VS Code; retirement planned |
 
