@@ -13,7 +13,7 @@
  */
 
 import { existsSync, realpathSync } from 'node:fs'
-import { basename, dirname, isAbsolute, relative, resolve, sep } from 'node:path'
+import { basename, dirname, resolve } from 'node:path'
 import { postEvent } from './event-bus-client'
 import { PROTECTED_BRANCHES } from './git-policy'
 import { getCurrentBranch, runGit } from './git-utils'
@@ -874,24 +874,12 @@ function resolveFilePath(filePath: string): string {
  * signature of a linked worktree). Non-repos and unreadable paths return
  * blocked: false — this hook guards worktree isolation, not file access.
  */
-export async function checkWorktreeIsolation(
-	filePath: string,
-	options: { scopeRoot?: string } = {},
-): Promise<{
+export async function checkWorktreeIsolation(filePath: string): Promise<{
 	blocked: boolean
 	reason?: string
 	branch?: string
 }> {
 	const resolvedFilePath = resolveFilePath(filePath)
-	if (options.scopeRoot) {
-		const scopeRoot = resolveFilePath(options.scopeRoot)
-		const target = resolvedFilePath
-		const relation = relative(scopeRoot, target)
-		if (relation === '..' || relation.startsWith(`..${sep}`) || isAbsolute(relation)) {
-			return { blocked: false }
-		}
-	}
-
 	// Walk up to the nearest existing ancestor: the target may be a new file in
 	// a directory that does not exist yet, and spawning git with a missing cwd
 	// throws ENOENT rather than returning a non-zero exit code.
@@ -1148,9 +1136,7 @@ if (import.meta.main) {
 				}
 			}
 
-			const isolation = await checkWorktreeIsolation(filePath, {
-				scopeRoot: process.env.CLAUDE_GIT_SAFETY_WORKTREE_ROOT,
-			})
+			const isolation = await checkWorktreeIsolation(filePath)
 			if (isolation.blocked) {
 				if (safetyMode === 'strict') {
 					await denyAndExit(

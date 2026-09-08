@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs'
+import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { PROTECTED_BRANCHES } from './git-policy.ts'
@@ -1278,30 +1278,6 @@ describe('checkWorktreeIsolation', () => {
 			join(root, 'no', 'such', 'dir', 'file.txt'),
 		)
 		expect(result.blocked).toBe(false)
-	})
-
-	test('allows a main checkout outside the configured scope', async () => {
-		const result = await checkWorktreeIsolation(join(mainRepo, 'seed.txt'), {
-			scopeRoot: join(root, 'another-repository'),
-		})
-		expect(result.blocked).toBe(false)
-	})
-
-	test('blocks a main checkout inside the configured scope', async () => {
-		const result = await checkWorktreeIsolation(join(mainRepo, 'seed.txt'), {
-			scopeRoot: mainRepo,
-		})
-		expect(result.blocked).toBe(true)
-	})
-
-	test('blocks a new file through a symlinked parent inside the configured scope', async () => {
-		const linkedMainRepo = join(root, 'linked-repo')
-		symlinkSync(mainRepo, linkedMainRepo, 'dir')
-		const result = await checkWorktreeIsolation(
-			join(linkedMainRepo, 'new', 'file.txt'),
-			{ scopeRoot: mainRepo },
-		)
-		expect(result.blocked).toBe(true)
 	})
 
 	test('reason names the repo and the isolation remedy', async () => {

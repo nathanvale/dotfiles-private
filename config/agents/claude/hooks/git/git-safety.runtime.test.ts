@@ -112,6 +112,36 @@ afterEach(() => {
 })
 
 describe('git-safety runtime mode behavior', () => {
+	test('strict denies an ordinary file edit in a main checkout', () => {
+		const { cwd } = createTempRepo()
+		const result = runSafetyHook({
+			cwd,
+			mode: 'strict',
+			toolName: 'Edit',
+			filePath: join(cwd, 'README.md'),
+		})
+		expect(result.exitCode).toBe(2)
+		expect(result.stdout).toContain('MAIN CHECKOUT')
+	})
+
+	test('strict allows an ordinary file edit in a linked worktree', () => {
+		const { cwd } = createTempRepo()
+		const worktreeRoot = mkdtempSync(join(tmpdir(), 'git-safety-linked-'))
+		tempDirs.push(worktreeRoot)
+		const worktree = join(worktreeRoot, 'worktree')
+		const add = runGit(cwd, ['worktree', 'add', '-b', 'feat/test', worktree])
+		expect(add.exitCode).toBe(0)
+
+		const result = runSafetyHook({
+			cwd: worktree,
+			mode: 'strict',
+			toolName: 'Edit',
+			filePath: join(worktree, 'README.md'),
+		})
+		expect(result.exitCode).toBe(0)
+		expect(result.stdout).not.toContain('"permissionDecision":"deny"')
+	})
+
 	test('strict denies destructive commands', () => {
 		const { cwd } = createTempRepo()
 		const result = runSafetyHook({
@@ -203,6 +233,20 @@ describe('git-safety runtime mode behavior', () => {
 		})
 		expect(result.exitCode).toBe(0)
 		expect(result.stdout).not.toContain('"permissionDecision":"deny"')
+	})
+})
+
+describe('installed hook declarations', () => {
+	test('Claude and Codex declare the checkout safety gate', () => {
+		const claude = JSON.parse(
+			readFileSync(join(import.meta.dir, '../../settings.json'), 'utf8'),
+		) as { hooks?: { PreToolUse?: Array<{ matcher?: string }> } }
+		const codex = JSON.parse(
+			readFileSync(join(import.meta.dir, '../../../codex/hooks.json'), 'utf8'),
+		) as { hooks?: { PreToolUse?: Array<{ matcher?: string }> } }
+
+		expect(claude.hooks?.PreToolUse?.[0]?.matcher).toBe('Write|Edit|Bash')
+		expect(codex.hooks?.PreToolUse?.[0]?.matcher).toBe('Write|Edit|Bash')
 	})
 })
 
