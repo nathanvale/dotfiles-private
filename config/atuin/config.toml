@@ -10,3 +10,6 @@ up_arrow = false
 [sync]
 # Enable sync v2
 records = true
+
+[ai]
+enabled = true

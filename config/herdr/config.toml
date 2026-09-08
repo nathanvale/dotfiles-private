@@ -1,4 +1,8 @@
 onboarding = false
+
+[keys]
+prefix = "ctrl+g"
+
 [ui]
 agent_panel_sort = "spaces"
 
