@@ -49,3 +49,7 @@ esac
 # Shared Node runtime bootstrap. Keeps VS Code, tmux, Ghostty, and non-interactive
 # zsh scripts aligned with project .nvmrc/.node-version files.
 [ -f "$HOME/.config/fnm/bootstrap.sh" ] && source "$HOME/.config/fnm/bootstrap.sh"
+
+# A verified applied Mise revision takes precedence over the fallback above.
+# The bootstrap stays inactive when current is missing or invalid.
+[ -f "$HOME/.config/mise/bootstrap.sh" ] && source "$HOME/.config/mise/bootstrap.sh"

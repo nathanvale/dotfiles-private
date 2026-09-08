@@ -5,3 +5,4 @@
 # so Git hooks need their own fnm bootstrap.
 
 [ -f "$HOME/.config/fnm/bootstrap.sh" ] && . "$HOME/.config/fnm/bootstrap.sh"
+[ -f "$HOME/.config/mise/bootstrap.sh" ] && . "$HOME/.config/mise/bootstrap.sh"
