@@ -13,18 +13,15 @@ show_symlink = true
 [opener]
 # Open markdown - Enter opens in editor (default), Shift-O for interactive picker
 markdown = [
+  { run = 'open-dev-document %s', orphan = true, desc = "Open in VS Code (exact checkout)" },
   { run = 'glow -p %s', block = true, desc = "Preview with Glow" },
-  { run = 'vim %s', block = true, desc = "Edit in Vim" },
-  { run = 'mo --open %s', desc = "mo (browser, dark mode)" },
-  { run = 'grip %s -b', desc = "grip (GitHub-exact)" },
-  { run = 'mdserve %s --open', desc = "mdserve (live reload)" },
 ]
 
 [open]
 # prepend_rules merges with defaults (keeps edit, open, reveal openers)
 # rules = [...] would REPLACE all defaults, breaking open --interactive
 prepend_rules = [
-  # Markdown files -> glow first, editor second
+  # Markdown files -> explicit VS Code checkout, Glow as optional preview
   { url = "*.md", use = "markdown" },
   { url = "*.markdown", use = "markdown" },
 ]

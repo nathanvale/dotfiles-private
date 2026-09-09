@@ -58,13 +58,19 @@ Use `git difftool --cached --tool=tode -- path/to/file` for a staged comparison.
 
 | Key | Current action |
 | --- | --- |
-| Enter on Markdown | Glow (VS Code migration planned, not applied) |
-| e | Vim (custom; VS Code migration planned) |
+| Enter on Markdown | VS Code, explicit file and checkout (trial) |
+| e | VS Code, explicit file and checkout (trial) |
 | M | Preview with Glow |
-| B | Browse with Mo |
+| B | Browse current directory in VS Code; Mo retired |
 | O | Reveal in Finder (custom, overrides the default chooser) |
 
 ## VS Code
+
+`open-dev-document FILE` requests a new desktop VS Code window with the exact
+file and its Git checkout. For the canonical vault, main is required; it stops
+instead of switching branches. Worktree paths retain their own checkout.
+This trial does not install a Ghostty link handler or a macOS file association.
+Mo is removed from active Yazi bindings; its package and old helper are retained.
 
 | Key | Action |
 | --- | --- |

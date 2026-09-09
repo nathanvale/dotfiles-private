@@ -10,20 +10,17 @@ on = "M"
 run = 'shell "PAGER=\"less -R\" glow -p %s" --block --confirm'
 desc = "Preview current file with Glow"
 
-# e = Edit in Vim (explicit binding, doesn't rely on $EDITOR)
+# e = Open exact file and checkout in VS Code
 [[mgr.prepend_keymap]]
 on = "e"
-run = 'shell "vim %s" --block --confirm'
-desc = "Edit in Vim"
+run = 'shell "open-dev-document %s" --orphan --confirm'
+desc = "Open in VS Code (exact checkout)"
 
-# B = Browse with Mo (live-reload in browser with sidebar navigation)
-# On a folder: watches all .md files with live-reload
-# On a file: opens that single file
-# Logic lives in scripts/mo-browse.sh to avoid TOML quoting issues
+# B = Browse current directory in desktop VS Code; Mo integration retired.
 [[mgr.prepend_keymap]]
 on = "B"
-run = 'shell "~/.config/yazi/scripts/mo-browse.sh %h" --orphan --confirm'
-desc = "Browse with Mo (live reload)"
+run = 'shell "open-dev-document %h" --orphan --confirm'
+desc = "Browse folder in VS Code (Mo retired)"
 
 # Shift-O = Reveal in Finder (opens the containing folder and selects the file)
 [[mgr.prepend_keymap]]
