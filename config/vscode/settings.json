@@ -276,5 +276,6 @@
 	"search.sortOrder": "modified",
 	"workbench.activityBar.compact": true,
 	"workbench.secondarySideBar.showLabels": false,
-	"editor.accessibilitySupport": "on"
+	"editor.accessibilitySupport": "on",
+	"diffEditor.codeLens": true
 }

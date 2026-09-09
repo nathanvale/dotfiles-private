@@ -37,3 +37,6 @@ agent_panel_sort = "spaces"
 
 [experimental]
 kitty_graphics = true
+
+[ui.sound]
+enabled = true
