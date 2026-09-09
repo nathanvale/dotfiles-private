@@ -13,6 +13,18 @@ Checked against local configuration on 2026-09-09. Uppercase means Shift+letter.
 Press Ctrl+G, release, then the following key. Prefix is configured locally;
 actions below are installed Herdr defaults.
 
+Popup overrides: Ctrl+G then Shift+L opens Lazygit (90% width and height);
+Shift+Y opens Yazi (90%); Shift+T opens a scratch terminal (80% by 70%).
+Quit the first two with q; exit the scratch shell with exit or Ctrl+D at an
+empty prompt. Escape is handled by the popup application. These popups end
+when their command exits; they are not persistent hidden terminals.
+Tab renaming is available through the menu; its Shift+T binding is disabled.
+Lowercase l still focuses the pane to the right.
+
+Herdr uses the focused pane directory when available. Check pwd in a scratch
+popup when moving between repositories or worktrees. Keep long-running jobs
+in ordinary panes. Popup commands cannot change the parent shell's directory.
+
 | Key | Action |
 | --- | --- |
 | ? | Help |
