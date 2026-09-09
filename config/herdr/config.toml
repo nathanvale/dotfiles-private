@@ -32,6 +32,12 @@ description = "Scratch terminal (quit: exit or Ctrl+D)"
 width = "80%"
 height = "70%"
 
+[[keys.command]]
+key = "prefix+shift+a"
+type = "plugin_action"
+command = "herdr-arrange.open"
+description = "Arrange panes"
+
 [ui]
 agent_panel_sort = "spaces"
 
