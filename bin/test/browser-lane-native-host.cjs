@@ -41,7 +41,8 @@ const element = (values, children = [], actions = {}) => ({
 });
 const tabs = urls.map((_, index) => element({
   AXRole: 'AXRadioButton', ChromeAXNodeId: index + 1,
-  AXARIAPosInSet: index + 1, AXARIASetSize: scenario === 'hidden' ? 3 : urls.length,
+  AXARIAPosInSet: scenario === 'no-position' || scenario === 'partial-position' ? null : index + 1,
+  AXARIASetSize: scenario === 'no-position' ? null : scenario === 'hidden' ? 3 : urls.length,
   AXValue: () => selected === index + 1 ? 1 : 0,
 }, [], {AXPress: () => {
   selected = index + 1;

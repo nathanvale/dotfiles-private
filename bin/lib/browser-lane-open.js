@@ -54,6 +54,7 @@ function run(argv) {
         var window = profileWindow();
         var tabs = [];
         var walked = 0;
+        var positionMode = null;
         // Only structural Chrome UI is walked. AXWebArea children are never
         // fetched, including when the currently selected page is a login page.
         function walk(element, depth, inTabGroup) {
@@ -64,10 +65,15 @@ function run(argv) {
             if (role === "AXRadioButton" && inTabGroup) {
                 const position = attribute(element, "AXARIAPosInSet");
                 const size = attribute(element, "AXARIASetSize");
-                if (!Number.isInteger(position) || !Number.isInteger(size) ||
-                        position < 1 || size < 1 || size > 40 || position > size) {
+                const metadataAbsent = position === null && size === null;
+                const metadataPresent = Number.isInteger(position) && Number.isInteger(size) &&
+                    position >= 1 && size >= 1 && size <= 40 && position <= size;
+                if (!metadataAbsent && !metadataPresent) {
                     refuse("tab_inventory_unavailable");
                 }
+                const currentMode = metadataPresent ? "explicit" : "structural";
+                if (positionMode !== null && positionMode !== currentMode) refuse("tab_inventory_unavailable");
+                positionMode = currentMode;
                 tabs.push({element: element, id: identifier(element), position: position,
                     size: size, selected: attribute(element, "AXValue")});
                 return;
@@ -83,10 +89,14 @@ function run(argv) {
         }
         walk(window, 0, false);
         if (!tabs.length || tabs.length > 40) refuse("tab_inventory_unavailable");
-        tabs.sort(function (a, b) { return a.position - b.position; });
+        // Chrome 152 omits the ARIA set position attributes from otherwise
+        // complete tab buttons. In that shape, uiElements() order is the only
+        // structural order; the stable ID signature still detects changes.
+        if (positionMode === "explicit") tabs.sort(function (a, b) { return a.position - b.position; });
         var ids = {};
         tabs.forEach(function (tab, index) {
-            if (tab.position !== index + 1 || tab.size !== tabs.length || ids[tab.id]) {
+            if ((positionMode === "explicit" &&
+                    (tab.position !== index + 1 || tab.size !== tabs.length)) || ids[tab.id]) {
                 refuse("tab_inventory_unavailable");
             }
             ids[tab.id] = true;
