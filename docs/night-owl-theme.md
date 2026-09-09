@@ -47,6 +47,7 @@ installed outside this repository.
 | Lazygit UI | [`config/lazygit/config.yml`](../config/lazygit/config.yml) maps borders, selections, authors, and status colours. |
 | Yazi UI | [`config/yazi/theme.toml`](../config/yazi/theme.toml) maps surfaces, tabs, selections, and file roles. Built-in file icons and syntax preview colours are separate. |
 | fzf and eza | [`.zshrc`](../.zshrc) defines RGB search highlights and file-list colours. New shells load these values. |
+| OpenCode | [`config/opencode/tui.jsonc`](../config/opencode/tui.jsonc) selects the tracked [`night-owl`](../config/opencode/themes/night-owl.json) theme. |
 
 ## Typography and diff layout
 
