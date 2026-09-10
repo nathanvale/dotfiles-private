@@ -9,6 +9,7 @@ Scope, admission, and the edit rule:
 
 | Read this | When |
 |---|---|
+| [`herdr-control.md`](herdr-control.md) | Controlling Herdr agents, machines, sessions, workspaces, tabs or panes from inside Herdr or an external app |
 | [`session-history.md`](session-history.md) | Finding a moved Codex session, restoring its rollout, or refreshing the Scratch history register |
 | [`instruction-maintenance.md`](instruction-maintenance.md) | Changing `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, or a document they point to |
 | [`skills.md`](skills.md) | Creating, reviewing, editing, choosing a source or live address, migrating, or retiring a skill |
