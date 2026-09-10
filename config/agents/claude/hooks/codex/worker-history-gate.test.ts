@@ -27,9 +27,13 @@ function runHook(input: string, path = dirname(process.execPath)): HookResult {
 	}
 }
 
-function spawnInput(forkTurns: unknown, includeForkTurns = true): string {
+function spawnInput(
+	forkTurns: unknown,
+	includeForkTurns = true,
+	toolName = 'spawn_agent',
+): string {
 	return JSON.stringify({
-		tool_name: 'spawn_agent',
+		tool_name: toolName,
 		tool_input: {
 			task_name: 'reader',
 			...(includeForkTurns ? { fork_turns: forkTurns } : {}),
@@ -52,6 +56,12 @@ describe('worker history gate public process', () => {
 		expect(result).toEqual({ exitCode: 0, stdout: '', stderr: '' })
 	})
 
+	test('allows an explicit fresh worker from the flattened v2 tool name', () => {
+		const result = runHook(spawnInput('none', true, 'collaborationspawn_agent'))
+
+		expect(result).toEqual({ exitCode: 0, stdout: '', stderr: '' })
+	})
+
 	test('refuses an omitted fork_turns value', () => {
 		expectRefusal(
 			runHook(spawnInput(undefined, false)),
@@ -62,6 +72,13 @@ describe('worker history gate public process', () => {
 	test('refuses full history', () => {
 		expectRefusal(
 			runHook(spawnInput('all')),
+			'fork_turns must be the explicit string "none".',
+		)
+	})
+
+	test('refuses full history from the flattened v2 tool name', () => {
+		expectRefusal(
+			runHook(spawnInput('all', true, 'collaborationspawn_agent')),
 			'fork_turns must be the explicit string "none".',
 		)
 	})

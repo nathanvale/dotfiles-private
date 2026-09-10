@@ -4,6 +4,7 @@ interface PreToolUseInput {
 }
 
 const REPAIR = 'Retry the spawn_agent call with fork_turns: none.'
+const SPAWN_TOOL_NAMES = new Set(['spawn_agent', 'collaborationspawn_agent'])
 
 function refuse(reason: string): never {
 	console.error(`Worker history gate refused the launch: ${reason} ${REPAIR}`)
@@ -42,7 +43,7 @@ function parseInput(raw: string): PreToolUseInput {
 
 const input = parseInput(await Bun.stdin.text())
 
-if (input.tool_name !== 'spawn_agent') {
+if (!SPAWN_TOOL_NAMES.has(input.tool_name)) {
 	process.exit(0)
 }
 
