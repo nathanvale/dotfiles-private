@@ -7,6 +7,16 @@ name = "terminal"
 [keys]
 prefix = "ctrl+g"
 rename_tab = ""
+previous_workspace = 'ctrl+shift+\'
+next_workspace = 'ctrl+\'
+switch_tab = ["prefix+1..9", "alt+1..9"]
+zoom = "prefix+space"
+
+[[keys.command]]
+key = "alt+0"
+type = "shell"
+command = 'tab_id="$("$HERDR_BIN_PATH" tab list --workspace "$HERDR_ACTIVE_WORKSPACE_ID" | jq -r ".result.tabs[9].tab_id // empty")"; [ -z "$tab_id" ] || "$HERDR_BIN_PATH" tab focus "$tab_id"'
+description = "Switch to tab 10"
 
 [[keys.command]]
 key = "prefix+shift+l"
