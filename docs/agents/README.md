@@ -9,6 +9,7 @@ Scope, admission, and the edit rule:
 
 | Read this | When |
 |---|---|
+| [`session-history.md`](session-history.md) | Finding a moved Codex session, restoring its rollout, or refreshing the Scratch history register |
 | [`instruction-maintenance.md`](instruction-maintenance.md) | Changing `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, or a document they point to |
 | [`skills.md`](skills.md) | Creating, reviewing, editing, choosing a source or live address, migrating, or retiring a skill |
 | [`email.md`](email.md) | Answering a question about an accessible email |
