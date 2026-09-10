@@ -5,6 +5,27 @@ Desktop. This owned instruction overrides only the third-party Herdr skill's
 blanket refusal outside `HERDR_ENV=1`. Keep its remaining guidance and reviewed
 payload intact; use installed CLI help for current syntax.
 
+## Find a coordinator
+
+- Route requests to talk to, ask, or check a project coordinator through live
+  Herdr discovery, including from a blank Desktop task. Discover running sessions
+  and tab labels first; use Codex history only when explicitly requested or when
+  live discovery cannot locate the target and history is needed for recovery.
+- Match approximate project/tab names against live labels. Accept a unique short
+  name or first word, such as "ADHD" for "ADHD Development Workflow". If multiple
+  destinations fit, ask one short question before sending.
+- Resolve the coordinator within the matched tab using agent identity and recent
+  output. The top-left pane is the expected coordinator location, not proof of
+  ownership; distinguish it from helpers before sending.
+- Retain the selected host, session, tab, pane and agent identity for follow-up
+  requests. Revalidate the selected agent directly before effects. Repeat full
+  discovery only when selection is absent, invalid, moved, replaced or ambiguous.
+- Keep a fresh question tied to its fresh answer. Read a baseline before sending;
+  verify acknowledgement and a response to that question after submission. A
+  matching echoed prompt, queued input, old result or settled earlier turn does
+  not complete the request. Use bounded agent waits and inspect new output rather
+  than repeatedly searching for text already present.
+
 ## Resolve the caller and destination
 
 - Inside Herdr (`HERDR_ENV=1`): use inherited session and pane context for

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Stage Manager"
+  short_description: "Talk to a live Herdr coordinator"
+  default_prompt: "Use $talk-to-stage-manager to connect me to the ADHD coordinator."
+policy:
+  allow_implicit_invocation: false

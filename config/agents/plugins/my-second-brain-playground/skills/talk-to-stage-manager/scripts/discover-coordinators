@@ -1,0 +1,188 @@
+#!/usr/bin/env bash
+
+set -uo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: discover-coordinators QUERY
+
+Search live Herdr tab and agent state across local sessions and enabled saved
+machines. Writes one JSON result to stdout. Performs read-only discovery.
+EOF
+}
+
+if [[ ${1:-} == "--help" || ${1:-} == "-h" ]]; then
+  usage
+  exit 0
+fi
+
+if [[ $# -ne 1 || -z $1 ]]; then
+  usage >&2
+  exit 2
+fi
+
+if ! command -v jq >/dev/null 2>&1; then
+  printf '%s\n' '{"error":{"code":"dependency_missing","message":"Required command is unavailable","command":"jq","repair":"Restore the named command and retry"},"retry_safe":true,"side_effects":false}'
+  exit 69
+fi
+
+for required_command in herdr ssh; do
+  if ! command -v "$required_command" >/dev/null 2>&1; then
+    jq -cn --arg command "$required_command" \
+      '{error:{code:"dependency_missing",message:"Required command is unavailable",command:$command,repair:"Restore the named command and retry"},retry_safe:true,side_effects:false}'
+    exit 69
+  fi
+done
+
+query=$1
+started_epoch=$(date +%s)
+run_id="stage-manager-${started_epoch}-$$"
+temp_dir=$(mktemp -d "${TMPDIR:-/tmp}/stage-manager-discovery.XXXXXX") || exit 70
+records_file="$temp_dir/records.jsonl"
+unreachable_file="$temp_dir/unreachable.jsonl"
+: >"$records_file"
+: >"$unreachable_file"
+
+cleanup() {
+  if [[ -n ${temp_dir:-} && $temp_dir == *stage-manager-discovery.* && -d $temp_dir ]]; then
+    rm -rf -- "$temp_dir"
+  fi
+}
+trap cleanup EXIT
+
+record_unreachable() {
+  local machine_label=$1
+  local target=$2
+  local session=$3
+  local code=$4
+  jq -cn \
+    --arg machine "$machine_label" \
+    --arg target "$target" \
+    --arg session "$session" \
+    --arg code "$code" \
+    '{machine:{label:$machine,target:$target},session:$session,code:$code}' \
+    >>"$unreachable_file"
+}
+
+emit_session_records() {
+  local machine_kind=$1
+  local machine_label=$2
+  local target=$3
+  local session=$4
+  local workspaces_json=$5
+  local tabs_json=$6
+  local agents_json=$7
+
+  jq -cn \
+    --arg machine_kind "$machine_kind" \
+    --arg machine_label "$machine_label" \
+    --arg target "$target" \
+    --arg session "$session" \
+    --argjson workspaces "$workspaces_json" \
+    --argjson tabs "$tabs_json" \
+    --argjson agents "$agents_json" \
+    '$tabs.result.tabs[] as $tab
+     | ($workspaces.result.workspaces
+        | map(select(.workspace_id == $tab.workspace_id))
+        | .[0]) as $workspace
+     | {
+         machine:{kind:$machine_kind,label:$machine_label,target:(if ($target | length) > 0 then $target else null end)},
+         session:$session,
+         workspace:{id:$tab.workspace_id,label:($workspace.label // null)},
+         tab:{id:$tab.tab_id,label:$tab.label},
+         agents:($agents.result.agents
+           | map(select(.tab_id == $tab.tab_id)
+             | {
+                 name:(.name // null),
+                 kind:.agent,
+                 status:.agent_status,
+                 pane_id:.pane_id,
+                 session_identity:(.agent_session.value // null),
+                 title:(.title // null)
+               }))
+       }' >>"$records_file"
+}
+
+local_sessions_json=$(herdr session list --json 2>/dev/null) || {
+  record_unreachable "This Mac" "local" "*" "local_session_list_failed"
+  local_sessions_json='{"sessions":[]}'
+}
+
+while IFS= read -r session; do
+  [[ -n $session ]] || continue
+  workspaces_json=$(herdr --session "$session" workspace list 2>/dev/null) || {
+    record_unreachable "This Mac" "local" "$session" "workspace_list_failed"
+    continue
+  }
+  tabs_json=$(herdr --session "$session" tab list 2>/dev/null) || {
+    record_unreachable "This Mac" "local" "$session" "tab_list_failed"
+    continue
+  }
+  agents_json=$(herdr --session "$session" agent list 2>/dev/null) || {
+    record_unreachable "This Mac" "local" "$session" "agent_list_failed"
+    continue
+  }
+  emit_session_records "local" "This Mac" "" "$session" \
+    "$workspaces_json" "$tabs_json" "$agents_json"
+done < <(jq -r '.sessions[] | select(.running == true) | .name' <<<"$local_sessions_json")
+
+machines_json=$(herdr machine list --json 2>/dev/null) || {
+  record_unreachable "Saved machines" "local" "*" "machine_list_failed"
+  machines_json='[]'
+}
+
+while IFS=$'\t' read -r machine_label target session; do
+  [[ -n $target && -n $session ]] || continue
+  if [[ ! $target =~ ^[A-Za-z0-9@._:-]+$ || ! $session =~ ^[A-Za-z0-9._-]+$ ]]; then
+    record_unreachable "$machine_label" "$target" "$session" "unsupported_profile_value"
+    continue
+  fi
+  ssh_args=(-o BatchMode=yes -o ConnectTimeout=10 -- "$target")
+  workspaces_json=$(ssh "${ssh_args[@]}" herdr --session "$session" workspace list </dev/null 2>/dev/null) || {
+    record_unreachable "$machine_label" "$target" "$session" "workspace_list_failed"
+    continue
+  }
+  tabs_json=$(ssh "${ssh_args[@]}" herdr --session "$session" tab list </dev/null 2>/dev/null) || {
+    record_unreachable "$machine_label" "$target" "$session" "tab_list_failed"
+    continue
+  }
+  agents_json=$(ssh "${ssh_args[@]}" herdr --session "$session" agent list </dev/null 2>/dev/null) || {
+    record_unreachable "$machine_label" "$target" "$session" "agent_list_failed"
+    continue
+  }
+  emit_session_records "remote" "$machine_label" "$target" "$session" \
+    "$workspaces_json" "$tabs_json" "$agents_json"
+done < <(jq -r '.[] | select(.enabled == true) | [.label,.target,.session] | @tsv' <<<"$machines_json")
+
+records_json=$(jq -s '.' "$records_file")
+unreachable_json=$(jq -s '.' "$unreachable_file")
+elapsed_seconds=$(( $(date +%s) - started_epoch ))
+
+jq -cn \
+  --arg run_id "$run_id" \
+  --arg query "$query" \
+  --argjson records "$records_json" \
+  --argjson unreachable "$unreachable_json" \
+  --argjson elapsed_seconds "$elapsed_seconds" \
+  'def normalized: ascii_downcase | gsub("[^a-z0-9]+"; " ") | gsub("^ +| +$"; "");
+   ($query | normalized) as $needle
+   | ($records
+      | map(select(
+          (.tab.label | normalized | startswith($needle))
+          or ((.tab.label | normalized | split(" "))
+              | any(startswith($needle)))))) as $matches
+   | {
+       run_id:$run_id,
+       query:$query,
+       status:(
+         if ($unreachable | length) > 0 then "incomplete"
+         elif ($matches | length) == 0 then "not_found"
+         elif ($matches | length) == 1 then "unique"
+         else "ambiguous"
+         end),
+       matches:$matches,
+       unreachable:$unreachable,
+       searched:{tabs:($records | length),elapsed_seconds:$elapsed_seconds},
+       retry_safe:true,
+       side_effects:false
+     }'

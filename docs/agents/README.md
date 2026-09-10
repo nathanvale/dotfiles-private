@@ -9,10 +9,10 @@ Scope, admission, and the edit rule:
 
 | Read this | When |
 |---|---|
-| [`herdr-control.md`](herdr-control.md) | Inspecting or controlling Herdr agents, machines, sessions, workspaces, tabs or panes from inside Herdr or an external app |
+| [`herdr-control.md`](herdr-control.md) | Addressing a coordinator by project/tab name, or inspecting/controlling Herdr from any app |
 | [`session-history.md`](session-history.md) | Finding a moved Codex session, restoring its rollout, or refreshing the Scratch history register |
 | [`instruction-maintenance.md`](instruction-maintenance.md) | Changing `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, or a document they point to |
-| [`skills.md`](skills.md) | Creating, reviewing, editing, choosing a source or live address, migrating, or retiring a skill |
+| [`skills.md`](skills.md) | Developing, installing, refreshing, or activating a personal plugin; or creating, reviewing, sourcing, migrating, or retiring a skill |
 | [`email.md`](email.md) | Answering a question about an accessible email |
 | [`browser-automation.md`](browser-automation.md) | Automating Chrome, routing a profile lane, choosing an adapter or CDP engine, or naming `browser-use` or `browser-lanes` |
 | [`personal-bills.md`](personal-bills.md) | Advising or acting on a personal bill, payment notice, billing renewal, billing account, or bill-payment portal |
