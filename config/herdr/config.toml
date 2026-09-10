@@ -11,6 +11,9 @@ previous_workspace = 'ctrl+shift+\'
 next_workspace = 'ctrl+\'
 switch_tab = ["prefix+1..9", "alt+1..9"]
 zoom = "prefix+space"
+toggle_sidebar = ["prefix+b", "cmd+b"]
+cycle_pane_next = ["prefix+tab", 'ctrl+cmd+\']
+cycle_pane_previous = ["prefix+shift+tab", 'ctrl+shift+cmd+\']
 
 [[keys.command]]
 key = "alt+0"
