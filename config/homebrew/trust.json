@@ -7,6 +7,8 @@
   ],
   "trustedformulae": [
     "anomalyco/tap/opencode",
+    "k1low/tap/mo",
+    "ognistik/formulae/macrowhisper",
     "openclaw/tap/gogcli",
     "steipete/tap/codexbar",
     "steipete/tap/imsg",
@@ -15,6 +17,7 @@
     "steipete/tap/remindctl"
   ],
   "trustedcasks": [
-    "steipete/tap/codexbar"
+    "steipete/tap/codexbar",
+    "steipete/tap/trimmy"
   ]
 }

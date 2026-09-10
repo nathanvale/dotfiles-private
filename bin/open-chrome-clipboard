@@ -1,0 +1,28 @@
+#!/usr/bin/python3
+"""Open a copied web link in the Chrome profile named by the shortcut."""
+
+import os
+import subprocess
+import sys
+from urllib.parse import urlsplit
+
+if len(sys.argv) != 2:
+    sys.exit("Usage: open-chrome-clipboard PROFILE_DIRECTORY")
+
+link = subprocess.check_output(["/usr/bin/pbpaste"], text=True).strip()
+try:
+    parsed = urlsplit(link)
+    valid = parsed.scheme in ("https", "http") and bool(parsed.hostname)
+    valid = valid and not any(character.isspace() for character in link)
+except ValueError:
+    valid = False
+
+if not valid:
+    subprocess.run([
+        "/usr/bin/osascript", "-e",
+        'display notification "Copy a web link first, then press Hyper+W." with title "Open copied link"',
+    ], check=False)
+    sys.exit(1)
+
+chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+os.execv(chrome, [chrome, "--profile-directory=" + sys.argv[1], link])
