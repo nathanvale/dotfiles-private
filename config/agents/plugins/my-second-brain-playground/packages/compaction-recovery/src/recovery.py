@@ -585,6 +585,10 @@ def control_panel_entries(checkpoint: Mapping[str, Any]) -> Tuple[Tuple[str, str
             shell_command(checkpoint["agentLedger"], "register", "discover"),
         ),
         (
+            "Read live Task lifecycle (public Agent Ledger status projection; accepted Task appears in activeTasks while active)",
+            shell_command(checkpoint["agentLedger"], "register", "status", "--db", checkpoint["register"]),
+        ),
+        (
             "Verify accepted Task (diagnostic fallback, read-only; use only while discovery has no public Task read)",
             shell_command("/usr/bin/sqlite3", "-readonly", checkpoint["register"], task_query),
         ),

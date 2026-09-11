@@ -385,6 +385,7 @@ function expectedContext(fixture: Fixture, freshness: "fresh" | "stale"): string
 		`Read evidence owner: ${shellCommand("/bin/cat", join(fixture.vault, "projects/ledger-workflow/proof.md"))}`,
 		`Read recovery guide: ${shellCommand("/bin/cat", join(fixture.vault, "docs/agents/recovery.md"))}`,
 		`Discover Agent Ledger commands: ${shellCommand(fixture.agentLedger, "register", "discover")}`,
+		`Read live Task lifecycle (public Agent Ledger status projection; accepted Task appears in activeTasks while active): ${shellCommand(fixture.agentLedger, "register", "status", "--db", fixture.register)}`,
 		`Verify accepted Task (diagnostic fallback, read-only; use only while discovery has no public Task read): ${shellCommand("/usr/bin/sqlite3", "-readonly", fixture.register, taskQuery)}`,
 		`Inspect goal and evidence Git history: ${shellCommand("/usr/bin/git", "-C", fixture.vault, "log", "--format=%h%x09%ad%x09%s", "--date=short", "--", "projects/ledger-workflow/GOAL.md", "projects/ledger-workflow/proof.md")}`,
 		`Next safe action: ${fixedNextAction}`,
@@ -532,6 +533,15 @@ test("quoted owner, Task diagnostic, and Git history controls execute at their r
 		stderr: "",
 	})
 	expect(readFileSync(current.register).toString("base64")).toBe(registerBefore)
+
+	const statusRegisterBefore = readFileSync(current.register).toString("base64")
+	const liveStatus = run("/bin/sh", current.vault, "", environment(current), [
+		"-c",
+		commandFor("Read live Task lifecycle (public Agent Ledger status projection; accepted Task appears in activeTasks while active)"),
+	])
+	expect(liveStatus.exitCode).toBe(0)
+	expect(existsSync(`${current.agentLedger}.executed`)).toBe(true)
+	expect(readFileSync(current.register).toString("base64")).toBe(statusRegisterBefore)
 
 	expect(run("/usr/bin/git", current.vault, "", environment(current), ["init"]).exitCode).toBe(0)
 	expect(
@@ -1489,6 +1499,9 @@ test("bind derives identity from the goal and recover returns the same session p
  expect(recovered.stderr).toBe("")
  expect(JSON.parse(recovered.stdout)).toMatchObject({operation:"recover", transactionState:"not-applicable", data:{taskIdentity,sessionIdentity}})
  expect(JSON.parse(recovered.stdout).data.controlPanel).toContain(`Task identity: ${taskIdentity}`)
+	expect(JSON.parse(recovered.stdout).data.controlPanel).toContain(
+		`Read live Task lifecycle (public Agent Ledger status projection; accepted Task appears in activeTasks while active): ${shellCommand(current.agentLedger, "register", "status", "--db", current.register)}`,
+	)
 	expect(observePrimaryTree(current.root)).toEqual(before)
  expect(runHook(current).stdout).toContain(taskIdentity)
 })
