@@ -12,6 +12,7 @@ Scope, admission, and the edit rule:
 | [`herdr-control.md`](herdr-control.md) | Addressing a coordinator by project/tab name, or inspecting/controlling Herdr from any app |
 | [`session-history.md`](session-history.md) | Finding a moved Codex session, restoring its rollout, or refreshing the Scratch history register |
 | [`instruction-maintenance.md`](instruction-maintenance.md) | Changing `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, or a document they point to |
+| [`work-placement.md`](work-placement.md) | Choosing or changing the owner of code, repositories, project packets, notes, plans, evidence, or runtime output |
 | [`skills.md`](skills.md) | Developing, installing, refreshing, or activating a personal plugin; or creating, reviewing, sourcing, migrating, or retiring a skill |
 | [`email.md`](email.md) | Answering a question about an accessible email |
 | [`browser-automation.md`](browser-automation.md) | Automating Chrome, routing a profile lane, choosing an adapter or CDP engine, or naming `browser-use` or `browser-lanes` |
