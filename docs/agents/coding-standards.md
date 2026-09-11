@@ -2,14 +2,24 @@
 
 Cross-package rules. A rule enters only with witnessed evidence in two or more
 packages; a single-package rule lives in that package's `CODING_STANDARDS.md`,
-which points here instead of restating. Delete a rule the moment tooling
-enforces it.
+which points here instead of restating. Delete a rule the moment tooling and
+its configuration fully confess it.
 
 Evidence archive: the `receipts/standards-research*.md` files (issue-55 feature
 branch until merge). Candidates route through a fit review before entering this
 file or any package standards file.
 
 ## Rules
+
+### Fallow enforces
+
+- Export only symbols another module imports; unused exports are errors.
+- Export every type that appears in a public signature; private type leaks are errors.
+- Keep functions at or below cyclomatic 20 and cognitive 15; extract by responsibility when a health threshold fails; never suppress it, because suppression hides complexity from the gate.
+- Declare every script invoked by a hook, `SKILL.md`, `package.json` script, launchd job, or shell as a runtime root in `.fallowrc.json` `entry`; never delete it as dead, because doing so breaks its invoking path.
+- Place committed build bundles under an `ignorePatterns` glob.
+- Give every inline `fallow-ignore` a human-readable reason; use it only for a genuine false positive.
+- Close out each code-changing turn per the `AGENTS.md` Proof section.
 
 ### Independent oracle
 

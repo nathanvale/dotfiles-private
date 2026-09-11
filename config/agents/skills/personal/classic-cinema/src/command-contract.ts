@@ -31,15 +31,7 @@ export const HEAL_SKILL_CHECK_IDS: readonly HealSkillCheckId[] = [
 	"owner-paths",
 ] as const;
 
-export const HEAL_SKILL_DIAGNOSTIC_CODES = [
-	"usage_error",
-	"unknown_check",
-	"skill_root_missing",
-	"repair_incomplete",
-] as const;
-export type HealSkillDiagnosticCode = (typeof HEAL_SKILL_DIAGNOSTIC_CODES)[number];
-
-export const HEAL_SKILL_FAILURE_ACTIONS = [
+const HEAL_SKILL_FAILURE_ACTIONS = [
 	{
 		id: "repair_booking_log",
 		summary: "Run repair --only booking-log-valid --execute to fix the ledger.",
@@ -57,7 +49,7 @@ export const HEAL_SKILL_FAILURE_ACTIONS = [
 	},
 ] as const;
 
-export const HEAL_SKILL_SUCCESS_ACTIONS = [
+const HEAL_SKILL_SUCCESS_ACTIONS = [
 	{
 		id: "skill_healthy",
 		summary: "All checks pass; no action needed.",

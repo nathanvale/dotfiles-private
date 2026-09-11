@@ -34,7 +34,6 @@
 		"lint:fix": "biome lint --write .",
 		"lint:scripts": "find . -type f \\( -name '*.sh' -o -name '*.bash' \\) ! -path './node_modules/*' ! -path './.worktrees/*' ! -path './.claude/worktrees/*' ! -path './.husky/_/*' -print0 | xargs -0 shellcheck -e SC1071 -S error",
 		"lint:workflows": "if [ -d .github/workflows ]; then actionlint; else echo 'no .github/workflows; skipping'; fi",
-		"memory:qmd-federation": "bun run $HOME/.config/context/scripts/qmd-roster-sync.ts",
 		"prepare": "husky",
 		"quality:fallow": "node_modules/.bin/fallow audit --format json --quiet --type-aware --type-aware-require best-effort",
 		"test": "bun run --filter '*' test",
@@ -44,8 +43,7 @@
 		"validate": "bun run check && bun run lint:scripts && bun run lint:workflows"
 	},
 	"dependencies": {
-		"puppeteer": "^24.32.0",
-		"yaml": "^2.8.1"
+		"puppeteer": "^24.32.0"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.15",

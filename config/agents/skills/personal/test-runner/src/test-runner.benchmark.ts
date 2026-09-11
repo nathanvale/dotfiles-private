@@ -108,7 +108,7 @@ export type BenchmarkEvidence = {
 	output_path: string;
 };
 
-type CandidateGate = {
+export type CandidateGate = {
 	fixture: string;
 	variant: string;
 	exit_correctness_required: true;
@@ -125,7 +125,7 @@ type CandidateGate = {
 	source: "observed_calibration";
 };
 
-type GateResult = {
+export type GateResult = {
 	status: "pass" | "fail" | "not_applicable";
 	failures: string[];
 };
@@ -425,16 +425,12 @@ export const BENCHMARK_FIXTURES: BenchmarkFixture[] = [
 	},
 ];
 
-export async function runBenchmark(
-	argv: readonly string[],
-	options: { cwd?: string; now?: Date } = {},
-): Promise<{ exitCode: number; stdout: string; evidence: BenchmarkEvidence }> {
-	const cwd = options.cwd ?? import.meta.dir;
-	const invocationDir = options.cwd ?? process.cwd();
-	const args = parseArgs(argv);
-	if (args.help) return { exitCode: 0, stdout: renderHelp(), evidence: emptyEvidence(cwd, args) };
-
-	const fixtures = selectFixtures(args.fixtureLabels);
+async function collectBenchmarkRows(
+	cwd: string,
+	invocationDir: string,
+	args: ParsedArgs,
+	fixtures: BenchmarkFixture[],
+): Promise<BenchmarkRow[]> {
 	const rows: BenchmarkRow[] = [];
 
 	for (const fixture of fixtures) {
@@ -459,15 +455,22 @@ export async function runBenchmark(
 	if (args.includeSynthetic) rows.push(...createSyntheticRows(fixtures));
 
 	applyScores(rows);
+	return rows;
+}
 
-	const outputDir = join(cwd, args.outputDir);
-	await mkdir(outputDir, { recursive: true });
-	const outputPath = join(outputDir, `${args.runId}-${args.mode}.json`);
-	const evidence: BenchmarkEvidence = {
+async function buildBenchmarkEvidence(
+	cwd: string,
+	args: ParsedArgs,
+	fixtures: BenchmarkFixture[],
+	rows: BenchmarkRow[],
+	outputPath: string,
+	now: Date | undefined,
+): Promise<BenchmarkEvidence> {
+	return {
 		schema_version: "2",
 		mode: args.mode,
 		run_id: args.runId,
-		generated_at: (options.now ?? new Date()).toISOString(),
+		generated_at: (now ?? new Date()).toISOString(),
 		token_estimate_method: TOKEN_ESTIMATE_METHOD,
 		fixtures,
 		rows,
@@ -482,6 +485,24 @@ export async function runBenchmark(
 				: null,
 		output_path: relative(cwd, outputPath),
 	};
+}
+
+export async function runBenchmark(
+	argv: readonly string[],
+	options: { cwd?: string; now?: Date } = {},
+): Promise<{ exitCode: number; stdout: string; evidence: BenchmarkEvidence }> {
+	const cwd = options.cwd ?? import.meta.dir;
+	const invocationDir = options.cwd ?? process.cwd();
+	const args = parseArgs(argv);
+	if (args.help) return { exitCode: 0, stdout: renderHelp(), evidence: emptyEvidence(cwd, args) };
+
+	const fixtures = selectFixtures(args.fixtureLabels);
+	const rows = await collectBenchmarkRows(cwd, invocationDir, args, fixtures);
+
+	const outputDir = join(cwd, args.outputDir);
+	await mkdir(outputDir, { recursive: true });
+	const outputPath = join(outputDir, `${args.runId}-${args.mode}.json`);
+	const evidence = await buildBenchmarkEvidence(cwd, args, fixtures, rows, outputPath, options.now);
 
 	await writeFile(outputPath, `${JSON.stringify(evidence, null, 2)}\n`);
 
@@ -493,6 +514,86 @@ export async function runBenchmark(
 			? 1
 			: 0;
 	return { exitCode, stdout, evidence };
+}
+
+type ParseArgsFlagHandler = (parsed: ParsedArgs, args: readonly string[], index: number) => number;
+
+/** Looked up by an attacker-controlled argv token, guarded with
+ * Object.hasOwn: a plain property read would let e.g. a bare `constructor`
+ * token resolve `handlers.constructor` to `Object`, a truthy value that is
+ * not a real handler. */
+const PARSE_ARGS_FLAG_HANDLERS: Record<string, ParseArgsFlagHandler> = {
+	"--help": (parsed, _args, index) => {
+		parsed.help = true;
+		return index + 1;
+	},
+	"-h": (parsed, _args, index) => {
+		parsed.help = true;
+		return index + 1;
+	},
+	"--json": (parsed, _args, index) => {
+		parsed.json = true;
+		return index + 1;
+	},
+	"--mode": (parsed, args, index) => {
+		const value = requireNext(args, index, "--mode");
+		if (value !== "calibration" && value !== "fixed-gate") {
+			throw new Error("--mode must be calibration or fixed-gate.");
+		}
+		parsed.mode = value;
+		return index + 2;
+	},
+	"--run-id": (parsed, args, index) => {
+		parsed.runId = requireNext(args, index, "--run-id");
+		return index + 2;
+	},
+	"--output-dir": (parsed, args, index) => {
+		parsed.outputDir = requireNext(args, index, "--output-dir");
+		return index + 2;
+	},
+	"--mcp-baseline": (parsed, args, index) => {
+		parsed.mcpBaselinePath = requireNext(args, index, "--mcp-baseline");
+		return index + 2;
+	},
+	"--no-mcp-baseline": (parsed, _args, index) => {
+		parsed.includeMcpBaseline = false;
+		return index + 1;
+	},
+	"--local-runner": (parsed, args, index) => {
+		parsed.localRunnerCommand = requireNext(args, index, "--local-runner");
+		return index + 2;
+	},
+	"--gate-file": (parsed, args, index) => {
+		parsed.gateFile = requireNext(args, index, "--gate-file");
+		return index + 2;
+	},
+	"--gate-preset": (parsed, args, index) => {
+		const value = requireNext(args, index, "--gate-preset");
+		if (value !== "bun-no-mcp") {
+			throw new Error("--gate-preset must be bun-no-mcp.");
+		}
+		parsed.gatePreset = value;
+		return index + 2;
+	},
+	"--include-synthetic": (parsed, _args, index) => {
+		parsed.includeSynthetic = true;
+		return index + 1;
+	},
+	"--fixture": (parsed, args, index) => {
+		const labels = requireNext(args, index, "--fixture")
+			.split(",")
+			.map((label) => label.trim())
+			.filter(Boolean);
+		parsed.fixtureLabels = new Set(labels);
+		return index + 2;
+	},
+};
+
+function validateParsedArgs(parsed: ParsedArgs): ParsedArgs {
+	if (parsed.mode === "fixed-gate" && !parsed.gateFile && !parsed.gatePreset) {
+		throw new Error("--mode fixed-gate requires --gate-file or --gate-preset.");
+	}
+	return parsed;
 }
 
 function parseArgs(argv: readonly string[]): ParsedArgs {
@@ -512,79 +613,16 @@ function parseArgs(argv: readonly string[]): ParsedArgs {
 		fixtureLabels: null,
 	};
 
-	for (let index = 0; index < args.length; index += 1) {
-		const arg = args[index];
-		switch (arg) {
-			case "--help":
-			case "-h":
-				parsed.help = true;
-				break;
-			case "--json":
-				parsed.json = true;
-				break;
-			case "--mode": {
-				const value = requireNext(args, index, "--mode");
-				if (value !== "calibration" && value !== "fixed-gate") {
-					throw new Error("--mode must be calibration or fixed-gate.");
-				}
-				parsed.mode = value;
-				index += 1;
-				break;
-			}
-			case "--run-id":
-				parsed.runId = requireNext(args, index, "--run-id");
-				index += 1;
-				break;
-			case "--output-dir":
-				parsed.outputDir = requireNext(args, index, "--output-dir");
-				index += 1;
-				break;
-			case "--mcp-baseline":
-				parsed.mcpBaselinePath = requireNext(args, index, "--mcp-baseline");
-				index += 1;
-				break;
-			case "--no-mcp-baseline":
-				parsed.includeMcpBaseline = false;
-				break;
-			case "--local-runner":
-				parsed.localRunnerCommand = requireNext(args, index, "--local-runner");
-				index += 1;
-				break;
-			case "--gate-file":
-				parsed.gateFile = requireNext(args, index, "--gate-file");
-				index += 1;
-				break;
-			case "--gate-preset": {
-				const value = requireNext(args, index, "--gate-preset");
-				if (value !== "bun-no-mcp") {
-					throw new Error("--gate-preset must be bun-no-mcp.");
-				}
-				parsed.gatePreset = value;
-				index += 1;
-				break;
-			}
-			case "--include-synthetic":
-				parsed.includeSynthetic = true;
-				break;
-			case "--fixture": {
-				const labels = requireNext(args, index, "--fixture")
-					.split(",")
-					.map((label) => label.trim())
-					.filter(Boolean);
-				parsed.fixtureLabels = new Set(labels);
-				index += 1;
-				break;
-			}
-			default:
-				throw new Error(`unknown option: ${arg}`);
-		}
+	let index = 0;
+	while (index < args.length) {
+		const handler = Object.hasOwn(PARSE_ARGS_FLAG_HANDLERS, args[index])
+			? PARSE_ARGS_FLAG_HANDLERS[args[index]]
+			: undefined;
+		if (!handler) throw new Error(`unknown option: ${args[index]}`);
+		index = handler(parsed, args, index);
 	}
 
-	if (parsed.mode === "fixed-gate" && !parsed.gateFile && !parsed.gatePreset) {
-		throw new Error("--mode fixed-gate requires --gate-file or --gate-preset.");
-	}
-
-	return parsed;
+	return validateParsedArgs(parsed);
 }
 
 function selectFixtures(labels: Set<string> | null): BenchmarkFixture[] {
@@ -1114,68 +1152,86 @@ function isCurrentFidelityScore(
 	);
 }
 
+function findNativeBaseline(rows: readonly BenchmarkRow[], row: BenchmarkRow): BenchmarkRow | undefined {
+	return rows.find(
+		(candidate) =>
+			candidate.fixture === row.fixture &&
+			candidate.variant_kind === "native_bun" &&
+			candidate.token_estimate,
+	);
+}
+
+function computeRowScore(row: BenchmarkRow, rows: readonly BenchmarkRow[]): number {
+	const nativeBaseline = findNativeBaseline(rows, row);
+	const baselineTokens = nativeBaseline?.token_estimate ?? row.token_estimate ?? 0;
+	const tokenReduction =
+		baselineTokens > 0 && row.token_estimate !== null
+			? Math.max(0, (baselineTokens - row.token_estimate) / baselineTokens)
+			: 0;
+	const fidelityScore = row.fidelity?.score ?? 0;
+	return round2(tokenReduction * 50 + fidelityScore * 50);
+}
+
+function isRepairContextMode(contextMode: BenchmarkRow["context_mode"]): boolean {
+	return (
+		contextMode === "repair" || contextMode === "repair-json" || contextMode === "repair-toon"
+	);
+}
+
+function repairModeLabel(contextMode: BenchmarkRow["context_mode"]): string {
+	if (contextMode === "repair-json") return "repair JSON";
+	if (contextMode === "repair-toon") return "repair TOON";
+	return "repair";
+}
+
+function annotateRepairNotes(row: BenchmarkRow, rows: readonly BenchmarkRow[]): void {
+	if (!isRepairContextMode(row.context_mode)) return;
+	const mcp = rows.find(
+		(candidate) =>
+			candidate.fixture === row.fixture &&
+			candidate.variant_kind === "mcp_artifact" &&
+			candidate.token_estimate !== null,
+	);
+	if (mcp?.token_estimate === null || mcp?.token_estimate === undefined) return;
+	const label = repairModeLabel(row.context_mode);
+	row.notes.push(
+		row.token_estimate !== null && row.token_estimate < mcp.token_estimate
+			? `${label} token estimate beats MCP artifact`
+			: `${label} token estimate does not beat MCP artifact`,
+	);
+}
+
+function annotateTriageNotes(row: BenchmarkRow, rows: readonly BenchmarkRow[]): void {
+	if (row.context_mode !== "triage") return;
+	const raw = rows.find(
+		(candidate) => candidate.fixture === row.fixture && candidate.context_mode === "raw",
+	);
+	if (raw?.token_estimate === null || raw?.token_estimate === undefined) return;
+	row.notes.push(
+		row.token_estimate !== null && row.token_estimate < raw.token_estimate
+			? "triage is smaller than raw Bun"
+			: "triage is not smaller than raw Bun",
+	);
+}
+
+function scoreRow(row: BenchmarkRow, rows: readonly BenchmarkRow[]): void {
+	if (row.status === "skipped") {
+		row.score = null;
+		return;
+	}
+	if (!row.exit_correct) {
+		row.score = 0;
+		row.notes.push("exit correctness failed before token or fidelity scoring");
+		return;
+	}
+	row.score = computeRowScore(row, rows);
+	annotateRepairNotes(row, rows);
+	annotateTriageNotes(row, rows);
+}
+
 function applyScores(rows: BenchmarkRow[]): void {
 	for (const row of rows) {
-		if (row.status === "skipped") {
-			row.score = null;
-			continue;
-		}
-		if (!row.exit_correct) {
-			row.score = 0;
-			row.notes.push("exit correctness failed before token or fidelity scoring");
-			continue;
-		}
-		const nativeBaseline = rows.find(
-			(candidate) =>
-				candidate.fixture === row.fixture &&
-				candidate.variant_kind === "native_bun" &&
-				candidate.token_estimate,
-		);
-		const baselineTokens = nativeBaseline?.token_estimate ?? row.token_estimate ?? 0;
-		const tokenReduction =
-			baselineTokens > 0 && row.token_estimate !== null
-				? Math.max(0, (baselineTokens - row.token_estimate) / baselineTokens)
-				: 0;
-		const fidelityScore = row.fidelity?.score ?? 0;
-		row.score = round2(tokenReduction * 50 + fidelityScore * 50);
-		if (
-			row.context_mode === "repair" ||
-			row.context_mode === "repair-json" ||
-			row.context_mode === "repair-toon"
-		) {
-			const mcp = rows.find(
-				(candidate) =>
-					candidate.fixture === row.fixture &&
-					candidate.variant_kind === "mcp_artifact" &&
-					candidate.token_estimate !== null,
-			);
-			if (mcp?.token_estimate !== null && mcp?.token_estimate !== undefined) {
-				const label =
-					row.context_mode === "repair-json"
-						? "repair JSON"
-						: row.context_mode === "repair-toon"
-							? "repair TOON"
-							: "repair";
-				row.notes.push(
-					row.token_estimate !== null && row.token_estimate < mcp.token_estimate
-						? `${label} token estimate beats MCP artifact`
-						: `${label} token estimate does not beat MCP artifact`,
-				);
-			}
-		}
-		if (row.context_mode === "triage") {
-			const raw = rows.find(
-				(candidate) =>
-					candidate.fixture === row.fixture && candidate.context_mode === "raw",
-			);
-			if (raw?.token_estimate !== null && raw?.token_estimate !== undefined) {
-				row.notes.push(
-					row.token_estimate !== null && row.token_estimate < raw.token_estimate
-						? "triage is smaller than raw Bun"
-						: "triage is not smaller than raw Bun",
-				);
-			}
-		}
+		scoreRow(row, rows);
 	}
 }
 
@@ -1201,6 +1257,131 @@ function createCandidateGates(rows: BenchmarkRow[]): CandidateGate[] {
 		}));
 }
 
+type GateCheck = (
+	gate: CandidateGate,
+	row: BenchmarkRow,
+	rows: readonly BenchmarkRow[],
+) => string | null;
+
+function checkTokenEstimateGate(gate: CandidateGate, row: BenchmarkRow): string | null {
+	if (
+		gate.max_token_estimate !== null &&
+		(row.token_estimate === null || row.token_estimate > gate.max_token_estimate)
+	) {
+		return `${gate.variant}/${gate.fixture}: token estimate exceeded gate`;
+	}
+	return null;
+}
+
+function checkTokenEstimateVariantGate(
+	gate: CandidateGate,
+	row: BenchmarkRow,
+	rows: readonly BenchmarkRow[],
+): string | null {
+	if (!gate.max_token_estimate_variant) return null;
+	const comparison = findComparisonRow(rows, gate);
+	if (comparison?.status === "skipped") {
+		return `${gate.variant}/${gate.fixture}: comparison row ${
+			gate.max_token_estimate_variant
+		} skipped - ${comparison.skip_reason ?? "reason unavailable"}`;
+	}
+	if (!comparison || comparison.token_estimate === null) {
+		return `${gate.variant}/${gate.fixture}: comparison row ${gate.max_token_estimate_variant} missing`;
+	}
+	if (
+		(row.token_estimate === null || row.token_estimate > comparison.token_estimate) &&
+		!gate.token_exception
+	) {
+		return `${gate.variant}/${gate.fixture}: token estimate exceeded ${gate.max_token_estimate_variant}`;
+	}
+	return null;
+}
+
+function checkFidelityScoreGate(gate: CandidateGate, row: BenchmarkRow): string | null {
+	if (
+		gate.min_fidelity_score !== null &&
+		(row.fidelity?.score ?? 0) < gate.min_fidelity_score
+	) {
+		return `${gate.variant}/${gate.fixture}: fidelity score below gate`;
+	}
+	return null;
+}
+
+function checkLookupAvailableGate(gate: CandidateGate, row: BenchmarkRow): string | null {
+	if (gate.require_lookup_available && row.lookup_available !== true) {
+		return `${gate.variant}/${gate.fixture}: lookup unavailable`;
+	}
+	return null;
+}
+
+function checkDetailRoundtripGate(gate: CandidateGate, row: BenchmarkRow): string | null {
+	if (gate.require_detail_roundtrip && row.detail_roundtrip?.richer_detail !== true) {
+		return `${gate.variant}/${gate.fixture}: detail roundtrip failed`;
+	}
+	return null;
+}
+
+function checkMaxDetailTestRerunsGate(gate: CandidateGate, row: BenchmarkRow): string | null {
+	if (
+		gate.max_detail_test_reruns !== undefined &&
+		(row.detail_roundtrip?.test_reruns ?? 0) > gate.max_detail_test_reruns
+	) {
+		return `${gate.variant}/${gate.fixture}: detail lookup reran tests`;
+	}
+	return null;
+}
+
+function checkMaxDiagnosticCharsGate(gate: CandidateGate, row: BenchmarkRow): string | null {
+	if (
+		gate.max_diagnostic_chars !== undefined &&
+		(row.diagnostic_chars ?? Number.POSITIVE_INFINITY) > gate.max_diagnostic_chars
+	) {
+		return `${gate.variant}/${gate.fixture}: diagnostic chars exceeded gate`;
+	}
+	return null;
+}
+
+function checkExpectedReceivedAvailabilityGate(
+	gate: CandidateGate,
+	row: BenchmarkRow,
+): string | null {
+	if (
+		gate.require_no_false_expected_received &&
+		(row.fidelity?.signals.expected_value !== true ||
+			row.fidelity.signals.received_value !== true)
+	) {
+		return `${gate.variant}/${gate.fixture}: expected/received availability gate failed`;
+	}
+	return null;
+}
+
+const GATE_VALUE_CHECKS: readonly GateCheck[] = [
+	checkTokenEstimateGate,
+	checkTokenEstimateVariantGate,
+	checkFidelityScoreGate,
+	checkLookupAvailableGate,
+	checkDetailRoundtripGate,
+	checkMaxDetailTestRerunsGate,
+	checkMaxDiagnosticCharsGate,
+	checkExpectedReceivedAvailabilityGate,
+];
+
+function evaluateGate(gate: CandidateGate, rows: readonly BenchmarkRow[]): string[] {
+	const row = findGateRow(rows, gate);
+	if (!row) return [`${gate.variant}/${gate.fixture}: row missing`];
+	if (row.status === "skipped") {
+		return [
+			`${gate.variant}/${gate.fixture}: skipped - ${row.skip_reason ?? "reason unavailable"}`,
+		];
+	}
+	if (row.exit_correct !== true) {
+		return [`${gate.variant}/${gate.fixture}: exit correctness failed`];
+	}
+	return GATE_VALUE_CHECKS.map((check) => check(gate, row, rows)).filter(
+		(failure): failure is string => failure !== null,
+	);
+}
+
 async function evaluateFixedGates(
 	cwd: string,
 	gateFile: string | null,
@@ -1210,91 +1391,7 @@ async function evaluateFixedGates(
 	const candidateGates = gatePreset
 		? createPresetGates(gatePreset)
 		: await loadFixedGateFile(cwd, gateFile);
-	const failures: string[] = [];
-	for (const gate of candidateGates) {
-		const row = findGateRow(rows, gate);
-		if (!row) {
-			failures.push(`${gate.variant}/${gate.fixture}: row missing`);
-			continue;
-		}
-		if (row.status === "skipped") {
-			failures.push(
-				`${gate.variant}/${gate.fixture}: skipped - ${
-					row.skip_reason ?? "reason unavailable"
-				}`,
-			);
-			continue;
-		}
-		if (row.exit_correct !== true) {
-			failures.push(`${gate.variant}/${gate.fixture}: exit correctness failed`);
-			continue;
-		}
-		if (
-			gate.max_token_estimate !== null &&
-			(row.token_estimate === null || row.token_estimate > gate.max_token_estimate)
-		) {
-			failures.push(`${gate.variant}/${gate.fixture}: token estimate exceeded gate`);
-		}
-		if (gate.max_token_estimate_variant) {
-			const comparison = findComparisonRow(rows, gate);
-			if (comparison?.status === "skipped") {
-				failures.push(
-					`${gate.variant}/${gate.fixture}: comparison row ${
-						gate.max_token_estimate_variant
-					} skipped - ${comparison.skip_reason ?? "reason unavailable"}`,
-				);
-			} else if (!comparison || comparison.token_estimate === null) {
-				failures.push(
-					`${gate.variant}/${gate.fixture}: comparison row ${gate.max_token_estimate_variant} missing`,
-				);
-			} else if (
-				row.token_estimate === null ||
-				row.token_estimate > comparison.token_estimate
-			) {
-				if (!gate.token_exception) {
-					failures.push(
-						`${gate.variant}/${gate.fixture}: token estimate exceeded ${gate.max_token_estimate_variant}`,
-					);
-				}
-			}
-		}
-		if (
-			gate.min_fidelity_score !== null &&
-			(row.fidelity?.score ?? 0) < gate.min_fidelity_score
-		) {
-			failures.push(`${gate.variant}/${gate.fixture}: fidelity score below gate`);
-		}
-		if (gate.require_lookup_available && row.lookup_available !== true) {
-			failures.push(`${gate.variant}/${gate.fixture}: lookup unavailable`);
-		}
-		if (
-			gate.require_detail_roundtrip &&
-			row.detail_roundtrip?.richer_detail !== true
-		) {
-			failures.push(`${gate.variant}/${gate.fixture}: detail roundtrip failed`);
-		}
-		if (
-			gate.max_detail_test_reruns !== undefined &&
-			(row.detail_roundtrip?.test_reruns ?? 0) > gate.max_detail_test_reruns
-		) {
-			failures.push(`${gate.variant}/${gate.fixture}: detail lookup reran tests`);
-		}
-		if (
-			gate.max_diagnostic_chars !== undefined &&
-			(row.diagnostic_chars ?? Number.POSITIVE_INFINITY) > gate.max_diagnostic_chars
-		) {
-			failures.push(`${gate.variant}/${gate.fixture}: diagnostic chars exceeded gate`);
-		}
-		if (
-			gate.require_no_false_expected_received &&
-			(row.fidelity?.signals.expected_value !== true ||
-				row.fidelity.signals.received_value !== true)
-		) {
-			failures.push(
-				`${gate.variant}/${gate.fixture}: expected/received availability gate failed`,
-			);
-		}
-	}
+	const failures = candidateGates.flatMap((gate) => evaluateGate(gate, rows));
 	return { status: failures.length === 0 ? "pass" : "fail", failures };
 }
 

@@ -3,10 +3,10 @@ import { fileURLToPath } from 'node:url';
 
 import { recipeDigest, repairRecipe, verifyIndependentReceipt } from '../../../skills/bake-off/scripts/recipe-contract.mjs';
 
-export const transport = 'deterministic-local-process';
+const transport = 'deterministic-local-process';
 const pluginRoot = fileURLToPath(new URL('../../../', import.meta.url));
 
-export function runJourney({ statePath, title, recipe }) {
+function runJourney({ statePath, title, recipe }) {
   if (typeof statePath !== 'string' || statePath.length === 0) throw new TypeError('statePath is required');
   if (typeof title !== 'string' || title.length === 0) throw new TypeError('title is required');
   if (!recipe || !Array.isArray(recipe.steps)) throw new TypeError('recipe is required');
@@ -72,7 +72,3 @@ function main() {
 }
 
 if (process.argv[1]?.endsWith('/journey.mjs')) main();
-
-export function readFixtureState(statePath) {
-  return JSON.parse(readFileSync(statePath, 'utf8'));
-}

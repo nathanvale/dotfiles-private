@@ -721,6 +721,12 @@ describe("runner benchmark fidelity", () => {
 		expect(envelope.run_id).toBe("unit-json-error");
 		expect(envelope.error.code).toBe("benchmark_usage_error");
 	});
+
+	test("rejects a bare prototype-named token as an unknown option, not an inherited handler", async () => {
+		for (const token of ["constructor", "__proto__"]) {
+			await expect(runBenchmark([token])).rejects.toThrow(`unknown option: ${token}`);
+		}
+	});
 });
 
 describe("test runner runtime", () => {

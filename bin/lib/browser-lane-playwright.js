@@ -64,6 +64,23 @@ async function retire(run) {
   owned.delete(run);
   return true;
 }
+async function waitForCommandCompletion(run, cleanup, end) {
+  while (!run.done) {
+    if (!cleanup && abort.signal.aborted) throw abort.signal.reason;
+    if (performance.now() >= end) throw fault(124, 'playwright_timeout');
+    if (run.overflow) throw fault(1, 'playwright_response_too_large');
+    await delay(20);
+  }
+}
+function parseCommandResponse(run) {
+  let response;
+  try { response = JSON.parse(run.stdout); } catch { throw fault(1, 'playwright_response_invalid'); }
+  if (!response || Array.isArray(response) || typeof response !== 'object' ||
+      ('isError' in response && typeof response.isError !== 'boolean')) {
+    throw fault(1, 'playwright_response_invalid');
+  }
+  return response;
+}
 async function command(args, cleanup = false) {
   const end = cleanup ? performance.now() + 3000 : deadline;
   if (!cleanup && abort.signal.aborted) throw abort.signal.reason;
@@ -71,18 +88,9 @@ async function command(args, cleanup = false) {
   const run = launch(cli, [`-s=${session}`, '--json', ...args]);
   let response, failure;
   try {
-    while (!run.done) {
-      if (!cleanup && abort.signal.aborted) throw abort.signal.reason;
-      if (performance.now() >= end) throw fault(124, 'playwright_timeout');
-      if (run.overflow) throw fault(1, 'playwright_response_too_large');
-      await delay(20);
-    }
+    await waitForCommandCompletion(run, cleanup, end);
     if (run.status !== 0) throw fault(run.status, 'playwright_command_failed');
-    try { response = JSON.parse(run.stdout); } catch { throw fault(1, 'playwright_response_invalid'); }
-    if (!response || Array.isArray(response) || typeof response !== 'object' ||
-        ('isError' in response && typeof response.isError !== 'boolean')) {
-      throw fault(1, 'playwright_response_invalid');
-    }
+    response = parseCommandResponse(run);
   } catch (error) { failure = error; }
   // Include descendants, even when the command leader exited first.
   if (!await retire(run)) throw fault(17, 'playwright_process_retirement_unproved');
@@ -132,50 +140,69 @@ function diagnose(error) {
       : 'Inspect the intended page and run-scoped session before retrying.'
   }}) + '\n');
 }
+async function waitForDaemonReady(daemon) {
+  const readyEnd = Math.min(deadline, performance.now() + 10_000);
+  while (!daemon.stdout.includes('Daemon listening on')) {
+    if (abort.signal.aborted) throw abort.signal.reason;
+    if (performance.now() >= deadline) throw fault(124, 'playwright_timeout');
+    if (daemon.done || performance.now() >= readyEnd) throw fault(12, 'playwright_not_ready');
+    await delay(20);
+  }
+}
+async function runPlanActions(plan) {
+  await assertPage();
+  for (const action of plan.actions) {
+    await assertPage();
+    const args = action.command === 'evaluate' ? ['eval', `(${action.args[0]}\n)`] : [action.command, ...action.args];
+    const response = await command(args);
+    render(response);
+    if (response.isError === true) throw fault(1, 'playwright_action_failed');
+    await assertPage();
+  }
+}
+async function detachDaemon(daemon) {
+  try {
+    const response = await command(['detach'], true);
+    const end = performance.now() + 1000;
+    while (!daemon.done && performance.now() < end) await delay(20);
+    return response.status === 'detached' && daemon.done;
+  } catch { return false; } // Retirement below remains mandatory after failed detach.
+}
+async function retireOwnedRuns() {
+  let allRetired = true;
+  for (const run of [...owned]) {
+    if (!await retire(run)) allRetired = false;
+  }
+  return allRetired;
+}
+async function finalizeRun(daemon) {
+  let cleanup = 'unconfirmed';
+  if (daemon && await detachDaemon(daemon)) cleanup = 'confirmed';
+  if (!await retireOwnedRuns()) cleanup = 'unconfirmed';
+  return cleanup;
+}
+function reportActivityOutcome(failure, cleanup, status) {
+  if (!env.BROWSER_LANE_ACTIVITY_OUTCOME) return;
+  try {
+    fs.writeFileSync(env.BROWSER_LANE_ACTIVITY_OUTCOME, JSON.stringify({
+      actionOutcome: failure ? 'failed' : 'completed', cleanupOutcome: cleanup, exitCode: status
+    }), {mode: 0o600});
+  } catch { /* Activity publication is advisory. */ }
+}
 async function main() {
   let daemon, failure, cleanup = 'unconfirmed';
   try {
     const plan = JSON.parse(fs.readFileSync(env.BROWSER_LANE_PLAYWRIGHT_PLAN, 'utf8'));
     daemon = launch(env.BROWSER_LANE_PLAYWRIGHT_NODE, [daemonPath, session], { ...env, PLAYWRIGHT_MCP_CDP_ENDPOINT: endpoint });
-    const readyEnd = Math.min(deadline, performance.now() + 10_000);
-    while (!daemon.stdout.includes('Daemon listening on')) {
-      if (abort.signal.aborted) throw abort.signal.reason;
-      if (performance.now() >= deadline) throw fault(124, 'playwright_timeout');
-      if (daemon.done || performance.now() >= readyEnd) throw fault(12, 'playwright_not_ready');
-      await delay(20);
-    }
-    await assertPage();
-    for (const action of plan.actions) {
-      await assertPage();
-      const args = action.command === 'evaluate' ? ['eval', `(${action.args[0]}\n)`] : [action.command, ...action.args];
-      const response = await command(args);
-      render(response);
-      if (response.isError === true) throw fault(1, 'playwright_action_failed');
-      await assertPage();
-    }
+    await waitForDaemonReady(daemon);
+    await runPlanActions(plan);
   } catch (e) { failure = e; }
   finally {
-    if (daemon) {
-      try {
-        const response = await command(['detach'], true);
-        const end = performance.now() + 1000;
-        while (!daemon.done && performance.now() < end) await delay(20);
-        if (response.status === 'detached' && daemon.done) cleanup = 'confirmed';
-      } catch { /* Retirement below remains mandatory after failed detach. */ }
-    }
-    for (const run of [...owned]) {
-      if (!await retire(run)) cleanup = 'unconfirmed';
-    }
+    cleanup = await finalizeRun(daemon);
   }
   if (abort.signal.aborted) failure = abort.signal.reason;
   const status = failure?.status || (cleanup === 'confirmed' ? 0 : 17);
-  if (env.BROWSER_LANE_ACTIVITY_OUTCOME) {
-    try {
-      fs.writeFileSync(env.BROWSER_LANE_ACTIVITY_OUTCOME, JSON.stringify({
-        actionOutcome: failure ? 'failed' : 'completed', cleanupOutcome: cleanup, exitCode: status
-      }), {mode: 0o600});
-    } catch { /* Activity publication is advisory. */ }
-  }
+  reportActivityOutcome(failure, cleanup, status);
   if (failure) diagnose(failure);
   else if (cleanup !== 'confirmed') diagnose(fault(17, 'playwright_lifecycle_unresolved'));
   // All owned process groups were retired above. No browser.close() is used.

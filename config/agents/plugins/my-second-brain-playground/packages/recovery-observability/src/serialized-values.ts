@@ -1,5 +1,5 @@
 export const MAX_SERIALIZED_RECORD_BYTES = 4 * 1024
-export const TRACE_SCHEMA_VERSION = 1 as const
+const TRACE_SCHEMA_VERSION = 1 as const
 
 const identityPattern = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,511}$/
 const pluginVersionPattern = /^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-((?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/
@@ -228,41 +228,68 @@ function projectRecord(input: Record<string, unknown>): LifecycleRecord {
 	}
 }
 
+function validLifecycleIdentities(input: Record<string, unknown>): boolean {
+	const required = [input.record_identity, input.journey_identity, input.invocation_identity, input.producer_identity]
+	if (!required.every(isRecoveryIdentity)) return false
+	const optional = [input.parent_record_identity, input.observed_worker_identity, input.inherited_parent_identity, input.ledger_task_identity]
+	if (optional.some((value) => value !== undefined && !isRecoveryIdentity(value))) return false
+	const workerIdentityPair = input.observed_worker_identity === undefined === (input.observed_worker_identity_source === undefined)
+	return workerIdentityPair && (
+		input.observed_worker_identity_source === undefined ||
+		isMember(workerIdentitySources, input.observed_worker_identity_source)
+	)
+}
+
+function validLifecycleNumbers(input: Record<string, unknown>): boolean {
+	if (!Number.isSafeInteger(input.producer_sequence) || (input.producer_sequence as number) < 0) return false
+	return input.duration_ms === undefined || (
+		typeof input.duration_ms === "number" &&
+		Number.isFinite(input.duration_ms) &&
+		input.duration_ms >= 0
+	)
+}
+
+function validLifecycleKinds(input: Record<string, unknown>): boolean {
+	return (
+		isMember(harnessKinds, input.harness_kind) &&
+		isMember(operations, input.operation) &&
+		isMember(phases, input.phase) &&
+		validIsoTimestamp(input.occurred_at) &&
+		isMember(outcomes, input.outcome)
+	)
+}
+
+function validLifecycleOutcome(input: Record<string, unknown>): boolean {
+	const refusalPair = input.outcome === "refused" ? input.refusal_code !== undefined : input.refusal_code === undefined
+	return refusalPair && (input.refusal_code === undefined || isMember(refusalCodes, input.refusal_code))
+}
+
+function validLifecycleEvidence(input: Record<string, unknown>): boolean {
+	return (
+		(input.source_evidence === undefined || validSourceEvidence(input.source_evidence)) &&
+		(input.install_evidence === undefined || validInstallEvidence(input.install_evidence))
+	)
+}
+
+function validLifecycleValues(input: Record<string, unknown>): boolean {
+	return (
+		input.schema_version === TRACE_SCHEMA_VERSION &&
+		input.record_type === "lifecycle" &&
+		validLifecycleIdentities(input) &&
+		validLifecycleNumbers(input) &&
+		validLifecycleKinds(input) &&
+		validLifecycleOutcome(input) &&
+		validLifecycleEvidence(input)
+	)
+}
+
 export function validateLifecycleRecord(
 	input: unknown,
 	options: { readonly knownSecretValues?: readonly string[] } = {},
 ): LifecycleValidationResult {
 	if (!isObject(input)) return { accepted: false, refusal: "invalid-record" }
 	if (!hasOnlyKeys(input, recordKeys)) return { accepted: false, refusal: "unknown-field" }
-	const workerIdentityPair = input.observed_worker_identity === undefined === (input.observed_worker_identity_source === undefined)
-	const refusalPair = input.outcome === "refused" ? input.refusal_code !== undefined : input.refusal_code === undefined
-	if (
-		input.schema_version !== TRACE_SCHEMA_VERSION ||
-		input.record_type !== "lifecycle" ||
-		!isRecoveryIdentity(input.record_identity) ||
-		!isRecoveryIdentity(input.journey_identity) ||
-		!isRecoveryIdentity(input.invocation_identity) ||
-		!isRecoveryIdentity(input.producer_identity) ||
-		!Number.isSafeInteger(input.producer_sequence) ||
-		(input.producer_sequence as number) < 0 ||
-		(input.parent_record_identity !== undefined && !isRecoveryIdentity(input.parent_record_identity)) ||
-		(input.observed_worker_identity !== undefined && !isRecoveryIdentity(input.observed_worker_identity)) ||
-		!workerIdentityPair ||
-		(input.observed_worker_identity_source !== undefined && !isMember(workerIdentitySources, input.observed_worker_identity_source)) ||
-		(input.inherited_parent_identity !== undefined && !isRecoveryIdentity(input.inherited_parent_identity)) ||
-		(input.ledger_task_identity !== undefined && !isRecoveryIdentity(input.ledger_task_identity)) ||
-		!isMember(harnessKinds, input.harness_kind) ||
-		!isMember(operations, input.operation) ||
-		!isMember(phases, input.phase) ||
-		!validIsoTimestamp(input.occurred_at) ||
-		(input.duration_ms !== undefined &&
-			(typeof input.duration_ms !== "number" || !Number.isFinite(input.duration_ms) || input.duration_ms < 0)) ||
-		!isMember(outcomes, input.outcome) ||
-		!refusalPair ||
-		(input.refusal_code !== undefined && !isMember(refusalCodes, input.refusal_code)) ||
-		(input.source_evidence !== undefined && !validSourceEvidence(input.source_evidence)) ||
-		(input.install_evidence !== undefined && !validInstallEvidence(input.install_evidence))
-	) {
+	if (!validLifecycleValues(input)) {
 		return { accepted: false, refusal: "invalid-value" }
 	}
 	if (containsKnownSecret(input, options.knownSecretValues ?? [])) {

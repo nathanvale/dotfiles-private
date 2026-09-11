@@ -88,16 +88,12 @@ function displayText(value: string, maximumLength: number): string {
 	return `${normalized.slice(0, maximumLength - 1)}…`
 }
 
-function argumentsAreValid(arguments_: string[]): boolean {
-	const command = arguments_[0]
-	if (!command || !["archived", "snapshot", "search"].includes(command)) {
-		return false
-	}
+function collectSeenOptions(arguments_: string[]): Set<string> | undefined {
 	const allowedValues = new Set(["--limit", "--database", "--state", "--query"])
 	const seen = new Set<string>()
 	for (let index = 1; index < arguments_.length; index += 1) {
 		const argument = arguments_[index]
-		if (!argument || seen.has(argument)) return false
+		if (!argument || seen.has(argument)) return undefined
 		if (argument === "--json") {
 			seen.add(argument)
 			continue
@@ -109,14 +105,18 @@ function argumentsAreValid(arguments_: string[]): boolean {
 				value.startsWith("--") ||
 				(argument !== "--query" && value.length === 0)
 			) {
-				return false
+				return undefined
 			}
 			seen.add(argument)
 			index += 1
 			continue
 		}
-		return false
+		return undefined
 	}
+	return seen
+}
+
+function commandOptionsAreValid(command: string, seen: Set<string>): boolean {
 	if (!seen.has("--json")) return false
 	if (command === "archived" && (seen.has("--state") || seen.has("--query"))) {
 		return false
@@ -126,6 +126,16 @@ function argumentsAreValid(arguments_: string[]): boolean {
 		return false
 	}
 	return true
+}
+
+function argumentsAreValid(arguments_: string[]): boolean {
+	const command = arguments_[0]
+	if (!command || !["archived", "snapshot", "search"].includes(command)) {
+		return false
+	}
+	const seen = collectSeenOptions(arguments_)
+	if (seen === undefined) return false
+	return commandOptionsAreValid(command, seen)
 }
 
 function envelopeError(
@@ -238,6 +248,144 @@ function writeSnapshot(statePath: string, snapshot: SessionSnapshot): void {
 	chmodSync(statePath, 0o600)
 }
 
+function parseLimit(arguments_: string[]): number {
+	return Number(valueAfter(arguments_, "--limit") ?? "30")
+}
+
+function requestIsValid(arguments_: string[], limit: number): boolean {
+	return argumentsAreValid(arguments_) && Number.isInteger(limit) && limit >= 1 && limit <= 200
+}
+
+function runSearchCommand(arguments_: string[], command: string, limit: number, statePath: string): void {
+	const snapshot = readSnapshot(statePath)
+	if (!snapshot) {
+		envelopeError(
+			command,
+			"snapshot_unavailable",
+			"Run snapshot --json to create a private local index, then retry the search.",
+			3,
+			true,
+		)
+		return
+	}
+	const query = valueAfter(arguments_, "--query") ?? ""
+	const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean)
+	const sessions = snapshot.sessions
+		.filter((session) => {
+			const haystack = [
+				session.id,
+				session.title,
+				session.summary,
+				session.cwd,
+				session.thread_source ?? "",
+			]
+				.join(" ")
+				.toLocaleLowerCase()
+			return terms.every((term) => haystack.includes(term))
+		})
+		.slice(0, limit)
+		.map((session) => ({
+			...session,
+			summary: displayText(session.summary, 140),
+		}))
+	const snapshotAgeMs = Math.max(
+		0,
+		Date.now() - new Date(snapshot.generated_at).getTime(),
+	)
+	process.stdout.write(
+		`${JSON.stringify({
+			status: "ok",
+			run_id: randomUUID(),
+			action: command,
+			side_effects: "none",
+			data: {
+				query,
+				snapshot_generated_at: snapshot.generated_at,
+				snapshot_age_ms: snapshotAgeMs,
+				stale: snapshotAgeMs > 24 * 60 * 60 * 1000,
+				sessions,
+			},
+		})}\n`,
+	)
+}
+
+function readSessionsForCommand(arguments_: string[], command: string, limit: number): SessionMetadata[] | undefined {
+	const databasePath = valueAfter(arguments_, "--database") ?? defaultDatabasePath()
+	const database = openDatabase(databasePath)
+	if (!database) {
+		envelopeError(
+			command,
+			"source_unavailable",
+			"Start Codex Desktop once so its local session index exists, then retry.",
+			3,
+			true,
+		)
+		return undefined
+	}
+	try {
+		const sessions = readSessions(database, limit, command === "archived")
+		database.close()
+		return sessions
+	} catch {
+		database.close()
+		envelopeError(
+			command,
+			"source_incompatible",
+			"Update Codex Desktop or the session-picker adapter, then retry.",
+			4,
+			false,
+		)
+		return undefined
+	}
+}
+
+function runSnapshotCommand(command: string, statePath: string, sessions: SessionMetadata[]): void {
+	const existed = existsSync(statePath)
+	const snapshot: SessionSnapshot = {
+		schema_version: 1,
+		generated_at: new Date().toISOString(),
+		sessions,
+	}
+	try {
+		writeSnapshot(statePath, snapshot)
+	} catch {
+		envelopeError(
+			command,
+			"snapshot_write_failed",
+			"Check that the private state directory is writable, then retry.",
+			5,
+			true,
+		)
+		return
+	}
+	process.stdout.write(
+		`${JSON.stringify({
+			status: "ok",
+			run_id: randomUUID(),
+			action: command,
+			side_effects: "local_private_state",
+			data: {
+				changed_state: existed ? "updated" : "created",
+				state_path: statePath,
+				generated_at: snapshot.generated_at,
+				session_count: sessions.length,
+			},
+		})}\n`,
+	)
+}
+
+function writeSessionsResult(command: string, sessions: SessionMetadata[]): void {
+	process.stdout.write(
+		`${JSON.stringify({
+			status: "ok",
+			run_id: randomUUID(),
+			action: command,
+			side_effects: "none",
+			data: { source_availability: "ready", sessions },
+		})}\n`,
+	)
+}
+
 function main(arguments_: string[]): void {
 	if (
 		arguments_.length === 0 ||
@@ -249,13 +397,8 @@ function main(arguments_: string[]): void {
 	}
 
 	const command = arguments_[0] ?? "unknown"
-	const limit = Number(valueAfter(arguments_, "--limit") ?? "30")
-	if (
-		!argumentsAreValid(arguments_) ||
-		!Number.isInteger(limit) ||
-		limit < 1 ||
-		limit > 200
-	) {
+	const limit = parseLimit(arguments_)
+	if (!requestIsValid(arguments_, limit)) {
 		envelopeError(
 			command,
 			"invalid_usage",
@@ -270,133 +413,19 @@ function main(arguments_: string[]): void {
 
 	const statePath = valueAfter(arguments_, "--state") ?? defaultStatePath()
 	if (command === "search") {
-		const snapshot = readSnapshot(statePath)
-		if (!snapshot) {
-			envelopeError(
-				command,
-				"snapshot_unavailable",
-				"Run snapshot --json to create a private local index, then retry the search.",
-				3,
-				true,
-			)
-			return
-		}
-		const query = valueAfter(arguments_, "--query") ?? ""
-		const terms = query.toLocaleLowerCase().split(/\s+/).filter(Boolean)
-		const sessions = snapshot.sessions
-			.filter((session) => {
-				const haystack = [
-					session.id,
-					session.title,
-					session.summary,
-					session.cwd,
-					session.thread_source ?? "",
-				]
-					.join(" ")
-					.toLocaleLowerCase()
-				return terms.every((term) => haystack.includes(term))
-			})
-			.slice(0, limit)
-			.map((session) => ({
-				...session,
-				summary: displayText(session.summary, 140),
-			}))
-		const snapshotAgeMs = Math.max(
-			0,
-			Date.now() - new Date(snapshot.generated_at).getTime(),
-		)
-		process.stdout.write(
-			`${JSON.stringify({
-				status: "ok",
-				run_id: randomUUID(),
-				action: command,
-				side_effects: "none",
-				data: {
-					query,
-					snapshot_generated_at: snapshot.generated_at,
-					snapshot_age_ms: snapshotAgeMs,
-					stale: snapshotAgeMs > 24 * 60 * 60 * 1000,
-					sessions,
-				},
-			})}\n`,
-		)
+		runSearchCommand(arguments_, command, limit, statePath)
 		return
 	}
 
-	const databasePath = valueAfter(arguments_, "--database") ?? defaultDatabasePath()
-	const database = openDatabase(databasePath)
-	if (!database) {
-		envelopeError(
-			command,
-			"source_unavailable",
-			"Start Codex Desktop once so its local session index exists, then retry.",
-			3,
-			true,
-		)
-		return
-	}
-
-	let sessions: SessionMetadata[]
-	try {
-		sessions = readSessions(database, limit, command === "archived")
-	} catch {
-		database.close()
-		envelopeError(
-			command,
-			"source_incompatible",
-			"Update Codex Desktop or the session-picker adapter, then retry.",
-			4,
-			false,
-		)
-		return
-	}
-	database.close()
+	const sessions = readSessionsForCommand(arguments_, command, limit)
+	if (sessions === undefined) return
 
 	if (command === "snapshot") {
-		const existed = existsSync(statePath)
-		const snapshot: SessionSnapshot = {
-			schema_version: 1,
-			generated_at: new Date().toISOString(),
-			sessions,
-		}
-		try {
-			writeSnapshot(statePath, snapshot)
-		} catch {
-			envelopeError(
-				command,
-				"snapshot_write_failed",
-				"Check that the private state directory is writable, then retry.",
-				5,
-				true,
-			)
-			return
-		}
-		process.stdout.write(
-			`${JSON.stringify({
-				status: "ok",
-				run_id: randomUUID(),
-				action: command,
-				side_effects: "local_private_state",
-				data: {
-					changed_state: existed ? "updated" : "created",
-					state_path: statePath,
-					generated_at: snapshot.generated_at,
-					session_count: sessions.length,
-				},
-			})}\n`,
-		)
+		runSnapshotCommand(command, statePath, sessions)
 		return
 	}
 
-	process.stdout.write(
-		`${JSON.stringify({
-			status: "ok",
-			run_id: randomUUID(),
-			action: command,
-			side_effects: "none",
-			data: { source_availability: "ready", sessions },
-		})}\n`,
-	)
+	writeSessionsResult(command, sessions)
 }
 
 main(process.argv.slice(2))

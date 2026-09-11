@@ -75,6 +75,91 @@ function parseScenarios(): TestDesignScenario[] {
 	return parsed.scenarios;
 }
 
+type ScenarioFactorName =
+	| "artifact"
+	| "handback"
+	| "profile"
+	| "operation"
+	| "seam";
+type ScenarioFactor = readonly [ScenarioFactorName, readonly string[]];
+
+function factorValue(
+	scenario: TestDesignScenario,
+	factor: ScenarioFactorName,
+): string | undefined {
+	return factor === "profile" ? scenario.profiles[0] : scenario[factor];
+}
+
+function assertFactorPair(
+	scenarios: TestDesignScenario[],
+	left: ScenarioFactor,
+	right: ScenarioFactor,
+): void {
+	const [leftName, leftValues] = left;
+	const [rightName, rightValues] = right;
+	const observed = new Set(
+		scenarios.map(
+			(scenario) =>
+				`${factorValue(scenario, leftName)}::${factorValue(scenario, rightName)}`,
+		),
+	);
+	for (const leftValue of leftValues) {
+		for (const rightValue of rightValues) {
+			expect(observed).toContain(`${leftValue}::${rightValue}`);
+		}
+	}
+}
+
+function assertFactorPairs(scenarios: TestDesignScenario[]): void {
+	const factors: readonly ScenarioFactor[] = [
+		["artifact", artifactTypes],
+		["handback", handbacks],
+		["profile", profiles],
+		["operation", operations],
+		["seam", seams],
+	];
+	for (let left = 0; left < factors.length; left += 1) {
+		for (let right = left + 1; right < factors.length; right += 1) {
+			assertFactorPair(scenarios, factors[left], factors[right]);
+		}
+	}
+}
+
+function assertMutationScenarios(scenarios: TestDesignScenario[]): void {
+	const mutationScenarios = scenarios.filter((scenario) =>
+		["create", "change"].includes(scenario.operation),
+	);
+	for (const scenario of mutationScenarios) {
+		expect(scenario.prompt.length).toBeGreaterThan(20);
+		expect(scenario.profiles).toHaveLength(1);
+		expect(scenario.expected.invokeTestDesign).toBe(true);
+		expect(scenario.expected.briefBeforeEdit).toBe(true);
+		expect(scenario.expected.activeWorkflowRemainsDriver).toBe(true);
+		if (scenario.seam === "existing") {
+			expect(scenario.expected.continuation).toBe("return");
+		} else {
+			expect(scenario.expected.continuation).toBe("await-seam-approval");
+		}
+	}
+}
+
+function assertNegativeScenarios(scenarios: TestDesignScenario[]): void {
+	for (const operation of ["read", "run"] as const) {
+		const negativeScenarios = scenarios.filter(
+			(candidate) => candidate.operation === operation,
+		);
+		expect(negativeScenarios.length).toBeGreaterThan(0);
+		for (const scenario of negativeScenarios) {
+			expect(scenario.expected).toEqual({
+				invokeTestDesign: false,
+				briefBeforeEdit: false,
+				activeWorkflowRemainsDriver: true,
+				continuation: "return",
+			});
+		}
+	}
+}
+
 describe("agent-native testing skill contract", () => {
 	test("uses the accepted invocation lanes and exact Startup Surface route", () => {
 		const testDesign = parseSkill(testDesignPath);
@@ -88,19 +173,6 @@ describe("agent-native testing skill contract", () => {
 
 		expect(requiredText(resolve(repositoryRoot, "config/agents/global.md"))).toContain(
 			startupRule,
-		);
-	});
-
-	test("wires qualification to the current personal source", () => {
-		const qualification = requiredText(
-			resolve(
-				repositoryRoot,
-				"config/agents/skills/personal/test-design/evals/qualification.ts",
-			),
-		);
-		expect(qualification).toContain('"config/agents/global.md"');
-		expect(qualification).toContain(
-			'"config/agents/skills/personal/test-design/evals/smoke-definitions.ts"',
 		);
 	});
 
@@ -279,66 +351,9 @@ describe("agent-native testing skill contract", () => {
 			new Set(profiles),
 		);
 
-			const factors = [
-				["artifact", artifactTypes],
-				["handback", handbacks],
-				["profile", profiles],
-				["operation", operations],
-				["seam", seams],
-			] as const;
-			const factorValue = (
-				scenario: TestDesignScenario,
-				factor: (typeof factors)[number][0],
-			) =>
-				factor === "profile" ? scenario.profiles[0] : scenario[factor];
-		for (let left = 0; left < factors.length; left += 1) {
-			for (let right = left + 1; right < factors.length; right += 1) {
-				const [leftName, leftValues] = factors[left];
-				const [rightName, rightValues] = factors[right];
-				const observed = new Set(
-					scenarios.map(
-						(scenario) =>
-							`${factorValue(scenario, leftName)}::${factorValue(scenario, rightName)}`,
-					),
-				);
-				for (const leftValue of leftValues) {
-					for (const rightValue of rightValues) {
-						expect(observed).toContain(`${leftValue}::${rightValue}`);
-					}
-				}
-			}
-		}
-
-		const mutationScenarios = scenarios.filter((scenario) =>
-			["create", "change"].includes(scenario.operation),
-		);
-		for (const scenario of mutationScenarios) {
-			expect(scenario.prompt.length).toBeGreaterThan(20);
-			expect(scenario.profiles).toHaveLength(1);
-			expect(scenario.expected.invokeTestDesign).toBe(true);
-			expect(scenario.expected.briefBeforeEdit).toBe(true);
-			expect(scenario.expected.activeWorkflowRemainsDriver).toBe(true);
-			if (scenario.seam === "existing") {
-				expect(scenario.expected.continuation).toBe("return");
-			} else {
-				expect(scenario.expected.continuation).toBe("await-seam-approval");
-			}
-		}
-
-			for (const operation of ["read", "run"] as const) {
-				const negativeScenarios = scenarios.filter(
-					(candidate) => candidate.operation === operation,
-				);
-				expect(negativeScenarios.length).toBeGreaterThan(0);
-				for (const scenario of negativeScenarios) {
-					expect(scenario.expected).toEqual({
-						invokeTestDesign: false,
-						briefBeforeEdit: false,
-						activeWorkflowRemainsDriver: true,
-						continuation: "return",
-					});
-				}
-			}
+		assertFactorPairs(scenarios);
+		assertMutationScenarios(scenarios);
+		assertNegativeScenarios(scenarios);
 
 		expect(scenarios.some((scenario) => scenario.seam === "new")).toBe(true);
 		expect(scenarios.some((scenario) => scenario.seam === "disputed")).toBe(

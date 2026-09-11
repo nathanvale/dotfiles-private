@@ -8,6 +8,15 @@ import {
 	resolvePosterUrl,
 } from "./fill-ticket.ts";
 
+async function runFillTicketCli(argv: string[]): Promise<{ exitCode: number; stderr: string }> {
+	const proc = Bun.spawn(["bun", "run", new URL("./fill-ticket.ts", import.meta.url).pathname, ...argv], {
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	const [stderr, exitCode] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+	return { exitCode, stderr };
+}
+
 describe("resolvePosterUrl (always absolute)", () => {
 	test("relative mx/ prefix gets CDN", () => {
 		expect(resolvePosterUrl("mx/posters/project-hail-mary-261bf935.jpg")).toBe(
@@ -95,5 +104,15 @@ describe("buildTicketLines", () => {
 		const out = buildTicketLines([{ type: "Adult", qty: 2, price: 2700 }]);
 		expect(out).toContain("Adult Ticket x 2");
 		expect(out.split("<tr>").length - 1).toBe(1);
+	});
+});
+
+describe("parseArgs (prototype-keyed flag tables)", () => {
+	test("rejects a bare prototype-named token as an unknown argument", async () => {
+		for (const token of ["constructor", "__proto__"]) {
+			const { exitCode, stderr } = await runFillTicketCli([token]);
+			expect(exitCode).toBe(64);
+			expect(stderr).toContain(`Unknown argument: ${token}`);
+		}
 	});
 });

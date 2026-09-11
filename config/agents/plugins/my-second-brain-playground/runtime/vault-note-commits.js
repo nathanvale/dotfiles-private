@@ -173,40 +173,56 @@ function atomicPrivateJson(path, payload) {
 function completionRef(runId) {
   return `refs/vault-note-commits/${runId}`;
 }
+function validateReceiptStorage(path) {
+  const metadata = lstatSync(path);
+  const directory = lstatSync(dirname(path));
+  if (!metadata.isFile() || metadata.isSymbolicLink() || (metadata.mode & 511) !== 384 || !directory.isDirectory() || directory.isSymbolicLink() || (directory.mode & 511) !== 448) {
+    throw new Error("Unsafe receipt");
+  }
+}
+function validateReceiptShape(receipt) {
+  const keys = Object.keys(receipt).sort().join(",");
+  const expectedKeys = ["schemaVersion", "runId", "vault", "worktree", "commonGitDirectory", "baseCommit", "paths", "code", ...receipt.code === "INTEGRATED" ? ["commit"] : []].sort().join(",");
+  if (keys !== expectedKeys || receipt.schemaVersion !== 1 || typeof receipt.runId !== "string" || !runIdPattern.test(receipt.runId) || typeof receipt.worktree !== "string" || typeof receipt.vault !== "string" || !isAbsolute(receipt.vault) || typeof receipt.commonGitDirectory !== "string" || !isAbsolute(receipt.commonGitDirectory) || typeof receipt.baseCommit !== "string" || !/^[a-f0-9]{40,64}$/.test(receipt.baseCommit) || !Array.isArray(receipt.paths) || receipt.paths.length === 0 || receipt.paths.some((entry) => typeof entry !== "string" || !entry || isAbsolute(entry) || entry.split(sep).includes("..")) || !samePaths(receipt.paths, [...new Set(receipt.paths)].sort()) || receipt.code !== "INTEGRATED" && receipt.code !== "NO_CHANGES") {
+    throw new Error("Invalid receipt");
+  }
+}
+function validateReceiptIdentity(receipt, worktree) {
+  const vaultId = createHash("sha256").update(receipt.vault).digest("hex").slice(0, 16);
+  if (worktree !== join(realpathSync(stateRoot("finish")), vaultId, receipt.runId))
+    throw new Error("Mismatched receipt identity");
+  const common = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], receipt.vault);
+  if (common.exitCode !== 0 || common.stdout.trim() !== receipt.commonGitDirectory)
+    throw new Error("Changed vault identity");
+}
+function validateReceiptGitEvidence(receipt) {
+  const evidenceCommit = receipt.code === "INTEGRATED" ? receipt.commit : receipt.baseCommit;
+  if (typeof evidenceCommit !== "string" || !/^[a-f0-9]{40,64}$/.test(evidenceCommit))
+    throw new Error("Invalid completion commit");
+  const reference = run(["git", "rev-parse", "--verify", completionRef(receipt.runId)], receipt.vault);
+  if (reference.exitCode !== 0 || reference.stdout.trim() !== evidenceCommit)
+    throw new Error("Mismatched completion reference");
+  const ancestry = run(["git", "merge-base", "--is-ancestor", evidenceCommit, "main"], receipt.vault);
+  if (ancestry.exitCode !== 0)
+    throw new Error("Completion absent from main");
+  if (receipt.code === "INTEGRATED") {
+    const paths = run(["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", evidenceCommit], receipt.vault);
+    if (paths.exitCode !== 0 || !samePaths(splitNul(paths.stdout).sort(), receipt.paths))
+      throw new Error("Completion paths differ");
+  }
+}
 function readReceipt(worktree) {
   const path = receiptPath(worktree);
   if (!existsSync(path))
     return;
   try {
-    const metadata = lstatSync(path);
-    const directory = lstatSync(dirname(path));
-    if (!metadata.isFile() || metadata.isSymbolicLink() || (metadata.mode & 511) !== 384 || !directory.isDirectory() || directory.isSymbolicLink() || (directory.mode & 511) !== 448)
-      throw new Error("Unsafe receipt");
+    validateReceiptStorage(path);
     const receipt = JSON.parse(readFileSync(path, "utf8"));
-    const keys = Object.keys(receipt).sort().join(",");
-    const expectedKeys = ["schemaVersion", "runId", "vault", "worktree", "commonGitDirectory", "baseCommit", "paths", "code", ...receipt.code === "INTEGRATED" ? ["commit"] : []].sort().join(",");
-    if (keys !== expectedKeys || receipt.schemaVersion !== 1 || typeof receipt.runId !== "string" || !runIdPattern.test(receipt.runId) || receipt.worktree !== worktree || typeof receipt.vault !== "string" || !isAbsolute(receipt.vault) || typeof receipt.commonGitDirectory !== "string" || !isAbsolute(receipt.commonGitDirectory) || typeof receipt.baseCommit !== "string" || !/^[a-f0-9]{40,64}$/.test(receipt.baseCommit) || !Array.isArray(receipt.paths) || receipt.paths.length === 0 || receipt.paths.some((entry) => typeof entry !== "string" || !entry || isAbsolute(entry) || entry.split(sep).includes("..")) || !samePaths(receipt.paths, [...new Set(receipt.paths)].sort()) || receipt.code !== "INTEGRATED" && receipt.code !== "NO_CHANGES")
-      throw new Error("Invalid receipt");
-    const vaultId = createHash("sha256").update(receipt.vault).digest("hex").slice(0, 16);
-    if (worktree !== join(realpathSync(stateRoot("finish")), vaultId, receipt.runId))
-      throw new Error("Mismatched receipt identity");
-    const common = run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], receipt.vault);
-    if (common.exitCode !== 0 || common.stdout.trim() !== receipt.commonGitDirectory)
-      throw new Error("Changed vault identity");
-    const evidenceCommit = receipt.code === "INTEGRATED" ? receipt.commit : receipt.baseCommit;
-    if (typeof evidenceCommit !== "string" || !/^[a-f0-9]{40,64}$/.test(evidenceCommit))
-      throw new Error("Invalid completion commit");
-    const reference = run(["git", "rev-parse", "--verify", completionRef(receipt.runId)], receipt.vault);
-    if (reference.exitCode !== 0 || reference.stdout.trim() !== evidenceCommit)
-      throw new Error("Mismatched completion reference");
-    const ancestry = run(["git", "merge-base", "--is-ancestor", evidenceCommit, "main"], receipt.vault);
-    if (ancestry.exitCode !== 0)
-      throw new Error("Completion absent from main");
-    if (receipt.code === "INTEGRATED") {
-      const paths = run(["git", "diff-tree", "--no-commit-id", "--name-only", "-r", "-z", evidenceCommit], receipt.vault);
-      if (paths.exitCode !== 0 || !samePaths(splitNul(paths.stdout).sort(), receipt.paths))
-        throw new Error("Completion paths differ");
-    }
+    validateReceiptShape(receipt);
+    if (receipt.worktree !== worktree)
+      throw new Error("Mismatched receipt worktree");
+    validateReceiptIdentity(receipt, worktree);
+    validateReceiptGitEvidence(receipt);
     return outcome(true, "finish", "ALREADY_COMPLETED", receipt.runId, existsSync(worktree) ? "Completion is recorded. Inspect the retained candidate before removing it; no new write was performed." : "The original finish completed. No new write was performed.", {
       originalCode: receipt.code,
       worktree,
@@ -429,11 +445,12 @@ function ownerIsLive(path) {
     return !(error instanceof Error && ("code" in error) && error.code === "ESRCH");
   }
 }
-function withLock(manifest, action) {
+function acquireLock(manifest) {
   const lock = join(manifest.commonGitDirectory, "vault-note-commits.lock");
   for (let attempt = 0;attempt < 81; attempt++) {
     try {
       mkdirSync(lock, { mode: 448 });
+      return lock;
     } catch (error) {
       if (!(error instanceof Error && ("code" in error) && error.code === "EEXIST"))
         throw error;
@@ -447,23 +464,26 @@ function withLock(manifest, action) {
       }
       preserve(manifest, "INTEGRATION_BUSY", "Wait for the active finisher to release the local integration lock, then retry.");
     }
-    let result;
-    try {
-      writeFileSync(join(lock, "owner.json"), `${JSON.stringify({ schemaVersion, runId: manifest.runId, pid: process.pid })}
-`, {
-        mode: 384
-      });
-      result = action();
-    } catch (error) {
-      try {
-        rmSync(lock, { recursive: true, force: true });
-      } catch {}
-      throw error;
-    }
-    rmSync(lock, { recursive: true, force: true });
-    return result;
   }
   return preserve(manifest, "INTEGRATION_BUSY", "Remove the stale integration lock after inspection, then retry.", false);
+}
+function withLock(manifest, action) {
+  const lock = acquireLock(manifest);
+  let result;
+  try {
+    writeFileSync(join(lock, "owner.json"), `${JSON.stringify({ schemaVersion, runId: manifest.runId, pid: process.pid })}
+`, {
+      mode: 384
+    });
+    result = action();
+  } catch (error) {
+    try {
+      rmSync(lock, { recursive: true, force: true });
+    } catch {}
+    throw error;
+  }
+  rmSync(lock, { recursive: true, force: true });
+  return result;
 }
 function integrate(manifest, commit) {
   return withLock(manifest, () => {
@@ -537,28 +557,43 @@ same absolute worktree path to recover ALREADY_COMPLETED, originalCode, and the 
 Retries perform no new write. A crash before receipt persistence still requires inspection.
 Without --vault, begin reads ~/.config/my-second-brain-playground/vault.json (or XDG_CONFIG_HOME).
 Remote sync is a separate operation.`;
+function runCommand(command, args) {
+  if (command === "begin")
+    return begin(args);
+  if (command === "finish")
+    return finish(args);
+  return refuse("help", "INVALID_USAGE", null, "Run vault-note-commits --help.");
+}
+function failureResult(command, error) {
+  if (error instanceof Refusal)
+    return error.result;
+  const safeCommand = command === "begin" || command === "finish" ? command : "help";
+  return outcome(false, safeCommand, "UNEXPECTED_FAILURE", null, "Preserve any candidate worktree and inspect the local error before retrying.", { retrySafe: false });
+}
+function printFailure(result, json) {
+  if (json)
+    console.log(JSON.stringify(result));
+  else
+    console.error(`${result.code}: ${result.nextAction}`);
+  if (result.diagnostics?.length)
+    console.error(result.diagnostics.join(`
+`));
+  process.exitCode = 1;
+}
 function main() {
   const raw = process.argv.slice(2);
   const json = raw.includes("--json");
   const args = raw.filter((argument) => argument !== "--json");
   const command = args.shift();
+  if (command === "--help" || command === "-h" || command === undefined) {
+    console.log(usage);
+    return;
+  }
   try {
-    if (command === "--help" || command === "-h" || command === undefined) {
-      console.log(usage);
-      return;
-    }
-    const result = command === "begin" ? begin(args) : command === "finish" ? finish(args) : refuse("help", "INVALID_USAGE", null, "Run vault-note-commits --help.");
+    const result = runCommand(command, args);
     console.log(json ? JSON.stringify(result) : `${result.code}: ${result.nextAction}`);
   } catch (error) {
-    const result = error instanceof Refusal ? error.result : outcome(false, command === "begin" || command === "finish" ? command : "help", "UNEXPECTED_FAILURE", null, "Preserve any candidate worktree and inspect the local error before retrying.", { retrySafe: false });
-    if (json)
-      console.log(JSON.stringify(result));
-    else
-      console.error(`${result.code}: ${result.nextAction}`);
-    if (result.diagnostics?.length)
-      console.error(result.diagnostics.join(`
-`));
-    process.exitCode = 1;
+    printFailure(failureResult(command, error), json);
   }
 }
 main();

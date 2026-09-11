@@ -101,78 +101,160 @@ function parseCheckId(flag: string, value: string): string {
 
 // --- argv parsing (validated against the contract's per-command flags) ---
 
-function parseHealSkillArgv(argv: readonly string[]): ParsedHealCommand {
+type ParsedHealOptions = {
+	outputMode: OutputMode;
+	only: string | null;
+	execute: boolean;
+	noInput: boolean;
+	explainId: string | null;
+};
+
+type HealCommandPrefix = {
+	command: HealSkillCommand;
+	args: string[];
+};
+
+function createHealSkillOptions(): ParsedHealOptions {
+	return {
+		outputMode: "plain",
+		only: null,
+		execute: false,
+		noInput: false,
+		explainId: null,
+	};
+}
+
+function parseSpecialArgv(argv: readonly string[]): ParsedHealCommand | null {
 	if (argv.includes("--version")) return { kind: "version" };
 	if (argv.includes("--help") || argv.includes("-h")) {
 		return { kind: "help", command: findCommand(argv) };
 	}
+	if (argv[0] === "help") {
+		return { kind: "help", command: findCommand(argv.slice(1)) };
+	}
+	return null;
+}
 
+function parseCommandPrefix(argv: readonly string[]): HealCommandPrefix {
 	const args = [...argv];
-	let command: HealSkillCommand = "check";
-	if (args[0] && !args[0].startsWith("-")) {
-		const candidate = args.shift();
-		if (candidate === "help") {
-			return { kind: "help", command: findCommand(args) };
-		}
-		if (!isCommand(candidate)) throw usageError(`unknown command: ${candidate}`);
-		command = candidate;
+	const candidate = args[0];
+	if (candidate === undefined || candidate.startsWith("-")) {
+		return { command: "check", args };
 	}
+	args.shift();
+	if (!isCommand(candidate)) throw usageError(`unknown command: ${candidate}`);
+	return { command: candidate, args };
+}
 
-	let outputMode: OutputMode = "plain";
-	let only: string | null = null;
-	let execute = false;
-	let noInput = false;
-	let explainId: string | null = null;
+/** Keyed by an attacker-controlled argv token, so this is a Map (not a plain
+ * object): a plain object would let e.g. a bare `constructor` token resolve
+ * `handlers.constructor` to `Object`, a truthy value that is not a real handler. */
+const SIMPLE_FLAG_HANDLERS: ReadonlyMap<string, (state: ParsedHealOptions) => void> = new Map([
+	[
+		"--json",
+		(state: ParsedHealOptions) => {
+			state.outputMode = "json";
+		},
+	],
+	[
+		"--execute",
+		(state: ParsedHealOptions) => {
+			state.execute = true;
+		},
+	],
+	[
+		"--no-input",
+		(state: ParsedHealOptions) => {
+			state.noInput = true;
+		},
+	],
+]);
 
+function parseHealSkillOption(
+	args: string[],
+	index: number,
+	command: HealSkillCommand,
+	state: ParsedHealOptions,
+): number {
+	const arg = args[index];
+	const handler = SIMPLE_FLAG_HANDLERS.get(arg);
+	if (handler) {
+		handler(state);
+		return index;
+	}
+	if (arg === "--only") {
+		state.only = parseCheckId("--only", requireNext(args, index, "--only"));
+		return index + 1;
+	}
+	if (arg.startsWith("--only=")) {
+		state.only = parseCheckId("--only", requireInlineValue(arg, "--only"));
+		return index;
+	}
+	if (command === "explain" && !arg.startsWith("-") && state.explainId === null) {
+		state.explainId = arg;
+		return index;
+	}
+	if (arg.startsWith("-")) throw usageError(`unknown option: ${arg}`);
+	throw usageError(`unexpected argument: ${arg}`);
+}
+
+function parseHealSkillOptions(
+	args: string[],
+	command: HealSkillCommand,
+): ParsedHealOptions {
+	const state = createHealSkillOptions();
 	for (let index = 0; index < args.length; index += 1) {
-		const arg = args[index];
-		switch (arg) {
-			case "--json":
-				outputMode = "json";
-				break;
-			case "--only":
-				only = parseCheckId("--only", requireNext(args, index, "--only"));
-				index += 1;
-				break;
-			case "--execute":
-				execute = true;
-				break;
-			case "--no-input":
-				noInput = true;
-				break;
-			default:
-				if (arg.startsWith("--only=")) {
-					only = parseCheckId("--only", requireInlineValue(arg, "--only"));
-				} else if (command === "explain" && !arg.startsWith("-") && explainId === null) {
-					explainId = arg;
-				} else if (arg.startsWith("-")) {
-					throw usageError(`unknown option: ${arg}`);
-				} else {
-					throw usageError(`unexpected argument: ${arg}`);
-				}
-		}
+		index = parseHealSkillOption(args, index, command, state);
 	}
+	return state;
+}
 
-	if (command === "check") {
-		if (execute) throw usageError("check does not accept --execute.");
-		if (noInput) throw usageError("check does not accept --no-input.");
-		return { kind: "check", outputMode, only };
-	}
+function validateCheckOptions(options: ParsedHealOptions): void {
+	if (options.execute) throw usageError("check does not accept --execute.");
+	if (options.noInput) throw usageError("check does not accept --no-input.");
+}
 
-	if (command === "repair") {
-		return { kind: "repair", outputMode, only, execute, noInput };
-	}
-
-	// explain
-	if (only) throw usageError("explain does not accept --only.");
-	if (execute) throw usageError("explain does not accept --execute.");
-	if (noInput) throw usageError("explain does not accept --no-input.");
-	if (!explainId) {
+function validateExplainOptions(options: ParsedHealOptions): string {
+	if (options.only) throw usageError("explain does not accept --only.");
+	if (options.execute) throw usageError("explain does not accept --execute.");
+	if (options.noInput) throw usageError("explain does not accept --no-input.");
+	if (!options.explainId) {
 		throw usageError(
 			`explain requires a check id: ${knownCheckIds().join(", ")}`,
 		);
 	}
-	return { kind: "explain", outputMode, checkId: explainId };
+	return options.explainId;
+}
+
+function buildParsedHealCommand(
+	command: HealSkillCommand,
+	options: ParsedHealOptions,
+): ParsedHealCommand {
+	if (command === "check") {
+		validateCheckOptions(options);
+		return { kind: "check", outputMode: options.outputMode, only: options.only };
+	}
+	if (command === "repair") {
+		return {
+			kind: "repair",
+			outputMode: options.outputMode,
+			only: options.only,
+			execute: options.execute,
+			noInput: options.noInput,
+		};
+	}
+	return {
+		kind: "explain",
+		outputMode: options.outputMode,
+		checkId: validateExplainOptions(options),
+	};
+}
+
+function parseHealSkillArgv(argv: readonly string[]): ParsedHealCommand {
+	const special = parseSpecialArgv(argv);
+	if (special) return special;
+	const { command, args } = parseCommandPrefix(argv);
+	return buildParsedHealCommand(command, parseHealSkillOptions(args, command));
 }
 
 // --- runtime (injectable for tests; the engine reads the real filesystem) ---
@@ -225,6 +307,60 @@ async function runCheck(input: {
 	};
 }
 
+async function processRepairFinding(input: {
+	finding: Finding;
+	execute: boolean;
+	runtime: HealSkillRuntime;
+	repairs: RepairResult[];
+}): Promise<boolean> {
+	if (input.finding.status === "ok") return false;
+	if (
+		input.finding.checkId === "booking-log-valid" &&
+		input.finding.autoRepairable
+	) {
+		input.repairs.push(await input.runtime.repairBookingLog(input.execute));
+		return false;
+	}
+	return input.finding.status === "handoff" || !input.finding.autoRepairable;
+}
+
+async function collectRepairResults(input: {
+	findings: Finding[];
+	execute: boolean;
+	runtime: HealSkillRuntime;
+}): Promise<{ repairs: RepairResult[]; handoffNeeded: boolean }> {
+	const repairs: RepairResult[] = [];
+	let handoffNeeded = false;
+	for (const finding of input.findings) {
+		if (
+			await processRepairFinding({
+				finding,
+				execute: input.execute,
+				runtime: input.runtime,
+				repairs,
+			})
+		) {
+			handoffNeeded = true;
+		}
+	}
+	return { repairs, handoffNeeded };
+}
+
+function getRepairExitCode(
+	findings: Finding[],
+	applied: boolean,
+	handoffNeeded: boolean,
+): number {
+	if (handoffNeeded) return 1;
+	if (applied) return 0;
+	return findings.some((finding) => finding.status !== "ok") ? 1 : 0;
+}
+
+function getRepairAction(applied: boolean, handoffNeeded: boolean): string {
+	if (applied) return "repaired";
+	return handoffNeeded ? "handoff_needed" : "no_repair_needed";
+}
+
 async function runRepair(input: {
 	parsed: Extract<ParsedHealCommand, { kind: "repair" }>;
 	runtime: HealSkillRuntime;
@@ -233,31 +369,17 @@ async function runRepair(input: {
 }): Promise<HealResult> {
 	// Run the targeted (or full) checks first so we only repair what's broken.
 	const findings = await input.runtime.runChecks(input.parsed.only);
-	const repairs: RepairResult[] = [];
-	let handoffNeeded = false;
-	for (const f of findings) {
-		if (f.status === "ok") continue;
-		if (f.checkId === "booking-log-valid" && f.autoRepairable) {
-			repairs.push(await input.runtime.repairBookingLog(input.parsed.execute));
-		} else if (f.status === "handoff" || !f.autoRepairable) {
-			handoffNeeded = true;
-		}
-	}
+	const { repairs, handoffNeeded } = await collectRepairResults({
+		findings,
+		execute: input.parsed.execute,
+		runtime: input.runtime,
+	});
 	const applied = repairs.some((r) => r.applied);
-	// 0 if repaired and no handoff; 1 if handoff still needed or findings remain
-	// with nothing applied; 0 if nothing was broken.
-	const exitCode = handoffNeeded
-		? 1
-		: applied
-			? 0
-			: findings.some((f) => f.status !== "ok")
-				? 1
-				: 0;
 	return {
 		run_id: input.runId,
 		duration_ms: input.runtime.now() - input.startedAt,
-		exit_code: exitCode,
-		action: applied ? "repaired" : handoffNeeded ? "handoff_needed" : "no_repair_needed",
+		exit_code: getRepairExitCode(findings, applied, handoffNeeded),
+		action: getRepairAction(applied, handoffNeeded),
 		mode: input.parsed.execute ? "execute" : "preview",
 		findings,
 		repairs,
@@ -272,7 +394,9 @@ function runExplain(input: {
 	startedAt: number;
 }): HealResult {
 	const id = input.parsed.checkId;
-	const explanation = CHECK_EXPLAIN[id];
+	// id is an attacker-controlled argv token, so a plain-property read would
+	// let e.g. "constructor" resolve to Object instead of failing the lookup.
+	const explanation = Object.hasOwn(CHECK_EXPLAIN, id) ? CHECK_EXPLAIN[id] : undefined;
 	if (!explanation) {
 		throw usageError(`explain needs a known check id: ${knownCheckIds().join(", ")}`);
 	}
@@ -291,31 +415,60 @@ function statusEmoji(s: Finding["status"]): string {
 	return { ok: "✅", finding: "⚠️", repaired: "🔧", handoff: "🚑" }[s];
 }
 
-function renderPlain(result: HealResult): string {
+function renderExplanation(result: HealResult): string | null {
+	if (!result.explanation) return null;
+	return `${result.explanation.checkId}\n\n${result.explanation.explanation}\n`;
+}
+
+function renderFinding(finding: Finding): string[] {
+	const lines = [`${statusEmoji(finding.status)} ${finding.checkId}: ${finding.summary}`];
+	if (finding.detail) lines.push(`   ${finding.detail}`);
+	lines.push(`   → ${finding.nextAction}`);
+	return lines;
+}
+
+function renderFindings(findings: Finding[]): string[] {
 	const lines: string[] = [];
-	if (result.explanation) {
-		lines.push(`${result.explanation.checkId}\n\n${result.explanation.explanation}`);
-		return `${lines.join("\n")}\n`;
+	for (const finding of findings) {
+		if (finding.status === "ok") continue;
+		lines.push(...renderFinding(finding));
 	}
+	return lines;
+}
+
+function renderRepair(repair: RepairResult): string[] {
+	const lines = [`${repair.applied ? "🔧" : "👁"} ${repair.checkId}: ${repair.summary}`];
+	if (repair.backupPath) lines.push(`   backup: ${repair.backupPath}`);
+	for (const line of repair.previewLines ?? []) lines.push(`   ${line}`);
+	return lines;
+}
+
+function renderRepairs(repairs: RepairResult[]): string[] {
+	const lines: string[] = [];
+	for (const repair of repairs) lines.push(...renderRepair(repair));
+	return lines;
+}
+
+function renderPreviewNotice(result: HealResult, repairs: RepairResult[]): string | null {
+	if (result.mode !== "preview" || repairs.length === 0) return null;
+	return "\nPreview only. Re-run with --execute to apply.";
+}
+
+function renderPlain(result: HealResult): string {
+	const explanation = renderExplanation(result);
+	if (explanation) return explanation;
+
 	const findings = result.findings ?? [];
-	const findingsOnly = findings.filter((f) => f.status !== "ok");
-	if (findingsOnly.length === 0 && (result.repairs ?? []).length === 0) {
+	const repairs = result.repairs ?? [];
+	if (findings.every((finding) => finding.status === "ok") && repairs.length === 0) {
 		return "✅ classic-cinema healthy — all checks pass\n";
 	}
-	for (const f of findings) {
-		if (f.status === "ok") continue;
-		lines.push(`${statusEmoji(f.status)} ${f.checkId}: ${f.summary}`);
-		if (f.detail) lines.push(`   ${f.detail}`);
-		lines.push(`   → ${f.nextAction}`);
-	}
-	for (const r of result.repairs ?? []) {
-		lines.push(`${r.applied ? "🔧" : "👁"} ${r.checkId}: ${r.summary}`);
-		if (r.backupPath) lines.push(`   backup: ${r.backupPath}`);
-		for (const p of r.previewLines ?? []) lines.push(`   ${p}`);
-	}
-	if (result.mode === "preview" && (result.repairs ?? []).length > 0) {
-		lines.push("\nPreview only. Re-run with --execute to apply.");
-	}
+
+	const lines: string[] = [];
+	lines.push(...renderFindings(findings));
+	lines.push(...renderRepairs(repairs));
+	const previewNotice = renderPreviewNotice(result, repairs);
+	if (previewNotice) lines.push(previewNotice);
 	return `${lines.join("\n")}\n`;
 }
 

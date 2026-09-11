@@ -57,30 +57,37 @@ function run(argv) {
         var positionMode = null;
         // Only structural Chrome UI is walked. AXWebArea children are never
         // fetched, including when the currently selected page is a login page.
+        function tabPositionMode(position, size) {
+            const metadataAbsent = position === null && size === null;
+            const metadataPresent = Number.isInteger(position) && Number.isInteger(size) &&
+                position >= 1 && size >= 1 && size <= 40 && position <= size;
+            if (!metadataAbsent && !metadataPresent) refuse("tab_inventory_unavailable");
+            return metadataPresent ? "explicit" : "structural";
+        }
+        function recordTab(element) {
+            const position = attribute(element, "AXARIAPosInSet");
+            const size = attribute(element, "AXARIASetSize");
+            const currentMode = tabPositionMode(position, size);
+            if (positionMode !== null && positionMode !== currentMode) refuse("tab_inventory_unavailable");
+            positionMode = currentMode;
+            tabs.push({element: element, id: identifier(element), position: position,
+                size: size, selected: attribute(element, "AXValue")});
+        }
+        function isTabContainer(role) {
+            return ["AXWindow", "AXGroup", "AXTabGroup", "AXSplitGroup", "AXScrollArea"].indexOf(role) >= 0;
+        }
         function walk(element, depth, inTabGroup) {
             checkTime();
             if (++walked > 300 || depth > 14) refuse("tab_inventory_unavailable");
             var role = attribute(element, "AXRole");
             if (role === "AXWebArea") return;
             if (role === "AXRadioButton" && inTabGroup) {
-                const position = attribute(element, "AXARIAPosInSet");
-                const size = attribute(element, "AXARIASetSize");
-                const metadataAbsent = position === null && size === null;
-                const metadataPresent = Number.isInteger(position) && Number.isInteger(size) &&
-                    position >= 1 && size >= 1 && size <= 40 && position <= size;
-                if (!metadataAbsent && !metadataPresent) {
-                    refuse("tab_inventory_unavailable");
-                }
-                const currentMode = metadataPresent ? "explicit" : "structural";
-                if (positionMode !== null && positionMode !== currentMode) refuse("tab_inventory_unavailable");
-                positionMode = currentMode;
-                tabs.push({element: element, id: identifier(element), position: position,
-                    size: size, selected: attribute(element, "AXValue")});
+                recordTab(element);
                 return;
             }
             // Leaf controls cannot contain the tab strip. Do not traverse
             // address fields, buttons, text, menus, or their values.
-            if (["AXWindow", "AXGroup", "AXTabGroup", "AXSplitGroup", "AXScrollArea"].indexOf(role) < 0) return;
+            if (!isTabContainer(role)) return;
             var children = element.uiElements();
             if (children.length > 100) refuse("tab_inventory_unavailable");
             children.forEach(function (child) {

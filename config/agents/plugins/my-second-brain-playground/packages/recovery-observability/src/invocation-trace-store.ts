@@ -23,7 +23,7 @@ import {
 	validateLifecycleRecord,
 } from "./serialized-values.ts"
 
-export const DEFAULT_TRACE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
+const DEFAULT_TRACE_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000
 export const DEFAULT_TRACE_MAX_TOTAL_BYTES = 20 * 1024 * 1024
 const MAX_QUERY_TRACE_ENTRIES = 10_000
 
@@ -219,120 +219,174 @@ function stableRecord(value: unknown): string {
 	return JSON.stringify(value)
 }
 
-export function queryTraces(options: { readonly stateHome?: string; readonly filter?: TraceFilter } = {}): TraceQueryResult {
-	const root = traceRoot(options.stateHome)
-	if (root === null || !existsSync(root)) return { available: false, trace_root: root, records: [], anomalies: [] }
+interface TraceReadState {
+	records: StoredTraceRecord[]
+	anomalies: TraceAnomaly[]
+	deliveries: Map<string, string>
+	includeDiagnostics: boolean
+}
+
+function unavailableTraceResult(root: string | null): TraceQueryResult {
+	return { available: false, trace_root: root, records: [], anomalies: [] }
+}
+
+function traceRootIsAvailable(root: string | null): boolean {
+	if (root === null || !existsSync(root)) return false
 	try {
 		const stat = lstatSync(root)
-		if (!stat.isDirectory() || stat.isSymbolicLink()) return { available: false, trace_root: root, records: [], anomalies: [] }
+		return stat.isDirectory() && !stat.isSymbolicLink()
 	} catch {
-		return { available: false, trace_root: root, records: [], anomalies: [] }
+		return false
 	}
-	const records: StoredTraceRecord[] = []
-	const anomalies: TraceAnomaly[] = []
-	const deliveries = new Map<string, string>()
-	for (const file of admittedTraceFiles(root, MAX_QUERY_TRACE_ENTRIES)) {
-		let content: Buffer
-		try {
-			if (file.size > DEFAULT_TRACE_MAX_TOTAL_BYTES) {
-				anomalies.push({ file: file.name, code: "oversized-record" })
-				continue
-			}
-			content = readFileSync(file.path)
-		} catch {
-			anomalies.push({ file: file.name, code: "unreadable-file" })
-			continue
-		}
-		const complete = content.length === 0 || content[content.length - 1] === 0x0a
-		const lines = content.toString("utf8").split("\n")
-		if (complete) lines.pop()
-		const sequences = new Map<string, number>()
-		for (let index = 0; index < lines.length; index += 1) {
-			const lineNumber = index + 1
-			const line = lines[index] ?? ""
-			if (!complete && index === lines.length - 1) {
-				anomalies.push({ file: file.name, line: lineNumber, code: "partial-final-line" })
-				continue
-			}
-			if (Buffer.byteLength(`${line}\n`) > MAX_SERIALIZED_RECORD_BYTES) {
-				anomalies.push({ file: file.name, line: lineNumber, code: "oversized-record" })
-				continue
-			}
-			let parsed: unknown
-			try {
-				parsed = JSON.parse(line)
-			} catch {
-				anomalies.push({ file: file.name, line: lineNumber, code: "invalid-record" })
-				continue
-			}
-			if (typeof parsed === "object" && parsed !== null && (parsed as { schema_version?: unknown }).schema_version !== 1) {
-				anomalies.push({ file: file.name, line: lineNumber, code: "unknown-schema" })
-				continue
-			}
-			if (validateDiagnosticTraceRecord(parsed)) {
-				if (Object.keys(options.filter ?? {}).length === 0) records.push(parsed)
-				continue
-			}
-			const validated = validateLifecycleRecord(parsed)
-			if (!validated.accepted) {
-				anomalies.push({ file: file.name, line: lineNumber, code: "invalid-record" })
-				continue
-			}
-			const record = validated.record
-			const fingerprint = stableRecord(record)
-			const delivered = deliveries.get(record.record_identity)
-			if (delivered !== undefined) {
-				anomalies.push({ file: file.name, line: lineNumber, code: delivered === fingerprint ? "duplicate-delivery" : "record-identity-conflict" })
-				if (delivered === fingerprint) continue
-			} else {
-				deliveries.set(record.record_identity, fingerprint)
-			}
-			const previous = sequences.get(record.producer_identity)
-			if (previous === undefined && record.producer_sequence !== 0) {
-				anomalies.push({
-					file: file.name,
-					line: lineNumber,
-					code: "sequence-gap",
-					producer_identity: record.producer_identity,
-					expected_sequence: 0,
-					observed_sequence: record.producer_sequence,
-				})
-			} else if (previous !== undefined) {
-				if (record.producer_sequence === previous) {
-					anomalies.push({
-						file: file.name,
-						line: lineNumber,
-						code: "duplicate-sequence",
-						producer_identity: record.producer_identity,
-						observed_sequence: record.producer_sequence,
-					})
-				} else if (record.producer_sequence !== previous + 1) {
-					anomalies.push({
-						file: file.name,
-						line: lineNumber,
-						code: "sequence-gap",
-						producer_identity: record.producer_identity,
-						expected_sequence: previous + 1,
-						observed_sequence: record.producer_sequence,
-					})
-				}
-			}
-			sequences.set(record.producer_identity, record.producer_sequence)
-			records.push(record)
-		}
+}
+
+function readTraceLine(
+	file: string,
+	line: string,
+	lineNumber: number,
+	partial: boolean,
+	state: TraceReadState,
+): unknown | undefined {
+	if (partial) {
+		state.anomalies.push({ file, line: lineNumber, code: "partial-final-line" })
+		return undefined
 	}
-	const selected = new Set(records.filter(record => record.record_type === "lifecycle" && matches(record, options.filter ?? {})))
+	if (Buffer.byteLength(`${line}\n`) > MAX_SERIALIZED_RECORD_BYTES) {
+		state.anomalies.push({ file, line: lineNumber, code: "oversized-record" })
+		return undefined
+	}
+	let parsed: unknown
+	try {
+		parsed = JSON.parse(line)
+	} catch {
+		state.anomalies.push({ file, line: lineNumber, code: "invalid-record" })
+		return undefined
+	}
+	if (typeof parsed === "object" && parsed !== null && (parsed as { schema_version?: unknown }).schema_version !== 1) {
+		state.anomalies.push({ file, line: lineNumber, code: "unknown-schema" })
+		return undefined
+	}
+	return parsed
+}
+
+function addSequenceAnomaly(
+	file: string,
+	line: number,
+	record: LifecycleRecord,
+	sequences: Map<string, number>,
+	anomalies: TraceAnomaly[],
+): void {
+	const previous = sequences.get(record.producer_identity)
+	if (previous === undefined) {
+		if (record.producer_sequence !== 0) {
+			anomalies.push({
+				file, line, code: "sequence-gap", producer_identity: record.producer_identity,
+				expected_sequence: 0, observed_sequence: record.producer_sequence,
+			})
+		}
+	} else if (record.producer_sequence === previous) {
+		anomalies.push({
+				file, line, code: "duplicate-sequence", producer_identity: record.producer_identity,
+				observed_sequence: record.producer_sequence,
+			})
+	} else if (record.producer_sequence !== previous + 1) {
+		anomalies.push({
+				file, line, code: "sequence-gap", producer_identity: record.producer_identity,
+				expected_sequence: previous + 1, observed_sequence: record.producer_sequence,
+			})
+	}
+	sequences.set(record.producer_identity, record.producer_sequence)
+}
+
+function acceptLifecycleRecord(
+	file: string,
+	line: number,
+	record: LifecycleRecord,
+	state: TraceReadState,
+	sequences: Map<string, number>,
+): void {
+	const fingerprint = stableRecord(record)
+	const delivered = state.deliveries.get(record.record_identity)
+	if (delivered !== undefined) {
+		state.anomalies.push({
+			file, line,
+			code: delivered === fingerprint ? "duplicate-delivery" : "record-identity-conflict",
+		})
+		if (delivered === fingerprint) return
+	} else {
+		state.deliveries.set(record.record_identity, fingerprint)
+	}
+	addSequenceAnomaly(file, line, record, sequences, state.anomalies)
+	state.records.push(record)
+}
+
+function acceptTraceValue(
+	file: string,
+	line: number,
+	value: unknown,
+	state: TraceReadState,
+	sequences: Map<string, number>,
+): void {
+	if (validateDiagnosticTraceRecord(value)) {
+		if (state.includeDiagnostics) state.records.push(value)
+		return
+	}
+	const validated = validateLifecycleRecord(value)
+	if (!validated.accepted) {
+		state.anomalies.push({ file, line, code: "invalid-record" })
+		return
+	}
+	acceptLifecycleRecord(file, line, validated.record, state, sequences)
+}
+
+function readTraceFile(file: { name: string; path: string; size: number }, state: TraceReadState): void {
+	let content: Buffer
+	try {
+		if (file.size > DEFAULT_TRACE_MAX_TOTAL_BYTES) {
+			state.anomalies.push({ file: file.name, code: "oversized-record" })
+			return
+		}
+		content = readFileSync(file.path)
+	} catch {
+		state.anomalies.push({ file: file.name, code: "unreadable-file" })
+		return
+	}
+	const complete = content.length === 0 || content[content.length - 1] === 0x0a
+	const lines = content.toString("utf8").split("\n")
+	if (complete) lines.pop()
+	const sequences = new Map<string, number>()
+	for (let index = 0; index < lines.length; index += 1) {
+		const value = readTraceLine(file.name, lines[index] ?? "", index + 1, !complete && index === lines.length - 1, state)
+		if (value !== undefined) acceptTraceValue(file.name, index + 1, value, state, sequences)
+	}
+}
+
+function selectTraceRecords(records: StoredTraceRecord[], filter: TraceFilter): StoredTraceRecord[] {
+	if (Object.keys(filter).length === 0) return records
+	const selected = new Set(records.filter((record): record is LifecycleRecord => record.record_type === "lifecycle" && matches(record, filter)))
 	const ancestors = new Map<string, LifecycleRecord>()
 	for (const record of records) {
 		if (record.record_type === "lifecycle" && !ancestors.has(record.record_identity)) ancestors.set(record.record_identity, record)
 	}
 	for (const record of selected) {
-		if (record.record_type !== "lifecycle") continue
 		const parent = record.parent_record_identity === undefined ? undefined : ancestors.get(record.parent_record_identity)
 		if (parent !== undefined) selected.add(parent)
 	}
-	const filtered = Object.keys(options.filter ?? {}).length === 0 ? records : records.filter(record => selected.has(record))
-	return { available: true, trace_root: root, records: filtered, anomalies }
+	return records.filter((record) => selected.has(record))
+}
+
+export function queryTraces(options: { readonly stateHome?: string; readonly filter?: TraceFilter } = {}): TraceQueryResult {
+	const root = traceRoot(options.stateHome)
+	if (!traceRootIsAvailable(root)) return unavailableTraceResult(root)
+	const filter = options.filter ?? {}
+	const state: TraceReadState = {
+		records: [],
+		anomalies: [],
+		deliveries: new Map(),
+		includeDiagnostics: Object.keys(filter).length === 0,
+	}
+	for (const file of admittedTraceFiles(root as string, MAX_QUERY_TRACE_ENTRIES)) readTraceFile(file, state)
+	return { available: true, trace_root: root, records: selectTraceRecords(state.records, filter), anomalies: state.anomalies }
 }
 
 export function cleanupTraces(options: {
@@ -356,7 +410,7 @@ export function cleanupTraces(options: {
 	const maxTotalBytes = options.maxTotalBytes ?? DEFAULT_TRACE_MAX_TOTAL_BYTES
 	let removedFiles = 0
 	let removedBytes = 0
-	let retained = files
+	const retained = files
 		.filter((file) => {
 			if (nowMs - file.mtimeMs <= maxAgeMs) return true
 			try {

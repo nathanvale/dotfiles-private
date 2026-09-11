@@ -14,7 +14,7 @@ import { postEvent } from './event-bus-client'
 /** Maximum log file size in bytes before rotation (10 MB). */
 const MAX_LOG_SIZE = 10 * 1024 * 1024
 
-interface PostToolUseHookInput {
+export interface PostToolUseHookInput {
 	tool_name: string
 	tool_input?: {
 		command?: unknown
@@ -59,7 +59,7 @@ function redactCommand(command: string): string {
  * Builds a structured log entry from a PostToolUse hook payload. Returns null
  * for non-Bash tools so only shell commands are recorded in the audit trail.
  */
-export function createLogEntry(
+function createLogEntry(
 	input: PostToolUseHookInput,
 ): CommandLogEntry | null {
 	if (input.tool_name !== 'Bash') {

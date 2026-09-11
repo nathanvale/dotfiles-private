@@ -1,0 +1,17 @@
+
+Microsoft Teams Chat Scraper
+
+Usage:
+  bun teams-scraper.ts [options]
+
+Options:
+  -c, --channel <name>   Expected channel name (for validation)
+  -o, --output <path>    Output JSON file path (default: ./teams-messages.json)
+  -r, --raw <path>       Use raw text file instead of clipboard capture
+  -h, --help             Show this help message
+
+Examples:
+  bun teams-scraper.ts
+  bun teams-scraper.ts -o ./engineers-chat.json
+  bun teams-scraper.ts -r ./clipboard-dump.txt -o ./parsed.json
+

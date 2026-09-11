@@ -141,6 +141,14 @@ describe("heal-skill argv surface", () => {
 		expect(result.stderr).toContain("explain requires a check id");
 	});
 
+	test("rejects a bare prototype-named token as an unexpected argument, not an inherited flag handler", async () => {
+		for (const token of ["constructor", "__proto__"]) {
+			const result = await runForTest(["check", token], stubRuntime({}));
+			expect(result.exitCode).toBe(2);
+			expect(result.stderr).toContain(`unexpected argument: ${token}`);
+		}
+	});
+
 	test("JSON usage error emits a structured envelope", async () => {
 		const result = await runForTest(["check", "--bogus", "--json"], stubRuntime({}));
 		expect(result.exitCode).toBe(2);

@@ -186,14 +186,40 @@ function projectRecord(input) {
     ...input.install_evidence === undefined ? {} : { install_evidence: { ...input.install_evidence } }
   };
 }
+function validLifecycleIdentities(input) {
+  const required = [input.record_identity, input.journey_identity, input.invocation_identity, input.producer_identity];
+  if (!required.every(isRecoveryIdentity))
+    return false;
+  const optional = [input.parent_record_identity, input.observed_worker_identity, input.inherited_parent_identity, input.ledger_task_identity];
+  if (optional.some((value) => value !== undefined && !isRecoveryIdentity(value)))
+    return false;
+  const workerIdentityPair = input.observed_worker_identity === undefined === (input.observed_worker_identity_source === undefined);
+  return workerIdentityPair && (input.observed_worker_identity_source === undefined || isMember(workerIdentitySources, input.observed_worker_identity_source));
+}
+function validLifecycleNumbers(input) {
+  if (!Number.isSafeInteger(input.producer_sequence) || input.producer_sequence < 0)
+    return false;
+  return input.duration_ms === undefined || typeof input.duration_ms === "number" && Number.isFinite(input.duration_ms) && input.duration_ms >= 0;
+}
+function validLifecycleKinds(input) {
+  return isMember(harnessKinds, input.harness_kind) && isMember(operations, input.operation) && isMember(phases, input.phase) && validIsoTimestamp(input.occurred_at) && isMember(outcomes, input.outcome);
+}
+function validLifecycleOutcome(input) {
+  const refusalPair = input.outcome === "refused" ? input.refusal_code !== undefined : input.refusal_code === undefined;
+  return refusalPair && (input.refusal_code === undefined || isMember(refusalCodes, input.refusal_code));
+}
+function validLifecycleEvidence(input) {
+  return (input.source_evidence === undefined || validSourceEvidence(input.source_evidence)) && (input.install_evidence === undefined || validInstallEvidence(input.install_evidence));
+}
+function validLifecycleValues(input) {
+  return input.schema_version === TRACE_SCHEMA_VERSION && input.record_type === "lifecycle" && validLifecycleIdentities(input) && validLifecycleNumbers(input) && validLifecycleKinds(input) && validLifecycleOutcome(input) && validLifecycleEvidence(input);
+}
 function validateLifecycleRecord(input, options = {}) {
   if (!isObject(input))
     return { accepted: false, refusal: "invalid-record" };
   if (!hasOnlyKeys(input, recordKeys))
     return { accepted: false, refusal: "unknown-field" };
-  const workerIdentityPair = input.observed_worker_identity === undefined === (input.observed_worker_identity_source === undefined);
-  const refusalPair = input.outcome === "refused" ? input.refusal_code !== undefined : input.refusal_code === undefined;
-  if (input.schema_version !== TRACE_SCHEMA_VERSION || input.record_type !== "lifecycle" || !isRecoveryIdentity(input.record_identity) || !isRecoveryIdentity(input.journey_identity) || !isRecoveryIdentity(input.invocation_identity) || !isRecoveryIdentity(input.producer_identity) || !Number.isSafeInteger(input.producer_sequence) || input.producer_sequence < 0 || input.parent_record_identity !== undefined && !isRecoveryIdentity(input.parent_record_identity) || input.observed_worker_identity !== undefined && !isRecoveryIdentity(input.observed_worker_identity) || !workerIdentityPair || input.observed_worker_identity_source !== undefined && !isMember(workerIdentitySources, input.observed_worker_identity_source) || input.inherited_parent_identity !== undefined && !isRecoveryIdentity(input.inherited_parent_identity) || input.ledger_task_identity !== undefined && !isRecoveryIdentity(input.ledger_task_identity) || !isMember(harnessKinds, input.harness_kind) || !isMember(operations, input.operation) || !isMember(phases, input.phase) || !validIsoTimestamp(input.occurred_at) || input.duration_ms !== undefined && (typeof input.duration_ms !== "number" || !Number.isFinite(input.duration_ms) || input.duration_ms < 0) || !isMember(outcomes, input.outcome) || !refusalPair || input.refusal_code !== undefined && !isMember(refusalCodes, input.refusal_code) || input.source_evidence !== undefined && !validSourceEvidence(input.source_evidence) || input.install_evidence !== undefined && !validInstallEvidence(input.install_evidence)) {
+  if (!validLifecycleValues(input)) {
     return { accepted: false, refusal: "invalid-value" };
   }
   if (containsKnownSecret(input, options.knownSecretValues ?? [])) {
@@ -372,130 +398,159 @@ function stableRecord(value) {
   }
   return JSON.stringify(value);
 }
-function queryTraces(options = {}) {
-  const root = traceRoot(options.stateHome);
+function unavailableTraceResult(root) {
+  return { available: false, trace_root: root, records: [], anomalies: [] };
+}
+function traceRootIsAvailable(root) {
   if (root === null || !existsSync(root))
-    return { available: false, trace_root: root, records: [], anomalies: [] };
+    return false;
   try {
     const stat = lstatSync(root);
-    if (!stat.isDirectory() || stat.isSymbolicLink())
-      return { available: false, trace_root: root, records: [], anomalies: [] };
+    return stat.isDirectory() && !stat.isSymbolicLink();
   } catch {
-    return { available: false, trace_root: root, records: [], anomalies: [] };
+    return false;
   }
-  const records = [];
-  const anomalies = [];
-  const deliveries = new Map;
-  for (const file of admittedTraceFiles(root, MAX_QUERY_TRACE_ENTRIES)) {
-    let content;
-    try {
-      if (file.size > DEFAULT_TRACE_MAX_TOTAL_BYTES) {
-        anomalies.push({ file: file.name, code: "oversized-record" });
-        continue;
-      }
-      content = readFileSync(file.path);
-    } catch {
-      anomalies.push({ file: file.name, code: "unreadable-file" });
-      continue;
-    }
-    const complete = content.length === 0 || content[content.length - 1] === 10;
-    const lines = content.toString("utf8").split(`
-`);
-    if (complete)
-      lines.pop();
-    const sequences = new Map;
-    for (let index = 0;index < lines.length; index += 1) {
-      const lineNumber = index + 1;
-      const line = lines[index] ?? "";
-      if (!complete && index === lines.length - 1) {
-        anomalies.push({ file: file.name, line: lineNumber, code: "partial-final-line" });
-        continue;
-      }
-      if (Buffer.byteLength(`${line}
+}
+function readTraceLine(file, line, lineNumber, partial, state) {
+  if (partial) {
+    state.anomalies.push({ file, line: lineNumber, code: "partial-final-line" });
+    return;
+  }
+  if (Buffer.byteLength(`${line}
 `) > MAX_SERIALIZED_RECORD_BYTES) {
-        anomalies.push({ file: file.name, line: lineNumber, code: "oversized-record" });
-        continue;
-      }
-      let parsed;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        anomalies.push({ file: file.name, line: lineNumber, code: "invalid-record" });
-        continue;
-      }
-      if (typeof parsed === "object" && parsed !== null && parsed.schema_version !== 1) {
-        anomalies.push({ file: file.name, line: lineNumber, code: "unknown-schema" });
-        continue;
-      }
-      if (validateDiagnosticTraceRecord(parsed)) {
-        if (Object.keys(options.filter ?? {}).length === 0)
-          records.push(parsed);
-        continue;
-      }
-      const validated = validateLifecycleRecord(parsed);
-      if (!validated.accepted) {
-        anomalies.push({ file: file.name, line: lineNumber, code: "invalid-record" });
-        continue;
-      }
-      const record = validated.record;
-      const fingerprint = stableRecord(record);
-      const delivered = deliveries.get(record.record_identity);
-      if (delivered !== undefined) {
-        anomalies.push({ file: file.name, line: lineNumber, code: delivered === fingerprint ? "duplicate-delivery" : "record-identity-conflict" });
-        if (delivered === fingerprint)
-          continue;
-      } else {
-        deliveries.set(record.record_identity, fingerprint);
-      }
-      const previous = sequences.get(record.producer_identity);
-      if (previous === undefined && record.producer_sequence !== 0) {
-        anomalies.push({
-          file: file.name,
-          line: lineNumber,
-          code: "sequence-gap",
-          producer_identity: record.producer_identity,
-          expected_sequence: 0,
-          observed_sequence: record.producer_sequence
-        });
-      } else if (previous !== undefined) {
-        if (record.producer_sequence === previous) {
-          anomalies.push({
-            file: file.name,
-            line: lineNumber,
-            code: "duplicate-sequence",
-            producer_identity: record.producer_identity,
-            observed_sequence: record.producer_sequence
-          });
-        } else if (record.producer_sequence !== previous + 1) {
-          anomalies.push({
-            file: file.name,
-            line: lineNumber,
-            code: "sequence-gap",
-            producer_identity: record.producer_identity,
-            expected_sequence: previous + 1,
-            observed_sequence: record.producer_sequence
-          });
-        }
-      }
-      sequences.set(record.producer_identity, record.producer_sequence);
-      records.push(record);
-    }
+    state.anomalies.push({ file, line: lineNumber, code: "oversized-record" });
+    return;
   }
-  const selected = new Set(records.filter((record) => record.record_type === "lifecycle" && matches(record, options.filter ?? {})));
+  let parsed;
+  try {
+    parsed = JSON.parse(line);
+  } catch {
+    state.anomalies.push({ file, line: lineNumber, code: "invalid-record" });
+    return;
+  }
+  if (typeof parsed === "object" && parsed !== null && parsed.schema_version !== 1) {
+    state.anomalies.push({ file, line: lineNumber, code: "unknown-schema" });
+    return;
+  }
+  return parsed;
+}
+function addSequenceAnomaly(file, line, record, sequences, anomalies) {
+  const previous = sequences.get(record.producer_identity);
+  if (previous === undefined) {
+    if (record.producer_sequence !== 0) {
+      anomalies.push({
+        file,
+        line,
+        code: "sequence-gap",
+        producer_identity: record.producer_identity,
+        expected_sequence: 0,
+        observed_sequence: record.producer_sequence
+      });
+    }
+  } else if (record.producer_sequence === previous) {
+    anomalies.push({
+      file,
+      line,
+      code: "duplicate-sequence",
+      producer_identity: record.producer_identity,
+      observed_sequence: record.producer_sequence
+    });
+  } else if (record.producer_sequence !== previous + 1) {
+    anomalies.push({
+      file,
+      line,
+      code: "sequence-gap",
+      producer_identity: record.producer_identity,
+      expected_sequence: previous + 1,
+      observed_sequence: record.producer_sequence
+    });
+  }
+  sequences.set(record.producer_identity, record.producer_sequence);
+}
+function acceptLifecycleRecord(file, line, record, state, sequences) {
+  const fingerprint = stableRecord(record);
+  const delivered = state.deliveries.get(record.record_identity);
+  if (delivered !== undefined) {
+    state.anomalies.push({
+      file,
+      line,
+      code: delivered === fingerprint ? "duplicate-delivery" : "record-identity-conflict"
+    });
+    if (delivered === fingerprint)
+      return;
+  } else {
+    state.deliveries.set(record.record_identity, fingerprint);
+  }
+  addSequenceAnomaly(file, line, record, sequences, state.anomalies);
+  state.records.push(record);
+}
+function acceptTraceValue(file, line, value, state, sequences) {
+  if (validateDiagnosticTraceRecord(value)) {
+    if (state.includeDiagnostics)
+      state.records.push(value);
+    return;
+  }
+  const validated = validateLifecycleRecord(value);
+  if (!validated.accepted) {
+    state.anomalies.push({ file, line, code: "invalid-record" });
+    return;
+  }
+  acceptLifecycleRecord(file, line, validated.record, state, sequences);
+}
+function readTraceFile(file, state) {
+  let content;
+  try {
+    if (file.size > DEFAULT_TRACE_MAX_TOTAL_BYTES) {
+      state.anomalies.push({ file: file.name, code: "oversized-record" });
+      return;
+    }
+    content = readFileSync(file.path);
+  } catch {
+    state.anomalies.push({ file: file.name, code: "unreadable-file" });
+    return;
+  }
+  const complete = content.length === 0 || content[content.length - 1] === 10;
+  const lines = content.toString("utf8").split(`
+`);
+  if (complete)
+    lines.pop();
+  const sequences = new Map;
+  for (let index = 0;index < lines.length; index += 1) {
+    const value = readTraceLine(file.name, lines[index] ?? "", index + 1, !complete && index === lines.length - 1, state);
+    if (value !== undefined)
+      acceptTraceValue(file.name, index + 1, value, state, sequences);
+  }
+}
+function selectTraceRecords(records, filter) {
+  if (Object.keys(filter).length === 0)
+    return records;
+  const selected = new Set(records.filter((record) => record.record_type === "lifecycle" && matches(record, filter)));
   const ancestors = new Map;
   for (const record of records) {
     if (record.record_type === "lifecycle" && !ancestors.has(record.record_identity))
       ancestors.set(record.record_identity, record);
   }
   for (const record of selected) {
-    if (record.record_type !== "lifecycle")
-      continue;
     const parent = record.parent_record_identity === undefined ? undefined : ancestors.get(record.parent_record_identity);
     if (parent !== undefined)
       selected.add(parent);
   }
-  const filtered = Object.keys(options.filter ?? {}).length === 0 ? records : records.filter((record) => selected.has(record));
-  return { available: true, trace_root: root, records: filtered, anomalies };
+  return records.filter((record) => selected.has(record));
+}
+function queryTraces(options = {}) {
+  const root = traceRoot(options.stateHome);
+  if (!traceRootIsAvailable(root))
+    return unavailableTraceResult(root);
+  const filter = options.filter ?? {};
+  const state = {
+    records: [],
+    anomalies: [],
+    deliveries: new Map,
+    includeDiagnostics: Object.keys(filter).length === 0
+  };
+  for (const file of admittedTraceFiles(root, MAX_QUERY_TRACE_ENTRIES))
+    readTraceFile(file, state);
+  return { available: true, trace_root: root, records: selectTraceRecords(state.records, filter), anomalies: state.anomalies };
 }
 function cleanupTraces(options = {}) {
   const root = traceRoot(options.stateHome);
@@ -515,7 +570,7 @@ function cleanupTraces(options = {}) {
   const maxTotalBytes = options.maxTotalBytes ?? DEFAULT_TRACE_MAX_TOTAL_BYTES;
   let removedFiles = 0;
   let removedBytes = 0;
-  let retained = files.filter((file) => {
+  const retained = files.filter((file) => {
     if (nowMs - file.mtimeMs <= maxAgeMs)
       return true;
     try {
@@ -3529,6 +3584,12 @@ var usage = `Usage:
   recovery-traces cleanup [--state-home PATH]
   recovery-traces identity
 `;
+var VIEW_FILTERS = new Map([
+  ["--journey", "journey_identity"],
+  ["--invocation", "invocation_identity"],
+  ["--worker", "observed_worker_identity"],
+  ["--task", "ledger_task_identity"]
+]);
 function parse(args) {
   const command = args[0];
   if (command !== "view" && command !== "cleanup" && command !== "identity")
@@ -3540,18 +3601,14 @@ function parse(args) {
     const value = args[index + 1];
     if (!key || !value || value.startsWith("--"))
       return null;
-    if (key === "--state-home")
+    if (key === "--state-home") {
       stateHome = value;
-    else if (command === "view" && key === "--journey")
-      filter.journey_identity = value;
-    else if (command === "view" && key === "--invocation")
-      filter.invocation_identity = value;
-    else if (command === "view" && key === "--worker")
-      filter.observed_worker_identity = value;
-    else if (command === "view" && key === "--task")
-      filter.ledger_task_identity = value;
-    else
+      continue;
+    }
+    const filterKey = VIEW_FILTERS.get(key);
+    if (command !== "view" || filterKey === undefined)
       return null;
+    filter[filterKey] = value;
   }
   return { command, stateHome, filter };
 }
@@ -3561,6 +3618,81 @@ function pluginRoot() {
 }
 function sha256(path) {
   return createHash("sha256").update(readFileSync2(path)).digest("hex");
+}
+function writeIdentityFailure() {
+  process.stdout.write(`${JSON.stringify({ schema_version: 1, command: "identity", ok: false, error: "identity-unavailable", next_action: "Restore the plugin package metadata, recovery sources, and observer runtime, then retry identity." })}
+`);
+  return 1;
+}
+function runIdentityCommand(args) {
+  if (args.length !== 1) {
+    process.stderr.write(usage);
+    return 64;
+  }
+  try {
+    const root = pluginRoot();
+    const plugin = JSON.parse(readFileSync2(resolve2(root, "package.json"), "utf8"));
+    if (typeof plugin !== "object" || plugin === null || !("version" in plugin) || !isPluginVersion(plugin.version)) {
+      throw new Error("invalid-plugin-metadata");
+    }
+    process.stdout.write(`${JSON.stringify({
+      schema_version: 1,
+      command: "identity",
+      ok: true,
+      plugin_version: plugin.version,
+      recovery_source_sha256: sha256(resolve2(root, "packages/compaction-recovery/src/recovery.py")),
+      observer_source_sha256: sha256(resolve2(root, "packages/recovery-observability/src/recovery-observer.ts")),
+      runtime_sha256: sha256(resolve2(root, "runtime/recovery-observer.js"))
+    })}
+`);
+    return 0;
+  } catch {
+    return writeIdentityFailure();
+  }
+}
+function recordCleanupObservation(observer, invocation, journey, parent, started, sequence, outcome) {
+  try {
+    observer?.accept({
+      schema_version: 1,
+      record_type: "lifecycle",
+      record_identity: `${invocation}-${sequence}`,
+      journey_identity: journey,
+      invocation_identity: invocation,
+      producer_identity: invocation,
+      producer_sequence: sequence,
+      parent_record_identity: parent,
+      harness_kind: "command",
+      operation: "cleanup",
+      phase: "cleanup",
+      occurred_at: new Date().toISOString(),
+      duration_ms: Number(process.hrtime.bigint() - started) / 1e6,
+      outcome
+    });
+  } catch {}
+}
+function createCleanupObserver(parsed, invocation) {
+  const journey = process.env.MSB_RECOVERY_CLEANUP_JOURNEY;
+  const parent = process.env.MSB_RECOVERY_CLEANUP_PARENT;
+  if (parsed.command !== "cleanup" || !isRecoveryIdentity(journey) || !isRecoveryIdentity(parent)) {
+    return { observer: undefined, journey, parent };
+  }
+  return {
+    observer: openRecoveryObservability({ invocationIdentity: invocation, stateHome: parsed.stateHome }),
+    journey,
+    parent
+  };
+}
+function runTraceAction(parsed) {
+  const invocation = `cleanup-${randomUUID2()}`;
+  const lifecycle = createCleanupObserver(parsed, invocation);
+  const started = process.hrtime.bigint();
+  recordCleanupObservation(lifecycle.observer, invocation, lifecycle.journey, lifecycle.parent, started, 0, "started");
+  const result = parsed.command === "view" ? viewRecoveryTraces({ stateHome: parsed.stateHome, filter: parsed.filter }) : cleanupRecoveryTraces({ stateHome: parsed.stateHome });
+  recordCleanupObservation(lifecycle.observer, invocation, lifecycle.journey, lifecycle.parent, started, 1, result.available ? "succeeded" : "unavailable");
+  lifecycle.observer?.dispose();
+  process.stdout.write(`${JSON.stringify({ schema_version: 1, command: parsed.command, ok: true, ...result })}
+`);
+  return 0;
 }
 async function runTraceCommand(args) {
   if (args.length === 1 && (args[0] === "--help" || args[0] === "-h" || args[0] === "help")) {
@@ -3573,65 +3705,9 @@ async function runTraceCommand(args) {
     return 64;
   }
   if (parsed.command === "identity") {
-    if (args.length !== 1) {
-      process.stderr.write(usage);
-      return 64;
-    }
-    try {
-      const root = pluginRoot();
-      const plugin = JSON.parse(readFileSync2(resolve2(root, "package.json"), "utf8"));
-      if (typeof plugin !== "object" || plugin === null || !("version" in plugin) || !isPluginVersion(plugin.version)) {
-        throw new Error("invalid-plugin-metadata");
-      }
-      process.stdout.write(`${JSON.stringify({
-        schema_version: 1,
-        command: "identity",
-        ok: true,
-        plugin_version: plugin.version,
-        recovery_source_sha256: sha256(resolve2(root, "packages/compaction-recovery/src/recovery.py")),
-        observer_source_sha256: sha256(resolve2(root, "packages/recovery-observability/src/recovery-observer.ts")),
-        runtime_sha256: sha256(resolve2(root, "runtime/recovery-observer.js"))
-      })}
-`);
-      return 0;
-    } catch {
-      process.stdout.write(`${JSON.stringify({ schema_version: 1, command: "identity", ok: false, error: "identity-unavailable", next_action: "Restore the plugin package metadata, recovery sources, and observer runtime, then retry identity." })}
-`);
-      return 1;
-    }
+    return runIdentityCommand(args);
   }
-  const journey = process.env.MSB_RECOVERY_CLEANUP_JOURNEY;
-  const parent = process.env.MSB_RECOVERY_CLEANUP_PARENT;
-  const invocation = `cleanup-${randomUUID2()}`;
-  const observer = parsed.command === "cleanup" && isRecoveryIdentity(journey) && isRecoveryIdentity(parent) ? openRecoveryObservability({ invocationIdentity: invocation, stateHome: parsed.stateHome }) : undefined;
-  const started = process.hrtime.bigint();
-  const recordCleanup = (sequence, outcome) => {
-    try {
-      observer?.accept({
-        schema_version: 1,
-        record_type: "lifecycle",
-        record_identity: `${invocation}-${sequence}`,
-        journey_identity: journey,
-        invocation_identity: invocation,
-        producer_identity: invocation,
-        producer_sequence: sequence,
-        parent_record_identity: parent,
-        harness_kind: "command",
-        operation: "cleanup",
-        phase: "cleanup",
-        occurred_at: new Date().toISOString(),
-        duration_ms: Number(process.hrtime.bigint() - started) / 1e6,
-        outcome
-      });
-    } catch {}
-  };
-  recordCleanup(0, "started");
-  const result = parsed.command === "view" ? viewRecoveryTraces({ stateHome: parsed.stateHome, filter: parsed.filter }) : cleanupRecoveryTraces({ stateHome: parsed.stateHome });
-  recordCleanup(1, result.available ? "succeeded" : "unavailable");
-  observer?.dispose();
-  process.stdout.write(`${JSON.stringify({ schema_version: 1, command: parsed.command, ok: true, ...result })}
-`);
-  return 0;
+  return runTraceAction(parsed);
 }
 if (import.meta.main)
   process.exitCode = await runTraceCommand(process.argv.slice(2));

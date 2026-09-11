@@ -1,0 +1,15 @@
+📄 Reading from file: input.txt
+📊 Captured 914 characters
+🔍 Parsing messages...
+✅ Parsed 4 messages
+📅 Date range: 2026-09-01 to 2026-09-02
+📢 Channel: 🏆Engineers
+💾 Saved to: output.json
+
+📝 Sample messages:
+  [02/09/2026 9:15 am] Alice Smith: Morning all, standup moved to 10am today
+Everyone please upd...
+    Reactions: 👍(3)
+  [02/09/2026 12:05 pm] Bob Jones: Will do. Url Preview for https://example.com/vendor...
+  [03/09/2026 12:40 am] Carol White: Nice work team, Alice Smith, Carol White...
+    Reactions: ❤️(1)

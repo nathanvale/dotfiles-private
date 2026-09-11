@@ -860,6 +860,45 @@ describe('issue 5: shell indirection does not bypass safety checks', () => {
 })
 
 // ---------------------------------------------------------------------------
+// Regression: GIT_SUBCOMMAND_CHECKS/INLINE_EXEC_FLAGS must be Maps, not plain
+// objects, because they're looked up by an attacker-controlled string. A
+// plain object would resolve inherited Object.prototype members
+// (`toString`, `constructor`, ...) as if they were real checkers.
+// ---------------------------------------------------------------------------
+describe('git subcommand dispatch is immune to prototype pollution', () => {
+	test('blocks: git toString; git push --force origin main', () => {
+		// Before the Map fix: GIT_SUBCOMMAND_CHECKS['toString'] resolved
+		// Object.prototype.toString (truthy), so the segment loop returned a
+		// bare string as the "result" on the first segment and never even
+		// reached the second segment's force push.
+		const result = checkCommand('git toString; git push --force origin main')
+		expect(result.blocked).toBe(true)
+	})
+
+	test('blocks: git constructor && git reset --hard', () => {
+		// Same hazard via a different inherited property:
+		// GIT_SUBCOMMAND_CHECKS['constructor'] would resolve Object (the
+		// constructor function) on a plain object.
+		const result = checkCommand('git constructor && git reset --hard')
+		expect(result.blocked).toBe(true)
+	})
+
+	test('pins current behavior: nice -n git reset --hard is not blocked (no crash)', () => {
+		// `-n` is in NICE_OPTIONS_WITH_VALUE, so stripExecutionPrefixes always
+		// treats the word after a bare `-n` as its value -- here that word is
+		// `git` itself, since no adjustment value was actually supplied. The
+		// prefix strip then leaves `reset --hard` (not `git reset --hard`) as
+		// the "wrapped"/subcommand text, which no longer parses as a git
+		// invocation at all, so nothing blocks it. This is a pre-existing
+		// shell-tokenizer parsing gap unrelated to the Map fix above; this
+		// test only pins the current (non-crashing, non-blocking) behavior so
+		// a future change to prefix parsing doesn't silently flip it.
+		const result = checkCommand('nice -n git reset --hard')
+		expect(result.blocked).toBe(false)
+	})
+})
+
+// ---------------------------------------------------------------------------
 // Fail-closed on unbalanced input
 // ---------------------------------------------------------------------------
 describe('unbalanced shell input', () => {

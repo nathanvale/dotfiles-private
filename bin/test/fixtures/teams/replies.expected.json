@@ -1,0 +1,163 @@
+{
+  "channel": "🎯Product",
+  "messageCount": 10,
+  "dateRange": {
+    "earliest": "2026-09-03",
+    "latest": "2026-09-04"
+  },
+  "messages": [
+    {
+      "id": "alice-smith-04092026900",
+      "author": "Alice Smith",
+      "timestamp": "04/09/2026 9:00 am",
+      "date": "04/09/2026",
+      "time": "9:00 am",
+      "content": "Can someone review the release notes before lunch?",
+      "isReply": false,
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "id": "bob-jones-04092026920",
+      "author": "Bob Jones",
+      "timestamp": "04/09/2026 9:20 am",
+      "date": "04/09/2026",
+      "time": "9:20 am",
+      "content": "On it, Alice Smith",
+      "isReply": true,
+      "replyTo": {
+        "author": "Alice Smith",
+        "timestamp": "04/09/2026 9:00 am",
+        "preview": "Can someone review the release notes…"
+      },
+      "reactions": [
+        {
+          "emoji": "👍",
+          "name": "Like",
+          "count": 1
+        }
+      ],
+      "attachments": [],
+      "mentions": [
+        "Alice Smith"
+      ]
+    },
+    {
+      "id": "alice-smith-04092026925",
+      "author": "Alice Smith",
+      "timestamp": "04/09/2026 9:25 am",
+      "date": "04/09/2026",
+      "time": "9:25 am",
+      "content": "Thanks!\nReview your praise history\nDancing cat (GIF Image)",
+      "isReply": true,
+      "replyTo": {
+        "author": "Bob Jones",
+        "timestamp": "04/09/2026 9:20 am",
+        "preview": "On it, Alice Smith"
+      },
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "id": "carol-white-04092026930",
+      "author": "Carol White",
+      "timestamp": "04/09/2026 9:30 am",
+      "date": "04/09/2026",
+      "time": "9:30 am",
+      "content": "Fresh message after a reply, no preview header",
+      "isReply": false,
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "id": "dave-brown-04092026935",
+      "author": "Dave Brown",
+      "timestamp": "04/09/2026 9:35 am",
+      "date": "04/09/2026",
+      "time": "9:35 am",
+      "content": "Reply preview line",
+      "isReply": false,
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "id": "erin-black-04092026940",
+      "author": "Erin Black",
+      "timestamp": "04/09/2026 9:40 am",
+      "date": "04/09/2026",
+      "time": "9:40 am",
+      "content": "Erin replying to Dave\nSecond reply line",
+      "isReply": true,
+      "replyTo": {
+        "author": "Dave Brown",
+        "timestamp": "04/09/2026 9:35 am",
+        "preview": "Reply preview line"
+      },
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "id": "frank-green-04092026945",
+      "author": "Frank Green",
+      "timestamp": "04/09/2026 9:45 am",
+      "date": "04/09/2026",
+      "time": "9:45 am",
+      "content": "Next preview",
+      "isReply": false,
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "id": "frank-green-04092026950",
+      "author": "Frank Green",
+      "timestamp": "04/09/2026 9:50 am",
+      "date": "04/09/2026",
+      "time": "9:50 am",
+      "content": "Self reply from Frank",
+      "isReply": true,
+      "replyTo": {
+        "author": "Frank Green",
+        "timestamp": "04/09/2026 9:45 am",
+        "preview": "Next preview"
+      },
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "id": "grace-hall-04092026955",
+      "author": "Grace Hall",
+      "timestamp": "04/09/2026 9:55 am",
+      "date": "04/09/2026",
+      "time": "9:55 am",
+      "content": "",
+      "isReply": true,
+      "replyTo": {
+        "author": "Frank Green",
+        "timestamp": "04/09/2026 9:50 am",
+        "preview": "Self reply from Frank"
+      },
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "id": "henry-ives-040920261000",
+      "author": "Henry Ives",
+      "timestamp": "04/09/2026 10:00 am",
+      "date": "04/09/2026",
+      "time": "10:00 am",
+      "content": "Something else",
+      "isReply": false,
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    }
+  ]
+}

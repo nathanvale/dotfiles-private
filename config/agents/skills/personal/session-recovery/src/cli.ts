@@ -23,7 +23,7 @@ import type {
 	ReviewLedgerRow,
 } from "./session-recovery-model.ts"
 
-interface ParsedArgs {
+export interface ParsedArgs {
 	command?: "scan" | "extract" | "validate"
 	help: boolean
 	json: boolean
@@ -126,6 +126,46 @@ function validateCommandArgs(parsed: ParsedArgs): ParsedArgs {
  * parseArgs(["scan", "--from", "2026-08-01", "--to", "2026-08-08"])
  * ```
  */
+function applyArgument(parsed: ParsedArgs, argument: string | undefined, value: string): void {
+	switch (argument) {
+		case "--from":
+			parsed.from = value
+			break
+		case "--to":
+			parsed.to = value
+			break
+		case "--source":
+			if (value !== "claude" && value !== "codex") {
+				throw new UsageError(`--source requires claude or codex: ${value}`)
+			}
+			parsed.sources.push(value)
+			break
+		case "--repo":
+			parsed.repo = value
+			break
+		case "--session":
+			parsed.sessions.push(value)
+			break
+		case "--offset":
+			parsed.offset = integer(value, argument, true)
+			break
+		case "--limit":
+			parsed.limit = integer(value, argument, false, EXTRACT_MAX_LIMIT)
+			break
+		case "--max-message-chars":
+			parsed.maxMessageChars = integer(value, argument, false, MAX_MESSAGE_CHARS)
+			break
+		case "--inventory":
+			parsed.inventory = value
+			break
+		case "--ledger":
+			parsed.ledger = value
+			break
+		default:
+			throw new UsageError(`Unknown option: ${argument}`)
+	}
+}
+
 export function parseArgs(args: string[]): ParsedArgs {
 	const parsed: ParsedArgs = {
 		help: false,
@@ -154,48 +194,12 @@ export function parseArgs(args: string[]): ParsedArgs {
 		const value = args[index + 1]
 		if (!value || value.startsWith("-")) throw new UsageError(`${argument} requires a value`)
 		index += 1
-		switch (argument) {
-			case "--from":
-				parsed.from = value
-				break
-			case "--to":
-				parsed.to = value
-				break
-			case "--source":
-				if (value !== "claude" && value !== "codex") {
-					throw new UsageError(`--source requires claude or codex: ${value}`)
-				}
-				parsed.sources.push(value)
-				break
-			case "--repo":
-				parsed.repo = value
-				break
-			case "--session":
-				parsed.sessions.push(value)
-				break
-			case "--offset":
-				parsed.offset = integer(value, argument, true)
-				break
-			case "--limit":
-				parsed.limit = integer(value, argument, false, EXTRACT_MAX_LIMIT)
-				break
-			case "--max-message-chars":
-				parsed.maxMessageChars = integer(value, argument, false, MAX_MESSAGE_CHARS)
-				break
-			case "--inventory":
-				parsed.inventory = value
-				break
-			case "--ledger":
-				parsed.ledger = value
-				break
-			default:
-				throw new UsageError(`Unknown option: ${argument}`)
-		}
+		applyArgument(parsed, argument, value)
 	}
 	return validateCommandArgs(parsed)
 }
 
-interface CliIo {
+export interface CliIo {
 	stdout: (text: string) => void
 	stderr: (text: string) => void
 }
@@ -347,42 +351,46 @@ function decodeReconciliation(value: unknown): {
 	return counts
 }
 
+function decodeInventoryLedgerRow(rowValue: unknown, index: number, sessions: Set<string>, from: number, to: number): void {
+	const row = record(rowValue, `inventory.ledger[${index}]`)
+	const session = stringValue(row.session, `inventory.ledger[${index}].session`)
+	if (sessions.has(session)) invalidInput(`duplicate inventory session: ${session}`)
+	sessions.add(session)
+	const sessionId = stringValue(row.session_id, `inventory.ledger[${index}].session_id`)
+	const source = literal(row.source, ["claude", "codex"], `inventory.ledger[${index}].source`)
+	if (session !== `${source}:${sessionId}`) {
+		invalidInput(`inventory.ledger[${index}] session identity is inconsistent`)
+	}
+	literal(row.kind, ["primary", "helper"], `inventory.ledger[${index}].kind`)
+	nullableString(row.parent_session_id, `inventory.ledger[${index}].parent_session_id`)
+	const createdAt = Date.parse(stringValue(row.created_at, `inventory.ledger[${index}].created_at`))
+	const updatedAt = Date.parse(stringValue(row.updated_at, `inventory.ledger[${index}].updated_at`))
+	if (
+		!Number.isFinite(createdAt) || !Number.isFinite(updatedAt) ||
+		createdAt > updatedAt || createdAt >= to || updatedAt < from
+	) {
+		invalidInput(`inventory.ledger[${index}] timestamps are inconsistent`)
+	}
+	nullableString(row.repository_hint, `inventory.ledger[${index}].repository_hint`)
+	nullableString(row.branch, `inventory.ledger[${index}].branch`)
+	integerValue(row.message_count, `inventory.ledger[${index}].message_count`)
+	stringValue(row.summary, `inventory.ledger[${index}].summary`)
+	stringValue(row.outcome_hint, `inventory.ledger[${index}].outcome_hint`)
+	const digest = stringValue(row.content_sha256, `inventory.ledger[${index}].content_sha256`)
+	if (!/^[a-f0-9]{64}$/.test(digest)) invalidInput(`inventory.ledger[${index}].content_sha256 is invalid`)
+	literal(row.classification, ["unclassified"], `inventory.ledger[${index}].classification`)
+	if (row.work_group_id !== null || row.canonical_owner_or_proposal !== null || row.confidence !== null) {
+		invalidInput(`inventory.ledger[${index}] contains review fields`)
+	}
+	literal(row.reason, ["awaiting evidence review"], `inventory.ledger[${index}].reason`)
+	if (row.source_available !== true) invalidInput(`inventory.ledger[${index}].source_available must be true`)
+}
+
 function decodeInventoryLedger(value: unknown, from: number, to: number): number {
 	if (!Array.isArray(value)) return invalidInput("inventory.ledger must be an array")
 	const sessions = new Set<string>()
 	for (const [index, rowValue] of value.entries()) {
-		const row = record(rowValue, `inventory.ledger[${index}]`)
-		const session = stringValue(row.session, `inventory.ledger[${index}].session`)
-		if (sessions.has(session)) return invalidInput(`duplicate inventory session: ${session}`)
-		sessions.add(session)
-		const sessionId = stringValue(row.session_id, `inventory.ledger[${index}].session_id`)
-		const source = literal(row.source, ["claude", "codex"], `inventory.ledger[${index}].source`)
-		if (session !== `${source}:${sessionId}`) {
-			return invalidInput(`inventory.ledger[${index}] session identity is inconsistent`)
-		}
-		literal(row.kind, ["primary", "helper"], `inventory.ledger[${index}].kind`)
-		nullableString(row.parent_session_id, `inventory.ledger[${index}].parent_session_id`)
-		const createdAt = Date.parse(stringValue(row.created_at, `inventory.ledger[${index}].created_at`))
-		const updatedAt = Date.parse(stringValue(row.updated_at, `inventory.ledger[${index}].updated_at`))
-		if (
-			!Number.isFinite(createdAt) || !Number.isFinite(updatedAt) ||
-			createdAt > updatedAt || createdAt >= to || updatedAt < from
-		) {
-			return invalidInput(`inventory.ledger[${index}] timestamps are inconsistent`)
-		}
-		nullableString(row.repository_hint, `inventory.ledger[${index}].repository_hint`)
-		nullableString(row.branch, `inventory.ledger[${index}].branch`)
-		integerValue(row.message_count, `inventory.ledger[${index}].message_count`)
-		stringValue(row.summary, `inventory.ledger[${index}].summary`)
-		stringValue(row.outcome_hint, `inventory.ledger[${index}].outcome_hint`)
-		const digest = stringValue(row.content_sha256, `inventory.ledger[${index}].content_sha256`)
-		if (!/^[a-f0-9]{64}$/.test(digest)) return invalidInput(`inventory.ledger[${index}].content_sha256 is invalid`)
-		literal(row.classification, ["unclassified"], `inventory.ledger[${index}].classification`)
-		if (row.work_group_id !== null || row.canonical_owner_or_proposal !== null || row.confidence !== null) {
-			return invalidInput(`inventory.ledger[${index}] contains review fields`)
-		}
-		literal(row.reason, ["awaiting evidence review"], `inventory.ledger[${index}].reason`)
-		if (row.source_available !== true) return invalidInput(`inventory.ledger[${index}].source_available must be true`)
+		decodeInventoryLedgerRow(rowValue, index, sessions, from, to)
 	}
 	return value.length
 }
@@ -486,6 +494,86 @@ async function readReviewRows(path: string): Promise<ReviewLedgerRow[]> {
  * const exitCode = await runCli(["--help"])
  * ```
  */
+async function runScanCommand(parsed: ParsedArgs, io: CliIo, runId: string): Promise<number> {
+	const result = await scanRecoverySessions({
+		from: parsed.from as string,
+		to: parsed.to as string,
+		sources: parsed.sources.length > 0 ? parsed.sources : undefined,
+		repoPath: parsed.repo,
+		sessions: parsed.sessions,
+	})
+	io.stdout(parsed.json
+		? envelope("ok", runId, result)
+		: `Accounted for ${result.reconciliation.ledger_rows} sessions. Complete: ${result.complete ? "yes" : "no"}.\n${result.next_safe_action}\n`)
+	return 0
+}
+
+async function runExtractCommand(parsed: ParsedArgs, io: CliIo, runId: string): Promise<number> {
+	const result = await extractRecoverySession({
+		session: parsed.sessions[0] as string,
+		offset: parsed.offset,
+		limit: parsed.limit,
+		maxMessageChars: parsed.maxMessageChars,
+	})
+	const page = result.messages.length === 0
+		? `No messages returned at offset ${result.offset}.`
+		: result.messages.map((message) => `[${message.index}] ${message.role}: ${message.text}`).join("\n\n")
+	io.stdout(parsed.json ? envelope("ok", runId, result) : `${page}\n\n${result.next_safe_action}\n`)
+	return 0
+}
+
+async function runValidateCommand(parsed: ParsedArgs, io: CliIo, runId: string): Promise<number> {
+	const inventory = await readInventory(parsed.inventory as string)
+	const rows = await readReviewRows(parsed.ledger as string)
+	const result = validateReviewLedger(inventory, rows)
+	if (!result.valid) {
+		const error = {
+			category: "ledger_invalid",
+			message: "Review ledger does not reconcile with the inventory.",
+			retry_safe: true,
+			issues: result.issues,
+			reconciliation: result.reconciliation,
+			next_action: result.next_safe_action,
+		}
+		if (parsed.json) io.stdout(envelope("error", runId, error))
+		else io.stderr(`${COMMAND_NAME}: ${error.message}\n${result.issues.join("\n")}\n`)
+		return 4
+	}
+	io.stdout(parsed.json
+		? envelope("ok", runId, result)
+		: `Review ledger reconciled.\n${result.next_safe_action}\n`)
+	return 0
+}
+
+async function dispatchCommand(parsed: ParsedArgs, io: CliIo, runId: string): Promise<number> {
+	if (parsed.help) {
+		io.stdout(HELP_TEXT)
+		return 0
+	}
+	if (!parsed.command) throw new UsageError("Command is required")
+	if (parsed.command === "scan") return runScanCommand(parsed, io, runId)
+	if (parsed.command === "extract") return runExtractCommand(parsed, io, runId)
+	if (parsed.command === "validate") return runValidateCommand(parsed, io, runId)
+	return unexpectedCommand(parsed.command)
+}
+
+function describeCliFailure(error: unknown): { message: string; details: Record<string, unknown>; exitCode: number } {
+	const usage = error instanceof UsageError
+	const recovery = error instanceof SessionRecoveryError
+	const category = usage ? "invalid_usage" : recovery ? error.category : "runtime_failure"
+	const message = error instanceof Error ? error.message : String(error)
+	const details = {
+		category,
+		message,
+		retry_safe: !usage,
+		next_action: usage
+			? `Run ${COMMAND_NAME} --help and correct the arguments.`
+			: "Repair the named source or input, then retry with the same arguments.",
+	}
+	const exitCode = usage || (recovery && error.category === "invalid_window") ? 2 : 3
+	return { message, details, exitCode }
+}
+
 export async function runCli(args: string[], io: CliIo = {
 	stdout: (text) => process.stdout.write(text),
 	stderr: (text) => process.stderr.write(text),
@@ -494,76 +582,12 @@ export async function runCli(args: string[], io: CliIo = {
 	let parsed: ParsedArgs | undefined
 	try {
 		parsed = parseArgs(args)
-		if (parsed.help) {
-			io.stdout(HELP_TEXT)
-			return 0
-		}
-		if (!parsed.command) throw new UsageError("Command is required")
-		if (parsed.command === "scan") {
-			const result = await scanRecoverySessions({
-				from: parsed.from as string,
-				to: parsed.to as string,
-				sources: parsed.sources.length > 0 ? parsed.sources : undefined,
-				repoPath: parsed.repo,
-				sessions: parsed.sessions,
-			})
-			io.stdout(parsed.json
-				? envelope("ok", runId, result)
-				: `Accounted for ${result.reconciliation.ledger_rows} sessions. Complete: ${result.complete ? "yes" : "no"}.\n${result.next_safe_action}\n`)
-			return 0
-		}
-		if (parsed.command === "extract") {
-			const result = await extractRecoverySession({
-				session: parsed.sessions[0] as string,
-				offset: parsed.offset,
-				limit: parsed.limit,
-				maxMessageChars: parsed.maxMessageChars,
-			})
-			const page = result.messages.length === 0
-				? `No messages returned at offset ${result.offset}.`
-				: result.messages.map((message) => `[${message.index}] ${message.role}: ${message.text}`).join("\n\n")
-			io.stdout(parsed.json ? envelope("ok", runId, result) : `${page}\n\n${result.next_safe_action}\n`)
-			return 0
-		}
-		if (parsed.command === "validate") {
-			const inventory = await readInventory(parsed.inventory as string)
-			const rows = await readReviewRows(parsed.ledger as string)
-			const result = validateReviewLedger(inventory, rows)
-			if (!result.valid) {
-				const error = {
-					category: "ledger_invalid",
-					message: "Review ledger does not reconcile with the inventory.",
-					retry_safe: true,
-					issues: result.issues,
-					reconciliation: result.reconciliation,
-					next_action: result.next_safe_action,
-				}
-				if (parsed.json) io.stdout(envelope("error", runId, error))
-				else io.stderr(`${COMMAND_NAME}: ${error.message}\n${result.issues.join("\n")}\n`)
-				return 4
-			}
-			io.stdout(parsed.json
-				? envelope("ok", runId, result)
-				: `Review ledger reconciled.\n${result.next_safe_action}\n`)
-			return 0
-		}
-		return unexpectedCommand(parsed.command)
+		return await dispatchCommand(parsed, io, runId)
 	} catch (error) {
-		const usage = error instanceof UsageError
-		const recovery = error instanceof SessionRecoveryError
-		const category = usage ? "invalid_usage" : recovery ? error.category : "runtime_failure"
-		const message = error instanceof Error ? error.message : String(error)
-		const details = {
-			category,
-			message,
-			retry_safe: !usage,
-			next_action: usage
-				? `Run ${COMMAND_NAME} --help and correct the arguments.`
-				: "Repair the named source or input, then retry with the same arguments.",
-		}
-		if (parsed?.json || args.includes("--json")) io.stdout(envelope("error", runId, details))
-		else io.stderr(`${COMMAND_NAME}: ${message}\n`)
-		return usage || (recovery && error.category === "invalid_window") ? 2 : 3
+		const failure = describeCliFailure(error)
+		if (parsed?.json || args.includes("--json")) io.stdout(envelope("error", runId, failure.details))
+		else io.stderr(`${COMMAND_NAME}: ${failure.message}\n`)
+		return failure.exitCode
 	}
 }
 

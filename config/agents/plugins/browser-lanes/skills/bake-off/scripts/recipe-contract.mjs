@@ -3,14 +3,16 @@ import { readFileSync, realpathSync } from 'node:fs';
 import { isAbsolute, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const SCHEMA_VERSION = 2;
-export const ADAPTERS = Object.freeze([
+import { runBakeOffCli } from './cli-runner.mjs';
+
+const SCHEMA_VERSION = 2;
+const ADAPTERS = Object.freeze([
   'agent-browser',
   'chrome-devtools',
   'playwright',
   'puppeteer',
 ]);
-export const EFFECTS = Object.freeze([
+const EFFECTS = Object.freeze([
   'read',
   'control',
   'Insert',
@@ -22,7 +24,7 @@ export const EFFECTS = Object.freeze([
 const SHA256 = /^[0-9a-f]{64}$/;
 const ID = /^[a-z0-9][a-z0-9._-]*$/;
 
-export class RecipeContractError extends Error {
+class RecipeContractError extends Error {
   constructor(code, path, message) {
     super(`${path}: ${message}`);
     this.name = 'RecipeContractError';
@@ -67,6 +69,93 @@ function validateScriptLink(link, path, errors) {
   }
   validateRelativePath(link.path, `${path}.path`, errors);
   validateSha(link.sha256, `${path}.sha256`, errors);
+}
+
+function validateStepIdentity(step, path, stepIds, errors) {
+  if (!nonEmptyString(step.id) || !ID.test(step.id)) {
+    errors.push(error('invalid-step-id', `${path}.id`, 'must be a stable lowercase identifier'));
+  } else if (stepIds.has(step.id)) {
+    errors.push(error('duplicate-step-id', `${path}.id`, 'must be unique and ordered'));
+  } else {
+    stepIds.add(step.id);
+  }
+}
+
+function validateStepAdapters(step, path, errors) {
+  if (!ADAPTERS.includes(step.preferredAdapter)) {
+    errors.push(error('invalid-adapter', `${path}.preferredAdapter`, 'must name a supported adapter'));
+  }
+  if (!Array.isArray(step.fallbackAdapters)) {
+    errors.push(error('invalid-fallbacks', `${path}.fallbackAdapters`, 'must be an ordered array'));
+    return;
+  }
+  const fallbackIds = new Set();
+  for (const [fallbackIndex, adapter] of step.fallbackAdapters.entries()) {
+    const fallbackPath = `${path}.fallbackAdapters[${fallbackIndex}]`;
+    if (!ADAPTERS.includes(adapter)) errors.push(error('invalid-adapter', fallbackPath, 'must name a supported adapter'));
+    if (fallbackIds.has(adapter)) errors.push(error('duplicate-fallback', fallbackPath, 'fallback adapters must be unique and ordered'));
+    fallbackIds.add(adapter);
+    if (adapter === step.preferredAdapter) errors.push(error('preferred-as-fallback', fallbackPath, 'must differ from preferredAdapter'));
+  }
+}
+
+function validateStepAuthority(step, path, errors) {
+  if (!isRecord(step.authority)) {
+    errors.push(error('invalid-authority', `${path}.authority`, 'must include effect and scope'));
+    return;
+  }
+  if (!EFFECTS.includes(step.authority.effect)) errors.push(error('unknown-effect', `${path}.authority.effect`, 'must be read, control, Insert, Save, Delete, or Submit'));
+  if (!nonEmptyString(step.authority.scope)) errors.push(error('missing-authority-scope', `${path}.authority.scope`, 'must describe the bounded effect scope'));
+}
+
+function validateStepUncertainty(step, path, errors) {
+  if (!isRecord(step.uncertainty)) {
+    errors.push(error('invalid-uncertainty', `${path}.uncertainty`, 'must require observation before replay and refuse unknown effects'));
+    return;
+  }
+  if (step.uncertainty.observeBeforeReplay !== true) errors.push(error('unsafe-uncertainty-policy', `${path}.uncertainty.observeBeforeReplay`, 'must be true'));
+  if (step.uncertainty.noReplayIfUnknown !== true) errors.push(error('unsafe-uncertainty-policy', `${path}.uncertainty.noReplayIfUnknown`, 'must be true'));
+}
+
+function validateRecipeStep(step, index, stepIds, errors) {
+  const path = `steps[${index}]`;
+  if (!isRecord(step)) {
+    errors.push(error('invalid-step', path, 'must be an object'));
+    return;
+  }
+  validateStepIdentity(step, path, stepIds, errors);
+  if (!nonEmptyString(step.intent)) errors.push(error('missing-intent', `${path}.intent`, 'must be a non-empty string'));
+  validateStepAdapters(step, path, errors);
+  if (!nonEmptyString(step.successAssertion)) errors.push(error('missing-success-assertion', `${path}.successAssertion`, 'must be a non-empty observable assertion'));
+  validateStepAuthority(step, path, errors);
+  validateStepUncertainty(step, path, errors);
+  if (step.script !== undefined) validateScriptLink(step.script, `${path}.script`, errors);
+}
+
+function validateRecipeSteps(steps, errors) {
+  const stepIds = new Set();
+  for (const [index, step] of steps.entries()) validateRecipeStep(step, index, stepIds, errors);
+}
+
+function validateRecipeShape(recipe, errors) {
+  if (recipe.schemaVersion !== SCHEMA_VERSION) {
+    errors.push(error('unsupported-schema', 'schemaVersion', `must be ${SCHEMA_VERSION}`));
+  }
+  if (!nonEmptyString(recipe.id) || !ID.test(recipe.id)) {
+    errors.push(error('invalid-id', 'id', 'must be a stable lowercase identifier'));
+  }
+  if (!Number.isInteger(recipe.revision) || recipe.revision < 1) {
+    errors.push(error('invalid-revision', 'revision', 'must be a positive integer'));
+  }
+  if (!['candidate', 'independently-verified'].includes(recipe.state)) {
+    errors.push(error('invalid-state', 'state', 'must be candidate or independently-verified'));
+  }
+  if (!ADAPTERS.includes(recipe.defaultAdapter)) {
+    errors.push(error('invalid-adapter', 'defaultAdapter', 'must name a supported adapter'));
+  }
+  if (!Array.isArray(recipe.steps) || recipe.steps.length === 0) {
+    errors.push(error('missing-steps', 'steps', 'must contain at least one ordered step'));
+  }
 }
 
 function expectedScopes(recipe) {
@@ -167,6 +256,10 @@ function validateAcceptance(recipe, path, errors) {
     });
   }
 
+  validateAcceptanceBinding(recipe, acceptance, path, errors);
+}
+
+function validateAcceptanceBinding(recipe, acceptance, path, errors) {
   const candidate = { ...recipe, state: 'candidate' };
   delete candidate.acceptance;
   if (typeof acceptance.candidateRecipeSha256 === 'string' && SHA256.test(acceptance.candidateRecipeSha256)) {
@@ -180,78 +273,7 @@ function validateAcceptance(recipe, path, errors) {
   }
 }
 
-export function validateRecipe(recipe, options = {}) {
-  const errors = [];
-  if (!isRecord(recipe)) {
-    return { valid: false, errors: [error('invalid-recipe', '$', 'must be an object')] };
-  }
-  if (recipe.schemaVersion !== SCHEMA_VERSION) {
-    errors.push(error('unsupported-schema', 'schemaVersion', `must be ${SCHEMA_VERSION}`));
-  }
-  if (!nonEmptyString(recipe.id) || !ID.test(recipe.id)) {
-    errors.push(error('invalid-id', 'id', 'must be a stable lowercase identifier'));
-  }
-  if (!Number.isInteger(recipe.revision) || recipe.revision < 1) {
-    errors.push(error('invalid-revision', 'revision', 'must be a positive integer'));
-  }
-  if (!['candidate', 'independently-verified'].includes(recipe.state)) {
-    errors.push(error('invalid-state', 'state', 'must be candidate or independently-verified'));
-  }
-  if (!ADAPTERS.includes(recipe.defaultAdapter)) {
-    errors.push(error('invalid-adapter', 'defaultAdapter', 'must name a supported adapter'));
-  }
-  if (!Array.isArray(recipe.steps) || recipe.steps.length === 0) {
-    errors.push(error('missing-steps', 'steps', 'must contain at least one ordered step'));
-  }
-
-  const stepIds = new Set();
-  if (Array.isArray(recipe.steps)) {
-    recipe.steps.forEach((step, index) => {
-      const path = `steps[${index}]`;
-      if (!isRecord(step)) {
-        errors.push(error('invalid-step', path, 'must be an object'));
-        return;
-      }
-      if (!nonEmptyString(step.id) || !ID.test(step.id)) {
-        errors.push(error('invalid-step-id', `${path}.id`, 'must be a stable lowercase identifier'));
-      } else if (stepIds.has(step.id)) {
-        errors.push(error('duplicate-step-id', `${path}.id`, 'must be unique and ordered'));
-      } else {
-        stepIds.add(step.id);
-      }
-      if (!nonEmptyString(step.intent)) errors.push(error('missing-intent', `${path}.intent`, 'must be a non-empty string'));
-      if (!ADAPTERS.includes(step.preferredAdapter)) errors.push(error('invalid-adapter', `${path}.preferredAdapter`, 'must name a supported adapter'));
-      if (!Array.isArray(step.fallbackAdapters)) {
-        errors.push(error('invalid-fallbacks', `${path}.fallbackAdapters`, 'must be an ordered array'));
-      } else {
-        const fallbackIds = new Set();
-        step.fallbackAdapters.forEach((adapter, fallbackIndex) => {
-          const fallbackPath = `${path}.fallbackAdapters[${fallbackIndex}]`;
-          if (!ADAPTERS.includes(adapter)) errors.push(error('invalid-adapter', fallbackPath, 'must name a supported adapter'));
-          if (fallbackIds.has(adapter)) errors.push(error('duplicate-fallback', fallbackPath, 'fallback adapters must be unique and ordered'));
-          fallbackIds.add(adapter);
-          if (adapter === step.preferredAdapter) errors.push(error('preferred-as-fallback', fallbackPath, 'must differ from preferredAdapter'));
-        });
-      }
-      if (!nonEmptyString(step.successAssertion)) errors.push(error('missing-success-assertion', `${path}.successAssertion`, 'must be a non-empty observable assertion'));
-      if (!isRecord(step.authority)) {
-        errors.push(error('invalid-authority', `${path}.authority`, 'must include effect and scope'));
-      } else {
-        if (!EFFECTS.includes(step.authority.effect)) errors.push(error('unknown-effect', `${path}.authority.effect`, 'must be read, control, Insert, Save, Delete, or Submit'));
-        if (!nonEmptyString(step.authority.scope)) errors.push(error('missing-authority-scope', `${path}.authority.scope`, 'must describe the bounded effect scope'));
-      }
-      if (!isRecord(step.uncertainty)) {
-        errors.push(error('invalid-uncertainty', `${path}.uncertainty`, 'must require observation before replay and refuse unknown effects'));
-      } else {
-        if (step.uncertainty.observeBeforeReplay !== true) errors.push(error('unsafe-uncertainty-policy', `${path}.uncertainty.observeBeforeReplay`, 'must be true'));
-        if (step.uncertainty.noReplayIfUnknown !== true) errors.push(error('unsafe-uncertainty-policy', `${path}.uncertainty.noReplayIfUnknown`, 'must be true'));
-      }
-      if (step.script !== undefined) validateScriptLink(step.script, `${path}.script`, errors);
-    });
-  }
-
-  if (recipe.state === 'independently-verified') validateAcceptance(recipe, 'acceptance', errors);
-
+function validateRecipeScripts(recipe, options, errors) {
   if (options.checkScripts && errors.length === 0) {
     const checked = actualScriptLinks(recipe, options.scriptRoot);
     errors.push(...checked.errors);
@@ -262,10 +284,22 @@ export function validateRecipe(recipe, options = {}) {
       }
     }
   }
+}
+
+export function validateRecipe(recipe, options = {}) {
+  const errors = [];
+  if (!isRecord(recipe)) {
+    return { valid: false, errors: [error('invalid-recipe', '$', 'must be an object')] };
+  }
+  validateRecipeShape(recipe, errors);
+  if (Array.isArray(recipe.steps)) validateRecipeSteps(recipe.steps, errors);
+
+  if (recipe.state === 'independently-verified') validateAcceptance(recipe, 'acceptance', errors);
+  validateRecipeScripts(recipe, options, errors);
   return { valid: errors.length === 0, errors };
 }
 
-export function assertRecipe(recipe, options = {}) {
+function assertRecipe(recipe, options = {}) {
   const result = validateRecipe(recipe, options);
   if (!result.valid) {
     const first = result.errors[0];
@@ -288,21 +322,16 @@ function receiptError(code, path, message) {
   return error(code, `receipt.${path}`, message);
 }
 
-export function verifyIndependentReceipt(recipe, receipt, options = {}) {
-  const recipeResult = validateRecipe(recipe);
-  const errors = [...recipeResult.errors];
-  if (!recipeResult.valid) return { valid: false, errors, recordedEvidence: false };
-  if (recipeResult.valid && recipe.state !== 'candidate') errors.push(error('not-candidate', 'state', 'only a candidate can be promoted'));
-  if (!isRecord(receipt)) {
-    errors.push(receiptError('invalid-receipt', '$', 'must be an independent workflow receipt'));
-    return { valid: false, errors };
-  }
+function validateReceiptIdentity(recipe, receipt, errors) {
   if (receipt.kind !== 'independent-workflow-receipt') errors.push(receiptError('invalid-receipt-kind', 'kind', 'must identify an independent workflow receipt'));
   if (receipt.recipeId !== recipe.id) errors.push(receiptError('recipe-id-mismatch', 'recipeId', 'must match the candidate'));
   if (receipt.recipeRevision !== recipe.revision) errors.push(receiptError('revision-mismatch', 'recipeRevision', 'must match the candidate'));
   const candidateHash = recipeDigest(recipe);
   if (receipt.recipeSha256 !== candidateHash) errors.push(receiptError('recipe-hash-mismatch', 'recipeSha256', 'must bind the complete candidate content'));
+  return candidateHash;
+}
 
+function validateReceiptScripts(recipe, receipt, options, errors) {
   const declaredScripts = scriptLinks(recipe);
   errors.push(...declaredScripts.errors);
   if (!Array.isArray(receipt.scriptHashes)) {
@@ -314,27 +343,29 @@ export function verifyIndependentReceipt(recipe, receipt, options = {}) {
     if (!options.scriptRoot) errors.push(receiptError('script-root-required', 'scriptHashes', 'scriptRoot is required to verify linked script bytes'));
     else errors.push(...actualScriptLinks(recipe, options.scriptRoot).errors);
   }
+  return declaredScripts;
+}
 
+function validateReceiptStep(step, observed, index, errors) {
+  if (!isRecord(observed)
+    || observed.id !== step.id
+    || observed.adapter !== step.preferredAdapter
+    || observed.successAssertion !== step.successAssertion
+    || observed.passed !== true) {
+    errors.push(receiptError('step-coverage-mismatch', `orderedSteps[${index}]`, 'must preserve ordered IDs, executed adapters, passed assertions, and successful assertions'));
+  }
+}
+
+function validateReceiptStepCoverage(recipe, receipt, errors) {
   const orderedSteps = Array.isArray(receipt.orderedSteps) ? receipt.orderedSteps : [];
   if (orderedSteps.length !== (recipe.steps?.length ?? 0)) {
     errors.push(receiptError('incomplete-step-coverage', 'orderedSteps', 'must include each recipe step exactly once in order'));
-  } else {
-    recipe.steps.forEach((step, index) => {
-      const observed = orderedSteps[index];
-      if (!isRecord(observed)
-        || observed.id !== step.id
-        || observed.adapter !== step.preferredAdapter
-        || observed.successAssertion !== step.successAssertion
-        || observed.passed !== true) {
-        errors.push(receiptError('step-coverage-mismatch', `orderedSteps[${index}]`, 'must preserve ordered IDs, executed adapters, passed assertions, and successful assertions'));
-      }
-    });
+    return;
   }
+  for (const [index, step] of recipe.steps.entries()) validateReceiptStep(step, orderedSteps[index], index, errors);
+}
 
-  if (!Array.isArray(receipt.unresolvedEffects) || receipt.unresolvedEffects.length !== 0) {
-    errors.push(receiptError('unresolved-effects', 'unresolvedEffects', 'must be an empty array before promotion'));
-  }
-
+function validateReceiptFinalState(recipe, receipt, errors) {
   if (!isRecord(receipt.finalState) || !nonEmptyString(receipt.finalState.status) || receipt.finalState.observed !== true || receipt.finalState.passed !== true) {
     errors.push(receiptError('missing-final-state', 'finalState', 'must include an observed passing final status'));
   }
@@ -342,6 +373,9 @@ export function verifyIndependentReceipt(recipe, receipt, options = {}) {
   if (!Array.isArray(scopes) || JSON.stringify(scopes) !== JSON.stringify(expectedScopes(recipe))) {
     errors.push(receiptError('scope-mismatch', 'finalState.scope', 'must cover the recipe authority scopes in order'));
   }
+}
+
+function validateReceiptIdentityProof(receipt, errors) {
   if (!isRecord(receipt.identity) || !nonEmptyString(receipt.identity.runId) || !nonEmptyString(receipt.identity.discovery) || !nonEmptyString(receipt.identity.author)) {
     errors.push(receiptError('missing-independent-identities', 'identity', 'must include runId, discovery, and author'));
   } else if (receipt.identity.discovery === receipt.identity.author) {
@@ -353,6 +387,26 @@ export function verifyIndependentReceipt(recipe, receipt, options = {}) {
   if (!nonEmptyString(receipt.receiptId)) {
     errors.push(receiptError('missing-receipt-id', 'receiptId', 'must identify the independent receipt'));
   }
+}
+
+export function verifyIndependentReceipt(recipe, receipt, options = {}) {
+  const recipeResult = validateRecipe(recipe);
+  const errors = [...recipeResult.errors];
+  if (!recipeResult.valid) return { valid: false, errors, recordedEvidence: false };
+  if (recipe.state !== 'candidate') errors.push(error('not-candidate', 'state', 'only a candidate can be promoted'));
+  if (!isRecord(receipt)) {
+    errors.push(receiptError('invalid-receipt', '$', 'must be an independent workflow receipt'));
+    return { valid: false, errors };
+  }
+  const candidateHash = validateReceiptIdentity(recipe, receipt, errors);
+  const declaredScripts = validateReceiptScripts(recipe, receipt, options, errors);
+  validateReceiptStepCoverage(recipe, receipt, errors);
+
+  if (!Array.isArray(receipt.unresolvedEffects) || receipt.unresolvedEffects.length !== 0) {
+    errors.push(receiptError('unresolved-effects', 'unresolvedEffects', 'must be an empty array before promotion'));
+  }
+  validateReceiptFinalState(recipe, receipt, errors);
+  validateReceiptIdentityProof(receipt, errors);
 
   if (errors.length > 0) return { valid: false, errors, recordedEvidence: false };
   const accepted = structuredClone(recipe);
@@ -408,13 +462,8 @@ export function migrateLegacyRecipe(legacy, stepContracts, options = {}) {
   return candidate;
 }
 
-export function repairRecipe(recipe, request) {
-  assertRecipe(recipe);
-  if (!isRecord(request)) throw new RecipeContractError('invalid-repair-request', 'request', 'must include stepId, observation, and fallbackAdapter');
-  const index = recipe.steps.findIndex((step) => step.id === request.stepId);
-  if (index < 0) throw new RecipeContractError('unknown-step', 'request.stepId', 'must identify an exact recipe step');
-  const observation = request.observation;
-  if (!isRecord(observation) || observation.stepId !== undefined && observation.stepId !== request.stepId) {
+function validateRepairObservation(observation, stepId) {
+  if (!isRecord(observation) || observation.stepId !== undefined && observation.stepId !== stepId) {
     throw new RecipeContractError('invalid-observation', 'request.observation', 'must identify verified evidence for the exact failed step');
   }
   if (observation.kind !== 'verified-failure') {
@@ -435,18 +484,22 @@ export function repairRecipe(recipe, request) {
   if (!nonEmptyString(observation.evidenceId)) {
     throw new RecipeContractError('missing-observation-evidence', 'request.observation.evidenceId', 'must point to recorded observation evidence');
   }
-  const step = recipe.steps[index];
-  if (!step.fallbackAdapters.includes(request.fallbackAdapter)) {
+}
+
+function validateRepairFallbackAdapter(step, fallbackAdapter) {
+  if (!step.fallbackAdapters.includes(fallbackAdapter)) {
     throw new RecipeContractError('fallback-not-allowed', 'request.fallbackAdapter', 'must be one of the step ordered fallbackAdapters');
   }
-  if (request.fallbackAdapter === step.preferredAdapter) {
+  if (fallbackAdapter === step.preferredAdapter) {
     throw new RecipeContractError('same-adapter', 'request.fallbackAdapter', 'must change the step adapter choice');
   }
-  const fallbackEvidence = request.fallbackEvidence;
+}
+
+function validateRepairFallbackEvidence(step, stepId, fallbackAdapter, fallbackEvidence) {
   if (!isRecord(fallbackEvidence)
     || fallbackEvidence.kind !== 'verified-success'
-    || fallbackEvidence.stepId !== request.stepId
-    || fallbackEvidence.adapter !== request.fallbackAdapter
+    || fallbackEvidence.stepId !== stepId
+    || fallbackEvidence.adapter !== fallbackAdapter
     || fallbackEvidence.passed !== true
     || fallbackEvidence.effect === 'unknown'
     || fallbackEvidence.effect !== step.authority.effect
@@ -455,6 +508,19 @@ export function repairRecipe(recipe, request) {
     || !nonEmptyString(fallbackEvidence.evidenceId)) {
     throw new RecipeContractError('missing-fallback-evidence', 'request.fallbackEvidence', 'must prove the exact fallback adapter passed for the exact step');
   }
+}
+
+export function repairRecipe(recipe, request) {
+  assertRecipe(recipe);
+  if (!isRecord(request)) throw new RecipeContractError('invalid-repair-request', 'request', 'must include stepId, observation, and fallbackAdapter');
+  const index = recipe.steps.findIndex((step) => step.id === request.stepId);
+  if (index < 0) throw new RecipeContractError('unknown-step', 'request.stepId', 'must identify an exact recipe step');
+  const observation = request.observation;
+  validateRepairObservation(observation, request.stepId);
+  const step = recipe.steps[index];
+  validateRepairFallbackAdapter(step, request.fallbackAdapter);
+  const fallbackEvidence = request.fallbackEvidence;
+  validateRepairFallbackEvidence(step, request.stepId, request.fallbackAdapter, fallbackEvidence);
   const repaired = structuredClone(recipe);
   repaired.revision += 1;
   repaired.state = 'candidate';
@@ -472,24 +538,18 @@ export function repairRecipe(recipe, request) {
   return repaired;
 }
 
+function recipeCliResult(args, fileIndex) {
+  const recipe = JSON.parse(readFileSync(args[fileIndex + 1], 'utf8'));
+  const rootIndex = args.indexOf('--script-root');
+  return validateRecipe(recipe, rootIndex >= 0 ? { checkScripts: true, scriptRoot: args[rootIndex + 1] } : {});
+}
+
 function runCli() {
-  const args = process.argv.slice(2);
-  const fileIndex = args.indexOf('--file');
-  if (fileIndex < 0 || !args[fileIndex + 1]) {
-    console.error('usage: recipe-contract.mjs --file RECIPE.json [--script-root DIR]');
-    process.exitCode = 2;
-    return;
-  }
-  try {
-    const recipe = JSON.parse(readFileSync(args[fileIndex + 1], 'utf8'));
-    const rootIndex = args.indexOf('--script-root');
-    const result = validateRecipe(recipe, rootIndex >= 0 ? { checkScripts: true, scriptRoot: args[rootIndex + 1] } : {});
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-    process.exitCode = result.valid ? 0 : 1;
-  } catch (cause) {
-    console.error(`recipe-contract: ${cause.message}`);
-    process.exitCode = 2;
-  }
+  runBakeOffCli(process.argv.slice(2), {
+    usage: 'usage: recipe-contract.mjs --file RECIPE.json [--script-root DIR]',
+    prefix: 'recipe-contract',
+    execute: recipeCliResult,
+  });
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) runCli();

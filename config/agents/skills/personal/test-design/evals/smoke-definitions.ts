@@ -1,10 +1,31 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import type {
-	ExpectedResult,
-	JsonSchema,
-	SmokeTestDefinition,
-} from "../../../../../../scripts/multi-agent-smoke-lib.ts";
+
+export type JsonSchemaProperty =
+	| { type: "string"; enum?: readonly string[] }
+	| { type: "boolean" }
+	| { type: "number" };
+
+export type JsonSchema = {
+	type: "object";
+	properties: Record<string, JsonSchemaProperty>;
+	required: string[];
+	additionalProperties: boolean;
+};
+
+export type ExpectedResult = Record<string, string | boolean>;
+
+export type SmokeTestDefinition = {
+	id: string;
+	title: string;
+	schema: JsonSchema;
+	prompt: string;
+	expectations: {
+		claude: Record<string, unknown>;
+		codex: Record<string, unknown>;
+	};
+	runtime: Record<string, unknown>;
+};
 
 /** Canonical pairwise factors shared by manifest validation and contract tests. @internal */
 export const testDesignScenarioFactors = {
@@ -179,7 +200,22 @@ const runnerSensitiveRelevantProfiles = new Set<(typeof profiles)[number]>([
 	"runner-execution",
 ]);
 
-function objectSchema(properties: Record<string, unknown>): JsonSchema {
+function schemaProperties(
+	fields: readonly string[],
+	property: JsonSchemaProperty,
+): Record<string, JsonSchemaProperty> {
+	return Object.fromEntries(
+		fields.map((field): [string, JsonSchemaProperty] => [field, property]),
+	);
+}
+
+function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {
+	return Object.keys(value).sort().join("\n") === keys.toSorted().join("\n");
+}
+
+function objectSchema(
+	properties: Record<string, JsonSchemaProperty>,
+): JsonSchema {
 	return {
 		type: "object",
 		properties,
@@ -188,11 +224,7 @@ function objectSchema(properties: Record<string, unknown>): JsonSchema {
 	};
 }
 
-function exactKeys(value: Record<string, unknown>, keys: string[]): boolean {
-	return Object.keys(value).sort().join("\n") === keys.toSorted().join("\n");
-}
-
-function parseScenarios(): TestDesignScenario[] {
+function readScenarioManifest(): unknown[] {
 	const parsed = JSON.parse(
 		readFileSync(join(import.meta.dir, "pairwise-scenarios.json"), "utf8"),
 	) as unknown;
@@ -205,53 +237,73 @@ function parseScenarios(): TestDesignScenario[] {
 	) {
 		throw new Error("test-design pairwise manifest header is invalid");
 	}
-	const scenarios = (parsed as { scenarios: unknown[] }).scenarios;
-	for (const candidate of scenarios) {
-		if (typeof candidate !== "object" || candidate === null) {
-			throw new Error("test-design pairwise scenario must be an object");
-		}
-		const scenario = candidate as Record<string, unknown>;
-		const expected = scenario.expected as Record<string, unknown> | undefined;
-		if (
-			!exactKeys(scenario, [
-				"id",
-				"prompt",
-				"artifact",
-				"handback",
-				"profiles",
-				"operation",
-				"seam",
-				"expected",
-			]) ||
-			typeof scenario.id !== "string" ||
-			scenario.id.length === 0 ||
-			typeof scenario.prompt !== "string" ||
-			scenario.prompt.length === 0 ||
-			!artifacts.includes(scenario.artifact as never) ||
-			!handbacks.includes(scenario.handback as never) ||
-			!Array.isArray(scenario.profiles) ||
-			scenario.profiles.length !== 1 ||
-			!profiles.includes(scenario.profiles[0] as never) ||
-			!operations.includes(scenario.operation as never) ||
-			!seams.includes(scenario.seam as never) ||
-			typeof expected !== "object" ||
-			expected === null ||
-			!exactKeys(expected, [
-				"invokeTestDesign",
-				"briefBeforeEdit",
-				"activeWorkflowRemainsDriver",
-				"continuation",
-			]) ||
-			typeof expected.invokeTestDesign !== "boolean" ||
-			typeof expected.briefBeforeEdit !== "boolean" ||
-			typeof expected.activeWorkflowRemainsDriver !== "boolean" ||
-			!["return", "await-seam-approval"].includes(
-				String(expected.continuation),
-			)
-		) {
-			throw new Error(`test-design pairwise scenario is invalid: ${String(scenario.id)}`);
-		}
+	return (parsed as { scenarios: unknown[] }).scenarios;
+}
+
+function hasNonEmptyString(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0;
+}
+
+function isExpectedShape(expected: Record<string, unknown> | undefined): boolean {
+	if (typeof expected !== "object" || expected === null) return false;
+	if (
+		!exactKeys(expected, [
+			"invokeTestDesign",
+			"briefBeforeEdit",
+			"activeWorkflowRemainsDriver",
+			"continuation",
+		])
+	) {
+		return false;
 	}
+	if (typeof expected.invokeTestDesign !== "boolean") return false;
+	if (typeof expected.briefBeforeEdit !== "boolean") return false;
+	if (typeof expected.activeWorkflowRemainsDriver !== "boolean") return false;
+	return ["return", "await-seam-approval"].includes(
+		String(expected.continuation),
+	);
+}
+
+function isScenarioShapeValid(scenario: Record<string, unknown>): boolean {
+	if (
+		!exactKeys(scenario, [
+			"id",
+			"prompt",
+			"artifact",
+			"handback",
+			"profiles",
+			"operation",
+			"seam",
+			"expected",
+		])
+	) {
+		return false;
+	}
+	if (!hasNonEmptyString(scenario.id)) return false;
+	if (!hasNonEmptyString(scenario.prompt)) return false;
+	if (!artifacts.includes(scenario.artifact as never)) return false;
+	if (!handbacks.includes(scenario.handback as never)) return false;
+	if (!Array.isArray(scenario.profiles)) return false;
+	if (scenario.profiles.length !== 1) return false;
+	if (!profiles.includes(scenario.profiles[0] as never)) return false;
+	if (!operations.includes(scenario.operation as never)) return false;
+	if (!seams.includes(scenario.seam as never)) return false;
+	return isExpectedShape(scenario.expected as Record<string, unknown> | undefined);
+}
+
+function validateScenario(candidate: unknown): void {
+	if (typeof candidate !== "object" || candidate === null) {
+		throw new Error("test-design pairwise scenario must be an object");
+	}
+	const scenario = candidate as Record<string, unknown>;
+	if (!isScenarioShapeValid(scenario)) {
+		throw new Error(`test-design pairwise scenario is invalid: ${String(scenario.id)}`);
+	}
+}
+
+function parseScenarios(): TestDesignScenario[] {
+	const scenarios = readScenarioManifest();
+	for (const candidate of scenarios) validateScenario(candidate);
 	return scenarios as TestDesignScenario[];
 }
 
@@ -328,13 +380,9 @@ function createPairwiseDefinition(): SmokeTestDefinition {
 		title: "Test-design frozen all-pairs matrix",
 		schema: objectSchema({
 			whoAmI: { type: "string", enum: ["claude", "codex"] },
-			...Object.fromEntries(fields.map((field) => [field, { type: "string" }])),
-			...Object.fromEntries(
-				v2Fields.map((field) => [field, { type: "boolean" }]),
-			),
-			...Object.fromEntries(
-				v3Fields.map((field) => [field, { type: "boolean" }]),
-			),
+			...schemaProperties(fields, { type: "string" }),
+			...schemaProperties(v2Fields, { type: "boolean" }),
+			...schemaProperties(v3Fields, { type: "boolean" }),
 		}),
 		prompt: `Frozen test-design all-pairs qualification.
 
@@ -394,11 +442,13 @@ const lightweightBriefFields = [
 	"stillUnproved",
 ];
 
-function fullBriefSchema(properties: Record<string, unknown> = {}): JsonSchema {
+function fullBriefSchema(
+	properties: Record<string, JsonSchemaProperty> = {},
+): JsonSchema {
 	return objectSchema({
 		whoAmI: { type: "string", enum: ["claude", "codex"] },
 		route: { type: "string", enum: ["full"] },
-		...Object.fromEntries(briefFields.map((field) => [field, { type: "string" }])),
+		...schemaProperties(briefFields, { type: "string" }),
 		exactFocusedCommand: { type: "string" },
 		expectedSelectedTests: { type: "number" },
 		redEvidenceKind: { type: "string", enum: ["disposable-perturbation"] },
@@ -538,12 +588,10 @@ Return only the schema-matching JSON. Use only read-only discovery and file-read
 const simpleUnitDefinition: SmokeTestDefinition = {
 	id: "test-design-simple-unit-route",
 	title: "Test-design lightweight unchanged-boundary route",
-	schema: objectSchema({
-		whoAmI: { type: "string", enum: ["claude", "codex"] },
-		route: { type: "string", enum: ["lightweight"] },
-		...Object.fromEntries(
-			lightweightBriefFields.map((field) => [field, { type: "string" }]),
-		),
+		schema: objectSchema({
+			whoAmI: { type: "string", enum: ["claude", "codex"] },
+			route: { type: "string", enum: ["lightweight"] },
+			...schemaProperties(lightweightBriefFields, { type: "string" }),
 		exactFocusedCommand: { type: "string" },
 		selectedProfiles: { type: "string" },
 		runnerEnvelopeApplied: { type: "boolean" },

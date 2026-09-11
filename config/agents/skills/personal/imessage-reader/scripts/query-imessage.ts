@@ -236,6 +236,83 @@ const ADDRESSBOOK_DB_NAME = "AddressBook-v22.abcddb";
  * - No source DBs are found
  * - Individual source DBs can't be opened (permissions, corruption)
  */
+function addPhoneContacts(db: Database, map: Map<string, string>): void {
+	const phoneRows = db
+		.prepare(
+			`SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZORGANIZATION, p.ZFULLNUMBER
+			 FROM ZABCDRECORD r
+			 JOIN ZABCDPHONENUMBER p ON p.ZOWNER = r.Z_PK
+			 WHERE p.ZFULLNUMBER IS NOT NULL`,
+		)
+		.all() as {
+		ZFIRSTNAME: string | null;
+		ZLASTNAME: string | null;
+		ZORGANIZATION: string | null;
+		ZFULLNUMBER: string;
+	}[];
+
+	for (const row of phoneRows) {
+		const name = formatContactNameFromLib(
+			row.ZFIRSTNAME,
+			row.ZLASTNAME,
+			row.ZORGANIZATION,
+		);
+		if (!name) continue;
+		const normalized = normalizePhoneFromLib(row.ZFULLNUMBER);
+		if (normalized.length >= 3 && !map.has(normalized)) {
+			map.set(normalized, name);
+		}
+	}
+}
+
+function addEmailContacts(db: Database, map: Map<string, string>): void {
+	const emailRows = db
+		.prepare(
+			`SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZORGANIZATION, e.ZADDRESS
+			 FROM ZABCDRECORD r
+			 JOIN ZABCDEMAILADDRESS e ON e.ZOWNER = r.Z_PK
+			 WHERE e.ZADDRESS IS NOT NULL`,
+		)
+		.all() as {
+		ZFIRSTNAME: string | null;
+		ZLASTNAME: string | null;
+		ZORGANIZATION: string | null;
+		ZADDRESS: string;
+	}[];
+
+	for (const row of emailRows) {
+		const name = formatContactNameFromLib(
+			row.ZFIRSTNAME,
+			row.ZLASTNAME,
+			row.ZORGANIZATION,
+		);
+		if (!name) continue;
+		const normalized = row.ZADDRESS.toLowerCase().trim();
+		if (normalized && !map.has(normalized)) {
+			map.set(normalized, name);
+		}
+	}
+}
+
+function mergeContactsFromSource(sourceId: string, map: Map<string, string>): void {
+	const dbPath = join(ADDRESSBOOK_SOURCES_DIR, sourceId, ADDRESSBOOK_DB_NAME);
+	let db: Database;
+	try {
+		db = new Database(dbPath, { readonly: true });
+	} catch {
+		return; // This source can't be opened — skip it
+	}
+
+	try {
+		addPhoneContacts(db, map);
+		addEmailContacts(db, map);
+	} catch {
+		// Schema mismatch or corrupt source — skip
+	} finally {
+		db.close();
+	}
+}
+
 function buildContactMap(): Map<string, string> {
 	const map = new Map<string, string>();
 
@@ -247,75 +324,7 @@ function buildContactMap(): Map<string, string> {
 	}
 
 	for (const sourceId of sourceDirs) {
-		const dbPath = join(ADDRESSBOOK_SOURCES_DIR, sourceId, ADDRESSBOOK_DB_NAME);
-		let db: Database;
-		try {
-			db = new Database(dbPath, { readonly: true });
-		} catch {
-			continue; // This source can't be opened — skip it
-		}
-
-		try {
-			// Query phone numbers with contact names
-			const phoneRows = db
-				.prepare(
-					`SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZORGANIZATION, p.ZFULLNUMBER
-					 FROM ZABCDRECORD r
-					 JOIN ZABCDPHONENUMBER p ON p.ZOWNER = r.Z_PK
-					 WHERE p.ZFULLNUMBER IS NOT NULL`,
-				)
-				.all() as {
-				ZFIRSTNAME: string | null;
-				ZLASTNAME: string | null;
-				ZORGANIZATION: string | null;
-				ZFULLNUMBER: string;
-			}[];
-
-			for (const row of phoneRows) {
-				const name = formatContactNameFromLib(
-					row.ZFIRSTNAME,
-					row.ZLASTNAME,
-					row.ZORGANIZATION,
-				);
-				if (!name) continue;
-				const normalized = normalizePhoneFromLib(row.ZFULLNUMBER);
-				if (normalized.length >= 3 && !map.has(normalized)) {
-					map.set(normalized, name);
-				}
-			}
-
-			// Query email addresses with contact names
-			const emailRows = db
-				.prepare(
-					`SELECT r.ZFIRSTNAME, r.ZLASTNAME, r.ZORGANIZATION, e.ZADDRESS
-					 FROM ZABCDRECORD r
-					 JOIN ZABCDEMAILADDRESS e ON e.ZOWNER = r.Z_PK
-					 WHERE e.ZADDRESS IS NOT NULL`,
-				)
-				.all() as {
-				ZFIRSTNAME: string | null;
-				ZLASTNAME: string | null;
-				ZORGANIZATION: string | null;
-				ZADDRESS: string;
-			}[];
-
-			for (const row of emailRows) {
-				const name = formatContactNameFromLib(
-					row.ZFIRSTNAME,
-					row.ZLASTNAME,
-					row.ZORGANIZATION,
-				);
-				if (!name) continue;
-				const normalized = row.ZADDRESS.toLowerCase().trim();
-				if (normalized && !map.has(normalized)) {
-					map.set(normalized, name);
-				}
-			}
-		} catch {
-			// Schema mismatch or corrupt source — skip
-		} finally {
-			db.close();
-		}
+		mergeContactsFromSource(sourceId, map);
 	}
 
 	return map;
@@ -441,7 +450,7 @@ type MessageQueryResult = {
 	visibleMessages: Array<ParsedMessage & { _rowid: number }>;
 };
 
-function queryMessages(args: {
+interface QueryMessagesArgs {
 	since?: string;
 	until?: string;
 	contact?: string;
@@ -455,96 +464,129 @@ function queryMessages(args: {
 	"save-dir"?: string;
 	"no-save"?: boolean;
 	pretty: boolean;
-}) {
-	const result = withDB<MessageQueryResult>((db) => {
-		const conditions: string[] = [];
-		const params: (string | number)[] = [];
-		const searchNeedle = args.search?.toLowerCase().trim() || null;
+}
 
-		if (args.since) {
-			conditions.push("m.date >= ?");
-			params.push(dateToAppleNsFromLib(args.since));
-		}
-		if (args.until) {
-			conditions.push("m.date <= ?");
-			params.push(dateToAppleNsEndOfDayFromLib(args.until));
-		}
-		if (args.contact) {
-			conditions.push("h.id LIKE ?");
-			params.push(`%${args.contact}%`);
-		}
-		if (args["from-me"]) {
-			conditions.push("m.is_from_me = 1");
-		} else if (args["to-me"]) {
-			conditions.push("m.is_from_me = 0");
-		}
-		if (args.service) {
-			conditions.push("m.service = ?");
-			params.push(args.service);
-		}
+function buildMessageQueryConditions(
+	args: QueryMessagesArgs,
+): { where: string; params: (string | number)[]; searchNeedle: string | null } {
+	const conditions: string[] = [];
+	const params: (string | number)[] = [];
+	const searchNeedle = args.search?.toLowerCase().trim() || null;
 
-		const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
-		const sql =
-			searchNeedle == null
-				? `${MESSAGE_SQL} ${where} ORDER BY m.date ${args.order} LIMIT ?`
-				: `${MESSAGE_SQL} ${where} ORDER BY m.date ${args.order}`;
-		if (searchNeedle == null) params.push(args.limit);
+	if (args.since) {
+		conditions.push("m.date >= ?");
+		params.push(dateToAppleNsFromLib(args.since));
+	}
+	if (args.until) {
+		conditions.push("m.date <= ?");
+		params.push(dateToAppleNsEndOfDayFromLib(args.until));
+	}
+	if (args.contact) {
+		conditions.push("h.id LIKE ?");
+		params.push(`%${args.contact}%`);
+	}
+	if (args["from-me"]) {
+		conditions.push("m.is_from_me = 1");
+	} else if (args["to-me"]) {
+		conditions.push("m.is_from_me = 0");
+	}
+	if (args.service) {
+		conditions.push("m.service = ?");
+		params.push(args.service);
+	}
 
-		const rows = db.prepare(sql).all(...params) as MessageRow[];
-		if (rows.length === 0) {
-			return { persistableMessages: [], visibleMessages: [] };
+	const where = conditions.length ? `WHERE ${conditions.join(" AND ")}` : "";
+	return { where, params, searchNeedle };
+}
+
+function fetchAttachmentsByMessageId(
+	db: Database,
+	rowids: number[],
+): Map<number, AttachmentRow[]> {
+	const attachmentRowsByMessageId = new Map<number, AttachmentRow[]>();
+	if (rowids.length === 0) return attachmentRowsByMessageId;
+	const placeholders = rowids.map(() => "?").join(",");
+	const attRows = db
+		.prepare(
+			`SELECT maj.message_id, a.filename, a.mime_type, a.uti,
+			        a.total_bytes, a.transfer_name
+			 FROM message_attachment_join maj
+			 JOIN attachment a ON maj.attachment_id = a.rowid
+			 WHERE maj.message_id IN (${placeholders})`,
+		)
+		.all(...rowids) as AttachmentRow[];
+
+	for (const att of attRows) {
+		const mid = att.message_id;
+		const bucket = attachmentRowsByMessageId.get(mid) ?? [];
+		bucket.push(att);
+		attachmentRowsByMessageId.set(mid, bucket);
+	}
+	return attachmentRowsByMessageId;
+}
+
+function assembleQueriedMessages(
+	rows: MessageRow[],
+	attachmentRowsByMessageId: Map<number, AttachmentRow[]>,
+	searchNeedle: string | null,
+	limit: number,
+	includeAttachments: boolean | undefined,
+): MessageQueryResult {
+	const messages = rows.flatMap((row) =>
+		parseRowFromLib(row, attachmentRowsByMessageId.get(row.rowid) ?? [], {
+			contactMap: getContactMap(),
+			resolveAttachment: resolveAttachmentPathFromLib,
+		}),
+	);
+	const linkedMessages = linkMessageTargetsFromLib(messages);
+	const filteredMessages =
+		searchNeedle == null
+			? linkedMessages
+			: linkedMessages.filter((message) =>
+					matchesSearch(message, searchNeedle),
+				);
+	const persistableMessages: typeof filteredMessages = [];
+	const visibleMessages: typeof filteredMessages = [];
+
+	for (const message of filteredMessages) {
+		const isVisible = includeAttachments || message.message_kind !== "media";
+		if (isVisible && visibleMessages.length >= limit) break;
+		persistableMessages.push(message);
+		if (isVisible) {
+			visibleMessages.push(message);
 		}
+	}
 
-		const rowids = rows.map((row) => row.rowid);
-		const attachmentRowsByMessageId = new Map<number, AttachmentRow[]>();
-		if (rowids.length > 0) {
-			const placeholders = rowids.map(() => "?").join(",");
-			const attRows = db
-				.prepare(
-					`SELECT maj.message_id, a.filename, a.mime_type, a.uti,
-					        a.total_bytes, a.transfer_name
-					 FROM message_attachment_join maj
-					 JOIN attachment a ON maj.attachment_id = a.rowid
-					 WHERE maj.message_id IN (${placeholders})`,
-				)
-				.all(...rowids) as AttachmentRow[];
+	return { persistableMessages, visibleMessages };
+}
 
-			for (const att of attRows) {
-				const mid = att.message_id;
-				const bucket = attachmentRowsByMessageId.get(mid) ?? [];
-				bucket.push(att);
-				attachmentRowsByMessageId.set(mid, bucket);
-			}
-		}
+function runMessageQuery(db: Database, args: QueryMessagesArgs): MessageQueryResult {
+	const { where, params, searchNeedle } = buildMessageQueryConditions(args);
+	const sql =
+		searchNeedle == null
+			? `${MESSAGE_SQL} ${where} ORDER BY m.date ${args.order} LIMIT ?`
+			: `${MESSAGE_SQL} ${where} ORDER BY m.date ${args.order}`;
+	if (searchNeedle == null) params.push(args.limit);
 
-		const messages = rows.flatMap((row) =>
-			parseRowFromLib(row, attachmentRowsByMessageId.get(row.rowid) ?? [], {
-				contactMap: getContactMap(),
-				resolveAttachment: resolveAttachmentPathFromLib,
-			}),
-		);
-		const linkedMessages = linkMessageTargetsFromLib(messages);
-		const filteredMessages =
-			searchNeedle == null
-				? linkedMessages
-				: linkedMessages.filter((message) =>
-						matchesSearch(message, searchNeedle),
-					);
-		const persistableMessages: typeof filteredMessages = [];
-		const visibleMessages: typeof filteredMessages = [];
+	const rows = db.prepare(sql).all(...params) as MessageRow[];
+	if (rows.length === 0) {
+		return { persistableMessages: [], visibleMessages: [] };
+	}
 
-		for (const message of filteredMessages) {
-			const isVisible =
-				args["include-attachments"] || message.message_kind !== "media";
-			if (isVisible && visibleMessages.length >= args.limit) break;
-			persistableMessages.push(message);
-			if (isVisible) {
-				visibleMessages.push(message);
-			}
-		}
+	const rowids = rows.map((row) => row.rowid);
+	const attachmentRowsByMessageId = fetchAttachmentsByMessageId(db, rowids);
 
-		return { persistableMessages, visibleMessages };
-	});
+	return assembleQueriedMessages(
+		rows,
+		attachmentRowsByMessageId,
+		searchNeedle,
+		args.limit,
+		args["include-attachments"],
+	);
+}
+
+function queryMessages(args: QueryMessagesArgs) {
+	const result = withDB<MessageQueryResult>((db) => runMessageQuery(db, args));
 
 	// Strip internal _rowid once, reuse for both saving and output
 	const messages = result.visibleMessages.map(({ _rowid, ...msg }) => msg);

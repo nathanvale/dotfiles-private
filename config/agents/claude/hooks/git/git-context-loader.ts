@@ -16,7 +16,7 @@ import { postEvent } from './event-bus-client'
 import { parsePorcelainStatus } from './git-status-parser'
 import { isGitRepo, runGit } from './git-utils'
 
-type SessionSource = 'startup' | 'resume' | 'compact' | 'clear'
+export type SessionSource = 'startup' | 'resume' | 'compact' | 'clear'
 
 interface SessionStartHookInput {
 	session_id: string
@@ -43,7 +43,7 @@ function isSessionStartHookInput(
 	)
 }
 
-interface GitContext {
+export interface GitContext {
 	branch: string
 	status: {
 		staged: number
@@ -65,7 +65,7 @@ function sanitizeContextLine(value: string): string {
 }
 
 /** Gathers git state. Uses fewer commits on compact/clear to save context budget. */
-export async function getGitContext(
+async function getGitContext(
 	cwd: string,
 	commitCount: number = 5,
 ): Promise<GitContext | null> {
@@ -102,7 +102,7 @@ export async function getGitContext(
 }
 
 /** Formats the additionalContext payload with git repository state. */
-export function formatAdditionalContext(
+function formatAdditionalContext(
 	context: GitContext,
 	source: SessionSource,
 ): string {

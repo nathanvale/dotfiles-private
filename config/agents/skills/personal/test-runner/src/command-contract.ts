@@ -17,7 +17,7 @@ type TestRunnerCommandContract = CommandFacadeContract<
 	TestRunnerMutation
 >;
 
-export const TEST_RUNNER_DIAGNOSTIC_CODES = [
+const TEST_RUNNER_DIAGNOSTIC_CODES = [
 	"invalid_cwd",
 	"missing_bun",
 	"runner_timeout",
@@ -33,7 +33,7 @@ export const TEST_RUNNER_DIAGNOSTIC_CODES = [
 export type TestRunnerDiagnosticCode =
 	(typeof TEST_RUNNER_DIAGNOSTIC_CODES)[number];
 
-export const TEST_RUNNER_RESULT_STATUSES = [
+const TEST_RUNNER_RESULT_STATUSES = [
 	"passed",
 	"failed",
 	"error",
@@ -41,7 +41,7 @@ export const TEST_RUNNER_RESULT_STATUSES = [
 export type TestRunnerResultStatus =
 	(typeof TEST_RUNNER_RESULT_STATUSES)[number];
 
-export const TEST_RUNNER_FAILURE_ACTIONS = [
+const TEST_RUNNER_FAILURE_ACTIONS = [
 	{
 		id: "fix_test_failure",
 		summary: "Use the failure context to edit the failing code or test.",
@@ -69,7 +69,7 @@ export const TEST_RUNNER_FAILURE_ACTIONS = [
 	},
 ] as const;
 
-export const TEST_RUNNER_SUCCESS_ACTIONS = [
+const TEST_RUNNER_SUCCESS_ACTIONS = [
 	{
 		id: "continue_implementation",
 		summary: "Continue implementation with the current focused test passing.",

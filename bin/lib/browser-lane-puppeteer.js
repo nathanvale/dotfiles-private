@@ -228,6 +228,50 @@ function planInvalid() {
 	);
 }
 
+function isPlanShape(plan) {
+	return Boolean(
+		plan &&
+		typeof plan === 'object' &&
+		!Array.isArray(plan) &&
+		[1, 2].includes(plan.schema_version) &&
+		Array.isArray(plan.actions) &&
+		plan.actions.length >= 1 &&
+		plan.actions.length <= 50,
+	);
+}
+
+function isActionShape(action) {
+	if (!action || typeof action !== 'object' || Array.isArray(action)) return false;
+	const keys = Object.keys(action).sort();
+	return keys.length === 2 && keys[0] === 'args' && keys[1] === 'command';
+}
+
+function isEvaluateSource(source, schemaVersion) {
+	return (
+		schemaVersion === 2 &&
+		typeof source === 'string' &&
+		source.length >= 1 &&
+		source.length <= 65536 &&
+		!source.includes('\0')
+	);
+}
+
+function isSafeActionArgument(arg) {
+	return typeof arg === 'string' && arg.length <= 4096 && !/[\r\n]/.test(arg) && !arg.startsWith('-');
+}
+
+function validateAction(schemaVersion, action) {
+	if (!isActionShape(action)) throw planInvalid();
+	const arity = Object.hasOwn(ARITY, action.command) ? ARITY[action.command] : null;
+	if (!arity || !Array.isArray(action.args)) throw planInvalid();
+	if (action.args.length < arity[0] || action.args.length > arity[1]) throw planInvalid();
+	if (action.command === 'evaluate') {
+		if (!isEvaluateSource(action.args[0], schemaVersion)) throw planInvalid();
+		return;
+	}
+	if (!action.args.every(isSafeActionArgument)) throw planInvalid();
+}
+
 function loadPlan(planPath) {
 	let plan;
 	try {
@@ -235,51 +279,8 @@ function loadPlan(planPath) {
 	} catch {
 		throw planInvalid();
 	}
-	if (
-		!plan ||
-		typeof plan !== 'object' ||
-		Array.isArray(plan) ||
-		![1, 2].includes(plan.schema_version) ||
-		!Array.isArray(plan.actions) ||
-		plan.actions.length < 1 ||
-		plan.actions.length > 50
-	) {
-		throw planInvalid();
-	}
-	for (const action of plan.actions) {
-		if (!action || typeof action !== 'object' || Array.isArray(action)) {
-			throw planInvalid();
-		}
-		const keys = Object.keys(action).sort();
-		if (keys.length !== 2 || keys[0] !== 'args' || keys[1] !== 'command') {
-			throw planInvalid();
-		}
-		const arity = Object.hasOwn(ARITY, action.command) ? ARITY[action.command] : null;
-		if (!arity || !Array.isArray(action.args)) {
-			throw planInvalid();
-		}
-		if (action.args.length < arity[0] || action.args.length > arity[1]) {
-			throw planInvalid();
-		}
-		if (action.command === 'evaluate') {
-			const [source] = action.args;
-			if (
-				plan.schema_version !== 2 ||
-				typeof source !== 'string' ||
-				source.length < 1 ||
-				source.length > 65536 ||
-				source.includes('\0')
-			) {
-				throw planInvalid();
-			}
-			continue;
-		}
-		for (const arg of action.args) {
-			if (typeof arg !== 'string' || arg.length > 4096 || /[\r\n]/.test(arg) || arg.startsWith('-')) {
-				throw planInvalid();
-			}
-		}
-	}
+	if (!isPlanShape(plan)) throw planInvalid();
+	for (const action of plan.actions) validateAction(plan.schema_version, action);
 	return plan.actions;
 }
 

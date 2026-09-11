@@ -4,8 +4,8 @@ import { redactByField } from "@logtape/redaction"
 import type { TraceAcceptResult } from "./invocation-trace-store.ts"
 import { diagnosticEvents, diagnosticLevels, type DiagnosticEvent, projectDiagnosticProperties, validateDiagnosticTraceRecord, validateLifecycleRecord } from "./serialized-values.ts"
 
-export const RECOVERY_LOG_CATEGORY = ["my-second-brain-playground", "recovery"] as const
-export const DIAGNOSTIC_BUFFER_LIMIT = 250
+const RECOVERY_LOG_CATEGORY = ["my-second-brain-playground", "recovery"] as const
+const DIAGNOSTIC_BUFFER_LIMIT = 250
 
 const sensitiveFieldPatterns = [
 	/api[-_]?key/i,

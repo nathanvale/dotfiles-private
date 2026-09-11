@@ -452,6 +452,15 @@ describe("public trace command and scoped cleanup", () => {
 		}
 	})
 
+	test("rejects a bare prototype-named filter key as a usage error, not an inherited filter", () => {
+		const stateHome = temporaryRoot()
+		for (const key of ["constructor", "__proto__"]) {
+			const result = runCli(["view", key, "some-value"], stateHome)
+			expect(result.exitCode).toBe(64)
+			expect(result.stdout).toBe("")
+		}
+	})
+
 	test("the public reader reports invalid, unknown, and partial records without inventing terminal state", () => {
 		const stateHome = temporaryRoot()
 		const root = traceRoot(stateHome)

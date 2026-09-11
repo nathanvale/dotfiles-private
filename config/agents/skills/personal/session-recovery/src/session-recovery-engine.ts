@@ -92,63 +92,84 @@ function isMeaningfulPrompt(text: string): boolean {
 	return text.length > 0 && !/^(?:yes|no|ok|agree|continue|unlocked|[0-9]+)$/i.test(text)
 }
 
+interface SummaryAccumulator {
+	metadata?: SessionMetadata
+	createdAt: number
+	updatedAt: number
+	messageCount: number
+	summary: string
+	fallbackPrompt: string
+	outcomeHint: string
+	hash: ReturnType<typeof createHash>
+}
+
+function applyCandidateMetadata(state: SummaryAccumulator, candidate: SessionMetadata | undefined): void {
+	if (!candidate) return
+	if (!state.metadata) {
+		state.metadata = candidate
+		state.createdAt = candidate.startedAt ? Date.parse(candidate.startedAt) : Number.NaN
+		state.updatedAt = state.createdAt
+		return
+	}
+	if (candidate.opaqueId !== state.metadata.opaqueId) return
+	state.metadata = {
+		...state.metadata,
+		cwd: state.metadata.cwd ?? candidate.cwd,
+		branch: state.metadata.branch ?? candidate.branch,
+		repositoryUrl: state.metadata.repositoryUrl ?? candidate.repositoryUrl,
+		parentSessionId: state.metadata.parentSessionId ?? candidate.parentSessionId,
+		kind: state.metadata.kind === "helper" || candidate.kind === "helper" ? "helper" : "primary",
+	}
+}
+
+function applySummaryTimestamp(state: SummaryAccumulator, value: unknown): void {
+	const timestamp = timestampFromRecord(value)
+	if (timestamp === undefined) return
+	state.createdAt = Number.isFinite(state.createdAt) ? Math.min(state.createdAt, timestamp) : timestamp
+	state.updatedAt = Number.isFinite(state.updatedAt) ? Math.max(state.updatedAt, timestamp) : timestamp
+}
+
+function applySummaryMessage(state: SummaryAccumulator, message: { role: string; text: string }): void {
+	state.messageCount += 1
+	const cleaned = cleanHistoricalText(message.text, message.role === "user" ? 280 : 400)
+	if (message.role === "user") {
+		if (!state.fallbackPrompt && cleaned) state.fallbackPrompt = cleaned
+		if (!state.summary && isMeaningfulPrompt(cleaned)) state.summary = cleaned
+	} else if (cleaned) {
+		state.outcomeHint = cleaned
+	}
+}
+
 async function summarizeFileUnsafe(path: string, source: SessionSource): Promise<FileSummary | undefined> {
-	let metadata: SessionMetadata | undefined
-	let createdAt = Number.NaN
-	let updatedAt = createdAt
-	let messageCount = 0
-	let summary = ""
-	let fallbackPrompt = ""
-	let outcomeHint = ""
-	const hash = createHash("sha256")
+	const state: SummaryAccumulator = {
+		createdAt: Number.NaN,
+		updatedAt: Number.NaN,
+		messageCount: 0,
+		summary: "",
+		fallbackPrompt: "",
+		outcomeHint: "",
+		hash: createHash("sha256"),
+	}
 
 	for await (const value of readJsonLines(path, {
 		strict: true,
-		onChunk: (chunk) => hash.update(chunk),
+		onChunk: (chunk) => state.hash.update(chunk),
 	})) {
-		const candidateMetadata = parseSessionMetadata(value, source, path)
-		if (candidateMetadata && !metadata) {
-			metadata = candidateMetadata
-			createdAt = candidateMetadata.startedAt
-				? Date.parse(candidateMetadata.startedAt)
-				: Number.NaN
-			updatedAt = createdAt
-		} else if (candidateMetadata && metadata && candidateMetadata.opaqueId === metadata.opaqueId) {
-			metadata = {
-				...metadata,
-				cwd: metadata.cwd ?? candidateMetadata.cwd,
-				branch: metadata.branch ?? candidateMetadata.branch,
-				repositoryUrl: metadata.repositoryUrl ?? candidateMetadata.repositoryUrl,
-				parentSessionId: metadata.parentSessionId ?? candidateMetadata.parentSessionId,
-				kind: metadata.kind === "helper" || candidateMetadata.kind === "helper" ? "helper" : "primary",
-			}
-		}
-		const timestamp = timestampFromRecord(value)
-		if (timestamp !== undefined) {
-			createdAt = Number.isFinite(createdAt) ? Math.min(createdAt, timestamp) : timestamp
-			updatedAt = Number.isFinite(updatedAt) ? Math.max(updatedAt, timestamp) : timestamp
-		}
+		applyCandidateMetadata(state, parseSessionMetadata(value, source, path))
+		applySummaryTimestamp(state, value)
 		const message = parseNormalizedMessage(value, source)
-		if (!message) continue
-		messageCount += 1
-		const cleaned = cleanHistoricalText(message.text, message.role === "user" ? 280 : 400)
-		if (message.role === "user") {
-			if (!fallbackPrompt && cleaned) fallbackPrompt = cleaned
-			if (!summary && isMeaningfulPrompt(cleaned)) summary = cleaned
-		} else if (cleaned) {
-			outcomeHint = cleaned
-		}
+		if (message) applySummaryMessage(state, message)
 	}
-	if (!metadata) return undefined
+	if (!state.metadata) return undefined
 
 	return {
-		metadata,
-		createdAt: Number.isFinite(createdAt) ? createdAt : undefined,
-		updatedAt: Number.isFinite(updatedAt) ? updatedAt : undefined,
-		messageCount,
-		summary: summary || fallbackPrompt || "No safe user summary available.",
-		outcomeHint: outcomeHint || "No safe assistant outcome available.",
-		contentHash: hash.digest("hex"),
+		metadata: state.metadata,
+		createdAt: Number.isFinite(state.createdAt) ? state.createdAt : undefined,
+		updatedAt: Number.isFinite(state.updatedAt) ? state.updatedAt : undefined,
+		messageCount: state.messageCount,
+		summary: state.summary || state.fallbackPrompt || "No safe user summary available.",
+		outcomeHint: state.outcomeHint || "No safe assistant outcome available.",
+		contentHash: state.hash.digest("hex"),
 	}
 }
 
@@ -249,6 +270,262 @@ function inventoryRow(summary: FileSummary): InventoryLedgerRow {
 	}
 }
 
+type SessionFile = Awaited<ReturnType<typeof listSessionFiles>>["files"][number]
+type SessionState = Awaited<ReturnType<typeof listSessionFiles>>["states"][number]
+type RepositoryMatcher = ReturnType<typeof createRepositoryMatcher>
+
+interface ScanContext {
+	from: number
+	to: number
+	sources: SessionSource[]
+	selectedStates: SessionState[]
+	selectedFiles: SessionFile[]
+	requestedSessions: Set<string>
+	repository?: RepositoryMatcher
+	incompleteReasons: string[]
+}
+
+interface ScanEvidence {
+	summaries: FileSummary[]
+	unsupportedFiles: number
+	failedBySource: Map<SessionSource, number>
+	discoveredSessions?: Set<string>
+}
+
+interface ScanSelection {
+	eligible: FileSummary[]
+	unresolvedTimestamps: number
+	unresolvedRepositoryMatches: number
+	excluded: number
+}
+
+function sourceIncompleteReasons(states: SessionState[]): string[] {
+	const reasons = states
+		.filter((state) => state.state === "missing")
+		.map((state) => `${state.source} ${state.location} source is missing`)
+	for (const state of states) {
+		if (state.unreadable_directories > 0) {
+			reasons.push(
+				`${state.unreadable_directories} ${state.source} ${state.location} director${state.unreadable_directories === 1 ? "y was" : "ies were"} unreadable`,
+			)
+		}
+	}
+	return reasons
+}
+
+async function createScanContext(options: {
+	from: string
+	to: string
+	sources?: SessionSource[]
+	repoPath?: string
+	sessions?: string[]
+	roots?: SessionRoots
+}): Promise<ScanContext> {
+	const from = parseWindowBound(options.from, "from")
+	const to = parseWindowBound(options.to, "to")
+	if (to <= from) throw new SessionRecoveryError("--to must be later than --from", "invalid_window")
+	const sources: SessionSource[] = [...new Set<SessionSource>(options.sources ?? ["codex", "claude"])].sort()
+	const { files, states } = await listSessionFiles(options.roots ?? defaultSessionRoots())
+	let repository: RepositoryMatcher | undefined
+	try {
+		repository = options.repoPath ? createRepositoryMatcher(options.repoPath) : undefined
+	} catch (error) {
+		throw new SessionRecoveryError(error instanceof Error ? error.message : String(error), "invalid_repo")
+	}
+	const selectedStates = states.filter((state) => sources.includes(state.source))
+	return {
+		from,
+		to,
+		sources,
+		selectedStates,
+		selectedFiles: files.filter((file) => sources.includes(file.source)),
+		requestedSessions: new Set(options.sessions ?? []),
+		repository,
+		incompleteReasons: sourceIncompleteReasons(selectedStates),
+	}
+}
+
+interface RequestedDiscovery {
+	filesToSummarize: SessionFile[]
+	discoveredSessions?: Set<string>
+	unsupportedFiles: number
+	failedBySource: Map<SessionSource, number>
+}
+
+async function discoverRequestedFiles(files: SessionFile[], requestedSessions: Set<string>): Promise<RequestedDiscovery> {
+	if (requestedSessions.size === 0) {
+		return { filesToSummarize: files, unsupportedFiles: 0, failedBySource: new Map() }
+	}
+	const discoveredSessions = new Set<string>()
+	const filesToSummarize: SessionFile[] = []
+	let unsupportedFiles = 0
+	const failedBySource = new Map<SessionSource, number>()
+	for (let index = 0; index < files.length; index += 8) {
+		const batch = await Promise.all(files.slice(index, index + 8).map(async (file) => {
+			try {
+				return { file, metadata: await readMetadata(file.path, file.source) }
+			} catch {
+				return { file, failed: true as const }
+			}
+		}))
+		for (const outcome of batch) {
+			if ("failed" in outcome) {
+				failedBySource.set(outcome.file.source, (failedBySource.get(outcome.file.source) ?? 0) + 1)
+			} else if (!outcome.metadata) {
+				unsupportedFiles += 1
+			} else {
+				discoveredSessions.add(outcome.metadata.opaqueId)
+				if (requestedSessions.has(outcome.metadata.opaqueId)) filesToSummarize.push(outcome.file)
+			}
+		}
+	}
+	return { filesToSummarize, discoveredSessions, unsupportedFiles, failedBySource }
+}
+
+async function summarizeFiles(files: SessionFile[]): Promise<{
+	summaries: FileSummary[]
+	unsupportedFiles: number
+	failedBySource: Map<SessionSource, number>
+}> {
+	const summaries: FileSummary[] = []
+	let unsupportedFiles = 0
+	const failedBySource = new Map<SessionSource, number>()
+	for (let index = 0; index < files.length; index += 8) {
+		const batch = await Promise.all(files.slice(index, index + 8).map((file) => summarizeFile(file.path, file.source)))
+		for (const outcome of batch) {
+			if (outcome.kind === "summary") summaries.push(outcome.summary)
+			else if (outcome.kind === "unsupported") unsupportedFiles += 1
+			else failedBySource.set(outcome.source, (failedBySource.get(outcome.source) ?? 0) + 1)
+		}
+	}
+	return { summaries, unsupportedFiles, failedBySource }
+}
+
+async function collectScanEvidence(context: ScanContext): Promise<ScanEvidence> {
+	const discovery = await discoverRequestedFiles(context.selectedFiles, context.requestedSessions)
+	const summarized = await summarizeFiles(discovery.filesToSummarize)
+	const failedBySource = new Map(discovery.failedBySource)
+	for (const [source, count] of summarized.failedBySource) {
+		failedBySource.set(source, (failedBySource.get(source) ?? 0) + count)
+	}
+	for (const [source, count] of failedBySource) {
+		context.incompleteReasons.push(`${count} ${source} session file${count === 1 ? "" : "s"} could not be read`)
+	}
+	return {
+		summaries: summarized.summaries,
+		unsupportedFiles: discovery.unsupportedFiles + summarized.unsupportedFiles,
+		failedBySource,
+		discoveredSessions: discovery.discoveredSessions,
+	}
+}
+
+function combineSummaries(summaries: FileSummary[]): FileSummary[] {
+	const grouped = new Map<string, FileSummary[]>()
+	for (const summary of summaries) {
+		const current = grouped.get(summary.metadata.opaqueId) ?? []
+		current.push(summary)
+		grouped.set(summary.metadata.opaqueId, current)
+	}
+	return [...grouped.values()].map(combineFileSummaries)
+}
+
+type SelectionDecision = "eligible" | "excluded" | "unresolved_repository" | "unresolved_timestamp"
+
+function assessSummary(summary: FileSummary, context: ScanContext): SelectionDecision {
+	if (context.requestedSessions.size > 0 && !context.requestedSessions.has(summary.metadata.opaqueId)) return "excluded"
+	if (context.repository) {
+		const assessment = context.repository.assess(summary.metadata)
+		if (assessment.status === "unresolved") return "unresolved_repository"
+		if (assessment.status === "mismatch") return "excluded"
+	}
+	if (summary.createdAt === undefined || summary.updatedAt === undefined) return "unresolved_timestamp"
+	return summary.createdAt >= context.to || summary.updatedAt < context.from ? "excluded" : "eligible"
+}
+
+function selectEligibleSummaries(combined: FileSummary[], context: ScanContext, discoveredSessions?: Set<string>): ScanSelection {
+	const eligible: FileSummary[] = []
+	let unresolvedTimestamps = 0
+	let unresolvedRepositoryMatches = 0
+	let excluded = discoveredSessions
+		? [...discoveredSessions].filter((session) => !context.requestedSessions.has(session)).length
+		: 0
+	for (const summary of combined) {
+		switch (assessSummary(summary, context)) {
+			case "eligible":
+				eligible.push(summary)
+				break
+			case "unresolved_timestamp":
+				unresolvedTimestamps += 1
+				break
+			case "unresolved_repository":
+				unresolvedRepositoryMatches += 1
+				break
+			case "excluded":
+				excluded += 1
+				break
+		}
+	}
+	return { eligible, unresolvedTimestamps, unresolvedRepositoryMatches, excluded }
+}
+
+function appendSelectionReasons(
+	context: ScanContext,
+	combined: FileSummary[],
+	discoveredSessions: Set<string> | undefined,
+	selection: ScanSelection,
+): void {
+	if (selection.unresolvedTimestamps > 0) context.incompleteReasons.push(`${selection.unresolvedTimestamps} selected sessions had no usable timestamp`)
+	if (selection.unresolvedRepositoryMatches > 0) {
+		context.incompleteReasons.push(
+			`${selection.unresolvedRepositoryMatches} selected session${selection.unresolvedRepositoryMatches === 1 ? " had" : "s had"} unresolved repository ownership`,
+		)
+	}
+	if (context.requestedSessions.size === 0) return
+	const discovered = discoveredSessions ?? new Set(combined.map((summary) => summary.metadata.opaqueId))
+	const missing = [...context.requestedSessions].filter((session) => !discovered.has(session)).sort()
+	if (missing.length > 0) context.incompleteReasons.push(`requested sessions not found: ${missing.join(", ")}`)
+}
+
+function buildScanResult(context: ScanContext, evidence: ScanEvidence, selection: ScanSelection): RecoveryScanResult {
+	const ledger = selection.eligible
+		.map(inventoryRow)
+		.sort((left, right) => right.updated_at.localeCompare(left.updated_at) || left.session.localeCompare(right.session))
+	const complete = context.incompleteReasons.length === 0
+	return {
+		action: "scan",
+		side_effect: "none",
+		complete,
+		vault_write_allowed: false,
+		incomplete_reasons: context.incompleteReasons,
+		filters: {
+			from: new Date(context.from).toISOString(),
+			to: new Date(context.to).toISOString(),
+			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+			sources: context.sources,
+			repository: context.repository?.name ?? null,
+			sessions: [...context.requestedSessions].sort(),
+		},
+		source_states: context.selectedStates,
+		reconciliation: {
+			scanned_files: context.selectedFiles.length,
+			native_sessions: evidence.discoveredSessions?.size ?? combineSummaries(evidence.summaries).length,
+			unsupported_files: evidence.unsupportedFiles,
+			failed_files: [...evidence.failedBySource.values()].reduce((total, count) => total + count, 0),
+			eligible: ledger.length,
+			ledger_rows: ledger.length,
+			excluded: selection.excluded,
+			unresolved_timestamps: selection.unresolvedTimestamps,
+			unresolved_repository_matches: selection.unresolvedRepositoryMatches,
+		},
+		ledger,
+		next_safe_action: complete
+			? "Group and classify every ledger row, then validate the review ledger before proposing any vault write."
+			: "Repair the incomplete source evidence, then rerun the same bounded scan. Vault writes remain blocked.",
+		contract_id: CONTRACT_ID,
+		schema_version: SCHEMA_VERSION,
+	}
+}
+
 /**
  * Inventory every native session overlapping an explicit bounded window.
  *
@@ -269,173 +546,12 @@ export async function scanRecoverySessions(options: {
 	sessions?: string[]
 	roots?: SessionRoots
 }): Promise<RecoveryScanResult> {
-	const from = parseWindowBound(options.from, "from")
-	const to = parseWindowBound(options.to, "to")
-	if (to <= from) {
-		throw new SessionRecoveryError("--to must be later than --from", "invalid_window")
-	}
-	const sources: SessionSource[] = [
-		...new Set<SessionSource>(options.sources ?? ["codex", "claude"]),
-	].sort()
-	const roots = options.roots ?? defaultSessionRoots()
-	const { files, states } = await listSessionFiles(roots)
-	let repository: ReturnType<typeof createRepositoryMatcher> | undefined
-	try {
-		repository = options.repoPath ? createRepositoryMatcher(options.repoPath) : undefined
-	} catch (error) {
-		throw new SessionRecoveryError(
-			error instanceof Error ? error.message : String(error),
-			"invalid_repo",
-		)
-	}
-	const requestedSessions = new Set(options.sessions ?? [])
-	const selectedStates = states.filter((state) => sources.includes(state.source))
-	const selectedFiles = files.filter((file) => sources.includes(file.source))
-	const incompleteReasons = selectedStates
-		.filter((state) => state.state === "missing")
-		.map((state) => `${state.source} ${state.location} source is missing`)
-	for (const state of selectedStates) {
-		if (state.unreadable_directories > 0) {
-			incompleteReasons.push(
-				`${state.unreadable_directories} ${state.source} ${state.location} director${state.unreadable_directories === 1 ? "y was" : "ies were"} unreadable`,
-			)
-		}
-	}
-	const summaries: FileSummary[] = []
-	let unsupportedFiles = 0
-	const failedBySource = new Map<SessionSource, number>()
-	let filesToSummarize = selectedFiles
-	let discoveredSessions: Set<string> | undefined
-	if (requestedSessions.size > 0) {
-		discoveredSessions = new Set<string>()
-		filesToSummarize = []
-		for (let index = 0; index < selectedFiles.length; index += 8) {
-			const batchFiles = selectedFiles.slice(index, index + 8)
-			const batch = await Promise.all(batchFiles.map(async (file) => {
-				try {
-					return { file, metadata: await readMetadata(file.path, file.source) }
-				} catch {
-					return { file, failed: true as const }
-				}
-			}))
-			for (const outcome of batch) {
-				if ("failed" in outcome) {
-					failedBySource.set(
-						outcome.file.source,
-						(failedBySource.get(outcome.file.source) ?? 0) + 1,
-					)
-				} else if (!outcome.metadata) {
-					unsupportedFiles += 1
-				} else {
-					discoveredSessions.add(outcome.metadata.opaqueId)
-					if (requestedSessions.has(outcome.metadata.opaqueId)) filesToSummarize.push(outcome.file)
-				}
-			}
-		}
-	}
-	for (let index = 0; index < filesToSummarize.length; index += 8) {
-		const batch = await Promise.all(
-			filesToSummarize.slice(index, index + 8).map((file) => summarizeFile(file.path, file.source)),
-		)
-		for (const outcome of batch) {
-			if (outcome.kind === "summary") summaries.push(outcome.summary)
-			else if (outcome.kind === "unsupported") unsupportedFiles += 1
-			else failedBySource.set(outcome.source, (failedBySource.get(outcome.source) ?? 0) + 1)
-		}
-	}
-	for (const [source, count] of failedBySource) {
-		incompleteReasons.push(`${count} ${source} session file${count === 1 ? "" : "s"} could not be read`)
-	}
-	const grouped = new Map<string, FileSummary[]>()
-	for (const summary of summaries) {
-		const current = grouped.get(summary.metadata.opaqueId) ?? []
-		current.push(summary)
-		grouped.set(summary.metadata.opaqueId, current)
-	}
-	const combined = [...grouped.values()].map(combineFileSummaries)
-	let unresolvedTimestamps = 0
-	let unresolvedRepositoryMatches = 0
-	let excluded = discoveredSessions
-		? [...discoveredSessions].filter((session) => !requestedSessions.has(session)).length
-		: 0
-	const eligible: FileSummary[] = []
-	for (const summary of combined) {
-		if (requestedSessions.size > 0 && !requestedSessions.has(summary.metadata.opaqueId)) {
-			excluded += 1
-			continue
-		}
-		if (repository) {
-			const assessment = repository.assess(summary.metadata)
-			if (assessment.status === "unresolved") {
-				unresolvedRepositoryMatches += 1
-				continue
-			}
-			if (assessment.status === "mismatch") {
-				excluded += 1
-				continue
-			}
-		}
-		if (summary.createdAt === undefined || summary.updatedAt === undefined) {
-			unresolvedTimestamps += 1
-			continue
-		}
-		if (summary.createdAt >= to || summary.updatedAt < from) {
-			excluded += 1
-			continue
-		}
-		eligible.push(summary)
-	}
-	if (unresolvedTimestamps > 0) {
-		incompleteReasons.push(`${unresolvedTimestamps} selected sessions had no usable timestamp`)
-	}
-	if (unresolvedRepositoryMatches > 0) {
-		incompleteReasons.push(
-			`${unresolvedRepositoryMatches} selected session${unresolvedRepositoryMatches === 1 ? " had" : "s had"} unresolved repository ownership`,
-		)
-	}
-	if (requestedSessions.size > 0) {
-		const discovered = discoveredSessions ?? new Set(combined.map((summary) => summary.metadata.opaqueId))
-		const missing = [...requestedSessions].filter((session) => !discovered.has(session)).sort()
-		if (missing.length > 0) incompleteReasons.push(`requested sessions not found: ${missing.join(", ")}`)
-	}
-	const ledger = eligible
-		.map(inventoryRow)
-		.sort((left, right) => right.updated_at.localeCompare(left.updated_at) || left.session.localeCompare(right.session))
-	const complete = incompleteReasons.length === 0
-
-	return {
-		action: "scan",
-		side_effect: "none",
-		complete,
-		vault_write_allowed: false,
-		incomplete_reasons: incompleteReasons,
-		filters: {
-			from: new Date(from).toISOString(),
-			to: new Date(to).toISOString(),
-			timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-			sources,
-			repository: repository?.name ?? null,
-			sessions: [...requestedSessions].sort(),
-		},
-		source_states: selectedStates,
-			reconciliation: {
-				scanned_files: selectedFiles.length,
-			native_sessions: discoveredSessions?.size ?? combined.length,
-				unsupported_files: unsupportedFiles,
-				failed_files: [...failedBySource.values()].reduce((total, count) => total + count, 0),
-			eligible: ledger.length,
-			ledger_rows: ledger.length,
-			excluded,
-			unresolved_timestamps: unresolvedTimestamps,
-			unresolved_repository_matches: unresolvedRepositoryMatches,
-		},
-		ledger,
-		next_safe_action: complete
-			? "Group and classify every ledger row, then validate the review ledger before proposing any vault write."
-			: "Repair the incomplete source evidence, then rerun the same bounded scan. Vault writes remain blocked.",
-		contract_id: CONTRACT_ID,
-		schema_version: SCHEMA_VERSION,
-	}
+	const context = await createScanContext(options)
+	const evidence = await collectScanEvidence(context)
+	const combined = combineSummaries(evidence.summaries)
+	const selection = selectEligibleSummaries(combined, context, evidence.discoveredSessions)
+	appendSelectionReasons(context, combined, evidence.discoveredSessions, selection)
+	return buildScanResult(context, evidence, selection)
 }
 
 /**
@@ -541,67 +657,98 @@ const CONFIDENCE = new Set<ReviewConfidence>(["high", "medium", "low"])
  * const result = validateReviewLedger(inventory, reviewRows)
  * ```
  */
+interface ReviewLedgerState {
+	issues: string[]
+	seen: Set<string>
+	anchorGroups: Set<string>
+	supportingGroups: Set<string>
+	matchedRows: number
+}
+
+function checkProjectCandidateRow(row: ReviewLedgerRow, state: ReviewLedgerState): void {
+	if (!row.work_group_id?.trim()) state.issues.push(`project candidate missing work_group_id: ${row.session}`)
+	else state.anchorGroups.add(row.work_group_id)
+	if (!row.canonical_owner_or_proposal?.trim()) {
+		state.issues.push(`project candidate missing canonical owner or proposal: ${row.session}`)
+	}
+	if (row.confidence === "low") state.issues.push(`project candidate has low confidence: ${row.session}`)
+}
+
+function checkCompletedStandaloneRow(row: ReviewLedgerRow, state: ReviewLedgerState): void {
+	if (row.work_group_id?.trim()) state.anchorGroups.add(row.work_group_id)
+}
+
+function checkSupportingRow(row: ReviewLedgerRow, state: ReviewLedgerState): void {
+	if (!row.work_group_id?.trim()) state.issues.push(`supporting row missing work_group_id: ${row.session}`)
+	else state.supportingGroups.add(row.work_group_id)
+}
+
+function checkClassificationRules(row: ReviewLedgerRow, state: ReviewLedgerState): void {
+	if (row.classification === "project_candidate") checkProjectCandidateRow(row, state)
+	if (row.classification === "completed_standalone") checkCompletedStandaloneRow(row, state)
+	if (row.classification === "supporting_or_duplicate") checkSupportingRow(row, state)
+}
+
+function checkRowFields(row: ReviewLedgerRow, state: ReviewLedgerState): void {
+	if (!CLASSIFICATIONS.has(row.classification)) state.issues.push(`invalid classification for ${row.session}`)
+	if (!CONFIDENCE.has(row.confidence)) state.issues.push(`invalid confidence for ${row.session}`)
+	if (!row.reason?.trim()) state.issues.push(`missing reason for ${row.session}`)
+	if (!row.source_available) state.issues.push(`source unavailable during review: ${row.session}`)
+	checkClassificationRules(row, state)
+}
+
+function checkReviewRow(row: ReviewLedgerRow, inventoryIds: Set<string>, state: ReviewLedgerState): void {
+	const duplicate = state.seen.has(row.session)
+	if (duplicate) state.issues.push(`duplicate review row: ${row.session}`)
+	state.seen.add(row.session)
+	if (!inventoryIds.has(row.session)) {
+		state.issues.push(`review row not present in inventory: ${row.session}`)
+		return
+	}
+	if (!duplicate) state.matchedRows += 1
+	checkRowFields(row, state)
+}
+
+function checkMissingReviewRows(inventoryIds: Set<string>, state: ReviewLedgerState): void {
+	for (const session of inventoryIds) {
+		if (!state.seen.has(session)) state.issues.push(`missing review row: ${session}`)
+	}
+}
+
+function checkOrphanSupportingGroups(state: ReviewLedgerState): void {
+	for (const group of state.supportingGroups) {
+		if (!state.anchorGroups.has(group)) {
+			state.issues.push(`supporting work group has no project or completed anchor: ${group}`)
+		}
+	}
+}
+
 export function validateReviewLedger(
 	inventory: RecoveryScanResult,
 	rows: ReviewLedgerRow[],
 ): ReviewValidationResult {
-	const issues: string[] = []
-	if (!inventory.complete) issues.push("inventory is incomplete")
+	const state: ReviewLedgerState = {
+		issues: inventory.complete ? [] : ["inventory is incomplete"],
+		seen: new Set(),
+		anchorGroups: new Set(),
+		supportingGroups: new Set(),
+		matchedRows: 0,
+	}
 	const inventoryIds = new Set(inventory.ledger.map((row) => row.session))
-	const seen = new Set<string>()
-	const anchorGroups = new Set<string>()
-	const supportingGroups = new Set<string>()
-	let matchedRows = 0
-	for (const row of rows) {
-		const duplicate = seen.has(row.session)
-		if (duplicate) issues.push(`duplicate review row: ${row.session}`)
-		seen.add(row.session)
-		if (!inventoryIds.has(row.session)) {
-			issues.push(`review row not present in inventory: ${row.session}`)
-			continue
-		}
-		if (!duplicate) matchedRows += 1
-		if (!CLASSIFICATIONS.has(row.classification)) {
-			issues.push(`invalid classification for ${row.session}`)
-		}
-		if (!CONFIDENCE.has(row.confidence)) issues.push(`invalid confidence for ${row.session}`)
-		if (!row.reason?.trim()) issues.push(`missing reason for ${row.session}`)
-		if (!row.source_available) issues.push(`source unavailable during review: ${row.session}`)
-		if (row.classification === "project_candidate") {
-			if (!row.work_group_id?.trim()) issues.push(`project candidate missing work_group_id: ${row.session}`)
-			else anchorGroups.add(row.work_group_id)
-			if (!row.canonical_owner_or_proposal?.trim()) {
-				issues.push(`project candidate missing canonical owner or proposal: ${row.session}`)
-			}
-			if (row.confidence === "low") issues.push(`project candidate has low confidence: ${row.session}`)
-		}
-		if (row.classification === "completed_standalone" && row.work_group_id?.trim()) {
-			anchorGroups.add(row.work_group_id)
-		}
-		if (row.classification === "supporting_or_duplicate") {
-			if (!row.work_group_id?.trim()) issues.push(`supporting row missing work_group_id: ${row.session}`)
-			else supportingGroups.add(row.work_group_id)
-		}
-	}
-	for (const session of inventoryIds) {
-		if (!seen.has(session)) issues.push(`missing review row: ${session}`)
-	}
-	for (const group of supportingGroups) {
-		if (!anchorGroups.has(group)) {
-			issues.push(`supporting work group has no project or completed anchor: ${group}`)
-		}
-	}
-	const valid = issues.length === 0
+	for (const row of rows) checkReviewRow(row, inventoryIds, state)
+	checkMissingReviewRows(inventoryIds, state)
+	checkOrphanSupportingGroups(state)
+	const valid = state.issues.length === 0
 	return {
 		action: "validate",
 		valid,
 		approval_ready: valid,
 		vault_write_allowed: false,
-		issues,
+		issues: state.issues,
 		reconciliation: {
 			inventory_rows: inventory.ledger.length,
 			review_rows: rows.length,
-			matched_rows: matchedRows,
+			matched_rows: state.matchedRows,
 		},
 		next_safe_action: valid
 			? "Present one evidence-backed proposal for grilling and foreground Yay, Nay, Defer, or Details review."

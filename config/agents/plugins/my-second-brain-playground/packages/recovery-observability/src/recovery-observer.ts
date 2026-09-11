@@ -86,42 +86,70 @@ async function forward(stream: ReadableStream<Uint8Array>, output: { write(value
 	}
 }
 
+interface LifecycleFrameState {
+	pending: Uint8Array
+	pendingBytes: number
+	discarding: boolean
+}
+
+function consumeLifecycleSegment(
+	state: LifecycleFrameState,
+	segment: Uint8Array,
+	terminated: boolean,
+	decoder: TextDecoder,
+	accept: (record: unknown) => unknown,
+	reportFailure: () => void,
+): void {
+	if (!state.discarding) {
+		if (state.pendingBytes + segment.length > MAX_SERIALIZED_RECORD_BYTES) {
+			state.discarding = true
+			state.pendingBytes = 0
+			reportFailure()
+		} else {
+			state.pending.set(segment, state.pendingBytes)
+			state.pendingBytes += segment.length
+		}
+	}
+	if (!terminated || state.discarding) return
+	try {
+		accept(JSON.parse(decoder.decode(state.pending.subarray(0, state.pendingBytes))))
+	} catch {
+		reportFailure()
+	}
+}
+
+function consumeLifecycleChunk(
+	chunk: Uint8Array,
+	state: LifecycleFrameState,
+	decoder: TextDecoder,
+	accept: (record: unknown) => unknown,
+	reportFailure: () => void,
+): void {
+	let offset = 0
+	while (offset < chunk.length) {
+		const newline = chunk.indexOf(10, offset)
+		const end = newline < 0 ? chunk.length : newline
+		consumeLifecycleSegment(state, chunk.subarray(offset, end), newline >= 0, decoder, accept, reportFailure)
+		if (newline < 0) return
+		state.pendingBytes = 0
+		// Only a delimiter ends a rejected frame, never a transport chunk boundary.
+		state.discarding = false
+		offset = newline + 1
+	}
+}
+
 async function consumeLifecycle(fd: number, accept: (record: unknown) => unknown, reportFailure: () => void): Promise<void> {
 	const decoder = new TextDecoder()
-	const pending = new Uint8Array(MAX_SERIALIZED_RECORD_BYTES)
-	let pendingBytes = 0
-	let discarding = false
+	const state: LifecycleFrameState = {
+		pending: new Uint8Array(MAX_SERIALIZED_RECORD_BYTES),
+		pendingBytes: 0,
+		discarding: false,
+	}
 	try {
 		for await (const chunk of Bun.file(fd).stream()) {
-			let offset = 0
-			while (offset < chunk.length) {
-				const newline = chunk.indexOf(10, offset)
-				const end = newline < 0 ? chunk.length : newline
-				if (!discarding) {
-					if (pendingBytes + end - offset > MAX_SERIALIZED_RECORD_BYTES) {
-						discarding = true
-						pendingBytes = 0
-						reportFailure()
-					} else {
-						pending.set(chunk.subarray(offset, end), pendingBytes)
-						pendingBytes += end - offset
-					}
-				}
-				if (newline < 0) break
-				if (!discarding) {
-					try {
-						accept(JSON.parse(decoder.decode(pending.subarray(0, pendingBytes))))
-					} catch {
-						reportFailure()
-					}
-				}
-				pendingBytes = 0
-				// Only a delimiter ends a rejected frame, never a transport chunk boundary.
-				discarding = false
-				offset = newline + 1
-			}
+			consumeLifecycleChunk(chunk, state, decoder, accept, reportFailure)
 		}
-		if (pendingBytes > 0 || discarding) reportFailure()
+		if (state.pendingBytes > 0 || state.discarding) reportFailure()
 	} catch {
 		reportFailure()
 	}

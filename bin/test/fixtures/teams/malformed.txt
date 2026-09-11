@@ -1,0 +1,29 @@
+Random line before any author
+Alice Smith
+05/09/2026 8:00 am
+
+First message
+Begin Reference, no author suffix here
+Still first message content
+Begin Reference, orphan preview by Zed Young
+Bob Jones
+05/09/2026 8:10 am
+
+Second message
+Begin Reference, garbage without by
+Bob Jones
+05/09/2026 8:20 am
+
+Third message
+Chat Bot
+05/09/2026 8:30 pm
+Trailing lines after an invalid author
+Only attachments by Carol White
+Carol White
+05/09/2026 8:40 am
+
+Dancing cat (GIF Image)
+Dave Brown
+05/09/2026 8:50 am
+
+Last message

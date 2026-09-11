@@ -187,6 +187,135 @@ export function createDefaultRuntime(overrides: Partial<WorkTreeRuntime> = {}): 
 	};
 }
 
+export type SyncWorkspaceResult =
+	| { kind: "written"; path: string }
+	| { kind: "drift_blocked"; path: string }
+	| { kind: "error"; code: WorkTreeDiagnosticCode; message: string };
+
+type StateRefreshInputs = {
+	ownerRoot: string;
+	registry: Registry;
+	worktrees: Awaited<ReturnType<typeof listWorktrees>>;
+};
+
+type StateRefreshWithWip = StateRefreshInputs & { wip: string | null };
+
+type FocusProbe = { worktreePath: string; candidate: string };
+
+async function discoverStateRefreshInputs(
+	runtime: WorkTreeRuntime,
+): Promise<StateRefreshInputs | Extract<SyncWorkspaceResult, { kind: "error" }>> {
+	const repoRoot = runtime.repoRoot();
+	try {
+		const initialWorktrees = await listWorktrees(repoRoot, runtime.run);
+		const ownerRoot = repoOwnerRootFor(initialWorktrees, repoRoot);
+		const registry = await loadRegistryFromRuntime(runtime, ownerRoot);
+		// First pass finds the owner root; second pass applies registry ignored-worktree globs.
+		const worktrees = await listWorktrees(
+			repoRoot,
+			runtime.run,
+			registry.defaults?.ignoredWorktrees ?? [],
+		);
+		return { ownerRoot, registry, worktrees };
+	} catch (error) {
+		if (!(error instanceof WorkTreeDiscoveryError)) throw error;
+		return { kind: "error", code: error.code, message: error.message };
+	}
+}
+
+function resolveStateRefreshWip(inputs: StateRefreshInputs): StateRefreshWithWip {
+	const wip = inputs.registry.defaults?.wip
+		? expandHome(inputs.registry.defaults.wip)
+		: null;
+	if (!wip) return { ...inputs, wip: null };
+	return {
+		...inputs,
+		registry: {
+			...inputs.registry,
+			defaults: { ...inputs.registry.defaults, wip },
+		},
+		wip,
+	};
+}
+
+async function stateRefreshDrift(
+	runtime: WorkTreeRuntime,
+	workspacePath: string,
+	force: boolean,
+): Promise<Extract<SyncWorkspaceResult, { kind: "drift_blocked" }> | null> {
+	const existing = await runtime.readTextFile(workspacePath);
+	if (existing === null || force || !isDrift(existing)) return null;
+	return { kind: "drift_blocked", path: workspacePath };
+}
+
+async function ensureStateRefreshWip(
+	runtime: WorkTreeRuntime,
+	wip: string | null,
+): Promise<Extract<SyncWorkspaceResult, { kind: "error" }> | null> {
+	if (!wip) return null;
+	try {
+		await runtime.ensureDirectory(wip);
+		return null;
+	} catch {
+		return {
+			kind: "error",
+			code: "write_failed",
+			message: "Could not create the WIP scratch folder.",
+		};
+	}
+}
+
+function focusProbeFor(worktree: Worktree): FocusProbe {
+	const stem = worktree.branch.includes("/")
+		? worktree.branch.slice(worktree.branch.indexOf("/") + 1)
+		: worktree.branch;
+	const candidate = `skills/${stem.replace(/^harden-/, "").replace(/-(refactor|harden|fix|feat|wip)$/, "")}`;
+	return { worktreePath: worktree.path, candidate };
+}
+
+async function probeStateRefreshFocusFolders(
+	runtime: WorkTreeRuntime,
+	worktrees: readonly Worktree[],
+): Promise<Set<string>> {
+	// Pre-resolve focus-folder existence async (the engine's probe is sync), so
+	// guessFocus can probe `<worktree>/skills/<stem>` without an async boundary.
+	const probes = worktrees.map(focusProbeFor);
+	const probeResults = await Promise.all(
+		probes.map((probe) => runtime.pathExists(`${probe.worktreePath}/${probe.candidate}`)),
+	);
+	const probed = new Set<string>();
+	for (const [index, found] of probeResults.entries()) {
+		if (!found) continue;
+		const probe = probes[index];
+		probed.add(`${probe.worktreePath}::${probe.candidate}`);
+	}
+	return probed;
+}
+
+async function renderAndRegisterStateRefresh(
+	runtime: WorkTreeRuntime,
+	inputs: StateRefreshWithWip,
+	workspacePath: string,
+	probed: ReadonlySet<string>,
+): Promise<SyncWorkspaceResult> {
+	const workspace = renderWorkspace(inputs.registry, inputs.worktrees, (worktreePath, subfolder) =>
+		probed.has(`${worktreePath}::${subfolder}`),
+	);
+	try {
+		await runtime.writeTextFile(workspacePath, stampHeader(workspace));
+	} catch {
+		return {
+			kind: "error",
+			code: "write_failed",
+			message: "Could not write the workspace file.",
+		};
+	}
+	for (const worktree of inputs.worktrees) {
+		await registerCodexProject(worktree.path).catch(() => {});
+	}
+	return { kind: "written", path: workspacePath };
+}
+
 /**
  * Render the repo's workspace and apply the drift gate before writing.
  *
@@ -202,96 +331,17 @@ export function createDefaultRuntime(overrides: Partial<WorkTreeRuntime> = {}): 
 export async function syncWorkspace(
 	runtime: WorkTreeRuntime,
 	force: boolean,
-): Promise<
-	| { kind: "written"; path: string }
-	| { kind: "drift_blocked"; path: string }
-	| { kind: "error"; code: WorkTreeDiagnosticCode; message: string }
-> {
-	const repoRoot = runtime.repoRoot();
-	let ownerRoot = repoRoot;
-	let registry: Registry;
-	let worktrees: Awaited<ReturnType<typeof listWorktrees>>;
-	try {
-		worktrees = await listWorktrees(repoRoot, runtime.run);
-		ownerRoot = repoOwnerRootFor(worktrees, repoRoot);
-		registry = await loadRegistryFromRuntime(runtime, ownerRoot);
-		// First pass finds the owner root; second pass applies registry ignored-worktree globs.
-		worktrees = await listWorktrees(
-			repoRoot,
-			runtime.run,
-			registry.defaults?.ignoredWorktrees ?? [],
-		);
-	} catch (error) {
-		if (error instanceof WorkTreeDiscoveryError) {
-			return { kind: "error", code: error.code, message: error.message };
-		}
-		throw error;
-	}
-	const workspacePath = workspacePathFor(ownerRoot);
-
-	const wip = registry.defaults?.wip ? expandHome(registry.defaults.wip) : null;
-	if (wip) {
-		registry = {
-			...registry,
-			defaults: {
-				...registry.defaults,
-				wip,
-			},
-		};
-	}
-
-	const existing = await runtime.readTextFile(workspacePath);
-	if (existing !== null && isDrift(existing) && !force) {
-		return { kind: "drift_blocked", path: workspacePath };
-	}
-
-	if (wip) {
-		try {
-			await runtime.ensureDirectory(wip);
-		} catch {
-			return {
-				kind: "error",
-				code: "write_failed",
-				message: "Could not create the WIP scratch folder.",
-			};
-		}
-	}
-
-	// Pre-resolve focus-folder existence async (the engine's probe is sync), so
-	// guessFocus can probe `<worktree>/skills/<stem>` without an async boundary.
-	const probes = worktrees.map((worktree) => {
-		const stem = worktree.branch.includes("/")
-			? worktree.branch.slice(worktree.branch.indexOf("/") + 1)
-			: worktree.branch;
-		const candidate = `skills/${stem.replace(/^harden-/, "").replace(/-(refactor|harden|fix|feat|wip)$/, "")}`;
-		return { worktreePath: worktree.path, candidate };
-	});
-	const probed = new Set<string>();
-	const probeResults = await Promise.all(
-		probes.map((probe) => runtime.pathExists(`${probe.worktreePath}/${probe.candidate}`)),
-	);
-	for (const [index, found] of probeResults.entries()) {
-		if (found) {
-			const probe = probes[index];
-			probed.add(`${probe.worktreePath}::${probe.candidate}`);
-		}
-	}
-	const workspace = renderWorkspace(registry, worktrees, (worktreePath, subfolder) =>
-		probed.has(`${worktreePath}::${subfolder}`),
-	);
-	try {
-		await runtime.writeTextFile(workspacePath, stampHeader(workspace));
-	} catch {
-		return {
-			kind: "error",
-			code: "write_failed",
-			message: "Could not write the workspace file.",
-		};
-	}
-	for (const w of worktrees) {
-		await registerCodexProject(w.path).catch(() => {});
-	}
-	return { kind: "written", path: workspacePath };
+): Promise<SyncWorkspaceResult> {
+	const discovered = await discoverStateRefreshInputs(runtime);
+	if ("kind" in discovered) return discovered;
+	const inputs = resolveStateRefreshWip(discovered);
+	const workspacePath = workspacePathFor(inputs.ownerRoot);
+	const drift = await stateRefreshDrift(runtime, workspacePath, force);
+	if (drift) return drift;
+	const wipError = await ensureStateRefreshWip(runtime, inputs.wip);
+	if (wipError) return wipError;
+	const probed = await probeStateRefreshFocusFolders(runtime, inputs.worktrees);
+	return renderAndRegisterStateRefresh(runtime, inputs, workspacePath, probed);
 }
 
 /**
@@ -837,10 +887,14 @@ export async function removeCodexSidebarState(
 /**
  * @internal exported for focused tests; `worktree rm` owns the operator-facing path.
  */
-export async function archiveCodexThreadsForCwd(
+type CollectedCodexThreads = { ids: Set<string>; readableDb: boolean };
+
+type ArchivedCodexThreads = Omit<CodexAppProjectCleanupResult["thread_archive"], "status">;
+
+async function collectCodexThreadIds(
 	runtime: Pick<WorkTreeRuntime, "run">,
 	worktreePath: string,
-): Promise<CodexAppProjectCleanupResult["thread_archive"]> {
+): Promise<CollectedCodexThreads> {
 	const ids = new Set<string>();
 	let readableDb = false;
 	for (const stateDbPath of codexStateDbPaths()) {
@@ -852,19 +906,22 @@ export async function archiveCodexThreadsForCwd(
 		]);
 		if (!result.ok) continue;
 		readableDb = true;
-		for (const line of result.stdout.split(/\r?\n/)) {
-			const id = line.trim();
-			if (id) ids.add(id);
-		}
+		for (const id of threadIdsFromOutput(result.stdout)) ids.add(id);
 	}
-	if (!readableDb) {
-		return {
-			status: "unavailable",
-			archived_thread_ids: [],
-			failed_thread_ids: [],
-			skipped_thread_ids: [],
-		};
-	}
+	return { ids, readableDb };
+}
+
+function threadIdsFromOutput(stdout: string): string[] {
+	return stdout
+		.split(/\r?\n/)
+		.map((line) => line.trim())
+		.filter((id) => id.length > 0);
+}
+
+async function archiveCodexThreadIds(
+	runtime: Pick<WorkTreeRuntime, "run">,
+	ids: ReadonlySet<string>,
+): Promise<ArchivedCodexThreads> {
 	const currentThreadId = process.env.CODEX_THREAD_ID;
 	const archivedThreadIds: string[] = [];
 	const failedThreadIds: string[] = [];
@@ -881,16 +938,36 @@ export async function archiveCodexThreadsForCwd(
 			failedThreadIds.push(id);
 		}
 	}
+	return { archived_thread_ids: archivedThreadIds, failed_thread_ids: failedThreadIds, skipped_thread_ids: skippedThreadIds };
+}
+
+function codexThreadArchiveStatus(
+	archived: ArchivedCodexThreads,
+): CodexAppProjectCleanupResult["thread_archive"]["status"] {
+	return archived.failed_thread_ids.length > 0
+		? "partial"
+		: archived.archived_thread_ids.length > 0
+			? "archived"
+			: "none";
+}
+
+export async function archiveCodexThreadsForCwd(
+	runtime: Pick<WorkTreeRuntime, "run">,
+	worktreePath: string,
+): Promise<CodexAppProjectCleanupResult["thread_archive"]> {
+	const collected = await collectCodexThreadIds(runtime, worktreePath);
+	if (!collected.readableDb) {
+		return {
+			status: "unavailable",
+			archived_thread_ids: [],
+			failed_thread_ids: [],
+			skipped_thread_ids: [],
+		};
+	}
+	const archived = await archiveCodexThreadIds(runtime, collected.ids);
 	return {
-		status:
-			failedThreadIds.length > 0
-				? "partial"
-				: archivedThreadIds.length > 0
-					? "archived"
-					: "none",
-		archived_thread_ids: archivedThreadIds,
-		failed_thread_ids: failedThreadIds,
-		skipped_thread_ids: skippedThreadIds,
+		status: codexThreadArchiveStatus(archived),
+		...archived,
 	};
 }
 
@@ -956,6 +1033,134 @@ export interface ParsedInvocation {
 	parseError?: CommandResult;
 }
 
+type InvocationState = {
+	command: string;
+	positionals: string[];
+	force: boolean;
+	forceRender: boolean;
+	noInput: boolean;
+	repoRoot: string | undefined;
+	dryRun: boolean;
+	track: boolean;
+	pr: number | undefined;
+	usedFlags: Set<string>;
+};
+
+function invocationResult(state: InvocationState, parseError?: CommandResult): ParsedInvocation {
+	return {
+		command: state.command,
+		positionals: state.positionals,
+		force: state.force,
+		forceRender: state.forceRender,
+		noInput: state.noInput,
+		repoRoot: state.repoRoot,
+		...(state.dryRun ? { dryRun: state.dryRun } : {}),
+		...(state.track ? { track: state.track } : {}),
+		...(state.pr !== undefined ? { pr: state.pr } : {}),
+		...(parseError ? { parseError } : {}),
+	};
+}
+
+/** Keyed by an attacker-controlled argv token, so this is a Map (not a plain
+ * object): a plain object would let e.g. a bare `constructor` token resolve
+ * `flags.constructor` to `Object`, a truthy value that is not a real handler. */
+const INVOCATION_BOOLEAN_FLAGS: ReadonlyMap<string, (state: InvocationState) => void> = new Map([
+	[
+		"--force",
+		(state: InvocationState) => {
+			state.force = true;
+		},
+	],
+	[
+		"--force-render",
+		(state: InvocationState) => {
+			state.forceRender = true;
+		},
+	],
+	[
+		"--no-input",
+		(state: InvocationState) => {
+			state.noInput = true;
+		},
+	],
+	[
+		"--dry-run",
+		(state: InvocationState) => {
+			state.dryRun = true;
+		},
+	],
+	[
+		"--track",
+		(state: InvocationState) => {
+			state.track = true;
+		},
+	],
+	// --json selects output mode; WorkTree always emits JSON envelopes.
+	["--json", () => {}],
+]);
+
+function applyInvocationValueFlag(
+	state: InvocationState,
+	arg: string,
+	value: string | undefined,
+): string | null {
+	if (arg === "--repo") {
+		if (!value || value.startsWith("--")) return "--repo needs a path value.";
+		state.repoRoot = value;
+		return null;
+	}
+	if (arg === "--pr") {
+		if (!value || value.startsWith("--")) return "--pr needs a positive integer.";
+		const parsedPr = Number.parseInt(value, 10);
+		if (!/^\d+$/.test(value) || parsedPr < 1) return "--pr needs a positive integer.";
+		state.pr = parsedPr;
+		return null;
+	}
+	return `Unknown flag '${arg}'.`;
+}
+
+const INVOCATION_VALUE_FLAGS = new Set(["--repo", "--pr"]);
+
+/** Apply one argv token to the invocation state; returns the next index to read and an error message when the token is invalid. */
+function parseInvocationToken(
+	state: InvocationState,
+	argv: readonly string[],
+	index: number,
+): { nextIndex: number; error: string | null } {
+	const arg = argv[index];
+	const applyBoolean = INVOCATION_BOOLEAN_FLAGS.get(arg);
+	if (applyBoolean) {
+		applyBoolean(state);
+		state.usedFlags.add(arg);
+		return { nextIndex: index + 1, error: null };
+	}
+	if (INVOCATION_VALUE_FLAGS.has(arg)) {
+		state.usedFlags.add(arg);
+		const error = applyInvocationValueFlag(state, arg, argv[index + 1]);
+		return error ? { nextIndex: index, error } : { nextIndex: index + 2, error: null };
+	}
+	if (arg.startsWith("--")) {
+		return { nextIndex: index, error: `Unknown flag '${arg}'.` };
+	}
+	if (state.command === "") {
+		state.command = arg;
+	} else {
+		state.positionals.push(arg);
+	}
+	return { nextIndex: index + 1, error: null };
+}
+
+function disallowedInvocationFlag(command: string, usedFlags: ReadonlySet<string>): string | null {
+	// command is an attacker-controlled argv token, so `in` (which walks the
+	// prototype chain) would let e.g. "constructor" resolve to Object.
+	if (!Object.hasOwn(worktreeContracts, command)) return null;
+	const allowed = new Set(Object.keys(worktreeContracts[command as keyof typeof worktreeContracts].flags));
+	for (const flag of usedFlags) {
+		if (!allowed.has(flag)) return flag;
+	}
+	return null;
+}
+
 /**
  * Parse a diagnostic-stripped argv into a verb, positionals, and command flags.
  *
@@ -969,95 +1174,31 @@ export interface ParsedInvocation {
  * ```
  */
 export function parseInvocation(argv: readonly string[]): ParsedInvocation {
-	const positionals: string[] = [];
-	let force = false;
-	let forceRender = false;
-	let noInput = false;
-	let repoRoot: string | undefined;
-	let dryRun = false;
-	let track = false;
-	let pr: number | undefined;
-	let command = "";
-	const usedFlags = new Set<string>();
-	const fail = (message: string): ParsedInvocation => ({
-		command,
-		positionals,
-		force,
-		forceRender,
-		noInput,
-		repoRoot,
-		...(dryRun ? { dryRun } : {}),
-		...(track ? { track } : {}),
-		...(pr !== undefined ? { pr } : {}),
-		parseError: usageFailure("usage_error", message, "Review the command help and retry."),
-	});
-	for (let i = 0; i < argv.length; i += 1) {
-		const arg = argv[i];
-		if (arg === "--force") {
-			force = true;
-			usedFlags.add(arg);
-		} else if (arg === "--force-render") {
-			forceRender = true;
-			usedFlags.add(arg);
-		} else if (arg === "--no-input") {
-			noInput = true;
-			usedFlags.add(arg);
-		} else if (arg === "--dry-run") {
-			dryRun = true;
-			usedFlags.add(arg);
-		} else if (arg === "--track") {
-			track = true;
-			usedFlags.add(arg);
-		} else if (arg === "--json") {
-			// --json selects output mode; WorkTree always emits JSON envelopes.
-			usedFlags.add(arg);
-		} else if (arg === "--repo") {
-			usedFlags.add(arg);
-			const value = argv[i + 1];
-			if (!value || value.startsWith("--")) {
-				return fail("--repo needs a path value.");
-			}
-			repoRoot = value;
-			i += 1;
-		} else if (arg === "--pr") {
-			usedFlags.add(arg);
-			const value = argv[i + 1];
-			if (!value || value.startsWith("--")) {
-				return fail("--pr needs a positive integer.");
-			}
-			const parsedPr = Number.parseInt(value, 10);
-			if (!/^\d+$/.test(value) || parsedPr < 1) {
-				return fail("--pr needs a positive integer.");
-			}
-			pr = parsedPr;
-			i += 1;
-		} else if (arg.startsWith("--")) {
-			return fail(`Unknown flag '${arg}'.`);
-		} else if (command === "") {
-			command = arg;
-		} else {
-			positionals.push(arg);
-		}
-	}
-	if (command in worktreeContracts) {
-		const allowed = new Set(Object.keys(worktreeContracts[command as keyof typeof worktreeContracts].flags));
-		for (const flag of usedFlags) {
-			if (!allowed.has(flag)) {
-				return fail(`Flag '${flag}' is not accepted by worktree ${command}.`);
-			}
-		}
-	}
-	return {
-		command,
-		positionals,
-		force,
-		forceRender,
-		noInput,
-		repoRoot,
-		...(dryRun ? { dryRun } : {}),
-		...(track ? { track } : {}),
-		...(pr !== undefined ? { pr } : {}),
+	const state: InvocationState = {
+		command: "",
+		positionals: [],
+		force: false,
+		forceRender: false,
+		noInput: false,
+		repoRoot: undefined,
+		dryRun: false,
+		track: false,
+		pr: undefined,
+		usedFlags: new Set<string>(),
 	};
+	const fail = (message: string): ParsedInvocation =>
+		invocationResult(state, usageFailure("usage_error", message, "Review the command help and retry."));
+	let index = 0;
+	while (index < argv.length) {
+		const { nextIndex, error } = parseInvocationToken(state, argv, index);
+		if (error) return fail(error);
+		index = nextIndex;
+	}
+	const disallowedFlag = disallowedInvocationFlag(state.command, state.usedFlags);
+	if (disallowedFlag) {
+		return fail(`Flag '${disallowedFlag}' is not accepted by worktree ${state.command}.`);
+	}
+	return invocationResult(state);
 }
 
 async function runFocusCommand(
@@ -1479,10 +1620,12 @@ function renderFrontDoorUsage(): string {
 
 function renderHelpForArgv(argv: readonly string[]): string {
 	const helpTopic = argv[0] === "help" ? argv[1] : undefined;
-	const command = (helpTopic ?? argv.find((arg) => arg in worktreeContracts)) as
+	// argv tokens are attacker-controlled, so `in` (which walks the prototype
+	// chain) would let e.g. "constructor" resolve to Object.
+	const command = (helpTopic ?? argv.find((arg) => Object.hasOwn(worktreeContracts, arg))) as
 		| keyof typeof worktreeContracts
 		| undefined;
-	if (command && command in worktreeContracts) {
+	if (command && Object.hasOwn(worktreeContracts, command)) {
 		return renderCommandUsage(worktreeContracts[command]);
 	}
 	return renderFrontDoorUsage();

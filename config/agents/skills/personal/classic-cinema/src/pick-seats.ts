@@ -17,10 +17,10 @@
 //   1 — empty/invalid seatmap, or no adjacent run in any zone
 //   64 — invalid usage
 
-import { type SeatRow, type Seat } from "./cinema-api.ts";
+import type { SeatRow, Seat } from "./cinema-api.ts";
 
 const ZONES = ["front", "middle", "back", "surprise"] as const;
-type Zone = (typeof ZONES)[number];
+export type Zone = (typeof ZONES)[number];
 
 const HELP = `classic-cinema pick-seats — best adjacent seats in a zone
 
@@ -37,6 +37,11 @@ Output: comma-joined seat codes on stdout. Expansion note on stderr.
 Exit: 0 found, 1 none/invalid map, 64 invalid usage.`;
 
 type IndexedSeat = [number, string];
+
+export interface SeatSelection {
+	codes: string[];
+	zoneUsed: Zone;
+}
 
 async function loadSeatmap(path: string): Promise<SeatRow[]> {
 	const file = Bun.file(path);
@@ -109,11 +114,38 @@ const ZONE_EXPANSION: Record<Zone, Zone[]> = {
 	surprise: ["middle", "front", "back"],
 };
 
+function findBestRun(zoneRows: SeatRow[], count: number): IndexedSeat[] | null {
+	if (zoneRows.length === 0) return null;
+
+	// Prefer rows nearest the centre of the zone.
+	const zoneCenter = (zoneRows.length - 1) / 2;
+	const sortedRows = zoneRows
+		.map((row, idx) => ({ row, idx }))
+		.sort((a, b) => Math.abs(a.idx - zoneCenter) - Math.abs(b.idx - zoneCenter));
+
+	let bestRun: IndexedSeat[] | null = null;
+	let bestScore = Number.POSITIVE_INFINITY;
+
+	for (const { row } of sortedRows) {
+		const seats = availableSeats(row);
+		const totalSeats = (row.seats ?? []).length;
+		for (const run of findAdjacentRuns(seats, count)) {
+			const score = scoreRun(run, totalSeats);
+			if (score < bestScore) {
+				bestScore = score;
+				bestRun = run;
+			}
+		}
+	}
+
+	return bestRun;
+}
+
 export function pickSeats(
 	rows: SeatRow[],
 	zoneName: Zone,
 	count: number,
-): { codes: string[]; zoneUsed: Zone } | null {
+): SeatSelection | null {
 	const validRows = getValidRows(rows);
 	const { front, middle, back } = splitZones(validRows);
 	const zoneMap: Record<Zone, SeatRow[]> = {
@@ -125,29 +157,7 @@ export function pickSeats(
 
 	for (const tryZone of ZONE_EXPANSION[zoneName] ?? ["middle", "front", "back"]) {
 		const zoneRows = zoneMap[tryZone] ?? middle;
-		if (zoneRows.length === 0) continue;
-
-		// Prefer rows nearest the centre of the zone.
-		const zoneCenter = (zoneRows.length - 1) / 2;
-		const sortedRows = zoneRows
-			.map((row, idx) => ({ row, idx }))
-			.sort((a, b) => Math.abs(a.idx - zoneCenter) - Math.abs(b.idx - zoneCenter));
-
-		let bestRun: IndexedSeat[] | null = null;
-		let bestScore = Number.POSITIVE_INFINITY;
-
-		for (const { row } of sortedRows) {
-			const seats = availableSeats(row);
-			const totalSeats = (row.seats ?? []).length;
-			for (const run of findAdjacentRuns(seats, count)) {
-				const s = scoreRun(run, totalSeats);
-				if (s < bestScore) {
-					bestScore = s;
-					bestRun = run;
-				}
-			}
-		}
-
+		const bestRun = findBestRun(zoneRows, count);
 		if (bestRun) {
 			return { codes: bestRun.map((s) => s[1]), zoneUsed: tryZone };
 		}
@@ -156,44 +166,76 @@ export function pickSeats(
 	return null;
 }
 
-function parseArgs(argv: string[]): { seatmapFile: string; zone: Zone; count: number } {
-	let seatmapFile: string | null = null;
-	let zone: string | null = null;
-	let count: number | null = null;
-	for (let i = 0; i < argv.length; i++) {
-		const arg = argv[i];
-		if (arg === "-h" || arg === "--help") {
-			console.log(HELP);
-			process.exit(0);
-		} else if (arg === "--seatmap-file") {
-			seatmapFile = argv[++i] ?? "";
-		} else if (arg.startsWith("--seatmap-file=")) {
-			seatmapFile = arg.slice("--seatmap-file=".length);
-		} else if (arg === "--zone") {
-			zone = argv[++i] ?? "";
-		} else if (arg.startsWith("--zone=")) {
-			zone = arg.slice("--zone=".length);
-		} else if (arg === "--count") {
-			count = Number.parseInt(argv[++i] ?? "", 10);
-		} else if (arg.startsWith("--count=")) {
-			count = Number.parseInt(arg.slice("--count=".length), 10);
-		} else {
-			console.error(`Unknown argument: ${arg}`);
-			console.error(HELP);
-			process.exit(64);
-		}
-	}
+type PickSeatsArgs = { seatmapFile: string; zone: Zone; count: number };
+type PickSeatsRawArgs = { seatmapFile: string | null; zone: string | null; count: number | null };
+
+function exitWithHelp(): never {
+	console.log(HELP);
+	process.exit(0);
+}
+
+function exitWithUsageError(message: string): never {
+	console.error(message);
+	console.error(HELP);
+	process.exit(64);
+}
+
+function exitWithUnknownArg(arg: string): never {
+	console.error(`Unknown argument: ${arg}`);
+	console.error(HELP);
+	process.exit(64);
+}
+
+/** Read a `--flag value` or `--flag=value` token at `index`; null when `argv[index]` isn't this flag. */
+function readFlagArg(
+	argv: readonly string[],
+	index: number,
+	flag: string,
+): { value: string; consumed: number } | null {
+	if (argv[index] === `--${flag}`) return { value: argv[index + 1] ?? "", consumed: 2 };
+	const prefix = `--${flag}=`;
+	if (argv[index].startsWith(prefix)) return { value: argv[index].slice(prefix.length), consumed: 1 };
+	return null;
+}
+
+function validatePickSeatsArgs(raw: PickSeatsRawArgs): PickSeatsArgs {
+	const { seatmapFile, zone, count } = raw;
 	if (seatmapFile === null || zone === null || count === null || Number.isNaN(count)) {
-		console.error("Missing/invalid required --seatmap-file, --zone, --count");
-		console.error(HELP);
-		process.exit(64);
+		exitWithUsageError("Missing/invalid required --seatmap-file, --zone, --count");
 	}
 	if (!ZONES.includes(zone as Zone)) {
-		console.error(`Invalid --zone '${zone}' (choose: ${ZONES.join(", ")})`);
-		console.error(HELP);
-		process.exit(64);
+		exitWithUsageError(`Invalid --zone '${zone}' (choose: ${ZONES.join(", ")})`);
 	}
 	return { seatmapFile, zone: zone as Zone, count };
+}
+
+function parseArgs(argv: string[]): PickSeatsArgs {
+	const raw: PickSeatsRawArgs = { seatmapFile: null, zone: null, count: null };
+	let i = 0;
+	while (i < argv.length) {
+		const arg = argv[i];
+		if (arg === "-h" || arg === "--help") exitWithHelp();
+		const seatmapFlag = readFlagArg(argv, i, "seatmap-file");
+		if (seatmapFlag) {
+			raw.seatmapFile = seatmapFlag.value;
+			i += seatmapFlag.consumed;
+			continue;
+		}
+		const zoneFlag = readFlagArg(argv, i, "zone");
+		if (zoneFlag) {
+			raw.zone = zoneFlag.value;
+			i += zoneFlag.consumed;
+			continue;
+		}
+		const countFlag = readFlagArg(argv, i, "count");
+		if (countFlag) {
+			raw.count = Number.parseInt(countFlag.value, 10);
+			i += countFlag.consumed;
+			continue;
+		}
+		exitWithUnknownArg(arg);
+	}
+	return validatePickSeatsArgs(raw);
 }
 
 async function main(): Promise<void> {

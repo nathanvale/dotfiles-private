@@ -1,0 +1,58 @@
+{
+  "channel": "Unknown Channel",
+  "messageCount": 4,
+  "dateRange": {
+    "earliest": "2026-09-04",
+    "latest": "2026-09-04"
+  },
+  "messages": [
+    {
+      "id": "alice-smith-05092026800",
+      "author": "Alice Smith",
+      "timestamp": "05/09/2026 8:00 am",
+      "date": "05/09/2026",
+      "time": "8:00 am",
+      "content": "First message",
+      "isReply": false,
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "id": "bob-jones-05092026810",
+      "author": "Bob Jones",
+      "timestamp": "05/09/2026 8:10 am",
+      "date": "05/09/2026",
+      "time": "8:10 am",
+      "content": "Second message",
+      "isReply": false,
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "id": "bob-jones-05092026820",
+      "author": "Bob Jones",
+      "timestamp": "05/09/2026 8:20 am",
+      "date": "05/09/2026",
+      "time": "8:20 am",
+      "content": "Third message\nChat Bot\n05/09/2026 8:30 pm\nTrailing lines after an invalid author",
+      "isReply": false,
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    },
+    {
+      "id": "dave-brown-05092026850",
+      "author": "Dave Brown",
+      "timestamp": "05/09/2026 8:50 am",
+      "date": "05/09/2026",
+      "time": "8:50 am",
+      "content": "Last message",
+      "isReply": false,
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    }
+  ]
+}

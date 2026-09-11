@@ -1,0 +1,15 @@
+📄 Reading from file: input.txt
+📊 Captured 1271 characters
+🔍 Parsing messages...
+✅ Parsed 10 messages
+📅 Date range: 2026-09-03 to 2026-09-04
+📢 Channel: 🎯Product
+💾 Saved to: output.json
+
+📝 Sample messages:
+  [04/09/2026 9:00 am] Alice Smith: Can someone review the release notes before lunch?...
+  [04/09/2026 9:20 am] Bob Jones: On it, Alice Smith...
+    Reactions: 👍(1)
+  [04/09/2026 9:25 am] Alice Smith: Thanks!
+Review your praise history
+Dancing cat (GIF Image)...

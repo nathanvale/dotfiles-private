@@ -186,14 +186,40 @@ function projectRecord(input) {
     ...input.install_evidence === undefined ? {} : { install_evidence: { ...input.install_evidence } }
   };
 }
+function validLifecycleIdentities(input) {
+  const required = [input.record_identity, input.journey_identity, input.invocation_identity, input.producer_identity];
+  if (!required.every(isRecoveryIdentity))
+    return false;
+  const optional = [input.parent_record_identity, input.observed_worker_identity, input.inherited_parent_identity, input.ledger_task_identity];
+  if (optional.some((value) => value !== undefined && !isRecoveryIdentity(value)))
+    return false;
+  const workerIdentityPair = input.observed_worker_identity === undefined === (input.observed_worker_identity_source === undefined);
+  return workerIdentityPair && (input.observed_worker_identity_source === undefined || isMember(workerIdentitySources, input.observed_worker_identity_source));
+}
+function validLifecycleNumbers(input) {
+  if (!Number.isSafeInteger(input.producer_sequence) || input.producer_sequence < 0)
+    return false;
+  return input.duration_ms === undefined || typeof input.duration_ms === "number" && Number.isFinite(input.duration_ms) && input.duration_ms >= 0;
+}
+function validLifecycleKinds(input) {
+  return isMember(harnessKinds, input.harness_kind) && isMember(operations, input.operation) && isMember(phases, input.phase) && validIsoTimestamp(input.occurred_at) && isMember(outcomes, input.outcome);
+}
+function validLifecycleOutcome(input) {
+  const refusalPair = input.outcome === "refused" ? input.refusal_code !== undefined : input.refusal_code === undefined;
+  return refusalPair && (input.refusal_code === undefined || isMember(refusalCodes, input.refusal_code));
+}
+function validLifecycleEvidence(input) {
+  return (input.source_evidence === undefined || validSourceEvidence(input.source_evidence)) && (input.install_evidence === undefined || validInstallEvidence(input.install_evidence));
+}
+function validLifecycleValues(input) {
+  return input.schema_version === TRACE_SCHEMA_VERSION && input.record_type === "lifecycle" && validLifecycleIdentities(input) && validLifecycleNumbers(input) && validLifecycleKinds(input) && validLifecycleOutcome(input) && validLifecycleEvidence(input);
+}
 function validateLifecycleRecord(input, options = {}) {
   if (!isObject(input))
     return { accepted: false, refusal: "invalid-record" };
   if (!hasOnlyKeys(input, recordKeys))
     return { accepted: false, refusal: "unknown-field" };
-  const workerIdentityPair = input.observed_worker_identity === undefined === (input.observed_worker_identity_source === undefined);
-  const refusalPair = input.outcome === "refused" ? input.refusal_code !== undefined : input.refusal_code === undefined;
-  if (input.schema_version !== TRACE_SCHEMA_VERSION || input.record_type !== "lifecycle" || !isRecoveryIdentity(input.record_identity) || !isRecoveryIdentity(input.journey_identity) || !isRecoveryIdentity(input.invocation_identity) || !isRecoveryIdentity(input.producer_identity) || !Number.isSafeInteger(input.producer_sequence) || input.producer_sequence < 0 || input.parent_record_identity !== undefined && !isRecoveryIdentity(input.parent_record_identity) || input.observed_worker_identity !== undefined && !isRecoveryIdentity(input.observed_worker_identity) || !workerIdentityPair || input.observed_worker_identity_source !== undefined && !isMember(workerIdentitySources, input.observed_worker_identity_source) || input.inherited_parent_identity !== undefined && !isRecoveryIdentity(input.inherited_parent_identity) || input.ledger_task_identity !== undefined && !isRecoveryIdentity(input.ledger_task_identity) || !isMember(harnessKinds, input.harness_kind) || !isMember(operations, input.operation) || !isMember(phases, input.phase) || !validIsoTimestamp(input.occurred_at) || input.duration_ms !== undefined && (typeof input.duration_ms !== "number" || !Number.isFinite(input.duration_ms) || input.duration_ms < 0) || !isMember(outcomes, input.outcome) || !refusalPair || input.refusal_code !== undefined && !isMember(refusalCodes, input.refusal_code) || input.source_evidence !== undefined && !validSourceEvidence(input.source_evidence) || input.install_evidence !== undefined && !validInstallEvidence(input.install_evidence)) {
+  if (!validLifecycleValues(input)) {
     return { accepted: false, refusal: "invalid-value" };
   }
   if (containsKnownSecret(input, options.knownSecretValues ?? [])) {
@@ -378,7 +404,7 @@ function cleanupTraces(options = {}) {
   const maxTotalBytes = options.maxTotalBytes ?? DEFAULT_TRACE_MAX_TOTAL_BYTES;
   let removedFiles = 0;
   let removedBytes = 0;
-  let retained = files.filter((file) => {
+  const retained = files.filter((file) => {
     if (nowMs - file.mtimeMs <= maxAgeMs)
       return true;
     try {
@@ -3443,42 +3469,50 @@ async function forward(stream, output, onFirstWrite) {
     } catch {}
   }
 }
+function consumeLifecycleSegment(state, segment, terminated, decoder, accept, reportFailure) {
+  if (!state.discarding) {
+    if (state.pendingBytes + segment.length > MAX_SERIALIZED_RECORD_BYTES) {
+      state.discarding = true;
+      state.pendingBytes = 0;
+      reportFailure();
+    } else {
+      state.pending.set(segment, state.pendingBytes);
+      state.pendingBytes += segment.length;
+    }
+  }
+  if (!terminated || state.discarding)
+    return;
+  try {
+    accept(JSON.parse(decoder.decode(state.pending.subarray(0, state.pendingBytes))));
+  } catch {
+    reportFailure();
+  }
+}
+function consumeLifecycleChunk(chunk, state, decoder, accept, reportFailure) {
+  let offset = 0;
+  while (offset < chunk.length) {
+    const newline = chunk.indexOf(10, offset);
+    const end = newline < 0 ? chunk.length : newline;
+    consumeLifecycleSegment(state, chunk.subarray(offset, end), newline >= 0, decoder, accept, reportFailure);
+    if (newline < 0)
+      return;
+    state.pendingBytes = 0;
+    state.discarding = false;
+    offset = newline + 1;
+  }
+}
 async function consumeLifecycle(fd, accept, reportFailure) {
   const decoder = new TextDecoder;
-  const pending = new Uint8Array(MAX_SERIALIZED_RECORD_BYTES);
-  let pendingBytes = 0;
-  let discarding = false;
+  const state = {
+    pending: new Uint8Array(MAX_SERIALIZED_RECORD_BYTES),
+    pendingBytes: 0,
+    discarding: false
+  };
   try {
     for await (const chunk of Bun.file(fd).stream()) {
-      let offset = 0;
-      while (offset < chunk.length) {
-        const newline = chunk.indexOf(10, offset);
-        const end = newline < 0 ? chunk.length : newline;
-        if (!discarding) {
-          if (pendingBytes + end - offset > MAX_SERIALIZED_RECORD_BYTES) {
-            discarding = true;
-            pendingBytes = 0;
-            reportFailure();
-          } else {
-            pending.set(chunk.subarray(offset, end), pendingBytes);
-            pendingBytes += end - offset;
-          }
-        }
-        if (newline < 0)
-          break;
-        if (!discarding) {
-          try {
-            accept(JSON.parse(decoder.decode(pending.subarray(0, pendingBytes))));
-          } catch {
-            reportFailure();
-          }
-        }
-        pendingBytes = 0;
-        discarding = false;
-        offset = newline + 1;
-      }
+      consumeLifecycleChunk(chunk, state, decoder, accept, reportFailure);
     }
-    if (pendingBytes > 0 || discarding)
+    if (state.pendingBytes > 0 || state.discarding)
       reportFailure();
   } catch {
     reportFailure();

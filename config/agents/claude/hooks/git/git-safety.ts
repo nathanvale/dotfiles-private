@@ -78,6 +78,84 @@ export function getGitSafetyMode(
 	return 'strict'
 }
 
+/** One step of the `-C` scan: given the word at `i`, returns the possibly
+ * updated resolved cwd (only `-C <path>` changes it) and the index of the
+ * next word to examine. `--key=value` global options are consumed by the
+ * default one-word advance, same as any other unrecognized option. */
+function stepGitDashCOption(
+	words: string[],
+	i: number,
+	resolvedCwd: string | null,
+	fallbackCwd: string,
+): { resolvedCwd: string | null; nextIndex: number } {
+	const word = words[i] || ''
+	if (word === '-C' && i + 1 < words.length) {
+		const target = words[i + 1] || ''
+		return {
+			resolvedCwd: resolve(resolvedCwd ?? fallbackCwd, target),
+			nextIndex: i + 2,
+		}
+	}
+	// Skip other options-with-value (e.g. -c, --git-dir)
+	if (['-c', '--git-dir', '--work-tree', '--namespace'].includes(word)) {
+		return { resolvedCwd, nextIndex: i + 2 }
+	}
+	return { resolvedCwd, nextIndex: i + 1 }
+}
+
+/** Finds the `git` word in a segment already known to contain a git
+ * invocation, then walks its global options collecting `-C <path>` values
+ * (resolved left-to-right, each relative to the last). Returns the final
+ * resolved cwd, or null if no `-C` flag was present. */
+function findGitDashCCwd(segment: string, fallbackCwd: string): string | null {
+	const words = splitShellWords(segment)
+	const gitIdx = words.findIndex(
+		(word) => normalizeExecutableName(word || null) === 'git',
+	)
+	if (gitIdx === -1) return null
+
+	let resolvedCwd: string | null = null
+	let i = gitIdx + 1
+	while (i < words.length) {
+		const word = words[i] || ''
+		if (!word.startsWith('-') || word === '--') break // reached subcommand
+
+		const step = stepGitDashCOption(words, i, resolvedCwd, fallbackCwd)
+		resolvedCwd = step.resolvedCwd
+		i = step.nextIndex
+	}
+
+	return resolvedCwd
+}
+
+/** Finds a `cd <path>` segment that precedes a later segment containing a
+ * git invocation, mirroring how `cd /other/repo && git ...` changes the
+ * effective working directory for that git invocation. */
+function findCdTargetBeforeGit(
+	segments: string[],
+	fallbackCwd: string,
+): string | null {
+	for (let s = 0; s < segments.length; s++) {
+		const segment = segments[s] || ''
+		const words = splitShellWords(segment)
+		if (words.length < 2) continue
+
+		const head = words[0] || ''
+		if (head !== 'cd') continue
+
+		// The cd target is the last non-flag argument
+		const target = words[words.length - 1] || ''
+		if (target.startsWith('-')) continue
+
+		// Only use this if a later segment has a git invocation
+		const hasLaterGit = segments
+			.slice(s + 1)
+			.some((seg) => parseGitInvocation(seg) !== null)
+		if (hasLaterGit) return resolve(fallbackCwd, target)
+	}
+	return null
+}
+
 /**
  * Resolves the effective git working directory from a shell command.
  *
@@ -96,85 +174,13 @@ export function resolveEffectiveGitCwd(
 
 	// 1. Check for `git -C <path>` in the segment containing a commit-like invocation.
 	for (const segment of segments) {
-		const invocation = parseGitInvocation(segment)
-		if (!invocation) continue
-
-		const words = splitShellWords(segment)
-		// Find the `git` word
-		let gitIdx = -1
-		for (let i = 0; i < words.length; i++) {
-			if (normalizeExecutableName(words[i] || null) === 'git') {
-				gitIdx = i
-				break
-			}
-		}
-		if (gitIdx === -1) continue
-
-		// Walk from git to the subcommand, collecting -C values.
-		// Multiple -C flags are resolved left-to-right (each relative to the last).
-		let resolvedCwd: string | null = null
-		let i = gitIdx + 1
-		while (i < words.length) {
-			const word = words[i] || ''
-			if (!word.startsWith('-')) break // reached subcommand
-			if (word === '--') {
-				i++
-				break
-			}
-
-			if (word === '-C' && i + 1 < words.length) {
-				const target = words[i + 1] || ''
-				resolvedCwd = resolve(resolvedCwd ?? fallbackCwd, target)
-				i += 2
-				continue
-			}
-
-			// Skip other options-with-value (e.g. -c, --git-dir)
-			if (['-c', '--git-dir', '--work-tree', '--namespace'].includes(word)) {
-				i += 2
-				continue
-			}
-			// Skip --key=value style options
-			if (
-				word.startsWith('--git-dir=') ||
-				word.startsWith('--work-tree=') ||
-				word.startsWith('--namespace=') ||
-				word.startsWith('--super-prefix=') ||
-				word.startsWith('--config-env=')
-			) {
-				i++
-				continue
-			}
-
-			i++
-		}
-
+		if (!parseGitInvocation(segment)) continue
+		const resolvedCwd = findGitDashCCwd(segment, fallbackCwd)
 		if (resolvedCwd) return resolvedCwd
 	}
 
 	// 2. Check for `cd <path>` in a preceding segment.
-	for (let s = 0; s < segments.length; s++) {
-		const segment = segments[s] || ''
-		const words = splitShellWords(segment)
-		if (words.length < 2) continue
-
-		const head = words[0] || ''
-		if (head !== 'cd') continue
-
-		// The cd target is the last non-flag argument
-		const target = words[words.length - 1] || ''
-		if (target.startsWith('-')) continue
-
-		// Only use this if a later segment has a git invocation
-		const hasLaterGit = segments
-			.slice(s + 1)
-			.some((seg) => parseGitInvocation(seg) !== null)
-		if (hasLaterGit) {
-			return resolve(fallbackCwd, target)
-		}
-	}
-
-	return fallbackCwd
+	return findCdTargetBeforeGit(segments, fallbackCwd) ?? fallbackCwd
 }
 
 /**
@@ -221,21 +227,26 @@ function hasHereScriptRedirection(segment: string): boolean {
 	return /(^|[\s;|&])<<<?/.test(segment)
 }
 
+/** Keyed by an attacker-controlled command head, so this is a Map (not a
+ * plain object) for the same reason as `GIT_SUBCOMMAND_CHECKS`: a plain
+ * object would let e.g. `constructor -c "..."` resolve `flagMap.constructor`
+ * to `Object`, a truthy non-array value. */
+const INLINE_EXEC_FLAGS: ReadonlyMap<string, readonly string[]> = new Map([
+	['python', ['-c']],
+	['python3', ['-c']],
+	['node', ['-e', '--eval']],
+	['ruby', ['-e']],
+	['perl', ['-e']],
+	['php', ['-r']],
+	['lua', ['-e']],
+])
+
 function getInlineExecScript(
 	normalizedHead: string | null,
 	args: string[],
 ): string | null {
 	if (!normalizedHead) return null
-	const flagMap: Record<string, string[]> = {
-		python: ['-c'],
-		python3: ['-c'],
-		node: ['-e', '--eval'],
-		ruby: ['-e'],
-		perl: ['-e'],
-		php: ['-r'],
-		lua: ['-e'],
-	}
-	const flags = flagMap[normalizedHead]
+	const flags = INLINE_EXEC_FLAGS.get(normalizedHead)
 	if (!flags) return null
 	for (let i = 0; i < args.length; i++) {
 		const arg = args[i] || ''
@@ -409,424 +420,552 @@ function collectGitInvocations(segments: string[], depth = 0): GitInvocation[] {
 	return invocations
 }
 
+/** A safety finding for a single check; `null` means the check didn't fire. */
+type SafetyFinding = { blocked: true; reason: string } | null
+
+function checkPushSafety(args: string[]): SafetyFinding {
+	const hasForce = hasForceFlag(args)
+	const refspecArgs = getPushRefspecArgs(args)
+	const hasForceByRefspec = refspecArgs.some((arg) => arg.startsWith('+'))
+	const hasMirror = hasLongFlag(args, '--mirror')
+	const hasPrune = hasLongFlag(args, '--prune')
+	const hasForceWithLease =
+		hasLongFlag(args, '--force-with-lease') ||
+		args.some((a) => a.startsWith('--force-with-lease='))
+	const hasForceIfIncludes = hasLongFlag(args, '--force-if-includes')
+	const hasProtectedLeaseTarget = args
+		.filter((arg) => arg.startsWith('--force-with-lease='))
+		.map((arg) => arg.slice('--force-with-lease='.length))
+		.map((value) => value.split(':')[0] ?? '')
+		.some((target) => isProtectedBranchLike(target))
+
+	if (hasMirror) {
+		return {
+			blocked: true,
+			reason:
+				'git push --mirror can overwrite and delete remote refs destructively. Use explicit feature-branch pushes instead.',
+		}
+	}
+	if (hasPrune) {
+		return {
+			blocked: true,
+			reason:
+				'git push --prune can delete remote refs unexpectedly. Use explicit, reviewed branch deletion workflows instead.',
+		}
+	}
+	if (hasForce || hasForceByRefspec) {
+		return {
+			blocked: true,
+			reason:
+				'Force push can destroy remote history. Use --force-with-lease on a feature branch if you must.',
+		}
+	}
+	if (hasForceWithLease || hasForceIfIncludes) {
+		const targetsProtected = refspecArgs.some((arg) => {
+			const target = arg.includes(':') ? (arg.split(':').at(-1) ?? '') : arg
+			return isProtectedBranchRef(target)
+		})
+		if (targetsProtected || hasProtectedLeaseTarget) {
+			return {
+				blocked: true,
+				reason:
+					'Force push (even with --force-with-lease) to a protected branch can destroy shared history. Push to a feature branch and open a PR instead.',
+			}
+		}
+	}
+
+	// Block remote deletion of protected branches (plain or fully-qualified refs)
+	if (
+		hasLongFlag(args, '--delete') ||
+		hasShortFlag(args, 'd') ||
+		hasLongFlagPrefix(args, '--delete=')
+	) {
+		const deleteTargets = getPushDeleteTargets(args, refspecArgs).map((arg) =>
+			normalizeBranchRef(arg),
+		)
+		if (deleteTargets.some((target) => isProtectedBranchRef(target))) {
+			return {
+				blocked: true,
+				reason:
+					'Deleting protected remote branches is blocked. Push to feature branches and use PR workflows.',
+			}
+		}
+	}
+
+	// Also block deletion refspec form: git push origin :main / :refs/heads/main
+	const deletionTargets = refspecArgs
+		.filter((arg) => arg.startsWith(':'))
+		.map((arg) => normalizeBranchRef(arg.slice(1)))
+	if (deletionTargets.some((target) => isProtectedBranchRef(target))) {
+		return {
+			blocked: true,
+			reason:
+				'Deleting protected remote branches is blocked. Push to feature branches and use PR workflows.',
+		}
+	}
+
+	return null
+}
+
+function checkResetSafety(args: string[]): SafetyFinding {
+	if (args.includes('--hard')) {
+		return {
+			blocked: true,
+			reason: 'Hard reset destroys uncommitted changes permanently.',
+		}
+	}
+	if (args.includes('--merge')) {
+		return {
+			blocked: true,
+			reason:
+				'git reset --merge can lose uncommitted changes. Use `git merge --abort` to cleanly abort a merge.',
+		}
+	}
+	return null
+}
+
+function checkCleanSafety(args: string[]): SafetyFinding {
+	if (!hasForceFlag(args)) return null
+	return {
+		blocked: true,
+		reason: 'git clean -f permanently deletes untracked files.',
+	}
+}
+
+/** Covers both `git checkout .` and `git checkout <ref> [--] <path>`, which
+ * overwrite working-tree files without backup. */
+function checkCheckoutSafety(args: string[]): SafetyFinding {
+	if (args.includes('.')) {
+		return {
+			blocked: true,
+			reason: 'git checkout . discards all unstaged changes permanently.',
+		}
+	}
+	const sepIdx = args.indexOf('--')
+	if (sepIdx >= 0 && sepIdx < args.length - 1) {
+		return {
+			blocked: true,
+			reason:
+				'git checkout <ref> -- <path> overwrites files without backup. Use `git stash` to save changes first, or `git diff <ref> -- <path>` to review.',
+		}
+	}
+	// Block `git checkout <ref> <path>` (2+ non-flag args, no -b/-B)
+	// Allow: `git checkout branch-name`, `git checkout -b new base`
+	if (sepIdx < 0) {
+		const hasBranchCreate =
+			hasShortFlag(args, 'b') ||
+			hasShortFlag(args, 'B') ||
+			hasLongFlag(args, '--branch') ||
+			hasLongFlag(args, '-b') ||
+			hasLongFlag(args, '-B')
+		if (!hasBranchCreate) {
+			const nonFlagArgs = args.filter((a) => !a.startsWith('-'))
+			if (nonFlagArgs.length >= 2) {
+				return {
+					blocked: true,
+					reason:
+						'git checkout <ref> <path> overwrites files without backup. Use `git stash` to save changes first, or `git diff <ref> -- <path>` to review.',
+				}
+			}
+		}
+	}
+	return null
+}
+
+function checkRestoreSafety(args: string[]): SafetyFinding {
+	const hasStaged = hasLongFlag(args, '--staged') || hasShortFlag(args, 'S')
+	const hasSource = args.some((a) => a.startsWith('--source'))
+	const nonFlagArgs = args.filter(
+		(a) => !a.startsWith('-') && !a.startsWith('--'),
+	)
+	// Block `git restore .` (discards all unstaged changes)
+	if (args.includes('.')) {
+		return {
+			blocked: true,
+			reason: 'git restore . discards all unstaged changes permanently.',
+		}
+	}
+	// Block `git restore --source=<ref> <path>` (overwrites from ref)
+	if (hasSource && nonFlagArgs.length > 0) {
+		return {
+			blocked: true,
+			reason:
+				'git restore --source overwrites working tree files from another ref. Use `git diff` to review changes first.',
+		}
+	}
+	// Block `git restore <path>` without --staged (discards unstaged)
+	if (!hasStaged && !hasSource && nonFlagArgs.length > 0) {
+		return {
+			blocked: true,
+			reason:
+				'git restore <path> discards unstaged changes permanently. Use `git restore --staged <path>` to unstage, or `git stash` to save changes first.',
+		}
+	}
+	return null
+}
+
+/** Covers both `git branch -D` and `git branch --delete --force`. */
+function checkBranchSafety(args: string[]): SafetyFinding {
+	if (hasShortFlag(args, 'D')) {
+		return {
+			blocked: true,
+			reason: 'git branch -D force-deletes a branch even if not merged.',
+		}
+	}
+	if (
+		(hasLongFlag(args, '--delete') || hasShortFlag(args, 'd')) &&
+		hasForceFlag(args)
+	) {
+		return {
+			blocked: true,
+			reason:
+				'git branch --delete --force force-deletes a branch even if not merged.',
+		}
+	}
+	return null
+}
+
+function checkWorktreeSafety(args: string[]): SafetyFinding {
+	if ((args[0] === 'remove' || args[1] === 'remove') && hasForceFlag(args)) {
+		return {
+			blocked: true,
+			reason:
+				'Force-removing a worktree can destroy uncommitted work. Use `bunx @side-quest/git worktree delete` which checks status first.',
+		}
+	}
+	return null
+}
+
+/** Covers both `git stash drop` and `git stash clear`. */
+function checkStashSafety(args: string[]): SafetyFinding {
+	if (args[0] === 'drop') {
+		return {
+			blocked: true,
+			reason:
+				'git stash drop permanently deletes a stash entry. Use `git stash list` to review stashes first.',
+		}
+	}
+	if (args[0] === 'clear') {
+		return {
+			blocked: true,
+			reason:
+				'git stash clear destroys all stash entries permanently. Use `git stash list` to review first.',
+		}
+	}
+	return null
+}
+
+function checkFilterBranchSafety(): SafetyFinding {
+	return {
+		blocked: true,
+		reason:
+			'git filter-branch rewrites history destructively. Use safer migration tooling and backups first.',
+	}
+}
+
+function checkReflogSafety(args: string[]): SafetyFinding {
+	if (args[0] !== 'expire') return null
+	return {
+		blocked: true,
+		reason:
+			'git reflog expire can permanently remove recovery history. Avoid destructive reflog pruning in agent workflows.',
+	}
+}
+
+function checkUpdateRefSafety(args: string[]): SafetyFinding {
+	if (args[0] !== '-d' && !args.includes('--delete')) return null
+	return {
+		blocked: true,
+		reason:
+			'git update-ref -d/--delete can remove refs destructively. Use safer branch/tag workflows.',
+	}
+}
+
+function checkGcSafety(args: string[]): SafetyFinding {
+	if (!args.includes('--prune=now') && !args.includes('--prune=all')) {
+		return null
+	}
+	return {
+		blocked: true,
+		reason:
+			'git gc --prune=now/all permanently removes unreachable objects immediately. Use `git gc` without --prune=now to allow the default grace period.',
+	}
+}
+
+/** Extracts the command text passed to `--exec`/`-x`/`--exec=`, stripping
+ * surrounding quotes left by shell word splitting. Returns undefined when
+ * `arg` isn't one of those flags. */
+function extractRebaseExecCommand(
+	arg: string,
+	args: string[],
+	idx: number,
+): string | undefined {
+	if (arg === '--exec' || arg === '-x') return args[idx + 1]
+	if (!arg.startsWith('--exec=')) return undefined
+	let val = arg.slice('--exec='.length)
+	if (
+		val.length >= 2 &&
+		((val.startsWith('"') && val.endsWith('"')) ||
+			(val.startsWith("'") && val.endsWith("'")))
+	) {
+		val = val.slice(1, -1)
+	}
+	return val
+}
+
+function checkRebaseSafety(args: string[], depth: number): SafetyFinding {
+	for (let idx = 0; idx < args.length; idx++) {
+		const arg = args[idx] || ''
+		const execCmd = extractRebaseExecCommand(arg, args, idx)
+		if (!execCmd) continue
+		const execResult = checkCommandInternal(execCmd, depth + 1)
+		if (execResult.blocked) {
+			return {
+				blocked: true,
+				reason: `git rebase --exec runs a destructive command: ${execResult.reason}`,
+			}
+		}
+	}
+	return null
+}
+
+/** One safety check per git subcommand that can perform a destructive
+ * operation. Looked up by `parseGitInvocation`'s `subcommand` -- an
+ * attacker-controlled string (e.g. `git toString ...`) -- so this is a Map
+ * (not a plain object) so an unknown subcommand can never resolve to an
+ * inherited prototype property such as `toString`/`constructor`. A plain
+ * object here would let `GIT_SUBCOMMAND_CHECKS['toString']` resolve to
+ * `Object.prototype.toString`, which is truthy and not a real checker. */
+const GIT_SUBCOMMAND_CHECKS: ReadonlyMap<
+	string,
+	(args: string[], depth: number) => SafetyFinding
+> = new Map([
+	['push', checkPushSafety],
+	['reset', checkResetSafety],
+	['clean', checkCleanSafety],
+	['checkout', checkCheckoutSafety],
+	['restore', checkRestoreSafety],
+	['branch', checkBranchSafety],
+	['worktree', checkWorktreeSafety],
+	['stash', checkStashSafety],
+	['filter-branch', checkFilterBranchSafety],
+	['reflog', checkReflogSafety],
+	['update-ref', checkUpdateRefSafety],
+	['gc', checkGcSafety],
+	['rebase', checkRebaseSafety],
+])
+
+function checkInlineInterpreterExec(
+	normalizedHead: string | null,
+	args: string[],
+	segment: string,
+): SafetyFinding {
+	const inlineScript = getInlineExecScript(normalizedHead, args)
+	if (inlineScript !== null) {
+		return {
+			blocked: true,
+			reason:
+				'Inline interpreter execution (-c/-e/-r/--eval) cannot be safety-analyzed reliably. Use direct commands instead.',
+		}
+	}
+	if (
+		hasHereScriptRedirection(segment) &&
+		['python', 'python3', 'node', 'ruby', 'perl', 'php', 'lua'].includes(
+			normalizedHead ?? '',
+		)
+	) {
+		return {
+			blocked: true,
+			reason:
+				'Interpreter commands receiving heredoc/here-string input cannot be safety-analyzed reliably.',
+		}
+	}
+	return null
+}
+
+function checkXargsReplaceTemplate(
+	normalizedHead: string | null,
+	args: string[],
+	segment: string,
+): SafetyFinding {
+	if (normalizedHead !== 'xargs') return null
+	const hasReplaceTemplate = args.some(
+		(arg) =>
+			arg === '-I' ||
+			arg.startsWith('-I') ||
+			arg === '--replace' ||
+			arg.startsWith('--replace='),
+	)
+	if (!hasReplaceTemplate) return null
+	// With replacement templates, runtime stdin content becomes executable
+	// command text. If this fans into a shell wrapper, static analysis is
+	// not reliable, so fail closed.
+	const tail = extractWrappedShellCommand(segment)
+	const tailHead = tail
+		? normalizeExecutableName(getCommandWords(tail).head)
+		: null
+	if (tailHead && ['sh', 'bash', 'zsh', 'dash', 'ksh'].includes(tailHead)) {
+		return {
+			blocked: true,
+			reason:
+				'xargs replacement templates piped into shell commands cannot be safety-analyzed. Avoid xargs -I with sh/bash.',
+		}
+	}
+	return null
+}
+
+const STDIN_SHELL_HEADS = [
+	'sh',
+	'bash',
+	'zsh',
+	'dash',
+	'ksh',
+	'fish',
+	'pwsh',
+	'powershell',
+]
+
+function checkShellReadsStdin(
+	normalizedHead: string | null,
+	args: string[],
+	segment: string,
+): SafetyFinding {
+	if (!STDIN_SHELL_HEADS.includes(normalizedHead ?? '')) return null
+	const readsCommandsFromStdin =
+		args.length === 0 ||
+		args.includes('-s') ||
+		args.includes('--stdin') ||
+		hasHereScriptRedirection(segment)
+	if (!readsCommandsFromStdin) return null
+	return {
+		blocked: true,
+		reason:
+			'Shell commands reading script input from stdin cannot be safety-analyzed. Avoid piping commands into sh/bash.',
+	}
+}
+
+function checkFindDelete(
+	normalizedHead: string | null,
+	args: string[],
+): SafetyFinding {
+	if (normalizedHead !== 'find') return null
+	if (args.includes('-delete')) {
+		return {
+			blocked: true,
+			reason:
+				'find -delete permanently removes files. Use `find ... -print` first to review, then delete manually.',
+		}
+	}
+	for (let i = 0; i < args.length - 1; i++) {
+		if ((args[i] || '') !== '-exec') continue
+		const next = normalizeExecutableName(args[i + 1] || '')
+		if (next === 'rm') {
+			return {
+				blocked: true,
+				reason:
+					'find -exec rm permanently removes files. Use `find ... -print` first to review, then delete manually.',
+			}
+		}
+	}
+	return null
+}
+
+function checkRmWorktreeDeletion(
+	normalizedHead: string | null,
+	args: string[],
+): SafetyFinding {
+	if (normalizedHead !== 'rm') return null
+	const targetsWorktrees = args.some((arg) =>
+		/\.worktrees(?:[/\\]|$)/.test(arg),
+	)
+	if (!targetsWorktrees || !hasRecursiveForceRmArgs(args)) return null
+	return {
+		blocked: true,
+		reason:
+			'Deleting .worktrees/ directly bypasses git worktree cleanup. Use `bunx @side-quest/git worktree clean` instead.',
+	}
+}
+
+/** Checks a segment's head command against every non-git-specific safety
+ * rule (inline interpreter execution, xargs replacement templates, shells
+ * reading scripts from stdin, `find -delete`/`-exec rm`, `rm` targeting
+ * `.worktrees/`). Returns null when `cmdIndex` has no command word. */
+function checkNonGitSegmentSafety(
+	segment: string,
+	words: string[],
+	cmdIndex: number,
+	normalizedHead: string | null,
+): SafetyFinding {
+	if (cmdIndex < 0) return null
+	const args = words.slice(cmdIndex + 1)
+	return (
+		checkInlineInterpreterExec(normalizedHead, args, segment) ??
+		checkXargsReplaceTemplate(normalizedHead, args, segment) ??
+		checkShellReadsStdin(normalizedHead, args, segment) ??
+		checkFindDelete(normalizedHead, args) ??
+		checkRmWorktreeDeletion(normalizedHead, args)
+	)
+}
+
 /**
  * Checks pre-parsed segments for destructive operations. Called by
  * checkCommand (depth 0) and recursively by checkCommandInternal.
  */
+type CommandCheckResult = { blocked: boolean; reason?: string }
+
+/** Recursively checks a shell-wrapper's inner command (`sh -c "..."`, `eval
+ * ...`, etc). Returns null when the segment isn't a wrapper or the inner
+ * command wasn't blocked. */
+function checkWrappedCommandSafety(
+	segment: string,
+	depth: number,
+): CommandCheckResult | null {
+	const wrapped = extractWrappedShellCommand(segment)
+	if (!wrapped) return null
+	const result = checkCommandInternal(wrapped, depth + 1)
+	return result.blocked ? result : null
+}
+
+/** Recursively checks every `$(...)`/backtick command substitution embedded
+ * in a segment. Returns null when none of them were blocked. */
+function checkEmbeddedSubstitutionsSafety(
+	segment: string,
+	depth: number,
+): CommandCheckResult | null {
+	for (const nested of extractCommandSubstitutions(segment)) {
+		const result = checkCommandInternal(nested, depth + 1)
+		if (result.blocked) return result
+	}
+	return null
+}
+
+/** Looks up and runs the git-subcommand-specific safety check for a
+ * segment, if it parses as a git invocation with a known subcommand. */
+function checkGitInvocationSafety(
+	segment: string,
+	depth: number,
+): CommandCheckResult | null {
+	const gitInvocation = parseGitInvocation(segment)
+	if (!gitInvocation) return null
+	const checker = GIT_SUBCOMMAND_CHECKS.get(gitInvocation.subcommand)
+	return checker?.(gitInvocation.args, depth) ?? null
+}
+
 function checkParsedSegments(
 	segments: string[],
 	depth: number,
 ): { blocked: boolean; reason?: string } {
 	for (const segment of segments) {
-		const wrapped = extractWrappedShellCommand(segment)
-		if (wrapped) {
-			const wrappedResult = checkCommandInternal(wrapped, depth + 1)
-			if (wrappedResult.blocked) return wrappedResult
-		}
-
-		for (const nested of extractCommandSubstitutions(segment)) {
-			const nestedResult = checkCommandInternal(nested, depth + 1)
-			if (nestedResult.blocked) return nestedResult
-		}
-
-		const gitInvocation = parseGitInvocation(segment)
-
-		if (gitInvocation) {
-			const { subcommand, args } = gitInvocation
-
-			if (subcommand === 'push') {
-				const hasForce = hasForceFlag(args)
-				const hasForceByRefspec = getPushRefspecArgs(args).some((arg) =>
-					arg.startsWith('+'),
-				)
-				const hasMirror = hasLongFlag(args, '--mirror')
-				const hasPrune = hasLongFlag(args, '--prune')
-				const hasForceWithLease =
-					hasLongFlag(args, '--force-with-lease') ||
-					args.some((a) => a.startsWith('--force-with-lease='))
-				const hasForceIfIncludes = hasLongFlag(args, '--force-if-includes')
-				const refspecArgs = getPushRefspecArgs(args)
-				const hasProtectedLeaseTarget = args
-					.filter((arg) => arg.startsWith('--force-with-lease='))
-					.map((arg) => arg.slice('--force-with-lease='.length))
-					.map((value) => value.split(':')[0] ?? '')
-					.some((target) => isProtectedBranchLike(target))
-				if (hasMirror) {
-					return {
-						blocked: true,
-						reason:
-							'git push --mirror can overwrite and delete remote refs destructively. Use explicit feature-branch pushes instead.',
-					}
-				}
-				if (hasPrune) {
-					return {
-						blocked: true,
-						reason:
-							'git push --prune can delete remote refs unexpectedly. Use explicit, reviewed branch deletion workflows instead.',
-					}
-				}
-				if (hasForce || hasForceByRefspec) {
-					return {
-						blocked: true,
-						reason:
-							'Force push can destroy remote history. Use --force-with-lease on a feature branch if you must.',
-					}
-				}
-				if (hasForceWithLease || hasForceIfIncludes) {
-					const targetsProtected = refspecArgs.some((arg) => {
-						const target = arg.includes(':')
-							? (arg.split(':').at(-1) ?? '')
-							: arg
-						return isProtectedBranchRef(target)
-					})
-					if (targetsProtected || hasProtectedLeaseTarget) {
-						return {
-							blocked: true,
-							reason:
-								'Force push (even with --force-with-lease) to a protected branch can destroy shared history. Push to a feature branch and open a PR instead.',
-						}
-					}
-				}
-
-				// Block remote deletion of protected branches (plain or fully-qualified refs)
-				if (
-					hasLongFlag(args, '--delete') ||
-					hasShortFlag(args, 'd') ||
-					hasLongFlagPrefix(args, '--delete=')
-				) {
-					const deleteTargets = getPushDeleteTargets(args, refspecArgs).map(
-						(arg) => normalizeBranchRef(arg),
-					)
-					if (deleteTargets.some((target) => isProtectedBranchRef(target))) {
-						return {
-							blocked: true,
-							reason:
-								'Deleting protected remote branches is blocked. Push to feature branches and use PR workflows.',
-						}
-					}
-				}
-
-				// Also block deletion refspec form: git push origin :main / :refs/heads/main
-				const deletionTargets = refspecArgs
-					.filter((arg) => arg.startsWith(':'))
-					.map((arg) => normalizeBranchRef(arg.slice(1)))
-				if (deletionTargets.some((target) => isProtectedBranchRef(target))) {
-					return {
-						blocked: true,
-						reason:
-							'Deleting protected remote branches is blocked. Push to feature branches and use PR workflows.',
-					}
-				}
-			}
-			if (subcommand === 'reset' && args.includes('--hard')) {
-				return {
-					blocked: true,
-					reason: 'Hard reset destroys uncommitted changes permanently.',
-				}
-			}
-			if (subcommand === 'reset' && args.includes('--merge')) {
-				return {
-					blocked: true,
-					reason:
-						'git reset --merge can lose uncommitted changes. Use `git merge --abort` to cleanly abort a merge.',
-				}
-			}
-			if (subcommand === 'clean' && hasForceFlag(args)) {
-				return {
-					blocked: true,
-					reason: 'git clean -f permanently deletes untracked files.',
-				}
-			}
-			if (subcommand === 'checkout' && args.includes('.')) {
-				return {
-					blocked: true,
-					reason: 'git checkout . discards all unstaged changes permanently.',
-				}
-			}
-			if (subcommand === 'restore') {
-				const hasStaged =
-					hasLongFlag(args, '--staged') || hasShortFlag(args, 'S')
-				const hasSource = args.some((a) => a.startsWith('--source'))
-				const nonFlagArgs = args.filter(
-					(a) => !a.startsWith('-') && !a.startsWith('--'),
-				)
-				// Block `git restore .` (discards all unstaged changes)
-				if (args.includes('.')) {
-					return {
-						blocked: true,
-						reason: 'git restore . discards all unstaged changes permanently.',
-					}
-				}
-				// Block `git restore --source=<ref> <path>` (overwrites from ref)
-				if (hasSource && nonFlagArgs.length > 0) {
-					return {
-						blocked: true,
-						reason:
-							'git restore --source overwrites working tree files from another ref. Use `git diff` to review changes first.',
-					}
-				}
-				// Block `git restore <path>` without --staged (discards unstaged)
-				if (!hasStaged && !hasSource && nonFlagArgs.length > 0) {
-					return {
-						blocked: true,
-						reason:
-							'git restore <path> discards unstaged changes permanently. Use `git restore --staged <path>` to unstage, or `git stash` to save changes first.',
-					}
-				}
-			}
-			if (subcommand === 'branch' && hasShortFlag(args, 'D')) {
-				return {
-					blocked: true,
-					reason: 'git branch -D force-deletes a branch even if not merged.',
-				}
-			}
-			if (
-				subcommand === 'branch' &&
-				(hasLongFlag(args, '--delete') || hasShortFlag(args, 'd')) &&
-				hasForceFlag(args)
-			) {
-				return {
-					blocked: true,
-					reason:
-						'git branch --delete --force force-deletes a branch even if not merged.',
-				}
-			}
-			if (
-				subcommand === 'worktree' &&
-				(args[0] === 'remove' || args[1] === 'remove') &&
-				hasForceFlag(args)
-			) {
-				return {
-					blocked: true,
-					reason:
-						'Force-removing a worktree can destroy uncommitted work. Use `bunx @side-quest/git worktree delete` which checks status first.',
-				}
-			}
-			if (subcommand === 'stash' && args[0] === 'drop') {
-				return {
-					blocked: true,
-					reason:
-						'git stash drop permanently deletes a stash entry. Use `git stash list` to review stashes first.',
-				}
-			}
-			if (subcommand === 'stash' && args[0] === 'clear') {
-				return {
-					blocked: true,
-					reason:
-						'git stash clear destroys all stash entries permanently. Use `git stash list` to review first.',
-				}
-			}
-			if (subcommand === 'filter-branch') {
-				return {
-					blocked: true,
-					reason:
-						'git filter-branch rewrites history destructively. Use safer migration tooling and backups first.',
-				}
-			}
-			if (subcommand === 'reflog' && args[0] === 'expire') {
-				return {
-					blocked: true,
-					reason:
-						'git reflog expire can permanently remove recovery history. Avoid destructive reflog pruning in agent workflows.',
-				}
-			}
-			if (
-				subcommand === 'update-ref' &&
-				(args[0] === '-d' || args.includes('--delete'))
-			) {
-				return {
-					blocked: true,
-					reason:
-						'git update-ref -d/--delete can remove refs destructively. Use safer branch/tag workflows.',
-				}
-			}
-			if (
-				subcommand === 'gc' &&
-				(args.includes('--prune=now') || args.includes('--prune=all'))
-			) {
-				return {
-					blocked: true,
-					reason:
-						'git gc --prune=now/all permanently removes unreachable objects immediately. Use `git gc` without --prune=now to allow the default grace period.',
-				}
-			}
-			if (subcommand === 'rebase') {
-				for (let idx = 0; idx < args.length; idx++) {
-					const arg = args[idx] || ''
-					let execCmd: string | undefined
-					if (arg === '--exec' || arg === '-x') {
-						execCmd = args[idx + 1]
-					} else if (arg.startsWith('--exec=')) {
-						let val = arg.slice('--exec='.length)
-						// Strip surrounding quotes left by shell word splitting
-						if (
-							val.length >= 2 &&
-							((val.startsWith('"') && val.endsWith('"')) ||
-								(val.startsWith("'") && val.endsWith("'")))
-						) {
-							val = val.slice(1, -1)
-						}
-						execCmd = val
-					}
-					if (execCmd) {
-						const execResult = checkCommandInternal(execCmd, depth + 1)
-						if (execResult.blocked) {
-							return {
-								blocked: true,
-								reason: `git rebase --exec runs a destructive command: ${execResult.reason}`,
-							}
-						}
-					}
-				}
-			}
-			if (subcommand === 'checkout') {
-				const sepIdx = args.indexOf('--')
-				if (sepIdx >= 0 && sepIdx < args.length - 1) {
-					return {
-						blocked: true,
-						reason:
-							'git checkout <ref> -- <path> overwrites files without backup. Use `git stash` to save changes first, or `git diff <ref> -- <path>` to review.',
-					}
-				}
-				// Block `git checkout <ref> <path>` (2+ non-flag args, no -b/-B)
-				// Allow: `git checkout branch-name`, `git checkout -b new base`
-				if (sepIdx < 0) {
-					const hasBranchCreate =
-						hasShortFlag(args, 'b') ||
-						hasShortFlag(args, 'B') ||
-						hasLongFlag(args, '--branch') ||
-						hasLongFlag(args, '-b') ||
-						hasLongFlag(args, '-B')
-					if (!hasBranchCreate) {
-						const nonFlagArgs = args.filter((a) => !a.startsWith('-'))
-						if (nonFlagArgs.length >= 2) {
-							return {
-								blocked: true,
-								reason:
-									'git checkout <ref> <path> overwrites files without backup. Use `git stash` to save changes first, or `git diff <ref> -- <path>` to review.',
-							}
-						}
-					}
-				}
-			}
-		}
-
 		const { words, cmdIndex, head } = getCommandWords(segment)
 		const normalizedHead = normalizeExecutableName(head)
-		if (cmdIndex >= 0) {
-			const args = words.slice(cmdIndex + 1)
-			const inlineScript = getInlineExecScript(normalizedHead, args)
-			if (inlineScript !== null) {
-				return {
-					blocked: true,
-					reason:
-						'Inline interpreter execution (-c/-e/-r/--eval) cannot be safety-analyzed reliably. Use direct commands instead.',
-				}
-			}
-			if (
-				hasHereScriptRedirection(segment) &&
-				['python', 'python3', 'node', 'ruby', 'perl', 'php', 'lua'].includes(
-					normalizedHead ?? '',
-				)
-			) {
-				return {
-					blocked: true,
-					reason:
-						'Interpreter commands receiving heredoc/here-string input cannot be safety-analyzed reliably.',
-				}
-			}
-		}
-		if (normalizedHead === 'xargs' && cmdIndex >= 0) {
-			const args = words.slice(cmdIndex + 1)
-			const hasReplaceTemplate = args.some(
-				(arg) =>
-					arg === '-I' ||
-					arg.startsWith('-I') ||
-					arg === '--replace' ||
-					arg.startsWith('--replace='),
-			)
-			if (hasReplaceTemplate) {
-				// With replacement templates, runtime stdin content becomes executable
-				// command text. If this fans into a shell wrapper, static analysis is
-				// not reliable, so fail closed.
-				const tail = extractWrappedShellCommand(segment)
-				const tailHead = tail
-					? normalizeExecutableName(getCommandWords(tail).head)
-					: null
-				if (
-					tailHead &&
-					['sh', 'bash', 'zsh', 'dash', 'ksh'].includes(tailHead)
-				) {
-					return {
-						blocked: true,
-						reason:
-							'xargs replacement templates piped into shell commands cannot be safety-analyzed. Avoid xargs -I with sh/bash.',
-					}
-				}
-			}
-		}
-		if (
-			cmdIndex >= 0 &&
-			[
-				'sh',
-				'bash',
-				'zsh',
-				'dash',
-				'ksh',
-				'fish',
-				'pwsh',
-				'powershell',
-			].includes(normalizedHead ?? '')
-		) {
-			const args = words.slice(cmdIndex + 1)
-			const readsCommandsFromStdin =
-				args.length === 0 ||
-				args.includes('-s') ||
-				args.includes('--stdin') ||
-				hasHereScriptRedirection(segment)
-			if (readsCommandsFromStdin) {
-				return {
-					blocked: true,
-					reason:
-						'Shell commands reading script input from stdin cannot be safety-analyzed. Avoid piping commands into sh/bash.',
-				}
-			}
-		}
-		if (normalizedHead === 'find' && cmdIndex >= 0) {
-			const args = words.slice(cmdIndex + 1)
-			if (args.includes('-delete')) {
-				return {
-					blocked: true,
-					reason:
-						'find -delete permanently removes files. Use `find ... -print` first to review, then delete manually.',
-				}
-			}
-			for (let i = 0; i < args.length - 1; i++) {
-				if ((args[i] || '') !== '-exec') continue
-				const next = normalizeExecutableName(args[i + 1] || '')
-				if (next === 'rm') {
-					return {
-						blocked: true,
-						reason:
-							'find -exec rm permanently removes files. Use `find ... -print` first to review, then delete manually.',
-					}
-				}
-			}
-		}
 
-		if (normalizedHead === 'rm' && cmdIndex >= 0) {
-			const args = words.slice(cmdIndex + 1)
-			const targetsWorktrees = args.some((arg) =>
-				/\.worktrees(?:[/\\]|$)/.test(arg),
-			)
-			if (targetsWorktrees && hasRecursiveForceRmArgs(args)) {
-				return {
-					blocked: true,
-					reason:
-						'Deleting .worktrees/ directly bypasses git worktree cleanup. Use `bunx @side-quest/git worktree clean` instead.',
-				}
-			}
-		}
+		const result =
+			checkWrappedCommandSafety(segment, depth) ??
+			checkEmbeddedSubstitutionsSafety(segment, depth) ??
+			checkGitInvocationSafety(segment, depth) ??
+			checkNonGitSegmentSafety(segment, words, cmdIndex, normalizedHead)
+
+		if (result) return result
 	}
 	return { blocked: false }
 }

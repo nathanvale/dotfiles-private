@@ -6,7 +6,7 @@
 import { dirname, join } from "node:path";
 import { bookingLogPath, scanLog } from "./booking-log.ts";
 
-export const SKILL_ROOT = join(dirname(Bun.fileURLToPath(import.meta.url)), "..");
+const SKILL_ROOT = join(dirname(Bun.fileURLToPath(import.meta.url)), "..");
 const DOTFILES_ROOT = join(SKILL_ROOT, "..", "..", "..", "..", "..");
 
 const COMMANDS = [

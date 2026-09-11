@@ -1,0 +1,7 @@
+📄 Reading from file: input.txt
+📊 Captured 59 characters
+🔍 Parsing messages...
+✅ Parsed 0 messages
+📅 Date range:  to 
+📢 Channel: Unknown Channel
+💾 Saved to: output.json

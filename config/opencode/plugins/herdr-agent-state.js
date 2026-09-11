@@ -22,6 +22,18 @@ const CHILD_EVENT_STATES = new Map([
   ["question.replied", "working"],
   ["question.rejected", "working"],
 ]);
+const EVENT_STATE_BY_TYPE = new Map([
+  ["tool.execute.before", "working"],
+  ["tool.execute.after", "working"],
+  ["permission.replied", "working"],
+  ["question.replied", "working"],
+  ["question.rejected", "working"],
+  ["session.compacted", "working"],
+  ["permission.asked", "blocked"],
+  ["question.asked", "blocked"],
+  ["session.error", "blocked"],
+  ["session.idle", "idle"],
+]);
 
 function nextReportSeq() {
   reportSeq += 1;
@@ -50,6 +62,70 @@ function stateFromSessionStatus(status) {
   return typeof kind === "string"
     ? SESSION_STATE_BY_STATUS.get(kind.toLowerCase())
     : undefined;
+}
+
+function rememberChildSession(properties) {
+  const info = properties.info;
+  if (info?.id && info.parentID) {
+    childSessions.set(info.id, info.parentID);
+  }
+}
+
+function rootSessionIDFor(sessionID) {
+  if (!sessionID || !childSessions.has(sessionID)) {
+    return undefined;
+  }
+
+  let rootSessionID = sessionID;
+  while (childSessions.has(rootSessionID)) {
+    rootSessionID = childSessions.get(rootSessionID);
+  }
+  return rootSessionID;
+}
+
+async function handleChildEvent(type, sessionID) {
+  const rootSessionID = rootSessionIDFor(sessionID);
+  if (!rootSessionID) {
+    return false;
+  }
+
+  const state = CHILD_EVENT_STATES.get(type);
+  if (state) {
+    await reportState(state, rootSessionID);
+  }
+  return true;
+}
+
+async function handleSessionEvent(type, properties, sessionID) {
+  if (type === "session.created") {
+    // Creation is server-global, so an attached client may own it. The
+    // TUI plugin separately reports the root selected in this pane.
+    reportedRootSessionID = sessionID;
+    return;
+  }
+
+  if (type === "session.updated") {
+    if (!sessionID || sessionID === reportedRootSessionID) {
+      return;
+    }
+    await reportSession(sessionID);
+    return;
+  }
+
+  if (type === "session.status") {
+    const state = stateFromSessionStatus(properties.status);
+    if (state) {
+      await reportState(state, sessionID);
+      return;
+    }
+    await reportSession(sessionID);
+    return;
+  }
+
+  const state = EVENT_STATE_BY_TYPE.get(type);
+  if (state) {
+    await reportState(state, sessionID);
+  }
 }
 
 function request(method, params) {
@@ -139,63 +215,12 @@ export const HerdrAgentStatePlugin = async () => {
       const properties = event?.properties ?? {};
       const sessionID = sessionIDFromProperties(properties);
 
-      const info = properties.info;
-      if (info?.id && info.parentID) {
-        childSessions.set(info.id, info.parentID);
-      }
-      if (sessionID && childSessions.has(sessionID)) {
-        const state = CHILD_EVENT_STATES.get(type);
-        if (state) {
-          let rootSessionID = sessionID;
-          while (childSessions.has(rootSessionID)) {
-            rootSessionID = childSessions.get(rootSessionID);
-          }
-          await reportState(state, rootSessionID);
-        }
+      rememberChildSession(properties);
+      if (await handleChildEvent(type, sessionID)) {
         return;
       }
 
-      switch (type) {
-        case "session.created":
-          // Creation is server-global, so an attached client may own it. The
-          // TUI plugin separately reports the root selected in this pane.
-          reportedRootSessionID = sessionID;
-          break;
-        case "session.updated":
-          if (sessionID && sessionID !== reportedRootSessionID) {
-            await reportSession(sessionID);
-          }
-          break;
-        case "session.status": {
-          const state = stateFromSessionStatus(properties.status);
-          if (state) {
-            await reportState(state, sessionID);
-          } else {
-            await reportSession(sessionID);
-          }
-          break;
-        }
-        case "tool.execute.before":
-        case "tool.execute.after":
-        case "permission.replied":
-        case "question.replied":
-        case "question.rejected":
-        case "session.compacted":
-          await reportState("working", sessionID);
-          break;
-        case "permission.asked":
-        case "question.asked":
-        case "session.error":
-          await reportState("blocked", sessionID);
-          break;
-        case "session.idle":
-          await reportState("idle", sessionID);
-          break;
-        case "session.deleted":
-          break;
-        default:
-          break;
-      }
+      await handleSessionEvent(type, properties, sessionID);
     },
   };
 };

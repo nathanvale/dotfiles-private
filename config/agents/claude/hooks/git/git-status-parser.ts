@@ -15,6 +15,37 @@ export interface FileStatusCounts {
 	untracked: number
 }
 
+function parseBranchHeader(lines: string[]): string | null {
+	const branchLine = lines.find((line) => line.startsWith('##'))
+	if (!branchLine) {
+		return null
+	}
+
+	const header = branchLine.slice(3).trim()
+	if (header.startsWith('No commits yet on ')) {
+		return header.slice('No commits yet on '.length).trim() || null
+	}
+
+	const parsed = header.split('...')[0]
+	return parsed ? parsed.trim() : null
+}
+
+function classifyStatusCode(code: string): {
+	staged: boolean
+	modified: boolean
+	untracked: boolean
+} {
+	if (code.startsWith('?') || code === '??') {
+		return { staged: false, modified: false, untracked: true }
+	}
+
+	return {
+		staged: code[0] !== ' ' && code[0] !== '?',
+		modified: code[1] !== ' ' && code[1] !== '?',
+		untracked: false,
+	}
+}
+
 /**
  * Parse `git status --porcelain [-b]` output into file status counts
  * and an optional branch name (present only when `-b` flag was used).
@@ -24,19 +55,7 @@ export function parsePorcelainStatus(output: string): {
 	counts: FileStatusCounts
 } {
 	const lines = output.split('\n')
-	const branchLine = lines.find((line) => line.startsWith('##'))
-	let branch: string | null = null
-	if (branchLine) {
-		const header = branchLine.slice(3).trim()
-		if (header.startsWith('No commits yet on ')) {
-			branch = header.slice('No commits yet on '.length).trim() || null
-		} else {
-			const parsed = header.split('...')[0]
-			if (parsed) {
-				branch = parsed.trim()
-			}
-		}
-	}
+	const branch = parseBranchHeader(lines)
 
 	let staged = 0
 	let modified = 0
@@ -47,18 +66,10 @@ export function parsePorcelainStatus(output: string): {
 			continue
 		}
 
-		const code = line.slice(0, 2)
-		if (code.startsWith('?') || code === '??') {
-			untracked++
-			continue
-		}
-
-		if (code[0] !== ' ' && code[0] !== '?') {
-			staged++
-		}
-		if (code[1] !== ' ' && code[1] !== '?') {
-			modified++
-		}
+		const status = classifyStatusCode(line.slice(0, 2))
+		staged += Number(status.staged)
+		modified += Number(status.modified)
+		untracked += Number(status.untracked)
 	}
 
 	return { branch, counts: { staged, modified, untracked } }

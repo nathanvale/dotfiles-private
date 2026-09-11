@@ -81,7 +81,7 @@ type ParsedRunnerCommand =
 			bunArgs: string[];
 	  };
 
-type ProcessResult = {
+export type ProcessResult = {
 	exitCode: number;
 	stdout: string;
 	stderr: string;
@@ -89,7 +89,7 @@ type ProcessResult = {
 	wallTimeMs: number;
 };
 
-export type TestRunnerFailure = {
+type TestRunnerFailure = {
 	failure_id: string;
 	file: string | null;
 	line: number | null;
@@ -104,7 +104,7 @@ export type TestRunnerFailure = {
 	detail_handle: string | null;
 };
 
-export type TestRunnerDiagnostic = {
+type TestRunnerDiagnostic = {
 	code: TestRunnerDiagnosticCode | "bun_tests_failed";
 	message: string;
 	cause: string;
@@ -112,20 +112,20 @@ export type TestRunnerDiagnostic = {
 	next_action: string;
 };
 
-export type TestRunnerCoverageFile = {
+type TestRunnerCoverageFile = {
 	file: string;
 	functions_percent: number | null;
 	lines_percent: number | null;
 	uncovered_lines: string | null;
 };
 
-export type TestRunnerCoverage = {
+type TestRunnerCoverage = {
 	functions_percent: number | null;
 	lines_percent: number | null;
 	files: TestRunnerCoverageFile[];
 };
 
-export type TestRunnerResult = {
+type TestRunnerResult = {
 	action:
 		| "tests_passed"
 		| "tests_failed"
@@ -162,7 +162,7 @@ export type TestRunnerResult = {
 	};
 };
 
-export type TestRunnerDetail = {
+type TestRunnerDetail = {
 	handle: string;
 	run_id: string;
 	failure_id: string;
@@ -236,7 +236,7 @@ export function createDefaultTestRunnerRuntime(
 	};
 }
 
-export async function runTestRunnerCli(
+async function runTestRunnerCli(
 	argv: readonly string[],
 	options: {
 		runtime?: TestRunnerRuntime;
@@ -734,6 +734,144 @@ async function runBunTestProcess(input: {
 	}
 }
 
+type RunnerFlagsState = {
+	outputMode: OutputMode;
+	cwd: string;
+	timeoutMs: number;
+	debugOutput: boolean;
+	runMode: TestRunnerRunMode;
+	handle: string | null;
+};
+
+/** Apply a flag that matches exactly (optionally consuming the next argv token); null when `args[index]` isn't one of these. */
+function applyExactRunnerFlag(
+	state: RunnerFlagsState,
+	args: readonly string[],
+	index: number,
+): number | null {
+	switch (args[index]) {
+		case "--json":
+			state.outputMode = "json";
+			return index + 1;
+		case "--plain":
+			state.outputMode = "plain";
+			return index + 1;
+		case "--format":
+			state.outputMode = parseOutputFormat(requireNext(args, index, "--format"));
+			return index + 2;
+		case "--debug-output":
+			state.debugOutput = true;
+			return index + 1;
+		case "--mode":
+			state.runMode = parseRunMode(requireNext(args, index, "--mode"));
+			return index + 2;
+		case "--handle":
+			state.handle = requireNext(args, index, "--handle");
+			return index + 2;
+		case "--cwd":
+			state.cwd = requireNext(args, index, "--cwd");
+			return index + 2;
+		case "--timeout-ms":
+			state.timeoutMs = parseTimeoutMs(requireNext(args, index, "--timeout-ms"));
+			return index + 2;
+		default:
+			return null;
+	}
+}
+
+/** Apply a `--flag=value` token; returns false when `arg` doesn't match one of these. */
+function applyInlineRunnerFlag(state: RunnerFlagsState, arg: string): boolean {
+	if (arg.startsWith("--cwd=")) {
+		state.cwd = requireInlineValue(arg, "--cwd");
+	} else if (arg.startsWith("--timeout-ms=")) {
+		state.timeoutMs = parseTimeoutMs(requireInlineValue(arg, "--timeout-ms"));
+	} else if (arg.startsWith("--mode=")) {
+		state.runMode = parseRunMode(requireInlineValue(arg, "--mode"));
+	} else if (arg.startsWith("--format=")) {
+		state.outputMode = parseOutputFormat(requireInlineValue(arg, "--format"));
+	} else if (arg.startsWith("--handle=")) {
+		state.handle = requireInlineValue(arg, "--handle");
+	} else {
+		return false;
+	}
+	return true;
+}
+
+function parseRunnerFlags(args: readonly string[], defaultCwd: string): RunnerFlagsState {
+	const state: RunnerFlagsState = {
+		outputMode: "plain",
+		cwd: defaultCwd,
+		timeoutMs: DEFAULT_TIMEOUT_MS,
+		debugOutput: false,
+		runMode: "compact",
+		handle: null,
+	};
+	let index = 0;
+	while (index < args.length) {
+		const nextIndex = applyExactRunnerFlag(state, args, index);
+		if (nextIndex !== null) {
+			index = nextIndex;
+			continue;
+		}
+		const arg = args[index];
+		if (applyInlineRunnerFlag(state, arg)) {
+			index += 1;
+			continue;
+		}
+		if (arg.startsWith("-")) throw usageError(`unknown option: ${arg}`);
+		throw usageError(`unexpected runner argument: ${arg}. Pass test args after --.`);
+	}
+	return state;
+}
+
+function finalizeStatusCommand(
+	command: "status",
+	input: { bunArgs: readonly string[]; separatorSeen: boolean },
+	flags: RunnerFlagsState,
+): ParsedRunnerCommand {
+	if (input.bunArgs.length > 0 || input.separatorSeen) {
+		throw usageError("status does not accept test args.");
+	}
+	if (flags.handle) throw usageError("status does not accept --handle.");
+	if (flags.runMode !== "compact") throw usageError("status does not accept --mode.");
+	return { kind: "status", command, outputMode: flags.outputMode, cwd: flags.cwd };
+}
+
+function finalizeDetailCommand(
+	command: "detail",
+	input: { bunArgs: readonly string[]; separatorSeen: boolean; defaultCwd: string },
+	flags: RunnerFlagsState,
+): ParsedRunnerCommand {
+	if (input.bunArgs.length > 0 || input.separatorSeen) {
+		throw usageError("detail does not accept test args.");
+	}
+	if (flags.cwd !== input.defaultCwd) throw usageError("detail does not accept --cwd.");
+	if (flags.debugOutput) throw usageError("detail does not accept --debug-output.");
+	if (flags.runMode !== "compact") throw usageError("detail does not accept --mode.");
+	if (!flags.handle) {
+		throw usageError("detail requires --handle from a prior repair or triage packet.");
+	}
+	return { kind: "detail", command, outputMode: flags.outputMode, handle: flags.handle };
+}
+
+function finalizeRunCommand(
+	command: "run",
+	input: { bunArgs: readonly string[]; separatorSeen: boolean },
+	flags: RunnerFlagsState,
+): ParsedRunnerCommand {
+	if (flags.handle) throw usageError("run does not accept --handle; use detail --handle.");
+	return {
+		kind: "run",
+		command,
+		outputMode: flags.outputMode,
+		cwd: flags.cwd,
+		timeoutMs: flags.timeoutMs,
+		debugOutput: flags.debugOutput,
+		runMode: flags.runMode,
+		bunArgs: input.separatorSeen ? [...input.bunArgs] : [],
+	};
+}
+
 function parseTestRunnerArgv(input: {
 	argv: readonly string[];
 	bunArgs: readonly string[];
@@ -756,102 +894,11 @@ function parseTestRunnerArgv(input: {
 		command = candidate;
 	}
 
-	let outputMode: OutputMode = "plain";
-	let cwd = input.defaultCwd;
-	let timeoutMs = DEFAULT_TIMEOUT_MS;
-	let debugOutput = false;
-	let runMode: TestRunnerRunMode = "compact";
-	let handle: string | null = null;
+	const flags = parseRunnerFlags(args, input.defaultCwd);
 
-	for (let index = 0; index < args.length; index += 1) {
-		const arg = args[index];
-		switch (arg) {
-			case "--json":
-				outputMode = "json";
-				break;
-			case "--plain":
-				outputMode = "plain";
-				break;
-			case "--format":
-				outputMode = parseOutputFormat(requireNext(args, index, "--format"));
-				index += 1;
-				break;
-			case "--debug-output":
-				debugOutput = true;
-				break;
-			case "--mode":
-				runMode = parseRunMode(requireNext(args, index, "--mode"));
-				index += 1;
-				break;
-			case "--handle":
-				handle = requireNext(args, index, "--handle");
-				index += 1;
-				break;
-			case "--cwd":
-				cwd = requireNext(args, index, "--cwd");
-				index += 1;
-				break;
-			case "--timeout-ms":
-				timeoutMs = parseTimeoutMs(requireNext(args, index, "--timeout-ms"));
-				index += 1;
-				break;
-			default:
-				if (arg.startsWith("--cwd=")) {
-					cwd = requireInlineValue(arg, "--cwd");
-				} else if (arg.startsWith("--timeout-ms=")) {
-					timeoutMs = parseTimeoutMs(requireInlineValue(arg, "--timeout-ms"));
-				} else if (arg.startsWith("--mode=")) {
-					runMode = parseRunMode(requireInlineValue(arg, "--mode"));
-				} else if (arg.startsWith("--format=")) {
-					outputMode = parseOutputFormat(requireInlineValue(arg, "--format"));
-				} else if (arg.startsWith("--handle=")) {
-					handle = requireInlineValue(arg, "--handle");
-				} else if (arg.startsWith("-")) {
-					throw usageError(`unknown option: ${arg}`);
-				} else {
-					throw usageError(
-						`unexpected runner argument: ${arg}. Pass test args after --.`,
-					);
-				}
-		}
-	}
-
-	if (command === "status") {
-		if (input.bunArgs.length > 0 || input.separatorSeen) {
-			throw usageError("status does not accept test args.");
-		}
-		if (handle) throw usageError("status does not accept --handle.");
-		if (runMode !== "compact") throw usageError("status does not accept --mode.");
-		return { kind: "status", command, outputMode, cwd };
-	}
-
-	if (command === "detail") {
-		if (input.bunArgs.length > 0 || input.separatorSeen) {
-			throw usageError("detail does not accept test args.");
-		}
-		if (cwd !== input.defaultCwd) throw usageError("detail does not accept --cwd.");
-		if (debugOutput) throw usageError("detail does not accept --debug-output.");
-		if (runMode !== "compact") throw usageError("detail does not accept --mode.");
-		if (!handle) {
-			throw usageError(
-				"detail requires --handle from a prior repair or triage packet.",
-			);
-		}
-		return { kind: "detail", command, outputMode, handle };
-	}
-
-	if (handle) throw usageError("run does not accept --handle; use detail --handle.");
-
-	return {
-		kind: "run",
-		command,
-		outputMode,
-		cwd,
-		timeoutMs,
-		debugOutput,
-		runMode,
-		bunArgs: input.separatorSeen ? [...input.bunArgs] : [],
-	};
+	if (command === "status") return finalizeStatusCommand(command, input, flags);
+	if (command === "detail") return finalizeDetailCommand(command, input, flags);
+	return finalizeRunCommand(command, input, flags);
 }
 
 function writeResult(
@@ -905,12 +952,7 @@ function writeResult(
 	);
 }
 
-function renderPlain(result: TestRunnerResult): string {
-	if (result.command === "detail") return renderDetailPlain(result);
-	if (result.diagnostic && result.status === "error") return renderErrorPlain(result);
-	if (result.mode === "repair") return renderRepairPlain(result);
-	if (result.mode === "triage") return renderTriagePlain(result);
-
+function buildPlainHead(result: TestRunnerResult): string[] {
 	const head = [
 		result.action,
 		`status=${result.status}`,
@@ -922,10 +964,10 @@ function renderPlain(result: TestRunnerResult): string {
 		`run_id=${result.run_id}`,
 	];
 	appendCoverageHead(head, result);
-	const lines = [head.join(" ")];
-	appendCoverageLines(lines, result);
-	appendDetailDiagnostic(lines, result);
+	return head;
+}
 
+function appendFailurePlainLines(lines: string[], result: TestRunnerResult): void {
 	for (const failure of result.failures.slice(0, MAX_FAILURES)) {
 		lines.push(
 			`- ${failure.file ?? "unknown"} > ${failure.test_name || "unknown test"}`,
@@ -949,6 +991,18 @@ function renderPlain(result: TestRunnerResult): string {
 	if (result.status === "failed" && result.failures.length === 0) {
 		lines.push("- Test process exited non-zero; rerun with --json --debug-output if context is missing.");
 	}
+}
+
+function renderPlain(result: TestRunnerResult): string {
+	if (result.command === "detail") return renderDetailPlain(result);
+	if (result.diagnostic && result.status === "error") return renderErrorPlain(result);
+	if (result.mode === "repair") return renderRepairPlain(result);
+	if (result.mode === "triage") return renderTriagePlain(result);
+
+	const lines = [buildPlainHead(result).join(" ")];
+	appendCoverageLines(lines, result);
+	appendDetailDiagnostic(lines, result);
+	appendFailurePlainLines(lines, result);
 	return `${lines.join("\n")}\n`;
 }
 
@@ -1126,6 +1180,30 @@ function compactTestName(testName: string): string {
 	return parts.at(-1) ?? testName;
 }
 
+function appendTriageFailureLines(lines: string[], failure: TestRunnerFailure): void {
+	lines.push(
+		`- target=${failure.navigation_target ?? failure.file ?? "unknown"} test=${failure.test_name || "unknown test"}`,
+	);
+	if (failure.assertion_signal) lines.push(`  assertion=${failure.assertion_signal}`);
+	if (failure.expected) lines.push(`  expected=${failure.expected}`);
+	if (failure.received) lines.push(`  received=${failure.received}`);
+	if (failure.navigation_context) {
+		lines.push(`  context=${failure.navigation_context}`);
+	}
+	const usefulContext = failure.context.filter(
+		(line) =>
+			line !== failure.message &&
+			!line.startsWith("(fail)") &&
+			!line.startsWith("Expected:") &&
+			!line.startsWith("Received:"),
+	);
+	const fallbackContext = failure.navigation_context ? [] : usefulContext;
+	for (const contextLine of fallbackContext.slice(0, 2)) {
+		lines.push(`  context=${contextLine}`);
+	}
+	if (failure.detail_handle) lines.push(`  detail=${failure.detail_handle}`);
+}
+
 function renderTriagePlain(result: TestRunnerResult): string {
 	if (result.status === "passed") {
 		const lines = [`tests_passed exit=${result.exit_code} failed=0`];
@@ -1135,27 +1213,7 @@ function renderTriagePlain(result: TestRunnerResult): string {
 	const lines = ["triage"];
 	appendDetailDiagnostic(lines, result);
 	for (const failure of result.failures.slice(0, MAX_FAILURES)) {
-		lines.push(
-			`- target=${failure.navigation_target ?? failure.file ?? "unknown"} test=${failure.test_name || "unknown test"}`,
-		);
-			if (failure.assertion_signal) lines.push(`  assertion=${failure.assertion_signal}`);
-			if (failure.expected) lines.push(`  expected=${failure.expected}`);
-			if (failure.received) lines.push(`  received=${failure.received}`);
-			if (failure.navigation_context) {
-				lines.push(`  context=${failure.navigation_context}`);
-			}
-			const usefulContext = failure.context.filter(
-				(line) =>
-					line !== failure.message &&
-				!line.startsWith("(fail)") &&
-					!line.startsWith("Expected:") &&
-					!line.startsWith("Received:"),
-			);
-			const fallbackContext = failure.navigation_context ? [] : usefulContext;
-			for (const contextLine of fallbackContext.slice(0, 2)) {
-				lines.push(`  context=${contextLine}`);
-			}
-		if (failure.detail_handle) lines.push(`  detail=${failure.detail_handle}`);
+		appendTriageFailureLines(lines, failure);
 	}
 	if (result.failures.length > MAX_FAILURES) {
 		lines.push(`- ${result.failures.length - MAX_FAILURES} more failure(s) omitted`);
@@ -1296,22 +1354,27 @@ function parseBunOutput(input: {
 	};
 }
 
+function parseCoverageLine(line: string): TestRunnerCoverageFile | null {
+	if (!line.includes("|")) return null;
+	const cells = line.split("|").map((cell) => cell.trim());
+	if (cells.length < 3) return null;
+	const [file, functionsPercent, linesPercent, uncoveredLines] = cells;
+	if (!file || file === "File" || file.startsWith("-")) return null;
+	if (!/^\d+(?:\.\d+)?$/.test(functionsPercent ?? "")) return null;
+	if (!/^\d+(?:\.\d+)?$/.test(linesPercent ?? "")) return null;
+	return {
+		file,
+		functions_percent: Number(functionsPercent),
+		lines_percent: Number(linesPercent),
+		uncovered_lines: uncoveredLines || null,
+	};
+}
+
 function parseCoverage(lines: readonly string[]): TestRunnerCoverage | undefined {
 	const files: TestRunnerCoverageFile[] = [];
 	for (const line of lines) {
-		if (!line.includes("|")) continue;
-		const cells = line.split("|").map((cell) => cell.trim());
-		if (cells.length < 3) continue;
-		const [file, functionsPercent, linesPercent, uncoveredLines] = cells;
-		if (!file || file === "File" || file.startsWith("-")) continue;
-		if (!/^\d+(?:\.\d+)?$/.test(functionsPercent ?? "")) continue;
-		if (!/^\d+(?:\.\d+)?$/.test(linesPercent ?? "")) continue;
-		files.push({
-			file,
-			functions_percent: Number(functionsPercent),
-			lines_percent: Number(linesPercent),
-			uncovered_lines: uncoveredLines || null,
-		});
+		const parsed = parseCoverageLine(line);
+		if (parsed) files.push(parsed);
 	}
 	if (files.length === 0) return undefined;
 	const allFiles = files.find((file) => file.file === "All files");

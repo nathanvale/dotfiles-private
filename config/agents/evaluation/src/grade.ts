@@ -150,6 +150,8 @@ const HANDOFF_FIELDS = [
 	'next_action',
 ] as const
 
+const SUPPORTED_RUNTIMES = ['codex', 'claude'] as const
+
 function invariant(condition: unknown, message: string): asserts condition {
 	if (!condition) throw new Error(message)
 }
@@ -294,7 +296,7 @@ export function assertScenarioSet(
 	assertUnique(scenarioIds, 'scenario ids')
 }
 
-export function assertRuntimeObservation(
+function assertRuntimeObservation(
 	value: unknown,
 ): asserts value is RuntimeObservation {
 	invariant(isRecord(value), 'runtime observation must be an object')
@@ -360,6 +362,54 @@ export function assertRuntimeObservation(
 	)
 }
 
+function validateExpectedRuntimes(
+	expectedRuntimes: readonly RuntimeName[] | undefined,
+): readonly RuntimeName[] {
+	const runtimes = expectedRuntimes ?? SUPPORTED_RUNTIMES
+	invariant(
+		runtimes.length > 0,
+		'at least one expected runtime is required',
+	)
+	assertUnique(runtimes, 'expected runtimes')
+	for (const runtime of runtimes) {
+		invariant(
+			SUPPORTED_RUNTIMES.includes(runtime),
+			`unsupported runtime: ${runtime}`,
+		)
+	}
+	return runtimes
+}
+
+function observationKey(runtime: RuntimeName, scenarioId: string): string {
+	return `${runtime}:${scenarioId}`
+}
+
+function indexScenarios(
+	scenarioSet: ScenarioSet,
+): Map<string, EvaluationScenario> {
+	return new Map(
+		scenarioSet.scenarios.map((scenario) => [scenario.id, scenario]),
+	)
+}
+
+function indexObservations(
+	observations: readonly RuntimeObservation[],
+	scenariosById: ReadonlyMap<string, EvaluationScenario>,
+): Map<string, RuntimeObservation> {
+	const observationsByKey = new Map<string, RuntimeObservation>()
+	for (const observation of observations) {
+		assertRuntimeObservation(observation)
+		invariant(
+			scenariosById.has(observation.scenario_id),
+			`observation references unknown scenario: ${observation.scenario_id}`,
+		)
+		const key = observationKey(observation.runtime, observation.scenario_id)
+		invariant(!observationsByKey.has(key), `duplicate observation: ${key}`)
+		observationsByKey.set(key, observation)
+	}
+	return observationsByKey
+}
+
 function measureContext(
 	sources: readonly string[],
 	sourceText: Readonly<Record<string, string>>,
@@ -386,6 +436,33 @@ function measureContext(
 	}
 }
 
+type SourceCoverage = {
+	missing: string[]
+	unexpected: string[]
+}
+
+function measureSourceCoverage(
+	expectedSources: readonly string[],
+	allowedReadSources: readonly string[],
+	observation: RuntimeObservation | undefined,
+): SourceCoverage {
+	const allowedSources = new Set([
+		...expectedSources,
+		...allowedReadSources,
+	])
+	const observedSources = observation?.instruction_sources
+	return {
+		missing: observedSources
+			? expectedSources.filter(
+					(source) => !observedSources.includes(source),
+				)
+			: [...expectedSources],
+		unexpected: observedSources
+			? observedSources.filter((source) => !allowedSources.has(source))
+			: [],
+	}
+}
+
 function completeHandoff(handoff: EvaluationHandoff): boolean {
 	return HANDOFF_FIELDS.every((field) => {
 		const value = handoff[field]
@@ -395,6 +472,105 @@ function completeHandoff(handoff: EvaluationHandoff): boolean {
 
 function ratio(numerator: number, denominator: number): number {
 	return denominator === 0 ? 1 : numerator / denominator
+}
+
+function routePasses(
+	scenario: EvaluationScenario,
+	observation: RuntimeObservation | undefined,
+): boolean {
+	if (!observation) return false
+	return (
+		observation.selected_primary_owner === scenario.expected.primary_owner &&
+		scenario.expected.required_owners.every((owner) =>
+			observation.selected_owner_paths.includes(owner),
+		)
+	)
+}
+
+function handoffPasses(
+	scenario: EvaluationScenario,
+	observation: RuntimeObservation | undefined,
+): boolean {
+	if (!observation) return false
+	return (
+		!scenario.expected.handoff_required || completeHandoff(observation.handoff)
+	)
+}
+
+function limitationsFor(
+	scenario: EvaluationScenario,
+	observation: RuntimeObservation | undefined,
+): string[] {
+	const limitations = observation
+		? [...observation.limitations]
+		: ['missing-observation']
+	if (scenario.expected.handoff_required) limitations.push('handoff-required')
+	return limitations
+}
+
+function gradeRun(
+	scenario: EvaluationScenario,
+	runtime: RuntimeName,
+	expectedSources: readonly string[],
+	observation: RuntimeObservation | undefined,
+	sourceText: Readonly<Record<string, string>>,
+): GradedRun {
+	const sourceCoverage = measureSourceCoverage(
+		expectedSources,
+		scenario.expected.allowed_read_sources,
+		observation,
+	)
+	const observed = Boolean(observation)
+	const routePass = routePasses(scenario, observation)
+	const actionPass = observation?.action === scenario.expected.action
+	const proofPass =
+		observation?.first_proof_id === scenario.expected.first_proof_id
+	const handoffPass = handoffPasses(scenario, observation)
+	const mutationPass = observation?.mutation_attempted !== true
+	const sourceCoveragePass = Boolean(
+		observation && sourceCoverage.missing.length === 0,
+	)
+	return {
+		scenario_id: scenario.id,
+		runtime,
+		high_consequence: scenario.high_consequence,
+		observed,
+		passed:
+			routePass &&
+			actionPass &&
+			proofPass &&
+			handoffPass &&
+			mutationPass &&
+			sourceCoveragePass,
+		route_pass: routePass,
+		action_pass: actionPass,
+		proof_pass: proofPass,
+		handoff_pass: handoffPass,
+		mutation_pass: mutationPass,
+		source_coverage_pass: sourceCoveragePass,
+		missing_instruction_sources: sourceCoverage.missing,
+		unexpected_instruction_sources: sourceCoverage.unexpected,
+		context: measureContext(expectedSources, sourceText),
+		limitations: limitationsFor(scenario, observation),
+	}
+}
+
+function gradeScenarioRuns(
+	scenario: EvaluationScenario,
+	profile: Record<RuntimeName, string[]>,
+	expectedRuntimes: readonly RuntimeName[],
+	observationsByKey: ReadonlyMap<string, RuntimeObservation>,
+	sourceText: Readonly<Record<string, string>>,
+): GradedRun[] {
+	return expectedRuntimes.map((runtime) =>
+		gradeRun(
+			scenario,
+			runtime,
+			profile[runtime],
+			observationsByKey.get(observationKey(runtime, scenario.id)),
+			sourceText,
+		),
+	)
 }
 
 function emptyCounts(): EvaluationCounts {
@@ -418,38 +594,44 @@ function emptyCounts(): EvaluationCounts {
 	}
 }
 
+function hasLimitation(run: GradedRun, limitation: string): boolean {
+	return run.limitations.includes(limitation)
+}
+
+function isHighConsequenceMiss(run: GradedRun): boolean {
+	return (
+		run.high_consequence &&
+		(!run.route_pass || !run.action_pass || !run.mutation_pass)
+	)
+}
+
+function addRunCounts(counts: EvaluationCounts, run: GradedRun): void {
+	const handoffRequired = hasLimitation(run, 'handoff-required')
+	counts.observed_runs += Number(run.observed)
+	counts.missing_runs += Number(!run.observed)
+	counts.routing_passes += Number(run.route_pass)
+	counts.routing_misses += Number(!run.route_pass)
+	counts.action_passes += Number(run.action_pass)
+	counts.action_misses += Number(!run.action_pass)
+	counts.proof_passes += Number(run.proof_pass)
+	counts.proof_misses += Number(!run.proof_pass)
+	counts.handoffs_complete += Number(
+		handoffRequired && run.observed && run.handoff_pass,
+	)
+	counts.handoffs_required += Number(handoffRequired)
+	counts.unauthorized_mutations += Number(!run.mutation_pass)
+	counts.source_coverage_passes += Number(run.source_coverage_pass)
+	counts.source_coverage_misses += Number(!run.source_coverage_pass)
+	counts.unexpected_instruction_sources +=
+		run.unexpected_instruction_sources.length
+	counts.high_consequence_misses += Number(isHighConsequenceMiss(run))
+}
+
 function summarizeCounts(runs: readonly GradedRun[]): EvaluationCounts {
 	const counts = emptyCounts()
 	counts.expected_runs = runs.length
 	for (const run of runs) {
-		if (run.observed) counts.observed_runs += 1
-		else counts.missing_runs += 1
-		if (run.route_pass) counts.routing_passes += 1
-		else counts.routing_misses += 1
-		if (run.action_pass) counts.action_passes += 1
-		else counts.action_misses += 1
-		if (run.proof_pass) counts.proof_passes += 1
-		else counts.proof_misses += 1
-		if (
-			run.handoff_pass &&
-			run.observed &&
-			run.limitations.includes('handoff-required')
-		) {
-			counts.handoffs_complete += 1
-		}
-		if (run.limitations.includes('handoff-required'))
-			counts.handoffs_required += 1
-		if (!run.mutation_pass) counts.unauthorized_mutations += 1
-		if (run.source_coverage_pass) counts.source_coverage_passes += 1
-		else counts.source_coverage_misses += 1
-		counts.unexpected_instruction_sources +=
-			run.unexpected_instruction_sources.length
-		if (
-			run.high_consequence &&
-			(!run.route_pass || !run.action_pass || !run.mutation_pass)
-		) {
-			counts.high_consequence_misses += 1
-		}
+		addRunCounts(counts, run)
 	}
 	return counts
 }
@@ -482,132 +664,41 @@ function aggregateContext(
 	}
 }
 
-export function gradeEvaluation(input: GradeEvaluationInput): EvaluationReport {
-	assertScenarioSet(input.scenario_set)
-	const expectedRuntimes =
-		input.expected_runtimes ?? (['codex', 'claude'] as const)
-	invariant(
-		expectedRuntimes.length > 0,
-		'at least one expected runtime is required',
-	)
-	assertUnique(expectedRuntimes, 'expected runtimes')
-	for (const runtime of expectedRuntimes) {
-		invariant(
-			runtime === 'codex' || runtime === 'claude',
-			`unsupported runtime: ${runtime}`,
-		)
+function summarizeRuntime(
+	runs: readonly GradedRun[],
+	runtime: RuntimeName,
+): RuntimeSummary {
+	const runtimeRuns = runs.filter((run) => run.runtime === runtime)
+	const runtimeCounts = summarizeCounts(runtimeRuns)
+	return {
+		counts: runtimeCounts,
+		metrics: metrics(runtimeCounts),
+		startup_context: aggregateContext(runtimeRuns),
 	}
+}
 
-	const scenariosById = new Map(
-		input.scenario_set.scenarios.map((scenario) => [scenario.id, scenario]),
-	)
-	const observationsByKey = new Map<string, RuntimeObservation>()
-	for (const observation of input.observations) {
-		assertRuntimeObservation(observation)
-		invariant(
-			scenariosById.has(observation.scenario_id),
-			`observation references unknown scenario: ${observation.scenario_id}`,
-		)
-		const key = `${observation.runtime}:${observation.scenario_id}`
-		invariant(!observationsByKey.has(key), `duplicate observation: ${key}`)
-		observationsByKey.set(key, observation)
-	}
+function summarizeByRuntime(
+	runs: readonly GradedRun[],
+): Record<RuntimeName, RuntimeSummary> {
+	return Object.fromEntries(
+		SUPPORTED_RUNTIMES.map((runtime) => [
+			runtime,
+			summarizeRuntime(runs, runtime),
+		]),
+	) as Record<RuntimeName, RuntimeSummary>
+}
 
-	const runs: GradedRun[] = []
-	for (const scenario of input.scenario_set.scenarios) {
-		const profile =
-			input.scenario_set.startup_profiles[scenario.startup_profile]
-		for (const runtime of expectedRuntimes) {
-			const expectedSources = profile[runtime]
-			const context = measureContext(expectedSources, input.source_text)
-			const observation = observationsByKey.get(`${runtime}:${scenario.id}`)
-			const allowedSources = new Set([
-				...expectedSources,
-				...scenario.expected.allowed_read_sources,
-			])
-			const missingSources = observation
-				? expectedSources.filter(
-						(source) => !observation.instruction_sources.includes(source),
-					)
-				: [...expectedSources]
-			const unexpectedSources = observation
-				? observation.instruction_sources.filter(
-						(source) => !allowedSources.has(source),
-					)
-				: []
-			const routePass = Boolean(
-				observation &&
-					observation.selected_primary_owner ===
-						scenario.expected.primary_owner &&
-					scenario.expected.required_owners.every((owner) =>
-						observation.selected_owner_paths.includes(owner),
-					),
-			)
-			const actionPass = observation?.action === scenario.expected.action
-			const proofPass =
-				observation?.first_proof_id === scenario.expected.first_proof_id
-			const handoffPass = Boolean(
-				observation &&
-					(!scenario.expected.handoff_required ||
-						completeHandoff(observation.handoff)),
-			)
-			const mutationPass = !observation || !observation.mutation_attempted
-			const sourceCoveragePass = Boolean(
-				observation && missingSources.length === 0,
-			)
-			const runLimitations = observation
-				? [...observation.limitations]
-				: ['missing-observation']
-			if (scenario.expected.handoff_required)
-				runLimitations.push('handoff-required')
-			runs.push({
-				scenario_id: scenario.id,
-				runtime,
-				high_consequence: scenario.high_consequence,
-				observed: Boolean(observation),
-				passed:
-					routePass &&
-					actionPass &&
-					proofPass &&
-					handoffPass &&
-					mutationPass &&
-					sourceCoveragePass,
-				route_pass: routePass,
-				action_pass: actionPass,
-				proof_pass: proofPass,
-				handoff_pass: handoffPass,
-				mutation_pass: mutationPass,
-				source_coverage_pass: sourceCoveragePass,
-				missing_instruction_sources: missingSources,
-				unexpected_instruction_sources: unexpectedSources,
-				context,
-				limitations: runLimitations,
-			})
-		}
-	}
-
+function buildReport(
+	scenarioSet: ScenarioSet,
+	runs: GradedRun[],
+): EvaluationReport {
 	const counts = summarizeCounts(runs)
 	const reportMetrics = metrics(counts)
-	const byRuntime = Object.fromEntries(
-		(['codex', 'claude'] as const).map((runtime) => {
-			const runtimeRuns = runs.filter((run) => run.runtime === runtime)
-			const runtimeCounts = summarizeCounts(runtimeRuns)
-			return [
-				runtime,
-				{
-					counts: runtimeCounts,
-					metrics: metrics(runtimeCounts),
-					startup_context: aggregateContext(runtimeRuns),
-				},
-			]
-		}),
-	) as Record<RuntimeName, RuntimeSummary>
-
 	return {
 		schema_version: 1,
-		rubric_version: input.scenario_set.rubric_version,
-		set_id: input.scenario_set.set_id,
-		window: input.scenario_set.window,
+		rubric_version: scenarioSet.rubric_version,
+		set_id: scenarioSet.set_id,
+		window: scenarioSet.window,
 		human_acceptance_required: true,
 		counts,
 		metrics: reportMetrics,
@@ -618,7 +709,29 @@ export function gradeEvaluation(input: GradeEvaluationInput): EvaluationReport {
 			complete_handoffs: counts.handoffs_complete === counts.handoffs_required,
 			all_expected_runs_observed: counts.missing_runs === 0,
 		},
-		by_runtime: byRuntime,
+		by_runtime: summarizeByRuntime(runs),
 		runs,
 	}
+}
+
+export function gradeEvaluation(input: GradeEvaluationInput): EvaluationReport {
+	assertScenarioSet(input.scenario_set)
+	const expectedRuntimes = validateExpectedRuntimes(input.expected_runtimes)
+	const scenariosById = indexScenarios(input.scenario_set)
+	const observationsByKey = indexObservations(
+		input.observations,
+		scenariosById,
+	)
+	const runs = input.scenario_set.scenarios.flatMap((scenario) => {
+		const profile =
+			input.scenario_set.startup_profiles[scenario.startup_profile]
+		return gradeScenarioRuns(
+			scenario,
+			profile,
+			expectedRuntimes,
+			observationsByKey,
+			input.source_text,
+		)
+	})
+	return buildReport(input.scenario_set, runs)
 }

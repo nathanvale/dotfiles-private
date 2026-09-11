@@ -2,16 +2,9 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const NON_ATTEMPT_OUTCOMES = /^(?:not started|skipped|historical|pending|setup)\b/;
+import { runBakeOffCli } from './cli-runner.mjs';
 
-export class ReportCloseoutError extends Error {
-  constructor(code, path, message) {
-    super(`${path}: ${message}`);
-    this.name = 'ReportCloseoutError';
-    this.code = code;
-    this.path = path;
-  }
-}
+const NON_ATTEMPT_OUTCOMES = /^(?:not started|skipped|historical|pending|setup)\b/;
 
 function reportError(code, path, message) {
   return { code, path, message };
@@ -92,7 +85,35 @@ function unknownClaim(value) {
   return /\b(?:unknown|unconfirmed|unresolved)\b/i.test(value);
 }
 
-export function parseReport(markdown) {
+function isBudgetNumber(value) {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function isValidBudgetShape(budget) {
+  return Boolean(budget)
+    && typeof budget === 'object'
+    && !Array.isArray(budget)
+    && ['setup', 'dispatch', 'closeout', 'handoff'].includes(budget.phase)
+    && ['setupSeconds', 'remainingSeconds', 'reserveSeconds'].every(key => isBudgetNumber(budget[key]))
+    && Array.isArray(budget.attemptCapsSeconds)
+    && budget.attemptCapsSeconds.every(isBudgetNumber)
+    && (budget.priorProvenSeconds === undefined || isBudgetNumber(budget.priorProvenSeconds))
+    && (budget.userAttemptCapSeconds === undefined || isBudgetNumber(budget.userAttemptCapSeconds))
+    && (budget.userSetupCapSeconds === undefined || isBudgetNumber(budget.userSetupCapSeconds));
+}
+
+function collectStaleClaims(text, sectionName, predicate, code, message, errors) {
+  for (const line of linesWithValues(text)) {
+    if (predicate(line)) errors.push(reportError(code, sectionName, message));
+  }
+}
+
+function validateCurrentAttemptClaims(parsed, errors) {
+  collectStaleClaims(parsed.checkpoint, 'Coordinator checkpoint', hasStaleCheckpointClaim, 'stale-checkpoint', 'current attempts cannot retain a no-attempts or setup claim', errors);
+  collectStaleClaims(parsed.delivery, 'Delivery', hasStaleDeliveryClaim, 'stale-delivery', 'current attempts cannot retain a pending, no-attempts, or setup claim', errors);
+}
+
+function parseReport(markdown) {
   const rows = parseAttempts(markdown);
   return {
     attempts: rows,
@@ -108,14 +129,7 @@ export function parseReport(markdown) {
 export function validateBudget(budget) {
   const errors = [];
   const fail = (code, message) => errors.push(reportError(code, 'Budget', message));
-  const number = (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0;
-  if (!budget || typeof budget !== 'object' || Array.isArray(budget)
-    || !['setup', 'dispatch', 'closeout', 'handoff'].includes(budget.phase)
-    || !['setupSeconds', 'remainingSeconds', 'reserveSeconds'].every(key => number(budget[key]))
-    || !Array.isArray(budget.attemptCapsSeconds) || !budget.attemptCapsSeconds.every(number)
-    || (budget.priorProvenSeconds !== undefined && !number(budget.priorProvenSeconds))
-    || (budget.userAttemptCapSeconds !== undefined && !number(budget.userAttemptCapSeconds))
-    || (budget.userSetupCapSeconds !== undefined && !number(budget.userSetupCapSeconds))) {
+  if (!isValidBudgetShape(budget)) {
     fail('invalid-budget', 'Supply phase, nonnegative setup/remaining/reserve seconds and attemptCapsSeconds.');
     return { valid: false, errors };
   }
@@ -152,15 +166,7 @@ export function validateReport(markdown, options = {}) {
   const budget = reportBudget(markdown);
   if (budget !== null) errors.push(...validateBudget(budget).errors);
   else if (options.requireBudget) errors.push(reportError('missing-budget', 'Budget', 'Add the browser-lanes-budget JSON record before dispatch or closeout.'));
-  if (parsed.actualAttempts.length > 0) {
-    for (const line of linesWithValues(parsed.checkpoint)) {
-      if (hasStaleCheckpointClaim(line)) errors.push(reportError('stale-checkpoint', 'Coordinator checkpoint', 'current attempts cannot retain a no-attempts or setup claim'));
-    }
-    for (const line of linesWithValues(parsed.delivery)) {
-      if (hasStaleDeliveryClaim(line)) errors.push(reportError('stale-delivery', 'Delivery', 'current attempts cannot retain a pending, no-attempts, or setup claim'));
-    }
-
-  }
+  if (parsed.actualAttempts.length > 0) validateCurrentAttemptClaims(parsed, errors);
   return {
     valid: errors.length === 0,
     errors,
@@ -173,31 +179,16 @@ export function validateReport(markdown, options = {}) {
   };
 }
 
-export function assertReport(markdown) {
-  const result = validateReport(markdown);
-  if (!result.valid) {
-    const first = result.errors[0];
-    throw new ReportCloseoutError(first.code, first.path, first.message);
-  }
-  return result;
+function reportCliResult(args, fileIndex) {
+  return validateReport(readFileSync(args[fileIndex + 1], 'utf8'), { requireBudget: args.includes('--require-budget') });
 }
 
 function runCli() {
-  const args = process.argv.slice(2);
-  const fileIndex = args.indexOf('--file');
-  if (fileIndex < 0 || !args[fileIndex + 1]) {
-    console.error('usage: report-closeout.mjs --file REPORT.md [--require-budget]');
-    process.exitCode = 2;
-    return;
-  }
-  try {
-    const result = validateReport(readFileSync(args[fileIndex + 1], 'utf8'), { requireBudget: args.includes('--require-budget') });
-    process.stdout.write(`${JSON.stringify(result)}\n`);
-    process.exitCode = result.valid ? 0 : 1;
-  } catch (cause) {
-    console.error(`report-closeout: ${cause.message}`);
-    process.exitCode = 2;
-  }
+  runBakeOffCli(process.argv.slice(2), {
+    usage: 'usage: report-closeout.mjs --file REPORT.md [--require-budget]',
+    prefix: 'report-closeout',
+    execute: reportCliResult,
+  });
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) runCli();

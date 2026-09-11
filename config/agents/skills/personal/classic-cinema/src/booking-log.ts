@@ -26,17 +26,6 @@ export interface LogScan {
 	lastValidLineNo: number;
 }
 
-const REQUIRED_FIELDS = [
-	"timestamp",
-	"movie_title",
-	"session_datetime",
-	"screen",
-	"seats",
-	"tickets",
-	"total",
-	"gmail_message_id",
-];
-
 /** A line is valid when it parses as a single JSON object on one physical line. */
 export function validateLine(raw: string): { valid: boolean; reason?: string } {
 	const trimmed = raw.trim();
@@ -77,9 +66,4 @@ export function scanLog(content: string): LogScan {
 	});
 
 	return { totalLines: lines.length, validLines, badLines, lastValidLineNo };
-}
-
-/** Whether a booking object carries the required fields (advisory, not enforced on read). */
-export function hasRequiredFields(obj: Record<string, unknown>): string[] {
-	return REQUIRED_FIELDS.filter((f) => !(f in obj));
 }

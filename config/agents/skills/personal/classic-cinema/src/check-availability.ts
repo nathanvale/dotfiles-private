@@ -33,7 +33,7 @@ Options:
 Output: one JSON object per line on stdout. Diagnostics on stderr.
 Exit: 0 ok, 1 none processed, 64 invalid usage.`;
 
-interface Availability {
+export interface Availability {
 	screen: string;
 	available: number;
 	total: number;

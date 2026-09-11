@@ -293,6 +293,23 @@ describe("parseInvocation", () => {
 			}
 		}
 	});
+
+	test("treats a bare prototype-named token as the command, not an inherited flag", () => {
+		for (const token of ["constructor", "__proto__", "toString"]) {
+			const parsed = parseInvocation([token]);
+			expect(parsed.command).toBe(token);
+			expect(parsed.force).toBe(false);
+		}
+	});
+
+	test("does not crash validating flags against a prototype-named command", () => {
+		for (const token of ["constructor", "__proto__", "toString"]) {
+			const parsed = parseInvocation([token, "--force"]);
+			expect(parsed.parseError).toBeUndefined();
+			expect(parsed.command).toBe(token);
+			expect(parsed.force).toBe(true);
+		}
+	});
 });
 
 describe("validateColor", () => {
@@ -1416,6 +1433,19 @@ describe("Command Surface Alignment Proof", () => {
 		expect(output).toContain("Usage: worktree app <branch> --json");
 		expect(output).toContain(worktreeContracts.app.summary);
 		expect(output).not.toContain("Worktree CRUD:");
+	});
+
+	test("help for a prototype-named topic falls back to the front door menu", async () => {
+		for (const topic of ["constructor", "__proto__", "toString"]) {
+			let output = "";
+			const exitCode = await main(["help", topic], {
+				runtime: fakeRuntime(),
+				stdout: { write: (chunk) => { output += chunk; } },
+			});
+
+			expect(exitCode).toBe(0);
+			expect(output).toContain("Usage: worktree <command> --json");
+		}
 	});
 
 	test("emitted diagnostic codes stay inside the exported contract tuple", async () => {

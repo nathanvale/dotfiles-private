@@ -21,17 +21,17 @@ const HTTP_METHODS = new Set(["GET", "HEAD", "OPTIONS", "POST", "PUT", "PATCH", 
 
 type RetrySafety = "same_input_safe" | "same_input_unsafe" | "inspect_before_retry";
 
-interface CliIo {
+export interface CliIo {
 	stdout: (text: string) => void;
 	stderr: (text: string) => void;
 }
 
-type FetchLike = (
+export type FetchLike = (
 	input: string | URL | Request,
 	init?: RequestInit,
 ) => Promise<Response>;
 
-interface CliDependencies {
+export interface CliDependencies {
 	fetcher: FetchLike;
 	environment: Record<string, string | undefined>;
 	cwd: string;
@@ -123,6 +123,75 @@ class CliError extends Error {
 	}
 }
 
+function buildErrorEnvelope(runId: string, cliError: CliError, exitCode: number): Record<string, unknown> {
+	return {
+		contract_id: ENVELOPE_CONTRACT_ID,
+		schema_version: ENVELOPE_SCHEMA_VERSION,
+		status: "error",
+		run_id: runId,
+		error: { code: cliError.code, message: cliError.message },
+		retry_safety: cliError.retrySafety,
+		next_safe_action: cliError.nextSafeAction,
+		exit_code: exitCode,
+		...(cliError.retryAfterSeconds === undefined ? {} : { retry_after_seconds: cliError.retryAfterSeconds }),
+		...(cliError.maximumAttempts === undefined ? {} : { maximum_attempts: cliError.maximumAttempts }),
+	};
+}
+
+async function runDoctorCommand(input: ParsedInput, dependencies: CliDependencies): Promise<number> {
+	const response = await diagnoseOpenApi(input, dependencies);
+	dependencies.io.stdout(JSON.stringify(successEnvelope(dependencies.runId, input.command, BITBUCKET_OPENAPI_URL, response)));
+	return response.exitCode ?? 0;
+}
+
+async function runOperationsCommand(input: ParsedInput, dependencies: CliDependencies): Promise<number> {
+	const response = await discoverOperations(input, dependencies);
+	dependencies.io.stdout(JSON.stringify(successEnvelope(dependencies.runId, input.command, BITBUCKET_OPENAPI_URL, response)));
+	return 0;
+}
+
+async function runApiCommand(input: ParsedInput, authHeader: string, dependencies: CliDependencies): Promise<number> {
+	const response = await executeCommand(input, undefined, authHeader, dependencies);
+	const target = `${API_BASE_URL}${normalizeApiPath(input.positionals[0])}`;
+	dependencies.io.stdout(JSON.stringify(successEnvelope(dependencies.runId, input.command, target, response)));
+	return 0;
+}
+
+async function resolveTargetRepository(input: ParsedInput, dependencies: CliDependencies): Promise<BitbucketRepository> {
+	return resolveRepository({
+		...input.repositoryOverride,
+		environment: dependencies.environment,
+		cwd: dependencies.cwd,
+	}).catch((error: unknown) => {
+		throw new CliError(
+			"repository_unresolved",
+			error instanceof Error ? error.message : String(error),
+			"Run inside the intended Bitbucket clone, or pass --workspace and --repo together.",
+		);
+	});
+}
+
+async function runRepositoryCommand(input: ParsedInput, authHeader: string, dependencies: CliDependencies): Promise<number> {
+	const repository = await resolveTargetRepository(input, dependencies);
+	const response = await executeCommand(input, repository, authHeader, dependencies);
+	dependencies.io.stdout(JSON.stringify(successEnvelope(dependencies.runId, input.command, `${repository.workspace}/${repository.repo}`, response)));
+	return 0;
+}
+
+async function dispatchCliCommand(argv: string[], dependencies: CliDependencies): Promise<number> {
+	const frontDoor = handleFrontDoor(argv, dependencies.io);
+	if (frontDoor !== null) return frontDoor;
+
+	const input = parseInput(argv);
+	if (input.command.name === "doctor") return runDoctorCommand(input, dependencies);
+	if (input.command.name === "operations") return runOperationsCommand(input, dependencies);
+
+	const authHeader = resolveAuthHeader(dependencies.environment);
+	if (input.command.name === "api") return runApiCommand(input, authHeader, dependencies);
+
+	return runRepositoryCommand(input, authHeader, dependencies);
+}
+
 /** Run the public bb CLI with injectable boundaries for focused proof. */
 export async function runCli(
 	argv: string[],
@@ -142,60 +211,54 @@ export async function runCli(
 	};
 
 	try {
-		const frontDoor = handleFrontDoor(argv, dependencies.io);
-		if (frontDoor !== null) return frontDoor;
-
-		const input = parseInput(argv);
-		if (input.command.name === "doctor") {
-			const response = await diagnoseOpenApi(input, dependencies);
-			dependencies.io.stdout(JSON.stringify(successEnvelope(dependencies.runId, input.command, BITBUCKET_OPENAPI_URL, response)));
-			return response.exitCode ?? 0;
-		}
-		if (input.command.name === "operations") {
-			const response = await discoverOperations(input, dependencies);
-			dependencies.io.stdout(JSON.stringify(successEnvelope(dependencies.runId, input.command, BITBUCKET_OPENAPI_URL, response)));
-			return 0;
-		}
-
-		const authHeader = resolveAuthHeader(dependencies.environment);
-		if (input.command.name === "api") {
-			const response = await executeCommand(input, undefined, authHeader, dependencies);
-			const target = `${API_BASE_URL}${normalizeApiPath(input.positionals[0])}`;
-			dependencies.io.stdout(JSON.stringify(successEnvelope(dependencies.runId, input.command, target, response)));
-			return 0;
-		}
-
-		const repository = await resolveRepository({
-			...input.repositoryOverride,
-			environment: dependencies.environment,
-			cwd: dependencies.cwd,
-		}).catch((error: unknown) => {
-			throw new CliError(
-				"repository_unresolved",
-				error instanceof Error ? error.message : String(error),
-				"Run inside the intended Bitbucket clone, or pass --workspace and --repo together.",
-			);
-		});
-		const response = await executeCommand(input, repository, authHeader, dependencies);
-		dependencies.io.stdout(JSON.stringify(successEnvelope(dependencies.runId, input.command, `${repository.workspace}/${repository.repo}`, response)));
-		return 0;
+		return await dispatchCliCommand(argv, dependencies);
 	} catch (error: unknown) {
 		const cliError = normalizeError(error);
 		const exitCode = cliError.code === "usage_error" || cliError.code === "unknown_command" ? 2 : 1;
-		dependencies.io.stderr(JSON.stringify({
-			contract_id: ENVELOPE_CONTRACT_ID,
-			schema_version: ENVELOPE_SCHEMA_VERSION,
-			status: "error",
-			run_id: dependencies.runId,
-			error: { code: cliError.code, message: cliError.message },
-			retry_safety: cliError.retrySafety,
-			next_safe_action: cliError.nextSafeAction,
-			exit_code: exitCode,
-			...(cliError.retryAfterSeconds === undefined ? {} : { retry_after_seconds: cliError.retryAfterSeconds }),
-			...(cliError.maximumAttempts === undefined ? {} : { maximum_attempts: cliError.maximumAttempts }),
-		}));
+		dependencies.io.stderr(JSON.stringify(buildErrorEnvelope(dependencies.runId, cliError, exitCode)));
 		return exitCode;
 	}
+}
+
+function handleHelpCommand(argv: string[], io: CliIo): number {
+	if (argv.length > 2) {
+		io.stderr("Usage: bb help [command]");
+		return 2;
+	}
+	const command = argv[1];
+	if (command && !findCommand(command)) {
+		io.stderr(renderHelp(command));
+		return 2;
+	}
+	io.stdout(renderHelp(command));
+	return 0;
+}
+
+function handleCommandsCommand(argv: string[], io: CliIo): number {
+	if (argv.length !== 2 || argv[1] !== "--json") {
+		io.stderr("Usage: bb commands --json");
+		return 2;
+	}
+	io.stdout(JSON.stringify({
+		contract_id: "bitbucket.commands",
+		schema_version: "1",
+		commands: COMMANDS,
+	}));
+	return 0;
+}
+
+function handleInlineHelpFlag(argv: string[], io: CliIo): number {
+	const command = argv[0];
+	if (argv.length !== 2) {
+		io.stderr(`Usage: bb ${command} --help`);
+		return 2;
+	}
+	if (!findCommand(command)) {
+		io.stderr(renderHelp(command));
+		return 2;
+	}
+	io.stdout(renderHelp(command));
+	return 0;
 }
 
 function handleFrontDoor(argv: string[], io: CliIo): number | null {
@@ -203,45 +266,61 @@ function handleFrontDoor(argv: string[], io: CliIo): number | null {
 		io.stdout(renderHelp());
 		return 0;
 	}
-	if (argv[0] === "help") {
-		if (argv.length > 2) {
-			io.stderr("Usage: bb help [command]");
-			return 2;
-		}
-		const command = argv[1];
-		if (command && !findCommand(command)) {
-			io.stderr(renderHelp(command));
-			return 2;
-		}
-		io.stdout(renderHelp(command));
-		return 0;
-	}
-	if (argv[0] === "commands") {
-		if (argv.length !== 2 || argv[1] !== "--json") {
-			io.stderr("Usage: bb commands --json");
-			return 2;
-		}
-		io.stdout(JSON.stringify({
-			contract_id: "bitbucket.commands",
-			schema_version: "1",
-			commands: COMMANDS,
-		}));
-		return 0;
-	}
-	if (argv.includes("--help") || argv.includes("-h")) {
-		const command = argv[0];
-		if (argv.length !== 2) {
-			io.stderr(`Usage: bb ${command} --help`);
-			return 2;
-		}
-		if (!findCommand(command)) {
-			io.stderr(renderHelp(command));
-			return 2;
-		}
-		io.stdout(renderHelp(command));
-		return 0;
-	}
+	if (argv[0] === "help") return handleHelpCommand(argv, io);
+	if (argv[0] === "commands") return handleCommandsCommand(argv, io);
+	if (argv.includes("--help") || argv.includes("-h")) return handleInlineHelpFlag(argv, io);
 	return null;
+}
+
+const VALUE_FLAGS = new Set([
+	"--state", "--limit", "--max-chars", "--text", "--path", "--line",
+	"--comment-id", "--strategy", "--title", "--source", "--destination",
+	"--description", "--workspace", "--repo", "--query", "--method",
+	"--body-json", "--body", "--body-file", "--headers-json", "--accept",
+	"--content-type", "--baseline-file", "--cursor", "--body-sha256",
+]);
+const BOOLEAN_FLAGS = new Set(["--execute", "--close-source-branch"]);
+
+function consumeValueFlagToken(
+	command: CommandDefinition,
+	flags: Map<string, string | true>,
+	token: string,
+	argv: string[],
+	index: number,
+): number {
+	if (!command.flags.includes(token)) throw usage(`Flag ${token} is not supported by ${command.name}.`);
+	if (flags.has(token)) throw usage(`Flag ${token} cannot be repeated.`);
+	const value = argv[index + 1];
+	if (!value || value.startsWith("--")) throw usage(`Flag ${token} requires a value.`);
+	flags.set(token, value);
+	return index + 1;
+}
+
+function consumeBooleanFlagToken(
+	command: CommandDefinition,
+	flags: Map<string, string | true>,
+	token: string,
+	index: number,
+): number {
+	if (!command.flags.includes(token)) throw usage(`Flag ${token} is not supported by ${command.name}.`);
+	if (flags.has(token)) throw usage(`Flag ${token} cannot be repeated.`);
+	flags.set(token, true);
+	return index;
+}
+
+function consumeArgumentToken(
+	command: CommandDefinition,
+	flags: Map<string, string | true>,
+	positionals: string[],
+	argv: string[],
+	index: number,
+): number {
+	const token = argv[index];
+	if (VALUE_FLAGS.has(token)) return consumeValueFlagToken(command, flags, token, argv, index);
+	if (BOOLEAN_FLAGS.has(token)) return consumeBooleanFlagToken(command, flags, token, index);
+	if (token.startsWith("--")) throw usage(`Unknown flag: ${token}`);
+	positionals.push(token);
+	return index;
 }
 
 function parseInput(argv: string[]): ParsedInput {
@@ -249,34 +328,9 @@ function parseInput(argv: string[]): ParsedInput {
 	if (!command) throw new CliError("unknown_command", `Unknown command: ${argv[0]}`, "Run bb --help or bb commands --json.");
 	const positionals: string[] = [];
 	const flags = new Map<string, string | true>();
-	const valueFlags = new Set([
-		"--state", "--limit", "--max-chars", "--text", "--path", "--line",
-		"--comment-id", "--strategy", "--title", "--source", "--destination",
-		"--description", "--workspace", "--repo", "--query", "--method",
-		"--body-json", "--body", "--body-file", "--headers-json", "--accept",
-		"--content-type", "--baseline-file", "--cursor", "--body-sha256",
-	]);
-	const booleanFlags = new Set(["--execute", "--close-source-branch"]);
 
 	for (let index = 1; index < argv.length; index += 1) {
-		const token = argv[index];
-		if (valueFlags.has(token)) {
-			if (!command.flags.includes(token)) throw usage(`Flag ${token} is not supported by ${command.name}.`);
-			if (flags.has(token)) throw usage(`Flag ${token} cannot be repeated.`);
-			const value = argv[index + 1];
-			if (!value || value.startsWith("--")) throw usage(`Flag ${token} requires a value.`);
-			flags.set(token, value);
-			index += 1;
-			continue;
-		}
-		if (booleanFlags.has(token)) {
-			if (!command.flags.includes(token)) throw usage(`Flag ${token} is not supported by ${command.name}.`);
-			if (flags.has(token)) throw usage(`Flag ${token} cannot be repeated.`);
-			flags.set(token, true);
-			continue;
-		}
-		if (token.startsWith("--")) throw usage(`Unknown flag: ${token}`);
-		positionals.push(token);
+		index = consumeArgumentToken(command, flags, positionals, argv, index);
 	}
 	if (positionals.length < command.positionals.minimum || positionals.length > command.positionals.maximum) {
 		throw usage(`Command ${command.name} accepts ${describePositionalCount(command.positionals.minimum, command.positionals.maximum)}.`);
@@ -377,6 +431,46 @@ function buildRequest(input: ParsedInput, repository: BitbucketRepository | unde
 	return builder({ input, base, id, limit });
 }
 
+function resolveGenericRequestBody(
+	input: ParsedInput,
+	contentType: string | undefined,
+): { body: unknown; previewBody: unknown; contentType: string | undefined } {
+	const jsonBody = stringFlag(input.flags, "--body-json");
+	const textBody = stringFlag(input.flags, "--body");
+	const bodyFile = stringFlag(input.flags, "--body-file");
+	if (jsonBody) {
+		let body: unknown;
+		try {
+			body = JSON.parse(jsonBody);
+		} catch {
+			throw usage("--body-json must contain valid JSON.");
+		}
+		const previewBody = { source: "inline_json", redacted: redactSensitiveValues(body) };
+		return { body, previewBody, contentType: contentType ?? "application/json" };
+	}
+	if (textBody !== undefined) {
+		return { body: textBody, previewBody: { source: "inline_text" }, contentType: contentType ?? "text/plain" };
+	}
+	if (bodyFile) {
+		if (!existsSync(bodyFile)) throw usage(`Body file does not exist: ${bodyFile}`);
+		const bytes = readFileSync(bodyFile);
+		const previewBody = { source: "file", path: bodyFile, bytes: bytes.byteLength };
+		return { body: bytes, previewBody, contentType: contentType ?? (Bun.file(bodyFile).type || "application/octet-stream") };
+	}
+	return { body: undefined, previewBody: undefined, contentType };
+}
+
+function validateGenericRequestBodyDigest(input: ParsedInput, body: unknown, previewBody: unknown): unknown {
+	const approvedDigest = stringFlag(input.flags, "--body-sha256");
+	if (body === undefined && approvedDigest) throw usage("--body-sha256 is valid only when a request body is present.");
+	if (body === undefined) return previewBody;
+	const digest = requestBodyDigest(body);
+	const updatedPreview = { ...(previewBody as Record<string, unknown>), sha256: digest };
+	if (input.flags.has("--execute") && !approvedDigest) throw usage("Generic body execution requires --body-sha256 from the approved preview.");
+	if (approvedDigest && approvedDigest.toLowerCase() !== digest) throw usage("--body-sha256 does not match the current request-body bytes.");
+	return updatedPreview;
+}
+
 function buildGenericApiRequest(input: ParsedInput): ApiRequest {
 	const path = normalizeApiPath(input.positionals[0]);
 	const method = (stringFlag(input.flags, "--method") ?? "GET").toUpperCase();
@@ -385,39 +479,9 @@ function buildGenericApiRequest(input: ParsedInput): ApiRequest {
 	const bodyFlags = ["--body-json", "--body", "--body-file"].filter((name) => input.flags.has(name));
 	if (bodyFlags.length > 1) throw usage("Use only one of --body-json, --body, or --body-file.");
 
-	let body: unknown;
-	let previewBody: unknown;
-	let contentType = stringFlag(input.flags, "--content-type");
-	const jsonBody = stringFlag(input.flags, "--body-json");
-	const textBody = stringFlag(input.flags, "--body");
-	const bodyFile = stringFlag(input.flags, "--body-file");
-	if (jsonBody) {
-		try {
-			body = JSON.parse(jsonBody);
-		} catch {
-			throw usage("--body-json must contain valid JSON.");
-		}
-		previewBody = { source: "inline_json", redacted: redactSensitiveValues(body) };
-		contentType ??= "application/json";
-	} else if (textBody !== undefined) {
-		body = textBody;
-		previewBody = { source: "inline_text" };
-		contentType ??= "text/plain";
-	} else if (bodyFile) {
-		if (!existsSync(bodyFile)) throw usage(`Body file does not exist: ${bodyFile}`);
-		const bytes = readFileSync(bodyFile);
-		body = bytes;
-		previewBody = { source: "file", path: bodyFile, bytes: bytes.byteLength };
-		contentType ??= Bun.file(bodyFile).type || "application/octet-stream";
-	}
-	const approvedDigest = stringFlag(input.flags, "--body-sha256");
-	if (body === undefined && approvedDigest) throw usage("--body-sha256 is valid only when a request body is present.");
-	if (body !== undefined) {
-		const digest = requestBodyDigest(body);
-		previewBody = { ...(previewBody as Record<string, unknown>), sha256: digest };
-		if (input.flags.has("--execute") && !approvedDigest) throw usage("Generic body execution requires --body-sha256 from the approved preview.");
-		if (approvedDigest && approvedDigest.toLowerCase() !== digest) throw usage("--body-sha256 does not match the current request-body bytes.");
-	}
+	const initialContentType = stringFlag(input.flags, "--content-type");
+	const { body, previewBody: resolvedPreview, contentType } = resolveGenericRequestBody(input, initialContentType);
+	const previewBody = validateGenericRequestBodyDigest(input, body, resolvedPreview);
 
 	return {
 		path,
@@ -472,30 +536,114 @@ function resolveEffect(input: ParsedInput): "read" | "write" {
 	return READ_METHODS.has(method) ? "read" : "write";
 }
 
-async function diagnoseOpenApi(input: ParsedInput, dependencies: CliDependencies): Promise<CommandResult> {
-	if (input.positionals.length !== 1 || input.positionals[0] !== "openapi") throw usage("Doctor target must be: openapi.");
-	const baselinePath = stringFlag(input.flags, "--baseline-file") ?? dependencies.openApiBaselinePath;
+function loadOpenApiBaseline(baselinePath: string): { baseline: OpenApiBaseline; baselineContent: string } {
 	if (!existsSync(baselinePath)) {
 		throw new CliError("openapi_baseline_missing", `OpenAPI baseline not found: ${baselinePath}`, "Restore the generated baseline from source control, then rerun the doctor.");
 	}
-
-	let baseline: OpenApiBaseline;
-	let baselineContent: string;
 	try {
-		baselineContent = readFileSync(baselinePath, "utf8");
-		baseline = JSON.parse(baselineContent) as OpenApiBaseline;
+		const baselineContent = readFileSync(baselinePath, "utf8");
+		const baseline = JSON.parse(baselineContent) as OpenApiBaseline;
+		return { baseline, baselineContent };
 	} catch (error: unknown) {
 		throw new CliError("openapi_baseline_invalid", error instanceof Error ? error.message : String(error), "Regenerate and review the OpenAPI baseline, then rerun the doctor.");
 	}
+}
 
-	const document = await fetchOpenApiDocument(dependencies.fetcher);
-
-	let analysis: OpenApiDriftAnalysis;
+function analyzeAgainstLiveDocument(document: unknown, baseline: OpenApiBaseline): OpenApiDriftAnalysis {
 	try {
-		analysis = analyzeOpenApiDrift(document, baseline);
+		return analyzeOpenApiDrift(document, baseline);
 	} catch (error: unknown) {
 		throw new CliError("openapi_contract_invalid", error instanceof Error ? error.message : String(error), "Inspect the baseline and live Swagger shape before accepting any contract update.");
 	}
+}
+
+function buildDriftContinuation(
+	breaking: boolean,
+	review: boolean,
+	provenanceAttention: boolean,
+	trustedBaseline: boolean,
+	trustedIssueDraft: OpenApiDriftAnalysis["issue_draft"],
+): Record<string, unknown> | null {
+	if (provenanceAttention) {
+		return {
+			action: "restore_reviewed_baseline",
+			approval_required: false,
+			notification_status: "not_allowed",
+			help_path: "references/openapi-drift.md",
+		};
+	}
+	if (breaking) {
+		if (trustedBaseline && trustedIssueDraft) {
+			return {
+				action: "review_and_prepare_owner_issue",
+				owner_repository: "nathanvale/claude-code-config",
+				dedupe_key: trustedIssueDraft.dedupe_key,
+				approval_required: true,
+				notification_status: "not_sent",
+				issue_url: null,
+				help_path: "references/openapi-drift.md",
+			};
+		}
+		return {
+			action: "restore_reviewed_baseline",
+			approval_required: false,
+			notification_status: "not_allowed",
+			help_path: "references/openapi-drift.md",
+		};
+	}
+	if (review) {
+		return {
+			action: "review_contract_drift",
+			approval_required: false,
+			notification_status: "not_required",
+			help_path: "references/openapi-drift.md",
+		};
+	}
+	return null;
+}
+
+function buildDriftNextSafeAction(
+	breaking: boolean,
+	provenanceAttention: boolean,
+	trustedBaseline: boolean,
+	health: OpenApiDriftAnalysis["health"],
+): string {
+	if (provenanceAttention) return "Follow data.continuation: restore the reviewed bundled baseline before relying on drift results.";
+	if (breaking) {
+		return trustedBaseline
+			? "Follow data.continuation: review the bounded evidence, deduplicate the owner issue, then obtain explicit approval before creation."
+			: "Follow data.continuation: restore the reviewed bundled baseline before any escalation.";
+	}
+	if (health === "additive_drift") return "Review the additive operations during normal maintenance; no owner notification is required.";
+	if (health === "review_drift") return "Follow data.continuation and resolve the indeterminate compatibility change before treating the contract as healthy.";
+	return "No OpenAPI repair action is required.";
+}
+
+function buildDriftRemediationClass(
+	breaking: boolean,
+	provenanceAttention: boolean,
+	trustedBaseline: boolean,
+	health: OpenApiDriftAnalysis["health"],
+): "none" | "maintenance_review" | "approval_required" | "untrusted_baseline" {
+	if (breaking) return trustedBaseline ? "approval_required" : "untrusted_baseline";
+	if (provenanceAttention) return "untrusted_baseline";
+	return health === "healthy" ? "none" : "maintenance_review";
+}
+
+function buildOwnerNotification(breaking: boolean, trustedBaseline: boolean): Record<string, unknown> {
+	return breaking
+		? { status: "not_sent", reason: trustedBaseline ? "approval_required" : "untrusted_baseline", issue_url: null }
+		: { status: "not_required", issue_url: null };
+}
+
+async function diagnoseOpenApi(input: ParsedInput, dependencies: CliDependencies): Promise<CommandResult> {
+	if (input.positionals.length !== 1 || input.positionals[0] !== "openapi") throw usage("Doctor target must be: openapi.");
+	const baselinePath = stringFlag(input.flags, "--baseline-file") ?? dependencies.openApiBaselinePath;
+	const { baseline, baselineContent } = loadOpenApiBaseline(baselinePath);
+
+	const document = await fetchOpenApiDocument(dependencies.fetcher);
+	const analysis = analyzeAgainstLiveDocument(document, baseline);
+
 	const breaking = analysis.health === "breaking_drift";
 	const review = analysis.health === "review_drift";
 	const baselineProvenance = assessBaselineProvenance({
@@ -508,38 +656,8 @@ async function diagnoseOpenApi(input: ParsedInput, dependencies: CliDependencies
 	const provenanceAttention = baselineProvenance.trust === "bundled_unverified";
 	const attention = breaking || review || provenanceAttention;
 	const trustedIssueDraft = trustedBaseline ? analysis.issue_draft : null;
-	const continuation = provenanceAttention
-		? {
-			action: "restore_reviewed_baseline",
-			approval_required: false,
-			notification_status: "not_allowed",
-			help_path: "references/openapi-drift.md",
-		}
-		: breaking
-		? trustedBaseline && trustedIssueDraft
-			? {
-				action: "review_and_prepare_owner_issue",
-				owner_repository: "nathanvale/claude-code-config",
-				dedupe_key: trustedIssueDraft.dedupe_key,
-				approval_required: true,
-				notification_status: "not_sent",
-				issue_url: null,
-				help_path: "references/openapi-drift.md",
-			}
-			: {
-				action: "restore_reviewed_baseline",
-				approval_required: false,
-				notification_status: "not_allowed",
-				help_path: "references/openapi-drift.md",
-			}
-		: review
-			? {
-				action: "review_contract_drift",
-				approval_required: false,
-				notification_status: "not_required",
-				help_path: "references/openapi-drift.md",
-			}
-			: null;
+	const continuation = buildDriftContinuation(breaking, review, provenanceAttention, trustedBaseline, trustedIssueDraft);
+
 	return {
 		status: attention ? "attention" : "ok",
 		exitCode: breaking ? 3 : review || provenanceAttention ? 4 : 0,
@@ -551,29 +669,52 @@ async function diagnoseOpenApi(input: ParsedInput, dependencies: CliDependencies
 			baseline_trust: baselineProvenance.trust,
 			baseline_trust_reason: baselineProvenance.reason,
 			continuation,
-			owner_notification: breaking
-				? { status: "not_sent", reason: trustedBaseline ? "approval_required" : "untrusted_baseline", issue_url: null }
-				: { status: "not_required", issue_url: null },
+			owner_notification: buildOwnerNotification(breaking, trustedBaseline),
 		},
-		next_safe_action: provenanceAttention
-			? "Follow data.continuation: restore the reviewed bundled baseline before relying on drift results."
-			: breaking
-			? trustedBaseline
-				? "Follow data.continuation: review the bounded evidence, deduplicate the owner issue, then obtain explicit approval before creation."
-				: "Follow data.continuation: restore the reviewed bundled baseline before any escalation."
-			: analysis.health === "additive_drift"
-				? "Review the additive operations during normal maintenance; no owner notification is required."
-				: analysis.health === "review_drift"
-					? "Follow data.continuation and resolve the indeterminate compatibility change before treating the contract as healthy."
-					: "No OpenAPI repair action is required.",
+		next_safe_action: buildDriftNextSafeAction(breaking, provenanceAttention, trustedBaseline, analysis.health),
 		retry_safety: "same_input_safe",
 		effect: "read",
-		remediationClass: breaking
-			? (trustedBaseline ? "approval_required" : "untrusted_baseline")
-			: provenanceAttention
-				? "untrusted_baseline"
-				: analysis.health === "healthy" ? "none" : "maintenance_review",
+		remediationClass: buildDriftRemediationClass(breaking, provenanceAttention, trustedBaseline, analysis.health),
 	};
+}
+
+function buildOperationRecord(
+	method: string,
+	path: string,
+	operation: { summary?: unknown; tags?: unknown; parameters?: unknown; consumes?: unknown; produces?: unknown },
+	pathParameters: Array<Record<string, unknown>>,
+	document: { consumes: unknown; produces: unknown },
+): Record<string, unknown> {
+	const parameters = [...pathParameters, ...summarizeParameters(operation.parameters)];
+	return {
+		method: method.toUpperCase(),
+		path,
+		summary: typeof operation.summary === "string" ? operation.summary : "",
+		tags: Array.isArray(operation.tags) ? operation.tags.filter((tag): tag is string => typeof tag === "string") : [],
+		parameters,
+		consumes: stringArray(operation.consumes ?? document.consumes),
+		produces: stringArray(operation.produces ?? document.produces),
+		body_schema: parameters.find((parameter) => parameter.in === "body")?.schema ?? null,
+	};
+}
+
+function collectMatchingOperations(
+	paths: Record<string, Record<string, unknown>>,
+	document: { consumes: unknown; produces: unknown },
+	query: string,
+): Array<Record<string, unknown>> {
+	const operations: Array<Record<string, unknown>> = [];
+	for (const [path, pathItem] of Object.entries(paths)) {
+		const pathParameters = summarizeParameters(pathItem.parameters);
+		for (const [method, value] of Object.entries(pathItem)) {
+			if (!HTTP_METHODS.has(method.toUpperCase()) || !value || typeof value !== "object") continue;
+			const operation = value as { summary?: unknown; tags?: unknown; parameters?: unknown; consumes?: unknown; produces?: unknown };
+			const candidate = `${method} ${path} ${String(operation.summary ?? "")} ${Array.isArray(operation.tags) ? operation.tags.join(" ") : ""}`.toLowerCase();
+			if (query && !candidate.includes(query)) continue;
+			operations.push(buildOperationRecord(method, path, operation, pathParameters, document));
+		}
+	}
+	return operations;
 }
 
 async function discoverOperations(input: ParsedInput, dependencies: CliDependencies): Promise<CommandResult> {
@@ -584,27 +725,7 @@ async function discoverOperations(input: ParsedInput, dependencies: CliDependenc
 	const query = queryText.toLowerCase();
 	const limit = boundedInteger(stringFlag(input.flags, "--limit") ?? "50", "limit", 1, 200);
 	const cursor = boundedInteger(stringFlag(input.flags, "--cursor") ?? "0", "cursor", 0, Number.MAX_SAFE_INTEGER);
-	const operations: Array<Record<string, unknown>> = [];
-	for (const [path, pathItem] of Object.entries(document.paths)) {
-		const pathParameters = summarizeParameters(pathItem.parameters);
-		for (const [method, value] of Object.entries(pathItem)) {
-			if (!HTTP_METHODS.has(method.toUpperCase()) || !value || typeof value !== "object") continue;
-			const operation = value as { summary?: unknown; tags?: unknown; parameters?: unknown; consumes?: unknown; produces?: unknown };
-			const candidate = `${method} ${path} ${String(operation.summary ?? "")} ${Array.isArray(operation.tags) ? operation.tags.join(" ") : ""}`.toLowerCase();
-			if (query && !candidate.includes(query)) continue;
-			const parameters = [...pathParameters, ...summarizeParameters(operation.parameters)];
-			operations.push({
-				method: method.toUpperCase(),
-				path,
-				summary: typeof operation.summary === "string" ? operation.summary : "",
-				tags: Array.isArray(operation.tags) ? operation.tags.filter((tag): tag is string => typeof tag === "string") : [],
-				parameters,
-				consumes: stringArray(operation.consumes ?? document.consumes),
-				produces: stringArray(operation.produces ?? document.produces),
-				body_schema: parameters.find((parameter) => parameter.in === "body")?.schema ?? null,
-			});
-		}
-	}
+	const operations = collectMatchingOperations(document.paths, { consumes: document.consumes, produces: document.produces }, query);
 
 	operations.sort((left, right) => `${left.method} ${left.path}`.localeCompare(`${right.method} ${right.path}`));
 	const page = operations.slice(cursor, cursor + limit);
@@ -727,10 +848,9 @@ const REQUEST_BUILDERS: Record<string, RequestBuilder> = {
 	branches: ({ base, limit }) => ({ path: `${base}/refs/branches?pagelen=${limit()}` }),
 };
 
-async function callApi(request: ApiRequest, authHeader: string, fetcher: FetchLike, effect: "read" | "write"): Promise<unknown> {
-	let response: Response;
+async function sendApiRequest(request: ApiRequest, authHeader: string, fetcher: FetchLike, effect: "read" | "write"): Promise<Response> {
 	try {
-		response = await fetcher(`${API_BASE_URL}${request.path}`, {
+		return await fetcher(`${API_BASE_URL}${request.path}`, {
 			method: request.method ?? "GET",
 			headers: {
 				...request.headers,
@@ -749,11 +869,11 @@ async function callApi(request: ApiRequest, authHeader: string, fetcher: FetchLi
 			effect === "write" ? "inspect_before_retry" : "same_input_safe",
 		);
 	}
+}
 
-	const contentType = response.headers.get("content-type") ?? "";
-	let text: string;
+async function readApiResponseText(response: Response, effect: "read" | "write"): Promise<string> {
 	try {
-		text = await response.text();
+		return await response.text();
 	} catch (error: unknown) {
 		throw new CliError(
 			"network_failure",
@@ -762,22 +882,30 @@ async function callApi(request: ApiRequest, authHeader: string, fetcher: FetchLi
 			effect === "write" ? "inspect_before_retry" : "same_input_safe",
 		);
 	}
-	let body: unknown = text;
-	if (contentType.includes("json") && text) {
-		try {
-			body = JSON.parse(text);
-		} catch {
-			if (response.ok) {
-				throw new CliError(
-					"invalid_api_response",
-					"Bitbucket returned malformed JSON for a successful response.",
-					effect === "write" ? "Inspect the affected Bitbucket resource before retrying." : "Retry once; if it repeats, inspect Bitbucket service health.",
-					effect === "write" ? "inspect_before_retry" : "same_input_safe",
-				);
-			}
-			body = text;
+}
+
+function parseApiResponseBody(text: string, response: Response, effect: "read" | "write"): unknown {
+	const contentType = response.headers.get("content-type") ?? "";
+	if (!contentType.includes("json") || !text) return text;
+	try {
+		return JSON.parse(text);
+	} catch {
+		if (response.ok) {
+			throw new CliError(
+				"invalid_api_response",
+				"Bitbucket returned malformed JSON for a successful response.",
+				effect === "write" ? "Inspect the affected Bitbucket resource before retrying." : "Retry once; if it repeats, inspect Bitbucket service health.",
+				effect === "write" ? "inspect_before_retry" : "same_input_safe",
+			);
 		}
+		return text;
 	}
+}
+
+async function callApi(request: ApiRequest, authHeader: string, fetcher: FetchLike, effect: "read" | "write"): Promise<unknown> {
+	const response = await sendApiRequest(request, authHeader, fetcher, effect);
+	const text = await readApiResponseText(response, effect);
+	const body = parseApiResponseBody(text, response, effect);
 	if (!response.ok) {
 		const classification = classifyHttpError(response.status, effect, response.headers);
 		throw new CliError(classification.code, `Bitbucket API ${response.status}: request rejected`, classification.nextSafeAction, classification.retrySafety, classification.retryAfterSeconds, classification.maximumAttempts);
@@ -799,33 +927,63 @@ function requestBodyDigest(body: unknown): string {
 	throw usage("Request body cannot be bound to a deterministic digest.");
 }
 
-function classifyHttpError(status: number, effect: "read" | "write", headers: Headers): { code: string; nextSafeAction: string; retrySafety: RetrySafety; retryAfterSeconds?: number; maximumAttempts?: number } {
-	const retrySafety = effect === "write" ? "inspect_before_retry" : "same_input_safe";
-	if (status === 401) return { code: "auth_rejected", nextSafeAction: "Refresh the process-scoped Bitbucket credentials, then run bb status.", retrySafety: "same_input_safe" };
-	if (status === 403) return { code: "permission_denied", nextSafeAction: "Check API-token scopes and repository access. Do not retry unchanged credentials.", retrySafety: "same_input_safe" };
-	if ([404, 405, 415, 422].includes(status)) {
-		const code = status === 404 ? "not_found" : status === 405 ? "method_not_allowed" : status === 415 ? "unsupported_media_type" : "request_rejected";
-		return {
-			code,
-			nextSafeAction: effect === "write"
-				? "Inspect the affected Bitbucket resource first. Then run bb doctor openapi; execute again only after confirming no change and correcting the request."
-				: "Run bb doctor openapi. If it is healthy, correct the path, method, content type, or request body before retrying.",
-			retrySafety,
-		};
-	}
-	if (status === 429) {
-		const retryAfterSeconds = parseRetryAfter(headers.get("retry-after"));
-		return {
-			code: "rate_limited",
-			nextSafeAction: effect === "write"
-				? `Wait ${retryAfterSeconds} seconds, inspect the affected Bitbucket resource, then retry at most once only when no change occurred.`
-				: `Wait ${retryAfterSeconds} seconds, then retry at most once. Inspect service health if rate limiting continues.`,
-			retrySafety,
-			retryAfterSeconds,
-			maximumAttempts: 1,
-		};
-	}
+type HttpErrorClassification = {
+	code: string;
+	nextSafeAction: string;
+	retrySafety: RetrySafety;
+	retryAfterSeconds?: number;
+	maximumAttempts?: number;
+};
+
+function classifyAuthRejected(): HttpErrorClassification {
+	return { code: "auth_rejected", nextSafeAction: "Refresh the process-scoped Bitbucket credentials, then run bb status.", retrySafety: "same_input_safe" };
+}
+
+function classifyPermissionDenied(): HttpErrorClassification {
+	return { code: "permission_denied", nextSafeAction: "Check API-token scopes and repository access. Do not retry unchanged credentials.", retrySafety: "same_input_safe" };
+}
+
+function requestRejectionCode(status: number): string {
+	if (status === 404) return "not_found";
+	if (status === 405) return "method_not_allowed";
+	if (status === 415) return "unsupported_media_type";
+	return "request_rejected";
+}
+
+function classifyRequestRejected(status: number, effect: "read" | "write", retrySafety: RetrySafety): HttpErrorClassification {
+	return {
+		code: requestRejectionCode(status),
+		nextSafeAction: effect === "write"
+			? "Inspect the affected Bitbucket resource first. Then run bb doctor openapi; execute again only after confirming no change and correcting the request."
+			: "Run bb doctor openapi. If it is healthy, correct the path, method, content type, or request body before retrying.",
+		retrySafety,
+	};
+}
+
+function classifyRateLimited(effect: "read" | "write", retrySafety: RetrySafety, headers: Headers): HttpErrorClassification {
+	const retryAfterSeconds = parseRetryAfter(headers.get("retry-after"));
+	return {
+		code: "rate_limited",
+		nextSafeAction: effect === "write"
+			? `Wait ${retryAfterSeconds} seconds, inspect the affected Bitbucket resource, then retry at most once only when no change occurred.`
+			: `Wait ${retryAfterSeconds} seconds, then retry at most once. Inspect service health if rate limiting continues.`,
+		retrySafety,
+		retryAfterSeconds,
+		maximumAttempts: 1,
+	};
+}
+
+function classifyGenericApiFailure(effect: "read" | "write", retrySafety: RetrySafety): HttpErrorClassification {
 	return { code: "api_failure", nextSafeAction: effect === "write" ? "Inspect the pull request before retrying." : "Retry once, then inspect Bitbucket service health.", retrySafety };
+}
+
+function classifyHttpError(status: number, effect: "read" | "write", headers: Headers): HttpErrorClassification {
+	const retrySafety: RetrySafety = effect === "write" ? "inspect_before_retry" : "same_input_safe";
+	if (status === 401) return classifyAuthRejected();
+	if (status === 403) return classifyPermissionDenied();
+	if ([404, 405, 415, 422].includes(status)) return classifyRequestRejected(status, effect, retrySafety);
+	if (status === 429) return classifyRateLimited(effect, retrySafety, headers);
+	return classifyGenericApiFailure(effect, retrySafety);
 }
 
 function parseRetryAfter(value: string | null): number {

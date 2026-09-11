@@ -177,6 +177,10 @@ test('a temporary production-gate perturbation rejects the unchanged receipt', a
     assert.notEqual(perturbed, source, 'the negative control must change the production gate');
     const copy = join(temporaryRoot, 'recipe-contract.mjs');
     writeFileSync(copy, perturbed);
+    writeFileSync(
+      join(temporaryRoot, 'cli-runner.mjs'),
+      readFileSync(join(pluginRoot, 'skills/bake-off/scripts/cli-runner.mjs'), 'utf8'),
+    );
     const module = await import(`${new URL(`file://${copy}`).href}?negative-control`);
     assert.equal(module.verifyIndependentReceipt(recipe, completeReceipt(), { scriptRoot: pluginRoot }).valid, false);
   } finally {

@@ -58,7 +58,7 @@ Usage:
 Output: path to /tmp/classic-cinema-ticket-<ts>.html on stdout.
 Exit: 0 ok, 1 runtime failure, 64 invalid usage.`;
 
-interface SelectedTicket {
+export interface SelectedTicket {
 	type: string;
 	qty: number;
 	price: number;
@@ -200,6 +200,28 @@ interface FillArgs {
 	customerName: string;
 }
 
+/** Keyed by an attacker-controlled argv token, so this is a Map (not a plain
+ * object): a plain object would let e.g. a bare `constructor` token resolve
+ * `flags.constructor` to `Object`, a truthy value that is not a real field name. */
+const FILL_ARGS_STRING_FLAGS: ReadonlyMap<
+	string,
+	Exclude<keyof FillArgs, "bookingFee" | "total" | "runtime">
+> = new Map([
+	["--movie-title", "movieTitle"],
+	["--session-datetime", "sessionDatetime"],
+	["--screen", "screen"],
+	["--seats", "seats"],
+	["--tickets-file", "ticketsFile"],
+	["--poster-url", "posterUrl"],
+	["--customer-name", "customerName"],
+]);
+
+const FILL_ARGS_NUMBER_FLAGS: ReadonlyMap<string, "bookingFee" | "total" | "runtime"> = new Map([
+	["--booking-fee", "bookingFee"],
+	["--total", "total"],
+	["--runtime", "runtime"],
+]);
+
 function parseArgs(argv: string[]): FillArgs {
 	const v: Partial<FillArgs> = { runtime: 0, customerName: "Nathan" };
 	const takeNum = (raw: string, flag: string): number => {
@@ -213,20 +235,16 @@ function parseArgs(argv: string[]): FillArgs {
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
 		const next = (): string => argv[++i] ?? "";
+		const stringKey = FILL_ARGS_STRING_FLAGS.get(arg);
+		const numberKey = FILL_ARGS_NUMBER_FLAGS.get(arg);
 		if (arg === "-h" || arg === "--help") {
 			console.log(HELP);
 			process.exit(0);
-		} else if (arg === "--movie-title") v.movieTitle = next();
-		else if (arg === "--session-datetime") v.sessionDatetime = next();
-		else if (arg === "--screen") v.screen = next();
-		else if (arg === "--seats") v.seats = next();
-		else if (arg === "--tickets-file") v.ticketsFile = next();
-		else if (arg === "--booking-fee") v.bookingFee = takeNum(next(), "--booking-fee");
-		else if (arg === "--total") v.total = takeNum(next(), "--total");
-		else if (arg === "--poster-url") v.posterUrl = next();
-		else if (arg === "--runtime") v.runtime = takeNum(next(), "--runtime");
-		else if (arg === "--customer-name") v.customerName = next();
-		else {
+		} else if (stringKey) {
+			v[stringKey] = next();
+		} else if (numberKey) {
+			v[numberKey] = takeNum(next(), arg);
+		} else {
 			console.error(`Unknown argument: ${arg}`);
 			console.error(HELP);
 			process.exit(64);

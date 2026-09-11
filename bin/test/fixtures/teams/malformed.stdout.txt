@@ -1,0 +1,15 @@
+📄 Reading from file: input.txt
+📊 Captured 512 characters
+🔍 Parsing messages...
+✅ Parsed 4 messages
+📅 Date range: 2026-09-04 to 2026-09-04
+📢 Channel: Unknown Channel
+💾 Saved to: output.json
+
+📝 Sample messages:
+  [05/09/2026 8:00 am] Alice Smith: First message...
+  [05/09/2026 8:10 am] Bob Jones: Second message...
+  [05/09/2026 8:20 am] Bob Jones: Third message
+Chat Bot
+05/09/2026 8:30 pm
+Trailing lines aft...

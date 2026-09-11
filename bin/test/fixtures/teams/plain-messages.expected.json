@@ -1,0 +1,110 @@
+{
+  "channel": "🏆Engineers",
+  "messageCount": 4,
+  "dateRange": {
+    "earliest": "2026-09-01",
+    "latest": "2026-09-02"
+  },
+  "messages": [
+    {
+      "id": "alice-smith-02092026915",
+      "author": "Alice Smith",
+      "timestamp": "02/09/2026 9:15 am",
+      "date": "02/09/2026",
+      "time": "9:15 am",
+      "content": "Morning all, standup moved to 10am today\nEveryone please update the board, Bob Jones can you chase the vendor?",
+      "isReply": false,
+      "reactions": [
+        {
+          "emoji": "👍",
+          "name": "Like",
+          "count": 3
+        }
+      ],
+      "attachments": [],
+      "mentions": [
+        "Everyone",
+        "Bob Jones"
+      ]
+    },
+    {
+      "id": "bob-jones-020920261205",
+      "author": "Bob Jones",
+      "timestamp": "02/09/2026 12:05 pm",
+      "date": "02/09/2026",
+      "time": "12:05 pm",
+      "content": "Will do. Url Preview for https://example.com/vendor",
+      "isReply": false,
+      "reactions": [],
+      "attachments": [
+        {
+          "type": "link",
+          "description": "https://example.com/vendor"
+        },
+        {
+          "type": "link",
+          "description": "www.example.com"
+        },
+        {
+          "type": "link",
+          "description": "https://example.com/vendor"
+        }
+      ],
+      "mentions": []
+    },
+    {
+      "id": "carol-white-030920261240",
+      "author": "Carol White",
+      "timestamp": "03/09/2026 12:40 am",
+      "date": "03/09/2026",
+      "time": "12:40 am",
+      "content": "Nice work team, Alice Smith, Carol White",
+      "isReply": false,
+      "reactions": [
+        {
+          "emoji": "❤️",
+          "name": "Heart",
+          "count": 1
+        }
+      ],
+      "attachments": [
+        {
+          "type": "praise",
+          "description": "Praise card sent to Alice Smith"
+        },
+        {
+          "type": "praise",
+          "description": "Praise"
+        },
+        {
+          "type": "gif",
+          "description": "Dancing cat (GIF Image)"
+        },
+        {
+          "type": "gif",
+          "description": "GIF by Giphy"
+        },
+        {
+          "type": "gif",
+          "description": "funny cat (GIF)"
+        }
+      ],
+      "mentions": [
+        "Alice Smith",
+        "Carol White"
+      ]
+    },
+    {
+      "id": "dave-brown-010920261159",
+      "author": "Dave Brown",
+      "timestamp": "01/09/2026 11:59 pm",
+      "date": "01/09/2026",
+      "time": "11:59 pm",
+      "content": "Late night deploy done",
+      "isReply": false,
+      "reactions": [],
+      "attachments": [],
+      "mentions": []
+    }
+  ]
+}
