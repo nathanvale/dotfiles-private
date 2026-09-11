@@ -162,7 +162,9 @@ function validateAcceptance(recipe, path, errors) {
   if (!Array.isArray(acceptance.candidateScriptHashes)) {
     errors.push(error('invalid-script-hashes', `${path}.candidateScriptHashes`, 'must be an array'));
   } else {
-    acceptance.candidateScriptHashes.forEach((link, index) => validateScriptLink(link, `${path}.candidateScriptHashes[${index}]`, errors));
+    acceptance.candidateScriptHashes.forEach((link, index) => {
+      validateScriptLink(link, `${path}.candidateScriptHashes[${index}]`, errors);
+    });
   }
 
   const candidate = { ...recipe, state: 'candidate' };
