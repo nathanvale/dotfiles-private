@@ -83,7 +83,6 @@ zone graph this repository has not needed. Facts below were decided 2026-09-11.
   and `vault-git` to `retired`; `fallow` becomes `projectOnly` (source
   `.claude/skills/fallow`, Tracking Link `.agents/skills/fallow`).
 - Biome Stop hook: a delta gate, changed files only, repo-local binary only.
-- Lane: Codex was quota-exhausted; all implementation ran on Fable.
 
 ## Consequences
 
@@ -125,8 +124,11 @@ zone graph this repository has not needed. Facts below were decided 2026-09-11.
 - `bin/agent-skills-inventory --json` shows three names under `retired`,
   `fallow` as `projectOnly`, and no user-scope Fallow links; `git check-ignore`
   proves worktree copies and vendored trees are ignored.
-- Claude direct-discovery canaries pass against project-scope pointer skills;
-  Codex canary deferred while the Codex account is quota-limited.
+- Claude direct-discovery canaries pass against project-scope pointer skills.
+  The Codex canary returned the exact retired marker, but its protected-harness
+  fence moved because Codex refreshed its own `.system` skills and plugin cache
+  during the run; the baseline is not rebaselined and the canary is re-run
+  before acceptance.
 - Revisit `boundaries` on the first import policy dispute; `best-effort` once
   every TS file has a tsconfig owner or Fallow accepts inherited abstentions.
 

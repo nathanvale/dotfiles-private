@@ -40,17 +40,19 @@ acting.
 
 | Exit | Meaning |
 | ---: | --- |
-| 0 | Audit passed and every selected TypeScript project completed. |
-| 1 | An introduced finding failed policy, or a selected project or query stayed `unavailable` or `partial` under `require: complete`. |
+| 0 | `verdict` passed: no introduced finding failed policy. |
+| 1 | An introduced finding failed policy. |
 | 2 | Operational error such as an invalid comparison base; no audit ran. |
 
-- `.fallowrc.json` pins `new-only` attribution, requires complete type-aware
-  evidence, and promotes every applicable warn-default rule to `error`.
-- Treat `reason_code: blocking-diagnostics` as a structural TypeScript problem
-  in the named project: repair the source, then retry.
-- Treat `attached-comment` or `dynamic-behavior` partials as unresolved
-  unused-export candidates in changed files: remove the export or prove its
-  use, then retry.
+- `quality:fallow` passes `--type-aware-require best-effort`: the exit code
+  follows `verdict`; `_meta.type_aware` incompleteness is advisory.
+- `.fallowrc.json` pins `new-only` attribution and promotes every applicable
+  warn-default rule to `error`. Its `require: complete` applies only to a
+  direct `node_modules/.bin/fallow audit` run, which then refuses on any
+  `unavailable` project or `partial` query.
+- Treat `blocking-diagnostics`, `attached-comment`, and `dynamic-behavior` in
+  `_meta` as advisory: repair them when you own the file, never to make the
+  gate pass. ADR 0008 names the revisit triggers for restoring `complete`.
 
 ## Comparison bases
 
