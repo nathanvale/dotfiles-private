@@ -5,6 +5,10 @@
     "": {
       "name": "my-second-brain-playground-plugin",
     },
+    "packages/cli-design-check": {
+      "name": "cli-design-check",
+      "version": "0.0.0",
+    },
     "packages/compaction-recovery": {
       "name": "compaction-recovery",
       "version": "0.0.0",
@@ -26,6 +30,8 @@
     "@logtape/logtape": ["@logtape/logtape@2.3.1", "", {}, "sha512-nYLsBWMKk0Llp62U6cDbQxNcEKc0E0s5hWbAxkmUM8ax6VchGkPSjPrVp3ixFQUuvUB9ku7MSgPzFhmVTSh2Jw=="],
 
     "@logtape/redaction": ["@logtape/redaction@2.3.1", "", { "peerDependencies": { "@logtape/logtape": "^2.3.1" } }, "sha512-djd6+dl7QvwW4miYAX9p63gylz8EUKDANH9dlrkU6OzobELiTq7uqB1u5fINMtVsrJIQnukc1FpGx+fcZdeqVQ=="],
+
+    "cli-design-check": ["cli-design-check@workspace:packages/cli-design-check"],
 
     "compaction-recovery": ["compaction-recovery@workspace:packages/compaction-recovery"],
 
