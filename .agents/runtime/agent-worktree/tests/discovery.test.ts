@@ -44,6 +44,41 @@ branch refs/heads/feat/x
 		]);
 	});
 
+	test("characterizes porcelain edge fields and ignored lines", () => {
+		const entries = parseWorktreePorcelain(`HEAD ignored-before-worktree
+worktree /repo.git
+bare
+locked maintenance
+malformed
+prunable
+unrecognized value
+
+worktree /repo/.worktrees/detached
+HEAD def
+unexpected value
+detached
+locked
+`);
+
+		expect(entries).toEqual([
+			{
+				path: "/repo.git",
+				isMain: true,
+				detached: false,
+				prunable: true,
+				lockedReason: "maintenance",
+			},
+			{
+				path: "/repo/.worktrees/detached",
+				head: "def",
+				isMain: false,
+				detached: true,
+				prunable: false,
+				lockedReason: "locked",
+			},
+		]);
+	});
+
 	test("discovers main owner, active linked worktree, stale dirs, and default branch", async () => {
 		const root = await mkdtemp(join(tmpdir(), "agent-worktree-discovery-"));
 		const linked = join(root, ".worktrees", "feat-x");

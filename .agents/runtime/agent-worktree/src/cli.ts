@@ -340,6 +340,97 @@ export async function main(
 	return result.exitCode;
 }
 
+type InvocationState = Omit<ParsedInvocation, "positionals" | "parseError"> & {
+	positionals: string[];
+	usedFlags: Set<string>;
+};
+
+type InvocationStep = { nextIndex: number; error?: string };
+
+type InvocationFlagParser = (
+	state: InvocationState,
+	index: number,
+	value: string | undefined,
+) => InvocationStep;
+
+type InvocationValueParser = (
+	state: InvocationState,
+	value: string,
+) => string | undefined;
+
+const INVOCATION_FLAG_PARSERS = new Map<string, InvocationFlagParser>([
+	[
+		"--json",
+		createBooleanFlagParser("--json", (state) => {
+			state.json = true;
+		}),
+	],
+	[
+		"--dry-run",
+		createBooleanFlagParser("--dry-run", (state) => {
+			state.dryRun = true;
+		}),
+	],
+	[
+		"--preview",
+		createBooleanFlagParser("--preview", (state) => {
+			state.preview = true;
+		}),
+	],
+	[
+		"--force",
+		createBooleanFlagParser("--force", (state) => {
+			state.force = true;
+		}),
+	],
+	[
+		"--delete-branch",
+		createBooleanFlagParser("--delete-branch", (state) => {
+			state.deleteBranch = true;
+		}),
+	],
+	[
+		"--track",
+		createBooleanFlagParser("--track", (state) => {
+			state.track = true;
+		}),
+	],
+	[
+		"--repo",
+		createValueFlagParser("--repo", (state, value) => {
+			state.repo = value;
+		}),
+	],
+	[
+		"--ref",
+		createValueFlagParser("--ref", (state, value) => {
+			state.ref = value;
+		}),
+	],
+	[
+		"--base",
+		createValueFlagParser("--base", (state, value) => {
+			state.base = value;
+		}),
+	],
+	[
+		"--pr",
+		createValueFlagParser("--pr", parsePullRequestFlag),
+	],
+	[
+		"--limit",
+		createValueFlagParser("--limit", parseLimitFlag),
+	],
+	[
+		"--fields",
+		createValueFlagParser("--fields", parseFieldsFlag),
+	],
+	[
+		"--select",
+		createValueFlagParser("--select", parseSelectFlag),
+	],
+]);
+
 /**
  * Parse argv into the package command invocation.
  *
@@ -352,139 +443,183 @@ export async function main(
  * ```
  */
 export function parseInvocation(argv: readonly string[]): ParsedInvocation {
-	const positionals: string[] = [];
-	let command: AgentWorktreeCommand | undefined;
-	let repo: string | undefined;
-	let ref: string | undefined;
-	let base: string | undefined;
-	let pr: number | undefined;
-	let limit: number | undefined;
-	let fields: readonly ProjectionFieldSet[] | undefined;
-	let select: readonly string[] | undefined;
-	let json = false;
-	let dryRun = false;
-	let preview = false;
-	let force = false;
-	let deleteBranch = false;
-	let track = false;
-	const usedFlags = new Set<string>();
-	const fail = (message: string): ParsedInvocation => ({
-		command,
-		positionals,
-		repo,
-		json,
-		dryRun,
-		preview,
-		force,
-		deleteBranch,
-		track,
-		ref,
-		base,
-		pr,
-		limit,
-		fields,
-		select,
-		parseError: usageFailure(message),
-	});
-
+	const state = createInvocationState();
 	for (let index = 0; index < argv.length; index += 1) {
-		const arg = argv[index];
-		if (arg === "--json") {
-			json = true;
-			usedFlags.add(arg);
-		} else if (arg === "--dry-run") {
-			dryRun = true;
-			usedFlags.add(arg);
-		} else if (arg === "--preview") {
-			preview = true;
-			usedFlags.add(arg);
-		} else if (arg === "--force") {
-			force = true;
-			usedFlags.add(arg);
-		} else if (arg === "--delete-branch") {
-			deleteBranch = true;
-			usedFlags.add(arg);
-		} else if (arg === "--track") {
-			track = true;
-			usedFlags.add(arg);
-		} else if (
-			arg === "--repo" ||
-			arg === "--ref" ||
-			arg === "--base" ||
-			arg === "--pr" ||
-			arg === "--limit" ||
-			arg === "--fields" ||
-			arg === "--select"
-		) {
-			usedFlags.add(arg);
-			const value = argv[index + 1];
-			if (!value || value.startsWith("--")) {
-				return fail(`${arg} needs a value.`);
-			}
-			if (arg === "--repo") repo = value;
-			if (arg === "--ref") ref = value;
-			if (arg === "--base") base = value;
-			if (arg === "--pr") {
-				const parsedPr = Number.parseInt(value, 10);
-				if (!/^\d+$/.test(value) || parsedPr < 1) {
-					return fail("--pr needs a positive integer.");
-				}
-				pr = parsedPr;
-			}
-			if (arg === "--fields") {
-				const parsedFields = parseProjectionFields(value);
-				if (!parsedFields.ok) return fail(parsedFields.message);
-				fields = parsedFields.fields;
-			}
-			if (arg === "--select") {
-				const parsedSelect = parseProjectionSelect(value);
-				if (!parsedSelect.ok) return fail(parsedSelect.message);
-				select = parsedSelect.select;
-			}
-			if (arg === "--limit") {
-				const parsedLimit = Number.parseInt(value, 10);
-				if (!Number.isFinite(parsedLimit) || parsedLimit < 1) {
-					return fail("--limit needs a positive integer.");
-				}
-				limit = parsedLimit;
-			}
-			index += 1;
-		} else if (arg.startsWith("--")) {
-			return fail(`Unknown flag '${arg}'.`);
-		} else if (!command && isAgentWorktreeCommand(arg)) {
-			command = arg;
-		} else if (!command) {
-			return fail(`Unknown command '${arg}'.`);
-		} else {
-			positionals.push(arg);
-		}
+		const step = parseInvocationArgument(state, argv[index], index, argv[index + 1]);
+		if (step.error) return invocationWithError(state, step.error);
+		index = step.nextIndex;
 	}
 
-	if (!command) return fail("Missing command.");
-	const allowedFlags = new Set(Object.keys(agentWorktreeContracts[command].flags));
-	for (const flag of usedFlags) {
-		if (!allowedFlags.has(flag)) {
-			return fail(`Flag '${flag}' is not accepted by agent-worktree ${command}.`);
-		}
-	}
+	if (!state.command) return invocationWithError(state, "Missing command.");
+	const flagError = validateInvocationFlags(state);
+	if (flagError) return invocationWithError(state, flagError);
+	return toParsedInvocation(state);
+}
+
+function createInvocationState(): InvocationState {
 	return {
-		command,
-		positionals,
-		repo,
-		json,
-		dryRun,
-		preview,
-		force,
-		deleteBranch,
-		track,
-		ref,
-		base,
-		pr,
-		limit,
-		fields,
-		select,
+		positionals: [],
+		json: false,
+		dryRun: false,
+		preview: false,
+		force: false,
+		deleteBranch: false,
+		track: false,
+		usedFlags: new Set<string>(),
 	};
 }
+
+function parseInvocationArgument(
+	state: InvocationState,
+	arg: string,
+	index: number,
+	value: string | undefined,
+): InvocationStep {
+	const parser = INVOCATION_FLAG_PARSERS.get(arg);
+	if (parser) return parser(state, index, value);
+	if (arg.startsWith("--")) {
+		return { nextIndex: index, error: `Unknown flag '${arg}'.` };
+	}
+	if (!state.command && isAgentWorktreeCommand(arg)) {
+		state.command = arg;
+		return { nextIndex: index };
+	}
+	if (!state.command) {
+		return { nextIndex: index, error: `Unknown command '${arg}'.` };
+	}
+	state.positionals.push(arg);
+	return { nextIndex: index };
+}
+
+function validateInvocationFlags(state: InvocationState): string | undefined {
+	if (!state.command) return undefined;
+	const allowedFlags = new Set(Object.keys(agentWorktreeContracts[state.command].flags));
+	for (const flag of state.usedFlags) {
+		if (!allowedFlags.has(flag)) {
+			return `Flag '${flag}' is not accepted by agent-worktree ${state.command}.`;
+		}
+	}
+	return undefined;
+}
+
+function toParsedInvocation(state: InvocationState): ParsedInvocation {
+	return {
+		command: state.command,
+		positionals: state.positionals,
+		repo: state.repo,
+		json: state.json,
+		dryRun: state.dryRun,
+		preview: state.preview,
+		force: state.force,
+		deleteBranch: state.deleteBranch,
+		track: state.track,
+		ref: state.ref,
+		base: state.base,
+		pr: state.pr,
+		limit: state.limit,
+		fields: state.fields,
+		select: state.select,
+	};
+}
+
+function invocationWithError(
+	state: InvocationState,
+	message: string,
+): ParsedInvocation {
+	return {
+		...toParsedInvocation(state),
+		parseError: usageFailure(message),
+	};
+}
+
+function createBooleanFlagParser(
+	flag: string,
+	apply: (state: InvocationState) => void,
+): InvocationFlagParser {
+	return (state, index) => {
+		state.usedFlags.add(flag);
+		apply(state);
+		return { nextIndex: index };
+	};
+}
+
+function createValueFlagParser(
+	flag: string,
+	parse: InvocationValueParser,
+): InvocationFlagParser {
+	return (state, index, value) => {
+		state.usedFlags.add(flag);
+		if (!value || value.startsWith("--")) {
+			return { nextIndex: index, error: `${flag} needs a value.` };
+		}
+		const error = parse(state, value);
+		return error
+			? { nextIndex: index, error }
+			: { nextIndex: index + 1 };
+	};
+}
+
+function parsePullRequestFlag(
+	state: InvocationState,
+	value: string,
+): string | undefined {
+	const parsedPr = Number.parseInt(value, 10);
+	if (!/^\d+$/.test(value) || parsedPr < 1) {
+		return "--pr needs a positive integer.";
+	}
+	state.pr = parsedPr;
+	return undefined;
+}
+
+function parseLimitFlag(state: InvocationState, value: string): string | undefined {
+	const parsedLimit = Number.parseInt(value, 10);
+	if (!Number.isFinite(parsedLimit) || parsedLimit < 1) {
+		return "--limit needs a positive integer.";
+	}
+	state.limit = parsedLimit;
+	return undefined;
+}
+
+function parseFieldsFlag(state: InvocationState, value: string): string | undefined {
+	const parsedFields = parseProjectionFields(value);
+	if (!parsedFields.ok) return parsedFields.message;
+	state.fields = parsedFields.fields;
+	return undefined;
+}
+
+function parseSelectFlag(state: InvocationState, value: string): string | undefined {
+	const parsedSelect = parseProjectionSelect(value);
+	if (!parsedSelect.ok) return parsedSelect.message;
+	state.select = parsedSelect.select;
+	return undefined;
+}
+
+type CommandContext = {
+	invocation: ParsedInvocation;
+	runtime: AgentWorktreeCliRuntime;
+	runId: string;
+	cwd: string;
+};
+
+type CommandHandler = (
+	context: CommandContext,
+) => CommandResult | Promise<CommandResult>;
+
+const COMMAND_HANDLERS = new Map<AgentWorktreeCommand, CommandHandler>([
+	["commands", runCommandsCommand],
+	["doctor", runDoctorCommand],
+	["list", runListCommand],
+	["status", runStatusCommand],
+	["check", runCheckCommand],
+	["create", runCreateCommand],
+	["attach", runAttachCommand],
+	["delete", runDeleteCommand],
+	["refresh", runRefreshCommand],
+	["clean", runCleanCommand],
+	["recover", runRecoverCommand],
+	["inspect", runInspectCommand],
+	["handoff", runHandoffCommand],
+]);
 
 /**
  * Route a parsed invocation to command behavior.
@@ -508,217 +643,303 @@ export async function runCommand(
 	const command = invocation.command;
 	const cwd = invocation.repo ?? runtime.cwd();
 	if (!command) return usageFailure("Missing command.");
+	const handler = COMMAND_HANDLERS.get(command);
+	if (!handler) return usageFailure(`Unknown command '${command}'.`);
 
 	try {
-		switch (command) {
-			case "commands":
-				return {
-					ok: true,
-					data: resultData(
-						"commands",
-						projectCommandDiscoveryTree(agentWorktreeContractEntries),
-					),
-				};
-			case "doctor":
-				return readCommandResult(
-					"doctor",
-					doctorData(await runDoctor({ cwd, run: runtime.run })),
-					invocation,
-				);
-			case "list":
-				return readCommandResult(
-					"list",
-					await listWorktrees({ cwd, run: runtime.run, limit: invocation.limit }),
-					invocation,
-				);
-			case "status":
-				return readCommandResult(
-					"status",
-					await statusWorktreeResult({
-						cwd,
-						run: runtime.run,
-						limit: invocation.limit,
-					}),
-					invocation,
-				);
-			case "check": {
-				const branch = invocation.positionals[0];
-				if (!branch) return usageFailure("check needs <branch>.");
-				return {
-					ok: true,
-					data: resultData(
-						"check",
-						await checkWorktree({ cwd, run: runtime.run, branch }),
-					),
-				};
-			}
-			case "create": {
-				const branch = invocation.positionals[0];
-				if (!branch) return usageFailure("create needs <branch>.");
-				const result = await createWorktree({
-					cwd,
-					run: runtime.run,
-					branch,
-					base: invocation.base,
-					dryRun: invocation.dryRun,
-					runId,
-					now: runtime.now,
-				});
-				return lifecycleCommandResult("create", result, invocation.dryRun);
-			}
-			case "attach": {
-				const ref = invocation.positionals[0];
-				if (ref && invocation.pr !== undefined) {
-					return usageFailure("attach accepts either <ref> or --pr, not both.");
-				}
-				if (invocation.track && invocation.pr === undefined) {
-					return usageFailure("attach --track needs --pr <n>.");
-				}
-				if (!ref && invocation.pr === undefined) {
-					return usageFailure("attach needs <ref> or --pr <n>.");
-				}
-				if (invocation.positionals.length > 1) {
-					return usageFailure("attach accepts one positional <ref>.");
-				}
-				const result = await attachWorktree({
-					cwd,
-					run: runtime.run,
-					ref,
-					pr: invocation.pr,
-					track: invocation.track,
-					dryRun: invocation.dryRun,
-					runId,
-					now: runtime.now,
-				});
-				return lifecycleCommandResult("attach", result, invocation.dryRun);
-			}
-			case "delete": {
-				const branch = invocation.positionals[0];
-				if (!branch) return usageFailure("delete needs <branch>.");
-				if (!invocation.dryRun && !invocation.force) {
-					return usageFailure("delete normal execution needs --force.");
-				}
-				const result = await deleteWorktree({
-					cwd,
-					run: runtime.run,
-					branch,
-					dryRun: invocation.dryRun,
-					force: invocation.force,
-					deleteBranch: invocation.deleteBranch,
-					runId,
-					now: runtime.now,
-				});
-				return lifecycleCommandResult("delete", result, invocation.dryRun);
-			}
-			case "refresh": {
-				const result = await refreshWorktrees({
-					cwd,
-					run: runtime.run,
-					dryRun: invocation.dryRun,
-					runId,
-					now: runtime.now,
-				});
-				return lifecycleCommandResult("refresh", result, invocation.dryRun);
-			}
-			case "clean":
-				return readCommandResult(
-					"clean",
-					await cleanPreview({
-						cwd,
-						run: runtime.run,
-						limit: invocation.limit,
-					}),
-					invocation,
-				);
-			case "recover": {
-				const ref = invocation.ref ?? invocation.positionals[0];
-				const parsedRef = ref ? parseAgentWorktreeRef(ref) : null;
-				if (!ref || !parsedRef) {
-					return usageFailure("recover needs a typed ref.");
-				}
-				const discovery = await discoverRepo({ cwd, run: runtime.run });
-				if (!discovery.storeRoot) {
-					return runtimeFailure(
-						"recover needs a resolved repo store root.",
-						"Repo readiness needs a repository root before recovery.",
-						"none",
-					);
-				}
-				const inspected = await inspectRefFromRoot(discovery.storeRoot, ref);
-				if (!inspected?.found) {
-					return runtimeFailure(
-						"recover ref was not found in the durable store.",
-						"Inspect current durable refs before recovery.",
-						"none",
-					);
-				}
-				const record = inspected.record as
-					| { changedState?: AgentWorktreeChangedState }
-					| undefined;
-				return {
-					ok: true,
-					data: resultData(
-						"recover",
-						lifecycleData(
-							recoverPreview({
-								ref,
-								changedState: record?.changedState,
-								failureRef:
-									parsedRef.kind === "failure" ? parsedRef : undefined,
-							}),
-						),
-					),
-				};
-			}
-			case "inspect": {
-				const ref = invocation.ref ?? invocation.positionals[0];
-				if (!ref) return usageFailure("inspect needs a typed ref.");
-				if (!parseAgentWorktreeRef(ref)) {
-					return usageFailure("inspect needs a supported typed ref.");
-				}
-				const discovery = await discoverRepo({ cwd, run: runtime.run });
-				if (!discovery.storeRoot) {
-					return runtimeFailure(
-						"inspect needs a resolved repo store root.",
-						"Repo readiness needs a repository root before ref inspection.",
-						"none",
-					);
-				}
-				const inspected = await inspectRefFromRoot(discovery.storeRoot, ref);
-				if (!inspected) {
-					return usageFailure("inspect needs a supported typed ref.");
-				}
-				return { ok: true, data: resultData("inspect", inspected) };
-			}
-			case "handoff": {
-				const discovery = await discoverRepo({ cwd, run: runtime.run });
-				if (!discovery.storeRoot) {
-					return runtimeFailure(
-						"handoff needs a resolved repo store root.",
-						"Repo readiness needs a repository root before handoff.",
-						"none",
-					);
-				}
-				return readCommandResult(
-					"handoff",
-					await buildHandoffSnapshot(
-						discovery.storeRoot,
-						{ limit: invocation.limit },
-					),
-					invocation,
-				);
-			}
-		}
+		return await handler({ invocation, runtime, runId, cwd });
 	} catch (error) {
-		return {
-			ok: false,
-			exitCode: 1,
-			code: "runtime_error",
-			message: error instanceof Error ? error.message : "Command failed.",
-			action: "Inspect repo readiness and durable state before retry.",
-			changedState: "unknown",
-		};
+		return commandRuntimeFailure(error);
 	}
+}
+
+function runCommandsCommand(): CommandResult {
+	return {
+		ok: true,
+		data: resultData(
+			"commands",
+			projectCommandDiscoveryTree(agentWorktreeContractEntries),
+		),
+	};
+}
+
+async function runDoctorCommand({
+	cwd,
+	runtime,
+	invocation,
+}: CommandContext): Promise<CommandResult> {
+	return readCommandResult(
+		"doctor",
+		doctorData(await runDoctor({ cwd, run: runtime.run })),
+		invocation,
+	);
+}
+
+async function runListCommand({
+	cwd,
+	runtime,
+	invocation,
+}: CommandContext): Promise<CommandResult> {
+	return readCommandResult(
+		"list",
+		await listWorktrees({ cwd, run: runtime.run, limit: invocation.limit }),
+		invocation,
+	);
+}
+
+async function runStatusCommand({
+	cwd,
+	runtime,
+	invocation,
+}: CommandContext): Promise<CommandResult> {
+	return readCommandResult(
+		"status",
+		await statusWorktreeResult({
+			cwd,
+			run: runtime.run,
+			limit: invocation.limit,
+		}),
+		invocation,
+	);
+}
+
+async function runCheckCommand({
+	cwd,
+	runtime,
+	invocation,
+}: CommandContext): Promise<CommandResult> {
+	const branch = invocation.positionals[0];
+	if (!branch) return usageFailure("check needs <branch>.");
+	return {
+		ok: true,
+		data: resultData(
+			"check",
+			await checkWorktree({ cwd, run: runtime.run, branch }),
+		),
+	};
+}
+
+async function runCreateCommand({
+	cwd,
+	runtime,
+	runId,
+	invocation,
+}: CommandContext): Promise<CommandResult> {
+	const branch = invocation.positionals[0];
+	if (!branch) return usageFailure("create needs <branch>.");
+	const result = await createWorktree({
+		cwd,
+		run: runtime.run,
+		branch,
+		base: invocation.base,
+		dryRun: invocation.dryRun,
+		runId,
+		now: runtime.now,
+	});
+	return lifecycleCommandResult("create", result, invocation.dryRun);
+}
+
+async function runAttachCommand({
+	cwd,
+	runtime,
+	runId,
+	invocation,
+}: CommandContext): Promise<CommandResult> {
+	const validationError = validateAttachInvocation(invocation);
+	if (validationError) return usageFailure(validationError);
+	const result = await attachWorktree({
+		cwd,
+		run: runtime.run,
+		ref: invocation.positionals[0],
+		pr: invocation.pr,
+		track: invocation.track,
+		dryRun: invocation.dryRun,
+		runId,
+		now: runtime.now,
+	});
+	return lifecycleCommandResult("attach", result, invocation.dryRun);
+}
+
+function validateAttachInvocation(
+	invocation: ParsedInvocation,
+): string | undefined {
+	const ref = invocation.positionals[0];
+	if (ref && invocation.pr !== undefined) {
+		return "attach accepts either <ref> or --pr, not both.";
+	}
+	if (invocation.track && invocation.pr === undefined) {
+		return "attach --track needs --pr <n>.";
+	}
+	if (!ref && invocation.pr === undefined) {
+		return "attach needs <ref> or --pr <n>.";
+	}
+	if (invocation.positionals.length > 1) {
+		return "attach accepts one positional <ref>.";
+	}
+	return undefined;
+}
+
+async function runDeleteCommand({
+	cwd,
+	runtime,
+	runId,
+	invocation,
+}: CommandContext): Promise<CommandResult> {
+	const validation = validateDeleteInvocation(invocation);
+	if ("error" in validation) return usageFailure(validation.error);
+	const result = await deleteWorktree({
+		cwd,
+		run: runtime.run,
+		branch: validation.branch,
+		dryRun: invocation.dryRun,
+		force: invocation.force,
+		deleteBranch: invocation.deleteBranch,
+		runId,
+		now: runtime.now,
+	});
+	return lifecycleCommandResult("delete", result, invocation.dryRun);
+}
+
+function validateDeleteInvocation(
+	invocation: ParsedInvocation,
+): { error: string } | { branch: string } {
+	const branch = invocation.positionals[0];
+	if (!branch) return { error: "delete needs <branch>." };
+	if (!invocation.dryRun && !invocation.force) {
+		return { error: "delete normal execution needs --force." };
+	}
+	return { branch };
+}
+
+async function runRefreshCommand({
+	cwd,
+	runtime,
+	runId,
+	invocation,
+}: CommandContext): Promise<CommandResult> {
+	const result = await refreshWorktrees({
+		cwd,
+		run: runtime.run,
+		dryRun: invocation.dryRun,
+		runId,
+		now: runtime.now,
+	});
+	return lifecycleCommandResult("refresh", result, invocation.dryRun);
+}
+
+async function runCleanCommand({
+	cwd,
+	runtime,
+	invocation,
+}: CommandContext): Promise<CommandResult> {
+	return readCommandResult(
+		"clean",
+		await cleanPreview({
+			cwd,
+			run: runtime.run,
+			limit: invocation.limit,
+		}),
+		invocation,
+	);
+}
+
+async function runRecoverCommand({
+	cwd,
+	runtime,
+	invocation,
+}: CommandContext): Promise<CommandResult> {
+	const ref = invocation.ref ?? invocation.positionals[0];
+	const parsedRef = ref ? parseAgentWorktreeRef(ref) : null;
+	if (!ref || !parsedRef) return usageFailure("recover needs a typed ref.");
+	const discovery = await discoverRepo({ cwd, run: runtime.run });
+	if (!discovery.storeRoot) {
+		return runtimeFailure(
+			"recover needs a resolved repo store root.",
+			"Repo readiness needs a repository root before recovery.",
+			"none",
+		);
+	}
+	const inspected = await inspectRefFromRoot(discovery.storeRoot, ref);
+	if (!inspected?.found) {
+		return runtimeFailure(
+			"recover ref was not found in the durable store.",
+			"Inspect current durable refs before recovery.",
+			"none",
+		);
+	}
+	const record = inspected.record as
+		| { changedState?: AgentWorktreeChangedState }
+		| undefined;
+	return {
+		ok: true,
+		data: resultData(
+			"recover",
+			lifecycleData(
+				recoverPreview({
+					ref,
+					changedState: record?.changedState,
+					failureRef:
+						parsedRef.kind === "failure" ? parsedRef : undefined,
+				}),
+			),
+		),
+	};
+}
+
+async function runInspectCommand({
+	cwd,
+	runtime,
+	invocation,
+}: CommandContext): Promise<CommandResult> {
+	const ref = invocation.ref ?? invocation.positionals[0];
+	if (!ref) return usageFailure("inspect needs a typed ref.");
+	if (!parseAgentWorktreeRef(ref)) {
+		return usageFailure("inspect needs a supported typed ref.");
+	}
+	const discovery = await discoverRepo({ cwd, run: runtime.run });
+	if (!discovery.storeRoot) {
+		return runtimeFailure(
+			"inspect needs a resolved repo store root.",
+			"Repo readiness needs a repository root before ref inspection.",
+			"none",
+		);
+	}
+	const inspected = await inspectRefFromRoot(discovery.storeRoot, ref);
+	if (!inspected) return usageFailure("inspect needs a supported typed ref.");
+	return { ok: true, data: resultData("inspect", inspected) };
+}
+
+async function runHandoffCommand({
+	cwd,
+	runtime,
+	invocation,
+}: CommandContext): Promise<CommandResult> {
+	const discovery = await discoverRepo({ cwd, run: runtime.run });
+	if (!discovery.storeRoot) {
+		return runtimeFailure(
+			"handoff needs a resolved repo store root.",
+			"Repo readiness needs a repository root before handoff.",
+			"none",
+		);
+	}
+	return readCommandResult(
+		"handoff",
+		await buildHandoffSnapshot(discovery.storeRoot, {
+			limit: invocation.limit,
+		}),
+		invocation,
+	);
+}
+
+function commandRuntimeFailure(error: unknown): CommandResult {
+	return {
+		ok: false,
+		exitCode: 1,
+		code: "runtime_error",
+		message: error instanceof Error ? error.message : "Command failed.",
+		action: "Inspect repo readiness and durable state before retry.",
+		changedState: "unknown",
+	};
 }
 
 function usageFailure(message: string): CommandResult {

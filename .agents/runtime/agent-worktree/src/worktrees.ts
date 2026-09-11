@@ -256,30 +256,27 @@ function viewWorktrees(
 	);
 }
 
-/**
- * Build the default recovery plan for a changed-state result.
- *
- * @param input - Changed-state and optional failure ref
- * @returns Recovery plan for a lifecycle command
- *
- * @example
- * ```typescript
- * const plan = buildRecoveryPlan({ changedState: "partial", failureRef: { kind: "failure", id: "run-1/delete" } })
- * ```
- */
-export function buildRecoveryPlan(input: {
+type RecoveryPlanInput = {
 	changedState: AgentWorktreeChangedState;
 	failureRef?: AgentWorktreeRef;
 	retrySafety?: RecoveryRetrySafety;
 	handoffReason?: HumanHandoffReason;
 	existingCheckoutPath?: string;
-}): RecoveryPlan {
+};
+
+type RecoveryPlanBuilder = (input: RecoveryPlanInput) => RecoveryPlan;
+
+const RECOVERY_RETRY_ACTIONS = new Map<RecoveryRetrySafety, string>([
+	["same_input_safe", "retry_same_input"],
+	["same_input_unsafe", "change_input"],
+	["inspect_first", "inspect_first"],
+	["operator_required", "operator_handoff"],
+]);
+
+function buildNoneRecoveryPlan(input: RecoveryPlanInput): RecoveryPlan {
 	// Handoff and existing-checkout shortcuts only apply before mutation; a
 	// partial-state failure must keep the inspect_failure_ref plan (KTD9).
-	if (
-		input.changedState === "none" &&
-		input.handoffReason === "isolation_unavailable"
-	) {
+	if (input.handoffReason === "isolation_unavailable") {
 		return {
 			changedState: input.changedState,
 			nextActionId: "work_in_current_checkout",
@@ -299,7 +296,7 @@ export function buildRecoveryPlan(input: {
 			],
 		};
 	}
-	if (input.changedState === "none" && input.existingCheckoutPath) {
+	if (input.existingCheckoutPath) {
 		return {
 			changedState: input.changedState,
 			nextActionId: "use_existing_checkout",
@@ -313,51 +310,48 @@ export function buildRecoveryPlan(input: {
 			],
 		};
 	}
-	if (input.changedState === "none") {
-		const retrySafety = input.retrySafety ?? "same_input_safe";
-		const nextActionId =
-			retrySafety === "operator_required"
-				? "operator_handoff"
-				: retrySafety === "inspect_first"
-					? "inspect_first"
-					: retrySafety === "same_input_unsafe"
-						? "change_input"
-						: "retry_same_input";
-		return {
-			changedState: "none",
-			nextActionId,
-			choices: [
-				{
-					id: nextActionId,
-					retrySafety,
-					...(input.handoffReason
-						? { handoffReason: input.handoffReason }
-						: {}),
-				},
-			],
-		};
-	}
-	if (input.changedState === "partial") {
-		return {
-			changedState: "partial",
-			nextActionId: "inspect_failure_ref",
-			choices: [
-				{
-					id: "inspect_failure_ref",
-					retrySafety: "inspect_first",
-					...(input.failureRef ? { ref: input.failureRef } : {}),
-					handoffReason: "partial_mutation",
-				},
-			],
-		};
-	}
-	if (input.changedState === "complete") {
-		return {
-			changedState: "complete",
-			nextActionId: "inspect_result",
-			choices: [{ id: "inspect_result", retrySafety: "same_input_unsafe" }],
-		};
-	}
+	const retrySafety = input.retrySafety ?? "same_input_safe";
+	const nextActionId =
+		RECOVERY_RETRY_ACTIONS.get(retrySafety) ?? "retry_same_input";
+	return {
+		changedState: "none",
+		nextActionId,
+		choices: [
+			{
+				id: nextActionId,
+				retrySafety,
+				...(input.handoffReason
+					? { handoffReason: input.handoffReason }
+					: {}),
+			},
+		],
+	};
+}
+
+function buildPartialRecoveryPlan(input: RecoveryPlanInput): RecoveryPlan {
+	return {
+		changedState: "partial",
+		nextActionId: "inspect_failure_ref",
+		choices: [
+			{
+				id: "inspect_failure_ref",
+				retrySafety: "inspect_first",
+				...(input.failureRef ? { ref: input.failureRef } : {}),
+				handoffReason: "partial_mutation",
+			},
+		],
+	};
+}
+
+function buildCompleteRecoveryPlan(): RecoveryPlan {
+	return {
+		changedState: "complete",
+		nextActionId: "inspect_result",
+		choices: [{ id: "inspect_result", retrySafety: "same_input_unsafe" }],
+	};
+}
+
+function buildUnknownRecoveryPlan(input: RecoveryPlanInput): RecoveryPlan {
 	return {
 		changedState: "unknown",
 		nextActionId: "operator_handoff",
@@ -370,6 +364,38 @@ export function buildRecoveryPlan(input: {
 			},
 		],
 	};
+}
+
+const RECOVERY_PLAN_BUILDERS = new Map<
+	AgentWorktreeChangedState,
+	RecoveryPlanBuilder
+>([
+	["none", buildNoneRecoveryPlan],
+	["partial", buildPartialRecoveryPlan],
+	["complete", buildCompleteRecoveryPlan],
+	["unknown", buildUnknownRecoveryPlan],
+]);
+
+/**
+ * Build the default recovery plan for a changed-state result.
+ *
+ * @param input - Changed-state and optional failure ref
+ * @returns Recovery plan for a lifecycle command
+ *
+ * @example
+ * ```typescript
+ * const plan = buildRecoveryPlan({ changedState: "partial", failureRef: { kind: "failure", id: "run-1/delete" } })
+ * ```
+ */
+export function buildRecoveryPlan(input: {
+	changedState: AgentWorktreeChangedState;
+	failureRef?: AgentWorktreeRef;
+	retrySafety?: RecoveryRetrySafety;
+	handoffReason?: HumanHandoffReason;
+	existingCheckoutPath?: string;
+}): RecoveryPlan {
+	const builder = RECOVERY_PLAN_BUILDERS.get(input.changedState);
+	return (builder ?? buildUnknownRecoveryPlan)(input);
 }
 
 /**
@@ -681,200 +707,252 @@ export async function attachWorktree(options: DiscoverRepoOptions & {
 }): Promise<LifecycleResult> {
 	const run = options.run ?? defaultGitRunner;
 	const discovery = await discoverRepo({ cwd: options.cwd, run });
-	// Probe failure fails closed on mutation; read verbs still degrade to an issue.
-	if (discovery.isolation === "linked_worktree" || discovery.isolation === undefined) {
+	if (attachIsolationUnavailable(discovery)) {
 		return isolationRefusal("attach");
 	}
-	const prBranch = options.pr === undefined ? undefined : `pr-${options.pr}`;
-	const requestedRef = prBranch ?? options.ref;
-	if (!requestedRef) {
+	const request = getAttachRequest(options);
+	if (!request) {
 		return refNotFoundRefusal("attach");
 	}
-	const targetPath = join(
-		discovery.mainOwnerRoot ?? discovery.gitRoot ?? options.cwd,
+	const requestCwd = discovery.gitRoot ?? options.cwd;
+	const targetPath = attachTargetPath(discovery, options.cwd, request.requestedRef);
+	const input = {
+		run,
+		discovery,
+		cwd: requestCwd,
+		targetPath,
+		dryRun: options.dryRun,
+		runId: options.runId,
+		now: options.now,
+	};
+	if (request.kind === "pr") {
+		return attachPullRequest({
+			...input,
+			pr: request.pr,
+			requestedRef: request.requestedRef,
+			track: options.track,
+		});
+	}
+	return attachPlainRef({
+		...input,
+		requestedRef: request.requestedRef,
+	});
+}
+
+type AttachRequest =
+	| { kind: "pr"; pr: number; requestedRef: string }
+	| { kind: "ref"; requestedRef: string };
+
+type AttachLifecycleInput = {
+	run: GitRunner;
+	discovery: RepoDiscovery;
+	cwd: string;
+	targetPath: string;
+	dryRun: boolean;
+	runId: string;
+	now?: () => number;
+};
+
+type AttachPullRequestInput = AttachLifecycleInput & {
+	pr: number;
+	requestedRef: string;
+	track?: boolean;
+};
+
+type AttachPlainRefInput = AttachLifecycleInput & {
+	requestedRef: string;
+};
+
+type AttachCompletionInput = AttachLifecycleInput & {
+	changes: readonly string[];
+	mode: "branch" | "detached" | "pr";
+	resolvedRef: string;
+	steps: readonly AgentWorktreeOperationStep[];
+};
+
+function attachIsolationUnavailable(discovery: RepoDiscovery): boolean {
+	return discovery.isolation === "linked_worktree" || discovery.isolation === undefined;
+}
+
+function getAttachRequest(options: {
+	ref?: string;
+	pr?: number;
+}): AttachRequest | undefined {
+	if (options.pr !== undefined) {
+		return {
+			kind: "pr",
+			pr: options.pr,
+			requestedRef: `pr-${options.pr}`,
+		};
+	}
+	if (!options.ref) return undefined;
+	return { kind: "ref", requestedRef: options.ref };
+}
+
+function attachTargetPath(
+	discovery: RepoDiscovery,
+	cwd: string,
+	requestedRef: string,
+): string {
+	return join(
+		discovery.mainOwnerRoot ?? discovery.gitRoot ?? cwd,
 		".worktrees",
 		sanitizeBranchPath(requestedRef),
 	);
-	if (prBranch) {
-		if (options.track) {
-			return attachTrackedPullRequest({
-				run,
-				discovery,
-				cwd: discovery.gitRoot ?? options.cwd,
-				pr: options.pr as number,
-				targetPath,
-				dryRun: options.dryRun,
-				runId: options.runId,
-				now: options.now,
-			});
-		}
-		const existingCheckoutPath = findBranchCheckoutPath(discovery, prBranch);
-		if (existingCheckoutPath) {
-			return branchCheckoutRefusal("attach", existingCheckoutPath);
-		}
-		const changes = [
-			`fetch pull request ${options.pr} into ${prBranch}`,
-			`attach worktree ${targetPath}`,
-			`checkout existing branch ${prBranch}`,
-		];
-		if (options.dryRun) {
-			return {
-				action: "attach",
-				changedState: "none",
-				preview: true,
-				changes,
-				nextSafeAction: "attach",
-				recovery: buildRecoveryPlan({ changedState: "none" }),
-				resolvedRef: prBranch,
-				targetPath,
-				mode: "pr",
-			};
-		}
-		const fetchResult = await run(
-			["git", "fetch", "origin", `pull/${options.pr}/head:${prBranch}`],
-			{ cwd: discovery.gitRoot ?? options.cwd },
-		);
-		if (!fetchResult.ok) {
-			const failure = classifyPrFetchFailure(fetchResult);
-			return failedLifecycle({
-				command: "attach",
-				storeRoot: discovery.storeRoot,
-				runId: options.runId,
-				stepId: "fetch_pr",
-				changedState: "none",
-				whatHappened: failure.whatHappened,
-				whatChanged: [],
-				reason: failure.reason,
-				retrySafety: failure.retrySafety,
-				now: options.now,
-			});
-		}
-		const addResult = await run(
-			["git", "worktree", "add", targetPath, prBranch],
-			{ cwd: discovery.gitRoot ?? options.cwd },
-		);
-		if (!addResult.ok) {
-			const failure = classifyWorktreeAddFailure(addResult);
-			return failedLifecycle({
-				command: "attach",
-				storeRoot: discovery.storeRoot,
-				runId: options.runId,
-				stepId: "attach_worktree",
-				changedState: "partial",
-				whatHappened: failure.whatHappened,
-				whatChanged: [`Fetched pull request ${options.pr} into ${prBranch}.`],
-				reason: failure.reason,
-				retrySafety: failure.retrySafety,
-				handoffReason: failure.handoffReason,
-				existingCheckoutPath: failure.existingCheckoutPath,
-				priorSteps: [
-					{
-						id: "fetch_pr",
-						action: "fetch pull request",
-						status: "completed",
-						changedState: "complete",
-					},
-				],
-				now: options.now,
-			});
-		}
-		const runRef = await writeRun(discovery.storeRoot, {
-			runId: options.runId,
-			command: "attach",
-			now: options.now,
-			steps: [
+}
+
+async function attachPullRequest(
+	input: AttachPullRequestInput,
+): Promise<LifecycleResult> {
+	if (input.track) {
+		return attachTrackedPullRequest({
+			run: input.run,
+			discovery: input.discovery,
+			cwd: input.cwd,
+			pr: input.pr,
+			targetPath: input.targetPath,
+			dryRun: input.dryRun,
+			runId: input.runId,
+			now: input.now,
+		});
+	}
+	return attachUntrackedPullRequest(input);
+}
+
+function buildPullRequestAttachChanges(
+	input: Pick<AttachPullRequestInput, "pr" | "requestedRef" | "targetPath">,
+): readonly string[] {
+	return [
+		`fetch pull request ${input.pr} into ${input.requestedRef}`,
+		`attach worktree ${input.targetPath}`,
+		`checkout existing branch ${input.requestedRef}`,
+	];
+}
+
+async function attachUntrackedPullRequest(
+	input: AttachPullRequestInput,
+): Promise<LifecycleResult> {
+	const existingCheckoutPath = findBranchCheckoutPath(
+		input.discovery,
+		input.requestedRef,
+	);
+	if (existingCheckoutPath) {
+		return branchCheckoutRefusal("attach", existingCheckoutPath);
+	}
+	const changes = buildPullRequestAttachChanges(input);
+	if (input.dryRun) {
+		return attachPreviewResult({
+			changes,
+			resolvedRef: input.requestedRef,
+			targetPath: input.targetPath,
+			mode: "pr",
+		});
+	}
+	const fetchResult = await input.run(
+		[
+			"git",
+			"fetch",
+			"origin",
+			`pull/${input.pr}/head:${input.requestedRef}`,
+		],
+		{ cwd: input.cwd },
+	);
+	if (!fetchResult.ok) {
+		return failedPullRequestFetch(input, fetchResult);
+	}
+	const addResult = await input.run(
+		["git", "worktree", "add", input.targetPath, input.requestedRef],
+		{ cwd: input.cwd },
+	);
+	if (!addResult.ok) {
+		return failedAttachWorktreeAdd({
+			...input,
+			result: addResult,
+			changedState: "partial",
+			whatChanged: [
+				`Fetched pull request ${input.pr} into ${input.requestedRef}.`,
+			],
+			priorSteps: [
 				{
 					id: "fetch_pr",
 					action: "fetch pull request",
 					status: "completed",
 					changedState: "complete",
 				},
-				{
-					id: "attach_worktree",
-					action: "attach worktree",
-					status: "completed",
-					changedState: "complete",
-				},
 			],
 		});
-		await registerCodexProject(targetPath).catch(() => {});
-		return {
-			action: "attach",
-			changedState: "complete",
-			preview: false,
-			runRef,
-			changes,
-			nextSafeAction: "status",
-			recovery: buildRecoveryPlan({ changedState: "complete" }),
-			resolvedRef: prBranch,
-			targetPath,
-			mode: "pr",
-		};
 	}
+	return completeAttach({
+		...input,
+		changes,
+		resolvedRef: input.requestedRef,
+		mode: "pr",
+		steps: [
+			{
+				id: "fetch_pr",
+				action: "fetch pull request",
+				status: "completed",
+				changedState: "complete",
+			},
+			{
+				id: "attach_worktree",
+				action: "attach worktree",
+				status: "completed",
+				changedState: "complete",
+			},
+		],
+	});
+}
+
+async function attachPlainRef(
+	input: AttachPlainRefInput,
+): Promise<LifecycleResult> {
 	const resolved = await resolveAttachRef(
-		run,
-		discovery.gitRoot ?? options.cwd,
-		requestedRef,
+		input.run,
+		input.cwd,
+		input.requestedRef,
 	);
 	if (!resolved) {
 		return refNotFoundRefusal("attach");
 	}
-	const resolvedRef = resolved.objectId;
-	if (resolved.mode === "branch") {
-		const existingCheckoutPath = findBranchCheckoutPath(
-			discovery,
-			requestedRef,
-		);
-		if (existingCheckoutPath) {
-			return branchCheckoutRefusal("attach", existingCheckoutPath);
-		}
+	const existingCheckoutPath =
+		resolved.mode === "branch"
+			? findBranchCheckoutPath(input.discovery, input.requestedRef)
+			: undefined;
+	if (existingCheckoutPath) {
+		return branchCheckoutRefusal("attach", existingCheckoutPath);
 	}
 	const changes = [
-		`attach worktree ${targetPath}`,
+		`attach worktree ${input.targetPath}`,
 		resolved.mode === "branch"
-			? `checkout existing branch ${requestedRef}`
-			: `checkout detached ref ${requestedRef}`,
+			? `checkout existing branch ${input.requestedRef}`
+			: `checkout detached ref ${input.requestedRef}`,
 	];
-	if (options.dryRun) {
-		return {
-			action: "attach",
-			changedState: "none",
-			preview: true,
+	if (input.dryRun) {
+		return attachPreviewResult({
 			changes,
-			nextSafeAction: "attach",
-			recovery: buildRecoveryPlan({ changedState: "none" }),
-			resolvedRef,
-			targetPath,
+			resolvedRef: resolved.objectId,
+			targetPath: input.targetPath,
 			mode: resolved.mode,
-		};
-	}
-	const result = await run(
-		resolved.mode === "branch"
-			? ["git", "worktree", "add", targetPath, requestedRef]
-			: ["git", "worktree", "add", "--detach", targetPath, requestedRef],
-		{ cwd: discovery.gitRoot ?? options.cwd },
-	);
-	if (!result.ok) {
-		const failure = classifyWorktreeAddFailure(result);
-		return failedLifecycle({
-			command: "attach",
-			storeRoot: discovery.storeRoot,
-			runId: options.runId,
-			stepId: "attach_worktree",
-			changedState: "none",
-			whatHappened: failure.whatHappened,
-			whatChanged: [],
-			reason: failure.reason,
-			retrySafety: failure.retrySafety,
-			handoffReason: failure.handoffReason,
-			existingCheckoutPath: failure.existingCheckoutPath,
-			now: options.now,
 		});
 	}
-	const runRef = await writeRun(discovery.storeRoot, {
-		runId: options.runId,
-		command: "attach",
-		now: options.now,
+	const result = await input.run(
+		buildAttachWorktreeArgs(resolved.mode, input.targetPath, input.requestedRef),
+		{ cwd: input.cwd },
+	);
+	if (!result.ok) {
+		return failedAttachWorktreeAdd({
+			...input,
+			result,
+			changedState: "none",
+			whatChanged: [],
+		});
+	}
+	return completeAttach({
+		...input,
+		changes,
+		resolvedRef: resolved.objectId,
+		mode: resolved.mode,
 		steps: [
 			{
 				id: "attach_worktree",
@@ -884,19 +962,102 @@ export async function attachWorktree(options: DiscoverRepoOptions & {
 			},
 		],
 	});
-	await registerCodexProject(targetPath).catch(() => {});
+}
+
+function buildAttachWorktreeArgs(
+	mode: "branch" | "detached",
+	targetPath: string,
+	requestedRef: string,
+): string[] {
+	return mode === "branch"
+		? ["git", "worktree", "add", targetPath, requestedRef]
+		: ["git", "worktree", "add", "--detach", targetPath, requestedRef];
+}
+
+function attachPreviewResult(input: {
+	changes: readonly string[];
+	resolvedRef: string;
+	targetPath: string;
+	mode: "branch" | "detached" | "pr";
+}): LifecycleResult {
+	return {
+		action: "attach",
+		changedState: "none",
+		preview: true,
+		changes: input.changes,
+		nextSafeAction: "attach",
+		recovery: buildRecoveryPlan({ changedState: "none" }),
+		resolvedRef: input.resolvedRef,
+		targetPath: input.targetPath,
+		mode: input.mode,
+	};
+}
+
+async function completeAttach(
+	input: AttachCompletionInput,
+): Promise<LifecycleResult> {
+	const runRef = await writeRun(input.discovery.storeRoot, {
+		runId: input.runId,
+		command: "attach",
+		now: input.now,
+		steps: input.steps,
+	});
+	await registerCodexProject(input.targetPath).catch(() => {});
 	return {
 		action: "attach",
 		changedState: "complete",
 		preview: false,
 		runRef,
-		changes,
+		changes: input.changes,
 		nextSafeAction: "status",
 		recovery: buildRecoveryPlan({ changedState: "complete" }),
-		resolvedRef,
-		targetPath,
-		mode: resolved.mode,
+		resolvedRef: input.resolvedRef,
+		targetPath: input.targetPath,
+		mode: input.mode,
 	};
+}
+
+function failedPullRequestFetch(
+	input: AttachPullRequestInput,
+	result: GitRunResult,
+): Promise<LifecycleResult> {
+	const failure = classifyPrFetchFailure(result);
+	return failedLifecycle({
+		command: "attach",
+		storeRoot: input.discovery.storeRoot,
+		runId: input.runId,
+		stepId: "fetch_pr",
+		changedState: "none",
+		whatHappened: failure.whatHappened,
+		whatChanged: [],
+		reason: failure.reason,
+		retrySafety: failure.retrySafety,
+		now: input.now,
+	});
+}
+
+function failedAttachWorktreeAdd(input: AttachLifecycleInput & {
+	result: GitRunResult;
+	changedState: AgentWorktreeChangedState;
+	whatChanged: readonly string[];
+	priorSteps?: readonly AgentWorktreeOperationStep[];
+}): Promise<LifecycleResult> {
+	const failure = classifyWorktreeAddFailure(input.result);
+	return failedLifecycle({
+		command: "attach",
+		storeRoot: input.discovery.storeRoot,
+		runId: input.runId,
+		stepId: "attach_worktree",
+		changedState: input.changedState,
+		whatHappened: failure.whatHappened,
+		whatChanged: input.whatChanged,
+		reason: failure.reason,
+		retrySafety: failure.retrySafety,
+		handoffReason: failure.handoffReason,
+		existingCheckoutPath: failure.existingCheckoutPath,
+		priorSteps: input.priorSteps,
+		now: input.now,
+	});
 }
 
 async function attachTrackedPullRequest(input: {
@@ -1074,48 +1235,112 @@ export async function deleteWorktree(options: DiscoverRepoOptions & {
 		(worktree) => worktree.branch === options.branch,
 	);
 	if (!target) {
-		return {
-			action: "delete",
-			changedState: "none",
-			preview: true,
-			changes: [],
-			nextSafeAction: "list",
-			reason: "target_not_found",
-			recovery: buildRecoveryPlan({ changedState: "none" }),
-		};
+		return deleteTargetNotFoundResult();
 	}
 	const check = await checkWorktree({
 		cwd: options.cwd,
 		run,
 		branch: options.branch,
 	});
-	const plannedChanges = [
-		`remove worktree ${target.path}`,
-		...(options.deleteBranch ? [`delete branch ${options.branch}`] : []),
+	const input = {
+		run,
+		discovery,
+		cwd: discovery.gitRoot ?? options.cwd,
+		target,
+		branch: options.branch,
+		runId: options.runId,
+		now: options.now,
+		deleteBranch: options.deleteBranch,
+	};
+	const plannedChanges = buildDeleteChanges(input);
+	const preflightResult = await deletePreflight({
+		...input,
+		check,
+		plannedChanges,
+		dryRun: options.dryRun,
+		force: options.force,
+	});
+	if (preflightResult) return preflightResult;
+	return executeDeleteWorktree(input);
+}
+
+type DeleteWorktreeInput = {
+	run: GitRunner;
+	discovery: RepoDiscovery;
+	cwd: string;
+	target: DiscoveredWorktree;
+	branch: string;
+	runId: string;
+	deleteBranch: boolean;
+	now?: () => number;
+};
+
+type DeletePreflightInput = DeleteWorktreeInput & {
+	check: WorktreeCheckResult;
+	plannedChanges: readonly string[];
+	dryRun: boolean;
+	force: boolean;
+};
+
+type DeleteFailureInput = Pick<
+	DeleteWorktreeInput,
+	"discovery" | "runId" | "now"
+> & {
+	stepId: string;
+	changedState: AgentWorktreeChangedState;
+	whatHappened: string;
+	whatChanged: readonly string[];
+	backupRef?: string;
+	reason?: AgentWorktreeLifecycleReason;
+	retrySafety?: RecoveryRetrySafety;
+	handoffReason?: HumanHandoffReason;
+};
+
+function deleteTargetNotFoundResult(): LifecycleResult {
+	return {
+		action: "delete",
+		changedState: "none",
+		preview: true,
+		changes: [],
+		nextSafeAction: "list",
+		reason: "target_not_found",
+		recovery: buildRecoveryPlan({ changedState: "none" }),
+	};
+}
+
+function buildDeleteChanges(input: DeleteWorktreeInput): readonly string[] {
+	return [
+		`remove worktree ${input.target.path}`,
+		...(input.deleteBranch ? [`delete branch ${input.branch}`] : []),
 	];
-	if (options.dryRun) {
+}
+
+async function deletePreflight(
+	input: DeletePreflightInput,
+): Promise<LifecycleResult | undefined> {
+	if (input.dryRun) {
 		return {
 			action: "delete",
 			changedState: "none",
 			preview: true,
-			changes: plannedChanges,
-			nextSafeAction: check.allowed ? "delete" : "handoff",
-			reason: check.allowed ? undefined : check.decision.reason,
+			changes: input.plannedChanges,
+			nextSafeAction: input.check.allowed ? "delete" : "handoff",
+			reason: input.check.allowed ? undefined : input.check.decision.reason,
 			recovery: buildRecoveryPlan({
 				changedState: "none",
-				retrySafety: check.decision.retrySafe
+				retrySafety: input.check.decision.retrySafe
 					? "same_input_safe"
 					: "operator_required",
-				handoffReason: handoffReasonForDecision(check.decision),
+				handoffReason: handoffReasonForDecision(input.check.decision),
 			}),
 		};
 	}
-	if (!options.force) {
+	if (!input.force) {
 		return {
 			action: "delete",
 			changedState: "none",
 			preview: false,
-			changes: plannedChanges,
+			changes: input.plannedChanges,
 			nextSafeAction: "delete",
 			reason: "missing_force",
 			recovery: buildRecoveryPlan({
@@ -1125,103 +1350,126 @@ export async function deleteWorktree(options: DiscoverRepoOptions & {
 			}),
 		};
 	}
-	if (!check.allowed) {
-		return failedLifecycle({
-			command: "delete",
-			storeRoot: discovery.storeRoot,
-			runId: options.runId,
+	if (!input.check.allowed) {
+		return failedDeleteLifecycle({
+			discovery: input.discovery,
+			runId: input.runId,
+			now: input.now,
 			stepId: "preflight_blocked",
 			changedState: "none",
-			whatHappened: `Delete blocked by ${check.decision.reason}.`,
+			whatHappened: `Delete blocked by ${input.check.decision.reason}.`,
 			whatChanged: [],
-			reason: check.decision.reason,
-			retrySafety: check.decision.retrySafe
+			reason: input.check.decision.reason,
+			retrySafety: input.check.decision.retrySafe
 				? "same_input_safe"
 				: "operator_required",
-			handoffReason: handoffReasonForDecision(check.decision),
-			now: options.now,
+			handoffReason: handoffReasonForDecision(input.check.decision),
 		});
 	}
+	return undefined;
+}
 
-	const removeResult = await run(["git", "worktree", "remove", target.path], {
-		cwd: discovery.gitRoot ?? options.cwd,
-	});
-	if (!removeResult.ok) {
-		return failedLifecycle({
-			command: "delete",
-			storeRoot: discovery.storeRoot,
-			runId: options.runId,
-			stepId: "remove_worktree",
-			changedState: "none",
-			whatHappened: "Worktree removal failed.",
-			whatChanged: [],
-			now: options.now,
-		});
-	}
-	await deregisterCodexProject(target.path).catch(() => {});
-	if (!options.deleteBranch) {
-		const runRef = await writeRun(discovery.storeRoot, {
-			runId: options.runId,
-			command: "delete",
-			now: options.now,
-			steps: [
-				{
-					id: "remove_worktree",
-					action: "remove worktree",
-					status: "completed",
-					changedState: "complete",
-				},
-			],
-		});
-		return {
-			action: "delete",
-			changedState: "complete",
-			preview: false,
-			runRef,
-			changes: ["removed worktree"],
-			nextSafeAction: "refresh",
-			recovery: buildRecoveryPlan({ changedState: "complete" }),
-		};
-	}
+async function executeDeleteWorktree(
+	input: DeleteWorktreeInput,
+): Promise<LifecycleResult> {
+	const removalFailure = await removeDeleteTarget(input);
+	if (removalFailure) return removalFailure;
+	await deregisterCodexProject(input.target.path).catch(() => {});
+	if (!input.deleteBranch) return completeDeleteWithoutBranch(input);
+	return deleteBranchAfterRemoval(input);
+}
 
-	const backupRef = `refs/agent-worktree/backups/${sanitizeBranchPath(options.branch)}/${packageRunId(options.runId)}`;
-	const backupResult = await run(["git", "update-ref", backupRef, options.branch], {
-		cwd: discovery.gitRoot ?? options.cwd,
+async function removeDeleteTarget(
+	input: DeleteWorktreeInput,
+): Promise<LifecycleResult | undefined> {
+	const result = await input.run(
+		["git", "worktree", "remove", input.target.path],
+		{ cwd: input.cwd },
+	);
+	if (result.ok) return undefined;
+	return failedDeleteLifecycle({
+		discovery: input.discovery,
+		runId: input.runId,
+		now: input.now,
+		stepId: "remove_worktree",
+		changedState: "none",
+		whatHappened: "Worktree removal failed.",
+		whatChanged: [],
 	});
+}
+
+async function completeDeleteWithoutBranch(
+	input: DeleteWorktreeInput,
+): Promise<LifecycleResult> {
+	const runRef = await writeRun(input.discovery.storeRoot, {
+		runId: input.runId,
+		command: "delete",
+		now: input.now,
+		steps: [
+			{
+				id: "remove_worktree",
+				action: "remove worktree",
+				status: "completed",
+				changedState: "complete",
+			},
+		],
+	});
+	return {
+		action: "delete",
+		changedState: "complete",
+		preview: false,
+		runRef,
+		changes: ["removed worktree"],
+		nextSafeAction: "refresh",
+		recovery: buildRecoveryPlan({ changedState: "complete" }),
+	};
+}
+
+function deleteBackupRef(branch: string, runId: string): string {
+	return `refs/agent-worktree/backups/${sanitizeBranchPath(branch)}/${packageRunId(runId)}`;
+}
+
+async function deleteBranchAfterRemoval(
+	input: DeleteWorktreeInput,
+): Promise<LifecycleResult> {
+	const backupRef = deleteBackupRef(input.branch, input.runId);
+	const backupResult = await input.run(
+		["git", "update-ref", backupRef, input.branch],
+		{ cwd: input.cwd },
+	);
 	if (!backupResult.ok) {
-		return failedLifecycle({
-			command: "delete",
-			storeRoot: discovery.storeRoot,
-			runId: options.runId,
+		return failedDeleteLifecycle({
+			discovery: input.discovery,
+			runId: input.runId,
+			now: input.now,
 			stepId: "create_backup_ref",
 			changedState: "partial",
 			whatHappened:
 				"Backup ref creation failed after worktree removal; branch deletion skipped.",
 			whatChanged: ["Worktree removed."],
-			now: options.now,
 		});
 	}
-	const deleteBranchResult = await run(["git", "branch", "-D", options.branch], {
-		cwd: discovery.gitRoot ?? options.cwd,
-	});
+	const deleteBranchResult = await input.run(
+		["git", "branch", "-D", input.branch],
+		{ cwd: input.cwd },
+	);
 	if (!deleteBranchResult.ok) {
-		return failedLifecycle({
-			command: "delete",
-			storeRoot: discovery.storeRoot,
-			runId: options.runId,
+		return failedDeleteLifecycle({
+			discovery: input.discovery,
+			runId: input.runId,
+			now: input.now,
 			stepId: "delete_branch",
 			changedState: "partial",
 			whatHappened: "Branch deletion failed after worktree removal.",
 			whatChanged: ["Worktree removed.", `Backup ref created: ${backupRef}`],
 			backupRef,
-			now: options.now,
 		});
 	}
-	const runRef = await writeRun(discovery.storeRoot, {
-		runId: options.runId,
+	const runRef = await writeRun(input.discovery.storeRoot, {
+		runId: input.runId,
 		command: "delete",
 		backupRef,
-		now: options.now,
+		now: input.now,
 		steps: [
 			{
 				id: "remove_worktree",
@@ -1247,6 +1495,23 @@ export async function deleteWorktree(options: DiscoverRepoOptions & {
 		nextSafeAction: "refresh",
 		recovery: buildRecoveryPlan({ changedState: "complete" }),
 	};
+}
+
+function failedDeleteLifecycle(input: DeleteFailureInput): Promise<LifecycleResult> {
+	return failedLifecycle({
+		command: "delete",
+		storeRoot: input.discovery.storeRoot,
+		runId: input.runId,
+		now: input.now,
+		stepId: input.stepId,
+		changedState: input.changedState,
+		whatHappened: input.whatHappened,
+		whatChanged: input.whatChanged,
+		backupRef: input.backupRef,
+		reason: input.reason,
+		retrySafety: input.retrySafety,
+		handoffReason: input.handoffReason,
+	});
 }
 
 /**

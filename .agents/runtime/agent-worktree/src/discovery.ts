@@ -345,6 +345,41 @@ function classifyRepoIsolation(input: {
 		: "linked_worktree";
 }
 
+type PorcelainFieldHandler = (
+	entry: DiscoveredWorktree,
+	value: string,
+) => void;
+
+const PORCELAIN_FIELD_HANDLERS = new Map<string, PorcelainFieldHandler>([
+	["HEAD", (entry, value) => (entry.head = value)],
+	["branch", (entry, value) => (entry.branch = stripHeadsPrefix(value))],
+	["detached", (entry) => (entry.detached = true)],
+	["prunable", (entry) => (entry.prunable = true)],
+	["locked", (entry, value) => (entry.lockedReason = value || "locked")],
+]);
+
+function startWorktreeEntry(
+	entries: DiscoveredWorktree[],
+	current: DiscoveredWorktree | null,
+	path: string,
+): DiscoveredWorktree {
+	if (current) entries.push(current);
+	return {
+		path,
+		isMain: entries.length === 0,
+		detached: false,
+		prunable: false,
+	};
+}
+
+function applyPorcelainField(
+	entry: DiscoveredWorktree,
+	key: string,
+	value: string,
+): void {
+	PORCELAIN_FIELD_HANDLERS.get(key)?.(entry, value);
+}
+
 /**
  * Parse `git worktree list --porcelain` output.
  *
@@ -367,21 +402,11 @@ export function parseWorktreePorcelain(
 		const [key, ...rest] = line.split(" ");
 		const value = rest.join(" ");
 		if (key === "worktree") {
-			if (current) entries.push(current);
-			current = {
-				path: value,
-				isMain: entries.length === 0,
-				detached: false,
-				prunable: false,
-			};
+			current = startWorktreeEntry(entries, current, value);
 			continue;
 		}
 		if (!current) continue;
-		if (key === "HEAD") current.head = value;
-		if (key === "branch") current.branch = stripHeadsPrefix(value);
-		if (key === "detached") current.detached = true;
-		if (key === "prunable") current.prunable = true;
-		if (key === "locked") current.lockedReason = value || "locked";
+		applyPorcelainField(current, key, value);
 	}
 	if (current) entries.push(current);
 	return entries;

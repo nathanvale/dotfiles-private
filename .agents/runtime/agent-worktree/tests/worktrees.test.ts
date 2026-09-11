@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
 	attachWorktree,
+	buildRecoveryPlan,
 	checkWorktree,
 	cleanPreview,
 	createWorktree,
@@ -212,6 +213,26 @@ branch refs/heads/feat/x
 		expect(calls.some((call) => call.includes("worktree remove"))).toBe(false);
 	});
 });
+
+		test("buildRecoveryPlan routes unknown changed-state to operator handoff", () => {
+			expect(
+				buildRecoveryPlan({
+					changedState: "unknown",
+					failureRef: { kind: "failure", id: "run-1/unknown" },
+				}),
+			).toEqual({
+				changedState: "unknown",
+				nextActionId: "operator_handoff",
+				choices: [
+					{
+						id: "operator_handoff",
+						retrySafety: "operator_required",
+						ref: { kind: "failure", id: "run-1/unknown" },
+						handoffReason: "partial_mutation",
+					},
+				],
+			});
+		});
 
 	describe("agent-worktree lifecycle writes", () => {
 		test("attach checks out an existing branch at the main owner path", async () => {
@@ -559,6 +580,119 @@ branch refs/heads/feat/x
 			});
 		});
 
+		test("attach without a ref returns change-input recovery", async () => {
+			const root = await mkdtemp(join(tmpdir(), "agent-worktree-attach-no-ref-"));
+			const calls: string[] = [];
+			const baseRun = fakeGitRunner(mainRepoGitOutputs(root));
+
+			const result = await attachWorktree({
+				cwd: root,
+				dryRun: false,
+				runId: "attach/no-ref",
+				run: async (args, options) => {
+					calls.push(args.join(" "));
+					return baseRun(args, options);
+				},
+			});
+
+			expect(result).toEqual({
+				action: "attach",
+				changedState: "none",
+				preview: false,
+				changes: [],
+				nextSafeAction: "change_input",
+				reason: "ref_not_found",
+				recovery: {
+					changedState: "none",
+					nextActionId: "change_input",
+					choices: [
+						{
+							id: "change_input",
+							retrySafety: "same_input_unsafe",
+						},
+					],
+				},
+			});
+			expect(calls.some((call) => call.startsWith("git show-ref"))).toBe(false);
+		});
+
+		test("PR attach preview plans fetch and branch checkout without mutation", async () => {
+			const root = await mkdtemp(join(tmpdir(), "agent-worktree-attach-pr-preview-"));
+			const calls: string[] = [];
+			const baseRun = fakeGitRunner(mainRepoGitOutputs(root));
+
+			const result = await attachWorktree({
+				cwd: root,
+				pr: 42,
+				dryRun: true,
+				runId: "attach/pr-preview",
+				run: async (args, options) => {
+					calls.push(args.join(" "));
+					return baseRun(args, options);
+				},
+			});
+
+			expect(result).toMatchObject({
+				action: "attach",
+				changedState: "none",
+				preview: true,
+				changes: [
+					"fetch pull request 42 into pr-42",
+					`attach worktree ${join(root, ".worktrees", "pr-42")}`,
+					"checkout existing branch pr-42",
+				],
+				resolvedRef: "pr-42",
+				targetPath: join(root, ".worktrees", "pr-42"),
+				mode: "pr",
+			});
+			expect(calls.some((call) => call.startsWith("git fetch"))).toBe(false);
+			expect(calls.some((call) => call.startsWith("git worktree add"))).toBe(false);
+		});
+
+		test("PR attach refuses a branch already checked out elsewhere", async () => {
+			const root = await mkdtemp(join(tmpdir(), "agent-worktree-attach-pr-conflict-"));
+			const linked = join(root, ".worktrees", "pr-42");
+			const calls: string[] = [];
+			const baseRun = fakeGitRunner({
+				...mainRepoGitOutputs(root),
+				["git worktree list --porcelain"]: `worktree ${root}
+HEAD abc
+branch refs/heads/main
+
+worktree ${linked}
+HEAD def
+branch refs/heads/pr-42
+`,
+			});
+
+			const result = await attachWorktree({
+				cwd: root,
+				pr: 42,
+				dryRun: false,
+				runId: "attach/pr-conflict",
+				run: async (args, options) => {
+					calls.push(args.join(" "));
+					return baseRun(args, options);
+				},
+			});
+
+			expect(result).toMatchObject({
+				changedState: "none",
+				reason: "branch_already_checked_out",
+				existingCheckoutPath: linked,
+				recovery: {
+					nextActionId: "use_existing_checkout",
+					choices: [
+						{
+							id: "use_existing_checkout",
+							path: linked,
+						},
+					],
+				},
+			});
+			expect(calls.some((call) => call.startsWith("git fetch"))).toBe(false);
+		});
+
 		test("PR attach fetches into a local branch before adding the worktree", async () => {
 			const root = await mkdtemp(join(tmpdir(), "agent-worktree-attach-pr-"));
 			const target = join(root, ".worktrees", "pr-42");
@@ -637,6 +771,50 @@ branch refs/heads/feat/x
 				"attach_worktree",
 				"checkout_pr",
 			]);
+		});
+
+		test("tracked PR attach preview avoids mutation", async () => {
+			const root = await mkdtemp(join(tmpdir(), "agent-worktree-attach-track-preview-"));
+			const target = join(root, ".worktrees", "pr-42");
+			const calls: string[] = [];
+			const baseRun = fakeGitRunner(mainRepoGitOutputs(root));
+
+			const result = await attachWorktree({
+				cwd: root,
+				pr: 42,
+				track: true,
+				dryRun: true,
+				runId: "attach/track-preview",
+				run: async (args, options) => {
+					calls.push(args.join(" "));
+					return baseRun(args, options);
+				},
+			});
+
+			expect(result).toEqual({
+				action: "attach",
+				changedState: "none",
+				preview: true,
+				changes: [
+					`attach detached worktree ${target}`,
+					"checkout pull request 42 with gh for push tracking",
+				],
+				nextSafeAction: "attach",
+				recovery: {
+					changedState: "none",
+					nextActionId: "retry_same_input",
+					choices: [
+						{
+							id: "retry_same_input",
+							retrySafety: "same_input_safe",
+						},
+					],
+				},
+				targetPath: target,
+				mode: "pr",
+			});
+			expect(calls.some((call) => call.startsWith("git worktree add"))).toBe(false);
+			expect(calls.some((call) => call.startsWith("gh pr checkout"))).toBe(false);
 		});
 
 		test("missing gh returns a typed degradation while pure-git PR mode stays available", async () => {
@@ -1039,6 +1217,183 @@ branch refs/heads/feat/x
 					],
 				},
 			});
+		});
+
+		test("delete requires force before attempting removal", async () => {
+			const { root, linked } = await createLinkedWorktreeFixture(
+				"agent-worktree-delete-force-",
+			);
+			const calls: string[] = [];
+
+			const result = await deleteWorktree({
+				...deleteFixtureOptions(root, async (args, options) => {
+					calls.push(args.join(" "));
+					return deleteFixtureRunner(root, linked)(args, options);
+				}),
+				force: false,
+			});
+
+			expect(result).toMatchObject({
+				action: "delete",
+				changedState: "none",
+				preview: false,
+				changes: [`remove worktree ${linked}`, "delete branch feat/x"],
+				nextSafeAction: "delete",
+				reason: "missing_force",
+				recovery: {
+					nextActionId: "inspect_first",
+					choices: [
+						{
+							id: "inspect_first",
+							retrySafety: "inspect_first",
+							handoffReason: "destructive_confirmation",
+						},
+					],
+				},
+			});
+			expect(calls.some((call) => call.includes("worktree remove"))).toBe(false);
+		});
+
+		test("delete dry-run reports a blocked preflight without mutation", async () => {
+			const { root, linked } = await createLinkedWorktreeFixture(
+				"agent-worktree-delete-preview-blocked-",
+			);
+			const calls: string[] = [];
+
+			const result = await deleteWorktree({
+				...deleteFixtureOptions(
+					root,
+					async (args, options) => {
+						calls.push(args.join(" "));
+						return deleteFixtureRunner(root, linked, {
+							status: " M file.txt\n",
+						})(args, options);
+					},
+				),
+				dryRun: true,
+				force: false,
+			});
+
+			expect(result).toMatchObject({
+				action: "delete",
+				changedState: "none",
+				preview: true,
+				changes: [`remove worktree ${linked}`, "delete branch feat/x"],
+				nextSafeAction: "handoff",
+				reason: "dirty",
+				recovery: {
+					changedState: "none",
+					nextActionId: "retry_same_input",
+					choices: [
+						{
+							id: "retry_same_input",
+							retrySafety: "same_input_safe",
+							handoffReason: "dirty_state",
+						},
+					],
+				},
+			});
+			expect(calls.some((call) => call.includes("worktree remove"))).toBe(false);
+		});
+
+		test("delete records removal failure before branch operations", async () => {
+			const { root, linked } = await createLinkedWorktreeFixture(
+				"agent-worktree-delete-remove-fail-",
+			);
+			const calls: string[] = [];
+
+			const result = await deleteWorktree({
+				...deleteFixtureOptions(root, async (args, options) => {
+					calls.push(args.join(" "));
+					return deleteFixtureRunner(root, linked)(args, options);
+				}),
+			});
+
+			expect(result).toMatchObject({
+				changedState: "none",
+				reason: undefined,
+				failureRef: {
+					kind: "failure",
+					id: "facade_run/remove_worktree",
+				},
+				changes: [],
+			});
+			expect(calls).toContain(`git worktree remove ${linked}`);
+			expect(calls.some((call) => call.includes("update-ref"))).toBe(false);
+			expect(calls.some((call) => call.includes("branch -D"))).toBe(false);
+		});
+
+		test("delete removes the worktree while keeping its branch", async () => {
+			const { root, linked } = await createLinkedWorktreeFixture(
+				"agent-worktree-delete-keep-branch-",
+			);
+			const calls: string[] = [];
+
+			const result = await deleteWorktree({
+				...deleteFixtureOptions(root, async (args, options) => {
+					calls.push(args.join(" "));
+					return deleteFixtureRunner(root, linked, {
+						extra: { [`git worktree remove ${linked}`]: "" },
+					})(args, options);
+				}),
+				deleteBranch: false,
+			});
+
+			expect(result).toMatchObject({
+				action: "delete",
+				changedState: "complete",
+				preview: false,
+				changes: ["removed worktree"],
+				nextSafeAction: "refresh",
+				recovery: {
+					changedState: "complete",
+					nextActionId: "inspect_result",
+				},
+			});
+			expect(result.backupRef).toBeUndefined();
+			expect(calls).toContain(`git worktree remove ${linked}`);
+			expect(calls.some((call) => call.includes("update-ref"))).toBe(false);
+			expect(calls.some((call) => call.includes("branch -D"))).toBe(false);
+		});
+
+		test("delete backs up and then deletes the branch on success", async () => {
+			const { root, linked } = await createLinkedWorktreeFixture(
+				"agent-worktree-delete-success-",
+			);
+			const backupRef = "refs/agent-worktree/backups/feat-x/facade_run";
+			const calls: string[] = [];
+
+			const result = await deleteWorktree({
+				...deleteFixtureOptions(root, async (args, options) => {
+					calls.push(args.join(" "));
+					return deleteFixtureRunner(root, linked, {
+						extra: {
+							[`git worktree remove ${linked}`]: "",
+							[`git update-ref ${backupRef} feat/x`]: "",
+							["git branch -D feat/x"]: "",
+						},
+					})(args, options);
+				}),
+			});
+
+			expect(result).toMatchObject({
+				action: "delete",
+				changedState: "complete",
+				preview: false,
+				backupRef,
+				changes: ["removed worktree", "deleted branch"],
+				nextSafeAction: "refresh",
+				recovery: {
+					changedState: "complete",
+					nextActionId: "inspect_result",
+				},
+			});
+			expect(calls.indexOf(`git worktree remove ${linked}`)).toBeLessThan(
+				calls.indexOf(`git update-ref ${backupRef} feat/x`),
+			);
+			expect(calls.indexOf(`git update-ref ${backupRef} feat/x`)).toBeLessThan(
+				calls.indexOf("git branch -D feat/x"),
+			);
 		});
 
 		test("delete records partial failure with backup ref when branch deletion fails", async () => {
