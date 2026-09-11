@@ -445,7 +445,7 @@ def validate_checkpoint(
     recovery = contained_file(vault, raw["recoveryPath"])
     entry = contained_file(vault, "README.md", "README.md")
     agent_ledger = validate_owned_executable(raw["agentLedgerExecutable"])
-    if project_map.parent != goal.parent or project_map.parent != evidence.parent:
+    if project_map.parent != goal.parent or not is_within(evidence, project_map.parent):
         reject()
     register = validate_register(home, raw["registerPath"], task_identity, program_identity)
     goal_text = read_bounded_file(goal, MARKDOWN_LIMIT_BYTES).decode("utf-8", errors="strict")
@@ -684,7 +684,7 @@ def schema_document() -> Mapping[str, Any]:
             "vaultRoot": "configured canonical absolute playground path",
             "projectMap": "contained project README.md",
             "goalPath": "contained GOAL.md beside the project map",
-            "evidencePath": "contained file beside the project map",
+            "evidencePath": "contained regular file under the project directory",
             "recoveryPath": "contained recovery guide",
             "agentLedgerExecutable": "canonical absolute regular executable owned by the current user",
             "sessionIdentity": "hook-supplied safe session token for one session-scoped checkpoint",
@@ -1007,7 +1007,7 @@ def run_session_command(run_id: str, operation: str, arguments: list[str]) -> in
             "vaultRoot": str(vault),
             "projectMap": project + "/README.md",
             "goalPath": goal.relative_to(vault).as_posix(),
-            "evidencePath": options.get("--evidence", project + "/proof.md"),
+            "evidencePath": options.get("--evidence", project + "/README.md"),
             "recoveryPath": "docs/agents/recovery.md",
             "agentLedgerExecutable": options.get("--agent-ledger"),
             "sessionIdentity": selected_session(options),

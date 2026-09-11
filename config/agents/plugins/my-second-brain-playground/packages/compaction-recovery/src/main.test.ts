@@ -1506,6 +1506,116 @@ test("bind derives identity from the goal and recover returns the same session p
  expect(runHook(current).stdout).toContain(taskIdentity)
 })
 
+test("bind accepts evidence anywhere under the project subtree and renders it", () => {
+	const current = fixture({ writeCheckpoint: false })
+	const evidencePath = "projects/ledger-workflow/proofs/proof.md"
+	write(join(current.vault, evidencePath), "# Proof\n")
+	const env = { ...environment(current), CODEX_SESSION_ID: sessionIdentity }
+	const binding = run(checkpointCommand, current.vault, "", env, [
+		"bind",
+		"projects/ledger-workflow/GOAL.md",
+		"--agent-ledger",
+		current.agentLedger,
+		"--evidence",
+		evidencePath,
+	])
+	expect(binding.exitCode).toBe(0)
+	expect(machineEnvelope(binding, "bind", "success")).toMatchObject({
+		transactionState: "committed",
+	})
+	const saved = JSON.parse(readFileSync(current.checkpointPath, "utf8"))
+	expect(saved.evidencePath).toBe(evidencePath)
+	const expectedEvidenceLine = `Read evidence owner: ${shellCommand("/bin/cat", join(current.vault, evidencePath))}`
+	const recovered = run(checkpointCommand, current.vault, "", env, ["recover"])
+	expect(recovered.exitCode).toBe(0)
+	machineEnvelope(recovered, "recover", "success")
+	expect(JSON.parse(recovered.stdout).data.controlPanel).toContain(expectedEvidenceLine)
+	const hook = runHook(current)
+	expect(hook.exitCode).toBe(0)
+	expect(hook.stderr).toBe("")
+	const hookOutput = JSON.parse(hook.stdout) as {
+		hookSpecificOutput: { additionalContext: string }
+	}
+	expect(hookOutput.hookSpecificOutput.additionalContext).toContain(expectedEvidenceLine)
+})
+
+test("bind defaults evidence to the project README", () => {
+	const current = fixture({ writeCheckpoint: false })
+	rmSync(join(current.vault, "projects/ledger-workflow/proof.md"))
+	const env = { ...environment(current), CODEX_SESSION_ID: sessionIdentity }
+	const binding = run(checkpointCommand, current.vault, "", env, [
+		"bind",
+		"projects/ledger-workflow/GOAL.md",
+		"--agent-ledger",
+		current.agentLedger,
+	])
+	expect(binding.exitCode).toBe(0)
+	expect(machineEnvelope(binding, "bind", "success")).toMatchObject({
+		transactionState: "committed",
+	})
+	const evidencePath = "projects/ledger-workflow/README.md"
+	const saved = JSON.parse(readFileSync(current.checkpointPath, "utf8"))
+	expect(saved.evidencePath).toBe(evidencePath)
+	const recovered = run(checkpointCommand, current.vault, "", env, ["recover"])
+	expect(recovered.exitCode).toBe(0)
+	machineEnvelope(recovered, "recover", "success")
+	expect(JSON.parse(recovered.stdout).data.controlPanel).toContain(
+		`Read evidence owner: ${shellCommand("/bin/cat", join(current.vault, evidencePath))}`,
+	)
+})
+
+test("evidence outside the bound project stays refused", () => {
+	const current = fixture()
+	const otherEvidencePath = "projects/other-project/README.md"
+	write(join(current.vault, otherEvidencePath), "# Other project\n")
+
+	replaceCheckpoint(current, { evidencePath: otherEvidencePath })
+	const outsideProjectBefore = observePrimaryTree(current.root)
+	expect(runHook(current).stdout).toBe("")
+	expect(observePrimaryTree(current.root)).toEqual(outsideProjectBefore)
+
+	replaceCheckpoint(current, { evidencePath: "README.md" })
+	const vaultRootBefore = observePrimaryTree(current.root)
+	expect(runHook(current).stdout).toBe("")
+	expect(observePrimaryTree(current.root)).toEqual(vaultRootBefore)
+
+	const escapePath = join(current.vault, "projects/ledger-workflow/proofs/escape.md")
+	mkdirSync(dirname(escapePath), { recursive: true })
+	symlinkSync(join(current.vault, otherEvidencePath), escapePath)
+	replaceCheckpoint(current, { evidencePath: "projects/ledger-workflow/proofs/escape.md" })
+	const escapingSymlinkBefore = observePrimaryTree(current.root)
+	expect(runHook(current).stdout).toBe("")
+	expect(observePrimaryTree(current.root)).toEqual(escapingSymlinkBefore)
+
+	const unbound = fixture({ writeCheckpoint: false })
+	write(join(unbound.vault, otherEvidencePath), "# Other project\n")
+	const binding = run(
+		checkpointCommand,
+		unbound.vault,
+		"",
+		{ ...environment(unbound), CODEX_SESSION_ID: sessionIdentity },
+		[
+			"bind",
+			"projects/ledger-workflow/GOAL.md",
+			"--agent-ledger",
+			unbound.agentLedger,
+			"--evidence",
+			otherEvidencePath,
+		],
+	)
+	expect(binding.exitCode).toBe(1)
+	expect(machineEnvelope(binding, "bind", "error")).toMatchObject({
+		transactionState: "not-started",
+		error: {
+			code: "INVALID_CHECKPOINT",
+			action: "CORRECT_INPUT",
+			errorFamily: "validation",
+			safeToRetrySameInput: false,
+		},
+	})
+	expect(existsSync(unbound.checkpointPath)).toBe(false)
+})
+
 test("bind and recovery recognize a committed WAL Task without changing Register data", () => {
 	const current = fixture({ writeCheckpoint: false })
 	const env = { ...environment(current), CODEX_SESSION_ID: sessionIdentity }
