@@ -207,6 +207,14 @@ function makeProtectedBaselineFixture() {
 	write(join(cacheRoot, 'plugin-a', 'index.js'), 'export default 1\n')
 	write(join(cacheRoot, 'plugin-b', 'README.md'), '# plugin b\n')
 	symlinkSync(join(cacheRoot, 'plugin-a'), join(cacheRoot, 'latest'))
+	const protectedSkillsOracle = join(fixture.home, 'protected-skills-oracle')
+	cpSync(join(skillsRoot, 'personal'), join(protectedSkillsOracle, 'personal'), {
+		recursive: true,
+	})
+	symlinkSync(
+		join(skillsRoot, '.system'),
+		join(protectedSkillsOracle, 'system-alias'),
+	)
 
 	const protectedBaseline = {
 		algorithm: 'git-tree-sha1',
@@ -214,8 +222,9 @@ function makeProtectedBaselineFixture() {
 		roots: [
 			{
 				path: '.codex/skills',
-				entryCount: entryCount(skillsRoot),
-				gitTreeSha1: gitTreeHash(skillsRoot, false),
+				excludedTopLevelEntries: ['.system'],
+				entryCount: entryCount(protectedSkillsOracle),
+				gitTreeSha1: gitTreeHash(protectedSkillsOracle, false),
 			},
 			{
 				path: '.codex/plugins/cache',
@@ -235,7 +244,7 @@ function makeProtectedBaselineFixture() {
 	topology.protectedHarness = protectedBaseline
 	writeFileSync(topologyPath, JSON.stringify(topology))
 
-	return { ...fixture, protectedBaseline }
+	return { ...fixture, protectedBaseline, topologyPath }
 }
 
 function declareProjectOnlyDotfiles(fixture: ReturnType<typeof makeFixture>) {
@@ -533,6 +542,20 @@ describe('agent-skills-inventory public process', () => {
 		expect(report.protected_harness).toEqual(fixture.protectedBaseline)
 		expect(report.protected_harness.issues).toBeUndefined()
 
+		write(
+			join(fixture.home, '.codex', 'skills', '.system', 'launch-version.txt'),
+			'new Codex build\n',
+		)
+		const harnessOwnedMutation = run(fixture.home, '--json')
+		expect(harnessOwnedMutation.stderr.toString()).toBe('')
+		expect(harnessOwnedMutation.exitCode).toBe(0)
+		const harnessOwnedReport = JSON.parse(
+			harnessOwnedMutation.stdout.toString(),
+		)
+		expect(harnessOwnedReport.protected_harness).toEqual(
+			fixture.protectedBaseline,
+		)
+
 		write(join(fixture.home, '.codex', 'skills', 'baseline-mutation.txt'), 'mutation\n')
 		const mutated = run(fixture.home, '--json')
 		expect(mutated.exitCode).toBe(1)
@@ -568,5 +591,54 @@ describe('agent-skills-inventory public process', () => {
 				}),
 			]),
 		)
+	})
+
+	test('rejects unsafe protected Harness exclusions', () => {
+		for (const invalid of [
+			{
+				excludedTopLevelEntries: ['../skills'],
+				expectedName: '.codex/skills',
+				rootIndex: 0,
+			},
+			{
+				excludedTopLevelEntries: ['.system', '.system'],
+				expectedName: '.codex/skills',
+				rootIndex: 0,
+			},
+			{
+				excludedTopLevelEntries: ['.system', {}],
+				expectedName: '.codex/skills',
+				rootIndex: 0,
+			},
+			{
+				excludedTopLevelEntries: ['personal'],
+				expectedName: '.codex/skills',
+				rootIndex: 0,
+			},
+			{
+				excludedTopLevelEntries: ['.system'],
+				expectedName: '.codex/plugins/cache',
+				rootIndex: 1,
+			},
+		]) {
+			const fixture = makeProtectedBaselineFixture()
+			const topology = JSON.parse(readFileSync(fixture.topologyPath, 'utf8'))
+			topology.protectedHarness.roots[
+				invalid.rootIndex
+			].excludedTopLevelEntries = invalid.excludedTopLevelEntries
+			writeFileSync(fixture.topologyPath, JSON.stringify(topology))
+
+			const result = run(fixture.home, '--json')
+			expect(result.stderr.toString()).toBe('')
+			expect(result.exitCode).toBe(1)
+			const report = JSON.parse(result.stdout.toString())
+			expect(report.issues).toContainEqual(
+				expect.objectContaining({
+					address: 'protected-harness',
+					code: 'protected-manifest-invalid',
+					name: invalid.expectedName,
+				}),
+			)
+		}
 	})
 })

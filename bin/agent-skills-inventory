@@ -67,11 +67,14 @@ def git_object_hash(kind, payload):
     return hashlib.sha1(header + payload).digest()
 
 
-def git_tree_digest(root):
+def git_tree_digest(root, excluded_top_level_entries=None):
+    excluded = excluded_top_level_entries or set()
     rows = []
     with os.scandir(root) as entries:
         ordered = sorted(entries, key=lambda entry: os.fsencode(entry.name))
     for entry in ordered:
+        if entry.name in excluded:
+            continue
         path = entry.path
         encoded_name = os.fsencode(entry.name)
         entry_stat = os.lstat(path)
@@ -91,19 +94,20 @@ def git_tree_digest(root):
     return git_object_hash("tree", b"".join(rows))
 
 
-def git_tree_hash(root):
+def git_tree_hash(root, excluded_top_level_entries=None):
     try:
         root_stat = os.lstat(root)
     except OSError:
         return None
     if not stat.S_ISDIR(root_stat.st_mode):
         return None
-    digest = git_tree_digest(root)
+    digest = git_tree_digest(root, excluded_top_level_entries)
     return digest.hex() if digest else None
 
 
-def entry_count(root):
+def entry_count(root, excluded_top_level_entries=None):
     """Count entries, recursing into real directories only."""
+    excluded = excluded_top_level_entries or set()
     try:
         root_stat = os.lstat(root)
     except OSError:
@@ -114,6 +118,8 @@ def entry_count(root):
     try:
         with os.scandir(root) as entries:
             for entry in entries:
+                if entry.name in excluded:
+                    continue
                 count += 1
                 try:
                     entry_stat = entry.stat(follow_symlinks=False)
@@ -127,6 +133,29 @@ def entry_count(root):
     except OSError:
         return None
     return count
+
+
+def protected_root_exclusions(relative_path, declaration):
+    excluded = declaration.get("excludedTopLevelEntries", [])
+    if not isinstance(excluded, list):
+        return None
+    seen = set()
+    for name in excluded:
+        if (
+            not isinstance(name, str)
+            or not name
+            or "\0" in name
+            or name in {".", ".."}
+            or os.path.basename(name) != name
+            or name in seen
+        ):
+            return None
+        seen.add(name)
+    if excluded and (
+        relative_path != ".codex/skills" or excluded != [".system"]
+    ):
+        return None
+    return excluded
 
 
 def path_kind(path):
@@ -945,16 +974,28 @@ class Inventory:
                 )
                 continue
 
+            excluded_entries = protected_root_exclusions(relative_path, expected)
+            if excluded_entries is None:
+                self.issue(
+                    "protected-manifest-invalid",
+                    "protected-harness",
+                    relative_path,
+                    "only .codex/skills may exclude its single .system entry",
+                )
+                continue
+
             root = os.path.join(HOME, relative_path)
-            count = entry_count(root)
-            digest = git_tree_hash(root)
-            observed_roots.append(
-                {
-                    "path": relative_path,
-                    "entryCount": count,
-                    "gitTreeSha1": digest,
-                }
-            )
+            excluded_set = set(excluded_entries)
+            count = entry_count(root, excluded_set)
+            digest = git_tree_hash(root, excluded_set)
+            observed = {
+                "path": relative_path,
+                "entryCount": count,
+                "gitTreeSha1": digest,
+            }
+            if excluded_entries:
+                observed["excludedTopLevelEntries"] = excluded_entries
+            observed_roots.append(observed)
             if count is None or digest is None:
                 self.issue(
                     "protected-root-missing",
