@@ -55,10 +55,6 @@ runtime owner for machine-checkable contracts.
   `runtime/cli-command-facade/src/testing.ts`
 - Package tests and fixtures:
   `runtime/cli-command-facade/tests/command-facade.test.ts`
-- Cross-package Station Map report:
-  `skills/cli-execution-auditor/src/station-map.ts`
-  This path appears here because the facade owns the generic Station Map model;
-  the auditor owns the cross-package report that applies it to target CLIs.
 
 ## Capability Map
 
@@ -254,9 +250,6 @@ Use these instead of writing package-local equivalents.
 | `extractEnvelopeContractId(envelope)` | Reads `contract_id` or `contract` from envelope data. |
 
 Reference implementations:
-- `skills/skill-feedback/src/skill-feedback.integration.test.ts` — full
-  coverage, no skipped stations (uses package-local helpers, predates shared
-  extraction).
 - `skills/use-storybook/tests/storybook-doctor.integration.test.ts` — partial
   coverage with skipped stations, uses shared helpers from the facade testing
   subpath.
@@ -351,7 +344,6 @@ Current repo alignment:
 | Package | Unit | Catalog | Integration | Status |
 |---------|------|---------|-------------|--------|
 | `skills/use-storybook` | Yes | Yes | Yes (shared helpers) | Fully aligned |
-| `skills/skill-feedback` | Yes | Yes | Yes (local helpers) | Aligned, could adopt shared helpers |
 | `skills/worktree` | Yes | No | Yes (no catalog) | Needs catalog + refactor |
 | `runtime/agent-worktree` | Yes | No | Yes (no catalog) | Needs catalog + refactor |
 

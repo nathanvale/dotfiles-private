@@ -1,20 +1,8 @@
 {
+	"extends": "../../../tsconfig.base.json",
 	"compilerOptions": {
-		"target": "ESNext",
-		"lib": ["ESNext"],
-		"module": "Preserve",
-		"moduleDetection": "force",
-		"moduleResolution": "bundler",
-		"allowImportingTsExtensions": true,
-		"verbatimModuleSyntax": true,
-		"noEmit": true,
-		"strict": true,
-		"types": ["bun"],
-		"skipLibCheck": true,
-		"noFallthroughCasesInSwitch": true,
-		"noImplicitOverride": true,
-		"resolveJsonModule": true,
-		"ignoreDeprecations": "6.0"
+		"exactOptionalPropertyTypes": false,
+		"noUncheckedIndexedAccess": false
 	},
 	"include": ["src/**/*.ts", "tests/**/*.ts"]
 }

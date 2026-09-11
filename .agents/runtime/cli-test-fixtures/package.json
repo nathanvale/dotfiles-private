@@ -12,6 +12,8 @@
 		".": "./src/index.ts"
 	},
 	"scripts": {
+		"lint": "biome check --diagnostic-level=error .",
+		"test": "bun test --pass-with-no-tests",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"devDependencies": {

@@ -7,6 +7,8 @@
 	"scripts": {
 		"cli-author-facade-smoke": "./src/facade-resolution-smoke.ts",
 		"smoke": "bun run src/facade-resolution-smoke.ts",
+		"lint": "biome check --diagnostic-level=error .",
+		"test": "bun test --pass-with-no-tests",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},
 	"dependencies": {

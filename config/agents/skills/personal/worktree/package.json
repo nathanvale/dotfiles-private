@@ -6,6 +6,7 @@
 	"description": "Bun package for the WorkTree skill. Renders per-repo VS Code workspaces from a branch-keyed registry and calls the shared agent-worktree runtime through a facade-backed agent-native CLI.",
 	"scripts": {
 		"worktree": "bun run src/worktree.ts",
+		"lint": "biome check --diagnostic-level=error .",
 		"test": "bun test src",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},

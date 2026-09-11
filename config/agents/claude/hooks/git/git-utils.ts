@@ -7,7 +7,7 @@
 
 export interface RunGitOptions {
 	/** Working directory for the git command. Defaults to process.cwd(). */
-	cwd?: string
+	cwd?: string | undefined
 	/** How to handle stderr. Defaults to 'ignore'. */
 	stderr?: 'pipe' | 'ignore'
 	/** Whether to trim stdout. Defaults to true. */
@@ -36,7 +36,7 @@ export async function runGit(
 	const trim = options?.trim ?? true
 
 	const proc = Bun.spawn(['git', ...args], {
-		cwd,
+		...(cwd !== undefined ? { cwd } : {}),
 		stdout: 'pipe',
 		stderr,
 	})

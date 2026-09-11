@@ -236,17 +236,43 @@ describe('git-safety runtime mode behavior', () => {
 	})
 })
 
-describe('installed hook declarations', () => {
-	test('Claude and Codex declare the checkout safety gate', () => {
-		const claude = JSON.parse(
-			readFileSync(join(import.meta.dir, '../../settings.json'), 'utf8'),
-		) as { hooks?: { PreToolUse?: Array<{ matcher?: string }> } }
-		const codex = JSON.parse(
-			readFileSync(join(import.meta.dir, '../../../codex/hooks.json'), 'utf8'),
-		) as { hooks?: { PreToolUse?: Array<{ matcher?: string }> } }
+interface PreToolUseDeclaration {
+	matcher?: string
+	hooks?: Array<{ command?: string }>
+}
 
-		expect(claude.hooks?.PreToolUse?.[0]?.matcher).toBe('Write|Edit|Bash')
-		expect(codex.hooks?.PreToolUse?.[0]?.matcher).toBe('Write|Edit|Bash')
+interface HookDeclarations {
+	hooks?: { PreToolUse?: PreToolUseDeclaration[] }
+}
+
+function readDeclarations(relativePath: string): HookDeclarations {
+	return JSON.parse(
+		readFileSync(join(import.meta.dir, relativePath), 'utf8'),
+	) as HookDeclarations
+}
+
+function findGitSafetyGate(
+	declarations: HookDeclarations,
+): PreToolUseDeclaration | undefined {
+	return declarations.hooks?.PreToolUse?.find((entry) =>
+		entry.hooks?.some((hook) => hook.command?.includes('git-safety')),
+	)
+}
+
+describe('installed hook declarations', () => {
+	test('Claude declares the checkout safety gate on Write|Edit|Bash', () => {
+		const claude = readDeclarations('../../settings.json')
+
+		expect(findGitSafetyGate(claude)?.matcher).toBe('Write|Edit|Bash')
+	})
+
+	test('Codex declares no checkout safety gate', () => {
+		// bc209ae6 removed the git-safety declaration from the Codex hooks
+		// file and left only Codex-specific gates. Pin that so re-adding it
+		// is a reviewed change rather than a silent one.
+		const codex = readDeclarations('../../../codex/hooks.json')
+
+		expect(findGitSafetyGate(codex)).toBeUndefined()
 	})
 })
 

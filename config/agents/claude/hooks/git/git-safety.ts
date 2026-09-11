@@ -877,7 +877,8 @@ function resolveFilePath(filePath: string): string {
 export async function checkWorktreeIsolation(filePath: string): Promise<{
 	blocked: boolean
 	reason?: string
-	branch?: string
+	/** Undefined when HEAD is detached; the key is always present when blocked. */
+	branch?: string | undefined
 }> {
 	const resolvedFilePath = resolveFilePath(filePath)
 	// Walk up to the nearest existing ancestor: the target may be a new file in
@@ -962,6 +963,51 @@ export function isCommitCommand(
 }
 
 /**
+ * Flags that stop a commit-creating subcommand from creating a commit.
+ * `controlFlow` flags resume or abandon an in-progress operation;
+ * `suppressesCommit` flags run the operation without committing.
+ */
+interface CommitSubcommandRule {
+	readonly controlFlow: readonly string[]
+	readonly suppressesCommit: readonly string[]
+	readonly shortSuppress?: string
+}
+
+const SEQUENCER_COMMIT_RULE: CommitSubcommandRule = {
+	controlFlow: ['--abort', '--continue', '--quit', '--skip'],
+	suppressesCommit: ['--no-commit'],
+	shortSuppress: 'n',
+}
+
+/**
+ * Subcommands that can create a commit. A Map (not a plain object) so an
+ * unknown subcommand can never resolve to an inherited prototype property.
+ */
+const COMMIT_SUBCOMMAND_RULES: ReadonlyMap<string, CommitSubcommandRule> =
+	new Map([
+		['commit', { controlFlow: [], suppressesCommit: [] }],
+		['cherry-pick', SEQUENCER_COMMIT_RULE],
+		['revert', SEQUENCER_COMMIT_RULE],
+		[
+			'merge',
+			{
+				controlFlow: ['--abort', '--continue', '--quit'],
+				suppressesCommit: ['--squash', '--ff-only', '--no-commit'],
+			},
+		],
+	])
+
+function invocationCreatesCommit({ subcommand, args }: GitInvocation): boolean {
+	const rule = COMMIT_SUBCOMMAND_RULES.get(subcommand)
+	if (!rule) return false
+	const isControlFlow = rule.controlFlow.some((flag) => hasLongFlag(args, flag))
+	const suppressesCommit =
+		rule.suppressesCommit.some((flag) => hasLongFlag(args, flag)) ||
+		(rule.shortSuppress !== undefined && hasShortFlag(args, rule.shortSuppress))
+	return !isControlFlow && !suppressesCommit
+}
+
+/**
  * Detects git subcommands that can create a commit and therefore must be
  * blocked on protected branches.
  */
@@ -971,38 +1017,7 @@ export function hasProtectedBranchCommitAction(
 ): boolean {
 	const segments = preParsedSegments ?? splitShellSegments(command).segments
 	const invocations = collectGitInvocations(segments)
-
-	for (const { subcommand, args } of invocations) {
-		if (subcommand === 'commit') return true
-
-		if (subcommand === 'cherry-pick' || subcommand === 'revert') {
-			const isControlFlow =
-				hasLongFlag(args, '--abort') ||
-				hasLongFlag(args, '--continue') ||
-				hasLongFlag(args, '--quit') ||
-				hasLongFlag(args, '--skip')
-			if (isControlFlow) continue
-			const noCommit =
-				hasLongFlag(args, '--no-commit') || hasShortFlag(args, 'n')
-			if (!noCommit) return true
-		}
-
-		if (subcommand === 'merge') {
-			const isControlFlow =
-				hasLongFlag(args, '--abort') ||
-				hasLongFlag(args, '--continue') ||
-				hasLongFlag(args, '--quit')
-			if (isControlFlow) continue
-			const suppressesCommit =
-				hasLongFlag(args, '--squash') ||
-				hasLongFlag(args, '--ff-only') ||
-				hasLongFlag(args, '--no-commit')
-			const createsCommit = !suppressesCommit
-			if (createsCommit) return true
-		}
-	}
-
-	return false
+	return invocations.some(invocationCreatesCommit)
 }
 
 /**

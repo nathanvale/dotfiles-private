@@ -1,168 +1,68 @@
 #!/usr/bin/env bun
 
 /**
- * Stop hook: run a project-wide Biome check when Biome-relevant files changed.
- *
- * Adapted from side-quest-engineering's biome-runner plugin setup. Warnings are
- * allowed through so existing style debt does not create end-of-session noise.
+ * Stop hook: delta Biome gate. Lints only the files changed in the working
+ * tree (staged, unstaged, untracked), and only when the repository itself has
+ * Biome installed (`node_modules/.bin/biome` plus `biome.json[c]`). Repos
+ * without a local Biome, and pre-existing errors in untouched files, never
+ * block a Stop.
  */
 
-import { existsSync } from 'node:fs'
+import {
+	changedBiomeFiles,
+	parseBiomeErrors,
+	resolveRepoBiome,
+	resolveRepoRoot,
+	runBiomeCheck,
+	summariseFailure,
+} from './biome-common.ts'
 
-const BIOME_EXTENSIONS = [
-	'.ts',
-	'.tsx',
-	'.js',
-	'.jsx',
-	'.json',
-	'.jsonc',
-	'.css',
-]
-
-interface BiomeDiagnostic {
-	file: string
-	line: number
-	message: string
-	code: string
-	severity: 'error' | 'warning'
+interface StopHookInput {
+	stop_hook_active?: boolean
+	cwd?: string
 }
 
-interface BiomeReporterDiagnostic {
-	severity?: string
-	description?: string
-	message?: string
-	category?: string
-	location?: {
-		path?: string
-		start?: {
-			line?: number
-		}
-	}
-}
-
-async function getGitRoot(): Promise<string | null> {
-	const proc = Bun.spawn(['git', 'rev-parse', '--show-toplevel'], {
-		stdout: 'pipe',
-		stderr: 'pipe',
-	})
-	const [exitCode, stdout] = await Promise.all([
-		proc.exited,
-		proc.stdout.text(),
-	])
-	if (exitCode !== 0) return null
-	return stdout.trim() || null
-}
-
-async function hasChangedBiomeFiles(): Promise<boolean> {
-	const commands = [
-		['git', 'diff', '--cached', '--name-only', '--diff-filter=d'],
-		['git', 'diff', '--name-only', '--diff-filter=d'],
-		['git', 'ls-files', '--others', '--exclude-standard'],
-	]
-	const outputs = await Promise.all(
-		commands.map(async (command) => {
-			const proc = Bun.spawn(command, { stdout: 'pipe', stderr: 'pipe' })
-			const [stdout] = await Promise.all([proc.stdout.text(), proc.exited])
-			return stdout
-		}),
-	)
-	return outputs.some((output) =>
-		output
-			.trim()
-			.split('\n')
-			.some(
-				(file) =>
-					file &&
-					BIOME_EXTENSIONS.some((extension) => file.endsWith(extension)),
-			),
-	)
-}
-
-function parseBiomeOutput(output: string): BiomeDiagnostic[] {
+async function readInput(): Promise<StopHookInput> {
 	try {
-		const report = JSON.parse(output) as {
-			diagnostics?: BiomeReporterDiagnostic[]
-		}
-		return (report.diagnostics ?? [])
-			.filter(
-				(diagnostic) =>
-					diagnostic.severity === 'error' || diagnostic.severity === 'warning',
-			)
-			.map((diagnostic) => ({
-				file: diagnostic.location?.path ?? 'unknown',
-				line: diagnostic.location?.start?.line ?? 0,
-				message:
-					diagnostic.description ?? diagnostic.message ?? 'Unknown issue',
-				code: diagnostic.category ?? 'unknown',
-				severity: diagnostic.severity as 'error' | 'warning',
-			}))
+		const raw = await Bun.stdin.text()
+		if (!raw.trim()) return {}
+		return JSON.parse(raw) as StopHookInput
 	} catch {
-		return []
+		// Empty or non-JSON stdin should not block the stop hook.
+		return {}
 	}
 }
 
 async function main(): Promise<void> {
-	try {
-		const raw = await Bun.stdin.text()
-		if (raw.trim()) {
-			const input = JSON.parse(raw) as { stop_hook_active?: boolean }
-			if (input.stop_hook_active === true) process.exit(0)
-		}
-	} catch {
-		// Empty or non-JSON stdin should not block the stop hook.
-	}
+	const input = await readInput()
+	if (input.stop_hook_active === true) process.exit(0)
 
-	const gitRoot = await getGitRoot()
-	if (!gitRoot) process.exit(0)
-	if (!(await hasChangedBiomeFiles())) process.exit(0)
-	if (
-		!existsSync(`${gitRoot}/biome.json`) &&
-		!existsSync(`${gitRoot}/biome.jsonc`)
-	)
-		process.exit(0)
+	const cwd =
+		typeof input.cwd === 'string' && input.cwd.trim()
+			? input.cwd
+			: process.cwd()
+	const repoRoot = await resolveRepoRoot(cwd)
+	if (!repoRoot) process.exit(0)
 
-	const proc = Bun.spawn(
-		[
-			'bunx',
-			'@biomejs/biome',
-			'check',
-			'--diagnostic-level=error',
-			'--reporter=json',
-			gitRoot,
-		],
-		{
-			cwd: gitRoot,
-			stdout: 'pipe',
-			stderr: 'pipe',
-			env: { ...process.env, CI: 'true' },
-		},
-	)
-	const [exitCode, stdout, stderr] = await Promise.all([
-		proc.exited,
-		proc.stdout.text(),
-		proc.stderr.text(),
-	])
+	const biomeBin = resolveRepoBiome(repoRoot)
+	if (!biomeBin) process.exit(0)
 
-	if (exitCode === 0) process.exit(0)
+	const files = await changedBiomeFiles(repoRoot)
+	if (files.length === 0) process.exit(0)
 
-	const diagnostics = parseBiomeOutput(stdout)
-	const fallbackDiagnostics =
-		diagnostics.length > 0 ? diagnostics : parseBiomeOutput(stderr)
-	const errors = fallbackDiagnostics.filter(
-		(diagnostic) => diagnostic.severity === 'error',
-	)
-	if (errors.length === 0) process.exit(0)
+	const result = await runBiomeCheck(biomeBin, repoRoot, files)
+	if (result.exitCode === 0) process.exit(0)
 
+	const diagnostics = parseBiomeErrors(result.stdout, result.stderr)
+	const summary = summariseFailure(result, diagnostics)
 	process.stderr.write(
 		JSON.stringify({
 			tool: 'biome-ci',
 			status: 'error',
-			errorCount: errors.length,
-			errors: errors.slice(0, 30).map((error) => ({
-				file: error.file,
-				line: error.line,
-				message: `[${error.code}] ${error.message}`,
-			})),
+			scope: 'changed-files',
+			fileCount: files.length,
+			errorCount: summary.errorCount,
+			errors: summary.errors,
 		}),
 	)
 	process.exit(2)

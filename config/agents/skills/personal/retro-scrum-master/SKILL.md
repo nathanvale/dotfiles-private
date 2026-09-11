@@ -35,8 +35,8 @@ facilitated meeting.
 - Keep the tone enthusiastic and specific. Never manufacture praise, failure,
   or consensus.
 - Never invent absent teammates, their opinions, or their agreement.
-- When a claim concerns agent behavior, prefer bounded session evidence,
-  skill-feedback patterns, and artifact-based qualification over self-report.
+- When a claim concerns agent behavior, prefer bounded session evidence and
+  artifact-based qualification over self-report.
 - When the user requests independent gap-finding and the harness permits it,
   dispatch read-only agents only for bounded follow-ups using existing evidence
   from the selected retrospective. Give them non-overlapping lenses. Stop when

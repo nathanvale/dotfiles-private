@@ -4,6 +4,7 @@
 	"type": "module",
 	"scripts": {
 		"benchmark": "bun run src/test-runner.benchmark.ts",
+		"lint": "biome check --diagnostic-level=error .",
 		"test": "bun test src/test-runner.test.ts",
 		"test-runner": "./src/test-runner.sh",
 		"test-runner-benchmark": "./src/test-runner.benchmark.ts",

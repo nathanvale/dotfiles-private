@@ -206,7 +206,7 @@ function EvidencePanel({ state }: { state: PrototypeState }) {
 				<Field label="Expected generated digest" value={state.generatedArtifact.expectedDigest} />
 				<Field label="Observed generated digest" value={state.generatedArtifact.observedDigest} />
 			</dl>
-			<div className="lifecycle" aria-label="Cancellation lifecycle evidence">
+			<section className="lifecycle" aria-label="Cancellation lifecycle evidence">
 				<p className="lifecycle-title">Cancellation evidence</p>
 				{[
 					["Request", state.cancellation.request],
@@ -220,7 +220,7 @@ function EvidencePanel({ state }: { state: PrototypeState }) {
 						<strong>{value}</strong>
 					</div>
 				))}
-			</div>
+			</section>
 		</section>
 	);
 }
@@ -341,6 +341,7 @@ export function App() {
 								data-status={
 									index < stepIndex ? "complete" : index === stepIndex ? "current" : "later"
 								}
+								// biome-ignore lint/suspicious/noArrayIndexKey: steps are a static, never-reordered script and one action may legitimately repeat within a walkthrough (fail-closed runs attemptContinuation twice), so position is the step's identity
 								key={`${activeWalkthrough.id}-${index}-${step.action.type}`}
 							>
 								<button onClick={() => runGuidedStep(step, index)} type="button">

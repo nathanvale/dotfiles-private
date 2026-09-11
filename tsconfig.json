@@ -1,0 +1,5 @@
+{
+	"extends": "./tsconfig.base.json",
+	"include": ["tooling/**/*.ts", "config/agents/claude/hooks/**/*.ts"],
+	"exclude": ["node_modules"]
+}

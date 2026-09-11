@@ -6,7 +6,12 @@
 		"quarter-ledger": "./scripts/quarter-ledger.ts"
 	},
 	"scripts": {
+		"lint": "biome check --diagnostic-level=error .",
 		"test": "bun test scripts/quarter-ledger.test.ts",
-		"typecheck": "bunx tsc --noEmit -p tsconfig.json"
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
 	}
 }
