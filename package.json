@@ -14,7 +14,6 @@
 		".agents/runtime/session-corpus",
 		"config/agents/skills/personal/bitbucket",
 		"config/agents/skills/personal/classic-cinema",
-		"config/agents/skills/personal/cli-author",
 		"config/agents/skills/personal/session-recovery",
 		"config/agents/skills/personal/test-runner",
 		"config/agents/skills/personal/worktree",

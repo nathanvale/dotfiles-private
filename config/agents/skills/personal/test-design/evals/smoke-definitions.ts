@@ -41,7 +41,7 @@ export const testDesignScenarioFactors = {
 		"tdd",
 		"diagnosing-bugs",
 		"ci-testbed",
-		"cli-author",
+		"cli-design",
 		"test-runner",
 	],
 	profiles: [

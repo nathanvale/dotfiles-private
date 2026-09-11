@@ -111,7 +111,7 @@ Do not accept a brief whose expected result restates the implementation. Do not 
 - `tdd`: brief before the first test edit; return for RED to GREEN.
 - `diagnosing-bugs`: brief after reproduction and isolation; return before the regression-test edit.
 - `ci-testbed`: use only when mismatch repair changes a repository-test artifact; return to its repair owner.
-- `cli-author`: brief after contract and seam selection; return before test implementation.
+- `cli-design`: brief after contract and seam selection; return before test implementation.
 - `test-runner`: use only when repair changes a repository-test artifact; return to repair mode.
 ## Done
 

@@ -97,17 +97,6 @@
         "typescript": "catalog:",
       },
     },
-    "config/agents/skills/personal/cli-author": {
-      "name": "cli-author-scripts",
-      "version": "0.0.0",
-      "dependencies": {
-        "@side-quest/cli-command-facade": "workspace:*",
-      },
-      "devDependencies": {
-        "@types/bun": "catalog:",
-        "typescript": "catalog:",
-      },
-    },
     "config/agents/skills/personal/session-recovery": {
       "name": "session-recovery-scripts",
       "dependencies": {
@@ -346,8 +335,6 @@
     "chromium-bidi": ["chromium-bidi@11.0.0", "", { "dependencies": { "mitt": "3.0.1", "zod": "3.25.76" }, "peerDependencies": { "devtools-protocol": "0.0.1534754" } }, "sha512-cM3DI+OOb89T3wO8cpPSro80Q9eKYJ7hGVXoGS3GkDPxnYSqiv+6xwpIf6XERyJ9Tdsl09hmNmY94BkgZdVekw=="],
 
     "classic-cinema-scripts": ["classic-cinema-scripts@workspace:config/agents/skills/personal/classic-cinema"],
-
-    "cli-author-scripts": ["cli-author-scripts@workspace:config/agents/skills/personal/cli-author"],
 
     "cli-cursor": ["cli-cursor@5.0.0", "", { "dependencies": { "restore-cursor": "5.1.0" } }, "sha512-aCj4O5wKyszjMmDT4tZj93kxyydN/K5zPWSCe6/0AV/AA1pqe5ZBIw0a2ZfPQV7lL5/yb5HsUreJ6UFAF1tEQw=="],
 

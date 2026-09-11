@@ -32,7 +32,7 @@ Do not shell out to old worktree wrappers. `worktree` calls the shared `.agents/
 - `codex` on PATH: needed by `worktree app <branch>` and best-effort thread archival during `worktree rm`. App launch absence → `codex_app_not_found`; removal still completes with partial cleanup metadata.
 - `gh` on PATH: optional; needed only for push-tracking PR attach. Missing state: degraded with `gh_not_found`; omit tracking or install `gh`, then retry. Contract owner: `.agents/runtime/agent-worktree/src/`.
 - Fresh-worktree bootstrap: run `bun install --frozen-lockfile` from the repository root after `new` or `attach`, following `AGENTS.md`.
-- `cli-author`: hard dependency before changing the CLI contract surface.
+- `cli-design`: hard dependency before changing the CLI contract surface.
 
 ## Safety
 

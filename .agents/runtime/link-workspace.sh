@@ -20,7 +20,7 @@ link_runtime() { # <pkg> <dep>
   ln -sfn "../../../$2" "$here/$1/node_modules/@side-quest/$2"
 }
 
-for s in classic-cinema cli-author test-runner worktree; do
+for s in classic-cinema test-runner worktree; do
   link_personal "$s" cli-command-facade
 done
 link_personal session-recovery session-corpus

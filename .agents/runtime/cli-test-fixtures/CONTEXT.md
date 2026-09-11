@@ -103,8 +103,8 @@ This package does NOT own:
 - Domain-specific fixture shapes (storybook config, git repo scaffolding, full
   setup dirs) stay in the consuming test file. This package provides generic
   building blocks that every facade-backed CLI integration test needs.
-- The `cli-author` testing strategy (`.agents/skills/cli-author/references/cli-command-facade.md`)
-  documents how these building blocks compose with the facade testing helpers.
+- The `cli-design` plugin skill's complex-profile reference documents how
+  these building blocks compose with the facade testing helpers.
 
 ## Admission criteria
 

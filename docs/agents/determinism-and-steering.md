@@ -48,7 +48,7 @@ A Gate refuses, names the change, and runs again. The loop closes only when
 each refusal carries the next action: its cause and its repair path. Where no
 repair exists, naming the human handoff is the repair path.
 
-`cli-author` owns the CLI form: exit codes, stderr shape, and the structure of
+the `cli-design` plugin skill owns the CLI form: exit codes, stderr shape, and the structure of
 a hint.
 
 ## What a Gate costs
