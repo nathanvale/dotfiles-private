@@ -1,9 +1,0 @@
-{
-	"extends": "../../../../../tsconfig.base.json",
-	"compilerOptions": {
-		"exactOptionalPropertyTypes": false,
-		"noUncheckedIndexedAccess": false
-	},
-	"include": ["src/**/*.ts"],
-	"exclude": ["src/fixtures"]
-}

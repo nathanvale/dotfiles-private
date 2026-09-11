@@ -12,7 +12,6 @@
         "@biomejs/biome": "2.4.15",
         "@commitlint/cli": "^20.1.0",
         "@commitlint/config-conventional": "^20.0.0",
-        "@side-quest/setup": "workspace:*",
         "@types/bun": "catalog:",
         "commitlint-config-git-commit-emoji": "^1.0.0",
         "fallow": "3.19.0",
@@ -74,32 +73,6 @@
         "typescript": "catalog:",
       },
     },
-    ".agents/runtime/setup": {
-      "name": "@side-quest/setup",
-      "version": "0.1.0",
-      "bin": {
-        "setup": "./src/cli.ts",
-      },
-      "dependencies": {
-        "@side-quest/vault-git-transaction-manager": "workspace:*",
-      },
-      "devDependencies": {
-        "@types/bun": "catalog:",
-        "typescript": "catalog:",
-      },
-    },
-    ".agents/runtime/vault-git-transaction-manager": {
-      "name": "@side-quest/vault-git-transaction-manager",
-      "version": "0.1.0",
-      "dependencies": {
-        "@side-quest/cli-command-facade": "workspace:*",
-      },
-      "devDependencies": {
-        "@types/bun": "catalog:",
-        "@types/node": "25.9.1",
-        "typescript": "catalog:",
-      },
-    },
     "apps/vscode/nathan-adhd-helper": {
       "name": "diff-toggle",
       "version": "0.3.5",
@@ -136,41 +109,10 @@
         "typescript": "catalog:",
       },
     },
-    "config/agents/skills/personal/cli-execution-auditor": {
-      "name": "cli-execution-auditor-scripts",
-      "version": "0.0.0",
-      "dependencies": {
-        "@side-quest/cli-command-facade": "workspace:*",
-      },
-      "devDependencies": {
-        "@types/bun": "catalog:",
-        "typescript": "catalog:",
-      },
-    },
-    "config/agents/skills/personal/fallow": {
-      "name": "fallow-scripts",
-      "dependencies": {
-        "@side-quest/cli-command-facade": "workspace:*",
-      },
-      "devDependencies": {
-        "@types/bun": "catalog:",
-        "typescript": "catalog:",
-      },
-    },
     "config/agents/skills/personal/session-recovery": {
       "name": "session-recovery-scripts",
       "dependencies": {
         "@side-quest/session-corpus": "workspace:*",
-      },
-      "devDependencies": {
-        "@types/bun": "catalog:",
-        "typescript": "catalog:",
-      },
-    },
-    "config/agents/skills/personal/skill-feedback": {
-      "name": "skill-feedback-scripts",
-      "dependencies": {
-        "@side-quest/cli-command-facade": "workspace:*",
       },
       "devDependencies": {
         "@types/bun": "catalog:",
@@ -182,13 +124,6 @@
       "dependencies": {
         "@side-quest/cli-command-facade": "workspace:*",
       },
-      "devDependencies": {
-        "@types/bun": "catalog:",
-        "typescript": "catalog:",
-      },
-    },
-    "config/agents/skills/personal/vault-git": {
-      "name": "vault-git-skill",
       "devDependencies": {
         "@types/bun": "catalog:",
         "typescript": "catalog:",
@@ -307,10 +242,6 @@
 
     "@side-quest/session-corpus": ["@side-quest/session-corpus@workspace:.agents/runtime/session-corpus"],
 
-    "@side-quest/setup": ["@side-quest/setup@workspace:.agents/runtime/setup"],
-
-    "@side-quest/vault-git-transaction-manager": ["@side-quest/vault-git-transaction-manager@workspace:.agents/runtime/vault-git-transaction-manager"],
-
     "@tootallnate/quickjs-emscripten": ["@tootallnate/quickjs-emscripten@0.23.0", "", {}, "sha512-C5Mc6rdnsaJDjO3UpGW/CQTHtCKaYlScZTly4JIu97Jxo/odCiH0ITnDXSJPTOrEKk/ycSZ0AOgTmkDtkOsvIA=="],
 
     "@types/bun": ["@types/bun@1.4.0", "", { "dependencies": { "bun-types": "1.4.0" } }, "sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ=="],
@@ -421,8 +352,6 @@
 
     "cli-cursor": ["cli-cursor@5.0.0", "", { "dependencies": { "restore-cursor": "5.1.0" } }, "sha512-aCj4O5wKyszjMmDT4tZj93kxyydN/K5zPWSCe6/0AV/AA1pqe5ZBIw0a2ZfPQV7lL5/yb5HsUreJ6UFAF1tEQw=="],
 
-    "cli-execution-auditor-scripts": ["cli-execution-auditor-scripts@workspace:config/agents/skills/personal/cli-execution-auditor"],
-
     "cli-truncate": ["cli-truncate@5.1.1", "", { "dependencies": { "slice-ansi": "7.1.2", "string-width": "8.1.0" } }, "sha512-SroPvNHxUnk+vIW/dOSfNqdy1sPEFkrTk6TUtqLCnBlo3N7TNYYkzzN7uSD6+jVjrdO4+p8nH7JzH6cIvUem6A=="],
 
     "cliui": ["cliui@8.0.1", "", { "dependencies": { "string-width": "4.2.3", "strip-ansi": "6.0.1", "wrap-ansi": "7.0.0" } }, "sha512-BSeNnyus75C4//NQ9gQt1/csTXyo/8Sb+afLAkzAptFuMsod9HFokGNudZpi/oQV73hnVK+sR+5PVRMd+Dr7YQ=="],
@@ -494,8 +423,6 @@
     "extract-zip": ["extract-zip@2.0.1", "", { "dependencies": { "debug": "4.4.3", "get-stream": "5.2.0", "yauzl": "2.10.0" }, "optionalDependencies": { "@types/yauzl": "2.10.3" }, "bin": { "extract-zip": "cli.js" } }, "sha512-GDhU9ntwuKyGXdZBUgTIe+vXnWj0fppUEtMDL0+idd5Sta8TGpHssn/eusA9mrPr9qNDym6SxAYZjNvCn/9RBg=="],
 
     "fallow": ["fallow@3.19.0", "", { "dependencies": { "detect-libc": "2.1.2" }, "optionalDependencies": { "@fallow-cli/darwin-arm64": "3.19.0", "@fallow-cli/darwin-x64": "3.19.0", "@fallow-cli/linux-arm64-gnu": "3.19.0", "@fallow-cli/linux-arm64-musl": "3.19.0", "@fallow-cli/linux-x64-gnu": "3.19.0", "@fallow-cli/linux-x64-musl": "3.19.0", "@fallow-cli/win32-arm64-msvc": "3.19.0", "@fallow-cli/win32-x64-msvc": "3.19.0", "fallow-type-aware": "3.19.0" }, "bin": { "fallow": "bin/fallow", "fallow-lsp": "bin/fallow-lsp", "fallow-mcp": "bin/fallow-mcp" } }, "sha512-iM44GldeupBOvJLR2BZSEridMVbsKJpjEfrYjzW7kpBZLRXLRQh/g7RoCseCMlWK+4hDIuQWu+lAmXe9MDllQQ=="],
-
-    "fallow-scripts": ["fallow-scripts@workspace:config/agents/skills/personal/fallow"],
 
     "fallow-type-aware": ["fallow-type-aware@3.19.0", "", { "dependencies": { "typescript": "7.0.2" }, "bin": { "fallow-type-aware": "fallow-type-aware.mjs" } }, "sha512-/LlmR1qNNcNf8Vv1l3FmwkaenfJLd9PBcE1FCebf4MUWeyy+UTqZfc61139/EwgpuHzBdjOMVpyhgCSEjuHx8Q=="],
 
@@ -665,8 +592,6 @@
 
     "signal-exit": ["signal-exit@4.1.0", "", {}, "sha512-bzyZ1e88w9O1iNJbKnOlvYTrWPDl46O1bG0D3XInv+9tkPrxrN8jUUTiFlDkkmKWgn1M6CfIA13SuGqOa9Korw=="],
 
-    "skill-feedback-scripts": ["skill-feedback-scripts@workspace:config/agents/skills/personal/skill-feedback"],
-
     "slice-ansi": ["slice-ansi@7.1.2", "", { "dependencies": { "ansi-styles": "6.2.3", "is-fullwidth-code-point": "5.1.0" } }, "sha512-iOBWFgUX7caIZiuutICxVgX1SdxwAVFFKwt1EvMYYec/NWO5meOJ6K5uQxhrYBdQJne4KxiqZc+KptFOWFSI9w=="],
 
     "smart-buffer": ["smart-buffer@4.2.0", "", {}, "sha512-94hK0Hh8rPqQl2xXc3HsaBoOXKV20MToPkcXvwbISWLEs+64sBq5kFgn2kJDHb1Pry9yrP0dxrCI9RRci7RXKg=="],
@@ -712,8 +637,6 @@
     "undici-types": ["undici-types@7.24.6", "", {}, "sha512-WRNW+sJgj5OBN4/0JpHFqtqzhpbnV0GuB+OozA9gCL7a993SmU+1JBZCzLNxYsbMfIeDL+lTsphD5jN5N+n0zg=="],
 
     "unicorn-magic": ["unicorn-magic@0.1.0", "", {}, "sha512-lRfVq8fE8gz6QMBuDM6a+LO3IAzTi05H6gCVaUpir2E1Rwpo4ZUog45KpNXKC/Mn3Yb9UDuHumeFTo9iV/D9FQ=="],
-
-    "vault-git-skill": ["vault-git-skill@workspace:config/agents/skills/personal/vault-git"],
 
     "webdriver-bidi-protocol": ["webdriver-bidi-protocol@0.3.9", "", {}, "sha512-uIYvlRQ0PwtZR1EzHlTMol1G0lAlmOe6wPykF9a77AK3bkpvZHzIVxRE2ThOx5vjy2zISe0zhwf5rzuUfbo1PQ=="],
 

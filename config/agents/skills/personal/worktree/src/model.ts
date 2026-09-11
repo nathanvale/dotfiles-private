@@ -64,7 +64,7 @@ export interface BranchPrefs {
  *   "wip": "~/code/_wip",
  *   "excludes": ["node_modules", "dist", "*.tsbuildinfo"],
  *   "codeBin": "/usr/local/bin/code",
- *   "ignoredWorktrees": ["**\/fallow-audit-base-cache-*"]
+ *   "ignoredWorktrees": ["**\/scratch-build-cache-*"]
  * }
  * ```
  */

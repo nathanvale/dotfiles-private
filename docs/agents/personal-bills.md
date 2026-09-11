@@ -59,7 +59,7 @@
 ## Act
 
 1. Route the requested work through the applicable owning skill, such as
-   `context-advisor` for unclear placement, `vault-git` for vault writes,
+   `context-advisor` for unclear placement,
    `browser-use` for bill-payment portal work, `gog-gmail` for Gmail,
    `gog-calendar` for calendar work, `apple-reminders` for reminders, and
    `draft-message` or the applicable channel skill for messages. Follow that

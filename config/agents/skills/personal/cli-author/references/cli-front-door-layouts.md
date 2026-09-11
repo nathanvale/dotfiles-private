@@ -97,8 +97,6 @@ my-package/
 - Each CLI's `commands --json` projects only its own contract surface.
 - Command Contract Locator discovers both via the
   `src/front-doors/**/command-contract.ts` glob (depth-N supported).
-- Reference fixture:
-  `cli-execution-auditor/src/fixtures/good-front-door-local/`.
 
 **When to use:** CLIs own distinct command type unions, result contracts,
 and action affordances. Front-door folders make ownership seams visible in
@@ -157,12 +155,10 @@ declared script name. The workspace facade invariant gate validates this.
 
 - **Command name collision:** command names must not collide across front doors
   in the same package. The auditor catches duplicates at contract acquisition
-  time. Reference fixture:
-  `cli-execution-auditor/src/fixtures/bad-front-door-duplicate-command/`.
+  time.
 - **Uncovered front door:** every front door with a package script must have a
   discoverable `command-contract.ts`. A front door missing its contract goes
-  unaudited while the auditor reports clean. Reference fixture:
-  `cli-execution-auditor/src/fixtures/bad-front-door-uncovered/`.
+  unaudited while the auditor reports clean.
 
 ## Migrating from Single Flat to Front-Door Folders
 
@@ -178,15 +174,9 @@ declared script name. The workspace facade invariant gate validates this.
 
 ## Owner Paths
 
-- Command Contract Locator:
-  `cli-execution-auditor/src/command-contract-discovery.ts`.
 - Workspace facade invariant gate:
   `scripts/check-workspace-facade-invariants.ts`.
 - Facade testing subpath:
   `runtime/cli-command-facade/src/testing.ts`.
 - Test fixture package:
   `runtime/cli-test-fixtures/`.
-- Front-door fixtures (canonical):
-  `cli-execution-auditor/src/fixtures/good-front-door-local/`.
-- Depth-N front-door fixture:
-  `cli-execution-auditor/src/fixtures/good-front-door-nested/`.

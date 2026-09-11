@@ -13,5 +13,3 @@ Current test-runner owners and shared runner-family constraints.
 - [skills/cli-author/references/agent-native-cli-design.md](../../cli-author/references/agent-native-cli-design.md)
 - [runtime/cli-command-facade/AGENTS.md](../../../../../../.agents/runtime/cli-command-facade/AGENTS.md)
 - [runtime/cli-command-facade/CONTEXT.md](../../../../../../.agents/runtime/cli-command-facade/CONTEXT.md)
-- [skills/cli-execution-auditor/references/lane-contract-clauses.md](../../cli-execution-auditor/references/lane-contract-clauses.md)
-- [skills/cli-execution-auditor/SKILL.md](../../cli-execution-auditor/SKILL.md)
