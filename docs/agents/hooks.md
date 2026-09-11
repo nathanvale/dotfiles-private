@@ -44,3 +44,10 @@ Codex re-approval step, not a file change.
 - Existing hook scripts: `config/agents/claude/hooks/`.
 - Hook declarations: `config/agents/claude/hooks.json` and
   `config/agents/codex/hooks.json`.
+- Plugin-delivered quality gates: `config/agents/plugins/proof/hooks/`, with
+  its own `hooks/claude/hooks.json` and `hooks/codex/hooks.json` per harness.
+  Activation is `enabledPlugins` in `config/agents/claude/settings.json`, not
+  a `settings.json` hook declaration. The scripts run from the installed
+  plugin cache, so a source change takes effect only through a plugin
+  release: `claude plugin marketplace update personal` on Claude Code, and a
+  Codex per-hook trust re-approval (see above) on Codex.

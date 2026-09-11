@@ -18,6 +18,7 @@
 		"config/agents/skills/personal/test-runner",
 		"config/agents/skills/personal/worktree",
 		"config/agents/skills/personal/xero",
+		"config/agents/plugins/proof",
 		"apps/vscode/*"
 	],
 	"catalog": {

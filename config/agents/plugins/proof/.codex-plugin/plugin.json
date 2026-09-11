@@ -1,0 +1,20 @@
+{
+  "name": "proof",
+  "version": "0.1.0",
+  "description": "Self-gating Biome, Fallow, and TypeScript quality hooks that fire only in repositories carrying the tool locally.",
+  "author": {
+    "name": "Nathan Vale"
+  },
+  "hooks": "./hooks/codex/hooks.json",
+  "interface": {
+    "displayName": "Proof",
+    "shortDescription": "Self-gating Biome, Fallow, and TypeScript quality hooks",
+    "longDescription": "Dependency-free quality hooks that lint, audit, and typecheck changed files only in repositories that already carry Biome, Fallow, or TypeScript locally.",
+    "developerName": "Nathan Vale",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Read"
+    ],
+    "defaultPrompt": "Report what the proof plugin's quality hooks blocked or passed on the current change."
+  }
+}
