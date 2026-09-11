@@ -12,8 +12,11 @@
  */
 import { join } from 'node:path'
 import {
+	type CompileFailure,
+	type CompileSuccess,
 	compileSpecificationCandidate,
 	generateArtifactSet,
+	type GenerationOptions,
 	verifyArtifactSet,
 } from '../src/index.ts'
 import { PILOT_EMITTERS } from './generation/pilot-derivation.ts'
@@ -35,43 +38,56 @@ async function main(verb: string | undefined): Promise<number> {
 	const compiled = compileSpecificationCandidate(source, {
 		sourcePath: 'pilot/vault-git-reimagined.state-machine.jsonc',
 	})
-	if (!compiled.ok) {
-		console.error('the pilot candidate does not compile:')
-		for (const diagnostic of compiled.diagnostics) {
+	if (!compiled.ok) return reportCompileFailure(compiled)
+
+	const options = { outputDir: OUTPUT_DIR, emitters: PILOT_EMITTERS }
+	return verb === 'generate'
+		? await runGenerate(compiled, options)
+		: await runVerify(compiled, options)
+}
+
+function reportCompileFailure(compiled: CompileFailure): number {
+	console.error('the pilot candidate does not compile:')
+	for (const diagnostic of compiled.diagnostics) {
+		console.error(
+			`  ${diagnostic.cause} at ${diagnostic.path}: ${diagnostic.message}`,
+		)
+	}
+	return 1
+}
+
+async function runGenerate(
+	compiled: CompileSuccess,
+	options: GenerationOptions,
+): Promise<number> {
+	const generated = await generateArtifactSet(
+		compiled.ir,
+		compiled.digest,
+		options,
+	)
+	if (!generated.ok) {
+		console.error(`generation failed: ${generated.cause}`)
+		console.error(`  ${generated.message}`)
+		for (const refusal of generated.refusals) {
 			console.error(
-				`  ${diagnostic.cause} at ${diagnostic.path}: ${diagnostic.message}`,
+				`  ${refusal.cause} (${refusal.subject}): ${refusal.message}`,
 			)
 		}
 		return 1
 	}
-
-	const options = { outputDir: OUTPUT_DIR, emitters: PILOT_EMITTERS }
-
-	if (verb === 'generate') {
-		const generated = await generateArtifactSet(
-			compiled.ir,
-			compiled.digest,
-			options,
-		)
-		if (!generated.ok) {
-			console.error(`generation failed: ${generated.cause}`)
-			console.error(`  ${generated.message}`)
-			for (const refusal of generated.refusals) {
-				console.error(
-					`  ${refusal.cause} (${refusal.subject}): ${refusal.message}`,
-				)
-			}
-			return 1
-		}
-		console.log(
-			`generated ${generated.declaredOutputs.length} declared outputs for specification digest ${generated.specificationDigest}:`,
-		)
-		for (const path of generated.declaredOutputs) {
-			console.log(`  ${path}`)
-		}
-		return 0
+	console.log(
+		`generated ${generated.declaredOutputs.length} declared outputs for specification digest ${generated.specificationDigest}:`,
+	)
+	for (const path of generated.declaredOutputs) {
+		console.log(`  ${path}`)
 	}
+	return 0
+}
 
+async function runVerify(
+	compiled: CompileSuccess,
+	options: GenerationOptions,
+): Promise<number> {
 	const verified = await verifyArtifactSet(
 		compiled.ir,
 		compiled.digest,

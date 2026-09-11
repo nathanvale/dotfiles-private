@@ -90,74 +90,15 @@ export function deriveStations(ir: SpecificationIr): StationEmission {
 	for (const command of [...surface.commands].sort()) {
 		const mutation = surface.mutations[command] ?? 'read'
 		for (const branch of branchesFor(command, surface)) {
-			const id = `${command}.${branch}`
-			const facts = BRANCH_FACTS[branch]
-			const contract = resolveResultContract(command, surface)
-
-			if (seen.has(id)) {
-				refusals.push(
-					artifactRefusal({
-						cause: 'emit_station_id_duplicate',
-						subject: id,
-						message: `Two derived Branch Stations claim the id ${id}.`,
-					}),
-				)
-				continue
-			}
-			seen.add(id)
-
-			if (!STATION_ID_PATTERN.test(id)) {
-				refusals.push(
-					artifactRefusal({
-						cause: 'emit_station_id_invalid',
-						subject: id,
-						message: `Branch Station id ${id} does not satisfy the facade id grammar.`,
-					}),
-				)
-				continue
-			}
-			// The `id.split(".")[0] === command` invariant and command membership in
-			// discovery are not checked here: `id` is constructed as
-			// `${command}.${branch}` from a `command` drawn out of
-			// `surface.commands`, so neither can fail. Guarding them anyway would
-			// claim a check the derivation makes structurally impossible. The
-			// facade re-checks both independently, and a test asserts its drift
-			// output is empty, so the invariants stay proved rather than assumed.
-			//
-			// The exit code is likewise not checked against `surface.exit_codes`
-			// here: `BRANCH_FACTS` carries only the three baseline exits, and
-			// `deriveCommandContracts` refuses a surface that omits any of them, so
-			// a station cannot reach an undeclared exit. The cross-validation is
-			// enforced at that one owner rather than restated per station.
-			if (contract === undefined) {
-				refusals.push(
-					artifactRefusal({
-						cause: 'emit_result_contract_undeclared',
-						subject: id,
-						message: `Branch Station ${id} has no result contract declared for command ${command}; the candidate declares neither a ${command} binding nor a lifecycle contract.`,
-					}),
-				)
-				continue
-			}
-
-			stations.push({
+			const outcome = deriveBranchStation(
+				command,
 				branch,
 				mutation,
-				station: {
-					id,
-					command,
-					classification: 'required',
-					intent: branch,
-					trigger: triggerFor(command, branch, mutation),
-					expectedExitCode: facts.exitCode,
-					expectedEnvelopeStatus: facts.envelopeStatus,
-					expectedResultContractId: contract.id,
-					mutationExpectation: mutationExpectationFor(branch, mutation),
-					...(facts.errorCode === undefined
-						? {}
-						: { expectedErrorCode: facts.errorCode }),
-				},
-			})
+				surface,
+				seen,
+			)
+			if ('refusal' in outcome) refusals.push(outcome.refusal)
+			else stations.push(outcome.station)
 		}
 	}
 
@@ -168,6 +109,84 @@ export function deriveStations(ir: SpecificationIr): StationEmission {
 	refusals.push(...unresolvedRouteTargets(ir, stations))
 
 	return { stations, refusals }
+}
+
+/**
+ * The `id.split(".")[0] === command` invariant and command membership in
+ * discovery are not checked here: `id` is constructed as `${command}.${branch}`
+ * from a `command` drawn out of `surface.commands`, so neither can fail.
+ * Guarding them anyway would claim a check the derivation makes structurally
+ * impossible. The facade re-checks both independently, and a test asserts its
+ * drift output is empty, so the invariants stay proved rather than assumed.
+ *
+ * The exit code is likewise not checked against `surface.exit_codes` here:
+ * `BRANCH_FACTS` carries only the three baseline exits, and
+ * `deriveCommandContracts` refuses a surface that omits any of them, so a
+ * station cannot reach an undeclared exit. The cross-validation is enforced
+ * at that one owner rather than restated per station.
+ */
+function deriveBranchStation(
+	command: string,
+	branch: BranchKind,
+	mutation: string,
+	surface: CommandSurface,
+	seen: Set<string>,
+): { readonly station: DerivedStation } | { readonly refusal: ArtifactRefusal } {
+	const id = `${command}.${branch}`
+	const facts = BRANCH_FACTS[branch]
+	const contract = resolveResultContract(command, surface)
+
+	if (seen.has(id)) {
+		return {
+			refusal: artifactRefusal({
+				cause: 'emit_station_id_duplicate',
+				subject: id,
+				message: `Two derived Branch Stations claim the id ${id}.`,
+			}),
+		}
+	}
+	seen.add(id)
+
+	if (!STATION_ID_PATTERN.test(id)) {
+		return {
+			refusal: artifactRefusal({
+				cause: 'emit_station_id_invalid',
+				subject: id,
+				message: `Branch Station id ${id} does not satisfy the facade id grammar.`,
+			}),
+		}
+	}
+
+	if (contract === undefined) {
+		return {
+			refusal: artifactRefusal({
+				cause: 'emit_result_contract_undeclared',
+				subject: id,
+				message: `Branch Station ${id} has no result contract declared for command ${command}; the candidate declares neither a ${command} binding nor a lifecycle contract.`,
+			}),
+		}
+	}
+
+	return {
+		station: {
+			branch,
+			mutation,
+			station: {
+				id,
+				command,
+				classification: 'required',
+				intent: branch,
+				trigger: triggerFor(command, branch, mutation),
+				expectedExitCode: facts.exitCode,
+				expectedEnvelopeStatus: facts.envelopeStatus,
+				expectedResultContractId: contract.id,
+				mutationExpectation: mutationExpectationFor(branch, mutation),
+				...(facts.errorCode === undefined
+					? {}
+					: { expectedErrorCode: facts.errorCode }),
+			},
+		},
+	}
 }
 
 /**

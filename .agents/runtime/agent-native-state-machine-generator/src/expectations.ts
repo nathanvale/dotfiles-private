@@ -106,6 +106,19 @@ const BRANCH_RESULT_KIND: Readonly<Record<BranchKind, string>> = {
 	invalid_usage: 'refusal',
 }
 
+/** Facts held across one station's row derivation. */
+interface StationContext {
+	readonly ir: SpecificationIr
+	readonly derived: DerivedStation
+	readonly facts: (typeof BRANCH_FACTS)[BranchKind]
+	readonly incomplete: boolean
+}
+
+/** Either a finished row, or the refusal that station produced. */
+type RowOutcome =
+	| { readonly row: SemanticExpectationRow }
+	| { readonly refusal: ArtifactRefusal }
+
 /**
  * Builds the semantic expectation table for a derived station set.
  *
@@ -120,7 +133,6 @@ export function buildExpectationTable(
 	const refusals: ArtifactRefusal[] = []
 	const rows: SemanticExpectationRow[] = []
 	const catalog = new Map(ir.actions.catalog.map((entry) => [entry.id, entry]))
-	const resolution = ir.actions.resolution
 	// Keyed by the Branch Station id the candidate declared, so a column
 	// reaches a row only where the specification named that exact station.
 	// Nothing is inferred from the command, the branch, or the key's shape.
@@ -129,163 +141,210 @@ export function buildExpectationTable(
 	)
 
 	for (const derived of sortStations(stations)) {
-		const { station, branch } = derived
-		const facts = BRANCH_FACTS[branch]
-		const incomplete = facts.projectionCompleteness === 'incomplete'
-
-		// An incomplete projection has one admitted meaning, and the candidate
-		// declares it under `actions.resolution`. Without that declaration the
-		// generator has nothing to publish and must not invent the triple.
-		if (incomplete && resolution?.unavailableProjectionBlocker === undefined) {
-			refusals.push(
-				artifactRefusal({
-					cause: 'emit_expectation_column_underivable',
-					subject: `${station.id}:blocker`,
-					message: `Branch Station ${station.id} projects incompletely, but the candidate declares no actions.resolution.unavailable_projection_blocker to name why.`,
-				}),
-			)
-			continue
-		}
-
-		const selected = incomplete
-			? undefined
-			: blockerRowFor(branch, ir, station.command)
-
-		if (selected !== undefined && 'ambiguous' in selected) {
-			refusals.push(
-				artifactRefusal({
-					cause: 'emit_expectation_column_underivable',
-					subject: `${station.id}:blocker`,
-					message: `Branch Station ${station.id} matches more than one declared station_blocker row, so no single admitted refusal cause can be named.`,
-				}),
-			)
-			continue
-		}
-
-		// The selected row carries the blocker AND what that blocker routes
-		// to, so a mapping's action and posture are taken from the same match
-		// rather than resolved separately from a blocker name.
-		const routedAction =
-			selected !== undefined && 'row' in selected
-				? selected.row.target
-				: undefined
-		const routedPosture =
-			selected !== undefined && 'row' in selected
-				? selected.row.retrySafety
-				: undefined
-
-		const blocker = incomplete
-			? resolution?.unavailableProjectionBlocker
-			: selected === undefined
-				? undefined
-				: 'row' in selected
-					? selected.row.blocker
-					: selected.fallbackBlocker
-
-		if (branch === 'refused' && blocker === undefined) {
-			refusals.push(
-				artifactRefusal({
-					cause: 'emit_expectation_column_underivable',
-					subject: `${station.id}:blocker`,
-					message: `Branch Station ${station.id} is a refusal, but no declared station_blocker mapping selects for it and the candidate declares no single blocker, so no admitted refusal cause can be named.`,
-				}),
-			)
-			continue
-		}
-
-		const retrySafety = incomplete
-			? // The spec fixes the incomplete-projection posture as operator-owned.
-				// A candidate that also declares it must agree; a disagreement is a
-				// specification defect rather than something to silently resolve.
-				(resolution?.unavailableProjectionRetrySafety ?? 'operator_required')
-			: // A declared route's posture is the admitted answer for that
-				// route; the rule table answers only where no route selected.
-				(routedPosture ??
-				resolveRetryPosture(ir, {
-					command: station.command,
-					resultKind: BRANCH_RESULT_KIND[branch],
-					...(blocker === undefined ? {} : { blocker }),
-					state: facts.state,
-				}))
-
-		if (retrySafety === undefined) {
-			refusals.push(
-				artifactRefusal({
-					cause: 'emit_retry_posture_unresolved',
-					subject: station.id,
-					message: `No declared retry_posture rule matches Branch Station ${station.id} (command ${station.command}, result_kind ${BRANCH_RESULT_KIND[branch]}); Exact Same-Input Retry Safety cannot be derived from exit status or prose.`,
-				}),
-			)
-			continue
-		}
-
-		const action = routedAction ?? resolveAction(ir, derived, incomplete)
-		if (action === undefined) {
-			refusals.push(
-				artifactRefusal({
-					cause: 'emit_expectation_column_underivable',
-					subject: `${station.id}:expectedActionId`,
-					message: `Branch Station ${station.id} has no declared action: the candidate's action catalog names no entry this branch can reach, and Input Schema v1 has no per-station action binding.`,
-				}),
-			)
-			continue
-		}
-
-		const entry = catalog.get(action)
-		if (entry === undefined) {
-			refusals.push(
-				artifactRefusal({
-					cause: 'emit_expectation_action_unknown',
-					subject: `${station.id}:${action}`,
-					message: `Branch Station ${station.id} expects action ${action}, which the action catalog does not declare.`,
-				}),
-			)
-			continue
-		}
-
-		const stopScope = incomplete
-			? // Agent-terminal by the spec: an incomplete projection stops the
-				// current agent and never claims the product itself is finished.
-				(resolution?.unavailableProjectionStop ?? 'agent_terminal')
-			: entry.stopScope
-
-		const row: SemanticExpectationRow = {
-			stationId: station.id,
-			expectedActionId: action,
-			state: facts.state,
-			exitMeaning: exitMeaningFor(branch, ir),
-			...(blocker === undefined ? {} : { blocker }),
-			authority: facts.authority,
-			retrySafety,
-			projectionCompleteness: facts.projectionCompleteness,
-			nextSafeAction: entry.kind,
-			...(stopScope === undefined ? {} : { stopScope }),
-			...columnsFor(declaredColumns.get(station.id)),
-		}
-
-		const violation = assertIncompleteProjection(row)
-		if (violation) {
-			refusals.push(violation)
-			continue
-		}
-		// Whether a declared station_action binding chose this action, asked at
-		// the same seam that resolution uses, so the projection below reads a
-		// declaration rather than re-deriving one.
-		const stationAction = selectRoutingRow(ir, 'station_action', {
-			branch,
-			command: station.command,
-		})
-		const retryable = retryableFor({
-			row,
-			boundByStationAction:
-				stationAction !== undefined && 'row' in stationAction,
-			entry,
-			ir,
-		})
-		rows.push(retryable === undefined ? row : { ...row, retryable })
+		const outcome = buildRowForStation(ir, derived, catalog, declaredColumns)
+		if ('refusal' in outcome) refusals.push(outcome.refusal)
+		else rows.push(outcome.row)
 	}
 
 	return { rows, refusals }
+}
+
+/** Resolves one station to its expectation row, or the refusal that blocks it. */
+function buildRowForStation(
+	ir: SpecificationIr,
+	derived: DerivedStation,
+	catalog: ReadonlyMap<string, ActionEntry>,
+	declaredColumns: ReadonlyMap<string, ExpectationColumns>,
+): RowOutcome {
+	const { station, branch } = derived
+	const facts = BRANCH_FACTS[branch]
+	const ctx: StationContext = {
+		ir,
+		derived,
+		facts,
+		incomplete: facts.projectionCompleteness === 'incomplete',
+	}
+
+	const declarationRefusal = checkIncompleteResolutionDeclared(ctx)
+	if (declarationRefusal !== undefined) return { refusal: declarationRefusal }
+
+	const blockerOutcome = resolveStationBlocker(ctx)
+	if ('refusal' in blockerOutcome) return blockerOutcome
+	const { blocker, routedAction, routedPosture } = blockerOutcome.value
+
+	const retrySafety = resolveStationRetrySafety(ctx, routedPosture, blocker)
+	if (retrySafety === undefined) {
+		return {
+			refusal: artifactRefusal({
+				cause: 'emit_retry_posture_unresolved',
+				subject: station.id,
+				message: `No declared retry_posture rule matches Branch Station ${station.id} (command ${station.command}, result_kind ${BRANCH_RESULT_KIND[branch]}); Exact Same-Input Retry Safety cannot be derived from exit status or prose.`,
+			}),
+		}
+	}
+
+	const action = routedAction ?? resolveAction(ir, derived, ctx.incomplete)
+	if (action === undefined) {
+		return {
+			refusal: artifactRefusal({
+				cause: 'emit_expectation_column_underivable',
+				subject: `${station.id}:expectedActionId`,
+				message: `Branch Station ${station.id} has no declared action: the candidate's action catalog names no entry this branch can reach, and Input Schema v1 has no per-station action binding.`,
+			}),
+		}
+	}
+
+	const entry = catalog.get(action)
+	if (entry === undefined) {
+		return {
+			refusal: artifactRefusal({
+				cause: 'emit_expectation_action_unknown',
+				subject: `${station.id}:${action}`,
+				message: `Branch Station ${station.id} expects action ${action}, which the action catalog does not declare.`,
+			}),
+		}
+	}
+
+	const stopScope = ctx.incomplete
+		? // Agent-terminal by the spec: an incomplete projection stops the
+			// current agent and never claims the product itself is finished.
+			(ir.actions.resolution?.unavailableProjectionStop ?? 'agent_terminal')
+		: entry.stopScope
+
+	const row: SemanticExpectationRow = {
+		stationId: station.id,
+		expectedActionId: action,
+		state: facts.state,
+		exitMeaning: exitMeaningFor(branch, ir),
+		...(blocker === undefined ? {} : { blocker }),
+		authority: facts.authority,
+		retrySafety,
+		projectionCompleteness: facts.projectionCompleteness,
+		nextSafeAction: entry.kind,
+		...(stopScope === undefined ? {} : { stopScope }),
+		...columnsFor(declaredColumns.get(station.id)),
+	}
+
+	const violation = assertIncompleteProjection(row)
+	if (violation) return { refusal: violation }
+
+	// Whether a declared station_action binding chose this action, asked at
+	// the same seam that resolution uses, so the projection below reads a
+	// declaration rather than re-deriving one.
+	const stationAction = selectRoutingRow(ir, 'station_action', {
+		branch,
+		command: station.command,
+	})
+	const retryable = retryableFor({
+		row,
+		boundByStationAction: stationAction !== undefined && 'row' in stationAction,
+		entry,
+		ir,
+	})
+	return { row: retryable === undefined ? row : { ...row, retryable } }
+}
+
+/**
+ * An incomplete projection has one admitted meaning, and the candidate
+ * declares it under `actions.resolution`. Without that declaration the
+ * generator has nothing to publish and must not invent the triple.
+ */
+function checkIncompleteResolutionDeclared(
+	ctx: StationContext,
+): ArtifactRefusal | undefined {
+	if (!ctx.incomplete) return undefined
+	if (ctx.ir.actions.resolution?.unavailableProjectionBlocker !== undefined)
+		return undefined
+	return artifactRefusal({
+		cause: 'emit_expectation_column_underivable',
+		subject: `${ctx.derived.station.id}:blocker`,
+		message: `Branch Station ${ctx.derived.station.id} projects incompletely, but the candidate declares no actions.resolution.unavailable_projection_blocker to name why.`,
+	})
+}
+
+interface StationBlockerResolution {
+	readonly blocker: string | undefined
+	readonly routedAction: string | undefined
+	readonly routedPosture: RetryPosture | undefined
+}
+
+/**
+ * The selected row carries the blocker AND what that blocker routes to, so a
+ * mapping's action and posture are taken from the same match rather than
+ * resolved separately from a blocker name.
+ */
+function resolveStationBlocker(
+	ctx: StationContext,
+):
+	| { readonly value: StationBlockerResolution }
+	| { readonly refusal: ArtifactRefusal } {
+	const { ir, derived, incomplete } = ctx
+	const { station, branch } = derived
+	const resolution = ir.actions.resolution
+	const selected = incomplete
+		? undefined
+		: blockerRowFor(branch, ir, station.command)
+
+	if (selected !== undefined && 'ambiguous' in selected) {
+		return {
+			refusal: artifactRefusal({
+				cause: 'emit_expectation_column_underivable',
+				subject: `${station.id}:blocker`,
+				message: `Branch Station ${station.id} matches more than one declared station_blocker row, so no single admitted refusal cause can be named.`,
+			}),
+		}
+	}
+
+	const routedAction =
+		selected !== undefined && 'row' in selected ? selected.row.target : undefined
+	const routedPosture =
+		selected !== undefined && 'row' in selected
+			? selected.row.retrySafety
+			: undefined
+
+	const blocker = incomplete
+		? resolution?.unavailableProjectionBlocker
+		: selected === undefined
+			? undefined
+			: 'row' in selected
+				? selected.row.blocker
+				: selected.fallbackBlocker
+
+	if (branch === 'refused' && blocker === undefined) {
+		return {
+			refusal: artifactRefusal({
+				cause: 'emit_expectation_column_underivable',
+				subject: `${station.id}:blocker`,
+				message: `Branch Station ${station.id} is a refusal, but no declared station_blocker mapping selects for it and the candidate declares no single blocker, so no admitted refusal cause can be named.`,
+			}),
+		}
+	}
+
+	return { value: { blocker, routedAction, routedPosture } }
+}
+
+function resolveStationRetrySafety(
+	{ ir, derived, facts, incomplete }: StationContext,
+	routedPosture: RetryPosture | undefined,
+	blocker: string | undefined,
+): RetryPosture | undefined {
+	if (incomplete) {
+		// The spec fixes the incomplete-projection posture as operator-owned. A
+		// candidate that also declares it must agree; a disagreement is a
+		// specification defect rather than something to silently resolve.
+		return ir.actions.resolution?.unavailableProjectionRetrySafety ?? 'operator_required'
+	}
+	// A declared route's posture is the admitted answer for that route; the
+	// rule table answers only where no route selected.
+	return (
+		routedPosture ??
+		resolveRetryPosture(ir, {
+			command: derived.station.command,
+			resultKind: BRANCH_RESULT_KIND[derived.branch],
+			...(blocker === undefined ? {} : { blocker }),
+			state: facts.state,
+		})
+	)
 }
 
 /**

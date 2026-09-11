@@ -68,172 +68,220 @@ function walk(
 	sourcePath: string | undefined,
 ): void {
 	switch (shape.t) {
-		case 'union': {
-			const winner = shape.of.find((candidate) => matches(node, candidate))
-			if (winner === undefined) {
-				push(
-					diagnostics,
-					sourcePath,
-					'structure_type_mismatch',
-					`Value at ${path || '<root>'} does not match any permitted shape for this field.`,
-					path,
-					node.loc,
-				)
-			}
+		case 'union':
+			walkUnion(node, shape, path, diagnostics, sourcePath)
 			return
-		}
-
-		case 'string': {
-			if (node.kind !== 'string') {
-				push(
-					diagnostics,
-					sourcePath,
-					'structure_type_mismatch',
-					`Expected a string at ${path}; found ${node.kind}.`,
-					path,
-					node.loc,
-				)
-				return
-			}
-			if (shape.nonEmpty === true && node.value.trim() === '') {
-				push(
-					diagnostics,
-					sourcePath,
-					'structure_value_not_permitted',
-					`Value at ${path} must not be empty.`,
-					path,
-					node.loc,
-				)
-				return
-			}
-			if (shape.enum !== undefined && !shape.enum.includes(node.value)) {
-				push(
-					diagnostics,
-					sourcePath,
-					'structure_value_not_permitted',
-					`Value ${JSON.stringify(node.value)} at ${path} is not in the sealed vocabulary [${shape.enum.join(', ')}].`,
-					path,
-					node.loc,
-				)
-			}
+		case 'string':
+			walkString(node, shape, path, diagnostics, sourcePath)
 			return
-		}
-
 		case 'number':
-			if (node.kind !== 'number') {
-				push(
-					diagnostics,
-					sourcePath,
-					'structure_type_mismatch',
-					`Expected a number at ${path}; found ${node.kind}.`,
-					path,
-					node.loc,
-				)
-			}
+			walkNumber(node, path, diagnostics, sourcePath)
 			return
-
 		case 'boolean':
-			if (node.kind !== 'boolean') {
-				push(
-					diagnostics,
-					sourcePath,
-					'structure_type_mismatch',
-					`Expected a boolean at ${path}; found ${node.kind}.`,
-					path,
-					node.loc,
-				)
-			}
+			walkBoolean(node, path, diagnostics, sourcePath)
 			return
-
-		case 'array': {
-			if (node.kind !== 'array') {
-				push(
-					diagnostics,
-					sourcePath,
-					'structure_type_mismatch',
-					`Expected an array at ${path}; found ${node.kind}.`,
-					path,
-					node.loc,
-				)
-				return
-			}
-			node.items.forEach((item, index) => {
-				walk(item, shape.of, `${path}[${index}]`, diagnostics, sourcePath)
-			})
+		case 'array':
+			walkArray(node, shape, path, diagnostics, sourcePath)
 			return
-		}
-
-		case 'map': {
-			if (node.kind !== 'object') {
-				push(
-					diagnostics,
-					sourcePath,
-					'structure_type_mismatch',
-					`Expected an object at ${path}; found ${node.kind}.`,
-					path,
-					node.loc,
-				)
-				return
-			}
-			for (const entry of node.entries) {
-				walk(
-					entry.value,
-					shape.of,
-					join(path, entry.key),
-					diagnostics,
-					sourcePath,
-				)
-			}
+		case 'map':
+			walkMap(node, shape, path, diagnostics, sourcePath)
 			return
-		}
-
-		case 'object': {
-			if (node.kind !== 'object') {
-				push(
-					diagnostics,
-					sourcePath,
-					'structure_type_mismatch',
-					`Expected an object at ${path || '<root>'}; found ${node.kind}.`,
-					path,
-					node.loc,
-				)
-				return
-			}
-			const present = new Set<string>()
-			for (const entry of node.entries) {
-				present.add(entry.key)
-				const field = shape.fields[entry.key]
-				if (field === undefined) {
-					push(
-						diagnostics,
-						sourcePath,
-						'structure_unknown_key',
-						`Unknown key ${JSON.stringify(entry.key)} at ${path || '<root>'}. Input Schema v1 admits only the keys the admitted candidates use.`,
-						join(path, entry.key),
-						entry.keyLoc,
-					)
-					continue
-				}
-				walk(entry.value, field, join(path, entry.key), diagnostics, sourcePath)
-			}
-			for (const key of shape.required) {
-				if (!present.has(key)) {
-					push(
-						diagnostics,
-						sourcePath,
-						'structure_missing_required',
-						`Missing required key ${JSON.stringify(key)} at ${path || '<root>'}.`,
-						join(path, key),
-						node.loc,
-					)
-				}
-			}
+		case 'object':
+			walkObject(node, shape, path, diagnostics, sourcePath)
 			return
-		}
 	}
 	// A new Shape variant must add its own case: without this check it would
 	// fall through and validate nothing while the build stayed green.
 	const _exhausted: never = shape
+}
+
+function walkUnion(
+	node: JsoncNode,
+	shape: Extract<Shape, { t: 'union' }>,
+	path: string,
+	diagnostics: Diagnostic[],
+	sourcePath: string | undefined,
+): void {
+	const winner = shape.of.find((candidate) => matches(node, candidate))
+	if (winner !== undefined) return
+	push(
+		diagnostics,
+		sourcePath,
+		'structure_type_mismatch',
+		`Value at ${path || '<root>'} does not match any permitted shape for this field.`,
+		path,
+		node.loc,
+	)
+}
+
+function walkString(
+	node: JsoncNode,
+	shape: Extract<Shape, { t: 'string' }>,
+	path: string,
+	diagnostics: Diagnostic[],
+	sourcePath: string | undefined,
+): void {
+	if (node.kind !== 'string') {
+		push(
+			diagnostics,
+			sourcePath,
+			'structure_type_mismatch',
+			`Expected a string at ${path}; found ${node.kind}.`,
+			path,
+			node.loc,
+		)
+		return
+	}
+	if (shape.nonEmpty === true && node.value.trim() === '') {
+		push(
+			diagnostics,
+			sourcePath,
+			'structure_value_not_permitted',
+			`Value at ${path} must not be empty.`,
+			path,
+			node.loc,
+		)
+		return
+	}
+	if (shape.enum !== undefined && !shape.enum.includes(node.value)) {
+		push(
+			diagnostics,
+			sourcePath,
+			'structure_value_not_permitted',
+			`Value ${JSON.stringify(node.value)} at ${path} is not in the sealed vocabulary [${shape.enum.join(', ')}].`,
+			path,
+			node.loc,
+		)
+	}
+}
+
+function walkNumber(
+	node: JsoncNode,
+	path: string,
+	diagnostics: Diagnostic[],
+	sourcePath: string | undefined,
+): void {
+	if (node.kind === 'number') return
+	push(
+		diagnostics,
+		sourcePath,
+		'structure_type_mismatch',
+		`Expected a number at ${path}; found ${node.kind}.`,
+		path,
+		node.loc,
+	)
+}
+
+function walkBoolean(
+	node: JsoncNode,
+	path: string,
+	diagnostics: Diagnostic[],
+	sourcePath: string | undefined,
+): void {
+	if (node.kind === 'boolean') return
+	push(
+		diagnostics,
+		sourcePath,
+		'structure_type_mismatch',
+		`Expected a boolean at ${path}; found ${node.kind}.`,
+		path,
+		node.loc,
+	)
+}
+
+function walkArray(
+	node: JsoncNode,
+	shape: Extract<Shape, { t: 'array' }>,
+	path: string,
+	diagnostics: Diagnostic[],
+	sourcePath: string | undefined,
+): void {
+	if (node.kind !== 'array') {
+		push(
+			diagnostics,
+			sourcePath,
+			'structure_type_mismatch',
+			`Expected an array at ${path}; found ${node.kind}.`,
+			path,
+			node.loc,
+		)
+		return
+	}
+	node.items.forEach((item, index) => {
+		walk(item, shape.of, `${path}[${index}]`, diagnostics, sourcePath)
+	})
+}
+
+function walkMap(
+	node: JsoncNode,
+	shape: Extract<Shape, { t: 'map' }>,
+	path: string,
+	diagnostics: Diagnostic[],
+	sourcePath: string | undefined,
+): void {
+	if (node.kind !== 'object') {
+		push(
+			diagnostics,
+			sourcePath,
+			'structure_type_mismatch',
+			`Expected an object at ${path}; found ${node.kind}.`,
+			path,
+			node.loc,
+		)
+		return
+	}
+	for (const entry of node.entries) {
+		walk(entry.value, shape.of, join(path, entry.key), diagnostics, sourcePath)
+	}
+}
+
+function walkObject(
+	node: JsoncNode,
+	shape: Extract<Shape, { t: 'object' }>,
+	path: string,
+	diagnostics: Diagnostic[],
+	sourcePath: string | undefined,
+): void {
+	if (node.kind !== 'object') {
+		push(
+			diagnostics,
+			sourcePath,
+			'structure_type_mismatch',
+			`Expected an object at ${path || '<root>'}; found ${node.kind}.`,
+			path,
+			node.loc,
+		)
+		return
+	}
+	const present = new Set<string>()
+	for (const entry of node.entries) {
+		present.add(entry.key)
+		const field = shape.fields[entry.key]
+		if (field === undefined) {
+			push(
+				diagnostics,
+				sourcePath,
+				'structure_unknown_key',
+				`Unknown key ${JSON.stringify(entry.key)} at ${path || '<root>'}. Input Schema v1 admits only the keys the admitted candidates use.`,
+				join(path, entry.key),
+				entry.keyLoc,
+			)
+			continue
+		}
+		walk(entry.value, field, join(path, entry.key), diagnostics, sourcePath)
+	}
+	for (const key of shape.required) {
+		if (!present.has(key)) {
+			push(
+				diagnostics,
+				sourcePath,
+				'structure_missing_required',
+				`Missing required key ${JSON.stringify(key)} at ${path || '<root>'}.`,
+				join(path, key),
+				node.loc,
+			)
+		}
+	}
 }
 
 function join(path: string, key: string): string {

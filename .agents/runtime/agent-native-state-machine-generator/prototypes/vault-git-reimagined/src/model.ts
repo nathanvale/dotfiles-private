@@ -399,195 +399,258 @@ function startOperation(state: PrototypeState, declaredSideEffect: string): Prot
 	);
 }
 
-export function reduceState(state: PrototypeState, action: Action): PrototypeState {
-	switch (action.type) {
-		case "start_publication":
-			return startOperation(state, "Publish the admitted vault revision durably.");
-		case "observe_durable_publication":
-			if (state.logicalOperationId === null || state.declaredSideEffect === null) {
-				return refused(state, "Refused: no Declared Side Effect exists to observe.");
-			}
-			return accepted(
-				{
-					...state,
-					acknowledgement: "completed",
-					observedSideEffect: "The admitted vault revision is durably published.",
-					operationProgress: "terminal",
-					observationDeadline: "not_started",
-				},
-				"Observed Side Effect recorded. Publication is now terminal.",
-			);
-		case "capture_action_projection":
-			return accepted(
-				{ ...state, projectedRevision: state.durableRevision },
-				`Authority projected from durable revision ${state.durableRevision}.`,
-			);
-		case "observe_concurrent_revision":
-			return accepted(
-				{ ...state, durableRevision: state.durableRevision + 1 },
-				"A concurrent durable revision was observed. Re-evaluate projected Authority.",
-			);
-		case "invoke_projected_action": {
-			const projection = deriveProjection(state);
-			if (projection.actionFreshness !== "current" || projection.authority.status !== "granted") {
-				return refused(state, `Refused: ${projection.authority.reason}`);
-			}
-			return accepted(state, "Projected action accepted under current Authority.");
-		}
-		case "start_logical_operation":
-			return startOperation(state, "Apply one admitted durable revision.");
-		case "lose_acknowledgement":
-			if (state.logicalOperationId === null) {
-				return refused(state, "Refused: there is no Logical Operation whose Acknowledgement can be lost.");
-			}
-			return accepted(
-				{ ...state, acknowledgement: "unknown" },
-				`Acknowledgement is unknown. ${state.logicalOperationId} remains the sole Logical Operation ID.`,
-			);
-		case "attempt_blind_retry":
-			if (state.acknowledgement !== "unknown") {
-				return refused(state, "Refused: blind retry is only being demonstrated for unknown Acknowledgement.");
-			}
-			return refused(
-				state,
-				`Refused: inspect ${state.logicalOperationId} before deciding whether the same input is safe to retry.`,
-			);
-		case "observe_operation_progress":
-			if (state.logicalOperationId === null || state.operationProgress === "terminal") {
-				return refused(state, "Refused: no active Logical Operation can supply Operation Progress.");
-			}
-			return accepted(
-				{ ...state, operationProgress: "advancing", observationDeadline: "healthy" },
-				"Authoritative Operation Progress was observed within the deadline.",
-			);
-		case "miss_observation_deadline":
-			if (state.logicalOperationId === null || state.operationProgress === "terminal") {
-				return refused(state, "Refused: no active observation deadline exists.");
-			}
-			return accepted(
-				{ ...state, operationProgress: "stalled", observationDeadline: "missed" },
-				"Observation deadline missed. Gate Availability remains a separate fact.",
-			);
-		case "request_cancellation":
-			if (state.logicalOperationId === null || state.operationProgress === "terminal") {
-				return refused(state, "Refused: Cancellation requires an active Logical Operation.");
-			}
-			if (state.cancellation.stage !== "not_requested") {
-				return refused(state, "Refused: Cancellation has already been requested for this Logical Operation.");
-			}
-			return accepted(
-				{
-					...state,
-					cancellation: { ...state.cancellation, stage: "requested", request: "recorded" },
-				},
-				"Cancellation request recorded. Delivery and effectiveness remain unknown.",
-			);
-		case "deliver_cancellation":
-			if (state.cancellation.stage !== "requested") {
-				return refused(state, "Refused: Cancellation delivery requires a recorded request.");
-			}
-			return accepted(
-				{
-					...state,
-					cancellation: {
-						...state.cancellation,
-						stage: "delivered",
-						delivery: "delivered",
-					},
-				},
-				"Cancellation was delivered. Delivery does not prove effectiveness.",
-			);
-		case "observe_cancellation_effective":
-			if (state.cancellation.stage !== "delivered") {
-				return refused(state, "Refused: effectiveness can only be observed after delivery.");
-			}
-			return accepted(
-				{
-					...state,
-					cancellation: {
-						...state.cancellation,
-						stage: "effective",
-						effectiveness: "effective",
-					},
-				},
-				"Cancellation effectiveness observed. Cleanup remains pending.",
-			);
-		case "complete_cancellation_cleanup":
-			if (state.cancellation.stage !== "effective") {
-				return refused(state, "Refused: cleanup follows observed Cancellation effectiveness.");
-			}
-			return accepted(
-				{
-					...state,
-					cancellation: {
-						...state.cancellation,
-						stage: "cleanup_complete",
-						cleanup: "complete",
-					},
-				},
-				"Cancellation cleanup completed. The terminal outcome is still absent.",
-			);
-		case "observe_cancelled_outcome":
-			if (state.cancellation.stage !== "cleanup_complete") {
-				return refused(state, "Refused: terminal Cancellation requires completed cleanup.");
-			}
-			return accepted(
-				{
-					...state,
-					acknowledgement: "completed",
-					operationProgress: "terminal",
-					observationDeadline: "not_started",
-					cancellation: {
-						...state.cancellation,
-						stage: "cancelled",
-						terminalOutcome: "cancelled",
-					},
-				},
-				"Cancelled terminal outcome observed.",
-			);
-		case "attempt_conflicting_work":
-			if (state.cancellation.stage !== "not_requested" && state.cancellation.stage !== "cancelled") {
-				return refused(state, "Refused: Cancellation in flight denies conflicting work.");
-			}
-			return startOperation(state, "Start conflicting durable work.");
-		case "remove_required_evidence":
-			return accepted(
-				{ ...state, requiredEvidence: "missing" },
-				"A required observation is missing. Projection Completeness now fails closed.",
-			);
-		case "restore_required_evidence":
-			return accepted(
-				{ ...state, requiredEvidence: "present" },
-				"Required evidence restored and ready for a fresh State Projection.",
-			);
-		case "edit_generated_output":
-			return accepted(
-				{
-					...state,
-					generatedArtifact: { ...state.generatedArtifact, observedDigest: "edited:91ad" },
-				},
-				"Generated output was edited outside isolated regeneration.",
-			);
-		case "restore_generated_output":
-			return accepted(
-				{
-					...state,
-					generatedArtifact: {
-						...state.generatedArtifact,
-						observedDigest: state.generatedArtifact.expectedDigest,
-					},
-				},
-				"The Generated Artifact Set matches isolated regeneration again.",
-			);
-		case "attempt_continuation": {
-			const projection = deriveProjection(state);
-			if (
-				projection.projectionCompleteness !== "complete" ||
-				projection.authority.status !== "granted"
-			) {
-				return refused(state, `Refused: ${projection.nextSafeAction.reason}`);
-			}
-			return accepted(state, "Continuation accepted by a complete State Projection with current Authority.");
-		}
+function handleStartPublication(state: PrototypeState): PrototypeState {
+	return startOperation(state, "Publish the admitted vault revision durably.");
+}
+
+function handleObserveDurablePublication(state: PrototypeState): PrototypeState {
+	if (state.logicalOperationId === null || state.declaredSideEffect === null) {
+		return refused(state, "Refused: no Declared Side Effect exists to observe.");
 	}
+	return accepted(
+		{
+			...state,
+			acknowledgement: "completed",
+			observedSideEffect: "The admitted vault revision is durably published.",
+			operationProgress: "terminal",
+			observationDeadline: "not_started",
+		},
+		"Observed Side Effect recorded. Publication is now terminal.",
+	);
+}
+
+function handleCaptureActionProjection(state: PrototypeState): PrototypeState {
+	return accepted(
+		{ ...state, projectedRevision: state.durableRevision },
+		`Authority projected from durable revision ${state.durableRevision}.`,
+	);
+}
+
+function handleObserveConcurrentRevision(state: PrototypeState): PrototypeState {
+	return accepted(
+		{ ...state, durableRevision: state.durableRevision + 1 },
+		"A concurrent durable revision was observed. Re-evaluate projected Authority.",
+	);
+}
+
+function handleInvokeProjectedAction(state: PrototypeState): PrototypeState {
+	const projection = deriveProjection(state);
+	if (projection.actionFreshness !== "current" || projection.authority.status !== "granted") {
+		return refused(state, `Refused: ${projection.authority.reason}`);
+	}
+	return accepted(state, "Projected action accepted under current Authority.");
+}
+
+function handleStartLogicalOperation(state: PrototypeState): PrototypeState {
+	return startOperation(state, "Apply one admitted durable revision.");
+}
+
+function handleLoseAcknowledgement(state: PrototypeState): PrototypeState {
+	if (state.logicalOperationId === null) {
+		return refused(state, "Refused: there is no Logical Operation whose Acknowledgement can be lost.");
+	}
+	return accepted(
+		{ ...state, acknowledgement: "unknown" },
+		`Acknowledgement is unknown. ${state.logicalOperationId} remains the sole Logical Operation ID.`,
+	);
+}
+
+function handleAttemptBlindRetry(state: PrototypeState): PrototypeState {
+	if (state.acknowledgement !== "unknown") {
+		return refused(state, "Refused: blind retry is only being demonstrated for unknown Acknowledgement.");
+	}
+	return refused(
+		state,
+		`Refused: inspect ${state.logicalOperationId} before deciding whether the same input is safe to retry.`,
+	);
+}
+
+function handleObserveOperationProgress(state: PrototypeState): PrototypeState {
+	if (state.logicalOperationId === null || state.operationProgress === "terminal") {
+		return refused(state, "Refused: no active Logical Operation can supply Operation Progress.");
+	}
+	return accepted(
+		{ ...state, operationProgress: "advancing", observationDeadline: "healthy" },
+		"Authoritative Operation Progress was observed within the deadline.",
+	);
+}
+
+function handleMissObservationDeadline(state: PrototypeState): PrototypeState {
+	if (state.logicalOperationId === null || state.operationProgress === "terminal") {
+		return refused(state, "Refused: no active observation deadline exists.");
+	}
+	return accepted(
+		{ ...state, operationProgress: "stalled", observationDeadline: "missed" },
+		"Observation deadline missed. Gate Availability remains a separate fact.",
+	);
+}
+
+function handleRequestCancellation(state: PrototypeState): PrototypeState {
+	if (state.logicalOperationId === null || state.operationProgress === "terminal") {
+		return refused(state, "Refused: Cancellation requires an active Logical Operation.");
+	}
+	if (state.cancellation.stage !== "not_requested") {
+		return refused(state, "Refused: Cancellation has already been requested for this Logical Operation.");
+	}
+	return accepted(
+		{
+			...state,
+			cancellation: { ...state.cancellation, stage: "requested", request: "recorded" },
+		},
+		"Cancellation request recorded. Delivery and effectiveness remain unknown.",
+	);
+}
+
+function handleDeliverCancellation(state: PrototypeState): PrototypeState {
+	if (state.cancellation.stage !== "requested") {
+		return refused(state, "Refused: Cancellation delivery requires a recorded request.");
+	}
+	return accepted(
+		{
+			...state,
+			cancellation: {
+				...state.cancellation,
+				stage: "delivered",
+				delivery: "delivered",
+			},
+		},
+		"Cancellation was delivered. Delivery does not prove effectiveness.",
+	);
+}
+
+function handleObserveCancellationEffective(state: PrototypeState): PrototypeState {
+	if (state.cancellation.stage !== "delivered") {
+		return refused(state, "Refused: effectiveness can only be observed after delivery.");
+	}
+	return accepted(
+		{
+			...state,
+			cancellation: {
+				...state.cancellation,
+				stage: "effective",
+				effectiveness: "effective",
+			},
+		},
+		"Cancellation effectiveness observed. Cleanup remains pending.",
+	);
+}
+
+function handleCompleteCancellationCleanup(state: PrototypeState): PrototypeState {
+	if (state.cancellation.stage !== "effective") {
+		return refused(state, "Refused: cleanup follows observed Cancellation effectiveness.");
+	}
+	return accepted(
+		{
+			...state,
+			cancellation: {
+				...state.cancellation,
+				stage: "cleanup_complete",
+				cleanup: "complete",
+			},
+		},
+		"Cancellation cleanup completed. The terminal outcome is still absent.",
+	);
+}
+
+function handleObserveCancelledOutcome(state: PrototypeState): PrototypeState {
+	if (state.cancellation.stage !== "cleanup_complete") {
+		return refused(state, "Refused: terminal Cancellation requires completed cleanup.");
+	}
+	return accepted(
+		{
+			...state,
+			acknowledgement: "completed",
+			operationProgress: "terminal",
+			observationDeadline: "not_started",
+			cancellation: {
+				...state.cancellation,
+				stage: "cancelled",
+				terminalOutcome: "cancelled",
+			},
+		},
+		"Cancelled terminal outcome observed.",
+	);
+}
+
+function handleAttemptConflictingWork(state: PrototypeState): PrototypeState {
+	if (state.cancellation.stage !== "not_requested" && state.cancellation.stage !== "cancelled") {
+		return refused(state, "Refused: Cancellation in flight denies conflicting work.");
+	}
+	return startOperation(state, "Start conflicting durable work.");
+}
+
+function handleRemoveRequiredEvidence(state: PrototypeState): PrototypeState {
+	return accepted(
+		{ ...state, requiredEvidence: "missing" },
+		"A required observation is missing. Projection Completeness now fails closed.",
+	);
+}
+
+function handleRestoreRequiredEvidence(state: PrototypeState): PrototypeState {
+	return accepted(
+		{ ...state, requiredEvidence: "present" },
+		"Required evidence restored and ready for a fresh State Projection.",
+	);
+}
+
+function handleEditGeneratedOutput(state: PrototypeState): PrototypeState {
+	return accepted(
+		{
+			...state,
+			generatedArtifact: { ...state.generatedArtifact, observedDigest: "edited:91ad" },
+		},
+		"Generated output was edited outside isolated regeneration.",
+	);
+}
+
+function handleRestoreGeneratedOutput(state: PrototypeState): PrototypeState {
+	return accepted(
+		{
+			...state,
+			generatedArtifact: {
+				...state.generatedArtifact,
+				observedDigest: state.generatedArtifact.expectedDigest,
+			},
+		},
+		"The Generated Artifact Set matches isolated regeneration again.",
+	);
+}
+
+function handleAttemptContinuation(state: PrototypeState): PrototypeState {
+	const projection = deriveProjection(state);
+	if (
+		projection.projectionCompleteness !== "complete" ||
+		projection.authority.status !== "granted"
+	) {
+		return refused(state, `Refused: ${projection.nextSafeAction.reason}`);
+	}
+	return accepted(state, "Continuation accepted by a complete State Projection with current Authority.");
+}
+
+const ACTION_HANDLERS: Readonly<Record<Action["type"], (state: PrototypeState) => PrototypeState>> = {
+	start_publication: handleStartPublication,
+	observe_durable_publication: handleObserveDurablePublication,
+	capture_action_projection: handleCaptureActionProjection,
+	observe_concurrent_revision: handleObserveConcurrentRevision,
+	invoke_projected_action: handleInvokeProjectedAction,
+	start_logical_operation: handleStartLogicalOperation,
+	lose_acknowledgement: handleLoseAcknowledgement,
+	attempt_blind_retry: handleAttemptBlindRetry,
+	observe_operation_progress: handleObserveOperationProgress,
+	miss_observation_deadline: handleMissObservationDeadline,
+	request_cancellation: handleRequestCancellation,
+	deliver_cancellation: handleDeliverCancellation,
+	observe_cancellation_effective: handleObserveCancellationEffective,
+	complete_cancellation_cleanup: handleCompleteCancellationCleanup,
+	observe_cancelled_outcome: handleObserveCancelledOutcome,
+	attempt_conflicting_work: handleAttemptConflictingWork,
+	remove_required_evidence: handleRemoveRequiredEvidence,
+	restore_required_evidence: handleRestoreRequiredEvidence,
+	edit_generated_output: handleEditGeneratedOutput,
+	restore_generated_output: handleRestoreGeneratedOutput,
+	attempt_continuation: handleAttemptContinuation,
+};
+
+export function reduceState(state: PrototypeState, action: Action): PrototypeState {
+	return ACTION_HANDLERS[action.type](state);
 }

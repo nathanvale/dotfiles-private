@@ -63,15 +63,35 @@ export function deriveCommandContracts(
 	// Collected, not short-circuited: the other columns are still checked so
 	// a candidate sees every underivable surface at once rather than one per
 	// run, which is the same shape the write-preview refusal already takes.
-	if (entryScript === undefined)
-		refusals.push(
-			artifactRefusal({
-				cause: 'emit_entry_undeclarable',
-				subject: ir.specMeta.product,
-				message: `Product ${ir.specMeta.product} names no public entry point: the candidate declares no command_surface.entry and the consumer supplied none, so every command contract's script would name a path the generator invented.`,
-			}),
-		)
+	const entryRefusal = checkEntryScriptDeclared(ir, entryScript)
+	if (entryRefusal !== undefined) refusals.push(entryRefusal)
+	refusals.push(...checkBaselineExitCodesDeclared(surface))
 
+	for (const command of [...surface.commands].sort()) {
+		const outcome = deriveCommandContract(ir, surface, command, entryScript)
+		if ('refusal' in outcome) refusals.push(outcome.refusal)
+		else contracts[command] = outcome.contract
+	}
+
+	return { contracts, refusals }
+}
+
+function checkEntryScriptDeclared(
+	ir: SpecificationIr,
+	entryScript: string | undefined,
+): ArtifactRefusal | undefined {
+	if (entryScript !== undefined) return undefined
+	return artifactRefusal({
+		cause: 'emit_entry_undeclarable',
+		subject: ir.specMeta.product,
+		message: `Product ${ir.specMeta.product} names no public entry point: the candidate declares no command_surface.entry and the consumer supplied none, so every command contract's script would name a path the generator invented.`,
+	})
+}
+
+function checkBaselineExitCodesDeclared(
+	surface: CommandSurface,
+): readonly ArtifactRefusal[] {
+	const refusals: ArtifactRefusal[] = []
 	for (const code of BASELINE_EXIT_CODES) {
 		if (surface.exitCodes[code] === undefined) {
 			refusals.push(
@@ -83,42 +103,53 @@ export function deriveCommandContracts(
 			)
 		}
 	}
+	return refusals
+}
 
-	for (const command of [...surface.commands].sort()) {
-		const mutation = surface.mutations[command] ?? 'read'
-		const sideEffects = MUTATION_SIDE_EFFECTS[mutation] ?? ['read']
+/**
+ * A write-implying command owes the facade's Write Preview Capability
+ * obligation: a non-mutating Execution Mode, or a declared reason it owes
+ * none. Both are product-owner decisions, so the generator reads what the
+ * candidate declared and refuses when it declared neither rather than
+ * inventing a `check` mode or authoring an exemption.
+ */
+function deriveCommandContract(
+	ir: SpecificationIr,
+	surface: CommandSurface,
+	command: string,
+	entryScript: string | undefined,
+):
+	| { readonly contract: CommandFacadeContract }
+	| { readonly refusal: ArtifactRefusal } {
+	const mutation = surface.mutations[command] ?? 'read'
+	const sideEffects = MUTATION_SIDE_EFFECTS[mutation] ?? ['read']
 
-		// A write-implying command owes the facade's Write Preview Capability
-		// obligation: a non-mutating Execution Mode, or a declared reason it
-		// owes none. Both are product-owner decisions, so the generator reads
-		// what the candidate declared and refuses when it declared neither
-		// rather than inventing a `check` mode or authoring an exemption.
-		const declaredModes = surface.executionModes[command] ?? []
-		const previewable = declaredModes.some(
-			(mode) => mode === 'check' || mode === 'dry_run',
-		)
-		const exemption = surface.previewExemptions[command]
-		if (
-			isWriteImplyingMutation(mutation) &&
-			!previewable &&
-			exemption === undefined
-		) {
-			refusals.push(
-				artifactRefusal({
-					cause: 'emit_write_preview_undeclarable',
-					subject: command,
-					message: `Command ${command} declares write-implying mutation ${mutation}, which owes a check or dry_run preview path, but declares no such execution mode and no preview exemption. Admit one or the other for ${command}.`,
-				}),
-			)
-			continue
+	const declaredModes = surface.executionModes[command] ?? []
+	const previewable = declaredModes.some(
+		(mode) => mode === 'check' || mode === 'dry_run',
+	)
+	const exemption = surface.previewExemptions[command]
+	if (
+		isWriteImplyingMutation(mutation) &&
+		!previewable &&
+		exemption === undefined
+	) {
+		return {
+			refusal: artifactRefusal({
+				cause: 'emit_write_preview_undeclarable',
+				subject: command,
+				message: `Command ${command} declares write-implying mutation ${mutation}, which owes a check or dry_run preview path, but declares no such execution mode and no preview exemption. Admit one or the other for ${command}.`,
+			}),
 		}
+	}
 
-		const declared = resolveResultContract(command, surface)
-		const resultContract =
-			declared === undefined
-				? undefined
-				: { id: declared.id, schema_version: declared.version }
-		contracts[command] = {
+	const declared = resolveResultContract(command, surface)
+	const resultContract =
+		declared === undefined
+			? undefined
+			: { id: declared.id, schema_version: declared.version }
+	return {
+		contract: {
 			script: `${entryScript ?? ''} ${command}`,
 			summary: summaryFor(command, mutation),
 			usage: [`${ir.specMeta.product} ${command}`],
@@ -130,10 +161,8 @@ export function deriveCommandContracts(
 			...(resultContract === undefined ? {} : { resultContract }),
 			flags: flagsFor(command, surface),
 			exitCodes: { ...surface.exitCodes },
-		}
+		},
 	}
-
-	return { contracts, refusals }
 }
 
 function outputModesFor(

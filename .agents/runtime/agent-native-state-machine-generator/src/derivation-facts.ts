@@ -118,39 +118,45 @@ export function resolveRetryPosture(
 	return undefined
 }
 
+/**
+ * One matcher per condition key a rule may branch on. A `Map` rather than a
+ * plain object, since `key` comes from a candidate's declared rule and must
+ * never resolve through a prototype property.
+ */
+const RULE_CONDITION_MATCHERS = new Map<
+	string,
+	(value: string | readonly string[], facts: RetryFacts) => boolean
+>([
+	['command', (value, facts) => value === facts.command],
+	[
+		'result_kind',
+		(value, facts) => value === facts.resultKind || value === 'any_other',
+	],
+	[
+		'blocker',
+		(value, facts) => facts.blocker !== undefined && value === facts.blocker,
+	],
+	[
+		'state_in',
+		(value, facts) =>
+			facts.state !== undefined &&
+			Array.isArray(value) &&
+			value.includes(facts.state),
+	],
+])
+
 function matchesRule(
 	when: Readonly<Record<string, string | readonly string[]>>,
 	facts: RetryFacts,
 ): boolean {
 	// Every declared condition must hold. A condition naming a fact the station
 	// cannot supply fails the rule rather than being skipped, so a rule never
-	// matches more broadly than it was written.
+	// matches more broadly than it was written. A condition on a fact no
+	// Branch Station carries (an activation cause, a doctor task terminal) has
+	// no matcher, which is exactly that failure.
 	for (const [key, value] of Object.entries(when)) {
-		switch (key) {
-			case 'command':
-				if (value !== facts.command) return false
-				break
-			case 'result_kind':
-				if (value !== facts.resultKind && value !== 'any_other') return false
-				break
-			case 'blocker':
-				if (facts.blocker === undefined || value !== facts.blocker) return false
-				break
-			case 'state_in':
-				if (
-					facts.state === undefined ||
-					!Array.isArray(value) ||
-					!value.includes(facts.state)
-				) {
-					return false
-				}
-				break
-			default:
-				// A condition on a fact no Branch Station carries (an activation
-				// cause, a doctor task terminal) cannot be evaluated here, so the
-				// rule does not match this station.
-				return false
-		}
+		const matches = RULE_CONDITION_MATCHERS.get(key)
+		if (matches === undefined || !matches(value, facts)) return false
 	}
 	return true
 }

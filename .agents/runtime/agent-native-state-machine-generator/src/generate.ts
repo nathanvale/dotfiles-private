@@ -583,6 +583,169 @@ export async function generateArtifactSet(
 	return await writeArtifactSet(ir, digest, options, false)
 }
 
+type ExistingManifest = Awaited<ReturnType<typeof readExistingManifest>>
+
+interface ProvenanceExpectation {
+	readonly inputSchemaVersion: string
+	readonly generatorContractVersion: string
+}
+
+/**
+ * The IR and the digest must agree about their own identity.
+ *
+ * `deriveArtifactSet` and the manifest read the two separately, so a caller
+ * that amends one and keeps the other would publish a set whose declared
+ * version and recorded provenance disagree. Checking one identity and
+ * trusting the other is how a fail-closed gate ends up trusting an input
+ * nothing cross-checks.
+ */
+function checkProvenanceIdentity(
+	ir: SpecificationIr,
+	digest: SpecificationDigest,
+):
+	| { readonly expectation: ProvenanceExpectation }
+	| { readonly failure: GenerationFailure } {
+	const irVersion = ir.specMeta.inputSchemaVersion
+	const reader = registeredReaderFor(irVersion)
+	const expectedInputSchemaVersion = reader?.frozenEnvelopeVersion ?? irVersion
+	const expectedGeneratorContractVersion =
+		reader?.frozenGeneratorContractVersion ?? GENERATOR_CONTRACT_VERSION
+	if (
+		digest.inputSchemaVersion !== expectedInputSchemaVersion ||
+		digest.generatorContractVersion !== expectedGeneratorContractVersion
+	) {
+		return {
+			failure: {
+				ok: false,
+				cause: 'generation_provenance_mismatch',
+				subject: irVersion,
+				message: `The compiled specification declares Input Schema Version ${JSON.stringify(irVersion)}, whose digest envelope names ${JSON.stringify(expectedInputSchemaVersion)} and Generator Contract Version ${JSON.stringify(expectedGeneratorContractVersion)}, but the supplied digest names ${JSON.stringify(digest.inputSchemaVersion)} and ${JSON.stringify(digest.generatorContractVersion)}. A Generated Artifact Set cannot record two identities.`,
+				refusals: [],
+			},
+		}
+	}
+	return {
+		expectation: {
+			inputSchemaVersion: expectedInputSchemaVersion,
+			generatorContractVersion: expectedGeneratorContractVersion,
+		},
+	}
+}
+
+/**
+ * Before every other judgement about the existing set, and before any write
+ * or delete: a declared output this set may not own refuses on its own
+ * cause.
+ *
+ * It runs first because it is the only gate that judges the paths
+ * themselves. Leaving it to a later gate is what made the boundary hold by
+ * accident: the materialisation check rejects an escaping path as "not
+ * present", which reports a misleading cause and stops protecting anything
+ * the moment the gates are reordered.
+ */
+function checkUnsafeDeclaredOutput(
+	existing: ExistingManifest,
+): GenerationFailure | undefined {
+	if (!existing.present || existing.unsafeDeclaredOutput === undefined)
+		return undefined
+	return {
+		ok: false,
+		cause: 'generation_unsafe_declared_output',
+		subject: existing.unsafeDeclaredOutput,
+		message: `The provenance manifest declares the output ${JSON.stringify(existing.unsafeDeclaredOutput)}, which escapes the generated output directory or repeats another declared output. A Generated Artifact Set owns only forward-slashed relative paths inside its own directory, so this manifest was not written by this generator.`,
+		refusals: [],
+	}
+}
+
+/**
+ * Identity AND materialisation. A manifest is a claim about a set, not the
+ * set: its digest is printed in every generated header, so anyone can write
+ * one. Requiring the declared outputs to exist means "this set is already
+ * here" is proven by the artifacts rather than asserted by a file that names
+ * them.
+ */
+async function resolveReplacesOwnSet(
+	outputDir: string,
+	existing: ExistingManifest,
+	digest: SpecificationDigest,
+	expectation: ProvenanceExpectation,
+): Promise<boolean> {
+	const identityMatches =
+		existing.present &&
+		existing.readable &&
+		existing.digest === digest.specificationDigest &&
+		existing.inputSchemaVersion === expectation.inputSchemaVersion &&
+		existing.generatorContractVersion === expectation.generatorContractVersion
+	return (
+		identityMatches &&
+		existing.declaredOutputs.length > 0 &&
+		(await allOutputsPresent(outputDir, existing.declaredOutputs))
+	)
+}
+
+/**
+ * Identity is required whenever this compilation did not found what is
+ * already there. Repair does not waive it: `repairing` narrows what a
+ * caller may do to a set it already owns, and never widens it, so proving
+ * the set is not this compilation's is enough on its own.
+ */
+function checkUnreadableManifest(
+	existing: ExistingManifest,
+	outputDir: string,
+): GenerationFailure | undefined {
+	if (!existing.present || existing.readable) return undefined
+	return {
+		ok: false,
+		cause: 'generation_unreadable_manifest',
+		subject: outputDir,
+		message:
+			'The provenance manifest in the output directory cannot be read, so the set it declares cannot be identified. Remove it and generate afresh.',
+		refusals: [],
+	}
+}
+
+function checkForeignExistingSet(
+	existing: ExistingManifest,
+	replacesOwnSet: boolean,
+	outputDir: string,
+): GenerationFailure | undefined {
+	if (!existing.present || replacesOwnSet) return undefined
+	return {
+		ok: false,
+		cause: 'generation_foreign_existing_set',
+		subject: outputDir,
+		message:
+			'The Generated Artifact Set in the output directory records a different specification or generator identity, or declares outputs that are not present, so this compilation cannot replace it. Check the output directory.',
+		refusals: [],
+	}
+}
+
+/**
+ * Founding a NEW set from input the Registered Reader owns would give a
+ * consumer v2 meaning it never admitted. The route out is the Registered
+ * Migration, which produces an isolated candidate the product owner admits
+ * separately.
+ *
+ * Replacing a set that already exists is not founding one. The admitted
+ * pilot's set is pinned on a superseded version, so verifying and
+ * regenerating it must keep working; only the first write is refused.
+ */
+function checkSupersededInputSchema(
+	repairing: boolean,
+	replacesOwnSet: boolean,
+	declaredVersion: string,
+): GenerationFailure | undefined {
+	if (repairing || replacesOwnSet || !isRegisteredReaderVersion(declaredVersion))
+		return undefined
+	return {
+		ok: false,
+		cause: 'generation_superseded_input_schema',
+		subject: declaredVersion,
+		message: `Input Schema Version ${JSON.stringify(declaredVersion)} is read-only. A new Generated Artifact Set is founded from version ${JSON.stringify(INPUT_SCHEMA_VERSION)}, so migrate the candidate and admit the result before generating.`,
+		refusals: [],
+	}
+}
+
 /**
  * The shared writer behind both verbs.
  *
@@ -604,111 +767,42 @@ async function writeArtifactSet(
 	repairing: boolean,
 ): Promise<GenerationResult> {
 	// Before rendering and before any write: the IR and the digest must agree
-	// about their own identity. `deriveArtifactSet` and the manifest read the
-	// two separately, so a caller that amends one and keeps the other would
-	// publish a set whose declared version and recorded provenance disagree.
-	// Checking one identity and trusting the other is how a fail-closed gate
-	// ends up trusting an input nothing cross-checks.
-	const irVersion = ir.specMeta.inputSchemaVersion
-	const reader = registeredReaderFor(irVersion)
-	const expectedInputSchemaVersion = reader?.frozenEnvelopeVersion ?? irVersion
-	const expectedGeneratorContractVersion =
-		reader?.frozenGeneratorContractVersion ?? GENERATOR_CONTRACT_VERSION
-	if (
-		digest.inputSchemaVersion !== expectedInputSchemaVersion ||
-		digest.generatorContractVersion !== expectedGeneratorContractVersion
-	)
-		return {
-			ok: false,
-			cause: 'generation_provenance_mismatch',
-			subject: irVersion,
-			message: `The compiled specification declares Input Schema Version ${JSON.stringify(irVersion)}, whose digest envelope names ${JSON.stringify(expectedInputSchemaVersion)} and Generator Contract Version ${JSON.stringify(expectedGeneratorContractVersion)}, but the supplied digest names ${JSON.stringify(digest.inputSchemaVersion)} and ${JSON.stringify(digest.generatorContractVersion)}. A Generated Artifact Set cannot record two identities.`,
-			refusals: [],
-		}
+	// about their own identity.
+	const identity = checkProvenanceIdentity(ir, digest)
+	if ('failure' in identity) return identity.failure
 
 	const existing = await readExistingManifest(options.outputDir)
-	// Before rendering and before any write: founding a NEW set from input the
-	// Registered Reader owns would give a consumer v2 meaning it never
-	// admitted. The route out is the Registered Migration, which produces an
-	// isolated candidate the product owner admits separately.
-	//
-	// Replacing a set that already exists is not founding one. The admitted
-	// pilot's set is pinned on a superseded version, so verifying and
-	// regenerating it must keep working; only the first write is refused.
-	// Legacy replacement is legitimate only when the set on disk IS the set
-	// this compilation describes. Presence is not provenance: a corrupt
-	// manifest, or one belonging to another product or another specification,
-	// says nothing about whether this legacy version may replace it.
+	// Presence is not provenance: a corrupt manifest, or one belonging to
+	// another product or another specification, says nothing about whether
+	// this legacy version may replace it.
 	const declaredVersion = ir.specMeta.inputSchemaVersion
-	// Before every other judgement about the existing set, and before any
-	// write or delete: a declared output this set may not own refuses on its
-	// own cause.
-	//
-	// It runs first because it is the only gate that judges the paths
-	// themselves. Leaving it to a later gate is what made the boundary hold by
-	// accident: the materialisation check rejects an escaping path as "not
-	// present", which reports a misleading cause and stops protecting anything
-	// the moment the gates are reordered.
-	if (existing.present && existing.unsafeDeclaredOutput !== undefined)
-		return {
-			ok: false,
-			cause: 'generation_unsafe_declared_output',
-			subject: existing.unsafeDeclaredOutput,
-			message: `The provenance manifest declares the output ${JSON.stringify(existing.unsafeDeclaredOutput)}, which escapes the generated output directory or repeats another declared output. A Generated Artifact Set owns only forward-slashed relative paths inside its own directory, so this manifest was not written by this generator.`,
-			refusals: [],
-		}
 
-	// Identity AND materialisation. A manifest is a claim about a set, not the
-	// set: its digest is printed in every generated header, so anyone can
-	// write one. Requiring the declared outputs to exist means "this set is
-	// already here" is proven by the artifacts rather than asserted by a file
-	// that names them.
-	const identityMatches =
-		existing.present &&
-		existing.readable &&
-		existing.digest === digest.specificationDigest &&
-		existing.inputSchemaVersion === expectedInputSchemaVersion &&
-		existing.generatorContractVersion === expectedGeneratorContractVersion
-	const replacesOwnSet =
-		identityMatches &&
-		existing.declaredOutputs.length > 0 &&
-		(await allOutputsPresent(options.outputDir, existing.declaredOutputs))
-	// Identity is required whenever this compilation did not found what is
-	// already there. Repair does not waive it: `repairing` narrows what a
-	// caller may do to a set it already owns, and never widens it, so proving
-	// the set is not this compilation's is enough on its own.
-	if (existing.present && !existing.readable)
-		return {
-			ok: false,
-			cause: 'generation_unreadable_manifest',
-			subject: options.outputDir,
-			message:
-				'The provenance manifest in the output directory cannot be read, so the set it declares cannot be identified. Remove it and generate afresh.',
-			refusals: [],
-		}
+	const unsafeOutputFailure = checkUnsafeDeclaredOutput(existing)
+	if (unsafeOutputFailure) return unsafeOutputFailure
 
-	if (existing.present && !replacesOwnSet)
-		return {
-			ok: false,
-			cause: 'generation_foreign_existing_set',
-			subject: options.outputDir,
-			message:
-				'The Generated Artifact Set in the output directory records a different specification or generator identity, or declares outputs that are not present, so this compilation cannot replace it. Check the output directory.',
-			refusals: [],
-		}
-
-	if (
-		!repairing &&
-		!replacesOwnSet &&
-		isRegisteredReaderVersion(declaredVersion)
+	const replacesOwnSet = await resolveReplacesOwnSet(
+		options.outputDir,
+		existing,
+		digest,
+		identity.expectation,
 	)
-		return {
-			ok: false,
-			cause: 'generation_superseded_input_schema',
-			subject: declaredVersion,
-			message: `Input Schema Version ${JSON.stringify(declaredVersion)} is read-only. A new Generated Artifact Set is founded from version ${JSON.stringify(INPUT_SCHEMA_VERSION)}, so migrate the candidate and admit the result before generating.`,
-			refusals: [],
-		}
+
+	const unreadableFailure = checkUnreadableManifest(existing, options.outputDir)
+	if (unreadableFailure) return unreadableFailure
+
+	const foreignSetFailure = checkForeignExistingSet(
+		existing,
+		replacesOwnSet,
+		options.outputDir,
+	)
+	if (foreignSetFailure) return foreignSetFailure
+
+	const supersededVersionFailure = checkSupersededInputSchema(
+		repairing,
+		replacesOwnSet,
+		declaredVersion,
+	)
+	if (supersededVersionFailure) return supersededVersionFailure
 
 	const emitters = options.emitters ?? DEFAULT_EMITTERS
 	const rendered = renderArtifactSet(ir, digest, emitters)

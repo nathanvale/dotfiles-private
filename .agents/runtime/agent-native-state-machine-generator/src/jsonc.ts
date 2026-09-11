@@ -159,25 +159,35 @@ class Parser {
 	 */
 	private skipTrivia(): void {
 		for (;;) {
-			const char = this.text[this.index]
-			if (char !== undefined && WHITESPACE.has(char)) {
-				this.index += 1
-				continue
-			}
-			if (char === '/' && this.text[this.index + 1] === '/') {
-				const end = this.text.indexOf('\n', this.index)
-				this.index = end === -1 ? this.text.length : end
-				continue
-			}
-			if (char === '/' && this.text[this.index + 1] === '*') {
-				const end = this.text.indexOf('*/', this.index + 2)
-				if (end === -1)
-					this.fail('jsonc_syntax_error', 'Unterminated block comment.')
-				this.index = end + 2
-				continue
-			}
+			if (this.skipWhitespace()) continue
+			if (this.skipLineComment()) continue
+			if (this.skipBlockComment()) continue
 			return
 		}
+	}
+
+	private skipWhitespace(): boolean {
+		const char = this.text[this.index]
+		if (char === undefined || !WHITESPACE.has(char)) return false
+		this.index += 1
+		return true
+	}
+
+	private skipLineComment(): boolean {
+		if (this.text[this.index] !== '/' || this.text[this.index + 1] !== '/')
+			return false
+		const end = this.text.indexOf('\n', this.index)
+		this.index = end === -1 ? this.text.length : end
+		return true
+	}
+
+	private skipBlockComment(): boolean {
+		if (this.text[this.index] !== '/' || this.text[this.index + 1] !== '*')
+			return false
+		const end = this.text.indexOf('*/', this.index + 2)
+		if (end === -1) this.fail('jsonc_syntax_error', 'Unterminated block comment.')
+		this.index = end + 2
+		return true
 	}
 
 	// --- values ---------------------------------------------------------------
@@ -213,50 +223,60 @@ class Parser {
 					'Unexpected end of input inside an object.',
 				)
 			}
-			if (this.text[this.index] !== '"') {
-				this.fail(
-					'jsonc_syntax_error',
-					`Object keys must be double-quoted strings; found ${this.describeHere()}.`,
-				)
-			}
-			const keyLoc = this.here()
-			const keyNode = this.parseString()
-			const key = keyNode.kind === 'string' ? keyNode.value : ''
-			const previous = seen.get(key)
-			if (previous !== undefined) {
-				this.fail(
-					'jsonc_duplicate_key',
-					`Duplicate object key ${JSON.stringify(key)} (first declared at line ${previous.line}).`,
-					keyLoc,
-				)
-			}
-			seen.set(key, keyLoc)
+			entries.push(this.parseObjectMember(seen))
 			this.skipTrivia()
-			if (this.text[this.index] !== ':') {
-				this.fail(
-					'jsonc_syntax_error',
-					`Expected ":" after object key ${JSON.stringify(key)}.`,
-				)
-			}
-			this.index += 1
-			this.skipTrivia()
-			const value = this.parseValue()
-			entries.push({ key, keyLoc, value })
-			this.skipTrivia()
-			const next = this.text[this.index]
-			if (next === ',') {
-				this.index += 1
-				continue
-			}
-			if (next === '}') {
-				this.index += 1
-				return { kind: 'object', entries, loc }
-			}
+			if (this.consumeObjectSeparator()) return { kind: 'object', entries, loc }
+		}
+	}
+
+	/** One `"key": value` member, guarding the key against redeclaration. */
+	private parseObjectMember(seen: Map<string, SourceLocation>): JsoncEntry {
+		if (this.text[this.index] !== '"') {
 			this.fail(
 				'jsonc_syntax_error',
-				`Expected "," or "}" in object; found ${this.describeHere()}.`,
+				`Object keys must be double-quoted strings; found ${this.describeHere()}.`,
 			)
 		}
+		const keyLoc = this.here()
+		const keyNode = this.parseString()
+		const key = keyNode.kind === 'string' ? keyNode.value : ''
+		const previous = seen.get(key)
+		if (previous !== undefined) {
+			this.fail(
+				'jsonc_duplicate_key',
+				`Duplicate object key ${JSON.stringify(key)} (first declared at line ${previous.line}).`,
+				keyLoc,
+			)
+		}
+		seen.set(key, keyLoc)
+		this.skipTrivia()
+		if (this.text[this.index] !== ':') {
+			this.fail(
+				'jsonc_syntax_error',
+				`Expected ":" after object key ${JSON.stringify(key)}.`,
+			)
+		}
+		this.index += 1
+		this.skipTrivia()
+		const value = this.parseValue()
+		return { key, keyLoc, value }
+	}
+
+	/** Consumes the separator after a member; true when the object closed. */
+	private consumeObjectSeparator(): boolean {
+		const next = this.text[this.index]
+		if (next === ',') {
+			this.index += 1
+			return false
+		}
+		if (next === '}') {
+			this.index += 1
+			return true
+		}
+		this.fail(
+			'jsonc_syntax_error',
+			`Expected "," or "}" in object; found ${this.describeHere()}.`,
+		)
 	}
 
 	private parseArray(): JsoncNode {
@@ -362,30 +382,9 @@ class Parser {
 		const loc = this.here()
 		const start = this.index
 		if (this.text[this.index] === '-') this.index += 1
-		while (
-			this.index < this.text.length &&
-			DIGITS.has(this.text[this.index] as string)
-		)
-			this.index += 1
-		if (this.text[this.index] === '.') {
-			this.index += 1
-			while (
-				this.index < this.text.length &&
-				DIGITS.has(this.text[this.index] as string)
-			)
-				this.index += 1
-		}
-		const exponent = this.text[this.index]
-		if (exponent === 'e' || exponent === 'E') {
-			this.index += 1
-			const sign = this.text[this.index]
-			if (sign === '+' || sign === '-') this.index += 1
-			while (
-				this.index < this.text.length &&
-				DIGITS.has(this.text[this.index] as string)
-			)
-				this.index += 1
-		}
+		this.consumeDigits()
+		this.consumeFraction()
+		this.consumeExponent()
 		const raw = this.text.slice(start, this.index)
 		const value = Number(raw)
 		if (!Number.isFinite(value)) {
@@ -396,6 +395,29 @@ class Parser {
 			)
 		}
 		return { kind: 'number', value, loc }
+	}
+
+	private consumeDigits(): void {
+		while (
+			this.index < this.text.length &&
+			DIGITS.has(this.text[this.index] as string)
+		)
+			this.index += 1
+	}
+
+	private consumeFraction(): void {
+		if (this.text[this.index] !== '.') return
+		this.index += 1
+		this.consumeDigits()
+	}
+
+	private consumeExponent(): void {
+		const exponent = this.text[this.index]
+		if (exponent !== 'e' && exponent !== 'E') return
+		this.index += 1
+		const sign = this.text[this.index]
+		if (sign === '+' || sign === '-') this.index += 1
+		this.consumeDigits()
 	}
 
 	/**

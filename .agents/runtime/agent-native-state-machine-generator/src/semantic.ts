@@ -40,6 +40,18 @@ const UNROUTED_SAMPLE_SIZE = 5
 /** `result_kind` values the candidates branch on in the retry table. */
 const RESULT_KINDS = new Set(['inspection', 'success', 'refusal', 'any_other'])
 
+type CatalogEntryPath = readonly ['actions', 'catalog', number]
+type PauseModePath = readonly ['pause_modes', string]
+type RoutingRowPath = readonly ['routing', string, 'rows', number]
+
+/** Resolves one cross-reference against a sealed vocabulary, reporting when it fails. */
+type ReferenceResolver = (
+	value: string | undefined,
+	path: string,
+	location: JsoncNode['loc'],
+	label: string,
+) => void
+
 class Cursor {
 	constructor(private readonly root: JsoncNode) {}
 
@@ -299,78 +311,10 @@ function checkActionCatalog(scope: SemanticCheckScope): void {
 		const kind = cursor.string([...base, 'kind'])
 		if (id === undefined || kind === undefined) return
 
-		if (!declaredKinds.has(kind)) {
-			report(
-				'semantic_unresolved_reference',
-				`Action ${JSON.stringify(id)} uses kind ${JSON.stringify(kind)}, which is not declared in actions.kinds.`,
-				`actions.catalog[${index}].kind`,
-				cursor.loc([...base, 'kind']),
-			)
-		}
-
-		// Missing action semantics: each sealed kind carries a mandatory payload.
-		if (
-			kind === 'none' &&
-			cursor.string([...base, 'stop_scope']) === undefined
-		) {
-			report(
-				'semantic_missing_action_semantics',
-				`Action ${JSON.stringify(id)} has kind "none" but declares no stop_scope. Stop Scope must state whether the product is domain_terminal or only the current agent is agent_terminal.`,
-				`actions.catalog[${index}]`,
-				cursor.keyLoc([...base, 'id']),
-			)
-		}
-		if (
-			kind === 'needs_human' &&
-			cursor.string([...base, 'human_kind']) === undefined
-		) {
-			report(
-				'semantic_missing_action_semantics',
-				`Action ${JSON.stringify(id)} has kind "needs_human" but declares no human_kind.`,
-				`actions.catalog[${index}]`,
-				cursor.keyLoc([...base, 'id']),
-			)
-		}
-		if (kind === 'wait') {
-			for (const required of ['condition', 'owner'] as const) {
-				if (cursor.string([...base, required]) === undefined) {
-					report(
-						'semantic_missing_action_semantics',
-						`Action ${JSON.stringify(id)} has kind "wait" but declares no ${required}. A wait must name its condition and Progress Owner so healthy work never becomes terminal.`,
-						`actions.catalog[${index}]`,
-						cursor.keyLoc([...base, 'id']),
-					)
-				}
-			}
-		}
-
-		const requiresFeature = cursor.string([...base, 'requires_feature'])
-		if (
-			requiresFeature !== undefined &&
-			!cursor.strings(['features', 'feature_gates']).includes(requiresFeature)
-		) {
-			report(
-				'semantic_unresolved_reference',
-				`Action ${JSON.stringify(id)} requires feature gate ${JSON.stringify(requiresFeature)}, which features.feature_gates does not declare.`,
-				`actions.catalog[${index}].requires_feature`,
-				cursor.loc([...base, 'requires_feature']),
-			)
-		}
-
-		const externalOwners = cursor.strings(['actions', 'external_owners'])
-		const owner = cursor.string([...base, 'owner'])
-		if (
-			owner !== undefined &&
-			externalOwners.length > 0 &&
-			!externalOwners.includes(owner)
-		) {
-			report(
-				'semantic_unresolved_reference',
-				`Action ${JSON.stringify(id)} names owner ${JSON.stringify(owner)}, which actions.external_owners does not declare.`,
-				`actions.catalog[${index}].owner`,
-				cursor.loc([...base, 'owner']),
-			)
-		}
+		checkActionKindDeclared(scope, base, id, kind, declaredKinds)
+		checkActionMandatorySemantics(scope, base, id, kind)
+		checkActionFeatureGate(scope, base, id)
+		checkActionOwner(scope, base, id)
 	})
 
 	// A selectable Next Safe Action must exist, and exactly one terminal "none".
@@ -390,6 +334,100 @@ function checkActionCatalog(scope: SemanticCheckScope): void {
 			)
 		}
 	}
+}
+
+function checkActionKindDeclared(
+	{ cursor, report }: SemanticCheckScope,
+	base: CatalogEntryPath,
+	id: string,
+	kind: string,
+	declaredKinds: ReadonlySet<string>,
+): void {
+	if (declaredKinds.has(kind)) return
+	report(
+		'semantic_unresolved_reference',
+		`Action ${JSON.stringify(id)} uses kind ${JSON.stringify(kind)}, which is not declared in actions.kinds.`,
+		`actions.catalog[${base[2]}].kind`,
+		cursor.loc([...base, 'kind']),
+	)
+}
+
+/** Missing action semantics: each sealed kind carries a mandatory payload. */
+function checkActionMandatorySemantics(
+	{ cursor, report }: SemanticCheckScope,
+	base: CatalogEntryPath,
+	id: string,
+	kind: string,
+): void {
+	if (kind === 'none' && cursor.string([...base, 'stop_scope']) === undefined) {
+		report(
+			'semantic_missing_action_semantics',
+			`Action ${JSON.stringify(id)} has kind "none" but declares no stop_scope. Stop Scope must state whether the product is domain_terminal or only the current agent is agent_terminal.`,
+			`actions.catalog[${base[2]}]`,
+			cursor.keyLoc([...base, 'id']),
+		)
+	}
+	if (
+		kind === 'needs_human' &&
+		cursor.string([...base, 'human_kind']) === undefined
+	) {
+		report(
+			'semantic_missing_action_semantics',
+			`Action ${JSON.stringify(id)} has kind "needs_human" but declares no human_kind.`,
+			`actions.catalog[${base[2]}]`,
+			cursor.keyLoc([...base, 'id']),
+		)
+	}
+	if (kind !== 'wait') return
+	for (const required of ['condition', 'owner'] as const) {
+		if (cursor.string([...base, required]) !== undefined) continue
+		report(
+			'semantic_missing_action_semantics',
+			`Action ${JSON.stringify(id)} has kind "wait" but declares no ${required}. A wait must name its condition and Progress Owner so healthy work never becomes terminal.`,
+			`actions.catalog[${base[2]}]`,
+			cursor.keyLoc([...base, 'id']),
+		)
+	}
+}
+
+function checkActionFeatureGate(
+	{ cursor, report }: SemanticCheckScope,
+	base: CatalogEntryPath,
+	id: string,
+): void {
+	const requiresFeature = cursor.string([...base, 'requires_feature'])
+	if (
+		requiresFeature === undefined ||
+		cursor.strings(['features', 'feature_gates']).includes(requiresFeature)
+	)
+		return
+	report(
+		'semantic_unresolved_reference',
+		`Action ${JSON.stringify(id)} requires feature gate ${JSON.stringify(requiresFeature)}, which features.feature_gates does not declare.`,
+		`actions.catalog[${base[2]}].requires_feature`,
+		cursor.loc([...base, 'requires_feature']),
+	)
+}
+
+function checkActionOwner(
+	{ cursor, report }: SemanticCheckScope,
+	base: CatalogEntryPath,
+	id: string,
+): void {
+	const externalOwners = cursor.strings(['actions', 'external_owners'])
+	const owner = cursor.string([...base, 'owner'])
+	if (
+		owner === undefined ||
+		externalOwners.length === 0 ||
+		externalOwners.includes(owner)
+	)
+		return
+	report(
+		'semantic_unresolved_reference',
+		`Action ${JSON.stringify(id)} names owner ${JSON.stringify(owner)}, which actions.external_owners does not declare.`,
+		`actions.catalog[${base[2]}].owner`,
+		cursor.loc([...base, 'owner']),
+	)
 }
 
 /**
@@ -423,12 +461,7 @@ function checkReferences({
 	report,
 	actionIds,
 }: SemanticCheckScope): void {
-	const resolveAction = (
-		value: string | undefined,
-		path: string,
-		location: JsoncNode['loc'],
-		label: string,
-	): void => {
+	const resolveAction: ReferenceResolver = (value, path, location, label) => {
 		if (value === undefined || actionIds.has(value)) return
 		report(
 			'semantic_unresolved_reference',
@@ -439,6 +472,26 @@ function checkReferences({
 	}
 	const resolveBlocker = blockerResolver(cursor, report)
 
+	checkCauseToNextActionReferences(cursor, report, resolveAction)
+	checkContextualRenderingReferences(cursor, resolveAction)
+
+	resolveBlocker(
+		cursor.string(['actions', 'resolution', 'unavailable_projection_blocker']),
+		'actions.resolution.unavailable_projection_blocker',
+		cursor.loc(['actions', 'resolution', 'unavailable_projection_blocker']),
+		'actions.resolution',
+	)
+
+	checkCapabilityErrorReferences(cursor, resolveAction, resolveBlocker)
+	checkQuarantineReferences(cursor, resolveAction, resolveBlocker)
+	checkStaleLeaseTakeoverReferences(cursor, resolveBlocker)
+}
+
+function checkCauseToNextActionReferences(
+	cursor: Cursor,
+	report: SemanticCheckScope['report'],
+	resolveAction: ReferenceResolver,
+): void {
 	for (const entry of cursor.entries(['activation', 'cause_to_next_action'])) {
 		const path = ['activation', 'cause_to_next_action', entry.key] as const
 		if (
@@ -458,11 +511,18 @@ function checkReferences({
 			'activation.cause_to_next_action',
 		)
 	}
+}
 
+/**
+ * Both declared forms carry targets, so both resolve. A bare string is one
+ * target and reports at the key; only the array form indexes, to name which
+ * of several targets failed.
+ */
+function checkContextualRenderingReferences(
+	cursor: Cursor,
+	resolveAction: ReferenceResolver,
+): void {
 	for (const entry of cursor.entries(['actions', 'contextual_renderings'])) {
-		// Both declared forms carry targets, so both resolve. A bare string is
-		// one target and reports at the key; only the array form indexes, to
-		// name which of several targets failed.
 		if (entry.value.kind === 'string') {
 			resolveAction(
 				entry.value.value,
@@ -483,14 +543,13 @@ function checkReferences({
 			)
 		})
 	}
+}
 
-	resolveBlocker(
-		cursor.string(['actions', 'resolution', 'unavailable_projection_blocker']),
-		'actions.resolution.unavailable_projection_blocker',
-		cursor.loc(['actions', 'resolution', 'unavailable_projection_blocker']),
-		'actions.resolution',
-	)
-
+function checkCapabilityErrorReferences(
+	cursor: Cursor,
+	resolveAction: ReferenceResolver,
+	resolveBlocker: ReferenceResolver,
+): void {
 	for (const entry of cursor.entries(['authority', 'capability_errors'])) {
 		const base = ['authority', 'capability_errors', entry.key] as const
 		resolveBlocker(
@@ -514,7 +573,13 @@ function checkReferences({
 			)
 		}
 	}
+}
 
+function checkQuarantineReferences(
+	cursor: Cursor,
+	resolveAction: ReferenceResolver,
+	resolveBlocker: ReferenceResolver,
+): void {
 	resolveBlocker(
 		cursor.string(['authority', 'quarantine', 'blocker']),
 		'authority.quarantine.blocker',
@@ -527,6 +592,12 @@ function checkReferences({
 		cursor.loc(['authority', 'quarantine', 'next']),
 		'authority.quarantine',
 	)
+}
+
+function checkStaleLeaseTakeoverReferences(
+	cursor: Cursor,
+	resolveBlocker: ReferenceResolver,
+): void {
 	cursor
 		.items(['authority', 'stale_lease_takeover', 'failure_blockers'])
 		.forEach((item, index) => {
@@ -614,79 +685,102 @@ function checkTransitionTargets({ cursor, report }: SemanticCheckScope): void {
 }
 
 /** State values, their declared subsets, and projection totality. */
-function checkStateVocabularies({ cursor, report }: SemanticCheckScope): void {
-	for (const stateEntry of cursor.entries(['states'])) {
-		const base = ['states', stateEntry.key] as const
-		const values = cursor.strings([...base, 'values'])
-		const valueSet = new Set(values)
+function checkStateVocabularies(scope: SemanticCheckScope): void {
+	for (const stateEntry of scope.cursor.entries(['states'])) {
+		checkStateEntry(scope, stateEntry.key)
+	}
+}
 
-		reportRepeatedValues(
-			report,
-			values,
-			(duplicate) =>
-				`State ${JSON.stringify(stateEntry.key)} declares value ${JSON.stringify(duplicate)} more than once.`,
-			`states.${stateEntry.key}.values`,
-			cursor.loc([...base, 'values']),
+function checkStateEntry(scope: SemanticCheckScope, stateName: string): void {
+	const { cursor, report } = scope
+	const base = ['states', stateName] as const
+	const values = cursor.strings([...base, 'values'])
+	const valueSet = new Set(values)
+
+	reportRepeatedValues(
+		report,
+		values,
+		(duplicate) =>
+			`State ${JSON.stringify(stateName)} declares value ${JSON.stringify(duplicate)} more than once.`,
+		`states.${stateName}.values`,
+		cursor.loc([...base, 'values']),
+	)
+
+	checkStateSubsets(scope, stateName, valueSet)
+	checkStateProjection(scope, stateName, valueSet)
+}
+
+function checkStateSubsets(
+	{ cursor, report }: SemanticCheckScope,
+	stateName: string,
+	valueSet: ReadonlySet<string>,
+): void {
+	const base = ['states', stateName] as const
+	for (const subset of [
+		'terminal',
+		'human_terminal',
+		'absorbing',
+		'observation_sourced',
+		'durable_subset_excludes',
+	] as const) {
+		cursor.items([...base, subset]).forEach((item, index) => {
+			if (item.kind !== 'string' || valueSet.has(item.value)) return
+			report(
+				'semantic_unresolved_reference',
+				`states.${stateName}.${subset} names ${JSON.stringify(item.value)}, which is not one of that state's declared values.`,
+				`states.${stateName}.${subset}[${index}]`,
+				item.loc,
+			)
+		})
+	}
+}
+
+/**
+ * A declared phase-to-state projection must be total over the source phases.
+ *
+ * The source phases are the declared phase state's values. Totality is
+ * checked against what the product declared it projects from, never against
+ * a state found by matching the table's own keys: a table missing a row
+ * would then define away the gap it is missing (gap row 14). A candidate
+ * that declares no phase state has no source to be total against, and
+ * checkTransitionTargets already refuses that when it matters.
+ */
+function checkStateProjection(
+	scope: SemanticCheckScope,
+	stateName: string,
+	valueSet: ReadonlySet<string>,
+): void {
+	const { cursor, report } = scope
+	const base = ['states', stateName] as const
+	const projection = cursor.entries([...base, 'projection_from_phase'])
+	if (projection.length === 0) return
+
+	const declaredPhaseState =
+		cursor.string(['phase_state']) ??
+		registeredReaderFor(cursor.string(['spec_meta', 'input_schema_version']) ?? '')
+			?.frozenPhaseState
+	const sourcePhases =
+		declaredPhaseState === undefined
+			? []
+			: cursor.strings(['states', declaredPhaseState, 'values'])
+	const covered = new Set(projection.map((entry) => entry.key))
+	for (const phase of sourcePhases) {
+		if (covered.has(phase)) continue
+		report(
+			'semantic_incomplete_projection',
+			`states.${stateName}.projection_from_phase does not map phase ${JSON.stringify(phase)}. A partial projection would leave that phase without a safe interpretation.`,
+			`states.${stateName}.projection_from_phase`,
+			cursor.keyLoc([...base, 'projection_from_phase']),
 		)
-
-		for (const subset of [
-			'terminal',
-			'human_terminal',
-			'absorbing',
-			'observation_sourced',
-			'durable_subset_excludes',
-		] as const) {
-			cursor.items([...base, subset]).forEach((item, index) => {
-				if (item.kind !== 'string' || valueSet.has(item.value)) return
-				report(
-					'semantic_unresolved_reference',
-					`states.${stateEntry.key}.${subset} names ${JSON.stringify(item.value)}, which is not one of that state's declared values.`,
-					`states.${stateEntry.key}.${subset}[${index}]`,
-					item.loc,
-				)
-			})
-		}
-
-		// A declared phase-to-state projection must be total over the source phases.
-		const projection = cursor.entries([...base, 'projection_from_phase'])
-		if (projection.length > 0) {
-			// The source phases are the declared phase state's values. Totality
-			// is checked against what the product declared it projects from,
-			// never against a state found by matching the table's own keys: a
-			// table missing a row would then define away the gap it is missing
-			// (gap row 14). A candidate that declares no phase state has no
-			// source to be total against, and checkTransitionTargets already
-			// refuses that when it matters.
-			const declaredPhaseState =
-				cursor.string(['phase_state']) ??
-				registeredReaderFor(
-					cursor.string(['spec_meta', 'input_schema_version']) ?? '',
-				)?.frozenPhaseState
-			const sourcePhases =
-				declaredPhaseState === undefined
-					? []
-					: cursor.strings(['states', declaredPhaseState, 'values'])
-			const covered = new Set(projection.map((entry) => entry.key))
-			for (const phase of sourcePhases) {
-				if (covered.has(phase)) continue
-				report(
-					'semantic_incomplete_projection',
-					`states.${stateEntry.key}.projection_from_phase does not map phase ${JSON.stringify(phase)}. A partial projection would leave that phase without a safe interpretation.`,
-					`states.${stateEntry.key}.projection_from_phase`,
-					cursor.keyLoc([...base, 'projection_from_phase']),
-				)
-			}
-			for (const entry of projection) {
-				if (entry.value.kind !== 'string' || valueSet.has(entry.value.value))
-					continue
-				report(
-					'semantic_unresolved_reference',
-					`states.${stateEntry.key}.projection_from_phase maps ${JSON.stringify(entry.key)} to ${JSON.stringify(entry.value.value)}, which is not a declared value of that state.`,
-					`states.${stateEntry.key}.projection_from_phase.${entry.key}`,
-					entry.value.loc,
-				)
-			}
-		}
+	}
+	for (const entry of projection) {
+		if (entry.value.kind !== 'string' || valueSet.has(entry.value.value)) continue
+		report(
+			'semantic_unresolved_reference',
+			`states.${stateName}.projection_from_phase maps ${JSON.stringify(entry.key)} to ${JSON.stringify(entry.value.value)}, which is not a declared value of that state.`,
+			`states.${stateName}.projection_from_phase.${entry.key}`,
+			entry.value.loc,
+		)
 	}
 }
 
@@ -830,7 +924,28 @@ function checkRetryPosture({ cursor, report }: SemanticCheckScope): void {
 }
 
 /** Who may write, and what each command and exit actually means. */
-function checkAuthorityAndSideEffects({
+function checkAuthorityAndSideEffects(scope: SemanticCheckScope): void {
+	const { cursor, report } = scope
+	checkWriteAuthority(scope)
+
+	const commands = cursor.strings(['command_surface', 'commands'])
+	checkMutationDeclarations(scope, commands)
+	checkFlagsDeclarations(scope, commands)
+	checkOutputModesOverrides(scope, commands)
+
+	reportRepeatedValues(
+		report,
+		commands,
+		(duplicate) =>
+			`command_surface.commands lists ${JSON.stringify(duplicate)} more than once.`,
+		'command_surface.commands',
+		cursor.loc(['command_surface', 'commands']),
+	)
+
+	checkExitCodesDeclared(scope)
+}
+
+function checkWriteAuthority({
 	cursor,
 	report,
 	features,
@@ -846,20 +961,23 @@ function checkAuthorityAndSideEffects({
 
 	// Feature-conditioned: only a remote-authority product must resolve leases.
 	if (
-		features.remoteAuthority &&
-		!cursor.has(['authority', 'lease_expiry_grants'])
-	) {
-		report(
-			'semantic_missing_authority_semantics',
-			`features.remote_authority is true but authority.lease_expiry_grants is absent. A remote-authority product must state what lease expiry grants, so expiry never silently grants takeover.`,
-			'authority.lease_expiry_grants',
-			cursor.keyLoc(['authority']),
-		)
-	}
+		!features.remoteAuthority ||
+		cursor.has(['authority', 'lease_expiry_grants'])
+	)
+		return
+	report(
+		'semantic_missing_authority_semantics',
+		`features.remote_authority is true but authority.lease_expiry_grants is absent. A remote-authority product must state what lease expiry grants, so expiry never silently grants takeover.`,
+		'authority.lease_expiry_grants',
+		cursor.keyLoc(['authority']),
+	)
+}
 
-	const commands = cursor.strings(['command_surface', 'commands'])
-	const mutationEntries = cursor.entries(['command_surface', 'mutations'])
-	for (const entry of mutationEntries) {
+function checkMutationDeclarations(
+	{ cursor, report }: SemanticCheckScope,
+	commands: readonly string[],
+): void {
+	for (const entry of cursor.entries(['command_surface', 'mutations'])) {
 		if (!commands.includes(entry.key)) {
 			report(
 				'semantic_unresolved_reference',
@@ -881,7 +999,12 @@ function checkAuthorityAndSideEffects({
 			)
 		}
 	}
+}
 
+function checkFlagsDeclarations(
+	{ cursor, report }: SemanticCheckScope,
+	commands: readonly string[],
+): void {
 	for (const entry of cursor.entries(['command_surface', 'flags'])) {
 		if (commands.includes(entry.key)) continue
 		report(
@@ -891,7 +1014,12 @@ function checkAuthorityAndSideEffects({
 			entry.keyLoc,
 		)
 	}
+}
 
+function checkOutputModesOverrides(
+	{ cursor, report }: SemanticCheckScope,
+	commands: readonly string[],
+): void {
 	for (const entry of cursor.entries([
 		'command_surface',
 		'output_modes_overrides',
@@ -904,17 +1032,10 @@ function checkAuthorityAndSideEffects({
 			entry.keyLoc,
 		)
 	}
+}
 
-	reportRepeatedValues(
-		report,
-		commands,
-		(duplicate) =>
-			`command_surface.commands lists ${JSON.stringify(duplicate)} more than once.`,
-		'command_surface.commands',
-		cursor.loc(['command_surface', 'commands']),
-	)
-
-	// Baseline exit meanings must be declared; an undeclared exit is unroutable.
+/** Baseline exit meanings must be declared; an undeclared exit is unroutable. */
+function checkExitCodesDeclared({ cursor, report }: SemanticCheckScope): void {
 	for (const code of BASELINE_EXIT_CODES) {
 		if (cursor.string(['command_surface', 'exit_codes', code]) !== undefined)
 			continue
@@ -929,7 +1050,6 @@ function checkAuthorityAndSideEffects({
 
 /** Unique ids, and machinery that agrees with the feature flags in both directions. */
 function checkIdentityAndFeatureConditioning(scope: SemanticCheckScope): void {
-	const { cursor, report, features } = scope
 	reportDuplicateIds(
 		scope,
 		['invariants'],
@@ -941,8 +1061,24 @@ function checkIdentityAndFeatureConditioning(scope: SemanticCheckScope): void {
 		(id) => `Duplicate unresolved_decisions id ${JSON.stringify(id)}.`,
 	)
 
-	// Feature-conditioning, both directions. A product that disables durable
-	// machinery must not declare it; one that enables it must supply it.
+	checkDurableOperationsConditioning(scope)
+	checkVersionCustodyConditioning(scope)
+	checkLivenessEvidenceConditioning(scope)
+	checkMissedDeadlineCauses(scope)
+	checkCancellationConditioning(scope)
+	checkActionKindsVocabulary(scope)
+	checkResolutionCompleteness(scope)
+}
+
+/**
+ * Feature-conditioning, both directions. A product that disables durable
+ * machinery must not declare it; one that enables it must supply it.
+ */
+function checkDurableOperationsConditioning({
+	cursor,
+	report,
+	features,
+}: SemanticCheckScope): void {
 	if (!features.durableOperations) {
 		if (cursor.entries(['entities']).length > 0) {
 			report(
@@ -968,17 +1104,26 @@ function checkIdentityAndFeatureConditioning(scope: SemanticCheckScope): void {
 				cursor.keyLoc(['versioning', 'records']),
 			)
 		}
-	} else if (cursor.strings(['acknowledgement', 'values']).length === 0) {
-		report(
-			'semantic_feature_machinery_conflict',
-			`features.durable_operations is true but acknowledgement.values is empty. A durable product must state how a Logical Operation is acknowledged, or unknown outcomes have no interpretation.`,
-			'acknowledgement.values',
-			cursor.keyLoc(['acknowledgement', 'values']),
-		)
+		return
 	}
+	if (cursor.strings(['acknowledgement', 'values']).length > 0) return
+	report(
+		'semantic_feature_machinery_conflict',
+		`features.durable_operations is true but acknowledgement.values is empty. A durable product must state how a Logical Operation is acknowledged, or unknown outcomes have no interpretation.`,
+		'acknowledgement.values',
+		cursor.keyLoc(['acknowledgement', 'values']),
+	)
+}
 
-	// Version custody, like the other feature-conditioned sections, must agree
-	// with its flag in both directions.
+/**
+ * Version custody, like the other feature-conditioned sections, must agree
+ * with its flag in both directions.
+ */
+function checkVersionCustodyConditioning({
+	cursor,
+	report,
+	features,
+}: SemanticCheckScope): void {
 	if (
 		!features.versionCustody &&
 		cursor.node(['versioning', 'incompatible_run_policy'])?.kind === 'object'
@@ -990,7 +1135,13 @@ function checkIdentityAndFeatureConditioning(scope: SemanticCheckScope): void {
 			cursor.keyLoc(['versioning', 'incompatible_run_policy']),
 		)
 	}
+}
 
+function checkLivenessEvidenceConditioning({
+	cursor,
+	report,
+	features,
+}: SemanticCheckScope): void {
 	if (
 		!features.livenessEvidence &&
 		cursor.entries(['waits', 'budgets_ms']).length > 0
@@ -1002,7 +1153,12 @@ function checkIdentityAndFeatureConditioning(scope: SemanticCheckScope): void {
 			cursor.keyLoc(['waits', 'budgets_ms']),
 		)
 	}
+}
 
+function checkMissedDeadlineCauses({
+	cursor,
+	report,
+}: SemanticCheckScope): void {
 	for (const entry of cursor.entries(['waits', 'missed_deadline_causes'])) {
 		if (cursor.has(['waits', 'budgets_ms', entry.key])) continue
 		report(
@@ -1012,26 +1168,32 @@ function checkIdentityAndFeatureConditioning(scope: SemanticCheckScope): void {
 			entry.keyLoc,
 		)
 	}
+}
 
-	// Cancellation must agree with its feature flag in both directions.
-	const cancellationEntries = cursor.entries(['cancellation'])
-	if (features.cancellation === 'not_supported') {
-		for (const entry of cancellationEntries) {
-			if (
-				entry.value.kind === 'string' &&
-				entry.value.value === 'not_supported'
-			)
-				continue
-			report(
-				'semantic_feature_machinery_conflict',
-				`features.cancellation is "not_supported" but cancellation.${entry.key} declares a lifecycle. An unsupported feature must not carry placeholder machinery.`,
-				`cancellation.${entry.key}`,
-				entry.keyLoc,
-			)
-		}
+/** Cancellation must agree with its feature flag in both directions. */
+function checkCancellationConditioning({
+	cursor,
+	report,
+	features,
+}: SemanticCheckScope): void {
+	if (features.cancellation !== 'not_supported') return
+	for (const entry of cursor.entries(['cancellation'])) {
+		if (entry.value.kind === 'string' && entry.value.value === 'not_supported')
+			continue
+		report(
+			'semantic_feature_machinery_conflict',
+			`features.cancellation is "not_supported" but cancellation.${entry.key} declares a lifecycle. An unsupported feature must not carry placeholder machinery.`,
+			`cancellation.${entry.key}`,
+			entry.keyLoc,
+		)
 	}
+}
 
-	// Sealed kind vocabulary: actions.kinds itself must not invent a kind.
+/** Sealed kind vocabulary: actions.kinds itself must not invent a kind. */
+function checkActionKindsVocabulary({
+	cursor,
+	report,
+}: SemanticCheckScope): void {
 	cursor.items(['actions', 'kinds']).forEach((item, index) => {
 		if (item.kind !== 'string') return
 		if (
@@ -1047,22 +1209,26 @@ function checkIdentityAndFeatureConditioning(scope: SemanticCheckScope): void {
 			item.loc,
 		)
 	})
+}
 
-	// A projection that can fail must say how it fails, or it defaults to continuing.
-	if (cursor.has(['actions', 'resolution'])) {
-		for (const required of [
-			'unavailable_projection_retry_safety',
-			'unavailable_projection_stop',
-		] as const) {
-			if (cursor.string(['actions', 'resolution', required]) !== undefined)
-				continue
-			report(
-				'semantic_incomplete_projection',
-				`actions.resolution declares a missing-context path but no ${required}. An incomplete projection must deny Authority and stop fail-closed rather than defaulting to a Next Safe Action that continues.`,
-				`actions.resolution.${required}`,
-				cursor.keyLoc(['actions', 'resolution']),
-			)
-		}
+/** A projection that can fail must say how it fails, or it defaults to continuing. */
+function checkResolutionCompleteness({
+	cursor,
+	report,
+}: SemanticCheckScope): void {
+	if (!cursor.has(['actions', 'resolution'])) return
+	for (const required of [
+		'unavailable_projection_retry_safety',
+		'unavailable_projection_stop',
+	] as const) {
+		if (cursor.string(['actions', 'resolution', required]) !== undefined)
+			continue
+		report(
+			'semantic_incomplete_projection',
+			`actions.resolution declares a missing-context path but no ${required}. An incomplete projection must deny Authority and stop fail-closed rather than defaulting to a Next Safe Action that continues.`,
+			`actions.resolution.${required}`,
+			cursor.keyLoc(['actions', 'resolution']),
+		)
 	}
 }
 
@@ -1087,16 +1253,22 @@ function actionKindOf(cursor: Cursor, id: string): string | undefined {
  * only passes a shape check accepts an action id nothing declares, which is a
  * reference the generator would carry into an artifact unchallenged.
  */
-function checkCommandSurfaceV2({
-	cursor,
-	report,
-	actionIds,
-}: SemanticCheckScope): void {
+function checkCommandSurfaceV2(scope: SemanticCheckScope): void {
+	const { cursor } = scope
 	const commands = new Set(cursor.strings(['command_surface', 'commands']))
 	const exitCodes = new Set(
 		cursor.entries(['command_surface', 'exit_codes']).map((row) => row.key),
 	)
 
+	checkPositionalRoutes(scope, commands)
+	checkRootBranches(scope, exitCodes)
+	checkExpectationColumns(scope, commands)
+}
+
+function checkPositionalRoutes(
+	{ cursor, report, actionIds }: SemanticCheckScope,
+	commands: ReadonlySet<string>,
+): void {
 	for (const entry of cursor.entries([
 		'command_surface',
 		'positional_routes',
@@ -1130,11 +1302,18 @@ function checkCommandSurfaceV2({
 				cursor.loc([...base, 'bare_invocation_target']),
 			)
 	}
+}
 
-	// Root branches: the exit each rides is declared, the action each names is
-	// declared, and no two branches sharing an exit claim the same meaning.
-	// Sharing one exit is expected - the crash path and a refusal both ride 1 -
-	// but sharing the meaning too leaves an agent one word for two branches.
+/**
+ * Root branches: the exit each rides is declared, the action each names is
+ * declared, and no two branches sharing an exit claim the same meaning.
+ * Sharing one exit is expected - the crash path and a refusal both ride 1 -
+ * but sharing the meaning too leaves an agent one word for two branches.
+ */
+function checkRootBranches(
+	{ cursor, report, actionIds }: SemanticCheckScope,
+	exitCodes: ReadonlySet<string>,
+): void {
 	const meaningsByExit = new Map<string, Map<string, string>>()
 	for (const entry of cursor.entries(['command_surface', 'root_branches'])) {
 		const base = ['command_surface', 'root_branches', entry.key] as const
@@ -1173,9 +1352,16 @@ function checkCommandSurfaceV2({
 			cursor.loc([...base, 'meaning']),
 		)
 	}
+}
 
-	// Expectation columns are keyed by Branch Station id, whose grammar names
-	// the command before the branch.
+/**
+ * Expectation columns are keyed by Branch Station id, whose grammar names the
+ * command before the branch.
+ */
+function checkExpectationColumns(
+	{ cursor, report }: SemanticCheckScope,
+	commands: ReadonlySet<string>,
+): void {
 	for (const entry of cursor.entries(['expectation_columns'])) {
 		const command = entry.key.split('.')[0] ?? ''
 		if (commands.has(command)) continue
@@ -1197,137 +1383,205 @@ function checkCommandSurfaceV2({
  * admitted (ADR 0005).
  */
 function checkRouting(scope: SemanticCheckScope): void {
-	const { cursor, report, actionIds } = scope
+	const { cursor } = scope
 	const commands = new Set(cursor.strings(['command_surface', 'commands']))
 
 	for (const table of cursor.entries(['routing'])) {
-		const base = ['routing', table.key] as const
-		const targetKind = cursor.string([...base, 'target_kind'])
-		const discriminants = cursor.entries([...base, 'discriminants'])
-		const declaredFields = new Map<string, ReadonlySet<string>>()
-		for (const field of discriminants) {
-			declaredFields.set(
-				field.key,
-				new Set(cursor.strings([...base, 'discriminants', field.key])),
+		checkRoutingTable(scope, table.key, commands)
+	}
+}
+
+function checkRoutingTable(
+	scope: SemanticCheckScope,
+	tableKey: string,
+	commands: ReadonlySet<string>,
+): void {
+	const { cursor, report } = scope
+	const base = ['routing', tableKey] as const
+	const targetKind = cursor.string([...base, 'target_kind'])
+	const discriminants = cursor.entries([...base, 'discriminants'])
+	const declaredFields = new Map<string, ReadonlySet<string>>()
+	for (const field of discriminants) {
+		declaredFields.set(
+			field.key,
+			new Set(cursor.strings([...base, 'discriminants', field.key])),
+		)
+	}
+
+	const rows = cursor.items([...base, 'rows'])
+	const seenKeys = new Map<string, number>()
+
+	rows.forEach((_row, index) => {
+		checkRoutingRow(
+			scope,
+			tableKey,
+			index,
+			targetKind,
+			declaredFields,
+			seenKeys,
+			commands,
+		)
+	})
+
+	// Where the table asks for it, every declared combination must route.
+	//
+	// Reported as one diagnostic naming the count plus a bounded sample: the
+	// key space is the product of the declared vocabularies, so a table with
+	// several fields has thousands of uncovered combinations and one
+	// diagnostic each would bury the repair in its own evidence. The count is
+	// what a reader acts on; the sample shows the shape.
+	if (cursor.bool([...base, 'requires_complete_coverage']) !== true) return
+	const fields = [...declaredFields.keys()].sort(compareCodepoints)
+	const missing = combinationsOf(fields, declaredFields).filter(
+		(combination) => !seenKeys.has(combination),
+	)
+	if (missing.length === 0) return
+	const sample = missing.slice(0, UNROUTED_SAMPLE_SIZE)
+	report(
+		'semantic_incomplete_projection',
+		`Routing table ${JSON.stringify(tableKey)} declares complete coverage but routes no row for ${missing.length} of its declared key combinations, so that evidence selects nothing. First ${sample.length}: ${sample.map((combination) => JSON.stringify(combination)).join(', ')}.`,
+		`routing.${tableKey}.rows`,
+		cursor.loc([...base, 'rows']),
+	)
+}
+
+function checkRoutingRow(
+	scope: SemanticCheckScope,
+	tableKey: string,
+	index: number,
+	targetKind: string | undefined,
+	declaredFields: ReadonlyMap<string, ReadonlySet<string>>,
+	seenKeys: Map<string, number>,
+	commands: ReadonlySet<string>,
+): void {
+	const rowPath = ['routing', tableKey, 'rows', index] as const
+	checkRoutingRowKeys(scope, tableKey, index, rowPath, declaredFields)
+	checkRoutingRowUniqueness(
+		scope,
+		tableKey,
+		index,
+		rowPath,
+		declaredFields,
+		seenKeys,
+	)
+	checkRoutingRowTarget(scope, tableKey, index, rowPath, targetKind, commands)
+}
+
+/**
+ * Every discriminant the row names must be one the table declares, carrying
+ * a value that discriminant admits. A row missing a declared discriminant
+ * has an incomplete key, so it would select for more inputs than it names.
+ */
+function checkRoutingRowKeys(
+	{ cursor, report }: SemanticCheckScope,
+	tableKey: string,
+	index: number,
+	rowPath: RoutingRowPath,
+	declaredFields: ReadonlyMap<string, ReadonlySet<string>>,
+): void {
+	const keyEntries = cursor.entries([...rowPath, 'key'])
+
+	for (const entry of keyEntries) {
+		const values = declaredFields.get(entry.key)
+		if (values === undefined) {
+			report(
+				'semantic_unresolved_reference',
+				`Routing table ${JSON.stringify(tableKey)} row ${index} keys on ${JSON.stringify(entry.key)}, which the table does not declare as a discriminant.`,
+				`routing.${tableKey}.rows[${index}].key.${entry.key}`,
+				entry.keyLoc,
+			)
+			continue
+		}
+		const value = cursor.string([...rowPath, 'key', entry.key])
+		if (value !== undefined && !values.has(value)) {
+			report(
+				'semantic_free_text_branch_value',
+				`Routing table ${JSON.stringify(tableKey)} row ${index} sets ${JSON.stringify(entry.key)} to ${JSON.stringify(value)}, which is outside that discriminant's declared values.`,
+				`routing.${tableKey}.rows[${index}].key.${entry.key}`,
+				cursor.loc([...rowPath, 'key', entry.key]),
 			)
 		}
+	}
 
-		const rows = cursor.items([...base, 'rows'])
-		const seenKeys = new Map<string, number>()
-
-		rows.forEach((_row, index) => {
-			const rowPath = [...base, 'rows', index] as const
-			const keyEntries = cursor.entries([...rowPath, 'key'])
-
-			// Every discriminant the row names must be one the table declares,
-			// carrying a value that discriminant admits.
-			for (const entry of keyEntries) {
-				const values = declaredFields.get(entry.key)
-				if (values === undefined) {
-					report(
-						'semantic_unresolved_reference',
-						`Routing table ${JSON.stringify(table.key)} row ${index} keys on ${JSON.stringify(entry.key)}, which the table does not declare as a discriminant.`,
-						`routing.${table.key}.rows[${index}].key.${entry.key}`,
-						entry.keyLoc,
-					)
-					continue
-				}
-				const value = cursor.string([...rowPath, 'key', entry.key])
-				if (value !== undefined && !values.has(value)) {
-					report(
-						'semantic_free_text_branch_value',
-						`Routing table ${JSON.stringify(table.key)} row ${index} sets ${JSON.stringify(entry.key)} to ${JSON.stringify(value)}, which is outside that discriminant's declared values.`,
-						`routing.${table.key}.rows[${index}].key.${entry.key}`,
-						cursor.loc([...rowPath, 'key', entry.key]),
-					)
-				}
-			}
-
-			// A row missing a declared discriminant has an incomplete key, so
-			// it would select for more inputs than it names.
-			for (const field of declaredFields.keys()) {
-				if (keyEntries.some((entry) => entry.key === field)) continue
-				report(
-					'semantic_incomplete_projection',
-					`Routing table ${JSON.stringify(table.key)} row ${index} omits discriminant ${JSON.stringify(field)}, so its key is incomplete and would select more than one input.`,
-					`routing.${table.key}.rows[${index}].key`,
-					cursor.loc([...rowPath, 'key']),
-				)
-			}
-
-			// Two rows sharing a complete key make selection ambiguous.
-			const signature = [...declaredFields.keys()]
-				.sort(compareCodepoints)
-				.map(
-					(field) =>
-						`${field}=${cursor.string([...rowPath, 'key', field]) ?? ''}`,
-				)
-				.join('&')
-			const first = seenKeys.get(signature)
-			if (first === undefined) seenKeys.set(signature, index)
-			else {
-				report(
-					'semantic_competing_actions',
-					`Routing table ${JSON.stringify(table.key)} rows ${first} and ${index} share one complete key, so no single route is selected.`,
-					`routing.${table.key}.rows[${index}].key`,
-					cursor.loc([...rowPath, 'key']),
-				)
-			}
-
-			// The target resolves under the kind the table declares.
-			const target = cursor.string([...rowPath, 'target'])
-			if (target === undefined) return
-			if (targetKind === 'action' && !actionIds.has(target)) {
-				report(
-					'semantic_unresolved_reference',
-					`Routing table ${JSON.stringify(table.key)} row ${index} targets action ${JSON.stringify(target)}, which the action catalog does not declare.`,
-					`routing.${table.key}.rows[${index}].target`,
-					cursor.loc([...rowPath, 'target']),
-				)
-			}
-			if (targetKind === 'branch_station') {
-				// The command prefix is all this stage can resolve: the derived
-				// station catalog does not exist until `buildIr` has run, and
-				// this validation runs before it. The prefix check is therefore
-				// a partial one by construction, and it must not be read as
-				// resolving the target - `doctor.typo_no_such_station` passes it
-				// while naming a station no derivation emits.
-				//
-				// The whole target is checked against the derived catalog by
-				// `branch-stations.ts`, which owns that catalog, and refuses
-				// with `emit_route_station_unknown`.
-				const command = target.split('.')[0] ?? ''
-				if (!commands.has(command)) {
-					report(
-						'semantic_unresolved_reference',
-						`Routing table ${JSON.stringify(table.key)} row ${index} targets Branch Station ${JSON.stringify(target)}, whose command is absent from the declared command surface.`,
-						`routing.${table.key}.rows[${index}].target`,
-						cursor.loc([...rowPath, 'target']),
-					)
-				}
-			}
-		})
-
-		// Where the table asks for it, every declared combination must route.
-		//
-		// Reported as one diagnostic naming the count plus a bounded sample:
-		// the key space is the product of the declared vocabularies, so a
-		// table with several fields has thousands of uncovered combinations
-		// and one diagnostic each would bury the repair in its own evidence.
-		// The count is what a reader acts on; the sample shows the shape.
-		if (cursor.bool([...base, 'requires_complete_coverage']) !== true) continue
-		const fields = [...declaredFields.keys()].sort(compareCodepoints)
-		const missing = combinationsOf(fields, declaredFields).filter(
-			(combination) => !seenKeys.has(combination),
-		)
-		if (missing.length === 0) continue
-		const sample = missing.slice(0, UNROUTED_SAMPLE_SIZE)
+	for (const field of declaredFields.keys()) {
+		if (keyEntries.some((entry) => entry.key === field)) continue
 		report(
 			'semantic_incomplete_projection',
-			`Routing table ${JSON.stringify(table.key)} declares complete coverage but routes no row for ${missing.length} of its declared key combinations, so that evidence selects nothing. First ${sample.length}: ${sample.map((combination) => JSON.stringify(combination)).join(', ')}.`,
-			`routing.${table.key}.rows`,
-			cursor.loc([...base, 'rows']),
+			`Routing table ${JSON.stringify(tableKey)} row ${index} omits discriminant ${JSON.stringify(field)}, so its key is incomplete and would select more than one input.`,
+			`routing.${tableKey}.rows[${index}].key`,
+			cursor.loc([...rowPath, 'key']),
 		)
+	}
+}
+
+/** Two rows sharing a complete key make selection ambiguous. */
+function checkRoutingRowUniqueness(
+	{ cursor, report }: SemanticCheckScope,
+	tableKey: string,
+	index: number,
+	rowPath: RoutingRowPath,
+	declaredFields: ReadonlyMap<string, ReadonlySet<string>>,
+	seenKeys: Map<string, number>,
+): void {
+	const signature = [...declaredFields.keys()]
+		.sort(compareCodepoints)
+		.map((field) => `${field}=${cursor.string([...rowPath, 'key', field]) ?? ''}`)
+		.join('&')
+	const first = seenKeys.get(signature)
+	if (first === undefined) {
+		seenKeys.set(signature, index)
+		return
+	}
+	report(
+		'semantic_competing_actions',
+		`Routing table ${JSON.stringify(tableKey)} rows ${first} and ${index} share one complete key, so no single route is selected.`,
+		`routing.${tableKey}.rows[${index}].key`,
+		cursor.loc([...rowPath, 'key']),
+	)
+}
+
+/**
+ * The target resolves under the kind the table declares.
+ *
+ * For a Branch Station target, the command prefix is all this stage can
+ * resolve: the derived station catalog does not exist until `buildIr` has
+ * run, and this validation runs before it. The prefix check is therefore a
+ * partial one by construction, and it must not be read as resolving the
+ * target - `doctor.typo_no_such_station` passes it while naming a station no
+ * derivation emits.
+ *
+ * The whole target is checked against the derived catalog by
+ * `branch-stations.ts`, which owns that catalog, and refuses with
+ * `emit_route_station_unknown`.
+ */
+function checkRoutingRowTarget(
+	{ cursor, report, actionIds }: SemanticCheckScope,
+	tableKey: string,
+	index: number,
+	rowPath: RoutingRowPath,
+	targetKind: string | undefined,
+	commands: ReadonlySet<string>,
+): void {
+	const target = cursor.string([...rowPath, 'target'])
+	if (target === undefined) return
+	if (targetKind === 'action' && !actionIds.has(target)) {
+		report(
+			'semantic_unresolved_reference',
+			`Routing table ${JSON.stringify(tableKey)} row ${index} targets action ${JSON.stringify(target)}, which the action catalog does not declare.`,
+			`routing.${tableKey}.rows[${index}].target`,
+			cursor.loc([...rowPath, 'target']),
+		)
+	}
+	if (targetKind === 'branch_station') {
+		const command = target.split('.')[0] ?? ''
+		if (!commands.has(command)) {
+			report(
+				'semantic_unresolved_reference',
+				`Routing table ${JSON.stringify(tableKey)} row ${index} targets Branch Station ${JSON.stringify(target)}, whose command is absent from the declared command surface.`,
+				`routing.${tableKey}.rows[${index}].target`,
+				cursor.loc([...rowPath, 'target']),
+			)
+		}
 	}
 }
 
@@ -1498,76 +1752,114 @@ function checkCapabilities(scope: SemanticCheckScope): void {
  * itself.
  */
 function checkPauseModes(scope: SemanticCheckScope): void {
-	const { cursor, report, actionIds } = scope
+	const { cursor } = scope
 	const blockers = new Set(cursor.strings(['blockers']))
 	const externalOwners = new Set(cursor.strings(['actions', 'external_owners']))
 	for (const entry of cursor.entries(['pause_modes'])) {
-		const base = ['pause_modes', entry.key] as const
-		const blocker = cursor.string([...base, 'active_blocker'])
-		if (blocker !== undefined && !blockers.has(blocker))
-			report(
-				'semantic_unresolved_reference',
-				`Pause Mode ${JSON.stringify(entry.key)} emits blocker ${JSON.stringify(blocker)}, which the candidate does not declare.`,
-				`pause_modes.${entry.key}.active_blocker`,
-				cursor.loc([...base, 'active_blocker']),
-			)
+		checkPauseModeEntry(scope, entry.key, blockers, externalOwners)
+	}
+}
 
-		const owner = cursor.string([...base, 'owner'])
-		if (
-			owner !== undefined &&
-			externalOwners.size > 0 &&
-			!externalOwners.has(owner)
-		)
-			report(
-				'semantic_unresolved_reference',
-				`Pause Mode ${JSON.stringify(entry.key)} names owner ${JSON.stringify(owner)}, which actions.external_owners does not declare.`,
-				`pause_modes.${entry.key}.owner`,
-				cursor.loc([...base, 'owner']),
-			)
+function checkPauseModeEntry(
+	scope: SemanticCheckScope,
+	key: string,
+	blockers: ReadonlySet<string>,
+	externalOwners: ReadonlySet<string>,
+): void {
+	const base = ['pause_modes', key] as const
+	checkPauseModeBlocker(scope, base, key, blockers)
+	checkPauseModeOwnerDeclared(scope, base, key, externalOwners)
+	const owner = scope.cursor.string([...base, 'owner'])
+	checkPauseModeRelease(scope, base, key, owner)
+}
 
-		const release = cursor.string([...base, 'release_action'])
-		if (release === undefined) continue
-		if (!actionIds.has(release)) {
-			report(
-				'semantic_unresolved_reference',
-				`Pause Mode ${JSON.stringify(entry.key)} releases through ${JSON.stringify(release)}, which the action catalog does not declare.`,
-				`pause_modes.${entry.key}.release_action`,
-				cursor.loc([...base, 'release_action']),
-			)
-			continue
-		}
+function checkPauseModeBlocker(
+	{ cursor, report }: SemanticCheckScope,
+	base: PauseModePath,
+	key: string,
+	blockers: ReadonlySet<string>,
+): void {
+	const blocker = cursor.string([...base, 'active_blocker'])
+	if (blocker === undefined || blockers.has(blocker)) return
+	report(
+		'semantic_unresolved_reference',
+		`Pause Mode ${JSON.stringify(key)} emits blocker ${JSON.stringify(blocker)}, which the candidate does not declare.`,
+		`pause_modes.${key}.active_blocker`,
+		cursor.loc([...base, 'active_blocker']),
+	)
+}
 
-		// The release is human-owned: a Pause Mode is an externally owned gate,
-		// so the specification may declare a request for release and never an
-		// action that clears the gate on the product's own authority.
-		const index = cursor
-			.items(['actions', 'catalog'])
-			.findIndex(
-				(_item, position) =>
-					cursor.string(['actions', 'catalog', position, 'id']) === release,
-			)
-		if (index === -1) continue
-		const kind = cursor.string(['actions', 'catalog', index, 'kind'])
-		if (kind !== 'needs_human') {
-			report(
-				'semantic_missing_authority_semantics',
-				`Pause Mode ${JSON.stringify(entry.key)} releases through ${JSON.stringify(release)}, whose kind is ${JSON.stringify(kind ?? 'undeclared')}. An externally owned gate is released by its owner, so the release action requests release and is needs_human.`,
-				`pause_modes.${entry.key}.release_action`,
-				cursor.loc([...base, 'release_action']),
-			)
-			continue
-		}
+function checkPauseModeOwnerDeclared(
+	{ cursor, report }: SemanticCheckScope,
+	base: PauseModePath,
+	key: string,
+	externalOwners: ReadonlySet<string>,
+): void {
+	const owner = cursor.string([...base, 'owner'])
+	if (
+		owner === undefined ||
+		externalOwners.size === 0 ||
+		externalOwners.has(owner)
+	)
+		return
+	report(
+		'semantic_unresolved_reference',
+		`Pause Mode ${JSON.stringify(key)} names owner ${JSON.stringify(owner)}, which actions.external_owners does not declare.`,
+		`pause_modes.${key}.owner`,
+		cursor.loc([...base, 'owner']),
+	)
+}
 
-		// Released by THIS gate's declared owner. Membership in
-		// external_owners says the owner exists, not that it owns this gate.
-		const releaseOwner = cursor.string(['actions', 'catalog', index, 'owner'])
-		if (owner === undefined || releaseOwner === undefined) continue
-		if (releaseOwner === owner) continue
+/**
+ * The release is human-owned: a Pause Mode is an externally owned gate, so
+ * the specification may declare a request for release and never an action
+ * that clears the gate on the product's own authority. Released by THIS
+ * gate's declared owner: membership in external_owners says the owner
+ * exists, not that it owns this gate.
+ */
+function checkPauseModeRelease(
+	{ cursor, report, actionIds }: SemanticCheckScope,
+	base: PauseModePath,
+	key: string,
+	owner: string | undefined,
+): void {
+	const release = cursor.string([...base, 'release_action'])
+	if (release === undefined) return
+	if (!actionIds.has(release)) {
 		report(
-			'semantic_missing_authority_semantics',
-			`Pause Mode ${JSON.stringify(entry.key)} is owned by ${JSON.stringify(owner)} but releases through an action owned by ${JSON.stringify(releaseOwner)}, so the request would not reach the gate's owner.`,
-			`pause_modes.${entry.key}.release_action`,
+			'semantic_unresolved_reference',
+			`Pause Mode ${JSON.stringify(key)} releases through ${JSON.stringify(release)}, which the action catalog does not declare.`,
+			`pause_modes.${key}.release_action`,
 			cursor.loc([...base, 'release_action']),
 		)
+		return
 	}
+
+	const index = cursor
+		.items(['actions', 'catalog'])
+		.findIndex(
+			(_item, position) =>
+				cursor.string(['actions', 'catalog', position, 'id']) === release,
+		)
+	if (index === -1) return
+	const kind = cursor.string(['actions', 'catalog', index, 'kind'])
+	if (kind !== 'needs_human') {
+		report(
+			'semantic_missing_authority_semantics',
+			`Pause Mode ${JSON.stringify(key)} releases through ${JSON.stringify(release)}, whose kind is ${JSON.stringify(kind ?? 'undeclared')}. An externally owned gate is released by its owner, so the release action requests release and is needs_human.`,
+			`pause_modes.${key}.release_action`,
+			cursor.loc([...base, 'release_action']),
+		)
+		return
+	}
+
+	const releaseOwner = cursor.string(['actions', 'catalog', index, 'owner'])
+	if (owner === undefined || releaseOwner === undefined) return
+	if (releaseOwner === owner) return
+	report(
+		'semantic_missing_authority_semantics',
+		`Pause Mode ${JSON.stringify(key)} is owned by ${JSON.stringify(owner)} but releases through an action owned by ${JSON.stringify(releaseOwner)}, so the request would not reach the gate's owner.`,
+		`pause_modes.${key}.release_action`,
+		cursor.loc([...base, 'release_action']),
+	)
 }
