@@ -29,6 +29,7 @@
 	],
 	"main": "./extension.js",
 	"scripts": {
+		"lint": "biome check --diagnostic-level=error .",
 		"test": "node --test test/*.test.js"
 	},
 	"files": [

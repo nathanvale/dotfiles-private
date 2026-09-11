@@ -6,6 +6,7 @@
 	"description": "Bun package for the cli-execution-auditor skill. Audits a facade-backed CLI's agent-execution experience against a per-lane contract: static contract assertions + facade-surface exercise, findings written to an auditor-local Markdown ledger. Wraps the @side-quest/cli-command-facade testing harness; acquires target contracts by subprocess, never by importing the target module.",
 	"scripts": {
 		"auditor": "bun run src/auditor.ts",
+		"lint": "biome check --diagnostic-level=error .",
 		"test": "bun test",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},

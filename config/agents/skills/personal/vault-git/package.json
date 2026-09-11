@@ -3,6 +3,12 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"test": "bun test tests/skill-contract.test.ts"
+		"lint": "biome check --diagnostic-level=error .",
+		"test": "bun test tests/skill-contract.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json"
+	},
+	"devDependencies": {
+		"@types/bun": "catalog:",
+		"typescript": "catalog:"
 	}
 }

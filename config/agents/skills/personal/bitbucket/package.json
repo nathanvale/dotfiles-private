@@ -13,6 +13,7 @@
 	"scripts": {
 		"bb": "bun run src/cli.ts",
 		"generate-openapi-baseline": "bun run src/generate-openapi-baseline.ts",
+		"lint": "biome check --diagnostic-level=error .",
 		"test": "bun test src/*.test.ts",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},

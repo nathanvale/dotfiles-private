@@ -11,6 +11,7 @@
 		"pick-seats": "bun run src/pick-seats.ts",
 		"fill-ticket": "bun run src/fill-ticket.ts",
 		"heal-skill": "bun run src/heal-skill.ts",
+		"lint": "biome check --diagnostic-level=error .",
 		"test": "bun test",
 		"typecheck": "tsc --noEmit -p tsconfig.json"
 	},

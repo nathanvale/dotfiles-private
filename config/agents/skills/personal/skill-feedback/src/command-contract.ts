@@ -3209,6 +3209,7 @@ function validateAllowedKeys(
 			);
 		}
 	}
+	return undefined;
 }
 
 function requireReviewRecord(
@@ -3241,6 +3242,7 @@ function validateReviewString(
 	path: string,
 ): ReviewResultValidationError | undefined {
 	if (typeof raw !== "string") return reviewResultError(path, "expected_string");
+	return undefined;
 }
 
 function validateReviewNumber(
@@ -3250,6 +3252,7 @@ function validateReviewNumber(
 	if (typeof raw !== "number" || !Number.isFinite(raw)) {
 		return reviewResultError(path, "expected_number");
 	}
+	return undefined;
 }
 
 function validateReviewBoolean(
@@ -3257,6 +3260,7 @@ function validateReviewBoolean(
 	path: string,
 ): ReviewResultValidationError | undefined {
 	if (typeof raw !== "boolean") return reviewResultError(path, "expected_boolean");
+	return undefined;
 }
 
 function validateExpectedValue(
@@ -3266,6 +3270,7 @@ function validateExpectedValue(
 	reason: string,
 ): ReviewResultValidationError | undefined {
 	if (raw !== expected) return reviewResultError(path, reason);
+	return undefined;
 }
 
 function validateReviewStringArray(
@@ -3277,6 +3282,7 @@ function validateReviewStringArray(
 		const error = validateReviewString(value, `${path}[${index}]`);
 		if (error) return error;
 	}
+	return undefined;
 }
 
 function validateReviewTargets(
@@ -3290,6 +3296,7 @@ function validateReviewTargets(
 			return reviewResultError(target.path, target.reason);
 		}
 	}
+	return undefined;
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -3327,6 +3334,7 @@ function validateReviewCoverage(
 			"coverage.low_coverage_warning",
 		);
 	}
+	return undefined;
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -3483,6 +3491,7 @@ function validateReviewOpenItems(
 			}
 		}
 	}
+	return undefined;
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -3522,6 +3531,7 @@ function validateReviewOpenActions(
 		);
 		if (evidenceRefs) return evidenceRefs;
 	}
+	return undefined;
 }
 
 function validateNoAction(raw: unknown): ReviewResultValidationError | undefined {
@@ -3567,6 +3577,7 @@ function validateReviewRetention(
 			if (error) return error;
 		}
 	}
+	return undefined;
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -3640,6 +3651,7 @@ function validateReviewUnits(
 			if (trustedId) return trustedId;
 		}
 	}
+	return undefined;
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -3757,6 +3769,7 @@ function validateReviewLedgerEntries(
 		);
 		if (burden) return burden;
 	}
+	return undefined;
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -3810,6 +3823,7 @@ function validateReviewEngineeringSignals(
 		);
 		if (allowedClaims) return allowedClaims;
 	}
+	return undefined;
 }
 
 function validateEnumArray(
@@ -3822,6 +3836,7 @@ function validateEnumArray(
 	for (const [index, value] of raw.entries()) {
 		if (!check(value)) return reviewResultError(`${path}[${index}]`, reason);
 	}
+	return undefined;
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -3844,6 +3859,7 @@ function validateReviewLedgerVerificationBurden(
 	if ("note" in burden) {
 		return validateReviewString(burden.note, `${path}.note`);
 	}
+	return undefined;
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -3928,6 +3944,7 @@ function validateReviewAnchorMissTelemetry(
 		);
 		if (targets) return targets;
 	}
+	return undefined;
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -3950,6 +3967,7 @@ function validateReviewClaimReadiness(
 		);
 		if (error) return error;
 	}
+	return undefined;
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -3981,6 +3999,7 @@ function validateHealthInboxStatus(
 	raw: unknown,
 ): ReviewResultValidationError | undefined {
 	if (!isHealthInboxStatus(raw)) return reviewResultError("inbox_status", "invalid");
+	return undefined;
 }
 
 function validateHealthCounts(
@@ -4159,6 +4178,7 @@ function validateCorrelateCandidates(
 		);
 		if (reasons) return reasons;
 	}
+	return undefined;
 }
 
 function validateCorrelateReasonIds(
@@ -4171,6 +4191,7 @@ function validateCorrelateReasonIds(
 			return reviewResultError(`${path}[${index}]`, "invalid_reason_id");
 		}
 	}
+	return undefined;
 }
 
 // Covered by package tests; keep owner-local safety branches explicit.
@@ -4207,6 +4228,7 @@ function validateCorrelateSideEffects(
 			return reviewResultError(`${path}[${index}]`, "invalid_side_effect");
 		}
 	}
+	return undefined;
 }
 
 // Covered by parseReportsResultData filter contract tests.
@@ -4292,6 +4314,7 @@ function validateReportListRows(
 			);
 			if (error) return error;
 		}
+		return undefined;
 	});
 }
 
@@ -4306,6 +4329,7 @@ function validateReportIdAndRef(
 	if (rawRef !== `report:${rawId}`) {
 		return reviewResultError(refPath, "invalid_report_ref");
 	}
+	return undefined;
 }
 
 function validateReportFriction(
@@ -4316,6 +4340,7 @@ function validateReportFriction(
 	if (isInvalidCloseoutParseResult(friction)) {
 		return reviewResultError(friction.path, friction.reason);
 	}
+	return undefined;
 }
 
 function validateReportVerificationBurden(
@@ -4326,6 +4351,7 @@ function validateReportVerificationBurden(
 	if (isInvalidCloseoutParseResult(burden)) {
 		return reviewResultError(burden.path, burden.reason);
 	}
+	return undefined;
 }
 
 function validateReportTargets(
@@ -4336,6 +4362,7 @@ function validateReportTargets(
 	if (isInvalidCloseoutParseResult(targets)) {
 		return reviewResultError(targets.path, targets.reason);
 	}
+	return undefined;
 }
 
 function validateReportObservations(
@@ -4345,6 +4372,7 @@ function validateReportObservations(
 	if (isInvalidCloseoutParseResult(observations)) {
 		return reviewResultError(observations.path, observations.reason);
 	}
+	return undefined;
 }
 
 // Covered by parseReportDetailData evidence-gap package tests.
@@ -4372,6 +4400,7 @@ function validateEvidenceGaps(
 			if (error) return error;
 		}
 	}
+	return undefined;
 }
 
 function validateReportMissingFields(
@@ -4384,6 +4413,7 @@ function validateReportMissingFields(
 			return reviewResultError(`${path}[${index}]`, "invalid_missing_field");
 		}
 	}
+	return undefined;
 }
 
 function validateUsageFilters(
@@ -4458,6 +4488,7 @@ function validateUsageRows(raw: unknown): ReviewResultValidationError | undefine
 		}
 		const refs = validateReportRefArray(row.report_refs, `${path}.report_refs`);
 		if (refs) return refs;
+		return undefined;
 	});
 }
 
@@ -4534,6 +4565,7 @@ function validateQueueRows(raw: unknown): ReviewResultValidationError | undefine
 		}
 		const refs = validateReportRefArray(row.report_refs, `${path}.report_refs`);
 		if (refs) return refs;
+		return undefined;
 	});
 }
 
@@ -4556,6 +4588,7 @@ function validateRecordArray(
 		const error = validateRecord(row, rowPath);
 		if (error) return error;
 	}
+	return undefined;
 }
 
 function validateQueueNoBuild(
@@ -4589,6 +4622,7 @@ function validateReportRefArray(
 			return reviewResultError(`${path}[${index}]`, "invalid_report_ref");
 		}
 	}
+	return undefined;
 }
 
 function validateOwnerPathField(
@@ -4597,6 +4631,7 @@ function validateOwnerPathField(
 ): ReviewResultValidationError | undefined {
 	if (typeof raw !== "string") return reviewResultError(path, "expected_string");
 	if (!isValidOwnerPath(raw)) return reviewResultError(path, "invalid_owner_path");
+	return undefined;
 }
 
 function validateNumberFields<const Field extends readonly string[]>(

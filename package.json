@@ -33,7 +33,8 @@
 	},
 	"keywords": [],
 	"scripts": {
-		"check": "biome check --diagnostic-level=error .",
+		"biome:check": "biome check --diagnostic-level=error .",
+		"check": "git diff --check && bun run biome:check && bun run typecheck && bun run test && bun run test:hooks && bun run test:quality:repository",
 		"check:write": "biome check --write .",
 		"lint": "biome lint --diagnostic-level=error .",
 		"lint:fix": "biome lint --write .",
@@ -41,6 +42,10 @@
 		"lint:workflows": "if [ -d .github/workflows ]; then actionlint; else echo 'no .github/workflows; skipping'; fi",
 		"memory:qmd-federation": "bun run $HOME/.config/context/scripts/qmd-roster-sync.ts",
 		"prepare": "husky",
+		"test": "bun run --filter '*' test",
+		"test:hooks": "bun test config/agents/claude/hooks",
+		"test:quality:repository": "bun test tooling/repository-quality/workspace-manifest.test.ts",
+		"typecheck": "tsc --noEmit -p tsconfig.json && bun run --filter '*' typecheck",
 		"validate": "bun run check && bun run lint:scripts && bun run lint:workflows"
 	},
 	"dependencies": {
