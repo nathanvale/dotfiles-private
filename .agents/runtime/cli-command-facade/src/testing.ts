@@ -225,72 +225,58 @@ export function assertJsonErrorEnvelope(
 	return envelope as WrittenCliRuntimeErrorEnvelope;
 }
 
-/**
- * Assert that an envelope data payload carries the declared result contract.
- *
- * This checks facade-owned metadata only; package-owned result vocabulary stays
- * with the consuming package's tests.
- *
- * @param input - Command label, facade contract, and parsed envelope
- * @throws When the envelope lacks matching result-contract metadata
- *
- * @example
- * ```typescript
- * assertCommandResultContract({
- *   command: "report",
- *   contract: reportContract,
- *   envelope,
- * })
- * ```
- */
-export function assertCommandResultContract(input: {
-	command: string;
-	contract: Pick<CommandFacadeContract, "json" | "outputModes" | "resultContract">;
-	envelope: unknown;
-}): void {
-	if (!input.contract.resultContract) {
+function assertResultContractShape(
+	command: string,
+	contract: Pick<CommandFacadeContract, "json" | "outputModes" | "resultContract">,
+): CommandFacadeResultContract {
+	if (!contract.resultContract) {
 		throw new Error(
-			`Command result contract assertion failed: command=${input.command} classification=missing-contract`,
+			`Command result contract assertion failed: command=${command} classification=missing-contract`,
 		);
 	}
 	if (
-		input.contract.json !== true ||
-		(input.contract.outputModes !== undefined &&
-			!input.contract.outputModes.includes("json"))
+		contract.json !== true ||
+		(contract.outputModes !== undefined &&
+			!contract.outputModes.includes("json"))
 	) {
 		throw new Error(
-			`Command result contract assertion failed: command=${input.command} classification=non-json-result-contract`,
+			`Command result contract assertion failed: command=${command} classification=non-json-result-contract`,
 		);
 	}
-	if (!isJsonObject(input.envelope)) {
+	return contract.resultContract;
+}
+
+function assertSuccessEnvelopeShape(
+	command: string,
+	envelope: unknown,
+): RuntimeSuccessEnvelopeCandidate {
+	if (!isJsonObject(envelope)) {
 		throw new Error(
-			`Command result contract assertion failed: command=${input.command} classification=missing-envelope`,
+			`Command result contract assertion failed: command=${command} classification=missing-envelope`,
 		);
 	}
-	if (input.envelope.status !== "ok") {
+	if (envelope.status !== "ok") {
 		throw new Error(
-			`Command result contract assertion failed: command=${input.command} classification=not-success-envelope`,
+			`Command result contract assertion failed: command=${command} classification=not-success-envelope`,
 		);
 	}
-	if (
-		typeof input.envelope.run_id !== "string" ||
-		input.envelope.run_id.trim() === ""
-	) {
+	if (typeof envelope.run_id !== "string" || envelope.run_id.trim() === "") {
 		throw new Error(
-			`Command result contract assertion failed: command=${input.command} classification=missing-run-id`,
+			`Command result contract assertion failed: command=${command} classification=missing-run-id`,
 		);
 	}
-	if (!isJsonObject(input.envelope.data)) {
+	if (!isJsonObject(envelope.data)) {
 		throw new Error(
-			`Command result contract assertion failed: command=${input.command} classification=missing-data`,
+			`Command result contract assertion failed: command=${command} classification=missing-data`,
 		);
 	}
-	const successEnvelope = input.envelope as RuntimeSuccessEnvelopeCandidate;
-	assertSupportedJsonSuccessEnvelopeKeys(input.command, successEnvelope);
-	assertOptionalDurationMs(
-		`Command result contract assertion failed: command=${input.command}`,
-		successEnvelope.duration_ms,
-	);
+	return envelope as RuntimeSuccessEnvelopeCandidate;
+}
+
+function assertConstructibleSuccessEnvelope(
+	command: string,
+	successEnvelope: RuntimeSuccessEnvelopeCandidate,
+): void {
 	try {
 		createCliRuntimeSuccessEnvelope({
 			run_id: successEnvelope.run_id,
@@ -322,25 +308,73 @@ export function assertCommandResultContract(input: {
 		});
 	} catch (error) {
 		throw new Error(
-			`Command result contract assertion failed: command=${input.command} classification=invalid-success-envelope reason=${
+			`Command result contract assertion failed: command=${command} classification=invalid-success-envelope reason=${
 				error instanceof Error ? error.message : String(error)
 			}`,
 		);
 	}
-	const actual = input.envelope.data.contract_id;
-	const expected = input.contract.resultContract.id;
+}
+
+function assertResultContractMetadataMatch(
+	command: string,
+	resultContract: CommandFacadeResultContract,
+	successEnvelope: RuntimeSuccessEnvelopeCandidate,
+): void {
+	const actual = successEnvelope.data.contract_id;
+	const expected = resultContract.id;
 	if (actual !== expected) {
 		throw new Error(
-			`Command result contract assertion failed: command=${input.command} expected=${expected} actual=${String(actual)}`,
+			`Command result contract assertion failed: command=${command} expected=${expected} actual=${String(actual)}`,
 		);
 	}
-	const actualSchemaVersion = input.envelope.data.schema_version;
-	const expectedSchemaVersion = input.contract.resultContract.schema_version;
+	const actualSchemaVersion = successEnvelope.data.schema_version;
+	const expectedSchemaVersion = resultContract.schema_version;
 	if (actualSchemaVersion !== expectedSchemaVersion) {
 		throw new Error(
-			`Command result contract assertion failed: command=${input.command} schema_version expected=${String(expectedSchemaVersion)} actual=${String(actualSchemaVersion)}`,
+			`Command result contract assertion failed: command=${command} schema_version expected=${String(expectedSchemaVersion)} actual=${String(actualSchemaVersion)}`,
 		);
 	}
+}
+
+/**
+ * Assert that an envelope data payload carries the declared result contract.
+ *
+ * This checks facade-owned metadata only; package-owned result vocabulary stays
+ * with the consuming package's tests.
+ *
+ * @param input - Command label, facade contract, and parsed envelope
+ * @throws When the envelope lacks matching result-contract metadata
+ *
+ * @example
+ * ```typescript
+ * assertCommandResultContract({
+ *   command: "report",
+ *   contract: reportContract,
+ *   envelope,
+ * })
+ * ```
+ */
+export function assertCommandResultContract(input: {
+	command: string;
+	contract: Pick<CommandFacadeContract, "json" | "outputModes" | "resultContract">;
+	envelope: unknown;
+}): void {
+	const resultContract = assertResultContractShape(input.command, input.contract);
+	const successEnvelope = assertSuccessEnvelopeShape(
+		input.command,
+		input.envelope,
+	);
+	assertSupportedJsonSuccessEnvelopeKeys(input.command, successEnvelope);
+	assertOptionalDurationMs(
+		`Command result contract assertion failed: command=${input.command}`,
+		successEnvelope.duration_ms,
+	);
+	assertConstructibleSuccessEnvelope(input.command, successEnvelope);
+	assertResultContractMetadataMatch(
+		input.command,
+		resultContract,
+		successEnvelope,
+	);
 }
 
 export type CommandSurfaceCase<TResult> = {

@@ -394,35 +394,21 @@ export function createCliRetryRuntimeError(
 	});
 }
 
-export function validateStructuredRuntimeError(
-	error: unknown,
-	options: { run_id?: string; process_exit_code?: number } = {},
+function validateErrorRunIdMatch(
+	error: Record<string, unknown>,
+	options: { run_id?: string },
+): string[] {
+	if (options.run_id !== undefined && error.run_id !== options.run_id) {
+		return ["error.run_id must match envelope run_id"];
+	}
+	return [];
+}
+
+function validateErrorExitCode(
+	error: Record<string, unknown>,
+	options: { process_exit_code?: number },
 ): string[] {
 	const issues: string[] = [];
-	if (!isJsonObject(error)) {
-		return ["error must be an object"];
-	}
-
-	issues.push(
-		...validateAllowedKeys("error", error, [
-			"run_id",
-			"code",
-			"message",
-			"exit_code",
-			"severity",
-			"recoverability",
-			"retryable",
-			"hint",
-			"failure_domain",
-		]),
-		...validateNonEmptyString("error.run_id", error.run_id),
-		...validateNonEmptyString("error.code", error.code),
-		...validateNonEmptyString("error.message", error.message),
-	);
-
-	if (options.run_id !== undefined && error.run_id !== options.run_id) {
-		issues.push("error.run_id must match envelope run_id");
-	}
 	if (!Number.isInteger(error.exit_code) || Number(error.exit_code) < 0) {
 		issues.push("error.exit_code must be a non-negative integer");
 	}
@@ -432,13 +418,24 @@ export function validateStructuredRuntimeError(
 	) {
 		issues.push("error.exit_code must match process_exit_code");
 	}
+	return issues;
+}
+
+function validateErrorSeverity(error: Record<string, unknown>): string[] {
 	if (
 		!RUNTIME_ERROR_SEVERITIES.includes(error.severity as RuntimeErrorSeverity)
 	) {
-		issues.push(
+		return [
 			`error.severity must be one of: ${RUNTIME_ERROR_SEVERITIES.join(", ")}`,
-		);
+		];
 	}
+	return [];
+}
+
+function validateErrorRecoverabilityAndRetryable(
+	error: Record<string, unknown>,
+): string[] {
+	const issues: string[] = [];
 	if (
 		!RUNTIME_ERROR_RECOVERABILITIES.includes(
 			error.recoverability as RuntimeErrorRecoverability,
@@ -457,17 +454,44 @@ export function validateStructuredRuntimeError(
 	if (error.recoverability === "retry" && error.retryable !== true) {
 		issues.push("error.recoverability retry requires retryable true");
 	}
-	if (error.failure_domain !== undefined) {
-		issues.push(...validateFailureDomain(error.failure_domain));
-	}
-	if (error.hint !== undefined) {
-		issues.push(
-			...validateAgentHint(error.hint, {
-				recoverability: error.recoverability as RuntimeErrorRecoverability,
-			}),
-		);
-	}
 	return issues;
+}
+
+export function validateStructuredRuntimeError(
+	error: unknown,
+	options: { run_id?: string; process_exit_code?: number } = {},
+): string[] {
+	if (!isJsonObject(error)) {
+		return ["error must be an object"];
+	}
+	return [
+		...validateAllowedKeys("error", error, [
+			"run_id",
+			"code",
+			"message",
+			"exit_code",
+			"severity",
+			"recoverability",
+			"retryable",
+			"hint",
+			"failure_domain",
+		]),
+		...validateNonEmptyString("error.run_id", error.run_id),
+		...validateNonEmptyString("error.code", error.code),
+		...validateNonEmptyString("error.message", error.message),
+		...validateErrorRunIdMatch(error, options),
+		...validateErrorExitCode(error, options),
+		...validateErrorSeverity(error),
+		...validateErrorRecoverabilityAndRetryable(error),
+		...(error.failure_domain !== undefined
+			? validateFailureDomain(error.failure_domain)
+			: []),
+		...(error.hint !== undefined
+			? validateAgentHint(error.hint, {
+					recoverability: error.recoverability as RuntimeErrorRecoverability,
+				})
+			: []),
+	];
 }
 
 function createStructuredRuntimeError(
@@ -627,32 +651,33 @@ function validateOptionalRuntimeActions(
 	});
 }
 
-function validateOptionalRuntimeContinuation(
-	continuation: unknown,
-	options: {
-		envelopeStatus?: "ok" | "error";
-		runtimeActions?: readonly RuntimeActionGuidance[];
-	} = {},
-	path = "continuation",
-): string[] {
-	const hasActions =
-		Array.isArray(options.runtimeActions) && options.runtimeActions.length > 0;
-	if (continuation === undefined) {
-		return hasActions
-			? [`${path} is required when runtime_actions is present`]
-			: [];
-	}
-	if (!isJsonObject(continuation)) {
-		return [`${path} must be an object`];
-	}
+type ContinuationOptions = {
+	envelopeStatus?: "ok" | "error";
+	runtimeActions?: readonly RuntimeActionGuidance[];
+};
 
+type ForbiddenSets = {
+	forbiddenActionIds: ReadonlySet<string>;
+	forbiddenSideEffects: ReadonlySet<string>;
+};
+
+type ContinuationFlags = {
+	issues: string[];
+	hasNextAction: boolean;
+	requiresOperator: boolean;
+	hasChoices: boolean;
+};
+
+function validateContinuationFlags(
+	path: string,
+	continuation: Record<string, unknown>,
+): ContinuationFlags {
 	const issues = validateAllowedKeys(path, continuation, [
 		"next_action_id",
 		"requires_operator",
 		"constraints",
 		"choices",
 	]);
-
 	const hasNextAction = continuation.next_action_id !== undefined;
 	const requiresOperator = continuation.requires_operator === true;
 	const hasChoices = continuation.choices !== undefined;
@@ -675,83 +700,279 @@ function validateOptionalRuntimeContinuation(
 			),
 		);
 	}
+	return { issues, hasNextAction, requiresOperator, hasChoices };
+}
 
+function validateContinuationChoicesDrift(
+	path: string,
+	continuation: Record<string, unknown>,
+	options: ContinuationOptions,
+	flags: Pick<ContinuationFlags, "hasNextAction" | "requiresOperator">,
+	forbidden: ForbiddenSets,
+): string[] {
+	const issues: string[] = [];
+	if (options.envelopeStatus !== "error") {
+		issues.push(`${path}.choices is valid only on error envelopes`);
+	}
+	if (!flags.requiresOperator) {
+		issues.push(`${path}.choices requires requires_operator true`);
+	}
+	if (flags.hasNextAction) {
+		issues.push(
+			`${path}.choices must not be used with ${path}.next_action_id`,
+		);
+	}
+	issues.push(
+		...validateRuntimeRecoveryChoices(continuation.choices, {
+			...forbidden,
+			...(options.runtimeActions !== undefined
+				? { runtimeActions: options.runtimeActions }
+				: {}),
+			path,
+		}),
+	);
+	return issues;
+}
+
+function validateContinuationNextActionDrift(
+	path: string,
+	continuation: Record<string, unknown>,
+	options: ContinuationOptions,
+	forbidden: ForbiddenSets,
+): string[] {
+	if (
+		typeof continuation.next_action_id !== "string" ||
+		continuation.next_action_id.trim().length === 0
+	) {
+		return [];
+	}
+	const nextActionId = continuation.next_action_id;
+	const issues: string[] = [];
+	const primaryAction = options.runtimeActions?.find(
+		(action) => action.id === nextActionId,
+	);
+	if (!primaryAction) {
+		issues.push(`${path}.next_action_id must reference a runtime_actions[].id`);
+	}
+	if (forbidden.forbiddenActionIds.has(nextActionId)) {
+		issues.push(
+			`${path}.next_action_id must not appear in ${path}.constraints[].forbidden_action_ids`,
+		);
+	}
+	if (
+		Array.isArray(primaryAction?.side_effects) &&
+		primaryAction.side_effects.some((sideEffect) =>
+			forbidden.forbiddenSideEffects.has(sideEffect),
+		)
+	) {
+		issues.push(
+			`${path} primary action must not use a side effect forbidden by ${path}.constraints`,
+		);
+	}
+	return issues;
+}
+
+function validateOptionalRuntimeContinuation(
+	continuation: unknown,
+	options: ContinuationOptions = {},
+	path = "continuation",
+): string[] {
+	const hasActions =
+		Array.isArray(options.runtimeActions) && options.runtimeActions.length > 0;
+	if (continuation === undefined) {
+		return hasActions
+			? [`${path} is required when runtime_actions is present`]
+			: [];
+	}
+	if (!isJsonObject(continuation)) {
+		return [`${path} must be an object`];
+	}
+
+	const flags = validateContinuationFlags(path, continuation);
 	const {
 		constraintIssues,
 		forbiddenActionIds,
 		forbiddenSideEffects,
 		hasNonEmptySummary,
 	} = validateRuntimeContinuationConstraints(continuation.constraints, path);
-	issues.push(...constraintIssues);
+	const forbidden: ForbiddenSets = { forbiddenActionIds, forbiddenSideEffects };
 
-	if (requiresOperator && !hasNonEmptySummary) {
+	const issues = [...flags.issues, ...constraintIssues];
+	if (flags.requiresOperator && !hasNonEmptySummary) {
 		issues.push(
 			`${path}.requires_operator requires at least one constraint summary`,
 		);
 	}
-	if (hasChoices) {
-		if (options.envelopeStatus !== "error") {
-			issues.push(`${path}.choices is valid only on error envelopes`);
-		}
-		if (!requiresOperator) {
-			issues.push(`${path}.choices requires requires_operator true`);
-		}
-		if (hasNextAction) {
-			issues.push(`${path}.choices must not be used with ${path}.next_action_id`);
-		}
-			issues.push(
-				...validateRuntimeRecoveryChoices(continuation.choices, {
-					forbiddenActionIds,
-					forbiddenSideEffects,
-					...(options.runtimeActions !== undefined
-						? { runtimeActions: options.runtimeActions }
-						: {}),
-					path,
-				}),
-			);
-	}
-
-	if (
-		typeof continuation.next_action_id === "string" &&
-		continuation.next_action_id.trim().length > 0
-	) {
-		const nextActionId = continuation.next_action_id;
-		const primaryAction = options.runtimeActions?.find(
-			(action) => action.id === nextActionId,
+	if (flags.hasChoices) {
+		issues.push(
+			...validateContinuationChoicesDrift(
+				path,
+				continuation,
+				options,
+				flags,
+				forbidden,
+			),
 		);
-		if (!primaryAction) {
+	}
+	issues.push(
+		...validateContinuationNextActionDrift(
+			path,
+			continuation,
+			options,
+			forbidden,
+		),
+	);
+	return issues;
+}
+
+type RuntimeRecoveryChoiceOptions = {
+	forbiddenActionIds: ReadonlySet<string>;
+	forbiddenSideEffects: ReadonlySet<string>;
+	runtimeActions?: readonly RuntimeActionGuidance[];
+	path: string;
+};
+
+function validateRuntimeRecoveryChoiceCore(
+	choicePath: string,
+	choice: Record<string, unknown>,
+	ids: Set<string>,
+): string[] {
+	const issues = [
+		...validateAllowedKeys(choicePath, choice, [
+			"id",
+			"label",
+			"summary",
+			"recoverability",
+			"action_id",
+			"side_effects",
+			"docs_url",
+		]),
+		...validateNonEmptyString(`${choicePath}.id`, choice.id),
+		...validateNonEmptyProjectedText(`${choicePath}.label`, choice.label),
+		...validateNonEmptyProjectedText(`${choicePath}.summary`, choice.summary),
+		...validateRuntimeRecoveryChoiceRecoverability(
+			`${choicePath}.recoverability`,
+			choice.recoverability,
+		),
+	];
+	if (choice.docs_url !== undefined) {
+		issues.push(
+			...validateOptionalDocsUrl(`${choicePath}.docs_url`, choice.docs_url),
+		);
+	}
+	if (typeof choice.id === "string" && choice.id.trim().length > 0) {
+		if (ids.has(choice.id)) {
+			issues.push(`${choicePath}.id must be unique`);
+		}
+		ids.add(choice.id);
+	}
+	return issues;
+}
+
+function validateRuntimeRecoveryChoiceActionShape(
+	choicePath: string,
+	choice: Record<string, unknown>,
+): { issues: string[]; sideEffects: CommandFacadeSideEffect[] } {
+	const issues: string[] = [];
+	const hasActionId = choice.action_id !== undefined;
+	if (hasActionId) {
+		issues.push(
+			...validateNonEmptyString(`${choicePath}.action_id`, choice.action_id),
+		);
+		if (choice.side_effects !== undefined) {
 			issues.push(
-				`${path}.next_action_id must reference a runtime_actions[].id`,
+				`${choicePath}.side_effects must be omitted when action_id is present`,
 			);
 		}
-		if (forbiddenActionIds.has(nextActionId)) {
+	} else if (choice.side_effects === undefined) {
+		issues.push(`${choicePath}.side_effects is required without action_id`);
+	}
+	const directSideEffects = validateRuntimeRecoveryChoiceSideEffects(
+		choice.side_effects,
+		choicePath,
+	);
+	issues.push(...directSideEffects.issues);
+	return { issues, sideEffects: directSideEffects.sideEffects };
+}
+
+function validateRuntimeRecoveryChoiceForbidden(
+	choicePath: string,
+	choice: Record<string, unknown>,
+	directSideEffects: readonly CommandFacadeSideEffect[],
+	options: RuntimeRecoveryChoiceOptions,
+): string[] {
+	const issues: string[] = [];
+	if (
+		typeof choice.action_id === "string" &&
+		choice.action_id.trim().length > 0
+	) {
+		const action = options.runtimeActions?.find(
+			(runtimeAction) => runtimeAction.id === choice.action_id,
+		);
+		if (!options.runtimeActions || options.runtimeActions.length === 0) {
+			issues.push(`${choicePath}.action_id requires emitted runtime_actions`);
+		} else if (!action) {
 			issues.push(
-				`${path}.next_action_id must not appear in ${path}.constraints[].forbidden_action_ids`,
+				`${choicePath}.action_id must reference a runtime_actions[].id`,
+			);
+		}
+		if (options.forbiddenActionIds.has(choice.action_id)) {
+			issues.push(
+				`${choicePath}.action_id must not appear in ${options.path}.constraints[].forbidden_action_ids`,
 			);
 		}
 		if (
-			Array.isArray(primaryAction?.side_effects) &&
-			primaryAction.side_effects.some((sideEffect) =>
-				forbiddenSideEffects.has(sideEffect),
+			Array.isArray(action?.side_effects) &&
+			action.side_effects.some((sideEffect) =>
+				options.forbiddenSideEffects.has(sideEffect),
 			)
 		) {
 			issues.push(
-				`${path} primary action must not use a side effect forbidden by ${path}.constraints`,
+				`${choicePath} must not use a side effect forbidden by ${options.path}.constraints`,
 			);
 		}
+	} else if (
+		directSideEffects.some((sideEffect) =>
+			options.forbiddenSideEffects.has(sideEffect),
+		)
+	) {
+		issues.push(
+			`${choicePath} must not use a side effect forbidden by ${options.path}.constraints`,
+		);
 	}
-
 	return issues;
+}
+
+function validateRuntimeRecoveryChoice(
+	choice: unknown,
+	index: number,
+	choicesPath: string,
+	ids: Set<string>,
+	options: RuntimeRecoveryChoiceOptions,
+): string[] {
+	const choicePath = `${choicesPath}.${index}`;
+	if (!isJsonObject(choice)) {
+		return [`${choicePath} must be an object`];
+	}
+	const actionShape = validateRuntimeRecoveryChoiceActionShape(
+		choicePath,
+		choice,
+	);
+	return [
+		...validateRuntimeRecoveryChoiceCore(choicePath, choice, ids),
+		...actionShape.issues,
+		...validateRuntimeRecoveryChoiceForbidden(
+			choicePath,
+			choice,
+			actionShape.sideEffects,
+			options,
+		),
+	];
 }
 
 function validateRuntimeRecoveryChoices(
 	choices: unknown,
-	options: {
-		forbiddenActionIds: ReadonlySet<string>;
-		forbiddenSideEffects: ReadonlySet<string>;
-		runtimeActions?: readonly RuntimeActionGuidance[];
-		path: string;
-	},
+	options: RuntimeRecoveryChoiceOptions,
 ): string[] {
 	const path = `${options.path}.choices`;
 	if (!Array.isArray(choices)) {
@@ -762,106 +983,9 @@ function validateRuntimeRecoveryChoices(
 	}
 
 	const ids = new Set<string>();
-	return choices.flatMap((choice, index) => {
-		const choicePath = `${path}.${index}`;
-		if (!isJsonObject(choice)) {
-			return [`${choicePath} must be an object`];
-		}
-
-		const issues = [
-			...validateAllowedKeys(choicePath, choice, [
-				"id",
-				"label",
-				"summary",
-				"recoverability",
-				"action_id",
-				"side_effects",
-				"docs_url",
-			]),
-			...validateNonEmptyString(`${choicePath}.id`, choice.id),
-			...validateNonEmptyProjectedText(`${choicePath}.label`, choice.label),
-			...validateNonEmptyProjectedText(`${choicePath}.summary`, choice.summary),
-			...validateRuntimeRecoveryChoiceRecoverability(
-				`${choicePath}.recoverability`,
-				choice.recoverability,
-			),
-		];
-
-		if (choice.docs_url !== undefined) {
-			issues.push(
-				...validateOptionalDocsUrl(`${choicePath}.docs_url`, choice.docs_url),
-			);
-		}
-		if (typeof choice.id === "string" && choice.id.trim().length > 0) {
-			if (ids.has(choice.id)) {
-				issues.push(`${choicePath}.id must be unique`);
-			}
-			ids.add(choice.id);
-		}
-
-		const hasActionId = choice.action_id !== undefined;
-		if (hasActionId) {
-			issues.push(
-				...validateNonEmptyString(`${choicePath}.action_id`, choice.action_id),
-			);
-			if (choice.side_effects !== undefined) {
-				issues.push(
-					`${choicePath}.side_effects must be omitted when action_id is present`,
-				);
-			}
-		} else if (choice.side_effects === undefined) {
-			issues.push(`${choicePath}.side_effects is required without action_id`);
-		}
-
-		const directSideEffects = validateRuntimeRecoveryChoiceSideEffects(
-			choice.side_effects,
-			choicePath,
-		);
-		issues.push(...directSideEffects.issues);
-
-		if (
-			typeof choice.action_id === "string" &&
-			choice.action_id.trim().length > 0
-		) {
-			const action = options.runtimeActions?.find(
-				(runtimeAction) => runtimeAction.id === choice.action_id,
-			);
-			if (!options.runtimeActions || options.runtimeActions.length === 0) {
-				issues.push(
-					`${choicePath}.action_id requires emitted runtime_actions`,
-				);
-			} else if (!action) {
-				issues.push(
-					`${choicePath}.action_id must reference a runtime_actions[].id`,
-				);
-			}
-			if (options.forbiddenActionIds.has(choice.action_id)) {
-				issues.push(
-					`${choicePath}.action_id must not appear in ${options.path}.constraints[].forbidden_action_ids`,
-				);
-			}
-			if (
-				Array.isArray(action?.side_effects) &&
-				action.side_effects.some((sideEffect) =>
-					options.forbiddenSideEffects.has(sideEffect),
-				)
-			) {
-				issues.push(
-					`${choicePath} must not use a side effect forbidden by ${options.path}.constraints`,
-				);
-			}
-		} else if (
-			directSideEffects.sideEffects.some((sideEffect) =>
-				options.forbiddenSideEffects.has(sideEffect),
-			)
-		) {
-			issues.push(
-				`${choicePath} must not use a side effect forbidden by ${options.path}.constraints`,
-			);
-		}
-
-		return issues;
-	});
+	return choices.flatMap((choice, index) =>
+		validateRuntimeRecoveryChoice(choice, index, path, ids, options),
+	);
 }
 
 function validateRuntimeRecoveryChoiceRecoverability(

@@ -371,6 +371,114 @@ const ALLOWED_EVIDENCE_PROVENANCES = new Set<string>(
 	BRANCH_STATION_EVIDENCE_PROVENANCES,
 );
 
+function findStationCatalogEntryDrift(
+	path: string,
+	station: BranchStation,
+	knownCommands: ReadonlySet<string>,
+	seenStationIds: Set<string>,
+): CommandFacadeMetadataDrift[] {
+	const drift: CommandFacadeMetadataDrift[] = [];
+	if (seenStationIds.has(station.id)) {
+		drift.push(driftRecord(path, "branch-station-id-duplicate", station.id));
+	}
+	seenStationIds.add(station.id);
+	if (!STATION_ID_PATTERN.test(station.id)) {
+		drift.push(driftRecord(path, "branch-station-id-invalid", station.id));
+	}
+	if (station.id.split(".")[0] !== station.command) {
+		drift.push(
+			driftRecord(path, "branch-station-id-command-mismatch", station.id),
+		);
+	}
+	if (!knownCommands.has(station.command)) {
+		drift.push(
+			driftRecord(
+				path,
+				"branch-station-command-unknown",
+				`${station.id}:${station.command}`,
+			),
+		);
+	}
+	if (!ALLOWED_CLASSIFICATIONS.has(station.classification)) {
+		drift.push(
+			driftRecord(
+				path,
+				"branch-station-classification-invalid",
+				`${station.id}:${station.classification}`,
+			),
+		);
+	}
+	drift.push(...safeTextDrift(path, station));
+	return drift;
+}
+
+function findStationEvidenceEntryDrift(
+	path: string,
+	evidence: BranchStationEvidence,
+	knownStationIds: ReadonlySet<string>,
+	seenEvidenceIds: Set<string>,
+): CommandFacadeMetadataDrift[] {
+	const drift: CommandFacadeMetadataDrift[] = [];
+	if (seenEvidenceIds.has(evidence.stationId)) {
+		drift.push(
+			driftRecord(path, "branch-station-evidence-duplicate", evidence.stationId),
+		);
+	}
+	seenEvidenceIds.add(evidence.stationId);
+	if (!knownStationIds.has(evidence.stationId)) {
+		drift.push(
+			driftRecord(path, "branch-station-evidence-unknown", evidence.stationId),
+		);
+	}
+	if (!ALLOWED_EVIDENCE_STATUSES.has(evidence.status)) {
+		drift.push(
+			driftRecord(
+				path,
+				"branch-station-evidence-status-invalid",
+				`${evidence.stationId}:${evidence.status}`,
+			),
+		);
+	}
+	if (
+		evidence.provenance !== undefined &&
+		!ALLOWED_EVIDENCE_PROVENANCES.has(evidence.provenance)
+	) {
+		drift.push(
+			driftRecord(
+				path,
+				"branch-station-evidence-provenance-invalid",
+				`${evidence.stationId}:${evidence.provenance}`,
+			),
+		);
+	}
+	if (
+		(evidence.status === "skipped" ||
+			evidence.status === "declared-unreachable") &&
+		!evidence.rationale?.trim()
+	) {
+		drift.push(
+			driftRecord(
+				path,
+				"branch-station-evidence-rationale-missing",
+				evidence.stationId,
+			),
+		);
+	}
+	if (evidence.rationale) {
+		for (const issue of validateProjectedFreeText(
+			`${evidence.stationId}.rationale`,
+			evidence.rationale,
+		)) {
+			drift.push({
+				category: "branch-station-evidence-rationale-unsafe-text",
+				path,
+				action: `Remove unsafe content from evidence ${evidence.stationId} rationale (${issue}).`,
+			});
+		}
+	}
+	return drift;
+}
+
 /**
  * Validate package-owned Branch Station declarations against discovery.
  *
@@ -392,109 +500,31 @@ export function findBranchStationCatalogDrift(
 	const path = input.path ?? "branch-station-catalog";
 	const knownCommands = new Set(Object.keys(input.discovery.commands).sort());
 	const seenStationIds = new Set<string>();
-	const drift: CommandFacadeMetadataDrift[] = [];
-
-	for (const station of [...input.catalog].sort((a, b) =>
-		a.id.localeCompare(b.id),
-	)) {
-		if (seenStationIds.has(station.id)) {
-			drift.push(driftRecord(path, "branch-station-id-duplicate", station.id));
-		}
-		seenStationIds.add(station.id);
-		if (!STATION_ID_PATTERN.test(station.id)) {
-			drift.push(driftRecord(path, "branch-station-id-invalid", station.id));
-		}
-		if (station.id.split(".")[0] !== station.command) {
-			drift.push(
-				driftRecord(path, "branch-station-id-command-mismatch", station.id),
-			);
-		}
-		if (!knownCommands.has(station.command)) {
-			drift.push(
-				driftRecord(
-					path,
-					"branch-station-command-unknown",
-					`${station.id}:${station.command}`,
-				),
-			);
-		}
-		if (!ALLOWED_CLASSIFICATIONS.has(station.classification)) {
-			drift.push(
-				driftRecord(
-					path,
-					"branch-station-classification-invalid",
-					`${station.id}:${station.classification}`,
-				),
-			);
-		}
-		drift.push(...safeTextDrift(path, station));
-	}
+	const stationDrift = [...input.catalog]
+		.sort((a, b) => a.id.localeCompare(b.id))
+		.flatMap((station) =>
+			findStationCatalogEntryDrift(
+				path,
+				station,
+				knownCommands,
+				seenStationIds,
+			),
+		);
 
 	const knownStationIds = new Set(input.catalog.map((station) => station.id));
 	const seenEvidenceIds = new Set<string>();
-	for (const evidence of [...(input.evidence ?? [])].sort((a, b) =>
-		a.stationId.localeCompare(b.stationId),
-	)) {
-		if (seenEvidenceIds.has(evidence.stationId)) {
-			drift.push(
-				driftRecord(path, "branch-station-evidence-duplicate", evidence.stationId),
-			);
-		}
-		seenEvidenceIds.add(evidence.stationId);
-		if (!knownStationIds.has(evidence.stationId)) {
-			drift.push(
-				driftRecord(path, "branch-station-evidence-unknown", evidence.stationId),
-			);
-		}
-		if (!ALLOWED_EVIDENCE_STATUSES.has(evidence.status)) {
-			drift.push(
-				driftRecord(
-					path,
-					"branch-station-evidence-status-invalid",
-					`${evidence.stationId}:${evidence.status}`,
-				),
-			);
-		}
-		if (
-			evidence.provenance !== undefined &&
-			!ALLOWED_EVIDENCE_PROVENANCES.has(evidence.provenance)
-		) {
-			drift.push(
-				driftRecord(
-					path,
-					"branch-station-evidence-provenance-invalid",
-					`${evidence.stationId}:${evidence.provenance}`,
-				),
-			);
-		}
-		if (
-			(evidence.status === "skipped" ||
-				evidence.status === "declared-unreachable") &&
-			!evidence.rationale?.trim()
-		) {
-			drift.push(
-				driftRecord(
-					path,
-					"branch-station-evidence-rationale-missing",
-					evidence.stationId,
-				),
-			);
-		}
-		if (evidence.rationale) {
-			for (const issue of validateProjectedFreeText(
-				`${evidence.stationId}.rationale`,
-				evidence.rationale,
-			)) {
-				drift.push({
-					category: "branch-station-evidence-rationale-unsafe-text",
-					path,
-					action: `Remove unsafe content from evidence ${evidence.stationId} rationale (${issue}).`,
-				});
-			}
-		}
-	}
+	const evidenceDrift = [...(input.evidence ?? [])]
+		.sort((a, b) => a.stationId.localeCompare(b.stationId))
+		.flatMap((evidence) =>
+			findStationEvidenceEntryDrift(
+				path,
+				evidence,
+				knownStationIds,
+				seenEvidenceIds,
+			),
+		);
 
-	return drift.sort(byDrift);
+	return [...stationDrift, ...evidenceDrift].sort(byDrift);
 }
 
 /**

@@ -92,16 +92,83 @@ type InternalCliDiagnosticContext = ActiveCliDiagnosticContext & {
 const cliDiagnosticContextStorage =
 	new AsyncLocalStorage<InternalCliDiagnosticContext>();
 
+type CliDiagnosticParseState = {
+	mode: CliDiagnosticMode;
+	quiet: boolean;
+	verbose: boolean;
+	debug: boolean;
+	json: boolean;
+	runId: string | undefined;
+};
+
+const CLI_DIAGNOSTIC_MODE_FLAG_HANDLERS: ReadonlyMap<
+	string,
+	(state: CliDiagnosticParseState) => void
+> = new Map([
+	[
+		"--quiet",
+		(state: CliDiagnosticParseState) => {
+			state.quiet = true;
+			state.mode = "quiet";
+		},
+	],
+	[
+		"--verbose",
+		(state: CliDiagnosticParseState) => {
+			state.verbose = true;
+			state.mode = "verbose";
+		},
+	],
+	[
+		"--debug",
+		(state: CliDiagnosticParseState) => {
+			state.debug = true;
+			state.mode = "debug";
+		},
+	],
+]);
+
+function parseRunIdFlagValue(
+	argv: readonly string[],
+	index: number,
+	currentRunId: string | undefined,
+): { runId: string; nextIndex: number } {
+	if (currentRunId) {
+		throw usageError("--run-id cannot be specified more than once");
+	}
+	const value = argv[index + 1];
+	if (!value || value.startsWith("--")) {
+		throw usageError("--run-id requires a value");
+	}
+	return { runId: parseCliRunId(value), nextIndex: index + 1 };
+}
+
+function parseRunIdFlagAssignment(
+	arg: string,
+	currentRunId: string | undefined,
+): string {
+	if (currentRunId) {
+		throw usageError("--run-id cannot be specified more than once");
+	}
+	const value = arg.slice("--run-id=".length);
+	if (value.startsWith("--")) {
+		throw usageError("--run-id requires a value");
+	}
+	return parseCliRunId(value);
+}
+
 export function parseCliDiagnosticArgv(
 	argv: readonly string[],
 ): ParsedCliDiagnosticArgv {
-	let mode: CliDiagnosticMode = "default";
+	const state: CliDiagnosticParseState = {
+		mode: "default",
+		quiet: false,
+		verbose: false,
+		debug: false,
+		json: false,
+		runId: undefined,
+	};
 	const strippedArgv: string[] = [];
-	let quiet = false;
-	let verbose = false;
-	let debug = false;
-	let json = false;
-	let runId: string | undefined;
 
 	for (let index = 0; index < argv.length; index += 1) {
 		const arg = argv[index];
@@ -109,62 +176,39 @@ export function parseCliDiagnosticArgv(
 			strippedArgv.push(...argv.slice(index + 1));
 			break;
 		}
-		if (arg === "--quiet") {
-			quiet = true;
-			mode = "quiet";
-			continue;
-		}
-		if (arg === "--verbose") {
-			verbose = true;
-			mode = "verbose";
-			continue;
-		}
-		if (arg === "--debug") {
-			debug = true;
-			mode = "debug";
+		const modeFlagHandler = CLI_DIAGNOSTIC_MODE_FLAG_HANDLERS.get(arg);
+		if (modeFlagHandler) {
+			modeFlagHandler(state);
 			continue;
 		}
 		if (arg === "--json") {
-			json = true;
+			state.json = true;
 			strippedArgv.push(arg);
 			continue;
 		}
 		if (arg === "--run-id") {
-			if (runId) {
-				throw usageError("--run-id cannot be specified more than once");
-			}
-			const value = argv[index + 1];
-			if (!value || value.startsWith("--")) {
-				throw usageError("--run-id requires a value");
-			}
-			runId = parseCliRunId(value);
-			index += 1;
+			const parsed = parseRunIdFlagValue(argv, index, state.runId);
+			state.runId = parsed.runId;
+			index = parsed.nextIndex;
 			continue;
 		}
 		if (arg.startsWith("--run-id=")) {
-			if (runId) {
-				throw usageError("--run-id cannot be specified more than once");
-			}
-			const value = arg.slice("--run-id=".length);
-			if (value.startsWith("--")) {
-				throw usageError("--run-id requires a value");
-			}
-			runId = parseCliRunId(value);
+			state.runId = parseRunIdFlagAssignment(arg, state.runId);
 			continue;
 		}
 		strippedArgv.push(arg);
 	}
-	runId ??= randomUUID();
+	const runId = state.runId ?? randomUUID();
 
 	return {
 		argv: strippedArgv,
 		options: {
-			json,
-			quiet,
-			verbose,
-			debug,
-			mode,
-			lowestLevel: lowestLogLevelForDiagnosticMode(mode),
+			json: state.json,
+			quiet: state.quiet,
+			verbose: state.verbose,
+			debug: state.debug,
+			mode: state.mode,
+			lowestLevel: lowestLogLevelForDiagnosticMode(state.mode),
 			runId,
 			startedAtMs: Date.now(),
 		},
