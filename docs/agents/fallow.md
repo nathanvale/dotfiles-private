@@ -1,0 +1,86 @@
+# Fallow Quality Gate
+
+Goal: audit the current code-changing delta through Fallow's native JSON
+contract. `quality:fallow` re-emits that JSON unchanged; there is no repository
+helper, wrapper, or replacement report format.
+
+## Start
+
+1. Read `.agents/skills/fallow/SKILL.md`, then its version-matched owner at
+   `node_modules/fallow/skills/fallow/SKILL.md`.
+2. Resolve flags from `node_modules/.bin/fallow --help`, never from memory.
+3. Keep MCP, global installation, PATH overrides, and broad suppressions out of
+   this owner.
+
+## Commands
+
+Dirty code-changing turn:
+
+```sh
+bun run --silent quality:fallow --changed-since HEAD
+```
+
+Review or handoff: replace `HEAD` with the immutable task-start commit. A clean
+comparison to `HEAD` is only an empty-delta smoke check.
+
+Complete repository gate:
+
+```sh
+bun run check
+```
+
+Its Fallow step passes no comparison base, so Fallow selects the branch
+upstream or remote-default merge-base.
+
+## Decisions
+
+Fallow prints JSON on stdout on every exit, including a refusal. Preserve it as
+tool evidence; read `verdict`, `attribution`, and `_meta.type_aware` before
+acting.
+
+| Exit | Meaning |
+| ---: | --- |
+| 0 | Audit passed and every selected TypeScript project completed. |
+| 1 | An introduced finding failed policy, or a selected project or query stayed `unavailable` or `partial` under `require: complete`. |
+| 2 | Operational error such as an invalid comparison base; no audit ran. |
+
+- `.fallowrc.json` pins `new-only` attribution, requires complete type-aware
+  evidence, and promotes every applicable warn-default rule to `error`.
+- Treat `reason_code: blocking-diagnostics` as a structural TypeScript problem
+  in the named project: repair the source, then retry.
+- Treat `attached-comment` or `dynamic-behavior` partials as unresolved
+  unused-export candidates in changed files: remove the export or prove its
+  use, then retry.
+
+## Comparison bases
+
+- Complete gate: leave the CLI base unset so native merge-base detection owns
+  selection. Treat a zero-file result as an empty-delta smoke, not changed-code
+  review evidence.
+- Dirty turn: use `HEAD` so tracked and untracked work remains in scope.
+- Review and handoff: use the immutable task-start commit.
+- Remote integration: use a freshly resolved remote ref only after that remote
+  action is authorized.
+- Never disable type-aware analysis or save a count baseline to make a gate
+  pass.
+
+## Boundaries
+
+- `boundaries` is deliberately absent from `.fallowrc.json`; `fallow guard` and
+  zones stay unconfigured until a zone graph is accepted.
+
+## Editor resolution
+
+- VS Code resolves `node_modules/.bin/fallow` and `node_modules/.bin/fallow-lsp`
+  from this repository; one root `.fallowrc.json` governs every workspace.
+- If project-binary resolution fails, stop. Never change global PATH, set
+  `fallow.lspPath` or `fallow.configPath`, or add another editor override.
+
+## Runtime state and repair
+
+- Fallow may create `.fallow/` caches; the root `.gitignore` excludes them.
+  Inspect them when diagnosing, never commit them or place source inside them.
+- Repair only the reported finding. Never weaken a test, add a broad ignore, or
+  turn the repository into a suppression baseline.
+- TypeScript remains authoritative for compilation; Fallow type-aware
+  completeness is quality evidence only.

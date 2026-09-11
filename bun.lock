@@ -15,6 +15,7 @@
         "@side-quest/setup": "workspace:*",
         "@types/bun": "catalog:",
         "commitlint-config-git-commit-emoji": "^1.0.0",
+        "fallow": "3.19.0",
         "husky": "^9.1.7",
         "lint-staged": "^16.2.7",
         "typescript": "catalog:",
@@ -276,6 +277,22 @@
 
     "@commitlint/types": ["@commitlint/types@20.0.0", "", { "dependencies": { "@types/conventional-commits-parser": "5.0.2", "chalk": "5.6.2" } }, "sha512-bVUNBqG6aznYcYjTjnc3+Cat/iBgbgpflxbIBTnsHTX0YVpnmINPEkSRWymT2Q8aSH3Y7aKnEbunilkYe8TybA=="],
 
+    "@fallow-cli/darwin-arm64": ["@fallow-cli/darwin-arm64@3.19.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-jMKEAov6FOdKxoBjjn3UWwX2AqLwH+k7WNgw1AH0h/5N7rRUb6zTSInJi7egh35y99xe8BA2XwjYNmTrQRINyw=="],
+
+    "@fallow-cli/darwin-x64": ["@fallow-cli/darwin-x64@3.19.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-3z9wemsC3TRdPA6TtbIafLyWUHgOCeWBbileojpOk7OvmrHXo7DtemhxpNK0lMBN3hrIpzpmteFpI+mXiEz8XA=="],
+
+    "@fallow-cli/linux-arm64-gnu": ["@fallow-cli/linux-arm64-gnu@3.19.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-I8H7HPQSQvmFI1CK8h10qxbYUyIl3gMFsNv1p2+NdfllLMcv26aQGrWkA3wlV9yA2v8AEH8ReDDAwHME9PEh1A=="],
+
+    "@fallow-cli/linux-arm64-musl": ["@fallow-cli/linux-arm64-musl@3.19.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-zcEehLVdrVII75MLjO6jq1gbnSrtFVrjq+7u3gH1PjX8laeiIP2xVk3yGW/Qp3kV72k6375Dbqo8EiHxSCvC9A=="],
+
+    "@fallow-cli/linux-x64-gnu": ["@fallow-cli/linux-x64-gnu@3.19.0", "", { "os": "linux", "cpu": "x64" }, "sha512-CkvQz9l4TwVGQkmlFqOJlPVR9bK6UPgyIaz/kuh4f7xfYoxgjQpI1Kv7eyInP8u9m8ZhreVlhX/GsL1zedw40Q=="],
+
+    "@fallow-cli/linux-x64-musl": ["@fallow-cli/linux-x64-musl@3.19.0", "", { "os": "linux", "cpu": "x64" }, "sha512-EMlGT90rgbpjkp31w8BhbeSOsQxXFShDVy6zeEIPUA85h+HJCAztiDqs+joLB6J1rw4nINfxJKJDT6un+qiajA=="],
+
+    "@fallow-cli/win32-arm64-msvc": ["@fallow-cli/win32-arm64-msvc@3.19.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-Pno7H0ylKb7Bxcqc5IxmGB8eTvplJT383qPW16QvJ8hMTiS88rdrZ8WxM3OludRBIMHQU3/QEMPbLBVr5d1uDA=="],
+
+    "@fallow-cli/win32-x64-msvc": ["@fallow-cli/win32-x64-msvc@3.19.0", "", { "os": "win32", "cpu": "x64" }, "sha512-N9Hwxylu6kq+mCs1lvAlC02L5wIiOddXh8dnUT5hoC6irwssAX0w3DXwIgC82N1KyX+9KA5n5Cxxgwuh9ptepw=="],
+
     "@local/xero-skill": ["@local/xero-skill@workspace:config/agents/skills/personal/xero"],
 
     "@logtape/logtape": ["@logtape/logtape@2.3.1", "", {}, "sha512-nYLsBWMKk0Llp62U6cDbQxNcEKc0E0s5hWbAxkmUM8ax6VchGkPSjPrVp3ixFQUuvUB9ku7MSgPzFhmVTSh2Jw=="],
@@ -442,6 +459,8 @@
 
     "degenerator": ["degenerator@5.0.1", "", { "dependencies": { "ast-types": "0.13.4", "escodegen": "2.1.0", "esprima": "4.0.1" } }, "sha512-TllpMR/t0M5sqCXfj85i4XaAzxmS5tVA16dqvdkMwGmzI+dXLXnw3J+3Vdv7VKw+ThlTMboK6i9rnZ6Nntj5CQ=="],
 
+    "detect-libc": ["detect-libc@2.1.2", "", {}, "sha512-Btj2BOOO83o3WyH59e8MgXsxEQVcarkUOpEYrubB0urwnN10yQ364rsiByU11nZlqWYZm05i/of7io4mzihBtQ=="],
+
     "devtools-protocol": ["devtools-protocol@0.0.1534754", "", {}, "sha512-26T91cV5dbOYnXdJi5qQHoTtUoNEqwkHcAyu/IKtjIAxiEqPMrDiRkDOPWVsGfNZGmlQVHQbZRSjD8sxagWVsQ=="],
 
     "diff-toggle": ["diff-toggle@workspace:apps/vscode/nathan-adhd-helper"],
@@ -474,7 +493,11 @@
 
     "extract-zip": ["extract-zip@2.0.1", "", { "dependencies": { "debug": "4.4.3", "get-stream": "5.2.0", "yauzl": "2.10.0" }, "optionalDependencies": { "@types/yauzl": "2.10.3" }, "bin": { "extract-zip": "cli.js" } }, "sha512-GDhU9ntwuKyGXdZBUgTIe+vXnWj0fppUEtMDL0+idd5Sta8TGpHssn/eusA9mrPr9qNDym6SxAYZjNvCn/9RBg=="],
 
+    "fallow": ["fallow@3.19.0", "", { "dependencies": { "detect-libc": "2.1.2" }, "optionalDependencies": { "@fallow-cli/darwin-arm64": "3.19.0", "@fallow-cli/darwin-x64": "3.19.0", "@fallow-cli/linux-arm64-gnu": "3.19.0", "@fallow-cli/linux-arm64-musl": "3.19.0", "@fallow-cli/linux-x64-gnu": "3.19.0", "@fallow-cli/linux-x64-musl": "3.19.0", "@fallow-cli/win32-arm64-msvc": "3.19.0", "@fallow-cli/win32-x64-msvc": "3.19.0", "fallow-type-aware": "3.19.0" }, "bin": { "fallow": "bin/fallow", "fallow-lsp": "bin/fallow-lsp", "fallow-mcp": "bin/fallow-mcp" } }, "sha512-iM44GldeupBOvJLR2BZSEridMVbsKJpjEfrYjzW7kpBZLRXLRQh/g7RoCseCMlWK+4hDIuQWu+lAmXe9MDllQQ=="],
+
     "fallow-scripts": ["fallow-scripts@workspace:config/agents/skills/personal/fallow"],
+
+    "fallow-type-aware": ["fallow-type-aware@3.19.0", "", { "dependencies": { "typescript": "7.0.2" }, "bin": { "fallow-type-aware": "fallow-type-aware.mjs" } }, "sha512-/LlmR1qNNcNf8Vv1l3FmwkaenfJLd9PBcE1FCebf4MUWeyy+UTqZfc61139/EwgpuHzBdjOMVpyhgCSEjuHx8Q=="],
 
     "fast-deep-equal": ["fast-deep-equal@3.1.3", "", {}, "sha512-f3qQ9oQy9j2AhBe/H9VC91wLmKBCCU/gDOnKNAYG5hswO7BLKj09Hc5HYNz9cGI++xlpDCIgDaitVs03ATR84Q=="],
 

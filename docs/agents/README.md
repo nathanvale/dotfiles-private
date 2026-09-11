@@ -27,3 +27,4 @@ Scope, admission, and the edit rule:
 | [`determinism-and-steering.md`](determinism-and-steering.md) | Sorting a rule into gate, clause, or delete |
 | [`coding-standards.md`](coding-standards.md) | Authoring or reviewing code or tests |
 | [`mac-storage.md`](mac-storage.md) | Investigating or cleaning up Mac storage |
+| [`fallow.md`](fallow.md) | Running or diagnosing the `quality:fallow` gate |

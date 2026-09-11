@@ -34,7 +34,7 @@
 	"keywords": [],
 	"scripts": {
 		"biome:check": "biome check --diagnostic-level=error .",
-		"check": "git diff --check && bun run biome:check && bun run typecheck && bun run test && bun run test:hooks && bun run test:quality:repository",
+		"check": "git diff --check && bun run biome:check && bun run typecheck && bun run test && bun run test:hooks && bun run test:quality:repository && bun run --silent quality:fallow",
 		"check:write": "biome check --write .",
 		"lint": "biome lint --diagnostic-level=error .",
 		"lint:fix": "biome lint --write .",
@@ -42,6 +42,7 @@
 		"lint:workflows": "if [ -d .github/workflows ]; then actionlint; else echo 'no .github/workflows; skipping'; fi",
 		"memory:qmd-federation": "bun run $HOME/.config/context/scripts/qmd-roster-sync.ts",
 		"prepare": "husky",
+		"quality:fallow": "node_modules/.bin/fallow audit --format json --quiet --type-aware --type-aware-require complete",
 		"test": "bun run --filter '*' test",
 		"test:hooks": "bun test config/agents/claude/hooks",
 		"test:quality:repository": "bun test tooling/repository-quality/workspace-manifest.test.ts",
@@ -59,6 +60,7 @@
 		"@side-quest/setup": "workspace:*",
 		"@types/bun": "catalog:",
 		"commitlint-config-git-commit-emoji": "^1.0.0",
+		"fallow": "3.19.0",
 		"husky": "^9.1.7",
 		"lint-staged": "^16.2.7",
 		"typescript": "catalog:"
