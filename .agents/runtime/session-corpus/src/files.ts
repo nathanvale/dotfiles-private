@@ -9,35 +9,67 @@ import type {
 	SourceScanState,
 } from "./model.ts"
 
-async function listJsonl(root: string): Promise<{
+type JsonlScanResult = {
 	paths: string[]
 	unreadableDirectories: number
-}> {
-	if (!existsSync(root)) return { paths: [], unreadableDirectories: 0 }
+}
+
+function isPermissionDenied(error: unknown): boolean {
+	const code = (error as NodeJS.ErrnoException).code
+	return code === "EACCES" || code === "EPERM"
+}
+
+async function readDirectoryEntries(directory: string): Promise<Dirent[] | undefined> {
+	try {
+		return await readdir(directory, { withFileTypes: true })
+	} catch (error) {
+		if (isPermissionDenied(error)) return
+
+		throw error
+	}
+}
+
+function isJsonlFile(entry: Dirent): boolean {
+	return entry.isFile() && entry.name.endsWith(".jsonl")
+}
+
+function recordDirectoryEntry(
+	current: string,
+	entry: Dirent,
+	pending: string[],
+	results: string[],
+): void {
+	const path = resolve(current, entry.name)
+	if (entry.isDirectory()) {
+		pending.push(path)
+		return
+	}
+	if (isJsonlFile(entry)) results.push(path)
+}
+
+async function scanJsonlTree(root: string): Promise<JsonlScanResult> {
 	const results: string[] = []
 	let unreadableDirectories = 0
 	const pending = [root]
 	while (pending.length > 0) {
 		const current = pending.pop()
 		if (!current) continue
-		let entries: Dirent[]
-		try {
-			entries = await readdir(current, { withFileTypes: true })
-		} catch (error) {
-			const code = (error as NodeJS.ErrnoException).code
-			if (code === "EACCES" || code === "EPERM") {
-				unreadableDirectories += 1
-				continue
-			}
-			throw error
-		}
-		for (const entry of entries) {
-			const path = resolve(current, entry.name)
-			if (entry.isDirectory()) pending.push(path)
-			else if (entry.isFile() && entry.name.endsWith(".jsonl")) results.push(path)
+		const entries = await readDirectoryEntries(current)
+		if (entries) {
+			for (const entry of entries) recordDirectoryEntry(current, entry, pending, results)
+		} else {
+			unreadableDirectories += 1
 		}
 	}
 	return { paths: results.sort(), unreadableDirectories }
+}
+
+async function listJsonl(root: string): Promise<{
+	paths: string[]
+	unreadableDirectories: number
+}> {
+	if (!existsSync(root)) return { paths: [], unreadableDirectories: 0 }
+	return scanJsonlTree(root)
 }
 
 /**

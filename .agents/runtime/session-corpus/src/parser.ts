@@ -31,6 +31,82 @@ function textBlocks(content: unknown): string[] {
 	})
 }
 
+function parseCodexSessionMetadata(
+	line: Record<string, unknown>,
+	path: string,
+): SessionMetadata | undefined {
+	if (line.type !== "session_meta") return undefined
+	const payload = asRecord(line.payload)
+	if (!payload) return undefined
+	const git = asRecord(payload.git)
+	const sourceMetadata = asRecord(payload.source)
+	const sessionId = typeof payload.id === "string" ? payload.id : undefined
+	if (!sessionId) return undefined
+	const helper = payload.thread_source === "subagent" || sourceMetadata?.subagent === true
+	const parentSessionId = [payload.parent_thread_id, payload.forked_from_id]
+		.find((candidate): candidate is string => typeof candidate === "string")
+	return {
+		source: "codex",
+		opaqueId: `codex:${sessionId}`,
+		sessionId,
+		path,
+		cwd: typeof payload.cwd === "string" ? payload.cwd : undefined,
+		branch: typeof git?.branch === "string" ? git.branch : undefined,
+		startedAt: typeof payload.timestamp === "string" ? payload.timestamp : undefined,
+		repositoryUrl: typeof git?.repository_url === "string" ? git.repository_url : undefined,
+		parentSessionId,
+		kind: helper || parentSessionId ? "helper" : "primary",
+	}
+}
+
+function parseClaudeSessionMetadata(
+	line: Record<string, unknown>,
+	path: string,
+): SessionMetadata | undefined {
+	const sessionId = typeof line.sessionId === "string" ? line.sessionId : undefined
+	const cwd = typeof line.cwd === "string" ? line.cwd : undefined
+	if (!sessionId || !cwd) return undefined
+	return {
+		source: "claude",
+		opaqueId: `claude:${sessionId}`,
+		sessionId,
+		path,
+		cwd,
+		branch: typeof line.gitBranch === "string" ? line.gitBranch : undefined,
+		startedAt: typeof line.timestamp === "string" ? line.timestamp : undefined,
+		parentSessionId: typeof line.parentSessionId === "string" ? line.parentSessionId : undefined,
+		kind: line.isSidechain === true || typeof line.agentId === "string" ? "helper" : "primary",
+	}
+}
+
+function normalizedMessage(
+	role: unknown,
+	content: unknown,
+	timestamp: unknown,
+): NormalizedMessage | undefined {
+	if (role !== "user" && role !== "assistant") return undefined
+	const text = textBlocks(content).join("\n").trim()
+	if (!text) return undefined
+	return {
+		role,
+		timestamp: typeof timestamp === "string" ? timestamp : undefined,
+		text,
+	}
+}
+
+function parseCodexNormalizedMessage(line: Record<string, unknown>): NormalizedMessage | undefined {
+	if (line.type !== "response_item") return undefined
+	const payload = asRecord(line.payload)
+	if (payload?.type !== "message") return undefined
+	return normalizedMessage(payload.role, payload.content, line.timestamp)
+}
+
+function parseClaudeNormalizedMessage(line: Record<string, unknown>): NormalizedMessage | undefined {
+	if (line.type !== "user" && line.type !== "assistant") return undefined
+	const message = asRecord(line.message)
+	return normalizedMessage(message?.role, message?.content, line.timestamp)
+}
+
 /**
  * Parse the minimum private locator from one runtime-native JSONL record.
  *
@@ -51,48 +127,8 @@ export function parseSessionMetadata(
 ): SessionMetadata | undefined {
 	const line = asRecord(value)
 	if (!line) return undefined
-
-	if (source === "codex" && line.type === "session_meta") {
-		const payload = asRecord(line.payload)
-		if (!payload) return undefined
-		const git = asRecord(payload.git)
-		const sourceMetadata = asRecord(payload.source)
-		const sessionId = typeof payload.id === "string" ? payload.id : undefined
-		if (!sessionId) return undefined
-		const helper = payload.thread_source === "subagent" || sourceMetadata?.subagent === true
-		const parentSessionId = [payload.parent_thread_id, payload.forked_from_id]
-			.find((candidate): candidate is string => typeof candidate === "string")
-		return {
-			source,
-			opaqueId: `${source}:${sessionId}`,
-			sessionId,
-			path,
-			cwd: typeof payload.cwd === "string" ? payload.cwd : undefined,
-			branch: typeof git?.branch === "string" ? git.branch : undefined,
-			startedAt: typeof payload.timestamp === "string" ? payload.timestamp : undefined,
-			repositoryUrl: typeof git?.repository_url === "string" ? git.repository_url : undefined,
-			parentSessionId,
-			kind: helper || parentSessionId ? "helper" : "primary",
-		}
-	}
-
-	if (source === "claude") {
-		const sessionId = typeof line.sessionId === "string" ? line.sessionId : undefined
-		const cwd = typeof line.cwd === "string" ? line.cwd : undefined
-		if (!sessionId || !cwd) return undefined
-		return {
-			source,
-			opaqueId: `${source}:${sessionId}`,
-			sessionId,
-			path,
-			cwd,
-			branch: typeof line.gitBranch === "string" ? line.gitBranch : undefined,
-			startedAt: typeof line.timestamp === "string" ? line.timestamp : undefined,
-			parentSessionId: typeof line.parentSessionId === "string" ? line.parentSessionId : undefined,
-			kind: line.isSidechain === true || typeof line.agentId === "string" ? "helper" : "primary",
-		}
-	}
-
+	if (source === "codex") return parseCodexSessionMetadata(line, path)
+	if (source === "claude") return parseClaudeSessionMetadata(line, path)
 	return undefined
 }
 
@@ -114,33 +150,9 @@ export function parseNormalizedMessage(
 ): NormalizedMessage | undefined {
 	const line = asRecord(value)
 	if (!line) return undefined
-
-	if (source === "codex") {
-		if (line.type !== "response_item") return undefined
-		const payload = asRecord(line.payload)
-		if (payload?.type !== "message") return undefined
-		const role = payload.role
-		if (role !== "user" && role !== "assistant") return undefined
-		const text = textBlocks(payload.content).join("\n").trim()
-		if (!text) return undefined
-		return {
-			role,
-			timestamp: typeof line.timestamp === "string" ? line.timestamp : undefined,
-			text,
-		}
-	}
-
-	if (line.type !== "user" && line.type !== "assistant") return undefined
-	const message = asRecord(line.message)
-	const role = message?.role
-	if (role !== "user" && role !== "assistant") return undefined
-	const text = textBlocks(message?.content).join("\n").trim()
-	if (!text) return undefined
-	return {
-		role,
-		timestamp: typeof line.timestamp === "string" ? line.timestamp : undefined,
-		text,
-	}
+	if (source === "codex") return parseCodexNormalizedMessage(line)
+	if (source === "claude") return parseClaudeNormalizedMessage(line)
+	return undefined
 }
 
 /**

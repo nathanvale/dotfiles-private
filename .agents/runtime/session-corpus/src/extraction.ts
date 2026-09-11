@@ -1,4 +1,4 @@
-import type { SessionMetadata } from "./model.ts"
+import type { NormalizedMessage, SessionMetadata } from "./model.ts"
 import { parseNormalizedMessage, readJsonLines } from "./parser.ts"
 import { redactSessionText } from "./redaction.ts"
 
@@ -36,6 +36,97 @@ export interface ExtractedSessionPage {
 	redactions: number
 	/** Redacted message page. */
 	messages: ExtractedSessionMessage[]
+}
+
+type ExtractionState = {
+	totalMessages: number
+	redactions: number
+	messages: ExtractedSessionMessage[]
+}
+
+function isNonNegativeSafeInteger(value: number): boolean {
+	return Number.isSafeInteger(value) && value >= 0
+}
+
+function isPositiveSafeInteger(value: number): boolean {
+	return Number.isSafeInteger(value) && value > 0
+}
+
+function validateExtractionOptions(options: {
+	offset: number
+	limit: number
+	maxMessageChars: number
+}): void {
+	if (!isNonNegativeSafeInteger(options.offset)) {
+		throw new Error("offset must be a non-negative integer")
+	}
+	if (!isPositiveSafeInteger(options.limit)) {
+		throw new Error("limit must be a positive integer")
+	}
+	if (!isNonNegativeSafeInteger(options.maxMessageChars)) {
+		throw new Error("maxMessageChars must be a non-negative integer")
+	}
+}
+
+function compareSessionFragments(left: SessionMetadata, right: SessionMetadata): number {
+	const leftStarted = startedAtSortValue(left.startedAt)
+	const rightStarted = startedAtSortValue(right.startedAt)
+	return leftStarted - rightStarted || left.path.localeCompare(right.path)
+}
+
+function orderedSessionFragments(fragments: SessionMetadata[]): SessionMetadata[] {
+	return [...fragments].sort(compareSessionFragments)
+}
+
+function appendExtractedMessage(
+	state: ExtractionState,
+	message: NormalizedMessage | undefined,
+	options: { offset: number; limit: number; maxMessageChars: number },
+): void {
+	if (!message) return
+	const index = state.totalMessages
+	state.totalMessages += 1
+	if (index < options.offset || state.messages.length >= options.limit) return
+	const redacted = redactSessionText(message.text)
+	state.redactions += redacted.redactions
+	const truncated = redacted.text.length > options.maxMessageChars
+	state.messages.push({
+		index,
+		role: message.role,
+		timestamp: message.timestamp,
+		text: truncated
+			? redacted.text.slice(0, options.maxMessageChars) + "…"
+			: redacted.text,
+		truncated,
+	})
+}
+
+async function appendFragmentMessages(
+	state: ExtractionState,
+	metadata: SessionMetadata,
+	options: { offset: number; limit: number; maxMessageChars: number },
+	strict: boolean,
+): Promise<void> {
+	for await (const value of readJsonLines(metadata.path, { strict })) {
+		appendExtractedMessage(state, parseNormalizedMessage(value, metadata.source), options)
+	}
+}
+
+function buildExtractedSessionPage(
+	state: ExtractionState,
+	options: { offset: number; limit: number; maxMessageChars: number },
+): ExtractedSessionPage {
+	const nextOffset = options.offset + state.messages.length < state.totalMessages
+		? options.offset + state.messages.length
+		: null
+	return {
+		offset: options.offset,
+		limit: options.limit,
+		totalMessages: state.totalMessages,
+		nextOffset,
+		redactions: state.redactions,
+		messages: state.messages,
+	}
 }
 
 /**
@@ -82,52 +173,10 @@ async function extractSessionFragmentsPageUnsafe(
 	options: { offset: number; limit: number; maxMessageChars: number },
 	strict: boolean,
 ): Promise<ExtractedSessionPage> {
-	if (!Number.isSafeInteger(options.offset) || options.offset < 0) {
-		throw new Error("offset must be a non-negative integer")
+	validateExtractionOptions(options)
+	const state: ExtractionState = { totalMessages: 0, redactions: 0, messages: [] }
+	for (const metadata of orderedSessionFragments(fragments)) {
+		await appendFragmentMessages(state, metadata, options, strict)
 	}
-	if (!Number.isSafeInteger(options.limit) || options.limit <= 0) {
-		throw new Error("limit must be a positive integer")
-	}
-	if (!Number.isSafeInteger(options.maxMessageChars) || options.maxMessageChars < 0) {
-		throw new Error("maxMessageChars must be a non-negative integer")
-	}
-	let totalMessages = 0
-	let redactions = 0
-	const messages: ExtractedSessionMessage[] = []
-	const ordered = [...fragments].sort((left, right) => {
-		const leftStarted = startedAtSortValue(left.startedAt)
-		const rightStarted = startedAtSortValue(right.startedAt)
-		return leftStarted - rightStarted || left.path.localeCompare(right.path)
-	})
-	for (const metadata of ordered) {
-		for await (const value of readJsonLines(metadata.path, { strict })) {
-			const message = parseNormalizedMessage(value, metadata.source)
-			if (!message) continue
-			const index = totalMessages
-			totalMessages += 1
-			if (index < options.offset || messages.length >= options.limit) continue
-			const redacted = redactSessionText(message.text)
-			redactions += redacted.redactions
-			const truncated = redacted.text.length > options.maxMessageChars
-			messages.push({
-				index,
-				role: message.role,
-				timestamp: message.timestamp,
-				text: truncated
-					? `${redacted.text.slice(0, options.maxMessageChars)}…`
-					: redacted.text,
-				truncated,
-			})
-		}
-	}
-	return {
-		offset: options.offset,
-		limit: options.limit,
-		totalMessages,
-		nextOffset: options.offset + messages.length < totalMessages
-			? options.offset + messages.length
-			: null,
-		redactions,
-		messages,
-	}
+	return buildExtractedSessionPage(state, options)
 }
