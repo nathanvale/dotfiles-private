@@ -877,7 +877,8 @@ function resolveFilePath(filePath: string): string {
 export async function checkWorktreeIsolation(filePath: string): Promise<{
 	blocked: boolean
 	reason?: string
-	branch?: string
+	/** Undefined when HEAD is detached; the key is always present when blocked. */
+	branch?: string | undefined
 }> {
 	const resolvedFilePath = resolveFilePath(filePath)
 	// Walk up to the nearest existing ancestor: the target may be a new file in

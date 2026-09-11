@@ -32,8 +32,8 @@
 			".agents/skills",
 			"!.agents/skills/*",
 			".agents/runtime",
-			"!.agents/runtime/*",
-			".agents/runtime/setup"
+			"!.agents/runtime/agent-native-state-machine-generator/fixtures/negative",
+			"!.agents/runtime/vault-git-transaction-manager"
 		]
 	},
 	"formatter": {
