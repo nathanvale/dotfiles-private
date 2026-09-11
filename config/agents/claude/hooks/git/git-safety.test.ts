@@ -281,6 +281,42 @@ describe('protected-branch commit action detection', () => {
 	])('does not detect non-commit action: %s', (command) => {
 		expect(hasProtectedBranchCommitAction(command)).toBe(false)
 	})
+
+	test('commit-creation table: control-flow, suppression, compound commands', () => {
+		// Independent oracle: expectations are literal, not derived from the
+		// subcommand flag tables in git-safety.ts.
+		const cases: ReadonlyArray<readonly [string, boolean]> = [
+			['git commit', true],
+			['git commit --no-commit', true],
+			['git cherry-pick abc123', true],
+			['git cherry-pick --abort', false],
+			['git cherry-pick --quit', false],
+			['git cherry-pick --skip', false],
+			['git cherry-pick -n abc123', false],
+			['git cherry-pick -xn abc123', false],
+			['git cherry-pick -x abc123', true],
+			['git revert --no-commit abc123', false],
+			['git revert --quit', false],
+			['git revert --skip', false],
+			['git revert abc123', true],
+			['git merge feature/foo', true],
+			['git merge --squash feature/foo', false],
+			['git merge --ff-only feature/foo', false],
+			['git merge --no-commit feature/foo', false],
+			['git merge --continue', false],
+			['git merge --quit', false],
+			['git merge -n feature/foo', true],
+			['git merge --skip feature/foo', true],
+			['git fetch && git merge --no-commit feature/foo', false],
+			['git fetch && git merge feature/foo', true],
+			['git cherry-pick --abort; git cherry-pick abc123', true],
+			['git status | cat; git revert -n abc123', false],
+			['git fetch origin && git status', false],
+		]
+		for (const [command, expected] of cases) {
+			expect(hasProtectedBranchCommitAction(command), command).toBe(expected)
+		}
+	})
 })
 
 describe('git history/ref destructive operations', () => {

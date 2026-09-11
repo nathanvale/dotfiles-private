@@ -10,10 +10,9 @@ import path from "node:path";
 const repoRoot = path.resolve(import.meta.dir, "../..");
 const rootBaseConfig = path.join(repoRoot, "tsconfig.base.json");
 
-test("every workspace member declares lint, test, and (for TypeScript) typecheck against the root base config", () => {
-	const rootManifest = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+function listWorkspaceMembers(rootManifest: { workspaces: string[] }): string[] {
 	const members: string[] = [];
-	for (const entry of rootManifest.workspaces as string[]) {
+	for (const entry of rootManifest.workspaces) {
 		if (!entry.endsWith("/*")) {
 			members.push(entry);
 			continue;
@@ -23,36 +22,36 @@ test("every workspace member declares lint, test, and (for TypeScript) typecheck
 			if (child.isDirectory()) members.push(`${parent}/${child.name}`);
 		}
 	}
+	return members;
+}
 
-	const violations: string[] = [];
-	for (const member of members) {
-		const memberDir = path.join(repoRoot, member);
-		const manifestPath = path.join(memberDir, "package.json");
-		if (!existsSync(manifestPath)) {
-			violations.push(`${member}: package.json is missing`);
-			continue;
-		}
-		const scripts = JSON.parse(readFileSync(manifestPath, "utf8")).scripts ?? {};
-		for (const script of ["lint", "test"]) {
-			if (typeof scripts[script] !== "string") violations.push(`${member}: scripts.${script} is missing`);
-		}
+function violationsFor(member: string): string[] {
+	const memberDir = path.join(repoRoot, member);
+	const manifestPath = path.join(memberDir, "package.json");
+	if (!existsSync(manifestPath)) return [`${member}: package.json is missing`];
 
-		const hasTypeScript = readdirSync(memberDir, { recursive: true, encoding: "utf8" }).some(
-			(relative) => !relative.split(path.sep).includes("node_modules") && /\.tsx?$/.test(relative),
-		);
-		if (!hasTypeScript) continue;
+	const scripts = JSON.parse(readFileSync(manifestPath, "utf8")).scripts ?? {};
+	const hasTypeScript = readdirSync(memberDir, { recursive: true, encoding: "utf8" }).some(
+		(relative) => !relative.split(path.sep).includes("node_modules") && /\.tsx?$/.test(relative),
+	);
+	const requiredScripts = hasTypeScript ? ["lint", "test", "typecheck"] : ["lint", "test"];
+	const violations = requiredScripts
+		.filter((script) => typeof scripts[script] !== "string")
+		.map((script) => `${member}: scripts.${script} is missing`);
+	if (!hasTypeScript) return violations;
 
-		if (typeof scripts.typecheck !== "string") violations.push(`${member}: scripts.typecheck is missing`);
-		const tsconfigPath = path.join(memberDir, "tsconfig.json");
-		if (!existsSync(tsconfigPath)) {
-			violations.push(`${member}: tsconfig.json is missing`);
-			continue;
-		}
-		const extendsValue = JSON.parse(readFileSync(tsconfigPath, "utf8")).extends;
-		if (typeof extendsValue !== "string" || path.resolve(memberDir, extendsValue) !== rootBaseConfig) {
-			violations.push(`${member}: tsconfig.json must extend the root tsconfig.base.json (got ${JSON.stringify(extendsValue)})`);
-		}
+	const tsconfigPath = path.join(memberDir, "tsconfig.json");
+	if (!existsSync(tsconfigPath)) return [...violations, `${member}: tsconfig.json is missing`];
+	const extendsValue = JSON.parse(readFileSync(tsconfigPath, "utf8")).extends;
+	if (typeof extendsValue !== "string" || path.resolve(memberDir, extendsValue) !== rootBaseConfig) {
+		violations.push(`${member}: tsconfig.json must extend the root tsconfig.base.json (got ${JSON.stringify(extendsValue)})`);
 	}
+	return violations;
+}
+
+test("every workspace member declares lint, test, and (for TypeScript) typecheck against the root base config", () => {
+	const rootManifest = JSON.parse(readFileSync(path.join(repoRoot, "package.json"), "utf8"));
+	const violations = listWorkspaceMembers(rootManifest).flatMap(violationsFor);
 
 	expect(violations.join("\n")).toBe("");
 });

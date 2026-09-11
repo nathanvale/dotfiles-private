@@ -7,7 +7,7 @@
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 
-export const BIOME_EXTENSIONS = [
+const BIOME_EXTENSIONS = [
 	'.ts',
 	'.tsx',
 	'.js',
