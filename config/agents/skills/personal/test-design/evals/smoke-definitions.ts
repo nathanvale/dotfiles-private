@@ -13,7 +13,7 @@ export type JsonSchema = {
 	additionalProperties: boolean;
 };
 
-export type ExpectedResult = Record<string, string | boolean>;
+type ExpectedResult = Record<string, string | boolean>;
 
 export type SmokeTestDefinition = {
 	id: string;

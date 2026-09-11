@@ -74,7 +74,7 @@ export function isUiChrome(trimmed: string): boolean {
 }
 
 /** A "preview by Author" header line. */
-export function isPreviewHeader(line: string): boolean {
+function isPreviewHeader(line: string): boolean {
 	return (
 		/ by [A-Z][a-z]+ [A-Z][a-z]+$/.test(line) &&
 		!line.startsWith('Begin Reference')
