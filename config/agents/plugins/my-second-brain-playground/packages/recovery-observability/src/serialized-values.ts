@@ -285,7 +285,7 @@ function validLifecycleValues(input: Record<string, unknown>): boolean {
 
 export function validateLifecycleRecord(
 	input: unknown,
-	options: { readonly knownSecretValues?: readonly string[] } = {},
+	options: { readonly knownSecretValues?: readonly string[] | undefined } = {},
 ): LifecycleValidationResult {
 	if (!isObject(input)) return { accepted: false, refusal: "invalid-record" }
 	if (!hasOnlyKeys(input, recordKeys)) return { accepted: false, refusal: "unknown-field" }
@@ -318,7 +318,7 @@ export function projectDiagnosticProperties(input: Readonly<Record<string, unkno
 
 export function validateDiagnosticTraceRecord(
 	input: unknown,
-	options: { readonly knownSecretValues?: readonly string[] } = {},
+	options: { readonly knownSecretValues?: readonly string[] | undefined } = {},
 ): input is DiagnosticTraceRecord {
 	if (!isObject(input) || !hasOnlyKeys(input, diagnosticKeys)) return false
 	if (

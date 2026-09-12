@@ -54,8 +54,8 @@ export function createRecoveryDiagnosticAdapter(options: {
 	readonly writeDiagnostic: (line: string) => void
 	readonly retainLifecycle: (record: unknown) => TraceAcceptResult
 	readonly disposeOutput?: () => void
-	readonly mode?: DiagnosticMode
-	readonly knownSecretValues?: readonly string[]
+	readonly mode?: DiagnosticMode | undefined
+	readonly knownSecretValues?: readonly string[] | undefined
 }): RecoveryDiagnosticAdapter {
 	const mode = options.mode ?? "default"
 	const secrets = options.knownSecretValues ?? []

@@ -535,7 +535,7 @@ function selectTraceRecords(records, filter) {
     if (parent !== undefined)
       selected.add(parent);
   }
-  return records.filter((record) => selected.has(record));
+  return records.filter((record) => record.record_type === "lifecycle" && selected.has(record));
 }
 function queryTraces(options = {}) {
   const root = traceRoot(options.stateHome);

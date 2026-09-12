@@ -23,9 +23,9 @@ export interface RecoveryObservability {
 
 export function openRecoveryObservability(options: {
 	readonly invocationIdentity: string
-	readonly stateHome?: string
-	readonly mode?: DiagnosticMode
-	readonly knownSecretValues?: readonly string[]
+	readonly stateHome?: string | undefined
+	readonly mode?: DiagnosticMode | undefined
+	readonly knownSecretValues?: readonly string[] | undefined
 }): RecoveryObservability {
 	const store = createInvocationTraceStore({
 		invocationIdentity: options.invocationIdentity,
@@ -52,11 +52,11 @@ export function openRecoveryObservability(options: {
 	}
 }
 
-export function viewRecoveryTraces(options: { readonly stateHome?: string; readonly filter?: TraceFilter } = {}): TraceQueryResult {
+export function viewRecoveryTraces(options: { readonly stateHome?: string | undefined; readonly filter?: TraceFilter } = {}): TraceQueryResult {
 	return queryTraces(options)
 }
 
-export function cleanupRecoveryTraces(options: { readonly stateHome?: string } = {}): TraceCleanupResult {
+export function cleanupRecoveryTraces(options: { readonly stateHome?: string | undefined } = {}): TraceCleanupResult {
 	return cleanupTraces(options)
 }
 

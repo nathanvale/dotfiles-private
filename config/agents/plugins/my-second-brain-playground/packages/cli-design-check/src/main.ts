@@ -19,22 +19,23 @@ const valueOptions = new Set(["--cwd", "--command", "--success-args", "--missing
 interface ParsedOptions {
 	help: boolean
 	json: boolean
-	cwd?: string
-	command?: string
-	successArgs?: string
-	missingArgs?: string
-	effectArgs?: string
-	secretArgs?: string
-	secretMarker?: string
-	timeoutMs?: string
+	cwd?: string | undefined
+	command?: string | undefined
+	successArgs?: string | undefined
+	missingArgs?: string | undefined
+	effectArgs?: string | undefined
+	secretArgs?: string | undefined
+	secretMarker?: string | undefined
+	timeoutMs?: string | undefined
 }
 
 type Resolved = { kind: "help" } | { kind: "run"; json: boolean; options: MatrixOptions }
 
 function hasJsonFlag(args: readonly string[]): boolean {
 	for (let index = 0; index < args.length; index += 1) {
-		if (args[index] === "--json") return true
-		if (valueOptions.has(args[index])) index += 1
+		const token = args[index]
+		if (token === "--json") return true
+		if (token !== undefined && valueOptions.has(token)) index += 1
 	}
 	return false
 }

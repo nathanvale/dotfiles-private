@@ -121,8 +121,8 @@ function safeFileName(invocationIdentity: string): string {
 
 export function createInvocationTraceStore(options: {
 	readonly invocationIdentity: string
-	readonly stateHome?: string
-	readonly knownSecretValues?: readonly string[]
+	readonly stateHome?: string | undefined
+	readonly knownSecretValues?: readonly string[] | undefined
 }): InvocationTraceStore {
 	let descriptor: number | null = null
 	let filePath: string | null = null
@@ -372,10 +372,10 @@ function selectTraceRecords(records: StoredTraceRecord[], filter: TraceFilter): 
 		const parent = record.parent_record_identity === undefined ? undefined : ancestors.get(record.parent_record_identity)
 		if (parent !== undefined) selected.add(parent)
 	}
-	return records.filter((record) => selected.has(record))
+	return records.filter((record) => record.record_type === "lifecycle" && selected.has(record))
 }
 
-export function queryTraces(options: { readonly stateHome?: string; readonly filter?: TraceFilter } = {}): TraceQueryResult {
+export function queryTraces(options: { readonly stateHome?: string | undefined; readonly filter?: TraceFilter } = {}): TraceQueryResult {
 	const root = traceRoot(options.stateHome)
 	if (!traceRootIsAvailable(root)) return unavailableTraceResult(root)
 	const filter = options.filter ?? {}
@@ -390,7 +390,7 @@ export function queryTraces(options: { readonly stateHome?: string; readonly fil
 }
 
 export function cleanupTraces(options: {
-	readonly stateHome?: string
+	readonly stateHome?: string | undefined
 	readonly nowMs?: number
 	readonly maxAgeMs?: number
 	readonly maxTotalBytes?: number

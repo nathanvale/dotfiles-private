@@ -13,7 +13,7 @@ export interface ScenarioSpec {
 	scenario: string
 	argv: string[]
 	expectedExit: number
-	secretMarker?: string
+	secretMarker?: string | undefined
 }
 
 export interface ProcessResult {
@@ -27,9 +27,9 @@ export interface ProcessResult {
 export interface ScenarioOptions {
 	successArgs: string[]
 	missingArgs: string[]
-	effectArgs?: string[]
-	secretArgs?: string[]
-	secretMarker?: string
+	effectArgs?: string[] | undefined
+	secretArgs?: string[] | undefined
+	secretMarker?: string | undefined
 }
 
 interface Observation {

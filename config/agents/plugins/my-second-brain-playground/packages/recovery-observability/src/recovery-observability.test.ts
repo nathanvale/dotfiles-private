@@ -437,12 +437,12 @@ describe("public trace command and scoped cleanup", () => {
 		for (const [invocation, journey, worker, task] of [
 			["invocation-1", "journey-1", "worker-1", "task-1"],
 			["invocation-2", "journey-2", "worker-2", "task-2"],
-		]) {
+		] as const) {
 			const store = createInvocationTraceStore({ invocationIdentity: invocation, stateHome })
 			store.accept(record({ invocation_identity: invocation, journey_identity: journey, observed_worker_identity: worker, ledger_task_identity: task }))
 			store.dispose()
 		}
-		for (const [flag, value] of [["--journey", "journey-2"], ["--invocation", "invocation-2"], ["--worker", "worker-2"], ["--task", "task-2"]]) {
+		for (const [flag, value] of [["--journey", "journey-2"], ["--invocation", "invocation-2"], ["--worker", "worker-2"], ["--task", "task-2"]] as const) {
 			const result = runCli(["view", flag, value], stateHome)
 			expect(result.exitCode).toBe(0)
 			expect(result.stderr).toBe("")

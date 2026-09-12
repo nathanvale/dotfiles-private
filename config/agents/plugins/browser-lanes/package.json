@@ -1,0 +1,9 @@
+{
+	"name": "browser-lanes-plugin",
+	"private": true,
+	"type": "module",
+	"scripts": {
+		"lint": "biome check --diagnostic-level=error .",
+		"test": "bun test tests"
+	}
+}

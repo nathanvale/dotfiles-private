@@ -227,7 +227,10 @@ export async function runRecoveryObserver(arguments_: readonly string[]): Promis
 	}
 	const invocationRecordIdentity = acceptObserverRecord("invocation", "started")
 
-	let child: ReturnType<typeof Bun.spawn>
+	// Explicit type arguments keep stdout/stderr typed as the "pipe" ReadableStream
+	// this call actually requests; the bare ReturnType<typeof Bun.spawn> erases to
+	// each parameter's full constraint instead of the literals passed below.
+	let child: ReturnType<typeof Bun.spawn<Bun.SpawnOptions.Writable, "pipe", "pipe">>
 	try {
 		child = Bun.spawn(
 			[
@@ -246,7 +249,9 @@ export async function runRecoveryObserver(arguments_: readonly string[]): Promis
 					MSB_RECOVERY_OBSERVATION_JOURNEY_IDENTITY: journeyIdentity,
 					MSB_RECOVERY_OBSERVATION_PARENT_RECORD_IDENTITY: invocationRecordIdentity,
 				},
-				stdio: [process.stdin, "pipe", "pipe", "pipe"],
+				// process.stdin is a Node ReadStream; Bun accepts it as a stdin source at
+				// runtime even though its stdio[0] type declares only Bun-native shapes.
+				stdio: [process.stdin as unknown as Bun.SpawnOptions.Writable, "pipe", "pipe", "pipe"],
 			},
 		)
 	} catch {

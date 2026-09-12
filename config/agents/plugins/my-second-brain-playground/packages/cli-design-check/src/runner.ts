@@ -1,6 +1,7 @@
 import { type ChildProcess, spawn } from "node:child_process"
 import { createHash } from "node:crypto"
-import { type Dirent, readdir } from "node:fs/promises"
+import type { Dirent } from "node:fs"
+import { readdir } from "node:fs/promises"
 import { join, relative } from "node:path"
 import type { Readable } from "node:stream"
 import { FINDINGS } from "./contract.ts"
@@ -137,7 +138,8 @@ async function exitOrKill(child: ChildProcess, timeoutMs: number): Promise<ExitO
 
 async function spawnScenario(command: string[], spec: ScenarioSpec, cwd: string, env: Record<string, string>, timeoutMs: number): Promise<ProcessResult> {
 	const started = process.hrtime.bigint()
-	const child = spawn(command[0], [...command.slice(1), ...spec.argv], { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true })
+	// command is validated non-empty by matrixOptions() before any scenario runs.
+	const child = spawn(command[0] as string, [...command.slice(1), ...spec.argv], { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true })
 	const stdout = collectStream(child.stdout as Readable)
 	const stderr = collectStream(child.stderr as Readable)
 	const outcome = await exitOrKill(child, timeoutMs)

@@ -1060,7 +1060,9 @@ test("capture enabled, disabled, and unavailable preserve bind, recover, hook, a
 	const current = fixture({ writeCheckpoint: false })
 	const registerBefore = readFileSync(current.register).toString("base64")
 	const tracePath = join(current.state, "my-second-brain-playground", "recovery-traces")
-	const rows: Record<string, Record<string, unknown>> = {}
+	type Mode = "disabled" | "enabled" | "unavailable"
+	// Every mode is written in the loop below before any mode is read.
+	const rows = {} as Record<Mode, Record<string, unknown>>
 
 	for (const mode of ["disabled", "enabled", "unavailable"] as const) {
 		rmSync(current.checkpointPath, { force: true })

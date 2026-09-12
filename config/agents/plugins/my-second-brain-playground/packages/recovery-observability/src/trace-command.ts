@@ -22,7 +22,7 @@ const VIEW_FILTERS: ReadonlyMap<string, string> = new Map([
 	["--task", "ledger_task_identity"],
 ])
 
-function parse(args: readonly string[]): { command: Command; stateHome?: string; filter: Record<string, string> } | null {
+function parse(args: readonly string[]): { command: Command; stateHome?: string | undefined; filter: Record<string, string> } | null {
 	const command = args[0]
 	if (command !== "view" && command !== "cleanup" && command !== "identity") return null
 	const filter: Record<string, string> = {}
@@ -84,7 +84,7 @@ function runIdentityCommand(args: readonly string[]): number {
 	}
 }
 
-type ParsedTraceCommand = { command: Command; stateHome?: string; filter: Record<string, string> }
+type ParsedTraceCommand = { command: Command; stateHome?: string | undefined; filter: Record<string, string> }
 
 function recordCleanupObservation(
 	observer: ReturnType<typeof openRecoveryObservability> | undefined,

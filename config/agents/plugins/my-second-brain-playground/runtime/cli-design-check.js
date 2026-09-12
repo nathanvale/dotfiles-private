@@ -570,9 +570,10 @@ var DEFAULT_TIMEOUT_MS = 15000;
 var valueOptions = new Set(["--cwd", "--command", "--success-args", "--missing-args", "--effect-args", "--secret-args", "--secret-marker", "--timeout-ms"]);
 function hasJsonFlag(args) {
   for (let index = 0;index < args.length; index += 1) {
-    if (args[index] === "--json")
+    const token = args[index];
+    if (token === "--json")
       return true;
-    if (valueOptions.has(args[index]))
+    if (token !== undefined && valueOptions.has(token))
       index += 1;
   }
   return false;

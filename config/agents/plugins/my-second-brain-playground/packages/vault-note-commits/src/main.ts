@@ -44,7 +44,7 @@ interface Result {
 	retrySafe: boolean
 	nextAction: string
 	worktree?: string
-	commit?: string
+	commit?: string | undefined
 	paths?: string[]
 	receipt?: string
 	originalCode?: "INTEGRATED" | "NO_CHANGES"
