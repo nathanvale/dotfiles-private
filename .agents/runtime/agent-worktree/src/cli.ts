@@ -134,7 +134,7 @@ export function createDefaultRuntime(
 	};
 }
 
-type CommandResult =
+export type CommandResult =
 	| {
 			ok: true;
 			data: Record<string, unknown>;

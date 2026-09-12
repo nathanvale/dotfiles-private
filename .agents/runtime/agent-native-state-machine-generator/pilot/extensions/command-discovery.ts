@@ -10,7 +10,7 @@
 import { projectCommandDiscoveryTree } from '@side-quest/cli-command-facade'
 import { vaultGitReimaginedCommandContracts } from '../generated/src/command-surface-contract.ts'
 
-export type VaultGitReimaginedCommand =
+type VaultGitReimaginedCommand =
 	keyof typeof vaultGitReimaginedCommandContracts
 
 const contractEntries = (

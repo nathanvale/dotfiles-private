@@ -38,21 +38,31 @@ Full-repository zero proof:
 node_modules/.bin/fallow audit --format json --quiet --type-aware --type-aware-require best-effort --gate all --base "$(git rev-list --max-parents=0 HEAD | tail -1)"
 ```
 
-### Per-package measurement (non-gating)
+### Per-package zero proof
+
+The root audit never traverses `.agents/**` (dot-directory). Run each package
+rooted instead; this gates on the same terms as the full-repository proof:
 
 ```sh
 node_modules/.bin/fallow audit --root .agents/runtime/<package> --config .fallowrc.json --format json --quiet --type-aware --type-aware-require best-effort --gate all --base "$(git rev-list --max-parents=0 HEAD | tail -1)"
 ```
 
-This measures a package the root audit cannot see; root-relative `ignorePatterns`
-do not apply inside it, so record its findings without gating them until the
-follow-up lands.
+Or run all five packages in one pass with `tooling/fallow-runtime-audit.ts`,
+which forwards any extra flags to each rooted `fallow audit` call:
 
-Expect the repository baseline to have zero dead-code and zero complexity
-findings with `verdict: pass` or `verdict: warn`. Treat `verdict: fail` as a
-regression. Report duplication clone groups as warn-tier findings; they are not
-gated. Hold this zero-proof result as the repository baseline from this change
-onward; do not save a count baseline.
+```sh
+bun run quality:fallow:runtime -- --gate all --base "$(git rev-list --max-parents=0 HEAD | tail -1)"
+```
+
+Expect the repository baseline and every package to have zero dead-code and
+zero complexity findings with `verdict: pass` or `verdict: warn`. Treat
+`verdict: fail` as a regression. Report duplication clone groups as warn-tier
+findings; they are not gated. Hold this zero-proof result as the repository
+baseline from this change onward; do not save a count baseline.
+
+Dead-code and complexity are both zero across all five `.agents/runtime/*`
+packages as of 2026-09-12. `quality:fallow:runtime` runs inside `bun run
+check`, so this gate is enforced on every check, not only a manual run.
 
 ## Configuration
 
@@ -61,7 +71,9 @@ onward; do not save a count baseline.
 - `.fallowrc.json` `ignorePatterns` owns generated bundles and vendored trees.
 - `.fallowrc.json` `health.maxCrap` stays `0` because there is no first-party path to real coverage. Bun 1.4 `bun test --coverage` emits `text` and `lcov` only; Fallow `health.coverage` reads Istanbul `coverage-final.json` only. Wire an lcov-to-Istanbul conversion and merge across 13 workspace test runs before restoring CRAP enforcement. Keep `health.maxCrap` at `0` until that path exists; the schema documents `0` as "disable CRAP enforcement entirely".
 - `.fallowrc.json` `ignoreDependencies` holds `vscode` because the VS Code extension host supplies it and unlisted-dependency findings have no inline suppression path. Keep `@logtape/logtape` and `@logtape/redaction` because the playground's nested, independently locked recovery-observability package is never registered by root workspace discovery. Fallow `workspaces.patterns` was tested with the playground root and with `packages/*` on 2026-09-12; `fallow list --workspaces` reported the same 13 workspaces with no diagnostic. Keep the playground `entry` glob because Fallow does not read `bun build <path>` script arguments as entries. Registering the playground under root `workspaces` remains untested and would change its independent lock ownership.
-- Keep `.agents/**` in `.fallowrc.json` `ignorePatterns`: Fallow never traverses dot-prefixed directories and no config adds one. The five `.agents/runtime/*` packages (140 files, 2,340 functions, measured 2026-09-12) are unmeasured by the root audit. Their own check contract is Biome, tsc, and bun test, which measure neither dead code nor complexity. Rooted runs with the repo rc (`fallow audit --root <pkg> --config .fallowrc.json`) found 23 dead-code and 40 complexity findings on 2026-09-12. A follow-up owns measurement and repair. Until it lands, the zero baseline covers 149 of 289 files. Root-relative `ignorePatterns` do not apply inside a rooted run.
+- Keep `.agents/**` in `.fallowrc.json` `ignorePatterns`: Fallow never traverses dot-prefixed directories. The five `.agents/runtime/*` packages are invisible to the root audit; `tooling/fallow-runtime-audit.ts` (`bun run quality:fallow:runtime`) runs each one rooted instead, per the Per-package zero proof above. Their own check contract (Biome, tsc, bun test) measures neither dead code nor complexity, so the rooted run is the only gate for those two categories in this tree.
+- A rooted run resolves `.fallowrc.json` `entry` globs and `framework[].detection`/`usedExports` patterns relative to `--root`, not the repo root. Declare a package-local runtime root (a manually invoked dev script, a tsc-program-root type-test file) as an `entry` glob in the shared root `.fallowrc.json`; it is a no-op outside that package's own rooted run.
+- Use `framework[].usedExports` for a symbol in a generator-emitted file that is guarded by its own drift check (regenerating the file must reproduce the committed output byte-for-byte). Gate the plugin on `detection: { type: "fileExists", pattern: <a file the generator always produces> }` so it activates only inside that package's rooted run, then list the exact export names under `usedExports`. A value export may additionally be read only by dynamic property access (`module[name]`), which a type export never is (types are erased at runtime); either reason alone justifies the declaration, since un-exporting desyncs the file from its drift check regardless.
 - `.fallowrc.json` `audit.cacheMaxAgeDays` is `7` because worker worktrees each leave a base-snapshot cache under the temp directory (37 caches, 412 MB on 2026-09-12); `fallow audit-cache prune --dry-run` reports them.
 
 ## Decisions

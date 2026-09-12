@@ -1,4 +1,3 @@
-// fallow-ignore-file unused-file
 import { mkdtemp, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";

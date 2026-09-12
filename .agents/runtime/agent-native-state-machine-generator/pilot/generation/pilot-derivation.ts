@@ -32,7 +32,7 @@ export const PILOT_DERIVATION_OPTIONS: DerivationOptions = {
 }
 
 /** Declared path of the generated Projection Composer selection module. */
-export const PILOT_COMPOSER_PATH = 'src/projection-composer.ts'
+const PILOT_COMPOSER_PATH = 'src/projection-composer.ts'
 
 export const PILOT_EMITTERS: readonly ArtifactEmitter[] = [
 	{

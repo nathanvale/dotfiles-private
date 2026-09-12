@@ -94,17 +94,23 @@ Run:
 node_modules/.bin/fallow audit --format json --quiet --type-aware --type-aware-require best-effort --gate all --base "$(git rev-list --max-parents=0 HEAD | tail -1)"
 ```
 
-The following rooted per-package command is additional context and non-gating
-measurement evidence. It is not part of the gating confirmation command.
+Run the rooted per-package proof too; it gates on the same terms as the root
+audit, not as separate non-gating context:
 
 ```sh
-node_modules/.bin/fallow audit --root .agents/runtime/<package> --config .fallowrc.json --format json --quiet --type-aware --type-aware-require best-effort --gate all --base "$(git rev-list --max-parents=0 HEAD | tail -1)"
+bun run quality:fallow:runtime -- --gate all --base "$(git rev-list --max-parents=0 HEAD | tail -1)"
 ```
 
-Confirm JSON `verdict` is `pass` or `warn` with zero dead-code and zero
-complexity findings; treat `fail` as a regression. Confirm `bun run check` is
-green. Treat the 20 warn-tier duplication clone groups as known residue, not a
+Confirm every JSON `verdict` (root and each of the five `.agents/runtime/*`
+packages) is `pass` or `warn` with zero dead-code and zero complexity
+findings; treat `fail` as a regression. Confirm `bun run check` is green.
+Treat the 20 warn-tier duplication clone groups as known residue, not a
 blocking condition.
+
+Dead-code and complexity repair for all five packages landed 2026-09-12
+(verified zero on a rooted audit each). `quality:fallow:runtime` runs inside
+`bun run check`, so this confirmation holds on every check, not only a
+manual run.
 
 ## References
 

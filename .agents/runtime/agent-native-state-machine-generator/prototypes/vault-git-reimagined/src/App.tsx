@@ -338,14 +338,15 @@ export function App() {
 					<ol className="guided-steps">
 						{activeWalkthrough.steps.map((step, index) => (
 							<li
+								className="guided-step"
 								data-status={
 									index < stepIndex ? "complete" : index === stepIndex ? "current" : "later"
 								}
 								// biome-ignore lint/suspicious/noArrayIndexKey: steps are a static, never-reordered script and one action may legitimately repeat within a walkthrough (fail-closed runs attemptContinuation twice), so position is the step's identity
 								key={`${activeWalkthrough.id}-${index}-${step.action.type}`}
 							>
-								<button onClick={() => runGuidedStep(step, index)} type="button">
-									<span>{index + 1}</span>
+								<button className="guided-step__trigger" onClick={() => runGuidedStep(step, index)} type="button">
+									<span className="guided-step__marker">{index + 1}</span>
 									{step.label}
 								</button>
 							</li>
@@ -361,7 +362,9 @@ export function App() {
 				<div className="section-heading">
 					<p className="eyebrow">Nothing is disabled</p>
 					<h2 id="free-play-heading">Free play</h2>
-					<p>Push events in any order. Invalid actions stay available so the refusal is visible.</p>
+					<p className="section-description">
+						Push events in any order. Invalid actions stay available so the refusal is visible.
+					</p>
 				</div>
 				<div className="button-grid">
 					{freePlayActions.map((definition) => (

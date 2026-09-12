@@ -203,7 +203,7 @@ function invalidUsageOutcome(
 	}
 }
 
-export function main(argv: readonly string[]): number {
+function main(argv: readonly string[]): number {
 	const runId = `vault-git-reimagined-${crypto.randomUUID()}`
 	const startedAt = performance.now()
 	const emit = (outcome: PilotOutcome): number => {

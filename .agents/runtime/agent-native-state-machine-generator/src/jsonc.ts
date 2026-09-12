@@ -12,7 +12,7 @@ import {
 	type SourceLocation,
 } from './diagnostics.ts'
 
-export type JsonPrimitive = string | number | boolean | null
+type JsonPrimitive = string | number | boolean | null
 
 export type JsoncNode =
 	| {

@@ -47,7 +47,7 @@ export type AgentHint = {
 	docs_url?: string;
 };
 
-type AgentHintActionByRecoverability = {
+export type AgentHintActionByRecoverability = {
 	none: "contact_support" | "open_docs";
 	retry: "retry";
 	change_input: "change_input" | "open_docs";

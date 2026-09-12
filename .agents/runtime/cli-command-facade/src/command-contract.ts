@@ -100,9 +100,9 @@ export type CommandFacadeResultContract = {
 	schema_version?: string | number;
 };
 
-type CommandResultMetadataKey = "contract_id" | "schema_version";
+export type CommandResultMetadataKey = "contract_id" | "schema_version";
 
-type CommandResultInvalidPayloadBranch<TData extends object> =
+export type CommandResultInvalidPayloadBranch<TData extends object> =
 	TData extends (...args: never[]) => unknown
 		? true
 		: TData extends readonly unknown[]
@@ -132,7 +132,7 @@ export type CommandResultPayload<TData extends object> = true extends (
 	? never
 	: TData;
 
-type CommandResultMetadata<
+export type CommandResultMetadata<
 	TResultContract extends CommandFacadeResultContract = CommandFacadeResultContract,
 > = {
 	contract_id: TResultContract["id"];
@@ -366,7 +366,7 @@ export type CommandDiscoveryTree<
 	commands: Readonly<Partial<Record<TCommand, TCommandEntry>>>;
 };
 
-type CommandDiscoveryCoreKey = keyof CommandDiscoveryCommand;
+export type CommandDiscoveryCoreKey = keyof CommandDiscoveryCommand;
 
 export type CommandDiscoveryAugment = object & {
 	[K in CommandDiscoveryCoreKey]?: never;
