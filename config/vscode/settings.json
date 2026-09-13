@@ -277,5 +277,6 @@
 	"workbench.activityBar.compact": true,
 	"workbench.secondarySideBar.showLabels": false,
 	"editor.accessibilitySupport": "on",
-	"diffEditor.codeLens": true
+	"diffEditor.codeLens": true,
+	"security.workspace.trust.untrustedFiles": "open"
 }
