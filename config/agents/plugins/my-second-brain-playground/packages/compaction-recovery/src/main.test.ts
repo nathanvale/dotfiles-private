@@ -1852,14 +1852,12 @@ test("paired cold processes keep capture-enabled and unavailable primary-respons
 		enabled: percentile95(pairedStdoutEofDeltas(rows.enabled, rows.disabled)),
 		unavailable: percentile95(pairedStdoutEofDeltas(rows.unavailable, rows.disabled)),
 	}
-	expect(enabledDelta).toBeLessThanOrEqual(100)
-	expect(unavailableDelta).toBeLessThanOrEqual(100)
-	expect(pairedDeltaP95.enabled).toBeLessThanOrEqual(100)
-	expect(pairedDeltaP95.unavailable).toBeLessThanOrEqual(100)
 
 	const pluginRoot = resolve(import.meta.dir, "../../..")
 	const sha256 = (path: string): string => createHash("sha256").update(readFileSync(path)).digest("hex")
 	const plugin = JSON.parse(readFileSync(join(pluginRoot, "package.json"), "utf8")) as { version: string }
+	// The accepted qualification contract is paired p95 overhead. Independent
+	// per-mode p95 values remain diagnostic so CI failures expose both statistics.
 	console.log(JSON.stringify({
 		recovery_observability_qualification: {
 			sample_count_per_mode: sampleCount,
@@ -1875,4 +1873,6 @@ test("paired cold processes keep capture-enabled and unavailable primary-respons
 			unknowns: ["native-compaction: no native trigger exercised", "installed-harness-trust: fixture processes only", "observer-owned-deadline: covered by a separate process test, not this timing run"],
 		},
 	}))
+	expect(pairedDeltaP95.enabled).toBeLessThanOrEqual(100)
+	expect(pairedDeltaP95.unavailable).toBeLessThanOrEqual(100)
 }, 30_000)

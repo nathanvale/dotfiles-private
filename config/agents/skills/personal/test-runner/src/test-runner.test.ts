@@ -52,6 +52,122 @@ function parseEnvelope(result: { stdout: string }): any {
 	return JSON.parse(result.stdout);
 }
 
+type PublicRunnerEnvironment = "ci" | "local";
+
+function publicRunnerEnvironment(mode: PublicRunnerEnvironment) {
+	const environment: Record<string, string | undefined> = {
+		...process.env,
+		FORCE_COLOR: "0",
+	};
+
+	for (const key of Object.keys(environment)) {
+		if (key === "CLAUDECODE" || key.startsWith("CLAUDE_CODE_")) {
+			delete environment[key];
+		}
+	}
+
+	if (mode === "ci") {
+		environment.CI = "true";
+		environment.GITHUB_ACTIONS = "true";
+	} else {
+		delete environment.CI;
+		delete environment.GITHUB_ACTIONS;
+	}
+
+	return environment;
+}
+
+async function runPublicRunnerWithEnvironment(
+	argv: readonly string[],
+	mode: PublicRunnerEnvironment,
+) {
+	const proc = Bun.spawn(
+		["bun", "run", join(scriptsDir, "test-runner.ts"), ...argv],
+		{
+			cwd: scriptsDir,
+			env: publicRunnerEnvironment(mode),
+			stdout: "pipe",
+			stderr: "pipe",
+		},
+	);
+	const [stdout, stderr, exitCode] = await Promise.all([
+		new Response(proc.stdout).text(),
+		new Response(proc.stderr).text(),
+		proc.exited,
+	]);
+	return { exitCode, stdout, stderr };
+}
+
+const CI_PARITY_FIXTURES = [
+	"fail",
+	"multi-fail",
+	"three-plus-fail",
+	"top-level-mixed",
+	"deep-nested",
+	"string-newlines",
+	"runtime-error",
+	"thrown-error",
+	"timeout",
+] as const;
+
+const ACTIONABLE_FAILURE_FIELDS = [
+	"file",
+	"line",
+	"navigation_target",
+	"navigation_context",
+	"test_name",
+	"message",
+	"assertion_signal",
+	"expected",
+	"received",
+	"context",
+] as const;
+
+function fixtureArguments(fixture: (typeof CI_PARITY_FIXTURES)[number]) {
+	return fixture === "timeout"
+		? [`fixtures/${fixture}.test.ts`, "--timeout", "50"]
+		: [`fixtures/${fixture}.test.ts`];
+}
+
+function publicRunnerArguments(
+	runId: string,
+	fixture: (typeof CI_PARITY_FIXTURES)[number],
+) {
+	return [
+		"--cwd",
+		scriptsDir,
+		"--json",
+		"--debug-output",
+		"--run-id",
+		runId,
+		"--",
+		...fixtureArguments(fixture),
+	];
+}
+
+function actionableFailureRecords(envelope: ReturnType<typeof parseEnvelope>) {
+	return envelope.data.failures.map((failure: Record<string, unknown>) =>
+		Object.fromEntries(
+			ACTIONABLE_FAILURE_FIELDS.map((field) => {
+				const value = failure[field];
+				if (field !== "context" || !Array.isArray(value)) {
+					return [field, value];
+				}
+				// Bun measures each invocation separately; keep context while
+				// canonicalising only its trailing reporter duration.
+				return [
+					field,
+					value.map((line) =>
+						typeof line === "string"
+							? line.replace(/\s+\[\d+(?:\.\d+)?ms\]$/, " [<duration>ms]")
+							: line,
+					),
+				];
+			}),
+		),
+	);
+}
+
 function shortRunKey(value: string): string {
 	let hash = 2166136261;
 	for (let index = 0; index < value.length; index += 1) {
@@ -812,6 +928,72 @@ describe("test runner runtime", () => {
 		expect(envelope.data.failures[0].context.join("\n")).toContain("Expected:");
 		expect(envelope.continuation.next_action_id).toBe("lookup_failure_detail");
 	});
+
+	test("CI Bun group annotations do not become failure paths", async () => {
+		const result = await runPublicRunnerWithEnvironment(
+			[
+				"--cwd",
+				scriptsDir,
+				"--json",
+				"--debug-output",
+				"--run-id",
+				"ci-grouped-runner",
+				"--",
+				"fixtures/fail.test.ts",
+			],
+			"ci",
+		);
+
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toBe("");
+		const envelope = parseEnvelope(result);
+		expect(envelope.data.failures[0].file).toBe("fixtures/fail.test.ts");
+		expect(envelope.data.failures[0].navigation_target).toBe(
+			"fixtures/fail.test.ts:9",
+		);
+		expect(envelope.data.debug.stderr_sample).toContain(
+			"::group::fixtures/fail.test.ts:",
+		);
+	});
+
+	test(
+		"CI and local public runner records stay equivalent across failure fixtures",
+		async () => {
+			for (const fixture of CI_PARITY_FIXTURES) {
+				const [ciResult, localResult] = await Promise.all([
+					runPublicRunnerWithEnvironment(
+						publicRunnerArguments(`ci-parity-${fixture}`, fixture),
+						"ci",
+					),
+					runPublicRunnerWithEnvironment(
+						publicRunnerArguments(`local-parity-${fixture}`, fixture),
+						"local",
+					),
+				]);
+
+				expect(ciResult.exitCode).toBe(1);
+				expect(localResult.exitCode).toBe(1);
+				expect(ciResult.stderr).toBe("");
+				expect(localResult.stderr).toBe("");
+
+				const ciEnvelope = parseEnvelope(ciResult);
+				const localEnvelope = parseEnvelope(localResult);
+				expect(ciEnvelope.error.code).toBe(localEnvelope.error.code);
+				expect(ciEnvelope.data.summary).toEqual(localEnvelope.data.summary);
+				expect(actionableFailureRecords(ciEnvelope)).toEqual(
+					actionableFailureRecords(localEnvelope),
+				);
+				expect(ciEnvelope.data.debug.stderr_sample).toContain("::group::");
+				if (fixture === "timeout" || fixture === "string-newlines") {
+					expect(ciEnvelope.data.debug.stderr_sample).toContain("::error ");
+				}
+				expect(localEnvelope.data.debug.stderr_sample).not.toContain(
+					"::group::",
+				);
+			}
+		},
+		BROAD_BENCHMARK_TIMEOUT_MS,
+	);
 
 	test("repair mode emits hot-context packet with lookup handle", async () => {
 		const result = await runForTest([

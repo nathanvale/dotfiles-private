@@ -1292,11 +1292,20 @@ const ANSI_SGR_PATTERN =
 	// biome-ignore lint/suspicious/noControlCharactersInRegex: the SGR introducer is the sequence being removed.
 	/\u001b\[[0-9;]*m/g;
 const COLOURED_FAIL_MARKER_PATTERN = /^\u2717 /gm;
+const GITHUB_GROUP_START_PATTERN = /^::group::/gm;
+const GITHUB_GROUP_END_PATTERN = /^::endgroup::(?:\r?\n|$)/gm;
+const GITHUB_ANNOTATION_PATTERN =
+	/^::(?:error|warning|notice)(?: [^\r\n]*?)?::[^\r\n]*(?:\r?\n|$)/gm;
 
 function normalizeBunOutput(output: string): string {
 	return output
 		.replace(ANSI_SGR_PATTERN, "")
-		.replace(COLOURED_FAIL_MARKER_PATTERN, "(fail) ");
+		.replace(COLOURED_FAIL_MARKER_PATTERN, "(fail) ")
+		// Bun emits GitHub workflow command markers around each file when CI is set.
+		// Keep the grouped file name while removing reporter-only metadata and boundary lines.
+		.replace(GITHUB_ANNOTATION_PATTERN, "")
+		.replace(GITHUB_GROUP_START_PATTERN, "")
+		.replace(GITHUB_GROUP_END_PATTERN, "");
 }
 
 function parseBunOutput(input: {

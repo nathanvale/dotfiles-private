@@ -39,6 +39,22 @@ grep -q '^phase_2_ai_rescue() {$' "$phase" ||
   fail 'extracted phase does not define its function'
 pass 'phase_2_ai_rescue is extracted from setup.sh'
 
+# The phase now publishes its readiness marker through the production atomic
+# state writer. Load the exact helper definitions beside the extracted phase,
+# and fail closed if a source refactor makes any dependency disappear.
+state_helpers="$TEST_ROOT/state-helpers.sh"
+{
+  sed -n '/^    state_file_is_safe() {$/,/^    }$/p' "$REPO_ROOT/setup.sh"
+  sed -n '/^    atomic_publish_file() {$/,/^    }$/p' "$REPO_ROOT/setup.sh"
+  sed -n '/^    atomic_write_state_text() {$/,/^    }$/p' "$REPO_ROOT/setup.sh"
+} | sed 's/^    //' >"$state_helpers"
+[[ -s "$state_helpers" ]] || fail 'could not extract Phase 2 state helpers from setup.sh'
+for helper in state_file_is_safe atomic_publish_file atomic_write_state_text; do
+  grep -q "^${helper}() {$" "$state_helpers" ||
+    fail "extracted state helpers do not define $helper"
+done
+pass 'Phase 2 loads production atomic state helpers from setup.sh'
+
 phase_home="$TEST_ROOT/phase-home"
 stub_bin="$TEST_ROOT/stub-bin"
 record_dir="$TEST_ROOT/records"
@@ -104,9 +120,10 @@ run_phase() {
       log() { printf "%s\n" "$1" >>"$RECORD_DIR/log"; }
       log_warn() { printf "%s\n" "$1" >>"$RECORD_DIR/log"; }
       log_phase() { :; }
+      source "$2"
       source "$1"
       phase_2_ai_rescue
-    ' _ "$phase"
+    ' _ "$phase" "$state_helpers"
 }
 
 refuse_brew() {

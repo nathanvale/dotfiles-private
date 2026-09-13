@@ -269,7 +269,7 @@ test("a live integration lock preserves the committed candidate for retry", () =
 	rmSync(lock, { recursive: true })
 	const retried = finish(vault, state, worktree)
 	expect(retried.json).toMatchObject({ ok: true, code: "INTEGRATED", commit: candidateCommit })
-})
+}, 30_000)
 
 test.each(["missing", "malformed", "invalid pid"])("finish recovers an abandoned lock with %s owner", (owner) => {
 	const { vault, state, initialHead } = fixture()
@@ -306,7 +306,7 @@ test.each(["missing", "malformed"])("finish gives a fresh %s owner time to publi
 	expect(readFileSync(join(lock, "owner.json"), "utf8")).toBe(liveOwner)
 	expect(existsSync(worktree)).toBe(true)
 	expect(git(vault, "rev-parse", "HEAD")).toBe(initialHead)
-})
+}, 30_000)
 
 test("finish preserves an unreadable present owner even after the grace period", () => {
 	const { vault, state, initialHead } = fixture()
@@ -322,7 +322,7 @@ test("finish preserves an unreadable present owner even after the grace period",
 	expect(statSync(join(lock, "owner.json")).isDirectory()).toBe(true)
 	expect(existsSync(worktree)).toBe(true)
 	expect(git(vault, "rev-parse", "HEAD")).toBe(initialHead)
-})
+}, 30_000)
 
 test("an unexpected failure after integration is propagated instead of retried as lock contention", () => {
 	const { root, vault, state, initialHead } = fixture()

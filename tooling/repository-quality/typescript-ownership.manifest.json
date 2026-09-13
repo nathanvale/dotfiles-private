@@ -1,0 +1,166 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "path": "config/agents/evaluation/src/grade.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "evaluation-grade-test",
+      "command": "bun test config/agents/evaluation/tests/grade.test.ts",
+      "source": "config/agents/evaluation/README.md:93"
+    },
+    {
+      "path": "config/agents/evaluation/tests/grade.test.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "evaluation-grade-test",
+      "command": "bun test config/agents/evaluation/tests/grade.test.ts",
+      "source": "config/agents/evaluation/README.md:93"
+    },
+    {
+      "path": "config/agents/skills/personal/ci-testbed/scripts/ci-repro.ts",
+      "owner": "unverified-runtime",
+      "qualification": "separate-qualification",
+      "qualification_name": "ci-testbed-reproduction",
+      "reason": "ci-repro creates a fresh worktree, installs dependencies, and runs a caller-supplied test; this slice records it for review without claiming that workflow as TypeScript proof."
+    },
+    {
+      "path": "config/agents/skills/personal/session-picker/scripts/archived-sessions.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "session-picker-archived-test-verified",
+      "command": "bun test config/agents/skills/personal/session-picker/scripts/archived-sessions.test.ts",
+      "source": "config/agents/skills/personal/session-picker/SKILL.md:116"
+    },
+    {
+      "path": "config/agents/skills/personal/session-picker/scripts/archived-sessions.test.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "session-picker-archived-test-verified",
+      "command": "bun test config/agents/skills/personal/session-picker/scripts/archived-sessions.test.ts",
+      "source": "config/agents/skills/personal/session-picker/SKILL.md:116"
+    },
+    {
+      "path": "config/agents/skills/personal/mcp-doctor/scripts/mcp-doctor.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "mcp-doctor-fixture-test-verified",
+      "command": "bun test config/agents/skills/personal/mcp-doctor/scripts/mcp-doctor.test.ts",
+      "source": "config/agents/skills/personal/mcp-doctor/scripts/mcp-doctor.test.ts"
+    },
+    {
+      "path": "bin/teams/lib/lines.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "teams-scraper-fixture-test",
+      "command": "bun test bin/test/teams-scraper.test.ts",
+      "source": "bin/test/teams-scraper.test.ts"
+    },
+    {
+      "path": "bin/teams/lib/message.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "teams-scraper-fixture-test",
+      "command": "bun test bin/test/teams-scraper.test.ts",
+      "source": "bin/test/teams-scraper.test.ts"
+    },
+    {
+      "path": "bin/teams/lib/parser.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "teams-scraper-fixture-test",
+      "command": "bun test bin/test/teams-scraper.test.ts",
+      "source": "bin/test/teams-scraper.test.ts"
+    },
+    {
+      "path": "bin/teams/lib/types.ts",
+      "owner": "unverified-runtime",
+      "qualification": "separate-qualification",
+      "qualification_name": "teams-scraper-type-declarations-review",
+      "reason": "The fixture scraper test exercises parser, line, and message runtime code, but this file contains only erased TypeScript interfaces; the process test cannot prove its declarations and no separate compiler qualification is recorded."
+    },
+    {
+      "path": "bin/teams/teams-scraper.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "teams-scraper-fixture-test",
+      "command": "bun test bin/test/teams-scraper.test.ts",
+      "source": "bin/test/teams-scraper.test.ts"
+    },
+    {
+      "path": "bin/test/teams-scraper.test.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "teams-scraper-fixture-test",
+      "command": "bun test bin/test/teams-scraper.test.ts",
+      "source": "bin/test/teams-scraper.test.ts"
+    },
+    {
+      "path": "bin/test/agent-skills-inventory.test.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "agent-skills-inventory-fixture-test",
+      "command": "bun test bin/test/agent-skills-inventory.test.ts",
+      "source": "bin/test/agent-skills-inventory.test.ts"
+    },
+    {
+      "path": "config/agents/skills/personal/mcp-doctor/scripts/mcp-doctor.test.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "mcp-doctor-fixture-test-verified",
+      "command": "bun test config/agents/skills/personal/mcp-doctor/scripts/mcp-doctor.test.ts",
+      "source": "config/agents/skills/personal/mcp-doctor/scripts/mcp-doctor.test.ts"
+    },
+    {
+      "path": "config/agents/skills/personal/imessage-reader/scripts/fixtures.ts",
+      "owner": "unverified-runtime",
+      "qualification": "separate-qualification",
+      "qualification_name": "imessage-reader-tsconfig-unverified",
+      "reason": "Separate imessage-reader tsc exits 1 with eight TS2375/TS2379 exactOptionalPropertyTypes diagnostics at scripts/lib.ts:1919 and scripts/query-imessage.ts:374,1064,1105,1133,1210,1245,1274; no iMessage runtime query was run."
+    },
+    {
+      "path": "config/agents/skills/personal/imessage-reader/scripts/lib.ts",
+      "owner": "unverified-runtime",
+      "qualification": "separate-qualification",
+      "qualification_name": "imessage-reader-tsconfig-unverified",
+      "reason": "Separate imessage-reader tsc exits 1 with eight TS2375/TS2379 exactOptionalPropertyTypes diagnostics at scripts/lib.ts:1919 and scripts/query-imessage.ts:374,1064,1105,1133,1210,1245,1274; no iMessage runtime query was run."
+    },
+    {
+      "path": "config/agents/skills/personal/imessage-reader/scripts/lib.test.ts",
+      "owner": "unverified-runtime",
+      "qualification": "separate-qualification",
+      "qualification_name": "imessage-reader-tsconfig-unverified",
+      "reason": "Separate imessage-reader tsc exits 1 with eight TS2375/TS2379 exactOptionalPropertyTypes diagnostics at scripts/lib.ts:1919 and scripts/query-imessage.ts:374,1064,1105,1133,1210,1245,1274; no iMessage runtime query was run."
+    },
+    {
+      "path": "config/agents/skills/personal/imessage-reader/scripts/query-imessage.ts",
+      "owner": "unverified-runtime",
+      "qualification": "separate-qualification",
+      "qualification_name": "imessage-reader-tsconfig-unverified",
+      "reason": "Separate imessage-reader tsc exits 1 with eight TS2375/TS2379 exactOptionalPropertyTypes diagnostics at scripts/lib.ts:1919 and scripts/query-imessage.ts:374,1064,1105,1133,1210,1245,1274; no iMessage runtime query was run."
+    },
+    {
+      "path": "config/agents/skills/personal/imessage-reader/scripts/runtime-shims.d.ts",
+      "owner": "unverified-runtime",
+      "qualification": "separate-qualification",
+      "qualification_name": "imessage-reader-tsconfig-unverified",
+      "reason": "Separate imessage-reader tsc exits 1 with eight TS2375/TS2379 exactOptionalPropertyTypes diagnostics at scripts/lib.ts:1919 and scripts/query-imessage.ts:374,1064,1105,1133,1210,1245,1274; no iMessage runtime query was run."
+    },
+    {
+      "path": "config/agents/skills/personal/test-design/evals/smoke-definitions.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "test-design-skill-contract",
+      "command": "bun test config/agents/skills/personal/test-design/tests/skill-contract.test.ts",
+      "source": "config/agents/skills/personal/test-design/tests/skill-contract.test.ts"
+    },
+    {
+      "path": "config/agents/skills/personal/test-design/tests/skill-contract.test.ts",
+      "owner": "named-command",
+      "qualification": "separate-qualification",
+      "qualification_name": "test-design-skill-contract",
+      "command": "bun test config/agents/skills/personal/test-design/tests/skill-contract.test.ts",
+      "source": "config/agents/skills/personal/test-design/tests/skill-contract.test.ts"
+    }
+  ]
+}

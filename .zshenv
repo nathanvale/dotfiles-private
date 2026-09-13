@@ -43,6 +43,21 @@ case ":${PATH:-}:" in
   *) export PATH="/opt/homebrew/bin:${PATH:-/usr/bin:/bin:/usr/sbin:/sbin}" ;;
 esac
 
+# User command directories are safe, side-effect-free PATH inputs owned here so
+# login, interactive, and non-interactive zsh processes share one lookup rule.
+# Keep them ahead of the runtime bootstraps below; a verified fnm or Mise
+# selection can then establish its own runtime priority without being shadowed.
+typeset -U path PATH
+case ":${PATH:-}:" in
+  *":$HOME/.local/bin:"*) ;;
+  *) path=("$HOME/.local/bin" "${path[@]}") ;;
+esac
+case ":${PATH:-}:" in
+  *":$HOME/bin:"*) ;;
+  *) path=("$HOME/bin" "${path[@]}") ;;
+esac
+export PATH
+
 # Keep the 1Password service-account token out of shell startup.
 # bin/with-one-password-token reads dotfiles/.env for the exact `op` child only.
 

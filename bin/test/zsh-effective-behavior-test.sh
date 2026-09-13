@@ -95,6 +95,45 @@ cp "$REPO_ROOT/.zshenv" "$home/.zshenv"
 cp "$REPO_ROOT/.zprofile" "$home/.zprofile"
 cp "$REPO_ROOT/.zshrc" "$home/.zshrc"
 
+# User-command lookup fixture. The two locations have different owners: the
+# repository's managed command tree is reachable through HOME/bin, while native
+# installers publish commands under HOME/.local/bin. Both must be available
+# before any startup mode reaches a command lookup.
+managed_home_command="$home/bin/managed-home-command"
+managed_local_command="$home/.local/bin/managed-local-command"
+mkdir -p "${managed_home_command%/*}" "${managed_local_command%/*}"
+printf '#!/bin/sh\nexit 0\n' >"$managed_home_command"
+printf '#!/bin/sh\nexit 0\n' >"$managed_local_command"
+printf 'print -r -- sourced > "$HOME/.local/bin/contract-local-env-sourced"\n' \
+  >"$home/.local/bin/env"
+chmod 755 "$managed_home_command" "$managed_local_command"
+
+# Priority fixture. All three owners publish the same command name so a lookup
+# assertion observes ordering rather than only availability. The managed
+# HOME/bin copy is the independent expected winner for interactive startup;
+# the local and Bun copies are harmless lower-priority fallbacks.
+priority_home_command="$home/bin/priority-probe"
+priority_local_command="$home/.local/bin/priority-probe"
+priority_bun_command="$home/.bun/bin/priority-probe"
+mkdir -p "${priority_bun_command%/*}"
+printf '#!/bin/sh\nprintf managed-home\\n\n' >"$priority_home_command"
+printf '#!/bin/sh\nprintf managed-local\\n\n' >"$priority_local_command"
+printf '#!/bin/sh\nprintf bun-fallback\\n\n' >"$priority_bun_command"
+chmod 755 "$priority_home_command" "$priority_local_command" "$priority_bun_command"
+
+# Account-switch ownership fixture. The non-secret env file is the only startup
+# input allowed to set this value. A separate secret-file marker proves the
+# startup owners do not read the retired secret route while preserving the
+# sourced value through the complete shell process.
+account_switch_dir="$home/.config/lll-account-switch"
+account_switch_env="$account_switch_dir/env"
+account_switch_secret="$account_switch_dir/secrets.env"
+mkdir -p "$account_switch_dir"
+printf 'export LLL_ACCOUNT_SWITCH_KNOWN_REPOS="/synthetic/repo-one:/synthetic/repo-two"\n' \
+  >"$account_switch_env"
+printf 'print -r -- sourced > "$HOME/.config/lll-account-switch/secret-read-marker"\n' \
+  >"$account_switch_secret"
+
 # Negative control for the disclosure detector.
 #
 # Without this, a detector that silently matched nothing would report every
@@ -281,6 +320,27 @@ identity_probe='
   print -r -- "saypath=$(whence -p -- say 2>/dev/null)"
 '
 
+# Probe public command lookup and the effective count of each user-owned path.
+# The nested zsh evaluates these expressions. The fixture paths are independent
+# from this probe and asserted below by the outer harness.
+# shellcheck disable=SC2016
+command_lookup_probe='
+  local_bin_count=0
+  home_bin_count=0
+  for entry in $path; do
+    [[ "$entry" == "$HOME/.local/bin" ]] && local_bin_count=$((local_bin_count + 1))
+    [[ "$entry" == "$HOME/bin" ]] && home_bin_count=$((home_bin_count + 1))
+  done
+  print -r -- "home_command=$(command -v managed-home-command 2>/dev/null)"
+  print -r -- "local_command=$(command -v managed-local-command 2>/dev/null)"
+  print -r -- "priority_command=$(command -v priority-probe 2>/dev/null)"
+  print -r -- "home_bin_count=$home_bin_count"
+  print -r -- "local_bin_count=$local_bin_count"
+  print -r -- "local_env_sourced=$([[ -e "$HOME/.local/bin/contract-local-env-sourced" ]] && print yes || print no)"
+  print -r -- "known_repos=${LLL_ACCOUNT_SWITCH_KNOWN_REPOS:-}"
+  print -r -- "secret_read=$([[ -e "$HOME/.config/lll-account-switch/secret-read-marker" ]] && print yes || print no)"
+'
+
 # Probe emitting the effective executable search path, one entry per line.
 # The nested zsh evaluates these expressions.
 # shellcheck disable=SC2016
@@ -351,6 +411,29 @@ for mode in noninteractive-nonlogin noninteractive-login interactive-nonlogin in
     skip "$mode: say identity (no /usr/bin/say on this platform)"
     skip "$mode: say resolution (no /usr/bin/say on this platform)"
   fi
+
+  run_mode "$mode" "$command_lookup_probe"
+  assert_equals "$probe_status" '0' "$mode: user-command lookup exits zero"
+  assert_equals "$(grep '^home_command=' <<<"$probe_out")" "home_command=$managed_home_command" \
+    "$mode: managed HOME/bin command resolves through the shell PATH"
+  assert_equals "$(grep '^local_command=' <<<"$probe_out")" "local_command=$managed_local_command" \
+    "$mode: native HOME/.local/bin command resolves through the shell PATH"
+  assert_equals "$(grep '^priority_command=' <<<"$probe_out")" "priority_command=$priority_home_command" \
+    "$mode: managed HOME/bin wins over HOME/.local/bin and Bun fallback"
+  assert_equals "$(grep '^home_bin_count=' <<<"$probe_out")" 'home_bin_count=1' \
+    "$mode: HOME/bin is present once"
+  assert_equals "$(grep '^local_bin_count=' <<<"$probe_out")" 'local_bin_count=1' \
+    "$mode: HOME/.local/bin is present once"
+  assert_equals "$(grep '^local_env_sourced=' <<<"$probe_out")" 'local_env_sourced=no' \
+    "$mode: absent HOME/.local/bin/env is not sourced during startup"
+  case "$mode" in
+    interactive-nonlogin|interactive-login)
+      assert_equals "$(grep '^known_repos=' <<<"$probe_out")" 'known_repos=/synthetic/repo-one:/synthetic/repo-two' \
+        "$mode: sourced non-secret account-switch repos survive startup"
+      assert_equals "$(grep '^secret_read=' <<<"$probe_out")" 'secret_read=no' \
+        "$mode: account-switch secret file is not read during startup"
+      ;;
+  esac
 done
 
 # Effective executable search path.

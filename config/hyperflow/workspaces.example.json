@@ -1,0 +1,109 @@
+{
+	"workspaces": {
+		"1": {
+			"apps": ["Ghostty"],
+			"description": "Terminal",
+			"mode": "default"
+		},
+		"2": {
+			"apps": ["Visual Studio Code"],
+			"description": "VS Code",
+			"mode": "default"
+		},
+		"3": {
+			"apps": ["Safari"],
+			"description": "Browser",
+			"mode": "default"
+		},
+		"4": {
+			"apps": ["Google Chrome"],
+			"description": "Browser",
+			"mode": "default"
+		},
+		"5": {
+			"apps": ["Codex"],
+			"description": "Codex",
+			"mode": "default"
+		},
+		"6": {
+			"apps": ["Slack"],
+			"description": "Slack",
+			"mode": "default"
+		},
+		"7": {
+			"apps": ["zoom.us"],
+			"description": "Zoom",
+			"mode": "default"
+		},
+		"C": {
+			"apps": ["Calendar"],
+			"description": "Apple Calendar",
+			"mode": "default"
+		},
+		"F": {
+			"apps": ["Finder"],
+			"description": "Finder",
+			"mode": "default"
+		},
+		"H1": {
+			"apps": ["Mail"],
+			"description": "Apple Mail",
+			"mode": "email"
+		},
+		"H2": {
+			"apps": ["Calendar"],
+			"description": "Apple Calendar",
+			"mode": "default"
+		},
+		"H3": {
+			"apps": ["Music"],
+			"description": "Apple Music",
+			"mode": "default"
+		},
+		"H4": {
+			"apps": ["Podcasts"],
+			"description": "Apple Podcasts",
+			"mode": "default"
+		},
+		"H5": {
+			"apps": ["Calendar"],
+			"description": "Apple Calendar",
+			"mode": "default"
+		},
+		"S": {
+			"apps": ["System Settings"],
+			"description": "System Settings",
+			"mode": "default"
+		},
+		"D": {
+			"apps": ["Docker Desktop"],
+			"description": "Docker",
+			"mode": "default"
+		},
+		"P": {
+			"apps": ["Podcasts"],
+			"description": "Apple Podcasts",
+			"mode": "default"
+		},
+		"M": {
+			"apps": ["Messages"],
+			"description": "Apple Messages",
+			"mode": "default"
+		},
+		"E": {
+			"apps": ["Mail"],
+			"description": "Apple Mail",
+			"mode": "email"
+		},
+		"G": {
+			"apps": ["ChatGPT"],
+			"description": "ChatGPT",
+			"mode": "default"
+		},
+		"CC": {
+			"apps": ["Claude"],
+			"description": "Claude",
+			"mode": "default"
+		}
+	}
+}

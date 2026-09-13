@@ -1,4 +1,5 @@
 import path from "node:path";
+import type { AuditOutput } from "fallow/types";
 
 const packages = [
 	".agents/runtime/agent-native-state-machine-generator",
@@ -8,12 +9,24 @@ const packages = [
 	".agents/runtime/session-corpus",
 ] as const;
 
-type FallowAuditOutput = {
-	verdict?: string;
-	summary?: Record<string, unknown>;
-};
+type FallowAuditOutput = AuditOutput & { kind: "audit" };
 
-type PackageResult = { package: string; verdict: string | null; exit: number };
+const FALLOW_AUDIT_SCHEMA_VERSION: AuditOutput["schema_version"] = 10;
+
+type AuditClassification = "success" | "quality-failure" | "operational-failure";
+
+type PackageResult = {
+	package: string;
+	scope: string;
+	verdict: unknown;
+	exit: number | null;
+	classification: AuditClassification;
+	nativeReport: unknown;
+	summary: unknown;
+	stdout: string;
+	stderr: string;
+	error?: string;
+};
 
 export type RunFallowRuntimeAuditOptions = {
 	repoRoot: string;
@@ -24,71 +37,145 @@ export type RunFallowRuntimeAuditOptions = {
 	logError?: (line: string) => void;
 };
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isAuditSummary(value: unknown): value is AuditOutput["summary"] {
+	if (!isRecord(value)) return false;
+	return (
+		typeof value.dead_code_issues === "number" &&
+		typeof value.dead_code_has_errors === "boolean" &&
+		typeof value.complexity_findings === "number" &&
+		(value.max_cyclomatic === null || typeof value.max_cyclomatic === "number") &&
+		typeof value.duplication_clone_groups === "number"
+	);
+}
+
+function isAuditAttribution(value: unknown): value is AuditOutput["attribution"] {
+	if (!isRecord(value)) return false;
+	return (
+		(value.gate === "new-only" || value.gate === "all") &&
+		typeof value.dead_code_introduced === "number" &&
+		typeof value.dead_code_inherited === "number" &&
+		typeof value.complexity_introduced === "number" &&
+		typeof value.complexity_inherited === "number" &&
+		typeof value.duplication_introduced === "number" &&
+		typeof value.duplication_inherited === "number" &&
+		typeof value.styling_introduced === "number" &&
+		typeof value.styling_inherited === "number" &&
+		typeof value.duplication_demoted === "number"
+	);
+}
+
+function isFallowAuditOutput(value: unknown): value is FallowAuditOutput {
+	if (!isRecord(value)) return false;
+	return (
+		value.kind === "audit" &&
+		value.schema_version === FALLOW_AUDIT_SCHEMA_VERSION &&
+		typeof value.version === "string" &&
+		value.command === "audit" &&
+		(value.verdict === "pass" || value.verdict === "warn" || value.verdict === "fail") &&
+		typeof value.changed_files_count === "number" &&
+		typeof value.base_ref === "string" &&
+		typeof value.elapsed_ms === "number" &&
+		isAuditSummary(value.summary) &&
+		isAuditAttribution(value.attribution)
+	);
+}
+
+function classifyAuditResult(exit: number | null, verdict: unknown): AuditClassification {
+	if (exit === 0 && (verdict === "pass" || verdict === "warn")) return "success";
+	if (exit === 1 && verdict === "fail") return "quality-failure";
+	return "operational-failure";
+}
+
+function errorMessage(error: unknown): string {
+	return error instanceof Error ? error.message : String(error);
+}
+
 export async function runFallowRuntimeAudit(options: RunFallowRuntimeAuditOptions): Promise<number> {
 	const { repoRoot, fallowBin, packages: packageList, extraArgs, log = console.log, logError = console.error } = options;
 	const results: PackageResult[] = [];
 
 	for (const packagePath of packageList) {
-		const fallowProcess = Bun.spawn(
-			[
-				fallowBin,
-				"audit",
-				"--root",
-				packagePath,
-				"--config",
-				".fallowrc.json",
-				"--format",
-				"json",
-				"--quiet",
-				"--type-aware",
-				"--type-aware-require",
-				"best-effort",
-				...extraArgs,
-			],
-			{ cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
-		);
-		const [stdout, stderr, exit] = await Promise.all([
-			new Response(fallowProcess.stdout).text(),
-			new Response(fallowProcess.stderr).text(),
-			fallowProcess.exited,
-		]);
-
+		let result: PackageResult;
 		try {
-			const output = JSON.parse(stdout) as FallowAuditOutput;
-			const verdict = output.verdict ?? null;
-			log(
-				JSON.stringify({
-					package: packagePath,
-					verdict,
-					exit,
-					summary: output.summary ?? null,
-				}),
+			const fallowProcess = Bun.spawn(
+				[
+					fallowBin,
+					"audit",
+					"--root",
+					packagePath,
+					"--config",
+					".fallowrc.json",
+					"--format",
+					"json",
+					"--quiet",
+					"--type-aware",
+					"--type-aware-require",
+					"best-effort",
+					...extraArgs,
+				],
+				{ cwd: repoRoot, stdout: "pipe", stderr: "pipe" },
 			);
-			results.push({ package: packagePath, verdict, exit });
-		} catch {
-			// Unparseable stdout means no audit result exists, regardless of
-			// what the child's own exit code claimed; a success exit paired
-			// with non-JSON output is itself an operational failure.
-			const operationalExit = exit === 0 ? 2 : exit;
-			log(
-				JSON.stringify({
-					package: packagePath,
-					verdict: null,
-					exit: operationalExit,
-					summary: null,
-					stderr: stderr.slice(0, 2000),
-				}),
-			);
-			results.push({ package: packagePath, verdict: null, exit: operationalExit });
+			const [stdout, stderr, exit] = await Promise.all([
+				new Response(fallowProcess.stdout).text(),
+				new Response(fallowProcess.stderr).text(),
+				fallowProcess.exited,
+			]);
+
+			let nativeReport: unknown = null;
+			let verdict: unknown = null;
+			let summary: unknown = null;
+			try {
+				nativeReport = JSON.parse(stdout);
+				if (isFallowAuditOutput(nativeReport)) {
+					verdict = nativeReport.verdict ?? null;
+					summary = nativeReport.summary ?? null;
+				}
+			} catch {
+				// The raw stdout remains in the emitted record for diagnosis.
+			}
+
+			result = {
+				package: packagePath,
+				scope: packagePath,
+				verdict,
+				exit,
+				classification: classifyAuditResult(exit, verdict),
+				nativeReport,
+				summary,
+				stdout,
+				stderr,
+			};
+		} catch (error) {
+			result = {
+				package: packagePath,
+				scope: packagePath,
+				verdict: null,
+				exit: null,
+				classification: "operational-failure",
+				nativeReport: null,
+				summary: null,
+				stdout: "",
+				stderr: "",
+				error: errorMessage(error),
+			};
 		}
+
+		log(JSON.stringify(result));
+		results.push(result);
 	}
 
-	const operationalErrors = results.filter((result) => result.exit === 2).map((result) => result.package);
+	const operationalErrors = results
+		.filter((result) => result.classification === "operational-failure")
+		.map((result) => result.package);
 	if (operationalErrors.length > 0) {
-		logError(`Fallow operational error (exit 2): ${operationalErrors.join(", ")}`);
+		logError(`Fallow operational error: ${operationalErrors.join(", ")}`);
 		return 2;
 	}
-	if (results.some((result) => result.verdict === "fail" || result.exit === 1)) {
+	if (results.some((result) => result.classification === "quality-failure")) {
 		return 1;
 	}
 	return 0;

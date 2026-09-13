@@ -1,21 +1,13 @@
 #!/bin/bash
+# Deprecated: this helper uninstalls nothing automatically. Homebrew removal
+# is destructive and stays a deliberate, manual, unforwarded step. No
+# repository-relative dependency: it must print its notice even copied
+# outside this repository.
 
 set -e
 
-# Ensure the script is being run from the correct directory
-cd "$(dirname "$0")"
+printf 'brew_uninstall.sh is retired; it uninstalls nothing automatically.\n' >&2
+printf 'Run the official Homebrew uninstall script yourself when you intend that destructive action:\n' >&2
+printf '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh)"\n' >&2
 
-# Source the colour_log.sh script
-source "./colour_log.sh"
-
-"log $INFO ""Starting Homebrew uninstallation..."
-
-# Run the official Homebrew uninstall script
-"log $INFO ""Running the official Homebrew uninstall script..."
-
-if ! /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/uninstall.sh)"; then
-    "log $ERROR ""Failed to run the official Homebrew uninstall script."
-    exit 0
-else
-    "log $INFO ""Homebrew uninstallation complete."
-fi
+exit 1

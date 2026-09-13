@@ -1,5 +1,4 @@
-# Created by `pipx` on 2025-11-24 19:17:40h
-export PATH="$HOME/.local/bin:$PATH"
+# User command paths are owned by .zshenv for every zsh startup mode.
 
 # Re-select the verified Mise shims after this login file changes PATH.
 [ -f "$HOME/.config/mise/bootstrap.sh" ] && source "$HOME/.config/mise/bootstrap.sh"

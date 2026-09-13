@@ -26,7 +26,19 @@ import {
 	summariseFailure,
 } from './common.ts'
 
-const BIOME_EXTENSIONS = ['.ts', '.tsx', '.js', '.jsx', '.json', '.jsonc', '.css']
+const BIOME_EXTENSIONS = [
+	'.ts',
+	'.tsx',
+	'.js',
+	'.jsx',
+	'.mjs',
+	'.cjs',
+	'.mts',
+	'.cts',
+	'.json',
+	'.jsonc',
+	'.css',
+]
 const BIOME_MARKERS = ['biome.json', 'biome.jsonc']
 
 interface BiomeReporterDiagnostic {

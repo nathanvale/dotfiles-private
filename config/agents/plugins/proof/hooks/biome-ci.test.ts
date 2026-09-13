@@ -1,4 +1,4 @@
-import { writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { afterAll, describe, expect, test } from 'bun:test'
 import {
@@ -12,6 +12,10 @@ import {
 } from './test-support.ts'
 
 const HOOK_PATH = join(import.meta.dir, 'biome-ci.ts')
+
+// Independent oracle: these are the module suffixes the public hook contract
+// promises to pass through to Biome.
+const MODULE_EXTENSIONS = ['mjs', 'cjs', 'mts', 'cts'] as const
 
 afterAll(() => {
 	cleanupTempDirs()
@@ -32,18 +36,19 @@ function fakeReport(): string {
 
 async function setupRepo(
 	dir: string,
-	options: { withBiome?: boolean; exitCode?: number } = {},
+	options: { withBiome?: boolean; exitCode?: number; dirtyFile?: string; recordArgs?: boolean } = {},
 ): Promise<void> {
 	initRepo(dir)
 	writeFileSync(join(dir, 'committed.ts'), 'export const a = 1\n')
 	if (options.withBiome) {
 		writeFileSync(join(dir, 'biome.json'), '{}\n')
 		writeFileSync(join(dir, '.gitignore'), 'node_modules/\n')
-		installFakeBinary(dir, 'biome', `echo '${fakeReport()}'\nexit ${options.exitCode ?? 0}`)
+		const recordArgs = options.recordArgs ? `printf '%s\\n' "$@" > "$PWD/biome-argv"\n` : ''
+		installFakeBinary(dir, 'biome', `${recordArgs}echo '${fakeReport()}'\nexit ${options.exitCode ?? 0}`)
 	}
 	git(dir, 'add', '.')
 	git(dir, 'commit', '-q', '-m', 'init')
-	writeFileSync(join(dir, 'dirty.ts'), 'export const b = 1\n')
+	writeFileSync(join(dir, options.dirtyFile ?? 'dirty.ts'), 'export const b = 1\n')
 }
 
 interface BiomeEnvelope {
@@ -54,6 +59,48 @@ interface BiomeEnvelope {
 	fileCount: number
 	errorCount: number
 	errors: { file: string; line: number; message: string }[]
+}
+
+function recordedBiomeArgs(dir: string): string[] {
+	return readFileSync(join(dir, 'biome-argv'), 'utf8').trim().split('\n')
+}
+
+async function assertModuleExtensions(
+	event: 'Stop' | 'PostToolUse',
+	harnessArgs: string[],
+	harness: 'claude' | 'codex',
+): Promise<void> {
+	for (const extension of MODULE_EXTENSIONS) {
+		const dir = await makeTempDir(`proof-biome-${event.toLowerCase()}-${harness}-${extension}-`)
+		await setupRepo(dir, { withBiome: true, exitCode: 1, dirtyFile: `dirty.${extension}`, recordArgs: true })
+		const editedFile = join(dir, `dirty.${extension}`)
+		const input =
+			event === 'Stop'
+				? { hook_event_name: event, cwd: dir }
+				: { hook_event_name: event, cwd: dir, tool_input: { file_path: editedFile } }
+		const run = await runHook(HOOK_PATH, input, harnessArgs)
+
+		expect(run.exitCode).toBe(event === 'Stop' ? 2 : 0)
+		expect(wasInvoked(dir, 'biome')).toBe(true)
+		expect(recordedBiomeArgs(dir)).toContain(editedFile)
+
+		if (event === 'Stop') {
+			const envelope = JSON.parse(run.stderr) as BiomeEnvelope
+			expect(envelope.event).toBe('Stop')
+			expect(envelope.fileCount).toBe(1)
+			expect(envelope.errorCount).toBe(1)
+		} else if (harness === 'codex') {
+			const payload = JSON.parse(run.stdout) as Record<string, unknown>
+			expect(Object.keys(payload)).toEqual(['hookSpecificOutput'])
+		} else {
+			const payload = JSON.parse(run.stdout) as {
+				decision: string
+				hookSpecificOutput: { hookEventName: string }
+			}
+			expect(payload.decision).toBe('block')
+			expect(payload.hookSpecificOutput.hookEventName).toBe('PostToolUse')
+		}
+	}
 }
 
 describe('biome-ci Stop', () => {
@@ -175,5 +222,23 @@ describe('biome-ci PostToolUse', () => {
 		})
 		expect(run.exitCode).toBe(0)
 		expect(run.stdout).toBe('')
+	})
+})
+
+describe('biome-ci module extensions', () => {
+	test('Stop passes all module extensions to Biome for Claude', async () => {
+		await assertModuleExtensions('Stop', [], 'claude')
+	})
+
+	test('Stop passes all module extensions to Biome for Codex', async () => {
+		await assertModuleExtensions('Stop', ['--harness=codex'], 'codex')
+	})
+
+	test('PostToolUse reports all module extensions through the Claude envelope', async () => {
+		await assertModuleExtensions('PostToolUse', [], 'claude')
+	})
+
+	test('PostToolUse reports all module extensions through the Codex envelope', async () => {
+		await assertModuleExtensions('PostToolUse', ['--harness=codex'], 'codex')
 	})
 })
