@@ -1,6 +1,8 @@
 {
   "activationApps" : [
-
+    "Messages",
+    "Microsoft Teams",
+    "Slack"
   ],
   "activationSites" : [
 
@@ -15,7 +17,7 @@
   "iconName" : "",
   "key" : "message",
   "language" : "en",
-  "languageModelID" : "sl-1",
+  "languageModelID" : "sw-gpt-5.1",
   "literalPunctuation" : false,
   "name" : "Message",
   "prompt" : "",
@@ -25,9 +27,10 @@
   "realtimeOutput" : false,
   "script" : "",
   "scriptEnabled" : false,
+  "tone" : "balanced",
   "translateToEnglish" : false,
   "type" : "message",
   "useSystemAudio" : false,
   "version" : 1,
-  "voiceModelID" : "sv-1"
+  "voiceModelID" : "cohere-transcribe-q4"
 }

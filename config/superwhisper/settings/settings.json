@@ -1,24 +1,38 @@
 {
   "favoriteModelIDs" : [
-    "sv-1"
+    "s1-vocab-v2-160MB",
+    "cohere-transcribe-q4"
   ],
   "modeKeys" : [
     "message",
-    "agent-prompt",
-    "casual-text",
-    "daily-note",
-    "default",
-    "email",
-    "professional-engineer"
+    "local"
   ],
   "replacements" : [
     {
       "id" : "6389A6EA-B31B-4CA5-AD30-748AB6F9FF9D",
       "original" : "super whisper",
       "with" : "Superwhisper"
+    },
+    {
+      "id" : "CC556E66-8C8E-4F55-A9AC-FF4E1517619C",
+      "original" : "work tree",
+      "with" : "worktree"
+    },
+    {
+      "id" : "07F7BC30-F2F9-43A4-A918-55048BFC8E4D",
+      "original" : "VS code",
+      "with" : "VS Code"
+    },
+    {
+      "id" : "555931D4-46E5-4C64-BCD6-7FAAF98FB97F",
+      "original" : "cluade code",
+      "with" : "Claude Code"
     }
   ],
   "vocabulary" : [
-    "Superwhisper"
+    "Superwhisper",
+    "are we now",
+    "Codex",
+    "Claude Code"
   ]
 }

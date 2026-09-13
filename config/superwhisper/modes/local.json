@@ -12,13 +12,12 @@
   "contextTemplate" : "Use the copied text as context to complete this task.\n\nCopied text: ",
   "description" : "",
   "diarize" : false,
-  "iconName" : "",
-  "key" : "default",
-  "language" : "auto",
+  "iconName" : "macbook",
+  "key" : "local",
+  "language" : "en",
   "languageModelID" : "",
   "literalPunctuation" : false,
   "name" : "Default",
-  "playbackBehavior" : "keepPlaying",
   "prompt" : "",
   "promptExamples" : [
 
@@ -27,12 +26,12 @@
   "script" : "",
   "scriptEnabled" : false,
   "shortcut" : {
-    "carbonKeyCode" : 61,
-    "carbonModifiers" : 2048
+    "carbonKeyCode" : 62,
+    "carbonModifiers" : 4096
   },
   "translateToEnglish" : false,
   "type" : "voice",
   "useSystemAudio" : false,
   "version" : 1,
-  "voiceModelID" : "sv-1"
+  "voiceModelID" : "cohere-transcribe-q4"
 }
