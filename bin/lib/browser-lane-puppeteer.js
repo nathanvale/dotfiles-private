@@ -7,7 +7,7 @@
 //
 //   AGENT_BROWSER_CDP                  one-use loopback CDP endpoint (from MCPorter)
 //   BROWSER_LANE_PUPPETEER_PLAN        private mode-600 plan snapshot path
-//   BROWSER_LANE_PAGE_URL_SHA256       digest of the exact admitted page URL
+//   BROWSER_LANE_PAGE_URL_SHA256       digest of the admitted page site
 //   BROWSER_LANE_PUPPETEER_TTL_SECONDS lease TTL; bounds the whole run
 //   BROWSER_LANE_RUN_ID                run correlation for stderr envelopes
 //
@@ -31,6 +31,7 @@
 
 const crypto = require('node:crypto');
 const fs = require('node:fs');
+const { siteFromUrl } = require('./browser-lane-site');
 
 const PROGRAM = 'browser-lane';
 const EXIT_USAGE = 2;
@@ -46,6 +47,11 @@ const PAGES_TIMEOUT_MS = 5_000;
 const ACTION_TIMEOUT_MS = 30_000;
 const DISCONNECT_TIMEOUT_MS = 5_000;
 const DEFAULT_TTL_SECONDS = 900;
+
+const siteHash = (url) => {
+	const site = siteFromUrl(url);
+	return site === null ? null : sha256(site);
+};
 
 // Exact arity per command. The router validates the same table before the
 // lease; this copy is the executor's own guard on the bytes it actually runs.
@@ -376,13 +382,15 @@ async function assertBoundPage(browser, boundPage, expectedHash) {
 			retrySafe,
 		);
 	}
-	const matches = pages.filter((page) => sha256(page.url()) === expectedHash);
+	const pageSites = pages.map((page) => ({ page, hash: siteHash(page.url()) }));
+	const matches = pageSites.filter(({ hash }) => hash === expectedHash).map(({ page }) => page);
+	if (boundPage && matches.includes(boundPage)) return boundPage;
 	if (matches.length > 1) {
 		throw new LaneFailure(
 			EXIT_PAGE_UNRESOLVED,
 			'puppeteer_page_ambiguous',
-			`the relay exposed ${matches.length} pages matching the exact task URL`,
-			'Keep one exact task page selected and leave unrelated admitted pages unchanged, then retry.',
+			`the relay exposed ${matches.length} pages on the task site without a bound match`,
+			'Select one task page and leave unrelated admitted pages unchanged, then retry.',
 			retrySafe,
 		);
 	}
@@ -393,7 +401,7 @@ async function assertBoundPage(browser, boundPage, expectedHash) {
 			boundPage
 				? 'the admitted page changed between Puppeteer actions'
 				: 'the admitted page changed before Puppeteer actions began',
-			"Observe the intended tab's current ordinary URL in the declared profile, then inspect that exact URL and verify the action's effect. Do not replay an uncertain mutation or re-admit solely because navigation ended the old attachment. Honor Stop or revoked access.",
+				"Observe the intended tab's current ordinary URL in the declared profile, then inspect that page and verify the action's effect. Do not replay an uncertain mutation or re-admit solely because navigation ended the old attachment. Honor Stop or revoked access.",
 			retrySafe,
 		);
 	}

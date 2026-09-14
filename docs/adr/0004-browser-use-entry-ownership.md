@@ -80,13 +80,22 @@ plugin's lane gates as the owners of browser routing and interaction mechanics.
 Nathan explicitly approved a global config flag on 14 September 2026, with
 skills following it and a switch back to secured behavior. Preserve this
 entry ownership. While `free_mode` is true, replace Selected-tabs admission and
-page-action restrictions with All tabs and unrestricted Chrome DevTools calls
-through the declared lane. The skill may set the extension mode. False restores
-the original secured routing; the skill restores Selected tabs when needed.
-Profile identity, authenticated relay, task authority and serial lane custody
-remain. This prioritizes usable automation while Nathan revisits security.
-Confirm through public CLI tests for enabled, disabled, missing and malformed
-configuration, plus separate live extension-mode evidence.
+page-action restrictions with All tabs and direct routing to any declared
+adapter through the lane. Choose Agent Browser, Playwright, Puppeteer, or Chrome
+DevTools by capability. The first three perform their own same-site checks
+without a Chrome DevTools `list_pages` preflight; Chrome DevTools calls remain
+unrestricted. The skill may set the extension mode. False restores the original
+secured routing; the skill restores Selected tabs when needed. Profile
+identity, authenticated relay, task authority and serial lane custody remain.
+This prioritizes usable automation while Nathan revisits security. Confirm
+through public CLI tests for enabled, disabled, missing and malformed
+configuration, plus separate live extension-mode and adapter evidence.
+
+Nathan accepted a same-site revision on 14 September 2026, after a live
+timesheet proof showed exact-URL matching failing within seconds under portal
+redirects and query rewrites: every adapter refused. Each adapter now proves
+the same-site page in both secured and free mode; `--next-page-url` remains
+exact, since it names one expected destination.
 
 ## Confirmation
 
@@ -95,6 +104,8 @@ Confirm with `bin/agent-skills-inventory --json`: show no third-party
 `bin/test/browser-lane-test.sh`. Pass the direct discovery canaries in
 `docs/agents/skills.md` for surviving `browser-use` and retired `use-browser`.
 Pass one separately approved live Selected-tabs handoff on a harmless page.
+Pass one live free-mode Agent Browser run with an unrelated tab present and
+the DevTools inventory failing.
 
 Authority: Nathan.
 

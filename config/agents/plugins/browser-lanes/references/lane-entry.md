@@ -20,18 +20,23 @@ Nathan explicitly enabled this temporary policy on 14 September 2026.
    tabs, use visible UI to set All tabs in the extension's options. This config
    authorizes that change; proceed without a tab grant or another confirmation.
    Honor disabled access and an explicit Stop.
-3. Run `browser-lane run --lane NAME --account-role ROLE --run-id ID -- mcporter
-   call chrome-devtools.TOOL ...`. Read `mcporter list chrome-devtools --schema`
-   for actual tool inputs. Start with `list_pages`, use its current page IDs,
-   and navigate, create, select, read, or operate tabs as the task requires.
-   Omit `--page-url`; free mode passes tool inputs through without target injection.
+3. Choose Agent Browser, Playwright, Puppeteer, or Chrome DevTools by capability
+   from `adapter-selection.md`, then invoke that adapter's public `browser-lane`
+   command directly. Agent Browser, Playwright, and Puppeteer match a page on
+   the declared site and recheck it inside an authenticated one-use relay
+   handoff. For Chrome DevTools, run `browser-lane run --lane NAME
+   --account-role ROLE --run-id ID -- mcporter call chrome-devtools.TOOL ...`.
+   Read `mcporter list chrome-devtools --schema` for tool inputs and omit
+   `--page-url`; free mode passes tool inputs through without target injection.
 4. Keep actions within the user's task and declared profile. Serialize work in
    each lane. Verify uncertain effects before retrying. Keep credentials in the
    browser. Free mode removes lane admission restrictions, not task authority.
 
-The plan adapters retain their existing schemas. For work beyond those schemas,
-use the free Chrome DevTools route above, including page scripts. Do not stop
-for the secured adapter's action allowlist or human tab-admission handoff.
+The direct adapters keep their command and schema limits. Choose Chrome
+DevTools when the task needs its additional capabilities, including tab
+operations or page scripts. Do not stop for the secured adapter's action
+allowlist or human tab-admission handoff when another free-mode adapter
+supports the requested work.
 
 When `free_mode` is `false`, follow the secured workflow below. If OpenClaw is
 still in All tabs mode, use visible UI to restore Selected tabs before health.

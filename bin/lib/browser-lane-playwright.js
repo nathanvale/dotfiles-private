@@ -5,6 +5,7 @@
 const fs = require('node:fs');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
+const { siteFromUrl } = require('./browser-lane-site');
 
 const env = { ...process.env };
 const endpoint = env.AGENT_BROWSER_CDP;
@@ -20,6 +21,10 @@ const owned = new Set();
 const abort = new AbortController();
 const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
 const fault = (status, code) => Object.assign(new Error(code), { status, code });
+const siteHash = url => {
+  const site = siteFromUrl(url);
+  return site === null ? null : crypto.createHash('sha256').update(site).digest('hex');
+};
 const interrupted = fault(130, 'playwright_interrupted');
 for (const signal of ['SIGHUP', 'SIGINT', 'SIGTERM']) {
   process.on(signal, () => abort.abort(interrupted));
@@ -106,15 +111,16 @@ async function assertPage() {
       !Array.isArray(evidence.pageUrls) || evidence.pageUrls.some(url => typeof url !== 'string')) {
     throw fault(16, 'playwright_page_unreadable');
   }
-  const hashes = evidence.pageUrls.map(url => crypto.createHash('sha256').update(url).digest('hex'));
+  const hashes = evidence.pageUrls.map(siteHash);
   const matchCount = hashes.filter(hash => hash === expectedHash).length;
+  const selectedHash = siteHash(evidence.selectedUrl);
+  if (selectedHash === null) throw fault(16, 'playwright_page_unreadable');
+  if (selectedHash === expectedHash) return;
   if (matchCount > 1) throw fault(16, 'playwright_page_ambiguous');
   if (matchCount === 0) {
     throw fault(16, 'playwright_page_changed');
   }
-  if (crypto.createHash('sha256').update(evidence.selectedUrl).digest('hex') !== expectedHash) {
-    throw fault(16, 'playwright_page_not_selected');
-  }
+  throw fault(16, 'playwright_page_not_selected');
 }
 function render(response) {
   for (const [key, value] of Object.entries(response)) {
@@ -124,10 +130,10 @@ function render(response) {
 function diagnose(error) {
   const messages = {
     playwright_action_failed: 'Playwright reported an action error. Inspect its diagnostic and any partial page effects before retrying.',
-    playwright_page_ambiguous: 'More than one admitted page matches the exact task URL. Keep one exact task page selected before retrying.',
-    playwright_page_changed: 'The admitted page changed at an action boundary. Inspect the exact intended page and any uncertain effects before retrying.',
-    playwright_page_not_selected: 'The unique exact task page is no longer the selected page. Select it before retrying.',
-    playwright_page_unreadable: 'The admitted page became unreadable or ambiguous. Inspect the exact intended page before retrying.',
+    playwright_page_ambiguous: 'More than one admitted page matches the task site without a selected match. Select one task page before retrying.',
+    playwright_page_changed: 'The admitted page left the task site at an action boundary. Inspect the intended page and any uncertain effects before retrying.',
+    playwright_page_not_selected: 'The unique page on the task site is no longer the selected page. Select it before retrying.',
+    playwright_page_unreadable: 'The admitted page became unreadable or ambiguous. Inspect the intended page before retrying.',
     playwright_timeout: 'The Playwright run reached its deadline. Inspect partial page effects before retrying.',
     playwright_interrupted: 'The Playwright run was interrupted. Inspect partial page effects before retrying.',
     playwright_lifecycle_unresolved: 'Playwright could not prove clean detach. Inspect the exact run-scoped session before retrying.'
@@ -136,7 +142,7 @@ function diagnose(error) {
   process.stderr.write(JSON.stringify({status: 'error', run_id: env.BROWSER_LANE_RUN_ID || 'unknown', error: {
     code, retry_safe: false, message: messages[code] || 'Playwright failed to complete its command safely.',
     next: ['playwright_page_ambiguous', 'playwright_page_changed', 'playwright_page_not_selected', 'playwright_page_unreadable', 'playwright_action_failed'].includes(code)
-      ? "Observe the intended tab's current ordinary URL in the declared profile, then inspect that exact URL and verify the action's effect. Do not replay an uncertain mutation or re-admit solely because navigation ended the old attachment. Honor Stop or revoked access."
+      ? "Observe the intended tab's current ordinary URL in the declared profile, then inspect that page and verify the action's effect. Do not replay an uncertain mutation or re-admit solely because navigation ended the old attachment. Honor Stop or revoked access."
       : 'Inspect the intended page and run-scoped session before retrying.'
   }}) + '\n');
 }

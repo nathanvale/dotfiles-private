@@ -204,7 +204,7 @@ Commands:
   open      Reuse an exact task tab or open it in the declared Chrome profile without
             checking relay health, tab admission, authentication, or page content.
   health    Check one lane's profile, extension, relay, and declared baseline.
-  inspect   Report visible-page counts and exact-target readiness, without content.
+  inspect   Report visible-page counts and same-site target readiness, without content.
   run       Hold the lane lease and run one relay-only MCPorter browser call.
   agent-browser
             Hold the lane lease and bind, pin, verify, run, and retire one Agent Browser session.
@@ -218,13 +218,9 @@ Commands:
 
 Global mode:
   - Global config: ${XDG_CONFIG_HOME:-$HOME/.config}/browser-lanes/config.json.
-    {"free_mode":true} enables unrestricted Chrome DevTools lane calls: navigation,
-    tab creation/selection/closing and explicit page IDs, without --page-url.
-    Use live list_pages IDs and the installed tool schema. The extension must
-    use All tabs; the skill may configure this once per profile. Missing config
-    or {"free_mode":false} restores secured routing. Malformed config exits 2.
-    Free mode retains profile identity, relay authentication and the lane lease.
-    Plan adapters retain their plan contracts; use run for unrestricted work.
+    {"free_mode":true} routes any adapter's public command directly with no
+    admission or inventory preflight. Chrome DevTools `run` passes tool inputs
+    through. {"free_mode":false} restores secured routing; malformed config exits 2.
 
 Health proof gaps (secured mode):
   - Health reads one fresh live access-status snapshot. An unavailable snapshot
@@ -253,7 +249,7 @@ Open contract:
     visible profile before retrying.
 
 Run contract:
-  - Agent Browser --next-page-url declares an observed, distinct same-origin
+  - Agent Browser --next-page-url declares an observed, distinct same-site
     destination for exactly one action. Success requires the same stable tab
     target ID and exact destination in a fresh pinned inventory, then retirement.
     It reports navigation completion, not application Save success. Inspect the
@@ -263,8 +259,8 @@ Run contract:
   - The account role must match the selected lane's declared role.
   - Only `mcporter call chrome-devtools.*` is accepted.
   - Page-scoped tools require --page-url. When supplied, the relay must expose
-    exactly one admitted match for that URL and it must be the relay's default
-    selected page before page content access. Unrelated admitted pages are
+    one admitted page on that site, or one selected match when several exist,
+    before page content access. Unrelated admitted pages are
     preserved and never selected or modified; bare list_pages may omit the URL.
   - The freshly resolved page index is routed onto the child command line as
     `pageId=INDEX`, before the child's own `--` when it has one. `list_pages`
@@ -288,8 +284,8 @@ Run contract:
     URL checks detect changes at call boundaries, not every in-script effect.
     Timeout/disconnect cannot prove page code stopped; inspect before retry.
   - Playwright gives the one-use endpoint only to its run-scoped daemon.
-    Browser-reported checks require its selected page to be the unique exact
-    URL match before and after each action; unrelated pages remain untouched.
+    Browser-reported checks require its selected page to stay on the declared
+    site before and after each action; unrelated pages remain untouched.
     Hashing runs on the host, independently of page globals. Caller code stays
     in page eval.
     Structured CLI errors stop the plan even when the vendor process exits 0.
@@ -305,7 +301,7 @@ Run contract:
     action prints one JSON line on stdout. Page binding is rechecked after
     evaluate before a successful result is emitted.
   - Puppeteer receives the one-use CDP endpoint only through its environment,
-    binds the unique exact page by URL digest, rechecks the same page before
+    binds one same-site page by digest, rechecks the same page before
     every action, leaves unrelated pages untouched, and disconnects before the
     relay handoff exits; it never closes the external Chrome profile.
   - The child receives relay policy `require`, the lane's loopback relay URL,
@@ -315,7 +311,7 @@ Run contract:
     lease. Open and stale handoffs both refuse compliant browser automation.
     Time can mark a handoff stale but never restores access automatically.
   - Handoff output contains only lane metadata, a safe task reference, the
-    intended application origin, and its start mode. It omits full URLs,
+    intended application site, and its start mode. It omits full URLs,
     titles, page identifiers,
     account identifiers, relay details, and browser content.
   - Handoff open creates --nonce-output exclusively as an owner-only mode-600
@@ -338,8 +334,8 @@ Inspect contract:
   - Hold the exclusive lane lease, prove authenticated transport, and inventory
     only currently visible pages. Change no browser state or sharing permissions.
   - Without --page-url, success proves a readable inventory, not task readiness.
-    With it, success requires one exact matching selected page. Unrelated
-    visible pages do not make that target ambiguous.
+    With it, success requires one page on the declared site, preferring one
+    selected match when several exist. Different-site pages are unrelated.
   - Zero visible pages does not prove zero stored grants, a wrong profile, or
     continuous access enforcement. A fresh preflight snapshot reports live access
     mode; stored grants stay unknown.
@@ -363,13 +359,13 @@ Attended-login handoff:
   - `handoff open --page-url URL` writes the reservation before opening the
     intended application in the declared profile. It requires no relay,
     admitted page, adapter, or page inspection. Without `--page-url`, the
-    compatible admitted-page flow derives the origin from one selected page.
+    compatible admitted-page flow derives the site from one selected page.
   - While open or stale, list, health, untargeted inspect, handoff status, and
     recovery verify remain available. Targeted inspect, every browser engine,
     recovery create or expire, and a second open are refused.
   - `handoff resume --page-url URL` re-proves the lane, Selected-tabs mode,
-    one selected exact task page, and the recorded origin before removing the
-    reservation. It reuses a valid exact-page permission. If permission is
+    one page on the recorded site, preferring a selected match, before removing
+    the reservation. It reuses a valid same-site permission. If permission is
     absent, it returns the one human grant action and keeps the reservation.
     `release` aborts without page inspection. Both require the nonce.
   - The reservation coordinates callers that obey browser-lane. It cannot prove
@@ -683,9 +679,29 @@ has_remembered_page_identifier() {
   return 1
 }
 
+browser_lane_site_module_path() {
+  local script_real
+  script_real="$(realpath "${BASH_SOURCE[0]}" 2>/dev/null)" || return 1
+  printf '%s/lib/browser-lane-site.js' "$(dirname "$script_real")"
+}
+
+page_site_sha256() {
+  local node_bin site_module hash
+  node_bin="$(command -v node 2>/dev/null || true)"
+  site_module="$(browser_lane_site_module_path 2>/dev/null || true)"
+  [[ -n "$node_bin" && -f "$site_module" && ! -L "$site_module" ]] || return 1
+  IFS= read -r -d '' hash < <(printf '%s\0' "$1" | "$node_bin" "$site_module" 2>/dev/null) || return 1
+  [[ "$hash" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s\n' "$hash"
+}
+
 read_admitted_pages() {
   local lane_value="$1" page_url="$2" run_id="$3"
-  local port output_file page_summary expected_mode page_list_status
+  local port output_file page_summary expected_mode page_list_status parsed_pages
+  local requested_site_hash='' candidate_id candidate_url candidate_selected candidate_site_hash
+  local visible_count selected_page_count single_url selected_page_url
+  local match_count=0 selected_match_count=0 first_match_id='' selected_match_id=''
+  local chosen_id='' target_selected='null' readiness target_requested='false' match_count_json='null'
   port="$(jq -r '.relay_port' <<<"$lane_value")"
   expected_mode="$(jq -r '.expected_access_mode' <<<"$lane_value")"
   # All callers have already passed route_preflight under the lane lease.
@@ -730,9 +746,9 @@ read_admitted_pages() {
   # position rather than a greedy pattern: the selected marker is an exact
   # suffix, and the URL is the last parenthesised group closing the line. Any
   # line that does not parse under those rules refuses the whole list instead
-  # of admitting a guess. Only counts and the numeric index leave this filter;
-  # titles and URLs never reach the shell, a command line, or a refusal.
-  if ! page_summary="$(jq -s -ce --arg page_url "$page_url" '
+  # of admitting a guess. Titles stay inside jq. URLs reach only quoted private
+  # variables and process stdin for site hashing, never a command line or refusal.
+  if ! parsed_pages="$(jq -s -ce '
     def split_selected:
       if endswith(" [selected]")
       then {selected: true, body: .[0:(length - 11)]}
@@ -779,22 +795,7 @@ read_admitted_pages() {
     | join("\n")
     | split("\n")
     | if any(.[]; line_kind == "unknown") then error("unknown_line") else . end
-    | [.[] | select(line_kind == "page") | parse_page_line] as $pages
-    | [$pages[] | select(.url == $page_url)] as $matches
-    | {visible_page_count:($pages|length),
-       target:{requested:($page_url != ""),
-         match_count:(if $page_url == "" then null else ($matches|length) end),
-         selected:(if ($matches|length) == 1 then $matches[0].selected else null end)},
-       matched_id:(if ($matches|length) == 1 then $matches[0].id else "" end),
-       single_url:(if ($pages|length) == 1 then $pages[0].url else "" end),
-       single_selected:(if ($pages|length) == 1 then $pages[0].selected else null end),
-       readiness:(if $page_url == "" then
-           (if ($pages|length) == 0 then "no_visible_pages" else "target_not_requested" end)
-         elif ($matches|length) == 0 then "target_absent"
-         elif ($matches|length) > 1 then "ambiguous"
-         elif $matches[0].selected != true then "target_not_selected"
-         elif ([$pages[] | select(.selected)] | length) > 1 then "ambiguous"
-         else "ready" end)}
+    | {pages:[.[] | select(line_kind == "page") | parse_page_line]}
   ' "$output_file" 2>/dev/null)"; then
     cleanup_page_list_file
     emit_error "$EXIT_PAGE_UNRESOLVED" 'page_list_unreadable' "$run_id" false \
@@ -802,11 +803,65 @@ read_admitted_pages() {
       "Confirm the exact existing profile and inspect its OpenClaw popup; request approval before changing sharing." "$page_access_data"
   fi
   cleanup_page_list_file
+  visible_count="$(jq -r '.pages | length' <<<"$parsed_pages")"
+  selected_page_count="$(jq -r '[.pages[] | select(.selected)] | length' <<<"$parsed_pages")"
+  single_url="$(jq -r 'if (.pages | length) == 1 then .pages[0].url else "" end' <<<"$parsed_pages")"
+  selected_page_url="$(jq -r 'first(.pages[] | select(.selected) | .url) // ""' <<<"$parsed_pages")"
+  if [[ -n "$page_url" ]]; then
+    requested_site_hash="$(page_site_sha256 "$page_url")" || die_usage '--page-url has an unusable site'
+    target_requested='true'
+    while IFS= read -r -d '' candidate_id &&
+      IFS= read -r -d '' candidate_url &&
+      IFS= read -r -d '' candidate_selected; do
+      candidate_site_hash="$(page_site_sha256 "$candidate_url")" || continue
+      [[ "$candidate_site_hash" == "$requested_site_hash" ]] || continue
+      match_count=$((match_count + 1))
+      first_match_id="$candidate_id"
+      if [[ "$candidate_selected" == 'true' ]]; then
+        selected_match_count=$((selected_match_count + 1))
+        selected_match_id="$candidate_id"
+      fi
+    done < <(jq -j '.pages[] | .id, "\u0000", .url, "\u0000", (.selected | tostring), "\u0000"' <<<"$parsed_pages")
+    match_count_json="$match_count"
+    if [[ "$match_count" == 0 ]]; then
+      readiness='target_absent'
+    elif [[ "$selected_match_count" == 1 ]]; then
+      chosen_id="$selected_match_id"
+      target_selected='true'
+      readiness='ready'
+    elif [[ "$selected_match_count" -gt 1 || "$match_count" -gt 1 ]]; then
+      readiness='ambiguous'
+    else
+      chosen_id="$first_match_id"
+      target_selected='false'
+      readiness='ready'
+    fi
+  elif [[ "$visible_count" == 0 ]]; then
+    readiness='no_visible_pages'
+  else
+    readiness='target_not_requested'
+  fi
+  page_summary="$(jq -cn \
+    --argjson visible_page_count "$visible_count" \
+    --argjson requested "$target_requested" \
+    --argjson match_count "$match_count_json" \
+    --argjson selected "$target_selected" \
+    --arg readiness "$readiness" \
+    --arg matched_id "$chosen_id" \
+    --arg single_url "$single_url" \
+    --arg selected_page_url "$selected_page_url" \
+    --argjson selected_page_count "$selected_page_count" '
+      {visible_page_count:$visible_page_count,
+       target:{requested:$requested,match_count:$match_count,selected:$selected},
+       matched_id:$matched_id,single_url:$single_url,
+       selected_page_url:$selected_page_url,selected_page_count:$selected_page_count,
+       readiness:$readiness}')"
   resolved_page_id="$(jq -r '.matched_id' <<<"$page_summary")"
   resolved_single_page_url="$(jq -r '.single_url' <<<"$page_summary")"
-  resolved_single_page_selected="$(jq -r '.single_selected' <<<"$page_summary")"
+  resolved_selected_page_url="$(jq -r '.selected_page_url' <<<"$page_summary")"
+  resolved_selected_page_count="$(jq -r '.selected_page_count' <<<"$page_summary")"
   page_access_data="$(jq -c --argjson summary "$page_summary" \
-    '. + ($summary | del(.matched_id,.single_url,.single_selected)) + {inventory:"readable"}' <<<"$page_access_data")"
+    '. + ($summary | del(.matched_id,.single_url,.selected_page_url,.selected_page_count)) + {inventory:"readable"}' <<<"$page_access_data")"
 }
 
 require_admitted_page() {
@@ -822,7 +877,7 @@ require_admitted_page() {
   fi
   if [[ "$readiness" == 'ambiguous' ]]; then
     emit_error "$EXIT_PAGE_UNRESOLVED" 'page_ambiguous' "$run_id" true \
-      "the lane must expose exactly one admitted page matching the declared page (matched $match_count of $admitted_count admitted pages)" \
+      "the lane exposes several admitted pages on the declared site without one selected match (matched $match_count of $admitted_count admitted pages)" \
       "Confirm the exact existing profile and request approval to limit sharing to the intended tab, then retry." "$page_access_data"
   fi
   if [[ "$readiness" != 'ready' ]]; then
@@ -833,6 +888,10 @@ require_admitted_page() {
 }
 
 resolve_admitted_page() {
+  # Secured mode resolves one page on the declared site through the Chrome
+  # DevTools inventory. Free mode has no admission; each adapter proves its page
+  # inside its handoff.
+  [[ "$free_mode" == 'false' ]] || return 0
   read_admitted_pages "$1" "$2" "$3"
   require_admitted_page "$3"
 }
@@ -859,7 +918,8 @@ page_target_match_count='null'
 page_target_selected='null'
 agent_cleanup_temp_dir=''
 resolved_single_page_url=''
-resolved_single_page_selected='null'
+resolved_selected_page_url=''
+resolved_selected_page_count='0'
 
 decode_page_target_facts() {
   local decoded
@@ -895,24 +955,27 @@ retire_page_list_child() {
 
 cleanup_agent_browser_temp_dir() {
   [[ -n "${agent_cleanup_temp_dir:-}" ]] || return 0
-  rm -f "$agent_cleanup_temp_dir/info.json" "$agent_cleanup_temp_dir/list.json" "$agent_cleanup_temp_dir/close.json" "$agent_cleanup_temp_dir/session.json" "$agent_cleanup_temp_dir/url.json" "$agent_cleanup_temp_dir/outcome.json" "$agent_cleanup_temp_dir/run"
+  rm -f "$agent_cleanup_temp_dir/info.json" "$agent_cleanup_temp_dir/list.json" "$agent_cleanup_temp_dir/close.json" "$agent_cleanup_temp_dir/session.json" "$agent_cleanup_temp_dir/url.json" "$agent_cleanup_temp_dir/candidate-urls" "$agent_cleanup_temp_dir/candidate-hashes" "$agent_cleanup_temp_dir/outcome.json" "$agent_cleanup_temp_dir/run"
   rmdir "$agent_cleanup_temp_dir" 2>/dev/null || true
   agent_cleanup_temp_dir=''
 }
 
-# A shared CDP session must attach without pinning before it can safely pin the
-# already-admitted page. The runner stays within one authenticated MCPorter
-# handoff, keeping the endpoint private through bind, guard, work, and retirement.
+# A shared CDP session first attaches without pinning. Free mode selects the
+# page on the declared site itself; secured mode receives the admitted page. The
+# endpoint stays private through bind, guard, work, and retirement.
 run_agent_browser_staged() {
-  local relay_url="$1" session_name="$2" page_url_hash="$3" next_page_url_hash="$4"
-  shift 4
-  local runner outcome_file child_status phase outcome_status
+  local relay_url="$1" session_name="$2" page_url_hash="$3" next_page_url_hash="$4" free_mode="$5"
+  shift 5
+  local runner outcome_file child_status phase outcome_status site_node site_module
+  site_node="$(command -v node 2>/dev/null || true)"
+  site_module="$(browser_lane_site_module_path 2>/dev/null || true)"
   agent_cleanup_temp_dir="$(mktemp -d "$state_root/agent-cleanup.XXXXXX")"
   chmod 700 "$agent_cleanup_temp_dir"
   runner="$agent_cleanup_temp_dir/run"
   outcome_file="$agent_cleanup_temp_dir/outcome.json"
-  cat >"$runner" <<'SH'
-#!/usr/bin/env bash
+  {
+    printf '%s\n' '#!/usr/bin/env bash'
+    cat <<'SH'
 set -u
 state_dir="$BROWSER_LANE_AGENT_STATE_DIR"
 session="$BROWSER_LANE_AGENT_SESSION"
@@ -920,10 +983,15 @@ expected_hash="$BROWSER_LANE_AGENT_PAGE_SHA256"
 next_expected_hash="$BROWSER_LANE_AGENT_NEXT_PAGE_SHA256"
 expected_target_id=''
 navigation_observed=false
+free_mode="$BROWSER_LANE_AGENT_FREE_MODE"
 outcome="$state_dir/outcome.json"
 info="$state_dir/info.json"
 attached="$state_dir/list.json"
 url_file="$state_dir/url.json"
+candidate_urls="$state_dir/candidate-urls"
+candidate_hashes="$state_dir/candidate-hashes"
+site_node="$BROWSER_LANE_AGENT_SITE_NODE"
+site_module="$BROWSER_LANE_AGENT_SITE_MODULE"
 finish() { jq -cn --arg phase "$1" --argjson status "${2:-0}" '{phase:$phase,status:$status}' >"$outcome"; }
 retire() {
   agent-browser --session "$session" session info --json >"$info" 2>/dev/null || return 1
@@ -933,8 +1001,14 @@ retire() {
     jq -e '.success == true and .data.closed == true' "$state_dir/session.json" >/dev/null 2>&1 || return 1
   fi
 }
-# This is the only unpinned command.  It attaches the fresh run-scoped session
-# to the already-proved sole selected page; its result never reaches stdout.
+page_site_sha256() {
+  local hash
+  IFS= read -r -d '' hash < <(printf '%s\0' "$1" | "$site_node" "$site_module" 2>/dev/null) || return 1
+  [[ "$hash" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s\n' "$hash"
+}
+# This is the only unpinned inventory command. Its result stays private while
+# free mode selects one same-site target and secured mode uses the admitted page.
 if ! agent-browser --session "$session" tab list --json >"$attached" 2>/dev/null; then
   if retire; then
     finish attach_failed 17
@@ -943,13 +1017,79 @@ if ! agent-browser --session "$session" tab list --json >"$attached" 2>/dev/null
   fi
   exit 85
 fi
-if [[ -n "$next_expected_hash" ]]; then
+if [[ "$free_mode" == true ]]; then
+  if [[ -z "$site_node" || ! -f "$site_module" || -L "$site_module" ]] ||
+    ! jq -e '.success == true and (.data.tabs | type) == "array"' "$attached" >/dev/null 2>&1; then
+    if retire; then finish attach_failed 17; else finish attach_cleanup_failed 17; fi
+    exit 85
+  fi
+  if ! jq -j '.data.tabs[] | objects | select((.targetId | type) == "string" and (.targetId | length) > 0 and (.url | type) == "string") | .url, "\u0000"' "$attached" >"$candidate_urls" 2>/dev/null ||
+    ! "$site_node" "$site_module" <"$candidate_urls" >"$candidate_hashes" 2>/dev/null; then
+    if retire; then finish attach_failed 17; else finish attach_cleanup_failed 17; fi
+    exit 85
+  fi
+  match_count=0
+  preferred_count=0
+  first_target_id=''
+  preferred_target_id=''
+  exec 3<"$candidate_hashes"
+  while IFS= read -r -d '' candidate_target_id &&
+    IFS= read -r -d '' candidate_url &&
+    IFS= read -r -d '' candidate_preferred; do
+    if ! IFS= read -r -d '' candidate_hash <&3; then
+      if retire; then finish attach_failed 17; else finish attach_cleanup_failed 17; fi
+      exit 85
+    fi
+    [[ -z "$candidate_hash" || "$candidate_hash" =~ ^[0-9a-f]{64}$ ]] || {
+      if retire; then finish attach_failed 17; else finish attach_cleanup_failed 17; fi
+      exit 85
+    }
+    [[ "$candidate_hash" == "$expected_hash" ]] || continue
+    match_count=$((match_count + 1))
+    first_target_id="$candidate_target_id"
+    if [[ "$candidate_preferred" == true ]]; then
+      preferred_count=$((preferred_count + 1))
+      preferred_target_id="$candidate_target_id"
+    fi
+  done < <(jq -j '.data.tabs[] | objects | select((.targetId | type) == "string" and (.targetId | length) > 0 and (.url | type) == "string") | .targetId, "\u0000", .url, "\u0000", ((.active == true or .selected == true) | tostring), "\u0000"' "$attached")
+  if IFS= read -r -d '' candidate_hash <&3; then
+    if retire; then finish attach_failed 17; else finish attach_cleanup_failed 17; fi
+    exit 85
+  fi
+  exec 3<&-
+  if [[ "$preferred_count" == 1 ]]; then
+    expected_target_id="$preferred_target_id"
+  elif [[ "$preferred_count" == 0 && "$match_count" == 1 ]]; then
+    expected_target_id="$first_target_id"
+  else
+    if retire; then finish url_mismatch 16; else finish url_mismatch_cleanup_failed 16; fi
+    exit 87
+  fi
+  if ! agent-browser --session "$session" tab "$expected_target_id" --json >"$state_dir/session.json" 2>/dev/null ||
+    ! jq -e '.success == true' "$state_dir/session.json" >/dev/null 2>&1; then
+    if retire; then finish attach_failed 17; else finish attach_cleanup_failed 17; fi
+    exit 85
+  fi
+  if [[ -n "$next_expected_hash" ]]; then
+    if ! agent-browser --session "$session" --pin-tab tab list --json >"$state_dir/list.json" 2>/dev/null ||
+      ! jq -e --arg target "$expected_target_id" '
+        .success == true and (.data.tabs | type) == "array" and (.data.tabs | length) == 1 and
+        .data.tabs[0].targetId == $target
+      ' "$state_dir/list.json" >/dev/null 2>&1; then
+      if retire; then finish attach_failed 17; else finish attach_cleanup_failed 17; fi
+      exit 85
+    fi
+  fi
+elif [[ -n "$next_expected_hash" ]]; then
   expected_target_id="$(jq -er 'if .success == true and (.data.tabs | type) == "array" and (.data.tabs | length) == 1 and (.data.tabs[0].targetId | type) == "string" and (.data.tabs[0].targetId | length) > 0 and (.data.tabs[0].url | type) == "string" then .data.tabs[0].targetId else error("invalid") end' "$attached" 2>/dev/null)" || {
     if retire; then finish attach_failed 17; else finish attach_cleanup_failed 17; fi
     exit 85
   }
   initial_attached_url="$(jq -er '.data.tabs[0].url' "$attached")" || exit 85
-  initial_attached_hash="$(printf '%s' "$initial_attached_url" | shasum -a 256 | awk '{print $1}')"
+  initial_attached_hash="$(page_site_sha256 "$initial_attached_url")" || {
+    if retire; then finish url_unreadable 16; else finish url_unreadable_cleanup_failed 16; fi
+    exit 86
+  }
   [[ "$initial_attached_hash" == "$expected_hash" ]] || { if retire; then finish url_mismatch 16; else finish url_mismatch_cleanup_failed 16; fi; exit 87; }
 fi
 # Pin only after the attachment established the sole admitted page. Each item
@@ -971,7 +1111,10 @@ actual_url="$(jq -er 'if .success == true then (.data.url // .data.value // .dat
   fi
   exit 86
 }
-actual_hash="$(printf '%s' "$actual_url" | shasum -a 256 | awk '{print $1}')"
+actual_hash="$(page_site_sha256 "$actual_url")" || {
+  if retire; then finish url_unreadable 16; else finish url_unreadable_cleanup_failed 16; fi
+  exit 86
+}
 if [[ "$actual_hash" != "$expected_hash" ]]; then
   if retire; then
     finish url_mismatch 16
@@ -996,19 +1139,27 @@ verify_transition() {
     transition_url="$(jq -er '.data.tabs[0].url' "$state_dir/list.json")"
     transition_hash="$(printf '%s' "$transition_url" | shasum -a 256 | awk '{print $1}')"
     if [[ "$transition_hash" == "$next_expected_hash" ]]; then navigation_observed=true; return 0; fi
-    [[ "$transition_hash" == "$expected_hash" ]] || break
+    transition_site_hash="$(page_site_sha256 "$transition_url")" || {
+      if retire; then finish transition_unreadable 16; else finish transition_unreadable_cleanup_failed 16; fi
+      exit 86
+    }
+    [[ "$transition_site_hash" == "$expected_hash" ]] || break
     # Tab inventory URLs may stay cached across a document navigation. Ask the
     # pinned target for its current URL, then recheck its identity before success.
-    if [[ "$transition_hash" == "$expected_hash" ]] &&
-      agent-browser --session "$session" --pin-tab get url --json >"$url_file" 2>/dev/null; then
+    if agent-browser --session "$session" --pin-tab get url --json >"$url_file" 2>/dev/null; then
       transition_url="$(jq -er 'select(.success == true) | (.data.url // .data.value // .data) | select(type == "string")' "$url_file" 2>/dev/null)" || transition_url=''
       transition_hash="$(printf '%s' "$transition_url" | shasum -a 256 | awk '{print $1}')"
-      if [[ "$transition_hash" == "$next_expected_hash" ]] &&
-        agent-browser --session "$session" --pin-tab tab list --json >"$state_dir/list.json" 2>/dev/null &&
-        jq -e --arg target "$expected_target_id" '.success == true and (.data.tabs | length) == 1 and .data.tabs[0].targetId == $target' "$state_dir/list.json" >/dev/null 2>&1; then
-        navigation_observed=true; return 0
+      if [[ "$transition_hash" == "$next_expected_hash" ]]; then
+        if agent-browser --session "$session" --pin-tab tab list --json >"$state_dir/list.json" 2>/dev/null &&
+          jq -e --arg target "$expected_target_id" '.success == true and (.data.tabs | length) == 1 and .data.tabs[0].targetId == $target' "$state_dir/list.json" >/dev/null 2>&1; then
+          navigation_observed=true; return 0
+        fi
+        break
       fi
-      [[ -z "$transition_url" || "$transition_hash" == "$expected_hash" ]] || break
+      if [[ -n "$transition_url" ]]; then
+        transition_site_hash="$(page_site_sha256 "$transition_url")" || break
+        [[ "$transition_site_hash" == "$expected_hash" ]] || break
+      fi
     fi
     [[ "$transition_attempt" != 5 ]] || break
     sleep 0.1
@@ -1037,11 +1188,15 @@ else
 fi
 exit "$work_status"
 SH
+  } >"$runner"
   chmod 700 "$runner"
   BROWSER_LANE_AGENT_STATE_DIR="$agent_cleanup_temp_dir" \
     BROWSER_LANE_AGENT_SESSION="$session_name" \
     BROWSER_LANE_AGENT_PAGE_SHA256="$page_url_hash" \
     BROWSER_LANE_AGENT_NEXT_PAGE_SHA256="$next_page_url_hash" \
+    BROWSER_LANE_AGENT_FREE_MODE="$free_mode" \
+    BROWSER_LANE_AGENT_SITE_NODE="$site_node" \
+    BROWSER_LANE_AGENT_SITE_MODULE="$site_module" \
     "$mcporter_bin" chrome-relay exec --relay-url "$relay_url" -- "$runner" "$@"
   child_status=$?
   phase="$(jq -r '.phase // "unknown"' "$outcome_file" 2>/dev/null || printf unknown)"
@@ -1360,14 +1515,6 @@ create_handoff_nonce() {
       'Choose a new absolute filename inside an existing owner-only mode-700 directory without symlinks. Never reuse an existing token file.'
 }
 
-origin_from_page_url() {
-  jq -Rer '
-    capture("^(?<scheme>https?)://(?<authority>[^/?#[:space:]]+)") as $parts
-    | select(($parts.authority | contains("@")) | not)
-    | "\($parts.scheme | ascii_downcase)://\($parts.authority | ascii_downcase)"
-  ' <<<"$1" 2>/dev/null
-}
-
 emit_open_success() {
   local lane="$1" lane_value="$2" json="$3" run_id="$4" data
   data="$(jq -cn \
@@ -1512,20 +1659,32 @@ open_profile_page() {
 }
 
 require_single_handoff_page() {
-  local lane_value="$1" run_id="$2" visible_count
+  local lane_value="$1" run_id="$2" visible_count handoff_page_url node_bin site_module
   read_admitted_pages "$lane_value" '' "$run_id"
   visible_count="$(jq -r '.visible_page_count' <<<"$page_access_data")"
-  [[ "$visible_count" == '1' ]] ||
+  if [[ "$resolved_selected_page_count" == '1' ]]; then
+    handoff_page_url="$resolved_selected_page_url"
+  elif [[ "$resolved_selected_page_count" == '0' && "$visible_count" == '1' ]]; then
+    handoff_page_url="$resolved_single_page_url"
+  else
     emit_error "$EXIT_PAGE_UNRESOLVED" 'handoff_page_ambiguous' "$run_id" true \
-      "an attended-login handoff requires exactly one admitted page; observed $visible_count" \
+      "an attended-login handoff requires one selected page or one admitted page; observed $visible_count" \
       'Ask the human to admit only the intended task tab, then retry.' "$page_access_data"
-  [[ "$resolved_single_page_selected" == 'true' ]] ||
+  fi
+  [[ -n "$handoff_page_url" ]] ||
     emit_error "$EXIT_PAGE_UNRESOLVED" 'handoff_page_not_selected' "$run_id" true \
       'the attended-login handoff page is not the relay selected page' \
       'Ask the human to select the intended task tab in the exact profile, then retry.' "$page_access_data"
-  handoff_observed_origin="$(origin_from_page_url "$resolved_single_page_url")" ||
+  node_bin="$(command -v node 2>/dev/null || true)"
+  site_module="$(browser_lane_site_module_path 2>/dev/null || true)"
+  handoff_observed_origin="$("$node_bin" -e '
+    const { siteFromUrl } = require(process.argv[1]);
+    const site = siteFromUrl(process.argv[2]);
+    if (site === null) process.exit(1);
+    process.stdout.write(site);
+  ' "$site_module" "$handoff_page_url" 2>/dev/null)" ||
     emit_error "$EXIT_PAGE_UNRESOLVED" 'handoff_origin_unusable' "$run_id" false \
-      'the attended-login handoff page does not have a safe HTTP origin' \
+      'the attended-login handoff page does not have a safe HTTP site' \
       'Use an ordinary HTTP or HTTPS task page without embedded user information.' "$page_access_data"
 }
 
@@ -1538,17 +1697,17 @@ require_handoff_continuation_page() {
   target_selected="$page_target_selected"
   if [[ "$readiness" == 'target_absent' ]]; then
     emit_error "$EXIT_PAGE_UNRESOLVED" 'handoff_grant_required' "$run_id" true \
-      "the exact task page is not admitted (matched 0 of $admitted_count admitted pages)" \
-      "In the declared Chrome profile, focus the intended exact task tab and click OpenClaw's Allow on this tab once; leave unrelated admitted pages unchanged, then retry." "$page_access_data"
+      "the task site is not admitted (matched 0 of $admitted_count admitted pages)" \
+      "In the declared Chrome profile, focus the intended task tab and click OpenClaw's Allow on this tab once; leave unrelated admitted pages unchanged, then retry." "$page_access_data"
   fi
-  if [[ "$match_count" -gt 1 ]]; then
+  if [[ "$readiness" == 'ambiguous' ]]; then
     emit_error "$EXIT_PAGE_UNRESOLVED" 'handoff_page_ambiguous' "$run_id" true \
-      "continuation requires one admitted page matching the exact task URL (matched $match_count of $admitted_count admitted pages)" \
-      'Select one intended task tab with a unique ordinary URL, then retry.' "$page_access_data"
+      "continuation found several admitted pages on the declared site without one selected match (matched $match_count of $admitted_count admitted pages)" \
+      'Select the intended task tab, then retry.' "$page_access_data"
   fi
   if [[ "$target_selected" != 'true' ]]; then
     emit_error "$EXIT_PAGE_UNRESOLVED" 'handoff_page_not_selected' "$run_id" true \
-      'the exact task page is admitted but is not the relay selected page' \
+      'the task page is admitted but is not the relay selected page' \
       'Select the intended task tab in the declared Chrome profile, then retry.' "$page_access_data"
   fi
 }
@@ -1673,7 +1832,7 @@ emit_pre_admission_opening_uncertain() {
 
 open_handoff() {
   local lane="$1" lane_value="$2" account_role="$3" task_ref="$4" window="$5" page_url="$6" json="$7" run_id="$8"
-  local nonce_output="$9" expected_role nonce_hash success_data
+  local nonce_output="$9" expected_role nonce_hash success_data node_bin site_module
   expected_role="$(jq -r '.account_role' <<<"$lane_value")"
   [[ "$account_role" == "$expected_role" ]] ||
     emit_error "$EXIT_PROFILE_MISMATCH" 'account_role_mismatch' "$run_id" false \
@@ -1687,9 +1846,16 @@ open_handoff() {
     trap 'release_lease "$lane" "$run_id"' EXIT
     trap interrupt_handoff_publication HUP INT TERM
     refuse_while_handoff "$lane" "$lane_value" "$run_id"
-    handoff_observed_origin="$(origin_from_page_url "$page_url")" ||
+    node_bin="$(command -v node 2>/dev/null || true)"
+    site_module="$(browser_lane_site_module_path 2>/dev/null || true)"
+    handoff_observed_origin="$("$node_bin" -e '
+      const { siteFromUrl } = require(process.argv[1]);
+      const site = siteFromUrl(process.argv[2]);
+      if (site === null) process.exit(1);
+      process.stdout.write(site);
+    ' "$site_module" "$page_url" 2>/dev/null)" ||
       emit_error "$EXIT_PAGE_UNRESOLVED" 'handoff_origin_unusable' "$run_id" false \
-        'the intended application page does not have a safe HTTP origin' \
+        'the intended application page does not have a safe HTTP site' \
         'Use an ordinary HTTP or HTTPS application page without embedded user information.'
     create_handoff_nonce "$nonce_output" "$run_id"
     write_handoff_record "$lane" "$lane_value" "$task_ref" "$window" "$nonce_hash" pre_admission "$run_id"
@@ -1797,7 +1963,7 @@ interrupt_handoff_resume() {
 
 resume_handoff() {
   local lane="$1" lane_value="$2" account_role="$3" nonce="$4" page_url="$5" json="$6" run_id="$7"
-  local expected_role recorded_origin recorded_start_mode requested_origin resumed_data
+  local expected_role recorded_origin recorded_start_mode recorded_origin_hash requested_origin_hash resumed_data
   expected_role="$(jq -r '.account_role' <<<"$lane_value")"
   [[ "$account_role" == "$expected_role" ]] ||
     emit_error "$EXIT_PROFILE_MISMATCH" 'account_role_mismatch' "$run_id" false \
@@ -1812,11 +1978,15 @@ resume_handoff() {
   trap 'interrupt_handoff_resume "$lane" "$run_id"' HUP INT TERM
   recorded_origin="$(jq -r '.site_origin' "$handoff_record")"
   recorded_start_mode="$(jq -r '.start_mode // "admitted"' "$handoff_record")"
-  requested_origin="$(origin_from_page_url "$page_url")" ||
+  recorded_origin_hash="$(page_site_sha256 "$recorded_origin")" ||
     emit_error "$EXIT_PAGE_UNRESOLVED" 'handoff_destination_unusable' "$run_id" false \
-      'the continuation page does not have a safe HTTP origin' \
+      'the reserved application site is no longer readable' \
+      'Repair the Browser Lane runtime, then retry without changing the reservation.'
+  requested_origin_hash="$(page_site_sha256 "$page_url")" ||
+    emit_error "$EXIT_PAGE_UNRESOLVED" 'handoff_destination_unusable' "$run_id" false \
+      'the continuation page does not have a safe HTTP site' \
       'Use the exact ordinary HTTP or HTTPS task-page URL without embedded user information.'
-  [[ "$requested_origin" == "$recorded_origin" ]] ||
+  [[ "$requested_origin_hash" == "$recorded_origin_hash" ]] ||
     emit_error "$EXIT_PAGE_UNRESOLVED" 'handoff_destination_mismatch' "$run_id" false \
       'the continuation page does not match the reserved application origin' \
       'Resume with the exact intended task page from the reserved application, or release this handoff.'
@@ -2524,7 +2694,7 @@ validate_recovery_usage() {
 main() {
   local command_name="${1:-}" json='false' lane='' account_role='' run_id='' run_id_set='false' ttl='' ttl_set='false'
   local page_url='' page_url_set='false' next_page_url='' next_page_url_set='false' child_tool='' resolved_page_id=''
-  local child_arg='' page_id_routed='false'
+  local child_arg='' page_id_routed='false' start_site_hash='' next_site_hash='' site_node='' site_module=''
   local -a child_argv=()
   local recovery_action='' retention_days='' deletion_owner='' snapshot='' execute='false' recovery_flags='false'
   local plan_file='' plan_file_set='false' scenario=''
@@ -2838,7 +3008,7 @@ main() {
     export BROWSER_LANE_PLAYWRIGHT_SESSION="$session_name"
     export BROWSER_LANE_PLAYWRIGHT_TTL_SECONDS="$ttl"
     export BROWSER_LANE_PAGE_URL_SHA256
-    BROWSER_LANE_PAGE_URL_SHA256="$(printf '%s' "$page_url" | shasum -a 256 | awk '{print $1}')"
+    BROWSER_LANE_PAGE_URL_SHA256="$(page_site_sha256 "$page_url")" || die_usage '--page-url has an unusable site'
     set +e
     "$mcporter_bin" chrome-relay exec --relay-url "http://127.0.0.1:$relay_port" -- \
       "$0" __playwright-child &
@@ -2897,7 +3067,7 @@ main() {
     export BROWSER_LANE_PUPPETEER_PLAN="$action_plan_temp_file"
     export BROWSER_LANE_PUPPETEER_TTL_SECONDS="$ttl"
     export BROWSER_LANE_PAGE_URL_SHA256
-    BROWSER_LANE_PAGE_URL_SHA256="$(printf '%s' "$page_url" | shasum -a 256 | awk '{print $1}')"
+    BROWSER_LANE_PAGE_URL_SHA256="$(page_site_sha256 "$page_url")" || die_usage '--page-url has an unusable site'
     # The relay handoff runs as a background job so a signal to this process
     # is forwarded to it at once instead of waiting for the current action to
     # finish; the parent then waits for the child to be gone before its EXIT
@@ -2933,14 +3103,22 @@ main() {
     [[ "$page_url_set" == 'true' ]] || die_usage 'agent-browser requires --page-url'
     [[ "$page_url" =~ ^https?://[^[:space:]]+$ ]] ||
       die_usage '--page-url must be an absolute http or https URL'
+    site_node="$(command -v node 2>/dev/null || true)"
+    site_module="$(browser_lane_site_module_path 2>/dev/null || true)"
+    if [[ -z "$site_node" || ! -f "$site_module" || -L "$site_module" ]] ||
+      ! "$site_node" -e 'require(process.argv[1])' "$site_module" >/dev/null 2>&1; then
+      emit_error "$EXIT_LIFECYCLE_UNRESOLVED" 'agent_browser_attach_failed' "$run_id" true \
+        'Agent Browser could not attach its run-scoped session to the admitted page' \
+        'Restore Node.js and the lane-owned site helper, then retry.'
+    fi
     if [[ "$next_page_url_set" == 'true' ]]; then
       [[ "$next_page_url" =~ ^https?://[^[:space:]]+$ ]] ||
         die_usage '--next-page-url must be an absolute http or https URL'
       [[ "$#" -eq 1 ]] || die_usage '--next-page-url requires exactly one terminal batch command'
-      start_origin="$(origin_from_page_url "$page_url")" || die_usage '--page-url has an unusable origin'
-      next_origin="$(origin_from_page_url "$next_page_url")" || die_usage '--next-page-url has an unusable origin'
-      [[ "$start_origin" == "$next_origin" && "$page_url" != "$next_page_url" ]] ||
-        die_usage '--next-page-url must be a different URL on the same origin as --page-url'
+      start_site_hash="$(page_site_sha256 "$page_url")" || die_usage '--page-url has an unusable site'
+      next_site_hash="$(page_site_sha256 "$next_page_url")" || die_usage '--next-page-url has an unusable site'
+      [[ "$start_site_hash" == "$next_site_hash" && "$page_url" != "$next_page_url" ]] ||
+        die_usage '--next-page-url must be a different URL on the same site as --page-url'
     fi
     [[ "$#" -ge 1 ]] || die_usage 'agent-browser requires one or more batch commands after --'
     for child_arg in "$@"; do
@@ -2966,13 +3144,13 @@ main() {
     # Hash the full identity instead of truncating it into a long filename.
     session_hash="$(printf '%s:%s' "$lane" "$run_id" | shasum -a 256 | cut -c 1-24)"
     session_name="browser-lane-${session_hash}-$$"
-    page_url_hash="$(printf '%s' "$page_url" | shasum -a 256 | awk '{print $1}')"
+    page_url_hash="$(page_site_sha256 "$page_url")" || die_usage '--page-url has an unusable site'
     export BROWSER_LANE_NAME="$lane"
     export BROWSER_LANE_RUN_ID="$run_id"
     set +e
     next_page_hash=''
     [[ "$next_page_url_set" == 'false' ]] || next_page_hash="$(printf '%s' "$next_page_url" | shasum -a 256 | awk '{print $1}')"
-    run_agent_browser_staged "http://127.0.0.1:$relay_port" "$session_name" "$page_url_hash" "$next_page_hash" "$@"
+    run_agent_browser_staged "http://127.0.0.1:$relay_port" "$session_name" "$page_url_hash" "$next_page_hash" "$free_mode" "$@"
     child_status=$?
     set -e
     local action_outcome='unknown' cleanup_outcome='unknown' outcome_code="$child_status"
@@ -2993,7 +3171,7 @@ main() {
         cleanup_agent_browser_temp_dir
         emit_error "$EXIT_LIFECYCLE_UNRESOLVED" 'agent_browser_attach_failed' "$run_id" true \
           'Agent Browser could not attach its run-scoped session to the admitted page' \
-          'Check the run-scoped Agent Browser runtime and socket directory; exact-page readiness already passed.'
+          'Check the run-scoped Agent Browser runtime and socket directory; same-site readiness already passed.'
         ;;
       url_unreadable|url_unreadable_cleanup_failed)
         [[ "${AGENT_BROWSER_STAGED_PHASE:-}" != 'url_unreadable_cleanup_failed' ]] ||
@@ -3001,7 +3179,7 @@ main() {
         cleanup_agent_browser_temp_dir
         emit_error "$EXIT_PAGE_UNRESOLVED" 'agent_browser_page_unreadable' "$run_id" false \
           'Agent Browser could not read the page bound to its run-scoped session' \
-          "Observe the intended tab's current ordinary URL in the declared profile, then inspect that exact URL and verify the action's effect. Do not replay an uncertain mutation or re-admit solely because navigation ended the old attachment. Honor Stop or revoked access."
+          "Observe the intended tab's current ordinary URL in the declared profile, then inspect that page and verify the action's effect. Do not replay an uncertain mutation or re-admit solely because navigation ended the old attachment. Honor Stop or revoked access."
         ;;
       transition_unreadable|transition_unreadable_cleanup_failed)
         [[ "${AGENT_BROWSER_STAGED_PHASE:-}" != 'transition_unreadable_cleanup_failed' ]] ||
@@ -3017,7 +3195,7 @@ main() {
         cleanup_agent_browser_temp_dir
         emit_error "$EXIT_PAGE_UNRESOLVED" 'agent_browser_page_mismatch' "$run_id" false \
           'Agent Browser bound a page that does not match the admitted page' \
-          "Observe the intended tab's current ordinary URL in the declared profile, then inspect that exact URL and verify the action's effect. Do not replay an uncertain mutation or re-admit solely because navigation ended the old attachment. Honor Stop or revoked access."
+          "Observe the intended tab's current ordinary URL in the declared profile, then inspect that page and verify the action's effect. Do not replay an uncertain mutation or re-admit solely because navigation ended the old attachment. Honor Stop or revoked access."
         ;;
       cleanup_failed)
         if [[ "${AGENT_BROWSER_STAGED_STATUS:-0}" == '0' ]]; then
@@ -3069,7 +3247,7 @@ main() {
   if [[ "$free_mode" == false ]] && is_prohibited_tool "$child_tool"; then
     emit_error "$EXIT_USAGE" 'prohibited_tool' "$run_id" false \
       "chrome-devtools tool is prohibited inside a lane run: $child_tool" \
-      "Use a tool that stays inside the selected exact task page; page creation, navigation, selection, closing, PWA lifecycle, extension lifecycle, and out-of-band execution are not lane-run actions."
+      "Use a tool that stays inside the selected same-site task page; page creation, navigation, selection, closing, PWA lifecycle, extension lifecycle, and out-of-band execution are not lane-run actions."
   fi
   if [[ "$free_mode" == false ]] && has_remembered_page_identifier "$@"; then
     emit_error "$EXIT_USAGE" 'remembered_page_identifier' "$run_id" false \
@@ -3082,7 +3260,7 @@ main() {
   if [[ "$free_mode" == false && "$child_tool" != 'list_pages' && "$page_url_set" == 'false' ]]; then
     emit_error "$EXIT_USAGE" 'page_url_required' "$run_id" false \
       "this chrome-devtools tool accesses page content and requires --page-url: $child_tool" \
-      'Pass --page-url with the exact URL of the selected task page.'
+      'Pass --page-url with the full URL of the selected same-site task page.'
   fi
   require_command openclaw "$run_id"
   require_command "$mcporter_bin" "$run_id"
