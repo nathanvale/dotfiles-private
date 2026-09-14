@@ -35,6 +35,10 @@ export const FINDINGS = {
 	HUMAN_OUTPUT_IS_JSON: "HUMAN_OUTPUT_IS_JSON",
 	HELP_MISSING_USAGE: "HELP_MISSING_USAGE",
 	ENVELOPE_NEXT_STEP_RULE: "ENVELOPE_NEXT_STEP_RULE",
+	ENVELOPE_SUCCESS_UNRESOLVED: "ENVELOPE_SUCCESS_UNRESOLVED",
+	ENVELOPE_UNRESOLVED_RETRYABLE: "ENVELOPE_UNRESOLVED_RETRYABLE",
+	DISCOVERY_FIELD_UNDECLARED: "DISCOVERY_FIELD_UNDECLARED",
+	LARGE_ENVELOPE_BELOW_THRESHOLD: "LARGE_ENVELOPE_BELOW_THRESHOLD",
 	SECRET_MARKER_LEAKED: "SECRET_MARKER_LEAKED",
 	SECRET_KEY_NOT_REDACTED: "SECRET_KEY_NOT_REDACTED",
 } as const
@@ -154,11 +158,36 @@ function nextStepRuleHolds(value: JsonRecord): boolean {
 	return isPresent(value.nextAction) !== isPresent(value.handoff)
 }
 
+const isUnresolvedState: Check = (value) => value === "partially-completed" || value === "unknown"
+
+// CC:56: a success never leaves effects partially completed or unknown.
+function successIsResolved(value: JsonRecord): boolean {
+	return value.outcome !== "success" || !isUnresolvedState(value.transactionState)
+}
+
+// CP:34, CC:60: an unresolved state routes retry through inspection or handoff, never a blind retry.
+function unresolvedIsNotRetryable(value: JsonRecord): boolean {
+	return !isUnresolvedState(value.transactionState) || value.retryable === false
+}
+
+// Guidance that is present must say something: null stays null-based (O-09), a string is non-blank.
+const isNonBlankString: Check = (value) => typeof value === "string" && value.trim().length > 0
+const isAbsentOrNonBlank: Check = (value) => !isPresent(value) || isNonBlankString(value)
+
+function handoffReasonIsNonBlank(value: JsonRecord): boolean {
+	return !isRecord(value.handoff) || isNonBlankString(value.handoff.reason)
+}
+
 function crossFieldFindings(value: JsonRecord): string[] {
 	const rules: ReadonlyArray<readonly [finding: string, holds: boolean]> = [
 		[envelopeFieldInvalid("outcome"), outcomeMatchesFailureClass(value)],
 		[envelopeFieldInvalid("causeCode"), causeCodeMatchesFailureClass(value)],
 		[FINDINGS.ENVELOPE_NEXT_STEP_RULE, nextStepRuleHolds(value)],
+		[FINDINGS.ENVELOPE_SUCCESS_UNRESOLVED, successIsResolved(value)],
+		[FINDINGS.ENVELOPE_UNRESOLVED_RETRYABLE, unresolvedIsNotRetryable(value)],
+		[envelopeFieldInvalid("nextAction"), isAbsentOrNonBlank(value.nextAction)],
+		[envelopeFieldInvalid("repairAction"), isAbsentOrNonBlank(value.repairAction)],
+		[envelopeFieldInvalid("handoff.reason"), handoffReasonIsNonBlank(value)],
 	]
 	return rules.filter(([, holds]) => !holds).map(([finding]) => finding)
 }
@@ -198,12 +227,26 @@ const DISCOVERY_FIELD_CHECKS: readonly FieldCheck[] = [
 	["logtape", isBoolean],
 ]
 
+// The value of key "75" is not judged (B-01); only its presence is.
+const JUDGED_EXIT_MEANINGS = Object.entries(EXIT_MEANINGS).filter(([code]) => code !== "75")
+
 function exitMeaningFindings(result: JsonRecord): string[] {
 	if (!isRecord(result.exitMeanings)) return []
 	const exitMeanings = result.exitMeanings
-	return Object.keys(EXIT_MEANINGS)
+	const missing = Object.keys(EXIT_MEANINGS)
 		.filter((code) => !hasOwn(exitMeanings, code))
 		.map((code) => discoveryFieldMissing(`exitMeanings.${code}`))
+	// CC:7-14: the declared meanings for 0 to 4 are the contract's own words.
+	const invalid = JUDGED_EXIT_MEANINGS.filter(([code, meaning]) => hasOwn(exitMeanings, code) && exitMeanings[code] !== meaning).map(([code]) =>
+		envelopeFieldInvalid(`result.exitMeanings.${code}`),
+	)
+	// Key "75" must carry a non-empty string; its token is unjudged until D1 (B-01).
+	const unavailable = hasOwn(exitMeanings, "75") && !isNonEmptyString(exitMeanings["75"]) ? [envelopeFieldInvalid("result.exitMeanings.75")] : []
+	// CC:14, CC:48: the exit set is closed, so a key outside 0, 1, 2, 3, 4, 75 is undeclared.
+	const undeclared = Object.keys(exitMeanings)
+		.filter((code) => !hasOwn(EXIT_MEANINGS, code))
+		.map((code) => `${FINDINGS.DISCOVERY_FIELD_UNDECLARED}:exitMeanings.${code}`)
+	return [...missing, ...invalid, ...unavailable, ...undeclared]
 }
 
 export function discoveryFindings(value: unknown): string[] {
@@ -211,5 +254,31 @@ export function discoveryFindings(value: unknown): string[] {
 	const result = value.result
 	const invalid: FindingName = (field) => envelopeFieldInvalid(`result.${field}`)
 	return unique([...fieldFindings(result, DISCOVERY_FIELD_CHECKS, discoveryFieldMissing, invalid), ...exitMeaningFindings(result)])
+}
+
+// Codes that are always emitted with a suffix; their instances are listed below, not the bare prefix.
+const SUFFIXED_CODES: readonly string[] = [FINDINGS.DISCOVERY_FIELD_UNDECLARED, FINDINGS.SECRET_MARKER_LEAKED, FINDINGS.SECRET_KEY_NOT_REDACTED]
+
+// The sealed vocabulary: every code the checker can emit. Open-ended families carry one <placeholder>
+// instance. The specimen manifest must cover each entry or the report lists it as unproved (O-18).
+export function allFindingCodes(): string[] {
+	const envelopeFields = ENVELOPE_FIELD_CHECKS.map(([field]) => field)
+	const discoveryFields = DISCOVERY_FIELD_CHECKS.map(([field]) => field)
+	const exitCodes = Object.keys(EXIT_MEANINGS)
+	return unique([
+		...Object.values(FINDINGS).filter((code) => !SUFFIXED_CODES.includes(code)),
+		...envelopeFields.map(envelopeFieldMissing),
+		...envelopeFields.map(envelopeFieldInvalid),
+		envelopeFieldInvalid("handoff.reason"),
+		...discoveryFields.map((field) => envelopeFieldInvalid(`result.${field}`)),
+		...exitCodes.map((code) => envelopeFieldInvalid(`result.exitMeanings.${code}`)),
+		discoveryFieldMissing("result"),
+		...discoveryFields.map(discoveryFieldMissing),
+		...exitCodes.map((code) => discoveryFieldMissing(`exitMeanings.${code}`)),
+		`${FINDINGS.DISCOVERY_FIELD_UNDECLARED}:exitMeanings.<key>`,
+		`${FINDINGS.SECRET_MARKER_LEAKED}:stdout`,
+		`${FINDINGS.SECRET_MARKER_LEAKED}:stderr`,
+		`${FINDINGS.SECRET_KEY_NOT_REDACTED}:<path>`,
+	])
 }
 

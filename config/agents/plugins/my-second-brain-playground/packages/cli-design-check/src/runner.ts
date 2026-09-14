@@ -4,17 +4,28 @@ import type { Dirent } from "node:fs"
 import { readdir } from "node:fs/promises"
 import { join, relative } from "node:path"
 import type { Readable } from "node:stream"
-import { FINDINGS } from "./contract.ts"
-import { buildScenarios, type ProcessResult, type ScenarioOptions, scenarioFindings, type ScenarioSpec } from "./scenario-rules.ts"
+import { allFindingCodes, FINDINGS } from "./contract.ts"
+import { buildScenarios, type ProcessResult, type ScenarioOptions, scenarioFindings, type ScenarioSpec, skippedScenarios } from "./scenario-rules.ts"
+import { SPECIMEN_MANIFEST } from "./specimen-manifest.ts"
 
 export interface ScenarioRow {
 	scenario: string
 	argv: string[]
-	expectedExit: number | null
+	expectedExit: number | readonly number[] | null
 	observedExit: number | null
 	passed: boolean
 	findings: string[]
 	durationMilliseconds: number
+}
+
+// What the target-unchanged row compared, and the effect classes it cannot see (O-15).
+export interface TargetObservation {
+	root: string
+	hashedRegularFiles: FileSnapshot[]
+	excludedDirectories: string[]
+	excludedEntryKinds: string[]
+	notObserved: string[]
+	changedPaths: string[]
 }
 
 export interface RunReport {
@@ -24,6 +35,13 @@ export interface RunReport {
 	passedCount: number
 	failedCount: number
 	targetUnchanged: boolean
+	targetObservation: TargetObservation
+	// Optional rows the caller did not supply, so nothing was proved about them.
+	skippedScenarios: string[]
+	// Finding codes no specimen in the manifest has ever produced (O-18); the accepted target is [].
+	findingCoverage: { unproved: string[] }
+	// Values the checker reads but deliberately does not judge (B-01).
+	unjudged: string[]
 }
 
 export interface MatrixOptions extends ScenarioOptions {
@@ -32,7 +50,7 @@ export interface MatrixOptions extends ScenarioOptions {
 	timeoutMs: number
 }
 
-interface FileSnapshot {
+export interface FileSnapshot {
 	relativePath: string
 	sha256: string
 }
@@ -40,6 +58,7 @@ interface FileSnapshot {
 interface StreamCollector {
 	done: Promise<void>
 	text: () => string
+	close: () => void
 }
 
 interface ExitOutcome {
@@ -101,7 +120,7 @@ function collectStream(stream: Readable): StreamCollector {
 			// A torn-down pipe ends collection; whatever arrived is still reported.
 		}
 	})()
-	return { done, text: () => Buffer.concat(chunks).toString("utf8") }
+	return { done, text: () => Buffer.concat(chunks).toString("utf8"), close: () => stream.destroy() }
 }
 
 function exitPromise(child: ChildProcess): Promise<number | null> {
@@ -136,6 +155,19 @@ async function exitOrKill(child: ChildProcess, timeoutMs: number): Promise<ExitO
 	return { observedExit: null, timedOut: true }
 }
 
+// A naturally exited child can leave descendants holding its pipes. Drain first, then
+// use the detached process-group custody before closing any still-open reader handles.
+async function drainStreams(child: ChildProcess, collectors: StreamCollector[]): Promise<void> {
+	const drained = Promise.all(collectors.map(({ done }) => done))
+	if ((await withTimeout(drained, READ_GRACE_MS)) !== TIMED_OUT) return
+	signalGroup(child, "SIGTERM")
+	if ((await withTimeout(drained, KILL_GRACE_MS)) !== TIMED_OUT) return
+	signalGroup(child, "SIGKILL")
+	if ((await withTimeout(drained, KILL_GRACE_MS)) !== TIMED_OUT) return
+	for (const collector of collectors) collector.close()
+	await withTimeout(drained, KILL_GRACE_MS)
+}
+
 async function spawnScenario(command: string[], spec: ScenarioSpec, cwd: string, env: Record<string, string>, timeoutMs: number): Promise<ProcessResult> {
 	const started = process.hrtime.bigint()
 	// command is validated non-empty by matrixOptions() before any scenario runs.
@@ -143,7 +175,7 @@ async function spawnScenario(command: string[], spec: ScenarioSpec, cwd: string,
 	const stdout = collectStream(child.stdout as Readable)
 	const stderr = collectStream(child.stderr as Readable)
 	const outcome = await exitOrKill(child, timeoutMs)
-	await withTimeout(Promise.all([stdout.done, stderr.done]), READ_GRACE_MS)
+	await drainStreams(child, [stdout, stderr])
 	return {
 		stdout: stdout.text(),
 		stderr: stderr.text(),
@@ -172,9 +204,35 @@ function scenarioRow(spec: ScenarioSpec, result: ProcessResult): ScenarioRow {
 	}
 }
 
+// Findings stay codes; the changed paths live in targetObservation.changedPaths.
 function targetRow(changed: string[]): ScenarioRow {
-	const findings = changed.length === 0 ? [] : [FINDINGS.TARGET_MUTATED, ...changed]
+	const findings = changed.length === 0 ? [] : [FINDINGS.TARGET_MUTATED]
 	return { scenario: "target-unchanged", argv: [], expectedExit: null, observedExit: null, passed: changed.length === 0, findings, durationMilliseconds: 0 }
+}
+
+// entryFiles() keeps directories and regular files only; everything else is invisible to the hash comparison.
+const EXCLUDED_ENTRY_KINDS = ["symlink", "socket", "fifo", "block-device", "character-device"]
+// Effects a before/after content hash of regular files cannot detect.
+const NOT_OBSERVED = ["out-of-tree paths", "reverted effects", "mode changes", "empty directories", "writes inside excluded directories"]
+
+function targetObservation(root: string, before: FileSnapshot[], changed: string[]): TargetObservation {
+	return {
+		root,
+		hashedRegularFiles: before,
+		excludedDirectories: [...SKIPPED_DIRECTORIES].sort(),
+		excludedEntryKinds: [...EXCLUDED_ENTRY_KINDS],
+		notObserved: [...NOT_OBSERVED],
+		changedPaths: changed,
+	}
+}
+
+// The exit-75 token is read for presence only; its wording awaits D1 (B-01).
+const UNJUDGED = ["exitMeanings.75"]
+
+// A finding code is proved once some manifest specimen names it, as its subject or among its findings.
+function unprovedFindingCodes(): string[] {
+	const proved = new Set(SPECIMEN_MANIFEST.flatMap((entry) => [entry.code, ...entry.findings]))
+	return allFindingCodes().filter((code) => !proved.has(code))
 }
 
 export async function runMatrix(options: MatrixOptions): Promise<RunReport> {
@@ -187,5 +245,16 @@ export async function runMatrix(options: MatrixOptions): Promise<RunReport> {
 	const changed = changedPaths(before, await snapshotDirectory(options.cwd))
 	rows.push(targetRow(changed))
 	const passedCount = rows.filter((row) => row.passed).length
-	return { targetDirectory: options.cwd, command: [...options.command], rows, passedCount, failedCount: rows.length - passedCount, targetUnchanged: changed.length === 0 }
+	return {
+		targetDirectory: options.cwd,
+		command: [...options.command],
+		rows,
+		passedCount,
+		failedCount: rows.length - passedCount,
+		targetUnchanged: changed.length === 0,
+		targetObservation: targetObservation(options.cwd, before, changed),
+		skippedScenarios: skippedScenarios(options),
+		findingCoverage: { unproved: unprovedFindingCodes() },
+		unjudged: [...UNJUDGED],
+	}
 }

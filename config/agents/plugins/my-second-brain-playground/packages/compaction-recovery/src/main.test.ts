@@ -57,6 +57,13 @@ interface TimedProcessResult extends ProcessResult {
 	exitMs: number
 }
 
+interface ObserverPhaseTiming {
+	invocationIdentity: string
+	observerOpenMs: number
+	responseAvailableMs: number
+	terminalMs: number
+}
+
 function write(path: string, contents: string, mode?: number): void {
 	mkdirSync(dirname(path), { recursive: true })
 	writeFileSync(path, contents)
@@ -450,6 +457,57 @@ function lifecycleRecords(current: Fixture, recordType = "lifecycle"): Array<Rec
 		.filter(Boolean)
 		.map((line) => JSON.parse(line) as Record<string, unknown>)
 		.filter((record) => record.record_type === recordType)
+}
+
+function observerTraceFileNames(current: Fixture): Set<string> {
+	const root = join(current.state, "my-second-brain-playground", "recovery-traces")
+	return existsSync(root)
+		? new Set(readdirSync(root).filter((name) => name.endsWith(".jsonl")))
+		: new Set()
+}
+
+function observerPhaseTiming(current: Fixture, before: ReadonlySet<string>): ObserverPhaseTiming {
+	const root = join(current.state, "my-second-brain-playground", "recovery-traces")
+	const created = [...observerTraceFileNames(current)].filter((name) => !before.has(name))
+	if (created.length !== 1) {
+		throw new Error(`recovery observer timing association is ambiguous: expected 1 new trace, received ${created.length}`)
+	}
+	const records = readFileSync(join(root, created[0] as string), "utf8")
+		.trim()
+		.split("\n")
+		.filter(Boolean)
+		.map((line) => JSON.parse(line) as Record<string, unknown>)
+	const observerRecords = records.filter((record) => (
+		record.record_type === "lifecycle" &&
+		record.operation === "recover" &&
+		typeof record.producer_identity === "string" &&
+		record.producer_identity.startsWith("recovery-observer-")
+	))
+	const phase = (name: string): Record<string, unknown> | undefined => {
+		const matches = observerRecords.filter((record) => record.phase === name)
+		return matches.length === 1 ? matches[0] : undefined
+	}
+	const invocation = phase("invocation")
+	const response = phase("response-available")
+	const terminal = phase("terminal")
+	const durations = [invocation?.duration_ms, response?.duration_ms, terminal?.duration_ms]
+	const identities = new Set(observerRecords.map((record) => record.invocation_identity))
+	const producers = new Set(observerRecords.map((record) => record.producer_identity))
+	const valid = invocation !== undefined && response !== undefined && terminal !== undefined &&
+		invocation.outcome === "started" && response.outcome === "succeeded" && terminal.outcome === "succeeded" &&
+		identities.size === 1 && typeof invocation.invocation_identity === "string" &&
+		producers.size === 1 && response.parent_record_identity === invocation.record_identity &&
+		terminal.parent_record_identity === invocation.record_identity &&
+		durations.every((duration) => typeof duration === "number" && Number.isFinite(duration) && duration >= 0) &&
+		(durations[0] as number) <= (durations[1] as number) &&
+		(durations[1] as number) <= (durations[2] as number)
+	if (!valid) throw new Error("recovery observer timing record has invalid phase values or association")
+	return {
+		invocationIdentity: invocation.invocation_identity as string,
+		observerOpenMs: durations[0] as number,
+		responseAvailableMs: durations[1] as number,
+		terminalMs: durations[2] as number,
+	}
 }
 
 async function directChildProcessId(parentProcessId: number): Promise<number> {
@@ -1796,6 +1854,44 @@ test("bind refreshes the same accepted work owner", () => {
 	expect(runHook(current).stdout).toContain(taskIdentity)
 })
 
+test("observer timing correlation rejects wrong phase values and ambiguous association", () => {
+	const current = fixture()
+	const traceRoot = join(current.state, "my-second-brain-playground", "recovery-traces")
+	const before = observerTraceFileNames(current)
+	const record = (
+		phase: "invocation" | "response-available" | "terminal",
+		duration: number,
+		sequence: number,
+	): Record<string, unknown> => ({
+		schema_version: 1,
+		record_type: "lifecycle",
+		record_identity: `observer-1-${sequence}`,
+		journey_identity: "invocation-1",
+		invocation_identity: "invocation-1",
+		producer_identity: "recovery-observer-1",
+		producer_sequence: sequence,
+		...(sequence === 0 ? {} : { parent_record_identity: "observer-1-0" }),
+		harness_kind: "unknown",
+		operation: "recover",
+		phase,
+		occurred_at: `2026-09-14T00:00:0${sequence}.000Z`,
+		duration_ms: duration,
+		outcome: sequence === 0 ? "started" : "succeeded",
+	})
+	write(join(traceRoot, "first.jsonl"), [
+		record("invocation", 1, 0),
+		record("response-available", 3, 1),
+		record("terminal", 2, 2),
+	].map((value) => JSON.stringify(value)).join("\n") + "\n", 0o600)
+	expect(() => observerPhaseTiming(current, before)).toThrow("invalid phase values or association")
+	write(join(traceRoot, "second.jsonl"), [
+		record("invocation", 1, 0),
+		record("response-available", 2, 1),
+		record("terminal", 3, 2),
+	].map((value) => JSON.stringify(value)).join("\n") + "\n", 0o600)
+	expect(() => observerPhaseTiming(current, before)).toThrow("expected 1 new trace, received 2")
+})
+
 test("paired cold processes keep capture-enabled and unavailable primary-response p95 within 100 ms", async () => {
 	const sampleCount = 20
 	const disabled = fixture()
@@ -1810,8 +1906,10 @@ test("paired cold processes keep capture-enabled and unavailable primary-respons
 		enabled: [] as TimedProcessResult[],
 		unavailable: [] as TimedProcessResult[],
 	}
+	const observerPhases: ObserverPhaseTiming[] = []
 	const runSample = async (mode: keyof typeof rows): Promise<void> => {
 		const current = { disabled, enabled, unavailable }[mode]
+		const observerTracesBefore = mode === "enabled" ? observerTraceFileNames(current) : undefined
 		const env = mode === "disabled"
 			? { ...withoutCapture(current), CODEX_SESSION_ID: sessionIdentity }
 			: mode === "unavailable"
@@ -1827,6 +1925,7 @@ test("paired cold processes keep capture-enabled and unavailable primary-respons
 			data: { taskIdentity, sessionIdentity },
 		})
 		rows[mode].push(result)
+		if (observerTracesBefore !== undefined) observerPhases.push(observerPhaseTiming(current, observerTracesBefore))
 	}
 
 	for (let index = 0; index < sampleCount; index += 1) {
@@ -1852,27 +1951,73 @@ test("paired cold processes keep capture-enabled and unavailable primary-respons
 		enabled: percentile95(pairedStdoutEofDeltas(rows.enabled, rows.disabled)),
 		unavailable: percentile95(pairedStdoutEofDeltas(rows.unavailable, rows.disabled)),
 	}
-
 	const pluginRoot = resolve(import.meta.dir, "../../..")
 	const sha256 = (path: string): string => createHash("sha256").update(readFileSync(path)).digest("hex")
 	const plugin = JSON.parse(readFileSync(join(pluginRoot, "package.json"), "utf8")) as { version: string }
 	// The accepted qualification contract is paired p95 overhead. Independent
 	// per-mode p95 values remain diagnostic so CI failures expose both statistics.
+	const observerPhaseP95 = {
+		observer_open_ms: percentile95(observerPhases.map((phase) => phase.observerOpenMs)),
+		response_available_ms: percentile95(observerPhases.map((phase) => phase.responseAvailableMs)),
+		terminal_ms: percentile95(observerPhases.map((phase) => phase.terminalMs)),
+		estimated_shell_bun_import_ms: percentile95(observerPhases.map((phase, index) => (
+			(rows.enabled.at(index)?.firstStdoutByteMs ?? Number.NaN) - phase.responseAvailableMs
+		))),
+	}
+	const sampleMeasurements = Object.fromEntries(
+		Object.entries(rows).map(([mode, samples]) => [
+			mode,
+			samples.map((sample, index) => {
+				const phase = mode === "enabled" ? observerPhases.at(index) : undefined
+				return {
+					first_stdout_byte_ms: sample.firstStdoutByteMs,
+					stdout_eof_ms: sample.stdoutEofMs,
+					exit_ms: sample.exitMs,
+					post_stdout_eof_until_exit_ms: sample.exitMs - sample.stdoutEofMs,
+					...(phase === undefined ? {} : {
+						observer_open_ms: phase.observerOpenMs,
+						observer_response_available_ms: phase.responseAvailableMs,
+						observer_terminal_ms: phase.terminalMs,
+						estimated_shell_bun_import_ms: (sample.firstStdoutByteMs ?? Number.NaN) - phase.responseAvailableMs,
+					}),
+				}
+			}),
+		]),
+	)
 	console.log(JSON.stringify({
 		recovery_observability_qualification: {
 			sample_count_per_mode: sampleCount,
+			mode_order: "even: disabled,enabled,unavailable; odd: unavailable,enabled,disabled",
 			primary_response_measure: "process launch to complete stdout EOF",
 			p95_ms: p95,
 			delta_p95_ms: { enabled: enabledDelta, unavailable: unavailableDelta },
 			paired_delta_p95_ms: pairedDeltaP95,
-			machine: { platform: process.platform, architecture: process.arch, bun: Bun.version },
+			observer_phase_p95_ms: observerPhaseP95,
+			observer_phase_invocation_identities: observerPhases.map((phase) => phase.invocationIdentity),
+			paired_stdout_eof_delta_samples_ms: {
+				enabled: pairedStdoutEofDeltas(rows.enabled, rows.disabled),
+				unavailable: pairedStdoutEofDeltas(rows.unavailable, rows.disabled),
+			},
+			samples_ms: sampleMeasurements,
+			machine: {
+				platform: process.platform,
+				architecture: process.arch,
+				bun: Bun.version,
+				ci: process.env.CI === "true",
+				runner_os: process.env.RUNNER_OS ?? null,
+				runner_architecture: process.env.RUNNER_ARCH ?? null,
+				image_os: process.env.ImageOS ?? null,
+			},
 			plugin_version: plugin.version,
 			source_sha256: sha256(recoveryEngine),
+			observer_source_sha256: sha256(resolve(import.meta.dir, "../../recovery-observability/src/recovery-observer.ts")),
 			runtime_sha256: sha256(join(pluginRoot, "runtime/recovery-observer.js")),
 			coverage: ["disabled", "enabled", "unavailable"],
 			unknowns: ["native-compaction: no native trigger exercised", "installed-harness-trust: fixture processes only", "observer-owned-deadline: covered by a separate process test, not this timing run"],
 		},
 	}))
+
+	expect(observerPhases).toHaveLength(sampleCount)
 	expect(pairedDeltaP95.enabled).toBeLessThanOrEqual(100)
 	expect(pairedDeltaP95.unavailable).toBeLessThanOrEqual(100)
 }, 30_000)

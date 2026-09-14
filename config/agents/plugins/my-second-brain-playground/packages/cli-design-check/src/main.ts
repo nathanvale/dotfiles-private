@@ -1,11 +1,11 @@
 import { statSync } from "node:fs"
 import { resolve } from "node:path"
 import { parseArgs } from "node:util"
-import { renderHuman, renderInternalError, renderJson, renderUsageError } from "./render.ts"
+import { renderHelp, renderHuman, renderInternalError, renderJson, renderUsageError } from "./render.ts"
 import { type MatrixOptions, runMatrix } from "./runner.ts"
 
 const HELP_TEXT = `usage:
-  cli-design-check --cwd <dir> --command "<argv words>" --success-args "<args>" --missing-args "<args>" [--effect-args "<args>"] [--secret-args "<args>" --secret-marker <string>] [--json] [--timeout-ms <n>]
+  cli-design-check --cwd <dir> --command "<argv words>" --success-args "<args>" --missing-args "<args>" [--effect-args "<args>"] [--secret-args "<args>" --secret-marker <string>] [--malformed-args "<args>"] [--large-args "<args>"] [--json] [--timeout-ms <n>]
   cli-design-check --help
 
 Run the target CLI through the standard design contract scenario matrix.
@@ -14,7 +14,7 @@ In human mode a usage error or internal error is one line on stderr.
 `
 
 const DEFAULT_TIMEOUT_MS = 15000
-const valueOptions = new Set(["--cwd", "--command", "--success-args", "--missing-args", "--effect-args", "--secret-args", "--secret-marker", "--timeout-ms"])
+const valueOptions = new Set(["--cwd", "--command", "--success-args", "--missing-args", "--effect-args", "--secret-args", "--secret-marker", "--malformed-args", "--large-args", "--timeout-ms"])
 
 interface ParsedOptions {
 	help: boolean
@@ -26,10 +26,12 @@ interface ParsedOptions {
 	effectArgs?: string | undefined
 	secretArgs?: string | undefined
 	secretMarker?: string | undefined
+	malformedArgs?: string | undefined
+	largeArgs?: string | undefined
 	timeoutMs?: string | undefined
 }
 
-type Resolved = { kind: "help" } | { kind: "run"; json: boolean; options: MatrixOptions }
+type Resolved = { kind: "help"; json: boolean } | { kind: "run"; json: boolean; options: MatrixOptions }
 
 function hasJsonFlag(args: readonly string[]): boolean {
 	for (let index = 0; index < args.length; index += 1) {
@@ -74,6 +76,8 @@ function parseCli(args: readonly string[]): ParsedOptions {
 			"effect-args": { type: "string" },
 			"secret-args": { type: "string" },
 			"secret-marker": { type: "string" },
+			"malformed-args": { type: "string" },
+			"large-args": { type: "string" },
 			"timeout-ms": { type: "string" },
 		},
 		strict: true,
@@ -90,6 +94,8 @@ function parseCli(args: readonly string[]): ParsedOptions {
 		effectArgs: stringOption(options, "effect-args"),
 		secretArgs: stringOption(options, "secret-args"),
 		secretMarker: stringOption(options, "secret-marker"),
+		malformedArgs: stringOption(options, "malformed-args"),
+		largeArgs: stringOption(options, "large-args"),
 		timeoutMs: stringOption(options, "timeout-ms"),
 	}
 }
@@ -129,13 +135,15 @@ function matrixOptions(parsed: ParsedOptions): MatrixOptions {
 		effectArgs: optionalWords(parsed.effectArgs),
 		secretArgs: optionalWords(parsed.secretArgs),
 		secretMarker: parsed.secretMarker,
+		malformedArgs: optionalWords(parsed.malformedArgs),
+		largeArgs: optionalWords(parsed.largeArgs),
 		timeoutMs: nonNegativeInteger(parsed.timeoutMs),
 	}
 }
 
 function resolveInvocation(args: readonly string[]): Resolved {
 	const parsed = parseCli(args)
-	if (parsed.help) return { kind: "help" }
+	if (parsed.help) return { kind: "help", json: parsed.json }
 	return { kind: "run", json: parsed.json, options: matrixOptions(parsed) }
 }
 
@@ -168,7 +176,7 @@ async function dispatch(args: readonly string[]): Promise<number> {
 		return usageFailure(error, hasJsonFlag(args))
 	}
 	if (resolved.kind === "help") {
-		process.stdout.write(HELP_TEXT)
+		process.stdout.write(resolved.json ? renderHelp(HELP_TEXT) : HELP_TEXT)
 		return 0
 	}
 	try {
@@ -179,4 +187,5 @@ async function dispatch(args: readonly string[]): Promise<number> {
 }
 
 const exitCode = await dispatch(process.argv.slice(2))
-process.exit(exitCode)
+// Set, never forced: a forced exit drops whatever the stdout pipe has not taken yet (O-14).
+process.exitCode = exitCode

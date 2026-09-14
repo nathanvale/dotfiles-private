@@ -2,7 +2,13 @@
 import { randomUUID } from "node:crypto"
 import { closeSync } from "node:fs"
 import { join, resolve } from "node:path"
-import { isRecoveryIdentity, MAX_SERIALIZED_RECORD_BYTES, openRecoveryObservability, type RecoveryOperation } from "./interface.ts"
+import { createInvocationTraceStore, type InvocationTraceStore } from "./invocation-trace-store.ts"
+import {
+	type DiagnosticTraceRecord,
+	isRecoveryIdentity,
+	MAX_SERIALIZED_RECORD_BYTES,
+	type RecoveryOperation,
+} from "./serialized-values.ts"
 
 type InvocationKind = "hook" | "checkpoint"
 export type TerminalOutcome = "signalled" | "deadline-exceeded"
@@ -46,6 +52,23 @@ function observerOperation(kind: InvocationKind, arguments_: readonly string[]):
 function childOutcome(exitCode: number | null, signalCode: string | null): "succeeded" | "failed" | "signalled" {
 	if (signalCode !== null) return "signalled"
 	return exitCode === 0 ? "succeeded" : "failed"
+}
+
+function retainObserverFailureDiagnostic(store: InvocationTraceStore): void {
+	try {
+		const record: DiagnosticTraceRecord = {
+			schema_version: 1,
+			record_type: "diagnostic",
+			category: "my-second-brain-playground/recovery",
+			level: "error",
+			event: "observer-failure",
+			occurred_at: new Date().toISOString(),
+			properties: {},
+		}
+		store.writeDiagnostic(`${JSON.stringify(record)}\n`)
+	} catch {
+		// Failure diagnostics remain best effort and cannot replace the primary result.
+	}
 }
 
 export function firstTerminalOutcome(
@@ -173,7 +196,10 @@ async function closePrimaryResponseDescriptors(): Promise<void> {
 	})))
 }
 
-export async function runRecoveryObserver(arguments_: readonly string[]): Promise<number> {
+export async function runRecoveryObserver(
+	arguments_: readonly string[],
+	dependencies: { readonly createTraceStore?: typeof createInvocationTraceStore } = {},
+): Promise<number> {
 	const kind = arguments_[0]
 	if (kind !== "hook" && kind !== "checkpoint") return 2
 	const invocationKind: InvocationKind = kind
@@ -183,16 +209,12 @@ export async function runRecoveryObserver(arguments_: readonly string[]): Promis
 	let journeyIdentity = invocationIdentity
 	const observerIdentity = identity("recovery-observer")
 	const inheritedParentIdentity = invocationKind === "checkpoint" ? optionalIdentity(process.env.CODEX_SESSION_ID) : undefined
-	const observability = openRecoveryObservability({ invocationIdentity })
+	const traceStore = (dependencies.createTraceStore ?? createInvocationTraceStore)({ invocationIdentity })
 	let diagnosticReported = false
 	const reportObserverFailure = () => {
 		if (diagnosticReported) return
 		diagnosticReported = true
-		try {
-			observability.diagnostic({ level: "error", event: "observer-failure" })
-		} catch {
-			// Optional diagnostics cannot replace the primary result.
-		}
+		retainObserverFailureDiagnostic(traceStore)
 	}
 	let observerSequence = 0
 	let responseObserved = false
@@ -203,7 +225,7 @@ export async function runRecoveryObserver(arguments_: readonly string[]): Promis
 	): string => {
 		const recordIdentity = `${observerIdentity}-${observerSequence}`
 		try {
-			observability.accept({
+			const result = traceStore.accept({
 				schema_version: 1,
 				record_type: "lifecycle",
 				record_identity: recordIdentity,
@@ -220,6 +242,7 @@ export async function runRecoveryObserver(arguments_: readonly string[]): Promis
 				duration_ms: monotonicMilliseconds(started),
 				outcome,
 			})
+			if (!result.accepted) reportObserverFailure()
 		} catch {
 			reportObserverFailure()
 		}
@@ -257,7 +280,7 @@ export async function runRecoveryObserver(arguments_: readonly string[]): Promis
 	} catch {
 		acceptObserverRecord("terminal", "failed", invocationRecordIdentity)
 		reportObserverFailure()
-		observability.dispose()
+		traceStore.dispose()
 		return 2
 	}
 
@@ -302,7 +325,7 @@ export async function runRecoveryObserver(arguments_: readonly string[]): Promis
 		acceptObserverRecord("response-available", "succeeded", invocationRecordIdentity)
 	}
 	const lifecycle = consumeLifecycle(child.stdio[3] as number, (record) => {
-		const result = observability.accept(record)
+		const result = traceStore.accept(record)
 		if (!result.accepted) {
 			reportObserverFailure()
 			return
@@ -327,7 +350,7 @@ export async function runRecoveryObserver(arguments_: readonly string[]): Promis
 	acceptObserverRecord("terminal", terminalOutcome ?? childOutcome(exitCode, child.signalCode), invocationRecordIdentity)
 
 	// The child response is complete. Close our response descriptors before detached retention starts.
-	observability.dispose()
+	traceStore.dispose()
 	scheduleCleanup(journeyIdentity, invocationRecordIdentity)
 	return exitCode
 }

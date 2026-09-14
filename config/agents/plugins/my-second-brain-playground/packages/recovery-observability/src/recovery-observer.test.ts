@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { firstTerminalOutcome } from "./recovery-observer.ts"
@@ -7,6 +7,48 @@ import { queryTraces } from "./invocation-trace-store.ts"
 
 const temporaryRoots: string[] = []
 const pluginRoot = resolve(import.meta.dir, "../../..")
+// Independent oracle: complete normalized output authored from recovery.py's command_envelope and schema_document contracts.
+const EXPECTED_NORMALIZED_SCHEMA_STDOUT = `${JSON.stringify({
+	schemaVersion: 1,
+	commandIdentity: "my-second-brain-playground.recovery-checkpoint",
+	runIdentity: "<run-identity>",
+	operation: "schema",
+	status: "success",
+	data: {
+		schemaVersion: 2,
+		required: [
+			"schemaVersion",
+			"vaultRoot",
+			"projectMap",
+			"goalPath",
+			"evidencePath",
+			"recoveryPath",
+			"agentLedgerExecutable",
+			"sessionIdentity",
+			"registerPath",
+			"taskIdentity",
+			"programIdentity",
+			"scope",
+			"observedAt",
+		],
+		additionalProperties: false,
+		freshForSeconds: 3600,
+		futureSkewSeconds: 300,
+		identityPattern: "^[a-z0-9][a-z0-9-]{0,127}$",
+		sessionIdentityPattern: "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$",
+		pathRules: {
+			vaultRoot: "configured canonical absolute playground path",
+			projectMap: "contained project README.md",
+			goalPath: "contained GOAL.md beside the project map",
+			evidencePath: "contained regular file under the project directory",
+			recoveryPath: "contained recovery guide",
+			agentLedgerExecutable: "canonical absolute regular executable owned by the current user",
+			sessionIdentity: "hook-supplied safe session token for one session-scoped checkpoint",
+			registerPath: "canonical file under the playground XDG Register directory",
+		},
+		observedAt: "UTC RFC 3339 timestamp ending in Z",
+	},
+})}\n`
 
 function temporaryRoot(): string {
 	const root = mkdtempSync(join(tmpdir(), "recovery-observer-test-"))
@@ -118,6 +160,77 @@ describe("observer terminal cause arbitration", () => {
 		expect(firstTerminalOutcome("signalled", "deadline-exceeded")).toBe("signalled")
 		expect(firstTerminalOutcome(undefined, "deadline-exceeded")).toBe("deadline-exceeded")
 	})
+})
+
+test("observer lifecycle seam reports refused and thrown observer-owned writes without replacing accepted child output", async () => {
+	const root = temporaryRoot()
+	const observerSource = join(import.meta.dir, "recovery-observer.ts")
+	for (const storeOutcome of ["accepted", "refused", "thrown"] as const) {
+		const stateHome = join(root, "state", storeOutcome)
+		const eventsPath = join(root, `${storeOutcome}.jsonl`)
+		const script = `
+import { appendFileSync } from "node:fs"
+import { runRecoveryObserver } from ${JSON.stringify(observerSource)}
+const storeOutcome = ${JSON.stringify(storeOutcome)}
+const eventsPath = ${JSON.stringify(eventsPath)}
+const recordEvent = (event) => appendFileSync(eventsPath, JSON.stringify(event) + "\\n")
+const exitCode = await runRecoveryObserver(["checkpoint", "schema"], {
+  createTraceStore: () => ({
+    path: null,
+    accept(input) {
+      const observerTerminal = input?.record_type === "lifecycle"
+        && input?.phase === "terminal"
+        && typeof input?.producer_identity === "string"
+        && input.producer_identity.startsWith("recovery-observer-")
+      const outcome = observerTerminal ? storeOutcome : "accepted"
+      recordEvent({ event: "accept", observerTerminal, outcome })
+      if (outcome === "thrown") throw new Error("test-owned trace acceptance failure")
+      if (outcome === "refused") return { accepted: false, refusal: "storage-unavailable" }
+      return { accepted: true, record: input }
+    },
+    writeDiagnostic(line) {
+      recordEvent({ event: "diagnostic", record: JSON.parse(line) })
+      return true
+    },
+    dispose() {},
+  }),
+})
+process.exitCode = exitCode
+`
+		const child = Bun.spawn([process.execPath, "--eval", script], {
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+			env: { ...process.env, HOME: stateHome, XDG_STATE_HOME: stateHome },
+		})
+		const [exitCode, stdout, stderr] = await Promise.all([
+			child.exited,
+			new Response(child.stdout).text(),
+			new Response(child.stderr).text(),
+		])
+		expect(exitCode).toBe(0)
+		expect(stderr).toBe("")
+		const output = JSON.parse(stdout) as Record<string, unknown>
+		expect(output.runIdentity).toMatch(/^recovery-checkpoint-run-[a-f0-9]{24}$/)
+		const normalizedPrimaryOutput = stdout.replace(
+			`"runIdentity":"${String(output.runIdentity)}"`,
+			'"runIdentity":"<run-identity>"',
+		)
+		expect(normalizedPrimaryOutput).toBe(EXPECTED_NORMALIZED_SCHEMA_STDOUT)
+
+		const events = readFileSync(eventsPath, "utf8").trim().split("\n").map(line => JSON.parse(line) as Record<string, unknown>)
+		const observerTerminalAttempts = events.filter(event => event.event === "accept" && event.observerTerminal)
+		expect(observerTerminalAttempts).toHaveLength(1)
+		expect(observerTerminalAttempts).toEqual([
+			{ event: "accept", observerTerminal: true, outcome: storeOutcome },
+		])
+		const diagnostics = events.filter(event => event.event === "diagnostic")
+		if (storeOutcome === "accepted") expect(diagnostics).toEqual([])
+		else {
+			expect(diagnostics).toHaveLength(1)
+			expect(diagnostics).toMatchObject([{ record: { level: "error", event: "observer-failure", properties: {} } }])
+		}
+	}
 })
 
 test("lifecycle framing discards oversized suffixes and reports incomplete EOF frames", async () => {

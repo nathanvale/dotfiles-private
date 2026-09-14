@@ -29,8 +29,10 @@ function baseEnvelope(): BaseFields {
 	}
 }
 
-function cell(value: number | null): string {
-	return value === null ? "-" : String(value)
+// An accepted exit set renders as "3|4".
+function cell(value: number | readonly number[] | null): string {
+	if (value === null) return "-"
+	return typeof value === "number" ? String(value) : value.join("|")
 }
 
 function renderRow(row: ScenarioRow): string {
@@ -39,12 +41,27 @@ function renderRow(row: ScenarioRow): string {
 	return `${row.scenario} | ${cell(row.observedExit)} | ${cell(row.expectedExit)} | ${verdict} | ${findings}`
 }
 
+function list(values: string[]): string {
+	return values.join(", ") || "-"
+}
+
+// Human mode carries the same skipped, unproved, unjudged and observation facts as the envelope (O-15, O-18).
 export function renderHuman(report: RunReport): string {
+	const observation = report.targetObservation
 	const lines = [
 		"scenario | exit | expected | result | findings",
 		...report.rows.map(renderRow),
 		`passed ${report.passedCount}/${report.rows.length}`,
 		`target unchanged: ${report.targetUnchanged ? "yes" : "no"}`,
+		`skipped scenarios: ${list(report.skippedScenarios)}`,
+		`unproved findings: ${list(report.findingCoverage.unproved)}`,
+		`unjudged: ${list(report.unjudged)}`,
+		`target root: ${observation.root}`,
+		`target hashed regular files: ${observation.hashedRegularFiles.length}`,
+		`target excluded directories: ${list(observation.excludedDirectories)}`,
+		`target excluded entry kinds: ${list(observation.excludedEntryKinds)}`,
+		`target not observed: ${list(observation.notObserved)}`,
+		`target changed paths: ${list(observation.changedPaths)}`,
 	]
 	return `${lines.join("\n")}\n`
 }
@@ -66,6 +83,20 @@ export function renderJson(report: RunReport): string {
 		...verdictFields(report.rows.find((row) => !row.passed)),
 		message: `passed ${report.passedCount}/${report.rows.length} scenarios`,
 		result: report as unknown as JsonRecord,
+	})
+}
+
+// CC:44 applies to the checker's own --help --json (O-02): one success envelope carrying the usage text.
+export function renderHelp(usage: string): string {
+	return stringify({
+		...baseEnvelope(),
+		outcome: "success",
+		failureClass: null,
+		causeCode: null,
+		message: "cli-design-check usage",
+		nextAction: null,
+		repairAction: null,
+		result: { usage },
 	})
 }
 

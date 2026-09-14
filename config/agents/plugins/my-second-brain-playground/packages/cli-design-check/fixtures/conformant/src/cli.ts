@@ -16,6 +16,8 @@ type FailureClass = "usage" | "domain" | "schema" | "internal" | "unavailable" |
 type Envelope = { envelopeVersion: 1; contractVersion: string; commandIdentity: string; runIdentity: string; outcome: "success" | "refused" | "failed" | "unknown"; failureClass: FailureClass; causeCode: string | null; message: string; effectClass: "inspect" | "repository-local" | "external"; transactionState: "unchanged" | "completed" | "partially-completed" | "rolled-back" | "unknown"; retryable: boolean; retryDelayMilliseconds: number | null; nextAction: string | null; availablePaths: string[]; repairAction: string | null; handoff: { reason: string; prerequisites: string[] } | null; result: object | null };
 type EnvelopeOptions = { effectClass?: Envelope["effectClass"]; transactionState?: Envelope["transactionState"]; retryable?: boolean; retryDelayMilliseconds?: number | null; nextAction?: string | null; availablePaths?: string[]; repairAction?: string | null; handoff?: Envelope["handoff"]; result?: object | null };
 type ReadResult = { kind: "ok"; values: FlatValues } | { kind: "missing" } | { kind: "malformed" } | { kind: "unreadable" };
+// --large inflates the success result to 2 MiB in process (the checker threshold is 1 MiB) so a large envelope drain is observable without a committed file.
+const LARGE_PAYLOAD_BYTES = 2 * 1024 * 1024;
 const DISCOVERY = { name: "config-peek", contractVersion: CONTRACT_VERSION, generationConventionVersion: "1.0.0", commands: [{ identity: "config-peek.help", argv: "--help", effectClass: "inspect", description: "Show help and usage" }, { identity: "config-peek.discover", argv: "--discover --json", effectClass: "inspect", description: "Describe commands and the contract" }, { identity: "config-peek.read", argv: "[--json] <path>", effectClass: "inspect", description: "Read and flatten one JSON file" }], exitMeanings: { "0": "success", "1": "internal", "2": "usage", "3": "domain", "4": "schema", "75": "retryable-or-unavailable" }, machineMode: "--json", logtape: false };
 
 function isObject(value: JsonValue): value is JsonObject {
@@ -114,13 +116,14 @@ function main(): number {
   const identity = commandIdentity(rawArgs);
   let parsed: ReturnType<typeof parseArgs>;
   try {
-    parsed = parseArgs({ args: rawArgs, options: { json: { type: "boolean" }, discover: { type: "boolean" }, help: { type: "boolean" }, write: { type: "boolean" } }, strict: true, allowPositionals: true });
+    parsed = parseArgs({ args: rawArgs, options: { json: { type: "boolean" }, discover: { type: "boolean" }, help: { type: "boolean" }, write: { type: "boolean" }, large: { type: "boolean" } }, strict: true, allowPositionals: true });
   } catch {
     return usageFailure(jsonMode, identity, "USAGE_UNKNOWN_OPTION", "Unknown option; run config-peek --help", "config-peek: unknown option; run config-peek --help");
   }
   try {
     if (parsed.values.help === true) {
-      process.stdout.write(HELP_TEXT);
+      if (jsonMode) emitJson(makeEnvelope("config-peek.help", "success", null, null, "Help completed", { availablePaths: [DISCOVER_PATH], result: { usage: "config-peek [--json] [--discover] <path>", example: "config-peek --json config/valid.json" } }));
+      else process.stdout.write(HELP_TEXT);
       return 0;
     }
     if (parsed.values.write === true) {
@@ -140,11 +143,11 @@ function main(): number {
     if (input.kind === "missing") return domainFailure(jsonMode, pathText, "DOMAIN_INPUT_MISSING", "Input file is missing; provide a readable JSON file", "Provide a readable JSON file inside the current directory", "config-peek: input file is missing; provide a readable JSON file");
     if (input.kind === "malformed") return domainFailure(jsonMode, pathText, "DOMAIN_INPUT_MALFORMED", "Input is malformed JSON; correct the file and retry", "Correct the JSON bytes and retry; no file is changed by the CLI", "config-peek: input is malformed JSON; correct the file and retry");
     if (input.kind === "unreadable") return domainFailure(jsonMode, pathText, "DOMAIN_INPUT_UNREADABLE", "Input file is not readable; provide a readable JSON file", "Provide a readable JSON file inside the current directory", "config-peek: input file is not readable; provide a readable JSON file");
-    if (jsonMode) emitJson(makeEnvelope("config-peek.read", "success", null, null, "Configuration read successfully", { retryable: true, availablePaths: [DISCOVER_PATH], result: { path: pathText, values: input.values } }));
+    if (jsonMode) emitJson(makeEnvelope("config-peek.read", "success", null, null, "Configuration read successfully", { retryable: true, availablePaths: [DISCOVER_PATH], result: { path: pathText, values: input.values, ...(parsed.values.large === true ? { largePayload: "x".repeat(LARGE_PAYLOAD_BYTES) } : {}) } }));
     else process.stdout.write(humanValues(input.values));
     return 0;
   } catch {
     return internalFailure(jsonMode, identity);
   }
 }
-process.exit(main());
+process.exitCode = main();
