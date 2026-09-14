@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Plugin-owned quality gates
@@ -48,6 +48,12 @@ We will choose Option B because it is the only option that gives both
 harnesses a versioned release boundary (a plugin install or marketplace
 update) while keeping the hook sources dependency-free and self-gating per
 repository, matching every named driver.
+
+Accepted revision: the personal plugin release payload includes both
+`config/agents/plugins/.claude-plugin/marketplace.json` and
+`config/agents/plugins/.agents/plugins/marketplace.json`. The repository gate
+keeps their plugin names and versions aligned with each plugin's Claude and
+Codex manifests.
 
 ## Consequences
 
