@@ -9,6 +9,8 @@
     "anomalyco/tap/opencode",
     "k1low/tap/mo",
     "ognistik/formulae/macrowhisper",
+    "openai/tools/softnet",
+    "openai/tools/tart",
     "openclaw/tap/gogcli",
     "steipete/tap/codexbar",
     "steipete/tap/imsg",
