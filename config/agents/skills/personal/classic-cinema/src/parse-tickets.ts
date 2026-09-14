@@ -20,6 +20,7 @@
 //   64 — invalid usage
 
 import { BASE_URL, CINEMA_ID, readOrFetchJson } from "./cinema-api.ts";
+import { maybeExitWithHelp, runMain } from "./cli-entrypoint.ts";
 
 const SLOT_ORDER = ["Adult", "Child", "Concession", "Senior", "Student", "Pension"] as const;
 const TICKETS_TMP = "/tmp/cc-tickets.json";
@@ -85,10 +86,8 @@ function parseArgs(argv: string[]): { sessionId: string; spec: string } {
 	let spec: string | null = null;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
-		if (arg === "-h" || arg === "--help") {
-			console.log(HELP);
-			process.exit(0);
-		} else if (arg === "--session-id") {
+		maybeExitWithHelp(arg, HELP);
+		if (arg === "--session-id") {
 			sessionId = argv[++i] ?? "";
 		} else if (arg.startsWith("--session-id=")) {
 			sessionId = arg.slice("--session-id=".length);
@@ -178,8 +177,5 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-	main().catch((err) => {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	});
+	runMain(main);
 }

@@ -481,21 +481,28 @@ type RuntimeSuccessEnvelopeCandidate = Record<string, unknown> & {
 	data: Record<string, unknown>;
 };
 
+function findUnsupportedKeys(
+	envelope: Record<string, unknown>,
+	supportedKeys: ReadonlySet<string>,
+): string[] {
+	return Object.keys(envelope).filter((key) => !supportedKeys.has(key));
+}
+
 function assertSupportedJsonErrorEnvelopeKeys(
 	envelope: RuntimeErrorEnvelopeCandidate,
 ): void {
-	const supportedKeys = new Set([
-		"status",
-		"run_id",
-		"data",
-		"error",
-		"runtime_actions",
-		"continuation",
-		"diagnostic_trail",
-		"duration_ms",
-	]);
-	const unsupportedKeys = Object.keys(envelope).filter(
-		(key) => !supportedKeys.has(key),
+	const unsupportedKeys = findUnsupportedKeys(
+		envelope,
+		new Set([
+			"status",
+			"run_id",
+			"data",
+			"error",
+			"runtime_actions",
+			"continuation",
+			"diagnostic_trail",
+			"duration_ms",
+		]),
 	);
 	if (unsupportedKeys.length > 0) {
 		throw new Error(
@@ -508,17 +515,17 @@ function assertSupportedJsonSuccessEnvelopeKeys(
 	command: string,
 	envelope: RuntimeSuccessEnvelopeCandidate,
 ): void {
-	const supportedKeys = new Set([
-		"status",
-		"run_id",
-		"data",
-		"runtime_actions",
-		"continuation",
-		"diagnostic_trail",
-		"duration_ms",
-	]);
-	const unsupportedKeys = Object.keys(envelope).filter(
-		(key) => !supportedKeys.has(key),
+	const unsupportedKeys = findUnsupportedKeys(
+		envelope,
+		new Set([
+			"status",
+			"run_id",
+			"data",
+			"runtime_actions",
+			"continuation",
+			"diagnostic_trail",
+			"duration_ms",
+		]),
 	);
 	if (unsupportedKeys.length > 0) {
 		throw new Error(

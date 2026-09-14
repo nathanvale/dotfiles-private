@@ -9,6 +9,7 @@ import { chmodSync, existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs
 import { mkdtemp, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { collectSpawnResult } from './common'
 
 const tempDirs: string[] = []
 
@@ -60,12 +61,7 @@ export async function runHook(
 	})
 	proc.stdin.write(JSON.stringify(input))
 	proc.stdin.end()
-	const [exitCode, stdout, stderr] = await Promise.all([
-		proc.exited,
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
-	])
-	return { exitCode, stdout, stderr }
+	return collectSpawnResult(proc.exited, proc.stdout, proc.stderr)
 }
 
 export function sentinelPath(repoRoot: string, binName: string): string {

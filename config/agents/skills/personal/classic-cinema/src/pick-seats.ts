@@ -18,6 +18,7 @@
 //   64 — invalid usage
 
 import type { SeatRow, Seat } from "./cinema-api.ts";
+import { maybeExitWithHelp, runMain } from "./cli-entrypoint.ts";
 
 const ZONES = ["front", "middle", "back", "surprise"] as const;
 export type Zone = (typeof ZONES)[number];
@@ -169,11 +170,6 @@ export function pickSeats(
 type PickSeatsArgs = { seatmapFile: string; zone: Zone; count: number };
 type PickSeatsRawArgs = { seatmapFile: string | null; zone: string | null; count: number | null };
 
-function exitWithHelp(): never {
-	console.log(HELP);
-	process.exit(0);
-}
-
 function exitWithUsageError(message: string): never {
 	console.error(message);
 	console.error(HELP);
@@ -214,7 +210,7 @@ function parseArgs(argv: string[]): PickSeatsArgs {
 	let i = 0;
 	while (i < argv.length) {
 		const arg = argv[i];
-		if (arg === "-h" || arg === "--help") exitWithHelp();
+		maybeExitWithHelp(arg, HELP);
 		const seatmapFlag = readFlagArg(argv, i, "seatmap-file");
 		if (seatmapFlag) {
 			raw.seatmapFile = seatmapFlag.value;
@@ -267,8 +263,5 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-	main().catch((err) => {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	});
+	runMain(main);
 }

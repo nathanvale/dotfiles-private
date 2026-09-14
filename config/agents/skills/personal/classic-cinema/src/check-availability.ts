@@ -20,6 +20,7 @@ import {
 	seatmapTmpPath,
 	seatmapUrl,
 } from "./cinema-api.ts";
+import { maybeExitWithHelp, runMain } from "./cli-entrypoint.ts";
 
 const HELP = `classic-cinema check-availability — seat availability per session
 
@@ -61,10 +62,8 @@ function parseArgs(argv: string[]): { sessionIds: string } {
 	let sessionIds: string | null = null;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
-		if (arg === "-h" || arg === "--help") {
-			console.log(HELP);
-			process.exit(0);
-		} else if (arg === "--session-ids") {
+		maybeExitWithHelp(arg, HELP);
+		if (arg === "--session-ids") {
 			sessionIds = argv[++i] ?? "";
 		} else if (arg.startsWith("--session-ids=")) {
 			sessionIds = arg.slice("--session-ids=".length);
@@ -122,8 +121,5 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-	main().catch((err) => {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	});
+	runMain(main);
 }

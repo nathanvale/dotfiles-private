@@ -12,6 +12,16 @@ and the `personal` marketplace entry in
 `config/agents/plugins/.claude-plugin/marketplace.json`; a version bump touches
 all three.
 
+## Live proof
+
+On 2026-09-12, fresh sessions proved the plugin live in both harnesses:
+Claude Code with Sonnet 5 via Foundry and Codex with gpt-6-astra. Adding an
+unused export blocked `Stop` with the plugin's `fallow-ci` envelope. The
+plugin's `biome-ci` fired alongside the old repository Biome hook before those
+hooks were removed. Codex recorded five trusted hook entries,
+`proof@personal:hooks.json:*`, in `~/.codex/config.toml`. This change removes
+the superseded repository Biome hooks.
+
 ## Plugin root
 
 Run source commands from the plugin root: the directory containing this

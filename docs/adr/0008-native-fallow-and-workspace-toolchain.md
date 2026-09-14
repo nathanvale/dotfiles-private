@@ -82,7 +82,7 @@ zone graph this repository has not needed. Facts below were decided 2026-09-11.
 - Topology: `topology.json` moves `skill-feedback`, `cli-execution-auditor`,
   and `vault-git` to `retired`; `fallow` becomes `projectOnly` (source
   `.claude/skills/fallow`, Tracking Link `.agents/skills/fallow`).
-- Biome Stop hook: a delta gate, changed files only, repo-local binary only.
+- Biome Stop hook: a delta gate, changed files only, repo-local binary only. (superseded by ADR 0010: the gate now ships in the `proof` plugin)
 
 ## Consequences
 

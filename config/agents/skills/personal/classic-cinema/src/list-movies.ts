@@ -28,6 +28,7 @@ import {
 	type RawSession,
 	todayAest,
 } from "./cinema-api.ts";
+import { maybeExitWithHelp, runMain } from "./cli-entrypoint.ts";
 
 const HELP = `classic-cinema list-movies — today's Elsternwick listing
 
@@ -45,10 +46,8 @@ function parseArgs(argv: string[]): { movie: string | null } {
 	let movie: string | null = null;
 	for (let i = 0; i < argv.length; i++) {
 		const arg = argv[i];
-		if (arg === "-h" || arg === "--help") {
-			console.log(HELP);
-			process.exit(0);
-		} else if (arg === "--movie") {
+		maybeExitWithHelp(arg, HELP);
+		if (arg === "--movie") {
 			movie = argv[++i] ?? "";
 		} else if (arg.startsWith("--movie=")) {
 			movie = arg.slice("--movie=".length);
@@ -145,8 +144,5 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-	main().catch((err) => {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	});
+	runMain(main);
 }

@@ -13,6 +13,7 @@
  */
 
 import { postEvent } from './event-bus-client'
+import { sanitizeContextLine } from './git-context-sanitizer'
 import { parsePorcelainStatus } from './git-status-parser'
 import { isGitRepo, runGit } from './git-utils'
 
@@ -51,17 +52,6 @@ export interface GitContext {
 		untracked: number
 	}
 	recentCommits: string[]
-}
-
-function sanitizeContextLine(value: string): string {
-	// Strip ASCII control characters (0x00-0x1F and 0x7F) using charCodeAt to
-	// avoid Biome noControlCharactersInRegex lint rule on regex literals.
-	let out = ''
-	for (let i = 0; i < value.length; i++) {
-		const c = value.charCodeAt(i)
-		out += c <= 0x1f || c === 0x7f ? ' ' : value[i]
-	}
-	return out.replace(/```/g, "'''").replace(/\s+/g, ' ').trim()
 }
 
 /** Gathers git state. Uses fewer commits on compact/clear to save context budget. */

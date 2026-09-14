@@ -183,6 +183,73 @@ function validateOrder(oldestFirst: boolean | undefined): "ASC" | "DESC" {
 	return oldestFirst ? "ASC" : "DESC";
 }
 
+/** Minimal shape accepted by node:util `parseArgs`'s `options`. */
+type CliOptionSpec = Record<
+	string,
+	{ type: "string" | "boolean"; default?: string | boolean }
+>;
+
+/**
+ * Parse CLI args against `options`, wrapping node:util's throw in the
+ * structured SkillError every subcommand reports for an unknown flag.
+ */
+function parseCliArgs(
+	args: string[],
+	options: CliOptionSpec,
+): Record<string, unknown> {
+	try {
+		return parseArgs({ args, strict: true, options }).values as Record<
+			string,
+			unknown
+		>;
+	} catch (err) {
+		throw new SkillError(
+			"UNKNOWN_FLAG",
+			String(err instanceof Error ? err.message : err),
+			'Run "help" command to see available options',
+			EXIT.INVALID_ARGS,
+		);
+	}
+}
+
+/** Validate `--since` only when present; leaves the raw value untouched. */
+function validateSinceIfPresent(since: string | undefined): void {
+	if (since) validateDate(since);
+}
+
+/** Resolve `--limit`, applying `defaultValue` when the flag is omitted. */
+function resolveLimit(raw: string | undefined, defaultValue: number): number;
+function resolveLimit(raw: string | undefined): number | undefined;
+function resolveLimit(
+	raw: string | undefined,
+	defaultValue?: number,
+): number | undefined {
+	return raw ? validateLimit(raw) : defaultValue;
+}
+
+/**
+ * Parse the `--since`/`--save-dir`/`--limit`/`--pretty` option group shared
+ * by `sync` and `enrich`, validating `since` and resolving `limit` in one
+ * call. `extraOptions` adds any command-specific flags (e.g. `sync`'s
+ * `--cursor-file`).
+ */
+function parseSinceLimitArgs(
+	args: string[],
+	extraOptions: CliOptionSpec,
+	defaultLimit: number,
+): { values: Record<string, unknown>; limit: number } {
+	const values = parseCliArgs(args, {
+		since: { type: "string" },
+		...extraOptions,
+		"save-dir": { type: "string" },
+		limit: { type: "string" },
+		pretty: { type: "boolean", default: false },
+	});
+	validateSinceIfPresent(values.since as string | undefined);
+	const limit = resolveLimit(values.limit as string | undefined, defaultLimit);
+	return { values, limit };
+}
+
 /**
  * Open the database, run a callback, and guarantee cleanup via try/finally.
  */
@@ -809,24 +876,7 @@ function loadMessagesSince(sinceDate: string, limit: number): ParsedMessage[] {
 		if (rows.length === 0) return [];
 
 		const rowids = rows.map((r) => r.rowid);
-		const attachmentRowsByMessageId = new Map<number, AttachmentRow[]>();
-		if (rowids.length > 0) {
-			const placeholders = rowids.map(() => "?").join(",");
-			const attRows = db
-				.prepare(
-					`SELECT maj.message_id, a.filename, a.mime_type, a.uti,
-					        a.total_bytes, a.transfer_name
-					 FROM message_attachment_join maj
-					 JOIN attachment a ON maj.attachment_id = a.rowid
-					 WHERE maj.message_id IN (${placeholders})`,
-				)
-				.all(...rowids) as AttachmentRow[];
-			for (const att of attRows) {
-				const bucket = attachmentRowsByMessageId.get(att.message_id) ?? [];
-				bucket.push(att);
-				attachmentRowsByMessageId.set(att.message_id, bucket);
-			}
-		}
+		const attachmentRowsByMessageId = fetchAttachmentsByMessageId(db, rowids);
 
 		const messages = rows.flatMap((row) =>
 			parseRowFromLib(row, attachmentRowsByMessageId.get(row.rowid) ?? [], {
@@ -1013,39 +1063,24 @@ try {
 
 	switch (command) {
 		case "messages": {
-			let values: Record<string, unknown>;
-			try {
-				const parsed = parseArgs({
-					args: rest,
-					strict: true,
-					options: {
-						since: { type: "string" },
-						until: { type: "string" },
-						contact: { type: "string" },
-						search: { type: "string" },
-						"from-me": { type: "boolean", default: false },
-						"to-me": { type: "boolean", default: false },
-						service: { type: "string" },
-						limit: { type: "string" },
-						"oldest-first": { type: "boolean", default: false },
-						"include-attachments": { type: "boolean", default: false },
-						"save-dir": { type: "string" },
-						"no-save": { type: "boolean", default: false },
-						pretty: { type: "boolean", default: false },
-					},
-				});
-				values = parsed.values as Record<string, unknown>;
-			} catch (err) {
-				throw new SkillError(
-					"UNKNOWN_FLAG",
-					String(err instanceof Error ? err.message : err),
-					'Run "help" command to see available options',
-					EXIT.INVALID_ARGS,
-				);
-			}
+			const values = parseCliArgs(rest, {
+				since: { type: "string" },
+				until: { type: "string" },
+				contact: { type: "string" },
+				search: { type: "string" },
+				"from-me": { type: "boolean", default: false },
+				"to-me": { type: "boolean", default: false },
+				service: { type: "string" },
+				limit: { type: "string" },
+				"oldest-first": { type: "boolean", default: false },
+				"include-attachments": { type: "boolean", default: false },
+				"save-dir": { type: "string" },
+				"no-save": { type: "boolean", default: false },
+				pretty: { type: "boolean", default: false },
+			});
 
 			// Validate inputs
-			if (values.since) validateDate(values.since as string);
+			validateSinceIfPresent(values.since as string | undefined);
 			if (values.until) validateDate(values.until as string);
 			if (values["from-me"] && values["to-me"]) {
 				throw new SkillError(
@@ -1055,7 +1090,7 @@ try {
 					EXIT.INVALID_ARGS,
 				);
 			}
-			const limit = values.limit ? validateLimit(values.limit as string) : 100;
+			const limit = resolveLimit(values.limit as string | undefined, 100);
 			const order = validateOrder(
 				values["oldest-first"] as boolean | undefined,
 			);
@@ -1079,57 +1114,23 @@ try {
 			break;
 		}
 		case "contacts": {
-			let values: Record<string, unknown>;
-			try {
-				const parsed = parseArgs({
-					args: rest,
-					strict: true,
-					options: {
-						limit: { type: "string" },
-						pretty: { type: "boolean", default: false },
-					},
-				});
-				values = parsed.values as Record<string, unknown>;
-			} catch (err) {
-				throw new SkillError(
-					"UNKNOWN_FLAG",
-					String(err instanceof Error ? err.message : err),
-					'Run "help" command to see available options',
-					EXIT.INVALID_ARGS,
-				);
-			}
+			const values = parseCliArgs(rest, {
+				limit: { type: "string" },
+				pretty: { type: "boolean", default: false },
+			});
 
-			const limit = values.limit
-				? validateLimit(values.limit as string)
-				: undefined;
+			const limit = resolveLimit(values.limit as string | undefined);
 			queryContacts({ limit, pretty: values.pretty as boolean });
 			break;
 		}
 		case "threads": {
-			let values: Record<string, unknown>;
-			try {
-				const parsed = parseArgs({
-					args: rest,
-					strict: true,
-					options: {
-						contact: { type: "string" },
-						limit: { type: "string" },
-						pretty: { type: "boolean", default: false },
-					},
-				});
-				values = parsed.values as Record<string, unknown>;
-			} catch (err) {
-				throw new SkillError(
-					"UNKNOWN_FLAG",
-					String(err instanceof Error ? err.message : err),
-					'Run "help" command to see available options',
-					EXIT.INVALID_ARGS,
-				);
-			}
+			const values = parseCliArgs(rest, {
+				contact: { type: "string" },
+				limit: { type: "string" },
+				pretty: { type: "boolean", default: false },
+			});
 
-			const limit = values.limit
-				? validateLimit(values.limit as string)
-				: undefined;
+			const limit = resolveLimit(values.limit as string | undefined);
 			queryThreads({
 				contact: values.contact as string | undefined,
 				limit,
@@ -1138,74 +1139,29 @@ try {
 			break;
 		}
 		case "schema": {
-			let pretty = false;
-			try {
-				const parsed = parseArgs({
-					args: rest,
-					strict: true,
-					options: { pretty: { type: "boolean", default: false } },
-				});
-				pretty = parsed.values.pretty as boolean;
-			} catch (err) {
-				throw new SkillError(
-					"UNKNOWN_FLAG",
-					String(err instanceof Error ? err.message : err),
-					'Run "help" command to see available options',
-					EXIT.INVALID_ARGS,
-				);
-			}
-			showSchema(pretty);
+			const values = parseCliArgs(rest, {
+				pretty: { type: "boolean", default: false },
+			});
+			showSchema(values.pretty as boolean);
 			break;
 		}
 		case "help":
 		case "--help":
 		case "-h":
 		case undefined: {
-			let pretty = false;
-			try {
-				const parsed = parseArgs({
-					args: command == null ? process.argv.slice(2) : rest,
-					strict: true,
-					options: { pretty: { type: "boolean", default: false } },
-				});
-				pretty = parsed.values.pretty as boolean;
-			} catch (err) {
-				throw new SkillError(
-					"UNKNOWN_FLAG",
-					String(err instanceof Error ? err.message : err),
-					'Run "help" command to see available options',
-					EXIT.INVALID_ARGS,
-				);
-			}
-			showHelp(pretty);
+			const values = parseCliArgs(
+				command == null ? process.argv.slice(2) : rest,
+				{ pretty: { type: "boolean", default: false } },
+			);
+			showHelp(values.pretty as boolean);
 			break;
 		}
 		case "sync": {
-			let values: Record<string, unknown>;
-			try {
-				const parsed = parseArgs({
-					args: rest,
-					strict: true,
-					options: {
-						since: { type: "string" },
-						"cursor-file": { type: "string" },
-						"save-dir": { type: "string" },
-						limit: { type: "string" },
-						pretty: { type: "boolean", default: false },
-					},
-				});
-				values = parsed.values as Record<string, unknown>;
-			} catch (err) {
-				throw new SkillError(
-					"UNKNOWN_FLAG",
-					String(err instanceof Error ? err.message : err),
-					'Run "help" command to see available options',
-					EXIT.INVALID_ARGS,
-				);
-			}
-
-			if (values.since) validateDate(values.since as string);
-			const limit = values.limit ? validateLimit(values.limit as string) : 500;
+			const { values, limit } = parseSinceLimitArgs(
+				rest,
+				{ "cursor-file": { type: "string" } },
+				500,
+			);
 
 			syncMessages({
 				since: values.since as string | undefined,
@@ -1217,30 +1173,7 @@ try {
 			break;
 		}
 		case "enrich": {
-			let values: Record<string, unknown>;
-			try {
-				const parsed = parseArgs({
-					args: rest,
-					strict: true,
-					options: {
-						since: { type: "string" },
-						"save-dir": { type: "string" },
-						limit: { type: "string" },
-						pretty: { type: "boolean", default: false },
-					},
-				});
-				values = parsed.values as Record<string, unknown>;
-			} catch (err) {
-				throw new SkillError(
-					"UNKNOWN_FLAG",
-					String(err instanceof Error ? err.message : err),
-					'Run "help" command to see available options',
-					EXIT.INVALID_ARGS,
-				);
-			}
-
-			if (values.since) validateDate(values.since as string);
-			const limit = values.limit ? validateLimit(values.limit as string) : 500;
+			const { values, limit } = parseSinceLimitArgs(rest, {}, 500);
 
 			enrichMessages({
 				since: values.since as string | undefined,
@@ -1251,25 +1184,10 @@ try {
 			break;
 		}
 		case "migrate-notes": {
-			let values: Record<string, unknown>;
-			try {
-				const parsed = parseArgs({
-					args: rest,
-					strict: true,
-					options: {
-						"save-dir": { type: "string" },
-						pretty: { type: "boolean", default: false },
-					},
-				});
-				values = parsed.values as Record<string, unknown>;
-			} catch (err) {
-				throw new SkillError(
-					"UNKNOWN_FLAG",
-					String(err instanceof Error ? err.message : err),
-					'Run "help" command to see available options',
-					EXIT.INVALID_ARGS,
-				);
-			}
+			const values = parseCliArgs(rest, {
+				"save-dir": { type: "string" },
+				pretty: { type: "boolean", default: false },
+			});
 
 			migrateNotesCommand({
 				"save-dir": values["save-dir"] as string | undefined,

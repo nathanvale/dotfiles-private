@@ -532,13 +532,46 @@ function classifyRequestParameter(before: unknown, after: unknown): Compatibilit
 	return result;
 }
 
-function classifyRequestEnum(before: unknown, after: unknown): Compatibility {
+/** Build string-keyed enum value sets, or null when either side is not an array. */
+function enumValueSets(
+	before: unknown,
+	after: unknown,
+): { beforeValues: Set<string>; afterValues: Set<string> } | null {
+	if (!Array.isArray(before) || !Array.isArray(after)) return null;
+	return {
+		beforeValues: new Set(before.map(stableStringify)),
+		afterValues: new Set(after.map(stableStringify)),
+	};
+}
+
+/** True if some value in `from` is absent from `to`. */
+function hasMissingValue(from: Set<string>, to: Set<string>): boolean {
+	return [...from].some((value) => !to.has(value));
+}
+
+type EnumCompatibilityDirection = "request" | "response";
+
+function classifyEnumCompatibility(
+	before: unknown,
+	after: unknown,
+	direction: EnumCompatibilityDirection,
+): Compatibility {
 	if (stableStringify(before) === stableStringify(after)) return "same";
-	if (!Array.isArray(before) || !Array.isArray(after)) return "review";
-	const beforeValues = new Set(before.map(stableStringify));
-	const afterValues = new Set(after.map(stableStringify));
-	if ([...beforeValues].some((value) => !afterValues.has(value))) return "breaking";
-	return [...afterValues].some((value) => !beforeValues.has(value)) ? "additive" : "same";
+	const sets = enumValueSets(before, after);
+	if (!sets) return "review";
+	const { beforeValues, afterValues } = sets;
+	const valueRemoved = hasMissingValue(beforeValues, afterValues);
+	const valueAdded = hasMissingValue(afterValues, beforeValues);
+	if (direction === "request") {
+		if (valueRemoved) return "breaking";
+		return valueAdded ? "additive" : "same";
+	}
+	if (valueAdded) return "breaking";
+	return valueRemoved ? "additive" : "same";
+}
+
+function classifyRequestEnum(before: unknown, after: unknown): Compatibility {
+	return classifyEnumCompatibility(before, after, "request");
 }
 
 function classifyRequestBound(before: unknown, after: unknown, kind: "minimum" | "maximum"): Compatibility {
@@ -679,12 +712,7 @@ function classifyResponseSchema(before: unknown, after: unknown): Compatibility 
 }
 
 function classifyResponseEnum(before: unknown, after: unknown): Compatibility {
-	if (stableStringify(before) === stableStringify(after)) return "same";
-	if (!Array.isArray(before) || !Array.isArray(after)) return "review";
-	const beforeValues = new Set(before.map(stableStringify));
-	const afterValues = new Set(after.map(stableStringify));
-	if ([...afterValues].some((value) => !beforeValues.has(value))) return "breaking";
-	return [...beforeValues].some((value) => !afterValues.has(value)) ? "additive" : "same";
+	return classifyEnumCompatibility(before, after, "response");
 }
 
 function stringSet(value: unknown): Set<string> {

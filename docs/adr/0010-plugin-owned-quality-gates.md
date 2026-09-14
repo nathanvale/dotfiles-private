@@ -6,7 +6,7 @@ status: proposed
 
 ## Context and Problem
 
-The Biome quality gate lived as three `settings.json` hook declarations
+The Biome quality gate lived as two `settings.json` hook declarations
 (`config/agents/claude/hooks/biome/biome-ci.ts` on `Stop`,
 `biome-check.ts` on `PostToolUse`). It was Claude-only: `config/agents/codex/hooks.json`
 has no Biome hook at all. It was also unversioned and edited in place: a change took effect
@@ -17,6 +17,8 @@ placement informed by `docs/research/2026-09-12-agent-hook-timing.md`.
 
 What delivery mechanism gives both harnesses a versioned, self-disabling
 quality gate without adding a build step or a runtime dependency?
+
+The ADR 0008 decision "Biome Stop hook: a delta gate, changed files only, repo-local binary only" is superseded by this plugin.
 
 ## Decision Drivers
 
@@ -62,9 +64,8 @@ repository, matching every named driver.
   an error in a file the current change did not touch is reported only as
   `suppressedCount`, never surfaced as a blocking finding. `bun run check`
   remains the complete gate; this hook is a fast, partial signal at `Stop`.
-- Neutral: the old `config/agents/claude/hooks/biome/*` scripts and their
-  `settings.json` registrations stay in place, unmodified, in this change.
-  Retiring them is a later PR's job once the plugin is proven.
+- Neutral: this change removes the old `config/agents/claude/hooks/biome/*`
+  scripts and their `settings.json` registrations after the plugin live proof.
 - Deferred: relocating `tooling/repository-quality`'s test-runner ownership
   is out of scope for this change.
 
@@ -134,9 +135,15 @@ shows `fallow-ci` and `typecheck-ci` blocking a `Stop` with the expected
 envelope, `biome-ci` informing on `PostToolUse`, and every hook exiting 0
 quickly in a repository that carries none of the three tools.
 
-Revisit trigger: the old `config/agents/claude/hooks/biome/*` scripts and
-their `settings.json` registrations move to a follow-up PR that retires them
-once this plugin has run in place for a while.
+- Live proof on 2026-09-12: harness (Claude Code, Sonnet 5 via Foundry) and
+  harness (Codex, gpt-6-astra) both ran the plugin. Adding an unused export
+  blocked `Stop` with the plugin's `fallow-ci` envelope. The plugin's
+  `biome-ci` fired alongside the old repository Biome hook before this change.
+  Codex recorded five trusted hook entries, `proof@personal:hooks.json:*`, in
+  `~/.codex/config.toml`. This PR removes the old repository Biome hooks.
+
+Revisit trigger: revisit plugin gate ownership if a future live proof shows
+that a quality gate no longer runs reliably in either harness.
 
 ## References
 

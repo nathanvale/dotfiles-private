@@ -352,6 +352,19 @@ interface RequestedDiscovery {
 	failedBySource: Map<SessionSource, number>
 }
 
+/** Map items in bounded batches, awaiting each batch before starting the next. */
+async function processInBatches<T, R>(
+	items: T[],
+	batchSize: number,
+	mapper: (item: T) => Promise<R>,
+	onBatch: (batch: R[]) => void,
+): Promise<void> {
+	for (let index = 0; index < items.length; index += batchSize) {
+		const batch = await Promise.all(items.slice(index, index + batchSize).map(mapper))
+		onBatch(batch)
+	}
+}
+
 async function discoverRequestedFiles(files: SessionFile[], requestedSessions: Set<string>): Promise<RequestedDiscovery> {
 	if (requestedSessions.size === 0) {
 		return { filesToSummarize: files, unsupportedFiles: 0, failedBySource: new Map() }
@@ -360,15 +373,18 @@ async function discoverRequestedFiles(files: SessionFile[], requestedSessions: S
 	const filesToSummarize: SessionFile[] = []
 	let unsupportedFiles = 0
 	const failedBySource = new Map<SessionSource, number>()
-	for (let index = 0; index < files.length; index += 8) {
-		const batch = await Promise.all(files.slice(index, index + 8).map(async (file) => {
+	await processInBatches(
+		files,
+		8,
+		async (file) => {
 			try {
 				return { file, metadata: await readMetadata(file.path, file.source) }
 			} catch {
 				return { file, failed: true as const }
 			}
-		}))
-		for (const outcome of batch) {
+		},
+		(batch) => {
+			for (const outcome of batch) {
 			if ("failed" in outcome) {
 				failedBySource.set(outcome.file.source, (failedBySource.get(outcome.file.source) ?? 0) + 1)
 			} else if (!outcome.metadata) {
@@ -377,8 +393,9 @@ async function discoverRequestedFiles(files: SessionFile[], requestedSessions: S
 				discoveredSessions.add(outcome.metadata.opaqueId)
 				if (requestedSessions.has(outcome.metadata.opaqueId)) filesToSummarize.push(outcome.file)
 			}
-		}
-	}
+			}
+		},
+	)
 	return { filesToSummarize, discoveredSessions, unsupportedFiles, failedBySource }
 }
 
@@ -390,14 +407,18 @@ async function summarizeFiles(files: SessionFile[]): Promise<{
 	const summaries: FileSummary[] = []
 	let unsupportedFiles = 0
 	const failedBySource = new Map<SessionSource, number>()
-	for (let index = 0; index < files.length; index += 8) {
-		const batch = await Promise.all(files.slice(index, index + 8).map((file) => summarizeFile(file.path, file.source)))
-		for (const outcome of batch) {
+	await processInBatches(
+		files,
+		8,
+		(file) => summarizeFile(file.path, file.source),
+		(batch) => {
+			for (const outcome of batch) {
 			if (outcome.kind === "summary") summaries.push(outcome.summary)
 			else if (outcome.kind === "unsupported") unsupportedFiles += 1
 			else failedBySource.set(outcome.source, (failedBySource.get(outcome.source) ?? 0) + 1)
+			}
 		}
-	}
+	)
 	return { summaries, unsupportedFiles, failedBySource }
 }
 

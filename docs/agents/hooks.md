@@ -41,11 +41,12 @@ Codex re-approval step, not a file change.
 
 ## Owner
 
-- Existing hook scripts: `config/agents/claude/hooks/`.
+- Existing non-plugin hook scripts: `config/agents/claude/hooks/`.
 - Hook declarations: `config/agents/claude/hooks.json` and
   `config/agents/codex/hooks.json`.
-- Plugin-delivered quality gates: `config/agents/plugins/proof/hooks/`, with
-  its own `hooks/claude/hooks.json` and `hooks/codex/hooks.json` per harness.
+- Biome, Fallow, and TypeScript quality gates come only from
+  `config/agents/plugins/proof/hooks/`, with its own `hooks/claude/hooks.json`
+  and `hooks/codex/hooks.json` per harness.
   Activation is `enabledPlugins` in `config/agents/claude/settings.json`, not
   a `settings.json` hook declaration. The scripts run from the installed
   plugin cache, so a source change takes effect only through a plugin

@@ -956,7 +956,7 @@ function scoreFidelity(
 	const compactRows = parseCompactJsonFailureRows(output);
 	const toonRows = parseToonFailureRows(output);
 	if (fixture.kind === "pass") {
-		const signals: FidelitySignal = {
+		return buildFidelityAssessment({
 			failure_count: true,
 			failing_file: true,
 			failing_test: true,
@@ -967,21 +967,7 @@ function scoreFidelity(
 			lookup_handle: true,
 			expected_value: true,
 			received_value: true,
-		};
-		const fidelitySignalEntries = Object.entries(signals).filter(
-			([name]) => name !== "lookup_handle",
-		);
-		const missing = fidelitySignalEntries
-			.filter(([, present]) => !present)
-			.map(([name]) => name);
-		return {
-			applicable: true,
-			score:
-				fidelitySignalEntries.filter(([, present]) => present).length /
-				fidelitySignalEntries.length,
-			signals,
-			missing,
-		};
+		});
 	}
 
 	const expectedFailureCount = fixture.expectedSignals.expectedFailureCount ?? 1;
@@ -991,7 +977,7 @@ function scoreFidelity(
 		fixture.expectedSignals.receivedValueAvailable ?? fixture.kind !== "timeout";
 	const expectedValuePresent = hasExpectedValueSignal(output, compactRows, toonRows);
 	const receivedValuePresent = hasReceivedValueSignal(output, compactRows, toonRows);
-	const signals: FidelitySignal = {
+	return buildFidelityAssessment({
 		failure_count: observedFailureCount(output, compactRows, toonRows) === expectedFailureCount,
 		failing_file: fixture.expectedSignals.failingFile
 			? output.includes(fixture.expectedSignals.failingFile)
@@ -1010,7 +996,10 @@ function scoreFidelity(
 		received_value: receivedValueAvailable
 			? receivedValuePresent
 			: !receivedValuePresent,
-	};
+	});
+}
+
+function buildFidelityAssessment(signals: FidelitySignal): FidelityScore {
 	const fidelitySignalEntries = Object.entries(signals).filter(
 		([name]) => name !== "lookup_handle",
 	);

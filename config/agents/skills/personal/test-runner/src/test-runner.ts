@@ -322,20 +322,24 @@ async function runTestRunnerCli(
 	return result.exit_code;
 }
 
-async function checkRunnerStatus(input: {
-	parsed: Extract<ParsedRunnerCommand, { kind: "status" }>;
+type RunnerContext = { cwd: string; bunCommand: string };
+
+async function resolveRunnerContext(input: {
+	command: TestRunnerCommand;
+	rawCwd: string;
+	bunArgs: readonly string[];
 	runtime: TestRunnerRuntime;
 	runId: string;
 	startedAt: number;
-}): Promise<TestRunnerResult> {
-	const cwd = resolve(input.parsed.cwd);
+}): Promise<RunnerContext | TestRunnerResult> {
+	const cwd = resolve(input.rawCwd);
 	const cwdOk = await input.runtime.isDirectory(cwd);
 	if (!cwdOk) {
 		return createRunnerDiagnosticResult({
-			command: "status",
+			command: input.command,
 			cwd,
 			bunCommand: null,
-			bunArgs: [],
+			bunArgs: input.bunArgs,
 			runId: input.runId,
 			durationMs: input.runtime.now() - input.startedAt,
 			diagnostic: invalidCwdDiagnostic(cwd),
@@ -345,22 +349,48 @@ async function checkRunnerStatus(input: {
 	const bunCommand = await input.runtime.findBun();
 	if (!bunCommand) {
 		return createRunnerDiagnosticResult({
-			command: "status",
+			command: input.command,
 			cwd,
 			bunCommand: null,
-			bunArgs: [],
+			bunArgs: input.bunArgs,
 			runId: input.runId,
 			durationMs: input.runtime.now() - input.startedAt,
 			diagnostic: missingBunDiagnostic(),
 			exitCode: RUNTIME_FAILURE_EXIT_CODE,
 		});
 	}
+	return { cwd, bunCommand };
+}
+
+function isRunnerContext(
+	value: RunnerContext | TestRunnerResult,
+): value is RunnerContext {
+	return !("contract" in value);
+}
+
+async function checkRunnerStatus(input: {
+	parsed: Extract<ParsedRunnerCommand, { kind: "status" }>;
+	runtime: TestRunnerRuntime;
+	runId: string;
+	startedAt: number;
+}): Promise<TestRunnerResult> {
+	const context = await resolveRunnerContext({
+		command: "status",
+		rawCwd: input.parsed.cwd,
+		bunArgs: [],
+		runtime: input.runtime,
+		runId: input.runId,
+		startedAt: input.startedAt,
+	});
+	if (!isRunnerContext(context)) {
+		return context;
+	}
 	return baseResult({
 		action: "runner_ready",
 		status: "passed",
 		command: "status",
-		cwd,
-		bunCommand,
+		cwd: context.cwd,
+		bunCommand: context.bunCommand,
 		bunArgs: [],
 		exitCode: 0,
 		runId: input.runId,
@@ -376,34 +406,18 @@ async function runBunTests(input: {
 	runId: string;
 	startedAt: number;
 }): Promise<TestRunnerResult> {
-	const cwd = resolve(input.parsed.cwd);
-	const cwdOk = await input.runtime.isDirectory(cwd);
-	if (!cwdOk) {
-		return createRunnerDiagnosticResult({
-			command: "run",
-			cwd,
-			bunCommand: null,
-			bunArgs: input.parsed.bunArgs,
-			runId: input.runId,
-			durationMs: input.runtime.now() - input.startedAt,
-			diagnostic: invalidCwdDiagnostic(cwd),
-			exitCode: RUNTIME_FAILURE_EXIT_CODE,
-		});
+	const context = await resolveRunnerContext({
+		command: "run",
+		rawCwd: input.parsed.cwd,
+		bunArgs: input.parsed.bunArgs,
+		runtime: input.runtime,
+		runId: input.runId,
+		startedAt: input.startedAt,
+	});
+	if (!isRunnerContext(context)) {
+		return context;
 	}
-
-	const bunCommand = await input.runtime.findBun();
-	if (!bunCommand) {
-		return createRunnerDiagnosticResult({
-			command: "run",
-			cwd,
-			bunCommand: null,
-			bunArgs: input.parsed.bunArgs,
-			runId: input.runId,
-			durationMs: input.runtime.now() - input.startedAt,
-			diagnostic: missingBunDiagnostic(),
-			exitCode: RUNTIME_FAILURE_EXIT_CODE,
-		});
-	}
+	const { cwd, bunCommand } = context;
 
 	let processResult: ProcessResult;
 	try {

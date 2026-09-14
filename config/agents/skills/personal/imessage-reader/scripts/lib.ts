@@ -1645,17 +1645,34 @@ function dayOfWeek(localIso: string): string {
 }
 
 /**
+ * Zero-padded local date/time components of an ISO timestamp, shared by
+ * every v2 path and frontmatter builder below.
+ */
+function localDateParts(sentAt: string): {
+	year: string;
+	month: string;
+	day: string;
+	hours: string;
+	minutes: string;
+	seconds: string;
+} {
+	const d = new Date(sentAt);
+	return {
+		year: String(d.getFullYear()),
+		month: String(d.getMonth() + 1).padStart(2, "0"),
+		day: String(d.getDate()).padStart(2, "0"),
+		hours: String(d.getHours()).padStart(2, "0"),
+		minutes: String(d.getMinutes()).padStart(2, "0"),
+		seconds: String(d.getSeconds()).padStart(2, "0"),
+	};
+}
+
+/**
  * Build the canonical v2 save path relative to the save dir.
  * Pattern: YYYY/MM/YYYY-MM-DD-HHmmss-imessage-{guid-slug-v2}.md
  */
 export function canonicalSavePath(sentAt: string, sourceId: string): string {
-	const d = new Date(sentAt);
-	const year = String(d.getFullYear());
-	const month = String(d.getMonth() + 1).padStart(2, "0");
-	const day = String(d.getDate()).padStart(2, "0");
-	const hours = String(d.getHours()).padStart(2, "0");
-	const minutes = String(d.getMinutes()).padStart(2, "0");
-	const seconds = String(d.getSeconds()).padStart(2, "0");
+	const { year, month, day, hours, minutes, seconds } = localDateParts(sentAt);
 	const slug = guidSlugV2(sourceId);
 	const filename = `${year}-${month}-${day}-${hours}${minutes}${seconds}-imessage-${slug}.md`;
 	return join(year, month, filename);
@@ -1671,9 +1688,7 @@ export function canonicalAttachmentLocalPath(
 	sourceId: string,
 	filename: string,
 ): string {
-	const d = new Date(sentAt);
-	const year = String(d.getFullYear());
-	const month = String(d.getMonth() + 1).padStart(2, "0");
+	const { year, month } = localDateParts(sentAt);
 	return join(
 		"runtime/imessage/attachments",
 		year,
@@ -1689,12 +1704,7 @@ export function canonicalAttachmentLocalPath(
  * Build the title for a v2 note: "iMessage with {contact} at {date} {HH:MM}"
  */
 function v2Title(conversationWith: string, sentAt: string): string {
-	const d = new Date(sentAt);
-	const year = d.getFullYear();
-	const month = String(d.getMonth() + 1).padStart(2, "0");
-	const day = String(d.getDate()).padStart(2, "0");
-	const hours = String(d.getHours()).padStart(2, "0");
-	const minutes = String(d.getMinutes()).padStart(2, "0");
+	const { year, month, day, hours, minutes } = localDateParts(sentAt);
 	return `iMessage with ${conversationWith} at ${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
@@ -1702,10 +1712,7 @@ function v2Title(conversationWith: string, sentAt: string): string {
  * Build the date-only updated field from sent_at.
  */
 function v2Updated(sentAt: string): string {
-	const d = new Date(sentAt);
-	const year = d.getFullYear();
-	const month = String(d.getMonth() + 1).padStart(2, "0");
-	const day = String(d.getDate()).padStart(2, "0");
+	const { year, month, day } = localDateParts(sentAt);
 	return `${year}-${month}-${day}`;
 }
 

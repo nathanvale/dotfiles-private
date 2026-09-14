@@ -63,6 +63,20 @@ export function resolveCwd(input: HookInput): string {
 	return typeof input.cwd === 'string' && input.cwd.trim() ? input.cwd : process.cwd()
 }
 
+/** Awaits a piped subprocess's exit code alongside its fully drained stdout/stderr text. */
+export async function collectSpawnResult(
+	exited: Promise<number>,
+	stdout: ReadableStream<Uint8Array>,
+	stderr: ReadableStream<Uint8Array>,
+): Promise<CommandResult> {
+	const [exitCode, stdoutText, stderrText] = await Promise.all([
+		exited,
+		new Response(stdout).text(),
+		new Response(stderr).text(),
+	])
+	return { exitCode, stdout: stdoutText, stderr: stderrText }
+}
+
 export async function runCommand(
 	argv: string[],
 	options: { cwd: string; env?: Record<string, string> },
@@ -73,12 +87,7 @@ export async function runCommand(
 		stderr: 'pipe',
 		env: options.env ? { ...process.env, ...options.env } : process.env,
 	})
-	const [exitCode, stdout, stderr] = await Promise.all([
-		proc.exited,
-		new Response(proc.stdout).text(),
-		new Response(proc.stderr).text(),
-	])
-	return { exitCode, stdout, stderr }
+	return collectSpawnResult(proc.exited, proc.stdout, proc.stderr)
 }
 
 async function runGit(cwd: string, args: string[]): Promise<CommandResult> {

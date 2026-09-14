@@ -19,6 +19,7 @@
 // Exit codes: 0 ok, 1 runtime failure (bad datetime, missing file), 64 invalid usage.
 
 import { dirname, join } from "node:path";
+import { maybeExitWithHelp, runMain } from "./cli-entrypoint.ts";
 
 export const CDN_BASE = "https://movingstory-prod.imgix.net/";
 
@@ -237,10 +238,8 @@ function parseArgs(argv: string[]): FillArgs {
 		const next = (): string => argv[++i] ?? "";
 		const stringKey = FILL_ARGS_STRING_FLAGS.get(arg);
 		const numberKey = FILL_ARGS_NUMBER_FLAGS.get(arg);
-		if (arg === "-h" || arg === "--help") {
-			console.log(HELP);
-			process.exit(0);
-		} else if (stringKey) {
+		maybeExitWithHelp(arg, HELP);
+		if (stringKey) {
 			v[stringKey] = next();
 		} else if (numberKey) {
 			v[numberKey] = takeNum(next(), arg);
@@ -315,8 +314,5 @@ async function main(): Promise<void> {
 }
 
 if (import.meta.main) {
-	main().catch((err) => {
-		console.error(err instanceof Error ? err.message : String(err));
-		process.exit(1);
-	});
+	runMain(main);
 }

@@ -16,6 +16,7 @@
  * one, which is the coupling this module exists to break. `Shape` itself is
  * imported because it is the shape language, not a version's contract.
  */
+// fallow-ignore-file code-duplication -- deliberate frozen copy of schema.ts vocabularies; importing schema.ts here would re-couple the frozen v1 surface (see file header)
 import type { Shape } from './schema.ts'
 
 const str: Shape = { t: 'string' }

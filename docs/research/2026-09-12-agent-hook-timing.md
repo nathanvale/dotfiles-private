@@ -156,6 +156,8 @@ Source: [Codex hooks reference](https://developers.openai.com/codex/hooks)
   typecheck 0.5 s; Biome per file well under 1 s. Every candidate gate is
   far below the 600 s default and the local self-destruct budgets.
 
+(Both scripts were removed on 2026-09-12 by ADR 0010; the plugin's hooks replace them.)
+
 ## Community signal (last 7 days)
 
 Secondary, practitioner reports; treat as signal, not authority.
