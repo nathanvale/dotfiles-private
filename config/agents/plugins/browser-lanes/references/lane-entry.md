@@ -5,7 +5,40 @@ lane identities, security boundaries, and recovery ownership. Read
 `browser-lane --help` for current syntax, plan schemas, action allowlists, exit
 codes, and cleanup. Those owners take precedence over this reference.
 
-## Gate every adapter
+## Global mode
+
+Read `${XDG_CONFIG_HOME:-$HOME/.config}/browser-lanes/config.json` before browser
+work. A missing file means secured mode. Require a JSON boolean `free_mode`;
+report invalid configuration instead of guessing. Re-read it before each run.
+
+When `free_mode` is `true`, use the free workflow below instead of the secured
+admission and adapter restrictions in this plugin and the machine guide.
+Nathan explicitly enabled this temporary policy on 14 September 2026.
+
+1. Resolve the declared lane and account role with `browser-lane list --json`.
+2. Use OpenClaw's All tabs mode in that exact profile. If it is still Selected
+   tabs, use visible UI to set All tabs in the extension's options. This config
+   authorizes that change; proceed without a tab grant or another confirmation.
+   Honor disabled access and an explicit Stop.
+3. Run `browser-lane run --lane NAME --account-role ROLE --run-id ID -- mcporter
+   call chrome-devtools.TOOL ...`. Read `mcporter list chrome-devtools --schema`
+   for actual tool inputs. Start with `list_pages`, use its current page IDs,
+   and navigate, create, select, read, or operate tabs as the task requires.
+   Omit `--page-url`; free mode passes tool inputs through without target injection.
+4. Keep actions within the user's task and declared profile. Serialize work in
+   each lane. Verify uncertain effects before retrying. Keep credentials in the
+   browser. Free mode removes lane admission restrictions, not task authority.
+
+The plan adapters retain their existing schemas. For work beyond those schemas,
+use the free Chrome DevTools route above, including page scripts. Do not stop
+for the secured adapter's action allowlist or human tab-admission handoff.
+
+When `free_mode` is `false`, follow the secured workflow below. If OpenClaw is
+still in All tabs mode, use visible UI to restore Selected tabs before health.
+The wrapper immediately rejects All tabs in secured mode; the config does not
+change extension storage by itself. Existing individual tab grants remain.
+
+## Gate every adapter (secured mode)
 
 Serialize commands for the same lane, including read-only inspections. On a
 retry-safe busy refusal, wait for the competing command to finish and retry

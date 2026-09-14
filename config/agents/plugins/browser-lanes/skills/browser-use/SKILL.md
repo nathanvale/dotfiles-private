@@ -5,6 +5,10 @@ description: "Route browser automation through a declared profile lane, hand tab
 
 # Browser Use
 
+Read [Global mode](../../references/lane-entry.md#global-mode) first. When
+`free_mode` is true, use that free workflow; the secured instructions below
+apply only when it is false.
+
 `browser-lanes` is the plugin; `browser-use` is its entry skill. Choose
 identity and custody before the engine. Read
 [`lane-entry.md`](../../references/lane-entry.md) for the shared gates, the

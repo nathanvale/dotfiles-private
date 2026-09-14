@@ -45,10 +45,20 @@ registry="$state_root/registry.json"
 leases_root="$state_root/leases"
 recovery_root="$state_root/recovery"
 handoffs_root="$state_root/handoffs"
+free_mode=false
 lane_activity_started=false
 lane_activity_pid=''
 lane_activity_run_id=''
 lane_activity_outcome_file=''
+
+load_free_mode() {
+  local config="${XDG_CONFIG_HOME:-$HOME/.config}/browser-lanes/config.json"
+  [[ -e "$config" ]] || return 0
+  free_mode="$(jq -ers 'if length == 1 and (.[0] | type == "object" and (.free_mode | type) == "boolean") then .[0].free_mode | tostring else error("one config object with boolean free_mode is required") end' "$config" 2>/dev/null)" ||
+    emit_error "$EXIT_USAGE" 'invalid_free_mode_config' "$1" false \
+      'Browser Lanes config must contain a boolean free_mode' \
+      'Set free_mode to true or false in ~/.config/browser-lanes/config.json.'
+}
 
 # OpenClaw activity accepts a smaller run-id grammar than the public lane.
 # Keep the public run id at its own boundary and derive one opaque, stable
@@ -206,7 +216,17 @@ Commands:
             explicitly resume or release it without exposing credentials.
   recovery  Create, verify, or expire a private authentication-free blueprint.
 
-Health proof gaps:
+Global mode:
+  - Global config: ${XDG_CONFIG_HOME:-$HOME/.config}/browser-lanes/config.json.
+    {"free_mode":true} enables unrestricted Chrome DevTools lane calls: navigation,
+    tab creation/selection/closing and explicit page IDs, without --page-url.
+    Use live list_pages IDs and the installed tool schema. The extension must
+    use All tabs; the skill may configure this once per profile. Missing config
+    or {"free_mode":false} restores secured routing. Malformed config exits 2.
+    Free mode retains profile identity, relay authentication and the lane lease.
+    Plan adapters retain their plan contracts; use run for unrestricted work.
+
+Health proof gaps (secured mode):
   - Health reads one fresh live access-status snapshot. An unavailable snapshot
     fails the route; an all-tabs, disabled, or transitioning snapshot fails the
     baseline. Preference checks and manual UI observations do not prove it.
@@ -582,6 +602,8 @@ live_access_status() {
       access_status_state='disabled'
     elif [[ "$(jq -r '.transitioning' <<<"$status")" == 'true' ]]; then
       access_status_state='transitioning'
+    elif [[ "$access_status_observed" == 'all' && "$free_mode" == 'true' ]]; then
+      access_status_state='selected'
     elif [[ "$access_status_observed" != 'selected' ]]; then
       access_status_state='mismatch'
     else
@@ -1111,8 +1133,8 @@ acquire_lease() {
         "lane is claimed but its owner record is not available yet: $lane" \
         "Retry the same command once after the current command finishes. If this persists, inspect the private lease directory; do not remove it automatically."
     fi
-    [[ -d "$lease_dir" && ! -L "$lease_dir" && -f "$owner_file" && ! -L "$owner_file" ]] &&
-      jq -e '
+    if ! [[ -d "$lease_dir" && ! -L "$lease_dir" && -f "$owner_file" && ! -L "$owner_file" ]] ||
+      ! jq -e '
         type == "object" and
         (.run_id | type == "string" and length > 0) and
         (.pid | type == "number" and . > 0 and floor == .) and
@@ -1120,10 +1142,11 @@ acquire_lease() {
         (.acquired_at_epoch | type == "number" and . >= 0 and floor == .) and
         (.expires_at_epoch | type == "number" and . >= 0 and floor == .) and
         .expires_at_epoch >= .acquired_at_epoch
-      ' "$owner_file" >/dev/null 2>&1 ||
+      ' "$owner_file" >/dev/null 2>&1; then
       emit_error "$EXIT_BUSY" 'lane_busy_unreadable' "$run_id" false \
         "lane lease path or owner record is unsafe or invalid: $lane" \
         "Inspect the private lease directory before retrying."
+    fi
     owner_run="$(jq -r '.run_id // "unknown"' "$owner_file" 2>/dev/null)"
     if lease_owner_matches_live_process "$owner_file"; then
       emit_error "$EXIT_BUSY" 'lane_busy' "$run_id" true \
@@ -2677,6 +2700,7 @@ main() {
   [[ -n "$run_id" ]] || run_id="$(generated_run_id)"
   [[ "$run_id" =~ ^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$ ]] || die_usage 'run id is invalid'
   require_command jq "$run_id"
+  load_free_mode "$run_id"
   if [[ -n "$snapshot" ]]; then
     validate_snapshot_id "$snapshot" ||
       emit_error "$EXIT_USAGE" 'invalid_snapshot_id' "$run_id" false \
@@ -3042,12 +3066,12 @@ main() {
   [[ "${1##*/}" == 'mcporter' && "$2" == 'call' && "$3" == chrome-devtools.* ]] ||
     die_usage 'run accepts only: mcporter call chrome-devtools.TOOL ...'
   child_tool="${3#chrome-devtools.}"
-  if is_prohibited_tool "$child_tool"; then
+  if [[ "$free_mode" == false ]] && is_prohibited_tool "$child_tool"; then
     emit_error "$EXIT_USAGE" 'prohibited_tool' "$run_id" false \
       "chrome-devtools tool is prohibited inside a lane run: $child_tool" \
       "Use a tool that stays inside the selected exact task page; page creation, navigation, selection, closing, PWA lifecycle, extension lifecycle, and out-of-band execution are not lane-run actions."
   fi
-  if has_remembered_page_identifier "$@"; then
+  if [[ "$free_mode" == false ]] && has_remembered_page_identifier "$@"; then
     emit_error "$EXIT_USAGE" 'remembered_page_identifier' "$run_id" false \
       'child arguments carry a remembered page identifier' \
       'Remove pageId and pageIdx; the lane resolves its admitted page for every run.'
@@ -3055,7 +3079,7 @@ main() {
   if [[ "$page_url_set" == 'true' ]] && [[ ! "$page_url" =~ ^https?://[^[:space:]]+$ ]]; then
     die_usage '--page-url must be an absolute http or https URL'
   fi
-  if [[ "$child_tool" != 'list_pages' && "$page_url_set" == 'false' ]]; then
+  if [[ "$free_mode" == false && "$child_tool" != 'list_pages' && "$page_url_set" == 'false' ]]; then
     emit_error "$EXIT_USAGE" 'page_url_required' "$run_id" false \
       "this chrome-devtools tool accesses page content and requires --page-url: $child_tool" \
       'Pass --page-url with the exact URL of the selected task page.'
@@ -3068,9 +3092,11 @@ main() {
   trap 'cleanup_page_list_file; release_lease "$lane" "$run_id"' EXIT HUP INT TERM
   refuse_while_handoff "$lane" "$lane_value" "$run_id"
   route_preflight "$lane" "$lane_value" "$run_id"
-  if [[ "$page_url_set" == 'true' ]]; then
+  if [[ "$free_mode" == false && "$page_url_set" == 'true' ]]; then
     resolve_admitted_page "$lane_value" "$page_url" "$run_id"
     export BROWSER_LANE_PAGE_ID="$resolved_page_id"
+  fi
+  if [[ "$free_mode" == true || "$page_url_set" == 'true' ]]; then
     relay_port="$(jq -r '.relay_port' <<<"$lane_value")"
     start_lane_activity "http://127.0.0.1:$relay_port" "$run_id" 'chrome-devtools' "$ttl"
   fi

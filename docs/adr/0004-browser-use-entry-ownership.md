@@ -75,6 +75,19 @@ plugin's lane gates as the owners of browser routing and interaction mechanics.
   third-party direct-route conflict.
 - Align source, installed state, and startup documents only after that rewrite.
 
+## Accepted temporary revision: configurable free mode
+
+Nathan explicitly approved a global config flag on 14 September 2026, with
+skills following it and a switch back to secured behavior. Preserve this
+entry ownership. While `free_mode` is true, replace Selected-tabs admission and
+page-action restrictions with All tabs and unrestricted Chrome DevTools calls
+through the declared lane. The skill may set the extension mode. False restores
+the original secured routing; the skill restores Selected tabs when needed.
+Profile identity, authenticated relay, task authority and serial lane custody
+remain. This prioritizes usable automation while Nathan revisits security.
+Confirm through public CLI tests for enabled, disabled, missing and malformed
+configuration, plus separate live extension-mode evidence.
+
 ## Confirmation
 
 Confirm with `bin/agent-skills-inventory --json`: show no third-party

@@ -5,6 +5,10 @@ description: "Use the secured Agent Browser lane for bounded snapshots, observed
 
 # Agent Browser
 
+Read [Global mode](../../references/lane-entry.md#global-mode) first. When
+`free_mode` is true, use that free workflow; the secured instructions below
+apply only when it is false.
+
 Read [`lane-entry.md`](../../references/lane-entry.md), then run only
 `browser-lane agent-browser` with its required lane, role, run ID, exact page
 URL, and a bounded batch. The public command owns the pinned session, fresh URL

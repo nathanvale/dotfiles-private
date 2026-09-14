@@ -5,6 +5,10 @@ description: "Use the secured Playwright lane for private JSON plans containing 
 
 # Playwright
 
+Read [Global mode](../../references/lane-entry.md#global-mode) first. When
+`free_mode` is true, use that free workflow; the secured instructions below
+apply only when it is false.
+
 Read [`lane-entry.md`](../../references/lane-entry.md), then write an absolute,
 regular, non-symlink mode-600 JSON plan that matches current `browser-lane
 --help`. Run only `browser-lane playwright` with the required lane, role, run

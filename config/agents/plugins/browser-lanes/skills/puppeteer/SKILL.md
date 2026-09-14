@@ -5,6 +5,10 @@ description: "Use the secured Puppeteer lane for private fixed-action JSON plans
 
 # Puppeteer
 
+Read [Global mode](../../references/lane-entry.md#global-mode) first. When
+`free_mode` is true, use that free workflow; the secured instructions below
+apply only when it is false.
+
 Read [`lane-entry.md`](../../references/lane-entry.md), then write an absolute,
 regular, non-symlink mode-600 JSON plan matching current `browser-lane --help`.
 Run only `browser-lane puppeteer` with its required lane, role, run ID, exact

@@ -5,6 +5,10 @@ description: "Use Chrome DevTools MCP through the secured lane for one page-scop
 
 # Chrome DevTools
 
+Read [Global mode](../../references/lane-entry.md#global-mode) first. When
+`free_mode` is true, use that free workflow; the secured instructions below
+apply only when it is false.
+
 Read [`lane-entry.md`](../../references/lane-entry.md), then run only
 `browser-lane run ... -- mcporter call chrome-devtools.TOOL ...`. Use the exact
 lane, role, run ID, and page URL required by current CLI help. The lane owns a
