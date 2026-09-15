@@ -144,9 +144,42 @@ fi
 printf 'baseline_ip=%s\n' "$baseline_ip"
 ```
 
-Over SSH, record `sw_vers`, `diskutil list physical`, `df -h /`, and the
-presence or absence of Homebrew, Mise, Node, Bun, npm, Python and Git. Stop the
-baseline after the check. Do not install source or tools into it.
+Set `DOTFILES_VM_BASELINE_SSH_TARGET` to the exact `user@address` that passed
+the baseline's public-key SSH check. Record the host health and reject the
+baseline before any clone when a forbidden development tool is present:
+
+```bash
+if ! ssh "$DOTFILES_VM_BASELINE_SSH_TARGET" /bin/bash <<'GUEST'
+set -euo pipefail
+sw_vers
+diskutil list physical
+df -h /
+
+for tool in brew mise node bun npm; do
+  tool_path="$(command -v "$tool" 2>/dev/null || true)"
+  [[ -z "$tool_path" ]] || {
+    printf 'contaminated baseline: %s resolves to %s\n' "$tool" "$tool_path" >&2
+    exit 1
+  }
+  printf 'baseline_%s=absent\n' "$tool"
+done
+
+for tool in python git; do
+  tool_path="$(command -v "$tool" 2>/dev/null || true)"
+  printf 'baseline_%s=%s\n' "$tool" "${tool_path:-absent}"
+done
+GUEST
+then
+  tart stop "$DOTFILES_VM_BASELINE"
+  exit 1
+fi
+tart stop "$DOTFILES_VM_BASELINE"
+```
+
+The forbidden-tool assertions keep a contaminated guest from becoming the
+source for a qualification clone. Python and Git remain separate inventory
+facts because the vanilla image may expose their system launchers. Do not
+install source or tools into the baseline.
 
 ## Freeze the candidate source
 
@@ -370,7 +403,21 @@ shell:
 ```bash
 /bin/zsh -lic '
   cd "$HOME/code/dotfiles" || exit 1
-  command -v git node bun python npm claude
+  git_path="$(command -v git 2>/dev/null || true)"
+  [[ "$git_path" == "/usr/bin/git" ]] || {
+    printf "expected Git at /usr/bin/git, got %s\n" "${git_path:-unavailable}" >&2
+    exit 1
+  }
+  claude_path="$(command -v claude 2>/dev/null || true)"
+  if [[ -z "$claude_path" ]]; then
+    claude_path="$HOME/.local/bin/claude"
+  fi
+  [[ -x "$claude_path" ]] || {
+    printf "expected an executable Claude Code at PATH or %s\n" "$HOME/.local/bin/claude" >&2
+    exit 1
+  }
+  command -v node bun python npm >/dev/null
+  printf "git_path=%s\nclaude_path=%s\n" "$git_path" "$claude_path"
   git --version
   node --version
   bun --version
@@ -383,8 +430,18 @@ shell:
     printf "expected toolchain status exit 2, got %s\n" "$toolchain_exit" >&2
     exit 1
   }
-  printf "%s\n" "$toolchain_output" | jq -e '\''
-    .status == "ready" and .exact_reconstruction == "not_qualified"
+  printf "%s\n" "$toolchain_output" | jq -e --arg mise_root "$HOME/.local/share/mise" '\''
+    .status == "ready" and
+    .exact_reconstruction == "not_qualified" and
+    ([.tools[] | select(.name == "git" or .name == "node" or .name == "bun" or .name == "python" or .name == "npm")] | length == 5) and
+    all(.tools[]; .executable_path != "" and .effective_version == .expected_version and .version_matches == true) and
+    (.tools[] | select(.name == "git") |
+      .selected_owner == "system" and .observed_owner == "system" and
+      .selected_owner_matches == true and .executable_path == "/usr/bin/git") and
+    all(.tools[] | select(.name == "node" or .name == "bun" or .name == "python" or .name == "npm");
+      .selected_owner == "mise" and .observed_owner == "mise" and
+      .selected_owner_matches == true and
+      (.executable_path | startswith($mise_root + "/")))
   '\'' >/dev/null
 '
 ```

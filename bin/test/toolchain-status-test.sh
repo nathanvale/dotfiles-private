@@ -11,6 +11,7 @@ mkdir -p "$HOME_ROOT"
 HOME_CANONICAL="$(CDPATH='' cd -P "$HOME_ROOT" && pwd)"
 FAKE_BIN="$TEST_ROOT/bin"
 MISE_BIN="$TEST_ROOT/mise-bin"
+READY_BIN="$TEST_ROOT/ready-bin"
 SHIM_DATA="$HOME_CANONICAL/.local/share/mise"
 SHIM_BIN="$SHIM_DATA/shims"
 HOSTILE_MISE_DATA="$TEST_ROOT/hostile-mise-data"
@@ -58,6 +59,7 @@ run_cli_in_path() {
 	set +e
 	output="$(HOME="$HOME_ROOT" PATH="$test_path:/usr/bin:/bin" \
 		MISE_TEST_NODE_PATH="${MISE_TEST_NODE_PATH:-}" MISE_TEST_NPM_PATH="${MISE_TEST_NPM_PATH:-}" \
+		MISE_TEST_RESULT_DIR="${MISE_TEST_RESULT_DIR:-}" \
 		"$@" 2>"$TEST_ROOT/stderr")"
 	status=$?
 	set -e
@@ -256,6 +258,27 @@ assert_equals '0' "$(wc -c <"$TEST_ROOT/stderr" | tr -d ' ')" 'status JSON keeps
 CANONICAL_MISE_DATA="$(CDPATH='' cd -P "$HOME_ROOT" && pwd)/.local/share/mise"
 CANONICAL_MISE_CUSTODY="$CANONICAL_MISE_DATA|$CANONICAL_MISE_DATA/installs|$CANONICAL_MISE_DATA/shims"
 assert_equals '1' "$(awk -v expected="$CANONICAL_MISE_CUSTODY" 'NF && $0 != expected { bad=1 } END { if (bad || NR == 0) print 0; else print 1 }' "$MISE_ENV_LEDGER")" 'status replaces every hostile Mise directory override on every ownership probe'
+
+# A fully ready selection still returns 2 while the source-only declaration is
+# not qualified. Keep system Git out of the fixture PATH so this row proves the
+# command's distinct ready-but-unqualified exit contract.
+mkdir -p "$READY_BIN"
+for tool in node bun python npm; do
+	cp "$FAKE_BIN/$tool" "$READY_BIN/$tool"
+done
+chmod +x "$READY_BIN/node" "$READY_BIN/bun" "$READY_BIN/python" "$READY_BIN/npm"
+ready_result="$(MISE_TEST_RESULT_DIR="$READY_BIN" run_cli_in_path "$MISE_BIN:$READY_BIN" "$CLI" status --json)"
+ready_status="$(sed -n '1p' <<<"$ready_result")"
+ready_json="$(sed -n '2,$p' <<<"$ready_result")"
+assert_equals '2' "$ready_status" 'ready but source-only status preserves the qualification exit'
+assert_equals 'ready' "$(jq -r '.status' <<<"$ready_json")" 'ready status is distinct from its qualification state'
+assert_equals 'not_qualified' "$(jq -r '.exact_reconstruction' <<<"$ready_json")" 'ready status retains the unqualified reconstruction state'
+for tool in node bun python npm; do
+	assert_equals "$READY_BIN/$tool" "$(jq -r --arg tool "$tool" '.tools[] | select(.name == $tool) | .executable_path' <<<"$ready_json")" "$tool ready status reports its selected executable path"
+	assert_equals "$(oracle "$tool" 2)" "$(jq -r --arg tool "$tool" '.tools[] | select(.name == $tool) | .effective_version' <<<"$ready_json")" "$tool ready status reports its declared version"
+done
+assert_equals '/usr/bin/git' "$(jq -r '.tools[] | select(.name == "git") | .executable_path' <<<"$ready_json")" 'ready status reports the selected system Git path'
+assert_equals 'system' "$(jq -r '.tools[] | select(.name == "git") | .observed_owner' <<<"$ready_json")" 'ready status observes system Git ownership'
 
 SPLIT_NODE_BIN="$TEST_ROOT/split-node/bin"
 SPLIT_NPM_BIN="$TEST_ROOT/split-npm/bin"

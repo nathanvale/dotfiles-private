@@ -298,7 +298,7 @@ if [[ "$command_name" == bundle ]]; then
   bundle_attempt=$((bundle_attempt + 1))
   printf '%s\n' "$bundle_attempt" >"$bundle_attempt_file"
   bundle_result="$(awk -v attempt="$bundle_attempt" '{ if (NF >= attempt) print $attempt; else print $NF }' <<<"${BUNDLE_RESULTS:-success}")"
-  printf 'attempt=%s profile=%s download_concurrency=%s result=%s\n' "$bundle_attempt" "${HOMEBREW_DOTFILES_PROFILE:-unset}" "${HOMEBREW_DOWNLOAD_CONCURRENCY:-unset}" "$bundle_result" >>"$RECORD_DIR/bundle-environment"
+  printf 'attempt=%s profile=%s download_concurrency=%s vm_host=%s result=%s\n' "$bundle_attempt" "${HOMEBREW_DOTFILES_PROFILE:-unset}" "${HOMEBREW_DOWNLOAD_CONCURRENCY:-unset}" "${HOMEBREW_DOTFILES_VM_HOST:-unset}" "$bundle_result" >>"$RECORD_DIR/bundle-environment"
   [[ "$bundle_result" == success ]]
   exit
 fi
@@ -312,9 +312,16 @@ if [[ "$command_name" == list ]]; then
   elif [[ "$formula_name" == mise ]]; then
     [[ "${MISE_STATE:-missing}" == present ]] ||
       grep -Fxq $'install\tmise' "$RECORD_DIR/brew-calls"
+  elif [[ "$formula_name" == git ]]; then
+    [[ -x "${CORE_STUB_BIN:-}/git" ]]
   else
     exit 1
   fi
+  exit
+fi
+
+if [[ "$command_name" == unlink && "$formula_name" == git ]]; then
+  rm -f "${CORE_STUB_BIN:-}/git"
   exit
 fi
 
@@ -365,7 +372,7 @@ run_phase3() {
   rm -rf "$RECORD_DIR"
   mkdir -p "$RECORD_DIR"
   env -i HOME="$TEST_ROOT/home" PATH="$STUB_BIN:/usr/bin:/bin" \
-    RECORD_DIR="$RECORD_DIR" \
+    RECORD_DIR="$RECORD_DIR" CORE_STUB_BIN="$STUB_BIN" \
     bash -c '
       set -euo pipefail
       log() { printf "%s\n" "$1" >>"$RECORD_DIR/log"; }
@@ -382,6 +389,24 @@ assert_not_recorded $'install\tgit' \
   'Phase 3 preserves the selected macOS system Git owner'
 assert_recorded $'install\tzsh' \
   'Phase 3 continues installing the remaining core tools'
+
+cat >"$STUB_BIN/git" <<'STUB'
+#!/bin/bash
+printf 'homebrew git fixture\n'
+STUB
+chmod +x "$STUB_BIN/git"
+run_phase3 || fail 'Phase 3 rerun with a linked Homebrew Git exited nonzero'
+pass 'Phase 3 rerun with a linked Homebrew Git exits zero'
+assert_recorded $'list\tgit' \
+  'Phase 3 detects an already installed Homebrew Git formula'
+assert_recorded $'unlink\tgit' \
+  'Phase 3 unlinks an already linked Homebrew Git formula'
+[[ ! -e "$STUB_BIN/git" ]] ||
+  fail 'Phase 3 left the linked Homebrew Git executable in place'
+pass 'Phase 3 removes the linked Homebrew Git executable'
+grep -Fxq 'Git owner verified: /usr/bin/git' "$RECORD_DIR/log" ||
+  fail 'Phase 3 did not verify the system Git owner after unlinking'
+pass 'Phase 3 verifies Git resolves to /usr/bin/git after unlinking'
 
 run_phase() {
   local bun_state="$1"
@@ -510,7 +535,7 @@ run_phase5 success || fail 'successful Phase 5 run exited nonzero'
 pass 'successful Phase 5 run exits zero'
 assert_recorded $'bundle\t--file='"$FIXTURE_DOTFILES/config/brew/Brewfile" \
   'Phase 5 calls the profile Brewfile through brew bundle'
-grep -Fxq 'attempt=1 profile=desktop download_concurrency=1 result=success' "$RECORD_DIR/bundle-environment" ||
+grep -Fxq 'attempt=1 profile=desktop download_concurrency=1 vm_host=0 result=success' "$RECORD_DIR/bundle-environment" ||
   fail 'Phase 5 did not pass the desktop profile into Brewfile evaluation'
 pass 'Phase 5 passes the selected profile to Brewfile evaluation'
 grep -Fxq 'Profile package download concurrency: 1' "$RECORD_DIR/log" ||
@@ -527,10 +552,10 @@ run_phase5 'fail success' || fail 'second bundle attempt did not recover Phase 5
 pass 'first failed bundle and second successful bundle completes Phase 5'
 assert_exact_count 2 $'bundle\t--file='"$FIXTURE_DOTFILES/config/brew/Brewfile" "$RECORD_DIR/brew-calls" \
   'Phase 5 retries the bundle exactly once after an initial failure'
-grep -Fxq 'attempt=1 profile=desktop download_concurrency=1 result=fail' "$RECORD_DIR/bundle-environment" ||
+grep -Fxq 'attempt=1 profile=desktop download_concurrency=1 vm_host=0 result=fail' "$RECORD_DIR/bundle-environment" ||
   fail 'Phase 5 records the failed first bundle attempt'
 pass 'Phase 5 records the failed first bundle attempt'
-grep -Fxq 'attempt=2 profile=desktop download_concurrency=1 result=success' "$RECORD_DIR/bundle-environment" ||
+grep -Fxq 'attempt=2 profile=desktop download_concurrency=1 vm_host=0 result=success' "$RECORD_DIR/bundle-environment" ||
   fail 'Phase 5 records the successful second bundle attempt'
 pass 'Phase 5 records the successful second bundle attempt'
 grep -Fxq 'Profile package bundle attempt 1 of 2 exited 1' "$RECORD_DIR/log" ||
@@ -555,7 +580,7 @@ assert_exact_count 2 $'bundle\t--file='"$FIXTURE_DOTFILES/config/brew/Brewfile" 
 grep -Fxq 'Profile package bundle attempt 2 of 2 exited 1' "$RECORD_DIR/log" ||
   fail 'Phase 5 reports the final bundle failure exit status'
 pass 'Phase 5 reports the final bundle failure exit status'
-grep -Fxq "Retry: HOMEBREW_DOWNLOAD_CONCURRENCY=1 HOMEBREW_DOTFILES_PROFILE=desktop brew bundle --file=$FIXTURE_DOTFILES/config/brew/Brewfile" "$RECORD_DIR/log" ||
+grep -Fxq "Retry: HOMEBREW_DOWNLOAD_CONCURRENCY=1 HOMEBREW_DOTFILES_PROFILE=desktop HOMEBREW_DOTFILES_VM_HOST=0 brew bundle --file=$FIXTURE_DOTFILES/config/brew/Brewfile" "$RECORD_DIR/log" ||
   fail 'two failed bundle attempts preserve the manual repair command'
 pass 'two failed bundle attempts preserve the manual repair command'
 if grep -Fxq 'Applications: COMPLETE' "$RECORD_DIR/log"; then
@@ -567,7 +592,7 @@ if [[ -e "$RECORD_DIR/checkpoint" ]]; then
 fi
 pass 'two failed bundle attempts prevent the post-phase checkpoint'
 
-expected_assertions=100
+expected_assertions=105
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

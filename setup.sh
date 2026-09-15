@@ -1705,6 +1705,26 @@ main() {
             fi
         done
 
+        # A rerun can encounter a Homebrew Git formula that was linked after a
+        # previous setup. Remove its links before asserting the selected owner,
+        # while keeping the formula installed as an available fallback.
+        if brew list git &>/dev/null; then
+            log "Unlinking Homebrew Git to preserve the selected system owner..."
+            if ! brew unlink git; then
+                log_error "Failed to unlink the Homebrew Git formula"
+                return 1
+            fi
+        fi
+
+        hash -r 2>/dev/null || true
+        local git_path
+        git_path="$(command -v git 2>/dev/null || true)"
+        if [[ "$git_path" != "/usr/bin/git" ]]; then
+            log_error "Git must resolve to /usr/bin/git after Phase 3; found ${git_path:-unavailable}"
+            return 1
+        fi
+        log "Git owner verified: /usr/bin/git"
+
         log "Core Tools: COMPLETE"
     }
 
@@ -1835,12 +1855,15 @@ main() {
         local bundle_attempt=1
         local bundle_max_attempts=2
         local bundle_download_concurrency=1
+        local vm_host="${HOMEBREW_DOTFILES_VM_HOST:-0}"
         local bundle_exit=0
         log "Profile package download concurrency: $bundle_download_concurrency"
         while [[ "$bundle_attempt" -le "$bundle_max_attempts" ]]; do
             log "Running profile package bundle (attempt $bundle_attempt of $bundle_max_attempts)"
             if HOMEBREW_DOWNLOAD_CONCURRENCY="$bundle_download_concurrency" \
-                HOMEBREW_DOTFILES_PROFILE="$profile" brew bundle --file="$brewfile"; then
+                HOMEBREW_DOTFILES_PROFILE="$profile" \
+                HOMEBREW_DOTFILES_VM_HOST="$vm_host" \
+                brew bundle --file="$brewfile"; then
                 log "Profile package bundle attempt $bundle_attempt of $bundle_max_attempts exited 0"
                 log "All packages installed successfully"
                 break
@@ -1851,7 +1874,7 @@ main() {
 
             if [[ "$bundle_attempt" -eq "$bundle_max_attempts" ]]; then
                 log_error "The profile package bundle failed after $bundle_max_attempts attempts"
-                log_error "Retry: HOMEBREW_DOWNLOAD_CONCURRENCY=$bundle_download_concurrency HOMEBREW_DOTFILES_PROFILE=$profile brew bundle --file=$brewfile"
+                log_error "Retry: HOMEBREW_DOWNLOAD_CONCURRENCY=$bundle_download_concurrency HOMEBREW_DOTFILES_PROFILE=$profile HOMEBREW_DOTFILES_VM_HOST=$vm_host brew bundle --file=$brewfile"
                 return 1
             fi
 
