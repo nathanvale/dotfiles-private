@@ -22,7 +22,9 @@ type Row = readonly [
 const USAGE_INVALID_INVOCATION: readonly ["refused", "USAGE_INVALID_INVOCATION"] = ["refused", "USAGE_INVALID_INVOCATION"]
 const PRE_DISPATCH: readonly ["unchanged", false, null, "next-action", true, 2, null] = ["unchanged", false, null, "next-action", true, 2, null]
 
-const ROWS: readonly Row[] = [
+// Keep the declarations literal: the contract derives its finite StationId vocabulary from this single production
+// owner (CDS-BC-1), so widening this array to Row[] would turn that vocabulary back into an arbitrary string.
+const ROWS = [
 	// Fixture scenarios (section 3.3)
 	["repair-lab.status", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", false, null, "next-action", false, 0, "repair-lab.healthy"],
 	["repair-lab.inspect", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", false, null, "next-action", false, 0, "repair-lab.inspect"],
@@ -122,7 +124,20 @@ const ROWS: readonly Row[] = [
 	["repair-lab.recover", "failed", "INTERNAL_RESULT_UNCHANGED", "repository-local", "unchanged", false, null, "handoff", true, 1, null],
 	["repair-lab.recover", "refused", "INTERNAL_PREPARATION", "repository-local", "unchanged", false, null, "next-action", true, 1, null],
 	["repair-lab.recover", "failed", "INTERNAL_RESULT_UNKNOWN", "repository-local", "unknown", false, null, "handoff", true, 1, null],
-]
+	// B1 (CDS-BC-1): the accepted C0 selected-command discovery built-in. Its success, unknown-selector and usage
+	// refusals plus the two egress fallbacks of a read-only built-in mirror the discovery identity; a missing selector
+	// is the existing dispatch refusal.
+	["repair-lab.command-discovery", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", false, null, "next-action", false, 0, null],
+	["repair-lab.command-discovery", "refused", "USAGE_UNKNOWN_COMMAND", "inspect", "unchanged", false, null, "next-action", true, 2, null],
+	["repair-lab.command-discovery", ...USAGE_INVALID_INVOCATION, "inspect", ...PRE_DISPATCH],
+	["repair-lab.command-discovery", "failed", "INTERNAL_RESULT_UNCHANGED", "inspect", "unchanged", false, null, "handoff", true, 1, null],
+	["repair-lab.command-discovery", "refused", "INTERNAL_PREPARATION", "inspect", "unchanged", false, null, "next-action", true, 1, null],
+] as const satisfies readonly Row[]
+
+export type StationIdOf<RowTuple> = RowTuple extends readonly [infer Command extends string, infer Outcome extends string, infer Cause extends string, ...readonly unknown[]] ? `["${Command}","${Outcome}","${Cause}"]` : never
+
+/** The sealed identity vocabulary declared by this production catalogue: the JSON tuple encoding of every row. */
+export type DefinedStationId = StationIdOf<(typeof ROWS)[number]>
 
 const DECLARED_ROWS: readonly StationRow[] = ROWS.map(
 	([commandIdentity, outcome, causeCode, effectClass, transactionState, retryable, retryDelayMilliseconds, guidance, repairAction, exit, fixtureLabel]) => ({

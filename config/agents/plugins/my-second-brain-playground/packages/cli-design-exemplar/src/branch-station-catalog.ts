@@ -13,8 +13,9 @@ export function stationIdOf(envelope: ObservedTuple): string {
 	return JSON.stringify([envelope.commandIdentity, envelope.outcome, envelope.causeCode])
 }
 
+// Only a declared row produces a finite StationId; the encoding is the same JSON tuple as stationIdOf.
 export function stationIdOfRow(row: StationRow): StationId {
-	return JSON.stringify([row.commandIdentity, row.outcome, row.causeCode])
+	return JSON.stringify([row.commandIdentity, row.outcome, row.causeCode]) as StationId
 }
 
 const BY_ID: ReadonlyMap<string, StationRow> = (() => {

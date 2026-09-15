@@ -26,11 +26,13 @@ import {
 	type EnvelopeV2,
 	type Handoff,
 	type JsonValue,
+	type WireCauseCode,
 } from "./command-contract.ts"
 import { type DiagnosticsStatus, openRunDiagnostics } from "./diagnostics.ts"
 import { type Decision, decide, factsOf, type ParsedRequest } from "./engine.ts"
 import type { EgressFault, ExecutionFacts, Faults } from "./model.ts"
 import { createRuntime, parseFaults, resolveRoot, RETRY_DELAY_MS } from "./runtime.ts"
+import { commandDiscovery, type PublicStation, wireGuidance } from "./station-catalogue.ts"
 
 // run(argv, io, env): parsing with node:util parseArgs (strict), --json detection anywhere in raw argv, identity derived
 // from the raw argv command word before strict parsing, human rendering literal to the fixture lines, and the one
@@ -41,7 +43,7 @@ export interface Io {
 	stderr(text: string): void
 }
 
-const HELP_TEXT = "repair-lab: inspect, preview, apply and repair a fixture-local resource with journal-backed recovery\nusage: repair-lab <command> [options] [--json]\n\ncommands:\n  status                              report the resource status\n  inspect [--state <path>] [--include-diagnostics]\n  apply --preview                     write an apply preview\n  apply --preview-id <id> --authorize fixture-authority\n  repair --preview | repair --apply --preview-id <id> --authorize fixture-authority\n  repair --apply --retry-once --authorize fixture-authority\n  recover                             report recovery state from the journal\n  --discover --json                   describe commands and the contract\n\nexample:\n  repair-lab status --json\n"
+const HELP_TEXT = "repair-lab: inspect, preview, apply and repair a fixture-local resource with journal-backed recovery\nusage: repair-lab <command> [options] [--json]\n\ncommands:\n  status                              report the resource status\n  inspect [--state <path>] [--include-diagnostics]\n  apply --preview                     write an apply preview\n  apply --preview-id <id> --authorize fixture-authority\n  repair --preview | repair --apply --preview-id <id> --authorize fixture-authority\n  repair --apply --retry-once --authorize fixture-authority\n  recover                             report recovery state from the journal\n  --discover --json                   describe commands and the contract\n  --discover-command <identity>       describe the possible outcomes of one command\n\nexample:\n  repair-lab status --json\n"
 
 export type Routed = { identity: CommandIdentity; route: CliRoute }
 
@@ -56,15 +58,27 @@ export function machineMode(argv: readonly string[]): boolean {
 
 function routed(route: CliRoute): Routed { return { identity: declarationForRoute(route).identity, route } }
 
+// Built-in help, discovery and command-discovery options are mutually exclusive (accepted C0): any two together, or a
+// command-discovery selector that is missing or option-shaped, is the dispatch refusal before strict parsing.
+function builtInRoute(beforeDelimiter: readonly string[]): Routed | undefined {
+	const help = beforeDelimiter.includes("--help")
+	const discover = beforeDelimiter.includes("--discover")
+	const selectorIndex = beforeDelimiter.indexOf("--discover-command")
+	const discoverCommand = selectorIndex !== -1
+	if ((help && discover) || (help && discoverCommand) || (discover && discoverCommand)) return routed("dispatch")
+	if (help) return routed("help")
+	if (discover) return routed("discover")
+	if (!discoverCommand) return undefined
+	const selector = beforeDelimiter[selectorIndex + 1]
+	return selector === undefined || selector.startsWith("-") ? routed("dispatch") : routed("command-discovery")
+}
+
 // Identity is derived from the raw argv command word and route flags before strict parsing, so a usage refusal keeps
 // the routed identity (brief 12, section 3.4 and the 7.3 gotcha).
 export function routeRawArgv(argv: readonly string[]): Routed {
 	const beforeDelimiter = controls(argv)
-	const help = beforeDelimiter.includes("--help")
-	const discover = beforeDelimiter.includes("--discover")
-	if (help && discover) return routed("dispatch")
-	if (help) return routed("help")
-	if (discover) return routed("discover")
+	const builtIn = builtInRoute(beforeDelimiter)
+	if (builtIn !== undefined) return builtIn
 	const word = beforeDelimiter.find((token) => !token.startsWith("-"))
 	if (word === undefined) return routed("dispatch")
 	switch (word) {
@@ -106,7 +120,7 @@ function parse(argv: readonly string[]): Parsed | { usage: UsageCause; message: 
 // resolution, diagnostics or any state read (PR 184, thread 4003813481).
 function shapeViolation(parsed: Parsed, route: Exclude<CliRoute, "dispatch">): string | null {
 	const shape = declarationForRoute(route)
-	if (route === "help" || route === "discover") {
+	if (route === "help" || route === "discover" || route === "command-discovery") {
 		if (parsed.positionals.length !== 0) return `${shape.word} takes no positional arguments`
 	} else if (parsed.positionals.length !== 1 || parsed.positionals[0] !== shape.word) return `${shape.word} takes no further positional arguments`
 	const allowed = new Set<string>(shape.allowedOptions)
@@ -136,59 +150,82 @@ function nonempty(values: readonly string[]): [string, ...string[]] | null { con
 function completedEffects(facts: ExecutionFacts): Extract<ContractResult, { transactionState: "completed" }>["effects"] | null { const completed = nonempty(facts.completedEffectIds); return completed === null ? null : { completed, remaining: [], uncertain: [], inventoryComplete: true } }
 function partialEffects(facts: ExecutionFacts): Extract<ContractResult, { transactionState: "partially-completed" }>["effects"] | null { const completed = nonempty(facts.completedEffectIds); const remaining = nonempty(facts.remainingEffectIds); return completed === null || remaining === null ? null : { completed, remaining, uncertain: [], inventoryComplete: true } }
 function unknownEffects(facts: ExecutionFacts): Effects { const uncertain = [...facts.remainingEffectIds].sort(); return { completed: [...facts.completedEffectIds].sort(), remaining: [], uncertain, inventoryComplete: uncertain.length > 0 } }
-function handoff(reason: string): Handoff { return { owner: "operator", reason, inspect: [INSPECT_ACTION] } }
+// Every wire next action, handoff and repair action comes from the one station guidance owner, never from a
+// scenario-specific decision string, so each derived identity has exactly the meaning its PublicStation publishes.
+function nextActionOf(identity: CommandIdentity, cause: WireCauseCode): string {
+	const { guidance } = wireGuidance(identity, cause)
+	if (!("nextAction" in guidance)) throw new Error(`station guidance for ${cause} is a handoff`)
+	return guidance.nextAction
+}
+function handoffOf(identity: CommandIdentity, cause: WireCauseCode): Handoff {
+	const { guidance } = wireGuidance(identity, cause)
+	if (!("handoff" in guidance)) throw new Error(`station guidance for ${cause} is a next action`)
+	return guidance.handoff
+}
+function repairActionOf(identity: CommandIdentity, cause: WireCauseCode): string {
+	const { repairAction } = wireGuidance(identity, cause)
+	if (repairAction === null) throw new Error(`station guidance for ${cause} has no repair action`)
+	return repairAction
+}
 function envelope(message: string, result: ContractResult, diagnostics?: Diagnostics): EnvelopeV2 { return { envelopeVersion: ENVELOPE_VERSION, contractVersion: CONTRACT_VERSION, message, availablePaths: paths(result.nextAction), result, ...(diagnostics === undefined ? {} : { diagnostics }) } }
 function usageEnvelope(identity: CommandIdentity, runId: string, cause: UsageCause, message: string, facts: ExecutionFacts): EnvelopeV2 {
-	const result: ContractResult = { runId, commandIdentity: identity, outcome: "refused", effectClass: facts.effectClass, transactionState: "unchanged", causeCode: cause === "USAGE_UNKNOWN_COMMAND" ? "USAGE_UNKNOWN_COMMAND" : "USAGE_INVALID_INVOCATION", failureClass: "usage", exitCode: 2, data: null, retryable: false, repairAction: `Correct the command arguments or run ${HELP_PATH}`, effects: unchangedEffects(facts), nextAction: HELP_PATH }
+	const causeCode = cause === "USAGE_UNKNOWN_COMMAND" ? "USAGE_UNKNOWN_COMMAND" : "USAGE_INVALID_INVOCATION"
+	const result: ContractResult = { runId, commandIdentity: identity, outcome: "refused", effectClass: facts.effectClass, transactionState: "unchanged", causeCode, failureClass: "usage", exitCode: 2, data: null, retryable: false, repairAction: repairActionOf(identity, causeCode), effects: unchangedEffects(facts), nextAction: nextActionOf(identity, causeCode) }
 	return envelope(message, result)
 }
 function successResult(decision: Decision, runId: string): EnvelopeV2 {
 	if (!isSafeJson(decision.result)) throw new Error("decision data is not JSON")
 	const facts = factsOf(decision, runId)
-	const nextAction = nextActionFor(decision)
+	const identity = decision.commandIdentity
 	let result: ContractResult
 	if (decision.transactionState === "completed") {
 		if (decision.effectClass === "inspect") throw new Error("inspect success cannot be completed")
 			const effectInventory = completedEffects(facts)
 			if (effectInventory === null) throw new Error("completed success lacks completed effects")
-			result = { runId, commandIdentity: decision.commandIdentity, outcome: "success", effectClass: decision.effectClass, transactionState: "completed", causeCode: "SUCCESS_COMPLETED", failureClass: null, exitCode: 0, data: decision.result, retryable: false, repairAction: null, effects: effectInventory, nextAction }
+			result = { runId, commandIdentity: identity, outcome: "success", effectClass: decision.effectClass, transactionState: "completed", causeCode: "SUCCESS_COMPLETED", failureClass: null, exitCode: 0, data: decision.result, retryable: false, repairAction: null, effects: effectInventory, nextAction: nextActionOf(identity, "SUCCESS_COMPLETED") }
 		} else if (decision.effectClass === "inspect") {
-			result = { runId, commandIdentity: decision.commandIdentity, outcome: "success", effectClass: "inspect", transactionState: "unchanged", causeCode: "SUCCESS_UNCHANGED", failureClass: null, exitCode: 0, data: decision.result, retryable: false, repairAction: null, effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true }, nextAction }
+			result = { runId, commandIdentity: identity, outcome: "success", effectClass: "inspect", transactionState: "unchanged", causeCode: "SUCCESS_UNCHANGED", failureClass: null, exitCode: 0, data: decision.result, retryable: false, repairAction: null, effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true }, nextAction: nextActionOf(identity, "SUCCESS_UNCHANGED") }
 		} else {
-			result = { runId, commandIdentity: decision.commandIdentity, outcome: "success", effectClass: "repository-local", transactionState: "unchanged", causeCode: "SUCCESS_UNCHANGED", failureClass: null, exitCode: 0, data: decision.result, retryable: false, repairAction: null, effects: unchangedEffects(facts, true), nextAction }
+			result = { runId, commandIdentity: identity, outcome: "success", effectClass: "repository-local", transactionState: "unchanged", causeCode: "SUCCESS_UNCHANGED", failureClass: null, exitCode: 0, data: decision.result, retryable: false, repairAction: null, effects: unchangedEffects(facts, true), nextAction: nextActionOf(identity, "SUCCESS_UNCHANGED") }
 	}
 	return envelope(decision.message, result)
 }
 function transientResult(decision: Decision, runId: string): EnvelopeV2 {
 	if (decision.effectClass === "inspect") throw new Error("inspect results cannot be transient")
 	const facts = factsOf(decision, runId)
-	const common = { runId, commandIdentity: decision.commandIdentity, effectClass: decision.effectClass, transactionState: "unchanged" as const, failureClass: "transient" as const, exitCode: 75 as const, data: null, retryable: true as const, retryDelayMilliseconds: RETRY_DELAY_MS, repairAction: decision.repairAction ?? "Wait before retrying the same input.", effects: unchangedEffects(facts), nextAction: `retry the same command after ${RETRY_DELAY_MS} ms` }
-	const result: ContractResult = decision.domainOutcome === "refused" ? { ...common, outcome: "refused", causeCode: "TRANSIENT_NOT_STARTED" } : { ...common, outcome: "failed", causeCode: "TRANSIENT_ATTEMPT_UNCHANGED" }
+	const identity = decision.commandIdentity
+	const causeCode = decision.domainOutcome === "refused" ? "TRANSIENT_NOT_STARTED" : "TRANSIENT_ATTEMPT_UNCHANGED"
+	const common = { runId, commandIdentity: identity, effectClass: decision.effectClass, transactionState: "unchanged" as const, failureClass: "transient" as const, exitCode: 75 as const, data: null, retryable: true as const, retryDelayMilliseconds: RETRY_DELAY_MS, repairAction: repairActionOf(identity, causeCode), effects: unchangedEffects(facts), nextAction: nextActionOf(identity, causeCode) }
+	const result: ContractResult = causeCode === "TRANSIENT_NOT_STARTED" ? { ...common, outcome: "refused", causeCode } : { ...common, outcome: "failed", causeCode }
 	return envelope(decision.message, result)
 }
 function refusalResult(decision: Decision, runId: string): EnvelopeV2 {
 	const facts = factsOf(decision, runId)
-	const common = { runId, commandIdentity: decision.commandIdentity, outcome: "refused" as const, effectClass: decision.effectClass, transactionState: "unchanged" as const, data: null, retryable: false as const, repairAction: decision.repairAction ?? "Inspect the refusal before continuing.", effects: unchangedEffects(facts) }
+	const identity = decision.commandIdentity
+	const common = { runId, commandIdentity: identity, outcome: "refused" as const, effectClass: decision.effectClass, transactionState: "unchanged" as const, data: null, retryable: false as const, effects: unchangedEffects(facts) }
+	const next = (causeCode: WireCauseCode) => ({ repairAction: repairActionOf(identity, causeCode), nextAction: nextActionOf(identity, causeCode) })
 	let result: ContractResult
-	if (decision.failureClass === "usage") result = { ...common, causeCode: "USAGE_INVALID_INVOCATION", failureClass: "usage", exitCode: 2, nextAction: nextActionFor(decision) }
-	else if (decision.failureClass === "schema") result = { ...common, causeCode: "SCHEMA_INVALID_INPUT", failureClass: "schema", exitCode: 4, nextAction: nextActionFor(decision) }
-	else if (decision.causeCode === "DOMAIN_AUTHORITY_MISSING") result = { ...common, causeCode: "DOMAIN_AUTHORITY_REQUIRED", failureClass: "domain", exitCode: 3, handoff: handoff("Obtain the named authority before continuing.") }
-	else if (decision.failureClass === "internal") result = { ...common, causeCode: "INTERNAL_PREPARATION", failureClass: "internal", exitCode: 1, nextAction: nextActionFor(decision) }
-	else result = { ...common, causeCode: "DOMAIN_PRECONDITION_UNMET", failureClass: "domain", exitCode: 3, nextAction: nextActionFor(decision) }
+	if (decision.failureClass === "usage") result = { ...common, causeCode: "USAGE_INVALID_INVOCATION", failureClass: "usage", exitCode: 2, ...next("USAGE_INVALID_INVOCATION") }
+	else if (decision.failureClass === "schema") result = { ...common, causeCode: "SCHEMA_INVALID_INPUT", failureClass: "schema", exitCode: 4, ...next("SCHEMA_INVALID_INPUT") }
+	else if (decision.causeCode === "DOMAIN_AUTHORITY_MISSING") result = { ...common, causeCode: "DOMAIN_AUTHORITY_REQUIRED", failureClass: "domain", exitCode: 3, repairAction: repairActionOf(identity, "DOMAIN_AUTHORITY_REQUIRED"), handoff: handoffOf(identity, "DOMAIN_AUTHORITY_REQUIRED") }
+	else if (decision.failureClass === "internal") result = { ...common, causeCode: "INTERNAL_PREPARATION", failureClass: "internal", exitCode: 1, ...next("INTERNAL_PREPARATION") }
+	else result = { ...common, causeCode: "DOMAIN_PRECONDITION_UNMET", failureClass: "domain", exitCode: 3, ...next("DOMAIN_PRECONDITION_UNMET") }
 	return envelope(decision.message, result)
 }
 function ordinaryFailureResult(decision: Decision, runId: string): EnvelopeV2 {
 	const facts = factsOf(decision, runId)
-	const common = { runId, commandIdentity: decision.commandIdentity, outcome: "failed" as const, data: null, retryable: false as const, repairAction: decision.repairAction ?? "Inspect the failure before continuing.", handoff: handoff(decision.message) }
+	const identity = decision.commandIdentity
+	const common = { runId, commandIdentity: identity, outcome: "failed" as const, data: null, retryable: false as const }
+	const handoff = (causeCode: WireCauseCode) => ({ repairAction: repairActionOf(identity, causeCode), handoff: handoffOf(identity, causeCode) })
 	let result: ContractResult
 	if (decision.causeCode === "INTERNAL_UNEXPECTED") {
-		result = { ...common, effectClass: decision.effectClass, transactionState: "unchanged", causeCode: "INTERNAL_UNEXPECTED", failureClass: "internal", exitCode: 1, effects: unchangedEffects(facts) }
+		result = { ...common, effectClass: decision.effectClass, transactionState: "unchanged", causeCode: "INTERNAL_UNEXPECTED", failureClass: "internal", exitCode: 1, effects: unchangedEffects(facts), ...handoff("INTERNAL_UNEXPECTED") }
 	} else {
 		if (decision.effectClass === "inspect" || decision.transactionState !== "unknown") throw new Error("ordinary effect failure facts are inadmissible")
 		const effectInventory = unknownEffects(facts)
-		if (decision.causeCode === "DOMAIN_RECOVERY_HANDOFF_REQUIRED") result = { ...common, effectClass: decision.effectClass, transactionState: "unknown", causeCode: "DOMAIN_RECOVERY_HANDOFF_REQUIRED", failureClass: "domain", exitCode: 3, effects: effectInventory }
-		else if (decision.causeCode === "INTERNAL_EFFECT_OUTCOME_UNKNOWN") result = { ...common, effectClass: decision.effectClass, transactionState: "unknown", causeCode: "INTERNAL_EFFECT_OUTCOME_UNKNOWN", failureClass: "internal", exitCode: 1, effects: effectInventory }
-		else if (decision.causeCode === "INTERNAL_EFFECT_NOT_OBSERVED") result = { ...common, effectClass: decision.effectClass, transactionState: "unknown", causeCode: "INTERNAL_EFFECT_NOT_OBSERVED", failureClass: "internal", exitCode: 1, effects: effectInventory }
+		if (decision.causeCode === "DOMAIN_RECOVERY_HANDOFF_REQUIRED") result = { ...common, effectClass: decision.effectClass, transactionState: "unknown", causeCode: "DOMAIN_RECOVERY_HANDOFF_REQUIRED", failureClass: "domain", exitCode: 3, effects: effectInventory, ...handoff("DOMAIN_RECOVERY_HANDOFF_REQUIRED") }
+		else if (decision.causeCode === "INTERNAL_EFFECT_OUTCOME_UNKNOWN") result = { ...common, effectClass: decision.effectClass, transactionState: "unknown", causeCode: "INTERNAL_EFFECT_OUTCOME_UNKNOWN", failureClass: "internal", exitCode: 1, effects: effectInventory, ...handoff("INTERNAL_EFFECT_OUTCOME_UNKNOWN") }
+		else if (decision.causeCode === "INTERNAL_EFFECT_NOT_OBSERVED") result = { ...common, effectClass: decision.effectClass, transactionState: "unknown", causeCode: "INTERNAL_EFFECT_NOT_OBSERVED", failureClass: "internal", exitCode: 1, effects: effectInventory, ...handoff("INTERNAL_EFFECT_NOT_OBSERVED") }
 		else throw new Error("ordinary failure cause is not admitted")
 	}
 	return envelope(decision.message, result)
@@ -225,26 +262,6 @@ function decisionEnvelope(decision: Decision, runId: string, diagnostics: Diagno
 	return { ...result, diagnostics: diagnosticsDisclosure(diagnostics) }
 }
 
-// The fixture's next actions per station (brief 12, section 3.3 and 3.4).
-function nextActionFor(decision: Decision): string {
-	switch (decision.stationLabel) {
-		case "repair-lab.inspect":
-			return "repair-lab apply --preview"
-		case "repair-lab.preview":
-			return `repair-lab apply --preview-id ${String((decision.result as Record<string, unknown>).preview_id)} --authorize fixture-authority`
-		case "repair-lab.repairable-precondition":
-			return "repair-lab repair --apply --preview-id repair-preview-missing-index --authorize fixture-authority"
-		case "repair-lab.preview-missing":
-			return decision.commandIdentity === "repair-lab.apply" ? "repair-lab apply --preview" : "repair-lab repair --preview"
-		case "repair-lab.storage-busy":
-			return `retry the same command after ${RETRY_DELAY_MS} ms`
-		case "repair-lab.usage":
-			return HELP_PATH
-		default:
-			return INSPECT_ACTION
-	}
-}
-
 type FallbackFacts =
 	| (ExecutionFacts & { readonly domainOutcome: "refused"; readonly transactionState: "unchanged"; readonly fallbackCase: "preparation" })
 	| (ExecutionFacts & { readonly domainOutcome: "success" | "failed" | "unknown"; readonly transactionState: "unchanged"; readonly fallbackCase: "result-unchanged" })
@@ -264,32 +281,34 @@ function fallbackFacts(facts: ExecutionFacts): FallbackFacts | null {
 function fallbackEnvelope(facts: ExecutionFacts): EnvelopeV2 | null {
 	const fallback = fallbackFacts(facts)
 	if (fallback === null) return null
-	const common = { runId: fallback.runIdentity, commandIdentity: fallback.commandIdentity, failureClass: "internal" as const, exitCode: 1 as const, data: null, retryable: false as const, repairAction: "Inspect trusted effect evidence before continuing." }
+	const identity = fallback.commandIdentity
+	const common = { runId: fallback.runIdentity, commandIdentity: identity, failureClass: "internal" as const, exitCode: 1 as const, data: null, retryable: false as const }
+	const handoff = (causeCode: WireCauseCode) => ({ repairAction: repairActionOf(identity, causeCode), handoff: handoffOf(identity, causeCode) })
 	let result: ContractResult
 	switch (fallback.fallbackCase) {
 		case "preparation":
-			result = { ...common, outcome: "refused", effectClass: fallback.effectClass, transactionState: "unchanged", causeCode: "INTERNAL_PREPARATION", effects: unchangedEffects(fallback), nextAction: INSPECT_ACTION }
+			result = { ...common, outcome: "refused", effectClass: fallback.effectClass, transactionState: "unchanged", causeCode: "INTERNAL_PREPARATION", effects: unchangedEffects(fallback), repairAction: repairActionOf(identity, "INTERNAL_PREPARATION"), nextAction: nextActionOf(identity, "INTERNAL_PREPARATION") }
 			break
 		case "result-unchanged":
-			result = { ...common, outcome: "failed", effectClass: fallback.effectClass, transactionState: "unchanged", causeCode: "INTERNAL_RESULT_UNCHANGED", effects: unchangedEffects(fallback), handoff: handoff("Inspect trusted effect evidence before continuing.") }
+			result = { ...common, outcome: "failed", effectClass: fallback.effectClass, transactionState: "unchanged", causeCode: "INTERNAL_RESULT_UNCHANGED", effects: unchangedEffects(fallback), ...handoff("INTERNAL_RESULT_UNCHANGED") }
 			break
 		case "result-completed": {
 			if (fallback.effectClass === "inspect") return null
 			const effectInventory = completedEffects(fallback)
 			if (effectInventory === null) return null
-			result = { ...common, outcome: "failed", effectClass: fallback.effectClass, transactionState: "completed", causeCode: "INTERNAL_RESULT_COMPLETED", effects: effectInventory, handoff: handoff("Inspect trusted effect evidence before continuing.") }
+			result = { ...common, outcome: "failed", effectClass: fallback.effectClass, transactionState: "completed", causeCode: "INTERNAL_RESULT_COMPLETED", effects: effectInventory, ...handoff("INTERNAL_RESULT_COMPLETED") }
 			break
 		}
 		case "result-partial": {
 			if (fallback.effectClass === "inspect") return null
 			const effectInventory = partialEffects(fallback)
 			if (effectInventory === null) return null
-			result = { ...common, outcome: "failed", effectClass: fallback.effectClass, transactionState: "partially-completed", causeCode: "INTERNAL_RESULT_PARTIAL", effects: effectInventory, handoff: handoff("Inspect trusted effect evidence before continuing.") }
+			result = { ...common, outcome: "failed", effectClass: fallback.effectClass, transactionState: "partially-completed", causeCode: "INTERNAL_RESULT_PARTIAL", effects: effectInventory, ...handoff("INTERNAL_RESULT_PARTIAL") }
 			break
 		}
 		case "result-unknown":
 			if (fallback.effectClass === "inspect") return null
-			result = { ...common, outcome: "failed", effectClass: fallback.effectClass, transactionState: "unknown", causeCode: "INTERNAL_RESULT_UNKNOWN", effects: unknownEffects(fallback), handoff: handoff("Inspect trusted effect evidence before continuing.") }
+			result = { ...common, outcome: "failed", effectClass: fallback.effectClass, transactionState: "unknown", causeCode: "INTERNAL_RESULT_UNKNOWN", effects: unknownEffects(fallback), ...handoff("INTERNAL_RESULT_UNKNOWN") }
 			break
 	}
 	return envelope("The result could not be serialized safely.", result)
@@ -358,7 +377,7 @@ function discoveryText(): string {
 }
 
 function successEnvelope(identity: CommandIdentity, runIdentity: string, message: string, data: JsonValue): EnvelopeV2 {
-	const result: ContractResult = { runId: runIdentity, commandIdentity: identity, outcome: "success", effectClass: "inspect", transactionState: "unchanged", causeCode: "SUCCESS_UNCHANGED", failureClass: null, exitCode: 0, data, retryable: false, repairAction: null, effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true }, nextAction: INSPECT_ACTION }
+	const result: ContractResult = { runId: runIdentity, commandIdentity: identity, outcome: "success", effectClass: "inspect", transactionState: "unchanged", causeCode: "SUCCESS_UNCHANGED", failureClass: null, exitCode: 0, data, retryable: false, repairAction: null, effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true }, nextAction: nextActionOf(identity, "SUCCESS_UNCHANGED") }
 	return envelope(message, result)
 }
 
@@ -409,6 +428,27 @@ function runDiscover(session: Session): number {
 	return session.machine(successEnvelope(identity, session.runIdentity, "Command discovery completed", discovery()), facts)
 }
 
+// One selected command's possible stations from the typed catalogue (accepted C0 command-scoped discovery). The
+// selector is the parsed option value; an unknown canonical identity is refused at the command-discovery identity.
+function stationLine(station: PublicStation): string {
+	return `  ${station.outcome} | ${station.causeCode} | ${station.transactionState} | exit ${station.exitCode} | retryable ${station.retryable} | ${"handoff" in station.guidance ? "handoff" : "next-action"} | ${station.reachability}`
+}
+
+function runCommandDiscovery(session: Session, parsed: Parsed): number {
+	const identity = "repair-lab.command-discovery"
+	const selected = parsed.values["discover-command"]
+	const command = COMMANDS.find((candidate) => candidate.commandIdentity === selected)
+	if (command === undefined) return usageRefusal(session, identity, "USAGE_UNKNOWN_COMMAND", `unknown command ${String(selected)}`)
+	const data = commandDiscovery(command)
+	if (!session.jsonMode) {
+		session.io.stdout(`${data.command.commandIdentity}: possible outcomes\n`)
+		for (const station of data.stations) session.io.stdout(`${stationLine(station)}\n`)
+		return 0
+	}
+	const facts = { ...usageFacts(identity, session.runIdentity), domainOutcome: "success" as const }
+	return session.machine(successEnvelope(identity, session.runIdentity, "Command discovery completed", data), facts)
+}
+
 // A routed command: resolve the root, open diagnostics, decide, dispose diagnostics, then render once.
 async function runCommand(session: Session, routed: Routed, route: CommandRoute, parsed: Parsed, faults: Faults, root: string): Promise<number> {
 	const request = buildRequest(parsed, route)
@@ -450,6 +490,7 @@ export async function run(argv: readonly string[], io: Io, env: Record<string, s
 	if (violation !== null) return usageRefusal(session, routed.identity, "USAGE_INVALID_ARGUMENTS", violation)
 	if (routed.route === "help") return runHelp(session, parsed)
 	if (routed.route === "discover") return runDiscover(session)
+	if (routed.route === "command-discovery") return runCommandDiscovery(session, parsed)
 	// Argv shape is judged before the environment (fault channel, root) and before diagnostics or any state read.
 	if (faults === null) return usageRefusal(session, routed.identity, "USAGE_INVALID_ARGUMENTS", "REPAIR_LAB_FAULT is not a supported fault")
 	const root = resolveRoot(env, cwd)

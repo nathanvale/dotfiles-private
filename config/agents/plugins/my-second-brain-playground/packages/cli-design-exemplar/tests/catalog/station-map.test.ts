@@ -2,16 +2,18 @@ import { afterAll, describe, expect, test } from "bun:test"
 import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { declaredStation, STATION_IDS, stationIdOf, stationIdOfRow } from "../../src/branch-station-catalog.ts"
-import { STATIONS } from "../../src/command-contract.ts"
+import { type Handoff, STATIONS } from "../../src/command-contract.ts"
+import { BRANCH_STATIONS, type CatalogueDeclaration, type CatalogueObservation, type PublicStation, validateCatalogue } from "../../src/station-catalogue.ts"
 import { defineStationRows } from "../../src/station-rows.ts"
 import { createRoot, envelopeOf, linkOutside, linkStateFile, readOnlyJournal, removeRoot, type Root, runCli, type Variant } from "../helpers/harness.ts"
+import { expectedStation } from "./expected-station-semantics.ts"
 
 // Independent oracle (CDS-PE-4; brief 12, section 5): EXPECTED_STATIONS is restated from the fixture's station_catalog,
 // PE revision 3 and brief 12 sections 3.3, 3.4 and 5; BINDINGS ties every tuple to argv, state variant and fault with
 // the expected transaction state and guidance per scenario. STATIONS supplies enumeration only; nothing below is read
 // from the modules under test. Marked independent oracle: a dedupe pass must not hoist these tables into STATIONS.
 
-type Identity = "dispatch" | "help" | "discovery" | "status" | "inspect" | "inspect-diagnostics" | "preview" | "apply" | "repair" | "repair-retry" | "recover"
+type Identity = "dispatch" | "help" | "discovery" | "command-discovery" | "status" | "inspect" | "inspect-diagnostics" | "preview" | "apply" | "repair" | "repair-retry" | "recover"
 type Outcome = "success" | "refused" | "failed"
 type EffectClass = "inspect" | "repository-local"
 type State = "unchanged" | "completed" | "partially-completed" | "unknown"
@@ -57,7 +59,7 @@ const FAILURE_CLASS_BY_CAUSE: Readonly<Record<string, Exclude<FailureClass, null
 	INTERNAL_RESULT_COMPLETED: "internal",
 	INTERNAL_RESULT_UNKNOWN: "internal",
 }
-const READ_ONLY: Identity[] = ["dispatch", "help", "discovery", "status", "inspect", "inspect-diagnostics"]
+const READ_ONLY: Identity[] = ["dispatch", "help", "discovery", "command-discovery", "status", "inspect", "inspect-diagnostics"]
 const classOf = (identity: Identity): EffectClass => (READ_ONLY.includes(identity) ? "inspect" : "repository-local")
 const id = (identity: Identity, outcome: Outcome, cause: string | null): string => JSON.stringify([`repair-lab.${identity}`, outcome, cause])
 const successId = (identity: Identity, transactionState: Extract<State, "unchanged" | "completed">): string => id(identity, "success", transactionState === "completed" ? "SUCCESS_COMPLETED" : "SUCCESS_UNCHANGED")
@@ -149,8 +151,17 @@ for (const identity of MUTATING) {
 fallback("recover", "failed", "INTERNAL_RESULT_UNCHANGED", "unchanged")
 fallback("recover", "refused", "INTERNAL_PREPARATION", "unchanged")
 fallback("recover", "failed", "INTERNAL_RESULT_UNKNOWN", "unknown")
+// B1 (CDS-BC-1, accepted C0 command-scoped discovery): the command-discovery built-in mirrors the discovery identity's
+// success, usage and egress rows and adds the unknown-selector refusal. Appended after the historical rows above.
+success("command-discovery", "unchanged", null)
+usage("command-discovery", "USAGE_UNKNOWN_COMMAND")
+usage("command-discovery", "USAGE_INVALID_INVOCATION")
+fallback("command-discovery", "failed", "INTERNAL_RESULT_UNCHANGED", "unchanged")
+fallback("command-discovery", "refused", "INTERNAL_PREPARATION", "unchanged")
 
 // Binding table: (tuple, argv, variant, fault, setup, before) with the expected transaction state and guidance per scenario.
+// B1 (accepted C0 template rule): one next action per derived identity, so the preview-id, repairable-precondition and
+// preview-missing scenarios now expect the conservative read-only inspect route instead of scenario-specific text.
 type Setup = "read-only-journal" | "missing-resource" | "malformed-resource" | "unreadable-resource" | "invalid-resource" | "link" | "link-resource"
 interface Binding {
 	tuple: string
@@ -184,18 +195,19 @@ const b = (tuple: string, argv: string[], variant: Variant, rest: Partial<Bindin
 	return { tuple, argv, variant, ...handoffBinding, guidance: "handoff" }
 }
 const un = (tuple: string, argv: string[], variant: Variant, rest: Partial<Binding> = {}): Binding => b(tuple, argv, variant, { transactionState: "unchanged", guidance: "next-action", nextAction: INSPECT, ...rest })
-const ROUTE_ARGV: Record<Identity, string[]> = { dispatch: [], help: ["--help"], discovery: ["--discover"], status: ["status"], inspect: ["inspect"], "inspect-diagnostics": ["inspect", "--include-diagnostics"], preview: ["apply", "--preview"], apply: APPLY, repair: REPAIR, "repair-retry": RETRY, recover: ["recover"] }
+const DISCOVER_COMMAND = ["--discover-command", "repair-lab.apply"]
+const ROUTE_ARGV: Record<Identity, string[]> = { dispatch: [], help: ["--help"], discovery: ["--discover"], "command-discovery": DISCOVER_COMMAND, status: ["status"], inspect: ["inspect"], "inspect-diagnostics": ["inspect", "--include-diagnostics"], preview: ["apply", "--preview"], apply: APPLY, repair: REPAIR, "repair-retry": RETRY, recover: ["recover"] }
 
 const BINDINGS: Binding[] = [
 	// Thirteen fixture scenarios (3.3)
 	un(successId("status", "unchanged"), ["status"], "healthy"),
 	un(successId("inspect", "unchanged"), ["inspect"], "healthy", { nextAction: "repair-lab apply --preview" }),
-	un(successId("preview", "unchanged"), ["apply", "--preview"], "healthy", { nextAction: "repair-lab apply --preview-id preview-healthy-revision-4 --authorize fixture-authority" }),
+	un(successId("preview", "unchanged"), ["apply", "--preview"], "healthy"),
 	b(successId("apply", "completed"), APPLY, "healthy-with-fresh-preview", { transactionState: "completed", guidance: "next-action", nextAction: INSPECT }),
 	un(id("apply", "refused", "DOMAIN_PRECONDITION_UNMET"), STALE, "revision-5-with-revision-4-preview"),
 	b(id("apply", "failed", "INTERNAL_EFFECT_OUTCOME_UNKNOWN"), PARTIAL, "healthy-with-partial-preview", { fault: "effect.write-journal-outcome-unknown", transactionState: "unknown", guidance: "next-action", nextAction: RECOVER }),
 	un(id("apply", "refused", "DOMAIN_AUTHORITY_REQUIRED"), ["apply", "--automation"], "healthy"),
-	un(id("repair", "refused", "DOMAIN_PRECONDITION_UNMET"), ["repair", "--preview"], "derived-index-missing", { nextAction: "repair-lab repair --apply --preview-id repair-preview-missing-index --authorize fixture-authority" }),
+	un(id("repair", "refused", "DOMAIN_PRECONDITION_UNMET"), ["repair", "--preview"], "derived-index-missing"),
 	b(successId("repair", "completed"), REPAIR, "derived-index-missing-with-fresh-preview", { transactionState: "completed", guidance: "next-action", nextAction: INSPECT }),
 	b(successId("repair-retry", "completed"), RETRY, "derived-index-missing-with-fresh-preview", { fault: "one-transient-lock", transactionState: "completed", guidance: "next-action", nextAction: INSPECT }),
 	b(id("recover", "failed", "DOMAIN_RECOVERY_HANDOFF_REQUIRED"), ["recover"], "unknown-after-partial", { transactionState: "unknown", guidance: "handoff" }),
@@ -222,9 +234,9 @@ const BINDINGS: Binding[] = [
 		un(id(identity, "refused", "SCHEMA_INVALID_INPUT"), ROUTE_ARGV[identity], "healthy", { setup: "invalid-resource" }),
 	]),
 	// Admission refusals (3.5 steps 2 through 10) on the three mutating identities
-	un(id("apply", "refused", "DOMAIN_PRECONDITION_UNMET"), APPLY, "healthy", { nextAction: "repair-lab apply --preview" }),
-	un(id("repair", "refused", "DOMAIN_PRECONDITION_UNMET"), REPAIR, "derived-index-missing", { nextAction: "repair-lab repair --preview" }),
-	un(id("repair-retry", "refused", "DOMAIN_PRECONDITION_UNMET"), RETRY, "derived-index-missing-with-apply-preview", { nextAction: "repair-lab repair --preview" }),
+	un(id("apply", "refused", "DOMAIN_PRECONDITION_UNMET"), APPLY, "healthy"),
+	un(id("repair", "refused", "DOMAIN_PRECONDITION_UNMET"), REPAIR, "derived-index-missing"),
+	un(id("repair-retry", "refused", "DOMAIN_PRECONDITION_UNMET"), RETRY, "derived-index-missing-with-apply-preview"),
 	un(id("apply", "refused", "DOMAIN_PRECONDITION_UNMET"), APPLY, "healthy-with-consumed-preview"),
 	un(id("repair", "refused", "DOMAIN_PRECONDITION_UNMET"), REPAIR, "derived-index-missing-with-fresh-preview", { before: REPAIR }),
 	un(id("repair-retry", "refused", "DOMAIN_PRECONDITION_UNMET"), RETRY, "derived-index-missing-with-fresh-preview", { before: RETRY }),
@@ -291,6 +303,12 @@ const BINDINGS: Binding[] = [
 	b(id("recover", "failed", "INTERNAL_RESULT_UNKNOWN"), ["recover"], "unknown-after-partial", { fault: CYCLE, transactionState: "unknown", guidance: "handoff" }),
 	// Internal final-component resource symlinks reach the existing 2.0 precondition tuple on every affected route.
 	...(["status", "preview", "apply", "repair", "repair-retry", "recover"] as Identity[]).map((identity) => un(id(identity, "refused", "DOMAIN_PRECONDITION_UNMET"), ROUTE_ARGV[identity], identity === "apply" ? "healthy-with-fresh-preview" : identity === "repair" || identity === "repair-retry" ? "derived-index-missing-with-fresh-preview" : "healthy", { setup: "link-resource" })),
+	// B1: selected-command discovery reaches its five stations; a missing selector is the existing dispatch refusal.
+	b(successId("command-discovery", "unchanged"), DISCOVER_COMMAND, "healthy", { transactionState: "unchanged", guidance: "next-action", nextAction: INSPECT }),
+	un(id("command-discovery", "refused", "USAGE_UNKNOWN_COMMAND"), ["--discover-command", "repair-lab.nope"], "healthy", { nextAction: HELP }),
+	un(id("command-discovery", "refused", "USAGE_INVALID_INVOCATION"), [...DISCOVER_COMMAND, "--no-such-option"], "healthy", { nextAction: HELP }),
+	un(id("command-discovery", "failed", "INTERNAL_RESULT_UNCHANGED"), DISCOVER_COMMAND, "healthy", { fault: CYCLE }),
+	un(id("command-discovery", "refused", "INTERNAL_PREPARATION"), [...DISCOVER_COMMAND, "--no-such-option"], "healthy", { fault: CYCLE }),
 ]
 
 function applySetup(root: Root, setup: Setup | undefined): void {
@@ -426,7 +444,7 @@ describe("station catalogue", () => {
 		}
 	})
 	test("every bound scenario reaches its tuple through a real child process with the expected transaction, retry and recovery fields", async () => {
-		expect(BINDINGS).toHaveLength(151)
+		expect(BINDINGS).toHaveLength(156)
 		for (const binding of BINDINGS) {
 			const observation = await observe(binding)
 			const signature = signatureFor(binding)
@@ -436,7 +454,7 @@ describe("station catalogue", () => {
 		}
 	}, 120_000)
 	test("three-way set equality: declared, expected and observed tuples coincide (STATION_UNREACHED / STATION_UNDECLARED)", () => {
-		expect(observations).toHaveLength(151)
+		expect(observations).toHaveLength(156)
 		const observed = new Set(observations.map((observation) => observation.tuple))
 		const boundTuples = new Set(BINDINGS.map((binding) => binding.tuple))
 		const declared = new Set(STATION_IDS)
@@ -448,4 +466,114 @@ describe("station catalogue", () => {
 		expect(observed.size).toBe(boundTuples.size)
 		expect(observed.size).toBe(EXPECTED_STATIONS.size)
 	})
+	// B1 template agreement (accepted C0, control-contract-evolution.md lines 665-674): every real observation's full next
+	// action or handoff object plus repair action must equal its PublicStation template after only the admitted
+	// substitutions, and must equal the independent B1 oracle, so a wrong catalogue agreeing with wrong output cannot pass.
+	test("every observed station's emitted guidance and repair action equal its expanded PublicStation template and the independent oracle", () => {
+		expect(observations).toHaveLength(156)
+		const declared = new Map(BRANCH_STATIONS.map((declaration) => [declaration.identity, declaration]))
+		const observed: CatalogueObservation[] = []
+		for (const observation of observations) {
+			const declaration = declared.get(observation.tuple)
+			if (declaration === undefined) throw new Error(`STATION_UNDECLARED ${observation.tuple}`)
+			const station = observedStation(observation, declaration)
+			observed.push({ identity: observation.tuple, station })
+			expect(validateCatalogue([expandTemplates(declaration, observation.envelope)], [{ identity: observation.tuple, station }], "strict-new"), scenarioLabel(observation.binding)).toEqual({ mode: "strict-new", findings: [], fullQualification: true })
+			expect(guidanceFields(station), `${scenarioLabel(observation.binding)} versus the independent oracle`).toEqual(guidanceFields(expectedStation(observation.tuple)))
+		}
+		const expanded = BRANCH_STATIONS.map((declaration) => expandTemplates(declaration, firstEnvelope(declaration.identity)))
+		expect(validateCatalogue(expanded, observed, "strict-new")).toEqual({ mode: "strict-new", findings: [], fullQualification: true })
+	})
+	test("one altered guidance literal is STATION_FIELD_MISMATCH against the same real observations and restores green", () => {
+		const identity = '["repair-lab.apply","refused","DOMAIN_PRECONDITION_UNMET"]'
+		const observed: CatalogueObservation[] = observations.map((observation) => {
+			const declaration = BRANCH_STATIONS.find((candidate) => candidate.identity === observation.tuple)
+			if (declaration === undefined) throw new Error(`STATION_UNDECLARED ${observation.tuple}`)
+			return { identity: observation.tuple, station: observedStation(observation, declaration) }
+		})
+		const expanded = BRANCH_STATIONS.map((declaration) => expandTemplates(declaration, firstEnvelope(declaration.identity)))
+		const altered = expanded.map((declaration) => (declaration.identity === identity && "nextAction" in declaration.guidance ? { ...declaration, guidance: { nextAction: `${declaration.guidance.nextAction} --json` } } : declaration))
+		expect(altered).not.toEqual(expanded)
+		expect(validateCatalogue(altered, observed, "strict-new")).toEqual({ mode: "strict-new", findings: [{ code: "STATION_FIELD_MISMATCH", identity, field: "guidance.nextAction" }], fullQualification: false })
+		expect(validateCatalogue(expanded, observed, "strict-new")).toEqual({ mode: "strict-new", findings: [], fullQualification: true })
+	})
+	// Accepted C0 (control-contract-evolution.md lines 665-674): substitution applies to handoff resource strings too. The
+	// exemplar emits no handoff resource, so the agreeing observation carries the same real result's runId literally; the
+	// template owner must render the admitted token to that value, and an unexpanded token must name the exact field.
+	test("an admitted token in a handoff resource field is expanded from the real result before comparison and a raw token is a resource mismatch", () => {
+		const identity = '["repair-lab.apply","refused","DOMAIN_AUTHORITY_REQUIRED"]'
+		const observation = observations.find((candidate) => candidate.tuple === identity)
+		const declaration = BRANCH_STATIONS.find((candidate) => candidate.identity === identity)
+		if (observation === undefined || declaration === undefined) throw new Error(`STATION_UNREACHED ${identity}`)
+		const runId = String(observation.envelope.runId)
+		expect(runId.length).toBeGreaterThan(0)
+		const withResource = <T extends CatalogueDeclaration | PublicStation>(station: T, resource: { readonly kind: string; readonly id: string }): T => {
+			if (!("handoff" in station.guidance)) throw new Error(`${identity} must be a handoff station`)
+			return { ...station, guidance: { handoff: { ...station.guidance.handoff, resource } } }
+		}
+		const templated = withResource(declaration, { kind: "run {runId}", id: "{runId}" })
+		const observed: CatalogueObservation = { identity, station: withResource(observedStation(observation, declaration), { kind: `run ${runId}`, id: runId }) }
+		const expanded = expandTemplates(templated, observation.envelope)
+		expect("handoff" in expanded.guidance ? expanded.guidance.handoff.resource : undefined).toEqual({ kind: `run ${runId}`, id: runId })
+		expect(validateCatalogue([expanded], [observed], "strict-new")).toEqual({ mode: "strict-new", findings: [], fullQualification: true })
+		expect(validateCatalogue([templated], [observed], "strict-new")).toEqual({ mode: "strict-new", findings: [{ code: "STATION_FIELD_MISMATCH", identity, field: "guidance.handoff.resource.id" }], fullQualification: false })
+		expect(validateCatalogue([expandTemplates(declaration, observation.envelope)], [{ identity, station: observedStation(observation, declaration) }], "strict-new")).toEqual({ mode: "strict-new", findings: [], fullQualification: true })
+	})
 })
+
+// The admitted C0 substitutions, expanded from the actual result fields of one real observation before comparison.
+// The exemplar's templates are literal today; the expansion still runs so a future token is compared truthfully.
+function substitute(template: string, envelope: Record<string, unknown>): string {
+	const effects = envelope.effects as { completed: string[]; remaining: string[]; uncertain: string[] }
+	const idempotencyKey = envelope.idempotencyKey
+	return template
+		.replaceAll("{runId}", String(envelope.runId))
+		.replaceAll("{completedEffects}", JSON.stringify(effects.completed))
+		.replaceAll("{remainingEffects}", JSON.stringify(effects.remaining))
+		.replaceAll("{uncertainEffects}", JSON.stringify(effects.uncertain))
+		.replaceAll("{idempotencyKey}", () => {
+			if (typeof idempotencyKey !== "string") throw new Error("template uses {idempotencyKey} but the result carries none")
+			return idempotencyKey
+		})
+}
+// Strings only, including the optional handoff resource fields; the handoff's object structure never changes.
+function expandHandoff(handoff: Handoff, envelope: Record<string, unknown>): Handoff {
+	const head = { owner: handoff.owner, reason: substitute(handoff.reason, envelope), inspect: handoff.inspect.map((instruction) => substitute(instruction, envelope)) }
+	return handoff.resource === undefined ? head : { ...head, resource: { kind: substitute(handoff.resource.kind, envelope), id: substitute(handoff.resource.id, envelope) } }
+}
+function expandTemplates(declaration: CatalogueDeclaration, envelope: Record<string, unknown>): CatalogueDeclaration {
+	const guidance: PublicStation["guidance"] = "nextAction" in declaration.guidance ? { nextAction: substitute(declaration.guidance.nextAction, envelope) } : { handoff: expandHandoff(declaration.guidance.handoff, envelope) }
+	return { ...declaration, guidance, repairAction: declaration.repairAction === null ? null : substitute(declaration.repairAction, envelope) }
+}
+function firstEnvelope(identity: string): Record<string, unknown> {
+	const observation = observations.find((candidate) => candidate.tuple === identity)
+	if (observation === undefined) throw new Error(`STATION_UNREACHED ${identity}`)
+	return observation.envelope
+}
+// A real observation projected onto the public station fields. The retry policy is the declared policy when the
+// emitted delay lies inside it and a distinct single-value policy otherwise, so an out-of-bounds delay is a mismatch.
+function observedStation(observation: Observation, declaration: CatalogueDeclaration): PublicStation {
+	const { envelope } = observation
+	const delay = envelope.retryDelayMilliseconds
+	const retryable = envelope.retryable === true
+	const policy = declaration.retryDelayPolicy
+	const withinPolicy = retryable && typeof delay === "number" && policy.kind === "bounded" && delay >= policy.minimumMilliseconds && delay <= policy.maximumMilliseconds
+	const guidance: PublicStation["guidance"] = envelope.handoff === undefined ? { nextAction: String(envelope.nextAction) } : { handoff: envelope.handoff as Handoff }
+	return {
+		commandIdentity: envelope.commandIdentity as PublicStation["commandIdentity"],
+		outcome: envelope.outcome as PublicStation["outcome"],
+		causeCode: envelope.causeCode as PublicStation["causeCode"],
+		failureClass: envelope.failureClass as PublicStation["failureClass"],
+		exitCode: observation.exit as PublicStation["exitCode"],
+		effectClass: envelope.effectClass as PublicStation["effectClass"],
+		transactionState: envelope.transactionState as PublicStation["transactionState"],
+		retryable,
+		retryDelayPolicy: withinPolicy ? policy : retryable && typeof delay === "number" ? { kind: "bounded", minimumMilliseconds: delay, maximumMilliseconds: delay } : { kind: "none" },
+		trigger: `observed ${scenarioLabel(observation.binding)}`,
+		guidance,
+		repairAction: envelope.repairAction === null ? null : String(envelope.repairAction),
+		reachability: "required",
+		unreachableRationale: null,
+	}
+}
+const guidanceFields = (station: PublicStation): Pick<PublicStation, "guidance" | "repairAction"> => ({ guidance: station.guidance, repairAction: station.repairAction })
