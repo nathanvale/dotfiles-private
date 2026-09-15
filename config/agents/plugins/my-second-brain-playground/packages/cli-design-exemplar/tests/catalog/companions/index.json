@@ -1,7 +1,7 @@
 {
 	"variants": [
-		{ "id": "a", "patch": "a.patch", "patchSha256": "3afb38b277307d527e47ceebfeb623246b5d62f6ca79795fc23a88c738520722" },
-		{ "id": "b", "patch": "b.patch", "patchSha256": "736b160e60d4e95b49ad9299c756e6ae99661fe9ccc601812360494ed30ce3c8" },
-		{ "id": "c", "patch": "c.patch", "patchSha256": "33c0cd6bb34387be404eb0eedb7b254a78445dfca88ae589e1218307b4a93459" }
+		{ "id": "a", "patch": "a.patch", "patchSha256": "5adac41df5820e78a7c4ec21e19819b6e0e977864845c4c67bf737f8eed5e035" },
+		{ "id": "b", "patch": "b.patch", "patchSha256": "d6495b49f23b31378a17ca358a4d37ef4010cb15c97b84e5fbbf2af7ba21f003" },
+		{ "id": "c", "patch": "c.patch", "patchSha256": "b94746b11f4fdfe4643166ce77f42fc0182b201a197ae9822a99b3015fc1c1ef" }
 	]
 }
