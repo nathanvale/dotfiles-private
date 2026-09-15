@@ -74,9 +74,14 @@ prepare_fixture() {
   FIXTURE_HOME="$TEST_ROOT/home"
   FIXTURE_DOTFILES="$FIXTURE_HOME/code/dotfiles"
   RECORD_DIR="$TEST_ROOT/records"
+  CANONICAL_ARM_HOMEBREW_PREFIX="$TEST_ROOT/opt-homebrew"
+  CANONICAL_INTEL_HOMEBREW_PREFIX="$TEST_ROOT/usr-local"
   mkdir -p "$FIXTURE_DOTFILES/bin/dotfiles/symlinks" "$FIXTURE_DOTFILES/config/macos" \
     "$RECORD_DIR"
-  cp "$REPO_ROOT/setup.sh" "$FIXTURE_DOTFILES/setup.sh"
+  sed \
+    -e "s#/opt/homebrew#$CANONICAL_ARM_HOMEBREW_PREFIX#g" \
+    -e "s#/usr/local#$CANONICAL_INTEL_HOMEBREW_PREFIX#g" \
+    "$REPO_ROOT/setup.sh" >"$FIXTURE_DOTFILES/setup.sh"
   chmod +x "$FIXTURE_DOTFILES/setup.sh"
 
   cat >"$FIXTURE_DOTFILES/bin/dotfiles/symlinks/symlinks_manage.sh" <<'EOF'
@@ -183,10 +188,68 @@ reset_fixture() {
     "$RECORD_DIR/rm-crash-barrier" \
     "$RECORD_DIR/A-holding" \
     "$RECORD_DIR/B-done" "$RECORD_DIR/race" \
+    "$RECORD_DIR/canonical-brew-calls" "$RECORD_DIR/fnm-calls" \
+    "$RECORD_DIR/inherited-brew-calls" "$RECORD_DIR/toolchain-calls" \
+    "$RECORD_DIR/git-probe-calls" \
+    "$CANONICAL_ARM_HOMEBREW_PREFIX" "$CANONICAL_INTEL_HOMEBREW_PREFIX" \
     "$FIXTURE_HOME/code/private-dotfiles" \
     "$FIXTURE_DOTFILES/verify_install.sh.disabled"
   mkdir -p "$RECORD_DIR"
   : >"$RECORD_DIR/calls"
+}
+
+install_canonical_homebrew_fixture() {
+  local prefix="$1"
+  local prefix_bin="$prefix/bin"
+
+  mkdir -p "$prefix_bin" "$FIXTURE_DOTFILES/config/node" \
+    "$FIXTURE_DOTFILES/config/brew" "$FIXTURE_DOTFILES/bin/dotfiles"
+  printf '%s\n' 22.14.0 >"$FIXTURE_DOTFILES/config/node/version"
+  : >"$FIXTURE_DOTFILES/config/brew/Brewfile"
+
+  cat >"$prefix_bin/brew" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'brew %s\n' "$*" >>"$RECORD_DIR/canonical-brew-calls"
+case "${1:-}" in
+  shellenv)
+    printf 'export PATH=%q:$PATH\n' "$(dirname "$0")"
+    ;;
+  --version)
+    printf 'Homebrew fixture\n'
+    ;;
+esac
+EOF
+  cat >"$prefix_bin/fnm" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'fnm %s\n' "$*" >>"$RECORD_DIR/fnm-calls"
+EOF
+  cat >"$prefix_bin/mise" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+EOF
+  cat >"$FIXTURE_DOTFILES/bin/dotfiles/toolchain" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'toolchain %s\n' "$*" >>"$RECORD_DIR/toolchain-calls"
+EOF
+  chmod +x "$prefix_bin/brew" "$prefix_bin/fnm" "$prefix_bin/mise" \
+    "$FIXTURE_DOTFILES/bin/dotfiles/toolchain"
+}
+
+install_inherited_brew_fixture() {
+  local bin_dir="$1"
+
+  mkdir -p "$bin_dir"
+  cat >"$bin_dir/brew" <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'inherited brew %s\n' "$*" >>"$RECORD_DIR/inherited-brew-calls"
+exit 99
+EOF
+  chmod +x "$bin_dir/brew"
 }
 
 test_process_start_identity() {
@@ -433,6 +496,72 @@ PY
 }
 
 prepare_fixture
+
+# An extracted release archive has no .git entry. Activation from that public
+# root must reach its collaborator without consulting whatever git happens to
+# be inherited from the caller.
+reset_fixture
+git_probe_bin="$TEST_ROOT/git-probe-bin"
+mkdir -p "$git_probe_bin"
+cat >"$git_probe_bin/git" <<'EOF'
+#!/usr/bin/env bash
+printf 'git %s\n' "$*" >>"$RECORD_DIR/git-probe-calls"
+exit 1
+EOF
+chmod +x "$git_probe_bin/git"
+SETUP_TEST_PATH="$git_probe_bin:/usr/bin:/bin" run_setup symlinks
+assert_equals "$RUN_EXIT" 0 'archive-root symlink activation exits successfully'
+assert_file_contains "$RECORD_DIR/calls" 'entered:' \
+  'archive-root activation reaches the public symlink collaborator'
+assert_file_absent "$RECORD_DIR/git-probe-calls" \
+  'archive-root activation does not invoke Git'
+
+# Canonical Homebrew discovery must reject executable directory placeholders.
+# Phase 6 then remains usable without trying to execute either placeholder.
+reset_fixture
+mkdir -p "$CANONICAL_ARM_HOMEBREW_PREFIX/bin/brew" \
+  "$CANONICAL_INTEL_HOMEBREW_PREFIX/bin/brew"
+run_setup --desktop --start-phase 6
+assert_equals "$RUN_EXIT" 0 \
+  'canonical Homebrew directory placeholders do not block Phase 6'
+assert_file_contains "$RECORD_DIR/calls" 'entered:' \
+  'directory placeholders still allow the public Phase 6 collaborator'
+assert_file_contains "$RECORD_DIR/calls" 'verifier:' \
+  'directory placeholders still allow final verification'
+
+# A new SSH process can resume after Foundation with no inherited Homebrew
+# path. Both canonical prefixes must hydrate before Phase 4, and an arbitrary
+# inherited brew must remain unused.
+for homebrew_case in arm intel; do
+  reset_fixture
+  case "$homebrew_case" in
+    arm)
+      canonical_homebrew_prefix="$CANONICAL_ARM_HOMEBREW_PREFIX"
+      ;;
+    intel)
+      canonical_homebrew_prefix="$CANONICAL_INTEL_HOMEBREW_PREFIX"
+      ;;
+  esac
+  install_canonical_homebrew_fixture "$canonical_homebrew_prefix"
+  inherited_brew_bin="$TEST_ROOT/inherited-brew-$homebrew_case"
+  install_inherited_brew_fixture "$inherited_brew_bin"
+  mkdir -p "$FIXTURE_HOME/.dotfiles_state"
+  printf '%s\n' desktop >"$FIXTURE_HOME/.dotfiles_state/profile"
+  printf '%s\n' 4 >"$FIXTURE_HOME/.dotfiles_state/checkpoint"
+  SETUP_TEST_PATH="$inherited_brew_bin:/usr/bin:/bin" run_setup --desktop --resume
+  assert_equals "$RUN_EXIT" 0 \
+    "$homebrew_case canonical Homebrew supports checkpoint-four resume"
+  assert_file_contains "$RECORD_DIR/canonical-brew-calls" 'brew shellenv' \
+    "$homebrew_case canonical Homebrew supplies the resumed shell environment"
+  assert_file_contains "$RECORD_DIR/canonical-brew-calls" 'brew list bun' \
+    "$homebrew_case canonical Homebrew receives Phase 4 package probes"
+  assert_file_contains "$RECORD_DIR/fnm-calls" 'fnm install --corepack-enabled 22.14.0' \
+    "$homebrew_case hydrated PATH exposes fnm to Phase 4"
+  assert_file_contains "$RECORD_DIR/toolchain-calls" 'toolchain update --apply' \
+    "$homebrew_case resume reaches the verified toolchain apply seam"
+  assert_file_absent "$RECORD_DIR/inherited-brew-calls" \
+    "$homebrew_case resume ignores arbitrary inherited brew"
+done
 
 # Help and status remain read-only even when state is unsafe or a mutating
 # process owns the state lock.
