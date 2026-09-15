@@ -34,6 +34,14 @@ assert_file_contains() {
   pass "$label"
 }
 
+assert_file_not_contains() {
+  local file="$1" text="$2" label="$3"
+  if grep -Fq "$text" "$file"; then
+    fail "$label (unexpected [$text])"
+  fi
+  pass "$label"
+}
+
 assert_file_matches() {
   local file="$1" pattern="$2" label="$3"
   grep -Eq "$pattern" "$file" || fail "$label (pattern [$pattern] did not match)"
@@ -286,6 +294,20 @@ assert_file_contains "$FIXTURE_HOME/.dotfiles_state/setup-result" \
 assert_file_contains "$RUN_STDOUT" 'SETUP VERIFIED' \
   'successful verification reports verified completion'
 
+# Server setup retains symlink and verification work, but never applies
+# interactive desktop preference writes.
+reset_fixture
+write_verifier pass
+run_setup '' pass --server --start-phase 6
+[[ "$RUN_EXIT" -eq 0 ]] || fail 'server configuration suffix exits zero after verification'
+pass 'server configuration suffix exits zero after verification'
+assert_file_contains "$RECORD_DIR/calls" 'symlinks-called' \
+  'server configuration suffix executes symlinks'
+assert_file_not_contains "$RECORD_DIR/calls" 'prefs-called:--set' \
+  'server configuration suffix skips desktop preferences'
+assert_file_contains "$RECORD_DIR/calls" 'verifier-called' \
+  'server configuration suffix runs the final verifier'
+
 # ---------------------------------------------------------------------------
 # A mandatory verifier failure retains the checkpoint and gives a repair path.
 # ---------------------------------------------------------------------------
@@ -465,7 +487,7 @@ pass 'linked-worktree activation exits nonzero'
 assert_file_contains "$TEST_ROOT/boundary-stdout" 'linked worktree is blocked' \
   'linked-worktree activation reports the canonical checkout boundary'
 
-expected_assertions=69
+expected_assertions=73
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

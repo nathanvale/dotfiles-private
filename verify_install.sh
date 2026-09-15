@@ -71,6 +71,14 @@ get_profile() {
     fi
 }
 
+pmset_setting_is_zero() {
+    local setting="$1"
+    local value
+
+    value="$(pmset -g | awk -v setting="$setting" '$1 == setting { print $2; exit }')"
+    [[ "$value" == "0" ]]
+}
+
 # Start a new phase (resets per-phase counters)
 phase_start() {
     PHASE_PASS=0
@@ -678,8 +686,8 @@ if [[ "$PROFILE" == "server" ]]; then
     verify_profile_requirements server
     verify "LM Studio recovery script" "[[ -f '$HOME/.local/bin/lm-studio-ensure.sh' && -x '$HOME/.local/bin/lm-studio-ensure.sh' ]]"
     verify "LM Studio recovery agent" "[[ -f '$HOME/Library/LaunchAgents/com.nathanvale.lm-studio-ensure.plist' ]]"
-    verify "Sleep disabled" "[[ \$(pmset -g | grep ' sleep' | awk '{print \$2}') == '0' ]]"
-    verify "Display sleep disabled" "[[ \$(pmset -g | grep 'displaysleep' | awk '{print \$2}') == '0' ]]"
+    verify "Sleep disabled" "pmset_setting_is_zero sleep"
+    verify "Display sleep disabled" "pmset_setting_is_zero displaysleep"
     verify_warn "SSH enabled" "nc -z localhost 22"
     verify_warn "Screen saver disabled" "[[ \$(defaults read com.apple.screensaver idleTime 2>/dev/null) == '0' ]]"
     phase_end "Server Settings"
