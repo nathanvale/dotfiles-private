@@ -36,7 +36,7 @@ git pull
 - **Phase 3:** 16+ essential CLI tools (git, tmux, fzf, ripgrep, etc.)
 - **Phase 4:** Retained fallback runtimes plus one verified Mise toolchain apply
 - **Phase 5:** Profile package bundle from `config/brew/Brewfile`; failures stop setup
-- **Phase 6:** Symlinks for dotfiles + macOS preferences
+- **Phase 6:** Symlinks for dotfiles, plus macOS preferences on the desktop profile. The server profile skips interactive macOS preferences.
 
 Supports `--resume` to pick up where it left off and `--start-phase N` to skip ahead.
 
