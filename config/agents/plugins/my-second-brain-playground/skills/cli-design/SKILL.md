@@ -92,8 +92,10 @@ validated serializer.
 
 ## Qualify the static policy
 
+### New repository
+
 From the canonical `bun-typescript-template` root, admit the materialized CLI
-and store receipts outside the generated or existing project:
+and store receipts outside the generated project:
 
 ```bash
 bun run admit:static /absolute/project/path simple /absolute/evidence/path
@@ -117,8 +119,26 @@ for stray console output, explicit `any`, non-null assertions, and the scoped
 restricted imports defined by the canonical profile.
 
 Completion criterion: the profile's static-admission result is `admitted`, both
-whole-project Fallow passes have complete evidence, and the generated or host
+whole-project Fallow passes have complete evidence, and the generated
 repository's own `bun run check` passes.
+
+### Existing Bun project
+
+Preserve the host's TypeScript, Biome, Fallow, package, lockfile, script, test,
+and source owners. Review only an explicit scoped policy delta for the added CLI
+paths. Run the accepted gradual-adoption review from the host root:
+
+```bash
+node_modules/.bin/fallow audit --format json --quiet --gate new-only --type-aware --type-aware-require complete
+```
+
+Keep the host's existing quality commands visible and run them. This review
+must fail when required semantic evidence is missing, but it does not qualify
+inherited findings away or claim that the whole existing project is clean.
+
+Completion criterion: the preservation diff contains only the selected owner
+paths and reviewed additive deltas, host checks pass, and the new-only review
+passes with complete required evidence for the changed CLI paths.
 
 ## Change commands and stations
 

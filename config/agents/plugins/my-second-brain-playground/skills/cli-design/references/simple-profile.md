@@ -60,6 +60,7 @@ state, effect inventory, retry policy, and guidance. Exercise:
 
 Run the generated CI sequence from a clean fresh checkout. The generated project
 passes with its own lockfile and has no template or plugin runtime dependency.
-Qualify its static policy through the skill's `admit:static` route; a
-changed-files Fallow audit does not replace the complete whole-project and
-production-dependency passes.
+For a new repository, qualify its static policy through the skill's
+`admit:static` route; a changed-files Fallow audit does not replace the complete
+whole-project and production-dependency passes. In an existing project, preserve
+the host policy and use the skill's complete-evidence new-only adoption review.
