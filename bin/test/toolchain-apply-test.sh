@@ -12,8 +12,12 @@ BIN="$TEST_ROOT/bin"
 LEDGER="$TEST_ROOT/mise-ledger"
 MISE_ENV_LEDGER="$TEST_ROOT/mise-env-ledger"
 MISE_CONTEXT_LEDGER="$TEST_ROOT/mise-context-ledger"
+MISE_PYTHON_ATTESTATION_LEDGER="$TEST_ROOT/mise-python-attestation-ledger"
 ORACLE="$TEST_ROOT/oracle.tsv"
 LOCK_ORACLE="$TEST_ROOT/lock.oracle"
+LOCK_PRE_ORACLE="$TEST_ROOT/lock.pre.oracle"
+LOCK_ENRICHED_ORACLE="$TEST_ROOT/lock.enriched.oracle"
+LOCK_OUTPUT_LEDGER="$TEST_ROOT/lock-output-ledger"
 CONTRACT_ORACLE="$TEST_ROOT/contract.oracle"
 assertion_count=0
 
@@ -22,6 +26,7 @@ trap cleanup EXIT
 pass() { assertion_count=$((assertion_count + 1)); printf 'ok %d - %s\n' "$assertion_count" "$1"; }
 fail() { printf 'not ok - %s\n' "$1" >&2; exit 1; }
 assert_equals() { [[ "$1" == "$2" ]] || fail "$3 (expected [$1], got [$2])"; pass "$3"; }
+assert_contains() { [[ "$1" == *"$2"* ]] || fail "$3 (expected [$2] in [$1])"; pass "$3"; }
 assert_file() { [[ -r "$1" ]] || fail "$2"; pass "$2"; }
 assert_not_exists() { [[ ! -e "$1" && ! -L "$1" ]] || fail "$2"; pass "$2"; }
 assert_process_gone() {
@@ -50,7 +55,9 @@ bun|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0
 python|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9
 npm|11.19.0|11.19.0|11.19.0|11.19.0|11.19.0|11.19.0|11.19.0
 EOF
-printf '# locked fixture\n' >"$LOCK_ORACLE"
+printf '%s\n' '# locked fixture' '# installed baseline platform' >"$LOCK_ORACLE"
+printf '# locked fixture\n' >"$LOCK_PRE_ORACLE"
+printf '%s\n' '# locked fixture' '# installed baseline platform' '# installed extra platform alias' >"$LOCK_ENRICHED_ORACLE"
 printf 'mise-revision-v1\n' >"$CONTRACT_ORACLE"
 
 mkdir -p "$HOME_ROOT" "$BIN"
@@ -63,8 +70,20 @@ CLI="$FIXTURE_REPO/bin/dotfiles/toolchain"
 cat >"$BIN/mise" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
+
+python_attestation_policy_is_not_persisted() {
+  [[ -n "${MISE_GLOBAL_CONFIG_FILE:-}" ]] || return 1
+  ! awk '
+    /^\[settings\][[:space:]]*$/ { in_settings=1; next }
+    /^\[/ { in_settings=0 }
+    in_settings && $0 ~ /^[[:space:]]*python\.github_attestations[[:space:]]*=[[:space:]]*false([[:space:]]*#.*)?$/ { found=1 }
+    END { exit !found }
+  ' "$MISE_GLOBAL_CONFIG_FILE"
+}
+
 printf '%s\n' "$*" >>"$TOOLCHAIN_MISE_LEDGER"
 printf '%s|%s|%s\n' "${MISE_DATA_DIR:-unset}" "${MISE_INSTALLS_DIR:-unset}" "${MISE_SHIMS_DIR:-unset}" >>"$TOOLCHAIN_MISE_ENV_LEDGER"
+printf '%s|%s\n' "${MISE_PYTHON_GITHUB_ATTESTATIONS:-unset}" "$*" >>"$TOOLCHAIN_MISE_PYTHON_ATTESTATION_LEDGER"
 if [[ -n "${MISE_GLOBAL_CONFIG_FILE:-}" ]]; then
   printf '%s|%s|%s|%s|%s\n' "$PWD" "${MISE_CEILING_PATHS:-unset}" "$MISE_GLOBAL_CONFIG_FILE" "${MISE_NODE_VERSION-unset},${MISE_BUN_VERSION-unset},${MISE_PYTHON_VERSION-unset},${MISE_NPM_VERSION-unset},${MISE_CONFIG_FILE-unset},${MISE_CONFIG_DIR-unset},${MISE_DEFAULT_CONFIG_FILENAME-unset}" "$*" >>"$TOOLCHAIN_MISE_CONTEXT_LEDGER"
   if [[ "$PWD" == "$TOOLCHAIN_ADVERSARIAL_PROJECT" ]]; then
@@ -78,6 +97,7 @@ if [[ -n "${MISE_GLOBAL_CONFIG_FILE:-}" ]]; then
   [[ "${MISE_CEILING_PATHS:-}" == "$PWD" ]] || exit 96
   [[ "$MISE_GLOBAL_CONFIG_FILE" == "$TOOLCHAIN_EXPECTED_STATE/revisions/"*"/config.toml" ]] || exit 96
   [[ "${MISE_NODE_VERSION+x}${MISE_BUN_VERSION+x}${MISE_PYTHON_VERSION+x}${MISE_NPM_VERSION+x}${MISE_CONFIG_FILE+x}${MISE_CONFIG_DIR+x}${MISE_DEFAULT_CONFIG_FILENAME+x}" == '' ]] || exit 96
+  python_attestation_policy_is_not_persisted || exit 71
 fi
 case "$1" in
  lock)
@@ -87,7 +107,17 @@ case "$1" in
     cp "$MISE_TEST_REPLACEMENT_CONFIG" "$MISE_TEST_CANONICAL_CONFIG"
     cp "$MISE_TEST_REPLACEMENT_MANIFEST" "$MISE_TEST_CANONICAL_MANIFEST"
   fi
-  printf '# locked fixture\n' >"$(dirname "$MISE_GLOBAL_CONFIG_FILE")/mise.lock"
+  lock_file="$(dirname "$MISE_GLOBAL_CONFIG_FILE")/mise.lock"
+  if [[ ! -e "$lock_file" && ! -L "$lock_file" ]]; then
+    if [[ -n "${MISE_TEST_LOCK_MUTATION_MARKER:-}" && -e "$MISE_TEST_LOCK_MUTATION_MARKER" ]]; then
+      printf '%s\n' '# locked fixture' '# installed baseline platform' >"$lock_file"
+    else
+      printf '# locked fixture\n' >"$lock_file"
+    fi
+  fi
+  if [[ -n "${MISE_TEST_LOCK_OUTPUT_LEDGER:-}" ]]; then
+    shasum -a 256 "$lock_file" | awk '{print $1}' >>"$MISE_TEST_LOCK_OUTPUT_LEDGER"
+  fi
   ;;
  install)
   [[ "${MISE_TEST_NOISY:-false}" != true ]] || printf 'fixture install progress\n'
@@ -97,6 +127,17 @@ case "$1" in
     printf '%s\n' "$!" >"$MISE_TEST_GRANDCHILD_PID_FILE"
   fi
   [[ -z "${MISE_TEST_BLOCK_FILE:-}" ]] || { : >"$MISE_TEST_BLOCK_FILE"; while [[ ! -e "${MISE_TEST_RELEASE_FILE:-}" ]]; do sleep 0.05; done; }
+  if [[ "${MISE_TEST_MUTATE_LOCK_ON_INSTALL:-false}" == true ]]; then
+    lock_file="$(dirname "$MISE_GLOBAL_CONFIG_FILE")/mise.lock"
+    if [[ -n "${MISE_TEST_LOCK_MUTATION_MARKER:-}" && ! -e "$MISE_TEST_LOCK_MUTATION_MARKER" ]]; then
+      printf '# installed baseline platform\n' >>"$lock_file"
+      printf '# installed extra platform alias\n' >>"$lock_file"
+      if [[ -n "${MISE_TEST_LOCK_OUTPUT_LEDGER:-}" ]]; then
+        shasum -a 256 "$lock_file" | awk '{print $1}' >>"$MISE_TEST_LOCK_OUTPUT_LEDGER"
+      fi
+      : >"$MISE_TEST_LOCK_MUTATION_MARKER"
+    fi
+  fi
   ;;
  which)
   case "$2" in node|bun|python) printf '%s/%s\n' "$TOOLCHAIN_FAKE_RUNTIME" "$2" ;; *) exit 97;; esac
@@ -104,6 +145,12 @@ case "$1" in
  exec)
   tool="$3"; column="${MISE_TEST_ORACLE_COLUMN:-2}"
   version="$(awk -F '|' -v tool="$tool" -v column="$column" '$1 == tool { print $column; exit }' "$TOOLCHAIN_ORACLE")"
+  if [[ "$tool" == node && "${MISE_TEST_VERIFY_FAILURE_MODE:-}" == once && ! -e "${MISE_TEST_VERIFY_FAILURE_MARKER:-}" ]]; then
+    : >"$MISE_TEST_VERIFY_FAILURE_MARKER"
+    version='0.0.0'
+  elif [[ "$tool" == node && "${MISE_TEST_VERIFY_FAILURE_MODE:-}" == always ]]; then
+    version='0.0.0'
+  fi
   case "$tool" in node) printf 'v%s\n' "$version";; bun) printf '%s\n' "$version";; python) printf 'Python %s\n' "$version";; *) exit 97;; esac
   ;;
  *) exit 97;;
@@ -180,6 +227,9 @@ cat >"$BIN/rm" <<'EOF'
 #!/usr/bin/env bash
 last=''
 for arg in "$@"; do last="$arg"; done
+if [[ "${MISE_TEST_FAIL_LOCK_REMOVAL:-false}" == true && "$last" == */mise.lock ]]; then
+  exit 73
+fi
 if [[ "${MISE_TEST_CLAIM_RECORD_RM_KILL:-false}" == true && "$last" == */lock-records/* ]]; then
   /bin/rm "$@"
   printf '%s\n' "$last" >"$MISE_TEST_CLAIM_RECORD_RM_PATH_FILE"
@@ -218,7 +268,9 @@ CANONICAL_MISE_DATA="$(CDPATH='' cd -P "$HOME_ROOT" && pwd)/.local/share/mise"
 CANONICAL_MISE_CUSTODY="$CANONICAL_MISE_DATA|$CANONICAL_MISE_DATA/installs|$CANONICAL_MISE_DATA/shims"
 export TOOLCHAIN_MISE_LEDGER="$LEDGER" TOOLCHAIN_MISE_ENV_LEDGER="$MISE_ENV_LEDGER"
 export TOOLCHAIN_MISE_CONTEXT_LEDGER="$MISE_CONTEXT_LEDGER"
+export TOOLCHAIN_MISE_PYTHON_ATTESTATION_LEDGER="$MISE_PYTHON_ATTESTATION_LEDGER"
 export TOOLCHAIN_FAKE_RUNTIME="$TEST_ROOT/runtime" TOOLCHAIN_ORACLE="$ORACLE"
+export MISE_TEST_LOCK_OUTPUT_LEDGER="$LOCK_OUTPUT_LEDGER"
 export MISE_DATA_DIR="$TEST_ROOT/hostile-mise-data"
 export MISE_INSTALLS_DIR="$TEST_ROOT/hostile-mise-installs"
 export MISE_SHIMS_DIR="$TEST_ROOT/hostile-mise-shims"
@@ -230,6 +282,10 @@ export TOOLCHAIN_EXPECTED_STATE TOOLCHAIN_ADVERSARIAL_PROJECT TOOLCHAIN_PROJECT_
 mkdir -p "$TOOLCHAIN_ADVERSARIAL_PROJECT"
 printf '%s\n' '[tools]' 'node = "0.0.1"' 'bun = "0.0.2"' 'python = "0.0.3"' \
   '[hooks]' 'enter = "touch project-config-ran"' >"$TOOLCHAIN_ADVERSARIAL_PROJECT/mise.toml"
+
+verification_failure_marker="$TEST_ROOT/verification-failure.marker"
+lock_mutation_marker="$TEST_ROOT/lock-mutation.marker"
+export MISE_TEST_LOCK_MUTATION_MARKER="$lock_mutation_marker"
 
 fixture_content_id() {
  local manifest="$1" config="$2" name file digest
@@ -280,15 +336,23 @@ export MISE_NODE_VERSION='0.0.5' MISE_BUN_VERSION='0.0.6' \
 export MISE_CONFIG_FILE="$TOOLCHAIN_ADVERSARIAL_PROJECT/mise.toml"
 export MISE_CONFIG_DIR="$TOOLCHAIN_ADVERSARIAL_PROJECT"
 export MISE_DEFAULT_CONFIG_FILENAME='hostile.toml'
+export MISE_PYTHON_GITHUB_ATTESTATIONS=true
 export MISE_TEST_NOISY=true
+export MISE_TEST_MUTATE_LOCK_ON_INSTALL=true
+export MISE_TEST_VERIFY_FAILURE_MODE=once MISE_TEST_VERIFY_FAILURE_MARKER="$verification_failure_marker"
+: >"$LOCK_OUTPUT_LEDGER"
 first="$(run_cli_from "$TOOLCHAIN_ADVERSARIAL_PROJECT" update --apply --json)"
+unset MISE_TEST_VERIFY_FAILURE_MODE MISE_TEST_VERIFY_FAILURE_MARKER
 unset MISE_TEST_NOISY
 first_status="$(sed -n '1p' <<<"$first")"
 first_json="$(sed -n '2,$p' <<<"$first")"
 [[ -n "$first_json" ]] || { cat "$TEST_ROOT/stderr" >&2; fail 'first apply returns structured JSON'; }
 assert_equals '0' "$first_status" 'first apply succeeds despite unresolved Git ownership'
 assert_equals 'state_write_and_tool_install' "$(jq -r '.side_effect' <<<"$first_json")" 'applied result truthfully reports state and install effects'
-assert_equals '2' "$(grep -Ec '^fixture (lock|install) progress$' "$TEST_ROOT/stderr")" 'noisy Mise output stays on diagnostic stderr'
+assert_equals '3' "$(grep -Ec '^fixture (lock|install) progress$' "$TEST_ROOT/stderr")" 'noisy Mise output stays on diagnostic stderr'
+assert_equals '3' "$(awk -F '|' '$1 == "false" && ($2 == "lock --global" || $2 == "install") { count++ } END { print count + 0 }' "$MISE_PYTHON_ATTESTATION_LEDGER")" 'pinned Python lock and install calls receive the attestation exception'
+assert_equals '0' "$(awk -F '|' '$2 == "lock --global" || $2 == "install" { if ($1 != "false") count++ } END { print count + 0 }' "$MISE_PYTHON_ATTESTATION_LEDGER")" 'no pinned Python lock or install call misses the attestation exception'
+assert_equals '0' "$(awk -F '|' '$2 != "lock --global" && $2 != "install" && $1 != "unset" { count++ } END { print count + 0 }' "$MISE_PYTHON_ATTESTATION_LEDGER")" 'verification calls retain the default Python attestation policy'
 revision="$(jq -r '.content_id' <<<"$first_json")"
 assert_equals '0' "$(grep -Eq '^[0-9a-f]{64}$' <<<"$revision"; printf '%s' "$?")" 'published revision uses a lowercase SHA-256 identity'
 state="$(CDPATH='' cd "$HOME_ROOT/.dotfiles_state/toolchain" && pwd -P)"
@@ -297,6 +361,19 @@ assert_file "$state/revisions/$revision/mise.lock" 'apply publishes a generated 
 assert_file "$state/revisions/$revision/receipt.json" 'apply publishes a bounded receipt'
 assert_file "$state/revisions/$revision/manifest.tsv" 'apply publishes the snapshotted manifest'
 assert_file "$state/revisions/$revision/contract.txt" 'apply publishes the application contract'
+assert_file "$lock_mutation_marker" 'first install mutates the generated lock'
+expected_revision="$(fixture_content_id "$FIXTURE_REPO/config/toolchain/versions.tsv" "$FIXTURE_REPO/config/mise/source.toml")"
+expected_lock_hash="$(shasum -a 256 "$LOCK_ORACLE" | awk '{print $1}')"
+pre_lock_hash="$(shasum -a 256 "$LOCK_PRE_ORACLE" | awk '{print $1}')"
+enriched_lock_hash="$(shasum -a 256 "$LOCK_ENRICHED_ORACLE" | awk '{print $1}')"
+assert_equals "$expected_revision" "$revision" 'published content identity includes the post-install lock bytes'
+assert_equals '2' "$(grep -Ec '^lock --global$' "$LEDGER")" 'first apply regenerates the lock after install'
+assert_equals "$pre_lock_hash" "$(sed -n '1p' "$LOCK_OUTPUT_LEDGER")" 'first lock output is the pre-install bytes'
+assert_equals "$enriched_lock_hash" "$(sed -n '2p' "$LOCK_OUTPUT_LEDGER")" 'install mutates the existing lock with extra aliases'
+assert_equals "$expected_lock_hash" "$(sed -n '3p' "$LOCK_OUTPUT_LEDGER")" 'fresh post-install lock output is canonical'
+assert_equals "$expected_lock_hash" "$(shasum -a 256 "$state/revisions/$revision/mise.lock" | awk '{print $1}')" 'published lock matches the independent final-lock oracle'
+assert_equals "$revision" "$(jq -r '.content_id' "$state/revisions/$revision/receipt.json")" 'receipt content identity matches the published revision'
+assert_equals "$expected_lock_hash" "$(jq -r '.lock_sha256' "$state/revisions/$revision/receipt.json")" 'receipt lock digest matches the published final lock'
 assert_equals '555' "$(stat -f '%Lp' "$state/revisions/$revision")" 'published revision directory is read-only'
 assert_equals '444' "$(stat -f '%Lp' "$state/revisions/$revision/config.toml")" 'published revision artifacts are read-only'
 assert_equals "$state/revisions/$revision" "$(CDPATH='' cd "$(dirname "$state/current")/$(readlink "$state/current")" && pwd -P)" 'apply atomically selects the published revision'
@@ -309,6 +386,61 @@ context_isolated="$(awk -F '|' -v state="$state" 'NF && ($1 !~ ("^" state "/\\.m
 assert_equals '1' "$context_isolated" 'apply isolates every config-sensitive Mise process in a private capsule with selectors scrubbed'
 assert_equals "$(shasum -a 256 "$FIXTURE_REPO/config/mise/source.toml" | awk '{print $1}')" "$(shasum -a 256 "$state/revisions/$revision/config.toml" | awk '{print $1}')" 'project config cannot alter the published global revision'
 assert_equals '0' "$(find "$state" -maxdepth 1 -name '.mise-operation-*' -print | wc -l | tr -d ' ')" 'apply removes its private Mise process capsule'
+
+# A later Python revision must return to Mise's default attestation policy.
+# Fail installation after observing the process environment so this negative
+# control cannot publish or select another revision.
+cp "$FIXTURE_REPO/config/mise/source.toml" "$TEST_ROOT/source.before-future-python"
+cp "$FIXTURE_REPO/config/toolchain/versions.tsv" "$TEST_ROOT/manifest.before-future-python"
+sed 's/python = "3.11.9"/python = "3.12.0"/' "$TEST_ROOT/source.before-future-python" >"$FIXTURE_REPO/config/mise/source.toml"
+sed 's/python|3.11.9|/python|3.12.0|/' "$TEST_ROOT/manifest.before-future-python" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
+: >"$MISE_PYTHON_ATTESTATION_LEDGER"
+export MISE_TEST_FAIL_INSTALL=true
+future_python="$(MISE_TEST_LOCK_OUTPUT_LEDGER= run_cli update --apply --json)"
+unset MISE_TEST_FAIL_INSTALL
+assert_equals '70' "$(sed -n '1p' <<<"$future_python")" 'future Python fixture reaches the bounded failed-install observation'
+assert_equals '2' "$(awk -F '|' '$1 == "unset" && ($2 == "lock --global" || $2 == "install") { count++ } END { print count + 0 }' "$MISE_PYTHON_ATTESTATION_LEDGER")" 'future Python lock and install calls retain the default attestation policy'
+assert_equals '0' "$(awk -F '|' '$2 == "lock --global" || $2 == "install" { if ($1 != "unset") count++ } END { print count + 0 }' "$MISE_PYTHON_ATTESTATION_LEDGER")" 'future Python revision does not inherit the pinned exception'
+cp "$TEST_ROOT/source.before-future-python" "$FIXTURE_REPO/config/mise/source.toml"
+cp "$TEST_ROOT/manifest.before-future-python" "$FIXTURE_REPO/config/toolchain/versions.tsv"
+
+: >"$LEDGER"
+second="$(run_cli_from "$TOOLCHAIN_ADVERSARIAL_PROJECT" update --apply --json)"
+second_status="$(sed -n '1p' <<<"$second")"
+second_json="$(sed -n '2,$p' <<<"$second")"
+assert_equals '0' "$second_status" 'next apply succeeds after canonical lock regeneration'
+assert_equals 'no_change' "$(jq -r '.status' <<<"$second_json")" 'next apply reuses the converged identity'
+assert_equals 'state_write' "$(jq -r '.side_effect' <<<"$second_json")" 'converged apply reports snapshot and lock writes only'
+assert_equals "$revision" "$(jq -r '.content_id' <<<"$second_json")" 'next apply keeps the first published content identity'
+assert_equals '1' "$(grep -Ec '^lock --global$' "$LEDGER")" 'next apply generates one canonical identity lock'
+assert_equals '0' "$(grep -Ec '^install$' "$LEDGER")" 'next apply does not reinstall tools'
+assert_equals "$expected_lock_hash" "$(sed -n '4p' "$LOCK_OUTPUT_LEDGER")" 'next apply starts from the same canonical lock bytes'
+assert_equals "$revision" "$(readlink "$state/current" | sed 's#^revisions/##')" 'next apply leaves the converged revision selected'
+assert_equals '1' "$(find "$state/revisions" -mindepth 1 -maxdepth 1 -type d -print | wc -l | tr -d ' ')" 'next apply reuses the published revision without a duplicate'
+unset MISE_TEST_MUTATE_LOCK_ON_INSTALL
+
+# A verification predicate that is wrong once after install must be retried
+# within the same apply. Repeated failure below proves the retry bound and
+# keeps the failed predicate visible to the caller.
+cp "$FIXTURE_REPO/config/mise/source.toml" "$TEST_ROOT/source.before-verification-retry"
+cp "$FIXTURE_REPO/config/toolchain/versions.tsv" "$TEST_ROOT/manifest.before-verification-retry"
+sed 's/node = "24.20.0"/node = "24.20.1"/' "$TEST_ROOT/source.before-verification-retry" >"$FIXTURE_REPO/config/mise/source.toml"
+sed 's/node|24.20.0|/node|24.20.1|/' "$TEST_ROOT/manifest.before-verification-retry" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
+export MISE_TEST_FAIL_LOCK_REMOVAL=true
+lock_removal_failure="$(run_cli update --apply --json)"
+unset MISE_TEST_FAIL_LOCK_REMOVAL
+assert_equals '73' "$(sed -n '1p' <<<"$lock_removal_failure")" 'staging lock removal failure returns a state failure'
+assert_equals 'mise_lock_replace_failed' "$(jq -r '.error.code' <<<"$(sed -n '2,$p' <<<"$lock_removal_failure")")" 'staging lock removal failure has a structured replacement error'
+assert_equals "$revision" "$(readlink "$state/current" | sed 's#^revisions/##')" 'staging lock removal failure preserves current selection'
+assert_equals '0' "$(find "$state/revisions" -maxdepth 1 -name '.staging-*' -print | wc -l | tr -d ' ')" 'staging lock removal failure cleans its private staging directory'
+export MISE_TEST_VERIFY_FAILURE_MODE=always
+verification_exhausted="$(run_cli update --apply --retry --json)"
+unset MISE_TEST_VERIFY_FAILURE_MODE
+assert_equals '70' "$(sed -n '1p' <<<"$verification_exhausted")" 'exhausted verification retry returns its failure status'
+assert_equals 'mise_verification_failed' "$(jq -r '.error.code' <<<"$(sed -n '2,$p' <<<"$verification_exhausted")")" 'exhausted verification retry keeps its structured error code'
+assert_contains "$(jq -r '.error.message' <<<"$(sed -n '2,$p' <<<"$verification_exhausted")")" 'node_version_mismatch' 'exhausted verification retry preserves the failed predicate'
+cp "$TEST_ROOT/source.before-verification-retry" "$FIXTURE_REPO/config/mise/source.toml"
+cp "$TEST_ROOT/manifest.before-verification-retry" "$FIXTURE_REPO/config/toolchain/versions.tsv"
 
 : >"$LEDGER"
 same="$(run_cli_from "$TOOLCHAIN_ADVERSARIAL_PROJECT" update --apply --json)"

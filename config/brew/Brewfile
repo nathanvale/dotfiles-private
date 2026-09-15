@@ -5,6 +5,7 @@
 # Usage:
 #   HOMEBREW_DOTFILES_PROFILE=desktop brew bundle --file=~/code/dotfiles/config/brew/Brewfile
 #   HOMEBREW_DOTFILES_PROFILE=server brew bundle --file=~/code/dotfiles/config/brew/Brewfile
+#   HOMEBREW_DOTFILES_PROFILE=desktop HOMEBREW_DOTFILES_VM_HOST=1 brew bundle --file=~/code/dotfiles/config/brew/Brewfile
 #
 # NOTE: Environment variables must be prefixed with HOMEBREW_ to be passed through
 # to Brewfile Ruby evaluation. Regular env vars are filtered out by Homebrew.
@@ -38,14 +39,8 @@ end
 # MUST use HOMEBREW_ prefix for env vars to work in Brewfile context
 profile = ENV.fetch("HOMEBREW_DOTFILES_PROFILE", "desktop")
 raise "invalid HOMEBREW_DOTFILES_PROFILE: #{profile.inspect} (expected \"desktop\" or \"server\")" unless %w[desktop server].include?(profile)
-
-# =============================================================================
-# TAPS
-# =============================================================================
-tap "ognistik/homebrew-formulae"
-tap "openclaw/tap"
-tap "steipete/tap"
-tap "anomalyco/tap"
+vm_host = ENV.fetch("HOMEBREW_DOTFILES_VM_HOST", "0")
+raise "invalid HOMEBREW_DOTFILES_VM_HOST: #{vm_host.inspect} (expected \"0\" or \"1\")" unless %w[0 1].include?(vm_host)
 
 # =============================================================================
 # CORE CLI TOOLS (all profiles)
@@ -117,14 +112,14 @@ brew "zsh-autosuggestions"
 brew "aider"                   # AI pair programming CLI
 brew "gemini-cli"              # Google Gemini AI CLI
 brew "whisper-cpp"             # Speech-to-text (local)
-brew "ognistik/homebrew-formulae/macrowhisper"  # MacroWhisper
-brew "steipete/tap/mcporter"   # MCP client CLI & code-gen toolkit
-brew "steipete/tap/peekaboo"   # macOS screenshots and agent vision analysis
-brew "steipete/tap/remindctl"  # Agent-friendly Apple Reminders CLI
-brew "steipete/tap/imsg"       # Agent-friendly Apple Messages CLI
-brew "openclaw/tap/gogcli"     # Google Workspace CLI for agents and automation
+brew "ognistik/homebrew-formulae/macrowhisper", trusted: true # MacroWhisper
+brew "steipete/tap/mcporter", trusted: true   # MCP client CLI & code-gen toolkit
+brew "steipete/tap/peekaboo", trusted: true   # macOS screenshots and agent vision analysis
+brew "steipete/tap/remindctl", trusted: true  # Agent-friendly Apple Reminders CLI
+brew "steipete/tap/imsg", trusted: true       # Agent-friendly Apple Messages CLI
+brew "openclaw/tap/gogcli", trusted: true     # Google Workspace CLI for agents and automation
 brew "summarize"               # Multi-modal AI content summarizer
-brew "anomalyco/tap/opencode" # Open-source coding agent with local model support
+brew "anomalyco/tap/opencode", trusted: true # Open-source coding agent with local model support
 
 # =============================================================================
 # CLOUD & INFRASTRUCTURE (all profiles)
@@ -151,8 +146,7 @@ brew "pandoc"                  # Document format converter
 brew "yazi"                    # Terminal file manager (Rust, async, preview pane)
 brew "glow"                    # Terminal markdown renderer (GFM, tables, colors)
 brew "grip"                    # GitHub-exact markdown preview on localhost
-tap "k1LoW/tap"
-brew "k1LoW/tap/mo"            # Markdown viewer with dark mode, Mermaid, live reload
+brew "k1LoW/tap/mo", trusted: true # Markdown viewer with dark mode, Mermaid, live reload
 brew "mdserve"                 # Markdown preview server for AI coding agents
 
 # =============================================================================
@@ -172,6 +166,10 @@ cask "chatgpt"                 # OpenAI ChatGPT app
 # DESKTOP PROFILE - GUI apps, communication, development
 # =============================================================================
 if profile == "desktop"
+  # Host-only VM runner. The guest uses the desktop profile without this opt-in.
+  brew "openai/tools/softnet", trusted: true if vm_host == "1"
+  brew "openai/tools/tart", trusted: true if vm_host == "1"
+
   # Desktop environment
   cask "cmux"                    # Multi-agent terminal and SSH workspaces
   cask "iterm2"                  # Terminal emulator
@@ -203,7 +201,7 @@ if profile == "desktop"
   # AI Desktop Apps (GUI-based)
   cask "claude"                # Anthropic Claude app
   cask "codex-app"             # OpenAI Codex desktop app
-  cask "steipete/tap/codexbar" # Codex menubar app
+  cask "steipete/tap/codexbar", trusted: true # Codex menubar app
 
   # Utilities
   cask "hammerspoon"           # Desktop automation
@@ -213,7 +211,7 @@ if profile == "desktop"
   cask "aldente"               # Battery management
   cask "imazing"               # iOS device management
   cask "raspberry-pi-imager"   # SD card imaging
-  cask "steipete/tap/trimmy"   # Clipboard cleaner for terminal snippets
+  cask "steipete/tap/trimmy", trusted: true # Clipboard cleaner for terminal snippets
   cask "upscayl"               # AI image upscaling
   cask "monitorcontrol"        # External monitor brightness/volume control
 
