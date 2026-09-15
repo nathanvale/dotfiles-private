@@ -5,7 +5,7 @@ import { declaredStation, STATION_IDS, stationIdOf, stationIdOfRow } from "../..
 import { type Handoff, STATIONS } from "../../src/command-contract.ts"
 import { BRANCH_STATIONS, type CatalogueDeclaration, type CatalogueObservation, type PublicStation, validateCatalogue } from "../../src/station-catalogue.ts"
 import { defineStationRows } from "../../src/station-rows.ts"
-import { createRoot, envelopeOf, linkOutside, linkStateFile, readOnlyJournal, removeRoot, type Root, runCli, type Variant } from "../helpers/harness.ts"
+import { APPLY_EVENT_PAYLOAD, createRoot, envelopeOf, fillJournal, frameLine, linkOutside, linkStateFile, readOnlyJournal, removeRoot, type Root, runCli, type Variant } from "../helpers/harness.ts"
 import { expectedStation } from "./expected-station-semantics.ts"
 
 // Independent oracle (CDS-PE-4; brief 12, section 5): EXPECTED_STATIONS is restated from the fixture's station_catalog,
@@ -36,11 +36,15 @@ const EXPECTED_STATIONS = new Map<string, Signature>()
 const HANDOFF_CAUSES = new Set([
 	"DOMAIN_AUTHORITY_REQUIRED",
 	"DOMAIN_RECOVERY_HANDOFF_REQUIRED",
+	"DOMAIN_RECOVERY_PARTIAL_HANDOFF",
+	"DOMAIN_PRIOR_RUN_PENDING",
+	"DOMAIN_JOURNAL_LOCK_HELD",
 	"INTERNAL_EFFECT_OUTCOME_UNKNOWN",
 	"INTERNAL_EFFECT_NOT_OBSERVED",
 	"INTERNAL_UNEXPECTED",
 	"INTERNAL_RESULT_UNCHANGED",
 	"INTERNAL_RESULT_COMPLETED",
+	"INTERNAL_RESULT_PARTIAL",
 	"INTERNAL_RESULT_UNKNOWN",
 ])
 const FAILURE_CLASS_BY_CAUSE: Readonly<Record<string, Exclude<FailureClass, null>>> = {
@@ -50,6 +54,10 @@ const FAILURE_CLASS_BY_CAUSE: Readonly<Record<string, Exclude<FailureClass, null
 	DOMAIN_PRECONDITION_UNMET: "domain",
 	DOMAIN_AUTHORITY_REQUIRED: "domain",
 	DOMAIN_RECOVERY_HANDOFF_REQUIRED: "domain",
+	DOMAIN_RECOVERY_PARTIAL_HANDOFF: "domain",
+	DOMAIN_PRIOR_RUN_PENDING: "domain",
+	DOMAIN_JOURNAL_LOCK_HELD: "domain",
+	DOMAIN_JOURNAL_LIMIT_REACHED: "domain",
 	TRANSIENT_NOT_STARTED: "transient",
 	INTERNAL_PREPARATION: "internal",
 	INTERNAL_EFFECT_OUTCOME_UNKNOWN: "internal",
@@ -57,6 +65,7 @@ const FAILURE_CLASS_BY_CAUSE: Readonly<Record<string, Exclude<FailureClass, null
 	INTERNAL_UNEXPECTED: "internal",
 	INTERNAL_RESULT_UNCHANGED: "internal",
 	INTERNAL_RESULT_COMPLETED: "internal",
+	INTERNAL_RESULT_PARTIAL: "internal",
 	INTERNAL_RESULT_UNKNOWN: "internal",
 }
 const READ_ONLY: Identity[] = ["dispatch", "help", "discovery", "command-discovery", "status", "inspect", "inspect-diagnostics"]
@@ -158,11 +167,22 @@ usage("command-discovery", "USAGE_UNKNOWN_COMMAND")
 usage("command-discovery", "USAGE_INVALID_INVOCATION")
 fallback("command-discovery", "failed", "INTERNAL_RESULT_UNCHANGED", "unchanged")
 fallback("command-discovery", "refused", "INTERNAL_PREPARATION", "unchanged")
+// O1 Candidate A (ticket freeze 2026-09-15): the journal scan bound and an unresolved prior run refuse every writer
+// identity (domain, exit 3, unchanged; limit is a next action, prior run a handoff); recover's known partial completion
+// is failed/partially-completed exit 3 with a handoff; its D6-c fallback is INTERNAL_RESULT_PARTIAL.
+const WRITERS: Identity[] = ["preview", "apply", "repair", "repair-retry"]
+for (const identity of WRITERS) {
+	domain(identity, "DOMAIN_JOURNAL_LIMIT_REACHED", null)
+	domain(identity, "DOMAIN_PRIOR_RUN_PENDING", null)
+	domain(identity, "DOMAIN_JOURNAL_LOCK_HELD", null)
+}
+declare("recover", "failed", "DOMAIN_RECOVERY_PARTIAL_HANDOFF", { transactionState: "partially-completed", retryable: false, delay: null, exit: 3, label: "repair-lab.partial-handoff" })
+fallback("recover", "failed", "INTERNAL_RESULT_PARTIAL", "partially-completed")
 
 // Binding table: (tuple, argv, variant, fault, setup, before) with the expected transaction state and guidance per scenario.
 // B1 (accepted C0 template rule): one next action per derived identity, so the preview-id, repairable-precondition and
 // preview-missing scenarios now expect the conservative read-only inspect route instead of scenario-specific text.
-type Setup = "read-only-journal" | "missing-resource" | "malformed-resource" | "unreadable-resource" | "invalid-resource" | "link" | "link-resource"
+type Setup = "read-only-journal" | "missing-resource" | "malformed-resource" | "unreadable-resource" | "invalid-resource" | "link" | "link-resource" | "corrupt-journal" | "journal-over-bound" | "journal-lock"
 interface Binding {
 	tuple: string
 	argv: string[]
@@ -309,6 +329,15 @@ const BINDINGS: Binding[] = [
 	un(id("command-discovery", "refused", "USAGE_INVALID_INVOCATION"), [...DISCOVER_COMMAND, "--no-such-option"], "healthy", { nextAction: HELP }),
 	un(id("command-discovery", "failed", "INTERNAL_RESULT_UNCHANGED"), DISCOVER_COMMAND, "healthy", { fault: CYCLE }),
 	un(id("command-discovery", "refused", "INTERNAL_PREPARATION"), [...DISCOVER_COMMAND, "--no-such-option"], "healthy", { fault: CYCLE }),
+	// O1 Candidate A: a journal over the 10,000,000-byte scan bound and an unresolved consumed plan refuse every writer;
+	// a corrupt terminated frame reaches the existing schema tuple on every routed identity; known partial completion
+	// and its egress fallback reach recover's two new stations.
+	...WRITERS.map((identity) => un(id(identity, "refused", "DOMAIN_JOURNAL_LIMIT_REACHED"), ROUTE_ARGV[identity], identity === "apply" ? "healthy-with-fresh-preview" : identity === "preview" ? "healthy" : "derived-index-missing-with-fresh-preview", { setup: "journal-over-bound" })),
+	...WRITERS.map((identity) => b(id(identity, "refused", "DOMAIN_JOURNAL_LOCK_HELD"), ROUTE_ARGV[identity], "healthy-with-fresh-preview", { setup: "journal-lock", transactionState: "unchanged", guidance: "handoff" })),
+	...WRITERS.map((identity) => b(id(identity, "refused", "DOMAIN_PRIOR_RUN_PENDING"), ROUTE_ARGV[identity], "partial-after-halt", { transactionState: "unchanged", guidance: "handoff" })),
+	...ROUTED.map((identity) => un(id(identity, "refused", "SCHEMA_INVALID_INPUT"), ROUTE_ARGV[identity], identity === "apply" ? "healthy-with-fresh-preview" : identity === "repair" || identity === "repair-retry" ? "derived-index-missing-with-fresh-preview" : "healthy", { setup: "corrupt-journal" })),
+	b(id("recover", "failed", "DOMAIN_RECOVERY_PARTIAL_HANDOFF"), ["recover"], "partial-after-halt", { transactionState: "partially-completed", guidance: "handoff" }),
+	b(id("recover", "failed", "INTERNAL_RESULT_PARTIAL"), ["recover"], "partial-after-halt", { fault: CYCLE, transactionState: "partially-completed", guidance: "handoff" }),
 ]
 
 function applySetup(root: Root, setup: Setup | undefined): void {
@@ -336,6 +365,18 @@ function applySetup(root: Root, setup: Setup | undefined): void {
 			return
 		case "link-resource":
 			linkStateFile(root, "resource.json", readFileSync(resource, "utf8"))
+			return
+		case "corrupt-journal": {
+			// One LF-terminated frame whose payloadBytes disagrees with its payload by one byte.
+			const frame = JSON.parse(frameLine(APPLY_EVENT_PAYLOAD)) as { payloadBytes: number }
+			writeFileSync(join(root.root, "state", "journal.jsonl"), `${JSON.stringify({ ...frame, payloadBytes: frame.payloadBytes + 1 })}\n`)
+			return
+		}
+		case "journal-lock":
+			writeFileSync(join(root.root, "state", "journal.lock"), "foreign-lock\n")
+			return
+		case "journal-over-bound":
+			fillJournal(root, 10_000_001)
 			return
 	}
 }
@@ -444,7 +485,7 @@ describe("station catalogue", () => {
 		}
 	})
 	test("every bound scenario reaches its tuple through a real child process with the expected transaction, retry and recovery fields", async () => {
-		expect(BINDINGS).toHaveLength(156)
+		expect(BINDINGS).toHaveLength(178)
 		for (const binding of BINDINGS) {
 			const observation = await observe(binding)
 			const signature = signatureFor(binding)
@@ -454,7 +495,7 @@ describe("station catalogue", () => {
 		}
 	}, 120_000)
 	test("three-way set equality: declared, expected and observed tuples coincide (STATION_UNREACHED / STATION_UNDECLARED)", () => {
-		expect(observations).toHaveLength(156)
+		expect(observations).toHaveLength(178)
 		const observed = new Set(observations.map((observation) => observation.tuple))
 		const boundTuples = new Set(BINDINGS.map((binding) => binding.tuple))
 		const declared = new Set(STATION_IDS)
@@ -470,7 +511,7 @@ describe("station catalogue", () => {
 	// action or handoff object plus repair action must equal its PublicStation template after only the admitted
 	// substitutions, and must equal the independent B1 oracle, so a wrong catalogue agreeing with wrong output cannot pass.
 	test("every observed station's emitted guidance and repair action equal its expanded PublicStation template and the independent oracle", () => {
-		expect(observations).toHaveLength(156)
+		expect(observations).toHaveLength(178)
 		const declared = new Map(BRANCH_STATIONS.map((declaration) => [declaration.identity, declaration]))
 		const observed: CatalogueObservation[] = []
 		for (const observation of observations) {

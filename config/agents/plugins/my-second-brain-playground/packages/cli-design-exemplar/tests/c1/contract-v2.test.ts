@@ -5,7 +5,7 @@ import { emitMachine } from "../../src/cli.ts"
 import type { ExecutionFacts } from "../../src/model.ts"
 import { createRoot, readState, removeRoot, runCli } from "../helpers/harness.ts"
 
-const facts: ExecutionFacts = { commandIdentity: "repair-lab.status", runIdentity: "run-c1", domainOutcome: "success", effectClass: "inspect", transactionState: "unchanged", completedEffectIds: [], remainingEffectIds: [], stationLabel: "c1", guidance: { kind: "next-action", target: "repair-lab inspect" } }
+const facts: ExecutionFacts = { commandIdentity: "repair-lab.status", runIdentity: "run-c1", domainOutcome: "success", effectClass: "inspect", transactionState: "unchanged", completedEffectIds: [], remainingEffectIds: [], inventoryComplete: true, stationLabel: "c1", guidance: { kind: "next-action", target: "repair-lab inspect" } }
 const valid = { envelopeVersion: 2, contractVersion: "2.0.0", message: "Status read", availablePaths: ["repair-lab.inspect"], result: { runId: "run-c1", commandIdentity: "repair-lab.status", outcome: "success", effectClass: "inspect", transactionState: "unchanged", causeCode: "SUCCESS_UNCHANGED", failureClass: null, exitCode: 0, data: { status: "healthy" }, retryable: false, repairAction: null, effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true }, nextAction: "repair-lab inspect" } }
 
 describe("C1 successor writer", () => {

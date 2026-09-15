@@ -55,3 +55,17 @@ declare const wire: WireResult
 // @ts-expect-error arbitrary wire values do not widen into a correlated domain result
 const reverse: ContractResult = wire
 void [n1, n2, n3, n4, n5, n6, n7, n8, n9, m1, m2, m3, r1, r2, r3, r4, reverse]
+
+// O1 Candidate A (ticket freeze 2026-09-15): the three accepted causes on their exact typed rows, and the arm or state
+// they cannot take. Literal specimens restated from the freeze, never from CAUSE_RULES.
+const limitReached: ContractResult = { runId: "run", commandIdentity: "repair-lab.apply", outcome: "refused", effectClass: "repository-local", transactionState: "unchanged", causeCode: "DOMAIN_JOURNAL_LIMIT_REACHED", failureClass: "domain", exitCode: 3, data: null, retryable: false, repairAction: "archive", effects, nextAction: "repair-lab inspect" }
+const priorRunPending: ContractResult = { runId: "run", commandIdentity: "repair-lab.preview", outcome: "refused", effectClass: "repository-local", transactionState: "unchanged", causeCode: "DOMAIN_PRIOR_RUN_PENDING", failureClass: "domain", exitCode: 3, data: null, retryable: false, repairAction: "recover", effects, handoff }
+const partialHandoff: ContractResult = { runId: "run", commandIdentity: "repair-lab.recover", outcome: "failed", effectClass: "repository-local", transactionState: "partially-completed", causeCode: "DOMAIN_RECOVERY_PARTIAL_HANDOFF", failureClass: "domain", exitCode: 3, data: null, retryable: false, repairAction: "inspect", effects: { completed: ["effect.one"], remaining: ["effect.two"], uncertain: [], inventoryComplete: true }, handoff }
+void [limitReached, priorRunPending, partialHandoff]
+// @ts-expect-error P1 a journal limit refusal is a next action, never a handoff
+const p1: ContractResult = { runId: "run", commandIdentity: "repair-lab.apply", outcome: "refused", effectClass: "repository-local", transactionState: "unchanged", causeCode: "DOMAIN_JOURNAL_LIMIT_REACHED", failureClass: "domain", exitCode: 3, data: null, retryable: false, repairAction: "archive", effects, handoff }
+// @ts-expect-error P2 a prior-run refusal is a handoff, never a next action
+const p2: ContractResult = { runId: "run", commandIdentity: "repair-lab.preview", outcome: "refused", effectClass: "repository-local", transactionState: "unchanged", causeCode: "DOMAIN_PRIOR_RUN_PENDING", failureClass: "domain", exitCode: 3, data: null, retryable: false, repairAction: "recover", effects, nextAction: "repair-lab inspect" }
+// @ts-expect-error P3 a partial recovery handoff cannot claim unknown state
+const p3: ContractResult = { runId: "run", commandIdentity: "repair-lab.recover", outcome: "failed", effectClass: "repository-local", transactionState: "unknown", causeCode: "DOMAIN_RECOVERY_PARTIAL_HANDOFF", failureClass: "domain", exitCode: 3, data: null, retryable: false, repairAction: "inspect", effects: { completed: [], remaining: [], uncertain: ["effect.one"], inventoryComplete: true }, handoff }
+void [p1, p2, p3]

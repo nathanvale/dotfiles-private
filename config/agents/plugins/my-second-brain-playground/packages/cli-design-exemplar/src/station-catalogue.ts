@@ -49,6 +49,10 @@ const RETRY_ACTION = `retry the same command after ${RETRY_DELAY_MS} ms`
 const FALLBACK_ACTION = "Inspect trusted effect evidence before continuing."
 const RECOVER_ACTION = "run repair-lab recover; do not retry automatically"
 const USAGE_ACTION = `Correct the command arguments or run ${HELP_PATH}`
+// O1 Candidate B lock refusal wording: the engine's envelope message and human line read these same two strings, so the
+// exception carries only its cause identity and no second copy of the wording exists.
+export const JOURNAL_LOCK_HELD_REASON = "state/journal.lock already exists; inspect its owner and resource state before manual removal"
+export const JOURNAL_LOCK_HELD_REPAIR_ACTION = "Inspect state/journal.lock and resource state; remove the lock manually only after confirming its owner is stopped. Do not retry automatically."
 const next = (nextAction: string, repairAction: string | null): WireGuidance => ({ guidance: { nextAction }, repairAction })
 const handoff = (reason: string, repairAction: string): WireGuidance => ({ guidance: { handoff: { owner: "operator", reason, inspect: [INSPECT_ACTION] } }, repairAction })
 // Total over the cause owner so an unhandled cause is a compiler error; unreachable causes restate the C0 table.
@@ -77,6 +81,12 @@ const GUIDANCE_BY_CAUSE: Readonly<Record<WireCauseCode, WireGuidance>> = {
 	INTERNAL_EFFECT_OUTCOME_UNKNOWN: handoff("a durable write was attempted and its outcome is not established", RECOVER_ACTION),
 	INTERNAL_EFFECT_NOT_OBSERVED: handoff("an effect returned without an observable change", RECOVER_ACTION),
 	INTERNAL_UNEXPECTED: handoff("unexpected internal error", "inspect; report the diagnostics file"),
+	// O1 Candidate A (ticket freeze 2026-09-15): the journal is never rotated or pruned automatically; an unresolved prior
+	// run and a known partial completion both hand off to the operator through the read-only inspect route.
+	DOMAIN_JOURNAL_LIMIT_REACHED: next(INSPECT_ACTION, "Inspect, then archive the journal manually; nothing is rotated or pruned automatically"),
+	DOMAIN_JOURNAL_LOCK_HELD: handoff(JOURNAL_LOCK_HELD_REASON, JOURNAL_LOCK_HELD_REPAIR_ACTION),
+	DOMAIN_PRIOR_RUN_PENDING: handoff("a prior run's consumed plan has unresolved effects; recover before previewing or applying again", RECOVER_ACTION),
+	DOMAIN_RECOVERY_PARTIAL_HANDOFF: handoff("handoff required: a known subset of effects completed and the remaining effects are known not applied; no safe automatic action is available", "Inspect the known partial effects before separately authorized recovery"),
 }
 // Command-specific meanings: the inspect route's success leads to a preview; a mutating route's precondition refusal
 // (stale, consumed or missing preview, unreadable input) is repaired by inspecting and previewing again.

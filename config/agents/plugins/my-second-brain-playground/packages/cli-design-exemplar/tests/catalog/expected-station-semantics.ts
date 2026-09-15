@@ -13,7 +13,7 @@ export type Tuple = readonly [commandIdentity: PublicStation["commandIdentity"],
 // Read-only identities carry the inspect stance; every other identity is repository-local (brief 12, section 3.4).
 const READ_ONLY = new Set<string>(["repair-lab.dispatch", "repair-lab.help", "repair-lab.discovery", "repair-lab.command-discovery", "repair-lab.status", "repair-lab.inspect", "repair-lab.inspect-diagnostics"])
 // Causes whose accepted guidance arm is a handoff (C0 cause table plus the exemplar's admitted domain causes).
-const HANDOFF_CAUSES = new Set<string>(["DOMAIN_AUTHORITY_REQUIRED", "DOMAIN_RECOVERY_HANDOFF_REQUIRED", "INTERNAL_EFFECT_OUTCOME_UNKNOWN", "INTERNAL_EFFECT_NOT_OBSERVED", "INTERNAL_UNEXPECTED", "INTERNAL_RESULT_UNCHANGED", "INTERNAL_RESULT_COMPLETED", "INTERNAL_RESULT_UNKNOWN"])
+const HANDOFF_CAUSES = new Set<string>(["DOMAIN_AUTHORITY_REQUIRED", "DOMAIN_RECOVERY_HANDOFF_REQUIRED", "DOMAIN_RECOVERY_PARTIAL_HANDOFF", "DOMAIN_PRIOR_RUN_PENDING", "DOMAIN_JOURNAL_LOCK_HELD", "INTERNAL_EFFECT_OUTCOME_UNKNOWN", "INTERNAL_EFFECT_NOT_OBSERVED", "INTERNAL_UNEXPECTED", "INTERNAL_RESULT_UNCHANGED", "INTERNAL_RESULT_COMPLETED", "INTERNAL_RESULT_PARTIAL", "INTERNAL_RESULT_UNKNOWN"])
 const FAILURE_BY_CAUSE: Readonly<Record<string, FailureClass>> = {
 	USAGE_INVALID_INVOCATION: "usage",
 	USAGE_UNKNOWN_COMMAND: "usage",
@@ -21,6 +21,10 @@ const FAILURE_BY_CAUSE: Readonly<Record<string, FailureClass>> = {
 	DOMAIN_PRECONDITION_UNMET: "domain",
 	DOMAIN_AUTHORITY_REQUIRED: "domain",
 	DOMAIN_RECOVERY_HANDOFF_REQUIRED: "domain",
+	DOMAIN_RECOVERY_PARTIAL_HANDOFF: "domain",
+	DOMAIN_JOURNAL_LOCK_HELD: "domain",
+	DOMAIN_PRIOR_RUN_PENDING: "domain",
+	DOMAIN_JOURNAL_LIMIT_REACHED: "domain",
 	TRANSIENT_NOT_STARTED: "transient",
 	INTERNAL_PREPARATION: "internal",
 	INTERNAL_EFFECT_OUTCOME_UNKNOWN: "internal",
@@ -28,6 +32,7 @@ const FAILURE_BY_CAUSE: Readonly<Record<string, FailureClass>> = {
 	INTERNAL_UNEXPECTED: "internal",
 	INTERNAL_RESULT_UNCHANGED: "internal",
 	INTERNAL_RESULT_COMPLETED: "internal",
+	INTERNAL_RESULT_PARTIAL: "internal",
 	INTERNAL_RESULT_UNKNOWN: "internal",
 }
 const EXIT_BY_CLASS = { usage: 2, domain: 3, schema: 4, transient: 75, internal: 1 } as const
@@ -42,7 +47,9 @@ const FIXTURE_LABELS: Readonly<Record<string, string>> = {
 	'["repair-lab.inspect-diagnostics","success","SUCCESS_UNCHANGED"]': "repair-lab.secret-marker",
 }
 
-// The complete expected tuple inventory: 86 historical stations plus the five B1 command-discovery stations.
+// The complete expected tuple inventory: 86 historical stations, the five B1 command-discovery stations and the ten O1
+// Candidate A stations (ticket freeze 2026-09-15): the three accepted causes on their reachable identities plus the
+// D6-c partial fallback that the partially-completed recover facts make reachable.
 const EXPECTED_TUPLES = [
 	["repair-lab.status", "success", "SUCCESS_UNCHANGED"],
 	["repair-lab.inspect", "success", "SUCCESS_UNCHANGED"],
@@ -136,8 +143,24 @@ const EXPECTED_TUPLES = [
 	["repair-lab.command-discovery", "refused", "USAGE_INVALID_INVOCATION"],
 	["repair-lab.command-discovery", "failed", "INTERNAL_RESULT_UNCHANGED"],
 	["repair-lab.command-discovery", "refused", "INTERNAL_PREPARATION"],
+	// O1 Candidate A (ticket freeze 2026-09-15): journal scan bound and unresolved prior run on every writer identity,
+	// known partial completion on recover, and the D6-c partial fallback of recover's new partially-completed facts.
+	["repair-lab.preview", "refused", "DOMAIN_JOURNAL_LIMIT_REACHED"],
+	["repair-lab.apply", "refused", "DOMAIN_JOURNAL_LIMIT_REACHED"],
+	["repair-lab.repair", "refused", "DOMAIN_JOURNAL_LIMIT_REACHED"],
+	["repair-lab.repair-retry", "refused", "DOMAIN_JOURNAL_LIMIT_REACHED"],
+	["repair-lab.preview", "refused", "DOMAIN_PRIOR_RUN_PENDING"],
+	["repair-lab.apply", "refused", "DOMAIN_PRIOR_RUN_PENDING"],
+	["repair-lab.repair", "refused", "DOMAIN_PRIOR_RUN_PENDING"],
+	["repair-lab.repair-retry", "refused", "DOMAIN_PRIOR_RUN_PENDING"],
+	["repair-lab.recover", "failed", "DOMAIN_RECOVERY_PARTIAL_HANDOFF"],
+	["repair-lab.recover", "failed", "INTERNAL_RESULT_PARTIAL"],
+	["repair-lab.preview", "refused", "DOMAIN_JOURNAL_LOCK_HELD"],
+	["repair-lab.apply", "refused", "DOMAIN_JOURNAL_LOCK_HELD"],
+	["repair-lab.repair", "refused", "DOMAIN_JOURNAL_LOCK_HELD"],
+	["repair-lab.repair-retry", "refused", "DOMAIN_JOURNAL_LOCK_HELD"],
 ] as const satisfies readonly Tuple[]
-export const EXPECTED_STATION_COUNT = 91
+export const EXPECTED_STATION_COUNT = 105
 
 // Expected wire guidance (accepted C0 template rule; TC-D6 one meaning per derived identity). Each string below is
 // the literal next action, handoff reason or repair action the CLI must emit and discovery must publish for that
@@ -162,7 +185,13 @@ const EXPECTED_GUIDANCE_BY_CAUSE: Readonly<Record<string, ExpectedGuidance>> = {
 	INTERNAL_RESULT_UNCHANGED: { handoffReason: FALLBACK, repairAction: FALLBACK },
 	INTERNAL_RESULT_COMPLETED: { handoffReason: FALLBACK, repairAction: FALLBACK },
 	INTERNAL_RESULT_UNKNOWN: { handoffReason: FALLBACK, repairAction: FALLBACK },
+	INTERNAL_RESULT_PARTIAL: { handoffReason: FALLBACK, repairAction: FALLBACK },
 	DOMAIN_RECOVERY_HANDOFF_REQUIRED: { handoffReason: "handoff required: the remaining effect outcome is unknown; no safe automatic action is available", repairAction: "Inspect the failure before continuing." },
+	// O1 Candidate A (ticket freeze 2026-09-15): the three accepted causes' literal guidance.
+	DOMAIN_RECOVERY_PARTIAL_HANDOFF: { handoffReason: "handoff required: a known subset of effects completed and the remaining effects are known not applied; no safe automatic action is available", repairAction: "Inspect the known partial effects before separately authorized recovery" },
+	DOMAIN_JOURNAL_LOCK_HELD: { handoffReason: "state/journal.lock already exists; inspect its owner and resource state before manual removal", repairAction: "Inspect state/journal.lock and resource state; remove the lock manually only after confirming its owner is stopped. Do not retry automatically." },
+	DOMAIN_PRIOR_RUN_PENDING: { handoffReason: "a prior run's consumed plan has unresolved effects; recover before previewing or applying again", repairAction: RECOVER },
+	DOMAIN_JOURNAL_LIMIT_REACHED: { nextAction: EXPECTED_INSPECT, repairAction: "Inspect, then archive the journal manually; nothing is rotated or pruned automatically" },
 	INTERNAL_EFFECT_OUTCOME_UNKNOWN: { handoffReason: "a durable write was attempted and its outcome is not established", repairAction: RECOVER },
 	INTERNAL_EFFECT_NOT_OBSERVED: { handoffReason: "an effect returned without an observable change", repairAction: RECOVER },
 	INTERNAL_UNEXPECTED: { handoffReason: "unexpected internal error", repairAction: "inspect; report the diagnostics file" },
@@ -185,6 +214,7 @@ export const identityOf = (tuple: Tuple): string => JSON.stringify(tuple)
 function transactionStateOf(outcome: Outcome, causeCode: string): WireTransactionState {
 	if (outcome === "success") return causeCode === "SUCCESS_COMPLETED" ? "completed" : "unchanged"
 	if (causeCode === "INTERNAL_RESULT_COMPLETED") return "completed"
+	if (causeCode === "INTERNAL_RESULT_PARTIAL" || causeCode === "DOMAIN_RECOVERY_PARTIAL_HANDOFF") return "partially-completed"
 	if (causeCode === "DOMAIN_RECOVERY_HANDOFF_REQUIRED" || causeCode === "INTERNAL_EFFECT_OUTCOME_UNKNOWN" || causeCode === "INTERNAL_EFFECT_NOT_OBSERVED" || causeCode === "INTERNAL_RESULT_UNKNOWN") return "unknown"
 	return "unchanged"
 }

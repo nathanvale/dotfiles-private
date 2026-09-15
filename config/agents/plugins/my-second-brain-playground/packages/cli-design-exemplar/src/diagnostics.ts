@@ -47,7 +47,7 @@ class BoundedQueue {
 
 	log(record: LogRecord): void {
 		if (this.failure !== null) {
-			this.unflushed += 1
+			this.dropped += 1
 			return
 		}
 		if (this.queue.length >= QUEUE_CAP) {

@@ -5,7 +5,7 @@ import type { ExecutionFacts } from "../../src/model.ts"
 import { parseFaults } from "../../src/runtime.ts"
 import { EXPECTED_COMMAND_IDENTITIES as IDENTITIES } from "../helpers/command-identity-oracle.ts"
 const STATION_IDENTITIES = IDENTITIES
-function facts(overrides: Partial<ExecutionFacts>): ExecutionFacts { return { commandIdentity: "repair-lab.apply", runIdentity: "run-test", domainOutcome: "success", effectClass: "repository-local", transactionState: "completed", completedEffectIds: ["effect.update-index", "effect.write-journal"], remainingEffectIds: [], stationLabel: "repair-lab.authorized-apply", guidance: { kind: "next-action", target: "repair-lab inspect" }, ...overrides } }
+function facts(overrides: Partial<ExecutionFacts>): ExecutionFacts { return { commandIdentity: "repair-lab.apply", runIdentity: "run-test", domainOutcome: "success", effectClass: "repository-local", transactionState: "completed", completedEffectIds: ["effect.update-index", "effect.write-journal"], remainingEffectIds: [], inventoryComplete: true, stationLabel: "repair-lab.authorized-apply", guidance: { kind: "next-action", target: "repair-lab inspect" }, ...overrides } }
 function valid(): Record<string, unknown> { return { envelopeVersion: 2, contractVersion: "2.0.0", message: "ok", availablePaths: ["repair-lab.help", "repair-lab.status"], result: { runId: "run-x", commandIdentity: "repair-lab.status", outcome: "success", failureClass: null, causeCode: "SUCCESS_UNCHANGED", effectClass: "inspect", transactionState: "unchanged", retryable: false, nextAction: "repair-lab inspect", repairAction: null, data: { a: 1 }, effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true }, exitCode: 0 } } }
 
 describe("discovery and exit map", () => {
@@ -29,6 +29,28 @@ describe("MachineEnvelopeSchema", () => {
 		expect(MachineEnvelopeSchema.safeParse({ ...valid(), result: { ...(valid().result as Record<string, unknown>), commandIdentity: "repair-lab.future" } }).success).toBe(false)
 		expect(MachineEnvelopeSchema.safeParse({ ...valid(), result: { ...(valid().result as Record<string, unknown>), outcome: "refused", failureClass: "usage", causeCode: "USAGE_FUTURE", exitCode: 2, data: null, repairAction: "repair" } }).success).toBe(false)
 		for (const commandIdentity of IDENTITIES) expect(MachineEnvelopeSchema.safeParse({ ...valid(), result: { ...(valid().result as Record<string, unknown>), commandIdentity } }).success).toBe(true)
+	})
+	// O1 Candidate A (ticket freeze 2026-09-15): each accepted cause validates on exactly its one allowed row and on no
+	// other arm, state or class. The rows below are literal restatements of the freeze, not of CAUSE_RULES.
+	test("admits the O1 causes only on their exact rows", () => {
+		const base = valid().result as Record<string, unknown>
+		const refused = (causeCode: string, guidance: Record<string, unknown>) => ({ ...base, commandIdentity: "repair-lab.apply", outcome: "refused", effectClass: "repository-local", transactionState: "unchanged", causeCode, failureClass: "domain", exitCode: 3, data: null, repairAction: "repair", nextAction: undefined, ...guidance })
+		const handoff = { handoff: { owner: "operator", reason: "r", inspect: ["repair-lab inspect"] } }
+		const next = { nextAction: "repair-lab inspect" }
+		const parse = (result: Record<string, unknown>): boolean => MachineEnvelopeSchema.safeParse({ ...valid(), result: JSON.parse(JSON.stringify(result)) }).success
+		expect(parse(refused("DOMAIN_JOURNAL_LIMIT_REACHED", next))).toBe(true)
+		expect(parse(refused("DOMAIN_JOURNAL_LIMIT_REACHED", handoff))).toBe(false)
+		expect(parse(refused("DOMAIN_PRIOR_RUN_PENDING", handoff))).toBe(true)
+		expect(parse(refused("DOMAIN_PRIOR_RUN_PENDING", next))).toBe(false)
+		expect(parse({ ...refused("DOMAIN_PRIOR_RUN_PENDING", handoff), exitCode: 1, failureClass: "internal" })).toBe(false)
+		const partial = { ...base, commandIdentity: "repair-lab.recover", outcome: "failed", effectClass: "repository-local", transactionState: "partially-completed", causeCode: "DOMAIN_RECOVERY_PARTIAL_HANDOFF", failureClass: "domain", exitCode: 3, data: null, repairAction: "inspect", effects: { completed: ["effect.update-index"], remaining: ["effect.write-journal"], uncertain: [], inventoryComplete: true }, nextAction: undefined, ...handoff }
+		expect(parse(partial)).toBe(true)
+		expect(parse({ ...partial, transactionState: "unknown", effects: { completed: [], remaining: [], uncertain: ["effect.update-index"], inventoryComplete: true } })).toBe(false)
+		expect(parse({ ...partial, handoff: undefined, nextAction: "repair-lab inspect" })).toBe(false)
+		expect(parse({ ...partial, effects: { completed: ["effect.update-index"], remaining: [], uncertain: [], inventoryComplete: true } })).toBe(false)
+		expect(CAUSE.DOMAIN_JOURNAL_LIMIT_REACHED).toBe("domain")
+		expect(CAUSE.DOMAIN_PRIOR_RUN_PENDING).toBe("domain")
+		expect(CAUSE.DOMAIN_RECOVERY_PARTIAL_HANDOFF).toBe("domain")
 	})
 })
 

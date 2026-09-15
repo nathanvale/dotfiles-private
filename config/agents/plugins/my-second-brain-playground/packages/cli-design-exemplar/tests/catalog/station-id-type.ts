@@ -190,6 +190,34 @@ function exhaustivelyNameStation(stationId: CandidateStationId): string {
 			return stationId
 		case '["repair-lab.command-discovery","refused","INTERNAL_PREPARATION"]':
 			return stationId
+		case '["repair-lab.preview","refused","DOMAIN_JOURNAL_LIMIT_REACHED"]':
+			return stationId
+		case '["repair-lab.apply","refused","DOMAIN_JOURNAL_LIMIT_REACHED"]':
+			return stationId
+		case '["repair-lab.repair","refused","DOMAIN_JOURNAL_LIMIT_REACHED"]':
+			return stationId
+		case '["repair-lab.repair-retry","refused","DOMAIN_JOURNAL_LIMIT_REACHED"]':
+			return stationId
+		case '["repair-lab.preview","refused","DOMAIN_PRIOR_RUN_PENDING"]':
+			return stationId
+		case '["repair-lab.apply","refused","DOMAIN_PRIOR_RUN_PENDING"]':
+			return stationId
+		case '["repair-lab.repair","refused","DOMAIN_PRIOR_RUN_PENDING"]':
+			return stationId
+		case '["repair-lab.repair-retry","refused","DOMAIN_PRIOR_RUN_PENDING"]':
+			return stationId
+		case '["repair-lab.recover","failed","DOMAIN_RECOVERY_PARTIAL_HANDOFF"]':
+			return stationId
+		case '["repair-lab.recover","failed","INTERNAL_RESULT_PARTIAL"]':
+			return stationId
+		case '["repair-lab.preview","refused","DOMAIN_JOURNAL_LOCK_HELD"]':
+			return stationId
+		case '["repair-lab.apply","refused","DOMAIN_JOURNAL_LOCK_HELD"]':
+			return stationId
+		case '["repair-lab.repair","refused","DOMAIN_JOURNAL_LOCK_HELD"]':
+			return stationId
+		case '["repair-lab.repair-retry","refused","DOMAIN_JOURNAL_LOCK_HELD"]':
+			return stationId
 		default: {
 			const impossible: never = stationId
 			return impossible
