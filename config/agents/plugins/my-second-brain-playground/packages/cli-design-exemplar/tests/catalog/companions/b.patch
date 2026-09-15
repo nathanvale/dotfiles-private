@@ -1,0 +1,10 @@
+--- a/src/station-rows.ts
++++ b/src/station-rows.ts
+@@ -120,7 +120,6 @@
+ 	["repair-lab.recover", "refused", "DOMAIN_INPUT_MALFORMED", "repository-local", "unchanged", false, null, "next-action", true, 3, "repair-lab.input-malformed"],
+ 	["repair-lab.recover", "refused", "DOMAIN_INPUT_UNREADABLE", "repository-local", "unchanged", false, null, "next-action", true, 3, "repair-lab.input-unreadable"],
+ 	["repair-lab.recover", "refused", "SCHEMA_STATE_INVALID", "repository-local", "unchanged", false, null, "next-action", true, 4, "repair-lab.state-schema-invalid"],
+-	["repair-lab.inspect-diagnostics", "refused", "DOMAIN_PATH_ESCAPE", "inspect", "unchanged", false, null, "next-action", true, 3, "repair-lab.hostile-input"],
+ 	// Admission refusals on the repair identities (F3): authority precedes every preview lookup; the retry plan shares step 8.
+ 	["repair-lab.repair", "refused", "DOMAIN_AUTHORITY_MISSING", "repository-local", "unchanged", false, null, "next-action", true, 3, "repair-lab.prohibited-automation"],
+ 	["repair-lab.repair-retry", "refused", "DOMAIN_AUTHORITY_MISSING", "repository-local", "unchanged", false, null, "next-action", true, 3, "repair-lab.prohibited-automation"],

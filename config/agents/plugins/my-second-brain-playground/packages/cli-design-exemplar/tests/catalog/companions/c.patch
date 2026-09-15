@@ -1,0 +1,11 @@
+--- a/src/branch-station-catalog.ts
++++ b/src/branch-station-catalog.ts
+@@ -51,8 +51,6 @@
+ 			return "INTERNAL_RESULT_COMPLETED"
+ 		case "result-unknown":
+ 			return "INTERNAL_RESULT_UNKNOWN"
+-		case "unknown-unresolved":
+-			return "INTERNAL_RESULT_UNKNOWN"
+ 		default:
+ 			return assertNever(fallbackCase)
+ 	}

@@ -9,6 +9,16 @@
       "name": "cli-design-check",
       "version": "0.0.0",
     },
+    "packages/cli-design-exemplar": {
+      "name": "cli-design-exemplar",
+      "version": "0.0.0",
+      "dependencies": {
+        "@logtape/file": "2.3.1",
+        "@logtape/logtape": "2.3.1",
+        "@logtape/redaction": "2.3.1",
+        "zod": "4.4.3",
+      },
+    },
     "packages/compaction-recovery": {
       "name": "compaction-recovery",
       "version": "0.0.0",
@@ -27,16 +37,22 @@
     },
   },
   "packages": {
+    "@logtape/file": ["@logtape/file@2.3.1", "", { "peerDependencies": { "@logtape/logtape": "^2.3.1" } }, "sha512-jNGW1Ey0m9eFTmMxk5b8xOnX0XGetnCUJVs57BbXA28oAtQ+EDTp2rto2Jql7jM/RZAiDFp8lgovSKeLJnoj9g=="],
+
     "@logtape/logtape": ["@logtape/logtape@2.3.1", "", {}, "sha512-nYLsBWMKk0Llp62U6cDbQxNcEKc0E0s5hWbAxkmUM8ax6VchGkPSjPrVp3ixFQUuvUB9ku7MSgPzFhmVTSh2Jw=="],
 
     "@logtape/redaction": ["@logtape/redaction@2.3.1", "", { "peerDependencies": { "@logtape/logtape": "^2.3.1" } }, "sha512-djd6+dl7QvwW4miYAX9p63gylz8EUKDANH9dlrkU6OzobELiTq7uqB1u5fINMtVsrJIQnukc1FpGx+fcZdeqVQ=="],
 
     "cli-design-check": ["cli-design-check@workspace:packages/cli-design-check"],
 
+    "cli-design-exemplar": ["cli-design-exemplar@workspace:packages/cli-design-exemplar"],
+
     "compaction-recovery": ["compaction-recovery@workspace:packages/compaction-recovery"],
 
     "recovery-observability": ["recovery-observability@workspace:packages/recovery-observability"],
 
     "vault-note-commits": ["vault-note-commits@workspace:packages/vault-note-commits"],
+
+    "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
   }
 }

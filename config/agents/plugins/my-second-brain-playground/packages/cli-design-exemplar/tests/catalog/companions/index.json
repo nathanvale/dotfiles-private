@@ -1,0 +1,7 @@
+{
+	"variants": [
+		{ "id": "a", "patch": "a.patch", "patchSha256": "3afb38b277307d527e47ceebfeb623246b5d62f6ca79795fc23a88c738520722" },
+		{ "id": "b", "patch": "b.patch", "patchSha256": "736b160e60d4e95b49ad9299c756e6ae99661fe9ccc601812360494ed30ce3c8" },
+		{ "id": "c", "patch": "c.patch", "patchSha256": "33c0cd6bb34387be404eb0eedb7b254a78445dfca88ae589e1218307b4a93459" }
+	]
+}

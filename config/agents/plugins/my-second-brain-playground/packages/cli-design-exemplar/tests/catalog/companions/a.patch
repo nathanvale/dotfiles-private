@@ -1,0 +1,20 @@
+--- a/src/station-rows.ts
++++ b/src/station-rows.ts
+@@ -97,6 +97,7 @@
+ 	["repair-lab.status", "refused", "DOMAIN_INPUT_MALFORMED", "inspect", "unchanged", false, null, "next-action", true, 3, "repair-lab.input-malformed"],
+ 	["repair-lab.status", "refused", "DOMAIN_INPUT_UNREADABLE", "inspect", "unchanged", false, null, "next-action", true, 3, "repair-lab.input-unreadable"],
+ 	["repair-lab.status", "refused", "SCHEMA_STATE_INVALID", "inspect", "unchanged", false, null, "next-action", true, 4, "repair-lab.state-schema-invalid"],
++	["repair-lab.status", "refused", "DOMAIN_PREVIEW_STALE", "inspect", "unchanged", false, null, "next-action", true, 3, "repair-lab.stale-preview"],
+ 	["repair-lab.inspect-diagnostics", "refused", "DOMAIN_INPUT_MALFORMED", "inspect", "unchanged", false, null, "next-action", true, 3, "repair-lab.input-malformed"],
+ 	["repair-lab.inspect-diagnostics", "refused", "DOMAIN_INPUT_UNREADABLE", "inspect", "unchanged", false, null, "next-action", true, 3, "repair-lab.input-unreadable"],
+ 	["repair-lab.inspect-diagnostics", "refused", "SCHEMA_STATE_INVALID", "inspect", "unchanged", false, null, "next-action", true, 4, "repair-lab.state-schema-invalid"],
+--- a/tests/catalog/station-map.test.ts
++++ b/tests/catalog/station-map.test.ts
+@@ -70,6 +70,7 @@
+ 	domain(identity, "SCHEMA_STATE_INVALID", "repair-lab.state-schema-invalid", true, 4)
+ }
+ domain("inspect-diagnostics", "DOMAIN_PATH_ESCAPE", "repair-lab.hostile-input")
++domain("status", "DOMAIN_PREVIEW_STALE", "repair-lab.stale-preview")
+ const MUTATING: Identity[] = ["apply", "repair", "repair-retry"]
+ for (const identity of MUTATING) {
+ 	domain(identity, "DOMAIN_PREVIEW_MISSING", null)
