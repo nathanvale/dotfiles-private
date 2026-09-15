@@ -216,6 +216,65 @@ pass 'failed-install run points at the native installer'
 refuse_brew 'failed-install run'
 
 # ---------------------------------------------------------------------------
+# First-run verifier: the native install path is usable before shell startup.
+# ---------------------------------------------------------------------------
+#
+# Setup's final verifier is a child process. Keep ~/.local/bin out of its
+# inherited PATH and observe the real verifier against two independent HOME
+# fixtures: one without Claude, and one containing only the native installer
+# output. The first case keeps the warning meaningful; the second proves that
+# the verifier recognizes the canonical executable without mutating PATH.
+verifier_root="$TEST_ROOT/verifier"
+verifier_dotfiles="$verifier_root/dotfiles"
+verifier_without_claude_home="$verifier_root/home-without-claude"
+verifier_with_claude_home="$verifier_root/home-with-claude"
+verifier_with_claude_directory_home="$verifier_root/home-with-claude-directory"
+mkdir -p "$verifier_dotfiles" "$verifier_without_claude_home" \
+  "$verifier_with_claude_home/.local/bin" \
+  "$verifier_with_claude_directory_home/.local/bin/claude"
+cp "$REPO_ROOT/verify_install.sh" "$verifier_dotfiles/verify_install.sh"
+chmod +x "$verifier_dotfiles/verify_install.sh"
+printf '#!/bin/sh\nexit 0\n' \
+  >"$verifier_with_claude_home/.local/bin/claude"
+chmod +x "$verifier_with_claude_home/.local/bin/claude"
+
+run_verifier() {
+  local home="$1"
+  set +e
+  verifier_output="$(env -i HOME="$home" PATH=/usr/bin:/bin DOTFILES_PROFILE=desktop \
+    "$verifier_dotfiles/verify_install.sh" --verbose --machine-summary 2>&1)"
+  verifier_exit=$?
+  set -e
+  verifier_output="$(sed -E $'s/\033\\[[0-9;]*[[:alpha:]]//g' <<<"$verifier_output")"
+}
+
+run_verifier "$verifier_without_claude_home"
+grep -Fq '⚠ Claude Code' <<<"$verifier_output" ||
+  fail 'verifier keeps the Claude warning when no executable is installed'
+pass 'verifier keeps the Claude warning when no executable is installed'
+grep -Fq '⚠ AI rescue marker' <<<"$verifier_output" ||
+  fail 'verifier keeps the rescue-marker warning when Claude is unavailable'
+pass 'verifier keeps the rescue-marker warning when Claude is unavailable'
+
+run_verifier "$verifier_with_claude_home"
+if grep -Fq '⚠ Claude Code' <<<"$verifier_output"; then
+  fail 'verifier does not warn for Claude installed at ~/.local/bin'
+fi
+pass 'verifier accepts Claude installed at ~/.local/bin before shell startup'
+if grep -Fq '⚠ AI rescue marker' <<<"$verifier_output"; then
+  fail 'verifier does not warn about the rescue marker when Claude is available'
+fi
+pass 'verifier suppresses the rescue-marker warning when Claude is available'
+
+run_verifier "$verifier_with_claude_directory_home"
+grep -Fq '⚠ Claude Code' <<<"$verifier_output" ||
+  fail 'verifier rejects an executable directory at ~/.local/bin/claude'
+pass 'verifier rejects an executable directory at ~/.local/bin/claude'
+grep -Fq '⚠ AI rescue marker' <<<"$verifier_output" ||
+  fail 'verifier keeps the rescue-marker warning for a Claude directory placeholder'
+pass 'verifier keeps the rescue-marker warning for a Claude directory placeholder'
+
+# ---------------------------------------------------------------------------
 # Repair guidance text.
 # ---------------------------------------------------------------------------
 #

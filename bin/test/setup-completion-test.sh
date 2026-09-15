@@ -175,6 +175,23 @@ run_setup() {
   set -e
 }
 
+run_setup_relative() {
+  local verify_mode="$1"
+  shift
+  RUN_STDOUT="$TEST_ROOT/stdout"
+  RUN_STDERR="$TEST_ROOT/stderr"
+
+  set +e
+  (
+    cd "$FIXTURE_DOTFILES"
+    env -i HOME="$FIXTURE_HOME" PATH="/usr/bin:/bin" \
+      RECORD_DIR="$RECORD_DIR" VERIFY_MODE="$verify_mode" \
+      ./setup.sh "$@"
+  ) >"$RUN_STDOUT" 2>"$RUN_STDERR"
+  RUN_EXIT=$?
+  set -e
+}
+
 prepare_fixture
 
 # ---------------------------------------------------------------------------
@@ -229,6 +246,18 @@ assert_file_contains "$RUN_STDERR" 'Invalid stored profile' \
   'invalid stored profile names its source'
 assert_equals "$(< "$FIXTURE_HOME/.dotfiles_state/profile")" invalid \
   'invalid stored profile is not overwritten before validation'
+
+# The documented relative invocation is the installed setup process. It must
+# not enter the noninteractive curl-bootstrap branch and pull remote state.
+reset_fixture
+write_verifier pass
+run_setup_relative pass --desktop --start-phase 6
+[[ "$RUN_EXIT" -eq 0 ]] || fail 'relative setup invocation exits zero'
+pass 'relative setup invocation exits zero'
+if grep -Fq 'Pulling latest changes' "$RUN_STDOUT"; then
+  fail 'relative setup invocation does not pull remote state'
+fi
+pass 'relative setup invocation does not pull remote state'
 
 # ---------------------------------------------------------------------------
 # A valid suffix executes, verifies, records its receipt, and clears the
@@ -436,7 +465,7 @@ pass 'linked-worktree activation exits nonzero'
 assert_file_contains "$TEST_ROOT/boundary-stdout" 'linked worktree is blocked' \
   'linked-worktree activation reports the canonical checkout boundary'
 
-expected_assertions=67
+expected_assertions=69
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

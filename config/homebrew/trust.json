@@ -1,10 +1,5 @@
 {
-  "trustedtaps": [
-    "k1low/tap",
-    "ognistik/formulae",
-    "openclaw/tap",
-    "steipete/tap"
-  ],
+  "trustedtaps": [],
   "trustedformulae": [
     "anomalyco/tap/opencode",
     "k1low/tap/mo",
