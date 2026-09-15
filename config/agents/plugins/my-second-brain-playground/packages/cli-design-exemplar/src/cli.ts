@@ -244,28 +244,79 @@ function ordinaryFailureResult(decision: Decision, runId: string): EnvelopeV2 {
 	return envelope(decision.message, result)
 }
 type SinkFailure = Extract<Diagnostics, { status: "available" }>["sinkFailure"]
-function sinkFailureOf(status: DiagnosticsStatus): SinkFailure {
-	if (status.droppedRecords !== null && status.droppedRecords > 0) return "capacity"
-	if (status.sinkFailure?.startsWith("open:") === true || status.sinkFailure?.startsWith("configure:") === true) return "setup"
-	if (status.sinkFailure?.startsWith("dispose:") === true || status.sinkFailure?.startsWith("logtape-dispose:") === true) return "close"
-	if (status.sinkFailure?.startsWith("log:") === true || status.sinkFailure?.startsWith("flush:") === true || status.sinkFailure?.startsWith("meta:") === true) return "write"
-	return null
+function sinkFailureOf(failure: string): SinkFailure | undefined {
+	if (failure.startsWith("timeout:")) return "flush-timeout"
+	if (failure.startsWith("capacity:")) return "capacity"
+	if (failure.startsWith("open:") || failure.startsWith("configure:")) return "setup"
+	if (failure.startsWith("dispose:") || failure.startsWith("logtape-dispose:")) return "close"
+	if (failure.startsWith("log:") || failure.startsWith("flush:") || failure.startsWith("meta:")) return "write"
+	return undefined
 }
-function diagnosticsDisclosure(status: DiagnosticsStatus): Diagnostics {
-	const sinkFailure = sinkFailureOf(status)
-	if (status.droppedRecords !== null && status.unflushedRecords !== null && status.truncatedRecords !== null && status.countsComplete !== null && status.closed !== null) {
-		return { status: "available", file: status.file, sinkFailure, droppedRecords: status.droppedRecords, unflushedRecords: status.unflushedRecords, truncatedRecords: status.truncatedRecords, countsComplete: status.countsComplete, closed: status.closed }
+
+// The accepted diagnostics schema is validated independently. A diagnostics-only defect never reaches egress
+// validation as an invalid combined envelope, and therefore cannot invoke the frozen domain fallback.
+const diagnosticsSchema = MachineEnvelopeSchema.shape.diagnostics.unwrap()
+const diagnosticsFields = diagnosticsSchema.options[0].shape
+interface DiagnosticInspection { trusted: Record<string, unknown>; invalid: boolean; damagedAccounting: boolean; missingCounter: boolean }
+
+function inspectDiagnosticField(status: object, name: string, schema: { safeParse(value: unknown): { success: boolean; data?: unknown } }, inspected: DiagnosticInspection): void {
+	const descriptor = Object.getOwnPropertyDescriptor(status, name)
+	const counter = name.endsWith("Records")
+	const unknown = descriptor === undefined || (descriptor.value === null && name !== "file" && name !== "sinkFailure")
+	if (unknown) { inspected.missingCounter ||= counter; return }
+	const value = name === "sinkFailure" && typeof descriptor.value === "string" ? sinkFailureOf(descriptor.value) : descriptor.value
+	const parsed = schema.safeParse(value)
+	if (parsed.success && "value" in descriptor) { inspected.trusted[name] = parsed.data; return }
+	inspected.invalid = true
+	inspected.damagedAccounting ||= counter || name === "countsComplete"
+}
+
+function inspectDiagnostics(status: object): DiagnosticInspection {
+	const inspected: DiagnosticInspection = { trusted: {}, invalid: Object.keys(status).some((name) => name === "status" || !Object.hasOwn(diagnosticsFields, name)), damagedAccounting: false, missingCounter: false }
+	for (const [name, schema] of Object.entries(diagnosticsFields)) {
+		if (name !== "status") inspectDiagnosticField(status, name, schema, inspected)
 	}
-	const trusted: Extract<Diagnostics, { status: "unavailable" }>["trusted"] = {
-		file: status.file,
-		...(sinkFailure === null ? {} : { sinkFailure }),
-		...(status.droppedRecords === null ? {} : { droppedRecords: status.droppedRecords }),
-		...(status.unflushedRecords === null ? {} : { unflushedRecords: status.unflushedRecords }),
-		...(status.truncatedRecords === null ? {} : { truncatedRecords: status.truncatedRecords }),
-		...(status.countsComplete === null ? {} : { countsComplete: status.countsComplete }),
-		...(status.closed === null ? {} : { closed: status.closed }),
+	if (inspected.missingCounter && inspected.trusted.countsComplete === true) inspected.damagedAccounting = true
+	if (inspected.damagedAccounting) {
+		inspected.invalid = true
+		// Individually valid surviving counters are lower bounds once exact accounting integrity is lost.
+		inspected.trusted.countsComplete = false
 	}
-	return { status: "unavailable", reason: "status-unavailable", trusted }
+	return inspected
+}
+
+// C0 ties timeout to unconfirmed closure and pending admitted records. Loss cannot coexist with a claim of
+// no sink failure. Conflicting fields do not independently establish which side is wrong, so omit both claims.
+function validateDiagnosticInvariants(inspected: DiagnosticInspection): void {
+	const { sinkFailure, closed, unflushedRecords, countsComplete } = inspected.trusted
+	const conflicting = new Set<string>()
+	if (sinkFailure === "flush-timeout" && closed === true) { conflicting.add("sinkFailure"); conflicting.add("closed") }
+	if (sinkFailure === "flush-timeout" && unflushedRecords === 0 && countsComplete === true) { conflicting.add("sinkFailure"); conflicting.add("unflushedRecords") }
+	if (sinkFailure === null) {
+		for (const name of ["droppedRecords", "unflushedRecords"]) {
+			const value = inspected.trusted[name]
+			if (typeof value === "number" && value > 0) { conflicting.add("sinkFailure"); conflicting.add(name) }
+		}
+	}
+	if (conflicting.size === 0) return
+	inspected.invalid = true
+	for (const name of conflicting) {
+		delete inspected.trusted[name]
+		if (name.endsWith("Records")) inspected.trusted.countsComplete = false
+	}
+}
+
+function diagnosticsDisclosure(status: unknown): Diagnostics {
+	const invalid: Diagnostics = { status: "unavailable", reason: "status-invalid", trusted: {} }
+	try {
+		if (typeof status !== "object" || status === null || Array.isArray(status)) return invalid
+		const inspected = inspectDiagnostics(status)
+		validateDiagnosticInvariants(inspected)
+		const available = diagnosticsSchema.safeParse({ status: "available", ...inspected.trusted })
+		if (!inspected.invalid && available.success) return available.data
+		const unavailable = diagnosticsSchema.safeParse({ status: "unavailable", reason: inspected.invalid ? "status-invalid" : "status-unavailable", trusted: inspected.trusted })
+		return unavailable.success ? unavailable.data : invalid
+	} catch { return invalid }
 }
 function decisionEnvelope(decision: Decision, runId: string, diagnostics: DiagnosticsStatus | null): EnvelopeV2 {
 	const ordinaryCause = decision.causeCode === "DOMAIN_RECOVERY_HANDOFF_REQUIRED" || decision.causeCode === "DOMAIN_RECOVERY_PARTIAL_HANDOFF" || decision.causeCode === "INTERNAL_EFFECT_OUTCOME_UNKNOWN" || decision.causeCode === "INTERNAL_EFFECT_NOT_OBSERVED" || decision.causeCode === "INTERNAL_UNEXPECTED"
@@ -463,23 +514,25 @@ function runCommandDiscovery(session: Session, parsed: Parsed): number {
 }
 
 // A routed command: resolve the root, open diagnostics, decide, dispose diagnostics, then render once.
-async function runCommand(session: Session, routed: Routed, route: CommandRoute, parsed: Parsed, faults: Faults, root: string): Promise<number> {
+async function runCommand(session: Session, routed: Routed, route: CommandRoute, parsed: Parsed, faults: Faults, root: string, env: Record<string, string | undefined>): Promise<number> {
 	const request = buildRequest(parsed, route)
 	if (request === null) return usageRefusal(session, routed.identity, "USAGE_INVALID_ARGUMENTS", "resource identities must be nonempty")
 	const diagnosticsFault = faults.domain === "sink-throw" || faults.domain === "sink-dispose-throw" || faults.domain === "diagnostics-flood" ? faults.domain : null
-	const diagnostics = await openRunDiagnostics({ runIdentity: session.runIdentity, command: routed.identity, root, fault: diagnosticsFault })
+	const diagnostics = await openRunDiagnostics({ runIdentity: session.runIdentity, command: routed.identity, env, fault: diagnosticsFault })
 	const runtime = createRuntime(root, faults)
 	const decision = decide(runtime, request, session.runIdentity)
 	decision.events.forEach((event, index) => {
 		if (index === decision.events.length - 1) diagnostics.setStation(decision.stationLabel)
 		diagnostics.log(event, `${decision.commandIdentity}: ${event}`, { sensitive_fields_redacted: event === "inspect.redaction-applied" ? decision.redactedFields : [] })
 	})
+	const frozen = structuredClone(decisionEnvelope(decision, session.runIdentity, null))
+	const facts = structuredClone(factsOf(decision, session.runIdentity))
 	const status = await diagnostics.dispose()
 	if (!session.jsonMode) {
 		renderHuman(decision, session.io)
 		return exitFor(decision.failureClass === "unavailable" ? "transient" : decision.failureClass)
 	}
-	return session.machine(decisionEnvelope(decision, session.runIdentity, status), factsOf(decision, session.runIdentity))
+	return session.machine({ ...frozen, diagnostics: diagnosticsDisclosure(status) }, facts)
 }
 
 export async function run(argv: readonly string[], io: Io, env: Record<string, string | undefined>, runIdentity: string, cwd: string): Promise<number> {
@@ -508,5 +561,5 @@ export async function run(argv: readonly string[], io: Io, env: Record<string, s
 	if (faults === null) return usageRefusal(session, routed.identity, "USAGE_INVALID_ARGUMENTS", "REPAIR_LAB_FAULT is not a supported fault")
 	const root = resolveRoot(env, cwd)
 	if (root === null) return usageRefusal(session, routed.identity, "USAGE_INVALID_ARGUMENTS", "REPAIR_LAB_ROOT must be an absolute existing directory")
-	return runCommand(session, routed, routed.route, parsed, faults, root)
+	return runCommand(session, routed, routed.route, parsed, faults, root, env)
 }

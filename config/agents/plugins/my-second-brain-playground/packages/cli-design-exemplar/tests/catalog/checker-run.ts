@@ -135,7 +135,7 @@ async function runChecker(checkerMain: string, runRoot: string, cwdDir: string, 
 			stdin: "ignore",
 			stdout: "pipe",
 			stderr: "pipe",
-			env: { HOME: process.env.HOME ?? "/", PATH: process.env.PATH ?? "", NO_COLOR: "1", TERM: "dumb", REPAIR_LAB_ROOT: fixtureRoot },
+			env: { HOME: runRoot, XDG_STATE_HOME: join(runRoot, "private-state"), PATH: process.env.PATH ?? "", NO_COLOR: "1", TERM: "dumb", REPAIR_LAB_ROOT: fixtureRoot },
 		},
 	)
 	let timedOut = false
