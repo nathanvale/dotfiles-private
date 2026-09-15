@@ -14,7 +14,7 @@ import {
 import { homedir, tmpdir } from "os";
 import { dirname, isAbsolute, join, relative, resolve } from "path";
 import { parseArgs } from "util";
-var TEMPLATE_REVISION = "6e328f4cfc14ffeeaf7291209ccbf91c6ec46bf5";
+var TEMPLATE_REVISION = "09e1d080d012ef451a6757fb4fecddb9757c7628";
 var TEMPLATE_ROOT = resolve(process.env.BUN_TYPESCRIPT_TEMPLATE_ROOT ?? join(homedir(), "code", "bun-typescript-template"));
 var COMPLEX_DEPENDENCIES = {
   "@logtape/logtape": "2.3.1",

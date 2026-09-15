@@ -9,7 +9,7 @@ const TEMPLATE_ROOT = resolve(
   process.env.BUN_TYPESCRIPT_TEMPLATE_TEST_ROOT ??
     join(homedir(), "code", "bun-typescript-template"),
 );
-const TEMPLATE_REVISION = "6e328f4cfc14ffeeaf7291209ccbf91c6ec46bf5";
+const TEMPLATE_REVISION = "09e1d080d012ef451a6757fb4fecddb9757c7628";
 const roots: string[] = [];
 
 function invoke(
@@ -138,21 +138,45 @@ test("composes the simple starter into a single package and preserves host owner
 
 test("composes complex into a workspace package and updates the owning lock", async () => {
   const project = await fixture(true);
+  const beforeWorkspaceManifest = await readFile(join(project.root, "package.json"));
+  const beforePackageManifest = JSON.parse(
+    await readFile(join(project.packageRoot, "package.json"), "utf8"),
+  );
+  const beforeLock = await readFile(join(project.root, "bun.lock"), "utf8");
+  const beforeQuality = await readFile(join(project.root, "biome.json"));
+  const beforeTest = await readFile(join(project.packageRoot, "existing.test.ts"));
+  const beforeSentinel = await readFile(join(project.root, "unrelated.txt"));
   const result = invoke(project.root, project.packagePath, "complex");
 
   expect(result.exitCode).toBe(0);
   const packageJson = JSON.parse(
     await readFile(join(project.packageRoot, "package.json"), "utf8"),
   );
-  expect(packageJson.scripts.existing).toBe("bun test");
-  expect(packageJson.dependencies).toEqual({
-    "@logtape/logtape": "2.3.1",
-    "@logtape/redaction": "2.3.1",
-    zod: "4.4.3",
+  expect(packageJson).toEqual({
+    ...beforePackageManifest,
+    dependencies: {
+      "@logtape/logtape": "2.3.1",
+      "@logtape/redaction": "2.3.1",
+      zod: "4.4.3",
+    },
+    scripts: {
+      ...beforePackageManifest.scripts,
+      "cli:example": "bun run src/cli.ts",
+    },
   });
   const lock = await readFile(join(project.root, "bun.lock"), "utf8");
+  expect(lock).not.toBe(beforeLock);
+  expect(lock).toContain('"@types/bun": "1.4.0"');
   expect(lock).toContain('"@logtape/logtape": "2.3.1"');
   expect(lock).toContain('"zod": "4.4.3"');
+  expect(await readFile(join(project.root, "package.json"))).toEqual(
+    beforeWorkspaceManifest,
+  );
+  expect(await readFile(join(project.root, "biome.json"))).toEqual(beforeQuality);
+  expect(await readFile(join(project.packageRoot, "existing.test.ts"))).toEqual(
+    beforeTest,
+  );
+  expect(await readFile(join(project.root, "unrelated.txt"))).toEqual(beforeSentinel);
   expect(await Bun.file(join(project.packageRoot, "tests/catalog/catalog.test.ts")).exists()).toBe(true);
   const install = Bun.spawnSync(
     [process.execPath, "install", "--frozen-lockfile", "--ignore-scripts"],

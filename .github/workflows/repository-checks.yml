@@ -33,7 +33,7 @@ jobs:
         shell: bash
         env:
           TEMPLATE_DEPLOY_KEY: ${{ secrets.CLI_TEMPLATE_DEPLOY_KEY }}
-          TEMPLATE_REVISION: 6e328f4cfc14ffeeaf7291209ccbf91c6ec46bf5
+          TEMPLATE_REVISION: 09e1d080d012ef451a6757fb4fecddb9757c7628
         run: |
           if [[ -z "$TEMPLATE_DEPLOY_KEY" ]]; then
             echo "CLI_TEMPLATE_DEPLOY_KEY is required to read the pinned private template." >&2
@@ -44,6 +44,7 @@ jobs:
           install -d -m 0700 "$ssh_root"
           printf '%s\n' "$TEMPLATE_DEPLOY_KEY" > "$ssh_root/key"
           chmod 0600 "$ssh_root/key"
+          trap 'rm -f "$ssh_root/key"' EXIT
           ssh-keyscan -t ed25519 github.com > "$ssh_root/known_hosts" 2>/dev/null
           chmod 0600 "$ssh_root/known_hosts"
           test "$(ssh-keygen -lf "$ssh_root/known_hosts" -E sha256 | awk '{print $2}')" = \
