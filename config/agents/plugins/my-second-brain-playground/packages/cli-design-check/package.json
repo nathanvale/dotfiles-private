@@ -1,1 +1,1 @@
-{"name":"cli-design-check","version":"0.0.0","private":true,"type":"module","main":"src/main.ts"}
+{"name":"cli-design-check","version":"0.0.0","private":true,"type":"module","main":"src/successor/main.ts"}

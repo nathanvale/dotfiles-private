@@ -1,4 +1,4 @@
-import { type CauseCode, type CommandIdentity, type CommandRoute, declarationForRoute } from "./command-contract.ts"
+import { declarationForRoute, parseResourceId, type Authorization, type CauseCode, type CommandIdentity, type CommandRoute, type ResourceId } from "./command-contract.ts"
 import type { DomainOutcome, EffectId, ExecutionFacts, Guidance, JournalRecord, Preview, Resource, TransactionState } from "./model.ts"
 import { RETRY_DELAY_MS, type Runtime, RuntimeRefusal, TransientLock } from "./runtime.ts"
 
@@ -7,7 +7,13 @@ import { RETRY_DELAY_MS, type Runtime, RuntimeRefusal, TransientLock } from "./r
 
 export const SECRET_KEY_PATTERN = /(token|secret|password|passwd|credential|api[-_]?key|private[-_]?key)/i
 export const REDACTED = "[REDACTED]"
-export const FIXTURE_AUTHORITY = "fixture-authority"
+function requiredResourceId(value: string): ResourceId {
+	const parsed = parseResourceId(value)
+	if (parsed === null) throw new Error("internal resource identity is empty")
+	return parsed
+}
+
+export const FIXTURE_AUTHORITY = "fixture-authority" as const
 
 export interface Decision {
 	commandIdentity: CommandIdentity
@@ -33,12 +39,14 @@ export interface Decision {
 
 export interface Request {
 	route: CommandRoute
-	statePath: string | undefined
-	previewId: string | undefined
-	authority: string | undefined
+	statePath: ResourceId | undefined
+	previewId: ResourceId | undefined
+	authority: Authorization | undefined
 	automation: boolean
 	includeDiagnostics: boolean
 }
+
+export type ParsedRequest = Request
 
 const INSPECT: Guidance = { kind: "next-action", target: "repair-lab inspect" }
 const RECOVER: Guidance = { kind: "next-action", target: "repair-lab recover" }
@@ -59,7 +67,8 @@ export function redactJson(value: unknown, redacted: string[], path = ""): unkno
 	return output
 }
 
-function base(commandIdentity: CommandIdentity, effectClass: Decision["effectClass"]): Decision {
+function base(route: CommandRoute): Decision {
+	const { identity: commandIdentity, effectClass } = declarationForRoute(route)
 	return {
 		commandIdentity,
 		domainOutcome: "success",
@@ -123,7 +132,7 @@ function inputRefusal(decision: Decision, error: RuntimeRefusal, command: string
 }
 
 function decideStatus(runtime: Runtime): Decision {
-	const decision = base("repair-lab.status", "inspect")
+	const decision = base("status")
 	if (runtime.faults.domain === "throw-internal") throw new Error("injected internal failure")
 	const resource = runtime.readResource().value
 	const redacted: string[] = []
@@ -139,8 +148,7 @@ function decideStatus(runtime: Runtime): Decision {
 }
 
 function decideInspect(runtime: Runtime, request: Request): Decision {
-	const identity = request.includeDiagnostics ? "repair-lab.inspect-diagnostics" : "repair-lab.inspect"
-	const decision = base(identity, "inspect")
+	const decision = base(request.includeDiagnostics ? "inspect-diagnostics" : "inspect")
 	if (runtime.faults.domain === "throw-internal") throw new Error("injected internal failure")
 	const resource = runtime.readResource(request.statePath).value
 	const redacted: string[] = []
@@ -170,10 +178,10 @@ function decideInspect(runtime: Runtime, request: Request): Decision {
 }
 
 function decidePreview(runtime: Runtime): Decision {
-	const decision = base("repair-lab.preview", "repository-local")
+	const decision = base("preview")
 	if (runtime.faults.domain === "throw-internal") throw new Error("injected internal failure")
 	const resource = runtime.readResource().value
-	const previewId = `preview-${resource.status}-revision-${resource.revision}`
+	const previewId = requiredResourceId(`preview-${resource.status}-revision-${resource.revision}`)
 	runtime.writePreview({ preview_id: previewId, kind: "apply", resource_revision: resource.revision, expected_effect_ids: APPLY_PLAN, consumed: false })
 	return {
 		...decision,
@@ -186,13 +194,13 @@ function decidePreview(runtime: Runtime): Decision {
 }
 
 function decideRepairPreview(runtime: Runtime): Decision {
-	const decision = base("repair-lab.repair", "repository-local")
+	const decision = base("repair-preview")
 	if (runtime.faults.domain === "throw-internal") throw new Error("injected internal failure")
 	const resource = runtime.readResource().value
 	if (resource.status === "healthy") {
 		return { ...refusal(decision, "domain", "DOMAIN_REPAIR_NOT_REQUIRED", "the derived index is present; nothing to repair", null, "repair-lab.repair-not-required", "repair refused: nothing to repair; inspect"), result: { result: "repair-not-required", station_id: "repair-lab.repair-not-required", transaction_state: "unchanged" }, events: ["repair.inspect.started", "repair.precondition.present"] }
 	}
-	const previewId = "repair-preview-missing-index"
+	const previewId = requiredResourceId("repair-preview-missing-index")
 	runtime.writePreview({ preview_id: previewId, kind: "repair", resource_revision: resource.revision, expected_effect_ids: REPAIR_PLAN, consumed: false })
 	return {
 		...refusal(decision, "domain", "DOMAIN_REPAIR_REQUIRED", "derived index is absent; inspect and authorize repair", "repair", "repair-lab.repairable-precondition", "repair required: derived index is absent; inspect and authorize repair"),
@@ -203,8 +211,8 @@ function decideRepairPreview(runtime: Runtime): Decision {
 }
 
 interface MutationPlan {
-	identity: "repair-lab.apply" | "repair-lab.repair" | "repair-lab.repair-retry"
-	command: "apply" | "repair"
+	identity: CommandIdentity
+	command: string
 	kind: "apply" | "repair"
 	plan: EffectId[]
 	label: { success: string; result: string }
@@ -212,10 +220,10 @@ interface MutationPlan {
 	humanCompleted: string[]
 }
 
-const PLANS: Record<"apply" | "repair" | "repair-retry", MutationPlan> = {
-	apply: { identity: "repair-lab.apply", command: "apply", kind: "apply", plan: APPLY_PLAN, label: { success: "repair-lab.authorized-apply", result: "applied" }, events: { started: "apply.started", completed: "apply.completed" }, humanCompleted: ["apply: completed", `effects: ${APPLY_PLAN.join(", ")}`, "next: inspect"] },
-	repair: { identity: "repair-lab.repair", command: "repair", kind: "repair", plan: REPAIR_PLAN, label: { success: "repair-lab.authorized-repair", result: "repair-applied" }, events: { started: "repair.apply.started", completed: "repair.apply.completed" }, humanCompleted: ["repair: completed", `effects: ${REPAIR_PLAN.join(", ")}`, "next: inspect"] },
-	"repair-retry": { identity: "repair-lab.repair-retry", command: "repair", kind: "repair", plan: REPAIR_PLAN, label: { success: "repair-lab.permitted-transient-retry", result: "retried-once" }, events: { started: "repair.started", completed: "repair.completed" }, humanCompleted: ["repair: completed after one bounded retry", "next: inspect"] },
+const PLANS: Record<"apply" | "repair" | "repair-retry", Omit<MutationPlan, "identity" | "command">> = {
+	apply: { kind: "apply", plan: APPLY_PLAN, label: { success: "repair-lab.authorized-apply", result: "applied" }, events: { started: "apply.started", completed: "apply.completed" }, humanCompleted: ["apply: completed", `effects: ${APPLY_PLAN.join(", ")}`, "next: inspect"] },
+	repair: { kind: "repair", plan: REPAIR_PLAN, label: { success: "repair-lab.authorized-repair", result: "repair-applied" }, events: { started: "repair.apply.started", completed: "repair.apply.completed" }, humanCompleted: ["repair: completed", `effects: ${REPAIR_PLAN.join(", ")}`, "next: inspect"] },
+	"repair-retry": { kind: "repair", plan: REPAIR_PLAN, label: { success: "repair-lab.permitted-transient-retry", result: "retried-once" }, events: { started: "repair.started", completed: "repair.completed" }, humanCompleted: ["repair: completed after one bounded retry", "next: inspect"] },
 }
 
 // Refusal precedence inside every effect-executing route (brief 12, 3.5). Returns the bound preview or a refusal.
@@ -363,8 +371,9 @@ function executePlan(runtime: Runtime, plan: MutationPlan, preview: Preview, dec
 }
 
 function decideMutation(runtime: Runtime, request: Request, key: "apply" | "repair" | "repair-retry", runIdentity: string): Decision {
-	const plan = PLANS[key]
-	const decision = base(plan.identity, "repository-local")
+	const declaration = declarationForRoute(key)
+	const plan: MutationPlan = { ...PLANS[key], identity: declaration.identity, command: declaration.word }
+	const decision = base(key)
 	if (runtime.faults.domain === "throw-internal") throw new Error("injected internal failure")
 	const resource = runtime.readResource().value
 	const admitted = admitMutation(runtime, request, plan, decision, resource)
@@ -391,22 +400,16 @@ function decideMutation(runtime: Runtime, request: Request, key: "apply" | "repa
 	return executePlan(runtime, plan, admitted.preview, decision, runIdentity, retryCount)
 }
 
-// A completion record is established only when the resource read back agrees with it (PR 184, thread 4003813581):
-// the current revision equals the revision the record observed, and a repair plan also finds the index present.
-// Journal claims the resource contradicts establish nothing; recovery then hands off rather than reporting success.
 function establishedCompletions(journal: readonly JournalRecord[], preview: Preview, resource: Resource): EffectId[] {
-	const statusAgrees = preview.kind !== "repair" || resource.status === "healthy"
-	// Completed ids come only from completed records of the consumed preview's own run (F2): an earlier cycle's
-	// records never satisfy a later preview's plan.
-	return journal
-		.filter((record): record is Extract<JournalRecord, { kind: "completed" }> => record.kind === "completed" && record.preview_id === preview.preview_id && record.run === preview.consumed_by_run)
-		.filter((record) => statusAgrees && record.resource_revision === resource.revision)
-		.map((record) => record.effect)
+	const scoped = journal.filter((record): record is Extract<JournalRecord, { kind: "completed" }> => record.kind === "completed" && record.preview_id === preview.preview_id && record.run === preview.consumed_by_run)
+	// Any contradiction invalidates this run's completion evidence, even when later records agree.
+	if (scoped.some((record) => record.resource_revision !== resource.revision) || (preview.kind === "repair" && resource.status !== "healthy")) return []
+	return scoped.map((record) => record.effect)
 }
 
-// Recovery reads the consumed preview's bound plan, the journal's completed records and the resource; it never repairs (brief 12, 8.1).
+// Recovery reads the consumed preview's bound plan and independently established completion records; it never repairs.
 function decideRecover(runtime: Runtime): Decision {
-	const decision = base("repair-lab.recover", "repository-local")
+	const decision = base("recover")
 	if (runtime.faults.domain === "throw-internal") throw new Error("injected internal failure")
 	const resource = runtime.readResource().value
 	const preview = runtime.readPreview()
@@ -438,9 +441,8 @@ function decideRecover(runtime: Runtime): Decision {
 // outcome failed with the existing domain cause INTERNAL_EFFECT_OUTCOME_UNKNOWN so its tuple is distinct from W1
 // (coordinator ruling, implementation01/w2-owner-resolution.md; brief 12's INTERNAL_UNEXPECTED binding collided).
 function unexpected(route: CommandRoute, runtime: Runtime, error: unknown): Decision {
-	const declaration = declarationForRoute(route)
-	const decision = base(declaration.identity, declaration.effectClass)
-	const command = declaration.word
+	const decision = base(route)
+	const command = declarationForRoute(route).word
 	const detail = (error instanceof Error ? error.message : String(error)).slice(0, 120)
 	if (runtime.facts.durableWriteAttempted) {
 		const completed = [...runtime.facts.completed]
@@ -477,7 +479,7 @@ function unexpected(route: CommandRoute, runtime: Runtime, error: unknown): Deci
 	}
 }
 
-export function decide(runtime: Runtime, request: Request, runIdentity: string): Decision {
+export function decide(runtime: Runtime, request: ParsedRequest, runIdentity: string): Decision {
 	try {
 		switch (request.route) {
 			case "status":
@@ -499,8 +501,7 @@ export function decide(runtime: Runtime, request: Request, runIdentity: string):
 	} catch (error) {
 		// An input refusal is only an "unchanged" fact before the first durable write; after one it is W2 (section 5).
 		if (error instanceof RuntimeRefusal && !runtime.facts.durableWriteAttempted) {
-			const declaration = declarationForRoute(request.route)
-			return inputRefusal(base(declaration.identity, declaration.effectClass), error, declaration.word)
+			return inputRefusal(base(request.route), error, declarationForRoute(request.route).word)
 		}
 		return unexpected(request.route, runtime, error)
 	}

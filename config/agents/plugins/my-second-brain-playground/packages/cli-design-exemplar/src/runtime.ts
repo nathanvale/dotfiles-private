@@ -1,5 +1,6 @@
 import { appendFileSync, closeSync, existsSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, realpathSync, writeFileSync } from "node:fs"
 import { dirname, isAbsolute, resolve, sep } from "node:path"
+import { parseResourceId } from "./command-contract.ts"
 import type { DomainFault, EffectId, EgressFault, Faults, JournalRecord, Preview, Resource, WriteFacts } from "./model.ts"
 
 // Real node:fs effects only; fault injection lives here at the boundary it simulates (brief 12, section 6).
@@ -24,7 +25,7 @@ export interface ReadResult<T> {
 }
 
 const DOMAIN_FAULT_NAMES = new Set(["effect.write-journal-outcome-unknown", "one-transient-lock", "persistent-lock", "silent-no-op", "throw-internal", "sink-throw", "sink-dispose-throw", "diagnostics-flood"])
-const NON_JSON_VARIANTS = new Set(["cycle", "date", "undefined", "function", "bigint", "nan"])
+const NON_JSON_VARIANTS = new Set(["cycle", "depth65", "date", "undefined", "function", "bigint", "nan", "infinity"])
 const SCHEMA_INVALID_VARIANTS = new Set(["non-string-message", "extra-key", "bad-enum", "both-guidance"])
 const EFFECT_IDS: readonly EffectId[] = ["effect.update-index", "effect.write-journal", "effect.repair-cache"]
 
@@ -116,9 +117,9 @@ export function createRuntime(root: string, faults: Faults): Runtime {
 	let transientLocksLeft = faults.domain === "one-transient-lock" ? 1 : faults.domain === "persistent-lock" ? Number.POSITIVE_INFINITY : 0
 	// Internal state paths pass the same containment predicate immediately before every read and write (PR 184,
 	// thread 4003813337): a pre-existing final-component symlink at any of them is DOMAIN_PATH_ESCAPE, never followed.
-	const PREVIEW = "state/preview.json"
-	const JOURNAL = "state/journal.jsonl"
-	const RESOURCE = "state/resource.json"
+	const PREVIEW_STATE = "state/preview.json"
+	const JOURNAL_STATE = "state/journal.jsonl"
+	const RESOURCE_STATE = "state/resource.json"
 
 	// Exact containment predicate (brief 12, 3.1): lexical rejection first, then a symlink walk of every existing
 	// component below the root, then canonical equality-or-component-boundary; only then may the target be opened.
@@ -167,29 +168,72 @@ export function createRuntime(root: string, faults: Faults): Runtime {
 		}
 	}
 
-	function isResource(value: unknown): value is Resource {
-		if (typeof value !== "object" || value === null || Array.isArray(value)) return false
+	function parseResource(value: unknown): Resource | null {
+		if (typeof value !== "object" || value === null || Array.isArray(value)) return null
 		const record = value as Record<string, unknown>
-		return typeof record.resource === "string" && typeof record.revision === "number" && (record.status === "healthy" || record.status === "index-missing") && typeof record.version === "number"
+		const resource = parseResourceId(record.resource)
+		if (resource === null || typeof record.revision !== "number" || (record.status !== "healthy" && record.status !== "index-missing") || typeof record.version !== "number") return null
+		return { ...record, resource, revision: record.revision, status: record.status, version: record.version }
 	}
 
-	function readResource(path = RESOURCE): ReadResult<Resource> {
+	function parsePreview(value: unknown): Preview | null {
+		if (typeof value !== "object" || value === null || Array.isArray(value)) return null
+		const record = value as Record<string, unknown>
+		const previewId = parseResourceId(record.preview_id)
+		if (previewId === null || (record.kind !== "apply" && record.kind !== "repair") || typeof record.resource_revision !== "number" || !Array.isArray(record.expected_effect_ids) || typeof record.consumed !== "boolean" || (record.consumed_by_run !== undefined && typeof record.consumed_by_run !== "string")) return null
+		const expectedEffects = record.expected_effect_ids.filter((effect): effect is EffectId => typeof effect === "string" && EFFECT_IDS.includes(effect as EffectId))
+		if (expectedEffects.length !== record.expected_effect_ids.length) return null
+		return { preview_id: previewId, kind: record.kind, resource_revision: record.resource_revision, expected_effect_ids: expectedEffects, consumed: record.consumed, ...(record.consumed_by_run === undefined ? {} : { consumed_by_run: record.consumed_by_run }) }
+	}
+
+	function parseJournalBase(record: Record<string, unknown>): Omit<Extract<JournalRecord, { kind: "intent" }>, "kind"> | null {
+		const previewId = parseResourceId(record.preview_id)
+		if (previewId === null) return null
+		if (typeof record.seq !== "number" || !Number.isSafeInteger(record.seq)) return null
+		if (typeof record.run !== "string" || typeof record.operation !== "string") return null
+		if (typeof record.effect !== "string" || !EFFECT_IDS.includes(record.effect as EffectId)) return null
+		return { seq: record.seq, run: record.run, effect: record.effect as EffectId, operation: record.operation, preview_id: previewId }
+	}
+
+	function parseJournalRecord(value: unknown): JournalRecord | null {
+		if (typeof value !== "object" || value === null || Array.isArray(value)) return null
+		const record = value as Record<string, unknown>
+		const base = parseJournalBase(record)
+		if (base === null) return null
+		if (record.kind === "intent") return { kind: "intent", ...base }
+		if (record.kind === "completed" && typeof record.resource_revision === "number") return { kind: "completed", ...base, resource_revision: record.resource_revision }
+		if (record.kind === "event" && typeof record.summary === "string") return { kind: "event", ...base, summary: record.summary }
+		return null
+	}
+
+	const defaultResourcePath = RESOURCE_STATE
+	function readResource(path: string = defaultResourcePath): ReadResult<Resource> {
 		const raw = readRawState(path)
-		if (!isResource(raw.value)) throw new RuntimeRefusal("SCHEMA_STATE_INVALID", "resource does not match the resource schema")
-		return { value: raw.value, bytes: raw.bytes }
+		const resource = parseResource(raw.value)
+		if (resource === null) throw new RuntimeRefusal("SCHEMA_STATE_INVALID", "resource does not match the resource schema")
+		return { value: resource, bytes: raw.bytes }
 	}
 
 	function readPreview(): Preview | null {
-		const previewPath = withinRoot(PREVIEW)
+		const previewPath = withinRoot(PREVIEW_STATE)
 		if (!existsSync(previewPath)) return null
-		return JSON.parse(readFileSync(previewPath, "utf8")) as Preview
+		let raw: unknown
+		try {
+			raw = JSON.parse(readFileSync(previewPath, "utf8"))
+		} catch {
+			throw new RuntimeRefusal("SCHEMA_STATE_INVALID", "preview does not match the preview schema")
+		}
+		const preview = parsePreview(raw)
+		if (preview === null) throw new RuntimeRefusal("SCHEMA_STATE_INVALID", "preview does not match the preview schema")
+		return preview
 	}
 
 	function writeDurable(path: string, bytes: string, mode: "write" | "append"): void {
+		const target = withinRoot(path)
 		facts.durableWriteAttempted = true
-		if (mode === "write") writeFileSync(path, bytes)
-		else appendFileSync(path, bytes)
-		const fd = openSync(path, "r")
+		if (mode === "write") writeFileSync(target, bytes)
+		else appendFileSync(target, bytes)
+		const fd = openSync(target, "r")
 		try {
 			fsyncSync(fd)
 		} finally {
@@ -198,35 +242,45 @@ export function createRuntime(root: string, faults: Faults): Runtime {
 	}
 
 	function writePreview(preview: Preview): void {
-		const previewPath = withinRoot(PREVIEW)
+		const previewPath = withinRoot(PREVIEW_STATE)
 		mkdirSync(dirname(previewPath), { recursive: true })
 		// The preview file is not transaction state (accepted rows 3 and 8): recorded, but not a durable write attempt.
 		writeFileSync(previewPath, `${JSON.stringify(preview)}\n`)
 	}
 
 	function consumePreview(preview: Preview, runIdentity: string): void {
-		writeDurable(withinRoot(PREVIEW), `${JSON.stringify({ ...preview, consumed: true, consumed_by_run: runIdentity })}\n`, "write")
+		writeDurable(withinRoot(PREVIEW_STATE), `${JSON.stringify({ ...preview, consumed: true, consumed_by_run: runIdentity })}\n`, "write")
 	}
 
 	function readJournal(): JournalRecord[] {
-		const journalPath = withinRoot(JOURNAL)
+		const journalPath = withinRoot(JOURNAL_STATE)
 		if (!existsSync(journalPath)) return []
 		return readFileSync(journalPath, "utf8")
 			.split("\n")
 			.filter((line) => line.length > 0)
-			.map((line) => JSON.parse(line) as JournalRecord)
+			.map((line) => {
+				let raw: unknown
+				try {
+					raw = JSON.parse(line)
+				} catch {
+					throw new RuntimeRefusal("SCHEMA_STATE_INVALID", "journal does not match the journal schema")
+				}
+					const record = parseJournalRecord(raw)
+					if (record === null) throw new RuntimeRefusal("SCHEMA_STATE_INVALID", "journal does not match the journal schema")
+					return record
+			})
 	}
 
 	function appendJournal(record: JournalRecord): void {
-		writeDurable(withinRoot(JOURNAL), `${JSON.stringify(record)}\n`, "append")
+		writeDurable(withinRoot(JOURNAL_STATE), `${JSON.stringify(record)}\n`, "append")
 	}
 
 	// Every state path an effect plan will touch is admitted before the first durable write, so a symlinked journal or
 	// resource refuses while the preview is still unconsumed; each later access still re-checks its own path.
 	function admitStatePaths(): void {
-		withinRoot(PREVIEW)
-		withinRoot(JOURNAL)
-		withinRoot(RESOURCE)
+		withinRoot(PREVIEW_STATE)
+		withinRoot(JOURNAL_STATE)
+		withinRoot(RESOURCE_STATE)
 	}
 
 	function probeStorage(attempt: number): void {
@@ -241,31 +295,42 @@ export function createRuntime(root: string, faults: Faults): Runtime {
 		if (typeof fault === "object" && fault !== null && fault.kind === kind && fault.effectId === effectId) process.kill(process.pid, "SIGKILL")
 	}
 
+	function resourceFromBytes(bytes: string): Resource {
+		let raw: unknown
+		try {
+			raw = JSON.parse(bytes)
+		} catch {
+			throw new RuntimeRefusal("SCHEMA_STATE_INVALID", "resource does not match the resource schema")
+		}
+		const resource = parseResource(raw)
+		if (resource === null) throw new RuntimeRefusal("SCHEMA_STATE_INVALID", "resource does not match the resource schema")
+		return resource
+	}
+
+	function writeJournalEffect(effectId: EffectId, operation: string, previewId: string, runIdentity: string, seq: () => number): boolean {
+		const eventLine = `${JSON.stringify({ kind: "event", seq: seq(), run: runIdentity, effect: effectId, operation, preview_id: previewId, summary: `${operation} recorded` })}\n`
+		if (faults.domain !== "silent-no-op") writeDurable(withinRoot(JOURNAL_STATE), eventLine, "append")
+		haltIf("halt-after-effect", effectId)
+		return readFileSync(withinRoot(JOURNAL_STATE), "utf8").endsWith(eventLine)
+	}
+
+	function writeResourceEffect(effectId: EffectId, current: Resource): boolean {
+		const next: Resource = effectId === "effect.repair-cache" ? { ...current, status: "healthy", revision: current.revision + 1 } : { ...current, revision: current.revision + 1 }
+		const expected = `${JSON.stringify(next)}\n`
+		if (faults.domain !== "silent-no-op") writeDurable(withinRoot(RESOURCE_STATE), expected, "write")
+		haltIf("halt-after-effect", effectId)
+		return readFileSync(withinRoot(RESOURCE_STATE), "utf8") === expected
+	}
+
 	// Intent line, effect, read-back, completed line (brief 12, 3.5 step 11). Faults apply at the boundary they simulate.
 	function applyEffect(effectId: EffectId, operation: string, previewId: string, runIdentity: string, seq: () => number): "completed" | "unknown" | "not-observed" {
 		appendJournal({ kind: "intent", seq: seq(), run: runIdentity, effect: effectId, operation, preview_id: previewId })
 		facts.intentRecorded.push(effectId)
 		if (effectId === "effect.write-journal" && faults.domain === "effect.write-journal-outcome-unknown") return "unknown"
 		haltIf("halt-before-effect", effectId)
-		const before = readFileSync(withinRoot(RESOURCE), "utf8")
-		const current = JSON.parse(before) as Resource
-		let expected: string
-		if (effectId === "effect.write-journal") {
-			const eventLine = `${JSON.stringify({ kind: "event", seq: seq(), run: runIdentity, effect: effectId, operation, preview_id: previewId, summary: `${operation} recorded` })}\n`
-			if (faults.domain !== "silent-no-op") writeDurable(withinRoot(JOURNAL), eventLine, "append")
-			haltIf("halt-after-effect", effectId)
-			const journal = readFileSync(withinRoot(JOURNAL), "utf8")
-			if (!journal.endsWith(eventLine)) return "not-observed"
-			expected = journal
-		} else {
-			const next: Resource = effectId === "effect.repair-cache" ? { ...current, status: "healthy", revision: current.revision + 1 } : { ...current, revision: current.revision + 1 }
-			expected = `${JSON.stringify(next)}\n`
-			if (faults.domain !== "silent-no-op") writeDurable(withinRoot(RESOURCE), expected, "write")
-			haltIf("halt-after-effect", effectId)
-			const after = readFileSync(withinRoot(RESOURCE), "utf8")
-			if (after !== expected) return "not-observed"
-		}
-		const revision = (JSON.parse(readFileSync(withinRoot(RESOURCE), "utf8")) as Resource).revision
+		const observed = effectId === "effect.write-journal" ? writeJournalEffect(effectId, operation, previewId, runIdentity, seq) : writeResourceEffect(effectId, resourceFromBytes(readFileSync(withinRoot(RESOURCE_STATE), "utf8")))
+		if (!observed) return "not-observed"
+		const revision = resourceFromBytes(readFileSync(withinRoot(RESOURCE_STATE), "utf8")).revision
 		appendJournal({ kind: "completed", seq: seq(), run: runIdentity, effect: effectId, operation, preview_id: previewId, resource_revision: revision })
 		facts.completed.push(effectId)
 		return "completed"

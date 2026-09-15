@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { run } from "./cli.ts"
+import { machineMode, run } from "./cli.ts"
 
 // The sole production caller of cli.run. runIdentity is generated first (brief 12, 7.2); the process uses
 // process.exitCode so a large stdout drains fully through a real pipe (CDS-PE-1).
@@ -12,12 +12,13 @@ const io = {
 		process.stderr.write(text)
 	},
 }
-run(process.argv.slice(2), io, process.env, runIdentity, process.cwd()).then(
+const argv = process.argv.slice(2)
+run(argv, io, process.env, runIdentity, process.cwd()).then(
 	(code) => {
 		process.exitCode = code
 	},
-	(error: unknown) => {
-		process.stderr.write(`repair-lab: egress invariant: ${error instanceof Error ? error.message : String(error)}\n`)
+	() => {
+		if (!machineMode(argv)) process.stderr.write("repair-lab: internal failure\n")
 		process.exitCode = 1
 	},
 )

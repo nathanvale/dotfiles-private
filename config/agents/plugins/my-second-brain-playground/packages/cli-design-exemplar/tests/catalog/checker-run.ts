@@ -5,6 +5,9 @@ import { createRoot, MAIN, SECRET_MARKER } from "../helpers/harness.ts"
 
 const CHECKER_TIMEOUT_MS = 180_000
 const USAGE = "usage: REPAIR_LAB_CHECKER_MAIN=<absolute checker src/main.ts> REPAIR_LAB_RUN_ROOT=<run output directory> bun run tests/catalog/checker-run.ts"
+const INTERNAL_FAULT_ARGUMENT = "--checker-fault=throw-internal"
+const SCHEMA_CONTROL_ARGUMENT = "--checker-state=schema-invalid"
+const TRANSIENT_FAULT_ARGUMENT = "--checker-fault=one-transient-lock"
 
 interface RunResult {
 	stdout: string
@@ -74,7 +77,7 @@ function manifestTree(root: string): Map<string, string> {
 }
 
 function writeManifest(path: string, entries: Map<string, string>): void {
-	const lines = [...entries.entries()].map(([relativePath, line]) => `${line}  ${relativePath}`)
+	const lines = [...entries.entries()].map(([relativePath, entry]) => `${entry}  ${relativePath}`)
 	writeFileSync(path, lines.length === 0 ? "" : `${lines.join("\n")}\n`)
 }
 
@@ -91,7 +94,9 @@ function diffTrees(before: Map<string, string>, after: Map<string, string>): Tre
 	return { added, removed, modified }
 }
 
-async function runChecker(checkerMain: string, runRoot: string, cwdDir: string, fixtureRoot: string): Promise<RunResult> {
+async function runChecker(checkerMain: string, runRoot: string, cwdDir: string, fixtureRoot: string, adapter: string): Promise<RunResult> {
+	const retainedStreams = join(runRoot, "retained-streams")
+	mkdirSync(retainedStreams, { recursive: true, mode: 0o700 })
 	const child = Bun.spawn(
 		[
 			"bun",
@@ -100,11 +105,19 @@ async function runChecker(checkerMain: string, runRoot: string, cwdDir: string, 
 			"--cwd",
 			cwdDir,
 			"--command",
-			`bun run ${MAIN}`,
+			`bun ${adapter}`,
 			"--success-args",
 			"status",
 			"--missing-args",
 			"inspect --state state/missing.json",
+			"--internal-args",
+			`status ${INTERNAL_FAULT_ARGUMENT}`,
+			"--schema-args",
+			`inspect --state state/schema-invalid.json ${SCHEMA_CONTROL_ARGUMENT}`,
+			"--transient-args",
+			`apply --preview-id preview-healthy-revision-4 --authorize fixture-authority ${TRANSIENT_FAULT_ARGUMENT}`,
+			"--retain-streams-dir",
+			retainedStreams,
 			"--effect-args",
 			"apply --automation",
 			"--secret-args",
@@ -147,14 +160,11 @@ function parseReport(stdout: string): { report: Record<string, unknown> | null; 
 	try {
 		const envelope = asRecord(JSON.parse(stdout) as unknown)
 		if (envelope === null) return { report: null, parsed: false }
-		return { report: asRecord(envelope.result) ?? envelope, parsed: true }
+		const result = asRecord(envelope.result)
+		return { report: asRecord(result?.data) ?? result ?? envelope, parsed: true }
 	} catch {
 		return { report: null, parsed: false }
 	}
-}
-
-function nestedRecord(parent: Record<string, unknown>, key: string): Record<string, unknown> | null {
-	return asRecord(parent[key])
 }
 
 function normalized(value: unknown): unknown {
@@ -163,6 +173,13 @@ function normalized(value: unknown): unknown {
 
 function deepEqual(left: unknown, right: unknown): boolean {
 	return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function observedRow(report: Record<string, unknown>, scenario: string): unknown {
+	if (!Array.isArray(report.rows)) return null
+	const row = report.rows.find((candidate) => asRecord(candidate)?.scenario === scenario)
+	const record = asRecord(row)
+	return record === null ? null : { observedExit: normalized(record.observedExit), passed: normalized(record.passed) }
 }
 
 function makeExpectation(expected: unknown, actual: unknown, ok = deepEqual(expected, normalized(actual))): Expectation {
@@ -181,14 +198,16 @@ function diagnosticsOnly(added: string[], after: Map<string, string>, targetRoot
 function judge(stdout: string, stderr: string, checkerExit: number, delta: TreeDelta, after: Map<string, string>, targetRoot: string, fixtureRoot: string): Judgement {
 	const parsed = parseReport(stdout)
 	const report = parsed.report ?? {}
-	const coverage = nestedRecord(report, "findingCoverage")
+	const exclusions = Array.isArray(report.observationExclusions) ? report.observationExclusions : []
 	const expectations: Record<string, Expectation> = {
 		"report-json": makeExpectation(true, parsed.parsed),
-		rows: makeExpectation(15, Array.isArray(report.rows) ? report.rows.length : null),
+		rows: makeExpectation(19, Array.isArray(report.rows) ? report.rows.length : null),
 		failedCount: makeExpectation(0, report.failedCount),
-		skippedScenarios: makeExpectation([], report.skippedScenarios),
-		"finding-coverage-unproved": makeExpectation([], coverage?.unproved),
-		unjudged: makeExpectation(["exitMeanings.75"], report.unjudged),
+		skippedRows: makeExpectation([], report.skippedRows),
+		"non-regular-observation-exclusion": makeExpectation("runtime contents of non-regular entries", exclusions, exclusions.includes("runtime contents of non-regular entries")),
+		"internal-exit-1": makeExpectation({ observedExit: 1, passed: true }, observedRow(report, "internal-failure-json")),
+		"schema-exit-4": makeExpectation({ observedExit: 4, passed: true }, observedRow(report, "schema-refusal-json")),
+		"transient-exit-75": makeExpectation({ observedExit: 75, passed: true }, observedRow(report, "transient-refusal-json")),
 		"target-unchanged": makeExpectation(true, report.targetUnchanged),
 		"checker-exit": makeExpectation(0, checkerExit),
 		"checker-stderr-empty": makeExpectation("", stderr),
@@ -201,6 +220,43 @@ function judge(stdout: string, stderr: string, checkerExit: number, delta: TreeD
 
 function writeJson(path: string, value: unknown): void {
 	writeFileSync(path, `${JSON.stringify(value, null, "\t")}\n`)
+}
+
+function writeCheckerAdapter(cwdDir: string): string {
+	const adapter = join(cwdDir, "checker-target-adapter.ts")
+	writeFileSync(adapter, `
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
+const args = process.argv.slice(2)
+const internal = args.includes(${JSON.stringify(INTERNAL_FAULT_ARGUMENT)})
+const schema = args.includes(${JSON.stringify(SCHEMA_CONTROL_ARGUMENT)})
+const transient = args.includes(${JSON.stringify(TRANSIENT_FAULT_ARGUMENT)})
+const forwarded = args.filter((argument) => argument !== ${JSON.stringify(INTERNAL_FAULT_ARGUMENT)} && argument !== ${JSON.stringify(SCHEMA_CONTROL_ARGUMENT)} && argument !== ${JSON.stringify(TRANSIENT_FAULT_ARGUMENT)})
+const root = process.env.REPAIR_LAB_ROOT as string
+const preview = join(root, "state", "preview.json")
+const schemaState = join(root, "state", "schema-invalid.json")
+const previousPreview = existsSync(preview) ? readFileSync(preview) : null
+const previousSchemaState = existsSync(schemaState) ? readFileSync(schemaState) : null
+if (schema) writeFileSync(schemaState, '{"resource":"demo","revision":"four","status":"healthy","version":1}\\n')
+if (transient) writeFileSync(preview, '{"preview_id":"preview-healthy-revision-4","kind":"apply","resource_revision":4,"expected_effect_ids":["effect.update-index","effect.write-journal"],"consumed":false}\\n')
+try {
+	const env = { ...process.env, ...(internal ? { REPAIR_LAB_FAULT: "throw-internal" } : {}), ...(transient ? { REPAIR_LAB_FAULT: "one-transient-lock" } : {}) }
+	const result = Bun.spawnSync(["bun", ${JSON.stringify(MAIN)}, ...forwarded], { cwd: process.cwd(), env, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+	process.stdout.write(result.stdout)
+	process.stderr.write(result.stderr)
+	process.exitCode = result.exitCode
+} finally {
+	if (schema) {
+		if (previousSchemaState === null) rmSync(schemaState, { force: true })
+		else writeFileSync(schemaState, previousSchemaState)
+	}
+	if (transient) {
+		if (previousPreview === null) rmSync(preview, { force: true })
+		else writeFileSync(preview, previousPreview)
+	}
+}
+`)
+	return adapter
 }
 
 function errorMessage(error: unknown): string {
@@ -223,9 +279,10 @@ async function main(): Promise<void> {
 	const cwdDir = join(runRoot, "checker-cwd")
 	mkdirSync(cwdDir, { recursive: true, mode: 0o700 })
 	writeFileSync(join(cwdDir, "README.txt"), `fixture root: ${root.root}\n`)
+	const adapter = writeCheckerAdapter(cwdDir)
 	const before = manifestTree(targetRoot)
 	writeManifest(join(runRoot, "hashes-before.txt"), before)
-	const result = await runChecker(checkerMain, runRoot, cwdDir, root.root)
+	const result = await runChecker(checkerMain, runRoot, cwdDir, root.root, adapter)
 	writeFileSync(join(runRoot, "checker-report.json"), result.stdout)
 	writeFileSync(join(runRoot, "checker-stderr.txt"), result.stderr)
 	writeFileSync(join(runRoot, "checker-exit.txt"), `${result.exit}\n`)

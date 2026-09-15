@@ -1,516 +1,697 @@
 // @bun
-// packages/cli-design-check/src/main.ts
-import { statSync } from "fs";
+// packages/cli-design-check/src/successor/main.ts
+import { realpathSync, statSync } from "fs";
 import { resolve } from "path";
 import { parseArgs } from "util";
 
-// packages/cli-design-check/src/render.ts
-import { randomUUID } from "crypto";
-
-// packages/cli-design-check/src/contract.ts
-var ENVELOPE_VERSION = 1;
-var CONTRACT_VERSION = "1.0.0";
-var GENERATION_CONVENTION_VERSION = "1.0.0";
-var MACHINE_MODE = "--json";
-var REDACTED = "[REDACTED]";
-var EXIT_MEANINGS = {
-  "0": "success",
-  "1": "internal",
-  "2": "usage",
-  "3": "domain",
-  "4": "schema",
-  "75": "unavailable"
-};
-var OUTCOMES = ["success", "refused", "failed", "unknown"];
-var FAILURE_OUTCOMES = OUTCOMES.filter((outcome) => outcome !== "success");
-var FAILURE_CLASSES = ["usage", "domain", "schema", "internal", "unavailable"];
-var EFFECT_CLASSES = ["inspect", "repository-local", "external"];
-var TRANSACTION_STATES = ["unchanged", "completed", "partially-completed", "rolled-back", "unknown"];
-var SECRET_KEY_PATTERN = /(token|secret|password|passwd|credential|api[-_]?key|private[-_]?key)/i;
-var CAUSE_CODE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
-var FINDINGS = {
-  EXIT_MISMATCH: "EXIT_MISMATCH",
-  STDOUT_NOT_EMPTY: "STDOUT_NOT_EMPTY",
+// packages/cli-design-check/src/successor/contract.ts
+var CHECKER_CONTRACT_VERSION = "2.0.0";
+var CHECKER_ENVELOPE_VERSION = 2;
+var SUCCESSOR_FINDINGS = {
+  STDOUT_NOT_SINGLE_JSON_OBJECT: "STDOUT_NOT_SINGLE_JSON_OBJECT",
   STDOUT_EMPTY: "STDOUT_EMPTY",
   STDERR_NOT_EMPTY: "STDERR_NOT_EMPTY",
-  STDERR_NOT_ONE_LINE: "STDERR_NOT_ONE_LINE",
-  STDOUT_NOT_SINGLE_JSON_OBJECT: "STDOUT_NOT_SINGLE_JSON_OBJECT",
-  JSON_ON_STDERR: "JSON_ON_STDERR",
-  PROMPTED_OR_HUNG: "PROMPTED_OR_HUNG",
-  TARGET_MUTATED: "TARGET_MUTATED",
   HUMAN_OUTPUT_IS_JSON: "HUMAN_OUTPUT_IS_JSON",
-  HELP_MISSING_USAGE: "HELP_MISSING_USAGE",
+  TARGET_JSON_DEPTH_EXCEEDED: "TARGET_JSON_DEPTH_EXCEEDED",
+  TARGET_AVAILABLE_PATHS_INVALID: "TARGET_AVAILABLE_PATHS_INVALID",
+  TARGET_COMMAND_UNDECLARED: "TARGET_COMMAND_UNDECLARED",
+  TARGET_CAUSE_CORRELATION: "TARGET_CAUSE_CORRELATION",
+  EXIT_MISMATCH: "EXIT_MISMATCH",
   ENVELOPE_NEXT_STEP_RULE: "ENVELOPE_NEXT_STEP_RULE",
-  ENVELOPE_SUCCESS_UNRESOLVED: "ENVELOPE_SUCCESS_UNRESOLVED",
+  TARGET_GUIDANCE_CORRELATION: "TARGET_GUIDANCE_CORRELATION",
+  TARGET_RETRY_CORRELATION: "TARGET_RETRY_CORRELATION",
   ENVELOPE_UNRESOLVED_RETRYABLE: "ENVELOPE_UNRESOLVED_RETRYABLE",
-  DISCOVERY_FIELD_UNDECLARED: "DISCOVERY_FIELD_UNDECLARED",
-  LARGE_ENVELOPE_BELOW_THRESHOLD: "LARGE_ENVELOPE_BELOW_THRESHOLD",
-  SECRET_MARKER_LEAKED: "SECRET_MARKER_LEAKED",
-  SECRET_KEY_NOT_REDACTED: "SECRET_KEY_NOT_REDACTED"
+  TARGET_OUTCOME_DATA_CORRELATION: "TARGET_OUTCOME_DATA_CORRELATION",
+  TARGET_EFFECTS_INVALID: "TARGET_EFFECTS_INVALID",
+  TARGET_EFFECT_STATE_CORRELATION: "TARGET_EFFECT_STATE_CORRELATION",
+  TARGET_INSPECT_EFFECT_CORRELATION: "TARGET_INSPECT_EFFECT_CORRELATION",
+  TARGET_SUCCESS_REMAINS: "TARGET_SUCCESS_REMAINS",
+  TARGET_ATTEMPTED_EFFECT_INVALID: "TARGET_ATTEMPTED_EFFECT_INVALID"
 };
-function isRecord(value) {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
+var CHECKER_EXIT = { success: 0, internal: 1, usage: 2, domain: 3, schema: 4, transient: 75 };
+var cause = (failureClass, outcome, state, retryable, guidance) => ({
+  failureClass,
+  outcome,
+  state,
+  retryable,
+  guidance,
+  exit: failureClass === null ? CHECKER_EXIT.success : CHECKER_EXIT[failureClass]
+});
+var CAUSE_RULES = {
+  SUCCESS_UNCHANGED: cause(null, "success", "unchanged", false, "next"),
+  SUCCESS_COMPLETED: cause(null, "success", "completed", false, "next"),
+  USAGE_INVALID_INVOCATION: cause("usage", "refused", "unchanged", false, "next"),
+  USAGE_UNKNOWN_COMMAND: cause("usage", "refused", "unchanged", false, "next"),
+  SCHEMA_INVALID_INPUT: cause("schema", "refused", "unchanged", false, "next"),
+  SCHEMA_UNSUPPORTED_CONTRACT: cause("schema", "refused", "unchanged", false, "next"),
+  DOMAIN_PRECONDITION_UNMET: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_AUTHORITY_REQUIRED: cause("domain", "refused", "unchanged", false, "handoff"),
+  TRANSIENT_NOT_STARTED: cause("transient", "refused", "unchanged", true, "next"),
+  TRANSIENT_ATTEMPT_UNCHANGED: cause("transient", "failed", "unchanged", true, "next"),
+  DOMAIN_DEADLINE_BEFORE_START: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_DEADLINE_UNCHANGED: cause("domain", "failed", "unchanged", false, "next"),
+  DOMAIN_DEADLINE_COMPLETED: cause("domain", "failed", "completed", false, "handoff"),
+  DOMAIN_DEADLINE_PARTIAL: cause("domain", "failed", "partially-completed", false, "handoff"),
+  DOMAIN_DEADLINE_UNKNOWN: cause("domain", "failed", "unknown", false, "handoff"),
+  INTERNAL_PREPARATION: cause("internal", "refused", "unchanged", false, "next"),
+  INTERNAL_RESULT_UNCHANGED: cause("internal", "failed", "unchanged", false, "handoff"),
+  INTERNAL_RESULT_COMPLETED: cause("internal", "failed", "completed", false, "handoff"),
+  INTERNAL_RESULT_PARTIAL: cause("internal", "failed", "partially-completed", false, "handoff"),
+  INTERNAL_RESULT_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
+  DOMAIN_RECOVERY_HANDOFF_REQUIRED: cause("domain", "failed", "unknown", false, "handoff"),
+  INTERNAL_EFFECT_OUTCOME_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
+  INTERNAL_EFFECT_NOT_OBSERVED: cause("internal", "failed", "unknown", false, "handoff"),
+  INTERNAL_UNEXPECTED: cause("internal", "failed", "unchanged", false, "handoff")
+};
+function causeRuleFor(causeCode) {
+  return CAUSE_RULES[causeCode];
 }
-var isString = (value) => typeof value === "string";
-var isBoolean = (value) => typeof value === "boolean";
-var isNonEmptyString = (value) => typeof value === "string" && value.length > 0;
-var isNonNegativeNumber = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
-var isStringArray = (value) => Array.isArray(value) && value.every(isString);
-var isPresent = (value) => value !== null && value !== undefined;
-var equals = (expected) => (value) => value === expected;
-var oneOf = (allowed) => (value) => allowed.includes(value);
-var nullable = (accept) => (value) => value === null || accept(value);
-var isValidFailureClass = nullable(oneOf(FAILURE_CLASSES));
-var isHandoff = (value) => isRecord(value) && isString(value.reason) && isStringArray(value.prerequisites);
-function hasOwn(value, field) {
-  return Object.hasOwn(value, field);
+function checkerExitMeanings() {
+  return Object.fromEntries(Object.entries(CHECKER_EXIT).map(([meaning, exit]) => [String(exit), meaning]));
 }
-function unique(findings) {
-  return [...new Set(findings)];
+var TOP_KEYS = ["availablePaths", "contractVersion", "diagnostics", "envelopeVersion", "message", "result"];
+var RESULT_KEYS = ["attemptedEffect", "causeCode", "commandIdentity", "data", "effectClass", "effects", "exitCode", "failureClass", "handoff", "idempotencyKey", "nextAction", "outcome", "repairAction", "retryable", "retryDelayMilliseconds", "runId", "transactionState"];
+var EFFECT_KEYS = ["completed", "inventoryComplete", "remaining", "uncertain"];
+var HANDOFF_KEYS = ["inspect", "owner", "reason", "resource"];
+var AVAILABLE_DIAGNOSTIC_KEYS = ["closed", "countsComplete", "droppedRecords", "file", "sinkFailure", "status", "truncatedRecords", "unflushedRecords"];
+var UNAVAILABLE_DIAGNOSTIC_KEYS = ["reason", "status", "trusted"];
+var TRUSTED_DIAGNOSTIC_KEYS = ["closed", "countsComplete", "droppedRecords", "file", "sinkFailure", "truncatedRecords", "unflushedRecords"];
+var isRecord = (value) => typeof value === "object" && value !== null && !Array.isArray(value);
+var isNonblank = (value) => typeof value === "string" && value.trim().length > 0;
+var isSafeNonnegativeInteger = (value) => Number.isSafeInteger(value) && value >= 0;
+var isPositiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
+var isStringArray = (value) => Array.isArray(value) && value.every(isNonblank);
+var isFailureClass = (value) => ["usage", "domain", "schema", "internal", "transient"].includes(value);
+var hasOwn = (value, key) => Object.hasOwn(value, key);
+var fieldMissing = (path) => `TARGET_FIELD_MISSING:${path}`;
+var fieldInvalid = (path) => `TARGET_FIELD_INVALID:${path}`;
+var fieldUndeclared = (path) => `TARGET_FIELD_UNDECLARED:${path}`;
+function firstMissing(value, keys, path) {
+  const missing = keys.find((key) => !hasOwn(value, key));
+  return missing === undefined ? null : fieldMissing(`${path}${missing}`);
 }
-function envelopeFieldMissing(field) {
-  return `ENVELOPE_FIELD_MISSING:${field}`;
+function firstUndeclared(value, keys, path) {
+  const allowed = new Set(keys);
+  const extra = Object.keys(value).find((key) => !allowed.has(key));
+  return extra === undefined ? null : fieldUndeclared(`${path}${extra}`);
 }
-function envelopeFieldInvalid(field) {
-  return `ENVELOPE_FIELD_INVALID:${field}`;
+function safeObservedVersion(value) {
+  if (!isRecord(value) || typeof value.contractVersion !== "string")
+    return null;
+  return [...value.contractVersion].map((character) => {
+    const code = character.charCodeAt(0);
+    return code <= 31 || code === 127 ? " " : character;
+  }).join("").slice(0, 128);
 }
-function discoveryFieldMissing(field) {
-  return `DISCOVERY_FIELD_MISSING:${field}`;
+function exceedsDepth(value, maximumDepth = 64) {
+  const visit = (candidate, depth) => {
+    if (depth > maximumDepth)
+      return true;
+    if (Array.isArray(candidate))
+      return candidate.some((entry) => visit(entry, depth + 1));
+    if (isRecord(candidate))
+      return Object.values(candidate).some((entry) => visit(entry, depth + 1));
+    return false;
+  };
+  return visit(value, 0);
 }
-function fieldFinding(record, check, missing, invalid) {
-  const [field, accept] = check;
-  if (!hasOwn(record, field))
-    return [missing(field)];
-  return accept(record[field]) ? [] : [invalid(field)];
+function sortedUnique(values) {
+  return new Set(values).size === values.length && values.every((value, index) => index === 0 || values[index - 1] < value);
 }
-function fieldFindings(record, checks, missing, invalid) {
-  return checks.flatMap((check) => fieldFinding(record, check, missing, invalid));
+function basicTopFinding(value) {
+  return firstMissing(value, ["envelopeVersion", "contractVersion", "message", "availablePaths", "result"], "") ?? firstUndeclared(value, TOP_KEYS, "") ?? (value.envelopeVersion === CHECKER_ENVELOPE_VERSION ? null : fieldInvalid("envelopeVersion")) ?? (isNonblank(value.message) ? null : fieldInvalid("message")) ?? (isStringArray(value.availablePaths) ? null : fieldInvalid("availablePaths"));
 }
-var ENVELOPE_FIELD_CHECKS = [
-  ["envelopeVersion", equals(ENVELOPE_VERSION)],
-  ["contractVersion", equals(CONTRACT_VERSION)],
-  ["commandIdentity", isNonEmptyString],
-  ["runIdentity", isNonEmptyString],
-  ["outcome", oneOf(OUTCOMES)],
-  ["failureClass", isValidFailureClass],
-  ["causeCode", nullable((value) => typeof value === "string" && CAUSE_CODE_PATTERN.test(value))],
-  ["message", isString],
-  ["effectClass", oneOf(EFFECT_CLASSES)],
-  ["transactionState", oneOf(TRANSACTION_STATES)],
-  ["retryable", isBoolean],
-  ["retryDelayMilliseconds", nullable(isNonNegativeNumber)],
-  ["nextAction", nullable(isString)],
-  ["availablePaths", isStringArray],
-  ["repairAction", nullable(isString)],
-  ["handoff", nullable(isHandoff)],
-  ["result", nullable(isRecord)]
-];
-var EXIT_FOR_MEANING = new Map(Object.entries(EXIT_MEANINGS).map(([code, meaning]) => [meaning, Number(code)]));
-function isCauseCode(value, failureClass) {
-  if (failureClass === null)
-    return value === null;
-  return typeof value === "string" && CAUSE_CODE_PATTERN.test(value) && value.startsWith(`${failureClass.toUpperCase()}_`);
+function firstInvalidField(checks) {
+  const invalid = checks.find((check) => !check.valid(check.value));
+  return invalid === undefined ? null : fieldInvalid(invalid.path);
 }
-function outcomeMatchesFailureClass(value) {
-  if (!hasOwn(value, "outcome") || !hasOwn(value, "failureClass"))
+function basicResultFinding(result) {
+  const required = ["runId", "commandIdentity", "outcome", "effectClass", "transactionState", "causeCode", "failureClass", "exitCode", "data", "retryable", "repairAction", "effects"];
+  const shapeFinding = firstMissing(result, required, "result.") ?? firstUndeclared(result, RESULT_KEYS, "result.");
+  if (shapeFinding !== null)
+    return shapeFinding;
+  const fieldFinding = firstInvalidField([
+    { path: "result.runId", value: result.runId, valid: isNonblank },
+    { path: "result.commandIdentity", value: result.commandIdentity, valid: isNonblank },
+    { path: "result.outcome", value: result.outcome, valid: (value) => ["success", "refused", "failed"].includes(String(value)) },
+    { path: "result.effectClass", value: result.effectClass, valid: (value) => ["inspect", "repository-local", "external"].includes(String(value)) },
+    { path: "result.transactionState", value: result.transactionState, valid: (value) => ["unchanged", "completed", "partially-completed", "unknown"].includes(String(value)) },
+    { path: "result.causeCode", value: result.causeCode, valid: isNonblank },
+    { path: "result.failureClass", value: result.failureClass, valid: (value) => value === null || isFailureClass(value) },
+    { path: "result.retryable", value: result.retryable, valid: (value) => typeof value === "boolean" },
+    { path: "result.exitCode", value: result.exitCode, valid: (value) => [0, 1, 2, 3, 4, 75].includes(value) }
+  ]);
+  if (fieldFinding !== null)
+    return fieldFinding;
+  if (hasOwn(result, "idempotencyKey") && !isNonblank(result.idempotencyKey))
+    return fieldInvalid("result.idempotencyKey");
+  if (hasOwn(result, "attemptedEffect") && !isNonblank(result.attemptedEffect))
+    return fieldInvalid("result.attemptedEffect");
+  return null;
+}
+function effectsFinding(result) {
+  if (!isRecord(result.effects))
+    return fieldInvalid("result.effects");
+  const effects = result.effects;
+  const shapeFinding = firstMissing(effects, EFFECT_KEYS, "result.effects.") ?? firstUndeclared(effects, EFFECT_KEYS, "result.effects.");
+  if (shapeFinding !== null)
+    return shapeFinding;
+  if (!isStringArray(effects.completed) || !isStringArray(effects.remaining) || !isStringArray(effects.uncertain) || typeof effects.inventoryComplete !== "boolean")
+    return fieldInvalid("result.effects");
+  const collections = [effects.completed, effects.remaining, effects.uncertain];
+  const all = collections.flat();
+  if (!collections.every(sortedUnique) || new Set(all).size !== all.length)
+    return SUCCESSOR_FINDINGS.TARGET_EFFECTS_INVALID;
+  return null;
+}
+function stateEffectsHold(result) {
+  const effects = result.effects;
+  if (result.transactionState === "unchanged")
+    return effects.inventoryComplete && effects.completed.length === 0 && effects.uncertain.length === 0;
+  if (result.transactionState === "completed")
+    return effects.inventoryComplete && effects.completed.length > 0 && effects.remaining.length === 0 && effects.uncertain.length === 0;
+  if (result.transactionState === "partially-completed")
+    return effects.inventoryComplete && effects.completed.length > 0 && effects.remaining.length > 0 && effects.uncertain.length === 0;
+  return !effects.inventoryComplete || effects.uncertain.length > 0;
+}
+function effectCorrelationFinding(result) {
+  const effects = result.effects;
+  const all = [...effects.completed, ...effects.remaining, ...effects.uncertain];
+  if (!stateEffectsHold(result))
+    return SUCCESSOR_FINDINGS.TARGET_EFFECT_STATE_CORRELATION;
+  if (result.effectClass === "inspect" && (result.transactionState !== "unchanged" || !effects.inventoryComplete || all.length !== 0))
+    return SUCCESSOR_FINDINGS.TARGET_INSPECT_EFFECT_CORRELATION;
+  if (result.outcome === "success" && effects.remaining.length !== 0)
+    return SUCCESSOR_FINDINGS.TARGET_SUCCESS_REMAINS;
+  if (hasOwn(result, "attemptedEffect") && (result.outcome !== "failed" || !isNonblank(result.attemptedEffect) || !all.includes(result.attemptedEffect)))
+    return SUCCESSOR_FINDINGS.TARGET_ATTEMPTED_EFFECT_INVALID;
+  return null;
+}
+function handoffValid(value) {
+  if (!isRecord(value) || firstUndeclared(value, HANDOFF_KEYS, "") !== null)
+    return false;
+  if (!["human", "operator"].includes(value.owner) || !isNonblank(value.reason) || !isStringArray(value.inspect) || value.inspect.length === 0)
+    return false;
+  if (!hasOwn(value, "resource"))
     return true;
-  return value.outcome === "success" === (value.failureClass === null);
+  return isRecord(value.resource) && Object.keys(value.resource).sort().join(",") === "id,kind" && isNonblank(value.resource.id) && isNonblank(value.resource.kind);
 }
-function causeCodeMatchesFailureClass(value) {
-  if (!hasOwn(value, "causeCode") || !isValidFailureClass(value.failureClass))
-    return true;
-  return isCauseCode(value.causeCode, value.failureClass);
+function guidanceFinding(result, rule) {
+  const hasNext = hasOwn(result, "nextAction");
+  const hasHandoff = hasOwn(result, "handoff");
+  if (hasNext === hasHandoff)
+    return SUCCESSOR_FINDINGS.ENVELOPE_NEXT_STEP_RULE;
+  if (hasNext && !isNonblank(result.nextAction))
+    return fieldInvalid("result.nextAction");
+  if (hasHandoff && !handoffValid(result.handoff))
+    return fieldInvalid("result.handoff");
+  if (rule.guidance === "next" !== hasNext)
+    return SUCCESSOR_FINDINGS.TARGET_GUIDANCE_CORRELATION;
+  return null;
 }
-function nextStepRuleHolds(value) {
-  if (!FAILURE_OUTCOMES.includes(value.outcome))
-    return true;
-  return isPresent(value.nextAction) !== isPresent(value.handoff);
+function retryFinding(result) {
+  if ((result.transactionState === "partially-completed" || result.transactionState === "unknown") && result.retryable === true)
+    return SUCCESSOR_FINDINGS.ENVELOPE_UNRESOLVED_RETRYABLE;
+  const hasDelay = hasOwn(result, "retryDelayMilliseconds");
+  if (result.retryable === true)
+    return hasDelay && isPositiveInteger(result.retryDelayMilliseconds) ? null : SUCCESSOR_FINDINGS.TARGET_RETRY_CORRELATION;
+  return hasDelay ? SUCCESSOR_FINDINGS.TARGET_RETRY_CORRELATION : null;
 }
-var isUnresolvedState = (value) => value === "partially-completed" || value === "unknown";
-function successIsResolved(value) {
-  return value.outcome !== "success" || !isUnresolvedState(value.transactionState);
+function causeFinding(result, observedExit) {
+  const rule = typeof result.causeCode === "string" && result.causeCode in CAUSE_RULES ? CAUSE_RULES[result.causeCode] : undefined;
+  if (rule === undefined)
+    return fieldInvalid("result.causeCode");
+  if (rule.failureClass !== result.failureClass || rule.outcome !== result.outcome || rule.state !== result.transactionState || rule.retryable !== result.retryable || rule.exit !== result.exitCode)
+    return SUCCESSOR_FINDINGS.TARGET_CAUSE_CORRELATION;
+  if (observedExit !== rule.exit)
+    return SUCCESSOR_FINDINGS.EXIT_MISMATCH;
+  return guidanceFinding(result, rule);
 }
-function unresolvedIsNotRetryable(value) {
-  return !isUnresolvedState(value.transactionState) || value.retryable === false;
+function outcomeFinding(result) {
+  if (result.outcome === "success")
+    return result.failureClass === null && result.repairAction === null ? null : SUCCESSOR_FINDINGS.TARGET_OUTCOME_DATA_CORRELATION;
+  if (result.data !== null)
+    return SUCCESSOR_FINDINGS.TARGET_OUTCOME_DATA_CORRELATION;
+  return isNonblank(result.repairAction) ? null : fieldInvalid("result.repairAction");
 }
-var isNonBlankString = (value) => typeof value === "string" && value.trim().length > 0;
-var isAbsentOrNonBlank = (value) => !isPresent(value) || isNonBlankString(value);
-function handoffReasonIsNonBlank(value) {
-  return !isRecord(value.handoff) || isNonBlankString(value.handoff.reason);
-}
-function crossFieldFindings(value) {
-  const rules = [
-    [envelopeFieldInvalid("outcome"), outcomeMatchesFailureClass(value)],
-    [envelopeFieldInvalid("causeCode"), causeCodeMatchesFailureClass(value)],
-    [FINDINGS.ENVELOPE_NEXT_STEP_RULE, nextStepRuleHolds(value)],
-    [FINDINGS.ENVELOPE_SUCCESS_UNRESOLVED, successIsResolved(value)],
-    [FINDINGS.ENVELOPE_UNRESOLVED_RETRYABLE, unresolvedIsNotRetryable(value)],
-    [envelopeFieldInvalid("nextAction"), isAbsentOrNonBlank(value.nextAction)],
-    [envelopeFieldInvalid("repairAction"), isAbsentOrNonBlank(value.repairAction)],
-    [envelopeFieldInvalid("handoff.reason"), handoffReasonIsNonBlank(value)]
+var validDiagnosticFile = (value) => value === null || typeof value === "string" && value.startsWith("/");
+var validSinkFailure = (value) => value === null || ["capacity", "setup", "write", "flush-timeout", "close"].includes(String(value));
+var validBoolean = (value) => typeof value === "boolean";
+function diagnosticFieldChecks(value) {
+  return [
+    { path: "file", value: value.file, valid: validDiagnosticFile },
+    { path: "sinkFailure", value: value.sinkFailure, valid: validSinkFailure },
+    { path: "droppedRecords", value: value.droppedRecords, valid: isSafeNonnegativeInteger },
+    { path: "unflushedRecords", value: value.unflushedRecords, valid: isSafeNonnegativeInteger },
+    { path: "truncatedRecords", value: value.truncatedRecords, valid: isSafeNonnegativeInteger },
+    { path: "countsComplete", value: value.countsComplete, valid: validBoolean },
+    { path: "closed", value: value.closed, valid: validBoolean }
   ];
-  return rules.filter(([, holds]) => !holds).map(([finding]) => finding);
 }
-function exitAlignmentFindings(value, observedExit) {
-  if (observedExit === undefined || !isValidFailureClass(value.failureClass))
-    return [];
-  const expectedExit = EXIT_FOR_MEANING.get(value.failureClass ?? "success");
-  return expectedExit === observedExit ? [] : [envelopeFieldInvalid("failureClass")];
+function availableDiagnosticsValid(value) {
+  const shapeFinding = firstMissing(value, AVAILABLE_DIAGNOSTIC_KEYS, "") ?? firstUndeclared(value, AVAILABLE_DIAGNOSTIC_KEYS, "");
+  return shapeFinding === null && firstInvalidField(diagnosticFieldChecks(value)) === null;
 }
-function envelopeFindings(value, observedExit) {
+function trustedDiagnosticsValid(value) {
+  if (firstUndeclared(value, TRUSTED_DIAGNOSTIC_KEYS, "") !== null)
+    return false;
+  return diagnosticFieldChecks(value).filter((check) => hasOwn(value, check.path)).every((check) => check.valid(check.value));
+}
+function diagnosticsFinding(value) {
+  if (value === undefined)
+    return null;
   if (!isRecord(value))
-    return [];
-  return unique([
-    ...fieldFindings(value, ENVELOPE_FIELD_CHECKS, envelopeFieldMissing, envelopeFieldInvalid),
-    ...crossFieldFindings(value),
-    ...exitAlignmentFindings(value, observedExit)
+    return "TARGET_DIAGNOSTICS_INVALID:diagnostics";
+  if (value.status === "available")
+    return availableDiagnosticsValid(value) ? null : "TARGET_DIAGNOSTICS_INVALID:diagnostics";
+  if (value.status !== "unavailable" || firstMissing(value, UNAVAILABLE_DIAGNOSTIC_KEYS, "") !== null || firstUndeclared(value, UNAVAILABLE_DIAGNOSTIC_KEYS, "") !== null)
+    return "TARGET_DIAGNOSTICS_INVALID:diagnostics";
+  if (!["status-invalid", "status-unavailable"].includes(String(value.reason)) || !isRecord(value.trusted))
+    return "TARGET_DIAGNOSTICS_INVALID:diagnostics";
+  return trustedDiagnosticsValid(value.trusted) ? null : "TARGET_DIAGNOSTICS_INVALID:diagnostics";
+}
+function commandSummaryValid(value) {
+  if (!isRecord(value) || Object.keys(value).sort().join(",") !== "commandIdentity,effectClass,route,summary")
+    return false;
+  const finding = firstInvalidField([
+    { path: "commandIdentity", value: value.commandIdentity, valid: isNonblank },
+    { path: "effectClass", value: value.effectClass, valid: (entry) => ["inspect", "repository-local", "external"].includes(String(entry)) },
+    { path: "route", value: value.route, valid: (entry) => Array.isArray(entry) && entry.every((token) => typeof token === "string") },
+    { path: "summary", value: value.summary, valid: isNonblank }
   ]);
+  return finding === null;
 }
-var COMMAND_FIELD_CHECKS = [
-  ["identity", isString],
-  ["argv", isString],
-  ["effectClass", oneOf(EFFECT_CLASSES)],
-  ["description", isString]
-];
-var acceptsCommandFields = (command) => COMMAND_FIELD_CHECKS.every(([field, accept]) => accept(command[field]));
-var isCommand = (value) => isRecord(value) && acceptsCommandFields(value);
-var isCommandList = (value) => Array.isArray(value) && value.length > 0 && value.every(isCommand);
-var DISCOVERY_FIELD_CHECKS = [
-  ["name", isString],
-  ["contractVersion", equals(CONTRACT_VERSION)],
-  ["generationConventionVersion", equals(GENERATION_CONVENTION_VERSION)],
-  ["machineMode", equals(MACHINE_MODE)],
-  ["commands", isCommandList],
-  ["exitMeanings", isRecord],
-  ["logtape", isBoolean]
-];
-var JUDGED_EXIT_MEANINGS = Object.entries(EXIT_MEANINGS).filter(([code]) => code !== "75");
-function exitMeaningFindings(result) {
-  if (!isRecord(result.exitMeanings))
-    return [];
-  const exitMeanings = result.exitMeanings;
-  const missing = Object.keys(EXIT_MEANINGS).filter((code) => !hasOwn(exitMeanings, code)).map((code) => discoveryFieldMissing(`exitMeanings.${code}`));
-  const invalid = JUDGED_EXIT_MEANINGS.filter(([code, meaning]) => hasOwn(exitMeanings, code) && exitMeanings[code] !== meaning).map(([code]) => envelopeFieldInvalid(`result.exitMeanings.${code}`));
-  const unavailable = hasOwn(exitMeanings, "75") && !isNonEmptyString(exitMeanings["75"]) ? [envelopeFieldInvalid("result.exitMeanings.75")] : [];
-  const undeclared = Object.keys(exitMeanings).filter((code) => !hasOwn(EXIT_MEANINGS, code)).map((code) => `${FINDINGS.DISCOVERY_FIELD_UNDECLARED}:exitMeanings.${code}`);
-  return [...missing, ...invalid, ...unavailable, ...undeclared];
+function exactObject(value, expected) {
+  return isRecord(value) && JSON.stringify(value) === JSON.stringify(expected);
 }
-function discoveryFindings(value) {
-  if (!isRecord(value) || !isRecord(value.result))
-    return [discoveryFieldMissing("result")];
+function discoveryCommands(result) {
+  if (!isRecord(result.data))
+    return { finding: fieldInvalid("result.data"), commands: [] };
+  const data = result.data;
+  const dataKeys = ["contractVersion", "generationConventionVersion", "profile", "commands", "exitMeanings", "signalExits", "effectExclusions"];
+  const dataShape = firstMissing(data, dataKeys, "result.data.") ?? firstUndeclared(data, dataKeys, "result.data.");
+  if (dataShape !== null)
+    return { finding: dataShape, commands: [] };
+  const metadataFinding = firstInvalidField([
+    { path: "result.data.contractVersion", value: data.contractVersion, valid: (value) => value === CHECKER_CONTRACT_VERSION },
+    { path: "result.data.generationConventionVersion", value: data.generationConventionVersion, valid: (value) => value === CHECKER_CONTRACT_VERSION },
+    { path: "result.data.profile", value: data.profile, valid: (value) => ["simple", "complex"].includes(String(value)) }
+  ]);
+  if (metadataFinding !== null)
+    return { finding: metadataFinding, commands: [] };
+  if (!Array.isArray(data.commands) || data.commands.length === 0)
+    return { finding: fieldInvalid("result.data.commands"), commands: [] };
+  if (!data.commands.every(commandSummaryValid))
+    return { finding: fieldInvalid("result.data.commands"), commands: [] };
+  const commands = data.commands.map((entry) => entry.commandIdentity);
+  if (new Set(commands).size !== commands.length)
+    return { finding: fieldInvalid("result.data.commands"), commands: [] };
+  const exitMeanings = { "0": "success", "1": "internal", "2": "usage", "3": "domain", "4": "schema", "75": "transient" };
+  if (!exactObject(data.exitMeanings, exitMeanings))
+    return { finding: fieldInvalid("result.data.exitMeanings"), commands: [] };
+  if (!exactObject(data.signalExits, { "130": "SIGINT", "143": "SIGTERM" }))
+    return { finding: fieldInvalid("result.data.signalExits"), commands: [] };
+  if (!isStringArray(data.effectExclusions))
+    return { finding: fieldInvalid("result.data.effectExclusions"), commands: [] };
+  return { finding: null, commands };
+}
+function validateSupported(value, observedExit, declaredCommands, discovery) {
+  const version = CHECKER_CONTRACT_VERSION;
+  if (exceedsDepth(value))
+    return { observedContractVersion: version, findings: [SUCCESSOR_FINDINGS.TARGET_JSON_DEPTH_EXCEEDED], declaredCommands: [] };
+  const topFinding = basicTopFinding(value);
+  if (topFinding !== null)
+    return { observedContractVersion: version, findings: [topFinding], declaredCommands: [] };
+  if (!isRecord(value.result))
+    return { observedContractVersion: version, findings: ["TARGET_SCHEMA_INVALID:result"], declaredCommands: [] };
   const result = value.result;
-  const invalid = (field) => envelopeFieldInvalid(`result.${field}`);
-  return unique([...fieldFindings(result, DISCOVERY_FIELD_CHECKS, discoveryFieldMissing, invalid), ...exitMeaningFindings(result)]);
+  const structural = basicResultFinding(result) ?? effectsFinding(result);
+  if (structural !== null)
+    return { observedContractVersion: version, findings: [structural], declaredCommands: [] };
+  const semantic = retryFinding(result) ?? causeFinding(result, observedExit) ?? outcomeFinding(result) ?? effectCorrelationFinding(result) ?? diagnosticsFinding(value.diagnostics);
+  if (semantic !== null)
+    return { observedContractVersion: version, findings: [semantic], declaredCommands: [] };
+  if (!sortedUnique(value.availablePaths))
+    return { observedContractVersion: version, findings: [SUCCESSOR_FINDINGS.TARGET_AVAILABLE_PATHS_INVALID], declaredCommands: [] };
+  if (declaredCommands !== undefined && ![result.commandIdentity, ...value.availablePaths].every((identity) => declaredCommands.includes(identity)))
+    return { observedContractVersion: version, findings: [SUCCESSOR_FINDINGS.TARGET_COMMAND_UNDECLARED], declaredCommands: [] };
+  if (!discovery)
+    return { observedContractVersion: version, findings: [], declaredCommands: [] };
+  const declared = discoveryCommands(result);
+  return { observedContractVersion: version, findings: declared.finding === null ? [] : [declared.finding], declaredCommands: declared.commands };
 }
-var SUFFIXED_CODES = [FINDINGS.DISCOVERY_FIELD_UNDECLARED, FINDINGS.SECRET_MARKER_LEAKED, FINDINGS.SECRET_KEY_NOT_REDACTED];
-function allFindingCodes() {
-  const envelopeFields = ENVELOPE_FIELD_CHECKS.map(([field]) => field);
-  const discoveryFields = DISCOVERY_FIELD_CHECKS.map(([field]) => field);
-  const exitCodes = Object.keys(EXIT_MEANINGS);
-  return unique([
-    ...Object.values(FINDINGS).filter((code) => !SUFFIXED_CODES.includes(code)),
-    ...envelopeFields.map(envelopeFieldMissing),
-    ...envelopeFields.map(envelopeFieldInvalid),
-    envelopeFieldInvalid("handoff.reason"),
-    ...discoveryFields.map((field) => envelopeFieldInvalid(`result.${field}`)),
-    ...exitCodes.map((code) => envelopeFieldInvalid(`result.exitMeanings.${code}`)),
-    discoveryFieldMissing("result"),
-    ...discoveryFields.map(discoveryFieldMissing),
-    ...exitCodes.map((code) => discoveryFieldMissing(`exitMeanings.${code}`)),
-    `${FINDINGS.DISCOVERY_FIELD_UNDECLARED}:exitMeanings.<key>`,
-    `${FINDINGS.SECRET_MARKER_LEAKED}:stdout`,
-    `${FINDINGS.SECRET_MARKER_LEAKED}:stderr`,
-    `${FINDINGS.SECRET_KEY_NOT_REDACTED}:<path>`
-  ]);
+function validateTargetEnvelope(value, observedExit, declaredCommands, discovery = false) {
+  const observedContractVersion = safeObservedVersion(value);
+  if (!isRecord(value))
+    return { observedContractVersion, findings: [SUCCESSOR_FINDINGS.STDOUT_NOT_SINGLE_JSON_OBJECT], declaredCommands: [] };
+  if (observedContractVersion !== CHECKER_CONTRACT_VERSION)
+    return { observedContractVersion, findings: ["TARGET_CONTRACT_UNSUPPORTED"], declaredCommands: [] };
+  return validateSupported(value, observedExit, declaredCommands, discovery);
 }
 
-// packages/cli-design-check/src/render.ts
-function stringify(envelope) {
-  return `${JSON.stringify(envelope)}
+// packages/cli-design-check/src/successor/command-contract.ts
+var CHECKER_IDENTITIES = {
+  discovery: "cli-design-check.discovery",
+  dispatch: "cli-design-check.dispatch",
+  help: "cli-design-check.help",
+  run: "cli-design-check.run"
+};
+var SUMMARY = "Inspect a target CLI through the strict 2.0.0 design-contract scenario matrix";
+var USAGE = 'cli-design-check --cwd <dir> --command "<argv words>" --success-args "<args>" --missing-args "<args>" --internal-args "<args>" --schema-args "<args>" --transient-args "<args>" [options]';
+var COMMANDS = [
+  { commandIdentity: CHECKER_IDENTITIES.discovery, route: ["--discover"], summary: "Describe the checker command and 2.0 contract", effectClass: "inspect" },
+  { commandIdentity: CHECKER_IDENTITIES.dispatch, route: [], summary: "Report invalid checker invocations", effectClass: "inspect" },
+  { commandIdentity: CHECKER_IDENTITIES.help, route: ["--help"], summary: "Show checker help and usage", effectClass: "inspect" },
+  { commandIdentity: CHECKER_IDENTITIES.run, route: [], summary: "Inspect a target CLI through the successor scenario matrix", effectClass: "inspect" }
+];
+var OPTION_DESCRIPTORS = [
+  { key: "help", name: "--help", type: "boolean", valueName: null, summary: "Show help" },
+  { key: "discover", name: "--discover", type: "boolean", valueName: null, summary: "Show command and contract discovery" },
+  { key: "json", name: "--json", type: "boolean", valueName: null, summary: "Emit one machine-readable 2.0 envelope" },
+  { key: "cwd", name: "--cwd", type: "string", valueName: "dir", summary: "Select the target working directory" },
+  { key: "command", name: "--command", type: "string", valueName: "argv words", summary: "Select the target CLI command" },
+  { key: "success-args", name: "--success-args", type: "string", valueName: "args", summary: "Set the target success arguments" },
+  { key: "missing-args", name: "--missing-args", type: "string", valueName: "args", summary: "Set the target missing-input arguments" },
+  { key: "internal-args", name: "--internal-args", type: "string", valueName: "args", summary: "Set the target internal-failure arguments" },
+  { key: "schema-args", name: "--schema-args", type: "string", valueName: "args", summary: "Set the target schema-refusal arguments" },
+  { key: "transient-args", name: "--transient-args", type: "string", valueName: "args", summary: "Set the target transient-refusal arguments" },
+  { key: "retain-streams-dir", name: "--retain-streams-dir", type: "string", valueName: "absolute-directory", summary: "Retain raw target streams in an existing private directory" },
+  { key: "effect-args", name: "--effect-args", type: "string", valueName: "args", summary: "Set optional authority-refusal arguments" },
+  { key: "secret-args", name: "--secret-args", type: "string", valueName: "args", summary: "Set optional secret-redaction arguments" },
+  { key: "secret-marker", name: "--secret-marker", type: "string", valueName: "string", summary: "Set the secret marker paired with secret arguments" },
+  { key: "malformed-args", name: "--malformed-args", type: "string", valueName: "args", summary: "Set optional malformed-value arguments" },
+  { key: "large-args", name: "--large-args", type: "string", valueName: "args", summary: "Set optional large-envelope arguments" },
+  { key: "timeout-ms", name: "--timeout-ms", type: "string", valueName: "n", summary: "Set the per-scenario timeout" }
+];
+var OPTIONS = OPTION_DESCRIPTORS.map(({ name, valueName, summary }) => ({ name, valueName, summary }));
+function checkerParseArgsOptions() {
+  return Object.fromEntries(OPTION_DESCRIPTORS.map(({ key, type }) => [key, { type }]));
+}
+function checkerOptionTakesValue(token) {
+  return OPTION_DESCRIPTORS.some((option) => option.name === token && option.type === "string");
+}
+var CHECKER_AVAILABLE_PATHS = COMMANDS.map((command) => command.commandIdentity);
+var CHECKER_HELP_DATA = {
+  usage: USAGE,
+  summary: SUMMARY,
+  commands: COMMANDS,
+  options: OPTIONS
+};
+var CHECKER_DISCOVERY_DATA = {
+  contractVersion: CHECKER_CONTRACT_VERSION,
+  generationConventionVersion: CHECKER_CONTRACT_VERSION,
+  profile: "simple",
+  commands: COMMANDS,
+  exitMeanings: checkerExitMeanings(),
+  signalExits: { "130": "SIGINT", "143": "SIGTERM" },
+  effectExclusions: ["retained raw stream files are diagnostic custody, not target domain effects"]
+};
+function renderCheckerHelpHuman() {
+  return `${SUMMARY}
+
+usage:
+  ${USAGE}
+
+example:
+  cli-design-check --discover --json
 `;
 }
-function baseEnvelope() {
-  return {
-    envelopeVersion: ENVELOPE_VERSION,
-    contractVersion: CONTRACT_VERSION,
-    commandIdentity: "cli-design-check.run",
-    runIdentity: `run-${randomUUID()}`,
-    effectClass: "inspect",
-    transactionState: "unchanged",
-    retryable: false,
-    retryDelayMilliseconds: null,
-    availablePaths: [],
-    handoff: null
-  };
+function renderCheckerDiscoveryHuman() {
+  const commands = COMMANDS.map((command) => `command: ${command.commandIdentity}
+  route: ${command.route.join(" ") || "<root>"}
+  effect: ${command.effectClass}
+  summary: ${command.summary}`);
+  const exits = Object.entries(CHECKER_DISCOVERY_DATA.exitMeanings).map(([exit, meaning]) => `exit ${exit}: ${meaning}`);
+  const signals = Object.entries(CHECKER_DISCOVERY_DATA.signalExits).map(([exit, signal]) => `signal ${exit}: ${signal}`);
+  const exclusions = CHECKER_DISCOVERY_DATA.effectExclusions.map((exclusion) => `effect exclusion: ${exclusion}`);
+  return `${[SUMMARY, `contract version: ${CHECKER_CONTRACT_VERSION}`, "profile: simple", ...commands, ...exits, ...signals, ...exclusions].join(`
+`)}
+`;
+}
+
+// packages/cli-design-check/src/successor/render.ts
+var EMPTY_EFFECTS = { completed: [], remaining: [], uncertain: [], inventoryComplete: true };
+function stringify(value) {
+  return `${JSON.stringify(value)}
+`;
+}
+function resultEnvelope(runId, commandIdentity, message, data, verdict) {
+  const rule = causeRuleFor(verdict.causeCode);
+  if (rule.guidance !== verdict.guidance.kind)
+    throw new Error(`guidance does not match ${verdict.causeCode}`);
+  if (rule.retryable !== (verdict.retryDelayMilliseconds !== undefined))
+    throw new Error(`retry delay does not match ${verdict.causeCode}`);
+  return stringify({
+    envelopeVersion: CHECKER_ENVELOPE_VERSION,
+    contractVersion: CHECKER_CONTRACT_VERSION,
+    message,
+    availablePaths: CHECKER_AVAILABLE_PATHS,
+    result: {
+      runId,
+      commandIdentity,
+      outcome: rule.outcome,
+      effectClass: "inspect",
+      transactionState: rule.state,
+      causeCode: verdict.causeCode,
+      failureClass: rule.failureClass,
+      exitCode: rule.exit,
+      data: rule.outcome === "success" ? data : null,
+      retryable: rule.retryable,
+      ...verdict.retryDelayMilliseconds === undefined ? {} : { retryDelayMilliseconds: verdict.retryDelayMilliseconds },
+      repairAction: verdict.repairAction,
+      effects: EMPTY_EFFECTS,
+      ...verdict.guidance.kind === "next" ? { nextAction: verdict.guidance.nextAction } : { handoff: verdict.guidance.handoff }
+    }
+  });
 }
 function cell(value) {
-  if (value === null)
-    return "-";
-  return typeof value === "number" ? String(value) : value.join("|");
+  return value === null ? "-" : String(value);
 }
 function renderRow(row) {
-  const verdict = row.passed ? "pass" : "fail";
-  const findings = row.findings.join(", ") || "-";
-  return `${row.scenario} | ${cell(row.observedExit)} | ${cell(row.expectedExit)} | ${verdict} | ${findings}`;
-}
-function list(values) {
-  return values.join(", ") || "-";
+  const custody = row.streamCustody === null ? "-" : `${row.streamCustody.stdoutPath},${row.streamCustody.stderrPath}`;
+  return `${row.scenario} | ${cell(row.observedExit)} | ${cell(row.expectedExit)} | ${row.passed ? "pass" : "fail"} | ${row.findings.join(", ") || "-"} | ${cell(row.observedContractVersion)} | ${custody}`;
 }
 function renderHuman(report) {
-  const observation = report.targetObservation;
   const lines = [
-    "scenario | exit | expected | result | findings",
+    "scenario | exit | expected | result | findings | version | retained streams",
     ...report.rows.map(renderRow),
     `passed ${report.passedCount}/${report.rows.length}`,
     `target unchanged: ${report.targetUnchanged ? "yes" : "no"}`,
-    `skipped scenarios: ${list(report.skippedScenarios)}`,
-    `unproved findings: ${list(report.findingCoverage.unproved)}`,
-    `unjudged: ${list(report.unjudged)}`,
-    `target root: ${observation.root}`,
-    `target hashed regular files: ${observation.hashedRegularFiles.length}`,
-    `target excluded directories: ${list(observation.excludedDirectories)}`,
-    `target excluded entry kinds: ${list(observation.excludedEntryKinds)}`,
-    `target not observed: ${list(observation.notObserved)}`,
-    `target changed paths: ${list(observation.changedPaths)}`
+    `retention requested: ${report.retention.requested ? "yes" : "no"}`,
+    `skipped rows: ${report.skippedRows.length === 0 ? "none" : report.skippedRows.join(", ")}`,
+    `observation exclusions: ${report.observationExclusions.length === 0 ? "none" : report.observationExclusions.join(", ")}`
   ];
   return `${lines.join(`
 `)}
 `;
 }
-function verdictFields(firstFailure) {
-  if (firstFailure === undefined)
-    return { outcome: "success", failureClass: null, causeCode: null, nextAction: null, repairAction: null };
+function retainedPaths(report) {
+  return report.rows.flatMap((row) => row.streamCustody === null ? [] : [row.streamCustody.stdoutPath, row.streamCustody.stderrPath]);
+}
+function reportDisclosure(report) {
+  const custody = retainedPaths(report);
+  return `Checker report: ${report.passedCount}/${report.rows.length} passed; ${report.failedCount} failed; skipped rows: ${report.skippedRows.length === 0 ? "none" : report.skippedRows.join(", ")}; observation exclusions: ${report.observationExclusions.length === 0 ? "none" : report.observationExclusions.join(", ")}; retained stream custody: ${custody.length === 0 ? "none" : custody.join(", ")}.`;
+}
+function semanticVersionParts(value) {
+  const match = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/.exec(value);
+  if (match === null)
+    return null;
+  return [BigInt(match[1] ?? ""), BigInt(match[2] ?? ""), BigInt(match[3] ?? "")];
+}
+function supportedVersionParts() {
+  const parts = semanticVersionParts(CHECKER_CONTRACT_VERSION);
+  if (parts === null)
+    throw new Error(`checker contract version ${CHECKER_CONTRACT_VERSION} is not semantic`);
+  return parts;
+}
+var SUPPORTED_VERSION_PARTS = supportedVersionParts();
+function compareToSupportedVersion(value) {
+  const observed = semanticVersionParts(value);
+  if (observed === null)
+    return null;
+  for (const [index, part] of observed.entries()) {
+    const expected = SUPPORTED_VERSION_PARTS[index];
+    if (part < expected)
+      return -1;
+    if (part > expected)
+      return 1;
+  }
+  return 0;
+}
+function unsupportedGuidance(observedVersion) {
+  if (observedVersion === null)
+    return { message: "Target contract version is missing; observed null.", repairAction: "Supply an explicit supported 2.0.0 document." };
+  const rendered = JSON.stringify(observedVersion);
+  const comparison = compareToSupportedVersion(observedVersion);
+  if (observedVersion === "1.0" || comparison === -1)
+    return { message: `Target contract version ${rendered} is unsupported legacy format.`, repairAction: "Obtain a conforming 2.0.0 producer; no legacy adapter is available." };
+  if (comparison === 1)
+    return { message: `Target contract version ${rendered} is newer than supported 2.0.0.`, repairAction: `Use a reviewed consumer matching ${rendered}, or obtain a conforming 2.0.0 producer.` };
+  if (/\d/.test(observedVersion))
+    return { message: `Target contract version ${rendered} is malformed.`, repairAction: "Supply an explicit supported 2.0.0 document." };
+  return { message: `Target contract version ${rendered} is unrecognized.`, repairAction: "Supply an explicit supported 2.0.0 document." };
+}
+function reportVerdict(report) {
+  const disclosure = reportDisclosure(report);
+  if (report.failedCount === 0) {
+    return {
+      message: `Target contract 2.0.0 accepted. ${disclosure}`,
+      causeCode: "SUCCESS_UNCHANGED",
+      repairAction: null,
+      guidance: { kind: "next", nextAction: CHECKER_IDENTITIES.run }
+    };
+  }
+  const first = report.rows.find((row) => !row.passed);
+  const finding = first?.findings[0] ?? "unknown finding";
+  if (finding === "TARGET_CONTRACT_UNSUPPORTED") {
+    const guidance = unsupportedGuidance(first?.observedContractVersion ?? null);
+    return {
+      message: `${guidance.message} ${disclosure}`,
+      causeCode: "SCHEMA_UNSUPPORTED_CONTRACT",
+      repairAction: guidance.repairAction,
+      guidance: { kind: "next", nextAction: CHECKER_IDENTITIES.run }
+    };
+  }
   return {
-    outcome: "refused",
-    failureClass: "domain",
-    causeCode: "DOMAIN_CONTRACT_VIOLATION",
-    nextAction: `inspect scenario "${firstFailure.scenario}"`,
-    repairAction: `${firstFailure.scenario} failed: ${firstFailure.findings[0]}`
+    message: `Target contract 2.0.0 is broken: ${finding}. ${disclosure}`,
+    causeCode: "SCHEMA_INVALID_INPUT",
+    repairAction: `Repair target 2.0.0 field or correlation ${finding}, then rerun the checker. Inspect the target's effects separately; do not replay it automatically.`,
+    guidance: { kind: "next", nextAction: CHECKER_IDENTITIES.run }
   };
 }
 function renderJson(report) {
-  return stringify({
-    ...baseEnvelope(),
-    ...verdictFields(report.rows.find((row) => !row.passed)),
-    message: `passed ${report.passedCount}/${report.rows.length} scenarios`,
-    result: report
-  });
-}
-function renderHelp(usage) {
-  return stringify({
-    ...baseEnvelope(),
-    outcome: "success",
-    failureClass: null,
-    causeCode: null,
-    message: "cli-design-check usage",
-    nextAction: null,
-    repairAction: null,
-    result: { usage }
-  });
+  const verdict = reportVerdict(report);
+  const exit = causeRuleFor(verdict.causeCode).exit;
+  return { text: resultEnvelope(report.runIdentity, CHECKER_IDENTITIES.run, verdict.message, report, verdict), exit };
 }
 function renderUsageError(message) {
-  return stringify({
-    ...baseEnvelope(),
-    outcome: "refused",
-    failureClass: "usage",
-    causeCode: "USAGE_INVALID_ARGUMENTS",
-    message,
-    nextAction: "run cli-design-check --help",
-    repairAction: "Correct the arguments and retry.",
-    result: null
+  return resultEnvelope("run-cli-design-check-usage", CHECKER_IDENTITIES.dispatch, message, null, {
+    causeCode: "USAGE_INVALID_INVOCATION",
+    repairAction: "Correct the invocation using cli-design-check --help.",
+    guidance: { kind: "next", nextAction: CHECKER_IDENTITIES.help }
+  });
+}
+function renderHelp() {
+  return resultEnvelope("run-cli-design-check-help", CHECKER_IDENTITIES.help, "Describe the successor checker invocation.", CHECKER_HELP_DATA, {
+    causeCode: "SUCCESS_UNCHANGED",
+    repairAction: null,
+    guidance: { kind: "next", nextAction: CHECKER_IDENTITIES.run }
+  });
+}
+function renderDiscovery() {
+  return resultEnvelope("run-cli-design-check-discovery", CHECKER_IDENTITIES.discovery, "Describe the checker command and 2.0 contract.", CHECKER_DISCOVERY_DATA, {
+    causeCode: "SUCCESS_UNCHANGED",
+    repairAction: null,
+    guidance: { kind: "next", nextAction: CHECKER_IDENTITIES.run }
   });
 }
 function renderInternalError(message) {
-  return stringify({
-    ...baseEnvelope(),
-    outcome: "failed",
-    failureClass: "internal",
-    causeCode: "INTERNAL_UNEXPECTED",
-    message,
-    nextAction: "inspect message, then retry",
-    repairAction: "Inspect the error and retry.",
-    result: null
+  return resultEnvelope("run-cli-design-check-internal", CHECKER_IDENTITIES.run, message, null, {
+    causeCode: "INTERNAL_RESULT_UNCHANGED",
+    repairAction: "Inspect the checker failure without replaying the target.",
+    guidance: { kind: "handoff", handoff: { owner: "operator", reason: "Checker result production failed after target execution.", inspect: [CHECKER_IDENTITIES.run] } }
   });
 }
 
-// packages/cli-design-check/src/runner.ts
+// packages/cli-design-check/src/successor/runner.ts
 import { spawn } from "child_process";
-import { createHash } from "crypto";
-import { readdir } from "fs/promises";
-import { join, relative } from "path";
+import { createHash, randomUUID } from "crypto";
+import { lstatSync } from "fs";
+import { lstat, open, readlink, readdir, unlink } from "fs/promises";
+import { isAbsolute, join, relative } from "path";
 
-// packages/cli-design-check/src/scenario-rules.ts
+// packages/cli-design-check/src/successor/scenario-rules.ts
 var JSON_FLAG = "--json";
-function isOneNonEmptyLine(text) {
-  const withoutTrailingNewlines = text.replace(/(?:\r\n|\n|\r)+$/g, "");
-  return withoutTrailingNewlines.length > 0 && !/[\r\n]/.test(withoutTrailingNewlines);
-}
-function when(failed, finding) {
-  return failed ? [finding] : [];
-}
-function parseSingleJsonObject(text) {
+var LARGE_ENVELOPE_THRESHOLD_BYTES = 1024 * 1024;
+var REDACTED = "[REDACTED]";
+var SECRET_KEY_PATTERN = /(token|secret|password|passwd|credential|api[-_]?key|private[-_]?key)/i;
+function parseSingleJsonRecord(text) {
   if (text.trim() === "")
     return null;
   try {
     const value = JSON.parse(text);
-    return isRecord(value) ? value : null;
+    return typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
   } catch {
     return null;
   }
 }
-function secretMarkerLeaked(stream) {
-  return `${FINDINGS.SECRET_MARKER_LEAKED}:${stream}`;
+function parsesAsObjectOrArray(text) {
+  try {
+    const value = JSON.parse(text);
+    return typeof value === "object" && value !== null;
+  } catch {
+    return false;
+  }
 }
-function secretKeyEntryFindings(path, key, child) {
-  if (SECRET_KEY_PATTERN.test(key) && child !== REDACTED)
-    return [`${FINDINGS.SECRET_KEY_NOT_REDACTED}:${path}`];
-  return secretKeyFindings(child, `${path}.`);
+function oneLine(text) {
+  const trimmed = text.replace(/(?:\r\n|\n|\r)+$/g, "");
+  return trimmed.length > 0 && !/[\r\n]/.test(trimmed);
+}
+function humanFindings(spec, result) {
+  if (result.stderr !== "" && spec.kind !== "human-refusal")
+    return [SUCCESSOR_FINDINGS.STDERR_NOT_EMPTY];
+  if (spec.kind === "human-refusal") {
+    if (result.stdout !== "")
+      return ["STDOUT_NOT_EMPTY"];
+    return oneLine(result.stderr) ? [] : ["STDERR_NOT_ONE_LINE"];
+  }
+  if (result.stdout === "")
+    return [SUCCESSOR_FINDINGS.STDOUT_EMPTY];
+  if (spec.kind === "human-help" && !/usage/i.test(result.stdout))
+    return ["HELP_MISSING_USAGE"];
+  if ((spec.kind === "human-discovery" || spec.kind === "human-success") && parsesAsObjectOrArray(result.stdout))
+    return [SUCCESSOR_FINDINGS.HUMAN_OUTPUT_IS_JSON];
+  return [];
 }
 function secretKeyFindings(value, prefix = "") {
-  if (!isRecord(value) && !Array.isArray(value))
+  if (typeof value !== "object" || value === null)
     return [];
-  return Object.entries(value).flatMap(([key, child]) => secretKeyEntryFindings(`${prefix}${key}`, key, child));
+  return Object.entries(value).flatMap(([key, child]) => {
+    const path = `${prefix}${key}`;
+    if (SECRET_KEY_PATTERN.test(key) && child !== REDACTED)
+      return [`SECRET_KEY_NOT_REDACTED:${path}`];
+    return secretKeyFindings(child, `${path}.`);
+  });
 }
-var helpRule = ({ result }) => [
-  ...when(result.stdout.length === 0, FINDINGS.STDOUT_EMPTY),
-  ...when(result.stdout.length > 0 && !/usage/i.test(result.stdout), FINDINGS.HELP_MISSING_USAGE)
-];
-var humanRefusalRule = ({ result }) => [
-  ...when(result.stdout.length !== 0, FINDINGS.STDOUT_NOT_EMPTY),
-  ...when(!isOneNonEmptyLine(result.stderr), FINDINGS.STDERR_NOT_ONE_LINE)
-];
-function isJsonStructure(text) {
-  if (text.trim() === "")
-    return false;
-  try {
-    const value = JSON.parse(text);
-    return isRecord(value) || Array.isArray(value);
-  } catch {
-    return false;
+function optionalFindings(spec, result, parsed) {
+  const findings = [];
+  if (spec.largeEnvelope === true && parsed !== null && Buffer.byteLength(result.stdout, "utf8") < LARGE_ENVELOPE_THRESHOLD_BYTES)
+    findings.push("LARGE_ENVELOPE_BELOW_THRESHOLD");
+  if (spec.secretMarker !== undefined) {
+    findings.push(...secretKeyFindings(parsed));
+    if (result.stdout.includes(spec.secretMarker))
+      findings.push("SECRET_MARKER_LEAKED:stdout");
+    if (result.stderr.includes(spec.secretMarker))
+      findings.push("SECRET_MARKER_LEAKED:stderr");
   }
+  return findings;
 }
-var humanSuccessRule = ({ result }) => [
-  ...when(result.stdout.length === 0, FINDINGS.STDOUT_EMPTY),
-  ...when(isJsonStructure(result.stdout), FINDINGS.HUMAN_OUTPUT_IS_JSON)
-];
-var stderrEmptyRule = ({ result }) => when(result.stderr.length !== 0, FINDINGS.STDERR_NOT_EMPTY);
-var jsonStderrRule = ({ result, stderrObject }) => [
-  ...when(result.stderr.length !== 0, FINDINGS.STDERR_NOT_EMPTY),
-  ...when(stderrObject !== null, FINDINGS.JSON_ON_STDERR)
-];
-var envelopeRule = ({ result, stdoutObject }) => {
-  if (stdoutObject === null)
-    return [FINDINGS.STDOUT_NOT_SINGLE_JSON_OBJECT];
-  return envelopeFindings(stdoutObject, result.observedExit ?? undefined);
-};
-var discoveryRule = ({ stdoutObject }) => stdoutObject === null ? [] : discoveryFindings(stdoutObject);
-var LARGE_ENVELOPE_THRESHOLD_BYTES = 1024 * 1024;
-var largeEnvelopeRule = ({ result, stdoutObject }) => when(stdoutObject !== null && Buffer.byteLength(result.stdout, "utf8") < LARGE_ENVELOPE_THRESHOLD_BYTES, FINDINGS.LARGE_ENVELOPE_BELOW_THRESHOLD);
-function expecting(expectations) {
-  return ({ stdoutObject }) => {
-    if (stdoutObject === null)
-      return [];
-    return expectations.filter(([field, accept]) => !accept(stdoutObject[field])).map(([field]) => envelopeFieldInvalid(field));
-  };
+function exitAccepted(expected, observed) {
+  return typeof expected === "number" ? observed === expected : observed !== null && expected.includes(observed);
 }
-var secretRule = ({ spec, result, stdoutObject }) => {
-  const marker = spec.secretMarker ?? "";
-  return [
-    ...secretKeyFindings(stdoutObject?.result),
-    ...when(marker !== "" && result.stdout.includes(marker), secretMarkerLeaked("stdout")),
-    ...when(marker !== "" && result.stderr.includes(marker), secretMarkerLeaked("stderr"))
-  ];
-};
-var isUnchanged = (value) => value === "unchanged";
-var isFalse = (value) => value === false;
-var isDomain = (value) => value === "domain";
-var isRefused = (value) => value === "refused";
-var usageRefusalRules = [
-  envelopeRule,
-  expecting([
-    ["outcome", isRefused],
-    ["failureClass", (value) => value === "usage"],
-    ["causeCode", (value) => typeof value === "string" && value.startsWith("USAGE_")],
-    ["transactionState", isUnchanged]
-  ]),
-  jsonStderrRule
-];
-var RULES = {
-  help: [helpRule, stderrEmptyRule],
-  "help-json": [envelopeRule, jsonStderrRule],
-  discover: [envelopeRule, discoveryRule, jsonStderrRule],
-  "no-arguments": [humanRefusalRule],
-  "no-arguments-json": usageRefusalRules,
-  "unknown-option": [humanRefusalRule],
-  "unknown-option-json": usageRefusalRules,
-  "success-human": [humanSuccessRule, stderrEmptyRule],
-  "success-json": [
-    envelopeRule,
-    expecting([
-      ["outcome", (value) => value === "success"],
-      ["failureClass", (value) => value === null],
-      ["transactionState", isUnchanged]
-    ]),
-    jsonStderrRule
-  ],
-  "missing-input": [
-    envelopeRule,
-    expecting([
-      ["outcome", (value) => value === "refused" || value === "failed"],
-      ["failureClass", isDomain],
-      ["retryable", isFalse],
-      ["transactionState", isUnchanged],
-      ["repairAction", (value) => typeof value === "string" && value.length > 0]
-    ]),
-    jsonStderrRule
-  ],
-  "malformed-value-json": [
-    envelopeRule,
-    expecting([
-      ["outcome", (value) => value === "refused" || value === "failed"],
-      ["failureClass", (value) => value === "domain" || value === "schema"],
-      ["retryable", isFalse],
-      ["transactionState", isUnchanged],
-      ["repairAction", (value) => typeof value === "string" && value.length > 0]
-    ]),
-    jsonStderrRule
-  ],
-  "unauthorized-effect": [
-    envelopeRule,
-    expecting([
-      ["outcome", isRefused],
-      ["failureClass", isDomain],
-      ["transactionState", isUnchanged],
-      ["retryable", isFalse]
-    ]),
-    jsonStderrRule
-  ],
-  "secret-redaction": [envelopeRule, secretRule, jsonStderrRule],
-  "large-envelope": [envelopeRule, largeEnvelopeRule, jsonStderrRule]
-};
-function exitAccepted(expectedExit, observedExit) {
-  return typeof expectedExit === "number" ? observedExit === expectedExit : observedExit !== null && expectedExit.includes(observedExit);
-}
-function scenarioFindings(spec, result) {
-  const observation = {
-    spec,
-    result,
-    stdoutObject: parseSingleJsonObject(result.stdout),
-    stderrObject: parseSingleJsonObject(result.stderr)
-  };
-  const rules = RULES[spec.scenario] ?? [];
-  const findings = [
-    ...when(result.timedOut, FINDINGS.PROMPTED_OR_HUNG),
-    ...rules.flatMap((rule) => rule(observation)),
-    ...when(!exitAccepted(spec.expectedExit, result.observedExit), FINDINGS.EXIT_MISMATCH)
-  ];
-  return [...new Set(findings)];
+function analyzeScenario(spec, result, declaredCommands) {
+  if (result.timedOut)
+    return { findings: ["PROMPTED_OR_HUNG"], observedContractVersion: null, declaredCommands: [] };
+  if (spec.kind !== "machine") {
+    const findings = humanFindings(spec, result);
+    if (findings.length === 0 && !exitAccepted(spec.expectedExit, result.observedExit))
+      findings.push(SUCCESSOR_FINDINGS.EXIT_MISMATCH);
+    return { findings, observedContractVersion: null, declaredCommands: [] };
+  }
+  const parsed = parseSingleJsonRecord(result.stdout);
+  const optional = optionalFindings(spec, result, parsed);
+  if (result.stderr !== "")
+    return { findings: [...new Set([SUCCESSOR_FINDINGS.STDERR_NOT_EMPTY, ...optional])], observedContractVersion: null, declaredCommands: [] };
+  if (parsed === null)
+    return { findings: [...new Set([SUCCESSOR_FINDINGS.STDOUT_NOT_SINGLE_JSON_OBJECT, ...optional])], observedContractVersion: null, declaredCommands: [] };
+  const validation = validateTargetEnvelope(parsed, result.observedExit, declaredCommands, spec.discovery === true);
+  return { ...validation, findings: [...new Set([...validation.findings, ...optional])] };
 }
 function optionalRows(options) {
   const secretArgs = options.secretMarker === undefined ? undefined : options.secretArgs;
   return [
     { scenario: "malformed-value-json", argv: options.malformedArgs, expectedExit: [3, 4] },
-    { scenario: "large-envelope", argv: options.largeArgs, expectedExit: 0 },
+    { scenario: "large-envelope", argv: options.largeArgs, expectedExit: 0, largeEnvelope: true },
     { scenario: "unauthorized-effect", argv: options.effectArgs, expectedExit: 3 },
     { scenario: "secret-redaction", argv: secretArgs, expectedExit: 0, secretMarker: options.secretMarker }
   ];
@@ -518,349 +699,49 @@ function optionalRows(options) {
 function optionalScenario(row) {
   if (row.argv === undefined)
     return [];
-  return [{ scenario: row.scenario, argv: [...row.argv, JSON_FLAG], expectedExit: row.expectedExit, secretMarker: row.secretMarker }];
+  return [{ scenario: row.scenario, argv: [...row.argv, JSON_FLAG], expectedExit: row.expectedExit, kind: "machine", largeEnvelope: row.largeEnvelope, secretMarker: row.secretMarker }];
 }
-function skippedScenarios(options) {
+function skippedSuccessorScenarios(options) {
   return optionalRows(options).filter((row) => row.argv === undefined).map((row) => row.scenario);
 }
-function buildScenarios(options) {
+function buildSuccessorScenarios(options) {
   return [
-    { scenario: "help", argv: ["--help"], expectedExit: 0 },
-    { scenario: "help-json", argv: [JSON_FLAG, "--help"], expectedExit: 0 },
-    { scenario: "discover", argv: ["--discover", JSON_FLAG], expectedExit: 0 },
-    { scenario: "no-arguments", argv: [], expectedExit: 2 },
-    { scenario: "no-arguments-json", argv: [JSON_FLAG], expectedExit: 2 },
-    { scenario: "unknown-option", argv: ["--definitely-unknown-option"], expectedExit: 2 },
-    { scenario: "unknown-option-json", argv: ["--definitely-unknown-option", JSON_FLAG], expectedExit: 2 },
-    { scenario: "success-human", argv: [...options.successArgs], expectedExit: 0 },
-    { scenario: "success-json", argv: [...options.successArgs, JSON_FLAG], expectedExit: 0 },
-    { scenario: "missing-input", argv: [...options.missingArgs, JSON_FLAG], expectedExit: 3 },
-    ...optionalRows(options).flatMap(optionalScenario)
+    { scenario: "help-human", argv: ["--help"], expectedExit: 0, kind: "human-help" },
+    { scenario: "help-json", argv: ["--help", JSON_FLAG], expectedExit: 0, kind: "machine" },
+    { scenario: "discover-human", argv: ["--discover"], expectedExit: 0, kind: "human-discovery" },
+    { scenario: "discover-json", argv: ["--discover", JSON_FLAG], expectedExit: 0, kind: "machine", discovery: true },
+    { scenario: "no-arguments-human", argv: [], expectedExit: 2, kind: "human-refusal" },
+    { scenario: "no-arguments-json", argv: [JSON_FLAG], expectedExit: 2, kind: "machine" },
+    { scenario: "unknown-option-human", argv: ["--definitely-unknown-option"], expectedExit: 2, kind: "human-refusal" },
+    { scenario: "unknown-option-json", argv: ["--definitely-unknown-option", JSON_FLAG], expectedExit: 2, kind: "machine" },
+    { scenario: "success-human", argv: [...options.successArgs], expectedExit: 0, kind: "human-success" },
+    { scenario: "success-json", argv: [...options.successArgs, JSON_FLAG], expectedExit: 0, kind: "machine" },
+    { scenario: "missing-input-json", argv: [...options.missingArgs, JSON_FLAG], expectedExit: 3, kind: "machine" },
+    ...optionalRows(options).flatMap(optionalScenario),
+    { scenario: "internal-failure-json", argv: [...options.internalArgs, JSON_FLAG], expectedExit: 1, kind: "machine" },
+    { scenario: "schema-refusal-json", argv: [...options.schemaArgs, JSON_FLAG], expectedExit: 4, kind: "machine" },
+    { scenario: "transient-refusal-json", argv: [...options.transientArgs, JSON_FLAG], expectedExit: 75, kind: "machine" }
   ];
 }
 
-// packages/cli-design-check/src/specimen-manifest.ts
-var SPECIMEN_MANIFEST = [
-  {
-    rule: "O-01",
-    code: "STDOUT_NOT_SINGLE_JSON_OBJECT",
-    specimen: "S01",
-    proof: "process",
-    row: "help-json",
-    mutation: "prose on `--help --json`",
-    findings: ["STDOUT_NOT_SINGLE_JSON_OBJECT"]
-  },
-  {
-    rule: "O-16",
-    code: "STDOUT_NOT_SINGLE_JSON_OBJECT",
-    specimen: "S19",
-    proof: "process",
-    row: "no-arguments-json",
-    mutation: "bare `--json` answers with a human one-liner on stderr and nothing on stdout",
-    findings: ["STDOUT_NOT_SINGLE_JSON_OBJECT", "STDERR_NOT_EMPTY"]
-  },
-  {
-    rule: "O-12",
-    code: "ENVELOPE_FIELD_INVALID:outcome",
-    specimen: "S15",
-    proof: "process",
-    row: "malformed-value-json",
-    mutation: "malformed input is treated as a success: success envelope, null repairAction, exit 0",
-    findings: ["ENVELOPE_FIELD_INVALID:outcome", "ENVELOPE_FIELD_INVALID:failureClass", "ENVELOPE_FIELD_INVALID:repairAction", "EXIT_MISMATCH"]
-  },
-  {
-    rule: "O-10",
-    code: "ENVELOPE_FIELD_INVALID:failureClass",
-    specimen: "S13",
-    proof: "process",
-    row: "malformed-value-json",
-    mutation: "declares failureClass schema (cause SCHEMA_INPUT_MALFORMED) while exiting 3",
-    findings: ["ENVELOPE_FIELD_INVALID:failureClass"]
-  },
-  {
-    rule: "O-12",
-    code: "malformed-value-json accepts schema with exit 4",
-    specimen: "C14",
-    proof: "process",
-    row: "malformed-value-json",
-    mutation: "declares failureClass schema (cause SCHEMA_INPUT_MALFORMED) and exits 4: the oracle's other aligned pairing",
-    findings: [],
-    passes: {},
-    observedExit: 4
-  },
-  {
-    rule: "O-12",
-    code: "ENVELOPE_FIELD_INVALID:failureClass",
-    specimen: "C15",
-    proof: "process",
-    row: "malformed-value-json",
-    mutation: "keeps failureClass domain but exits 4 (misaligned; exit 4 alone is not accepted)",
-    findings: ["ENVELOPE_FIELD_INVALID:failureClass"],
-    observedExit: 4
-  },
-  {
-    rule: "O-03",
-    code: "ENVELOPE_FIELD_INVALID:result.exitMeanings.0",
-    specimen: "S02",
-    proof: "process",
-    row: "discover",
-    mutation: 'exitMeanings "0" is "banana"',
-    findings: ["ENVELOPE_FIELD_INVALID:result.exitMeanings.0"]
-  },
-  {
-    rule: "O-04",
-    code: "DISCOVERY_FIELD_UNDECLARED:exitMeanings.<key>",
-    specimen: "S03",
-    proof: "process",
-    row: "discover",
-    mutation: 'exitMeanings gains an undeclared key "99"',
-    findings: ["DISCOVERY_FIELD_UNDECLARED:exitMeanings.99"]
-  },
-  {
-    rule: "O-05",
-    code: "ENVELOPE_FIELD_INVALID:result.exitMeanings.75",
-    specimen: "S04",
-    proof: "process",
-    row: "discover",
-    mutation: 'exitMeanings "75" is the empty string',
-    findings: ["ENVELOPE_FIELD_INVALID:result.exitMeanings.75"]
-  },
-  {
-    rule: "O-06",
-    code: "ENVELOPE_SUCCESS_UNRESOLVED",
-    specimen: "S05",
-    proof: "process",
-    row: "discover",
-    mutation: "the success discovery envelope carries transactionState unknown",
-    findings: ["ENVELOPE_SUCCESS_UNRESOLVED"]
-  },
-  {
-    rule: "O-07",
-    code: "ENVELOPE_UNRESOLVED_RETRYABLE",
-    specimen: "U01",
-    proof: "unit",
-    row: "help-json",
-    mutation: "a refusal reports partially-completed yet retryable true",
-    findings: ["ENVELOPE_UNRESOLVED_RETRYABLE"],
-    unit: { base: "refusal", set: { transactionState: "partially-completed", retryable: true }, observedExit: 3 }
-  },
-  {
-    rule: "O-07",
-    code: "ENVELOPE_UNRESOLVED_RETRYABLE",
-    specimen: "S06",
-    proof: "process",
-    row: "missing-input",
-    mutation: "the missing-input refusal reports transactionState unknown yet retryable true",
-    findings: ["ENVELOPE_UNRESOLVED_RETRYABLE", "ENVELOPE_FIELD_INVALID:retryable", "ENVELOPE_FIELD_INVALID:transactionState"],
-    attributableOnly: true
-  },
-  {
-    rule: "O-08",
-    code: "ENVELOPE_FIELD_INVALID:nextAction",
-    specimen: "S07",
-    proof: "process",
-    row: "missing-input",
-    mutation: "the refusal's nextAction is the empty string",
-    findings: ["ENVELOPE_FIELD_INVALID:nextAction"]
-  },
-  {
-    rule: "O-08",
-    code: "ENVELOPE_FIELD_INVALID:repairAction",
-    specimen: "S08",
-    proof: "process",
-    row: "missing-input",
-    mutation: "the refusal's repairAction is the empty string",
-    findings: ["ENVELOPE_FIELD_INVALID:repairAction"]
-  },
-  {
-    rule: "O-08",
-    code: "ENVELOPE_FIELD_INVALID:handoff.reason",
-    specimen: "S09",
-    proof: "process",
-    row: "success-json",
-    mutation: "the success carries a handoff whose reason is the empty string",
-    findings: ["ENVELOPE_FIELD_INVALID:handoff.reason"]
-  },
-  {
-    rule: "O-08",
-    code: "ENVELOPE_FIELD_INVALID:nextAction",
-    specimen: "S10",
-    proof: "process",
-    row: "success-json",
-    mutation: "the success's nextAction is the empty string",
-    findings: ["ENVELOPE_FIELD_INVALID:nextAction"]
-  },
-  {
-    rule: "O-09",
-    code: "ENVELOPE_NEXT_STEP_RULE",
-    specimen: "S11",
-    proof: "process",
-    row: "missing-input",
-    mutation: "the refusal carries both a nextAction and a handoff",
-    findings: ["ENVELOPE_NEXT_STEP_RULE"]
-  },
-  {
-    rule: "O-09",
-    code: "ENVELOPE_NEXT_STEP_RULE",
-    specimen: "S12",
-    proof: "process",
-    row: "missing-input",
-    mutation: "the refusal carries neither a nextAction nor a handoff",
-    findings: ["ENVELOPE_NEXT_STEP_RULE"]
-  },
-  {
-    rule: "O-13",
-    code: "STDOUT_NOT_SINGLE_JSON_OBJECT",
-    specimen: "S16",
-    proof: "process",
-    row: "large-envelope",
-    mutation: "a forced exit with status 0 immediately after writing the 2 MiB envelope (the tail never reaches the pipe)",
-    findings: ["STDOUT_NOT_SINGLE_JSON_OBJECT"],
-    environmentSensitive: true
-  },
-  {
-    rule: "O-13",
-    code: "LARGE_ENVELOPE_BELOW_THRESHOLD",
-    specimen: "C01",
-    proof: "process",
-    row: "large-envelope",
-    mutation: "the declared large result is a short string",
-    findings: ["LARGE_ENVELOPE_BELOW_THRESHOLD"]
-  },
-  {
-    rule: "O-15",
-    code: "targetObservation.notObserved",
-    specimen: "S17",
-    proof: "process",
-    row: "target-unchanged",
-    mutation: "the success-json row writes a file outside --cwd (in the OS temp directory)",
-    findings: [],
-    passes: { field: "notObserved", names: "out-of-tree paths" },
-    effects: [{ kind: "file", path: "<tmpdir>/cli-design-specimen-S17.txt", content: `written outside the target root
-` }],
-    cleanup: ["<tmpdir>/cli-design-specimen-S17.txt"]
-  },
-  {
-    rule: "O-15",
-    code: "targetObservation.excludedEntryKinds",
-    specimen: "S18",
-    proof: "process",
-    row: "target-unchanged",
-    mutation: "the success-json row creates a symlink inside --cwd",
-    findings: [],
-    passes: { field: "excludedEntryKinds", names: "symlink" },
-    effects: [{ kind: "symlink", path: "<target>/config/specimen-link.json", target: "valid.json" }],
-    cleanup: ["<target>/config/specimen-link.json"]
-  },
-  {
-    rule: "O-17",
-    code: "HUMAN_OUTPUT_IS_JSON",
-    specimen: "S20",
-    proof: "process",
-    row: "success-human",
-    mutation: "human success output is a top-level JSON array",
-    findings: ["HUMAN_OUTPUT_IS_JSON"]
-  },
-  {
-    rule: "O-17",
-    code: "HUMAN_OUTPUT_IS_JSON",
-    specimen: "U03",
-    proof: "unit",
-    row: "success-human",
-    mutation: "human success output is a bare number, which stays legal prose",
-    findings: [],
-    unit: { base: "success", stdout: `42
-`, observedExit: 0 }
-  },
-  {
-    rule: "O-17",
-    code: "HUMAN_OUTPUT_IS_JSON",
-    specimen: "U04",
-    proof: "unit",
-    row: "success-human",
-    mutation: "human success output is a quoted string, which stays legal prose",
-    findings: [],
-    unit: { base: "success", stdout: `"demo"
-`, observedExit: 0 }
-  },
-  { rule: "O-10", code: "ENVELOPE_FIELD_INVALID:failureClass", specimen: "U02a", proof: "unit", row: "help-json", mutation: "internal failure aligned with exit 1", findings: [], unit: { base: "refusal", set: { outcome: "failed", failureClass: "internal", causeCode: "INTERNAL_UNEXPECTED" }, observedExit: 1 } },
-  { rule: "O-10", code: "ENVELOPE_FIELD_INVALID:failureClass", specimen: "U02b", proof: "unit", row: "help-json", mutation: "internal failure with exit 3", findings: ["ENVELOPE_FIELD_INVALID:failureClass"], unit: { base: "refusal", set: { outcome: "failed", failureClass: "internal", causeCode: "INTERNAL_UNEXPECTED" }, observedExit: 3 } },
-  { rule: "O-10", code: "ENVELOPE_FIELD_INVALID:failureClass", specimen: "U02c", proof: "unit", row: "help-json", mutation: "schema refusal aligned with exit 4", findings: [], unit: { base: "refusal", set: { failureClass: "schema", causeCode: "SCHEMA_INPUT_INVALID" }, observedExit: 4 } },
-  { rule: "O-10", code: "ENVELOPE_FIELD_INVALID:failureClass", specimen: "U02d", proof: "unit", row: "help-json", mutation: "unavailable failure aligned with exit 75", findings: [], unit: { base: "refusal", set: { outcome: "failed", failureClass: "unavailable", causeCode: "UNAVAILABLE_STORAGE_BUSY" }, observedExit: 75 } },
-  { rule: "O-10", code: "ENVELOPE_FIELD_INVALID:failureClass", specimen: "U02e", proof: "unit", row: "help-json", mutation: "unavailable failure with exit 3", findings: ["ENVELOPE_FIELD_INVALID:failureClass"], unit: { base: "refusal", set: { outcome: "failed", failureClass: "unavailable", causeCode: "UNAVAILABLE_STORAGE_BUSY" }, observedExit: 3 } },
-  { rule: "coverage", code: "STDOUT_NOT_EMPTY", specimen: "C02", proof: "process", row: "no-arguments", mutation: "the human refusal also prints a line on stdout", findings: ["STDOUT_NOT_EMPTY"] },
-  { rule: "coverage", code: "STDOUT_EMPTY", specimen: "C03", proof: "process", row: "success-human", mutation: "human success prints nothing", findings: ["STDOUT_EMPTY"] },
-  { rule: "coverage", code: "STDERR_NOT_ONE_LINE", specimen: "C04", proof: "process", row: "no-arguments", mutation: "the human refusal prints two stderr lines", findings: ["STDERR_NOT_ONE_LINE"] },
-  { rule: "coverage", code: "JSON_ON_STDERR", specimen: "C05", proof: "process", row: "success-json", mutation: "the success envelope is also written to stderr", findings: ["STDERR_NOT_EMPTY", "JSON_ON_STDERR"] },
-  { rule: "coverage", code: "PROMPTED_OR_HUNG", specimen: "C06", proof: "process", row: "no-arguments", mutation: "the human refusal never exits", findings: ["PROMPTED_OR_HUNG", "EXIT_MISMATCH"], timeoutMs: 1000 },
-  { rule: "coverage", code: "TARGET_MUTATED", specimen: "C07", proof: "process", row: "target-unchanged", mutation: "the success-json row writes SPECIMEN_WROTE inside --cwd", findings: ["TARGET_MUTATED"], changedPaths: ["SPECIMEN_WROTE"], effects: [{ kind: "file", path: "<target>/SPECIMEN_WROTE", content: `written inside the target root
-` }], cleanup: ["<target>/SPECIMEN_WROTE"] },
-  { rule: "coverage", code: "HELP_MISSING_USAGE", specimen: "C08", proof: "process", row: "help", mutation: "help text has no usage line", findings: ["HELP_MISSING_USAGE"] },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:retryDelayMilliseconds", specimen: "C09", proof: "process", row: "success-json", mutation: "the success envelope has no retryDelayMilliseconds field", findings: ["ENVELOPE_FIELD_MISSING:retryDelayMilliseconds"] },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:exitMeanings.75", specimen: "C10", proof: "process", row: "discover", mutation: 'exitMeanings has no "75" key', findings: ["DISCOVERY_FIELD_MISSING:exitMeanings.75"] },
-  { rule: "coverage", code: "SECRET_MARKER_LEAKED:stdout", specimen: "C11", proof: "process", row: "secret-redaction", mutation: "the secret marker appears in the envelope message", findings: ["SECRET_MARKER_LEAKED:stdout"] },
-  { rule: "coverage", code: "SECRET_KEY_NOT_REDACTED:<path>", specimen: "C12", proof: "process", row: "secret-redaction", mutation: "result.values.apiToken is a plain value instead of [REDACTED]", findings: ["SECRET_KEY_NOT_REDACTED:values.apiToken"] },
-  { rule: "coverage", code: "STDERR_NOT_EMPTY", specimen: "C13", proof: "process", row: "help", mutation: "help also prints a diagnostic on stderr", findings: ["STDERR_NOT_EMPTY"] },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:envelopeVersion", specimen: "U05", proof: "unit", row: "help-json", mutation: "envelopeVersion absent", findings: ["ENVELOPE_FIELD_MISSING:envelopeVersion"], unit: { base: "success", remove: ["envelopeVersion"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:contractVersion", specimen: "U06", proof: "unit", row: "help-json", mutation: "contractVersion absent", findings: ["ENVELOPE_FIELD_MISSING:contractVersion"], unit: { base: "success", remove: ["contractVersion"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:commandIdentity", specimen: "U07", proof: "unit", row: "help-json", mutation: "commandIdentity absent", findings: ["ENVELOPE_FIELD_MISSING:commandIdentity"], unit: { base: "success", remove: ["commandIdentity"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:runIdentity", specimen: "U08", proof: "unit", row: "help-json", mutation: "runIdentity absent", findings: ["ENVELOPE_FIELD_MISSING:runIdentity"], unit: { base: "success", remove: ["runIdentity"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:outcome", specimen: "U09", proof: "unit", row: "help-json", mutation: "outcome absent", findings: ["ENVELOPE_FIELD_MISSING:outcome"], unit: { base: "success", remove: ["outcome"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:failureClass", specimen: "U10", proof: "unit", row: "help-json", mutation: "failureClass absent", findings: ["ENVELOPE_FIELD_MISSING:failureClass"], unit: { base: "success", remove: ["failureClass"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:causeCode", specimen: "U11", proof: "unit", row: "help-json", mutation: "causeCode absent", findings: ["ENVELOPE_FIELD_MISSING:causeCode"], unit: { base: "success", remove: ["causeCode"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:message", specimen: "U12", proof: "unit", row: "help-json", mutation: "message absent", findings: ["ENVELOPE_FIELD_MISSING:message"], unit: { base: "success", remove: ["message"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:effectClass", specimen: "U13", proof: "unit", row: "help-json", mutation: "effectClass absent", findings: ["ENVELOPE_FIELD_MISSING:effectClass"], unit: { base: "success", remove: ["effectClass"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:transactionState", specimen: "U14", proof: "unit", row: "help-json", mutation: "transactionState absent", findings: ["ENVELOPE_FIELD_MISSING:transactionState"], unit: { base: "success", remove: ["transactionState"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:retryable", specimen: "U15", proof: "unit", row: "help-json", mutation: "retryable absent", findings: ["ENVELOPE_FIELD_MISSING:retryable"], unit: { base: "success", remove: ["retryable"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:nextAction", specimen: "U16", proof: "unit", row: "help-json", mutation: "nextAction absent", findings: ["ENVELOPE_FIELD_MISSING:nextAction"], unit: { base: "success", remove: ["nextAction"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:availablePaths", specimen: "U17", proof: "unit", row: "help-json", mutation: "availablePaths absent", findings: ["ENVELOPE_FIELD_MISSING:availablePaths"], unit: { base: "success", remove: ["availablePaths"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:repairAction", specimen: "U18", proof: "unit", row: "help-json", mutation: "repairAction absent", findings: ["ENVELOPE_FIELD_MISSING:repairAction"], unit: { base: "success", remove: ["repairAction"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:handoff", specimen: "U19", proof: "unit", row: "help-json", mutation: "handoff absent", findings: ["ENVELOPE_FIELD_MISSING:handoff"], unit: { base: "success", remove: ["handoff"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_MISSING:result", specimen: "U20", proof: "unit", row: "help-json", mutation: "result absent", findings: ["ENVELOPE_FIELD_MISSING:result"], unit: { base: "success", remove: ["result"], observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:envelopeVersion", specimen: "U21", proof: "unit", row: "help-json", mutation: "envelopeVersion is 2", findings: ["ENVELOPE_FIELD_INVALID:envelopeVersion"], unit: { base: "success", set: { envelopeVersion: 2 }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:contractVersion", specimen: "U22", proof: "unit", row: "help-json", mutation: 'contractVersion is "2.0.0"', findings: ["ENVELOPE_FIELD_INVALID:contractVersion"], unit: { base: "success", set: { contractVersion: "2.0.0" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:commandIdentity", specimen: "U23", proof: "unit", row: "help-json", mutation: "commandIdentity is empty", findings: ["ENVELOPE_FIELD_INVALID:commandIdentity"], unit: { base: "success", set: { commandIdentity: "" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:runIdentity", specimen: "U24", proof: "unit", row: "help-json", mutation: "runIdentity is empty", findings: ["ENVELOPE_FIELD_INVALID:runIdentity"], unit: { base: "success", set: { runIdentity: "" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:causeCode", specimen: "U25", proof: "unit", row: "help-json", mutation: "causeCode is lowercase", findings: ["ENVELOPE_FIELD_INVALID:causeCode"], unit: { base: "refusal", set: { causeCode: "domain_input_missing" }, observedExit: 3 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:message", specimen: "U26", proof: "unit", row: "help-json", mutation: "message is a number", findings: ["ENVELOPE_FIELD_INVALID:message"], unit: { base: "success", set: { message: 42 }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:effectClass", specimen: "U27", proof: "unit", row: "help-json", mutation: 'effectClass is "cosmic"', findings: ["ENVELOPE_FIELD_INVALID:effectClass"], unit: { base: "success", set: { effectClass: "cosmic" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:retryDelayMilliseconds", specimen: "U28", proof: "unit", row: "help-json", mutation: "retryDelayMilliseconds is negative", findings: ["ENVELOPE_FIELD_INVALID:retryDelayMilliseconds"], unit: { base: "success", set: { retryDelayMilliseconds: -1 }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:availablePaths", specimen: "U29", proof: "unit", row: "help-json", mutation: "availablePaths is a string", findings: ["ENVELOPE_FIELD_INVALID:availablePaths"], unit: { base: "success", set: { availablePaths: "config-peek --help" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:handoff", specimen: "U30", proof: "unit", row: "help-json", mutation: "handoff is a string", findings: ["ENVELOPE_FIELD_INVALID:handoff"], unit: { base: "success", set: { handoff: "ask the operator" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:result", specimen: "U31", proof: "unit", row: "help-json", mutation: "result is an array", findings: ["ENVELOPE_FIELD_INVALID:result"], unit: { base: "success", set: { result: [] }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:result.name", specimen: "U32", proof: "unit", row: "discover", mutation: "discovery name is a number", findings: ["ENVELOPE_FIELD_INVALID:result.name"], unit: { base: "discovery", set: { "result.name": 42 }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:result.contractVersion", specimen: "U33", proof: "unit", row: "discover", mutation: 'discovery contractVersion is "2.0.0"', findings: ["ENVELOPE_FIELD_INVALID:result.contractVersion"], unit: { base: "discovery", set: { "result.contractVersion": "2.0.0" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:result.generationConventionVersion", specimen: "U34", proof: "unit", row: "discover", mutation: 'generationConventionVersion is "2.0.0"', findings: ["ENVELOPE_FIELD_INVALID:result.generationConventionVersion"], unit: { base: "discovery", set: { "result.generationConventionVersion": "2.0.0" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:result.machineMode", specimen: "U35", proof: "unit", row: "discover", mutation: 'machineMode is "--machine"', findings: ["ENVELOPE_FIELD_INVALID:result.machineMode"], unit: { base: "discovery", set: { "result.machineMode": "--machine" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:result.commands", specimen: "U36", proof: "unit", row: "discover", mutation: "commands is empty", findings: ["ENVELOPE_FIELD_INVALID:result.commands"], unit: { base: "discovery", set: { "result.commands": [] }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:result.exitMeanings", specimen: "U37", proof: "unit", row: "discover", mutation: "exitMeanings is a string", findings: ["ENVELOPE_FIELD_INVALID:result.exitMeanings"], unit: { base: "discovery", set: { "result.exitMeanings": "0 success" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:result.logtape", specimen: "U38", proof: "unit", row: "discover", mutation: 'logtape is "yes"', findings: ["ENVELOPE_FIELD_INVALID:result.logtape"], unit: { base: "discovery", set: { "result.logtape": "yes" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:result.exitMeanings.1", specimen: "U39", proof: "unit", row: "discover", mutation: 'exitMeanings "1" is "banana"', findings: ["ENVELOPE_FIELD_INVALID:result.exitMeanings.1"], unit: { base: "discovery", set: { "result.exitMeanings.1": "banana" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:result.exitMeanings.2", specimen: "U40", proof: "unit", row: "discover", mutation: 'exitMeanings "2" is "banana"', findings: ["ENVELOPE_FIELD_INVALID:result.exitMeanings.2"], unit: { base: "discovery", set: { "result.exitMeanings.2": "banana" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:result.exitMeanings.3", specimen: "U41", proof: "unit", row: "discover", mutation: 'exitMeanings "3" is "banana"', findings: ["ENVELOPE_FIELD_INVALID:result.exitMeanings.3"], unit: { base: "discovery", set: { "result.exitMeanings.3": "banana" }, observedExit: 0 } },
-  { rule: "coverage", code: "ENVELOPE_FIELD_INVALID:result.exitMeanings.4", specimen: "U42", proof: "unit", row: "discover", mutation: 'exitMeanings "4" is "banana"', findings: ["ENVELOPE_FIELD_INVALID:result.exitMeanings.4"], unit: { base: "discovery", set: { "result.exitMeanings.4": "banana" }, observedExit: 0 } },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:result", specimen: "U43", proof: "unit", row: "discover", mutation: "the discovery envelope has a null result", findings: ["DISCOVERY_FIELD_MISSING:result"], unit: { base: "discovery", set: { result: null }, observedExit: 0 } },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:name", specimen: "U44", proof: "unit", row: "discover", mutation: "discovery name absent", findings: ["DISCOVERY_FIELD_MISSING:name"], unit: { base: "discovery", remove: ["result.name"], observedExit: 0 } },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:contractVersion", specimen: "U45", proof: "unit", row: "discover", mutation: "discovery contractVersion absent", findings: ["DISCOVERY_FIELD_MISSING:contractVersion"], unit: { base: "discovery", remove: ["result.contractVersion"], observedExit: 0 } },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:generationConventionVersion", specimen: "U46", proof: "unit", row: "discover", mutation: "generationConventionVersion absent", findings: ["DISCOVERY_FIELD_MISSING:generationConventionVersion"], unit: { base: "discovery", remove: ["result.generationConventionVersion"], observedExit: 0 } },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:machineMode", specimen: "U47", proof: "unit", row: "discover", mutation: "machineMode absent", findings: ["DISCOVERY_FIELD_MISSING:machineMode"], unit: { base: "discovery", remove: ["result.machineMode"], observedExit: 0 } },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:commands", specimen: "U48", proof: "unit", row: "discover", mutation: "commands absent", findings: ["DISCOVERY_FIELD_MISSING:commands"], unit: { base: "discovery", remove: ["result.commands"], observedExit: 0 } },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:exitMeanings", specimen: "U49", proof: "unit", row: "discover", mutation: "exitMeanings absent", findings: ["DISCOVERY_FIELD_MISSING:exitMeanings"], unit: { base: "discovery", remove: ["result.exitMeanings"], observedExit: 0 } },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:logtape", specimen: "U50", proof: "unit", row: "discover", mutation: "logtape absent", findings: ["DISCOVERY_FIELD_MISSING:logtape"], unit: { base: "discovery", remove: ["result.logtape"], observedExit: 0 } },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:exitMeanings.0", specimen: "U51", proof: "unit", row: "discover", mutation: 'exitMeanings "0" absent', findings: ["DISCOVERY_FIELD_MISSING:exitMeanings.0"], unit: { base: "discovery", remove: ["result.exitMeanings.0"], observedExit: 0 } },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:exitMeanings.1", specimen: "U52", proof: "unit", row: "discover", mutation: 'exitMeanings "1" absent', findings: ["DISCOVERY_FIELD_MISSING:exitMeanings.1"], unit: { base: "discovery", remove: ["result.exitMeanings.1"], observedExit: 0 } },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:exitMeanings.2", specimen: "U53", proof: "unit", row: "discover", mutation: 'exitMeanings "2" absent', findings: ["DISCOVERY_FIELD_MISSING:exitMeanings.2"], unit: { base: "discovery", remove: ["result.exitMeanings.2"], observedExit: 0 } },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:exitMeanings.3", specimen: "U54", proof: "unit", row: "discover", mutation: 'exitMeanings "3" absent', findings: ["DISCOVERY_FIELD_MISSING:exitMeanings.3"], unit: { base: "discovery", remove: ["result.exitMeanings.3"], observedExit: 0 } },
-  { rule: "coverage", code: "DISCOVERY_FIELD_MISSING:exitMeanings.4", specimen: "U55", proof: "unit", row: "discover", mutation: 'exitMeanings "4" absent', findings: ["DISCOVERY_FIELD_MISSING:exitMeanings.4"], unit: { base: "discovery", remove: ["result.exitMeanings.4"], observedExit: 0 } },
-  { rule: "coverage", code: "SECRET_MARKER_LEAKED:stderr", specimen: "U56", proof: "unit", row: "secret-redaction", mutation: "the secret marker appears on stderr", findings: ["SECRET_MARKER_LEAKED:stderr", "STDERR_NOT_EMPTY"], unit: { base: "success", stderr: `warning: CHECK_FIXTURE_SECRET_MARKER
-`, secretMarker: "CHECK_FIXTURE_SECRET_MARKER", observedExit: 0 } }
-];
-
-// packages/cli-design-check/src/runner.ts
+// packages/cli-design-check/src/successor/runner.ts
 var TIMED_OUT = Symbol("timed-out");
 var KILL_GRACE_MS = 500;
 var READ_GRACE_MS = 500;
 var SKIPPED_DIRECTORIES = new Set(["node_modules", ".git"]);
+var OBSERVATION_EXCLUSIONS = [
+  "contents of excluded directories: .git, node_modules",
+  "out-of-tree paths",
+  "referents of symlink entries",
+  "reverted effects",
+  "runtime contents of non-regular entries"
+];
+
+class StreamRetentionError extends Error {
+  constructor(scenario, remainingPaths) {
+    super(remainingPaths.length === 0 ? `could not retain streams for ${scenario}; no retained artifact remains` : `could not retain streams for ${scenario}; retained raw stream custody remains at ${remainingPaths.join(", ")}`);
+  }
+}
 function childEnvironment() {
   const env = {};
   for (const [key, value] of Object.entries(process.env)) {
@@ -871,26 +752,46 @@ function childEnvironment() {
   env.TERM = "dumb";
   return env;
 }
-async function entryFiles(directory, entry) {
-  const filePath = join(directory, entry.name);
-  if (entry.isDirectory())
-    return SKIPPED_DIRECTORIES.has(entry.name) ? [] : listFiles(filePath);
-  return entry.isFile() ? [filePath] : [];
+function entryKind(stat) {
+  if (stat.isFile())
+    return "file";
+  if (stat.isDirectory())
+    return "directory";
+  if (stat.isSymbolicLink())
+    return "symlink";
+  if (stat.isFIFO())
+    return "fifo";
+  if (stat.isSocket())
+    return "socket";
+  if (stat.isBlockDevice())
+    return "block-device";
+  if (stat.isCharacterDevice())
+    return "character-device";
+  return "unknown";
 }
-async function listFiles(directory) {
-  const files = [];
-  for (const entry of await readdir(directory, { withFileTypes: true }))
-    files.push(...await entryFiles(directory, entry));
-  return files;
+function relativePath(root, path) {
+  const pathFromRoot = relative(root, path).split("\\").join("/");
+  return pathFromRoot === "" ? "." : pathFromRoot;
+}
+async function snapshotEntry(root, path) {
+  const stat = await lstat(path);
+  const kind = entryKind(stat);
+  const entry = { relativePath: relativePath(root, path), kind, mode: stat.mode & 4095 };
+  if (kind === "file") {
+    const bytes = new Uint8Array(await Bun.file(path).arrayBuffer());
+    entry.sha256 = createHash("sha256").update(bytes).digest("hex");
+  } else if (kind === "symlink") {
+    entry.linkTarget = await readlink(path);
+  }
+  if (kind !== "directory" || path !== root && SKIPPED_DIRECTORIES.has(path.split("/").at(-1)))
+    return [entry];
+  const descendants = [];
+  for (const name of (await readdir(path)).sort())
+    descendants.push(...await snapshotEntry(root, join(path, name)));
+  return [entry, ...descendants];
 }
 async function snapshotDirectory(directory) {
-  const snapshots = [];
-  for (const filePath of await listFiles(directory)) {
-    const bytes = new Uint8Array(await Bun.file(filePath).arrayBuffer());
-    const sha256 = createHash("sha256").update(bytes).digest("hex");
-    snapshots.push({ relativePath: relative(directory, filePath).split("\\").join("/"), sha256 });
-  }
-  return snapshots.sort((left, right) => left.relativePath.localeCompare(right.relativePath));
+  return (await snapshotEntry(directory, directory)).sort((left, right) => left.relativePath.localeCompare(right.relativePath));
 }
 function withTimeout(promise, milliseconds) {
   let timer;
@@ -955,105 +856,121 @@ async function drainStreams(child, collectors) {
     collector.close();
   await withTimeout(drained, KILL_GRACE_MS);
 }
-async function spawnScenario(command, spec, cwd, env, timeoutMs) {
+async function spawnScenario(command, spec, cwd, timeoutMs) {
   const started = process.hrtime.bigint();
-  const child = spawn(command[0], [...command.slice(1), ...spec.argv], { cwd, env, stdio: ["ignore", "pipe", "pipe"], detached: true });
+  const child = spawn(command[0], [...command.slice(1), ...spec.argv], { cwd, env: childEnvironment(), stdio: ["ignore", "pipe", "pipe"], detached: true });
   const stdout = collectStream(child.stdout);
   const stderr = collectStream(child.stderr);
   const outcome = await exitOrKill(child, timeoutMs);
   await drainStreams(child, [stdout, stderr]);
-  return {
-    stdout: stdout.text(),
-    stderr: stderr.text(),
-    observedExit: outcome.observedExit,
-    timedOut: outcome.timedOut,
-    durationMilliseconds: Number(process.hrtime.bigint() - started) / 1e6
-  };
+  return { stdout: stdout.text(), stderr: stderr.text(), observedExit: outcome.observedExit, timedOut: outcome.timedOut, durationMilliseconds: Number(process.hrtime.bigint() - started) / 1e6 };
 }
 function changedPaths(before, after) {
-  const beforeMap = new Map(before.map((file) => [file.relativePath, file.sha256]));
-  const afterMap = new Map(after.map((file) => [file.relativePath, file.sha256]));
+  const beforeMap = new Map(before.map((entry) => [entry.relativePath, JSON.stringify(entry)]));
+  const afterMap = new Map(after.map((entry) => [entry.relativePath, JSON.stringify(entry)]));
   return [...new Set([...beforeMap.keys(), ...afterMap.keys()])].filter((path) => beforeMap.get(path) !== afterMap.get(path)).sort();
 }
-function scenarioRow(spec, result) {
-  const findings = scenarioFindings(spec, result);
-  return {
-    scenario: spec.scenario,
-    argv: spec.argv,
-    expectedExit: spec.expectedExit,
-    observedExit: result.observedExit,
-    passed: findings.length === 0,
-    findings,
-    durationMilliseconds: result.durationMilliseconds
-  };
+async function writeExclusive(path, content, createdPaths) {
+  const handle = await open(path, "wx", 384);
+  createdPaths.push(path);
+  try {
+    await handle.chmod(384);
+    await handle.writeFile(content, "utf8");
+    await handle.close();
+  } catch (error) {
+    await handle.close().catch(() => {
+      return;
+    });
+    await unlink(path).catch(() => {
+      return;
+    });
+    throw error;
+  }
+}
+function isMissingPathError(error) {
+  return typeof error === "object" && error !== null && "code" in error && error.code === "ENOENT";
+}
+async function unconfirmedCustodyPaths(paths) {
+  const unconfirmed = await Promise.all(paths.map(async (path) => {
+    try {
+      await lstat(path);
+      return path;
+    } catch (error) {
+      return isMissingPathError(error) ? null : path;
+    }
+  }));
+  return unconfirmed.filter((path) => path !== null);
+}
+async function cleanupRetainedPaths(paths) {
+  await Promise.all(paths.map((path) => unlink(path).catch(() => {
+    return;
+  })));
+  return unconfirmedCustodyPaths(paths);
+}
+async function retainStreams(directory, runIdentity, scenario, result) {
+  const stdoutPath = join(directory, `${runIdentity}.${scenario}.stdout.txt`);
+  const stderrPath = join(directory, `${runIdentity}.${scenario}.stderr.txt`);
+  const createdPaths = [];
+  try {
+    await writeExclusive(stdoutPath, result.stdout, createdPaths);
+    await writeExclusive(stderrPath, result.stderr, createdPaths);
+    return { stdoutPath, stderrPath };
+  } catch {
+    throw new StreamRetentionError(scenario, await cleanupRetainedPaths(createdPaths));
+  }
 }
 function targetRow(changed) {
-  const findings = changed.length === 0 ? [] : [FINDINGS.TARGET_MUTATED];
-  return { scenario: "target-unchanged", argv: [], expectedExit: null, observedExit: null, passed: changed.length === 0, findings, durationMilliseconds: 0 };
+  const findings = changed.length === 0 ? [] : ["TARGET_MUTATED"];
+  return { scenario: "target-unchanged", argv: [], expectedExit: null, observedExit: null, observedContractVersion: null, passed: findings.length === 0, findings, durationMilliseconds: 0, streamCustody: null };
 }
-var EXCLUDED_ENTRY_KINDS = ["symlink", "socket", "fifo", "block-device", "character-device"];
-var NOT_OBSERVED = ["out-of-tree paths", "reverted effects", "mode changes", "empty directories", "writes inside excluded directories"];
-function targetObservation(root, before, changed) {
-  return {
-    root,
-    hashedRegularFiles: before,
-    excludedDirectories: [...SKIPPED_DIRECTORIES].sort(),
-    excludedEntryKinds: [...EXCLUDED_ENTRY_KINDS],
-    notObserved: [...NOT_OBSERVED],
-    changedPaths: changed
-  };
+function validateRetentionDirectory(directory) {
+  if (!isAbsolute(directory))
+    throw new Error("--retain-streams-dir must be an absolute directory");
+  let stat;
+  try {
+    stat = lstatSync(directory);
+  } catch {
+    throw new Error("--retain-streams-dir must already exist");
+  }
+  const owner = typeof process.getuid === "function" ? process.getuid() : stat.uid;
+  if (!stat.isDirectory() || stat.isSymbolicLink() || stat.uid !== owner || (stat.mode & 511) !== 448)
+    throw new Error("--retain-streams-dir must be a non-symlinked, current-user-owned 0700 directory");
+  return directory;
 }
-var UNJUDGED = ["exitMeanings.75"];
-function unprovedFindingCodes() {
-  const proved = new Set(SPECIMEN_MANIFEST.flatMap((entry) => [entry.code, ...entry.findings]));
-  return allFindingCodes().filter((code) => !proved.has(code));
-}
-async function runMatrix(options) {
+async function runSuccessorMatrix(options) {
+  const runIdentity = `run-${randomUUID()}`;
   const before = await snapshotDirectory(options.cwd);
-  const env = childEnvironment();
   const rows = [];
-  for (const spec of buildScenarios(options)) {
-    rows.push(scenarioRow(spec, await spawnScenario(options.command, spec, options.cwd, env, options.timeoutMs)));
+  let declaredCommands;
+  for (const spec of buildSuccessorScenarios(options)) {
+    const result = await spawnScenario(options.command, spec, options.cwd, options.timeoutMs);
+    const streamCustody = options.retainStreamsDirectory === undefined ? null : await retainStreams(options.retainStreamsDirectory, runIdentity, spec.scenario, result);
+    const analysis = analyzeScenario(spec, result, declaredCommands);
+    if (spec.discovery === true && analysis.findings.length === 0)
+      declaredCommands = analysis.declaredCommands;
+    rows.push({ scenario: spec.scenario, argv: spec.argv, expectedExit: spec.expectedExit, observedExit: result.observedExit, observedContractVersion: analysis.observedContractVersion, passed: analysis.findings.length === 0, findings: analysis.findings, durationMilliseconds: result.durationMilliseconds, streamCustody });
   }
   const changed = changedPaths(before, await snapshotDirectory(options.cwd));
   rows.push(targetRow(changed));
   const passedCount = rows.filter((row) => row.passed).length;
-  return {
-    targetDirectory: options.cwd,
-    command: [...options.command],
-    rows,
-    passedCount,
-    failedCount: rows.length - passedCount,
-    targetUnchanged: changed.length === 0,
-    targetObservation: targetObservation(options.cwd, before, changed),
-    skippedScenarios: skippedScenarios(options),
-    findingCoverage: { unproved: unprovedFindingCodes() },
-    unjudged: [...UNJUDGED]
-  };
+  return { runIdentity, targetDirectory: options.cwd, command: [...options.command], rows, passedCount, failedCount: rows.length - passedCount, targetUnchanged: changed.length === 0, changedPaths: changed, retention: { requested: options.retainStreamsDirectory !== undefined, directory: options.retainStreamsDirectory ?? null }, skippedRows: skippedSuccessorScenarios(options), observationExclusions: [...OBSERVATION_EXCLUSIONS] };
 }
 
-// packages/cli-design-check/src/main.ts
-var HELP_TEXT = `usage:
-  cli-design-check --cwd <dir> --command "<argv words>" --success-args "<args>" --missing-args "<args>" [--effect-args "<args>"] [--secret-args "<args>" --secret-marker <string>] [--malformed-args "<args>"] [--large-args "<args>"] [--json] [--timeout-ms <n>]
-  cli-design-check --help
-
-Run the target CLI through the standard design contract scenario matrix.
-Use --json for one machine-readable Contract Core envelope on stdout; in that mode stderr stays empty.
-In human mode a usage error or internal error is one line on stderr.
-`;
+// packages/cli-design-check/src/successor/main.ts
 var DEFAULT_TIMEOUT_MS = 15000;
-var valueOptions = new Set(["--cwd", "--command", "--success-args", "--missing-args", "--effect-args", "--secret-args", "--secret-marker", "--malformed-args", "--large-args", "--timeout-ms"]);
 function hasJsonFlag(args) {
   for (let index = 0;index < args.length; index += 1) {
     const token = args[index];
+    if (token === "--")
+      return false;
     if (token === "--json")
       return true;
-    if (token !== undefined && valueOptions.has(token))
+    if (token !== undefined && checkerOptionTakesValue(token))
       index += 1;
   }
   return false;
 }
-function oneLine(value) {
+function oneLine2(value) {
   const message = value instanceof Error ? value.message : String(value);
   return message.replace(/[\r\n]+/g, " ").trim() || "unknown error";
 }
@@ -1075,31 +992,23 @@ function stringOption(options, name) {
 function parseCli(args) {
   const { values } = parseArgs({
     args,
-    options: {
-      help: { type: "boolean" },
-      json: { type: "boolean" },
-      cwd: { type: "string" },
-      command: { type: "string" },
-      "success-args": { type: "string" },
-      "missing-args": { type: "string" },
-      "effect-args": { type: "string" },
-      "secret-args": { type: "string" },
-      "secret-marker": { type: "string" },
-      "malformed-args": { type: "string" },
-      "large-args": { type: "string" },
-      "timeout-ms": { type: "string" }
-    },
+    options: checkerParseArgsOptions(),
     strict: true,
     allowPositionals: false
   });
   const options = values;
   return {
     help: options.help === true,
+    discover: options.discover === true,
     json: options.json === true,
     cwd: stringOption(options, "cwd"),
     command: stringOption(options, "command"),
     successArgs: stringOption(options, "success-args"),
     missingArgs: stringOption(options, "missing-args"),
+    internalArgs: stringOption(options, "internal-args"),
+    schemaArgs: stringOption(options, "schema-args"),
+    transientArgs: stringOption(options, "transient-args"),
+    retainStreamsDirectory: stringOption(options, "retain-streams-dir"),
     effectArgs: stringOption(options, "effect-args"),
     secretArgs: stringOption(options, "secret-args"),
     secretMarker: stringOption(options, "secret-marker"),
@@ -1107,6 +1016,9 @@ function parseCli(args) {
     largeArgs: stringOption(options, "large-args"),
     timeoutMs: stringOption(options, "timeout-ms")
   };
+}
+function hasCommandOptions(parsed) {
+  return [parsed.cwd, parsed.command, parsed.successArgs, parsed.missingArgs, parsed.internalArgs, parsed.schemaArgs, parsed.transientArgs, parsed.retainStreamsDirectory, parsed.effectArgs, parsed.secretArgs, parsed.secretMarker, parsed.malformedArgs, parsed.largeArgs, parsed.timeoutMs].some((value) => value !== undefined);
 }
 function required(value, name) {
   if (value === undefined)
@@ -1121,9 +1033,9 @@ function existingDirectory(value) {
   } catch {
     throw new Error(`--cwd must be an existing directory: ${value}`);
   }
-  return directory;
+  return realpathSync(directory);
 }
-function nonNegativeInteger(value) {
+function nonnegativeInteger(value) {
   if (value === undefined)
     return DEFAULT_TIMEOUT_MS;
   if (!/^\d+$/.test(value))
@@ -1139,47 +1051,63 @@ function matrixOptions(parsed) {
     throw new Error("--command must contain at least one word");
   if (parsed.secretArgs === undefined !== (parsed.secretMarker === undefined))
     throw new Error("--secret-args and --secret-marker must be supplied together");
+  const retainStreamsDirectory = parsed.retainStreamsDirectory === undefined ? undefined : validateRetentionDirectory(parsed.retainStreamsDirectory);
   return {
     cwd: existingDirectory(required(parsed.cwd, "cwd")),
     command,
     successArgs: splitWords(required(parsed.successArgs, "success-args")),
     missingArgs: splitWords(required(parsed.missingArgs, "missing-args")),
+    internalArgs: splitWords(required(parsed.internalArgs, "internal-args")),
+    schemaArgs: splitWords(required(parsed.schemaArgs, "schema-args")),
+    transientArgs: splitWords(required(parsed.transientArgs, "transient-args")),
     effectArgs: optionalWords(parsed.effectArgs),
     secretArgs: optionalWords(parsed.secretArgs),
     secretMarker: parsed.secretMarker,
     malformedArgs: optionalWords(parsed.malformedArgs),
     largeArgs: optionalWords(parsed.largeArgs),
-    timeoutMs: nonNegativeInteger(parsed.timeoutMs)
+    timeoutMs: nonnegativeInteger(parsed.timeoutMs),
+    ...retainStreamsDirectory === undefined ? {} : { retainStreamsDirectory }
   };
 }
 function resolveInvocation(args) {
   const parsed = parseCli(args);
+  if (parsed.help && parsed.discover)
+    throw new Error("--help and --discover are mutually exclusive");
+  if ((parsed.help || parsed.discover) && hasCommandOptions(parsed))
+    throw new Error("built-in options cannot be combined with checker command options");
   if (parsed.help)
     return { kind: "help", json: parsed.json };
+  if (parsed.discover)
+    return { kind: "discovery", json: parsed.json };
   return { kind: "run", json: parsed.json, options: matrixOptions(parsed) };
 }
 function usageFailure(error, json) {
-  const cause = oneLine(error);
+  const cause2 = oneLine2(error);
   if (json)
-    process.stdout.write(renderUsageError(cause));
+    process.stdout.write(renderUsageError(cause2));
   else
-    process.stderr.write(`cli-design-check: ${cause}; run cli-design-check --help
+    process.stderr.write(`cli-design-check: ${cause2}; run cli-design-check --help
 `);
   return 2;
 }
 function internalFailure(error, json) {
-  const cause = oneLine(error);
+  const cause2 = oneLine2(error);
   if (json)
-    process.stdout.write(renderInternalError(cause));
+    process.stdout.write(renderInternalError(cause2));
   else
-    process.stderr.write(`cli-design-check: internal error: ${cause}
+    process.stderr.write(`cli-design-check: internal error: ${cause2}
 `);
   return 1;
 }
 async function runAndReport(options, json) {
-  const report = await runMatrix(options);
-  process.stdout.write(json ? renderJson(report) : renderHuman(report));
-  return report.failedCount === 0 ? 0 : 3;
+  const report = await runSuccessorMatrix(options);
+  if (!json) {
+    process.stdout.write(renderHuman(report));
+    return report.failedCount === 0 ? 0 : 4;
+  }
+  const rendered = renderJson(report);
+  process.stdout.write(rendered.text);
+  return rendered.exit;
 }
 async function dispatch(args) {
   let resolved;
@@ -1189,7 +1117,11 @@ async function dispatch(args) {
     return usageFailure(error, hasJsonFlag(args));
   }
   if (resolved.kind === "help") {
-    process.stdout.write(resolved.json ? renderHelp(HELP_TEXT) : HELP_TEXT);
+    process.stdout.write(resolved.json ? renderHelp() : renderCheckerHelpHuman());
+    return 0;
+  }
+  if (resolved.kind === "discovery") {
+    process.stdout.write(resolved.json ? renderDiscovery() : renderCheckerDiscoveryHuman());
     return 0;
   }
   try {
@@ -1198,5 +1130,4 @@ async function dispatch(args) {
     return internalFailure(error, resolved.json);
   }
 }
-var exitCode = await dispatch(process.argv.slice(2));
-process.exitCode = exitCode;
+process.exitCode = await dispatch(process.argv.slice(2));

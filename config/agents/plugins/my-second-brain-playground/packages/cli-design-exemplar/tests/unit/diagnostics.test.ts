@@ -41,7 +41,7 @@ describe("diagnostics adapter", () => {
 		diagnostics.setStation("repair-lab.healthy")
 		diagnostics.log("a.completed", "second", { token: "SECRET-VALUE" })
 		const status = await diagnostics.dispose()
-		expect(status).toEqual({ file, sinkFailure: null, droppedRecords: 0 })
+		expect(status).toEqual({ file, sinkFailure: null, droppedRecords: 0, unflushedRecords: 0, truncatedRecords: 0, countsComplete: true, closed: true })
 		const lines = records(file)
 		expect(lines.map((record) => [record.sequence, record.event_id, record.station_id])).toEqual([
 			[1, "run-1:1", null],
@@ -50,13 +50,17 @@ describe("diagnostics adapter", () => {
 		expect(lines[1]?.token).toBe("[REDACTED]")
 		expect(readFileSync(file, "utf8").includes("SECRET-VALUE")).toBe(false)
 	})
-	test("a throwing sink is recorded at flush, never thrown into the caller", async () => {
+	test("a throwing sink preserves its flush failure and counts later records as unflushed", async () => {
 		const base = root()
 		const diagnostics = await openRunDiagnostics({ runIdentity: "run-2", command: "repair-lab.status", root: base, fault: "sink-throw" })
 		expect(() => diagnostics.log("a", "a")).not.toThrow()
+		await tick()
+		diagnostics.log("b", "b")
+		diagnostics.log("c", "c")
 		const status = await diagnostics.dispose()
 		expect(status.sinkFailure).toBe("flush: injected sink failure")
 		expect(status.file).toBe(join(base, "diagnostics", "run-2.jsonl"))
+		expect(status).toEqual({ file: join(base, "diagnostics", "run-2.jsonl"), sinkFailure: "flush: injected sink failure", droppedRecords: 0, unflushedRecords: 3, truncatedRecords: 0, countsComplete: true, closed: true })
 	})
 	test("a throwing disposal is recorded as dispose: and records already flushed stay written", async () => {
 		const base = root()
@@ -64,6 +68,8 @@ describe("diagnostics adapter", () => {
 		diagnostics.log("a", "a")
 		const status = await diagnostics.dispose()
 		expect(status.sinkFailure).toBe("dispose: injected dispose failure")
+		expect(status.closed).toBe(false)
+		if (status.file === null) throw new Error("opened diagnostics file was lost")
 		expect(records(status.file)).toHaveLength(1)
 	})
 	test("an unwritable diagnostics path is recorded as open: and the run continues without a file", async () => {
@@ -87,7 +93,7 @@ describe("diagnostics adapter", () => {
 			expect(statSync(file).mode & 0o777).toBe(0o600)
 			diagnostics.log("a", "a")
 			const status = await diagnostics.dispose()
-			expect(status).toEqual({ file, sinkFailure: null, droppedRecords: 0 })
+			expect(status).toEqual({ file, sinkFailure: null, droppedRecords: 0, unflushedRecords: 0, truncatedRecords: 0, countsComplete: true, closed: true })
 			expect(records(file)).toHaveLength(1)
 		}
 	})
@@ -103,6 +109,10 @@ describe("diagnostics adapter", () => {
 		const diagnostics = await openRunDiagnostics({ runIdentity: "run-6", command: "repair-lab.status", root: base, fault: "diagnostics-flood" })
 		const status = await diagnostics.dispose()
 		expect(status.droppedRecords).toBe(8)
+		expect(status.unflushedRecords).toBe(0)
+		expect(status.truncatedRecords).toBe(0)
+		expect(status.countsComplete).toBe(true)
+		if (status.file === null) throw new Error("opened diagnostics file was lost")
 		const lines = records(status.file)
 		expect(lines).toHaveLength(257)
 		expect(lines[256]?.event_kind).toBe("diagnostics.truncated")

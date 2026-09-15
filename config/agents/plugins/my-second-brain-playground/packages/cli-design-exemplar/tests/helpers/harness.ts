@@ -282,8 +282,8 @@ export function envelopeKeys(): string[] {
 
 // One receipt directory per scenario run under the private root (brief 12, 8.2); every surface is returned for the marker scan.
 export function writeReceipt(root: Root, scenario: string, run: Run): { directory: string; surfaces: Record<string, string> } {
-	const envelope = run.stdout.startsWith("{") ? (JSON.parse(run.stdout) as { runIdentity?: string }) : {}
-	const runIdentity = envelope.runIdentity ?? "human"
+	const envelope = run.stdout.startsWith("{") ? (JSON.parse(run.stdout) as { result?: { runId?: string } }) : {}
+	const runIdentity = envelope.result?.runId ?? "human"
 	const directory = join(root.privateRoot, "receipts", scenario, runIdentity)
 	mkdirSync(directory, { recursive: true })
 	const files = diagnosticsFiles(root)

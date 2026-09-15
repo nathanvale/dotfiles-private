@@ -1,6 +1,6 @@
-import type { CommandIdentity } from "./command-contract.ts"
-
 // Domain types only. No behaviour lives here (brief 12, section 6).
+
+import type { CommandIdentity } from "./command-contract.ts"
 
 export type EffectId = "effect.update-index" | "effect.write-journal" | "effect.repair-cache"
 
@@ -40,7 +40,7 @@ export type DomainFault =
 	| { kind: "halt-after-effect"; effectId: EffectId }
 
 export type EgressFault =
-	| { kind: "egress-non-json"; variant: "cycle" | "date" | "undefined" | "function" | "bigint" | "nan" }
+	| { kind: "egress-non-json"; variant: "cycle" | "depth65" | "date" | "undefined" | "function" | "bigint" | "nan" | "infinity" }
 	| { kind: "egress-schema-invalid"; variant: "non-string-message" | "extra-key" | "bad-enum" | "both-guidance" }
 
 export interface Faults {
@@ -49,8 +49,8 @@ export interface Faults {
 }
 
 export type DomainOutcome = "success" | "refused" | "failed" | "unknown"
-export type TransactionState = "unchanged" | "completed" | "unknown"
-export type EffectClass = "inspect" | "repository-local"
+export type TransactionState = "unchanged" | "completed" | "partially-completed" | "unknown"
+export type EffectClass = "inspect" | "repository-local" | "external"
 
 export type Guidance = { kind: "next-action"; target: "repair-lab inspect" | "repair-lab recover" } | { kind: "handoff"; station: "repair-lab.required-handoff" }
 
@@ -74,6 +74,3 @@ export interface WriteFacts {
 	completed: EffectId[]
 	remaining: EffectId[]
 }
-
-// Stage-2 input of the egress writer: exactly the five accepted D6-c cases (presented outcome, trusted state) (brief 12, 7.2).
-export type FallbackCase = "preparation" | "result-unchanged" | "result-completed" | "result-unknown" | "unknown-unresolved"

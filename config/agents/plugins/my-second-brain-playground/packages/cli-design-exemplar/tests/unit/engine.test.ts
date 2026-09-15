@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test"
+import { mintAuthorization, parseResourceId, type Authorization, type ResourceId } from "../../src/command-contract.ts"
 import { type Decision, decide, factsOf, FIXTURE_AUTHORITY, redactJson, type Request } from "../../src/engine.ts"
 import type { EffectId, Faults, JournalRecord, Preview, Resource } from "../../src/model.ts"
 import { type Runtime, RuntimeRefusal, TransientLock } from "../../src/runtime.ts"
@@ -11,6 +12,18 @@ const U: EffectId = "effect.update-index"
 const J: EffectId = "effect.write-journal"
 const R: EffectId = "effect.repair-cache"
 const RUN = "run-unit"
+
+function resourceId(value: string): ResourceId {
+	const parsed = parseResourceId(value)
+	if (parsed === null) throw new Error(`invalid fixture resource id: ${value}`)
+	return parsed
+}
+
+function authorization(value: string): Authorization {
+	const parsed = mintAuthorization(value)
+	if (parsed === null) throw new Error(`invalid fixture authority: ${value}`)
+	return parsed
+}
 
 interface State {
 	resource: Resource | RuntimeRefusal
@@ -39,11 +52,11 @@ function fake(overrides: Partial<State>): Runtime & { state: State } {
 		writePreview: (preview) => {
 			state.preview = preview
 		},
-		admitStatePaths: () => {},
 		consumePreview: (preview, runIdentity) => {
 			facts.durableWriteAttempted = true
 			state.preview = { ...preview, consumed: true, consumed_by_run: runIdentity }
 		},
+		admitStatePaths: () => {},
 		readJournal: () => state.journal,
 		appendJournal: (record) => {
 			facts.durableWriteAttempted = true
@@ -78,7 +91,7 @@ function request(route: Request["route"], overrides: Partial<Request> = {}): Req
 const applyPreview = (id = "preview-healthy-revision-4", revision = 4, plan: EffectId[] = [U, J]): Preview => ({ preview_id: id, kind: "apply", resource_revision: revision, expected_effect_ids: plan, consumed: false })
 const repairPreview = (revision = 4, plan: EffectId[] = [R, J]): Preview => ({ preview_id: "repair-preview-missing-index", kind: "repair", resource_revision: revision, expected_effect_ids: plan, consumed: false })
 const indexMissing: Resource = { resource: "demo", revision: 4, status: "index-missing", version: 1 }
-const authorized = (route: Request["route"], previewId?: string): Request => request(route, { authority: FIXTURE_AUTHORITY, ...(previewId === undefined ? {} : { previewId }) })
+const authorized = (route: Request["route"], previewId?: string): Request => request(route, { authority: authorization(FIXTURE_AUTHORITY), ...(previewId === undefined ? {} : { previewId: resourceId(previewId) }) })
 
 function signature(decision: Decision): string {
 	return `${decision.domainOutcome}|${decision.causeCode ?? "null"}|${decision.transactionState}|${decision.retryable}|${decision.retryDelayMilliseconds ?? "null"}|${decision.guidance.kind}`
@@ -97,7 +110,7 @@ describe("outward retry predicate per resulting state (B2)", () => {
 		["row 9 repair", () => decide(fake({ resource: indexMissing, preview: repairPreview() }), authorized("repair", "repair-preview-missing-index"), RUN), "success|null|completed|false|null|next-action"],
 		["row 10 retry", () => decide(fake({ resource: indexMissing, preview: repairPreview(), busy: 1 }), authorized("repair-retry"), RUN), "success|null|completed|false|null|next-action"],
 		["row 11 handoff", () => decide(fake({ resource: { resource: "demo", revision: 5, status: "healthy", version: 1 }, preview: { ...applyPreview("preview-partial-revision-4"), consumed: true, consumed_by_run: "run-fixture" }, journal: [{ kind: "intent", seq: 1, run: "run-fixture", effect: U, operation: "apply", preview_id: "preview-partial-revision-4" }, { kind: "completed", seq: 2, run: "run-fixture", effect: U, operation: "apply", preview_id: "preview-partial-revision-4", resource_revision: 5 }, { kind: "intent", seq: 3, run: "run-fixture", effect: J, operation: "apply", preview_id: "preview-partial-revision-4" }] }), request("recover"), RUN), "unknown|DOMAIN_RECOVERY_HANDOFF_REQUIRED|unknown|false|null|handoff"],
-		["row 12 hostile", () => decide(fake({ resource: new RuntimeRefusal("DOMAIN_PATH_ESCAPE", "escape") }), request("inspect", { statePath: "../../outside-root-sentinel" }), RUN), "refused|DOMAIN_PATH_ESCAPE|unchanged|false|null|next-action"],
+		["row 12 hostile", () => decide(fake({ resource: new RuntimeRefusal("DOMAIN_PATH_ESCAPE", "escape") }), request("inspect", { statePath: resourceId("../../outside-root-sentinel") }), RUN), "refused|DOMAIN_PATH_ESCAPE|unchanged|false|null|next-action"],
 		["row 13 redacted inspect", () => decide(fake({ resource: { resource: "demo", revision: 4, status: "healthy", version: 1, diagnostic_token: "CDS_QI_SECRET_MARKER_REPAIR_LAB" } }), request("inspect-diagnostics", { includeDiagnostics: true }), RUN), "success|null|unchanged|true|null|next-action"],
 		["busy without --retry-once", () => decide(fake({ resource: indexMissing, preview: repairPreview(), busy: 1 }), authorized("repair", "repair-preview-missing-index"), RUN), "refused|UNAVAILABLE_STORAGE_BUSY|unchanged|true|25|next-action"],
 		["persistent lock with --retry-once", () => decide(fake({ resource: indexMissing, preview: repairPreview(), busy: 2 }), authorized("repair-retry"), RUN), "refused|UNAVAILABLE_STORAGE_BUSY|unchanged|true|25|next-action"],
@@ -121,7 +134,7 @@ describe("outward retry predicate per resulting state (B2)", () => {
 
 describe("refusal precedence (3.5)", () => {
 	test("authority (2) precedes preview presence (3): no preview and no authority is DOMAIN_AUTHORITY_MISSING", () => {
-		expect(decide(fake({}), request("apply", { previewId: "x" }), RUN).causeCode).toBe("DOMAIN_AUTHORITY_MISSING")
+		expect(decide(fake({}), request("apply", { previewId: resourceId("x") }), RUN).causeCode).toBe("DOMAIN_AUTHORITY_MISSING")
 		expect(decide(fake({}), authorized("apply", "x"), RUN).causeCode).toBe("DOMAIN_PREVIEW_MISSING")
 	})
 	test("identity binding (4) precedes consumption (5): a mismatched id on a consumed preview is DOMAIN_PREVIEW_MISSING", () => {
@@ -153,6 +166,14 @@ describe("refusal precedence (3.5)", () => {
 		expect(decide(fake({ resource: indexMissing, preview: applyPreview() }), authorized("repair-retry"), RUN).result?.reason).toBe("mismatch")
 		expect(decide(fake({ resource: indexMissing, preview: repairPreview() }), authorized("repair-retry"), RUN).domainOutcome).toBe("success")
 	})
+	test("ordinary apply and repair reject an omitted preview identity as a mismatch", () => {
+		const apply = fake({ preview: applyPreview() })
+		expect(decide(apply, authorized("apply"), RUN).result?.reason).toBe("mismatch")
+		expect(apply.state.preview?.consumed).toBe(false)
+		const repair = fake({ resource: indexMissing, preview: repairPreview() })
+		expect(decide(repair, authorized("repair"), RUN).result?.reason).toBe("mismatch")
+		expect(repair.state.preview?.consumed).toBe(false)
+	})
 })
 
 describe("recover scoping (F2)", () => {
@@ -175,6 +196,25 @@ describe("recover scoping (F2)", () => {
 	test("an unconsumed or absent preview is nothing pending", () => {
 		expect(decide(fake({ preview: applyPreview() }), request("recover"), RUN).result?.result).toBe("nothing-pending")
 		expect(decide(fake({}), request("recover"), RUN).result?.result).toBe("nothing-pending")
+	})
+	test("journal completions are established only when resource revision and repair status agree", () => {
+		const completed = (kind: "apply" | "repair", revision: number): JournalRecord[] => {
+			const previewId = kind === "apply" ? "preview-healthy-revision-4" : "repair-preview-missing-index"
+			const plan = kind === "apply" ? [U, J] : [R, J]
+			return plan.map((effect, index) => ({ kind: "completed", seq: index + 1, run: "run-bound", effect, operation: kind, preview_id: previewId, resource_revision: revision }))
+		}
+		const applyPreviewConsumed = { ...applyPreview(), consumed: true, consumed_by_run: "run-bound" }
+		const applyAgrees = decide(fake({ resource: { resource: "demo", revision: 5, status: "healthy", version: 1 }, preview: applyPreviewConsumed, journal: completed("apply", 5) }), request("recover"), RUN)
+		expect(applyAgrees.result?.result).toBe("nothing-pending")
+		const applyDisagrees = decide(fake({ resource: { resource: "demo", revision: 4, status: "healthy", version: 1 }, preview: applyPreviewConsumed, journal: completed("apply", 5) }), request("recover"), RUN)
+		expect(applyDisagrees.causeCode).toBe("DOMAIN_RECOVERY_HANDOFF_REQUIRED")
+		expect(applyDisagrees.completedEffectIds).toEqual([])
+		expect(applyDisagrees.remainingEffectIds).toEqual([U, J])
+		const repairPreviewConsumed = { ...repairPreview(), consumed: true, consumed_by_run: "run-bound" }
+		const repairDisagrees = decide(fake({ resource: { resource: "demo", revision: 5, status: "index-missing", version: 1 }, preview: repairPreviewConsumed, journal: completed("repair", 5) }), request("recover"), RUN)
+		expect(repairDisagrees.causeCode).toBe("DOMAIN_RECOVERY_HANDOFF_REQUIRED")
+		expect(repairDisagrees.completedEffectIds).toEqual([])
+		expect(repairDisagrees.remainingEffectIds).toEqual([R, J])
 	})
 })
 
