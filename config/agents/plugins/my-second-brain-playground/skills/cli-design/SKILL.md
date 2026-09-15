@@ -90,6 +90,36 @@ transaction state, never an outcome, and never authorize automatic replay.
 Completion criterion: every public path returns through the typed result and
 validated serializer.
 
+## Qualify the static policy
+
+From the canonical `bun-typescript-template` root, admit the materialized CLI
+and store receipts outside the generated or existing project:
+
+```bash
+bun run admit:static /absolute/project/path simple /absolute/evidence/path
+bun run admit:static /absolute/project/path complex /absolute/evidence/path
+```
+
+Choose the command matching the selected profile. The admission interface
+checks the resolved pins, authored-file inventory, Biome, TypeScript, tests, and
+both Fallow passes. `quality:fallow` must cover the whole project, including
+tests, with complete required semantic evidence. The separate production
+dependency pass must also succeed. A changed-files or `new-only` audit is useful
+review evidence, but cannot qualify a new starter or hide an inherited finding.
+Stop when a required semantic query is unavailable or incomplete; distinguish
+that failure from a run that proves no semantic query was necessary.
+
+Keep the focused Fallow policy enabled for unused files, exports and types;
+unused, unlisted, unresolved and misclassified dependencies; circular imports
+and re-export cycles; declared module-boundary violations with complete file
+coverage; and unexplained or stale Fallow suppressions. Keep Biome responsible
+for stray console output, explicit `any`, non-null assertions, and the scoped
+restricted imports defined by the canonical profile.
+
+Completion criterion: the profile's static-admission result is `admitted`, both
+whole-project Fallow passes have complete evidence, and the generated or host
+repository's own `bun run check` passes.
+
 ## Change commands and stations
 
 For a new or changed command:
