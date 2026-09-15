@@ -1422,10 +1422,17 @@ main() {
         log_section "Applying macOS preferences"
         log "Profile: $profile"
 
-        # Common preferences (works for both desktop and server)
+        # macOS user-interface preferences belong to an interactive desktop.
+        # A headless server should receive its symlinks without Finder, Dock,
+        # Mail, Safari, or other desktop preference writes.
+        if [[ "$profile" == "server" ]]; then
+            log "Skipping desktop macOS preferences for server profile"
+            return 0
+        fi
+
         local prefs_script="$dotfiles/config/macos/defaults.common.sh"
         if [[ -f "$prefs_script" ]]; then
-            log "Applying common macOS preferences..."
+            log "Applying desktop macOS preferences..."
             run_setup_child "$prefs_script" --set
         else
             log_warn "Preferences script not found: $prefs_script"
