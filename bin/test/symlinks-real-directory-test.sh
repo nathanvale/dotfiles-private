@@ -10,7 +10,7 @@ REPO_ROOT="$(CDPATH='' cd "$(dirname "$0")/../.." && pwd)"
 TEST_ROOT="$(mktemp -d)"
 trap 'rm -rf "$TEST_ROOT"' EXIT
 
-BASE_REVISION='fdeb8e16174101c30295803c7157214c2a629a6f'
+UNSAFE_BASE_FIXTURE="$REPO_ROOT/bin/test/fixtures/symlinks-manage-destructive-base.sh"
 
 assertion_count=0
 RUN_OUTPUT=''
@@ -391,13 +391,10 @@ assert_no_recursive_rm() {
   pass "$label"
 }
 
-# Sensitivity control: a copied base revision uses the old interactive rm -rf
-# route. These observations are the inverse of the GREEN assertions below.
-BASE_SCRIPT="$TEST_ROOT/base-symlinks_manage.sh"
-git -C "$REPO_ROOT" cat-file -e "${BASE_REVISION}^{commit}" 2>/dev/null ||
-  fail "base revision $BASE_REVISION is unavailable; unshallow or fetch it before running this test"
-git -C "$REPO_ROOT" show "$BASE_REVISION:bin/dotfiles/symlinks/symlinks_manage.sh" >"$BASE_SCRIPT"
-make_fixture 'base-negative-control' "$BASE_SCRIPT"
+# Sensitivity control: a test-owned fixture preserves the old interactive
+# rm -rf route without making public CI depend on excluded private history.
+# These observations are the inverse of the GREEN assertions below.
+make_fixture 'base-negative-control' "$UNSAFE_BASE_FIXTURE"
 seed_real_directory 'base-sentinel-bytes'
 # The base control must be allowed to demonstrate its destructive route. Every
 # GREEN fixture keeps the observing rm wrapper installed.
