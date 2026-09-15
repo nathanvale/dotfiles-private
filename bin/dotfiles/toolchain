@@ -11,6 +11,8 @@ MISE_DATA_ROOT=''
 MISE_INSTALLS_ROOT=''
 MISE_SHIMS_ROOT=''
 APPLY_CONTRACT_VERSION='mise-revision-v1'
+# This pinned Python archive predates Mise's GitHub attestation requirement.
+PYTHON_ATTESTATION_EXCEPTION_VERSION='3.11.9'
 RUN_ID="toolchain-$(date +%s)-$$-${RANDOM:-0}"
 SIDE_EFFECT='read'
 STATE=''
@@ -42,6 +44,11 @@ ADOPTED_STALE_RECORD_OWNED=false
 TAKEOVER_DRAIN_REASON=''
 CURRENT_TMP=''
 CURRENT_TMP_OWNED=false
+VERIFY_FAILURE=''
+VERIFY_FAILURE_RETRYABLE=false
+VERIFY_RETRY_LIMIT=2
+VERIFY_RETRY_DELAY_SECONDS='0.1'
+PYTHON_ATTESTATION_POLICY='default'
 
 usage() {
 	cat <<'EOF'
@@ -296,6 +303,24 @@ remove_owned_tree() {
 	rm -rf "$path"
 }
 
+remove_owned_staging_lock() {
+	local lock="$STAGING/mise.lock" base
+	[[ "$STAGING_OWNED" == true && -n "$STAGING" && "$(dirname "$STAGING")" == "$REVISIONS" && ! -L "$STAGING" && -d "$STAGING" ]] || return 1
+	base="$(basename "$STAGING")"
+	[[ "$base" == .staging-* && "$base" != .staging- ]] || return 1
+	[[ -f "$lock" && ! -L "$lock" ]] || return 1
+	begin_ownership_transition
+	if ! rm "$lock"; then
+		finish_ownership_transition
+		return 1
+	fi
+	if [[ -e "$lock" || -L "$lock" ]]; then
+		finish_ownership_transition
+		return 1
+	fi
+	finish_ownership_transition
+}
+
 release_lock() {
 	local token
 	[[ "$LOCK_HELD" == true ]] || return 0
@@ -427,6 +452,22 @@ retire_child_scope() {
 	CHILD_PID=''; CHILD_PGID=''
 }
 
+prepare_mise_process_environment() {
+	local python_attestation_policy="$1" config="$2"
+	unset MISE_NODE_VERSION MISE_BUN_VERSION MISE_PYTHON_VERSION MISE_NPM_VERSION
+	unset MISE_CONFIG_FILE MISE_CONFIG_DIR MISE_DEFAULT_CONFIG_FILENAME
+	case "$python_attestation_policy" in
+		exception) export MISE_PYTHON_GITHUB_ATTESTATIONS=false ;;
+		default) unset MISE_PYTHON_GITHUB_ATTESTATIONS ;;
+		*) return 1 ;;
+	esac
+	export MISE_DATA_DIR="$MISE_DATA_ROOT"
+	export MISE_INSTALLS_DIR="$MISE_INSTALLS_ROOT"
+	export MISE_SHIMS_DIR="$MISE_SHIMS_ROOT"
+	export MISE_GLOBAL_CONFIG_FILE="$config"
+	export MISE_CEILING_PATHS="$PROCESS_CAPSULE"
+}
+
 install_staged_toolchain() {
 	local status observed_pgid gate gate_valid=false
 	PENDING_SIGNAL=''
@@ -441,7 +482,8 @@ install_staged_toolchain() {
 	(
 		while [[ ! -f "$CHILD_GATE" ]]; do sleep 0.01; done
 		CDPATH='' cd "$PROCESS_CAPSULE" || exit 70
-		exec env -u MISE_NODE_VERSION -u MISE_BUN_VERSION -u MISE_PYTHON_VERSION -u MISE_NPM_VERSION -u MISE_CONFIG_FILE -u MISE_CONFIG_DIR -u MISE_DEFAULT_CONFIG_FILENAME MISE_DATA_DIR="$MISE_DATA_ROOT" MISE_INSTALLS_DIR="$MISE_INSTALLS_ROOT" MISE_SHIMS_DIR="$MISE_SHIMS_ROOT" MISE_GLOBAL_CONFIG_FILE="$STAGING/config.toml" MISE_CEILING_PATHS="$PROCESS_CAPSULE" mise install
+		prepare_mise_process_environment "$PYTHON_ATTESTATION_POLICY" "$STAGING/config.toml" || exit 70
+		exec mise install
 	) >&2 &
 	CHILD_PID=$!
 	CHILD_PGID="$CHILD_PID"
@@ -472,10 +514,21 @@ install_staged_toolchain() {
 mise_with_config() {
 	local config="$1"
 	shift
+	mise_with_config_and_policy "$config" default "$@"
+}
+
+mise_with_config_and_policy() {
+	local config="$1" python_attestation_policy="$2"
+	shift 2
 	(
 		CDPATH='' cd "$PROCESS_CAPSULE" || exit 70
-		exec env -u MISE_NODE_VERSION -u MISE_BUN_VERSION -u MISE_PYTHON_VERSION -u MISE_NPM_VERSION -u MISE_CONFIG_FILE -u MISE_CONFIG_DIR -u MISE_DEFAULT_CONFIG_FILENAME MISE_DATA_DIR="$MISE_DATA_ROOT" MISE_INSTALLS_DIR="$MISE_INSTALLS_ROOT" MISE_SHIMS_DIR="$MISE_SHIMS_ROOT" MISE_GLOBAL_CONFIG_FILE="$config" MISE_CEILING_PATHS="$PROCESS_CAPSULE" mise "$@"
+		prepare_mise_process_environment "$python_attestation_policy" "$config" || exit 70
+		exec mise "$@"
 	)
+}
+
+mise_with_staged_python_attestation_policy() {
+	mise_with_config_and_policy "$STAGING/config.toml" "$PYTHON_ATTESTATION_POLICY" "$@"
 }
 
 lock_record() {
@@ -813,12 +866,49 @@ snapshot_is_valid() {
 	done <"$manifest"
 }
 
+python_attestation_policy_for_snapshot() {
+	local manifest="$1" config="$2" manifest_version config_version
+	manifest_version="$(awk -F '|' '$1 == "python" { print $2; count++ } END { if (count != 1) exit 1 }' "$manifest")" || return 1
+	config_version="$(awk -F '"' '$1 ~ "^[[:space:]]*python[[:space:]]*=" { print $2; count++ } END { if (count != 1) exit 1 }' "$config")" || return 1
+	[[ "$manifest_version" == "$config_version" ]] || return 1
+	if [[ "$manifest_version" == "$PYTHON_ATTESTATION_EXCEPTION_VERSION" ]]; then
+		printf 'exception\n'
+	else
+		printf 'default\n'
+	fi
+}
+
 revision_content_id() {
 	local revision="$1" name digest
 	for name in contract.txt manifest.tsv config.toml mise.lock; do
 		digest="$(file_sha256 "$revision/$name")" || return 1
 		printf '%s_sha256=%s\n' "$name" "$digest"
 	done | shasum -a 256 | awk '{print $1}'
+}
+
+verification_failed() {
+	VERIFY_FAILURE="$1"
+	VERIFY_FAILURE_RETRYABLE="$2"
+	return 1
+}
+
+verification_message() {
+	local message="$1"
+	if [[ -n "$VERIFY_FAILURE" ]]; then
+		printf '%s (%s)' "$message" "$VERIFY_FAILURE"
+	else
+		printf '%s' "$message"
+	fi
+}
+
+verify_revision_with_retry() {
+	local revision="$1" mode="${2:-published}" attempt=1
+	while :; do
+		if revision_is_verified "$revision" "$mode"; then return 0; fi
+		[[ "$VERIFY_FAILURE_RETRYABLE" == true && "$attempt" -lt "$VERIFY_RETRY_LIMIT" ]] || return 1
+		sleep "$VERIFY_RETRY_DELAY_SECONDS"
+		attempt=$((attempt + 1))
+	done
 }
 
 atomic_select() {
@@ -847,44 +937,55 @@ atomic_select() {
 
 revision_is_verified() {
 	local revision="$1" mode="${2:-published}" config lock receipt saved_manifest contract tool expected raw stored_id contract_hash manifest_hash config_hash lock_hash artifact node_path npm_path
+	VERIFY_FAILURE=''
+	VERIFY_FAILURE_RETRYABLE=false
 	config="$revision/config.toml"
 	lock="$revision/mise.lock"
 	receipt="$revision/receipt.json"
 	saved_manifest="$revision/manifest.tsv"
 	contract="$revision/contract.txt"
-	valid_content_id "$CONTENT_ID" && [[ -d "$revision" && ! -L "$revision" ]] || return 1
-	regular_readable "$config" && regular_readable "$lock" && [[ -s "$lock" ]] && regular_readable "$receipt" && regular_readable "$saved_manifest" && regular_readable "$contract" || return 1
+	valid_content_id "$CONTENT_ID" && [[ -d "$revision" && ! -L "$revision" ]] || { verification_failed 'revision_identity_invalid' false; return 1; }
+	regular_readable "$config" && regular_readable "$lock" && [[ -s "$lock" ]] && regular_readable "$receipt" && regular_readable "$saved_manifest" && regular_readable "$contract" || { verification_failed 'revision_artifact_missing' false; return 1; }
 	if [[ "$mode" == published ]]; then
-		[[ "$(stat -f '%Lp' "$revision")" == 555 ]] || return 1
+		[[ "$(stat -f '%Lp' "$revision")" == 555 ]] || { verification_failed 'revision_directory_mode_invalid' false; return 1; }
 		for artifact in "$config" "$lock" "$receipt" "$saved_manifest" "$contract"; do
-			[[ "$(stat -f '%Lp' "$artifact")" == 444 ]] || return 1
+			[[ "$(stat -f '%Lp' "$artifact")" == 444 ]] || { verification_failed 'revision_artifact_mode_invalid' false; return 1; }
 		done
 	fi
-	[[ "$(cat "$contract")" == "$APPLY_CONTRACT_VERSION" ]] || return 1
+	[[ "$(cat "$contract")" == "$APPLY_CONTRACT_VERSION" ]] || { verification_failed 'contract_mismatch' false; return 1; }
 	stored_id="$(revision_content_id "$revision")"
-	[[ "$stored_id" == "$CONTENT_ID" ]] || return 1
-	snapshot_is_valid "$saved_manifest" "$config" || return 1
+	[[ "$stored_id" == "$CONTENT_ID" ]] || { verification_failed 'content_identity_mismatch' false; return 1; }
+	snapshot_is_valid "$saved_manifest" "$config" || { verification_failed 'snapshot_invalid' false; return 1; }
 	contract_hash="$(file_sha256 "$contract")"
 	manifest_hash="$(file_sha256 "$saved_manifest")"
 	config_hash="$(file_sha256 "$config")"
 	lock_hash="$(file_sha256 "$lock")"
-	[[ "$(wc -l <"$receipt" | tr -d ' ')" == 1 ]] || return 1
-	grep -Fqx "{\"schema_version\":\"1\",\"content_id\":\"$CONTENT_ID\",\"contract_sha256\":\"$contract_hash\",\"manifest_sha256\":\"$manifest_hash\",\"config_sha256\":\"$config_hash\",\"lock_sha256\":\"$lock_hash\",\"contract\":\"$APPLY_CONTRACT_VERSION\"}" "$receipt" || return 1
+	[[ "$(wc -l <"$receipt" | tr -d ' ')" == 1 ]] || { verification_failed 'receipt_shape_invalid' false; return 1; }
+	grep -Fqx "{\"schema_version\":\"1\",\"content_id\":\"$CONTENT_ID\",\"contract_sha256\":\"$contract_hash\",\"manifest_sha256\":\"$manifest_hash\",\"config_sha256\":\"$config_hash\",\"lock_sha256\":\"$lock_hash\",\"contract\":\"$APPLY_CONTRACT_VERSION\"}" "$receipt" || { verification_failed 'receipt_mismatch' false; return 1; }
 	for tool in node bun python; do
 		expected="$(awk -F '"' -v tool="$tool" '$1 ~ "^[[:space:]]*" tool "[[:space:]]*=" { print $2; exit }' "$config")"
-		mise_with_config "$config" which "$tool" >/dev/null 2>&1 || return 1
+		mise_with_config "$config" which "$tool" >/dev/null 2>&1 || { verification_failed "${tool}_which_failed" true; return 1; }
 		case "$tool" in
-			node) raw="$(mise_with_config "$config" exec -- node --version 2>/dev/null)" || return 1; [[ "${raw#v}" == "$expected" ]] || return 1 ;;
-			bun) raw="$(mise_with_config "$config" exec -- bun --version 2>/dev/null)" || return 1; [[ "$raw" == "$expected" ]] || return 1 ;;
-			python) raw="$(mise_with_config "$config" exec -- python --version 2>/dev/null)" || return 1; [[ "${raw#Python }" == "$expected" ]] || return 1 ;;
+			node)
+				raw="$(mise_with_config "$config" exec -- node --version 2>/dev/null)" || { verification_failed 'node_version_probe_failed' true; return 1; }
+				[[ "${raw#v}" == "$expected" ]] || { verification_failed 'node_version_mismatch' true; return 1; }
+				;;
+			bun)
+				raw="$(mise_with_config "$config" exec -- bun --version 2>/dev/null)" || { verification_failed 'bun_version_probe_failed' true; return 1; }
+				[[ "$raw" == "$expected" ]] || { verification_failed 'bun_version_mismatch' true; return 1; }
+				;;
+			python)
+				raw="$(mise_with_config "$config" exec -- python --version 2>/dev/null)" || { verification_failed 'python_version_probe_failed' true; return 1; }
+				[[ "${raw#Python }" == "$expected" ]] || { verification_failed 'python_version_mismatch' true; return 1; }
+				;;
 		esac
 	done
 	expected="$(awk -F '|' '$1 == "npm" { print $2; exit }' "$saved_manifest")"
-	node_path="$(mise_with_config "$config" which node 2>/dev/null)" || return 1
+	node_path="$(mise_with_config "$config" which node 2>/dev/null)" || { verification_failed 'node_which_failed' true; return 1; }
 	npm_path="${node_path%/*}/npm"
-	[[ -x "$npm_path" ]] || return 1
-	raw="$("$npm_path" --version 2>/dev/null)" || return 1
-	[[ "$raw" == "$expected" ]] || return 1
+	[[ -x "$npm_path" ]] || { verification_failed 'npm_executable_missing' true; return 1; }
+	raw="$("$npm_path" --version 2>/dev/null)" || { verification_failed 'npm_version_probe_failed' true; return 1; }
+	[[ "$raw" == "$expected" ]] || { verification_failed 'npm_version_mismatch' true; return 1; }
 }
 
 apply_revision() {
@@ -896,11 +997,12 @@ apply_revision() {
 	create_process_capsule
 	snapshot_sources
 	snapshot_is_valid "$STAGING/manifest.tsv" "$STAGING/config.toml" || emit_error 'snapshot_invalid' 'repair_the_manifest_and_mise_source_then_retry' true 'snapshotted toolchain declarations are inconsistent' 65 'error'
-	mise_with_config "$STAGING/config.toml" lock --global >&2 || emit_error 'mise_lock_failed' 'repair_mise_lock_inputs_and_retry' true 'Mise could not generate the staging lock' 70 'error'
+	PYTHON_ATTESTATION_POLICY="$(python_attestation_policy_for_snapshot "$STAGING/manifest.tsv" "$STAGING/config.toml")" || emit_error 'snapshot_invalid' 'repair_the_manifest_and_mise_source_then_retry' true 'snapshotted Python declarations are inconsistent' 65 'error'
+	mise_with_staged_python_attestation_policy lock --global >&2 || emit_error 'mise_lock_failed' 'repair_mise_lock_inputs_and_retry' true 'Mise could not generate the staging lock' 70 'error'
 	regular_readable "$STAGING/mise.lock" && [[ -s "$STAGING/mise.lock" ]] || emit_error 'mise_lock_missing' 'repair_mise_lock_generation_and_retry' true 'Mise did not create a safe nonempty staging lock' 70 'error'
 	CONTENT_ID="$(revision_content_id "$STAGING")" || emit_error 'content_identity_invalid' 'repair_source_bytes' true 'unable to create a content identity' 65 'error'
 	valid_content_id "$CONTENT_ID" || emit_error 'content_identity_invalid' 'repair_source_bytes' true 'unable to create a valid content identity' 65 'error'
-	if [[ -L "$STATE/current" && "$(readlink "$STATE/current")" == "revisions/$CONTENT_ID" ]] && revision_is_verified "$REVISIONS/$CONTENT_ID"; then
+	if [[ -L "$STATE/current" && "$(readlink "$STATE/current")" == "revisions/$CONTENT_ID" ]] && verify_revision_with_retry "$REVISIONS/$CONTENT_ID"; then
 		remove_owned_tree "$STAGING" "$REVISIONS" '.staging-' || emit_error 'staging_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'no-change staging could not be cleaned' 73 'error'
 		STAGING_OWNED=false
 		STAGING=''
@@ -912,22 +1014,30 @@ apply_revision() {
 	fi
 	SIDE_EFFECT='state_write_and_tool_install'
 	install_staged_toolchain || emit_error 'mise_install_failed' 'repair_the_download_or_retry' true 'Mise could not install the managed toolchain' 70 'error'
+	remove_owned_staging_lock || emit_error 'mise_lock_replace_failed' 'repair_toolchain_state_permissions' false 'Mise lock could not be safely replaced after install' 73 'error'
+	mise_with_staged_python_attestation_policy lock --global >&2 || emit_error 'mise_lock_failed' 'repair_mise_lock_inputs_and_retry' true 'Mise could not regenerate the staging lock after install' 70 'error'
+	# Keep the pre-install identity for the no-change fast path. First install
+	# may enrich the lock, so regenerate and publish evidence from the
+	# post-install bytes.
+	regular_readable "$STAGING/mise.lock" && [[ -s "$STAGING/mise.lock" ]] || emit_error 'mise_lock_missing' 'repair_mise_lock_generation_and_retry' true 'Mise did not preserve a safe nonempty staging lock after install' 70 'error'
+	CONTENT_ID="$(revision_content_id "$STAGING")" || emit_error 'content_identity_invalid' 'repair_source_bytes' true 'unable to create a content identity' 65 'error'
+	valid_content_id "$CONTENT_ID" || emit_error 'content_identity_invalid' 'repair_source_bytes' true 'unable to create a valid content identity' 65 'error'
 	contract_hash="$(file_sha256 "$STAGING/contract.txt")" || emit_error 'receipt_failed' 'repair_toolchain_state_permissions' false 'application contract digest could not be recorded' 73 'error'
 	manifest_hash="$(file_sha256 "$STAGING/manifest.tsv")" || emit_error 'receipt_failed' 'repair_toolchain_state_permissions' false 'toolchain manifest digest could not be recorded' 73 'error'
 	config_hash="$(file_sha256 "$STAGING/config.toml")" || emit_error 'receipt_failed' 'repair_toolchain_state_permissions' false 'Mise config digest could not be recorded' 73 'error'
 	lock_hash="$(file_sha256 "$STAGING/mise.lock")" || emit_error 'receipt_failed' 'repair_toolchain_state_permissions' false 'Mise lock digest could not be recorded' 73 'error'
 	printf '{"schema_version":"1","content_id":"%s","contract_sha256":"%s","manifest_sha256":"%s","config_sha256":"%s","lock_sha256":"%s","contract":"%s"}\n' "$CONTENT_ID" "$contract_hash" "$manifest_hash" "$config_hash" "$lock_hash" "$APPLY_CONTRACT_VERSION" >"$STAGING/receipt.json" || emit_error 'receipt_failed' 'repair_toolchain_state_permissions' false 'verification receipt could not be recorded' 73 'error'
-	revision_is_verified "$STAGING" staging || emit_error 'mise_verification_failed' 'repair_the_managed_runtime_and_retry' true 'Mise did not verify every exact managed version' 70 'error'
+	verify_revision_with_retry "$STAGING" staging || emit_error 'mise_verification_failed' 'repair_the_managed_runtime_and_retry' true "$(verification_message 'Mise did not verify every exact managed version')" 70 'error'
 	destination="$REVISIONS/$CONTENT_ID"
 	if [[ -e "$destination" || -L "$destination" ]]; then
-		if [[ ! -d "$destination" || -L "$destination" ]] || ! revision_is_verified "$destination"; then
-			emit_error 'revision_conflict' 'inspect_the_existing_revision_before_retrying' false 'an existing revision does not verify against its content identity' 73 'error'
+		if [[ ! -d "$destination" || -L "$destination" ]] || ! verify_revision_with_retry "$destination"; then
+			emit_error 'revision_conflict' 'inspect_the_existing_revision_before_retrying' false "$(verification_message 'an existing revision does not verify against its content identity')" 73 'error'
 		fi
 		remove_owned_tree "$STAGING" "$REVISIONS" '.staging-' || emit_error 'staging_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'verified staging could not be cleaned before reuse' 73 'error'
 	else
 		chmod 0444 "$STAGING/config.toml" "$STAGING/manifest.tsv" "$STAGING/contract.txt" "$STAGING/mise.lock" "$STAGING/receipt.json" || emit_error 'revision_publish_failed' 'repair_toolchain_state_permissions' false 'revision artifacts could not be made read-only' 73 'error'
 		chmod 0555 "$STAGING" || emit_error 'revision_publish_failed' 'repair_toolchain_state_permissions' false 'revision directory could not be made read-only' 73 'error'
-		revision_is_verified "$STAGING" || emit_error 'revision_publish_failed' 'inspect_the_staged_revision_and_retry' false 'read-only revision did not verify before publication' 73 'error'
+		verify_revision_with_retry "$STAGING" || emit_error 'revision_publish_failed' 'inspect_the_staged_revision_and_retry' false "$(verification_message 'read-only revision did not verify before publication')" 73 'error'
 		mv "$STAGING" "$destination" || emit_error 'revision_publish_failed' 'inspect_the_revision_store_and_retry' false 'verified revision could not be published' 73 'error'
 	fi
 	atomic_select
@@ -948,7 +1058,7 @@ recover_revision() {
 	acquire_lock recover
 	create_process_capsule
 	[[ -d "$REVISIONS/$CONTENT_ID" && ! -L "$REVISIONS/$CONTENT_ID" ]] || emit_error 'revision_not_found' 'choose_an_existing_verified_revision' true 'requested revision does not exist' 65 'error'
-	revision_is_verified "$REVISIONS/$CONTENT_ID" || emit_error 'revision_unverified' 'choose_a_verified_revision_or_apply_again' true 'requested revision is incomplete or cannot verify exact managed tools' 65 'error'
+	verify_revision_with_retry "$REVISIONS/$CONTENT_ID" || emit_error 'revision_unverified' 'choose_a_verified_revision_or_apply_again' true "$(verification_message 'requested revision is incomplete or cannot verify exact managed tools')" 65 'error'
 	atomic_select
 	STAGING_OWNED=false
 	STAGING=''

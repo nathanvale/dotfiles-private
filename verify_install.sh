@@ -169,6 +169,14 @@ verify_warn() {
     fi
 }
 
+# The native Claude installer writes its executable to ~/.local/bin. Setup
+# hydrates that directory for its own shell, but the final verifier is a child
+# process and must remain truthful when it inherits the pre-install PATH.
+claude_code_available() {
+    command -v claude &>/dev/null ||
+        [[ -f "$HOME/.local/bin/claude" && -x "$HOME/.local/bin/claude" ]]
+}
+
 # The profile package table is shared with config/brew/Brewfile. Keep the
 # verification checks typed so a malformed table cannot become shell code.
 profile_requirement_holds() {
@@ -588,10 +596,10 @@ phase_end "Phase 1: Foundation"
 # Phase 2: AI Rescue
 # ============================================================================
 phase_start
-verify_warn "Claude Code" "command -v claude"
+verify_warn "Claude Code" "claude_code_available"
 verify_warn "Managed Codex" "[[ -x '$HOME/.codex/packages/standalone/current/codex' ]]"
 # Only check AI rescue marker if Claude Code itself is missing (otherwise it's noise)
-if ! command -v claude &>/dev/null; then
+if ! claude_code_available; then
     verify_warn "AI rescue marker" "[[ -f '$STATE_DIR/ai_rescue_ready' ]]"
 else
     # Count it as passed silently
@@ -855,7 +863,7 @@ if [[ $FAIL_COUNT -gt 0 || $WARN_COUNT -gt 0 ]]; then
                     ;;
                 "AI rescue marker")
                     # Suppress entirely -- Claude Code handles this
-                    if command -v claude &>/dev/null; then
+                    if claude_code_available; then
                         continue
                     fi
                     action "$YELLOW" "AI rescue" "Claude Code not available" \

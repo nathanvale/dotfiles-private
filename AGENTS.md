@@ -12,6 +12,7 @@
 - Accepted-behavior change: reconcile with [`docs/adr/`](docs/adr/) before editing.
 - Domain naming: use [`CONTEXT.md`](CONTEXT.md).
 - Setup/profile: run `./setup.sh --help`, `./verify_install.sh --help`, then closest subsystem owner.
+- Clean macOS VM qualification: read [`docs/agents/tart-vm-qualification.md`](docs/agents/tart-vm-qualification.md).
 - Packages: edit `config/brew/profile-requirements.tsv` for profile-owned package requirements; `config/brew/Brewfile` is the derived Homebrew entrypoint. Set `dotfiles_profile=desktop` (or `server`); apply: `HOMEBREW_DOTFILES_PROFILE="$dotfiles_profile" brew bundle --file=config/brew/Brewfile`; verify: `HOMEBREW_DOTFILES_PROFILE="$dotfiles_profile" brew bundle check --file=config/brew/Brewfile`.
 - Claude Gates: declare in `config/agents/claude/settings.json`; reserve `config/agents/claude/hooks.json` for `InstructionsLoaded`; Biome, Fallow, and TypeScript quality gates live in the `proof` plugin (`config/agents/plugins/proof/hooks/`).
 - Running or diagnosing the `quality:fallow` gate: read [`docs/agents/fallow.md`](docs/agents/fallow.md).
