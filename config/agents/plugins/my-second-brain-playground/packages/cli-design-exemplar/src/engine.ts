@@ -3,6 +3,7 @@ import type { DomainOutcome, EffectId, ExecutionFacts, Guidance, JournalEntry, J
 import { JournalLockHeld } from "./journal-lock.ts"
 import { JOURNAL_SCAN_BOUND_BYTES, RETRY_DELAY_MS, type Runtime, RuntimeRefusal, sha256Hex, TransientLock } from "./runtime.ts"
 import { JOURNAL_LOCK_HELD_REASON, JOURNAL_LOCK_HELD_REPAIR_ACTION } from "./station-catalogue.ts"
+import type { OperationDeadline } from "./operation-deadline.ts"
 
 // Pure policy over plain data plus the runtime seam: authority, preview matching, staleness, consumption order,
 // unknown classification, retry policy, redaction and result shaping (brief 12, sections 3.3 through 3.5).
@@ -47,6 +48,7 @@ export interface Request {
 	authority: Authorization | undefined
 	automation: boolean
 	includeDiagnostics: boolean
+	deadline?: OperationDeadline | null
 }
 
 export type ParsedRequest = Request
@@ -354,60 +356,101 @@ function sleepMilliseconds(milliseconds: number): void {
 	}
 }
 
-function executePlan(runtime: Runtime, plan: MutationPlan, preview: Preview, decision: Decision, runIdentity: string, retryCount: number): Decision {
+type DeadlineState = "before-start" | "unchanged" | "completed" | "partially-completed" | "unknown"
+
+const DEADLINE_POLICY = {
+	"before-start": { outcome: "refused", transactionState: "unchanged", causeCode: "DOMAIN_DEADLINE_BEFORE_START", guidance: INSPECT, message: "the operation deadline passed before work started", repairAction: "inspect the deadline and input, then explicitly decide a new run", humanStderr: "operation refused: deadline passed before work started" },
+	unchanged: { outcome: "failed", transactionState: "unchanged", causeCode: "DOMAIN_DEADLINE_UNCHANGED", guidance: INSPECT, message: "the operation deadline passed with unchanged effects", repairAction: "inspect the deadline and input, then explicitly decide a new run", humanStderr: "operation failed: deadline passed with unchanged effects" },
+	completed: { outcome: "failed", transactionState: "completed", causeCode: "DOMAIN_DEADLINE_COMPLETED", guidance: HANDOFF, message: "the operation deadline passed with completed effects", repairAction: "inspect observed effects before any new run", humanStderr: "operation failed: deadline passed with completed effects" },
+	"partially-completed": { outcome: "failed", transactionState: "partially-completed", causeCode: "DOMAIN_DEADLINE_PARTIAL", guidance: HANDOFF, message: "the operation deadline passed with partially-completed effects", repairAction: "inspect observed effects before any new run", humanStderr: "operation failed: deadline passed with partially-completed effects" },
+	unknown: { outcome: "failed", transactionState: "unknown", causeCode: "DOMAIN_DEADLINE_UNKNOWN", guidance: HANDOFF, message: "the operation deadline passed with unknown effects", repairAction: "inspect observed effects before any new run", humanStderr: "operation failed: deadline passed with unknown effects" },
+} as const satisfies Record<DeadlineState, { outcome: "refused" | "failed"; transactionState: TransactionState; causeCode: CauseCode; guidance: Guidance; message: string; repairAction: string; humanStderr: string }>
+
+function deadlineDecision(decision: Decision, state: DeadlineState, completed: readonly EffectId[], remaining: readonly EffectId[]): Decision {
+	const policy = DEADLINE_POLICY[state]
+	return {
+		...decision,
+		domainOutcome: policy.outcome,
+		failureClass: "domain",
+		causeCode: policy.causeCode,
+		message: policy.message,
+		transactionState: policy.transactionState,
+		guidance: policy.guidance,
+		repairAction: policy.repairAction,
+		stationLabel: `repair-lab.deadline-${state}`,
+		result: { result: `deadline-${state}`, station_id: `repair-lab.deadline-${state}`, transaction_state: policy.transactionState, completed_effect_ids: [...completed], remaining_effect_ids: [...remaining] },
+		humanStderr: [policy.humanStderr],
+		events: [`operation.deadline-${state}`],
+		completedEffectIds: [...completed],
+		remainingEffectIds: [...remaining],
+	}
+}
+
+function failedEffectDecision(outcome: "unknown" | "not-observed", effectId: EffectId, plan: MutationPlan, decision: Decision, events: readonly string[], completed: EffectId[], remaining: EffectId[]): Decision {
+	if (outcome === "unknown") {
+		return {
+			...decision,
+			domainOutcome: "unknown",
+			failureClass: "internal",
+			causeCode: "INTERNAL_EFFECT_OUTCOME_UNKNOWN",
+			message: `${plan.command} outcome unknown: inspect state or request human handoff; do not retry automatically`,
+			transactionState: "unknown",
+			guidance: RECOVER,
+			repairAction: "inspect: run repair-lab recover; do not retry automatically",
+			stationLabel: "repair-lab.partial-unknown",
+			result: { result: "unknown-outcome", station_id: "repair-lab.partial-unknown", transaction_state: "unknown", completed_effect_ids: completed, remaining_effect_ids: remaining, retry_safety: "unsafe", human_handoff: true },
+			humanStderr: [`${plan.command} outcome unknown: inspect state or request human handoff; do not retry automatically`],
+			events: [...events, `${effectId}.unknown`, `${plan.command}.handoff-required`],
+			completedEffectIds: completed,
+			remainingEffectIds: remaining,
+		}
+	}
+	return {
+		...decision,
+		domainOutcome: "failed",
+		failureClass: "internal",
+		causeCode: "INTERNAL_EFFECT_NOT_OBSERVED",
+		message: `${effectId} returned without an observable change`,
+		transactionState: "unknown",
+		guidance: RECOVER,
+		repairAction: "run repair-lab recover; do not retry automatically",
+		stationLabel: "repair-lab.effect-not-observed",
+		result: { result: "effect-not-observed", station_id: "repair-lab.effect-not-observed", transaction_state: "unknown", completed_effect_ids: completed, remaining_effect_ids: remaining },
+		humanStderr: [`${plan.command} failed: ${effectId} was not observed; run repair-lab recover`],
+		events: [...events, `${effectId}.not-observed`],
+		completedEffectIds: completed,
+		remainingEffectIds: remaining,
+	}
+}
+
+function incompleteEffectDecision(outcome: "unknown" | "not-observed", effectId: EffectId, plan: MutationPlan, decision: Decision, events: readonly string[], completed: EffectId[], deadline: OperationDeadline | null): Decision {
+	const remaining = plan.plan.filter((id) => !completed.includes(id))
+	if (deadline?.expired()) return deadlineDecision(decision, "unknown", completed, remaining)
+	return failedEffectDecision(outcome, effectId, plan, decision, events, completed, remaining)
+}
+
+function executePlan(runtime: Runtime, plan: MutationPlan, preview: Preview, decision: Decision, runIdentity: string, retryCount: number, deadline: OperationDeadline | null): Decision {
 	let sequence = 0
 	const seq = (): number => {
 		sequence += 1
 		return sequence
 	}
 	const events: string[] = retryCount > 0 ? [plan.events.started, "repair.transient-refused", "repair.retry-permitted"] : [plan.events.started]
+	runtime.facts.remaining = [...plan.plan]
+	if (deadline?.expired()) return deadlineDecision(decision, "unchanged", [], plan.plan)
 	// Containment of every state path the plan touches precedes the first durable write (preview consumption).
 	runtime.admitStatePaths()
-	runtime.facts.remaining = [...plan.plan]
 	runtime.consumePreview(preview, runIdentity)
 	const completed: EffectId[] = []
 	for (const effectId of plan.plan) {
 		const outcome = runtime.applyEffect(effectId, plan.kind, preview.preview_id, runIdentity, seq)
-		if (outcome === "completed") {
-			completed.push(effectId)
-			runtime.facts.remaining = plan.plan.filter((id) => !completed.includes(id))
-			events.push(`${effectId}.completed`)
-			continue
-		}
-		const remaining = plan.plan.filter((id) => !completed.includes(id))
-		if (outcome === "unknown") {
-			return {
-				...decision,
-				domainOutcome: "unknown",
-				failureClass: "internal",
-				causeCode: "INTERNAL_EFFECT_OUTCOME_UNKNOWN",
-				message: `${plan.command} outcome unknown: inspect state or request human handoff; do not retry automatically`,
-				transactionState: "unknown",
-				guidance: RECOVER,
-				repairAction: "inspect: run repair-lab recover; do not retry automatically",
-				stationLabel: "repair-lab.partial-unknown",
-				result: { result: "unknown-outcome", station_id: "repair-lab.partial-unknown", transaction_state: "unknown", completed_effect_ids: completed, remaining_effect_ids: remaining, retry_safety: "unsafe", human_handoff: true },
-				humanStderr: [`${plan.command} outcome unknown: inspect state or request human handoff; do not retry automatically`],
-				events: [...events, `${effectId}.unknown`, `${plan.command}.handoff-required`],
-				completedEffectIds: completed,
-				remainingEffectIds: remaining,
-			}
-		}
-		return {
-			...decision,
-			domainOutcome: "failed",
-			failureClass: "internal",
-			causeCode: "INTERNAL_EFFECT_NOT_OBSERVED",
-			message: `${effectId} returned without an observable change`,
-			transactionState: "unknown",
-			guidance: RECOVER,
-			repairAction: "run repair-lab recover; do not retry automatically",
-			stationLabel: "repair-lab.effect-not-observed",
-			result: { result: "effect-not-observed", station_id: "repair-lab.effect-not-observed", transaction_state: "unknown", completed_effect_ids: completed, remaining_effect_ids: remaining },
-			humanStderr: [`${plan.command} failed: ${effectId} was not observed; run repair-lab recover`],
-			events: [...events, `${effectId}.not-observed`],
-			completedEffectIds: completed,
-			remainingEffectIds: remaining,
+		if (outcome !== "completed") return incompleteEffectDecision(outcome, effectId, plan, decision, events, completed, deadline)
+		completed.push(effectId)
+		runtime.facts.remaining = plan.plan.filter((id) => !completed.includes(id))
+		events.push(`${effectId}.completed`)
+		if (deadline?.expired()) {
+			const remaining = plan.plan.filter((id) => !completed.includes(id))
+			return deadlineDecision(decision, remaining.length === 0 ? "completed" : "partially-completed", completed, remaining)
 		}
 	}
 	const result: Record<string, unknown> = { result: plan.label.result, station_id: plan.label.success, transaction_state: "completed", completed_effect_ids: completed, remaining_effect_ids: [] }
@@ -453,7 +496,7 @@ function decideMutation(runtime: Runtime, request: Request, key: "apply" | "repa
 	// computed plan; for repair-retry this is the content match that binds the preview without an argv id (B1).
 	const bound = admitted.preview.expected_effect_ids
 	if (bound.length !== plan.plan.length || bound.some((id, index) => id !== plan.plan[index])) return admitted.missing("mismatch").refused
-	return executePlan(runtime, plan, admitted.preview, decision, runIdentity, retryCount)
+	return executePlan(runtime, plan, admitted.preview, decision, runIdentity, retryCount, request.deadline ?? null)
 }
 
 // Recovery observation (O1 Candidate A, D3). Each effect of the consumed preview's plan is classified from
@@ -630,6 +673,10 @@ function dispatchDecision(runtime: Runtime, request: ParsedRequest, runIdentity:
 export function decide(runtime: Runtime, request: ParsedRequest, runIdentity: string): Decision {
 	let release: (() => void) | undefined
 	try {
+		if (request.deadline?.expired()) {
+			const plan = request.route === "apply" || request.route === "repair" || request.route === "repair-retry" ? PLANS[request.route].plan : []
+			return deadlineDecision(base(request.route), "before-start", [], plan)
+		}
 		if (["preview", "repair-preview", "apply", "repair", "repair-retry"].includes(request.route)) release = runtime.acquireJournalLock(runIdentity)
 		return dispatchDecision(runtime, request, runIdentity)
 	} catch (error) {
