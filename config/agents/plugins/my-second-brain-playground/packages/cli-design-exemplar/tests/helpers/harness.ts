@@ -10,6 +10,35 @@ import { join, resolve } from "node:path"
 export const MAIN = resolve(import.meta.dir, "../../src/main.ts")
 export const SECRET_MARKER = "CDS_QI_SECRET_MARKER_REPAIR_LAB"
 export const RESET_RESOURCE = '{"resource":"demo","revision":4,"status":"healthy","version":1}\n'
+export const REVISION_5_RESOURCE = '{"resource":"demo","revision":5,"status":"healthy","version":1}\n'
+
+// Test-owned journal revision 2 codec (O1 Candidate A, ticket freeze 2026-09-15): one strict LF-terminated frame per
+// line carrying the payload's byte length and SHA-256. Authored independently of src/runtime.ts so an expected journal
+// is literal test bytes, never the production writer's output; the decoder throws on any line that is not such a frame.
+export const sha256 = (text: string): string => createHash("sha256").update(text, "utf8").digest("hex")
+export function frameLine(payload: string): string {
+	return `${JSON.stringify({ journalVersion: 2, payloadBytes: Buffer.byteLength(payload, "utf8"), payloadSha256: sha256(payload), payload })}\n`
+}
+export function decodeFrame(line: string): Record<string, unknown> {
+	const frame = JSON.parse(line) as Record<string, unknown>
+	if (Object.keys(frame).sort().join(",") !== "journalVersion,payload,payloadBytes,payloadSha256") throw new Error(`journal line is not a revision 2 frame: ${line.slice(0, 80)}`)
+	if (frame.journalVersion !== 2 || typeof frame.payload !== "string") throw new Error(`journal frame has a bad version or payload: ${line.slice(0, 80)}`)
+	if (frame.payloadBytes !== Buffer.byteLength(frame.payload, "utf8")) throw new Error(`journal frame payloadBytes disagrees with its payload: ${line.slice(0, 80)}`)
+	if (frame.payloadSha256 !== sha256(frame.payload)) throw new Error(`journal frame payloadSha256 disagrees with its payload: ${line.slice(0, 80)}`)
+	return JSON.parse(frame.payload) as Record<string, unknown>
+}
+// Literal digests of the two fixture resource serializations and of an event payload, for seeded intent frames.
+export const RESET_RESOURCE_SHA256 = sha256(RESET_RESOURCE)
+export const REVISION_5_RESOURCE_SHA256 = sha256(REVISION_5_RESOURCE)
+export const APPLY_EVENT_PAYLOAD = '{"kind":"event","seq":4,"run":"run-fixture","effect":"effect.write-journal","operation":"apply","preview_id":"preview-partial-revision-4","summary":"apply recorded"}'
+// The three frames a run leaves after its first effect landed and its second intent was recorded (halt-after-effect shape).
+export const PARTIAL_APPLY_FRAMES = [
+	frameLine(`{"kind":"intent","seq":1,"run":"run-fixture","effect":"effect.update-index","operation":"apply","preview_id":"preview-partial-revision-4","before_sha256":"${RESET_RESOURCE_SHA256}","expected_after_sha256":"${REVISION_5_RESOURCE_SHA256}"}`),
+	frameLine(`{"kind":"completed","seq":2,"run":"run-fixture","effect":"effect.update-index","operation":"apply","preview_id":"preview-partial-revision-4","resource_revision":5,"observed_after_sha256":"${REVISION_5_RESOURCE_SHA256}"}`),
+	frameLine(`{"kind":"intent","seq":3,"run":"run-fixture","effect":"effect.write-journal","operation":"apply","preview_id":"preview-partial-revision-4","before_sha256":null,"expected_after_sha256":"${sha256(APPLY_EVENT_PAYLOAD)}"}`),
+].join("")
+// A torn tail: the event frame that would complete the plan, cut before its terminal LF.
+export const TORN_APPLY_EVENT_FRAGMENT = frameLine(APPLY_EVENT_PAYLOAD).slice(0, -25)
 
 export type Variant =
 	| "healthy"
@@ -27,6 +56,7 @@ export type Variant =
 	| "healthy-with-mismatched-effects-preview"
 	| "derived-index-missing-with-mismatched-effects-preview"
 	| "healthy-with-consumed-preview"
+	| "partial-after-halt"
 
 export interface Root {
 	root: string
@@ -77,14 +107,17 @@ export function createRoot(variant: Variant, parent?: string): Root {
 			preview = REPAIR_PREVIEW
 			break
 		case "unknown-after-partial":
-			resource = '{"resource":"demo","revision":5,"status":"healthy","version":1}\n'
+			// Row 11 (required handoff): the first effect landed and the second effect's event frame is torn, so its
+			// outcome cannot be classified from the valid prefix (CDS-LO-1 A4: no parsing of torn state).
+			resource = REVISION_5_RESOURCE
 			preview = `${JSON.stringify({ preview_id: "preview-partial-revision-4", kind: "apply", resource_revision: 4, expected_effect_ids: ["effect.update-index", "effect.write-journal"], consumed: true, consumed_by_run: "run-fixture" })}\n`
-			journal = [
-				JSON.stringify({ kind: "intent", seq: 1, run: "run-fixture", effect: "effect.update-index", operation: "apply", preview_id: "preview-partial-revision-4" }),
-				JSON.stringify({ kind: "completed", seq: 2, run: "run-fixture", effect: "effect.update-index", operation: "apply", preview_id: "preview-partial-revision-4", resource_revision: 5 }),
-				JSON.stringify({ kind: "intent", seq: 3, run: "run-fixture", effect: "effect.write-journal", operation: "apply", preview_id: "preview-partial-revision-4" }),
-			].join("\n")
-			journal += "\n"
+			journal = `${PARTIAL_APPLY_FRAMES}${TORN_APPLY_EVENT_FRAGMENT}`
+			break
+		case "partial-after-halt":
+			// The first effect landed and the second was never applied, under a complete scan: known partial completion.
+			resource = REVISION_5_RESOURCE
+			preview = `${JSON.stringify({ preview_id: "preview-partial-revision-4", kind: "apply", resource_revision: 4, expected_effect_ids: ["effect.update-index", "effect.write-journal"], consumed: true, consumed_by_run: "run-fixture" })}\n`
+			journal = PARTIAL_APPLY_FRAMES
 			break
 		case "secret-marker-in-diagnostic-field":
 			resource = `${JSON.stringify({ resource: "demo", revision: 4, status: "healthy", version: 1, diagnostic_token: SECRET_MARKER })}\n`
@@ -205,7 +238,25 @@ export function journalRecords(root: Root): Array<Record<string, unknown>> {
 	return readState(root)
 		.journal.split("\n")
 		.filter((line) => line.length > 0)
-		.map((line) => JSON.parse(line) as Record<string, unknown>)
+		.map(decodeFrame)
+}
+
+// Seeds a journal of valid filler event frames whose total size is at least `bytes`, or exactly `bytes` with `exact`.
+export function fillJournal(root: Root, bytes: number, exact = false): void {
+	const filler = (padding: number): string => frameLine(`{"kind":"event","seq":1,"run":"run-filler","effect":"effect.write-journal","operation":"apply","preview_id":"preview-filler","summary":"filler${"x".repeat(padding)}"}`)
+	const unit = filler(0)
+	const parts: string[] = []
+	let total = 0
+	while (exact ? total + 2 * unit.length < bytes : total < bytes) {
+		parts.push(unit)
+		total += unit.length
+	}
+	if (exact) {
+		const last = filler(bytes - total - unit.length)
+		if (total + last.length !== bytes) throw new Error(`fillJournal could not reach exactly ${bytes} bytes`)
+		parts.push(last)
+	}
+	writeFileSync(join(root.root, "state", "journal.jsonl"), parts.join(""))
 }
 
 export function diagnosticsFiles(root: Root): string[] {

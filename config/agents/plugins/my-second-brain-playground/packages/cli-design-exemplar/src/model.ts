@@ -1,4 +1,4 @@
-// Domain types only. No behaviour lives here (brief 12, section 6).
+// Domain types and the sealed vocabularies that define them. No behaviour lives here (brief 12, section 6).
 
 import type { CommandIdentity } from "./command-contract.ts"
 
@@ -21,23 +21,35 @@ export interface Preview {
 	consumed_by_run?: string
 }
 
+// Journal revision 2 records (O1 Candidate A, ticket freeze 2026-09-15). An intent carries the observation tuple that
+// recovery classifies against: the SHA-256 of the exact bytes before the effect (null for effect.write-journal) and of
+// the exact bytes the effect must produce (the resource serialization, or the event payload). A completed record carries
+// the digest of the bytes the read-back observed; it corroborates but never establishes an effect.
 export type JournalRecord =
-	| { kind: "intent"; seq: number; run: string; effect: EffectId; operation: string; preview_id: string }
-	| { kind: "completed"; seq: number; run: string; effect: EffectId; operation: string; preview_id: string; resource_revision: number }
+	| { kind: "intent"; seq: number; run: string; effect: EffectId; operation: string; preview_id: string; before_sha256: string | null; expected_after_sha256: string }
+	| { kind: "completed"; seq: number; run: string; effect: EffectId; operation: string; preview_id: string; resource_revision: number; observed_after_sha256: string }
 	| { kind: "event"; seq: number; run: string; effect: EffectId; operation: string; preview_id: string; summary: string }
 
-// The closed fault channel (brief 12, section 3.1). One domain fault and at most one egress fault per process.
+// One validated frame of the journal scan with its payload digest, and the two reasons a scan can be incomplete: a torn
+// final fragment (no terminal LF) or bytes beyond the scan bound that were never read.
+export interface JournalEntry {
+	record: JournalRecord
+	payloadSha256: string
+}
+export interface JournalScan {
+	entries: JournalEntry[]
+	torn: boolean
+	exceedsScanBound: boolean
+}
+
+// The closed fault channel (brief 12, section 3.1). One domain fault and at most one egress fault per process. The
+// named domain faults are one sealed vocabulary: the runtime's token parser admits exactly this tuple.
+export const DOMAIN_FAULT_NAMES = ["effect.write-journal-outcome-unknown", "one-transient-lock", "persistent-lock", "silent-no-op", "throw-internal", "sink-throw", "sink-dispose-throw", "diagnostics-flood", "journal-contention"] as const
 export type DomainFault =
-	| "effect.write-journal-outcome-unknown"
-	| "one-transient-lock"
-	| "persistent-lock"
-	| "silent-no-op"
-	| "throw-internal"
-	| "sink-throw"
-	| "sink-dispose-throw"
-	| "diagnostics-flood"
+	| (typeof DOMAIN_FAULT_NAMES)[number]
 	| { kind: "halt-before-effect"; effectId: EffectId }
 	| { kind: "halt-after-effect"; effectId: EffectId }
+	| { kind: "readback-fail"; effectId: EffectId }
 
 export type EgressFault =
 	| { kind: "egress-non-json"; variant: "cycle" | "depth65" | "date" | "undefined" | "function" | "bigint" | "nan" | "infinity" }
@@ -63,6 +75,8 @@ export interface ExecutionFacts {
 	transactionState: TransactionState
 	completedEffectIds: EffectId[]
 	remainingEffectIds: EffectId[]
+	// False only when the journal scan stopped at its bound, so the plan's classification may be missing evidence.
+	inventoryComplete: boolean
 	stationLabel: string
 	guidance: Guidance
 }

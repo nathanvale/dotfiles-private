@@ -1,27 +1,38 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { existsSync, linkSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { appendFileSync, chmodSync, existsSync, linkSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { EXPECTED_COMMAND_IDENTITIES } from "../helpers/command-identity-oracle.ts"
 import {
+	APPLY_EVENT_PAYLOAD,
 	blockDiagnostics,
 	createRoot,
+	decodeFrame,
 	diagnosticsFiles,
 	diagnosticsRecords,
 	envelopeOf,
+	fillJournal,
+	frameLine,
 	journalRecords,
 	largePayload,
 	linkOutside,
 	linkStateFile,
 	modeOf,
 	normalize,
+	PARTIAL_APPLY_FRAMES,
 	readOnlyJournal,
 	readState,
 	removeRoot,
+	RESET_RESOURCE,
+	RESET_RESOURCE_SHA256,
+	REVISION_5_RESOURCE,
+	REVISION_5_RESOURCE_SHA256,
 	type Root,
 	type Run,
 	runCli,
 	SECRET_MARKER,
 	sentinelUntouched,
+	sha256,
+	TORN_APPLY_EVENT_FRAGMENT,
 	type Variant,
 	writeReceipt,
 } from "../helpers/harness.ts"
@@ -61,7 +72,7 @@ interface Expected {
 	causeCode: string | null
 	exit: number
 	effectClass: "inspect" | "repository-local"
-	transactionState: "unchanged" | "completed" | "unknown"
+	transactionState: "unchanged" | "completed" | "partially-completed" | "unknown"
 	retryable: boolean
 	delay: number | null
 	nextAction: string | null
@@ -93,6 +104,10 @@ const C0_LEGACY_BINDINGS: Readonly<Record<string, Partial<Expected>>> = {
 	INTERNAL_RESULT_UNCHANGED: { outcome: "failed", causeCode: "INTERNAL_RESULT_UNCHANGED", failureClass: "internal", exit: 1 },
 	INTERNAL_RESULT_COMPLETED: { outcome: "failed", causeCode: "INTERNAL_RESULT_COMPLETED", failureClass: "internal", exit: 1 },
 	INTERNAL_PREPARATION: { outcome: "refused", causeCode: "INTERNAL_PREPARATION", failureClass: "internal", exit: 1 },
+	// O1 Candidate A (ticket freeze 2026-09-15): the three accepted domain causes of this candidate, on their exact rows.
+	DOMAIN_JOURNAL_LIMIT_REACHED: { outcome: "refused", causeCode: "DOMAIN_JOURNAL_LIMIT_REACHED", failureClass: "domain", exit: 3 },
+	DOMAIN_PRIOR_RUN_PENDING: { outcome: "refused", causeCode: "DOMAIN_PRIOR_RUN_PENDING", failureClass: "domain", exit: 3 },
+	DOMAIN_RECOVERY_PARTIAL_HANDOFF: { outcome: "failed", causeCode: "DOMAIN_RECOVERY_PARTIAL_HANDOFF", failureClass: "domain", exit: 3 },
 }
 const c0Success = (expected: Expected): Expected => ({ ...expected, causeCode: expected.transactionState === "completed" ? "SUCCESS_COMPLETED" : "SUCCESS_UNCHANGED", failureClass: null, exit: 0, retryable: false })
 const c0Expected = (expected: Expected): Expected => expected.outcome === "success" ? c0Success(expected) : { ...expected, ...(expected.causeCode === null ? {} : C0_LEGACY_BINDINGS[expected.causeCode]) }
@@ -112,6 +127,12 @@ function retainRecoveryEvidence(name: string, evidence: unknown): void {
 	if (directory === undefined) return
 	mkdirSync(directory, { recursive: true, mode: 0o700 })
 	writeFileSync(join(directory, `${name}.json`), `${JSON.stringify(evidence, null, 2)}\n`, { mode: 0o600 })
+}
+
+// One process receipt: both streams, exit, signal, and the raw state bytes plus diagnostics files after the run.
+function receiptOf(root: Root, run: Run): Record<string, unknown> {
+	const diagnostics = Object.fromEntries(diagnosticsFiles(root).map((file) => [file, readFileSync(join(root.root, "diagnostics", file), "utf8")]))
+	return { stdout: run.stdout, stderr: run.stderr, exit: run.exit, signal: run.signal, state: readState(root), diagnostics }
 }
 
 interface Machine {
@@ -140,7 +161,7 @@ async function machine(root: Root, argv: string[], fault?: string, env?: Record<
 function check(observed: Machine, expected: Expected): void {
 	const { envelope, run } = observed
 	const selected = c0Expected(expected)
-	const handoffCause = ["DOMAIN_AUTHORITY_REQUIRED", "DOMAIN_RECOVERY_HANDOFF_REQUIRED", "INTERNAL_EFFECT_OUTCOME_UNKNOWN", "INTERNAL_EFFECT_NOT_OBSERVED", "INTERNAL_UNEXPECTED", "INTERNAL_RESULT_UNCHANGED", "INTERNAL_RESULT_COMPLETED", "INTERNAL_RESULT_UNKNOWN"].includes(selected.causeCode ?? "")
+	const handoffCause = ["DOMAIN_AUTHORITY_REQUIRED", "DOMAIN_RECOVERY_HANDOFF_REQUIRED", "DOMAIN_RECOVERY_PARTIAL_HANDOFF", "DOMAIN_PRIOR_RUN_PENDING", "DOMAIN_JOURNAL_LOCK_HELD", "INTERNAL_EFFECT_OUTCOME_UNKNOWN", "INTERNAL_EFFECT_NOT_OBSERVED", "INTERNAL_UNEXPECTED", "INTERNAL_RESULT_UNCHANGED", "INTERNAL_RESULT_COMPLETED", "INTERNAL_RESULT_PARTIAL", "INTERNAL_RESULT_UNKNOWN"].includes(selected.causeCode ?? "")
 	expect(run.exit).toBe(selected.exit)
 	expect(envelope.commandIdentity).toBe(expected.identity)
 	expect(envelope.outcome).toBe(selected.outcome)
@@ -199,6 +220,31 @@ async function human(root: Root, argv: string[], fault?: string): Promise<Run> {
 function lines(text: string): string[] {
 	return text.split("\n").filter((line) => line.length > 0)
 }
+
+// Literal state after one fixture run (O1 U0 and O1 Candidate A). Journal revision 2 literals: each line is a test-encoded
+// frame of the literal record; the digests are computed by the test from the fixture's literal resource bytes and the
+// literal event payload, never by the production writer.
+const REVISION_5_HEALTHY = REVISION_5_RESOURCE
+const PARTIAL_REASON = "handoff required: a known subset of effects completed and the remaining effects are known not applied; no safe automatic action is available"
+const PRIOR_RUN_REASON = "a prior run's consumed plan has unresolved effects; recover before previewing or applying again"
+type Kind = "apply" | "repair"
+const previewIdOf = (kind: Kind): string => (kind === "apply" ? "preview-healthy-revision-4" : "repair-preview-missing-index")
+const planOf = (kind: Kind): [string, string] => (kind === "apply" ? [U, J] : [R, J])
+const consumedPreview = (kind: Kind, runId: string): string => `{"preview_id":"${previewIdOf(kind)}","kind":"${kind}","resource_revision":4,"expected_effect_ids":["${planOf(kind)[0]}","effect.write-journal"],"consumed":true,"consumed_by_run":"${runId}"}\n`
+const beforeOf = (kind: Kind): string => (kind === "apply" ? RESET_RESOURCE_SHA256 : sha256('{"resource":"demo","revision":4,"status":"index-missing","version":1}\n'))
+const eventPayload = (kind: Kind, seq: number, runId: string): string => `{"kind":"event","seq":${seq},"run":"${runId}","effect":"effect.write-journal","operation":"${kind}","preview_id":"${previewIdOf(kind)}","summary":"${kind} recorded"}`
+const intentLine = (kind: Kind, seq: number, runId: string, effect: string): string => frameLine(effect === J ? `{"kind":"intent","seq":${seq},"run":"${runId}","effect":"${effect}","operation":"${kind}","preview_id":"${previewIdOf(kind)}","before_sha256":null,"expected_after_sha256":"${sha256(eventPayload(kind, seq + 1, runId))}"}` : `{"kind":"intent","seq":${seq},"run":"${runId}","effect":"${effect}","operation":"${kind}","preview_id":"${previewIdOf(kind)}","before_sha256":"${beforeOf(kind)}","expected_after_sha256":"${REVISION_5_RESOURCE_SHA256}"}`)
+const completedLine = (kind: Kind, seq: number, runId: string, effect: string): string => frameLine(`{"kind":"completed","seq":${seq},"run":"${runId}","effect":"${effect}","operation":"${kind}","preview_id":"${previewIdOf(kind)}","resource_revision":5,"observed_after_sha256":"${effect === J ? sha256(eventPayload(kind, seq - 1, runId)) : REVISION_5_RESOURCE_SHA256}"}`)
+const eventLine = (kind: Kind, seq: number, runId: string): string => frameLine(eventPayload(kind, seq, runId))
+const completedJournal = (kind: Kind, runId: string): string => {
+	const [first] = planOf(kind)
+	return `${intentLine(kind, 1, runId, first)}${completedLine(kind, 2, runId, first)}${intentLine(kind, 3, runId, J)}${eventLine(kind, 4, runId)}${completedLine(kind, 5, runId, J)}`
+}
+const recoverPartial = (completed: string[], remaining: string[]): { expected: Expected; effects: Record<string, unknown> } => ({ expected: { identity: "repair-lab.recover", outcome: "failed", failureClass: "domain", causeCode: "DOMAIN_RECOVERY_PARTIAL_HANDOFF", exit: 3, effectClass: "repository-local", transactionState: "partially-completed", retryable: false, delay: null, nextAction: null }, effects: { completed, remaining, uncertain: [], inventoryComplete: true } })
+const recoverNothingPending: Expected = { identity: "repair-lab.recover", outcome: "success", failureClass: null, causeCode: null, exit: 0, effectClass: "repository-local", transactionState: "unchanged", retryable: true, delay: null, nextAction: INSPECT }
+const recoverUnknown: Expected = { identity: "repair-lab.recover", outcome: "unknown", failureClass: "domain", causeCode: "DOMAIN_RECOVERY_HANDOFF_REQUIRED", exit: 3, effectClass: "repository-local", transactionState: "unknown", retryable: false, delay: null, nextAction: null }
+const priorRunPending = (identity: string): Expected => ({ identity, outcome: "refused", failureClass: "domain", causeCode: "DOMAIN_PRIOR_RUN_PENDING", exit: 3, effectClass: "repository-local", transactionState: "unchanged", retryable: false, delay: null, nextAction: null })
+const schemaRefusal = (identity: string, effectClass: Expected["effectClass"]): Expected => ({ identity, outcome: "refused", failureClass: "schema", causeCode: "SCHEMA_STATE_INVALID", exit: 4, effectClass, transactionState: "unchanged", retryable: false, delay: null, nextAction: INSPECT })
 
 describe("egress", () => {
 	test("--help prints the usage line and one example on stdout, exit 0", async () => {
@@ -683,106 +729,124 @@ describe("recovery", () => {
 		check(nothing, { identity: "repair-lab.recover", outcome: "success", failureClass: null, causeCode: null, exit: 0, effectClass: "repository-local", transactionState: "unchanged", retryable: true, delay: null, nextAction: INSPECT })
 		expect(nothing.result?.result).toBe("nothing-pending")
 	})
-	function seedRecovery(root: Root, kind: "apply" | "repair", resource: { revision: number; status: "healthy" | "index-missing" }, claimedRevision: number): void {
-		const plan = kind === "apply" ? [U, J] : [R, J]
+	// D3 seeding (O1 Candidate A): a consumed preview plus the revision 2 frames a run would leave. Every digest is
+	// computed by the test from its own literal bytes; bookkeeping (completed) frames and the event frame are optional so
+	// each row states what the journal claims versus what the resource bytes independently show.
+	const INDEX_MISSING_RESOURCE = '{"resource":"demo","revision":4,"status":"index-missing","version":1}\n'
+	type Seed = { resource: string; bookkeeping: boolean; event: boolean; claimedRevision?: number; extraFrames?: string[] }
+	function seedRecovery(root: Root, kind: "apply" | "repair", seed: Seed): { plan: [string, string]; frames: string[] } {
+		const plan: [string, string] = kind === "apply" ? [U, J] : [R, J]
 		const previewId = kind === "apply" ? "preview-healthy-revision-4" : "repair-preview-missing-index"
+		const before = kind === "apply" ? RESET_RESOURCE_SHA256 : sha256(INDEX_MISSING_RESOURCE)
+		const eventPayload = `{"kind":"event","seq":4,"run":"run-fixture","effect":"effect.write-journal","operation":"${kind}","preview_id":"${previewId}","summary":"${kind} recorded"}`
+		const claimed = seed.claimedRevision ?? 5
+		const frames = [
+			frameLine(`{"kind":"intent","seq":1,"run":"run-fixture","effect":"${plan[0]}","operation":"${kind}","preview_id":"${previewId}","before_sha256":"${before}","expected_after_sha256":"${REVISION_5_RESOURCE_SHA256}"}`),
+			...(seed.bookkeeping ? [frameLine(`{"kind":"completed","seq":2,"run":"run-fixture","effect":"${plan[0]}","operation":"${kind}","preview_id":"${previewId}","resource_revision":${claimed},"observed_after_sha256":"${REVISION_5_RESOURCE_SHA256}"}`)] : []),
+			frameLine(`{"kind":"intent","seq":3,"run":"run-fixture","effect":"effect.write-journal","operation":"${kind}","preview_id":"${previewId}","before_sha256":null,"expected_after_sha256":"${sha256(eventPayload)}"}`),
+			...(seed.event ? [frameLine(eventPayload)] : []),
+			...(seed.bookkeeping ? [frameLine(`{"kind":"completed","seq":5,"run":"run-fixture","effect":"effect.write-journal","operation":"${kind}","preview_id":"${previewId}","resource_revision":${claimed},"observed_after_sha256":"${sha256(eventPayload)}"}`)] : []),
+			...(seed.extraFrames ?? []),
+		]
 		const state = join(root.root, "state")
-		writeFileSync(join(state, "resource.json"), `${JSON.stringify({ resource: "demo", revision: resource.revision, status: resource.status, version: 1 })}\n`)
+		writeFileSync(join(state, "resource.json"), seed.resource)
 		writeFileSync(join(state, "preview.json"), `${JSON.stringify({ preview_id: previewId, kind, resource_revision: 4, expected_effect_ids: plan, consumed: true, consumed_by_run: "run-fixture" })}\n`)
-		const records = plan.flatMap((effect, index) => [
-			{ kind: "intent", seq: index * 2 + 1, run: "run-fixture", effect, operation: kind, preview_id: previewId },
-			{ kind: "completed", seq: index * 2 + 2, run: "run-fixture", effect, operation: kind, preview_id: previewId, resource_revision: claimedRevision },
-		])
-		writeFileSync(join(state, "journal.jsonl"), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`)
+		writeFileSync(join(state, "journal.jsonl"), frames.join(""))
+		return { plan, frames }
 	}
-	test("candidate2 recovery: mixed scoped completion revisions require handoff without replay", async () => {
+	test("O1 A6 recovery observation: completion is established from resource bytes and the event frame, never from completed bookkeeping frames", async () => {
 		for (const kind of ["apply", "repair"] as const) {
-			const root = fresh("healthy")
-			seedRecovery(root, kind, { revision: 5, status: "healthy" }, 5)
-			const plan = kind === "apply" ? [U, J] : [R, J]
-			const contradiction = { kind: "completed", seq: 0, run: "run-fixture", effect: plan[0], operation: kind, preview_id: kind === "apply" ? "preview-healthy-revision-4" : "repair-preview-missing-index", resource_revision: 4 }
-			const journal = join(root.root, "state", "journal.jsonl")
-			writeFileSync(journal, `${JSON.stringify(contradiction)}\n${readFileSync(journal, "utf8")}`)
-			const before = readState(root)
-			const run = await runCli(root, ["recover", "--json"])
-			retainRecoveryEvidence(`mixed-completion-revisions-${kind}`, { kind, run, before, after: readState(root) })
-			const result = envelopeOf(run).result as Record<string, unknown>
-			expect(run).toMatchObject({ exit: 3, stderr: "", signal: null })
-			expect(result).toMatchObject({ commandIdentity: "repair-lab.recover", outcome: "failed", transactionState: "unknown", causeCode: "DOMAIN_RECOVERY_HANDOFF_REQUIRED", failureClass: "domain", exitCode: 3, retryable: false, data: null, effects: { completed: [], remaining: [], uncertain: plan, inventoryComplete: true }, handoff: { owner: "operator", inspect: ["repair-lab inspect"] } })
-			expect(result.nextAction).toBeUndefined()
-			expect(result.retryDelayMilliseconds).toBeUndefined()
-			expect(readState(root)).toEqual(before)
+			// Both effects independently observed (resource at the expected bytes, event frame present): nothing pending even
+			// when a contradictory bookkeeping frame precedes the run's frames.
+			const agreeing = fresh("healthy")
+			const { plan, frames } = seedRecovery(agreeing, kind, { resource: REVISION_5_RESOURCE, bookkeeping: true, event: true })
+			const previewId = kind === "apply" ? "preview-healthy-revision-4" : "repair-preview-missing-index"
+			const contradiction = frameLine(`{"kind":"completed","seq":0,"run":"run-fixture","effect":"${plan[0]}","operation":"${kind}","preview_id":"${previewId}","resource_revision":4,"observed_after_sha256":"${RESET_RESOURCE_SHA256}"}`)
+			writeFileSync(join(agreeing.root, "state", "journal.jsonl"), `${contradiction}${frames.join("")}`)
+			const before = readState(agreeing)
+			const observed = await machine(agreeing, ["recover"])
+			check(observed, recoverNothingPending)
+			expect(observed.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true })
+			expect(projection(observed)).toEqual({ result: "nothing-pending", station_id: "repair-lab.nothing-pending", transaction_state: "unchanged", observed_resource_revision: 5, consumed_preview_id: previewId, observed_completed_effect_ids: plan, not_applied_effect_ids: [] })
+			expect(readState(agreeing)).toEqual(before)
+			// Bookkeeping claims both completions but the event frame is absent: the second effect is known not applied.
+			const claimedOnly = fresh("healthy")
+			seedRecovery(claimedOnly, kind, { resource: REVISION_5_RESOURCE, bookkeeping: true, event: false })
+			const partial = await machine(claimedOnly, ["recover"])
+			check(partial, recoverPartial([plan[0]], [J]).expected)
+			expect(partial.envelope.effects).toEqual({ completed: [plan[0]], remaining: [J], uncertain: [], inventoryComplete: true })
+			expect(partial.envelope.handoff).toEqual({ owner: "operator", reason: "handoff required: a known subset of effects completed and the remaining effects are known not applied; no safe automatic action is available", inspect: [INSPECT] })
+			expect(partial.envelope.repairAction).toBe("Inspect the known partial effects before separately authorized recovery")
+			// Resource at its pre-image with bookkeeping claiming revision 5: the bytes win; nothing was applied.
+			const preImage = fresh("healthy")
+			seedRecovery(preImage, kind, { resource: kind === "apply" ? RESET_RESOURCE : INDEX_MISSING_RESOURCE, bookkeeping: true, event: false })
+			const notApplied = await machine(preImage, ["recover"])
+			check(notApplied, recoverNothingPending)
+			expect(projection(notApplied)).toEqual({ result: "nothing-pending", station_id: "repair-lab.nothing-pending", transaction_state: "unchanged", observed_resource_revision: 4, consumed_preview_id: previewId, observed_completed_effect_ids: [], not_applied_effect_ids: plan })
+			// Resource bytes that match neither digest: the first effect is uncertain; the run cannot be classified.
+			const third = fresh("healthy")
+			seedRecovery(third, kind, { resource: kind === "apply" ? '{"resource":"demo","revision":6,"status":"healthy","version":1}\n' : '{"resource":"demo","revision":5,"status":"index-missing","version":1}\n', bookkeeping: true, event: false })
+			const unknown = await machine(third, ["recover"])
+			check(unknown, { ...recoverUnknown, handoff: plan })
+			expect(unknown.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: plan, inventoryComplete: true })
+			// Two scoped intents for one effect are contradictory evidence: uncertain, never resolved by either digest.
+			const duplicated = fresh("healthy")
+			const duplicate = frameLine(`{"kind":"intent","seq":9,"run":"run-fixture","effect":"${plan[0]}","operation":"${kind}","preview_id":"${previewId}","before_sha256":"${RESET_RESOURCE_SHA256}","expected_after_sha256":"${REVISION_5_RESOURCE_SHA256}"}`)
+			seedRecovery(duplicated, kind, { resource: REVISION_5_RESOURCE, bookkeeping: false, event: true, extraFrames: [duplicate] })
+			const contradictory = await machine(duplicated, ["recover"])
+			check(contradictory, { ...recoverUnknown, handoff: [plan[0]] })
+			expect(contradictory.envelope.effects).toEqual({ completed: [J], remaining: [], uncertain: [plan[0]], inventoryComplete: true })
+			retainRecoveryEvidence(`o1-a6-observation-${kind}`, { kind, agreeing: receiptOf(agreeing, observed.run), claimedOnly: receiptOf(claimedOnly, partial.run), preImage: receiptOf(preImage, notApplied.run), third: receiptOf(third, unknown.run), duplicated: receiptOf(duplicated, contradictory.run) })
 		}
 	})
-	test("candidate2 recovery: post-consumption RuntimeRefusal is failed unknown with a complete uncertain inventory", async () => {
-		const rows: Array<[Variant, string[], string, string[]]> = [
-			["healthy-with-fresh-preview", AUTHORIZED_APPLY, "repair-lab.apply", [U, J]],
-			["derived-index-missing-with-fresh-preview", AUTHORIZED_REPAIR, "repair-lab.repair", [R, J]],
-			["derived-index-missing-with-fresh-preview", RETRY_REPAIR, "repair-lab.repair-retry", [R, J]],
+	test("O1 A2: a resource aliased as the journal is an unversioned nonempty journal, refused before consumption with every byte unchanged", async () => {
+		const rows: Array<[Variant, string[], string]> = [
+			["healthy-with-fresh-preview", AUTHORIZED_APPLY, "repair-lab.apply"],
+			["derived-index-missing-with-fresh-preview", AUTHORIZED_REPAIR, "repair-lab.repair"],
+			["derived-index-missing-with-fresh-preview", RETRY_REPAIR, "repair-lab.repair-retry"],
 		]
-		for (const [variant, argv, identity, plan] of rows) {
+		for (const [variant, argv, identity] of rows) {
 			const root = fresh(variant)
 			const state = join(root.root, "state")
 			rmSync(join(state, "journal.jsonl"))
-			// Real filesystem alias: the first intent append invalidates resource JSON after preview consumption.
+			// Real filesystem alias: the journal's bytes are the resource JSON, a nonempty line without journalVersion.
 			linkSync(join(state, "resource.json"), join(state, "journal.jsonl"))
 			const before = readState(root)
-			const run = await runCli(root, [...argv, "--json"])
-			const after = readState(root)
-			retainRecoveryEvidence(`post-consumption-runtime-refusal-${identity}`, { identity, run, before, after })
-			const result = envelopeOf(run).result as Record<string, unknown>
-			expect(run).toMatchObject({ exit: 1, stderr: "", signal: null })
-			expect(result).toMatchObject({ commandIdentity: identity, outcome: "failed", transactionState: "unknown", causeCode: "INTERNAL_EFFECT_OUTCOME_UNKNOWN", failureClass: "internal", exitCode: 1, retryable: false, data: null, effects: { completed: [], remaining: [], uncertain: plan, inventoryComplete: true }, repairAction: "run repair-lab recover; do not retry automatically", handoff: { owner: "operator", reason: "a durable write was attempted and its outcome is not established", inspect: ["repair-lab inspect"] } })
-			expect(result.nextAction).toBeUndefined()
-			expect(result.retryDelayMilliseconds).toBeUndefined()
-			expect(JSON.parse(after.preview as string)).toEqual({ ...JSON.parse(before.preview as string), consumed: true, consumed_by_run: result.runId })
-			const intent = { kind: "intent", seq: 1, run: result.runId, effect: plan[0], operation: identity === "repair-lab.apply" ? "apply" : "repair", preview_id: JSON.parse(before.preview as string).preview_id }
-			expect(after.resource).toBe(`${before.resource}${JSON.stringify(intent)}\n`)
-			expect(after.journal).toBe(after.resource)
-		}
-	})
-	test("recover reports nothing pending only when scoped completion records and resource read-back agree", async () => {
-		for (const kind of ["apply", "repair"] as const) {
-			const root = fresh("healthy")
-			seedRecovery(root, kind, { revision: 5, status: "healthy" }, 5)
-			const observed = await machine(root, ["recover"])
-			check(observed, { identity: "repair-lab.recover", outcome: "success", failureClass: null, causeCode: null, exit: 0, effectClass: "repository-local", transactionState: "unchanged", retryable: true, delay: null, nextAction: INSPECT })
-		}
-		const disagreements: Array<["apply" | "repair", { revision: number; status: "healthy" | "index-missing" }, number, string[]]> = [
-			["apply", { revision: 4, status: "healthy" }, 5, [U, J]],
-			["apply", { revision: 6, status: "healthy" }, 5, [U, J]],
-			["repair", { revision: 5, status: "index-missing" }, 5, [R, J]],
-			["repair", { revision: 4, status: "index-missing" }, 5, [R, J]],
-		]
-		for (const [kind, resource, claimedRevision, plan] of disagreements) {
-			const root = fresh("healthy")
-			seedRecovery(root, kind, resource, claimedRevision)
-			const before = readState(root)
-			const observed = await machine(root, ["recover"])
-			check(observed, { identity: "repair-lab.recover", outcome: "unknown", failureClass: "domain", causeCode: "DOMAIN_RECOVERY_HANDOFF_REQUIRED", exit: 3, effectClass: "repository-local", transactionState: "unknown", retryable: false, delay: null, nextAction: null, handoff: plan })
-			expect(observed.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: plan, inventoryComplete: true })
+			const observed = await machine(root, argv)
+			retainRecoveryEvidence(`o1-a2-aliased-journal-${identity}`, { identity, before, run: receiptOf(root, observed.run) })
+			check(observed, { identity, outcome: "refused", failureClass: "schema", causeCode: "SCHEMA_STATE_INVALID", exit: 4, effectClass: "repository-local", transactionState: "unchanged", retryable: false, delay: null, nextAction: INSPECT })
+			expect(observed.message).toContain("unversioned")
+			expect(observed.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true })
 			expect(readState(root)).toEqual(before)
+			expect((JSON.parse(before.preview as string) as { consumed: boolean }).consumed).toBe(false)
 		}
 	})
 	test("write-ahead: halt before the effect leaves the intent and nothing else; halt after leaves no completion", async () => {
 		const before = fresh("healthy-with-fresh-preview")
 		const halted = await runCli(before, [...AUTHORIZED_APPLY, "--json"], { fault: `halt-before-effect:${U}` })
+		retainRecoveryEvidence("o1-write-ahead-after-intent", receiptOf(before, halted))
 		expect(halted.signal).toBe("SIGKILL")
 		expect(halted.stdout).toBe("")
 		expect(journalRecords(before).map((record) => `${record.kind}:${record.effect}`)).toEqual([`intent:${U}`])
 		expect(readState(before).resource).toBe('{"resource":"demo","revision":4,"status":"healthy","version":1}\n')
 		expect((JSON.parse(readState(before).preview as string) as { consumed: boolean }).consumed).toBe(true)
+		// O1 A6 (D3): the intent's pre-image digest matches the resource and the scan is complete, so nothing was applied.
 		const recovered = await machine(before, ["recover"])
-		check(recovered, { identity: "repair-lab.recover", outcome: "unknown", failureClass: "domain", causeCode: "DOMAIN_RECOVERY_HANDOFF_REQUIRED", exit: 3, effectClass: "repository-local", transactionState: "unknown", retryable: false, delay: null, nextAction: null, handoff: [U, J] })
-			expect(recovered.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: [U, J], inventoryComplete: true })
+		retainRecoveryEvidence("o1-write-ahead-after-intent-recover", receiptOf(before, recovered.run))
+		check(recovered, recoverNothingPending)
+		expect(recovered.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true })
+		expect(projection(recovered)).toEqual({ result: "nothing-pending", station_id: "repair-lab.nothing-pending", transaction_state: "unchanged", observed_resource_revision: 4, consumed_preview_id: "preview-healthy-revision-4", observed_completed_effect_ids: [], not_applied_effect_ids: [U, J] })
 		const after = fresh("healthy-with-fresh-preview")
 		const haltedAfter = await runCli(after, [...AUTHORIZED_APPLY, "--json"], { fault: `halt-after-effect:${U}` })
+		retainRecoveryEvidence("o1-write-ahead-after-effect", receiptOf(after, haltedAfter))
 		expect(haltedAfter.signal).toBe("SIGKILL")
 		expect(journalRecords(after).map((record) => `${record.kind}:${record.effect}`)).toEqual([`intent:${U}`])
 		expect(JSON.parse(readState(after).resource).revision).toBe(5)
+		// O1 A6 (D3): the resource equals the expected bytes and the second effect has no intent under a complete scan.
 		const recoveredAfter = await machine(after, ["recover"])
-		expect(recoveredAfter.envelope.causeCode).toBe("DOMAIN_RECOVERY_HANDOFF_REQUIRED")
-			expect(recoveredAfter.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: [U, J], inventoryComplete: true })
+		retainRecoveryEvidence("o1-write-ahead-after-effect-recover", receiptOf(after, recoveredAfter.run))
+		check(recoveredAfter, recoverPartial([U], [J]).expected)
+		expect(recoveredAfter.envelope.effects).toEqual({ completed: [U], remaining: [J], uncertain: [], inventoryComplete: true })
 	})
 	test("W4 silent no-op: an effect that returns without an observable change never records completion", async () => {
 		const rows: Array<[Variant, string[], string, string[]]> = [
@@ -792,6 +856,7 @@ describe("recovery", () => {
 		for (const [variant, argv, identity, uncertain] of rows) {
 			const root = fresh(variant)
 			const observed = await machine(root, argv, "silent-no-op")
+			retainRecoveryEvidence(`o1-silent-no-op-${identity}`, receiptOf(root, observed.run))
 			check(observed, { identity, outcome: "failed", failureClass: "internal", causeCode: "INTERNAL_EFFECT_NOT_OBSERVED", exit: 1, effectClass: "repository-local", transactionState: "unknown", retryable: false, delay: null, nextAction: RECOVER })
 			expect(observed.envelope.effects).toEqual({ completed: [], remaining: [], uncertain, inventoryComplete: true })
 			expect(journalRecords(root).map((record) => record.kind)).toEqual(["intent"])
@@ -806,9 +871,11 @@ describe("recovery", () => {
 		expect(second.result?.preview_id).toBe("preview-healthy-revision-5")
 		const partial = await machine(root, ["apply", "--preview-id", "preview-healthy-revision-5", "--authorize", "fixture-authority"], "effect.write-journal-outcome-unknown")
 			expect(partial.envelope.causeCode).toBe("INTERNAL_EFFECT_OUTCOME_UNKNOWN")
+		// O1 A6 (D3): the earlier cycle's frames are out of scope; this run's second effect has an intent but no event frame
+		// under a complete scan, so the live-run uncertainty resolves to a known partial completion.
 		const recovered = await machine(root, ["recover"])
-		check(recovered, { identity: "repair-lab.recover", outcome: "unknown", failureClass: "domain", causeCode: "DOMAIN_RECOVERY_HANDOFF_REQUIRED", exit: 3, effectClass: "repository-local", transactionState: "unknown", retryable: false, delay: null, nextAction: null, handoff: [J] })
-			expect(recovered.envelope.effects).toEqual({ completed: [U], remaining: [], uncertain: [J], inventoryComplete: true })
+		check(recovered, recoverPartial([U], [J]).expected)
+		expect(recovered.envelope.effects).toEqual({ completed: [U], remaining: [J], uncertain: [], inventoryComplete: true })
 	})
 	test("F6: the storage probe (step 9) precedes expected-effect binding (step 10)", async () => {
 		const root = fresh("healthy-with-mismatched-effects-preview")
@@ -835,9 +902,11 @@ describe("recovery", () => {
 			expect(journalRecords(root)).toEqual([])
 			expect(readState(root).resource).toBe(resourceBefore)
 			expect((JSON.parse(readState(root).preview as string) as { consumed: boolean }).consumed).toBe(true)
+			// O1 A6 (D3): no intent frame under a complete scan means nothing was applied; the live W2 uncertainty resolves.
 			const recovered = await machine(root, ["recover"])
-			expect(recovered.envelope.causeCode).toBe("DOMAIN_RECOVERY_HANDOFF_REQUIRED")
-			expect(recovered.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: plan, inventoryComplete: true })
+			check(recovered, recoverNothingPending)
+			expect(recovered.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true })
+			expect(projection(recovered)).toMatchObject({ result: "nothing-pending", observed_completed_effect_ids: [], not_applied_effect_ids: plan })
 			expect(journalRecords(root)).toEqual([])
 			const w1 = fresh(variant)
 			const before = readState(w1)
@@ -887,7 +956,8 @@ describe("recovery", () => {
 			expect(unknown.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: [U, J], inventoryComplete: true })
 		const stateAfter = readState(w2)
 		const recovered = await machine(w2, ["recover"])
-		expect(recovered.envelope.causeCode).toBe("DOMAIN_RECOVERY_HANDOFF_REQUIRED")
+		expect(recovered.envelope.causeCode).toBe("SUCCESS_UNCHANGED")
+		expect(projection(recovered)).toMatchObject({ result: "nothing-pending", not_applied_effect_ids: [U, J] })
 		expect(readState(w2)).toEqual(stateAfter)
 		const w4 = await machine(fresh("healthy-with-fresh-preview"), AUTHORIZED_APPLY, "silent-no-op+egress-non-json:cycle")
 		check(w4, fallback("repair-lab.apply", "failed", "INTERNAL_RESULT_UNKNOWN", "repository-local", "unknown", RECOVER))
@@ -1052,7 +1122,20 @@ describe("diagnostics", () => {
 			expect(disposing.diagnostics).toEqual({ status: "available", file: join(disposingRoot.root, "diagnostics", `${disposing.envelope.runId as string}.jsonl`), sinkFailure: "close", droppedRecords: 0, unflushedRecords: 0, truncatedRecords: 0, countsComplete: true, closed: false })
 			expect(comparable(disposing, disposingRoot)).toEqual(expected)
 			// Resulting state compares with each process's run token normalized (consumed_by_run and journal run fields).
-			const stateOf = (root: Root, runId: string): string => JSON.stringify(readState(root)).split(runId).join("run-NORMALIZED")
+			// Journal frames are decoded (the decoder re-derives each frame's digest) and the digests bound to the run token
+			// through the event payload are normalized, since two runs can never share them.
+			const stateOf = (root: Root, runId: string): string => {
+				const state = readState(root)
+				const segments = state.journal.split("\n")
+				const fragment = segments.pop() ?? ""
+				const records = segments.map((line) => JSON.parse(JSON.stringify(decodeFrame(line)).split(runId).join("run-NORMALIZED")) as Record<string, unknown>)
+				for (const record of records) {
+					if (record.effect !== J) continue
+					if ("expected_after_sha256" in record) record.expected_after_sha256 = "<run-bound>"
+					if ("observed_after_sha256" in record) record.observed_after_sha256 = "<run-bound>"
+				}
+				return JSON.stringify({ resource: state.resource, preview: state.preview?.split(runId).join("run-NORMALIZED") ?? null, records, fragment })
+			}
 			expect(stateOf(unwritable, blocked.envelope.runId as string)).toBe(stateOf(normal, baseline.envelope.runId as string))
 			expect(stateOf(throwingRoot, throwing.envelope.runId as string)).toBe(stateOf(normal, baseline.envelope.runId as string))
 		}
@@ -1070,5 +1153,496 @@ describe("diagnostics", () => {
 	test("inspect-diagnostics fallback rows carry unchanged and inspect guidance", async () => {
 		check(await machine(fresh("secret-marker-in-diagnostic-field"), ["inspect", "--include-diagnostics"], "egress-non-json:cycle"), fallback("repair-lab.inspect-diagnostics", "failed", "INTERNAL_RESULT_UNCHANGED", "inspect", "unchanged", INSPECT))
 		check(await machine(fresh("healthy"), ["inspect", "--include-diagnostics", "--state", "state/missing.json"], "egress-non-json:cycle"), fallback("repair-lab.inspect-diagnostics", "refused", "INTERNAL_PREPARATION", "inspect", "unchanged", INSPECT))
+	})
+})
+
+// O1 unit U0 (CDS-LO-1 A6 and A9 on the repaired base): read-back failure after a successful durable write, diagnostics
+// that never authorize completion or replay, and a sequential second child. Every literal below is restated from the
+// fixture and the accepted 2.0 station table; the rows add no journal version, lock, cause, station or observation rule.
+describe("O1 U0", () => {
+	const READ_BACK_REASON = "a durable write was attempted and its outcome is not established"
+	function diagnosticsBytes(root: Root): Record<string, string> {
+		return Object.fromEntries(diagnosticsFiles(root).map((file) => [file, readFileSync(join(root.root, "diagnostics", file), "utf8")]))
+	}
+	const handoffExpectation = (identity: string, causeCode: string, failureClass: "internal" | "domain", exit: number): Expected => ({ identity, outcome: "failed", failureClass, causeCode, exit, effectClass: "repository-local", transactionState: "unknown", retryable: false, delay: null, nextAction: null })
+	// Journal-shaped completion text and a fabricated authorizing event, written where only diagnostics live.
+	function forgeDiagnostics(root: Root, kind: Kind, runId: string): string[] {
+		const [first] = planOf(kind)
+		const forged = `${completedLine(kind, 2, runId, first)}${eventLine(kind, 4, runId)}${completedLine(kind, 5, runId, J)}${JSON.stringify({ event_kind: "recovery.replay-authorized", station: "repair-lab.authorized-apply", run: runId, completed_effect_ids: planOf(kind) })}\n`
+		const directory = join(root.root, "diagnostics")
+		mkdirSync(directory, { recursive: true })
+		const files = diagnosticsFiles(root)
+		for (const file of files) appendFileSync(join(directory, file), forged)
+		writeFileSync(join(directory, "run-00000000-0000-4000-8000-000000000000.jsonl"), forged)
+		return diagnosticsFiles(root)
+	}
+	async function recoverUnchangedAcrossDiagnostics(root: Root, kind: Kind, forgedRunId: string, expected: Expected, effects: Record<string, unknown>, label: string): Promise<void> {
+		const state = readState(root)
+		const intact = await machine(root, ["recover"])
+		check(intact, expected)
+		expect(intact.envelope.effects).toEqual(effects)
+		expect(intact.diagnostics).toMatchObject({ status: "available", sinkFailure: null })
+		const oracle = comparable(intact, root)
+		expect(readState(root)).toEqual(state)
+		const intactReceipt = receiptOf(root, intact.run)
+		for (const file of diagnosticsFiles(root)) rmSync(join(root.root, "diagnostics", file))
+		const deleted = await machine(root, ["recover"])
+		expect(comparable(deleted, root)).toEqual(oracle)
+		expect(deleted.diagnostics).toMatchObject({ status: "available", sinkFailure: null })
+		expect(readState(root)).toEqual(state)
+		const deletedReceipt = receiptOf(root, deleted.run)
+		const throwing = await machine(root, ["recover"], "sink-throw")
+		expect(comparable(throwing, root)).toEqual(oracle)
+		expect(throwing.diagnostics).toMatchObject({ status: "available", sinkFailure: "write", unflushedRecords: 2 })
+		expect(readState(root)).toEqual(state)
+		const throwingReceipt = receiptOf(root, throwing.run)
+		const forgedFiles = forgeDiagnostics(root, kind, forgedRunId)
+		expect(forgedFiles.length).toBeGreaterThanOrEqual(3)
+		const forgedBefore = diagnosticsBytes(root)
+		const forged = await machine(root, ["recover"])
+		expect(comparable(forged, root)).toEqual(oracle)
+		expect(forged.envelope.effects).toEqual(effects)
+		expect(forged.diagnostics).toMatchObject({ status: "available", sinkFailure: null })
+		expect(readState(root)).toEqual(state)
+		const forgedAfter = diagnosticsBytes(root)
+		for (const [file, bytes] of Object.entries(forgedBefore)) expect(forgedAfter[file]).toBe(bytes)
+		retainRecoveryEvidence(`o1-u0-p12-${label}`, { kind, forgedRunId, state, oracle, intact: intactReceipt, deleted: deletedReceipt, throwing: throwingReceipt, forged: receiptOf(root, forged.run) })
+	}
+
+	test("O1 U0 P8: a durable write that lands but cannot be read back is failed|INTERNAL_EFFECT_OUTCOME_UNKNOWN; recover and the same argv never replay", async () => {
+		const rows: Array<[Variant, string[], string, Kind, string, string[], string[]]> = [
+			["healthy-with-fresh-preview", AUTHORIZED_APPLY, "repair-lab.apply", "apply", U, [], [U, J]],
+			["derived-index-missing-with-fresh-preview", AUTHORIZED_REPAIR, "repair-lab.repair", "repair", R, [], [R, J]],
+			["healthy-with-fresh-preview", AUTHORIZED_APPLY, "repair-lab.apply", "apply", J, [U], [J]],
+		]
+		for (const [variant, argv, identity, kind, effect, completed, uncertain] of rows) {
+			const root = fresh(variant)
+			const before = readState(root)
+			const observed = await machine(root, argv, `readback-fail:${effect}`)
+			const runId = observed.envelope.runId as string
+			expect(observed.run).toMatchObject({ exit: 1, stderr: "", signal: null })
+			check(observed, handoffExpectation(identity, "INTERNAL_EFFECT_OUTCOME_UNKNOWN", "internal", 1))
+			expect(observed.envelope).toMatchObject({ data: null, retryable: false, repairAction: "run repair-lab recover; do not retry automatically", handoff: { owner: "operator", reason: READ_BACK_REASON, inspect: [INSPECT] }, effects: { completed, remaining: [], uncertain, inventoryComplete: true } })
+			expect(observed.envelope.nextAction).toBeUndefined()
+			expect(observed.envelope.retryDelayMilliseconds).toBeUndefined()
+			expect(observed.message).toBe(READ_BACK_REASON)
+			// Independent state: the write landed, the preview is consumed by this run, and no completion line names the effect.
+			const [first] = planOf(kind)
+			const expectedJournal = effect === J ? `${intentLine(kind, 1, runId, first)}${completedLine(kind, 2, runId, first)}${intentLine(kind, 3, runId, J)}${eventLine(kind, 4, runId)}` : intentLine(kind, 1, runId, effect)
+			const afterFault = readState(root)
+			expect(afterFault).toEqual({ resource: REVISION_5_HEALTHY, preview: consumedPreview(kind, runId), journal: expectedJournal })
+			expect(afterFault.resource).not.toBe(before.resource)
+			// O1 A6 (D3) on the U0 rows: recover classifies from the landed bytes. A landed resource write with no second
+			// intent is a known partial completion; a landed event frame completes the plan, so nothing is pending.
+			const recovered = await machine(root, ["recover"])
+			if (effect === J) {
+				check(recovered, recoverNothingPending)
+				expect(projection(recovered)).toMatchObject({ result: "nothing-pending", observed_completed_effect_ids: [U, J], not_applied_effect_ids: [] })
+			} else {
+				const partial = recoverPartial([effect], [J])
+				check(recovered, partial.expected)
+				expect(recovered.envelope.effects).toEqual(partial.effects)
+				expect(recovered.envelope.handoff).toEqual({ owner: "operator", reason: PARTIAL_REASON, inspect: [INSPECT] })
+			}
+			expect(readState(root)).toEqual(afterFault)
+			// O1 A7 (D6): the same argv never replays. An unresolved prior run refuses DOMAIN_PRIOR_RUN_PENDING; a resolved
+			// consumed plan keeps the existing consumed-preview refusal. Either way every byte is unchanged.
+			const repeated = await machine(root, argv)
+			if (effect === J) check(repeated, domain(identity, "DOMAIN_PREVIEW_CONSUMED", "repository-local"))
+			else {
+				check(repeated, { identity, outcome: "refused", failureClass: "domain", causeCode: "DOMAIN_PRIOR_RUN_PENDING", exit: 3, effectClass: "repository-local", transactionState: "unchanged", retryable: false, delay: null, nextAction: null })
+				expect(repeated.envelope.handoff).toEqual({ owner: "operator", reason: PRIOR_RUN_REASON, inspect: [INSPECT] })
+			}
+			expect(repeated.envelope.effects).toMatchObject({ completed: [], uncertain: [], inventoryComplete: true })
+			expect(readState(root)).toEqual(afterFault)
+			retainRecoveryEvidence(`o1-u0-p8-${identity}-${effect}`, { variant, argv, fault: `readback-fail:${effect}`, before, fault_run: receiptOf(root, observed.run), recover: receiptOf(root, recovered.run), repeat: receiptOf(root, repeated.run) })
+		}
+		const humanRoot = fresh("healthy-with-fresh-preview")
+		const humanRun = await human(humanRoot, AUTHORIZED_APPLY, `readback-fail:${U}`)
+		expect(humanRun).toMatchObject({ exit: 1, stdout: "", signal: null })
+		expect(lines(humanRun.stderr)).toEqual([`apply failed: ${READ_BACK_REASON}; run repair-lab recover`])
+		expect(readState(humanRoot).resource).toBe(REVISION_5_HEALTHY)
+		retainRecoveryEvidence("o1-u0-p8-human", receiptOf(humanRoot, humanRun))
+		// The channel stays closed: an unbound, unknown or extra-suffixed effect argument is a usage refusal before any
+		// state access; a known effect id followed by more syntax is not that effect id.
+		for (const token of ["readback-fail", "readback-fail:effect.nope", "readback-fail:", `readback-fail:${U}:extra`, `readback-fail:${U}:`]) {
+			const closed = fresh("healthy-with-fresh-preview")
+			const untouched = readState(closed)
+			check(await machine(closed, AUTHORIZED_APPLY, token), usage("repair-lab.apply", "USAGE_INVALID_ARGUMENTS", "repository-local"))
+			expect(readState(closed)).toEqual(untouched)
+		}
+	})
+
+	test("O1 U0 P12: intact, deleted, throwing and forged diagnostics leave recover's decision, effects and guidance identical after a completed real apply and after a real pending run", async () => {
+		// Completed real apply: recover is nothing-pending under every diagnostics condition; nothing is re-applied.
+		const completedRoot = fresh("healthy-with-fresh-preview")
+		const applied = await machine(completedRoot, AUTHORIZED_APPLY)
+		expect(applied.envelope).toMatchObject({ outcome: "success", transactionState: "completed" })
+		const appliedRun = applied.envelope.runId as string
+		const completedState = readState(completedRoot)
+		expect(completedState).toEqual({ resource: REVISION_5_HEALTHY, preview: consumedPreview("apply", appliedRun), journal: completedJournal("apply", appliedRun) })
+		await recoverUnchangedAcrossDiagnostics(completedRoot, "apply", appliedRun, recoverNothingPending, { completed: [], remaining: [], uncertain: [], inventoryComplete: true }, "completed-apply")
+		expect(readState(completedRoot)).toEqual(completedState)
+		expect(journalRecords(completedRoot).filter((record) => record.kind === "event")).toHaveLength(1)
+		// Real pending run: the first effect's write landed and the process was killed before its completion line.
+		const pendingRoot = fresh("healthy-with-fresh-preview")
+		const halted = await runCli(pendingRoot, [...AUTHORIZED_APPLY, "--json"], { fault: `halt-after-effect:${U}` })
+		expect(halted.signal).toBe("SIGKILL")
+		expect(halted.stdout).toBe("")
+		const pendingState = readState(pendingRoot)
+		const haltedRun = (JSON.parse(pendingState.preview as string) as { consumed_by_run: string }).consumed_by_run
+		expect(pendingState).toEqual({ resource: REVISION_5_HEALTHY, preview: consumedPreview("apply", haltedRun), journal: intentLine("apply", 1, haltedRun, U) })
+		// O1 A6 (D3): the landed first effect and the never-intended second effect are a known partial completion; the
+		// U0 invariant holds unchanged: no diagnostics condition alters that decision, its effects or its guidance.
+		const pending = recoverPartial([U], [J])
+		await recoverUnchangedAcrossDiagnostics(pendingRoot, "apply", haltedRun, pending.expected, pending.effects, "pending-apply")
+		expect(readState(pendingRoot)).toEqual(pendingState)
+	})
+
+	test("O1 U0 P3: a second real child started after a completed apply or repair exits is refused as consumed and leaves every state byte identical", async () => {
+		const rows: Array<[Variant, string[], string, Kind]> = [
+			["healthy-with-fresh-preview", AUTHORIZED_APPLY, "repair-lab.apply", "apply"],
+			["derived-index-missing-with-fresh-preview", AUTHORIZED_REPAIR, "repair-lab.repair", "repair"],
+		]
+		for (const [variant, argv, identity, kind] of rows) {
+			const root = fresh(variant)
+			const first = await machine(root, argv)
+			const firstRun = first.envelope.runId as string
+			expect(first.run).toMatchObject({ exit: 0, signal: null })
+			expect(first.envelope).toMatchObject({ outcome: "success", transactionState: "completed", effects: { completed: planOf(kind), remaining: [], uncertain: [], inventoryComplete: true } })
+			const done = readState(root)
+			expect(done).toEqual({ resource: REVISION_5_HEALTHY, preview: consumedPreview(kind, firstRun), journal: completedJournal(kind, firstRun) })
+			// runCli resolves only after the first child's exit, so the second child is strictly sequential.
+			const second = await machine(root, argv)
+			const secondRun = second.envelope.runId as string
+			expect(secondRun).not.toBe(firstRun)
+			check(second, domain(identity, "DOMAIN_PREVIEW_CONSUMED", "repository-local"))
+			expect(second.envelope).toMatchObject({ data: null, retryable: false, effects: { completed: [], uncertain: [], inventoryComplete: true } })
+			expect(second.envelope.handoff).toBeUndefined()
+			expect(readState(root)).toEqual(done)
+			expect(done.journal.includes(secondRun)).toBe(false)
+			expect(diagnosticsFiles(root)).toEqual([`${firstRun}.jsonl`, `${secondRun}.jsonl`].sort())
+			// The 2.0 wire folds consumed and stale into DOMAIN_PRECONDITION_UNMET; the station is pinned through the
+			// second child's terminal diagnostics record and, below, the human stderr line.
+			expect(diagnosticsRecords(root, `${secondRun}.jsonl`).map((record) => [record.event_kind, record.station_id])).toEqual([[kind === "apply" ? "apply.started" : "repair.apply.started", null], [`${kind}.preview-consumed`, "repair-lab.preview-consumed"]])
+			const third = await human(root, argv)
+			expect(third).toMatchObject({ exit: 3, stdout: "", signal: null })
+			expect(lines(third.stderr)).toEqual([`${kind} refused: preview already consumed; inspect and preview again`])
+			expect(readState(root)).toEqual(done)
+			retainRecoveryEvidence(`o1-u0-p3-${identity}`, { variant, argv, first: receiptOf(root, first.run), second: receiptOf(root, second.run), third: receiptOf(root, third) })
+		}
+	})
+})
+
+// O1 Candidate A (CDS-LO-1, ticket freeze 2026-09-15): journal revision 2 framing, the unversioned, torn and corrupt
+// journal behaviours, the three finite bounds, atomic preview consumption, and the prior-run refusal. Every expected
+// byte, digest, message and station below is a literal authored from the freeze and C0 revision 2; nothing is read
+// from the modules under test. Recovery observation (A6) lives with the other recover rows in "recovery" above.
+describe("O1 A", () => {
+	const LIMIT_ACTION = "Inspect, then archive the journal manually; nothing is rotated or pruned automatically"
+	const SCAN_BOUND = 10_000_000
+	const UNVERSIONED_LINE = '{"kind":"intent","seq":1,"run":"run-fixture","effect":"effect.update-index","operation":"apply","preview_id":"preview-healthy-revision-4"}\n'
+	// Every routed state command with the fixture variant on which it would otherwise proceed past the journal read.
+	const ROUTED: Array<[Variant, string[], string, Expected["effectClass"]]> = [
+		["healthy", ["status"], "repair-lab.status", "inspect"],
+		["healthy", ["inspect"], "repair-lab.inspect", "inspect"],
+		["healthy", ["inspect", "--include-diagnostics"], "repair-lab.inspect-diagnostics", "inspect"],
+		["healthy", ["apply", "--preview"], "repair-lab.preview", "repository-local"],
+		["healthy", ["repair", "--preview"], "repair-lab.repair", "repository-local"],
+		["healthy-with-fresh-preview", AUTHORIZED_APPLY, "repair-lab.apply", "repository-local"],
+		["derived-index-missing-with-fresh-preview", AUTHORIZED_REPAIR, "repair-lab.repair", "repository-local"],
+		["derived-index-missing-with-fresh-preview", RETRY_REPAIR, "repair-lab.repair-retry", "repository-local"],
+		["partial-after-halt", ["recover"], "repair-lab.recover", "repository-local"],
+	]
+	const WRITERS = ROUTED.filter(([, argv]) => argv.includes("--preview") || argv.includes("--authorize"))
+	const journalPath = (root: Root): string => join(root.root, "state", "journal.jsonl")
+	const seedJournal = (root: Root, bytes: string): void => writeFileSync(journalPath(root), bytes)
+	function stateEntries(root: Root): string[] {
+		return readdirSync(join(root.root, "state")).sort()
+	}
+	async function expectSchemaRefusal(root: Root, argv: string[], identity: string, effectClass: Expected["effectClass"], message: string): Promise<Machine> {
+		const before = readState(root)
+		const observed = await machine(root, argv)
+		retainRecoveryEvidence(`o1-schema-${sha256(before.journal)}-${argv.join("_")}`, { argv, before, run: receiptOf(root, observed.run) })
+		check(observed, schemaRefusal(identity, effectClass))
+		expect(`${argv.join(" ")}: ${observed.message}`).toBe(`${argv.join(" ")}: ${message}`)
+		expect(observed.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true })
+		expect(observed.envelope.repairAction).toBe("Restore a resource that matches the resource schema, then inspect")
+		expect(readState(root)).toEqual(before)
+		return observed
+	}
+
+	test("O1 A9 recover precedence: resource validation precedes journal validation, then preview validation", async () => {
+		const rows: Array<[string, string, string, string]> = [
+			["resource-first", "{}\n", "garbage\n", "resource does not match the resource schema"],
+			["journal-first", RESET_RESOURCE, "garbage\n", "journal line is not a strict journal revision 2 frame"],
+			["preview-last", RESET_RESOURCE, "", "preview does not match the preview schema"],
+		]
+		for (const [label, resource, journal, message] of rows) {
+			const root = fresh("healthy-with-fresh-preview")
+			writeFileSync(join(root.root, "state", "resource.json"), resource)
+			writeFileSync(join(root.root, "state", "preview.json"), "{}\n")
+			seedJournal(root, journal)
+			const before = readState(root)
+			const observed = await machine(root, ["recover"])
+			retainRecoveryEvidence(`o1-a9-${label}`, { before, run: receiptOf(root, observed.run) })
+			check(observed, schemaRefusal("repair-lab.recover", "repository-local"))
+			expect(observed.message).toBe(message)
+			expect(readState(root)).toEqual(before)
+		}
+	})
+
+	test("O1 A1 framing: a completed apply and repair leave exactly the five test-encoded revision 2 frames with the run's digests", async () => {
+		const rows: Array<[Variant, string[], Kind]> = [
+			["healthy-with-fresh-preview", AUTHORIZED_APPLY, "apply"],
+			["derived-index-missing-with-fresh-preview", AUTHORIZED_REPAIR, "repair"],
+		]
+		for (const [variant, argv, kind] of rows) {
+			const root = fresh(variant)
+			const observed = await machine(root, argv)
+			const runId = observed.envelope.runId as string
+			expect(observed.envelope).toMatchObject({ outcome: "success", transactionState: "completed" })
+			const state = readState(root)
+			expect(state).toEqual({ resource: REVISION_5_HEALTHY, preview: consumedPreview(kind, runId), journal: completedJournal(kind, runId) })
+			// Each line is one strict frame in the frozen key order; the decoder re-derives length and digest independently.
+			for (const line of lines(state.journal)) expect(line.startsWith('{"journalVersion":2,"payloadBytes":')).toBe(true)
+			expect(journalRecords(root).map((record) => [record.kind, record.seq, record.effect])).toEqual([["intent", 1, planOf(kind)[0]], ["completed", 2, planOf(kind)[0]], ["intent", 3, J], ["event", 4, J], ["completed", 5, J]])
+			expect(stateEntries(root)).toEqual(["journal.jsonl", "preview.json", "resource.json"])
+			retainRecoveryEvidence(`o1-a1-framing-${kind}`, receiptOf(root, observed.run))
+		}
+	})
+
+	test("O1 A2 unversioned: a nonempty journal without journalVersion is refused by every routed state command, unchanged and unmigrated", async () => {
+		for (const [variant, argv, identity, effectClass] of ROUTED) {
+			const root = fresh(variant)
+			seedJournal(root, UNVERSIONED_LINE)
+			await expectSchemaRefusal(root, argv, identity, effectClass, "journal is unversioned; journal revision 2 frames are required and no migration is performed")
+			expect(readState(root).journal).toBe(UNVERSIONED_LINE)
+		}
+		const humanRoot = fresh("healthy")
+		seedJournal(humanRoot, UNVERSIONED_LINE)
+		const run = await human(humanRoot, ["status"])
+		expect(run).toMatchObject({ exit: 4, stdout: "", signal: null })
+		expect(lines(run.stderr)).toEqual(["status refused: journal is unversioned; journal revision 2 frames are required and no migration is performed"])
+		retainRecoveryEvidence("o1-a2-unversioned-human", receiptOf(humanRoot, run))
+	})
+
+	test("O1 A3 corrupt terminated frame: shape, version, length, digest, bound and payload violations each block every routed state command", async () => {
+		const valid = frameLine(APPLY_EVENT_PAYLOAD)
+		const frame = JSON.parse(valid) as { journalVersion: number; payloadBytes: number; payloadSha256: string; payload: string }
+		const withFrame = (changes: Record<string, unknown>): string => `${JSON.stringify({ ...frame, ...changes })}\n`
+		const flipped = frame.payload.replace('"summary":"apply recorded"}', '"summary":"apply recordeD"}')
+		expect(flipped).not.toBe(frame.payload)
+		const oversizedPayload = `{"kind":"event","seq":1,"run":"run-fixture","effect":"effect.write-journal","operation":"apply","preview_id":"preview-filler","summary":"${"y".repeat(64_001 - 139)}"}`
+		expect(Buffer.byteLength(oversizedPayload, "utf8")).toBe(64_001)
+		const boundaryPayload = `{"kind":"event","seq":1,"run":"run-fixture","effect":"effect.write-journal","operation":"apply","preview_id":"preview-filler","summary":"${"y".repeat(64_000 - 139)}"}`
+		expect(Buffer.byteLength(boundaryPayload, "utf8")).toBe(64_000)
+		const corruptions: Array<[string, string, string]> = [
+			["not JSON", "garbage\n", "journal line is not a strict journal revision 2 frame"],
+			["JSON array", "[1]\n", "journal line is not a strict journal revision 2 frame"],
+			["version literal 3", withFrame({ journalVersion: 3 }), "journal line is not a strict journal revision 2 frame"],
+			["extra frame key", withFrame({ extra: true }), "journal line is not a strict journal revision 2 frame"],
+			["missing payloadSha256", `${JSON.stringify({ journalVersion: 2, payloadBytes: frame.payloadBytes, payload: frame.payload })}\n`, "journal line is not a strict journal revision 2 frame"],
+			["payloadBytes off by one", withFrame({ payloadBytes: frame.payloadBytes + 1 }), "journal frame payloadBytes disagrees with its payload"],
+			["one flipped payload byte", withFrame({ payload: flipped }), "journal frame payloadSha256 disagrees with its payload"],
+			["uppercase digest", withFrame({ payloadSha256: frame.payloadSha256.toUpperCase() }), "journal line is not a strict journal revision 2 frame"],
+			["payload over 64,000 bytes", frameLine(oversizedPayload), "journal frame payload exceeds the 64,000-byte bound"],
+			["line over 512,000 bytes", `${JSON.stringify({ journalVersion: 2, payloadBytes: 0, payloadSha256: frame.payloadSha256, payload: "", pad: "z".repeat(512_000) })}\n`, "journal line exceeds the 512,000-byte framed-line bound"],
+			["payload is not a strict record", frameLine('{"kind":"intent","seq":1}'), "journal frame payload is not a strict journal record"],
+			["record with an unknown field", frameLine(`${APPLY_EVENT_PAYLOAD.slice(0, -1)},"extra":1}`), "journal frame payload is not a strict journal record"],
+			["intent without digests", frameLine(UNVERSIONED_LINE.trim()), "journal frame payload is not a strict journal record"],
+			["corrupt frame after a valid prefix", `${PARTIAL_APPLY_FRAMES}${withFrame({ payloadBytes: frame.payloadBytes + 1 })}`, "journal frame payloadBytes disagrees with its payload"],
+		]
+		for (const [label, bytes, message] of corruptions) {
+			const readers: Array<[Variant, string[], string, Expected["effectClass"]]> = [ROUTED[0] as (typeof ROUTED)[number], ROUTED[3] as (typeof ROUTED)[number], ROUTED[5] as (typeof ROUTED)[number], ROUTED[8] as (typeof ROUTED)[number]]
+			for (const [variant, argv, identity, effectClass] of readers) {
+				const root = fresh(variant)
+				seedJournal(root, bytes)
+				const observed = await expectSchemaRefusal(root, argv, identity, effectClass, message)
+				expect(`${label}: ${observed.envelope.causeCode as string}`).toBe(`${label}: SCHEMA_INVALID_INPUT`)
+				if (identity === "repair-lab.apply") expect((JSON.parse(readState(root).preview as string) as { consumed: boolean }).consumed).toBe(false)
+			}
+		}
+		// The payload bound is inclusive: a 64,000-byte payload frame is a valid journal for readers and writers.
+		const boundary = fresh("healthy-with-fresh-preview")
+		seedJournal(boundary, frameLine(boundaryPayload))
+		expect((await machine(boundary, ["status"])).envelope.outcome).toBe("success")
+		const applied = await machine(boundary, AUTHORIZED_APPLY)
+		expect(applied.envelope).toMatchObject({ outcome: "success", transactionState: "completed" })
+		expect(readState(boundary).journal.startsWith(frameLine(boundaryPayload))).toBe(true)
+		retainRecoveryEvidence("o1-a3-boundary-payload", receiptOf(boundary, applied.run))
+	})
+
+	test("O1 A4 torn tail: readers keep the validated prefix and never parse the fragment; writers refuse before any durable write", async () => {
+		// Row 11's fixture is the torn event frame: status and inspect succeed on the prefix; recover classifies the second
+		// effect as uncertain (that row is checked in "recovery" above and rechecked here through the effects inventory).
+		const torn = fresh("unknown-after-partial")
+		const before = readState(torn)
+		expect(before.journal.endsWith("\n")).toBe(false)
+		expect((await machine(torn, ["status"])).envelope).toMatchObject({ outcome: "success", causeCode: "SUCCESS_UNCHANGED" })
+		expect((await machine(torn, ["inspect"])).envelope).toMatchObject({ outcome: "success", causeCode: "SUCCESS_UNCHANGED" })
+		const recovered = await machine(torn, ["recover"])
+		check(recovered, { ...recoverUnknown, handoff: [J] })
+		expect(recovered.envelope.effects).toEqual({ completed: [U], remaining: [], uncertain: [J], inventoryComplete: true })
+		expect(readState(torn)).toEqual(before)
+		// Every writer refuses schema-class on a torn tail, whether the fragment is a partial frame or a whole frame that
+		// merely lacks its terminal LF; the preview stays unconsumed and no byte changes.
+		const fragments: Array<[string, string]> = [
+			["partial frame", TORN_APPLY_EVENT_FRAGMENT],
+			["frame without LF", frameLine(APPLY_EVENT_PAYLOAD).slice(0, -1)],
+			["fragment after a valid prefix", `${PARTIAL_APPLY_FRAMES}{"journalVersion":2,"payloadBytes":`],
+		]
+		for (const [label, fragment] of fragments) {
+			for (const [variant, argv, identity, effectClass] of WRITERS) {
+				const root = fresh(variant)
+				seedJournal(root, fragment)
+				const observed = await expectSchemaRefusal(root, argv, identity, effectClass, "journal ends in a torn frame; writers are blocked until it is inspected")
+				expect(`${label}: ${observed.envelope.causeCode as string}`).toBe(`${label}: SCHEMA_INVALID_INPUT`)
+				if (argv.includes("--authorize")) expect((JSON.parse(readState(root).preview as string) as { consumed: boolean }).consumed).toBe(false)
+				else if (variant === "healthy") expect(readState(root).preview).toBeNull()
+			}
+		}
+		// A torn bookkeeping frame after an independently confirmed event is not uncertainty: every effect is established.
+		const bookkeeping = fresh("healthy-with-fresh-preview")
+		const applied = await machine(bookkeeping, AUTHORIZED_APPLY)
+		const runId = applied.envelope.runId as string
+		const journal = readState(bookkeeping).journal
+		expect(journal).toBe(completedJournal("apply", runId))
+		seedJournal(bookkeeping, journal.slice(0, -30))
+		const settled = await machine(bookkeeping, ["recover"])
+		check(settled, recoverNothingPending)
+		expect(projection(settled)).toMatchObject({ result: "nothing-pending", observed_completed_effect_ids: [U, J], not_applied_effect_ids: [] })
+		check(await machine(bookkeeping, ["apply", "--preview"]), schemaRefusal("repair-lab.preview", "repository-local"))
+		retainRecoveryEvidence("o1-a4-torn-bookkeeping", receiptOf(bookkeeping, settled.run))
+	})
+
+	test("O1 A5 bounds: a journal over the scan bound refuses every writer with DOMAIN_JOURNAL_LIMIT_REACHED and hands recovery off with an incomplete inventory; exactly at the bound one more apply is admitted", async () => {
+		const limit = (identity: string): Expected => ({ identity, outcome: "refused", failureClass: "domain", causeCode: "DOMAIN_JOURNAL_LIMIT_REACHED", exit: 3, effectClass: "repository-local", transactionState: "unchanged", retryable: false, delay: null, nextAction: INSPECT })
+		for (const [variant, argv, identity] of WRITERS) {
+			const root = fresh(variant)
+			fillJournal(root, SCAN_BOUND + 1)
+			const before = readState(root)
+			expect(Buffer.byteLength(before.journal, "utf8")).toBeGreaterThan(SCAN_BOUND)
+			const observed = await machine(root, argv)
+			check(observed, limit(identity))
+			expect(observed.envelope.repairAction).toBe(LIMIT_ACTION)
+			expect(observed.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true })
+			expect(observed.message).toBe("journal scan bound of 10,000,000 bytes reached; inspect, then archive the journal manually")
+			expect(readState(root)).toEqual(before)
+		}
+		// Readers still run on an over-bound journal; recover with a consumed plan reports an incomplete inventory.
+		const reader = fresh("partial-after-halt")
+		fillJournal(reader, SCAN_BOUND + 1)
+		seedJournal(reader, `${PARTIAL_APPLY_FRAMES}${readState(reader).journal}`)
+		expect((await machine(reader, ["status"])).envelope.outcome).toBe("success")
+		const incomplete = await machine(reader, ["recover"])
+		check(incomplete, { ...recoverUnknown, handoff: [J] })
+		expect(incomplete.envelope.effects).toEqual({ completed: [U], remaining: [], uncertain: [J], inventoryComplete: false })
+		const humanRoot = fresh("healthy-with-fresh-preview")
+		fillJournal(humanRoot, SCAN_BOUND + 1)
+		const humanRun = await human(humanRoot, AUTHORIZED_APPLY)
+		expect(humanRun).toMatchObject({ exit: 3, stdout: "", signal: null })
+		expect(lines(humanRun.stderr)).toEqual(["apply refused: journal scan bound of 10,000,000 bytes reached; inspect, then archive the journal manually"])
+		// Exactly 10,000,000 bytes is inside the bound: the apply lands, its frames cross the bound, and only then do the
+		// next writer refuse and recovery report an incomplete inventory. Nothing is rotated or pruned.
+		const exact = fresh("healthy-with-fresh-preview")
+		fillJournal(exact, SCAN_BOUND, true)
+		const filler = readState(exact).journal
+		expect(Buffer.byteLength(filler, "utf8")).toBe(SCAN_BOUND)
+		const applied = await machine(exact, AUTHORIZED_APPLY)
+		expect(applied.envelope).toMatchObject({ outcome: "success", transactionState: "completed" })
+		const runId = applied.envelope.runId as string
+		expect(readState(exact)).toEqual({ resource: REVISION_5_HEALTHY, preview: consumedPreview("apply", runId), journal: `${filler}${completedJournal("apply", runId)}` })
+		const afterCrossing = await machine(exact, ["recover"])
+		check(afterCrossing, { ...recoverUnknown, handoff: [U, J] })
+		expect(afterCrossing.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: [U, J], inventoryComplete: false })
+		check(await machine(exact, ["apply", "--preview"]), limit("repair-lab.preview"))
+		expect(readState(exact).journal).toBe(`${filler}${completedJournal("apply", runId)}`)
+		retainRecoveryEvidence("o1-a5-exact-bound", { applied: { stdout: applied.run.stdout, exit: applied.run.exit }, recover: afterCrossing.run.stdout, journalBytes: Buffer.byteLength(readState(exact).journal, "utf8") })
+	}, 120_000)
+
+	test("O1 A7 prior-run refusal: an unresolved consumed plan blocks every writer with DOMAIN_PRIOR_RUN_PENDING and preserves the recovery inventory; a resolved plan does not", async () => {
+		const rows: Array<[string[], string]> = [
+			[["apply", "--preview"], "repair-lab.preview"],
+			[["repair", "--preview"], "repair-lab.repair"],
+			[["apply", "--preview-id", "preview-partial-revision-4", "--authorize", "fixture-authority"], "repair-lab.apply"],
+			[["apply", "--preview-id", "preview-other", "--authorize", "fixture-authority"], "repair-lab.apply"],
+			[AUTHORIZED_REPAIR, "repair-lab.repair"],
+			[RETRY_REPAIR, "repair-lab.repair-retry"],
+		]
+		for (const [argv, identity] of rows) {
+			const root = fresh("partial-after-halt")
+			const before = readState(root)
+			const observed = await machine(root, argv)
+			check(observed, priorRunPending(identity))
+			expect(observed.envelope.handoff).toEqual({ owner: "operator", reason: PRIOR_RUN_REASON, inspect: [INSPECT] })
+			expect(observed.envelope.repairAction).toBe("run repair-lab recover; do not retry automatically")
+			expect(observed.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true })
+			expect(readState(root)).toEqual(before)
+		}
+		// Authority still precedes the prior-run check; a torn tail still precedes it as the schema refusal.
+		check(await machine(fresh("partial-after-halt"), ["apply", "--preview-id", "preview-partial-revision-4"]), domain("repair-lab.apply", "DOMAIN_AUTHORITY_MISSING", "repository-local"))
+		check(await machine(fresh("unknown-after-partial"), ["apply", "--preview"]), schemaRefusal("repair-lab.preview", "repository-local"))
+		const humanRoot = fresh("partial-after-halt")
+		const humanRun = await human(humanRoot, ["apply", "--preview"])
+		expect(humanRun).toMatchObject({ exit: 3, stdout: "", signal: null })
+		expect(lines(humanRun.stderr)).toEqual(["apply refused: a prior run's consumed plan has unresolved effects; run repair-lab recover"])
+		// Candidate B: the crash lock refuses first. Only explicit operator removal after the child has exited permits
+		// the existing prior-run check; the consumed preview and independently observed effects survive both refusals.
+		const crashed = fresh("healthy-with-fresh-preview")
+		const halted = await runCli(crashed, [...AUTHORIZED_APPLY, "--json"], { fault: `halt-after-effect:${U}` })
+		expect(halted.signal).toBe("SIGKILL")
+		const residue = readState(crashed)
+		const locked = await machine(crashed, ["apply", "--preview"])
+		check(locked, { ...priorRunPending("repair-lab.preview"), causeCode: "DOMAIN_JOURNAL_LOCK_HELD" })
+		expect(readState(crashed)).toEqual(residue)
+		retainRecoveryEvidence("o1-a7-crash-lock", receiptOf(crashed, locked.run))
+		rmSync(join(crashed.root, "state", "journal.lock")) // Explicit operator action after observing SIGKILL completion.
+		check(await machine(crashed, ["apply", "--preview"]), priorRunPending("repair-lab.preview"))
+		expect(readState(crashed)).toEqual(residue)
+		// Resolved plans: after explicit crash-lock removal, fully not applied and fully completed admit a fresh preview.
+		const aborted = fresh("healthy-with-fresh-preview")
+		expect((await runCli(aborted, [...AUTHORIZED_APPLY, "--json"], { fault: `halt-before-effect:${U}` })).signal).toBe("SIGKILL")
+		check(await machine(aborted, ["apply", "--preview"]), { ...priorRunPending("repair-lab.preview"), causeCode: "DOMAIN_JOURNAL_LOCK_HELD" })
+		rmSync(join(aborted.root, "state", "journal.lock")) // Explicit operator action after observing SIGKILL completion.
+		const abortedPreview = await machine(aborted, ["apply", "--preview"])
+		check(abortedPreview, { identity: "repair-lab.preview", outcome: "success", failureClass: null, causeCode: null, exit: 0, effectClass: "repository-local", transactionState: "unchanged", retryable: false, delay: null, nextAction: INSPECT })
+		expect(JSON.parse(readState(aborted).preview as string)).toEqual({ preview_id: "preview-healthy-revision-4", kind: "apply", resource_revision: 4, expected_effect_ids: [U, J], consumed: false })
+		const completed = fresh("healthy-with-fresh-preview")
+		expect((await machine(completed, AUTHORIZED_APPLY)).envelope.outcome).toBe("success")
+		const completedPreview = await machine(completed, ["apply", "--preview"])
+		expect(completedPreview.result?.preview_id).toBe("preview-healthy-revision-5")
+		retainRecoveryEvidence("o1-a7-crash-residue", receiptOf(crashed, halted))
+	})
+
+	test("O1 A8 atomic consumption: no temp residue after a run, consumed bytes and lock after a halt, and refused lock creation leaves the preview unconsumed", async () => {
+		const normal = fresh("healthy-with-fresh-preview")
+		expect((await machine(normal, AUTHORIZED_APPLY)).envelope.outcome).toBe("success")
+		expect(stateEntries(normal)).toEqual(["journal.jsonl", "preview.json", "resource.json"])
+		const halted = fresh("healthy-with-fresh-preview")
+		const run = await runCli(halted, [...AUTHORIZED_APPLY, "--json"], { fault: `halt-before-effect:${U}` })
+		expect(run.signal).toBe("SIGKILL")
+		const haltedRun = (JSON.parse(readState(halted).preview as string) as { consumed_by_run: string }).consumed_by_run
+		expect(readState(halted).preview).toBe(consumedPreview("apply", haltedRun))
+		expect(stateEntries(halted)).toEqual(["journal.jsonl", "journal.lock", "preview.json", "resource.json"])
+		// Candidate B admits the exclusive lock before preview consumption. A directory that admits no new entry now
+		// fails before any durable domain write, so the result is unchanged and recovery finds nothing pending.
+		const readOnly = fresh("healthy-with-fresh-preview")
+		const before = readState(readOnly)
+		chmodSync(join(readOnly.root, "state"), 0o500)
+		try {
+			const observed = await machine(readOnly, AUTHORIZED_APPLY)
+			check(observed, { identity: "repair-lab.apply", outcome: "failed", failureClass: "internal", causeCode: "INTERNAL_UNEXPECTED", exit: 1, effectClass: "repository-local", transactionState: "unchanged", retryable: false, delay: null, nextAction: null })
+			expect(observed.envelope.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true })
+			expect(readState(readOnly)).toEqual(before)
+			expect(stateEntries(readOnly)).toEqual(["journal.jsonl", "preview.json", "resource.json"])
+			retainRecoveryEvidence("o1-a8-read-only-state", receiptOf(readOnly, observed.run))
+		} finally {
+			chmodSync(join(readOnly.root, "state"), 0o700)
+		}
+		const recovered = await machine(readOnly, ["recover"])
+		check(recovered, recoverNothingPending)
+		expect(projection(recovered)).toMatchObject({ result: "nothing-pending", consumed_preview_id: null, observed_completed_effect_ids: [], not_applied_effect_ids: [] })
+		expect(readState(readOnly)).toEqual(before)
 	})
 })

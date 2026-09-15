@@ -7,9 +7,10 @@ const command = ["bunx", "tsc", "--ignoreConfig", "--noEmit", "--strict", "--exa
 const locks = [
 	["N1", "TS2322"], ["N2", "TS2322"], ["N3", "TS2322"], ["N4", "TS2322"], ["N5", "TS2322"], ["N6", "TS2375"], ["N7", "TS2322"], ["N8", "TS2322"], ["N9", "TS2322"], ["N10", "TS2540"],
 	["M1", "TS2322"], ["M2", "TS2322"], ["M3", "TS2322"], ["R1", "TS2322"], ["R2", "TS2322"], ["R3", "TS2322"], ["R4", "TS2322"],
+	["P1", "TS2322"], ["P2", "TS2322"], ["P3", "TS2322"],
 ] as const
 
-test("C1 compiler locks have 17 independent stripped-directive diagnostics", () => {
+test("C1 compiler locks have 20 independent stripped-directive diagnostics", () => {
 	const source = readFileSync(fixture, "utf8")
 	for (const [lock, code] of locks) {
 		const lines = source.split("\n")

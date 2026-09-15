@@ -40,11 +40,24 @@ const CAUSE_RULES = {
 	INTERNAL_EFFECT_OUTCOME_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
 	INTERNAL_EFFECT_NOT_OBSERVED: cause("internal", "failed", "unknown", false, "handoff"),
 	INTERNAL_UNEXPECTED: cause("internal", "failed", "unchanged", false, "handoff"),
+	// O1 Candidate A (ticket freeze 2026-09-15): the accepted cause batch minus DOMAIN_JOURNAL_LOCK_HELD (Candidate B).
+	DOMAIN_JOURNAL_LIMIT_REACHED: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_JOURNAL_LOCK_HELD: cause("domain", "refused", "unchanged", false, "handoff"),
+	DOMAIN_PRIOR_RUN_PENDING: cause("domain", "refused", "unchanged", false, "handoff"),
+	DOMAIN_RECOVERY_PARTIAL_HANDOFF: cause("domain", "failed", "partially-completed", false, "handoff"),
 } as const
 export type WireCauseCode = keyof typeof CAUSE_RULES
 export type CauseRule = (typeof CAUSE_RULES)[WireCauseCode]
 /** The accepted result-table row of one cause; the station catalogue schema checks every declaration against it. */
 export function causeRule(code: WireCauseCode): CauseRule { return CAUSE_RULES[code] }
+type RuleQuery = { readonly [Field in keyof CauseRule]?: CauseRule[Field] }
+type CausesWhere<Query extends RuleQuery> = { [Code in WireCauseCode]: (typeof CAUSE_RULES)[Code] extends Query ? Code : never }[WireCauseCode]
+// A result-schema row names its cause group by the accepted rule fields, so CAUSE_RULES stays the one owner of which
+// causes share a row; the same selection is made at the type level so the inferred result type stays literal.
+function causesWhere<const Query extends RuleQuery>(query: Query): readonly CausesWhere<Query>[] {
+	const fields = Object.entries(query) as [keyof CauseRule, CauseRule[keyof CauseRule]][]
+	return (Object.keys(CAUSE_RULES) as WireCauseCode[]).filter((code): code is CausesWhere<Query> => fields.every(([field, value]) => CAUSE_RULES[code][field] === value))
+}
 
 // The old engine still owns its decision representation. This alias is input-only
 // composition, not an emitted wire vocabulary or a legacy adapter.
@@ -185,8 +198,8 @@ const resultSchema = z.union([
 	z.strictObject({ ...baseShape, ...successShape, effectClass: z.enum(["repository-local", "external"]), transactionState: z.literal("completed"), causeCode: z.literal("SUCCESS_COMPLETED"), effects: completedEffectsSchema }),
 	z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: z.enum(["inspect", "repository-local", "external"]), causeCode: z.enum(["USAGE_INVALID_INVOCATION", "USAGE_UNKNOWN_COMMAND"]), failureClass: z.literal("usage"), exitCode: z.literal(2), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional() }),
 	z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: z.enum(["inspect", "repository-local", "external"]), causeCode: z.enum(["SCHEMA_INVALID_INPUT", "SCHEMA_UNSUPPORTED_CONTRACT"]), failureClass: z.literal("schema"), exitCode: z.literal(4), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional() }),
-	z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: z.enum(["inspect", "repository-local", "external"]), causeCode: z.enum(["DOMAIN_PRECONDITION_UNMET", "DOMAIN_DEADLINE_BEFORE_START"]), failureClass: z.literal("domain"), exitCode: z.literal(3), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional() }),
-	z.strictObject({ ...baseShape, ...refusalShape, ...handoffShape, effectClass: z.enum(["inspect", "repository-local", "external"]), causeCode: z.literal("DOMAIN_AUTHORITY_REQUIRED"), failureClass: z.literal("domain"), exitCode: z.literal(3), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional() }),
+	z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: z.enum(["inspect", "repository-local", "external"]), causeCode: z.enum(["DOMAIN_PRECONDITION_UNMET", "DOMAIN_DEADLINE_BEFORE_START", "DOMAIN_JOURNAL_LIMIT_REACHED"]), failureClass: z.literal("domain"), exitCode: z.literal(3), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional() }),
+	z.strictObject({ ...baseShape, ...refusalShape, ...handoffShape, effectClass: z.enum(["inspect", "repository-local", "external"]), causeCode: z.enum(causesWhere({ failureClass: "domain", outcome: "refused", transactionState: "unchanged", retryable: false, guidance: "handoff" })), failureClass: z.literal("domain"), exitCode: z.literal(3), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional() }),
 	z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: z.enum(["inspect", "repository-local", "external"]), causeCode: z.literal("INTERNAL_PREPARATION"), failureClass: z.literal("internal"), exitCode: z.literal(1), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional() }),
 	z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: z.enum(["repository-local", "external"]), causeCode: z.literal("TRANSIENT_NOT_STARTED"), failureClass: z.literal("transient"), exitCode: z.literal(75), retryable: z.literal(true), retryDelayMilliseconds: positiveInteger }),
 	z.strictObject({ ...baseShape, ...failedShape, ...nextShape, effectClass: z.enum(["repository-local", "external"]), transactionState: z.literal("unchanged"), causeCode: z.literal("TRANSIENT_ATTEMPT_UNCHANGED"), failureClass: z.literal("transient"), exitCode: z.literal(75), retryable: z.literal(true), retryDelayMilliseconds: positiveInteger, effects: effectsSchema }),
@@ -194,7 +207,7 @@ const resultSchema = z.union([
 	z.strictObject({ ...baseShape, ...failedShape, ...handoffShape, effectClass: z.enum(["inspect", "repository-local", "external"]), transactionState: z.literal("unchanged"), causeCode: z.enum(["INTERNAL_RESULT_UNCHANGED", "INTERNAL_UNEXPECTED"]), failureClass: z.literal("internal"), exitCode: z.literal(1), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional(), effects: effectsSchema }),
 	z.strictObject({ ...baseShape, ...failedShape, ...handoffShape, effectClass: z.enum(["repository-local", "external"]), transactionState: z.literal("completed"), causeCode: z.literal("DOMAIN_DEADLINE_COMPLETED"), failureClass: z.literal("domain"), exitCode: z.literal(3), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional(), effects: completedEffectsSchema }),
 	z.strictObject({ ...baseShape, ...failedShape, ...handoffShape, effectClass: z.enum(["repository-local", "external"]), transactionState: z.literal("completed"), causeCode: z.literal("INTERNAL_RESULT_COMPLETED"), failureClass: z.literal("internal"), exitCode: z.literal(1), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional(), effects: completedEffectsSchema }),
-	z.strictObject({ ...baseShape, ...failedShape, ...handoffShape, effectClass: z.enum(["repository-local", "external"]), transactionState: z.literal("partially-completed"), causeCode: z.literal("DOMAIN_DEADLINE_PARTIAL"), failureClass: z.literal("domain"), exitCode: z.literal(3), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional(), effects: partialEffectsSchema }),
+	z.strictObject({ ...baseShape, ...failedShape, ...handoffShape, effectClass: z.enum(["repository-local", "external"]), transactionState: z.literal("partially-completed"), causeCode: z.enum(["DOMAIN_DEADLINE_PARTIAL", "DOMAIN_RECOVERY_PARTIAL_HANDOFF"]), failureClass: z.literal("domain"), exitCode: z.literal(3), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional(), effects: partialEffectsSchema }),
 	z.strictObject({ ...baseShape, ...failedShape, ...handoffShape, effectClass: z.enum(["repository-local", "external"]), transactionState: z.literal("partially-completed"), causeCode: z.literal("INTERNAL_RESULT_PARTIAL"), failureClass: z.literal("internal"), exitCode: z.literal(1), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional(), effects: partialEffectsSchema }),
 	z.strictObject({ ...baseShape, ...failedShape, ...handoffShape, effectClass: z.enum(["repository-local", "external"]), transactionState: z.literal("unknown"), causeCode: z.enum(["INTERNAL_RESULT_UNKNOWN", "INTERNAL_EFFECT_OUTCOME_UNKNOWN", "INTERNAL_EFFECT_NOT_OBSERVED"]), failureClass: z.literal("internal"), exitCode: z.literal(1), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional(), effects: effectsSchema }),
 	z.strictObject({ ...baseShape, ...failedShape, ...handoffShape, effectClass: z.enum(["repository-local", "external"]), transactionState: z.literal("unknown"), causeCode: z.enum(["DOMAIN_DEADLINE_UNKNOWN", "DOMAIN_RECOVERY_HANDOFF_REQUIRED"]), failureClass: z.literal("domain"), exitCode: z.literal(3), retryable: z.literal(false), retryDelayMilliseconds: z.never().optional(), effects: effectsSchema }),

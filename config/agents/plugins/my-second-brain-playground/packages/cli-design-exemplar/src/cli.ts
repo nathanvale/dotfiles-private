@@ -132,7 +132,7 @@ function shapeViolation(parsed: Parsed, route: Exclude<CliRoute, "dispatch">): s
 
 function usageFacts(identity: CommandIdentity, runIdentity: string): ExecutionFacts {
 	const { effectClass } = declarationForIdentity(identity)
-	return { commandIdentity: identity, runIdentity, domainOutcome: "refused", effectClass, transactionState: "unchanged", completedEffectIds: [], remainingEffectIds: [], stationLabel: "repair-lab.usage", guidance: { kind: "next-action", target: "repair-lab inspect" } }
+	return { commandIdentity: identity, runIdentity, domainOutcome: "refused", effectClass, transactionState: "unchanged", completedEffectIds: [], remainingEffectIds: [], inventoryComplete: true, stationLabel: "repair-lab.usage", guidance: { kind: "next-action", target: "repair-lab inspect" } }
 }
 
 function pathIdentity(instruction: string | undefined): string | undefined {
@@ -149,7 +149,9 @@ function unchangedEffects(facts: ExecutionFacts, successful = false): Effects { 
 function nonempty(values: readonly string[]): [string, ...string[]] | null { const sorted = [...values].sort(); const first = sorted[0]; return first === undefined ? null : [first, ...sorted.slice(1)] }
 function completedEffects(facts: ExecutionFacts): Extract<ContractResult, { transactionState: "completed" }>["effects"] | null { const completed = nonempty(facts.completedEffectIds); return completed === null ? null : { completed, remaining: [], uncertain: [], inventoryComplete: true } }
 function partialEffects(facts: ExecutionFacts): Extract<ContractResult, { transactionState: "partially-completed" }>["effects"] | null { const completed = nonempty(facts.completedEffectIds); const remaining = nonempty(facts.remainingEffectIds); return completed === null || remaining === null ? null : { completed, remaining, uncertain: [], inventoryComplete: true } }
-function unknownEffects(facts: ExecutionFacts): Effects { const uncertain = [...facts.remainingEffectIds].sort(); return { completed: [...facts.completedEffectIds].sort(), remaining: [], uncertain, inventoryComplete: uncertain.length > 0 } }
+// An unknown state lists every non-completed effect as uncertain; the inventory is complete only when the facts say so
+// and at least one effect is uncertain (a scan cut at its bound reports inventoryComplete false).
+function unknownEffects(facts: ExecutionFacts): Effects { const uncertain = [...facts.remainingEffectIds].sort(); return { completed: [...facts.completedEffectIds].sort(), remaining: [], uncertain, inventoryComplete: facts.inventoryComplete && uncertain.length > 0 } }
 // Every wire next action, handoff and repair action comes from the one station guidance owner, never from a
 // scenario-specific decision string, so each derived identity has exactly the meaning its PublicStation publishes.
 function nextActionOf(identity: CommandIdentity, cause: WireCauseCode): string {
@@ -208,6 +210,11 @@ function refusalResult(decision: Decision, runId: string): EnvelopeV2 {
 	if (decision.failureClass === "usage") result = { ...common, causeCode: "USAGE_INVALID_INVOCATION", failureClass: "usage", exitCode: 2, ...next("USAGE_INVALID_INVOCATION") }
 	else if (decision.failureClass === "schema") result = { ...common, causeCode: "SCHEMA_INVALID_INPUT", failureClass: "schema", exitCode: 4, ...next("SCHEMA_INVALID_INPUT") }
 	else if (decision.causeCode === "DOMAIN_AUTHORITY_MISSING") result = { ...common, causeCode: "DOMAIN_AUTHORITY_REQUIRED", failureClass: "domain", exitCode: 3, repairAction: repairActionOf(identity, "DOMAIN_AUTHORITY_REQUIRED"), handoff: handoffOf(identity, "DOMAIN_AUTHORITY_REQUIRED") }
+	// O1 Candidate A: the two writer refusals keep their own accepted causes and arms rather than folding into the
+	// precondition row.
+	else if (decision.causeCode === "DOMAIN_JOURNAL_LOCK_HELD") result = { ...common, causeCode: "DOMAIN_JOURNAL_LOCK_HELD", failureClass: "domain", exitCode: 3, repairAction: repairActionOf(identity, "DOMAIN_JOURNAL_LOCK_HELD"), handoff: handoffOf(identity, "DOMAIN_JOURNAL_LOCK_HELD") }
+	else if (decision.causeCode === "DOMAIN_PRIOR_RUN_PENDING") result = { ...common, causeCode: "DOMAIN_PRIOR_RUN_PENDING", failureClass: "domain", exitCode: 3, repairAction: repairActionOf(identity, "DOMAIN_PRIOR_RUN_PENDING"), handoff: handoffOf(identity, "DOMAIN_PRIOR_RUN_PENDING") }
+	else if (decision.causeCode === "DOMAIN_JOURNAL_LIMIT_REACHED") result = { ...common, causeCode: "DOMAIN_JOURNAL_LIMIT_REACHED", failureClass: "domain", exitCode: 3, ...next("DOMAIN_JOURNAL_LIMIT_REACHED") }
 	else if (decision.failureClass === "internal") result = { ...common, causeCode: "INTERNAL_PREPARATION", failureClass: "internal", exitCode: 1, ...next("INTERNAL_PREPARATION") }
 	else result = { ...common, causeCode: "DOMAIN_PRECONDITION_UNMET", failureClass: "domain", exitCode: 3, ...next("DOMAIN_PRECONDITION_UNMET") }
 	return envelope(decision.message, result)
@@ -220,6 +227,12 @@ function ordinaryFailureResult(decision: Decision, runId: string): EnvelopeV2 {
 	let result: ContractResult
 	if (decision.causeCode === "INTERNAL_UNEXPECTED") {
 		result = { ...common, effectClass: decision.effectClass, transactionState: "unchanged", causeCode: "INTERNAL_UNEXPECTED", failureClass: "internal", exitCode: 1, effects: unchangedEffects(facts), ...handoff("INTERNAL_UNEXPECTED") }
+	} else if (decision.causeCode === "DOMAIN_RECOVERY_PARTIAL_HANDOFF") {
+		// O1 Candidate A: known partial completion carries both a completed and a remaining inventory.
+		if (decision.effectClass === "inspect") throw new Error("partial recovery facts are inadmissible")
+		const effectInventory = partialEffects(facts)
+		if (effectInventory === null) throw new Error("partial recovery facts are inadmissible")
+		result = { ...common, effectClass: decision.effectClass, transactionState: "partially-completed", causeCode: "DOMAIN_RECOVERY_PARTIAL_HANDOFF", failureClass: "domain", exitCode: 3, effects: effectInventory, ...handoff("DOMAIN_RECOVERY_PARTIAL_HANDOFF") }
 	} else {
 		if (decision.effectClass === "inspect" || decision.transactionState !== "unknown") throw new Error("ordinary effect failure facts are inadmissible")
 		const effectInventory = unknownEffects(facts)
@@ -255,7 +268,7 @@ function diagnosticsDisclosure(status: DiagnosticsStatus): Diagnostics {
 	return { status: "unavailable", reason: "status-unavailable", trusted }
 }
 function decisionEnvelope(decision: Decision, runId: string, diagnostics: DiagnosticsStatus | null): EnvelopeV2 {
-	const ordinaryCause = decision.causeCode === "DOMAIN_RECOVERY_HANDOFF_REQUIRED" || decision.causeCode === "INTERNAL_EFFECT_OUTCOME_UNKNOWN" || decision.causeCode === "INTERNAL_EFFECT_NOT_OBSERVED" || decision.causeCode === "INTERNAL_UNEXPECTED"
+	const ordinaryCause = decision.causeCode === "DOMAIN_RECOVERY_HANDOFF_REQUIRED" || decision.causeCode === "DOMAIN_RECOVERY_PARTIAL_HANDOFF" || decision.causeCode === "INTERNAL_EFFECT_OUTCOME_UNKNOWN" || decision.causeCode === "INTERNAL_EFFECT_NOT_OBSERVED" || decision.causeCode === "INTERNAL_UNEXPECTED"
 	const result = decision.domainOutcome === "success" ? successResult(decision, runId) : decision.failureClass === "unavailable" ? transientResult(decision, runId) : decision.domainOutcome === "refused" ? refusalResult(decision, runId) : ordinaryCause ? ordinaryFailureResult(decision, runId) : fallbackEnvelope(factsOf(decision, runId))
 	if (result === null) throw new Error("uncomposable fallback facts")
 	if (diagnostics === null) return result

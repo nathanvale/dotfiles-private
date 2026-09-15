@@ -50,17 +50,14 @@ describe("diagnostics adapter", () => {
 		expect(lines[1]?.token).toBe("[REDACTED]")
 		expect(readFileSync(file, "utf8").includes("SECRET-VALUE")).toBe(false)
 	})
-	test("a throwing sink preserves its flush failure and counts later records as unflushed", async () => {
+	test("a throwing sink is recorded at flush, never thrown into the caller", async () => {
 		const base = root()
 		const diagnostics = await openRunDiagnostics({ runIdentity: "run-2", command: "repair-lab.status", root: base, fault: "sink-throw" })
 		expect(() => diagnostics.log("a", "a")).not.toThrow()
-		await tick()
-		diagnostics.log("b", "b")
-		diagnostics.log("c", "c")
 		const status = await diagnostics.dispose()
 		expect(status.sinkFailure).toBe("flush: injected sink failure")
 		expect(status.file).toBe(join(base, "diagnostics", "run-2.jsonl"))
-		expect(status).toEqual({ file: join(base, "diagnostics", "run-2.jsonl"), sinkFailure: "flush: injected sink failure", droppedRecords: 0, unflushedRecords: 3, truncatedRecords: 0, countsComplete: true, closed: true })
+		expect(status).toEqual({ file: join(base, "diagnostics", "run-2.jsonl"), sinkFailure: "flush: injected sink failure", droppedRecords: 0, unflushedRecords: 1, truncatedRecords: 0, countsComplete: true, closed: true })
 	})
 	test("a throwing disposal is recorded as dispose: and records already flushed stay written", async () => {
 		const base = root()

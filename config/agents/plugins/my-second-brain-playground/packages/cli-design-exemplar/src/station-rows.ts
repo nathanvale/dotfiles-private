@@ -132,6 +132,23 @@ const ROWS = [
 	["repair-lab.command-discovery", ...USAGE_INVALID_INVOCATION, "inspect", ...PRE_DISPATCH],
 	["repair-lab.command-discovery", "failed", "INTERNAL_RESULT_UNCHANGED", "inspect", "unchanged", false, null, "handoff", true, 1, null],
 	["repair-lab.command-discovery", "refused", "INTERNAL_PREPARATION", "inspect", "unchanged", false, null, "next-action", true, 1, null],
+	// O1 Candidate A (CDS-LO-1, ticket freeze 2026-09-15): a journal over the scan bound and an unresolved consumed plan
+	// refuse every writer identity before any durable write; recover reports a known partial completion; and recover's
+	// new partially-completed facts make the D6-c partial fallback reachable. Candidate B adds whole-state lock refusal.
+	["repair-lab.preview", "refused", "DOMAIN_JOURNAL_LIMIT_REACHED", "repository-local", "unchanged", false, null, "next-action", true, 3, null],
+	["repair-lab.apply", "refused", "DOMAIN_JOURNAL_LIMIT_REACHED", "repository-local", "unchanged", false, null, "next-action", true, 3, null],
+	["repair-lab.repair", "refused", "DOMAIN_JOURNAL_LIMIT_REACHED", "repository-local", "unchanged", false, null, "next-action", true, 3, null],
+	["repair-lab.repair-retry", "refused", "DOMAIN_JOURNAL_LIMIT_REACHED", "repository-local", "unchanged", false, null, "next-action", true, 3, null],
+	["repair-lab.preview", "refused", "DOMAIN_PRIOR_RUN_PENDING", "repository-local", "unchanged", false, null, "handoff", true, 3, null],
+	["repair-lab.apply", "refused", "DOMAIN_PRIOR_RUN_PENDING", "repository-local", "unchanged", false, null, "handoff", true, 3, null],
+	["repair-lab.repair", "refused", "DOMAIN_PRIOR_RUN_PENDING", "repository-local", "unchanged", false, null, "handoff", true, 3, null],
+	["repair-lab.repair-retry", "refused", "DOMAIN_PRIOR_RUN_PENDING", "repository-local", "unchanged", false, null, "handoff", true, 3, null],
+	["repair-lab.recover", "failed", "DOMAIN_RECOVERY_PARTIAL_HANDOFF", "repository-local", "partially-completed", false, null, "handoff", true, 3, null],
+	["repair-lab.recover", "failed", "INTERNAL_RESULT_PARTIAL", "repository-local", "partially-completed", false, null, "handoff", true, 1, null],
+	["repair-lab.preview", "refused", "DOMAIN_JOURNAL_LOCK_HELD", "repository-local", "unchanged", false, null, "handoff", true, 3, null],
+	["repair-lab.apply", "refused", "DOMAIN_JOURNAL_LOCK_HELD", "repository-local", "unchanged", false, null, "handoff", true, 3, null],
+	["repair-lab.repair", "refused", "DOMAIN_JOURNAL_LOCK_HELD", "repository-local", "unchanged", false, null, "handoff", true, 3, null],
+	["repair-lab.repair-retry", "refused", "DOMAIN_JOURNAL_LOCK_HELD", "repository-local", "unchanged", false, null, "handoff", true, 3, null],
 ] as const satisfies readonly Row[]
 
 export type StationIdOf<RowTuple> = RowTuple extends readonly [infer Command extends string, infer Outcome extends string, infer Cause extends string, ...readonly unknown[]] ? `["${Command}","${Outcome}","${Cause}"]` : never
