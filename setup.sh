@@ -949,6 +949,7 @@ main() {
 
     require_canonical_activation_checkout() {
         local git_dir common_dir
+        [[ -e "$setup_script_dir/.git" ]] || return 0
         git -C "$setup_script_dir" rev-parse --is-inside-work-tree >/dev/null 2>&1 || return 0
         git_dir="$(git -C "$setup_script_dir" rev-parse --absolute-git-dir 2>/dev/null)" || {
             log_error "Cannot classify the activation checkout: $setup_script_dir"
@@ -964,6 +965,28 @@ main() {
             log_error "Review in the worktree, then activate from $DOTFILES_DIR after the change is accepted."
             exit 1
         fi
+    }
+
+    canonical_homebrew_path() {
+        local candidate
+        for candidate in /opt/homebrew/bin/brew /usr/local/bin/brew; do
+            [[ -f "$candidate" && -x "$candidate" ]] || continue
+            printf '%s\n' "$candidate"
+            return 0
+        done
+        return 1
+    }
+
+    hydrate_canonical_homebrew_environment() {
+        local brew_path shellenv
+        brew_path="$(canonical_homebrew_path)" || return 0
+
+        shellenv="$("$brew_path" shellenv)" || {
+            log_error "Unable to load the Homebrew environment from $brew_path"
+            return 1
+        }
+        eval "$shellenv"
+        log "Homebrew environment hydrated: $brew_path"
     }
 
     # ========================================================================
@@ -1549,15 +1572,16 @@ main() {
         fi
 
         # Homebrew
-        if ! command -v brew &>/dev/null; then
+        local brew_path
+        brew_path="$(canonical_homebrew_path)" || brew_path=""
+        if [[ -z "$brew_path" ]]; then
             log "Installing Homebrew..."
             NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 
-            # Add Homebrew to PATH for this session (Apple Silicon)
-            eval "$(/opt/homebrew/bin/brew shellenv)"
+            hydrate_canonical_homebrew_environment
             log "Homebrew installed"
         else
-            log "Homebrew already installed: $(brew --version | head -1)"
+            log "Homebrew already installed: $("$brew_path" --version | head -1)"
         fi
 
         # macOS Tahoe (26+) compatibility fix
@@ -1649,9 +1673,9 @@ main() {
     phase_3_core_tools() {
         log_phase 3 "Core Tools"
 
-        # Essential CLI tools that should be installed early
+        # Xcode CLT supplies the selected system Git. Installing Homebrew Git
+        # here would shadow that exact owner in every hydrated setup shell.
         local essentials=(
-            git
             zsh
             tmux
             zoxide
@@ -1680,6 +1704,26 @@ main() {
                 brew install "$tool" || log_warn "Failed to install $tool"
             fi
         done
+
+        # A rerun can encounter a Homebrew Git formula that was linked after a
+        # previous setup. Remove its links before asserting the selected owner,
+        # while keeping the formula installed as an available fallback.
+        if brew list git &>/dev/null; then
+            log "Unlinking Homebrew Git to preserve the selected system owner..."
+            if ! brew unlink git; then
+                log_error "Failed to unlink the Homebrew Git formula"
+                return 1
+            fi
+        fi
+
+        hash -r 2>/dev/null || true
+        local git_path
+        git_path="$(command -v git 2>/dev/null || true)"
+        if [[ "$git_path" != "/usr/bin/git" ]]; then
+            log_error "Git must resolve to /usr/bin/git after Phase 3; found ${git_path:-unavailable}"
+            return 1
+        fi
+        log "Git owner verified: /usr/bin/git"
 
         log "Core Tools: COMPLETE"
     }
@@ -1802,16 +1846,41 @@ main() {
             fi
         done
 
-        # Run brew bundle with profile environment variable
-        # NOTE: Must use HOMEBREW_ prefix for env vars to pass through to Brewfile Ruby context
-        # Regular env vars are filtered out by Homebrew for security/isolation
-        if HOMEBREW_DOTFILES_PROFILE="$profile" brew bundle --file="$brewfile"; then
-            log "All packages installed successfully"
-        else
-            log_error "The profile package bundle failed"
-            log_error "Retry: HOMEBREW_DOTFILES_PROFILE=$profile brew bundle --file=$brewfile"
-            return 1
-        fi
+        # Run brew bundle with profile environment variable. Serial downloads avoid
+        # connection resets from the desktop cask burst on a clean host. One
+        # immediate retry keeps a remaining transient failure inside this setup
+        # invocation.
+        # NOTE: Must use HOMEBREW_ prefix for env vars to pass through to Brewfile Ruby context.
+        # Regular env vars are filtered out by Homebrew for security/isolation.
+        local bundle_attempt=1
+        local bundle_max_attempts=2
+        local bundle_download_concurrency=1
+        local vm_host="${HOMEBREW_DOTFILES_VM_HOST:-0}"
+        local bundle_exit=0
+        log "Profile package download concurrency: $bundle_download_concurrency"
+        while [[ "$bundle_attempt" -le "$bundle_max_attempts" ]]; do
+            log "Running profile package bundle (attempt $bundle_attempt of $bundle_max_attempts)"
+            if HOMEBREW_DOWNLOAD_CONCURRENCY="$bundle_download_concurrency" \
+                HOMEBREW_DOTFILES_PROFILE="$profile" \
+                HOMEBREW_DOTFILES_VM_HOST="$vm_host" \
+                brew bundle --file="$brewfile"; then
+                log "Profile package bundle attempt $bundle_attempt of $bundle_max_attempts exited 0"
+                log "All packages installed successfully"
+                break
+            else
+                bundle_exit=$?
+            fi
+            log_warn "Profile package bundle attempt $bundle_attempt of $bundle_max_attempts exited $bundle_exit"
+
+            if [[ "$bundle_attempt" -eq "$bundle_max_attempts" ]]; then
+                log_error "The profile package bundle failed after $bundle_max_attempts attempts"
+                log_error "Retry: HOMEBREW_DOWNLOAD_CONCURRENCY=$bundle_download_concurrency HOMEBREW_DOTFILES_PROFILE=$profile HOMEBREW_DOTFILES_VM_HOST=$vm_host brew bundle --file=$brewfile"
+                return 1
+            fi
+
+            log_warn "Retrying the profile package bundle once within this setup invocation"
+            bundle_attempt=$((bundle_attempt + 1))
+        done
 
         log "Applications: COMPLETE"
     }
@@ -1989,6 +2058,8 @@ main() {
     run_full_install() {
         require_canonical_activation_checkout
         local start_phase="$1"
+
+        hydrate_canonical_homebrew_environment
 
         local profile
         profile=$(get_profile)
@@ -2322,7 +2393,8 @@ main() {
     fi
 
     # Check if dotfiles already exist (curl | bash flow)
-    if [[ -d "$DOTFILES_DIR" ]] && [[ ! -f "$DOTFILES_DIR/setup.sh" || "$0" != "$DOTFILES_DIR/setup.sh" ]]; then
+    if [[ -d "$DOTFILES_DIR" ]] &&
+        [[ ! -f "$DOTFILES_DIR/setup.sh" || ! "$DOTFILES_DIR/setup.sh" -ef "${BASH_SOURCE[0]:-$0}" ]]; then
         log_warn "Dotfiles directory already exists: $DOTFILES_DIR"
 
         if [[ -t 0 ]]; then
