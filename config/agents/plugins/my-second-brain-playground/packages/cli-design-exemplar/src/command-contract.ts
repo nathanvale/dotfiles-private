@@ -42,6 +42,9 @@ const CAUSE_RULES = {
 	INTERNAL_UNEXPECTED: cause("internal", "failed", "unchanged", false, "handoff"),
 } as const
 export type WireCauseCode = keyof typeof CAUSE_RULES
+export type CauseRule = (typeof CAUSE_RULES)[WireCauseCode]
+/** The accepted result-table row of one cause; the station catalogue schema checks every declaration against it. */
+export function causeRule(code: WireCauseCode): CauseRule { return CAUSE_RULES[code] }
 
 // The old engine still owns its decision representation. This alias is input-only
 // composition, not an emitted wire vocabulary or a legacy adapter.
@@ -63,6 +66,7 @@ const CLI_OPTIONS = {
 	json: { type: "boolean", valueName: null, summary: "Emit one machine-readable 2.0 envelope" },
 	help: { type: "boolean", valueName: null, summary: "Show help" },
 	discover: { type: "boolean", valueName: null, summary: "Show command and contract discovery" },
+	"discover-command": { type: "string", valueName: "canonical-command-identity", summary: "Describe the possible outcomes of one selected command" },
 	state: { type: "string", valueName: "path", summary: "Select a fixture-local state path" },
 	preview: { type: "boolean", valueName: null, summary: "Create a preview" },
 	apply: { type: "boolean", valueName: null, summary: "Apply a repair preview" },
@@ -96,6 +100,8 @@ const COMMAND_DECLARATIONS = defineCommands([
 	{ commandIdentity: "repair-lab.dispatch", route: [], effectClass: "inspect", summary: "Refuse missing or incompatible command selection", routes: [{ route: "dispatch", word: "dispatch", allowedOptions: ["json"], requiredOptions: [] }] },
 	{ commandIdentity: "repair-lab.help", route: ["--help"], effectClass: "inspect", summary: "Show help and usage", routes: [{ route: "help", word: "help", allowedOptions: ["help", "json"], requiredOptions: ["help"] }] },
 	{ commandIdentity: "repair-lab.discovery", route: ["--discover"], effectClass: "inspect", summary: "Describe commands and the contract", routes: [{ route: "discover", word: "discovery", allowedOptions: ["discover", "json"], requiredOptions: ["discover"] }] },
+	// B1 (CDS-BC-1): the accepted C0 selected-command discovery built-in; the selector is an option value, never a positional.
+	{ commandIdentity: "repair-lab.command-discovery", route: ["--discover-command"], effectClass: "inspect", summary: "Describe the possible outcomes of one selected command", routes: [{ route: "command-discovery", word: "command-discovery", allowedOptions: ["discover-command", "json"], requiredOptions: ["discover-command"] }] },
 	{ commandIdentity: "repair-lab.status", route: ["status"], effectClass: "inspect", summary: "Report the resource status", routes: [{ route: "status", word: "status", allowedOptions: ["json"], requiredOptions: [] }] },
 	{ commandIdentity: "repair-lab.inspect", route: ["inspect"], effectClass: "inspect", summary: "Inspect the resource and preview readiness", routes: [{ route: "inspect", word: "inspect", allowedOptions: ["json", "state"], requiredOptions: [] }] },
 	{ commandIdentity: "repair-lab.inspect-diagnostics", route: ["inspect", "--include-diagnostics"], effectClass: "inspect", summary: "Inspect with redacted diagnostic fields", routes: [{ route: "inspect-diagnostics", word: "inspect", allowedOptions: ["json", "state", "include-diagnostics"], requiredOptions: ["include-diagnostics"] }] },
@@ -111,7 +117,7 @@ const COMMAND_DECLARATIONS = defineCommands([
 
 export type CommandIdentity = (typeof COMMAND_DECLARATIONS)[number]["commandIdentity"]
 export type CliRoute = (typeof COMMAND_DECLARATIONS)[number]["routes"][number]["route"]
-export type CommandRoute = Exclude<CliRoute, "dispatch" | "help" | "discover">
+export type CommandRoute = Exclude<CliRoute, "dispatch" | "help" | "discover" | "command-discovery">
 export type CommandSummary = { readonly commandIdentity: CommandIdentity; readonly route: readonly string[]; readonly summary: string; readonly effectClass: (typeof COMMAND_DECLARATIONS)[number]["effectClass"] }
 export interface RouteDeclaration { identity: CommandIdentity; effectClass: CommandSummary["effectClass"]; route: CliRoute; word: string; allowedOptions: readonly OptionName[]; requiredOptions: readonly OptionName[] }
 export type OptionSummary = { readonly name: string; readonly valueName: string | null; readonly summary: string }
@@ -250,5 +256,7 @@ export function isSafeJson(input: unknown, maximumDepth = 64): input is JsonValu
 
 export type StationGuidance = "next-action" | "handoff"
 export interface StationRow { commandIdentity: CommandIdentity; outcome: Outcome; causeCode: WireCauseCode; effectClass: EffectClass; transactionState: WireTransactionState; retryable: boolean; retryDelayMilliseconds: number | null; guidance: StationGuidance; repairAction: boolean; exit: ExitCode; fixtureLabel: string | null }
-export type StationId = string
+// A finite union derived from the one production declaration table (CDS-BC-1 type lock): an unhandled StationId
+// switch arm is a compiler error, and no second hand-maintained identity vocabulary exists.
+export type StationId = import("./station-rows.ts").DefinedStationId
 export const STATIONS: readonly StationRow[] = STATION_ROWS
