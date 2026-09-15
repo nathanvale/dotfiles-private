@@ -97,6 +97,11 @@ phase_end() {
         # All passed -- single line
         if [[ "$MODE" != "quiet" ]]; then
             echo -e "${GREEN}${name}:${RESET} ${PHASE_PASS}/${total} passed"
+            if [[ "$MODE" == "verbose" && ${#PHASE_ISSUES[@]} -gt 0 ]]; then
+                for issue in "${PHASE_ISSUES[@]}"; do
+                    echo -e "  $issue"
+                done
+            fi
         fi
     elif [[ $PHASE_FAIL -eq 0 && $PHASE_WARN -eq 0 ]]; then
         if [[ "$MODE" != "quiet" ]]; then
