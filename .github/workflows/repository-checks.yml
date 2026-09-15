@@ -33,7 +33,7 @@ jobs:
         shell: bash
         env:
           TEMPLATE_DEPLOY_KEY: ${{ secrets.CLI_TEMPLATE_DEPLOY_KEY }}
-          TEMPLATE_REVISION: 09e1d080d012ef451a6757fb4fecddb9757c7628
+          TEMPLATE_REVISION: afa86af1b7cd8187669392e12d019af6ff7ce9c6
         run: |
           if [[ -z "$TEMPLATE_DEPLOY_KEY" ]]; then
             echo "CLI_TEMPLATE_DEPLOY_KEY is required to read the pinned private template." >&2

@@ -9,7 +9,7 @@ const TEMPLATE_ROOT = resolve(
   process.env.BUN_TYPESCRIPT_TEMPLATE_TEST_ROOT ??
     join(homedir(), "code", "bun-typescript-template"),
 );
-const TEMPLATE_REVISION = "09e1d080d012ef451a6757fb4fecddb9757c7628";
+const TEMPLATE_REVISION = "afa86af1b7cd8187669392e12d019af6ff7ce9c6";
 const roots: string[] = [];
 
 function invoke(
