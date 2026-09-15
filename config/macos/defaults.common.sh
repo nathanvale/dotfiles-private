@@ -218,14 +218,14 @@ set_preferences() {
     run defaults write com.apple.helpviewer DevMode -bool true                            # Non-floating Help windows
 
     # ── Mail ──────────────────────────────────────
-    # Mail creates its sandbox preferences only after first launch. A headless
-    # server does not have that container, so preserve the rest of setup and
-    # leave this desktop-only preference for a later interactive run.
-    local mail_preferences_dir="$HOME/Library/Containers/com.apple.mail/Data/Library/Preferences"
-    if [[ -d "$mail_preferences_dir" ]]; then
-        run defaults write com.apple.mail AddressesIncludeNameOnPasteboard -bool false     # Copy email as address only
+    # This preference belongs to the desktop profile. macOS protects Mail's
+    # container from a headless SSH session even when the container exists.
+    # Skipping it keeps server setup resumable; an interactive desktop run can
+    # apply it later.
+    if [[ "${DOTFILES_PROFILE:-desktop}" != "server" ]]; then
+      run defaults write com.apple.mail AddressesIncludeNameOnPasteboard -bool false     # Copy email as address only
     else
-        log "$WARNING" "Mail preference skipped: Mail has not created its preferences yet"
+        log "$WARNING" "Mail preference skipped for server profile"
     fi
 
     # ── Safari (requires Full Disk Access) ───────
