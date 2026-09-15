@@ -1,0 +1,32 @@
+{
+  "name": "personal",
+  "interface": {
+    "displayName": "Personal"
+  },
+  "plugins": [
+    {
+      "name": "browser-lanes",
+      "version": "0.5.15",
+      "source": {
+        "source": "local",
+        "path": "./browser-lanes"
+      }
+    },
+    {
+      "name": "my-second-brain-playground",
+      "version": "0.12.0",
+      "source": {
+        "source": "local",
+        "path": "./my-second-brain-playground"
+      }
+    },
+    {
+      "name": "proof",
+      "version": "0.1.0",
+      "source": {
+        "source": "local",
+        "path": "./proof"
+      }
+    }
+  ]
+}

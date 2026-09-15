@@ -1,0 +1,103 @@
+{
+  "$schema": "./node_modules/fallow/schema.json",
+  "ignorePatterns": [
+    ".claude/worktrees/**",
+    ".worktrees/**",
+    ".agent-worktree/**",
+    "config/raycast/extensions/**",
+    "config/herdr/plugins/**",
+    "config/opencode/herdr-tui-session.js",
+    "config/opencode/plugins/herdr-agent-state.js",
+    "config/agents/skills/personal/last30days/scripts/lib/vendor/**",
+    "config/agents/plugins/my-second-brain-playground/packages/cli-design-check/fixtures/**",
+    "config/agents/plugins/my-second-brain-playground/runtime/**",
+    "config/agents/skills/third-party/**",
+    ".agents/**"
+  ],
+  "typeAware": {
+    "enabled": true,
+    "require": "complete"
+  },
+  "audit": {
+    "gate": "new-only",
+    "cacheMaxAgeDays": 7
+  },
+  "rules": {
+    "boundary-violation": "error",
+    "css-broken-reference": "error",
+    "css-dead-surface": "error",
+    "css-duplicate-block": "error",
+    "css-selector-complexity": "error",
+    "css-token-drift": "error",
+    "dev-dependencies-in-production": "error",
+    "empty-catalog-groups": "error",
+    "invalid-client-export": "error",
+    "misplaced-directive": "error",
+    "mixed-client-server-barrel": "error",
+    "policy-violation": "error",
+    "private-type-leaks": "error",
+    "re-export-cycle": "error",
+    "require-suppression-reason": "error",
+    "stale-suppressions": "error",
+    "test-only-dependencies": "error",
+    "type-only-dependencies": "error",
+    "unprovided-injects": "error",
+    "unrendered-components": "error",
+    "unused-catalog-entries": "error",
+    "unused-component-emits": "error",
+    "unused-component-inputs": "error",
+    "unused-component-outputs": "error",
+    "unused-component-props": "error",
+    "unused-dev-dependencies": "error",
+    "unused-dependency-overrides": "error",
+    "unused-load-data-keys": "error",
+    "unused-optional-dependencies": "error",
+    "unused-server-actions": "error",
+    "unused-store-members": "error",
+    "unused-svelte-events": "error"
+  },
+  "health": {
+    "maxCrap": 0
+  },
+  "entry": [
+    "bin/teams/teams-scraper.ts",
+    "bin/lib/browser-lane-open.js",
+    "bin/lib/browser-lane-playwright.js",
+    "bin/lib/browser-lane-puppeteer.js",
+    "bin/test/browser-lane-native-host.cjs",
+    "config/agents/claude/hooks/**/*.ts",
+    "config/agents/skills/personal/ci-testbed/scripts/ci-repro.ts",
+    "config/agents/skills/personal/imessage-reader/scripts/query-imessage.ts",
+    "config/agents/skills/personal/mcp-doctor/scripts/mcp-doctor.ts",
+    "config/agents/skills/personal/session-picker/scripts/archived-sessions.ts",
+    "config/agents/skills/personal/xero/scripts/quarter-ledger.ts",
+    "config/agents/plugins/browser-lanes/skills/bake-off/scripts/recipe-contract.mjs",
+    "config/agents/plugins/browser-lanes/skills/bake-off/scripts/report-closeout.mjs",
+    "config/agents/plugins/**/tests/**/*.{js,mjs,cjs,ts}",
+    "**/test-fixtures/**/*.{js,mjs,cjs,ts}",
+    "config/crossnote/**/*.{js,less}",
+    "config/opencode/**/*.js",
+    "config/agents/plugins/my-second-brain-playground/packages/*/src/{main,trace-command,recovery-observer}.ts",
+    "config/agents/plugins/my-second-brain-playground/packages/cli-design-check/src/successor/main.ts",
+    "config/agents/plugins/proof/hooks/**/*.ts",
+    "pilot/generate.ts",
+    "tests/type-contracts.ts",
+    "tests/type-contracts-loose.ts"
+  ],
+  "ignoreDependencies": [
+    "vscode",
+    "@logtape/logtape",
+    "@logtape/redaction",
+    "@logtape/file",
+    "zod"
+  ],
+  "framework": [
+    {
+      "name": "vault-git-reimagined-generated-catalog",
+      "detection": { "type": "fileExists", "pattern": "pilot/generated/src/branch-station-catalog.ts" },
+      "usedExports": [
+        { "pattern": "pilot/generated/src/*.ts", "exports": ["VAULT_GIT_REIMAGINED_STATION_IDS", "projectVaultGitReimaginedStationMap", "VAULT_GIT_REIMAGINED_PROJECTION_TABLE", "VaultGitReimaginedCommand"] }
+      ]
+    }
+  ]
+}

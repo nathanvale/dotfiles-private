@@ -1,0 +1,904 @@
+{
+	"schemaVersion": 1,
+	"personal": {
+		"agent-reliability-guardrails": {
+			"addresses": [
+				"agents"
+			]
+		},
+		"apple-reminders": {
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"bitbucket": {
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"ci-testbed": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"classic-cinema": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"codex-code-review": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"context-advisor": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"context-unhobble-audit": {
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"design-parity-session": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"fix-microphone": {
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledHarnesses": [
+				"codex"
+			]
+		},
+		"figma": {
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gh-account-switch": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"heal-skill": {
+			"addresses": [
+				"agents"
+			]
+		},
+		"imessage-reader": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"last30days": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"mcp-doctor": {
+			"addresses": [
+				"agents"
+			]
+		},
+		"notion": {
+			"addresses": [
+				"agents"
+			]
+		},
+		"one-password": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"pattern-referee": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"peekaboo": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"resume-handoff": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"retro-scrum-master": {
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"session-picker": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"session-recovery": {
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"storybook-matrix": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"stream-deck-author": {
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"summarize": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"test-design": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"test-runner": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"teams": {
+			"addresses": [
+				"agents"
+			]
+		},
+		"stream-deck-use": {
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"vocab-refresh": {
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"work-music": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"worktree": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"xero": {
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		}
+	},
+	"projectOnly": {
+		"dotfiles": {
+			"source": ".claude/skills/dotfiles",
+			"projectAddresses": [
+				".agents/skills/dotfiles"
+			]
+		},
+		"fallow": {
+			"source": ".claude/skills/fallow",
+			"projectAddresses": [
+				".agents/skills/fallow"
+			]
+		}
+	},
+	"thirdParty": {
+		"find-skills": {
+			"owner": "vercel-labs/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"herdr": {
+			"owner": "herdrdev/herdr",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"gog": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-admin": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-analytics": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-appscript": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-calendar": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-chat": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-classroom": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-contacts": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-contacts-cleanup": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-docs": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-drive": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-drive-audit": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-forms": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-gmail": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-groups": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-inbox-triage": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-keep": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-maps": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-meet": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-meeting-prep": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-people": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-photos": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-save-attachments": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-searchconsole": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-sheets": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-sites": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-slides": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-tasks": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-weekly-digest": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"gog-youtube": {
+			"owner": "openclaw/gogcli",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"ask-matt": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"claude-handoff": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"code-review": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"codebase-design": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"diagnosing-bugs": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"domain-modeling": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"git-guardrails-claude-code": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"grill-me": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"grill-with-docs": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"grilling": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"handoff": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"implement": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"implement-spec": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"improve-codebase-architecture": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"migrate-to-shoehorn": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"prototype": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"research": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"resolving-merge-conflicts": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"scaffold-exercises": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"setup-matt-pocock-skills": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"setup-pre-commit": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"setup-ts-deep-modules": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"tdd": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"teach": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"to-questionnaire": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"to-spec": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"to-tickets": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"triage": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"wait-what": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"wayfinder": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"wizard": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"writing-beats": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"writing-for-agents": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			]
+		},
+		"writing-fragments": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		},
+		"writing-shape": {
+			"owner": "mattpocock/skills",
+			"addresses": [
+				"agents",
+				"claude"
+			],
+			"disabledAddresses": [
+				"claude"
+			]
+		}
+	},
+	"retired": [
+		"ac-convergence",
+		"adhd-helper",
+		"bft-booking",
+		"browser-use-ledger",
+		"browser-use-prototyper",
+		"browser-use-support-ticket",
+		"browserclaw",
+		"ce-work-inspect",
+		"cli-author",
+		"cli-execution-auditor",
+		"decision-mode",
+		"domain-modeling-retrospective",
+		"ica-seam-swarm",
+		"improve-test-architecture",
+		"issue-to-pr",
+		"lll-account-switch",
+		"loop-me",
+		"newsroom-investigate",
+		"notebooklm",
+		"pr-review-loop",
+		"productivity-connectors",
+		"productivity-sync",
+		"prompt-system-router",
+		"prompt-system-workflow",
+		"record-decision",
+		"runbook-orchestrator",
+		"skill-feedback",
+		"skill-self-audit-loop",
+		"skills-sync",
+		"unit-closeout",
+		"vault-git",
+		"work-style-convert"
+	],
+	"migration": {
+		"remainingPersonalLegacy": "complete"
+	},
+	"protectedHarness": {
+		"algorithm": "git-tree-sha1",
+		"version": 1,
+		"roots": [
+			{
+				"path": ".codex/skills",
+				"excludedTopLevelEntries": [
+					".system"
+				],
+				"entryCount": 22,
+				"gitTreeSha1": "a12cc1ee3c0bf47f8b643361f77910253409e3e2"
+			},
+			{
+				"path": ".codex/plugins/cache",
+				"entryCount": 3306,
+				"gitTreeSha1": "1be03490f659ae8e4845da5ddf87fd2b466ff5cf"
+			}
+		]
+	}
+}

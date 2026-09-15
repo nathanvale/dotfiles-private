@@ -1,0 +1,26 @@
+{
+	"mcpServers": {
+		"notebooklm-mcp": {
+			"command": "notebooklm-mcp"
+		},
+		"notion": {
+			"baseUrl": "https://mcp.notion.com/mcp",
+			"auth": "oauth"
+		},
+		"elgato": {
+			"description": "Elgato Stream Deck MCP Actions",
+			"command": "npx",
+			"args": ["--yes", "@elgato/mcp-server@latest"]
+		},
+		"streamdeck-author": {
+			"description": "Author Stream Deck profiles via verygoodplugins streamdeck-mcp",
+			"command": "uvx",
+			"args": ["streamdeck-mcp"]
+		},
+		"chrome-devtools": {
+			"command": "npx",
+			"args": ["-y", "chrome-devtools-mcp", "--autoConnect"],
+			"description": "Chrome DevTools MCP through the OpenClaw extension relay"
+		}
+	}
+}

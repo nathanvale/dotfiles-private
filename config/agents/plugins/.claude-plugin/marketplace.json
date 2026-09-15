@@ -1,0 +1,38 @@
+{
+  "name": "personal",
+  "owner": {
+    "name": "Nathan Vale"
+  },
+  "metadata": {
+    "description": "Personal versioned plugins served from the dotfiles source."
+  },
+  "plugins": [
+    {
+      "name": "browser-lanes",
+      "description": "Lane-first browser automation, attended login, and adapter bake-offs that produce reusable recipes.",
+      "version": "0.5.15",
+      "author": {
+        "name": "Nathan Vale"
+      },
+      "source": "./browser-lanes"
+    },
+    {
+      "name": "my-second-brain-playground",
+      "description": "A playground for building My Second Brain skills one vertical slice at a time.",
+      "version": "0.12.0",
+      "author": {
+        "name": "Nathan Vale"
+      },
+      "source": "./my-second-brain-playground"
+    },
+    {
+      "name": "proof",
+      "description": "Self-gating Biome, Fallow, and TypeScript quality hooks that fire only in repositories carrying the tool locally.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Nathan Vale"
+      },
+      "source": "./proof"
+    }
+  ]
+}

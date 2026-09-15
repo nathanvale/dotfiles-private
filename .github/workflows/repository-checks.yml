@@ -1,0 +1,86 @@
+name: Repository checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-checks-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  repository-checks:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      CI: "true"
+      COMPARISON_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+    steps:
+      - name: Check out the candidate and comparison history
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Install the repository's Bun version
+        uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: package.json
+      - name: Validate the event's immutable comparison base
+        shell: bash
+        run: |
+          if [[ ! "$COMPARISON_BASE" =~ ^[0-9a-f]{40}$ ]] || [[ "$COMPARISON_BASE" == 0000000000000000000000000000000000000000 ]]; then
+            echo "A nonzero event commit is required for comparison." >&2
+            exit 1
+          fi
+          git cat-file -e "${COMPARISON_BASE}^{commit}"
+      - name: Prepare root and independently locked dependencies
+        id: preparation
+        run: bun run prepare:check -- --receipt-dir "$RUNNER_TEMP/dotfiles-preparation"
+      - name: Run the complete repository gate
+        run: bun run check
+      - name: Check the audit's public shell processes
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -uo pipefail
+          failures=0
+          failed_suites=()
+          suites=(
+            bin/test/symlinks-manage-test.sh
+            bin/test/symlinks-real-directory-test.sh
+            bin/test/setup-completion-test.sh
+            bin/test/setup-state-recovery-test.sh
+            bin/test/profile-link-parity-test.sh
+            bin/test/bun-core-install-test.sh
+            bin/test/claude-native-install-test.sh
+            bin/test/codex-managed-install-test.sh
+            bin/test/legacy-homebrew-helpers-test.sh
+            bin/test/zsh-effective-behavior-test.sh
+            bin/test/zsh-startup-silence-test.sh
+            bin/test/zsh-work-profile-boundary-test.sh
+            bin/test/codex-ambient-credential-boundary-test.sh
+          )
+          for suite in "${suites[@]}"; do
+            if bash "$suite"; then
+              :
+            else
+              status=$?
+              failures=$((failures + 1))
+              failed_suites+=("$suite (exit $status)")
+            fi
+          done
+          if (( failures > 0 )); then
+            printf 'Shell regression suite failures (%d):\n' "$failures" >&2
+            printf '  %s\n' "${failed_suites[@]}" >&2
+            exit 1
+          fi
+      - name: Compare root and runtime Fallow against the event commit
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
+        shell: bash
+        run: |
+          bun run --silent quality:fallow --changed-since "$COMPARISON_BASE"
+          bun run --silent quality:fallow:runtime -- --base "$COMPARISON_BASE"

@@ -1,0 +1,110 @@
+#!/usr/bin/env bash
+# teams-send — stage a message in a Microsoft Teams conversation, ready for you to send.
+#
+#   teams-send "Project Devs" ./message.txt
+#   teams-send "Alex Example" ./message.txt
+#   echo "quick note" | teams-send "Jordan Example" -
+#
+# It navigates, verifies it landed on the right conversation, and pastes the text
+# into the compose box. It deliberately does NOT press Enter: you read it and send.
+#
+# Exit codes: 0 staged, 1 usage/resolution error, 2 safety gate failed.
+
+set -uo pipefail
+
+LIB="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/teams-automation.sh"
+# shellcheck source=lib/teams-automation.sh
+. "$LIB" || { echo "cannot load $LIB" >&2; exit 1; }
+
+usage() {
+  cat >&2 <<'EOF'
+usage: teams-send <conversation> <file|->  [--send]
+
+  <conversation>  Channel or person name as it appears in Teams
+                  (e.g. "Project Devs", "Alex Example")
+  <file|->        File containing the message, or - to read stdin
+  --send          Also press Enter. Off by default, on purpose.
+
+Staging only by default: the text lands in the compose box and stops there.
+EOF
+  exit 1
+}
+
+[ $# -ge 2 ] || usage
+TARGET="$1"; SRC="$2"; shift 2
+DO_SEND=0
+for a in "$@"; do
+  case "$a" in
+    --send) DO_SEND=1 ;;
+    *) echo "unknown option: $a" >&2; usage ;;
+  esac
+done
+
+if [ "$SRC" = "-" ]; then
+  MSG=$(cat)
+else
+  [ -f "$SRC" ] || { echo "no such file: $SRC" >&2; exit 1; }
+  MSG=$(cat "$SRC")
+fi
+[ -n "${MSG//[[:space:]]/}" ] || { echo "message is empty" >&2; exit 1; }
+
+# 1. Resolve the target to a stable conversation id from the local Teams cache.
+CONV_ID=$(teams_resolve_conversation "$TARGET")
+if [ -z "$CONV_ID" ]; then
+  echo "Could not resolve '$TARGET' to a single conversation." >&2
+  CAND=$(teams_resolve_candidates "$TARGET")
+  if [ -n "$CAND" ]; then
+    echo "Ambiguous — these all match. Use the exact name:" >&2
+    echo "$CAND" >&2
+  else
+    echo "No conversation name contains that text. Known conversations:" >&2
+    timeout 60s "$TEAMS_PY" "$TEAMS_CLI" channels --json 2>/dev/null \
+      | jq -r '.data[] | select(.name != null) | "  - \(.name)"' | head -25 >&2
+  fi
+  exit 1
+fi
+CONV_NAME=$(teams_conversation_name "$CONV_ID")
+echo "target      : $CONV_NAME"
+echo "conversation: $CONV_ID"
+
+# 2. Focus Teams. Without this, every keystroke goes to the calling terminal.
+teams_require_focus || exit 2
+
+# 3. Navigate via deep link.
+teams_open_conversation "$CONV_ID"
+
+# 4. SAFETY GATE: the window title must name the conversation we asked for.
+#    This is what makes it impossible to paste into the wrong chat.
+teams_require_focus || exit 2
+teams_require_conversation "$CONV_NAME" || exit 2
+echo "verified    : $(teams_window_title)"
+
+# 5. Click into the compose box and paste.
+if ! teams_paste_text "$MSG"; then
+  echo "FAILED to stage the message. Nothing was sent." >&2
+  echo "Your text is on the clipboard: paste it manually with cmd+V." >&2
+  printf '%s' "$MSG" | pbcopy
+  exit 2
+fi
+sleep 1
+
+SHOT="${TMPDIR:-/tmp}/teams-send-$(date +%s).png"
+teams_screenshot "$SHOT" >/dev/null
+echo "screenshot  : $SHOT"
+
+if [ "$DO_SEND" -eq 1 ]; then
+  # Re-verify immediately before pressing Enter. Focus or conversation could have
+  # changed between staging and now (you clicked something, a call popped up), and
+  # Enter in the wrong place sends to the wrong person.
+  teams_require_focus || { echo "not sending: Teams lost focus" >&2; exit 2; }
+  teams_require_conversation "$CONV_NAME" || { echo "not sending: wrong conversation" >&2; exit 2; }
+  timeout 20s peekaboo press return >/dev/null 2>&1
+  sleep 2
+  SENT_SHOT="${TMPDIR:-/tmp}/teams-sent-$(date +%s).png"
+  teams_screenshot "$SENT_SHOT" >/dev/null
+  echo "SENT to: $CONV_NAME"
+  echo "proof   : $SENT_SHOT"
+else
+  echo
+  echo "STAGED — not sent. Read it in Teams and press Enter yourself."
+fi

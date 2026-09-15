@@ -1,0 +1,23 @@
+{
+	"version": 1,
+	"plugins": [
+		{
+			"name": "browser-lanes",
+			"path": "config/agents/plugins/browser-lanes",
+			"ownership": "no-nested-install",
+			"reason": "Browser Lanes tests are dependency-free and do not carry a Bun lockfile."
+		},
+		{
+			"name": "my-second-brain-playground",
+			"path": "config/agents/plugins/my-second-brain-playground",
+			"ownership": "independent-lock",
+			"reason": "The Playground is an independently locked nested Bun workspace."
+		},
+		{
+			"name": "proof",
+			"path": "config/agents/plugins/proof",
+			"ownership": "root-workspace",
+			"reason": "Proof is a root workspace member; the root lock owns its dependencies."
+		}
+	]
+}

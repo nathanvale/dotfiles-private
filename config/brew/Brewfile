@@ -1,0 +1,247 @@
+# Brewfile - Unified package manifest with profile conditionals
+#
+# Profiles: desktop | headless server
+#
+# Usage:
+#   HOMEBREW_DOTFILES_PROFILE=desktop brew bundle --file=~/code/dotfiles/config/brew/Brewfile
+#   HOMEBREW_DOTFILES_PROFILE=server brew bundle --file=~/code/dotfiles/config/brew/Brewfile
+#
+# NOTE: Environment variables must be prefixed with HOMEBREW_ to be passed through
+# to Brewfile Ruby evaluation. Regular env vars are filtered out by Homebrew.
+#
+# Brewfiles are Ruby, so we can use conditionals for profile-specific packages.
+
+# The verifier's profile-owned package requirements are kept in one tab-separated
+# table. Homebrew evaluates the same rows that verify_install.sh consumes.
+requirements_path = File.join(__dir__, "profile-requirements.tsv")
+profile_requirements = File.readlines(requirements_path).each_with_object([]) do |raw_line, rows|
+  line = raw_line.chomp
+  next if line.empty? || line.start_with?("#")
+
+  fields = line.split("\t", -1)
+  raise "invalid profile requirement row" unless fields.length == 9
+
+  scope, severity, package_type, package_name, label, check_kind, check_value, phase, inactive_behavior = fields
+  valid = %w[all desktop server].include?(scope) &&
+    %w[required warn].include?(severity) &&
+    %w[cask brew preexisting].include?(package_type) &&
+    !package_name.empty? && !label.empty? && !check_value.empty? &&
+    %w[app command home-executable].include?(check_kind) &&
+    %w[applications server].include?(phase) &&
+    %w[omit skip].include?(inactive_behavior)
+  raise "invalid profile requirement row" unless valid
+
+  rows << fields
+end
+
+# Profile detection (defaults to desktop)
+# MUST use HOMEBREW_ prefix for env vars to work in Brewfile context
+profile = ENV.fetch("HOMEBREW_DOTFILES_PROFILE", "desktop")
+raise "invalid HOMEBREW_DOTFILES_PROFILE: #{profile.inspect} (expected \"desktop\" or \"server\")" unless %w[desktop server].include?(profile)
+
+# =============================================================================
+# TAPS
+# =============================================================================
+tap "ognistik/homebrew-formulae"
+tap "openclaw/tap"
+tap "steipete/tap"
+tap "anomalyco/tap"
+
+# =============================================================================
+# CORE CLI TOOLS (all profiles)
+# =============================================================================
+brew "tmux"                    # Terminal multiplexer (essential for SSH sessions)
+brew "herdr"                   # Persistent remote agent workspace server
+brew "zoxide"                  # Smarter cd command
+brew "direnv"                  # Environment variable management
+brew "tmuxinator"              # Tmux session manager
+brew "atuin"                   # Shell history search
+brew "ripgrep"                 # Fast grep replacement
+brew "bat"                     # Cat with syntax highlighting
+brew "eza"                     # Modern ls replacement
+brew "fd"                      # Fast find replacement
+brew "fzf"                     # Fuzzy finder
+brew "hyperfine"               # Command-line benchmarking
+brew "gh"                      # GitHub CLI
+brew "jq"                      # JSON processor
+brew "yq"                      # YAML processor
+brew "lazygit"                 # Git TUI
+brew "fnm"                     # Fast Node Manager
+brew "mise"                    # Verified applied toolchain owner
+brew "shfmt"                   # Shell script formatter
+brew "shellcheck"              # Shell script linter
+brew "wget"                    # HTTP client
+brew "git-delta"               # Better git diff
+brew "coreutils"               # GNU core utilities
+brew "tree"                    # Directory visualization
+brew "watch"                   # Command watching
+brew "gnu-sed"                 # Consistent sed behavior
+brew "htop"                    # Process viewer
+brew "lnav"                    # Log file navigator
+brew "just"                    # Project-specific command runner
+brew "ssh-audit"               # SSH server & client auditing
+
+# =============================================================================
+# DEVELOPMENT TOOLS (all profiles)
+# =============================================================================
+brew "bun"                     # JavaScript runtime (now in homebrew-core; oven-sh tap retired)
+brew "python"                  # Python (includes pip)
+brew "uv"                      # Fast Python package installer
+brew "pipx"                    # Install Python CLI tools in isolation
+brew "pyenv"                   # Python version manager
+brew "pnpm"                    # Fast npm alternative
+brew "git-filter-repo"         # Git history rewriting
+brew "ast-grep"                # AST-based code search
+brew "sqlite"                  # Required by QMD for local hybrid search indexes
+brew "railway"                 # Deploy CLI (Railway.app)
+
+# Build tools
+brew "m4"                      # GNU macro processor
+brew "autoconf"                # Configure script generator
+
+# Linting/Formatting
+brew "actionlint"              # GitHub Actions linter
+brew "yamllint"                # YAML linter
+brew "bats-core"               # Bash testing framework
+
+# =============================================================================
+# SHELL (all profiles)
+# =============================================================================
+brew "zsh"
+brew "zsh-syntax-highlighting"
+brew "zsh-autosuggestions"
+
+# =============================================================================
+# AI CLI TOOLS (all profiles - work over SSH)
+# =============================================================================
+brew "aider"                   # AI pair programming CLI
+brew "gemini-cli"              # Google Gemini AI CLI
+brew "whisper-cpp"             # Speech-to-text (local)
+brew "ognistik/homebrew-formulae/macrowhisper"  # MacroWhisper
+brew "steipete/tap/mcporter"   # MCP client CLI & code-gen toolkit
+brew "steipete/tap/peekaboo"   # macOS screenshots and agent vision analysis
+brew "steipete/tap/remindctl"  # Agent-friendly Apple Reminders CLI
+brew "steipete/tap/imsg"       # Agent-friendly Apple Messages CLI
+brew "openclaw/tap/gogcli"     # Google Workspace CLI for agents and automation
+brew "summarize"               # Multi-modal AI content summarizer
+brew "anomalyco/tap/opencode" # Open-source coding agent with local model support
+
+# =============================================================================
+# CLOUD & INFRASTRUCTURE (all profiles)
+# =============================================================================
+brew "awscli"                  # AWS CLI
+brew "az"                      # Azure CLI
+brew "flyctl"                  # Fly.io CLI
+brew "ghq"                     # Remote repository management
+
+# =============================================================================
+# UTILITIES (all profiles)
+# =============================================================================
+brew "blueutil"                # Bluetooth CLI control
+brew "m1ddc"                   # DDC monitor control (input switching, brightness)
+brew "poppler"                 # PDF utilities
+brew "grep"                    # GNU grep
+brew "hl"                      # Log highlighter
+brew "ffmpeg"                  # Media processing
+brew "pandoc"                  # Document format converter
+
+# =============================================================================
+# MARKDOWN & FILE BROWSING (all profiles)
+# =============================================================================
+brew "yazi"                    # Terminal file manager (Rust, async, preview pane)
+brew "glow"                    # Terminal markdown renderer (GFM, tables, colors)
+brew "grip"                    # GitHub-exact markdown preview on localhost
+tap "k1LoW/tap"
+brew "k1LoW/tap/mo"            # Markdown viewer with dark mode, Mermaid, live reload
+brew "mdserve"                 # Markdown preview server for AI coding agents
+
+# =============================================================================
+# CASKS - SHARED COMMAND-LINE TOOLS (all profiles)
+# =============================================================================
+cask "1password-cli"           # 1Password CLI (op)
+cask "gcloud-cli"              # Google Cloud CLI
+
+# =============================================================================
+# CASKS - SHARED GUI TOOLS (all profiles - keyboard, launcher, terminal, voice)
+# =============================================================================
+cask "karabiner-elements"      # Keyboard customization (Hyper key)
+cask "superwhisper"            # Voice input anywhere
+cask "chatgpt"                 # OpenAI ChatGPT app
+
+# =============================================================================
+# DESKTOP PROFILE - GUI apps, communication, development
+# =============================================================================
+if profile == "desktop"
+  # Desktop environment
+  cask "cmux"                    # Multi-agent terminal and SSH workspaces
+  cask "iterm2"                  # Terminal emulator
+  cask "font-inter"              # Inter typeface
+
+  # Communication
+  cask "zoom"                  # Video conferencing
+  cask "microsoft-teams"       # Work meetings
+  cask "microsoft-outlook"     # Work email
+  cask "superhuman"            # Email client
+
+  # Browsers
+  # Velja trial: installed directly from https://sindresorhus.com/velja (no Homebrew cask).
+  cask "finicky"               # Route links to the intended browser profile
+  cask "firefox"               # Privacy-focused browser
+  cask "google-chrome"         # Development/testing
+
+  # Development
+  cask "postman"               # API testing
+  cask "docker-desktop"        # Container management
+  cask "utm"                   # Virtual machines (QEMU)
+
+  # Productivity
+  cask "notion"                # Documentation/wiki
+  cask "notion-calendar"       # Calendar
+  cask "ollama-app"            # Local LLM GUI
+  cask "philips-hue-sync"      # Smart light control
+
+  # AI Desktop Apps (GUI-based)
+  cask "claude"                # Anthropic Claude app
+  cask "codex-app"             # OpenAI Codex desktop app
+  cask "steipete/tap/codexbar" # Codex menubar app
+
+  # Utilities
+  cask "hammerspoon"           # Desktop automation
+  cask "bettertouchtool"       # Input automation and Stream Deck Pedal control
+  cask "betterdisplay"         # Display management
+  cask "cleanmymac"            # System cleanup
+  cask "aldente"               # Battery management
+  cask "imazing"               # iOS device management
+  cask "raspberry-pi-imager"   # SD card imaging
+  cask "steipete/tap/trimmy"   # Clipboard cleaner for terminal snippets
+  cask "upscayl"               # AI image upscaling
+  cask "monitorcontrol"        # External monitor brightness/volume control
+
+  # Work-specific
+  brew "jira-cli"              # Interactive Jira CLI
+  brew "yarn"                  # Package manager (legacy projects)
+
+end
+
+# =============================================================================
+# SERVER PROFILE - Headless, containers, AI workloads
+# =============================================================================
+# Profile-owned OrbStack, Ollama, and the preexisting LM Studio CLI are declared
+# by the shared requirement table appended below.
+if profile == "server"
+  # Browsers
+  cask "google-chrome"         # Development/testing, headless automation
+
+  # cask "ollama-app"            # Ollama GUI wrapper
+  # brew "docker"                # Docker CLI
+  # brew "colima"                # Lightweight container VM
+  # brew "docker-compose"        # Multi-container orchestration
+
+end
+
+profile_requirements.each do |scope, _severity, package_type, package_name, _label, _check_kind, _check_value, _phase, _inactive_behavior|
+  next unless scope == "all" || scope == profile
+  next unless package_type == "cask" || package_type == "brew"
+
+  send(package_type, package_name)
+end

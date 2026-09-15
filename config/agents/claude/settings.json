@@ -1,0 +1,245 @@
+{
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  },
+  "permissions": {
+    "allow": [
+      "Bash",
+      "Bash(rm -rf /tmp/**)",
+      "Bash(rm -rf /private/tmp/**)",
+      "Bash(rm -rf /var/folders/**)",
+      "Bash(rm -fr /tmp/**)",
+      "Bash(rm -fr /private/tmp/**)",
+      "Bash(rm -fr /var/folders/**)"
+    ],
+    "deny": [
+      "AskUserQuestion"
+    ],
+    "ask": [],
+    "defaultMode": "bypassPermissions"
+  },
+  "enableAllProjectMcpServers": false,
+  "disabledMcpjsonServers": [],
+  "disableClaudeAiConnectors": true,
+  "skillOverrides": {
+    "apple-reminders": "off",
+    "bitbucket": "off",
+    "context-unhobble-audit": "off",
+    "dataviz": "off",
+    "figma": "off",
+    "git-guardrails-claude-code": "off",
+    "gog": "off",
+    "gog-admin": "off",
+    "gog-analytics": "off",
+    "gog-appscript": "off",
+    "gog-calendar": "off",
+    "gog-chat": "off",
+    "gog-classroom": "off",
+    "gog-contacts": "off",
+    "gog-contacts-cleanup": "off",
+    "gog-docs": "off",
+    "gog-drive": "off",
+    "gog-drive-audit": "off",
+    "gog-forms": "off",
+    "gog-gmail": "off",
+    "gog-groups": "off",
+    "gog-inbox-triage": "off",
+    "gog-keep": "off",
+    "gog-maps": "off",
+    "gog-meet": "off",
+    "gog-meeting-prep": "off",
+    "gog-people": "off",
+    "gog-photos": "off",
+    "gog-save-attachments": "off",
+    "gog-searchconsole": "off",
+    "gog-sheets": "off",
+    "gog-sites": "off",
+    "gog-slides": "off",
+    "gog-tasks": "off",
+    "gog-weekly-digest": "off",
+    "gog-youtube": "off",
+    "implement": "on",
+    "migrate-to-shoehorn": "off",
+    "resolving-merge-conflicts": "off",
+    "retro-scrum-master": "off",
+    "scaffold-exercises": "off",
+    "session-recovery": "off",
+    "setup-pre-commit": "off",
+    "setup-ts-deep-modules": "off",
+    "stream-deck-author": "off",
+    "stream-deck-use": "off",
+    "tdd": "on",
+    "to-questionnaire": "off",
+    "to-tickets": "on",
+    "update-config": "off",
+    "vocab-refresh": "off",
+    "wizard": "off",
+    "writing-beats": "off",
+    "writing-fragments": "off",
+    "writing-shape": "off"
+  },
+  "disableBundledSkills": false,
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run \"$HOME/.claude/hooks/git/git-safety.ts\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run $HOME/.claude/hooks/git/git-context-loader.ts",
+            "timeout": 15
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"$HOME/.claude/hooks/herdr-agent-state.sh\" session",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "date '+Current datetime: %A, %d %B %Y %I:%M %p %Z'",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run $HOME/.claude/hooks/git/command-logger.ts",
+            "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__.*biome-runner__(biome_lintCheck|biome_lintFix|biome_formatCheck)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SQ_HOOK_DEDUP_ENABLED=1 bunx @side-quest/claude-hooks posttool",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "mcp__.*biome-runner__(biome_lintCheck|biome_lintFix|biome_formatCheck)",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "SQ_HOOK_DEDUP_ENABLED=1 bunx @side-quest/claude-hooks posttool-failure",
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun run $HOME/.claude/hooks/git/session-summary.ts",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash -lc 'repo=$(git rev-parse --show-toplevel 2>/dev/null || true); if [ -x \"$repo/scripts/check-prompt-drift-on-stop.sh\" ]; then \"$repo/scripts/check-prompt-drift-on-stop.sh\"; fi'",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  },
+  "worktree": {
+    "baseRef": "fresh"
+  },
+  "disableRemoteControl": true,
+  "disableWorkflows": false,
+  "statusLine": {
+    "type": "command",
+    "command": "bash /Users/nathanvale/.claude/statusline-command.sh"
+  },
+  "enabledPlugins": {
+    "my-second-brain@my-second-brain": true,
+    "fable-advisor@fable-advisor": true,
+    "browser-lanes@personal": true,
+    "my-second-brain-playground@personal": true,
+    "proof@personal": true
+  },
+  "extraKnownMarketplaces": {
+    "my-second-brain": {
+      "source": {
+        "source": "github",
+        "repo": "myagentdojo/my-second-brain-plugin",
+        "ref": "v0.4.0"
+      }
+    },
+    "fable-advisor": {
+      "source": {
+        "source": "github",
+        "repo": "DannyMac180/fable-advisor"
+      }
+    },
+    "personal": {
+      "source": {
+        "source": "directory",
+        "path": "/Users/nathanvale/code/dotfiles/config/agents/plugins"
+      }
+    }
+  },
+  "effortLevel": "high",
+  "modelSettings": {
+    "claude-opus-5": {
+      "effortLevel": "high"
+    },
+    "claude-haiku-4-5": {
+      "effortLevel": "xhigh"
+    },
+    "claude-sonnet-5": {
+      "effortLevel": "xhigh"
+    }
+  },
+  "autoMemoryEnabled": false,
+  "skipDangerousModePermissionPrompt": true,
+  "skipWorkflowUsageWarning": true,
+  "theme": "dark",
+  "autoCompactEnabled": true,
+  "agentPushNotifEnabled": true,
+  "skipAutoPermissionPrompt": true
+}

@@ -1,0 +1,348 @@
+#!/bin/bash
+# tx - Unified tmux/tmuxinator launcher
+# Usage: tx [project|path] [template]
+
+set -e
+
+TMUXINATOR_DIR="$HOME/.config/tmuxinator"
+CODE_DIR="$HOME/code"
+MARKETPLACES_DIR="$HOME/.claude/plugins/marketplaces"
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+CYAN='\033[0;36m'
+NC='\033[0m'
+
+# Available templates (excluding cloud-agents which is special)
+TEMPLATES=("standard" "fullstack" "nextjs" "mac-mini")
+
+show_help() {
+    echo -e "${CYAN}tx${NC} - Unified tmux/tmuxinator launcher"
+    echo ""
+    echo -e "${YELLOW}USAGE:${NC}"
+    echo "  tx                      Interactive picker (fzf)"
+    echo "  tx <project>            Start project (standard template)"
+    echo "  tx <path>               Start from path (standard template)"
+    echo "  tx .                    Start current directory"
+    echo "  tx <project> <template> Start with specific template"
+    echo "  tx --list               List templates"
+    echo "  tx --help               Show this help"
+    echo ""
+    echo -e "${YELLOW}TEMPLATES:${NC}"
+    echo "  standard   - primary agent + git + files + shell (default)"
+    echo "  fullstack  - agents + git + dev + vault"
+    echo "  nextjs     - agents + git + dev + prisma? + storybook?"
+    echo ""
+    echo -e "${YELLOW}EXAMPLES:${NC}"
+    echo "  tx paicc-1              # Uses standard template"
+    echo "  tx .                    # Current directory"
+    echo "  tx dotfiles fullstack   # Explicit template"
+    echo "  tx ~/code/my-app        # Full path"
+}
+
+list_templates() {
+    echo -e "${CYAN}Available templates:${NC}"
+    for t in "${TEMPLATES[@]}"; do
+        if [ -f "$TMUXINATOR_DIR/$t.yml" ]; then
+            echo -e "  ${GREEN}$t${NC}"
+        fi
+    done
+    # Also show cloud-agents if it exists
+    if [ -f "$TMUXINATOR_DIR/cloud-agents.yml" ]; then
+        echo -e "  ${YELLOW}cloud-agents${NC} (special)"
+    fi
+}
+
+# Resolve project name/path to full path
+resolve_path() {
+    local input="$1"
+
+    # Current directory
+    if [ "$input" = "." ]; then
+        echo "$PWD"
+        return
+    fi
+
+    # Already a full path (use realpath to avoid triggering zsh chpwd hooks)
+    if [ -d "$input" ]; then
+        realpath "$input"
+        return
+    fi
+
+    # Expand ~
+    if [[ "$input" == ~* ]]; then
+        local expanded="${input/#\~/$HOME}"
+        if [ -d "$expanded" ]; then
+            echo "$expanded"
+            return
+        fi
+    fi
+
+    # Check in ~/code
+    if [ -d "$CODE_DIR/$input" ]; then
+        echo "$CODE_DIR/$input"
+        return
+    fi
+
+    # Check in ~/.claude/plugins/marketplaces
+    if [ -d "$MARKETPLACES_DIR/$input" ]; then
+        echo "$MARKETPLACES_DIR/$input"
+        return
+    fi
+
+    # Check in ~/.claude (for dot-claude)
+    if [ "$input" = "dot-claude" ] && [ -d "$HOME/.claude" ]; then
+        echo "$HOME/.claude"
+        return
+    fi
+
+    # Not found
+    echo ""
+}
+
+# Get session name from path
+get_session_name() {
+    local path="$1"
+    basename "$path" | sed 's/^\./.dot-/' | tr '.' '-' | tr '[:upper:]' '[:lower:]'
+}
+
+git_summary() {
+    local path="$1"
+
+    if ! git -C "$path" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+        echo "no git"
+        return
+    fi
+
+    local branch dirty_count marker
+    branch=$(git -C "$path" branch --show-current 2>/dev/null || true)
+    if [ -z "$branch" ]; then
+        branch=$(git -C "$path" rev-parse --short HEAD 2>/dev/null || echo "detached")
+    fi
+
+    dirty_count=$(git -C "$path" status --short 2>/dev/null | sed '/^$/d' | wc -l | tr -d ' ')
+    if [ "$dirty_count" -eq 0 ]; then
+        marker="clean"
+    else
+        marker="dirty:$dirty_count"
+    fi
+
+    echo "$branch $marker"
+}
+
+session_summary() {
+    local session="$1"
+    local commands
+
+    commands=$(tmux list-panes -t "$session" -F '#{pane_current_command}' 2>/dev/null | sort -u | tr '\n' ',' | sed 's/,$//')
+    if [ -z "$commands" ]; then
+        commands="no panes"
+    fi
+
+    echo "$commands"
+}
+
+preview_path() {
+    local path="$1"
+
+    if [ ! -d "$path" ]; then
+        echo "Path not found: $path"
+        return
+    fi
+
+    echo "Path: $path"
+    echo "Git:  $(git_summary "$path")"
+    echo
+    find "$path" -maxdepth 1 -print 2>/dev/null | sort | sed -n '1,18p'
+}
+
+preview_item() {
+    local data="$1"
+    local kind="${data%%:*}"
+    local name="${data#*:}"
+
+    case "$kind" in
+        running)
+            echo "Running session: $name"
+            echo "Commands: $(session_summary "$name")"
+            echo
+            tmux list-windows -t "$name" -F '#I:#W  panes:#{window_panes}' 2>/dev/null
+            echo
+            tmux list-panes -t "$name" -F '#{window_index}.#{pane_index}  #{pane_current_command}  #{pane_current_path}' 2>/dev/null | sed -n '1,20p'
+            ;;
+        project)
+            preview_path "$CODE_DIR/$name"
+            ;;
+        marketplace)
+            preview_path "$MARKETPLACES_DIR/$name"
+            ;;
+        *)
+            echo "Unknown picker item: $data"
+            ;;
+    esac
+}
+
+# Start or attach to session
+start_session() {
+    local path="$1"
+    local template="$2"
+    local session_name
+    session_name=$(get_session_name "$path")
+
+    # Check if session already exists
+    if tmux has-session -t "$session_name" 2>/dev/null; then
+        echo -e "${YELLOW}Session '$session_name' exists, attaching...${NC}"
+        if [ -n "$TMUX" ]; then
+            tmux switch-client -t "$session_name"
+        else
+            exec tmux attach-session -t "$session_name"
+        fi
+        return
+    fi
+
+    # Start new session with template
+    echo -e "${GREEN}Starting '$session_name' with template '$template'${NC}"
+
+    if [ -n "$TMUX" ]; then
+        tmuxinator start "$template" "$path"
+        tmux switch-client -t "$session_name"
+    else
+        exec tmuxinator start "$template" "$path"
+    fi
+}
+
+# Interactive picker with fzf
+interactive_picker() {
+    # Build list of options
+    local options=""
+
+    # Running sessions
+    local sessions
+    sessions=$(tmux list-sessions -F "#{session_name}" 2>/dev/null || true)
+    if [ -n "$sessions" ]; then
+        while IFS= read -r s; do
+            options+="running:$s\t$(printf "[running] %-28s %s" "$s" "$(session_summary "$s")")\n"
+        done <<< "$sessions"
+    fi
+
+    # Projects in ~/code (excluding hidden and common non-project dirs)
+    if [ -d "$CODE_DIR" ]; then
+        for dir in "$CODE_DIR"/*/; do
+            [ -d "$dir" ] || continue
+            local name
+            name=$(basename "$dir")
+            [[ "$name" == .* ]] && continue
+            [[ "$name" == "node_modules" ]] && continue
+            # Skip if already running
+            if echo "$sessions" | grep -qx "$name" 2>/dev/null; then
+                continue
+            fi
+            options+="project:$name\t$(printf "%-38s %s" "$name" "$(git_summary "$dir")")\n"
+        done
+    fi
+
+    # Marketplaces in ~/.claude/plugins/marketplaces
+    if [ -d "$MARKETPLACES_DIR" ]; then
+        for dir in "$MARKETPLACES_DIR"/*/; do
+            [ -d "$dir" ] || continue
+            local name
+            name=$(basename "$dir")
+            [[ "$name" == .* ]] && continue
+            # Skip if already running
+            if echo "$sessions" | grep -qx "$name" 2>/dev/null; then
+                continue
+            fi
+            options+="marketplace:$name\t$(printf "[marketplace] %-24s %s" "$name" "$(git_summary "$dir")")\n"
+        done
+    fi
+
+    # Use fzf to select
+    local selected
+    selected=$(printf "%b" "$options" | sed '/^$/d' | fzf --height=60% --border \
+        --delimiter=$'\t' \
+        --with-nth=2.. \
+        --prompt="Select project: " \
+        --header="Enter to start, Ctrl-C to cancel" \
+        --preview="$0 --preview {1}" \
+        --preview-window=right:40%)
+
+    [ -z "$selected" ] && exit 0
+
+    local selected_data="${selected%%$'\t'*}"
+    local selected_kind="${selected_data%%:*}"
+    selected="${selected_data#*:}"
+
+    # Handle running session
+    if [[ "$selected_kind" == "running" ]]; then
+        local session_name="$selected"
+        if [ -n "$TMUX" ]; then
+            tmux switch-client -t "$session_name"
+        else
+            exec tmux attach-session -t "$session_name"
+        fi
+        return
+    fi
+
+    # Start project
+    local path
+    case "$selected_kind" in
+        project)
+            path="$CODE_DIR/$selected"
+            ;;
+        marketplace)
+            path="$MARKETPLACES_DIR/$selected"
+            ;;
+        *)
+            path=$(resolve_path "$selected")
+            ;;
+    esac
+    if [ -z "$path" ]; then
+        echo -e "${RED}Could not find project: $selected${NC}"
+        exit 1
+    fi
+
+    start_session "$path" "standard"
+}
+
+# Main
+case "${1:-}" in
+    --preview)
+        preview_item "${2:-}"
+        exit 0
+        ;;
+    --help|-h)
+        show_help
+        exit 0
+        ;;
+    --list|-l)
+        list_templates
+        exit 0
+        ;;
+    "")
+        # No args - interactive picker
+        interactive_picker
+        ;;
+    *)
+        # Project/path specified
+        path=$(resolve_path "$1")
+
+        if [ -z "$path" ]; then
+            echo -e "${RED}Could not find: $1${NC}"
+            echo "Try: tx --help"
+            exit 1
+        fi
+
+        template="${2:-standard}"
+
+        # Validate template exists
+        if [ ! -f "$TMUXINATOR_DIR/$template.yml" ]; then
+            echo -e "${RED}Template not found: $template${NC}"
+            list_templates
+            exit 1
+        fi
+
+        start_session "$path" "$template"
+        ;;
+esac

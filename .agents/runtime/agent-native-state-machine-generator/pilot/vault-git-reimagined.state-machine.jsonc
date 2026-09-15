@@ -1,0 +1,163 @@
+// Vault Git Reimagined - pilot Admitted State-Machine Specification.
+// Specification Admission: Nathan Vale, 2026-08-21, recorded on
+// dotfiles issue 55. Stage 4 learning pilot. The pilot still
+// claims nothing toward qualification: admission gives this file
+// design-time semantic authority for the pilot only.
+//
+// Authoring rules honored (issue 55): data-only JSONC; comments explain
+// meaning and never select control flow; unresolved semantics are surfaced in
+// "unresolved_decisions" rather than invented.
+//
+// The surface is deliberately read-only so the candidate emits within frozen
+// Input Schema v1: no write-implying mutation (so no execution-mode surface is
+// owed), exactly one declared blocker (so the refused branch can name it), and
+// a no-argument behavior whose generator binding lands on a declared command.
+{
+	"spec_meta": {
+		"product": "vault-git-reimagined",
+		"input_schema_version": "1",
+		"product_specification_revision": "1",
+		"state_machine_definition_version": "1",
+		"public_result_schema_version": "1",
+	},
+
+	// Every durable-work feature is off. The pilot is a stateless read surface;
+	// under feature conditioning none of the omitted machinery may be generated.
+	"features": {
+		"durable_operations": false,
+		"liveness_evidence": false,
+		"cancellation": "not_supported",
+		"version_custody": false,
+		"remote_authority": false,
+		"feature_gates": [],
+	},
+
+	// No durable entities: every invocation is a self-contained observation.
+	"entities": {},
+
+	"states": {
+		// The one Observed Fact this surface consumes: whether the vault
+		// workspace root carries a .git entry. Both values are observation
+		// sourced; the Fact Provider reports them and never selects state.
+		"workspace_observability": {
+			"values": ["observable", "unobservable"],
+			"observation_sourced": ["observable", "unobservable"],
+		},
+		// Per-invocation projection outcome. Every value is terminal because the
+		// surface is stateless: an invocation observes, projects, and stops.
+		"projection_outcome": {
+			"values": ["observed_success", "blocked", "input_refused"],
+			"terminal": ["observed_success", "blocked", "input_refused"],
+		},
+	},
+
+	// Stateless: no durable transitions exist.
+	"transitions": [],
+
+	"invariants": [
+		{
+			"id": "read_only_surface",
+			"holds": "every declared command mutation is read; no command on this surface attempts a Declared Side Effect",
+		},
+		{
+			"id": "single_projection_owner",
+			"holds": "the generated Projection Composer is the sole selector of the public State Projection and Next Safe Action; the front door never assembles a projection by hand",
+		},
+		{
+			"id": "envelope_contract_parity",
+			"holds": "every Branch Station emits one typed result envelope whose exit code and status agree with the Command Surface Contract",
+		},
+	],
+
+	// Exactly one blocker, shared by the refused branch and the unavailable
+	// projection resolution. Input Schema v1 derives a refusal blocker only
+	// when exactly one is declared; see unresolved_decisions.
+	"blockers": ["projection_unavailable"],
+
+	"actions": {
+		"kinds": ["invoke", "none"],
+		"catalog": [
+			{ "id": "inspect_status", "kind": "invoke" },
+			{ "id": "inspect_commands", "kind": "invoke" },
+			{ "id": "none", "kind": "none", "stop_scope": "agent_terminal" },
+		],
+		"resolution": {
+			"missing_context": "unavailable_projection",
+			"unavailable_projection_blocker": "projection_unavailable",
+			"unavailable_projection_retry_safety": "operator_required",
+			"unavailable_projection_stop": "agent_terminal",
+		},
+	},
+
+	"retry_posture": {
+		"values": ["same_input_safe", "operator_required"],
+		// Every command is a read: repeating the identical invocation performs
+		// the identical observation, so both declared branches are safe under
+		// Exact Same-Input Retry Safety. Incomplete projections take the
+		// operator-owned posture from actions.resolution instead.
+		"rules": [
+			{ "when": { "result_kind": "success" }, "then": "same_input_safe" },
+			{ "when": { "result_kind": "refusal" }, "then": "same_input_safe" },
+		],
+		"never_auto_retry": [],
+	},
+
+	// Nothing durable to acknowledge.
+	"acknowledgement": { "values": [], "unknown_policy": "not_applicable" },
+
+	"waits": {
+		"wake_route": "caller_reinvocation",
+		"budgets_ms": {},
+		"missed_deadline_causes": {},
+	},
+
+	"cancellation": { "all": "not_supported" },
+
+	"authority": {
+		"write_authority_owner": "vault_git_reimagined_operator",
+		"scope": "no declared command writes; write authority stays with the operator outside this surface",
+	},
+
+	"command_surface": {
+		"commands": ["status", "commands"],
+		"exit_codes": {
+			"0": "read_success",
+			"1": "refused_projection_unavailable",
+			"2": "invalid_usage",
+		},
+		"output_modes_default": ["json"],
+		"output_modes_overrides": {},
+		// Bare invocation performs the read-only status dashboard and never a
+		// default write. The generator binds this behavior to the declared
+		// status command; see unresolved_decisions.bare_invocation_binding.
+		"no_argument_behavior": "read_only_dashboard",
+		"flags": {
+			"status": ["--json"],
+			"commands": ["--json"],
+		},
+		"mutations": { "status": "read", "commands": "read" },
+		"result_contracts": {
+			"status": { "id": "vault-git-reimagined.status", "version": 1 },
+			"commands": { "id": "vault-git-reimagined.command-discovery", "version": 1 },
+		},
+	},
+
+	"versioning": { "records": {}, "incompatible_run_policy": "not_applicable" },
+
+	// Semantics the pilot could not decide inside frozen Input Schema v1. Each
+	// needs a product-owner decision before admission; none is invented here.
+	"unresolved_decisions": [
+		{
+			"id": "single_blocker_refusal_cause",
+			"question": "Input Schema v1 derives a refused branch's blocker only when exactly one blocker is declared, so every command's refused station shares projection_unavailable. Declaring a second blocker would refuse emission. Which blocker-to-command mapping should stage 5 admit before this surface can distinguish refusal causes?",
+		},
+		{
+			"id": "bare_invocation_binding",
+			"question": "The read_only_dashboard binding to the status command comes from a generator convention, not a declared field. Should stage 5 admit an explicit bare-invocation binding in the schema so the candidate owns it?",
+		},
+		{
+			"id": "fact_to_branch_selection",
+			"question": "Input Schema v1 declares no mapping from the workspace_observability Observed Fact to the refused branch, so the front door supplies the observed branch and only the projection selection is generated. Should stage 5 admit a fact-to-branch surface so the Projection Composer's selection is generated end to end?",
+		},
+	],
+}

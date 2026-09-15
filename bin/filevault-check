@@ -1,0 +1,220 @@
+#!/usr/bin/env bash
+# filevault-check — report FileVault encryption AND recovery-key escrow state.
+#
+# Why: on an MDM-managed Mac, "encrypted" and "compliant" are different things.
+# IT compliance reports measure whether the recovery key reached the MDM server
+# (Jamf), not merely whether the disk is encrypted. Those come apart: encryption
+# can succeed while escrow silently fails, leaving an encrypted disk whose key
+# nobody holds — worse than before, and still flagged non-compliant.
+#
+# Two further traps this script exists to avoid:
+#   - Apple Silicon reports "Encrypted at rest" from the Secure Enclave even with
+#     FileVault OFF. That is hardware encryption, not FileVault, and does not
+#     satisfy a compliance check.
+#   - `diskutil info` on the wrong volume happily reports FileVault: No for a
+#     disk that has nothing to do with the boot volume. Step 2 pins the Data volume.
+#
+# Typical use: MDM deferred enablement is armed but has never fired. Restart,
+# complete the FileVault prompt at login, then run this to confirm before
+# telling IT it is sorted.
+#
+# Read-only. Nothing here enables, disables, or alters encryption state.
+# Steps 3-5 need sudo; the script prompts once and skips them cleanly if declined.
+#
+# Usage: filevault-check
+
+set -uo pipefail   # deliberately no -e: a failing check should report, not abort
+
+RED=$'\033[31m'; GRN=$'\033[32m'; YEL=$'\033[33m'; BLU=$'\033[34m'; DIM=$'\033[2m'; RST=$'\033[0m'
+
+hdr() { printf '\n%s──────────────────────────────────────────────────────────%s\n%s%s%s\n' "$DIM" "$RST" "$BLU" "$1" "$RST"; }
+ok()   { printf '%s  ✅ %s%s\n' "$GRN" "$1" "$RST"; }
+warn() { printf '%s  ⚠️  %s%s\n' "$YEL" "$1" "$RST"; }
+bad()  { printf '%s  ❌ %s%s\n' "$RED" "$1" "$RST"; }
+info() { printf '     %s\n' "$1"; }
+
+VERDICT_ENCRYPTED="unknown"
+VERDICT_ESCROW="unknown"
+VERDICT_TRIGGER="unknown"
+
+printf '%sFileVault verification — %s on %s%s\n' "$BLU" "$(date '+%Y-%m-%d %H:%M')" "$(scutil --get ComputerName 2>/dev/null || echo unknown)" "$RST"
+
+# ─── 1. FileVault on? ────────────────────────────────────────────────────────
+hdr "1. FileVault status"
+FV_OUT="$(fdesetup status 2>&1)"
+info "$FV_OUT"
+if grep -qi "FileVault is On" <<<"$FV_OUT"; then
+  VERDICT_ENCRYPTED="on"
+  ok "FileVault is ON"
+  if grep -qi "in progress" <<<"$FV_OUT"; then
+    warn "Initial encryption still running — normal, finishes in the background"
+  fi
+elif grep -qi "Deferred enablement" <<<"$FV_OUT"; then
+  VERDICT_ENCRYPTED="deferred"
+  bad "Still OFF — deferred enablement armed but the prompt was not completed"
+  info "Log out or restart and complete the FileVault prompt when it appears."
+else
+  VERDICT_ENCRYPTED="off"
+  bad "FileVault is OFF"
+fi
+
+# ─── 2. Right volume? ────────────────────────────────────────────────────────
+hdr "2. Boot volume check (guards against reading the wrong disk)"
+APFS="$(diskutil apfs list 2>/dev/null)"
+if [[ -n "$APFS" ]]; then
+  # Find the Data volume and report its FileVault line.
+  DATA_BLOCK="$(awk '/Macintosh HD - Data|APFS Volume Disk .*Data/{f=1} f{print} f&&/FileVault/{exit}' <<<"$APFS")"
+  if [[ -n "$DATA_BLOCK" ]]; then
+    grep -iE "APFS Volume|Name:|FileVault" <<<"$DATA_BLOCK" | sed 's/^/     /'
+    if grep -qiE "FileVault:[[:space:]]*Yes" <<<"$DATA_BLOCK"; then
+      ok "Data volume reports FileVault: Yes"
+    else
+      warn "Data volume does not report FileVault: Yes (see above)"
+    fi
+  else
+    warn "Could not isolate the Data volume; full FileVault lines:"
+    grep -i "FileVault" <<<"$APFS" | sed 's/^/     /'
+  fi
+else
+  warn "diskutil apfs list returned nothing"
+fi
+
+# ─── sudo gate ───────────────────────────────────────────────────────────────
+hdr "3-5. Recovery key + escrow (needs sudo)"
+if sudo -v 2>/dev/null; then
+  SUDO_OK=1
+else
+  SUDO_OK=0
+  warn "No sudo — skipping steps 3-5."
+  info "Re-run with sudo available to check recovery key and escrow."
+fi
+
+if [[ "${SUDO_OK}" == "1" ]]; then
+  # ─── 3. Recovery keys ──────────────────────────────────────────────────────
+  printf '\n  %sRecovery keys%s\n' "$DIM" "$RST"
+  PERSONAL="$(sudo fdesetup haspersonalrecoverykey 2>&1)"
+  INSTITUTIONAL="$(sudo fdesetup hasinstitutionalrecoverykey 2>&1)"
+  info "personal:      $PERSONAL"
+  info "institutional: $INSTITUTIONAL"
+  if [[ "$PERSONAL" == "true" ]]; then
+    ok "Personal recovery key exists (this is the one Jamf escrows)"
+  else
+    warn "No personal recovery key — expected 'true' once FileVault is on"
+  fi
+  [[ "$INSTITUTIONAL" == "false" ]] && info "(institutional=false is normal unless an employer uses an FDE certificate)"
+
+  # ─── 4. Escrow configuration ───────────────────────────────────────────────
+  # Check /Library/Managed Preferences, NOT `profiles -P`. MDMs commonly deliver
+  # FileVault and escrow settings as managed preferences, which do not appear in
+  # the installed-configuration-profile list. Checking only `profiles -P` reports
+  # a false "no escrow configured" on a machine that is correctly configured —
+  # a dangerous false negative, since it argues against enabling FileVault.
+  printf '\n  %sEscrow configuration%s\n' "$DIM" "$RST"
+  MP_DIR="/Library/Managed Preferences"
+  MP_HITS=""
+  for f in "$MP_DIR"/*; do
+    [[ -e "$f" ]] || continue
+    base="${f##*/}"
+    shopt -s nocasematch
+    if [[ "$base" == *fde* || "$base" == *filevault* || "$base" == *escrow* ]]; then
+      MP_HITS+="${base}"$'\n'
+    fi
+    shopt -u nocasematch
+  done
+  MP_HITS="${MP_HITS%$'\n'}"
+  if [[ -n "$MP_HITS" ]]; then
+    sed 's/^/     /' <<<"$MP_HITS"
+    if grep -qi "FDERecoveryKeyEscrow" <<<"$MP_HITS"; then
+      ok "FDERecoveryKeyEscrow managed preference is present"
+    else
+      warn "FileVault managed prefs found, but no explicit FDERecoveryKeyEscrow"
+    fi
+  else
+    # Fall back to the profile list before concluding anything is missing.
+    PROF_HITS="$(sudo profiles -P 2>/dev/null | grep -iE "escrow|filevault|FDE")"
+    if [[ -n "$PROF_HITS" ]]; then
+      sed 's/^/     /' <<<"$PROF_HITS"
+      ok "FileVault/escrow delivered as a configuration profile"
+    else
+      warn "No FileVault/escrow config found in managed prefs or profiles"
+      info "If the MDM is meant to escrow recovery keys, its absence is worth"
+      info "raising with IT — encryption without escrow fails compliance."
+    fi
+  fi
+
+  # ─── 6. Deferral trigger sanity ────────────────────────────────────────────
+  # A policy can be armed and still never fire. When deferral suppresses the
+  # logout prompt AND allows unlimited login bypasses, nothing ever starts
+  # enablement — the machine sits "deferred" forever and keeps failing the
+  # compliance report. This is invisible unless the policy is read directly.
+  FV_POLICY="$MP_DIR/com.apple.MCX.FileVault2.plist"
+  if [[ "$VERDICT_ENCRYPTED" != "on" && -f "$FV_POLICY" ]]; then
+    printf '\n  %sDeferral trigger%s\n' "$DIM" "$RST"
+    POLICY="$(defaults read "$FV_POLICY" 2>/dev/null)"
+    grep -iE "Defer|Enable|RecoveryKey" <<<"$POLICY" | sed 's/^/     /'
+    NO_LOGOUT_PROMPT=0; NO_LOGIN_FORCE=0
+    grep -qiE "DeferDontAskAtUserLogout[[:space:]]*=[[:space:]]*1" <<<"$POLICY" && NO_LOGOUT_PROMPT=1
+    grep -qiE "DeferForceAtUserLoginMaxBypassAttempts[[:space:]]*=[[:space:]]*0" <<<"$POLICY" && NO_LOGIN_FORCE=1
+    if [[ "$NO_LOGOUT_PROMPT" == "1" && "$NO_LOGIN_FORCE" == "1" ]]; then
+      VERDICT_TRIGGER="none"
+      bad "Policy is armed but has NO TRIGGER"
+      info "DeferDontAskAtUserLogout=1 suppresses the logout prompt, and"
+      info "DeferForceAtUserLoginMaxBypassAttempts=0 never forces it at login."
+      info "Restarting will NOT enable FileVault. IT must trigger it MDM-side."
+    elif [[ "$NO_LOGOUT_PROMPT" == "1" ]]; then
+      warn "Logout prompt suppressed; enablement depends on the login path"
+    fi
+  fi
+
+  # ─── 5. Did escrow actually fire? ──────────────────────────────────────────
+  printf '\n  %sEscrow activity in the last 60 minutes%s\n' "$DIM" "$RST"
+  ESC_LOG="$(sudo log show --predicate 'subsystem == "com.apple.FileVault" OR eventMessage CONTAINS[c] "escrow"' --last 60m 2>/dev/null \
+             | grep -iE "escrow|recovery key" | tail -20)"
+  if [[ -n "$ESC_LOG" ]]; then
+    sed 's/^/     /' <<<"$ESC_LOG"
+    if grep -qiE "success|escrowed|sent" <<<"$ESC_LOG"; then
+      VERDICT_ESCROW="likely-ok"
+      ok "Log shows escrow activity that looks successful"
+    else
+      VERDICT_ESCROW="unclear"
+      warn "Escrow log lines found but success is not explicit — Karl should confirm"
+    fi
+  else
+    VERDICT_ESCROW="silent"
+    warn "No escrow log lines in the last 60 min"
+    info "Not proof of failure — escrow is often quiet or delayed. Karl confirms server-side."
+  fi
+fi
+
+# ─── Verdict ─────────────────────────────────────────────────────────────────
+hdr "Verdict"
+case "$VERDICT_ENCRYPTED" in
+  on)
+    case "$VERDICT_ESCROW" in
+      likely-ok)
+        ok "Encryption ON, escrow activity looks successful."
+        info "Safe to tell IT it is enabled. Still ask them to confirm the key"
+        info "landed on the MDM server — only they can see that." ;;
+      *)
+        ok "Encryption ON. Escrow not confirmable locally (common)."
+        info "Tell IT FileVault is now on, and ask them to verify the recovery key"
+        info "escrowed to the MDM server. That half is not visible from this machine." ;;
+    esac
+    ;;
+  deferred)
+    bad "Still OFF — do not report this as resolved."
+    if [[ "$VERDICT_TRIGGER" == "none" ]]; then
+      info "The policy is armed but has no trigger (see 'Deferral trigger' above)."
+      info "Restarting will not help. Ask IT to trigger enablement from the MDM,"
+      info "or to change the deferral settings so the prompt actually fires."
+    else
+      info "Deferred enablement is armed but the prompt was never completed."
+      info "Log out or restart, then complete the FileVault prompt at login."
+    fi ;;
+  off)
+    bad "Still OFF — do not report this as resolved."
+    info "No deferred enablement detected either; the MDM policy may not be applied." ;;
+  *)
+    warn "Inconclusive — capture this output before reporting anything." ;;
+esac
+printf '\n'

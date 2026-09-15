@@ -1,0 +1,146 @@
+[alias]
+    amend = commit --amend --no-edit
+    branches = branch -a
+    br = branch
+    ci = commit
+    cl = "!clear"
+    co = checkout
+    df = diff
+    # `last` is the one home for human log presentation. It asks for
+    # abbreviation, decoration, and relative time explicitly, so no [log] or
+    # [format] default has to rewrite what an unattended command asked for:
+    # `log.abbrevCommit` and `log.decorate` rewrite an explicit
+    # `--pretty=oneline`, and `log.date = relative` rewrites an explicit
+    # `--pretty=format:%ad`. An explicit --pretty on the command line already
+    # outranks [format].pretty, which is kept out of the defaults anyway.
+    # See bin/test/git-effective-behavior-test.sh.
+    last = log -1 HEAD --pretty=format:'%C(auto)%h %d %s %C(black)%C(bold)%cr' --abbrev-commit --decorate
+    lg = log --oneline --graph --all --decorate
+    st = status
+    undo = reset --soft HEAD^
+    uncommit = reset --soft HEAD^
+    unstage = reset HEAD
+	pr = "!f() { exec az repos pr \"$@\"; }; f"
+	repo = "!f() { exec az repos \"$@\"; }; f"
+
+[branch]
+    autosetuprebase = never
+
+[color]
+    ui = auto
+
+[color "branch"]
+    current = yellow reverse
+    local = yellow
+    remote = green
+
+[color "diff"]
+    frag = magenta bold
+    meta = yellow bold
+    new = green bold
+    old = red bold
+
+[color "status"]
+    added = yellow
+    changed = green
+    untracked = cyan
+
+[commit]
+    template = ~/.gitmessage
+
+[core]
+    # Terminal-aware editor. A human on a terminal gets vim; an unattended
+    # command gets a clean nonzero failure instead of a launched editor that
+    # hangs forever waiting on input it will never receive. Git prints its own
+    # "Please supply the message using either -m or -F option." on failure.
+    editor = "sh -c 'test -t 0 && test -t 1 || exit 1; exec vim \"$@\"' vim"
+    excludesfile = ~/.gitignore_global
+    pager = bat --pager=less
+
+[delta]
+    # Unified is readable in narrow shells; delta --side-by-side opts in.
+    features = line-numbers decorations
+    side-by-side = false
+    line-numbers = true
+    decorations = true
+    true-color = always
+    # Night Owl diff overlays composited on the #011627 editor surface. Delta
+    # cannot render VS Code's translucent values directly.
+    minus-style = syntax "#31222f"
+    minus-non-emph-style = syntax "#31222f"
+    minus-emph-style = syntax "#4c202a"
+    minus-empty-line-marker-style = normal "#31222f"
+    plus-style = syntax "#162c31"
+    plus-non-emph-style = syntax "#162c31"
+    plus-emph-style = syntax "#294239"
+    plus-empty-line-marker-style = normal "#162c31"
+    line-numbers-minus-style = "#EF5350"
+    line-numbers-plus-style = "#9CCC65"
+    line-numbers-zero-style = "#5F7E97"
+    file-style = "#82AAFF"
+
+[diff]
+    tool = vimdiff
+    colorMoved = default
+
+[difftool "vscode"]
+    # Two-pane diff in the running VS Code window. Invoked explicitly by
+    # lazygit's `V` custom command via --tool=vscode, so the [diff] tool
+    # default above stays vimdiff for terminal-only sessions.
+    cmd = code --wait --diff $LOCAL $REMOTE
+
+[help]
+    autocorrect = 0
+
+[https]
+    sslVerify = true
+
+[init]
+    defaultBranch = main
+
+[interactive]
+    diffFilter = delta --color-only
+
+[merge]
+    tool = vimdiff
+    conflictstyle = diff3
+
+[mergetool]
+    keepBackup = false
+
+[mergetool "vscode"]
+    # VS Code's three-way merge editor. Argument order is theirs, ours, base,
+    # result, which is what the merge editor expects. Invoked explicitly by
+    # lazygit's `<c-v>` custom command via --tool=vscode.
+    cmd = code --wait --merge $REMOTE $LOCAL $BASE $MERGED
+
+[pager]
+  diff = delta
+  log = delta
+  reflog = delta
+  show = delta
+  blame = delta
+
+[pull]
+    rebase = true
+
+[rerere]
+    enabled = true
+
+[push]
+    default = current
+	autoSetupRemote = true
+
+[user]
+	name = Nathan Vale
+	email = nathanvale@users.noreply.github.com
+[fetch]
+	prune = true
+[credential]
+	helper = osxkeychain
+[credential "https://github.com"]
+	helper = 
+	helper = !/opt/homebrew/bin/gh auth git-credential
+[credential "https://gist.github.com"]
+	helper = 
+	helper = !/opt/homebrew/bin/gh auth git-credential

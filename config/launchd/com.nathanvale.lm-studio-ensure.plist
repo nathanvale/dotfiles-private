@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.nathanvale.lm-studio-ensure</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/server/.local/bin/lm-studio-ensure.sh</string>
+  </array>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>DOTFILES_PROFILE</key>
+    <string>server</string>
+  </dict>
+
+  <key>StartInterval</key>
+  <integer>60</integer>
+
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>/Users/server/Library/Logs/lm-studio-ensure.log</string>
+
+  <key>StandardErrorPath</key>
+  <string>/Users/server/Library/Logs/lm-studio-ensure.log</string>
+</dict>
+</plist>

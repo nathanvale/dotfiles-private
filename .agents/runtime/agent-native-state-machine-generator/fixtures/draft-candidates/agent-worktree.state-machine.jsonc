@@ -1,0 +1,462 @@
+// Agent Worktree - Specification Candidate draft (UNADMITTED DRAFT)
+// Schema-insurance artifact for dotfiles issue 55: a third product
+// drafted against frozen Input Schema v1 before the first real admission
+// hardens it. The draft claims nothing: compiling, deriving, and green tests
+// never constitute Specification Admission, which is the product owner's
+// explicit act.
+//
+// Every declared meaning below is derived from the observable contracts of
+// .agents/runtime/agent-worktree (source and tests in this worktree); the
+// citing comment beside each non-obvious declaration names the owning file.
+// Where the product's policy is not observable, an unresolved_decisions entry
+// surfaces the question instead of a guess.
+//
+// Authoring rules honored (issue 55): data-only JSONC; comments explain
+// meaning and never select control flow; unresolved semantics are surfaced in
+// "unresolved_decisions" rather than invented.
+{
+	"spec_meta": {
+		"product": "agent-worktree", // model.ts AGENT_WORKTREE_PACKAGE_NAME
+		"input_schema_version": "1",
+		"product_specification_revision": "unadmitted",
+		"state_machine_definition_version": "unadmitted",
+		"public_result_schema_version": "1", // model.ts AGENT_WORKTREE_SCHEMA_VERSION
+	},
+
+	"features": {
+		// The store persists run, failure, and worktree records across
+		// invocations for recovery and handoff (store.ts createFileStore).
+		"durable_operations": true,
+		// No heartbeat, deadline, or wake machinery exists anywhere in the
+		// package; the 30-day retention threshold is a warning age, not a
+		// liveness deadline (model.ts AGENT_WORKTREE_RETENTION_WARN_AFTER_DAYS).
+		"liveness_evidence": false,
+		// No cancellation surface exists on any command.
+		"cancellation": "not_supported",
+		// Durable records carry no schema_version field and reads never check
+		// one (store.ts readJson); see unresolved_decisions.
+		"version_custody": false,
+		// Writes are gated by local repo evidence and operator confirmation,
+		// never by a remote lease or ledger.
+		"remote_authority": false,
+		"feature_gates": [],
+	},
+
+	"entities": {
+		// Durable run record: one JSON document plus one JSONL event trail per
+		// CLI invocation (store.ts writeRun).
+		"run": {
+			"identity": { "field": "runId" },
+			"storage": ".agent-worktree/runs",
+			"record": "json_document_plus_jsonl_event_trail",
+		},
+		// Durable failure record; its ref id is "<run-id>/<step-id>" (model.ts
+		// AGENT_WORKTREE_FAILURE_REF_TEMPLATE, worktrees.ts failedLifecycle).
+		"failure": {
+			"identity": { "fields": ["runId", "stepId"] },
+			"storage": ".agent-worktree/failures",
+			"record": "json_document",
+		},
+		// Durable worktree record id is "<sanitized-label>-<8-hex-path-hash>"
+		// (worktrees.ts worktreeRecordId); refresh overwrites it in place.
+		"worktree": {
+			"identity": { "field": "ref.id", "pattern": "^[A-Za-z0-9._-]+-[0-9a-f]{8}$" },
+			"storage": ".agent-worktree/worktrees",
+			"record": "json_document_overwritten_on_refresh",
+		},
+		// Per-run branch backup ref created before branch deletion (model.ts
+		// AGENT_WORKTREE_BACKUP_REF_TEMPLATE, worktrees.ts deleteWorktree).
+		"backup_ref": {
+			"identity": { "pattern": "^refs/agent-worktree/backups/" },
+			"storage": "git_ref_namespace",
+			"record": "one_ref_per_branch_per_run",
+		},
+	},
+
+	"states": {
+		// The recovery-routing pivot every run and failure envelope carries
+		// (model.ts AGENT_WORKTREE_CHANGED_STATES).
+		"changed_state": { "values": ["none", "partial", "complete", "unknown"] },
+		// Aggregate run status (store.ts AgentWorktreeRunRecord.status).
+		// "running" is declared type surface, but v1 writes the record once at
+		// command end, so only the terminal pair is ever persisted
+		// (worktrees.ts writeRun).
+		"run_status": {
+			"values": ["running", "completed", "failed"],
+			"terminal": ["completed", "failed"],
+		},
+		// Step statuses; "pending" and "skipped" are reserved v2 rows in the
+		// sealed source constant (store.ts AGENT_WORKTREE_OPERATION_STEP_STATUSES).
+		"step_status": {
+			"values": ["pending", "running", "completed", "failed", "skipped"],
+			"terminal": ["completed", "failed", "skipped"],
+		},
+		// Doctor and check status vocabulary (model.ts AGENT_WORKTREE_STATUSES).
+		"doctor_status": { "values": ["ok", "warn", "blocked", "unknown"] },
+		// Aggregate repo mutation posture (model.ts
+		// AGENT_WORKTREE_MUTATION_READINESS, doctor.ts mutationReadinessForStatus).
+		"mutation_readiness": { "values": ["ready", "blocked", "unknown"] },
+		// Git isolation for the invocation cwd; all three values come from git
+		// probes, never from stored state (discovery.ts classifyRepoIsolation).
+		"repo_isolation": {
+			"values": ["main", "linked_worktree", "submodule"],
+			"observation_sourced": ["main", "linked_worktree", "submodule"],
+		},
+		// Pure branch-safety decision table outputs (merge-intelligence.ts
+		// BranchSafetyDecision).
+		"branch_safety_disposition": { "values": ["allow", "block", "warn", "handoff"] },
+		"branch_safety_reason": {
+			"values": [
+				"protected_branch", "dirty", "checked_out_elsewhere",
+				"merged", "unmerged", "evidence_unreliable",
+			],
+		},
+		// The product's four-class recovery retry vocabulary (model.ts
+		// AGENT_WORKTREE_RECOVERY_RETRY_SAFETY). Declared here as a state
+		// because Input Schema v1 seals retry_posture.values to three postures
+		// and has no surface for "inspect_first"; see unresolved_decisions.
+		"recovery_retry_safety": {
+			"values": ["same_input_safe", "same_input_unsafe", "inspect_first", "operator_required"],
+		},
+		// Failure-record same-input retry summary (model.ts
+		// AGENT_WORKTREE_SAME_INPUT_RETRY); a hint field, never a selector.
+		"same_input_retry": {
+			"values": ["safe", "unsafe", "unknown"],
+			"role": "recovery_hint_only",
+		},
+	},
+
+	// The run journal records step-level events (store.ts
+	// AGENT_WORKTREE_OPERATION_EVENT_KINDS), but v1 synthesizes the whole
+	// trail at command end in one write (worktrees.ts writeRun and
+	// buildOperationEvents), so no durable in-flight Transition is observable.
+	// Whether the journal event kinds should be admitted as Transitions is an
+	// unresolved decision, never a draft invention.
+	"transitions": [],
+
+	"invariants": [
+		{
+			"id": "backup_before_branch_delete",
+			"holds": "delete creates the per-run backup ref before branch deletion is attempted; a failed backup skips branch deletion",
+			"consequence": "a deleted branch is always recoverable from refs/agent-worktree/backups",
+		},
+		{
+			"id": "destructive_needs_force",
+			"holds": "delete normal execution refuses without --force; preview never mutates",
+		},
+		{
+			"id": "machine_json_stdout_only",
+			"holds": "commands emit one JSON object envelope on stdout; diagnostics route to stderr or durable refs",
+		},
+		{
+			"id": "doctor_readable_map_exits_zero",
+			"holds": "doctor exits zero whenever a readable map exists; blockers and unknowns ride in structured data",
+		},
+		{
+			"id": "mutation_fails_closed_on_isolation",
+			"holds": "create and attach refuse when isolation is linked_worktree or unclassifiable; read verbs degrade to an issue instead",
+		},
+		{
+			"id": "failure_ref_survives_store_outage",
+			"holds": "a lifecycle result still carries its failure ref when the durable store write fails",
+		},
+		{
+			"id": "retention_warns_never_deletes",
+			"holds": "records and backup refs older than 30 days raise a doctor warning; nothing is pruned without a later explicit command decision",
+		},
+		{
+			"id": "partial_mutation_keeps_inspect_plan",
+			"holds": "a partial-state failure always routes to inspect_failure_ref; handoff and existing-checkout shortcuts apply only before mutation",
+		},
+	],
+
+	// The sealed lifecycle reason vocabulary verbatim (model.ts
+	// AGENT_WORKTREE_LIFECYCLE_REASONS), plus the doctor and discovery blocker
+	// tokens that reach public blocker arrays (doctor.ts repoCheck,
+	// dependenciesCheck, worktreesCheck, mutationsCheck). "merged" is declared
+	// sealed surface though it is only observed on allow paths. Doctor also
+	// emits branch-scoped composite blockers ("<branch>:<reason>") that a
+	// static vocabulary cannot carry; see unresolved_decisions.
+	"blockers": [
+		"branch_already_checked_out", "branch_already_exists", "checked_out_elsewhere",
+		"dirty", "evidence_unreliable", "gh_not_found", "gh_pr_checkout_failed",
+		"isolation_unavailable", "merged", "missing_force", "pr_fetch_failed",
+		"protected_branch", "ref_not_found", "target_not_found", "target_path_exists",
+		"unmerged", "worktree_add_failed",
+		"repo_unreadable", "git_unavailable", "worktrees_unknown",
+		"git_root_failed", "default_branch_unknown",
+	],
+
+	// Next Safe Action catalog. Every id below is an observed nextSafeAction,
+	// recovery-choice, or doctor next-action value; none is renamed to fit a
+	// generator convention. The product declares no id literally named "none"
+	// and no terminal domain stop: every refusal carries a per-failure
+	// recovery plan instead (worktrees.ts buildRecoveryPlan); see
+	// unresolved_decisions.
+	"actions": {
+		"kinds": ["invoke", "needs_input", "needs_human", "none"],
+		// The product's sealed human-handoff reasons (model.ts
+		// AGENT_WORKTREE_HUMAN_HANDOFF_REASONS) stand in as needs_human kinds;
+		// the pairing per entry below is the observed call-site pairing, and
+		// the runtime variability is an unresolved decision.
+		"needs_human_kinds": [
+			"destructive_confirmation", "dirty_state", "unreliable_evidence",
+			"partial_mutation", "isolation_unavailable",
+		],
+		"catalog": [
+			// Command invocations observed as next-action values (worktrees.ts
+			// lifecycle results, doctor.ts nextActions, inspect.ts nextSafeActions).
+			{ "id": "doctor", "kind": "invoke" },
+			{ "id": "list", "kind": "invoke" },
+			{ "id": "status", "kind": "invoke" },
+			{ "id": "check", "kind": "invoke", "requires_context": ["branch"] },
+			{ "id": "clean", "kind": "invoke" },
+			{ "id": "recover", "kind": "invoke", "requires_context": ["ref"] },
+			{ "id": "refresh", "kind": "invoke" },
+			{ "id": "inspect", "kind": "invoke", "requires_context": ["ref"] },
+			{ "id": "handoff", "kind": "invoke" },
+			{ "id": "create", "kind": "invoke", "requires_context": ["branch"] },
+			{ "id": "attach", "kind": "invoke", "requires_context": ["ref"] },
+			{ "id": "delete", "kind": "invoke", "requires_context": ["branch"] },
+			// Recovery-plan choice ids (worktrees.ts buildRecoveryPlan).
+			{ "id": "inspect_failure_ref", "kind": "invoke", "requires_context": ["failure_ref"] },
+			{ "id": "inspect_result", "kind": "invoke" },
+			{
+				"id": "inspect_first", "kind": "invoke",
+				"note": "inspect the durable ref before any retry; the inspect_first retry class never blind-retries",
+			},
+			{ "id": "retry_same_input", "kind": "invoke" },
+			// Usage errors and unmutated refusals ask for corrected input
+			// (cli.ts usage hint action "change_input", worktrees.ts
+			// refNotFoundRefusal).
+			{ "id": "change_input", "kind": "needs_input" },
+			// Isolation-unavailable plan: the operator resolves the environment
+			// (worktrees.ts isolationRefusal, buildRecoveryPlan).
+			{ "id": "stop_and_resolve_environment", "kind": "needs_human", "human_kind": "isolation_unavailable" },
+			// Observed pairing in the unknown-changed-state plan branch
+			// (worktrees.ts buildRecoveryPlan); other call sites pair the same
+			// id with dirty_state, unreliable_evidence, or
+			// destructive_confirmation - see unresolved_decisions.
+			{ "id": "operator_handoff", "kind": "needs_human", "human_kind": "partial_mutation" },
+			// The current agent stops using this product and continues its work
+			// elsewhere: in the checkout it already has, or in the existing
+			// checkout the plan names (worktrees.ts isolationRefusal,
+			// branchCheckoutRefusal).
+			{ "id": "work_in_current_checkout", "kind": "none", "stop_scope": "agent_terminal" },
+			{
+				"id": "use_existing_checkout", "kind": "none", "stop_scope": "agent_terminal",
+				"note": "the recovery choice carries the existing checkout path",
+			},
+		],
+	},
+
+	"selectors": {
+		// Typed ref grammar "<kind>:<id>" with sealed kinds and no ".."
+		// traversal (inspect.ts parseAgentWorktreeRef, model.ts
+		// AGENT_WORKTREE_REF_KINDS).
+		"typed_ref": "^(worktree|run|failure):(?!.*\\.\\.).+$",
+		"backup_ref": "^refs/agent-worktree/backups/.+/.+$",
+	},
+
+	"retry_posture": {
+		// Sealed Input Schema v1 vocabulary. The product's fourth class,
+		// "inspect_first", cannot be declared here; see states.recovery_retry_safety
+		// and unresolved_decisions.
+		"values": ["same_input_safe", "same_input_unsafe", "operator_required"],
+		// Ordered, first match wins. Completed mutations refuse an identical
+		// rerun (the branch is then already checked out), which
+		// buildRecoveryPlan encodes as inspect_result with same_input_unsafe.
+		// Read commands repeat the identical observation. Per-reason failure
+		// postures (classifyWorktreeAddFailure) are not expressible in v1 and
+		// are deliberately not restated as rules.
+		"rules": [
+			{ "when": { "command": "create", "result_kind": "success" }, "then": "same_input_unsafe" },
+			{ "when": { "command": "attach", "result_kind": "success" }, "then": "same_input_unsafe" },
+			{ "when": { "command": "delete", "result_kind": "success" }, "then": "same_input_unsafe" },
+			{ "when": { "command": "refresh", "result_kind": "success" }, "then": "same_input_unsafe" },
+			{ "when": { "command": "doctor" }, "then": "same_input_safe" },
+			{ "when": { "command": "list" }, "then": "same_input_safe" },
+			{ "when": { "command": "status" }, "then": "same_input_safe" },
+			{ "when": { "command": "check" }, "then": "same_input_safe" },
+			{ "when": { "command": "clean" }, "then": "same_input_safe" },
+			{ "when": { "command": "recover" }, "then": "same_input_safe" },
+			{ "when": { "command": "inspect" }, "then": "same_input_safe" },
+			{ "when": { "command": "handoff" }, "then": "same_input_safe" },
+			{ "when": { "command": "commands" }, "then": "same_input_safe" },
+		],
+		// Partial and unknown changed-states never blind-retry: partial routes
+		// to inspect_failure_ref, unknown to operator_handoff (worktrees.ts
+		// buildRecoveryPlan).
+		"never_auto_retry": ["changed_state_partial", "changed_state_unknown"],
+		// Each failure record carries its own retry summary (model.ts
+		// AGENT_WORKTREE_FAILURE_RECORD_FIELDS).
+		"per_hint_field": "same_input_retry",
+	},
+
+	"acknowledgement": {
+		// Durable knowledge of a run's outcome: the persisted run status pair
+		// plus the persisted "unknown" changed-state (store.ts
+		// AgentWorktreeRunRecord).
+		"values": ["completed", "failed", "unknown"],
+		// An unknown changed-state transfers the choice to an operator and is
+		// never blind-retried (worktrees.ts buildRecoveryPlan unknown branch).
+		"unknown_policy": "operator_handoff_never_blind_retry",
+	},
+
+	"waits": {
+		// No scheduler exists; all continuation is a caller re-invoking the CLI.
+		"wake_route": "caller_reinvocation",
+		"budgets_ms": {},
+		"missed_deadline_causes": {},
+	},
+
+	"cancellation": { "all": "not_supported" },
+
+	"authority": {
+		// No single owner is declared by the product. Mutation permission is
+		// an aggregate: repo isolation must classify as main (worktrees.ts
+		// createWorktree, attachWorktree), the branch-safety decision must
+		// allow (merge-intelligence.ts classifyBranchSafety), and destructive
+		// execution additionally needs the operator's --force confirmation
+		// (cli.ts delete routing). Naming one admitted owner is an unresolved
+		// decision.
+		"write_authority_owner": "local_repo_evidence_and_operator_confirmation",
+		"scope": "create, attach, refresh write after isolation checks; delete additionally needs --force plus an allow disposition; reads need no authority",
+	},
+
+	"command_surface": {
+		// model.ts AGENT_WORKTREE_COMMANDS, in package order.
+		"commands": [
+			"doctor", "list", "create", "attach", "status", "check", "delete",
+			"clean", "recover", "refresh", "inspect", "handoff", "commands",
+		],
+		// command-contract.ts exitCodes.
+		"exit_codes": {
+			"0": "command_succeeded",
+			"1": "runtime_failure",
+			"2": "usage_or_input_error",
+		},
+		// cli.ts main handles these before any command routing.
+		"global_flags": ["--help", "-h", "--version"],
+		"output_modes_default": ["json"],
+		"output_modes_overrides": {},
+		// Bare invocation renders command usage text and exits zero (cli.ts
+		// main, argv.length === 0); the rendered command is a generator-visible
+		// binding question - see unresolved_decisions.
+		"no_argument_behavior": "help",
+		// Exact flag spellings from command-contract.ts. --repo, --base, --pr,
+		// --ref, --limit, --fields, and --select take values; Input Schema v1
+		// records spellings only - see unresolved_decisions.
+		"flags": {
+			"doctor": ["--repo", "--json", "--limit", "--fields", "--select"],
+			"list": ["--repo", "--json", "--limit", "--fields", "--select"],
+			"create": ["--repo", "--dry-run", "--json", "--base"],
+			"attach": ["--repo", "--dry-run", "--json", "--pr", "--track"],
+			"status": ["--repo", "--json", "--limit", "--fields", "--select"],
+			"check": ["--repo", "--json"],
+			"delete": ["--repo", "--dry-run", "--json", "--force", "--delete-branch"],
+			"clean": ["--repo", "--json", "--preview", "--limit", "--fields", "--select"],
+			"recover": ["--repo", "--json", "--dry-run", "--ref"],
+			"refresh": ["--repo", "--dry-run", "--json"],
+			"inspect": ["--repo", "--json", "--ref"],
+			"handoff": ["--repo", "--json", "--limit", "--fields", "--select"],
+			"commands": ["--json"],
+		},
+		// Nearest sealed mutation kinds for the facade's check/write/destructive
+		// classes (command-contract.ts). attach matches remote_write exactly
+		// (side effects read, check, network, write). delete is "destructive"
+		// in the facade, a class v1 does not seal; local_write is the nearest
+		// declared kind and the loss is an unresolved decision. recover and
+		// clean are preview-only reads in v1.
+		"mutations": {
+			"doctor": "read", "list": "read", "status": "read", "check": "read",
+			"clean": "read", "recover": "read", "inspect": "read", "handoff": "read",
+			"commands": "read",
+			"create": "local_write", "attach": "remote_write",
+			"refresh": "local_write", "delete": "local_write",
+		},
+		// command-contract.ts: every command shares the lifecycle result
+		// contract except commands, which carries discovery metadata.
+		"result_contracts": {
+			"lifecycle": { "id": "agent-worktree.lifecycle", "version": 1 },
+			"commands": { "id": "agent-worktree.commands", "version": 1 },
+		},
+	},
+
+	"versioning": {
+		// Durable records persist without any version field (store.ts record
+		// interfaces), so there is nothing to declare; see unresolved_decisions.
+		"records": {},
+		"incompatible_run_policy": "not_applicable",
+	},
+
+	// Semantics the product's code and tests do not decide, and schema surface
+	// Input Schema v1 lacks. Issue 55 requires these surfaced, never invented.
+	// Each needs a product-owner decision before admission.
+	"unresolved_decisions": [
+		{
+			"id": "inspect_first_retry_posture",
+			"question": "The product's recovery vocabulary has four classes including inspect_first (model.ts AGENT_WORKTREE_RECOVERY_RETRY_SAFETY); retry_posture.values is sealed to three. Should the sealed vocabulary grow, or does inspect_first map onto an admitted posture?",
+		},
+		{
+			"id": "per_reason_recovery_routing",
+			"question": "Failure recovery routes per lifecycle reason and changed-state (worktrees.ts buildRecoveryPlan, classifyWorktreeAddFailure): each reason selects its own next action, retry class, and handoff reason. v1 has no blocker-to-action or blocker-to-posture surface, so none of this table is declarable. Admit a mapping surface, or accept refusal-station derivation failure?",
+		},
+		{
+			"id": "no_terminal_none_id",
+			"question": "The derivation convention resolves refusal and incomplete rows to a catalog id literally named \"none\". agent-worktree declares no such id: every refusal carries a named recovery plan instead. Should a terminal none id be admitted, or should v1 gain per-station action bindings?",
+		},
+		{
+			"id": "success_action_binding_convention",
+			"question": "v1 binds a success station to the invoke action whose id ends with \"_<command>\" (a vault-git naming style). agent-worktree's action ids are the bare command names, so no success station can bind. Should the binding become declared surface instead of a naming convention?",
+		},
+		{
+			"id": "execution_modes_declared_but_undeclarable",
+			"question": "The product declares executionModes dry_run/normal and a --dry-run flag on every write command (command-contract.ts), yet v1 has no execution-mode surface, so create, attach, refresh, and delete refuse emission with emit_write_preview_undeclarable. Admit the execution-mode surface the stage-5 worklist already carries?",
+		},
+		{
+			"id": "destructive_mutation_class",
+			"question": "The facade seals mutation-intent classes check/write/destructive (command-contract.ts AgentWorktreeMutation); v1 seals read/preview/remote_write/local_write/recovery. delete's destructive class and its force-confirmation obligation have no v1 counterpart. Extend the sealed mutation kinds, or record destructive-ness elsewhere?",
+		},
+		{
+			"id": "bare_invocation_binding",
+			"question": "Bare invocation renders usage for the doctor contract and exits zero (cli.ts main), but v1 has no bare-invocation binding field and the generator's help convention expects a command named \"help\". Which command should the admitted binding name?",
+		},
+		{
+			"id": "changed_state_column",
+			"question": "Every run and failure envelope pivots recovery on changed_state none/partial/complete/unknown (model.ts), but v1 expectation rows have no changed-state column. Should the semantic expectation table carry one?",
+		},
+		{
+			"id": "per_failure_human_kind",
+			"question": "The schema binds one human_kind per action entry, but operator_handoff's handoff reason varies per failure at runtime (worktrees.ts handoffReasonForDecision pairs it with dirty_state, unreliable_evidence, or destructive_confirmation). Should human_kind become per-station or per-blocker surface?",
+		},
+		{
+			"id": "write_authority_owner_aggregate",
+			"question": "No single write-authority owner is declared by the product; this draft names the evidence aggregate. Which admitted owner should the specification name?",
+		},
+		{
+			"id": "logical_operation_identity",
+			"question": "Each invocation mints a fresh run id (cli.ts runId from the facade); no identity spans retries of the same intended outcome, so Exact Same-Input Retry Safety has no Logical Operation to anchor to. Should a logical-operation identity be added to the product, or is the failure ref the admitted anchor?",
+		},
+		{
+			"id": "journal_event_transitions",
+			"question": "The run journal's five event kinds (store.ts AGENT_WORKTREE_OPERATION_EVENT_KINDS) record step-level state changes, but v1 records are written once post hoc. Should the event kinds be admitted as Transitions, and if so against which phase vocabulary?",
+		},
+		{
+			"id": "unversioned_durable_records",
+			"question": "Durable records carry no schema_version and reads never check one (store.ts), while the envelope declares schema version 1 (model.ts). What is the incompatible-record read policy, and should version_custody become true?",
+		},
+		{
+			"id": "retention_policy_surface",
+			"question": "The 30-day warn-only retention threshold (model.ts, doctor.ts storeCheck) is neither a wait budget nor a version policy; v1 has no surface for retention. Where should it live?",
+		},
+		{
+			"id": "value_taking_flags",
+			"question": "v1 records flag spellings only and the generator emits every flag as boolean; --repo, --base, --pr, --ref, --limit, --fields, and --select take values (command-contract.ts). Should flag types become declared surface?",
+		},
+		{
+			"id": "composite_doctor_blockers",
+			"question": "Doctor emits branch-scoped composite blocker strings such as \"<branch>:dirty\" (doctor.ts mutationsCheck); the blockers vocabulary is a static list. Should composite blockers be admitted as a template surface, or flattened?",
+		},
+	],
+}
