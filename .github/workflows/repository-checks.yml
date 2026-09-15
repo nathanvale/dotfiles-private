@@ -29,6 +29,33 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
+      - name: Prepare the pinned Bun CLI template
+        shell: bash
+        env:
+          TEMPLATE_DEPLOY_KEY: ${{ secrets.CLI_TEMPLATE_DEPLOY_KEY }}
+          TEMPLATE_REVISION: 595273415c47f21ae2b149a6b29e4a3d67af365c
+        run: |
+          if [[ -z "$TEMPLATE_DEPLOY_KEY" ]]; then
+            echo "CLI_TEMPLATE_DEPLOY_KEY is required to read the pinned private template." >&2
+            exit 1
+          fi
+          ssh_root="$RUNNER_TEMP/cli-template-ssh"
+          template_root="$RUNNER_TEMP/bun-typescript-template"
+          install -d -m 0700 "$ssh_root"
+          printf '%s\n' "$TEMPLATE_DEPLOY_KEY" > "$ssh_root/key"
+          chmod 0600 "$ssh_root/key"
+          trap 'rm -f "$ssh_root/key"' EXIT
+          ssh-keyscan -t ed25519 github.com > "$ssh_root/known_hosts" 2>/dev/null
+          chmod 0600 "$ssh_root/known_hosts"
+          test "$(ssh-keygen -lf "$ssh_root/known_hosts" -E sha256 | awk '{print $2}')" = \
+            "SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU"
+          git init --quiet "$template_root"
+          git -C "$template_root" remote add origin git@github.com:nathanvale/bun-typescript-template.git
+          GIT_SSH_COMMAND="ssh -i $ssh_root/key -o IdentitiesOnly=yes -o UserKnownHostsFile=$ssh_root/known_hosts" \
+            git -C "$template_root" fetch --quiet --depth=1 origin "$TEMPLATE_REVISION"
+          git -C "$template_root" checkout --quiet --detach FETCH_HEAD
+          test "$(git -C "$template_root" rev-parse HEAD)" = "$TEMPLATE_REVISION"
+          printf 'BUN_TYPESCRIPT_TEMPLATE_TEST_ROOT=%s\n' "$template_root" >> "$GITHUB_ENV"
       - name: Validate the event's immutable comparison base
         shell: bash
         run: |
