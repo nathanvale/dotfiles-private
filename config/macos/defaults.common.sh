@@ -218,7 +218,15 @@ set_preferences() {
     run defaults write com.apple.helpviewer DevMode -bool true                            # Non-floating Help windows
 
     # ── Mail ──────────────────────────────────────
-    run defaults write com.apple.mail AddressesIncludeNameOnPasteboard -bool false         # Copy email as address only
+    # Mail creates its sandbox preferences only after first launch. A headless
+    # server does not have that container, so preserve the rest of setup and
+    # leave this desktop-only preference for a later interactive run.
+    local mail_preferences_dir="$HOME/Library/Containers/com.apple.mail/Data/Library/Preferences"
+    if [[ -d "$mail_preferences_dir" ]]; then
+        run defaults write com.apple.mail AddressesIncludeNameOnPasteboard -bool false     # Copy email as address only
+    else
+        log "$WARNING" "Mail preference skipped: Mail has not created its preferences yet"
+    fi
 
     # ── Safari (requires Full Disk Access) ───────
     log "$INFO" ""
