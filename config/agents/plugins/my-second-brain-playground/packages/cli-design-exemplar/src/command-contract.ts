@@ -88,6 +88,7 @@ const CLI_OPTIONS = {
 	"retry-once": { type: "boolean", valueName: null, summary: "Permit one bounded transient retry" },
 	automation: { type: "boolean", valueName: null, summary: "Declare unattended invocation" },
 	"include-diagnostics": { type: "boolean", valueName: null, summary: "Include redacted diagnostic fields" },
+	"deadline-ms": { type: "string", valueName: "positive-integer", summary: "Stop starting work after this operation deadline" },
 } as const satisfies Record<string, ParseArgsOptionsConfig[string] & { valueName: string | null; summary: string }>
 export type OptionName = keyof typeof CLI_OPTIONS
 // Object.fromEntries erases literal keys; this projection preserves each declaration's parser type.
@@ -119,12 +120,12 @@ const COMMAND_DECLARATIONS = defineCommands([
 	{ commandIdentity: "repair-lab.inspect", route: ["inspect"], effectClass: "inspect", summary: "Inspect the resource and preview readiness", routes: [{ route: "inspect", word: "inspect", allowedOptions: ["json", "state"], requiredOptions: [] }] },
 	{ commandIdentity: "repair-lab.inspect-diagnostics", route: ["inspect", "--include-diagnostics"], effectClass: "inspect", summary: "Inspect with redacted diagnostic fields", routes: [{ route: "inspect-diagnostics", word: "inspect", allowedOptions: ["json", "state", "include-diagnostics"], requiredOptions: ["include-diagnostics"] }] },
 	{ commandIdentity: "repair-lab.preview", route: ["apply", "--preview"], effectClass: "repository-local", summary: "Write an apply preview without mutating domain state", routes: [{ route: "preview", word: "apply", allowedOptions: ["json", "preview"], requiredOptions: ["preview"] }] },
-	{ commandIdentity: "repair-lab.apply", route: ["apply"], effectClass: "repository-local", summary: "Apply a fresh preview with fixture-local authority", routes: [{ route: "apply", word: "apply", allowedOptions: ["json", "preview-id", "authorize", "automation"], requiredOptions: [] }] },
+	{ commandIdentity: "repair-lab.apply", route: ["apply"], effectClass: "repository-local", summary: "Apply a fresh preview with fixture-local authority", routes: [{ route: "apply", word: "apply", allowedOptions: ["json", "preview-id", "authorize", "automation", "deadline-ms"], requiredOptions: [] }] },
 	{ commandIdentity: "repair-lab.repair", route: ["repair"], effectClass: "repository-local", summary: "Preview or apply a repair of the derived index", routes: [
 		{ route: "repair-preview", word: "repair", allowedOptions: ["json", "preview"], requiredOptions: ["preview"] },
-		{ route: "repair", word: "repair", allowedOptions: ["json", "apply", "preview-id", "authorize", "automation"], requiredOptions: ["apply"] },
+		{ route: "repair", word: "repair", allowedOptions: ["json", "apply", "preview-id", "authorize", "automation", "deadline-ms"], requiredOptions: ["apply"] },
 	] },
-	{ commandIdentity: "repair-lab.repair-retry", route: ["repair", "--retry-once"], effectClass: "repository-local", summary: "Apply a repair with one bounded transient retry", routes: [{ route: "repair-retry", word: "repair", allowedOptions: ["json", "apply", "retry-once", "authorize", "automation"], requiredOptions: ["apply", "retry-once"] }] },
+	{ commandIdentity: "repair-lab.repair-retry", route: ["repair", "--retry-once"], effectClass: "repository-local", summary: "Apply a repair with one bounded transient retry", routes: [{ route: "repair-retry", word: "repair", allowedOptions: ["json", "apply", "retry-once", "authorize", "automation", "deadline-ms"], requiredOptions: ["apply", "retry-once"] }] },
 	{ commandIdentity: "repair-lab.recover", route: ["recover"], effectClass: "repository-local", summary: "Read the journal and resource to report recovery state", routes: [{ route: "recover", word: "recover", allowedOptions: ["json"], requiredOptions: [] }] },
 ])
 

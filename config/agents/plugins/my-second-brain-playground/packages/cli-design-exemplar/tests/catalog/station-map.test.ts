@@ -1,11 +1,11 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { declaredStation, STATION_IDS, stationIdOf, stationIdOfRow } from "../../src/branch-station-catalog.ts"
 import { type Handoff, STATIONS } from "../../src/command-contract.ts"
 import { BRANCH_STATIONS, type CatalogueDeclaration, type CatalogueObservation, type PublicStation, validateCatalogue } from "../../src/station-catalogue.ts"
 import { defineStationRows } from "../../src/station-rows.ts"
-import { APPLY_EVENT_PAYLOAD, createRoot, envelopeOf, fillJournal, frameLine, linkOutside, linkStateFile, readOnlyJournal, removeRoot, type Root, runCli, type Variant } from "../helpers/harness.ts"
+import { APPLY_EVENT_PAYLOAD, createRoot, envelopeOf, fillJournal, frameLine, journalRecords, linkOutside, linkStateFile, MAIN, readOnlyJournal, readState, removeRoot, REVISION_5_RESOURCE, type Root, runCli, type Run, type Variant } from "../helpers/harness.ts"
 import { expectedStation } from "./expected-station-semantics.ts"
 
 // Independent oracle (CDS-PE-4; brief 12, section 5): EXPECTED_STATIONS is restated from the fixture's station_catalog,
@@ -35,6 +35,9 @@ interface Signature {
 const EXPECTED_STATIONS = new Map<string, Signature>()
 const HANDOFF_CAUSES = new Set([
 	"DOMAIN_AUTHORITY_REQUIRED",
+	"DOMAIN_DEADLINE_COMPLETED",
+	"DOMAIN_DEADLINE_PARTIAL",
+	"DOMAIN_DEADLINE_UNKNOWN",
 	"DOMAIN_RECOVERY_HANDOFF_REQUIRED",
 	"DOMAIN_RECOVERY_PARTIAL_HANDOFF",
 	"DOMAIN_PRIOR_RUN_PENDING",
@@ -53,6 +56,11 @@ const FAILURE_CLASS_BY_CAUSE: Readonly<Record<string, Exclude<FailureClass, null
 	SCHEMA_INVALID_INPUT: "schema",
 	DOMAIN_PRECONDITION_UNMET: "domain",
 	DOMAIN_AUTHORITY_REQUIRED: "domain",
+	DOMAIN_DEADLINE_BEFORE_START: "domain",
+	DOMAIN_DEADLINE_UNCHANGED: "domain",
+	DOMAIN_DEADLINE_COMPLETED: "domain",
+	DOMAIN_DEADLINE_PARTIAL: "domain",
+	DOMAIN_DEADLINE_UNKNOWN: "domain",
 	DOMAIN_RECOVERY_HANDOFF_REQUIRED: "domain",
 	DOMAIN_RECOVERY_PARTIAL_HANDOFF: "domain",
 	DOMAIN_PRIOR_RUN_PENDING: "domain",
@@ -179,6 +187,25 @@ for (const identity of WRITERS) {
 declare("recover", "failed", "DOMAIN_RECOVERY_PARTIAL_HANDOFF", { transactionState: "partially-completed", retryable: false, delay: null, exit: 3, label: "repair-lab.partial-handoff" })
 fallback("recover", "failed", "INTERNAL_RESULT_PARTIAL", "partially-completed")
 
+// O3 (CDS-LO-3): these fifteen literals restate the accepted C0 deadline matrix. They are intentionally independent
+// of src/station-rows.ts and of production guidance/catalogue owners.
+const deadline = (identity: Extract<Identity, "apply" | "repair" | "repair-retry">, outcome: Extract<Outcome, "refused" | "failed">, cause: "DOMAIN_DEADLINE_BEFORE_START" | "DOMAIN_DEADLINE_UNCHANGED" | "DOMAIN_DEADLINE_COMPLETED" | "DOMAIN_DEADLINE_PARTIAL" | "DOMAIN_DEADLINE_UNKNOWN", transactionState: State): void => declare(identity, outcome, cause, { transactionState, retryable: false, delay: null, exit: 3, label: null })
+deadline("apply", "refused", "DOMAIN_DEADLINE_BEFORE_START", "unchanged")
+deadline("apply", "failed", "DOMAIN_DEADLINE_UNCHANGED", "unchanged")
+deadline("apply", "failed", "DOMAIN_DEADLINE_COMPLETED", "completed")
+deadline("apply", "failed", "DOMAIN_DEADLINE_PARTIAL", "partially-completed")
+deadline("apply", "failed", "DOMAIN_DEADLINE_UNKNOWN", "unknown")
+deadline("repair", "refused", "DOMAIN_DEADLINE_BEFORE_START", "unchanged")
+deadline("repair", "failed", "DOMAIN_DEADLINE_UNCHANGED", "unchanged")
+deadline("repair", "failed", "DOMAIN_DEADLINE_COMPLETED", "completed")
+deadline("repair", "failed", "DOMAIN_DEADLINE_PARTIAL", "partially-completed")
+deadline("repair", "failed", "DOMAIN_DEADLINE_UNKNOWN", "unknown")
+deadline("repair-retry", "refused", "DOMAIN_DEADLINE_BEFORE_START", "unchanged")
+deadline("repair-retry", "failed", "DOMAIN_DEADLINE_UNCHANGED", "unchanged")
+deadline("repair-retry", "failed", "DOMAIN_DEADLINE_COMPLETED", "completed")
+deadline("repair-retry", "failed", "DOMAIN_DEADLINE_PARTIAL", "partially-completed")
+deadline("repair-retry", "failed", "DOMAIN_DEADLINE_UNKNOWN", "unknown")
+
 // Binding table: (tuple, argv, variant, fault, setup, before) with the expected transaction state and guidance per scenario.
 // B1 (accepted C0 template rule): one next action per derived identity, so the preview-id, repairable-precondition and
 // preview-missing scenarios now expect the conservative read-only inspect route instead of scenario-specific text.
@@ -191,10 +218,20 @@ interface Binding {
 	setup?: Setup
 	before?: string[]
 	env?: Record<string, string>
+	lifecycleMode?: DeadlineMode
+	directEffectState?: State
+	expectedEffects?: EffectInventory
 	transactionState: State
 	guidance: Guidance
 	nextAction?: string
 }
+interface EffectInventory {
+	completed: string[]
+	remaining: string[]
+	uncertain: string[]
+	inventoryComplete: boolean
+}
+type DeadlineMode = "deadline-before-start" | "deadline-unchanged" | "deadline-completed" | "deadline-partial" | "deadline-unknown"
 const U = "effect.update-index"
 const J = "effect.write-journal"
 const R = "effect.repair-cache"
@@ -207,6 +244,7 @@ const CYCLE = "egress-non-json:cycle"
 const INSPECT = "repair-lab inspect"
 const RECOVER = "repair-lab recover"
 const HELP = "repair-lab --help"
+const PRELOAD = resolve(import.meta.dir, "../helpers/process-lifecycle-preload.ts")
 const b = (tuple: string, argv: string[], variant: Variant, rest: Partial<Binding> & { transactionState: State; guidance: Guidance }): Binding => {
 	const decoded = JSON.parse(tuple) as [string, string, string | null]
 	const cause = decoded[2] ?? ""
@@ -215,6 +253,14 @@ const b = (tuple: string, argv: string[], variant: Variant, rest: Partial<Bindin
 	return { tuple, argv, variant, ...handoffBinding, guidance: "handoff" }
 }
 const un = (tuple: string, argv: string[], variant: Variant, rest: Partial<Binding> = {}): Binding => b(tuple, argv, variant, { transactionState: "unchanged", guidance: "next-action", nextAction: INSPECT, ...rest })
+const deadlineEffects = (state: State, effects: readonly [string, string]): EffectInventory => {
+	const [first, second] = effects
+	if (state === "unchanged") return { completed: [], remaining: [first, second], uncertain: [], inventoryComplete: true }
+	if (state === "completed") return { completed: [first, second], remaining: [], uncertain: [], inventoryComplete: true }
+	if (state === "partially-completed") return { completed: [first], remaining: [second], uncertain: [], inventoryComplete: true }
+	return { completed: [first], remaining: [], uncertain: [second], inventoryComplete: true }
+}
+const deadlineBinding = (identity: Extract<Identity, "apply" | "repair" | "repair-retry">, argv: string[], variant: Variant, mode: DeadlineMode, outcome: Extract<Outcome, "refused" | "failed">, cause: "DOMAIN_DEADLINE_BEFORE_START" | "DOMAIN_DEADLINE_UNCHANGED" | "DOMAIN_DEADLINE_COMPLETED" | "DOMAIN_DEADLINE_PARTIAL" | "DOMAIN_DEADLINE_UNKNOWN", directEffectState: State, effects: readonly [string, string], fault?: string): Binding => b(id(identity, outcome, cause), [...argv, "--deadline-ms", "1"], variant, { transactionState: directEffectState, guidance: "next-action", nextAction: INSPECT, lifecycleMode: mode, directEffectState, expectedEffects: deadlineEffects(directEffectState, effects), ...(fault === undefined ? {} : { fault }) })
 const DISCOVER_COMMAND = ["--discover-command", "repair-lab.apply"]
 const ROUTE_ARGV: Record<Identity, string[]> = { dispatch: [], help: ["--help"], discovery: ["--discover"], "command-discovery": DISCOVER_COMMAND, status: ["status"], inspect: ["inspect"], "inspect-diagnostics": ["inspect", "--include-diagnostics"], preview: ["apply", "--preview"], apply: APPLY, repair: REPAIR, "repair-retry": RETRY, recover: ["recover"] }
 
@@ -338,6 +384,23 @@ const BINDINGS: Binding[] = [
 	...ROUTED.map((identity) => un(id(identity, "refused", "SCHEMA_INVALID_INPUT"), ROUTE_ARGV[identity], identity === "apply" ? "healthy-with-fresh-preview" : identity === "repair" || identity === "repair-retry" ? "derived-index-missing-with-fresh-preview" : "healthy", { setup: "corrupt-journal" })),
 	b(id("recover", "failed", "DOMAIN_RECOVERY_PARTIAL_HANDOFF"), ["recover"], "partial-after-halt", { transactionState: "partially-completed", guidance: "handoff" }),
 	b(id("recover", "failed", "INTERNAL_RESULT_PARTIAL"), ["recover"], "partial-after-halt", { fault: CYCLE, transactionState: "partially-completed", guidance: "handoff" }),
+	// O3: real, preloaded deadline process rows. The effect lists and direct resource/journal witnesses are literal test
+	// facts, so an envelope cannot assert an unchanged, retryable, or different effect state without failing here.
+	deadlineBinding("apply", APPLY, "healthy-with-fresh-preview", "deadline-before-start", "refused", "DOMAIN_DEADLINE_BEFORE_START", "unchanged", [U, J]),
+	deadlineBinding("apply", APPLY, "healthy-with-fresh-preview", "deadline-unchanged", "failed", "DOMAIN_DEADLINE_UNCHANGED", "unchanged", [U, J]),
+	deadlineBinding("apply", APPLY, "healthy-with-fresh-preview", "deadline-completed", "failed", "DOMAIN_DEADLINE_COMPLETED", "completed", [U, J]),
+	deadlineBinding("apply", APPLY, "healthy-with-fresh-preview", "deadline-partial", "failed", "DOMAIN_DEADLINE_PARTIAL", "partially-completed", [U, J]),
+	deadlineBinding("apply", APPLY, "healthy-with-fresh-preview", "deadline-unknown", "failed", "DOMAIN_DEADLINE_UNKNOWN", "unknown", [U, J], "effect.write-journal-outcome-unknown"),
+	deadlineBinding("repair", REPAIR, "derived-index-missing-with-fresh-preview", "deadline-before-start", "refused", "DOMAIN_DEADLINE_BEFORE_START", "unchanged", [R, J]),
+	deadlineBinding("repair", REPAIR, "derived-index-missing-with-fresh-preview", "deadline-unchanged", "failed", "DOMAIN_DEADLINE_UNCHANGED", "unchanged", [R, J]),
+	deadlineBinding("repair", REPAIR, "derived-index-missing-with-fresh-preview", "deadline-completed", "failed", "DOMAIN_DEADLINE_COMPLETED", "completed", [R, J]),
+	deadlineBinding("repair", REPAIR, "derived-index-missing-with-fresh-preview", "deadline-partial", "failed", "DOMAIN_DEADLINE_PARTIAL", "partially-completed", [R, J]),
+	deadlineBinding("repair", REPAIR, "derived-index-missing-with-fresh-preview", "deadline-unknown", "failed", "DOMAIN_DEADLINE_UNKNOWN", "unknown", [R, J], "effect.write-journal-outcome-unknown"),
+	deadlineBinding("repair-retry", RETRY, "derived-index-missing-with-fresh-preview", "deadline-before-start", "refused", "DOMAIN_DEADLINE_BEFORE_START", "unchanged", [R, J]),
+	deadlineBinding("repair-retry", RETRY, "derived-index-missing-with-fresh-preview", "deadline-unchanged", "failed", "DOMAIN_DEADLINE_UNCHANGED", "unchanged", [R, J]),
+	deadlineBinding("repair-retry", RETRY, "derived-index-missing-with-fresh-preview", "deadline-completed", "failed", "DOMAIN_DEADLINE_COMPLETED", "completed", [R, J]),
+	deadlineBinding("repair-retry", RETRY, "derived-index-missing-with-fresh-preview", "deadline-partial", "failed", "DOMAIN_DEADLINE_PARTIAL", "partially-completed", [R, J]),
+	deadlineBinding("repair-retry", RETRY, "derived-index-missing-with-fresh-preview", "deadline-unknown", "failed", "DOMAIN_DEADLINE_UNKNOWN", "unknown", [R, J], "effect.write-journal-outcome-unknown"),
 ]
 
 function applySetup(root: Root, setup: Setup | undefined): void {
@@ -386,6 +449,7 @@ interface Observation {
 	tuple: string
 	envelope: Record<string, unknown>
 	exit: number
+	directEffectState?: State
 }
 
 const observations: Observation[] = []
@@ -397,20 +461,60 @@ afterAll(() => {
 // Readable scenario prefix for the tuple expectation: argv, variant, and the fault or setup that shaped the run.
 const scenarioLabel = (binding: Binding): string => `${binding.argv.join(" ")} [${binding.variant}${binding.fault === undefined ? "" : ` ${binding.fault}`}${binding.setup === undefined ? "" : ` ${binding.setup}`}]`
 
+async function runDeadlineProcess(root: Root, binding: Binding): Promise<Run> {
+	if (binding.lifecycleMode === undefined) throw new Error("deadline process requires a lifecycle mode")
+	const env = {
+		PATH: process.env.PATH ?? "",
+		HOME: root.privateRoot,
+		XDG_STATE_HOME: join(root.privateRoot, "state"),
+		NO_COLOR: "1",
+		TERM: "dumb",
+		O3_CONTROL: root.privateRoot,
+		O3_MODE: binding.lifecycleMode,
+		...(binding.fault === undefined ? {} : { REPAIR_LAB_FAULT: binding.fault }),
+		...(binding.env ?? {}),
+	}
+	const child = Bun.spawn([process.execPath, "--preload", PRELOAD, MAIN, ...binding.argv, "--json"], { cwd: root.root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+	const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+	return { stdout, stderr, exit, signal: child.signalCode }
+}
+
+function directDeadlineState(root: Root, before: ReturnType<typeof readState>, binding: Binding): State {
+	const expected = binding.expectedEffects
+	const state = binding.directEffectState
+	if (expected === undefined || state === undefined) throw new Error(`deadline binding lacks direct facts: ${binding.tuple}`)
+	const observed = readState(root)
+	if (state === "unchanged") {
+		expect(observed, scenarioLabel(binding)).toEqual(before)
+		return state
+	}
+	expect(observed.resource, scenarioLabel(binding)).toBe(REVISION_5_RESOURCE)
+	const records = journalRecords(root).map((record) => [String(record.kind), String(record.effect)])
+	const names = [...expected.completed, ...expected.remaining, ...expected.uncertain]
+	const [first, second] = names
+	if (names.length !== 2 || first === undefined || second === undefined) throw new Error(`deadline binding has malformed effect facts: ${binding.tuple}`)
+	if (state === "completed") expect(records, scenarioLabel(binding)).toEqual([["intent", first], ["completed", first], ["intent", second], ["event", second], ["completed", second]])
+	else if (state === "partially-completed") expect(records, scenarioLabel(binding)).toEqual([["intent", first], ["completed", first]])
+	else expect(records, scenarioLabel(binding)).toEqual([["intent", first], ["completed", first], ["intent", second]])
+	return state
+}
+
 async function observe(binding: Binding): Promise<Observation> {
 	const root = createRoot(binding.variant)
 	roots.push(root)
 	applySetup(root, binding.setup)
+	const before = binding.lifecycleMode === undefined ? undefined : readState(root)
 	const options = { ...(binding.fault === undefined ? {} : { fault: binding.fault }), ...(binding.env === undefined ? {} : { env: binding.env }) }
 	if (binding.before !== undefined) {
 		const first = await runCli(root, [...binding.before, "--json"], options)
 		if (first.exit !== 0) throw new Error(`before step failed for ${binding.tuple}: ${first.stdout}`)
 	}
-	const run = await runCli(root, [...binding.argv, "--json"], options)
+	const run = binding.lifecycleMode === undefined ? await runCli(root, [...binding.argv, "--json"], options) : await runDeadlineProcess(root, binding)
 	expect(run.stderr).toBe("")
 	const outer = envelopeOf(run)
 	const envelope = outer.result as Record<string, unknown>
-	const observation = { binding, tuple: stationIdOf({ commandIdentity: String(envelope.commandIdentity), outcome: String(envelope.outcome), causeCode: String(envelope.causeCode) }), envelope, exit: run.exit }
+	const directEffectState = binding.lifecycleMode === undefined ? undefined : directDeadlineState(root, before as ReturnType<typeof readState>, binding)
+	const observation = { binding, tuple: stationIdOf({ commandIdentity: String(envelope.commandIdentity), outcome: String(envelope.outcome), causeCode: String(envelope.causeCode) }), envelope, exit: run.exit, ...(directEffectState === undefined ? {} : { directEffectState }) }
 	observations.push(observation)
 	return observation
 }
@@ -427,6 +531,10 @@ function assertCoreCorrelation(binding: Binding, observation: Observation, signa
 	expect(`${binding.tuple} ${envelope.effectClass}|${envelope.transactionState}|${envelope.retryable}|${observation.exit}`).toBe(`${binding.tuple} ${signature.effectClass}|${signature.transactionState}|${signature.retryable}|${signature.exit}`)
 	expect(envelope.transactionState).toBe(signature.transactionState)
 	expect(envelope.failureClass).toBe(signature.failureClass)
+	if (binding.directEffectState !== undefined) {
+		expect(observation.directEffectState).toBe(binding.directEffectState)
+		expect(envelope.effects).toEqual(binding.expectedEffects)
+	}
 	if (signature.retryable) expect(envelope.retryDelayMilliseconds).toBe(signature.delay)
 	else expect(envelope.retryDelayMilliseconds).toBeUndefined()
 	if (signature.repairAction) {
@@ -485,7 +593,7 @@ describe("station catalogue", () => {
 		}
 	})
 	test("every bound scenario reaches its tuple through a real child process with the expected transaction, retry and recovery fields", async () => {
-		expect(BINDINGS).toHaveLength(178)
+		expect(BINDINGS).toHaveLength(193)
 		for (const binding of BINDINGS) {
 			const observation = await observe(binding)
 			const signature = signatureFor(binding)
@@ -495,7 +603,7 @@ describe("station catalogue", () => {
 		}
 	}, 120_000)
 	test("three-way set equality: declared, expected and observed tuples coincide (STATION_UNREACHED / STATION_UNDECLARED)", () => {
-		expect(observations).toHaveLength(178)
+		expect(observations).toHaveLength(193)
 		const observed = new Set(observations.map((observation) => observation.tuple))
 		const boundTuples = new Set(BINDINGS.map((binding) => binding.tuple))
 		const declared = new Set(STATION_IDS)
@@ -511,7 +619,7 @@ describe("station catalogue", () => {
 	// action or handoff object plus repair action must equal its PublicStation template after only the admitted
 	// substitutions, and must equal the independent B1 oracle, so a wrong catalogue agreeing with wrong output cannot pass.
 	test("every observed station's emitted guidance and repair action equal its expanded PublicStation template and the independent oracle", () => {
-		expect(observations).toHaveLength(178)
+		expect(observations).toHaveLength(193)
 		const declared = new Map(BRANCH_STATIONS.map((declaration) => [declaration.identity, declaration]))
 		const observed: CatalogueObservation[] = []
 		for (const observation of observations) {
