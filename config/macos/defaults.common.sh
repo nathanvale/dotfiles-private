@@ -218,7 +218,15 @@ set_preferences() {
     run defaults write com.apple.helpviewer DevMode -bool true                            # Non-floating Help windows
 
     # ── Mail ──────────────────────────────────────
-    run defaults write com.apple.mail AddressesIncludeNameOnPasteboard -bool false         # Copy email as address only
+    # This preference belongs to the desktop profile. macOS protects Mail's
+    # container from a headless SSH session even when the container exists.
+    # Skipping it keeps server setup resumable; an interactive desktop run can
+    # apply it later.
+    if [[ "${DOTFILES_PROFILE:-desktop}" != "server" ]]; then
+      run defaults write com.apple.mail AddressesIncludeNameOnPasteboard -bool false     # Copy email as address only
+    else
+        log "$WARNING" "Mail preference skipped for server profile"
+    fi
 
     # ── Safari (requires Full Disk Access) ───────
     log "$INFO" ""
