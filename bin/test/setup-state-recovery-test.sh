@@ -33,8 +33,14 @@ assert_file_contains() {
 
 assert_file_not_contains() {
   local file="$1" text="$2" label="$3"
-  if grep -Fq "$text" "$file"; then
+  local grep_status=0
+
+  [[ -f "$file" ]] || fail "$label (missing file [$file])"
+  grep -Fq "$text" "$file" || grep_status=$?
+  if ((grep_status == 0)); then
     fail "$label (found [$text])"
+  elif ((grep_status != 1)); then
+    fail "$label (cannot read [$file])"
   fi
   pass "$label"
 }
