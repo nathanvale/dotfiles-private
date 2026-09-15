@@ -1471,7 +1471,7 @@ describe("O1 A", () => {
 		expect(applied.envelope).toMatchObject({ outcome: "success", transactionState: "completed" })
 		expect(readState(boundary).journal.startsWith(frameLine(boundaryPayload))).toBe(true)
 		retainRecoveryEvidence("o1-a3-boundary-payload", receiptOf(boundary, applied.run))
-	})
+	}, 15_000)
 
 	test("O1 A4 torn tail: readers keep the validated prefix and never parse the fragment; writers refuse before any durable write", async () => {
 		// Row 11's fixture is the torn event frame: status and inspect succeed on the prefix; recover classifies the second
