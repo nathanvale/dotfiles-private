@@ -1,20 +1,20 @@
 --- a/src/station-rows.ts
 +++ b/src/station-rows.ts
-@@ -97,6 +97,7 @@
- 	["repair-lab.status", "refused", "DOMAIN_INPUT_MALFORMED", "inspect", "unchanged", false, null, "next-action", true, 3, "repair-lab.input-malformed"],
- 	["repair-lab.status", "refused", "DOMAIN_INPUT_UNREADABLE", "inspect", "unchanged", false, null, "next-action", true, 3, "repair-lab.input-unreadable"],
- 	["repair-lab.status", "refused", "SCHEMA_STATE_INVALID", "inspect", "unchanged", false, null, "next-action", true, 4, "repair-lab.state-schema-invalid"],
-+	["repair-lab.status", "refused", "DOMAIN_PREVIEW_STALE", "inspect", "unchanged", false, null, "next-action", true, 3, "repair-lab.stale-preview"],
- 	["repair-lab.inspect-diagnostics", "refused", "DOMAIN_INPUT_MALFORMED", "inspect", "unchanged", false, null, "next-action", true, 3, "repair-lab.input-malformed"],
- 	["repair-lab.inspect-diagnostics", "refused", "DOMAIN_INPUT_UNREADABLE", "inspect", "unchanged", false, null, "next-action", true, 3, "repair-lab.input-unreadable"],
- 	["repair-lab.inspect-diagnostics", "refused", "SCHEMA_STATE_INVALID", "inspect", "unchanged", false, null, "next-action", true, 4, "repair-lab.state-schema-invalid"],
+@@ -82,0 +83 @@
++	["repair-lab.status", "refused", "DOMAIN_AUTHORITY_REQUIRED", "inspect", "unchanged", false, null, "handoff", true, 3, null],
+--- a/tests/catalog/expected-station-semantics.ts
++++ b/tests/catalog/expected-station-semantics.ts
+@@ -105,0 +106 @@
++	["repair-lab.status", "refused", "DOMAIN_AUTHORITY_REQUIRED"],
+@@ -184 +185 @@
+-export const EXPECTED_STATION_COUNT = 120
++export const EXPECTED_STATION_COUNT = 121
+--- a/tests/catalog/station-id-type.ts
++++ b/tests/catalog/station-id-type.ts
+@@ -103,0 +104,2 @@
++			return stationId
++		case '["repair-lab.status","refused","DOMAIN_AUTHORITY_REQUIRED"]':
 --- a/tests/catalog/station-map.test.ts
 +++ b/tests/catalog/station-map.test.ts
-@@ -70,6 +70,7 @@
- 	domain(identity, "SCHEMA_STATE_INVALID", "repair-lab.state-schema-invalid", true, 4)
- }
- domain("inspect-diagnostics", "DOMAIN_PATH_ESCAPE", "repair-lab.hostile-input")
-+domain("status", "DOMAIN_PREVIEW_STALE", "repair-lab.stale-preview")
- const MUTATING: Identity[] = ["apply", "repair", "repair-retry"]
- for (const identity of MUTATING) {
- 	domain(identity, "DOMAIN_PREVIEW_MISSING", null)
+@@ -133,0 +134 @@
++domain("status", "DOMAIN_AUTHORITY_REQUIRED", null)
