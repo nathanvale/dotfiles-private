@@ -9,6 +9,10 @@
       "name": "cli-design-check",
       "version": "0.0.0",
     },
+    "packages/cli-design-compose": {
+      "name": "cli-design-compose",
+      "version": "0.0.0",
+    },
     "packages/cli-design-exemplar": {
       "name": "cli-design-exemplar",
       "version": "0.0.0",
@@ -44,6 +48,8 @@
     "@logtape/redaction": ["@logtape/redaction@2.3.1", "", { "peerDependencies": { "@logtape/logtape": "^2.3.1" } }, "sha512-djd6+dl7QvwW4miYAX9p63gylz8EUKDANH9dlrkU6OzobELiTq7uqB1u5fINMtVsrJIQnukc1FpGx+fcZdeqVQ=="],
 
     "cli-design-check": ["cli-design-check@workspace:packages/cli-design-check"],
+
+    "cli-design-compose": ["cli-design-compose@workspace:packages/cli-design-compose"],
 
     "cli-design-exemplar": ["cli-design-exemplar@workspace:packages/cli-design-exemplar"],
 
