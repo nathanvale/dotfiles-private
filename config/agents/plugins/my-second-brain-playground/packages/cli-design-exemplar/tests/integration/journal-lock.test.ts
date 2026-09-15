@@ -15,7 +15,7 @@ function receipt(name: string, root: Root, runs: Record<string, Run>, extra: Rec
 	const directory = process.env.O1_B_RECEIPTS
 	if (directory === undefined) return
 	mkdirSync(directory, { recursive: true, mode: 0o700 })
-	writeFileSync(join(directory, `${name}.json`), `${JSON.stringify({ runs, executable: MAIN, fixtureRoot: root.root, bunVersion: Bun.version, state: readState(root), lock: lockBytes(root), diagnostics: Object.fromEntries(diagnosticsFiles(root).map((file) => [file, readFileSync(join(root.root, "diagnostics", file), "utf8")])), ...extra }, null, 2)}\n`, { mode: 0o600 })
+	writeFileSync(join(directory, `${name}.json`), `${JSON.stringify({ runs, executable: MAIN, fixtureRoot: root.root, bunVersion: Bun.version, state: readState(root), lock: lockBytes(root), diagnostics: Object.fromEntries(diagnosticsFiles(root).map((file) => [file, readFileSync(join(root.privateRoot, "state", "repair-lab", "diagnostics", file), "utf8")])), ...extra }, null, 2)}\n`, { mode: 0o600 })
 }
 function refused(run: Run): void {
 	expect(run.exit).toBe(3)
@@ -32,7 +32,7 @@ function refused(run: Run): void {
 // Scrubbed real child process, bounded lifetime, immediately drained streams. The shared barrier is fixture state,
 // separate from resource/journal truth. Even a failed readiness assertion kills and reaps every child in finally.
 function contender(root: Root, argv = APPLY) {
-	const env = { HOME: process.env.HOME ?? "/", PATH: process.env.PATH ?? "", NO_COLOR: "1", TERM: "dumb", REPAIR_LAB_FAULT: "journal-contention" }
+	const env = { HOME: root.privateRoot, XDG_STATE_HOME: join(root.privateRoot, "state"), PATH: process.env.PATH ?? "", NO_COLOR: "1", TERM: "dumb", REPAIR_LAB_FAULT: "journal-contention" }
 	const child = Bun.spawn(["bun", "run", MAIN, ...argv], { cwd: root.root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
 	const timer = setTimeout(() => child.kill("SIGKILL"), 15_000)
 	const done = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]).then(([stdout, stderr, exit]): Run & { pid: number; argv: string[] } => { clearTimeout(timer); return { stdout, stderr, exit, signal: child.signalCode, pid: child.pid, argv: ["bun", "run", MAIN, ...argv] } })

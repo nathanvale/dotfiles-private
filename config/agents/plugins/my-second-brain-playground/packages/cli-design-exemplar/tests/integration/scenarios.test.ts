@@ -131,7 +131,7 @@ function retainRecoveryEvidence(name: string, evidence: unknown): void {
 
 // One process receipt: both streams, exit, signal, and the raw state bytes plus diagnostics files after the run.
 function receiptOf(root: Root, run: Run): Record<string, unknown> {
-	const diagnostics = Object.fromEntries(diagnosticsFiles(root).map((file) => [file, readFileSync(join(root.root, "diagnostics", file), "utf8")]))
+	const diagnostics = Object.fromEntries(diagnosticsFiles(root).map((file) => [file, readFileSync(join(root.privateRoot, "state", "repair-lab", "diagnostics", file), "utf8")]))
 	return { stdout: run.stdout, stderr: run.stderr, exit: run.exit, signal: run.signal, state: readState(root), diagnostics }
 }
 
@@ -1053,10 +1053,10 @@ describe("diagnostics", () => {
 		const root = fresh("healthy-with-fresh-preview")
 		const observed = await machine(root, AUTHORIZED_APPLY)
 		const runIdentity = observed.envelope.runId as string
-		expect(modeOf(join(root.root, "diagnostics"))).toBe(0o700)
+		expect(modeOf(join(root.privateRoot, "state", "repair-lab", "diagnostics"))).toBe(0o700)
 		expect(diagnosticsFiles(root)).toEqual([`${runIdentity}.jsonl`])
-		expect(modeOf(join(root.root, "diagnostics", `${runIdentity}.jsonl`))).toBe(0o600)
-		expect(observed.diagnostics).toEqual({ status: "available", file: join(root.root, "diagnostics", `${runIdentity}.jsonl`), sinkFailure: null, droppedRecords: 0, unflushedRecords: 0, truncatedRecords: 0, countsComplete: true, closed: true })
+		expect(modeOf(join(root.privateRoot, "state", "repair-lab", "diagnostics", `${runIdentity}.jsonl`))).toBe(0o600)
+		expect(observed.diagnostics).toEqual({ status: "available", file: join(root.privateRoot, "state", "repair-lab", "diagnostics", `${runIdentity}.jsonl`), sinkFailure: null, droppedRecords: 0, unflushedRecords: 0, truncatedRecords: 0, countsComplete: true, closed: true })
 		const lines = records(root)
 		expect(lines.map((record) => record.event_kind)).toEqual(["apply.started", "effect.update-index.completed", "effect.write-journal.completed", "apply.completed"])
 		expect(lines.map((record) => record.sequence)).toEqual([1, 2, 3, 4])
@@ -1075,7 +1075,7 @@ describe("diagnostics", () => {
 		const status = fresh("healthy")
 		const observed = await machine(status, ["status"])
 		expect(records(status)).toEqual([])
-		expect(observed.diagnostics).toEqual({ status: "available", file: join(status.root, "diagnostics", `${observed.envelope.runId as string}.jsonl`), sinkFailure: null, droppedRecords: 0, unflushedRecords: 0, truncatedRecords: 0, countsComplete: true, closed: true })
+		expect(observed.diagnostics).toEqual({ status: "available", file: join(status.privateRoot, "state", "repair-lab", "diagnostics", `${observed.envelope.runId as string}.jsonl`), sinkFailure: null, droppedRecords: 0, unflushedRecords: 0, truncatedRecords: 0, countsComplete: true, closed: true })
 	})
 	test("redaction: the marker never reaches the diagnostics file and the redaction event names the field", async () => {
 		const root = fresh("secret-marker-in-diagnostic-field")
@@ -1083,16 +1083,16 @@ describe("diagnostics", () => {
 		const lines = records(root)
 		expect(lines.map((record) => record.event_kind)).toEqual(["inspect.started", "inspect.redaction-applied", "inspect.completed"])
 		expect(lines[1]?.sensitive_fields_redacted).toEqual(["diagnostic_token"])
-		expect(readFileSync(join(root.root, "diagnostics", diagnosticsFiles(root)[0] as string), "utf8").includes(SECRET_MARKER)).toBe(false)
+		expect(readFileSync(join(root.privateRoot, "state", "repair-lab", "diagnostics", diagnosticsFiles(root)[0] as string), "utf8").includes(SECRET_MARKER)).toBe(false)
 	})
-	test("bounded queue: a flood keeps 256 records plus one truncation record and reports the drops", async () => {
+	test("bounded queue: a flood keeps 256 records and reports the drops without admitting another record", async () => {
 		const root = fresh("healthy")
 		const observed = await machine(root, ["status"], "diagnostics-flood")
 		expect(observed.envelope.outcome).toBe("success")
 		const lines = records(root)
-		expect(lines).toHaveLength(257)
-		expect(lines[256]?.event_kind).toBe("diagnostics.truncated")
-		expect(observed.diagnostics).toEqual({ status: "available", file: join(root.root, "diagnostics", `${observed.envelope.runId as string}.jsonl`), sinkFailure: "capacity", droppedRecords: 8, unflushedRecords: 0, truncatedRecords: 0, countsComplete: true, closed: true })
+		expect(lines).toHaveLength(256)
+		expect(lines[255]?.event_kind).toBe("diagnostics.flood")
+		expect(observed.diagnostics).toEqual({ status: "available", file: join(root.privateRoot, "state", "repair-lab", "diagnostics", `${observed.envelope.runId as string}.jsonl`), sinkFailure: "capacity", droppedRecords: 8, unflushedRecords: 0, truncatedRecords: 0, countsComplete: true, closed: true })
 	})
 	test("sink failures preserve exit, envelope and domain result; only runIdentity and sinkFailure differ", async () => {
 		const scenarios: Array<[Variant, string[]]> = [
@@ -1110,16 +1110,16 @@ describe("diagnostics", () => {
 			expect(blocked.run.exit).toBe(baseline.run.exit)
 			expect(blocked.diagnostics).toEqual({ status: "unavailable", reason: "status-unavailable", trusted: { file: null, sinkFailure: "setup" } })
 			expect(comparable(blocked, unwritable)).toEqual(expected)
-			expect(existsSync(join(unwritable.root, "diagnostics", `${blocked.envelope.runId as string}.jsonl`))).toBe(false)
+			expect(existsSync(join(unwritable.privateRoot, "state", "repair-lab", "diagnostics", `${blocked.envelope.runId as string}.jsonl`))).toBe(false)
 			const throwingRoot = fresh(variant)
 			const throwing = await machine(throwingRoot, argv, "sink-throw")
 			expect(throwing.run.exit).toBe(baseline.run.exit)
 			expect(Object.keys(throwing.diagnostics ?? {}).sort()).toEqual(["closed", "countsComplete", "droppedRecords", "file", "sinkFailure", "status", "truncatedRecords", "unflushedRecords"])
-			expect(throwing.diagnostics).toEqual({ status: "available", file: join(throwingRoot.root, "diagnostics", `${throwing.envelope.runId as string}.jsonl`), sinkFailure: "write", droppedRecords: 0, unflushedRecords: baseline.envelope.commandIdentity === "repair-lab.apply" ? 4 : baseline.envelope.commandIdentity === "repair-lab.inspect-diagnostics" ? 3 : 2, truncatedRecords: 0, countsComplete: true, closed: true })
+			expect(throwing.diagnostics).toEqual({ status: "available", file: join(throwingRoot.privateRoot, "state", "repair-lab", "diagnostics", `${throwing.envelope.runId as string}.jsonl`), sinkFailure: "write", droppedRecords: 0, unflushedRecords: baseline.envelope.commandIdentity === "repair-lab.apply" ? 4 : baseline.envelope.commandIdentity === "repair-lab.inspect-diagnostics" ? 3 : 2, truncatedRecords: 0, countsComplete: true, closed: true })
 			expect(comparable(throwing, throwingRoot)).toEqual(expected)
 			const disposingRoot = fresh(variant)
 			const disposing = await machine(disposingRoot, argv, "sink-dispose-throw")
-			expect(disposing.diagnostics).toEqual({ status: "available", file: join(disposingRoot.root, "diagnostics", `${disposing.envelope.runId as string}.jsonl`), sinkFailure: "close", droppedRecords: 0, unflushedRecords: 0, truncatedRecords: 0, countsComplete: true, closed: false })
+			expect(disposing.diagnostics).toEqual({ status: "available", file: join(disposingRoot.privateRoot, "state", "repair-lab", "diagnostics", `${disposing.envelope.runId as string}.jsonl`), sinkFailure: "close", droppedRecords: 0, unflushedRecords: 0, truncatedRecords: 0, countsComplete: true, closed: false })
 			expect(comparable(disposing, disposingRoot)).toEqual(expected)
 			// Resulting state compares with each process's run token normalized (consumed_by_run and journal run fields).
 			// Journal frames are decoded (the decoder re-derives each frame's digest) and the digests bound to the run token
@@ -1144,7 +1144,7 @@ describe("diagnostics", () => {
 		const root = fresh("unknown-after-partial")
 		const first = await machine(root, ["recover"])
 		const { rmSync } = await import("node:fs")
-		rmSync(join(root.root, "diagnostics", `${first.envelope.runId as string}.jsonl`))
+		rmSync(join(root.privateRoot, "state", "repair-lab", "diagnostics", `${first.envelope.runId as string}.jsonl`))
 		const second = await machine(root, ["recover"])
 		expect(normalize(second.run.stdout, second.envelope.runId as string)).toEqual(normalize(first.run.stdout, first.envelope.runId as string))
 		expect(second.envelope.handoff).toMatchObject({ owner: "operator", inspect: [INSPECT] })
@@ -1162,14 +1162,14 @@ describe("diagnostics", () => {
 describe("O1 U0", () => {
 	const READ_BACK_REASON = "a durable write was attempted and its outcome is not established"
 	function diagnosticsBytes(root: Root): Record<string, string> {
-		return Object.fromEntries(diagnosticsFiles(root).map((file) => [file, readFileSync(join(root.root, "diagnostics", file), "utf8")]))
+		return Object.fromEntries(diagnosticsFiles(root).map((file) => [file, readFileSync(join(root.privateRoot, "state", "repair-lab", "diagnostics", file), "utf8")]))
 	}
 	const handoffExpectation = (identity: string, causeCode: string, failureClass: "internal" | "domain", exit: number): Expected => ({ identity, outcome: "failed", failureClass, causeCode, exit, effectClass: "repository-local", transactionState: "unknown", retryable: false, delay: null, nextAction: null })
 	// Journal-shaped completion text and a fabricated authorizing event, written where only diagnostics live.
 	function forgeDiagnostics(root: Root, kind: Kind, runId: string): string[] {
 		const [first] = planOf(kind)
 		const forged = `${completedLine(kind, 2, runId, first)}${eventLine(kind, 4, runId)}${completedLine(kind, 5, runId, J)}${JSON.stringify({ event_kind: "recovery.replay-authorized", station: "repair-lab.authorized-apply", run: runId, completed_effect_ids: planOf(kind) })}\n`
-		const directory = join(root.root, "diagnostics")
+		const directory = join(root.privateRoot, "state", "repair-lab", "diagnostics")
 		mkdirSync(directory, { recursive: true })
 		const files = diagnosticsFiles(root)
 		for (const file of files) appendFileSync(join(directory, file), forged)
@@ -1185,7 +1185,7 @@ describe("O1 U0", () => {
 		const oracle = comparable(intact, root)
 		expect(readState(root)).toEqual(state)
 		const intactReceipt = receiptOf(root, intact.run)
-		for (const file of diagnosticsFiles(root)) rmSync(join(root.root, "diagnostics", file))
+		for (const file of diagnosticsFiles(root)) rmSync(join(root.privateRoot, "state", "repair-lab", "diagnostics", file))
 		const deleted = await machine(root, ["recover"])
 		expect(comparable(deleted, root)).toEqual(oracle)
 		expect(deleted.diagnostics).toMatchObject({ status: "available", sinkFailure: null })

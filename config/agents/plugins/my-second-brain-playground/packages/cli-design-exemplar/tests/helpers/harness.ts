@@ -202,7 +202,7 @@ export interface RunOptions {
 }
 
 export async function runCli(root: Root, argv: string[], options: RunOptions = {}): Promise<Run> {
-	const env: Record<string, string> = { HOME: process.env.HOME ?? "/", NO_COLOR: "1", TERM: "dumb", PATH: process.env.PATH ?? "", ...(options.env ?? {}) }
+	const env: Record<string, string> = { HOME: root.privateRoot, XDG_STATE_HOME: join(root.privateRoot, "state"), NO_COLOR: "1", TERM: "dumb", PATH: process.env.PATH ?? "", ...(options.env ?? {}) }
 	if (options.fault !== undefined) env.REPAIR_LAB_FAULT = options.fault
 	const child = Bun.spawn(["bun", "run", MAIN, ...argv], { cwd: options.cwd ?? root.root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
 	const deadline = options.timeoutMs ?? 20_000
@@ -260,12 +260,12 @@ export function fillJournal(root: Root, bytes: number, exact = false): void {
 }
 
 export function diagnosticsFiles(root: Root): string[] {
-	const directory = join(root.root, "diagnostics")
-	return existsSync(directory) ? readdirSync(directory).sort() : []
+	const directory = join(root.privateRoot, "state", "repair-lab", "diagnostics")
+	return existsSync(directory) ? readdirSync(directory).filter((name) => name.endsWith(".jsonl")).sort() : []
 }
 
 export function diagnosticsRecords(root: Root, file: string): Array<Record<string, unknown>> {
-	return readFileSync(join(root.root, "diagnostics", file), "utf8")
+	return readFileSync(join(root.privateRoot, "state", "repair-lab", "diagnostics", file), "utf8")
 		.split("\n")
 		.filter((line) => line.length > 0)
 		.map((line) => JSON.parse(line) as Record<string, unknown>)
@@ -324,7 +324,8 @@ export function readOnlyJournal(root: Root): void {
 
 // Unwritable diagnostics (brief 12, 8.2): the diagnostics path pre-exists as a regular file.
 export function blockDiagnostics(root: Root): void {
-	writeFileSync(join(root.root, "diagnostics"), "not a directory\n")
+	mkdirSync(join(root.privateRoot, "state", "repair-lab"), { recursive: true, mode: 0o700 })
+	writeFileSync(join(root.privateRoot, "state", "repair-lab", "diagnostics"), "not a directory\n")
 }
 
 export function envelopeKeys(): string[] {
@@ -338,7 +339,7 @@ export function writeReceipt(root: Root, scenario: string, run: Run): { director
 	const directory = join(root.privateRoot, "receipts", scenario, runIdentity)
 	mkdirSync(directory, { recursive: true })
 	const files = diagnosticsFiles(root)
-	const diagnostics = files.length === 1 ? readFileSync(join(root.root, "diagnostics", files[0] as string), "utf8") : ""
+	const diagnostics = files.length === 1 ? readFileSync(join(root.privateRoot, "state", "repair-lab", "diagnostics", files[0] as string), "utf8") : ""
 	const state = readState(root)
 	const digest = (bytes: string | null): string | null => (bytes === null ? null : createHash("sha256").update(bytes).digest("hex"))
 	const surfaces: Record<string, string> = { stdout: run.stdout, stderr: run.stderr, exit: `${run.exit}\n`, "diagnostics.jsonl": diagnostics, "state-after.json": JSON.stringify({ resource: digest(state.resource), preview: digest(state.preview), journal: digest(state.journal) }) }
