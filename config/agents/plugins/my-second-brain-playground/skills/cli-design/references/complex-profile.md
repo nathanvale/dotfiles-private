@@ -95,9 +95,11 @@ Run:
 Use literal expected results independent of the production catalogue. Preserve
 one defect at a time in negative controls, prove its exact finding, then restore
 the same harness to green. Run the complete repository and generated CI sequence
-from a clean checkout. Qualify its static policy through the skill's
-`admit:static` route; a changed-files Fallow audit does not replace the complete
-whole-project and production-dependency passes.
+from a clean checkout. For a new repository, qualify its static policy through
+the skill's `admit:static` route; a changed-files Fallow audit does not replace
+the complete whole-project and production-dependency passes. In an existing
+project, preserve the host policy and use the skill's complete-evidence new-only
+adoption review.
 
 The local `packages/cli-design-exemplar` is the qualified complex reference. A
 repository using `@side-quest/cli-command-facade` keeps that runtime as its
