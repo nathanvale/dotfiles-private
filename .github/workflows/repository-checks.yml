@@ -29,6 +29,18 @@ jobs:
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: package.json
+      - name: Prepare the pinned Bun CLI template
+        shell: bash
+        env:
+          TEMPLATE_REVISION: 6e328f4cfc14ffeeaf7291209ccbf91c6ec46bf5
+        run: |
+          template_root="$RUNNER_TEMP/bun-typescript-template"
+          git init --quiet "$template_root"
+          git -C "$template_root" remote add origin https://github.com/nathanvale/bun-typescript-template.git
+          git -C "$template_root" fetch --quiet --depth=1 origin "$TEMPLATE_REVISION"
+          git -C "$template_root" checkout --quiet --detach FETCH_HEAD
+          test "$(git -C "$template_root" rev-parse HEAD)" = "$TEMPLATE_REVISION"
+          printf 'BUN_TYPESCRIPT_TEMPLATE_TEST_ROOT=%s\n' "$template_root" >> "$GITHUB_ENV"
       - name: Validate the event's immutable comparison base
         shell: bash
         run: |

@@ -1,7 +1,6 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -10,22 +9,15 @@ const TEMPLATE_ROOT = resolve(
   process.env.BUN_TYPESCRIPT_TEMPLATE_TEST_ROOT ??
     join(homedir(), "code", "bun-typescript-template"),
 );
-const TEMPLATE_REVISION = "20c9f188f6bf82260b108e3899c951a4b6b1ae27";
+const TEMPLATE_REVISION = "6e328f4cfc14ffeeaf7291209ccbf91c6ec46bf5";
 const roots: string[] = [];
 
-function templateAvailable(): boolean {
-  if (!existsSync(TEMPLATE_ROOT)) return false;
-  return (
-    Bun.spawnSync(
-      ["git", "-C", TEMPLATE_ROOT, "cat-file", "-e", `${TEMPLATE_REVISION}^{commit}`],
-      { stderr: "ignore", stdout: "ignore" },
-    ).exitCode === 0
-  );
-}
-
-const integrationTest = templateAvailable() ? test : test.skip;
-
-function invoke(projectRoot: string, packagePath: string, starter: string) {
+function invoke(
+  projectRoot: string,
+  packagePath: string,
+  starter: string,
+  templateRoot = TEMPLATE_ROOT,
+) {
   const result = Bun.spawnSync(
     [
       join(PLUGIN_ROOT, "bin", "cli-design"),
@@ -42,7 +34,7 @@ function invoke(projectRoot: string, packagePath: string, starter: string) {
     ],
     {
       cwd: PLUGIN_ROOT,
-      env: { ...process.env, BUN_TYPESCRIPT_TEMPLATE_ROOT: TEMPLATE_ROOT },
+      env: { ...process.env, BUN_TYPESCRIPT_TEMPLATE_ROOT: templateRoot },
       stderr: "pipe",
       stdout: "pipe",
     },
@@ -76,6 +68,9 @@ async function fixture(workspace: boolean) {
       `${JSON.stringify({ name: "tool", private: true, scripts: { existing: "bun test" } })}\n`,
     );
   }
+  await writeFile(join(root, "biome.json"), '{"linter":{"enabled":true}}\n');
+  await writeFile(join(packageRoot, "existing.test.ts"), "export const preserved = true;\n");
+  await writeFile(join(root, "unrelated.txt"), "owned sentinel\n");
   const install = Bun.spawnSync(
     [process.execPath, "install", "--lockfile-only", "--ignore-scripts"],
     { cwd: root, stderr: "pipe", stdout: "pipe" },
@@ -94,9 +89,20 @@ afterEach(async () => {
   );
 });
 
-integrationTest("composes the simple starter into a single package and preserves host owners", async () => {
+test("the exact pinned canonical template revision is available", () => {
+  const result = Bun.spawnSync(
+    ["git", "-C", TEMPLATE_ROOT, "cat-file", "-e", `${TEMPLATE_REVISION}^{commit}`],
+    { stderr: "pipe", stdout: "pipe" },
+  );
+  expect(result.exitCode).toBe(0);
+});
+
+test("composes the simple starter into a single package and preserves host owners", async () => {
   const project = await fixture(false);
   const beforeLock = await readFile(join(project.root, "bun.lock"));
+  const beforeQuality = await readFile(join(project.root, "biome.json"));
+  const beforeTest = await readFile(join(project.packageRoot, "existing.test.ts"));
+  const beforeSentinel = await readFile(join(project.root, "unrelated.txt"));
   const result = invoke(project.root, project.packagePath, "simple");
 
   expect(result.exitCode).toBe(0);
@@ -115,6 +121,9 @@ integrationTest("composes the simple starter into a single package and preserves
   expect(await Bun.file(join(project.packageRoot, "src/cli.ts")).exists()).toBe(true);
   expect(await Bun.file(join(project.root, "bun.lock")).exists()).toBe(true);
   expect(digest(await readFile(join(project.root, "bun.lock")))).toBe(digest(beforeLock));
+  expect(await readFile(join(project.root, "biome.json"))).toEqual(beforeQuality);
+  expect(await readFile(join(project.packageRoot, "existing.test.ts"))).toEqual(beforeTest);
+  expect(await readFile(join(project.root, "unrelated.txt"))).toEqual(beforeSentinel);
   const invocation = Bun.spawnSync(
     [process.execPath, "run", "src/cli.ts", "status", "--json"],
     { cwd: project.packageRoot, stderr: "pipe", stdout: "pipe" },
@@ -127,7 +136,7 @@ integrationTest("composes the simple starter into a single package and preserves
   });
 });
 
-integrationTest("composes complex into a workspace package and updates the owning lock", async () => {
+test("composes complex into a workspace package and updates the owning lock", async () => {
   const project = await fixture(true);
   const result = invoke(project.root, project.packagePath, "complex");
 
@@ -162,7 +171,7 @@ integrationTest("composes complex into a workspace package and updates the ownin
   });
 });
 
-integrationTest("refuses a source collision without changing manifest or lock bytes", async () => {
+test("refuses a source collision without changing manifest or lock bytes", async () => {
   const project = await fixture(false);
   await mkdir(join(project.packageRoot, "src"));
   await writeFile(join(project.packageRoot, "src/cli.ts"), "owned bytes\n");
@@ -179,4 +188,66 @@ integrationTest("refuses a source collision without changing manifest or lock by
   expect(await readFile(join(project.packageRoot, "src/cli.ts"), "utf8")).toBe("owned bytes\n");
   expect(digest(await readFile(join(project.packageRoot, "package.json")))).toBe(digest(packageBefore));
   expect(digest(await readFile(join(project.root, "bun.lock")))).toBe(digest(lockBefore));
+});
+
+test("refuses ambiguous, outside, and symlinked package paths before writes", async () => {
+  const project = await fixture(true);
+  const outside = await mkdtemp(join(tmpdir(), "cli-compose-outside-"));
+  roots.push(outside);
+  await writeFile(join(outside, "package.json"), '{"name":"outside"}\n');
+  await symlink(outside, join(project.root, "packages", "escape"));
+  const beforeLock = await readFile(join(project.root, "bun.lock"));
+
+  for (const [packagePath, causeCode] of [
+    ["packages", "DOMAIN_PROJECT_PRECONDITION"],
+    ["../outside", "USAGE_PACKAGE_OUTSIDE_PROJECT"],
+    ["packages/escape", "DOMAIN_UNSAFE_PACKAGE_PATH"],
+  ] as const) {
+    const result = invoke(project.root, packagePath, "simple");
+    expect(result.exitCode).toBe(packagePath === "../outside" ? 2 : 3);
+    expect(JSON.parse(result.stdout).causeCode).toBe(causeCode);
+  }
+  expect(await readFile(join(project.root, "bun.lock"))).toEqual(beforeLock);
+  expect(await Bun.file(join(outside, "src/cli.ts")).exists()).toBe(false);
+});
+
+test("refuses script and dependency conflicts before changing owner bytes", async () => {
+  for (const kind of ["script", "dependency"] as const) {
+    const project = await fixture(false);
+    const manifestPath = join(project.packageRoot, "package.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    if (kind === "script") manifest.scripts["cli:example"] = "bun run owned.ts";
+    else manifest.dependencies = { zod: "4.3.0" };
+    await writeFile(manifestPath, `${JSON.stringify(manifest)}\n`);
+    const beforeManifest = await readFile(manifestPath);
+    const beforeLock = await readFile(join(project.root, "bun.lock"));
+    const result = invoke(project.root, project.packagePath, "complex");
+    expect(result.exitCode).toBe(3);
+    expect(JSON.parse(result.stdout).causeCode).toBe(
+      kind === "script" ? "DOMAIN_SCRIPT_CONFLICT" : "DOMAIN_DEPENDENCY_CONFLICT",
+    );
+    expect(await readFile(manifestPath)).toEqual(beforeManifest);
+    expect(await readFile(join(project.root, "bun.lock"))).toEqual(beforeLock);
+  }
+});
+
+test("refuses an unavailable pinned template revision before host writes", async () => {
+  const project = await fixture(false);
+  const emptyRepository = await mkdtemp(join(tmpdir(), "cli-compose-empty-template-"));
+  roots.push(emptyRepository);
+  expect(Bun.spawnSync(["git", "init", "--quiet", emptyRepository]).exitCode).toBe(0);
+  const beforeManifest = await readFile(join(project.packageRoot, "package.json"));
+  const beforeLock = await readFile(join(project.root, "bun.lock"));
+  const result = invoke(
+    project.root,
+    project.packagePath,
+    "simple",
+    emptyRepository,
+  );
+  expect(result.exitCode).toBe(1);
+  expect(JSON.parse(result.stdout).causeCode).toBe(
+    "INTERNAL_TEMPLATE_REVISION_UNAVAILABLE",
+  );
+  expect(await readFile(join(project.packageRoot, "package.json"))).toEqual(beforeManifest);
+  expect(await readFile(join(project.root, "bun.lock"))).toEqual(beforeLock);
 });

@@ -14,7 +14,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
-const TEMPLATE_REVISION = "20c9f188f6bf82260b108e3899c951a4b6b1ae27";
+const TEMPLATE_REVISION = "6e328f4cfc14ffeeaf7291209ccbf91c6ec46bf5";
 const TEMPLATE_ROOT = resolve(
   process.env.BUN_TYPESCRIPT_TEMPLATE_ROOT ??
     join(homedir(), "code", "bun-typescript-template"),
@@ -142,6 +142,47 @@ async function ordinaryFile(path: string, label: string): Promise<void> {
   }
 }
 
+async function refuseSymlinkPath(
+  root: string,
+  target: string,
+  includeTarget: boolean,
+): Promise<void> {
+  const relativePath = relative(root, target);
+  if (relativePath === "") return;
+  if (relativePath.startsWith("..") || isAbsolute(relativePath)) {
+    throw new ComposeError(
+      "USAGE_PACKAGE_OUTSIDE_PROJECT",
+      "composition paths must stay inside --project-root",
+      2,
+      "Choose the owning Bun package relative to the project root.",
+    );
+  }
+  const segments = relativePath.split("/");
+  if (!includeTarget) segments.pop();
+  let current = root;
+  for (const segment of segments) {
+    current = join(current, segment);
+    const stats = await lstat(current).catch(() => undefined);
+    if (stats === undefined) break;
+    if (stats.isSymbolicLink()) {
+      throw new ComposeError(
+        "DOMAIN_UNSAFE_PACKAGE_PATH",
+        `composition path traverses a symbolic link: ${current}`,
+        3,
+        "Choose an ordinary package path without symbolic-link ancestors.",
+      );
+    }
+    if (!stats.isDirectory()) {
+      throw new ComposeError(
+        "DOMAIN_PROJECT_PRECONDITION",
+        `composition path ancestor is not a directory: ${current}`,
+        3,
+        "Repair the package directory before composing the CLI.",
+      );
+    }
+  }
+}
+
 async function resolveOwners(options: ComposeOptions) {
   const packagePath = resolve(options.projectRoot, options.packagePath);
   if (isAbsolute(options.packagePath) || !isInside(options.projectRoot, packagePath)) {
@@ -152,6 +193,7 @@ async function resolveOwners(options: ComposeOptions) {
       "Choose the owning Bun package relative to the project root.",
     );
   }
+  await refuseSymlinkPath(options.projectRoot, packagePath, true);
   await ordinaryFile(join(options.projectRoot, "package.json"), "project package.json");
   await ordinaryFile(join(options.projectRoot, "bun.lock"), "project bun.lock");
   await ordinaryFile(join(packagePath, "package.json"), "target package.json");
@@ -356,7 +398,9 @@ async function compose(options: ComposeOptions) {
   const sources = templateFiles(options.starter);
   const metadataPath = join(packagePath, ".cli-design-template.json");
   for (const source of sources) {
-    await requireAbsent(join(packagePath, source.relativePath));
+    const target = join(packagePath, source.relativePath);
+    await refuseSymlinkPath(packagePath, target, false);
+    await requireAbsent(target);
   }
   await requireAbsent(metadataPath);
 
