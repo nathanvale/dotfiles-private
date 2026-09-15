@@ -31,6 +31,14 @@ assert_file_contains() {
   pass "$label"
 }
 
+assert_file_not_contains() {
+  local file="$1" text="$2" label="$3"
+  if grep -Fq "$text" "$file"; then
+    fail "$label (found [$text])"
+  fi
+  pass "$label"
+}
+
 assert_file_absent() {
   local file="$1" label="$2"
   [[ ! -e "$file" && ! -L "$file" ]] || fail "$label (found $file)"
@@ -1319,8 +1327,8 @@ run_setup --server --start-phase 6
 assert_equals "$RUN_EXIT" 0 'server profile setup exits successfully'
 assert_file_contains "$FIXTURE_HOME/.dotfiles_state/setup-result" 'profile=server' \
   'server profile is published in the setup result'
-assert_file_contains "$RECORD_DIR/calls" 'prefs:' \
-  'server profile reaches the shared preference collaborator'
+assert_file_not_contains "$RECORD_DIR/calls" 'prefs:' \
+  'server profile skips the desktop preference collaborator'
 assert_file_absent "$FIXTURE_HOME/.dotfiles_state/setup.lock" \
   'server profile releases its setup lock'
 
