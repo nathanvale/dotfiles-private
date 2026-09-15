@@ -39,15 +39,16 @@ checks, tests, and CI.
 
 ### Existing Bun project
 
-Run the plugin's preservation-safe composer:
+From `PLUGIN_ROOT` (`../..` from this `SKILL.md`), run the plugin's
+preservation-safe composer:
 
 ```bash
-"${PLUGIN_ROOT}/bin/cli-design" compose-existing --project-root PATH --package PATH --starter simple|complex --source-packet PATH_OR_URL [--json]
+bun run cli-design compose-existing --project-root PATH --package PATH --starter simple|complex --source-packet PATH_OR_URL [--json]
 ```
 
-`PLUGIN_ROOT` is `../..` from this `SKILL.md`. Select the package explicitly.
-Resolve ownership conflicts instead of replacing current source, scripts,
-dependencies, tests, lockfile, or quality configuration.
+Select the package explicitly. Resolve ownership conflicts instead of replacing
+current source, scripts, dependencies, tests, lockfile, or quality
+configuration.
 
 ### Maintain or extend
 
