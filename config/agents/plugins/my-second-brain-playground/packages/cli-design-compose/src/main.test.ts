@@ -32,7 +32,7 @@ const TEMPLATE_ROOT = resolve(
 );
 // Independent oracle: this test-owned revision must not be imported from the
 // composer, so a changed production pin makes the public composition checks RED.
-const TEMPLATE_REVISION = "c829b46853afc699bb3f39fba42412ff557ab9c1";
+const TEMPLATE_REVISION = "7f6d95017e051c23e978f5d7f7542732b799dfdc";
 const DEFAULT_SOURCE_PACKET = "https://example.test/vault/projects/example/";
 const roots: string[] = [];
 const templateAvailable =

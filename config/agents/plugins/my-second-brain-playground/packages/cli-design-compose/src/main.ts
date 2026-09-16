@@ -16,7 +16,7 @@ import { homedir, tmpdir } from "node:os";
 import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
-const TEMPLATE_REVISION = "c829b46853afc699bb3f39fba42412ff557ab9c1";
+const TEMPLATE_REVISION = "7f6d95017e051c23e978f5d7f7542732b799dfdc";
 const TEMPLATE_ROOT = resolve(
   process.env.BUN_TYPESCRIPT_TEMPLATE_ROOT ??
     join(homedir(), "code", "bun-typescript-template"),
