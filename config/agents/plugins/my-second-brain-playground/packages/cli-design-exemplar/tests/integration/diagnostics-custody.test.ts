@@ -1,11 +1,15 @@
 import { createHash } from "node:crypto"
 import { afterEach, describe, expect, test } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
-import { join, resolve } from "node:path"
+import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, symlinkSync, unlinkSync, utimesSync, writeFileSync } from "node:fs"
+import { hostname } from "node:os"
+import { basename, join, resolve } from "node:path"
 import { createRoot, MAIN, readState, removeRoot, RESET_RESOURCE, REVISION_5_RESOURCE, type Root, type Run } from "../helpers/harness.ts"
 
 // O2 approved public seam. Every expected cap/mode/exit/status is a test-owned literal, not a production import.
 const PRELOAD = resolve(import.meta.dir, "../helpers/diagnostics-preload.ts")
+const DIAGNOSTICS = resolve(import.meta.dir, "../../src/diagnostics.ts")
+const HOST_TOKEN = createHash("sha256").update(hostname()).digest("hex").slice(0, 16)
+const CAPACITY = { status: "unavailable", reason: "status-unavailable", trusted: { file: null, sinkFailure: "capacity" } }
 const roots: Root[] = []
 const children: ReturnType<typeof Bun.spawn>[] = []
 function fresh(variant: Parameters<typeof createRoot>[0] = "healthy"): Root { const root = createRoot(variant); roots.push(root); return root }
@@ -414,5 +418,192 @@ describe("O2 diagnostics cross-field invariants", () => {
 			expect(status.reason).toBe("status-invalid")
 			expect(status.trusted).toEqual({ file: files(root)[0], ...(corruption === "drops-without-failure" ? { unflushedRecords: 0 } : { droppedRecords: 0 }), truncatedRecords: 0, countsComplete: false, closed: !timed })
 		}
+	})
+})
+
+// Lock fixtures are test-owned literals mirroring the custody contract: `.allocation-lock/owner-<pid>-<host token>`.
+function lockPath(root: Root): string { return join(directory(root), ".allocation-lock") }
+function owner(pid: number, host = HOST_TOKEN): string { return `owner-${pid}-${host}` }
+function seedLock(root: Root, markers: string[]): void {
+	mkdirSync(lockPath(root), { recursive: true, mode: 0o700 })
+	for (const marker of markers) writeFileSync(join(lockPath(root), marker), "", { mode: 0o600 })
+}
+async function deadPid(): Promise<number> { const child = Bun.spawn(["/usr/bin/true"]); await child.exited; return child.pid }
+function livePid(): number { const child = Bun.spawn(["/bin/sleep", "30"]); children.push(child); return child.pid }
+function lockShape(root: Root): unknown {
+	const info = lstatSync(lockPath(root))
+	return { directory: info.isDirectory(), file: info.isFile(), entries: info.isDirectory() ? readdirSync(lockPath(root)).sort() : null }
+}
+function bookkeeping(root: Root): string[] { return readdirSync(directory(root)).filter((name) => name.startsWith(".allocation-lock")).sort() }
+async function expectCapacity(root: Root, baseline: Run): Promise<void> {
+	const before = lockShape(root)
+	const observed = await run(root)
+	expect(observed.exit).toBe(0)
+	expect(envelope(observed).diagnostics).toEqual(CAPACITY)
+	expect(files(root)).toHaveLength(0)
+	expect(lockShape(root)).toEqual(before)
+	expect(bookkeeping(root)).toEqual([".allocation-lock"])
+	expect(domain(observed)).toEqual(domain(baseline))
+	expect(readState(root).resource).toBe(RESET_RESOURCE)
+}
+
+describe("O2 allocation lock custody", () => {
+	test("dead-owner and legacy empty locks are recovered and released", async () => {
+		const baseline = await run(fresh())
+		for (const markers of [[owner(await deadPid())], []]) {
+			const root = fresh()
+			seedLock(root, markers)
+			const observed = await run(root)
+			expect(observed.exit).toBe(0)
+			expect(envelope(observed).diagnostics.status).toBe("available")
+			expect(files(root)).toHaveLength(1)
+			expect(bookkeeping(root)).toEqual([])
+			expect(domain(observed)).toEqual(domain(baseline))
+			expect(readState(root).resource).toBe(RESET_RESOURCE)
+		}
+	})
+	test("live owner keeps fail-fast capacity with its lock intact", async () => {
+		const baseline = await run(fresh())
+		const root = fresh()
+		seedLock(root, [owner(livePid())])
+		await expectCapacity(root, baseline)
+	})
+	test("foreign-host, multi-owner, unrecognized and non-directory locks are ambiguous and preserved", async () => {
+		const baseline = await run(fresh())
+		const dead = await deadPid()
+		const foreign = owner(dead, "f".repeat(16))
+		expect(foreign).not.toBe(owner(dead))
+		const arrangements: Array<(root: Root) => void> = [
+			(root) => seedLock(root, [foreign]),
+			(root) => seedLock(root, [owner(dead), owner(livePid())]),
+			(root) => seedLock(root, ["owner-junk"]),
+			(root) => { mkdirSync(directory(root), { recursive: true, mode: 0o700 }); writeFileSync(lockPath(root), "", { mode: 0o600 }) },
+		]
+		for (const arrange of arrangements) {
+			const root = fresh()
+			arrange(root)
+			await expectCapacity(root, baseline)
+		}
+	})
+	test("a normal run leaves no lock or staging bookkeeping behind", async () => {
+		const root = fresh()
+		const observed = await run(root)
+		expect(envelope(observed).diagnostics.status).toBe("available")
+		expect(bookkeeping(root)).toEqual([])
+	})
+	test("foreign-host and malformed residue survive a successful allocation while same-host dead residue is swept", async () => {
+		const root = fresh()
+		const dead = await deadPid()
+		const foreign = "f".repeat(16)
+		const kept = [`.allocation-lock.pending-${dead}-${foreign}-1`, `.allocation-lock.retiring-${dead}-${foreign}-1`, ".allocation-lock.pending-junk"]
+		const swept = [`.allocation-lock.pending-${dead}-${HOST_TOKEN}-1`, `.allocation-lock.retiring-${dead}-${HOST_TOKEN}-1`]
+		for (const name of [...kept, ...swept]) {
+			mkdirSync(join(directory(root), name), { recursive: true, mode: 0o700 })
+			writeFileSync(join(directory(root), name, owner(dead, name.includes(foreign) ? foreign : HOST_TOKEN)), "", { mode: 0o600 })
+		}
+		const shapes = Object.fromEntries(kept.map((name) => [name, readdirSync(join(directory(root), name)).sort()]))
+		const observed = await run(root)
+		expect(observed.exit).toBe(0)
+		expect(envelope(observed).diagnostics).toMatchObject({ status: "available", closed: true })
+		expect(files(root)).toHaveLength(1)
+		expect(bookkeeping(root)).toEqual([...kept].sort())
+		expect(Object.fromEntries(kept.map((name) => [name, readdirSync(join(directory(root), name)).sort()]))).toEqual(shapes)
+		caps(root)
+	})
+	test("a successor acquiring during the prior owner's release window leaves two clean allocations", async () => {
+		const root = fresh()
+		// Test-owned barrier: hold the prior owner inside release right after its lock leaves the shared path.
+		const preload = join(root.privateRoot, "release-barrier-preload.ts")
+		writeFileSync(preload, [
+			'import { mock } from "bun:test"',
+			'import * as fs from "node:fs"',
+			'import { join } from "node:path"',
+			"const control = process.env.O2_CONTROL as string",
+			"const originalRename = fs.renameSync",
+			'mock.module("node:fs", () => ({ ...fs, renameSync: ((from: fs.PathLike, to: fs.PathLike) => {',
+			"\toriginalRename(from, to)",
+			'\tif (!String(from).endsWith("/.allocation-lock")) return',
+			'\tfs.writeFileSync(join(control, `ready-${process.pid}`), "ready\\n", { mode: 0o600 })',
+			"\tconst deadline = Date.now() + 3000",
+			'\twhile (!fs.existsSync(join(control, "release"))) { if (Date.now() > deadline) throw new Error("release barrier never released"); Bun.sleepSync(2) }',
+			"}) as typeof fs.renameSync }))",
+		].join("\n"), { mode: 0o600 })
+		const env = { PATH: process.env.PATH ?? "", HOME: root.privateRoot, XDG_STATE_HOME: join(root.privateRoot, "state"), O2_CONTROL: root.privateRoot, NO_COLOR: "1" }
+		const prior = Bun.spawn([process.execPath, "--preload", preload, MAIN, "inspect", "--json"], { cwd: root.root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+		children.push(prior)
+		const priorResult = Promise.all([new Response(prior.stdout).text(), new Response(prior.stderr).text(), prior.exited]).then(([stdout, stderr, exit]): Run => ({ stdout, stderr, exit, signal: prior.signalCode }))
+		await ready(root)
+		// The shared lock path is free while the prior owner still holds its retiring directory.
+		expect(bookkeeping(root)).toEqual([`.allocation-lock.retiring-${prior.pid}-${HOST_TOKEN}-1`])
+		const successor = await run(root)
+		expect(successor.exit).toBe(0)
+		expect(envelope(successor).diagnostics).toMatchObject({ status: "available", closed: true })
+		writeFileSync(join(root.privateRoot, "release"), "release\n")
+		const observed = await priorResult
+		expect(observed.exit).toBe(0)
+		expect(envelope(observed).diagnostics).toMatchObject({ status: "available", closed: true })
+		expect(domain(observed)).toEqual(domain(successor))
+		const logs = files(root)
+		expect(logs).toHaveLength(2)
+		const names = readdirSync(directory(root))
+		for (const file of logs) expect(names.some((name) => name.startsWith(`${basename(file)}.closed-`))).toBe(true)
+		expect(bookkeeping(root)).toEqual([])
+		caps(root)
+		expect(readState(root).resource).toBe(RESET_RESOURCE)
+	})
+})
+
+describe("O2 timed-out flush later close", () => {
+	test("a drain that settles after the flush timeout closes the file, keeps the frozen timeout status and frees its reservation", async () => {
+		const root = fresh()
+		for (let index = 0; index < 9; index += 1) seed(root, `active-${index}`, 1_000_000, false)
+		// Test-owned process: production diagnostics with one descriptor write delayed past the flush deadline.
+		const preload = join(root.privateRoot, "later-close-preload.ts")
+		const driver = join(root.privateRoot, "later-close-driver.ts")
+		writeFileSync(preload, [
+			'import { mock } from "bun:test"',
+			'import * as fs from "node:fs"',
+			"const fds = new Set<number>()",
+			"const originalOpen = fs.openSync",
+			"const originalWrite = fs.write",
+			"mock.module(\"node:fs\", () => ({ ...fs,",
+			"\topenSync: ((path: fs.PathLike, flags: number, mode: number) => { const fd = originalOpen(path, flags, mode); if (String(path).endsWith(\".jsonl\")) fds.add(fd); return fd }) as typeof fs.openSync,",
+			"\twrite: ((fd: number, buffer: Buffer, offset: number, length: number, position: number | null, callback: (error: NodeJS.ErrnoException | null, written: number, buffer: Buffer) => void) => {",
+			"\t\tif (!fds.has(fd)) { originalWrite(fd, buffer, offset, length, position, callback); return }",
+			"\t\tsetTimeout(() => originalWrite(fd, buffer, offset, length, position, callback), 700)",
+			"\t}) as typeof fs.write,",
+			"}))",
+		].join("\n"), { mode: 0o600 })
+		writeFileSync(driver, [
+			'import { readdirSync } from "node:fs"',
+			'import { dirname } from "node:path"',
+			`import { openRunDiagnostics } from ${JSON.stringify(DIAGNOSTICS)}`,
+			'const opened = await openRunDiagnostics({ runIdentity: "run-later-close", command: "inspect", env: process.env, fault: null })',
+			'opened.log("diagnostics.later", "later close")',
+			"const status = await opened.dispose()",
+			"const directory = dirname(status.file as string)",
+			'const closed = () => readdirSync(directory).some((name) => name.startsWith("run-later-close.jsonl.closed-"))',
+			"const closedAtDispose = closed()",
+			"const deadline = performance.now() + 1500",
+			"while (!closed() && performance.now() < deadline) await Bun.sleep(5)",
+			"console.log(JSON.stringify({ status, closedAtDispose, closedLater: closed() }))",
+		].join("\n"), { mode: 0o600 })
+		const env = { PATH: process.env.PATH ?? "", HOME: root.privateRoot, XDG_STATE_HOME: join(root.privateRoot, "state"), NO_COLOR: "1" }
+		const child = Bun.spawn([process.execPath, "--preload", preload, driver], { cwd: root.root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
+		children.push(child)
+		const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+		expect(stderr).toBe("")
+		expect(exit).toBe(0)
+		const observed = JSON.parse(stdout)
+		expect(observed.status).toMatchObject({ sinkFailure: "timeout: diagnostic flush", unflushedRecords: 1, closed: false })
+		expect(observed.closedAtDispose).toBe(false)
+		expect(observed.closedLater).toBe(true)
+		expect(readFileSync(join(directory(root), "run-later-close.jsonl"), "utf8")).toContain('"event_kind":"diagnostics.later"')
+		// Nine active files reserve 9 MB; the next run fits only because the late-closed file is reclaimable, and prune takes it.
+		const next = await run(root)
+		expect(envelope(next).diagnostics.status).toBe("available")
+		expect(existsSync(join(directory(root), "run-later-close.jsonl"))).toBe(false)
+		expect(files(root)).toHaveLength(10)
+		caps(root)
 	})
 })

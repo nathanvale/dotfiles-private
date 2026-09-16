@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
@@ -16,20 +16,35 @@ function workspace(): string {
 	return root
 }
 
-function fakeChecker(root: string, mutation: "none" | "mode" | "directory" | "symlink" | "fifo"): string {
+function fakeChecker(root: string, mutation: "none" | "mode" | "directory" | "symlink" | "fifo" | "unclosed" | "stale-marker" | "lock" | "loose-file" | "stray"): string {
 	const path = join(root, `checker-${mutation}.ts`)
 	writeFileSync(path, `
-import { chmodSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, lstatSync, mkdirSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 const root = process.env.REPAIR_LAB_ROOT as string
 writeFileSync(${JSON.stringify(join(root, "fake.pid"))}, String(process.pid))
-const diagnostics = join(root, "diagnostics")
+const xdg = process.env.XDG_STATE_HOME as string
+const diagnostics = join(xdg, "repair-lab", "diagnostics")
 mkdirSync(diagnostics, { recursive: true, mode: 0o700 })
-chmodSync(diagnostics, 0o700)
+for (const directory of [xdg, join(xdg, "repair-lab"), diagnostics]) chmodSync(directory, 0o700)
 const file = join(diagnostics, "fake.jsonl")
-writeFileSync(file, "")
+writeFileSync(file, "fake diagnostic\\n")
 chmodSync(file, 0o600)
+const info = lstatSync(file)
+const marker = file + ".closed-" + info.dev + "-" + info.ino + "-" + info.size + "-" + info.mtimeMs
 const mutation = ${JSON.stringify(mutation)}
+if (mutation !== "unclosed") {
+	const markerPath = mutation === "stale-marker" ? file + ".closed-" + info.dev + "-" + (info.ino + 1) + "-" + info.size + "-" + info.mtimeMs : marker
+	mkdirSync(markerPath, { mode: 0o700 })
+	chmodSync(markerPath, 0o700)
+}
+if (mutation === "lock") {
+	const lock = join(diagnostics, ".allocation-lock")
+	mkdirSync(lock, { mode: 0o700 })
+	chmodSync(lock, 0o700)
+}
+if (mutation === "loose-file") chmodSync(file, 0o644)
+if (mutation === "stray") writeFileSync(join(xdg, "stray.txt"), "stray\\n")
 if (mutation === "mode") chmodSync(join(root, "state", "resource.json"), 0o600)
 if (mutation === "directory") mkdirSync(join(root, "state", "unexpected-empty"), { mode: 0o700 })
 if (mutation === "symlink") symlinkSync("resource.json", join(root, "state", "unexpected-link.json"))
@@ -48,7 +63,7 @@ process.stdout.write(JSON.stringify({ envelopeVersion: 2, contractVersion: "2.0.
 	return path
 }
 
-async function runChecker(runRoot: string, checkerMain: string): Promise<{
+async function runChecker(runRoot: string, checkerMain: string, timeoutMs = 5_000): Promise<{
 	exit: number
 	stdout: string
 	stderr: string
@@ -75,7 +90,7 @@ async function runChecker(runRoot: string, checkerMain: string): Promise<{
 	const timeout = setTimeout(() => {
 		timedOut = true
 		child.kill()
-	}, 5_000)
+	}, timeoutMs)
 	try {
 		const [stdout, stderr, exit] = await Promise.all([
 			new Response(child.stdout).text(),
@@ -116,6 +131,31 @@ describe("checker-run filesystem manifest", () => {
 			mkdirSync(runRoot, { mode: 0o700 })
 			const run = await runChecker(runRoot, fakeChecker(root, mutation))
 			expect(`${mutation}:${run.exit}:${run.stdout}:${run.stderr}`).toContain(`${mutation}:1:checker-run: FAIL`)
+		}
+	})
+
+	test("accepts the real checker driving the real command through the private-state hierarchy", async () => {
+		const root = workspace()
+		const runRoot = join(root, "run")
+		mkdirSync(runRoot, { mode: 0o700 })
+		const checkerMain = resolve(import.meta.dir, "../../../cli-design-check/src/successor/main.ts")
+		const run = await runChecker(runRoot, checkerMain, 60_000)
+		expect(run).toMatchObject({ exit: 0, stdout: "checker-run: ok\n", stderr: "", timedOut: false, signal: null })
+		const verdict = JSON.parse(readFileSync(join(runRoot, "verdict.json"), "utf8")) as { added: string[]; removed: string[]; modified: string[] }
+		expect(verdict.added).toContain("private-state/repair-lab/diagnostics")
+		expect(verdict.added.some((path) => /^private-state\/repair-lab\/diagnostics\/[a-zA-Z0-9_-]+\.jsonl$/.test(path))).toBe(true)
+		expect(verdict.removed).toEqual([])
+		expect(verdict.modified).toEqual([])
+	}, 90_000)
+
+	test("rejects invalid private-state diagnostics hierarchy additions", async () => {
+		for (const mutation of ["unclosed", "stale-marker", "lock", "loose-file", "stray"] as const) {
+			const root = workspace()
+			const runRoot = join(root, "run")
+			mkdirSync(runRoot, { mode: 0o700 })
+			const run = await runChecker(runRoot, fakeChecker(root, mutation))
+			expect(run.exit).toBe(1)
+			expect(run.stdout).toContain("checker-run: FAIL added-diagnostics-only")
 		}
 	})
 

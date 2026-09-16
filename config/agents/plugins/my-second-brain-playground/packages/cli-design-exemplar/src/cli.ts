@@ -286,18 +286,24 @@ function inspectDiagnostics(status: object): DiagnosticInspection {
 }
 
 // C0 ties timeout to unconfirmed closure and pending admitted records. Loss cannot coexist with a claim of
-// no sink failure. Conflicting fields do not independently establish which side is wrong, so omit both claims.
-function validateDiagnosticInvariants(inspected: DiagnosticInspection): void {
-	const { sinkFailure, closed, unflushedRecords, countsComplete } = inspected.trusted
+// no sink failure, and neither can an unconfirmed closure: the producer only leaves closed false after a sink failure.
+// Conflicting fields do not independently establish which side is wrong, so omit both claims.
+function conflictingDiagnosticClaims(trusted: Record<string, unknown>): Set<string> {
+	const { sinkFailure, closed, unflushedRecords, countsComplete } = trusted
 	const conflicting = new Set<string>()
 	if (sinkFailure === "flush-timeout" && closed === true) { conflicting.add("sinkFailure"); conflicting.add("closed") }
 	if (sinkFailure === "flush-timeout" && unflushedRecords === 0 && countsComplete === true) { conflicting.add("sinkFailure"); conflicting.add("unflushedRecords") }
-	if (sinkFailure === null) {
-		for (const name of ["droppedRecords", "unflushedRecords"]) {
-			const value = inspected.trusted[name]
-			if (typeof value === "number" && value > 0) { conflicting.add("sinkFailure"); conflicting.add(name) }
-		}
+	if (sinkFailure !== null) return conflicting
+	if (closed === false) { conflicting.add("sinkFailure"); conflicting.add("closed") }
+	for (const name of ["droppedRecords", "unflushedRecords"]) {
+		const value = trusted[name]
+		if (typeof value === "number" && value > 0) { conflicting.add("sinkFailure"); conflicting.add(name) }
 	}
+	return conflicting
+}
+
+function validateDiagnosticInvariants(inspected: DiagnosticInspection): void {
+	const conflicting = conflictingDiagnosticClaims(inspected.trusted)
 	if (conflicting.size === 0) return
 	inspected.invalid = true
 	for (const name of conflicting) {

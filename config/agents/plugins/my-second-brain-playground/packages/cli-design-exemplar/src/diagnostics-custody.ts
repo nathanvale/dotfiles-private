@@ -1,12 +1,21 @@
-import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, rmdirSync, unlinkSync, type Stats } from "node:fs"
+import { createHash } from "node:crypto"
+import { chmodSync, closeSync, constants, fstatSync, lstatSync, mkdirSync, openSync, readdirSync, renameSync, rmdirSync, unlinkSync, type Stats } from "node:fs"
+import { hostname } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 
 // Each active file reserves its full run allowance. Empty marker directories are bookkeeping, not log files.
 // A closed marker binds the descriptor's dev/inode/size/mtime, so age or an absent lease never proves closure.
+// A held allocation lock is always a populated directory placed on, and later moved off, the shared path by one atomic
+// rename. Only an empty directory or a single owner marker whose process is verified dead on this host is recoverable;
+// anything else fails fast.
 const RUN_BYTES = 1_000_000
 const TOTAL_BYTES = 10_000_000
 const FILES = 50
 const WEEK_MS = 7 * 24 * 60 * 60 * 1000
+const HOST = createHash("sha256").update(hostname()).digest("hex").slice(0, 16)
+const OWNER = /^owner-([1-9][0-9]{0,9})-([0-9a-f]{16})$/
+const RESIDUE = /^\.allocation-lock\.(?:pending|retiring)-([1-9][0-9]{0,9})-([0-9a-f]{16})-[0-9]+$/
+let sequence = 0
 
 export interface DiagnosticFile {
 	fd: number
@@ -109,6 +118,81 @@ function allocate(directory: string, runIdentity: string): DiagnosticFile {
 	} }
 }
 
+function alive(pid: number): boolean {
+	try { process.kill(pid, 0); return true } catch (error) {
+		// EPERM is another user's live process; only ESRCH proves the owner is gone.
+		return (error as NodeJS.ErrnoException).code !== "ESRCH"
+	}
+}
+
+function discard(entry: string): void {
+	if (!lstatSync(entry).isDirectory()) { unlinkSync(entry); return }
+	for (const name of readdirSync(entry)) unlinkSync(join(entry, name))
+	rmdirSync(entry)
+}
+
+// Private staging and retiring entries never hold the shared path. Only a same-host entry whose process is locally
+// proven dead is litter; a foreign host's liveness cannot be judged here, so its residue is left alone.
+function sweepResidue(directory: string): void {
+	for (const name of readdirSync(directory)) {
+		const match = RESIDUE.exec(name)
+		const pid = Number(match?.[1])
+		if (match?.[2] !== HOST || pid === process.pid || alive(pid)) continue
+		if (lstatSync(join(directory, name)).uid === process.getuid?.()) discard(join(directory, name))
+	}
+}
+
+// Stage a fully initialized lock privately so the lock path never shows an ownerless directory.
+function stageAllocationLock(staging: string): string {
+	const marker = `owner-${process.pid}-${HOST}`
+	// A leftover entry under our own unique name can only belong to a dead earlier process that reused this pid.
+	if (existing(staging) !== null) discard(staging)
+	mkdirSync(staging, { mode: 0o700 })
+	closeSync(openSync(join(staging, marker), constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW, 0o600))
+	return marker
+}
+
+// Remove the lock only when it is empty or names one verified dead owner on this host; never touch anything else.
+function recoverStaleLock(lock: string): void {
+	const info = lstatSync(lock)
+	if (!info.isDirectory() || info.uid !== process.getuid?.()) throw new Error("capacity")
+	const entries = readdirSync(lock)
+	if (entries.length === 1) {
+		const name = entries[0] as string
+		const match = OWNER.exec(name)
+		const pid = Number(match?.[1])
+		if (match?.[2] !== HOST || pid === process.pid || alive(pid)) throw new Error("capacity")
+		const marker = lstatSync(join(lock, name))
+		if (!marker.isFile() || marker.uid !== info.uid) throw new Error("capacity")
+		try { unlinkSync(join(lock, name)) } catch (error) {
+			if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error
+		}
+	} else if (entries.length !== 0) throw new Error("capacity")
+	// rmdir succeeds only while the directory is still empty, so a fresh populated lock is never removed.
+	rmdirSync(lock)
+}
+
+function acquireAllocationLock(directory: string): () => void {
+	const lock = join(directory, ".allocation-lock")
+	sequence += 1
+	const staging = `${lock}.pending-${process.pid}-${HOST}-${sequence}`
+	const retiring = `${lock}.retiring-${process.pid}-${HOST}-${sequence}`
+	sweepResidue(directory)
+	if (existing(retiring) !== null) discard(retiring)
+	const marker = stageAllocationLock(staging)
+	// rename replaces only an empty directory and fails on a populated one, so a live holder is never displaced.
+	try {
+		try { renameSync(staging, lock) } catch { recoverStaleLock(lock); renameSync(staging, lock) }
+	} catch { discard(staging); throw new Error("capacity") }
+	return () => {
+		// One rename moves the still-populated lock off the shared path, so the path is never left empty for a
+		// successor to replace mid-release; the marker and directory are then dismantled under our private name.
+		renameSync(lock, retiring)
+		unlinkSync(join(retiring, marker))
+		rmdirSync(retiring)
+	}
+}
+
 export function openDiagnosticFile(env: Record<string, string | undefined>, runIdentity: string): DiagnosticFile {
 	if (!/^[a-zA-Z0-9_-]{1,128}$/.test(runIdentity)) throw new Error("invalid run identity")
 	const directory = stateDirectory(env)
@@ -119,7 +203,6 @@ export function openDiagnosticFile(env: Record<string, string | undefined>, runI
 		chmodSync(directory, 0o700)
 	} else mkdirSync(directory, { mode: 0o700 })
 	trustedDirectory(directory)
-	const lock = join(directory, ".allocation-lock")
-	try { mkdirSync(lock, { mode: 0o700 }) } catch { throw new Error("capacity") }
-	try { prune(directory); return allocate(directory, runIdentity) } finally { rmdirSync(lock) }
+	const release = acquireAllocationLock(directory)
+	try { prune(directory); return allocate(directory, runIdentity) } finally { release() }
 }

@@ -28,6 +28,31 @@ function records(file: string): Array<Record<string, unknown>> {
 
 const tick = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 5))
 
+async function waitUntil(condition: () => boolean, label: string, limitMs = 2_000): Promise<void> {
+	const deadline = Date.now() + limitMs
+	while (!condition()) {
+		if (Date.now() > deadline) throw new Error(`timed out waiting for: ${label}`)
+		await tick()
+	}
+}
+
+// Byte-level observation for polling while writes are in flight: a record's newline is its last byte, so newline
+// count is the complete-record count and a partial write is never parsed.
+function completeRecords(file: string): number {
+	return existsSync(file) ? readFileSync(file).filter((byte) => byte === 0x0a).length : 0
+}
+
+// Constant payload: only the sequence digits grow, so the last complete line bounds every later record, and file
+// size never exceeds admitted bytes; once this holds no further record can be admitted for the run.
+function capTripped(file: string): boolean {
+	if (!existsSync(file)) return false
+	const bytes = readFileSync(file)
+	const end = bytes.lastIndexOf(0x0a)
+	if (end < 0) return false
+	const lastLineBytes = end - bytes.lastIndexOf(0x0a, end - 1)
+	return bytes.length + lastLineBytes > 1_000_000
+}
+
 describe("diagnostics adapter", () => {
 	test("creates a 0700 directory and a 0600 per-run file; log() is deferred to the next tick", async () => {
 		const base = root()
@@ -145,11 +170,19 @@ describe("O2 record and run admission", () => {
 		const base = root()
 		const diagnostics = await openRunDiagnostics({ runIdentity: "run-cap", command: "repair-lab.inspect", env: { XDG_STATE_HOME: base }, fault: null })
 		const payload = Object.fromEntries(Array.from({ length: 100 }, (_, index) => [`group_${index}_${"a".repeat(40)}`, Object.fromEntries(Array.from({ length: 4 }, (_, child) => [`value_${child}`, 1234567890123]))]))
+		const file = join(base, "repair-lab", "diagnostics", "run-cap.jsonl")
 		for (let batch = 0; batch < 20; batch += 1) {
 			for (let index = 0; index < 10; index += 1) diagnostics.log("inspect.completed", "ready", payload)
-			await new Promise((resolve) => setTimeout(resolve, 10))
+			if (batch === 0) {
+				await waitUntil(() => completeRecords(file) === 10, "first diagnostic batch")
+				expect(records(file)).toHaveLength(10)
+				continue
+			}
+			// A tripped cap means later logs cannot increase the file count.
+			await waitUntil(() => completeRecords(file) >= (batch + 1) * 10 || capTripped(file), `diagnostic batch ${batch + 1} or run cap`)
 		}
 		const status = await diagnostics.dispose()
+		expect(records(file)).toHaveLength(completeRecords(file))
 		expect(status.droppedRecords).toBeGreaterThan(0)
 		expect(statSync(status.file as string).size).toBeGreaterThan(900_000)
 		expect(statSync(status.file as string).size).toBeLessThanOrEqual(1_000_000)

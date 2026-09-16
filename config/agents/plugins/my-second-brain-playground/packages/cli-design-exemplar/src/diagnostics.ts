@@ -144,6 +144,9 @@ class BoundedQueue {
 		else this.close()
 		this.queue.length = 0
 		this.frozen = Object.freeze({ file: this.file.file, sinkFailure: this.failure, droppedRecords: this.dropped, unflushedRecords: this.unflushed, truncatedRecords: this.truncated, countsComplete: true, closed: this.closed })
+		// A timed-out drain may still settle before exit: close then so the file earns its closure proof and stops
+		// reserving a full run allowance. The frozen status above already reported the timeout and stays unchanged.
+		if (!complete) void this.flush().then(() => this.close(), () => this.close())
 		return this.frozen
 	}
 
