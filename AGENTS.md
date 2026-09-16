@@ -18,6 +18,24 @@
 - Running or diagnosing the `quality:fallow` gate: read [`docs/agents/fallow.md`](docs/agents/fallow.md).
 - Working inside a workspace package: run `bun run typecheck`, `bun run lint`, `bun run test` there; root `bun run check` is the complete gate.
 
+## Agent skills
+
+### Issue tracker
+
+Publish repository Specs and Tickets as GitHub Issues in
+`nathanvale/dotfiles-private-archive`. Read
+[`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
+
+### Triage labels
+
+Use the five canonical Matt Pocock triage roles. Read
+[`docs/agents/triage-labels.md`](docs/agents/triage-labels.md).
+
+### Domain docs
+
+Use the repository's single-context glossary and ADR layout. Read
+[`docs/agents/domain.md`](docs/agents/domain.md).
+
 ## Proof
 
 - Behavior change: smallest covering check must pass before broader checks.
