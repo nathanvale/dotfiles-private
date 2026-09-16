@@ -89,14 +89,19 @@ journal and actual resource evidence, then reports what is confirmed.
 ## Help and discovery
 
 Human help names public commands, options, and examples. Machine mode applies
-when `--json` is present, including usage failures. Except for SIGINT and
-SIGTERM, machine mode emits exactly one validated 2.0 envelope on stdout with
-empty stderr. Before output, SIGINT and SIGTERM exit 130 and 143, respectively,
-after the bounded diagnostics flush with no envelope and empty stdout and
-stderr. After output starts, a signal may leave a partial stdout stream; once
-the stream is fully drained, the complete stdout envelope may remain. Keep
-stderr empty and preserve the observed stream without emitting a replacement
-envelope.
+when `--json` is present, including usage failures. On ordinary
+application-controlled completion, machine mode emits exactly one validated 2.0
+envelope on stdout with empty stderr. An uncaught crash or a pre-drain
+EPIPE/transport failure is a no-envelope exception: it may terminate before
+that completion, retain any already observed stdout, keep stderr empty, and
+never emit a replacement envelope.
+
+SIGINT and SIGTERM use the accepted bounded-stop lifecycle: exit 130 and 143,
+respectively, after the bounded diagnostics flush. Before output, no envelope
+is emitted and stdout and stderr remain empty. After output starts, a signal may
+leave a partial stdout stream; once the stream is fully drained, the complete
+stdout envelope may remain. Keep stderr empty and preserve the observed stream
+without emitting a replacement envelope.
 
 `--discover --json` reports contract and generation version, profile, commands,
 exit meanings, signal exits, and explicit effect exclusions.
