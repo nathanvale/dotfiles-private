@@ -24,31 +24,47 @@ Completion criterion: every command has an effect class and observable result.
 
 ## Choose the route
 
+Set `SKILL_DIR` to this `SKILL.md`'s directory, then derive the plugin root
+once:
+
+```bash
+SKILL_DIR=/absolute/path/to/skills/cli-design
+PLUGIN_ROOT=$(cd -- "$SKILL_DIR/../.." && pwd -P)
+```
+
+`--source-packet PATH_OR_URL` names the project's vault packet as an absolute
+path or HTTP(S) URL. The bootstrap also refuses newline, carriage-return, and
+backtick characters; the composer checks the shape alone. Both record the
+value verbatim in the generated `README.md` or `.cli-design-template.json`;
+neither reads the packet. Packet placement: dotfiles
+`docs/agents/work-placement.md`.
+
 ### New repository
 
 Run the canonical `bun-typescript-template` public bootstrap from that
 repository's root:
 
 ```bash
-bun run bootstrap --profile durable --starter simple --destination PATH --source-packet PATH_OR_URL [--name NAME] [--json]
-bun run bootstrap --profile durable --starter complex --destination PATH --source-packet PATH_OR_URL [--name NAME] [--json]
+bun run bootstrap --profile durable --starter simple --destination PATH --source-packet PATH_OR_URL
+bun run bootstrap --profile durable --starter complex --destination PATH --source-packet PATH_OR_URL
 ```
 
-Use an empty destination. Generated projects own their dependencies, lockfile,
-checks, tests, and CI.
+Use an empty destination. Add `--name NAME` to replace the name derived from
+the destination and `--json` for the machine result. Generated projects own
+their dependencies, lockfile, checks, tests, and CI.
 
 ### Existing Bun project
 
-From `PLUGIN_ROOT` (`../..` from this `SKILL.md`), run the plugin's
-preservation-safe composer:
+Run the plugin's preservation-safe composer from `PLUGIN_ROOT`:
 
 ```bash
-bun run cli-design compose-existing --project-root PATH --package PATH --starter simple --source-packet PATH_OR_URL [--json]
-bun run cli-design compose-existing --project-root PATH --package PATH --starter complex --source-packet PATH_OR_URL [--json]
+bun run --cwd "$PLUGIN_ROOT" cli-design compose-existing --project-root PATH --package PATH --starter simple --source-packet PATH_OR_URL
+bun run --cwd "$PLUGIN_ROOT" cli-design compose-existing --project-root PATH --package PATH --starter complex --source-packet PATH_OR_URL
 ```
 
-Select the package explicitly. Resolve ownership conflicts instead of replacing
-current source, scripts, dependencies, tests, lockfile, or quality
+Pass an absolute `--project-root` and select the package explicitly; add
+`--json` for the machine result. Resolve ownership conflicts instead of
+replacing current source, scripts, dependencies, tests, lockfile, or quality
 configuration.
 
 ### Maintain or extend
@@ -152,8 +168,8 @@ For a new or changed command:
 2. Add implementation and public process tests.
 3. For a complex CLI, add every possible station with its outcome, cause,
    effect state, retry policy, and recovery guidance.
-4. Exercise `--discover-command COMMAND_IDENTITY --json` and compare it with the
-   same typed catalogue used by tests.
+4. Exercise the target CLI's `--discover-command COMMAND_IDENTITY --json` and
+   compare it with the same typed catalogue used by tests.
 5. Reject a new observed station that is undeclared or a declared required
    station that is never reached.
 
@@ -166,21 +182,29 @@ for every changed route.
 
 ## Prove the result
 
-Read public help first:
+Read public help first. Human help prints `[options]` only; JSON help lists
+every option with its value name:
 
 ```bash
-"${PLUGIN_ROOT}/bin/cli-design-check" --help
+"${PLUGIN_ROOT}/bin/cli-design-check" --help --json
 ```
 
-Run the strict checker using its required 2.0 scenario shape:
+Run the strict checker with its required 2.0 rows:
 
 ```bash
-"${PLUGIN_ROOT}/bin/cli-design-check" --cwd DIR --command "ARGV WORDS" --success-args "ARGS" --missing-args "ARGS" --internal-args "ARGS" --schema-args "ARGS" --transient-args "ARGS" [options]
+"${PLUGIN_ROOT}/bin/cli-design-check" --cwd DIR --command "ARGV WORDS" --success-args "ARGS" --missing-args "ARGS" --internal-args "ARGS" --schema-args "ARGS" --transient-args "ARGS" --json
 ```
 
-Supply the optional authority, redaction, malformed-value, and large-envelope
-rows when the CLI supports them. `--timeout-ms` bounds every spawned scenario
-and `--retain-streams-dir` retains raw streams; both are options, not rows. Run
+Add each optional row the CLI supports: `--effect-args "ARGS"` (authority
+refusal), `--secret-args "ARGS"` with `--secret-marker STRING` (redaction;
+supplied together), `--malformed-args "ARGS"` (malformed value), and
+`--large-args "ARGS"` (large envelope). `--timeout-ms N` bounds every spawned
+scenario and `--retain-streams-dir ABSOLUTE_DIR` retains raw streams; both are
+options, not rows. The matrix covers help, `--discover`, refusal, success,
+missing-input, and failure-class rows on the target; it has no
+`--discover-command` row and rejects that flag on itself, so the project's own
+catalogue and process tests prove command-scoped discovery (reference:
+`packages/cli-design-exemplar/tests/catalog/command-discovery.test.ts`). Run
 the generated or host repository's complete checks. For complex CLIs, run unit,
 integration, catalogue, recovery, and lifecycle process tests.
 
