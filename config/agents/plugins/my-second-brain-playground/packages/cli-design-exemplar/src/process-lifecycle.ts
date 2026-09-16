@@ -23,7 +23,7 @@ export interface ProcessLifecycle {
 }
 
 const DIAGNOSTIC_FLUSH_MILLISECONDS = 500
-const NORMAL_EXIT_WATCHDOG_MILLISECONDS = 150
+const NORMAL_EXIT_WATCHDOG_MILLISECONDS = 100
 
 export function createProcessLifecycle(dependencies: ProcessLifecycleDependencies): ProcessLifecycle {
 	let stopping = false
