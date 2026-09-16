@@ -94,7 +94,7 @@ function diffTrees(before: Map<string, string>, after: Map<string, string>): Tre
 	return { added, removed, modified }
 }
 
-async function runChecker(checkerMain: string, runRoot: string, cwdDir: string, fixtureRoot: string, adapter: string): Promise<RunResult> {
+async function runChecker(checkerMain: string, runRoot: string, targetRoot: string, cwdDir: string, fixtureRoot: string, adapter: string): Promise<RunResult> {
 	const retainedStreams = join(runRoot, "retained-streams")
 	mkdirSync(retainedStreams, { recursive: true, mode: 0o700 })
 	const child = Bun.spawn(
@@ -135,7 +135,7 @@ async function runChecker(checkerMain: string, runRoot: string, cwdDir: string, 
 			stdin: "ignore",
 			stdout: "pipe",
 			stderr: "pipe",
-			env: { HOME: process.env.HOME ?? "/", PATH: process.env.PATH ?? "", NO_COLOR: "1", TERM: "dumb", REPAIR_LAB_ROOT: fixtureRoot },
+			env: { HOME: runRoot, XDG_STATE_HOME: join(targetRoot, "private-state"), PATH: process.env.PATH ?? "", NO_COLOR: "1", TERM: "dumb", REPAIR_LAB_ROOT: fixtureRoot },
 		},
 	)
 	let timedOut = false
@@ -186,16 +186,55 @@ function makeExpectation(expected: unknown, actual: unknown, ok = deepEqual(expe
 	return { expected, actual: normalized(actual), ok }
 }
 
-// The only admitted additions are the fixture's private diagnostics directory (0700) and its per-run files (0600).
-function diagnosticsOnly(added: string[], after: Map<string, string>, targetRoot: string, fixtureRoot: string): boolean {
-	const prefix = relative(targetRoot, fixtureRoot).split(sep).join("/").replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-	const directory = new RegExp(`^${prefix}/diagnostics$`)
-	const file = new RegExp(`^${prefix}/diagnostics/[^/]+\\.jsonl$`)
-	const admitted = (path: string): boolean => (directory.test(path) && after.get(path) === "dir 0700 -") || (file.test(path) && (after.get(path) ?? "").startsWith("file 0600 "))
-	return added.some((path) => file.test(path)) && new Set(added).size === added.length && added.every(admitted)
+const DIAGNOSTICS = "private-state/repair-lab/diagnostics"
+const DIAGNOSTICS_DIRECTORIES = new Set(["private-state", "private-state/repair-lab", DIAGNOSTICS])
+const DIAGNOSTIC_FILE = /^private-state\/repair-lab\/diagnostics\/([a-zA-Z0-9_-]{1,128})\.jsonl$/
+const CLOSURE_MARKER = /^private-state\/repair-lab\/diagnostics\/([a-zA-Z0-9_-]{1,128})\.jsonl\.closed-([0-9.-]+)$/
+
+type Addition = { kind: "directory" } | { kind: "file"; id: string } | { kind: "marker"; id: string; suffix: string }
+
+// One added manifest path is a hierarchy directory (0700), a per-run file (0600), a closure marker (empty 0700
+// directory), or an unrelated target mutation.
+function classifyAddition(path: string, entry: string | undefined): Addition | null {
+	if (DIAGNOSTICS_DIRECTORIES.has(path)) return entry === "dir 0700 -" ? { kind: "directory" } : null
+	const file = DIAGNOSTIC_FILE.exec(path)
+	if (file !== null) return entry?.startsWith("file 0600 ") ? { kind: "file", id: file[1] as string } : null
+	const marker = CLOSURE_MARKER.exec(path)
+	if (marker !== null) return entry === "dir 0700 -" ? { kind: "marker", id: marker[1] as string, suffix: marker[2] as string } : null
+	return null
 }
 
-function judge(stdout: string, stderr: string, checkerExit: number, delta: TreeDelta, after: Map<string, string>, targetRoot: string, fixtureRoot: string): Judgement {
+// A closure marker is trustworthy only when its suffix binds the live dev, inode, size, and mtime of its file, exactly
+// as src/diagnostics-custody.ts writes it.
+function boundMarkerSuffix(file: string): string | null {
+	try {
+		const info = lstatSync(file)
+		return `${info.dev}-${info.ino}-${info.size}-${info.mtimeMs}`
+	} catch {
+		return null
+	}
+}
+
+// The only admitted additions are the private-state diagnostics hierarchy, its per-run files, and one bound closure
+// marker per file. A leftover allocation lock, an unclosed or replaced file, or any other path fails the run.
+function diagnosticsOnly(added: string[], after: Map<string, string>, targetRoot: string): boolean {
+	if (added.length === 0 || new Set(added).size !== added.length) return false
+	const files = new Map<string, string>()
+	const markers = new Map<string, string[]>()
+	for (const path of added) {
+		const addition = classifyAddition(path, after.get(path))
+		if (addition === null) return false
+		if (addition.kind === "file") files.set(addition.id, path)
+		if (addition.kind === "marker") markers.set(addition.id, [...(markers.get(addition.id) ?? []), addition.suffix])
+	}
+	if (files.size === 0 || markers.size !== files.size) return false
+	return [...files].every(([id, path]) => {
+		const suffixes = markers.get(id)
+		return suffixes?.length === 1 && suffixes[0] === boundMarkerSuffix(join(targetRoot, path))
+	})
+}
+
+function judge(stdout: string, stderr: string, checkerExit: number, delta: TreeDelta, after: Map<string, string>, targetRoot: string): Judgement {
 	const parsed = parseReport(stdout)
 	const report = parsed.report ?? {}
 	const exclusions = Array.isArray(report.observationExclusions) ? report.observationExclusions : []
@@ -213,7 +252,7 @@ function judge(stdout: string, stderr: string, checkerExit: number, delta: TreeD
 		"checker-stderr-empty": makeExpectation("", stderr),
 		"removed-empty": makeExpectation([], delta.removed),
 		"modified-empty": makeExpectation([], delta.modified),
-		"added-diagnostics-only": makeExpectation("fixture diagnostics (0700) and its *.jsonl (0600) only", delta.added, diagnosticsOnly(delta.added, after, targetRoot, fixtureRoot)),
+		"added-diagnostics-only": makeExpectation("private-state diagnostics hierarchy (0700 dirs), *.jsonl (0600) and bound closure markers only", delta.added, diagnosticsOnly(delta.added, after, targetRoot)),
 	}
 	return { expectations, ok: Object.values(expectations).every((item) => item.ok) }
 }
@@ -282,14 +321,14 @@ async function main(): Promise<void> {
 	const adapter = writeCheckerAdapter(cwdDir)
 	const before = manifestTree(targetRoot)
 	writeManifest(join(runRoot, "hashes-before.txt"), before)
-	const result = await runChecker(checkerMain, runRoot, cwdDir, root.root, adapter)
+	const result = await runChecker(checkerMain, runRoot, targetRoot, cwdDir, root.root, adapter)
 	writeFileSync(join(runRoot, "checker-report.json"), result.stdout)
 	writeFileSync(join(runRoot, "checker-stderr.txt"), result.stderr)
 	writeFileSync(join(runRoot, "checker-exit.txt"), `${result.exit}\n`)
 	const after = manifestTree(targetRoot)
 	writeManifest(join(runRoot, "hashes-after.txt"), after)
 	const delta = diffTrees(before, after)
-	const judgement = judge(result.stdout, result.stderr, result.exit, delta, after, targetRoot, root.root)
+	const judgement = judge(result.stdout, result.stderr, result.exit, delta, after, targetRoot)
 	writeJson(join(runRoot, "verdict.json"), { checkerMain, checkerExit: result.exit, expectations: judgement.expectations, ...delta, ok: judgement.ok })
 	if (judgement.ok) process.stdout.write("checker-run: ok\n")
 	else process.stdout.write(`checker-run: FAIL ${Object.entries(judgement.expectations).filter(([, item]) => !item.ok).map(([name]) => name).join(",")}\n`)
