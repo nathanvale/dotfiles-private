@@ -90,6 +90,7 @@ class ComposeError extends Error {
     message: string,
     readonly exitCode: 1 | 2 | 3,
     readonly repairAction: string,
+    readonly unresolvedEffects: string[] = [],
   ) {
     super(message);
   }
@@ -522,6 +523,7 @@ export async function stageProject(
         `staged project cleanup failed; unresolved effects: ${stage}`,
         3,
         "Preserve and inspect the listed path before retrying.",
+        [stage],
       );
     }
     throw error;
@@ -562,6 +564,7 @@ async function regenerateLock(
       `staged project cleanup failed; unresolved effects: ${stage}`,
       3,
       "Preserve and inspect the listed path before retrying.",
+      [stage],
     );
   }
   if (problem !== undefined) throw problem;
@@ -571,6 +574,64 @@ async function regenerateLock(
 
 function hash(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
+}
+
+export interface LockInputSnapshot {
+  bytes: Uint8Array;
+  path: string;
+}
+
+export async function snapshotLockInputs(projectRoot: string): Promise<LockInputSnapshot[]> {
+  const rootManifestPath = join(projectRoot, "package.json");
+  const rootManifest = await readManifest(rootManifestPath, "project package.json");
+  const paths = new Set([rootManifestPath, join(projectRoot, "bun.lock")]);
+  for (const pattern of workspacePatterns(rootManifest)) {
+    const manifestPattern = `${pattern.replace(/\/$/, "")}/package.json`;
+    for await (const path of new Bun.Glob(manifestPattern).scan({
+      cwd: projectRoot,
+      onlyFiles: true,
+    })) {
+      paths.add(join(projectRoot, path));
+    }
+  }
+  return await Promise.all(
+    [...paths]
+      .sort()
+      .map(async (path) => ({ bytes: await readFile(path), path })),
+  );
+}
+
+function snapshotBytes(inputs: LockInputSnapshot[], path: string): Uint8Array {
+  const input = inputs.find((candidate) => candidate.path === path);
+  if (input === undefined) throw new Error(`missing lock input snapshot: ${path}`);
+  return input.bytes;
+}
+
+export async function requireUnchangedLockInputs(
+  projectRoot: string,
+  inputs: LockInputSnapshot[],
+): Promise<void> {
+  const currentInputs = await snapshotLockInputs(projectRoot);
+  if (
+    currentInputs.length !== inputs.length ||
+    currentInputs.some((input, index) => input.path !== inputs[index]?.path)
+  ) {
+    throw new ComposeError(
+      "DOMAIN_CONCURRENT_CHANGE",
+      "workspace lock input set changed during preparation",
+      3,
+      "Inspect the concurrent edit and retry from the new state.",
+    );
+  }
+  for (const [index, input] of inputs.entries()) {
+    if (sameBytes(currentInputs[index]?.bytes ?? new Uint8Array(), input.bytes)) continue;
+    throw new ComposeError(
+      "DOMAIN_CONCURRENT_CHANGE",
+      `workspace lock input changed during preparation: ${relative(projectRoot, input.path)}`,
+      3,
+      "Inspect the concurrent edit and retry from the new state.",
+    );
+  }
 }
 
 async function requireAbsent(path: string): Promise<void> {
@@ -893,6 +954,7 @@ async function rollbackPublication(
 }
 
 function publicationError(error: unknown, unresolved: string[]): ComposeError {
+  const inherited = error instanceof ComposeError ? error.unresolvedEffects : [];
   const issue =
     error instanceof TransactionIssue
       ? error
@@ -900,13 +962,22 @@ function publicationError(error: unknown, unresolved: string[]): ComposeError {
           "internal",
           error instanceof Error ? error.message : "unexpected publish failure",
         );
-  const remaining = [...new Set([...issue.unresolved, ...unresolved])];
+  const remaining = [...new Set([...inherited, ...issue.unresolved, ...unresolved])];
   if (remaining.length > 0 || issue.kind === "partial") {
     return new ComposeError(
       "DOMAIN_PARTIAL_COMPOSITION",
       `${issue.message}; unresolved effects: ${remaining.join(", ")}`,
       3,
       "Preserve and inspect the listed paths before retrying.",
+      remaining,
+    );
+  }
+  if (error instanceof ComposeError) {
+    return new ComposeError(
+      error.causeCode,
+      `${error.message}; the host project was restored`,
+      error.exitCode,
+      error.repairAction,
     );
   }
   if (issue.kind === "collision") {
@@ -950,11 +1021,13 @@ export async function publish(
   creations: Creation[],
   replacements: Replacement[],
   fileSystem: FileSystemAdapter = nodeFileSystem,
+  confirmPublishedState: () => Promise<void> = async () => {},
 ): Promise<void> {
   const state: PublicationState = { created: [], createdDirectories: [], replaced: [] };
   try {
     for (const file of creations) await writeNewFile(file, state, fileSystem);
     for (const file of replacements) await replaceFile(file, state, fileSystem);
+    await confirmPublishedState();
   } catch (error) {
     throw publicationError(error, await rollbackPublication(state, fileSystem));
   }
@@ -965,6 +1038,7 @@ export async function publish(
       `composition completed with retained recovery files: ${unresolved.join(", ")}`,
       3,
       "Preserve and inspect the listed paths before retrying.",
+      unresolved,
     );
   }
 }
@@ -1019,11 +1093,15 @@ export async function withProjectLock<T>(
   }
   const unresolved = await releaseProjectLock(path, token, fileSystem);
   if (unresolved.length > 0) {
+    const actionMessage = problem instanceof Error ? `${problem.message}; ` : "";
+    const actionUnresolved = problem instanceof ComposeError ? problem.unresolvedEffects : [];
+    const remaining = [...new Set([...actionUnresolved, ...unresolved])];
     throw new ComposeError(
       "DOMAIN_PARTIAL_COMPOSITION",
-      `project transaction lock could not be released; unresolved effects: ${unresolved.join(", ")}`,
+      `${actionMessage}project transaction lock could not be released; unresolved effects: ${remaining.join(", ")}`,
       3,
       "Preserve and inspect the listed path before retrying.",
+      remaining,
     );
   }
   if (problem !== undefined) throw problem;
@@ -1034,8 +1112,9 @@ async function composeLocked(options: ComposeOptions) {
   const { packagePath } = await resolveOwners(options);
   const packageFile = join(packagePath, "package.json");
   const lockFile = join(options.projectRoot, "bun.lock");
-  const originalPackage = await readFile(packageFile);
-  const originalLock = await readFile(lockFile);
+  const lockInputs = await snapshotLockInputs(options.projectRoot);
+  const originalPackage = snapshotBytes(lockInputs, packageFile);
+  const originalLock = snapshotBytes(lockInputs, lockFile);
   const sources = templateFiles(options.starter);
   const metadataPath = join(packagePath, ".cli-design-template.json");
   for (const source of sources) {
@@ -1047,22 +1126,16 @@ async function composeLocked(options: ComposeOptions) {
 
   const nextPackage = await updatedPackage(packageFile, options.starter);
   const nextLock = await regenerateLock(options, nextPackage);
-  if (hash(await readFile(packageFile)) !== hash(originalPackage)) {
-    throw new ComposeError(
-      "DOMAIN_CONCURRENT_CHANGE",
-      "target package.json changed during preparation",
-      3,
-      "Inspect the concurrent edit and retry from the new state.",
-    );
-  }
-  if (hash(await readFile(lockFile)) !== hash(originalLock)) {
-    throw new ComposeError(
-      "DOMAIN_CONCURRENT_CHANGE",
-      "bun.lock changed during preparation",
-      3,
-      "Inspect the concurrent edit and retry from the new state.",
-    );
-  }
+  await requireUnchangedLockInputs(options.projectRoot, lockInputs);
+  const publishedLockInputs = lockInputs.map((input) => ({
+    ...input,
+    bytes:
+      input.path === packageFile
+        ? nextPackage
+        : input.path === lockFile
+          ? nextLock
+          : input.bytes,
+  }));
 
   const metadata = new TextEncoder().encode(
     `${JSON.stringify(
@@ -1087,6 +1160,8 @@ async function composeLocked(options: ComposeOptions) {
       { bytes: nextPackage, original: originalPackage, path: packageFile },
       { bytes: nextLock, original: originalLock, path: lockFile },
     ],
+    nodeFileSystem,
+    async () => await requireUnchangedLockInputs(options.projectRoot, publishedLockInputs),
   );
 
   return {
