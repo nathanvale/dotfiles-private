@@ -72,6 +72,22 @@ async function ready(root: Root, count = 1): Promise<void> {
 		await Bun.sleep(2)
 	}
 }
+async function finalizationStarted(root: Root): Promise<number> {
+	const deadline = performance.now() + 1500
+	let marker: string | undefined
+	for (;;) {
+		marker = readdirSync(root.privateRoot).find((name) => name.startsWith("finalizing-"))
+		if (marker !== undefined) break
+		if (performance.now() > deadline) throw new Error("child never reached the diagnostics finalization marker")
+		await Bun.sleep(2)
+	}
+	if (marker === undefined) throw new Error("child finalization marker disappeared")
+	const encoded = readFileSync(join(root.privateRoot, marker), "utf8")
+	if (!/^[1-9]\d{12}\n$/.test(encoded)) throw new Error("diagnostics finalization marker is invalid")
+	const started = Number(encoded.trim())
+	if (!Number.isSafeInteger(started)) throw new Error("diagnostics finalization marker is invalid")
+	return started
+}
 function seed(root: Root, name: string, bytes: number, closed: boolean, ageDays = 0): string {
 	mkdirSync(directory(root), { recursive: true, mode: 0o700 })
 	const file = join(directory(root), `${name}.jsonl`)
@@ -269,9 +285,13 @@ describe("O2 diagnostics custody process", () => {
 		const baseline = await run(fresh())
 		for (const mode of ["throw", "stuck", "late"]) {
 			const root = fresh()
-			const before = performance.now()
-			const observed = await run(root, mode === "throw" ? { env: { REPAIR_LAB_FAULT: "sink-throw" } } : { mode })
-			expect(performance.now() - before).toBeLessThan(850)
+			const child = start(root, { mode: "finalization-marker", env: mode === "throw" ? { REPAIR_LAB_FAULT: "sink-throw" } : { O2_WRITE_MODE: mode } })
+			const started = await finalizationStarted(root)
+			const observed = await child.result
+			const elapsed = Date.now() - started
+			// The accepted 500 ms flush deadline plus bounded process output is measured from a test-owned marker, not cold-process launch.
+			expect(elapsed).toBeGreaterThanOrEqual(0)
+			expect(elapsed).toBeLessThan(650)
 			const status = envelope(observed).diagnostics
 			expect(status.sinkFailure).toBe(mode === "throw" ? "write" : "flush-timeout")
 			expect(status.unflushedRecords).toBe(2)

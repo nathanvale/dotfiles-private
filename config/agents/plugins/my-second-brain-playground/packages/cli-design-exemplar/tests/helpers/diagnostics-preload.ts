@@ -15,6 +15,12 @@ const originalWrite = fs.write
 const originalRename = fs.renameSync
 let shortWritePending = true
 function signalReady(): void { fs.writeFileSync(join(control, `ready-${process.pid}`), "ready\n", { mode: 0o600 }) }
+function signalFinalizationStarted(): void {
+	const marker = join(control, `finalizing-${process.pid}`)
+	const pending = join(control, `marker-${process.pid}.pending`)
+	fs.writeFileSync(pending, `${Date.now()}\n`, { mode: 0o600 })
+	fs.renameSync(pending, marker)
+}
 function prepareDestination(path: fs.PathLike): void {
 	if (mode === "enospc") throw Object.assign(new Error("synthetic disk full"), { code: "ENOSPC" })
 	if (mode === "existing") fs.writeFileSync(path, "existing bytes\n", { mode: 0o600 })
@@ -90,6 +96,17 @@ if (mode === "signal-ready") {
 			signalReady()
 			// Hold the front door immediately before finalization; the real signal handler finalizes its active owner.
 			return new Promise(() => { setInterval(() => {}, 1000) })
+		} }
+	} }))
+}
+
+if (mode === "finalization-marker") {
+	mock.module("../../src/diagnostics.ts", () => ({ ...diagnostics, openRunDiagnostics: async (options: Parameters<typeof actualOpenDiagnostics>[0]) => {
+		const opened = await actualOpenDiagnostics(options)
+		return { ...opened, dispose(): Promise<diagnostics.DiagnosticsStatus> {
+			// This fixture marker brackets the real bounded disposer; it is not emitted by production diagnostics.
+			signalFinalizationStarted()
+			return opened.dispose()
 		} }
 	} }))
 }
