@@ -1,11 +1,7 @@
---- a/src/branch-station-catalog.ts
-+++ b/src/branch-station-catalog.ts
-@@ -51,8 +51,6 @@
- 			return "INTERNAL_RESULT_COMPLETED"
- 		case "result-unknown":
- 			return "INTERNAL_RESULT_UNKNOWN"
--		case "unknown-unresolved":
--			return "INTERNAL_RESULT_UNKNOWN"
- 		default:
- 			return assertNever(fallbackCase)
- 	}
+--- a/src/cli.ts
++++ b/src/cli.ts
+@@ -432,4 +431,0 @@
+-		case "result-unknown":
+-			if (fallback.effectClass === "inspect") return null
+-			result = { ...common, outcome: "failed", effectClass: fallback.effectClass, transactionState: "unknown", causeCode: "INTERNAL_RESULT_UNKNOWN", effects: unknownEffects(fallback), ...handoff("INTERNAL_RESULT_UNKNOWN") }
+-			break
