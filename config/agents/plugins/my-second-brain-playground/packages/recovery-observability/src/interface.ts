@@ -61,5 +61,4 @@ export function cleanupRecoveryTraces(options: { readonly stateHome?: string | u
 }
 
 export type { DiagnosticInput, DiagnosticMode, TraceAcceptResult, TraceCleanupResult, TraceFilter, TraceQueryResult }
-export { isRecoveryIdentity, isPluginVersion, MAX_SERIALIZED_RECORD_BYTES } from "./serialized-values.ts"
-export type { RecoveryOperation } from "./serialized-values.ts"
+export { isRecoveryIdentity, isPluginVersion } from "./serialized-values.ts"
