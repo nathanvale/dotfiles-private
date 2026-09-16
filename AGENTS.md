@@ -10,7 +10,8 @@
 - Moved Codex session or Scratch history register: read [`docs/agents/session-history.md`](docs/agents/session-history.md).
 - Before editing, match task against [`docs/agents/README.md`](docs/agents/README.md) and read every matching document.
 - Accepted-behavior change: reconcile with [`docs/adr/`](docs/adr/) before editing.
-- Domain naming: use [`CONTEXT.md`](CONTEXT.md).
+- Domain naming: use [`CONTEXT-MAP.md`](CONTEXT-MAP.md) to select the relevant
+  glossary.
 - Setup/profile: run `./setup.sh --help`, `./verify_install.sh --help`, then closest subsystem owner.
 - Clean macOS VM qualification: read [`docs/agents/tart-vm-qualification.md`](docs/agents/tart-vm-qualification.md).
 - Packages: edit `config/brew/profile-requirements.tsv` for profile-owned package requirements; `config/brew/Brewfile` is the derived Homebrew entrypoint. Set `dotfiles_profile=desktop` (or `server`); apply: `HOMEBREW_DOTFILES_PROFILE="$dotfiles_profile" brew bundle --file=config/brew/Brewfile`; verify: `HOMEBREW_DOTFILES_PROFILE="$dotfiles_profile" brew bundle check --file=config/brew/Brewfile`.
@@ -33,7 +34,7 @@ Use the five canonical Matt Pocock triage roles. Read
 
 ### Domain docs
 
-Use the repository's single-context glossary and ADR layout. Read
+Use the repository's multi-context map and ADR layout. Read
 [`docs/agents/domain.md`](docs/agents/domain.md).
 
 ## Proof
