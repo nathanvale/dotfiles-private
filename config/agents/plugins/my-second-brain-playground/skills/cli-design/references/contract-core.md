@@ -1,72 +1,136 @@
-# Contract Core 1.0.0
+# Contract Core 2.0.0
+
+Keep the executable command-contract module as the owner of exact types, causes,
+route declarations, and schemas. This reference carries the portable invariants.
 
 ## Exit meanings
 
-| Exit code | Meaning |
-| --- | --- |
-| 0 | success |
-| 1 | internal |
-| 2 | usage |
-| 3 | domain, including input, precondition, and effect refusal |
-| 4 | schema |
-| 75 | unavailable |
+| Exit | Failure class | Meaning |
+| --- | --- | --- |
+| 0 | `null` | success |
+| 1 | `internal` | internal failure |
+| 2 | `usage` | invocation refusal |
+| 3 | `domain` | precondition, authority, deadline, or recovery result |
+| 4 | `schema` | invalid or unsupported format |
+| 75 | `transient` | safe bounded retry may succeed |
 
-Keep `failureClass` and exit code aligned: usage maps to 2, domain to 3, schema to 4, internal to 1, unavailable to 75, and a null failureClass to 0. This exit set is closed, fixed, finite, and documented.
+SIGINT exits 130 and SIGTERM exits 143 after the bounded shutdown policy. Keep
+these signal exits outside the normal result-to-exit mapping.
 
 ## Machine envelope
 
-```
-envelopeVersion: 1
-contractVersion: "1.0.0"
-commandIdentity: string            // "<cli-name>.<command>"
-runIdentity: string                // unique per process, e.g. "run-<uuid>"
-outcome: "success" | "refused" | "failed" | "unknown"
-failureClass: null | "usage" | "domain" | "schema" | "internal" | "unavailable"
-causeCode: null | string
-message: string
-effectClass: "inspect" | "repository-local" | "external"
-transactionState: "unchanged" | "completed" | "partially-completed" | "rolled-back" | "unknown"
-retryable: boolean
-retryDelayMilliseconds: null | number
-nextAction: null | string
-availablePaths: string[]
-repairAction: null | string
-handoff: null | { reason: string, prerequisites: string[] }
-result: null | object
+The top-level envelope is strict:
+
+```text
+envelopeVersion: 2
+contractVersion: "2.0.0"
+message: non-empty string
+availablePaths: sorted unique canonical command identities
+result: ContractResult
+diagnostics?: Diagnostics
 ```
 
-Identity fields establish the command and process run. Outcome fields record the result, failure class, cause, and public message. Effect and transaction fields describe side-effect class and transaction state. Retry and next-action fields describe safe repetition, delay, repair, paths, and handoff. The result field carries the primary command result when one exists.
+Every `ContractResult` includes:
 
-## Human mode
+```text
+runId, commandIdentity, outcome, effectClass, transactionState,
+causeCode, failureClass, exitCode, data, retryable, repairAction,
+effects, and exactly one of nextAction or handoff
+```
 
-Human mode keeps help and results easy to scan. Help prints a usage line and one example. A refusal or failure writes exactly one line to stderr naming the cause and repair, keeps stdout empty, and uses the mapped exit code. The primary result goes to stdout; diagnostics go to stderr.
+`idempotencyKey`, `attemptedEffect`, and `retryDelayMilliseconds` appear only in
+the result arms that admit them. Omit inapplicable optional keys instead of
+serializing them as null.
 
-Machine mode applies whenever `--json` appears anywhere in argv, including with an unknown option or no arguments. Every outcome in machine mode, usage errors included, prints exactly one envelope on stdout and nothing on stderr, and uses the same mapped exit code as human mode.
+## Correlated result arms
+
+- Outcomes are `success`, `refused`, or `failed`.
+- Transaction states are `unchanged`, `completed`, `partially-completed`, or
+  `unknown`.
+- `unknown` is a transaction state only.
+- Success uses `SUCCESS_UNCHANGED` or `SUCCESS_COMPLETED`, exit 0, null
+  `failureClass`, JSON-valued data including null, null `repairAction`, and
+  `retryable: false`.
+- Refused means no change was attempted and uses `transactionState: unchanged`.
+- Failed means work was attempted. State and effect evidence distinguish
+  unchanged, completed, partial, and unknown results.
+- Partial and unknown effects are nonretryable. Inspect or hand off before any
+  later attempt.
+- A retryable transient row includes a positive bounded delay and is limited to
+  confirmed not-started or unchanged facts.
+- A nonretryable row omits `retryDelayMilliseconds`.
+- Failure data is null and carries a useful `repairAction`.
+
+Cause codes are a closed typed vocabulary. Their prefix and row agree with the
+failure class, outcome, state, exit, retry policy, and guidance arm. Do not derive
+expected tests from the production cause table.
+
+## Effects
+
+Every result has:
+
+```text
+effects.completed: sorted unique effect identities
+effects.remaining: sorted unique effect identities
+effects.uncertain: sorted unique effect identities
+effects.inventoryComplete: boolean
+```
+
+The collections are disjoint. An inspect result has an empty complete inventory.
+Unchanged has no completed or uncertain effects. Completed has at least one
+completed effect and no remaining or uncertain effect. Partially completed has
+completed and remaining effects with a complete inventory. Unknown has an
+uncertain effect or an incomplete inventory. An `attemptedEffect`, when present,
+appears in this inventory.
+
+Never replay a completed or uncertain effect to repair reporting. Recovery reads
+journal and actual resource evidence, then reports what is confirmed.
 
 ## Help and discovery
 
-`--help` prints a usage line and one example, then exits 0. `--discover --json` prints the discovery envelope whose `result` has `name`, `contractVersion`, `generationConventionVersion`, a `commands` array of `{identity, argv, effectClass, description}`, `exitMeanings` keyed `"0"`, `"1"`, `"2"`, `"3"`, `"4"`, `"75"`, `machineMode: "--json"`, and a boolean `logtape`.
+Human help names public commands, options, and examples. Machine mode applies
+when `--json` is present, including usage failures. On ordinary
+application-controlled completion, machine mode emits exactly one validated 2.0
+envelope on stdout with empty stderr. An uncaught crash or a pre-drain
+EPIPE/transport failure is a no-envelope exception: it may terminate before
+that completion, retain any already observed stdout, keep stderr empty, and
+never emit a replacement envelope.
 
-## No arguments and non-interactive
+SIGINT and SIGTERM use the accepted bounded-stop lifecycle: exit 130 and 143,
+respectively, after the bounded diagnostics flush. Before output, no envelope
+is emitted and stdout and stderr remain empty. After output starts, a signal may
+leave a partial stdout stream; once the stream is fully drained, the complete
+stdout envelope may remain. Keep stderr empty and preserve the observed stream
+without emitting a replacement envelope.
 
-A stateless CLI invoked with no arguments exits 2, with stdout empty and stderr exactly one line naming `--help`; a CLI that owns state may instead print a bounded read-only dashboard and exit 0. stdin that is not a TTY never triggers a prompt; a prompt never substitutes for mutation authority.
+`--discover --json` reports contract and generation version, profile, commands,
+exit meanings, signal exits, and explicit effect exclusions.
 
-## Effects and transactions
+`--discover-command COMMAND_IDENTITY --json` reports possible stations for one
+selected command from the same typed catalogue used by tests. It does not report
+live state, grant approval, or authorize replay. Unknown selectors return a
+focused usage or domain refusal with repair guidance.
 
-Use effectClass values `inspect`, `repository-local`, and `external`. Use transactionState values `unchanged`, `completed`, `partially-completed`, `rolled-back`, and `unknown`. For anything beyond inspection, preview expected effect identities and the observed resource revision, then apply only a matching unconsumed preview. Apply each effect identity at most once. Report completed and unresolved effects separately for partial or unknown outcomes, and route retry through inspection or handoff first.
+## Input, authority, and recovery
 
-## Retry and next action
+Parse argv strictly. Validate files, JSON, environment, network, and persisted
+state from `unknown`. Keep preview and apply separate for state-changing work.
+Bind an apply to its unconsumed preview, resource revision, authority, and effect
+identities.
 
-Set `retryable` true when a same-input retry is safe and may succeed without further inspection. Include `retryDelayMilliseconds` when the delay is known. When `outcome` is `refused`, `failed`, or `unknown`, exactly one of `nextAction` or `handoff` is non-null; `availablePaths` is always an array and may accompany either; when `outcome` is `success`, both `nextAction` and `handoff` may be null.
+Use durable intent and completion evidence before downstream recovery depends on
+it. Two processes attempting one approved change produce exactly one effect; the
+other safely refuses. Interrupted or unconfirmed writes remain failed with
+unknown effects until read-only recovery resolves them.
 
-## Redaction
+## Diagnostics and output
 
-Apply the key regex `/(token|secret|password|passwd|credential|api[-_]?key|private[-_]?key)/i` and render matching values as `[REDACTED]` on every stream. Treat every input string as data and keep command execution explicit.
+Primary results go to stdout. Diagnostics never change the domain result, exit,
+or recovery safety. Keep diagnostics custody separate from the recovery journal.
+Disclose unavailable, dropped, truncated, or unflushed diagnostics truthfully.
+Redact secret-bearing values before any public output, including `message`,
+`data`, stdout, and stderr, and again at the diagnostics sink.
 
-## Cause codes
-
-Use uppercase cause codes matching `[A-Z][A-Z0-9_]*` and prefix each non-null code with its failure class: `USAGE_`, `DOMAIN_`, `SCHEMA_`, `INTERNAL_`, or `UNAVAILABLE_`. A null failureClass uses a null causeCode. Examples: `USAGE_UNKNOWN_OPTION`, `DOMAIN_INPUT_MISSING`, `DOMAIN_INPUT_MALFORMED`, `DOMAIN_PATH_ESCAPE`, `DOMAIN_EFFECT_NOT_AVAILABLE`, `DOMAIN_PREVIEW_STALE`, `UNAVAILABLE_STORAGE_BUSY`.
-
-## Provenance
-
-The vocabulary reuses Agent Ledger's `envelopeVersion`, `commandIdentity`, `runIdentity`, `transactionState`, `failureClass`, `retryable`, `message`, `repairAction`, and `retryDelayMilliseconds`. The remaining fields come from the accepted pre-design analysis; the whole spelling is provisional until a Toolkit owner exists.
+Validate the complete serialized value immediately before output. If the result
+cannot be serialized safely, emit the bounded internal fallback that preserves
+trusted effect facts. A failed fallback exits without replay.

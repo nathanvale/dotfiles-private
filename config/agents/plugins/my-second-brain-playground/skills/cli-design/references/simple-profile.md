@@ -1,56 +1,67 @@
 # Simple profile
 
-Use this layout for a small CLI whose behaviour stays local to one entry point.
+Use simple only when every command is read-only and no complex trigger applies.
+The canonical starter lives in `bun-typescript-template/starters/simple`; consume
+it through the public bootstrap or preservation-safe composer.
 
-```
+## Layout
+
+```text
+.github/workflows/ci.yml
+README.md
 package.json
+bun.lock
+biome.json
+.fallowrc.json
 tsconfig.json
 src/cli.ts
 tests/cli.test.ts
 ```
 
-`src/cli.ts` owns metadata, strict argument parsing with `node:util` `parseArgs` (`strict: true`, `allowPositionals: true`), the operation, the human and machine renderers, the envelope builder, and `main`. This profile uses no runtime dependency and no LogTape.
+Keep the behavioral entry point cohesive while it remains small. Split a module
+only when one concern gains an independent contract or test seam. The simple
+starter has no runtime dependency and no LogTape.
 
-Illustrative skeleton only; this is not a schema:
+## Contract behavior
 
-```ts
-import { parseArgs } from "node:util";
+- Every product command has `effectClass: inspect` and
+  `transactionState: unchanged`.
+- Human help names supported commands and examples.
+- `--discover --json` reports Contract Core 2.0 and the simple profile.
+- `--discover-command COMMAND_IDENTITY --json` reports the selected read-only
+  command's possible stations.
+- Machine success, refusal, and internal failure use the strict 2.0 envelope.
+- Non-TTY stdin never prompts.
 
-const meta = {
-  name: "sample",
-  contractVersion: "1.0.0",
-  generationConventionVersion: "1.0.0",
-} as const;
+A command that changes user data or configuration moves the CLI to complex.
+Keep the repository layout proportionate after that move; complex does not imply
+a workspace or monorepo.
 
-const exitFor = (failureClass: string | null) =>
-  ({ null: 0, usage: 2, domain: 3, schema: 4, internal: 1, unavailable: 75 })[
-    failureClass ?? "null"
-  ];
+## Maintenance and extension
 
-const envelope = (partial: Record<string, unknown>) => {
-  const value = { envelopeVersion: 1, ...meta, outcome: "success", failureClass: null, ...partial };
-  return { value, exitCode: exitFor(value.failureClass as string | null) };
-};
-
-const fail = (causeCode: string, message: string, repairAction: string) =>
-  envelope({ outcome: "refused", failureClass: "domain", causeCode, message, repairAction });
-
-const main = () => {
-  const { values } = parseArgs({ options: { help: { type: "boolean", short: "h" }, discover: { type: "boolean" }, json: { type: "boolean" } }, strict: true, allowPositionals: true });
-  if (values.help) { process.stdout.write("Usage: sample [--discover] [--json]\n"); return 0; }
-  const output = values.discover ? envelope({ result: meta }) : envelope({ result: null });
-  process.stdout.write(values.json ? JSON.stringify(output.value) + "\n" : "ok\n");
-  return output.exitCode;
-};
-
-const code = main();
-process.exit(code);
-```
+For a read-only command, update its identity, route, help, implementation,
+selected-command discovery, and process tests together. If the new behavior
+introduces mutation, authority, recovery, partial state, or diagnostics history,
+change the profile before implementing it.
 
 ## Tests
 
-Write process-level tests with `Bun.spawn` against `bun run src/cli.ts`. Assert exit code, stdout, and stderr for each scenario, with expected values written as literals rather than computed values.
+Use `Bun.spawn` or `Bun.spawnSync` against the public entry point. Assert literal
+exit, stdout, stderr, command identity, outcome, cause, effect class, transaction
+state, effect inventory, retry policy, and guidance. Exercise:
 
-## Full example
+- human help;
+- machine success;
+- machine internal failure;
+- full discovery;
+- selected-command discovery;
+- missing or unknown command refusal;
+- closed and held-open non-TTY stdin; and
+- every applicable strict checker row.
 
-The runnable conformant example is `../../../packages/cli-design-check/fixtures/conformant/src/cli.ts`.
+Run the generated CI sequence from a clean fresh checkout. The generated project
+passes with its own lockfile and has no template or plugin runtime dependency.
+For a new repository, qualify its static policy through the skill's
+`admit:static` route; a changed-files Fallow audit does not replace the complete
+whole-project and production-dependency passes. In an existing project, preserve
+the host policy and use the skill's complete-evidence new-only adoption review.
