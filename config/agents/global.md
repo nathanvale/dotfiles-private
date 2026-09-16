@@ -136,6 +136,8 @@
 
 - Give capable agents maps, invariants, owner paths, inspectable state, and the
   next safe action.
+- Beads-backed research, planning, implementation, or review: read
+  `$HOME/code/dotfiles/docs/agents/beads.md` before work.
 - Architecture decision proposal or lifecycle change: read
   `$HOME/code/dotfiles/docs/agents/architecture-decisions.md` first.
 - Sorting a rule into gate, clause, or delete: read

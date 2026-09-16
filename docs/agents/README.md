@@ -30,3 +30,4 @@ Scope, admission, and the edit rule:
 | [`tart-vm-qualification.md`](tart-vm-qualification.md) | Testing setup or toolchain ownership end to end on a clean macOS VM |
 | [`mac-storage.md`](mac-storage.md) | Investigating or cleaning up Mac storage |
 | [`fallow.md`](fallow.md) | Running or diagnosing the `quality:fallow` gate |
+| [`beads.md`](beads.md) | Researching, planning, implementing, or reviewing Beads-backed task graphs, workflows, coordination, sync, worktrees, plugins, boards, or knowledge |
