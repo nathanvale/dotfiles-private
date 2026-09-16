@@ -30,10 +30,11 @@ jobs:
         with:
           bun-version-file: package.json
       - name: Prepare the pinned Bun CLI template
+        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
         shell: bash
         env:
           TEMPLATE_DEPLOY_KEY: ${{ secrets.CLI_TEMPLATE_DEPLOY_KEY }}
-          TEMPLATE_REVISION: 595273415c47f21ae2b149a6b29e4a3d67af365c
+          TEMPLATE_REVISION: c829b46853afc699bb3f39fba42412ff557ab9c1
         run: |
           if [[ -z "$TEMPLATE_DEPLOY_KEY" ]]; then
             echo "CLI_TEMPLATE_DEPLOY_KEY is required to read the pinned private template." >&2

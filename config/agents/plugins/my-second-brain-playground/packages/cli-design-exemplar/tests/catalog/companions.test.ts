@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
@@ -44,6 +44,7 @@ interface Variant {
 interface Manifest {
 	frozenAt: string
 	baseline: Record<string, string>
+	lifecycleObservationSha256: string
 	variants: Variant[]
 }
 interface Index {
@@ -85,7 +86,8 @@ function stage(stageRoot: string, id: string): string {
 	return directory
 }
 
-function claimStageRoot(stageRoot: string, oracleSource = LIFECYCLE_OBSERVATION): void {
+function claimStageRoot(stageRoot: string, oracleSource = LIFECYCLE_OBSERVATION, expectedDigest = sha256(readFileSync(oracleSource))): void {
+	if (sha256(readFileSync(oracleSource)) !== expectedDigest) throw new Error("lifecycle observation does not match the private manifest")
 	// No recursive creation: EEXIST refuses a prior proof root before its marker or oracle can be touched.
 	mkdirSync(stageRoot, { mode: 0o700 })
 	try {
@@ -102,10 +104,13 @@ function claimStageRoot(stageRoot: string, oracleSource = LIFECYCLE_OBSERVATION)
 // Every judged or skipped check names a canonical regular file inside the staged package; the counts alone
 // cannot tell a real skipped check from a path that never existed or an alias of another entry.
 function validateCoverageFiles(id: string, files: string[], root: string): void {
+	const realRoot = realpathSync(root)
 	for (const file of files) {
-		const canonical = relative(root, resolve(root, file)).split(sep).join("/")
-		const stats = statSync(join(root, file), { throwIfNoEntry: false })
-		if (isAbsolute(file) || canonical !== file || stats === undefined || !stats.isFile()) throw new Error(`${id} coverage file must be a canonical regular file inside the package: ${file}`)
+		const path = resolve(root, file)
+		const canonical = relative(root, path).split(sep).join("/")
+		const stats = lstatSync(path, { throwIfNoEntry: false })
+		const realPath = stats === undefined ? undefined : realpathSync(path)
+		if (isAbsolute(file) || canonical !== file || stats === undefined || stats.isSymbolicLink() || !stats.isFile() || realPath !== resolve(realRoot, file)) throw new Error(`${id} coverage file must be a canonical regular file inside the package: ${file}`)
 	}
 }
 
@@ -272,15 +277,32 @@ describe("companion proof retention", () => {
 		rmSync(root, { recursive: true, force: true })
 	})
 
+	test("rejects a changed lifecycle analyzer before claiming the stage root", () => {
+		const root = mkdtempSync(join(tmpdir(), "repair-lab-companion-retention-"))
+		const oracle = join(root, "lifecycle-observation.ts")
+		const stageRoot = join(root, "staged")
+		writeFileSync(oracle, "export const observation = 'changed'\n")
+		expect(() => claimStageRoot(stageRoot, oracle, sha256("reviewed analyzer\n"))).toThrow("lifecycle observation does not match the private manifest")
+		expect(existsSync(stageRoot)).toBe(false)
+		claimStageRoot(stageRoot, oracle, sha256(readFileSync(oracle)))
+		expect(readFileSync(join(stageRoot, "cli-design-check", "src", "successor", "lifecycle-observation.ts"))).toEqual(readFileSync(oracle))
+		rmSync(root, { recursive: true, force: true })
+	})
+
 	test("requires every coverage file to be a canonical regular file inside the staged package", () => {
 		const root = mkdtempSync(join(tmpdir(), "repair-lab-companion-retention-"))
+		const outside = mkdtempSync(join(tmpdir(), "repair-lab-companion-outside-"))
 		mkdirSync(join(root, "tests"))
 		writeFileSync(join(root, "tests", "real.test.ts"), "export {}\n")
+		writeFileSync(join(outside, "outside.test.ts"), "export {}\n")
+		symlinkSync(join(outside, "outside.test.ts"), join(root, "tests", "final-link.test.ts"))
+		symlinkSync(outside, join(root, "linked-tests"))
 		expect(() => validateCoverageFiles("c", ["tests/real.test.ts"], root)).not.toThrow()
-		for (const file of ["./tests/real.test.ts", "tests//real.test.ts", "tests/missing.test.ts", "../real.test.ts", "tests", join(root, "tests", "real.test.ts")]) {
+		for (const file of ["./tests/real.test.ts", "tests//real.test.ts", "tests/missing.test.ts", "../real.test.ts", "tests", join(root, "tests", "real.test.ts"), "tests/final-link.test.ts", "linked-tests/outside.test.ts"]) {
 			expect(() => validateCoverageFiles("c", [file], root)).toThrow(`c coverage file must be a canonical regular file inside the package: ${file}`)
 		}
 		rmSync(root, { recursive: true, force: true })
+		rmSync(outside, { recursive: true, force: true })
 	})
 
 	test("requires the complete reasoned skip inventory", () => {
@@ -325,7 +347,7 @@ describe("B2 companions (CDS-BC-2)", () => {
 		expect(index.variants.map((entry) => `${entry.id} ${entry.patch} ${entry.patchSha256}`)).toEqual(manifest.variants.map((variant) => `${variant.id} ${variant.patch} ${variant.patchSha256}`))
 		let claimedStageRoot = false
 		try {
-			claimStageRoot(stageRoot)
+			claimStageRoot(stageRoot, LIFECYCLE_OBSERVATION, manifest.lifecycleObservationSha256)
 			claimedStageRoot = true
 			const runsRoot = join(dirname(manifestPath), "runs")
 			mkdirSync(runsRoot, { recursive: true, mode: 0o700 })

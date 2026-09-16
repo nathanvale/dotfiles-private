@@ -2,6 +2,7 @@ import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
   chmod,
+  lstat,
   mkdir,
   mkdtemp,
   readdir,
@@ -13,14 +14,28 @@ import {
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
+import {
+  nodeFileSystem,
+  publish,
+  stageProject,
+  type Creation,
+  type FileSystemAdapter,
+  type Replacement,
+} from "./main";
 
 const PLUGIN_ROOT = resolve(import.meta.dir, "../../..");
 const TEMPLATE_ROOT = resolve(
   process.env.BUN_TYPESCRIPT_TEMPLATE_TEST_ROOT ??
     join(homedir(), "code", "bun-typescript-template"),
 );
-const TEMPLATE_REVISION = "595273415c47f21ae2b149a6b29e4a3d67af365c";
+const TEMPLATE_REVISION = "c829b46853afc699bb3f39fba42412ff557ab9c1";
+const DEFAULT_SOURCE_PACKET = "https://example.test/vault/projects/example/";
 const roots: string[] = [];
+const templateAvailable =
+  process.env.BUN_TYPESCRIPT_TEMPLATE_TEST_ROOT !== undefined ||
+  Bun.spawnSync(["git", "-C", TEMPLATE_ROOT, "cat-file", "-e", `${TEMPLATE_REVISION}^{commit}`])
+    .exitCode === 0;
+const templateTest = templateAvailable ? test : test.skip;
 
 function invoke(
   projectRoot: string,
@@ -28,6 +43,7 @@ function invoke(
   starter: string,
   templateRoot = TEMPLATE_ROOT,
   extraArgs: string[] = [],
+  sourcePacket = DEFAULT_SOURCE_PACKET,
 ) {
   const result = Bun.spawnSync(
     [
@@ -40,7 +56,7 @@ function invoke(
       "--starter",
       starter,
       "--source-packet",
-      "https://example.test/vault/projects/example/",
+      sourcePacket,
       "--json",
       ...extraArgs,
     ],
@@ -56,6 +72,26 @@ function invoke(
     stderr: result.stderr.toString(),
     stdout: result.stdout.toString(),
   };
+}
+
+function fileSystemWith(overrides: Partial<FileSystemAdapter>): FileSystemAdapter {
+  return { ...nodeFileSystem, ...overrides };
+}
+
+async function rejected(action: () => Promise<unknown>): Promise<Record<string, unknown>> {
+  try {
+    await action();
+  } catch (error) {
+    expect(error).toBeInstanceOf(Error);
+    return error as unknown as Record<string, unknown>;
+  }
+  throw new Error("expected action to reject");
+}
+
+async function transactionArtifacts(root: string): Promise<string[]> {
+  return (await readdir(root, { recursive: true }))
+    .filter((path) => path.includes(".cli-design-"))
+    .sort();
 }
 
 async function fixture(workspace: boolean) {
@@ -81,6 +117,7 @@ async function fixture(workspace: boolean) {
     );
   }
   await writeFile(join(root, "biome.json"), '{"linter":{"enabled":true}}\n');
+  await writeFile(join(root, "README.md"), "host README\n");
   await writeFile(join(packageRoot, "existing.test.ts"), "export const preserved = true;\n");
   await writeFile(join(root, "unrelated.txt"), "owned sentinel\n");
   const install = Bun.spawnSync(
@@ -114,7 +151,7 @@ afterEach(async () => {
   );
 });
 
-test("the exact pinned canonical template revision is available", () => {
+templateTest("the exact pinned canonical template revision is available", () => {
   const result = Bun.spawnSync(
     ["git", "-C", TEMPLATE_ROOT, "cat-file", "-e", `${TEMPLATE_REVISION}^{commit}`],
     { stderr: "pipe", stdout: "pipe" },
@@ -122,7 +159,7 @@ test("the exact pinned canonical template revision is available", () => {
   expect(result.exitCode).toBe(0);
 });
 
-test("composes the simple starter into a single package and preserves host owners", async () => {
+templateTest("composes the simple starter into a single package and preserves host owners", async () => {
   const project = await fixture(false);
   const beforeLock = await readFile(join(project.root, "bun.lock"));
   const beforeQuality = await readFile(join(project.root, "biome.json"));
@@ -161,7 +198,7 @@ test("composes the simple starter into a single package and preserves host owner
   });
 });
 
-test("composes complex into a workspace package and updates the owning lock", async () => {
+templateTest("composes complex into a workspace package and updates the owning lock", async () => {
   const project = await fixture(true);
   const beforeWorkspaceManifest = await readFile(join(project.root, "package.json"));
   const beforePackageManifest = JSON.parse(
@@ -220,7 +257,7 @@ test("composes complex into a workspace package and updates the owning lock", as
   });
 });
 
-test("refuses a source collision without changing manifest or lock bytes", async () => {
+templateTest("refuses a source collision without changing manifest or lock bytes", async () => {
   const project = await fixture(false);
   await mkdir(join(project.packageRoot, "src"));
   await writeFile(join(project.packageRoot, "src/cli.ts"), "owned bytes\n");
@@ -284,7 +321,63 @@ test("refuses malformed arguments as usage errors before host writes", async () 
   expect(await snapshotTree(project.root)).toEqual(treeBefore);
 });
 
-test("refuses a malformed target manifest as a schema error before host writes", async () => {
+test("refuses credential-bearing and query source URLs without leaking their bytes", async () => {
+  const marker = "source-packet-secret-marker";
+  for (const sourcePacket of [
+    `https://${marker}@example.test/project`,
+    `https://reader:${marker}@example.test/project`,
+    `https://example.test/project?token=${marker}`,
+    "https://example.test/project?",
+  ]) {
+    const project = await fixture(false);
+    const treeBefore = await snapshotTree(project.root);
+    const readmeBefore = await readFile(join(project.root, "README.md"));
+    const result = invoke(
+      project.root,
+      project.packagePath,
+      "simple",
+      TEMPLATE_ROOT,
+      [],
+      sourcePacket,
+    );
+
+    expect(result.exitCode).toBe(2);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      causeCode: "USAGE_INVALID_SOURCE_PACKET",
+      status: "refused",
+    });
+    expect(`${result.stdout}${result.stderr}`).not.toContain(marker);
+    expect(`${result.stdout}${result.stderr}`).not.toContain(sourcePacket);
+    expect(await Bun.file(join(project.packageRoot, ".cli-design-template.json")).exists()).toBe(
+      false,
+    );
+    expect(await readFile(join(project.root, "README.md"))).toEqual(readmeBefore);
+    expect((await readFile(join(project.root, "README.md"), "utf8"))).not.toContain(marker);
+    expect(await snapshotTree(project.root)).toEqual(treeBefore);
+  }
+});
+
+templateTest("preserves an ordinary source URL byte-for-byte", async () => {
+  const project = await fixture(false);
+  const sourcePacket = "https://Example.test:443/vault/a%2Fb#Reviewed-Source";
+  const result = invoke(
+    project.root,
+    project.packagePath,
+    "simple",
+    TEMPLATE_ROOT,
+    [],
+    sourcePacket,
+  );
+
+  expect(result.exitCode).toBe(0);
+  expect(JSON.parse(result.stdout).sourcePacket).toBe(sourcePacket);
+  const metadata = JSON.parse(
+    await readFile(join(project.packageRoot, ".cli-design-template.json"), "utf8"),
+  );
+  expect(metadata.sourcePacket).toBe(sourcePacket);
+});
+
+templateTest("refuses a malformed target manifest as a schema error before host writes", async () => {
   const project = await fixture(false);
   await writeFile(join(project.packageRoot, "package.json"), '{"name": "host",\n');
   const treeBefore = await snapshotTree(project.root);
@@ -297,7 +390,7 @@ test("refuses a malformed target manifest as a schema error before host writes",
   expect(await snapshotTree(project.root)).toEqual(treeBefore);
 });
 
-test("refuses script and dependency conflicts before changing owner bytes", async () => {
+templateTest("refuses script and dependency conflicts before changing owner bytes", async () => {
   for (const kind of ["script", "dependency", "devDependency"] as const) {
     const project = await fixture(false);
     const manifestPath = join(project.packageRoot, "package.json");
@@ -323,7 +416,190 @@ test("refuses script and dependency conflicts before changing owner bytes", asyn
   }
 });
 
-test.skipIf(process.getuid?.() === 0)(
+test("refuses a second project transaction without disturbing its lock", async () => {
+  const project = await fixture(false);
+  const lockPath = join(project.root, ".cli-design-compose.lock");
+  await writeFile(lockPath, "first owner\n", { flag: "wx" });
+  const treeBefore = await snapshotTree(project.root);
+  const result = invoke(project.root, project.packagePath, "simple");
+
+  expect(result.exitCode).toBe(3);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    causeCode: "DOMAIN_PROJECT_BUSY",
+    status: "refused",
+  });
+  expect(await snapshotTree(project.root)).toEqual(treeBefore);
+});
+
+test("claims new publication paths without clobbering a concurrent file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cli-compose-transaction-"));
+  roots.push(root);
+  const directory = join(root, "owned");
+  const target = join(directory, "created.ts");
+  const competing = new TextEncoder().encode("concurrent owner\n");
+  await mkdir(directory);
+  const fileSystem = fileSystemWith({
+    link: async (source, destination) => {
+      if (destination === target) await writeFile(target, competing, { flag: "wx" });
+      await nodeFileSystem.link(source, destination);
+    },
+  });
+
+  const error = await rejected(
+    async () => await publish([{ bytes: new TextEncoder().encode("generated\n"), path: target }], [], fileSystem),
+  );
+  expect(error.causeCode).toBe("DOMAIN_TARGET_COLLISION");
+  expect(await readFile(target, "utf8")).toBe("concurrent owner\n");
+  expect(await transactionArtifacts(root)).toEqual([]);
+});
+
+test("does not remove a colliding temporary file it did not create", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cli-compose-transaction-"));
+  roots.push(root);
+  const target = join(root, "created.ts");
+  let temporary: string | undefined;
+  const fileSystem = fileSystemWith({
+    writeExclusive: async (path, bytes) => {
+      temporary = path;
+      await writeFile(path, "competing temporary owner\n", { flag: "wx" });
+      await nodeFileSystem.writeExclusive(path, bytes);
+    },
+  });
+
+  const error = await rejected(
+    async () => await publish([{ bytes: new TextEncoder().encode("generated\n"), path: target }], [], fileSystem),
+  );
+  expect(error.causeCode).toBe("DOMAIN_TARGET_COLLISION");
+  expect(temporary).toBeDefined();
+  expect(await readFile(temporary as string, "utf8")).toBe("competing temporary owner\n");
+  expect(await Bun.file(target).exists()).toBe(false);
+});
+
+test("captures and restores a concurrently changed replacement without overwriting it", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cli-compose-transaction-"));
+  roots.push(root);
+  const target = join(root, "package.json");
+  const original = new TextEncoder().encode("original\n");
+  const competing = new TextEncoder().encode("concurrent owner\n");
+  await writeFile(target, original);
+  let injected = false;
+  const fileSystem = fileSystemWith({
+    rename: async (source, destination) => {
+      if (!injected && source === target && destination.endsWith(".backup")) {
+        injected = true;
+        await writeFile(target, competing);
+      }
+      await nodeFileSystem.rename(source, destination);
+    },
+  });
+
+  const error = await rejected(
+    async () =>
+      await publish(
+        [],
+        [{ bytes: new TextEncoder().encode("generated\n"), original, path: target }],
+        fileSystem,
+      ),
+  );
+  expect(error.causeCode).toBe("DOMAIN_CONCURRENT_CHANGE");
+  expect(await readFile(target, "utf8")).toBe("concurrent owner\n");
+  expect(await transactionArtifacts(root)).toEqual([]);
+});
+
+test("preserves a later edit and reports the retained original when rollback loses ownership", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cli-compose-transaction-"));
+  roots.push(root);
+  const packagePath = join(root, "package.json");
+  const lockPath = join(root, "bun.lock");
+  const packageOriginal = new TextEncoder().encode("package original\n");
+  const lockOriginal = new TextEncoder().encode("lock original\n");
+  const packageGenerated = new TextEncoder().encode("package generated\n");
+  const competing = new TextEncoder().encode("concurrent package owner\n");
+  await writeFile(packagePath, packageOriginal);
+  await writeFile(lockPath, lockOriginal);
+  let failed = false;
+  const fileSystem = fileSystemWith({
+    link: async (source, destination) => {
+      if (!failed && destination === lockPath) {
+        failed = true;
+        await writeFile(packagePath, competing);
+        throw new Error("injected lock publication failure");
+      }
+      await nodeFileSystem.link(source, destination);
+    },
+  });
+  const replacements: Replacement[] = [
+    { bytes: packageGenerated, original: packageOriginal, path: packagePath },
+    { bytes: new TextEncoder().encode("lock generated\n"), original: lockOriginal, path: lockPath },
+  ];
+
+  const error = await rejected(async () => await publish([], replacements, fileSystem));
+  expect(error.causeCode).toBe("DOMAIN_PARTIAL_COMPOSITION");
+  expect(String(error.message)).toContain("unresolved effects");
+  expect(await readFile(packagePath, "utf8")).toBe("concurrent package owner\n");
+  expect(await readFile(lockPath, "utf8")).toBe("lock original\n");
+  const artifacts = await transactionArtifacts(root);
+  expect(artifacts).toHaveLength(1);
+  expect(await readFile(join(root, artifacts[0] as string), "utf8")).toBe("package original\n");
+});
+
+test("removes temporary files and newly created directories after publication failure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cli-compose-transaction-"));
+  roots.push(root);
+  const target = join(root, "new", "nested", "created.ts");
+  const fileSystem = fileSystemWith({
+    link: async () => {
+      throw new Error("injected publication failure");
+    },
+  });
+  const creation: Creation = { bytes: new TextEncoder().encode("generated\n"), path: target };
+
+  const error = await rejected(async () => await publish([creation], [], fileSystem));
+  expect(error.causeCode).toBe("INTERNAL_COMPOSE_FAILURE");
+  expect(await Bun.file(join(root, "new")).exists()).toBe(false);
+  expect(await transactionArtifacts(root)).toEqual([]);
+});
+
+test("removes a partially copied stage when project staging fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cli-compose-transaction-"));
+  roots.push(root);
+  let stage: string | undefined;
+  const fileSystem = fileSystemWith({
+    copyTree: async (_source, destination) => {
+      stage = destination;
+      await writeFile(join(destination, "partial-copy"), "partial bytes\n");
+      throw new Error("injected copy failure");
+    },
+  });
+
+  await rejected(async () => await stageProject(root, fileSystem));
+  expect(stage).toBeDefined();
+  expect(await Bun.file(stage as string).exists()).toBe(false);
+});
+
+test("reports a partially copied stage when its cleanup fails", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cli-compose-transaction-"));
+  roots.push(root);
+  let stage: string | undefined;
+  const fileSystem = fileSystemWith({
+    copyTree: async (_source, destination) => {
+      stage = destination;
+      await writeFile(join(destination, "partial-copy"), "partial bytes\n");
+      throw new Error("injected copy failure");
+    },
+    remove: async () => {
+      throw new Error("injected cleanup failure");
+    },
+  });
+
+  const error = await rejected(async () => await stageProject(root, fileSystem));
+  expect(error.causeCode).toBe("DOMAIN_PARTIAL_COMPOSITION");
+  expect(String(error.message)).toContain(stage as string);
+  expect((await lstat(stage as string)).isDirectory()).toBe(true);
+  await rm(stage as string, { force: true, recursive: true });
+});
+
+test.skipIf(!templateAvailable || process.getuid?.() === 0)(
   "restores the host project when a commit-phase write fails after earlier writes",
   async () => {
     const project = await fixture(false);
@@ -342,15 +618,11 @@ test.skipIf(process.getuid?.() === 0)(
     expect(JSON.parse(result.stdout).message).toContain("the host project was restored");
     expect(await Bun.file(join(project.packageRoot, "src/cli.ts")).exists()).toBe(false);
     expect(await Bun.file(join(project.packageRoot, ".cli-design-template.json")).exists()).toBe(false);
-    const treeAfter = await snapshotTree(project.root);
-    // Rollback removes written files; empty directories created for them may remain.
-    expect(Object.fromEntries(Object.entries(treeAfter).filter(([, value]) => value !== "directory"))).toEqual(
-      Object.fromEntries(Object.entries(treeBefore).filter(([, value]) => value !== "directory")),
-    );
+    expect(await snapshotTree(project.root)).toEqual(treeBefore);
   },
 );
 
-test("composes the pinned template bytes even when the template working tree drifts", async () => {
+templateTest("composes the pinned template bytes even when the template working tree drifts", async () => {
   const project = await fixture(false);
   const clone = await mkdtemp(join(tmpdir(), "cli-compose-template-clone-"));
   roots.push(clone);
