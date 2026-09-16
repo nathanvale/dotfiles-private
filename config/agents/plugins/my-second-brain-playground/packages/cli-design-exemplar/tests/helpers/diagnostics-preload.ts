@@ -12,6 +12,8 @@ const control = process.env.O2_CONTROL ?? ""
 const fds = new Set<number>()
 const originalOpen = fs.openSync
 const originalWrite = fs.write
+const originalRename = fs.renameSync
+let shortWritePending = true
 function signalReady(): void { fs.writeFileSync(join(control, `ready-${process.pid}`), "ready\n", { mode: 0o600 }) }
 function prepareDestination(path: fs.PathLike): void {
 	if (mode === "enospc") throw Object.assign(new Error("synthetic disk full"), { code: "ENOSPC" })
@@ -43,9 +45,29 @@ function patchedWrite(fd: number, buffer: Buffer, offset: number, length: number
 		const timer = setInterval(() => { if (fs.existsSync(join(control, "release"))) { clearInterval(timer); originalWrite(fd, buffer, offset, length, position, callback) } }, 2)
 		return
 	}
+	if (writeMode === "short-write" && shortWritePending) {
+		shortWritePending = false
+		const prefix = Math.max(1, Math.floor(length / 2))
+		originalWrite(fd, buffer, offset, prefix, position, callback)
+		return
+	}
 	originalWrite(fd, buffer, offset, length, position, callback)
 }
-mock.module("node:fs", () => ({ ...fs, openSync: patchedOpen, write: patchedWrite }))
+function patchedRename(from: fs.PathLike, to: fs.PathLike): void {
+	if (mode === "release-failure" && String(from).endsWith("/.allocation-lock")) throw new Error("injected allocation lock release failure")
+	originalRename(from, to)
+}
+mock.module("node:fs", () => ({ ...fs, openSync: patchedOpen, write: patchedWrite, renameSync: patchedRename }))
+
+if (mode === "stderr-delayed") {
+	const delayedWrite = process.stderr.write.bind(process.stderr)
+	process.stderr.write = ((chunk: string | Uint8Array, encoding?: BufferEncoding | ((error?: Error | null) => void), callback?: (error?: Error | null) => void): boolean => {
+		const done = typeof encoding === "function" ? encoding : callback
+		signalReady()
+		setTimeout(() => { delayedWrite(chunk, typeof encoding === "string" ? encoding : undefined, done) }, 50)
+		return true
+	}) as typeof process.stderr.write
+}
 
 if (mode === "hostile-record" || mode === "byte-flood") {
 	mock.module("../../src/diagnostics.ts", () => ({ ...diagnostics, openRunDiagnostics: async (options: Parameters<typeof diagnostics.openRunDiagnostics>[0]) => {
@@ -84,6 +106,10 @@ function corruptStatus(status: diagnostics.DiagnosticsStatus): unknown {
 		case "nonobject": return "invalid status"
 		case "getter": return Object.defineProperty({ ...status }, "droppedRecords", { get() { throw new Error("bad accounting getter") }, enumerable: true })
 		case "missing-count": { const { droppedRecords: _omitted, ...rest } = status; return rest }
+		case "missing-file": { const { file: _omitted, ...rest } = status; return rest }
+		case "missing-sink-failure": { const { sinkFailure: _omitted, ...rest } = status; return rest }
+		case "missing-counts-complete": { const { countsComplete: _omitted, ...rest } = status; return rest }
+		case "missing-closed": { const { closed: _omitted, ...rest } = status; return rest }
 		default: return { ...status, droppedRecords: -1 }
 	}
 }

@@ -4,6 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync,
 import { hostname } from "node:os"
 import { basename, join, resolve } from "node:path"
 import { createRoot, MAIN, readState, removeRoot, RESET_RESOURCE, REVISION_5_RESOURCE, type Root, type Run } from "../helpers/harness.ts"
+import { finishActiveDiagnostics, openRunDiagnostics } from "../../src/diagnostics.ts"
 
 // O2 approved public seam. Every expected cap/mode/exit/status is a test-owned literal, not a production import.
 const PRELOAD = resolve(import.meta.dir, "../helpers/diagnostics-preload.ts")
@@ -47,6 +48,23 @@ function envelope(run: Run): { result: Record<string, unknown>; diagnostics: Rec
 	return JSON.parse(run.stdout)
 }
 function domain(run: Run): unknown { const parsed = JSON.parse(run.stdout); delete parsed.diagnostics; return JSON.parse(JSON.stringify(parsed).split(parsed.result.runId).join("run-NORMALIZED")) }
+const invalidStatusOmissions: Readonly<Record<string, readonly string[]>> = {
+	"unsafe-count": ["droppedRecords"],
+	"wrong-boolean": ["closed"],
+	"relative-path": ["file"],
+	getter: ["droppedRecords"],
+	"missing-count": ["droppedRecords"],
+	"missing-file": ["file"],
+	"missing-sink-failure": ["sinkFailure"],
+	"missing-closed": ["closed"],
+}
+const damagedAccountingCorruptions = new Set(["unsafe-count", "getter", "missing-count", "missing-counts-complete"])
+function expectedInvalidTrusted(corruption: string, root: Root): Record<string, unknown> {
+	if (corruption === "nonobject") return {}
+	const expected: Record<string, unknown> = { file: files(root)[0], sinkFailure: null, droppedRecords: 0, unflushedRecords: 0, truncatedRecords: 0, countsComplete: !damagedAccountingCorruptions.has(corruption), closed: true }
+	for (const field of invalidStatusOmissions[corruption] ?? []) delete expected[field]
+	return expected
+}
 async function ready(root: Root, count = 1): Promise<void> {
 	const deadline = performance.now() + 1500
 	while (readdirSync(root.privateRoot).filter((name) => name.startsWith("ready-")).length < count) {
@@ -96,6 +114,16 @@ describe("O2 diagnostics custody process", () => {
 		expect(existsSync(join(root.root, "override.jsonl"))).toBe(false)
 		expect(existsSync(join(root.root, "diagnostics"))).toBe(false)
 		expect(readState(root).resource).toBe(RESET_RESOURCE)
+	})
+	test("a short successful descriptor write is completed into valid closed JSONL", async () => {
+		const root = fresh()
+		const observed = envelope(await run(root, { mode: "short-write" }))
+		expect(observed.diagnostics).toMatchObject({ status: "available", sinkFailure: null, unflushedRecords: 0, closed: true })
+		const file = files(root)[0]
+		if (file === undefined) throw new Error("short-write run did not retain a diagnostics file")
+		const lines = readFileSync(file, "utf8").trim().split("\n")
+		expect(lines).toHaveLength(2)
+		for (const line of lines) expect(JSON.parse(line)).toMatchObject({ runIdentity: observed.result.runId })
 	})
 	test("unset or relative XDG selects HOME fallback; unset HOME and XDG reports unavailable", async () => {
 		for (const xdg of ["", "relative"]) {
@@ -293,6 +321,27 @@ describe("O2 diagnostics custody process", () => {
 		expect(observed.stderr).toBe("")
 		expect(readState(root).resource).toBe(RESET_RESOURCE)
 	})
+	test("the active owner closes the allocated file before asynchronous setup continues", async () => {
+		const root = fresh()
+		const opening = openRunDiagnostics({ runIdentity: "setup-owner", command: "repair-lab.inspect", env: { XDG_STATE_HOME: join(root.privateRoot, "state") }, fault: null })
+		await finishActiveDiagnostics()
+		const allocated = files(root)[0]
+		if (allocated === undefined) throw new Error("setup signal did not allocate its diagnostics file")
+		expect(readdirSync(directory(root)).some((name) => name.startsWith(`${basename(allocated)}.closed-`))).toBe(true)
+		const opened = await opening
+		expect(await opened.dispose()).toMatchObject({ file: allocated, closed: true })
+	})
+	test("a delayed human stderr write drains before normal exit", async () => {
+		const baseline = await run(fresh(), { args: [] })
+		const root = fresh()
+		const child = start(root, { mode: "stderr-delayed", args: [] })
+		await ready(root)
+		const observed = await child.result
+		expect(observed.exit).toBe(2)
+		expect(observed.stdout).toBe("")
+		expect(observed.stderr).toBe(baseline.stderr)
+		expect(observed.stderr.split("\n").filter(Boolean)).toHaveLength(1)
+	})
 	test("signal non-interference covers success, refusal and recovery failure with every diagnostics availability", async () => {
 		for (const [variant, args] of [["healthy", ["inspect", "--json"]], ["healthy", ["apply", "--json"]], ["unknown-after-partial", ["recover", "--json"]]] as const) {
 			for (const availability of ["available", "unavailable", "dropped", "unflushed"]) {
@@ -339,21 +388,17 @@ describe("O2 review repairs", () => {
 	})
 	test("invalid diagnostics isolate corrupt fields and preserve independently trusted status fields", async () => {
 		const baseline = await run(fresh())
-		for (const corruption of ["unsafe-count", "wrong-boolean", "relative-path", "nonobject", "getter", "missing-count"]) {
+		for (const corruption of ["unsafe-count", "wrong-boolean", "relative-path", "nonobject", "getter", "missing-count", "missing-file", "missing-sink-failure", "missing-counts-complete", "missing-closed"]) {
 			const root = fresh()
 			const observed = await run(root, { mode: "invalid-status", env: { O2_CORRUPTION: corruption } })
 			const decoded = envelope(observed)
 			expect(observed.exit).toBe(0)
 			expect(domain(observed)).toEqual(domain(baseline))
-			expect(decoded.diagnostics.status).toBe("unavailable")
-			expect(decoded.diagnostics.reason).toBe("status-invalid")
-			const trusted = decoded.diagnostics.trusted as Record<string, unknown>
-			if (corruption === "nonobject") expect(trusted).toEqual({})
-			else expect(trusted).toMatchObject({ sinkFailure: null, unflushedRecords: 0, truncatedRecords: 0 })
-			if (["unsafe-count", "getter", "missing-count"].includes(corruption)) { expect(trusted.droppedRecords).toBeUndefined(); expect(trusted.countsComplete).toBe(false); expect(trusted.file).toBe(files(root)[0]) }
-			if (corruption === "wrong-boolean") { expect(trusted.closed).toBeUndefined(); expect(trusted.countsComplete).toBe(true) }
-			if (corruption === "relative-path") { expect(trusted.file).toBeUndefined(); expect(trusted.closed).toBe(true) }
-		}
+				expect(decoded.diagnostics.status).toBe("unavailable")
+				expect(decoded.diagnostics.reason).toBe("status-invalid")
+				const trusted = decoded.diagnostics.trusted as Record<string, unknown>
+				expect(trusted).toEqual(expectedInvalidTrusted(corruption, root))
+			}
 	})
 	test("first sink failure stays write when later records are dropped", async () => {
 		const baseline = await run(fresh())
@@ -489,6 +534,18 @@ describe("O2 allocation lock custody", () => {
 		const root = fresh()
 		const observed = await run(root)
 		expect(envelope(observed).diagnostics.status).toBe("available")
+		expect(bookkeeping(root)).toEqual([])
+	})
+	test("a failed allocation-lock release closes its allocated file before the dead owner is recovered", async () => {
+		const root = fresh()
+		const failed = await run(root, { mode: "release-failure" })
+		expect(envelope(failed).diagnostics).toEqual({ status: "unavailable", reason: "status-unavailable", trusted: { file: null, sinkFailure: "setup" } })
+		const allocated = files(root)[0]
+		if (allocated === undefined) throw new Error("release failure did not retain its allocated diagnostics file")
+		expect(readdirSync(directory(root)).some((name) => name.startsWith(`${basename(allocated)}.closed-`))).toBe(true)
+		expect(bookkeeping(root)).toEqual([".allocation-lock"])
+		const successor = await run(root)
+		expect(envelope(successor).diagnostics).toMatchObject({ status: "available", closed: true })
 		expect(bookkeeping(root)).toEqual([])
 	})
 	test("foreign-host and malformed residue survive a successful allocation while same-host dead residue is swept", async () => {

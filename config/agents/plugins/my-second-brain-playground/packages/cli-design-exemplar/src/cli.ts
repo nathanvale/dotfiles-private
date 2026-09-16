@@ -262,7 +262,12 @@ interface DiagnosticInspection { trusted: Record<string, unknown>; invalid: bool
 function inspectDiagnosticField(status: object, name: string, schema: { safeParse(value: unknown): { success: boolean; data?: unknown } }, inspected: DiagnosticInspection): void {
 	const descriptor = Object.getOwnPropertyDescriptor(status, name)
 	const counter = name.endsWith("Records")
-	const unknown = descriptor === undefined || (descriptor.value === null && name !== "file" && name !== "sinkFailure")
+	if (descriptor === undefined) {
+		inspected.invalid = true
+		inspected.damagedAccounting ||= counter || name === "countsComplete"
+		return
+	}
+	const unknown = descriptor.value === null && name !== "file" && name !== "sinkFailure"
 	if (unknown) { inspected.missingCounter ||= counter; return }
 	const value = name === "sinkFailure" && typeof descriptor.value === "string" ? sinkFailureOf(descriptor.value) : descriptor.value
 	const parsed = schema.safeParse(value)

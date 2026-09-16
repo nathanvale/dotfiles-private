@@ -204,5 +204,19 @@ export function openDiagnosticFile(env: Record<string, string | undefined>, runI
 	} else mkdirSync(directory, { mode: 0o700 })
 	trustedDirectory(directory)
 	const release = acquireAllocationLock(directory)
-	try { prune(directory); return allocate(directory, runIdentity) } finally { release() }
+	let allocated: DiagnosticFile | null = null
+	let operationFailed = false
+	let operationError: unknown
+	try {
+		prune(directory)
+		allocated = allocate(directory, runIdentity)
+	} catch (error) { operationFailed = true; operationError = error }
+	try { release() } catch (error) {
+		// A release error must not strand the successfully allocated run file without closure proof.
+		try { allocated?.close() } catch {}
+		throw error
+	}
+	if (operationFailed) throw operationError
+	if (allocated === null) throw new Error("diagnostic allocation failed")
+	return allocated
 }

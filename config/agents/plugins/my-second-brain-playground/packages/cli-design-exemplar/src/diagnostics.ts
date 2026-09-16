@@ -69,12 +69,21 @@ function serialize(record: LogRecord): { bytes: Buffer; truncated: boolean } {
 }
 
 function writeBytes(fd: number, bytes: Buffer): Promise<void> {
+	if (bytes.length === 0) return Promise.resolve()
 	return new Promise((resolve, reject) => {
-		write(fd, bytes, 0, bytes.length, null, (error, written) => {
-			if (error !== null) reject(error)
-			else if (written !== bytes.length) reject(new Error("short diagnostic write"))
-			else resolve()
-		})
+		let offset = 0
+		const writeRemaining = (): void => {
+			write(fd, bytes, offset, bytes.length - offset, null, (error, written) => {
+				if (error !== null) reject(error)
+				else if (!Number.isSafeInteger(written) || written <= 0 || written > bytes.length - offset) reject(new Error("invalid diagnostic write length"))
+				else {
+					offset += written
+					if (offset === bytes.length) resolve()
+					else writeRemaining()
+				}
+			})
+		}
+		writeRemaining()
 	})
 }
 
@@ -176,15 +185,9 @@ export async function openRunDiagnostics(options: { runIdentity: string; command
 	let queue: BoundedQueue | null = null
 	let failure: string | null = null
 	let configured = false
-	try {
-		queue = new BoundedQueue(openDiagnosticFile(env, runIdentity), fault)
-		const owned = queue
-		const meta: Sink = (record) => { if (["warning", "error", "fatal"].includes(record.level)) owned.failure ??= "meta: logging failure" }
-		await configure({ sinks: { file: (record) => owned.log(record), meta }, loggers: [{ category: ["repair-lab"], sinks: ["file"], lowestLevel: "debug" }, { category: ["logtape", "meta"], sinks: ["meta"], lowestLevel: "debug" }], contextLocalStorage: new AsyncLocalStorage(), reset: true })
-		configured = true
-	} catch (error) { failure = queue?.failure ?? (error instanceof Error && error.message === "capacity" ? "capacity: no safe reservation" : "open: private diagnostics unavailable") }
 	const logger = getLogger(["repair-lab"])
 	let finished: Promise<DiagnosticsStatus> | null = null
+	const started = performance.now()
 	const opened: RunDiagnostics = {
 		log(eventKind, summary, properties = {}) {
 			if (!configured || finished !== null) return
@@ -202,7 +205,6 @@ export async function openRunDiagnostics(options: { runIdentity: string; command
 			return finished
 		},
 	}
-	const started = performance.now()
 	async function finalize(): Promise<DiagnosticsStatus> {
 		const deadline = performance.now() + FLUSH_MS
 		const status = queue === null ? { file: null, sinkFailure: failure, droppedRecords: null, unflushedRecords: null, truncatedRecords: null, countsComplete: null, closed: null } : await queue.finish()
@@ -211,7 +213,15 @@ export async function openRunDiagnostics(options: { runIdentity: string; command
 		if (active === opened) active = null
 		return Object.freeze({ ...status, sinkFailure: failure ?? status.sinkFailure })
 	}
-	active = opened
+	try {
+		queue = new BoundedQueue(openDiagnosticFile(env, runIdentity), fault)
+		// Publish the idempotent finalizer before asynchronous LogTape setup so a signal cannot strand the descriptor.
+		active = opened
+		const owned = queue
+		const meta: Sink = (record) => { if (["warning", "error", "fatal"].includes(record.level)) owned.failure ??= "meta: logging failure" }
+		await configure({ sinks: { file: (record) => owned.log(record), meta }, loggers: [{ category: ["repair-lab"], sinks: ["file"], lowestLevel: "debug" }, { category: ["logtape", "meta"], sinks: ["meta"], lowestLevel: "debug" }], contextLocalStorage: new AsyncLocalStorage(), reset: true })
+		configured = true
+	} catch (error) { failure = queue?.failure ?? (error instanceof Error && error.message === "capacity" ? "capacity: no safe reservation" : "open: private diagnostics unavailable") }
 	if (fault === "diagnostics-flood") for (let index = 0; index < RECORDS + 8; index += 1) opened.log("diagnostics.flood", "flood")
 	return opened
 }
