@@ -13,13 +13,18 @@ export type Tuple = readonly [commandIdentity: PublicStation["commandIdentity"],
 // Read-only identities carry the inspect stance; every other identity is repository-local (brief 12, section 3.4).
 const READ_ONLY = new Set<string>(["repair-lab.dispatch", "repair-lab.help", "repair-lab.discovery", "repair-lab.command-discovery", "repair-lab.status", "repair-lab.inspect", "repair-lab.inspect-diagnostics"])
 // Causes whose accepted guidance arm is a handoff (C0 cause table plus the exemplar's admitted domain causes).
-const HANDOFF_CAUSES = new Set<string>(["DOMAIN_AUTHORITY_REQUIRED", "DOMAIN_RECOVERY_HANDOFF_REQUIRED", "DOMAIN_RECOVERY_PARTIAL_HANDOFF", "DOMAIN_PRIOR_RUN_PENDING", "DOMAIN_JOURNAL_LOCK_HELD", "INTERNAL_EFFECT_OUTCOME_UNKNOWN", "INTERNAL_EFFECT_NOT_OBSERVED", "INTERNAL_UNEXPECTED", "INTERNAL_RESULT_UNCHANGED", "INTERNAL_RESULT_COMPLETED", "INTERNAL_RESULT_PARTIAL", "INTERNAL_RESULT_UNKNOWN"])
+const HANDOFF_CAUSES = new Set<string>(["DOMAIN_AUTHORITY_REQUIRED", "DOMAIN_DEADLINE_COMPLETED", "DOMAIN_DEADLINE_PARTIAL", "DOMAIN_DEADLINE_UNKNOWN", "DOMAIN_RECOVERY_HANDOFF_REQUIRED", "DOMAIN_RECOVERY_PARTIAL_HANDOFF", "DOMAIN_PRIOR_RUN_PENDING", "DOMAIN_JOURNAL_LOCK_HELD", "INTERNAL_EFFECT_OUTCOME_UNKNOWN", "INTERNAL_EFFECT_NOT_OBSERVED", "INTERNAL_UNEXPECTED", "INTERNAL_RESULT_UNCHANGED", "INTERNAL_RESULT_COMPLETED", "INTERNAL_RESULT_PARTIAL", "INTERNAL_RESULT_UNKNOWN"])
 const FAILURE_BY_CAUSE: Readonly<Record<string, FailureClass>> = {
 	USAGE_INVALID_INVOCATION: "usage",
 	USAGE_UNKNOWN_COMMAND: "usage",
 	SCHEMA_INVALID_INPUT: "schema",
 	DOMAIN_PRECONDITION_UNMET: "domain",
 	DOMAIN_AUTHORITY_REQUIRED: "domain",
+	DOMAIN_DEADLINE_BEFORE_START: "domain",
+	DOMAIN_DEADLINE_UNCHANGED: "domain",
+	DOMAIN_DEADLINE_COMPLETED: "domain",
+	DOMAIN_DEADLINE_PARTIAL: "domain",
+	DOMAIN_DEADLINE_UNKNOWN: "domain",
 	DOMAIN_RECOVERY_HANDOFF_REQUIRED: "domain",
 	DOMAIN_RECOVERY_PARTIAL_HANDOFF: "domain",
 	DOMAIN_JOURNAL_LOCK_HELD: "domain",
@@ -159,8 +164,24 @@ const EXPECTED_TUPLES = [
 	["repair-lab.apply", "refused", "DOMAIN_JOURNAL_LOCK_HELD"],
 	["repair-lab.repair", "refused", "DOMAIN_JOURNAL_LOCK_HELD"],
 	["repair-lab.repair-retry", "refused", "DOMAIN_JOURNAL_LOCK_HELD"],
+	// O3 (CDS-LO-3): every command that declares --deadline-ms exposes the same five accepted deadline outcomes.
+	["repair-lab.apply", "refused", "DOMAIN_DEADLINE_BEFORE_START"],
+	["repair-lab.apply", "failed", "DOMAIN_DEADLINE_UNCHANGED"],
+	["repair-lab.apply", "failed", "DOMAIN_DEADLINE_COMPLETED"],
+	["repair-lab.apply", "failed", "DOMAIN_DEADLINE_PARTIAL"],
+	["repair-lab.apply", "failed", "DOMAIN_DEADLINE_UNKNOWN"],
+	["repair-lab.repair", "refused", "DOMAIN_DEADLINE_BEFORE_START"],
+	["repair-lab.repair", "failed", "DOMAIN_DEADLINE_UNCHANGED"],
+	["repair-lab.repair", "failed", "DOMAIN_DEADLINE_COMPLETED"],
+	["repair-lab.repair", "failed", "DOMAIN_DEADLINE_PARTIAL"],
+	["repair-lab.repair", "failed", "DOMAIN_DEADLINE_UNKNOWN"],
+	["repair-lab.repair-retry", "refused", "DOMAIN_DEADLINE_BEFORE_START"],
+	["repair-lab.repair-retry", "failed", "DOMAIN_DEADLINE_UNCHANGED"],
+	["repair-lab.repair-retry", "failed", "DOMAIN_DEADLINE_COMPLETED"],
+	["repair-lab.repair-retry", "failed", "DOMAIN_DEADLINE_PARTIAL"],
+	["repair-lab.repair-retry", "failed", "DOMAIN_DEADLINE_UNKNOWN"],
 ] as const satisfies readonly Tuple[]
-export const EXPECTED_STATION_COUNT = 105
+export const EXPECTED_STATION_COUNT = 120
 
 // Expected wire guidance (accepted C0 template rule; TC-D6 one meaning per derived identity). Each string below is
 // the literal next action, handoff reason or repair action the CLI must emit and discovery must publish for that
@@ -180,6 +201,11 @@ const EXPECTED_GUIDANCE_BY_CAUSE: Readonly<Record<string, ExpectedGuidance>> = {
 	SCHEMA_INVALID_INPUT: { nextAction: EXPECTED_INSPECT, repairAction: "Restore a resource that matches the resource schema, then inspect" },
 	DOMAIN_PRECONDITION_UNMET: { nextAction: EXPECTED_INSPECT, repairAction: "provide a readable state file inside the fixture root, then inspect" },
 	DOMAIN_AUTHORITY_REQUIRED: { handoffReason: "Obtain the named authority before continuing.", repairAction: "Inspect, then supply --authorize fixture-authority with a fresh preview, or hand off" },
+	DOMAIN_DEADLINE_BEFORE_START: { nextAction: EXPECTED_INSPECT, repairAction: "Inspect the deadline and input, then explicitly decide a new run" },
+	DOMAIN_DEADLINE_UNCHANGED: { nextAction: EXPECTED_INSPECT, repairAction: "Inspect the deadline and input, then explicitly decide a new run" },
+	DOMAIN_DEADLINE_COMPLETED: { handoffReason: "The deadline passed after the effects completed.", repairAction: "Inspect the confirmed completed effects before any new run" },
+	DOMAIN_DEADLINE_PARTIAL: { handoffReason: "The deadline passed after a known subset of effects completed.", repairAction: "Inspect the known partial effects before separately authorized recovery" },
+	DOMAIN_DEADLINE_UNKNOWN: { handoffReason: "The deadline passed with uncertain effects.", repairAction: "Inspect the uncertain effects before any retry" },
 	TRANSIENT_NOT_STARTED: { nextAction: RETRY, repairAction: RETRY },
 	INTERNAL_PREPARATION: { nextAction: EXPECTED_INSPECT, repairAction: FALLBACK },
 	INTERNAL_RESULT_UNCHANGED: { handoffReason: FALLBACK, repairAction: FALLBACK },
@@ -214,8 +240,9 @@ export const identityOf = (tuple: Tuple): string => JSON.stringify(tuple)
 function transactionStateOf(outcome: Outcome, causeCode: string): WireTransactionState {
 	if (outcome === "success") return causeCode === "SUCCESS_COMPLETED" ? "completed" : "unchanged"
 	if (causeCode === "INTERNAL_RESULT_COMPLETED") return "completed"
-	if (causeCode === "INTERNAL_RESULT_PARTIAL" || causeCode === "DOMAIN_RECOVERY_PARTIAL_HANDOFF") return "partially-completed"
-	if (causeCode === "DOMAIN_RECOVERY_HANDOFF_REQUIRED" || causeCode === "INTERNAL_EFFECT_OUTCOME_UNKNOWN" || causeCode === "INTERNAL_EFFECT_NOT_OBSERVED" || causeCode === "INTERNAL_RESULT_UNKNOWN") return "unknown"
+	if (causeCode === "INTERNAL_RESULT_PARTIAL" || causeCode === "DOMAIN_RECOVERY_PARTIAL_HANDOFF" || causeCode === "DOMAIN_DEADLINE_PARTIAL") return "partially-completed"
+	if (causeCode === "DOMAIN_RECOVERY_HANDOFF_REQUIRED" || causeCode === "INTERNAL_EFFECT_OUTCOME_UNKNOWN" || causeCode === "INTERNAL_EFFECT_NOT_OBSERVED" || causeCode === "INTERNAL_RESULT_UNKNOWN" || causeCode === "DOMAIN_DEADLINE_UNKNOWN") return "unknown"
+	if (causeCode === "DOMAIN_DEADLINE_COMPLETED") return "completed"
 	return "unchanged"
 }
 

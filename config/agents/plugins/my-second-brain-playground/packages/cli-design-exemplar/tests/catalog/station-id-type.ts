@@ -6,7 +6,7 @@ import type { StationId } from "../../src/command-contract.ts"
 type CandidateStationId = StationId
 
 // fallow-ignore-next-line complexity -- this specimen intentionally enumerates every sealed vocabulary arm.
-function exhaustivelyNameStation(stationId: CandidateStationId): string {
+function _exhaustivelyNameStation(stationId: CandidateStationId): string {
 	switch (stationId) {
 		case '["repair-lab.status","success","SUCCESS_UNCHANGED"]':
 			return stationId
@@ -123,6 +123,36 @@ function exhaustivelyNameStation(stationId: CandidateStationId): string {
 		case '["repair-lab.repair-retry","refused","DOMAIN_AUTHORITY_REQUIRED"]':
 			return stationId
 		case '["repair-lab.apply","refused","TRANSIENT_NOT_STARTED"]':
+			return stationId
+		case '["repair-lab.apply","refused","DOMAIN_DEADLINE_BEFORE_START"]':
+			return stationId
+		case '["repair-lab.apply","failed","DOMAIN_DEADLINE_UNCHANGED"]':
+			return stationId
+		case '["repair-lab.apply","failed","DOMAIN_DEADLINE_COMPLETED"]':
+			return stationId
+		case '["repair-lab.apply","failed","DOMAIN_DEADLINE_PARTIAL"]':
+			return stationId
+		case '["repair-lab.apply","failed","DOMAIN_DEADLINE_UNKNOWN"]':
+			return stationId
+		case '["repair-lab.repair","refused","DOMAIN_DEADLINE_BEFORE_START"]':
+			return stationId
+		case '["repair-lab.repair","failed","DOMAIN_DEADLINE_UNCHANGED"]':
+			return stationId
+		case '["repair-lab.repair","failed","DOMAIN_DEADLINE_COMPLETED"]':
+			return stationId
+		case '["repair-lab.repair","failed","DOMAIN_DEADLINE_PARTIAL"]':
+			return stationId
+		case '["repair-lab.repair","failed","DOMAIN_DEADLINE_UNKNOWN"]':
+			return stationId
+		case '["repair-lab.repair-retry","refused","DOMAIN_DEADLINE_BEFORE_START"]':
+			return stationId
+		case '["repair-lab.repair-retry","failed","DOMAIN_DEADLINE_UNCHANGED"]':
+			return stationId
+		case '["repair-lab.repair-retry","failed","DOMAIN_DEADLINE_COMPLETED"]':
+			return stationId
+		case '["repair-lab.repair-retry","failed","DOMAIN_DEADLINE_PARTIAL"]':
+			return stationId
+		case '["repair-lab.repair-retry","failed","DOMAIN_DEADLINE_UNKNOWN"]':
 			return stationId
 		case '["repair-lab.repair","failed","INTERNAL_EFFECT_NOT_OBSERVED"]':
 			return stationId

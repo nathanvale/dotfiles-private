@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks"
-import { write } from "node:fs"
+import { write, writeSync } from "node:fs"
 import { configure, dispose, getJsonLinesFormatter, getLogger, type LogRecord, type Sink } from "@logtape/logtape"
 import { openDiagnosticFile, type DiagnosticFile } from "./diagnostics-custody.ts"
 import { REDACTED, SECRET_KEY_PATTERN } from "./engine.ts"
@@ -16,6 +16,7 @@ export interface DiagnosticsStatus {
 export interface RunDiagnostics {
 	log(eventKind: string, summary: string, properties?: Record<string, unknown>): void
 	setStation(stationId: string): void
+	emergency(eventKind: string): void
 	dispose(): Promise<DiagnosticsStatus>
 }
 export type DiagnosticsFault = "sink-throw" | "sink-dispose-throw" | "diagnostics-flood" | null
@@ -87,6 +88,21 @@ function writeBytes(fd: number, bytes: Buffer): Promise<void> {
 	})
 }
 
+export function writeBytesSync(fd: number, bytes: Buffer, writer: (fd: number, buffer: Buffer, offset: number, length: number, position: null) => number = writeSync): boolean {
+	let offset = 0
+	try {
+		while (offset < bytes.length) {
+			const remaining = bytes.length - offset
+			const written = writer(fd, bytes, offset, remaining, null)
+			if (!Number.isSafeInteger(written) || written <= 0 || written > remaining) return false
+			offset += written
+		}
+		return true
+	} catch {
+		return false
+	}
+}
+
 class BoundedQueue {
 	private readonly queue: Buffer[] = []
 	private retainedBytes = 0
@@ -139,6 +155,11 @@ class BoundedQueue {
 		return this.draining
 	}
 
+	emergency(bytes: Buffer): void {
+		if (this.frozen !== null || this.closed || this.pending > 0 || bytes.length > RECORD_BYTES) return
+		writeBytesSync(this.file.fd, bytes)
+	}
+
 	async finish(): Promise<DiagnosticsStatus> {
 		if (this.frozen !== null) return this.frozen
 		this.stopped = true
@@ -177,6 +198,9 @@ async function finishLogTape(milliseconds: number): Promise<void> {
 let active: RunDiagnostics | null = null
 // Main's signal handler uses the same idempotent, bounded finalization as normal exit.
 export async function finishActiveDiagnostics(): Promise<void> { await active?.dispose() }
+// Crash handling gets one synchronous, bounded write to the already owned descriptor. It never opens a path,
+// waits for disposal, changes domain truth or promises that the operating system persisted the bytes.
+export function attemptEmergencyDiagnostics(): void { active?.emergency("process.crash") }
 
 export async function openRunDiagnostics(options: { runIdentity: string; command: string; env: Record<string, string | undefined>; fault: DiagnosticsFault }): Promise<RunDiagnostics> {
 	const { runIdentity, command, env, fault } = options
@@ -200,6 +224,13 @@ export async function openRunDiagnostics(options: { runIdentity: string; command
 			} catch { if (queue !== null) { queue.failure ??= "log: serialization failed"; queue.dropped += 1 } }
 		},
 		setStation(id) { stationId = identifier(id) },
+		emergency(eventKind) {
+			if (queue === null || finished !== null) return
+			sequence += 1
+			const event = identifier(eventKind)
+			const bytes = Buffer.from(`${JSON.stringify({ runIdentity, command: identifier(command), sequence, event_id: `${runIdentity}:${sequence}`, event_kind: event, summary: `${identifier(command)}: ${event}`, emergency: true })}\n`)
+			queue.emergency(bytes)
+		},
 		dispose() {
 			finished ??= finalize()
 			return finished

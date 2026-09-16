@@ -31,6 +31,7 @@ import {
 import { type DiagnosticsStatus, openRunDiagnostics } from "./diagnostics.ts"
 import { type Decision, decide, factsOf, type ParsedRequest } from "./engine.ts"
 import type { EgressFault, ExecutionFacts, Faults } from "./model.ts"
+import { createOperationDeadline } from "./operation-deadline.ts"
 import { createRuntime, parseFaults, resolveRoot, RETRY_DELAY_MS } from "./runtime.ts"
 import { commandDiscovery, type PublicStation, wireGuidance } from "./station-catalogue.ts"
 
@@ -210,6 +211,7 @@ function refusalResult(decision: Decision, runId: string): EnvelopeV2 {
 	if (decision.failureClass === "usage") result = { ...common, causeCode: "USAGE_INVALID_INVOCATION", failureClass: "usage", exitCode: 2, ...next("USAGE_INVALID_INVOCATION") }
 	else if (decision.failureClass === "schema") result = { ...common, causeCode: "SCHEMA_INVALID_INPUT", failureClass: "schema", exitCode: 4, ...next("SCHEMA_INVALID_INPUT") }
 	else if (decision.causeCode === "DOMAIN_AUTHORITY_MISSING") result = { ...common, causeCode: "DOMAIN_AUTHORITY_REQUIRED", failureClass: "domain", exitCode: 3, repairAction: repairActionOf(identity, "DOMAIN_AUTHORITY_REQUIRED"), handoff: handoffOf(identity, "DOMAIN_AUTHORITY_REQUIRED") }
+	else if (decision.causeCode === "DOMAIN_DEADLINE_BEFORE_START") result = { ...common, causeCode: "DOMAIN_DEADLINE_BEFORE_START", failureClass: "domain", exitCode: 3, ...next("DOMAIN_DEADLINE_BEFORE_START") }
 	// O1 Candidate A: the two writer refusals keep their own accepted causes and arms rather than folding into the
 	// precondition row.
 	else if (decision.causeCode === "DOMAIN_JOURNAL_LOCK_HELD") result = { ...common, causeCode: "DOMAIN_JOURNAL_LOCK_HELD", failureClass: "domain", exitCode: 3, repairAction: repairActionOf(identity, "DOMAIN_JOURNAL_LOCK_HELD"), handoff: handoffOf(identity, "DOMAIN_JOURNAL_LOCK_HELD") }
@@ -219,6 +221,62 @@ function refusalResult(decision: Decision, runId: string): EnvelopeV2 {
 	else result = { ...common, causeCode: "DOMAIN_PRECONDITION_UNMET", failureClass: "domain", exitCode: 3, ...next("DOMAIN_PRECONDITION_UNMET") }
 	return envelope(decision.message, result)
 }
+
+function deadlineFailureBase(decision: Decision, runId: string) {
+	const facts = factsOf(decision, runId)
+	const identity = decision.commandIdentity
+	const common = { runId, commandIdentity: identity, outcome: "failed" as const, data: null, retryable: false as const, failureClass: "domain" as const, exitCode: 3 as const }
+	const handoff = (causeCode: WireCauseCode) => ({ repairAction: repairActionOf(identity, causeCode), handoff: handoffOf(identity, causeCode) })
+	return { facts, identity, common, handoff }
+}
+
+function deadlineUnchangedEnvelope(decision: Decision, runId: string): EnvelopeV2 {
+	if (decision.effectClass === "inspect" || decision.transactionState !== "unchanged") throw new Error("deadline unchanged facts are inadmissible")
+	const { facts, identity, common } = deadlineFailureBase(decision, runId)
+	const causeCode = "DOMAIN_DEADLINE_UNCHANGED"
+	return envelope(decision.message, { ...common, effectClass: "repository-local", transactionState: "unchanged", causeCode, effects: unchangedEffects(facts), repairAction: repairActionOf(identity, causeCode), nextAction: nextActionOf(identity, causeCode) })
+}
+
+function deadlineCompletedEnvelope(decision: Decision, runId: string): EnvelopeV2 {
+	if (decision.effectClass === "inspect" || decision.transactionState !== "completed") throw new Error("deadline completed facts are inadmissible")
+	const { facts, common, handoff } = deadlineFailureBase(decision, runId)
+	const effects = completedEffects(facts)
+	if (effects === null) throw new Error("deadline completed facts are inadmissible")
+	const causeCode = "DOMAIN_DEADLINE_COMPLETED"
+	return envelope(decision.message, { ...common, effectClass: "repository-local", transactionState: "completed", causeCode, effects, ...handoff(causeCode) })
+}
+
+function deadlinePartialEnvelope(decision: Decision, runId: string): EnvelopeV2 {
+	if (decision.effectClass === "inspect" || decision.transactionState !== "partially-completed") throw new Error("deadline partial facts are inadmissible")
+	const { facts, common, handoff } = deadlineFailureBase(decision, runId)
+	const effects = partialEffects(facts)
+	if (effects === null) throw new Error("deadline partial facts are inadmissible")
+	const causeCode = "DOMAIN_DEADLINE_PARTIAL"
+	return envelope(decision.message, { ...common, effectClass: "repository-local", transactionState: "partially-completed", causeCode, effects, ...handoff(causeCode) })
+}
+
+function deadlineUnknownEnvelope(decision: Decision, runId: string): EnvelopeV2 {
+	if (decision.effectClass === "inspect" || decision.transactionState !== "unknown") throw new Error("deadline unknown facts are inadmissible")
+	const { facts, common, handoff } = deadlineFailureBase(decision, runId)
+	const causeCode = "DOMAIN_DEADLINE_UNKNOWN"
+	return envelope(decision.message, { ...common, effectClass: "repository-local", transactionState: "unknown", causeCode, effects: unknownEffects(facts), ...handoff(causeCode) })
+}
+
+function deadlineFailureEnvelope(decision: Decision, runId: string): EnvelopeV2 | null {
+	switch (decision.causeCode) {
+		case "DOMAIN_DEADLINE_UNCHANGED":
+			return deadlineUnchangedEnvelope(decision, runId)
+		case "DOMAIN_DEADLINE_COMPLETED":
+			return deadlineCompletedEnvelope(decision, runId)
+		case "DOMAIN_DEADLINE_PARTIAL":
+			return deadlinePartialEnvelope(decision, runId)
+		case "DOMAIN_DEADLINE_UNKNOWN":
+			return deadlineUnknownEnvelope(decision, runId)
+		default:
+			return null
+	}
+}
+
 function ordinaryFailureResult(decision: Decision, runId: string): EnvelopeV2 {
 	const facts = factsOf(decision, runId)
 	const identity = decision.commandIdentity
@@ -330,8 +388,9 @@ function diagnosticsDisclosure(status: unknown): Diagnostics {
 	} catch { return invalid }
 }
 function decisionEnvelope(decision: Decision, runId: string, diagnostics: DiagnosticsStatus | null): EnvelopeV2 {
-	const ordinaryCause = decision.causeCode === "DOMAIN_RECOVERY_HANDOFF_REQUIRED" || decision.causeCode === "DOMAIN_RECOVERY_PARTIAL_HANDOFF" || decision.causeCode === "INTERNAL_EFFECT_OUTCOME_UNKNOWN" || decision.causeCode === "INTERNAL_EFFECT_NOT_OBSERVED" || decision.causeCode === "INTERNAL_UNEXPECTED"
-	const result = decision.domainOutcome === "success" ? successResult(decision, runId) : decision.failureClass === "unavailable" ? transientResult(decision, runId) : decision.domainOutcome === "refused" ? refusalResult(decision, runId) : ordinaryCause ? ordinaryFailureResult(decision, runId) : fallbackEnvelope(factsOf(decision, runId))
+	const ordinaryCause = decision.causeCode === "DOMAIN_DEADLINE_UNCHANGED" || decision.causeCode === "DOMAIN_DEADLINE_COMPLETED" || decision.causeCode === "DOMAIN_DEADLINE_PARTIAL" || decision.causeCode === "DOMAIN_DEADLINE_UNKNOWN" || decision.causeCode === "DOMAIN_RECOVERY_HANDOFF_REQUIRED" || decision.causeCode === "DOMAIN_RECOVERY_PARTIAL_HANDOFF" || decision.causeCode === "INTERNAL_EFFECT_OUTCOME_UNKNOWN" || decision.causeCode === "INTERNAL_EFFECT_NOT_OBSERVED" || decision.causeCode === "INTERNAL_UNEXPECTED"
+	const deadlineResult = deadlineFailureEnvelope(decision, runId)
+	const result = decision.domainOutcome === "success" ? successResult(decision, runId) : decision.failureClass === "unavailable" ? transientResult(decision, runId) : decision.domainOutcome === "refused" ? refusalResult(decision, runId) : deadlineResult ?? (ordinaryCause ? ordinaryFailureResult(decision, runId) : fallbackEnvelope(factsOf(decision, runId)))
 	if (result === null) throw new Error("uncomposable fallback facts")
 	if (diagnostics === null) return result
 	return { ...result, diagnostics: diagnosticsDisclosure(diagnostics) }
@@ -456,12 +515,15 @@ function successEnvelope(identity: CommandIdentity, runIdentity: string, message
 	return envelope(message, result)
 }
 
-function buildRequest(parsed: Parsed, route: CommandRoute): ParsedRequest | null {
+function buildRequest(parsed: Parsed, route: CommandRoute): { request: ParsedRequest } | { usage: string } {
 	const statePath = parsed.values.state === undefined ? undefined : parseResourceId(parsed.values.state)
 	const previewId = parsed.values["preview-id"] === undefined ? undefined : parseResourceId(parsed.values["preview-id"])
 	const authority = parsed.values.authorize === undefined ? undefined : mintAuthorization(parsed.values.authorize)
-	if (statePath === null || previewId === null) return null
-	return { route, statePath, previewId, authority: authority ?? undefined, automation: parsed.values.automation === true, includeDiagnostics: parsed.values["include-diagnostics"] === true }
+	if (statePath === null || previewId === null) return { usage: "resource identities must be nonempty" }
+	const deadlineValue = parsed.values["deadline-ms"]
+	const deadlineMilliseconds = deadlineValue === undefined ? undefined : Number(deadlineValue)
+	if (deadlineMilliseconds !== undefined && (!Number.isSafeInteger(deadlineMilliseconds) || deadlineMilliseconds <= 0 || String(deadlineMilliseconds) !== deadlineValue)) return { usage: "--deadline-ms must be a positive integer" }
+	return { request: { route, statePath, previewId, authority: authority ?? undefined, automation: parsed.values.automation === true, includeDiagnostics: parsed.values["include-diagnostics"] === true, deadline: deadlineMilliseconds === undefined ? null : createOperationDeadline(deadlineMilliseconds) } }
 }
 
 interface Session {
@@ -527,11 +589,11 @@ function runCommandDiscovery(session: Session, parsed: Parsed): number {
 // A routed command: resolve the root, open diagnostics, decide, dispose diagnostics, then render once.
 async function runCommand(session: Session, routed: Routed, route: CommandRoute, parsed: Parsed, faults: Faults, root: string, env: Record<string, string | undefined>): Promise<number> {
 	const request = buildRequest(parsed, route)
-	if (request === null) return usageRefusal(session, routed.identity, "USAGE_INVALID_ARGUMENTS", "resource identities must be nonempty")
+	if ("usage" in request) return usageRefusal(session, routed.identity, "USAGE_INVALID_ARGUMENTS", request.usage)
 	const diagnosticsFault = faults.domain === "sink-throw" || faults.domain === "sink-dispose-throw" || faults.domain === "diagnostics-flood" ? faults.domain : null
 	const diagnostics = await openRunDiagnostics({ runIdentity: session.runIdentity, command: routed.identity, env, fault: diagnosticsFault })
 	const runtime = createRuntime(root, faults)
-	const decision = decide(runtime, request, session.runIdentity)
+	const decision = decide(runtime, request.request, session.runIdentity)
 	decision.events.forEach((event, index) => {
 		if (index === decision.events.length - 1) diagnostics.setStation(decision.stationLabel)
 		diagnostics.log(event, `${decision.commandIdentity}: ${event}`, { sensitive_fields_redacted: event === "inspect.redaction-applied" ? decision.redactedFields : [] })

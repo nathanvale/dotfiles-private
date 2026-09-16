@@ -92,6 +92,22 @@ const ROWS = [
 	["repair-lab.repair", "refused", "DOMAIN_AUTHORITY_REQUIRED", "repository-local", "unchanged", false, null, "handoff", true, 3, null],
 	["repair-lab.repair-retry", "refused", "DOMAIN_AUTHORITY_REQUIRED", "repository-local", "unchanged", false, null, "handoff", true, 3, null],
 	["repair-lab.apply", "refused", "TRANSIENT_NOT_STARTED", "repository-local", "unchanged", true, 25, "next-action", true, 75, null],
+	// O3 (CDS-LO-3): the three commands that declare --deadline-ms expose every accepted effect-state row.
+	["repair-lab.apply", "refused", "DOMAIN_DEADLINE_BEFORE_START", "repository-local", "unchanged", false, null, "next-action", true, 3, null],
+	["repair-lab.apply", "failed", "DOMAIN_DEADLINE_UNCHANGED", "repository-local", "unchanged", false, null, "next-action", true, 3, null],
+	["repair-lab.apply", "failed", "DOMAIN_DEADLINE_COMPLETED", "repository-local", "completed", false, null, "handoff", true, 3, null],
+	["repair-lab.apply", "failed", "DOMAIN_DEADLINE_PARTIAL", "repository-local", "partially-completed", false, null, "handoff", true, 3, null],
+	["repair-lab.apply", "failed", "DOMAIN_DEADLINE_UNKNOWN", "repository-local", "unknown", false, null, "handoff", true, 3, null],
+	["repair-lab.repair", "refused", "DOMAIN_DEADLINE_BEFORE_START", "repository-local", "unchanged", false, null, "next-action", true, 3, null],
+	["repair-lab.repair", "failed", "DOMAIN_DEADLINE_UNCHANGED", "repository-local", "unchanged", false, null, "next-action", true, 3, null],
+	["repair-lab.repair", "failed", "DOMAIN_DEADLINE_COMPLETED", "repository-local", "completed", false, null, "handoff", true, 3, null],
+	["repair-lab.repair", "failed", "DOMAIN_DEADLINE_PARTIAL", "repository-local", "partially-completed", false, null, "handoff", true, 3, null],
+	["repair-lab.repair", "failed", "DOMAIN_DEADLINE_UNKNOWN", "repository-local", "unknown", false, null, "handoff", true, 3, null],
+	["repair-lab.repair-retry", "refused", "DOMAIN_DEADLINE_BEFORE_START", "repository-local", "unchanged", false, null, "next-action", true, 3, null],
+	["repair-lab.repair-retry", "failed", "DOMAIN_DEADLINE_UNCHANGED", "repository-local", "unchanged", false, null, "next-action", true, 3, null],
+	["repair-lab.repair-retry", "failed", "DOMAIN_DEADLINE_COMPLETED", "repository-local", "completed", false, null, "handoff", true, 3, null],
+	["repair-lab.repair-retry", "failed", "DOMAIN_DEADLINE_PARTIAL", "repository-local", "partially-completed", false, null, "handoff", true, 3, null],
+	["repair-lab.repair-retry", "failed", "DOMAIN_DEADLINE_UNKNOWN", "repository-local", "unknown", false, null, "handoff", true, 3, null],
 	// W3 on the repair identities: effect.write-journal is in the repair plan too.
 	// W4: an effect returned but read-back showed no change, on every effect-executing route.
 	["repair-lab.repair", "failed", "INTERNAL_EFFECT_NOT_OBSERVED", "repository-local", "unknown", false, null, "handoff", true, 1, null],
