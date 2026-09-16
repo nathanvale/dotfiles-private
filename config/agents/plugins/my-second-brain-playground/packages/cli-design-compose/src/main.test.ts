@@ -276,6 +276,39 @@ Bun.plugin({
   return preload;
 }
 
+async function publicationRemovalAfterDiscoveryPreload(path: string): Promise<string> {
+  const root = await mkdtemp(join(tmpdir(), "cli-compose-publication-removal-"));
+  roots.push(root);
+  const preload = join(root, "preload.ts");
+  const target = JSON.stringify(path);
+  const marker = JSON.stringify("cli-compose-remove-lock-input-after-discovery");
+  await writeFile(
+    preload,
+    `Bun.plugin({
+  name: "cli-compose-publication-removal-after-discovery",
+  setup(build) {
+    build.onLoad({ filter: new RegExp("runtime/cli-design\\\\.js$") }, async (args) => {
+      const source = await Bun.file(args.path).text();
+      const publicationNeedle = \`for (const file of creations)\n      await writeNewFile(file, state, fileSystem);\`;
+      const publicationReplacement = \`let removalInjected = false;\n    for (const file of creations) {\n      await writeNewFile(file, state, fileSystem);\n      if (!removalInjected) {\n        removalInjected = true;\n        globalThis[${marker}] = true;\n      }\n    }\`;
+      const discoveryNeedle = \`return await Promise.all([...paths].sort().map(async (path) => ({ bytes: await readFile(path), path })));\`;
+      const discoveryReplacement = \`if (globalThis[${marker}] === true) {\n    delete globalThis[${marker}];\n    await rm(${target});\n  }\n  return await Promise.all([...paths].sort().map(async (path) => ({ bytes: await readFile(path), path })));\`;
+      if (!source.includes(publicationNeedle) || !source.includes(discoveryNeedle)) {
+        throw new Error("comparison timing seam was not found");
+      }
+      return {
+        contents: source
+          .replace(publicationNeedle, publicationReplacement)
+          .replace(discoveryNeedle, discoveryReplacement),
+      };
+    });
+  },
+});
+`,
+  );
+  return preload;
+}
+
 async function fixture(workspace: boolean): Promise<ProjectFixture> {
   const root = await realpath(await mkdtemp(join(tmpdir(), "cli-compose-test-")));
   roots.push(root);
@@ -481,6 +514,34 @@ for (const [label, packagePath] of [
     expect(install.exitCode).toBe(0);
   });
 }
+
+test("the public compose process refuses a sibling manifest removed after comparison discovery", async () => {
+  const project = await fixture(true);
+  const target = join(project.root, "packages", "sibling", "package.json");
+  const originalSibling = await readFile(target);
+  const beforeTree = await snapshotTree(project.root);
+  const preload = await publicationRemovalAfterDiscoveryPreload(target);
+  const result = await invokeFixtureAsync(project, "complex", [], DEFAULT_SOURCE_PACKET, {
+    BUN_OPTIONS: `${process.env.BUN_OPTIONS ?? ""} --preload=${preload}`.trim(),
+  });
+
+  expect(result.exitCode).toBe(3);
+  expect(result.stderr).toBe("");
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    causeCode: "DOMAIN_CONCURRENT_CHANGE",
+    status: "refused",
+  });
+  expect(await Bun.file(target).exists()).toBe(false);
+  expect(await Bun.file(join(project.packageRoot, "src", "cli.ts")).exists()).toBe(false);
+  expect(await Bun.file(join(project.packageRoot, ".cli-design-template.json")).exists()).toBe(false);
+  await writeFile(target, originalSibling);
+  expect(await snapshotTree(project.root)).toEqual(beforeTree);
+  const install = Bun.spawnSync(
+    [process.execPath, "install", "--frozen-lockfile", "--ignore-scripts"],
+    { cwd: project.root, stderr: "pipe", stdout: "pipe" },
+  );
+  expect(install.exitCode).toBe(0);
+});
 
 test("refuses a sibling workspace manifest changed after staging", async () => {
   const project = await fixture(true);

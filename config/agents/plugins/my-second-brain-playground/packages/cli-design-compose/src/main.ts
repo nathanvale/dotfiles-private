@@ -611,7 +611,18 @@ export async function requireUnchangedLockInputs(
   projectRoot: string,
   inputs: LockInputSnapshot[],
 ): Promise<void> {
-  const currentInputs = await snapshotLockInputs(projectRoot);
+  let currentInputs: LockInputSnapshot[];
+  try {
+    currentInputs = await snapshotLockInputs(projectRoot);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") throw error;
+    throw new ComposeError(
+      "DOMAIN_CONCURRENT_CHANGE",
+      "workspace lock input disappeared during preparation",
+      3,
+      "Inspect the concurrent edit and retry from the new state.",
+    );
+  }
   if (
     currentInputs.length !== inputs.length ||
     currentInputs.some((input, index) => input.path !== inputs[index]?.path)

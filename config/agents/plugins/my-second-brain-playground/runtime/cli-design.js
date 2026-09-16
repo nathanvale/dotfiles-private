@@ -380,7 +380,14 @@ function snapshotBytes(inputs, path) {
   return input.bytes;
 }
 async function requireUnchangedLockInputs(projectRoot, inputs) {
-  const currentInputs = await snapshotLockInputs(projectRoot);
+  let currentInputs;
+  try {
+    currentInputs = await snapshotLockInputs(projectRoot);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT")
+      throw error;
+    throw new ComposeError("DOMAIN_CONCURRENT_CHANGE", "workspace lock input disappeared during preparation", 3, "Inspect the concurrent edit and retry from the new state.");
+  }
   if (currentInputs.length !== inputs.length || currentInputs.some((input, index) => input.path !== inputs[index]?.path)) {
     throw new ComposeError("DOMAIN_CONCURRENT_CHANGE", "workspace lock input set changed during preparation", 3, "Inspect the concurrent edit and retry from the new state.");
   }
