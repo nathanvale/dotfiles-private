@@ -15,6 +15,15 @@ const WORKTREE = resolve(PACKAGE, "../../../../../..")
 const COMPANIONS = join(import.meta.dir, "companions")
 const MANIFEST_PATH = process.env.REPAIR_LAB_COMPANIONS_MANIFEST
 const LIFECYCLE_OBSERVATION = resolve(PACKAGE, "../cli-design-check/src/successor/lifecycle-observation.ts")
+const PRIVATE_PROOF_NAME = "each variant reproduces its expected finding, keeps its declared unaffected checks green, and the reference solution restores the frozen baseline"
+const PRIVATE_PROOF_SKIP_REASON = "REPAIR_LAB_COMPANIONS_MANIFEST is absent, so this public fork cannot access the private B2 manifest"
+const PRIVATE_PROOF_COUNTS = {
+	manifestAvailable: { covered: 1, skipped: 0 },
+	manifestUnavailable: { covered: 0, skipped: 1 },
+} as const
+const privateProofAvailable = MANIFEST_PATH !== undefined
+const privateProofName = privateProofAvailable ? PRIVATE_PROOF_NAME : `${PRIVATE_PROOF_NAME} [skipped: ${PRIVATE_PROOF_SKIP_REASON}]`
+const privateProof = privateProofAvailable ? test : test.skip
 
 interface FailingCheck {
 	file: string
@@ -86,14 +95,14 @@ function stage(stageRoot: string, id: string): string {
 	return directory
 }
 
-function claimStageRoot(stageRoot: string, oracleSource = LIFECYCLE_OBSERVATION, expectedDigest = sha256(readFileSync(oracleSource))): void {
+function claimStageRoot(stageRoot: string, oracleSource = LIFECYCLE_OBSERVATION, expectedDigest = sha256(readFileSync(oracleSource)), seedOracle: (source: string, destination: string) => void = cpSync): void {
 	if (sha256(readFileSync(oracleSource)) !== expectedDigest) throw new Error("lifecycle observation does not match the private manifest")
 	// No recursive creation: EEXIST refuses a prior proof root before its marker or oracle can be touched.
 	mkdirSync(stageRoot, { mode: 0o700 })
 	try {
 		const lifecycleOracle = join(stageRoot, "cli-design-check", "src", "successor")
 		mkdirSync(lifecycleOracle, { recursive: true, mode: 0o700 })
-		cpSync(oracleSource, join(lifecycleOracle, "lifecycle-observation.ts"))
+		seedOracle(oracleSource, join(lifecycleOracle, "lifecycle-observation.ts"))
 	} catch (error) {
 		// Only the root this claim created is removed, so a later run does not inherit a half-seeded root.
 		rmSync(stageRoot, { recursive: true, force: true })
@@ -267,10 +276,15 @@ describe("companion proof retention", () => {
 		rmSync(root, { recursive: true, force: true })
 	})
 
-	test("removes only its own half-seeded stage root when oracle seeding fails", () => {
+	test("removes only its own half-seeded stage root when injected oracle seeding fails after creation", () => {
 		const root = mkdtempSync(join(tmpdir(), "repair-lab-companion-retention-"))
 		const stageRoot = join(root, "staged")
-		expect(() => claimStageRoot(stageRoot, join(root, "missing-oracle.ts"))).toThrow()
+		let stageCreated = false
+		expect(() => claimStageRoot(stageRoot, LIFECYCLE_OBSERVATION, sha256(readFileSync(LIFECYCLE_OBSERVATION)), () => {
+			stageCreated = existsSync(stageRoot)
+			throw new Error("injected oracle seeding failure")
+		})).toThrow("injected oracle seeding failure")
+		expect(stageCreated).toBe(true)
 		expect(existsSync(stageRoot)).toBe(false)
 		expect(() => claimStageRoot(stageRoot)).not.toThrow()
 		expect(existsSync(join(stageRoot, "cli-design-check", "src", "successor", "lifecycle-observation.ts"))).toBe(true)
@@ -338,7 +352,12 @@ describe("companion proof retention", () => {
 })
 
 describe("B2 companions (CDS-BC-2)", () => {
-	test.skipIf(MANIFEST_PATH === undefined)("each variant reproduces its expected finding, keeps its declared unaffected checks green, and the reference solution restores the frozen baseline", () => {
+	test("pins the private proof covered and skipped counts with an explicit fork rationale", () => {
+		expect({ covered: privateProofAvailable ? 1 : 0, skipped: privateProofAvailable ? 0 : 1 }).toEqual(privateProofAvailable ? PRIVATE_PROOF_COUNTS.manifestAvailable : PRIVATE_PROOF_COUNTS.manifestUnavailable)
+		if (!privateProofAvailable) expect(PRIVATE_PROOF_SKIP_REASON.trim()).not.toBe("")
+	})
+
+	privateProof(privateProofName, () => {
 		const manifestPath = MANIFEST_PATH as string
 		const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Manifest
 		const index = JSON.parse(readFileSync(join(COMPANIONS, "index.json"), "utf8")) as Index

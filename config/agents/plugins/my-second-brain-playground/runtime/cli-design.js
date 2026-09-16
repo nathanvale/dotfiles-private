@@ -14,7 +14,7 @@ import {
   writeFile
 } from "fs/promises";
 import { homedir, tmpdir } from "os";
-import { dirname, isAbsolute, join, relative, resolve } from "path";
+import { dirname, isAbsolute, join, parse, relative, resolve } from "path";
 import { parseArgs } from "util";
 var TEMPLATE_REVISION = "c829b46853afc699bb3f39fba42412ff557ab9c1";
 var TEMPLATE_ROOT = resolve(process.env.BUN_TYPESCRIPT_TEMPLATE_ROOT ?? join(homedir(), "code", "bun-typescript-template"));
@@ -165,6 +165,24 @@ async function refuseSymlinkPath(root, target, includeTarget) {
     }
     if (!stats.isDirectory()) {
       throw new ComposeError("DOMAIN_PROJECT_PRECONDITION", `composition path ancestor is not a directory: ${current}`, 3, "Repair the package directory before composing the CLI.");
+    }
+  }
+}
+async function refuseSymlinkProjectRoot(projectRoot) {
+  const absolute = resolve(projectRoot);
+  const parsed = parse(absolute);
+  const segments = relative(parsed.root, absolute).split(/[\\/]/).filter(Boolean);
+  let current = parsed.root;
+  for (const segment of segments) {
+    current = join(current, segment);
+    const stats = await lstat(current).catch(() => {
+      return;
+    });
+    if (stats?.isSymbolicLink()) {
+      throw new ComposeError("DOMAIN_UNSAFE_PROJECT_PATH", `project root traverses a symbolic link: ${current}`, 3, "Choose an ordinary project root without symbolic-link ancestors.");
+    }
+    if (stats !== undefined && !stats.isDirectory()) {
+      throw new ComposeError("DOMAIN_PROJECT_PRECONDITION", `project root ancestor is not a directory: ${current}`, 3, "Repair the project root before composing the CLI.");
     }
   }
 }
@@ -505,7 +523,7 @@ async function rollbackReplacement(file, fileSystem) {
   } catch (error) {
     if (errorCode(error) !== "ENOENT")
       return [file.path, file.backup];
-    return await restoreCaptured(file.backup, file.path, fileSystem);
+    return [file.path, file.backup];
   }
   const current = await fileSystem.read(captured).catch(() => {
     return;
@@ -574,12 +592,21 @@ async function publish(creations, replacements, fileSystem = nodeFileSystem) {
   }
 }
 async function releaseProjectLock(path, token, fileSystem) {
-  const current = await fileSystem.read(path).catch(() => {
+  const captured = uniqueSibling(path, "current");
+  try {
+    await fileSystem.rename(path, captured);
+  } catch {
+    return [path];
+  }
+  const current = await fileSystem.read(captured).catch(() => {
     return;
   });
-  if (current === undefined || !sameBytes(current, token))
-    return [path];
-  return await removeOwnedPath(path, fileSystem);
+  if (current === undefined)
+    return [path, captured];
+  if (sameBytes(current, token))
+    return await removeOwnedPath(captured, fileSystem);
+  const unresolved = await restoreCaptured(captured, path, fileSystem);
+  return [...new Set([path, ...unresolved])];
 }
 async function withProjectLock(projectRoot, action, fileSystem = nodeFileSystem) {
   const path = join(projectRoot, PROJECT_LOCK);
@@ -656,6 +683,7 @@ async function composeLocked(options) {
   };
 }
 async function compose(options) {
+  await refuseSymlinkProjectRoot(options.projectRoot);
   await ordinaryFile(join(options.projectRoot, "package.json"), "project package.json");
   return await withProjectLock(options.projectRoot, async () => await composeLocked(options));
 }
@@ -706,5 +734,6 @@ if (import.meta.main)
 export {
   nodeFileSystem,
   publish,
-  stageProject
+  stageProject,
+  withProjectLock
 };

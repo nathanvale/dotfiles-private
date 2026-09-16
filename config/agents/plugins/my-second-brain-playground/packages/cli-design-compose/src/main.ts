@@ -13,7 +13,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, relative, resolve } from "node:path";
+import { dirname, isAbsolute, join, parse, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 
 const TEMPLATE_REVISION = "c829b46853afc699bb3f39fba42412ff557ab9c1";
@@ -254,6 +254,36 @@ async function refuseSymlinkPath(
         `composition path ancestor is not a directory: ${current}`,
         3,
         "Repair the package directory before composing the CLI.",
+      );
+    }
+  }
+}
+
+// Project-root validation happens before the transaction lock is claimed. A lexical
+// resolve deliberately preserves the caller's supplied physical path so that a
+// symlinked root, including --package ., cannot gain write authority.
+async function refuseSymlinkProjectRoot(projectRoot: string): Promise<void> {
+  const absolute = resolve(projectRoot);
+  const parsed = parse(absolute);
+  const segments = relative(parsed.root, absolute).split(/[\\/]/).filter(Boolean);
+  let current = parsed.root;
+  for (const segment of segments) {
+    current = join(current, segment);
+    const stats = await lstat(current).catch(() => undefined);
+    if (stats?.isSymbolicLink()) {
+      throw new ComposeError(
+        "DOMAIN_UNSAFE_PROJECT_PATH",
+        `project root traverses a symbolic link: ${current}`,
+        3,
+        "Choose an ordinary project root without symbolic-link ancestors.",
+      );
+    }
+    if (stats !== undefined && !stats.isDirectory()) {
+      throw new ComposeError(
+        "DOMAIN_PROJECT_PRECONDITION",
+        `project root ancestor is not a directory: ${current}`,
+        3,
+        "Repair the project root before composing the CLI.",
       );
     }
   }
@@ -826,7 +856,10 @@ async function rollbackReplacement(
     await fileSystem.rename(file.path, captured);
   } catch (error) {
     if (errorCode(error) !== "ENOENT") return [file.path, file.backup];
-    return await restoreCaptured(file.backup, file.path, fileSystem);
+    // The published replacement is no longer ours. Do not recreate the original
+    // because a concurrent owner may have intentionally removed it; retain the
+    // backup as recovery evidence and surface the unresolved concurrent effect.
+    return [file.path, file.backup];
   }
   const current = await fileSystem.read(captured).catch(() => undefined);
   if (current === undefined || !sameBytes(current, file.bytes)) {
@@ -941,12 +974,23 @@ async function releaseProjectLock(
   token: Uint8Array,
   fileSystem: FileSystemAdapter,
 ): Promise<string[]> {
-  const current = await fileSystem.read(path).catch(() => undefined);
-  if (current === undefined || !sameBytes(current, token)) return [path];
-  return await removeOwnedPath(path, fileSystem);
+  // Spec axis: rename atomically transfers only our observed lock into a private
+  // capture. A later owner can claim path while we inspect the capture, and link
+  // restoration then refuses to overwrite that owner's replacement.
+  const captured = uniqueSibling(path, "current");
+  try {
+    await fileSystem.rename(path, captured);
+  } catch {
+    return [path];
+  }
+  const current = await fileSystem.read(captured).catch(() => undefined);
+  if (current === undefined) return [path, captured];
+  if (sameBytes(current, token)) return await removeOwnedPath(captured, fileSystem);
+  const unresolved = await restoreCaptured(captured, path, fileSystem);
+  return [...new Set([path, ...unresolved])];
 }
 
-async function withProjectLock<T>(
+export async function withProjectLock<T>(
   projectRoot: string,
   action: () => Promise<T>,
   fileSystem: FileSystemAdapter = nodeFileSystem,
@@ -1057,6 +1101,7 @@ async function composeLocked(options: ComposeOptions) {
 }
 
 async function compose(options: ComposeOptions) {
+  await refuseSymlinkProjectRoot(options.projectRoot);
   await ordinaryFile(join(options.projectRoot, "package.json"), "project package.json");
   return await withProjectLock(options.projectRoot, async () => await composeLocked(options));
 }

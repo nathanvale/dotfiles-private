@@ -8,16 +8,18 @@ import {
   readdir,
   readFile,
   readlink,
+  realpath,
   rm,
   symlink,
   writeFile,
 } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { dirname, join, relative, resolve } from "node:path";
 import {
   nodeFileSystem,
   publish,
   stageProject,
+  withProjectLock,
   type Creation,
   type FileSystemAdapter,
   type Replacement,
@@ -28,6 +30,8 @@ const TEMPLATE_ROOT = resolve(
   process.env.BUN_TYPESCRIPT_TEMPLATE_TEST_ROOT ??
     join(homedir(), "code", "bun-typescript-template"),
 );
+// Independent oracle: this test-owned revision must not be imported from the
+// composer, so a changed production pin makes the public composition checks RED.
 const TEMPLATE_REVISION = "c829b46853afc699bb3f39fba42412ff557ab9c1";
 const DEFAULT_SOURCE_PACKET = "https://example.test/vault/projects/example/";
 const roots: string[] = [];
@@ -95,7 +99,7 @@ async function transactionArtifacts(root: string): Promise<string[]> {
 }
 
 async function fixture(workspace: boolean) {
-  const root = await mkdtemp(join(tmpdir(), "cli-compose-test-"));
+  const root = await realpath(await mkdtemp(join(tmpdir(), "cli-compose-test-")));
   roots.push(root);
   const packagePath = workspace ? "packages/tool" : ".";
   const packageRoot = resolve(root, packagePath);
@@ -431,6 +435,30 @@ test("refuses a second project transaction without disturbing its lock", async (
   expect(await snapshotTree(project.root)).toEqual(treeBefore);
 });
 
+test("atomically releases only its owned project lock when a later owner races", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cli-compose-transaction-"));
+  roots.push(root);
+  const lockPath = join(root, ".cli-design-compose.lock");
+  const laterOwner = new TextEncoder().encode("later owner\n");
+  let released = false;
+  const fileSystem = fileSystemWith({
+    rename: async (source, destination) => {
+      await nodeFileSystem.rename(source, destination);
+      if (source === lockPath && destination.endsWith(".current")) {
+        released = true;
+        await writeFile(lockPath, Buffer.from(laterOwner), { flag: "wx" });
+      }
+    },
+  });
+
+  const result = await withProjectLock(root, async () => "finished", fileSystem);
+  expect(released).toBe(true);
+  expect(result).toBe("finished");
+  expect(await readFile(lockPath)).toEqual(Buffer.from(laterOwner));
+  const artifacts = await transactionArtifacts(root);
+  expect(artifacts).toEqual([".cli-design-compose.lock"]);
+});
+
 test("claims new publication paths without clobbering a concurrent file", async () => {
   const root = await mkdtemp(join(tmpdir(), "cli-compose-transaction-"));
   roots.push(root);
@@ -506,7 +534,7 @@ test("captures and restores a concurrently changed replacement without overwriti
   expect(await transactionArtifacts(root)).toEqual([]);
 });
 
-test("preserves a later edit and reports the retained original when rollback loses ownership", async () => {
+test("retains a backup and reports a lost replacement during rollback", async () => {
   const root = await mkdtemp(join(tmpdir(), "cli-compose-transaction-"));
   roots.push(root);
   const packagePath = join(root, "package.json");
@@ -522,7 +550,7 @@ test("preserves a later edit and reports the retained original when rollback los
     link: async (source, destination) => {
       if (!failed && destination === lockPath) {
         failed = true;
-        await writeFile(packagePath, competing);
+        await rm(packagePath);
         throw new Error("injected lock publication failure");
       }
       await nodeFileSystem.link(source, destination);
@@ -536,11 +564,26 @@ test("preserves a later edit and reports the retained original when rollback los
   const error = await rejected(async () => await publish([], replacements, fileSystem));
   expect(error.causeCode).toBe("DOMAIN_PARTIAL_COMPOSITION");
   expect(String(error.message)).toContain("unresolved effects");
-  expect(await readFile(packagePath, "utf8")).toBe("concurrent package owner\n");
+  expect(await Bun.file(packagePath).exists()).toBe(false);
   expect(await readFile(lockPath, "utf8")).toBe("lock original\n");
   const artifacts = await transactionArtifacts(root);
   expect(artifacts).toHaveLength(1);
   expect(await readFile(join(root, artifacts[0] as string), "utf8")).toBe("package original\n");
+});
+
+test("refuses a symlinked project root before creating its lock for package dot", async () => {
+  const project = await fixture(false);
+  const alias = join(dirname(project.root), `${project.root.split("/").at(-1)}-link`);
+  await symlink(project.root, alias);
+  roots.push(alias);
+  const result = invoke(alias, ".", "simple");
+
+  expect(result.exitCode).toBe(3);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    causeCode: "DOMAIN_UNSAFE_PROJECT_PATH",
+    status: "refused",
+  });
+  expect(await Bun.file(join(project.root, ".cli-design-compose.lock")).exists()).toBe(false);
 });
 
 test("removes temporary files and newly created directories after publication failure", async () => {
