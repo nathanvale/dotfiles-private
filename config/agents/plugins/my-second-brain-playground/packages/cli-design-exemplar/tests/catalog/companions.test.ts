@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { cpSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
@@ -15,6 +15,15 @@ const WORKTREE = resolve(PACKAGE, "../../../../../..")
 const COMPANIONS = join(import.meta.dir, "companions")
 const MANIFEST_PATH = process.env.REPAIR_LAB_COMPANIONS_MANIFEST
 const LIFECYCLE_OBSERVATION = resolve(PACKAGE, "../cli-design-check/src/successor/lifecycle-observation.ts")
+const PRIVATE_PROOF_NAME = "each variant reproduces its expected finding, keeps its declared unaffected checks green, and the reference solution restores the frozen baseline"
+const PRIVATE_PROOF_SKIP_REASON = "REPAIR_LAB_COMPANIONS_MANIFEST is absent, so this public fork cannot access the private B2 manifest"
+const PRIVATE_PROOF_COUNTS = {
+	manifestAvailable: { covered: 1, skipped: 0 },
+	manifestUnavailable: { covered: 0, skipped: 1 },
+} as const
+const privateProofAvailable = MANIFEST_PATH !== undefined
+const privateProofName = privateProofAvailable ? PRIVATE_PROOF_NAME : `${PRIVATE_PROOF_NAME} [skipped: ${PRIVATE_PROOF_SKIP_REASON}]`
+const privateProof = privateProofAvailable ? test : test.skip
 
 interface FailingCheck {
 	file: string
@@ -44,6 +53,7 @@ interface Variant {
 interface Manifest {
 	frozenAt: string
 	baseline: Record<string, string>
+	lifecycleObservationSha256: string
 	variants: Variant[]
 }
 interface Index {
@@ -85,13 +95,14 @@ function stage(stageRoot: string, id: string): string {
 	return directory
 }
 
-function claimStageRoot(stageRoot: string, oracleSource = LIFECYCLE_OBSERVATION): void {
+function claimStageRoot(stageRoot: string, oracleSource = LIFECYCLE_OBSERVATION, expectedDigest = sha256(readFileSync(oracleSource)), seedOracle: (source: string, destination: string) => void = cpSync): void {
+	if (sha256(readFileSync(oracleSource)) !== expectedDigest) throw new Error("lifecycle observation does not match the private manifest")
 	// No recursive creation: EEXIST refuses a prior proof root before its marker or oracle can be touched.
 	mkdirSync(stageRoot, { mode: 0o700 })
 	try {
 		const lifecycleOracle = join(stageRoot, "cli-design-check", "src", "successor")
 		mkdirSync(lifecycleOracle, { recursive: true, mode: 0o700 })
-		cpSync(oracleSource, join(lifecycleOracle, "lifecycle-observation.ts"))
+		seedOracle(oracleSource, join(lifecycleOracle, "lifecycle-observation.ts"))
 	} catch (error) {
 		// Only the root this claim created is removed, so a later run does not inherit a half-seeded root.
 		rmSync(stageRoot, { recursive: true, force: true })
@@ -102,10 +113,13 @@ function claimStageRoot(stageRoot: string, oracleSource = LIFECYCLE_OBSERVATION)
 // Every judged or skipped check names a canonical regular file inside the staged package; the counts alone
 // cannot tell a real skipped check from a path that never existed or an alias of another entry.
 function validateCoverageFiles(id: string, files: string[], root: string): void {
+	const realRoot = realpathSync(root)
 	for (const file of files) {
-		const canonical = relative(root, resolve(root, file)).split(sep).join("/")
-		const stats = statSync(join(root, file), { throwIfNoEntry: false })
-		if (isAbsolute(file) || canonical !== file || stats === undefined || !stats.isFile()) throw new Error(`${id} coverage file must be a canonical regular file inside the package: ${file}`)
+		const path = resolve(root, file)
+		const canonical = relative(root, path).split(sep).join("/")
+		const stats = lstatSync(path, { throwIfNoEntry: false })
+		const realPath = stats === undefined ? undefined : realpathSync(path)
+		if (isAbsolute(file) || canonical !== file || stats === undefined || stats.isSymbolicLink() || !stats.isFile() || realPath !== resolve(realRoot, file)) throw new Error(`${id} coverage file must be a canonical regular file inside the package: ${file}`)
 	}
 }
 
@@ -262,25 +276,47 @@ describe("companion proof retention", () => {
 		rmSync(root, { recursive: true, force: true })
 	})
 
-	test("removes only its own half-seeded stage root when oracle seeding fails", () => {
+	test("removes only its own half-seeded stage root when injected oracle seeding fails after creation", () => {
 		const root = mkdtempSync(join(tmpdir(), "repair-lab-companion-retention-"))
 		const stageRoot = join(root, "staged")
-		expect(() => claimStageRoot(stageRoot, join(root, "missing-oracle.ts"))).toThrow()
+		let stageCreated = false
+		expect(() => claimStageRoot(stageRoot, LIFECYCLE_OBSERVATION, sha256(readFileSync(LIFECYCLE_OBSERVATION)), () => {
+			stageCreated = existsSync(stageRoot)
+			throw new Error("injected oracle seeding failure")
+		})).toThrow("injected oracle seeding failure")
+		expect(stageCreated).toBe(true)
 		expect(existsSync(stageRoot)).toBe(false)
 		expect(() => claimStageRoot(stageRoot)).not.toThrow()
 		expect(existsSync(join(stageRoot, "cli-design-check", "src", "successor", "lifecycle-observation.ts"))).toBe(true)
 		rmSync(root, { recursive: true, force: true })
 	})
 
+	test("rejects a changed lifecycle analyzer before claiming the stage root", () => {
+		const root = mkdtempSync(join(tmpdir(), "repair-lab-companion-retention-"))
+		const oracle = join(root, "lifecycle-observation.ts")
+		const stageRoot = join(root, "staged")
+		writeFileSync(oracle, "export const observation = 'changed'\n")
+		expect(() => claimStageRoot(stageRoot, oracle, sha256("reviewed analyzer\n"))).toThrow("lifecycle observation does not match the private manifest")
+		expect(existsSync(stageRoot)).toBe(false)
+		claimStageRoot(stageRoot, oracle, sha256(readFileSync(oracle)))
+		expect(readFileSync(join(stageRoot, "cli-design-check", "src", "successor", "lifecycle-observation.ts"))).toEqual(readFileSync(oracle))
+		rmSync(root, { recursive: true, force: true })
+	})
+
 	test("requires every coverage file to be a canonical regular file inside the staged package", () => {
 		const root = mkdtempSync(join(tmpdir(), "repair-lab-companion-retention-"))
+		const outside = mkdtempSync(join(tmpdir(), "repair-lab-companion-outside-"))
 		mkdirSync(join(root, "tests"))
 		writeFileSync(join(root, "tests", "real.test.ts"), "export {}\n")
+		writeFileSync(join(outside, "outside.test.ts"), "export {}\n")
+		symlinkSync(join(outside, "outside.test.ts"), join(root, "tests", "final-link.test.ts"))
+		symlinkSync(outside, join(root, "linked-tests"))
 		expect(() => validateCoverageFiles("c", ["tests/real.test.ts"], root)).not.toThrow()
-		for (const file of ["./tests/real.test.ts", "tests//real.test.ts", "tests/missing.test.ts", "../real.test.ts", "tests", join(root, "tests", "real.test.ts")]) {
+		for (const file of ["./tests/real.test.ts", "tests//real.test.ts", "tests/missing.test.ts", "../real.test.ts", "tests", join(root, "tests", "real.test.ts"), "tests/final-link.test.ts", "linked-tests/outside.test.ts"]) {
 			expect(() => validateCoverageFiles("c", [file], root)).toThrow(`c coverage file must be a canonical regular file inside the package: ${file}`)
 		}
 		rmSync(root, { recursive: true, force: true })
+		rmSync(outside, { recursive: true, force: true })
 	})
 
 	test("requires the complete reasoned skip inventory", () => {
@@ -316,7 +352,12 @@ describe("companion proof retention", () => {
 })
 
 describe("B2 companions (CDS-BC-2)", () => {
-	test.skipIf(MANIFEST_PATH === undefined)("each variant reproduces its expected finding, keeps its declared unaffected checks green, and the reference solution restores the frozen baseline", () => {
+	test("pins the private proof covered and skipped counts with an explicit fork rationale", () => {
+		expect({ covered: privateProofAvailable ? 1 : 0, skipped: privateProofAvailable ? 0 : 1 }).toEqual(privateProofAvailable ? PRIVATE_PROOF_COUNTS.manifestAvailable : PRIVATE_PROOF_COUNTS.manifestUnavailable)
+		if (!privateProofAvailable) expect(PRIVATE_PROOF_SKIP_REASON.trim()).not.toBe("")
+	})
+
+	privateProof(privateProofName, () => {
 		const manifestPath = MANIFEST_PATH as string
 		const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Manifest
 		const index = JSON.parse(readFileSync(join(COMPANIONS, "index.json"), "utf8")) as Index
@@ -325,7 +366,7 @@ describe("B2 companions (CDS-BC-2)", () => {
 		expect(index.variants.map((entry) => `${entry.id} ${entry.patch} ${entry.patchSha256}`)).toEqual(manifest.variants.map((variant) => `${variant.id} ${variant.patch} ${variant.patchSha256}`))
 		let claimedStageRoot = false
 		try {
-			claimStageRoot(stageRoot)
+			claimStageRoot(stageRoot, LIFECYCLE_OBSERVATION, manifest.lifecycleObservationSha256)
 			claimedStageRoot = true
 			const runsRoot = join(dirname(manifestPath), "runs")
 			mkdirSync(runsRoot, { recursive: true, mode: 0o700 })
