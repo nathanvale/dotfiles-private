@@ -101,9 +101,12 @@ serialization. Validate external input as unknown and validate the final
 machine envelope before writing it.
 
 Human output stays concise. Except for SIGINT and SIGTERM, machine mode emits
-exactly one 2.0 envelope on stdout and nothing on stderr. SIGINT and SIGTERM
-exit 130 and 143, respectively, after the bounded diagnostics flush with no
-envelope and empty stdout and stderr. Non-TTY stdin never prompts. Unknown
+exactly one 2.0 envelope on stdout and nothing on stderr. Before output, SIGINT
+and SIGTERM exit 130 and 143, respectively, after the bounded diagnostics flush
+with no envelope and empty stdout and stderr. After output starts, a signal may
+leave a partial stdout stream; once the stream is fully drained, the complete
+stdout envelope may remain. Keep stderr empty and preserve the observed stream
+without emitting a replacement envelope. Non-TTY stdin never prompts. Unknown
 effects are transaction state, never an outcome, and never authorize automatic
 replay.
 
