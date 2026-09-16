@@ -43,7 +43,8 @@ From `PLUGIN_ROOT` (`../..` from this `SKILL.md`), run the plugin's
 preservation-safe composer:
 
 ```bash
-bun run cli-design compose-existing --project-root PATH --package PATH --starter simple|complex --source-packet PATH_OR_URL [--json]
+bun run cli-design compose-existing --project-root PATH --package PATH --starter simple --source-packet PATH_OR_URL [--json]
+bun run cli-design compose-existing --project-root PATH --package PATH --starter complex --source-packet PATH_OR_URL [--json]
 ```
 
 Select the package explicitly. Resolve ownership conflicts instead of replacing
@@ -126,7 +127,10 @@ repository's own `bun run check` passes.
 
 Preserve the host's TypeScript, Biome, Fallow, package, lockfile, script, test,
 and source owners. Review only an explicit scoped policy delta for the added CLI
-paths. Run the accepted gradual-adoption review from the host root:
+paths. The composer adds no Fallow dependency: the host must already provide
+`node_modules/.bin/fallow`. Confirm it exists before composing; when absent,
+stop and add Fallow through the host's own dependency owner first. Then run the
+accepted gradual-adoption review from the host root:
 
 ```bash
 node_modules/.bin/fallow audit --format json --quiet --gate new-only --type-aware --type-aware-require complete
@@ -174,13 +178,15 @@ Run the strict checker using its required 2.0 scenario shape:
 "${PLUGIN_ROOT}/bin/cli-design-check" --cwd DIR --command "ARGV WORDS" --success-args "ARGS" --missing-args "ARGS" --internal-args "ARGS" --schema-args "ARGS" --transient-args "ARGS" [options]
 ```
 
-Supply optional authority, redaction, malformed-value, large-envelope, timeout,
-and retained-stream rows when the CLI supports them. Run the generated or host
-repository's complete checks. For complex CLIs, run unit, integration, catalogue,
-recovery, and lifecycle process tests.
+Supply the optional authority, redaction, malformed-value, and large-envelope
+rows when the CLI supports them. `--timeout-ms` bounds every spawned scenario
+and `--retain-streams-dir` retains raw streams; both are options, not rows. Run
+the generated or host repository's complete checks. For complex CLIs, run unit,
+integration, catalogue, recovery, and lifecycle process tests.
 
 Completion criterion: every applicable checker row and repository check passes;
-each skipped row names why the behavior is unavailable.
+the proof report names why each `skippedRows` entry is unavailable, because the
+checker records skipped scenario names only.
 
 ## Version and owners
 

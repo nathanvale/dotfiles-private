@@ -116,7 +116,8 @@ unknown effects until read-only recovery resolves them.
 Primary results go to stdout. Diagnostics never change the domain result, exit,
 or recovery safety. Keep diagnostics custody separate from the recovery journal.
 Disclose unavailable, dropped, truncated, or unflushed diagnostics truthfully.
-Redact secret-bearing fields at the sink.
+Redact secret-bearing values before any public output, including `message`,
+`data`, stdout, and stderr, and again at the diagnostics sink.
 
 Validate the complete serialized value immediately before output. If the result
 cannot be serialized safely, emit the bounded internal fallback that preserves
