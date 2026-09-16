@@ -30,7 +30,7 @@ starter has no runtime dependency and no LogTape.
 - `--discover --json` reports Contract Core 2.0 and the simple profile.
 - `--discover-command COMMAND_IDENTITY --json` reports the selected read-only
   command's possible stations.
-- Machine success and refusal use the strict 2.0 envelope.
+- Machine success, refusal, and internal failure use the strict 2.0 envelope.
 - Non-TTY stdin never prompts.
 
 A command that changes user data or configuration moves the CLI to complex.
@@ -52,6 +52,7 @@ state, effect inventory, retry policy, and guidance. Exercise:
 
 - human help;
 - machine success;
+- machine internal failure;
 - full discovery;
 - selected-command discovery;
 - missing or unknown command refusal;

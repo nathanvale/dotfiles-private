@@ -49,7 +49,8 @@ serializing them as null.
   `unknown`.
 - `unknown` is a transaction state only.
 - Success uses `SUCCESS_UNCHANGED` or `SUCCESS_COMPLETED`, exit 0, null
-  `failureClass`, non-null data, null `repairAction`, and `retryable: false`.
+  `failureClass`, JSON-valued data including null, null `repairAction`, and
+  `retryable: false`.
 - Refused means no change was attempted and uses `transactionState: unchanged`.
 - Failed means work was attempted. State and effect evidence distinguish
   unchanged, completed, partial, and unknown results.
