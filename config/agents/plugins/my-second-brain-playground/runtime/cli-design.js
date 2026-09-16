@@ -55,6 +55,24 @@ function validateSourcePacket(value) {
   } catch {}
   throw new ComposeError("USAGE_INVALID_SOURCE_PACKET", "--source-packet must be an absolute path or HTTP(S) URL", 2, "Supply the canonical project packet as an absolute path or URL.");
 }
+function parseOptions(args) {
+  try {
+    return parseArgs({
+      allowPositionals: false,
+      args,
+      options: {
+        json: { type: "boolean" },
+        package: { type: "string" },
+        "project-root": { type: "string" },
+        "source-packet": { type: "string" },
+        starter: { type: "string" }
+      },
+      strict: true
+    }).values;
+  } catch (error) {
+    throw new ComposeError("USAGE_INVALID_ARGUMENTS", error instanceof Error ? error.message : "invalid compose-existing arguments", 2, "Run cli-design --help and correct the compose-existing options.");
+  }
+}
 function parseInvocation(argv) {
   if (argv.length === 0 || argv.includes("--help") || argv.includes("-h")) {
     return "help";
@@ -62,18 +80,7 @@ function parseInvocation(argv) {
   if (argv[0] !== "compose-existing") {
     throw new ComposeError("USAGE_UNKNOWN_COMMAND", `unsupported command: ${argv[0] ?? ""}`, 2, "Run cli-design --help and choose compose-existing.");
   }
-  const { values } = parseArgs({
-    allowPositionals: false,
-    args: argv.slice(1),
-    options: {
-      json: { type: "boolean" },
-      package: { type: "string" },
-      "project-root": { type: "string" },
-      "source-packet": { type: "string" },
-      starter: { type: "string" }
-    },
-    strict: true
-  });
+  const values = parseOptions(argv.slice(1));
   return {
     json: values.json === true,
     packagePath: required(values.package, "package"),
@@ -129,7 +136,22 @@ async function resolveOwners(options) {
   await ordinaryFile(join(options.projectRoot, "package.json"), "project package.json");
   await ordinaryFile(join(options.projectRoot, "bun.lock"), "project bun.lock");
   await ordinaryFile(join(packagePath, "package.json"), "target package.json");
+  await requireWorkspaceMember(options.projectRoot, packagePath);
   return { packagePath };
+}
+function workspacePatterns(manifest) {
+  const declared = manifest.workspaces;
+  const patterns = Array.isArray(declared) ? declared : declared === undefined ? [] : record(declared, "project package.json workspaces").packages;
+  return Array.isArray(patterns) ? patterns.filter((pattern) => typeof pattern === "string") : [];
+}
+async function requireWorkspaceMember(projectRoot, packagePath) {
+  const member = relative(projectRoot, packagePath).split("\\").join("/");
+  if (member === "")
+    return;
+  const manifest = await readManifest(join(projectRoot, "package.json"), "project package.json");
+  if (workspacePatterns(manifest).some((pattern) => new Bun.Glob(pattern).match(member)))
+    return;
+  throw new ComposeError("USAGE_PACKAGE_NOT_WORKSPACE_MEMBER", "--package must be . or a declared workspace member of --project-root", 2, "Declare the package under the project workspaces or choose a member package.");
 }
 function git(...args) {
   const result = Bun.spawnSync(["git", "-C", TEMPLATE_ROOT, ...args], {
@@ -158,11 +180,21 @@ function templateFiles(starter) {
     return { bytes: result.stdout, relativePath: path.slice(prefix.length) };
   });
 }
-function record(value) {
+function record(value, label = "target package.json") {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    throw new ComposeError("SCHEMA_INVALID_PACKAGE", "target package.json must contain an object", 3, "Repair the target package manifest before retrying.");
+    throw new ComposeError("SCHEMA_INVALID_PACKAGE", `${label} must contain an object`, 3, `Repair ${label} before retrying.`);
   }
   return value;
+}
+async function readManifest(path, label) {
+  const text = await readFile(path, "utf8");
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new ComposeError("SCHEMA_INVALID_PACKAGE", `${label} must contain valid JSON`, 3, `Repair ${label} before retrying.`);
+  }
+  return record(parsed, label);
 }
 function stringRecord(value, label) {
   if (value === undefined)
@@ -175,10 +207,23 @@ function stringRecord(value, label) {
   }
   return values;
 }
+var OTHER_DEPENDENCY_SECTIONS = [
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies"
+];
+function refuseForeignDeclaration(packageJson, name, version) {
+  for (const section of OTHER_DEPENDENCY_SECTIONS) {
+    if (stringRecord(packageJson[section], section)[name] !== undefined) {
+      throw new ComposeError("DOMAIN_DEPENDENCY_CONFLICT", `${name} is already declared under ${section}`, 3, `Reconcile ${name} under dependencies at ${version} before composing.`);
+    }
+  }
+}
 function addExactDependencies(packageJson, starter) {
   const dependencies = stringRecord(packageJson.dependencies, "dependencies");
   if (starter === "complex") {
     for (const [name, version] of Object.entries(COMPLEX_DEPENDENCIES)) {
+      refuseForeignDeclaration(packageJson, name, version);
       const current = dependencies[name];
       if (current !== undefined && current !== version) {
         throw new ComposeError("DOMAIN_DEPENDENCY_CONFLICT", `${name} is already pinned to ${current}`, 3, `Reconcile ${name} with the required ${version} pin before composing.`);
@@ -199,7 +244,7 @@ function addComposeScript(packageJson) {
   packageJson.scripts = scripts;
 }
 async function updatedPackage(path, starter) {
-  const parsed = record(JSON.parse(await readFile(path, "utf8")));
+  const parsed = await readManifest(path, "target package.json");
   addExactDependencies(parsed, starter);
   addComposeScript(parsed);
   return new TextEncoder().encode(`${JSON.stringify(parsed, null, 2)}
@@ -252,6 +297,37 @@ async function replaceFile(path, bytes) {
   await writeFile(temporary, bytes, { flag: "wx" });
   await rename(temporary, path);
 }
+async function rollback(created, replaced) {
+  const unresolved = [];
+  for (const file of replaced.reverse()) {
+    await replaceFile(file.path, file.original).catch(() => unresolved.push(file.path));
+  }
+  for (const path of created.reverse()) {
+    await rm(path, { force: true }).catch(() => unresolved.push(path));
+  }
+  return unresolved;
+}
+async function publish(creations, replacements) {
+  const created = [];
+  const replaced = [];
+  try {
+    for (const file of creations) {
+      await writeNewFile(file.path, file.bytes);
+      created.push(file.path);
+    }
+    for (const file of replacements) {
+      await replaceFile(file.path, file.bytes);
+      replaced.push(file);
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "unexpected publish failure";
+    const unresolved = await rollback(created, replaced);
+    if (unresolved.length > 0) {
+      throw new ComposeError("DOMAIN_PARTIAL_COMPOSITION", `${message}; unresolved effects: ${unresolved.join(", ")}`, 3, "Restore the listed paths from version control before retrying.");
+    }
+    throw new ComposeError("INTERNAL_COMPOSE_FAILURE", `${message}; the host project was restored`, 1, "Inspect the project and pinned template before retrying.");
+  }
+}
 async function compose(options) {
   const { packagePath } = await resolveOwners(options);
   const packageFile = join(packagePath, "package.json");
@@ -274,18 +350,22 @@ async function compose(options) {
   if (hash(await readFile(lockFile)) !== hash(originalLock)) {
     throw new ComposeError("DOMAIN_CONCURRENT_CHANGE", "bun.lock changed during preparation", 3, "Inspect the concurrent edit and retry from the new state.");
   }
-  for (const source of sources) {
-    await writeNewFile(join(packagePath, source.relativePath), source.bytes);
-  }
   const metadata = new TextEncoder().encode(`${JSON.stringify({
     sourcePacket: options.sourcePacket,
     starter: options.starter,
     templateRevision: TEMPLATE_REVISION
   }, null, 2)}
 `);
-  await writeNewFile(metadataPath, metadata);
-  await replaceFile(packageFile, nextPackage);
-  await replaceFile(lockFile, nextLock);
+  await publish([
+    ...sources.map((source) => ({
+      bytes: source.bytes,
+      path: join(packagePath, source.relativePath)
+    })),
+    { bytes: metadata, path: metadataPath }
+  ], [
+    { bytes: nextPackage, original: originalPackage, path: packageFile },
+    { bytes: nextLock, original: originalLock, path: lockFile }
+  ]);
   return {
     package: relative(options.projectRoot, packagePath) || ".",
     projectRoot: options.projectRoot,

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test"
 import { createHash } from "node:crypto"
-import { cpSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { dirname, join, relative, resolve, sep } from "node:path"
+import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
 // B2 companion proof (CDS-BC-2): the committed variants under companions/ carry only ids, patches and patch hashes. The
 // expected finding, unaffected checks, reference solution and frozen hashes live in a private manifest named by
@@ -85,12 +85,32 @@ function stage(stageRoot: string, id: string): string {
 	return directory
 }
 
-function claimStageRoot(stageRoot: string): void {
+function claimStageRoot(stageRoot: string, oracleSource = LIFECYCLE_OBSERVATION): void {
 	// No recursive creation: EEXIST refuses a prior proof root before its marker or oracle can be touched.
 	mkdirSync(stageRoot, { mode: 0o700 })
-	const lifecycleOracle = join(stageRoot, "cli-design-check", "src", "successor")
-	mkdirSync(lifecycleOracle, { recursive: true, mode: 0o700 })
-	cpSync(LIFECYCLE_OBSERVATION, join(lifecycleOracle, "lifecycle-observation.ts"))
+	try {
+		const lifecycleOracle = join(stageRoot, "cli-design-check", "src", "successor")
+		mkdirSync(lifecycleOracle, { recursive: true, mode: 0o700 })
+		cpSync(oracleSource, join(lifecycleOracle, "lifecycle-observation.ts"))
+	} catch (error) {
+		// Only the root this claim created is removed, so a later run does not inherit a half-seeded root.
+		rmSync(stageRoot, { recursive: true, force: true })
+		throw error
+	}
+}
+
+// Every judged or skipped check names a canonical regular file inside the staged package; the counts alone
+// cannot tell a real skipped check from a path that never existed or an alias of another entry.
+function validateCoverageFiles(id: string, files: string[], root: string): void {
+	for (const file of files) {
+		const canonical = relative(root, resolve(root, file)).split(sep).join("/")
+		const stats = statSync(join(root, file), { throwIfNoEntry: false })
+		if (isAbsolute(file) || canonical !== file || stats === undefined || !stats.isFile()) throw new Error(`${id} coverage file must be a canonical regular file inside the package: ${file}`)
+	}
+}
+
+function coverageFiles(variant: CoverageVariant): string[] {
+	return [...variant.failing.map((check) => check.file), ...variant.unaffected, ...(variant.skipped ?? []).map((check) => check.file)]
 }
 
 // The manifest variable is deliberately absent from children: a staged copy's own companion proof reports skipped.
@@ -167,7 +187,7 @@ function validateSkippedShape(id: string, skipped: SkippedCheck[]): void {
 }
 
 function validateUniqueFiles(variant: CoverageVariant, skipped: SkippedCheck[]): void {
-	const files = [...variant.failing.map((check) => check.file), ...variant.unaffected, ...skipped.map((check) => check.file)]
+	const files = coverageFiles({ ...variant, skipped })
 	if (new Set(files).size !== files.length) throw new Error(`${variant.id} coverage files must be unique`)
 }
 
@@ -242,6 +262,27 @@ describe("companion proof retention", () => {
 		rmSync(root, { recursive: true, force: true })
 	})
 
+	test("removes only its own half-seeded stage root when oracle seeding fails", () => {
+		const root = mkdtempSync(join(tmpdir(), "repair-lab-companion-retention-"))
+		const stageRoot = join(root, "staged")
+		expect(() => claimStageRoot(stageRoot, join(root, "missing-oracle.ts"))).toThrow()
+		expect(existsSync(stageRoot)).toBe(false)
+		expect(() => claimStageRoot(stageRoot)).not.toThrow()
+		expect(existsSync(join(stageRoot, "cli-design-check", "src", "successor", "lifecycle-observation.ts"))).toBe(true)
+		rmSync(root, { recursive: true, force: true })
+	})
+
+	test("requires every coverage file to be a canonical regular file inside the staged package", () => {
+		const root = mkdtempSync(join(tmpdir(), "repair-lab-companion-retention-"))
+		mkdirSync(join(root, "tests"))
+		writeFileSync(join(root, "tests", "real.test.ts"), "export {}\n")
+		expect(() => validateCoverageFiles("c", ["tests/real.test.ts"], root)).not.toThrow()
+		for (const file of ["./tests/real.test.ts", "tests//real.test.ts", "tests/missing.test.ts", "../real.test.ts", "tests", join(root, "tests", "real.test.ts")]) {
+			expect(() => validateCoverageFiles("c", [file], root)).toThrow(`c coverage file must be a canonical regular file inside the package: ${file}`)
+		}
+		rmSync(root, { recursive: true, force: true })
+	})
+
 	test("requires the complete reasoned skip inventory", () => {
 		const failingOne: FailingCheck = { file: "tests/failing-one.test.ts", mustContain: ["finding"] }
 		const failingTwo: FailingCheck = { file: "tests/failing-two.test.ts", mustContain: ["finding"] }
@@ -295,6 +336,7 @@ describe("B2 companions (CDS-BC-2)", () => {
 				expect(sha256(readFileSync(patchPath))).toBe(variant.patchSha256)
 				const directory = stage(stageRoot, variant.id)
 				applyPatch(directory, patchPath)
+				validateCoverageFiles(variant.id, coverageFiles(variant), directory)
 				expect(pick(hashSources(directory), Object.keys(variant.patchedFiles))).toEqual(variant.patchedFiles)
 				try {
 					judgeVariant(variant, directory, receipts)
