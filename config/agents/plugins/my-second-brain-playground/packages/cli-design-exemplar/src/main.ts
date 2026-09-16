@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto"
 import { machineMode, run } from "./cli.ts"
-import { attemptEmergencyDiagnostics, finishActiveDiagnostics } from "./diagnostics.ts"
+import { attemptEmergencyDiagnostics, finishActiveDiagnostics, writeBytesSync } from "./diagnostics.ts"
 import { createProcessLifecycle } from "./process-lifecycle.ts"
 
 // The sole production caller of cli.run. runIdentity is generated first (brief 12, 7.2); the process uses
@@ -28,7 +28,7 @@ const io = { stdout: lifecycle.stdout, stderr: lifecycle.stderr }
 run(argv, io, process.env, runIdentity, process.cwd()).then(
 	(code) => lifecycle.complete(code),
 	() => {
-		if (!machineMode(argv)) lifecycle.stderr("repair-lab: internal failure\n")
+		if (!machineMode(argv)) writeBytesSync(2, Buffer.from("repair-lab: internal failure\n"))
 		lifecycle.crash()
 	},
 )

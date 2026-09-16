@@ -9,11 +9,13 @@ const PRELOAD = resolve(import.meta.dir, "../helpers/process-lifecycle-preload.t
 const roots: Root[] = []
 const children: ReturnType<typeof Bun.spawn>[] = []
 const groupChildren: ChildProcessWithoutNullStreams[] = []
+const groupClosed = new WeakMap<ChildProcessWithoutNullStreams, Promise<void>>()
 const fresh = (variant: Parameters<typeof createRoot>[0] = "healthy"): Root => { const root = createRoot(variant); roots.push(root); return root }
 afterEach(async () => {
 	for (const child of children.splice(0)) { if (child.exitCode === null) child.kill("SIGKILL"); await child.exited }
 	for (const child of groupChildren.splice(0)) {
 		if (child.exitCode === null && child.pid !== undefined) { try { process.kill(-child.pid, "SIGKILL") } catch {} }
+		await groupClosed.get(child)
 	}
 	for (const root of roots.splice(0)) removeRoot(root)
 })
@@ -32,6 +34,7 @@ function startGroup(root: Root, args: string[], mode: string): ChildProcessWitho
 	const command = [process.execPath, "--preload", PRELOAD, MAIN]
 	const env = { PATH: process.env.PATH ?? "", HOME: root.privateRoot, XDG_STATE_HOME: join(root.privateRoot, "state"), NO_COLOR: "1", TERM: "dumb", O3_CONTROL: root.privateRoot, O3_MODE: mode }
 	const child = spawn(command[0] as string, [...command.slice(1), ...args], { cwd: root.root, env, stdio: ["pipe", "pipe", "pipe"], detached: true })
+	groupClosed.set(child, new Promise<void>((resolve) => { child.once("close", () => resolve()) }))
 	child.stdin.end()
 	groupChildren.push(child)
 	return child
@@ -64,6 +67,30 @@ async function waitFor(path: string): Promise<void> {
 async function result(child: ReturnType<typeof start>): Promise<{ stdout: string; stderr: string; exit: number; signal: string | null }> {
 	const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
 	return { stdout, stderr, exit, signal: child.signalCode }
+}
+
+async function boundedResult(child: ReturnType<typeof start>, timeoutMs: number): Promise<{ stdout: string; stderr: string; exit: number; signal: string | null; blocked: boolean }> {
+	let blocked = false
+	const timer = setTimeout(() => { blocked = true; child.kill("SIGKILL") }, timeoutMs)
+	try {
+		const observed = await result(child)
+		return { ...observed, blocked }
+	} finally {
+		clearTimeout(timer)
+	}
+}
+
+function prompted(stdout: string, stderr: string): boolean {
+	if (stderr !== "") return true
+	const lines = stdout.split("\n").filter((line) => line.length > 0)
+	if (lines.length !== 1) return true
+	try { JSON.parse(lines[0] as string); return false } catch { return true }
+}
+
+function stdinReadCount(root: Root): number {
+	const count = Number(readFileSync(join(root.privateRoot, "stdin-read-count"), "utf8").trim())
+	if (!Number.isSafeInteger(count) || count < 0) throw new Error("stdin observation receipt is invalid")
+	return count
 }
 
 function diagnostics(root: Root): string {
@@ -221,17 +248,36 @@ describe("O3 public process lifecycle", () => {
 			for (const stdin of ["ignore", "pipe"] as const) {
 				const root = fresh(route.variant)
 				const before = readState(root)
-				const observed = await result(start(root, [...route.args], { stdin }))
+				const observed = await boundedResult(start(root, [...route.args], { mode: "stdin-observation", stdin }), 2_000)
 				const after = readState(root)
+				const wasPrompted = prompted(observed.stdout, observed.stderr)
+				expect(analyzeLifecycleObservation({ claim: "stdin-neutral", stdout: observed.stdout, stderr: observed.stderr, envelopeCount: envelopeCount(observed.stdout), drainConfirmed: !observed.blocked, disposition: stdin === "pipe" ? "held-open" : "closed", stdinReadCount: stdinReadCount(root), prompted: wasPrompted, blocked: observed.blocked, expectedExitCode: route.exit, exitCode: observed.exit, domainStateUnchanged: after.resource === before.resource && after.journal === before.journal })).toEqual([])
 				expect(observed).toMatchObject({ exit: route.exit, stderr: "" })
 				expect(machineResult(observed.stdout)).toMatchObject({ commandIdentity: route.identity, outcome: route.outcome })
 				expect(after.resource).toBe(before.resource)
 				expect(after.journal).toBe(before.journal)
 				if (route.previewWritten) expect(after.preview).not.toBe(before.preview)
 				else expect(after.preview).toBe(before.preview)
-				expect(analyzeLifecycleObservation({ claim: "stdin-neutral", stdout: observed.stdout, stderr: observed.stderr, envelopeCount: 1, drainConfirmed: true, disposition: stdin === "pipe" ? "held-open" : "closed", stdinReadCount: 0, prompted: false, blocked: false, expectedExitCode: route.exit, exitCode: observed.exit, domainStateUnchanged: after.resource === before.resource && after.journal === before.journal })).toEqual([])
 			}
 		}
+	})
+
+	test("the stdin receipt and bounded collector detect their negative controls", async () => {
+		const readRoot = fresh()
+		const readObserved = await boundedResult(start(readRoot, ["status", "--json"], { mode: "stdin-observation", stdin: "pipe", env: { O3_STDIN_CONTROL: "read" } }), 2_000)
+		expect(readObserved.blocked).toBe(false)
+		expect(stdinReadCount(readRoot)).toBeGreaterThan(0)
+		expect(analyzeLifecycleObservation({ claim: "stdin-neutral", stdout: readObserved.stdout, stderr: readObserved.stderr, envelopeCount: envelopeCount(readObserved.stdout), drainConfirmed: true, disposition: "held-open", stdinReadCount: stdinReadCount(readRoot), prompted: prompted(readObserved.stdout, readObserved.stderr), blocked: false, expectedExitCode: 0, exitCode: readObserved.exit, domainStateUnchanged: true })).toEqual(["LIFECYCLE_STDIN_READ"])
+
+		const blockedRoot = fresh()
+		const blocked = await boundedResult(start(blockedRoot, ["status", "--json"], { mode: "before-output-signal", stdin: "pipe" }), 50)
+		expect(blocked).toMatchObject({ stdout: "", stderr: "", blocked: true })
+	})
+
+	test("a human-mode top-level rejection emits its bounded fallback before crash exit", async () => {
+		const root = fresh()
+		const observed = await result(start(root, ["status"], { mode: "run-rejection" }))
+		expect(observed).toEqual({ stdout: "", stderr: "repair-lab: internal failure\n", exit: 1, signal: null })
 	})
 
 	test("uncaught exception and unhandled rejection make one emergency attempt and exit silently", async () => {

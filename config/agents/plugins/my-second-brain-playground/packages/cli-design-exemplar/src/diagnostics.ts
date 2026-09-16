@@ -88,6 +88,21 @@ function writeBytes(fd: number, bytes: Buffer): Promise<void> {
 	})
 }
 
+export function writeBytesSync(fd: number, bytes: Buffer, writer: (fd: number, buffer: Buffer, offset: number, length: number, position: null) => number = writeSync): boolean {
+	let offset = 0
+	try {
+		while (offset < bytes.length) {
+			const remaining = bytes.length - offset
+			const written = writer(fd, bytes, offset, remaining, null)
+			if (!Number.isSafeInteger(written) || written <= 0 || written > remaining) return false
+			offset += written
+		}
+		return true
+	} catch {
+		return false
+	}
+}
+
 class BoundedQueue {
 	private readonly queue: Buffer[] = []
 	private retainedBytes = 0
@@ -141,8 +156,8 @@ class BoundedQueue {
 	}
 
 	emergency(bytes: Buffer): void {
-		if (this.frozen !== null || this.closed || bytes.length > RECORD_BYTES) return
-		try { writeSync(this.file.fd, bytes) } catch {}
+		if (this.frozen !== null || this.closed || this.pending > 0 || bytes.length > RECORD_BYTES) return
+		writeBytesSync(this.file.fd, bytes)
 	}
 
 	async finish(): Promise<DiagnosticsStatus> {

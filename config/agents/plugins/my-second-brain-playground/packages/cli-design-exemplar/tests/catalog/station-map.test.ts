@@ -475,8 +475,15 @@ async function runDeadlineProcess(root: Root, binding: Binding): Promise<Run> {
 		...(binding.env ?? {}),
 	}
 	const child = Bun.spawn([process.execPath, "--preload", PRELOAD, MAIN, ...binding.argv, "--json"], { cwd: root.root, env, stdin: "ignore", stdout: "pipe", stderr: "pipe" })
-	const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
-	return { stdout, stderr, exit, signal: child.signalCode }
+	let timedOut = false
+	const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL") }, 20_000)
+	try {
+		const [stdout, stderr, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited])
+		if (timedOut) throw new Error(`deadline process hung for 20000 ms; partial stdout ${stdout.length} bytes; partial stderr ${stderr.length} bytes`)
+		return { stdout, stderr, exit, signal: child.signalCode }
+	} finally {
+		clearTimeout(timer)
+	}
 }
 
 function directDeadlineState(root: Root, before: ReturnType<typeof readState>, binding: Binding): State {
