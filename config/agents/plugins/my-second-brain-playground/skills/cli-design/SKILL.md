@@ -33,10 +33,10 @@ PLUGIN_ROOT=$(cd -- "$SKILL_DIR/../.." && pwd -P)
 ```
 
 `--source-packet PATH_OR_URL` names the project's vault packet as an absolute
-path or HTTP(S) URL. The bootstrap also refuses newline, carriage-return, and
-backtick characters; the composer checks the shape alone. Both record the
-value verbatim in the generated `README.md` or `.cli-design-template.json`;
-neither reads the packet. Packet placement: dotfiles
+path or HTTP(S) URL. HTTP(S) URLs must contain no username, password, or query.
+The bootstrap also refuses newline, carriage-return, and backtick characters.
+Both record accepted values verbatim in the generated `README.md` or
+`.cli-design-template.json`; neither reads the packet. Packet placement: dotfiles
 `docs/agents/work-placement.md`.
 
 ### New repository
@@ -100,9 +100,12 @@ command identities, routes, causes, exit meanings, result correlations, and
 serialization. Validate external input as unknown and validate the final
 machine envelope before writing it.
 
-Human output stays concise. Machine mode emits exactly one 2.0 envelope on
-stdout and nothing on stderr. Non-TTY stdin never prompts. Unknown effects are
-transaction state, never an outcome, and never authorize automatic replay.
+Human output stays concise. Except for SIGINT and SIGTERM, machine mode emits
+exactly one 2.0 envelope on stdout and nothing on stderr. SIGINT and SIGTERM
+exit 130 and 143, respectively, after the bounded diagnostics flush with no
+envelope and empty stdout and stderr. Non-TTY stdin never prompts. Unknown
+effects are transaction state, never an outcome, and never authorize automatic
+replay.
 
 Completion criterion: every public path returns through the typed result and
 validated serializer.
