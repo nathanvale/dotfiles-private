@@ -39,6 +39,14 @@
       "name": "vault-note-commits",
       "version": "0.0.0",
     },
+    "packages/workflow-cli": {
+      "name": "workflow-cli",
+      "version": "0.0.0",
+      "dependencies": {
+        "@logtape/logtape": "2.3.1",
+        "@logtape/redaction": "2.3.1",
+      },
+    },
   },
   "packages": {
     "@logtape/file": ["@logtape/file@2.3.1", "", { "peerDependencies": { "@logtape/logtape": "^2.3.1" } }, "sha512-jNGW1Ey0m9eFTmMxk5b8xOnX0XGetnCUJVs57BbXA28oAtQ+EDTp2rto2Jql7jM/RZAiDFp8lgovSKeLJnoj9g=="],
@@ -58,6 +66,8 @@
     "recovery-observability": ["recovery-observability@workspace:packages/recovery-observability"],
 
     "vault-note-commits": ["vault-note-commits@workspace:packages/vault-note-commits"],
+
+    "workflow-cli": ["workflow-cli@workspace:packages/workflow-cli"],
 
     "zod": ["zod@4.4.3", "", {}, "sha512-ytENFjIJFl2UwYglde2jchW2Hwm4GJFLDiSXWdTrJQBIN9Fcyp7n4DhxJEiWNAJMV1/BqWfW/kkg71UDcHJyTQ=="],
   }

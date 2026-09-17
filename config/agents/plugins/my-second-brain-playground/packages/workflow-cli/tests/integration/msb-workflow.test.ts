@@ -1,0 +1,675 @@
+import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { createHash } from "node:crypto"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { BEAD, bindingPath, bindSession, createRoot, envelopeOf, FIXTURE_BD, markerPath, OTHER_BEAD, removeRoot, resultOf, type Root, type Run, runCli, runCliOnPlatform, runCliWithStoreFault, SECRET_BEAD, SECRET_MARKER, stateListing, steerBd } from "../fixtures/harness.ts"
+
+// The public process seam for the five envelope commands: every row spawns the production entry against the fixture
+// bd and a fresh private root. Expected cause codes, exits, transaction states and retry facts are literals from
+// Spec #57 and Ticket #58 (independent oracle), never read from the catalog.
+
+const SESSION = "session-1"
+const HELPER_PREFIX = "my-second-brain-playground/workflow-cli/"
+const DIAGNOSTICS_PREFIX = `${HELPER_PREFIX}diagnostics/`
+const BINDINGS_PREFIX = `${HELPER_PREFIX}recovery/sessions/`
+
+interface Expected {
+	readonly exit: number
+	readonly outcome: "success" | "refused" | "failed" | "unknown"
+	readonly causeCode: string | null
+	readonly transactionState: "unchanged" | "completed" | "unknown"
+	readonly retryable: boolean
+	readonly retryDelayMilliseconds?: number | null
+}
+
+/** One machine-mode envelope: empty stderr, one JSON line, the fixed identity fields, and the row's literal facts. */
+function expectEnvelope(run: Run, identity: string, expected: Expected): Record<string, unknown> {
+	expect(run.stderr).toBe("")
+	expect(run.exit).toBe(expected.exit)
+	const envelope = envelopeOf(run)
+	expect(envelope.envelopeVersion).toBe(1)
+	expect(envelope.contractVersion).toBe("1.0.0")
+	expect(envelope.commandIdentity).toBe(identity)
+	expect(envelope.runIdentity).toMatch(/^run-[0-9a-f-]{36}$/)
+	expect(envelope.outcome).toBe(expected.outcome)
+	expect(envelope.causeCode).toBe(expected.causeCode)
+	expect(envelope.transactionState).toBe(expected.transactionState)
+	expect(envelope.retryable).toBe(expected.retryable)
+	if (expected.retryDelayMilliseconds !== undefined) expect(envelope.retryDelayMilliseconds).toBe(expected.retryDelayMilliseconds)
+	if (expected.outcome === "success") expect(envelope.repairAction).toBeNull()
+	else {
+		expect(typeof envelope.repairAction).toBe("string")
+		// Exactly one of nextAction or handoff guides a non-success outcome.
+		expect((envelope.nextAction === null) !== (envelope.handoff === null)).toBe(true)
+	}
+	return envelope
+}
+
+function expectHumanRefusal(run: Run, causeCode: string, exit: number): void {
+	expect(run.stdout).toBe("")
+	expect(run.exit).toBe(exit)
+	expect(run.stderr.split("\n")).toHaveLength(2)
+	expect(run.stderr.startsWith(`msb-workflow: ${causeCode}: `)).toBe(true)
+	expect(run.stderr).toContain("; repair: ")
+}
+
+/** The durable entries a command may own: bindings, markers and lock files. Machine-mode diagnostics run files and the
+ * helper directories that hold them are the accepted exception (decision D2) and are excluded here. */
+function durableListing(root: Root): string[] {
+	return stateListing(root).filter((entry) => entry.startsWith(`${HELPER_PREFIX}recovery`) || entry.startsWith(`${HELPER_PREFIX}locks`))
+}
+
+function secondWorkspace(root: Root): string {
+	const workspace = join(root.privateRoot, "workspace-two")
+	mkdirSync(join(workspace, ".beads"), { recursive: true, mode: 0o700 })
+	return workspace
+}
+
+/** A directory outside every Git working directory, for the "bind outside Git" and "evidence outside" rows. */
+function outsideDirectory(): string {
+	return realpathSync(mkdtempSync(join(tmpdir(), "msb-outside-")))
+}
+
+function plantBinding(root: Root, session: string, bytes: string): void {
+	mkdirSync(join(root.stateHome, "my-second-brain-playground", "workflow-cli", "recovery", "sessions"), { recursive: true, mode: 0o700 })
+	writeFileSync(bindingPath(root, session), bytes, { mode: 0o600 })
+}
+
+const bindArgs = (root: Root, session: string, bead: string, workspace = root.workspace): string[] => ["bind", "--workspace", workspace, "--session", session, "--bead", bead, "--json"]
+const recoverArgs = (root: Root, session: string, workspace = root.workspace): string[] => ["recover", "--workspace", workspace, "--session", session, "--json"]
+const inspectArgs = (root: Root, session: string | null, workspace = root.workspace): string[] => ["inspect", "--workspace", workspace, ...(session === null ? [] : ["--session", session]), "--json"]
+
+let root: Root
+const extraDirectories: string[] = []
+
+beforeEach(() => {
+	root = createRoot()
+})
+
+afterEach(() => {
+	removeRoot(root)
+	for (const directory of extraDirectories.splice(0)) rmSync(directory, { recursive: true, force: true })
+})
+
+describe("contract surface through a real process", () => {
+	test("--help prints usage on stdout and exits 0 with empty stderr", async () => {
+		const run = await runCli(root, ["--help"])
+		expect(run.exit).toBe(0)
+		expect(run.stderr).toBe("")
+		expect(run.stdout.startsWith("usage: msb-workflow <inspect|bind|recover|hook> [options] [--json]\nexample: msb-workflow recover ")).toBe(true)
+	})
+
+	test("no arguments exits 2 with one stderr line naming --help", async () => {
+		const run = await runCli(root, [])
+		expectHumanRefusal(run, "USAGE_INVALID_INVOCATION", 2)
+		expect(run.stderr).toContain("msb-workflow --help")
+	})
+
+	test("an unknown option with --json is one usage envelope", async () => {
+		const run = await runCli(root, ["--nope", "--json"])
+		expectEnvelope(run, "msb-workflow.help", { exit: 2, outcome: "refused", causeCode: "USAGE_INVALID_INVOCATION", transactionState: "unchanged", retryable: false })
+	})
+
+	test("--discover --json lists exactly the six identities with their effect stances", async () => {
+		const run = await runCli(root, ["--discover", "--json"])
+		expectEnvelope(run, "msb-workflow.discover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		const result = resultOf(run)
+		const commands = result.commands as { identity: string; effectClass: string }[]
+		expect(commands.map((command) => [command.identity, command.effectClass])).toEqual([
+			["msb-workflow.help", "inspect"],
+			["msb-workflow.discover", "inspect"],
+			["msb-workflow.inspect", "inspect"],
+			["msb-workflow.bind", "repository-local"],
+			["msb-workflow.recover", "inspect"],
+			["msb-workflow.hook", "repository-local"],
+		])
+		expect(result.contractVersion).toBe("1.0.0")
+		expect(result.machineMode).toBe("--json")
+		expect(result.logtape).toBe(true)
+		expect((result.bindingSchema as { schemaVersion: number }).schemaVersion).toBe(3)
+	})
+
+	test("hook with any extra argument is an ordinary usage failure", async () => {
+		const run = await runCli(root, ["hook", "--json"])
+		expectEnvelope(run, "msb-workflow.hook", { exit: 2, outcome: "refused", causeCode: "USAGE_INVALID_INVOCATION", transactionState: "unchanged", retryable: false })
+		const human = await runCli(root, ["hook", "extra"])
+		expectHumanRefusal(human, "USAGE_INVALID_INVOCATION", 2)
+	})
+
+	test("a missing or relative workspace refuses before any state is touched", async () => {
+		const missing = await runCli(root, ["recover", "--workspace", join(root.privateRoot, "absent"), "--session", SESSION, "--json"])
+		expectEnvelope(missing, "msb-workflow.recover", { exit: 3, outcome: "refused", causeCode: "DOMAIN_WORKSPACE_INVALID", transactionState: "unchanged", retryable: false })
+		const relative = await runCli(root, ["inspect", "--workspace", "workspace", "--json"])
+		expectEnvelope(relative, "msb-workflow.inspect", { exit: 3, outcome: "refused", causeCode: "DOMAIN_WORKSPACE_INVALID", transactionState: "unchanged", retryable: false })
+		expect(stateListing(root)).toEqual([])
+	})
+
+	test("an absent or symlinked state root refuses every routed command without creating it", async () => {
+		const absent = join(root.privateRoot, "no-such-state")
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD), { env: { MSB_WORKFLOW_STATE_HOME: absent } })
+		expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_STATE_ROOT_UNSAFE", transactionState: "unchanged", retryable: false })
+		expect(existsSync(absent)).toBe(false)
+		const link = join(root.privateRoot, "state-link")
+		symlinkSync(root.stateHome, link)
+		const linked = await runCli(root, recoverArgs(root, SESSION), { env: { MSB_WORKFLOW_STATE_HOME: link } })
+		expectEnvelope(linked, "msb-workflow.recover", { exit: 3, outcome: "refused", causeCode: "DOMAIN_STATE_ROOT_UNSAFE", transactionState: "unchanged", retryable: false })
+		expect(stateListing(root)).toEqual([])
+	})
+})
+
+describe("session identity", () => {
+	test("--session and a different CODEX_SESSION_ID refuse", async () => {
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD), { env: { CODEX_SESSION_ID: "session-2" } })
+		expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_SESSION_CONFLICT", transactionState: "unchanged", retryable: false })
+		expect(durableListing(root)).toEqual([])
+	})
+
+	test("a session outside the closed grammar refuses", async () => {
+		const run = await runCli(root, recoverArgs(root, "-bad"))
+		expectEnvelope(run, "msb-workflow.recover", { exit: 3, outcome: "refused", causeCode: "DOMAIN_SESSION_INVALID", transactionState: "unchanged", retryable: false })
+	})
+
+	test("no session at all is a usage refusal", async () => {
+		const run = await runCli(root, ["recover", "--workspace", root.workspace, "--json"])
+		expectEnvelope(run, "msb-workflow.recover", { exit: 2, outcome: "refused", causeCode: "USAGE_INVALID_INVOCATION", transactionState: "unchanged", retryable: false })
+	})
+
+	test("CODEX_SESSION_ID alone binds a fresh session", async () => {
+		const run = await runCli(root, ["bind", "--workspace", root.workspace, "--bead", BEAD, "--json"], { env: { CODEX_SESSION_ID: "env-session" } })
+		expectEnvelope(run, "msb-workflow.bind", { exit: 0, outcome: "success", causeCode: null, transactionState: "completed", retryable: false })
+		expect(existsSync(bindingPath(root, "env-session"))).toBe(true)
+	})
+})
+
+describe("bind: the one local write", () => {
+	test("writes one 0600 schema-v3 binding under 0700 directories and returns the panel", async () => {
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
+		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 0, outcome: "success", causeCode: null, transactionState: "completed", retryable: false })
+		expect(envelope.effectClass).toBe("repository-local")
+		const result = resultOf(run)
+		expect(result.station).toBe("bound")
+		expect(result.refreshed).toBe(false)
+		expect(result.bindingPath).toBe(bindingPath(root, SESSION))
+		const saved = JSON.parse(readFileSync(bindingPath(root, SESSION), "utf8")) as Record<string, unknown>
+		expect(Object.keys(saved).sort()).toEqual(["beadId", "beadObservedAt", "beadsExecutable", "beadsVersion", "evidencePath", "observedAt", "schemaVersion", "sessionIdentity", "sourceRepository", "storePath", "storePrefix", "workspace"])
+		expect(saved.schemaVersion).toBe(3)
+		expect(saved.sessionIdentity).toBe(SESSION)
+		expect(saved.workspace).toBe(root.workspace)
+		expect(saved.storePath).toBe(join(root.workspace, ".beads"))
+		expect(saved.storePrefix).toBe("lkr")
+		expect(saved.beadsExecutable).toBe(FIXTURE_BD)
+		expect(saved.beadsVersion).toBe("1.2.2@6c124203e771")
+		expect(saved.beadId).toBe(BEAD)
+		expect(saved.beadObservedAt).toBe("2026-09-17T03:09:16Z")
+		expect(saved.sourceRepository).toBe(root.privateRoot)
+		expect(saved.evidencePath).toBeNull()
+		const listing = stateListing(root)
+		for (const entry of listing) expect(entry).toMatch(/:(700|600)$/)
+		expect(listing).toContain(`my-second-brain-playground/workflow-cli/recovery/sessions/${SESSION}.json:600`)
+		expect(listing.filter((entry) => entry.endsWith(".lock:600"))).toHaveLength(2)
+		expect(existsSync(markerPath(root, SESSION))).toBe(false)
+		expect(result.nextSafeAction).toBe(`Wait for the open human Gate lkr-gate to close through native bd before continuing ${BEAD}; do not resolve it yourself`)
+		expect(envelope.nextAction).toBe(result.nextSafeAction)
+	})
+
+	test("the same owner refreshes; a different Bead refuses and preserves the saved bytes", async () => {
+		await bindSession(root, SESSION)
+		const before = readFileSync(bindingPath(root, SESSION))
+		const again = await runCli(root, bindArgs(root, SESSION, BEAD))
+		expectEnvelope(again, "msb-workflow.bind", { exit: 0, outcome: "success", causeCode: null, transactionState: "completed", retryable: false })
+		expect(resultOf(again).refreshed).toBe(true)
+		const refreshed = readFileSync(bindingPath(root, SESSION))
+		const other = await runCli(root, bindArgs(root, SESSION, OTHER_BEAD))
+		const envelope = expectEnvelope(other, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BINDING_OWNERSHIP_CONFLICT", transactionState: "unchanged", retryable: false })
+		expect(envelope.nextAction).toBe(`msb-workflow recover --workspace ${root.workspace} --session ${SESSION}`)
+		expect(resultOf(other).savedBeadId).toBe(BEAD)
+		expect(readFileSync(bindingPath(root, SESSION)).equals(refreshed)).toBe(true)
+		expect(before.length).toBeGreaterThan(0)
+	})
+
+	test("a different workspace for the same session refuses and preserves the saved bytes", async () => {
+		await bindSession(root, SESSION)
+		const saved = readFileSync(bindingPath(root, SESSION))
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD, secondWorkspace(root)))
+		expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BINDING_OWNERSHIP_CONFLICT", transactionState: "unchanged", retryable: false })
+		expect(readFileSync(bindingPath(root, SESSION)).equals(saved)).toBe(true)
+	})
+
+	test("an inherited-only identity never replaces a saved owner", async () => {
+		await bindSession(root, SESSION)
+		const saved = readFileSync(bindingPath(root, SESSION))
+		const run = await runCli(root, ["bind", "--workspace", root.workspace, "--bead", OTHER_BEAD, "--json"], { env: { CODEX_SESSION_ID: SESSION } })
+		expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_SESSION_INHERITED_CONFLICT", transactionState: "unchanged", retryable: false })
+		expect(readFileSync(bindingPath(root, SESSION)).equals(saved)).toBe(true)
+	})
+
+	test("malformed saved bytes refuse with a schema cause and are never replaced", async () => {
+		plantBinding(root, SESSION, "{not json\n")
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
+		expectEnvelope(run, "msb-workflow.bind", { exit: 4, outcome: "refused", causeCode: "SCHEMA_BINDING_INVALID", transactionState: "unchanged", retryable: false })
+		expect(readFileSync(bindingPath(root, SESSION), "utf8")).toBe("{not json\n")
+	})
+
+	test("a symlinked binding is unsafe state and is left in place", async () => {
+		const target = join(root.privateRoot, "elsewhere.json")
+		writeFileSync(target, "{}\n", { mode: 0o600 })
+		mkdirSync(join(root.stateHome, "my-second-brain-playground", "workflow-cli", "recovery", "sessions"), { recursive: true, mode: 0o700 })
+		symlinkSync(target, bindingPath(root, SESSION))
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
+		expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_STATE_UNSAFE", transactionState: "unchanged", retryable: false })
+		expect(readFileSync(target, "utf8")).toBe("{}\n")
+	})
+
+	test("a missing Bead is a domain refusal that never invites a retry, and nothing is written", async () => {
+		const run = await runCli(root, bindArgs(root, SESSION, "lkr-nope"))
+		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BEAD_MISSING", transactionState: "unchanged", retryable: false, retryDelayMilliseconds: null })
+		expect(envelope.repairAction).toContain("lkr-nope")
+		expect(durableListing(root)).toEqual([])
+	})
+
+	test.each([
+		["a wrong store path", { wherePath: "/elsewhere/.beads" }],
+		["a wrong bd version", { version: "bd version 1.3.0 (abcdef0: abcdef0123456)" }],
+		["a prefix that disagrees with configuration", { configPrefix: "zzz" }],
+		["a redirected context", { redirected: true }],
+	])("%s refuses as a store mismatch before any write", async (_label, scenario) => {
+		steerBd(root, scenario)
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
+		expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_STORE_MISMATCH", transactionState: "unchanged", retryable: false })
+		expect(durableListing(root)).toEqual([])
+	})
+
+	test.each([
+		["no_beads_directory", { unavailable: "no_beads_directory" }],
+		["database contention", { unavailable: "database is locked by another process" }],
+		["a reply that is not JSON", { noJson: true }],
+	])("%s is unavailable, exit 75, retryable after 1000 ms", async (_label, scenario) => {
+		steerBd(root, scenario)
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
+		expectEnvelope(run, "msb-workflow.bind", { exit: 75, outcome: "failed", causeCode: "UNAVAILABLE_BEADS_READ", transactionState: "unchanged", retryable: true, retryDelayMilliseconds: 1000 })
+		expect(durableListing(root)).toEqual([])
+	})
+
+	test("an unset or missing executable refuses; PATH is never searched", async () => {
+		const unset = await runCli(root, bindArgs(root, SESSION, BEAD), { env: { MSB_WORKFLOW_BD_EXECUTABLE: undefined } })
+		expectEnvelope(unset, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_EXECUTABLE_INVALID", transactionState: "unchanged", retryable: false })
+		const missing = await runCli(root, bindArgs(root, SESSION, BEAD), { env: { MSB_WORKFLOW_BD_EXECUTABLE: join(root.privateRoot, "no-bd") } })
+		expectEnvelope(missing, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_EXECUTABLE_INVALID", transactionState: "unchanged", retryable: false })
+		const relative = await runCli(root, bindArgs(root, SESSION, BEAD), { env: { MSB_WORKFLOW_BD_EXECUTABLE: "bd" } })
+		expectEnvelope(relative, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_EXECUTABLE_INVALID", transactionState: "unchanged", retryable: false })
+		expect(durableListing(root)).toEqual([])
+	})
+
+	test("outside a Git working directory bind refuses with exit 3 and no --source flag exists", async () => {
+		const outside = outsideDirectory()
+		extraDirectories.push(outside)
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD), { cwd: outside })
+		expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_SOURCE_REPOSITORY_MISSING", transactionState: "unchanged", retryable: false })
+		const flagged = await runCli(root, [...bindArgs(root, SESSION, BEAD), "--source", root.privateRoot])
+		expectEnvelope(flagged, "msb-workflow.bind", { exit: 2, outcome: "refused", causeCode: "USAGE_INVALID_INVOCATION", transactionState: "unchanged", retryable: false })
+		expect(durableListing(root)).toEqual([])
+	})
+
+	test("--evidence must be a canonical regular file inside the source repository", async () => {
+		const inside = join(root.privateRoot, "evidence.md")
+		writeFileSync(inside, "# evidence\n")
+		const outside = outsideDirectory()
+		extraDirectories.push(outside)
+		const outsideFile = join(outside, "evidence.md")
+		writeFileSync(outsideFile, "# elsewhere\n")
+		for (const evidence of [outsideFile, join(root.privateRoot, "missing.md"), "relative.md", root.privateRoot]) {
+			const run = await runCli(root, [...bindArgs(root, SESSION, BEAD), "--evidence", evidence])
+			expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_EVIDENCE_INVALID", transactionState: "unchanged", retryable: false })
+		}
+		expect(durableListing(root)).toEqual([])
+		const run = await runCli(root, [...bindArgs(root, SESSION, BEAD), "--evidence", inside])
+		expectEnvelope(run, "msb-workflow.bind", { exit: 0, outcome: "success", causeCode: null, transactionState: "completed", retryable: false })
+		expect((JSON.parse(readFileSync(bindingPath(root, SESSION), "utf8")) as { evidencePath: string }).evidencePath).toBe(inside)
+	})
+
+	test("a failure before the rename is unchanged and retryable; nothing is written", async () => {
+		const run = await runCliWithStoreFault(root, bindArgs(root, SESSION, BEAD), "before-rename")
+		expectEnvelope(run, "msb-workflow.bind", { exit: 75, outcome: "failed", causeCode: "UNAVAILABLE_WRITE_FAILED", transactionState: "unchanged", retryable: true })
+		expect(existsSync(bindingPath(root, SESSION))).toBe(false)
+		// The permanent lock files exist; the sessions directory holds neither the binding nor a leftover temporary file.
+		expect(stateListing(root).filter((entry) => entry.startsWith(BINDINGS_PREFIX))).toEqual([])
+	})
+
+	test("a failure after the rename is unknown, not retryable, and names recover as the next action", async () => {
+		const run = await runCliWithStoreFault(root, bindArgs(root, SESSION, BEAD), "after-rename")
+		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 1, outcome: "unknown", causeCode: "INTERNAL_WRITE_OUTCOME_UNKNOWN", transactionState: "unknown", retryable: false })
+		expect(envelope.nextAction).toBe(`msb-workflow recover --workspace ${root.workspace} --session ${SESSION}`)
+		expect(existsSync(bindingPath(root, SESSION))).toBe(true)
+		const recovered = await runCli(root, recoverArgs(root, SESSION))
+		expectEnvelope(recovered, "msb-workflow.recover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+	})
+
+	test("an unsupported platform refuses before any effect", async () => {
+		const run = await runCliOnPlatform(root, bindArgs(root, SESSION, BEAD), "linux")
+		expectEnvelope(run, "msb-workflow.bind", { exit: 75, outcome: "failed", causeCode: "UNAVAILABLE_LOCK_UNSUPPORTED", transactionState: "unchanged", retryable: false })
+		expect(existsSync(bindingPath(root, SESSION))).toBe(false)
+		expect(durableListing(root).filter((entry) => entry.endsWith(".lock:600"))).toEqual([])
+	})
+
+	test("a pre-existing helper ancestor with a broader mode is refused, never corrected", async () => {
+		const ancestor = join(root.stateHome, "my-second-brain-playground")
+		mkdirSync(ancestor, { mode: 0o755 })
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
+		expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_STATE_UNSAFE", transactionState: "unchanged", retryable: false })
+		expect(statSync(ancestor).mode & 0o777).toBe(0o755)
+		expect(stateListing(root)).toEqual(["my-second-brain-playground:755"])
+		const human = await runCli(root, ["bind", "--workspace", root.workspace, "--session", SESSION, "--bead", BEAD])
+		expectHumanRefusal(human, "DOMAIN_STATE_UNSAFE", 3)
+		expect(stateListing(root)).toEqual(["my-second-brain-playground:755"])
+	})
+
+	test("two competing binds on one session produce one write and one storage-busy refusal", async () => {
+		const holder = runCliWithStoreFault(root, bindArgs(root, SESSION, BEAD), "hold-lock-3s")
+		await Bun.sleep(600)
+		const contender = await runCli(root, bindArgs(root, SESSION, BEAD))
+		expectEnvelope(contender, "msb-workflow.bind", { exit: 75, outcome: "failed", causeCode: "UNAVAILABLE_STORAGE_BUSY", transactionState: "unchanged", retryable: true, retryDelayMilliseconds: 2000 })
+		const held = await holder
+		expectEnvelope(held, "msb-workflow.bind", { exit: 0, outcome: "success", causeCode: null, transactionState: "completed", retryable: false })
+		expect(existsSync(bindingPath(root, SESSION))).toBe(true)
+		expect((JSON.parse(readFileSync(bindingPath(root, SESSION), "utf8")) as { beadId: string }).beadId).toBe(BEAD)
+	})
+})
+
+describe("bind in human mode: exactly one stderr line on every refusal and failure", () => {
+	const humanBind = (session: string, bead: string): string[] => ["bind", "--workspace", root.workspace, "--session", session, "--bead", bead]
+
+	test("success keeps stderr empty", async () => {
+		const run = await runCli(root, humanBind(SESSION, BEAD))
+		expect(run.exit).toBe(0)
+		expect(run.stderr).toBe("")
+		expect(run.stdout.length).toBeGreaterThan(0)
+	})
+
+	test("owner conflict and inherited conflict", async () => {
+		await bindSession(root, SESSION)
+		expectHumanRefusal(await runCli(root, humanBind(SESSION, OTHER_BEAD)), "DOMAIN_BINDING_OWNERSHIP_CONFLICT", 3)
+		expectHumanRefusal(await runCli(root, ["bind", "--workspace", root.workspace, "--bead", OTHER_BEAD], { env: { CODEX_SESSION_ID: SESSION } }), "DOMAIN_SESSION_INHERITED_CONFLICT", 3)
+	})
+
+	test("storage busy", async () => {
+		const holder = runCliWithStoreFault(root, bindArgs(root, SESSION, BEAD), "hold-lock-3s")
+		await Bun.sleep(600)
+		expectHumanRefusal(await runCli(root, humanBind(SESSION, BEAD)), "UNAVAILABLE_STORAGE_BUSY", 75)
+		expect((await holder).exit).toBe(0)
+	})
+
+	test("write failed before the rename and write unknown after it", async () => {
+		expectHumanRefusal(await runCliWithStoreFault(root, humanBind(SESSION, BEAD), "before-rename"), "UNAVAILABLE_WRITE_FAILED", 75)
+		expectHumanRefusal(await runCliWithStoreFault(root, humanBind(SESSION, BEAD), "after-rename"), "INTERNAL_WRITE_OUTCOME_UNKNOWN", 1)
+	})
+
+	test("unsupported platform, missing Bead, store mismatch and unavailable store", async () => {
+		expectHumanRefusal(await runCliOnPlatform(root, humanBind(SESSION, BEAD), "linux"), "UNAVAILABLE_LOCK_UNSUPPORTED", 75)
+		expectHumanRefusal(await runCli(root, humanBind(SESSION, "lkr-nope")), "DOMAIN_BEAD_MISSING", 3)
+		steerBd(root, { wherePath: "/elsewhere/.beads" })
+		expectHumanRefusal(await runCli(root, humanBind(SESSION, BEAD)), "DOMAIN_STORE_MISMATCH", 3)
+		steerBd(root, { unavailable: "no_beads_directory" })
+		expectHumanRefusal(await runCli(root, humanBind(SESSION, BEAD)), "UNAVAILABLE_BEADS_READ", 75)
+	})
+})
+
+describe("recover: the Resume Panel from current reads", () => {
+	test("returns the panel for the bound session with current status, blockers, gates, comments and one next action", async () => {
+		await bindSession(root, SESSION)
+		const before = durableListing(root)
+		const run = await runCli(root, recoverArgs(root, SESSION))
+		const envelope = expectEnvelope(run, "msb-workflow.recover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		expect(envelope.effectClass).toBe("inspect")
+		const result = resultOf(run)
+		expect(result.station).toBe("recovered")
+		expect(result.session).toBe(SESSION)
+		expect(result.workspace).toBe(root.workspace)
+		const store = result.store as { path: string; prefix: string; executable: string; executableDigest: string; version: string }
+		expect(store.path).toBe(join(root.workspace, ".beads"))
+		expect(store.prefix).toBe("lkr")
+		// The configured executable is the one that was run and hashed (decision D1: the digest is recorded, the version is pinned).
+		expect(store.executable).toBe(FIXTURE_BD)
+		expect(store.executableDigest).toBe(createHash("sha256").update(readFileSync(FIXTURE_BD)).digest("hex"))
+		expect(store.version).toBe("1.2.2@6c124203e771")
+		const bead = result.bead as Record<string, unknown>
+		expect(bead.id).toBe(BEAD)
+		expect(bead.status).toBe("in_progress")
+		expect(bead.assignee).toBe("migration-engineer")
+		expect(bead.parent).toBe("lkr-parent")
+		expect(bead.labels).toEqual(["enhancement", "ready-for-agent"])
+		expect(bead.specId).toBe("https://github.com/nathanvale/dotfiles-private/issues/57")
+		expect(bead.externalRef).toBe("https://github.com/nathanvale/dotfiles-private/issues/58")
+		expect(result.openBlockers).toEqual(["lkr-blocker (open) Blocker bead"])
+		expect(result.openHumanGates).toEqual(["lkr-gate (open) Gate: human"])
+		const comments = result.recentComments as { author: string; text: string }[]
+		expect(comments.map((comment) => comment.text)).toEqual(["## Checkpoint two\n\nSecond checkpoint body.", "## Checkpoint three\n\nThird checkpoint body.", "## Checkpoint four\n\nFourth checkpoint body; the newest."])
+		expect((result.binding as { freshness: string; changedSinceBinding: boolean }).freshness).toBe("fresh")
+		expect((result.binding as { changedSinceBinding: boolean }).changedSinceBinding).toBe(false)
+		expect(result.readOnlyCommands).toEqual([
+			`BEADS_DIR=${join(root.workspace, ".beads")} ${FIXTURE_BD} show ${BEAD} --readonly --json --include-comments`,
+			`BEADS_DIR=${join(root.workspace, ".beads")} ${FIXTURE_BD} gate list --all --readonly --json`,
+			`BEADS_DIR=${join(root.workspace, ".beads")} ${FIXTURE_BD} where --readonly --json`,
+			`msb-workflow recover --workspace ${root.workspace} --session ${SESSION} --json`,
+		])
+		expect(result.nextSafeAction).toBe(`Wait for the open human Gate lkr-gate to close through native bd before continuing ${BEAD}; do not resolve it yourself`)
+		expect(envelope.nextAction).toBe(result.nextSafeAction)
+		expect((result.resumePanel as string).startsWith("# Resume Panel\n")).toBe(true)
+		expect(result.resumePanel).not.toContain("## Beads prime context")
+		expect(durableListing(root)).toEqual(before)
+	})
+
+	test("human mode prints the panel as prose on stdout with empty stderr", async () => {
+		await bindSession(root, SESSION)
+		const run = await runCli(root, ["recover", "--workspace", root.workspace, "--session", SESSION])
+		expect(run.exit).toBe(0)
+		expect(run.stderr).toBe("")
+		expect(run.stdout.startsWith("# Resume Panel\n")).toBe(true)
+		expect(run.stdout).toContain(`Next safe action: Wait for the open human Gate lkr-gate`)
+	})
+
+	test("rebuilds from current reads: a changed Bead is reported, never the bound snapshot", async () => {
+		await bindSession(root, SESSION)
+		steerBd(root, { beads: { [BEAD]: { status: "closed", assignee: "someone-else", updated_at: "2026-09-17T09:00:00Z", dependencies: [] } } })
+		const run = await runCli(root, recoverArgs(root, SESSION))
+		expectEnvelope(run, "msb-workflow.recover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		const result = resultOf(run)
+		expect((result.bead as { status: string; assignee: string }).status).toBe("closed")
+		expect((result.bead as { assignee: string }).assignee).toBe("someone-else")
+		expect((result.binding as { changedSinceBinding: boolean }).changedSinceBinding).toBe(true)
+		expect(result.openBlockers).toEqual([])
+		expect(result.openHumanGates).toEqual([])
+		expect(result.nextSafeAction).toBe(`${BEAD} is closed; bind this session to the next Bead with msb-workflow bind before doing more work`)
+	})
+
+	test("uses the bound executable, not the environment", async () => {
+		await bindSession(root, SESSION)
+		const unset = await runCli(root, recoverArgs(root, SESSION), { env: { MSB_WORKFLOW_BD_EXECUTABLE: undefined } })
+		expectEnvelope(unset, "msb-workflow.recover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		const bogus = await runCli(root, recoverArgs(root, SESSION), { env: { MSB_WORKFLOW_BD_EXECUTABLE: join(root.privateRoot, "no-bd") } })
+		expectEnvelope(bogus, "msb-workflow.recover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+	})
+
+	test("an absent binding is a distinct domain refusal naming bind", async () => {
+		const run = await runCli(root, recoverArgs(root, SESSION))
+		const envelope = expectEnvelope(run, "msb-workflow.recover", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BINDING_ABSENT", transactionState: "unchanged", retryable: false })
+		expect(envelope.nextAction).toBe(`msb-workflow bind --workspace ${root.workspace} --bead <bead-id> --session ${SESSION}`)
+		expect(resultOf(run).bindingPath).toBe(bindingPath(root, SESSION))
+		expectHumanRefusal(await runCli(root, ["recover", "--workspace", root.workspace, "--session", SESSION]), "DOMAIN_BINDING_ABSENT", 3)
+	})
+
+	test("a binding that is not schema v3 is a schema refusal, exit 4", async () => {
+		plantBinding(root, SESSION, `${JSON.stringify({ schemaVersion: 2, session: SESSION })}\n`)
+		const run = await runCli(root, recoverArgs(root, SESSION))
+		expectEnvelope(run, "msb-workflow.recover", { exit: 4, outcome: "refused", causeCode: "SCHEMA_BINDING_INVALID", transactionState: "unchanged", retryable: false })
+		expect(resultOf(run).bindingPath).toBe(bindingPath(root, SESSION))
+	})
+
+	test("a binding carrying a __proto__ member or a duplicate key is refused as schema invalid", async () => {
+		await bindSession(root, SESSION)
+		const valid = readFileSync(bindingPath(root, SESSION), "utf8").trimEnd()
+		writeFileSync(bindingPath(root, SESSION), `${valid.slice(0, -1)},"__proto__":{"polluted":true}}\n`, { mode: 0o600 })
+		const proto = await runCli(root, recoverArgs(root, SESSION))
+		expectEnvelope(proto, "msb-workflow.recover", { exit: 4, outcome: "refused", causeCode: "SCHEMA_BINDING_INVALID", transactionState: "unchanged", retryable: false })
+		expect(resultOf(proto).reason).toContain("__proto__")
+		writeFileSync(bindingPath(root, SESSION), `${valid.slice(0, -1)},"beadId":"${OTHER_BEAD}"}\n`, { mode: 0o600 })
+		const duplicate = await runCli(root, recoverArgs(root, SESSION))
+		expectEnvelope(duplicate, "msb-workflow.recover", { exit: 4, outcome: "refused", causeCode: "SCHEMA_BINDING_INVALID", transactionState: "unchanged", retryable: false })
+		expect(resultOf(duplicate).reason).toContain("duplicate object key")
+	})
+
+	test("a stored workspace that differs from --workspace refuses and names the bound one", async () => {
+		await bindSession(root, SESSION)
+		const other = secondWorkspace(root)
+		const run = await runCli(root, recoverArgs(root, SESSION, other))
+		const envelope = expectEnvelope(run, "msb-workflow.recover", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BINDING_WORKSPACE_MISMATCH", transactionState: "unchanged", retryable: false })
+		expect(envelope.nextAction).toBe(`msb-workflow recover --workspace ${root.workspace} --session ${SESSION}`)
+		expect(resultOf(run).boundWorkspace).toBe(root.workspace)
+	})
+
+	test("a Bead that vanished since binding is a domain refusal, not an unavailable store", async () => {
+		await bindSession(root, SESSION)
+		steerBd(root, { showError: { [BEAD]: "no issues found matching the provided IDs" } })
+		const run = await runCli(root, recoverArgs(root, SESSION))
+		expectEnvelope(run, "msb-workflow.recover", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BEAD_MISSING", transactionState: "unchanged", retryable: false, retryDelayMilliseconds: null })
+	})
+
+	test("an unavailable store is exit 75 and retryable", async () => {
+		await bindSession(root, SESSION)
+		steerBd(root, { unavailable: "no_beads_directory" })
+		const run = await runCli(root, recoverArgs(root, SESSION))
+		expectEnvelope(run, "msb-workflow.recover", { exit: 75, outcome: "failed", causeCode: "UNAVAILABLE_BEADS_READ", transactionState: "unchanged", retryable: true, retryDelayMilliseconds: 1000 })
+	})
+
+	test("a redirected store refuses inside a Git working directory and context is skipped outside one", async () => {
+		await bindSession(root, SESSION)
+		steerBd(root, { redirected: true })
+		const inside = await runCli(root, recoverArgs(root, SESSION))
+		expectEnvelope(inside, "msb-workflow.recover", { exit: 3, outcome: "refused", causeCode: "DOMAIN_STORE_MISMATCH", transactionState: "unchanged", retryable: false })
+		const outside = outsideDirectory()
+		extraDirectories.push(outside)
+		const skipped = await runCli(root, recoverArgs(root, SESSION), { cwd: outside })
+		expectEnvelope(skipped, "msb-workflow.recover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		steerBd(root, { wherePath: "/elsewhere/.beads" })
+		const moved = await runCli(root, recoverArgs(root, SESSION), { cwd: outside })
+		expectEnvelope(moved, "msb-workflow.recover", { exit: 3, outcome: "refused", causeCode: "DOMAIN_STORE_MISMATCH", transactionState: "unchanged", retryable: false })
+	})
+
+	test("redacts the known secret values of the run on every stream and retained record", async () => {
+		await bindSession(root, "secret-session", SECRET_BEAD)
+		const machine = await runCli(root, recoverArgs(root, "secret-session"))
+		expectEnvelope(machine, "msb-workflow.recover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		expect(machine.stdout).not.toContain(SECRET_MARKER)
+		expect(machine.stdout).toContain("[REDACTED]")
+		const human = await runCli(root, ["recover", "--workspace", root.workspace, "--session", "secret-session"])
+		expect(human.exit).toBe(0)
+		expect(human.stdout).not.toContain(SECRET_MARKER)
+		expect(human.stderr).not.toContain(SECRET_MARKER)
+		const retained = readFileSync(bindingPath(root, "secret-session"), "utf8") + stateListing(root).join("\n")
+		expect(retained).not.toContain(SECRET_MARKER)
+		for (const entry of stateListing(root)) {
+			if (entry.startsWith(DIAGNOSTICS_PREFIX) && entry.endsWith(":600")) expect(readFileSync(join(root.stateHome, entry.slice(0, entry.lastIndexOf(":"))), "utf8")).not.toContain(SECRET_MARKER)
+		}
+	})
+})
+
+describe("inspect: read-only prerequisites", () => {
+	test("passes without a session and names bind as the next action", async () => {
+		const run = await runCli(root, inspectArgs(root, null))
+		const envelope = expectEnvelope(run, "msb-workflow.inspect", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		expect(envelope.nextAction).toBe(`msb-workflow bind --workspace ${root.workspace} --bead <bead-id> --session <id>`)
+		const checks = resultOf(run).checks as { name: string; status: string }[]
+		expect(checks.map((check) => [check.name, check.status])).toEqual([
+			["executable", "pass"],
+			["store", "pass"],
+			["state-root", "pass"],
+			["diagnostics-directory", "pass"],
+			["binding", "skipped"],
+			["marker", "skipped"],
+			["lock-files", "skipped"],
+		])
+		expect(durableListing(root)).toEqual([])
+	})
+
+	test("after bind every prerequisite passes and recover is the next action", async () => {
+		await bindSession(root, SESSION)
+		const before = durableListing(root)
+		const run = await runCli(root, inspectArgs(root, SESSION))
+		const envelope = expectEnvelope(run, "msb-workflow.inspect", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		expect(envelope.nextAction).toBe(`msb-workflow recover --workspace ${root.workspace} --session ${SESSION}`)
+		const checks = resultOf(run).checks as { name: string; status: string; detail: string }[]
+		expect(checks.map((check) => [check.name, check.status])).toEqual([
+			["executable", "pass"],
+			["store", "pass"],
+			["state-root", "pass"],
+			["diagnostics-directory", "pass"],
+			["binding", "pass"],
+			["marker", "pass"],
+			["lock-files", "pass"],
+			["sessions-directory", "pass"],
+		])
+		expect(checks.find((check) => check.name === "binding")?.detail).toContain(`${BEAD} in ${root.workspace}`)
+		expect(checks.find((check) => check.name === "lock-files")?.detail).toContain(": safe")
+		expect(durableListing(root)).toEqual(before)
+	})
+
+	test("names an absent binding with one repair and writes no binding, marker or lock", async () => {
+		const run = await runCli(root, inspectArgs(root, SESSION))
+		const envelope = expectEnvelope(run, "msb-workflow.inspect", { exit: 3, outcome: "refused", causeCode: "DOMAIN_PREREQUISITE_FAILED", transactionState: "unchanged", retryable: false })
+		expect(envelope.repairAction).toBe(`Bind this session: msb-workflow bind --workspace ${root.workspace} --bead <bead-id> --session ${SESSION}`)
+		const checks = resultOf(run).checks as { name: string; status: string; repair: string | null }[]
+		expect(checks.filter((check) => check.status === "fail").map((check) => check.name)).toEqual(["binding"])
+		expect(durableListing(root)).toEqual([])
+		expectHumanRefusal(await runCli(root, ["inspect", "--workspace", root.workspace, "--session", SESSION]), "DOMAIN_PREREQUISITE_FAILED", 3)
+	})
+
+	test("names a malformed binding and an unsafe lock file", async () => {
+		await bindSession(root, SESSION)
+		writeFileSync(bindingPath(root, SESSION), "{not json\n", { mode: 0o600 })
+		const locks = join(root.stateHome, "my-second-brain-playground", "workflow-cli", "locks", "sessions")
+		const lockFile = (stateListing(root).find((entry) => entry.startsWith("my-second-brain-playground/workflow-cli/locks/sessions/") && entry.endsWith(".lock:600")) ?? "").split(":")[0] as string
+		chmodSync(join(root.stateHome, lockFile), 0o644)
+		expect(existsSync(locks)).toBe(true)
+		const run = await runCli(root, inspectArgs(root, SESSION))
+		expectEnvelope(run, "msb-workflow.inspect", { exit: 3, outcome: "refused", causeCode: "DOMAIN_PREREQUISITE_FAILED", transactionState: "unchanged", retryable: false })
+		const checks = resultOf(run).checks as { name: string; status: string; detail: string }[]
+		expect(checks.filter((check) => check.status === "fail").map((check) => check.name)).toEqual(["binding", "lock-files"])
+		expect(checks.find((check) => check.name === "binding")?.detail).toContain("not schema v3")
+		expect(checks.find((check) => check.name === "lock-files")?.detail).toContain("mode is not 0600")
+		expect(readFileSync(bindingPath(root, SESSION), "utf8")).toBe("{not json\n")
+	})
+
+	test("value-redacts a secret observed in a bd reply wherever it recurs in the report", async () => {
+		steerBd(root, { prefix: "sekret", configPrefix: "sekret", config: { api_key: "sekret" } })
+		const run = await runCli(root, inspectArgs(root, null))
+		expectEnvelope(run, "msb-workflow.inspect", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		expect(run.stdout).not.toContain("sekret")
+		expect((resultOf(run).checks as { name: string; detail: string }[]).find((check) => check.name === "store")?.detail).toContain("(prefix [REDACTED])")
+	})
+
+	test("reports the configured executable with its recorded digest", async () => {
+		const run = await runCli(root, inspectArgs(root, null))
+		const detail = (resultOf(run).checks as { name: string; detail: string }[]).find((check) => check.name === "executable")?.detail ?? ""
+		expect(detail).toBe(`${FIXTURE_BD} (bd 1.2.2@6c124203e771; sha256 ${createHash("sha256").update(readFileSync(FIXTURE_BD)).digest("hex")})`)
+	})
+
+	test("names a bad executable and skips the store read", async () => {
+		const run = await runCli(root, inspectArgs(root, null), { env: { MSB_WORKFLOW_BD_EXECUTABLE: join(root.privateRoot, "no-bd") } })
+		expectEnvelope(run, "msb-workflow.inspect", { exit: 3, outcome: "refused", causeCode: "DOMAIN_PREREQUISITE_FAILED", transactionState: "unchanged", retryable: false })
+		const checks = resultOf(run).checks as { name: string; status: string }[]
+		expect(checks.slice(0, 2).map((check) => [check.name, check.status])).toEqual([
+			["executable", "fail"],
+			["store", "skipped"],
+		])
+	})
+
+	test("names a wrong store as a failed prerequisite and an unavailable store as exit 75", async () => {
+		steerBd(root, { wherePath: "/elsewhere/.beads" })
+		const wrong = await runCli(root, inspectArgs(root, null))
+		expectEnvelope(wrong, "msb-workflow.inspect", { exit: 3, outcome: "refused", causeCode: "DOMAIN_PREREQUISITE_FAILED", transactionState: "unchanged", retryable: false })
+		expect((resultOf(wrong).checks as { name: string; status: string }[]).find((check) => check.name === "store")?.status).toBe("fail")
+		steerBd(root, { unavailable: "no_beads_directory" })
+		const unavailable = await runCli(root, inspectArgs(root, null))
+		expectEnvelope(unavailable, "msb-workflow.inspect", { exit: 75, outcome: "failed", causeCode: "UNAVAILABLE_BEADS_READ", transactionState: "unchanged", retryable: true, retryDelayMilliseconds: 1000 })
+	})
+})

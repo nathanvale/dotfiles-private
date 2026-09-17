@@ -1,0 +1,5 @@
+#!/bin/sh
+# Fixture bd for tests and the cli-design checker: replays recorded bd 1.2.2 JSON, writes nothing.
+set -eu
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
+exec bun "$here/bd-shim.ts" "$@"
