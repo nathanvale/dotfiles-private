@@ -65,6 +65,19 @@ describe("the executable pin", () => {
 	})
 })
 
+describe("readPrime", () => {
+	test("spawns prime in the pinned binary's read-only form and returns its additionalContext", async () => {
+		const recorded = join(privateRoot, "argv")
+		const executable = join(privateRoot, "bd-recorder")
+		// The recorder writes one argument per line, then replays the hook envelope; its digest is an input, never an expectation.
+		writeFileSync(executable, `#!/bin/sh\nprintf '%s\\n' "$@" > "${recorded}"\necho '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"recorded prime"}}'\n`, { mode: 0o700 })
+		const prime = await reader(executable, { executable, sha256: digestOf(executable) }).readPrime()
+		expect(prime).toBe("recorded prime")
+		// The exact argv as a literal (independent oracle): --readonly is the bd 1.2.2 global flag that blocks write operations.
+		expect(readFileSync(recorded, "utf8").trimEnd().split("\n")).toEqual(["prime", "--readonly", "--hook-json"])
+	})
+})
+
 describe("readBead classification of a JSON error value", () => {
 	const steer = (error: string): void => {
 		writeFileSync(join(workspace, ".beads", "fixture.json"), `${JSON.stringify({ showError: { [BEAD]: error } })}\n`)

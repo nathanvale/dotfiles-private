@@ -3778,7 +3778,7 @@ function createBeadsReader(configuration) {
     return { status: "available", gates: (Array.isArray(reply.value) ? reply.value : []).map(gateOf).filter((gate) => gate !== null) };
   }
   async function readPrime() {
-    const result = await bd(["prime", "--hook-json"]);
+    const result = await bd(["prime", "--readonly", "--hook-json"]);
     if (result.status !== "exited" || result.exit !== 0)
       return null;
     const parsed = parseJson(result.stdout);
@@ -4932,7 +4932,7 @@ function guidance(binding) {
     "My Second Brain recovery session.",
     `Session identity: ${binding.sessionIdentity}`,
     `Bound to Bead ${binding.beadId} in ${binding.workspace} (store ${binding.storePath}).`,
-    `Rebuild the Resume Panel at any time: msb-workflow recover --workspace ${binding.workspace} --session ${binding.sessionIdentity} --json`,
+    `Rebuild the Resume Panel at any time: msb-workflow recover --workspace ${shellQuote(binding.workspace)} --session ${shellQuote(binding.sessionIdentity)} --json`,
     `Refresh or rebind with this exact session identity: msb-workflow bind --workspace ${binding.workspace} --bead <bead-id> --session ${binding.sessionIdentity}`,
     "After compaction the Resume Panel is delivered once: on the next prompt (Codex) or at SessionStart compact (Claude Code)."
   ].join(`
@@ -4940,7 +4940,7 @@ function guidance(binding) {
 }
 function notice(binding, uncertain, folded) {
   const foldedText = folded.length === 0 ? "" : ` Pending generation(s) ${folded.join(", ")} settle with this notice.`;
-  return `msb-workflow: the Resume Panel for compaction generation(s) ${uncertain.join(", ")} was claimed but never recorded delivered; run msb-workflow recover --workspace ${binding.workspace} --session ${binding.sessionIdentity} --json to rebuild it.${foldedText} Nothing is replayed automatically.`;
+  return `msb-workflow: the Resume Panel for compaction generation(s) ${uncertain.join(", ")} was claimed but never recorded delivered; run msb-workflow recover --workspace ${shellQuote(binding.workspace)} --session ${shellQuote(binding.sessionIdentity)} --json to rebuild it.${foldedText} Nothing is replayed automatically.`;
 }
 var SILENT = { delivery: "silent", stdout: "" };
 async function readPanelText(bound, eventName) {

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { BEAD, bindingPath, bindSession, createRoot, diagnosticsDirectory, FIXTURE_BD, hookEvent, hookOutputOf, markerPath, modeOf, readJsonFile, removeRoot, retainedBytes, type Root, type Run, runCli, runHook, runHookWithFault, SECRET_BEAD, SECRET_MARKER, spawnLockHolder, stateListing, steerBd } from "../fixtures/harness.ts"
+import { BEAD, bindingPath, bindSession, createRoot, diagnosticsDirectory, FIXTURE_BD, hookEvent, hookOutputOf, markerPath, modeOf, readJsonFile, removeRoot, resultOf, retainedBytes, type Root, type Run, runCli, runHook, runHookWithFault, SECRET_BEAD, SECRET_MARKER, spawnLockHolder, stateListing, steerBd } from "../fixtures/harness.ts"
 
 // The `hook` command through a real process: one Harness event on stdin, Harness JSON or silence on stdout, exit 0
 // and empty stderr on every path. Expected deliveries, marker states and texts are literals from Spec #57's hook
@@ -261,6 +261,31 @@ describe("SessionStart and PreCompact", () => {
 		steerBd(root, { redirected: true })
 		expect(expectHook(await runHook(root, preCompact()))?.additionalContext).toContain("redirected")
 		expect(durableListing(root)).toEqual(before)
+	})
+})
+
+describe("the recover command in the guidance and the notice is quoted for a POSIX shell (lkr-737.5.5)", () => {
+	test("a workspace with a space and a single quote renders one quoted recover command in the guidance, the notice, and panel command 4", async () => {
+		const workspace = join(root.privateRoot, "work sp'ace")
+		mkdirSync(join(workspace, ".beads"), { recursive: true, mode: 0o700 })
+		const bind = await runCli(root, ["bind", "--workspace", workspace, "--session", SESSION, "--bead", BEAD, "--json"])
+		expect(bind.exit).toBe(0)
+		// Hand-derived POSIX single quoting (independent oracle): the whole workspace is one single-quoted word with '
+		// spelled '\''; the private root is a plain temporary path and contributes no character needing an escape.
+		const recover = `msb-workflow recover --workspace '${root.privateRoot}/work sp'\\''ace' --session ${SESSION} --json`
+		const guidance = expectHook(await runHook(root, startup()))
+		expect(guidance?.additionalContext).toContain(`Rebuild the Resume Panel at any time: ${recover}\n`)
+		expectSilent(await runHook(root, postCompact()))
+		await runHookWithFault(root, prompt(), "kill-after-claim")
+		const notice = expectHook(await runHook(root, prompt()))
+		expect(notice?.additionalContext).toBe(`msb-workflow: the Resume Panel for compaction generation(s) 1 was claimed but never recorded delivered; run ${recover} to rebuild it. Nothing is replayed automatically.`)
+		const panel = await runCli(root, ["recover", "--workspace", workspace, "--session", SESSION, "--json"])
+		expect(panel.exit).toBe(0)
+		expect((resultOf(panel).readOnlyCommands as string[])[3]).toBe(recover)
+		// A real sh re-parses the rendered command into the exact words: the workspace stays one word, nothing is expanded.
+		const shell = Bun.spawnSync(["sh", "-c", `set -- ${recover}; printf '%s\\n' "$@"`], { env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent" }, stdout: "pipe", stderr: "pipe" })
+		expect(shell.stderr.toString()).toBe("")
+		expect(shell.stdout.toString()).toBe(`${["msb-workflow", "recover", "--workspace", workspace, "--session", SESSION, "--json"].join("\n")}\n`)
 	})
 })
 

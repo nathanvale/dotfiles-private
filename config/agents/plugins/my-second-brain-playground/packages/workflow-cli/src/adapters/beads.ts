@@ -229,8 +229,9 @@ export function createBeadsReader(configuration: BeadsConfiguration): BeadsReade
 		return { status: "available", gates: (Array.isArray(reply.value) ? reply.value : []).map(gateOf).filter((gate): gate is GateFacts => gate !== null) }
 	}
 
+	// `--readonly` is the global bd 1.2.2 flag that blocks write operations; the pinned bd 1.2.2 accepts it on `prime`.
 	async function readPrime(): Promise<string | null> {
-		const result = await bd(["prime", "--hook-json"])
+		const result = await bd(["prime", "--readonly", "--hook-json"])
 		if (result.status !== "exited" || result.exit !== 0) return null
 		const parsed = parseJson(result.stdout)
 		if (!isRecord(parsed)) return null

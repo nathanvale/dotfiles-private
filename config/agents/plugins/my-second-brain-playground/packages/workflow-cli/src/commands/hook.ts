@@ -13,7 +13,7 @@ import { redactText } from "../command-contract.ts"
 import { claimForPrompt, type CompactionMarker, type PromptDecision, recordDelivered, recordGeneration } from "../compaction-marker.ts"
 import type { Diagnostics } from "../diagnostics.ts"
 import type { RecoveryBinding } from "../model.ts"
-import { SESSION_PATTERN } from "../recovery.ts"
+import { SESSION_PATTERN, shellQuote } from "../recovery.ts"
 import { RuntimeFailure } from "../runtime.ts"
 import { readPanel } from "./recover.ts"
 import type { CommandContext } from "./shared.ts"
@@ -106,12 +106,14 @@ function harnessJson(eventName: EventName, additionalContext: string): string {
 	return `${JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext } })}\n`
 }
 
+/** The `recover` command in the guidance and the notice is pasteable shell input, quoted exactly as Resume Panel
+ * command 4 is; the prose lines and the `bind` line with its `<bead-id>` placeholder are not pasteable and stay bare. */
 function guidance(binding: RecoveryBinding): string {
 	return [
 		"My Second Brain recovery session.",
 		`Session identity: ${binding.sessionIdentity}`,
 		`Bound to Bead ${binding.beadId} in ${binding.workspace} (store ${binding.storePath}).`,
-		`Rebuild the Resume Panel at any time: msb-workflow recover --workspace ${binding.workspace} --session ${binding.sessionIdentity} --json`,
+		`Rebuild the Resume Panel at any time: msb-workflow recover --workspace ${shellQuote(binding.workspace)} --session ${shellQuote(binding.sessionIdentity)} --json`,
 		`Refresh or rebind with this exact session identity: msb-workflow bind --workspace ${binding.workspace} --bead <bead-id> --session ${binding.sessionIdentity}`,
 		"After compaction the Resume Panel is delivered once: on the next prompt (Codex) or at SessionStart compact (Claude Code).",
 	].join("\n")
@@ -119,7 +121,7 @@ function guidance(binding: RecoveryBinding): string {
 
 function notice(binding: RecoveryBinding, uncertain: readonly number[], folded: readonly number[]): string {
 	const foldedText = folded.length === 0 ? "" : ` Pending generation(s) ${folded.join(", ")} settle with this notice.`
-	return `msb-workflow: the Resume Panel for compaction generation(s) ${uncertain.join(", ")} was claimed but never recorded delivered; run msb-workflow recover --workspace ${binding.workspace} --session ${binding.sessionIdentity} --json to rebuild it.${foldedText} Nothing is replayed automatically.`
+	return `msb-workflow: the Resume Panel for compaction generation(s) ${uncertain.join(", ")} was claimed but never recorded delivered; run msb-workflow recover --workspace ${shellQuote(binding.workspace)} --session ${shellQuote(binding.sessionIdentity)} --json to rebuild it.${foldedText} Nothing is replayed automatically.`
 }
 
 const SILENT: HookResult = { delivery: "silent", stdout: "" }
