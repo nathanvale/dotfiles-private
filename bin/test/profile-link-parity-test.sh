@@ -494,5 +494,5 @@ assert_not_equals "$RUN_EXIT" 0 'verifier fails closed when the manager status o
 assert_contains "$RUN_OUTPUT" 'Managed symlink status contract' 'malformed manager output names the repair contract'
 assert_contains "$RUN_OUTPUT" 'DOTFILES_VERIFY_SUMMARY version=1 status=failed' 'malformed manager output remains a failed completion record'
 
-[[ "$assertion_count" -eq 87 ]] || fail "expected 87 assertions, observed $assertion_count"
+[[ "$assertion_count" -eq 91 ]] || fail "expected 91 assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"
