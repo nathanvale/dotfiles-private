@@ -1,6 +1,9 @@
 # Browser Automation
 
-Read the [global mode](../../config/agents/plugins/browser-lanes/references/lane-entry.md#global-mode)
+Classify the task first. An ordinary read-only request at one supplied public
+URL uses the [quiet dedicated Agent Browser surface](#quiet-dedicated-agent-browser-surface)
+directly. All other browser work reads the
+[global mode](../../config/agents/plugins/browser-lanes/references/lane-entry.md#global-mode)
 first. Nathan's temporary `free_mode` config routes any adapter directly
 without admission and authorizes configuring All tabs in the declared profile.
 The secured admission restrictions below apply only when free mode is false.
@@ -17,7 +20,7 @@ similar names have distinct owners:
 | --- | --- | --- |
 | `browser-lane` | The executable: lane list, health, inspect, engine runs, recovery | `bin/browser-lane`; contract in `browser-lane --help` |
 | `browser-lanes` | The versioned personal plugin carrying the `browser-use` entry skill and four adapter skills | `config/agents/plugins/browser-lanes`; discover through the Harness, source presence is not installation |
-| `browser-use` | The entry skill: lane-first routing, admission handoff, engine choice, recovery workflow | [`browser-use/SKILL.md`](../../config/agents/plugins/browser-lanes/skills/browser-use/SKILL.md) |
+| `browser-use` | The entry skill: task classification, lane routing, admission handoff, engine choice, recovery workflow | [`browser-use/SKILL.md`](../../config/agents/plugins/browser-lanes/skills/browser-use/SKILL.md) |
 
 Enter through `browser-use`. It applies the shared
 [lane entry](../../config/agents/plugins/browser-lanes/references/lane-entry.md)
@@ -30,6 +33,63 @@ The [adapter selection](../../config/agents/plugins/browser-lanes/references/ada
 reference owns that choice; each adapter names its one public `browser-lane`
 command. Raw MCPorter calls and direct full-profile attachment are not lane
 entry points.
+
+## Quiet dedicated Agent Browser surface
+
+Use this surface for an ordinary bounded request that reads one supplied
+public URL without sign-in: open a page, report its heading, its text, or
+where its links point. The task surface is that exact URL, the requested read,
+and the dedicated profile below; state it before the first browser command.
+Nathan supplies the URL and the read; everything below is fixed configuration,
+not a question for him. Sign-in, credentials, a page write, tab or profile
+management, dashboard work, an extension, or a daily Chrome identity returns
+the request to `browser-use` for an eligible declared lane or stops. This
+surface is never a fallback for a refused or failed lane task.
+
+It is a direct-upstream exception outside Browser Lanes, qualified on
+17 September 2026. Proof:
+`projects/browser-automation/proofs/quiet-agent-browser-profile.md` at commit
+`db9e7eed` on `main` of `$HOME/code/my-second-brain-playground`; read it from
+that commit, since a side-branch checkout there can show an older draft.
+Every command uses unchanged upstream `agent-browser` 0.34.0 with this
+flag-only prefix and one short task-named session:
+
+```sh
+agent-browser --namespace qab-quiet-profile --session TASK \
+  --profile /Users/nathanvale/.local/share/my-second-brain-playground/browser-automation/profiles/quiet-agent-browser \
+  --executable-path '/Users/nathanvale/Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing' \
+  --pin-tab --json COMMAND
+```
+
+- `--executable-path` pins Google Chrome for Testing 145.0.7632.6; default
+  discovery would substitute the daily Chrome bundle.
+- The absolute `--profile` path is passed straight to Chrome as its user data
+  directory: nothing is copied and daily Chrome `Local State` is never read.
+- `--namespace` keeps sockets and state under
+  `~/.agent-browser/namespaces/qab-quiet-profile`, apart from Browser Lanes
+  files. `--pin-tab` turns a lost tab into a typed error. Keep the default
+  headless launch.
+- `agent-browser --help` owns command syntax; it is client-only and launches
+  nothing. `--allowed-domains` is rejected with `--profile`, so this surface
+  has no upstream network containment.
+
+Journey: record `agent-browser --version` and the executable's `--version`;
+a drift from the pinned versions stops before launch. `open` the supplied URL,
+read with `get` or `snapshot`, keep `tab list` or `session info` output as
+inspection evidence, and end with `close`, including after a refusal or an
+abort. `close` ends the daemon and browser; the profile directory and the
+namespace sidecars persist by design. Confirm cleanup with `session list` a
+moment after `close`; the daemon can outlive `close` by about one second.
+
+Refusal: a failed navigation leaves the pinned tab at
+`chrome-error://chromewebdata/`. Recover with one explicit reopen of the last
+known target, then verify with `get url` or `tab list`. Never replay a write.
+
+Boundary: the profile is dedicated automation state. Never attach, copy,
+inspect, or modify Nathan's daily Chrome profile. A bare `--profile` name,
+`agent-browser profiles`, `--auto-connect`, and `--cdp` read or attach daily
+Chrome; `install` downloads a browser and `doctor` runs a live launch test, so
+both need separate authority.
 
 ## Lanes
 

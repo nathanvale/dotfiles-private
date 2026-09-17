@@ -6,7 +6,7 @@
   "plugins": [
     {
       "name": "browser-lanes",
-      "version": "0.5.15",
+      "version": "0.5.16-dev",
       "source": {
         "source": "local",
         "path": "./browser-lanes"

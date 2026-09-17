@@ -5,17 +5,36 @@ description: "Route browser automation through a declared profile lane, hand tab
 
 # Browser Use
 
-Read [Global mode](../../references/lane-entry.md#global-mode) first. When
-`free_mode` is true, use that free workflow and route directly to any of the
-four adapters by capability; no universal Chrome DevTools inventory step
-precedes the chosen adapter. The secured instructions below apply only when it
-is false.
+Classify the request first. An ordinary read-only request at one supplied
+public URL takes the [quiet dedicated surface](#quiet-dedicated-surface) and
+skips Global mode and Dispatch. Otherwise read [Global
+mode](../../references/lane-entry.md#global-mode) first. When `free_mode` is
+true, use that free workflow and route directly to any of the four adapters by
+capability; no universal Chrome DevTools inventory step precedes the chosen
+adapter. The secured instructions below apply only when it is false.
 
 `browser-lanes` is the plugin; `browser-use` is its entry skill. Choose
 identity and custody before the engine. Read
 [`lane-entry.md`](../../references/lane-entry.md) for the shared gates, the
 admission handoff, recovery, and the executable owner. For an engine choice,
 read [`adapter-selection.md`](../../references/adapter-selection.md).
+
+## Quiet dedicated surface
+
+For one supplied public URL and an ordinary read without sign-in, follow the
+"Quiet dedicated Agent Browser surface" section of
+`$HOME/code/dotfiles/docs/agents/browser-automation.md`. It fixes the upstream
+Agent Browser candidate, the dedicated profile, the flag prefix, the journey,
+and the refusal recovery; Nathan supplies only the URL and the read. State the
+exact URL, the requested read, and the dedicated profile as the task surface
+before the first browser command.
+
+This exception runs outside Browser Lanes: no `browser-lane` command, declared
+daily lane, tab admission, or adapter skill. Return the observed read, the
+retained inspection output, any refusal, and the next safe action. A request
+that needs sign-in, credentials, a write, profile or tab management, an
+extension, or a daily Chrome identity continues to Global mode and Dispatch
+instead.
 
 ## Dispatch
 

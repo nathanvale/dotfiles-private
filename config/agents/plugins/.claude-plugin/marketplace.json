@@ -10,7 +10,7 @@
     {
       "name": "browser-lanes",
       "description": "Lane-first browser automation, attended login, and adapter bake-offs that produce reusable recipes.",
-      "version": "0.5.15",
+      "version": "0.5.16-dev",
       "author": {
         "name": "Nathan Vale"
       },
