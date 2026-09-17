@@ -109,6 +109,7 @@ config/homebrew/trust.json.lock
 
 # Tool-owned runtime state (generated)
 config/bd/
+config/op/
 config/cmux/cmux.json
 config/last30days/last-report.json
 config/last30days/last-run.json
