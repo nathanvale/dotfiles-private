@@ -1,7 +1,8 @@
 // Beads read Adapter: the only path to native `bd`, and it is read-only. The executable is the one named by the
-// caller (MSB_WORKFLOW_BD_EXECUTABLE or the binding); PATH discovery never happens. Every reply is translated into
-// an observation; a JSON `error` field is classified by its value, never by the exit code, because the pinned bd
-// 1.2.2 exits 1 for both an absent Bead and an absent store.
+// caller (MSB_WORKFLOW_BD_EXECUTABLE or the binding); PATH discovery never happens, and the named path must be the
+// accepted pin, byte for byte, before it is spawned. Every reply is translated into an observation; a JSON `error`
+// field is classified by its value, never by the exit code, because the pinned bd 1.2.2 exits 1 for both an absent
+// Bead and an absent store.
 
 import { createHash } from "node:crypto"
 import { accessSync, constants, readFileSync, realpathSync, statSync } from "node:fs"
@@ -13,8 +14,19 @@ import { describeFailure, isRecord, parseJson, type ProcessResult, runBounded, s
 /** The verified Beads source for this rollout: any other version or revision refuses the store. */
 const PINNED_BD_VERSION = "1.2.2"
 const PINNED_BD_REVISION = "6c124203e771"
-const ABSENT_ISSUE_PATTERN = /no issues? found|not found|does not exist/i
+/** `bd version <version> (<build>: [<branch>@]<revision>)`: the revision is the hex field after the last `@` inside
+ * the parentheses, so the branch text bd appends inside a Git directory never reaches the pin. */
+const VERSION_LINE = /^bd version (\S+) \(\S+: (?:.*@)?([0-9a-f]+)\)$/
+/** Every JSON `error` value the pinned bd 1.2.2 was observed to emit for an absent issue
+ * (specification/evidence/bd-reads/show-missing.out); any other value, a missing store included, is unavailable. */
+const ABSENT_ISSUE_VALUES: ReadonlySet<string> = new Set(["no issues found matching the provided IDs"])
 const REASON_LIMIT = 200
+
+/** The accepted native bd: its exact absolute path and the SHA-256 of its bytes. Any other path or digest refuses before any bd read. */
+export interface BeadsPin {
+	readonly executable: string
+	readonly sha256: string
+}
 
 export type StoreRead = { readonly status: "verified"; readonly store: StoreFacts } | { readonly status: "executable-invalid" | "mismatch" | "unavailable"; readonly reason: string }
 export type BeadRead = { readonly status: "found"; readonly bead: BeadFacts } | { readonly status: "missing"; readonly reason: string } | { readonly status: "unavailable"; readonly reason: string }
@@ -38,18 +50,29 @@ interface ExecutableCheck {
 	readonly digest: string | null
 }
 
-/** Absolute, canonical, regular, executable; the SHA-256 is recorded, the version pin is decided by `bd version`. */
-function checkExecutable(executable: string | null): ExecutableCheck {
+/** Absolute, the pinned path, canonical, regular, executable, and the pinned SHA-256: all decided before any spawn.
+ * The version pin is decided afterwards by `bd version`. */
+function checkExecutable(executable: string | null, pin: BeadsPin): ExecutableCheck {
 	if (executable === null || executable.length === 0) return { status: "invalid", reason: "MSB_WORKFLOW_BD_EXECUTABLE is not set; PATH discovery is never used", digest: null }
 	if (!isAbsolute(executable)) return { status: "invalid", reason: "bd executable path must be absolute", digest: null }
+	if (executable !== pin.executable) return { status: "invalid", reason: `bd executable ${executable} is not the accepted ${pin.executable}`, digest: null }
+	let digest: string
 	try {
 		if (realpathSync(executable) !== executable) return { status: "invalid", reason: "bd executable path must be canonical (no symlinks)", digest: null }
 		if (!statSync(executable).isFile()) return { status: "invalid", reason: "bd executable is not a regular file", digest: null }
 		accessSync(executable, constants.X_OK)
-		return { status: "valid", reason: null, digest: createHash("sha256").update(readFileSync(executable)).digest("hex") }
+		digest = createHash("sha256").update(readFileSync(executable)).digest("hex")
 	} catch {
 		return { status: "invalid", reason: "bd executable is missing or not executable", digest: null }
 	}
+	if (digest !== pin.sha256) return { status: "invalid", reason: `bd executable ${executable} hashes ${digest}, not the accepted ${pin.sha256}`, digest: null }
+	return { status: "valid", reason: null, digest }
+}
+
+/** The pinned version and revision from the first line of `bd version`, or null when the line has another shape. */
+function parseVersionLine(stdout: string): { readonly version: string; readonly revision: string } | null {
+	const match = VERSION_LINE.exec(stdout.split("\n")[0] ?? "")
+	return match === null ? null : { version: match[1] as string, revision: match[2] as string }
 }
 
 function bounded(text: string): string {
@@ -108,6 +131,7 @@ export interface BeadsConfiguration {
 	readonly executable: string
 	readonly workspace: string
 	readonly cwd: string
+	readonly pin: BeadsPin
 }
 
 export function createBeadsReader(configuration: BeadsConfiguration): BeadsReader {
@@ -139,12 +163,13 @@ export function createBeadsReader(configuration: BeadsConfiguration): BeadsReade
 		return isRecord(reply.value) ? { kind: "object", value: reply.value } : { kind: "stop", read: { status: "unavailable", reason: `bd ${args[0]} returned no JSON object` } }
 	}
 
-	// The parenthesised suffix of `bd version` carries the current Git branch inside a repository; only the version
-	// and revision are pinned.
+	// The parenthesised suffix of `bd version` carries the current Git branch inside a repository; only the parsed
+	// version and revision fields are pinned, so a branch spelled like the revision never satisfies the pin.
 	async function checkVersion(): Promise<StoreRead | null> {
 		const version = await bd(["version"])
 		if (version.status !== "exited" || version.exit !== 0) return { status: "unavailable", reason: `bd version ${describeFailure(version)}` }
-		if (!version.stdout.includes(`bd version ${PINNED_BD_VERSION} `) || !version.stdout.includes(PINNED_BD_REVISION)) return { status: "mismatch", reason: `bd executable is not the verified ${PINNED_BD_VERSION} at ${PINNED_BD_REVISION}` }
+		const parsed = parseVersionLine(version.stdout)
+		if (parsed === null || parsed.version !== PINNED_BD_VERSION || parsed.revision !== PINNED_BD_REVISION) return { status: "mismatch", reason: `bd executable is not the verified ${PINNED_BD_VERSION} at ${PINNED_BD_REVISION}` }
 		return null
 	}
 
@@ -175,7 +200,7 @@ export function createBeadsReader(configuration: BeadsConfiguration): BeadsReade
 	}
 
 	async function verifyStore(cwdIsGitRepository: boolean): Promise<StoreRead> {
-		const executable = checkExecutable(configuration.executable)
+		const executable = checkExecutable(configuration.executable, configuration.pin)
 		if (executable.status === "invalid") return { status: "executable-invalid", reason: executable.reason ?? "bd executable is invalid" }
 		const version = await checkVersion()
 		if (version !== null) return version
@@ -191,7 +216,7 @@ export function createBeadsReader(configuration: BeadsConfiguration): BeadsReade
 	async function readBead(id: string): Promise<BeadRead> {
 		const reply = await readJson(["show", id, "--readonly", "--json", "--include-comments"])
 		if (reply.kind === "unavailable") return { status: "unavailable", reason: reply.reason }
-		if (reply.kind === "error") return ABSENT_ISSUE_PATTERN.test(reply.value) ? { status: "missing", reason: bounded(reply.value) } : { status: "unavailable", reason: `bd show: ${bounded(reply.value)}` }
+		if (reply.kind === "error") return ABSENT_ISSUE_VALUES.has(reply.value.trim()) ? { status: "missing", reason: bounded(reply.value) } : { status: "unavailable", reason: `bd show: ${bounded(reply.value)}` }
 		const issue = Array.isArray(reply.value) ? reply.value[0] : reply.value
 		if (!isRecord(issue) || stringField(issue, "id") !== id) return { status: "missing", reason: `bd show returned no issue with id ${id}` }
 		return { status: "found", bead: beadOf(issue, id) }

@@ -52,11 +52,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+/** The supplied cwd as written must already be the canonical path of an existing directory; a symlinked, `..`,
+ * `.` or trailing-slash spelling is refused, never normalised, so the admission below compares exact identities. */
 function canonicalDirectory(value: unknown): string | null {
 	if (typeof value !== "string" || value.length === 0 || value.length > 2048 || /[\0\r\n]/.test(value) || !isAbsolute(value)) return null
 	try {
-		const real = realpathSync(value)
-		return statSync(real).isDirectory() ? real : null
+		return realpathSync(value) === value && statSync(value).isDirectory() ? value : null
 	} catch {
 		return null
 	}

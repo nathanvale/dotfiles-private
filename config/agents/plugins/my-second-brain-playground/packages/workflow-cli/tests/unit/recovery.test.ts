@@ -134,6 +134,46 @@ describe("buildPanel", () => {
 		expect((panel.facts.binding as { freshness: string }).freshness).toBe("stale")
 	})
 
+	// The rendered commands are pasteable shell input. Expected spellings are hand-derived POSIX single quoting
+	// (independent oracle); a real `sh` then splits each rendered command back into the exact words.
+	describe("read-only commands are quoted for a POSIX shell", () => {
+		const workspace = "/Users/n v/it's $HOME;`x`*"
+		const nasty = validateBinding(binding({ workspace, storePath: `${workspace}/.beads`, beadsExecutable: "/opt/b d/bd", beadId: "lkr-1" }), NOW).binding
+		const panel = buildPanel({ binding: nasty, stale: false, store: STORE, bead: bead(), gates: [], prime: null })
+		const commands = panel.facts.readOnlyCommands as string[]
+
+		test("values outside the safe set are single-quoted with a quote spelled '\\''; safe values stay bare", () => {
+			expect(commands).toEqual([
+				"BEADS_DIR='/Users/n v/it'\\''s $HOME;`x`*/.beads' '/opt/b d/bd' show lkr-1 --readonly --json --include-comments",
+				"BEADS_DIR='/Users/n v/it'\\''s $HOME;`x`*/.beads' '/opt/b d/bd' gate list --all --readonly --json",
+				"BEADS_DIR='/Users/n v/it'\\''s $HOME;`x`*/.beads' '/opt/b d/bd' where --readonly --json",
+				"msb-workflow recover --workspace '/Users/n v/it'\\''s $HOME;`x`*' --session session-1 --json",
+			])
+			expect(panel.resumePanel).toContain(`- ${commands[3]}`)
+		})
+
+		test.each([
+			["a leading equals sign (zsh equals expansion)", "=lkr-1", "'=lkr-1'"],
+			["a tilde (home expansion)", "~lkr", "'~lkr'"],
+			["a hash (comment start)", "lkr#1", "'lkr#1'"],
+			["an equals sign after the first character", "lkr=1", "lkr=1"],
+		])("a Bead id with %s is rendered %s", (_label, beadId, rendered) => {
+			const facts = buildPanel({ binding: validateBinding(binding({ beadId }), NOW).binding, stale: false, store: STORE, bead: bead(), gates: [], prime: null }).facts
+			expect((facts.readOnlyCommands as string[])[0]).toBe(`BEADS_DIR=/ws/.beads /opt/bd show ${rendered} --readonly --json --include-comments`)
+		})
+
+		test.each([
+			[0, [`BEADS_DIR=${workspace}/.beads`, "/opt/b d/bd", "show", "lkr-1", "--readonly", "--json", "--include-comments"]],
+			[2, [`BEADS_DIR=${workspace}/.beads`, "/opt/b d/bd", "where", "--readonly", "--json"]],
+			[3, ["msb-workflow", "recover", "--workspace", workspace, "--session", "session-1", "--json"]],
+		])("a real sh splits command %i into the exact words with nothing expanded, globbed or run", (index, words) => {
+			// `set --` re-parses the rendered line exactly as a paste would; each resulting word is printed on its own line.
+			const shell = Bun.spawnSync(["sh", "-c", `set -- ${commands[index]}; printf '%s\\n' "$@"`], { env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent" }, stdout: "pipe", stderr: "pipe" })
+			expect(shell.stderr.toString()).toBe("")
+			expect(shell.stdout.toString()).toBe(`${words.join("\n")}\n`)
+		})
+	})
+
 	test("changed since binding follows the Bead's updated_at against beadObservedAt", () => {
 		const panel = buildPanel({ binding: saved, stale: false, store: STORE, bead: bead({ updatedAt: "2026-09-17T07:00:00Z" }), gates: [], prime: null })
 		expect((panel.facts.binding as { changedSinceBinding: boolean }).changedSinceBinding).toBe(true)

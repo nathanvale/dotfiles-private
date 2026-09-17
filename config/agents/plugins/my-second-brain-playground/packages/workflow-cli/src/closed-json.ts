@@ -11,6 +11,9 @@ const JSON_SPACE = new Set([" ", "\t", "\n", "\r"])
 
 class Parser {
 	private index = 0
+	/** Sticky, so a number is matched in place at `index` without copying the unparsed tail; owned per Parser because
+	 * `lastIndex` is mutable state. */
+	private readonly numberPattern = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y
 
 	constructor(private readonly text: string) {}
 
@@ -92,9 +95,10 @@ class Parser {
 	}
 
 	private number(): number {
-		const match = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(this.text.slice(this.index))
+		this.numberPattern.lastIndex = this.index
+		const match = this.numberPattern.exec(this.text)
 		if (match === null) return this.fail("invalid JSON number")
-		this.index += match[0].length
+		this.index = this.numberPattern.lastIndex
 		const value = Number(match[0])
 		if (!Number.isFinite(value)) return this.fail("non-finite JSON number")
 		return value

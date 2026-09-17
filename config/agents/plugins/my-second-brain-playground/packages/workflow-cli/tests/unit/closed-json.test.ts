@@ -34,6 +34,28 @@ describe("parseClosedJsonBytes", () => {
 		expect(() => parseClosedJsonBytes(bytes(text), LIMIT)).toThrow(message)
 	})
 
+	test("numbers are matched in place: each one starts exactly where the previous token ended", () => {
+		const text = '{"k": 10, "v": 2, "w": [3, 1e2, -0.5, 4]}'
+		expect(parseClosedJsonBytes(bytes(text), LIMIT)).toEqual({ k: 10, v: 2, w: [3, 100, -0.5, 4] })
+		// Two parsers in one process never share matching state.
+		expect(parseClosedJsonBytes(bytes("[7, 8]"), LIMIT)).toEqual([7, 8])
+		expect(parseClosedJsonBytes(bytes("[9]"), LIMIT)).toEqual([9])
+	})
+
+	test.each([
+		["a lone minus sign", "-", /invalid JSON number/],
+		["a minus before a letter", "[1, -x]", /invalid JSON number/],
+		["a non-finite number after other values", "[1, 2, 1e999]", /non-finite JSON number/],
+		["a number followed by a letter", "[1x]", /expected ',' or ']'/],
+	])("refuses %s", (_label, text, message) => {
+		expect(() => parseClosedJsonBytes(bytes(text), LIMIT)).toThrow(message)
+	})
+
+	test("tens of thousands of short numbers inside the hook bound decode as JSON.parse does", () => {
+		const text = `[${Array.from({ length: 40_000 }, (_, index) => index % 10).join(",")}]`
+		expect(parseClosedJsonBytes(bytes(text), 128 * 1024)).toEqual(JSON.parse(text))
+	})
+
 	test("refuses input over the byte bound before decoding it", () => {
 		expect(() => parseClosedJsonBytes(bytes(`"${"x".repeat(LIMIT)}"`), LIMIT)).toThrow(/exceeds 1024 bytes/)
 	})

@@ -3,7 +3,7 @@
 // file in machine mode (the accepted reading of "without writing"), so the diagnostics-directory check below verifies
 // the directory's safety, not its prior existence.
 
-import { existsSync, lstatSync } from "node:fs"
+import { lstatSync } from "node:fs"
 import type { RecoveryStore } from "../adapters/recovery.ts"
 import { summarizeMarker } from "../compaction-marker.ts"
 import type { Diagnostics } from "../diagnostics.ts"
@@ -35,8 +35,11 @@ function directoryCheck(name: string, path: string, repair: string): Check {
 		if (stat.uid !== uid) return fail(name, `${path} is not owned by the effective user`, repair)
 		if ((stat.mode & 0o777) !== 0o700) return fail(name, `${path} mode is not 0700`, repair)
 		return pass(name, `${path} is a private 0700 directory`)
-	} catch {
-		return skipped(name, `${path} does not exist yet; it is created 0700 on first use`)
+	} catch (error) {
+		// Only an absent entry is "not yet"; an unreadable parent, a file in the path or a symlink loop is a failure.
+		const code = (error as { code?: unknown }).code
+		if (code === "ENOENT") return skipped(name, `${path} does not exist yet; it is created 0700 on first use`)
+		return fail(name, `${path} is not accessible (${typeof code === "string" ? code : "lstat failed"})`, repair)
 	}
 }
 
@@ -94,7 +97,10 @@ function bindingChecks(context: CommandContext, stateHome: string, request: Insp
 	if (session === null) return [...checks, skipped("binding", "no --session or CODEX_SESSION_ID supplied"), skipped("marker", "no session supplied"), skipped("lock-files", "no session supplied")]
 	const store = context.openStore(stateHome)
 	checks.push(bindingCheck(store, request, session, context.now().getTime()), markerCheck(store, request, session), lockFilesCheck(store, request, session))
-	if (existsSync(addresses.sessions)) checks.push(directoryCheck("sessions-directory", addresses.sessions, "Repair the sessions directory to a private 0700 directory you own"))
+	// The row is omitted only for an absent (ENOENT) directory, which is created 0700 by the first bind; an unreadable
+	// (EACCES), looped (ELOOP) or non-directory sessions entry is a failed prerequisite, never a silent omission.
+	const sessions = directoryCheck("sessions-directory", addresses.sessions, "Repair the sessions directory to a private 0700 directory you own")
+	if (sessions.status !== "skipped") checks.push(sessions)
 	return checks
 }
 

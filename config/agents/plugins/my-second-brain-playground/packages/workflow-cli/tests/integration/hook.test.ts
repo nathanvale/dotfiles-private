@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { BEAD, bindingPath, bindSession, createRoot, diagnosticsDirectory, FIXTURE_BD, hookEvent, hookOutputOf, markerPath, modeOf, readJsonFile, removeRoot, retainedBytes, type Root, type Run, runCli, runHook, runHookWithFault, SECRET_BEAD, SECRET_MARKER, spawnLockHolder, stateListing, steerBd } from "../fixtures/harness.ts"
 
 // The `hook` command through a real process: one Harness event on stdin, Harness JSON or silence on stdout, exit 0
@@ -138,6 +138,18 @@ describe("hook input and admission: every invalid input is silent", () => {
 	test("a nonexistent cwd is silent", async () => {
 		await bindSession(root, SESSION)
 		expectSilent(await runHook(root, startup({ cwd: join(root.privateRoot, "absent") })))
+	})
+
+	test("a cwd that is not spelled canonically is silent, never normalised: a symlink alias, a trailing slash, a dot segment", async () => {
+		await bindSession(root, SESSION)
+		const alias = join(realpathSync(mkdtempSync(join(tmpdir(), "msb-alias-"))), "link")
+		extraDirectories.push(dirname(alias))
+		symlinkSync(root.privateRoot, alias)
+		const before = durableListing(root)
+		for (const cwd of [alias, `${root.privateRoot}/`, `${root.privateRoot}/.`, `${root.privateRoot}/workspace/..`]) expectSilent(await runHook(root, startup({ cwd })))
+		expect(durableListing(root)).toEqual(before)
+		// The same directory spelled canonically is admitted.
+		expect(expectHook(await runHook(root, startup()))?.hookEventName).toBe("SessionStart")
 	})
 
 	test("a missing binding is silent for every event (the Spec overrides the legacy unbound guidance)", async () => {

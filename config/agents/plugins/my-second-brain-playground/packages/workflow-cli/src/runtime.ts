@@ -112,7 +112,9 @@ function assertPrivateFile(path: string, expected?: Stats): Stats {
 	return named
 }
 
-function privateEntryExists(path: string): boolean {
+/** True when a private entry exists by name (lstat, so a symlink is an entry); only ENOENT is "absent", any other
+ * failure to reach the name is "unavailable" and never reads as absent. */
+export function privateEntryExists(path: string): boolean {
 	try {
 		return lstatSync(path) !== undefined
 	} catch (error) {

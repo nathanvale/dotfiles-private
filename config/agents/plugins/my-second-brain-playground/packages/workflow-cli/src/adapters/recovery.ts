@@ -2,14 +2,14 @@
 // locked section every write runs in. It never reads or writes the schema-v2 Python addresses under
 // my-second-brain-playground/recovery/sessions/, and never spawns the preserved Python launcher.
 
-import { existsSync, lstatSync } from "node:fs"
+import { lstatSync } from "node:fs"
 import type { Stats } from "node:fs"
 import { parseClosedJsonBytes } from "../closed-json.ts"
 import { type CompactionMarker, emptyMarker, MARKER_LIMIT_BYTES, parseMarker } from "../compaction-marker.ts"
 import type { LockAdapter } from "../lock-adapter.ts"
 import type { RecoveryBinding } from "../model.ts"
 import { BINDING_LIMIT_BYTES, validateBinding } from "../recovery.ts"
-import { assertPrivateAncestors, type AtomicWriteHooks, atomicWritePrivate, readPrivateFile, RuntimeFailure, stateAddresses, withLocks, withSessionLock } from "../runtime.ts"
+import { assertPrivateAncestors, type AtomicWriteHooks, atomicWritePrivate, privateEntryExists, readPrivateFile, RuntimeFailure, stateAddresses, withLocks, withSessionLock } from "../runtime.ts"
 
 export type BindingRead =
 	| { readonly status: "absent" }
@@ -70,8 +70,10 @@ function lockFileCheck(path: string): LockFileCheck {
 export function createRecoveryStore(stateHome: string, lockAdapter: LockAdapter, hooks: RecoveryStoreHooks = {}): RecoveryStore {
 	const addresses = stateAddresses(stateHome)
 	const readPrivate = (path: string, limit: number): Buffer | null => {
-		// Ancestors are verified read-only before the file: an absent helper directory means an absent record, never a write.
-		if (!existsSync(addresses.sessions)) return null
+		// Ancestors are verified read-only before the file: an absent (ENOENT) helper directory means an absent record, never
+		// a write. Any other failure to reach it (EACCES, ELOOP, ENOTDIR) throws and is classified unavailable or unsafe,
+		// so a binding that exists but cannot be read is never reported absent.
+		if (!privateEntryExists(addresses.sessions)) return null
 		assertPrivateAncestors(stateHome, addresses.sessions)
 		return readPrivateFile(path, limit)
 	}

@@ -269,6 +269,40 @@ describe("bind: the one local write", () => {
 	})
 
 	test.each([
+		["a missing database", "database does not exist"],
+		["a differently cased absent-issue value", "No Issues Found Matching The Provided IDs"],
+		["an issue-not-found phrasing bd 1.2.2 was never observed to emit", "issue lkr-fixture not found"],
+	])("%s is an error value outside the observed absent-issue allowlist: unavailable, exit 75, not a missing Bead", async (_label, error) => {
+		steerBd(root, { showError: { [BEAD]: error } })
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
+		expectEnvelope(run, "msb-workflow.bind", { exit: 75, outcome: "failed", causeCode: "UNAVAILABLE_BEADS_READ", transactionState: "unchanged", retryable: true, retryDelayMilliseconds: 1000 })
+		expect(durableListing(root)).toEqual([])
+	})
+
+	test.each([
+		["the pinned revision as the branch text with another revision", "bd version 1.2.2 (deadbeef0: 6c124203e771@deadbeef0000)"],
+		["no parenthesised build field", "bd version 1.2.2 6c124203e771"],
+		["a patch version bump at the pinned revision", "bd version 1.2.3 (6c124203e: 6c124203e771)"],
+		["the pinned revision only as a prefix of the revision field", "bd version 1.2.2 (6c124203e: 6c124203e771433a)"],
+	])("%s refuses as a store mismatch before any write", async (_label, version) => {
+		steerBd(root, { version })
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
+		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_STORE_MISMATCH", transactionState: "unchanged", retryable: false })
+		expect(envelope.message).toBe("bd executable is not the verified 1.2.2 at 6c124203e771")
+		expect(durableListing(root)).toEqual([])
+	})
+
+	test.each([
+		["outside a Git directory", "bd version 1.2.2 (6c124203e: 6c124203e771)"],
+		["inside a Git directory, with the branch appended", "bd version 1.2.2 (6c124203e: codex/lkr-195-recovery-helper-private@6c124203e771)"],
+		["with a branch containing @ and parentheses", "bd version 1.2.2 (6c124203e: release@2026(a)@6c124203e771)"],
+	])("the pinned version line %s binds", async (_label, version) => {
+		steerBd(root, { version })
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
+		expectEnvelope(run, "msb-workflow.bind", { exit: 0, outcome: "success", causeCode: null, transactionState: "completed", retryable: false })
+	})
+
+	test.each([
 		["a wrong store path", { wherePath: "/elsewhere/.beads" }],
 		["a wrong bd version", { version: "bd version 1.3.0 (abcdef0: abcdef0123456)" }],
 		["a prefix that disagrees with configuration", { configPrefix: "zzz" }],
@@ -298,6 +332,14 @@ describe("bind: the one local write", () => {
 		expectEnvelope(missing, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_EXECUTABLE_INVALID", transactionState: "unchanged", retryable: false })
 		const relative = await runCli(root, bindArgs(root, SESSION, BEAD), { env: { MSB_WORKFLOW_BD_EXECUTABLE: "bd" } })
 		expectEnvelope(relative, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_EXECUTABLE_INVALID", transactionState: "unchanged", retryable: false })
+		expect(durableListing(root)).toEqual([])
+	})
+
+	test("the production entry refuses the fixture bd: it is not the accepted path, whatever version it prints", async () => {
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD), { entry: "production" })
+		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_EXECUTABLE_INVALID", transactionState: "unchanged", retryable: false })
+		// The accepted path is the Ticket #58 literal, never read from the helper.
+		expect(envelope.message).toBe(`bd executable ${FIXTURE_BD} is not the accepted /Users/nathanvale/.local/state/trustworthy-engineering-loop-prototype/beads/bd`)
 		expect(durableListing(root)).toEqual([])
 	})
 
@@ -613,6 +655,35 @@ describe("inspect: read-only prerequisites", () => {
 		expect(durableListing(root)).toEqual(before)
 	})
 
+	test.each([
+		["a regular file where the helper directory belongs (ENOTDIR)", "ENOTDIR", (plugin: string) => writeFileSync(join(plugin, "workflow-cli"), "")],
+		["a symlink loop on the plugin directory (ELOOP)", "ELOOP", (plugin: string) => symlinkSync(plugin, plugin)],
+	])("%s fails the diagnostics-directory prerequisite with its repair, never a skip", async (_label, code, plant) => {
+		const plugin = join(root.stateHome, "my-second-brain-playground")
+		if (code !== "ELOOP") mkdirSync(plugin, { mode: 0o700 })
+		plant(plugin)
+		const run = await runCli(root, inspectArgs(root, null))
+		expectEnvelope(run, "msb-workflow.inspect", { exit: 3, outcome: "refused", causeCode: "DOMAIN_PREREQUISITE_FAILED", transactionState: "unchanged", retryable: false })
+		const check = (resultOf(run).checks as { name: string; status: string; detail: string; repair: string | null }[]).find((entry) => entry.name === "diagnostics-directory")
+		expect(check?.status).toBe("fail")
+		expect(check?.detail).toBe(`${join(plugin, "workflow-cli", "diagnostics")} is not accessible (${code})`)
+		expect(check?.repair).toBe("Repair the diagnostics directory to a private 0700 directory you own (a machine-mode run creates it 0700 when absent)")
+	})
+
+	test.skipIf(typeof process.geteuid === "function" && process.geteuid() === 0)("an unreadable plugin directory (EACCES) fails the diagnostics-directory prerequisite, never a skip", async () => {
+		const plugin = join(root.stateHome, "my-second-brain-playground")
+		mkdirSync(plugin, { mode: 0o000 })
+		try {
+			const run = await runCli(root, inspectArgs(root, null))
+			expectEnvelope(run, "msb-workflow.inspect", { exit: 3, outcome: "refused", causeCode: "DOMAIN_PREREQUISITE_FAILED", transactionState: "unchanged", retryable: false })
+			const check = (resultOf(run).checks as { name: string; status: string; detail: string }[]).find((entry) => entry.name === "diagnostics-directory")
+			expect(check?.status).toBe("fail")
+			expect(check?.detail).toBe(`${join(plugin, "workflow-cli", "diagnostics")} is not accessible (EACCES)`)
+		} finally {
+			chmodSync(plugin, 0o700)
+		}
+	})
+
 	test("names an absent binding with one repair and writes no binding, marker or lock", async () => {
 		const run = await runCli(root, inspectArgs(root, SESSION))
 		const envelope = expectEnvelope(run, "msb-workflow.inspect", { exit: 3, outcome: "refused", causeCode: "DOMAIN_PREREQUISITE_FAILED", transactionState: "unchanged", retryable: false })
@@ -621,6 +692,71 @@ describe("inspect: read-only prerequisites", () => {
 		expect(checks.filter((check) => check.status === "fail").map((check) => check.name)).toEqual(["binding"])
 		expect(durableListing(root)).toEqual([])
 		expectHumanRefusal(await runCli(root, ["inspect", "--workspace", root.workspace, "--session", SESSION]), "DOMAIN_PREREQUISITE_FAILED", 3)
+	})
+
+	// Only ENOENT means "absent". Every other failure to reach the sessions tree (EACCES, ELOOP, ENOTDIR) must surface
+	// as unavailable or unsafe: a bound session whose binding cannot be read is never reported as "no binding".
+	// The EACCES rows are skipped as root, because root traverses a 0000 directory and the failure is unobservable.
+	test.skipIf(typeof process.geteuid === "function" && process.geteuid() === 0)("an unreadable sessions tree (EACCES) after bind fails sessions-directory and never reports the binding absent", async () => {
+		await bindSession(root, SESSION)
+		const recovery = join(root.stateHome, "my-second-brain-playground", "workflow-cli", "recovery")
+		const sessions = join(recovery, "sessions")
+		chmodSync(recovery, 0o000)
+		try {
+			const run = await runCli(root, inspectArgs(root, SESSION))
+			expectEnvelope(run, "msb-workflow.inspect", { exit: 3, outcome: "refused", causeCode: "DOMAIN_PREREQUISITE_FAILED", transactionState: "unchanged", retryable: false })
+			const checks = resultOf(run).checks as { name: string; status: string; detail: string; repair: string | null }[]
+			const binding = checks.find((check) => check.name === "binding")
+			expect(binding?.status).toBe("fail")
+			expect(binding?.detail.startsWith("no binding at")).toBe(false)
+			expect(binding?.repair).toBe("Repair the named private state entry (owner, mode 0600/0700, no symlink, one link)")
+			const directory = checks.find((check) => check.name === "sessions-directory")
+			expect(directory?.status).toBe("fail")
+			expect(directory?.detail).toBe(`${sessions} is not accessible (EACCES)`)
+			expect(directory?.repair).toBe("Repair the sessions directory to a private 0700 directory you own")
+			expect(checks.find((check) => check.name === "marker")?.status).toBe("fail")
+		} finally {
+			chmodSync(recovery, 0o700)
+		}
+	})
+
+	test.skipIf(typeof process.geteuid === "function" && process.geteuid() === 0)("recover on an unreadable sessions tree (EACCES) is unavailable, never DOMAIN_BINDING_ABSENT", async () => {
+		await bindSession(root, SESSION)
+		const recovery = join(root.stateHome, "my-second-brain-playground", "workflow-cli", "recovery")
+		chmodSync(recovery, 0o000)
+		try {
+			const run = await runCli(root, recoverArgs(root, SESSION))
+			const envelope = expectEnvelope(run, "msb-workflow.recover", { exit: 75, outcome: "failed", causeCode: "UNAVAILABLE_BEADS_READ", transactionState: "unchanged", retryable: true, retryDelayMilliseconds: 1000 })
+			expect(envelope.causeCode).not.toBe("DOMAIN_BINDING_ABSENT")
+			expect(envelope.message).toBe(`${join(recovery, "sessions")} is not accessible`)
+		} finally {
+			chmodSync(recovery, 0o700)
+		}
+	})
+
+	test.each([
+		["sessions itself is the loop", "sessions", (recovery: string) => `${join(recovery, "sessions")} is not a real directory`],
+		["the recovery parent is the loop (ELOOP)", "recovery", (recovery: string) => `${join(recovery, "sessions")} is not accessible (ELOOP)`],
+	])("a symlink loop where %s fails sessions-directory and never reports the binding absent", async (_label, loopAt, expectedDetail) => {
+		const helper = join(root.stateHome, "my-second-brain-playground", "workflow-cli")
+		const recovery = join(helper, "recovery")
+		if (loopAt === "sessions") {
+			mkdirSync(recovery, { recursive: true, mode: 0o700 })
+			symlinkSync(join(recovery, "sessions"), join(recovery, "sessions"))
+		} else {
+			mkdirSync(helper, { recursive: true, mode: 0o700 })
+			symlinkSync(recovery, recovery)
+		}
+		const run = await runCli(root, inspectArgs(root, SESSION))
+		expectEnvelope(run, "msb-workflow.inspect", { exit: 3, outcome: "refused", causeCode: "DOMAIN_PREREQUISITE_FAILED", transactionState: "unchanged", retryable: false })
+		const checks = resultOf(run).checks as { name: string; status: string; detail: string; repair: string | null }[]
+		const binding = checks.find((check) => check.name === "binding")
+		expect(binding?.status).toBe("fail")
+		expect(binding?.detail.startsWith("no binding at")).toBe(false)
+		const directory = checks.find((check) => check.name === "sessions-directory")
+		expect(directory?.status).toBe("fail")
+		expect(directory?.detail).toBe(expectedDetail(recovery))
+		expect(directory?.repair).toBe("Repair the sessions directory to a private 0700 directory you own")
 	})
 
 	test("names a malformed binding and an unsafe lock file", async () => {

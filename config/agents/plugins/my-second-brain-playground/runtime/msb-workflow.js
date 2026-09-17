@@ -3595,23 +3595,35 @@ function describeFailure(result) {
 // packages/workflow-cli/src/adapters/beads.ts
 var PINNED_BD_VERSION = "1.2.2";
 var PINNED_BD_REVISION = "6c124203e771";
-var ABSENT_ISSUE_PATTERN = /no issues? found|not found|does not exist/i;
+var VERSION_LINE = /^bd version (\S+) \(\S+: (?:.*@)?([0-9a-f]+)\)$/;
+var ABSENT_ISSUE_VALUES = new Set(["no issues found matching the provided IDs"]);
 var REASON_LIMIT = 200;
-function checkExecutable(executable) {
+function checkExecutable(executable, pin) {
   if (executable === null || executable.length === 0)
     return { status: "invalid", reason: "MSB_WORKFLOW_BD_EXECUTABLE is not set; PATH discovery is never used", digest: null };
   if (!isAbsolute2(executable))
     return { status: "invalid", reason: "bd executable path must be absolute", digest: null };
+  if (executable !== pin.executable)
+    return { status: "invalid", reason: `bd executable ${executable} is not the accepted ${pin.executable}`, digest: null };
+  let digest;
   try {
     if (realpathSync(executable) !== executable)
       return { status: "invalid", reason: "bd executable path must be canonical (no symlinks)", digest: null };
     if (!statSync2(executable).isFile())
       return { status: "invalid", reason: "bd executable is not a regular file", digest: null };
     accessSync(executable, constants2.X_OK);
-    return { status: "valid", reason: null, digest: createHash("sha256").update(readFileSync(executable)).digest("hex") };
+    digest = createHash("sha256").update(readFileSync(executable)).digest("hex");
   } catch {
     return { status: "invalid", reason: "bd executable is missing or not executable", digest: null };
   }
+  if (digest !== pin.sha256)
+    return { status: "invalid", reason: `bd executable ${executable} hashes ${digest}, not the accepted ${pin.sha256}`, digest: null };
+  return { status: "valid", reason: null, digest };
+}
+function parseVersionLine(stdout) {
+  const match = VERSION_LINE.exec(stdout.split(`
+`)[0] ?? "");
+  return match === null ? null : { version: match[1], revision: match[2] };
 }
 function bounded(text) {
   return text.length > REASON_LIMIT ? `${text.slice(0, REASON_LIMIT)}\u2026` : text;
@@ -3694,7 +3706,8 @@ function createBeadsReader(configuration) {
     const version = await bd(["version"]);
     if (version.status !== "exited" || version.exit !== 0)
       return { status: "unavailable", reason: `bd version ${describeFailure(version)}` };
-    if (!version.stdout.includes(`bd version ${PINNED_BD_VERSION} `) || !version.stdout.includes(PINNED_BD_REVISION))
+    const parsed = parseVersionLine(version.stdout);
+    if (parsed === null || parsed.version !== PINNED_BD_VERSION || parsed.revision !== PINNED_BD_REVISION)
       return { status: "mismatch", reason: `bd executable is not the verified ${PINNED_BD_VERSION} at ${PINNED_BD_REVISION}` };
     return null;
   }
@@ -3728,7 +3741,7 @@ function createBeadsReader(configuration) {
     return null;
   }
   async function verifyStore(cwdIsGitRepository) {
-    const executable = checkExecutable(configuration.executable);
+    const executable = checkExecutable(configuration.executable, configuration.pin);
     if (executable.status === "invalid")
       return { status: "executable-invalid", reason: executable.reason ?? "bd executable is invalid" };
     const version = await checkVersion();
@@ -3750,7 +3763,7 @@ function createBeadsReader(configuration) {
     if (reply.kind === "unavailable")
       return { status: "unavailable", reason: reply.reason };
     if (reply.kind === "error")
-      return ABSENT_ISSUE_PATTERN.test(reply.value) ? { status: "missing", reason: bounded(reply.value) } : { status: "unavailable", reason: `bd show: ${bounded(reply.value)}` };
+      return ABSENT_ISSUE_VALUES.has(reply.value.trim()) ? { status: "missing", reason: bounded(reply.value) } : { status: "unavailable", reason: `bd show: ${bounded(reply.value)}` };
     const issue = Array.isArray(reply.value) ? reply.value[0] : reply.value;
     if (!isRecord(issue) || stringField(issue, "id") !== id)
       return { status: "missing", reason: `bd show returned no issue with id ${id}` };
@@ -3795,7 +3808,7 @@ async function gitTopLevel(cwd) {
 }
 
 // packages/workflow-cli/src/adapters/recovery.ts
-import { existsSync as existsSync2, lstatSync as lstatSync3 } from "fs";
+import { lstatSync as lstatSync3 } from "fs";
 
 // packages/workflow-cli/src/closed-json.ts
 class ClosedJsonError extends Error {
@@ -3807,6 +3820,7 @@ var JSON_SPACE = new Set([" ", "\t", `
 class Parser {
   text;
   index = 0;
+  numberPattern = /-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/y;
   constructor(text) {
     this.text = text;
   }
@@ -3904,10 +3918,11 @@ class Parser {
     return this.fail("unterminated JSON string");
   }
   number() {
-    const match = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(this.text.slice(this.index));
+    this.numberPattern.lastIndex = this.index;
+    const match = this.numberPattern.exec(this.text);
     if (match === null)
       return this.fail("invalid JSON number");
-    this.index += match[0].length;
+    this.index = this.numberPattern.lastIndex;
     const value = Number(match[0]);
     if (!Number.isFinite(value))
       return this.fail("non-finite JSON number");
@@ -4106,13 +4121,17 @@ function nextSafeAction(bead, blockers, gates) {
     return `Continue ${bead.id} from the evidence pointer and the last comment; record the next checkpoint with native bd comment before compaction`;
   return `Claim ${bead.id} through native bd before starting work; the binding records intent, not a claim`;
 }
+var SHELL_SAFE = /^[A-Za-z0-9_@%+:,./-][A-Za-z0-9_@%+=:,./-]*$/;
+function shellQuote(value) {
+  return SHELL_SAFE.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`;
+}
 function readOnlyCommands(binding) {
-  const prefix = `BEADS_DIR=${binding.storePath} ${binding.beadsExecutable}`;
+  const prefix = `BEADS_DIR=${shellQuote(binding.storePath)} ${shellQuote(binding.beadsExecutable)}`;
   return [
-    `${prefix} show ${binding.beadId} --readonly --json --include-comments`,
+    `${prefix} show ${shellQuote(binding.beadId)} --readonly --json --include-comments`,
     `${prefix} gate list --all --readonly --json`,
     `${prefix} where --readonly --json`,
-    `msb-workflow recover --workspace ${binding.workspace} --session ${binding.sessionIdentity} --json`
+    `msb-workflow recover --workspace ${shellQuote(binding.workspace)} --session ${shellQuote(binding.sessionIdentity)} --json`
   ];
 }
 function buildPanel(inputs) {
@@ -4412,7 +4431,7 @@ function lockFileCheck(path) {
 function createRecoveryStore(stateHome, lockAdapter, hooks = {}) {
   const addresses = stateAddresses(stateHome);
   const readPrivate = (path, limit) => {
-    if (!existsSync2(addresses.sessions))
+    if (!privateEntryExists(addresses.sessions))
       return null;
     assertPrivateAncestors(stateHome, addresses.sessions);
     return readPrivateFile(path, limit);
@@ -4470,6 +4489,7 @@ function createRecoveryStore(stateHome, lockAdapter, hooks = {}) {
 }
 
 // packages/workflow-cli/src/adapters/native.ts
+var PRODUCTION_BD_PIN = { executable: "/Users/nathanvale/.local/state/trustworthy-engineering-loop-prototype/beads/bd", sha256: "9581d8bcd9662ccf9d889ee8d879787e32cd4c0249d93374eeac5044e9f24351" };
 function stateRootIssue(configured) {
   if (configured.length === 0)
     return "the configured state root must be nonempty";
@@ -4504,7 +4524,7 @@ function productionContext(env, cwd, options = {}) {
     now: () => new Date,
     stateRoot: selectStateRoot(env),
     openStore: (stateHome) => createRecoveryStore(stateHome, lockAdapterFor(platform), options.storeHooks ?? {}),
-    openBeads: (executable, workspace, processCwd) => createBeadsReader({ executable, workspace, cwd: processCwd }),
+    openBeads: (executable, workspace, processCwd) => createBeadsReader({ executable, workspace, cwd: processCwd, pin: PRODUCTION_BD_PIN }),
     gitTopLevel,
     openDiagnostics
   };
@@ -4528,7 +4548,7 @@ var ROWS = [
   ...shared("session-conflict", "--session and CODEX_SESSION_ID are both present and differ", "refused", "DOMAIN_SESSION_CONFLICT", "unchanged", false, null, "next-action", ROUTED),
   ...shared("internal-failure", "An unexpected exception before any durable write", "failed", "INTERNAL_UNEXPECTED", "unchanged", false, null, "handoff", ROUTED),
   ...shared("beads-unavailable", "A native bd read failed to start, timed out, returned no JSON, or returned an error value that names no absent Bead (no_beads_directory, contention, unclassified)", "failed", "UNAVAILABLE_BEADS_READ", "unchanged", true, 1000, "next-action", ROUTED),
-  ...shared("executable-refused", "The bd executable named by MSB_WORKFLOW_BD_EXECUTABLE or the binding is unset, relative, missing, not a regular file, or not executable", "refused", "DOMAIN_EXECUTABLE_INVALID", "unchanged", false, null, "next-action", READERS),
+  ...shared("executable-refused", "The bd executable named by MSB_WORKFLOW_BD_EXECUTABLE or the binding was not accepted: it must be exactly the pinned absolute canonical path, a regular executable file, and hash to the pinned SHA-256 before any bd read; unset, relative, another path, a symlink, missing, not executable, or another digest all refuse", "refused", "DOMAIN_EXECUTABLE_INVALID", "unchanged", false, null, "next-action", READERS),
   ...shared("store-mismatch", "bd version is not 1.2.2 at 6c124203e771, where.path is not <workspace>/.beads, the prefix disagrees with effective configuration, or context is redirected", "refused", "DOMAIN_STORE_MISMATCH", "unchanged", false, null, "next-action", READERS),
   ...shared("state-unsafe", "A private state ancestor, lock file, marker, or binding has unsafe ownership, type, mode, link count, or identity", "refused", "DOMAIN_STATE_UNSAFE", "unchanged", false, null, "next-action", READERS),
   ...shared("binding-invalid", "The saved binding is not one bounded schema-v3 object: malformed bytes, duplicate keys, unknown or missing fields, null identities, or future skew", "refused", "SCHEMA_BINDING_INVALID", "unchanged", false, null, "next-action", READERS),
@@ -4588,7 +4608,7 @@ import { lstatSync as lstatSync5, realpathSync as realpathSync4 } from "fs";
 import { isAbsolute as isAbsolute6, relative, sep as sep3 } from "path";
 
 // packages/workflow-cli/src/commands/shared.ts
-import { existsSync as existsSync3, realpathSync as realpathSync3, statSync as statSync3 } from "fs";
+import { existsSync as existsSync2, realpathSync as realpathSync3, statSync as statSync3 } from "fs";
 import { isAbsolute as isAbsolute5, join as join5 } from "path";
 function refusal(station, message, repairAction, nextAction, result = {}) {
   return { station, message, result: { station, ...result }, repairAction, nextAction, availablePaths: [], handoffPrerequisites: [] };
@@ -4636,7 +4656,7 @@ function stateRootOutcome(reason) {
 function isGitRepository(cwd) {
   let current = cwd;
   for (;; ) {
-    if (existsSync3(join5(current, ".git")))
+    if (existsSync2(join5(current, ".git")))
       return true;
     const parent = join5(current, "..");
     if (realpathSafe(parent) === realpathSafe(current))
@@ -4857,8 +4877,7 @@ function canonicalDirectory(value) {
   if (typeof value !== "string" || value.length === 0 || value.length > 2048 || /[\0\r\n]/.test(value) || !isAbsolute7(value))
     return null;
   try {
-    const real = realpathSync5(value);
-    return statSync4(real).isDirectory() ? real : null;
+    return realpathSync5(value) === value && statSync4(value).isDirectory() ? value : null;
   } catch {
     return null;
   }
@@ -5053,7 +5072,7 @@ async function runHook(stdin, context, diagnostics, emit, faults = {}) {
 }
 
 // packages/workflow-cli/src/commands/inspect.ts
-import { existsSync as existsSync4, lstatSync as lstatSync6 } from "fs";
+import { lstatSync as lstatSync6 } from "fs";
 var pass = (name, detail) => ({ name, status: "pass", detail, repair: null });
 var fail = (name, detail, repair) => ({ name, status: "fail", detail, repair });
 var skipped = (name, detail) => ({ name, status: "skipped", detail, repair: null });
@@ -5068,8 +5087,11 @@ function directoryCheck(name, path, repair) {
     if ((stat.mode & 511) !== 448)
       return fail(name, `${path} mode is not 0700`, repair);
     return pass(name, `${path} is a private 0700 directory`);
-  } catch {
-    return skipped(name, `${path} does not exist yet; it is created 0700 on first use`);
+  } catch (error) {
+    const code = error.code;
+    if (code === "ENOENT")
+      return skipped(name, `${path} does not exist yet; it is created 0700 on first use`);
+    return fail(name, `${path} is not accessible (${typeof code === "string" ? code : "lstat failed"})`, repair);
   }
 }
 async function storeChecks(context, request) {
@@ -5124,8 +5146,9 @@ function bindingChecks(context, stateHome, request, session) {
     return [...checks, skipped("binding", "no --session or CODEX_SESSION_ID supplied"), skipped("marker", "no session supplied"), skipped("lock-files", "no session supplied")];
   const store = context.openStore(stateHome);
   checks.push(bindingCheck(store, request, session, context.now().getTime()), markerCheck(store, request, session), lockFilesCheck(store, request, session));
-  if (existsSync4(addresses.sessions))
-    checks.push(directoryCheck("sessions-directory", addresses.sessions, "Repair the sessions directory to a private 0700 directory you own"));
+  const sessions = directoryCheck("sessions-directory", addresses.sessions, "Repair the sessions directory to a private 0700 directory you own");
+  if (sessions.status !== "skipped")
+    checks.push(sessions);
   return checks;
 }
 async function runInspect(request, context, stateHome, diagnostics) {

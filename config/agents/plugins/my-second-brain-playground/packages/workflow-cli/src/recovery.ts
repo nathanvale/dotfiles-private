@@ -100,13 +100,23 @@ function nextSafeAction(bead: BeadFacts, blockers: readonly string[], gates: rea
 	return `Claim ${bead.id} through native bd before starting work; the binding records intent, not a claim`
 }
 
+/** Characters a POSIX shell reads literally outside quotes, never leading with `=` (zsh equals expansion); any other
+ * value is single-quoted with `'` spelled `'\''`. */
+const SHELL_SAFE = /^[A-Za-z0-9_@%+:,./-][A-Za-z0-9_@%+=:,./-]*$/
+
+/** One pasteable shell word: the value is never left for the shell to split, glob, expand or run. */
+function shellQuote(value: string): string {
+	return SHELL_SAFE.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`
+}
+
+/** The commands are pasteable shell input, so every dynamic value is quoted as one word. */
 function readOnlyCommands(binding: RecoveryBinding): readonly string[] {
-	const prefix = `BEADS_DIR=${binding.storePath} ${binding.beadsExecutable}`
+	const prefix = `BEADS_DIR=${shellQuote(binding.storePath)} ${shellQuote(binding.beadsExecutable)}`
 	return [
-		`${prefix} show ${binding.beadId} --readonly --json --include-comments`,
+		`${prefix} show ${shellQuote(binding.beadId)} --readonly --json --include-comments`,
 		`${prefix} gate list --all --readonly --json`,
 		`${prefix} where --readonly --json`,
-		`msb-workflow recover --workspace ${binding.workspace} --session ${binding.sessionIdentity} --json`,
+		`msb-workflow recover --workspace ${shellQuote(binding.workspace)} --session ${shellQuote(binding.sessionIdentity)} --json`,
 	]
 }
 

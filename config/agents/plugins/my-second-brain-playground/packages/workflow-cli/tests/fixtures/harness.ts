@@ -2,13 +2,18 @@ import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpath
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
-// Public process seam: every scenario spawns a fresh `bun run src/cli.ts` under a fresh private root with a pinned,
-// scrubbed environment, an isolated MSB_WORKFLOW_STATE_HOME, and the fixture bd shim as MSB_WORKFLOW_BD_EXECUTABLE.
-// Both streams are piped; stdin is ignored except for `hook`. Nothing here imports the modules under test; the
-// fault helpers compose the production context through its documented seam inside a fresh process.
+// Public process seam: every scenario spawns a fresh process under a fresh private root with a pinned, scrubbed
+// environment, an isolated MSB_WORKFLOW_STATE_HOME, and the fixture bd shim as MSB_WORKFLOW_BD_EXECUTABLE. The
+// default entry is the shim lane, tests/fixtures/checker/cli.ts, which runs the production main() with the Beads pin
+// composed from the named executable; `entry: "production"` spawns src/cli.ts with the accepted pin, which only the
+// native-storage suite and the pin-refusal test can pass. Both streams are piped; stdin is ignored except for
+// `hook`. Nothing here imports the modules under test; the fault helpers compose the same contexts inside a fresh
+// process through the documented seams.
 
 const PRODUCTION_CLI = resolve(import.meta.dir, "../../src/cli.ts")
+const FIXTURE_CLI = resolve(import.meta.dir, "checker/cli.ts")
 const NATIVE = resolve(import.meta.dir, "../../src/adapters/native.ts")
+const FIXTURE_CONTEXT = resolve(import.meta.dir, "checker/fixture-context.ts")
 export const FIXTURE_BD = resolve(import.meta.dir, "checker/bd")
 export const SECRET_MARKER = "CHECK_FIXTURE_SECRET_MARKER"
 export const BEAD = "lkr-fixture"
@@ -66,6 +71,8 @@ export interface RunOptions {
 	readonly cwd?: string
 	readonly stdin?: string
 	readonly timeoutMs?: number
+	/** The process entry: the shim lane (default) pins the named executable to its own bytes; "production" is src/cli.ts with the accepted pin. */
+	readonly entry?: "fixture" | "production"
 }
 
 function childEnvironment(root: Root, overrides: Record<string, string | undefined>): Record<string, string> {
@@ -92,14 +99,18 @@ async function spawnBun(args: readonly string[], root: Root, options: RunOptions
 	return { stdout, stderr, exit }
 }
 
-/** Drives the production entry in a fresh process. */
-export function runCli(root: Root, argv: readonly string[], options: RunOptions = {}): Promise<Run> {
-	return spawnBun(["run", PRODUCTION_CLI, ...argv], root, options)
+function entryOf(options: RunOptions): string {
+	return options.entry === "production" ? PRODUCTION_CLI : FIXTURE_CLI
 }
 
-/** Drives the production `hook` entry with one Harness event on stdin. */
+/** Drives the selected entry in a fresh process. */
+export function runCli(root: Root, argv: readonly string[], options: RunOptions = {}): Promise<Run> {
+	return spawnBun(["run", entryOf(options), ...argv], root, options)
+}
+
+/** Drives the selected entry's `hook` with one Harness event on stdin. */
 export function runHook(root: Root, event: unknown, options: RunOptions = {}): Promise<Run> {
-	return spawnBun(["run", PRODUCTION_CLI, "hook"], root, { ...options, stdin: typeof event === "string" ? event : JSON.stringify(event) })
+	return spawnBun(["run", entryOf(options), "hook"], root, { ...options, stdin: typeof event === "string" ? event : JSON.stringify(event) })
 }
 
 export type StoreFaultMode = "before-rename" | "after-rename" | "hold-lock-3s"
@@ -109,12 +120,12 @@ export type StoreFaultMode = "before-rename" | "after-rename" | "hold-lock-3s"
 export function runCliWithStoreFault(root: Root, argv: readonly string[], mode: StoreFaultMode, options: RunOptions = {}): Promise<Run> {
 	const script = `
 import { main } from ${JSON.stringify(PRODUCTION_CLI)}
-import { productionContext } from ${JSON.stringify(NATIVE)}
+import { fixtureContext } from ${JSON.stringify(FIXTURE_CONTEXT)}
 const mode = ${JSON.stringify(mode)}
 const fail = () => { throw new Error("controlled " + mode + " failure") }
 const hooks = mode === "before-rename" ? { beforeReplace: fail } : mode === "after-rename" ? { afterReplace: fail } : { beforeReplace: () => Bun.sleepSync(3000) }
 process.argv = [process.argv[0], "cli", ...${JSON.stringify(argv)}]
-main(productionContext(process.env, process.cwd(), { storeHooks: { bindingWrite: hooks } }))
+main(fixtureContext({ storeHooks: { bindingWrite: hooks } }))
 `
 	return spawnBun(["-e", script], root, options)
 }
@@ -137,11 +148,11 @@ export type HookFaultMode = "kill-after-claim" | "kill-after-output"
 export function runHookWithFault(root: Root, event: unknown, mode: HookFaultMode, options: RunOptions = {}): Promise<Run> {
 	const script = `
 import { main } from ${JSON.stringify(PRODUCTION_CLI)}
-import { productionContext } from ${JSON.stringify(NATIVE)}
+import { fixtureContext } from ${JSON.stringify(FIXTURE_CONTEXT)}
 const kill = () => process.kill(process.pid, "SIGKILL")
 const faults = ${JSON.stringify(mode)} === "kill-after-claim" ? { afterClaim: kill } : { afterOutput: kill }
 process.argv = [process.argv[0], "cli", "hook"]
-main(productionContext(process.env, process.cwd()), { hookFaults: faults })
+main(fixtureContext(), { hookFaults: faults })
 `
 	return spawnBun(["-e", script], root, { ...options, stdin: JSON.stringify(event) })
 }
@@ -150,9 +161,9 @@ main(productionContext(process.env, process.cwd()), { hookFaults: faults })
 export function runCliOnPlatform(root: Root, argv: readonly string[], platform: string, options: RunOptions = {}): Promise<Run> {
 	const script = `
 import { main } from ${JSON.stringify(PRODUCTION_CLI)}
-import { productionContext } from ${JSON.stringify(NATIVE)}
+import { fixtureContext } from ${JSON.stringify(FIXTURE_CONTEXT)}
 process.argv = [process.argv[0], "cli", ...${JSON.stringify(argv)}]
-main(productionContext(process.env, process.cwd(), { platform: ${JSON.stringify(platform)} }))
+main(fixtureContext({ platform: ${JSON.stringify(platform)} }))
 `
 	return spawnBun(["-e", script], root, options)
 }

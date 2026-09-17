@@ -1,6 +1,7 @@
-// Production composition: the one validated private state root, the Beads read Adapter, the Recovery Adapter over
-// the admitted Lock Adapter, the Git read, and the Diagnostics Module. Production always composes native owners;
-// tests reach the same runCli through this seam with faulted stores or a fixture bd named in the environment.
+// Production composition: the one validated private state root, the Beads read Adapter over the accepted bd pin, the
+// Recovery Adapter over the admitted Lock Adapter, the Git read, and the Diagnostics Module. Production always
+// composes native owners; tests reach the same runCli through this seam with faulted stores, or with the fixture bd
+// pinned to its own bytes by a test-owned openBeads (tests/fixtures/checker/fixture-context.ts).
 
 import { randomUUID } from "node:crypto"
 import { lstatSync } from "node:fs"
@@ -9,9 +10,12 @@ import { isAbsolute, join } from "node:path"
 import type { CommandContext, Environment, StateRoot } from "../commands/shared.ts"
 import { openDiagnostics } from "../diagnostics.ts"
 import { lockAdapterFor } from "../lock-adapter.ts"
-import { createBeadsReader } from "./beads.ts"
+import { type BeadsPin, createBeadsReader } from "./beads.ts"
 import { gitTopLevel } from "./git.ts"
 import { createRecoveryStore, type RecoveryStoreHooks } from "./recovery.ts"
+
+/** Ticket #58: the accepted native Beads executable. Any other path or digest refuses before any bd read. */
+const PRODUCTION_BD_PIN: BeadsPin = { executable: "/Users/nathanvale/.local/state/trustworthy-engineering-loop-prototype/beads/bd", sha256: "9581d8bcd9662ccf9d889ee8d879787e32cd4c0249d93374eeac5044e9f24351" }
 
 // The configured root is validated as written: no normalization, no symlink resolution, no creation. Ancestors may be
 // symlinks (macOS temp roots live under /var -> /private/var); the root entry itself must be a real owned directory.
@@ -53,7 +57,7 @@ export function productionContext(env: Environment, cwd: string, options: Compos
 		now: () => new Date(),
 		stateRoot: selectStateRoot(env),
 		openStore: (stateHome) => createRecoveryStore(stateHome, lockAdapterFor(platform), options.storeHooks ?? {}),
-		openBeads: (executable, workspace, processCwd) => createBeadsReader({ executable, workspace, cwd: processCwd }),
+		openBeads: (executable, workspace, processCwd) => createBeadsReader({ executable, workspace, cwd: processCwd, pin: PRODUCTION_BD_PIN }),
 		gitTopLevel,
 		openDiagnostics,
 	}

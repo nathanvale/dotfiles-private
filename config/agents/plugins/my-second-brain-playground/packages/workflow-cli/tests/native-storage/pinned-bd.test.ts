@@ -116,9 +116,9 @@ function nativeEnvironment(): Record<string, string> {
 	return { HOME: native.fakeHome, MSB_WORKFLOW_BD_EXECUTABLE: PINNED_BD }
 }
 
-/** The production entry with the pinned executable configured, run from the workspace (its own Git top level). */
+/** The production entry, with the accepted pin, and the pinned executable configured, run from the workspace (its own Git top level). */
 function run(argv: readonly string[], cwd = native.root.workspace): Promise<Run> {
-	return runCli(native.root, argv, { cwd, env: nativeEnvironment(), timeoutMs: 60_000 })
+	return runCli(native.root, argv, { cwd, env: nativeEnvironment(), timeoutMs: 60_000, entry: "production" })
 }
 
 function expectMachine(runResult: Run, identity: string, exit: number, causeCode: string | null): Record<string, unknown> {

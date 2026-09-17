@@ -177,21 +177,25 @@ stored in the binding (`recover`, `hook`). That path must be canonical (no
 symlink in any segment), a regular file, and executable. On every store read
 the helper then:
 
-1. computes the SHA-256 of the executable's bytes and records it: `inspect`
+1. requires the path to equal the accepted pin exactly, computes the SHA-256
+   of the executable's bytes, and requires that to equal the pinned digest,
+   all before the executable is run; the digest is also recorded: `inspect`
    prints it in the `executable` check, the Resume Panel prints it on the
    `Beads executable` line, and the `bind.started` diagnostic carries it;
-2. runs `bd version` and requires the text `bd version 1.2.2 ` and the
-   revision `6c124203e771`, without matching the branch suffix `bd` appends
-   inside a Git repository;
+2. runs `bd version` and parses the first line as
+   `bd version <version> (<build>: [<branch>@]<revision>)`, requiring the
+   version `1.2.2` and the revision field, the hex after the last `@` inside
+   the parentheses, to be `6c124203e771`; the branch text `bd` appends inside
+   a Git repository is never compared, so a branch spelled like the revision
+   cannot satisfy the pin;
 3. requires `bd where --readonly --json` to report `path` exactly equal to
    `<workspace>/.beads` (a missing store silently falls back to `~/.beads`, so
    equality is the guard), `bd config list --readonly --json` to agree on the
    prefix, and, inside a Git working directory, `bd context --readonly --json`
    to name the same store and not be redirected.
 
-The version and revision are enforced. The digest is reported, not compared,
-so a reader can check it against the pinned value. For this rollout the pinned
-executable is
+The path, digest, version and revision are all enforced; the digest is also
+reported so a reader can check it. For this rollout the pinned executable is
 `/Users/nathanvale/.local/state/trustworthy-engineering-loop-prototype/beads/bd`,
 SHA-256 `9581d8bcd9662ccf9d889ee8d879787e32cd4c0249d93374eeac5044e9f24351`,
 `bd version 1.2.2` at `6c124203e771`, and the selected store is
@@ -200,7 +204,13 @@ with prefix `lkr`. Homebrew `bd 1.3.0` on `PATH` must never be used; the
 version gate refuses it. The test fixture shim at
 `tests/fixtures/checker/bd` replays recorded `bd 1.2.2` JSON and has its own
 digest; that digest is never the pin and never appears in a production
-binding.
+binding, so the production entry refuses the shim. The shim-lane tests and the
+`cli-design` checker spawn `tests/fixtures/checker/cli.ts` instead: the same
+`main()` over `productionContext` with the pin composed from the executable
+each scenario names (`tests/fixtures/checker/fixture-context.ts`). The pin is
+proven by `tests/unit/beads.test.ts`, by the production entry refusing the
+shim in `tests/integration/msb-workflow.test.ts`, and by the native-storage
+suite against the pinned executable.
 
 ## Hook
 
@@ -223,13 +233,13 @@ scripts in the upstream Beads document at revision `6c124203e771`
 document enumerates no stdin fields, so nothing here is observed on the
 installed Codex until `M2`. The helper requires `hook_event_name` from the four
 events above, `session_id` matching the session grammar, `cwd` as an absolute
-existing directory (resolved to its real path), and `source` on `SessionStart`
+existing directory (spelled as its canonical path; a symlink alias, trailing slash, or dot segment is refused, never resolved), and `source` on `SessionStart`
 from `startup`, `resume`, `clear`, `compact`. No configured default and no
 environment value can stand in for those fields.
 
 Silence rules. The hook fails open with empty stdout and exit `0` when stdin
 is not one bounded JSON object, the event or `source` is unknown, the session
-identity is unsafe, `cwd` is not a real directory, no state root can be
+identity is unsafe, `cwd` is not the canonical spelling of a real directory, no state root can be
 selected, the binding is absent, invalid, unsafe, or unavailable, `cwd` is
 neither inside the binding's `sourceRepository` nor equal to its `workspace`,
 the marker cannot be read or is not one schema-v1 marker (corrupt marker), a
@@ -403,14 +413,17 @@ bun run typecheck
   so stdin passes through for `hook`. It needs `bun` on `PATH`; if `bun` is
   missing, the shell exits `127` before the helper runs, which is a launcher
   limit `M2` must weigh when it registers the hook.
-- `src/cli.ts` is the frozen checker smoke entry (`bun run src/cli.ts`) and
-  the bundle entry; `src/main.ts` is the unconditional entry that always runs
-  `main()`. All three paths run the same `main()`.
+- `src/cli.ts` is the production entry with the accepted bd pin and the
+  bundle entry; `src/main.ts` is the unconditional entry that always runs
+  `main()`; `tests/fixtures/checker/cli.ts` is the shim-lane entry the tests
+  and the checker spawn with the fixture `bd`. All four paths run the same
+  `main()`.
 - `bun run test:workflow-cli` runs the three complex-profile layers: `tests/unit`,
-  `tests/integration` (real processes against the fixture `bd` shim with a
-  reset private state root per scenario), and `tests/catalog` (every Branch
-  Station reached through a real process). The plugin `test` script includes
-  the same three directories.
+  `tests/integration` (real processes through the shim-lane entry against the
+  fixture `bd` with a reset private state root per scenario, plus one row
+  through the production entry proving it refuses the fixture `bd`), and
+  `tests/catalog` (every Branch Station reached through a real process). The
+  plugin `test` script includes the same three directories.
 - `bun test packages/workflow-cli/tests/native-storage` runs against the
   pinned executable and an isolated throwaway store created by `bd init`,
   never the selected trial store. It is bound to the machine that holds the
@@ -420,6 +433,10 @@ bun run typecheck
   globs (`packages/*/src/**/*.ts`, `packages/*/tests/**/*.ts`).
 - The `cli-design` checker invocation, its preparation fixtures
   (`tests/fixtures/checker/`), and the expected row record live in Ticket #58.
+  Since the production entry enforces the accepted pin, that invocation's
+  `bun run "$P/src/cli.ts" bind ...` preparation lines and its
+  `--command "bun run src/cli.ts"` must name `tests/fixtures/checker/cli.ts`
+  when they run with the fixture `bd`.
   The installed checker is the `2.0.0` successor and this helper keeps
   Contract Core `1.0.0`, so every machine row records
   `TARGET_CONTRACT_UNSUPPORTED` and the run exits `4`; the human rows and the
