@@ -83,7 +83,7 @@ create_valid_state() {
   local revision_dir="$HOME_FIXTURE/.dotfiles_state/toolchain/revisions/$REVISION_ID"
   mkdir -p "$revision_dir" "$HOME_FIXTURE/.local/share/mise/shims"
   printf '%s\n' '[tools]' 'node = "24.20.0"' 'bun = "1.4.0"' \
-    'python = "3.11.9"' '"github:gastownhall/beads" = "1.2.2"' >"$revision_dir/config.toml"
+    'python = "3.11.9"' '"github:gastownhall/beads" = "1.3.0"' >"$revision_dir/config.toml"
   ln -s "revisions/$REVISION_ID" "$HOME_FIXTURE/.dotfiles_state/toolchain/current"
 }
 
@@ -244,7 +244,7 @@ case "$tool" in
   node) version='24.20.0'; prefix='v' ;;
   bun) version='1.4.0'; prefix='' ;;
   python) version='3.11.9'; prefix='Python ' ;;
-  bd) version='1.2.2'; prefix='bd version ' ;;
+  bd) version='1.3.0'; prefix='bd version ' ;;
   npm) version='11.19.0'; prefix='' ;;
   *) exit 97 ;;
 esac
@@ -315,7 +315,7 @@ for mode in "${all_modes[@]}"; do
     fail "$mode retained a hostile Mise directory override"
   pass "$mode exports the canonical Mise directory layout"
   assert_equals "$(grep -E '^(project|global)-(node|bun|python|bd|npm)=' <<<"$zsh_out" | tr '\n' '|')" \
-    'project-node=v22.14.0|project-bun=1.2.3|project-python=Python 3.12.2|project-npm=10.9.2|global-node=v24.20.0|global-bun=1.4.0|global-python=Python 3.11.9|global-bd=bd version 1.2.2|global-npm=11.19.0|' \
+    'project-node=v22.14.0|project-bun=1.2.3|project-python=Python 3.12.2|project-npm=10.9.2|global-node=v24.20.0|global-bun=1.4.0|global-python=Python 3.11.9|global-bd=bd version 1.3.0|global-npm=11.19.0|' \
     "$mode honors project runtimes and Node-owned npm then resumes personal defaults"
   if [[ "$mode" == interactive-* ]]; then
     grep -Fxq 'activated=1' <<<"$zsh_out" || fail "$mode did not run Mise activation"
@@ -361,7 +361,7 @@ agent_out="$({
 agent_status=$?
 set -e
 assert_equals "$agent_status" '0' 'agent zsh launch exits zero with project overrides'
-assert_equals "$agent_out" $'project=v22.14.0|1.2.3|Python 3.12.2|10.9.2\nglobal=v24.20.0|1.4.0|Python 3.11.9|bd version 1.2.2|11.19.0' \
+assert_equals "$agent_out" $'project=v22.14.0|1.2.3|Python 3.12.2|10.9.2\nglobal=v24.20.0|1.4.0|Python 3.11.9|bd version 1.3.0|11.19.0' \
   'agent zsh launch keeps npm under project-selected Node then resumes personal defaults'
 assert_equals "$(wc -c <"$agent_err" | tr -d ' ')" '0' 'agent zsh project override launch stays silent'
 assert_equals "$(shasum -a 256 "$APPLIED_CONFIG" | awk '{print $1}')" "$applied_hash_before" \

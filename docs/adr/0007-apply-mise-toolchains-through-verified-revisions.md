@@ -23,8 +23,21 @@ qualification on 8 September 2026.
 
 Nathan extended this decision to the Beads global CLI on 18 September 2026.
 Beads must use the same verified revision path on the desktop and server
-profiles, pinned to 1.2.2 from `github:gastownhall/beads`. Homebrew remains the
-installer for Mise itself but no longer owns Beads.
+profiles, declared from `github:gastownhall/beads`. Homebrew remains the
+installer for Mise itself but no longer owns Beads. The first pin was 1.2.2.
+Commit `291f7a4240de02fe5167e0f60f6a4be0b0a757c7` and applied revision content
+ID `98d480317ba01afec38894e2a47ad2390277e592bf78b0a8748a2862d405cc5f` are the
+verified 1.2.2 binary rollback baseline on the desktop and server hosts.
+
+Later on 18 September 2026 Nathan authorized repinning Beads to release
+`v1.3.0`: upstream source commit `f45b249ce`, darwin arm64 asset
+`beads_1.3.0_darwin_arm64.tar.gz`, SHA-256
+`7cc77367d0b84c50243a1108bc1f73648699211257d414b917540bf868e6bb85`. A 1.2.2
+client knows store schema v53 and cannot read the selected Beads Web UI store,
+which is already at v66. The tag-matched upstream upgrade guide states that
+1.3.0 migrates a local v53 store to v66 in place on its first store-opening
+command, that every client sharing a store must upgrade together, and that
+going back is a schema-cursor rollback of the store, not a client downgrade.
 
 ## Decision Drivers
 
@@ -57,6 +70,22 @@ Declare Beads through Mise's GitHub backend and verify the public `bd` executabl
 and exact version before publishing or selecting a revision.
 Keep the canonical desired declaration at a non-default source path under
 `config/mise`; it is input to application, not live global state.
+
+Beads rollback has two distinct parts. Client rollback recovers applied
+revision `98d480317ba01afec38894e2a47ad2390277e592bf78b0a8748a2862d405cc5f` on
+each host through toolchain recovery and retains commit
+`291f7a4240de02fe5167e0f60f6a4be0b0a757c7`; it never opens or writes a store.
+Store rollback is a separate, destructive, store-write authority: a recovered
+1.2.2 client still cannot read a v66 store, and returning a migrated store to
+v53 requires the backed-up schema-cursor rollback in the upstream recovery
+runbook. Neither this decision nor toolchain recovery grants store rollback.
+
+Application of the 1.3.0 revision is host-gated. The Mac Mini's global pin is
+also visible to the separate LKR worker, whose embedded store is still v53.
+Applying 1.3.0 there can migrate that store to v66 on the first store-opening
+command, after which a 1.2.2 client cannot read it. Mac Mini application
+therefore remains gated on the LKR owner pausing access and approving a
+quiesced backup boundary. A source pin alone applies nothing on either host.
 
 The existing `bin/dotfiles/toolchain` interface owns preview, apply, status, and
 recovery. Apply acquires one bounded run lock, copies the declaration into a
@@ -151,6 +180,10 @@ a later explicit and destructive cleanup decision backed by live evidence.
 - Positive: the desktop and server profiles select one exact Beads release
   without relying on Homebrew's rolling formula version.
 - Positive: a failed staging operation preserves the last verified selection.
+- Negative: a 1.2.2 client cannot read a v66 store, so client rollback alone
+  does not restore access to any store that 1.3.0 has migrated.
+- Negative: the shared Mac Mini pin couples the Beads upgrade to the LKR
+  worker's store, so server application waits on that owner.
 - Negative: applied state duplicates a small reviewed declaration and lockfile
   outside Git.
 - Negative: shell startup must distinguish applied Mise state from temporary
@@ -159,6 +192,8 @@ a later explicit and destructive cleanup decision backed by live evidence.
   duplicated per applied revision.
 - Neutral: Git ownership, arbitrary Homebrew downgrade, app data, commits, pushes,
   and destructive cleanup remain outside this decision.
+- Neutral: store rollback, store migration, and every other Beads store write
+  remain outside this decision.
 
 ## Options and Tradeoffs
 
@@ -198,10 +233,24 @@ Mise cache. Revisit this decision if atomic selection cannot preserve a verified
 current revision or project overrides cannot work across the required launch
 contexts.
 
-For Beads, also prove the same selected 1.2.2 executable in fresh Codex, Claude,
-and Herdr panes on the desktop and server hosts. Remove the Homebrew Beads
-formula only after the Mise selection is verified and a rollback path is
-recorded.
+For Beads, also prove the same selected 1.3.0 executable in fresh Codex, Claude,
+and Herdr panes on the desktop and server hosts, with retained receipts rather
+than retired panes. The generated lock of the 1.3.0 revision must name the
+official `beads_1.3.0_darwin_arm64.tar.gz` asset and the SHA-256 recorded
+above, and its receipt must bind that lock; any mismatch stops application.
+Remove the Homebrew Beads formula only after the Mise selection is verified and
+a rollback path is recorded; Beads stays absent from
+`config/brew/profile-requirements.tsv`.
+
+Beads Web UI qualification remains blocked until both hosts qualify 1.3.0 and
+the selected v66 store passes a read-only check with identical before and
+after byte fingerprints of its `.beads` directory. Qualify 1.3.0 outside that
+store first.
+
+The Beads Web UI bakeoff checkpoint is recorded evidence for the 1.2.2
+baseline, not raw proof. Its sibling `commit-message.txt` is a stale
+pre-decision receipt: it attributes Beads to Homebrew and cannot support
+Mise-ownership proof.
 
 ## References
 
@@ -212,3 +261,7 @@ recorded.
 - [Mise configuration](https://mise.jdx.dev/configuration.html).
 - [Mise lockfiles](https://mise.jdx.dev/dev-tools/mise-lock.html).
 - [Mise shims](https://mise.jdx.dev/dev-tools/shims.html).
+- [Beads v1.3.0 release](https://github.com/gastownhall/beads/releases/tag/v1.3.0).
+- [Beads v1.3.0 upgrade guide](https://github.com/gastownhall/beads/blob/v1.3.0/docs/getting-started/upgrading.md).
+- [Beads schema-cursor rollback runbook](https://beads.gascity.com/recovery/accidental-1-2-1-release).
+- `$HOME/.local/state/my-second-brain-playground/beads-web-ui-bakeoff/<session>/checkpoint.md`.

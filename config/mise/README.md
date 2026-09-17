@@ -2,7 +2,7 @@
 
 `source.toml` is the canonical tracked declaration for Node, Bun, Python, and
 the Beads `bd` CLI. Beads uses Mise's GitHub backend with the exact
-`github:gastownhall/beads` 1.2.2 source.
+`github:gastownhall/beads` 1.3.0 source.
 npm is deliberately absent as a standalone Mise tool: its expected version is
 recorded in `../toolchain/versions.tsv` and verified from the selected Node
 installation. Read-only status also requires `mise which npm` to resolve that

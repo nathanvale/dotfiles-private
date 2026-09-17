@@ -43,7 +43,7 @@ cat >"$ORACLE" <<'EOF'
 node|24.20.0|mise|source_declared|mise
 bun|1.4.0|mise|source_declared|mise
 python|3.11.9|mise|source_declared|mise
-bd|1.2.2|mise|source_declared|mise
+bd|1.3.0|mise|source_declared|mise
 git|2.50.1|system|unqualified|unknown
 npm|11.19.0|mise|source_declared|mise
 EOF
