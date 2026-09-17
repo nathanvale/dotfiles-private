@@ -349,8 +349,8 @@ mise_effective_toolchain_healthy() {
     [[ "$status" -eq 0 || "$status" -eq 2 ]] || return 1
     printf '%s' "$output" | jq -e '
         .status == "ready" and
-        ([.tools[] | select(.name == "node" or .name == "bun" or .name == "python" or .name == "npm")] | length == 4) and
-        all(.tools[] | select(.name == "node" or .name == "bun" or .name == "python" or .name == "npm");
+        ([.tools[] | select(.name == "node" or .name == "bun" or .name == "python" or .name == "bd" or .name == "npm")] | length == 5) and
+        all(.tools[] | select(.name == "node" or .name == "bun" or .name == "python" or .name == "bd" or .name == "npm");
             .selected_owner == "mise" and .observed_owner == "mise" and
             .selected_owner_matches == true and .version_matches == true) and
         (.tools[] | select(.name == "npm") | .owning_node_runtime |
@@ -766,7 +766,7 @@ if [[ $FAIL_COUNT -gt 0 || $WARN_COUNT -gt 0 ]]; then
                 "Toolchain declaration manifest")
                     action "$RED" "Toolchain declaration manifest" "unreadable, malformed, or invalid toolchain JSON" \
                         "Check: $DOTFILES/bin/dotfiles/toolchain status --json" \
-                        "Repair: restore config/toolchain/versions.tsv with exactly Node, Bun, Python, Git, and npm rows"
+                        "Repair: restore config/toolchain/versions.tsv with exactly Node, Bun, Python, Beads, Git, and npm rows"
                     ;;
                 "Mise")
                     action "$RED" "Mise" "declared package owner is unavailable" \

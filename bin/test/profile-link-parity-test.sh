@@ -97,6 +97,9 @@ assert_exact_line() {
 	fi
 }
 
+assert_not_contains "$(<"$PROFILE_REQUIREMENTS_SOURCE")" $'\tbrew\tbeads\t' \
+	'Beads is not owned by the Homebrew profile manifest'
+
 profile_requirement_rows() {
 	local profile="$1"
 	local phase="$2"
@@ -494,5 +497,5 @@ assert_not_equals "$RUN_EXIT" 0 'verifier fails closed when the manager status o
 assert_contains "$RUN_OUTPUT" 'Managed symlink status contract' 'malformed manager output names the repair contract'
 assert_contains "$RUN_OUTPUT" 'DOTFILES_VERIFY_SUMMARY version=1 status=failed' 'malformed manager output remains a failed completion record'
 
-[[ "$assertion_count" -eq 91 ]] || fail "expected 91 assertions, observed $assertion_count"
+[[ "$assertion_count" -eq 88 ]] || fail "expected 88 assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

@@ -1,6 +1,8 @@
 # Mise toolchain declaration
 
-`source.toml` is the canonical tracked declaration for Node, Bun, and Python.
+`source.toml` is the canonical tracked declaration for Node, Bun, Python, and
+the Beads `bd` CLI. Beads uses Mise's GitHub backend with the exact
+`github:gastownhall/beads` 1.2.2 source.
 npm is deliberately absent as a standalone Mise tool: its expected version is
 recorded in `../toolchain/versions.tsv` and verified from the selected Node
 installation. Read-only status also requires `mise which npm` to resolve that
@@ -18,7 +20,8 @@ alternate-config selectors. Cleanup owns capsule removal across completion,
 failure, handled signals, and stale-lock takeover.
 
 Mise resolves a project-local `mise.toml` above this personal configuration, so
-an explicit project runtime continues to win. The configuration also enables
+an explicit project runtime continues to win. Beads remains a personal global
+CLI unless a project explicitly overrides its Mise source. The configuration also enables
 the existing Node and Python idiomatic version files when no project
 `mise.toml` is present. Git is intentionally absent: no supported exact Git
 owner has been selected or proved.

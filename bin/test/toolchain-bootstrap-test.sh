@@ -83,7 +83,7 @@ create_valid_state() {
   local revision_dir="$HOME_FIXTURE/.dotfiles_state/toolchain/revisions/$REVISION_ID"
   mkdir -p "$revision_dir" "$HOME_FIXTURE/.local/share/mise/shims"
   printf '%s\n' '[tools]' 'node = "24.20.0"' 'bun = "1.4.0"' \
-    'python = "3.11.9"' >"$revision_dir/config.toml"
+    'python = "3.11.9"' '"github:gastownhall/beads" = "1.2.2"' >"$revision_dir/config.toml"
   ln -s "revisions/$REVISION_ID" "$HOME_FIXTURE/.dotfiles_state/toolchain/current"
 }
 
@@ -244,6 +244,7 @@ case "$tool" in
   node) version='24.20.0'; prefix='v' ;;
   bun) version='1.4.0'; prefix='' ;;
   python) version='3.11.9'; prefix='Python ' ;;
+  bd) version='1.2.2'; prefix='bd version ' ;;
   npm) version='11.19.0'; prefix='' ;;
   *) exit 97 ;;
 esac
@@ -259,7 +260,7 @@ fi
 printf '%s%s\n' "$prefix" "$version"
 STUB
 chmod +x "$HOME_FIXTURE/.local/share/mise/shims/runtime-adapter"
-for runtime in node bun python npm; do
+for runtime in node bun python bd npm; do
   ln -s runtime-adapter "$HOME_FIXTURE/.local/share/mise/shims/$runtime"
 done
 APPLIED_CONFIG="$HOME_CANONICAL/.dotfiles_state/toolchain/revisions/$REVISION_ID/config.toml"
@@ -300,6 +301,7 @@ for mode in "${all_modes[@]}"; do
         print -r -- "global-node=$(node --version)"
         print -r -- "global-bun=$(bun --version)"
         print -r -- "global-python=$(python --version)"
+        print -r -- "global-bd=$(bd --version)"
         print -r -- "global-npm=$(npm --version)"
       '
   } 2>"$err_file")"
@@ -312,8 +314,8 @@ for mode in "${all_modes[@]}"; do
   grep -Fxq "directories=$HOME_CANONICAL/.local/share/mise|$HOME_CANONICAL/.local/share/mise/installs|$HOME_CANONICAL/.local/share/mise/shims" <<<"$zsh_out" ||
     fail "$mode retained a hostile Mise directory override"
   pass "$mode exports the canonical Mise directory layout"
-  assert_equals "$(grep -E '^(project|global)-(node|bun|python|npm)=' <<<"$zsh_out" | tr '\n' '|')" \
-    'project-node=v22.14.0|project-bun=1.2.3|project-python=Python 3.12.2|project-npm=10.9.2|global-node=v24.20.0|global-bun=1.4.0|global-python=Python 3.11.9|global-npm=11.19.0|' \
+  assert_equals "$(grep -E '^(project|global)-(node|bun|python|bd|npm)=' <<<"$zsh_out" | tr '\n' '|')" \
+    'project-node=v22.14.0|project-bun=1.2.3|project-python=Python 3.12.2|project-npm=10.9.2|global-node=v24.20.0|global-bun=1.4.0|global-python=Python 3.11.9|global-bd=bd version 1.2.2|global-npm=11.19.0|' \
     "$mode honors project runtimes and Node-owned npm then resumes personal defaults"
   if [[ "$mode" == interactive-* ]]; then
     grep -Fxq 'activated=1' <<<"$zsh_out" || fail "$mode did not run Mise activation"
@@ -353,13 +355,13 @@ agent_out="$({
       cd "$CONTRACT_PROJECT_DIR"
       print -r -- "project=$(node --version)|$(bun --version)|$(python --version)|$(npm --version)"
       cd "$CONTRACT_OUTSIDE_DIR"
-      print -r -- "global=$(node --version)|$(bun --version)|$(python --version)|$(npm --version)"
+      print -r -- "global=$(node --version)|$(bun --version)|$(python --version)|$(bd --version)|$(npm --version)"
     '
 } 2>"$agent_err")"
 agent_status=$?
 set -e
 assert_equals "$agent_status" '0' 'agent zsh launch exits zero with project overrides'
-assert_equals "$agent_out" $'project=v22.14.0|1.2.3|Python 3.12.2|10.9.2\nglobal=v24.20.0|1.4.0|Python 3.11.9|11.19.0' \
+assert_equals "$agent_out" $'project=v22.14.0|1.2.3|Python 3.12.2|10.9.2\nglobal=v24.20.0|1.4.0|Python 3.11.9|bd version 1.2.2|11.19.0' \
   'agent zsh launch keeps npm under project-selected Node then resumes personal defaults'
 assert_equals "$(wc -c <"$agent_err" | tr -d ' ')" '0' 'agent zsh project override launch stays silent'
 assert_equals "$(shasum -a 256 "$APPLIED_CONFIG" | awk '{print $1}')" "$applied_hash_before" \
@@ -428,12 +430,12 @@ cat >"$VERIFY_DOTFILES/bin/dotfiles/toolchain" <<'STUB'
 #!/bin/sh
 if [ "$(cat "$(dirname "$0")/../../verifier-state")" = ready ]; then
   cat <<'JSON'
-{"status":"ready","tools":[{"name":"node","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true},{"name":"bun","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true},{"name":"python","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true},{"name":"npm","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true,"owning_node_runtime":{"status":"observed","tool":"node","effective_version":"24.20.0","executable_path":"/fixture/node","npm_effective_version":"11.19.0","npm_executable_path":"/fixture/npm","mise_routed_npm_path":"/fixture/npm","matches_declared_parent":true}}]}
+{"status":"ready","tools":[{"name":"node","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true},{"name":"bun","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true},{"name":"python","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true},{"name":"bd","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true},{"name":"npm","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true,"owning_node_runtime":{"status":"observed","tool":"node","effective_version":"24.20.0","executable_path":"/fixture/node","npm_effective_version":"11.19.0","npm_executable_path":"/fixture/npm","mise_routed_npm_path":"/fixture/npm","matches_declared_parent":true}}]}
 JSON
   exit 2
 fi
 cat <<'JSON'
-{"status":"not_ready","tools":[{"name":"node","selected_owner":"mise","observed_owner":"fnm","selected_owner_matches":false,"version_matches":true,"declaration_matches":true},{"name":"bun","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true},{"name":"python","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true},{"name":"npm","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true}]}
+{"status":"not_ready","tools":[{"name":"node","selected_owner":"mise","observed_owner":"fnm","selected_owner_matches":false,"version_matches":true,"declaration_matches":true},{"name":"bun","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true},{"name":"python","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true},{"name":"bd","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true},{"name":"npm","selected_owner":"mise","observed_owner":"mise","selected_owner_matches":true,"version_matches":true,"declaration_matches":true}]}
 JSON
 exit 1
 STUB

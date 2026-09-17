@@ -3,6 +3,7 @@
 node = "24.20.0"
 bun = "1.4.0"
 python = "3.11.9"
+"github:gastownhall/beads" = "1.2.2"
 
 [settings]
 idiomatic_version_file_enable_tools = ["node", "python"]

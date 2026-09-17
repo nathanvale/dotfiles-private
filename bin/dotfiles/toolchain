@@ -58,7 +58,7 @@ Usage:
   toolchain update --apply [--retry] [--json]
   toolchain recover --revision <content-id> [--json]
 
-Report or preview the declared Node, Bun, Python, Git, and npm baseline. Preview
+Report or preview the declared Node, Bun, Python, Beads, Git, and npm baseline. Preview
 is read-only. Apply only publishes a verified Mise-managed revision; Git remains
 blocked and exact reconstruction remains unqualified.
 EOF
@@ -109,6 +109,7 @@ tool_version() {
 		node) raw="$(node --version 2>/dev/null)" || return 1; printf '%s\n' "${raw#v}" ;;
 		bun) bun --version 2>/dev/null ;;
 		python) raw="$(python --version 2>/dev/null)" || return 1; printf '%s\n' "${raw#Python }" ;;
+		bd) raw="$(bd --version 2>/dev/null)" || return 1; raw="${raw#bd version }"; printf '%s\n' "${raw%% *}" ;;
 		git) raw="$(git --version 2>/dev/null)" || return 1; raw="${raw#git version }"; printf '%s\n' "${raw%% *}" ;;
 		npm) npm --version 2>/dev/null ;;
 		*) return 1 ;;
@@ -123,6 +124,11 @@ mise_declaration_matches() {
 			declared="$(awk -F '"' -v tool="$tool" '$1 ~ "^[[:space:]]*" tool "[[:space:]]*=" { print $2; exit }' "$config")"
 			[[ "$declared" == "$expected" ]]
 			;;
+		bd)
+			[[ -r "$config" ]] || return 1
+			declared="$(awk -F '"' '$2 == "github:gastownhall/beads" && $3 ~ /^[[:space:]]*=/ { print $4; exit }' "$config")"
+			[[ "$declared" == "$expected" ]]
+			;;
 		npm)
 			[[ -r "$config" && -n "$NODE_EXPECTED" ]] || return 1
 			! awk -F '"' '$1 ~ "^[[:space:]]*npm[[:space:]]*=" { found=1 } END { exit !found }' "$config" &&
@@ -135,7 +141,7 @@ mise_declaration_matches() {
 observed_owner() {
 	local tool="$1" path="$2" mise_path routed_npm_path brew_prefix pyenv_path pyenv_root
 	[[ -n "$path" ]] || { printf 'unknown\n'; return; }
-	if [[ "$tool" == node || "$tool" == bun || "$tool" == python || "$tool" == npm ]]; then
+	if [[ "$tool" == node || "$tool" == bun || "$tool" == python || "$tool" == bd || "$tool" == npm ]]; then
 		if [[ "$tool" == npm ]]; then
 			if command -v mise >/dev/null 2>&1 && mise_path="$(MISE_DATA_DIR="$MISE_DATA_ROOT" MISE_INSTALLS_DIR="$MISE_INSTALLS_ROOT" MISE_SHIMS_DIR="$MISE_SHIMS_ROOT" mise which node 2>/dev/null)"; then
 				mise_path="${mise_path%/*}/npm"
@@ -244,7 +250,7 @@ emit_json() {
 		for row in "${ROWS[@]}"; do
 			IFS='|' read -r tool expected selected observed selected_matches effective version_ok declaration_ok row_qualification path parent <<<"$row"
 			action="$(preview_action "$tool" "$version_ok" "$declaration_ok" "$selected_matches" "$observed")"
-			source_path="$MANIFEST"; [[ "$tool" == node || "$tool" == bun || "$tool" == python ]] && source_path="$MISE_CONFIG"
+			source_path="$MANIFEST"; [[ "$tool" == node || "$tool" == bun || "$tool" == python || "$tool" == bd ]] && source_path="$MISE_CONFIG"
 			printf '%s{"tool":"%s","selected_owner":"%s","observed_owner":"%s","version":"%s","action":"%s","source_path":"%s"}' \
 				"$separator" "$(json_escape "$tool")" "$(json_escape "$selected")" "$(json_escape "$observed")" "$(json_escape "$expected")" "$(json_escape "$action")" "$(json_escape "$source_path")"
 			separator=','
@@ -840,7 +846,7 @@ snapshot_sources() {
 
 snapshot_is_valid() {
 	local manifest="$1" config="$2" tool expected selected qualification parent count declared
-	for tool in node bun python git npm; do
+	for tool in node bun python bd git npm; do
 		count="$(awk -F '|' -v tool="$tool" '$1 == tool { count++ } END { print count + 0 }' "$manifest")" || return 1
 		[[ "$count" == 1 ]] || return 1
 	done
@@ -848,7 +854,7 @@ snapshot_is_valid() {
 		[[ -z "$tool" || "$tool" == \#* ]] && continue
 		[[ -n "$expected" && -n "$selected" && -n "$qualification" && -n "$parent" && "$expected" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || return 1
 		case "$tool" in
-			node|bun|python) [[ "$selected" == mise && "$parent" == - ]] || return 1 ;;
+			node|bun|python|bd) [[ "$selected" == mise && "$parent" == - ]] || return 1 ;;
 			npm) [[ "$selected" == mise && "$parent" == node ]] || return 1 ;;
 			git) [[ "$selected" == system && "$parent" == - ]] || return 1 ;;
 			*) return 1 ;;
@@ -857,6 +863,10 @@ snapshot_is_valid() {
 		case "$tool" in
 			node|bun|python)
 				declared="$(awk -F '"' -v tool="$tool" '$1 ~ "^[[:space:]]*" tool "[[:space:]]*=" { print $2; count++ } END { if (count != 1) exit 1 }' "$config")" || return 1
+				[[ "$declared" == "$expected" ]] || return 1
+				;;
+			bd)
+				declared="$(awk -F '"' '$2 == "github:gastownhall/beads" && $3 ~ /^[[:space:]]*=/ { print $4; count++ } END { if (count != 1) exit 1 }' "$config")" || return 1
 				[[ "$declared" == "$expected" ]] || return 1
 				;;
 			npm)
@@ -962,8 +972,12 @@ revision_is_verified() {
 	lock_hash="$(file_sha256 "$lock")"
 	[[ "$(wc -l <"$receipt" | tr -d ' ')" == 1 ]] || { verification_failed 'receipt_shape_invalid' false; return 1; }
 	grep -Fqx "{\"schema_version\":\"1\",\"content_id\":\"$CONTENT_ID\",\"contract_sha256\":\"$contract_hash\",\"manifest_sha256\":\"$manifest_hash\",\"config_sha256\":\"$config_hash\",\"lock_sha256\":\"$lock_hash\",\"contract\":\"$APPLY_CONTRACT_VERSION\"}" "$receipt" || { verification_failed 'receipt_mismatch' false; return 1; }
-	for tool in node bun python; do
-		expected="$(awk -F '"' -v tool="$tool" '$1 ~ "^[[:space:]]*" tool "[[:space:]]*=" { print $2; exit }' "$config")"
+	for tool in node bun python bd; do
+		if [[ "$tool" == bd ]]; then
+			expected="$(awk -F '|' '$1 == "bd" { print $2; exit }' "$saved_manifest")"
+		else
+			expected="$(awk -F '"' -v tool="$tool" '$1 ~ "^[[:space:]]*" tool "[[:space:]]*=" { print $2; exit }' "$config")"
+		fi
 		mise_with_config "$config" which "$tool" >/dev/null 2>&1 || { verification_failed "${tool}_which_failed" true; return 1; }
 		case "$tool" in
 			node)
@@ -977,6 +991,11 @@ revision_is_verified() {
 			python)
 				raw="$(mise_with_config "$config" exec -- python --version 2>/dev/null)" || { verification_failed 'python_version_probe_failed' true; return 1; }
 				[[ "${raw#Python }" == "$expected" ]] || { verification_failed 'python_version_mismatch' true; return 1; }
+				;;
+			bd)
+				raw="$(mise_with_config "$config" exec -- bd --version 2>/dev/null)" || { verification_failed 'bd_version_probe_failed' true; return 1; }
+				raw="${raw#bd version }"
+				[[ "${raw%% *}" == "$expected" ]] || { verification_failed 'bd_version_mismatch' true; return 1; }
 				;;
 		esac
 	done
@@ -1118,6 +1137,7 @@ qualification='qualified'
 NEXT_ACTION='Run the full installation verifier for broader machine health.'
 node_seen=false
 bun_seen=false
+bd_seen=false
 git_seen=false
 python_seen=false
 npm_seen=false
@@ -1148,6 +1168,7 @@ while IFS= read -r manifest_line || [[ -n "$manifest_line" ]]; do
 		node) [[ "$node_seen" == false ]] || emit_error 'manifest_duplicate_tool' 'repair_manifest' true 'duplicate toolchain manifest row for node' 65 'error'; node_seen=true; [[ "$selected" == mise && "$parent" == - ]] || emit_error 'manifest_invalid' 'repair_manifest' true 'node must be Mise-owned and have no parent tool' 65 'error' ;;
 		bun) [[ "$bun_seen" == false ]] || emit_error 'manifest_duplicate_tool' 'repair_manifest' true 'duplicate toolchain manifest row for bun' 65 'error'; bun_seen=true; [[ "$selected" == mise && "$parent" == - ]] || emit_error 'manifest_invalid' 'repair_manifest' true 'bun must be Mise-owned and have no parent tool' 65 'error' ;;
 		python) [[ "$python_seen" == false ]] || emit_error 'manifest_duplicate_tool' 'repair_manifest' true 'duplicate toolchain manifest row for python' 65 'error'; python_seen=true; [[ "$selected" == mise && "$parent" == - ]] || emit_error 'manifest_invalid' 'repair_manifest' true 'python must be Mise-owned and have no parent tool' 65 'error' ;;
+		bd) [[ "$bd_seen" == false ]] || emit_error 'manifest_duplicate_tool' 'repair_manifest' true 'duplicate toolchain manifest row for bd' 65 'error'; bd_seen=true; [[ "$selected" == mise && "$parent" == - ]] || emit_error 'manifest_invalid' 'repair_manifest' true 'bd must be Mise-owned and have no parent tool' 65 'error' ;;
 		git) [[ "$git_seen" == false ]] || emit_error 'manifest_duplicate_tool' 'repair_manifest' true 'duplicate toolchain manifest row for git' 65 'error'; git_seen=true; [[ "$selected" == system && "$parent" == - ]] || emit_error 'manifest_invalid' 'repair_manifest' true 'git must use its unresolved system owner and have no parent tool' 65 'error' ;;
 		npm) [[ "$npm_seen" == false ]] || emit_error 'manifest_duplicate_tool' 'repair_manifest' true 'duplicate toolchain manifest row for npm' 65 'error'; npm_seen=true; [[ "$selected" == mise && "$parent" == node ]] || emit_error 'manifest_invalid' 'repair_manifest' true 'npm must be Mise-owned beneath node' 65 'error' ;;
 		*) emit_error 'manifest_unknown_tool' 'repair_manifest' true "unknown toolchain manifest tool: $tool" 65 'error' ;;
@@ -1161,6 +1182,7 @@ done <"$MANIFEST"
 [[ "$node_seen" == true ]] || emit_error 'manifest_incomplete' 'repair_manifest' true 'toolchain manifest is missing node' 65 'error'
 [[ "$bun_seen" == true ]] || emit_error 'manifest_incomplete' 'repair_manifest' true 'toolchain manifest is missing bun' 65 'error'
 [[ "$python_seen" == true ]] || emit_error 'manifest_incomplete' 'repair_manifest' true 'toolchain manifest is missing python' 65 'error'
+[[ "$bd_seen" == true ]] || emit_error 'manifest_incomplete' 'repair_manifest' true 'toolchain manifest is missing bd' 65 'error'
 [[ "$git_seen" == true ]] || emit_error 'manifest_incomplete' 'repair_manifest' true 'toolchain manifest is missing git' 65 'error'
 [[ "$npm_seen" == true ]] || emit_error 'manifest_incomplete' 'repair_manifest' true 'toolchain manifest is missing npm' 65 'error'
 

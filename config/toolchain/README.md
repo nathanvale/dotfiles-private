@@ -1,12 +1,15 @@
 # Toolchain baseline
 
-`versions.tsv` records the laptop's expected Node, Bun, Python, Git, and npm
+`versions.tsv` records the desktop and server profiles' expected Node, Bun,
+Python, Beads, Git, and npm
 versions, selected owner, qualification state, and any parent runtime. It is
 consumed by
 `bin/dotfiles/toolchain`.
 
 The manifest is deliberately not a lockfile. Mise is the selected source owner
-for Node, Bun, and Python, declared in `../mise/source.toml`. npm names `node`
+for Node, Bun, Python, and Beads, declared in `../mise/source.toml`. Beads uses
+Mise's GitHub backend at `github:gastownhall/beads` and exposes the `bd`
+executable. npm names `node`
 as its declared parent and is not declared or installed as a standalone Mise
 tool. Its expected child version remains in this manifest. Status observes the owning Node
 runtime through Mise, including the npm and Node executable paths, the Node
@@ -27,10 +30,10 @@ context, or reconstructed exactly. The command reports the selected owner and
 an independently observed owner separately; selected-owner matching is not an
 inference from a version alone.
 
-The manifest is complete only with exactly one Node, Bun, Python, Git, and npm
+The manifest is complete only with exactly one Node, Bun, Python, Beads, Git, and npm
 row. Every version must use exact three-part numeric syntax. npm must be
-Mise-owned beneath Node; the other language-runtime rows must be Mise-owned
-with no parent; Git stays system-owned with no parent. This source-only command
+Mise-owned beneath Node; Node, Bun, Python, and Beads must be Mise-owned with
+no parent; Git stays system-owned with no parent. This source-only command
 accepts `source_declared` or `unqualified` rows only. A `qualified` row needs an
 external qualification receipt and returns a structured repairable error here.
 Empty, missing, duplicate, unknown, or malformed rows also return a structured

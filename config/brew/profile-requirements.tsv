@@ -3,7 +3,6 @@
 # package_type is cask, brew, or preexisting; preexisting rows are not added to Brewfile.
 # OrbStack and Ollama use the server profile for native container/GPU access.
 # The server LM Studio CLI is a preexisting prerequisite with a separate repair route.
-# Beads installs the `bd` agent-memory CLI; Homebrew is its officially recommended installer.
 all	required	cask	ghostty	Ghostty	app	/Applications/Ghostty.app	applications	omit
 all	required	cask	raycast	Raycast	app	/Applications/Raycast.app	applications	omit
 all	required	cask	1password	1Password	app	/Applications/1Password.app	applications	omit
@@ -15,4 +14,3 @@ desktop	warn	cask	discord	Discord	app	/Applications/Discord.app	applications	omi
 server	warn	cask	orbstack	OrbStack	app	/Applications/OrbStack.app	applications	omit
 server	warn	brew	ollama	Ollama	command	ollama	applications	omit
 server	required	preexisting	-	LM Studio CLI (preexisting server prerequisite)	home-executable	.lmstudio/bin/lms	server	omit
-all	required	brew	beads	Beads (bd)	command	bd	applications	omit

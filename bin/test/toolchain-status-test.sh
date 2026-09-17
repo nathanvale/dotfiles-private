@@ -43,6 +43,7 @@ cat >"$ORACLE" <<'EOF'
 node|24.20.0|mise|source_declared|mise
 bun|1.4.0|mise|source_declared|mise
 python|3.11.9|mise|source_declared|mise
+bd|1.2.2|mise|source_declared|mise
 git|2.50.1|system|unqualified|unknown
 npm|11.19.0|mise|source_declared|mise
 EOF
@@ -116,6 +117,12 @@ cat >"$FAKE_BIN/python" <<'EOF'
 printf 'python %s\n' "$*" >>"$TOOLCHAIN_COMMAND_LEDGER"
 printf 'Python %s\n' "$ORACLE_PYTHON_VERSION"
 EOF
+cat >"$FAKE_BIN/bd" <<'EOF'
+#!/usr/bin/env bash
+[[ "$*" == '--version' ]] || exit 97
+printf 'bd %s\n' "$*" >>"$TOOLCHAIN_COMMAND_LEDGER"
+printf 'bd version %s (fixture)\n' "$ORACLE_BD_VERSION"
+EOF
 cat >"$FAKE_BIN/git" <<'EOF'
 #!/usr/bin/env bash
 [[ "$*" == '--version' ]] || exit 97
@@ -137,7 +144,7 @@ printf '%s\n' "$BREW_TEST_PREFIX"
 EOF
 cat >"$MISE_BIN/mise" <<'EOF'
 #!/usr/bin/env bash
-[[ "$1" == 'which' && ( "$2" == node || "$2" == bun || "$2" == python || "$2" == npm ) ]] || exit 97
+[[ "$1" == 'which' && ( "$2" == node || "$2" == bun || "$2" == python || "$2" == bd || "$2" == npm ) ]] || exit 97
 printf 'mise %s %s\n' "$1" "$2" >>"$TOOLCHAIN_COMMAND_LEDGER"
 printf '%s|%s|%s\n' "${MISE_DATA_DIR:-unset}" "${MISE_INSTALLS_DIR:-unset}" "${MISE_SHIMS_DIR:-unset}" >>"$TOOLCHAIN_MISE_ENV_LEDGER"
 if [[ "${MISE_TEST_WHICH_FAIL:-false}" == true ]]; then
@@ -163,13 +170,14 @@ printf 'pyenv %s\n' "$*" >>"$TOOLCHAIN_COMMAND_LEDGER"
 [[ "${PYENV_TEST_WHICH_FAIL:-false}" == true ]] && exit 1
 printf '%s\n' "${PYENV_TEST_PATH:-$PYENV_TEST_BIN}"
 EOF
-chmod +x "$FAKE_BIN/node" "$FAKE_BIN/bun" "$FAKE_BIN/python" "$FAKE_BIN/git" "$FAKE_BIN/npm" "$FAKE_BIN/brew" "$FAKE_BIN/pyenv" "$MISE_BIN/mise"
+chmod +x "$FAKE_BIN/node" "$FAKE_BIN/bun" "$FAKE_BIN/python" "$FAKE_BIN/bd" "$FAKE_BIN/git" "$FAKE_BIN/npm" "$FAKE_BIN/brew" "$FAKE_BIN/pyenv" "$MISE_BIN/mise"
 mkdir -p "$HOME_ROOT" "$SHIM_BIN" "$HOSTILE_SHIM_BIN"
 cp "$FAKE_BIN/node" "$SHIM_BIN/node"
 cp "$FAKE_BIN/bun" "$SHIM_BIN/bun"
 cp "$FAKE_BIN/python" "$SHIM_BIN/python"
+cp "$FAKE_BIN/bd" "$SHIM_BIN/bd"
 cp "$FAKE_BIN/npm" "$SHIM_BIN/npm"
-chmod +x "$SHIM_BIN/node" "$SHIM_BIN/bun" "$SHIM_BIN/python" "$SHIM_BIN/npm"
+chmod +x "$SHIM_BIN/node" "$SHIM_BIN/bun" "$SHIM_BIN/python" "$SHIM_BIN/bd" "$SHIM_BIN/npm"
 cp "$FAKE_BIN/node" "$HOSTILE_SHIM_BIN/node"
 chmod +x "$HOSTILE_SHIM_BIN/node"
 mkdir -p "$PYENV_SHIM"
@@ -189,9 +197,10 @@ export BREW_TEST_PREFIX="$TEST_ROOT/not-homebrew"
 ORACLE_NODE_VERSION="$(oracle node 2)"
 ORACLE_BUN_VERSION="$(oracle bun 2)"
 ORACLE_PYTHON_VERSION="$(oracle python 2)"
+ORACLE_BD_VERSION="$(oracle bd 2)"
 ORACLE_GIT_VERSION="$(oracle git 2)"
 ORACLE_NPM_VERSION="$(oracle npm 2)"
-export ORACLE_NODE_VERSION ORACLE_BUN_VERSION ORACLE_PYTHON_VERSION ORACLE_GIT_VERSION ORACLE_NPM_VERSION
+export ORACLE_NODE_VERSION ORACLE_BUN_VERSION ORACLE_PYTHON_VERSION ORACLE_BD_VERSION ORACLE_GIT_VERSION ORACLE_NPM_VERSION
 
 mkdir -p "$PREVIEW_REPO/bin/dotfiles" "$PREVIEW_REPO/config/toolchain" "$PREVIEW_REPO/config/mise"
 cp "$CLI" "$PREVIEW_CLI"
@@ -226,7 +235,7 @@ json="$(sed -n '2,$p' <<<"$result")"
 assert_equals '1' "$status" 'arbitrary fake Git path does not satisfy selected system ownership'
 assert_equals 'not_ready' "$(jq -r '.status' <<<"$json")" 'status distinguishes selected-owner mismatch'
 assert_equals 'not_qualified' "$(jq -r '.exact_reconstruction' <<<"$json")" 'source declarations do not claim exact reconstruction'
-for tool in node bun python git npm; do
+for tool in node bun python bd git npm; do
 	assert_equals "$(oracle "$tool" 2)" "$(jq -r --arg tool "$tool" '.tools[] | select(.name == $tool) | .expected_version' <<<"$json")" "$tool expected version comes from the independent oracle"
 	assert_equals 'true' "$(jq -r --arg tool "$tool" '.tools[] | select(.name == $tool) | .version_matches' <<<"$json")" "$tool matching version is proved against the independent oracle"
 done
@@ -263,17 +272,17 @@ assert_equals '1' "$(awk -v expected="$CANONICAL_MISE_CUSTODY" 'NF && $0 != expe
 # not qualified. Keep system Git out of the fixture PATH so this row proves the
 # command's distinct ready-but-unqualified exit contract.
 mkdir -p "$READY_BIN"
-for tool in node bun python npm; do
+for tool in node bun python bd npm; do
 	cp "$FAKE_BIN/$tool" "$READY_BIN/$tool"
 done
-chmod +x "$READY_BIN/node" "$READY_BIN/bun" "$READY_BIN/python" "$READY_BIN/npm"
+chmod +x "$READY_BIN/node" "$READY_BIN/bun" "$READY_BIN/python" "$READY_BIN/bd" "$READY_BIN/npm"
 ready_result="$(MISE_TEST_RESULT_DIR="$READY_BIN" run_cli_in_path "$MISE_BIN:$READY_BIN" "$CLI" status --json)"
 ready_status="$(sed -n '1p' <<<"$ready_result")"
 ready_json="$(sed -n '2,$p' <<<"$ready_result")"
 assert_equals '2' "$ready_status" 'ready but source-only status preserves the qualification exit'
 assert_equals 'ready' "$(jq -r '.status' <<<"$ready_json")" 'ready status is distinct from its qualification state'
 assert_equals 'not_qualified' "$(jq -r '.exact_reconstruction' <<<"$ready_json")" 'ready status retains the unqualified reconstruction state'
-for tool in node bun python npm; do
+for tool in node bun python bd npm; do
 	assert_equals "$READY_BIN/$tool" "$(jq -r --arg tool "$tool" '.tools[] | select(.name == $tool) | .executable_path' <<<"$ready_json")" "$tool ready status reports its selected executable path"
 	assert_equals "$(oracle "$tool" 2)" "$(jq -r --arg tool "$tool" '.tools[] | select(.name == $tool) | .effective_version' <<<"$ready_json")" "$tool ready status reports its declared version"
 done
@@ -385,9 +394,10 @@ assert_equals 'true' "$(jq -r '.apply_available' <<<"$preview_json")" 'preview d
 assert_equals 'no_change' "$(jq -r '.planned_actions[] | select(.tool == "node") | .action' <<<"$preview_json")" 'matching Node declaration and owner need no change'
 assert_equals 'blocked_exact_owner' "$(jq -r '.planned_actions[] | select(.tool == "git") | .action' <<<"$preview_json")" 'preview exposes the Git ownership block'
 assert_equals "$(CDPATH='' cd "$PREVIEW_REPO" && pwd -P)/config/mise/source.toml" "$(jq -r '.planned_actions[] | select(.tool == "bun") | .source_path' <<<"$preview_json")" 'preview names the affected Mise source'
+assert_equals "$(CDPATH='' cd "$PREVIEW_REPO" && pwd -P)/config/mise/source.toml" "$(jq -r '.planned_actions[] | select(.tool == "bd") | .source_path' <<<"$preview_json")" 'preview names the Beads Mise source'
 assert_equals "$(CDPATH='' cd "$PREVIEW_REPO" && pwd -P)/config/toolchain/versions.tsv" "$(jq -r '.planned_actions[] | select(.tool == "npm") | .source_path' <<<"$preview_json")" 'preview names the npm child-version source'
 assert_equals "$before_preview" "$after_preview" 'preview preserves path types, modes, bytes, Git state, and unrelated fixture state'
-assert_equals $'brew --prefix\nbun --version\ngit --version\nmise which bun\nmise which node\nmise which node\nmise which node\nmise which npm\nmise which npm\nmise which python\nnode --version\nnode --version\nnpm --version\nnpm --version\npython --version' "$(LC_ALL=C sort "$LEDGER")" 'preview invokes only permitted read operations, including explicit npm routing observation'
+assert_equals $'bd --version\nbrew --prefix\nbun --version\ngit --version\nmise which bd\nmise which bun\nmise which node\nmise which node\nmise which node\nmise which npm\nmise which npm\nmise which python\nnode --version\nnode --version\nnpm --version\nnpm --version\npython --version' "$(LC_ALL=C sort "$LEDGER")" 'preview invokes only permitted read operations, including Beads and explicit npm routing observation'
 
 SPECIAL_REPO="$TEST_ROOT/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"$'source\n\t"\\'
 cp -R "$PREVIEW_REPO" "$SPECIAL_REPO"

@@ -6,7 +6,7 @@ status: accepted
 
 ## Context and Problem
 
-The laptop baseline needs exact Node, Bun, Python, and npm defaults, project
+The desktop and server baseline needs exact Node, Bun, Python, Beads, and npm defaults, project
 overrides, deliberate updates, interruption recovery, and the same selected
 tools in interactive and agent launches. The dotfiles repository is linked into
 `~/.config`, so placing the desired Mise declaration at Mise's default global
@@ -20,6 +20,11 @@ assign one or weaken that unresolved requirement.
 Nathan selected Mise and approved live installation, activation, the staged
 applied-revision seam, global lock generation, and non-destructive live
 qualification on 8 September 2026.
+
+Nathan extended this decision to the Beads global CLI on 18 September 2026.
+Beads must use the same verified revision path on the desktop and server
+profiles, pinned to 1.2.2 from `github:gastownhall/beads`. Homebrew remains the
+installer for Mise itself but no longer owns Beads.
 
 ## Decision Drivers
 
@@ -44,10 +49,12 @@ qualification on 8 September 2026.
 
 ## Decision
 
-Use Mise as the selected owner for exact Node, Bun, and Python defaults. npm is
+Use Mise as the selected owner for exact Node, Bun, Python, and Beads defaults. npm is
 owned beneath selected Node: keep its expected version in the toolchain
 manifest, derive its executable from the selected Node installation, and do
 not declare or install it as a standalone Mise tool.
+Declare Beads through Mise's GitHub backend and verify the public `bd` executable
+and exact version before publishing or selecting a revision.
 Keep the canonical desired declaration at a non-default source path under
 `config/mise`; it is input to application, not live global state.
 
@@ -141,6 +148,8 @@ a later explicit and destructive cleanup decision backed by live evidence.
   toolchain revision.
 - Positive: one public interface concentrates preview, apply, verification,
   idempotence, interruption, retry, and recovery behavior.
+- Positive: the desktop and server profiles select one exact Beads release
+  without relying on Homebrew's rolling formula version.
 - Positive: a failed staging operation preserves the last verified selection.
 - Negative: applied state duplicates a small reviewed declaration and lockfile
   outside Git.
@@ -188,6 +197,11 @@ separate clean no-cache macOS qualification must prove downloads without a prior
 Mise cache. Revisit this decision if atomic selection cannot preserve a verified
 current revision or project overrides cannot work across the required launch
 contexts.
+
+For Beads, also prove the same selected 1.2.2 executable in fresh Codex, Claude,
+and Herdr panes on the desktop and server hosts. Remove the Homebrew Beads
+formula only after the Mise selection is verified and a rollback path is
+recorded.
 
 ## References
 

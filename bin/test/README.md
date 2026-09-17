@@ -53,8 +53,8 @@ directory and has no restore interface. It does not activate a live profile or
 claim signal-interruption recovery.
 
 `toolchain-status-test.sh` copies the public status and preview command into a
-temporary Git fixture and supplies independent fake Node, Bun, Python, Git,
-npm, Brew, and Mise processes. It proves manifest validation, selected versus
+temporary Git fixture and supplies independent fake Node, Bun, Python, Beads,
+Git, npm, Brew, and Mise processes. It proves manifest validation, selected versus
 observed ownership, npm's declared Node relationship, structured output,
 read-only preview, canonical Mise data, installs, and shims directory custody
 despite hostile inherited redirection, and verifier separation between a corrupt declaration and a valid
@@ -90,7 +90,8 @@ contained lowercase revision selection, regular config selection, canonical
 data, installs, and shims directory replacement, hostile empty, relative,
 duplicate, and stale shim PATH
 removal, inactive malformed and symlinked state, shim-only
-noninteractive launches, interactive activation, fallback-manager suppression
+noninteractive launches, interactive activation, Beads shim selection,
+fallback-manager suppression
 only while applied Mise is active, script-relative verifier custody despite a
 hostile inherited `DOTFILES`, and silent zero-exit startup. Mise, fnm, and
 pyenv are process fakes, so this does not prove a Homebrew install, real runtime

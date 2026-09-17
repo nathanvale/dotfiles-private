@@ -53,6 +53,7 @@ cat >"$ORACLE" <<'EOF'
 node|24.20.0|24.20.1|24.20.2|24.20.3|24.20.4|24.20.5|24.20.6
 bun|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0
 python|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9
+bd|1.2.2|1.2.2|1.2.2|1.2.2|1.2.2|1.2.2|1.2.2
 npm|11.19.0|11.19.0|11.19.0|11.19.0|11.19.0|11.19.0|11.19.0
 EOF
 printf '%s\n' '# locked fixture' '# installed baseline platform' >"$LOCK_ORACLE"
@@ -140,7 +141,7 @@ case "$1" in
   fi
   ;;
  which)
-  case "$2" in node|bun|python) printf '%s/%s\n' "$TOOLCHAIN_FAKE_RUNTIME" "$2" ;; *) exit 97;; esac
+  case "$2" in node|bun|python|bd) printf '%s/%s\n' "$TOOLCHAIN_FAKE_RUNTIME" "$2" ;; *) exit 97;; esac
   ;;
  exec)
   tool="$3"; column="${MISE_TEST_ORACLE_COLUMN:-2}"
@@ -151,7 +152,7 @@ case "$1" in
   elif [[ "$tool" == node && "${MISE_TEST_VERIFY_FAILURE_MODE:-}" == always ]]; then
     version='0.0.0'
   fi
-  case "$tool" in node) printf 'v%s\n' "$version";; bun) printf '%s\n' "$version";; python) printf 'Python %s\n' "$version";; *) exit 97;; esac
+  case "$tool" in node) printf 'v%s\n' "$version";; bun) printf '%s\n' "$version";; python) printf 'Python %s\n' "$version";; bd) printf 'bd version %s (fixture)\n' "$version";; *) exit 97;; esac
   ;;
  *) exit 97;;
 esac
@@ -360,6 +361,7 @@ assert_file "$state/revisions/$revision/config.toml" 'apply publishes the staged
 assert_file "$state/revisions/$revision/mise.lock" 'apply publishes a generated lock'
 assert_file "$state/revisions/$revision/receipt.json" 'apply publishes a bounded receipt'
 assert_file "$state/revisions/$revision/manifest.tsv" 'apply publishes the snapshotted manifest'
+assert_equals 'bd|1.2.2|mise|source_declared|-' "$(grep '^bd|' "$state/revisions/$revision/manifest.tsv")" 'published manifest pins Beads 1.2.2 under Mise'
 assert_file "$state/revisions/$revision/contract.txt" 'apply publishes the application contract'
 assert_file "$lock_mutation_marker" 'first install mutates the generated lock'
 expected_revision="$(fixture_content_id "$FIXTURE_REPO/config/toolchain/versions.tsv" "$FIXTURE_REPO/config/mise/source.toml")"

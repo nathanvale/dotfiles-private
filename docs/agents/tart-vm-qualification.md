@@ -16,7 +16,7 @@ of these facts:
 
 - The source image tag, OCI digest, macOS version and build match the declared
   inputs.
-- The guest starts without Homebrew, Mise, Node, Bun or npm. Record any system
+- The guest starts without Homebrew, Mise, Node, Bun, Beads or npm. Record any system
   Python and Git launchers separately.
 - The first `./setup.sh --desktop` exits zero without a manual repair or retry.
   Phase 5 uses serial Homebrew downloads and may retry its `brew bundle`
@@ -24,7 +24,7 @@ of these facts:
   remains part of the same setup invocation and is not a resumed run or manual
   repair.
 - An interactive login shell selects the intended Git owner and the exact
-  Mise-managed Node, Bun, Python and npm versions.
+  Mise-managed Node, Bun, Python, Beads and npm versions.
 - `bin/dotfiles/toolchain status --json` reports the selected owners ready.
 - The second full setup exits zero and produces no unexpected replacement,
   backup, version or ownership change.
@@ -416,12 +416,13 @@ shell:
     printf "expected an executable Claude Code at PATH or %s\n" "$HOME/.local/bin/claude" >&2
     exit 1
   }
-  command -v node bun python npm >/dev/null
+  command -v node bun python bd npm >/dev/null
   printf "git_path=%s\nclaude_path=%s\n" "$git_path" "$claude_path"
   git --version
   node --version
   bun --version
   python --version
+  bd --version
   npm --version
   toolchain_exit=0
   toolchain_output="$(bin/dotfiles/toolchain status --json)" || toolchain_exit=$?
@@ -433,12 +434,12 @@ shell:
   printf "%s\n" "$toolchain_output" | jq -e --arg mise_root "$HOME/.local/share/mise" '\''
     .status == "ready" and
     .exact_reconstruction == "not_qualified" and
-    ([.tools[] | select(.name == "git" or .name == "node" or .name == "bun" or .name == "python" or .name == "npm")] | length == 5) and
+    ([.tools[] | select(.name == "git" or .name == "node" or .name == "bun" or .name == "python" or .name == "bd" or .name == "npm")] | length == 6) and
     all(.tools[]; .executable_path != "" and .effective_version == .expected_version and .version_matches == true) and
     (.tools[] | select(.name == "git") |
       .selected_owner == "system" and .observed_owner == "system" and
       .selected_owner_matches == true and .executable_path == "/usr/bin/git") and
-    all(.tools[] | select(.name == "node" or .name == "bun" or .name == "python" or .name == "npm");
+    all(.tools[] | select(.name == "node" or .name == "bun" or .name == "python" or .name == "bd" or .name == "npm");
       .selected_owner == "mise" and .observed_owner == "mise" and
       .selected_owner_matches == true and
       (.executable_path | startswith($mise_root + "/")))
