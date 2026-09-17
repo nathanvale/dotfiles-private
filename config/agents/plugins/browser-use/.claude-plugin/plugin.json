@@ -1,0 +1,13 @@
+{
+  "name": "browser-use",
+  "version": "0.1.0",
+  "description": "Direct, attended browser reads in an isolated Google Chrome profile.",
+  "author": {
+    "name": "Nathan Vale"
+  },
+  "keywords": [
+    "browser",
+    "attended-authentication",
+    "isolated-profile"
+  ]
+}

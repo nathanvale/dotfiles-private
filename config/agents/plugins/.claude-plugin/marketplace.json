@@ -33,6 +33,15 @@
         "name": "Nathan Vale"
       },
       "source": "./proof"
+    },
+    {
+      "name": "browser-use",
+      "description": "Direct, attended browser reads in an isolated Google Chrome profile.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Nathan Vale"
+      },
+      "source": "./browser-use"
     }
   ]
 }
