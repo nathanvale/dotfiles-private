@@ -1407,31 +1407,48 @@ test("unknown arguments report a versioned not-started usage failure with a fixe
 	})
 })
 
-test("Codex and Claude declarations route startup, resume, and compact SessionStart to the shared executable", () => {
+test("Codex and Claude declarations register bin/msb-workflow hook and keep the legacy launchers as the byte-identical rollback route", () => {
 	const pluginRoot = resolve(import.meta.dir, "../../..")
+	const fileSha256 = (path: string): string => createHash("sha256").update(readFileSync(join(pluginRoot, path))).digest("hex")
 	const codex = JSON.parse(readFileSync(join(pluginRoot, "hooks/codex/hooks.json"), "utf8"))
 	const claude = JSON.parse(readFileSync(join(pluginRoot, "hooks/claude/hooks.json"), "utf8"))
 
+	// Ticket #52 (M2): both manifests route to the thin launcher. Codex SessionStart excludes `compact` so one
+	// compaction delivers one panel, on the next UserPromptSubmit; Claude keeps `compact` as its delivery event.
+	const launcher = { type: "command", command: '"${PLUGIN_ROOT}/bin/msb-workflow" hook' }
 	expect(codex).toEqual({
 		hooks: {
-			SessionStart: [
-				{
-					matcher: "startup|resume|compact",
-					hooks: [{ type: "command", command: '"${PLUGIN_ROOT}/hooks/recover-context"' }],
-				},
-			],
+			SessionStart: [{ matcher: "startup|resume|clear", hooks: [launcher] }],
+			PreCompact: [{ hooks: [launcher] }],
+			PostCompact: [{ hooks: [launcher] }],
+			UserPromptSubmit: [{ hooks: [launcher] }],
 		},
 	})
 	expect(claude).toEqual({
 		hooks: {
-			SessionStart: [
-				{
-					matcher: "startup|resume|compact",
-					hooks: [{ type: "command", command: '"${CLAUDE_PLUGIN_ROOT}/hooks/recover-context"' }],
-				},
-			],
+			SessionStart: [{ matcher: "startup|resume|compact", hooks: [{ type: "command", command: '"${CLAUDE_PLUGIN_ROOT}/bin/msb-workflow" hook' }] }],
 		},
 	})
+	expect(statSync(join(pluginRoot, "bin/msb-workflow")).mode & 0o111).not.toBe(0)
+
+	// Independent oracle: the manifest bytes are the rollback unit (restoring the pre-change bytes re-registers
+	// `hooks/recover-context`), so both identities are pinned here from the accepted M2 readiness packet.
+	const manifestBytes = {
+		"hooks/claude/hooks.json": { current: "609dfbe4e1ce188ce8d1db21a436cea2498e59301c8f0a49077b84b0c877e694", preChange: "c2c8e2500d48c46ed1559bd9bb212ecb2aa8b579152c340f53923c7ad36cc461" },
+		"hooks/codex/hooks.json": { current: "dba51eb5d7f8fc6b78f4f3307b5bdc2f5a09053aeb84fad5c1cd9606a02f9a07", preChange: "d9f8532a537e1e39f5b1cf1fad03221cfa6b43a1cb497c308e9b9e0da2081e08" },
+	}
+	for (const [path, identity] of Object.entries(manifestBytes)) {
+		expect(fileSha256(path)).toBe(identity.current)
+		expect(fileSha256(path)).not.toBe(identity.preChange)
+	}
+
+	// Independent oracle: the rollback route stays byte-identical and unregistered (Ticket #52, Spec #57 revision 2).
+	expect(fileSha256("hooks/recover-context")).toBe("2ffa42ad7671b4135394ccb15cb3daf4d4cb30ed0bda7101636e59cdb75fb859")
+	expect(statSync(join(pluginRoot, "hooks/recover-context")).mode & 0o111).not.toBe(0)
+	expect(fileSha256("hooks/recovery-checkpoint")).toBe("8981956b243b998942a431da595115dbab73b51c9474b5aa0db49e751636be92")
+	expect(statSync(join(pluginRoot, "hooks/recovery-checkpoint")).mode & 0o111).not.toBe(0)
+	expect(fileSha256("packages/compaction-recovery/src/recovery.py")).toBe("2c960f6302859781ef157bae5404800d99a92480691cf98ce9d1fc49823b8594")
+	expect(JSON.stringify([codex, claude])).not.toContain("hooks/recover-context")
 })
 
 test("the checkpoint writer atomically creates private state accepted by the hook", () => {
