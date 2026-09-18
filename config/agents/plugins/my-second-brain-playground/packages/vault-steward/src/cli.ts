@@ -3,7 +3,7 @@
 // against the strict schema before writing it (CONTRACT.md 3.1, 3.2, 3.5, 3.8, 3.9).
 import { isAbsolute, resolve } from "node:path"
 import { parseArgs } from "node:util"
-import { stationForReason, stationIdOf } from "./branch-station-catalog.ts"
+import { stationFor, stationIdOf } from "./branch-station-catalog.ts"
 import {
 	type CliRoute,
 	COMMANDS,
@@ -22,13 +22,14 @@ import {
 	type Handoff,
 	HELP_DATA,
 	isCommandIdentity,
-	isSafeJson,
 	type JsonValue,
 	MachineEnvelopeSchema,
 	PARSE_ARGS_CONFIG,
 	RETRY_DELAY_MS,
 	type StationRow,
 	type WireCauseCode,
+	causeRule,
+	isSafeJson as isJson,
 } from "./command-contract.ts"
 import { type DiagnosticsStatus, openRunDiagnostics } from "./diagnostics.ts"
 import {
@@ -60,7 +61,7 @@ import { parseFaults, withFaults } from "./faults.ts"
 import { observeGuard } from "./guard.ts"
 import { type EffectId, type GuardObservation, type Manifest, type PreviewRecord, productCause, type ProductCause, type RefusalFacts, type TransactionState } from "./model.ts"
 import { createRuntime, type Runtime } from "./runtime.ts"
-import { commandDiscovery, type PublicStation } from "./station-catalogue.ts"
+import { commandDiscovery, handoffOwner, type PublicStation } from "./station-catalogue.ts"
 
 export interface Io {
 	stdout(text: string): void
@@ -396,8 +397,30 @@ interface InspectViews {
 	main: ReturnType<typeof mainView>
 	lock: ReturnType<typeof lockView>
 	preview: PreviewRecord | null
+	previewInvalid: boolean
 	previewStale: boolean | null
 	observation: GuardObservation | undefined
+}
+
+// inspect is read-only: an unreadable preview record is reported, never refused.
+function previewViewOf(rt: Runtime, runId: string): { present: false } | { present: true; valid: true; record: PreviewRecord } | { present: true; valid: false } {
+	try {
+		const stored = readPreview(rt, runId)
+		return stored.present ? { present: true, valid: true, record: stored.record } : { present: false }
+	} catch (error) {
+		if (error instanceof Refusal && error.reason === "preview-invalid") return { present: true, valid: false }
+		throw error
+	}
+}
+
+// The preview part of the inspect view: absent, invalid, or the record with its staleness against the candidate.
+function previewViews(rt: Runtime, record: Manifest | null, candidate: ReturnType<typeof candidateView> | null): Pick<InspectViews, "preview" | "previewInvalid" | "previewStale"> {
+	if (record === null) return { preview: null, previewInvalid: false, previewStale: null }
+	const stored = previewViewOf(rt, record.runId)
+	if (!stored.present) return { preview: null, previewInvalid: false, previewStale: null }
+	if (!stored.valid) return { preview: null, previewInvalid: true, previewStale: null }
+	const previewStale = candidate === null ? null : candidate.head !== (stored.record.candidateCommit ?? record.baseCommit)
+	return { preview: stored.record, previewInvalid: false, previewStale }
 }
 
 function inspectViews(rt: Runtime, worktree: string): InspectViews {
@@ -407,19 +430,17 @@ function inspectViews(rt: Runtime, worktree: string): InspectViews {
 	const candidate = record === null ? null : candidateView(rt, record)
 	const main = record === null || candidate === null ? { head: null, containsCandidateCommit: null, overlap: [] } : mainView(rt, record, candidate)
 	const lock = record === null ? { held: false, ownerPid: null, ownerRunId: null, live: null } : lockView(rt, record.commonGitDirectory)
-	const stored = record === null ? null : readPreview(rt, record.runId)
-	const preview = stored?.present ? stored.record : null
-	const previewStale = preview === null || candidate === null ? null : candidate.head !== (preview.candidateCommit ?? record?.baseCommit)
 	// A valid receipt is the completion boundary: no hook spawn on that path.
 	const observation = receipt.valid || record === null ? undefined : observeGuard(rt, { vault: record.vault, candidateRoot: candidateRoot(rt, record.vault), runId: record.runId, candidateCommit: candidate?.committed ? (candidate.head ?? undefined) : undefined })
-	return { worktree, receipt, manifest, record, candidate, main, lock, preview, previewStale, observation }
+	return { worktree, receipt, manifest, record, candidate, main, lock, ...previewViews(rt, record, candidate), observation }
 }
 
 function recoveryStateOf(rt: Runtime, views: InspectViews): RecoveryState {
 	if (views.receipt.valid) return "completed"
 	if (views.record === null) return views.receipt.present ? "needs-human" : "not-started"
 	if (recoveryEvidence(rt, views.record).kind !== "unprovable") return "recoverable"
-	if (views.preview?.consumed) return "needs-human"
+	const cleanNotOnMain = views.candidate !== null && !views.candidate.dirty && views.main.containsCandidateCommit !== true
+	if (views.preview?.consumed) return cleanNotOnMain ? "not-started" : "needs-human"
 	if (views.preview !== null && views.previewStale === false) return "previewed"
 	if (views.candidate?.committed && views.main.overlap.length > 0) return "needs-human"
 	return "not-started"
@@ -431,7 +452,7 @@ function inspectData(views: InspectViews, state: RecoveryState, nextCommand: str
 		candidate: { runId: record?.runId ?? null, worktree: views.worktree, exists: manifest.worktreeExists, baseCommit: record?.baseCommit ?? null, head: candidate?.head ?? null, committed: candidate?.committed ?? false, dirty: candidate?.dirty ?? false, paths: record?.paths ?? null },
 		manifest: { present: manifest.present, valid: manifest.valid },
 		receipt: { present: receipt.present, valid: receipt.valid, code: receipt.code, path: receipt.path },
-		preview: preview === null ? { present: false, previewId: null, consumed: null, stale: null } : { present: true, previewId: preview.previewId, consumed: preview.consumed, stale: views.previewStale },
+		preview: preview === null ? { present: views.previewInvalid, valid: false, previewId: null, consumed: null, stale: null } : { present: true, valid: true, previewId: preview.previewId, consumed: preview.consumed, stale: views.previewStale },
 		lock: { held: lock.held, ownerPid: lock.ownerPid, ownerRunId: lock.ownerRunId, live: lock.live },
 		main: { head: main.head, containsCandidateCommit: main.containsCandidateCommit, overlap: main.overlap },
 		guard: guardData(views.observation),
@@ -529,29 +550,64 @@ const REPAIR: Readonly<Record<ProductCause, Guidance>> = {
 	INTERNAL_UNEXPECTED_UNKNOWN: { repair: "Inspect canonical main and the candidate before taking another action.", next: null },
 }
 
+const SENTENCE: Readonly<Record<ProductCause, string>> = {
+	SCHEMA_INVALID_INPUT: "An option value has the wrong shape.",
+	SCHEMA_CONFIG_INVALID: "The vault configuration file is unreadable or off schema.",
+	SCHEMA_MANIFEST_INVALID: "The candidate manifest fails validation.",
+	SCHEMA_RECEIPT_INVALID: "A receipt exists for this worktree but fails validation.",
+	SCHEMA_PREVIEW_INVALID: "The preview record is unreadable or off shape.",
+	DOMAIN_CONFIG_MISSING: "No vault is configured and --vault was not given.",
+	DOMAIN_VAULT_NOT_FOUND: "The vault path does not resolve.",
+	DOMAIN_CANONICAL_NOT_MAIN: "The vault is not the root checkout with main checked out.",
+	DOMAIN_PATH_REFUSED: "An admitted path escapes the vault or crosses a symbolic link.",
+	DOMAIN_CANDIDATE_NOT_FOUND: "No candidate worktree exists at that path and no receipt records it.",
+	DOMAIN_CANDIDATE_INVALID: "The committed candidate is dirty, has more than one commit, or its paths differ from the admitted set.",
+	DOMAIN_PATH_SET_MISMATCH: "The changed paths differ from the admitted set.",
+	DOMAIN_CHECK_FAILED: "bun run check failed inside the candidate.",
+	DOMAIN_FORMAT_FAILED: "Whitespace findings in the admitted files.",
+	DOMAIN_GUARD_INCOMPATIBLE: "The installed reference-transaction hook denies a ref Vault Steward must write.",
+	DOMAIN_CANONICAL_NOT_READY: "The canonical checkout is not on main or is dirty.",
+	DOMAIN_MAIN_DIVERGED: "The candidate base is no longer an ancestor of main.",
+	DOMAIN_SEMANTIC_OVERLAP: "Main changed an admitted path since the candidate began.",
+	DOMAIN_PREVIEW_NOT_FOUND: "No preview record exists for this candidate.",
+	DOMAIN_PREVIEW_CONSUMED: "The preview was already consumed by an earlier apply.",
+	DOMAIN_PREVIEW_STALE: "The preview no longer matches the candidate or main.",
+	DOMAIN_REBASE_CONFLICT: "The rebase onto the moved main conflicted and was aborted.",
+	DOMAIN_REBASED_PATH_SET_MISMATCH: "The rebased candidate commit's paths differ from the admitted set.",
+	DOMAIN_REBASED_CHECK_FAILED: "The checker failed on the rebased candidate.",
+	DOMAIN_RECOVERY_UNPROVABLE: "Git does not prove that main contains the candidate's own commit.",
+	TRANSIENT_INTEGRATION_BUSY: "Another finisher holds the local integration lock.",
+	INTERNAL_GIT_FAILED_UNCHANGED: "A Git command failed before any effect.",
+	INTERNAL_GIT_FAILED_PARTIAL: "A Git command failed after a confirmed effect.",
+	INTERNAL_GIT_FAILED_UNKNOWN: "A Git command failed while an effect's result was not established.",
+	INTERNAL_INTEGRATION_UNPROVED: "The fast-forward of main could not be proven by read-back.",
+	INTERNAL_COMPLETION_RECORD_FAILED: "The completion record could not be finished after the fast-forward.",
+	INTERNAL_UNEXPECTED_UNCHANGED: "An unclassified error occurred before any effect.",
+	INTERNAL_UNEXPECTED_UNKNOWN: "An unclassified error occurred while an effect was in flight.",
+}
+
+// A human sentence for the message: the cause's sentence plus the facts of this run. Agents match on causeCode.
 function describe(cause: ProductCause, facts: RefusalFacts): string {
-	const parts: string[] = []
+	const parts: string[] = [SENTENCE[cause]]
 	if (facts.detail) parts.push(facts.detail)
 	if (facts.overlap?.length) parts.push(`overlapping paths: ${facts.overlap.join(", ")}`)
-	if (facts.ref) parts.push(`the installed reference-transaction hook denies ${facts.ref}`)
+	if (facts.ref) parts.push(`denied ref: ${facts.ref}`)
 	if (facts.diagnostics?.length) parts.push(facts.diagnostics.join("; "))
 	if (facts.diagnosticsPath) parts.push(`checker diagnostics at ${facts.diagnosticsPath}`)
 	if (facts.worktree) parts.push(`candidate ${facts.worktree}`)
-	return parts.length === 0 ? cause : `${cause}: ${parts.join("; ")}`
+	return parts.join(" ")
 }
 
-function nextActionFor(station: StationRow, guidance: Guidance, refusal: Refusal): CommandIdentity {
+function nextActionFor(station: StationRow, guidance: Guidance): CommandIdentity {
 	const preferred = guidance.next
 	if (preferred !== null && (station.nextActions as readonly string[]).includes(preferred)) return preferred
-	if (station.causeCode === "TRANSIENT_NOT_STARTED") return station.commandIdentity
-	if ((refusal.reason === "state-home-missing" || refusal.reason === "input-invalid") && (station.nextActions as readonly string[]).includes("vault-steward.help")) return "vault-steward.help"
 	const first = station.nextActions[0]
 	return isCommandIdentity(first) ? first : "vault-steward.help"
 }
 
 function handoffFor(station: StationRow, message: string, facts: RefusalFacts): Handoff {
 	const inspect = facts.worktree ? [`vault-steward inspect --worktree ${facts.worktree} --json`] : ["vault-steward --discover --json"]
-	const owner = station.causeCode === "DOMAIN_AUTHORITY_REQUIRED" ? "human" : "operator"
+	const owner = handoffOwner(station.causeCode)
 	return facts.worktree ? { owner, reason: message, inspect, resource: { kind: "candidate-worktree", id: facts.worktree } } : { owner, reason: message, inspect }
 }
 
@@ -567,23 +623,20 @@ function effectsFor(inventory: readonly EffectId[], transaction: TransactionStat
 function refusalResult(decision: RefusalDecision, runId: string): { result: ContractResult; message: string } {
 	const { identity, refusal, inventory } = decision
 	const cause = productCause(refusal.reason, refusal.transaction)
-	const station = stationForReason(identity, cause, refusal.transaction) ?? stationForReason(identity, "INTERNAL_UNEXPECTED_UNCHANGED", "unchanged")
+	const declared = stationFor(identity, cause)
+	// An undeclared cause on this command is an internal inconsistency; the envelope stays valid and names it.
+	const station = declared ?? stationFor(identity, "INTERNAL_UNEXPECTED_UNCHANGED")
 	if (station === undefined) throw new Error(`no station for ${identity} ${cause}`)
-	const mapped = station.reasons.includes(cause)
-	const message = mapped ? describe(cause, refusal.facts) : `INTERNAL_UNEXPECTED_UNCHANGED: unmapped reason ${cause} on ${identity}`
+	const message = declared === undefined ? `Undeclared cause ${cause} on ${identity}; ${describe(cause, refusal.facts)}` : describe(cause, refusal.facts)
 	const guidance = REPAIR[cause]
 	const effectClass = declarationForIdentity(identity).effectClass
-	const transaction = mapped ? refusal.transaction : "unchanged"
+	const transaction = declared === undefined ? "unchanged" : refusal.transaction
 	const effects = effectClass === "inspect" ? { completed: [], remaining: [], uncertain: [], inventoryComplete: true } : effectsFor(inventory, transaction, refusal.facts)
-	const base = { runId, commandIdentity: identity, effectClass, transactionState: station.transactionState, causeCode: station.causeCode, failureClass: station.exit === 0 ? null : (declarationFailure(station.causeCode) as ContractResult["failureClass"]), exitCode: station.exit, data: null, repairAction: guidance.repair, effects, ...(refusal.facts.runId ? { idempotencyKey: refusal.facts.runId } : {}) }
-	const guided = station.guidance === "handoff" ? { ...base, handoff: handoffFor(station, message, refusal.facts) } : { ...base, nextAction: nextActionFor(station, guidance, refusal) }
+	const rule = causeRule(station.causeCode)
+	const base = { runId, commandIdentity: identity, effectClass, transactionState: station.transactionState, causeCode: station.causeCode, failureClass: rule.failureClass as ContractResult["failureClass"], exitCode: station.exit, data: null, repairAction: guidance.repair, effects, ...(refusal.facts.runId ? { idempotencyKey: refusal.facts.runId } : {}) }
+	const guided = station.guidance === "handoff" ? { ...base, handoff: handoffFor(station, message, refusal.facts) } : { ...base, nextAction: nextActionFor(station, guidance) }
 	const retry = station.retryable ? { retryable: true, retryDelayMilliseconds: RETRY_DELAY_MS } : { retryable: false }
 	return { result: { ...guided, outcome: station.outcome, ...retry } as unknown as ContractResult, message }
-}
-
-function declarationFailure(cause: WireCauseCode): string | null {
-	const prefix = cause.split("_")[0]
-	return prefix === "SUCCESS" ? null : prefix === "USAGE" ? "usage" : prefix === "SCHEMA" ? "schema" : prefix === "DOMAIN" ? "domain" : prefix === "TRANSIENT" ? "transient" : "internal"
 }
 
 function successResult(decision: SuccessDecision, runId: string): ContractResult {
@@ -621,7 +674,7 @@ function usageEnvelope(identity: CommandIdentity, runId: string, cause: "USAGE_I
 	const remaining = effectClass === "inspect" || route === undefined ? [] : [...INVENTORY[route]].sort()
 	const nextAction = cause === "USAGE_UNKNOWN_COMMAND" && identity === "vault-steward.command-discovery" ? "vault-steward.discovery" : "vault-steward.help"
 	const result: ContractResult = { runId, commandIdentity: identity, outcome: "refused", effectClass, transactionState: "unchanged", causeCode: cause, failureClass: "usage", exitCode: 2, data: null, retryable: false, repairAction: cause === "USAGE_UNKNOWN_COMMAND" ? "Select a canonical command from --discover --json or run --help." : "Correct the command arguments; run --help for the accepted forms.", effects: { completed: [], remaining, uncertain: [], inventoryComplete: true }, nextAction }
-	return envelope(`${cause}: ${message}`, result)
+	return envelope(message, result)
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -638,20 +691,51 @@ function diagnosticsDisclosure(status: DiagnosticsStatus): Diagnostics {
 }
 
 // Every machine outcome emits exactly one validated envelope. A candidate the schema rejects yields the bounded
-// internal fallback that keeps the identity and the trusted effect facts, exit 1, never a replay.
+// internal fallback that keeps the identity and the trusted effect facts (effects and transaction state when they
+// validate on their own, else unknown with an incomplete inventory), exit 1, never a replay.
+const effectsSchema = MachineEnvelopeSchema.shape.result.options[0].shape.effects
+function trustedEffects(candidate: EnvelopeV2): { transactionState: "unchanged" | "partially-completed" | "unknown"; effects: Effects; causeCode: "INTERNAL_UNEXPECTED_UNCHANGED" | "INTERNAL_UNEXPECTED_UNKNOWN" } {
+	const parsed = effectsSchema.safeParse(candidate.result?.effects)
+	const state = candidate.result?.transactionState
+	const unknown = { transactionState: "unknown" as const, effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: false }, causeCode: "INTERNAL_UNEXPECTED_UNKNOWN" as const }
+	if (!parsed.success) return unknown
+	const effects = parsed.data
+	if (state === "unchanged" && effects.completed.length === 0 && effects.uncertain.length === 0 && effects.inventoryComplete) return { transactionState: "unchanged", effects, causeCode: "INTERNAL_UNEXPECTED_UNCHANGED" }
+	if (state === "partially-completed" && effects.completed.length > 0 && effects.remaining.length > 0 && effects.uncertain.length === 0 && effects.inventoryComplete) return { transactionState: "partially-completed", effects, causeCode: "INTERNAL_UNEXPECTED_UNKNOWN" }
+	return effects.uncertain.length > 0 || !effects.inventoryComplete ? { ...unknown, effects } : unknown
+}
+
 function emitMachine(candidate: EnvelopeV2, io: Io): number {
-	const parsed = isSafeJson(candidate) ? MachineEnvelopeSchema.safeParse(candidate) : null
+	const parsed = isJson(candidate) ? MachineEnvelopeSchema.safeParse(candidate) : null
 	if (parsed?.success) {
 		io.stdout(`${JSON.stringify(parsed.data)}\n`)
 		return parsed.data.result.exitCode
 	}
 	const identity = isCommandIdentity(candidate.result?.commandIdentity) ? candidate.result.commandIdentity : "vault-steward.dispatch"
+	const effectClass = declarationForIdentity(identity).effectClass
+	const facts = effectClass === "inspect" ? { transactionState: "unchanged" as const, effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true }, causeCode: "INTERNAL_UNEXPECTED_UNCHANGED" as const } : trustedEffects(candidate)
+	const partial = facts.transactionState === "partially-completed"
 	const fallback: EnvelopeV2 = {
 		envelopeVersion: ENVELOPE_VERSION,
 		contractVersion: CONTRACT_VERSION,
-		message: "INTERNAL_UNEXPECTED_UNCHANGED: the result could not be serialized as a valid 2.0 envelope",
+		message: "The result could not be serialized as a valid 2.0 envelope; the effect facts below are the trusted ones.",
 		availablePaths: paths(identity),
-		result: { runId: typeof candidate.result?.runId === "string" && candidate.result.runId ? candidate.result.runId : "run-unknown", commandIdentity: identity, outcome: "failed", effectClass: declarationForIdentity(identity).effectClass, transactionState: "unchanged", causeCode: "INTERNAL_UNEXPECTED", failureClass: "internal", exitCode: 1, data: null, retryable: false, repairAction: "Inspect the diagnostics file and the candidate before retrying.", effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true }, handoff: { owner: "operator", reason: "envelope serialization failed", inspect: ["vault-steward --discover --json"] } },
+		result: {
+			runId: typeof candidate.result?.runId === "string" && candidate.result.runId ? candidate.result.runId : "run-unknown",
+			commandIdentity: identity,
+			outcome: "failed",
+			effectClass,
+			// A partially-completed candidate keeps its state under the unknown cause: the record is what failed.
+			transactionState: partial ? "unknown" : facts.transactionState,
+			causeCode: facts.causeCode,
+			failureClass: "internal",
+			exitCode: 1,
+			data: null,
+			retryable: false,
+			repairAction: "Inspect the candidate and the diagnostics file before retrying; nothing is replayed.",
+			effects: partial ? { ...facts.effects, uncertain: facts.effects.remaining, remaining: [] } : facts.effects,
+			handoff: { owner: "operator", reason: "envelope serialization failed", inspect: ["vault-steward --discover --json"] },
+		},
 	}
 	io.stdout(`${JSON.stringify(fallback)}\n`)
 	return 1
@@ -664,8 +748,7 @@ function renderHuman(decision: Decision, result: ContractResult, message: string
 		if (decision.kind === "success" && decision.identity === "vault-steward.inspect") io.stdout(`${JSON.stringify(decision.data)}\n`)
 		return
 	}
-	// The message already leads with the product reason; prefix the wire cause only when it differs.
-	io.stderr(`${message.startsWith(result.causeCode) ? message : `${result.causeCode}: ${message}`} (repair: ${result.repairAction})\n`)
+	io.stderr(`${result.causeCode}: ${message} (repair: ${result.repairAction})\n`)
 }
 
 function stationLine(station: PublicStation): string {

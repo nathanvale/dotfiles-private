@@ -37,10 +37,11 @@ configuration is missing or invalid, read
 
 ## Reading a result
 
-- `result.causeCode` is the Contract Core 2.0 vocabulary; the first token of
-  `message` is the product reason (for example `DOMAIN_PREVIEW_STALE`,
-  `DOMAIN_GUARD_INCOMPATIBLE`, `TRANSIENT_INTEGRATION_BUSY`). Discovery lists
-  every reason a station can carry under `reasons`.
+- Match on `result.causeCode`, never on `message` text: it carries the
+  product cause (for example `DOMAIN_PREVIEW_STALE`,
+  `DOMAIN_GUARD_INCOMPATIBLE`, `TRANSIENT_INTEGRATION_BUSY`), and
+  `--discover-command` lists every cause a command can emit with its exit,
+  state, retry policy, and next actions.
 - `data.guard` and `data.warnings` report the vault's Git gate; warnings never
   block. `DOMAIN_GUARD_INCOMPATIBLE` needs `bun run guard:install` in the vault.
   Codes and meanings: [guardrails](../vault-note-commits/references/guardrails.md).

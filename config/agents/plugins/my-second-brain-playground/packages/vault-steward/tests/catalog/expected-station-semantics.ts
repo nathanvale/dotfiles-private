@@ -1,6 +1,6 @@
 // Independent oracle (marked): the expected Branch Station semantics of the Vault Steward CLI, restated by hand from
-// CONTRACT.md section 5 collapsed onto the Contract Core 2.0 checker vocabulary (REPORT-2B deviation 1). A dedupe pass
-// must not hoist this table into src/station-rows.ts; the production table supplies enumeration only.
+// CONTRACT.md section 5 with the product causes on the wire. A dedupe pass must not hoist this table into
+// src/station-rows.ts; the production table supplies enumeration only.
 
 export interface ExpectedStation {
 	failureClass: "usage" | "schema" | "domain" | "transient" | "internal" | null
@@ -10,7 +10,6 @@ export interface ExpectedStation {
 	retryable: boolean
 	delay: number | null
 	guidance: "next-action" | "handoff"
-	reasons: string[]
 	nextActions: string[]
 	reachability: "required" | "declared-unreachable"
 }
@@ -26,75 +25,102 @@ const inspect = "vault-steward.inspect"
 const recover = "vault-steward.recover"
 const every = ["vault-steward.begin", "vault-steward.command-discovery", "vault-steward.discovery", "vault-steward.dispatch", "vault-steward.finish-apply", "vault-steward.finish-preview", "vault-steward.help", "vault-steward.inspect", "vault-steward.recover"]
 
-const usage = (effectClass: ExpectedStation["effectClass"], next = [help]): ExpectedStation => ({ failureClass: "usage", exit: 2, effectClass, state: "unchanged", retryable: false, delay: null, guidance: "next-action", reasons: ["USAGE_INVALID_INVOCATION"], nextActions: next, reachability: "required" })
-const unknownCommand = (next: string[]): ExpectedStation => ({ failureClass: "usage", exit: 2, effectClass: "inspect", state: "unchanged", retryable: false, delay: null, guidance: "next-action", reasons: ["USAGE_UNKNOWN_COMMAND"], nextActions: next, reachability: "required" })
-const unchanged = (effectClass: ExpectedStation["effectClass"], next: string[]): ExpectedStation => ({ failureClass: null, exit: 0, effectClass, state: "unchanged", retryable: false, delay: null, guidance: "next-action", reasons: [], nextActions: next, reachability: "required" })
-const completed = (next: string[]): ExpectedStation => ({ failureClass: null, exit: 0, effectClass: "repository-local", state: "completed", retryable: false, delay: null, guidance: "next-action", reasons: [], nextActions: next, reachability: "required" })
-const schema = (effectClass: ExpectedStation["effectClass"], reasons: string[], next: string[]): ExpectedStation => ({ failureClass: "schema", exit: 4, effectClass, state: "unchanged", retryable: false, delay: null, guidance: "next-action", reasons, nextActions: next, reachability: "required" })
-const precondition = (reasons: string[], next: string[]): ExpectedStation => ({ failureClass: "domain", exit: 3, effectClass: "repository-local", state: "unchanged", retryable: false, delay: null, guidance: "next-action", reasons, nextActions: next, reachability: "required" })
-const authority = (reasons: string[]): ExpectedStation => ({ failureClass: "domain", exit: 3, effectClass: "repository-local", state: "unchanged", retryable: false, delay: null, guidance: "handoff", reasons, nextActions: [], reachability: "required" })
-const transient = (next: string): ExpectedStation => ({ failureClass: "transient", exit: 75, effectClass: "repository-local", state: "unchanged", retryable: true, delay: 2000, guidance: "next-action", reasons: ["TRANSIENT_INTEGRATION_BUSY"], nextActions: [next], reachability: "required" })
-const internal = (effectClass: ExpectedStation["effectClass"], state: ExpectedStation["state"], reasons: string[], reachability: ExpectedStation["reachability"] = "required"): ExpectedStation => ({ failureClass: "internal", exit: 1, effectClass, state, retryable: false, delay: null, guidance: "handoff", reasons, nextActions: [], reachability })
+type Class = ExpectedStation["failureClass"]
+type State = ExpectedStation["state"]
+const EXIT: Record<string, number> = { usage: 2, schema: 4, domain: 3, transient: 75, internal: 1, null: 0 }
+const next = (failureClass: Class, effectClass: ExpectedStation["effectClass"], nextActions: string[], state: State = "unchanged"): ExpectedStation => ({ failureClass, exit: EXIT[String(failureClass)] as number, effectClass, state, retryable: failureClass === "transient", delay: failureClass === "transient" ? 2000 : null, guidance: "next-action", nextActions, reachability: "required" })
+const handoff = (failureClass: Exclude<Class, null>, state: State = "unchanged", reachability: ExpectedStation["reachability"] = "required"): ExpectedStation => ({ failureClass, exit: EXIT[failureClass] as number, effectClass: "repository-local", state, retryable: false, delay: null, guidance: "handoff", nextActions: [], reachability })
+const inspectHandoff = (failureClass: Exclude<Class, null>): ExpectedStation => ({ ...handoff(failureClass), effectClass: "inspect" })
+const RL = "repository-local"
 
 export const EXPECTED_STATIONS: readonly Spec[] = [
-	[help, "success", "SUCCESS_UNCHANGED", unchanged("inspect", [discovery])],
-	[help, "refused", "USAGE_INVALID_INVOCATION", usage("inspect")],
-	[discovery, "success", "SUCCESS_UNCHANGED", unchanged("inspect", ["vault-steward.command-discovery"])],
-	[discovery, "refused", "USAGE_INVALID_INVOCATION", usage("inspect")],
-	["vault-steward.command-discovery", "success", "SUCCESS_UNCHANGED", unchanged("inspect", every)],
-	["vault-steward.command-discovery", "refused", "USAGE_UNKNOWN_COMMAND", unknownCommand([discovery])],
-	["vault-steward.command-discovery", "refused", "USAGE_INVALID_INVOCATION", usage("inspect")],
-	["vault-steward.dispatch", "refused", "USAGE_INVALID_INVOCATION", usage("inspect")],
-	["vault-steward.dispatch", "refused", "USAGE_UNKNOWN_COMMAND", unknownCommand([help])],
-	[begin, "success", "SUCCESS_COMPLETED", completed([preview])],
-	[begin, "success", "SUCCESS_UNCHANGED", unchanged("repository-local", [begin])],
-	[begin, "refused", "USAGE_INVALID_INVOCATION", usage("repository-local")],
-	[begin, "refused", "SCHEMA_INVALID_INPUT", schema("repository-local", ["SCHEMA_INVALID_INPUT", "SCHEMA_CONFIG_INVALID"], [help])],
-	[begin, "refused", "DOMAIN_PRECONDITION_UNMET", precondition(["DOMAIN_CONFIG_MISSING", "DOMAIN_VAULT_NOT_FOUND", "DOMAIN_CANONICAL_NOT_MAIN", "DOMAIN_PATH_REFUSED"], [begin])],
-	[begin, "failed", "INTERNAL_RESULT_UNCHANGED", internal("repository-local", "unchanged", ["INTERNAL_GIT_FAILED_UNCHANGED"])],
-	[begin, "failed", "INTERNAL_RESULT_PARTIAL", internal("repository-local", "partially-completed", ["INTERNAL_GIT_FAILED_PARTIAL"])],
-	[begin, "failed", "INTERNAL_RESULT_UNKNOWN", internal("repository-local", "unknown", ["INTERNAL_UNEXPECTED_UNKNOWN"])],
-	[begin, "failed", "INTERNAL_UNEXPECTED", internal("repository-local", "unchanged", ["INTERNAL_UNEXPECTED_UNCHANGED"])],
-	[preview, "success", "SUCCESS_COMPLETED", completed([apply])],
-	[preview, "success", "SUCCESS_UNCHANGED", unchanged("repository-local", [inspect])],
-	[preview, "refused", "USAGE_INVALID_INVOCATION", usage("repository-local")],
-	[preview, "refused", "SCHEMA_INVALID_INPUT", schema("repository-local", ["SCHEMA_INVALID_INPUT", "SCHEMA_MANIFEST_INVALID", "SCHEMA_RECEIPT_INVALID"], [help, inspect])],
-	[preview, "refused", "DOMAIN_PRECONDITION_UNMET", precondition(["DOMAIN_CANDIDATE_NOT_FOUND", "DOMAIN_CANONICAL_NOT_MAIN", "DOMAIN_GUARD_INCOMPATIBLE", "DOMAIN_PATH_SET_MISMATCH", "DOMAIN_CHECK_FAILED", "DOMAIN_FORMAT_FAILED", "DOMAIN_CANDIDATE_INVALID"], [begin, preview, inspect])],
-	[preview, "refused", "DOMAIN_AUTHORITY_REQUIRED", authority(["DOMAIN_MAIN_DIVERGED", "DOMAIN_SEMANTIC_OVERLAP"])],
-	[preview, "failed", "INTERNAL_RESULT_UNCHANGED", internal("repository-local", "unchanged", ["INTERNAL_GIT_FAILED_UNCHANGED"])],
-	[preview, "failed", "INTERNAL_RESULT_UNKNOWN", internal("repository-local", "unknown", ["INTERNAL_GIT_FAILED_UNKNOWN", "INTERNAL_UNEXPECTED_UNKNOWN"])],
-	[preview, "failed", "INTERNAL_UNEXPECTED", internal("repository-local", "unchanged", ["INTERNAL_UNEXPECTED_UNCHANGED"])],
-	[apply, "success", "SUCCESS_COMPLETED", completed([inspect])],
-	[apply, "success", "SUCCESS_UNCHANGED", unchanged("repository-local", [inspect])],
-	[apply, "refused", "USAGE_INVALID_INVOCATION", usage("repository-local")],
-	[apply, "refused", "SCHEMA_INVALID_INPUT", schema("repository-local", ["SCHEMA_INVALID_INPUT", "SCHEMA_MANIFEST_INVALID", "SCHEMA_RECEIPT_INVALID", "SCHEMA_PREVIEW_INVALID"], [help, inspect])],
-	[apply, "refused", "DOMAIN_PRECONDITION_UNMET", precondition(["DOMAIN_CANDIDATE_NOT_FOUND", "DOMAIN_CANONICAL_NOT_MAIN", "DOMAIN_PREVIEW_NOT_FOUND", "DOMAIN_PREVIEW_CONSUMED", "DOMAIN_PREVIEW_STALE", "DOMAIN_GUARD_INCOMPATIBLE", "DOMAIN_CANONICAL_NOT_READY", "DOMAIN_REBASED_CHECK_FAILED"], [begin, preview, apply, inspect])],
-	[apply, "refused", "DOMAIN_AUTHORITY_REQUIRED", authority(["DOMAIN_REBASE_CONFLICT"])],
-	[apply, "refused", "TRANSIENT_NOT_STARTED", transient(apply)],
-	[apply, "failed", "INTERNAL_EFFECT_OUTCOME_UNKNOWN", internal("repository-local", "unknown", ["INTERNAL_INTEGRATION_UNPROVED"])],
-	[apply, "failed", "INTERNAL_RESULT_PARTIAL", internal("repository-local", "partially-completed", ["INTERNAL_COMPLETION_RECORD_FAILED"])],
-	[apply, "failed", "INTERNAL_RESULT_UNCHANGED", internal("repository-local", "unchanged", ["INTERNAL_GIT_FAILED_UNCHANGED"])],
-	[apply, "failed", "INTERNAL_RESULT_UNKNOWN", internal("repository-local", "unknown", ["INTERNAL_GIT_FAILED_UNKNOWN", "INTERNAL_UNEXPECTED_UNKNOWN"])],
-	[apply, "failed", "INTERNAL_UNEXPECTED", internal("repository-local", "unchanged", ["INTERNAL_UNEXPECTED_UNCHANGED"])],
-	[inspect, "success", "SUCCESS_UNCHANGED", unchanged("inspect", [begin, preview, apply, recover, inspect])],
-	[inspect, "refused", "USAGE_INVALID_INVOCATION", usage("inspect")],
-	[inspect, "refused", "SCHEMA_INVALID_INPUT", schema("inspect", ["SCHEMA_INVALID_INPUT"], [help])],
-	[inspect, "failed", "INTERNAL_RESULT_UNCHANGED", internal("inspect", "unchanged", ["INTERNAL_GIT_FAILED_UNCHANGED"])],
-	[inspect, "failed", "INTERNAL_UNEXPECTED", internal("inspect", "unchanged", ["INTERNAL_UNEXPECTED_UNCHANGED"])],
-	[recover, "success", "SUCCESS_COMPLETED", completed([inspect])],
-	[recover, "success", "SUCCESS_UNCHANGED", unchanged("repository-local", [inspect])],
-	[recover, "refused", "USAGE_INVALID_INVOCATION", usage("repository-local")],
-	[recover, "refused", "SCHEMA_INVALID_INPUT", schema("repository-local", ["SCHEMA_INVALID_INPUT", "SCHEMA_MANIFEST_INVALID", "SCHEMA_RECEIPT_INVALID"], [help, inspect])],
-	[recover, "refused", "DOMAIN_PRECONDITION_UNMET", precondition(["DOMAIN_CANDIDATE_NOT_FOUND", "DOMAIN_CANONICAL_NOT_MAIN", "DOMAIN_GUARD_INCOMPATIBLE"], [begin, inspect])],
-	[recover, "refused", "DOMAIN_AUTHORITY_REQUIRED", authority(["DOMAIN_RECOVERY_UNPROVABLE"])],
-	[recover, "refused", "TRANSIENT_NOT_STARTED", transient(recover)],
-	[recover, "failed", "INTERNAL_RESULT_PARTIAL", internal("repository-local", "partially-completed", ["INTERNAL_COMPLETION_RECORD_FAILED"])],
-	[recover, "failed", "INTERNAL_RESULT_UNCHANGED", internal("repository-local", "unchanged", ["INTERNAL_GIT_FAILED_UNCHANGED", "INTERNAL_COMPLETION_RECORD_FAILED"])],
-	[recover, "failed", "INTERNAL_RESULT_UNKNOWN", internal("repository-local", "unknown", ["INTERNAL_UNEXPECTED_UNKNOWN"], "declared-unreachable")],
-	[recover, "failed", "INTERNAL_UNEXPECTED", internal("repository-local", "unchanged", ["INTERNAL_UNEXPECTED_UNCHANGED"])],
+	[help, "success", "SUCCESS_UNCHANGED", next(null, "inspect", [discovery])],
+	[help, "refused", "USAGE_INVALID_INVOCATION", next("usage", "inspect", [help])],
+	[discovery, "success", "SUCCESS_UNCHANGED", next(null, "inspect", ["vault-steward.command-discovery"])],
+	[discovery, "refused", "USAGE_INVALID_INVOCATION", next("usage", "inspect", [help])],
+	["vault-steward.command-discovery", "success", "SUCCESS_UNCHANGED", next(null, "inspect", every)],
+	["vault-steward.command-discovery", "refused", "USAGE_UNKNOWN_COMMAND", next("usage", "inspect", [discovery])],
+	["vault-steward.command-discovery", "refused", "USAGE_INVALID_INVOCATION", next("usage", "inspect", [help])],
+	["vault-steward.dispatch", "refused", "USAGE_INVALID_INVOCATION", next("usage", "inspect", [help])],
+	["vault-steward.dispatch", "refused", "USAGE_UNKNOWN_COMMAND", next("usage", "inspect", [help])],
+	[begin, "success", "SUCCESS_COMPLETED", next(null, RL, [preview], "completed")],
+	[begin, "success", "SUCCESS_UNCHANGED", next(null, RL, [begin])],
+	[begin, "refused", "USAGE_INVALID_INVOCATION", next("usage", RL, [help])],
+	[begin, "refused", "SCHEMA_INVALID_INPUT", next("schema", RL, [help])],
+	[begin, "refused", "SCHEMA_CONFIG_INVALID", next("schema", RL, [help])],
+	[begin, "refused", "DOMAIN_CONFIG_MISSING", next("domain", RL, [begin])],
+	[begin, "refused", "DOMAIN_VAULT_NOT_FOUND", next("domain", RL, [begin])],
+	[begin, "refused", "DOMAIN_CANONICAL_NOT_MAIN", next("domain", RL, [begin])],
+	[begin, "refused", "DOMAIN_PATH_REFUSED", next("domain", RL, [begin])],
+	[begin, "failed", "INTERNAL_GIT_FAILED_UNCHANGED", handoff("internal")],
+	[begin, "failed", "INTERNAL_GIT_FAILED_PARTIAL", handoff("internal", "partially-completed")],
+	[begin, "failed", "INTERNAL_UNEXPECTED_UNKNOWN", handoff("internal", "unknown")],
+	[begin, "failed", "INTERNAL_UNEXPECTED_UNCHANGED", handoff("internal")],
+	[preview, "success", "SUCCESS_COMPLETED", next(null, RL, [apply], "completed")],
+	[preview, "success", "SUCCESS_UNCHANGED", next(null, RL, [inspect])],
+	[preview, "refused", "USAGE_INVALID_INVOCATION", next("usage", RL, [help])],
+	[preview, "refused", "SCHEMA_INVALID_INPUT", next("schema", RL, [help])],
+	[preview, "refused", "SCHEMA_MANIFEST_INVALID", handoff("schema")],
+	[preview, "refused", "SCHEMA_RECEIPT_INVALID", handoff("schema")],
+	[preview, "refused", "DOMAIN_CANDIDATE_NOT_FOUND", next("domain", RL, [begin])],
+	[preview, "refused", "DOMAIN_CANONICAL_NOT_MAIN", next("domain", RL, [begin])],
+	[preview, "refused", "DOMAIN_GUARD_INCOMPATIBLE", next("domain", RL, [inspect])],
+	[preview, "refused", "DOMAIN_PATH_SET_MISMATCH", next("domain", RL, [preview])],
+	[preview, "refused", "DOMAIN_CHECK_FAILED", next("domain", RL, [preview])],
+	[preview, "refused", "DOMAIN_FORMAT_FAILED", next("domain", RL, [preview])],
+	[preview, "refused", "DOMAIN_CANDIDATE_INVALID", handoff("domain")],
+	[preview, "refused", "DOMAIN_MAIN_DIVERGED", handoff("domain")],
+	[preview, "refused", "DOMAIN_SEMANTIC_OVERLAP", handoff("domain")],
+	[preview, "failed", "INTERNAL_GIT_FAILED_UNCHANGED", handoff("internal")],
+	[preview, "failed", "INTERNAL_GIT_FAILED_UNKNOWN", handoff("internal", "unknown")],
+	[preview, "failed", "INTERNAL_UNEXPECTED_UNKNOWN", handoff("internal", "unknown")],
+	[preview, "failed", "INTERNAL_UNEXPECTED_UNCHANGED", handoff("internal")],
+	[apply, "success", "SUCCESS_COMPLETED", next(null, RL, [inspect], "completed")],
+	[apply, "success", "SUCCESS_UNCHANGED", next(null, RL, [inspect])],
+	[apply, "refused", "USAGE_INVALID_INVOCATION", next("usage", RL, [help])],
+	[apply, "refused", "SCHEMA_INVALID_INPUT", next("schema", RL, [help])],
+	[apply, "refused", "SCHEMA_MANIFEST_INVALID", handoff("schema")],
+	[apply, "refused", "SCHEMA_RECEIPT_INVALID", handoff("schema")],
+	[apply, "refused", "SCHEMA_PREVIEW_INVALID", handoff("schema")],
+	[apply, "refused", "DOMAIN_CANDIDATE_NOT_FOUND", next("domain", RL, [begin])],
+	[apply, "refused", "DOMAIN_CANONICAL_NOT_MAIN", next("domain", RL, [begin])],
+	[apply, "refused", "DOMAIN_PREVIEW_NOT_FOUND", next("domain", RL, [preview])],
+	[apply, "refused", "DOMAIN_PREVIEW_CONSUMED", next("domain", RL, [inspect])],
+	[apply, "refused", "DOMAIN_PREVIEW_STALE", next("domain", RL, [preview])],
+	[apply, "refused", "DOMAIN_GUARD_INCOMPATIBLE", next("domain", RL, [inspect])],
+	[apply, "refused", "DOMAIN_CANONICAL_NOT_READY", next("domain", RL, [apply])],
+	[apply, "failed", "DOMAIN_REBASED_CHECK_FAILED", next("domain", RL, [preview])],
+	[apply, "failed", "DOMAIN_REBASE_CONFLICT", handoff("domain")],
+	[apply, "refused", "TRANSIENT_INTEGRATION_BUSY", next("transient", RL, [apply])],
+	[apply, "failed", "INTERNAL_INTEGRATION_UNPROVED", handoff("internal", "unknown")],
+	[apply, "failed", "INTERNAL_COMPLETION_RECORD_FAILED", next("internal", RL, [recover], "partially-completed")],
+	[apply, "failed", "INTERNAL_GIT_FAILED_UNCHANGED", handoff("internal")],
+	[apply, "failed", "INTERNAL_GIT_FAILED_UNKNOWN", handoff("internal", "unknown")],
+	[apply, "failed", "INTERNAL_UNEXPECTED_UNKNOWN", handoff("internal", "unknown")],
+	[apply, "failed", "INTERNAL_UNEXPECTED_UNCHANGED", handoff("internal")],
+	[inspect, "success", "SUCCESS_UNCHANGED", next(null, "inspect", [begin, preview, apply, recover, inspect])],
+	[inspect, "refused", "USAGE_INVALID_INVOCATION", next("usage", "inspect", [help])],
+	[inspect, "refused", "SCHEMA_INVALID_INPUT", next("schema", "inspect", [help])],
+	[inspect, "failed", "INTERNAL_GIT_FAILED_UNCHANGED", inspectHandoff("internal")],
+	[inspect, "failed", "INTERNAL_UNEXPECTED_UNCHANGED", inspectHandoff("internal")],
+	[recover, "success", "SUCCESS_COMPLETED", next(null, RL, [inspect], "completed")],
+	[recover, "success", "SUCCESS_UNCHANGED", next(null, RL, [inspect])],
+	[recover, "refused", "USAGE_INVALID_INVOCATION", next("usage", RL, [help])],
+	[recover, "refused", "SCHEMA_INVALID_INPUT", next("schema", RL, [help])],
+	[recover, "refused", "SCHEMA_MANIFEST_INVALID", handoff("schema")],
+	[recover, "refused", "SCHEMA_RECEIPT_INVALID", handoff("schema")],
+	[recover, "refused", "DOMAIN_CANDIDATE_NOT_FOUND", next("domain", RL, [begin])],
+	[recover, "refused", "DOMAIN_CANONICAL_NOT_MAIN", next("domain", RL, [begin])],
+	[recover, "refused", "DOMAIN_GUARD_INCOMPATIBLE", next("domain", RL, [inspect])],
+	[recover, "refused", "DOMAIN_RECOVERY_UNPROVABLE", handoff("domain")],
+	[recover, "refused", "TRANSIENT_INTEGRATION_BUSY", next("transient", RL, [recover])],
+	[recover, "failed", "INTERNAL_COMPLETION_RECORD_FAILED", next("internal", RL, [recover], "partially-completed")],
+	[recover, "failed", "INTERNAL_GIT_FAILED_UNCHANGED", handoff("internal")],
+	[recover, "failed", "INTERNAL_UNEXPECTED_UNKNOWN", handoff("internal", "unknown", "declared-unreachable")],
+	[recover, "failed", "INTERNAL_UNEXPECTED_UNCHANGED", handoff("internal")],
 ]
 
-export const EXPECTED_STATION_COUNT = 55
+export const EXPECTED_STATION_COUNT = 84
 export const identityOf = (command: string, outcome: string, cause: string): string => JSON.stringify([command, outcome, cause])
 export const EXPECTED_BY_IDENTITY: ReadonlyMap<string, ExpectedStation> = new Map(EXPECTED_STATIONS.map(([command, outcome, cause, expected]) => [identityOf(command, outcome, cause), expected]))
 

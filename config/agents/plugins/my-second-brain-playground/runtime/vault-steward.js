@@ -14307,66 +14307,104 @@ var INSPECT = "vault-steward.inspect";
 var RECOVER = "vault-steward.recover";
 var EVERY_COMMAND = ["vault-steward.begin", "vault-steward.command-discovery", "vault-steward.discovery", "vault-steward.dispatch", "vault-steward.finish-apply", "vault-steward.finish-preview", "vault-steward.help", "vault-steward.inspect", "vault-steward.recover"];
 var HANDOFF = [];
-var USAGE = ["USAGE_INVALID_INVOCATION"];
-var RECORD_UNREACHABLE = "recordCompletion classifies every failure of its two writes by evidence as INTERNAL_COMPLETION_RECORD_FAILED (unchanged before the ref, partially-completed after it); no write in this command can end with an unestablished result";
+var RECORD_UNREACHABLE = "recordCompletion classifies every failure of its two writes by evidence (INTERNAL_GIT_FAILED_UNCHANGED before the ref, INTERNAL_COMPLETION_RECORD_FAILED after it); no write in this command can end with an unestablished result";
+var N0 = [false, null, "next-action", 0];
+var N2 = [false, null, "next-action", 2];
+var N3 = [false, null, "next-action", 3];
+var N4 = [false, null, "next-action", 4];
+var H3 = [false, null, "handoff", 3];
+var H4 = [false, null, "handoff", 4];
+var H1 = [false, null, "handoff", 1];
+var N1 = [false, null, "next-action", 1];
+var T75 = [true, 2000, "next-action", 75];
+var RL = "repository-local";
 var ROWS = [
-  ["vault-steward.help", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", false, null, "next-action", 0, [], [DISCOVERY], "required", null],
-  ["vault-steward.help", "refused", "USAGE_INVALID_INVOCATION", "inspect", "unchanged", false, null, "next-action", 2, USAGE, [HELP], "required", null],
-  ["vault-steward.discovery", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", false, null, "next-action", 0, [], ["vault-steward.command-discovery"], "required", null],
-  ["vault-steward.discovery", "refused", "USAGE_INVALID_INVOCATION", "inspect", "unchanged", false, null, "next-action", 2, USAGE, [HELP], "required", null],
-  ["vault-steward.command-discovery", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", false, null, "next-action", 0, [], EVERY_COMMAND, "required", null],
-  ["vault-steward.command-discovery", "refused", "USAGE_UNKNOWN_COMMAND", "inspect", "unchanged", false, null, "next-action", 2, ["USAGE_UNKNOWN_COMMAND"], [DISCOVERY], "required", null],
-  ["vault-steward.command-discovery", "refused", "USAGE_INVALID_INVOCATION", "inspect", "unchanged", false, null, "next-action", 2, USAGE, [HELP], "required", null],
-  ["vault-steward.dispatch", "refused", "USAGE_INVALID_INVOCATION", "inspect", "unchanged", false, null, "next-action", 2, USAGE, [HELP], "required", null],
-  ["vault-steward.dispatch", "refused", "USAGE_UNKNOWN_COMMAND", "inspect", "unchanged", false, null, "next-action", 2, ["USAGE_UNKNOWN_COMMAND"], [HELP], "required", null],
-  ["vault-steward.begin", "success", "SUCCESS_COMPLETED", "repository-local", "completed", false, null, "next-action", 0, [], [PREVIEW], "required", null],
-  ["vault-steward.begin", "success", "SUCCESS_UNCHANGED", "repository-local", "unchanged", false, null, "next-action", 0, [], [BEGIN], "required", null],
-  ["vault-steward.begin", "refused", "USAGE_INVALID_INVOCATION", "repository-local", "unchanged", false, null, "next-action", 2, USAGE, [HELP], "required", null],
-  ["vault-steward.begin", "refused", "SCHEMA_INVALID_INPUT", "repository-local", "unchanged", false, null, "next-action", 4, ["SCHEMA_INVALID_INPUT", "SCHEMA_CONFIG_INVALID"], [HELP], "required", null],
-  ["vault-steward.begin", "refused", "DOMAIN_PRECONDITION_UNMET", "repository-local", "unchanged", false, null, "next-action", 3, ["DOMAIN_CONFIG_MISSING", "DOMAIN_VAULT_NOT_FOUND", "DOMAIN_CANONICAL_NOT_MAIN", "DOMAIN_PATH_REFUSED"], [BEGIN], "required", null],
-  ["vault-steward.begin", "failed", "INTERNAL_RESULT_UNCHANGED", "repository-local", "unchanged", false, null, "handoff", 1, ["INTERNAL_GIT_FAILED_UNCHANGED"], HANDOFF, "required", null],
-  ["vault-steward.begin", "failed", "INTERNAL_RESULT_PARTIAL", "repository-local", "partially-completed", false, null, "handoff", 1, ["INTERNAL_GIT_FAILED_PARTIAL"], HANDOFF, "required", null],
-  ["vault-steward.begin", "failed", "INTERNAL_RESULT_UNKNOWN", "repository-local", "unknown", false, null, "handoff", 1, ["INTERNAL_UNEXPECTED_UNKNOWN"], HANDOFF, "required", null],
-  ["vault-steward.begin", "failed", "INTERNAL_UNEXPECTED", "repository-local", "unchanged", false, null, "handoff", 1, ["INTERNAL_UNEXPECTED_UNCHANGED"], HANDOFF, "required", null],
-  ["vault-steward.finish-preview", "success", "SUCCESS_COMPLETED", "repository-local", "completed", false, null, "next-action", 0, [], [APPLY], "required", null],
-  ["vault-steward.finish-preview", "success", "SUCCESS_UNCHANGED", "repository-local", "unchanged", false, null, "next-action", 0, [], [INSPECT], "required", null],
-  ["vault-steward.finish-preview", "refused", "USAGE_INVALID_INVOCATION", "repository-local", "unchanged", false, null, "next-action", 2, USAGE, [HELP], "required", null],
-  ["vault-steward.finish-preview", "refused", "SCHEMA_INVALID_INPUT", "repository-local", "unchanged", false, null, "next-action", 4, ["SCHEMA_INVALID_INPUT", "SCHEMA_MANIFEST_INVALID", "SCHEMA_RECEIPT_INVALID"], [HELP, INSPECT], "required", null],
-  ["vault-steward.finish-preview", "refused", "DOMAIN_PRECONDITION_UNMET", "repository-local", "unchanged", false, null, "next-action", 3, ["DOMAIN_CANDIDATE_NOT_FOUND", "DOMAIN_CANONICAL_NOT_MAIN", "DOMAIN_GUARD_INCOMPATIBLE", "DOMAIN_PATH_SET_MISMATCH", "DOMAIN_CHECK_FAILED", "DOMAIN_FORMAT_FAILED", "DOMAIN_CANDIDATE_INVALID"], [BEGIN, PREVIEW, INSPECT], "required", null],
-  ["vault-steward.finish-preview", "refused", "DOMAIN_AUTHORITY_REQUIRED", "repository-local", "unchanged", false, null, "handoff", 3, ["DOMAIN_MAIN_DIVERGED", "DOMAIN_SEMANTIC_OVERLAP"], HANDOFF, "required", null],
-  ["vault-steward.finish-preview", "failed", "INTERNAL_RESULT_UNCHANGED", "repository-local", "unchanged", false, null, "handoff", 1, ["INTERNAL_GIT_FAILED_UNCHANGED"], HANDOFF, "required", null],
-  ["vault-steward.finish-preview", "failed", "INTERNAL_RESULT_UNKNOWN", "repository-local", "unknown", false, null, "handoff", 1, ["INTERNAL_GIT_FAILED_UNKNOWN", "INTERNAL_UNEXPECTED_UNKNOWN"], HANDOFF, "required", null],
-  ["vault-steward.finish-preview", "failed", "INTERNAL_UNEXPECTED", "repository-local", "unchanged", false, null, "handoff", 1, ["INTERNAL_UNEXPECTED_UNCHANGED"], HANDOFF, "required", null],
-  ["vault-steward.finish-apply", "success", "SUCCESS_COMPLETED", "repository-local", "completed", false, null, "next-action", 0, [], [INSPECT], "required", null],
-  ["vault-steward.finish-apply", "success", "SUCCESS_UNCHANGED", "repository-local", "unchanged", false, null, "next-action", 0, [], [INSPECT], "required", null],
-  ["vault-steward.finish-apply", "refused", "USAGE_INVALID_INVOCATION", "repository-local", "unchanged", false, null, "next-action", 2, USAGE, [HELP], "required", null],
-  ["vault-steward.finish-apply", "refused", "SCHEMA_INVALID_INPUT", "repository-local", "unchanged", false, null, "next-action", 4, ["SCHEMA_INVALID_INPUT", "SCHEMA_MANIFEST_INVALID", "SCHEMA_RECEIPT_INVALID", "SCHEMA_PREVIEW_INVALID"], [HELP, INSPECT], "required", null],
-  ["vault-steward.finish-apply", "refused", "DOMAIN_PRECONDITION_UNMET", "repository-local", "unchanged", false, null, "next-action", 3, ["DOMAIN_CANDIDATE_NOT_FOUND", "DOMAIN_CANONICAL_NOT_MAIN", "DOMAIN_PREVIEW_NOT_FOUND", "DOMAIN_PREVIEW_CONSUMED", "DOMAIN_PREVIEW_STALE", "DOMAIN_GUARD_INCOMPATIBLE", "DOMAIN_CANONICAL_NOT_READY", "DOMAIN_REBASED_CHECK_FAILED"], [BEGIN, PREVIEW, APPLY, INSPECT], "required", null],
-  ["vault-steward.finish-apply", "refused", "DOMAIN_AUTHORITY_REQUIRED", "repository-local", "unchanged", false, null, "handoff", 3, ["DOMAIN_REBASE_CONFLICT"], HANDOFF, "required", null],
-  ["vault-steward.finish-apply", "refused", "TRANSIENT_NOT_STARTED", "repository-local", "unchanged", true, 2000, "next-action", 75, ["TRANSIENT_INTEGRATION_BUSY"], [APPLY], "required", null],
-  ["vault-steward.finish-apply", "failed", "INTERNAL_EFFECT_OUTCOME_UNKNOWN", "repository-local", "unknown", false, null, "handoff", 1, ["INTERNAL_INTEGRATION_UNPROVED"], HANDOFF, "required", null],
-  ["vault-steward.finish-apply", "failed", "INTERNAL_RESULT_PARTIAL", "repository-local", "partially-completed", false, null, "handoff", 1, ["INTERNAL_COMPLETION_RECORD_FAILED"], HANDOFF, "required", null],
-  ["vault-steward.finish-apply", "failed", "INTERNAL_RESULT_UNCHANGED", "repository-local", "unchanged", false, null, "handoff", 1, ["INTERNAL_GIT_FAILED_UNCHANGED"], HANDOFF, "required", null],
-  ["vault-steward.finish-apply", "failed", "INTERNAL_RESULT_UNKNOWN", "repository-local", "unknown", false, null, "handoff", 1, ["INTERNAL_GIT_FAILED_UNKNOWN", "INTERNAL_UNEXPECTED_UNKNOWN"], HANDOFF, "required", null],
-  ["vault-steward.finish-apply", "failed", "INTERNAL_UNEXPECTED", "repository-local", "unchanged", false, null, "handoff", 1, ["INTERNAL_UNEXPECTED_UNCHANGED"], HANDOFF, "required", null],
-  ["vault-steward.inspect", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", false, null, "next-action", 0, [], [BEGIN, PREVIEW, APPLY, RECOVER, INSPECT], "required", null],
-  ["vault-steward.inspect", "refused", "USAGE_INVALID_INVOCATION", "inspect", "unchanged", false, null, "next-action", 2, USAGE, [HELP], "required", null],
-  ["vault-steward.inspect", "refused", "SCHEMA_INVALID_INPUT", "inspect", "unchanged", false, null, "next-action", 4, ["SCHEMA_INVALID_INPUT"], [HELP], "required", null],
-  ["vault-steward.inspect", "failed", "INTERNAL_RESULT_UNCHANGED", "inspect", "unchanged", false, null, "handoff", 1, ["INTERNAL_GIT_FAILED_UNCHANGED"], HANDOFF, "required", null],
-  ["vault-steward.inspect", "failed", "INTERNAL_UNEXPECTED", "inspect", "unchanged", false, null, "handoff", 1, ["INTERNAL_UNEXPECTED_UNCHANGED"], HANDOFF, "required", null],
-  ["vault-steward.recover", "success", "SUCCESS_COMPLETED", "repository-local", "completed", false, null, "next-action", 0, [], [INSPECT], "required", null],
-  ["vault-steward.recover", "success", "SUCCESS_UNCHANGED", "repository-local", "unchanged", false, null, "next-action", 0, [], [INSPECT], "required", null],
-  ["vault-steward.recover", "refused", "USAGE_INVALID_INVOCATION", "repository-local", "unchanged", false, null, "next-action", 2, USAGE, [HELP], "required", null],
-  ["vault-steward.recover", "refused", "SCHEMA_INVALID_INPUT", "repository-local", "unchanged", false, null, "next-action", 4, ["SCHEMA_INVALID_INPUT", "SCHEMA_MANIFEST_INVALID", "SCHEMA_RECEIPT_INVALID"], [HELP, INSPECT], "required", null],
-  ["vault-steward.recover", "refused", "DOMAIN_PRECONDITION_UNMET", "repository-local", "unchanged", false, null, "next-action", 3, ["DOMAIN_CANDIDATE_NOT_FOUND", "DOMAIN_CANONICAL_NOT_MAIN", "DOMAIN_GUARD_INCOMPATIBLE"], [BEGIN, INSPECT], "required", null],
-  ["vault-steward.recover", "refused", "DOMAIN_AUTHORITY_REQUIRED", "repository-local", "unchanged", false, null, "handoff", 3, ["DOMAIN_RECOVERY_UNPROVABLE"], HANDOFF, "required", null],
-  ["vault-steward.recover", "refused", "TRANSIENT_NOT_STARTED", "repository-local", "unchanged", true, 2000, "next-action", 75, ["TRANSIENT_INTEGRATION_BUSY"], [RECOVER], "required", null],
-  ["vault-steward.recover", "failed", "INTERNAL_RESULT_PARTIAL", "repository-local", "partially-completed", false, null, "handoff", 1, ["INTERNAL_COMPLETION_RECORD_FAILED"], HANDOFF, "required", null],
-  ["vault-steward.recover", "failed", "INTERNAL_RESULT_UNCHANGED", "repository-local", "unchanged", false, null, "handoff", 1, ["INTERNAL_GIT_FAILED_UNCHANGED", "INTERNAL_COMPLETION_RECORD_FAILED"], HANDOFF, "required", null],
-  ["vault-steward.recover", "failed", "INTERNAL_RESULT_UNKNOWN", "repository-local", "unknown", false, null, "handoff", 1, ["INTERNAL_UNEXPECTED_UNKNOWN"], HANDOFF, "declared-unreachable", RECORD_UNREACHABLE],
-  ["vault-steward.recover", "failed", "INTERNAL_UNEXPECTED", "repository-local", "unchanged", false, null, "handoff", 1, ["INTERNAL_UNEXPECTED_UNCHANGED"], HANDOFF, "required", null]
+  ["vault-steward.help", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", ...N0, [DISCOVERY], "required", null],
+  ["vault-steward.help", "refused", "USAGE_INVALID_INVOCATION", "inspect", "unchanged", ...N2, [HELP], "required", null],
+  ["vault-steward.discovery", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", ...N0, ["vault-steward.command-discovery"], "required", null],
+  ["vault-steward.discovery", "refused", "USAGE_INVALID_INVOCATION", "inspect", "unchanged", ...N2, [HELP], "required", null],
+  ["vault-steward.command-discovery", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", ...N0, EVERY_COMMAND, "required", null],
+  ["vault-steward.command-discovery", "refused", "USAGE_UNKNOWN_COMMAND", "inspect", "unchanged", ...N2, [DISCOVERY], "required", null],
+  ["vault-steward.command-discovery", "refused", "USAGE_INVALID_INVOCATION", "inspect", "unchanged", ...N2, [HELP], "required", null],
+  ["vault-steward.dispatch", "refused", "USAGE_INVALID_INVOCATION", "inspect", "unchanged", ...N2, [HELP], "required", null],
+  ["vault-steward.dispatch", "refused", "USAGE_UNKNOWN_COMMAND", "inspect", "unchanged", ...N2, [HELP], "required", null],
+  ["vault-steward.begin", "success", "SUCCESS_COMPLETED", RL, "completed", ...N0, [PREVIEW], "required", null],
+  ["vault-steward.begin", "success", "SUCCESS_UNCHANGED", RL, "unchanged", ...N0, [BEGIN], "required", null],
+  ["vault-steward.begin", "refused", "USAGE_INVALID_INVOCATION", RL, "unchanged", ...N2, [HELP], "required", null],
+  ["vault-steward.begin", "refused", "SCHEMA_INVALID_INPUT", RL, "unchanged", ...N4, [HELP], "required", null],
+  ["vault-steward.begin", "refused", "SCHEMA_CONFIG_INVALID", RL, "unchanged", ...N4, [HELP], "required", null],
+  ["vault-steward.begin", "refused", "DOMAIN_CONFIG_MISSING", RL, "unchanged", ...N3, [BEGIN], "required", null],
+  ["vault-steward.begin", "refused", "DOMAIN_VAULT_NOT_FOUND", RL, "unchanged", ...N3, [BEGIN], "required", null],
+  ["vault-steward.begin", "refused", "DOMAIN_CANONICAL_NOT_MAIN", RL, "unchanged", ...N3, [BEGIN], "required", null],
+  ["vault-steward.begin", "refused", "DOMAIN_PATH_REFUSED", RL, "unchanged", ...N3, [BEGIN], "required", null],
+  ["vault-steward.begin", "failed", "INTERNAL_GIT_FAILED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
+  ["vault-steward.begin", "failed", "INTERNAL_GIT_FAILED_PARTIAL", RL, "partially-completed", ...H1, HANDOFF, "required", null],
+  ["vault-steward.begin", "failed", "INTERNAL_UNEXPECTED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null],
+  ["vault-steward.begin", "failed", "INTERNAL_UNEXPECTED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
+  ["vault-steward.finish-preview", "success", "SUCCESS_COMPLETED", RL, "completed", ...N0, [APPLY], "required", null],
+  ["vault-steward.finish-preview", "success", "SUCCESS_UNCHANGED", RL, "unchanged", ...N0, [INSPECT], "required", null],
+  ["vault-steward.finish-preview", "refused", "USAGE_INVALID_INVOCATION", RL, "unchanged", ...N2, [HELP], "required", null],
+  ["vault-steward.finish-preview", "refused", "SCHEMA_INVALID_INPUT", RL, "unchanged", ...N4, [HELP], "required", null],
+  ["vault-steward.finish-preview", "refused", "SCHEMA_MANIFEST_INVALID", RL, "unchanged", ...H4, HANDOFF, "required", null],
+  ["vault-steward.finish-preview", "refused", "SCHEMA_RECEIPT_INVALID", RL, "unchanged", ...H4, HANDOFF, "required", null],
+  ["vault-steward.finish-preview", "refused", "DOMAIN_CANDIDATE_NOT_FOUND", RL, "unchanged", ...N3, [BEGIN], "required", null],
+  ["vault-steward.finish-preview", "refused", "DOMAIN_CANONICAL_NOT_MAIN", RL, "unchanged", ...N3, [BEGIN], "required", null],
+  ["vault-steward.finish-preview", "refused", "DOMAIN_GUARD_INCOMPATIBLE", RL, "unchanged", ...N3, [INSPECT], "required", null],
+  ["vault-steward.finish-preview", "refused", "DOMAIN_PATH_SET_MISMATCH", RL, "unchanged", ...N3, [PREVIEW], "required", null],
+  ["vault-steward.finish-preview", "refused", "DOMAIN_CHECK_FAILED", RL, "unchanged", ...N3, [PREVIEW], "required", null],
+  ["vault-steward.finish-preview", "refused", "DOMAIN_FORMAT_FAILED", RL, "unchanged", ...N3, [PREVIEW], "required", null],
+  ["vault-steward.finish-preview", "refused", "DOMAIN_CANDIDATE_INVALID", RL, "unchanged", ...H3, HANDOFF, "required", null],
+  ["vault-steward.finish-preview", "refused", "DOMAIN_MAIN_DIVERGED", RL, "unchanged", ...H3, HANDOFF, "required", null],
+  ["vault-steward.finish-preview", "refused", "DOMAIN_SEMANTIC_OVERLAP", RL, "unchanged", ...H3, HANDOFF, "required", null],
+  ["vault-steward.finish-preview", "failed", "INTERNAL_GIT_FAILED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
+  ["vault-steward.finish-preview", "failed", "INTERNAL_GIT_FAILED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null],
+  ["vault-steward.finish-preview", "failed", "INTERNAL_UNEXPECTED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null],
+  ["vault-steward.finish-preview", "failed", "INTERNAL_UNEXPECTED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
+  ["vault-steward.finish-apply", "success", "SUCCESS_COMPLETED", RL, "completed", ...N0, [INSPECT], "required", null],
+  ["vault-steward.finish-apply", "success", "SUCCESS_UNCHANGED", RL, "unchanged", ...N0, [INSPECT], "required", null],
+  ["vault-steward.finish-apply", "refused", "USAGE_INVALID_INVOCATION", RL, "unchanged", ...N2, [HELP], "required", null],
+  ["vault-steward.finish-apply", "refused", "SCHEMA_INVALID_INPUT", RL, "unchanged", ...N4, [HELP], "required", null],
+  ["vault-steward.finish-apply", "refused", "SCHEMA_MANIFEST_INVALID", RL, "unchanged", ...H4, HANDOFF, "required", null],
+  ["vault-steward.finish-apply", "refused", "SCHEMA_RECEIPT_INVALID", RL, "unchanged", ...H4, HANDOFF, "required", null],
+  ["vault-steward.finish-apply", "refused", "SCHEMA_PREVIEW_INVALID", RL, "unchanged", ...H4, HANDOFF, "required", null],
+  ["vault-steward.finish-apply", "refused", "DOMAIN_CANDIDATE_NOT_FOUND", RL, "unchanged", ...N3, [BEGIN], "required", null],
+  ["vault-steward.finish-apply", "refused", "DOMAIN_CANONICAL_NOT_MAIN", RL, "unchanged", ...N3, [BEGIN], "required", null],
+  ["vault-steward.finish-apply", "refused", "DOMAIN_PREVIEW_NOT_FOUND", RL, "unchanged", ...N3, [PREVIEW], "required", null],
+  ["vault-steward.finish-apply", "refused", "DOMAIN_PREVIEW_CONSUMED", RL, "unchanged", ...N3, [INSPECT], "required", null],
+  ["vault-steward.finish-apply", "refused", "DOMAIN_PREVIEW_STALE", RL, "unchanged", ...N3, [PREVIEW], "required", null],
+  ["vault-steward.finish-apply", "refused", "DOMAIN_GUARD_INCOMPATIBLE", RL, "unchanged", ...N3, [INSPECT], "required", null],
+  ["vault-steward.finish-apply", "refused", "DOMAIN_CANONICAL_NOT_READY", RL, "unchanged", ...N3, [APPLY], "required", null],
+  ["vault-steward.finish-apply", "failed", "DOMAIN_REBASED_CHECK_FAILED", RL, "unchanged", ...N3, [PREVIEW], "required", null],
+  ["vault-steward.finish-apply", "failed", "DOMAIN_REBASE_CONFLICT", RL, "unchanged", ...H3, HANDOFF, "required", null],
+  ["vault-steward.finish-apply", "refused", "TRANSIENT_INTEGRATION_BUSY", RL, "unchanged", ...T75, [APPLY], "required", null],
+  ["vault-steward.finish-apply", "failed", "INTERNAL_INTEGRATION_UNPROVED", RL, "unknown", ...H1, HANDOFF, "required", null],
+  ["vault-steward.finish-apply", "failed", "INTERNAL_COMPLETION_RECORD_FAILED", RL, "partially-completed", ...N1, [RECOVER], "required", null],
+  ["vault-steward.finish-apply", "failed", "INTERNAL_GIT_FAILED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
+  ["vault-steward.finish-apply", "failed", "INTERNAL_GIT_FAILED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null],
+  ["vault-steward.finish-apply", "failed", "INTERNAL_UNEXPECTED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null],
+  ["vault-steward.finish-apply", "failed", "INTERNAL_UNEXPECTED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
+  ["vault-steward.inspect", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", ...N0, [BEGIN, PREVIEW, APPLY, RECOVER, INSPECT], "required", null],
+  ["vault-steward.inspect", "refused", "USAGE_INVALID_INVOCATION", "inspect", "unchanged", ...N2, [HELP], "required", null],
+  ["vault-steward.inspect", "refused", "SCHEMA_INVALID_INPUT", "inspect", "unchanged", ...N4, [HELP], "required", null],
+  ["vault-steward.inspect", "failed", "INTERNAL_GIT_FAILED_UNCHANGED", "inspect", "unchanged", ...H1, HANDOFF, "required", null],
+  ["vault-steward.inspect", "failed", "INTERNAL_UNEXPECTED_UNCHANGED", "inspect", "unchanged", ...H1, HANDOFF, "required", null],
+  ["vault-steward.recover", "success", "SUCCESS_COMPLETED", RL, "completed", ...N0, [INSPECT], "required", null],
+  ["vault-steward.recover", "success", "SUCCESS_UNCHANGED", RL, "unchanged", ...N0, [INSPECT], "required", null],
+  ["vault-steward.recover", "refused", "USAGE_INVALID_INVOCATION", RL, "unchanged", ...N2, [HELP], "required", null],
+  ["vault-steward.recover", "refused", "SCHEMA_INVALID_INPUT", RL, "unchanged", ...N4, [HELP], "required", null],
+  ["vault-steward.recover", "refused", "SCHEMA_MANIFEST_INVALID", RL, "unchanged", ...H4, HANDOFF, "required", null],
+  ["vault-steward.recover", "refused", "SCHEMA_RECEIPT_INVALID", RL, "unchanged", ...H4, HANDOFF, "required", null],
+  ["vault-steward.recover", "refused", "DOMAIN_CANDIDATE_NOT_FOUND", RL, "unchanged", ...N3, [BEGIN], "required", null],
+  ["vault-steward.recover", "refused", "DOMAIN_CANONICAL_NOT_MAIN", RL, "unchanged", ...N3, [BEGIN], "required", null],
+  ["vault-steward.recover", "refused", "DOMAIN_GUARD_INCOMPATIBLE", RL, "unchanged", ...N3, [INSPECT], "required", null],
+  ["vault-steward.recover", "refused", "DOMAIN_RECOVERY_UNPROVABLE", RL, "unchanged", ...H3, HANDOFF, "required", null],
+  ["vault-steward.recover", "refused", "TRANSIENT_INTEGRATION_BUSY", RL, "unchanged", ...T75, [RECOVER], "required", null],
+  ["vault-steward.recover", "failed", "INTERNAL_COMPLETION_RECORD_FAILED", RL, "partially-completed", ...N1, [RECOVER], "required", null],
+  ["vault-steward.recover", "failed", "INTERNAL_GIT_FAILED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
+  ["vault-steward.recover", "failed", "INTERNAL_UNEXPECTED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "declared-unreachable", RECORD_UNREACHABLE],
+  ["vault-steward.recover", "failed", "INTERNAL_UNEXPECTED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null]
 ];
-var DECLARED_ROWS = ROWS.map(([commandIdentity, outcome, causeCode, effectClass, transactionState, retryable, retryDelayMilliseconds, guidance, exit, reasons, nextActions, reachability, unreachableRationale]) => ({
+var DECLARED_ROWS = ROWS.map(([commandIdentity, outcome, causeCode, effectClass, transactionState, retryable, retryDelayMilliseconds, guidance, exit, nextActions, reachability, unreachableRationale]) => ({
   commandIdentity,
   outcome,
   causeCode,
@@ -14376,7 +14414,6 @@ var DECLARED_ROWS = ROWS.map(([commandIdentity, outcome, causeCode, effectClass,
   retryDelayMilliseconds,
   guidance,
   exit,
-  reasons,
   nextActions,
   reachability,
   unreachableRationale
@@ -14406,19 +14443,50 @@ var CAUSE_RULES = {
   USAGE_INVALID_INVOCATION: cause("usage", "refused", "unchanged", false, "next"),
   USAGE_UNKNOWN_COMMAND: cause("usage", "refused", "unchanged", false, "next"),
   SCHEMA_INVALID_INPUT: cause("schema", "refused", "unchanged", false, "next"),
-  DOMAIN_PRECONDITION_UNMET: cause("domain", "refused", "unchanged", false, "next"),
-  DOMAIN_AUTHORITY_REQUIRED: cause("domain", "refused", "unchanged", false, "handoff"),
-  TRANSIENT_NOT_STARTED: cause("transient", "refused", "unchanged", true, "next"),
-  INTERNAL_RESULT_UNCHANGED: cause("internal", "failed", "unchanged", false, "handoff"),
-  INTERNAL_RESULT_PARTIAL: cause("internal", "failed", "partially-completed", false, "handoff"),
-  INTERNAL_RESULT_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
-  INTERNAL_EFFECT_OUTCOME_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
-  INTERNAL_UNEXPECTED: cause("internal", "failed", "unchanged", false, "handoff")
+  SCHEMA_CONFIG_INVALID: cause("schema", "refused", "unchanged", false, "next"),
+  SCHEMA_MANIFEST_INVALID: cause("schema", "refused", "unchanged", false, "handoff"),
+  SCHEMA_RECEIPT_INVALID: cause("schema", "refused", "unchanged", false, "handoff"),
+  SCHEMA_PREVIEW_INVALID: cause("schema", "refused", "unchanged", false, "handoff"),
+  DOMAIN_CONFIG_MISSING: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_VAULT_NOT_FOUND: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_CANONICAL_NOT_MAIN: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_PATH_REFUSED: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_CANDIDATE_NOT_FOUND: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_CANDIDATE_INVALID: cause("domain", "refused", "unchanged", false, "handoff"),
+  DOMAIN_PATH_SET_MISMATCH: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_CHECK_FAILED: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_FORMAT_FAILED: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_GUARD_INCOMPATIBLE: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_CANONICAL_NOT_READY: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_MAIN_DIVERGED: cause("domain", "refused", "unchanged", false, "handoff"),
+  DOMAIN_SEMANTIC_OVERLAP: cause("domain", "refused", "unchanged", false, "handoff"),
+  DOMAIN_PREVIEW_NOT_FOUND: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_PREVIEW_CONSUMED: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_PREVIEW_STALE: cause("domain", "refused", "unchanged", false, "next"),
+  DOMAIN_REBASE_CONFLICT: cause("domain", "failed", "unchanged", false, "handoff"),
+  DOMAIN_REBASED_CHECK_FAILED: cause("domain", "failed", "unchanged", false, "next"),
+  DOMAIN_RECOVERY_UNPROVABLE: cause("domain", "refused", "unchanged", false, "handoff"),
+  TRANSIENT_INTEGRATION_BUSY: cause("transient", "refused", "unchanged", true, "next"),
+  INTERNAL_GIT_FAILED_UNCHANGED: cause("internal", "failed", "unchanged", false, "handoff"),
+  INTERNAL_GIT_FAILED_PARTIAL: cause("internal", "failed", "partially-completed", false, "handoff"),
+  INTERNAL_GIT_FAILED_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
+  INTERNAL_INTEGRATION_UNPROVED: cause("internal", "failed", "unknown", false, "handoff"),
+  INTERNAL_COMPLETION_RECORD_FAILED: cause("internal", "failed", "partially-completed", false, "next"),
+  INTERNAL_UNEXPECTED_UNCHANGED: cause("internal", "failed", "unchanged", false, "handoff"),
+  INTERNAL_UNEXPECTED_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff")
 };
 function causeRule(code) {
   return CAUSE_RULES[code];
 }
 var WIRE_CAUSES = Object.keys(CAUSE_RULES);
+function causesWhere(query) {
+  const fields = Object.entries(query);
+  const codes = WIRE_CAUSES.filter((code) => fields.every(([field, value]) => CAUSE_RULES[code][field] === value));
+  const [first, ...rest] = codes;
+  if (first === undefined)
+    throw new Error(`no cause matches ${JSON.stringify(query)}`);
+  return [first, ...rest];
+}
 var CLI_OPTIONS = {
   json: { type: "boolean", valueName: null, summary: "Emit one machine-readable 2.0 envelope" },
   help: { type: "boolean", valueName: null, summary: "Show help" },
@@ -14501,19 +14569,26 @@ var handoffShape = { handoff: handoffSchema, nextAction: exports_external.never(
 var noRetry = { retryable: exports_external.literal(false), retryDelayMilliseconds: exports_external.never().optional() };
 var successShape = { outcome: exports_external.literal("success"), failureClass: exports_external.null(), exitCode: exports_external.literal(0), data: jsonSchema, ...noRetry, repairAction: exports_external.null(), ...nextShape };
 var refusalShape = { outcome: exports_external.literal("refused"), transactionState: exports_external.literal("unchanged"), data: exports_external.null(), repairAction: nonempty, effects: effectsSchema, attemptedEffect: exports_external.never().optional() };
-var failedShape = { outcome: exports_external.literal("failed"), data: exports_external.null(), repairAction: nonempty, effects: effectsSchema, attemptedEffect: nonempty.optional(), ...noRetry, ...handoffShape, failureClass: exports_external.literal("internal"), exitCode: exports_external.literal(1) };
+var failedBase = { outcome: exports_external.literal("failed"), data: exports_external.null(), repairAction: nonempty, effects: effectsSchema, attemptedEffect: nonempty.optional(), ...noRetry };
 var anyClass = exports_external.enum(["inspect", "repository-local"]);
+var refusedNext = (failureClass, exitCode) => exports_external.strictObject({ ...baseShape, ...refusalShape, ...nextShape, ...noRetry, effectClass: anyClass, causeCode: exports_external.enum(causesWhere({ failureClass, outcome: "refused", guidance: "next", retryable: false })), failureClass: exports_external.literal(failureClass), exitCode: exports_external.literal(exitCode) });
+var refusedHandoff = (failureClass, exitCode) => exports_external.strictObject({ ...baseShape, ...refusalShape, ...handoffShape, ...noRetry, effectClass: anyClass, causeCode: exports_external.enum(causesWhere({ failureClass, outcome: "refused", guidance: "handoff" })), failureClass: exports_external.literal(failureClass), exitCode: exports_external.literal(exitCode) });
+var failedRow = (failureClass, exitCode, transactionState, guidance) => exports_external.strictObject({ ...baseShape, ...failedBase, ...guidance === "handoff" ? handoffShape : nextShape, effectClass: anyClass, transactionState: exports_external.literal(transactionState), causeCode: exports_external.enum(causesWhere({ failureClass, outcome: "failed", transactionState, guidance })), failureClass: exports_external.literal(failureClass), exitCode: exports_external.literal(exitCode) });
 var resultSchema = exports_external.union([
   exports_external.strictObject({ ...baseShape, ...successShape, effectClass: anyClass, transactionState: exports_external.literal("unchanged"), causeCode: exports_external.literal("SUCCESS_UNCHANGED"), effects: effectsSchema }),
   exports_external.strictObject({ ...baseShape, ...successShape, effectClass: exports_external.literal("repository-local"), transactionState: exports_external.literal("completed"), causeCode: exports_external.literal("SUCCESS_COMPLETED"), effects: effectsSchema }),
-  exports_external.strictObject({ ...baseShape, ...refusalShape, ...nextShape, ...noRetry, effectClass: anyClass, causeCode: exports_external.enum(["USAGE_INVALID_INVOCATION", "USAGE_UNKNOWN_COMMAND"]), failureClass: exports_external.literal("usage"), exitCode: exports_external.literal(2) }),
-  exports_external.strictObject({ ...baseShape, ...refusalShape, ...nextShape, ...noRetry, effectClass: anyClass, causeCode: exports_external.literal("SCHEMA_INVALID_INPUT"), failureClass: exports_external.literal("schema"), exitCode: exports_external.literal(4) }),
-  exports_external.strictObject({ ...baseShape, ...refusalShape, ...nextShape, ...noRetry, effectClass: anyClass, causeCode: exports_external.literal("DOMAIN_PRECONDITION_UNMET"), failureClass: exports_external.literal("domain"), exitCode: exports_external.literal(3) }),
-  exports_external.strictObject({ ...baseShape, ...refusalShape, ...handoffShape, ...noRetry, effectClass: anyClass, causeCode: exports_external.literal("DOMAIN_AUTHORITY_REQUIRED"), failureClass: exports_external.literal("domain"), exitCode: exports_external.literal(3) }),
-  exports_external.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: exports_external.literal("repository-local"), causeCode: exports_external.literal("TRANSIENT_NOT_STARTED"), failureClass: exports_external.literal("transient"), exitCode: exports_external.literal(75), retryable: exports_external.literal(true), retryDelayMilliseconds: positiveInteger }),
-  exports_external.strictObject({ ...baseShape, ...failedShape, effectClass: anyClass, transactionState: exports_external.literal("unchanged"), causeCode: exports_external.enum(["INTERNAL_RESULT_UNCHANGED", "INTERNAL_UNEXPECTED"]) }),
-  exports_external.strictObject({ ...baseShape, ...failedShape, effectClass: exports_external.literal("repository-local"), transactionState: exports_external.literal("partially-completed"), causeCode: exports_external.literal("INTERNAL_RESULT_PARTIAL") }),
-  exports_external.strictObject({ ...baseShape, ...failedShape, effectClass: exports_external.literal("repository-local"), transactionState: exports_external.literal("unknown"), causeCode: exports_external.enum(["INTERNAL_RESULT_UNKNOWN", "INTERNAL_EFFECT_OUTCOME_UNKNOWN"]) })
+  refusedNext("usage", 2),
+  refusedNext("schema", 4),
+  refusedHandoff("schema", 4),
+  refusedNext("domain", 3),
+  refusedHandoff("domain", 3),
+  exports_external.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: exports_external.literal("repository-local"), causeCode: exports_external.literal("TRANSIENT_INTEGRATION_BUSY"), failureClass: exports_external.literal("transient"), exitCode: exports_external.literal(75), retryable: exports_external.literal(true), retryDelayMilliseconds: positiveInteger }),
+  failedRow("domain", 3, "unchanged", "handoff"),
+  failedRow("domain", 3, "unchanged", "next"),
+  failedRow("internal", 1, "unchanged", "handoff"),
+  failedRow("internal", 1, "partially-completed", "handoff"),
+  failedRow("internal", 1, "partially-completed", "next"),
+  failedRow("internal", 1, "unknown", "handoff")
 ]).superRefine((result, context) => {
   const collections = [result.effects.completed, result.effects.remaining, result.effects.uncertain];
   const all = collections.flat();
@@ -14596,8 +14671,8 @@ var BY_ID = (() => {
   return map2;
 })();
 var STATION_IDS = [...BY_ID.keys()];
-function stationForReason(commandIdentity, productCause, transactionState) {
-  return STATIONS.find((row) => row.commandIdentity === commandIdentity && row.transactionState === transactionState && row.reasons.includes(productCause));
+function stationFor(commandIdentity, causeCode) {
+  return STATIONS.find((row) => row.commandIdentity === commandIdentity && row.causeCode === causeCode);
 }
 
 // packages/vault-steward/src/diagnostics.ts
@@ -17659,6 +17734,8 @@ function productCause(reason, transaction) {
     return transaction === "unchanged" ? "INTERNAL_GIT_FAILED_UNCHANGED" : transaction === "partially-completed" ? "INTERNAL_GIT_FAILED_PARTIAL" : "INTERNAL_GIT_FAILED_UNKNOWN";
   if (reason === "unexpected")
     return transaction === "unchanged" ? "INTERNAL_UNEXPECTED_UNCHANGED" : "INTERNAL_UNEXPECTED_UNKNOWN";
+  if (reason === "completion-record-failed" && transaction === "unchanged")
+    return "INTERNAL_GIT_FAILED_UNCHANGED";
   return REASON_CAUSES[reason];
 }
 
@@ -18672,21 +18749,10 @@ function createRuntime() {
 }
 
 // packages/vault-steward/src/station-catalogue.ts
-var HANDOFF_OWNERS = {
-  SUCCESS_UNCHANGED: [],
-  SUCCESS_COMPLETED: [],
-  USAGE_INVALID_INVOCATION: [],
-  USAGE_UNKNOWN_COMMAND: [],
-  SCHEMA_INVALID_INPUT: [],
-  DOMAIN_PRECONDITION_UNMET: [],
-  DOMAIN_AUTHORITY_REQUIRED: ["human"],
-  TRANSIENT_NOT_STARTED: [],
-  INTERNAL_RESULT_UNCHANGED: ["operator"],
-  INTERNAL_RESULT_PARTIAL: ["operator"],
-  INTERNAL_RESULT_UNKNOWN: ["operator"],
-  INTERNAL_EFFECT_OUTCOME_UNKNOWN: ["operator"],
-  INTERNAL_UNEXPECTED: ["operator"]
-};
+var HUMAN = new Set(["DOMAIN_MAIN_DIVERGED", "DOMAIN_SEMANTIC_OVERLAP", "DOMAIN_REBASE_CONFLICT", "DOMAIN_RECOVERY_UNPROVABLE"]);
+function handoffOwner(causeCode) {
+  return HUMAN.has(causeCode) ? "human" : "operator";
+}
 var policyOf = (row) => row.retryable && row.retryDelayMilliseconds !== null ? { kind: "bounded", minimumMilliseconds: row.retryDelayMilliseconds, maximumMilliseconds: row.retryDelayMilliseconds } : { kind: "none" };
 function declarationOf(row) {
   const rule = causeRule(row.causeCode);
@@ -18700,8 +18766,7 @@ function declarationOf(row) {
     transactionState: row.transactionState,
     retryable: row.retryable,
     retryDelayPolicy: policyOf(row),
-    reasons: row.reasons,
-    guidance: row.guidance === "handoff" ? { kind: "handoff", owners: HANDOFF_OWNERS[row.causeCode] } : { kind: "next-action", nextActions: row.nextActions },
+    guidance: row.guidance === "handoff" ? { kind: "handoff", owners: [handoffOwner(row.causeCode)] } : { kind: "next-action", nextActions: row.nextActions },
     repairAction: row.outcome !== "success",
     reachability: row.reachability,
     unreachableRationale: row.unreachableRationale,
@@ -18721,7 +18786,6 @@ function catalogueSchemaIssues(declaration) {
     [declaration.effectClass !== "inspect" || declaration.transactionState === "unchanged", "inspect stations are always unchanged"],
     [guidance.kind !== "next-action" || guidance.nextActions.length > 0, "a next-action station declares at least one next action"],
     [guidance.kind !== "handoff" || guidance.owners.length > 0, "a handoff station declares its owner"],
-    [declaration.outcome === "success" || declaration.reasons.length > 0, "a refusal or failure station names its product reasons"],
     [declaration.reachability !== "required" || declaration.unreachableRationale === null, "required stations carry no unreachable rationale"],
     [declaration.reachability !== "declared-unreachable" || Boolean(declaration.unreachableRationale?.trim()), "declared-unreachable stations need a nonempty rationale"]
   ];
@@ -19013,6 +19077,27 @@ function inspectNext(state, worktree, hasCandidate) {
       return hasCandidate ? { nextCommand: `vault-steward finish --preview --worktree ${worktree} --message <subject> --json`, nextAction: "vault-steward.finish-preview" } : { nextCommand: "vault-steward begin --path <relative-path> --json", nextAction: "vault-steward.begin" };
   }
 }
+function previewViewOf(rt, runId) {
+  try {
+    const stored = readPreview(rt, runId);
+    return stored.present ? { present: true, valid: true, record: stored.record } : { present: false };
+  } catch (error51) {
+    if (error51 instanceof Refusal && error51.reason === "preview-invalid")
+      return { present: true, valid: false };
+    throw error51;
+  }
+}
+function previewViews(rt, record2, candidate) {
+  if (record2 === null)
+    return { preview: null, previewInvalid: false, previewStale: null };
+  const stored = previewViewOf(rt, record2.runId);
+  if (!stored.present)
+    return { preview: null, previewInvalid: false, previewStale: null };
+  if (!stored.valid)
+    return { preview: null, previewInvalid: true, previewStale: null };
+  const previewStale = candidate === null ? null : candidate.head !== (stored.record.candidateCommit ?? record2.baseCommit);
+  return { preview: stored.record, previewInvalid: false, previewStale };
+}
 function inspectViews(rt, worktree) {
   const receipt = receiptView(rt, worktree);
   const manifest = manifestView(rt, worktree);
@@ -19020,11 +19105,8 @@ function inspectViews(rt, worktree) {
   const candidate = record2 === null ? null : candidateView(rt, record2);
   const main = record2 === null || candidate === null ? { head: null, containsCandidateCommit: null, overlap: [] } : mainView(rt, record2, candidate);
   const lock = record2 === null ? { held: false, ownerPid: null, ownerRunId: null, live: null } : lockView(rt, record2.commonGitDirectory);
-  const stored = record2 === null ? null : readPreview(rt, record2.runId);
-  const preview = stored?.present ? stored.record : null;
-  const previewStale = preview === null || candidate === null ? null : candidate.head !== (preview.candidateCommit ?? record2?.baseCommit);
   const observation = receipt.valid || record2 === null ? undefined : observeGuard(rt, { vault: record2.vault, candidateRoot: candidateRoot(rt, record2.vault), runId: record2.runId, candidateCommit: candidate?.committed ? candidate.head ?? undefined : undefined });
-  return { worktree, receipt, manifest, record: record2, candidate, main, lock, preview, previewStale, observation };
+  return { worktree, receipt, manifest, record: record2, candidate, main, lock, ...previewViews(rt, record2, candidate), observation };
 }
 function recoveryStateOf(rt, views) {
   if (views.receipt.valid)
@@ -19033,8 +19115,9 @@ function recoveryStateOf(rt, views) {
     return views.receipt.present ? "needs-human" : "not-started";
   if (recoveryEvidence(rt, views.record).kind !== "unprovable")
     return "recoverable";
+  const cleanNotOnMain = views.candidate !== null && !views.candidate.dirty && views.main.containsCandidateCommit !== true;
   if (views.preview?.consumed)
-    return "needs-human";
+    return cleanNotOnMain ? "not-started" : "needs-human";
   if (views.preview !== null && views.previewStale === false)
     return "previewed";
   if (views.candidate?.committed && views.main.overlap.length > 0)
@@ -19047,7 +19130,7 @@ function inspectData(views, state, nextCommand) {
     candidate: { runId: record2?.runId ?? null, worktree: views.worktree, exists: manifest.worktreeExists, baseCommit: record2?.baseCommit ?? null, head: candidate?.head ?? null, committed: candidate?.committed ?? false, dirty: candidate?.dirty ?? false, paths: record2?.paths ?? null },
     manifest: { present: manifest.present, valid: manifest.valid },
     receipt: { present: receipt.present, valid: receipt.valid, code: receipt.code, path: receipt.path },
-    preview: preview === null ? { present: false, previewId: null, consumed: null, stale: null } : { present: true, previewId: preview.previewId, consumed: preview.consumed, stale: views.previewStale },
+    preview: preview === null ? { present: views.previewInvalid, valid: false, previewId: null, consumed: null, stale: null } : { present: true, valid: true, previewId: preview.previewId, consumed: preview.consumed, stale: views.previewStale },
     lock: { held: lock.held, ownerPid: lock.ownerPid, ownerRunId: lock.ownerRunId, live: lock.live },
     main: { head: main.head, containsCandidateCommit: main.containsCandidateCommit, overlap: main.overlap },
     guard: guardData(views.observation),
@@ -19137,36 +19220,67 @@ var REPAIR = {
   INTERNAL_UNEXPECTED_UNCHANGED: { repair: "Inspect the local error and the diagnostics file before retrying.", next: null },
   INTERNAL_UNEXPECTED_UNKNOWN: { repair: "Inspect canonical main and the candidate before taking another action.", next: null }
 };
+var SENTENCE = {
+  SCHEMA_INVALID_INPUT: "An option value has the wrong shape.",
+  SCHEMA_CONFIG_INVALID: "The vault configuration file is unreadable or off schema.",
+  SCHEMA_MANIFEST_INVALID: "The candidate manifest fails validation.",
+  SCHEMA_RECEIPT_INVALID: "A receipt exists for this worktree but fails validation.",
+  SCHEMA_PREVIEW_INVALID: "The preview record is unreadable or off shape.",
+  DOMAIN_CONFIG_MISSING: "No vault is configured and --vault was not given.",
+  DOMAIN_VAULT_NOT_FOUND: "The vault path does not resolve.",
+  DOMAIN_CANONICAL_NOT_MAIN: "The vault is not the root checkout with main checked out.",
+  DOMAIN_PATH_REFUSED: "An admitted path escapes the vault or crosses a symbolic link.",
+  DOMAIN_CANDIDATE_NOT_FOUND: "No candidate worktree exists at that path and no receipt records it.",
+  DOMAIN_CANDIDATE_INVALID: "The committed candidate is dirty, has more than one commit, or its paths differ from the admitted set.",
+  DOMAIN_PATH_SET_MISMATCH: "The changed paths differ from the admitted set.",
+  DOMAIN_CHECK_FAILED: "bun run check failed inside the candidate.",
+  DOMAIN_FORMAT_FAILED: "Whitespace findings in the admitted files.",
+  DOMAIN_GUARD_INCOMPATIBLE: "The installed reference-transaction hook denies a ref Vault Steward must write.",
+  DOMAIN_CANONICAL_NOT_READY: "The canonical checkout is not on main or is dirty.",
+  DOMAIN_MAIN_DIVERGED: "The candidate base is no longer an ancestor of main.",
+  DOMAIN_SEMANTIC_OVERLAP: "Main changed an admitted path since the candidate began.",
+  DOMAIN_PREVIEW_NOT_FOUND: "No preview record exists for this candidate.",
+  DOMAIN_PREVIEW_CONSUMED: "The preview was already consumed by an earlier apply.",
+  DOMAIN_PREVIEW_STALE: "The preview no longer matches the candidate or main.",
+  DOMAIN_REBASE_CONFLICT: "The rebase onto the moved main conflicted and was aborted.",
+  DOMAIN_REBASED_PATH_SET_MISMATCH: "The rebased candidate commit's paths differ from the admitted set.",
+  DOMAIN_REBASED_CHECK_FAILED: "The checker failed on the rebased candidate.",
+  DOMAIN_RECOVERY_UNPROVABLE: "Git does not prove that main contains the candidate's own commit.",
+  TRANSIENT_INTEGRATION_BUSY: "Another finisher holds the local integration lock.",
+  INTERNAL_GIT_FAILED_UNCHANGED: "A Git command failed before any effect.",
+  INTERNAL_GIT_FAILED_PARTIAL: "A Git command failed after a confirmed effect.",
+  INTERNAL_GIT_FAILED_UNKNOWN: "A Git command failed while an effect's result was not established.",
+  INTERNAL_INTEGRATION_UNPROVED: "The fast-forward of main could not be proven by read-back.",
+  INTERNAL_COMPLETION_RECORD_FAILED: "The completion record could not be finished after the fast-forward.",
+  INTERNAL_UNEXPECTED_UNCHANGED: "An unclassified error occurred before any effect.",
+  INTERNAL_UNEXPECTED_UNKNOWN: "An unclassified error occurred while an effect was in flight."
+};
 function describe3(cause2, facts) {
-  const parts = [];
+  const parts = [SENTENCE[cause2]];
   if (facts.detail)
     parts.push(facts.detail);
   if (facts.overlap?.length)
     parts.push(`overlapping paths: ${facts.overlap.join(", ")}`);
   if (facts.ref)
-    parts.push(`the installed reference-transaction hook denies ${facts.ref}`);
+    parts.push(`denied ref: ${facts.ref}`);
   if (facts.diagnostics?.length)
     parts.push(facts.diagnostics.join("; "));
   if (facts.diagnosticsPath)
     parts.push(`checker diagnostics at ${facts.diagnosticsPath}`);
   if (facts.worktree)
     parts.push(`candidate ${facts.worktree}`);
-  return parts.length === 0 ? cause2 : `${cause2}: ${parts.join("; ")}`;
+  return parts.join(" ");
 }
-function nextActionFor(station, guidance, refusal) {
+function nextActionFor(station, guidance) {
   const preferred = guidance.next;
   if (preferred !== null && station.nextActions.includes(preferred))
     return preferred;
-  if (station.causeCode === "TRANSIENT_NOT_STARTED")
-    return station.commandIdentity;
-  if ((refusal.reason === "state-home-missing" || refusal.reason === "input-invalid") && station.nextActions.includes("vault-steward.help"))
-    return "vault-steward.help";
   const first = station.nextActions[0];
   return isCommandIdentity(first) ? first : "vault-steward.help";
 }
 function handoffFor(station, message, facts) {
   const inspect3 = facts.worktree ? [`vault-steward inspect --worktree ${facts.worktree} --json`] : ["vault-steward --discover --json"];
-  const owner = station.causeCode === "DOMAIN_AUTHORITY_REQUIRED" ? "human" : "operator";
+  const owner = handoffOwner(station.causeCode);
   return facts.worktree ? { owner, reason: message, inspect: inspect3, resource: { kind: "candidate-worktree", id: facts.worktree } } : { owner, reason: message, inspect: inspect3 };
 }
 function effectsFor(inventory, transaction, facts) {
@@ -19182,23 +19296,20 @@ function effectsFor(inventory, transaction, facts) {
 function refusalResult(decision, runId) {
   const { identity, refusal, inventory } = decision;
   const cause2 = productCause(refusal.reason, refusal.transaction);
-  const station = stationForReason(identity, cause2, refusal.transaction) ?? stationForReason(identity, "INTERNAL_UNEXPECTED_UNCHANGED", "unchanged");
+  const declared = stationFor(identity, cause2);
+  const station = declared ?? stationFor(identity, "INTERNAL_UNEXPECTED_UNCHANGED");
   if (station === undefined)
     throw new Error(`no station for ${identity} ${cause2}`);
-  const mapped = station.reasons.includes(cause2);
-  const message = mapped ? describe3(cause2, refusal.facts) : `INTERNAL_UNEXPECTED_UNCHANGED: unmapped reason ${cause2} on ${identity}`;
+  const message = declared === undefined ? `Undeclared cause ${cause2} on ${identity}; ${describe3(cause2, refusal.facts)}` : describe3(cause2, refusal.facts);
   const guidance = REPAIR[cause2];
   const effectClass = declarationForIdentity(identity).effectClass;
-  const transaction = mapped ? refusal.transaction : "unchanged";
+  const transaction = declared === undefined ? "unchanged" : refusal.transaction;
   const effects = effectClass === "inspect" ? { completed: [], remaining: [], uncertain: [], inventoryComplete: true } : effectsFor(inventory, transaction, refusal.facts);
-  const base = { runId, commandIdentity: identity, effectClass, transactionState: station.transactionState, causeCode: station.causeCode, failureClass: station.exit === 0 ? null : declarationFailure(station.causeCode), exitCode: station.exit, data: null, repairAction: guidance.repair, effects, ...refusal.facts.runId ? { idempotencyKey: refusal.facts.runId } : {} };
-  const guided = station.guidance === "handoff" ? { ...base, handoff: handoffFor(station, message, refusal.facts) } : { ...base, nextAction: nextActionFor(station, guidance, refusal) };
+  const rule = causeRule(station.causeCode);
+  const base = { runId, commandIdentity: identity, effectClass, transactionState: station.transactionState, causeCode: station.causeCode, failureClass: rule.failureClass, exitCode: station.exit, data: null, repairAction: guidance.repair, effects, ...refusal.facts.runId ? { idempotencyKey: refusal.facts.runId } : {} };
+  const guided = station.guidance === "handoff" ? { ...base, handoff: handoffFor(station, message, refusal.facts) } : { ...base, nextAction: nextActionFor(station, guidance) };
   const retry = station.retryable ? { retryable: true, retryDelayMilliseconds: RETRY_DELAY_MS } : { retryable: false };
   return { result: { ...guided, outcome: station.outcome, ...retry }, message };
-}
-function declarationFailure(cause2) {
-  const prefix = cause2.split("_")[0];
-  return prefix === "SUCCESS" ? null : prefix === "USAGE" ? "usage" : prefix === "SCHEMA" ? "schema" : prefix === "DOMAIN" ? "domain" : prefix === "TRANSIENT" ? "transient" : "internal";
 }
 function successResult(decision, runId) {
   const effectClass = declarationForIdentity(decision.identity).effectClass;
@@ -19232,7 +19343,7 @@ function usageEnvelope(identity, runId, cause2, message) {
   const remaining = effectClass === "inspect" || route === undefined ? [] : [...INVENTORY[route]].sort();
   const nextAction = cause2 === "USAGE_UNKNOWN_COMMAND" && identity === "vault-steward.command-discovery" ? "vault-steward.discovery" : "vault-steward.help";
   const result = { runId, commandIdentity: identity, outcome: "refused", effectClass, transactionState: "unchanged", causeCode: cause2, failureClass: "usage", exitCode: 2, data: null, retryable: false, repairAction: cause2 === "USAGE_UNKNOWN_COMMAND" ? "Select a canonical command from --discover --json or run --help." : "Correct the command arguments; run --help for the accepted forms.", effects: { completed: [], remaining, uncertain: [], inventoryComplete: true }, nextAction };
-  return envelope(`${cause2}: ${message}`, result);
+  return envelope(message, result);
 }
 var SINK_FAILURES = ["capacity", "setup", "write", "flush-timeout", "close"];
 function diagnosticsDisclosure(status) {
@@ -19242,6 +19353,20 @@ function diagnosticsDisclosure(status) {
   }
   return { status: "available", file: status.file, sinkFailure: sinkFailure2, droppedRecords: status.droppedRecords, unflushedRecords: status.unflushedRecords, truncatedRecords: status.truncatedRecords, countsComplete: status.countsComplete, closed: status.closed };
 }
+var effectsSchema2 = MachineEnvelopeSchema.shape.result.options[0].shape.effects;
+function trustedEffects(candidate) {
+  const parsed = effectsSchema2.safeParse(candidate.result?.effects);
+  const state = candidate.result?.transactionState;
+  const unknown2 = { transactionState: "unknown", effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: false }, causeCode: "INTERNAL_UNEXPECTED_UNKNOWN" };
+  if (!parsed.success)
+    return unknown2;
+  const effects = parsed.data;
+  if (state === "unchanged" && effects.completed.length === 0 && effects.uncertain.length === 0 && effects.inventoryComplete)
+    return { transactionState: "unchanged", effects, causeCode: "INTERNAL_UNEXPECTED_UNCHANGED" };
+  if (state === "partially-completed" && effects.completed.length > 0 && effects.remaining.length > 0 && effects.uncertain.length === 0 && effects.inventoryComplete)
+    return { transactionState: "partially-completed", effects, causeCode: "INTERNAL_UNEXPECTED_UNKNOWN" };
+  return effects.uncertain.length > 0 || !effects.inventoryComplete ? { ...unknown2, effects } : unknown2;
+}
 function emitMachine(candidate, io) {
   const parsed = isSafeJson(candidate) ? MachineEnvelopeSchema.safeParse(candidate) : null;
   if (parsed?.success) {
@@ -19250,12 +19375,29 @@ function emitMachine(candidate, io) {
     return parsed.data.result.exitCode;
   }
   const identity = isCommandIdentity(candidate.result?.commandIdentity) ? candidate.result.commandIdentity : "vault-steward.dispatch";
+  const effectClass = declarationForIdentity(identity).effectClass;
+  const facts = effectClass === "inspect" ? { transactionState: "unchanged", effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true }, causeCode: "INTERNAL_UNEXPECTED_UNCHANGED" } : trustedEffects(candidate);
+  const partial2 = facts.transactionState === "partially-completed";
   const fallback = {
     envelopeVersion: ENVELOPE_VERSION,
     contractVersion: CONTRACT_VERSION,
-    message: "INTERNAL_UNEXPECTED_UNCHANGED: the result could not be serialized as a valid 2.0 envelope",
+    message: "The result could not be serialized as a valid 2.0 envelope; the effect facts below are the trusted ones.",
     availablePaths: paths(identity),
-    result: { runId: typeof candidate.result?.runId === "string" && candidate.result.runId ? candidate.result.runId : "run-unknown", commandIdentity: identity, outcome: "failed", effectClass: declarationForIdentity(identity).effectClass, transactionState: "unchanged", causeCode: "INTERNAL_UNEXPECTED", failureClass: "internal", exitCode: 1, data: null, retryable: false, repairAction: "Inspect the diagnostics file and the candidate before retrying.", effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true }, handoff: { owner: "operator", reason: "envelope serialization failed", inspect: ["vault-steward --discover --json"] } }
+    result: {
+      runId: typeof candidate.result?.runId === "string" && candidate.result.runId ? candidate.result.runId : "run-unknown",
+      commandIdentity: identity,
+      outcome: "failed",
+      effectClass,
+      transactionState: partial2 ? "unknown" : facts.transactionState,
+      causeCode: facts.causeCode,
+      failureClass: "internal",
+      exitCode: 1,
+      data: null,
+      retryable: false,
+      repairAction: "Inspect the candidate and the diagnostics file before retrying; nothing is replayed.",
+      effects: partial2 ? { ...facts.effects, uncertain: facts.effects.remaining, remaining: [] } : facts.effects,
+      handoff: { owner: "operator", reason: "envelope serialization failed", inspect: ["vault-steward --discover --json"] }
+    }
   };
   io.stdout(`${JSON.stringify(fallback)}
 `);
@@ -19273,7 +19415,7 @@ function renderHuman(decision, result, message, io) {
 `);
     return;
   }
-  io.stderr(`${message.startsWith(result.causeCode) ? message : `${result.causeCode}: ${message}`} (repair: ${result.repairAction})
+  io.stderr(`${result.causeCode}: ${message} (repair: ${result.repairAction})
 `);
 }
 function stationLine(station) {

@@ -10,7 +10,7 @@ import { EXPECTED_BY_IDENTITY, EXPECTED_COMMANDS, EXPECTED_STATION_COUNT, identi
 setDefaultTimeout(60_000)
 afterAll(cleanupFixtures)
 
-const PUBLIC_STATION_KEYS = ["causeCode", "commandIdentity", "effectClass", "exitCode", "failureClass", "guidance", "outcome", "reachability", "reasons", "repairAction", "retryDelayPolicy", "retryable", "transactionState", "unreachableRationale"]
+const PUBLIC_STATION_KEYS = ["causeCode", "commandIdentity", "effectClass", "exitCode", "failureClass", "guidance", "outcome", "reachability", "repairAction", "retryDelayPolicy", "retryable", "transactionState", "unreachableRationale"]
 
 function stationsOf(identity: string): Record<string, unknown>[] {
 	const f = fixture({ hook: false })
@@ -62,7 +62,6 @@ test("--discover-command publishes exactly the expected stations for every canon
 			expect(station.transactionState, identity).toBe(oracle.state)
 			expect(station.retryable, identity).toBe(oracle.retryable)
 			expect(station.retryDelayPolicy, identity).toEqual(oracle.delay === null ? { kind: "none" } : { kind: "bounded", minimumMilliseconds: oracle.delay, maximumMilliseconds: oracle.delay })
-			expect(station.reasons, identity).toEqual(oracle.reasons)
 			expect(station.reachability, identity).toBe(oracle.reachability)
 			expect(station.repairAction, identity).toBe(oracle.failureClass !== null)
 			const guidance = station.guidance as { kind: string; nextActions?: string[]; owners?: string[] }
@@ -85,7 +84,7 @@ test("human selected-command discovery prints one line per possible outcome", ()
 	const lines = run.stdout.split("\n").filter(Boolean)
 	expect(lines[0]).toBe("vault-steward.finish-apply: possible outcomes")
 	expect(lines.length - 1).toBe([...EXPECTED_BY_IDENTITY.keys()].filter((identity) => identity.startsWith('["vault-steward.finish-apply",')).length)
-	expect(lines.some((line) => line.includes("TRANSIENT_NOT_STARTED") && line.includes("exit 75") && line.includes("retryable true"))).toBe(true)
+	expect(lines.some((line) => line.includes("TRANSIENT_INTEGRATION_BUSY") && line.includes("exit 75") && line.includes("retryable true"))).toBe(true)
 })
 
 test("an unknown selector is refused at the command-discovery identity with discovery as the next action", () => {

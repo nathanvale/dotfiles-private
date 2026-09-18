@@ -4,9 +4,10 @@ import { causeRule, COMMANDS, EXIT, EXIT_MEANINGS, exitFor, MachineEnvelopeSchem
 import { parseFaults } from "../../src/faults.ts"
 import { BRANCH_STATIONS, catalogueSchemaIssues } from "../../src/station-catalogue.ts"
 
-// Contract enumeration: the wire vocabulary is exactly the Contract Core 2.0 subset this CLI emits, every cause's
-// rule row is the literal restated here (independent oracle, not read from the checker or the contract module), the
-// exit map is the six accepted exits, and raw argv routing keeps the command identity for usage refusals.
+// Contract enumeration: the wire vocabulary is exactly the Contract Core 2.0 core rows plus the CONTRACT.md 3.3 product
+// causes this CLI emits, every cause's rule row is the literal restated here (independent oracle, not read from the
+// checker or the contract module), the exit map is the six accepted exits, and raw argv routing keeps the command
+// identity for usage refusals.
 
 const EXPECTED_RULES: Record<string, [string | null, string, string, boolean, string]> = {
 	SUCCESS_UNCHANGED: [null, "success", "unchanged", false, "next"],
@@ -14,14 +15,37 @@ const EXPECTED_RULES: Record<string, [string | null, string, string, boolean, st
 	USAGE_INVALID_INVOCATION: ["usage", "refused", "unchanged", false, "next"],
 	USAGE_UNKNOWN_COMMAND: ["usage", "refused", "unchanged", false, "next"],
 	SCHEMA_INVALID_INPUT: ["schema", "refused", "unchanged", false, "next"],
-	DOMAIN_PRECONDITION_UNMET: ["domain", "refused", "unchanged", false, "next"],
-	DOMAIN_AUTHORITY_REQUIRED: ["domain", "refused", "unchanged", false, "handoff"],
-	TRANSIENT_NOT_STARTED: ["transient", "refused", "unchanged", true, "next"],
-	INTERNAL_RESULT_UNCHANGED: ["internal", "failed", "unchanged", false, "handoff"],
-	INTERNAL_RESULT_PARTIAL: ["internal", "failed", "partially-completed", false, "handoff"],
-	INTERNAL_RESULT_UNKNOWN: ["internal", "failed", "unknown", false, "handoff"],
-	INTERNAL_EFFECT_OUTCOME_UNKNOWN: ["internal", "failed", "unknown", false, "handoff"],
-	INTERNAL_UNEXPECTED: ["internal", "failed", "unchanged", false, "handoff"],
+	SCHEMA_CONFIG_INVALID: ["schema", "refused", "unchanged", false, "next"],
+	SCHEMA_MANIFEST_INVALID: ["schema", "refused", "unchanged", false, "handoff"],
+	SCHEMA_RECEIPT_INVALID: ["schema", "refused", "unchanged", false, "handoff"],
+	SCHEMA_PREVIEW_INVALID: ["schema", "refused", "unchanged", false, "handoff"],
+	DOMAIN_CONFIG_MISSING: ["domain", "refused", "unchanged", false, "next"],
+	DOMAIN_VAULT_NOT_FOUND: ["domain", "refused", "unchanged", false, "next"],
+	DOMAIN_CANONICAL_NOT_MAIN: ["domain", "refused", "unchanged", false, "next"],
+	DOMAIN_PATH_REFUSED: ["domain", "refused", "unchanged", false, "next"],
+	DOMAIN_CANDIDATE_NOT_FOUND: ["domain", "refused", "unchanged", false, "next"],
+	DOMAIN_CANDIDATE_INVALID: ["domain", "refused", "unchanged", false, "handoff"],
+	DOMAIN_PATH_SET_MISMATCH: ["domain", "refused", "unchanged", false, "next"],
+	DOMAIN_CHECK_FAILED: ["domain", "refused", "unchanged", false, "next"],
+	DOMAIN_FORMAT_FAILED: ["domain", "refused", "unchanged", false, "next"],
+	DOMAIN_GUARD_INCOMPATIBLE: ["domain", "refused", "unchanged", false, "next"],
+	DOMAIN_CANONICAL_NOT_READY: ["domain", "refused", "unchanged", false, "next"],
+	DOMAIN_MAIN_DIVERGED: ["domain", "refused", "unchanged", false, "handoff"],
+	DOMAIN_SEMANTIC_OVERLAP: ["domain", "refused", "unchanged", false, "handoff"],
+	DOMAIN_PREVIEW_NOT_FOUND: ["domain", "refused", "unchanged", false, "next"],
+	DOMAIN_PREVIEW_CONSUMED: ["domain", "refused", "unchanged", false, "next"],
+	DOMAIN_PREVIEW_STALE: ["domain", "refused", "unchanged", false, "next"],
+	DOMAIN_REBASE_CONFLICT: ["domain", "failed", "unchanged", false, "handoff"],
+	DOMAIN_REBASED_CHECK_FAILED: ["domain", "failed", "unchanged", false, "next"],
+	DOMAIN_RECOVERY_UNPROVABLE: ["domain", "refused", "unchanged", false, "handoff"],
+	TRANSIENT_INTEGRATION_BUSY: ["transient", "refused", "unchanged", true, "next"],
+	INTERNAL_GIT_FAILED_UNCHANGED: ["internal", "failed", "unchanged", false, "handoff"],
+	INTERNAL_GIT_FAILED_PARTIAL: ["internal", "failed", "partially-completed", false, "handoff"],
+	INTERNAL_GIT_FAILED_UNKNOWN: ["internal", "failed", "unknown", false, "handoff"],
+	INTERNAL_INTEGRATION_UNPROVED: ["internal", "failed", "unknown", false, "handoff"],
+	INTERNAL_COMPLETION_RECORD_FAILED: ["internal", "failed", "partially-completed", false, "next"],
+	INTERNAL_UNEXPECTED_UNCHANGED: ["internal", "failed", "unchanged", false, "handoff"],
+	INTERNAL_UNEXPECTED_UNKNOWN: ["internal", "failed", "unknown", false, "handoff"],
 }
 
 test("the wire cause vocabulary and its rule rows are exactly the expected literals", () => {

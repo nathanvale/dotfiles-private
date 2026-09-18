@@ -2,9 +2,10 @@ import { stationIdOfRow } from "./branch-station-catalog.ts"
 import { type CommandIdentity, type CommandSummary, causeRule, type EffectClass, type ExitCode, exitFor, type FailureClass, type Outcome, STATIONS, type StationRow, type WireCauseCode, type WireTransactionState } from "./command-contract.ts"
 
 // The typed catalogue: one readonly STATIONS owner supplies every public station, the selected-command discovery
-// data, and the enforcement inputs. Discovery is descriptive: possible outcomes only, never live state, approval, or
-// replay authority. Guidance is published as the set of next-action identities (or the handoff owner) a station may
-// emit; process evidence must stay inside that set and every declared next action must be observed.
+// data, and the enforcement inputs. Identity is [commandIdentity, outcome, causeCode] with the CONTRACT.md 3.3 product
+// cause on the wire. Discovery is descriptive: possible outcomes only, never live state, approval, or replay
+// authority. Guidance is published as the set of next-action identities (or the handoff owner) a station may emit;
+// process evidence must stay inside that set and every declared next action must be observed.
 
 export type Reachability = "required" | "declared-unreachable"
 export type RetryDelayPolicy = { readonly kind: "none" } | { readonly kind: "bounded"; readonly minimumMilliseconds: number; readonly maximumMilliseconds: number }
@@ -19,7 +20,6 @@ export type PublicStation = {
 	readonly transactionState: WireTransactionState
 	readonly retryable: boolean
 	readonly retryDelayPolicy: RetryDelayPolicy
-	readonly reasons: readonly string[]
 	readonly guidance: PublicGuidance
 	readonly repairAction: boolean
 	readonly reachability: Reachability
@@ -37,29 +37,18 @@ export type CatalogueObservation = {
 	readonly transactionState: string
 	readonly retryable: boolean
 	readonly retryDelayMilliseconds: number | null
-	readonly reason: string | null
 	readonly nextAction: string | null
 	readonly handoffOwner: string | null
 	readonly repairAction: boolean
 }
-export type CatalogueFindingCode = "STATION_UNREACHED" | "STATION_UNDECLARED" | "STATION_FIELD_MISMATCH" | "STATION_UNREACHABLE_OBSERVED" | "STATION_NEXT_ACTION_UNREACHED" | "STATION_REASON_UNREACHED"
+export type CatalogueFindingCode = "STATION_UNREACHED" | "STATION_UNDECLARED" | "STATION_FIELD_MISMATCH" | "STATION_UNREACHABLE_OBSERVED" | "STATION_NEXT_ACTION_UNREACHED"
 export type CatalogueFinding = { readonly code: CatalogueFindingCode; readonly identity: string; readonly field?: string }
 export type CatalogueReport = { readonly findings: readonly CatalogueFinding[]; readonly fullQualification: boolean }
 
-const HANDOFF_OWNERS: Readonly<Record<WireCauseCode, readonly ("human" | "operator")[]>> = {
-	SUCCESS_UNCHANGED: [],
-	SUCCESS_COMPLETED: [],
-	USAGE_INVALID_INVOCATION: [],
-	USAGE_UNKNOWN_COMMAND: [],
-	SCHEMA_INVALID_INPUT: [],
-	DOMAIN_PRECONDITION_UNMET: [],
-	DOMAIN_AUTHORITY_REQUIRED: ["human"],
-	TRANSIENT_NOT_STARTED: [],
-	INTERNAL_RESULT_UNCHANGED: ["operator"],
-	INTERNAL_RESULT_PARTIAL: ["operator"],
-	INTERNAL_RESULT_UNKNOWN: ["operator"],
-	INTERNAL_EFFECT_OUTCOME_UNKNOWN: ["operator"],
-	INTERNAL_UNEXPECTED: ["operator"],
+// Handoff owner per cause: human for decisions about content and concurrent work, operator for damaged state.
+const HUMAN: ReadonlySet<WireCauseCode> = new Set<WireCauseCode>(["DOMAIN_MAIN_DIVERGED", "DOMAIN_SEMANTIC_OVERLAP", "DOMAIN_REBASE_CONFLICT", "DOMAIN_RECOVERY_UNPROVABLE"])
+export function handoffOwner(causeCode: WireCauseCode): "human" | "operator" {
+	return HUMAN.has(causeCode) ? "human" : "operator"
 }
 
 const policyOf = (row: StationRow): RetryDelayPolicy => (row.retryable && row.retryDelayMilliseconds !== null ? { kind: "bounded", minimumMilliseconds: row.retryDelayMilliseconds, maximumMilliseconds: row.retryDelayMilliseconds } : { kind: "none" })
@@ -76,8 +65,7 @@ function declarationOf(row: StationRow): CatalogueDeclaration {
 		transactionState: row.transactionState,
 		retryable: row.retryable,
 		retryDelayPolicy: policyOf(row),
-		reasons: row.reasons,
-		guidance: row.guidance === "handoff" ? { kind: "handoff", owners: HANDOFF_OWNERS[row.causeCode] } : { kind: "next-action", nextActions: row.nextActions },
+		guidance: row.guidance === "handoff" ? { kind: "handoff", owners: [handoffOwner(row.causeCode)] } : { kind: "next-action", nextActions: row.nextActions },
 		repairAction: row.outcome !== "success",
 		reachability: row.reachability,
 		unreachableRationale: row.unreachableRationale,
@@ -100,7 +88,6 @@ export function catalogueSchemaIssues(declaration: CatalogueDeclaration): readon
 		[declaration.effectClass !== "inspect" || declaration.transactionState === "unchanged", "inspect stations are always unchanged"],
 		[guidance.kind !== "next-action" || guidance.nextActions.length > 0, "a next-action station declares at least one next action"],
 		[guidance.kind !== "handoff" || guidance.owners.length > 0, "a handoff station declares its owner"],
-		[declaration.outcome === "success" || declaration.reasons.length > 0, "a refusal or failure station names its product reasons"],
 		[declaration.reachability !== "required" || declaration.unreachableRationale === null, "required stations carry no unreachable rationale"],
 		[declaration.reachability !== "declared-unreachable" || Boolean(declaration.unreachableRationale?.trim()), "declared-unreachable stations need a nonempty rationale"],
 	]
@@ -133,7 +120,6 @@ function mismatchedField(declaration: CatalogueDeclaration, observed: CatalogueO
 		[delay === observed.retryDelayMilliseconds, "retryDelayPolicy"],
 		[declaration.repairAction === observed.repairAction, "repairAction"],
 		[guidanceHolds, declaration.guidance.kind === "next-action" ? "guidance.nextActions" : "guidance.owners"],
-		[observed.reason === null || declaration.reasons.includes(observed.reason), "reasons"],
 	]
 	return checks.find(([holds]) => !holds)?.[1]
 }
@@ -143,10 +129,7 @@ function declarationFindings(declaration: CatalogueDeclaration, runs: readonly C
 	if (declaration.reachability === "declared-unreachable") return runs.length > 0 ? [{ code: "STATION_UNREACHABLE_OBSERVED", identity }] : []
 	if (runs.length === 0) return [{ code: "STATION_UNREACHED", identity }]
 	const nextActions = declaration.guidance.kind === "next-action" ? declaration.guidance.nextActions : []
-	return [
-		...nextActions.filter((nextAction) => !runs.some((run) => run.nextAction === nextAction)).map((nextAction): CatalogueFinding => ({ code: "STATION_NEXT_ACTION_UNREACHED", identity, field: nextAction })),
-		...declaration.reasons.filter((reason) => !runs.some((run) => run.reason === reason)).map((reason): CatalogueFinding => ({ code: "STATION_REASON_UNREACHED", identity, field: reason })),
-	]
+	return nextActions.filter((nextAction) => !runs.some((run) => run.nextAction === nextAction)).map((nextAction): CatalogueFinding => ({ code: "STATION_NEXT_ACTION_UNREACHED", identity, field: nextAction }))
 }
 
 function observationFindings(byIdentity: ReadonlyMap<string, CatalogueDeclaration>, identity: string, runs: readonly CatalogueObservation[]): CatalogueFinding[] {
@@ -159,7 +142,7 @@ function observationFindings(byIdentity: ReadonlyMap<string, CatalogueDeclaratio
 }
 
 // Strict new-project enforcement: every required station reached, every observed station declared with agreeing
-// fields, every declared next action and product reason observed at least once, no declared-unreachable station
+// fields, every declared next action observed at least once, no declared-unreachable station
 // observed. There is no legacy baseline.
 export function validateCatalogue(declarations: readonly CatalogueDeclaration[], observations: readonly CatalogueObservation[]): CatalogueReport {
 	const byIdentity = new Map(declarations.map((declaration) => [declaration.identity, declaration]))

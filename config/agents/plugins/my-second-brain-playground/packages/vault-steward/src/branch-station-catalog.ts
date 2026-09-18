@@ -29,8 +29,8 @@ const BY_ID: ReadonlyMap<string, StationRow> = (() => {
 
 export const STATION_IDS: readonly string[] = [...BY_ID.keys()]
 
-// The station a command reaches for one product reason in one transaction state; undefined means the catalogue does
-// not declare it, which the writer reports as INTERNAL_UNEXPECTED with the reason named in the message.
-export function stationForReason(commandIdentity: string, productCause: string, transactionState: string): StationRow | undefined {
-	return STATIONS.find((row) => row.commandIdentity === commandIdentity && row.transactionState === transactionState && row.reasons.includes(productCause))
+// The station a command reaches for one wire cause; undefined means the catalogue does not declare it, which the
+// writer reports as INTERNAL_UNEXPECTED_UNCHANGED naming the undeclared cause in the message.
+export function stationFor(commandIdentity: string, causeCode: string): StationRow | undefined {
+	return STATIONS.find((row) => row.commandIdentity === commandIdentity && row.causeCode === causeCode)
 }

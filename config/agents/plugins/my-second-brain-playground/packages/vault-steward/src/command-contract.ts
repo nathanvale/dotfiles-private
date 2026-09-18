@@ -20,23 +20,47 @@ type GuidanceArm = "next" | "handoff"
 const cause = <C extends FailureClass | null, O extends Outcome, S extends WireTransactionState, R extends boolean, G extends GuidanceArm>(failureClass: C, outcome: O, transactionState: S, retryable: R, guidance: G) =>
 	({ failureClass, outcome, transactionState, retryable, guidance }) as const
 
-// The Contract Core 2.0 wire vocabulary accepted by the strict checker (packages/cli-design-check successor
-// CAUSE_RULES). Product-specific reasons (CONTRACT.md 3.3 names) travel as the first token of `message` and in the
-// station catalogue's `reasons`; see REPORT-2B deviation 1.
+// The closed wire vocabulary: the Contract Core 2.0 core rows every 2.0 CLI shares plus the Vault Steward product
+// causes of CONTRACT.md 3.3, each under its class prefix with the row it implies (Stage Manager decision on
+// REPORT-2B deviation 1: agents match on causeCode, never on message text). The strict checker accepts the product
+// rows through its additive CAUSE_RULES extension in packages/cli-design-check.
 const CAUSE_RULES = {
 	SUCCESS_UNCHANGED: cause(null, "success", "unchanged", false, "next"),
 	SUCCESS_COMPLETED: cause(null, "success", "completed", false, "next"),
 	USAGE_INVALID_INVOCATION: cause("usage", "refused", "unchanged", false, "next"),
 	USAGE_UNKNOWN_COMMAND: cause("usage", "refused", "unchanged", false, "next"),
 	SCHEMA_INVALID_INPUT: cause("schema", "refused", "unchanged", false, "next"),
-	DOMAIN_PRECONDITION_UNMET: cause("domain", "refused", "unchanged", false, "next"),
-	DOMAIN_AUTHORITY_REQUIRED: cause("domain", "refused", "unchanged", false, "handoff"),
-	TRANSIENT_NOT_STARTED: cause("transient", "refused", "unchanged", true, "next"),
-	INTERNAL_RESULT_UNCHANGED: cause("internal", "failed", "unchanged", false, "handoff"),
-	INTERNAL_RESULT_PARTIAL: cause("internal", "failed", "partially-completed", false, "handoff"),
-	INTERNAL_RESULT_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
-	INTERNAL_EFFECT_OUTCOME_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
-	INTERNAL_UNEXPECTED: cause("internal", "failed", "unchanged", false, "handoff"),
+	SCHEMA_CONFIG_INVALID: cause("schema", "refused", "unchanged", false, "next"),
+	SCHEMA_MANIFEST_INVALID: cause("schema", "refused", "unchanged", false, "handoff"),
+	SCHEMA_RECEIPT_INVALID: cause("schema", "refused", "unchanged", false, "handoff"),
+	SCHEMA_PREVIEW_INVALID: cause("schema", "refused", "unchanged", false, "handoff"),
+	DOMAIN_CONFIG_MISSING: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_VAULT_NOT_FOUND: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_CANONICAL_NOT_MAIN: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_PATH_REFUSED: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_CANDIDATE_NOT_FOUND: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_CANDIDATE_INVALID: cause("domain", "refused", "unchanged", false, "handoff"),
+	DOMAIN_PATH_SET_MISMATCH: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_CHECK_FAILED: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_FORMAT_FAILED: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_GUARD_INCOMPATIBLE: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_CANONICAL_NOT_READY: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_MAIN_DIVERGED: cause("domain", "refused", "unchanged", false, "handoff"),
+	DOMAIN_SEMANTIC_OVERLAP: cause("domain", "refused", "unchanged", false, "handoff"),
+	DOMAIN_PREVIEW_NOT_FOUND: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_PREVIEW_CONSUMED: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_PREVIEW_STALE: cause("domain", "refused", "unchanged", false, "next"),
+	DOMAIN_REBASE_CONFLICT: cause("domain", "failed", "unchanged", false, "handoff"),
+	DOMAIN_REBASED_CHECK_FAILED: cause("domain", "failed", "unchanged", false, "next"),
+	DOMAIN_RECOVERY_UNPROVABLE: cause("domain", "refused", "unchanged", false, "handoff"),
+	TRANSIENT_INTEGRATION_BUSY: cause("transient", "refused", "unchanged", true, "next"),
+	INTERNAL_GIT_FAILED_UNCHANGED: cause("internal", "failed", "unchanged", false, "handoff"),
+	INTERNAL_GIT_FAILED_PARTIAL: cause("internal", "failed", "partially-completed", false, "handoff"),
+	INTERNAL_GIT_FAILED_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
+	INTERNAL_INTEGRATION_UNPROVED: cause("internal", "failed", "unknown", false, "handoff"),
+	INTERNAL_COMPLETION_RECORD_FAILED: cause("internal", "failed", "partially-completed", false, "next"),
+	INTERNAL_UNEXPECTED_UNCHANGED: cause("internal", "failed", "unchanged", false, "handoff"),
+	INTERNAL_UNEXPECTED_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
 } as const
 export type WireCauseCode = keyof typeof CAUSE_RULES
 export type CauseRule = (typeof CAUSE_RULES)[WireCauseCode]
@@ -44,6 +68,15 @@ export function causeRule(code: WireCauseCode): CauseRule {
 	return CAUSE_RULES[code]
 }
 export const WIRE_CAUSES = Object.keys(CAUSE_RULES) as readonly WireCauseCode[]
+type RuleQuery = { readonly [Field in keyof CauseRule]?: CauseRule[Field] }
+// A result-schema row names its cause group by the rule fields, so CAUSE_RULES stays the one owner of which causes share a row.
+function causesWhere(query: RuleQuery): [WireCauseCode, ...WireCauseCode[]] {
+	const fields = Object.entries(query) as [keyof CauseRule, CauseRule[keyof CauseRule]][]
+	const codes = WIRE_CAUSES.filter((code) => fields.every(([field, value]) => CAUSE_RULES[code][field] === value))
+	const [first, ...rest] = codes
+	if (first === undefined) throw new Error(`no cause matches ${JSON.stringify(query)}`)
+	return [first, ...rest]
+}
 
 export type JsonValue = null | boolean | number | string | readonly JsonValue[] | { readonly [key: string]: JsonValue }
 
@@ -180,21 +213,32 @@ const handoffShape = { handoff: handoffSchema, nextAction: z.never().optional() 
 const noRetry = { retryable: z.literal(false), retryDelayMilliseconds: z.never().optional() }
 const successShape = { outcome: z.literal("success"), failureClass: z.null(), exitCode: z.literal(0), data: jsonSchema, ...noRetry, repairAction: z.null(), ...nextShape }
 const refusalShape = { outcome: z.literal("refused"), transactionState: z.literal("unchanged"), data: z.null(), repairAction: nonempty, effects: effectsSchema, attemptedEffect: z.never().optional() }
-const failedShape = { outcome: z.literal("failed"), data: z.null(), repairAction: nonempty, effects: effectsSchema, attemptedEffect: nonempty.optional(), ...noRetry, ...handoffShape, failureClass: z.literal("internal"), exitCode: z.literal(1) }
+
+const failedBase = { outcome: z.literal("failed"), data: z.null(), repairAction: nonempty, effects: effectsSchema, attemptedEffect: nonempty.optional(), ...noRetry }
 const anyClass = z.enum(["inspect", "repository-local"])
+const refusedNext = (failureClass: FailureClass, exitCode: ExitCode) =>
+	z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, ...noRetry, effectClass: anyClass, causeCode: z.enum(causesWhere({ failureClass, outcome: "refused", guidance: "next", retryable: false })), failureClass: z.literal(failureClass), exitCode: z.literal(exitCode) })
+const refusedHandoff = (failureClass: FailureClass, exitCode: ExitCode) =>
+	z.strictObject({ ...baseShape, ...refusalShape, ...handoffShape, ...noRetry, effectClass: anyClass, causeCode: z.enum(causesWhere({ failureClass, outcome: "refused", guidance: "handoff" })), failureClass: z.literal(failureClass), exitCode: z.literal(exitCode) })
+const failedRow = (failureClass: FailureClass, exitCode: ExitCode, transactionState: WireTransactionState, guidance: "next" | "handoff") =>
+	z.strictObject({ ...baseShape, ...failedBase, ...(guidance === "handoff" ? handoffShape : nextShape), effectClass: anyClass, transactionState: z.literal(transactionState), causeCode: z.enum(causesWhere({ failureClass, outcome: "failed", transactionState, guidance })), failureClass: z.literal(failureClass), exitCode: z.literal(exitCode) })
 
 const resultSchema = z
 	.union([
 		z.strictObject({ ...baseShape, ...successShape, effectClass: anyClass, transactionState: z.literal("unchanged"), causeCode: z.literal("SUCCESS_UNCHANGED"), effects: effectsSchema }),
 		z.strictObject({ ...baseShape, ...successShape, effectClass: z.literal("repository-local"), transactionState: z.literal("completed"), causeCode: z.literal("SUCCESS_COMPLETED"), effects: effectsSchema }),
-		z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, ...noRetry, effectClass: anyClass, causeCode: z.enum(["USAGE_INVALID_INVOCATION", "USAGE_UNKNOWN_COMMAND"]), failureClass: z.literal("usage"), exitCode: z.literal(2) }),
-		z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, ...noRetry, effectClass: anyClass, causeCode: z.literal("SCHEMA_INVALID_INPUT"), failureClass: z.literal("schema"), exitCode: z.literal(4) }),
-		z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, ...noRetry, effectClass: anyClass, causeCode: z.literal("DOMAIN_PRECONDITION_UNMET"), failureClass: z.literal("domain"), exitCode: z.literal(3) }),
-		z.strictObject({ ...baseShape, ...refusalShape, ...handoffShape, ...noRetry, effectClass: anyClass, causeCode: z.literal("DOMAIN_AUTHORITY_REQUIRED"), failureClass: z.literal("domain"), exitCode: z.literal(3) }),
-		z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: z.literal("repository-local"), causeCode: z.literal("TRANSIENT_NOT_STARTED"), failureClass: z.literal("transient"), exitCode: z.literal(75), retryable: z.literal(true), retryDelayMilliseconds: positiveInteger }),
-		z.strictObject({ ...baseShape, ...failedShape, effectClass: anyClass, transactionState: z.literal("unchanged"), causeCode: z.enum(["INTERNAL_RESULT_UNCHANGED", "INTERNAL_UNEXPECTED"]) }),
-		z.strictObject({ ...baseShape, ...failedShape, effectClass: z.literal("repository-local"), transactionState: z.literal("partially-completed"), causeCode: z.literal("INTERNAL_RESULT_PARTIAL") }),
-		z.strictObject({ ...baseShape, ...failedShape, effectClass: z.literal("repository-local"), transactionState: z.literal("unknown"), causeCode: z.enum(["INTERNAL_RESULT_UNKNOWN", "INTERNAL_EFFECT_OUTCOME_UNKNOWN"]) }),
+		refusedNext("usage", 2),
+		refusedNext("schema", 4),
+		refusedHandoff("schema", 4),
+		refusedNext("domain", 3),
+		refusedHandoff("domain", 3),
+		z.strictObject({ ...baseShape, ...refusalShape, ...nextShape, effectClass: z.literal("repository-local"), causeCode: z.literal("TRANSIENT_INTEGRATION_BUSY"), failureClass: z.literal("transient"), exitCode: z.literal(75), retryable: z.literal(true), retryDelayMilliseconds: positiveInteger }),
+		failedRow("domain", 3, "unchanged", "handoff"),
+		failedRow("domain", 3, "unchanged", "next"),
+		failedRow("internal", 1, "unchanged", "handoff"),
+		failedRow("internal", 1, "partially-completed", "handoff"),
+		failedRow("internal", 1, "partially-completed", "next"),
+		failedRow("internal", 1, "unknown", "handoff"),
 	])
 	.superRefine((result, context) => {
 		const collections = [result.effects.completed, result.effects.remaining, result.effects.uncertain]
@@ -256,8 +300,8 @@ export function isSafeJson(input: unknown, maximumDepth = 64): input is JsonValu
 	return visit(input, 0)
 }
 
-// One declared Branch Station: the possible outcome tuple of one command with its accepted signature, the product
-// reasons it covers (message prefixes), and every next-action identity it may emit.
+// One declared Branch Station: the possible outcome tuple of one command with its accepted signature and every
+// next-action identity it may emit.
 export interface StationRow {
 	commandIdentity: CommandIdentity
 	outcome: Outcome
@@ -268,7 +312,6 @@ export interface StationRow {
 	retryDelayMilliseconds: number | null
 	guidance: "next-action" | "handoff"
 	exit: ExitCode
-	reasons: readonly string[]
 	nextActions: readonly string[]
 	reachability: "required" | "declared-unreachable"
 	unreachableRationale: string | null

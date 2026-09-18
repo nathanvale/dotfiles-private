@@ -68,11 +68,9 @@ export function must(run: StewardRun, cause: string): Envelope {
 	return run.envelope
 }
 
-// The identity and product reason the catalogue tests compare: [commandIdentity, outcome, causeCode] and the first
-// message token when it is an upper-case product code.
-export function observationOf(envelope: Envelope): { identity: string; reason: string | null; nextAction: string | null; handoffOwner: string | null } {
+// The identity the catalogue tests compare: [commandIdentity, outcome, causeCode] plus the guidance emitted.
+export function observationOf(envelope: Envelope): { identity: string; nextAction: string | null; handoffOwner: string | null } {
 	const result = envelope.result
-	const reason = /^([A-Z][A-Z_]+)(?::|$)/.exec(envelope.message)?.[1] ?? null
 	const handoff = result.handoff as { owner?: string } | undefined
-	return { identity: JSON.stringify([result.commandIdentity, result.outcome, result.causeCode]), reason, nextAction: typeof result.nextAction === "string" ? result.nextAction : null, handoffOwner: handoff?.owner ?? null }
+	return { identity: JSON.stringify([result.commandIdentity, result.outcome, result.causeCode]), nextAction: typeof result.nextAction === "string" ? result.nextAction : null, handoffOwner: handoff?.owner ?? null }
 }
