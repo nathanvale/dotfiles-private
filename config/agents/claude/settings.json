@@ -141,7 +141,6 @@
   },
   "enabledPlugins": {
     "my-second-brain@my-second-brain": true,
-    "fable-advisor@fable-advisor": true,
     "browser-lanes@personal": true,
     "my-second-brain-playground@personal": true,
     "proof@personal": true
@@ -152,12 +151,6 @@
         "source": "github",
         "repo": "myagentdojo/my-second-brain-plugin",
         "ref": "v0.4.0"
-      }
-    },
-    "fable-advisor": {
-      "source": {
-        "source": "github",
-        "repo": "DannyMac180/fable-advisor"
       }
     },
     "personal": {
