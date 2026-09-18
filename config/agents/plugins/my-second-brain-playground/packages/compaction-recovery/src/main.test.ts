@@ -1416,14 +1416,28 @@ test("Codex and Claude declarations register bin/msb-workflow hook and keep the 
 	// Ticket #52 (M2): both manifests route to the thin launcher. Codex SessionStart excludes `compact` so one
 	// compaction delivers one panel, on the next UserPromptSubmit; Claude keeps `compact` as its delivery event.
 	const launcher = { type: "command", command: '"${PLUGIN_ROOT}/bin/msb-workflow" hook' }
+	// M2 U4-lite finding F2: on Codex only `UserPromptSubmit` delivers the Resume Panel (`prompt-panel`), and the
+	// real 0.154.0 tracer elided the middle of a 10,011-byte panel-plus-prime payload at Codex's default 2,500-token
+	// `additionalContextLimit`. Codex 0.154.0 counts ceil(bytes / 4), so the per-handler limit below is a 24,000-byte
+	// ceiling: 2.4x the observed payload and above the source bound (8 KiB prime + 3 KiB comment excerpts + header).
+	// Independent oracle: the limit and the observed token count are restated here, not read from the manifest.
+	const promptPanelContextLimit = 6000
+	const observedTracerPayloadTokens = 2503
 	expect(codex).toEqual({
 		hooks: {
 			SessionStart: [{ matcher: "startup|resume|clear", hooks: [launcher] }],
 			PreCompact: [{ hooks: [launcher] }],
 			PostCompact: [{ hooks: [launcher] }],
-			UserPromptSubmit: [{ hooks: [launcher] }],
+			UserPromptSubmit: [{ hooks: [{ ...launcher, additionalContextLimit: promptPanelContextLimit }] }],
 		},
 	})
+	expect(codex.hooks.UserPromptSubmit[0].hooks[0].additionalContextLimit).toBe(promptPanelContextLimit)
+	expect(promptPanelContextLimit).toBeGreaterThanOrEqual(observedTracerPayloadTokens * 2)
+	// Codex 0.154.0 honours `additionalContextLimit` only on events that can emit `additionalContext`; the other three
+	// handlers stay bare so no event carries an ignored field and their trust hashes are unchanged.
+	for (const event of ["SessionStart", "PreCompact", "PostCompact"]) {
+		expect(codex.hooks[event][0].hooks[0]).toEqual(launcher)
+	}
 	expect(claude).toEqual({
 		hooks: {
 			SessionStart: [{ matcher: "startup|resume|compact", hooks: [{ type: "command", command: '"${CLAUDE_PLUGIN_ROOT}/bin/msb-workflow" hook' }] }],
@@ -1432,15 +1446,22 @@ test("Codex and Claude declarations register bin/msb-workflow hook and keep the 
 	expect(statSync(join(pluginRoot, "bin/msb-workflow")).mode & 0o111).not.toBe(0)
 
 	// Independent oracle: the manifest bytes are the rollback unit (restoring the pre-change bytes re-registers
-	// `hooks/recover-context`), so both identities are pinned here from the accepted M2 readiness packet.
+	// `hooks/recover-context`), so both identities are pinned here from the accepted M2 readiness packet. The Codex
+	// manifest's M2 release-candidate identity (`dba51eb5…`) is superseded by the F2 context-limit repair; the Python
+	// rollback target (`preChange`) is unchanged by that repair.
 	const manifestBytes = {
 		"hooks/claude/hooks.json": { current: "609dfbe4e1ce188ce8d1db21a436cea2498e59301c8f0a49077b84b0c877e694", preChange: "c2c8e2500d48c46ed1559bd9bb212ecb2aa8b579152c340f53923c7ad36cc461" },
-		"hooks/codex/hooks.json": { current: "dba51eb5d7f8fc6b78f4f3307b5bdc2f5a09053aeb84fad5c1cd9606a02f9a07", preChange: "d9f8532a537e1e39f5b1cf1fad03221cfa6b43a1cb497c308e9b9e0da2081e08" },
+		"hooks/codex/hooks.json": {
+			current: "14423919a22f7c58683e0fafbd2bc8ce2427baf698c879e1147c0100bfa5f5ff",
+			superseded: "dba51eb5d7f8fc6b78f4f3307b5bdc2f5a09053aeb84fad5c1cd9606a02f9a07",
+			preChange: "d9f8532a537e1e39f5b1cf1fad03221cfa6b43a1cb497c308e9b9e0da2081e08",
+		},
 	}
 	for (const [path, identity] of Object.entries(manifestBytes)) {
 		expect(fileSha256(path)).toBe(identity.current)
 		expect(fileSha256(path)).not.toBe(identity.preChange)
 	}
+	expect(fileSha256("hooks/codex/hooks.json")).not.toBe(manifestBytes["hooks/codex/hooks.json"].superseded)
 
 	// Independent oracle: the rollback route stays byte-identical and unregistered (Ticket #52, Spec #57 revision 2).
 	expect(fileSha256("hooks/recover-context")).toBe("2ffa42ad7671b4135394ccb15cb3daf4d4cb30ed0bda7101636e59cdb75fb859")
