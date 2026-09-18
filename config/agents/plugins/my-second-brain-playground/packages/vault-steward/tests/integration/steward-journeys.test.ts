@@ -1,5 +1,5 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { cleanupFixtures, type Fixture, fixture, git, lockFiles, write } from "../helpers/harness.ts"
 import { data, must, steward, stewardAsync, stewardEnvironment } from "../helpers/steward.ts"
@@ -98,6 +98,24 @@ test("two applies of one preview produce exactly one integration; the other refu
 	const retried = must(run(f, ["finish", "--apply", "--preview-id", id, "--worktree", worktree]), "SUCCESS_UNCHANGED")
 	expect(retried.result.effects.completed).toEqual([])
 	expect(git(f.vault, "for-each-ref", "--format=%(refname)", "refs/vault-note-commits").split("\n")).toHaveLength(1)
+})
+
+test("two CLI applies against a dead lock recheck under the reclaim mutex: one completes and the paused juror observes the receipt", async () => {
+	const f = fixture()
+	const worktree = candidate(f)
+	const id = preview(f, worktree)
+	const lock = join(f.vault, ".git", "vault-note-commits.lock")
+	mkdirSync(lock)
+	writeFileSync(join(lock, "owner.json"), JSON.stringify({ schemaVersion: 1, runId: "dead", pid: 2_147_483_646 }))
+	const env = stewardEnvironment(f)
+	const paused = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=lock-judged:800" })
+	await Bun.sleep(100)
+	const reclaimer = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=after-lock:1200" })
+	const results = await Promise.all([paused, reclaimer])
+	expect(results.map((result) => result.envelope?.result.causeCode).sort()).toEqual(["SUCCESS_COMPLETED", "SUCCESS_UNCHANGED"])
+	expect(results.map((result) => result.envelope?.result.causeCode)).not.toContain("INTERNAL_INTEGRATION_UNPROVED")
+	expect(existsSync(lock)).toBe(false)
+	expect(existsSync(`${lock}.reclaim`)).toBe(false)
 })
 
 test("a second apply that starts after consumption refuses consumed while the first completes", async () => {

@@ -72,10 +72,28 @@ test("acquire creates the directory with its owner, refuses a live owner after a
 	expect(elapsed).toBeLessThan(4_000)
 	writeFileSync(join(lockPath(common), "owner.json"), JSON.stringify({ schemaVersion: 1, runId: "gone", pid: 2_147_483_646 }))
 	expect(acquireLock(rt, common, "vnc-third")).toBe(lockPath(common))
-	// The reclaim renamed the dead lock aside and removed it: no residue beside the live lock.
-	expect(readdirSync(common).filter((name) => name.includes(".reclaim-"))).toEqual([])
+	// The reclaim mutex is removed before the new owner is published, and the renamed dead lock leaves no residue.
+	expect(readdirSync(common).filter((name) => name.includes(".reclaim"))).toEqual([])
 	releaseLock(lockPath(common))
 	expect(ownerIsLive(rt, lockPath(common))).toBe(false)
+}, 15_000)
+
+test("a fresh reclaim mutex makes a dead lock busy, while a stale mutex is reclaimed before the dead lock", () => {
+	const rt = createRuntime()
+	const common = commonDirectory()
+	const lock = lockPath(common)
+	mkdirSync(lock)
+	writeFileSync(join(lock, "owner.json"), JSON.stringify({ schemaVersion: 1, runId: "gone", pid: 2_147_483_646 }))
+	mkdirSync(`${lock}.reclaim`)
+	const started = Date.now()
+	expect(acquireLock(rt, common, "fresh-mutex")).toBeNull()
+	const elapsed = Date.now() - started
+	expect(elapsed).toBeGreaterThanOrEqual(1_900)
+	expect(elapsed).toBeLessThan(4_000)
+	expect(readdirSync(common).sort()).toEqual(["vault-note-commits.lock", "vault-note-commits.lock.reclaim"])
+	age(`${lock}.reclaim`, 15)
+	expect(acquireLock(rt, common, "stale-mutex")).toBe(lock)
+	expect(readdirSync(common).filter((name) => name.includes(".reclaim"))).toEqual([])
 }, 15_000)
 
 test("a lock whose owner cannot be read for any reason other than absence stays live (review finding 3)", () => {

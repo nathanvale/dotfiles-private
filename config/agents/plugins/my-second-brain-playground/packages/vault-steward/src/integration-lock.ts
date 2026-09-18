@@ -1,12 +1,13 @@
 // The integration lock directory `<git-common-dir>/vault-note-commits.lock` with its owner.json, liveness, and grace
 // semantics. The lock name and layout are shared with every 0.12.x helper still in the field (CONTRACT.md 2.7).
-import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, renameSync, rmdirSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { invalidLockOwnerGraceMs, lockDirectoryName, schemaVersion } from "./model.ts"
 import type { Runtime } from "./runtime.ts"
 
 const lockAttempts = 81
 const lockPauseMs = 25
+const reclaimMutexStaleMs = 10_000
 
 function pause(milliseconds: number): void {
 	Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds)
@@ -57,6 +58,39 @@ export function lockPath(commonGitDirectory: string): string {
 	return join(commonGitDirectory, lockDirectoryName)
 }
 
+function reclaimMutexPath(lock: string): string {
+	return `${lock}.reclaim`
+}
+
+// Serialize only stale-lock reclamation. The mutex itself is a sibling directory so it never changes the shared lock
+// layout, and a crashed mutex holder becomes reclaimable after a bounded interval.
+function underReclaimMutex(rt: Runtime, lock: string, action: () => "busy" | "reclaimed"): "busy" | "reclaimed" {
+	const mutex = reclaimMutexPath(lock)
+	try {
+		mkdirSync(mutex, { mode: 0o700 })
+	} catch (error) {
+		if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error
+		const facts = rt.fileFacts(mutex)
+		if (facts.kind === "directory" && rt.now() - facts.mtimeMs > reclaimMutexStaleMs) {
+			try {
+				rmdirSync(mutex)
+			} catch {
+				// A concurrent owner may have removed or populated it; retry through the regular lock loop.
+			}
+		}
+		return "busy"
+	}
+	try {
+		return action()
+	} finally {
+		try {
+			rmdirSync(mutex)
+		} catch {
+			// The only safe cleanup is best effort: a crash-residual mutex is reclaimed after its staleness interval.
+		}
+	}
+}
+
 // One exclusive-create attempt: created, held by a live owner, or reclaimed from a dead one (and worth retrying at once).
 function tryCreate(rt: Runtime, lock: string): "created" | "busy" | "reclaimed" {
 	try {
@@ -66,15 +100,20 @@ function tryCreate(rt: Runtime, lock: string): "created" | "busy" | "reclaimed" 
 		if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error
 	}
 	if (!existsSync(lock) || ownerIsLive(rt, lock)) return "busy"
-	// Rename first so only one reclaimer wins a dead lock; a loser's rename fails and it simply retries.
-	const reclaimed = `${lock}.reclaim-${rt.pid}-${rt.now()}`
-	try {
-		renameSync(lock, reclaimed)
-	} catch {
-		return "busy"
-	}
-	rmSync(reclaimed, { recursive: true, force: true })
-	return "reclaimed"
+	rt.faultPoint("lock-judged")
+	return underReclaimMutex(rt, lock, () => {
+		// The first judgement is only an admission to the mutex. Rejudge this exact pathname while holding it.
+		if (!existsSync(lock)) return "reclaimed"
+		if (ownerIsLive(rt, lock)) return "busy"
+		const reclaimed = `${lock}.reclaim-${rt.pid}-${rt.now()}`
+		try {
+			renameSync(lock, reclaimed)
+		} catch {
+			return "busy"
+		}
+		rmSync(reclaimed, { recursive: true, force: true })
+		return "reclaimed"
+	})
 }
 
 function publishOwner(rt: Runtime, lock: string, runId: string): void {
