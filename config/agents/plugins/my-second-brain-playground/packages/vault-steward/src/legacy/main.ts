@@ -20,6 +20,7 @@ import {
 	vaultIdentity,
 } from "../engine.ts"
 import { observeGuard } from "../guard.ts"
+import { parseFaults, withFaults } from "../faults.ts"
 import type { GuardObservation, Manifest, ReceiptCode, RefusalFacts, RefusalReason, ValidReceipt } from "../model.ts"
 import { createRuntime, type Runtime } from "../runtime.ts"
 
@@ -375,7 +376,9 @@ function main(): void {
 		console.log(usage)
 		return
 	}
-	const rt = createRuntime()
+	// Source-only tests share the fault seam with the 2.0 door; installed bundles never receive this environment value.
+	const faults = parseFaults(process.env.VAULT_STEWARD_FAULT) ?? []
+	const rt = withFaults(createRuntime(), faults)
 	try {
 		const result = withObservation(runCommand(rt, command, args))
 		console.log(json ? JSON.stringify(result) : `${result.code}: ${result.nextAction}`)

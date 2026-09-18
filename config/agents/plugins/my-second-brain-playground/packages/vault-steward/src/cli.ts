@@ -436,7 +436,7 @@ function inspectViews(rt: Runtime, worktree: string): InspectViews {
 	const main = record === null || candidate === null ? { head: null, containsCandidateCommit: null, overlap: [] } : mainView(rt, record, candidate)
 	const lock = record === null ? { held: false, ownerPid: null, ownerRunId: null, live: null } : lockView(rt, record.commonGitDirectory)
 	// A valid receipt is the completion boundary: no hook spawn on that path.
-	const observation = receipt.valid || record === null ? undefined : observeGuard(rt, { vault: record.vault, candidateRoot: candidateRoot(rt, record.vault), runId: record.runId, candidateCommit: candidate?.committed ? (candidate.head ?? undefined) : undefined })
+	const observation = receipt.valid || record === null ? undefined : observeGuard(rt, { vault: record.vault, candidateRoot: candidateRoot(rt, record.vault), runId: record.runId, candidateCommit: candidate?.committed ? (candidate.head ?? undefined) : undefined }, false)
 	return { worktree, receipt, manifest, record, candidate, main, lock, ...previewViews(rt, record, candidate), observation }
 }
 
@@ -553,6 +553,7 @@ const REPAIR: Readonly<Record<ProductCause, Guidance>> = {
 	INTERNAL_GIT_FAILED_PARTIAL: { repair: "Inspect the created candidate worktree before retrying.", next: null },
 	INTERNAL_GIT_FAILED_UNKNOWN: { repair: "Inspect canonical main and the candidate before taking another action.", next: null },
 	INTERNAL_INTEGRATION_UNPROVED: { repair: "Inspect canonical main and the candidate before taking another action.", next: null },
+	INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: { repair: "Run finish --preview again; the candidate was restored before main moved.", next: null },
 	INTERNAL_COMPLETION_RECORD_FAILED: { repair: "Run vault-steward recover for this worktree; it records completion only from Git evidence.", next: null },
 	INTERNAL_UNEXPECTED_UNCHANGED: { repair: "Inspect the local error and the diagnostics file before retrying.", next: null },
 	INTERNAL_UNEXPECTED_UNKNOWN: { repair: "Inspect canonical main and the candidate before taking another action.", next: null },
@@ -589,6 +590,7 @@ const SENTENCE: Readonly<Record<ProductCause, string>> = {
 	INTERNAL_GIT_FAILED_PARTIAL: "A Git command failed after a confirmed effect.",
 	INTERNAL_GIT_FAILED_UNKNOWN: "A Git command failed while an effect's result was not established.",
 	INTERNAL_INTEGRATION_UNPROVED: "The fast-forward of main could not be proven by read-back.",
+	INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: "The fast-forward did not happen and the candidate was restored.",
 	INTERNAL_COMPLETION_RECORD_FAILED: "The completion record could not be finished after the fast-forward.",
 	INTERNAL_UNEXPECTED_UNCHANGED: "An unclassified error occurred before any effect.",
 	INTERNAL_UNEXPECTED_UNKNOWN: "An unclassified error occurred while an effect was in flight.",

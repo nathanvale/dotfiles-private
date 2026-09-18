@@ -128,12 +128,13 @@ export const REASON_CAUSES = {
 	"input-invalid": "SCHEMA_INVALID_INPUT",
 } as const
 export type RefusalReason = keyof typeof REASON_CAUSES
-export type ProductCause = (typeof REASON_CAUSES)[RefusalReason] | "INTERNAL_GIT_FAILED_PARTIAL" | "INTERNAL_GIT_FAILED_UNKNOWN" | "INTERNAL_UNEXPECTED_UNKNOWN"
+export type ProductCause = (typeof REASON_CAUSES)[RefusalReason] | "INTERNAL_GIT_FAILED_PARTIAL" | "INTERNAL_GIT_FAILED_UNKNOWN" | "INTERNAL_INTEGRATION_UNPROVED_UNCHANGED" | "INTERNAL_UNEXPECTED_UNKNOWN"
 
 // The CONTRACT.md 3.3 name of a refusal, split by transaction state where the design splits it.
 export function productCause(reason: RefusalReason, transaction: TransactionState): ProductCause {
 	if (reason === "git-failed") return transaction === "unchanged" ? "INTERNAL_GIT_FAILED_UNCHANGED" : transaction === "partially-completed" ? "INTERNAL_GIT_FAILED_PARTIAL" : "INTERNAL_GIT_FAILED_UNKNOWN"
 	if (reason === "unexpected") return transaction === "unchanged" ? "INTERNAL_UNEXPECTED_UNCHANGED" : "INTERNAL_UNEXPECTED_UNKNOWN"
+	if (reason === "integration-unproved" && transaction === "unchanged") return "INTERNAL_INTEGRATION_UNPROVED_UNCHANGED"
 	// A completion record that failed before its first write (the ref) changed nothing: that is the Git failure itself.
 	if (reason === "completion-record-failed" && transaction === "unchanged") return "INTERNAL_GIT_FAILED_UNCHANGED"
 	return REASON_CAUSES[reason]

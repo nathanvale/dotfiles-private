@@ -1,7 +1,7 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { existsSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { authoredCandidate, begin, cleanupFixtures, finish, fixture, git, runAlias, write } from "../helpers/harness.ts"
+import { authoredCandidate, begin, cleanupFixtures, finish, fixture, git, runAlias, runAliasAsync, write } from "../helpers/harness.ts"
 
 // Every row spawns several real Git and CLI processes on a machine shared with other agents: a process budget, not the
 // 5 s unit default.
@@ -171,3 +171,23 @@ test("a post-rebase CHECK_FAILED restores the candidate commit and the retry int
 	expect(retried.json).toMatchObject({ ok: true, code: "INTEGRATED" })
 	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("3")
 })
+
+test("S5 alias: a failed fast-forward after rebase restores the original candidate and its retry integrates", async () => {
+	const f = fixture()
+	const first = authoredCandidate(f, "projects/first/GOAL.md", "# First\n")
+	git(first, "add", "--", "projects/first/GOAL.md")
+	git(first, "commit", "-m", "docs: first")
+	const original = git(first, "rev-parse", "HEAD")
+	write(f.vault, "README.md", "# Fixture vault\n\nMoved.\n")
+	git(f.vault, "add", "--", "README.md")
+	git(f.vault, "commit", "-m", "docs: move main")
+	const second = authoredCandidate(f, "projects/second/GOAL.md", "# Second\n")
+	const paused = runAliasAsync(f.vault, ["finish", "--worktree", first, "--message", "docs: first"], { XDG_STATE_HOME: f.state, VAULT_STEWARD_FAULT: "pause=before-ff-merge:1600" })
+	await Bun.sleep(400)
+	rmSync(join(f.vault, ".git", "vault-note-commits.lock"), { recursive: true, force: true })
+	expect(finish(f, second, "docs: second").json).toMatchObject({ ok: true, code: "INTEGRATED" })
+	const failed = await paused
+	expect(failed.json).toMatchObject({ ok: false, code: "INTEGRATION_UNPROVED" })
+	expect(git(first, "rev-parse", "HEAD")).toBe(original)
+	expect(finish(f, first, "docs: first").json).toMatchObject({ ok: true, code: "INTEGRATED" })
+}, 30_000)

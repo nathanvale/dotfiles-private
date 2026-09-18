@@ -107,6 +107,7 @@ const ROWS = [
 	["vault-steward.finish-apply", "failed", "DOMAIN_REBASE_CONFLICT", RL, "unchanged", ...H3, HANDOFF, "required", null],
 	["vault-steward.finish-apply", "refused", "TRANSIENT_INTEGRATION_BUSY", RL, "unchanged", ...T75, [APPLY], "required", null],
 	["vault-steward.finish-apply", "failed", "INTERNAL_INTEGRATION_UNPROVED", RL, "unknown", ...H1, HANDOFF, "required", null],
+	["vault-steward.finish-apply", "failed", "INTERNAL_INTEGRATION_UNPROVED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
 	["vault-steward.finish-apply", "failed", "INTERNAL_COMPLETION_RECORD_FAILED", RL, "partially-completed", ...N1, [RECOVER], "required", null],
 	["vault-steward.finish-apply", "failed", "INTERNAL_GIT_FAILED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
 	["vault-steward.finish-apply", "failed", "INTERNAL_GIT_FAILED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null],

@@ -94,6 +94,7 @@ export const EXPECTED_STATIONS: readonly Spec[] = [
 	[apply, "failed", "DOMAIN_REBASE_CONFLICT", handoff("domain")],
 	[apply, "refused", "TRANSIENT_INTEGRATION_BUSY", next("transient", RL, [apply])],
 	[apply, "failed", "INTERNAL_INTEGRATION_UNPROVED", handoff("internal", "unknown")],
+	[apply, "failed", "INTERNAL_INTEGRATION_UNPROVED_UNCHANGED", handoff("internal", "unchanged")],
 	[apply, "failed", "INTERNAL_COMPLETION_RECORD_FAILED", next("internal", RL, [recover], "partially-completed")],
 	[apply, "failed", "INTERNAL_GIT_FAILED_UNCHANGED", handoff("internal")],
 	[apply, "failed", "INTERNAL_GIT_FAILED_UNKNOWN", handoff("internal", "unknown")],

@@ -2,7 +2,7 @@
 // a Refusal carrying a sealed reason and facts, rendered by a front door (legacy schemaVersion 1 today, Contract Core
 // 2.0 in the next unit). The step order is the legacy sequence inventoried in CONTRACT.md 2.6.
 import { createHash, randomUUID } from "node:crypto"
-import { isAbsolute, join, relative, resolve, sep } from "node:path"
+import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path"
 import { acquireLock, lockPath, ownerIsLive, releaseLock } from "./integration-lock.ts"
 import {
 	type CandidateState,
@@ -199,7 +199,7 @@ export function validateReceiptShape(receipt: Receipt): void {
 }
 
 export function manifestShapeValid(manifest: Manifest, worktree: string): boolean {
-	return manifest.schemaVersion === schemaVersion && runIdPattern.test(manifest.runId) && manifest.worktree === worktree && Array.isArray(manifest.paths)
+	return manifest.schemaVersion === schemaVersion && runIdPattern.test(manifest.runId) && manifest.worktree === worktree && validPathList(manifest.paths) && manifest.paths.every((path) => normalize(path) === path && !path.endsWith(sep))
 }
 
 // Git prints the offending content on the next line. Expose only file/line diagnostics.
@@ -534,15 +534,20 @@ function performRebase(rt: Runtime, manifest: Manifest, commit: string, currentM
 	return integrated
 }
 
-// Fast-forward canonical main to the integrated commit and prove it by read-back; the result is unknown otherwise.
-function fastForward(rt: Runtime, manifest: Manifest, vault: string, integrated: string): void {
+// Fast-forward canonical main to the integrated commit and prove it by read-back. A failed merge whose ancestry check
+// proves main did not move is safe to roll back to the pre-rebase candidate; a failed read-back remains unknown.
+function fastForward(rt: Runtime, manifest: Manifest, vault: string, original: string, integrated: string): void {
 	rt.faultPoint("before-ff-merge")
 	const merged = gitQuiet(rt, vault, ["merge", "--ff-only", integrated])
 	rt.faultPoint("after-ff-merge")
 	const readBack: GitContext = { ...context(manifest), transaction: "unknown", uncertainEffects: ["main.fast-forward"] }
-	if (merged.exitCode !== 0 || git(rt, vault, ["rev-parse", "HEAD"], readBack) !== integrated) {
-		refuse("integration-unproved", { ...candidateFacts(manifest, integrated), uncertainEffects: ["main.fast-forward"] }, "unknown")
+	const observed = git(rt, vault, ["rev-parse", "HEAD"], readBack)
+	if (merged.exitCode === 0 && observed === integrated) return
+	if (merged.exitCode !== 0 && gitQuiet(rt, vault, ["merge-base", "--is-ancestor", integrated, "main"]).exitCode !== 0) {
+		if (integrated !== original) gitQuiet(rt, manifest.worktree, ["checkout", "--detach", original])
+		refuse("integration-unproved", candidateFacts(manifest, original), "unchanged")
 	}
+	refuse("integration-unproved", { ...candidateFacts(manifest, integrated), uncertainEffects: ["main.fast-forward"] }, "unknown")
 }
 
 function canonicalReady(rt: Runtime, manifest: Manifest, commit: string | undefined): string {
@@ -562,7 +567,7 @@ export function integrate(rt: Runtime, manifest: Manifest, commit: string): Inte
 		const currentMain = git(rt, vault, ["rev-parse", "HEAD"], context(manifest))
 		const observation = observeMainAt(rt, manifest, commit, vault, currentMain)
 		const integrated = observation.rebase ? performRebase(rt, manifest, commit, currentMain) : commit
-		fastForward(rt, manifest, vault, integrated)
+		fastForward(rt, manifest, vault, commit, integrated)
 		return { kind: "completion", completion: recordCompletion(rt, manifest, integrated, ["main.fast-forward"]) }
 	})
 }
@@ -703,7 +708,7 @@ export function applyPreview(rt: Runtime, manifest: Manifest, record: PreviewRec
 				return { kind: "completion", completion }
 			}
 			const integrated = fresh.plan.rebase ? performRebase(rt, manifest, commit, currentMain) : commit
-			fastForward(rt, manifest, vault, integrated)
+				fastForward(rt, manifest, vault, commit, integrated)
 			const completion = recordCompletion(rt, manifest, integrated, ["main.fast-forward"])
 			prunePreview(rt, manifest.runId)
 			return { kind: "completion", completion }
