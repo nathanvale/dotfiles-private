@@ -16,9 +16,12 @@ missing receipt is not evidence of failure or permission to repeat the work.
 Inspect the candidate and canonical Git history before taking another action.
 
 Recovery covers losing the response after the terminal receipt was saved.
-A crash between integration and receipt persistence can leave an integrated
-commit without a readable receipt. That case still requires inspection; the
-helper does not claim automatic recovery across every crash boundary.
+A crash between integration and receipt persistence leaves an integrated
+commit without a receipt; retry `finish` with the same worktree path. When
+Git proves `main` already contains the candidate commit with exactly the
+admitted paths, the retry records the completion and returns `INTEGRATED`
+without replaying the fast-forward. Any other crash boundary still requires
+inspection; the helper does not claim automatic recovery across all of them.
 
 Nathan owns retention. Keep a receipt and its matching local Git reference
 together while retries may occur; remove both only after the run is no longer
