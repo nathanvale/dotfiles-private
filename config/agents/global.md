@@ -93,13 +93,13 @@
   `$HOME/code/dotfiles/docs/agents/work-placement.md` before choosing its owner.
 - New Bun or TypeScript repository: after choosing its owner, use
   `$HOME/code/bun-typescript-template/README.md` for bootstrap.
-- Durable-context lookup or placement: read
-  `$HOME/.config/context/vault.md`; use `context-advisor` when ownership is
-  unclear.
+- All personal, project and engineering work: enter through
+  `$HOME/.config/context/vault.md` before execution. Follow the selected vault's
+  Repository Instructions and workflow owners; use `context-advisor` when
+  ownership is unclear.
 - Personal bill, payment notice, billing renewal, billing account, or
   bill-payment portal: read
   `$HOME/code/dotfiles/docs/agents/personal-bills.md` before advising or acting.
-- Vault write or commit: read `$HOME/.config/context/vault.md`.
 
 ## Git and Machine State
 
@@ -116,10 +116,13 @@
   `$HOME/code/dotfiles/docs/agents/mac-storage.md`.
 - Use configured keychain or 1Password-backed wrappers for credentials. Never
   source an environment file or print secret values for an auth check.
-- Use `gog` for Google services.
+- Google service operation supported by `gog`: use the `gog` CLI and the
+  corresponding `gog-*` skill when available, even when a connector or browser
+  exists.
+- Google service journey requiring the signed-in web UI: follow the browser
+  automation and `browser-use` owner below.
 - Use `ghh` for GitHub CLI work.
-- Coordinator requests (including short project or tab names), or Herdr
-  inspection/control from any app: read
+- Codex Desktop or Claude Desktop work, coordinator requests, or Herdr work: read
   `$HOME/code/dotfiles/docs/agents/herdr-control.md` before the Herdr skill.
 - Prior shell activity: when recent terminal state may explain a task, use
   `atuin-agent-history recent --limit 20`; use `search --limit 20 -- <terms>` for a targeted lookup.
