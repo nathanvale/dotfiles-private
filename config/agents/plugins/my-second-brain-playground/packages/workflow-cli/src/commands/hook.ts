@@ -2,8 +2,8 @@
 // safe session_id and a canonical cwd, reads that session's binding, verifies cwd is inside the binding's source
 // repository or equals its workspace, and then delivers Harness JSON. Invalid input, a missing binding, a mismatch,
 // or any read failure fails open: empty stdout, exit 0. Diagnostics go to the private file sink only, because
-// stderr may reach the Harness. The payload shapes are fixture-derived from the pinned upstream document until M2
-// observes the installed Codex.
+// stderr may reach the Harness. The payload shapes are fixture-derived from the pinned upstream document; the
+// PreCompact output shape is the one observed on the installed Codex 0.154.0 (M2 U4-lite, finding F1).
 
 import { realpathSync, statSync } from "node:fs"
 import { isAbsolute, sep } from "node:path"
@@ -106,6 +106,13 @@ function harnessJson(eventName: EventName, additionalContext: string): string {
 	return `${JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext } })}\n`
 }
 
+/** PreCompact admits only the common output fields (`continue`, `stopReason`, `systemMessage`, `suppressOutput`):
+ * Codex 0.154.0 rejects `hookSpecificOutput` there as invalid PreCompact JSON and ignores plain text, so the one
+ * channel that reaches anyone is `systemMessage`, surfaced to the user as a warning. Compaction is never stopped. */
+function systemMessageJson(systemMessage: string): string {
+	return `${JSON.stringify({ systemMessage })}\n`
+}
+
 /** The `recover` command in the guidance and the notice is pasteable shell input, quoted exactly as Resume Panel
  * command 4 is; the prose lines and the `bind` line with its `<bead-id>` placeholder are not pasteable and stay bare. */
 function guidance(binding: RecoveryBinding): string {
@@ -158,17 +165,18 @@ async function sessionStart(bound: Bound): Promise<HookResult> {
 	return { delivery: "compact-panel", stdout: text }
 }
 
+/** The read-only availability check. An available read is silent: empty stdout on exit 0 is the documented success
+ * and no supported PreCompact field carries model context. An unavailable read warns the user with the cause and
+ * the repair, and compaction proceeds either way. */
 async function preCompact(bound: Bound): Promise<HookResult> {
 	const read = await readPanel(bound.store, bound.context, null, bound.event.session, bound.diagnostics, { includePrime: false })
 	if (read.status === "refused") {
 		const secrets = read.beads?.knownSecretValues() ?? []
-		const text = harnessJson("PreCompact", redactText(`msb-workflow recovery is unavailable before compaction: ${read.outcome.message}. Repair: ${read.outcome.repairAction ?? read.outcome.nextAction ?? "msb-workflow inspect"}`, secrets))
+		const text = systemMessageJson(redactText(`msb-workflow recovery is unavailable before compaction: ${read.outcome.message}. Repair: ${read.outcome.repairAction ?? read.outcome.nextAction ?? "msb-workflow inspect"}`, secrets))
 		bound.emit(text)
 		return { delivery: "precompact-unavailable", stdout: text }
 	}
-	const text = harnessJson("PreCompact", `msb-workflow recovery is available: session ${bound.binding.sessionIdentity} is bound to ${bound.binding.beadId}; the Resume Panel is delivered once on the next prompt after compaction.`)
-	bound.emit(text)
-	return { delivery: "precompact-available", stdout: text }
+	return { delivery: "precompact-available", stdout: "" }
 }
 
 /** The session lock alone, then the marker read; an unreadable marker is a silent fail-open. The workspace lock is

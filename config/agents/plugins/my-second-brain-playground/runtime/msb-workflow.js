@@ -4927,6 +4927,10 @@ function harnessJson(eventName, additionalContext) {
   return `${JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext } })}
 `;
 }
+function systemMessageJson(systemMessage) {
+  return `${JSON.stringify({ systemMessage })}
+`;
+}
 function guidance(binding) {
   return [
     "My Second Brain recovery session.",
@@ -4967,13 +4971,11 @@ async function preCompact(bound) {
   const read2 = await readPanel(bound.store, bound.context, null, bound.event.session, bound.diagnostics, { includePrime: false });
   if (read2.status === "refused") {
     const secrets = read2.beads?.knownSecretValues() ?? [];
-    const text2 = harnessJson("PreCompact", redactText(`msb-workflow recovery is unavailable before compaction: ${read2.outcome.message}. Repair: ${read2.outcome.repairAction ?? read2.outcome.nextAction ?? "msb-workflow inspect"}`, secrets));
-    bound.emit(text2);
-    return { delivery: "precompact-unavailable", stdout: text2 };
+    const text = systemMessageJson(redactText(`msb-workflow recovery is unavailable before compaction: ${read2.outcome.message}. Repair: ${read2.outcome.repairAction ?? read2.outcome.nextAction ?? "msb-workflow inspect"}`, secrets));
+    bound.emit(text);
+    return { delivery: "precompact-unavailable", stdout: text };
   }
-  const text = harnessJson("PreCompact", `msb-workflow recovery is available: session ${bound.binding.sessionIdentity} is bound to ${bound.binding.beadId}; the Resume Panel is delivered once on the next prompt after compaction.`);
-  bound.emit(text);
-  return { delivery: "precompact-available", stdout: text };
+  return { delivery: "precompact-available", stdout: "" };
 }
 function withMarker(bound, whenUnreadable, action) {
   const { store, event } = bound;

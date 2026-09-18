@@ -40,6 +40,26 @@ function expectSilent(run: Run): void {
 	expect(run.stdout).toBe("")
 }
 
+/** The PreCompact output fields Codex 0.154.0 admits, from the Codex hooks documentation's common output fields
+ * (independent oracle; the installed binary's `pre-compact.command.output` schema is `additionalProperties: false`
+ * over exactly these). `hookSpecificOutput` is not among them: Codex printed `Hook failed: hook returned invalid
+ * PreCompact hook JSON output` for it (M2 U4-lite runtime observer, finding F1). */
+const PRECOMPACT_COMMON_OUTPUT_FIELDS = ["continue", "stopReason", "suppressOutput", "systemMessage"]
+
+/** A PreCompact warning: exit 0, empty stderr, one JSON object on stdout whose only field is `systemMessage`, so
+ * compaction is never stopped and nothing outside the admitted field set is sent. Returns the warning text. */
+function expectPreCompactWarning(run: Run): string {
+	expect(run.exit).toBe(0)
+	expect(run.stderr).toBe("")
+	expect(run.stdout.endsWith("\n")).toBe(true)
+	const parsed = JSON.parse(run.stdout) as Record<string, unknown>
+	const keys = Object.keys(parsed)
+	expect(keys.every((key) => PRECOMPACT_COMMON_OUTPUT_FIELDS.includes(key))).toBe(true)
+	expect(keys).toEqual(["systemMessage"])
+	expect(typeof parsed.systemMessage).toBe("string")
+	return parsed.systemMessage as string
+}
+
 /** Durable state only: bindings, markers and locks; the hook's private diagnostics run files and the helper
  * directories that hold them are the accepted exception (decision D2) and are excluded. */
 function durableListing(target: Root): string[] {
@@ -246,20 +266,19 @@ describe("SessionStart and PreCompact", () => {
 		}
 	})
 
-	test("PreCompact reports availability without writing, and names the cause when recovery is unavailable", async () => {
+	test("PreCompact is silent when recovery is available, and warns through systemMessage alone when it is unavailable", async () => {
 		await bindSession(root, SESSION)
 		const before = durableListing(root)
-		const available = expectHook(await runHook(root, preCompact()))
-		expect(available?.hookEventName).toBe("PreCompact")
-		expect(available?.additionalContext).toBe(`msb-workflow recovery is available: session ${SESSION} is bound to ${BEAD}; the Resume Panel is delivered once on the next prompt after compaction.`)
+		const files = diagnosticsFiles()
+		expectSilent(await runHook(root, preCompact()))
+		expect(recordsSince(files).records.find((record) => record.eventKind === "hook.completed")?.delivery).toBe("precompact-available")
 		steerBd(root, { unavailable: "no_beads_directory" })
-		const unavailable = expectHook(await runHook(root, preCompact()))
-		expect(unavailable?.hookEventName).toBe("PreCompact")
-		expect(unavailable?.additionalContext.startsWith("msb-workflow recovery is unavailable before compaction: ")).toBe(true)
-		expect(unavailable?.additionalContext).toContain("no_beads_directory")
-		expect(unavailable?.additionalContext).toContain("Repair: ")
+		const unavailable = expectPreCompactWarning(await runHook(root, preCompact()))
+		expect(unavailable.startsWith("msb-workflow recovery is unavailable before compaction: ")).toBe(true)
+		expect(unavailable).toContain("no_beads_directory")
+		expect(unavailable).toContain("Repair: ")
 		steerBd(root, { redirected: true })
-		expect(expectHook(await runHook(root, preCompact()))?.additionalContext).toContain("redirected")
+		expect(expectPreCompactWarning(await runHook(root, preCompact()))).toContain("redirected")
 		expect(durableListing(root)).toEqual(before)
 	})
 })
