@@ -165,7 +165,7 @@ function observeSprawl(rt: Runtime, input: GuardInput, warnings: Warning[]): { b
 
 // Location, staleness, hooksPath, self-test, sprawl, foreign worktrees: the full observation every command makes
 // unless a valid receipt already short-circuits it (GUARD-INTERACTION.md section 4).
-export function observeGuard(rt: Runtime, input: GuardInput): GuardObservation {
+export function observeGuard(rt: Runtime, input: GuardInput, enforce = true): GuardObservation {
 	const location = locateHook(rt, input.vault)
 	const warnings = [...location.warnings]
 	const tested = selfTest(rt, location, input, warnings)
@@ -182,6 +182,6 @@ export function observeGuard(rt: Runtime, input: GuardInput): GuardObservation {
 	}
 	const observation = { guard, warnings }
 	// The refusal carries the full observation so the front door still reports guard status on this path (A2).
-	if (tested.deniedRef !== null) refuse("guard-incompatible", { ...input.facts, ref: tested.deniedRef, runId: input.runId, guard: observation })
+	if (enforce && tested.deniedRef !== null) refuse("guard-incompatible", { ...input.facts, ref: tested.deniedRef, runId: input.runId, guard: observation })
 	return observation
 }

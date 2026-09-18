@@ -61,6 +61,16 @@ test("V2 fixture 2 / B5: a hook denying the completion ref refuses preview befor
 	must(run(f, ["finish", "--apply", "--preview-id", id, "--worktree", worktree]), "SUCCESS_COMPLETED")
 })
 
+test("inspect reports an incompatible hook without refusing the recovery view", () => {
+	const f = fixture()
+	const worktree = candidate(f)
+	installHook(f.vault, HOSTILE)
+	const inspected = run(f, ["inspect", "--worktree", worktree])
+	must(inspected, "SUCCESS_UNCHANGED")
+	expect(inspected.stderr).toBe("")
+	expect(data(inspected)).toMatchObject({ guard: { selfTest: "incompatible" }, recovery: { state: "not-started" } })
+})
+
 test("V2 fixtures 3 to 5 and the probe-allowed hook are warnings with detail on begin, never refusals", () => {
 	const missing = fixture({ hook: false })
 	expect(data(must(run(missing, ["begin", "--vault", missing.vault, "--path", "a.md", "--preview"]), "SUCCESS_UNCHANGED"))).toMatchObject({ guard: { installed: false, selfTest: "missing" }, warnings: [{ code: "GUARD_MISSING", detail: `${missing.hookPath} is absent` }] })
