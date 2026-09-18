@@ -34,18 +34,19 @@ function runHook(config: string): { exitCode: number; stdout: string; stderr: st
 	return { exitCode: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr), ms: Date.now() - started }
 }
 
-const findings = 'console.log(JSON.stringify({ schemaVersion: 1, ok: false, findings: [{ id: "guard-hook-missing", severity: "error" }, { id: "branch-sprawl", severity: "error" }] }))\nprocess.exit(1)\n'
+const findings = 'console.log(JSON.stringify({ schemaVersion: 1, ok: false, findings: [{ id: "guard-hook-missing", severity: "error" }, { id: "legacy-backup-refs", severity: "info" }, { id: "stale-integration-lock", severity: "warn" }] }))\nprocess.exit(1)\n'
 const clean = 'console.log(JSON.stringify({ schemaVersion: 1, ok: true, findings: [] }))\n'
+const informational = 'console.log(JSON.stringify({ schemaVersion: 1, ok: true, findings: [{ id: "legacy-backup-refs", severity: "info" }] }))\n'
 
-test("F3: findings produce exactly one line and the hook still exits 0", () => {
+test("F3: error and warn findings produce exactly one line (info rows omitted) and the hook still exits 0", () => {
 	const { config, vault } = vaultWithAudit(findings)
 	const result = runHook(config)
 	expect(result.exitCode).toBe(0)
-	expect(result.stdout).toBe(`vault-guard: 2 finding(s) in ${vault}: guard-hook-missing, branch-sprawl (run 'bun run guard:audit --json' there)\n`)
+	expect(result.stdout).toBe(`vault-guard: 2 finding(s) in ${vault}: guard-hook-missing, stale-integration-lock (run 'bun run guard:audit --json' there)\n`)
 })
 
-test("F3: a clean audit, a vault without guard:audit, and no configured vault all print nothing", () => {
-	for (const config of [vaultWithAudit(clean).config, vaultWithAudit(null).config, join(mkdtempSync(join(tmpdir(), "vault-steward-f3-none-")), "home")]) {
+test("F3: a clean audit, an info-only audit, a vault without guard:audit, and no configured vault all print nothing", () => {
+	for (const config of [vaultWithAudit(clean).config, vaultWithAudit(informational).config, vaultWithAudit(null).config, join(mkdtempSync(join(tmpdir(), "vault-steward-f3-none-")), "home")]) {
 		const result = runHook(config)
 		expect(result.exitCode).toBe(0)
 		expect(result.stdout).toBe("")

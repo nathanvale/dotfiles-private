@@ -42,9 +42,11 @@ function pidIsLive(pid) {
 function ownerIsLive(rt, lock) {
   const directory = rt.fileFacts(lock);
   if (directory.kind === "missing")
-    return false;
+    return directory.errorCode !== "ENOENT";
   const ownerPath = join(lock, "owner.json");
   const owner = rt.fileFacts(ownerPath);
+  if (owner.kind === "missing" && owner.errorCode !== "ENOENT")
+    return true;
   const modified = Math.max(directory.mtimeMs, owner.mtimeMs);
   if (owner.kind === "missing")
     return withinGrace(rt, modified);
@@ -405,11 +407,21 @@ function mainContains(rt, manifest, commit) {
   const paths = gitQuiet(rt, vault, ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", commit]);
   return paths.exitCode === 0 && samePaths(splitNul(paths.stdout).sort(), manifest.paths);
 }
+function candidateProducedHead(rt, manifest) {
+  const subject = gitQuiet(rt, manifest.worktree, ["reflog", "show", "-1", "--format=%gs", "HEAD"]).stdout.trim();
+  if (/^rebase\b/.test(subject))
+    return true;
+  if (!/^commit\b/.test(subject))
+    return false;
+  const parent = gitQuiet(rt, manifest.worktree, ["rev-parse", "HEAD^"]);
+  const count = gitQuiet(rt, manifest.worktree, ["rev-list", "--count", `${manifest.baseCommit}..HEAD`]);
+  return parent.exitCode === 0 && parent.stdout.trim() === manifest.baseCommit && count.exitCode === 0 && count.stdout.trim() === "1";
+}
 function validateCommittedCandidate(rt, manifest, head) {
-  if (mainContains(rt, manifest, head))
-    return { kind: "already-on-main", commit: head };
   if (git(rt, manifest.worktree, ["status", "--porcelain"], context(manifest)))
     refuse("candidate-changed-after-commit", candidateFacts(manifest, head));
+  if (candidateProducedHead(rt, manifest) && mainContains(rt, manifest, head))
+    return { kind: "already-on-main", commit: head };
   const count = git(rt, manifest.worktree, ["rev-list", "--count", `${manifest.baseCommit}..HEAD`], context(manifest));
   const committed = splitNul(git(rt, manifest.worktree, ["diff", "--name-only", "-z", `${manifest.baseCommit}..HEAD`, "--"], context(manifest))).sort();
   if (count !== "1" || !samePaths(committed, manifest.paths))
@@ -713,9 +725,10 @@ function createRuntime() {
       try {
         const facts = lstatSync(path);
         const kind = facts.isSymbolicLink() ? "symlink" : facts.isFile() ? "file" : facts.isDirectory() ? "directory" : "other";
-        return { kind, mode: facts.mode & 511, mtimeMs: facts.mtimeMs };
-      } catch {
-        return { kind: "missing", mode: 0, mtimeMs: 0 };
+        return { kind, mode: facts.mode & 511, mtimeMs: facts.mtimeMs, errorCode: null };
+      } catch (error) {
+        const errorCode = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "UNKNOWN";
+        return { kind: "missing", mode: 0, mtimeMs: 0, errorCode };
       }
     },
     readText: (path) => readFileSync(path, "utf8"),
@@ -912,13 +925,13 @@ function renderReceipt(rt, worktree, valid) {
     receipt: path
   });
 }
-function renderIntegration(rt, manifest, result) {
+function renderIntegration(rt, manifest, result, recovered = false) {
   if (result.kind === "receipt")
     return renderReceipt(rt, manifest.worktree, result.receipt);
   const { code, commit, receipt, removed } = result.completion;
   return outcome(true, "finish", code, manifest.runId, removed ? commit ? "Run remote sync separately when you want to publish main." : "No candidate changes were authored. This does not verify the freshness of canonical notes." : "Completion is recorded. Inspect the retained candidate before removing it.", {
     changedState: commit ? "complete" : "none",
-    sideEffects: [...commit ? ["canonical-main-fast-forwarded"] : [], "completion-reference-written", "completion-receipt-written", ...removed ? ["candidate-worktree-removed"] : []],
+    sideEffects: [...commit && !recovered ? ["canonical-main-fast-forwarded"] : [], "completion-reference-written", "completion-receipt-written", ...removed ? ["candidate-worktree-removed"] : []],
     worktree: manifest.worktree,
     commit,
     paths: manifest.paths,
@@ -952,7 +965,7 @@ function finish(rt, args) {
   });
   const state = validateCandidate(rt, manifest, message);
   const result = state.kind === "commit" ? integrate(rt, manifest, state.commit) : completeWithoutIntegration(rt, manifest, state.kind === "already-on-main" ? state.commit : undefined);
-  return renderIntegration(rt, manifest, result);
+  return renderIntegration(rt, manifest, result, state.kind === "already-on-main");
 }
 var usage = `Vault Note Commits
 

@@ -51,7 +51,12 @@ worktree.
 ## Completion recovery
 
 A `finish` that fast-forwarded `main` but lost its receipt is recognised on
-retry: when Git proves `main` contains the candidate commit with exactly the
-admitted paths, the retry records the completion and returns `INTEGRATED`
-instead of `SEMANTIC_OVERLAP`. See
+retry: when the candidate is clean, its own HEAD reflog shows it produced
+the commit (`commit` on top of the base, or `rebase`), and Git proves `main`
+contains that commit with exactly the admitted paths, the retry records the
+completion and returns `INTEGRATED` with `sideEffects`
+`["completion-reference-written", "completion-receipt-written",
+"candidate-worktree-removed"]` (no `canonical-main-fast-forwarded`: that
+effect belongs to the crashed run). A candidate HEAD merely moved onto a
+commit of `main` is refused with the usual codes. See
 [completion recovery](completion-recovery.md).

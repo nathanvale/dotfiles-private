@@ -253,14 +253,15 @@ function renderReceipt(rt: Runtime, worktree: string, valid: ValidReceipt): Resu
 	})
 }
 
-function renderIntegration(rt: Runtime, manifest: Manifest, result: IntegrationResult): Result {
+// `recovered`: the fast-forward happened in an earlier crashed run (hazard H1); this run wrote only the record.
+function renderIntegration(rt: Runtime, manifest: Manifest, result: IntegrationResult, recovered = false): Result {
 	if (result.kind === "receipt") return renderReceipt(rt, manifest.worktree, result.receipt)
 	const { code, commit, receipt, removed } = result.completion
 	return outcome(true, "finish", code, manifest.runId, removed
 		? commit ? "Run remote sync separately when you want to publish main." : "No candidate changes were authored. This does not verify the freshness of canonical notes."
 		: "Completion is recorded. Inspect the retained candidate before removing it.", {
 		changedState: commit ? "complete" : "none",
-		sideEffects: [...(commit ? ["canonical-main-fast-forwarded"] : []), "completion-reference-written", "completion-receipt-written", ...(removed ? ["candidate-worktree-removed"] : [])],
+		sideEffects: [...(commit && !recovered ? ["canonical-main-fast-forwarded"] : []), "completion-reference-written", "completion-receipt-written", ...(removed ? ["candidate-worktree-removed"] : [])],
 		worktree: manifest.worktree, commit, paths: manifest.paths, receipt,
 	})
 }
@@ -293,7 +294,7 @@ function finish(rt: Runtime, args: string[]): Result {
 	const result = state.kind === "commit"
 		? integrate(rt, manifest, state.commit)
 		: completeWithoutIntegration(rt, manifest, state.kind === "already-on-main" ? state.commit : undefined)
-	return renderIntegration(rt, manifest, result)
+	return renderIntegration(rt, manifest, result, state.kind === "already-on-main")
 }
 
 const usage = `Vault Note Commits

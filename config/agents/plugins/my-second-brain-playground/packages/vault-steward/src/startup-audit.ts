@@ -9,7 +9,11 @@ const auditBudgetMs = 2_000
 
 interface Finding {
 	id: string
+	severity: string
 }
+
+// Only findings that need attention earn the line; informational rows (for example legacy-backup-refs) stay silent.
+const reportedSeverities = new Set(["error", "warn"])
 
 // Same resolution as the hook's recovery owner (compaction-recovery/src/recovery.py): $HOME/.config, never XDG_CONFIG_HOME,
 // so a HOME-scoped fixture fully isolates the hook.
@@ -36,7 +40,9 @@ function findingIds(stdout: string): string[] | null {
 	try {
 		const envelope = JSON.parse(stdout) as { findings?: unknown }
 		if (!Array.isArray(envelope.findings)) return null
-		return envelope.findings.map((finding: Finding) => (typeof finding?.id === "string" ? finding.id : "unknown"))
+		return envelope.findings
+			.filter((finding: Finding) => typeof finding?.severity === "string" && reportedSeverities.has(finding.severity))
+			.map((finding: Finding) => (typeof finding?.id === "string" ? finding.id : "unknown"))
 	} catch {
 		return null
 	}

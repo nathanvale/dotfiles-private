@@ -29,9 +29,11 @@ function pidIsLive(pid: number): boolean {
 // malformed owner is younger than the grace period (a fresh acquirer may not have published its pid yet).
 export function ownerIsLive(rt: Runtime, lock: string): boolean {
 	const directory = rt.fileFacts(lock)
-	if (directory.kind === "missing") return false
+	// Only ENOENT proves the lock is gone; any other lstat error (for example EACCES) keeps it live (CONTRACT.md 2.7).
+	if (directory.kind === "missing") return directory.errorCode !== "ENOENT"
 	const ownerPath = join(lock, "owner.json")
 	const owner = rt.fileFacts(ownerPath)
+	if (owner.kind === "missing" && owner.errorCode !== "ENOENT") return true
 	const modified = Math.max(directory.mtimeMs, owner.mtimeMs)
 	if (owner.kind === "missing") return withinGrace(rt, modified)
 	let contents: string

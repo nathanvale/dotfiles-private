@@ -393,9 +393,22 @@ function mainContains(rt: Runtime, manifest: Manifest, commit: string): boolean 
 	return paths.exitCode === 0 && samePaths(splitNul(paths.stdout).sort(), manifest.paths)
 }
 
+// Evidence that this worktree produced its HEAD: the newest HEAD reflog entry is a commit made here on top of the base
+// (one commit, parent equal to the base) or a rebase performed here. A HEAD merely moved onto some main commit
+// (`checkout --detach main`) leaves a checkout entry and is never completion evidence (review finding 1).
+function candidateProducedHead(rt: Runtime, manifest: Manifest): boolean {
+	const subject = gitQuiet(rt, manifest.worktree, ["reflog", "show", "-1", "--format=%gs", "HEAD"]).stdout.trim()
+	if (/^rebase\b/.test(subject)) return true
+	if (!/^commit\b/.test(subject)) return false
+	const parent = gitQuiet(rt, manifest.worktree, ["rev-parse", "HEAD^"])
+	const count = gitQuiet(rt, manifest.worktree, ["rev-list", "--count", `${manifest.baseCommit}..HEAD`])
+	return parent.exitCode === 0 && parent.stdout.trim() === manifest.baseCommit && count.exitCode === 0 && count.stdout.trim() === "1"
+}
+
 function validateCommittedCandidate(rt: Runtime, manifest: Manifest, head: string): CandidateState {
-	if (mainContains(rt, manifest, head)) return { kind: "already-on-main", commit: head }
+	// A crashed finish always leaves the candidate clean, so the clean check precedes any recovery evidence.
 	if (git(rt, manifest.worktree, ["status", "--porcelain"], context(manifest))) refuse("candidate-changed-after-commit", candidateFacts(manifest, head))
+	if (candidateProducedHead(rt, manifest) && mainContains(rt, manifest, head)) return { kind: "already-on-main", commit: head }
 	const count = git(rt, manifest.worktree, ["rev-list", "--count", `${manifest.baseCommit}..HEAD`], context(manifest))
 	const committed = splitNul(git(rt, manifest.worktree, ["diff", "--name-only", "-z", `${manifest.baseCommit}..HEAD`, "--"], context(manifest))).sort()
 	if (count !== "1" || !samePaths(committed, manifest.paths)) refuse("candidate-history-invalid", candidateFacts(manifest, head))

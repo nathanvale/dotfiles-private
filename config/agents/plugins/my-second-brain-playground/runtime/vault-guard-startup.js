@@ -3,6 +3,7 @@
 import { readFileSync } from "fs";
 import { join } from "path";
 var auditBudgetMs = 2000;
+var reportedSeverities = new Set(["error", "warn"]);
 function configuredVault(env) {
   if (!env.HOME)
     return null;
@@ -26,7 +27,7 @@ function findingIds(stdout) {
     const envelope = JSON.parse(stdout);
     if (!Array.isArray(envelope.findings))
       return null;
-    return envelope.findings.map((finding) => typeof finding?.id === "string" ? finding.id : "unknown");
+    return envelope.findings.filter((finding) => typeof finding?.severity === "string" && reportedSeverities.has(finding.severity)).map((finding) => typeof finding?.id === "string" ? finding.id : "unknown");
   } catch {
     return null;
   }

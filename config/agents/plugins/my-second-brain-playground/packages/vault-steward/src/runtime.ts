@@ -38,6 +38,8 @@ export interface FileFacts {
 	kind: "missing" | "file" | "directory" | "symlink" | "other"
 	mode: number
 	mtimeMs: number
+	// The lstat error code when the entry could not be read ("missing"); ENOENT means absent, anything else unknown.
+	errorCode: string | null
 }
 
 export interface Runtime {
@@ -101,9 +103,10 @@ export function createRuntime(): Runtime {
 			try {
 				const facts = lstatSync(path)
 				const kind = facts.isSymbolicLink() ? "symlink" : facts.isFile() ? "file" : facts.isDirectory() ? "directory" : "other"
-				return { kind, mode: facts.mode & 0o777, mtimeMs: facts.mtimeMs }
-			} catch {
-				return { kind: "missing", mode: 0, mtimeMs: 0 }
+				return { kind, mode: facts.mode & 0o777, mtimeMs: facts.mtimeMs, errorCode: null }
+			} catch (error) {
+				const errorCode = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "UNKNOWN"
+				return { kind: "missing", mode: 0, mtimeMs: 0, errorCode }
 			}
 		},
 		readText: (path) => readFileSync(path, "utf8"),

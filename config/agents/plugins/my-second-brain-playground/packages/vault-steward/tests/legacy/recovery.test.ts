@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
 import { existsSync, rmSync } from "node:fs"
 import { join } from "node:path"
-import { authoredCandidate, cleanupFixtures, finish, fixture, git, runAlias, write } from "../helpers/harness.ts"
+import { authoredCandidate, begin, cleanupFixtures, finish, fixture, git, runAlias, write } from "../helpers/harness.ts"
 
 afterEach(cleanupFixtures)
 
@@ -33,12 +33,13 @@ test("a retry after a completion-record crash records INTEGRATED instead of refu
 	const recovered = finish(f, worktree, "docs: complete goal")
 	expect(recovered.exitCode).toBe(0)
 	expect(recovered.stderr).toBe("")
+	// A genuine recovery writes only the record: the fast-forward happened in the crashed run (review finding 2).
 	expect(recovered.json).toMatchObject({
 		ok: true,
 		code: "INTEGRATED",
 		commit,
 		changedState: "complete",
-		sideEffects: ["canonical-main-fast-forwarded", "completion-reference-written", "completion-receipt-written", "candidate-worktree-removed"],
+		sideEffects: ["completion-reference-written", "completion-receipt-written", "candidate-worktree-removed"],
 		guard: { selfTest: "pass" },
 	})
 	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("1")
@@ -77,4 +78,55 @@ test("a committed candidate that main does not contain is still validated, not r
 	git(worktree, "commit", "-m", "docs: candidate created outside helper")
 	expect(finish(f, worktree).json).toMatchObject({ ok: false, code: "CHECK_FAILED" })
 	expect(git(f.vault, "rev-parse", "HEAD")).toBe(f.initialHead)
+})
+
+// Review finding 1 negative controls: a candidate HEAD merely moved onto main's tip (`git checkout --detach main`) is not
+// completion evidence, even though main contains that commit with exactly the admitted path set. Both scenarios keep
+// the 0.12.0 codes.
+
+test("a dirty candidate moved onto main's tip is refused CANDIDATE_CHANGED_AFTER_COMMIT, never recorded", () => {
+	const f = fixture()
+	const a = authoredCandidate(f, "projects/demo/GOAL.md", "# Goal\n\nA wrote.\n")
+	const b = begin(f, ["projects/demo/GOAL.md"]).json.worktree as string
+	expect(finish(f, a, "docs: A change").json).toMatchObject({ ok: true, code: "INTEGRATED" })
+	const x = git(f.vault, "rev-parse", "main")
+	git(b, "checkout", "--detach", "main")
+	write(b, "projects/demo/GOAL.md", "# Goal\n\nB wrote.\n")
+	const refused = finish(f, b, "docs: B change")
+	expect(refused.exitCode).toBe(1)
+	expect(refused.stderr).toBe("")
+	expect(refused.json).toMatchObject({ ok: false, code: "CANDIDATE_CHANGED_AFTER_COMMIT", retrySafe: false, changedState: "partial", sideEffects: ["candidate-commit-preserved"], commit: x, worktree: b })
+	expect(git(f.vault, "rev-parse", "main")).toBe(x)
+	expect(git(f.vault, "for-each-ref", "--format=%(refname)", "refs/vault-note-commits").split("\n")).toHaveLength(1)
+	expect(existsSync(b)).toBe(true)
+	expect(Bun.file(join(b, "projects/demo/GOAL.md")).text()).resolves.toContain("B wrote")
+})
+
+test("a clean candidate moved onto main's tip is refused SEMANTIC_OVERLAP, never recorded", () => {
+	const f = fixture()
+	const a = authoredCandidate(f, "projects/demo/GOAL.md", "# Goal\n\nA wrote.\n")
+	const b = begin(f, ["projects/demo/GOAL.md"]).json.worktree as string
+	expect(finish(f, a, "docs: A change").json).toMatchObject({ ok: true, code: "INTEGRATED" })
+	const x = git(f.vault, "rev-parse", "main")
+	git(b, "checkout", "--detach", "main")
+	const refused = finish(f, b, "docs: B change")
+	expect(refused.exitCode).toBe(1)
+	expect(refused.stderr).toBe("")
+	expect(refused.json).toMatchObject({ ok: false, code: "SEMANTIC_OVERLAP", retrySafe: false, changedState: "partial", sideEffects: ["candidate-commit-preserved"], commit: x, worktree: b })
+	expect(git(f.vault, "rev-parse", "main")).toBe(x)
+	expect(git(f.vault, "for-each-ref", "--format=%(refname)", "refs/vault-note-commits").split("\n")).toHaveLength(1)
+	expect(existsSync(b)).toBe(true)
+})
+
+test("a commit made in the candidate on top of a moved HEAD is not recovery evidence either", () => {
+	const f = fixture()
+	const a = authoredCandidate(f, "projects/demo/GOAL.md", "# Goal\n\nA wrote.\n")
+	const b = begin(f, ["projects/demo/GOAL.md"]).json.worktree as string
+	expect(finish(f, a, "docs: A change").json).toMatchObject({ ok: true, code: "INTEGRATED" })
+	git(b, "checkout", "--detach", "main")
+	write(b, "projects/demo/GOAL.md", "# Goal\n\nB wrote.\n")
+	git(b, "add", "--", "projects/demo/GOAL.md")
+	git(b, "commit", "-m", "docs: B outside the helper")
+	expect(finish(f, b, "docs: B change").json).toMatchObject({ ok: false, code: "CANDIDATE_HISTORY_INVALID", retrySafe: false })
+	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("1")
 })

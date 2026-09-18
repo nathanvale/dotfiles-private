@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { acquireLock, lockPath, ownerIsLive, releaseLock } from "../../src/integration-lock.ts"
@@ -75,3 +75,24 @@ test("acquire creates the directory with its owner, refuses a live owner after a
 	releaseLock(lockPath(common))
 	expect(ownerIsLive(rt, lockPath(common))).toBe(false)
 }, 15_000)
+
+test("a lock whose owner cannot be read for any reason other than absence stays live (review finding 3)", () => {
+	const rt = createRuntime()
+	const common = commonDirectory()
+	const lock = lockPath(common)
+	mkdirSync(lock)
+	writeFileSync(join(lock, "owner.json"), JSON.stringify({ schemaVersion: 1, runId: "x", pid: 2_147_483_646 }))
+	age(lock, 60)
+	age(join(lock, "owner.json"), 60)
+	// The dead owner is reclaimable while readable, but an unreadable lock directory (EACCES on lstat of its child) is live.
+	expect(ownerIsLive(rt, lock)).toBe(false)
+	chmodSync(lock, 0o000)
+	try {
+		expect(rt.fileFacts(join(lock, "owner.json")).errorCode).toBe("EACCES")
+		expect(ownerIsLive(rt, lock)).toBe(true)
+	} finally {
+		chmodSync(lock, 0o700)
+	}
+	expect(rt.fileFacts(join(common, "absent")).errorCode).toBe("ENOENT")
+	expect(ownerIsLive(rt, join(common, "absent"))).toBe(false)
+})
