@@ -4,6 +4,7 @@
 // handoff facts. The catalog test fails every declared row that no real public process has reached. The bare `hook`
 // command is the documented exception: its deliveries are enumerated and proven in commands/hook.ts.
 
+import { PINNED_BD_REVISION, PINNED_BD_VERSION } from "./adapters/beads.ts"
 import { type CommandIdentity, commandDeclaration, type ExitCode, exitFor, type FailureClass } from "./command-contract.ts"
 import type { DomainOutcome, EffectClass, TransactionState } from "./model.ts"
 
@@ -52,7 +53,7 @@ const ROWS: readonly Row[] = [
 	...shared("internal-failure", "An unexpected exception before any durable write", "failed", "INTERNAL_UNEXPECTED", "unchanged", false, null, "handoff", ROUTED),
 	...shared("beads-unavailable", "A native bd read failed to start, timed out, returned no JSON, or returned an error value that names no absent Bead (no_beads_directory, contention, unclassified)", "failed", "UNAVAILABLE_BEADS_READ", "unchanged", true, 1000, "next-action", ROUTED),
 	...shared("executable-refused", "The bd executable named by MSB_WORKFLOW_BD_EXECUTABLE or the binding was not accepted: it must be exactly the pinned absolute canonical path, a regular executable file, and hash to the pinned SHA-256 before any bd read; unset, relative, another path, a symlink, missing, not executable, or another digest all refuse", "refused", "DOMAIN_EXECUTABLE_INVALID", "unchanged", false, null, "next-action", READERS),
-	...shared("store-mismatch", "bd version is not 1.2.2 at 6c124203e771, where.path is not <workspace>/.beads, the prefix disagrees with effective configuration, or context is redirected", "refused", "DOMAIN_STORE_MISMATCH", "unchanged", false, null, "next-action", READERS),
+	...shared("store-mismatch", `bd version is not ${PINNED_BD_VERSION} at ${PINNED_BD_REVISION}, where.path is not <workspace>/.beads, the prefix disagrees with effective configuration, or context is redirected`, "refused", "DOMAIN_STORE_MISMATCH", "unchanged", false, null, "next-action", READERS),
 	...shared("state-unsafe", "A private state ancestor, lock file, marker, or binding has unsafe ownership, type, mode, link count, or identity", "refused", "DOMAIN_STATE_UNSAFE", "unchanged", false, null, "next-action", READERS),
 	...shared("binding-invalid", "The saved binding is not one bounded schema-v3 object: malformed bytes, duplicate keys, unknown or missing fields, null identities, or future skew", "refused", "SCHEMA_BINDING_INVALID", "unchanged", false, null, "next-action", READERS),
 	...shared("bead-missing", "The pinned bd reports the named Bead absent from the selected store", "refused", "DOMAIN_BEAD_MISSING", "unchanged", false, null, "next-action", READERS),

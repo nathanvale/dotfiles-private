@@ -1,4 +1,5 @@
-// Fixture `bd`: replays recorded bd 1.2.2 JSON keyed by subcommand and writes nothing. `where.path` and
+// Fixture `bd`: replays recorded output of the pinned bd keyed by subcommand and writes nothing; the shapes were recorded
+// on the previous pin and re-verified unchanged on 1.3.0, whose version line it replays. `where.path` and
 // `context.beads_dir` echo BEADS_DIR so the helper's exact-store comparison holds for any workspace. An optional
 // `<BEADS_DIR>/fixture.json` steers one scenario (wrong version, wrong store, unavailable store, missing Bead,
 // contention, changed Bead fields); the checker workspace carries none, so it replays the defaults. The shapes are
@@ -122,7 +123,7 @@ function show(steer: Scenario, id: string): never {
 
 function context(steer: Scenario): never {
 	if (steer.contextError !== undefined) errorReply(steer.contextError)
-	emit({ backend: "dolt", bd_version: "1.2.2", beads_dir: beadsDir, cwd_repo_root: process.cwd(), database: "lkr", dolt_mode: "embedded", is_redirected: steer.redirected === true, is_worktree: false, project_id: "fixture", repo_root: process.cwd(), schema_version: 1 })
+	emit({ backend: "dolt", bd_version: "1.3.0", beads_dir: beadsDir, cwd_repo_root: process.cwd(), database: "lkr", dolt_mode: "embedded", is_redirected: steer.redirected === true, is_worktree: false, project_id: "fixture", repo_root: process.cwd(), schema_version: 1 })
 }
 
 /** JSON subcommands keyed by their first two words; `version` is handled before steering because it is plain text. */
@@ -141,7 +142,7 @@ async function main(): Promise<void> {
 	if (steer.hang === true) await Bun.sleep(60_000)
 	const [command = "", second] = args
 	if (command === "version") {
-		process.stdout.write(`${steer.version ?? "bd version 1.2.2 (6c124203e: 6c124203e771)"}\n`)
+		process.stdout.write(`${steer.version ?? "bd version 1.3.0 (f45b249ce: f45b249ce6b4)"}\n`)
 		process.exit(0)
 	}
 	const handler = JSON_COMMANDS[`${command} ${second ?? ""}`] ?? JSON_COMMANDS[command]
