@@ -409,7 +409,7 @@ function mainContains(rt, manifest, commit) {
 }
 function candidateProducedHead(rt, manifest) {
   const subject = gitQuiet(rt, manifest.worktree, ["reflog", "show", "-1", "--format=%gs", "HEAD"]).stdout.trim();
-  if (/^rebase\b/.test(subject))
+  if (/^rebase \(pick\)/.test(subject))
     return true;
   if (!/^commit\b/.test(subject))
     return false;

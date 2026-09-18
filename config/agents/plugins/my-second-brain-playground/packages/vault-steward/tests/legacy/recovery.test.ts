@@ -1,7 +1,11 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { existsSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { authoredCandidate, begin, cleanupFixtures, finish, fixture, git, runAlias, write } from "../helpers/harness.ts"
+
+// Every row spawns several real Git and CLI processes on a machine shared with other agents: a process budget, not the
+// 5 s unit default.
+setDefaultTimeout(60_000)
 
 afterEach(cleanupFixtures)
 
@@ -129,4 +133,22 @@ test("a commit made in the candidate on top of a moved HEAD is not recovery evid
 	git(b, "commit", "-m", "docs: B outside the helper")
 	expect(finish(f, b, "docs: B change").json).toMatchObject({ ok: false, code: "CANDIDATE_HISTORY_INVALID", retrySafe: false })
 	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("1")
+})
+
+test("a clean candidate fast-forwarded by a no-op git rebase main is refused SEMANTIC_OVERLAP, never recorded", () => {
+	const f = fixture()
+	const a = authoredCandidate(f, "projects/demo/GOAL.md", "# Goal\n\nA wrote.\n")
+	const b = begin(f, ["projects/demo/GOAL.md"]).json.worktree as string
+	expect(finish(f, a, "docs: A change").json).toMatchObject({ ok: true, code: "INTEGRATED" })
+	const x = git(f.vault, "rev-parse", "main")
+	git(b, "rebase", "main")
+	expect(git(b, "rev-parse", "HEAD")).toBe(x)
+	expect(git(b, "reflog", "show", "-1", "--format=%gs", "HEAD")).toMatch(/^rebase \(start\)/)
+	const refused = finish(f, b, "docs: B change")
+	expect(refused.exitCode).toBe(1)
+	expect(refused.stderr).toBe("")
+	expect(refused.json).toMatchObject({ ok: false, code: "SEMANTIC_OVERLAP", retrySafe: false, changedState: "partial", sideEffects: ["candidate-commit-preserved"], commit: x, worktree: b })
+	expect(git(f.vault, "rev-parse", "main")).toBe(x)
+	expect(git(f.vault, "for-each-ref", "--format=%(refname)", "refs/vault-note-commits").split("\n")).toHaveLength(1)
+	expect(existsSync(b)).toBe(true)
 })

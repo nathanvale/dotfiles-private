@@ -1,8 +1,12 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { existsSync } from "node:fs"
 import { join } from "node:path"
 import { authoredCandidate, begin, cleanupFixtures, finish, fixture, git, installHook, write } from "../helpers/harness.ts"
 import { HOOK_TEXT } from "./hook-text.ts"
+
+// Every row spawns several real Git and CLI processes on a machine shared with other agents: a process budget, not the
+// 5 s unit default.
+setDefaultTimeout(60_000)
 
 afterEach(cleanupFixtures)
 

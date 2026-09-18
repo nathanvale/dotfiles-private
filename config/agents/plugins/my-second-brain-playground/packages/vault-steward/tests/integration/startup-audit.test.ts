@@ -1,7 +1,11 @@
-import { afterEach, expect, test } from "bun:test"
+import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
+
+// Every row spawns several real Git and CLI processes on a machine shared with other agents: a process budget, not the
+// 5 s unit default.
+setDefaultTimeout(60_000)
 
 // Row F3 (plan section 7): hooks/recover-context prints one guard line only when the configured vault's audit reports
 // findings, keeps silent otherwise, stays inside a 2 s budget when the audit hangs, and never changes the hook's exit.

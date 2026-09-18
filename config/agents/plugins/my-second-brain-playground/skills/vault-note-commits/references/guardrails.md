@@ -52,7 +52,7 @@ worktree.
 
 A `finish` that fast-forwarded `main` but lost its receipt is recognised on
 retry: when the candidate is clean, its own HEAD reflog shows it produced
-the commit (`commit` on top of the base, or `rebase`), and Git proves `main`
+the commit (`commit` on top of the base, or a rebase pick performed there), and Git proves `main`
 contains that commit with exactly the admitted paths, the retry records the
 completion and returns `INTEGRATED` with `sideEffects`
 `["completion-reference-written", "completion-receipt-written",

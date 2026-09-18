@@ -21,7 +21,7 @@ commit without a receipt; retry `finish` with the same worktree path. The
 retry records the completion and returns `INTEGRATED` without replaying the
 fast-forward only when three facts hold: the candidate is clean, the
 candidate's own HEAD reflog shows it produced its commit (a `commit` on top
-of the base, or a `rebase` performed there), and Git proves `main` contains
+of the base, or a rebase pick performed there), and Git proves `main` contains
 that commit with exactly the admitted paths. A HEAD merely moved onto a
 commit of `main` (for example `git checkout --detach main`) is never
 completion evidence and is refused as before. That `INTEGRATED` result lists

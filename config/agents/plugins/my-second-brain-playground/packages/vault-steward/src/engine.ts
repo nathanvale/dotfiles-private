@@ -394,11 +394,12 @@ function mainContains(rt: Runtime, manifest: Manifest, commit: string): boolean 
 }
 
 // Evidence that this worktree produced its HEAD: the newest HEAD reflog entry is a commit made here on top of the base
-// (one commit, parent equal to the base) or a rebase performed here. A HEAD merely moved onto some main commit
-// (`checkout --detach main`) leaves a checkout entry and is never completion evidence (review finding 1).
+// (one commit, parent equal to the base) or the `rebase (pick)` entry the engine's own `rebase --onto` leaves. A HEAD
+// merely moved onto some main commit (`checkout --detach main`, or a no-op `git rebase main` that ends on
+// `rebase (start)`) is never completion evidence (review findings 1 and 5).
 function candidateProducedHead(rt: Runtime, manifest: Manifest): boolean {
 	const subject = gitQuiet(rt, manifest.worktree, ["reflog", "show", "-1", "--format=%gs", "HEAD"]).stdout.trim()
-	if (/^rebase\b/.test(subject)) return true
+	if (/^rebase \(pick\)/.test(subject)) return true
 	if (!/^commit\b/.test(subject)) return false
 	const parent = gitQuiet(rt, manifest.worktree, ["rev-parse", "HEAD^"])
 	const count = gitQuiet(rt, manifest.worktree, ["rev-list", "--count", `${manifest.baseCommit}..HEAD`])
