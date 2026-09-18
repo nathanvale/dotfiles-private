@@ -216,14 +216,18 @@ suite against the pinned executable.
 
 `hook` accepts exactly the argv `hook` and reads one Harness event from stdin
 (128 KiB limit). Any other argv containing `hook` is an ordinary usage failure.
-Output is `{"hookSpecificOutput":{"hookEventName":<event>,"additionalContext":<text>}}`
-on stdout, and the exit code is always `0`.
+A delivery on `SessionStart` or `UserPromptSubmit` is
+`{"hookSpecificOutput":{"hookEventName":<event>,"additionalContext":<text>}}`
+on stdout. `PreCompact` never emits `hookSpecificOutput`: Codex 0.154.0 admits
+only the common output fields there and rejects anything else as invalid
+PreCompact JSON, so its one output shape is `{"systemMessage":<text>}`. The
+exit code is always `0`.
 
 | Event | Delivery |
 | --- | --- |
 | `SessionStart` with `source` `startup`, `resume`, or `clear` | Bounded session guidance naming the Bead, the workspace, and the exact `recover` and `bind` commands for this session. Never consumes a marker. |
 | `SessionStart` with `source` `compact` | The Resume Panel plus bounded `bd prime --readonly --hook-json` context (8 KiB). |
-| `PreCompact` | The read-only availability result: available, or unavailable with the cause and repair. |
+| `PreCompact` | The read-only availability check. Available: silent, empty stdout, recorded as `delivery` `precompact-available` in the private diagnostics run file. Unavailable: `{"systemMessage":<text>}` naming the cause and the repair, redacted, surfaced to the user as a warning. Compaction is never stopped, and no `hookSpecificOutput` is emitted. |
 | `PostCompact` | Records one monotonic generation as `pending` in the marker under the session lock. No output. |
 | `UserPromptSubmit` | Inspects the marker under the session lock, runs the native reads with no lock held, then re-decides under the lock: claims every pending generation at once (including one minted during the read), persists the claim, emits one panel with prime context, then records each claimed generation `delivered`. A second prompt is silent, and a prompt that a concurrent prompt beat to delivery settles silent. |
 
@@ -253,7 +257,8 @@ its `hook.completed` record with `delivery` `silent` and no cause record; an
 unusable state root leaves no run file, because none can be opened. Nothing
 reaches stderr, because stderr may reach the Harness.
 `PreCompact` is the one event that reports an unavailable read in its output
-instead of staying silent.
+instead of staying silent, through the common `systemMessage` field alone;
+an available read at `PreCompact` is silent.
 
 Missing binding. A session that never ran `bind` gets no guidance and no
 panel; the hook is silent. `inspect --session <id>` names the absent binding
