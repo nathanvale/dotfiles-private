@@ -1,9 +1,31 @@
 # Herdr control
 
 Nathan permits direct Herdr CLI control from external apps, including Codex
-Desktop. This owned instruction overrides only the third-party Herdr skill's
-blanket refusal outside `HERDR_ENV=1`. Keep its remaining guidance and reviewed
-payload intact; use installed CLI help for current syntax.
+Desktop and Claude Desktop. This owned instruction overrides only the
+third-party Herdr skill's blanket refusal outside `HERDR_ENV=1`. Keep its
+remaining guidance and reviewed payload intact; use installed CLI help for
+current syntax.
+
+## Portal and workflow
+
+- Follow the global vault entry. In that vault, read `CONTEXT.md` for vocabulary,
+  `docs/agents/workflow-governance.md` for scope and completion, and
+  `projects/engineering-workflow/cast.md` for coordination and execution owners.
+- Treat Codex Desktop and Claude Desktop as lightweight communication
+  portals to the selected Stage Manager. Relay requests and fresh replies;
+  keep coordination with that owner. The Stage Manager coordinates visible,
+  bounded Cast Members in Herdr for exploration and execution. A missing
+  destination requires discovery or one target question; Desktop does not
+  silently become the coordinator.
+- Prefer low reasoning for portal communication when the selected Harness
+  supports it. Verify actual session settings before reporting them; do not
+  change models or infer the Stage Manager's model from the portal's setting.
+- Keep computer-use capability available in Codex and in equipped agents
+  inside Herdr. Verify the selected agent's actual tools and host permissions;
+  a Herdr pane alone does not supply computer-use access. Capability does not
+  transfer workflow ownership. Computer-use implementation remains OPEN.
+- Follow the global browser and Google routes for those operations. Portal
+  routing does not change their owners.
 
 ## Find a coordinator
 
@@ -33,6 +55,16 @@ payload intact; use installed CLI help for current syntax.
 - Outside Herdr: discover running sessions with `herdr session list`; select the
   intended session explicitly with `--session`. Discover its workspaces, tabs,
   panes and agents before effects. Do not set `HERDR_ENV=1` to impersonate a pane.
+- For owner-provided external supervision, retain the exact `--session` and
+  an explicit pane ID or live agent name. The session selects the socket.
+  Resolve a missing target with `herdr --session <name> agent list` or
+  `herdr --session <name> pane list`. Do not change `HERDR_ENV`, use focus, or
+  omit the target on this route. Ask only when the intended session or target
+  cannot be resolved.
+- Use a resolved Herdr agent name or pane ID for `agent attach`, never an
+  opaque MCP worker ID. Use `herdr --remote <host> --session <name>` for the
+  full remote UI. Verify remote API transport and syntax separately before use;
+  a UI attachment does not qualify API access.
 - Resolve the destination as machine, Herdr session, workspace, tab and pane or
   agent. Use only the levels required by the operation. IDs are session-local;
   rediscover them after moving a pane or switching servers.
@@ -53,7 +85,8 @@ payload intact; use installed CLI help for current syntax.
   for ordinary commands and layout. Read command-group help before unfamiliar work.
 - Create requested tabs or workspaces with explicit parent and cwd. Use returned
   pane IDs to start an agent. A tab does not itself start a coordinator.
-- Preserve focus for background work; focus the destination when Nathan asks to
+- Preserve focus on the external supervision route above. On other routes,
+  preserve focus for background work; focus the destination when Nathan asks to
   open or switch to it. Preserve the coordinator pane during worker changes.
 - Treat machine add, enable, disable and remove as requested configuration
   changes. Inspect setup consequences; installing or replacing a remote server
