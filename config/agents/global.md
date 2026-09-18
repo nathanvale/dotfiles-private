@@ -116,9 +116,11 @@
   `$HOME/code/dotfiles/docs/agents/mac-storage.md`.
 - Use configured keychain or 1Password-backed wrappers for credentials. Never
   source an environment file or print secret values for an auth check.
-- All Google service work, including Gmail, Sheets, Docs, Drive and Calendar:
-  use the `gog` CLI with the `gog` and corresponding `gog-*` skills, including
-  when a connector or browser is available.
+- Google service operation supported by `gog`: use the `gog` CLI and the
+  corresponding `gog-*` skill when available, even when a connector or browser
+  exists.
+- Google service journey requiring the signed-in web UI: follow the browser
+  automation and `browser-use` owner below.
 - Use `ghh` for GitHub CLI work.
 - Codex Desktop or Claude Desktop work, coordinator requests, or Herdr work: read
   `$HOME/code/dotfiles/docs/agents/herdr-control.md` before the Herdr skill.

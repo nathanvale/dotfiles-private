@@ -9,7 +9,7 @@ Scope, admission, and the edit rule:
 
 | Read this | When |
 |---|---|
-| [`herdr-control.md`](herdr-control.md) | Codex or Claude Desktop work, addressing a coordinator by project/tab name, or inspecting/controlling Herdr from any app |
+| [`herdr-control.md`](herdr-control.md) | Codex Desktop or Claude Desktop work, addressing a coordinator by project/tab name, or inspecting/controlling Herdr from any app |
 | [`session-history.md`](session-history.md) | Finding a moved Codex session, restoring its rollout, or refreshing the Scratch history register |
 | [`instruction-maintenance.md`](instruction-maintenance.md) | Changing `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, or a document they point to |
 | [`work-placement.md`](work-placement.md) | Choosing or changing the owner of code, repositories, project packets, notes, plans, evidence, or runtime output |

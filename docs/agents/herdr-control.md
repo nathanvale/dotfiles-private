@@ -1,10 +1,11 @@
 # Herdr control
 
-Nathan permits direct Herdr CLI control from external apps, including Codex
-Desktop and Claude Desktop. This owned instruction overrides only the
-third-party Herdr skill's blanket refusal outside `HERDR_ENV=1`. Keep its
-remaining guidance and reviewed payload intact; use installed CLI help for
-current syntax.
+For Codex Desktop or Claude Desktop portal/coordinator routes, invoke the
+third-party Herdr skill even when the request does not mention Herdr, and permit
+direct Herdr CLI control outside `HERDR_ENV=1`. This owned instruction overrides
+only that skill's explicit-mention trigger and `HERDR_ENV` refusal on those
+routes. Keep its remaining guidance and reviewed payload intact; use installed
+CLI help for current syntax.
 
 ## Portal and workflow
 
