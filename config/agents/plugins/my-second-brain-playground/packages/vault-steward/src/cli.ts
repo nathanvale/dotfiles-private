@@ -223,13 +223,14 @@ function candidateRoot(rt: Runtime, vault: string): string {
 	return `${resolved}/${vaultIdentity(vault)}`
 }
 
-// The 2.0 front door refuses DOMAIN_CANONICAL_NOT_MAIN before the self-test when refs/heads/main is absent.
-function requireMain(rt: Runtime, manifest: Manifest): void {
-	if (gitQuiet(rt, manifest.vault, ["rev-parse", "--verify", "refs/heads/main"]).exitCode !== 0) throw new Refusal("not-canonical-main", { runId: manifest.runId, worktree: manifest.worktree, paths: manifest.paths, detail: "refs/heads/main is absent" })
+// The 2.0 front door refuses DOMAIN_CANONICAL_NOT_MAIN before the self-test when refs/heads/main is absent (an unborn
+// main passes canonicalVault's current-branch check).
+function requireMain(rt: Runtime, vault: string, facts: RefusalFacts = {}): void {
+	if (gitQuiet(rt, vault, ["rev-parse", "--verify", "refs/heads/main"]).exitCode !== 0) throw new Refusal("not-canonical-main", { ...facts, detail: "refs/heads/main is absent" })
 }
 
 function observeForCandidate(rt: Runtime, manifest: Manifest, candidateCommit: string | undefined): GuardObservation {
-	requireMain(rt, manifest)
+	requireMain(rt, manifest.vault, { runId: manifest.runId, worktree: manifest.worktree, paths: manifest.paths })
 	return observeGuard(rt, { vault: manifest.vault, candidateRoot: candidateRoot(rt, manifest.vault), runId: manifest.runId, candidateCommit, facts: { runId: manifest.runId, worktree: manifest.worktree, paths: manifest.paths } })
 }
 
@@ -255,6 +256,7 @@ function runBegin(rt: Runtime, parsed: Parsed, session: Session): Decision {
 	const requested = parsed.values.path ?? []
 	if (typeof parsed.values.vault === "string" && !isAbsolute(parsed.values.vault)) throw new Refusal("input-invalid", { detail: "--vault must be an absolute path" })
 	const vault = canonicalVault(rt, parsed.values.vault ?? configuredVault(rt))
+	requireMain(rt, vault)
 	const plan = planCandidate(rt, vault, requested)
 	const observation = observeGuard(rt, { vault, candidateRoot: candidateRoot(rt, vault), runId: plan.runId })
 	const warnings = warningsOf(observation)

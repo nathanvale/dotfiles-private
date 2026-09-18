@@ -18929,12 +18929,12 @@ function candidateRoot(rt, vault) {
   }
   return `${resolved}/${vaultIdentity(vault)}`;
 }
-function requireMain(rt, manifest) {
-  if (gitQuiet(rt, manifest.vault, ["rev-parse", "--verify", "refs/heads/main"]).exitCode !== 0)
-    throw new Refusal("not-canonical-main", { runId: manifest.runId, worktree: manifest.worktree, paths: manifest.paths, detail: "refs/heads/main is absent" });
+function requireMain(rt, vault, facts = {}) {
+  if (gitQuiet(rt, vault, ["rev-parse", "--verify", "refs/heads/main"]).exitCode !== 0)
+    throw new Refusal("not-canonical-main", { ...facts, detail: "refs/heads/main is absent" });
 }
 function observeForCandidate(rt, manifest, candidateCommit) {
-  requireMain(rt, manifest);
+  requireMain(rt, manifest.vault, { runId: manifest.runId, worktree: manifest.worktree, paths: manifest.paths });
   return observeGuard(rt, { vault: manifest.vault, candidateRoot: candidateRoot(rt, manifest.vault), runId: manifest.runId, candidateCommit, facts: { runId: manifest.runId, worktree: manifest.worktree, paths: manifest.paths } });
 }
 function knownCandidateCommit(rt, manifest) {
@@ -18959,6 +18959,7 @@ function runBegin(rt, parsed, session) {
   if (typeof parsed.values.vault === "string" && !isAbsolute3(parsed.values.vault))
     throw new Refusal("input-invalid", { detail: "--vault must be an absolute path" });
   const vault = canonicalVault(rt, parsed.values.vault ?? configuredVault(rt));
+  requireMain(rt, vault);
   const plan = planCandidate(rt, vault, requested);
   const observation = observeGuard(rt, { vault, candidateRoot: candidateRoot(rt, vault), runId: plan.runId });
   const warnings = warningsOf(observation);
