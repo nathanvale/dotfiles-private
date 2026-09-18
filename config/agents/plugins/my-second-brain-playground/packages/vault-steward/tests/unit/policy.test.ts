@@ -64,13 +64,16 @@ test("receipt shape validation is closed over keys, patterns, and sorted unique 
 	expect(() => validateReceiptShape({ ...receipt, code: "DONE" as Receipt["code"] })).toThrow()
 })
 
-test("manifest shape validation checks version, run id, worktree identity, and the paths array", () => {
-	const manifest: Manifest = { schemaVersion: 1, runId: receipt.runId, vault: "/vault", worktree: "/w", commonGitDirectory: "/vault/.git", baseCommit: "a".repeat(40), paths: [] }
+test("manifest shape validation requires a non-empty, sorted, normalised relative path set", () => {
+	const manifest: Manifest = { schemaVersion: 1, runId: receipt.runId, vault: "/vault", worktree: "/w", commonGitDirectory: "/vault/.git", baseCommit: "a".repeat(40), paths: ["a.md", "b/c.md"] }
 	expect(manifestShapeValid(manifest, "/w")).toBe(true)
 	expect(manifestShapeValid(manifest, "/other")).toBe(false)
 	expect(manifestShapeValid({ ...manifest, runId: "x" }, "/w")).toBe(false)
 	expect(manifestShapeValid({ ...manifest, schemaVersion: 2 as 1 }, "/w")).toBe(false)
 	expect(manifestShapeValid({ ...manifest, paths: "a.md" as unknown as string[] }, "/w")).toBe(false)
+	for (const paths of [[], ["a.md", "a.md"], ["b/c.md", "a.md"], ["/outside"], ["../outside"], ["a/../b.md"], ["a/./b.md"], ["a//b.md"], ["a/"]]) {
+		expect(manifestShapeValid({ ...manifest, paths }, "/w"), JSON.stringify(paths)).toBe(false)
+	}
 })
 
 test("path set helpers and whitespace finding extraction", () => {
