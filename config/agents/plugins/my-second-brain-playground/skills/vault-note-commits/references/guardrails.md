@@ -70,7 +70,18 @@ Candidates, receipts, and previews live under
 Foreign-worktree classification (this helper's `FOREIGN_WORKTREE_PRESENT`
 and the vault audit's `foreign-worktree`) is relative to the caller's state
 home, so run every agent and the audit with one state home; a candidate
-created under another state home is reported as foreign.
+created under another state home is reported as foreign. The CLI resolves
+`vault.json` under `${XDG_CONFIG_HOME:-~/.config}`, while the session-start
+guard line reads `~/.config` only (it mirrors the recovery hook's owner), so
+set the config under `~/.config` when `XDG_CONFIG_HOME` points elsewhere.
+
+## Known limitation: stale-lock reclaim
+
+Stale-lock reclaim is by pathname (rename, then remove), so two contenders
+that classify the same dead lock while a third publishes a live owner can
+briefly run two integrations; the loser's fast-forward then refuses
+`INTEGRATION_UNPROVED` and `main` is never corrupted. An identity-checked
+reclaim is the follow-up.
 
 ## Completion recovery
 
