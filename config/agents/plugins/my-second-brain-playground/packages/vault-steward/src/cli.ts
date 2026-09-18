@@ -372,14 +372,14 @@ function runFinishApply(rt: Runtime, parsed: Parsed, session: Session): Decision
 
 type RecoveryState = "not-started" | "previewed" | "completed" | "recoverable" | "needs-human"
 
-function inspectNext(state: RecoveryState, worktree: string, hasCandidate: boolean): { nextCommand: string | null; nextAction: CommandIdentity } {
+function inspectNext(state: RecoveryState, worktree: string, hasCandidate: boolean, previewId: string | null): { nextCommand: string | null; nextAction: CommandIdentity } {
 	switch (state) {
 		case "completed":
 			return { nextCommand: null, nextAction: "vault-steward.inspect" }
 		case "recoverable":
 			return { nextCommand: `vault-steward recover --worktree ${worktree} --json`, nextAction: "vault-steward.recover" }
 		case "previewed":
-			return { nextCommand: `vault-steward finish --apply --preview-id <previewId> --worktree ${worktree} --json`, nextAction: "vault-steward.finish-apply" }
+			return { nextCommand: `vault-steward finish --apply --preview-id ${previewId ?? "<previewId>"} --worktree ${worktree} --json`, nextAction: "vault-steward.finish-apply" }
 		case "needs-human":
 			return { nextCommand: null, nextAction: "vault-steward.inspect" }
 		default:
@@ -419,7 +419,10 @@ function previewViews(rt: Runtime, record: Manifest | null, candidate: ReturnTyp
 	const stored = previewViewOf(rt, record.runId)
 	if (!stored.present) return { preview: null, previewInvalid: false, previewStale: null }
 	if (!stored.valid) return { preview: null, previewInvalid: true, previewStale: null }
-	const previewStale = candidate === null ? null : candidate.head !== (stored.record.candidateCommit ?? record.baseCommit)
+	// CONTRACT.md 3.3: stale when main moved, the candidate HEAD differs from the previewed commit, or the candidate is dirty.
+	const mainHead = gitQuiet(rt, record.vault, ["rev-parse", "refs/heads/main"])
+	const mainMoved = mainHead.exitCode !== 0 || mainHead.stdout.trim() !== stored.record.observedMain
+	const previewStale = candidate === null ? null : candidate.head !== (stored.record.candidateCommit ?? record.baseCommit) || candidate.dirty || mainMoved
 	return { preview: stored.record, previewInvalid: false, previewStale }
 }
 
@@ -440,6 +443,9 @@ function recoveryStateOf(rt: Runtime, views: InspectViews): RecoveryState {
 	if (views.record === null) return views.receipt.present ? "needs-human" : "not-started"
 	if (recoveryEvidence(rt, views.record).kind !== "unprovable") return "recoverable"
 	const cleanNotOnMain = views.candidate !== null && !views.candidate.dirty && views.main.containsCandidateCommit !== true
+	// A consumed preview whose apply never had an effect (crash after consumption, or a refusal after the rebase was
+	// restored) needs a fresh preview, not a human: the candidate is clean, exactly as previewed, and main is where the
+	// preview observed it.
 	if (views.preview?.consumed) return cleanNotOnMain ? "not-started" : "needs-human"
 	if (views.preview !== null && views.previewStale === false) return "previewed"
 	if (views.candidate?.committed && views.main.overlap.length > 0) return "needs-human"
@@ -465,7 +471,7 @@ function runInspect(rt: Runtime, parsed: Parsed): Decision {
 	const worktree = requireAbsoluteWorktree(parsed.values.worktree)
 	const views = inspectViews(rt, worktree)
 	const state = recoveryStateOf(rt, views)
-	const next = inspectNext(state, worktree, views.record !== null)
+	const next = inspectNext(state, worktree, views.record !== null, views.preview?.previewId ?? null)
 	return {
 		kind: "success",
 		identity: "vault-steward.inspect",
@@ -849,9 +855,14 @@ async function runCommand(session: Session, route: CommandRoute, parsed: Parsed)
 	return emitMachine(envelope(message, result, diagnosticsDisclosure(status)), session.io)
 }
 
-export async function run(argv: readonly string[], io: Io, env: Record<string, string | undefined>, runId: string): Promise<number> {
+export interface RunOptions {
+	// The fault channel is honoured only when the process runs from source; the shipped bundle ignores it.
+	faultsAllowed: boolean
+}
+
+export async function run(argv: readonly string[], io: Io, env: Record<string, string | undefined>, runId: string, options: RunOptions): Promise<number> {
 	const routed = routeRawArgv(argv)
-	const session: Session = { io, runId, env, jsonMode: machineMode(argv) }
+	const session: Session = { io, runId, env: options.faultsAllowed ? env : { ...env, VAULT_STEWARD_FAULT: undefined }, jsonMode: machineMode(argv) }
 	const parsed = parse(argv)
 	if ("usage" in parsed) return usageRefusal(session, routed.identity, "USAGE_INVALID_INVOCATION", parsed.usage)
 	if (routed.route === "dispatch") {

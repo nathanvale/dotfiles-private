@@ -126,3 +126,23 @@ test("human mode prints warnings to stderr and keeps the legacy summary line", (
 	expect(new TextDecoder().decode(result.stdout)).toBe("CANDIDATE_READY: Edit only the admitted paths in the returned worktree, then run finish.\n")
 	expect(new TextDecoder().decode(result.stderr)).toBe(`warning: GUARD_MISSING ${f.hookPath} is absent\n`)
 })
+
+test("begin with a hook denying the completion ref refuses GUARD_INCOMPATIBLE before any effect", () => {
+	const f = fixture({ hook: HOOK_TEXT.replace("    refs/heads/main) ;;\n", "    refs/heads/main) ;;\n    refs/vault-note-commits/*)\n      printf 'VAULT_GUARD_BRANCH_CREATE_DENIED %s\\n' \"$ref\" >&2\n      exit 1 ;;\n") })
+	const refused = begin(f, ["projects/demo/GOAL.md"])
+	expect(refused.exitCode).toBe(1)
+	expect(refused.stderr).toBe("")
+	expect(refused.json).toMatchObject({
+		ok: false,
+		command: "begin",
+		code: "GUARD_INCOMPATIBLE",
+		changedState: "none",
+		sideEffects: [],
+		retrySafe: true,
+		nextAction: "Repair the installed reference-transaction hook with 'bun run guard:install' in the vault, then retry begin.",
+		guard: { installed: true, selfTest: "incompatible" },
+	})
+	expect(refused.json.worktree).toBeUndefined()
+	expect(existsSync(join(f.state, "my-second-brain"))).toBe(false)
+	expect(git(f.vault, "worktree", "list", "--porcelain").split("\n").filter((line) => line.startsWith("worktree "))).toHaveLength(1)
+})

@@ -63,6 +63,7 @@ const ROWS = [
 	["vault-steward.begin", "refused", "DOMAIN_VAULT_NOT_FOUND", RL, "unchanged", ...N3, [BEGIN], "required", null],
 	["vault-steward.begin", "refused", "DOMAIN_CANONICAL_NOT_MAIN", RL, "unchanged", ...N3, [BEGIN], "required", null],
 	["vault-steward.begin", "refused", "DOMAIN_PATH_REFUSED", RL, "unchanged", ...N3, [BEGIN], "required", null],
+	["vault-steward.begin", "refused", "DOMAIN_GUARD_INCOMPATIBLE", RL, "unchanged", ...N3, [BEGIN], "required", null],
 	["vault-steward.begin", "failed", "INTERNAL_GIT_FAILED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
 	["vault-steward.begin", "failed", "INTERNAL_GIT_FAILED_PARTIAL", RL, "partially-completed", ...H1, HANDOFF, "required", null],
 	["vault-steward.begin", "failed", "INTERNAL_UNEXPECTED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null],

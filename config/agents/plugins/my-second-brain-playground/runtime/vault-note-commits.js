@@ -7,7 +7,7 @@ import { createHash, randomUUID } from "crypto";
 import { isAbsolute, join as join2, relative, resolve, sep } from "path";
 
 // packages/vault-steward/src/integration-lock.ts
-import { existsSync, mkdirSync, rmSync } from "fs";
+import { existsSync, mkdirSync, renameSync, rmSync } from "fs";
 import { join } from "path";
 
 // packages/vault-steward/src/model.ts
@@ -80,7 +80,13 @@ function tryCreate(rt, lock) {
   }
   if (!existsSync(lock) || ownerIsLive(rt, lock))
     return "busy";
-  rmSync(lock, { recursive: true, force: true });
+  const reclaimed = `${lock}.reclaim-${rt.pid}-${rt.now()}`;
+  try {
+    renameSync(lock, reclaimed);
+  } catch {
+    return "busy";
+  }
+  rmSync(reclaimed, { recursive: true, force: true });
   return "reclaimed";
 }
 function publishOwner(rt, lock, runId) {
@@ -507,11 +513,16 @@ function performRebase(rt, manifest, commit, currentMain) {
     refuse("rebase-failed", candidateFacts(manifest, commit));
   }
   const integrated = git(rt, manifest.worktree, ["rev-parse", "HEAD"], context(manifest));
-  const rebasedPaths = splitNul(git(rt, manifest.worktree, ["diff", "--name-only", "-z", `${integrated}^`, integrated, "--"], context(manifest))).sort();
-  if (!samePaths(rebasedPaths, manifest.paths))
-    refuse("rebased-path-set-mismatch", { ...candidateFacts(manifest, integrated), afterRebase: true });
-  runChecker(rt, manifest, true);
-  checkWhitespace(rt, manifest, [`${integrated}^`, integrated], { ...candidateFacts(manifest, integrated), afterRebase: true });
+  try {
+    const rebasedPaths = splitNul(git(rt, manifest.worktree, ["diff", "--name-only", "-z", `${integrated}^`, integrated, "--"], context(manifest))).sort();
+    if (!samePaths(rebasedPaths, manifest.paths))
+      refuse("rebased-path-set-mismatch", { ...candidateFacts(manifest, integrated), afterRebase: true });
+    runChecker(rt, manifest, true);
+    checkWhitespace(rt, manifest, [`${integrated}^`, integrated], { ...candidateFacts(manifest, integrated), afterRebase: true });
+  } catch (error) {
+    gitQuiet(rt, manifest.worktree, ["checkout", "--detach", commit]);
+    throw error;
+  }
   return integrated;
 }
 function fastForward(rt, manifest, vault, integrated) {
@@ -710,7 +721,7 @@ import {
   openSync,
   readFileSync,
   realpathSync,
-  renameSync,
+  renameSync as renameSync2,
   rmSync as rmSync2,
   writeFileSync
 } from "fs";
@@ -781,7 +792,7 @@ function createRuntime() {
       } finally {
         closeSync(descriptor);
       }
-      renameSync(temporary, path);
+      renameSync2(temporary, path);
       const directory = openSync(dirname(path), "r");
       try {
         fsyncSync(directory);
@@ -846,6 +857,7 @@ function beginCreated(facts) {
   return facts.worktreeCreated ? { changedState: "partial", sideEffects: ["candidate-worktree-created"], worktree: facts.worktree } : {};
 }
 var guardRepair = "Repair the installed reference-transaction hook with 'bun run guard:install' in the vault, then rerun finish with the same worktree.";
+var guardRepairBegin = "Repair the installed reference-transaction hook with 'bun run guard:install' in the vault, then retry begin.";
 var beginRefusal = (code, nextAction) => () => outcome(false, "begin", code, null, nextAction);
 var finishPreserved = (code, nextAction, retrySafe, withCommit = true) => (facts) => outcome(false, "finish", code, facts.runId ?? null, nextAction, preserved(facts, retrySafe, withCommit ? facts.commit : undefined));
 var legacyRender = {
@@ -876,7 +888,7 @@ var legacyRender = {
     receipt: facts.receipt,
     worktree: facts.worktree
   }),
-  "guard-incompatible": (facts) => outcome(false, "finish", "GUARD_INCOMPATIBLE", facts.runId ?? null, guardRepair, {
+  "guard-incompatible": (facts, command) => command === "begin" ? outcome(false, "begin", "GUARD_INCOMPATIBLE", facts.runId ?? null, guardRepairBegin, { changedState: "none", sideEffects: [], retrySafe: true }) : outcome(false, "finish", "GUARD_INCOMPATIBLE", facts.runId ?? null, guardRepair, {
     changedState: "none",
     sideEffects: ["candidate-worktree-preserved"],
     retrySafe: true,

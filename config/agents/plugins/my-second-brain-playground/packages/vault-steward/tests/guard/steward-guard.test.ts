@@ -118,3 +118,15 @@ test("human mode prints warnings to stderr and one refusal line; machine mode ke
 	const machine = run(f, ["finish", "--preview", "--worktree", join(f.root, "absent"), "--message", "x"])
 	expect(machine.stderr).toBe("")
 })
+
+test("begin and begin --preview refuse DOMAIN_GUARD_INCOMPATIBLE before any effect", () => {
+	const f = fixture({ hook: HOSTILE })
+	for (const args of [["begin", "--vault", f.vault, "--path", "projects/demo/GOAL.md"], ["begin", "--vault", f.vault, "--path", "projects/demo/GOAL.md", "--preview"]]) {
+		const refused = run(f, args)
+		expect(refused.exitCode, args.join(" ")).toBe(3)
+		expect(refused.stderr).toBe("")
+		expect(refused.envelope?.result).toMatchObject({ commandIdentity: "vault-steward.begin", outcome: "refused", causeCode: "DOMAIN_GUARD_INCOMPATIBLE", transactionState: "unchanged", nextAction: "vault-steward.begin", effects: { completed: [], remaining: ["candidate.manifest", "candidate.worktree"], uncertain: [], inventoryComplete: true } })
+	}
+	expect(existsSync(join(f.state, "my-second-brain"))).toBe(false)
+	expect(git(f.vault, "worktree", "list", "--porcelain").split("\n").filter((line) => line.startsWith("worktree "))).toHaveLength(1)
+})

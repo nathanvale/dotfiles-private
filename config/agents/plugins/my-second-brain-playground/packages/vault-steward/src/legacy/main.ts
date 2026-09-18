@@ -118,6 +118,7 @@ function beginCreated(facts: RefusalFacts): Extra {
 }
 
 const guardRepair = "Repair the installed reference-transaction hook with 'bun run guard:install' in the vault, then rerun finish with the same worktree."
+const guardRepairBegin = "Repair the installed reference-transaction hook with 'bun run guard:install' in the vault, then retry begin."
 
 type Render = (facts: RefusalFacts, command: Command) => Result
 
@@ -160,14 +161,17 @@ const legacyRender: Record<RefusalReason, Render> = {
 			receipt: facts.receipt,
 			worktree: facts.worktree,
 		}),
-	"guard-incompatible": (facts) =>
-		outcome(false, "finish", "GUARD_INCOMPATIBLE", facts.runId ?? null, guardRepair, {
-			changedState: "none",
-			sideEffects: ["candidate-worktree-preserved"],
-			retrySafe: true,
-			worktree: facts.worktree,
-			paths: facts.paths,
-		}),
+	// begin refuses before any effect (nothing to preserve); finish refuses before the checker and the lock (A1).
+	"guard-incompatible": (facts, command) =>
+		command === "begin"
+			? outcome(false, "begin", "GUARD_INCOMPATIBLE", facts.runId ?? null, guardRepairBegin, { changedState: "none", sideEffects: [], retrySafe: true })
+			: outcome(false, "finish", "GUARD_INCOMPATIBLE", facts.runId ?? null, guardRepair, {
+					changedState: "none",
+					sideEffects: ["candidate-worktree-preserved"],
+					retrySafe: true,
+					worktree: facts.worktree,
+					paths: facts.paths,
+				}),
 	"candidate-changed-after-commit": finishPreserved("CANDIDATE_CHANGED_AFTER_COMMIT", "Inspect and restore the candidate to its committed state before retrying.", false),
 	"candidate-history-invalid": finishPreserved("CANDIDATE_HISTORY_INVALID", "Inspect the candidate history before continuing.", false),
 	"check-changed-candidate": finishPreserved("CHECK_CHANGED_CANDIDATE", "The checker changed the committed candidate. Inspect those changes before retrying.", false),

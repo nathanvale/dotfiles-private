@@ -52,6 +52,7 @@ export const EXPECTED_STATIONS: readonly Spec[] = [
 	[begin, "refused", "DOMAIN_VAULT_NOT_FOUND", next("domain", RL, [begin])],
 	[begin, "refused", "DOMAIN_CANONICAL_NOT_MAIN", next("domain", RL, [begin])],
 	[begin, "refused", "DOMAIN_PATH_REFUSED", next("domain", RL, [begin])],
+	[begin, "refused", "DOMAIN_GUARD_INCOMPATIBLE", next("domain", RL, [begin])],
 	[begin, "failed", "INTERNAL_GIT_FAILED_UNCHANGED", handoff("internal")],
 	[begin, "failed", "INTERNAL_GIT_FAILED_PARTIAL", handoff("internal", "partially-completed")],
 	[begin, "failed", "INTERNAL_UNEXPECTED_UNKNOWN", handoff("internal", "unknown")],
@@ -120,7 +121,7 @@ export const EXPECTED_STATIONS: readonly Spec[] = [
 	[recover, "failed", "INTERNAL_UNEXPECTED_UNCHANGED", handoff("internal")],
 ]
 
-export const EXPECTED_STATION_COUNT = 84
+export const EXPECTED_STATION_COUNT = 85
 export const identityOf = (command: string, outcome: string, cause: string): string => JSON.stringify([command, outcome, cause])
 export const EXPECTED_BY_IDENTITY: ReadonlyMap<string, ExpectedStation> = new Map(EXPECTED_STATIONS.map(([command, outcome, cause, expected]) => [identityOf(command, outcome, cause), expected]))
 

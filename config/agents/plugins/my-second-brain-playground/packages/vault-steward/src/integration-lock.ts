@@ -1,6 +1,6 @@
 // The integration lock directory `<git-common-dir>/vault-note-commits.lock` with its owner.json, liveness, and grace
 // semantics. The lock name and layout are shared with every 0.12.x helper still in the field (CONTRACT.md 2.7).
-import { existsSync, mkdirSync, rmSync } from "node:fs"
+import { existsSync, mkdirSync, renameSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { invalidLockOwnerGraceMs, lockDirectoryName, schemaVersion } from "./model.ts"
 import type { Runtime } from "./runtime.ts"
@@ -66,7 +66,14 @@ function tryCreate(rt: Runtime, lock: string): "created" | "busy" | "reclaimed" 
 		if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) throw error
 	}
 	if (!existsSync(lock) || ownerIsLive(rt, lock)) return "busy"
-	rmSync(lock, { recursive: true, force: true })
+	// Rename first so only one reclaimer wins a dead lock; a loser's rename fails and it simply retries.
+	const reclaimed = `${lock}.reclaim-${rt.pid}-${rt.now()}`
+	try {
+		renameSync(lock, reclaimed)
+	} catch {
+		return "busy"
+	}
+	rmSync(reclaimed, { recursive: true, force: true })
 	return "reclaimed"
 }
 

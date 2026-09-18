@@ -519,11 +519,18 @@ function performRebase(rt: Runtime, manifest: Manifest, commit: string, currentM
 		refuse("rebase-failed", candidateFacts(manifest, commit))
 	}
 	const integrated = git(rt, manifest.worktree, ["rev-parse", "HEAD"], context(manifest))
-	const rebasedPaths = splitNul(git(rt, manifest.worktree, ["diff", "--name-only", "-z", `${integrated}^`, integrated, "--"], context(manifest))).sort()
-	if (!samePaths(rebasedPaths, manifest.paths)) refuse("rebased-path-set-mismatch", { ...candidateFacts(manifest, integrated), afterRebase: true })
-	runChecker(rt, manifest, true)
-	// Hazard H3: whitespace is rechecked on the rebased commit (CONTRACT.md 4.2 A6).
-	checkWhitespace(rt, manifest, [`${integrated}^`, integrated], { ...candidateFacts(manifest, integrated), afterRebase: true })
+	try {
+		const rebasedPaths = splitNul(git(rt, manifest.worktree, ["diff", "--name-only", "-z", `${integrated}^`, integrated, "--"], context(manifest))).sort()
+		if (!samePaths(rebasedPaths, manifest.paths)) refuse("rebased-path-set-mismatch", { ...candidateFacts(manifest, integrated), afterRebase: true })
+		runChecker(rt, manifest, true)
+		// Hazard H3: whitespace is rechecked on the rebased commit (CONTRACT.md 4.2 A6).
+		checkWhitespace(rt, manifest, [`${integrated}^`, integrated], { ...candidateFacts(manifest, integrated), afterRebase: true })
+	} catch (error) {
+		// A refusal after the rebase restores the pre-rebase commit (a HEAD-only write the gate never sees) so the
+		// candidate is truly unchanged and the next preview plans the rebase again (allowed difference A8).
+		gitQuiet(rt, manifest.worktree, ["checkout", "--detach", commit])
+		throw error
+	}
 	return integrated
 }
 
@@ -681,6 +688,10 @@ export function applyPreview(rt: Runtime, manifest: Manifest, record: PreviewRec
 		const commit = record.candidateCommit ?? undefined
 		const vault = canonicalReady(rt, manifest, commit)
 		rt.faultPoint("after-lock")
+		// Re-read the record under the lock: an apply that bound before another consumer's crash refuses here.
+		const fresh = readPreview(rt, manifest.runId)
+		if (!fresh.present) refuse("preview-not-found", candidateFacts(manifest, commit))
+		if (fresh.record.consumed) refuse("preview-consumed", { ...candidateFacts(manifest, commit), detail: fresh.record.previewId })
 		const currentMain = git(rt, vault, ["rev-parse", "HEAD"], context(manifest))
 		if (currentMain !== record.observedMain) refuse("preview-stale", { ...candidateFacts(manifest, commit), detail: `main moved from ${record.observedMain} to ${currentMain}` })
 		consumePreview(rt, record, consumedBy)

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { acquireLock, lockPath, ownerIsLive, releaseLock } from "../../src/integration-lock.ts"
@@ -72,6 +72,8 @@ test("acquire creates the directory with its owner, refuses a live owner after a
 	expect(elapsed).toBeLessThan(4_000)
 	writeFileSync(join(lockPath(common), "owner.json"), JSON.stringify({ schemaVersion: 1, runId: "gone", pid: 2_147_483_646 }))
 	expect(acquireLock(rt, common, "vnc-third")).toBe(lockPath(common))
+	// The reclaim renamed the dead lock aside and removed it: no residue beside the live lock.
+	expect(readdirSync(common).filter((name) => name.includes(".reclaim-"))).toEqual([])
 	releaseLock(lockPath(common))
 	expect(ownerIsLive(rt, lockPath(common))).toBe(false)
 }, 15_000)

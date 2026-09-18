@@ -152,3 +152,22 @@ test("a clean candidate fast-forwarded by a no-op git rebase main is refused SEM
 	expect(git(f.vault, "for-each-ref", "--format=%(refname)", "refs/vault-note-commits").split("\n")).toHaveLength(1)
 	expect(existsSync(b)).toBe(true)
 })
+
+// Allowed difference A8: a post-rebase checker refusal restores the pre-rebase commit, so the retry after main is fixed
+// rebases again and integrates (0.12.0 left the rebased commit behind and refused CANDIDATE_HISTORY_INVALID forever).
+test("a post-rebase CHECK_FAILED restores the candidate commit and the retry integrates once main is fixed", () => {
+	const f = fixture()
+	const worktree = authoredCandidate(f)
+	write(f.vault, "BROKEN", "fail\n")
+	git(f.vault, "add", "--", "BROKEN")
+	git(f.vault, "commit", "-m", "chore: break main")
+	const failed = finish(f, worktree, "docs: change")
+	expect(failed.json).toMatchObject({ ok: false, code: "CHECK_FAILED", changedState: "partial", sideEffects: ["candidate-worktree-preserved", "checker-diagnostics-written"] })
+	expect(git(worktree, "rev-parse", "HEAD^")).toBe(f.initialHead)
+	expect(git(worktree, "rev-list", "--count", `${f.initialHead}..HEAD`)).toBe("1")
+	git(f.vault, "rm", "-q", "--", "BROKEN")
+	git(f.vault, "commit", "-m", "chore: fix main")
+	const retried = finish(f, worktree, "docs: change")
+	expect(retried.json).toMatchObject({ ok: true, code: "INTEGRATED" })
+	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("3")
+})

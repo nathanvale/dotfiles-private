@@ -9,7 +9,9 @@ const runId = `run-${randomUUID()}`
 const argv = process.argv.slice(2)
 const lifecycle = systemProcessLifecycle(attemptEmergencyDiagnostics, finishActiveDiagnostics)
 const io = { stdout: lifecycle.stdout, stderr: lifecycle.stderr }
-run(argv, io, process.env, runId).then(
+// Faults (VAULT_STEWARD_FAULT) are honoured only from source; the bundle under runtime/ ignores them.
+const faultsAllowed = import.meta.url.endsWith("/src/main.ts")
+run(argv, io, process.env, runId, { faultsAllowed }).then(
 	(code) => lifecycle.complete(code),
 	() => {
 		if (!machineMode(argv)) writeBytesSync(2, Buffer.from("vault-steward: internal failure\n"))

@@ -14337,6 +14337,7 @@ var ROWS = [
   ["vault-steward.begin", "refused", "DOMAIN_VAULT_NOT_FOUND", RL, "unchanged", ...N3, [BEGIN], "required", null],
   ["vault-steward.begin", "refused", "DOMAIN_CANONICAL_NOT_MAIN", RL, "unchanged", ...N3, [BEGIN], "required", null],
   ["vault-steward.begin", "refused", "DOMAIN_PATH_REFUSED", RL, "unchanged", ...N3, [BEGIN], "required", null],
+  ["vault-steward.begin", "refused", "DOMAIN_GUARD_INCOMPATIBLE", RL, "unchanged", ...N3, [BEGIN], "required", null],
   ["vault-steward.begin", "failed", "INTERNAL_GIT_FAILED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
   ["vault-steward.begin", "failed", "INTERNAL_GIT_FAILED_PARTIAL", RL, "partially-completed", ...H1, HANDOFF, "required", null],
   ["vault-steward.begin", "failed", "INTERNAL_UNEXPECTED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null],
@@ -17675,7 +17676,7 @@ import { createHash as createHash2, randomUUID } from "crypto";
 import { isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep } from "path";
 
 // packages/vault-steward/src/integration-lock.ts
-import { existsSync, mkdirSync as mkdirSync2, rmSync } from "fs";
+import { existsSync, mkdirSync as mkdirSync2, renameSync as renameSync2, rmSync } from "fs";
 import { join as join2 } from "path";
 
 // packages/vault-steward/src/model.ts
@@ -17797,7 +17798,13 @@ function tryCreate(rt, lock) {
   }
   if (!existsSync(lock) || ownerIsLive(rt, lock))
     return "busy";
-  rmSync(lock, { recursive: true, force: true });
+  const reclaimed = `${lock}.reclaim-${rt.pid}-${rt.now()}`;
+  try {
+    renameSync2(lock, reclaimed);
+  } catch {
+    return "busy";
+  }
+  rmSync(reclaimed, { recursive: true, force: true });
   return "reclaimed";
 }
 function publishOwner(rt, lock, runId) {
@@ -18229,11 +18236,16 @@ function performRebase(rt, manifest, commit, currentMain) {
     refuse("rebase-failed", candidateFacts(manifest, commit));
   }
   const integrated = git(rt, manifest.worktree, ["rev-parse", "HEAD"], context(manifest));
-  const rebasedPaths = splitNul(git(rt, manifest.worktree, ["diff", "--name-only", "-z", `${integrated}^`, integrated, "--"], context(manifest))).sort();
-  if (!samePaths(rebasedPaths, manifest.paths))
-    refuse("rebased-path-set-mismatch", { ...candidateFacts(manifest, integrated), afterRebase: true });
-  runChecker(rt, manifest, true);
-  checkWhitespace(rt, manifest, [`${integrated}^`, integrated], { ...candidateFacts(manifest, integrated), afterRebase: true });
+  try {
+    const rebasedPaths = splitNul(git(rt, manifest.worktree, ["diff", "--name-only", "-z", `${integrated}^`, integrated, "--"], context(manifest))).sort();
+    if (!samePaths(rebasedPaths, manifest.paths))
+      refuse("rebased-path-set-mismatch", { ...candidateFacts(manifest, integrated), afterRebase: true });
+    runChecker(rt, manifest, true);
+    checkWhitespace(rt, manifest, [`${integrated}^`, integrated], { ...candidateFacts(manifest, integrated), afterRebase: true });
+  } catch (error51) {
+    gitQuiet(rt, manifest.worktree, ["checkout", "--detach", commit]);
+    throw error51;
+  }
   return integrated;
 }
 function fastForward(rt, manifest, vault, integrated) {
@@ -18333,6 +18345,11 @@ function applyPreview(rt, manifest, record2, consumedBy) {
     const commit = record2.candidateCommit ?? undefined;
     const vault = canonicalReady(rt, manifest, commit);
     rt.faultPoint("after-lock");
+    const fresh = readPreview(rt, manifest.runId);
+    if (!fresh.present)
+      refuse("preview-not-found", candidateFacts(manifest, commit));
+    if (fresh.record.consumed)
+      refuse("preview-consumed", { ...candidateFacts(manifest, commit), detail: fresh.record.previewId });
     const currentMain = git(rt, vault, ["rev-parse", "HEAD"], context(manifest));
     if (currentMain !== record2.observedMain)
       refuse("preview-stale", { ...candidateFacts(manifest, commit), detail: `main moved from ${record2.observedMain} to ${currentMain}` });
@@ -18662,7 +18679,7 @@ import {
   openSync as openSync2,
   readFileSync,
   realpathSync,
-  renameSync as renameSync2,
+  renameSync as renameSync3,
   rmSync as rmSync2,
   writeFileSync
 } from "fs";
@@ -18733,7 +18750,7 @@ function createRuntime() {
       } finally {
         closeSync2(descriptor);
       }
-      renameSync2(temporary, path);
+      renameSync3(temporary, path);
       const directory = openSync2(dirname2(path), "r");
       try {
         fsyncSync(directory);
@@ -19063,14 +19080,14 @@ function runFinishApply(rt, parsed, session) {
     throw error51;
   }
 }
-function inspectNext(state, worktree, hasCandidate) {
+function inspectNext(state, worktree, hasCandidate, previewId) {
   switch (state) {
     case "completed":
       return { nextCommand: null, nextAction: "vault-steward.inspect" };
     case "recoverable":
       return { nextCommand: `vault-steward recover --worktree ${worktree} --json`, nextAction: "vault-steward.recover" };
     case "previewed":
-      return { nextCommand: `vault-steward finish --apply --preview-id <previewId> --worktree ${worktree} --json`, nextAction: "vault-steward.finish-apply" };
+      return { nextCommand: `vault-steward finish --apply --preview-id ${previewId ?? "<previewId>"} --worktree ${worktree} --json`, nextAction: "vault-steward.finish-apply" };
     case "needs-human":
       return { nextCommand: null, nextAction: "vault-steward.inspect" };
     default:
@@ -19095,7 +19112,9 @@ function previewViews(rt, record2, candidate) {
     return { preview: null, previewInvalid: false, previewStale: null };
   if (!stored.valid)
     return { preview: null, previewInvalid: true, previewStale: null };
-  const previewStale = candidate === null ? null : candidate.head !== (stored.record.candidateCommit ?? record2.baseCommit);
+  const mainHead = gitQuiet(rt, record2.vault, ["rev-parse", "refs/heads/main"]);
+  const mainMoved = mainHead.exitCode !== 0 || mainHead.stdout.trim() !== stored.record.observedMain;
+  const previewStale = candidate === null ? null : candidate.head !== (stored.record.candidateCommit ?? record2.baseCommit) || candidate.dirty || mainMoved;
   return { preview: stored.record, previewInvalid: false, previewStale };
 }
 function inspectViews(rt, worktree) {
@@ -19142,7 +19161,7 @@ function runInspect(rt, parsed) {
   const worktree = requireAbsoluteWorktree(parsed.values.worktree);
   const views = inspectViews(rt, worktree);
   const state = recoveryStateOf(rt, views);
-  const next = inspectNext(state, worktree, views.record !== null);
+  const next = inspectNext(state, worktree, views.record !== null, views.preview?.previewId ?? null);
   return {
     kind: "success",
     identity: "vault-steward.inspect",
@@ -19516,9 +19535,9 @@ async function runCommand(session, route, parsed) {
   }
   return emitMachine(envelope(message, result, diagnosticsDisclosure(status)), session.io);
 }
-async function run(argv, io, env, runId) {
+async function run(argv, io, env, runId, options) {
   const routed2 = routeRawArgv(argv);
-  const session = { io, runId, env, jsonMode: machineMode(argv) };
+  const session = { io, runId, env: options.faultsAllowed ? env : { ...env, VAULT_STEWARD_FAULT: undefined }, jsonMode: machineMode(argv) };
   const parsed = parse5(argv);
   if ("usage" in parsed)
     return usageRefusal(session, routed2.identity, "USAGE_INVALID_INVOCATION", parsed.usage);
@@ -19654,7 +19673,8 @@ var runId = `run-${randomUUID3()}`;
 var argv = process.argv.slice(2);
 var lifecycle = systemProcessLifecycle(attemptEmergencyDiagnostics, finishActiveDiagnostics);
 var io = { stdout: lifecycle.stdout, stderr: lifecycle.stderr };
-run(argv, io, process.env, runId).then((code) => lifecycle.complete(code), () => {
+var faultsAllowed = import.meta.url.endsWith("/src/main.ts");
+run(argv, io, process.env, runId, { faultsAllowed }).then((code) => lifecycle.complete(code), () => {
   if (!machineMode(argv))
     writeBytesSync(2, Buffer.from(`vault-steward: internal failure
 `));
