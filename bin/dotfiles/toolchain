@@ -49,6 +49,11 @@ VERIFY_FAILURE_RETRYABLE=false
 VERIFY_RETRY_LIMIT=2
 VERIFY_RETRY_DELAY_SECONDS='0.1'
 PYTHON_ATTESTATION_POLICY='default'
+VERIFIED_CURRENT_REVISION=''
+BEADS_TOOL='github:gastownhall/beads'
+BEADS_LOCK_FAILURE=''
+BEADS_LOCK_DETAIL=''
+BEADS_REQUEST_VERSION=''
 
 usage() {
 	cat <<'EOF'
@@ -309,24 +314,6 @@ remove_owned_tree() {
 	rm -rf "$path"
 }
 
-remove_owned_staging_lock() {
-	local lock="$STAGING/mise.lock" base
-	[[ "$STAGING_OWNED" == true && -n "$STAGING" && "$(dirname "$STAGING")" == "$REVISIONS" && ! -L "$STAGING" && -d "$STAGING" ]] || return 1
-	base="$(basename "$STAGING")"
-	[[ "$base" == .staging-* && "$base" != .staging- ]] || return 1
-	[[ -f "$lock" && ! -L "$lock" ]] || return 1
-	begin_ownership_transition
-	if ! rm "$lock"; then
-		finish_ownership_transition
-		return 1
-	fi
-	if [[ -e "$lock" || -L "$lock" ]]; then
-		finish_ownership_transition
-		return 1
-	fi
-	finish_ownership_transition
-}
-
 release_lock() {
 	local token
 	[[ "$LOCK_HELD" == true ]] || return 0
@@ -489,7 +476,10 @@ install_staged_toolchain() {
 		while [[ ! -f "$CHILD_GATE" ]]; do sleep 0.01; done
 		CDPATH='' cd "$PROCESS_CAPSULE" || exit 70
 		prepare_mise_process_environment "$PYTHON_ATTESTATION_POLICY" "$STAGING/config.toml" || exit 70
-		exec mise install
+		# Locked mode makes Mise consume the validated staged lock: it fails
+		# closed when a tool lacks a pre-resolved URL for this platform instead
+		# of resolving one through the GitHub API.
+		exec mise install --locked
 	) >&2 &
 	CHILD_PID=$!
 	CHILD_PGID="$CHILD_PID"
@@ -844,8 +834,232 @@ snapshot_sources() {
 	printf '%s\n' "$APPLY_CONTRACT_VERSION" >"$STAGING/contract.txt" || emit_error 'snapshot_failed' 'repair_toolchain_state_permissions' false 'application contract could not be snapshotted' 73 'error'
 }
 
+# Strict TOML reader for the Mise source and lock. It accepts the subset Mise
+# writes (comments, [table] and [[array]] headers, dotted and quoted keys,
+# basic and literal strings, conforming bare scalars, single-line arrays) and
+# fails closed on anything else: syntax errors, control characters, unsupported
+# escapes, inline tables, multi-line values, duplicate keys, redefined tables,
+# and bare text that is not a TOML boolean, integer, or float. Bare date and
+# time scalars are refused outright: no required Mise shape carries one, and
+# shape matching alone would accept impossible values such as `2026-99-99`.
+# Records are tab-separated: `table <path>`, `array <path> <index>`,
+# `key <path> <name> <type> <value>`, `item <path> <name> <index> <type> <value>`.
+# Path segments are joined by the unit separator; an array element is a `#n`
+# segment. On failure the only output is `error <line> <reason>`.
+toml_records() {
+	awk '
+		BEGIN {
+			US = sprintf("%c", 31); SQ = sprintf("%c", 39); DQ = "\""
+			for (i = 1; i < 32; i++) if (i != 9) CTRL = CTRL sprintf("%c", i)
+			CTRL = CTRL sprintf("%c", 127)
+			cur = ""; out = ""; failed = 0
+		}
+		function fail(reason) { failed = 1; printf "error\t%d\t%s\n", NR, reason; exit 1 }
+		function trim(s) { sub(/^[ \t]+/, "", s); sub(/[ \t]+$/, "", s); return s }
+		# TOML 1.0 bare scalars only: booleans, integers (decimal, hex, octal,
+		# binary), and floats. Date and time scalars are not accepted at all,
+		# because validating their calendar and clock ranges is out of scope
+		# and no required Mise shape uses them. Any other bare text is a
+		# syntax error, so `extra = nope` and `extra = 2026-99-99` fail closed.
+		function bare_scalar(s,    dec) {
+			if (s == "true" || s == "false") return 1
+			if (s ~ /^[+-]?(inf|nan)$/) return 1
+			dec = "(0|[1-9](_?[0-9])*)"
+			if (s ~ ("^[+-]?" dec "(\\.[0-9](_?[0-9])*)?([eE][+-]?[0-9](_?[0-9])*)?$")) return 1
+			if (s ~ /^0x[0-9A-Fa-f](_?[0-9A-Fa-f])*$/ || s ~ /^0o[0-7](_?[0-7])*$/ || s ~ /^0b[01](_?[01])*$/) return 1
+			return 0
+		}
+		function ws(c) { return c == " " || c == "\t" }
+		function join(base, name) { return base == "" ? name : base US name }
+		function strip_comment(s,    i, n, c, state, r) {
+			n = length(s); state = ""; r = ""
+			for (i = 1; i <= n; i++) {
+				c = substr(s, i, 1)
+				if (index(CTRL, c) > 0) fail("control character")
+				if (state == "") {
+					if (c == "#") break
+					if (c == DQ) state = "b"; else if (c == SQ) state = "l"
+				} else if (c == "\t") fail("tab inside string")
+				else if (state == "b") {
+					if (c == "\\") {
+						r = r c; i++
+						if (i > n) fail("unterminated string")
+						c = substr(s, i, 1)
+						if (index(CTRL, c) > 0 || c == "\t") fail("control character")
+					} else if (c == DQ) state = ""
+				} else if (c == SQ) state = ""
+				r = r c
+			}
+			if (state != "") fail("unterminated string")
+			return r
+		}
+		function parse_string(s, i,    n, q, c, r) {
+			n = length(s); q = substr(s, i, 1); r = ""
+			for (i++; i <= n; i++) {
+				c = substr(s, i, 1)
+				if (c == q) { STR = r; return i }
+				if (q == DQ && c == "\\") {
+					i++; c = substr(s, i, 1)
+					if (c != DQ && c != "\\") fail("unsupported escape")
+				}
+				r = r c
+			}
+			fail("unterminated string")
+		}
+		function parse_key(s, seg,    n, i, c, m, k) {
+			n = length(s); i = 1; m = 0
+			while (1) {
+				while (i <= n && ws(substr(s, i, 1))) i++
+				if (i > n) fail("invalid key")
+				c = substr(s, i, 1)
+				if (c == DQ || c == SQ) { i = parse_string(s, i); k = STR; i++ }
+				else {
+					k = ""
+					while (i <= n && substr(s, i, 1) ~ /[A-Za-z0-9_-]/) { k = k substr(s, i, 1); i++ }
+					if (k == "") fail("invalid key")
+				}
+				seg[++m] = k
+				while (i <= n && ws(substr(s, i, 1))) i++
+				if (i > n) return m
+				if (substr(s, i, 1) != ".") fail("invalid key")
+				i++
+			}
+		}
+		function resolve(seg, upto,    i, p) {
+			p = ""
+			for (i = 1; i <= upto; i++) {
+				p = join(p, seg[i])
+				if (p in arrays) p = p US "#" arrays[p]
+			}
+			return p
+		}
+		function header(line,    kind, inner, m, seg, base, p, i, n) {
+			n = length(line)
+			if (substr(line, 1, 2) == "[[") {
+				if (n < 5 || substr(line, n - 1, 2) != "]]") fail("invalid table header")
+				kind = "array"; inner = substr(line, 3, n - 4)
+			} else {
+				if (n < 3 || substr(line, n, 1) != "]") fail("invalid table header")
+				kind = "table"; inner = substr(line, 2, n - 2)
+			}
+			m = parse_key(inner, seg)
+			for (i = 1; i < m; i++) {
+				p = resolve(seg, i)
+				if (p in keys) fail("table redefines key")
+				if (!(p in defined)) defined[p] = "implicit"
+			}
+			base = join(resolve(seg, m - 1), seg[m])
+			if (base in keys) fail("table redefines key")
+			if (kind == "table") {
+				if (base in arrays) fail("table redefines array")
+				if (base in explicit) fail("duplicate table")
+				explicit[base] = 1; defined[base] = "table"; cur = base
+				out = out "table\t" base "\n"
+			} else {
+				if ((base in explicit) || ((base in defined) && defined[base] != "array")) fail("array redefines table")
+				arrays[base]++; defined[base] = "array"
+				cur = base US "#" arrays[base]
+				explicit[cur] = 1; defined[cur] = "table"
+				out = out "array\t" base "\t" arrays[base] "\n"
+			}
+		}
+		function parse_array(s,    n, i, c, expect) {
+			n = length(s); i = 2; VT = "array"; VN = 0; expect = "value"
+			while (1) {
+				while (i <= n && ws(substr(s, i, 1))) i++
+				if (i > n) fail("unterminated array")
+				c = substr(s, i, 1)
+				if (c == "]") { i++; break }
+				if (expect == "value") {
+					if (c == DQ || c == SQ) { i = parse_string(s, i); VN++; VAT[VN] = "string"; VA[VN] = STR; i++ }
+					else if (c == "[" || c == "{") fail("nested array or inline table unsupported")
+					else {
+						VA[VN + 1] = ""
+						while (i <= n && substr(s, i, 1) ~ /[A-Za-z0-9_+.:-]/) { VA[VN + 1] = VA[VN + 1] substr(s, i, 1); i++ }
+						if (!bare_scalar(VA[VN + 1])) fail("invalid array element")
+						VN++; VAT[VN] = "bare"
+					}
+					expect = "separator"
+				} else {
+					if (c != ",") fail("invalid array separator")
+					i++; expect = "value"
+				}
+			}
+			VV = VN
+			if (trim(substr(s, i)) != "") fail("unexpected content after value")
+		}
+		function parse_value(s,    n, c, i) {
+			n = length(s); VN = 0
+			if (n == 0) fail("missing value")
+			c = substr(s, 1, 1)
+			if (c == DQ || c == SQ) {
+				i = parse_string(s, 1); VT = "string"; VV = STR
+				if (trim(substr(s, i + 1)) != "") fail("unexpected content after value")
+			} else if (c == "[") parse_array(s)
+			else if (c == "{") fail("inline table unsupported")
+			else {
+				if (!bare_scalar(s)) fail("invalid value")
+				VT = "bare"; VV = s
+			}
+		}
+		function keyvalue(line,    n, i, c, state, p, m, seg, base, full, j) {
+			n = length(line); state = ""; p = 0
+			for (i = 1; i <= n; i++) {
+				c = substr(line, i, 1)
+				if (state == "") { if (c == "=") { p = i; break } if (c == DQ) state = "b"; else if (c == SQ) state = "l" }
+				else if (state == "b") { if (c == "\\") i++; else if (c == DQ) state = "" }
+				else if (c == SQ) state = ""
+			}
+			if (p == 0) fail("expected key/value pair")
+			m = parse_key(substr(line, 1, p - 1), seg)
+			base = cur
+			for (j = 1; j < m; j++) {
+				base = join(base, seg[j])
+				if ((base in keys) || (base in explicit) || (base in arrays)) fail("dotted key redefines existing key or table")
+				if (!(base in defined)) defined[base] = "implicit"
+			}
+			full = join(base, seg[m])
+			if (full in keys) fail("duplicate key")
+			if (full in defined) fail("key redefines table")
+			keys[full] = 1
+			parse_value(trim(substr(line, p + 1)))
+			out = out "key\t" base "\t" seg[m] "\t" VT "\t" VV "\n"
+			for (j = 1; j <= VN; j++) out = out "item\t" base "\t" seg[m] "\t" j "\t" VAT[j] "\t" VA[j] "\n"
+		}
+		{
+			line = $0; sub(/\r$/, "", line)
+			line = trim(strip_comment(line))
+			if (line == "") next
+			if (substr(line, 1, 1) == "[") header(line); else keyvalue(line)
+		}
+		END { if (failed) exit 1; printf "%s", out }
+	' "$1"
+}
+
+toml_error_detail() {
+	printf '%s\n' "$1" | awk 'BEGIN { FS = "\t" } $1 == "error" { printf "line %s: %s", $2, $3; exit }'
+}
+
+# Exit 0 and print the exact string request `tools.<name>`; exit 1 when the
+# tool is declared in another shape; exit 2 when it is not declared at all.
+config_tool_request() {
+	printf '%s\n' "$1" | awk -v name="$2" '
+		BEGIN { FS = "\t"; US = sprintf("%c", 31); prefix = "tools" US name }
+		$1 == "key" && $2 == "tools" && $3 == name { found = 1; type = $4; value = $5 }
+		($1 == "table" || $1 == "array") && ($2 == prefix || index($2, prefix US) == 1) { found = 1 }
+		END { if (!found) exit 2; if (type != "string") exit 1; print value }
+	'
+}
+
+config_tool_declared() {
+	local status=0
+	config_tool_request "$1" "$2" >/dev/null || status=$?
+	[[ "$status" != 2 ]]
+}
+
 snapshot_is_valid() {
-	local manifest="$1" config="$2" tool expected selected qualification parent count declared
+	local manifest="$1" config="$2" records tool expected selected qualification parent count declared
+	records="$(toml_records "$config")" || return 1
 	for tool in node bun python bd git npm; do
 		count="$(awk -F '|' -v tool="$tool" '$1 == tool { count++ } END { print count + 0 }' "$manifest")" || return 1
 		[[ "$count" == 1 ]] || return 1
@@ -862,24 +1076,25 @@ snapshot_is_valid() {
 		case "$qualification" in source_declared|unqualified) ;; *) return 1 ;; esac
 		case "$tool" in
 			node|bun|python)
-				declared="$(awk -F '"' -v tool="$tool" '$1 ~ "^[[:space:]]*" tool "[[:space:]]*=" { print $2; count++ } END { if (count != 1) exit 1 }' "$config")" || return 1
+				declared="$(config_tool_request "$records" "$tool")" || return 1
 				[[ "$declared" == "$expected" ]] || return 1
 				;;
 			bd)
-				declared="$(awk -F '"' '$2 == "github:gastownhall/beads" && $3 ~ /^[[:space:]]*=/ { print $4; count++ } END { if (count != 1) exit 1 }' "$config")" || return 1
+				declared="$(config_tool_request "$records" "$BEADS_TOOL")" || return 1
 				[[ "$declared" == "$expected" ]] || return 1
 				;;
 			npm)
-				! awk -F '"' '$1 ~ "^[[:space:]]*npm[[:space:]]*=" { found=1 } END { exit !found }' "$config" || return 1
+				! config_tool_declared "$records" npm || return 1
 				;;
 		esac
 	done <"$manifest"
 }
 
 python_attestation_policy_for_snapshot() {
-	local manifest="$1" config="$2" manifest_version config_version
+	local manifest="$1" config="$2" records manifest_version config_version
 	manifest_version="$(awk -F '|' '$1 == "python" { print $2; count++ } END { if (count != 1) exit 1 }' "$manifest")" || return 1
-	config_version="$(awk -F '"' '$1 ~ "^[[:space:]]*python[[:space:]]*=" { print $2; count++ } END { if (count != 1) exit 1 }' "$config")" || return 1
+	records="$(toml_records "$config")" || return 1
+	config_version="$(config_tool_request "$records" python)" || return 1
 	[[ "$manifest_version" == "$config_version" ]] || return 1
 	if [[ "$manifest_version" == "$PYTHON_ATTESTATION_EXCEPTION_VERSION" ]]; then
 		printf 'exception\n'
@@ -919,6 +1134,150 @@ verify_revision_with_retry() {
 		sleep "$VERIFY_RETRY_DELAY_SECONDS"
 		attempt=$((attempt + 1))
 	done
+}
+
+load_verified_current_revision() {
+	local target
+	VERIFIED_CURRENT_REVISION=''
+	[[ -L "$STATE/current" ]] || return 1
+	target="$(readlink "$STATE/current")" || return 1
+	[[ "$target" =~ ^revisions/[0-9a-f]{64}$ ]] || return 1
+	CONTENT_ID="${target#revisions/}"
+	VERIFIED_CURRENT_REVISION="$REVISIONS/$CONTENT_ID"
+	verify_revision_with_retry "$VERIFIED_CURRENT_REVISION" || { VERIFIED_CURRENT_REVISION=''; return 1; }
+}
+
+staged_sources_match_revision() {
+	local revision="$1" name
+	for name in contract.txt manifest.tsv config.toml; do
+		regular_readable "$STAGING/$name" && regular_readable "$revision/$name" && cmp -s "$STAGING/$name" "$revision/$name" || return 1
+	done
+}
+
+beads_failure() {
+	BEADS_LOCK_FAILURE="$1"
+	BEADS_LOCK_DETAIL="${2:-}"
+	return 1
+}
+
+beads_failure_message() {
+	if [[ -n "$BEADS_LOCK_DETAIL" ]]; then printf '%s: %s' "$BEADS_LOCK_FAILURE" "$BEADS_LOCK_DETAIL"; else printf '%s' "$BEADS_LOCK_FAILURE"; fi
+}
+
+# Official darwin arm64 release evidence for the Beads releases this decision
+# supports: 1.3.0 is the selected pin and 1.2.2 is the verified rollback
+# baseline. Any other request fails closed until its evidence is reviewed.
+beads_release_checksum() {
+	case "$1" in
+		1.2.2) printf '2aa1245c666419900d2d6993a05049e92c40e0e601d19579cca5b07a7bb8021d\n' ;;
+		1.3.0) printf '7cc77367d0b84c50243a1108bc1f73648699211257d414b917540bf868e6bb85\n' ;;
+		*) return 1 ;;
+	esac
+}
+
+beads_release_url() {
+	printf 'https://github.com/gastownhall/beads/releases/download/v%s/beads_%s_darwin_arm64.tar.gz\n' "$1" "$1"
+}
+
+# Load the exact Beads request Mise consumes from a parsed Mise source into
+# BEADS_REQUEST_VERSION: exactly one plain-string `tools."github:gastownhall/beads"`
+# naming a supported release.
+load_beads_request() {
+	local config="$1" records status=0
+	BEADS_REQUEST_VERSION=''
+	regular_readable "$config" || { beads_failure mise_source_unreadable; return 1; }
+	records="$(toml_records "$config")" || { beads_failure mise_source_toml_invalid "$(toml_error_detail "$records")"; return 1; }
+	if BEADS_REQUEST_VERSION="$(config_tool_request "$records" "$BEADS_TOOL")"; then :; else status=$?; fi
+	case "$status" in
+		0) ;;
+		2) beads_failure beads_request_missing; return 1 ;;
+		*) beads_failure beads_request_invalid; return 1 ;;
+	esac
+	beads_release_checksum "$BEADS_REQUEST_VERSION" >/dev/null || { beads_failure beads_request_unsupported "$BEADS_REQUEST_VERSION"; return 1; }
+}
+
+# Prove the lock carries exactly the record Mise consumes under locked
+# installation for the configured request: a supported lockfile format, one
+# `[[tools."github:gastownhall/beads"]]` record with the exact backend,
+# specifier binding, and locked version, and one `platforms.macos-arm64` table
+# with the official asset URL and SHA-256. Mise-owned extras such as `url_api`
+# and `provenance` are tolerated; other tools are not inspected here.
+validate_beads_lock() {
+	local lock="$1" config="$2" checksum records result
+	BEADS_LOCK_FAILURE=''
+	BEADS_LOCK_DETAIL=''
+	load_beads_request "$config" || return 1
+	checksum="$(beads_release_checksum "$BEADS_REQUEST_VERSION")" || { beads_failure beads_request_unsupported "$BEADS_REQUEST_VERSION"; return 1; }
+	regular_readable "$lock" || { beads_failure beads_lock_unreadable; return 1; }
+	records="$(toml_records "$lock")" || { beads_failure beads_lock_toml_invalid "$(toml_error_detail "$records")"; return 1; }
+	result="$(printf '%s\n' "$records" | awk -v tool="$BEADS_TOOL" -v version="$BEADS_REQUEST_VERSION" -v url="$(beads_release_url "$BEADS_REQUEST_VERSION")" -v checksum="sha256:$checksum" '
+		BEGIN { FS = "\t"; US = sprintf("%c", 31); tool_path = "tools" US tool; entry = tool_path US "#1"; platform = entry US "platforms.macos-arm64" }
+		function observed(value) { return value == "" ? "absent" : substr(value, index(value, ":") + 1) }
+		function kind(value) { return substr(value, 1, index(value, ":") - 1) }
+		function typed(value) { return kind(value) == "string" ? observed(value) : kind(value) " " observed(value) }
+		$1 == "key" && $2 == "" && $3 == "lockfile_version" { format = $4 ":" $5 }
+		$1 == "table" && $2 == tool_path { plain_entry = 1 }
+		$1 == "array" && $2 == tool_path { entries = $3 }
+		$1 == "key" && $2 == entry { field[$3] = $4 ":" $5 }
+		$1 == "item" && $2 == entry && $3 == "specifiers" { item[$4] = $5 ":" $6 }
+		$1 == "table" && $2 == platform { platforms++ }
+		$1 == "key" && $2 == platform { asset[$3] = $4 ":" $5 }
+		END {
+			if (format != "bare:2") { printf "beads_lock_format_unsupported\tlockfile_version %s\n", observed(format); exit }
+			if (plain_entry) { print "beads_lock_entry_invalid"; exit }
+			if (entries + 0 == 0) { print "beads_lock_entry_missing"; exit }
+			if (entries + 0 > 1) { printf "beads_lock_entry_duplicate\t%d records\n", entries; exit }
+			if (field["backend"] != "string:" tool) { printf "beads_lock_backend_mismatch\tobserved %s\n", observed(field["backend"]); exit }
+			if (field["version"] != "string:" version) { printf "beads_lock_version_mismatch\tobserved %s\n", observed(field["version"]); exit }
+			if (field["specifiers"] == "") { print "beads_lock_specifier_mismatch\tobserved absent"; exit }
+			if (field["specifiers"] !~ /^array:/) { printf "beads_lock_specifier_mismatch\tobserved %s %s\n", kind(field["specifiers"]), observed(field["specifiers"]); exit }
+			if (field["specifiers"] != "array:1") { printf "beads_lock_specifier_mismatch\tobserved %d specifiers\n", observed(field["specifiers"]); exit }
+			if (item[1] != "string:" version) { printf "beads_lock_specifier_mismatch\tobserved %s\n", typed(item[1]); exit }
+			if (platforms == 0) { print "beads_lock_macos_arm64_entry_missing"; exit }
+			if (asset["url"] != "string:" url) { printf "beads_lock_url_mismatch\tobserved %s\n", observed(asset["url"]); exit }
+			if (asset["checksum"] != "string:" checksum) { printf "beads_lock_checksum_mismatch\tobserved %s\n", observed(asset["checksum"]); exit }
+			print "ok"
+		}
+	')" || { beads_failure beads_lock_toml_invalid 'lock records could not be evaluated'; return 1; }
+	[[ "$result" == ok ]] && return 0
+	if [[ "$result" == *$'\t'* ]]; then
+		beads_failure "${result%%$'\t'*}" "${result#*$'\t'}"
+	else
+		beads_failure "$result"
+	fi
+}
+
+require_valid_staged_beads_declaration() {
+	load_beads_request "$STAGING/config.toml" || emit_error 'mise_source_invalid' 'repair_the_mise_source_beads_declaration_then_retry' true "staged Mise source failed Beads declaration validation ($(beads_failure_message))" 65 'error'
+}
+
+require_valid_staged_beads_lock() {
+	validate_beads_lock "$STAGING/mise.lock" "$STAGING/config.toml" && return 0
+	case "$BEADS_LOCK_FAILURE" in
+		mise_source_*|beads_request_*) emit_error 'mise_source_invalid' 'repair_the_mise_source_beads_declaration_then_retry' true "staged Mise source failed Beads declaration validation ($(beads_failure_message))" 65 'error' ;;
+		*) emit_error 'beads_lock_invalid' 'restore_a_lock_with_the_declared_beads_macos_arm64_release_and_retry' true "staging lock failed Beads verification ($(beads_failure_message))" 70 'error' ;;
+	esac
+}
+
+seed_staging_lock_from_matching_current() {
+	local current_version
+	[[ -n "$VERIFIED_CURRENT_REVISION" ]] || return 1
+	load_beads_request "$VERIFIED_CURRENT_REVISION/config.toml" || return 1
+	current_version="$BEADS_REQUEST_VERSION"
+	load_beads_request "$STAGING/config.toml" || return 1
+	[[ "$current_version" == "$BEADS_REQUEST_VERSION" ]] || return 1
+	cp "$VERIFIED_CURRENT_REVISION/mise.lock" "$STAGING/mise.lock" || emit_error 'mise_lock_seed_failed' 'repair_toolchain_state_permissions_and_retry' true 'verified matching-current lock could not be copied into staging' 73 'error'
+	chmod 0600 "$STAGING/mise.lock" || emit_error 'mise_lock_seed_failed' 'repair_toolchain_state_permissions_and_retry' true 'staged matching-current lock could not be made writable' 73 'error'
+}
+
+finish_no_change() {
+	remove_owned_tree "$STAGING" "$REVISIONS" '.staging-' || emit_error 'staging_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'no-change staging could not be cleaned' 73 'error'
+	STAGING_OWNED=false
+	STAGING=''
+	remove_process_capsule || emit_error 'capsule_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'no-change verification succeeded but process capsule cleanup failed' 73 'error'
+	release_lock || emit_error 'lock_release_failed' 'inspect_toolchain_state_before_retrying' false 'no-change verification succeeded but lock release failed' 73 'error'
+	trap - EXIT INT TERM
+	if [[ "$JSON" == true ]]; then printf '{"schema_version":1,"command":"update_apply","side_effect":"state_write","status":"no_change","content_id":"%s","exact_reconstruction":"not_qualified","git_exact_owner":"blocked"}\n' "$CONTENT_ID"; else printf 'Toolchain apply: no change. Git exact owner remains blocked; exact reconstruction remains not qualified.\n'; fi
 }
 
 atomic_select() {
@@ -966,6 +1325,7 @@ revision_is_verified() {
 	stored_id="$(revision_content_id "$revision")"
 	[[ "$stored_id" == "$CONTENT_ID" ]] || { verification_failed 'content_identity_mismatch' false; return 1; }
 	snapshot_is_valid "$saved_manifest" "$config" || { verification_failed 'snapshot_invalid' false; return 1; }
+	validate_beads_lock "$lock" "$config" || { verification_failed "$(beads_failure_message)" false; return 1; }
 	contract_hash="$(file_sha256 "$contract")"
 	manifest_hash="$(file_sha256 "$saved_manifest")"
 	config_hash="$(file_sha256 "$config")"
@@ -1015,30 +1375,33 @@ apply_revision() {
 	acquire_lock apply
 	create_process_capsule
 	snapshot_sources
+	require_valid_staged_beads_declaration
 	snapshot_is_valid "$STAGING/manifest.tsv" "$STAGING/config.toml" || emit_error 'snapshot_invalid' 'repair_the_manifest_and_mise_source_then_retry' true 'snapshotted toolchain declarations are inconsistent' 65 'error'
 	PYTHON_ATTESTATION_POLICY="$(python_attestation_policy_for_snapshot "$STAGING/manifest.tsv" "$STAGING/config.toml")" || emit_error 'snapshot_invalid' 'repair_the_manifest_and_mise_source_then_retry' true 'snapshotted Python declarations are inconsistent' 65 'error'
+	if load_verified_current_revision; then
+		if staged_sources_match_revision "$VERIFIED_CURRENT_REVISION"; then
+			finish_no_change
+			return 0
+		fi
+		seed_staging_lock_from_matching_current || true
+	fi
 	mise_with_staged_python_attestation_policy lock --global >&2 || emit_error 'mise_lock_failed' 'repair_mise_lock_inputs_and_retry' true 'Mise could not generate the staging lock' 70 'error'
 	regular_readable "$STAGING/mise.lock" && [[ -s "$STAGING/mise.lock" ]] || emit_error 'mise_lock_missing' 'repair_mise_lock_generation_and_retry' true 'Mise did not create a safe nonempty staging lock' 70 'error'
+	require_valid_staged_beads_lock
 	CONTENT_ID="$(revision_content_id "$STAGING")" || emit_error 'content_identity_invalid' 'repair_source_bytes' true 'unable to create a content identity' 65 'error'
 	valid_content_id "$CONTENT_ID" || emit_error 'content_identity_invalid' 'repair_source_bytes' true 'unable to create a valid content identity' 65 'error'
 	if [[ -L "$STATE/current" && "$(readlink "$STATE/current")" == "revisions/$CONTENT_ID" ]] && verify_revision_with_retry "$REVISIONS/$CONTENT_ID"; then
-		remove_owned_tree "$STAGING" "$REVISIONS" '.staging-' || emit_error 'staging_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'no-change staging could not be cleaned' 73 'error'
-		STAGING_OWNED=false
-		STAGING=''
-		remove_process_capsule || emit_error 'capsule_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'no-change verification succeeded but process capsule cleanup failed' 73 'error'
-		release_lock || emit_error 'lock_release_failed' 'inspect_toolchain_state_before_retrying' false 'no-change verification succeeded but lock release failed' 73 'error'
-		trap - EXIT INT TERM
-		if [[ "$JSON" == true ]]; then printf '{"schema_version":1,"command":"update_apply","side_effect":"state_write","status":"no_change","content_id":"%s","exact_reconstruction":"not_qualified","git_exact_owner":"blocked"}\n' "$CONTENT_ID"; else printf 'Toolchain apply: no change. Git exact owner remains blocked; exact reconstruction remains not qualified.\n'; fi
+		finish_no_change
 		return 0
 	fi
 	SIDE_EFFECT='state_write_and_tool_install'
 	install_staged_toolchain || emit_error 'mise_install_failed' 'repair_the_download_or_retry' true 'Mise could not install the managed toolchain' 70 'error'
-	remove_owned_staging_lock || emit_error 'mise_lock_replace_failed' 'repair_toolchain_state_permissions' false 'Mise lock could not be safely replaced after install' 73 'error'
 	mise_with_staged_python_attestation_policy lock --global >&2 || emit_error 'mise_lock_failed' 'repair_mise_lock_inputs_and_retry' true 'Mise could not regenerate the staging lock after install' 70 'error'
 	# Keep the pre-install identity for the no-change fast path. First install
-	# may enrich the lock, so regenerate and publish evidence from the
-	# post-install bytes.
+	# may enrich the lock, so refresh it in place and publish evidence from
+	# the post-install bytes without discarding retained tool entries.
 	regular_readable "$STAGING/mise.lock" && [[ -s "$STAGING/mise.lock" ]] || emit_error 'mise_lock_missing' 'repair_mise_lock_generation_and_retry' true 'Mise did not preserve a safe nonempty staging lock after install' 70 'error'
+	require_valid_staged_beads_lock
 	CONTENT_ID="$(revision_content_id "$STAGING")" || emit_error 'content_identity_invalid' 'repair_source_bytes' true 'unable to create a content identity' 65 'error'
 	valid_content_id "$CONTENT_ID" || emit_error 'content_identity_invalid' 'repair_source_bytes' true 'unable to create a valid content identity' 65 'error'
 	contract_hash="$(file_sha256 "$STAGING/contract.txt")" || emit_error 'receipt_failed' 'repair_toolchain_state_permissions' false 'application contract digest could not be recorded' 73 'error'
