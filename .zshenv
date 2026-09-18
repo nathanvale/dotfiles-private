@@ -68,3 +68,14 @@ export PATH
 # A verified applied Mise revision takes precedence over the fallback above.
 # The bootstrap stays inactive when current is missing or invalid.
 [ -f "$HOME/.config/mise/bootstrap.sh" ] && source "$HOME/.config/mise/bootstrap.sh"
+
+# ----------------------------------------------------------------------------
+# gogcli home
+# ----------------------------------------------------------------------------
+# ~/.config is a symlink into this repository, so anything written under
+# ~/.config/gogcli lands in the working tree. Credentials and tokens are
+# gitignored there, which keeps them out of history but makes them casualties
+# of a fresh worktree, a new clone, or `git clean -xdf`. Point gogcli at
+# machine-local state instead, so the repository holds the pointer and never
+# the secret. Restore on a new machine from the 1Password entries.
+export GOG_HOME="$HOME/.local/state/gogcli"
