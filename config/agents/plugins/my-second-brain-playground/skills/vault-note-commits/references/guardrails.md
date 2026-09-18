@@ -55,8 +55,10 @@ repaired in the vault (`bun run guard:install`), then rerun the same command.
 When a candidate is rebased onto a moved `main` and a check on the rebased
 commit then refuses (`CHECK_FAILED`, `FORMAT_FAILED`, or a rebased path-set
 mismatch), the helper restores the candidate's own commit before refusing
-(`git checkout --detach <commit>` writes only `HEAD`, which the gate never
-sees). The candidate is unchanged; once `main` is fixed, the same `finish`
+(`git checkout --detach <commit>` moves the candidate's `HEAD`, index, and
+working tree; it writes no guarded ref, so `refs/heads/main` and
+`refs/vault-note-commits/*` are untouched and the gate never sees it). The
+candidate is unchanged; once `main` is fixed, the same `finish`
 (or a new `finish --preview` for the Vault Steward CLI) rebases again and
 integrates. 0.12.0 left the rebased commit behind, which every later
 `finish` refused as `CANDIDATE_HISTORY_INVALID`.

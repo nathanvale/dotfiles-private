@@ -1,5 +1,5 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, rmSync } from "node:fs"
+import { existsSync, readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { authoredCandidate, begin, cleanupFixtures, finish, fixture, git, runAlias, write } from "../helpers/harness.ts"
 
@@ -103,7 +103,7 @@ test("a dirty candidate moved onto main's tip is refused CANDIDATE_CHANGED_AFTER
 	expect(git(f.vault, "rev-parse", "main")).toBe(x)
 	expect(git(f.vault, "for-each-ref", "--format=%(refname)", "refs/vault-note-commits").split("\n")).toHaveLength(1)
 	expect(existsSync(b)).toBe(true)
-	expect(Bun.file(join(b, "projects/demo/GOAL.md")).text()).resolves.toContain("B wrote")
+	expect(readFileSync(join(b, "projects/demo/GOAL.md"), "utf8")).toContain("B wrote")
 })
 
 test("a clean candidate moved onto main's tip is refused SEMANTIC_OVERLAP, never recorded", () => {
