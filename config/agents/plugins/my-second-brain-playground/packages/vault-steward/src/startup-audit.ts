@@ -2,8 +2,8 @@
 // when that vault exists and declares the script, prints exactly one line when findings exist, and stays silent
 // otherwise. Bounded to a 2 s child budget; every failure is silence, never a non-zero exit, so session start is
 // never blocked. Invoked by hooks/recover-context before the existing recovery observer.
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
+import { readFileSync, statSync } from "node:fs"
+import { isAbsolute, join } from "node:path"
 
 const auditBudgetMs = 2_000
 
@@ -21,7 +21,7 @@ function configuredVault(env: Record<string, string | undefined>): string | null
 	if (!env.HOME) return null
 	try {
 		const payload = JSON.parse(readFileSync(join(env.HOME, ".config", "my-second-brain-playground", "vault.json"), "utf8")) as { vault?: unknown }
-		return typeof payload.vault === "string" && payload.vault ? payload.vault : null
+		return typeof payload.vault === "string" && isAbsolute(payload.vault) && statSync(payload.vault).isDirectory() ? payload.vault : null
 	} catch {
 		return null
 	}

@@ -1,7 +1,7 @@
 // @bun
 // packages/vault-steward/src/startup-audit.ts
-import { readFileSync } from "fs";
-import { join } from "path";
+import { readFileSync, statSync } from "fs";
+import { isAbsolute, join } from "path";
 var auditBudgetMs = 2000;
 var reportedSeverities = new Set(["error", "warn"]);
 function configuredVault(env) {
@@ -9,7 +9,7 @@ function configuredVault(env) {
     return null;
   try {
     const payload = JSON.parse(readFileSync(join(env.HOME, ".config", "my-second-brain-playground", "vault.json"), "utf8"));
-    return typeof payload.vault === "string" && payload.vault ? payload.vault : null;
+    return typeof payload.vault === "string" && isAbsolute(payload.vault) && statSync(payload.vault).isDirectory() ? payload.vault : null;
   } catch {
     return null;
   }

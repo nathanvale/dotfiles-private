@@ -19,7 +19,7 @@ afterEach(() => {
 })
 
 // `config` is the fixture HOME: the hook resolves $HOME/.config/my-second-brain-playground/vault.json like its recovery owner.
-function vaultWithAudit(script: string | null): { config: string; vault: string } {
+function vaultWithAudit(script: string | null): { root: string; config: string; vault: string } {
 	const root = mkdtempSync(join(tmpdir(), "vault-steward-f3-"))
 	roots.push(root)
 	const vault = join(root, "vault")
@@ -29,12 +29,12 @@ function vaultWithAudit(script: string | null): { config: string; vault: string 
 	writeFileSync(join(config, ".config", "my-second-brain-playground", "vault.json"), JSON.stringify({ schemaVersion: 1, vault }))
 	writeFileSync(join(vault, "package.json"), JSON.stringify({ private: true, scripts: script === null ? {} : { "guard:audit": "bun run audit.ts" } }))
 	if (script !== null) writeFileSync(join(vault, "audit.ts"), script)
-	return { config, vault }
+	return { root, config, vault }
 }
 
-function runHook(config: string): { exitCode: number; stdout: string; stderr: string; ms: number } {
+function runHook(config: string, cwd = tmpdir()): { exitCode: number; stdout: string; stderr: string; ms: number } {
 	const started = Date.now()
-	const result = Bun.spawnSync([hook], { cwd: tmpdir(), stdout: "pipe", stderr: "pipe", stdin: "ignore", env: { ...process.env, HOME: config, XDG_STATE_HOME: join(config, "state") } })
+	const result = Bun.spawnSync([hook], { cwd, stdout: "pipe", stderr: "pipe", stdin: "ignore", env: { ...process.env, HOME: config, XDG_STATE_HOME: join(config, "state") } })
 	return { exitCode: result.exitCode, stdout: new TextDecoder().decode(result.stdout), stderr: new TextDecoder().decode(result.stderr), ms: Date.now() - started }
 }
 
@@ -55,6 +55,18 @@ test("F3: a clean audit, an info-only audit, a vault without guard:audit, and no
 		expect(result.exitCode).toBe(0)
 		expect(result.stdout).toBe("")
 	}
+})
+
+test("F3: a relative configured vault stays silent even when that relative directory declares guard:audit", () => {
+	const fixture = vaultWithAudit(findings)
+	const relativeVault = join(fixture.root, "relative-vault")
+	mkdirSync(relativeVault)
+	writeFileSync(join(relativeVault, "package.json"), JSON.stringify({ private: true, scripts: { "guard:audit": "bun run audit.ts" } }))
+	writeFileSync(join(relativeVault, "audit.ts"), findings)
+	writeFileSync(join(fixture.config, ".config", "my-second-brain-playground", "vault.json"), JSON.stringify({ schemaVersion: 1, vault: "relative-vault" }))
+	const result = runHook(fixture.config, fixture.root)
+	expect(result.exitCode).toBe(0)
+	expect(result.stdout).toBe("")
 })
 
 test("F3: a hanging or crashing audit never blocks or fails session start", () => {
