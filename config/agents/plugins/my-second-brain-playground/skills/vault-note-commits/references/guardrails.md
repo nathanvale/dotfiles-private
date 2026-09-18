@@ -77,11 +77,14 @@ set the config under `~/.config` when `XDG_CONFIG_HOME` points elsewhere.
 
 ## Known limitation: stale-lock reclaim
 
-Stale-lock reclaim is by pathname (rename, then remove), so two contenders
-that classify the same dead lock while a third publishes a live owner can
-briefly run two integrations; the loser's fast-forward then refuses
-`INTEGRATION_UNPROVED` and `main` is never corrupted. An identity-checked
-reclaim is the follow-up.
+Stale-lock reclaim uses a sibling, empty `mkdir`-exclusive reclaim mutex
+before it re-judges and renames a dead lock, so healthy protocol-following
+contenders cannot reclaim a lock another contender has already published.
+The mutex closes that pathname race; `main` still moves only by a proven
+`git merge --ff-only`. The residual is a mutex holder killed after creating
+the mutex and before removing it: after 10 seconds it is stale and two new
+contenders can race to remove it, so a kernel-backed identity lock remains a
+future hardening option.
 
 ## Completion recovery
 
