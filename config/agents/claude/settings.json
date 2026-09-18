@@ -81,29 +81,7 @@
   },
   "disableBundledSkills": false,
   "hooks": {
-    "PreToolUse": [
-      {
-        "matcher": "Write|Edit|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bun run \"$HOME/.claude/hooks/git/git-safety.ts\"",
-            "timeout": 5
-          }
-        ]
-      }
-    ],
     "SessionStart": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bun run $HOME/.claude/hooks/git/git-context-loader.ts",
-            "timeout": 15
-          }
-        ]
-      },
       {
         "matcher": "*",
         "hooks": [
@@ -129,16 +107,6 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bun run $HOME/.claude/hooks/git/command-logger.ts",
-            "timeout": 5
-          }
-        ]
-      },
-      {
         "matcher": "mcp__.*biome-runner__(biome_lintCheck|biome_lintFix|biome_formatCheck)",
         "hooks": [
           {
@@ -157,30 +125,6 @@
             "type": "command",
             "command": "SQ_HOOK_DEDUP_ENABLED=1 bunx @side-quest/claude-hooks posttool-failure",
             "timeout": 5
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bun run $HOME/.claude/hooks/git/session-summary.ts",
-            "timeout": 15
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "bash -lc 'repo=$(git rev-parse --show-toplevel 2>/dev/null || true); if [ -x \"$repo/scripts/check-prompt-drift-on-stop.sh\" ]; then \"$repo/scripts/check-prompt-drift-on-stop.sh\"; fi'",
-            "timeout": 10
           }
         ]
       }
