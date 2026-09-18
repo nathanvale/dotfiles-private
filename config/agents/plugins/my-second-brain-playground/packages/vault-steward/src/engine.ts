@@ -3,13 +3,15 @@
 // 2.0 in the next unit). The step order is the legacy sequence inventoried in CONTRACT.md 2.6.
 import { createHash, randomUUID } from "node:crypto"
 import { isAbsolute, join, relative, resolve, sep } from "node:path"
-import { acquireLock, releaseLock } from "./integration-lock.ts"
+import { acquireLock, lockPath, ownerIsLive, releaseLock } from "./integration-lock.ts"
 import {
 	type CandidateState,
 	type Completion,
 	commitPattern,
+	type EffectId,
 	type Manifest,
 	manifestName,
+	type PreviewRecord,
 	type Receipt,
 	type RefusalFacts,
 	type RefusalReason,
@@ -39,12 +41,17 @@ interface GitContext {
 	runId: string | null
 	worktree?: string
 	worktreeCreated?: boolean
+	// The transaction state a failure of this step reports (default unchanged, or partial once the worktree exists).
+	transaction?: TransactionState
+	completedEffects?: EffectId[]
+	uncertainEffects?: EffectId[]
 }
 
 function git(rt: Runtime, cwd: string, args: string[], context: GitContext): string {
 	const result = started(rt.spawn(["git", "--no-optional-locks", ...args], { cwd }))
 	if (result.exitCode !== 0) {
-		refuse("git-failed", { ...context, detail: result.stderr.trim() }, context.worktreeCreated ? "partially-completed" : "unchanged")
+		const { transaction, ...facts } = context
+		refuse("git-failed", { ...facts, detail: result.stderr.trim() }, transaction ?? (context.worktreeCreated ? "partially-completed" : "unchanged"))
 	}
 	return result.stdout.trim()
 }
@@ -251,6 +258,7 @@ export function createCandidate(rt: Runtime, plan: CandidatePlan): CreatedCandid
 	git(rt, plan.vault, ["worktree", "add", "--detach", plan.requestedWorktree, baseCommit], context)
 	context.worktreeCreated = true
 	context.worktree = plan.requestedWorktree
+	context.completedEffects = ["candidate.worktree"]
 	try {
 		const worktree = rt.realpath(plan.requestedWorktree)
 		context.worktree = worktree
@@ -267,7 +275,7 @@ export function createCandidate(rt: Runtime, plan: CandidatePlan): CreatedCandid
 		return { manifest }
 	} catch (error) {
 		if (error instanceof Refusal) throw error
-		refuse("unexpected", { runId: plan.runId, worktree: context.worktree, worktreeCreated: true, detail: error instanceof Error ? error.message : String(error) }, "partially-completed")
+		refuse("unexpected", { runId: plan.runId, worktree: context.worktree, worktreeCreated: true, completedEffects: ["candidate.worktree"], uncertainEffects: ["candidate.manifest"], detail: error instanceof Error ? error.message : String(error) }, "unknown")
 	}
 }
 
@@ -430,7 +438,13 @@ export function validateCandidate(rt: Runtime, manifest: Manifest, message: stri
 	if (!samePaths(changedPaths(rt, manifest), manifest.paths)) refuse("path-set-changed-by-checker", candidateFacts(manifest))
 	git(rt, manifest.worktree, ["add", "--", ...manifest.paths], context(manifest))
 	checkWhitespace(rt, manifest, ["--cached", manifest.baseCommit], candidateFacts(manifest))
-	git(rt, manifest.worktree, ["commit", "-m", message], context(manifest))
+	// A failure inside `commit` leaves the candidate commit's existence unestablished.
+	try {
+		git(rt, manifest.worktree, ["commit", "-m", message], { ...context(manifest), transaction: "unknown", uncertainEffects: ["candidate.commit"] })
+	} catch (error) {
+		if (error instanceof Refusal) throw error
+		refuse("unexpected", { ...candidateFacts(manifest), uncertainEffects: ["candidate.commit"], detail: error instanceof Error ? error.message : String(error) }, "unknown")
+	}
 	return { kind: "commit", commit: git(rt, manifest.worktree, ["rev-parse", "HEAD"], context(manifest)) }
 }
 
@@ -438,14 +452,17 @@ export function validateCandidate(rt: Runtime, manifest: Manifest, message: stri
 // Completion and integration (legacy phase D)
 
 // Completion ref, receipt, then best-effort candidate removal. The receipt is the completion boundary.
-function recordCompletion(rt: Runtime, manifest: Manifest, commit?: string): Completion {
+function recordCompletion(rt: Runtime, manifest: Manifest, commit?: string, completedBefore: EffectId[] = []): Completion {
 	const code = commit ? "INTEGRATED" : "NO_CHANGES"
 	const receipt = receiptPath(rt, manifest.worktree)
+	const completed: EffectId[] = [...completedBefore]
 	try {
 		git(rt, manifest.vault, ["update-ref", completionRef(manifest.runId), commit ?? manifest.baseCommit], context(manifest))
+		completed.push("completion.ref")
+		rt.faultPoint("before-receipt")
 		rt.atomicPrivateJson(receipt, { ...manifest, code, ...(commit ? { commit } : {}) } satisfies Receipt)
 	} catch {
-		refuse("completion-record-failed", { ...candidateFacts(manifest, commit), afterFastForward: commit !== undefined }, "partially-completed")
+		refuse("completion-record-failed", { ...candidateFacts(manifest, commit), afterFastForward: commit !== undefined, completedEffects: completed }, completed.length > 0 ? "partially-completed" : "unchanged")
 	}
 	const removed = gitQuiet(rt, manifest.vault, ["worktree", "remove", manifest.worktree])
 	return { code, commit, receipt, removed: removed.exitCode === 0 }
@@ -471,12 +488,31 @@ function withLock<T>(rt: Runtime, manifest: Manifest, action: () => T): T {
 
 export type IntegrationResult = { kind: "receipt"; receipt: ValidReceipt } | { kind: "completion"; completion: Completion }
 
-function rebaseOntoMain(rt: Runtime, manifest: Manifest, commit: string, currentMain: string, vault: string): string {
+interface MainObservation {
+	observedMain: string
+	rebase: boolean
+}
+
+// Where canonical main stands relative to the candidate base: unchanged, or moved without touching the admitted paths.
+// Refuses main-diverged and semantic-overlap; the same check runs at preview time and again under the lock.
+function observeMainAt(rt: Runtime, manifest: Manifest, commit: string | undefined, vault: string, currentMain: string): MainObservation {
+	if (currentMain === manifest.baseCommit || commit === undefined) return { observedMain: currentMain, rebase: false }
 	const ancestry = gitQuiet(rt, vault, ["merge-base", "--is-ancestor", manifest.baseCommit, currentMain])
 	if (ancestry.exitCode !== 0) refuse("main-diverged", candidateFacts(manifest, commit))
 	const mainChanges = splitNul(git(rt, vault, ["diff", "--name-only", "-z", manifest.baseCommit, currentMain, "--"], context(manifest))).sort()
 	const overlap = overlappingPaths(mainChanges, manifest.paths)
 	if (overlap.length > 0) refuse("semantic-overlap", { ...candidateFacts(manifest, commit), overlap })
+	return { observedMain: currentMain, rebase: true }
+}
+
+// Preview-time observation outside the lock, against refs/heads/main itself (the vault may be on another branch).
+function observeMain(rt: Runtime, manifest: Manifest, commit: string | undefined): MainObservation {
+	const vault = canonicalRoot(rt, manifest)
+	const currentMain = git(rt, vault, ["rev-parse", "refs/heads/main"], context(manifest))
+	return observeMainAt(rt, manifest, commit, vault, currentMain)
+}
+
+function performRebase(rt: Runtime, manifest: Manifest, commit: string, currentMain: string): string {
 	const rebased = gitQuiet(rt, manifest.worktree, ["rebase", "--onto", currentMain, manifest.baseCommit, commit])
 	if (rebased.exitCode !== 0) {
 		gitQuiet(rt, manifest.worktree, ["rebase", "--abort"])
@@ -491,22 +527,36 @@ function rebaseOntoMain(rt: Runtime, manifest: Manifest, commit: string, current
 	return integrated
 }
 
+// Fast-forward canonical main to the integrated commit and prove it by read-back; the result is unknown otherwise.
+function fastForward(rt: Runtime, manifest: Manifest, vault: string, integrated: string): void {
+	rt.faultPoint("before-ff-merge")
+	const merged = gitQuiet(rt, vault, ["merge", "--ff-only", integrated])
+	rt.faultPoint("after-ff-merge")
+	const readBack: GitContext = { ...context(manifest), transaction: "unknown", uncertainEffects: ["main.fast-forward"] }
+	if (merged.exitCode !== 0 || git(rt, vault, ["rev-parse", "HEAD"], readBack) !== integrated) {
+		refuse("integration-unproved", { ...candidateFacts(manifest, integrated), uncertainEffects: ["main.fast-forward"] }, "unknown")
+	}
+}
+
+function canonicalReady(rt: Runtime, manifest: Manifest, commit: string | undefined): string {
+	const vault = rt.realpath(manifest.vault)
+	if (git(rt, vault, ["branch", "--show-current"], context(manifest)) !== "main" || git(rt, vault, ["status", "--porcelain"], context(manifest))) {
+		refuse("canonical-not-ready", candidateFacts(manifest, commit))
+	}
+	return vault
+}
+
 // Under the integration lock: receipt re-read, canonical checks, optional rebase, fast-forward, completion record.
 export function integrate(rt: Runtime, manifest: Manifest, commit: string): IntegrationResult {
 	return withLock(rt, manifest, () => {
 		const completed = readReceipt(rt, manifest.worktree)
 		if (completed) return { kind: "receipt", receipt: completed }
-		const vault = rt.realpath(manifest.vault)
-		if (git(rt, vault, ["branch", "--show-current"], context(manifest)) !== "main" || git(rt, vault, ["status", "--porcelain"], context(manifest))) {
-			refuse("canonical-not-ready", candidateFacts(manifest, commit))
-		}
+		const vault = canonicalReady(rt, manifest, commit)
 		const currentMain = git(rt, vault, ["rev-parse", "HEAD"], context(manifest))
-		const integrated = currentMain === manifest.baseCommit ? commit : rebaseOntoMain(rt, manifest, commit, currentMain, vault)
-		const merged = gitQuiet(rt, vault, ["merge", "--ff-only", integrated])
-		if (merged.exitCode !== 0 || git(rt, vault, ["rev-parse", "HEAD"], context(manifest)) !== integrated) {
-			refuse("integration-unproved", candidateFacts(manifest, integrated), "unknown")
-		}
-		return { kind: "completion", completion: recordCompletion(rt, manifest, integrated) }
+		const observation = observeMainAt(rt, manifest, commit, vault, currentMain)
+		const integrated = observation.rebase ? performRebase(rt, manifest, commit, currentMain) : commit
+		fastForward(rt, manifest, vault, integrated)
+		return { kind: "completion", completion: recordCompletion(rt, manifest, integrated, ["main.fast-forward"]) }
 	})
 }
 
@@ -516,5 +566,268 @@ export function completeWithoutIntegration(rt: Runtime, manifest: Manifest, comm
 		const completed = readReceipt(rt, manifest.worktree)
 		if (completed) return { kind: "receipt", receipt: completed }
 		return { kind: "completion", completion: recordCompletion(rt, manifest, commit) }
+	})
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Preview and apply (CONTRACT.md 3.7, 3.8)
+
+function previewPath(rt: Runtime, runId: string): string {
+	return join(stateRoot(rt), "previews", `${runId}.json`)
+}
+
+function previewIdentity(runId: string, observedMain: string, candidateCommit: string | null): string {
+	return `preview-${runId}-${observedMain.slice(0, 12)}-${candidateCommit === null ? "none" : candidateCommit.slice(0, 12)}`
+}
+
+// The plan an apply is bound to: an integrate plan for a commit, or the no-changes completion.
+export function planPreview(rt: Runtime, manifest: Manifest, state: CandidateState, createdBy: string): PreviewRecord {
+	const commit = state.kind === "no-changes" ? null : state.commit
+	const observation = observeMain(rt, manifest, commit ?? undefined)
+	const expectedEffects: EffectId[] = commit === null ? ["completion.receipt", "completion.ref"] : ["completion.receipt", "completion.ref", "main.fast-forward"]
+	return {
+		schemaVersion,
+		previewId: previewIdentity(manifest.runId, observation.observedMain, commit),
+		runId: manifest.runId,
+		worktree: manifest.worktree,
+		commonGitDirectory: manifest.commonGitDirectory,
+		baseCommit: manifest.baseCommit,
+		candidateCommit: commit,
+		observedMain: observation.observedMain,
+		paths: manifest.paths,
+		plan: { kind: commit === null ? "no-changes" : "integrate", rebase: observation.rebase, expectedEffects },
+		consumed: false,
+		createdBy,
+	}
+}
+
+export function writePreview(rt: Runtime, record: PreviewRecord): string {
+	const path = previewPath(rt, record.runId)
+	rt.atomicPrivateJson(path, record)
+	return path
+}
+
+function previewShapeValid(record: PreviewRecord): boolean {
+	const keys = Object.keys(record)
+		.filter((key) => key !== "consumedBy")
+		.sort()
+		.join(",")
+	return (
+		keys === "baseCommit,candidateCommit,commonGitDirectory,consumed,createdBy,observedMain,paths,plan,previewId,runId,schemaVersion,worktree" &&
+		record.schemaVersion === 1 &&
+		typeof record.previewId === "string" &&
+		runIdPattern.test(record.runId) &&
+		typeof record.worktree === "string" &&
+		commitPattern.test(record.baseCommit) &&
+		(record.candidateCommit === null || commitPattern.test(record.candidateCommit)) &&
+		commitPattern.test(record.observedMain) &&
+		Array.isArray(record.paths) &&
+		typeof record.plan === "object" &&
+		record.plan !== null &&
+		(record.plan.kind === "integrate" || record.plan.kind === "no-changes") &&
+		typeof record.plan.rebase === "boolean" &&
+		Array.isArray(record.plan.expectedEffects) &&
+		typeof record.consumed === "boolean"
+	)
+}
+
+// The stored preview of a candidate: absent, or a validated record (an unreadable or off-shape record refuses).
+export function readPreview(rt: Runtime, runId: string): { present: false } | { present: true; path: string; record: PreviewRecord } {
+	const path = previewPath(rt, runId)
+	if (!rt.exists(path)) return { present: false }
+	let record: PreviewRecord
+	try {
+		record = JSON.parse(rt.readText(path)) as PreviewRecord
+		if (!previewShapeValid(record)) throw new Error("Invalid preview")
+	} catch {
+		refuse("preview-invalid", { runId, detail: path })
+	}
+	return { present: true, path, record }
+}
+
+// Read-only binding of an apply to its preview (CONTRACT.md 3.8 step 1): present, unconsumed, same identity, and the
+// candidate exactly as previewed.
+export function bindPreview(rt: Runtime, manifest: Manifest, previewId: string): PreviewRecord {
+	const stored = readPreview(rt, manifest.runId)
+	const facts = candidateFacts(manifest)
+	if (!stored.present) refuse("preview-not-found", facts)
+	const { record } = stored
+	if (record.consumed) refuse("preview-consumed", { ...facts, detail: record.previewId })
+	if (record.previewId !== previewId || record.worktree !== manifest.worktree) refuse("preview-stale", { ...facts, detail: `preview ${record.previewId} supersedes ${previewId}` })
+	const head = git(rt, manifest.worktree, ["rev-parse", "HEAD"], context(manifest))
+	if (head !== (record.candidateCommit ?? manifest.baseCommit)) refuse("preview-stale", { ...facts, detail: `candidate HEAD ${head} differs from the previewed commit` })
+	if (git(rt, manifest.worktree, ["status", "--porcelain"], context(manifest))) refuse("preview-stale", { ...facts, detail: "candidate worktree is dirty" })
+	return record
+}
+
+function consumePreview(rt: Runtime, record: PreviewRecord, consumedBy: string): void {
+	rt.atomicPrivateJson(previewPath(rt, record.runId), { ...record, consumed: true, consumedBy })
+}
+
+function prunePreview(rt: Runtime, runId: string): void {
+	try {
+		rt.removeTree(previewPath(rt, runId))
+	} catch {
+		// The receipt is the completion boundary; a leftover consumed preview is harmless.
+	}
+}
+
+// Apply under the lock (CONTRACT.md 3.8 steps 3 to 9). Every refusal before consumption leaves the preview reusable;
+// after consumption every exit is a failure with state from effect evidence.
+export function applyPreview(rt: Runtime, manifest: Manifest, record: PreviewRecord, consumedBy: string): IntegrationResult {
+	return withLock(rt, manifest, () => {
+		const completed = readReceipt(rt, manifest.worktree)
+		if (completed) return { kind: "receipt", receipt: completed }
+		const commit = record.candidateCommit ?? undefined
+		const vault = canonicalReady(rt, manifest, commit)
+		rt.faultPoint("after-lock")
+		const currentMain = git(rt, vault, ["rev-parse", "HEAD"], context(manifest))
+		if (currentMain !== record.observedMain) refuse("preview-stale", { ...candidateFacts(manifest, commit), detail: `main moved from ${record.observedMain} to ${currentMain}` })
+		consumePreview(rt, record, consumedBy)
+		rt.faultPoint("after-consume")
+		try {
+			if (commit === undefined) {
+				const completion = recordCompletion(rt, manifest)
+				prunePreview(rt, manifest.runId)
+				return { kind: "completion", completion }
+			}
+			const integrated = record.plan.rebase ? performRebase(rt, manifest, commit, currentMain) : commit
+			fastForward(rt, manifest, vault, integrated)
+			const completion = recordCompletion(rt, manifest, integrated, ["main.fast-forward"])
+			prunePreview(rt, manifest.runId)
+			return { kind: "completion", completion }
+		} catch (error) {
+			if (error instanceof Refusal) throw error
+			refuse("unexpected", { ...candidateFacts(manifest, commit), detail: error instanceof Error ? error.message : String(error) }, "unknown")
+		}
+	})
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Inspect and recover (CONTRACT.md 3.5, 3.9)
+
+export interface ReceiptView {
+	present: boolean
+	valid: boolean
+	code: "INTEGRATED" | "NO_CHANGES" | null
+	path: string | null
+	receipt: ValidReceipt | null
+}
+
+// The receipt as evidence, never as a refusal: inspect reports validity instead of stopping on it.
+export function receiptView(rt: Runtime, worktree: string): ReceiptView {
+	const path = receiptPath(rt, worktree)
+	if (!rt.exists(path)) return { present: false, valid: false, code: null, path: null, receipt: null }
+	try {
+		const valid = readReceipt(rt, worktree)
+		return valid === undefined ? { present: false, valid: false, code: null, path: null, receipt: null } : { present: true, valid: true, code: valid.receipt.code, path, receipt: valid }
+	} catch {
+		return { present: true, valid: false, code: null, path, receipt: null }
+	}
+}
+
+export interface ManifestView {
+	present: boolean
+	valid: boolean
+	manifest: Manifest | null
+	worktreeExists: boolean
+}
+
+export function manifestView(rt: Runtime, input: string): ManifestView {
+	try {
+		return { present: true, valid: true, manifest: readManifest(rt, input), worktreeExists: true }
+	} catch (error) {
+		if (error instanceof Refusal && error.reason === "candidate-not-found") return { present: false, valid: false, manifest: null, worktreeExists: false }
+		if (error instanceof Refusal && error.reason === "manifest-invalid") return { present: error.facts.runId !== null, valid: false, manifest: null, worktreeExists: true }
+		throw error
+	}
+}
+
+export interface CandidateView {
+	head: string | null
+	committed: boolean
+	dirty: boolean
+}
+
+export function candidateView(rt: Runtime, manifest: Manifest): CandidateView {
+	const head = gitQuiet(rt, manifest.worktree, ["rev-parse", "HEAD"])
+	const sha = head.exitCode === 0 ? head.stdout.trim() : null
+	const status = gitQuiet(rt, manifest.worktree, ["status", "--porcelain"])
+	return { head: sha, committed: sha !== null && sha !== manifest.baseCommit, dirty: status.exitCode === 0 && status.stdout.trim() !== "" }
+}
+
+export interface MainView {
+	head: string | null
+	containsCandidateCommit: boolean | null
+	overlap: string[]
+}
+
+export function mainView(rt: Runtime, manifest: Manifest, candidate: CandidateView): MainView {
+	const vault = canonicalRoot(rt, manifest)
+	const head = gitQuiet(rt, vault, ["rev-parse", "refs/heads/main"])
+	if (head.exitCode !== 0) return { head: null, containsCandidateCommit: null, overlap: [] }
+	const mainSha = head.stdout.trim()
+	const contains = candidate.committed && candidate.head !== null ? mainContains(rt, manifest, candidate.head) : null
+	let overlap: string[] = []
+	if (mainSha !== manifest.baseCommit) {
+		const changes = gitQuiet(rt, vault, ["diff", "--name-only", "-z", manifest.baseCommit, mainSha, "--"])
+		if (changes.exitCode === 0) overlap = overlappingPaths(splitNul(changes.stdout).sort(), manifest.paths)
+	}
+	return { head: mainSha, containsCandidateCommit: contains, overlap }
+}
+
+export interface LockView {
+	held: boolean
+	ownerPid: number | null
+	ownerRunId: string | null
+	live: boolean | null
+}
+
+export function lockView(rt: Runtime, commonGitDirectory: string): LockView {
+	const lock = lockPath(commonGitDirectory)
+	if (rt.fileFacts(lock).kind !== "directory") return { held: false, ownerPid: null, ownerRunId: null, live: null }
+	let ownerPid: number | null = null
+	let ownerRunId: string | null = null
+	try {
+		const owner = JSON.parse(rt.readText(join(lock, "owner.json"))) as { pid?: unknown; runId?: unknown }
+		ownerPid = typeof owner.pid === "number" ? owner.pid : null
+		ownerRunId = typeof owner.runId === "string" ? owner.runId : null
+	} catch {
+		// An unreadable owner is reported as held with unknown identity.
+	}
+	return { held: true, ownerPid, ownerRunId, live: ownerIsLive(rt, lock) }
+}
+
+// The completion evidence recover needs: the candidate's current HEAD proven on main with exactly the admitted paths, or
+// a no-changes completion whose ref already points at the base (a crash between the ref and the receipt).
+export type RecoveryEvidence = { kind: "integrated"; commit: string } | { kind: "no-changes" } | { kind: "unprovable"; detail: string }
+
+export function recoveryEvidence(rt: Runtime, manifest: Manifest): RecoveryEvidence {
+	const candidate = candidateView(rt, manifest)
+	if (candidate.dirty) return { kind: "unprovable", detail: "the candidate worktree is dirty; a crashed finish always leaves it clean" }
+	if (candidate.committed && candidate.head !== null) {
+		if (!candidateProducedHead(rt, manifest)) return { kind: "unprovable", detail: `candidate HEAD ${candidate.head} was not produced by this candidate (no commit or rebase reflog entry)` }
+		return mainContains(rt, manifest, candidate.head) ? { kind: "integrated", commit: candidate.head } : { kind: "unprovable", detail: `main does not contain candidate HEAD ${candidate.head} with exactly the admitted paths` }
+	}
+	const reference = gitQuiet(rt, canonicalRoot(rt, manifest), ["rev-parse", "--verify", completionRef(manifest.runId)])
+	if (reference.exitCode === 0 && reference.stdout.trim() === manifest.baseCommit) return { kind: "no-changes" }
+	return { kind: "unprovable", detail: candidate.head === null ? "candidate worktree HEAD is unreadable" : "the candidate has no commit and no completion reference points at its base" }
+}
+
+// Record completion evidence under the lock; never replays the fast-forward.
+export function recoverCandidate(rt: Runtime, manifest: Manifest): IntegrationResult {
+	return withLock(rt, manifest, () => {
+		const completed = readReceipt(rt, manifest.worktree)
+		if (completed) return { kind: "receipt", receipt: completed }
+		const evidence = recoveryEvidence(rt, manifest)
+		if (evidence.kind === "unprovable") refuse("recovery-unprovable", { ...candidateFacts(manifest), detail: evidence.detail })
+		try {
+			const completion = recordCompletion(rt, manifest, evidence.kind === "integrated" ? evidence.commit : undefined)
+			prunePreview(rt, manifest.runId)
+			return { kind: "completion", completion }
+		} catch (error) {
+			if (error instanceof Refusal) throw error
+			refuse("unexpected", { ...candidateFacts(manifest), detail: error instanceof Error ? error.message : String(error) }, "unknown")
+		}
 	})
 }

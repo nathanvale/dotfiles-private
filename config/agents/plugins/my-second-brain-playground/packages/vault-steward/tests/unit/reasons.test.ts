@@ -11,6 +11,7 @@ const expectedReasons = [
 	"check-changed-candidate", "path-set-mismatch", "path-set-changed-by-checker", "check-failed", "format-failed", "integration-busy",
 	"canonical-not-ready", "main-diverged", "semantic-overlap", "rebase-failed", "rebased-path-set-mismatch", "rebased-check-failed",
 	"integration-unproved", "completion-record-failed", "unexpected",
+	"preview-not-found", "preview-consumed", "preview-stale", "preview-invalid", "recovery-unprovable", "input-invalid",
 ]
 
 test("the reason vocabulary is exactly the expected closed list", () => {

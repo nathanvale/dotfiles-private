@@ -120,8 +120,48 @@ export const REASON_CAUSES = {
 	"integration-unproved": "INTERNAL_INTEGRATION_UNPROVED",
 	"completion-record-failed": "INTERNAL_COMPLETION_RECORD_FAILED",
 	"unexpected": "INTERNAL_UNEXPECTED_UNCHANGED",
+	"preview-not-found": "DOMAIN_PREVIEW_NOT_FOUND",
+	"preview-consumed": "DOMAIN_PREVIEW_CONSUMED",
+	"preview-stale": "DOMAIN_PREVIEW_STALE",
+	"preview-invalid": "SCHEMA_PREVIEW_INVALID",
+	"recovery-unprovable": "DOMAIN_RECOVERY_UNPROVABLE",
+	"input-invalid": "SCHEMA_INVALID_INPUT",
 } as const
 export type RefusalReason = keyof typeof REASON_CAUSES
+export type ProductCause = (typeof REASON_CAUSES)[RefusalReason] | "INTERNAL_GIT_FAILED_PARTIAL" | "INTERNAL_GIT_FAILED_UNKNOWN" | "INTERNAL_UNEXPECTED_UNKNOWN"
+
+// The CONTRACT.md 3.3 name of a refusal, split by transaction state where the design splits it.
+export function productCause(reason: RefusalReason, transaction: TransactionState): ProductCause {
+	if (reason === "git-failed") return transaction === "unchanged" ? "INTERNAL_GIT_FAILED_UNCHANGED" : transaction === "partially-completed" ? "INTERNAL_GIT_FAILED_PARTIAL" : "INTERNAL_GIT_FAILED_UNKNOWN"
+	if (reason === "unexpected") return transaction === "unchanged" ? "INTERNAL_UNEXPECTED_UNCHANGED" : "INTERNAL_UNEXPECTED_UNKNOWN"
+	return REASON_CAUSES[reason]
+}
+
+// Effect identities of the 2.0 inventories (CONTRACT.md 3.4; the candidate rebase is a published exclusion).
+export type EffectId = "candidate.manifest" | "candidate.worktree" | "candidate.commit" | "preview.record" | "main.fast-forward" | "completion.ref" | "completion.receipt"
+
+export interface PreviewPlan {
+	kind: "integrate" | "no-changes"
+	rebase: boolean
+	expectedEffects: EffectId[]
+}
+
+// Run store preview record (CONTRACT.md 3.7): the durable binding an apply must match before its first effect.
+export interface PreviewRecord {
+	schemaVersion: 1
+	previewId: string
+	runId: string
+	worktree: string
+	commonGitDirectory: string
+	baseCommit: string
+	candidateCommit: string | null
+	observedMain: string
+	paths: string[]
+	plan: PreviewPlan
+	consumed: boolean
+	createdBy: string
+	consumedBy?: string
+}
 
 // Facts a refusal carries for its front door to render. Every field is optional because each reason admits its own set.
 export interface RefusalFacts {
@@ -143,4 +183,7 @@ export interface RefusalFacts {
 	afterRebase?: boolean
 	// The guard observation completed before a guard refusal, so front doors can still report it.
 	guard?: GuardObservation
+	// Effects the 2.0 front door reports as completed or uncertain when the refusal is not unchanged.
+	completedEffects?: EffectId[]
+	uncertainEffects?: EffectId[]
 }

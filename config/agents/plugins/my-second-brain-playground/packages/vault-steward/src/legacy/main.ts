@@ -191,8 +191,19 @@ const legacyRender: Record<RefusalReason, Render> = {
 		outcome(false, "finish", "COMPLETION_RECORD_FAILED", facts.runId ?? null, facts.afterFastForward
 			? "The commit reached main but its receipt could not be saved. Inspect main and the preserved candidate before retrying."
 			: "No note changed but its receipt could not be saved. Preserve the candidate and inspect local state before retrying.", preserved(facts, false, facts.commit)),
-	unexpected: (facts, command) =>
-		outcome(false, command, "UNEXPECTED_FAILURE", facts.runId ?? null, "Preserve any candidate worktree and inspect the local error before retrying.", { retrySafe: false, ...beginCreated(facts) }),
+	unexpected: unexpectedFailure,
+	// Preview and recovery reasons belong to the Vault Steward 2.0 front door; the alias binds its own preview in one
+	// process, so reaching one here is an internal error (CONTRACT.md 4.1).
+	"preview-not-found": unexpectedFailure,
+	"preview-consumed": unexpectedFailure,
+	"preview-stale": unexpectedFailure,
+	"preview-invalid": unexpectedFailure,
+	"recovery-unprovable": unexpectedFailure,
+	"input-invalid": (_facts, command) => outcome(false, command, "INVALID_USAGE", null, "Run vault-note-commits --help and use the documented flags."),
+}
+
+function unexpectedFailure(facts: RefusalFacts, command: Command): Result {
+	return outcome(false, command, "UNEXPECTED_FAILURE", facts.runId ?? null, "Preserve any candidate worktree and inspect the local error before retrying.", { retrySafe: false, ...beginCreated(facts) })
 }
 
 function checkFailed(facts: RefusalFacts): Result {

@@ -63,6 +63,8 @@ export interface Runtime {
 	makeDirectory(path: string, mode: number): void
 	chmod(path: string, mode: number): void
 	removeTree(path: string): void
+	// Named points where a fault-injecting wrapper may halt or pause the process; a no-op in production.
+	faultPoint(name: string): void
 }
 
 function decode(bytes: Uint8Array | null | undefined): string {
@@ -141,5 +143,6 @@ export function createRuntime(): Runtime {
 		makeDirectory: (path, mode) => mkdirSync(path, { recursive: true, mode }),
 		chmod: (path, mode) => chmodSync(path, mode),
 		removeTree: (path) => rmSync(path, { recursive: true, force: true }),
+		faultPoint: () => {},
 	}
 }
