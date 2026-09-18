@@ -688,13 +688,13 @@ export function applyPreview(rt: Runtime, manifest: Manifest, record: PreviewRec
 		const commit = record.candidateCommit ?? undefined
 		const vault = canonicalReady(rt, manifest, commit)
 		rt.faultPoint("after-lock")
-		// Re-read the record under the lock: an apply that bound before another consumer's crash refuses here.
-		const fresh = readPreview(rt, manifest.runId)
-		if (!fresh.present) refuse("preview-not-found", candidateFacts(manifest, commit))
-		if (fresh.record.consumed) refuse("preview-consumed", { ...candidateFacts(manifest, commit), detail: fresh.record.previewId })
+		// Re-bind under the lock: an apply that bound before another consumer's crash refuses consumed here, and one
+		// bound before a newer preview (an amended candidate re-previewed) refuses stale instead of integrating the
+		// superseded commit over the newer record.
+		const fresh = bindPreview(rt, manifest, record.previewId)
 		const currentMain = git(rt, vault, ["rev-parse", "HEAD"], context(manifest))
-		if (currentMain !== record.observedMain) refuse("preview-stale", { ...candidateFacts(manifest, commit), detail: `main moved from ${record.observedMain} to ${currentMain}` })
-		consumePreview(rt, record, consumedBy)
+		if (currentMain !== fresh.observedMain) refuse("preview-stale", { ...candidateFacts(manifest, commit), detail: `main moved from ${fresh.observedMain} to ${currentMain}` })
+		consumePreview(rt, fresh, consumedBy)
 		rt.faultPoint("after-consume")
 		try {
 			if (commit === undefined) {
@@ -702,7 +702,7 @@ export function applyPreview(rt: Runtime, manifest: Manifest, record: PreviewRec
 				prunePreview(rt, manifest.runId)
 				return { kind: "completion", completion }
 			}
-			const integrated = record.plan.rebase ? performRebase(rt, manifest, commit, currentMain) : commit
+			const integrated = fresh.plan.rebase ? performRebase(rt, manifest, commit, currentMain) : commit
 			fastForward(rt, manifest, vault, integrated)
 			const completion = recordCompletion(rt, manifest, integrated, ["main.fast-forward"])
 			prunePreview(rt, manifest.runId)

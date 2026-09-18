@@ -18345,15 +18345,11 @@ function applyPreview(rt, manifest, record2, consumedBy) {
     const commit = record2.candidateCommit ?? undefined;
     const vault = canonicalReady(rt, manifest, commit);
     rt.faultPoint("after-lock");
-    const fresh = readPreview(rt, manifest.runId);
-    if (!fresh.present)
-      refuse("preview-not-found", candidateFacts(manifest, commit));
-    if (fresh.record.consumed)
-      refuse("preview-consumed", { ...candidateFacts(manifest, commit), detail: fresh.record.previewId });
+    const fresh = bindPreview(rt, manifest, record2.previewId);
     const currentMain = git(rt, vault, ["rev-parse", "HEAD"], context(manifest));
-    if (currentMain !== record2.observedMain)
-      refuse("preview-stale", { ...candidateFacts(manifest, commit), detail: `main moved from ${record2.observedMain} to ${currentMain}` });
-    consumePreview(rt, record2, consumedBy);
+    if (currentMain !== fresh.observedMain)
+      refuse("preview-stale", { ...candidateFacts(manifest, commit), detail: `main moved from ${fresh.observedMain} to ${currentMain}` });
+    consumePreview(rt, fresh, consumedBy);
     rt.faultPoint("after-consume");
     try {
       if (commit === undefined) {
@@ -18361,7 +18357,7 @@ function applyPreview(rt, manifest, record2, consumedBy) {
         prunePreview(rt, manifest.runId);
         return { kind: "completion", completion: completion2 };
       }
-      const integrated = record2.plan.rebase ? performRebase(rt, manifest, commit, currentMain) : commit;
+      const integrated = fresh.plan.rebase ? performRebase(rt, manifest, commit, currentMain) : commit;
       fastForward(rt, manifest, vault, integrated);
       const completion = recordCompletion(rt, manifest, integrated, ["main.fast-forward"]);
       prunePreview(rt, manifest.runId);

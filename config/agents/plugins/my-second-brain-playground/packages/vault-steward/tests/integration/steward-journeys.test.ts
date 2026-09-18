@@ -114,6 +114,32 @@ test("a second apply that starts after consumption refuses consumed while the fi
 	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("1")
 })
 
+test("an apply bound before the lock refuses stale when a newer preview supersedes it under the lock; the new work is never stranded", async () => {
+	const f = fixture()
+	const worktree = candidate(f)
+	const first = preview(f, worktree)
+	const env = stewardEnvironment(f)
+	const apply = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", first, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=after-lock:2500" })
+	await Bun.sleep(600)
+	// preview runs outside the lock: the candidate is amended and a newer record replaces the bound one while the apply is paused
+	write(worktree, "projects/demo/GOAL.md", "# Goal\n\nRevised.\n")
+	git(worktree, "commit", "--amend", "--no-edit", "--all")
+	const amended = git(worktree, "rev-parse", "HEAD")
+	const second = preview(f, worktree)
+	expect(second).not.toBe(first)
+	const stale = await apply
+	expect(stale.exitCode).toBe(3)
+	expect(stale.envelope?.result.causeCode).toBe("DOMAIN_PREVIEW_STALE")
+	expect(stale.envelope?.message).toMatch(/preview .* supersedes/)
+	expect(stale.envelope?.result.effects.completed).toEqual([])
+	expect(git(f.vault, "rev-parse", "HEAD")).toBe(f.initialHead)
+	// the newer preview is intact, unconsumed, and applies the amended commit
+	const applied = must(run(f, ["finish", "--apply", "--preview-id", second, "--worktree", worktree]), "SUCCESS_COMPLETED")
+	expect((applied.result.data as { integration: { commit: string } }).integration.commit).toBe(amended)
+	expect(git(f.vault, "rev-parse", "main")).toBe(amended)
+	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("1")
+})
+
 test("a crash between the fast-forward and the receipt is recoverable: inspect reports it, recover records it once", async () => {
 	const f = fixture()
 	const worktree = candidate(f)
