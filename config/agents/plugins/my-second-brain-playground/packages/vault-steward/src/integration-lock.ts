@@ -132,6 +132,8 @@ export function acquireLock(rt: Runtime, commonGitDirectory: string, runId: stri
 		const outcome = tryCreate(rt, lock)
 		if (outcome === "created") {
 			publishOwner(rt, lock, runId)
+			// Test-only fault seam: process tests observe the published owner before asserting another contender is busy.
+			rt.faultPoint("lock-held")
 			return lock
 		}
 		if (outcome === "busy" && attempt < lockAttempts - 1) pause(lockPauseMs)

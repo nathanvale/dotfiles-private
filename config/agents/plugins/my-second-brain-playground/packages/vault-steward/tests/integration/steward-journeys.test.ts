@@ -25,6 +25,14 @@ function preview(f: Fixture, worktree: string): string {
 	return data(run(f, ["finish", "--preview", "--worktree", worktree, "--message", "docs: change"])).previewId as string
 }
 
+// The filesystem owner record is the inter-process witness. The 10-s bound detects a hung test process; it is not the
+// ordering oracle, which is the holder's fault pause after that record is published.
+async function waitForOwner(path: string, previous?: string): Promise<void> {
+	const deadline = Date.now() + 10_000
+	while ((!existsSync(path) || (previous !== undefined && readFileSync(path, "utf8") === previous)) && Date.now() < deadline) await Bun.sleep(20)
+	expect(existsSync(path) && (previous === undefined || readFileSync(path, "utf8") !== previous)).toBe(true)
+}
+
 test("preview binds the apply: a stale candidate, a superseded id, and a moved main each refuse before any effect", () => {
 	const f = fixture()
 	const worktree = candidate(f)
@@ -83,13 +91,10 @@ test("two applies of one preview produce exactly one integration; the other refu
 	const worktree = candidate(f)
 	const id = preview(f, worktree)
 	const env = stewardEnvironment(f)
-	const [first, second] = await Promise.all([
-		stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=after-lock:3500" }),
-		(async () => {
-			await Bun.sleep(300)
-			return stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], env)
-		})(),
-	])
+	const holder = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=lock-held:3500" })
+	await waitForOwner(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"))
+	const second = await stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], env)
+	const first = await holder
 	expect(first.envelope?.result.causeCode).toBe("SUCCESS_COMPLETED")
 	expect(second.envelope?.result.causeCode).toBe("TRANSIENT_INTEGRATION_BUSY")
 	expect(second.envelope?.result.retryDelayMilliseconds).toBe(2000)
@@ -176,13 +181,11 @@ test("a crash between the fast-forward and the receipt is recoverable: inspect r
 	expect(inspected.result.nextAction).toBe("vault-steward.recover")
 	// two recovers: one records, the other refuses busy or sees the receipt; never a second ref value
 	const env = stewardEnvironment(f)
-	const [first, second] = await Promise.all([
-		stewardAsync(f.vault, ["recover", "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=before-receipt:3500" }),
-		(async () => {
-			await Bun.sleep(300)
-			return stewardAsync(f.vault, ["recover", "--worktree", worktree], env)
-		})(),
-	])
+	const staleOwner = readFileSync(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"), "utf8")
+	const holder = stewardAsync(f.vault, ["recover", "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=before-receipt:3500" })
+	await waitForOwner(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"), staleOwner)
+	const second = await stewardAsync(f.vault, ["recover", "--worktree", worktree], env)
+	const first = await holder
 	expect(first.envelope?.result.causeCode).toBe("SUCCESS_COMPLETED")
 	expect(first.envelope?.result.effects.completed).toEqual(["completion.receipt", "completion.ref"])
 	expect(second.envelope?.result.causeCode).toBe("TRANSIENT_INTEGRATION_BUSY")

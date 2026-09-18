@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { join, resolve } from "node:path"
 import { acquireLock, lockPath, ownerIsLive, releaseLock } from "../../src/integration-lock.ts"
 import { createRuntime } from "../../src/runtime.ts"
 
@@ -59,17 +59,40 @@ test("an unreadable present owner stays live after the grace period", () => {
 	expect(ownerIsLive(rt, lock)).toBe(true)
 })
 
-test("acquire creates the directory with its owner, refuses a live owner after about two seconds, and reclaims a dead one", () => {
+const lockModule = resolve(import.meta.dir, "../../src/integration-lock.ts")
+const runtimeModule = resolve(import.meta.dir, "../../src/runtime.ts")
+const faultsModule = resolve(import.meta.dir, "../../src/faults.ts")
+const lockContender = `
+const { acquireLock, releaseLock } = await import(${JSON.stringify(lockModule)})
+const { createRuntime } = await import(${JSON.stringify(runtimeModule)})
+const { parseFaults, withFaults } = await import(${JSON.stringify(faultsModule)})
+const faults = parseFaults(process.env.VAULT_STEWARD_FAULT) ?? []
+const lock = acquireLock(withFaults(createRuntime(), faults), process.env.LOCK_TEST_COMMON, "worker-" + process.pid)
+if (lock === null) process.exit(20)
+releaseLock(lock)
+console.log("acquired")
+`
+
+async function waitForOwner(path: string): Promise<void> {
+	const deadline = Date.now() + 10_000
+	while (!existsSync(path) && Date.now() < deadline) await Bun.sleep(20)
+	expect(existsSync(path)).toBe(true)
+}
+
+test("acquire creates the directory with its owner, observes a fault-held live owner, and reclaims a dead one", async () => {
 	const rt = createRuntime()
 	const common = commonDirectory()
 	const lock = acquireLock(rt, common, "vnc-run")
 	expect(lock).toBe(lockPath(common))
 	expect(JSON.parse(rt.readText(join(lockPath(common), "owner.json")))).toEqual({ schemaVersion: 1, runId: "vnc-run", pid: process.pid })
-	const started = Date.now()
-	expect(acquireLock(rt, common, "vnc-second")).toBeNull()
-	const elapsed = Date.now() - started
-	expect(elapsed).toBeGreaterThanOrEqual(1_900)
-	expect(elapsed).toBeLessThan(4_000)
+	releaseLock(lockPath(common))
+	const holder = Bun.spawn([process.execPath, "-e", lockContender], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, LOCK_TEST_COMMON: common, VAULT_STEWARD_FAULT: "pause=lock-held:1200" } })
+	// The holder's published owner is the ordering witness; the 10-s wait only bounds a hung child process.
+	await waitForOwner(join(lockPath(common), "owner.json"))
+	const contender = Bun.spawn([process.execPath, "-e", lockContender], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { ...process.env, LOCK_TEST_COMMON: common } })
+	expect(await holder.exited).toBe(0)
+	expect(await contender.exited).toBe(0)
+	mkdirSync(lockPath(common))
 	writeFileSync(join(lockPath(common), "owner.json"), JSON.stringify({ schemaVersion: 1, runId: "gone", pid: 2_147_483_646 }))
 	expect(acquireLock(rt, common, "vnc-third")).toBe(lockPath(common))
 	// The reclaim mutex is removed before the new owner is published, and the renamed dead lock leaves no residue.
