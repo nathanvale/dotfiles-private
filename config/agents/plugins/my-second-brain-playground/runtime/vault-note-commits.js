@@ -127,7 +127,8 @@ function refuse(reason, facts = {}, transaction = "unchanged") {
 function git(rt, cwd, args, context) {
   const result = started(rt.spawn(["git", "--no-optional-locks", ...args], { cwd }));
   if (result.exitCode !== 0) {
-    refuse("git-failed", { ...context, detail: result.stderr.trim() }, context.worktreeCreated ? "partially-completed" : "unchanged");
+    const { transaction, ...facts } = context;
+    refuse("git-failed", { ...facts, detail: result.stderr.trim() }, transaction ?? (context.worktreeCreated ? "partially-completed" : "unchanged"));
   }
   return result.stdout.trim();
 }
@@ -275,6 +276,7 @@ function createCandidate(rt, plan) {
   git(rt, plan.vault, ["worktree", "add", "--detach", plan.requestedWorktree, baseCommit], context);
   context.worktreeCreated = true;
   context.worktree = plan.requestedWorktree;
+  context.completedEffects = ["candidate.worktree"];
   try {
     const worktree = rt.realpath(plan.requestedWorktree);
     context.worktree = worktree;
@@ -293,7 +295,7 @@ function createCandidate(rt, plan) {
   } catch (error) {
     if (error instanceof Refusal)
       throw error;
-    refuse("unexpected", { runId: plan.runId, worktree: context.worktree, worktreeCreated: true, detail: error instanceof Error ? error.message : String(error) }, "partially-completed");
+    refuse("unexpected", { runId: plan.runId, worktree: context.worktree, worktreeCreated: true, completedEffects: ["candidate.worktree"], uncertainEffects: ["candidate.manifest"], detail: error instanceof Error ? error.message : String(error) }, "unknown");
   }
 }
 function manifestPath(rt, worktree, context) {
@@ -446,17 +448,26 @@ function validateCandidate(rt, manifest, message) {
     refuse("path-set-changed-by-checker", candidateFacts(manifest));
   git(rt, manifest.worktree, ["add", "--", ...manifest.paths], context(manifest));
   checkWhitespace(rt, manifest, ["--cached", manifest.baseCommit], candidateFacts(manifest));
-  git(rt, manifest.worktree, ["commit", "-m", message], context(manifest));
+  try {
+    git(rt, manifest.worktree, ["commit", "-m", message], { ...context(manifest), transaction: "unknown", uncertainEffects: ["candidate.commit"] });
+  } catch (error) {
+    if (error instanceof Refusal)
+      throw error;
+    refuse("unexpected", { ...candidateFacts(manifest), uncertainEffects: ["candidate.commit"], detail: error instanceof Error ? error.message : String(error) }, "unknown");
+  }
   return { kind: "commit", commit: git(rt, manifest.worktree, ["rev-parse", "HEAD"], context(manifest)) };
 }
-function recordCompletion(rt, manifest, commit) {
+function recordCompletion(rt, manifest, commit, completedBefore = []) {
   const code = commit ? "INTEGRATED" : "NO_CHANGES";
   const receipt = receiptPath(rt, manifest.worktree);
+  const completed = [...completedBefore];
   try {
     git(rt, manifest.vault, ["update-ref", completionRef(manifest.runId), commit ?? manifest.baseCommit], context(manifest));
+    completed.push("completion.ref");
+    rt.faultPoint("before-receipt");
     rt.atomicPrivateJson(receipt, { ...manifest, code, ...commit ? { commit } : {} });
   } catch {
-    refuse("completion-record-failed", { ...candidateFacts(manifest, commit), afterFastForward: commit !== undefined }, "partially-completed");
+    refuse("completion-record-failed", { ...candidateFacts(manifest, commit), afterFastForward: commit !== undefined, completedEffects: completed }, completed.length > 0 ? "partially-completed" : "unchanged");
   }
   const removed = gitQuiet(rt, manifest.vault, ["worktree", "remove", manifest.worktree]);
   return { code, commit, receipt, removed: removed.exitCode === 0 };
@@ -477,7 +488,9 @@ function withLock(rt, manifest, action) {
   releaseLock(lock);
   return result;
 }
-function rebaseOntoMain(rt, manifest, commit, currentMain, vault) {
+function observeMainAt(rt, manifest, commit, vault, currentMain) {
+  if (currentMain === manifest.baseCommit || commit === undefined)
+    return { observedMain: currentMain, rebase: false };
   const ancestry = gitQuiet(rt, vault, ["merge-base", "--is-ancestor", manifest.baseCommit, currentMain]);
   if (ancestry.exitCode !== 0)
     refuse("main-diverged", candidateFacts(manifest, commit));
@@ -485,6 +498,9 @@ function rebaseOntoMain(rt, manifest, commit, currentMain, vault) {
   const overlap = overlappingPaths(mainChanges, manifest.paths);
   if (overlap.length > 0)
     refuse("semantic-overlap", { ...candidateFacts(manifest, commit), overlap });
+  return { observedMain: currentMain, rebase: true };
+}
+function performRebase(rt, manifest, commit, currentMain) {
   const rebased = gitQuiet(rt, manifest.worktree, ["rebase", "--onto", currentMain, manifest.baseCommit, commit]);
   if (rebased.exitCode !== 0) {
     gitQuiet(rt, manifest.worktree, ["rebase", "--abort"]);
@@ -498,22 +514,33 @@ function rebaseOntoMain(rt, manifest, commit, currentMain, vault) {
   checkWhitespace(rt, manifest, [`${integrated}^`, integrated], { ...candidateFacts(manifest, integrated), afterRebase: true });
   return integrated;
 }
+function fastForward(rt, manifest, vault, integrated) {
+  rt.faultPoint("before-ff-merge");
+  const merged = gitQuiet(rt, vault, ["merge", "--ff-only", integrated]);
+  rt.faultPoint("after-ff-merge");
+  const readBack = { ...context(manifest), transaction: "unknown", uncertainEffects: ["main.fast-forward"] };
+  if (merged.exitCode !== 0 || git(rt, vault, ["rev-parse", "HEAD"], readBack) !== integrated) {
+    refuse("integration-unproved", { ...candidateFacts(manifest, integrated), uncertainEffects: ["main.fast-forward"] }, "unknown");
+  }
+}
+function canonicalReady(rt, manifest, commit) {
+  const vault = rt.realpath(manifest.vault);
+  if (git(rt, vault, ["branch", "--show-current"], context(manifest)) !== "main" || git(rt, vault, ["status", "--porcelain"], context(manifest))) {
+    refuse("canonical-not-ready", candidateFacts(manifest, commit));
+  }
+  return vault;
+}
 function integrate(rt, manifest, commit) {
   return withLock(rt, manifest, () => {
     const completed = readReceipt(rt, manifest.worktree);
     if (completed)
       return { kind: "receipt", receipt: completed };
-    const vault = rt.realpath(manifest.vault);
-    if (git(rt, vault, ["branch", "--show-current"], context(manifest)) !== "main" || git(rt, vault, ["status", "--porcelain"], context(manifest))) {
-      refuse("canonical-not-ready", candidateFacts(manifest, commit));
-    }
+    const vault = canonicalReady(rt, manifest, commit);
     const currentMain = git(rt, vault, ["rev-parse", "HEAD"], context(manifest));
-    const integrated = currentMain === manifest.baseCommit ? commit : rebaseOntoMain(rt, manifest, commit, currentMain, vault);
-    const merged = gitQuiet(rt, vault, ["merge", "--ff-only", integrated]);
-    if (merged.exitCode !== 0 || git(rt, vault, ["rev-parse", "HEAD"], context(manifest)) !== integrated) {
-      refuse("integration-unproved", candidateFacts(manifest, integrated), "unknown");
-    }
-    return { kind: "completion", completion: recordCompletion(rt, manifest, integrated) };
+    const observation = observeMainAt(rt, manifest, commit, vault, currentMain);
+    const integrated = observation.rebase ? performRebase(rt, manifest, commit, currentMain) : commit;
+    fastForward(rt, manifest, vault, integrated);
+    return { kind: "completion", completion: recordCompletion(rt, manifest, integrated, ["main.fast-forward"]) };
   });
 }
 function completeWithoutIntegration(rt, manifest, commit) {
@@ -764,7 +791,8 @@ function createRuntime() {
     },
     makeDirectory: (path, mode) => mkdirSync2(path, { recursive: true, mode }),
     chmod: (path, mode) => chmodSync(path, mode),
-    removeTree: (path) => rmSync2(path, { recursive: true, force: true })
+    removeTree: (path) => rmSync2(path, { recursive: true, force: true }),
+    faultPoint: () => {}
   };
 }
 
@@ -871,8 +899,17 @@ var legacyRender = {
   "rebased-path-set-mismatch": finishPreserved("REBASED_PATH_SET_MISMATCH", "Preserve the candidate and inspect its rebased commit before continuing.", false),
   "integration-unproved": finishPreserved("INTEGRATION_UNPROVED", "Inspect canonical main and the candidate before taking another action.", false),
   "completion-record-failed": (facts) => outcome(false, "finish", "COMPLETION_RECORD_FAILED", facts.runId ?? null, facts.afterFastForward ? "The commit reached main but its receipt could not be saved. Inspect main and the preserved candidate before retrying." : "No note changed but its receipt could not be saved. Preserve the candidate and inspect local state before retrying.", preserved(facts, false, facts.commit)),
-  unexpected: (facts, command) => outcome(false, command, "UNEXPECTED_FAILURE", facts.runId ?? null, "Preserve any candidate worktree and inspect the local error before retrying.", { retrySafe: false, ...beginCreated(facts) })
+  unexpected: unexpectedFailure,
+  "preview-not-found": unexpectedFailure,
+  "preview-consumed": unexpectedFailure,
+  "preview-stale": unexpectedFailure,
+  "preview-invalid": unexpectedFailure,
+  "recovery-unprovable": unexpectedFailure,
+  "input-invalid": (_facts, command) => outcome(false, command, "INVALID_USAGE", null, "Run vault-note-commits --help and use the documented flags.")
 };
+function unexpectedFailure(facts, command) {
+  return outcome(false, command, "UNEXPECTED_FAILURE", facts.runId ?? null, "Preserve any candidate worktree and inspect the local error before retrying.", { retrySafe: false, ...beginCreated(facts) });
+}
 function checkFailed(facts) {
   return outcome(false, "finish", "CHECK_FAILED", facts.runId ?? null, "Read the private checker diagnostics, fix the admitted files in the candidate, then retry finish.", {
     changedState: "partial",

@@ -9,6 +9,7 @@
 			"!config/herdr/plugins",
 			"!**/actions/assets",
 			"!**/dist",
+			"!config/agents/plugins/my-second-brain-playground/runtime",
 			"!**/coverage",
 			"!config/tmuxinator/*.yml",
 			"!config/opencode",
