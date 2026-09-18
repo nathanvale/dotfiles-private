@@ -213,9 +213,11 @@ with prefix `lkr`, which the repinned helper reads only after its one designated
 migration from schema `v53` to `v66` (Ticket #52 revision 3), because strict
 `--readonly` under `1.3.0` refuses a `v53` store. `PATH` discovery never
 happens. The Mise shim `/Users/nathanvale/.local/share/mise/shims/bd` is not
-the pin: it is a symlink, so the canonical-path check refuses it before any
-spawn. The retained private `bd 1.2.2` is not the pin either: the path check
-refuses it before any spawn, and it never targets the migrated store. The test
+the pin: its path is not the accepted path, so the exact-path check refuses it
+before any spawn; it is also a symlink, but the later canonical-path check never
+runs for it. The retained private `bd 1.2.2` is not the pin either: the same
+exact-path check refuses it before any spawn, and it never targets the migrated
+store. The test
 fixture shim at `tests/fixtures/checker/bd` replays recorded output of the
 pinned `bd` and has its own
 digest; that digest is never the pin and never appears in a production
