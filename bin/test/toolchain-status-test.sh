@@ -40,12 +40,12 @@ assert_contains() { grep -Fq -- "$2" <<<"$1" || fail "$3 (missing [$2])"; pass "
 # manifest or Mise declaration under test.
 cat >"$ORACLE" <<'EOF'
 # tool|version|selected_owner|qualification|fixture_observed_owner
-node|24.20.0|mise|source_declared|mise
+node|26.9.0|mise|source_declared|mise
 bun|1.4.0|mise|source_declared|mise
 python|3.11.9|mise|source_declared|mise
 bd|1.3.0|mise|source_declared|mise
 git|2.50.1|system|unqualified|unknown
-npm|11.19.0|mise|source_declared|mise
+npm|11.19.1|mise|source_declared|mise
 EOF
 
 oracle() {
@@ -429,7 +429,7 @@ manifest_error "$missing_repo" 'manifest_incomplete' 'missing required tool mani
 
 duplicate_repo="$TEST_ROOT/duplicate-repo"
 cp -R "$PREVIEW_REPO" "$duplicate_repo"
-printf 'node|24.20.0|mise|source_declared|-\n' >>"$duplicate_repo/config/toolchain/versions.tsv"
+printf 'node|26.9.0|mise|source_declared|-\n' >>"$duplicate_repo/config/toolchain/versions.tsv"
 manifest_error "$duplicate_repo" 'manifest_duplicate_tool' 'duplicate tool manifest'
 
 unknown_repo="$TEST_ROOT/unknown-repo"
@@ -471,7 +471,7 @@ valid_version_json="$(sed -n '2,$p' <<<"$valid_version_result")"
 assert_equals '1' "$valid_version_status" 'valid three-part versions reach ordinary ownership checks'
 assert_equals 'not_ready' "$(jq -r '.status' <<<"$valid_version_json")" 'valid three-part version control is not a manifest error'
 
-awk '$0 == "node = \"24.20.0\"" { print "node = \"24.20.1\""; next } { print }' "$VERIFY_REPO/config/mise/source.toml" >"$VERIFY_REPO/config/mise/source.next.toml"
+awk '$0 == "node = \"26.9.0\"" { print "node = \"26.9.1\""; next } { print }' "$VERIFY_REPO/config/mise/source.toml" >"$VERIFY_REPO/config/mise/source.next.toml"
 mv "$VERIFY_REPO/config/mise/source.next.toml" "$VERIFY_REPO/config/mise/source.toml"
 verifier_result="$(run_verifier)"
 verifier_status="$(sed -n '1p' <<<"$verifier_result")"

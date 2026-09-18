@@ -7,9 +7,9 @@
 # runtimes remain live fallbacks until a separately authorized migration.
 # `source_declared` means configuration exists but clean-machine qualification
 # has not happened. It never proves exact reconstruction.
-node|24.20.0|mise|source_declared|-
+node|26.9.0|mise|source_declared|-
 bun|1.4.0|mise|source_declared|-
 python|3.11.9|mise|source_declared|-
 bd|1.3.0|mise|source_declared|-
 git|2.50.1|system|unqualified|-
-npm|11.19.0|mise|source_declared|node
+npm|11.19.1|mise|source_declared|node
