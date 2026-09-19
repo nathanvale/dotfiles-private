@@ -6,6 +6,23 @@ case "$0" in
 *) exit 0 ;;
 esac
 
+# Guard audit line (plan 4.4, F3). The shell decides whether an audit is even possible (configured vault under
+# $HOME/.config, like the recovery owner, with a guard:audit script) before spawning anything, so the recovery exec
+# below keeps its process topology whenever no guard-enabled vault is configured. The bundle bounds the audit child to
+# 2 s, prints at most one line, and its exit status is ignored: the recovery exec path never changes.
+vault_guard_audit_line() {
+	config="${HOME:-}/.config/my-second-brain-playground/vault.json"
+	[ -n "${HOME:-}" ] && [ -r "$config" ] || return 0
+	vault=$(sed -n 's/.*"vault"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$config" 2>/dev/null | head -n 1)
+	[ -n "$vault" ] && [ -r "$vault/package.json" ] || return 0
+	grep -q '"guard:audit"' "$vault/package.json" 2>/dev/null || return 0
+	bun "$plugin_root/runtime/vault-guard-startup.js" 2>/dev/null || true
+}
+
+if command -v bun >/dev/null 2>&1 && [ -r "$plugin_root/runtime/vault-guard-startup.js" ]; then
+	vault_guard_audit_line
+fi
+
 if command -v bun >/dev/null 2>&1 && [ -r "$plugin_root/runtime/recovery-observer.js" ]; then
 	exec bun "$plugin_root/runtime/recovery-observer.js" hook
 fi

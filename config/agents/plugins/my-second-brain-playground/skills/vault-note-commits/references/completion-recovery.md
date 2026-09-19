@@ -16,9 +16,19 @@ missing receipt is not evidence of failure or permission to repeat the work.
 Inspect the candidate and canonical Git history before taking another action.
 
 Recovery covers losing the response after the terminal receipt was saved.
-A crash between integration and receipt persistence can leave an integrated
-commit without a readable receipt. That case still requires inspection; the
-helper does not claim automatic recovery across every crash boundary.
+A crash between integration and receipt persistence leaves an integrated
+commit without a receipt; retry `finish` with the same worktree path. The
+retry records the completion and returns `INTEGRATED` without replaying the
+fast-forward only when three facts hold: the candidate is clean, the
+candidate's own HEAD reflog shows it produced its commit (a `commit` on top
+of the base, or a rebase pick performed there), and Git proves `main` contains
+that commit with exactly the admitted paths. A HEAD merely moved onto a
+commit of `main` (for example `git checkout --detach main`) is never
+completion evidence and is refused as before. That `INTEGRATED` result lists
+`completion-reference-written` and `completion-receipt-written` (plus
+`candidate-worktree-removed`) as its side effects; the fast-forward belongs
+to the crashed run. Any other crash boundary still requires inspection; the
+helper does not claim automatic recovery across all of them.
 
 Nathan owns retention. Keep a receipt and its matching local Git reference
 together while retries may occur; remove both only after the run is no longer

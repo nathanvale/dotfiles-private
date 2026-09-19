@@ -11,6 +11,10 @@ resolve the installed plugin root. Inspect the helper contract with
 The helper discovers the synthetic vault through
 `~/.config/my-second-brain-playground/vault.json`. When configuration is
 missing or invalid, read [configuration](references/configuration.md).
+The Vault Steward CLI (`vault-steward`) succeeds this helper and keeps
+`vault-note-commits` as its alias through the migration period; read
+[guardrails](references/guardrails.md) when a result carries `warnings`, a
+`guard` field, or `GUARD_INCOMPATIBLE`.
 
 ## Begin
 

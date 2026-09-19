@@ -260,10 +260,12 @@ function findGitSafetyGate(
 }
 
 describe('installed hook declarations', () => {
-	test('Claude declares the checkout safety gate on Write|Edit|Bash', () => {
+	test('Claude declares no checkout safety gate', () => {
+		// e068c7a1 retired the unused git-safety declaration from Claude
+		// settings. Pin that absence so the retired hook stays retired.
 		const claude = readDeclarations('../../settings.json')
 
-		expect(findGitSafetyGate(claude)?.matcher).toBe('Write|Edit|Bash')
+		expect(findGitSafetyGate(claude)).toBeUndefined()
 	})
 
 	test('Codex declares no checkout safety gate', () => {
