@@ -553,7 +553,7 @@ const REPAIR: Readonly<Record<ProductCause, Guidance>> = {
 	INTERNAL_GIT_FAILED_PARTIAL: { repair: "Inspect the created candidate worktree before retrying.", next: null },
 	INTERNAL_GIT_FAILED_UNKNOWN: { repair: "Inspect canonical main and the candidate before taking another action.", next: null },
 	INTERNAL_INTEGRATION_UNPROVED: { repair: "Inspect canonical main and the candidate before taking another action.", next: null },
-	INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: { repair: "Run finish --preview again; the candidate was restored before main moved.", next: null },
+	INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: { repair: "Run finish --preview again; the candidate was restored before main moved.", next: "vault-steward.finish-preview" },
 	INTERNAL_COMPLETION_RECORD_FAILED: { repair: "Run vault-steward recover for this worktree; it records completion only from Git evidence.", next: null },
 	INTERNAL_UNEXPECTED_UNCHANGED: { repair: "Inspect the local error and the diagnostics file before retrying.", next: null },
 	INTERNAL_UNEXPECTED_UNKNOWN: { repair: "Inspect canonical main and the candidate before taking another action.", next: null },
