@@ -237,6 +237,7 @@ const resultSchema = z
 		failedRow("domain", 3, "unchanged", "handoff"),
 		failedRow("domain", 3, "unchanged", "next"),
 		failedRow("internal", 1, "unchanged", "handoff"),
+		failedRow("internal", 1, "unchanged", "next"),
 		failedRow("internal", 1, "partially-completed", "handoff"),
 		failedRow("internal", 1, "partially-completed", "next"),
 		failedRow("internal", 1, "unknown", "handoff"),

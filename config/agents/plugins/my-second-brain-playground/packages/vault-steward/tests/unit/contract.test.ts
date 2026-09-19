@@ -43,7 +43,7 @@ const EXPECTED_RULES: Record<string, [string | null, string, string, boolean, st
 	INTERNAL_GIT_FAILED_PARTIAL: ["internal", "failed", "partially-completed", false, "handoff"],
 	INTERNAL_GIT_FAILED_UNKNOWN: ["internal", "failed", "unknown", false, "handoff"],
 	INTERNAL_INTEGRATION_UNPROVED: ["internal", "failed", "unknown", false, "handoff"],
-	INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: ["internal", "failed", "unchanged", false, "handoff"],
+	INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: ["internal", "failed", "unchanged", false, "next"],
 	INTERNAL_COMPLETION_RECORD_FAILED: ["internal", "failed", "partially-completed", false, "next"],
 	INTERNAL_UNEXPECTED_UNCHANGED: ["internal", "failed", "unchanged", false, "handoff"],
 	INTERNAL_UNEXPECTED_UNKNOWN: ["internal", "failed", "unknown", false, "handoff"],

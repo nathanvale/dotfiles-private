@@ -113,7 +113,7 @@ const CAUSE_RULES = {
 	INTERNAL_GIT_FAILED_PARTIAL: cause("internal", "failed", "partially-completed", false, "handoff"),
 	INTERNAL_GIT_FAILED_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
 	INTERNAL_INTEGRATION_UNPROVED: cause("internal", "failed", "unknown", false, "handoff"),
-	INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: cause("internal", "failed", "unchanged", false, "handoff"),
+	INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: cause("internal", "failed", "unchanged", false, "next"),
 	INTERNAL_COMPLETION_RECORD_FAILED: cause("internal", "failed", "partially-completed", false, "next"),
 	INTERNAL_UNEXPECTED_UNCHANGED: cause("internal", "failed", "unchanged", false, "handoff"),
 	INTERNAL_UNEXPECTED_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
