@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "\"${CLAUDE_PLUGIN_ROOT}/hooks/recover-context\""
+            "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/msb-workflow\" hook"
           }
         ]
       }

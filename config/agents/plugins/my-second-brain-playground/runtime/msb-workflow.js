@@ -3593,8 +3593,8 @@ function describeFailure(result) {
 }
 
 // packages/workflow-cli/src/adapters/beads.ts
-var PINNED_BD_VERSION = "1.2.2";
-var PINNED_BD_REVISION = "6c124203e771";
+var PINNED_BD_VERSION = "1.3.0";
+var PINNED_BD_REVISION = "f45b249ce6b4";
 var VERSION_LINE = /^bd version (\S+) \(\S+: (?:.*@)?([0-9a-f]+)\)$/;
 var ABSENT_ISSUE_VALUES = new Set(["no issues found matching the provided IDs"]);
 var REASON_LIMIT = 200;
@@ -3778,7 +3778,7 @@ function createBeadsReader(configuration) {
     return { status: "available", gates: (Array.isArray(reply.value) ? reply.value : []).map(gateOf).filter((gate) => gate !== null) };
   }
   async function readPrime() {
-    const result = await bd(["prime", "--hook-json"]);
+    const result = await bd(["prime", "--readonly", "--hook-json"]);
     if (result.status !== "exited" || result.exit !== 0)
       return null;
     const parsed = parseJson(result.stdout);
@@ -4489,7 +4489,7 @@ function createRecoveryStore(stateHome, lockAdapter, hooks = {}) {
 }
 
 // packages/workflow-cli/src/adapters/native.ts
-var PRODUCTION_BD_PIN = { executable: "/Users/nathanvale/.local/state/trustworthy-engineering-loop-prototype/beads/bd", sha256: "9581d8bcd9662ccf9d889ee8d879787e32cd4c0249d93374eeac5044e9f24351" };
+var PRODUCTION_BD_PIN = { executable: "/Users/nathanvale/.local/share/mise/installs/github-gastownhall-beads/1.3.0/bd", sha256: "86e81a32d7b7cf3309a343210fac65e5a5ac485102c604447bf37d45aac675f0" };
 function stateRootIssue(configured) {
   if (configured.length === 0)
     return "the configured state root must be nonempty";
@@ -4549,7 +4549,7 @@ var ROWS = [
   ...shared("internal-failure", "An unexpected exception before any durable write", "failed", "INTERNAL_UNEXPECTED", "unchanged", false, null, "handoff", ROUTED),
   ...shared("beads-unavailable", "A native bd read failed to start, timed out, returned no JSON, or returned an error value that names no absent Bead (no_beads_directory, contention, unclassified)", "failed", "UNAVAILABLE_BEADS_READ", "unchanged", true, 1000, "next-action", ROUTED),
   ...shared("executable-refused", "The bd executable named by MSB_WORKFLOW_BD_EXECUTABLE or the binding was not accepted: it must be exactly the pinned absolute canonical path, a regular executable file, and hash to the pinned SHA-256 before any bd read; unset, relative, another path, a symlink, missing, not executable, or another digest all refuse", "refused", "DOMAIN_EXECUTABLE_INVALID", "unchanged", false, null, "next-action", READERS),
-  ...shared("store-mismatch", "bd version is not 1.2.2 at 6c124203e771, where.path is not <workspace>/.beads, the prefix disagrees with effective configuration, or context is redirected", "refused", "DOMAIN_STORE_MISMATCH", "unchanged", false, null, "next-action", READERS),
+  ...shared("store-mismatch", `bd version is not ${PINNED_BD_VERSION} at ${PINNED_BD_REVISION}, where.path is not <workspace>/.beads, the prefix disagrees with effective configuration, or context is redirected`, "refused", "DOMAIN_STORE_MISMATCH", "unchanged", false, null, "next-action", READERS),
   ...shared("state-unsafe", "A private state ancestor, lock file, marker, or binding has unsafe ownership, type, mode, link count, or identity", "refused", "DOMAIN_STATE_UNSAFE", "unchanged", false, null, "next-action", READERS),
   ...shared("binding-invalid", "The saved binding is not one bounded schema-v3 object: malformed bytes, duplicate keys, unknown or missing fields, null identities, or future skew", "refused", "SCHEMA_BINDING_INVALID", "unchanged", false, null, "next-action", READERS),
   ...shared("bead-missing", "The pinned bd reports the named Bead absent from the selected store", "refused", "DOMAIN_BEAD_MISSING", "unchanged", false, null, "next-action", READERS),
@@ -4675,9 +4675,9 @@ function storeOutcome(read2, workspace) {
   if (read2.status === "verified")
     return null;
   if (read2.status === "executable-invalid")
-    return refusal("executable-refused", read2.reason, "Set MSB_WORKFLOW_BD_EXECUTABLE to the absolute path of the pinned bd 1.2.2 executable and bind again", `msb-workflow inspect --workspace ${workspace}`, { reason: read2.reason });
+    return refusal("executable-refused", read2.reason, `Set MSB_WORKFLOW_BD_EXECUTABLE to the absolute path of the pinned bd ${PINNED_BD_VERSION} executable and bind again`, `msb-workflow inspect --workspace ${workspace}`, { reason: read2.reason });
   if (read2.status === "mismatch")
-    return refusal("store-mismatch", read2.reason, "Select the workspace whose .beads store is the intended one and the pinned bd 1.2.2 at 6c124203e771; a wrong, empty, global, or redirected store is never adopted", `msb-workflow inspect --workspace ${workspace}`, { reason: read2.reason });
+    return refusal("store-mismatch", read2.reason, `Select the workspace whose .beads store is the intended one and the pinned bd ${PINNED_BD_VERSION} at ${PINNED_BD_REVISION}; a wrong, empty, global, or redirected store is never adopted`, `msb-workflow inspect --workspace ${workspace}`, { reason: read2.reason });
   return { station: "beads-unavailable", message: read2.reason, result: { station: "beads-unavailable", reason: read2.reason }, repairAction: "Check that the selected .beads store exists and no other bd process holds it, then retry the same command", nextAction: `msb-workflow inspect --workspace ${workspace}`, availablePaths: [], handoffPrerequisites: [] };
 }
 function beadOutcome(read2, beadId, workspace) {
@@ -4927,12 +4927,16 @@ function harnessJson(eventName, additionalContext) {
   return `${JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext } })}
 `;
 }
+function systemMessageJson(systemMessage) {
+  return `${JSON.stringify({ systemMessage })}
+`;
+}
 function guidance(binding) {
   return [
     "My Second Brain recovery session.",
     `Session identity: ${binding.sessionIdentity}`,
     `Bound to Bead ${binding.beadId} in ${binding.workspace} (store ${binding.storePath}).`,
-    `Rebuild the Resume Panel at any time: msb-workflow recover --workspace ${binding.workspace} --session ${binding.sessionIdentity} --json`,
+    `Rebuild the Resume Panel at any time: msb-workflow recover --workspace ${shellQuote(binding.workspace)} --session ${shellQuote(binding.sessionIdentity)} --json`,
     `Refresh or rebind with this exact session identity: msb-workflow bind --workspace ${binding.workspace} --bead <bead-id> --session ${binding.sessionIdentity}`,
     "After compaction the Resume Panel is delivered once: on the next prompt (Codex) or at SessionStart compact (Claude Code)."
   ].join(`
@@ -4940,7 +4944,7 @@ function guidance(binding) {
 }
 function notice(binding, uncertain, folded) {
   const foldedText = folded.length === 0 ? "" : ` Pending generation(s) ${folded.join(", ")} settle with this notice.`;
-  return `msb-workflow: the Resume Panel for compaction generation(s) ${uncertain.join(", ")} was claimed but never recorded delivered; run msb-workflow recover --workspace ${binding.workspace} --session ${binding.sessionIdentity} --json to rebuild it.${foldedText} Nothing is replayed automatically.`;
+  return `msb-workflow: the Resume Panel for compaction generation(s) ${uncertain.join(", ")} was claimed but never recorded delivered; run msb-workflow recover --workspace ${shellQuote(binding.workspace)} --session ${shellQuote(binding.sessionIdentity)} --json to rebuild it.${foldedText} Nothing is replayed automatically.`;
 }
 var SILENT = { delivery: "silent", stdout: "" };
 async function readPanelText(bound, eventName) {
@@ -4967,13 +4971,11 @@ async function preCompact(bound) {
   const read2 = await readPanel(bound.store, bound.context, null, bound.event.session, bound.diagnostics, { includePrime: false });
   if (read2.status === "refused") {
     const secrets = read2.beads?.knownSecretValues() ?? [];
-    const text2 = harnessJson("PreCompact", redactText(`msb-workflow recovery is unavailable before compaction: ${read2.outcome.message}. Repair: ${read2.outcome.repairAction ?? read2.outcome.nextAction ?? "msb-workflow inspect"}`, secrets));
-    bound.emit(text2);
-    return { delivery: "precompact-unavailable", stdout: text2 };
+    const text = systemMessageJson(redactText(`msb-workflow recovery is unavailable before compaction: ${read2.outcome.message}. Repair: ${read2.outcome.repairAction ?? read2.outcome.nextAction ?? "msb-workflow inspect"}`, secrets));
+    bound.emit(text);
+    return { delivery: "precompact-unavailable", stdout: text };
   }
-  const text = harnessJson("PreCompact", `msb-workflow recovery is available: session ${bound.binding.sessionIdentity} is bound to ${bound.binding.beadId}; the Resume Panel is delivered once on the next prompt after compaction.`);
-  bound.emit(text);
-  return { delivery: "precompact-available", stdout: text };
+  return { delivery: "precompact-available", stdout: "" };
 }
 function withMarker(bound, whenUnreadable, action) {
   const { store, event } = bound;
@@ -5102,9 +5104,9 @@ async function storeChecks(context, request) {
   if (read2.status === "verified")
     return { checks: [pass("executable", `${read2.store.executable} (bd ${read2.store.version}; sha256 ${read2.store.executableDigest})`), pass("store", `${read2.store.storePath} (prefix ${read2.store.prefix}) agrees with where and config list`)], unavailable: null, knownSecretValues };
   if (read2.status === "executable-invalid")
-    return { checks: [fail("executable", read2.reason, "Set MSB_WORKFLOW_BD_EXECUTABLE to the absolute path of the pinned bd 1.2.2 executable"), skipped("store", "not read because the executable failed")], unavailable: null, knownSecretValues };
+    return { checks: [fail("executable", read2.reason, `Set MSB_WORKFLOW_BD_EXECUTABLE to the absolute path of the pinned bd ${PINNED_BD_VERSION} executable`), skipped("store", "not read because the executable failed")], unavailable: null, knownSecretValues };
   if (read2.status === "mismatch")
-    return { checks: [pass("executable", executable), fail("store", read2.reason, "Select the workspace whose .beads store is the intended one and the pinned bd 1.2.2 at 6c124203e771")], unavailable: null, knownSecretValues };
+    return { checks: [pass("executable", executable), fail("store", read2.reason, `Select the workspace whose .beads store is the intended one and the pinned bd ${PINNED_BD_VERSION} at ${PINNED_BD_REVISION}`)], unavailable: null, knownSecretValues };
   return { checks: [pass("executable", executable), fail("store", read2.reason, "Check that the selected .beads store exists and no other bd process holds it, then retry")], unavailable: read2.reason, knownSecretValues };
 }
 function stateRootCheck(stateHome) {

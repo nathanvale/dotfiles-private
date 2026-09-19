@@ -199,7 +199,7 @@ describe("bind: the one local write", () => {
 		expect(saved.storePath).toBe(join(root.workspace, ".beads"))
 		expect(saved.storePrefix).toBe("lkr")
 		expect(saved.beadsExecutable).toBe(FIXTURE_BD)
-		expect(saved.beadsVersion).toBe("1.2.2@6c124203e771")
+		expect(saved.beadsVersion).toBe("1.3.0@f45b249ce6b4")
 		expect(saved.beadId).toBe(BEAD)
 		expect(saved.beadObservedAt).toBe("2026-09-17T03:09:16Z")
 		expect(saved.sourceRepository).toBe(root.privateRoot)
@@ -271,7 +271,7 @@ describe("bind: the one local write", () => {
 	test.each([
 		["a missing database", "database does not exist"],
 		["a differently cased absent-issue value", "No Issues Found Matching The Provided IDs"],
-		["an issue-not-found phrasing bd 1.2.2 was never observed to emit", "issue lkr-fixture not found"],
+		["an issue-not-found phrasing the pinned bd was never observed to emit", "issue lkr-fixture not found"],
 	])("%s is an error value outside the observed absent-issue allowlist: unavailable, exit 75, not a missing Bead", async (_label, error) => {
 		steerBd(root, { showError: { [BEAD]: error } })
 		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
@@ -280,22 +280,22 @@ describe("bind: the one local write", () => {
 	})
 
 	test.each([
-		["the pinned revision as the branch text with another revision", "bd version 1.2.2 (deadbeef0: 6c124203e771@deadbeef0000)"],
-		["no parenthesised build field", "bd version 1.2.2 6c124203e771"],
-		["a patch version bump at the pinned revision", "bd version 1.2.3 (6c124203e: 6c124203e771)"],
-		["the pinned revision only as a prefix of the revision field", "bd version 1.2.2 (6c124203e: 6c124203e771433a)"],
+		["the pinned revision as the branch text with another revision", "bd version 1.3.0 (deadbeef0: f45b249ce6b4@deadbeef0000)"],
+		["no parenthesised build field", "bd version 1.3.0 f45b249ce6b4"],
+		["a patch version bump at the pinned revision", "bd version 1.3.1 (f45b249ce: f45b249ce6b4)"],
+		["the pinned revision only as a prefix of the revision field", "bd version 1.3.0 (f45b249ce: f45b249ce6b4433a)"],
 	])("%s refuses as a store mismatch before any write", async (_label, version) => {
 		steerBd(root, { version })
 		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
 		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_STORE_MISMATCH", transactionState: "unchanged", retryable: false })
-		expect(envelope.message).toBe("bd executable is not the verified 1.2.2 at 6c124203e771")
+		expect(envelope.message).toBe("bd executable is not the verified 1.3.0 at f45b249ce6b4")
 		expect(durableListing(root)).toEqual([])
 	})
 
 	test.each([
-		["outside a Git directory", "bd version 1.2.2 (6c124203e: 6c124203e771)"],
-		["inside a Git directory, with the branch appended", "bd version 1.2.2 (6c124203e: codex/lkr-195-recovery-helper-private@6c124203e771)"],
-		["with a branch containing @ and parentheses", "bd version 1.2.2 (6c124203e: release@2026(a)@6c124203e771)"],
+		["outside a Git directory", "bd version 1.3.0 (f45b249ce: f45b249ce6b4)"],
+		["inside a Git directory, with the branch appended", "bd version 1.3.0 (f45b249ce: codex/lkr-195-helper-pin-1.3@f45b249ce6b4)"],
+		["with a branch containing @ and parentheses", "bd version 1.3.0 (f45b249ce: release@2026(a)@f45b249ce6b4)"],
 	])("the pinned version line %s binds", async (_label, version) => {
 		steerBd(root, { version })
 		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
@@ -304,7 +304,7 @@ describe("bind: the one local write", () => {
 
 	test.each([
 		["a wrong store path", { wherePath: "/elsewhere/.beads" }],
-		["a wrong bd version", { version: "bd version 1.3.0 (abcdef0: abcdef0123456)" }],
+		["a wrong bd version", { version: "bd version 1.4.0 (abcdef0: abcdef0123456)" }],
 		["a prefix that disagrees with configuration", { configPrefix: "zzz" }],
 		["a redirected context", { redirected: true }],
 	])("%s refuses as a store mismatch before any write", async (_label, scenario) => {
@@ -338,8 +338,8 @@ describe("bind: the one local write", () => {
 	test("the production entry refuses the fixture bd: it is not the accepted path, whatever version it prints", async () => {
 		const run = await runCli(root, bindArgs(root, SESSION, BEAD), { entry: "production" })
 		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_EXECUTABLE_INVALID", transactionState: "unchanged", retryable: false })
-		// The accepted path is the Ticket #58 literal, never read from the helper.
-		expect(envelope.message).toBe(`bd executable ${FIXTURE_BD} is not the accepted /Users/nathanvale/.local/state/trustworthy-engineering-loop-prototype/beads/bd`)
+		// The accepted path is the Ticket #52 revision 3 literal, never read from the helper.
+		expect(envelope.message).toBe(`bd executable ${FIXTURE_BD} is not the accepted /Users/nathanvale/.local/share/mise/installs/github-gastownhall-beads/1.3.0/bd`)
 		expect(durableListing(root)).toEqual([])
 	})
 
@@ -473,7 +473,7 @@ describe("recover: the Resume Panel from current reads", () => {
 		// The configured executable is the one that was run and hashed (decision D1: the digest is recorded, the version is pinned).
 		expect(store.executable).toBe(FIXTURE_BD)
 		expect(store.executableDigest).toBe(createHash("sha256").update(readFileSync(FIXTURE_BD)).digest("hex"))
-		expect(store.version).toBe("1.2.2@6c124203e771")
+		expect(store.version).toBe("1.3.0@f45b249ce6b4")
 		const bead = result.bead as Record<string, unknown>
 		expect(bead.id).toBe(BEAD)
 		expect(bead.status).toBe("in_progress")
@@ -786,7 +786,7 @@ describe("inspect: read-only prerequisites", () => {
 	test("reports the configured executable with its recorded digest", async () => {
 		const run = await runCli(root, inspectArgs(root, null))
 		const detail = (resultOf(run).checks as { name: string; detail: string }[]).find((check) => check.name === "executable")?.detail ?? ""
-		expect(detail).toBe(`${FIXTURE_BD} (bd 1.2.2@6c124203e771; sha256 ${createHash("sha256").update(readFileSync(FIXTURE_BD)).digest("hex")})`)
+		expect(detail).toBe(`${FIXTURE_BD} (bd 1.3.0@f45b249ce6b4; sha256 ${createHash("sha256").update(readFileSync(FIXTURE_BD)).digest("hex")})`)
 	})
 
 	test("names a bad executable and skips the store read", async () => {

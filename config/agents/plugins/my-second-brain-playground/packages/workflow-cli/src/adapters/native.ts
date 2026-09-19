@@ -14,8 +14,10 @@ import { type BeadsPin, createBeadsReader } from "./beads.ts"
 import { gitTopLevel } from "./git.ts"
 import { createRecoveryStore, type RecoveryStoreHooks } from "./recovery.ts"
 
-/** Ticket #58: the accepted native Beads executable. Any other path or digest refuses before any bd read. */
-const PRODUCTION_BD_PIN: BeadsPin = { executable: "/Users/nathanvale/.local/state/trustworthy-engineering-loop-prototype/beads/bd", sha256: "9581d8bcd9662ccf9d889ee8d879787e32cd4c0249d93374eeac5044e9f24351" }
+/** The accepted native Beads executable: the Mise-owned canonical `bd 1.3.0` file (never the Mise shim), repinned under
+ * Ticket #52 revision 3 and Spec #57 revision 3 from the private executable Ticket #58 delivered. Any other path or
+ * digest refuses before any bd read. */
+const PRODUCTION_BD_PIN: BeadsPin = { executable: "/Users/nathanvale/.local/share/mise/installs/github-gastownhall-beads/1.3.0/bd", sha256: "86e81a32d7b7cf3309a343210fac65e5a5ac485102c604447bf37d45aac675f0" }
 
 // The configured root is validated as written: no normalization, no symlink resolution, no creation. Ancestors may be
 // symlinks (macOS temp roots live under /var -> /private/var); the root entry itself must be a real owned directory.

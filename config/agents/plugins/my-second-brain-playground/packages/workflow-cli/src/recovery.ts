@@ -104,8 +104,9 @@ function nextSafeAction(bead: BeadFacts, blockers: readonly string[], gates: rea
  * value is single-quoted with `'` spelled `'\''`. */
 const SHELL_SAFE = /^[A-Za-z0-9_@%+:,./-][A-Za-z0-9_@%+=:,./-]*$/
 
-/** One pasteable shell word: the value is never left for the shell to split, glob, expand or run. */
-function shellQuote(value: string): string {
+/** One pasteable shell word: the value is never left for the shell to split, glob, expand or run. The one quoting
+ * owner: the panel commands here and the `hook` guidance and notice render the same `recover` command through it. */
+export function shellQuote(value: string): string {
 	return SHELL_SAFE.test(value) ? value : `'${value.replace(/'/g, "'\\''")}'`
 }
 

@@ -39,6 +39,23 @@ which is already at v66. The tag-matched upstream upgrade guide states that
 command, that every client sharing a store must upgrade together, and that
 going back is a schema-cursor rollback of the store, not a client downgrade.
 
+Isolated Mise 2026.9.10 probes then witnessed three lock behaviors. With Beads
+1.3.0 already installed, generating a brand-new lock from the exact 1.3.0
+config omitted the Beads entry, asset, and checksum. Retaining the valid 1.3.0
+pre-install lock and refreshing it in place enriched that lock while preserving
+the Beads evidence. Seeding from the selected 1.2.2 lock did not update its
+Beads entry to 1.3.0. Preserving the pre-install lock is therefore necessary
+but is not sufficient by itself for safe retry or idempotence.
+
+Mise 2026.9.10 writes `lockfile_version = 2` lockfiles that bind each
+configured request to its locked version through `specifiers`, and
+`mise install --locked` requires a pre-resolved URL for the current platform
+from that lockfile instead of resolving one through the GitHub API. Beads
+documents `github:gastownhall/beads` as its Mise release backend. The rejected
+first repair matched lock lines by text, which could not prove that the matched
+text was the structurally valid record Mise would consume, and its recovery
+regression failed on content identity before reaching the Beads predicate.
+
 ## Decision Drivers
 
 - Keep one exact desired version and selected owner for each declared runtime.
@@ -99,6 +116,42 @@ by its colocated receipt. Only a fully verified staging revision can be publishe
 and selected through an atomic `current` link replacement. Interruption before
 selection leaves the prior revision active. Reapplying the selected content
 identity verifies it and returns a no-change result.
+
+After installation, apply must retain the valid pre-install `mise.lock` and run
+the post-install lock refresh in place. It must not delete that lock before the
+refresh. The final refreshed bytes remain the lock input to the content identity
+and the bytes bound by the receipt.
+
+Before generating a new lock, apply returns `no_change` only when the selected
+current revision fully verifies and its contract, manifest, and config bytes
+equal the staged source snapshot. This path does not run Mise lock generation
+or installation. For changed non-Beads sources, apply may seed staging only
+from a fully verified current revision whose declared Beads version exactly
+matches the staged declaration. It must never seed a 1.3.0 apply from a 1.2.2
+lock.
+
+Beads evidence is validated as parsed TOML structure, never by line matching.
+Apply reads the staged Mise source and `mise.lock` with a strict reader that
+fails closed on syntax errors, control characters, unsupported escapes, inline
+tables, multi-line values, duplicate keys, and redefined tables. The source must
+declare exactly one plain-string `tools."github:gastownhall/beads"` request
+naming a supported release: 1.3.0, the selected pin, or 1.2.2, the verified
+rollback baseline. Any other request fails closed until its official asset
+evidence is reviewed. The lock must declare `lockfile_version = 2` and exactly
+one `[[tools."github:gastownhall/beads"]]` record whose `backend` is
+`github:gastownhall/beads`, whose `specifiers` is exactly the configured
+request, and whose `version` equals it, with exactly one `platforms.macos-arm64`
+table under that record carrying the official
+`beads_<version>_darwin_arm64.tar.gz` URL and SHA-256. Mise-owned metadata such
+as `url_api` and `provenance` is tolerated; other tools and platforms are not
+inspected by this predicate. Apply validates the source before any Mise process
+runs, validates the lock before installation and again after the in-place
+refresh, and installs only through `mise install --locked`, so Mise consumes
+the validated lock's pre-resolved URLs and refuses to resolve a missing entry
+itself. Revision verification and recovery enforce the same predicate, so a
+sealed revision whose content identity and receipt are self-consistent is still
+refused when its lock lacks that record. Every refusal names the failed
+predicate, its observed value where one exists, and a repair path.
 
 The canonical run lock is one hard link to a complete, sealed, tokened owner
 record prepared under the same state directory. Publication is atomic: other
@@ -238,6 +291,23 @@ and Herdr panes on the desktop and server hosts, with retained receipts rather
 than retired panes. The generated lock of the 1.3.0 revision must name the
 official `beads_1.3.0_darwin_arm64.tar.gz` asset and the SHA-256 recorded
 above, and its receipt must bind that lock; any mismatch stops application.
+
+The Beads lock predicate is proved through the public apply and recover
+processes in `bin/test/toolchain-apply-test.sh` with a fake Mise and
+test-owned literal expectations. Malformed source TOML, a duplicate request
+key, a missing request, a table-form request, and an unsupported release are
+refused before any Mise process runs. Malformed lock TOML, a duplicate platform
+table, a wrong backend, a wrong, duplicate, or non-array specifier, a stale
+version, a wrong URL, a wrong checksum, a missing record, a duplicate record, a
+plain-table record, a missing platform, and legacy or future lockfile formats
+are refused before installation. Post-install loss or corruption of the lock is
+refused after the attempted install. The fake refuses any installation that is
+not exactly `install --locked`. A revision sealed by the test with a recomputed
+identity and matching receipt recovers when its lock is valid and is refused
+through the Beads predicate, with the prior selection unchanged, when its lock
+is stale, missing, malformed, or carries a wrong checksum. The 1.2.2 baseline
+recovers under the same predicate. Live `mise install --locked` on a host
+remains unproved until the next authorized apply.
 Remove the Homebrew Beads formula only after the Mise selection is verified and
 a rollback path is recorded; Beads stays absent from
 `config/brew/profile-requirements.tsv`.
@@ -263,5 +333,6 @@ Mise-ownership proof.
 - [Mise shims](https://mise.jdx.dev/dev-tools/shims.html).
 - [Beads v1.3.0 release](https://github.com/gastownhall/beads/releases/tag/v1.3.0).
 - [Beads v1.3.0 upgrade guide](https://github.com/gastownhall/beads/blob/v1.3.0/docs/getting-started/upgrading.md).
+- [Beads v1.3.0 installation guide, Mise backend](https://github.com/gastownhall/beads/blob/v1.3.0/docs/getting-started/installation.md).
 - [Beads schema-cursor rollback runbook](https://beads.gascity.com/recovery/accidental-1-2-1-release).
 - `$HOME/.local/state/my-second-brain-playground/beads-web-ui-bakeoff/<session>/checkpoint.md`.

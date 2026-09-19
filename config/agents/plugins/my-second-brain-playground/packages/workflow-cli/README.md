@@ -5,7 +5,10 @@ TypeScript replacement for the Python compaction helper
 (`packages/compaction-recovery/src/recovery.py`), built under
 [Spec #57](https://github.com/nathanvale/dotfiles-private/issues/57) revision 2
 and [Ticket #58](https://github.com/nathanvale/dotfiles-private/issues/58)
-revision 2.
+revision 2. Its Beads pin moved from the private `bd 1.2.2` to the Mise-owned
+`bd 1.3.0` under Spec #57 revision 3 and
+[Ticket #52](https://github.com/nathanvale/dotfiles-private/issues/52)
+revision 3 (stage `M2`); nothing else about the helper changed with the pin.
 
 Stage `M1` is source-only. The helper is built, tested, and documented here;
 it is not installed, not activated, and registered in no hook manifest. The
@@ -31,9 +34,12 @@ It is not a Beads workflow wrapper. It never runs a `bd` command that writes
 mutation), never executes a command it renders in the panel, and never reads
 `PATH` to find `bd`. It is not a graph engine, a task store, a journal, a cast
 registry, or a board product, and it does not become one by extension: a
-command with an external effect is outside this package. The pinned `bd 1.2.2`
-rewrites the store's `last-touched` hint file even under `--readonly`; that is
-a `bd` side effect of a read, not a helper write.
+command with an external effect is outside this package. The pinned `bd`
+rewrites the store's `last-touched` hint file even under `--readonly` (on
+`1.3.0` the rewrite keeps the same bytes and moves only the mtime); that is a
+`bd` side effect of a read, not a helper write. Under `1.3.0` a read may also
+append an anonymous-usage record under `$HOME/.beads/eventsData/`; see
+"Observed bd 1.3.0 behaviour" below.
 
 ## Python replacement
 
@@ -61,7 +67,7 @@ Intentional differences beyond the table:
 - Vault, project map, and Register lookups are gone; the only owners are the
   selected `.beads` store, the Git top level, and the private state root.
 - The Python fd-3 observation protocol and the Bun supervisor that spawned
-  Python stay in the rollback route only.
+  Python stay in the preserved Python source only and are not carried forward.
 
 ## Commands
 
@@ -129,8 +135,9 @@ beside the structured facts, and human mode prints the panel as is.
 A missing Bead is a domain refusal, exit `3`, never a retry invitation. A
 `bd` reply whose `error` value is `no_beads_directory`, a contention message,
 or anything unclassified is `UNAVAILABLE_BEADS_READ`, exit `75`. The `bd`
-process exit code never decides the class, because the pinned `bd 1.2.2` exits
-`1` for both an absent Bead and an absent store.
+process exit code never decides the class, because the pinned `bd` exits `1`
+for both an absent Bead and an absent store (observed on `1.2.2` and
+re-verified on `1.3.0`).
 
 Every Branch Station is declared in `src/branch-station-catalog.ts`, and the
 catalog suite fails any declared station that no real process reached.
@@ -184,8 +191,8 @@ the helper then:
    `Beads executable` line, and the `bind.started` diagnostic carries it;
 2. runs `bd version` and parses the first line as
    `bd version <version> (<build>: [<branch>@]<revision>)`, requiring the
-   version `1.2.2` and the revision field, the hex after the last `@` inside
-   the parentheses, to be `6c124203e771`; the branch text `bd` appends inside
+   version `1.3.0` and the revision field, the hex after the last `@` inside
+   the parentheses, to be `f45b249ce6b4`; the branch text `bd` appends inside
    a Git repository is never compared, so a branch spelled like the revision
    cannot satisfy the pin;
 3. requires `bd where --readonly --json` to report `path` exactly equal to
@@ -196,13 +203,23 @@ the helper then:
 
 The path, digest, version and revision are all enforced; the digest is also
 reported so a reader can check it. For this rollout the pinned executable is
-`/Users/nathanvale/.local/state/trustworthy-engineering-loop-prototype/beads/bd`,
-SHA-256 `9581d8bcd9662ccf9d889ee8d879787e32cd4c0249d93374eeac5044e9f24351`,
-`bd version 1.2.2` at `6c124203e771`, and the selected store is
+`/Users/nathanvale/.local/share/mise/installs/github-gastownhall-beads/1.3.0/bd`,
+SHA-256 `86e81a32d7b7cf3309a343210fac65e5a5ac485102c604447bf37d45aac675f0`,
+`bd version 1.3.0` at `f45b249ce6b4`, the Mise-owned canonical file rolled out
+at dotfiles commit `5999ac637fd0f3bda435435a698f1f123721cd75`; the selected
+store is
 `/Users/nathanvale/.local/state/my-second-brain-playground/legacy-kit-rollout-20260916/store/.beads`
-with prefix `lkr`. Homebrew `bd 1.3.0` on `PATH` must never be used; the
-version gate refuses it. The test fixture shim at
-`tests/fixtures/checker/bd` replays recorded `bd 1.2.2` JSON and has its own
+with prefix `lkr`, which the repinned helper reads only after its one designated
+migration from schema `v53` to `v66` (Ticket #52 revision 3), because strict
+`--readonly` under `1.3.0` refuses a `v53` store. `PATH` discovery never
+happens. The Mise shim `/Users/nathanvale/.local/share/mise/shims/bd` is not
+the pin: its path is not the accepted path, so the exact-path check refuses it
+before any spawn; it is also a symlink, but the later canonical-path check never
+runs for it. The retained private `bd 1.2.2` is not the pin either: the same
+exact-path check refuses it before any spawn, and it never targets the migrated
+store. The test
+fixture shim at `tests/fixtures/checker/bd` replays recorded output of the
+pinned `bd` and has its own
 digest; that digest is never the pin and never appears in a production
 binding, so the production entry refuses the shim. The shim-lane tests and the
 `cli-design` checker spawn `tests/fixtures/checker/cli.ts` instead: the same
@@ -212,18 +229,67 @@ proven by `tests/unit/beads.test.ts`, by the production entry refusing the
 shim in `tests/integration/msb-workflow.test.ts`, and by the native-storage
 suite against the pinned executable.
 
+### Observed bd 1.3.0 behaviour
+
+The limits the helper handles were recorded against `bd 1.2.2` and re-verified
+against `bd 1.3.0` at `f45b249ce6b4` by the pin-repair unit on a throwaway
+`bd init` store under a fake `HOME`. Each difference from the `1.2.2`
+statements is listed here; everything not listed was observed unchanged
+(`bd show --json` returns an array with no `revision` field; `bd context`
+needs a Git working directory, exits `1` with an `error` field otherwise, and
+refuses a store under `/private/tmp` as an unsafe location; a missing store in
+`BEADS_DIR` silently falls back to the store discoverable above the working
+directory, so `where.path` equality stays the guard; `bd version` appends the
+branch inside a repository; the absent-issue `error` value is still
+`no issues found matching the provided IDs`; the `where`, `config list`,
+`show`, `gate list`, and `prime --hook-json` shapes the helper reads are
+unchanged).
+
+- `last-touched`: `bd show --readonly` still rewrites the store's
+  `last-touched` hint file; on `1.3.0` the rewrite keeps the same bytes when the
+  touched Bead is unchanged and moves only the mtime, so a byte manifest of the
+  store sees no change across read-only reads. `.local_version` is not rewritten
+  by a strict `--readonly` read.
+- Anonymous usage metrics: `1.3.0` collects command-name metrics by default.
+  Its first run under a `HOME` with no opt-out writes `$HOME/.beads/machine-id`,
+  `$HOME/.config/bd/config.yaml` (`metrics.disabled: false`), and
+  `$HOME/.beads/eventsData/`, and every later command appends an event record
+  there. The helper forwards `HOME` to `bd` and forwards neither
+  `BD_DISABLE_METRICS` nor `DO_NOT_TRACK`, so in production every helper read
+  appends such a record under the real `$HOME/.beads/eventsData/` until metrics
+  are turned off. `bd metrics off` persists `metrics.disabled: true` in
+  `$HOME/.config/bd/config.yaml`; it is a one-time user-global decision outside
+  this helper. The native-storage suite plants that opt-out under its disposable
+  fake `HOME`, and with it `1.3.0` writes nothing under `HOME` except
+  `$HOME/.dolt/config_global.json` on the first store open. The migrated-copy
+  canary runs without the opt-out under a disposable fake `HOME` and observed
+  one `.evtq` record there per `bd` process the helper spawned.
+- Schema gate: strict `--readonly` under `1.3.0` refuses a schema `v53` store
+  (`schema version mismatch`, recorded by the migration rehearsal), so the
+  repinned helper reports `UNAVAILABLE_BEADS_READ` against an unmigrated store.
+  That refusal is correct and is why the pin repair and the designated
+  migration land in one planned window; the helper never runs `bd migrate` and
+  never opens a store without `--readonly`.
+- `bd gate list --all --readonly --json` prints `null`, not `[]`, when the
+  store holds no gates; the Beads read Adapter reads any non-array reply as an
+  empty gate list.
+
 ## Hook
 
 `hook` accepts exactly the argv `hook` and reads one Harness event from stdin
 (128 KiB limit). Any other argv containing `hook` is an ordinary usage failure.
-Output is `{"hookSpecificOutput":{"hookEventName":<event>,"additionalContext":<text>}}`
-on stdout, and the exit code is always `0`.
+A delivery on `SessionStart` or `UserPromptSubmit` is
+`{"hookSpecificOutput":{"hookEventName":<event>,"additionalContext":<text>}}`
+on stdout. `PreCompact` never emits `hookSpecificOutput`: Codex 0.154.0 admits
+only the common output fields there and rejects anything else as invalid
+PreCompact JSON, so its one output shape is `{"systemMessage":<text>}`. The
+exit code is always `0`.
 
 | Event | Delivery |
 | --- | --- |
 | `SessionStart` with `source` `startup`, `resume`, or `clear` | Bounded session guidance naming the Bead, the workspace, and the exact `recover` and `bind` commands for this session. Never consumes a marker. |
-| `SessionStart` with `source` `compact` | The Resume Panel plus bounded `bd prime --hook-json` context (8 KiB). |
-| `PreCompact` | The read-only availability result: available, or unavailable with the cause and repair. |
+| `SessionStart` with `source` `compact` | The Resume Panel plus bounded `bd prime --readonly --hook-json` context (8 KiB). |
+| `PreCompact` | The read-only availability check. Available: silent, empty stdout, recorded as `delivery` `precompact-available` in the private diagnostics run file. Unavailable: `{"systemMessage":<text>}` naming the cause and the repair, redacted, surfaced to the user as a warning. Compaction is never stopped, and no `hookSpecificOutput` is emitted. |
 | `PostCompact` | Records one monotonic generation as `pending` in the marker under the session lock. No output. |
 | `UserPromptSubmit` | Inspects the marker under the session lock, runs the native reads with no lock held, then re-decides under the lock: claims every pending generation at once (including one minted during the read), persists the claim, emits one panel with prime context, then records each claimed generation `delivered`. A second prompt is silent, and a prompt that a concurrent prompt beat to delivery settles silent. |
 
@@ -246,11 +312,15 @@ the marker cannot be read or is not one schema-v1 marker (corrupt marker), a
 panel read is refused, or anything throws. Once the event parsed and a state
 root was selected, each silent path leaves one record in the private
 diagnostics file (`hook.binding-unavailable`, `hook.cwd-refused`,
-`hook.marker-unreadable`, `hook.read-failed`, `hook.failed`); an unparseable
-event or an unusable state root leaves none, because no run file can be
-opened yet. Nothing reaches stderr, because stderr may reach the Harness.
+`hook.marker-unreadable`, `hook.read-failed`, `hook.failed`). The run file
+is opened as soon as a state root is selected, before stdin is parsed, so an
+unparseable event with a usable state root leaves one run file holding only
+its `hook.completed` record with `delivery` `silent` and no cause record; an
+unusable state root leaves no run file, because none can be opened. Nothing
+reaches stderr, because stderr may reach the Harness.
 `PreCompact` is the one event that reports an unavailable read in its output
-instead of staying silent.
+instead of staying silent, through the common `systemMessage` field alone;
+an available read at `PreCompact` is silent.
 
 Missing binding. A session that never ran `bind` gets no guidance and no
 panel; the hook is silent. `inspect --session <id>` names the absent binding

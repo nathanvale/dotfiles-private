@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { BEAD, bindingPath, bindSession, createRoot, diagnosticsDirectory, FIXTURE_BD, hookEvent, hookOutputOf, markerPath, modeOf, readJsonFile, removeRoot, retainedBytes, type Root, type Run, runCli, runHook, runHookWithFault, SECRET_BEAD, SECRET_MARKER, spawnLockHolder, stateListing, steerBd } from "../fixtures/harness.ts"
+import { BEAD, bindingPath, bindSession, createRoot, diagnosticsDirectory, FIXTURE_BD, hookEvent, hookOutputOf, markerPath, modeOf, readJsonFile, removeRoot, resultOf, retainedBytes, type Root, type Run, runCli, runHook, runHookWithFault, SECRET_BEAD, SECRET_MARKER, spawnLockHolder, stateListing, steerBd } from "../fixtures/harness.ts"
 
 // The `hook` command through a real process: one Harness event on stdin, Harness JSON or silence on stdout, exit 0
 // and empty stderr on every path. Expected deliveries, marker states and texts are literals from Spec #57's hook
@@ -38,6 +38,26 @@ function expectHook(run: Run): { hookEventName: string; additionalContext: strin
 function expectSilent(run: Run): void {
 	expect(expectHook(run)).toBeNull()
 	expect(run.stdout).toBe("")
+}
+
+/** The PreCompact output fields Codex 0.154.0 admits, from the Codex hooks documentation's common output fields
+ * (independent oracle; the installed binary's `pre-compact.command.output` schema is `additionalProperties: false`
+ * over exactly these). `hookSpecificOutput` is not among them: Codex printed `Hook failed: hook returned invalid
+ * PreCompact hook JSON output` for it (M2 U4-lite runtime observer, finding F1). */
+const PRECOMPACT_COMMON_OUTPUT_FIELDS = ["continue", "stopReason", "suppressOutput", "systemMessage"]
+
+/** A PreCompact warning: exit 0, empty stderr, one JSON object on stdout whose only field is `systemMessage`, so
+ * compaction is never stopped and nothing outside the admitted field set is sent. Returns the warning text. */
+function expectPreCompactWarning(run: Run): string {
+	expect(run.exit).toBe(0)
+	expect(run.stderr).toBe("")
+	expect(run.stdout.endsWith("\n")).toBe(true)
+	const parsed = JSON.parse(run.stdout) as Record<string, unknown>
+	const keys = Object.keys(parsed)
+	expect(keys.every((key) => PRECOMPACT_COMMON_OUTPUT_FIELDS.includes(key))).toBe(true)
+	expect(keys).toEqual(["systemMessage"])
+	expect(typeof parsed.systemMessage).toBe("string")
+	return parsed.systemMessage as string
 }
 
 /** Durable state only: bindings, markers and locks; the hook's private diagnostics run files and the helper
@@ -246,21 +266,45 @@ describe("SessionStart and PreCompact", () => {
 		}
 	})
 
-	test("PreCompact reports availability without writing, and names the cause when recovery is unavailable", async () => {
+	test("PreCompact is silent when recovery is available, and warns through systemMessage alone when it is unavailable", async () => {
 		await bindSession(root, SESSION)
 		const before = durableListing(root)
-		const available = expectHook(await runHook(root, preCompact()))
-		expect(available?.hookEventName).toBe("PreCompact")
-		expect(available?.additionalContext).toBe(`msb-workflow recovery is available: session ${SESSION} is bound to ${BEAD}; the Resume Panel is delivered once on the next prompt after compaction.`)
+		const files = diagnosticsFiles()
+		expectSilent(await runHook(root, preCompact()))
+		expect(recordsSince(files).records.find((record) => record.eventKind === "hook.completed")?.delivery).toBe("precompact-available")
 		steerBd(root, { unavailable: "no_beads_directory" })
-		const unavailable = expectHook(await runHook(root, preCompact()))
-		expect(unavailable?.hookEventName).toBe("PreCompact")
-		expect(unavailable?.additionalContext.startsWith("msb-workflow recovery is unavailable before compaction: ")).toBe(true)
-		expect(unavailable?.additionalContext).toContain("no_beads_directory")
-		expect(unavailable?.additionalContext).toContain("Repair: ")
+		const unavailable = expectPreCompactWarning(await runHook(root, preCompact()))
+		expect(unavailable.startsWith("msb-workflow recovery is unavailable before compaction: ")).toBe(true)
+		expect(unavailable).toContain("no_beads_directory")
+		expect(unavailable).toContain("Repair: ")
 		steerBd(root, { redirected: true })
-		expect(expectHook(await runHook(root, preCompact()))?.additionalContext).toContain("redirected")
+		expect(expectPreCompactWarning(await runHook(root, preCompact()))).toContain("redirected")
 		expect(durableListing(root)).toEqual(before)
+	})
+})
+
+describe("the recover command in the guidance and the notice is quoted for a POSIX shell (lkr-737.5.5)", () => {
+	test("a workspace with a space and a single quote renders one quoted recover command in the guidance, the notice, and panel command 4", async () => {
+		const workspace = join(root.privateRoot, "work sp'ace")
+		mkdirSync(join(workspace, ".beads"), { recursive: true, mode: 0o700 })
+		const bind = await runCli(root, ["bind", "--workspace", workspace, "--session", SESSION, "--bead", BEAD, "--json"])
+		expect(bind.exit).toBe(0)
+		// Hand-derived POSIX single quoting (independent oracle): the whole workspace is one single-quoted word with '
+		// spelled '\''; the private root is a plain temporary path and contributes no character needing an escape.
+		const recover = `msb-workflow recover --workspace '${root.privateRoot}/work sp'\\''ace' --session ${SESSION} --json`
+		const guidance = expectHook(await runHook(root, startup()))
+		expect(guidance?.additionalContext).toContain(`Rebuild the Resume Panel at any time: ${recover}\n`)
+		expectSilent(await runHook(root, postCompact()))
+		await runHookWithFault(root, prompt(), "kill-after-claim")
+		const notice = expectHook(await runHook(root, prompt()))
+		expect(notice?.additionalContext).toBe(`msb-workflow: the Resume Panel for compaction generation(s) 1 was claimed but never recorded delivered; run ${recover} to rebuild it. Nothing is replayed automatically.`)
+		const panel = await runCli(root, ["recover", "--workspace", workspace, "--session", SESSION, "--json"])
+		expect(panel.exit).toBe(0)
+		expect((resultOf(panel).readOnlyCommands as string[])[3]).toBe(recover)
+		// A real sh re-parses the rendered command into the exact words: the workspace stays one word, nothing is expanded.
+		const shell = Bun.spawnSync(["sh", "-c", `set -- ${recover}; printf '%s\\n' "$@"`], { env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent" }, stdout: "pipe", stderr: "pipe" })
+		expect(shell.stderr.toString()).toBe("")
+		expect(shell.stdout.toString()).toBe(`${["msb-workflow", "recover", "--workspace", workspace, "--session", SESSION, "--json"].join("\n")}\n`)
 	})
 })
 

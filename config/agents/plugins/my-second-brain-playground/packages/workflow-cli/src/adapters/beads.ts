@@ -1,8 +1,8 @@
 // Beads read Adapter: the only path to native `bd`, and it is read-only. The executable is the one named by the
 // caller (MSB_WORKFLOW_BD_EXECUTABLE or the binding); PATH discovery never happens, and the named path must be the
 // accepted pin, byte for byte, before it is spawned. Every reply is translated into an observation; a JSON `error`
-// field is classified by its value, never by the exit code, because the pinned bd 1.2.2 exits 1 for both an absent
-// Bead and an absent store.
+// field is classified by its value, never by the exit code, because the pinned bd exits 1 for both an absent Bead
+// and an absent store (observed on the previous pin and re-verified on 1.3.0).
 
 import { createHash } from "node:crypto"
 import { accessSync, constants, readFileSync, realpathSync, statSync } from "node:fs"
@@ -11,14 +11,16 @@ import { collectSecretValues } from "../command-contract.ts"
 import type { BeadComment, BeadDependency, BeadFacts, GateFacts, StoreFacts } from "../model.ts"
 import { describeFailure, isRecord, parseJson, type ProcessResult, runBounded, stringField } from "./native-process.ts"
 
-/** The verified Beads source for this rollout: any other version or revision refuses the store. */
-const PINNED_BD_VERSION = "1.2.2"
-const PINNED_BD_REVISION = "6c124203e771"
+/** The verified Beads source for this rollout: any other version or revision refuses the store. The one owner of the
+ * version and revision text; the user-facing repair strings and the station catalog derive from these. */
+export const PINNED_BD_VERSION = "1.3.0"
+export const PINNED_BD_REVISION = "f45b249ce6b4"
 /** `bd version <version> (<build>: [<branch>@]<revision>)`: the revision is the hex field after the last `@` inside
  * the parentheses, so the branch text bd appends inside a Git directory never reaches the pin. */
 const VERSION_LINE = /^bd version (\S+) \(\S+: (?:.*@)?([0-9a-f]+)\)$/
-/** Every JSON `error` value the pinned bd 1.2.2 was observed to emit for an absent issue
- * (specification/evidence/bd-reads/show-missing.out); any other value, a missing store included, is unavailable. */
+/** Every JSON `error` value the pinned bd was observed to emit for an absent issue
+ * (specification/evidence/bd-reads/show-missing.out, re-verified unchanged on 1.3.0); any other value, a missing store
+ * included, is unavailable. */
 const ABSENT_ISSUE_VALUES: ReadonlySet<string> = new Set(["no issues found matching the provided IDs"])
 const REASON_LIMIT = 200
 
@@ -229,8 +231,9 @@ export function createBeadsReader(configuration: BeadsConfiguration): BeadsReade
 		return { status: "available", gates: (Array.isArray(reply.value) ? reply.value : []).map(gateOf).filter((gate): gate is GateFacts => gate !== null) }
 	}
 
+	// `--readonly` is the global bd flag that blocks write operations; the pinned bd accepts it on `prime`.
 	async function readPrime(): Promise<string | null> {
-		const result = await bd(["prime", "--hook-json"])
+		const result = await bd(["prime", "--readonly", "--hook-json"])
 		if (result.status !== "exited" || result.exit !== 0) return null
 		const parsed = parseJson(result.stdout)
 		if (!isRecord(parsed)) return null
