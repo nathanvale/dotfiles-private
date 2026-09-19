@@ -1,0 +1,14 @@
+{
+  "name": "vault-steward",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "vault-steward": "src/main.ts"
+  },
+  "dependencies": {
+    "@logtape/logtape": "2.3.1",
+    "@logtape/redaction": "2.3.1",
+    "zod": "4.4.3"
+  }
+}
