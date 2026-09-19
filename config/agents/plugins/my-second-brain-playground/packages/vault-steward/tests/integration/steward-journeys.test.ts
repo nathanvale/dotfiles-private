@@ -323,8 +323,8 @@ test("the shipped bundle ignores VAULT_STEWARD_FAULT", () => {
 
 test("the shipped alias bundle ignores VAULT_STEWARD_FAULT", () => {
 	const f = fixture()
-	const shim = join(import.meta.dir, "../../../runtime/vault-note-commits.js")
-	const result = Bun.spawnSync([shim, "begin", "--vault", f.vault, "--path", "projects/demo/GOAL.md", "--json"], { cwd: f.vault, stdout: "pipe", stderr: "pipe", env: { ...process.env, XDG_STATE_HOME: f.state, VAULT_STEWARD_FAULT: "git-failure=rev-parse", GIT_TERMINAL_PROMPT: "0" } })
+	const shim = join(import.meta.dir, "../../../../runtime/vault-note-commits.js")
+	const result = Bun.spawnSync([process.execPath, shim, "begin", "--vault", f.vault, "--path", "projects/demo/GOAL.md", "--json"], { cwd: f.vault, stdout: "pipe", stderr: "pipe", env: { ...process.env, XDG_STATE_HOME: f.state, VAULT_STEWARD_FAULT: "git-failure=rev-parse", GIT_TERMINAL_PROMPT: "0" } })
 	expect(result.exitCode).toBe(0)
 	expect(JSON.parse(new TextDecoder().decode(result.stdout))).toMatchObject({ ok: true, code: "CANDIDATE_READY" })
 })
