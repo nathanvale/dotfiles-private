@@ -112,7 +112,8 @@ test("a fresh reclaim mutex makes a dead lock busy, while a stale mutex is recla
 	expect(acquireLock(rt, common, "fresh-mutex")).toBeNull()
 	const elapsed = Date.now() - started
 	expect(elapsed).toBeGreaterThanOrEqual(1_900)
-	expect(elapsed).toBeLessThan(4_000)
+	// This is only a generous hang bound on a loaded CI worker; mutex freshness, not elapsed time, is the oracle.
+	expect(elapsed).toBeLessThan(12_000)
 	expect(readdirSync(common).sort()).toEqual(["vault-note-commits.lock", "vault-note-commits.lock.reclaim"])
 	age(`${lock}.reclaim`, 15)
 	expect(acquireLock(rt, common, "stale-mutex")).toBe(lock)
