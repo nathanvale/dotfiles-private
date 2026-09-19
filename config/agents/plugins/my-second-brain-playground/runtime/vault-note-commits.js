@@ -4,10 +4,10 @@ import { isAbsolute as isAbsolute2, join as join4, resolve as resolve2 } from "p
 
 // packages/vault-steward/src/engine.ts
 import { createHash, randomUUID } from "crypto";
-import { isAbsolute, join as join2, relative, resolve, sep } from "path";
+import { isAbsolute, join as join2, normalize, relative, resolve, sep } from "path";
 
 // packages/vault-steward/src/integration-lock.ts
-import { existsSync, mkdirSync, renameSync, rmSync } from "fs";
+import { existsSync, mkdirSync, renameSync, rmdirSync, rmSync } from "fs";
 import { join } from "path";
 
 // packages/vault-steward/src/model.ts
@@ -25,6 +25,7 @@ var guardFailOpenCode = "VAULT_GUARD_FAIL_OPEN";
 // packages/vault-steward/src/integration-lock.ts
 var lockAttempts = 81;
 var lockPauseMs = 25;
+var reclaimMutexStaleMs = 1e4;
 function pause(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
@@ -70,6 +71,32 @@ function ownerIsLive(rt, lock) {
 function lockPath(commonGitDirectory) {
   return join(commonGitDirectory, lockDirectoryName);
 }
+function reclaimMutexPath(lock) {
+  return `${lock}.reclaim`;
+}
+function underReclaimMutex(rt, lock, action) {
+  const mutex = reclaimMutexPath(lock);
+  try {
+    mkdirSync(mutex, { mode: 448 });
+  } catch (error) {
+    if (!(error instanceof Error && ("code" in error) && error.code === "EEXIST"))
+      throw error;
+    const facts = rt.fileFacts(mutex);
+    if (facts.kind === "directory" && rt.now() - facts.mtimeMs > reclaimMutexStaleMs) {
+      try {
+        rmdirSync(mutex);
+      } catch {}
+    }
+    return "busy";
+  }
+  try {
+    return action();
+  } finally {
+    try {
+      rmdirSync(mutex);
+    } catch {}
+  }
+}
 function tryCreate(rt, lock) {
   try {
     mkdirSync(lock, { mode: 448 });
@@ -80,14 +107,21 @@ function tryCreate(rt, lock) {
   }
   if (!existsSync(lock) || ownerIsLive(rt, lock))
     return "busy";
-  const reclaimed = `${lock}.reclaim-${rt.pid}-${rt.now()}`;
-  try {
-    renameSync(lock, reclaimed);
-  } catch {
-    return "busy";
-  }
-  rmSync(reclaimed, { recursive: true, force: true });
-  return "reclaimed";
+  rt.faultPoint("lock-judged");
+  return underReclaimMutex(rt, lock, () => {
+    if (!existsSync(lock))
+      return "reclaimed";
+    if (ownerIsLive(rt, lock))
+      return "busy";
+    const reclaimed = `${lock}.reclaim-${rt.pid}-${rt.now()}`;
+    try {
+      renameSync(lock, reclaimed);
+    } catch {
+      return "busy";
+    }
+    rmSync(reclaimed, { recursive: true, force: true });
+    return "reclaimed";
+  });
 }
 function publishOwner(rt, lock, runId) {
   try {
@@ -104,6 +138,7 @@ function acquireLock(rt, commonGitDirectory, runId) {
     const outcome = tryCreate(rt, lock);
     if (outcome === "created") {
       publishOwner(rt, lock, runId);
+      rt.faultPoint("lock-held");
       return lock;
     }
     if (outcome === "busy" && attempt < lockAttempts - 1)
@@ -246,7 +281,7 @@ function validateReceiptShape(receipt) {
   }
 }
 function manifestShapeValid(manifest, worktree) {
-  return manifest.schemaVersion === schemaVersion && runIdPattern.test(manifest.runId) && manifest.worktree === worktree && Array.isArray(manifest.paths);
+  return manifest.schemaVersion === schemaVersion && runIdPattern.test(manifest.runId) && manifest.worktree === worktree && validPathList(manifest.paths) && manifest.paths.every((path) => normalize(path) === path && !path.endsWith(sep));
 }
 function whitespaceFindings(stdout) {
   return stdout.split(`
@@ -525,14 +560,20 @@ function performRebase(rt, manifest, commit, currentMain) {
   }
   return integrated;
 }
-function fastForward(rt, manifest, vault, integrated) {
+function fastForward(rt, manifest, vault, original, integrated) {
   rt.faultPoint("before-ff-merge");
   const merged = gitQuiet(rt, vault, ["merge", "--ff-only", integrated]);
   rt.faultPoint("after-ff-merge");
   const readBack = { ...context(manifest), transaction: "unknown", uncertainEffects: ["main.fast-forward"] };
-  if (merged.exitCode !== 0 || git(rt, vault, ["rev-parse", "HEAD"], readBack) !== integrated) {
-    refuse("integration-unproved", { ...candidateFacts(manifest, integrated), uncertainEffects: ["main.fast-forward"] }, "unknown");
+  const observed = git(rt, vault, ["rev-parse", "HEAD"], readBack);
+  if (merged.exitCode === 0 && observed === integrated)
+    return;
+  if (merged.exitCode !== 0 && gitQuiet(rt, vault, ["merge-base", "--is-ancestor", integrated, "main"]).exitCode !== 0) {
+    if (integrated !== original)
+      gitQuiet(rt, manifest.worktree, ["checkout", "--detach", original]);
+    refuse("integration-unproved", candidateFacts(manifest, original), "unchanged");
   }
+  refuse("integration-unproved", { ...candidateFacts(manifest, integrated), uncertainEffects: ["main.fast-forward"] }, "unknown");
 }
 function canonicalReady(rt, manifest, commit) {
   const vault = rt.realpath(manifest.vault);
@@ -550,7 +591,7 @@ function integrate(rt, manifest, commit) {
     const currentMain = git(rt, vault, ["rev-parse", "HEAD"], context(manifest));
     const observation = observeMainAt(rt, manifest, commit, vault, currentMain);
     const integrated = observation.rebase ? performRebase(rt, manifest, commit, currentMain) : commit;
-    fastForward(rt, manifest, vault, integrated);
+    fastForward(rt, manifest, vault, commit, integrated);
     return { kind: "completion", completion: recordCompletion(rt, manifest, integrated, ["main.fast-forward"]) };
   });
 }
@@ -688,7 +729,7 @@ function observeSprawl(rt, input, warnings) {
     warnings.push({ code: "FOREIGN_WORKTREE_PRESENT", detail: worktrees.join(", ") });
   return { branches, worktrees };
 }
-function observeGuard(rt, input) {
+function observeGuard(rt, input, enforce = true) {
   const location = locateHook(rt, input.vault);
   const warnings = [...location.warnings];
   const tested = selfTest(rt, location, input, warnings);
@@ -704,9 +745,67 @@ function observeGuard(rt, input) {
     worktrees: sprawl.worktrees
   };
   const observation = { guard, warnings };
-  if (tested.deniedRef !== null)
+  if (enforce && tested.deniedRef !== null)
     refuse("guard-incompatible", { ...input.facts, ref: tested.deniedRef, runId: input.runId, guard: observation });
   return observation;
+}
+
+// packages/vault-steward/src/faults.ts
+function parseFaults(value) {
+  if (value === undefined || value === "")
+    return [];
+  const faults = [];
+  for (const part of value.split(";")) {
+    const spawn = /^(git-failure|unexpected)(?:#([1-9][0-9]*))?=(.+)$/.exec(part);
+    const halt = /^halt=([a-z-]+)$/.exec(part);
+    const pause2 = /^pause=([a-z-]+):([1-9][0-9]*)$/.exec(part);
+    if (spawn?.[1] !== undefined && spawn[3] !== undefined)
+      faults.push({ kind: spawn[1], occurrence: Number(spawn[2] ?? "1"), fragment: spawn[3] });
+    else if (halt?.[1] !== undefined)
+      faults.push({ kind: "halt", point: halt[1] });
+    else if (pause2?.[1] !== undefined && pause2[2] !== undefined)
+      faults.push({ kind: "pause", point: pause2[1], milliseconds: Number(pause2[2]) });
+    else
+      return null;
+  }
+  return faults;
+}
+function pause2(milliseconds) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+function withFaults(rt, faults) {
+  if (faults.length === 0)
+    return rt;
+  const seen = new Map;
+  const spawnFaults = faults.filter((fault) => fault.kind === "git-failure" || fault.kind === "unexpected");
+  const firing = (argv) => spawnFaults.find((fault) => {
+    if (!argv.includes(fault.fragment))
+      return false;
+    const key = `${fault.kind}:${fault.fragment}`;
+    const count = (seen.get(key) ?? 0) + 1;
+    seen.set(key, count);
+    return count === fault.occurrence;
+  });
+  return {
+    ...rt,
+    spawn(command, options) {
+      const fault = command[0] === "git" ? firing(command.slice(1).join(" ")) : undefined;
+      if (fault === undefined)
+        return rt.spawn(command, options);
+      if (fault.kind === "unexpected")
+        throw new Error(`injected unexpected failure at ${fault.fragment}`);
+      return { exitCode: 128, timedOut: false, spawnError: null, stdout: "", stderr: `fatal: injected git failure at ${fault.fragment}` };
+    },
+    faultPoint(name) {
+      for (const fault of faults) {
+        if (fault.kind === "halt" && fault.point === name)
+          process.kill(process.pid, "SIGKILL");
+        if (fault.kind === "pause" && fault.point === name)
+          pause2(fault.milliseconds);
+      }
+      rt.faultPoint(name);
+    }
+  };
 }
 
 // packages/vault-steward/src/runtime.ts
@@ -1084,7 +1183,8 @@ function main() {
     console.log(usage);
     return;
   }
-  const rt = createRuntime();
+  const faults = parseFaults(process.env.VAULT_STEWARD_FAULT) ?? [];
+  const rt = withFaults(createRuntime(), faults);
   try {
     const result = withObservation(runCommand(rt, command, args));
     console.log(json ? JSON.stringify(result) : `${result.code}: ${result.nextAction}`);

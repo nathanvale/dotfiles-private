@@ -14379,6 +14379,7 @@ var ROWS = [
   ["vault-steward.finish-apply", "failed", "DOMAIN_REBASE_CONFLICT", RL, "unchanged", ...H3, HANDOFF, "required", null],
   ["vault-steward.finish-apply", "refused", "TRANSIENT_INTEGRATION_BUSY", RL, "unchanged", ...T75, [APPLY], "required", null],
   ["vault-steward.finish-apply", "failed", "INTERNAL_INTEGRATION_UNPROVED", RL, "unknown", ...H1, HANDOFF, "required", null],
+  ["vault-steward.finish-apply", "failed", "INTERNAL_INTEGRATION_UNPROVED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
   ["vault-steward.finish-apply", "failed", "INTERNAL_COMPLETION_RECORD_FAILED", RL, "partially-completed", ...N1, [RECOVER], "required", null],
   ["vault-steward.finish-apply", "failed", "INTERNAL_GIT_FAILED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
   ["vault-steward.finish-apply", "failed", "INTERNAL_GIT_FAILED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null],
@@ -14472,6 +14473,7 @@ var CAUSE_RULES = {
   INTERNAL_GIT_FAILED_PARTIAL: cause("internal", "failed", "partially-completed", false, "handoff"),
   INTERNAL_GIT_FAILED_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
   INTERNAL_INTEGRATION_UNPROVED: cause("internal", "failed", "unknown", false, "handoff"),
+  INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: cause("internal", "failed", "unchanged", false, "handoff"),
   INTERNAL_COMPLETION_RECORD_FAILED: cause("internal", "failed", "partially-completed", false, "next"),
   INTERNAL_UNEXPECTED_UNCHANGED: cause("internal", "failed", "unchanged", false, "handoff"),
   INTERNAL_UNEXPECTED_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff")
@@ -17673,10 +17675,10 @@ async function openRunDiagnostics(options) {
 
 // packages/vault-steward/src/engine.ts
 import { createHash as createHash2, randomUUID } from "crypto";
-import { isAbsolute as isAbsolute2, join as join3, relative, resolve as resolve2, sep } from "path";
+import { isAbsolute as isAbsolute2, join as join3, normalize, relative, resolve as resolve2, sep } from "path";
 
 // packages/vault-steward/src/integration-lock.ts
-import { existsSync, mkdirSync as mkdirSync2, renameSync as renameSync2, rmSync } from "fs";
+import { existsSync, mkdirSync as mkdirSync2, renameSync as renameSync2, rmdirSync as rmdirSync2, rmSync } from "fs";
 import { join as join2 } from "path";
 
 // packages/vault-steward/src/model.ts
@@ -17735,6 +17737,8 @@ function productCause(reason, transaction) {
     return transaction === "unchanged" ? "INTERNAL_GIT_FAILED_UNCHANGED" : transaction === "partially-completed" ? "INTERNAL_GIT_FAILED_PARTIAL" : "INTERNAL_GIT_FAILED_UNKNOWN";
   if (reason === "unexpected")
     return transaction === "unchanged" ? "INTERNAL_UNEXPECTED_UNCHANGED" : "INTERNAL_UNEXPECTED_UNKNOWN";
+  if (reason === "integration-unproved" && transaction === "unchanged")
+    return "INTERNAL_INTEGRATION_UNPROVED_UNCHANGED";
   if (reason === "completion-record-failed" && transaction === "unchanged")
     return "INTERNAL_GIT_FAILED_UNCHANGED";
   return REASON_CAUSES[reason];
@@ -17743,6 +17747,7 @@ function productCause(reason, transaction) {
 // packages/vault-steward/src/integration-lock.ts
 var lockAttempts = 81;
 var lockPauseMs = 25;
+var reclaimMutexStaleMs = 1e4;
 function pause(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
@@ -17788,6 +17793,32 @@ function ownerIsLive(rt, lock) {
 function lockPath(commonGitDirectory) {
   return join2(commonGitDirectory, lockDirectoryName);
 }
+function reclaimMutexPath(lock) {
+  return `${lock}.reclaim`;
+}
+function underReclaimMutex(rt, lock, action) {
+  const mutex = reclaimMutexPath(lock);
+  try {
+    mkdirSync2(mutex, { mode: 448 });
+  } catch (error51) {
+    if (!(error51 instanceof Error && ("code" in error51) && error51.code === "EEXIST"))
+      throw error51;
+    const facts = rt.fileFacts(mutex);
+    if (facts.kind === "directory" && rt.now() - facts.mtimeMs > reclaimMutexStaleMs) {
+      try {
+        rmdirSync2(mutex);
+      } catch {}
+    }
+    return "busy";
+  }
+  try {
+    return action();
+  } finally {
+    try {
+      rmdirSync2(mutex);
+    } catch {}
+  }
+}
 function tryCreate(rt, lock) {
   try {
     mkdirSync2(lock, { mode: 448 });
@@ -17798,14 +17829,21 @@ function tryCreate(rt, lock) {
   }
   if (!existsSync(lock) || ownerIsLive(rt, lock))
     return "busy";
-  const reclaimed = `${lock}.reclaim-${rt.pid}-${rt.now()}`;
-  try {
-    renameSync2(lock, reclaimed);
-  } catch {
-    return "busy";
-  }
-  rmSync(reclaimed, { recursive: true, force: true });
-  return "reclaimed";
+  rt.faultPoint("lock-judged");
+  return underReclaimMutex(rt, lock, () => {
+    if (!existsSync(lock))
+      return "reclaimed";
+    if (ownerIsLive(rt, lock))
+      return "busy";
+    const reclaimed = `${lock}.reclaim-${rt.pid}-${rt.now()}`;
+    try {
+      renameSync2(lock, reclaimed);
+    } catch {
+      return "busy";
+    }
+    rmSync(reclaimed, { recursive: true, force: true });
+    return "reclaimed";
+  });
 }
 function publishOwner(rt, lock, runId) {
   try {
@@ -17822,6 +17860,7 @@ function acquireLock(rt, commonGitDirectory, runId) {
     const outcome = tryCreate(rt, lock);
     if (outcome === "created") {
       publishOwner(rt, lock, runId);
+      rt.faultPoint("lock-held");
       return lock;
     }
     if (outcome === "busy" && attempt < lockAttempts - 1)
@@ -17964,7 +18003,7 @@ function validateReceiptShape(receipt) {
   }
 }
 function manifestShapeValid(manifest, worktree) {
-  return manifest.schemaVersion === schemaVersion && runIdPattern.test(manifest.runId) && manifest.worktree === worktree && Array.isArray(manifest.paths);
+  return manifest.schemaVersion === schemaVersion && runIdPattern.test(manifest.runId) && manifest.worktree === worktree && validPathList(manifest.paths) && manifest.paths.every((path) => normalize(path) === path && !path.endsWith(sep));
 }
 function whitespaceFindings(stdout) {
   return stdout.split(`
@@ -18248,14 +18287,20 @@ function performRebase(rt, manifest, commit, currentMain) {
   }
   return integrated;
 }
-function fastForward(rt, manifest, vault, integrated) {
+function fastForward(rt, manifest, vault, original, integrated) {
   rt.faultPoint("before-ff-merge");
   const merged = gitQuiet(rt, vault, ["merge", "--ff-only", integrated]);
   rt.faultPoint("after-ff-merge");
   const readBack = { ...context(manifest), transaction: "unknown", uncertainEffects: ["main.fast-forward"] };
-  if (merged.exitCode !== 0 || git(rt, vault, ["rev-parse", "HEAD"], readBack) !== integrated) {
-    refuse("integration-unproved", { ...candidateFacts(manifest, integrated), uncertainEffects: ["main.fast-forward"] }, "unknown");
+  const observed = git(rt, vault, ["rev-parse", "HEAD"], readBack);
+  if (merged.exitCode === 0 && observed === integrated)
+    return;
+  if (merged.exitCode !== 0 && gitQuiet(rt, vault, ["merge-base", "--is-ancestor", integrated, "main"]).exitCode !== 0) {
+    if (integrated !== original)
+      gitQuiet(rt, manifest.worktree, ["checkout", "--detach", original]);
+    refuse("integration-unproved", candidateFacts(manifest, original), "unchanged");
   }
+  refuse("integration-unproved", { ...candidateFacts(manifest, integrated), uncertainEffects: ["main.fast-forward"] }, "unknown");
 }
 function canonicalReady(rt, manifest, commit) {
   const vault = rt.realpath(manifest.vault);
@@ -18358,7 +18403,7 @@ function applyPreview(rt, manifest, record2, consumedBy) {
         return { kind: "completion", completion: completion2 };
       }
       const integrated = fresh.plan.rebase ? performRebase(rt, manifest, commit, currentMain) : commit;
-      fastForward(rt, manifest, vault, integrated);
+      fastForward(rt, manifest, vault, commit, integrated);
       const completion = recordCompletion(rt, manifest, integrated, ["main.fast-forward"]);
       prunePreview(rt, manifest.runId);
       return { kind: "completion", completion };
@@ -18642,7 +18687,7 @@ function observeSprawl(rt, input, warnings) {
     warnings.push({ code: "FOREIGN_WORKTREE_PRESENT", detail: worktrees.join(", ") });
   return { branches, worktrees };
 }
-function observeGuard(rt, input) {
+function observeGuard(rt, input, enforce = true) {
   const location = locateHook(rt, input.vault);
   const warnings = [...location.warnings];
   const tested = selfTest(rt, location, input, warnings);
@@ -18658,7 +18703,7 @@ function observeGuard(rt, input) {
     worktrees: sprawl.worktrees
   };
   const observation = { guard, warnings };
-  if (tested.deniedRef !== null)
+  if (enforce && tested.deniedRef !== null)
     refuse("guard-incompatible", { ...input.facts, ref: tested.deniedRef, runId: input.runId, guard: observation });
   return observation;
 }
@@ -19121,7 +19166,7 @@ function inspectViews(rt, worktree) {
   const candidate = record2 === null ? null : candidateView(rt, record2);
   const main = record2 === null || candidate === null ? { head: null, containsCandidateCommit: null, overlap: [] } : mainView(rt, record2, candidate);
   const lock = record2 === null ? { held: false, ownerPid: null, ownerRunId: null, live: null } : lockView(rt, record2.commonGitDirectory);
-  const observation = receipt.valid || record2 === null ? undefined : observeGuard(rt, { vault: record2.vault, candidateRoot: candidateRoot(rt, record2.vault), runId: record2.runId, candidateCommit: candidate?.committed ? candidate.head ?? undefined : undefined });
+  const observation = receipt.valid || record2 === null ? undefined : observeGuard(rt, { vault: record2.vault, candidateRoot: candidateRoot(rt, record2.vault), runId: record2.runId, candidateCommit: candidate?.committed ? candidate.head ?? undefined : undefined }, false);
   return { worktree, receipt, manifest, record: record2, candidate, main, lock, ...previewViews(rt, record2, candidate), observation };
 }
 function recoveryStateOf(rt, views) {
@@ -19232,6 +19277,7 @@ var REPAIR = {
   INTERNAL_GIT_FAILED_PARTIAL: { repair: "Inspect the created candidate worktree before retrying.", next: null },
   INTERNAL_GIT_FAILED_UNKNOWN: { repair: "Inspect canonical main and the candidate before taking another action.", next: null },
   INTERNAL_INTEGRATION_UNPROVED: { repair: "Inspect canonical main and the candidate before taking another action.", next: null },
+  INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: { repair: "Run finish --preview again; the candidate was restored before main moved.", next: null },
   INTERNAL_COMPLETION_RECORD_FAILED: { repair: "Run vault-steward recover for this worktree; it records completion only from Git evidence.", next: null },
   INTERNAL_UNEXPECTED_UNCHANGED: { repair: "Inspect the local error and the diagnostics file before retrying.", next: null },
   INTERNAL_UNEXPECTED_UNKNOWN: { repair: "Inspect canonical main and the candidate before taking another action.", next: null }
@@ -19267,6 +19313,7 @@ var SENTENCE = {
   INTERNAL_GIT_FAILED_PARTIAL: "A Git command failed after a confirmed effect.",
   INTERNAL_GIT_FAILED_UNKNOWN: "A Git command failed while an effect's result was not established.",
   INTERNAL_INTEGRATION_UNPROVED: "The fast-forward of main could not be proven by read-back.",
+  INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: "The fast-forward did not happen and the candidate was restored.",
   INTERNAL_COMPLETION_RECORD_FAILED: "The completion record could not be finished after the fast-forward.",
   INTERNAL_UNEXPECTED_UNCHANGED: "An unclassified error occurred before any effect.",
   INTERNAL_UNEXPECTED_UNKNOWN: "An unclassified error occurred while an effect was in flight."
