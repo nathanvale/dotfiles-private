@@ -1183,7 +1183,8 @@ function main() {
     console.log(usage);
     return;
   }
-  const faults = parseFaults(process.env.VAULT_STEWARD_FAULT) ?? [];
+  const faultsAllowed = import.meta.url.endsWith("/src/legacy/main.ts");
+  const faults = faultsAllowed ? parseFaults(process.env.VAULT_STEWARD_FAULT) ?? [] : [];
   const rt = withFaults(createRuntime(), faults);
   try {
     const result = withObservation(runCommand(rt, command, args));

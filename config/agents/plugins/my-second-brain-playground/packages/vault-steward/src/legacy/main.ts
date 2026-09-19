@@ -376,8 +376,8 @@ function main(): void {
 		console.log(usage)
 		return
 	}
-	// Source-only tests share the fault seam with the 2.0 door; installed bundles never receive this environment value.
-	const faults = parseFaults(process.env.VAULT_STEWARD_FAULT) ?? []
+	const faultsAllowed = import.meta.url.endsWith("/src/legacy/main.ts")
+	const faults = faultsAllowed ? parseFaults(process.env.VAULT_STEWARD_FAULT) ?? [] : []
 	const rt = withFaults(createRuntime(), faults)
 	try {
 		const result = withObservation(runCommand(rt, command, args))

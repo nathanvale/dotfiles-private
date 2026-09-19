@@ -91,7 +91,8 @@ test("two applies of one preview produce exactly one integration; the other refu
 	const worktree = candidate(f)
 	const id = preview(f, worktree)
 	const env = stewardEnvironment(f)
-	const holder = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=lock-held:3500" })
+	// The owner record proves the holder is paused while the contender exhausts its bounded lock retries, even on CI.
+	const holder = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=lock-held:12000" })
 	await waitForOwner(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"))
 	const second = await stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], env)
 	const first = await holder
@@ -182,7 +183,7 @@ test("a crash between the fast-forward and the receipt is recoverable: inspect r
 	// two recovers: one records, the other refuses busy or sees the receipt; never a second ref value
 	const env = stewardEnvironment(f)
 	const staleOwner = readFileSync(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"), "utf8")
-	const holder = stewardAsync(f.vault, ["recover", "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=before-receipt:3500" })
+	const holder = stewardAsync(f.vault, ["recover", "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=before-receipt:12000" })
 	await waitForOwner(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"), staleOwner)
 	const second = await stewardAsync(f.vault, ["recover", "--worktree", worktree], env)
 	const first = await holder
@@ -311,4 +312,12 @@ test("the shipped bundle ignores VAULT_STEWARD_FAULT", () => {
 	const envelope = JSON.parse(new TextDecoder().decode(result.stdout)) as { result: { causeCode: string } }
 	expect(envelope.result.causeCode).toBe("SUCCESS_UNCHANGED")
 	expect(result.exitCode).toBe(0)
+})
+
+test("the shipped alias bundle ignores VAULT_STEWARD_FAULT", () => {
+	const f = fixture()
+	const shim = join(import.meta.dir, "../../../runtime/vault-note-commits.js")
+	const result = Bun.spawnSync([shim, "begin", "--vault", f.vault, "--path", "projects/demo/GOAL.md", "--json"], { cwd: f.vault, stdout: "pipe", stderr: "pipe", env: { ...process.env, XDG_STATE_HOME: f.state, VAULT_STEWARD_FAULT: "git-failure=rev-parse", GIT_TERMINAL_PROMPT: "0" } })
+	expect(result.exitCode).toBe(0)
+	expect(JSON.parse(new TextDecoder().decode(result.stdout))).toMatchObject({ ok: true, code: "CANDIDATE_READY" })
 })
