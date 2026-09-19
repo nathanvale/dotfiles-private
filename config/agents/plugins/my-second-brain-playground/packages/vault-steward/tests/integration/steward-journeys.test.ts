@@ -91,10 +91,12 @@ test("two applies of one preview produce exactly one integration; the other refu
 	const worktree = candidate(f)
 	const id = preview(f, worktree)
 	const env = stewardEnvironment(f)
-	// The owner record proves the holder is paused while the contender exhausts its bounded lock retries, even on CI.
-	const holder = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=lock-held:12000" })
+	const release = join(f.root, "apply-release")
+	// The holder releases only after the contender's public busy envelope is observed.
+	const holder = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=lock-held:${release}` })
 	await waitForOwner(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"))
 	const second = await stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], env)
+	writeFileSync(release, "release\n")
 	const first = await holder
 	expect(first.envelope?.result.causeCode).toBe("SUCCESS_COMPLETED")
 	expect(second.envelope?.result.causeCode).toBe("TRANSIENT_INTEGRATION_BUSY")
@@ -114,9 +116,12 @@ test("two CLI applies against a dead lock recheck under the reclaim mutex: one c
 	mkdirSync(lock)
 	writeFileSync(join(lock, "owner.json"), JSON.stringify({ schemaVersion: 1, runId: "dead", pid: 2_147_483_646 }))
 	const env = stewardEnvironment(f)
-	const paused = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=lock-judged:800" })
-	await Bun.sleep(100)
-	const reclaimer = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=after-lock:1200" })
+	const release = join(f.root, "reclaim-release")
+	const paused = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=lock-judged:${join(lock, "owner.json")}` })
+	const reclaimer = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=lock-held:${release}` })
+	await waitForOwner(join(lock, "owner.json"))
+	// The reclaimer has published while the juror's lock-judged barrier is waiting for this path.
+	writeFileSync(release, "release\n")
 	const results = await Promise.all([paused, reclaimer])
 	expect(results.map((result) => result.envelope?.result.causeCode).sort()).toEqual(["SUCCESS_COMPLETED", "SUCCESS_UNCHANGED"])
 	expect(results.map((result) => result.envelope?.result.causeCode)).not.toContain("INTERNAL_INTEGRATION_UNPROVED")
@@ -183,9 +188,11 @@ test("a crash between the fast-forward and the receipt is recoverable: inspect r
 	// two recovers: one records, the other refuses busy or sees the receipt; never a second ref value
 	const env = stewardEnvironment(f)
 	const staleOwner = readFileSync(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"), "utf8")
-	const holder = stewardAsync(f.vault, ["recover", "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: "pause=before-receipt:12000" })
+	const release = join(f.root, "recover-release")
+	const holder = stewardAsync(f.vault, ["recover", "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=before-receipt:${release}` })
 	await waitForOwner(join(f.vault, ".git", "vault-note-commits.lock", "owner.json"), staleOwner)
 	const second = await stewardAsync(f.vault, ["recover", "--worktree", worktree], env)
+	writeFileSync(release, "release\n")
 	const first = await holder
 	expect(first.envelope?.result.causeCode).toBe("SUCCESS_COMPLETED")
 	expect(first.envelope?.result.effects.completed).toEqual(["completion.receipt", "completion.ref"])
