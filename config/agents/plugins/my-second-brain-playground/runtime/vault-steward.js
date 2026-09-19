@@ -14379,7 +14379,7 @@ var ROWS = [
   ["vault-steward.finish-apply", "failed", "DOMAIN_REBASE_CONFLICT", RL, "unchanged", ...H3, HANDOFF, "required", null],
   ["vault-steward.finish-apply", "refused", "TRANSIENT_INTEGRATION_BUSY", RL, "unchanged", ...T75, [APPLY], "required", null],
   ["vault-steward.finish-apply", "failed", "INTERNAL_INTEGRATION_UNPROVED", RL, "unknown", ...H1, HANDOFF, "required", null],
-  ["vault-steward.finish-apply", "failed", "INTERNAL_INTEGRATION_UNPROVED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
+  ["vault-steward.finish-apply", "failed", "INTERNAL_INTEGRATION_UNPROVED_UNCHANGED", RL, "unchanged", ...N1, [PREVIEW], "required", null],
   ["vault-steward.finish-apply", "failed", "INTERNAL_COMPLETION_RECORD_FAILED", RL, "partially-completed", ...N1, [RECOVER], "required", null],
   ["vault-steward.finish-apply", "failed", "INTERNAL_GIT_FAILED_UNCHANGED", RL, "unchanged", ...H1, HANDOFF, "required", null],
   ["vault-steward.finish-apply", "failed", "INTERNAL_GIT_FAILED_UNKNOWN", RL, "unknown", ...H1, HANDOFF, "required", null],
@@ -14473,7 +14473,7 @@ var CAUSE_RULES = {
   INTERNAL_GIT_FAILED_PARTIAL: cause("internal", "failed", "partially-completed", false, "handoff"),
   INTERNAL_GIT_FAILED_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff"),
   INTERNAL_INTEGRATION_UNPROVED: cause("internal", "failed", "unknown", false, "handoff"),
-  INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: cause("internal", "failed", "unchanged", false, "handoff"),
+  INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: cause("internal", "failed", "unchanged", false, "next"),
   INTERNAL_COMPLETION_RECORD_FAILED: cause("internal", "failed", "partially-completed", false, "next"),
   INTERNAL_UNEXPECTED_UNCHANGED: cause("internal", "failed", "unchanged", false, "handoff"),
   INTERNAL_UNEXPECTED_UNKNOWN: cause("internal", "failed", "unknown", false, "handoff")
@@ -14589,6 +14589,7 @@ var resultSchema = exports_external.union([
   failedRow("domain", 3, "unchanged", "handoff"),
   failedRow("domain", 3, "unchanged", "next"),
   failedRow("internal", 1, "unchanged", "handoff"),
+  failedRow("internal", 1, "unchanged", "next"),
   failedRow("internal", 1, "partially-completed", "handoff"),
   failedRow("internal", 1, "partially-completed", "next"),
   failedRow("internal", 1, "unknown", "handoff")
@@ -18505,6 +18506,7 @@ function recoverCandidate(rt, manifest) {
 }
 
 // packages/vault-steward/src/faults.ts
+import { existsSync as existsSync2 } from "fs";
 function parseFaults(value) {
   if (value === undefined || value === "")
     return [];
@@ -18513,12 +18515,15 @@ function parseFaults(value) {
     const spawn = /^(git-failure|unexpected)(?:#([1-9][0-9]*))?=(.+)$/.exec(part);
     const halt = /^halt=([a-z-]+)$/.exec(part);
     const pause2 = /^pause=([a-z-]+):([1-9][0-9]*)$/.exec(part);
+    const barrier = /^barrier=([a-z-]+):(.+)$/.exec(part);
     if (spawn?.[1] !== undefined && spawn[3] !== undefined)
       faults.push({ kind: spawn[1], occurrence: Number(spawn[2] ?? "1"), fragment: spawn[3] });
     else if (halt?.[1] !== undefined)
       faults.push({ kind: "halt", point: halt[1] });
     else if (pause2?.[1] !== undefined && pause2[2] !== undefined)
       faults.push({ kind: "pause", point: pause2[1], milliseconds: Number(pause2[2]) });
+    else if (barrier?.[1] !== undefined && barrier[2] !== undefined)
+      faults.push({ kind: "barrier", point: barrier[1], path: barrier[2] });
     else
       return null;
   }
@@ -18526,6 +18531,10 @@ function parseFaults(value) {
 }
 function pause2(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+function waitForPath(path) {
+  while (!existsSync2(path))
+    pause2(10);
 }
 function withFaults(rt, faults) {
   if (faults.length === 0)
@@ -18556,6 +18565,8 @@ function withFaults(rt, faults) {
           process.kill(process.pid, "SIGKILL");
         if (fault.kind === "pause" && fault.point === name)
           pause2(fault.milliseconds);
+        if (fault.kind === "barrier" && fault.point === name)
+          waitForPath(fault.path);
       }
       rt.faultPoint(name);
     }
@@ -18713,7 +18724,7 @@ import { createHash as createHash3, randomUUID as randomUUID2 } from "crypto";
 import {
   chmodSync as chmodSync2,
   closeSync as closeSync2,
-  existsSync as existsSync2,
+  existsSync as existsSync3,
   fsyncSync,
   lstatSync as lstatSync2,
   mkdirSync as mkdirSync3,
@@ -18757,7 +18768,7 @@ function createRuntime() {
       }
     },
     realpath: (path) => realpathSync(path),
-    exists: (path) => existsSync2(path),
+    exists: (path) => existsSync3(path),
     fileFacts(path) {
       try {
         const facts = lstatSync2(path);
@@ -19277,7 +19288,7 @@ var REPAIR = {
   INTERNAL_GIT_FAILED_PARTIAL: { repair: "Inspect the created candidate worktree before retrying.", next: null },
   INTERNAL_GIT_FAILED_UNKNOWN: { repair: "Inspect canonical main and the candidate before taking another action.", next: null },
   INTERNAL_INTEGRATION_UNPROVED: { repair: "Inspect canonical main and the candidate before taking another action.", next: null },
-  INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: { repair: "Run finish --preview again; the candidate was restored before main moved.", next: null },
+  INTERNAL_INTEGRATION_UNPROVED_UNCHANGED: { repair: "Run finish --preview again; the candidate was restored before main moved.", next: "vault-steward.finish-preview" },
   INTERNAL_COMPLETION_RECORD_FAILED: { repair: "Run vault-steward recover for this worktree; it records completion only from Git evidence.", next: null },
   INTERNAL_UNEXPECTED_UNCHANGED: { repair: "Inspect the local error and the diagnostics file before retrying.", next: null },
   INTERNAL_UNEXPECTED_UNKNOWN: { repair: "Inspect canonical main and the candidate before taking another action.", next: null }

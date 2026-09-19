@@ -751,6 +751,7 @@ function observeGuard(rt, input, enforce = true) {
 }
 
 // packages/vault-steward/src/faults.ts
+import { existsSync as existsSync2 } from "fs";
 function parseFaults(value) {
   if (value === undefined || value === "")
     return [];
@@ -759,12 +760,15 @@ function parseFaults(value) {
     const spawn = /^(git-failure|unexpected)(?:#([1-9][0-9]*))?=(.+)$/.exec(part);
     const halt = /^halt=([a-z-]+)$/.exec(part);
     const pause2 = /^pause=([a-z-]+):([1-9][0-9]*)$/.exec(part);
+    const barrier = /^barrier=([a-z-]+):(.+)$/.exec(part);
     if (spawn?.[1] !== undefined && spawn[3] !== undefined)
       faults.push({ kind: spawn[1], occurrence: Number(spawn[2] ?? "1"), fragment: spawn[3] });
     else if (halt?.[1] !== undefined)
       faults.push({ kind: "halt", point: halt[1] });
     else if (pause2?.[1] !== undefined && pause2[2] !== undefined)
       faults.push({ kind: "pause", point: pause2[1], milliseconds: Number(pause2[2]) });
+    else if (barrier?.[1] !== undefined && barrier[2] !== undefined)
+      faults.push({ kind: "barrier", point: barrier[1], path: barrier[2] });
     else
       return null;
   }
@@ -772,6 +776,10 @@ function parseFaults(value) {
 }
 function pause2(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+function waitForPath(path) {
+  while (!existsSync2(path))
+    pause2(10);
 }
 function withFaults(rt, faults) {
   if (faults.length === 0)
@@ -802,6 +810,8 @@ function withFaults(rt, faults) {
           process.kill(process.pid, "SIGKILL");
         if (fault.kind === "pause" && fault.point === name)
           pause2(fault.milliseconds);
+        if (fault.kind === "barrier" && fault.point === name)
+          waitForPath(fault.path);
       }
       rt.faultPoint(name);
     }
@@ -813,7 +823,7 @@ import { createHash as createHash2, randomUUID as randomUUID2 } from "crypto";
 import {
   chmodSync,
   closeSync,
-  existsSync as existsSync2,
+  existsSync as existsSync3,
   fsyncSync,
   lstatSync,
   mkdirSync as mkdirSync2,
@@ -857,7 +867,7 @@ function createRuntime() {
       }
     },
     realpath: (path) => realpathSync(path),
-    exists: (path) => existsSync2(path),
+    exists: (path) => existsSync3(path),
     fileFacts(path) {
       try {
         const facts = lstatSync(path);
