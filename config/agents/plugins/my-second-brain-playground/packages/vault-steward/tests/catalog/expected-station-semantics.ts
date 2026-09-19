@@ -122,7 +122,7 @@ export const EXPECTED_STATIONS: readonly Spec[] = [
 	[recover, "failed", "INTERNAL_UNEXPECTED_UNCHANGED", handoff("internal")],
 ]
 
-export const EXPECTED_STATION_COUNT = 85
+export const EXPECTED_STATION_COUNT = 86
 export const identityOf = (command: string, outcome: string, cause: string): string => JSON.stringify([command, outcome, cause])
 export const EXPECTED_BY_IDENTITY: ReadonlyMap<string, ExpectedStation> = new Map(EXPECTED_STATIONS.map(([command, outcome, cause, expected]) => [identityOf(command, outcome, cause), expected]))
 
