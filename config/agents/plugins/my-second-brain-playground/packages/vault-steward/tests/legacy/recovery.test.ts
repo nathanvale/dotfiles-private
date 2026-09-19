@@ -1,5 +1,5 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, readFileSync, rmSync } from "node:fs"
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { authoredCandidate, begin, cleanupFixtures, finish, fixture, git, runAlias, runAliasAsync, write } from "../helpers/harness.ts"
 
@@ -182,10 +182,16 @@ test("S5 alias: a failed fast-forward after rebase restores the original candida
 	git(f.vault, "add", "--", "README.md")
 	git(f.vault, "commit", "-m", "docs: move main")
 	const second = authoredCandidate(f, "projects/second/GOAL.md", "# Second\n")
-	const paused = runAliasAsync(f.vault, ["finish", "--worktree", first, "--message", "docs: first"], { XDG_STATE_HOME: f.state, VAULT_STEWARD_FAULT: "pause=before-ff-merge:1600" })
-	await Bun.sleep(400)
-	rmSync(join(f.vault, ".git", "vault-note-commits.lock"), { recursive: true, force: true })
+	const lock = join(f.vault, ".git", "vault-note-commits.lock")
+	const release = join(f.root, "first-release")
+	const paused = runAliasAsync(f.vault, ["finish", "--worktree", first, "--message", "docs: first"], { XDG_STATE_HOME: f.state, VAULT_STEWARD_FAULT: `barrier=before-ff-merge:${release}` })
+	const deadline = Date.now() + 10_000
+	while (!existsSync(join(lock, "owner.json")) && Date.now() < deadline) await Bun.sleep(10)
+	// The owner record is the ordering witness; the deadline only bounds a hung child before the injected legacy lock loss.
+	expect(existsSync(join(lock, "owner.json"))).toBe(true)
+	rmSync(lock, { recursive: true, force: true })
 	expect(finish(f, second, "docs: second").json).toMatchObject({ ok: true, code: "INTEGRATED" })
+	writeFileSync(release, "release\n")
 	const failed = await paused
 	expect(failed.json).toMatchObject({ ok: false, code: "INTEGRATION_UNPROVED" })
 	expect(git(first, "rev-parse", "HEAD")).toBe(original)
