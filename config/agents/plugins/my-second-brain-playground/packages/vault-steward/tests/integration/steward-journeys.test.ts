@@ -29,8 +29,17 @@ function preview(f: Fixture, worktree: string): string {
 // ordering oracle, which is the holder's fault pause after that record is published.
 async function waitForOwner(path: string, previous?: string): Promise<void> {
 	const deadline = Date.now() + 10_000
-	while ((!existsSync(path) || (previous !== undefined && readFileSync(path, "utf8") === previous)) && Date.now() < deadline) await Bun.sleep(20)
-	expect(existsSync(path) && (previous === undefined || readFileSync(path, "utf8") !== previous)).toBe(true)
+	let observed: string | null = null
+	while (Date.now() < deadline) {
+		try {
+			observed = readFileSync(path, "utf8")
+			if (previous === undefined || observed !== previous) break
+		} catch {
+			observed = null
+		}
+		await Bun.sleep(20)
+	}
+	expect(observed !== null && (previous === undefined || observed !== previous)).toBe(true)
 }
 
 test("preview binds the apply: a stale candidate, a superseded id, and a moved main each refuse before any effect", () => {
@@ -114,17 +123,21 @@ test("two CLI applies against a dead lock recheck under the reclaim mutex: one c
 	const id = preview(f, worktree)
 	const lock = join(f.vault, ".git", "vault-note-commits.lock")
 	mkdirSync(lock)
-	writeFileSync(join(lock, "owner.json"), JSON.stringify({ schemaVersion: 1, runId: "dead", pid: 2_147_483_646 }))
+	const deadOwner = JSON.stringify({ schemaVersion: 1, runId: "dead", pid: 2_147_483_646 })
+	writeFileSync(join(lock, "owner.json"), deadOwner)
 	const env = stewardEnvironment(f)
 	const release = join(f.root, "reclaim-release")
-	const paused = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=lock-judged:${join(lock, "owner.json")}` })
+	const published = join(f.root, "reclaimer-published")
+	const juror = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=lock-judged:${published}` })
 	const reclaimer = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=lock-held:${release}` })
-	await waitForOwner(join(lock, "owner.json"))
-	// The reclaimer has published while the juror's lock-judged barrier is waiting for this path.
+	await waitForOwner(join(lock, "owner.json"), deadOwner)
+	// Only the reclaimer can change the dead owner record. That witness releases the juror from lock-judged.
+	writeFileSync(published, "published\n")
 	writeFileSync(release, "release\n")
-	const results = await Promise.all([paused, reclaimer])
-	expect(results.map((result) => result.envelope?.result.causeCode).sort()).toEqual(["SUCCESS_COMPLETED", "SUCCESS_UNCHANGED"])
-	expect(results.map((result) => result.envelope?.result.causeCode)).not.toContain("INTERNAL_INTEGRATION_UNPROVED")
+	const [jurorResult, reclaimerResult] = await Promise.all([juror, reclaimer])
+	expect(reclaimerResult.envelope?.result.causeCode).toBe("SUCCESS_COMPLETED")
+	expect(jurorResult.envelope?.result.causeCode).toBe("SUCCESS_UNCHANGED")
+	expect([jurorResult, reclaimerResult].map((result) => result.envelope?.result.causeCode)).not.toContain("INTERNAL_INTEGRATION_UNPROVED")
 	expect(existsSync(lock)).toBe(false)
 	expect(existsSync(`${lock}.reclaim`)).toBe(false)
 })

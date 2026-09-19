@@ -1,5 +1,5 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { lockPath } from "../../src/integration-lock.ts"
@@ -62,10 +62,19 @@ async function outcome(child: ReturnType<typeof spawn>): Promise<{ exitCode: num
 	return { exitCode, stderr }
 }
 
-async function waitForPath(path: string): Promise<void> {
+async function waitForPath(path: string, previous?: string): Promise<void> {
 	const deadline = Date.now() + 10_000
-	while (!existsSync(path) && Date.now() < deadline) await Bun.sleep(10)
-	expect(existsSync(path)).toBe(true)
+	let observed: string | null = null
+	while (Date.now() < deadline) {
+		try {
+			observed = readFileSync(path, "utf8")
+			if (previous === undefined || observed !== previous) break
+		} catch {
+			observed = null
+		}
+		await Bun.sleep(10)
+	}
+	expect(observed !== null && (previous === undefined || observed !== previous)).toBe(true)
 }
 
 test("a paused stale juror rechecks the owner under the reclaim mutex and acquires only after the reclaimer releases", async () => {
@@ -73,10 +82,13 @@ test("a paused stale juror rechecks the owner under the reclaim mutex and acquir
 	const lock = deadLock(common)
 	const holding = join(common, "a-holding")
 	const release = join(common, "release")
-	const b = spawn(common, { VAULT_STEWARD_FAULT: `barrier=lock-judged:${join(lock, "owner.json")}`, LOCK_TEST_A_MARKER: holding, LOCK_TEST_HOLD_MS: "10" })
+	const published = join(common, "reclaimer-published")
+	const deadOwner = readFileSync(join(lock, "owner.json"), "utf8")
+	const b = spawn(common, { VAULT_STEWARD_FAULT: `barrier=lock-judged:${published}`, LOCK_TEST_A_MARKER: holding, LOCK_TEST_HOLD_MS: "10" })
 	const a = spawn(common, { VAULT_STEWARD_FAULT: `barrier=lock-held:${release}`, LOCK_TEST_MARKER: holding, LOCK_TEST_HOLD_MS: "20" })
-	// A's owner record is published before its lock-held barrier. B cannot leave lock-judged until that publication; the 10-s wait only bounds a hung child.
-	await waitForPath(join(lock, "owner.json"))
+	// The dead owner already exists, so wait for A's distinct publication before the test releases B's lock-judged barrier.
+	await waitForPath(join(lock, "owner.json"), deadOwner)
+	writeFileSync(published, "published\n")
 	writeFileSync(release, "release\n")
 	const [aResult, bResult] = await Promise.all([outcome(a), outcome(b)])
 	expect(aResult).toEqual({ exitCode: 0, stderr: "" })
