@@ -1407,7 +1407,7 @@ test("unknown arguments report a versioned not-started usage failure with a fixe
 	})
 })
 
-test("Codex and Claude declarations register bin/msb-workflow hook and keep the legacy launchers as the byte-identical rollback route", () => {
+test("Codex and Claude declarations register bin/msb-workflow hook and keep the legacy launchers pinned and unregistered as provenance only", () => {
 	const pluginRoot = resolve(import.meta.dir, "../../..")
 	const fileSha256 = (path: string): string => createHash("sha256").update(readFileSync(join(pluginRoot, path))).digest("hex")
 	const codex = JSON.parse(readFileSync(join(pluginRoot, "hooks/codex/hooks.json"), "utf8"))
@@ -1447,7 +1447,7 @@ test("Codex and Claude declarations register bin/msb-workflow hook and keep the 
 
 	// Independent oracle: the manifest bytes are the rollback unit (restoring the pre-change bytes re-registers
 	// `hooks/recover-context`), so both identities are pinned here from the accepted M2 readiness packet. The Codex
-	// manifest's M2 release-candidate identity (`dba51eb5…`) is superseded by the F2 context-limit repair; the Python
+	// manifest's M2 release-candidate identity (`dba51eb5…`) is superseded by the F2 context-limit repair; the manifest
 	// rollback target (`preChange`) is unchanged by that repair.
 	const manifestBytes = {
 		"hooks/claude/hooks.json": { current: "609dfbe4e1ce188ce8d1db21a436cea2498e59301c8f0a49077b84b0c877e694", preChange: "c2c8e2500d48c46ed1559bd9bb212ecb2aa8b579152c340f53923c7ad36cc461" },
@@ -1463,8 +1463,11 @@ test("Codex and Claude declarations register bin/msb-workflow hook and keep the 
 	}
 	expect(fileSha256("hooks/codex/hooks.json")).not.toBe(manifestBytes["hooks/codex/hooks.json"].superseded)
 
-	// Independent oracle: the rollback route stays byte-identical and unregistered (Ticket #52, Spec #57 revision 2).
-	expect(fileSha256("hooks/recover-context")).toBe("2ffa42ad7671b4135394ccb15cb3daf4d4cb30ed0bda7101636e59cdb75fb859")
+	// Independent oracle: the legacy launchers and the Python owner stay unregistered as provenance only; they are not a
+	// rollback route (Ticket #52 revision 3, Spec #57 revision 3). LKR never edited `hooks/recover-context`: its accepted
+	// hash was `2ffa42ad…` until `origin/main` `bf79fbc1` (PR #61, Vault Steward guard audit line) changed the bytes,
+	// so the merged-main bytes are the landing baseline pinned here.
+	expect(fileSha256("hooks/recover-context")).toBe("2e11156c6737b3bd3731686337cddbe655998d79eb0dbdbdfc37488c10cda8cc")
 	expect(statSync(join(pluginRoot, "hooks/recover-context")).mode & 0o111).not.toBe(0)
 	expect(fileSha256("hooks/recovery-checkpoint")).toBe("8981956b243b998942a431da595115dbab73b51c9474b5aa0db49e751636be92")
 	expect(statSync(join(pluginRoot, "hooks/recovery-checkpoint")).mode & 0o111).not.toBe(0)

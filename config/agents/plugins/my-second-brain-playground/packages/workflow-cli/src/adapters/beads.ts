@@ -40,7 +40,7 @@ export interface BeadsReader {
 	verifyStore(cwdIsGitRepository: boolean): Promise<StoreRead>
 	readBead(id: string): Promise<BeadRead>
 	readGates(): Promise<GatesRead>
-	/** The bounded `bd prime --hook-json` additionalContext, or null when that read fails; never a refusal. */
+	/** The bounded `bd prime --readonly --hook-json` additionalContext, or null when that read fails; never a refusal. */
 	readPrime(): Promise<string | null>
 	/** Every value observed under a secret-pattern key in any bd reply during this run. */
 	knownSecretValues(): readonly string[]

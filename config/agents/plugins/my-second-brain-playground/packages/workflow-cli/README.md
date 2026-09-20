@@ -242,8 +242,8 @@ refuses a store under `/private/tmp` as an unsafe location; a missing store in
 directory, so `where.path` equality stays the guard; `bd version` appends the
 branch inside a repository; the absent-issue `error` value is still
 `no issues found matching the provided IDs`; the `where`, `config list`,
-`show`, `gate list`, and `prime --hook-json` shapes the helper reads are
-unchanged).
+`show`, `gate list`, and `prime --readonly --hook-json` shapes the helper
+reads are unchanged).
 
 - `last-touched`: `bd show --readonly` still rewrites the store's
   `last-touched` hint file; on `1.3.0` the rewrite keeps the same bytes when the
