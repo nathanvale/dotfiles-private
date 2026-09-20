@@ -25,7 +25,7 @@ BEADS_LOCK_VERSION='1.3.0'
 BEADS_LOCK_ASSET='beads_1.3.0_darwin_arm64.tar.gz'
 BEADS_LOCK_URL="https://github.com/gastownhall/beads/releases/download/v$BEADS_LOCK_VERSION/$BEADS_LOCK_ASSET"
 BEADS_LOCK_SHA256='7cc77367d0b84c50243a1108bc1f73648699211257d414b917540bf868e6bb85'
-FINAL_LOCK_SHA256='88042fb9d282788a7d3d9708db7fad84581e5f62d8c1d9b228e4f5a3b2868df5'
+FINAL_LOCK_SHA256='0c4db8162b1446f984b3a7f264a8b92615ad71eddeda68b056e8195b2b3cdc86'
 assertion_count=0
 
 cleanup() { chmod -R u+w "$TEST_ROOT" 2>/dev/null || true; rm -rf "$TEST_ROOT"; }
@@ -63,14 +63,15 @@ assert_process_group_gone() {
 # or from any config under test. The fake Mise answers every version probe from
 # the column selected by MISE_TEST_ORACLE_COLUMN (default 2), so a test that
 # declares another version must also select the column that matches it.
-# Columns 2 through 8: Node 24.20.0 through 24.20.6. Column 9: Node 24.20.7
+# Columns 2 through 8: Node 26.9.0 through 26.9.6. Column 9: Node 26.9.7
 # (sealed control). Column 10: Beads 1.2.2 (verified rollback baseline).
+# Column 11: independently wrong npm control for Node 26.9.1.
 cat >"$ORACLE" <<'EOF'
-node|24.20.0|24.20.1|24.20.2|24.20.3|24.20.4|24.20.5|24.20.6|24.20.7|24.20.0
-bun|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0
-python|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9
-bd|1.3.0|1.3.0|1.3.0|1.3.0|1.3.0|1.3.0|1.3.0|1.3.0|1.2.2
-npm|11.19.0|11.19.0|11.19.0|11.19.0|11.19.0|11.19.0|11.19.0|11.19.0|11.19.0
+node|26.9.0|26.9.1|26.9.2|26.9.3|26.9.4|26.9.5|26.9.6|26.9.7|26.9.0|26.9.1
+bun|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0|1.4.0
+python|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9|3.11.9
+bd|1.3.0|1.3.0|1.3.0|1.3.0|1.3.0|1.3.0|1.3.0|1.3.0|1.2.2|1.3.0
+npm|11.19.1|11.19.1|11.19.1|11.19.1|11.19.1|11.19.1|11.19.1|11.19.1|11.19.1|11.19.0
 EOF
 # Independent oracle: these lock bodies are test-owned TOML in the
 # `lockfile_version = 2` shape Mise 2026.9.10 writes. They are never derived
@@ -85,10 +86,10 @@ write_lock() {
   } >"$path"
 }
 node_lock_entry() {
-  printf '%s\n' '[[tools.node]]' 'version = "24.20.0"' 'backend = "core:node"' 'specifiers = ["24.20.0"]' '' \
+  printf '%s\n' '[[tools.node]]' 'version = "26.9.0"' 'backend = "core:node"' 'specifiers = ["26.9.0"]' '' \
     '[tools.node."platforms.macos-arm64"]' \
-    'checksum = "sha256:40e5607e5ecb3db9192723776da2d75d966260fc74a7a9e731c1bd67dda96bc8"' \
-    'url = "https://nodejs.org/dist/v24.20.0/node-v24.20.0-darwin-arm64.tar.gz"' ''
+    'checksum = "sha256:6f3de7ed853ee283b4bf24b6e426618f1d357401ce5815db1866eb85eb4b05d9"' \
+    'url = "https://nodejs.org/dist/v26.9.0/node-v26.9.0-darwin-arm64.tar.gz"' ''
 }
 beads_lock_entry() {
   local version="$1" backend="$2" specifiers="$3" checksum="$4" url="$5"
@@ -104,8 +105,8 @@ mkdir -p "$NEGATIVE_LOCKS"
 {
   node_lock_entry
   printf '%s\n' '[tools.node."platforms.macos-x64"]' \
-    'checksum = "sha256:9e5b2644cf107befb6aefca676b96d3296bc10138096f022ed378d6233ed81f4"' \
-    'url = "https://nodejs.org/dist/v24.20.0/node-v24.20.0-darwin-x64.tar.gz"' ''
+    'checksum = "sha256:06b2e742ed9025dc84adc830243b3f731956eac9c321bccd0ede384209af02a8"' \
+    'url = "https://nodejs.org/dist/v26.9.0/node-v26.9.0-darwin-x64.tar.gz"' ''
   official_beads_lock_entry
   printf '%s\n' 'url_api = "https://api.github.com/repos/gastownhall/beads/releases/assets/566378329"' 'provenance = "github-attestations"'
 } | write_lock "$LOCK_ORACLE"
@@ -360,7 +361,11 @@ mkdir -p "$TEST_ROOT/runtime"
 cat >"$TEST_ROOT/runtime/npm" <<'EOF'
 #!/usr/bin/env bash
 [[ "$*" == '--version' ]] || exit 97
-awk -F '|' '$1 == "npm" { print $2; exit }' "$TOOLCHAIN_ORACLE"
+column="${MISE_TEST_ORACLE_COLUMN:-2}"
+while IFS='|' read -r mapped_path mapped_column; do
+  if [[ -n "$mapped_path" && "$mapped_path" == "$MISE_GLOBAL_CONFIG_FILE" ]]; then column="$mapped_column"; fi
+done <<<"${MISE_TEST_ORACLE_PATH_COLUMNS:-}"
+awk -F '|' -v column="$column" '$1 == "npm" { print $column; exit }' "$TOOLCHAIN_ORACLE"
 EOF
 chmod +x "$TEST_ROOT/runtime/npm"
 CANONICAL_MISE_DATA="$(CDPATH='' cd -P "$HOME_ROOT" && pwd)/.local/share/mise"
@@ -559,8 +564,8 @@ unset MISE_TEST_MUTATE_LOCK_ON_INSTALL
 # fact about the record Mise consumes under locked installation.
 cp "$FIXTURE_REPO/config/mise/source.toml" "$TEST_ROOT/source.before-beads-lock-refusal"
 cp "$FIXTURE_REPO/config/toolchain/versions.tsv" "$TEST_ROOT/manifest.before-beads-lock-refusal"
-sed 's/node = "24.20.0"/node = "24.20.1"/' "$TEST_ROOT/source.before-beads-lock-refusal" >"$TEST_ROOT/source.beads-refusal"
-sed 's/node|24.20.0|/node|24.20.1|/' "$TEST_ROOT/manifest.before-beads-lock-refusal" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
+sed 's/node = "26.9.0"/node = "26.9.1"/' "$TEST_ROOT/source.before-beads-lock-refusal" >"$TEST_ROOT/source.beads-refusal"
+sed 's/node|26.9.0|/node|26.9.1|/' "$TEST_ROOT/manifest.before-beads-lock-refusal" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
 cp "$TEST_ROOT/source.beads-refusal" "$FIXTURE_REPO/config/mise/source.toml"
 export MISE_TEST_ORACLE_COLUMN=3
 lock_refusal_current="$(readlink "$state/current")"
@@ -620,7 +625,7 @@ source_refusal 'beads_request_invalid' 'table-form Beads request'
 sed 's/"github:gastownhall\/beads" = "1.3.0"/"github:gastownhall\/beads" = "9.9.9"/' "$TEST_ROOT/source.beads-refusal" >"$FIXTURE_REPO/config/mise/source.toml"
 sed 's/bd|1.3.0|/bd|9.9.9|/' "$TEST_ROOT/manifest.before-beads-lock-refusal" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
 source_refusal 'beads_request_unsupported: 9.9.9' 'unsupported Beads request'
-sed 's/node|24.20.0|/node|24.20.1|/' "$TEST_ROOT/manifest.before-beads-lock-refusal" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
+sed 's/node|26.9.0|/node|26.9.1|/' "$TEST_ROOT/manifest.before-beads-lock-refusal" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
 cp "$TEST_ROOT/source.beads-refusal" "$FIXTURE_REPO/config/mise/source.toml"
 
 # A valid pre-install lock that the post-install refresh loses or corrupts
@@ -680,10 +685,10 @@ register_oracle_column "$revision" 2
 # keeps the failed predicate visible to the caller.
 cp "$FIXTURE_REPO/config/mise/source.toml" "$TEST_ROOT/source.before-verification-retry"
 cp "$FIXTURE_REPO/config/toolchain/versions.tsv" "$TEST_ROOT/manifest.before-verification-retry"
-sed 's/node = "24.20.0"/node = "24.20.1"/' "$TEST_ROOT/source.before-verification-retry" >"$FIXTURE_REPO/config/mise/source.toml"
-sed 's/node|24.20.0|/node|24.20.1|/' "$TEST_ROOT/manifest.before-verification-retry" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
-# The fake Mise answers from oracle column 2 (Node 24.20.0) while the config
-# under test now declares 24.20.1. A fake that derived its answer from that
+sed 's/node = "26.9.0"/node = "26.9.1"/' "$TEST_ROOT/source.before-verification-retry" >"$FIXTURE_REPO/config/mise/source.toml"
+sed 's/node|26.9.0|/node|26.9.1|/' "$TEST_ROOT/manifest.before-verification-retry" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
+# The fake Mise answers from oracle column 2 (Node 26.9.0) while the config
+# under test now declares 26.9.1. A fake that derived its answer from that
 # config would publish this revision instead of failing verification.
 oracle_independence_current="$(readlink "$state/current")"
 oracle_independence="$(MISE_TEST_FORCE_LOCK_FIXTURE="$LOCK_ORACLE" run_cli update --apply --json)"
@@ -698,6 +703,23 @@ unset MISE_TEST_VERIFY_FAILURE_MODE MISE_TEST_FORCE_LOCK_FIXTURE
 assert_equals '70' "$(sed -n '1p' <<<"$verification_exhausted")" 'exhausted verification retry returns its failure status'
 assert_equals 'mise_verification_failed' "$(jq -r '.error.code' <<<"$(sed -n '2,$p' <<<"$verification_exhausted")")" 'exhausted verification retry keeps its structured error code'
 assert_contains "$(jq -r '.error.message' <<<"$(sed -n '2,$p' <<<"$verification_exhausted")")" 'node_version_mismatch' 'exhausted verification retry preserves the failed predicate'
+cp "$TEST_ROOT/source.before-verification-retry" "$FIXTURE_REPO/config/mise/source.toml"
+cp "$TEST_ROOT/manifest.before-verification-retry" "$FIXTURE_REPO/config/toolchain/versions.tsv"
+
+# The fake Node 26.9.0 installation reports its real bundled npm 11.19.1 by
+# default. This separate oracle column deliberately reports 11.19.0 while its
+# Node version matches the changed declaration, so only the npm predicate can
+# refuse publication.
+sed 's/node = "26.9.0"/node = "26.9.1"/' "$TEST_ROOT/source.before-verification-retry" >"$FIXTURE_REPO/config/mise/source.toml"
+sed 's/node|26.9.0|/node|26.9.1|/' "$TEST_ROOT/manifest.before-verification-retry" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
+export MISE_TEST_ORACLE_COLUMN=11
+npm_mismatch_current="$(readlink "$state/current")"
+npm_mismatch="$(MISE_TEST_FORCE_LOCK_FIXTURE="$LOCK_ORACLE" run_cli update --apply --json)"
+assert_equals '70' "$(sed -n '1p' <<<"$npm_mismatch")" 'wrong Node-sibling npm version refuses apply'
+assert_equals 'mise_verification_failed' "$(jq -r '.error.code' <<<"$(sed -n '2,$p' <<<"$npm_mismatch")")" 'npm mismatch keeps the verification error code'
+assert_contains "$(jq -r '.error.message' <<<"$(sed -n '2,$p' <<<"$npm_mismatch")")" 'npm_version_mismatch' 'npm mismatch names the exact failed predicate'
+assert_equals "$npm_mismatch_current" "$(readlink "$state/current")" 'npm mismatch preserves current selection'
+export MISE_TEST_ORACLE_COLUMN=2
 cp "$TEST_ROOT/source.before-verification-retry" "$FIXTURE_REPO/config/mise/source.toml"
 cp "$TEST_ROOT/manifest.before-verification-retry" "$FIXTURE_REPO/config/toolchain/versions.tsv"
 
@@ -754,19 +776,19 @@ printf 'unrelated source state\n' >"$HOME_ROOT/unrelated"
 before_unrelated="$(shasum "$HOME_ROOT/unrelated" | awk '{print $1}')"
 cp "$FIXTURE_REPO/config/mise/source.toml" "$TEST_ROOT/source.original"
 cp "$FIXTURE_REPO/config/toolchain/versions.tsv" "$TEST_ROOT/manifest.original"
-awk '{ print } /^\[tools\]$/ { print "npm = \"11.19.0\"" }' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
+awk '{ print } /^\[tools\]$/ { print "npm = \"11.19.1\"" }' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
 : >"$LEDGER"
 standalone_npm="$(run_cli update --apply --json)"
 assert_equals '65' "$(sed -n '1p' <<<"$standalone_npm")" 'standalone npm declaration is rejected before installation'
 assert_equals 'snapshot_invalid' "$(jq -r '.error.code' <<<"$(sed -n '2,$p' <<<"$standalone_npm")")" 'standalone npm declaration names the inconsistent source model'
 assert_equals '0' "$(grep -Ec '^(lock|install)' "$LEDGER" || true)" 'standalone npm declaration never reaches Mise lock or install'
 cp "$TEST_ROOT/source.original" "$FIXTURE_REPO/config/mise/source.toml"
-sed 's/node = "24.20.0"/node = "24.20.1"/' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
+sed 's/node = "26.9.0"/node = "26.9.1"/' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
 export MISE_TEST_ORACLE_COLUMN=3
 declaration_only="$(run_cli update --apply --json)"
 assert_equals '65' "$(sed -n '1p' <<<"$declaration_only")" 'declaration-only drift is rejected before installation'
 assert_equals 'snapshot_invalid' "$(jq -r '.error.code' <<<"$(sed -n '2,$p' <<<"$declaration_only")")" 'declaration-only drift names the inconsistent snapshot'
-sed 's/node|24.20.0|/node|24.20.1|/' "$FIXTURE_REPO/config/toolchain/versions.tsv" >"$TEST_ROOT/versions.next"
+sed 's/node|26.9.0|/node|26.9.1|/' "$FIXTURE_REPO/config/toolchain/versions.tsv" >"$TEST_ROOT/versions.next"
 mv "$TEST_ROOT/versions.next" "$FIXTURE_REPO/config/toolchain/versions.tsv"
 set +e
 export MISE_TEST_FAIL_INSTALL=true
@@ -887,8 +909,8 @@ chmod 0555 "$state/revisions/$revision"
 # it. The control below proves the test's sealing is accepted when the lock is
 # valid; removing validate_beads_lock from revision verification would let the
 # stale, missing, malformed, and wrong-checksum revisions recover.
-sed 's/node = "24.20.0"/node = "24.20.7"/' "$TEST_ROOT/source.original" >"$TEST_ROOT/source.sealed"
-sed 's/node|24.20.0|/node|24.20.7|/' "$TEST_ROOT/manifest.original" >"$TEST_ROOT/manifest.sealed"
+sed 's/node = "26.9.0"/node = "26.9.7"/' "$TEST_ROOT/source.original" >"$TEST_ROOT/source.sealed"
+sed 's/node|26.9.0|/node|26.9.7|/' "$TEST_ROOT/manifest.original" >"$TEST_ROOT/manifest.sealed"
 sealed_control_dir="$TEST_ROOT/sealed-control-revision"
 mkdir "$sealed_control_dir"
 cp "$TEST_ROOT/source.sealed" "$sealed_control_dir/config.toml"
@@ -967,8 +989,8 @@ assert_equals 'no_change' "$(jq -r '.status' <<<"$(sed -n '2,$p' <<<"$post_lock_
 
 # A real second process blocks inside the fake install. Killing its CLI leaves
 # current untouched and a stale lock that only explicit retry may repair.
-sed 's/node = "24.20.0"/node = "24.20.2"/' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
-sed 's/node|24.20.0|/node|24.20.2|/' "$TEST_ROOT/manifest.original" >"$TEST_ROOT/manifest.blocked"
+sed 's/node = "26.9.0"/node = "26.9.2"/' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
+sed 's/node|26.9.0|/node|26.9.2|/' "$TEST_ROOT/manifest.original" >"$TEST_ROOT/manifest.blocked"
 mv "$TEST_ROOT/manifest.blocked" "$FIXTURE_REPO/config/toolchain/versions.tsv"
 export MISE_TEST_ORACLE_COLUMN=4
 block_file="$TEST_ROOT/install-blocked"
@@ -1081,8 +1103,8 @@ assert_not_exists "$state/lock-records/$dead_claim_token" 'bounded retry cleans 
 # A takeover killed after canonical unlink leaves no run lock to route a normal
 # entrant through --retry. Normal publication must therefore share the same
 # serializer and drain only the fully validated dead managed evidence.
-sed 's/node = "24.20.0"/node = "24.20.5"/' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
-sed 's/node|24.20.0|/node|24.20.5|/' "$TEST_ROOT/manifest.original" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
+sed 's/node = "26.9.0"/node = "26.9.5"/' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
+sed 's/node|26.9.0|/node|26.9.5|/' "$TEST_ROOT/manifest.original" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
 export MISE_TEST_ORACLE_COLUMN=7
 orphan_setup_block="$TEST_ROOT/orphan-setup-blocked"
 orphan_setup_release="$TEST_ROOT/orphan-setup-release"
@@ -1141,8 +1163,8 @@ assert_equals '1' "$([[ "$(readlink "$state/current")" != "$post_unlink_current"
 
 # Hold a live takeover after unlink to prove normal acquisition cannot bypass
 # serializer custody or remove its live claim.
-sed 's/node = "24.20.0"/node = "24.20.6"/' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
-sed 's/node|24.20.0|/node|24.20.6|/' "$TEST_ROOT/manifest.original" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
+sed 's/node = "26.9.0"/node = "26.9.6"/' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
+sed 's/node|26.9.0|/node|26.9.6|/' "$TEST_ROOT/manifest.original" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
 export MISE_TEST_ORACLE_COLUMN=8
 serializer_setup_block="$TEST_ROOT/serializer-setup-blocked"
 serializer_setup_release="$TEST_ROOT/serializer-setup-release"
@@ -1212,8 +1234,8 @@ assert_equals 'no_change' "$(jq -r '.status' <<<"$(sed -n '2,$p' <<<"$post_forei
 
 # TERM must end the owner, release its tokened state, and never continue to
 # publication or selection.
-sed 's/node = "24.20.0"/node = "24.20.3"/' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
-sed 's/node|24.20.0|/node|24.20.3|/' "$TEST_ROOT/manifest.original" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
+sed 's/node = "26.9.0"/node = "26.9.3"/' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
+sed 's/node|26.9.0|/node|26.9.3|/' "$TEST_ROOT/manifest.original" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
 export MISE_TEST_ORACLE_COLUMN=5
 term_block="$TEST_ROOT/term-blocked"
 term_release="$TEST_ROOT/term-release"
@@ -1306,13 +1328,13 @@ assert_equals "$term_prior" "$(readlink "$state/current")" 'PGID discovery failu
 
 # A source edit after the exclusive snapshot must not change the bytes or
 # identity being installed and published in this run.
-sed 's/node = "24.20.0"/node = "24.20.4"/' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
-sed 's/node|24.20.0|/node|24.20.4|/' "$TEST_ROOT/manifest.original" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
+sed 's/node = "26.9.0"/node = "26.9.4"/' "$TEST_ROOT/source.original" >"$FIXTURE_REPO/config/mise/source.toml"
+sed 's/node|26.9.0|/node|26.9.4|/' "$TEST_ROOT/manifest.original" >"$FIXTURE_REPO/config/toolchain/versions.tsv"
 export MISE_TEST_ORACLE_COLUMN=6
 cp "$FIXTURE_REPO/config/mise/source.toml" "$TEST_ROOT/source.snapshot-expected"
 cp "$FIXTURE_REPO/config/toolchain/versions.tsv" "$TEST_ROOT/manifest.snapshot-expected"
-sed 's/node = "24.20.0"/node = "24.20.5"/' "$TEST_ROOT/source.original" >"$TEST_ROOT/source.concurrent"
-sed 's/node|24.20.0|/node|24.20.5|/' "$TEST_ROOT/manifest.original" >"$TEST_ROOT/manifest.concurrent"
+sed 's/node = "26.9.0"/node = "26.9.5"/' "$TEST_ROOT/source.original" >"$TEST_ROOT/source.concurrent"
+sed 's/node|26.9.0|/node|26.9.5|/' "$TEST_ROOT/manifest.original" >"$TEST_ROOT/manifest.concurrent"
 snapshot_id="$(fixture_content_id "$TEST_ROOT/manifest.snapshot-expected" "$TEST_ROOT/source.snapshot-expected")"
 snapshot_run="$(MISE_TEST_REPLACEMENT_CONFIG="$TEST_ROOT/source.concurrent" MISE_TEST_REPLACEMENT_MANIFEST="$TEST_ROOT/manifest.concurrent" MISE_TEST_CANONICAL_CONFIG="$FIXTURE_REPO/config/mise/source.toml" MISE_TEST_CANONICAL_MANIFEST="$FIXTURE_REPO/config/toolchain/versions.tsv" run_cli update --apply --json)"
 assert_equals '0' "$(sed -n '1p' <<<"$snapshot_run")" 'concurrent source rewrite does not corrupt the snapshotted apply'

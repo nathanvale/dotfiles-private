@@ -64,9 +64,9 @@ assert_exact_count() {
 }
 
 # Independent oracle: keep the intended parity version literal in the test.
-[[ "$(tr -d '[:space:]' < "$REPO_ROOT/config/node/version")" == "24.20.0" ]] ||
-  fail 'Node version declaration differs from 24.20.0'
-pass 'Node version declaration is 24.20.0'
+[[ "$(tr -d '[:space:]' < "$REPO_ROOT/config/node/version")" == "26.9.0" ]] ||
+  fail 'Node version declaration differs from 26.9.0'
+pass 'Node version declaration is 26.9.0'
 
 # Evaluate the real Brewfile as Ruby for each profile. The tiny DSL adapter
 # records literal declarations only; it does not call Homebrew or mutate the
@@ -444,12 +444,12 @@ assert_recorded $'install\tpython' \
   'fresh run continues to the next development tool'
 assert_recorded $'list\tmise' 'fresh run checks Mise by its declared formula name'
 assert_recorded $'install\tmise' 'fresh run installs Mise before toolchain apply'
-grep -Fxq $'install\t--corepack-enabled\t24.20.0' "$RECORD_DIR/fnm-calls" ||
-  fail 'fresh run does not install Node 24.20.0 with Corepack'
-pass 'fresh run installs Node 24.20.0 with Corepack'
-grep -Fxq $'default\t24.20.0' "$RECORD_DIR/fnm-calls" ||
-  fail 'fresh run does not set Node 24.20.0 as the fnm default'
-pass 'fresh run sets Node 24.20.0 as the fnm default'
+grep -Fxq $'install\t--corepack-enabled\t26.9.0' "$RECORD_DIR/fnm-calls" ||
+  fail 'fresh run does not install Node 26.9.0 with Corepack'
+pass 'fresh run installs Node 26.9.0 with Corepack'
+grep -Fxq $'default\t26.9.0' "$RECORD_DIR/fnm-calls" ||
+  fail 'fresh run does not set Node 26.9.0 as the fnm default'
+pass 'fresh run sets Node 26.9.0 as the fnm default'
 assert_exact_count 1 $'toolchain\tupdate\t--apply' "$RECORD_DIR/toolchain-calls" \
   'fresh run invokes exactly one explicit toolchain apply'
 mise_install_line="$(grep -nFx $'brew\tinstall\tmise' "$RECORD_DIR/sequence" | cut -d: -f1)"
@@ -477,10 +477,10 @@ assert_recorded $'install\tpython' \
   'preinstalled run continues to the next development tool'
 assert_recorded $'list\tmise' 'preinstalled run checks Mise by its declared formula name'
 assert_not_recorded $'install\tmise' 'preinstalled run skips the Mise install'
-grep -Fxq $'install\t--corepack-enabled\t24.20.0' "$RECORD_DIR/fnm-calls" ||
-  fail 'preinstalled run does not reconcile Node 24.20.0 with Corepack'
-pass 'preinstalled run reconciles Node 24.20.0 with Corepack'
-grep -Fxq $'default\t24.20.0' "$RECORD_DIR/fnm-calls" ||
+grep -Fxq $'install\t--corepack-enabled\t26.9.0' "$RECORD_DIR/fnm-calls" ||
+  fail 'preinstalled run does not reconcile Node 26.9.0 with Corepack'
+pass 'preinstalled run reconciles Node 26.9.0 with Corepack'
+grep -Fxq $'default\t26.9.0' "$RECORD_DIR/fnm-calls" ||
   fail 'preinstalled run does not reconcile the fnm default'
 pass 'preinstalled run reconciles the fnm default'
 assert_exact_count 1 $'toolchain\tupdate\t--apply' "$RECORD_DIR/toolchain-calls" \
