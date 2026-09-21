@@ -20,7 +20,7 @@ selection cannot rewrite an active run.
 | Kind | Reference | State |
 | --- | --- | --- |
 | Planning and research | [`references/planning-research.md`](references/planning-research.md) | Revision 1 |
-| Engineering | [`references/engineering.md`](references/engineering.md) | Revision 1 |
+| Engineering | [`references/engineering.md`](references/engineering.md) | Revision 2 |
 
 Read the shared rules below, then the kind's reference.
 

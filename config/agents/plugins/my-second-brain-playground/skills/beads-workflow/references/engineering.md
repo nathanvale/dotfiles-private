@@ -1,7 +1,10 @@
 # Engineering kind
 
-Revision 1, 21 September 2026. Record on the Bead as its workflow reference:
-`skills/beads-workflow/references/engineering.md`, revision 1.
+Revision 2, 22 September 2026, repairing `F-55-2`, `F-55-3`, and `F-55-4`
+found in revision 1 of 21 September 2026 at
+`36572abc762ba13b6eec2e41d96426690e73eac5`. Record on the Bead as its
+workflow reference: `skills/beads-workflow/references/engineering.md`,
+revision 2.
 
 Journey: accepted intent, an A and B to C fan-in with one human Gate on C,
 claimed candidates, independent two-axis review, one actual finding, one
@@ -92,15 +95,18 @@ this Gate.
 
 The Stage Manager's run entry checkpoint on the dispatched parent names the
 Spec revision, this reference and revision, the supported lane set, the
-allowance and its owner, the packet path, and each prerequisite's
-`Role • Model`. Each performing Cast Member then runs `bd update <id>
---claim`, binds once with `msb-workflow bind` from a Git working directory,
-and posts its entry checkpoint: the lane label, the candidate base, the
-worktree, the owned paths, and the next safe action.
+allowance and its owner, the packet path, each prerequisite's
+`Role • Model`, and the role-skill identity: the role skill each dispatched
+role loads and this reference, each by resolved absolute path and SHA-256,
+saved as one list in the packet. Each performing Cast Member then runs
+`bd update <id> --claim`, binds once with `msb-workflow bind` from a Git
+working directory, and posts its entry checkpoint: the lane label, the
+candidate base, the worktree, the owned paths, and the next safe action.
 
 Done when the parent's last comment is the run entry checkpoint with the lane
-set, `bd show <A> --readonly --json` reports `in_progress` with the role as
-assignee, and the bind envelope reports success.
+set and the role-skill identity list, `bd show <A> --readonly --json` reports
+`in_progress` with the role as assignee, and the bind envelope reports
+success.
 
 ## 3. Build the candidate
 
@@ -181,9 +187,10 @@ supported lane from the same role's row. One checkpoint on R records the
 `Role • Model` after. Role skills and this reference are unchanged by the
 selection.
 
-Done when that checkpoint is on R, `git status --porcelain -- skills` is
-empty in the plugin source worktree the run dispatches from, and the pane
-listing shows one launch, for the selected lane only.
+Done when that checkpoint is on R, `shasum -a 256 -c` over the role-skill
+identity list from the run entry checkpoint passes, proving the role skill
+and this reference byte-equal to entry whether a change were committed or
+dirty, and the pane listing shows one launch, for the selected lane only.
 
 ## 9. Resume on the replacement lane
 
@@ -206,24 +213,33 @@ the unchanged Spec and standards identities, the finding ID, the changed
 paths, and the repair evidence, and reviews only that finding and regression
 on the changed paths. The verdict keeps the ID: `proved` sets the row's
 disposition; a new distinct defect takes a new ID with `related-to` or
-`split-from`; `not-proved` consumes the next attempt while the allowance
-allows, otherwise the run hands back. On `proved`, R's assignee closes R with
-`bd close <R> --reason-file <file>` naming the ID, candidate, count, and
-verdict receipt; then A's assignee closes A on its accepted Handback.
+`split-from`; `not-proved` leaves the row's disposition and count unchanged,
+and only the next dispatched repair consumes the next attempt, while the
+allowance allows, otherwise the run hands back. On `proved`, R's assignee
+closes R with `bd close <R> --reason-file <file>` naming the ID, candidate,
+count, and verdict receipt; then A's assignee supplies the facts for A's
+accepted Handback, the repaired candidate identity (the repair commit with
+dirty bytes `none`) beside the ID, count, and verdict receipt, the Ledger
+Steward posts it by the board-comment route, and A's assignee closes A on
+that Handback, so C joins the proved candidate.
 
-Done when `bd show <R>` and `bd show <A>` report `closed`, the row reads
-`proved` with the re-review receipt, and `bd blocked --readonly --json` lists
-C blocked by the Gate only.
+Done when `bd show <R>` and `bd show <A>` report `closed`, A's last
+checkpoint is its accepted Handback naming the same candidate commit as R's
+close reason, the row reads `proved` with the re-review receipt, and
+`bd blocked --readonly --json` lists C blocked by the Gate only.
 
 ## 11. Admit and join
 
 Nathan, or the Stage Manager on his decision, runs `bd gate resolve <gate>
 --reason "<decision and rationale>"`. Read `bd ready --readonly --json` now,
 before the claim, and record it, then take board witness two: C ready. The
-performing Cast Member claims C, binds, verifies the integrated result of A
-and B against both accepted Handbacks with focused checks, and posts C's
-closeout checkpoint whose `## Remaining` names the merge, activation, and
-release as unproved.
+performing Cast Member claims C, binds, confirms with `git rev-parse` that
+the commit it integrates for each prerequisite is the candidate commit that
+prerequisite's accepted Handback names, verifies the integrated result of A
+and B against both accepted Handbacks with focused checks, and supplies the
+facts for C's closeout checkpoint, which the Ledger Steward posts by the
+board-comment route, with `## Evidence` recording both compared commits and
+`## Remaining` naming the merge, activation, and release as unproved.
 
 Done when `bd gate list <C> --readonly --json` shows no open Gate, the
 `bd ready` read between the resolve and the claim listed C, and
