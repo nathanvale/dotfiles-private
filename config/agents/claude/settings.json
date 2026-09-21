@@ -141,7 +141,8 @@
   },
   "enabledPlugins": {
     "proof@personal": true,
-    "my-second-brain-playground@personal": true
+    "my-second-brain-playground@personal": true,
+    "personal@personal-timesheets-dev": true
   },
   "extraKnownMarketplaces": {
     "my-second-brain": {
@@ -155,6 +156,12 @@
       "source": {
         "source": "directory",
         "path": "/Users/nathanvale/code/dotfiles/config/agents/plugins"
+      }
+    },
+    "personal-timesheets-dev": {
+      "source": {
+        "source": "directory",
+        "path": "/Users/nathanvale/.local/state/personal-timesheets-dev-marketplace"
       }
     }
   },
