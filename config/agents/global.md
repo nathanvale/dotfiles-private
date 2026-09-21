@@ -1,4 +1,4 @@
-# Personal Agent Instructions
+g# Personal Agent Instructions
 
 ## Nathan
 
@@ -119,8 +119,7 @@
 - Google service operation supported by `gog`: use the `gog` CLI and the
   corresponding `gog-*` skill when available, even when a connector or browser
   exists.
-- Google service journey requiring the signed-in web UI: follow the browser
-  automation and `browser-use` owner below.
+
 - Use `ghh` for GitHub CLI work.
 - Codex Desktop or Claude Desktop work, coordinator requests, or Herdr work: read
   `$HOME/code/dotfiles/docs/agents/herdr-control.md` before the Herdr skill.
@@ -128,9 +127,7 @@
   `atuin-agent-history recent --limit 20`; use `search --limit 20 -- <terms>` for a targeted lookup.
 - Accessible email question: read
   `$HOME/code/dotfiles/docs/agents/email.md` before answering.
-- Browser automation, profile-lane routing, adapter or CDP-engine choice, or
-  a `browser-use` or `browser-lanes` question: read
-  `$HOME/code/dotfiles/docs/agents/browser-automation.md` before acting.
+
 - Long unattended local run on a sleep-capable Mac: launch it under
   `caffeinate -dimsu`, then prove the process completed. This does not protect
   a closed laptop lid.

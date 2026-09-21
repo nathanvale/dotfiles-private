@@ -140,10 +140,8 @@
     "command": "bash /Users/nathanvale/.claude/statusline-command.sh"
   },
   "enabledPlugins": {
-    "my-second-brain@my-second-brain": true,
-    "browser-lanes@personal": true,
-    "my-second-brain-playground@personal": true,
-    "proof@personal": true
+    "proof@personal": true,
+    "my-second-brain-playground@personal": true
   },
   "extraKnownMarketplaces": {
     "my-second-brain": {
