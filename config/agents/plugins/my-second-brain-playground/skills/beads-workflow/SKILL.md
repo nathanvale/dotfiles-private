@@ -1,6 +1,6 @@
 ---
 name: beads-workflow
-description: Run or resume one bounded planning or research journey on native Beads through direct bd 1.3.0 commands, with the msb-workflow helper used for recovery only. Use when a Stage Manager dispatch, a Cast Member, or a fresh-context resume names a Bead, a workflow kind, or a bd write on the isolated store; use for the store gate before any bd write, the human Gate, checkpoint comments, session binding, and the engineering kind's precedent pointer.
+description: Run or resume one bounded planning or research journey on native Beads through direct bd commands. Use when a dispatch or a fresh-context resume names a Bead, a workflow kind, or a bd write on the isolated store.
 ---
 
 # Beads Workflow
@@ -19,7 +19,7 @@ selection cannot rewrite an active run.
 
 | Kind | Reference | State |
 | --- | --- | --- |
-| Planning and research | [`references/planning-research.md`](references/planning-research.md) | Revision 1 |
+| Planning and research | [`references/planning-research-r2.md`](references/planning-research-r2.md) | Revision 2 for every new run. Revision 1, [`references/planning-research.md`](references/planning-research.md), only for a Bead that already records it. |
 | Engineering | [Ticket #52](https://github.com/nathanvale/dotfiles-private/issues/52) revision 3 and its receipts in the rollout packet | Precedent only; its procedure is a later unit |
 
 Read the shared rules below, then the kind's reference.
@@ -45,7 +45,7 @@ mismatch with one repair:
 
 ```sh
 export BEADS_DIR=<store root>/.beads
-bd version                          # version 1.3.0, revision f45b249ce6b4
+bd version                          # version and revision agree with msb-workflow inspect
 bd where --readonly --json          # .path equals $BEADS_DIR; .prefix as dispatched
 bd config list --readonly --json    # prefix agrees
 bd context --readonly --json        # in a Git working directory: same store, not redirected
@@ -58,7 +58,7 @@ the accepted executable digest; a wrong or ancestor store is
 `DOMAIN_STORE_MISMATCH`. A strict `--readonly` read still rewrites the store's
 `last-touched` hint; that is a `bd` side effect, not a write.
 
-## Native primitives, bd 1.3.0
+## Native primitives
 
 Syntax comes from `bd <command> --help` on the pinned executable. Pass
 `--actor <role>` on every write and `--author <role>` on every comment so the

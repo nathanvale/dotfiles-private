@@ -31,24 +31,37 @@ configuration remains separate.
 
 ## Compaction recovery
 
-The installed plugin exposes one checkpoint contract and a read-only
-`SessionStart` hook for `compact` events. Resolve the installed plugin root
-from the selected Harness metadata, assign it to `PLUGIN_ROOT`, then inspect
-or write the private checkpoint through its executable owner. Inspect recovery
-traces through the separate read-only view and scoped cleanup owner:
+Both hook manifests (`hooks/claude/hooks.json`, `hooks/codex/hooks.json`)
+register `bin/msb-workflow hook`;
+[`packages/workflow-cli/README.md`](packages/workflow-cli/README.md) owns
+that hook's contract and the source-only boundary (installation, hook trust,
+and activation are Ticket #52 evidence, not claims here). The
+[beads-workflow](skills/beads-workflow/SKILL.md) skill owns the LKR Beads
+route.
+
+The legacy checkpoint contract (`hooks/recovery-checkpoint`,
+`hooks/recover-context`, the Python owner, schema-v2 checkpoints) is provenance
+under Spec #57: kept byte-identical, registered by no manifest, never read by
+the registered hook. It remains a manual route whose help owns its syntax, and
+recovery traces record only that legacy route. Resolve the installed plugin
+root from the selected Harness metadata, assign it to `PLUGIN_ROOT`, then:
 
 ```sh
 "${PLUGIN_ROOT}/hooks/recovery-checkpoint" --help
 "${PLUGIN_ROOT}/bin/recovery-traces" --help
 ```
 
-For missing, stale, uncertain, or refused recovery context, follow the configured
-playground's `docs/agents/recovery.md`; command help owns binding syntax.
+For a legacy manual checkpoint on note work that is missing, stale, uncertain,
+or refused, follow the configured playground's `docs/agents/recovery.md`; the
+legacy launcher's help owns its binding syntax. For an LKR schema-v3 binding,
+refusal, or missing Resume Panel, use `bin/msb-workflow --help` and the
+[workflow-cli README](packages/workflow-cli/README.md#recovery-and-rollback),
+not that vault document.
 
-The writer validates the configured playground, project files, Agent Ledger
-Register, and accepted Task before replacing the checkpoint. The hook delivers
-verified pointers and one fixed recovery action. Raw transcripts remain with
-their Harness and never become checkpoint input.
+The legacy writer validates the configured playground, project files, Agent
+Ledger Register, and accepted Task before replacing its checkpoint; the legacy
+hook delivered verified pointers and one fixed recovery action. Raw transcripts
+remain with their Harness and never become checkpoint or binding input.
 
 Recovery traces are private operational evidence under XDG state. They do not
 own project knowledge, task state, decisions, or completion proof. Follow the
