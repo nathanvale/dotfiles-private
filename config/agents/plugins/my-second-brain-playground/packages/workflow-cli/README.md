@@ -18,7 +18,18 @@ helper is the registered hook path. The Python route
 (`packages/compaction-recovery/src/recovery.py`), the schema-v2 checkpoints,
 and both legacy launchers under `hooks/` are retained byte-identical and
 unregistered as provenance only; they are not a rollback route and are not
-rehearsed (Spec #57 revision 3 onward, Ticket #52 revision 3). This README states
+rehearsed (Spec #57 revision 3 onward, Ticket #52 revision 3). One live
+behaviour of `hooks/recover-context` is not carried into `bin/msb-workflow
+hook`: the Vault Steward guard-audit line that
+[PR #61](https://github.com/nathanvale/dotfiles-private/pull/61) added
+(`hooks/recover-context:13-24`, row F3, one `vault-guard:` line at
+SessionStart when the configured vault's `guard:audit` reports error or warn
+findings). On this source that line is unregistered under `M2` and retired
+from the registered hook path; its surfacing is re-homed through the existing
+Vault Steward `guard:audit` route, with no new command or hook, and the helper
+never runs `guard:audit`. The source-registered command canary for that break
+sits beside the manifest test in
+`packages/compaction-recovery/src/main.test.ts`. This README states
 source state only. Installation, activation, and merge are separate facts
 recorded in the Ticket #52 evidence, not claimed here.
 

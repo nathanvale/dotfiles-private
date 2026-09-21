@@ -1466,7 +1466,9 @@ test("Codex and Claude declarations register bin/msb-workflow hook and keep the 
 	// Independent oracle: the legacy launchers and the Python owner stay unregistered as provenance only; they are not a
 	// rollback route (Ticket #52 revision 3, Spec #57 revision 3). LKR never edited `hooks/recover-context`: its accepted
 	// hash was `2ffa42ad…` until `origin/main` `bf79fbc1` (PR #61, Vault Steward guard audit line) changed the bytes,
-	// so the merged-main bytes are the landing baseline pinned here.
+	// so the merged-main bytes are the landing baseline pinned here. That guard-audit line (`hooks/recover-context:13-24`,
+	// Vault Steward row F3) is therefore unregistered from this source under M2; the workflow-cli README owns its
+	// retirement statement, and the next row is the source-registered command canary for it.
 	expect(fileSha256("hooks/recover-context")).toBe("2e11156c6737b3bd3731686337cddbe655998d79eb0dbdbdfc37488c10cda8cc")
 	expect(statSync(join(pluginRoot, "hooks/recover-context")).mode & 0o111).not.toBe(0)
 	expect(fileSha256("hooks/recovery-checkpoint")).toBe("8981956b243b998942a431da595115dbab73b51c9474b5aa0db49e751636be92")
@@ -1474,6 +1476,42 @@ test("Codex and Claude declarations register bin/msb-workflow hook and keep the 
 	expect(fileSha256("packages/compaction-recovery/src/recovery.py")).toBe("2c960f6302859781ef157bae5404800d99a92480691cf98ce9d1fc49823b8594")
 	expect(JSON.stringify([codex, claude])).not.toContain("hooks/recover-context")
 })
+
+test("the registered Claude SessionStart command prints no guard-audit line where the legacy launcher prints one", () => {
+	// Source-registered command canary for the PR #61 guard-audit line (`hooks/recover-context:13-24`, Vault Steward row
+	// F3): that line is a live behaviour of the unregistered legacy launcher, not of `bin/msb-workflow hook`. It retires
+	// from the registered hook path and its surfacing is re-homed through the existing Vault Steward `guard:audit` route
+	// (Ticket #52 criterion 2; the workflow-cli README owns the statement). Under one F3 findings fixture the legacy
+	// launcher is the liveness control and the command the Claude manifest registers for `startup` is the target.
+	const pluginRoot = resolve(import.meta.dir, "../../..")
+	const current = fixture({ writeCheckpoint: false })
+	write(join(current.vault, "package.json"), `${JSON.stringify({ private: true, scripts: { "guard:audit": "bun run audit.ts" } })}\n`)
+	write(
+		join(current.vault, "audit.ts"),
+		'console.log(JSON.stringify({ schemaVersion: 1, ok: false, findings: [{ id: "guard-hook-missing", severity: "error" }] }))\nprocess.exit(1)\n',
+	)
+	// One environment, cwd, and `startup` event reach both processes. The cwd is the fixture root, outside the configured
+	// vault, so the preserved recovery route behind the legacy launcher stays silent and the control isolates the guard
+	// line. The helper's first-resolved state root is pinned and the ambient session and bd identities are scrubbed, so
+	// the registered hook's fail-open (no binding under the fixture state root, Spec #57 hook lifecycle) never depends on
+	// the caller's shell.
+	const env: Record<string, string> = { ...environment(current), MSB_WORKFLOW_STATE_HOME: current.state, CLAUDE_PLUGIN_ROOT: pluginRoot }
+	delete env.CODEX_SESSION_ID
+	delete env.MSB_WORKFLOW_BD_EXECUTABLE
+	const startup = hookEvent(current, "startup", current.root)
+	// Independent oracle: the F3 line contract restated as a literal (startup-audit.test.ts row F3), never read from
+	// `startup-audit.ts`; one error finding rather than the F3 three-finding envelope, so this is a control, not a copy.
+	const guardLine = `vault-guard: 1 finding(s) in ${current.vault}: guard-hook-missing (run 'bun run guard:audit --json' there)\n`
+
+	expect(run(hookCommand, current.root, startup, env)).toEqual({ exitCode: 0, stdout: guardLine, stderr: "" })
+
+	// The target is the manifest's own command string, run through the shell with `CLAUDE_PLUGIN_ROOT` in the child
+	// environment as the Harness supplies it, so the `${CLAUDE_PLUGIN_ROOT}` reference and the quoting are honoured by
+	// the shell; nothing here rewrites the command. The sibling row pins the matcher that admits `startup`.
+	const claude = JSON.parse(readFileSync(join(pluginRoot, "hooks/claude/hooks.json"), "utf8"))
+	const registered = run("/bin/sh", current.root, startup, env, ["-c", claude.hooks.SessionStart[0].hooks[0].command])
+	expect(registered).toEqual({ exitCode: 0, stdout: "", stderr: "" })
+}, 15_000)
 
 test("the checkpoint writer atomically creates private state accepted by the hook", () => {
 	const current = fixture({ writeCheckpoint: false })
