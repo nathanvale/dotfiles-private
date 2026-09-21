@@ -1,6 +1,6 @@
 ---
 name: beads-workflow
-description: Run or resume one bounded planning or research journey on native Beads through direct bd 1.3.0 commands, with the msb-workflow helper used for recovery only. Use when a Stage Manager dispatch, a Cast Member, or a fresh-context resume names a Bead, a workflow kind, or a bd write on the isolated store; use for the store gate before any bd write, the human Gate, checkpoint comments, session binding, and the engineering kind's precedent pointer.
+description: Run or resume one bounded journey of the planning and research kind or the engineering kind on native Beads through direct bd 1.3.0 commands, with the msb-workflow helper used for recovery only. Use when a Stage Manager dispatch, a Cast Member, or a fresh-context resume names a Bead, a workflow kind, or a bd write on the isolated store; use for the store gate before any bd write, the human Gate, checkpoint comments, session binding, a repair prerequisite that blocks a join, a mid-repair Handback, and lane substitution.
 ---
 
 # Beads Workflow
@@ -20,7 +20,7 @@ selection cannot rewrite an active run.
 | Kind | Reference | State |
 | --- | --- | --- |
 | Planning and research | [`references/planning-research.md`](references/planning-research.md) | Revision 1 |
-| Engineering | [Ticket #52](https://github.com/nathanvale/dotfiles-private/issues/52) revision 3 and its receipts in the rollout packet | Precedent only; its procedure is a later unit |
+| Engineering | [`references/engineering.md`](references/engineering.md) | Revision 1 |
 
 Read the shared rules below, then the kind's reference.
 
