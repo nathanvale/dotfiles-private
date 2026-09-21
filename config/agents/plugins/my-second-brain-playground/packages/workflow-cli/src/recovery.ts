@@ -92,11 +92,12 @@ function openHumanGates(bead: BeadFacts, gates: readonly GateFacts[]): readonly 
 		.map((gate) => `${gate.id} (${gate.status}) ${gate.title}`)
 }
 
-function nextSafeAction(bead: BeadFacts, blockers: readonly string[], gates: readonly string[]): string {
+/** The action names only what the binding holds: evidencePath is optional, so a null one is never called a pointer. */
+function nextSafeAction(bead: BeadFacts, blockers: readonly string[], gates: readonly string[], evidencePath: string | null): string {
 	if (gates.length > 0) return `Wait for the open human Gate ${gates[0]?.split(" ")[0] ?? ""} to close through native bd before continuing ${bead.id}; do not resolve it yourself`
 	if (blockers.length > 0) return `Resolve or wait for the open blocker ${blockers[0]?.split(" ")[0] ?? ""} through native bd before continuing ${bead.id}`
 	if (bead.status === "closed") return `${bead.id} is closed; bind this session to the next Bead with msb-workflow bind before doing more work`
-	if (bead.status === "in_progress") return `Continue ${bead.id} from the evidence pointer and the last comment; record the next checkpoint with native bd comment before compaction`
+	if (bead.status === "in_progress") return `Continue ${bead.id} from ${evidencePath === null ? "the last comment" : "the evidence pointer and the last comment"}; record the next checkpoint with native bd comment before compaction`
 	return `Claim ${bead.id} through native bd before starting work; the binding records intent, not a claim`
 }
 
@@ -128,7 +129,7 @@ export function buildPanel(inputs: PanelInputs): PanelFacts {
 	const gates = openHumanGates(bead, inputs.gates)
 	const comments = bead.comments.slice(-COMMENT_COUNT).map((comment) => ({ author: comment.author, createdAt: comment.createdAt, text: truncateBytes(comment.text, COMMENT_LIMIT_BYTES) }))
 	const changedSinceBinding = bead.updatedAt !== null && bead.updatedAt !== binding.beadObservedAt
-	const action = nextSafeAction(bead, blockers, gates)
+	const action = nextSafeAction(bead, blockers, gates, binding.evidencePath)
 	const commands = readOnlyCommands(binding)
 	const lines = [
 		"# Resume Panel",

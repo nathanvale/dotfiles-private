@@ -12,7 +12,8 @@ import { bindingPath, envelopeOf, hookOutputOf, readJsonFile, resultOf, retained
 // its cwd to the enclosing Git root looking for a .beads directory whenever BEADS_DIR names a missing store. The
 // pinned path and digest are literals from Ticket #52 revision 3 (independent oracle), so this suite is bound to the machine
 // that holds the pinned executable and fails, never skips, without it. The hook rows stop at SessionStart compact:
-// the marker and lock paths are proven by the shim suites.
+// the marker and lock paths are proven by the shim suites, and so is the "no bd prime read" argv oracle, because
+// the production pin names the executable by absolute path and digest and no recording wrapper can stand in front of it.
 
 /** Ticket #52 revision 3: the Mise-owned native Beads executable (the canonical file, not the shim), its SHA-256, and the
  * version the store gate pins. */
@@ -294,7 +295,7 @@ describe("bind and recover against live native reads", () => {
 		expect(result.nextSafeAction).toBe(`Wait for the open human Gate ${native.gate} to close through native bd before continuing ${native.bead}; do not resolve it yourself`)
 	}, 60_000)
 
-	test("SessionStart compact delivers the live panel with the pinned bd's prime context appended, silently on stderr", async () => {
+	test("SessionStart compact delivers the Resume Panel alone: no prime heading, the secret redacted, byte-equal to a separate recover from the same native store, silently on stderr (Spec #57 revision 5)", async () => {
 		await bindNative(SESSION)
 		const event = { hook_event_name: "SessionStart", source: "compact", session_id: SESSION, cwd: native.root.workspace }
 		const delivered = await runHook(native.root, event, { cwd: native.root.workspace, env: nativeEnvironment(), timeoutMs: 60_000 })
@@ -305,8 +306,13 @@ describe("bind and recover against live native reads", () => {
 		const text = output?.additionalContext ?? ""
 		expect(text.startsWith("# Resume Panel\n")).toBe(true)
 		expect(text).toContain(`Bead: ${native.bead} Native fixture Bead`)
-		expect(text).toContain("\n## Beads prime context\n[bd prime]")
+		expect(text).not.toContain("## Beads prime context")
+		expect(text).toContain("api_key=[REDACTED]")
 		expect(text).not.toContain(SECRET_MARKER)
+		// The delivered text is exactly the panel a separate recover process renders for this binding from the same live reads.
+		const recovered = await run(["recover", "--workspace", native.root.workspace, "--session", SESSION, "--json"])
+		expectMachine(recovered, "msb-workflow.recover", 0, null)
+		expect(text).toBe(resultOf(recovered).resumePanel as string)
 		expect(retainedBytes(native.root)).not.toContain(SECRET_MARKER)
 	}, 60_000)
 })

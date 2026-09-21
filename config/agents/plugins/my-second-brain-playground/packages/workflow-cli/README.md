@@ -16,8 +16,9 @@ plugin-owned hook manifests (`hooks/claude/hooks.json` and
 `hooks/codex/hooks.json`) to `bin/msb-workflow hook`, so on this source the
 helper is the registered hook path. The Python route
 (`packages/compaction-recovery/src/recovery.py`), the schema-v2 checkpoints,
-and both legacy launchers under `hooks/` are preserved as rollback evidence;
-they are no longer the path those manifests register. This README states
+and both legacy launchers under `hooks/` are retained byte-identical and
+unregistered as provenance only; they are not a rollback route and are not
+rehearsed (Spec #57 revision 3 onward, Ticket #52 revision 3). This README states
 source state only. Installation, activation, and merge are separate facts
 recorded in the Ticket #52 evidence, not claimed here.
 
@@ -247,8 +248,9 @@ refuses a store under `/private/tmp` as an unsafe location; a missing store in
 directory, so `where.path` equality stays the guard; `bd version` appends the
 branch inside a repository; the absent-issue `error` value is still
 `no issues found matching the provided IDs`; the `where`, `config list`,
-`show`, `gate list`, and `prime --readonly --hook-json` shapes the helper
-reads are unchanged).
+`show`, and `gate list` shapes the helper reads are unchanged, as is the
+`prime --readonly --hook-json` shape, which no delivery requests since Spec #57
+revision 5).
 
 - `last-touched`: `bd show --readonly` still rewrites the store's
   `last-touched` hint file; on `1.3.0` the rewrite keeps the same bytes when the
@@ -293,10 +295,10 @@ exit code is always `0`.
 | Event | Delivery |
 | --- | --- |
 | `SessionStart` with `source` `startup`, `resume`, or `clear` | Bounded session guidance naming the Bead, the workspace, and the exact `recover` and `bind` commands for this session. Never consumes a marker. |
-| `SessionStart` with `source` `compact` | The Resume Panel plus bounded `bd prime --readonly --hook-json` context (8 KiB). |
+| `SessionStart` with `source` `compact` | The Resume Panel alone: the same text `recover` renders from the same reads, with no `bd prime` read (Spec #57 revision 5). |
 | `PreCompact` | The read-only availability check. Available: silent, empty stdout, recorded as `delivery` `precompact-available` in the private diagnostics run file. Unavailable: `{"systemMessage":<text>}` naming the cause and the repair, redacted, surfaced to the user as a warning. Compaction is never stopped, and no `hookSpecificOutput` is emitted. |
 | `PostCompact` | Records one monotonic generation as `pending` in the marker under the session lock. No output. |
-| `UserPromptSubmit` | Inspects the marker under the session lock, runs the native reads with no lock held, then re-decides under the lock: claims every pending generation at once (including one minted during the read), persists the claim, emits one panel with prime context, then records each claimed generation `delivered`. A second prompt is silent, and a prompt that a concurrent prompt beat to delivery settles silent. |
+| `UserPromptSubmit` | Inspects the marker under the session lock, runs the native reads with no lock held, then re-decides under the lock: claims every pending generation at once (including one minted during the read), persists the claim, emits the Resume Panel alone (the same text `recover` renders from the same reads, with no `bd prime` read; Spec #57 revision 5), then records each claimed generation `delivered`. A second prompt is silent, and a prompt that a concurrent prompt beat to delivery settles silent. |
 
 Payload provenance. The shapes were first fixture-derived from the example
 hook scripts in the upstream Beads document at revision `6c124203e771`
@@ -463,11 +465,18 @@ Helper-side recovery, by cause:
 | `DOMAIN_BINDING_OWNERSHIP_CONFLICT` | Recover the saved binding and continue that Bead, or use a different session for the new Bead. No flag replaces a saved owner. |
 | Uncertain marker generations | Run `recover`; the next prompt hook emits the notice, not the panel, and settles them. |
 
-Rollback of the helper in `M1`: stop using it. There is nothing to unwind in
-Beads because the helper never wrote it. The Python route, the schema-v2
-checkpoints, the launchers under `hooks/`, and the hook registrations are
-untouched, so the proven path is still the live path. Keep the helper's
-private v3 state readable and do not translate it to schema v2.
+Rollback of the helper: there is nothing to unwind in Beads because the helper
+never wrote it. The hook rollback unit is the two manifest files: restoring the
+preserved pre-change bytes of `hooks/claude/hooks.json` and
+`hooks/codex/hooks.json` (their pre-change and current SHA-256 identities are
+pinned in `packages/compaction-recovery/src/main.test.ts`; the bytes are in the
+Ticket #52 receipt) is a reversible source change that names
+`hooks/recover-context` again. That restoration is not a qualified legacy
+recovery route: the legacy launchers under `hooks/`, the Python route, and the
+schema-v2 checkpoints were never changed and are retained as provenance only,
+and no recovery through them is newly certified, claimed, or rehearsed by this
+source (Ticket #52 revision 3). Keep the helper's private v3 state readable and
+do not translate it to schema v2.
 
 ## Build, run, and prove
 
@@ -490,9 +499,10 @@ bun run typecheck
   module stays a runtime expression and runs `main()` exactly once.
 - `bin/msb-workflow` is the thin launcher: it resolves the plugin root from
   its own location and runs `exec bun "$plugin_root/runtime/msb-workflow.js" "$@"`,
-  so stdin passes through for `hook`. It needs `bun` on `PATH`; if `bun` is
-  missing, the shell exits `127` before the helper runs, which is a launcher
-  limit `M2` must weigh when it registers the hook.
+  so stdin passes through for `hook`. Because both manifests register this
+  launcher, `bun` on the `PATH` the Harness gives its hooks is an operational
+  precondition of every registered hook event; if `bun` is missing, the shell
+  exits `127` before the helper runs and that event delivers nothing.
 - `src/cli.ts` is the production entry with the accepted bd pin and the
   bundle entry; `src/main.ts` is the unconditional entry that always runs
   `main()`; `tests/fixtures/checker/cli.ts` is the shim-lane entry the tests

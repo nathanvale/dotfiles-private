@@ -115,6 +115,21 @@ async function bindWithExecutable(session: string, executable: string): Promise<
 	if (run.exit !== 0) throw new Error(`bind failed: ${run.stdout}${run.stderr}`)
 }
 
+/** A bd executable that appends every invocation's argv as one line to a log before replaying the fixture bd, so a
+ * row can observe which native reads a hook process requested (process-level oracle, independent of the hook's own
+ * diagnostics). `invocations()` returns the logged argv lines; `reset()` empties the log between runs. */
+function recordingBd(): { readonly executable: string; invocations(): string[]; reset(): void } {
+	const executable = join(root.privateRoot, "bd-recording")
+	const log = join(root.privateRoot, "bd-invocations.log")
+	const script = ["#!/bin/sh", "set -eu", `printf '%s\\n' "$*" >> "${log}"`, `exec "${FIXTURE_BD}" "$@"`, ""].join("\n")
+	writeFileSync(executable, script, { mode: 0o700 })
+	return {
+		executable,
+		invocations: () => (existsSync(log) ? readFileSync(log, "utf8").split("\n").filter((line) => line.length > 0) : []),
+		reset: () => rmSync(log, { force: true }),
+	}
+}
+
 const PANEL_HEAD = "# Resume Panel\n"
 
 const startup = (overrides: Record<string, unknown> = {}): Record<string, unknown> => hookEvent(root, { source: "startup", ...overrides })
@@ -244,18 +259,28 @@ describe("SessionStart and PreCompact", () => {
 		expect(generations(root, SESSION)).toEqual([[1, "pending"]])
 	})
 
-	test("compact delivers the current panel with prime context appended", async () => {
-		await bindSession(root, SESSION)
+	test("compact delivers the Resume Panel alone: no prime heading, no bd prime read, and the same bytes recover renders from the same fixture replies (Spec #57 revision 5)", async () => {
+		const bd = recordingBd()
+		await bindWithExecutable(SESSION, bd.executable)
 		steerBd(root, { beads: { [BEAD]: { status: "closed", updated_at: "2026-09-17T09:00:00Z", dependencies: [] } } })
+		bd.reset()
 		const output = expectHook(await runHook(root, compact()))
 		expect(output?.hookEventName).toBe("SessionStart")
 		const text = output?.additionalContext ?? ""
-		expect(text.startsWith("# Resume Panel\n")).toBe(true)
+		expect(text.startsWith(PANEL_HEAD)).toBe(true)
 		expect(text).toContain(`Bead: ${BEAD} M1: fixture Bead`)
 		expect(text).toContain("Status: closed;")
 		expect(text).toContain("changed since binding: yes")
-		expect(text).toContain("\n## Beads prime context\n[bd prime] fixture prime context")
 		expect(text).toContain(`Next safe action: ${BEAD} is closed; bind this session to the next Bead`)
+		expect(text).not.toContain("## Beads prime context")
+		// The hook process requested no prime read: every bd child it spawned is logged, and none is `prime`.
+		const compactReads = bd.invocations()
+		expect(compactReads.length).toBeGreaterThan(0)
+		expect(compactReads.filter((line) => line.startsWith("prime "))).toEqual([])
+		// The delivered text is exactly the panel a separate recover process renders for this binding on the same replies.
+		const recover = await runCli(root, ["recover", "--workspace", root.workspace, "--session", SESSION, "--json"])
+		expect(recover.exit).toBe(0)
+		expect(text).toBe(resultOf(recover).resumePanel as string)
 	})
 
 	test("compact is silent when the store is unavailable, redirected, or the Bead is missing", async () => {
@@ -338,15 +363,34 @@ describe("PostCompact and UserPromptSubmit: exactly one panel per prompt", () =>
 		expect(existsSync(markerPath(root, SESSION))).toBe(false)
 	})
 
-	test("one compaction: the next prompt delivers one panel with prime context and the following prompt is silent", async () => {
-		await bindSession(root, SESSION)
+	test("one compaction: the next prompt delivers the Resume Panel alone (no prime heading, no bd prime read, the same bytes recover renders from the same fixture replies) and the following prompt is silent (Spec #57 revision 5)", async () => {
+		const bd = recordingBd()
+		await bindWithExecutable(SESSION, bd.executable)
+		steerBd(root, { beads: { [BEAD]: { status: "closed", updated_at: "2026-09-17T09:00:00Z", dependencies: [] } } })
 		expectSilent(await runHook(root, postCompact()))
+		bd.reset()
 		const output = expectHook(await runHook(root, prompt()))
 		expect(output?.hookEventName).toBe("UserPromptSubmit")
-		expect(output?.additionalContext.startsWith("# Resume Panel\n")).toBe(true)
-		expect(output?.additionalContext).toContain("\n## Beads prime context\n")
+		const text = output?.additionalContext ?? ""
+		expect(text.startsWith(PANEL_HEAD)).toBe(true)
+		expect(text).toContain(`Bead: ${BEAD} M1: fixture Bead`)
+		expect(text).toContain("Status: closed;")
+		expect(text).toContain("changed since binding: yes")
+		expect(text).toContain(`Next safe action: ${BEAD} is closed; bind this session to the next Bead`)
+		expect(text).not.toContain("## Beads prime context")
+		// The prompt hook process requested no prime read: every bd child it spawned is logged, and none is `prime`.
+		const promptReads = bd.invocations()
+		expect(promptReads.length).toBeGreaterThan(0)
+		expect(promptReads.filter((line) => line.startsWith("prime "))).toEqual([])
 		expect(generations(root, SESSION)).toEqual([[1, "delivered"]])
+		// The delivered text is exactly the panel a separate recover process renders for this binding on the same replies.
+		const recover = await runCli(root, ["recover", "--workspace", root.workspace, "--session", SESSION, "--json"])
+		expect(recover.exit).toBe(0)
+		expect(text).toBe(resultOf(recover).resumePanel as string)
+		// Exactly-once is unchanged: nothing is pending, so the following prompt is silent and spawns no bd process.
+		bd.reset()
 		expectSilent(await runHook(root, prompt()))
+		expect(bd.invocations()).toEqual([])
 		expect(generations(root, SESSION)).toEqual([[1, "delivered"]])
 	})
 

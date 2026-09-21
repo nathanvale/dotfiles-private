@@ -524,6 +524,47 @@ describe("recover: the Resume Panel from current reads", () => {
 		expect(result.nextSafeAction).toBe(`${BEAD} is closed; bind this session to the next Bead with msb-workflow bind before doing more work`)
 	})
 
+	// evidencePath is optional under Spec #57, so the in-progress action names only what the binding holds. The fixture
+	// Bead's gate and blocker are cleared so the in-progress branch is the one reached; its status and comments stay.
+	test("an in-progress Bead bound without an evidence path continues from the last comment; no evidence pointer is named", async () => {
+		await bindSession(root, SESSION)
+		steerBd(root, { beads: { [BEAD]: { dependencies: [] } } })
+		const run = await runCli(root, recoverArgs(root, SESSION))
+		const envelope = expectEnvelope(run, "msb-workflow.recover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		const result = resultOf(run)
+		expect(result.evidencePath).toBeNull()
+		expect(result.openBlockers).toEqual([])
+		expect(result.openHumanGates).toEqual([])
+		const expected = `Continue ${BEAD} from the last comment; record the next checkpoint with native bd comment before compaction`
+		expect(result.nextSafeAction).toBe(expected)
+		expect(envelope.nextAction).toBe(expected)
+		const lines = (result.resumePanel as string).split("\n")
+		expect(lines).toContain("Evidence: none")
+		expect(lines.filter((line) => line.startsWith("Next safe action: "))).toEqual([`Next safe action: ${expected}`])
+		const human = await runCli(root, ["recover", "--workspace", root.workspace, "--session", SESSION])
+		expect(human.exit).toBe(0)
+		expect(human.stderr).toBe("")
+		expect(human.stdout).toContain(`\nNext safe action: ${expected}\n`)
+		expect(human.stdout).not.toContain("evidence pointer")
+	})
+
+	test("an in-progress Bead bound with an evidence path continues from the evidence pointer and the last comment", async () => {
+		const evidence = join(root.privateRoot, "evidence.md")
+		writeFileSync(evidence, "# evidence\n")
+		await bindSession(root, SESSION, BEAD, ["--evidence", evidence])
+		steerBd(root, { beads: { [BEAD]: { dependencies: [] } } })
+		const run = await runCli(root, recoverArgs(root, SESSION))
+		const envelope = expectEnvelope(run, "msb-workflow.recover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		const result = resultOf(run)
+		expect(result.evidencePath).toBe(evidence)
+		const expected = `Continue ${BEAD} from the evidence pointer and the last comment; record the next checkpoint with native bd comment before compaction`
+		expect(result.nextSafeAction).toBe(expected)
+		expect(envelope.nextAction).toBe(expected)
+		const lines = (result.resumePanel as string).split("\n")
+		expect(lines).toContain(`Evidence: ${evidence}`)
+		expect(lines.filter((line) => line.startsWith("Next safe action: "))).toEqual([`Next safe action: ${expected}`])
+	})
+
 	test("uses the bound executable, not the environment", async () => {
 		await bindSession(root, SESSION)
 		const unset = await runCli(root, recoverArgs(root, SESSION), { env: { MSB_WORKFLOW_BD_EXECUTABLE: undefined } })

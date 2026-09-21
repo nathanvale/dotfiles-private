@@ -192,6 +192,20 @@ describe("buildPanel", () => {
 		expect(panel.resumePanel).toContain(`Next safe action: ${expected}`)
 	})
 
+	// evidencePath is optional under Spec #57, so the in-progress action names only what the binding holds: a bound
+	// path is named as the evidence pointer, a null one is not. Both the Evidence line and the action are literals.
+	test.each([
+		["no evidence path", null, "Evidence: none", "Continue lkr-1 from the last comment; record the next checkpoint with native bd comment before compaction"],
+		["a bound evidence path", "/repo/evidence.md", "Evidence: /repo/evidence.md", "Continue lkr-1 from the evidence pointer and the last comment; record the next checkpoint with native bd comment before compaction"],
+	])("the in-progress action names the evidence pointer only when the binding has %s", (_label, evidencePath, evidenceLine, expected) => {
+		const panel = buildPanel({ binding: validateBinding(binding({ evidencePath }), NOW).binding, stale: false, store: STORE, bead: bead(), gates: [], prime: null })
+		const lines = panel.resumePanel.split("\n")
+		expect(lines).toContain(evidenceLine)
+		expect(panel.nextSafeAction).toBe(expected)
+		expect(lines.filter((line) => line.startsWith("Next safe action: "))).toEqual([`Next safe action: ${expected}`])
+		expect(panel.facts.nextSafeAction).toBe(expected)
+	})
+
 	test("open blockers exclude gates and parent-child edges; open human gates exclude closed and non-human gates", () => {
 		const facts = bead({
 			dependencies: [

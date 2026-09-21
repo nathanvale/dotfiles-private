@@ -15,7 +15,7 @@ import type { Diagnostics } from "../diagnostics.ts"
 import type { RecoveryBinding } from "../model.ts"
 import { SESSION_PATTERN, shellQuote } from "../recovery.ts"
 import { RuntimeFailure } from "../runtime.ts"
-import { readPanel } from "./recover.ts"
+import { type PanelOptions, readPanel } from "./recover.ts"
 import type { CommandContext } from "./shared.ts"
 
 export const HOOK_INPUT_LIMIT_BYTES = 128 * 1024
@@ -144,9 +144,11 @@ interface Bound {
 	readonly emit: (text: string) => void
 }
 
-/** The current panel with prime context as Harness JSON for `eventName`, or null once a refused read is logged. */
-async function readPanelText(bound: Bound, eventName: EventName): Promise<string | null> {
-	const read = await readPanel(bound.store, bound.context, null, bound.event.session, bound.diagnostics, { includePrime: true })
+/** The current panel as Harness JSON for `eventName`, with prime context only when `options` asks for it, or null once
+ * a refused read is logged. Both compaction deliveries pass `includePrime: false` (Spec #57 revision 5), so the panel
+ * text is the one `recover` renders from the same reads. */
+async function readPanelText(bound: Bound, eventName: EventName, options: PanelOptions): Promise<string | null> {
+	const read = await readPanel(bound.store, bound.context, null, bound.event.session, bound.diagnostics, options)
 	if (read.status === "refused") {
 		bound.diagnostics.log("hook.read-failed", { level: "warning", station: read.outcome.station })
 		return null
@@ -154,13 +156,15 @@ async function readPanelText(bound: Bound, eventName: EventName): Promise<string
 	return harnessJson(eventName, redactText(read.panel.resumePanel, read.beads.knownSecretValues()))
 }
 
+/** The Claude Code `compact` delivery is the Resume Panel alone (Spec #57 revision 5): the same text `recover` renders
+ * from the same reads, with no prime read requested. */
 async function sessionStart(bound: Bound): Promise<HookResult> {
 	if (bound.event.source !== "compact") {
 		const text = harnessJson("SessionStart", guidance(bound.binding))
 		bound.emit(text)
 		return { delivery: "session-guidance", stdout: text }
 	}
-	const text = await readPanelText(bound, "SessionStart")
+	const text = await readPanelText(bound, "SessionStart", { includePrime: false })
 	if (text === null) return SILENT
 	bound.emit(text)
 	return { delivery: "compact-panel", stdout: text }
@@ -244,7 +248,8 @@ async function userPromptSubmit(bound: Bound): Promise<HookResult> {
 	})
 	if (inspected !== "read-needed") return inspected
 	// Nothing is claimed yet, so a refused read leaves the marker untouched and the next prompt retries the same generations.
-	const text = await readPanelText(bound, "UserPromptSubmit")
+	// The Codex refresh is the Resume Panel alone (Spec #57 revision 5): no prime read, the same text `recover` renders.
+	const text = await readPanelText(bound, "UserPromptSubmit", { includePrime: false })
 	if (text === null) return SILENT
 	return withMarker(bound, SILENT, (marker) => {
 		const decision = decide(bound, marker)

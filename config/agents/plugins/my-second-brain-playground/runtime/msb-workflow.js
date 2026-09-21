@@ -4110,7 +4110,7 @@ function openHumanGates(bead, gates) {
   const byId = new Map(gates.map((gate) => [gate.id, gate]));
   return bead.dependencies.filter((dependency) => dependency.issueType === "gate").map((dependency) => byId.get(dependency.id) ?? { id: dependency.id, title: dependency.title, status: dependency.status, awaitType: dependency.awaitType }).filter((gate) => gate.awaitType === "human" && gate.status !== "closed").map((gate) => `${gate.id} (${gate.status}) ${gate.title}`);
 }
-function nextSafeAction(bead, blockers, gates) {
+function nextSafeAction(bead, blockers, gates, evidencePath) {
   if (gates.length > 0)
     return `Wait for the open human Gate ${gates[0]?.split(" ")[0] ?? ""} to close through native bd before continuing ${bead.id}; do not resolve it yourself`;
   if (blockers.length > 0)
@@ -4118,7 +4118,7 @@ function nextSafeAction(bead, blockers, gates) {
   if (bead.status === "closed")
     return `${bead.id} is closed; bind this session to the next Bead with msb-workflow bind before doing more work`;
   if (bead.status === "in_progress")
-    return `Continue ${bead.id} from the evidence pointer and the last comment; record the next checkpoint with native bd comment before compaction`;
+    return `Continue ${bead.id} from ${evidencePath === null ? "the last comment" : "the evidence pointer and the last comment"}; record the next checkpoint with native bd comment before compaction`;
   return `Claim ${bead.id} through native bd before starting work; the binding records intent, not a claim`;
 }
 var SHELL_SAFE = /^[A-Za-z0-9_@%+:,./-][A-Za-z0-9_@%+=:,./-]*$/;
@@ -4140,7 +4140,7 @@ function buildPanel(inputs) {
   const gates = openHumanGates(bead, inputs.gates);
   const comments = bead.comments.slice(-COMMENT_COUNT).map((comment) => ({ author: comment.author, createdAt: comment.createdAt, text: truncateBytes(comment.text, COMMENT_LIMIT_BYTES) }));
   const changedSinceBinding = bead.updatedAt !== null && bead.updatedAt !== binding.beadObservedAt;
-  const action = nextSafeAction(bead, blockers, gates);
+  const action = nextSafeAction(bead, blockers, gates, binding.evidencePath);
   const commands = readOnlyCommands(binding);
   const lines = [
     "# Resume Panel",
@@ -4947,8 +4947,8 @@ function notice(binding, uncertain, folded) {
   return `msb-workflow: the Resume Panel for compaction generation(s) ${uncertain.join(", ")} was claimed but never recorded delivered; run msb-workflow recover --workspace ${shellQuote(binding.workspace)} --session ${shellQuote(binding.sessionIdentity)} --json to rebuild it.${foldedText} Nothing is replayed automatically.`;
 }
 var SILENT = { delivery: "silent", stdout: "" };
-async function readPanelText(bound, eventName) {
-  const read2 = await readPanel(bound.store, bound.context, null, bound.event.session, bound.diagnostics, { includePrime: true });
+async function readPanelText(bound, eventName, options) {
+  const read2 = await readPanel(bound.store, bound.context, null, bound.event.session, bound.diagnostics, options);
   if (read2.status === "refused") {
     bound.diagnostics.log("hook.read-failed", { level: "warning", station: read2.outcome.station });
     return null;
@@ -4961,7 +4961,7 @@ async function sessionStart(bound) {
     bound.emit(text2);
     return { delivery: "session-guidance", stdout: text2 };
   }
-  const text = await readPanelText(bound, "SessionStart");
+  const text = await readPanelText(bound, "SessionStart", { includePrime: false });
   if (text === null)
     return SILENT;
   bound.emit(text);
@@ -5027,7 +5027,7 @@ async function userPromptSubmit(bound) {
   });
   if (inspected !== "read-needed")
     return inspected;
-  const text = await readPanelText(bound, "UserPromptSubmit");
+  const text = await readPanelText(bound, "UserPromptSubmit", { includePrime: false });
   if (text === null)
     return SILENT;
   return withMarker(bound, SILENT, (marker) => {
