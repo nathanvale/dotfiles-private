@@ -18,11 +18,13 @@ this skill. Nathan controls authentication, draft writes, and submission.
 
 Use the browser surface supplied by the active Harness:
 
-- Codex Desktop: use the native in-app `@Browser` provider. Keep the task in one
-  visible in-app tab. Use `@Chrome` only when Nathan explicitly requests his
-  Chrome profile.
+- Codex Desktop: use the native in-app `@Browser` provider. Use `@Chrome` only
+  when Nathan explicitly requests his Chrome profile.
 - Claude Code: use the native Claude in Chrome tools. If browser tools are
   unavailable, stop and ask Nathan to relaunch Claude Code with `--chrome`.
+
+Stay in the visible task tab, except for a child tab explicitly opened by the
+selected portal workflow. Keep that child in the same native browser and task.
 
 Let Nathan complete sign-in, 1Password, CAPTCHA, passkey, device-trust, and
 recovery prompts. Resume only after Nathan returns the same visible tab. Take a
@@ -48,9 +50,11 @@ cookies, authentication-bearing URLs, browser identifiers, and screenshots.
    uncertain action. Repeat only after positive proof that it had no effect.
 5. `reviewing`: save and reopen the draft through the canonical list. Verify
    every entry and total.
-6. `awaiting submission approval`: capture the portal-defined ordered approval
-   evidence set. Show the period, entries, mapped notes where displayed, total,
-   and untouched submission control. Hash each item in display order.
+6. `awaiting submission approval`: capture the selected portal's required
+   screenshot(s) as an ordered evidence set. One screenshot is a one-item set;
+   follow the portal reference when it requires more. The complete set must
+   visibly show the period, entries, mapped notes where displayed, total, and
+   untouched submission control. Hash each item in display order.
 7. Keep `authorized_attempts: 0` until Nathan separately approves the current
    complete evidence set.
 8. `dispatching`: after approval, set `authorized_attempts: 1`, then dispatch

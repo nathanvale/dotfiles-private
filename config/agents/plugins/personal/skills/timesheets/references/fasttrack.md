@@ -6,6 +6,18 @@ Canonical target: the authenticated Candidate Portal timesheet list with a
 visible period row and status, or its explicit empty state. A login page,
 historical detail, or opened period detail is not the canonical target.
 
+## Navigation and state
+
+- Click Quick Access once. Inspect the tab list and switch to its new child tab.
+- Repeat Quick Access only after the tab list proves no new tab opened.
+- Wait for asynchronous state to settle. Continue only when the tab count,
+  visible section heading, and matching grid row count agree with the intended
+  view.
+- Use `timeAndAttendanceGridAvailable` for the available-timesheets grid.
+- Use `timeAndAttendanceGridHistorical` for the historical-timesheets grid.
+- Use `timeAndAttendanceGridIncomplete` for the incomplete-timesheets grid.
+- Use `timesheetAttendanceGrid` for the opened attendance grid.
+
 ## Read and propose
 
 - Before proposing entries, ask Nathan about public holidays, leave, sickness,
@@ -19,18 +31,6 @@ historical detail, or opened period detail is not the canonical target.
 - Confirm work days, attendance type, start and end times, and breaks.
 - Interpret `9 to 5` as `09:00` to `17:00`. Interpret `no breaks` as no break
   entries.
-
-## Navigation and state
-
-- Click Quick Access once. Inspect the tab list and switch to its new child tab.
-- Repeat Quick Access only after the tab list proves no new tab opened.
-- Wait for asynchronous state to settle. Continue only when the tab count,
-  visible section heading, and matching grid row count agree with the intended
-  view.
-- Use `timeAndAttendanceGridAvailable` for the available-timesheets grid.
-- Use `timeAndAttendanceGridHistorical` for the historical-timesheets grid.
-- Use `timeAndAttendanceGridIncomplete` for the incomplete-timesheets grid.
-- Use `timesheetAttendanceGrid` for the opened attendance grid.
 
 ## Draft
 
@@ -49,12 +49,13 @@ historical detail, or opened period detail is not the canonical target.
 ## Approval evidence
 
 - Capture the reopened draft as an ordered approval evidence set.
-- Use one screenshot only when the header and all daily rows are legible in one
-  viewport.
-- Otherwise capture two screenshots in order: the header first, then all daily
-  rows and totals.
-- Hash each screenshot in order. Retain both hashes for a two-image set in the
-  private approval receipt.
+- Use one screenshot only when the header and period, all daily rows, totals,
+  and untouched submission control are legible in one viewport.
+- Otherwise capture ordered screenshots: header and period first, then all daily
+  rows and totals. Include the untouched submission control in the set; add a
+  final screenshot if needed.
+- Hash each screenshot in order. Retain every hash in the private approval
+  receipt.
 - Any draft edit invalidates the entire set and its approval. Recapture the
   complete set after rechecking the draft.
 
