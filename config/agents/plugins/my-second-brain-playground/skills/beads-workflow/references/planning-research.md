@@ -85,6 +85,10 @@ next owner, next safe action, and one recovery lesson cited from its existing
 vault owner with path and `updated` date. Transient checkpoint comments are
 not lessons and are not promoted.
 
+Done when `bd show <id> --readonly --json --include-comments` returns the
+closeout checkpoint with all five headings and the cited lesson's vault path
+and `updated` date.
+
 ## 8. Retire
 
 After independent review against the Ticket's criteria, close with
