@@ -1,9 +1,7 @@
 # Planning and research kind
 
-Revision 1, 21 September 2026. The Bead records this file's plugin path,
-`skills/beads-workflow/references/planning-research.md`, and this revision
-verbatim as its workflow reference, beside the accepted Spec revision. A new
-revision here starts a new run; it never rewrites an active one.
+Revision 1, 21 September 2026. Record on the Bead as its workflow reference:
+`skills/beads-workflow/references/planning-research.md`, revision 1.
 
 Journey: actual question, workflow selection, claimed source gathering and
 comparison, evidence, human decision Gate, checkpoint, fresh-context resume,
@@ -64,7 +62,7 @@ Done when a checkpoint's Evidence names the note path and its commit.
 
 Nathan, or the Stage Manager on his decision, runs `bd gate resolve <gate>
 --reason "<decision and rationale>"`. The decision is also recorded in the
-vault owner. Nobody else resolves, and no comment substitutes for it.
+vault owner.
 
 Done when `bd gate list <id> --readonly --json` shows no open Gate and the
 vault decision cites the Gate ID.
@@ -75,8 +73,8 @@ One real compaction, or one fresh session bound to the same Bead. The Harness
 hook delivers one Resume Panel; an independent `msb-workflow recover` panel
 for the same session matches it. Continue from the panel's next safe action.
 
-Done when the two panels compare equal and the prompt after delivery is
-silent.
+Done when the `recover` panel equals the delivered panel section above
+`## Beads prime context` and the prompt after delivery is silent.
 
 ## 7. Hand back
 
@@ -87,7 +85,12 @@ not lessons and are not promoted.
 
 Done when `bd show <id> --readonly --json --include-comments` returns the
 closeout checkpoint with all five headings and the cited lesson's vault path
-and `updated` date.
+and `updated` date, and a `msb-workflow recover --json` panel for the bound
+session, or a fresh session bound to the same Bead, taken after the post,
+reports no open human Gate, shows the checkpoint's `## Checkpoint:` heading
+as the last of `result.recentComments`, and lists that `bd show` read among
+its read-only commands. The panel quotes at most 1024 bytes per comment and
+derives its own next safe action; read the full Handback from `bd show`.
 
 ## 8. Retire
 

@@ -27,14 +27,16 @@ Read the shared rules below, then the kind's reference.
 ## Dispatch
 
 The Stage Manager's dispatch names the store root, the `bd` executable, the
-parent Bead, the GitHub issue, the Spec revision, the performing Cast Role,
-and the writes it authorizes. Capability resolution lives with the Stage
+parent Bead, the GitHub issue, the Spec revision, the workflow kind with its
+reference revision from the table above, the performing Cast Role, and the
+writes it authorizes. Capability resolution lives with the Stage
 Manager and the vault's `projects/engineering-workflow/cast.md`; this skill
 names no model or Harness, and the same role runs under any lane. A dispatch
 that grants no write authority yields a proposed command file (the
 `proposed-commands.sh` pattern in the rollout packet) and stops before the
-first write. An unsupported workflow kind or revision refuses before dispatch
-with one next action.
+first write. On an unsupported workflow kind or reference revision, end the
+run and reply only with a refusal and one next action: ask the Stage Manager
+for a new dispatch naming a supported kind and revision.
 
 ## Store gate before every write
 
@@ -86,8 +88,11 @@ claims byte-equal.
 
 ## Checkpoint comments
 
-Every checkpoint is one Markdown comment with the headings `CHECKPOINT:
-<outcome>`, `Evidence`, `Remaining`, `Next owner`, `Next safe action`. A
+Every checkpoint is one GitHub-flavoured Markdown comment with five
+sentence-case `##` headings in this order: `## Checkpoint: <outcome>`,
+`## Evidence`, `## Remaining`, `## Next owner`, `## Next safe action`. That is
+Spec #51's `CHECKPOINT: outcome` shape rendered under the board-comment
+policy; bare `Label:` lines collapse into one paragraph on the board. A
 comment cannot claim or close a Bead or resolve a Gate. Board text follows the
 board-comment policy in the rollout packet: the evidence owner supplies exact
 facts and a receipt pointer, the Ledger Steward drafts and applies the Unslop
