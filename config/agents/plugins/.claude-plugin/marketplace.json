@@ -42,6 +42,15 @@
         "name": "Nathan Vale"
       },
       "source": "./browser-use"
+    },
+    {
+      "name": "personal",
+      "description": "Nathan's personal workflows for Codex and Claude Code.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Nathan Vale"
+      },
+      "source": "./personal"
     }
   ]
 }

@@ -1,0 +1,22 @@
+{
+  "name": "personal",
+  "version": "0.1.0",
+  "description": "Nathan's personal workflows for Codex and Claude Code.",
+  "author": {
+    "name": "Nathan Vale"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Personal",
+    "shortDescription": "Run Nathan's personal workflows",
+    "longDescription": "Personal workflows shared by Codex and Claude Code, beginning with guarded FastTrack360 and OnCore timesheets.",
+    "developerName": "Nathan Vale",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Help me prepare a timesheet and stop before submission unless I approve the exact draft."
+  }
+}

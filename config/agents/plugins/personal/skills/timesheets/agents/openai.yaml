@@ -1,0 +1,6 @@
+interface:
+  display_name: "Timesheets"
+  short_description: "Prepare guarded FastTrack360 or OnCore timesheets"
+  default_prompt: "Use $timesheets to prepare one timesheet and stop before submission."
+policy:
+  allow_implicit_invocation: false
