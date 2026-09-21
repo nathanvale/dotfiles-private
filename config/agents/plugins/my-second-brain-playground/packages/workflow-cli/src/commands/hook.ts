@@ -114,14 +114,15 @@ function systemMessageJson(systemMessage: string): string {
 }
 
 /** The `recover` command in the guidance and the notice is pasteable shell input, quoted exactly as Resume Panel
- * command 4 is; the prose lines and the `bind` line with its `<bead-id>` placeholder are not pasteable and stay bare. */
+ * command 4 is. The `bind` line quotes its dynamic workspace and session identity the same way, so it parses into the
+ * exact words once its `<bead-id>` placeholder is replaced; only the prose lines stay bare. */
 function guidance(binding: RecoveryBinding): string {
 	return [
 		"My Second Brain recovery session.",
 		`Session identity: ${binding.sessionIdentity}`,
 		`Bound to Bead ${binding.beadId} in ${binding.workspace} (store ${binding.storePath}).`,
 		`Rebuild the Resume Panel at any time: msb-workflow recover --workspace ${shellQuote(binding.workspace)} --session ${shellQuote(binding.sessionIdentity)} --json`,
-		`Refresh or rebind with this exact session identity: msb-workflow bind --workspace ${binding.workspace} --bead <bead-id> --session ${binding.sessionIdentity}`,
+		`Refresh or rebind with this exact session identity: msb-workflow bind --workspace ${shellQuote(binding.workspace)} --bead <bead-id> --session ${shellQuote(binding.sessionIdentity)}`,
 		"After compaction the Resume Panel is delivered once: on the next prompt (Codex) or at SessionStart compact (Claude Code).",
 	].join("\n")
 }

@@ -283,17 +283,19 @@ describe("SessionStart and PreCompact", () => {
 	})
 })
 
-describe("the recover command in the guidance and the notice is quoted for a POSIX shell (lkr-737.5.5)", () => {
-	test("a workspace with a space and a single quote renders one quoted recover command in the guidance, the notice, and panel command 4", async () => {
+describe("the recover and bind commands in the guidance and the notice are quoted for a POSIX shell (lkr-737.5.5)", () => {
+	test("a workspace with a space and a single quote renders one quoted recover command in the guidance, the notice, and panel command 4, and one quoted bind command in the guidance", async () => {
 		const workspace = join(root.privateRoot, "work sp'ace")
 		mkdirSync(join(workspace, ".beads"), { recursive: true, mode: 0o700 })
-		const bind = await runCli(root, ["bind", "--workspace", workspace, "--session", SESSION, "--bead", BEAD, "--json"])
-		expect(bind.exit).toBe(0)
+		const bound = await runCli(root, ["bind", "--workspace", workspace, "--session", SESSION, "--bead", BEAD, "--json"])
+		expect(bound.exit).toBe(0)
 		// Hand-derived POSIX single quoting (independent oracle): the whole workspace is one single-quoted word with '
 		// spelled '\''; the private root is a plain temporary path and contributes no character needing an escape.
 		const recover = `msb-workflow recover --workspace '${root.privateRoot}/work sp'\\''ace' --session ${SESSION} --json`
+		const bind = `msb-workflow bind --workspace '${root.privateRoot}/work sp'\\''ace' --bead <bead-id> --session ${SESSION}`
 		const guidance = expectHook(await runHook(root, startup()))
 		expect(guidance?.additionalContext).toContain(`Rebuild the Resume Panel at any time: ${recover}\n`)
+		expect(guidance?.additionalContext).toContain(`Refresh or rebind with this exact session identity: ${bind}\n`)
 		expectSilent(await runHook(root, postCompact()))
 		await runHookWithFault(root, prompt(), "kill-after-claim")
 		const notice = expectHook(await runHook(root, prompt()))
@@ -301,10 +303,16 @@ describe("the recover command in the guidance and the notice is quoted for a POS
 		const panel = await runCli(root, ["recover", "--workspace", workspace, "--session", SESSION, "--json"])
 		expect(panel.exit).toBe(0)
 		expect((resultOf(panel).readOnlyCommands as string[])[3]).toBe(recover)
-		// A real sh re-parses the rendered command into the exact words: the workspace stays one word, nothing is expanded.
-		const shell = Bun.spawnSync(["sh", "-c", `set -- ${recover}; printf '%s\\n' "$@"`], { env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent" }, stdout: "pipe", stderr: "pipe" })
-		expect(shell.stderr.toString()).toBe("")
-		expect(shell.stdout.toString()).toBe(`${["msb-workflow", "recover", "--workspace", workspace, "--session", SESSION, "--json"].join("\n")}\n`)
+		// A real sh re-parses each rendered command into the exact words: the workspace stays one word, nothing is
+		// expanded. The bind line is reparsed once its `<bead-id>` placeholder is replaced by a concrete Bead ID, as a
+		// user would paste it; the placeholder itself is never shell input.
+		const reparse = (command: string): string => {
+			const shell = Bun.spawnSync(["sh", "-c", `set -- ${command}; printf '%s\\n' "$@"`], { env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent" }, stdout: "pipe", stderr: "pipe" })
+			expect(shell.stderr.toString()).toBe("")
+			return shell.stdout.toString()
+		}
+		expect(reparse(recover)).toBe(`${["msb-workflow", "recover", "--workspace", workspace, "--session", SESSION, "--json"].join("\n")}\n`)
+		expect(reparse(bind.replace("<bead-id>", BEAD))).toBe(`${["msb-workflow", "bind", "--workspace", workspace, "--bead", BEAD, "--session", SESSION].join("\n")}\n`)
 	})
 })
 

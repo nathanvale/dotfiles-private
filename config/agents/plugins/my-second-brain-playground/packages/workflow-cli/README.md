@@ -10,11 +10,16 @@ revision 2. Its Beads pin moved from the private `bd 1.2.2` to the Mise-owned
 [Ticket #52](https://github.com/nathanvale/dotfiles-private/issues/52)
 revision 3 (stage `M2`); nothing else about the helper changed with the pin.
 
-Stage `M1` is source-only. The helper is built, tested, and documented here;
-it is not installed, not activated, and registered in no hook manifest. The
-Python route, the schema-v2 checkpoints, both legacy launchers under `hooks/`,
-and every hook registration are unchanged and remain the live path. `M2`
-(Ticket #52) owns the switch of the hook manifests to `bin/msb-workflow hook`.
+Stage `M1` was source-only: the helper was built, tested, and documented here
+and registered in no hook manifest. Stage `M2` (Ticket #52) changes both
+plugin-owned hook manifests (`hooks/claude/hooks.json` and
+`hooks/codex/hooks.json`) to `bin/msb-workflow hook`, so on this source the
+helper is the registered hook path. The Python route
+(`packages/compaction-recovery/src/recovery.py`), the schema-v2 checkpoints,
+and both legacy launchers under `hooks/` are preserved as rollback evidence;
+they are no longer the path those manifests register. This README states
+source state only. Installation, activation, and merge are separate facts
+recorded in the Ticket #52 evidence, not claimed here.
 
 ## Purpose and boundary
 
@@ -293,12 +298,17 @@ exit code is always `0`.
 | `PostCompact` | Records one monotonic generation as `pending` in the marker under the session lock. No output. |
 | `UserPromptSubmit` | Inspects the marker under the session lock, runs the native reads with no lock held, then re-decides under the lock: claims every pending generation at once (including one minted during the read), persists the claim, emits one panel with prime context, then records each claimed generation `delivered`. A second prompt is silent, and a prompt that a concurrent prompt beat to delivery settles silent. |
 
-Payload assumptions. The shapes are fixture-derived from the example hook
-scripts in the upstream Beads document at revision `6c124203e771`
+Payload provenance. The shapes were first fixture-derived from the example
+hook scripts in the upstream Beads document at revision `6c124203e771`
 (`docs/CODEX_INTEGRATION.md`) together with the Harness hook contract; that
-document enumerates no stdin fields, so nothing here is observed on the
-installed Codex until `M2`. The helper requires `hook_event_name` from the four
-events above, `session_id` matching the session grammar, `cwd` as an absolute
+document enumerates no stdin fields. Under `M2` (Ticket #52 criterion 3) the
+installed Codex was observed firing `SessionStart` with `source` `startup`
+and `compact`, `PreCompact`, `PostCompact`, and `UserPromptSubmit`, each with
+its event payload, and one real manual `/compact` proved the `PostCompact` to
+`UserPromptSubmit` exactly-once path (criterion 6, one trial). Still
+fixture-derived and unobserved: `SessionStart` with `source` `clear` or
+`resume`, listed as proof gaps. The helper requires `hook_event_name` from the
+four events above, `session_id` matching the session grammar, `cwd` as an absolute
 existing directory (spelled as its canonical path; a symlink alias, trailing slash, or dot segment is refused, never resolved), and `source` on `SessionStart`
 from `startup`, `resume`, `clear`, `compact`. No configured default and no
 environment value can stand in for those fields.
