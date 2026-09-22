@@ -153,7 +153,7 @@ Report which state each claim reached:
 - Authenticated: a live `atlassianUserInfo` or Community profile succeeded.
 - Live-read-proven, live-write-proven: external outcomes separately observed; a write needs separate authorization.
 
-On 2026-09-23, both existing Monash product items authenticated to Official
+On 2026-09-23, both existing tenant product items authenticated to Official
 with Basic (initialize HTTP 200), and direct schema discovery returned the same
 21-tool catalog. It included `executeWrite`, `createConfluenceContent`, and
 `updateConfluenceContent`, but not `getConfluenceSpace`. The catalog did not

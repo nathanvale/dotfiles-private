@@ -498,14 +498,19 @@ export function unlockFlow(session: Session, runId: string): Outcome {
 	}
 }
 
-async function canonicalAdjudicationInput(route: Route, receipt: Receipt, rawInput: unknown): Promise<WriteInput | Outcome> {
+function canonicalAdjudicationInput(receipt: Receipt, rawInput: unknown): WriteInput | Outcome {
 	const validated = writeInput(receipt.operation, rawInput);
 	if (!validated.ok) return refusal("input-invalid", validated.reason);
 	let canonical = validated.input;
 	if (receipt.operation === "page.create") {
-		const prepared = await prepare(route, receipt.operation, canonical);
-		if ("outcome" in prepared) return prepared.outcome;
-		canonical = canonicalWriteInput(canonical, prepared.ctx);
+		// Old receipts already bound a numeric space id before page creation was
+		// disabled. Recover that id from the validated receipt identity for
+		// read-only adjudication; never reopen the preview or apply path.
+		const identity = /^space:([1-9][0-9]{0,19}):create:/.exec(receipt.objectIdentity);
+		if (!identity) return refusal("refused-state", "the receipt has no canonical space identity");
+		const space = canonical.space as { id?: string; key?: string };
+		if (space.id !== undefined && space.id !== identity[1]) return refusal("input-invalid", "the supplied space id differs from this receipt");
+		canonical = { ...canonical, space: { ...space, id: identity[1] } };
 	}
 	return canonicalDigest(canonical) === receipt.inputDigest ? canonical : refusal("input-invalid", "the supplied input is not the input this receipt was recorded from");
 }
@@ -534,7 +539,7 @@ export async function adjudicateFlow(session: Session, runId: string, rawInput: 
 	const route = session.route(receipt.provider, spec.product, bound.binding);
 	const ready = await route.ready();
 	if (ready) return failed(ready);
-	const canonical = await canonicalAdjudicationInput(route, receipt, rawInput);
+	const canonical = canonicalAdjudicationInput(receipt, rawInput);
 	if (isOutcome(canonical)) return canonical;
 	const digestOf = (observed: string) => new Bun.CryptoHasher("sha256").update(observed).digest("hex");
 	const readBack = await readBackFor(route, receipt.operation, canonical, (observed) => receipt.revisionDigest !== null && digestOf(observed) === receipt.revisionDigest, receipt.baseline);

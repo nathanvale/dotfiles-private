@@ -863,6 +863,29 @@ describe("journaled writes", () => {
 		expect([calls, bindings, readJsonDir(previewsDir())]).toEqual([[], [], []]);
 	});
 
+	test("a legacy page.create receipt can be adjudicated without reopening page creation", async () => {
+		const rawInput = { space: { key: "ENG" }, title: "Recovered page", body: "historical body" };
+		const canonicalInput = { ...rawInput, space: { ...rawInput.space, id: "9001" } };
+		const journal = openJournal("example", { stateRoot, now: () => NOW });
+		const preview = journal.recordPreview({ operation: "page.create", provider: "community", canonicalInput, providerArgs: {}, revision: null });
+		const receipt = await journal.apply(
+			{ previewId: preview.previewId, provider: "community", canonicalInput, providerArgs: {}, revision: null },
+			async (_intent, sending) => { sending(); return { proof: "unknown" }; },
+		);
+		expect([receipt.status, receipt.send]).toEqual(["unknown", "possible"]);
+		const { transport, calls } = fakeTransport({
+			[`${CC}.confluence_search`]: { ok: true, data: [{ id: "123", title: rawInput.title, space: { id: "9001", key: "ENG" } }] },
+		});
+		const dependencies = deps({ transport });
+		const wrongSpace = await dispatch(["adjudicate", "--run", receipt.runId, "--input", JSON.stringify({ ...rawInput, space: { id: "9002", key: "ENG" } })], dependencies);
+		expect(wrongSpace.result.causeCode).toBe("input-invalid");
+		expect(calls.filter((call) => call.tool === "confluence_search")).toEqual([]);
+		const resolved = await dispatch(["adjudicate", "--run", receipt.runId, "--input", JSON.stringify(rawInput)], dependencies);
+		expect([resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["completed", ["confluence-content:123"]]);
+		expect((await dispatch(["receipt", "--run", receipt.runId], dependencies)).result.data).toMatchObject({ status: "completed" });
+		expect(calls.filter((call) => call.tool === "confluence_create_page")).toEqual([]);
+	});
+
 	test("Confluence writes require the current authoritative false instruction observation before preview or any write call", async () => {
 		const input = { pageId: "123", body: "# New body" };
 		for (const metadata of [{ hasSpaceInstructions: true }, {}, { hasSpaceInstructions: "false" }]) {
@@ -907,7 +930,7 @@ describe("journaled writes", () => {
 		const input = { pageId: "123", body: "hello" };
 		const official = await dispatch(["--provider", "official", "page.comment", "--input", JSON.stringify(input), "--preview"], deps({ transport }));
 		expect([official.result.outcome, official.result.causeCode, official.result.exitCode]).toEqual(["refused", "operation-unavailable", 3]);
-		expect(official.result.repairAction).toContain("cannot be safely prepared on Official");
+		expect(official.result.repairAction).toContain("the selected route cannot safely perform this operation");
 		const ungated = await dispatch(["--provider", "community", "page.comment", "--input", JSON.stringify(input), "--preview"], deps({ transport }));
 		expect([ungated.result.causeCode, ungated.result.repairAction?.includes("parity-unproven")]).toEqual(["refused-parity", true]);
 		expect(calls).toEqual([]);

@@ -57,7 +57,7 @@ _Avoid_: Context, token, credential
 
 **Atlassian Official**:
 The Atlassian-operated MCP Provider for Atlassian Cloud products.
-On 2026-09-23 both existing Monash product items authenticated to its live
+On 2026-09-23 both existing tenant product items authenticated to its live
 endpoint with Basic (initialize HTTP 200), and direct schema discovery returned
 the same 21-tool catalog. This is distinct from a dispatcher live read.
 _Avoid_: Official route, default provider, Rovo

@@ -240,7 +240,7 @@ export function readSchema(result: TransportResult): SchemaTool[] | null {
 // envelope.
 export const REPAIR_TEXT: Record<Exclude<CauseCode, "success">, string> = {
 	"usage-invalid": "correct the invocation",
-	"operation-unavailable": "this operation cannot be safely prepared on Official; use the default route or select --provider community with current parity evidence",
+	"operation-unavailable": "the selected route cannot safely perform this operation; inspect its current capability and preparation requirements",
 	"input-invalid": "correct the input object",
 	"site-unresolved": "the tenant's credential item must expose a valid site_url field",
 	"space-unresolved": "no readable page named the space's numeric id; supply space as {id, key} from the space settings page",

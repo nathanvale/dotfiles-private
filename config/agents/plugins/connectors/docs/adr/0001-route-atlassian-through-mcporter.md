@@ -14,7 +14,7 @@ is the independent `sooperset/mcp-atlassian` connector.
 The first candidate injected provider credentials into MCPorter. The dotfiles
 credential rule instead requires provider-specific wrappers below MCPorter.
 Early Official status attempts returned HTTP 401. On 2026-09-23 both existing
-Monash product items authenticated with Basic (initialize HTTP 200); direct
+tenant product items authenticated with Basic (initialize HTTP 200); direct
 schema discovery returned the same 21-tool catalog for each.
 
 Where should the route live, how can it support two providers without
@@ -193,7 +193,7 @@ provider accepts the existing credentials.
   posture and the refusal text says so.
 - Neutral: each selected item must carry a custom `site_url` field for the
   tenant guard. Direct Official authentication succeeded for both existing
-  Monash product items; the public dispatcher read and live parity remain open.
+  tenant product items; the public dispatcher read and live parity remain open.
 - Deferred: `page.create` on both providers, Official `page.comment`, the `?tools=all` endpoint, and a generated
   CLI.
 
@@ -242,7 +242,7 @@ change the documented personal-token Basic scheme, and these failures do not
 prove item type, Rovo MCP V2 scopes, organisation enablement, or product
 permissions. The later two-item custody experiment was also rejected: both
 Providers use the existing product item. Later on 2026-09-23, both existing
-Monash product items initialized Official with Basic at HTTP 200 and returned
+tenant product items initialized Official with Basic at HTTP 200 and returned
 the same live 21-tool catalog. That directly proves authentication and schema
 discovery for those items, not a public-launcher live read. The catalog lacks
 `getConfluenceSpace`; the registry's earlier entry was stale and was removed.
@@ -284,7 +284,7 @@ Live-only, still required before acceptance:
 
 1. Confirm organisation API-token-auth enablement and the Official personal
    tokens' Rovo MCP V2 scopes and product permissions with their owners where
-   required beyond the observed Monash initialization.
+   required beyond the observed tenant initialization.
 2. Public launcher and credential canary per tenant and product:
    `atlassianUserInfo` through the Official route returns the item's `username`.
 3. Read canary per operation: `issue.get`, `issue.search`, `page.get`,
