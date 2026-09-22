@@ -2,43 +2,22 @@
 // literals, then the real launcher crossing the fake MCPorter into the real
 // Provider and the shared bridge fake, with the session under XDG_STATE_HOME.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { assertCustody, createHarness, FIXTURES, type Harness } from "../../../tests/harness.ts";
+import { FIXTURE_ACCESS_TOKEN as ACCESS_TOKEN, FIXTURE_REFRESH_TOKEN as REFRESH_TOKEN, writeSessionFixture } from "./fixtures/session.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
 // Independent oracles: the read-only design-discovery tools documented by
 // Canva, and the fixture session's tokens, restated so configuration cannot
 // validate itself.
 const EXPECTED_ALLOWED_TOOLS = ["search-designs", "get-design", "get-design-pages", "get-design-content"];
-const ACCESS_TOKEN = "fixture-canva-access-token";
-const REFRESH_TOKEN = "fixture-canva-refresh-token";
 
 let harness: Harness;
 beforeEach(() => {
 	harness = createHarness({ "hyper-mcp-remote": path.join(FIXTURES, "bridge-fake.ts") });
 });
 afterEach(() => harness.dispose());
-
-function writeSession(account = "personal"): void {
-	const directory = path.join(harness.root, "connectors", "canva", account);
-	mkdirSync(directory, { recursive: true, mode: 0o700 });
-	const record = {
-		version: 1,
-		account,
-		client: { mode: "dcr", clientId: "fixture-client-1", redirectUri: "http://127.0.0.1:1/callback" },
-		issuer: "http://127.0.0.1:1",
-		resource: "http://127.0.0.1:1/mcp",
-		tokenEndpoint: "http://127.0.0.1:1/token",
-		revocationEndpoint: null,
-		scope: "design:meta:read",
-		accessToken: ACCESS_TOKEN,
-		accessTokenExpiresAt: Date.now() + 3_600_000,
-		refreshToken: REFRESH_TOKEN,
-		obtainedAt: Date.now(),
-	};
-	writeFileSync(path.join(directory, "session.json"), `${JSON.stringify(record)}\n`, { mode: 0o600 });
-}
 
 describe("Canva activated route", () => {
 	test("registry runs the Provider as a stdio server with the account selector and only read-only design discovery", () => {
@@ -63,7 +42,7 @@ describe("Canva activated route", () => {
 	});
 
 	test("a call crosses the route, MCPorter, the Provider, and the bridge with only the access token below MCPorter", async () => {
-		writeSession();
+		writeSessionFixture(harness.root, { overrides: { revocationEndpoint: null } });
 		const result = await harness.run(["canva", "--select", "account=personal", "--", "call", "search-designs", "--args", '{"query":"onboarding"}']);
 		expect([result.code, result.stderr]).toEqual([0, ""]);
 		const mcporter = assertCustody(harness, result, [ACCESS_TOKEN, REFRESH_TOKEN]);
@@ -83,7 +62,7 @@ describe("Canva activated route", () => {
 	});
 
 	test("a missing or malformed account selector refuses at the route before MCPorter", async () => {
-		writeSession();
+		writeSessionFixture(harness.root, { overrides: { revocationEndpoint: null } });
 		const missing = await harness.run(["canva", "--", "call", "search-designs"]);
 		expect([missing.code, missing.stdout, missing.stderr]).toEqual([2, "", "provider-route:error:select-missing:skill canva requires --select account=<value>\n"]);
 		const undeclared = await harness.run(["canva", "--select", "tenant=personal", "--", "call", "search-designs"]);

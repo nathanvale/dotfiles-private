@@ -41,16 +41,57 @@ function inspectDirectory(directory: string): PrivateStateResult<{ mode: number 
 	return { ok: true, mode: metadata.mode & 0o7777 };
 }
 
+// Private Connector state always descends through the final `connectors`
+// segment below its selected state root. Return that root and every directory
+// through the target so callers can reject an intermediate symlink before an
+// operation reaches its referent.
+function stateAncestors(directory: string): string[] | null {
+	const absolute = path.resolve(directory);
+	const parsed = path.parse(absolute);
+	const parts = absolute.slice(parsed.root.length).split(path.sep).filter(Boolean);
+	const marker = parts.lastIndexOf("connectors");
+	if (marker < 0) return null;
+	const selectedRoot = path.join(parsed.root, ...parts.slice(0, marker));
+	const ancestors = [selectedRoot];
+	for (let index = marker; index < parts.length; index += 1) ancestors.push(path.join(parsed.root, ...parts.slice(0, index + 1)));
+	return ancestors;
+}
+
+function inspectStateAncestors(directory: string): PrivateStateResult<Record<never, never>> {
+	for (const ancestor of stateAncestors(directory) ?? []) {
+		const inspected = inspectDirectory(ancestor);
+		if (!inspected.ok) return inspected;
+	}
+	return { ok: true };
+}
+
+function ensureDirectory(directory: string, recursive: boolean): PrivateStateResult<{ mode: number }> {
+	if (!inspect(directory).ok) {
+		try {
+			mkdirSync(directory, { recursive, mode: DIRECTORY_MODE });
+		} catch {
+			// Inspection below reports the closed refusal reason.
+		}
+	}
+	return inspectDirectory(directory);
+}
+
+function ensureDirectoryPath(directory: string): PrivateStateResult<{ mode: number }> {
+	const ancestors = stateAncestors(directory);
+	if (ancestors === null) return ensureDirectory(directory, true);
+	let target: PrivateStateResult<{ mode: number }> = { ok: false, reason: "absent" };
+	for (const [index, ancestor] of ancestors.entries()) {
+		target = ensureDirectory(ancestor, index === 0);
+		if (!target.ok) return target;
+	}
+	return target;
+}
+
 // Create the directory (and its parents) with owner-only permissions, then
 // prove it is a real directory this user owns. An existing owned directory is
 // narrowed to 0700; it is never widened.
 export function ownedDirectory(directory: string): PrivateStateResult<Record<never, never>> {
-	try {
-		mkdirSync(directory, { recursive: true, mode: DIRECTORY_MODE });
-	} catch {
-		// A path component that is not a directory surfaces in the inspection.
-	}
-	const owned = inspectDirectory(directory);
+	const owned = ensureDirectoryPath(directory);
 	if (!owned.ok) return owned;
 	if (owned.mode !== DIRECTORY_MODE) {
 		try {
@@ -76,6 +117,8 @@ const openFailure = (error: unknown): PrivateStateReason => {
 // read from the same descriptor, so nothing can be swapped between the check
 // and the read.
 export function readPrivateFile(file: string): PrivateStateResult<{ text: string }> {
+	const ancestors = inspectStateAncestors(path.dirname(file));
+	if (!ancestors.ok) return ancestors;
 	let fd: number;
 	try {
 		fd = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
@@ -101,6 +144,8 @@ export function readPrivateFile(file: string): PrivateStateResult<{ text: string
 // symlink or not a regular file is refused, never replaced.
 export function writePrivateFile(file: string, content: string): PrivateStateResult<Record<never, never>> {
 	const directory = path.dirname(file);
+	const ancestors = inspectStateAncestors(directory);
+	if (!ancestors.ok) return ancestors;
 	const owned = inspectDirectory(directory);
 	if (!owned.ok) return owned;
 	if (owned.mode !== DIRECTORY_MODE) return { ok: false, reason: "mode-invalid" };

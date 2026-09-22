@@ -9,7 +9,7 @@
 // injected. Tokens never appear in a result other than `accessToken`'s.
 import type { EnvironmentSource } from "../../../../bin/safe-environment.ts";
 import { type CallbackResult, listenForCallback } from "./callback.ts";
-import { clientForSession, type ClientIdentity, resolveClient } from "./client.ts";
+import { CLIENT_SECRET_ENV, clientEnvironment, clientForSession, type ClientIdentity, resolveClient } from "./client.ts";
 import type { OAuthConfig } from "./config.ts";
 import { discover, type Fetch } from "./discovery.ts";
 import { codeChallenge, codeVerifier, type Random, stateValue } from "./pkce.ts";
@@ -44,7 +44,7 @@ export interface SessionStatus {
 	refreshable: boolean;
 }
 
-export type LoginCause = "account-invalid" | "discovery-failed" | "client-unresolved" | "login-denied" | "login-mismatch" | "login-timeout" | "login-invalid" | "exchange-failed" | "session-busy" | "session-exists" | "session-unwritable";
+export type LoginCause = "account-invalid" | "discovery-failed" | "client-unresolved" | "client-secret-required" | "login-denied" | "login-mismatch" | "login-timeout" | "login-invalid" | "exchange-failed" | "session-busy" | "session-exists" | "session-unwritable";
 export type TokenCause = "account-invalid" | "auth-required" | "session-invalid" | "auth-expired" | "auth-busy" | "client-secret-unavailable" | "refresh-uncertain" | "refresh-incomplete" | "session-unwritable";
 export type LogoutRevocation = "confirmed" | "uncertain" | "unsupported" | "not-needed";
 export type LogoutCause = "account-invalid" | "auth-busy" | "client-secret-unavailable" | "session-unremovable";
@@ -69,6 +69,7 @@ const DETAILS: Record<LoginCause | TokenCause | LogoutCause, string> = {
 	"account-invalid": "the account must be a lowercase slug",
 	"discovery-failed": "the Canva authorization server could not be discovered or does not meet the PKCE and https requirements",
 	"client-unresolved": "the client identity could not be established with the authorization server",
+	"client-secret-required": "registered client login requires CANVA_CLIENT_SECRET; set the scoped secret for the matching client in oauth.json, then retry",
 	"client-secret-unavailable": "the stored registered client cannot authenticate because CANVA_CLIENT_SECRET is missing or does not match oauth.json; restore the scoped secret and matching registered client configuration, then retry",
 	"login-denied": "the authorization was denied in the browser",
 	"login-mismatch": "the callback did not carry this login's state and was ignored",
@@ -143,7 +144,7 @@ async function attendedLogin(account: string, options: LoginOptions, deps: Sessi
 	const listener = listenForCallback({ port: deps.config.loopbackPort, state, timeoutMs: deps.config.callbackTimeoutMs });
 	try {
 		const resolved = await resolveClient(deps.config.client, server, listener.redirectUri, null, deps.fetch, deps.env);
-		if (!resolved.ok) return loginFailure("client-unresolved");
+		if (!resolved.ok) return loginFailure(resolved.reason === "client-secret-required" ? "client-secret-required" : "client-unresolved");
 		const verifier = codeVerifier(deps.random);
 		const url = authorizationUrl(server.authorizationEndpoint, resolved.client, codeChallenge(verifier), state, deps.config);
 		options.onAuthorizationUrl?.(url);
@@ -171,6 +172,7 @@ export async function login(account: string, options: LoginOptions, deps: Sessio
 	// two concurrent logins can create at most one grant.
 	if (!prepareAccountDirectory(deps.stateRoot, account)) return loginFailure("session-unwritable");
 	if (readSession(deps.stateRoot, account).ok) return loginFailure("session-exists");
+	if (deps.config.client.mode === "registered" && clientEnvironment(deps.env)[CLIENT_SECRET_ENV] === undefined) return loginFailure("client-secret-required");
 	const locked = await withRefreshLock(deps.stateRoot, account, deps.clock, deps.config.refreshLockWaitMs, async (): Promise<LoginResult> => {
 		if (readSession(deps.stateRoot, account).ok) return loginFailure("session-exists");
 		return attendedLogin(account, options, deps);

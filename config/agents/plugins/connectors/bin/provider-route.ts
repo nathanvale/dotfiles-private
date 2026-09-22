@@ -41,12 +41,31 @@ const TOOL_ARGUMENT_PATTERN = /^([A-Za-z_][A-Za-z0-9_.-]*)[=:]([\s\S]*)$/;
 
 type Verb = keyof typeof ALLOWED_FLAGS;
 export type RefusalExit = 2 | 3 | 4;
+export type RouteErrorCode =
+	| "allowlist-missing"
+	| "argument-invalid"
+	| "arguments-invalid"
+	| "command-invalid"
+	| "config-invalid"
+	| "dispatcher-owned"
+	| "flag-forbidden"
+	| "flag-invalid"
+	| "imports-not-disabled"
+	| "internal-context-invalid"
+	| "provider-invalid"
+	| "select-invalid"
+	| "select-missing"
+	| "select-undeclared"
+	| "skill-config-missing"
+	| "skill-invalid"
+	| "skill-route-missing"
+	| "tool-invalid";
 
 export class RouteError extends Error {
-	readonly code: string;
+	readonly code: RouteErrorCode;
 	readonly exitCode: RefusalExit;
 
-	constructor(code: string, message: string, exitCode: RefusalExit = 2) {
+	constructor(code: RouteErrorCode, message: string, exitCode: RefusalExit = 2) {
 		super(message);
 		this.code = code;
 		this.exitCode = exitCode;
@@ -111,7 +130,7 @@ function parseInvocation(argv: string[]): Invocation {
 	return { skill, ...parseRouteOptions(options), verb, rest };
 }
 
-function readJson(file: string, missingCode: string): unknown {
+function readJson(file: string, missingCode: RouteErrorCode): unknown {
 	if (!existsSync(file)) throw new RouteError(missingCode, `${file} is missing`, 3);
 	try {
 		return JSON.parse(readFileSync(file, "utf8"));

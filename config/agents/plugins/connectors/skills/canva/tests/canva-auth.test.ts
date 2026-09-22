@@ -12,12 +12,11 @@ import { authorizationNotice, type CliDeps, renderOutput, run } from "../scripts
 import { parseOAuthConfig } from "../scripts/session/index.ts";
 
 import { type FakeAuthorizationServer, startAuthorizationServer } from "./fixtures/authorization-server.ts";
+import { FIXTURE_ACCESS_TOKEN as ACCESS_TOKEN, FIXTURE_REFRESH_TOKEN as REFRESH_TOKEN, writeSessionFixture } from "./fixtures/session.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
 const CLI = path.join(SKILL, "scripts", "canva-auth.ts");
 const CHECKER = path.resolve(SKILL, "..", "..", "..", "my-second-brain-playground", "bin", "cli-design-check");
-const ACCESS_TOKEN = "fixture-canva-access-token";
-const REFRESH_TOKEN = "fixture-canva-refresh-token";
 const NOW = 1_700_000_000_000;
 
 let root: string;
@@ -39,35 +38,15 @@ afterEach(() => {
 
 const accountDirectory = (account: string) => path.join(root, "connectors", "canva", account);
 
-function writeSessionFixture(account: string, overrides: Record<string, unknown> = {}): void {
-	mkdirSync(accountDirectory(account), { recursive: true, mode: 0o700 });
-	const record = {
-		version: 1,
-		account,
-		client: { mode: "dcr", clientId: "fixture-client-1", redirectUri: "http://127.0.0.1:1/callback" },
-		issuer: fake.issuer,
-		resource: fake.resource,
-		tokenEndpoint: `${fake.url}/token`,
-		revocationEndpoint: `${fake.url}/revoke`,
-		scope: "design:meta:read",
-		accessToken: ACCESS_TOKEN,
-		accessTokenExpiresAt: NOW + 3_600_000,
-		refreshToken: REFRESH_TOKEN,
-		obtainedAt: NOW,
-		...overrides,
-	};
-	writeFileSync(path.join(accountDirectory(account), "session.json"), `${JSON.stringify(record)}\n`, { mode: 0o600 });
-}
-
 // The fixture tree the checker and the process rows share: personal (valid),
 // tampered (invalid record), busy (held lock), stuck (unremovable directory).
 function writeFixtures(): void {
-	writeSessionFixture("personal");
-	writeSessionFixture("tampered");
+	writeSessionFixture(root, { account: "personal", now: NOW, server: fake });
+	writeSessionFixture(root, { account: "tampered", now: NOW, server: fake });
 	writeFileSync(path.join(accountDirectory("tampered"), "session.json"), "{}", { mode: 0o600 });
-	writeSessionFixture("busy");
+	writeSessionFixture(root, { account: "busy", now: NOW, server: fake });
 	writeFileSync(path.join(accountDirectory("busy"), "refresh.lock"), "{}", { mode: 0o600 });
-	writeSessionFixture("stuck", { revocationEndpoint: null });
+	writeSessionFixture(root, { account: "stuck", now: NOW, server: fake, overrides: { revocationEndpoint: null } });
 	immutable(path.join(accountDirectory("stuck"), "session.json"), true);
 }
 
@@ -203,7 +182,7 @@ describe("canva-auth login rendering", () => {
 	const SECRETS = ["fixture-access-token", "fixture-refresh-token", "fixture-code"];
 
 	test("logout preserves a stored registered session when its scoped client secret is unavailable", async () => {
-		writeSessionFixture("registered", { client: { mode: "registered", clientId: "portal-client", redirectUri: "http://127.0.0.1:47391/callback" } });
+		writeSessionFixture(root, { account: "registered", now: NOW, server: fake, overrides: { client: { mode: "registered", clientId: "portal-client", redirectUri: "http://127.0.0.1:47391/callback" } } });
 		const registered = deps({ client: { mode: "registered", clientId: "portal-client" }, loopbackPort: 47_391 });
 		const output = renderOutput((await run(["logout", "--account", "registered"], registered)).rendering, true);
 		const result = (JSON.parse(output.stdout) as { result: Record<string, unknown> }).result;
@@ -275,6 +254,15 @@ describe("canva-auth login rendering", () => {
 		const output = renderOutput(rendering, true);
 		const result = (JSON.parse(output.stdout) as { result: Record<string, unknown> }).result;
 		expect([output.exitCode, output.stderr, result.causeCode, urls, notices, fake.calls.registrations]).toEqual([2, "", "USAGE_INVALID_INVOCATION", [], [], 0]);
+	});
+
+	test("registered login without its scoped secret has a precondition repair and starts no authorization", async () => {
+		const registered = deps({ client: { mode: "registered", clientId: "portal-client" }, loopbackPort: 47_391 });
+		const { rendering, urls } = await run(["login", "--account", "work"], registered);
+		const output = renderOutput(rendering, true);
+		const result = (JSON.parse(output.stdout) as { result: Record<string, unknown> }).result;
+		expect([output.exitCode, output.stderr, result.causeCode, result.transactionState, result.repairAction, urls]).toEqual([3, "", "DOMAIN_PRECONDITION_UNMET", "unchanged", "Set CANVA_CLIENT_SECRET for the registered client configured in oauth.json, then retry; authorization was not started", []]);
+		expect([fake.calls.registrations, fake.calls.authorizations, fake.calls.tokenRequests, existsSync(path.join(accountDirectory("work"), "session.json"))]).toEqual([0, 0, 0, false]);
 	});
 
 	test("denied consent, a mismatched state, a failed exchange, and a held session lock each map to their stations", async () => {

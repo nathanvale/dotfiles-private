@@ -42,6 +42,20 @@ describe("ownedDirectory", () => {
 		expect(ownedDirectory(path.join(root, "file"))).toEqual({ ok: false, reason: "not-directory" });
 		expect(ownedDirectory(path.join(root, "file", "child"))).toEqual({ ok: false, reason: "absent" });
 	});
+
+	test("refuses an intermediate symlink under the selected state root for directory, read, and write custody", () => {
+		const outside = path.join(root, "outside");
+		const referent = path.join(outside, "canva", "personal");
+		mkdirSync(referent, { recursive: true, mode: 0o700 });
+		const session = path.join(referent, "session.json");
+		writeFileSync(session, "untouched", { mode: 0o600 });
+		symlinkSync(outside, path.join(root, "connectors"));
+		const selected = path.join(root, "connectors", "canva", "personal");
+		expect(ownedDirectory(selected)).toEqual({ ok: false, reason: "symlink" });
+		expect(readPrivateFile(path.join(selected, "session.json"))).toEqual({ ok: false, reason: "symlink" });
+		expect(writePrivateFile(path.join(selected, "session.json"), "changed")).toEqual({ ok: false, reason: "symlink" });
+		expect(readFileSync(session, "utf8")).toBe("untouched");
+	});
 });
 
 describe("writePrivateFile and readPrivateFile", () => {

@@ -18,7 +18,7 @@ export interface ClientIdentity {
 	secret: string | null;
 }
 
-export type ClientFailure = "registration-unsupported" | "registration-failed" | "registration-invalid";
+export type ClientFailure = "registration-unsupported" | "registration-failed" | "registration-invalid" | "client-secret-required";
 export type ClientResult = { ok: true; client: ClientIdentity } | { ok: false; reason: ClientFailure };
 
 export const CLIENT_SECRET_ENV = "CANVA_CLIENT_SECRET";
@@ -84,7 +84,7 @@ export async function resolveClient(config: ClientConfig, server: AuthorizationS
 			return register(config, server, redirectUri, fetchFn);
 		case "registered": {
 			const secret = clientEnvironment(env)[CLIENT_SECRET_ENV];
-			return { ok: true, client: { mode: "registered", clientId: config.clientId ?? "", redirectUri, secret: typeof secret === "string" && secret.length > 0 ? secret : null } };
+			return typeof secret === "string" && secret.length > 0 ? { ok: true, client: { mode: "registered", clientId: config.clientId ?? "", redirectUri, secret } } : { ok: false, reason: "client-secret-required" };
 		}
 		case "cimd":
 			return { ok: true, client: { mode: "cimd", clientId: config.metadataUrl ?? "", redirectUri, secret: null } };

@@ -85,6 +85,8 @@ function renderLogin(account: string, result: LoginResult, urls: string[]): Rend
 			return failed("INTERNAL_PREPARATION", REPAIR.unwritable, { nextAction: "canva-auth status --account <slug>" });
 		case "session-exists":
 			return failed("DOMAIN_PRECONDITION_UNMET", REPAIR.sessionExists, { nextAction: "canva-auth status --account <slug>" });
+		case "client-secret-required":
+			return failed("DOMAIN_PRECONDITION_UNMET", REPAIR.registeredSecretRequired, { nextAction: "canva-auth status --account <slug>" });
 		case "session-busy":
 			return failed("TRANSIENT_NOT_STARTED", REPAIR.lockHeld, { nextAction: `retry canva-auth login once after ${RETRY_DELAY_MS} ms` });
 		case "login-denied":

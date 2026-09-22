@@ -175,6 +175,12 @@ describe("login", () => {
 		expect((await login("cimd", { noBrowser: false }, cimd)).ok).toBe(true);
 		expect(fake.tokenBodies.at(-1)?.get("client_id")).toBe("https://example.invalid/client.json");
 	});
+
+	test("a registered client without its scoped secret refuses before discovery or authorization", async () => {
+		const result = await login("work", { noBrowser: false }, deps({}, { client: { mode: "registered", clientId: "portal-client" }, loopbackPort: 47_391 }));
+		expect(result).toEqual({ ok: false, cause: "client-secret-required", detail: "registered client login requires CANVA_CLIENT_SECRET; set the scoped secret for the matching client in oauth.json, then retry" });
+		expect([fake.calls.registrations, fake.calls.authorizations, fake.calls.tokenRequests, opened, existsSync(sessionFile("work"))]).toEqual([0, 0, 0, [], false]);
+	});
 });
 
 describe("accessToken", () => {

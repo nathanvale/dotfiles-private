@@ -39,7 +39,9 @@ bun "$AUTH" logout --account <slug> --json
   required because `--no-browser --json` is refused so machine completion
   keeps stderr empty. Show Nathan that URL and wait; never drive the browser.
   An existing session refuses before authorization; run `logout` before a new
-  login. Consent denied or a callback that is not this login's is
+  login. Registered mode requires scoped `CANVA_CLIENT_SECRET`; restore the
+  secret matching the client in `oauth.json` before retrying. Consent denied
+  or a callback that is not this login's is
   `DOMAIN_AUTHORITY_REQUIRED`; a missed window is `DOMAIN_DEADLINE_UNCHANGED`;
   a grant that could not be stored is `DOMAIN_RECOVERY_HANDOFF_REQUIRED`.
 - `logout` revokes the grant when Canva confirms it and removes the local
