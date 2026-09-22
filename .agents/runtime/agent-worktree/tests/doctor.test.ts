@@ -57,6 +57,10 @@ describe("agent-worktree doctor", () => {
 		expect(map.status).toBe("blocked");
 		expect(map.mutationReadiness).toBe("blocked");
 		expect(map.nextActions).toContain("handoff");
+		expect(map.repo.strayWorktreeCount).toBeUndefined();
+		expect(
+			map.checks.find((check) => check.id === "stray_worktrees")?.status,
+		).toBe("unknown");
 	});
 
 	test("keeps worktree list failures as unknown readable data", () => {
@@ -257,6 +261,33 @@ branch refs/heads/feat/x
 			"Stray worktrees unknown until the worktree list can be read.",
 		);
 		expect(map.repo.strayWorktreeCount).toBeUndefined();
+	});
+
+	test("keeps stray worktrees unknown when the main owner root is unavailable", () => {
+		const linked = {
+			path: "/elsewhere/feat-x",
+			branch: "feat/x",
+			isMain: false,
+			detached: false,
+			prunable: false,
+		};
+		const discovery = {
+			requestedRoot: "/repo",
+			gitRoot: "/repo",
+			worktrees: [linked],
+			linkedWorktrees: [linked],
+			staleDirs: [],
+			issues: [],
+		} satisfies RepoDiscovery;
+
+		const map = doctorMapFromDiscovery(discovery);
+		const check = map.checks.find((entry) => entry.id === "stray_worktrees");
+
+		expect(map.repo.strayWorktreeCount).toBeUndefined();
+		expect(check?.status).toBe("unknown");
+		expect(check?.summary).toBe(
+			"Stray worktrees unknown until the main owner root can be resolved.",
+		);
 	});
 
 	test("reports ok when every linked worktree lives under .worktrees", () => {
