@@ -1,4 +1,6 @@
+import { createHash } from "node:crypto";
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
 import type {
@@ -99,7 +101,7 @@ export interface AgentWorktreeOperationStep {
 }
 
 /**
- * Durable run record stored under `.agent-worktree/runs`.
+ * Durable run record stored under the state-owned agent-worktree store.
  *
  * @example
  * ```typescript
@@ -135,7 +137,7 @@ export interface AgentWorktreeRunRecord {
 }
 
 /**
- * Durable failure record stored under `.agent-worktree/failures`.
+ * Durable failure record stored under the state-owned agent-worktree store.
  *
  * @example
  * ```typescript
@@ -175,7 +177,7 @@ export interface AgentWorktreeFailureRecord {
 }
 
 /**
- * Durable worktree record stored under `.agent-worktree/worktrees`.
+ * Durable worktree record stored under the state-owned agent-worktree store.
  */
 export interface AgentWorktreeRecord {
 	/** Durable worktree ref. */
@@ -195,11 +197,11 @@ export interface AgentWorktreeRecord {
  *
  * @example
  * ```typescript
- * const store = createFileStore("/repo/.agent-worktree")
+ * const store = createFileStore("/state/agent-worktree/<repo-hash>")
  * ```
  */
 export interface AgentWorktreeStore {
-	/** Root directory for the main-owner store. */
+	/** Resolved state-owned durable store root. */
 	root: string;
 	/** Ensure store subdirectories exist. */
 	ensure(): Promise<void>;
@@ -226,12 +228,12 @@ export interface AgentWorktreeStore {
 /**
  * Create a filesystem-backed store.
  *
- * @param root - Main-owner `.agent-worktree` root
+ * @param root - Resolved state-owned store root
  * @returns Store port for durable records
  *
  * @example
  * ```typescript
- * const store = createFileStore("/repo/.agent-worktree")
+ * const store = createFileStore("/state/agent-worktree/<repo-hash>")
  * await store.ensure()
  * ```
  */
@@ -299,6 +301,29 @@ export function createFileStore(root: string): AgentWorktreeStore {
 			return listJsonRecords<AgentWorktreeRecord>(root, "worktrees");
 		},
 	};
+}
+
+/**
+ * Resolve the durable store root for a main-owner repository.
+ *
+ * The repository path is hashed so durable state stays outside the checkout
+ * while remaining stable across linked worktrees and repository renames.
+ *
+ * @param mainOwnerRoot - Absolute main-owner repository path
+ * @param env - Environment values, injectable for deterministic tests
+ * @returns State-owned durable store root
+ */
+export function resolveAgentWorktreeStoreRoot(
+	mainOwnerRoot: string,
+	env: Readonly<Record<string, string | undefined>> = process.env,
+): string {
+	const stateHome =
+		env.XDG_STATE_HOME || join(env.HOME ?? homedir(), ".local", "state");
+	const repoHash = createHash("sha256")
+		.update(mainOwnerRoot)
+		.digest("hex")
+		.slice(0, 16);
+	return join(stateHome, "agent-worktree", repoHash);
 }
 
 function storeJsonPath(

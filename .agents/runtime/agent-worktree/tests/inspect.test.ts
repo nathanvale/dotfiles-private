@@ -72,7 +72,7 @@ describe("agent-worktree inspect", () => {
 
 	test("handoff against a missing store root remains read-only", async () => {
 		const tempRoot = await mkdtemp(join(tmpdir(), "agent-worktree-handoff-missing-"));
-		const storeRoot = join(tempRoot, ".agent-worktree");
+		const storeRoot = join(tempRoot, "missing-store");
 
 		const snapshot = await buildHandoffSnapshot(storeRoot);
 

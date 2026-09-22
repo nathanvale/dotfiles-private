@@ -47,21 +47,21 @@
 		// CLI invocation (store.ts writeRun).
 		"run": {
 			"identity": { "field": "runId" },
-			"storage": ".agent-worktree/runs",
+			"storage": "${XDG_STATE_HOME:-~/.local/state}/agent-worktree/<repo-hash>/runs",
 			"record": "json_document_plus_jsonl_event_trail",
 		},
 		// Durable failure record; its ref id is "<run-id>/<step-id>" (model.ts
 		// AGENT_WORKTREE_FAILURE_REF_TEMPLATE, worktrees.ts failedLifecycle).
 		"failure": {
 			"identity": { "fields": ["runId", "stepId"] },
-			"storage": ".agent-worktree/failures",
+			"storage": "${XDG_STATE_HOME:-~/.local/state}/agent-worktree/<repo-hash>/failures",
 			"record": "json_document",
 		},
 		// Durable worktree record id is "<sanitized-label>-<8-hex-path-hash>"
 		// (worktrees.ts worktreeRecordId); refresh overwrites it in place.
 		"worktree": {
 			"identity": { "field": "ref.id", "pattern": "^[A-Za-z0-9._-]+-[0-9a-f]{8}$" },
-			"storage": ".agent-worktree/worktrees",
+			"storage": "${XDG_STATE_HOME:-~/.local/state}/agent-worktree/<repo-hash>/worktrees",
 			"record": "json_document_overwritten_on_refresh",
 		},
 		// Per-run branch backup ref created before branch deletion (model.ts

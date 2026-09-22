@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdtemp, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -89,6 +90,7 @@ locked
 
 		const discovery = await discoverRepo({
 			cwd: linked,
+			env: { XDG_STATE_HOME: "/state" },
 			run: fakeGitRunner({
 				["git rev-parse --show-toplevel"]: `${root}\n`,
 				["git rev-parse --git-dir"]: `${join(
@@ -118,7 +120,22 @@ branch refs/heads/feat/x
 		expect(discovery.linkedWorktrees).toHaveLength(1);
 		expect(discovery.staleDirs).toEqual([stale]);
 		expect(discovery.defaultBranch).toBe("main");
-		expect(discovery.storeRoot).toBe(join(root, ".agent-worktree"));
+		const expectedHash = createHash("sha256").update(root).digest("hex").slice(0, 16);
+		expect(discovery.storeRoot).toBe(join("/state", "agent-worktree", expectedHash));
+	});
+
+	test("derives the store hash from the literal main owner path", async () => {
+		const discovery = await discoverRepo({
+			cwd: "/repo",
+			env: { XDG_STATE_HOME: "/state" },
+			run: fakeGitRunner(mainRepoGitOutputs("/repo")),
+		});
+		const expectedHash = createHash("sha256")
+			.update("/repo")
+			.digest("hex")
+			.slice(0, 16);
+
+		expect(discovery.storeRoot).toBe(`/state/agent-worktree/${expectedHash}`);
 	});
 
 	test("reports linked worktrees outside <mainOwnerRoot>/.worktrees as strays", () => {

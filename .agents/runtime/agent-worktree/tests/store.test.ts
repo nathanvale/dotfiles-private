@@ -1,12 +1,30 @@
+import { createHash } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, expect, test } from "bun:test";
 
 import { buildHandoffSnapshot } from "../src/inspect.ts";
-import { type AgentWorktreeStore, createFileStore } from "../src/store.ts";
+import {
+	type AgentWorktreeStore,
+	createFileStore,
+	resolveAgentWorktreeStoreRoot,
+} from "../src/store.ts";
 
 describe("agent-worktree store", () => {
+	test("resolves state storage from XDG_STATE_HOME and the repository path", () => {
+		const expectedHash = createHash("sha256")
+			.update("/repo")
+			.digest("hex")
+			.slice(0, 16);
+
+		expect(
+			resolveAgentWorktreeStoreRoot("/repo", {
+				XDG_STATE_HOME: "/state",
+			}),
+		).toBe(`/state/agent-worktree/${expectedHash}`);
+	});
+
 	test("writes and reads run, failure, and worktree records", async () => {
 		const root = await mkdtemp(join(tmpdir(), "agent-worktree-store-"));
 		const store = createFileStore(root);

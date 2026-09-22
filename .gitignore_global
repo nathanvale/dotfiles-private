@@ -88,6 +88,5 @@ PROJECT_INDEX.json
 **/.claude/settings.local.json
 **/CLAUDE.local.md
 
-# Git worktrees, and the agent-worktree run store the Claude Code hooks write
+# Git worktrees
 .worktrees/**
-.agent-worktree/

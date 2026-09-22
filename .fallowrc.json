@@ -3,7 +3,6 @@
   "ignorePatterns": [
     ".claude/worktrees/**",
     ".worktrees/**",
-    ".agent-worktree/**",
     "config/raycast/extensions/**",
     "config/herdr/plugins/**",
     "config/opencode/herdr-tui-session.js",

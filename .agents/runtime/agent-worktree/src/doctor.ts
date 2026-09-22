@@ -146,7 +146,11 @@ export async function runDoctor(
 	options: DiscoverRepoOptions & { now?: () => number },
 ): Promise<DoctorMap> {
 	const run = options.run ?? defaultGitRunner;
-	const discovery = await discoverRepo({ cwd: options.cwd, run });
+	const discovery = await discoverRepo({
+		cwd: options.cwd,
+		run,
+		env: options.env,
+	});
 	const [mutationStatuses, retention] = await Promise.all([
 		discovery.gitRoot
 			? statusWorktreesForDiscovery(discovery, { cwd: options.cwd, run })

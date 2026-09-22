@@ -16,7 +16,10 @@ import {
 	statusWorktrees,
 } from "../src/worktrees.ts";
 import { inspectRefFromRoot } from "../src/inspect.ts";
-import { createFileStore } from "../src/store.ts";
+import {
+	createFileStore,
+	resolveAgentWorktreeStoreRoot,
+} from "../src/store.ts";
 import {
 	fakeGitRunner,
 	linkedRepoGitOutputs,
@@ -724,7 +727,7 @@ branch refs/heads/pr-42
 			expect(calls).toContain(`git worktree add ${target} pr-42`);
 			expect(calls.some((call) => call.includes("FETCH_HEAD"))).toBe(false);
 			const stored = await createFileStore(
-				join(root, ".agent-worktree"),
+				resolveAgentWorktreeStoreRoot(root),
 			).readRun("attach_pr");
 			expect(stored?.steps.map((step) => step.id)).toEqual([
 				"fetch_pr",
@@ -765,7 +768,7 @@ branch refs/heads/pr-42
 				calls.findIndex((call) => call.includes("gh pr checkout")),
 			);
 			const stored = await createFileStore(
-				join(root, ".agent-worktree"),
+				resolveAgentWorktreeStoreRoot(root),
 			).readRun("attach_track");
 			expect(stored?.steps.map((step) => step.id)).toEqual([
 				"attach_worktree",
@@ -907,7 +910,7 @@ branch refs/heads/pr-42
 				},
 			});
 			const stored = await createFileStore(
-				join(root, ".agent-worktree"),
+				resolveAgentWorktreeStoreRoot(root),
 			).readRun("attach_gh-fail");
 			expect(stored?.steps).toEqual([
 				expect.objectContaining({
@@ -967,7 +970,7 @@ branch refs/heads/pr-42
 				},
 			});
 			const stored = await createFileStore(
-				join(root, ".agent-worktree"),
+				resolveAgentWorktreeStoreRoot(root),
 			).readRun("attach_pr-add");
 			expect(stored?.steps).toEqual([
 				expect.objectContaining({
@@ -1422,7 +1425,7 @@ branch refs/heads/pr-42
 		});
 
 		const inspected = await inspectRefFromRoot(
-			join(root, ".agent-worktree"),
+			resolveAgentWorktreeStoreRoot(root),
 			"failure:facade_run/delete_branch",
 		);
 		expect(inspected?.found).toBe(true);
@@ -1430,7 +1433,7 @@ branch refs/heads/pr-42
 			"partial",
 		);
 		const inspectedRun = await inspectRefFromRoot(
-			join(root, ".agent-worktree"),
+			resolveAgentWorktreeStoreRoot(root),
 			"run:facade_run",
 		);
 		expect(
@@ -1495,7 +1498,7 @@ branch refs/heads/pr-42
 		});
 
 		const inspected = await inspectRefFromRoot(
-			join(root, ".agent-worktree"),
+			resolveAgentWorktreeStoreRoot(root),
 			"failure:facade_run/preflight_blocked",
 		);
 		expect(inspected?.found).toBe(true);
@@ -1536,7 +1539,7 @@ detached
 
 		expect(result.changedState).toBe("complete");
 		const records = await createFileStore(
-			join(root, ".agent-worktree"),
+			resolveAgentWorktreeStoreRoot(root),
 		).listWorktrees();
 		const detachedIds = records
 			.filter((record) => record.branch === "(detached)")

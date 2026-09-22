@@ -5,7 +5,7 @@ import { describe, expect, test } from "bun:test";
 
 import { doctorMapFromDiscovery, runDoctor } from "../src/doctor.ts";
 import type { RepoDiscovery } from "../src/discovery.ts";
-import { createFileStore } from "../src/store.ts";
+import { createFileStore, resolveAgentWorktreeStoreRoot } from "../src/store.ts";
 import { fakeGitRunner, mainRepoGitOutputs } from "./support.ts";
 
 describe("agent-worktree doctor", () => {
@@ -34,7 +34,7 @@ describe("agent-worktree doctor", () => {
 			worktrees: [],
 			linkedWorktrees: [],
 			staleDirs: [],
-			storeRoot: "/repo/.agent-worktree",
+			storeRoot: "/state/agent-worktree/repo-hash",
 			issues: [
 				{
 					code: "worktree_list_failed",
@@ -60,7 +60,7 @@ describe("agent-worktree doctor", () => {
 			worktrees: [],
 			linkedWorktrees: [],
 			staleDirs: [],
-			storeRoot: "/repo/.agent-worktree",
+			storeRoot: "/state/agent-worktree/repo-hash",
 			issues: [
 				{
 					code: "current_branch_failed",
@@ -178,7 +178,7 @@ branch refs/heads/feat/x
 			linkedWorktrees: [stray],
 			staleDirs: [],
 			defaultBranch: "main",
-			storeRoot: "/repo/.agent-worktree",
+			storeRoot: "/state/agent-worktree/repo-hash",
 			issues: [],
 		} satisfies RepoDiscovery;
 
@@ -203,7 +203,7 @@ branch refs/heads/feat/x
 			worktrees: [],
 			linkedWorktrees: [],
 			staleDirs: [],
-			storeRoot: "/repo/.agent-worktree",
+			storeRoot: "/state/agent-worktree/repo-hash",
 			issues: [
 				{
 					code: "worktree_list_failed",
@@ -245,7 +245,7 @@ branch refs/heads/feat/x
 			linkedWorktrees: [owned],
 			staleDirs: [],
 			defaultBranch: "main",
-			storeRoot: "/repo/.agent-worktree",
+			storeRoot: "/state/agent-worktree/repo-hash",
 			issues: [],
 		} satisfies RepoDiscovery;
 
@@ -259,7 +259,7 @@ branch refs/heads/feat/x
 
 	test("warns when durable records exceed retention threshold", async () => {
 		const root = await mkdtemp(join(tmpdir(), "agent-worktree-retention-"));
-		const store = createFileStore(join(root, ".agent-worktree"));
+		const store = createFileStore(resolveAgentWorktreeStoreRoot(root));
 		await store.writeRun({
 			runId: "old-run",
 			command: "refresh",

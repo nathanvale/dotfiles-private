@@ -2,6 +2,7 @@ import { readdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 
 import type { AgentWorktreeSeam } from "./model.ts";
+import { resolveAgentWorktreeStoreRoot } from "./store.ts";
 
 /**
  * Captured subprocess result from a git invocation.
@@ -138,7 +139,7 @@ export interface RepoDiscovery {
 	currentBranch?: string;
 	/** Default branch short name when it can be inferred. */
 	defaultBranch?: string;
-	/** Main-owner durable store root. */
+	/** Resolved state-owned durable store root. */
 	storeRoot?: string;
 	/** Non-fatal issues collected during discovery. */
 	issues: readonly DiscoveryIssue[];
@@ -157,6 +158,8 @@ export interface DiscoverRepoOptions {
 	cwd: string;
 	/** Git runner. Defaults to Bun subprocesses. */
 	run?: GitRunner;
+	/** Environment used to resolve the state-owned durable store root. */
+	env?: Readonly<Record<string, string | undefined>>;
 }
 
 /**
@@ -316,7 +319,7 @@ export async function discoverRepo(
 		staleDirs,
 		currentBranch: branchResult.ok ? branchResult.stdout.trim() : undefined,
 		defaultBranch,
-		storeRoot: join(mainOwnerRoot, ".agent-worktree"),
+		storeRoot: resolveAgentWorktreeStoreRoot(mainOwnerRoot, options.env),
 		issues,
 	};
 }

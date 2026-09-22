@@ -13,7 +13,7 @@ import {
 	AGENT_WORKTREE_HUMAN_HANDOFF_REASONS,
 	AGENT_WORKTREE_LIFECYCLE_REASONS,
 } from "../src/model.ts";
-import { createFileStore } from "../src/store.ts";
+import { createFileStore, resolveAgentWorktreeStoreRoot } from "../src/store.ts";
 import {
 	mainRepoGitOutputs,
 	linkedRepoGitOutputs,
@@ -362,7 +362,7 @@ describe("agent-worktree CLI surface", () => {
 
 	test("recover resolves refs from the durable store before returning ok", async () => {
 		const root = await mkdtemp(join(tmpdir(), "agent-worktree-cli-recover-"));
-		const store = createFileStore(join(root, ".agent-worktree"));
+		const store = createFileStore(resolveAgentWorktreeStoreRoot(root));
 		await store.writeFailure({
 			ref: { kind: "failure", id: "run-1/delete_branch" },
 			runId: "run-1",

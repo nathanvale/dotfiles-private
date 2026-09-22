@@ -460,7 +460,11 @@ export async function statusWorktreeResult(options: DiscoverRepoOptions & Worktr
 	limit?: number;
 }): Promise<WorktreeStatusResult> {
 	const run = options.run ?? defaultGitRunner;
-	const discovery = await discoverRepo({ cwd: options.cwd, run });
+	const discovery = await discoverRepo({
+		cwd: options.cwd,
+		run,
+		env: options.env,
+	});
 	const statuses = await statusWorktreesForDiscovery(discovery, { ...options, run });
 	const worktrees = viewWorktrees(discovery, options);
 	const projection = normalizeProjectionOptions({ limit: options.limit });
@@ -553,7 +557,11 @@ export async function checkWorktree(options: DiscoverRepoOptions & {
 	branch: string;
 }): Promise<WorktreeCheckResult> {
 	const run = options.run ?? defaultGitRunner;
-	const discovery = await discoverRepo({ cwd: options.cwd, run });
+	const discovery = await discoverRepo({
+		cwd: options.cwd,
+		run,
+		env: options.env,
+	});
 	const worktree = discovery.worktrees.find(
 		(entry) => entry.branch === options.branch,
 	);
@@ -608,7 +616,11 @@ export async function createWorktree(options: DiscoverRepoOptions & {
 	now?: () => number;
 }): Promise<LifecycleResult> {
 	const run = options.run ?? defaultGitRunner;
-	const discovery = await discoverRepo({ cwd: options.cwd, run });
+	const discovery = await discoverRepo({
+		cwd: options.cwd,
+		run,
+		env: options.env,
+	});
 	// Probe failure fails closed on mutation; read verbs still degrade to an issue.
 	if (discovery.isolation === "linked_worktree" || discovery.isolation === undefined) {
 		return isolationRefusal("create");
@@ -708,7 +720,11 @@ export async function attachWorktree(options: DiscoverRepoOptions & {
 	now?: () => number;
 }): Promise<LifecycleResult> {
 	const run = options.run ?? defaultGitRunner;
-	const discovery = await discoverRepo({ cwd: options.cwd, run });
+	const discovery = await discoverRepo({
+		cwd: options.cwd,
+		run,
+		env: options.env,
+	});
 	if (attachIsolationUnavailable(discovery)) {
 		return isolationRefusal("attach");
 	}
@@ -1232,7 +1248,11 @@ export async function deleteWorktree(options: DiscoverRepoOptions & {
 	now?: () => number;
 }): Promise<LifecycleResult> {
 	const run = options.run ?? defaultGitRunner;
-	const discovery = await discoverRepo({ cwd: options.cwd, run });
+	const discovery = await discoverRepo({
+		cwd: options.cwd,
+		run,
+		env: options.env,
+	});
 	const target = discovery.worktrees.find(
 		(worktree) => worktree.branch === options.branch,
 	);
@@ -1541,18 +1561,20 @@ export async function refreshWorktrees(options: DiscoverRepoOptions & {
 			recovery: buildRecoveryPlan({ changedState: "none" }),
 		};
 	}
-	const store = createFileStore(discovery.storeRoot ?? join(options.cwd, ".agent-worktree"));
-	for (const worktree of discovery.worktrees) {
-		await store.writeWorktree({
-			ref: {
-				kind: "worktree",
-				id: worktreeRecordId(worktree),
-			},
-			branch: worktree.branch ?? "(detached)",
-			path: worktree.path,
-			head: worktree.head,
-			observedAtMs: options.now ? options.now() : Date.now(),
-		});
+	if (discovery.storeRoot) {
+		const store = createFileStore(discovery.storeRoot);
+		for (const worktree of discovery.worktrees) {
+			await store.writeWorktree({
+				ref: {
+					kind: "worktree",
+					id: worktreeRecordId(worktree),
+				},
+				branch: worktree.branch ?? "(detached)",
+				path: worktree.path,
+				head: worktree.head,
+				observedAtMs: options.now ? options.now() : Date.now(),
+			});
+		}
 	}
 	const runRef = await writeRun(discovery.storeRoot, {
 		runId: options.runId,
@@ -1588,7 +1610,11 @@ export async function cleanPreview(options: DiscoverRepoOptions & WorktreeViewOp
 	limit?: number;
 }): Promise<CleanPreviewResult> {
 	const run = options.run ?? defaultGitRunner;
-	const discovery = await discoverRepo({ cwd: options.cwd, run });
+	const discovery = await discoverRepo({
+		cwd: options.cwd,
+		run,
+		env: options.env,
+	});
 	const projection = normalizeProjectionOptions({ limit: options.limit });
 	const worktrees = viewWorktrees(discovery, options);
 	const checkedOutBranches = new Set(
