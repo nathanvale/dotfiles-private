@@ -24,7 +24,7 @@
 ### Issue tracker
 
 Publish repository Specs and Tickets as GitHub Issues in
-`nathanvale/dotfiles-private-archive`. Read
+`nathanvale/dotfiles-private`. Read
 [`docs/agents/issue-tracker.md`](docs/agents/issue-tracker.md).
 
 ### Triage labels
