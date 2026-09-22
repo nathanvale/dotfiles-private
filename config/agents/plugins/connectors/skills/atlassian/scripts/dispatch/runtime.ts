@@ -5,7 +5,7 @@ import { lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "n
 import os from "node:os";
 import path from "node:path";
 import { encodeInvocationContext, type InvocationContext, parseInvocationContext, TENANT_PATTERN } from "../atlassian-provider-common.ts";
-import { OPERATIONS, type OperationId } from "./contract.ts";
+import { OPERATIONS, PRODUCTS, type OperationId, type Product } from "./contract.ts";
 import type { Dependencies, ParityAttestation, ParityEvidence, ParityRequest, Transport, TransportResult } from "./engine.ts";
 import { canonicalDigest, openJournal } from "./journal.ts";
 import { planDispatcherRoute, type RoutePlan } from "../../../../bin/provider-route.ts";
@@ -76,7 +76,7 @@ export function routeTransport(env: Environment, tenant: string): Transport {
 		},
 	};
 }
-export async function resolveCredentialContext(tenant: string, product: "jira" | "confluence", env: Environment): Promise<InvocationContext> {
+export async function resolveCredentialContext(tenant: string, product: Product, env: Environment): Promise<InvocationContext> {
 	const child = path.resolve(import.meta.dir, "..", "atlassian-credential-binding.ts");
 	const read = Bun.spawnSync([process.execPath, child, "--tenant", tenant, "--product", product], {
 		env: scrubbed(env),
@@ -118,7 +118,7 @@ function asAttestation(value: unknown): ParityAttestation | null {
 	const ok =
 		typeof record.tenant === "string" &&
 		TENANT_PATTERN.test(record.tenant) &&
-		(record.product === "jira" || record.product === "confluence") &&
+		(typeof record.product === "string" && (PRODUCTS as readonly string[]).includes(record.product)) &&
 		typeof record.operation === "string" &&
 		(OPERATIONS as readonly string[]).includes(record.operation) &&
 		Array.isArray(record.inputShape) &&

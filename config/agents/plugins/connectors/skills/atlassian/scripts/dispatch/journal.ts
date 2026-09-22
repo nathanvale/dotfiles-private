@@ -12,10 +12,11 @@ import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, read
 import os from "node:os";
 import path from "node:path";
 import { TENANT_PATTERN } from "../atlassian-provider-common.ts";
-import { OPERATION_SPECS, type OperationId, type ProviderName } from "./contract.ts";
+import { OPERATION_SPECS, PROVIDERS, type OperationId, type ProviderName, type WriteOperation } from "./contract.ts";
 
-export type WriteOperation = Extract<OperationId, "issue.create" | "issue.update" | "issue.comment" | "page.create" | "page.update" | "page.comment">;
-export type EffectKind = "jira-issue" | "jira-comment" | "confluence-content" | "confluence-comment";
+export type { WriteOperation } from "./contract.ts";
+const EFFECT_KINDS = ["jira-issue", "jira-comment", "confluence-content", "confluence-comment"] as const;
+export type EffectKind = (typeof EFFECT_KINDS)[number];
 export interface Effect {
 	kind: EffectKind;
 	id: string;
@@ -33,13 +34,17 @@ export interface WriteBaseline {
 // process, so "unchanged" on that basis is accepted only while the receipt is
 // still unsent. A monotonic revision that did not move proves no effect
 // whatever the send state.
-export type UnchangedBasis = "readback-absent" | "revision-unchanged";
+const UNCHANGED_BASES = ["readback-absent", "revision-unchanged"] as const;
+export type UnchangedBasis = (typeof UNCHANGED_BASES)[number];
 export type Evidence = { proof: "completed"; effects: Effect[] } | { proof: "unchanged"; basis: UnchangedBasis } | { proof: "unknown" };
-export type PreviewStatus = "open" | "consumed";
-export type ReceiptStatus = "intent" | "completed" | "unchanged" | "unknown";
+const PREVIEW_STATUSES = ["open", "consumed"] as const;
+export type PreviewStatus = (typeof PREVIEW_STATUSES)[number];
+const RECEIPT_STATUSES = ["intent", "completed", "unchanged", "unknown"] as const;
+export type ReceiptStatus = (typeof RECEIPT_STATUSES)[number];
 // Written ahead of the request: "unsent" until the dispatcher calls sending(),
 // "possible" from then on, whether or not the request actually left.
-export type SendState = "unsent" | "possible";
+const SEND_STATES = ["unsent", "possible"] as const;
+export type SendState = (typeof SEND_STATES)[number];
 
 export interface Preview {
 	previewId: string;
@@ -143,11 +148,11 @@ export class JournalError extends Error {
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const EFFECT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const STABLE_REVISION = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
-const EFFECT_KINDS: ReadonlySet<string> = new Set<EffectKind>(["jira-issue", "jira-comment", "confluence-content", "confluence-comment"]);
-const PREVIEW_STATUSES: ReadonlySet<string> = new Set<PreviewStatus>(["open", "consumed"]);
-const RECEIPT_STATUSES: ReadonlySet<string> = new Set<ReceiptStatus>(["intent", "completed", "unchanged", "unknown"]);
-const SEND_STATES: ReadonlySet<string> = new Set<SendState>(["unsent", "possible"]);
-const UNCHANGED_BASES: ReadonlySet<string> = new Set<UnchangedBasis>(["readback-absent", "revision-unchanged"]);
+const EFFECT_KIND_SET: ReadonlySet<string> = new Set(EFFECT_KINDS);
+const PREVIEW_STATUS_SET: ReadonlySet<string> = new Set(PREVIEW_STATUSES);
+const RECEIPT_STATUS_SET: ReadonlySet<string> = new Set(RECEIPT_STATUSES);
+const SEND_STATE_SET: ReadonlySet<string> = new Set(SEND_STATES);
+const UNCHANGED_BASIS_SET: ReadonlySet<string> = new Set(UNCHANGED_BASES);
 const SPACE_ID = /^[1-9][0-9]{0,19}$/;
 const DEFAULT_PREVIEW_TTL_MS = 15 * 60 * 1000;
 
@@ -312,7 +317,7 @@ const IDENTITY_SHAPES: Record<WriteOperation, RegExp> = {
 	"issue.create": /^project:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}:create:[a-z0-9][a-z0-9-]{0,63}:[0-9a-f]{16}$/,
 	"page.create": /^space:[1-9][0-9]{0,19}:create:(?:root|[A-Za-z0-9][A-Za-z0-9_.-]{0,127}):[0-9a-f]{16}$/,
 };
-const PROVIDERS: ReadonlySet<string> = new Set(["official", "community"]);
+const PROVIDER_SET: ReadonlySet<string> = new Set(PROVIDERS);
 
 // A function declaration, so TypeScript narrows after each guard call.
 function corrupt(what: string): never {
@@ -347,11 +352,11 @@ function asPreview(record: Record<string, unknown>): Preview {
 	const status = record.status;
 	if (typeof record.previewId !== "string" || !IDENTIFIER.test(record.previewId)) corrupt("preview id");
 	if (!validIdentity(record.operation, record.objectIdentity)) corrupt("preview operation or identity");
-	if (typeof record.provider !== "string" || !PROVIDERS.has(record.provider)) corrupt("preview provider");
+	if (typeof record.provider !== "string" || !PROVIDER_SET.has(record.provider)) corrupt("preview provider");
 	if (!validDigests(record)) corrupt("preview digest");
 	if (!validBaseline(record.baseline) || canonicalDigest(record.baseline) !== record.baselineDigest) corrupt("preview baseline");
 	if (!finiteTime(record.createdAt) || !finiteTime(record.expiresAt) || record.expiresAt <= record.createdAt) corrupt("preview timestamps");
-	if (typeof status !== "string" || !PREVIEW_STATUSES.has(status)) corrupt("preview status");
+	if (typeof status !== "string" || !PREVIEW_STATUS_SET.has(status)) corrupt("preview status");
 	return record as unknown as Preview;
 }
 
@@ -359,10 +364,10 @@ function asReceipt(record: Record<string, unknown>): Receipt {
 	const status = record.status;
 	if (typeof record.runId !== "string" || !IDENTIFIER.test(record.runId) || typeof record.previewId !== "string" || !IDENTIFIER.test(record.previewId)) corrupt("receipt id");
 	if (!validIdentity(record.operation, record.objectIdentity)) corrupt("receipt operation or identity");
-	if (typeof record.provider !== "string" || !PROVIDERS.has(record.provider)) corrupt("receipt provider");
+	if (typeof record.provider !== "string" || !PROVIDER_SET.has(record.provider)) corrupt("receipt provider");
 	if (!validDigests(record)) corrupt("receipt digest");
 	if (!validBaseline(record.baseline) || canonicalDigest(record.baseline) !== record.baselineDigest) corrupt("receipt baseline");
-	if (typeof status !== "string" || !RECEIPT_STATUSES.has(status)) corrupt("receipt status");
+	if (typeof status !== "string" || !RECEIPT_STATUS_SET.has(status)) corrupt("receipt status");
 	validateReceiptState(status, record.send, record.basis, record.effects, record.holder);
 	if (!finiteTime(record.createdAt) || !finiteTime(record.updatedAt) || record.updatedAt < record.createdAt) corrupt("receipt timestamps");
 	return record as unknown as Receipt;
@@ -372,8 +377,8 @@ function asReceipt(record: Record<string, unknown>): Receipt {
 // basis, and only a revision basis may follow a possible send; the holder pid
 // is a positive integer.
 function validateReceiptState(status: string, send: unknown, basis: unknown, effects: unknown, holder: unknown): void {
-	if (typeof send !== "string" || !SEND_STATES.has(send)) corrupt("receipt send state");
-	if (status === "unchanged" ? typeof basis !== "string" || !UNCHANGED_BASES.has(basis) : basis !== undefined) corrupt("receipt unchanged basis");
+	if (typeof send !== "string" || !SEND_STATE_SET.has(send)) corrupt("receipt send state");
+	if (status === "unchanged" ? typeof basis !== "string" || !UNCHANGED_BASIS_SET.has(basis) : basis !== undefined) corrupt("receipt unchanged basis");
 	if (status === "unchanged" && send !== "unsent" && basis !== "revision-unchanged") corrupt("receipt unchanged after a possible send");
 	if (!validEffects(effects)) corrupt("receipt effects");
 	if (status === "completed" ? effects.length === 0 : effects.length !== 0) corrupt("receipt effects for its status");
@@ -381,13 +386,13 @@ function validateReceiptState(status: string, send: unknown, basis: unknown, eff
 }
 
 function validEffects(effects: unknown): effects is Effect[] {
-	return Array.isArray(effects) && effects.every((effect) => isRecord(effect) && typeof effect.kind === "string" && EFFECT_KINDS.has(effect.kind) && typeof effect.id === "string" && EFFECT_ID.test(effect.id));
+	return Array.isArray(effects) && effects.every((effect) => isRecord(effect) && typeof effect.kind === "string" && EFFECT_KIND_SET.has(effect.kind) && typeof effect.id === "string" && EFFECT_ID.test(effect.id));
 }
 
 function validEvidence(evidence: unknown): evidence is Evidence {
 	if (!isRecord(evidence)) return false;
 	if (evidence.proof === "unknown") return true;
-	if (evidence.proof === "unchanged") return typeof evidence.basis === "string" && UNCHANGED_BASES.has(evidence.basis);
+	if (evidence.proof === "unchanged") return typeof evidence.basis === "string" && UNCHANGED_BASIS_SET.has(evidence.basis);
 	// A completion must name at least one effect; the persisted shape refuses
 	// a completed receipt without effects, so it is refused here first.
 	if (evidence.proof === "completed") return validEffects(evidence.effects) && evidence.effects.length > 0;

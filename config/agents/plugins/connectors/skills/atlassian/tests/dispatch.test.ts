@@ -9,9 +9,9 @@ import os from "node:os";
 import path from "node:path";
 import { assertCustody, createHarness, itemJson, type Harness, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
 import { run } from "../scripts/atlassian-dispatch.ts";
-import { ALLOWED_TOOLS, OPERATION_SPECS, OPERATIONS, registryToolVocabulary, SERVERS, serverFor } from "../scripts/dispatch/contract.ts";
+import { ALLOWED_TOOLS, OPERATION_SPECS, registryToolVocabulary, SERVERS, serverFor } from "../scripts/dispatch/contract.ts";
 import { attestationMatches, type Dependencies, type ParityAttestation, type ParityEvidence, REPAIR_TEXT, type SchemaTool, type Transport, type TransportResult } from "../scripts/dispatch/engine.ts";
-import { canonicalDigest, openJournal } from "../scripts/dispatch/journal.ts";
+import { openJournal } from "../scripts/dispatch/journal.ts";
 import { parityStore, resolveCredentialContext } from "../scripts/dispatch/runtime.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
@@ -27,21 +27,38 @@ const PRINCIPAL = "service@example.invalid";
 const ITEM_VERSION = "onepassword-item-version:1";
 const NOW = 1_700_000_000_000;
 
+// Test-owned digest oracle. It deliberately does not import the journal
+// serializer, so persisted journal representation changes fail this suite.
+function testCanonical(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(testCanonical).join(",")}]`;
+	if (typeof value === "object" && value !== null) {
+		const entries = Object.entries(value as Record<string, unknown>)
+			.filter(([, entry]) => entry !== undefined)
+			.sort(([left], [right]) => left.localeCompare(right));
+		return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${testCanonical(entry)}`).join(",")}}`;
+	}
+	return JSON.stringify(value) ?? "null";
+}
+
+const testDigest = (value: unknown): string => new Bun.CryptoHasher("sha256").update(testCanonical(value)).digest("hex");
+const EXPECTED_OPERATIONS = ["issue.get", "issue.search", "issue.create", "issue.update", "issue.comment", "page.get", "page.search", "page.create", "page.update", "page.comment"] as const;
+const EXPECTED_PATHS = ["atlassian.adjudicate", "atlassian.issue.comment", "atlassian.issue.create", "atlassian.issue.get", "atlassian.issue.search", "atlassian.issue.update", "atlassian.page.comment", "atlassian.page.create", "atlassian.page.get", "atlassian.page.search", "atlassian.page.update", "atlassian.parity", "atlassian.receipt", "atlassian.receipts", "atlassian.unlock"];
+
 // Independent oracle: the exact provider tool per operation and whether the
 // default Official endpoint reaches it as a primary tool, from the Stage
 // Manager decision, the Atlassian supported-tools page, and the v0.23.1
 // Community reference.
-const EXPECTED_TOOLS: Record<string, [string, boolean, string]> = {
-	"issue.get": ["getJiraIssue", true, "jira_get_issue"],
-	"issue.search": ["searchJiraIssuesUsingJql", true, "jira_search"],
-	"issue.create": ["createJiraIssue", true, "jira_create_issue"],
-	"issue.update": ["editJiraIssue", true, "jira_update_issue"],
-	"issue.comment": ["addOrEditJiraIssueComment", true, "jira_add_comment"],
-	"page.get": ["getConfluenceContent", true, "confluence_get_page"],
-	"page.search": ["searchConfluence", true, "confluence_search"],
-	"page.create": ["createConfluenceContent", true, "confluence_create_page"],
-	"page.update": ["updateConfluenceContent", true, "confluence_update_page"],
-	"page.comment": ["createConfluenceComment", false, "confluence_add_comment"],
+const EXPECTED_TOOLS: Record<string, [string, boolean, string, "jira" | "confluence"]> = {
+	"issue.get": ["getJiraIssue", true, "jira_get_issue", "jira"],
+	"issue.search": ["searchJiraIssuesUsingJql", true, "jira_search", "jira"],
+	"issue.create": ["createJiraIssue", true, "jira_create_issue", "jira"],
+	"issue.update": ["editJiraIssue", true, "jira_update_issue", "jira"],
+	"issue.comment": ["addOrEditJiraIssueComment", true, "jira_add_comment", "jira"],
+	"page.get": ["getConfluenceContent", true, "confluence_get_page", "confluence"],
+	"page.search": ["searchConfluence", true, "confluence_search", "confluence"],
+	"page.create": ["createConfluenceContent", true, "confluence_create_page", "confluence"],
+	"page.update": ["updateConfluenceContent", true, "confluence_update_page", "confluence"],
+	"page.comment": ["createConfluenceComment", false, "confluence_add_comment", "confluence"],
 };
 
 const tool = (name: string, required: string[], optional: string[] = []): SchemaTool => ({
@@ -99,7 +116,7 @@ const attested = (operation: ParityAttestation["operation"], inputShape: string[
 		operation,
 		inputShape,
 		origin: ORIGIN,
-		credentialDigest: canonicalDigest({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN }),
+		credentialDigest: testDigest({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN }),
 		objectSemantics: ({ "issue.get": "issue:key+id", "issue.search": "issues:key-set", "page.get": "page:id+version+title", "page.search": "pages:id-set" } as Record<string, string>)[operation] ?? "",
 		recordedAt: NOW - 1000,
 		expiresAt: NOW + 1000,
@@ -177,11 +194,11 @@ const toolError = (message: string): TransportResult => ({ ok: false, kind: "too
 
 describe("operation contract and routes", () => {
 	test("maps every operation to its exact provider tools and marks the deferred Official comment unreachable", () => {
-		expect([...OPERATIONS] as string[]).toEqual(Object.keys(EXPECTED_TOOLS));
-		for (const [id, [official, reachable, community]] of Object.entries(EXPECTED_TOOLS)) {
+		expect(Object.keys(OPERATION_SPECS)).toEqual([...EXPECTED_OPERATIONS]);
+		for (const [id, [official, reachable, community, product]] of Object.entries(EXPECTED_TOOLS)) {
 			const spec = OPERATION_SPECS[id as keyof typeof OPERATION_SPECS];
 			expect([id, spec.official.tool, spec.official.reachable, spec.community.tool]).toEqual([id, official, reachable, community]);
-			expect([id, spec.product]).toEqual([id, id.startsWith("issue.") ? "jira" : "confluence"]);
+			expect([id, spec.product]).toEqual([id, product]);
 		}
 	});
 
@@ -230,10 +247,10 @@ describe("operation contract and routes", () => {
 		});
 		expect([envelope.result.outcome, envelope.result.exitCode, envelope.result.commandIdentity]).toEqual(["success", 0, "atlassian.discover"]);
 		const data = envelope.result.data as { operations: { id: string }[]; commands: string[]; exitMeanings: Record<string, string> };
-		expect(data.operations.map((entry) => entry.id)).toEqual([...OPERATIONS]);
+		expect(data.operations.map((entry) => entry.id)).toEqual([...EXPECTED_OPERATIONS]);
 		expect(data.commands).toEqual(["receipts", "receipt", "adjudicate", "unlock", "parity"]);
 		expect(Object.keys(data.exitMeanings)).toEqual(["0", "2", "3", "4"]);
-		expect(envelope.availablePaths).toEqual([...OPERATIONS, "receipts", "receipt", "adjudicate", "unlock", "parity"].map((entry) => `atlassian.${entry}`).sort());
+		expect(envelope.availablePaths).toEqual(EXPECTED_PATHS);
 	});
 });
 
@@ -562,7 +579,7 @@ describe("journaled writes", () => {
 		expect(data.arguments).toEqual({ cloudId: "cloud-example", issueIdOrKey: "PROJ-1", commentBody: COMMENT.body });
 		expect(calls.map((call) => call.tool)).toEqual(["getAccessibleAtlassianResources", "getJiraIssue"]);
 		const previews = readJsonDir(previewsDir());
-		expect(previews.map((entry) => [entry.previewId, entry.status, entry.argsDigest])).toEqual([[data.previewId, "open", canonicalDigest(data.arguments)]]);
+		expect(previews.map((entry) => [entry.previewId, entry.status, entry.argsDigest])).toEqual([[data.previewId, "open", testDigest(data.arguments)]]);
 		expect(JSON.stringify(previews)).not.toContain("Quarterly");
 	});
 
@@ -581,7 +598,7 @@ describe("journaled writes", () => {
 		expect(sent).toHaveLength(1);
 		// The outbound object is the receipt-bound one: its digest is the preview's argsDigest.
 		const stored = readJsonDir(previewsDir())[0];
-		expect(canonicalDigest(sent[0]?.args)).toBe(stored?.argsDigest as string);
+		expect(testDigest(sent[0]?.args)).toBe(stored?.argsDigest as string);
 		expect(readJsonDir(receiptsDir()).map((entry) => [entry.status, entry.send, entry.effects])).toEqual([["completed", "possible", [{ kind: "jira-comment", id: "10001" }]]]);
 		// The same preview cannot be applied twice.
 		const again = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", preview.previewId], dependencies);
@@ -885,7 +902,7 @@ describe("parity attestation", () => {
 				operation: "issue.get",
 				inputShape: ["issueKey"],
 				origin: ORIGIN,
-				credentialDigest: canonicalDigest({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN }),
+				credentialDigest: testDigest({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN }),
 				objectSemantics: "issue:key+id",
 				recordedAt: NOW,
 				expiresAt: NOW + 7 * 24 * 60 * 60 * 1000,
@@ -925,7 +942,7 @@ describe("parity attestation", () => {
 		const store = parityStore(env);
 		const attestation = (attested("issue.get", ["issueKey"]) as { attestation: ParityAttestation }).attestation;
 		await store.attestParity(attestation);
-		const request = { tenant: "example", product: "jira" as const, operation: "issue.get" as const, inputShape: ["issueKey"], origin: ORIGIN, credentialDigest: canonicalDigest({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN }), now: NOW };
+		const request = { tenant: "example", product: "jira" as const, operation: "issue.get" as const, inputShape: ["issueKey"], origin: ORIGIN, credentialDigest: testDigest({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN }), now: NOW };
 		expect(await store.parity(request)).toEqual({ status: "attested", attestation });
 		expect(await store.parity({ ...request, inputShape: ["issueKey", "fields"] })).toEqual({ status: "unproven" });
 		const directory = path.join(stateRoot, "connectors", "atlassian", "example", "parity");
@@ -987,11 +1004,11 @@ describe("production adapters", () => {
 		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 42));
 		const first = await resolveCredentialContext("example", "jira", env());
 		const store = parityStore(env());
-		const attestation = (attested("issue.get", ["issueKey"], { credentialDigest: canonicalDigest(first) }) as { attestation: ParityAttestation }).attestation;
+		const attestation = (attested("issue.get", ["issueKey"], { credentialDigest: testDigest(first) }) as { attestation: ParityAttestation }).attestation;
 		await store.attestParity(attestation);
 		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 43));
 		const rotated = await resolveCredentialContext("example", "jira", env());
-		const request = { tenant: "example", product: "jira" as const, operation: "issue.get" as const, inputShape: ["issueKey"], origin: ORIGIN, credentialDigest: canonicalDigest(rotated), now: NOW };
+		const request = { tenant: "example", product: "jira" as const, operation: "issue.get" as const, inputShape: ["issueKey"], origin: ORIGIN, credentialDigest: testDigest(rotated), now: NOW };
 		expect(attestationMatches(await store.parity(request), request)).toEqual({ ok: false, reason: "fallback-ineligible:parity-mismatch" });
 	});
 

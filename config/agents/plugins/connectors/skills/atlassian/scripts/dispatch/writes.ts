@@ -5,7 +5,7 @@
 // and read-back evidence for operator adjudication. Provider names are taken
 // from current provider documentation and are confirmed only by the live
 // schema at dispatch time; nothing here assumes a reply shape without checking.
-import type { OperationSpec, ProviderName } from "./contract.ts";
+import { WRITE_OPERATION_IDS, type OperationSpec, type ProviderName } from "./contract.ts";
 import { collectInput } from "./engine.ts";
 import type { Effect, WriteBaseline, WriteOperation } from "./journal.ts";
 
@@ -52,7 +52,7 @@ const WRITE_INPUTS: Record<WriteOperation, Record<string, Field>> = {
 	"page.comment": { pageId: { kind: "text", required: true, pattern: NUMERIC_ID }, body: { kind: "body", required: true } },
 };
 
-export const WRITE_OPERATIONS = Object.keys(WRITE_INPUTS) as WriteOperation[];
+export const WRITE_OPERATIONS = WRITE_OPERATION_IDS;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);

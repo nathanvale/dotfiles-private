@@ -4,20 +4,12 @@
 // documented, not live-verified; the engine binds one only after live schema
 // confirmation.
 
-export const OPERATIONS = [
-	"issue.get",
-	"issue.search",
-	"issue.create",
-	"issue.update",
-	"issue.comment",
-	"page.get",
-	"page.search",
-	"page.create",
-	"page.update",
-	"page.comment",
-] as const;
-export type OperationId = (typeof OPERATIONS)[number];
-export type ProviderName = "official" | "community";
+import { PRODUCTS, type Product } from "../atlassian-provider-common.ts";
+
+export { PRODUCTS, type Product } from "../atlassian-provider-common.ts";
+
+export const PROVIDERS = ["official", "community"] as const;
+export type ProviderName = (typeof PROVIDERS)[number];
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
@@ -63,13 +55,50 @@ export const ALLOWED_TOOLS = registryToolVocabulary(registrySource());
 // allow-list, but the semantic operation still needs its documented identity.
 export const OFFICIAL_PAGE_COMMENT_TOOL = "createConfluenceComment";
 
-export interface OperationSpec {
-	id: OperationId;
+// This is the operation descriptor registry: route selection, product, write
+// policy admission, and exact provider tool identity live behind this one
+// interface. Consumers must not infer product from a string prefix.
+interface OperationDescriptor {
+	id: string;
 	kind: "read" | "write";
-	product: "jira" | "confluence";
+	product: Product;
 	// A tool that the default Official endpoint only reaches through its broad
 	// executeWrite dispatcher is unreachable here: the exact-name allow-list
 	// cannot bind executeWrite to one operation.
+	official: { tool: string; reachable: boolean };
+	community: { tool: string };
+}
+
+// This registry is the sole semantic catalog. The public operation list,
+// write-operation type, route choice, and provider-tool binding are derived
+// from it rather than separately maintained by policy modules.
+const OPERATION_REGISTRY = [
+	{ id: "issue.get", kind: "read", product: "jira", official: { tool: "getJiraIssue", reachable: true }, community: { tool: "jira_get_issue" } },
+	{ id: "issue.search", kind: "read", product: "jira", official: { tool: "searchJiraIssuesUsingJql", reachable: true }, community: { tool: "jira_search" } },
+	{ id: "issue.create", kind: "write", product: "jira", official: { tool: "createJiraIssue", reachable: true }, community: { tool: "jira_create_issue" } },
+	{ id: "issue.update", kind: "write", product: "jira", official: { tool: "editJiraIssue", reachable: true }, community: { tool: "jira_update_issue" } },
+	{ id: "issue.comment", kind: "write", product: "jira", official: { tool: "addOrEditJiraIssueComment", reachable: true }, community: { tool: "jira_add_comment" } },
+	{ id: "page.get", kind: "read", product: "confluence", official: { tool: "getConfluenceContent", reachable: true }, community: { tool: "confluence_get_page" } },
+	{ id: "page.search", kind: "read", product: "confluence", official: { tool: "searchConfluence", reachable: true }, community: { tool: "confluence_search" } },
+	{ id: "page.create", kind: "write", product: "confluence", official: { tool: "createConfluenceContent", reachable: true }, community: { tool: "confluence_create_page" } },
+	{ id: "page.update", kind: "write", product: "confluence", official: { tool: "updateConfluenceContent", reachable: true }, community: { tool: "confluence_update_page" } },
+	// Deferred on the default Official endpoint (reachable only through
+	// executeWrite, or as a direct tool on the unqualified `?tools=all`
+	// endpoint), so Official refuses it and Community carries it.
+	{ id: "page.comment", kind: "write", product: "confluence", official: { tool: OFFICIAL_PAGE_COMMENT_TOOL, reachable: false }, community: { tool: "confluence_add_comment" } },
+] as const satisfies readonly OperationDescriptor[];
+
+export type OperationId = (typeof OPERATION_REGISTRY)[number]["id"];
+export type WriteOperation = Extract<(typeof OPERATION_REGISTRY)[number], { readonly kind: "write" }>["id"];
+export const OPERATIONS: readonly OperationId[] = Object.freeze(OPERATION_REGISTRY.map(({ id }) => id));
+export const WRITE_OPERATION_IDS: readonly WriteOperation[] = Object.freeze(OPERATION_REGISTRY.filter(({ kind }) => kind === "write").map(({ id }) => id as WriteOperation));
+
+// Public consumers receive this fully declared boundary; the descriptor that
+// validates the registry remains an implementation detail.
+export interface OperationSpec {
+	id: OperationId;
+	kind: "read" | "write";
+	product: Product;
 	official: { tool: string; reachable: boolean };
 	community: { tool: string };
 }
@@ -79,29 +108,15 @@ function exactTool(server: ServerName, tool: string): string {
 	return tool;
 }
 
-const spec = (id: OperationId, kind: "read" | "write", officialTool: string, communityTool: string, reachable = true): OperationSpec => ({
-	id,
-	kind,
-	product: id.startsWith("issue.") ? "jira" : "confluence",
-	official: { tool: reachable ? exactTool(id.startsWith("issue.") ? "atlassian-official-jira" : "atlassian-official-confluence", officialTool) : officialTool, reachable },
-	community: { tool: exactTool(id.startsWith("issue.") ? "atlassian-community-jira" : "atlassian-community-confluence", communityTool) },
-});
+function admittedSpec(spec: (typeof OPERATION_REGISTRY)[number]): OperationSpec {
+	return {
+		...spec,
+		official: { tool: spec.official.reachable ? exactTool(serverFor("official", spec.product), spec.official.tool) : spec.official.tool, reachable: spec.official.reachable },
+		community: { tool: exactTool(serverFor("community", spec.product), spec.community.tool) },
+	};
+}
 
-export const OPERATION_SPECS: Record<OperationId, OperationSpec> = {
-	"issue.get": spec("issue.get", "read", "getJiraIssue", "jira_get_issue"),
-	"issue.search": spec("issue.search", "read", "searchJiraIssuesUsingJql", "jira_search"),
-	"issue.create": spec("issue.create", "write", "createJiraIssue", "jira_create_issue"),
-	"issue.update": spec("issue.update", "write", "editJiraIssue", "jira_update_issue"),
-	"issue.comment": spec("issue.comment", "write", "addOrEditJiraIssueComment", "jira_add_comment"),
-	"page.get": spec("page.get", "read", "getConfluenceContent", "confluence_get_page"),
-	"page.search": spec("page.search", "read", "searchConfluence", "confluence_search"),
-	"page.create": spec("page.create", "write", "createConfluenceContent", "confluence_create_page"),
-	"page.update": spec("page.update", "write", "updateConfluenceContent", "confluence_update_page"),
-	// Deferred on the default Official endpoint (reachable only through
-	// executeWrite, or as a direct tool on the unqualified `?tools=all`
-	// endpoint), so Official refuses it and Community carries it.
-	"page.comment": spec("page.comment", "write", OFFICIAL_PAGE_COMMENT_TOOL, "confluence_add_comment", false),
-};
+export const OPERATION_SPECS: Record<OperationId, OperationSpec> = Object.freeze(Object.fromEntries(OPERATION_REGISTRY.map((spec) => [spec.id, admittedSpec(spec)])) as Record<OperationId, OperationSpec>);
 
 // Operator commands beside the operations; each is a canonical command path.
 export const COMMANDS = ["receipts", "receipt", "adjudicate", "unlock", "parity"] as const;
@@ -109,7 +124,6 @@ export type CommandId = (typeof COMMANDS)[number];
 
 export const OFFICIAL_RESOURCES_TOOL = exactTool("atlassian-official-jira", "getAccessibleAtlassianResources");
 export const OFFICIAL_USER_TOOL = exactTool("atlassian-official-jira", "atlassianUserInfo");
-export type Product = OperationSpec["product"];
 
 // Four static routes: each provider is split by product because the API
 // token, the credential item, and the tool surface are product-specific.

@@ -7,13 +7,28 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { canonicalDigest, JournalError, objectIdentity, openJournal } from "../scripts/dispatch/journal.ts";
+import { JournalError, objectIdentity, openJournal } from "../scripts/dispatch/journal.ts";
 
 const WORKER = path.resolve(import.meta.dir, "fixtures", "journal-worker.ts");
 const PRIVATE = ["fixture-secret-value", "Quarterly numbers are down", "https://example.atlassian.net", "Billing broken", "Roadmap draft"];
 const COMMENT = { issueKey: "PROJ-1", body: "Quarterly numbers are down; fixture-secret-value; https://example.atlassian.net" };
 const CREATE = { projectKey: "PROJ", issueType: "Bug", summary: "Billing broken", description: "first" };
 const PAGE = { space: { id: "123" }, parentId: "77", title: "Roadmap draft", body: "x" };
+
+// Test-owned stable digest oracle. Journal representation changes must be
+// observable here without calculating an expected digest through production.
+function testCanonical(value: unknown): string {
+	if (Array.isArray(value)) return `[${value.map(testCanonical).join(",")}]`;
+	if (typeof value === "object" && value !== null) {
+		const entries = Object.entries(value as Record<string, unknown>)
+			.filter(([, entry]) => entry !== undefined)
+			.sort(([left], [right]) => left.localeCompare(right));
+		return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${testCanonical(entry)}`).join(",")}}`;
+	}
+	return JSON.stringify(value) ?? "null";
+}
+
+const testDigest = (value: unknown): string => new Bun.CryptoHasher("sha256").update(testCanonical(value)).digest("hex");
 // The same space named by its key alongside its id: one space, one identity.
 const PAGE_ALIAS = { ...PAGE, space: { id: "123", key: "ENG" }, body: "y" };
 
@@ -77,7 +92,7 @@ describe("private state and privacy", () => {
 		}
 		const text = stored();
 		for (const fragment of PRIVATE) expect(text).not.toContain(fragment);
-		expect(text).toContain(canonicalDigest(COMMENT));
+		expect(text).toContain(testDigest(COMMENT));
 		expect(text).not.toContain("v7");
 	});
 
@@ -144,9 +159,11 @@ describe("preview binding at apply", () => {
 		expect(receipt.updatedAt).toBe(1_700_000_000_010);
 	});
 
-	test("canonical digest is key-order independent and content sensitive", () => {
-		expect(canonicalDigest({ a: 1, b: [1, { c: 2 }] })).toBe(canonicalDigest({ b: [1, { c: 2 }], a: 1 }));
-		expect(canonicalDigest({ a: 1 })).not.toBe(canonicalDigest({ a: 2 }));
+	test("persisted preview digest uses the canonical input, independent of key order", () => {
+		const reordered = { body: COMMENT.body, issueKey: COMMENT.issueKey };
+		const preview = journal().recordPreview({ operation: "issue.comment", provider: "official", canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" });
+		expect(preview.inputDigest).toBe(testDigest(reordered));
+		expect(preview.inputDigest).not.toBe(testDigest({ ...COMMENT, body: "changed" }));
 	});
 });
 
