@@ -3,6 +3,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	realpathSync,
 	rmSync,
@@ -10,7 +11,7 @@ import {
 import { devNull, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
 	describeCliProcessRun,
 	parseCliProcessJson,
@@ -27,6 +28,29 @@ const WORKTREE_SCRIPT = worktreeContracts.sync.script;
 const SPAWN_TIMEOUT_MS = 15_000;
 const TEST_TIMEOUT_MS = 30_000;
 const KILL_SIGNAL = "SIGKILL";
+let testStateHome: string;
+let realStoreEntryCountBefore: number;
+
+function realAgentWorktreeStoreEntryCount(): number {
+	try {
+		return readdirSync(join(process.env.HOME ?? "", ".local", "state", "agent-worktree")).length;
+	} catch {
+		return 0;
+	}
+}
+
+beforeAll(() => {
+	realStoreEntryCountBefore = realAgentWorktreeStoreEntryCount();
+	testStateHome = mkdtempSync(join(tmpdir(), "worktree-test-state-"));
+});
+
+afterAll(() => {
+	try {
+		expect(realAgentWorktreeStoreEntryCount()).toBe(realStoreEntryCountBefore);
+	} finally {
+		rmSync(testStateHome, { recursive: true, force: true });
+	}
+});
 
 function runWtPackage(
 	args: readonly string[],
@@ -36,6 +60,7 @@ function runWtPackage(
 		label,
 		argv: ["bun", "run", "--silent", WORKTREE_SCRIPT, ...args],
 		cwd: packageRoot,
+		env: { ...process.env, XDG_STATE_HOME: testStateHome },
 		timeoutMs: SPAWN_TIMEOUT_MS,
 		killSignal: KILL_SIGNAL,
 	});
@@ -358,6 +383,7 @@ describe("WorkTree package entrypoint integration", () => {
 					label: "worktree open --json real repo cwd",
 					argv: ["bun", "run", sourceEntry, "open", "--json"],
 					cwd: repo,
+					env: { ...process.env, XDG_STATE_HOME: testStateHome },
 					timeoutMs: SPAWN_TIMEOUT_MS,
 					killSignal: KILL_SIGNAL,
 				});

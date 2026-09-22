@@ -1,9 +1,10 @@
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	realpathSync,
 	rmSync,
 	symlinkSync,
@@ -17,11 +18,35 @@ const removeHook = join(import.meta.dir, "worktree-remove.ts");
 const SPAWN_TIMEOUT_MS = 60_000;
 // Isolate temp repos from global/system git config (gpgsign, hooksPath,
 // templates); explicit `git config` calls inside the repos still apply.
-const gitEnv = {
+const gitEnv: NodeJS.ProcessEnv = {
 	...process.env,
 	GIT_CONFIG_GLOBAL: "/dev/null",
 	GIT_CONFIG_NOSYSTEM: "1",
 };
+let testStateHome: string;
+let realStoreEntryCountBefore: number;
+
+function realAgentWorktreeStoreEntryCount(): number {
+	try {
+		return readdirSync(join(process.env.HOME ?? "", ".local", "state", "agent-worktree")).length;
+	} catch {
+		return 0;
+	}
+}
+
+beforeAll(() => {
+	realStoreEntryCountBefore = realAgentWorktreeStoreEntryCount();
+	testStateHome = mkdtempSync(join(tmpdir(), "claude-worktree-hook-state-"));
+	gitEnv.XDG_STATE_HOME = testStateHome;
+});
+
+afterAll(() => {
+	try {
+		expect(realAgentWorktreeStoreEntryCount()).toBe(realStoreEntryCountBefore);
+	} finally {
+		rmSync(testStateHome, { recursive: true, force: true });
+	}
+});
 
 interface HookRun {
 	exitCode: number;

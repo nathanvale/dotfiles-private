@@ -307,7 +307,7 @@ export function createFileStore(root: string): AgentWorktreeStore {
  * Resolve the durable store root for a main-owner repository.
  *
  * The repository path is hashed so durable state stays outside the checkout
- * while remaining stable across linked worktrees and repository renames.
+ * while remaining stable across linked worktrees.
  *
  * @param mainOwnerRoot - Absolute main-owner repository path
  * @param env - Environment values, injectable for deterministic tests

@@ -1,33 +1,51 @@
-import { createHash } from "node:crypto";
 import { mkdtemp } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import { buildHandoffSnapshot } from "../src/inspect.ts";
 import {
 	type AgentWorktreeStore,
 	createFileStore,
-	resolveAgentWorktreeStoreRoot,
+	resolveAgentWorktreeStoreRoot as resolveStoreRoot,
 } from "../src/store.ts";
+
+import {
+	createTestStateHome,
+	realAgentWorktreeStoreEntryCount,
+} from "./support.ts";
+
+let testState: Awaited<ReturnType<typeof createTestStateHome>>;
+
+beforeAll(async () => {
+	testState = await createTestStateHome();
+});
+
+afterAll(async () => {
+	try {
+		expect(await realAgentWorktreeStoreEntryCount()).toBe(
+			testState.realStoreEntryCount,
+		);
+	} finally {
+		await testState.cleanup();
+	}
+});
 
 describe("agent-worktree store", () => {
 	test("resolves state storage from XDG_STATE_HOME and the repository path", () => {
-		const expectedHash = createHash("sha256")
-			.update("/repo")
-			.digest("hex")
-			.slice(0, 16);
-
 		expect(
-			resolveAgentWorktreeStoreRoot("/repo", {
+			resolveStoreRoot("/repo", {
 				XDG_STATE_HOME: "/state",
 			}),
-		).toBe(`/state/agent-worktree/${expectedHash}`);
+		).toBe(
+			// Independent oracle: verified with `printf '%s' /repo | shasum -a 256`.
+			"/state/agent-worktree/816fc349d3faebf8",
+		);
 	});
 
 	test("writes and reads run, failure, and worktree records", async () => {
 		const root = await mkdtemp(join(tmpdir(), "agent-worktree-store-"));
-		const store = createFileStore(root);
+		const store = createFileStore(resolveStoreRoot(root, testState.env));
 
 		await writeStoreFixture(store, {
 			command: "delete",
@@ -60,7 +78,8 @@ describe("agent-worktree store", () => {
 
 	test("handoff surfaces latest durable context from the store", async () => {
 		const root = await mkdtemp(join(tmpdir(), "agent-worktree-handoff-"));
-		const store = createFileStore(root);
+		const storeRoot = resolveStoreRoot(root, testState.env);
+		const store = createFileStore(storeRoot);
 		await writeStoreFixture(store, {
 			command: "refresh",
 			status: "completed",
@@ -70,7 +89,7 @@ describe("agent-worktree store", () => {
 			worktreeObservedAtMs: 5,
 		});
 
-		const snapshot = await buildHandoffSnapshot(root, { limit: 2 });
+		const snapshot = await buildHandoffSnapshot(storeRoot, { limit: 2 });
 
 		expect(snapshot.latest).toHaveLength(2);
 		expect(snapshot.total).toBe(3);

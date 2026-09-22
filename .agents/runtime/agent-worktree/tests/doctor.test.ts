@@ -1,12 +1,46 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
-import { doctorMapFromDiscovery, runDoctor } from "../src/doctor.ts";
+import { doctorMapFromDiscovery, runDoctor as runDoctorInRuntime } from "../src/doctor.ts";
 import type { RepoDiscovery } from "../src/discovery.ts";
-import { createFileStore, resolveAgentWorktreeStoreRoot } from "../src/store.ts";
-import { fakeGitRunner, mainRepoGitOutputs } from "./support.ts";
+import {
+	createFileStore,
+	resolveAgentWorktreeStoreRoot as resolveStoreRoot,
+} from "../src/store.ts";
+import {
+	createTestStateHome,
+	fakeGitRunner,
+	mainRepoGitOutputs,
+	realAgentWorktreeStoreEntryCount,
+} from "./support.ts";
+
+let testState: Awaited<ReturnType<typeof createTestStateHome>>;
+
+beforeAll(async () => {
+	testState = await createTestStateHome();
+});
+
+afterAll(async () => {
+	try {
+		expect(await realAgentWorktreeStoreEntryCount()).toBe(
+			testState.realStoreEntryCount,
+		);
+	} finally {
+		await testState.cleanup();
+	}
+});
+
+function runDoctor(
+	options: Parameters<typeof runDoctorInRuntime>[0],
+) {
+	return runDoctorInRuntime({ ...options, env: testState.env });
+}
+
+function resolveAgentWorktreeStoreRoot(root: string): string {
+	return resolveStoreRoot(root, testState.env);
+}
 
 describe("agent-worktree doctor", () => {
 	test("returns a blocked map when git root cannot be read", async () => {

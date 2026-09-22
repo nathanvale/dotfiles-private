@@ -1,30 +1,84 @@
 import { mkdtemp, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import {
-	attachWorktree,
+	attachWorktree as runAttachWorktree,
 	buildRecoveryPlan,
-	checkWorktree,
-	cleanPreview,
-	createWorktree,
-	deleteWorktree,
-	listWorktrees,
+	checkWorktree as runCheckWorktree,
+	cleanPreview as runCleanPreview,
+	createWorktree as runCreateWorktree,
+	deleteWorktree as runDeleteWorktree,
+	listWorktrees as runListWorktrees,
 	matchesWorktreePathPattern,
-	refreshWorktrees,
-	statusWorktrees,
+	refreshWorktrees as runRefreshWorktrees,
+	statusWorktrees as runStatusWorktrees,
 } from "../src/worktrees.ts";
 import { inspectRefFromRoot } from "../src/inspect.ts";
 import {
 	createFileStore,
-	resolveAgentWorktreeStoreRoot,
+	resolveAgentWorktreeStoreRoot as resolveStoreRoot,
 } from "../src/store.ts";
 import {
 	fakeGitRunner,
 	linkedRepoGitOutputs,
 	mainRepoGitOutputs,
+	createTestStateHome,
+	realAgentWorktreeStoreEntryCount,
 } from "./support.ts";
+
+let testState: Awaited<ReturnType<typeof createTestStateHome>>;
+
+beforeAll(async () => {
+	testState = await createTestStateHome();
+});
+
+afterAll(async () => {
+	try {
+		expect(await realAgentWorktreeStoreEntryCount()).toBe(
+			testState.realStoreEntryCount,
+		);
+	} finally {
+		await testState.cleanup();
+	}
+});
+
+function attachWorktree(options: Parameters<typeof runAttachWorktree>[0]) {
+	return runAttachWorktree({ ...options, env: testState.env });
+}
+
+function checkWorktree(options: Parameters<typeof runCheckWorktree>[0]) {
+	return runCheckWorktree({ ...options, env: testState.env });
+}
+
+function cleanPreview(options: Parameters<typeof runCleanPreview>[0]) {
+	return runCleanPreview({ ...options, env: testState.env });
+}
+
+function createWorktree(options: Parameters<typeof runCreateWorktree>[0]) {
+	return runCreateWorktree({ ...options, env: testState.env });
+}
+
+function deleteWorktree(options: Parameters<typeof runDeleteWorktree>[0]) {
+	return runDeleteWorktree({ ...options, env: testState.env });
+}
+
+function listWorktrees(options: Parameters<typeof runListWorktrees>[0]) {
+	return runListWorktrees({ ...options, env: testState.env });
+}
+
+function refreshWorktrees(options: Parameters<typeof runRefreshWorktrees>[0]) {
+	return runRefreshWorktrees({ ...options, env: testState.env });
+}
+
+function statusWorktrees(options: Parameters<typeof runStatusWorktrees>[0]) {
+	return runStatusWorktrees({ ...options, env: testState.env });
+}
+
+function resolveAgentWorktreeStoreRoot(root: string): string {
+	return resolveStoreRoot(root, testState.env);
+}
 
 describe("agent-worktree lifecycle reads", () => {
 	test("daily list and status hide configured worktree path patterns", async () => {

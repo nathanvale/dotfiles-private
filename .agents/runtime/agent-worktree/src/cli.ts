@@ -67,6 +67,8 @@ export interface AgentWorktreeCliRuntime {
 	now: () => number;
 	/** Git subprocess runner. */
 	run: GitRunner;
+	/** Environment used to resolve the state-owned durable store root. */
+	env?: Readonly<Record<string, string | undefined>>;
 }
 
 /**
@@ -671,7 +673,7 @@ async function runDoctorCommand({
 }: CommandContext): Promise<CommandResult> {
 	return readCommandResult(
 		"doctor",
-		doctorData(await runDoctor({ cwd, run: runtime.run })),
+		doctorData(await runDoctor({ cwd, run: runtime.run, env: runtime.env })),
 		invocation,
 	);
 }
@@ -683,7 +685,12 @@ async function runListCommand({
 }: CommandContext): Promise<CommandResult> {
 	return readCommandResult(
 		"list",
-		await listWorktrees({ cwd, run: runtime.run, limit: invocation.limit }),
+		await listWorktrees({
+			cwd,
+			run: runtime.run,
+			env: runtime.env,
+			limit: invocation.limit,
+		}),
 		invocation,
 	);
 }
@@ -698,6 +705,7 @@ async function runStatusCommand({
 		await statusWorktreeResult({
 			cwd,
 			run: runtime.run,
+			env: runtime.env,
 			limit: invocation.limit,
 		}),
 		invocation,
@@ -715,7 +723,7 @@ async function runCheckCommand({
 		ok: true,
 		data: resultData(
 			"check",
-			await checkWorktree({ cwd, run: runtime.run, branch }),
+			await checkWorktree({ cwd, run: runtime.run, env: runtime.env, branch }),
 		),
 	};
 }
@@ -731,6 +739,7 @@ async function runCreateCommand({
 	const result = await createWorktree({
 		cwd,
 		run: runtime.run,
+		env: runtime.env,
 		branch,
 		base: invocation.base,
 		dryRun: invocation.dryRun,
@@ -751,6 +760,7 @@ async function runAttachCommand({
 	const result = await attachWorktree({
 		cwd,
 		run: runtime.run,
+		env: runtime.env,
 		ref: invocation.positionals[0],
 		pr: invocation.pr,
 		track: invocation.track,
@@ -791,6 +801,7 @@ async function runDeleteCommand({
 	const result = await deleteWorktree({
 		cwd,
 		run: runtime.run,
+		env: runtime.env,
 		branch: validation.branch,
 		dryRun: invocation.dryRun,
 		force: invocation.force,
@@ -821,6 +832,7 @@ async function runRefreshCommand({
 	const result = await refreshWorktrees({
 		cwd,
 		run: runtime.run,
+		env: runtime.env,
 		dryRun: invocation.dryRun,
 		runId,
 		now: runtime.now,
@@ -838,6 +850,7 @@ async function runCleanCommand({
 		await cleanPreview({
 			cwd,
 			run: runtime.run,
+			env: runtime.env,
 			limit: invocation.limit,
 		}),
 		invocation,
@@ -852,7 +865,7 @@ async function runRecoverCommand({
 	const ref = invocation.ref ?? invocation.positionals[0];
 	const parsedRef = ref ? parseAgentWorktreeRef(ref) : null;
 	if (!ref || !parsedRef) return usageFailure("recover needs a typed ref.");
-	const discovery = await discoverRepo({ cwd, run: runtime.run });
+	const discovery = await discoverRepo({ cwd, run: runtime.run, env: runtime.env });
 	if (!discovery.storeRoot) {
 		return runtimeFailure(
 			"recover needs a resolved repo store root.",
@@ -897,7 +910,7 @@ async function runInspectCommand({
 	if (!parseAgentWorktreeRef(ref)) {
 		return usageFailure("inspect needs a supported typed ref.");
 	}
-	const discovery = await discoverRepo({ cwd, run: runtime.run });
+	const discovery = await discoverRepo({ cwd, run: runtime.run, env: runtime.env });
 	if (!discovery.storeRoot) {
 		return runtimeFailure(
 			"inspect needs a resolved repo store root.",
@@ -915,7 +928,7 @@ async function runHandoffCommand({
 	runtime,
 	invocation,
 }: CommandContext): Promise<CommandResult> {
-	const discovery = await discoverRepo({ cwd, run: runtime.run });
+	const discovery = await discoverRepo({ cwd, run: runtime.run, env: runtime.env });
 	if (!discovery.storeRoot) {
 		return runtimeFailure(
 			"handoff needs a resolved repo store root.",

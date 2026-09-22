@@ -1,8 +1,7 @@
-import { createHash } from "node:crypto";
 import { mkdtemp, mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import {
 	discoverRepo,
@@ -13,7 +12,25 @@ import {
 	fakeGitRunner,
 	linkedRepoGitOutputs,
 	mainRepoGitOutputs,
+	createTestStateHome,
+	realAgentWorktreeStoreEntryCount,
 } from "./support.ts";
+
+let testState: Awaited<ReturnType<typeof createTestStateHome>>;
+
+beforeAll(async () => {
+	testState = await createTestStateHome();
+});
+
+afterAll(async () => {
+	try {
+		expect(await realAgentWorktreeStoreEntryCount()).toBe(
+			testState.realStoreEntryCount,
+		);
+	} finally {
+		await testState.cleanup();
+	}
+});
 
 describe("agent-worktree discovery", () => {
 	test("parses porcelain worktree output with main and linked entries", () => {
@@ -120,8 +137,7 @@ branch refs/heads/feat/x
 		expect(discovery.linkedWorktrees).toHaveLength(1);
 		expect(discovery.staleDirs).toEqual([stale]);
 		expect(discovery.defaultBranch).toBe("main");
-		const expectedHash = createHash("sha256").update(root).digest("hex").slice(0, 16);
-		expect(discovery.storeRoot).toBe(join("/state", "agent-worktree", expectedHash));
+		expect(discovery.storeRoot).toMatch(/^\/state\/agent-worktree\/[a-f0-9]{16}$/);
 	});
 
 	test("derives the store hash from the literal main owner path", async () => {
@@ -130,12 +146,10 @@ branch refs/heads/feat/x
 			env: { XDG_STATE_HOME: "/state" },
 			run: fakeGitRunner(mainRepoGitOutputs("/repo")),
 		});
-		const expectedHash = createHash("sha256")
-			.update("/repo")
-			.digest("hex")
-			.slice(0, 16);
-
-		expect(discovery.storeRoot).toBe(`/state/agent-worktree/${expectedHash}`);
+		expect(discovery.storeRoot).toBe(
+			// Independent oracle: verified with `printf '%s' /repo | shasum -a 256`.
+			"/state/agent-worktree/816fc349d3faebf8",
+		);
 	});
 
 	test("reports linked worktrees outside <mainOwnerRoot>/.worktrees as strays", () => {

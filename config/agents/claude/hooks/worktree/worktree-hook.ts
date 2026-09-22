@@ -291,6 +291,8 @@ function listWorktrees(
 }
 
 function parseWorktreeListing(raw: string): RuntimeWorktree[] {
+	// discovery.ts parseWorktreePorcelain owns this format; it is restated here
+	// because the hook and runtime use separate TypeScript configurations.
 	return raw
 		.trim()
 		.split(/\n\s*\n/)
