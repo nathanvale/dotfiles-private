@@ -1,12 +1,46 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
-import { doctorMapFromDiscovery, runDoctor } from "../src/doctor.ts";
+import { doctorMapFromDiscovery, runDoctor as runDoctorInRuntime } from "../src/doctor.ts";
 import type { RepoDiscovery } from "../src/discovery.ts";
-import { createFileStore } from "../src/store.ts";
-import { fakeGitRunner, mainRepoGitOutputs } from "./support.ts";
+import {
+	createFileStore,
+	resolveAgentWorktreeStoreRoot as resolveStoreRoot,
+} from "../src/store.ts";
+import {
+	createTestStateHome,
+	fakeGitRunner,
+	mainRepoGitOutputs,
+	realAgentWorktreeStoreEntryCount,
+} from "./support.ts";
+
+let testState: Awaited<ReturnType<typeof createTestStateHome>>;
+
+beforeAll(async () => {
+	testState = await createTestStateHome();
+});
+
+afterAll(async () => {
+	try {
+		expect(await realAgentWorktreeStoreEntryCount()).toBe(
+			testState.realStoreEntryCount,
+		);
+	} finally {
+		await testState.cleanup();
+	}
+});
+
+function runDoctor(
+	options: Parameters<typeof runDoctorInRuntime>[0],
+) {
+	return runDoctorInRuntime({ ...options, env: testState.env });
+}
+
+function resolveAgentWorktreeStoreRoot(root: string): string {
+	return resolveStoreRoot(root, testState.env);
+}
 
 describe("agent-worktree doctor", () => {
 	test("returns a blocked map when git root cannot be read", async () => {
@@ -23,6 +57,10 @@ describe("agent-worktree doctor", () => {
 		expect(map.status).toBe("blocked");
 		expect(map.mutationReadiness).toBe("blocked");
 		expect(map.nextActions).toContain("handoff");
+		expect(map.repo.strayWorktreeCount).toBeUndefined();
+		expect(
+			map.checks.find((check) => check.id === "stray_worktrees")?.status,
+		).toBe("unknown");
 	});
 
 	test("keeps worktree list failures as unknown readable data", () => {
@@ -34,7 +72,7 @@ describe("agent-worktree doctor", () => {
 			worktrees: [],
 			linkedWorktrees: [],
 			staleDirs: [],
-			storeRoot: "/repo/.agent-worktree",
+			storeRoot: "/state/agent-worktree/repo-hash",
 			issues: [
 				{
 					code: "worktree_list_failed",
@@ -60,7 +98,7 @@ describe("agent-worktree doctor", () => {
 			worktrees: [],
 			linkedWorktrees: [],
 			staleDirs: [],
-			storeRoot: "/repo/.agent-worktree",
+			storeRoot: "/state/agent-worktree/repo-hash",
 			issues: [
 				{
 					code: "current_branch_failed",
@@ -158,9 +196,135 @@ branch refs/heads/feat/x
 		).toContain("feat/x:dirty");
 	});
 
+	test("warns with the stray paths when a linked worktree lives outside .worktrees", () => {
+		const stray = {
+			path: "/repo/.claude/worktrees/feat-z",
+			branch: "feat/z",
+			isMain: false,
+			detached: false,
+			prunable: false,
+		};
+		const discovery = {
+			requestedRoot: "/repo",
+			gitRoot: "/repo",
+			isolation: "main",
+			mainOwnerRoot: "/repo",
+			worktrees: [
+				{ path: "/repo", branch: "main", isMain: true, detached: false, prunable: false },
+				stray,
+			],
+			linkedWorktrees: [stray],
+			staleDirs: [],
+			defaultBranch: "main",
+			storeRoot: "/state/agent-worktree/repo-hash",
+			issues: [],
+		} satisfies RepoDiscovery;
+
+		const map = doctorMapFromDiscovery(discovery);
+		const check = map.checks.find((entry) => entry.id === "stray_worktrees");
+
+		expect(map.status).toBe("warn");
+		expect(map.mutationReadiness).toBe("ready");
+		expect(map.repo.strayWorktreeCount).toBe(1);
+		expect(check?.status).toBe("warn");
+		expect(check?.summary).toBe(
+			"1 linked worktree lives outside .worktrees: /repo/.claude/worktrees/feat-z",
+		);
+	});
+
+	test("keeps stray worktrees unknown when the worktree list could not be read", () => {
+		const discovery = {
+			requestedRoot: "/repo",
+			gitRoot: "/repo",
+			isolation: "main",
+			mainOwnerRoot: "/repo",
+			worktrees: [],
+			linkedWorktrees: [],
+			staleDirs: [],
+			storeRoot: "/state/agent-worktree/repo-hash",
+			issues: [
+				{
+					code: "worktree_list_failed",
+					status: "unknown",
+					summary: "Git worktree list failed.",
+				},
+			],
+		} satisfies RepoDiscovery;
+
+		const map = doctorMapFromDiscovery(discovery);
+		const check = map.checks.find(
+			(entry) => entry.id === "stray_worktrees",
+		);
+
+		expect(check?.status).toBe("unknown");
+		expect(check?.summary).toBe(
+			"Stray worktrees unknown until the worktree list can be read.",
+		);
+		expect(map.repo.strayWorktreeCount).toBeUndefined();
+	});
+
+	test("keeps stray worktrees unknown when the main owner root is unavailable", () => {
+		const linked = {
+			path: "/elsewhere/feat-x",
+			branch: "feat/x",
+			isMain: false,
+			detached: false,
+			prunable: false,
+		};
+		const discovery = {
+			requestedRoot: "/repo",
+			gitRoot: "/repo",
+			worktrees: [linked],
+			linkedWorktrees: [linked],
+			staleDirs: [],
+			issues: [],
+		} satisfies RepoDiscovery;
+
+		const map = doctorMapFromDiscovery(discovery);
+		const check = map.checks.find((entry) => entry.id === "stray_worktrees");
+
+		expect(map.repo.strayWorktreeCount).toBeUndefined();
+		expect(check?.status).toBe("unknown");
+		expect(check?.summary).toBe(
+			"Stray worktrees unknown until repo ownership is resolved.",
+		);
+	});
+
+	test("reports ok when every linked worktree lives under .worktrees", () => {
+		const owned = {
+			path: "/repo/.worktrees/feat-x",
+			branch: "feat/x",
+			isMain: false,
+			detached: false,
+			prunable: false,
+		};
+		const discovery = {
+			requestedRoot: "/repo",
+			gitRoot: "/repo",
+			isolation: "main",
+			mainOwnerRoot: "/repo",
+			worktrees: [
+				{ path: "/repo", branch: "main", isMain: true, detached: false, prunable: false },
+				owned,
+			],
+			linkedWorktrees: [owned],
+			staleDirs: [],
+			defaultBranch: "main",
+			storeRoot: "/state/agent-worktree/repo-hash",
+			issues: [],
+		} satisfies RepoDiscovery;
+
+		const map = doctorMapFromDiscovery(discovery);
+
+		expect(map.repo.strayWorktreeCount).toBe(0);
+		expect(
+			map.checks.find((entry) => entry.id === "stray_worktrees")?.status,
+		).toBe("ok");
+	});
+
 	test("warns when durable records exceed retention threshold", async () => {
 		const root = await mkdtemp(join(tmpdir(), "agent-worktree-retention-"));
-		const store = createFileStore(join(root, ".agent-worktree"));
+		const store = createFileStore(resolveAgentWorktreeStoreRoot(root));
 		await store.writeRun({
 			runId: "old-run",
 			command: "refresh",

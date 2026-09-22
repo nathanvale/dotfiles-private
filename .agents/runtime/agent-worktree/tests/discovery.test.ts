@@ -1,17 +1,36 @@
-import { mkdtemp, mkdir } from "node:fs/promises";
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import {
 	discoverRepo,
+	findStrayWorktrees,
 	parseWorktreePorcelain,
 } from "../src/discovery.ts";
 import {
 	fakeGitRunner,
 	linkedRepoGitOutputs,
 	mainRepoGitOutputs,
+	createTestStateHome,
+	realAgentWorktreeStoreEntryCount,
 } from "./support.ts";
+
+let testState: Awaited<ReturnType<typeof createTestStateHome>>;
+
+beforeAll(async () => {
+	testState = await createTestStateHome();
+});
+
+afterAll(async () => {
+	try {
+		expect(await realAgentWorktreeStoreEntryCount()).toBe(
+			testState.realStoreEntryCount,
+		);
+	} finally {
+		await testState.cleanup();
+	}
+});
 
 describe("agent-worktree discovery", () => {
 	test("parses porcelain worktree output with main and linked entries", () => {
@@ -88,6 +107,7 @@ locked
 
 		const discovery = await discoverRepo({
 			cwd: linked,
+			env: { XDG_STATE_HOME: "/state" },
 			run: fakeGitRunner({
 				["git rev-parse --show-toplevel"]: `${root}\n`,
 				["git rev-parse --git-dir"]: `${join(
@@ -117,7 +137,122 @@ branch refs/heads/feat/x
 		expect(discovery.linkedWorktrees).toHaveLength(1);
 		expect(discovery.staleDirs).toEqual([stale]);
 		expect(discovery.defaultBranch).toBe("main");
-		expect(discovery.storeRoot).toBe(join(root, ".agent-worktree"));
+		expect(discovery.storeRoot).toMatch(/^\/state\/agent-worktree\/[a-f0-9]{16}$/);
+	});
+
+	test("derives the store hash from the literal main owner path", async () => {
+		const discovery = await discoverRepo({
+			cwd: "/repo",
+			env: { XDG_STATE_HOME: "/state" },
+			run: fakeGitRunner(mainRepoGitOutputs("/repo")),
+		});
+		expect(discovery.storeRoot).toBe(
+			// Independent oracle: verified with `printf '%s' /repo | shasum -a 256`.
+			"/state/agent-worktree/816fc349d3faebf8",
+		);
+	});
+
+	test("does not resolve an owner or store from a linked checkout when worktree listing fails", async () => {
+		const linkedRoot = "/repo/.worktrees/feat-x";
+		const outputs = linkedRepoGitOutputs("/repo", linkedRoot);
+		outputs["git rev-parse --show-toplevel"] = `${linkedRoot}\n`;
+		delete outputs["git worktree list --porcelain"];
+
+		const discovery = await discoverRepo({
+			cwd: linkedRoot,
+			env: { XDG_STATE_HOME: "/state" },
+			run: fakeGitRunner(outputs),
+		});
+
+		expect(discovery.isolation).toBe("linked_worktree");
+		expect(discovery.gitRoot).toBe(linkedRoot);
+		expect(discovery.mainOwnerRoot).toBeUndefined();
+		expect(discovery.storeRoot).toBeUndefined();
+		expect(discovery.staleDirs).toEqual([]);
+		expect(discovery.issues).toContainEqual({
+			code: "worktree_list_failed",
+			status: "unknown",
+			summary: "Git worktree list could not be read.",
+		});
+	});
+
+	test("uses a proven main checkout as owner when worktree listing fails", async () => {
+		const outputs = mainRepoGitOutputs("/repo");
+		delete outputs["git worktree list --porcelain"];
+
+		const discovery = await discoverRepo({
+			cwd: "/repo",
+			env: { XDG_STATE_HOME: "/state" },
+			run: fakeGitRunner(outputs),
+		});
+
+		expect(discovery.isolation).toBe("main");
+		expect(discovery.mainOwnerRoot).toBe("/repo");
+		expect(discovery.storeRoot).toBe(
+			// Independent oracle: verified with `printf '%s' /repo | shasum -a 256`.
+			"/state/agent-worktree/816fc349d3faebf8",
+		);
+		expect(discovery.issues).toContainEqual({
+			code: "worktree_list_failed",
+			status: "unknown",
+			summary: "Git worktree list could not be read.",
+		});
+	});
+
+	test("does not classify worktree directories as stale without a worktree list", async () => {
+		const root = await mkdtemp(join(tmpdir(), "agent-worktree-list-failed-"));
+		try {
+			await mkdir(join(root, ".worktrees", "feat-x"), { recursive: true });
+			const outputs = mainRepoGitOutputs(root);
+			delete outputs["git worktree list --porcelain"];
+
+			const discovery = await discoverRepo({
+				cwd: root,
+				run: fakeGitRunner(outputs),
+			});
+
+			expect(discovery.mainOwnerRoot).toBe(root);
+			expect(discovery.staleDirs).toEqual([]);
+		} finally {
+			await rm(root, { recursive: true, force: true });
+		}
+	});
+
+	test("reports linked worktrees outside <mainOwnerRoot>/.worktrees as strays", () => {
+		const owned = {
+			path: "/repo/.worktrees/feat-x",
+			branch: "feat/x",
+			isMain: false,
+			detached: false,
+			prunable: false,
+		};
+		const sibling = {
+			path: "/code/.worktrees/repo-feat-y",
+			branch: "feat/y",
+			isMain: false,
+			detached: false,
+			prunable: false,
+		};
+		const claudeDefault = {
+			path: "/repo/.claude/worktrees/feat-z",
+			branch: "feat/z",
+			isMain: false,
+			detached: false,
+			prunable: false,
+		};
+
+		const strays = findStrayWorktrees({
+			mainOwnerRoot: "/repo",
+			linkedWorktrees: [owned, sibling, claudeDefault],
+		});
+
+		expect(strays.map((worktree) => worktree.path)).toEqual([
+			"/code/.worktrees/repo-feat-y",
+			"/repo/.claude/worktrees/feat-z",
+		]);
+		expect(
+			findStrayWorktrees({ mainOwnerRoot: undefined, linkedWorktrees: [sibling] }),
+		).toEqual([]);
 	});
 
 	test("classifies a normal checkout when resolved git dirs match", async () => {

@@ -24,6 +24,7 @@ import {
 	deleteWorktree,
 	type LifecycleResult,
 	registerCodexProject,
+	findStrayWorktrees,
 } from "../../../../../../.agents/runtime/agent-worktree/src/index.ts";
 import {
 	WORKTREE_COMMAND_ORDER,
@@ -545,6 +546,10 @@ async function statusSuccessData(runtime: WorkTreeRuntime): Promise<CommandResul
 			workspace_state: state,
 			worktree_count: worktrees.length,
 			linked_worktree_count: linked.length,
+			stray_worktree_count: findStrayWorktrees({
+				mainOwnerRoot: ownerRoot,
+				linkedWorktrees: linked,
+			}).length,
 			worktrees: worktrees.map((worktree) => {
 				const prefs = registry.branches[worktree.branch] ?? {};
 				return {

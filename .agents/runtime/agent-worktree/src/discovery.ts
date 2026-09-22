@@ -2,6 +2,7 @@ import { readdir } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 
 import type { AgentWorktreeSeam } from "./model.ts";
+import { resolveAgentWorktreeStoreRoot } from "./store.ts";
 
 /**
  * Captured subprocess result from a git invocation.
@@ -138,7 +139,7 @@ export interface RepoDiscovery {
 	currentBranch?: string;
 	/** Default branch short name when it can be inferred. */
 	defaultBranch?: string;
-	/** Main-owner durable store root. */
+	/** Resolved state-owned durable store root. */
 	storeRoot?: string;
 	/** Non-fatal issues collected during discovery. */
 	issues: readonly DiscoveryIssue[];
@@ -157,6 +158,8 @@ export interface DiscoverRepoOptions {
 	cwd: string;
 	/** Git runner. Defaults to Bun subprocesses. */
 	run?: GitRunner;
+	/** Environment used to resolve the state-owned durable store root. */
+	env?: Readonly<Record<string, string | undefined>>;
 }
 
 /**
@@ -289,21 +292,25 @@ export async function discoverRepo(
 		});
 	}
 
+	const listedMainOwnerRoot = worktrees.find(
+		(worktree) => worktree.isMain && worktree.path,
+	)?.path;
 	const mainOwnerRoot =
-		worktrees.find((worktree) => worktree.isMain)?.path ?? gitRoot;
+		listedMainOwnerRoot ??
+		(isolation === "main" ? gitRoot : undefined);
 	const activeWorktree =
 		findActiveWorktree(requestedRoot, worktrees) ??
 		worktrees.find((worktree) => worktree.path === gitRoot);
-	const staleDirs = await findStaleWorktreeDirs(mainOwnerRoot, worktrees).catch(
-		() => {
-			issues.push({
-				code: "stale_dir_scan_failed",
-				status: "warn",
-				summary: "Stale worktree directory scan failed.",
-			});
-			return [] as string[];
-		},
-	);
+	const staleDirs = listedMainOwnerRoot
+		? await findStaleWorktreeDirs(listedMainOwnerRoot, worktrees).catch(() => {
+				issues.push({
+					code: "stale_dir_scan_failed",
+					status: "warn",
+					summary: "Stale worktree directory scan failed.",
+				});
+				return [] as string[];
+			})
+		: [];
 
 	return {
 		requestedRoot,
@@ -316,7 +323,9 @@ export async function discoverRepo(
 		staleDirs,
 		currentBranch: branchResult.ok ? branchResult.stdout.trim() : undefined,
 		defaultBranch,
-		storeRoot: join(mainOwnerRoot, ".agent-worktree"),
+		storeRoot: mainOwnerRoot
+			? resolveAgentWorktreeStoreRoot(mainOwnerRoot, options.env)
+			: undefined,
 		issues,
 	};
 }
@@ -456,6 +465,32 @@ function findActiveWorktree(
 				requestedRoot === worktree.path ||
 				requestedRoot.startsWith(`${worktree.path}/`),
 		);
+}
+
+/**
+ * Linked worktrees checked out outside `<mainOwnerRoot>/.worktrees/`.
+ *
+ * Every harness is meant to land checkouts under the main owner's `.worktrees`
+ * directory; anything elsewhere is sprawl that `doctor` and the WorkTree
+ * skill's `status` surface.
+ *
+ * @param discovery - Main owner root and linked worktree records
+ * @returns Linked worktrees outside the owned `.worktrees` directory
+ *
+ * @example
+ * ```typescript
+ * const strays = findStrayWorktrees(discovery)
+ * ```
+ */
+export function findStrayWorktrees<T extends { path: string }>(discovery: {
+	mainOwnerRoot?: string;
+	linkedWorktrees: readonly T[];
+}): readonly T[] {
+	if (!discovery.mainOwnerRoot) return [];
+	const ownedPrefix = `${join(discovery.mainOwnerRoot, ".worktrees")}/`;
+	return discovery.linkedWorktrees.filter(
+		(worktree) => !worktree.path.startsWith(ownedPrefix),
+	);
 }
 
 async function findStaleWorktreeDirs(

@@ -1,3 +1,5 @@
+import { mkdtemp, readdir, rm } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
 import { basename, join } from "node:path";
 
 import { main, type AgentWorktreeCliRuntime } from "../src/cli.ts";
@@ -54,6 +56,42 @@ export interface TestTextCliRun {
 	exitCode: number;
 	/** Raw stdout bytes emitted by the CLI. */
 	output: string;
+}
+
+export type TestStoreEnv = Readonly<Record<string, string | undefined>>;
+
+export interface TestStateHome {
+	env: TestStoreEnv;
+	realStoreEntryCount: number;
+	cleanup(): Promise<void>;
+}
+
+/**
+ * Create an isolated XDG state home and capture the real store entry count.
+ *
+ * @returns Test environment and the independent home-state observation
+ */
+export async function createTestStateHome(): Promise<TestStateHome> {
+	const stateHome = await mkdtemp(join(tmpdir(), "agent-worktree-test-state-"));
+	return {
+		env: { XDG_STATE_HOME: stateHome },
+		realStoreEntryCount: await realAgentWorktreeStoreEntryCount(),
+		cleanup: () => rm(stateHome, { recursive: true, force: true }),
+	};
+}
+
+/**
+ * Count entries in the real durable store without creating its parent.
+ *
+ * @returns Number of real home store entries
+ */
+export async function realAgentWorktreeStoreEntryCount(): Promise<number> {
+	try {
+		return (await readdir(join(homedir(), ".local", "state", "agent-worktree")))
+			.length;
+	} catch {
+		return 0;
+	}
 }
 
 /**
@@ -232,10 +270,12 @@ branch refs/heads/${branch}
 export function repoRuntime(
 	root: string,
 	outputs: Record<string, string> = mainRepoGitOutputs(root),
+	env?: TestStoreEnv,
 ): Partial<AgentWorktreeCliRuntime> {
 	return {
 		cwd: () => root,
 		now: () => 1,
 		run: fakeGitRunner(outputs),
+		env,
 	};
 }

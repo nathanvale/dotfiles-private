@@ -90,3 +90,6 @@ PROJECT_INDEX.json
 
 # Git worktrees
 .worktrees/**
+
+# legacy checkout-local store, pre XDG move; not written by current code
+.agent-worktree/

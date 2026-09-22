@@ -1,27 +1,84 @@
 import { mkdtemp, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 
 import {
-	attachWorktree,
+	attachWorktree as runAttachWorktree,
 	buildRecoveryPlan,
-	checkWorktree,
-	cleanPreview,
-	createWorktree,
-	deleteWorktree,
-	listWorktrees,
+	checkWorktree as runCheckWorktree,
+	cleanPreview as runCleanPreview,
+	createWorktree as runCreateWorktree,
+	deleteWorktree as runDeleteWorktree,
+	listWorktrees as runListWorktrees,
 	matchesWorktreePathPattern,
-	refreshWorktrees,
-	statusWorktrees,
+	refreshWorktrees as runRefreshWorktrees,
+	statusWorktrees as runStatusWorktrees,
 } from "../src/worktrees.ts";
 import { inspectRefFromRoot } from "../src/inspect.ts";
-import { createFileStore } from "../src/store.ts";
+import {
+	createFileStore,
+	resolveAgentWorktreeStoreRoot as resolveStoreRoot,
+} from "../src/store.ts";
 import {
 	fakeGitRunner,
 	linkedRepoGitOutputs,
 	mainRepoGitOutputs,
+	createTestStateHome,
+	realAgentWorktreeStoreEntryCount,
 } from "./support.ts";
+
+let testState: Awaited<ReturnType<typeof createTestStateHome>>;
+
+beforeAll(async () => {
+	testState = await createTestStateHome();
+});
+
+afterAll(async () => {
+	try {
+		expect(await realAgentWorktreeStoreEntryCount()).toBe(
+			testState.realStoreEntryCount,
+		);
+	} finally {
+		await testState.cleanup();
+	}
+});
+
+function attachWorktree(options: Parameters<typeof runAttachWorktree>[0]) {
+	return runAttachWorktree({ ...options, env: testState.env });
+}
+
+function checkWorktree(options: Parameters<typeof runCheckWorktree>[0]) {
+	return runCheckWorktree({ ...options, env: testState.env });
+}
+
+function cleanPreview(options: Parameters<typeof runCleanPreview>[0]) {
+	return runCleanPreview({ ...options, env: testState.env });
+}
+
+function createWorktree(options: Parameters<typeof runCreateWorktree>[0]) {
+	return runCreateWorktree({ ...options, env: testState.env });
+}
+
+function deleteWorktree(options: Parameters<typeof runDeleteWorktree>[0]) {
+	return runDeleteWorktree({ ...options, env: testState.env });
+}
+
+function listWorktrees(options: Parameters<typeof runListWorktrees>[0]) {
+	return runListWorktrees({ ...options, env: testState.env });
+}
+
+function refreshWorktrees(options: Parameters<typeof runRefreshWorktrees>[0]) {
+	return runRefreshWorktrees({ ...options, env: testState.env });
+}
+
+function statusWorktrees(options: Parameters<typeof runStatusWorktrees>[0]) {
+	return runStatusWorktrees({ ...options, env: testState.env });
+}
+
+function resolveAgentWorktreeStoreRoot(root: string): string {
+	return resolveStoreRoot(root, testState.env);
+}
 
 describe("agent-worktree lifecycle reads", () => {
 	test("daily list and status hide configured worktree path patterns", async () => {
@@ -724,7 +781,7 @@ branch refs/heads/pr-42
 			expect(calls).toContain(`git worktree add ${target} pr-42`);
 			expect(calls.some((call) => call.includes("FETCH_HEAD"))).toBe(false);
 			const stored = await createFileStore(
-				join(root, ".agent-worktree"),
+				resolveAgentWorktreeStoreRoot(root),
 			).readRun("attach_pr");
 			expect(stored?.steps.map((step) => step.id)).toEqual([
 				"fetch_pr",
@@ -765,7 +822,7 @@ branch refs/heads/pr-42
 				calls.findIndex((call) => call.includes("gh pr checkout")),
 			);
 			const stored = await createFileStore(
-				join(root, ".agent-worktree"),
+				resolveAgentWorktreeStoreRoot(root),
 			).readRun("attach_track");
 			expect(stored?.steps.map((step) => step.id)).toEqual([
 				"attach_worktree",
@@ -907,7 +964,7 @@ branch refs/heads/pr-42
 				},
 			});
 			const stored = await createFileStore(
-				join(root, ".agent-worktree"),
+				resolveAgentWorktreeStoreRoot(root),
 			).readRun("attach_gh-fail");
 			expect(stored?.steps).toEqual([
 				expect.objectContaining({
@@ -967,7 +1024,7 @@ branch refs/heads/pr-42
 				},
 			});
 			const stored = await createFileStore(
-				join(root, ".agent-worktree"),
+				resolveAgentWorktreeStoreRoot(root),
 			).readRun("attach_pr-add");
 			expect(stored?.steps).toEqual([
 				expect.objectContaining({
@@ -1422,7 +1479,7 @@ branch refs/heads/pr-42
 		});
 
 		const inspected = await inspectRefFromRoot(
-			join(root, ".agent-worktree"),
+			resolveAgentWorktreeStoreRoot(root),
 			"failure:facade_run/delete_branch",
 		);
 		expect(inspected?.found).toBe(true);
@@ -1430,7 +1487,7 @@ branch refs/heads/pr-42
 			"partial",
 		);
 		const inspectedRun = await inspectRefFromRoot(
-			join(root, ".agent-worktree"),
+			resolveAgentWorktreeStoreRoot(root),
 			"run:facade_run",
 		);
 		expect(
@@ -1495,7 +1552,7 @@ branch refs/heads/pr-42
 		});
 
 		const inspected = await inspectRefFromRoot(
-			join(root, ".agent-worktree"),
+			resolveAgentWorktreeStoreRoot(root),
 			"failure:facade_run/preflight_blocked",
 		);
 		expect(inspected?.found).toBe(true);
@@ -1536,7 +1593,7 @@ detached
 
 		expect(result.changedState).toBe("complete");
 		const records = await createFileStore(
-			join(root, ".agent-worktree"),
+			resolveAgentWorktreeStoreRoot(root),
 		).listWorktrees();
 		const detachedIds = records
 			.filter((record) => record.branch === "(detached)")

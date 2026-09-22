@@ -101,9 +101,6 @@ bin/kgp
 # Homebrew trust lock (generated at runtime by brew trust)
 config/homebrew/trust.json.lock
 
-# Agent worktree runtime state (generated)
-.agent-worktree/
-
 # Fallow audit caches (generated)
 /.fallow/
 

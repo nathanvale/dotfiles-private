@@ -33,17 +33,16 @@ Codex re-approval step, not a file change.
 
 ## `disableAllHooks` retires the whole surface
 
-- One `settings.json` key trades every hook for its tokens: all six configured
-  events, including the `Stop` and `PreCompact` chains, plus the custom status
-  line and any custom file-suggestion command.
+- One `settings.json` key trades every hook for its tokens: every configured
+  hook event, plus the custom status line and any custom file-suggestion
+  command.
 - Nothing reports the loss. Silence is the failure mode here too.
 - Trim hooks one declaration at a time.
 
 ## Owner
 
 - Existing non-plugin hook scripts: `config/agents/claude/hooks/`.
-- Hook declarations: `config/agents/claude/hooks.json` and
-  `config/agents/codex/hooks.json`.
+- Hook declarations: Claude gates live in `config/agents/claude/settings.json`; reserve `config/agents/claude/hooks.json` for `InstructionsLoaded`; Codex uses `config/agents/codex/hooks.json`.
 - Biome, Fallow, and TypeScript quality gates come only from
   `config/agents/plugins/proof/hooks/`, with its own `hooks/claude/hooks.json`
   and `hooks/codex/hooks.json` per harness.

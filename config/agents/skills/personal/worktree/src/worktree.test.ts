@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
-import { homedir } from "node:os";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { renderCommandUsage } from "@side-quest/cli-command-facade";
 import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
 import { WORKTREE_DIAGNOSTIC_CODES, worktreeContracts } from "./command-contract.ts";
@@ -18,7 +20,44 @@ import {
 	type WorkTreeRuntime,
 } from "./worktree.ts";
 
-function runtimeFixtureFor(cwd = "/code/my-repo"): string {
+// The engine writes runtime run and failure records through the real
+// filesystem even with a fake git runner, so route them to a throwaway XDG
+// state home and prove the real store is untouched (review S8). The
+// integration test in this package carries the same guard for its spawned
+// processes.
+let unitStateHome: string;
+let previousStateHome: string | undefined;
+let realStoreEntryCountBefore: number;
+
+function realAgentWorktreeStoreEntryCount(): number {
+	try {
+		return readdirSync(join(homedir(), ".local", "state", "agent-worktree")).length;
+	} catch {
+		return 0;
+	}
+}
+
+beforeAll(() => {
+	realStoreEntryCountBefore = realAgentWorktreeStoreEntryCount();
+	previousStateHome = process.env.XDG_STATE_HOME;
+	unitStateHome = mkdtempSync(join(tmpdir(), "worktree-unit-state-"));
+	process.env.XDG_STATE_HOME = unitStateHome;
+});
+
+afterAll(() => {
+	try {
+		expect(realAgentWorktreeStoreEntryCount()).toBe(realStoreEntryCountBefore);
+	} finally {
+		if (previousStateHome === undefined) {
+			delete process.env.XDG_STATE_HOME;
+		} else {
+			process.env.XDG_STATE_HOME = previousStateHome;
+		}
+		rmSync(unitStateHome, { recursive: true, force: true });
+	}
+});
+
+function runtimeFixtureFor(cwd = "/code/my-repo", includeStray = false): string {
 	const ownerRoot = cwd.includes("/code/other-repo") ? "/code/other-repo" : "/code/my-repo";
 	return `worktree ${ownerRoot}
 HEAD abc
@@ -31,14 +70,21 @@ branch refs/heads/codex/browser-use-refactor
 worktree ${ownerRoot}/.worktrees/harden-test-runner
 HEAD ghi
 branch refs/heads/codex/harden-test-runner
-`;
+${includeStray ? `
+worktree ${ownerRoot}/outside-worktree
+HEAD jkl
+branch refs/heads/codex/stray
+` : ""}`;
 }
 
 /**
  * Build a fully in-memory runtime: no real fs, subprocess, or VS Code.
  * Tracks writes so tests can assert on the rendered workspace.
  */
-function fakeRuntime(overrides: Partial<WorkTreeRuntime> = {}): WorkTreeRuntime & {
+function fakeRuntime(
+	overrides: Partial<WorkTreeRuntime> = {},
+	includeStray = false,
+): WorkTreeRuntime & {
 	writes: Map<string, string>;
 	runCalls: string[][];
 	launched: Array<{ workspacePath: string; codeBin?: string }>;
@@ -83,7 +129,7 @@ function fakeRuntime(overrides: Partial<WorkTreeRuntime> = {}): WorkTreeRuntime 
 					: `${ownerRoot}/.git\n`,
 				"git rev-parse --git-common-dir": `${ownerRoot}/.git\n`,
 				"git rev-parse --show-superproject-working-tree": "\n",
-				"git worktree list --porcelain": runtimeFixtureFor(options?.cwd),
+				"git worktree list --porcelain": runtimeFixtureFor(options?.cwd, includeStray),
 				"git branch --show-current": "main\n",
 				"git symbolic-ref --short refs/remotes/origin/HEAD": "origin/main\n",
 				"git status --porcelain": "",
@@ -341,6 +387,7 @@ describe("status front door", () => {
 			workspace_state: "missing",
 			worktree_count: 3,
 			linked_worktree_count: 2,
+			stray_worktree_count: 0,
 			next_safe_action: "Choose a linked branch to open in Codex App, or render the workspace.",
 		});
 		expect(data.front_door).toMatchObject({
@@ -368,6 +415,20 @@ describe("status front door", () => {
 				}),
 			]),
 		);
+	});
+
+	test("reports one stray worktree when the discovered list contains one", async () => {
+		const result = await runCommand(
+			{ command: "status", positionals: [], force: false },
+			fakeRuntime({}, true),
+		);
+		const data = expectOkData(result);
+
+		expect(data).toMatchObject({
+			worktree_count: 4,
+			linked_worktree_count: 3,
+			stray_worktree_count: 1,
+		});
 	});
 
 	test("points at drift recovery when the workspace is hand-edited", async () => {

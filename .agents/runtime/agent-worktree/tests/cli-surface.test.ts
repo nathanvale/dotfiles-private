@@ -1,7 +1,7 @@
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { renderCommandUsage } from "@side-quest/cli-command-facade";
 import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
 
@@ -13,14 +13,49 @@ import {
 	AGENT_WORKTREE_HUMAN_HANDOFF_REASONS,
 	AGENT_WORKTREE_LIFECYCLE_REASONS,
 } from "../src/model.ts";
-import { createFileStore } from "../src/store.ts";
+import {
+	createFileStore,
+	resolveAgentWorktreeStoreRoot as resolveStoreRoot,
+} from "../src/store.ts";
 import {
 	mainRepoGitOutputs,
 	linkedRepoGitOutputs,
 	repoRuntime,
-	runJsonCli,
+	runJsonCli as runJsonCliInSupport,
 	type TestJsonEnvelope,
+	createTestStateHome,
+	realAgentWorktreeStoreEntryCount,
 } from "./support.ts";
+
+let testState: Awaited<ReturnType<typeof createTestStateHome>>;
+
+beforeAll(async () => {
+	testState = await createTestStateHome();
+});
+
+afterAll(async () => {
+	try {
+		expect(await realAgentWorktreeStoreEntryCount()).toBe(
+			testState.realStoreEntryCount,
+		);
+	} finally {
+		await testState.cleanup();
+	}
+});
+
+async function runJsonCli(
+	argv: readonly string[],
+	options: Parameters<typeof runJsonCliInSupport>[1] = {},
+) {
+	return runJsonCliInSupport(argv, {
+		...options,
+		runtime: { ...options.runtime, env: testState.env },
+	});
+}
+
+function resolveAgentWorktreeStoreRoot(root: string): string {
+	return resolveStoreRoot(root, testState.env);
+}
 
 describe("agent-worktree CLI surface", () => {
 	test("every advertised flag appears in rendered help", () => {
@@ -362,7 +397,7 @@ describe("agent-worktree CLI surface", () => {
 
 	test("recover resolves refs from the durable store before returning ok", async () => {
 		const root = await mkdtemp(join(tmpdir(), "agent-worktree-cli-recover-"));
-		const store = createFileStore(join(root, ".agent-worktree"));
+		const store = createFileStore(resolveAgentWorktreeStoreRoot(root));
 		await store.writeFailure({
 			ref: { kind: "failure", id: "run-1/delete_branch" },
 			runId: "run-1",

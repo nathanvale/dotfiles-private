@@ -172,7 +172,7 @@ export const AGENT_WORKTREE_BACKUP_REF_TEMPLATE =
 	"refs/agent-worktree/backups/<branch>/<run-id>" as const;
 
 /**
- * Store subdirectories owned by the main-owner `.agent-worktree/` store.
+ * Store subdirectories owned by the state-owned agent-worktree store.
  *
  * These names mirror the durable typed-ref families v1 needs to inspect after
  * partial failures without transcript context.

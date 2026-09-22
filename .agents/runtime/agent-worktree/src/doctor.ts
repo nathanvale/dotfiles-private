@@ -7,11 +7,13 @@ import {
 	type AgentWorktreeStatus,
 } from "./model.ts";
 import {
+	type DiscoveredWorktree,
 	type DiscoverRepoOptions,
 	type DiscoveryIssue,
 	defaultGitRunner,
 	type RepoDiscovery,
 	discoverRepo,
+	findStrayWorktrees,
 } from "./discovery.ts";
 import { mutationReadinessFromBranchSafetyDecision } from "./merge-intelligence.ts";
 import { createFileStore } from "./store.ts";
@@ -34,6 +36,7 @@ export const DOCTOR_CHECK_IDS = [
 	"current_branch",
 	"default_branch",
 	"stale_dirs",
+	"stray_worktrees",
 ] as const;
 
 /**
@@ -102,7 +105,7 @@ export interface DoctorRepoSummary {
 	gitRoot?: string;
 	/** Git repository isolation for the invocation cwd. */
 	isolation?: RepoDiscovery["isolation"];
-	/** Main owner root where `.agent-worktree` lives. */
+	/** Main owner root used to derive the durable store location. */
 	mainOwnerRoot?: string;
 	/** Active worktree path for the current cwd. */
 	activeWorktree?: string;
@@ -116,6 +119,8 @@ export interface DoctorRepoSummary {
 	linkedWorktreeCount: number;
 	/** Number of stale dirs under `.worktrees`. */
 	staleDirCount: number;
+	/** Number of linked worktrees checked out outside `.worktrees`, when known. */
+	strayWorktreeCount?: number;
 }
 
 interface DoctorRuntimeContext {
@@ -141,7 +146,11 @@ export async function runDoctor(
 	options: DiscoverRepoOptions & { now?: () => number },
 ): Promise<DoctorMap> {
 	const run = options.run ?? defaultGitRunner;
-	const discovery = await discoverRepo({ cwd: options.cwd, run });
+	const discovery = await discoverRepo({
+		cwd: options.cwd,
+		run,
+		env: options.env,
+	});
 	const [mutationStatuses, retention] = await Promise.all([
 		discovery.gitRoot
 			? statusWorktreesForDiscovery(discovery, { cwd: options.cwd, run })
@@ -174,6 +183,8 @@ function doctorMapFromDiscoveryWithContext(
 	context: DoctorRuntimeContext,
 ): DoctorMap {
 	const issueChecks = checksFromDiscoveryIssues(discovery);
+	const strays = findStrayWorktrees(discovery);
+	const strayWorktreeCountKnown = isStrayWorktreeCountKnown(discovery);
 	const checks: DoctorCheck[] = [
 		repoCheck(discovery),
 		worktreesCheck(discovery),
@@ -181,6 +192,7 @@ function doctorMapFromDiscoveryWithContext(
 		contractCheck(),
 		dependenciesCheck(discovery),
 		mutationsCheck(discovery, context),
+		strayWorktreesCheck(discovery, strays),
 		...issueChecks,
 	];
 	const aggregate = aggregateDoctorMap(checks);
@@ -196,6 +208,9 @@ function doctorMapFromDiscoveryWithContext(
 			storeRoot: discovery.storeRoot,
 			linkedWorktreeCount: discovery.linkedWorktrees.length,
 			staleDirCount: discovery.staleDirs.length,
+			...(strayWorktreeCountKnown
+				? { strayWorktreeCount: strays.length }
+				: {}),
 		},
 		availableCommands: AGENT_WORKTREE_COMMANDS,
 	};
@@ -278,6 +293,46 @@ function worktreesCheck(discovery: RepoDiscovery): DoctorCheck {
 		blockers: [],
 		nextActions: discovery.staleDirs.length > 0 ? ["clean"] : [],
 	};
+}
+
+function strayWorktreesCheck(
+	discovery: RepoDiscovery,
+	strays: readonly DiscoveredWorktree[],
+): DoctorCheck {
+	if (!isStrayWorktreeCountKnown(discovery)) {
+		return {
+			id: "stray_worktrees",
+			owner: "discovery",
+			status: "unknown",
+			summary:
+				discovery.mainOwnerRoot === undefined
+					? "Stray worktrees unknown until repo ownership is resolved."
+					: "Stray worktrees unknown until the worktree list can be read.",
+			blockers: [],
+			nextActions: ["doctor"],
+		};
+	}
+	const noun = strays.length === 1 ? "worktree lives" : "worktrees live";
+	return {
+		id: "stray_worktrees",
+		owner: "discovery",
+		status: strays.length > 0 ? "warn" : "ok",
+		summary:
+			strays.length === 0
+				? "All linked worktrees live under .worktrees."
+				: `${strays.length} linked ${noun} outside .worktrees: ${strays
+						.map((worktree) => worktree.path)
+						.join(", ")}`,
+		blockers: [],
+		nextActions: [],
+	};
+}
+
+function isStrayWorktreeCountKnown(discovery: RepoDiscovery): boolean {
+	return (
+		discovery.mainOwnerRoot !== undefined &&
+		!discovery.issues.some((issue) => issue.code === "worktree_list_failed")
+	);
 }
 
 function storeCheck(

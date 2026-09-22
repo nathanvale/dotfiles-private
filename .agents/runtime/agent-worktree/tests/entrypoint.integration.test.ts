@@ -9,7 +9,7 @@ import {
 import { devNull, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import {
 	describeCliProcessRun,
 	parseCliProcessJson,
@@ -21,11 +21,30 @@ import {
 	AGENT_WORKTREE_CLI_NAME,
 	AGENT_WORKTREE_CONTRACT_ID,
 } from "../src/model.ts";
+import {
+	createTestStateHome,
+	realAgentWorktreeStoreEntryCount,
+} from "./support.ts";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SPAWN_TIMEOUT_MS = 15_000;
 const TEST_TIMEOUT_MS = 30_000;
 const KILL_SIGNAL = "SIGKILL";
+let testState: Awaited<ReturnType<typeof createTestStateHome>>;
+
+beforeAll(async () => {
+	testState = await createTestStateHome();
+});
+
+afterAll(async () => {
+	try {
+		expect(await realAgentWorktreeStoreEntryCount()).toBe(
+			testState.realStoreEntryCount,
+		);
+	} finally {
+		await testState.cleanup();
+	}
+});
 
 function runPackageScript(
 	script: typeof AGENT_WORKTREE_CLI_NAME,
@@ -36,6 +55,7 @@ function runPackageScript(
 		label,
 		argv: ["bun", "run", "--silent", script, ...args],
 		cwd: packageRoot,
+		env: { ...process.env, ...testState.env },
 		timeoutMs: SPAWN_TIMEOUT_MS,
 		killSignal: KILL_SIGNAL,
 	});

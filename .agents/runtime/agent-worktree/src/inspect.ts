@@ -14,7 +14,7 @@ import { normalizeProjectionOptions, summarizeProjection } from "./projection.ts
  * Resolved store target for an inspectable ref.
  *
  * The relative path is intentionally store-local. Runtime code decides the
- * absolute main-owner `.agent-worktree/` root.
+ * absolute state-owned agent-worktree store root.
  */
 export interface InspectableRefResolution {
 	/** Parsed typed ref. */
@@ -51,7 +51,7 @@ export interface InspectResult {
  *
  * @example
  * ```typescript
- * const snapshot: HandoffSnapshot = { storeRoot: "/repo/.agent-worktree", latest: [] }
+ * const snapshot: HandoffSnapshot = { storeRoot: "/state/agent-worktree/<repo-hash>", latest: [] }
  * ```
  */
 export interface HandoffSnapshot {
@@ -119,7 +119,7 @@ export function resolveInspectableRef(
  *
  * @example
  * ```typescript
- * const inspected = await inspectRef(createFileStore("/repo/.agent-worktree"), "run:abc")
+ * const inspected = await inspectRef(createFileStore("/state/agent-worktree/<repo-hash>"), "run:abc")
  * ```
  */
 export async function inspectRef(
@@ -142,12 +142,12 @@ export async function inspectRef(
 /**
  * Build a read-only handoff snapshot from durable store context.
  *
- * @param storeRoot - Main-owner `.agent-worktree` root
+ * @param storeRoot - Resolved state-owned store root
  * @returns Handoff snapshot
  *
  * @example
  * ```typescript
- * const snapshot = await buildHandoffSnapshot("/repo/.agent-worktree")
+ * const snapshot = await buildHandoffSnapshot("/state/agent-worktree/<repo-hash>")
  * ```
  */
 export async function buildHandoffSnapshot(
@@ -197,13 +197,13 @@ export async function buildHandoffSnapshot(
 /**
  * Create a file store and inspect a ref.
  *
- * @param storeRoot - Main-owner `.agent-worktree` root
+ * @param storeRoot - Resolved state-owned store root
  * @param value - Raw typed ref
  * @returns Inspect result, or null for unsupported ref syntax
  *
  * @example
  * ```typescript
- * const inspected = await inspectRefFromRoot("/repo/.agent-worktree", "failure:run/step")
+ * const inspected = await inspectRefFromRoot("/state/agent-worktree/<repo-hash>", "failure:run/step")
  * ```
  */
 export function inspectRefFromRoot(
