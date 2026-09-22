@@ -43,7 +43,14 @@ describe("translateFailure", () => {
 		const translated = translateFailure(process_("atlassian-provider:error:username-missing:JIRA_EXAMPLE_API_TOKEN needs a username field", "", 4));
 		expect(translated).toEqual({ cause: "refused-precondition", hint: "add a username field to the tenant's product credential item", contentObserved: false });
 		expect(translateFailure(process_("atlassian-provider:error:credential-context-stale:credential item changed; restart the semantic operation", "", 4)).hint).toBe("credential item metadata changed; restart the semantic operation");
-		expect(translateFailure(process_("atlassian-provider:error:log-path-invalid:the bridge log directory must be an owned directory", "", 4))).toEqual({ cause: "failed-unknown", hint: null, contentObserved: false });
+		for (const [code, hint] of [
+			["log-path-invalid", "restore the Provider's owned bridge log directory"],
+			["execve-unavailable", "run the Provider with a Bun runtime that supports process replacement"],
+			["exec-failed", "inspect the Provider executable and runtime"],
+			["injection-mismatch", "restart through the semantic dispatcher"],
+		] as const) {
+			expect(translateFailure(process_(`atlassian-provider:error:${code}:untrusted provider detail`, "", 4))).toEqual({ cause: "refused-precondition", hint, contentObserved: false });
+		}
 	});
 
 	test("every non-precondition cause carries a null hint", () => {

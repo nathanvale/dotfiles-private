@@ -72,6 +72,20 @@ describe("writePrivateFile and readPrivateFile", () => {
 		expect(readdirSync(directory)).toEqual(["session.json"]);
 	});
 
+	test("forces the temporary file to exact 0600 even under a restrictive umask", () => {
+		const directory = path.join(root, "state");
+		expect(ownedDirectory(directory)).toEqual({ ok: true });
+		const file = path.join(directory, "session.json");
+		const previous = process.umask(0o777);
+		try {
+			expect(writePrivateFile(file, "private")).toEqual({ ok: true });
+		} finally {
+			process.umask(previous);
+		}
+		expect(mode(file)).toBe(0o600);
+		expect(readPrivateFile(file)).toEqual({ ok: true, text: "private" });
+	});
+
 	test("a write refuses a missing, symlinked, wide, or non-directory parent and creates nothing", () => {
 		const real = path.join(root, "real");
 		mkdirSync(real, { mode: 0o700 });

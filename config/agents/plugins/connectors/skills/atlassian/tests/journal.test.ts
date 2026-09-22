@@ -65,8 +65,13 @@ describe("identity is a pure function of input", () => {
 		expect(objectIdentity("page.create", PAGE)).toMatch(/^space:123:create:77:[0-9a-f]{16}$/);
 		expect(objectIdentity("page.create", { ...PAGE, parentId: undefined })).toMatch(/^space:123:create:root:/);
 		expect(objectIdentity("page.create", PAGE_ALIAS)).toBe(objectIdentity("page.create", PAGE));
-		for (const bad of [{}, { issueKey: "PROJ 1" }, { ...CREATE, summary: "  " }, { ...PAGE, space: {} }]) {
-			expect(() => objectIdentity("issue.comment", bad)).toThrow(JournalError);
+		for (const [operation, bad] of [
+			["issue.comment", {}],
+			["issue.comment", { issueKey: "PROJ 1" }],
+			["issue.create", { ...CREATE, summary: "  " }],
+			["page.create", { ...PAGE, space: {} }],
+		] as const) {
+			expect(() => objectIdentity(operation, bad)).toThrow(JournalError);
 		}
 		// A space key alone, a non-canonical id, or a numeric id are not one canonical container.
 		for (const space of [{ key: "ENG" }, { id: "0123" }, { id: 123 }, { id: "ENG" }, {}]) {

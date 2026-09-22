@@ -82,7 +82,7 @@ function parseServer(document: unknown, issuer: string): DiscoveryResult {
 export async function discover(resource: string, fetchFn: Fetch): Promise<DiscoveryResult> {
 	const resourceMetadata = await firstJson(fetchFn, wellKnown(resource, "oauth-protected-resource"));
 	if (resourceMetadata === undefined) return { ok: false, reason: "resource-metadata-unavailable" };
-	if (!isRecord(resourceMetadata) || !Array.isArray(resourceMetadata.authorization_servers)) return { ok: false, reason: "resource-metadata-invalid" };
+	if (!isRecord(resourceMetadata) || resourceMetadata.resource !== resource || !Array.isArray(resourceMetadata.authorization_servers)) return { ok: false, reason: "resource-metadata-invalid" };
 	const issuer = resourceMetadata.authorization_servers[0];
 	if (!secureUrl(issuer)) return { ok: false, reason: "resource-metadata-invalid" };
 	const serverMetadata = await firstJson(fetchFn, [...wellKnown(issuer, "oauth-authorization-server"), ...wellKnown(issuer, "openid-configuration")]);

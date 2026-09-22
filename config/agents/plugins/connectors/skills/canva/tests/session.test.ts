@@ -151,6 +151,10 @@ describe("login", () => {
 	});
 
 	test("discovery refuses a server without S256, a missing registration endpoint refuses dcr, and a bad account refuses first", async () => {
+		fake.options.mismatchedResourceMetadata = true;
+		expect(causeOf(await login("personal", { noBrowser: false }, deps()))).toBe("discovery-failed");
+		expect([fake.calls.registrations, fake.calls.authorizations, fake.calls.tokenRequests]).toEqual([0, 0, 0]);
+		fake.options.mismatchedResourceMetadata = false;
 		fake.options.omitPkce = true;
 		expect(causeOf(await login("personal", { noBrowser: false }, deps()))).toBe("discovery-failed");
 		fake.options.omitPkce = false;

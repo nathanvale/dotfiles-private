@@ -634,7 +634,7 @@ describe("journaled writes", () => {
 		const envelope = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", preview.previewId], dependencies);
 		expect([envelope.result.outcome, envelope.result.causeCode, envelope.result.transactionState, envelope.result.exitCode]).toEqual(["failed", "outcome-unknown", "unknown", 3]);
 		expect(envelope.result.effects).toEqual({ completed: [], remaining: [], uncertain: ["issue:PROJ-1"], inventoryComplete: false });
-		expect(envelope.result.nextAction).toContain("adjudicate");
+		expect(envelope.result.nextAction).toBe("run adjudicate --run <result.data.runId> with the same input; never retry the write before it resolves");
 		// Preview and apply both bind the matching-comment baseline before the
 		// possible send. The immediate read-back found nothing, which proves
 		// nothing after a possible send.

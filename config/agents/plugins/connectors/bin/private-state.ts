@@ -3,7 +3,7 @@
 // Symlinks are refused everywhere by lstat. Every refusal is a closed reason;
 // no path or content is carried in it. This is not a framework: consumers
 // keep their own record formats and their own recovery policy.
-import { chmodSync, closeSync, constants, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, type Stats, writeSync } from "node:fs";
+import { chmodSync, closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, type Stats, writeSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { EnvironmentSource } from "./safe-environment.ts";
@@ -156,12 +156,19 @@ export function writePrivateFile(file: string, content: string): PrivateStateRes
 	try {
 		const fd = openSync(temp, "wx", FILE_MODE);
 		try {
+			fchmodSync(fd, FILE_MODE);
 			writeSync(fd, content);
 			fsyncSync(fd);
 		} finally {
 			closeSync(fd);
 		}
 		renameSync(temp, file);
+		const directoryFd = openSync(directory, constants.O_RDONLY);
+		try {
+			fsyncSync(directoryFd);
+		} finally {
+			closeSync(directoryFd);
+		}
 		return { ok: true };
 	} catch {
 		rmSync(temp, { force: true });

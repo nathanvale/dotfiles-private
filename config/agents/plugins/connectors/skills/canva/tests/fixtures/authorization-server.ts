@@ -9,7 +9,7 @@ export interface FakeAuthorizationServer {
 	issuer: string;
 	resource: string;
 	calls: { registrations: number; authorizations: number; tokenRequests: number; refreshRequests: number; revocations: string[] };
-	options: { consent: "grant" | "deny"; tamperState: boolean; invalidGrantNext: boolean; failRegistration: boolean; omitRegistration: boolean; omitPkce: boolean; omitRefreshOnRotate: boolean };
+	options: { consent: "grant" | "deny"; tamperState: boolean; invalidGrantNext: boolean; failRegistration: boolean; omitRegistration: boolean; omitPkce: boolean; omitRefreshOnRotate: boolean; mismatchedResourceMetadata: boolean };
 	registered: { clientId: string; redirectUris: string[] }[];
 	authorizations: { clientId: string; redirectUri: string; resource: string | null; scope: string | null; codeChallengeMethod: string | null }[];
 	tokenBodies: URLSearchParams[];
@@ -48,7 +48,7 @@ export function startAuthorizationServer(): FakeAuthorizationServer {
 		issuer: "",
 		resource: "",
 		calls: { registrations: 0, authorizations: 0, tokenRequests: 0, refreshRequests: 0, revocations: [] },
-		options: { consent: "grant", tamperState: false, invalidGrantNext: false, failRegistration: false, omitRegistration: false, omitPkce: false, omitRefreshOnRotate: false },
+		options: { consent: "grant", tamperState: false, invalidGrantNext: false, failRegistration: false, omitRegistration: false, omitPkce: false, omitRefreshOnRotate: false, mismatchedResourceMetadata: false },
 		registered: [],
 		authorizations: [],
 		tokenBodies: [],
@@ -114,7 +114,7 @@ export function startAuthorizationServer(): FakeAuthorizationServer {
 			const url = new URL(request.url);
 			switch (url.pathname) {
 				case "/.well-known/oauth-protected-resource/mcp":
-					return json({ resource: fake.resource, authorization_servers: [fake.issuer] });
+					return json({ resource: fake.options.mismatchedResourceMetadata ? `${fake.url}/other` : fake.resource, authorization_servers: [fake.issuer] });
 				case "/.well-known/oauth-authorization-server":
 					return json({
 						issuer: fake.issuer,

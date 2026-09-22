@@ -161,7 +161,7 @@ function envelope(identity: string, effectClass: EffectClass, outcome: Outcome, 
 }
 
 function nextAction(outcome: Outcome): string {
-	if (outcome.transactionState === "unknown") return "run adjudicate --run <runId> with the same input; never retry the write before it resolves";
+	if (outcome.transactionState === "unknown") return "run adjudicate --run <result.data.runId> with the same input; never retry the write before it resolves";
 	if (outcome.cause === "success") return "use the data";
 	return "inspect the cause and provenance before any retry";
 }

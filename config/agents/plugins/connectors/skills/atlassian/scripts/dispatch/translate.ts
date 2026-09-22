@@ -42,6 +42,10 @@ const PROVIDER_CAUSE_HINTS: Record<string, string> = {
 	"tenant-invalid": "the tenant slug was rejected by the provider",
 	"product-invalid": "the provider route has no valid product",
 	"arguments-invalid": "the provider was invoked with unexpected arguments",
+	"log-path-invalid": "restore the Provider's owned bridge log directory",
+	"execve-unavailable": "run the Provider with a Bun runtime that supports process replacement",
+	"exec-failed": "inspect the Provider executable and runtime",
+	"injection-mismatch": "restart through the semantic dispatcher",
 };
 const PRECONDITION_PATTERN = new RegExp(`atlassian-provider:error:(${Object.keys(PROVIDER_CAUSE_HINTS).join("|")}):`);
 
