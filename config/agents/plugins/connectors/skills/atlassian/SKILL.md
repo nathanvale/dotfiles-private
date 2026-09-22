@@ -69,7 +69,7 @@ bun "$DISPATCH" --tenant <tenant> issue.comment --input '{"issueKey":"PROJ-1","b
 | `issue.comment` | `issueKey`, `body` | none |
 | `page.create` | `space` (`{id}`, `{key}`, or both), `title`, `body`, `parentId?` | none |
 | `page.update` | `pageId`, `body`, `title?`, `versionMessage?` | page version |
-| `page.comment` | `pageId`, `body` | none |
+| `page.comment` | `pageId`, `body` | page version |
 
 Rules the dispatcher enforces; state them when they refuse:
 
