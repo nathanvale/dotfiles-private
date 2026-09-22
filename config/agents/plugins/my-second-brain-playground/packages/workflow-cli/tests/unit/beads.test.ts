@@ -37,7 +37,7 @@ describe("the executable pin", () => {
 		expect(read.status).toBe("verified")
 		if (read.status !== "verified") return
 		expect(read.store.executableDigest).toBe(digestOf(FIXTURE_BD))
-		expect(read.store.version).toBe("1.2.2@6c124203e771")
+		expect(read.store.version).toBe("1.3.0@f45b249ce6b4")
 	})
 
 	test("a path other than the accepted one refuses, even with the accepted digest", async () => {
@@ -55,13 +55,26 @@ describe("the executable pin", () => {
 	test("a digest mismatch refuses before the executable is spawned", async () => {
 		const sentinel = join(privateRoot, "spawned")
 		const executable = join(privateRoot, "bd-sentinel")
-		writeFileSync(executable, `#!/bin/sh\n: > "${sentinel}"\necho 'bd version 1.2.2 (6c124203e: 6c124203e771)'\n`, { mode: 0o700 })
+		writeFileSync(executable, `#!/bin/sh\n: > "${sentinel}"\necho 'bd version 1.3.0 (f45b249ce: f45b249ce6b4)'\n`, { mode: 0o700 })
 		const refused = await reader(executable, { executable, sha256: "0".repeat(64) }).verifyStore(false)
 		expect(refused.status).toBe("executable-invalid")
 		expect(existsSync(sentinel)).toBe(false)
 		// The same script under its own digest is spawned: the sentinel proves the refusal above stopped the spawn.
 		await reader(executable, { executable, sha256: digestOf(executable) }).verifyStore(false)
 		expect(existsSync(sentinel)).toBe(true)
+	})
+})
+
+describe("readPrime", () => {
+	test("spawns prime in the pinned binary's read-only form and returns its additionalContext", async () => {
+		const recorded = join(privateRoot, "argv")
+		const executable = join(privateRoot, "bd-recorder")
+		// The recorder writes one argument per line, then replays the hook envelope; its digest is an input, never an expectation.
+		writeFileSync(executable, `#!/bin/sh\nprintf '%s\\n' "$@" > "${recorded}"\necho '{"hookSpecificOutput":{"hookEventName":"SessionStart","additionalContext":"recorded prime"}}'\n`, { mode: 0o700 })
+		const prime = await reader(executable, { executable, sha256: digestOf(executable) }).readPrime()
+		expect(prime).toBe("recorded prime")
+		// The exact argv as a literal (independent oracle): --readonly is the global bd flag that blocks write operations.
+		expect(readFileSync(recorded, "utf8").trimEnd().split("\n")).toEqual(["prime", "--readonly", "--hook-json"])
 	})
 })
 
@@ -82,7 +95,7 @@ describe("readBead classification of a JSON error value", () => {
 	test.each([
 		["a missing database", "database does not exist"],
 		["a differently cased absent-issue value", "No Issues Found Matching The Provided IDs"],
-		["an issue-not-found phrasing bd 1.2.2 was never observed to emit", `issue ${BEAD} not found`],
+		["an issue-not-found phrasing the pinned bd was never observed to emit", `issue ${BEAD} not found`],
 		["a missing store", "no_beads_directory"],
 		["contention", "database is locked by another process"],
 	])("%s is unavailable, never a missing Bead", async (_label, error) => {

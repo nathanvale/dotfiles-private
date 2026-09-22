@@ -2,14 +2,27 @@
 
 Use this branch to implement or qualify recovery after context compaction.
 Follow the configured playground's recovery and storage rules. Resolve the
-installed plugin root from its metadata. Inspect its accepted checkpoint
-contract with `${PLUGIN_ROOT}/hooks/recovery-checkpoint schema`; keep field
-names, size limits, and validation with that executable owner. If the installed
-command is unavailable, report the delivery gap before claiming checkpoint proof.
+installed plugin root from its metadata.
 
-## Save a bounded checkpoint
+The registered hook is `bin/msb-workflow hook`;
+[`packages/workflow-cli/README.md`](../../../packages/workflow-cli/README.md)
+owns its contract and the source-only boundary, and
+[beads-workflow](../../beads-workflow/SKILL.md) owns the LKR Beads route.
 
-Bind the selected goal once through the installed executable:
+The sections below describe the legacy schema-v2 route, provenance under Spec
+#57 and not a rollback route: `hooks/recovery-checkpoint` and
+`hooks/recover-context` are kept byte-identical and registered by no manifest,
+so their checkpoints are written and read manually and no registered hook
+delivers them. Note work without a Bead therefore has no automatic
+hook-delivered refresh on this candidate. Inspect the legacy contract with
+`${PLUGIN_ROOT}/hooks/recovery-checkpoint schema`; keep field names, size
+limits, and validation with that executable owner. If the installed command is
+unavailable, report the delivery gap before claiming checkpoint proof.
+
+## Save a bounded checkpoint (legacy schema v2)
+
+The legacy launcher binds the selected goal once and returns its control panel
+synchronously:
 
 ```sh
 "${PLUGIN_ROOT}/hooks/recovery-checkpoint" bind projects/<project>/GOAL.md --agent-ledger /absolute/path/to/agent-ledger
@@ -52,9 +65,12 @@ evidence owner. If a Task has not been adopted, name the declared fallback and
 missing identity explicitly; checkpoint creation cannot create a Task or
 transfer coordination ownership.
 
-## Recover authority
+## Recover authority (legacy schema v2)
 
-Treat the delivered commands as the recovery control panel. Its successful
+For a legacy checkpoint the panel comes from the launcher's own `bind` or
+`recover` output, not from a registered hook; a schema-v3 session gets its
+Resume Panel from `msb-workflow hook` or `recover` through the beads-workflow
+skill. Treat the delivered commands as the recovery control panel. Its successful
 validation confirms the accepted Task identity at delivery time, not current
 lifecycle status. Read the goal for the next action. Discover Ledger commands
 when coordination reads or mutations are needed; prefer advertised public
@@ -78,8 +94,9 @@ never executes them.
 
 ## Inspect recovery traces
 
-Use the installed plugin command for bounded operational evidence about bind,
-recover, and hook invocations:
+Use the installed plugin command for bounded operational evidence about
+legacy-launcher bind, recover, and hook invocations; `msb-workflow` keeps its
+own diagnostics at the address its README names and writes no trace here:
 
 ```sh
 "${PLUGIN_ROOT}/bin/recovery-traces" --help
@@ -133,7 +150,7 @@ Use evaluate-slice with separate criteria and evidence for:
 | Source behavior | Exercise the checkpoint contract and exact control-panel output, including shell quoting, invalid executable paths, stale or mismatched context, two-session isolation, and interrupted-operation recovery. |
 | Installed bytes | Identify the delivered artifact and compare its relevant bytes with the tested source build. |
 | Codex trust and activation | Inspect the actual hook registration and current trust state for the delivered command; observe activation rather than infer it from installation. |
-| Harness compaction delivery | Trigger real Codex and Claude compaction events where available. Observe the actual SessionStart compact event and recovery context delivery before the next operation. |
+| Harness compaction delivery | Trigger real Codex and Claude compaction events where available. Observe the actual events the registered manifest handles (Claude `SessionStart` `compact`; Codex `PreCompact`, `PostCompact`, then the next `UserPromptSubmit`) and the delivered recovery context before the next operation. |
 | Fresh continuation | Give a fresh agent the ordinary task and entry without the original conversation or expected answer. Observe use of the delivered control panel to recover the same goal, Register, Task, scope, evidence, and next safe action. |
 
 Exercise manual and automatic compaction where the harness exposes them. Record

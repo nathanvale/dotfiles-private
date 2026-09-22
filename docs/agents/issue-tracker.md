@@ -1,7 +1,7 @@
 # Issue tracker: GitHub
 
 Publish repository Specs and Tickets as GitHub Issues in
-`nathanvale/dotfiles-private-archive`. Use the `ghh` account wrapper for every
+`nathanvale/dotfiles-private`. Use the `ghh` account wrapper for every
 operation:
 
 ```sh
@@ -10,14 +10,14 @@ ghh exec --account nathanvale -- <gh arguments>
 
 ## Conventions
 
-- **Create an issue**: `ghh exec --account nathanvale -- issue create -R nathanvale/dotfiles-private-archive --title "..." --body-file <path>`.
-- **Read an issue**: `ghh exec --account nathanvale -- issue view <number> -R nathanvale/dotfiles-private-archive --comments`.
-- **List issues**: `ghh exec --account nathanvale -- issue list -R nathanvale/dotfiles-private-archive --state open --json number,title,body,labels,comments` with appropriate label and state filters.
-- **Comment on an issue**: `ghh exec --account nathanvale -- issue comment <number> -R nathanvale/dotfiles-private-archive --body-file <path>`.
+- **Create an issue**: `ghh exec --account nathanvale -- issue create -R nathanvale/dotfiles-private --title "..." --body-file <path>`.
+- **Read an issue**: `ghh exec --account nathanvale -- issue view <number> -R nathanvale/dotfiles-private --comments`.
+- **List issues**: `ghh exec --account nathanvale -- issue list -R nathanvale/dotfiles-private --state open --json number,title,body,labels,comments` with appropriate label and state filters.
+- **Comment on an issue**: `ghh exec --account nathanvale -- issue comment <number> -R nathanvale/dotfiles-private --body-file <path>`.
 - **Apply or remove labels**: use `ghh exec --account nathanvale -- issue edit` with `--add-label` or `--remove-label`.
-- **Close**: `ghh exec --account nathanvale -- issue close <number> -R nathanvale/dotfiles-private-archive --comment "..."`.
+- **Close**: `ghh exec --account nathanvale -- issue close <number> -R nathanvale/dotfiles-private --comment "..."`.
 
-Keep `-R nathanvale/dotfiles-private-archive` explicit. Do not infer the target
+Keep `-R nathanvale/dotfiles-private` explicit. Do not infer the target
 from a neighboring checkout or similarly named repository.
 
 ## Pull requests as a triage surface
@@ -37,14 +37,14 @@ through `ghh` as a PR first, then fall back to an issue lookup.
 ## When a skill says "publish to the issue tracker"
 
 Create a GitHub issue through `ghh` in
-`nathanvale/dotfiles-private-archive`.
+`nathanvale/dotfiles-private`.
 
 ## When a skill says "fetch the relevant ticket"
 
 Run this command:
 
 ```sh
-ghh exec --account nathanvale -- issue view <number> -R nathanvale/dotfiles-private-archive --comments
+ghh exec --account nathanvale -- issue view <number> -R nathanvale/dotfiles-private --comments
 ```
 
 ## Wayfinding operations

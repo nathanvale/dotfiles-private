@@ -64,6 +64,17 @@ A reusable structure of work, dependencies, gates, fan-out, fan-in, and
 completion conditions.
 _Avoid_: Flow, pipeline, process
 
+**Workflow Kind**:
+The named class of bounded journey that one run selects, defined by one
+Workflow Reference. A Workflow Kind is independent of the Cast Role, model,
+and Harness that perform the run.
+_Avoid_: Workflow type, track, mode
+
+**Workflow Reference**:
+The revisioned definition of one Workflow Kind's Workflow Graph. A run keeps
+the revision it selected, so a later revision never rewrites an active run.
+_Avoid_: Spec, graph definition, template
+
 **Workflow Core**:
 The Harness-neutral domain behavior shared by Workflow Adapters.
 _Avoid_: Engine, framework, orchestrator

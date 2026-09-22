@@ -38,6 +38,11 @@ describe("command declarations", () => {
 		expect(COMMANDS.map((command) => [command.identity, command.effectClass] as [string, string])).toEqual(IDENTITIES.map((row) => [...row] as [string, string]))
 	})
 
+	test("the bind invocation is pinned: the verified same-session switch is the trailing optional --from <bead-id>", () => {
+		expect(COMMANDS.find((command) => command.identity === "msb-workflow.bind")?.argv).toBe("msb-workflow bind --workspace <absolute-path> --bead <bead-id> [--session <id>] [--evidence <absolute-file>] [--from <bead-id>]")
+		expect(COMMANDS.filter((command) => command.identity !== "msb-workflow.bind").some((command) => command.argv.includes("--from"))).toBe(false)
+	})
+
 	test("exit mapping is closed and aligned with failure classes", () => {
 		expect([exitFor(null), exitFor("internal"), exitFor("usage"), exitFor("domain"), exitFor("schema"), exitFor("unavailable")]).toEqual([0, 1, 2, 3, 4, 75])
 	})

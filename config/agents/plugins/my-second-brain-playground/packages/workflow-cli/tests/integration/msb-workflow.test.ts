@@ -3,7 +3,7 @@ import { createHash } from "node:crypto"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { BEAD, bindingPath, bindSession, createRoot, envelopeOf, FIXTURE_BD, markerPath, OTHER_BEAD, removeRoot, resultOf, type Root, type Run, runCli, runCliOnPlatform, runCliWithStoreFault, SECRET_BEAD, SECRET_MARKER, stateListing, steerBd } from "../fixtures/harness.ts"
+import { BEAD, bindingPath, bindSession, createRoot, envelopeOf, FIXTURE_BD, markerPath, modeOf, OTHER_BEAD, removeRoot, resultOf, type Root, type Run, runCli, runCliOnPlatform, runCliWithStoreFault, SECRET_BEAD, SECRET_MARKER, stateListing, steerBd, TAMPERED_BEAD } from "../fixtures/harness.ts"
 
 // The public process seam for the five envelope commands: every row spawns the production entry against the fixture
 // bd and a fresh private root. Expected cause codes, exits, transaction states and retry facts are literals from
@@ -77,6 +77,8 @@ function plantBinding(root: Root, session: string, bytes: string): void {
 }
 
 const bindArgs = (root: Root, session: string, bead: string, workspace = root.workspace): string[] => ["bind", "--workspace", workspace, "--session", session, "--bead", bead, "--json"]
+/** The verified same-session switch: `--from` names the saved Bead the request replaces. */
+const switchArgs = (root: Root, session: string, bead: string, from: string, workspace = root.workspace): string[] => ["bind", "--workspace", workspace, "--session", session, "--bead", bead, "--from", from, "--json"]
 const recoverArgs = (root: Root, session: string, workspace = root.workspace): string[] => ["recover", "--workspace", workspace, "--session", session, "--json"]
 const inspectArgs = (root: Root, session: string | null, workspace = root.workspace): string[] => ["inspect", "--workspace", workspace, ...(session === null ? [] : ["--session", session]), "--json"]
 
@@ -199,7 +201,7 @@ describe("bind: the one local write", () => {
 		expect(saved.storePath).toBe(join(root.workspace, ".beads"))
 		expect(saved.storePrefix).toBe("lkr")
 		expect(saved.beadsExecutable).toBe(FIXTURE_BD)
-		expect(saved.beadsVersion).toBe("1.2.2@6c124203e771")
+		expect(saved.beadsVersion).toBe("1.3.0@f45b249ce6b4")
 		expect(saved.beadId).toBe(BEAD)
 		expect(saved.beadObservedAt).toBe("2026-09-17T03:09:16Z")
 		expect(saved.sourceRepository).toBe(root.privateRoot)
@@ -271,7 +273,7 @@ describe("bind: the one local write", () => {
 	test.each([
 		["a missing database", "database does not exist"],
 		["a differently cased absent-issue value", "No Issues Found Matching The Provided IDs"],
-		["an issue-not-found phrasing bd 1.2.2 was never observed to emit", "issue lkr-fixture not found"],
+		["an issue-not-found phrasing the pinned bd was never observed to emit", "issue lkr-fixture not found"],
 	])("%s is an error value outside the observed absent-issue allowlist: unavailable, exit 75, not a missing Bead", async (_label, error) => {
 		steerBd(root, { showError: { [BEAD]: error } })
 		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
@@ -280,22 +282,22 @@ describe("bind: the one local write", () => {
 	})
 
 	test.each([
-		["the pinned revision as the branch text with another revision", "bd version 1.2.2 (deadbeef0: 6c124203e771@deadbeef0000)"],
-		["no parenthesised build field", "bd version 1.2.2 6c124203e771"],
-		["a patch version bump at the pinned revision", "bd version 1.2.3 (6c124203e: 6c124203e771)"],
-		["the pinned revision only as a prefix of the revision field", "bd version 1.2.2 (6c124203e: 6c124203e771433a)"],
+		["the pinned revision as the branch text with another revision", "bd version 1.3.0 (deadbeef0: f45b249ce6b4@deadbeef0000)"],
+		["no parenthesised build field", "bd version 1.3.0 f45b249ce6b4"],
+		["a patch version bump at the pinned revision", "bd version 1.3.1 (f45b249ce: f45b249ce6b4)"],
+		["the pinned revision only as a prefix of the revision field", "bd version 1.3.0 (f45b249ce: f45b249ce6b4433a)"],
 	])("%s refuses as a store mismatch before any write", async (_label, version) => {
 		steerBd(root, { version })
 		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
 		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_STORE_MISMATCH", transactionState: "unchanged", retryable: false })
-		expect(envelope.message).toBe("bd executable is not the verified 1.2.2 at 6c124203e771")
+		expect(envelope.message).toBe("bd executable is not the verified 1.3.0 at f45b249ce6b4")
 		expect(durableListing(root)).toEqual([])
 	})
 
 	test.each([
-		["outside a Git directory", "bd version 1.2.2 (6c124203e: 6c124203e771)"],
-		["inside a Git directory, with the branch appended", "bd version 1.2.2 (6c124203e: codex/lkr-195-recovery-helper-private@6c124203e771)"],
-		["with a branch containing @ and parentheses", "bd version 1.2.2 (6c124203e: release@2026(a)@6c124203e771)"],
+		["outside a Git directory", "bd version 1.3.0 (f45b249ce: f45b249ce6b4)"],
+		["inside a Git directory, with the branch appended", "bd version 1.3.0 (f45b249ce: codex/lkr-195-helper-pin-1.3@f45b249ce6b4)"],
+		["with a branch containing @ and parentheses", "bd version 1.3.0 (f45b249ce: release@2026(a)@f45b249ce6b4)"],
 	])("the pinned version line %s binds", async (_label, version) => {
 		steerBd(root, { version })
 		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
@@ -304,7 +306,7 @@ describe("bind: the one local write", () => {
 
 	test.each([
 		["a wrong store path", { wherePath: "/elsewhere/.beads" }],
-		["a wrong bd version", { version: "bd version 1.3.0 (abcdef0: abcdef0123456)" }],
+		["a wrong bd version", { version: "bd version 1.4.0 (abcdef0: abcdef0123456)" }],
 		["a prefix that disagrees with configuration", { configPrefix: "zzz" }],
 		["a redirected context", { redirected: true }],
 	])("%s refuses as a store mismatch before any write", async (_label, scenario) => {
@@ -338,8 +340,8 @@ describe("bind: the one local write", () => {
 	test("the production entry refuses the fixture bd: it is not the accepted path, whatever version it prints", async () => {
 		const run = await runCli(root, bindArgs(root, SESSION, BEAD), { entry: "production" })
 		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_EXECUTABLE_INVALID", transactionState: "unchanged", retryable: false })
-		// The accepted path is the Ticket #58 literal, never read from the helper.
-		expect(envelope.message).toBe(`bd executable ${FIXTURE_BD} is not the accepted /Users/nathanvale/.local/state/trustworthy-engineering-loop-prototype/beads/bd`)
+		// The accepted path is the Ticket #52 revision 3 literal, never read from the helper.
+		expect(envelope.message).toBe(`bd executable ${FIXTURE_BD} is not the accepted /Users/nathanvale/.local/share/mise/installs/github-gastownhall-beads/1.3.0/bd`)
 		expect(durableListing(root)).toEqual([])
 	})
 
@@ -418,6 +420,294 @@ describe("bind: the one local write", () => {
 	})
 })
 
+describe("bind --from: the verified same-session switch", () => {
+	// Expected values are literals from Ticket [#56](https://github.com/nathanvale/dotfiles-private/issues/56) revision 2 AC4 and the task-switch contract brief (independent oracle):
+	// the switch is an expected-owner compare-and-swap on the one binding, never an override of the ordinary refusal.
+	const CLAIM_OTHER = `Claim ${OTHER_BEAD} through native bd before starting work; the binding records intent, not a claim`
+
+	test("bind --bead B --from A on a session bound to A replaces the one binding, reads it back, and returns B's panel", async () => {
+		await bindSession(root, SESSION)
+		const before = readFileSync(bindingPath(root, SESSION))
+		const run = await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD))
+		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 0, outcome: "success", causeCode: null, transactionState: "completed", retryable: false })
+		expect(envelope.effectClass).toBe("repository-local")
+		expect(envelope.message).toBe(`binding switched for ${SESSION}: ${BEAD} -> ${OTHER_BEAD}`)
+		expect(envelope.nextAction).toBe(CLAIM_OTHER)
+		const result = resultOf(run)
+		expect(result.station).toBe("switched")
+		expect(result.readBack).toBe(true)
+		expect(result.bindingPath).toBe(bindingPath(root, SESSION))
+		const previous = result.previous as Record<string, unknown>
+		expect(Object.keys(previous).sort()).toEqual(["beadId", "beadObservedAt", "evidencePath", "observedAt"])
+		expect(previous.beadId).toBe(BEAD)
+		expect(previous.beadObservedAt).toBe("2026-09-17T03:09:16Z")
+		expect(previous.evidencePath).toBeNull()
+		expect(result.session).toBe(SESSION)
+		expect(result.workspace).toBe(root.workspace)
+		expect((result.bead as { id: string; title: string }).id).toBe(OTHER_BEAD)
+		expect(result.nextSafeAction).toBe(CLAIM_OTHER)
+		expect(result.resumePanel as string).toContain(`Bead: ${OTHER_BEAD} Another Bead`)
+		// The durable record, read independently: one 0600 file naming B for the same session and workspace, bytes changed.
+		const saved = JSON.parse(readFileSync(bindingPath(root, SESSION), "utf8")) as Record<string, unknown>
+		expect([saved.schemaVersion, saved.sessionIdentity, saved.workspace, saved.beadId, saved.beadObservedAt]).toEqual([3, SESSION, root.workspace, OTHER_BEAD, "2026-09-17T08:30:13Z"])
+		expect(readFileSync(bindingPath(root, SESSION)).equals(before)).toBe(false)
+		expect(modeOf(bindingPath(root, SESSION))).toBe(0o600)
+		expect(stateListing(root).filter((entry) => entry.startsWith(BINDINGS_PREFIX))).toEqual([`${BINDINGS_PREFIX}${SESSION}.json:600`])
+		expect(existsSync(markerPath(root, SESSION))).toBe(false)
+	})
+
+	test("after the switch the old Bead is an obsolete continuation: bind --bead A refuses with savedBeadId B and names the switch in its repair", async () => {
+		await bindSession(root, SESSION)
+		await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD))
+		const switched = readFileSync(bindingPath(root, SESSION))
+		const run = await runCli(root, bindArgs(root, SESSION, BEAD))
+		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BINDING_OWNERSHIP_CONFLICT", transactionState: "unchanged", retryable: false })
+		expect(resultOf(run).savedBeadId).toBe(OTHER_BEAD)
+		expect(envelope.repairAction).toContain(`msb-workflow bind --workspace ${root.workspace} --bead ${BEAD} --from ${OTHER_BEAD} --session ${SESSION}`)
+		expect(envelope.nextAction).toBe(`msb-workflow recover --workspace ${root.workspace} --session ${SESSION}`)
+		expect(readFileSync(bindingPath(root, SESSION)).equals(switched)).toBe(true)
+	})
+
+	test("after the switch recover and inspect read B from current reads", async () => {
+		await bindSession(root, SESSION)
+		await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD))
+		const recovered = await runCli(root, recoverArgs(root, SESSION))
+		expectEnvelope(recovered, "msb-workflow.recover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		const result = resultOf(recovered)
+		expect((result.bead as { id: string }).id).toBe(OTHER_BEAD)
+		expect(result.session).toBe(SESSION)
+		expect(result.nextSafeAction).toBe(CLAIM_OTHER)
+		expect((result.readOnlyCommands as string[])[0]).toBe(`BEADS_DIR=${join(root.workspace, ".beads")} ${FIXTURE_BD} show ${OTHER_BEAD} --readonly --json --include-comments`)
+		const inspected = await runCli(root, inspectArgs(root, SESSION))
+		expectEnvelope(inspected, "msb-workflow.inspect", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		expect((resultOf(inspected).checks as { name: string; detail: string }[]).find((check) => check.name === "binding")?.detail).toContain(`${OTHER_BEAD} in ${root.workspace}`)
+	})
+
+	test("--from that is not the saved Bead refuses as a switch mismatch naming the saved owner, and preserves the bytes", async () => {
+		await bindSession(root, SESSION)
+		const saved = readFileSync(bindingPath(root, SESSION))
+		const run = await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, SECRET_BEAD))
+		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_SWITCH_FROM_MISMATCH", transactionState: "unchanged", retryable: false, retryDelayMilliseconds: null })
+		expect(envelope.nextAction).toBe(`msb-workflow recover --workspace ${root.workspace} --session ${SESSION}`)
+		const result = resultOf(run)
+		expect(result.station).toBe("switch-from-mismatch")
+		expect([result.savedBeadId, result.from, result.requestedBeadId]).toEqual([BEAD, SECRET_BEAD, OTHER_BEAD])
+		expect(readFileSync(bindingPath(root, SESSION)).equals(saved)).toBe(true)
+	})
+
+	test("--from with no saved binding refuses as absent, writes no binding, and names bind without --from", async () => {
+		const run = await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD))
+		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BINDING_ABSENT", transactionState: "unchanged", retryable: false })
+		const again = `msb-workflow bind --workspace ${root.workspace} --bead ${OTHER_BEAD} --session ${SESSION}`
+		expect(envelope.nextAction).toBe(again)
+		expect(envelope.repairAction).toBe(`Bind this session without --from: ${again}`)
+		expect(resultOf(run).bindingPath).toBe(bindingPath(root, SESSION))
+		expect(resultOf(run).from).toBe(BEAD)
+		expect(stateListing(root).filter((entry) => entry.startsWith(BINDINGS_PREFIX))).toEqual([])
+	})
+
+	test("--from equal to --bead is a usage refusal before any state root or store is touched, and --from is not an option of recover or inspect", async () => {
+		const same = await runCli(root, switchArgs(root, SESSION, BEAD, BEAD))
+		expectEnvelope(same, "msb-workflow.bind", { exit: 2, outcome: "refused", causeCode: "USAGE_INVALID_INVOCATION", transactionState: "unchanged", retryable: false })
+		expect(stateListing(root)).toEqual([])
+		const recover = await runCli(root, [...recoverArgs(root, SESSION), "--from", BEAD])
+		expectEnvelope(recover, "msb-workflow.recover", { exit: 2, outcome: "refused", causeCode: "USAGE_INVALID_INVOCATION", transactionState: "unchanged", retryable: false })
+		const inspect = await runCli(root, [...inspectArgs(root, SESSION), "--from", BEAD])
+		expectEnvelope(inspect, "msb-workflow.inspect", { exit: 2, outcome: "refused", causeCode: "USAGE_INVALID_INVOCATION", transactionState: "unchanged", retryable: false })
+		const empty = await runCli(root, ["bind", "--workspace", root.workspace, "--session", SESSION, "--bead", OTHER_BEAD, "--from", "--json"])
+		expectEnvelope(empty, "msb-workflow.bind", { exit: 2, outcome: "refused", causeCode: "USAGE_INVALID_INVOCATION", transactionState: "unchanged", retryable: false })
+		expect(stateListing(root)).toEqual([])
+	})
+
+	test("an inherited-only identity never switches a saved owner, before any store read or lock", async () => {
+		await bindSession(root, SESSION)
+		const saved = readFileSync(bindingPath(root, SESSION))
+		const before = durableListing(root)
+		const run = await runCli(root, ["bind", "--workspace", root.workspace, "--bead", OTHER_BEAD, "--from", BEAD, "--json"], { env: { CODEX_SESSION_ID: SESSION } })
+		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_SESSION_INHERITED_CONFLICT", transactionState: "unchanged", retryable: false })
+		expect(envelope.nextAction).toBe(`msb-workflow recover --workspace ${root.workspace} --session ${SESSION}`)
+		expect(readFileSync(bindingPath(root, SESSION)).equals(saved)).toBe(true)
+		expect(durableListing(root)).toEqual(before)
+		// The same identity passed explicitly as --session beside the same CODEX_SESSION_ID is explicit, and switches.
+		const explicit = await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD), { env: { CODEX_SESSION_ID: SESSION } })
+		expectEnvelope(explicit, "msb-workflow.bind", { exit: 0, outcome: "success", causeCode: null, transactionState: "completed", retryable: false })
+	})
+
+	test("--from never switches the workspace: a different --workspace is the ordinary owner conflict, bytes preserved", async () => {
+		await bindSession(root, SESSION)
+		const saved = readFileSync(bindingPath(root, SESSION))
+		const run = await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD, secondWorkspace(root)))
+		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BINDING_OWNERSHIP_CONFLICT", transactionState: "unchanged", retryable: false })
+		expect(envelope.repairAction).toContain("a saved workspace is never switched")
+		expect(envelope.repairAction).not.toContain("--from")
+		expect(resultOf(run).savedWorkspace).toBe(root.workspace)
+		expect(readFileSync(bindingPath(root, SESSION)).equals(saved)).toBe(true)
+	})
+
+	test("the new Bead is verified in the store before any lock: a missing Bead refuses with nothing written or created", async () => {
+		await bindSession(root, SESSION)
+		const saved = readFileSync(bindingPath(root, SESSION))
+		const before = durableListing(root)
+		const run = await runCli(root, switchArgs(root, SESSION, "lkr-nope", BEAD))
+		expectEnvelope(run, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BEAD_MISSING", transactionState: "unchanged", retryable: false, retryDelayMilliseconds: null })
+		expect(readFileSync(bindingPath(root, SESSION)).equals(saved)).toBe(true)
+		expect(durableListing(root)).toEqual(before)
+		steerBd(root, { unavailable: "database is locked by another process" })
+		const unavailable = await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD))
+		expectEnvelope(unavailable, "msb-workflow.bind", { exit: 75, outcome: "failed", causeCode: "UNAVAILABLE_BEADS_READ", transactionState: "unchanged", retryable: true, retryDelayMilliseconds: 1000 })
+		expect(readFileSync(bindingPath(root, SESSION)).equals(saved)).toBe(true)
+	})
+
+	test("malformed or unsafe saved state refuses a switch exactly as it refuses a bind, and is never replaced", async () => {
+		plantBinding(root, SESSION, "{not json\n")
+		const invalid = await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD))
+		expectEnvelope(invalid, "msb-workflow.bind", { exit: 4, outcome: "refused", causeCode: "SCHEMA_BINDING_INVALID", transactionState: "unchanged", retryable: false })
+		expect(readFileSync(bindingPath(root, SESSION), "utf8")).toBe("{not json\n")
+		chmodSync(bindingPath(root, SESSION), 0o644)
+		const unsafe = await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD))
+		expectEnvelope(unsafe, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_STATE_UNSAFE", transactionState: "unchanged", retryable: false })
+		expect(readFileSync(bindingPath(root, SESSION), "utf8")).toBe("{not json\n")
+	})
+
+	test("a failure before the rename leaves A saved and is retryable; a failure after it is unknown and recover reports the durable B", async () => {
+		await bindSession(root, SESSION)
+		const saved = readFileSync(bindingPath(root, SESSION))
+		const failed = await runCliWithStoreFault(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD), "before-rename")
+		expectEnvelope(failed, "msb-workflow.bind", { exit: 75, outcome: "failed", causeCode: "UNAVAILABLE_WRITE_FAILED", transactionState: "unchanged", retryable: true })
+		expect(readFileSync(bindingPath(root, SESSION)).equals(saved)).toBe(true)
+		expect(stateListing(root).filter((entry) => entry.startsWith(BINDINGS_PREFIX))).toEqual([`${BINDINGS_PREFIX}${SESSION}.json:600`])
+		const unknown = await runCliWithStoreFault(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD), "after-rename")
+		const envelope = expectEnvelope(unknown, "msb-workflow.bind", { exit: 1, outcome: "unknown", causeCode: "INTERNAL_WRITE_OUTCOME_UNKNOWN", transactionState: "unknown", retryable: false })
+		expect(envelope.nextAction).toBe(`msb-workflow recover --workspace ${root.workspace} --session ${SESSION}`)
+		expect(unknown.stdout).not.toContain('"station":"switched"')
+		const recovered = await runCli(root, recoverArgs(root, SESSION))
+		expectEnvelope(recovered, "msb-workflow.recover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		expect((resultOf(recovered).bead as { id: string }).id).toBe(OTHER_BEAD)
+		// The durable owner is now B, so the same switch is a mismatch that names B: the caller learns it already happened.
+		const again = await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD))
+		expectEnvelope(again, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_SWITCH_FROM_MISMATCH", transactionState: "unchanged", retryable: false })
+		expect(resultOf(again).savedBeadId).toBe(OTHER_BEAD)
+	})
+
+	test("the switch is reported only after the durable bytes read back as the written binding: another owner read back is unknown, never switched", async () => {
+		await bindSession(root, SESSION)
+		const run = await runCliWithStoreFault(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD), "tamper-after-rename")
+		const envelope = expectEnvelope(run, "msb-workflow.bind", { exit: 1, outcome: "unknown", causeCode: "INTERNAL_WRITE_OUTCOME_UNKNOWN", transactionState: "unknown", retryable: false })
+		expect(envelope.message).toContain(`read-back after the switch returned a binding naming ${TAMPERED_BEAD}, not the written ${OTHER_BEAD}`)
+		expect(envelope.nextAction).toBe(`msb-workflow recover --workspace ${root.workspace} --session ${SESSION}`)
+		expect(run.stdout).not.toContain('"station":"switched"')
+		// The helper never rewrote the tampered bytes: what the read-back found is what recover now finds.
+		expect((JSON.parse(readFileSync(bindingPath(root, SESSION), "utf8")) as { beadId: string }).beadId).toBe(TAMPERED_BEAD)
+	})
+
+	test("a held lock makes a concurrent switch busy; the serialized retry of a completed switch is a mismatch naming B, never a second write", async () => {
+		await bindSession(root, SESSION)
+		const holder = runCliWithStoreFault(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD), "hold-lock-3s")
+		await Bun.sleep(600)
+		const contender = await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD))
+		expectEnvelope(contender, "msb-workflow.bind", { exit: 75, outcome: "failed", causeCode: "UNAVAILABLE_STORAGE_BUSY", transactionState: "unchanged", retryable: true, retryDelayMilliseconds: 2000 })
+		const held = await holder
+		expectEnvelope(held, "msb-workflow.bind", { exit: 0, outcome: "success", causeCode: null, transactionState: "completed", retryable: false })
+		expect(resultOf(held).station).toBe("switched")
+		const switched = readFileSync(bindingPath(root, SESSION))
+		expect((JSON.parse(switched.toString("utf8")) as { beadId: string }).beadId).toBe(OTHER_BEAD)
+		const retry = await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD))
+		expectEnvelope(retry, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_SWITCH_FROM_MISMATCH", transactionState: "unchanged", retryable: false })
+		expect(resultOf(retry).savedBeadId).toBe(OTHER_BEAD)
+		expect(readFileSync(bindingPath(root, SESSION)).equals(switched)).toBe(true)
+	})
+
+	test("two sessions and two workspaces stay isolated: one session's switch leaves every other binding byte-identical", async () => {
+		const otherWorkspace = secondWorkspace(root)
+		await bindSession(root, SESSION)
+		await bindSession(root, "session-2")
+		const elsewhere = await runCli(root, bindArgs(root, "session-3", BEAD, otherWorkspace))
+		expect(elsewhere.exit).toBe(0)
+		const second = readFileSync(bindingPath(root, "session-2"))
+		const third = readFileSync(bindingPath(root, "session-3"))
+		const run = await runCli(root, switchArgs(root, SESSION, OTHER_BEAD, BEAD))
+		expectEnvelope(run, "msb-workflow.bind", { exit: 0, outcome: "success", causeCode: null, transactionState: "completed", retryable: false })
+		expect(readFileSync(bindingPath(root, "session-2")).equals(second)).toBe(true)
+		expect(readFileSync(bindingPath(root, "session-3")).equals(third)).toBe(true)
+		expect((resultOf(await runCli(root, recoverArgs(root, "session-2"))).bead as { id: string }).id).toBe(BEAD)
+		expect((resultOf(await runCli(root, recoverArgs(root, "session-3", otherWorkspace))).bead as { id: string }).id).toBe(BEAD)
+		expect((resultOf(await runCli(root, recoverArgs(root, SESSION))).bead as { id: string }).id).toBe(OTHER_BEAD)
+	})
+
+	test("human mode: the switch prints B's panel with empty stderr; mismatch and absent are one stderr line each", async () => {
+		const humanSwitch = ["bind", "--workspace", root.workspace, "--session", SESSION, "--bead", OTHER_BEAD, "--from", BEAD]
+		expectHumanRefusal(await runCli(root, humanSwitch), "DOMAIN_BINDING_ABSENT", 3)
+		await bindSession(root, SESSION)
+		expectHumanRefusal(await runCli(root, ["bind", "--workspace", root.workspace, "--session", SESSION, "--bead", OTHER_BEAD, "--from", SECRET_BEAD]), "DOMAIN_SWITCH_FROM_MISMATCH", 3)
+		const run = await runCli(root, humanSwitch)
+		expect(run.exit).toBe(0)
+		expect(run.stderr).toBe("")
+		expect(run.stdout.startsWith("# Resume Panel\n")).toBe(true)
+		expect(run.stdout).toContain(`Bead: ${OTHER_BEAD} Another Bead`)
+	})
+
+	test("bind, inspect, and recover retry and repair commands quote whitespace and embedded single quotes", async () => {
+		const workspace = join(root.privateRoot, "work sp'ace")
+		mkdirSync(join(workspace, ".beads"), { recursive: true, mode: 0o700 })
+		// Hand-derived POSIX single quoting (independent oracle): each unsafe argument is one word and each embedded '
+		// is spelled '\''.
+		const shownWorkspace = `'${root.privateRoot}/work sp'\\''ace'`
+		const recover = (session: string): string => `msb-workflow recover --workspace ${shownWorkspace} --session ${session}`
+		const inspect = (session: string): string => `msb-workflow inspect --workspace ${shownWorkspace} --session ${session}`
+
+		const absentSession = "session-absent"
+		const absent = await runCli(root, switchArgs(root, absentSession, OTHER_BEAD, BEAD, workspace))
+		const absentEnvelope = expectEnvelope(absent, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BINDING_ABSENT", transactionState: "unchanged", retryable: false })
+		const bind = `msb-workflow bind --workspace ${shownWorkspace} --bead ${OTHER_BEAD} --session ${absentSession}`
+		expect(absentEnvelope.nextAction).toBe(bind)
+		expect(absentEnvelope.repairAction).toBe(`Bind this session without --from: ${bind}`)
+
+		const conflictSession = "session-conflict"
+		expect((await runCli(root, bindArgs(root, conflictSession, BEAD, workspace))).exit).toBe(0)
+		const saved = JSON.parse(readFileSync(bindingPath(root, conflictSession), "utf8")) as Record<string, unknown>
+		saved.beadId = "lkr-old's bead"
+		writeFileSync(bindingPath(root, conflictSession), `${JSON.stringify(saved)}\n`, { mode: 0o600 })
+		const conflict = await runCli(root, bindArgs(root, conflictSession, OTHER_BEAD, workspace))
+		const conflictEnvelope = expectEnvelope(conflict, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BINDING_OWNERSHIP_CONFLICT", transactionState: "unchanged", retryable: false })
+		const switchCommand = `msb-workflow bind --workspace ${shownWorkspace} --bead ${OTHER_BEAD} --from 'lkr-old'\\''s bead' --session ${conflictSession}`
+		expect(conflictEnvelope.repairAction).toContain(switchCommand)
+		expect(conflictEnvelope.nextAction).toBe(recover(conflictSession))
+
+		const failedSession = "session-failed"
+		const failed = await runCliWithStoreFault(root, bindArgs(root, failedSession, BEAD, workspace), "before-rename")
+		expect(expectEnvelope(failed, "msb-workflow.bind", { exit: 75, outcome: "failed", causeCode: "UNAVAILABLE_WRITE_FAILED", transactionState: "unchanged", retryable: true }).nextAction).toBe(inspect(failedSession))
+
+		const unknownSession = "session-unknown"
+		const unknown = await runCliWithStoreFault(root, bindArgs(root, unknownSession, BEAD, workspace), "after-rename")
+		const unknownEnvelope = expectEnvelope(unknown, "msb-workflow.bind", { exit: 1, outcome: "unknown", causeCode: "INTERNAL_WRITE_OUTCOME_UNKNOWN", transactionState: "unknown", retryable: false })
+		expect(unknownEnvelope.nextAction).toBe(recover(unknownSession))
+		expect(unknownEnvelope.repairAction).toBe(`Run ${recover(unknownSession)} to read the durable binding before deciding whether to bind again`)
+
+		const reparse = (command: string): string => {
+			const shell = Bun.spawnSync(["sh", "-c", `set -- ${command}; printf '%s\\n' "$@"`], { env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent" }, stdout: "pipe", stderr: "pipe" })
+			expect(shell.stderr.toString()).toBe("")
+			return shell.stdout.toString()
+		}
+		expect(reparse(bind)).toBe(`${["msb-workflow", "bind", "--workspace", workspace, "--bead", OTHER_BEAD, "--session", absentSession].join("\n")}\n`)
+		expect(reparse(switchCommand)).toBe(`${["msb-workflow", "bind", "--workspace", workspace, "--bead", OTHER_BEAD, "--from", "lkr-old's bead", "--session", conflictSession].join("\n")}\n`)
+		expect(reparse(inspect(failedSession))).toBe(`${["msb-workflow", "inspect", "--workspace", workspace, "--session", failedSession].join("\n")}\n`)
+		expect(reparse(recover(unknownSession))).toBe(`${["msb-workflow", "recover", "--workspace", workspace, "--session", unknownSession].join("\n")}\n`)
+	})
+
+	test("discovery and help carry --from on bind alone; the identities and the binding schema are unchanged", async () => {
+		const discover = await runCli(root, ["--discover", "--json"])
+		const commands = resultOf(discover).commands as { identity: string; argv: string }[]
+		expect(commands).toHaveLength(6)
+		expect(commands.find((command) => command.identity === "msb-workflow.bind")?.argv).toBe("msb-workflow bind --workspace <absolute-path> --bead <bead-id> [--session <id>] [--evidence <absolute-file>] [--from <bead-id>]")
+		expect(commands.filter((command) => command.identity !== "msb-workflow.bind").some((command) => command.argv.includes("--from"))).toBe(false)
+		expect((resultOf(discover).bindingSchema as { schemaVersion: number; required: string[] }).required).toHaveLength(12)
+		const help = await runCli(root, ["--help"])
+		expect(help.exit).toBe(0)
+		expect(help.stdout).toContain("[--from <bead-id>]")
+		expect(help.stdout).toContain("bind --from <bead-id> is the verified same-session switch")
+	})
+})
+
 describe("bind in human mode: exactly one stderr line on every refusal and failure", () => {
 	const humanBind = (session: string, bead: string): string[] => ["bind", "--workspace", root.workspace, "--session", session, "--bead", bead]
 
@@ -473,7 +763,7 @@ describe("recover: the Resume Panel from current reads", () => {
 		// The configured executable is the one that was run and hashed (decision D1: the digest is recorded, the version is pinned).
 		expect(store.executable).toBe(FIXTURE_BD)
 		expect(store.executableDigest).toBe(createHash("sha256").update(readFileSync(FIXTURE_BD)).digest("hex"))
-		expect(store.version).toBe("1.2.2@6c124203e771")
+		expect(store.version).toBe("1.3.0@f45b249ce6b4")
 		const bead = result.bead as Record<string, unknown>
 		expect(bead.id).toBe(BEAD)
 		expect(bead.status).toBe("in_progress")
@@ -522,6 +812,47 @@ describe("recover: the Resume Panel from current reads", () => {
 		expect(result.openBlockers).toEqual([])
 		expect(result.openHumanGates).toEqual([])
 		expect(result.nextSafeAction).toBe(`${BEAD} is closed; bind this session to the next Bead with msb-workflow bind before doing more work`)
+	})
+
+	// evidencePath is optional under Spec #57, so the in-progress action names only what the binding holds. The fixture
+	// Bead's gate and blocker are cleared so the in-progress branch is the one reached; its status and comments stay.
+	test("an in-progress Bead bound without an evidence path continues from the last comment; no evidence pointer is named", async () => {
+		await bindSession(root, SESSION)
+		steerBd(root, { beads: { [BEAD]: { dependencies: [] } } })
+		const run = await runCli(root, recoverArgs(root, SESSION))
+		const envelope = expectEnvelope(run, "msb-workflow.recover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		const result = resultOf(run)
+		expect(result.evidencePath).toBeNull()
+		expect(result.openBlockers).toEqual([])
+		expect(result.openHumanGates).toEqual([])
+		const expected = `Continue ${BEAD} from the last comment; record the next checkpoint with native bd comment before compaction`
+		expect(result.nextSafeAction).toBe(expected)
+		expect(envelope.nextAction).toBe(expected)
+		const lines = (result.resumePanel as string).split("\n")
+		expect(lines).toContain("Evidence: none")
+		expect(lines.filter((line) => line.startsWith("Next safe action: "))).toEqual([`Next safe action: ${expected}`])
+		const human = await runCli(root, ["recover", "--workspace", root.workspace, "--session", SESSION])
+		expect(human.exit).toBe(0)
+		expect(human.stderr).toBe("")
+		expect(human.stdout).toContain(`\nNext safe action: ${expected}\n`)
+		expect(human.stdout).not.toContain("evidence pointer")
+	})
+
+	test("an in-progress Bead bound with an evidence path continues from the evidence pointer and the last comment", async () => {
+		const evidence = join(root.privateRoot, "evidence.md")
+		writeFileSync(evidence, "# evidence\n")
+		await bindSession(root, SESSION, BEAD, ["--evidence", evidence])
+		steerBd(root, { beads: { [BEAD]: { dependencies: [] } } })
+		const run = await runCli(root, recoverArgs(root, SESSION))
+		const envelope = expectEnvelope(run, "msb-workflow.recover", { exit: 0, outcome: "success", causeCode: null, transactionState: "unchanged", retryable: false })
+		const result = resultOf(run)
+		expect(result.evidencePath).toBe(evidence)
+		const expected = `Continue ${BEAD} from the evidence pointer and the last comment; record the next checkpoint with native bd comment before compaction`
+		expect(result.nextSafeAction).toBe(expected)
+		expect(envelope.nextAction).toBe(expected)
+		const lines = (result.resumePanel as string).split("\n")
+		expect(lines).toContain(`Evidence: ${evidence}`)
+		expect(lines.filter((line) => line.startsWith("Next safe action: "))).toEqual([`Next safe action: ${expected}`])
 	})
 
 	test("uses the bound executable, not the environment", async () => {
@@ -786,7 +1117,7 @@ describe("inspect: read-only prerequisites", () => {
 	test("reports the configured executable with its recorded digest", async () => {
 		const run = await runCli(root, inspectArgs(root, null))
 		const detail = (resultOf(run).checks as { name: string; detail: string }[]).find((check) => check.name === "executable")?.detail ?? ""
-		expect(detail).toBe(`${FIXTURE_BD} (bd 1.2.2@6c124203e771; sha256 ${createHash("sha256").update(readFileSync(FIXTURE_BD)).digest("hex")})`)
+		expect(detail).toBe(`${FIXTURE_BD} (bd 1.3.0@f45b249ce6b4; sha256 ${createHash("sha256").update(readFileSync(FIXTURE_BD)).digest("hex")})`)
 	})
 
 	test("names a bad executable and skips the store read", async () => {

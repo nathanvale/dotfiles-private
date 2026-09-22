@@ -3,7 +3,7 @@
 
 import { existsSync, realpathSync, statSync } from "node:fs"
 import { isAbsolute, join } from "node:path"
-import type { BeadRead, BeadsReader, StoreRead } from "../adapters/beads.ts"
+import { type BeadRead, type BeadsReader, PINNED_BD_REVISION, PINNED_BD_VERSION, type StoreRead } from "../adapters/beads.ts"
 import type { RecoveryStore } from "../adapters/recovery.ts"
 import { HELP_ACTION } from "../command-contract.ts"
 import type { Diagnostics, DiagnosticsContext } from "../diagnostics.ts"
@@ -98,8 +98,8 @@ function realpathSafe(path: string): string {
 /** The store gate as an outcome, shared by bind and recover; null means the store verified. */
 export function storeOutcome(read: StoreRead, workspace: string): CommandOutcome | null {
 	if (read.status === "verified") return null
-	if (read.status === "executable-invalid") return refusal("executable-refused", read.reason, "Set MSB_WORKFLOW_BD_EXECUTABLE to the absolute path of the pinned bd 1.2.2 executable and bind again", `msb-workflow inspect --workspace ${workspace}`, { reason: read.reason })
-	if (read.status === "mismatch") return refusal("store-mismatch", read.reason, "Select the workspace whose .beads store is the intended one and the pinned bd 1.2.2 at 6c124203e771; a wrong, empty, global, or redirected store is never adopted", `msb-workflow inspect --workspace ${workspace}`, { reason: read.reason })
+	if (read.status === "executable-invalid") return refusal("executable-refused", read.reason, `Set MSB_WORKFLOW_BD_EXECUTABLE to the absolute path of the pinned bd ${PINNED_BD_VERSION} executable and bind again`, `msb-workflow inspect --workspace ${workspace}`, { reason: read.reason })
+	if (read.status === "mismatch") return refusal("store-mismatch", read.reason, `Select the workspace whose .beads store is the intended one and the pinned bd ${PINNED_BD_VERSION} at ${PINNED_BD_REVISION}; a wrong, empty, global, or redirected store is never adopted`, `msb-workflow inspect --workspace ${workspace}`, { reason: read.reason })
 	return { station: "beads-unavailable", message: read.reason, result: { station: "beads-unavailable", reason: read.reason }, repairAction: "Check that the selected .beads store exists and no other bd process holds it, then retry the same command", nextAction: `msb-workflow inspect --workspace ${workspace}`, availablePaths: [], handoffPrerequisites: [] }
 }
 

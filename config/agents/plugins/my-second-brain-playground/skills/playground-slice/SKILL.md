@@ -21,19 +21,27 @@ For an authorized note update under an existing Task, use this short route.
    root is `../..` from this SKILL.md's directory. Assign that resolved absolute
    path to `PLUGIN_ROOT`; use the selected Ledger executable from the goal or
    project owner. Main and dev My Second Brain plugins are separate owners.
-   Bind once from the configured playground root:
+   The legacy manual binding, run once from the configured playground root,
+   returns its control panel synchronously:
 
    ```sh
    "${PLUGIN_ROOT}/hooks/recovery-checkpoint" bind projects/<project>/GOAL.md --agent-ledger /absolute/path/to/agent-ledger
    ```
 
-   Codex uses `CODEX_SESSION_ID`; Claude adds `--session` with the exact
+   On this source no registered hook reads that legacy checkpoint, so note
+   work without a Bead gets no hook-delivered refresh after compaction; the
+   installed manifest is Ticket #52 evidence, not this skill's claim.
+   [`packages/workflow-cli/README.md`](../../packages/workflow-cli/README.md)
+   owns the registered hook. LKR Beads work binds through
+   [beads-workflow](../beads-workflow/SKILL.md). Codex uses
+   `CODEX_SESSION_ID`; Claude adds `--session` with the exact
    identity delivered by its startup hook. Native workers first compare the
    exposed session ID with their independently supplied thread identity: a missing
    identity or inherited parent ID leaves worker binding unavailable. Preserve the saved checkpoint and report
    that gap; the caller's explicit goal still scopes independent note work.
    A refused bind is not permission to replace another owner's checkpoint.
-   Continue from the returned control panel. On refusal or uncertain context,
+   Continue from the returned control panel; after compaction, re-read the
+   goal. On refusal or uncertain context,
    follow the configured vault's `docs/agents/recovery.md` before effects.
 3. Before editing, use [Ledger Steward](references/tasks-first.md#ledger-steward)
    to inspect the Task and record this execution's start, or resume its owned
