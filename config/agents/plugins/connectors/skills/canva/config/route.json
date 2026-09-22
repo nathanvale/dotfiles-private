@@ -1,4 +1,6 @@
 {
 	"defaultProvider": "canva",
-	"dispatcherOwned": true
+	"selectors": {
+		"account": "CANVA_ACCOUNT"
+	}
 }

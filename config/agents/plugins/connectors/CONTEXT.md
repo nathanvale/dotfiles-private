@@ -45,8 +45,15 @@ _Avoid_: API token, cloud ID, account
 
 **Trusted Site Origin**:
 The tenant's site address as recorded in its own credential item metadata,
-the only source against which a Provider's reported site may be matched.
+the only source against which a Provider's reported site may be matched. Canva
+has no analogue: its endpoint is fixed and its identity is the account.
 _Avoid_: Token-management URL, provider-reported URL
+
+**Credential Binding**:
+The nonsecret record custody returns for one Atlassian Tenant and product: the
+principal, the credential item revision, and the Trusted Site Origin. It
+crosses the route; the credential value never does.
+_Avoid_: Context, token, credential
 
 **Atlassian Official**:
 The Atlassian-operated MCP Provider for Atlassian Cloud products.
@@ -68,6 +75,25 @@ The durable, expiring record of one proven Provider Parity for one Atlassian
 Operation and input shape. It gates both automatic fallback and explicit
 selection of Atlassian Community.
 _Avoid_: Cache, allowlist, override
+
+## Canva sessions
+
+**Canva Account**:
+The nonsecret slug that selects one Canva user's session for a request. It is
+the Route Selection for Canva; sessions, locks, and logs never cross accounts.
+_Avoid_: User, tenant, profile, login
+
+**Canva Session**:
+The private per-account record of one authorised grant: its client identity,
+authorization server, access token, and refresh token. It exists only below
+MCPorter and ends by logout or by Canva revoking the grant.
+_Avoid_: Credential, cache, cookie
+
+**Attended Login**:
+The one-time flow in which the system browser is opened for the user to grant
+access and the loopback callback returns the code. Nathan completes it; no
+agent drives the browser.
+_Avoid_: Automated login, headless login, OAuth flow
 
 ## Atlassian writes
 
