@@ -10,8 +10,8 @@
 // envelope is the runtime's public contract anyway.
 //
 // Claude Code contract: https://code.claude.com/docs/en/hooks (WorktreeCreate
-// prints the path as the last stdout line; WorktreeRemove reports through exit
-// status).
+// prints the path as the last stdout line and a name whose checkout already
+// exists reopens it; WorktreeRemove reports through exit status).
 
 import { realpathSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -50,10 +50,21 @@ interface RuntimeEnvelope {
 	data?: {
 		changed_state?: string;
 		reason?: string;
+		target_path?: string;
 		worktrees?: RuntimeWorktree[];
 		mainOwnerRoot?: string;
 	};
 	error?: { message?: string };
+}
+
+type RuntimeRun =
+	| { ok: true; envelope: RuntimeEnvelope }
+	| { ok: false; reason: string; message: string };
+
+interface RepoListing {
+	worktrees: RuntimeWorktree[];
+	/** Main checkout that owns `.worktrees/`; falls back to the hook cwd. */
+	mainOwnerRoot: string;
 }
 
 /**
@@ -81,10 +92,15 @@ export function parseWorktreeHookPayload(raw: string): WorktreeHookPayload {
 }
 
 /**
- * Create a worktree at `<repo>/.worktrees/<name>` on branch `<name>`.
+ * Create, or reopen, the worktree `<repo>/.worktrees/<name>` on branch `<name>`.
+ *
+ * The runtime is always driven from the main checkout, so the hook works from
+ * inside a linked worktree too. The new branch is based on the remote default
+ * branch when the repo has one, which mirrors Claude Code's own
+ * `worktree.baseRef: "fresh"` except that nothing is fetched first.
  *
  * @param payload - Hook payload with `cwd` and `name`
- * @returns Created path, or the runtime's refusal reason
+ * @returns Created or reopened path, or the runtime's refusal reason
  *
  * @example
  * ```typescript
@@ -97,24 +113,36 @@ export function createWorktreeFromHook(
 	if (!payload.name) {
 		return { ok: false, message: "WorktreeCreate payload has no name." };
 	}
-	const created = runRuntime(["create", payload.name], payload.cwd);
-	if (!created.ok) return created;
 	const listed = listWorktrees(payload.cwd);
 	if (!listed.ok) return listed;
-	const target = listed.worktrees.find(
-		(worktree) => worktree.branch === payload.name,
+	const { mainOwnerRoot } = listed.listing;
+	const base = remoteDefaultBranch(mainOwnerRoot);
+	const created = runRuntime(
+		["create", payload.name, ...(base ? ["--base", base] : [])],
+		mainOwnerRoot,
 	);
-	if (!target) {
-		return {
-			ok: false,
-			message: `worktree create completed but branch ${payload.name} is not listed by git.`,
-		};
+	if (created.ok) {
+		const path = created.envelope.data?.target_path;
+		return path
+			? { ok: true, path }
+			: {
+					ok: false,
+					message: "agent-worktree create completed without a target_path.",
+				};
 	}
-	return { ok: true, path: target.path };
+	if (created.reason === "branch_already_checked_out") {
+		const existing = listed.listing.worktrees.find(
+			(worktree) => worktree.branch === payload.name,
+		);
+		if (existing?.path.startsWith(`${join(mainOwnerRoot, ".worktrees")}/`)) {
+			return { ok: true, path: existing.path };
+		}
+	}
+	return created;
 }
 
 /**
- * Remove the registered worktree at `worktree_path`.
+ * Remove the registered worktree at `worktree_path` and its branch.
  *
  * The runtime's `--force` is its destructive confirmation, which Claude Code
  * has already given by firing this hook. Its branch-safety check still refuses
@@ -137,7 +165,7 @@ export function removeWorktreeFromHook(
 	const targetPath = canonicalPath(payload.worktree_path);
 	const listed = listWorktrees(payload.cwd);
 	if (!listed.ok) return listed;
-	const target = listed.worktrees.find(
+	const target = listed.listing.worktrees.find(
 		(worktree) => canonicalPath(worktree.path) === targetPath,
 	);
 	if (!target) {
@@ -154,8 +182,8 @@ export function removeWorktreeFromHook(
 	}
 	// Run from the main owner so git never removes the directory it runs in.
 	const removed = runRuntime(
-		["delete", target.branch, "--force"],
-		listed.mainOwnerRoot ?? payload.cwd,
+		["delete", target.branch, "--force", "--delete-branch"],
+		listed.listing.mainOwnerRoot,
 	);
 	return removed.ok ? { ok: true, path: target.path } : removed;
 }
@@ -199,10 +227,7 @@ export function runWorktreeHook(
 	return 0;
 }
 
-function runRuntime(
-	args: readonly string[],
-	cwd: string,
-): { ok: true; envelope: RuntimeEnvelope } | { ok: false; message: string } {
+function runRuntime(args: readonly string[], cwd: string): RuntimeRun {
 	const result = Bun.spawnSync([process.execPath, RUNTIME_CLI, ...args, "--json"], {
 		cwd,
 		stdin: "ignore",
@@ -217,6 +242,7 @@ function runRuntime(
 		const stderr = new TextDecoder().decode(result.stderr).trim();
 		return {
 			ok: false,
+			reason: "no_envelope",
 			message: `agent-worktree ${args[0]} produced no JSON envelope (exit ${result.exitCode}): ${stderr || stdout.trim()}`,
 		};
 	}
@@ -224,6 +250,7 @@ function runRuntime(
 		const reason = envelope.data?.reason ?? envelope.error?.message ?? "unknown";
 		return {
 			ok: false,
+			reason,
 			message: `agent-worktree ${args[0]} refused (${reason}).`,
 		};
 	}
@@ -232,16 +259,26 @@ function runRuntime(
 
 function listWorktrees(
 	cwd: string,
-):
-	| { ok: true; worktrees: RuntimeWorktree[]; mainOwnerRoot: string | undefined }
-	| { ok: false; message: string } {
+): { ok: true; listing: RepoListing } | { ok: false; message: string } {
 	const listed = runRuntime(["list"], cwd);
 	if (!listed.ok) return listed;
 	return {
 		ok: true,
-		worktrees: listed.envelope.data?.worktrees ?? [],
-		mainOwnerRoot: listed.envelope.data?.mainOwnerRoot,
+		listing: {
+			worktrees: listed.envelope.data?.worktrees ?? [],
+			mainOwnerRoot: listed.envelope.data?.mainOwnerRoot ?? cwd,
+		},
 	};
+}
+
+function remoteDefaultBranch(repoRoot: string): string | undefined {
+	const result = Bun.spawnSync(
+		["git", "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"],
+		{ cwd: repoRoot, stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+	);
+	if (result.exitCode !== 0) return undefined;
+	const ref = new TextDecoder().decode(result.stdout).trim();
+	return ref || undefined;
 }
 
 function canonicalPath(path: string): string {

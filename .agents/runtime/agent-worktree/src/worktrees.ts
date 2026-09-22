@@ -637,6 +637,7 @@ export async function createWorktree(options: DiscoverRepoOptions & {
 			preview: true,
 			changes,
 			nextSafeAction: "create",
+			targetPath,
 			recovery: buildRecoveryPlan({ changedState: "none" }),
 		};
 	}
@@ -682,6 +683,7 @@ export async function createWorktree(options: DiscoverRepoOptions & {
 		runRef,
 		changes,
 		nextSafeAction: "status",
+		targetPath,
 		recovery: buildRecoveryPlan({ changedState: "complete" }),
 	};
 }

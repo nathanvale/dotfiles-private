@@ -341,6 +341,7 @@ describe("status front door", () => {
 			workspace_state: "missing",
 			worktree_count: 3,
 			linked_worktree_count: 2,
+			stray_worktree_count: 0,
 			next_safe_action: "Choose a linked branch to open in Codex App, or render the workspace.",
 		});
 		expect(data.front_door).toMatchObject({

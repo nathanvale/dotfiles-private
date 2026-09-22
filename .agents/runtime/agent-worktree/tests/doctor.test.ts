@@ -190,7 +190,36 @@ branch refs/heads/feat/x
 		expect(map.repo.strayWorktreeCount).toBe(1);
 		expect(check?.status).toBe("warn");
 		expect(check?.summary).toBe(
-			"1 linked worktrees live outside .worktrees: /repo/.claude/worktrees/feat-z",
+			"1 linked worktree lives outside .worktrees: /repo/.claude/worktrees/feat-z",
+		);
+	});
+
+	test("keeps stray worktrees unknown when the worktree list could not be read", () => {
+		const discovery = {
+			requestedRoot: "/repo",
+			gitRoot: "/repo",
+			isolation: "main",
+			mainOwnerRoot: "/repo",
+			worktrees: [],
+			linkedWorktrees: [],
+			staleDirs: [],
+			storeRoot: "/repo/.agent-worktree",
+			issues: [
+				{
+					code: "worktree_list_failed",
+					status: "unknown",
+					summary: "Git worktree list failed.",
+				},
+			],
+		} satisfies RepoDiscovery;
+
+		const check = doctorMapFromDiscovery(discovery).checks.find(
+			(entry) => entry.id === "stray_worktrees",
+		);
+
+		expect(check?.status).toBe("unknown");
+		expect(check?.summary).toBe(
+			"Stray worktrees unknown until the worktree list can be read.",
 		);
 	});
 

@@ -462,9 +462,10 @@ function findActiveWorktree(
  * Linked worktrees checked out outside `<mainOwnerRoot>/.worktrees/`.
  *
  * Every harness is meant to land checkouts under the main owner's `.worktrees`
- * directory; anything elsewhere is sprawl that `status` should surface.
+ * directory; anything elsewhere is sprawl that `doctor` and the WorkTree
+ * skill's `status` surface.
  *
- * @param discovery - Repo discovery facts
+ * @param discovery - Main owner root and linked worktree records
  * @returns Linked worktrees outside the owned `.worktrees` directory
  *
  * @example
@@ -472,9 +473,10 @@ function findActiveWorktree(
  * const strays = findStrayWorktrees(discovery)
  * ```
  */
-export function findStrayWorktrees(
-	discovery: Pick<RepoDiscovery, "mainOwnerRoot" | "linkedWorktrees">,
-): readonly DiscoveredWorktree[] {
+export function findStrayWorktrees<T extends { path: string }>(discovery: {
+	mainOwnerRoot?: string;
+	linkedWorktrees: readonly T[];
+}): readonly T[] {
 	if (!discovery.mainOwnerRoot) return [];
 	const ownedPrefix = `${join(discovery.mainOwnerRoot, ".worktrees")}/`;
 	return discovery.linkedWorktrees.filter(

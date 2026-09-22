@@ -7,6 +7,7 @@ import {
 	type AgentWorktreeStatus,
 } from "./model.ts";
 import {
+	type DiscoveredWorktree,
 	type DiscoverRepoOptions,
 	type DiscoveryIssue,
 	defaultGitRunner,
@@ -178,6 +179,7 @@ function doctorMapFromDiscoveryWithContext(
 	context: DoctorRuntimeContext,
 ): DoctorMap {
 	const issueChecks = checksFromDiscoveryIssues(discovery);
+	const strays = findStrayWorktrees(discovery);
 	const checks: DoctorCheck[] = [
 		repoCheck(discovery),
 		worktreesCheck(discovery),
@@ -185,7 +187,7 @@ function doctorMapFromDiscoveryWithContext(
 		contractCheck(),
 		dependenciesCheck(discovery),
 		mutationsCheck(discovery, context),
-		strayWorktreesCheck(discovery),
+		strayWorktreesCheck(discovery, strays),
 		...issueChecks,
 	];
 	const aggregate = aggregateDoctorMap(checks);
@@ -201,7 +203,7 @@ function doctorMapFromDiscoveryWithContext(
 			storeRoot: discovery.storeRoot,
 			linkedWorktreeCount: discovery.linkedWorktrees.length,
 			staleDirCount: discovery.staleDirs.length,
-			strayWorktreeCount: findStrayWorktrees(discovery).length,
+			strayWorktreeCount: strays.length,
 		},
 		availableCommands: AGENT_WORKTREE_COMMANDS,
 	};
@@ -286,8 +288,21 @@ function worktreesCheck(discovery: RepoDiscovery): DoctorCheck {
 	};
 }
 
-function strayWorktreesCheck(discovery: RepoDiscovery): DoctorCheck {
-	const strays = findStrayWorktrees(discovery);
+function strayWorktreesCheck(
+	discovery: RepoDiscovery,
+	strays: readonly DiscoveredWorktree[],
+): DoctorCheck {
+	if (discovery.issues.some((issue) => issue.code === "worktree_list_failed")) {
+		return {
+			id: "stray_worktrees",
+			owner: "discovery",
+			status: "unknown",
+			summary: "Stray worktrees unknown until the worktree list can be read.",
+			blockers: [],
+			nextActions: ["doctor"],
+		};
+	}
+	const noun = strays.length === 1 ? "worktree lives" : "worktrees live";
 	return {
 		id: "stray_worktrees",
 		owner: "discovery",
@@ -295,7 +310,7 @@ function strayWorktreesCheck(discovery: RepoDiscovery): DoctorCheck {
 		summary:
 			strays.length === 0
 				? "All linked worktrees live under .worktrees."
-				: `${strays.length} linked worktrees live outside .worktrees: ${strays
+				: `${strays.length} linked ${noun} outside .worktrees: ${strays
 						.map((worktree) => worktree.path)
 						.join(", ")}`,
 		blockers: [],
