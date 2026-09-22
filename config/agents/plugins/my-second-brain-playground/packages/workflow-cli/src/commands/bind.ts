@@ -11,7 +11,7 @@ import type { BeadsReader } from "../adapters/beads.ts"
 import type { BindingRead, RecoveryStore } from "../adapters/recovery.ts"
 import type { Diagnostics } from "../diagnostics.ts"
 import type { BeadFacts, CommandOutcome, GateFacts, JsonObject, RecoveryBinding, StoreFacts } from "../model.ts"
-import { buildPanel, type PanelFacts, sameOwner } from "../recovery.ts"
+import { buildPanel, type PanelFacts, sameOwner, shellQuote } from "../recovery.ts"
 import { RuntimeFailure } from "../runtime.ts"
 import { beadOutcome, bindingInvalidOutcome, type CommandContext, refusal, resolveSession, sessionOutcome, stateUnsafeOutcome, storeOutcome, success, unavailableOutcome } from "./shared.ts"
 
@@ -43,20 +43,22 @@ function canonicalEvidence(evidence: string | null, sourceRepository: string): E
 }
 
 function writeOutcome(error: unknown, workspace: string, session: string): CommandOutcome {
-	if (error instanceof RuntimeFailure && error.kind === "busy") return { station: "storage-busy", message: error.message, result: { station: "storage-busy", reason: error.message }, repairAction: "Another msb-workflow process holds this workspace or session lock; wait for it to finish and retry the same command", nextAction: `msb-workflow inspect --workspace ${workspace} --session ${session}`, availablePaths: [], handoffPrerequisites: [] }
-	if (error instanceof RuntimeFailure && error.kind === "unsupported") return { station: "platform-unsupported", message: error.message, result: { station: "platform-unsupported", reason: error.message }, repairAction: "Run the helper on macOS, the only platform with an admitted lock Adapter; a Linux flock Adapter is a later unit", nextAction: `msb-workflow inspect --workspace ${workspace} --session ${session}`, availablePaths: [], handoffPrerequisites: [] }
+	if (error instanceof RuntimeFailure && error.kind === "busy") return { station: "storage-busy", message: error.message, result: { station: "storage-busy", reason: error.message }, repairAction: "Another msb-workflow process holds this workspace or session lock; wait for it to finish and retry the same command", nextAction: inspectAction(workspace, session), availablePaths: [], handoffPrerequisites: [] }
+	if (error instanceof RuntimeFailure && error.kind === "unsupported") return { station: "platform-unsupported", message: error.message, result: { station: "platform-unsupported", reason: error.message }, repairAction: "Run the helper on macOS, the only platform with an admitted lock Adapter; a Linux flock Adapter is a later unit", nextAction: inspectAction(workspace, session), availablePaths: [], handoffPrerequisites: [] }
 	if (error instanceof RuntimeFailure && error.kind === "unsafe") return stateUnsafeOutcome(error.message, workspace)
-	if (error instanceof RuntimeFailure && error.kind === "uncertain") return { station: "write-unknown", message: `the binding rename became visible but the write did not complete cleanly: ${error.message}`, result: { station: "write-unknown", reason: error.message }, repairAction: `Run msb-workflow recover --workspace ${workspace} --session ${session} to read the durable binding before deciding whether to bind again`, nextAction: `msb-workflow recover --workspace ${workspace} --session ${session}`, availablePaths: [], handoffPrerequisites: [] }
+	if (error instanceof RuntimeFailure && error.kind === "uncertain") return { station: "write-unknown", message: `the binding rename became visible but the write did not complete cleanly: ${error.message}`, result: { station: "write-unknown", reason: error.message }, repairAction: `Run ${recoverAction(workspace, session)} to read the durable binding before deciding whether to bind again`, nextAction: recoverAction(workspace, session), availablePaths: [], handoffPrerequisites: [] }
 	const reason = error instanceof Error ? error.message : "binding write failed"
-	return { station: "write-failed", message: reason, result: { station: "write-failed", reason }, repairAction: "Repair the private state directory (owner, mode 0700, free space), then retry the same bind", nextAction: `msb-workflow inspect --workspace ${workspace} --session ${session}`, availablePaths: [], handoffPrerequisites: [] }
+	return { station: "write-failed", message: reason, result: { station: "write-failed", reason }, repairAction: "Repair the private state directory (owner, mode 0700, free space), then retry the same bind", nextAction: inspectAction(workspace, session), availablePaths: [], handoffPrerequisites: [] }
 }
 
-const recoverAction = (workspace: string, session: string): string => `msb-workflow recover --workspace ${workspace} --session ${session}`
-const switchAction = (saved: RecoveryBinding, beadId: string): string => `msb-workflow bind --workspace ${saved.workspace} --bead ${beadId} --from ${saved.beadId} --session ${saved.sessionIdentity}`
+const inspectAction = (workspace: string, session: string): string => `msb-workflow inspect --workspace ${shellQuote(workspace)} --session ${shellQuote(session)}`
+const recoverAction = (workspace: string, session: string): string => `msb-workflow recover --workspace ${shellQuote(workspace)} --session ${shellQuote(session)}`
+const bindAction = (workspace: string, beadId: string, session: string): string => `msb-workflow bind --workspace ${shellQuote(workspace)} --bead ${shellQuote(beadId)} --session ${shellQuote(session)}`
+const switchAction = (saved: RecoveryBinding, beadId: string): string => `msb-workflow bind --workspace ${shellQuote(saved.workspace)} --bead ${shellQuote(beadId)} --from ${shellQuote(saved.beadId)} --session ${shellQuote(saved.sessionIdentity)}`
 
 /** The one repair for a saved owner that differs: a Bead change names the verified switch; a workspace change has none. */
 function ownerConflictRepair(saved: RecoveryBinding, binding: RecoveryBinding): string {
-	if (saved.workspace !== binding.workspace) return `Recover the saved binding with --workspace ${saved.workspace} and continue ${saved.beadId}, or use a different session for ${binding.workspace}; a saved workspace is never switched`
+	if (saved.workspace !== binding.workspace) return `Recover the saved binding with --workspace ${shellQuote(saved.workspace)} and continue ${saved.beadId}, or use a different session for ${binding.workspace}; a saved workspace is never switched`
 	return `Recover the saved binding and continue ${saved.beadId}, or switch this session to ${binding.beadId} only through the verified switch that names the owner it replaces: ${switchAction(saved, binding.beadId)}; no flag replaces a saved owner without naming it`
 }
 
@@ -98,7 +100,7 @@ function switchOwner(input: LockedWrite, saved: Extract<BindingRead, { status: "
 	const { store, binding } = input
 	const session = binding.sessionIdentity
 	if (saved.status === "absent") {
-		const again = `msb-workflow bind --workspace ${binding.workspace} --bead ${binding.beadId} --session ${session}`
+		const again = bindAction(binding.workspace, binding.beadId, session)
 		return refused(refusal("binding-absent", `no binding exists for session ${session}; --from ${from} names no saved owner`, `Bind this session without --from: ${again}`, again, { bindingPath: store.bindingPath(session), from }))
 	}
 	if (saved.binding.workspace !== binding.workspace) return refused(ownerConflict(input, saved.binding))
@@ -163,7 +165,7 @@ async function prepare(request: BindRequest, context: CommandContext): Promise<P
 	if (session.status !== "resolved") return sessionOutcome(session)
 	if (request.from !== null && session.source === "environment") return refusal("binding-inherited-conflict", `inherited session identity cannot switch a saved owner: --from ${request.from} to ${request.beadId} for session ${session.session}`, "An inherited CODEX_SESSION_ID is not worker ownership. Verify your own Harness session identity and pass it with --session; the saved binding is preserved", recoverAction(request.workspace, session.session), { from: request.from })
 	const sourceRepository = await context.gitTopLevel(context.cwd)
-	const again = `msb-workflow bind --workspace ${request.workspace} --bead ${request.beadId} --session ${session.session}`
+	const again = bindAction(request.workspace, request.beadId, session.session)
 	if (sourceRepository === null) return refusal("source-repository-missing", "bind must run inside a Git working directory; sourceRepository is derived from its top level", "Change into the source repository that owns this work (a worktree is fine) and bind again; there is no --source flag", `cd <source-repository> && ${again}`)
 	const evidence = canonicalEvidence(request.evidence, sourceRepository)
 	if (evidence.status === "invalid") return refusal("evidence-invalid", evidence.reason, `Pass --evidence as the canonical absolute path of a regular file inside ${sourceRepository}, or omit it`, again)

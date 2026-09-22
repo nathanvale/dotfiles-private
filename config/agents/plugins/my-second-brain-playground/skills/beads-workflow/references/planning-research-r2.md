@@ -28,29 +28,29 @@ Create the Bead under the dispatched parent with the GitHub issue as
 the description with the file.
 
 Done when the Bead exists, its description equals the file, and
-`bd show <id> --readonly --json` carries the dispatched parent, external
+`"$BD_EXECUTABLE" show <id> --readonly --json` carries the dispatched parent, external
 reference, and Spec link.
 
 ## 2. Gate the decision at entry
 
-Create exactly one Gate: `bd gate create --type=human --blocks <id> --reason
-"<the decision Nathan will make>"`. The Gate exists before any research so the
+Create exactly one Gate: `"$BD_EXECUTABLE" gate create --type=human --blocks
+<id> --reason "<the decision Nathan will make>" --actor <role>`. The Gate exists before any research so the
 Bead cannot close on prose alone.
 
-Done when `bd gate list <id> --readonly --json` shows one open human Gate and
-no `gh:pr` Gate, and `bd gate list --all --readonly --json` taken before and
-after differs only by this Gate.
+Done when `"$BD_EXECUTABLE" gate list <id> --readonly --json` shows one open
+human Gate and no `gh:pr` Gate, and `"$BD_EXECUTABLE" gate list --all
+--readonly --json` taken before and after differs only by this Gate.
 
 ## 3. Claim and bind
 
-`bd update <id> --claim` by the performing Cast Member. Then, from a Git
-working directory, bind the session once with `msb-workflow bind` as
-`SKILL.md` shows. Post the entry checkpoint: the capability request, the
-selected lane in the label form `cast.md` prescribes, the question, and the
-next safe action.
+The performing Cast Member runs `"$BD_EXECUTABLE" update <id> --claim --actor
+<role>`. Then, from a Git working directory, bind the session once with
+`msb-workflow bind` as `SKILL.md` shows. Post the entry checkpoint: the
+capability request, the selected lane in the label form `cast.md` prescribes,
+the question, and the next safe action.
 
-Done when `bd show <id> --readonly --json` reports `in_progress` with the
-role as assignee and the bind envelope reports success.
+Done when `"$BD_EXECUTABLE" show <id> --readonly --json` reports `in_progress`
+with the role as assignee and the bind envelope reports success.
 
 ## 4. Gather, compare, record
 
@@ -64,12 +64,12 @@ Done when a checkpoint's Evidence names the note path and its commit.
 
 ## 5. Decide
 
-Nathan, or the Stage Manager on his decision, runs `bd gate resolve <gate>
---reason "<decision and rationale>"`. The decision is also recorded in the
-vault owner.
+Nathan, or the Stage Manager on his decision, runs `"$BD_EXECUTABLE" gate
+resolve <gate> --reason "<decision and rationale>" --actor <role>`. The
+decision is also recorded in the vault owner.
 
-Done when `bd gate list <id> --readonly --json` shows no open Gate and the
-vault decision cites the Gate ID.
+Done when `"$BD_EXECUTABLE" gate list <id> --readonly --json` shows no open
+Gate and the vault decision cites the Gate ID.
 
 ## 6. Resume from a fresh context
 
@@ -93,21 +93,22 @@ next owner, next safe action, and one recovery lesson cited from its existing
 vault owner with path and `updated` date. Transient checkpoint comments are
 not lessons and are not promoted.
 
-Done when `bd show <id> --readonly --json --include-comments` returns the
+Done when `"$BD_EXECUTABLE" show <id> --readonly --json --include-comments` returns the
 closeout checkpoint with all five headings and the cited lesson's vault path
 and `updated` date, and a `msb-workflow recover --json` panel for the bound
 session, or a fresh session bound to the same Bead, taken after the post,
 reports no open human Gate, shows the checkpoint's `## Checkpoint:` heading
-as the last of `result.recentComments`, and lists that `bd show` read among
+as the last of `result.recentComments`, and lists that native `show` read among
 its read-only commands. The panel quotes at most 1024 bytes per comment and
-derives its own next safe action; read the full Handback from `bd show`.
+derives its own next safe action; read the full Handback with
+`"$BD_EXECUTABLE" show`.
 
 ## 8. Retire
 
 After independent review against the Ticket's criteria, close with
-`bd close <id> --reason-file <file>`.
+`"$BD_EXECUTABLE" close <id> --reason-file <file> --actor <role>`.
 
-Done when `bd show <id> --readonly --json --include-comments` returns the
+Done when `"$BD_EXECUTABLE" show <id> --readonly --json --include-comments` returns the
 closed Bead with every checkpoint body, the rendered board shows the decision
 and those bodies, and every other run's Bead and Gate list are byte-equal to
 their pre-run reads.

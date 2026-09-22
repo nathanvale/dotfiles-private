@@ -44,11 +44,12 @@ Prove the selected store with the dispatched executable, then refuse on any
 mismatch with one repair:
 
 ```sh
+BD_EXECUTABLE="/absolute/path/from-dispatch/to/bd"
 export BEADS_DIR=<store root>/.beads
-bd version                          # version and revision agree with msb-workflow inspect
-bd where --readonly --json          # .path equals $BEADS_DIR; .prefix as dispatched
-bd config list --readonly --json    # prefix agrees
-bd context --readonly --json        # in a Git working directory: same store, not redirected
+"$BD_EXECUTABLE" version                          # version and revision agree with msb-workflow inspect
+"$BD_EXECUTABLE" where --readonly --json          # .path equals $BEADS_DIR; .prefix as dispatched
+"$BD_EXECUTABLE" config list --readonly --json    # prefix agrees
+"$BD_EXECUTABLE" context --readonly --json        # in a Git working directory: same store, not redirected
 ```
 
 A missing or wrong `BEADS_DIR` can fall back silently to a store above the
@@ -60,21 +61,22 @@ the accepted executable digest; a wrong or ancestor store is
 
 ## Native primitives
 
-Syntax comes from `bd <command> --help` on the pinned executable. Pass
+Bind `BD_EXECUTABLE` once to the dispatched absolute path. Syntax comes from
+`"$BD_EXECUTABLE" <command> --help`. Pass
 `--actor <role>` on every write and `--author <role>` on every comment so the
 audit trail names the Cast Role. Read with `--readonly --json`.
 
 | Move | Command |
 | --- | --- |
-| Create | `bd create "<title>" --parent <bead> --external-ref <issue> --spec-id <spec> --body-file <file>` |
-| Depend | `bd dep add <blocked> <blocker>` |
-| Ready | `bd ready --readonly --json`; `bd blocked --readonly --json` |
-| Claim | `bd update <id> --claim` |
-| Gate | `bd gate create --type=human --blocks <id> --reason "<why>"`; `bd gate list <id> --readonly --json` |
-| Checkpoint | `bd comments add <id> -f <file> --author <role>` |
-| Read back | `bd show <id> --readonly --json --include-comments` |
-| Resolve | `bd gate resolve <gate> --reason "<decision and rationale>"` |
-| Close | `bd close <id> --reason-file <file>` |
+| Create | `"$BD_EXECUTABLE" create "<title>" --parent <bead> --external-ref <issue> --spec-id <spec> --body-file <file> --actor <role>` |
+| Depend | `"$BD_EXECUTABLE" dep add <blocked> <blocker> --actor <role>` |
+| Ready | `"$BD_EXECUTABLE" ready --readonly --json`; `"$BD_EXECUTABLE" blocked --readonly --json` |
+| Claim | `"$BD_EXECUTABLE" update <id> --claim --actor <role>` |
+| Gate | `"$BD_EXECUTABLE" gate create --type=human --blocks <id> --reason "<why>" --actor <role>`; `"$BD_EXECUTABLE" gate list <id> --readonly --json` |
+| Checkpoint | `"$BD_EXECUTABLE" comments add <id> -f <file> --author <role>` |
+| Read back | `"$BD_EXECUTABLE" show <id> --readonly --json --include-comments` |
+| Resolve | `"$BD_EXECUTABLE" gate resolve <gate> --reason "<decision and rationale>" --actor <role>` |
+| Close | `"$BD_EXECUTABLE" close <id> --reason-file <file> --actor <role>` |
 
 After every write, read the Bead back and compare with the file you wrote.
 
@@ -103,9 +105,9 @@ comment is posted and read back by ID. Raw receipts stay in private state.
 
 ```sh
 <plugin root>/bin/msb-workflow --help
-MSB_WORKFLOW_BD_EXECUTABLE=<bd> <plugin root>/bin/msb-workflow bind --workspace <store root> --bead <id> --session <id> --json   # once per session, from a Git working directory
+MSB_WORKFLOW_BD_EXECUTABLE="$BD_EXECUTABLE" <plugin root>/bin/msb-workflow bind --workspace <store root> --bead <id> --session <id> --json   # once per session, from a Git working directory
 <plugin root>/bin/msb-workflow recover --workspace <store root> --session <id> --json   # on resume
-MSB_WORKFLOW_BD_EXECUTABLE=<bd> <plugin root>/bin/msb-workflow inspect --workspace <store root> --session <id> --json   # on doubt
+MSB_WORKFLOW_BD_EXECUTABLE="$BD_EXECUTABLE" <plugin root>/bin/msb-workflow inspect --workspace <store root> --session <id> --json   # on doubt
 ```
 
 The plugin root is `../..` from this skill's directory. The helper's `--discover

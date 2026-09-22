@@ -45,31 +45,34 @@ with `SHA256SUMS`.
 
 A board witness is one read-only visit to the rendered board at a named
 moment, in the shape of the rollout packet's
-`board-rendered-witness-20260921.md`, saved in the packet. The `bd ready` and
-`bd blocked` reads taken beside it are native graph facts, recorded with it.
+`board-rendered-witness-20260921.md`, saved in the packet. The
+`"$BD_EXECUTABLE" ready` and `"$BD_EXECUTABLE" blocked` reads taken beside it
+are native graph facts, recorded with it.
 
 ## Guards
 
 - Uncertain effect: before any retry, read the owner. A Beads write:
-  `bd show <id> --readonly --json --include-comments`. A binding:
+  `"$BD_EXECUTABLE" show <id> --readonly --json --include-comments`. A binding:
   `msb-workflow inspect`. Retry only when the read proves the first attempt
   left nothing; a claim, comment, close, or dispatch that already landed is
   accepted as it is.
-- Guarded writes: `--if-assignee <holder>` or `--if-status <status>` on a
-  `bd update` field write other than `--claim`, and `--if-assignee <holder>`
-  on `bd unclaim`, write nothing on a mismatch and exit non-zero naming the
-  current holder or status. A mismatch is a fact to read, never a guard to
-  repeat.
-- Ownership: `bd close` refuses an actor other than the assignee and refuses
-  while a `blocks` dependency is open. The assignee closes, after acceptance.
+- Guarded writes: `"$BD_EXECUTABLE" update <id> <field-write> --if-assignee
+  <holder> --actor <role>` or `--if-status <status> --actor <role>`, other than
+  `--claim`; and `"$BD_EXECUTABLE" unclaim <id> --if-assignee <holder> --actor
+  <role>` write nothing on a mismatch and exit non-zero naming the current
+  holder or status. A mismatch is a fact to read, never a guard to repeat.
+- Ownership: `"$BD_EXECUTABLE" close <id> --reason-file <file> --actor <role>`
+  refuses an actor other than the assignee and refuses while a `blocks`
+  dependency is open. The assignee closes after acceptance.
 - Frontier exit: a Bead leaves the actionable frontier by one of two native
-  moves. `bd unclaim <id> --if-assignee <holder>` when the Bead stays live
-  and only its holder changes; `bd supersede <old> --with <new>` when the
-  Bead itself is replaced, which closes `<old>` with a `supersedes` edge to
-  `<new>`, keeps its comments and edges readable, and drops it from
-  `bd blocked`, while `<new>` carries the same finding ID and count. Neither
-  move claims delivery. `--force`, `reclaim`, `prune`, `purge`, and `delete`
-  stay outside a run.
+  moves. `"$BD_EXECUTABLE" unclaim <id> --if-assignee <holder> --actor <role>`
+  when the Bead stays live and only its holder changes;
+  `"$BD_EXECUTABLE" supersede <old> --with <new> --actor <role>` when the Bead
+  itself is replaced, which closes `<old>` with a `supersedes` edge to `<new>`,
+  keeps its comments and edges readable, and drops it from
+  `"$BD_EXECUTABLE" blocked`, while `<new>` carries the same finding ID and
+  count. Neither move claims delivery. `--force`, `reclaim`, `prune`, `purge`,
+  and `delete` stay outside a run.
 
 ## 1. Wire the graph
 
@@ -79,17 +82,18 @@ revision the dispatch names for that Bead (this reference, or
 Spec revision, the base commit, the owned paths, the performing Cast Role,
 the packet path, and the allowance with its owner. Create each under
 the dispatched parent with the GitHub issue as `--external-ref` and the Spec
-as `--spec-id`. Then `bd dep add <C> <A>`, `bd dep add <C> <B>`, and exactly
-one Gate: `bd gate create --type=human --blocks <C> --reason "<the decision
-Nathan makes to admit the join>"`. Read each Bead back and compare with its
-file.
+as `--spec-id`, using the shared Create primitive with `--actor <role>`. Then
+`"$BD_EXECUTABLE" dep add <C> <A> --actor <role>`, `"$BD_EXECUTABLE" dep add
+<C> <B> --actor <role>`, and exactly one Gate: `"$BD_EXECUTABLE" gate create
+--type=human --blocks <C> --reason "<the decision Nathan makes to admit the
+join>" --actor <role>`. Read each Bead back and compare with its file.
 
-Done when `bd show <C> --readonly --json` lists A, B, and the Gate as `blocks`
-dependencies, `bd blocked --readonly --json` lists C with all three in
-`blocked_by`, `bd ready --readonly --json` lists A and B and omits C,
-`bd gate list <C> --readonly --json` shows one open human Gate, and
-`bd gate list --all --readonly --json` taken before and after differs only by
-this Gate.
+Done when `"$BD_EXECUTABLE" show <C> --readonly --json` lists A, B, and the Gate
+as `blocks` dependencies, `"$BD_EXECUTABLE" blocked --readonly --json` lists C
+with all three in `blocked_by`, `"$BD_EXECUTABLE" ready --readonly --json`
+lists A and B and omits C, `"$BD_EXECUTABLE" gate list <C> --readonly --json`
+shows one open human Gate, and `"$BD_EXECUTABLE" gate list --all --readonly
+--json` taken before and after differs only by this Gate.
 
 ## 2. Route and claim
 
@@ -99,14 +103,15 @@ allowance and its owner, the packet path, each prerequisite's
 `Role • Model`, and the role-skill identity: the role skill each dispatched
 role loads and this reference, each by resolved absolute path and SHA-256,
 saved as one list in the packet. Each performing Cast Member then runs
-`bd update <id> --claim`, binds once with `msb-workflow bind` from a Git
-working directory, and posts its entry checkpoint: the lane label, the
-candidate base, the worktree, the owned paths, and the next safe action.
+`"$BD_EXECUTABLE" update <id> --claim --actor <role>`, binds once with
+`msb-workflow bind` from a Git working directory, and posts its entry
+checkpoint: the lane label, the candidate base, the worktree, the owned paths,
+and the next safe action.
 
 Done when the parent's last comment is the run entry checkpoint with the lane
-set and the role-skill identity list, `bd show <A> --readonly --json` reports
-`in_progress` with the role as assignee, and the bind envelope reports
-success.
+set and the role-skill identity list, `"$BD_EXECUTABLE" show <A> --readonly
+--json` reports `in_progress` with the role as assignee, and the bind envelope
+reports success.
 
 ## 3. Build the candidate
 
@@ -132,9 +137,10 @@ names the other. Add the row to `findings.md` at `attempt 0 of <allowed>`,
 disposition `not-proved`, and post a checkpoint on A naming the ID, anchor,
 candidate, and count. A prerequisite whose review returns no material
 finding is accepted on its Handback and its assignee closes it with
-`bd close <id> --reason-file <file>`. A run with no material finding on
-either prerequisite records that; Steps 5 to 10 stay unexercised and the
-closeout reports the gap. A finding is observed, never manufactured.
+`"$BD_EXECUTABLE" close <id> --reason-file <file> --actor <role>`. A run with
+no material finding on either prerequisite records that; Steps 5 to 10 stay
+unexercised and the closeout reports the gap. A finding is observed, never
+manufactured.
 
 Done when the row exists, A's checkpoint carries the same ID, candidate
 commit, and count as the row, and each accepted prerequisite without a
@@ -144,23 +150,26 @@ finding reports `closed`.
 
 Create R under the dispatched parent: its body names the finding ID, anchor,
 failure behaviour, the candidate commit as R's base, the allowance, and this
-reference. Then `bd dep add <C> <R>`, `bd dep add <A> <R>`, and
-`bd dep add <R> <A> -t discovered-from`. Read back, then take board witness
-one: R open, A and C blocked.
+reference. Create it with the shared Create primitive and `--actor <role>`.
+Then `"$BD_EXECUTABLE" dep add <C> <R> --actor <role>`, `"$BD_EXECUTABLE" dep
+add <A> <R> --actor <role>`, and `"$BD_EXECUTABLE" dep add <R> <A> -t
+discovered-from --actor <role>`. Read back, then take board witness one: R
+open, A and C blocked.
 
-Done when `bd blocked --readonly --json` lists C and A with R in `blocked_by`,
-`bd ready --readonly --json` lists R and omits A and C, and `bd show <R>
---readonly --json` carries the `discovered-from` edge to A. From here `bd
-close <A>` is refused natively until R closes.
+Done when `"$BD_EXECUTABLE" blocked --readonly --json` lists C and A with R in
+`blocked_by`, `"$BD_EXECUTABLE" ready --readonly --json` lists R and omits A
+and C, and `"$BD_EXECUTABLE" show <R> --readonly --json` carries the
+`discovered-from` edge to A. From here `"$BD_EXECUTABLE" close <A> --actor
+<role>` is refused natively until R closes.
 
 ## 6. Repair
 
-The dispatched performer claims R, binds under its own session, and posts R's
-entry checkpoint with the finding ID, the candidate, the lane label, and
-`attempt 1 of <allowed>`; the row moves to the same count. In a worktree from
-the candidate commit: RED with a focused check that fails on the finding,
-then GREEN, then the focused checks and the repository gates, then one repair
-commit.
+The dispatched performer claims R with `"$BD_EXECUTABLE" update <R> --claim
+--actor <role>`, binds under its own session, and posts R's entry checkpoint
+with the finding ID, the candidate, the lane label, and `attempt 1 of
+<allowed>`; the row moves to the same count. In a worktree from the candidate
+commit: RED with a focused check that fails on the finding, then GREEN, then
+the focused checks and the repository gates, then one repair commit.
 
 Done when R's entry checkpoint and the row agree on the ID, candidate, and
 count, and the RED receipt is in the packet.
@@ -170,13 +179,13 @@ count, and the RED receipt is in the packet.
 The sender commits or names its partial state by path and hash, posts the
 Handback checkpoint on R with the finding ID, candidate, and count verbatim,
 the exact next repair action under `## Remaining`, the Stage Manager as next
-owner, and stops. The Stage Manager releases the claim with `bd unclaim <R>
---if-assignee <sender>` and no `--reason`, so the Handback stays the last
-comment.
+owner, and stops. The Stage Manager releases the claim with
+`"$BD_EXECUTABLE" unclaim <R> --if-assignee <sender> --actor <role>` and no
+`--reason`, so the Handback stays the last comment.
 
-Done when `bd show <R> --readonly --json --include-comments` reports `open`,
-no assignee, and the Handback as the last comment. A non-zero exit names the
-current holder; read, then decide.
+Done when `"$BD_EXECUTABLE" show <R> --readonly --json --include-comments`
+reports `open`, no assignee, and the Handback as the last comment. A non-zero
+exit names the current holder; read, then decide.
 
 ## 8. Substitute the lane
 
@@ -194,12 +203,13 @@ dirty, and the pane listing shows one launch, for the selected lane only.
 
 ## 9. Resume on the replacement lane
 
-The receiver runs `bd update <R> --claim`, binds under its own session, and
-takes `msb-workflow recover --json` as the resume witness. Its entry
-checkpoint copies the finding ID, candidate, and count from the Handback and
-the row, never re-derived, and names the lane label. It continues from the
-Handback's exact next action to GREEN, the focused checks, the repository
-gates, and one repair commit, then posts R's Handback checkpoint.
+The receiver runs `"$BD_EXECUTABLE" update <R> --claim --actor <role>`, binds
+under its own session, and takes `msb-workflow recover --json` as the resume
+witness. Its entry checkpoint copies the finding ID, candidate, and count from
+the Handback and the row, never re-derived, and names the lane label. It
+continues from the Handback's exact next action to GREEN, the focused checks,
+the repository gates, and one repair commit, then posts R's Handback
+checkpoint.
 
 Done when the `recover` panel reports `in_progress` with the receiver's role
 as assignee, no open blocker or human Gate, and the sender's Handback among
@@ -216,45 +226,49 @@ disposition; a new distinct defect takes a new ID with `related-to` or
 `split-from`; `not-proved` leaves the row's disposition and count unchanged,
 and only the next dispatched repair consumes the next attempt, while the
 allowance allows, otherwise the run hands back. On `proved`, R's assignee
-closes R with `bd close <R> --reason-file <file>` naming the ID, candidate,
-count, and verdict receipt; then A's assignee supplies the facts for A's
-accepted Handback, the repaired candidate identity (the repair commit with
-dirty bytes `none`) beside the ID, count, and verdict receipt, the Ledger
-Steward posts it by the board-comment route, and A's assignee closes A on
-that Handback, so C joins the proved candidate.
+closes R with `"$BD_EXECUTABLE" close <R> --reason-file <file> --actor <role>`
+naming the ID, candidate, count, and verdict receipt; then A's assignee
+supplies the facts for A's accepted Handback, the repaired candidate identity
+(the repair commit with dirty bytes `none`) beside the ID, count, and verdict
+receipt, the Ledger Steward posts it by the board-comment route, and A's
+assignee closes A with `"$BD_EXECUTABLE" close <A> --reason-file <file> --actor
+<role>`, so C joins the proved candidate.
 
-Done when `bd show <R>` and `bd show <A>` report `closed`, A's last
+Done when `"$BD_EXECUTABLE" show <R> --readonly --json` and
+`"$BD_EXECUTABLE" show <A> --readonly --json` report `closed`, A's last
 checkpoint is its accepted Handback naming the same candidate commit as R's
 close reason, the row reads `proved` with the re-review receipt, and
-`bd blocked --readonly --json` lists C blocked by the Gate only.
+`"$BD_EXECUTABLE" blocked --readonly --json` lists C blocked by the Gate only.
 
 ## 11. Admit and join
 
-Nathan, or the Stage Manager on his decision, runs `bd gate resolve <gate>
---reason "<decision and rationale>"`. Read `bd ready --readonly --json` now,
-before the claim, and record it, then take board witness two: C ready. The
-performing Cast Member claims C, binds, confirms with `git rev-parse` that
-the commit it integrates for each prerequisite is the candidate commit that
-prerequisite's accepted Handback names, verifies the integrated result of A
-and B against both accepted Handbacks with focused checks, and supplies the
-facts for C's closeout checkpoint, which the Ledger Steward posts by the
-board-comment route, with `## Evidence` recording both compared commits and
-`## Remaining` naming the merge, activation, and release as unproved.
+Nathan, or the Stage Manager on his decision, runs `"$BD_EXECUTABLE" gate
+resolve <gate> --reason "<decision and rationale>" --actor <role>`. Read
+`"$BD_EXECUTABLE" ready --readonly --json` now, before the claim, and record
+it, then take board witness two: C ready. The performing Cast Member claims C
+with `"$BD_EXECUTABLE" update <C> --claim --actor <role>`, binds, confirms with
+`git rev-parse` that the commit it integrates for each prerequisite is the
+candidate commit that prerequisite's accepted Handback names, verifies the
+integrated result of A and B against both accepted Handbacks with focused
+checks, and supplies the facts for C's closeout checkpoint, which the Ledger
+Steward posts by the board-comment route, with `## Evidence` recording both
+compared commits and `## Remaining` naming the merge, activation, and release
+as unproved.
 
-Done when `bd gate list <C> --readonly --json` shows no open Gate, the
-`bd ready` read between the resolve and the claim listed C, and
-`bd show <C> --readonly --json --include-comments` returns the closeout
-checkpoint with all five headings.
+Done when `"$BD_EXECUTABLE" gate list <C> --readonly --json` shows no open
+Gate, the `"$BD_EXECUTABLE" ready` read between the resolve and the claim
+listed C, and `"$BD_EXECUTABLE" show <C> --readonly --json --include-comments`
+returns the closeout checkpoint with all five headings.
 
 ## 12. Retire and read the board
 
 After independent review against the Ticket's criteria, C's assignee closes
-it with `bd close <C> --reason-file <file>`. Take board witness three: C
-closed, its closeout body visible. Seal the packet.
+it with `"$BD_EXECUTABLE" close <C> --reason-file <file> --actor <role>`. Take
+board witness three: C closed, its closeout body visible. Seal the packet.
 
-Done when `bd show <C> --readonly --json --include-comments` returns the
-closed Bead with every checkpoint body, the three board witnesses show R
-open with C blocked, then C ready, then C closed with the merge unproved,
-`findings.md` retains every attempt row, every Bead that left the frontier
-did so by a listed move, and every other run's Bead and Gate list are
+Done when `"$BD_EXECUTABLE" show <C> --readonly --json --include-comments`
+returns the closed Bead with every checkpoint body, the three board witnesses
+show R open with C blocked, then C ready, then C closed with the merge
+unproved, `findings.md` retains every attempt row, every Bead that left the
+frontier did so by a listed move, and every other run's Bead and Gate list are
 byte-equal to their pre-run reads.

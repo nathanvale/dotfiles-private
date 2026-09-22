@@ -646,6 +646,54 @@ describe("bind --from: the verified same-session switch", () => {
 		expect(run.stdout).toContain(`Bead: ${OTHER_BEAD} Another Bead`)
 	})
 
+	test("bind, inspect, and recover retry and repair commands quote whitespace and embedded single quotes", async () => {
+		const workspace = join(root.privateRoot, "work sp'ace")
+		mkdirSync(join(workspace, ".beads"), { recursive: true, mode: 0o700 })
+		// Hand-derived POSIX single quoting (independent oracle): each unsafe argument is one word and each embedded '
+		// is spelled '\''.
+		const shownWorkspace = `'${root.privateRoot}/work sp'\\''ace'`
+		const recover = (session: string): string => `msb-workflow recover --workspace ${shownWorkspace} --session ${session}`
+		const inspect = (session: string): string => `msb-workflow inspect --workspace ${shownWorkspace} --session ${session}`
+
+		const absentSession = "session-absent"
+		const absent = await runCli(root, switchArgs(root, absentSession, OTHER_BEAD, BEAD, workspace))
+		const absentEnvelope = expectEnvelope(absent, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BINDING_ABSENT", transactionState: "unchanged", retryable: false })
+		const bind = `msb-workflow bind --workspace ${shownWorkspace} --bead ${OTHER_BEAD} --session ${absentSession}`
+		expect(absentEnvelope.nextAction).toBe(bind)
+		expect(absentEnvelope.repairAction).toBe(`Bind this session without --from: ${bind}`)
+
+		const conflictSession = "session-conflict"
+		expect((await runCli(root, bindArgs(root, conflictSession, BEAD, workspace))).exit).toBe(0)
+		const saved = JSON.parse(readFileSync(bindingPath(root, conflictSession), "utf8")) as Record<string, unknown>
+		saved.beadId = "lkr-old's bead"
+		writeFileSync(bindingPath(root, conflictSession), `${JSON.stringify(saved)}\n`, { mode: 0o600 })
+		const conflict = await runCli(root, bindArgs(root, conflictSession, OTHER_BEAD, workspace))
+		const conflictEnvelope = expectEnvelope(conflict, "msb-workflow.bind", { exit: 3, outcome: "refused", causeCode: "DOMAIN_BINDING_OWNERSHIP_CONFLICT", transactionState: "unchanged", retryable: false })
+		const switchCommand = `msb-workflow bind --workspace ${shownWorkspace} --bead ${OTHER_BEAD} --from 'lkr-old'\\''s bead' --session ${conflictSession}`
+		expect(conflictEnvelope.repairAction).toContain(switchCommand)
+		expect(conflictEnvelope.nextAction).toBe(recover(conflictSession))
+
+		const failedSession = "session-failed"
+		const failed = await runCliWithStoreFault(root, bindArgs(root, failedSession, BEAD, workspace), "before-rename")
+		expect(expectEnvelope(failed, "msb-workflow.bind", { exit: 75, outcome: "failed", causeCode: "UNAVAILABLE_WRITE_FAILED", transactionState: "unchanged", retryable: true }).nextAction).toBe(inspect(failedSession))
+
+		const unknownSession = "session-unknown"
+		const unknown = await runCliWithStoreFault(root, bindArgs(root, unknownSession, BEAD, workspace), "after-rename")
+		const unknownEnvelope = expectEnvelope(unknown, "msb-workflow.bind", { exit: 1, outcome: "unknown", causeCode: "INTERNAL_WRITE_OUTCOME_UNKNOWN", transactionState: "unknown", retryable: false })
+		expect(unknownEnvelope.nextAction).toBe(recover(unknownSession))
+		expect(unknownEnvelope.repairAction).toBe(`Run ${recover(unknownSession)} to read the durable binding before deciding whether to bind again`)
+
+		const reparse = (command: string): string => {
+			const shell = Bun.spawnSync(["sh", "-c", `set -- ${command}; printf '%s\\n' "$@"`], { env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent" }, stdout: "pipe", stderr: "pipe" })
+			expect(shell.stderr.toString()).toBe("")
+			return shell.stdout.toString()
+		}
+		expect(reparse(bind)).toBe(`${["msb-workflow", "bind", "--workspace", workspace, "--bead", OTHER_BEAD, "--session", absentSession].join("\n")}\n`)
+		expect(reparse(switchCommand)).toBe(`${["msb-workflow", "bind", "--workspace", workspace, "--bead", OTHER_BEAD, "--from", "lkr-old's bead", "--session", conflictSession].join("\n")}\n`)
+		expect(reparse(inspect(failedSession))).toBe(`${["msb-workflow", "inspect", "--workspace", workspace, "--session", failedSession].join("\n")}\n`)
+		expect(reparse(recover(unknownSession))).toBe(`${["msb-workflow", "recover", "--workspace", workspace, "--session", unknownSession].join("\n")}\n`)
+	})
+
 	test("discovery and help carry --from on bind alone; the identities and the binding schema are unchanged", async () => {
 		const discover = await runCli(root, ["--discover", "--json"])
 		const commands = resultOf(discover).commands as { identity: string; argv: string }[]
