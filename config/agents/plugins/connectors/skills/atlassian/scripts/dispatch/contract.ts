@@ -4,9 +4,9 @@
 // documented, not live-verified; the engine binds one only after live schema
 // confirmation.
 
-import { PRODUCTS, type Product } from "../atlassian-provider-common.ts";
+import { PRODUCTS, type Product } from "../custody/index.ts";
 
-export { PRODUCTS, type Product } from "../atlassian-provider-common.ts";
+export { PRODUCTS, type Product } from "../custody/index.ts";
 
 export const PROVIDERS = ["official", "community"] as const;
 export type ProviderName = (typeof PROVIDERS)[number];

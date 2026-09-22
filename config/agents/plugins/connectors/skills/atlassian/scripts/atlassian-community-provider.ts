@@ -1,44 +1,30 @@
 #!/usr/bin/env bun
-// Community mcp-atlassian Provider, one product per route. Reads the selected
-// product's item (username, credential, and site_url) through the credential
-// helper inside this process, and execs the pinned package with only that
-// product's environment triplet.
-import {
-	cleanEnvironment,
-	executableOnPath,
-	fail,
-	type Product,
-	readBoundItem,
-	refuseArguments,
-	replaceProcess,
-	singleLine,
-	SITE_URL_FIELD,
-	siteOrigins,
-	selectedProviderInvocation,
-} from "./atlassian-provider-common.ts";
+// Community mcp-atlassian Provider, one product per route. Re-reads the
+// selected product's bound item (username, credential, and site_url) inside
+// this process, and execs the pinned package with only that product's
+// environment triplet.
+import { type BoundItem, boundItem, type Product, providerInvocation } from "./custody/index.ts";
+import { atlassianProcess, type ProviderProcess, singleLine } from "./provider-process.ts";
 
+const { cleanEnvironment, executableOnPath, refuseArguments } = atlassianProcess;
+const fail: ProviderProcess["fail"] = atlassianProcess.fail;
+const replaceProcess: ProviderProcess["replaceProcess"] = atlassianProcess.replaceProcess;
 const PACKAGE_PIN = "mcp-atlassian==0.23.1";
 
-function productEnvironment(product: Product, username: string, credential: string, siteUrl: string): Record<string, string> {
-	const origins = siteOrigins(siteUrl);
-	if (product === "jira") return { JIRA_URL: origins.jira, JIRA_USERNAME: username, JIRA_API_TOKEN: credential };
-	return { CONFLUENCE_URL: origins.confluence, CONFLUENCE_USERNAME: username, CONFLUENCE_API_TOKEN: credential };
+function productEnvironment(product: Product, item: BoundItem, credential: string): Record<string, string> {
+	if (product === "jira") return { JIRA_URL: item.origin, JIRA_USERNAME: item.principal, JIRA_API_TOKEN: credential };
+	return { CONFLUENCE_URL: `${item.origin}/wiki`, CONFLUENCE_USERNAME: item.principal, CONFLUENCE_API_TOKEN: credential };
 }
 
 function main(argv: string[]): never {
 	refuseArguments(argv);
-	const { product, itemTitle, context } = selectedProviderInvocation();
+	const invocation = providerInvocation();
 	// This full-item read and comparison happens before uvx is probed or spawned.
-	const fields = readBoundItem(itemTitle, context);
+	const item = boundItem(invocation);
 	const uvx = executableOnPath("uvx");
-	const username = fields.get("username");
-	const credential = fields.get("credential");
-	const siteUrl = fields.get(SITE_URL_FIELD);
-	if (!username || !credential || !siteUrl) {
-		fail("community-fields-missing", `${itemTitle} needs username, credential, and a ${SITE_URL_FIELD} field`);
-	}
-	if (!singleLine(username) || !singleLine(credential)) fail("credential-invalid", `${itemTitle} has malformed fields`);
-	const environment = { ...cleanEnvironment(), ...productEnvironment(product, username, credential, siteUrl) };
+	if (item.credential === undefined) fail("community-fields-missing", `${invocation.itemTitle} needs username, credential, and a site_url field`);
+	if (!singleLine(item.credential)) fail("credential-invalid", `${invocation.itemTitle} has malformed fields`);
+	const environment = { ...cleanEnvironment(), ...productEnvironment(invocation.product, item, item.credential) };
 	replaceProcess(uvx, ["uvx", "--system-certs", "--no-env-file", "--from", PACKAGE_PIN, "mcp-atlassian"], environment);
 }
 

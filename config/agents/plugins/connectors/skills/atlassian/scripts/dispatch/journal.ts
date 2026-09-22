@@ -11,7 +11,7 @@
 import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { TENANT_PATTERN } from "../atlassian-provider-common.ts";
+import { TENANT_PATTERN } from "../custody/index.ts";
 import { OPERATION_SPECS, PROVIDERS, type OperationId, type ProviderName, type WriteOperation } from "./contract.ts";
 
 export type { WriteOperation } from "./contract.ts";

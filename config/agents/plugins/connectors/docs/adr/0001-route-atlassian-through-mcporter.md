@@ -74,15 +74,18 @@ lack an explicit `allowedTools` array.
 The launcher passes only the non-secret tenant slug to MCPorter. Each product
 route maps the slug and its static product to the 1Password item
 `JIRA_<TENANT>_API_TOKEN` or `CONFLUENCE_<TENANT>_API_TOKEN`; that mapping has
-one owner in the provider common module. The dispatcher invokes a custody child
-with only that tenant and product; the child reads the complete mapped item,
-validates its top-level positive `version` and exact `username`, and returns
-only a namespaced nonsecret principal/version binding. The dispatcher never
-reads the complete item or asks an operator to maintain a revision field. The Official provider reads the
-item's `username` as metadata, injects only the `credential` field into its own
-injected phase through the credential helper, composes the Basic value inside
-that process, and execs a pinned `hyper-mcp-remote` v0.5.0 child with a
-literal header template that the bridge expands. The raw token never reaches
+one owner in the custody module (`scripts/custody/`, imported only through its
+`index.ts`). The dispatcher invokes the module's custody child with only that
+tenant and product; the child reads the complete mapped item, validates its
+top-level positive `version` and exact `username`, and returns only a
+namespaced nonsecret principal/version binding (the Credential Binding). The
+dispatcher never reads the complete item or asks an operator to maintain a
+revision field. The Official provider recovers the binding through the same
+module, re-reads the item and refuses a stale binding, injects only the
+`credential` field into its own injected phase through the credential helper,
+composes the Basic value inside that process, and execs a pinned
+`hyper-mcp-remote` v0.5.0 child with a literal header template that the bridge
+expands. The raw token never reaches
 the bridge environment. The endpoint is `https://mcp.atlassian.com/v2/mcp`
 with `--no-auth`. The Community route runs pinned `mcp-atlassian` 0.23.1 below
 MCPorter with only the selected product's environment triplet, built from the

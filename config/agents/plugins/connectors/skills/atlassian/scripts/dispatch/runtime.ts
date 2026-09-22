@@ -4,8 +4,8 @@
 import { lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { encodeInvocationContext, type InvocationContext, parseInvocationContext, TENANT_PATTERN } from "../atlassian-provider-common.ts";
-import { OPERATIONS, PRODUCTS, type OperationId, type Product } from "./contract.ts";
+import { bindCredential, bindingChannel, type CredentialBinding, TENANT_PATTERN } from "../custody/index.ts";
+import { OPERATIONS, PRODUCTS, type OperationId } from "./contract.ts";
 import type { Dependencies, ParityAttestation, ParityEvidence, ParityRequest, Transport, TransportResult } from "./engine.ts";
 import { canonicalDigest, openJournal } from "./journal.ts";
 import { planDispatcherRoute, type RoutePlan } from "../../../../bin/provider-route.ts";
@@ -15,25 +15,16 @@ const CALL_TIMEOUT_MS = "30000";
 
 export type Environment = Record<string, string | undefined>;
 
-export class CredentialContextError extends Error {
-	constructor(
-		readonly causeCode: "site-unresolved" | "refused-precondition",
-		readonly detail: string,
-	) {
-		super(`credential-context-unavailable: ${detail}`);
-	}
-}
-
 function scrubbed(env: Environment): Record<string, string> {
 	return safeEnvironment(env);
 }
 
 // One route call at a time; the dispatcher never overlaps provider calls, so a
 // synchronous spawn is sufficient and keeps the process tree simple.
-function spawnRoute(env: Environment, tenant: string, context: InvocationContext, server: string, mcporterArgs: string[]): { code: number; stdout: string; stderr: string } {
+function spawnRoute(env: Environment, tenant: string, binding: CredentialBinding, server: string, mcporterArgs: string[]): { code: number; stdout: string; stderr: string } {
 	let plan: RoutePlan;
 	try {
-		plan = planDispatcherRoute(["atlassian", "--provider", server, "--select", `tenant=${tenant}`, "--", ...mcporterArgs], path.resolve(import.meta.dir, "..", "..", "..", "..", "skills"), scrubbed(env), encodeInvocationContext(context));
+		plan = planDispatcherRoute(["atlassian", "--provider", server, "--select", `tenant=${tenant}`, "--", ...mcporterArgs], path.resolve(import.meta.dir, "..", "..", "..", "..", "skills"), scrubbed(env), bindingChannel(binding));
 	} catch {
 		return { code: 3, stdout: "", stderr: "internal dispatcher transport refused" };
 	}
@@ -68,30 +59,13 @@ export function routeTransport(env: Environment, tenant: string): Transport {
 		return { ok: true, data };
 	};
 	return {
-		async listTools(context, server) {
-			return toResult(spawnRoute(env, tenant, context, server, ["list", "--schema", "--json", "--timeout", CALL_TIMEOUT_MS]));
+		async listTools(binding, server) {
+			return toResult(spawnRoute(env, tenant, binding, server, ["list", "--schema", "--json", "--timeout", CALL_TIMEOUT_MS]));
 		},
-		async call(context, server, tool, args) {
-			return toResult(spawnRoute(env, tenant, context, server, ["call", tool, "--args", JSON.stringify(args), "--output", "json", "--timeout", CALL_TIMEOUT_MS]));
+		async call(binding, server, tool, args) {
+			return toResult(spawnRoute(env, tenant, binding, server, ["call", tool, "--args", JSON.stringify(args), "--output", "json", "--timeout", CALL_TIMEOUT_MS]));
 		},
 	};
-}
-export async function resolveCredentialContext(tenant: string, product: Product, env: Environment): Promise<InvocationContext> {
-	const child = path.resolve(import.meta.dir, "..", "atlassian-credential-binding.ts");
-	const read = Bun.spawnSync([process.execPath, child, "--tenant", tenant, "--product", product], {
-		env: scrubbed(env),
-		stdin: "ignore",
-		stdout: "pipe",
-		stderr: "pipe",
-	});
-	if (read.exitCode !== 0) {
-		const code = /^atlassian-credential-binding:error:([a-z-]+)(?::[^\n]*)?$/m.exec(read.stderr.toString())?.[1];
-		if (code === "site-url-invalid") throw new CredentialContextError("site-unresolved", "the tenant's credential item must expose a valid site_url field");
-		throw new CredentialContextError("refused-precondition", "credential custody could not produce a stable context");
-	}
-	const context = parseInvocationContext(read.stdout.toString());
-	if (!context) throw new CredentialContextError("refused-precondition", "credential custody returned an invalid context");
-	return context;
 }
 
 // Attestations live beside the journal, one owned 0600 file per tenant,
@@ -168,7 +142,7 @@ export const isOperation = (value: string): value is OperationId => (OPERATIONS 
 export function productionDependencies(tenant: string, env: Environment): Dependencies {
 	return {
 		transport: routeTransport(env, tenant),
-		credentialContext: (slug, product) => resolveCredentialContext(slug, product, env),
+		bindCredential: async (slug, product) => bindCredential(slug, product, env),
 		...parityStore(env),
 		journal: (slug) => openJournal(slug, { env }),
 		now: Date.now,

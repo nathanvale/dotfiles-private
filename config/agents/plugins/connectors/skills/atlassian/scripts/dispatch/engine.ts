@@ -3,7 +3,7 @@
 // gate. No I/O; the runtime supplies a Transport and evidence.
 import { type CauseCode, type OperationId, type OperationSpec, type Product, type ProviderName, OPERATION_SPECS } from "./contract.ts";
 import { canonicalDigest, type Journal } from "./journal.ts";
-import type { InvocationContext } from "../atlassian-provider-common.ts";
+import type { BindResult, CredentialBinding } from "../custody/index.ts";
 
 export interface SchemaTool {
 	name: string;
@@ -21,8 +21,8 @@ export type TransportResult =
 export type TransportFailure = Exclude<TransportResult, { ok: true }>;
 
 export interface Transport {
-	listTools(context: InvocationContext, server: string): Promise<TransportResult>;
-	call(context: InvocationContext, server: string, tool: string, args: Record<string, unknown>): Promise<TransportResult>;
+	listTools(binding: CredentialBinding, server: string): Promise<TransportResult>;
+	call(binding: CredentialBinding, server: string, tool: string, args: Record<string, unknown>): Promise<TransportResult>;
 }
 
 // Live-parity attestation: recorded only by the parity command after both
@@ -59,8 +59,8 @@ export interface ParityRequest {
 // Credential custody owns this narrow seam. `revision` must come from a
 // nonsecret item revision or fingerprint supplied by that owner, never from a
 // credential value. An unavailable revision makes parity unproven.
-export function credentialDigest(context: InvocationContext): string {
-	return canonicalDigest({ principal: context.principal.toLowerCase(), itemVersion: context.itemVersion, origin: context.origin });
+export function credentialDigest(binding: CredentialBinding): string {
+	return canonicalDigest({ principal: binding.principal.toLowerCase(), itemVersion: binding.itemVersion, origin: binding.origin });
 }
 
 // What the parity command compares per read operation; an attestation whose
@@ -74,9 +74,10 @@ export const OBJECT_SEMANTICS: Partial<Record<OperationId, string>> = {
 
 export interface Dependencies {
 	transport: Transport;
-	// One complete exact-item read supplies an immutable nonsecret context for
-	// every schema list and provider call in one semantic operation.
-	credentialContext(tenant: string, product: Product): Promise<InvocationContext>;
+	// One complete exact-item read supplies an immutable nonsecret binding for
+	// every schema list and provider call in one semantic operation, or a
+	// closed refusal cause.
+	bindCredential(tenant: string, product: Product): Promise<BindResult>;
 	parity(request: ParityRequest): Promise<ParityEvidence>;
 	attestParity(attestation: ParityAttestation): Promise<void>;
 	journal(tenant: string): Journal;

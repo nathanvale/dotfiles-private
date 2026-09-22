@@ -15,7 +15,7 @@
 //   atlassian-dispatch --tenant <slug> unlock --run <runId>
 //   atlassian-dispatch --tenant <slug> parity --operation <read-operation> --input <json>
 //   atlassian-dispatch --discover
-import { TENANT_PATTERN } from "./atlassian-provider-common.ts";
+import { TENANT_PATTERN } from "./custody/index.ts";
 import { CAUSES, type CauseCode, type CommandId, COMMANDS, type Envelope, OPERATION_SPECS, OPERATIONS, type OperationSpec, type ProviderName } from "./dispatch/contract.ts";
 import { type Dependencies, readInput, REPAIR_TEXT, specFor } from "./dispatch/engine.ts";
 import { adjudicateFlow, applyFlow, type Outcome, parityFlow, previewFlow, readFlow, receiptFlow, receiptsFlow, Session, unlockFlow } from "./dispatch/flows.ts";
