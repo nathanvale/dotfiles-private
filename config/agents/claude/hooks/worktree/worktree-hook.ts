@@ -134,6 +134,8 @@ export function createWorktreeFromHook(
 		const existing = listed.listing.worktrees.find(
 			(worktree) => worktree.branch === payload.name,
 		);
+		// Same owned-prefix rule as the runtime's findStrayWorktrees; restated
+		// here only because the hook drives the runtime as a subprocess.
 		if (existing?.path.startsWith(`${join(mainOwnerRoot, ".worktrees")}/`)) {
 			return { ok: true, path: existing.path };
 		}
