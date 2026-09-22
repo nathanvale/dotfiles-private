@@ -72,6 +72,9 @@ function parseSession(text: string, account: string): SessionRecord | null {
 	return { version: 1, account, client, ...endpoints, ...tokens };
 }
 
+// The account directory as an owned 0700 directory, created if absent.
+export const prepareAccountDirectory = (root: string, account: string): boolean => ownedDirectory(accountDirectory(root, account)).ok;
+
 export function readSession(root: string, account: string): SessionReadResult {
 	const read = readPrivateFile(path.join(accountDirectory(root, account), SESSION_FILE));
 	if (!read.ok) return { ok: false, reason: read.reason === "absent" ? "absent" : "invalid" };

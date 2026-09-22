@@ -54,7 +54,7 @@ const causeOf = (result: { ok: true } | { ok: false; cause: string }): string =>
 describe("login", () => {
 	test("registers a client, runs PKCE S256 with state and resource, exchanges the code, and stores an exact-0600 session", async () => {
 		const result = await login("personal", { noBrowser: false }, deps());
-		expect(result).toEqual({ ok: true, status: { account: "personal", clientMode: "dcr", clientId: "fixture-client-1", issuer: fake.issuer, resource: fake.resource, scope: "design:meta:read", obtainedAt: NOW, accessTokenExpiresAt: NOW + 3_600_000, refreshable: true } });
+		expect(result).toEqual({ ok: true, status: { account: "personal", clientMode: "dcr", clientId: "fixture-client-1", issuer: fake.issuer, resource: fake.resource, scope: "design:meta:read", obtainedAt: NOW, expiresAt: NOW + 3_600_000, refreshable: true } });
 		expect([fake.calls.registrations, fake.calls.authorizations, fake.calls.tokenRequests]).toEqual([1, 1, 1]);
 		expect(fake.authorizations[0]).toMatchObject({ clientId: "fixture-client-1", resource: fake.resource, codeChallengeMethod: "S256", scope: null });
 		expect(fake.registered[0]?.redirectUris[0]).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/);
@@ -147,7 +147,7 @@ describe("accessToken", () => {
 		expect(fake.calls.refreshRequests).toBe(0);
 		now = NOW + 3_600_000 - 30_000;
 		const rotated = await accessToken("personal", deps());
-		expect(rotated).toMatchObject({ ok: true, token: "fixture-access-token-2", status: { accessTokenExpiresAt: now + 3_600_000, obtainedAt: now } });
+		expect(rotated).toMatchObject({ ok: true, token: "fixture-access-token-2", status: { expiresAt: now + 3_600_000, obtainedAt: now } });
 		expect(fake.calls.refreshRequests).toBe(1);
 		expect(fake.tokenBodies.at(-1)?.get("refresh_token")).toBe("fixture-refresh-token-1");
 		expect(JSON.parse(sessionText()).refreshToken).toBe("fixture-refresh-token-2");
@@ -205,7 +205,7 @@ describe("status and logout", () => {
 		expect(status("personal", deps())).toEqual({ ok: false, cause: "auth-required", detail: "no session exists for this account; run canva-auth login" });
 		expect((await login("personal", { noBrowser: false }, deps())).ok).toBe(true);
 		const shown = status("personal", deps());
-		expect(shown).toEqual({ ok: true, status: { account: "personal", clientMode: "dcr", clientId: "fixture-client-1", issuer: fake.issuer, resource: fake.resource, scope: "design:meta:read", obtainedAt: NOW, accessTokenExpiresAt: NOW + 3_600_000, refreshable: true } });
+		expect(shown).toEqual({ ok: true, status: { account: "personal", clientMode: "dcr", clientId: "fixture-client-1", issuer: fake.issuer, resource: fake.resource, scope: "design:meta:read", obtainedAt: NOW, expiresAt: NOW + 3_600_000, refreshable: true } });
 		for (const secret of SECRETS) expect(JSON.stringify(shown)).not.toContain(secret);
 		expect(await logout("personal", deps())).toEqual({ ok: true, removed: true, revoked: "confirmed" });
 		expect(fake.calls.revocations).toEqual(["fixture-refresh-token-1"]);

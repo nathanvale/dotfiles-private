@@ -13,7 +13,7 @@ import { type ClientIdentity, resolveClient } from "./client.ts";
 import type { OAuthConfig } from "./config.ts";
 import { discover, type Fetch } from "./discovery.ts";
 import { codeChallenge, codeVerifier, type Random, stateValue } from "./pkce.ts";
-import { ACCOUNT_PATTERN, type LockClock, readSession, removeSession, type SessionRecord, withRefreshLock, writeSession } from "./store.ts";
+import { ACCOUNT_PATTERN, type LockClock, prepareAccountDirectory, readSession, removeSession, type SessionRecord, withRefreshLock, writeSession } from "./store.ts";
 import { exchangeCode, refreshTokens, revokeToken, type TokenSet } from "./token.ts";
 
 export { loadOAuthConfig, type OAuthConfig } from "./config.ts";
@@ -29,7 +29,8 @@ export interface SessionDeps {
 	config: OAuthConfig;
 }
 
-// The nonsecret view of a session.
+// The nonsecret view of a session. No key names a token, so a redaction
+// audit of this view finds nothing to redact.
 export interface SessionStatus {
 	account: string;
 	clientMode: SessionRecord["client"]["mode"];
@@ -38,18 +39,19 @@ export interface SessionStatus {
 	resource: string;
 	scope: string | null;
 	obtainedAt: number;
-	accessTokenExpiresAt: number | null;
+	expiresAt: number | null;
 	refreshable: boolean;
 }
 
 export type LoginCause = "account-invalid" | "discovery-failed" | "client-unresolved" | "login-denied" | "login-timeout" | "login-invalid" | "exchange-failed" | "session-unwritable";
 export type TokenCause = "account-invalid" | "auth-required" | "session-invalid" | "auth-expired" | "auth-busy" | "refresh-failed" | "session-unwritable";
 export type LogoutRevocation = "confirmed" | "uncertain" | "unsupported" | "not-needed";
+export type LogoutCause = "account-invalid" | "auth-busy" | "session-unremovable";
 
 export type LoginResult = { ok: true; status: SessionStatus } | { ok: false; cause: LoginCause; detail: string };
 export type AccessTokenResult = { ok: true; token: string; status: SessionStatus } | { ok: false; cause: TokenCause; detail: string };
 export type StatusResult = { ok: true; status: SessionStatus } | { ok: false; cause: "account-invalid" | "auth-required" | "session-invalid"; detail: string };
-export type LogoutResult = { ok: true; removed: boolean; revoked: LogoutRevocation } | { ok: false; cause: "account-invalid"; detail: string };
+export type LogoutResult = { ok: true; removed: boolean; revoked: LogoutRevocation } | { ok: false; cause: LogoutCause; detail: string; revoked: LogoutRevocation };
 
 export interface LoginOptions {
 	noBrowser: boolean;
@@ -62,7 +64,7 @@ export interface LoginOptions {
 // not about to expire mid-call.
 const REFRESH_SKEW_MS = 60_000;
 
-const DETAILS: Record<LoginCause | TokenCause, string> = {
+const DETAILS: Record<LoginCause | TokenCause | LogoutCause, string> = {
 	"account-invalid": "the account must be a lowercase slug",
 	"discovery-failed": "the Canva authorization server could not be discovered or does not meet the PKCE and https requirements",
 	"client-unresolved": "the client identity could not be established with the authorization server",
@@ -76,6 +78,7 @@ const DETAILS: Record<LoginCause | TokenCause, string> = {
 	"auth-expired": "the session was revoked or expired at Canva and has been removed; run canva-auth login",
 	"auth-busy": "another process holds the refresh lock for this account; retry shortly",
 	"refresh-failed": "the authorization server did not rotate the refresh token; retry, then login if it persists",
+	"session-unremovable": "the private session directory could not be removed; inspect its permissions, then run canva-auth logout again",
 };
 
 export const statusOf = (session: SessionRecord): SessionStatus => ({
@@ -86,7 +89,7 @@ export const statusOf = (session: SessionRecord): SessionStatus => ({
 	resource: session.resource,
 	scope: session.scope,
 	obtainedAt: session.obtainedAt,
-	accessTokenExpiresAt: session.accessTokenExpiresAt,
+	expiresAt: session.accessTokenExpiresAt,
 	refreshable: session.refreshToken !== null,
 });
 
@@ -127,6 +130,9 @@ const tokenFailure = (cause: TokenCause): AccessTokenResult => ({ ok: false, cau
 
 export async function login(account: string, options: LoginOptions, deps: SessionDeps): Promise<LoginResult> {
 	if (!validAccount(account)) return loginFailure("account-invalid");
+	// The private directory is proved before any network request, so an
+	// unwritable store never leaves a grant at Canva with no local session.
+	if (!prepareAccountDirectory(deps.stateRoot, account)) return loginFailure("session-unwritable");
 	const discovered = await discover(deps.config.resource, deps.fetch);
 	if (!discovered.ok) return loginFailure("discovery-failed");
 	const server = discovered.server;
@@ -209,16 +215,30 @@ export function status(account: string, deps: Pick<SessionDeps, "stateRoot">): S
 	return { ok: true, status: statusOf(read.session) };
 }
 
+async function revokeSession(account: string, deps: Pick<SessionDeps, "stateRoot" | "fetch">): Promise<LogoutRevocation> {
+	const read = readSession(deps.stateRoot, account);
+	if (!read.ok || read.session.refreshToken === null) return "not-needed";
+	if (read.session.revocationEndpoint === null) return "unsupported";
+	return revokeToken(read.session.revocationEndpoint, { ...read.session.client, secret: null }, read.session.refreshToken, deps.fetch);
+}
+
 // Revoke the refresh token when the server offers revocation, then remove the
 // local session whatever the server said. The local removal is the effect
-// this command owns; revocation is reported as confirmed or uncertain.
-export async function logout(account: string, deps: Pick<SessionDeps, "stateRoot" | "fetch">): Promise<LogoutResult> {
-	if (!validAccount(account)) return { ok: false, cause: "account-invalid", detail: DETAILS["account-invalid"] };
-	const read = readSession(deps.stateRoot, account);
-	let revoked: LogoutRevocation = "not-needed";
-	if (read.ok && read.session.refreshToken !== null) {
-		revoked = read.session.revocationEndpoint === null ? "unsupported" : await revokeToken(read.session.revocationEndpoint, { ...read.session.client, secret: null }, read.session.refreshToken, deps.fetch);
-	}
-	const removed = removeSession(deps.stateRoot, account);
-	return { ok: true, removed, revoked };
+// this command owns; revocation is reported as confirmed or uncertain. It
+// runs under the refresh lock so a Provider mid-rotation is never pulled out
+// from under, and a held lock refuses immediately rather than waiting.
+export async function logout(account: string, deps: Pick<SessionDeps, "stateRoot" | "fetch" | "clock">): Promise<LogoutResult> {
+	if (!validAccount(account)) return { ok: false, cause: "account-invalid", detail: DETAILS["account-invalid"], revoked: "not-needed" };
+	const existing = readSession(deps.stateRoot, account);
+	if (!existing.ok && existing.reason === "absent") return { ok: true, removed: false, revoked: "not-needed" };
+	const locked = await withRefreshLock(deps.stateRoot, account, deps.clock, 0, async (): Promise<LogoutResult> => {
+		const revoked = await revokeSession(account, deps);
+		try {
+			return { ok: true, removed: removeSession(deps.stateRoot, account), revoked };
+		} catch {
+			return { ok: false, cause: "session-unremovable", detail: DETAILS["session-unremovable"], revoked };
+		}
+	});
+	if (!locked.ok) return { ok: false, cause: locked.reason === "auth-busy" ? "auth-busy" : "session-unremovable", detail: DETAILS[locked.reason === "auth-busy" ? "auth-busy" : "session-unremovable"], revoked: "not-needed" };
+	return locked.value;
 }
