@@ -421,7 +421,7 @@ describe("bind: the one local write", () => {
 })
 
 describe("bind --from: the verified same-session switch", () => {
-	// Expected values are literals from Ticket #56 revision 2 AC4 and the task-switch contract brief (independent oracle):
+	// Expected values are literals from Ticket [#56](https://github.com/nathanvale/dotfiles-private/issues/56) revision 2 AC4 and the task-switch contract brief (independent oracle):
 	// the switch is an expected-owner compare-and-swap on the one binding, never an override of the ordinary refusal.
 	const CLAIM_OTHER = `Claim ${OTHER_BEAD} through native bd before starting work; the binding records intent, not a claim`
 
