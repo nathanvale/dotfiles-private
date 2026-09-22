@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
 	discoverRepo,
+	findStrayWorktrees,
 	parseWorktreePorcelain,
 } from "../src/discovery.ts";
 import {
@@ -118,6 +119,43 @@ branch refs/heads/feat/x
 		expect(discovery.staleDirs).toEqual([stale]);
 		expect(discovery.defaultBranch).toBe("main");
 		expect(discovery.storeRoot).toBe(join(root, ".agent-worktree"));
+	});
+
+	test("reports linked worktrees outside <mainOwnerRoot>/.worktrees as strays", () => {
+		const owned = {
+			path: "/repo/.worktrees/feat-x",
+			branch: "feat/x",
+			isMain: false,
+			detached: false,
+			prunable: false,
+		};
+		const sibling = {
+			path: "/code/.worktrees/repo-feat-y",
+			branch: "feat/y",
+			isMain: false,
+			detached: false,
+			prunable: false,
+		};
+		const claudeDefault = {
+			path: "/repo/.claude/worktrees/feat-z",
+			branch: "feat/z",
+			isMain: false,
+			detached: false,
+			prunable: false,
+		};
+
+		const strays = findStrayWorktrees({
+			mainOwnerRoot: "/repo",
+			linkedWorktrees: [owned, sibling, claudeDefault],
+		});
+
+		expect(strays.map((worktree) => worktree.path)).toEqual([
+			"/code/.worktrees/repo-feat-y",
+			"/repo/.claude/worktrees/feat-z",
+		]);
+		expect(
+			findStrayWorktrees({ mainOwnerRoot: undefined, linkedWorktrees: [sibling] }),
+		).toEqual([]);
 	});
 
 	test("classifies a normal checkout when resolved git dirs match", async () => {

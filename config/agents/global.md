@@ -105,6 +105,10 @@ g# Personal Agent Instructions
 
 - Code repository edit: use an isolated worktree and commit only to a branch.
   The configured vault owns any explicit main-checkout exception.
+- Worktree location: `<repo>/.worktrees/<name>`. Pass the path when the tool
+  takes one (`herdr worktree create --path`, VS Code prompt, `git worktree add`).
+  Claude Code `--worktree` and worktree isolation route there through the
+  `WorktreeCreate` hook; `worktree status` reports strays.
 - Never force-push, hard-reset, run `git clean -f`, restore an entire working
   tree, or stage with `git add .` or `git add -A`.
 - Dirty or untracked work: treat it as owned until proven disposable. Preserve

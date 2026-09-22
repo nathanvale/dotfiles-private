@@ -458,6 +458,30 @@ function findActiveWorktree(
 		);
 }
 
+/**
+ * Linked worktrees checked out outside `<mainOwnerRoot>/.worktrees/`.
+ *
+ * Every harness is meant to land checkouts under the main owner's `.worktrees`
+ * directory; anything elsewhere is sprawl that `status` should surface.
+ *
+ * @param discovery - Repo discovery facts
+ * @returns Linked worktrees outside the owned `.worktrees` directory
+ *
+ * @example
+ * ```typescript
+ * const strays = findStrayWorktrees(discovery)
+ * ```
+ */
+export function findStrayWorktrees(
+	discovery: Pick<RepoDiscovery, "mainOwnerRoot" | "linkedWorktrees">,
+): readonly DiscoveredWorktree[] {
+	if (!discovery.mainOwnerRoot) return [];
+	const ownedPrefix = `${join(discovery.mainOwnerRoot, ".worktrees")}/`;
+	return discovery.linkedWorktrees.filter(
+		(worktree) => !worktree.path.startsWith(ownedPrefix),
+	);
+}
+
 async function findStaleWorktreeDirs(
 	mainOwnerRoot: string,
 	worktrees: readonly DiscoveredWorktree[],

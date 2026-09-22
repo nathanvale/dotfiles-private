@@ -128,6 +128,28 @@
           }
         ]
       }
+    ],
+    "WorktreeCreate": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$HOME/.claude/hooks/worktree/worktree-create.ts\"",
+            "timeout": 60
+          }
+        ]
+      }
+    ],
+    "WorktreeRemove": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bun \"$HOME/.claude/hooks/worktree/worktree-remove.ts\"",
+            "timeout": 60
+          }
+        ]
+      }
     ]
   },
   "worktree": {

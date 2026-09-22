@@ -158,6 +158,74 @@ branch refs/heads/feat/x
 		).toContain("feat/x:dirty");
 	});
 
+	test("warns with the stray paths when a linked worktree lives outside .worktrees", () => {
+		const stray = {
+			path: "/repo/.claude/worktrees/feat-z",
+			branch: "feat/z",
+			isMain: false,
+			detached: false,
+			prunable: false,
+		};
+		const discovery = {
+			requestedRoot: "/repo",
+			gitRoot: "/repo",
+			isolation: "main",
+			mainOwnerRoot: "/repo",
+			worktrees: [
+				{ path: "/repo", branch: "main", isMain: true, detached: false, prunable: false },
+				stray,
+			],
+			linkedWorktrees: [stray],
+			staleDirs: [],
+			defaultBranch: "main",
+			storeRoot: "/repo/.agent-worktree",
+			issues: [],
+		} satisfies RepoDiscovery;
+
+		const map = doctorMapFromDiscovery(discovery);
+		const check = map.checks.find((entry) => entry.id === "stray_worktrees");
+
+		expect(map.status).toBe("warn");
+		expect(map.mutationReadiness).toBe("ready");
+		expect(map.repo.strayWorktreeCount).toBe(1);
+		expect(check?.status).toBe("warn");
+		expect(check?.summary).toBe(
+			"1 linked worktrees live outside .worktrees: /repo/.claude/worktrees/feat-z",
+		);
+	});
+
+	test("reports ok when every linked worktree lives under .worktrees", () => {
+		const owned = {
+			path: "/repo/.worktrees/feat-x",
+			branch: "feat/x",
+			isMain: false,
+			detached: false,
+			prunable: false,
+		};
+		const discovery = {
+			requestedRoot: "/repo",
+			gitRoot: "/repo",
+			isolation: "main",
+			mainOwnerRoot: "/repo",
+			worktrees: [
+				{ path: "/repo", branch: "main", isMain: true, detached: false, prunable: false },
+				owned,
+			],
+			linkedWorktrees: [owned],
+			staleDirs: [],
+			defaultBranch: "main",
+			storeRoot: "/repo/.agent-worktree",
+			issues: [],
+		} satisfies RepoDiscovery;
+
+		const map = doctorMapFromDiscovery(discovery);
+
+		expect(map.repo.strayWorktreeCount).toBe(0);
+		expect(
+			map.checks.find((entry) => entry.id === "stray_worktrees")?.status,
+		).toBe("ok");
+	});
+
 	test("warns when durable records exceed retention threshold", async () => {
 		const root = await mkdtemp(join(tmpdir(), "agent-worktree-retention-"));
 		const store = createFileStore(join(root, ".agent-worktree"));

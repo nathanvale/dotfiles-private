@@ -12,6 +12,7 @@ import {
 	defaultGitRunner,
 	type RepoDiscovery,
 	discoverRepo,
+	findStrayWorktrees,
 } from "./discovery.ts";
 import { mutationReadinessFromBranchSafetyDecision } from "./merge-intelligence.ts";
 import { createFileStore } from "./store.ts";
@@ -34,6 +35,7 @@ export const DOCTOR_CHECK_IDS = [
 	"current_branch",
 	"default_branch",
 	"stale_dirs",
+	"stray_worktrees",
 ] as const;
 
 /**
@@ -116,6 +118,8 @@ export interface DoctorRepoSummary {
 	linkedWorktreeCount: number;
 	/** Number of stale dirs under `.worktrees`. */
 	staleDirCount: number;
+	/** Number of linked worktrees checked out outside `.worktrees`. */
+	strayWorktreeCount: number;
 }
 
 interface DoctorRuntimeContext {
@@ -181,6 +185,7 @@ function doctorMapFromDiscoveryWithContext(
 		contractCheck(),
 		dependenciesCheck(discovery),
 		mutationsCheck(discovery, context),
+		strayWorktreesCheck(discovery),
 		...issueChecks,
 	];
 	const aggregate = aggregateDoctorMap(checks);
@@ -196,6 +201,7 @@ function doctorMapFromDiscoveryWithContext(
 			storeRoot: discovery.storeRoot,
 			linkedWorktreeCount: discovery.linkedWorktrees.length,
 			staleDirCount: discovery.staleDirs.length,
+			strayWorktreeCount: findStrayWorktrees(discovery).length,
 		},
 		availableCommands: AGENT_WORKTREE_COMMANDS,
 	};
@@ -277,6 +283,23 @@ function worktreesCheck(discovery: RepoDiscovery): DoctorCheck {
 		summary: staleSummary,
 		blockers: [],
 		nextActions: discovery.staleDirs.length > 0 ? ["clean"] : [],
+	};
+}
+
+function strayWorktreesCheck(discovery: RepoDiscovery): DoctorCheck {
+	const strays = findStrayWorktrees(discovery);
+	return {
+		id: "stray_worktrees",
+		owner: "discovery",
+		status: strays.length > 0 ? "warn" : "ok",
+		summary:
+			strays.length === 0
+				? "All linked worktrees live under .worktrees."
+				: `${strays.length} linked worktrees live outside .worktrees: ${strays
+						.map((worktree) => worktree.path)
+						.join(", ")}`,
+		blockers: [],
+		nextActions: [],
 	};
 }
 

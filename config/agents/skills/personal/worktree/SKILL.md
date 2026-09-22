@@ -21,6 +21,7 @@ Do not shell out to old worktree wrappers. `worktree` calls the shared `.agents/
 - Daily view ignores: `defaults.ignoredWorktrees` path globs, e.g. `["**/scratch-build-cache-*"]`.
 - Contract, model, engine, discovery, and dispatcher: `config/agents/skills/personal/worktree/src/`.
 - Shared worktree runtime: `.agents/runtime/agent-worktree/src/index.ts`.
+- Claude Code `--worktree` and worktree isolation: `config/agents/claude/hooks/worktree/` routes `WorktreeCreate`/`WorktreeRemove` through the runtime, so those checkouts land in `.worktrees/` too.
 - Package command recipe: `config/agents/skills/personal/worktree/package.json`.
 - Runtime tests + alignment proof: `config/agents/skills/personal/worktree/src/`.
 
