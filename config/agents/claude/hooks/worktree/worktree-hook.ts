@@ -51,6 +51,7 @@ interface RuntimeEnvelope {
 		changed_state?: string;
 		reason?: string;
 		target_path?: string;
+		existing_checkout_path?: string;
 		worktrees?: RuntimeWorktree[];
 		mainOwnerRoot?: string;
 	};
@@ -59,7 +60,7 @@ interface RuntimeEnvelope {
 
 type RuntimeRun =
 	| { ok: true; envelope: RuntimeEnvelope }
-	| { ok: false; reason: string; message: string };
+	| { ok: false; reason: string; message: string; envelope?: RuntimeEnvelope };
 
 interface RepoListing {
 	worktrees: RuntimeWorktree[];
@@ -131,13 +132,14 @@ export function createWorktreeFromHook(
 				};
 	}
 	if (created.reason === "branch_already_checked_out") {
-		const existing = listed.listing.worktrees.find(
-			(worktree) => worktree.branch === payload.name,
-		);
+		const existingPath = created.envelope?.data?.existing_checkout_path;
 		// Same owned-prefix rule as the runtime's findStrayWorktrees; restated
 		// here only because the hook drives the runtime as a subprocess.
-		if (existing?.path.startsWith(`${join(mainOwnerRoot, ".worktrees")}/`)) {
-			return { ok: true, path: existing.path };
+		if (
+			typeof existingPath === "string" &&
+			isOwnedWorktreePath(existingPath, mainOwnerRoot)
+		) {
+			return { ok: true, path: existingPath };
 		}
 	}
 	return created;
@@ -254,6 +256,7 @@ function runRuntime(args: readonly string[], cwd: string): RuntimeRun {
 			ok: false,
 			reason,
 			message: `agent-worktree ${args[0]} refused (${reason}).`,
+			envelope,
 		};
 	}
 	return { ok: true, envelope };
@@ -262,15 +265,54 @@ function runRuntime(args: readonly string[], cwd: string): RuntimeRun {
 function listWorktrees(
 	cwd: string,
 ): { ok: true; listing: RepoListing } | { ok: false; message: string } {
-	const listed = runRuntime(["list"], cwd);
-	if (!listed.ok) return listed;
+	const result = Bun.spawnSync(["git", "worktree", "list", "--porcelain"], {
+		cwd,
+		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	if (result.exitCode !== 0) {
+		const stderr = new TextDecoder().decode(result.stderr).trim();
+		return {
+			ok: false,
+			message: `git worktree list failed (exit ${result.exitCode}): ${stderr}`,
+		};
+	}
+	const worktrees = parseWorktreeListing(
+		new TextDecoder().decode(result.stdout),
+	);
 	return {
 		ok: true,
 		listing: {
-			worktrees: listed.envelope.data?.worktrees ?? [],
-			mainOwnerRoot: listed.envelope.data?.mainOwnerRoot ?? cwd,
+			worktrees,
+			mainOwnerRoot: worktrees[0]?.path ?? cwd,
 		},
 	};
+}
+
+function parseWorktreeListing(raw: string): RuntimeWorktree[] {
+	return raw
+		.trim()
+		.split(/\n\s*\n/)
+		.flatMap((entry) => {
+			const path = entry
+				.split("\n")
+				.find((line) => line.startsWith("worktree "))
+				?.slice("worktree ".length);
+			if (!path) return [];
+			const branchRef = entry
+				.split("\n")
+				.find((line) => line.startsWith("branch "))
+				?.slice("branch ".length);
+			return [
+				{
+					path,
+					...(branchRef?.startsWith("refs/heads/")
+						? { branch: branchRef.slice("refs/heads/".length) }
+						: {}),
+				},
+			];
+		});
 }
 
 function remoteDefaultBranch(repoRoot: string): string | undefined {
@@ -280,7 +322,17 @@ function remoteDefaultBranch(repoRoot: string): string | undefined {
 	);
 	if (result.exitCode !== 0) return undefined;
 	const ref = new TextDecoder().decode(result.stdout).trim();
-	return ref || undefined;
+	if (!ref) return undefined;
+	const resolved = Bun.spawnSync(
+		["git", "rev-parse", "--verify", "--quiet", ref],
+		{ cwd: repoRoot, stdin: "ignore", stdout: "pipe", stderr: "ignore" },
+	);
+	return resolved.exitCode === 0 ? ref : undefined;
+}
+
+function isOwnedWorktreePath(path: string, mainOwnerRoot: string): boolean {
+	const worktreesRoot = canonicalPath(join(mainOwnerRoot, ".worktrees"));
+	return canonicalPath(path).startsWith(`${worktreesRoot}/`);
 }
 
 function canonicalPath(path: string): string {

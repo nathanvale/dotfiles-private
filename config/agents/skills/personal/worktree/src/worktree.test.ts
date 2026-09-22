@@ -18,7 +18,7 @@ import {
 	type WorkTreeRuntime,
 } from "./worktree.ts";
 
-function runtimeFixtureFor(cwd = "/code/my-repo"): string {
+function runtimeFixtureFor(cwd = "/code/my-repo", includeStray = false): string {
 	const ownerRoot = cwd.includes("/code/other-repo") ? "/code/other-repo" : "/code/my-repo";
 	return `worktree ${ownerRoot}
 HEAD abc
@@ -31,14 +31,21 @@ branch refs/heads/codex/browser-use-refactor
 worktree ${ownerRoot}/.worktrees/harden-test-runner
 HEAD ghi
 branch refs/heads/codex/harden-test-runner
-`;
+${includeStray ? `
+worktree ${ownerRoot}/outside-worktree
+HEAD jkl
+branch refs/heads/codex/stray
+` : ""}`;
 }
 
 /**
  * Build a fully in-memory runtime: no real fs, subprocess, or VS Code.
  * Tracks writes so tests can assert on the rendered workspace.
  */
-function fakeRuntime(overrides: Partial<WorkTreeRuntime> = {}): WorkTreeRuntime & {
+function fakeRuntime(
+	overrides: Partial<WorkTreeRuntime> = {},
+	includeStray = false,
+): WorkTreeRuntime & {
 	writes: Map<string, string>;
 	runCalls: string[][];
 	launched: Array<{ workspacePath: string; codeBin?: string }>;
@@ -83,7 +90,7 @@ function fakeRuntime(overrides: Partial<WorkTreeRuntime> = {}): WorkTreeRuntime 
 					: `${ownerRoot}/.git\n`,
 				"git rev-parse --git-common-dir": `${ownerRoot}/.git\n`,
 				"git rev-parse --show-superproject-working-tree": "\n",
-				"git worktree list --porcelain": runtimeFixtureFor(options?.cwd),
+				"git worktree list --porcelain": runtimeFixtureFor(options?.cwd, includeStray),
 				"git branch --show-current": "main\n",
 				"git symbolic-ref --short refs/remotes/origin/HEAD": "origin/main\n",
 				"git status --porcelain": "",
@@ -369,6 +376,20 @@ describe("status front door", () => {
 				}),
 			]),
 		);
+	});
+
+	test("reports one stray worktree when the discovered list contains one", async () => {
+		const result = await runCommand(
+			{ command: "status", positionals: [], force: false },
+			fakeRuntime({}, true),
+		);
+		const data = expectOkData(result);
+
+		expect(data).toMatchObject({
+			worktree_count: 4,
+			linked_worktree_count: 3,
+			stray_worktree_count: 1,
+		});
 	});
 
 	test("points at drift recovery when the workspace is hand-edited", async () => {

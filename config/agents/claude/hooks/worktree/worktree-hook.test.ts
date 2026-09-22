@@ -124,6 +124,18 @@ describe("Claude Code worktree hooks (public process)", () => {
 		});
 	});
 
+	test("WorktreeCreate omits a stale origin default branch ref", () => {
+		withTempRepo((repo) => {
+			git(repo, ["update-ref", "-d", "refs/remotes/origin/main"]);
+
+			const path = createViaHook(repo, "stale-origin-head");
+
+			expect(git(path, ["branch", "--show-current"]).trim()).toBe(
+				"stale-origin-head",
+			);
+		});
+	});
+
 	test("WorktreeCreate works from inside a linked worktree and still lands under the main checkout", () => {
 		withTempRepo((repo) => {
 			const outer = createViaHook(repo, "outer");
@@ -155,6 +167,36 @@ describe("Claude Code worktree hooks (public process)", () => {
 			expect(existsSync(join(first, "draft.txt"))).toBe(true);
 		});
 	});
+
+	test(
+		"WorktreeCreate and WorktreeRemove find entries beyond the projected list",
+		() => {
+			withTempRepo((repo) => {
+				const names = Array.from({ length: 21 }, (_, index) => `many-${index}`);
+				const paths = names.map((name) => createViaHook(repo, name));
+				const target = paths.at(-1);
+				if (!target) throw new Error("expected a final worktree path");
+
+				const reopened = runHook(createHook, {
+					cwd: repo,
+					name: names.at(-1),
+				});
+				expect(reopened).toEqual({
+					exitCode: 0,
+					stdout: `${target}\n`,
+					stderr: "",
+				});
+
+				const removed = runHook(removeHook, {
+					cwd: repo,
+					worktree_path: target,
+				});
+				expect(removed).toEqual({ exitCode: 0, stdout: "", stderr: "" });
+				expect(existsSync(target)).toBe(false);
+			});
+		},
+		30_000,
+	);
 
 	test("WorktreeCreate still finds the runtime when launched through the ~/.claude/hooks symlink", () => {
 		withTempRepo((repo) => {
