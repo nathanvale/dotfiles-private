@@ -1,0 +1,4 @@
+interface:
+  display_name: "Canva"
+  short_description: "Discover accessible Canva designs through a fail-closed route"
+  default_prompt: "Use $canva to explain the current Canva design-discovery capability and its authentication boundary."

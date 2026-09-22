@@ -1,0 +1,11 @@
+{
+	"$schema": "https://raw.githubusercontent.com/openclaw/mcporter/main/mcporter.schema.json",
+	"imports": [],
+	"mcpServers": {
+		"canva": {
+			"description": "Canva Official remote MCP, configured read-only and unavailable pending accepted per-user OAuth custody",
+			"baseUrl": "https://mcp.canva.com/mcp",
+			"allowedTools": ["search-designs", "get-design", "get-design-pages", "get-design-content"]
+		}
+	}
+}
