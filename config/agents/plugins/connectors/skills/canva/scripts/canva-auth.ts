@@ -84,10 +84,12 @@ function renderLogin(account: string, result: LoginResult, urls: string[]): Rend
 		case "session-unwritable":
 			return failed("INTERNAL_PREPARATION", REPAIR.unwritable, { nextAction: "canva-auth status --account <slug>" });
 		case "login-denied":
+		case "login-mismatch":
 			return failed("DOMAIN_AUTHORITY_REQUIRED", REPAIR.denied, { handoff: { owner: "human", reason: "Canva did not grant access for this login.", inspect: ["canva-auth status --account <slug>"] } });
 		case "login-timeout":
 			return failed("DOMAIN_DEADLINE_UNCHANGED", REPAIR.timeout, { nextAction: "canva-auth login --account <slug>" });
 		case "exchange-failed":
+		case "session-busy":
 			return failed("DOMAIN_RECOVERY_HANDOFF_REQUIRED", REPAIR.exchange, { handoff: { owner: "human", reason: "A grant may exist at Canva with no local session.", inspect: ["canva-auth status --account <slug>"] } }, { uncertain: [ids.grant] });
 		default:
 			return failed("DOMAIN_PRECONDITION_UNMET", REPAIR.precondition, { nextAction: "canva-auth status --account <slug>" });
@@ -132,7 +134,16 @@ function commandDiscovery(identity: string | undefined): Rendering {
 	return { identity: self, cause: "SUCCESS_UNCHANGED", effectClass: "inspect", message: `possible outcomes of ${identity}`, data: { command, semantics: "possible-outcomes", stations: STATIONS.filter((station) => station.commandIdentity === identity) }, guidance: { nextAction: "canva-auth status --account <slug>" }, repairAction: null };
 }
 
-async function runCommand(options: Options, deps: CliDeps, urls: string[]): Promise<Rendering> {
+// With --no-browser the human must have the URL before the callback wait,
+// so it is written the moment it exists: on stdout in human mode, and as one
+// prefixed stderr line in machine mode, where stdout stays one envelope.
+export function authorizationNotice(url: string, json: boolean): { stream: "stdout" | "stderr"; text: string } {
+	return json ? { stream: "stderr", text: `${PROGRAM}: authorization-url: ${url}\n` } : { stream: "stdout", text: `Open this URL in your browser to continue, then return here:\n${url}\n` };
+}
+
+export type Notify = (url: string) => void;
+
+async function runCommand(options: Options, deps: CliDeps, urls: string[], notify: Notify): Promise<Rendering> {
 	const command = options.command as CommandWord;
 	const identity: CommandIdentity = `canva-auth.${command}`;
 	const effectClass = command === "status" ? "inspect" : "external";
@@ -141,14 +152,20 @@ async function runCommand(options: Options, deps: CliDeps, urls: string[]): Prom
 	if (command === "status") return renderStatus(account, status(account, deps));
 	if (command === "logout") return renderLogout(account, await logout(account, deps));
 	if (deps.session === null) return { identity, cause: "INTERNAL_PREPARATION", effectClass: "external", message: "login refused: the oauth.json configuration is missing or invalid", data: null, guidance: { nextAction: "canva-auth status --account <slug>" }, repairAction: REPAIR.unwritable };
-	// The URL is surfaced to the human only when the browser is not opened.
+	// The URL is surfaced only when the browser is not opened, and immediately.
 	const noBrowser = options.flags.has("--no-browser");
-	return renderLogin(account, await login(account, { noBrowser, onAuthorizationUrl: (url) => (noBrowser ? urls.push(url) : undefined) }, deps.session), urls);
+	const onAuthorizationUrl = (url: string) => {
+		if (!noBrowser) return;
+		urls.push(url);
+		notify(url);
+	};
+	return renderLogin(account, await login(account, { noBrowser, onAuthorizationUrl }, deps.session), urls);
 }
 
 // Every path renders here; the human line and the machine envelope come from
-// one rendering so they cannot disagree.
-export async function run(argv: string[], deps: CliDeps): Promise<{ rendering: Rendering; urls: string[] }> {
+// one rendering so they cannot disagree. `notify` receives the authorization
+// URL before the callback wait starts.
+export async function run(argv: string[], deps: CliDeps, notify: Notify = () => undefined): Promise<{ rendering: Rendering; urls: string[] }> {
 	const urls: string[] = [];
 	const parsed = parseArgv(argv);
 	if (!parsed.ok) return { rendering: usage("canva-auth.dispatch", "inspect", parsed.reason), urls };
@@ -157,7 +174,7 @@ export async function run(argv: string[], deps: CliDeps): Promise<{ rendering: R
 	if (options.flags.has("--discover")) return { rendering: { identity: "canva-auth.discovery", cause: "SUCCESS_UNCHANGED", effectClass: "inspect", message: "canva-auth discovery", data: DISCOVERY_DATA, guidance: { nextAction: "canva-auth status --account <slug>" }, repairAction: null }, urls };
 	if ("--discover-command" in options.values) return { rendering: commandDiscovery(options.values["--discover-command"]), urls };
 	if (options.command === undefined) return { rendering: usage("canva-auth.dispatch", "inspect", "a command is required: login, status, or logout"), urls };
-	return { rendering: await runCommand(options, deps, urls), urls };
+	return { rendering: await runCommand(options, deps, urls, notify), urls };
 }
 
 function humanStatus(data: SessionStatus): string {
@@ -165,7 +182,7 @@ function humanStatus(data: SessionStatus): string {
 	return `account ${data.account}: client ${data.clientMode} ${data.clientId}, issuer ${data.issuer}, ${expiry}, ${data.refreshable ? "refreshable" : "not refreshable"}`;
 }
 
-function humanLines(rendering: Rendering, urls: string[]): string {
+function humanLines(rendering: Rendering): string {
 	switch (rendering.identity) {
 		case "canva-auth.help":
 			return HELP_TEXT;
@@ -178,17 +195,17 @@ function humanLines(rendering: Rendering, urls: string[]): string {
 		case "canva-auth.status":
 			return `${humanStatus(rendering.data as SessionStatus)}\n`;
 		default:
-			return `${[...urls.map((url) => `open this URL in your browser to continue: ${url}`), rendering.message].join("\n")}\n`;
+			return `${rendering.message}\n`;
 	}
 }
 
-export function renderOutput(rendering: Rendering, urls: string[], json: boolean): { stdout: string; stderr: string; exitCode: number } {
+export function renderOutput(rendering: Rendering, json: boolean): { stdout: string; stderr: string; exitCode: number } {
 	let built = envelope(rendering);
 	if (validateEnvelope(built).length > 0) {
 		built = envelope({ identity: rendering.identity, cause: "INTERNAL_UNEXPECTED", effectClass: rendering.effectClass, message: "the result could not be validated", data: null, guidance: { handoff: { owner: "operator", reason: "The envelope failed validation before output.", inspect: ["canva-auth status --account <slug>"] } }, repairAction: REPAIR.unexpected });
 	}
 	if (json) return { stdout: `${JSON.stringify(built)}\n`, stderr: "", exitCode: built.result.exitCode };
-	if (built.result.outcome === "success") return { stdout: humanLines(rendering, urls), stderr: "", exitCode: 0 };
+	if (built.result.outcome === "success") return { stdout: humanLines(rendering), stderr: "", exitCode: 0 };
 	return { stdout: "", stderr: `${PROGRAM}: ${built.result.causeCode}: ${built.result.repairAction}\n`, exitCode: built.result.exitCode };
 }
 
@@ -216,8 +233,12 @@ function productionDeps(): CliDeps {
 
 if (import.meta.main) {
 	const argv = process.argv.slice(2);
-	const { rendering, urls } = await run(argv, productionDeps());
-	const output = renderOutput(rendering, urls, argv.includes("--json"));
+	const json = argv.includes("--json");
+	const { rendering } = await run(argv, productionDeps(), (url) => {
+		const notice = authorizationNotice(url, json);
+		(notice.stream === "stdout" ? process.stdout : process.stderr).write(notice.text);
+	});
+	const output = renderOutput(rendering, json);
 	process.stdout.write(output.stdout);
 	process.stderr.write(output.stderr);
 	process.exit(output.exitCode);

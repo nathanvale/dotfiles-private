@@ -16,11 +16,13 @@ const DONE_BODY = "<!doctype html><title>Canva login</title><p>Login received. Y
 const FAILED_BODY = "<!doctype html><title>Canva login</title><p>Login was not completed. Return to the terminal.</p>";
 const html = (body: string, status: number) => new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" } });
 
+// The state is checked first on every callback, error callbacks included, so
+// a request that was not bound to this login never counts as a denial.
 function classify(url: URL, state: string): CallbackResult {
-	if (url.searchParams.has("error")) return { ok: false, reason: "authorization-denied" };
-	const code = url.searchParams.get("code");
 	const observedState = url.searchParams.get("state");
 	if (observedState !== state) return { ok: false, reason: "state-mismatch" };
+	if (url.searchParams.has("error")) return { ok: false, reason: "authorization-denied" };
+	const code = url.searchParams.get("code");
 	if (!code || code.length > 4096 || /[\r\n]/.test(code)) return { ok: false, reason: "callback-invalid" };
 	return { ok: true, code };
 }

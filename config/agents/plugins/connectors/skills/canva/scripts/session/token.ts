@@ -4,6 +4,7 @@
 // failure because it ends the session. No response text leaves.
 import { type ClientIdentity, clientAuthentication } from "./client.ts";
 import type { Fetch } from "./discovery.ts";
+import { isRecord } from "./validate.ts";
 
 export interface TokenSet {
 	accessToken: string;
@@ -15,9 +16,6 @@ export interface TokenSet {
 export type TokenFailure = "invalid-grant" | "token-request-failed" | "token-response-invalid";
 export type TokenResult = { ok: true; tokens: TokenSet } | { ok: false; reason: TokenFailure };
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 async function errorCode(response: Response): Promise<string | null> {
 	try {

@@ -33,10 +33,14 @@ bun "$AUTH" logout --account <slug> --json
 - `status` is inspect: exit 0 with the nonsecret session view;
   `DOMAIN_PRECONDITION_UNMET` (exit 3) means no session, run `login`;
   `SCHEMA_INVALID_INPUT` (exit 4) means a damaged session, run `logout` then `login`.
-- `login` is Attended Login: it opens the system browser once (or prints the
-  URL with `--no-browser`) and waits up to five minutes for Nathan to grant
-  access. Report the URL and wait; never drive the browser. Consent denied
-  is `DOMAIN_AUTHORITY_REQUIRED`; a missed window is `DOMAIN_DEADLINE_UNCHANGED`.
+- `login` is Attended Login: it opens the system browser once and waits up to
+  five minutes for Nathan to grant access. With `--no-browser` the URL is
+  written the moment it exists, before the wait: on stdout in human mode, as
+  one `canva-auth: authorization-url: <url>` line on stderr with `--json`
+  (stdout stays one envelope). Show Nathan that URL and wait; never drive the
+  browser. Consent denied or a callback that is not this login's is
+  `DOMAIN_AUTHORITY_REQUIRED`; a missed window is `DOMAIN_DEADLINE_UNCHANGED`;
+  a grant that could not be stored is `DOMAIN_RECOVERY_HANDOFF_REQUIRED`.
 - `logout` revokes the grant when Canva confirms it and removes the local
   session. `DOMAIN_RECOVERY_HANDOFF_REQUIRED` means the local session is gone
   but Canva did not confirm revocation: tell Nathan to revoke the Connectors

@@ -1,15 +1,19 @@
 // Private per-account session storage under
-// <state root>/connectors/canva/<account>/: an owned 0700 directory, one
-// exact-0600 session.json, and a refresh.lock that serialises rotation across
-// Provider processes. Everything below the record shape is bin/private-state.
-import { closeSync, openSync, rmSync, writeSync } from "node:fs";
+// <state root>/connectors/canva/<account>/: an owned 0700 directory that
+// outlives the session, one exact-0600 session.json, the Provider's log
+// directory, and a refresh.lock that serialises every mutation of that state
+// across processes. Everything below the record shape is bin/private-state.
+import { closeSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
 import path from "node:path";
 import { ownedDirectory, readPrivateFile, writePrivateFile } from "../../../../bin/private-state.ts";
 import type { ClientMode } from "./config.ts";
+import { isRecord } from "./validate.ts";
 
 export const ACCOUNT_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 const SESSION_FILE = "session.json";
 const LOCK_FILE = "refresh.lock";
+// The session state a logout removes; the directory and the lock stay.
+const SESSION_STATE = [SESSION_FILE, "hyper-mcp-remote"] as const;
 const LOCK_POLL_MS = 50;
 
 export interface SessionRecord {
@@ -30,10 +34,6 @@ export interface SessionRecord {
 export type SessionReadResult = { ok: true; session: SessionRecord } | { ok: false; reason: "absent" | "invalid" };
 
 export const accountDirectory = (root: string, account: string): string => path.join(root, "connectors", "canva", account);
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 const nullableString = (value: unknown): value is string | null => value === null || typeof value === "string";
 const nullableNumber = (value: unknown): value is number | null => value === null || (typeof value === "number" && Number.isFinite(value));
@@ -90,12 +90,13 @@ export function writeSession(root: string, record: SessionRecord): { ok: true } 
 	return written.ok ? { ok: true } : { ok: false, reason: `file-${written.reason}` };
 }
 
-// Removes the whole account directory: session, lock, and nothing else lives there.
+// Removes the session state only. The account directory and any lock inside
+// it are kept, so a holder of the lock is never pulled out from under.
 export function removeSession(root: string, account: string): boolean {
 	const directory = accountDirectory(root, account);
 	const read = readPrivateFile(path.join(directory, SESSION_FILE));
 	const existed = read.ok || read.reason !== "absent";
-	rmSync(directory, { recursive: true, force: true });
+	for (const entry of SESSION_STATE) rmSync(path.join(directory, entry), { recursive: true, force: true });
 	return existed;
 }
 
@@ -104,25 +105,38 @@ export interface LockClock {
 	sleep(ms: number): Promise<void>;
 }
 
-// Exclusive-create lock. A held lock is never reclaimed: the caller waits a
-// bounded number of polls and then reports busy, because pid liveness cannot
-// rule out pid reuse. The wait counts polls rather than reading the clock, so
-// an injected clock that stands still still bounds it.
-async function acquireLock(lock: string, clock: LockClock, waitMs: number): Promise<boolean> {
+// Exclusive-create lock whose record names a random owner token. A held lock
+// is never reclaimed: the caller waits a bounded number of polls and then
+// reports busy, because pid liveness cannot rule out pid reuse. The wait
+// counts polls rather than reading the clock, so an injected clock that
+// stands still still bounds it.
+async function acquireLock(lock: string, clock: LockClock, waitMs: number): Promise<string | null> {
+	const owner = crypto.randomUUID();
 	const polls = Math.ceil(waitMs / LOCK_POLL_MS);
 	for (let attempt = 0; ; attempt += 1) {
 		try {
 			const fd = openSync(lock, "wx", 0o600);
 			try {
-				writeSync(fd, `${JSON.stringify({ pid: process.pid, at: clock.now() })}\n`);
+				writeSync(fd, `${JSON.stringify({ pid: process.pid, at: clock.now(), owner })}\n`);
 			} finally {
 				closeSync(fd);
 			}
-			return true;
+			return owner;
 		} catch {
-			if (attempt >= polls) return false;
+			if (attempt >= polls) return null;
 			await clock.sleep(LOCK_POLL_MS);
 		}
+	}
+}
+
+// Release removes the lock only while its record still names this owner; a
+// lock that another process holds is left in place.
+function releaseLock(lock: string, owner: string): void {
+	try {
+		const record: unknown = JSON.parse(readFileSync(lock, "utf8"));
+		if (isRecord(record) && record.owner === owner) rmSync(lock, { force: true });
+	} catch {
+		// An unreadable or absent lock is not ours to remove.
 	}
 }
 
@@ -130,10 +144,11 @@ export async function withRefreshLock<T>(root: string, account: string, clock: L
 	const directory = accountDirectory(root, account);
 	if (!ownedDirectory(directory).ok) return { ok: false, reason: "directory-invalid" };
 	const lock = path.join(directory, LOCK_FILE);
-	if (!(await acquireLock(lock, clock, waitMs))) return { ok: false, reason: "auth-busy" };
+	const owner = await acquireLock(lock, clock, waitMs);
+	if (owner === null) return { ok: false, reason: "auth-busy" };
 	try {
 		return { ok: true, value: await work() };
 	} finally {
-		rmSync(lock, { force: true });
+		releaseLock(lock, owner);
 	}
 }

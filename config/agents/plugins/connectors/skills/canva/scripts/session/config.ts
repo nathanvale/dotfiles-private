@@ -4,6 +4,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { secureUrl } from "./discovery.ts";
+import { isRecord } from "./validate.ts";
 
 export const CLIENT_MODES = ["dcr", "registered", "cimd"] as const;
 export type ClientMode = (typeof CLIENT_MODES)[number];
@@ -30,9 +31,6 @@ export interface OAuthConfig {
 
 const CONFIG_PATH = path.resolve(import.meta.dir, "..", "..", "config", "oauth.json");
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function optionalString(record: Record<string, unknown>, key: string): string | null | undefined {
 	const value = record[key];

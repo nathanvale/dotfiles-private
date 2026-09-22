@@ -8,8 +8,9 @@ import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:
 import os from "node:os";
 import path from "node:path";
 import { OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
-import { type CliDeps, renderOutput, run } from "../scripts/canva-auth.ts";
-import { parseOAuthConfig } from "../scripts/session/config.ts";
+import { authorizationNotice, type CliDeps, renderOutput, run } from "../scripts/canva-auth.ts";
+import { parseOAuthConfig } from "../scripts/session/index.ts";
+
 import { type FakeAuthorizationServer, startAuthorizationServer } from "./fixtures/authorization-server.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
@@ -125,7 +126,8 @@ describe("canva-auth public process", () => {
 		expect([first.code, first.envelope().result.causeCode, first.envelope().result.effects]).toEqual([0, "SUCCESS_COMPLETED", { completed: ["canva-grant:personal", "canva-session:personal"], remaining: [], uncertain: [], inventoryComplete: true }]);
 		expect(first.envelope().result.data).toEqual({ account: "personal", removed: true, revoked: "confirmed" });
 		expect(fake.calls.revocations).toEqual([REFRESH_TOKEN]);
-		expect(existsSync(accountDirectory("personal"))).toBe(false);
+		// The session state is gone; the owned directory outlives it.
+		expect([existsSync(path.join(accountDirectory("personal"), "session.json")), existsSync(path.join(accountDirectory("personal"), "refresh.lock")), existsSync(accountDirectory("personal"))]).toEqual([false, false, true]);
 		const second = await runCli(["logout", "--account", "personal", "--json"]);
 		expect([second.code, second.envelope().result.causeCode, second.envelope().result.transactionState]).toEqual([0, "SUCCESS_UNCHANGED", "unchanged"]);
 		const human = await runCli(["logout", "--account", "tampered"]);
@@ -197,45 +199,89 @@ describe("canva-auth login rendering", () => {
 		};
 	};
 
+	const SECRETS = ["fixture-access-token", "fixture-refresh-token", "fixture-code"];
+
 	test("a completed login is SUCCESS_COMPLETED with the grant and session effects and no token in the envelope", async () => {
 		const { rendering, urls } = await run(["login", "--account", "personal"], deps());
-		const output = renderOutput(rendering, urls, true);
+		const output = renderOutput(rendering, true);
 		const envelope = JSON.parse(output.stdout) as { result: Record<string, unknown> };
 		expect([output.exitCode, output.stderr, envelope.result.causeCode, envelope.result.effectClass, envelope.result.effects]).toEqual([0, "", "SUCCESS_COMPLETED", "external", { completed: ["canva-grant:personal", "canva-session:personal"], remaining: [], uncertain: [], inventoryComplete: true }]);
 		expect(envelope.result.data).toMatchObject({ account: "personal", clientMode: "dcr", authorizationUrlPrinted: false });
-		for (const secret of ["fixture-access-token", "fixture-refresh-token", "fixture-code"]) expect(output.stdout).not.toContain(secret);
-		expect(renderOutput(rendering, urls, false).stdout).toBe("login succeeded for account personal\n");
+		expect(urls).toEqual([]);
+		for (const secret of SECRETS) expect(output.stdout).not.toContain(secret);
+		expect(renderOutput(rendering, false).stdout).toBe("login succeeded for account personal\n");
 	});
 
-	test("--no-browser prints the URL on the human stream and never opens a browser", async () => {
+	// With --no-browser the URL must reach the human before the callback wait,
+	// so the notice is the only way the fixture browser can ever complete the
+	// login: it is opened from the notification, never from the result.
+	test("--no-browser notifies the URL before the wait and the login completes from that notice; no code or token is in the notice", async () => {
 		let opened = 0;
 		const withCounter = deps();
-		const session = withCounter.session;
-		if (!session) throw new Error("session deps missing");
-		session.openBrowser = async () => {
+		if (!withCounter.session) throw new Error("session deps missing");
+		withCounter.session.openBrowser = async () => {
 			opened += 1;
 		};
-		const pending = run(["login", "--account", "personal", "--no-browser"], withCounter);
-		// Timeout is 300 ms and nobody completes the login: this is the deadline row.
-		const { rendering, urls } = await pending;
-		expect([opened, urls.length, rendering.cause]).toEqual([0, 1, "DOMAIN_DEADLINE_UNCHANGED"]);
-		const human = renderOutput(rendering, urls, false);
-		expect([human.exitCode, human.stdout, human.stderr]).toEqual([3, "", "canva-auth: DOMAIN_DEADLINE_UNCHANGED: No callback arrived within the login window; run login again and complete the browser step\n"]);
+		let settled = false;
+		const notices: string[] = [];
+		const noticed = new Promise<string>((resolve) => {
+			const notify = (url: string) => {
+				notices.push(url);
+				resolve(url);
+			};
+			void run(["login", "--account", "personal", "--no-browser"], withCounter, notify).then((result) => {
+				settled = true;
+				(withCounter as { result?: unknown }).result = result;
+			});
+		});
+		const url = await noticed;
+		expect(settled).toBe(false);
+		await fetch(url);
+		while (!settled) await new Promise((resolve) => setTimeout(resolve, 5));
+		const { rendering, urls } = (withCounter as { result?: { rendering: Parameters<typeof renderOutput>[0]; urls: string[] } }).result as { rendering: Parameters<typeof renderOutput>[0]; urls: string[] };
+		expect([opened, notices.length, urls, rendering.cause]).toEqual([0, 1, [url], "SUCCESS_COMPLETED"]);
+		expect(JSON.parse(renderOutput(rendering, true).stdout).result.data.authorizationUrlPrinted).toBe(true);
+		for (const secret of SECRETS) expect(url).not.toContain(secret);
+		expect(authorizationNotice(url, false)).toEqual({ stream: "stdout", text: `Open this URL in your browser to continue, then return here:\n${url}\n` });
+		expect(authorizationNotice(url, true)).toEqual({ stream: "stderr", text: `canva-auth: authorization-url: ${url}\n` });
 	});
 
-	test("denied consent hands off to the human; a failed exchange leaves the grant uncertain", async () => {
+	test("--no-browser with no callback is the deadline row; the notice still fired before the wait", async () => {
+		const noBrowser = deps();
+		if (!noBrowser.session) throw new Error("session deps missing");
+		noBrowser.session.openBrowser = async () => {
+			throw new Error("the browser must not open");
+		};
+		const notices: string[] = [];
+		const { rendering, urls } = await run(["login", "--account", "personal", "--no-browser"], noBrowser, (url) => notices.push(url));
+		expect([notices.length, urls.length, rendering.cause]).toEqual([1, 1, "DOMAIN_DEADLINE_UNCHANGED"]);
+		const human = renderOutput(rendering, false);
+		expect([human.exitCode, human.stdout, human.stderr]).toEqual([3, "", "canva-auth: DOMAIN_DEADLINE_UNCHANGED: No callback arrived within the login window; run login again and complete the browser step\n"]);
+		expect(renderOutput(rendering, true).stderr).toBe("");
+	});
+
+	test("denied consent, a mismatched state, a failed exchange, and a held session lock each map to their stations", async () => {
 		fake.options.consent = "deny";
-		const denied = renderOutput(...Object.values(await run(["login", "--account", "personal"], deps())) as [never, never], true);
+		const denied = renderOutput((await run(["login", "--account", "personal"], deps())).rendering, true);
 		const deniedEnvelope = JSON.parse(denied.stdout) as { result: Record<string, unknown> };
 		expect([denied.exitCode, deniedEnvelope.result.causeCode, deniedEnvelope.result.handoff]).toEqual([3, "DOMAIN_AUTHORITY_REQUIRED", { owner: "human", reason: "Canva did not grant access for this login.", inspect: ["canva-auth status --account <slug>"] }]);
+		fake.options.tamperState = true;
+		const mismatched = await run(["login", "--account", "personal"], deps());
+		expect([mismatched.rendering.cause, mismatched.rendering.message]).toEqual(["DOMAIN_AUTHORITY_REQUIRED", "login refused: login-mismatch"]);
+		fake.options.tamperState = false;
 		fake.options.consent = "grant";
 		const failing = deps();
 		if (!failing.session) throw new Error("session deps missing");
 		failing.session.fetch = (input, init) => (String(input).endsWith("/token") ? Promise.resolve(new Response('{"error":"server_error"}', { status: 500 })) : fetch(input, init));
 		const exchange = await run(["login", "--account", "personal"], failing);
-		const output = renderOutput(exchange.rendering, exchange.urls, true);
+		const output = renderOutput(exchange.rendering, true);
 		const envelope = JSON.parse(output.stdout) as { result: Record<string, unknown> };
 		expect([output.exitCode, envelope.result.causeCode, envelope.result.transactionState, envelope.result.effects]).toEqual([3, "DOMAIN_RECOVERY_HANDOFF_REQUIRED", "unknown", { completed: [], remaining: [], uncertain: ["canva-grant:personal"], inventoryComplete: true }]);
+		mkdirSync(accountDirectory("personal"), { recursive: true, mode: 0o700 });
+		writeFileSync(path.join(accountDirectory("personal"), "refresh.lock"), '{"owner":"someone-else"}', { mode: 0o600 });
+		const busy = await run(["login", "--account", "personal"], deps());
+		expect([busy.rendering.cause, busy.rendering.message]).toEqual(["DOMAIN_RECOVERY_HANDOFF_REQUIRED", "login failed: session-busy"]);
+		expect(existsSync(path.join(accountDirectory("personal"), "session.json"))).toBe(false);
 	});
 
 	test("an unwritable account directory refuses before discovery as INTERNAL_PREPARATION", async () => {
@@ -243,7 +289,7 @@ describe("canva-auth login rendering", () => {
 		writeFileSync(path.join(root, "connectors", "canva", "personal"), "not a directory");
 		const { rendering, urls } = await run(["login", "--account", "personal"], deps());
 		expect([rendering.cause, urls.length, fake.calls.registrations]).toEqual(["INTERNAL_PREPARATION", 0, 0]);
-		expect(renderOutput(rendering, urls, true).exitCode).toBe(1);
+		expect(renderOutput(rendering, true).exitCode).toBe(1);
 	});
 });
 

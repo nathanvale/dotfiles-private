@@ -2,6 +2,8 @@
 // the authorization server, then RFC 8414 metadata names its endpoints. Every
 // endpoint must be https (loopback http is admitted for tests only), the
 // issuer must match, and S256 must be advertised. No response text leaves.
+import { isRecord } from "./validate.ts";
+
 export interface AuthorizationServer {
 	issuer: string;
 	authorizationEndpoint: string;
@@ -16,10 +18,6 @@ export type DiscoveryResult = { ok: true; server: AuthorizationServer } | { ok: 
 // The injected HTTP seam: the global fetch in production, a routing or
 // failing function in tests.
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 // https, or http on the loopback host only.
 export function secureUrl(value: unknown): value is string {

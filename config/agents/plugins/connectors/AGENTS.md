@@ -5,7 +5,7 @@ Read [CONTEXT.md](CONTEXT.md) for the plugin's vocabulary before naming anything
 ## Invariants
 
 - The worktree candidate under `config/agents/plugins/connectors` is the source. An installed plugin cache is a copy: never edit it, and never treat its presence as activation proof.
-- Shared transport lives only in `bin/provider-route.ts`. It names no service; it selects one Connector Skill's registry and replaces itself with MCPorter.
+- Shared route selection into MCPorter lives only in `bin/provider-route.ts`. It names no service; it selects one Connector Skill's registry and replaces itself with MCPorter. Everything below MCPorter is Provider code, shared only through the `bin/` helpers listed below.
 - Every skill registry sets `imports: []` and gives every server an explicit exact-name `allowedTools` array. The route refuses a registry that omits either, before any process starts. Broad dispatcher tools (`discover`, `executeRead`, `executeWrite`, `executeDestructive`) never enter an allow-list.
 - Credential custody stays below MCPorter, inside a Provider process that resolves its own 1Password item or private OAuth session. Only non-secret Route Selection values cross the route; secret values never enter plugin config, arguments, envelopes, tests, or docs.
 - Shared Provider plumbing lives in `bin/`: `provider-process.ts` (refusal prefix, PATH lookup, scrub, exec), `private-state.ts` (owned 0700 directories, exact-0600 files), `hyper-mcp-remote.ts` (the pinned bridge). A skill's custody module is imported only through its `index.ts`.

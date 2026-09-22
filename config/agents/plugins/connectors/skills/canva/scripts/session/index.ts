@@ -8,7 +8,7 @@
 // can and removes the local session. Every dependency with an effect is
 // injected. Tokens never appear in a result other than `accessToken`'s.
 import type { EnvironmentSource } from "../../../../bin/safe-environment.ts";
-import { listenForCallback } from "./callback.ts";
+import { type CallbackResult, listenForCallback } from "./callback.ts";
 import { type ClientIdentity, resolveClient } from "./client.ts";
 import type { OAuthConfig } from "./config.ts";
 import { discover, type Fetch } from "./discovery.ts";
@@ -16,7 +16,7 @@ import { codeChallenge, codeVerifier, type Random, stateValue } from "./pkce.ts"
 import { ACCOUNT_PATTERN, type LockClock, prepareAccountDirectory, readSession, removeSession, type SessionRecord, withRefreshLock, writeSession } from "./store.ts";
 import { exchangeCode, refreshTokens, revokeToken, type TokenSet } from "./token.ts";
 
-export { loadOAuthConfig, type OAuthConfig } from "./config.ts";
+export { loadOAuthConfig, type OAuthConfig, parseOAuthConfig } from "./config.ts";
 export { ACCOUNT_PATTERN } from "./store.ts";
 
 export interface SessionDeps {
@@ -43,8 +43,8 @@ export interface SessionStatus {
 	refreshable: boolean;
 }
 
-export type LoginCause = "account-invalid" | "discovery-failed" | "client-unresolved" | "login-denied" | "login-timeout" | "login-invalid" | "exchange-failed" | "session-unwritable";
-export type TokenCause = "account-invalid" | "auth-required" | "session-invalid" | "auth-expired" | "auth-busy" | "refresh-failed" | "session-unwritable";
+export type LoginCause = "account-invalid" | "discovery-failed" | "client-unresolved" | "login-denied" | "login-mismatch" | "login-timeout" | "login-invalid" | "exchange-failed" | "session-busy" | "session-unwritable";
+export type TokenCause = "account-invalid" | "auth-required" | "session-invalid" | "auth-expired" | "auth-busy" | "refresh-failed" | "refresh-incomplete" | "session-unwritable";
 export type LogoutRevocation = "confirmed" | "uncertain" | "unsupported" | "not-needed";
 export type LogoutCause = "account-invalid" | "auth-busy" | "session-unremovable";
 
@@ -68,8 +68,10 @@ const DETAILS: Record<LoginCause | TokenCause | LogoutCause, string> = {
 	"account-invalid": "the account must be a lowercase slug",
 	"discovery-failed": "the Canva authorization server could not be discovered or does not meet the PKCE and https requirements",
 	"client-unresolved": "the client identity could not be established with the authorization server",
-	"login-denied": "the authorization was denied or the callback did not match this login",
+	"login-denied": "the authorization was denied in the browser",
+	"login-mismatch": "the callback did not carry this login's state and was ignored",
 	"login-timeout": "no callback arrived before the login window closed",
+	"session-busy": "another process holds the session lock for this account, so the code was not exchanged; a grant may exist at Canva; run canva-auth login again",
 	"login-invalid": "the callback carried no usable authorization code",
 	"exchange-failed": "the authorization server did not issue tokens for the code",
 	"session-unwritable": "the private session directory is not an owned 0700 directory",
@@ -78,6 +80,7 @@ const DETAILS: Record<LoginCause | TokenCause | LogoutCause, string> = {
 	"auth-expired": "the session was revoked or expired at Canva and has been removed; run canva-auth login",
 	"auth-busy": "another process holds the refresh lock for this account; retry shortly",
 	"refresh-failed": "the authorization server did not rotate the refresh token; retry, then login if it persists",
+	"refresh-incomplete": "the authorization server rotated the access token without a replacement refresh token; the single-use token is spent, so the session was removed; run canva-auth login",
 	"session-unremovable": "the private session directory could not be removed; inspect its permissions, then run canva-auth logout again",
 };
 
@@ -149,20 +152,35 @@ export async function login(account: string, options: LoginOptions, deps: Sessio
 		options.onAuthorizationUrl?.(url);
 		if (!options.noBrowser) await deps.openBrowser(url);
 		const callback = await listener.result;
-		if (!callback.ok) return loginFailure(callback.reason === "callback-timeout" ? "login-timeout" : callback.reason === "callback-invalid" ? "login-invalid" : "login-denied");
-		const exchanged = await exchangeCode({ tokenEndpoint: server.tokenEndpoint, client: resolved.client, code: callback.code, codeVerifier: verifier, redirectUri: listener.redirectUri, resource: deps.config.resource }, deps.fetch);
-		if (!exchanged.ok) return loginFailure("exchange-failed");
-		const record = recordFrom(
-			{ account, issuer: server.issuer, resource: deps.config.resource, tokenEndpoint: server.tokenEndpoint, revocationEndpoint: server.revocationEndpoint, client: { mode: resolved.client.mode, clientId: resolved.client.clientId, redirectUri: resolved.client.redirectUri } },
-			exchanged.tokens,
-			deps.clock.now(),
-		);
-		if (!writeSession(deps.stateRoot, record).ok) return loginFailure("session-unwritable");
-		return { ok: true, status: statusOf(record) };
+		if (!callback.ok) return loginFailure(CALLBACK_CAUSES[callback.reason]);
+		// The exchange and the write run under the account lock, so a refresh
+		// or logout in another process never interleaves with the new session.
+		// The attended wait itself is not held under the lock: a login killed
+		// mid-wait would otherwise leave a lock that is never reclaimed.
+		const locked = await withRefreshLock(deps.stateRoot, account, deps.clock, deps.config.refreshLockWaitMs, async (): Promise<LoginResult> => {
+			const exchanged = await exchangeCode({ tokenEndpoint: server.tokenEndpoint, client: resolved.client, code: callback.code, codeVerifier: verifier, redirectUri: listener.redirectUri, resource: deps.config.resource }, deps.fetch);
+			if (!exchanged.ok) return loginFailure("exchange-failed");
+			const record = recordFrom(
+				{ account, issuer: server.issuer, resource: deps.config.resource, tokenEndpoint: server.tokenEndpoint, revocationEndpoint: server.revocationEndpoint, client: { mode: resolved.client.mode, clientId: resolved.client.clientId, redirectUri: resolved.client.redirectUri } },
+				exchanged.tokens,
+				deps.clock.now(),
+			);
+			if (!writeSession(deps.stateRoot, record).ok) return loginFailure("session-unwritable");
+			return { ok: true, status: statusOf(record) };
+		});
+		if (!locked.ok) return loginFailure(locked.reason === "auth-busy" ? "session-busy" : "session-unwritable");
+		return locked.value;
 	} finally {
 		listener.close();
 	}
 }
+
+const CALLBACK_CAUSES: Record<Exclude<CallbackResult, { ok: true }>["reason"], LoginCause> = {
+	"state-mismatch": "login-mismatch",
+	"authorization-denied": "login-denied",
+	"callback-timeout": "login-timeout",
+	"callback-invalid": "login-invalid",
+};
 
 const fresh = (session: SessionRecord, now: number): boolean => session.accessTokenExpiresAt === null || session.accessTokenExpiresAt - now > REFRESH_SKEW_MS;
 
@@ -180,8 +198,13 @@ async function rotate(account: string, session: SessionRecord, deps: SessionDeps
 		}
 		return tokenFailure("refresh-failed");
 	}
-	// A server that omits the rotated refresh token keeps the current one.
-	const tokens: TokenSet = { ...refreshed.tokens, refreshToken: refreshed.tokens.refreshToken ?? session.refreshToken };
+	// Canva refresh tokens are single use: the one just sent is spent, so a
+	// reply without a replacement leaves no way to continue. Fail closed.
+	if (refreshed.tokens.refreshToken === null) {
+		removeSession(deps.stateRoot, account);
+		return tokenFailure("refresh-incomplete");
+	}
+	const tokens: TokenSet = refreshed.tokens;
 	const record = recordFrom(session, tokens, deps.clock.now());
 	if (!writeSession(deps.stateRoot, record).ok) return tokenFailure("session-unwritable");
 	return { ok: true, token: record.accessToken, status: statusOf(record) };

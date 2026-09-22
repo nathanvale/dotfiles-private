@@ -7,6 +7,7 @@
 import type { EnvironmentSource } from "../../../../bin/safe-environment.ts";
 import type { ClientConfig, ClientMode } from "./config.ts";
 import type { AuthorizationServer, Fetch } from "./discovery.ts";
+import { isRecord } from "./validate.ts";
 
 export interface ClientIdentity {
 	mode: ClientMode;
@@ -22,9 +23,6 @@ export type ClientResult = { ok: true; client: ClientIdentity } | { ok: false; r
 
 export const CLIENT_SECRET_ENV = "CANVA_CLIENT_SECRET";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 async function register(config: ClientConfig, server: AuthorizationServer, redirectUri: string, fetchFn: Fetch): Promise<ClientResult> {
 	if (server.registrationEndpoint === null) return { ok: false, reason: "registration-unsupported" };

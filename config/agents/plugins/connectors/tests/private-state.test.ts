@@ -2,7 +2,7 @@
 // closed reasons. Ownership by another user cannot be staged without
 // privileges and stays unproved here.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ownedDirectory, readPrivateFile, stateRoot, writePrivateFile } from "../bin/private-state.ts";
@@ -73,17 +73,35 @@ describe("writePrivateFile and readPrivateFile", () => {
 		expect(readdirSync(wide)).toEqual([]);
 	});
 
-	test("a write replaces a symlink at the target instead of following it", () => {
+	test("a write refuses a symlink or a directory at the target and touches neither it nor its referent", () => {
 		const directory = path.join(root, "state");
 		expect(ownedDirectory(directory)).toEqual({ ok: true });
 		const victim = path.join(root, "victim");
 		writeFileSync(victim, "untouched");
 		const file = path.join(directory, "session.json");
 		symlinkSync(victim, file);
-		expect(writePrivateFile(file, "new")).toEqual({ ok: true });
+		expect(writePrivateFile(file, "new")).toEqual({ ok: false, reason: "symlink" });
 		expect(readFileSync(victim, "utf8")).toBe("untouched");
-		expect(statSync(file).isSymbolicLink()).toBe(false);
-		expect(readPrivateFile(file)).toEqual({ ok: true, text: "new" });
+		expect(lstatSync(file).isSymbolicLink()).toBe(true);
+		expect(readdirSync(directory)).toEqual(["session.json"]);
+		mkdirSync(path.join(directory, "nested"), { mode: 0o700 });
+		expect(writePrivateFile(path.join(directory, "nested"), "new")).toEqual({ ok: false, reason: "not-regular" });
+	});
+
+	test("a read never follows a symlink: the descriptor is opened no-follow and inspected before it is read", () => {
+		const directory = path.join(root, "state");
+		expect(ownedDirectory(directory)).toEqual({ ok: true });
+		const real = path.join(directory, "real.json");
+		expect(writePrivateFile(real, "real")).toEqual({ ok: true });
+		// A symlink to an otherwise acceptable owned 0600 file is still refused.
+		const link = path.join(directory, "session.json");
+		symlinkSync(real, link);
+		expect(readPrivateFile(link)).toEqual({ ok: false, reason: "symlink" });
+		// Swapping the regular file for a symlink after it was valid is refused on the next read.
+		rmSync(real);
+		writeFileSync(real, "swapped", { mode: 0o644 });
+		expect(readPrivateFile(real)).toEqual({ ok: false, reason: "mode-invalid" });
+		expect(readPrivateFile(link)).toEqual({ ok: false, reason: "symlink" });
 	});
 
 	test("a read refuses anything but an owned exact-0600 regular file", () => {

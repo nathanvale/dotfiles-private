@@ -543,10 +543,10 @@ describe("provider text never reaches the envelope", () => {
 	test("translated failures carry fixed repair text and provenance; a hint is fixed text, never a message", async () => {
 		const precondition = failure("refused-precondition", false, "add a username field to the tenant's product credential item");
 		for (const [translated, cause, detail] of [
-			[failure("failed-transport"), "failed-transport", `${REPAIR_TEXT["failed-transport"]}; fallback-ineligible:parity-unproven`],
-			[failure("failed-transport", true), "failed-transport", `${REPAIR_TEXT["failed-transport"]}; fallback-ineligible:content-observed`],
-			[failure("refused-auth", true), "refused-auth", `${REPAIR_TEXT["refused-auth"]}; fallback-ineligible:refused-auth`],
-			[precondition, "refused-precondition", `${REPAIR_TEXT["refused-precondition"]}; add a username field to the tenant's product credential item; fallback-ineligible:refused-precondition`],
+			[failure("failed-transport"), "failed-transport", "the provider did not answer; inspect provider status before retrying the read; fallback-ineligible:parity-unproven"],
+			[failure("failed-transport", true), "failed-transport", "the provider did not answer; inspect provider status before retrying the read; fallback-ineligible:content-observed"],
+			[failure("refused-auth", true), "refused-auth", "the provider refused authentication or permission; verify the credential type, scopes, and product permissions with their owner; fallback-ineligible:refused-auth"],
+			[precondition, "refused-precondition", "a provider precondition failed before any request; run the provider readiness checks; add a username field to the tenant's product credential item; fallback-ineligible:refused-precondition"],
 		] as const) {
 			const { transport } = fakeTransport({ [`${OJ}.getJiraIssue`]: translated });
 			const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
@@ -1068,7 +1068,7 @@ describe("production adapters", () => {
 		const result = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
 		expect([result.code, result.stderr]).toEqual([3, ""]);
 		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; repairAction: string } };
-		expect([envelope.result.causeCode, envelope.result.repairAction]).toEqual(["refused-auth", `${REPAIR_TEXT["refused-auth"]}; fallback-ineligible:refused-auth`]);
+		expect([envelope.result.causeCode, envelope.result.repairAction]).toEqual(["refused-auth", "the provider refused authentication or permission; verify the credential type, scopes, and product permissions with their owner; fallback-ineligible:refused-auth"]);
 		for (const fragment of PRIVATE) expect(result.stdout).not.toContain(fragment);
 	});
 

@@ -5,8 +5,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { parseOAuthConfig } from "../scripts/session/config.ts";
-import { accessToken, login, logout, type SessionDeps, status } from "../scripts/session/index.ts";
+
+import { accessToken, login, logout, parseOAuthConfig, type SessionDeps, status } from "../scripts/session/index.ts";
 import { type FakeAuthorizationServer, preRegister, startAuthorizationServer } from "./fixtures/authorization-server.ts";
 
 let fake: FakeAuthorizationServer;
@@ -88,10 +88,15 @@ describe("login", () => {
 
 	test("denied consent, a mismatched state, a timeout, and a failed exchange each refuse with a closed cause and no session", async () => {
 		fake.options.consent = "deny";
-		expect(await login("personal", { noBrowser: false }, deps())).toEqual({ ok: false, cause: "login-denied", detail: "the authorization was denied or the callback did not match this login" });
+		expect(await login("personal", { noBrowser: false }, deps())).toEqual({ ok: false, cause: "login-denied", detail: "the authorization was denied in the browser" });
 		fake.options.consent = "grant";
 		fake.options.tamperState = true;
-		expect(causeOf(await login("personal", { noBrowser: false }, deps()))).toBe("login-denied");
+		expect(await login("personal", { noBrowser: false }, deps())).toEqual({ ok: false, cause: "login-mismatch", detail: "the callback did not carry this login's state and was ignored" });
+		// The state is checked before the error parameter: a denial that does
+		// not carry this login's state is a mismatch, never a denial.
+		fake.options.consent = "deny";
+		expect(causeOf(await login("personal", { noBrowser: false }, deps()))).toBe("login-mismatch");
+		fake.options.consent = "grant";
 		fake.options.tamperState = false;
 		expect(await login("personal", { noBrowser: false }, deps({ openBrowser: async () => undefined }, { callbackTimeoutMs: 100 }))).toEqual({ ok: false, cause: "login-timeout", detail: "no callback arrived before the login window closed" });
 		const failingExchange = deps({ fetch: (input, init) => (String(input).endsWith("/token") ? Promise.resolve(new Response('{"error":"server_error"}', { status: 500 })) : fetch(input, init)) });
@@ -162,6 +167,15 @@ describe("accessToken", () => {
 		expect(fake.calls.refreshRequests).toBe(1);
 	});
 
+	test("a rotation that omits the replacement refresh token fails closed and removes the spent session", async () => {
+		expect((await login("personal", { noBrowser: false }, deps())).ok).toBe(true);
+		now = NOW + 3_600_000;
+		fake.options.omitRefreshOnRotate = true;
+		expect(await accessToken("personal", deps())).toEqual({ ok: false, cause: "refresh-incomplete", detail: "the authorization server rotated the access token without a replacement refresh token; the single-use token is spent, so the session was removed; run canva-auth login" });
+		expect([fake.calls.refreshRequests, existsSync(sessionFile())]).toEqual([1, false]);
+		expect(await accessToken("personal", deps())).toMatchObject({ ok: false, cause: "auth-required" });
+	});
+
 	test("invalid_grant removes the session and reports auth-expired; a held lock reports auth-busy", async () => {
 		expect((await login("personal", { noBrowser: false }, deps())).ok).toBe(true);
 		now = NOW + 3_600_000;
@@ -209,8 +223,53 @@ describe("status and logout", () => {
 		for (const secret of SECRETS) expect(JSON.stringify(shown)).not.toContain(secret);
 		expect(await logout("personal", deps())).toEqual({ ok: true, removed: true, revoked: "confirmed" });
 		expect(fake.calls.revocations).toEqual(["fixture-refresh-token-1"]);
-		expect(existsSync(path.dirname(sessionFile()))).toBe(false);
+		// The session state is removed; the owned directory outlives it and holds no lock.
+		expect([existsSync(sessionFile()), readdirSync(path.dirname(sessionFile()))]).toEqual([false, []]);
 		expect(await logout("personal", deps())).toEqual({ ok: true, removed: false, revoked: "not-needed" });
+	});
+
+	test("logout releases only the lock it owns; a lock taken over by another process is left in place", async () => {
+		expect((await login("personal", { noBrowser: false }, deps())).ok).toBe(true);
+		const lock = path.join(path.dirname(sessionFile()), "refresh.lock");
+		let seenOwner = "";
+		// During revocation (inside the lock) another process takes the lock over.
+		const takeover = deps({
+			fetch: async (input, init) => {
+				if (String(input).endsWith("/revoke")) {
+					seenOwner = JSON.parse(readFileSync(lock, "utf8")).owner;
+					writeFileSync(lock, '{"pid":1,"at":0,"owner":"another-process"}', { mode: 0o600 });
+				}
+				return fetch(input, init);
+			},
+		});
+		expect(await logout("personal", takeover)).toEqual({ ok: true, removed: true, revoked: "confirmed" });
+		expect(seenOwner.length).toBeGreaterThan(20);
+		expect(JSON.parse(readFileSync(lock, "utf8"))).toEqual({ pid: 1, at: 0, owner: "another-process" });
+		expect(await accessToken("personal", deps())).toMatchObject({ ok: false, cause: "auth-required" });
+	});
+
+	test("a login's exchange and write wait for a logout holding the lock, and the new session survives", async () => {
+		expect((await login("personal", { noBrowser: false }, deps())).ok).toBe(true);
+		let releaseRevoke: () => void = () => undefined;
+		const gate = new Promise<void>((resolve) => {
+			releaseRevoke = resolve;
+		});
+		const slowLogout = deps({
+			fetch: async (input, init) => {
+				if (String(input).endsWith("/revoke")) await gate;
+				return fetch(input, init);
+			},
+		});
+		const logoutPending = logout("personal", slowLogout);
+		await new Promise((resolve) => setTimeout(resolve, 20));
+		const loginPending = login("personal", { noBrowser: false }, deps({}, { refreshLockWaitMs: 2000 }));
+		await new Promise((resolve) => setTimeout(resolve, 100));
+		// The login has consent but has not exchanged: the lock is still the logout's.
+		expect(fake.calls.tokenRequests).toBe(1);
+		releaseRevoke();
+		const [loggedOut, loggedIn] = await Promise.all([logoutPending, loginPending]);
+		expect([loggedOut, loggedIn.ok, fake.calls.tokenRequests]).toEqual([{ ok: true, removed: true, revoked: "confirmed" }, true, 2]);
+		expect(JSON.parse(sessionText()).accessToken).toBe("fixture-access-token-2");
 	});
 
 	test("logout still removes the session when revocation is unreachable", async () => {
