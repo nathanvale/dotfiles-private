@@ -184,7 +184,7 @@ type AgentWorktreeDoctorData = {
 		store_root: DoctorMap["repo"]["storeRoot"] | undefined;
 		linked_worktree_count: DoctorMap["repo"]["linkedWorktreeCount"];
 		stale_dir_count: DoctorMap["repo"]["staleDirCount"];
-		stray_worktree_count: DoctorMap["repo"]["strayWorktreeCount"];
+		stray_worktree_count?: DoctorMap["repo"]["strayWorktreeCount"];
 		available_commands: DoctorMap["availableCommands"];
 	};
 	checks: {
@@ -1128,7 +1128,9 @@ function doctorData(data: DoctorMap): AgentWorktreeDoctorData {
 			store_root: data.repo.storeRoot,
 			linked_worktree_count: data.repo.linkedWorktreeCount,
 			stale_dir_count: data.repo.staleDirCount,
-			stray_worktree_count: data.repo.strayWorktreeCount,
+			...(data.repo.strayWorktreeCount === undefined
+				? {}
+				: { stray_worktree_count: data.repo.strayWorktreeCount }),
 			available_commands: data.availableCommands,
 		},
 		checks: data.checks.map((check) => ({

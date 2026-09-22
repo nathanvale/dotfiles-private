@@ -105,7 +105,7 @@ export interface DoctorRepoSummary {
 	gitRoot?: string;
 	/** Git repository isolation for the invocation cwd. */
 	isolation?: RepoDiscovery["isolation"];
-	/** Main owner root where `.agent-worktree` lives. */
+	/** Main owner root used to derive the durable store location. */
 	mainOwnerRoot?: string;
 	/** Active worktree path for the current cwd. */
 	activeWorktree?: string;
@@ -119,8 +119,8 @@ export interface DoctorRepoSummary {
 	linkedWorktreeCount: number;
 	/** Number of stale dirs under `.worktrees`. */
 	staleDirCount: number;
-	/** Number of linked worktrees checked out outside `.worktrees`. */
-	strayWorktreeCount: number;
+	/** Number of linked worktrees checked out outside `.worktrees`, when known. */
+	strayWorktreeCount?: number;
 }
 
 interface DoctorRuntimeContext {
@@ -180,6 +180,9 @@ function doctorMapFromDiscoveryWithContext(
 ): DoctorMap {
 	const issueChecks = checksFromDiscoveryIssues(discovery);
 	const strays = findStrayWorktrees(discovery);
+	const strayWorktreeCountKnown = !discovery.issues.some(
+		(issue) => issue.code === "worktree_list_failed",
+	);
 	const checks: DoctorCheck[] = [
 		repoCheck(discovery),
 		worktreesCheck(discovery),
@@ -203,7 +206,9 @@ function doctorMapFromDiscoveryWithContext(
 			storeRoot: discovery.storeRoot,
 			linkedWorktreeCount: discovery.linkedWorktrees.length,
 			staleDirCount: discovery.staleDirs.length,
-			strayWorktreeCount: strays.length,
+			...(strayWorktreeCountKnown
+				? { strayWorktreeCount: strays.length }
+				: {}),
 		},
 		availableCommands: AGENT_WORKTREE_COMMANDS,
 	};

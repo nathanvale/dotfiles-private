@@ -213,7 +213,8 @@ branch refs/heads/feat/x
 			],
 		} satisfies RepoDiscovery;
 
-		const check = doctorMapFromDiscovery(discovery).checks.find(
+		const map = doctorMapFromDiscovery(discovery);
+		const check = map.checks.find(
 			(entry) => entry.id === "stray_worktrees",
 		);
 
@@ -221,6 +222,7 @@ branch refs/heads/feat/x
 		expect(check?.summary).toBe(
 			"Stray worktrees unknown until the worktree list can be read.",
 		);
+		expect(map.repo.strayWorktreeCount).toBeUndefined();
 	});
 
 	test("reports ok when every linked worktree lives under .worktrees", () => {
