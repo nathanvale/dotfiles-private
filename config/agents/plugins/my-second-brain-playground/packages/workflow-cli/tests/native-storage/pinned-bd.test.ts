@@ -5,19 +5,21 @@ import { homedir, tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import { bindingPath, envelopeOf, hookOutputOf, readJsonFile, resultOf, retainedBytes, type Root, type Run, runCli, runHook, stateListing } from "../fixtures/harness.ts"
 
-// The native-storage seam: the production entry against the pinned bd 1.2.2 executable and an isolated throwaway
+// The native-storage seam: the production entry against the pinned bd 1.3.0 executable and an isolated throwaway
 // store that `bd init` creates under $HOME/.local/state (the pinned `bd context` refuses a store under /private/tmp).
 // Every process in this suite runs with a disposable fake HOME, itself a Git top level holding its own `bd init`
 // store, so no bd process can discover the real ~/.beads or the selected trial store: the pinned bd walks up from
 // its cwd to the enclosing Git root looking for a .beads directory whenever BEADS_DIR names a missing store. The
-// pinned path and digest are literals from Ticket #58 (independent oracle), so this suite is bound to the machine
+// pinned path and digest are literals from Ticket #52 revision 3 (independent oracle), so this suite is bound to the machine
 // that holds the pinned executable and fails, never skips, without it. The hook rows stop at SessionStart compact:
-// the marker and lock paths are proven by the shim suites.
+// the marker and lock paths are proven by the shim suites, and so is the "no bd prime read" argv oracle, because
+// the production pin names the executable by absolute path and digest and no recording wrapper can stand in front of it.
 
-/** Ticket #58: the native Beads executable, its SHA-256, and the version the store gate pins. */
-const PINNED_BD = "/Users/nathanvale/.local/state/trustworthy-engineering-loop-prototype/beads/bd"
-const PINNED_BD_SHA256 = "9581d8bcd9662ccf9d889ee8d879787e32cd4c0249d93374eeac5044e9f24351"
-const PINNED_VERSION = "1.2.2@6c124203e771"
+/** Ticket #52 revision 3: the Mise-owned native Beads executable (the canonical file, not the shim), its SHA-256, and the
+ * version the store gate pins. */
+const PINNED_BD = "/Users/nathanvale/.local/share/mise/installs/github-gastownhall-beads/1.3.0/bd"
+const PINNED_BD_SHA256 = "86e81a32d7b7cf3309a343210fac65e5a5ac485102c604447bf37d45aac675f0"
+const PINNED_VERSION = "1.3.0@f45b249ce6b4"
 const PREFIX = "throwaway"
 const FAKE_HOME_PREFIX = "fakeglobal"
 const SESSION = "native-session"
@@ -81,7 +83,7 @@ function stateHomeParent(): string {
 
 /** Creates the throwaway root under the state home, a Git workspace with a `bd init` store, and the fixture Beads. */
 function createNativeStore(): NativeStore {
-	if (!existsSync(PINNED_BD)) throw new Error(`the pinned bd executable is absent at ${PINNED_BD}; Ticket #58 binds this suite to that machine`)
+	if (!existsSync(PINNED_BD)) throw new Error(`the pinned bd executable is absent at ${PINNED_BD}; Ticket #52 revision 3 binds this suite to that machine`)
 	const digest = createHash("sha256").update(readFileSync(PINNED_BD)).digest("hex")
 	if (digest !== PINNED_BD_SHA256) throw new Error(`the executable at ${PINNED_BD} hashes ${digest}, not the pinned ${PINNED_BD_SHA256}`)
 	const privateRoot = realpathSync(mkdtempSync(join(stateHomeParent(), "msb-native-")))
@@ -293,7 +295,7 @@ describe("bind and recover against live native reads", () => {
 		expect(result.nextSafeAction).toBe(`Wait for the open human Gate ${native.gate} to close through native bd before continuing ${native.bead}; do not resolve it yourself`)
 	}, 60_000)
 
-	test("SessionStart compact delivers the live panel with the pinned bd's prime context appended, silently on stderr", async () => {
+	test("SessionStart compact delivers the Resume Panel alone: no prime heading, the secret redacted, byte-equal to a separate recover from the same native store, silently on stderr (Spec #57 revision 5)", async () => {
 		await bindNative(SESSION)
 		const event = { hook_event_name: "SessionStart", source: "compact", session_id: SESSION, cwd: native.root.workspace }
 		const delivered = await runHook(native.root, event, { cwd: native.root.workspace, env: nativeEnvironment(), timeoutMs: 60_000 })
@@ -304,8 +306,13 @@ describe("bind and recover against live native reads", () => {
 		const text = output?.additionalContext ?? ""
 		expect(text.startsWith("# Resume Panel\n")).toBe(true)
 		expect(text).toContain(`Bead: ${native.bead} Native fixture Bead`)
-		expect(text).toContain("\n## Beads prime context\n[bd prime]")
+		expect(text).not.toContain("## Beads prime context")
+		expect(text).toContain("api_key=[REDACTED]")
 		expect(text).not.toContain(SECRET_MARKER)
+		// The delivered text is exactly the panel a separate recover process renders for this binding from the same live reads.
+		const recovered = await run(["recover", "--workspace", native.root.workspace, "--session", SESSION, "--json"])
+		expectMachine(recovered, "msb-workflow.recover", 0, null)
+		expect(text).toBe(resultOf(recovered).resumePanel as string)
 		expect(retainedBytes(native.root)).not.toContain(SECRET_MARKER)
 	}, 60_000)
 })

@@ -4,6 +4,7 @@
 // the directory's safety, not its prior existence.
 
 import { lstatSync } from "node:fs"
+import { PINNED_BD_REVISION, PINNED_BD_VERSION } from "../adapters/beads.ts"
 import type { RecoveryStore } from "../adapters/recovery.ts"
 import { summarizeMarker } from "../compaction-marker.ts"
 import type { Diagnostics } from "../diagnostics.ts"
@@ -56,8 +57,8 @@ async function storeChecks(context: CommandContext, request: InspectRequest): Pr
 	const read = await beads.verifyStore(isGitRepository(context.cwd))
 	const knownSecretValues = beads.knownSecretValues()
 	if (read.status === "verified") return { checks: [pass("executable", `${read.store.executable} (bd ${read.store.version}; sha256 ${read.store.executableDigest})`), pass("store", `${read.store.storePath} (prefix ${read.store.prefix}) agrees with where and config list`)], unavailable: null, knownSecretValues }
-	if (read.status === "executable-invalid") return { checks: [fail("executable", read.reason, "Set MSB_WORKFLOW_BD_EXECUTABLE to the absolute path of the pinned bd 1.2.2 executable"), skipped("store", "not read because the executable failed")], unavailable: null, knownSecretValues }
-	if (read.status === "mismatch") return { checks: [pass("executable", executable), fail("store", read.reason, "Select the workspace whose .beads store is the intended one and the pinned bd 1.2.2 at 6c124203e771")], unavailable: null, knownSecretValues }
+	if (read.status === "executable-invalid") return { checks: [fail("executable", read.reason, `Set MSB_WORKFLOW_BD_EXECUTABLE to the absolute path of the pinned bd ${PINNED_BD_VERSION} executable`), skipped("store", "not read because the executable failed")], unavailable: null, knownSecretValues }
+	if (read.status === "mismatch") return { checks: [pass("executable", executable), fail("store", read.reason, `Select the workspace whose .beads store is the intended one and the pinned bd ${PINNED_BD_VERSION} at ${PINNED_BD_REVISION}`)], unavailable: null, knownSecretValues }
 	return { checks: [pass("executable", executable), fail("store", read.reason, "Check that the selected .beads store exists and no other bd process holds it, then retry")], unavailable: read.reason, knownSecretValues }
 }
 

@@ -2,8 +2,8 @@
 // safe session_id and a canonical cwd, reads that session's binding, verifies cwd is inside the binding's source
 // repository or equals its workspace, and then delivers Harness JSON. Invalid input, a missing binding, a mismatch,
 // or any read failure fails open: empty stdout, exit 0. Diagnostics go to the private file sink only, because
-// stderr may reach the Harness. The payload shapes are fixture-derived from the pinned upstream document until M2
-// observes the installed Codex.
+// stderr may reach the Harness. The payload shapes are fixture-derived from the pinned upstream document; the
+// PreCompact output shape is the one observed on the installed Codex 0.154.0 (M2 U4-lite, finding F1).
 
 import { realpathSync, statSync } from "node:fs"
 import { isAbsolute, sep } from "node:path"
@@ -13,9 +13,9 @@ import { redactText } from "../command-contract.ts"
 import { claimForPrompt, type CompactionMarker, type PromptDecision, recordDelivered, recordGeneration } from "../compaction-marker.ts"
 import type { Diagnostics } from "../diagnostics.ts"
 import type { RecoveryBinding } from "../model.ts"
-import { SESSION_PATTERN } from "../recovery.ts"
+import { SESSION_PATTERN, shellQuote } from "../recovery.ts"
 import { RuntimeFailure } from "../runtime.ts"
-import { readPanel } from "./recover.ts"
+import { type PanelOptions, readPanel } from "./recover.ts"
 import type { CommandContext } from "./shared.ts"
 
 export const HOOK_INPUT_LIMIT_BYTES = 128 * 1024
@@ -106,20 +106,30 @@ function harnessJson(eventName: EventName, additionalContext: string): string {
 	return `${JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext } })}\n`
 }
 
+/** PreCompact admits only the common output fields (`continue`, `stopReason`, `systemMessage`, `suppressOutput`):
+ * Codex 0.154.0 rejects `hookSpecificOutput` there as invalid PreCompact JSON and ignores plain text, so the one
+ * channel that reaches anyone is `systemMessage`, surfaced to the user as a warning. Compaction is never stopped. */
+function systemMessageJson(systemMessage: string): string {
+	return `${JSON.stringify({ systemMessage })}\n`
+}
+
+/** The `recover` command in the guidance and the notice is pasteable shell input, quoted exactly as Resume Panel
+ * command 4 is. The `bind` line is the refresh of this exact owner (workspace, bound Bead, session identity), quoted
+ * the same way; a switch to another Bead is `bind --from`, named by the refusal it replaces, not by this guidance. */
 function guidance(binding: RecoveryBinding): string {
 	return [
 		"My Second Brain recovery session.",
 		`Session identity: ${binding.sessionIdentity}`,
 		`Bound to Bead ${binding.beadId} in ${binding.workspace} (store ${binding.storePath}).`,
-		`Rebuild the Resume Panel at any time: msb-workflow recover --workspace ${binding.workspace} --session ${binding.sessionIdentity} --json`,
-		`Refresh or rebind with this exact session identity: msb-workflow bind --workspace ${binding.workspace} --bead <bead-id> --session ${binding.sessionIdentity}`,
+		`Rebuild the Resume Panel at any time: msb-workflow recover --workspace ${shellQuote(binding.workspace)} --session ${shellQuote(binding.sessionIdentity)} --json`,
+		`Refresh this binding with this exact session identity: msb-workflow bind --workspace ${shellQuote(binding.workspace)} --bead ${shellQuote(binding.beadId)} --session ${shellQuote(binding.sessionIdentity)}`,
 		"After compaction the Resume Panel is delivered once: on the next prompt (Codex) or at SessionStart compact (Claude Code).",
 	].join("\n")
 }
 
 function notice(binding: RecoveryBinding, uncertain: readonly number[], folded: readonly number[]): string {
 	const foldedText = folded.length === 0 ? "" : ` Pending generation(s) ${folded.join(", ")} settle with this notice.`
-	return `msb-workflow: the Resume Panel for compaction generation(s) ${uncertain.join(", ")} was claimed but never recorded delivered; run msb-workflow recover --workspace ${binding.workspace} --session ${binding.sessionIdentity} --json to rebuild it.${foldedText} Nothing is replayed automatically.`
+	return `msb-workflow: the Resume Panel for compaction generation(s) ${uncertain.join(", ")} was claimed but never recorded delivered; run msb-workflow recover --workspace ${shellQuote(binding.workspace)} --session ${shellQuote(binding.sessionIdentity)} --json to rebuild it.${foldedText} Nothing is replayed automatically.`
 }
 
 const SILENT: HookResult = { delivery: "silent", stdout: "" }
@@ -134,9 +144,11 @@ interface Bound {
 	readonly emit: (text: string) => void
 }
 
-/** The current panel with prime context as Harness JSON for `eventName`, or null once a refused read is logged. */
-async function readPanelText(bound: Bound, eventName: EventName): Promise<string | null> {
-	const read = await readPanel(bound.store, bound.context, null, bound.event.session, bound.diagnostics, { includePrime: true })
+/** The current panel as Harness JSON for `eventName`, with prime context only when `options` asks for it, or null once
+ * a refused read is logged. Both compaction deliveries pass `includePrime: false` (Spec #57 revision 5), so the panel
+ * text is the one `recover` renders from the same reads. */
+async function readPanelText(bound: Bound, eventName: EventName, options: PanelOptions): Promise<string | null> {
+	const read = await readPanel(bound.store, bound.context, null, bound.event.session, bound.diagnostics, options)
 	if (read.status === "refused") {
 		bound.diagnostics.log("hook.read-failed", { level: "warning", station: read.outcome.station })
 		return null
@@ -144,29 +156,32 @@ async function readPanelText(bound: Bound, eventName: EventName): Promise<string
 	return harnessJson(eventName, redactText(read.panel.resumePanel, read.beads.knownSecretValues()))
 }
 
+/** The Claude Code `compact` delivery is the Resume Panel alone (Spec #57 revision 5): the same text `recover` renders
+ * from the same reads, with no prime read requested. */
 async function sessionStart(bound: Bound): Promise<HookResult> {
 	if (bound.event.source !== "compact") {
 		const text = harnessJson("SessionStart", guidance(bound.binding))
 		bound.emit(text)
 		return { delivery: "session-guidance", stdout: text }
 	}
-	const text = await readPanelText(bound, "SessionStart")
+	const text = await readPanelText(bound, "SessionStart", { includePrime: false })
 	if (text === null) return SILENT
 	bound.emit(text)
 	return { delivery: "compact-panel", stdout: text }
 }
 
+/** The read-only availability check. An available read is silent: empty stdout on exit 0 is the documented success
+ * and no supported PreCompact field carries model context. An unavailable read warns the user with the cause and
+ * the repair, and compaction proceeds either way. */
 async function preCompact(bound: Bound): Promise<HookResult> {
 	const read = await readPanel(bound.store, bound.context, null, bound.event.session, bound.diagnostics, { includePrime: false })
 	if (read.status === "refused") {
 		const secrets = read.beads?.knownSecretValues() ?? []
-		const text = harnessJson("PreCompact", redactText(`msb-workflow recovery is unavailable before compaction: ${read.outcome.message}. Repair: ${read.outcome.repairAction ?? read.outcome.nextAction ?? "msb-workflow inspect"}`, secrets))
+		const text = systemMessageJson(redactText(`msb-workflow recovery is unavailable before compaction: ${read.outcome.message}. Repair: ${read.outcome.repairAction ?? read.outcome.nextAction ?? "msb-workflow inspect"}`, secrets))
 		bound.emit(text)
 		return { delivery: "precompact-unavailable", stdout: text }
 	}
-	const text = harnessJson("PreCompact", `msb-workflow recovery is available: session ${bound.binding.sessionIdentity} is bound to ${bound.binding.beadId}; the Resume Panel is delivered once on the next prompt after compaction.`)
-	bound.emit(text)
-	return { delivery: "precompact-available", stdout: text }
+	return { delivery: "precompact-available", stdout: "" }
 }
 
 /** The session lock alone, then the marker read; an unreadable marker is a silent fail-open. The workspace lock is
@@ -233,7 +248,8 @@ async function userPromptSubmit(bound: Bound): Promise<HookResult> {
 	})
 	if (inspected !== "read-needed") return inspected
 	// Nothing is claimed yet, so a refused read leaves the marker untouched and the next prompt retries the same generations.
-	const text = await readPanelText(bound, "UserPromptSubmit")
+	// The Codex refresh is the Resume Panel alone (Spec #57 revision 5): no prime read, the same text `recover` renders.
+	const text = await readPanelText(bound, "UserPromptSubmit", { includePrime: false })
 	if (text === null) return SILENT
 	return withMarker(bound, SILENT, (marker) => {
 		const decision = decide(bound, marker)

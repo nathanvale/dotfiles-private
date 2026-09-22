@@ -45,6 +45,11 @@ configuration is missing or invalid, read
 - `data.guard` and `data.warnings` report the vault's Git gate; warnings never
   block. `DOMAIN_GUARD_INCOMPATIBLE` needs `bun run guard:install` in the vault.
   Codes and meanings: [guardrails](../vault-note-commits/references/guardrails.md).
+- `bun run guard:audit --json`, run directly in the vault, is the on-demand
+  route for a full guard report outside any `begin`/`finish`/`inspect`
+  transaction: the accepted replacement for the retiring session-start (F3)
+  guard line. Command and finding IDs: `docs/agents/git-guardrails.md` in the
+  vault.
 - Exit 75 with `retryDelayMilliseconds` is the only retry; partial and unknown
   states hand off through `inspect`.
 - `diagnostics.file` names the private per-run JSONL under

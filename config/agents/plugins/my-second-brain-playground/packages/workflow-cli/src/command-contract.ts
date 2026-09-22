@@ -41,7 +41,7 @@ export const COMMANDS: readonly CommandDeclaration[] = [
 	{ identity: "msb-workflow.help", argv: "msb-workflow --help", effectClass: "inspect", description: "Print one usage line and one example" },
 	{ identity: "msb-workflow.discover", argv: "msb-workflow --discover --json", effectClass: "inspect", description: "Describe the contract, commands, effect classes, exit meanings, machine mode and the private binding schema" },
 	{ identity: "msb-workflow.inspect", argv: "msb-workflow inspect --workspace <absolute-path> [--session <id>]", effectClass: "inspect", description: "Check the pinned bd executable, the selected store, the state root, the binding, the marker and the lock files without writing" },
-	{ identity: "msb-workflow.bind", argv: "msb-workflow bind --workspace <absolute-path> --bead <bead-id> [--session <id>] [--evidence <absolute-file>]", effectClass: "repository-local", description: "Bind this session to one Bead in the selected store, or refresh the same owner; the one private local write" },
+	{ identity: "msb-workflow.bind", argv: "msb-workflow bind --workspace <absolute-path> --bead <bead-id> [--session <id>] [--evidence <absolute-file>] [--from <bead-id>]", effectClass: "repository-local", description: "Bind this session to one Bead in the selected store, refresh the same owner, or with --from switch it from the saved Bead it names; the one private local write" },
 	{ identity: "msb-workflow.recover", argv: "msb-workflow recover --workspace <absolute-path> [--session <id>]", effectClass: "inspect", description: "Rebuild this session's Resume Panel from current read-only bd reads and name one next safe action" },
 	{ identity: "msb-workflow.hook", argv: "msb-workflow hook", effectClass: "repository-local", description: "Deliver session guidance or the Resume Panel for one Harness event read from stdin; Harness JSON out, always exit 0" },
 ]
@@ -60,6 +60,7 @@ export const HELP_TEXT = [
 	...COMMANDS.slice(2).map((command) => `  ${command.argv}`),
 	"",
 	"--session or CODEX_SESSION_ID supplies the session; both present and different refuses.",
+	"bind --from <bead-id> is the verified same-session switch: it must name the saved Bead, in the same workspace, with an explicit --session.",
 	"MSB_WORKFLOW_BD_EXECUTABLE names the pinned bd for inspect and bind; recover and hook use the bound one.",
 	"Add --json anywhere for one Contract Core 1.0.0 envelope on stdout. Run msb-workflow --discover --json for the machine contract.",
 	"",
