@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { AMBIENT_SENTINEL, createHarness, itemJson, type Harness, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
+import { AMBIENT_SENTINEL, createHarness, FIXTURES as SHARED_FIXTURES, itemJson, type Harness, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
 const FIXTURES = path.join(SKILL, "tests", "fixtures");
@@ -21,7 +21,7 @@ const FULL_ITEM = item({ username: "service@example.invalid", credential: "fixtu
 let harness: Harness;
 beforeEach(() => {
 	harness = createHarness({
-		"hyper-mcp-remote": path.join(FIXTURES, "bridge-fake.ts"),
+		"hyper-mcp-remote": path.join(SHARED_FIXTURES, "bridge-fake.ts"),
 		uvx: path.join(FIXTURES, "uvx-fake.ts"),
 	});
 });
@@ -69,7 +69,7 @@ describe("Official provider process", () => {
 			`inject ATLASSIAN_API_KEY op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential -- /usr/bin/env ATLASSIAN_TENANT=example ATLASSIAN_PRODUCT=jira CONNECTORS_INTERNAL_INVOCATION_CONTEXT={"principal":"service@example.invalid","itemVersion":"onepassword-item-version:1","origin":"https://example.atlassian.net"} ${OFFICIAL} --injected example jira`,
 			"op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json",
 		]);
-		const bridge = harness.receipt("official-provider.json");
+		const bridge = harness.receipt("bridge.json");
 		expect(bridge.argv).toEqual(["https://mcp.atlassian.com/v2/mcp", "--no-auth", "--header", "Authorization: Basic ${ATLASSIAN_BASIC}"]);
 		expect(bridge.basicMatches).toBe(true);
 		expect(bridge.rawKeyPresent).toBe(false);
@@ -123,7 +123,7 @@ describe("Official provider process", () => {
 		expect(result.code).toBe(4);
 		expect(result.stderr).toContain("atlassian-provider:error:bridge-version-invalid:");
 		expect(wrapperLines()).toEqual(["op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json"]);
-		expect(harness.has("official-provider.json")).toBe(false);
+		expect(harness.has("bridge.json")).toBe(false);
 	});
 
 	test("fails closed when the username is missing or malformed, before injecting the credential", async () => {
@@ -136,7 +136,7 @@ describe("Official provider process", () => {
 		expect(malformed.code).toBe(4);
 		expect(malformed.stderr).toContain("atlassian-provider:error:credential-invalid:");
 		expect(wrapperLines().some((line) => line.startsWith("inject"))).toBe(false);
-		expect(harness.has("official-provider.json")).toBe(false);
+		expect(harness.has("bridge.json")).toBe(false);
 	});
 
 	test("fails closed when the credential helper is absent", async () => {
@@ -160,7 +160,7 @@ describe("Official provider process", () => {
 		harness.write("item.json", item({ credential: "x" }));
 		const noUser = await runProvider(OFFICIAL, injected, { ATLASSIAN_API_KEY: "fixture-atlassian-api-key" });
 		expect(noUser.stderr).toContain("atlassian-provider:error:credential-invalid:");
-		expect(harness.has("official-provider.json")).toBe(false);
+		expect(harness.has("bridge.json")).toBe(false);
 	});
 
 	test("the injected phase binds its item to the selected tenant and product only; a raw title or foreign pair is refused", async () => {
@@ -195,12 +195,12 @@ describe("Official provider process", () => {
 		expect(noOuter.code).toBe(2);
 		expect(noOuter.stderr).toContain("atlassian-provider:error:tenant-invalid:");
 		expect(wrapperLines()).toEqual([]);
-		expect(harness.has("official-provider.json")).toBe(false);
+		expect(harness.has("bridge.json")).toBe(false);
 		// The matching pair reads exactly the selected item and reaches the bridge.
 		const bound = await runProvider(OFFICIAL, ["--injected", "example", "jira"], key);
 		expect(bound.code).toBe(0);
 		expect(wrapperLines()).toEqual(["op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json"]);
-		expect(harness.receipt("official-provider.json").basicMatches).toBe(true);
+		expect(harness.receipt("bridge.json").basicMatches).toBe(true);
 	});
 });
 
@@ -215,7 +215,7 @@ describe("Community provider process", () => {
 			for (const script of [OFFICIAL, COMMUNITY]) {
 				const result = await runProvider(script);
 				expect([label, result.code, result.stderr.includes("atlassian-provider:error:credential-context-stale:")]).toEqual([label, 4, true]);
-				expect(harness.has("official-provider.json") || harness.has("community-provider.json")).toBe(false);
+				expect(harness.has("bridge.json") || harness.has("community-provider.json")).toBe(false);
 				for (const stream of [result.stdout, result.stderr, readFileSync(path.join(harness.root, "wrapper.log"), "utf8")]) expect(stream).not.toContain(secret);
 			}
 		}
