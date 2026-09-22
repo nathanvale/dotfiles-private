@@ -192,15 +192,15 @@ async function commandFlow(session: Session, invocation: Invocation, command: Co
 		case "receipt":
 			return { identity, effectClass: "inspect", outcome: runId ? receiptFlow(session, runId) : refused("usage-invalid", "receipt needs --run <runId>") };
 		case "unlock":
-			return { identity, effectClass: "local", outcome: runId ? unlockFlow(session, runId) : refused("usage-invalid", "unlock needs --run <runId>") };
+			return { identity, effectClass: "repository-local", outcome: runId ? unlockFlow(session, runId) : refused("usage-invalid", "unlock needs --run <runId>") };
 		case "adjudicate":
-			return { identity, effectClass: "local", outcome: runId ? await adjudicateFlow(session, runId, invocation.input) : refused("usage-invalid", "adjudicate needs --run <runId> and --input <json>") };
+			return { identity, effectClass: "repository-local", outcome: runId ? await adjudicateFlow(session, runId, invocation.input) : refused("usage-invalid", "adjudicate needs --run <runId> and --input <json>") };
 		case "parity": {
 			const spec = invocation.operation === undefined ? undefined : specFor(invocation.operation);
-			if (!spec || spec.kind !== "read") return { identity, effectClass: "local", outcome: refused("usage-invalid", "parity needs --operation <read-operation>") };
+			if (!spec || spec.kind !== "read") return { identity, effectClass: "repository-local", outcome: refused("usage-invalid", "parity needs --operation <read-operation>") };
 			const validated = readInput(spec.id, invocation.input);
-			if (!validated.ok) return { identity, effectClass: "local", outcome: refused("input-invalid", validated.reason) };
-			return { identity, effectClass: "local", outcome: await parityFlow(session, spec, validated.input) };
+			if (!validated.ok) return { identity, effectClass: "repository-local", outcome: refused("input-invalid", validated.reason) };
+			return { identity, effectClass: "repository-local", outcome: await parityFlow(session, spec, validated.input) };
 		}
 	}
 }
@@ -233,7 +233,7 @@ export async function run(argv: string[], dependencies: (tenant: string) => Depe
 		return envelope(`atlassian.${spec.id}`, "inspect", outcome, session.provenance);
 	}
 	const outcome = await writeFlow(session, invocation, spec, invocation.mode);
-	return envelope(`atlassian.${spec.id}.${invocation.mode.kind}`, invocation.mode.kind === "apply" ? "external" : "local", outcome, session.provenance);
+	return envelope(`atlassian.${spec.id}.${invocation.mode.kind}`, invocation.mode.kind === "apply" ? "external" : "repository-local", outcome, session.provenance);
 }
 
 if (import.meta.main) {

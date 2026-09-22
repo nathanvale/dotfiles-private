@@ -56,6 +56,8 @@ bun "$DISPATCH" --tenant <tenant> page.search  --input '{"cql":"type = page AND 
 Every write is two calls with identical input. The preview binds the exact
 provider arguments, stable candidate or comment identifiers, and the target's
 current revision; the apply refuses when any of that evidence moved.
+Preview, adjudication, unlock, and parity persistence use the canonical
+`repository-local` effect class; apply uses `external`.
 
 ```sh
 bun "$DISPATCH" --tenant <tenant> issue.comment --input '{"issueKey":"PROJ-1","body":"..."}' --preview

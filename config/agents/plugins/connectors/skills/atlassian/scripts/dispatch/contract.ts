@@ -205,9 +205,9 @@ export interface Envelope {
 		runId: string;
 		commandIdentity: string;
 		outcome: Outcome;
-		// inspect reads; local changes only private journal or attestation state;
-		// external reaches the provider with a write.
-		effectClass: "inspect" | "local" | "external";
+		// inspect reads; repository-local changes only private journal or
+		// attestation state; external reaches the provider with a write.
+		effectClass: "inspect" | "repository-local" | "external";
 		transactionState: TransactionState;
 		causeCode: CauseCode;
 		failureClass: FailureClass;

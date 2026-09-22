@@ -102,8 +102,8 @@ export const spaceOf = (input: WriteInput): { id?: string; key?: string } => (is
 
 // What a write needs to read before it can be previewed or applied. The read
 // is repeated at apply so the revision and token are current, and the journal
-// refuses the apply when the revision moved. Comments and Jira creates bind no
-// revision: a changed issue is still the same comment target.
+// refuses the apply when the revision moved. Jira comments and Jira creates
+// bind no revision: a changed issue is still the same comment target.
 export type Preparation =
 	| { kind: "none" }
 	| { kind: "issue"; issueKey: string }
@@ -301,25 +301,6 @@ export function unwrapReply(data: unknown): unknown {
 	}
 }
 
-// The identifier of the object a write created or changed, read from the
-// provider reply. Updates fall back to the target the caller named, because
-// an update reply may carry no identifier at all.
-export function effectsFromReply(operation: WriteOperation, input: WriteInput, reply: unknown): Effect[] {
-	const kind = EFFECT_KIND[operation];
-	const target = operation === "issue.update" ? (input.issueKey as string) : operation === "page.update" ? (input.pageId as string) : undefined;
-	if (target !== undefined) return [{ kind, id: target }];
-	for (const record of records(unwrapReply(reply))) {
-		const id = operation === "issue.create" ? stringAt(record, "key") : stringAt(record, "id");
-		if (id !== undefined && EFFECT_ID.test(id) && (operation !== "issue.create" || ISSUE_KEY.test(id))) {
-			// A created issue or page appears as its own record; a comment id
-			// must come from a record that also carries a body.
-			if (kind.endsWith("-comment") && !("body" in record)) continue;
-			return [{ kind, id }];
-		}
-	}
-	return [];
-}
-
 // Normalised text for read-back matching: case, whitespace, and punctuation
 // are not part of a comment's or title's identity across providers.
 export const normalised = (value: string): string =>
@@ -328,6 +309,73 @@ export const normalised = (value: string): string =>
 		.toLowerCase()
 		.replace(/[^\p{L}\p{N}]+/gu, " ")
 		.trim();
+
+function namedIdentity(reply: unknown, keys: string[]): string | undefined {
+	for (const record of records(unwrapReply(reply))) {
+		const identity = stringAt(record, ...keys);
+		if (identity !== undefined) return identity;
+	}
+	return undefined;
+}
+
+function issueIdentity(reply: unknown): string | undefined {
+	return namedIdentity(reply, ["key", "issueKey", "issue_key"]);
+}
+
+function pageIdentity(reply: unknown, includePlainId: boolean): string | undefined {
+	const named = namedIdentity(reply, ["pageId", "page_id", "contentId", "content_id"]);
+	if (named !== undefined) return named;
+	for (const record of records(unwrapReply(reply))) {
+		const container = isRecord(record.container) ? stringAt(record.container, "id") : undefined;
+		if (container !== undefined) return container;
+		if (includePlainId) {
+			const id = stringAt(record, "id");
+			if (id !== undefined) return id;
+		}
+	}
+	return undefined;
+}
+
+function replyNamesRequestedObject(operation: WriteOperation, input: WriteInput, reply: unknown): boolean {
+	if (operation.startsWith("issue.") && operation !== "issue.create") {
+		const observed = issueIdentity(reply);
+		return observed === undefined || observed === input.issueKey;
+	}
+	if (operation.startsWith("page.") && operation !== "page.create") {
+		const observed = pageIdentity(reply, operation === "page.update");
+		return observed === undefined || observed === input.pageId;
+	}
+	return true;
+}
+
+function commentRecordMatches(record: Record<string, unknown>, input: WriteInput): boolean {
+	if (!("body" in record)) return false;
+	const wanted = normalised(input.body as string);
+	return wanted.length > 0 && normalised(bodyText(record.body)) === wanted;
+}
+
+function effectFromRecord(operation: WriteOperation, input: WriteInput, kind: Effect["kind"], record: Record<string, unknown>): Effect | undefined {
+	const id = operation === "issue.create" ? stringAt(record, "key") : stringAt(record, "id");
+	if (id === undefined || !EFFECT_ID.test(id)) return undefined;
+	if (operation === "issue.create" && !ISSUE_KEY.test(id)) return undefined;
+	if (kind.endsWith("-comment") && !commentRecordMatches(record, input)) return undefined;
+	return { kind, id };
+}
+
+// The identifier of the object a write created or changed, read from the
+// provider reply. Updates fall back to the target the caller named only when
+// the reply does not name a different object.
+export function effectsFromReply(operation: WriteOperation, input: WriteInput, reply: unknown): Effect[] {
+	const kind = EFFECT_KIND[operation];
+	if (!replyNamesRequestedObject(operation, input, reply)) return [];
+	const target = operation === "issue.update" ? (input.issueKey as string) : operation === "page.update" ? (input.pageId as string) : undefined;
+	if (target !== undefined) return [{ kind, id: target }];
+	for (const record of records(unwrapReply(reply))) {
+		const effect = effectFromRecord(operation, input, kind, record);
+		if (effect !== undefined) return [effect];
+	}
+	return [];
+}
 
 // Flatten a body that may be a string, a Confluence body object, or an ADF
 // document into plain text.
@@ -524,12 +572,19 @@ function issueUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, 
 	return { kind: "absent", revisionUnchanged: false };
 }
 
+function issueCommentEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
+	const issue = observeIssue(reply);
+	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply names no issue key" };
+	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
+	return commentEvidence("jira-comment", input.body as string, issue.comments, baseline);
+}
+
 function commentEvidence(kind: Effect["kind"], body: string, comments: { id: string; text: string }[], baseline: WriteBaseline): ReadBack {
 	const wanted = normalised(body);
 	if (wanted.length === 0) return { kind: "indeterminate", reason: "the requested comment has no stable read-back representation" };
 	return newEffects(
 		kind,
-		comments.filter((comment) => comment.text === wanted || (wanted.length >= 24 && comment.text.includes(wanted))).map((comment) => comment.id),
+		comments.filter((comment) => comment.text === wanted).map((comment) => comment.id),
 		baseline.commentIds,
 	);
 }
@@ -564,6 +619,8 @@ function pageCreateEvidence(input: WriteInput, reply: unknown, baseline: WriteBa
 
 function pageUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline): ReadBack {
 	const page = observePage(reply);
+	if (page.id === undefined) return { kind: "indeterminate", reason: "the read-back reply names no page" };
+	if (page.id !== input.pageId) return { kind: "indeterminate", reason: "the read-back reply names a different page" };
 	if (page.version === null || baseline.revision === null) return { kind: "indeterminate", reason: "the read-back reply carries no stable version" };
 	if (revisionMatches(page.version)) return { kind: "absent", revisionUnchanged: true };
 	const wantedBody = normalised(input.body as string);
@@ -575,6 +632,8 @@ function pageUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, r
 }
 
 function pageCommentEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
+	const observedPage = pageIdentity(reply, false);
+	if (observedPage !== undefined && observedPage !== input.pageId) return { kind: "indeterminate", reason: "the read-back reply names a different page" };
 	const comments: { id: string; text: string }[] = [];
 	for (const record of records(unwrapReply(reply))) {
 		const id = stringAt(record, "id");
@@ -597,7 +656,7 @@ export function readBackEvidence(operation: WriteOperation, input: WriteInput, r
 		case "issue.update":
 			return issueUpdateEvidence(input, revisionMatches, reply, baseline);
 		case "issue.comment":
-			return commentEvidence("jira-comment", input.body as string, observeIssue(reply).comments, baseline);
+			return issueCommentEvidence(input, reply, baseline);
 		case "page.create":
 			return pageCreateEvidence(input, reply, baseline);
 		case "page.update":
@@ -632,21 +691,30 @@ function pageCreateBaseline(input: WriteInput, reply: unknown): BaselineObservat
 }
 
 function issueCommentBaseline(input: WriteInput, reply: unknown): BaselineObservation {
-	return baselineWithCommentIds(commentEvidence("jira-comment", input.body as string, observeIssue(reply).comments, EMPTY_BASELINE));
+	const issue = observeIssue(reply);
+	if (issue.key === undefined) return { kind: "indeterminate", reason: "the Jira reply names no issue key" };
+	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the Jira reply names a different issue" };
+	const observed = baselineWithCommentIds(commentEvidence("jira-comment", input.body as string, issue.comments, EMPTY_BASELINE));
+	return observed.kind === "indeterminate" ? observed : { kind: "observed", baseline: { ...observed.baseline, effectIds: [issue.key] } };
 }
 
 function pageCommentBaseline(input: WriteInput, reply: unknown): BaselineObservation {
-	return baselineWithCommentIds(pageCommentEvidence(input, reply, EMPTY_BASELINE));
+	const observed = baselineWithCommentIds(pageCommentEvidence(input, reply, EMPTY_BASELINE));
+	return observed.kind === "indeterminate" ? observed : { kind: "observed", baseline: { ...observed.baseline, effectIds: [input.pageId as string] } };
 }
 
-function issueUpdateBaseline(_input: WriteInput, reply: unknown): BaselineObservation {
+function issueUpdateBaseline(input: WriteInput, reply: unknown): BaselineObservation {
 	const issue = observeIssue(reply);
-	if (issue.key === undefined || issue.revision === null) return { kind: "indeterminate", reason: "the Jira reply carries no stable revision; live qualification is required" };
+	if (issue.key === undefined) return { kind: "indeterminate", reason: "the Jira reply names no issue key" };
+	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the Jira reply names a different issue" };
+	if (issue.revision === null) return { kind: "indeterminate", reason: "the Jira reply carries no stable revision; live qualification is required" };
 	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [issue.key], revision: issue.revision } };
 }
 
 function pageUpdateBaseline(input: WriteInput, reply: unknown): BaselineObservation {
 	const page = observePage(reply);
+	if (page.id === undefined) return { kind: "indeterminate", reason: "the page read names no page id" };
+	if (page.id !== input.pageId) return { kind: "indeterminate", reason: "the page read names a different page" };
 	if (page.version === null) return { kind: "indeterminate", reason: "the page read exposes no stable version" };
 	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [input.pageId as string], revision: page.version } };
 }

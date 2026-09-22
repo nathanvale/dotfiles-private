@@ -148,6 +148,7 @@ function fakeTransport(results: Record<string, TransportResult | ((args: Record<
 			if (canned) return canned;
 			if (name === "getAccessibleAtlassianResources") return { ok: true, data: RESOURCES };
 			if (name === "atlassianUserInfo") return { ok: true, data: { account_id: "acc-1", email: PRINCIPAL } };
+			if (name === "getJiraIssue") return { ok: true, data: { key: args.issueIdOrKey, fields: { comment: { comments: [] } } } };
 			return { ok: true, data: { fake: `${server}.${name}` } };
 		},
 	};
@@ -580,7 +581,7 @@ describe("journaled writes", () => {
 	test("preview records a durable preview bound to the exact provider arguments and touches no write tool", async () => {
 		const { transport, calls } = fakeTransport();
 		const envelope = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--preview"], deps({ transport }));
-		expect([envelope.result.outcome, envelope.result.exitCode, envelope.result.effectClass, envelope.result.commandIdentity]).toEqual(["success", 0, "local", "atlassian.issue.comment.preview"]);
+		expect([envelope.result.outcome, envelope.result.exitCode, envelope.result.effectClass, envelope.result.commandIdentity]).toEqual(["success", 0, "repository-local", "atlassian.issue.comment.preview"]);
 		const data = previewData(envelope);
 		expect([data.server, data.tool, data.objectIdentity, data.revision]).toEqual([OJ, "addOrEditJiraIssueComment", "issue:PROJ-1", null]);
 		expect(data.arguments).toEqual({ cloudId: "cloud-example", issueIdOrKey: "PROJ-1", commentBody: COMMENT.body });
@@ -800,6 +801,53 @@ describe("journaled writes", () => {
 		expect(calls.find((call) => call.tool === "updateConfluenceContent")?.args).toEqual({ ...preview.arguments, snapshotToken: "snap-7" });
 	});
 
+	test("issue.update refuses a preparatory or baseline reply for another issue before any write", async () => {
+		for (const wrongRead of [1, 2]) {
+			let reads = 0;
+			const { transport, calls } = fakeTransport({
+				[`${OJ}.getJiraIssue`]: () => ({ ok: true, data: { key: ++reads === wrongRead ? "PROJ-2" : "PROJ-1", fields: { version: 7, summary: "old" } } }),
+			});
+			const envelope = await dispatch(["issue.update", "--input", '{"issueKey":"PROJ-1","fields":{"summary":"new"}}', "--preview"], deps({ transport }));
+			expect([wrongRead, envelope.result.causeCode, envelope.result.repairAction?.includes("different issue")]).toEqual([wrongRead, "capability-unavailable", true]);
+			expect(calls.map((call) => call.tool)).not.toContain("editJiraIssue");
+		}
+	});
+
+	test("page.update refuses a preparatory or baseline reply for another page before any write", async () => {
+		for (const wrongRead of [1, 2]) {
+			let reads = 0;
+			const { transport, calls } = fakeTransport({
+				[`${OC}.getConfluenceContent`]: () => ({ ok: true, data: { id: ++reads === wrongRead ? "999" : "123", title: "Roadmap", snapshotToken: "snap-7", metadata: { version: 7, hasSpaceInstructions: false }, body: { value: "old" } } }),
+			});
+			const envelope = await dispatch(["page.update", "--input", '{"pageId":"123","body":"new"}', "--preview"], deps({ transport }));
+			expect([wrongRead, envelope.result.causeCode, envelope.result.repairAction?.includes("different page")]).toEqual([wrongRead, "capability-unavailable", true]);
+			expect(calls.map((call) => call.tool)).not.toContain("updateConfluenceContent");
+		}
+	});
+
+	test("page.update stays unknown when a hostile provider reply and adjudication read name another page", async () => {
+		let reads = 0;
+		const { transport, calls } = fakeTransport({
+			[`${OC}.getConfluenceContent`]: () => {
+				reads += 1;
+				return reads <= 4
+					? { ok: true, data: { id: "123", title: "Roadmap", snapshotToken: "snap-7", metadata: { version: 7, hasSpaceInstructions: false }, body: { value: "old" } } }
+					: { ok: true, data: { id: "999", title: "Roadmap", snapshotToken: "snap-8", metadata: { version: 8, hasSpaceInstructions: false }, body: { value: "new" } } };
+			},
+			[`${OC}.updateConfluenceContent`]: { ok: true, data: { id: "999", version: 8 } },
+		});
+		const dependencies = deps({ transport });
+		const input = { pageId: "123", body: "new" };
+		const preview = previewData(await dispatch(["page.update", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const applied = await dispatch(["page.update", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
+		const runId = (applied.result.data as { runId: string }).runId;
+		const adjudicated = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(input)], dependencies);
+		expect([applied.result.causeCode, applied.result.transactionState]).toEqual(["outcome-unknown", "unknown"]);
+		expect([adjudicated.result.causeCode, adjudicated.result.repairAction?.includes("different page")]).toEqual(["refused-evidence", true]);
+		expect((await dispatch(["receipt", "--run", runId], dependencies)).result.data).toMatchObject({ status: "unknown", effects: [] });
+		expect(calls.filter((call) => call.tool === "updateConfluenceContent")).toHaveLength(1);
+	});
+
 	test("Official page.create resolves a space key to its numeric id through a page search before previewing; an unresolvable key refuses", async () => {
 		const search = { ok: true as const, data: { results: [{ id: "555", title: "Home", space: { id: "9001", key: "ENG" } }] } };
 		const { transport, calls } = fakeTransport({ [`${OC}.searchConfluence`]: search, [`${OC}.getConfluenceSpace`]: { ok: true, data: { metadata: { hasSpaceInstructions: false } } }, [`${OC}.createConfluenceContent`]: { ok: true, data: { id: "556", title: "Roadmap draft" } } });
@@ -879,12 +927,12 @@ describe("journaled writes", () => {
 		const receipt = await journal.apply({ previewId: preview.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: null }, async () => ({ proof: "unknown" }));
 		writeFileSync(path.join(stateRoot, "connectors", "atlassian", "example", "locks", "issue_PROJ-1.lock"), JSON.stringify({ pid: 2_147_483_000, lockId: "dead", at: NOW }), { mode: 0o600 });
 		const unlocked = await dispatch(["unlock", "--run", receipt.runId], dependencies);
-		expect([unlocked.result.outcome, unlocked.result.effectClass, unlocked.result.data]).toEqual(["success", "local", { runId: receipt.runId, objectIdentity: "issue:PROJ-1", unlocked: true }]);
+		expect([unlocked.result.outcome, unlocked.result.effectClass, unlocked.result.data]).toEqual(["success", "repository-local", { runId: receipt.runId, objectIdentity: "issue:PROJ-1", unlocked: true }]);
 		expect(readdirSync(path.join(stateRoot, "connectors", "atlassian", "example", "locks"))).toEqual([]);
 		const preIntentPreview = journal.recordPreview({ operation: "issue.comment", provider: "official", canonicalInput: COMMENT, providerArgs: COMMENT, revision: null });
 		writeFileSync(path.join(stateRoot, "connectors", "atlassian", "example", "locks", "issue_PROJ-1.lock"), JSON.stringify({ pid: 2_147_483_000, lockId: "dead", at: NOW }), { mode: 0o600 });
 		const recovered = await dispatch(["unlock", "--run", preIntentPreview.previewId], dependencies);
-		expect([recovered.result.outcome, recovered.result.effectClass, recovered.result.data]).toEqual(["success", "local", { previewId: preIntentPreview.previewId, objectIdentity: "issue:PROJ-1", unlocked: true }]);
+		expect([recovered.result.outcome, recovered.result.effectClass, recovered.result.data]).toEqual(["success", "repository-local", { previewId: preIntentPreview.previewId, objectIdentity: "issue:PROJ-1", unlocked: true }]);
 		const missing = await dispatch(["unlock", "--run", "nope"], dependencies);
 		expect([missing.result.causeCode, missing.result.repairAction?.endsWith("preview-unknown")]).toEqual(["refused-preview", true]);
 		const shown = await dispatch(["receipt", "--run", receipt.runId], dependencies);
@@ -899,7 +947,7 @@ describe("parity attestation", () => {
 	test("attests only when the Official principal is the item's username and both providers name the same object", async () => {
 		const { transport, calls } = fakeTransport({ [`${OJ}.getJiraIssue`]: OFFICIAL_ISSUE, [`${CJ}.jira_get_issue`]: COMMUNITY_ISSUE });
 		const envelope = await dispatch(["parity", "--operation", "issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
-		expect([envelope.result.outcome, envelope.result.effectClass, envelope.result.commandIdentity]).toEqual(["success", "local", "atlassian.parity"]);
+		expect([envelope.result.outcome, envelope.result.effectClass, envelope.result.commandIdentity]).toEqual(["success", "repository-local", "atlassian.parity"]);
 		expect(calls.map((call) => [call.server, call.tool])).toEqual([
 			[OJ, "getAccessibleAtlassianResources"],
 			[OJ, "atlassianUserInfo"],

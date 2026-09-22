@@ -76,6 +76,13 @@ describe("effects and read-back", () => {
 		expect(effectsFromReply("page.update", { pageId: "123", body: "b" }, {})).toEqual([{ kind: "confluence-content", id: "123" }]);
 		expect(effectsFromReply("page.comment", { pageId: "123", body: "b" }, { success: true, comment: { id: "42", body: "b" } })).toEqual([{ kind: "confluence-comment", id: "42" }]);
 		expect(effectsFromReply("issue.create", CREATE, { key: "not a key" })).toEqual([]);
+		expect(effectsFromReply("issue.update", { issueKey: "PROJ-1", fields: { summary: "x" } }, { key: "PROJ-2" })).toEqual([]);
+		expect(effectsFromReply("issue.comment", { issueKey: "PROJ-1", body: "x" }, { id: "10002", body: "x", issueKey: "PROJ-2" })).toEqual([]);
+		expect(effectsFromReply("issue.comment", { issueKey: "PROJ-1", body: "x" }, { id: "10003", body: "before x after" })).toEqual([]);
+		expect(effectsFromReply("page.update", { pageId: "123", body: "b" }, { id: "999" })).toEqual([]);
+		expect(effectsFromReply("page.update", { pageId: "123", body: "b" }, { page: { id: "999" } })).toEqual([]);
+		expect(effectsFromReply("page.comment", { pageId: "123", body: "b" }, { id: "43", body: "b", pageId: "999" })).toEqual([]);
+		expect(effectsFromReply("page.comment", { pageId: "123", body: "b" }, { id: "44", body: "b", container: { id: "999" } })).toEqual([]);
 	});
 
 	test("read-back plans name the provider read and escape search strings", () => {
@@ -107,6 +114,8 @@ describe("effects and read-back", () => {
 		const comment = { issueKey: "PROJ-1", body: "Quarterly numbers are down; see the sheet" };
 		expect(readBackEvidence("issue.comment", comment, never, { key: "PROJ-1", fields: { comment: { comments: [{ id: "1", body: "hello" }, { id: "2", body: { content: [{ type: "text", text: "Quarterly numbers are down; see the sheet" }] } }] } } })).toEqual({ kind: "found", effects: [{ kind: "jira-comment", id: "2" }] });
 		expect(readBackEvidence("issue.comment", comment, never, { key: "PROJ-1", fields: { comment: { comments: [{ id: "1", body: "hello" }] } } })).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.comment", comment, never, { key: "PROJ-2", fields: { comment: { comments: [{ id: "2", body: comment.body }] } } })).toEqual({ kind: "indeterminate", reason: "the read-back reply names a different issue" });
+		expect(readBackEvidence("issue.comment", comment, never, { key: "PROJ-1", fields: { comment: { comments: [{ id: "3", body: `Context before ${comment.body} context after` }] } } })).toEqual({ kind: "absent", revisionUnchanged: false });
 		const page = { space: { id: "9", key: "ENG" }, title: "Roadmap", body: "b" };
 		expect(readBackEvidence("page.create", page, never, { results: [{ id: "556", title: "Roadmap", space: { key: "ENG" } }] })).toEqual({ kind: "found", effects: [{ kind: "confluence-content", id: "556" }] });
 		expect(readBackEvidence("page.create", page, never, { results: [{ id: "556", title: "Roadmap", spaceId: "10" }] })).toEqual({ kind: "absent", revisionUnchanged: false });
@@ -115,9 +124,12 @@ describe("effects and read-back", () => {
 		const pageBaseline = { effectIds: ["123"], commentIds: [], revision: "7" };
 		expect(readBackEvidence("page.update", update, (observed) => observed === "7", { id: "123", version: 7, content: { value: "old" } }, pageBaseline)).toEqual({ kind: "absent", revisionUnchanged: true });
 		expect(readBackEvidence("page.update", update, (observed) => observed === "7", { id: "123", metadata: { version: 8 }, body: { value: "# New body\nmore" } }, pageBaseline)).toEqual({ kind: "indeterminate", reason: "the page moved to another version whose content is not this update" });
+		expect(readBackEvidence("page.update", update, never, { id: "999", version: 8, content: { value: "# New body" } }, pageBaseline)).toEqual({ kind: "indeterminate", reason: "the read-back reply names a different page" });
 		expect(readBackEvidence("page.update", update, (observed) => observed === "7", { id: "123", version: 8, content: { value: "someone else" } }, pageBaseline)).toEqual({ kind: "indeterminate", reason: "the page moved to another version whose content is not this update" });
 		expect(readBackEvidence("page.update", update, never, { id: "123" })).toEqual({ kind: "indeterminate", reason: "the read-back reply carries no stable version" });
 		expect(readBackEvidence("page.comment", { pageId: "123", body: "hello there" }, never, [{ id: "42", body: "Hello, there!" }])).toEqual({ kind: "found", effects: [{ kind: "confluence-comment", id: "42" }] });
+		const pageComment = "Quarterly numbers are down; see the sheet";
+		expect(readBackEvidence("page.comment", { pageId: "123", body: pageComment }, never, [{ id: "43", body: `Before ${pageComment} after` }])).toEqual({ kind: "absent", revisionUnchanged: false });
 	});
 
 	test("read-back keeps Unicode text and records every pre-existing matching identifier", () => {
@@ -125,8 +137,12 @@ describe("effects and read-back", () => {
 		expect(readBackEvidence("issue.update", { issueKey: "PROJ-1", fields: { summary: "你好" } }, never, { key: "PROJ-1", fields: { summary: "你好", version: 2 } }, { effectIds: ["PROJ-1"], commentIds: [], revision: "1" })).toEqual({ kind: "found", effects: [{ kind: "jira-issue", id: "PROJ-1" }] });
 		expect(readBackEvidence("issue.comment", { issueKey: "PROJ-1", body: "!!!" }, never, { key: "PROJ-1", fields: { comment: { comments: [{ id: "1", body: "???" }] } } })).toEqual({ kind: "indeterminate", reason: "the requested comment has no stable read-back representation" });
 		expect(baselineFromReply("issue.create", CREATE, { issues: [{ key: "PROJ-1", fields: { summary: CREATE.summary, issuetype: { name: "Bug" } } }, { key: "PROJ-2", fields: { summary: CREATE.summary, issuetype: { name: "Bug" } } }] })).toEqual({ kind: "observed", baseline: { effectIds: ["PROJ-1", "PROJ-2"], commentIds: [], revision: null } });
-		expect(baselineFromReply("issue.comment", { issueKey: "PROJ-1", body: "same comment" }, { key: "PROJ-1", fields: { comment: { comments: [{ id: "1", body: "same comment" }, { id: "2", body: "same comment" }] } } })).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: ["1", "2"], revision: null } });
+		expect(baselineFromReply("issue.comment", { issueKey: "PROJ-1", body: "same comment" }, { key: "PROJ-1", fields: { comment: { comments: [{ id: "1", body: "same comment" }, { id: "2", body: "same comment" }] } } })).toEqual({ kind: "observed", baseline: { effectIds: ["PROJ-1"], commentIds: ["1", "2"], revision: null } });
+		expect(baselineFromReply("issue.update", { issueKey: "PROJ-1", fields: { summary: "new" } }, { key: "PROJ-2", fields: { version: 7 } })).toEqual({ kind: "indeterminate", reason: "the Jira reply names a different issue" });
+		expect(baselineFromReply("issue.comment", { issueKey: "PROJ-1", body: "same comment" }, { key: "PROJ-2", fields: { comment: { comments: [{ id: "3", body: "same comment" }] } } })).toEqual({ kind: "indeterminate", reason: "the Jira reply names a different issue" });
 		expect(baselineFromReply("page.create", { space: { id: "9" }, title: "Same page", body: "body" }, { results: [{ id: "556", title: "Same page", space: { id: "9" } }, { id: "557", title: "Same page", space: { id: "9" } }] })).toEqual({ kind: "observed", baseline: { effectIds: ["556", "557"], commentIds: [], revision: null } });
+		expect(baselineFromReply("page.update", { pageId: "123", body: "new" }, { id: "999", version: 7 })).toEqual({ kind: "indeterminate", reason: "the page read names a different page" });
+		expect(baselineFromReply("page.comment", { pageId: "123", body: "same comment" }, [{ id: "4", body: "same comment" }])).toEqual({ kind: "observed", baseline: { effectIds: ["123"], commentIds: ["4"], revision: null } });
 	});
 
 	test("a space key resolves to its numeric id only from a page that names both", () => {

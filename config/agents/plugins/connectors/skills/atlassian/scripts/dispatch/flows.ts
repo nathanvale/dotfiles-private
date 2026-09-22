@@ -205,6 +205,8 @@ async function prepareIssue(route: Route, ctx: PreparedContext, issueKey: string
 	const read = await route.call(official ? "getJiraIssue" : "jira_get_issue", official ? { cloudId: route.cloudId, issueIdOrKey: issueKey, fields: ["version"] } : { issue_key: issueKey, fields: "version" });
 	if (read.cause !== "success") return { outcome: failed(read) };
 	const issue = observeIssue(read.data);
+	if (issue.key === undefined) return { outcome: refusal("capability-unavailable", "the preparatory Jira read names no issue key") };
+	if (issue.key !== issueKey) return { outcome: refusal("capability-unavailable", "the preparatory Jira read names a different issue") };
 	if (issue.revision === null) return { outcome: refusal("capability-unavailable", "the Jira reply exposes no stable revision; live qualification is required before issue.update") };
 	return { ctx: { ...ctx, revision: issue.revision } };
 }
@@ -219,6 +221,8 @@ async function preparePage(route: Route, ctx: PreparedContext, pageId: string): 
 	);
 	if (read.cause !== "success") return { outcome: failed(read) };
 	const page = observePage(read.data);
+	if (page.id === undefined) return { outcome: refusal("capability-unavailable", "the preparatory page read names no page id") };
+	if (page.id !== pageId) return { outcome: refusal("capability-unavailable", "the preparatory page read names a different page") };
 	if (page.spaceInstructions !== false) return { outcome: refusal("capability-unavailable", "getConfluenceSpace retrieval and instruction compliance need live qualification") };
 	if (page.version === null) return { outcome: refusal("capability-unavailable", "the page read exposed no version to bind the revision") };
 	if (official && page.snapshotToken === undefined) return { outcome: refusal("capability-unavailable", "the Official page read returned no snapshot token; a full-detail read is required before an update") };
