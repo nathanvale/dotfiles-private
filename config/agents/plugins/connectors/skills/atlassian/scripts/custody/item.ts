@@ -1,5 +1,5 @@
-// Credential item rules: the semantic tenant slug, the product, the
-// product-specific 1Password item title, the item's field map, its top-level
+// Credential item rules: the semantic tenant slug, product-specific
+// 1Password item title, the item's field map, its top-level
 // version, and the trusted site origin. Reads go through the dotfiles
 // credential helper; nothing here prints a value.
 import { statSync } from "node:fs";
@@ -107,7 +107,7 @@ export type BindingFailure = "credential-invalid" | "credential-revision-unavail
 
 // The nonsecret binding a complete item yields: its principal, its top-level
 // positive version, and the trusted site origin. Every other field stays here.
-export function itemBinding(item: unknown): { binding: CredentialBinding } | { cause: BindingFailure } {
+export function itemBinding(item: unknown, product: Product): { binding: CredentialBinding } | { cause: BindingFailure } {
 	if (!isRecord(item)) return { cause: "credential-invalid" };
 	const version = versionOf(item);
 	const fields = itemFieldMap(item);
@@ -116,7 +116,7 @@ export function itemBinding(item: unknown): { binding: CredentialBinding } | { c
 	if (!fields || !principal || !singleLine(principal) || principal.includes(":")) return { cause: "credential-invalid" };
 	if (!siteUrl || !validSiteUrl(siteUrl)) return { cause: "site-url-invalid" };
 	if (!version) return { cause: "credential-revision-unavailable" };
-	return { binding: { principal, itemVersion: `onepassword-item-version:${version}`, origin: `https://${new URL(siteUrl).hostname}` } };
+	return { binding: { product, principal, itemVersion: `onepassword-item-version:${version}`, origin: `https://${new URL(siteUrl).hostname}` } };
 }
 
 export type ItemReadFailure = "credential-wrapper-missing" | "credential-unavailable" | "credential-invalid";

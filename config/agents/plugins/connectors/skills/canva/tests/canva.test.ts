@@ -45,7 +45,8 @@ describe("Canva activated route", () => {
 		writeSessionFixture(harness.root, { overrides: { revocationEndpoint: null } });
 		const result = await harness.run(["canva", "--select", "account=personal", "--", "call", "search-designs", "--args", '{"query":"onboarding"}']);
 		expect([result.code, result.stderr]).toEqual([0, ""]);
-		const mcporter = assertCustody(harness, result, [ACCESS_TOKEN, REFRESH_TOKEN]);
+		// The fixture Bun launcher adds a child while preloading the fake bridge.
+		const mcporter = assertCustody(harness, result, [ACCESS_TOKEN, REFRESH_TOKEN], "child");
 		expect(mcporter.kind).toBe("stdio");
 		expect(mcporter.command).toBe(path.join(SKILL, "scripts", "canva-provider.ts"));
 		expect(mcporter.env.CANVA_ACCOUNT).toBe("personal");

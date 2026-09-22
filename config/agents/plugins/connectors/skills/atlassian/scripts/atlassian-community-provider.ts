@@ -17,7 +17,7 @@ function productEnvironment(product: Product, item: BoundItem, credential: strin
 }
 
 function prerequisites(): { invocation: ReturnType<typeof providerInvocation>; item: BoundItem; credential: string; uvx: string } {
-	const invocation = providerInvocation();
+	const invocation = providerInvocation("community");
 	const item = boundItem(invocation);
 	const uvx = executableOnPath("uvx");
 	if (item.credential === undefined) fail("community-fields-missing", `${invocation.itemTitle} needs username, credential, and a site_url field`);

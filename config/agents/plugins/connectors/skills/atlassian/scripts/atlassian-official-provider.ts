@@ -2,12 +2,8 @@
 // Official Atlassian Provider, one product per route. Phase one (no
 // arguments) validates tenant and product, re-reads the bound complete item,
 // probes the bridge pin only after that precondition, then execs the
-// credential helper to inject the API token into phase two. Phase two
-// (--injected) runs only below the helper: it re-probes the bridge pin,
-// re-reads the item as metadata, composes the Basic credential inside this
-// process, creates the private log path, and execs the pinned bridge with a
-// literal header template that the bridge expands. Bearer is a different
-// credential type and is never sent or auto-detected.
+// credential helper to inject the scoped personal token into phase two. Phase
+// two re-reads the item, composes Basic below MCPorter, and execs the bridge.
 import path from "node:path";
 import { bridgeArgv, bridgeExecutable, bridgeLogDirectory } from "../../../bin/hyper-mcp-remote.ts";
 import { stateRoot } from "../../../bin/private-state.ts";
@@ -47,7 +43,7 @@ function injectedPhase(invocation: ProviderInvocation): never {
 const ENV_BINARY = "/usr/bin/env";
 
 function prerequisites(): { helper: string; invocation: ProviderInvocation } {
-	const invocation = providerInvocation();
+	const invocation = providerInvocation("official");
 	const item = boundItem(invocation);
 	if (!singleLine(item.credential)) fail("credential-invalid", `${invocation.itemTitle} needs a valid credential field`);
 	bridgeExecutable(atlassianProcess);
@@ -57,7 +53,7 @@ function prerequisites(): { helper: string; invocation: ProviderInvocation } {
 function main(argv: string[]): never {
 	if (argv[0] === "--injected") {
 		if (argv.length !== 3) fail("arguments-invalid", "the injected phase needs the selected tenant and product", 2);
-		injectedPhase(providerInvocation(process.env, { tenant: argv[1] ?? "", product: argv[2] ?? "" }));
+		injectedPhase(providerInvocation("official", process.env, { tenant: argv[1] ?? "", product: argv[2] ?? "" }));
 	}
 	if (argv[0] === "--preflight") {
 		if (argv.length !== 1) fail("arguments-invalid", "the preflight phase accepts no other arguments", 2);

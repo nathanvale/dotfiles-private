@@ -75,9 +75,10 @@ function isMcporterOfflineEnvelope(value: unknown, requestedServer: string): boo
 function providerReadiness(env: Environment, tenant: string, binding: CredentialBinding, server: string): TransportResult | null {
 	const route = providerRouteFor(server);
 	if (!route) return { ok: false, ...translateFailure({ kind: "malformed", message: "unknown Provider route", contentObserved: false }) };
+	if (binding.product !== route.product) return { ok: false, cause: "refused-precondition", hint: "the credential binding does not match the Provider Route", contentObserved: false };
 	const script = path.resolve(import.meta.dir, "..", route.provider === "official" ? "atlassian-official-provider.ts" : "atlassian-community-provider.ts");
 	const run = Bun.spawnSync([process.execPath, script, "--preflight"], {
-		env: { ...scrubbed(env), ...invocationEnvironment({ tenant, product: route.product, binding }) },
+		env: { ...scrubbed(env), ...invocationEnvironment({ tenant, provider: route.provider, product: route.product, binding }) },
 		stdin: "ignore",
 		stdout: "pipe",
 		stderr: "pipe",
@@ -116,6 +117,8 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 		return { ok: true, data };
 	};
 	const request = (binding: CredentialBinding, server: string, mcporterArgs: string[]): TransportResult => {
+		const route = providerRouteFor(server);
+		if (!route || binding.product !== route.product) return { ok: false, cause: "refused-precondition", hint: "the credential binding does not match the Provider Route", contentObserved: false };
 		const planned = planRoute(env, tenant, binding, server, mcporterArgs, skillsRoot);
 		if ("ok" in planned) return planned;
 		const readiness = providerReadiness(env, tenant, binding, server);
@@ -158,6 +161,7 @@ function asAttestation(value: unknown): ParityAttestation | null {
 		typeof record.origin === "string" &&
 		typeof record.credentialDigest === "string" &&
 		HEX64.test(record.credentialDigest) &&
+		!("credentialSetDigest" in record) &&
 		typeof record.objectSemantics === "string" &&
 		finite(record.recordedAt) &&
 		finite(record.expiresAt) &&

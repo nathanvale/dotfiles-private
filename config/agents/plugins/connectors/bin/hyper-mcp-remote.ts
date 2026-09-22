@@ -4,18 +4,26 @@
 // bridge expands from its environment, and the private log directory.
 import { ownedDirectory } from "./private-state.ts";
 import type { ProviderProcess } from "./provider-process.ts";
+import { BRIDGE_VERSION, ownedBridgePath, ownedBridgeReady } from "./bridge-runtime.ts";
+import { fileURLToPath } from "node:url";
+import path from "node:path";
 
-const BRIDGE_VERSION = "0.5.0";
 const BRIDGE = "hyper-mcp-remote";
 const REPORTED = new RegExp(`^(?:${BRIDGE}\\s+)?${BRIDGE_VERSION.replaceAll(".", "\\.")}$`);
 
-// The bridge on PATH, only when it reports the pinned version.
+// Only pinned Connector-owned bytes may receive a Provider's credential.
+// First use provisions them through the Connector runtime.
 export function bridgeExecutable(proc: ProviderProcess): string {
-	const bridge = Bun.which(BRIDGE, { PATH: proc.cleanEnvironment().PATH ?? "" });
-	if (!bridge) proc.fail("bridge-version-invalid", `${BRIDGE} ${BRIDGE_VERSION} is required`);
-	const probe = Bun.spawnSync([bridge, "--version"], { env: proc.cleanEnvironment(), stdin: "ignore" });
+	const env = proc.cleanEnvironment();
+	const owned = ownedBridgePath(env);
+	if (!ownedDirectory(path.dirname(owned)).ok) proc.fail("bridge-version-invalid", `${BRIDGE} ${BRIDGE_VERSION} is required`);
+	if (!ownedBridgeReady(owned)) {
+		const install = Bun.spawnSync([process.execPath, fileURLToPath(new URL("./bridge-runtime.ts", import.meta.url))], { env, stdin: "ignore", stdout: "ignore", stderr: "ignore" });
+		if (install.exitCode !== 0 || !ownedBridgeReady(owned)) proc.fail("bridge-version-invalid", `${BRIDGE} ${BRIDGE_VERSION} is required`);
+	}
+	const probe = Bun.spawnSync([owned, "--version"], { env, stdin: "ignore" });
 	if (probe.exitCode !== 0 || !REPORTED.test(probe.stdout.toString().trim())) proc.fail("bridge-version-invalid", `${BRIDGE} ${BRIDGE_VERSION} is required`);
-	return bridge;
+	return owned;
 }
 
 // `--no-auth` keeps the bridge out of OAuth discovery; the header template is

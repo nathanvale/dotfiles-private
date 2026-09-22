@@ -28,15 +28,14 @@ describe("neutral write inputs", () => {
 });
 
 describe("preparation and provider arguments", () => {
-	test("each operation names the read it needs; page.create always resolves a supplied space key", () => {
+	test("each operation names the read it needs; page.create has no qualified preparation", () => {
 		expect(preparation("issue.create", "official", CREATE)).toEqual({ kind: "none" });
 		expect(preparation("issue.comment", "official", { issueKey: "PROJ-1", body: "x" })).toEqual({ kind: "none" });
 		expect(preparation("issue.update", "community", { issueKey: "PROJ-1", fields: { summary: "x" } })).toEqual({ kind: "issue", issueKey: "PROJ-1" });
 		expect(preparation("page.update", "official", { pageId: "123", body: "x" })).toEqual({ kind: "page", pageId: "123" });
-		expect(preparation("page.create", "official", { space: { id: "9" }, title: "t", body: "b" })).toEqual({ kind: "space", id: "9" });
-		expect(preparation("page.create", "official", { space: { key: "ENG" }, title: "t", body: "b" })).toEqual({ kind: "space", key: "ENG" });
-		expect(preparation("page.create", "community", { space: { id: "9" }, title: "t", body: "b" })).toEqual({ kind: "refused", reason: "the Community route needs space.key; supply space as {id, key}" });
-		expect(preparation("page.create", "community", { space: { id: "9", key: "ENG" }, title: "t", body: "b" })).toEqual({ kind: "space", id: "9", key: "ENG" });
+		for (const provider of ["official", "community"] as const) {
+			expect(preparation("page.create", provider, { space: { id: "9", key: "ENG" }, title: "t", body: "b" })).toEqual({ kind: "refused", reason: "Neither pinned route has a qualified space preparation tool" });
+		}
 	});
 
 	test("Official arguments use the documented v2 names; the snapshot token is preview-bound", () => {
@@ -45,8 +44,7 @@ describe("preparation and provider arguments", () => {
 		expect(writeArguments(OPERATION_SPECS["issue.update"], "official", { issueKey: "PROJ-1", fields: { summary: "x", description: "d" } }, ctx).args).toEqual({ cloudId: "c1", issueIdOrKey: "PROJ-1", fields: { summary: "x", description: "d" }, contentFormat: "markdown" });
 		expect(writeArguments(OPERATION_SPECS["issue.update"], "official", { issueKey: "PROJ-1", fields: { summary: "x" } }, ctx).args).toEqual({ cloudId: "c1", issueIdOrKey: "PROJ-1", fields: { summary: "x" } });
 		expect(writeArguments(OPERATION_SPECS["issue.comment"], "official", { issueKey: "PROJ-1", body: "hi" }, ctx).args).toEqual({ cloudId: "c1", issueIdOrKey: "PROJ-1", commentBody: "hi" });
-		expect(writeArguments(OPERATION_SPECS["page.create"], "official", { space: { id: "9", key: "ENG" }, parentId: "77", title: "T", body: "b" }, ctx).args).toEqual({ cloudId: "c1", parent: { spaceId: "9", parentContentId: "77" }, contentType: "page", title: "T", body: { format: "markdown", value: "b" } });
-		expect(writeArguments(OPERATION_SPECS["page.create"], "official", { space: { key: "ENG" }, title: "T", body: "b" }, { ...ctx, spaceId: "9" }).args.parent).toEqual({ spaceId: "9" });
+		expect(() => writeArguments(OPERATION_SPECS["page.create"], "official", { space: { id: "9", key: "ENG" }, parentId: "77", title: "T", body: "b" }, ctx)).toThrow("operation-unavailable");
 		const update = writeArguments(OPERATION_SPECS["page.update"], "official", { pageId: "123", body: "b", title: "New", versionMessage: "m" }, ctx);
 		expect(update.args).toEqual({ cloudId: "c1", contentId: "123", title: "New", body: { format: "markdown", value: "b" }, versionMessage: "m", snapshotToken: "snap" });
 		expect(update.bound).toEqual({ cloudId: "c1", contentId: "123", title: "New", body: { format: "markdown", value: "b" }, versionMessage: "m", snapshotToken: "snap" });

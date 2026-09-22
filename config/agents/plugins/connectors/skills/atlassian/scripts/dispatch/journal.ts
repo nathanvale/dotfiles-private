@@ -111,6 +111,7 @@ export interface PreviewRequest {
 
 export interface ApplyRequest {
 	previewId: string;
+	provider: ProviderName;
 	canonicalInput: unknown;
 	providerArgs: unknown;
 	revision: string | null;
@@ -589,6 +590,7 @@ class FileJournal implements Journal {
 	// write the intent durably, then mark the preview consumed.
 	private recordIntent(request: ApplyRequest): Receipt {
 		const preview = this.readPreview(request.previewId);
+		if (request.provider !== preview.provider) throw new JournalError("preview-provider-mismatch", "the selected provider differs from the previewed provider");
 		if (preview.status === "consumed") throw new JournalError("preview-consumed", "the preview was already applied");
 		if (this.now() > preview.expiresAt) throw new JournalError("preview-expired", "the preview has expired; preview again");
 		if (canonicalDigest(request.canonicalInput) !== preview.inputDigest) throw new JournalError("preview-input-mismatch", "the input differs from the previewed input");

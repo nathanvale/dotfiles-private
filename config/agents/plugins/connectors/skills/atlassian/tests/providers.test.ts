@@ -3,7 +3,7 @@
 // and product in the environment, fakes on PATH, the credential helper below
 // HOME. Four static routes: official and community, each for jira or confluence.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFileSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { AMBIENT_SENTINEL, createHarness, FIXTURES as SHARED_FIXTURES, itemJson, type Harness, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
 
@@ -28,6 +28,8 @@ beforeEach(() => {
 afterEach(() => harness.dispose());
 
 async function runProvider(script: string, args: string[] = [], env: Record<string, string> = {}) {
+	const provider = script === OFFICIAL ? "official" : "community";
+	const product = env.ATLASSIAN_PRODUCT ?? "jira";
 	const proc = Bun.spawn([script, ...args], {
 		cwd: path.join(SKILL, "config"),
 		env: {
@@ -36,8 +38,9 @@ async function runProvider(script: string, args: string[] = [], env: Record<stri
 			TMPDIR: harness.root,
 			XDG_STATE_HOME: harness.root,
 			ATLASSIAN_TENANT: "example",
-		ATLASSIAN_PRODUCT: "jira",
-		CONNECTORS_INTERNAL_INVOCATION_CONTEXT: '{"principal":"service@example.invalid","itemVersion":"onepassword-item-version:1","origin":"https://example.atlassian.net"}',
+			ATLASSIAN_PROVIDER: provider,
+			ATLASSIAN_PRODUCT: "jira",
+			CONNECTORS_INTERNAL_INVOCATION_CONTEXT: JSON.stringify({ product, principal: "service@example.invalid", itemVersion: "onepassword-item-version:1", origin: "https://example.atlassian.net" }),
 			AMBIENT_SENTINEL,
 			OP_SERVICE_ACCOUNT_TOKEN: OP_TOKEN_SENTINEL,
 			...env,
@@ -57,6 +60,22 @@ async function runProvider(script: string, args: string[] = [], env: Record<stri
 const wrapperLines = () => (harness.has("wrapper.log") ? readFileSync(path.join(harness.root, "wrapper.log"), "utf8").trim().split("\n") : []);
 
 describe("Official provider process", () => {
+	test("raw preflight rejects an unpinned owned file even when PATH reports the pinned version", async () => {
+		harness.dispose();
+		harness = createHarness({ uvx: path.join(FIXTURES, "uvx-fake.ts") });
+		const pathBridge = path.join(harness.binDir, "hyper-mcp-remote");
+		writeFileSync(pathBridge, `#!${process.execPath}\nimport "${path.join(SHARED_FIXTURES, "bridge-fake.ts")}";\n`);
+		chmodSync(pathBridge, 0o755);
+		const owned = path.join(harness.root, "connectors", "bridge", "0.5.0", "hyper-mcp-remote");
+		mkdirSync(path.dirname(owned), { recursive: true, mode: 0o700 });
+		writeFileSync(owned, "tampered owned bytes");
+		chmodSync(owned, 0o700);
+		harness.write("item.json", item({ username: "service@example.invalid", credential: "x" }));
+		const result = await runProvider(OFFICIAL, ["--preflight"], { PATH: harness.binDir });
+		expect([result.code, result.stdout]).toEqual([4, ""]);
+		expect(result.stderr).toContain("atlassian-provider:error:bridge-version-invalid:");
+		expect(harness.has("bridge.json")).toBe(false);
+	});
 	test("preflight proves local readiness without injecting a credential or starting the bridge", async () => {
 		harness.write("item.json", item({ username: "service@example.invalid", credential: "x" }));
 		const result = await runProvider(OFFICIAL, ["--preflight"]);
@@ -81,21 +100,25 @@ describe("Official provider process", () => {
 		expect(harness.has("bridge.json")).toBe(false);
 	});
 
-	test("jira: probes the bridge pin, reads the username as metadata, injects the credential, then sends Basic to the bridge", async () => {
+	test("jira: probes the bridge pin, binds the principal, injects the personal token, then sends Basic to the bridge", async () => {
 		harness.write("item.json", item({ username: "service@example.invalid", credential: "x", url: MANAGEMENT_URL }));
 		const result = await runProvider(OFFICIAL);
+		expect(result.stderr).toBe("");
 		expect(result.code).toBe(0);
 		// The helper forwards no custom environment through inject, so the
 		// injected phase re-reads the username as metadata rather than taking
 		// it from argv or env.
 		expect(wrapperLines()).toEqual([
 			"op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json",
-			`inject ATLASSIAN_API_KEY op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential -- /usr/bin/env ATLASSIAN_TENANT=example ATLASSIAN_PRODUCT=jira CONNECTORS_INTERNAL_INVOCATION_CONTEXT={"principal":"service@example.invalid","itemVersion":"onepassword-item-version:1","origin":"https://example.atlassian.net"} ${OFFICIAL} --injected example jira`,
+			`inject ATLASSIAN_API_KEY op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential -- /usr/bin/env ATLASSIAN_TENANT=example ATLASSIAN_PROVIDER=official ATLASSIAN_PRODUCT=jira CONNECTORS_INTERNAL_INVOCATION_CONTEXT={"product":"jira","principal":"service@example.invalid","itemVersion":"onepassword-item-version:1","origin":"https://example.atlassian.net"} ${OFFICIAL} --injected example jira`,
 			"op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json",
 		]);
 		const bridge = harness.receipt("bridge.json");
+		expect(bridge.executable).toBe(path.join(harness.home, ".local", "state", "connectors", "bridge", "0.5.0", "hyper-mcp-remote"));
+		expect(bridge.pinnedDigestMatches).toBe(true);
 		expect(bridge.argv).toEqual(["https://mcp.atlassian.com/v2/mcp", "--no-auth", "--header", "Authorization: Basic ${ATLASSIAN_BASIC}"]);
 		expect(bridge.basicMatches).toBe(true);
+		expect(bridge.atlassianBearerPresent).toBe(false);
 		expect(bridge.rawKeyPresent).toBe(false);
 		expect(bridge.ambient).toBe(false);
 		expect(bridge.opToken).toBe(false);
@@ -104,11 +127,13 @@ describe("Official provider process", () => {
 		for (const directory of [path.dirname(logPath), logPath]) expect(statSync(directory).mode & 0o777).toBe(0o700);
 	});
 
-	test("confluence: selects the CONFLUENCE item for the same tenant", async () => {
+	test("confluence: selects the same product item as Community", async () => {
 		harness.write("item.json", item({ username: "service@example.invalid", credential: "x" }));
 		expect((await runProvider(OFFICIAL, [], { ATLASSIAN_PRODUCT: "confluence" })).code).toBe(0);
 		expect(wrapperLines()[0]).toBe("op item get CONFLUENCE_EXAMPLE_API_TOKEN --vault API Credentials --format json");
 		expect(wrapperLines()[1]).toContain("op://API Credentials/CONFLUENCE_EXAMPLE_API_TOKEN/credential");
+		const bridge = harness.receipt("bridge.json");
+		expect([bridge.basicMatches, bridge.atlassianBearerPresent, bridge.rawKeyPresent]).toEqual([true, false, false]);
 	});
 
 	test("maps a dashed tenant slug to its item title", async () => {
@@ -133,6 +158,17 @@ describe("Official provider process", () => {
 		expect(wrapperLines()).toEqual([]);
 	});
 
+	test("rejects a wrong Provider or tagged product before item, helper, or bridge effects", async () => {
+		const wrongBinding = JSON.stringify({ product: "confluence", principal: "service@example.invalid", itemVersion: "onepassword-item-version:1", origin: "https://example.atlassian.net" });
+		for (const env of [{ ATLASSIAN_PROVIDER: "community" }, { CONNECTORS_INTERNAL_INVOCATION_CONTEXT: wrongBinding }]) {
+			const result = await runProvider(OFFICIAL, [], env);
+			expect([result.code, result.stdout]).toEqual([2, ""]);
+			expect(result.stderr).toContain("atlassian-provider:error:");
+		}
+		expect(wrapperLines()).toEqual([]);
+		expect(harness.has("bridge.json")).toBe(false);
+	});
+
 	test("refuses arguments", async () => {
 		const result = await runProvider(OFFICIAL, ["--verbose"]);
 		expect(result.code).toBe(2);
@@ -141,7 +177,7 @@ describe("Official provider process", () => {
 	});
 
 	test("checks the bridge pin before credential access", async () => {
-		harness.write("bridge-version", "0.5.1\n");
+		writeFileSync(path.join(harness.root, "connectors", "bridge", "0.5.0", "hyper-mcp-remote"), "tampered owned bytes");
 		harness.write("item.json", item({ username: "service@example.invalid", credential: "x" }));
 		const result = await runProvider(OFFICIAL);
 		expect(result.code).toBe(4);
@@ -172,11 +208,13 @@ describe("Official provider process", () => {
 	test("the injected phase re-probes the bridge pin and refuses a missing or malformed credential or username", async () => {
 		harness.write("item.json", item({ username: "service@example.invalid", credential: "x" }));
 		const injected = ["--injected", "example", "jira"];
-		harness.write("bridge-version", "0.5.1\n");
+		const owned = path.join(harness.root, "connectors", "bridge", "0.5.0", "hyper-mcp-remote");
+		const pinned = readFileSync(owned);
+		writeFileSync(owned, "tampered owned bytes");
 		const stale = await runProvider(OFFICIAL, injected, { ATLASSIAN_API_KEY: "fixture-atlassian-api-key" });
 		expect(stale.code).toBe(4);
 		expect(stale.stderr).toContain("atlassian-provider:error:bridge-version-invalid:");
-		harness.write("bridge-version", "0.5.0\n");
+		writeFileSync(owned, pinned);
 		const missing = await runProvider(OFFICIAL, injected);
 		expect(missing.stderr).toContain("atlassian-provider:error:credential-invalid:");
 		const malformed = await runProvider(OFFICIAL, injected, { ATLASSIAN_API_KEY: "fixture-atlassian-api-key\nextra" });
@@ -229,6 +267,13 @@ describe("Official provider process", () => {
 });
 
 describe("Community provider process", () => {
+	test("rejects a wrong product binding before item, helper, or uvx effects", async () => {
+		const result = await runProvider(COMMUNITY, [], { CONNECTORS_INTERNAL_INVOCATION_CONTEXT: JSON.stringify({ product: "confluence", principal: "service@example.invalid", itemVersion: "onepassword-item-version:1", origin: "https://example.atlassian.net" }) });
+		expect([result.code, result.stdout]).toEqual([2, ""]);
+		expect(result.stderr).toContain("atlassian-provider:error:credential-context-invalid:");
+		expect(wrapperLines()).toEqual([]);
+		expect(harness.has("uvx.json")).toBe(false);
+	});
 	test("preflight proves local readiness without starting the pinned package", async () => {
 		harness.write("item.json", FULL_ITEM);
 		const result = await runProvider(COMMUNITY, ["--preflight"]);
@@ -359,13 +404,13 @@ describe("Community provider process", () => {
 			const result = await runProvider(COMMUNITY);
 			expect({ url, code: result.code, cause: result.stderr.includes("atlassian-provider:error:credential-invalid:") }).toEqual({ url, code: 4, cause: true });
 			expect(result.stderr).not.toContain(url);
-				harness.write("item.json", rawItem({ username: "service@example.invalid", credential: "fixture-community-secret", url }, 1));
+			harness.write("item.json", rawItem({ username: "service@example.invalid", credential: "fixture-community-secret", url }, 1));
 			const legacy = await runProvider(COMMUNITY);
 			expect({ url, code: legacy.code, cause: legacy.stderr.includes("atlassian-provider:error:credential-invalid:") }).toEqual({ url, code: 4, cause: true });
 			expect(legacy.stderr).not.toContain(url);
 		}
 		expect(harness.has("community-provider.json")).toBe(false);
-	});
+	}, 15000);
 
 	test("refuses arguments, a bad product, and a non-semantic slug before reading the item", async () => {
 		harness.write("item.json", FULL_ITEM);

@@ -1,4 +1,5 @@
-// Fake hyper-mcp-remote bridge, the one owner of the bridge seam in tests.
+// PATH impostor used only to prove a version string cannot bypass the owned
+// bridge pin. Successful Provider tests observe final exec separately.
 // Records argv and the presence and shape of the injected authorization
 // material against test-written expected values; never records a value.
 // TMPDIR/bridge-version overrides --version.
@@ -12,8 +13,7 @@ if (process.argv[2] === "--version") {
 	process.stdout.write(`hyper-mcp-remote ${version}\n`);
 	process.exit(0);
 }
-// Independent oracles: the Basic credential the Atlassian fixture username and
-// secret must produce, and the Canva access token the fixture session holds.
+// Independent oracles: the personal-token Basic value and Canva access token.
 const EXPECTED_BASIC = Buffer.from("service@example.invalid:fixture-atlassian-api-key").toString("base64");
 const EXPECTED_CANVA_ACCESS_TOKEN = "fixture-canva-access-token";
 const CANVA_REFRESH_TOKEN = "fixture-canva-refresh-token";
@@ -24,6 +24,7 @@ writeFileSync(
 	JSON.stringify({
 		argv: process.argv.slice(2),
 		basicMatches: env.ATLASSIAN_BASIC === EXPECTED_BASIC,
+		atlassianBearerPresent: "ATLASSIAN_BEARER" in env,
 		rawKeyPresent: "ATLASSIAN_API_KEY" in env,
 		canvaTokenMatches: env.CANVA_ACCESS_TOKEN === EXPECTED_CANVA_ACCESS_TOKEN,
 		canvaRefreshPresent: environmentText.includes(CANVA_REFRESH_TOKEN) || process.argv.join(" ").includes(CANVA_REFRESH_TOKEN),

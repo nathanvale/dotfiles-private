@@ -42,17 +42,50 @@ function shim(file: string, modulePath: string): void {
 	chmodSync(file, 0o755);
 }
 
-// `fakes` maps an executable name on PATH to the TypeScript module that
-// implements it. The 1Password helper is always installed at the path the
-// Providers resolve below HOME.
+// Install the public pinned release through the production installer into
+// disposable test state. Provider invocations still run production checks.
+let pinnedBridgeBytes: Buffer | undefined;
+function pinnedBridge(): Buffer {
+	if (pinnedBridgeBytes) return pinnedBridgeBytes;
+	const state = mkdtempSync(path.join(os.tmpdir(), "connectors-bridge-fixture-"));
+	try {
+		const installed = Bun.spawnSync([process.execPath, path.join(PLUGIN_ROOT, "bin", "bridge-runtime.ts")], {
+			env: { ...process.env, HOME: state, XDG_STATE_HOME: state },
+			stdin: "ignore",
+			stdout: "pipe",
+			stderr: "pipe",
+		});
+		if (installed.exitCode !== 0) throw new Error("pinned bridge fixture unavailable");
+		pinnedBridgeBytes = readFileSync(path.join(state, "connectors", "bridge", "0.5.0", "hyper-mcp-remote"));
+		return pinnedBridgeBytes;
+	} finally {
+		rmSync(state, { recursive: true, force: true });
+	}
+}
+
+// `fakes` maps executable names on PATH to TypeScript modules. The bridge key
+// requests pinned bytes in disposable owned state and a final-exec observer.
+// The 1Password helper is always installed below HOME.
 export function createHarness(fakes: Record<string, string>): Harness {
 	const root = mkdtempSync(path.join(os.tmpdir(), "connectors-test-"));
 	const home = path.join(root, "home");
 	const binDir = path.join(root, "bin");
 	shim(path.join(home, "code", "dotfiles", "bin", "with-one-password-token"), path.join(FIXTURES, "one-password-fake.ts"));
 	shim(path.join(binDir, "mcporter"), path.join(FIXTURES, "mcporter-fake.ts"));
-	symlinkSync(process.execPath, path.join(binDir, "bun"));
-	for (const [name, modulePath] of Object.entries(fakes)) shim(path.join(binDir, name), modulePath);
+	if ("hyper-mcp-remote" in fakes) {
+		for (const state of [root, path.join(home, ".local", "state")]) {
+			const owned = path.join(state, "connectors", "bridge", "0.5.0", "hyper-mcp-remote");
+			mkdirSync(path.dirname(owned), { recursive: true, mode: 0o700 });
+			writeFileSync(owned, pinnedBridge(), { mode: 0o700 });
+			chmodSync(owned, 0o700);
+		}
+		const fakeBun = path.join(binDir, "bun");
+		writeFileSync(fakeBun, `#!${process.execPath}\nimport "${path.join(FIXTURES, "bun-with-bridge-fixture.ts")}";\n`);
+		chmodSync(fakeBun, 0o755);
+	} else symlinkSync(process.execPath, path.join(binDir, "bun"));
+	for (const [name, modulePath] of Object.entries(fakes)) {
+		if (name !== "hyper-mcp-remote") shim(path.join(binDir, name), modulePath);
+	}
 	return {
 		root,
 		home,

@@ -1,6 +1,6 @@
 // Public-process proof of the Canva Provider, invoked the way MCPorter invokes
 // it: no arguments, cwd at the skill config directory, the account slug in
-// the environment, the bridge fake on PATH, and a private session under
+// the environment, a pinned bridge in disposable owned state, and a private session under
 // XDG_STATE_HOME. Refresh crosses a real loopback HTTP call to the fake
 // authorization server in this test process.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -102,7 +102,7 @@ describe("Canva Provider process", () => {
 	});
 
 	test("a bridge pin mismatch refuses before any session read", async () => {
-		harness.write("bridge-version", "0.5.1\n");
+		writeFileSync(path.join(harness.root, "connectors", "bridge", "0.5.0", "hyper-mcp-remote"), "tampered owned bytes");
 		const result = await runProvider();
 		expect([result.code, result.stderr]).toEqual([4, "canva-provider:error:bridge-version-invalid:hyper-mcp-remote 0.5.0 is required\n"]);
 		expect(harness.has("bridge.json")).toBe(false);

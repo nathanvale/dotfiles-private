@@ -12,6 +12,7 @@ import {
 	credentialDigest,
 	type Dependencies,
 	fallbackDecision,
+	fallbackPrecondition,
 	type Input,
 	inputShape,
 	matchCloudId,
@@ -26,7 +27,7 @@ import {
 	type TransportResult,
 } from "./engine.ts";
 import { canonicalDigest, type Effect, type Evidence, JournalError, type Receipt, type WriteOperation } from "./journal.ts";
-import { baselineFromReply, effectsFromReply, observeIssue, observePage, observeSpaceInstructions, type PreparedContext, preparation, readBackEvidence, readBackPlan, type ReadBack, type RevisionMatch, spaceIdFromSearch, spaceSearchPlan, unwrapReply, type WriteInput, writeArguments, writeInput } from "./writes.ts";
+import { baselineFromReply, effectsFromReply, observeIssue, observePage, type PreparedContext, preparation, readBackEvidence, readBackPlan, type ReadBack, type RevisionMatch, unwrapReply, type WriteInput, writeArguments, writeInput } from "./writes.ts";
 
 export interface Outcome {
 	cause: CauseCode;
@@ -62,7 +63,10 @@ export class Session {
 	binding(product: Product): Promise<BindResult> {
 		let bound = this.bindings.get(product);
 		if (!bound) {
-			bound = this.deps.bindCredential(this.tenant, product);
+			bound = this.deps.bindCredential(this.tenant, product).then((result) => {
+				if (result.ok && result.binding.product !== product) return { ok: false, cause: "refused-precondition" as const, detail: "credential custody returned a binding for another product" };
+				return result;
+			});
 			this.bindings.set(product, bound);
 		}
 		return bound;
@@ -170,25 +174,30 @@ async function communityGate(session: Session, spec: OperationSpec, input: Recor
 // gate allows it. The reported cause stays the Official one when the
 // fallback also fails, so the caller sees why the default route failed.
 export async function readFlow(session: Session, spec: OperationSpec, input: Input, provider: ProviderName | undefined): Promise<Outcome> {
+	const selected = provider ?? "official";
 	const bound = await session.binding(spec.product);
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
 	const context = bound.binding;
 	const attempt = async (name: ProviderName) => {
 		const route = session.route(name, spec.product, context);
-		const ready = await route.ready({ tool: spec[name].tool, args: providerArguments(spec, name, input, name === "official" ? "pending" : undefined) });
+		const tool = spec[name].tool;
+		if (tool === null) return { cause: "operation-unavailable" as const, data: null, detail: REPAIR_TEXT["operation-unavailable"], contentObserved: false };
+		const ready = await route.ready({ tool, args: providerArguments(spec, name, input, name === "official" ? "pending" : undefined) });
 		if (ready) return ready;
-		return route.call(spec[name].tool, providerArguments(spec, name, input, route.cloudId));
+		return route.call(tool, providerArguments(spec, name, input, route.cloudId));
 	};
 	if (provider === "community") {
 		const gate = await communityGate(session, spec, input, context);
 		if (gate) return gate;
 	}
-	const primary = await attempt(provider ?? "official");
+	const primary = await attempt(selected);
 	if (primary.cause === "success") return success(primary.data);
 	if (provider !== undefined) return failed(primary);
+	const detail = primary.detail ?? primary.cause;
+	const precondition = fallbackPrecondition(spec, primary.cause, primary.contentObserved);
+	if (!precondition.eligible) return { ...failed(primary), detail: `${detail}; ${precondition.reason}` };
 	const request: ParityRequest = { tenant: session.tenant, product: spec.product, operation: spec.id, inputShape: inputShape(input), origin: context.origin, credentialDigest: credentialDigest(context), now: session.deps.now() };
 	const decision = fallbackDecision(spec, primary.cause, primary.contentObserved, await session.deps.parity(request), request);
-	const detail = primary.detail ?? primary.cause;
 	if (!decision.eligible) return { ...failed(primary), detail: `${detail}; ${decision.reason}` };
 	const secondary = await attempt("community");
 	if (secondary.cause === "success") return success(secondary.data);
@@ -223,34 +232,13 @@ async function preparePage(route: Route, ctx: PreparedContext, pageId: string): 
 	const page = observePage(read.data);
 	if (page.id === undefined) return { outcome: refusal("capability-unavailable", "the preparatory page read names no page id") };
 	if (page.id !== pageId) return { outcome: refusal("capability-unavailable", "the preparatory page read names a different page") };
-	if (page.spaceInstructions !== false) return { outcome: refusal("capability-unavailable", "getConfluenceSpace retrieval and instruction compliance need live qualification") };
+	if (page.spaceInstructions !== false) return { outcome: refusal("capability-unavailable", "the page read did not establish that space instructions are absent") };
 	if (page.version === null) return { outcome: refusal("capability-unavailable", "the page read exposed no version to bind the revision") };
 	if (official && page.snapshotToken === undefined) return { outcome: refusal("capability-unavailable", "the Official page read returned no snapshot token; a full-detail read is required before an update") };
 	const prepared: PreparedContext = { ...ctx, revision: page.version, spaceInstructions: false };
 	if (page.snapshotToken !== undefined) prepared.snapshotToken = page.snapshotToken;
 	if (page.title !== undefined) prepared.currentTitle = page.title;
 	return { ctx: prepared };
-}
-
-async function prepareSpace(route: Route, ctx: PreparedContext, reference: { key?: string; id?: string }): Promise<Prepared> {
-	let spaceId = reference.id;
-	if (reference.key !== undefined) {
-		const plan = spaceSearchPlan(reference.key, route.provider, route.cloudId);
-		const read = await route.call(plan.tool, plan.args);
-		if (read.cause !== "success") return { outcome: failed(read) };
-		spaceId = spaceIdFromSearch(reference.key, read.data);
-	}
-	if (spaceId === undefined) return { outcome: refusal("space-unresolved") };
-	const plan = route.provider === "official"
-		? { tool: "getConfluenceSpace", args: { cloudId: route.cloudId, spaceId } }
-		: reference.key === undefined
-			? null
-			: { tool: "confluence_get_space", args: { space_key: reference.key } };
-	if (plan === null) return { outcome: refusal("capability-unavailable", "getConfluenceSpace retrieval and instruction compliance need live qualification") };
-	const observed = await route.call(plan.tool, plan.args);
-	if (observed.cause !== "success") return { outcome: failed(observed) };
-	if (observeSpaceInstructions(observed.data) !== false) return { outcome: refusal("capability-unavailable", "getConfluenceSpace retrieval and instruction compliance need live qualification") };
-	return { ctx: { ...ctx, spaceId, spaceInstructions: false } };
 }
 
 async function bindBaseline(route: Route, operation: WriteOperation, input: WriteInput, ctx: PreparedContext): Promise<Prepared> {
@@ -284,9 +272,6 @@ async function prepare(route: Route, operation: WriteOperation, input: WriteInpu
 		case "page":
 			prepared = await preparePage(route, ctx, step.pageId);
 			break;
-		case "space":
-			prepared = await prepareSpace(route, ctx, step);
-			break;
 	}
 	if ("outcome" in prepared) return prepared;
 	return bindBaseline(route, operation, canonicalWriteInput(input, prepared.ctx), prepared.ctx);
@@ -302,6 +287,7 @@ export function canonicalWriteInput(input: WriteInput, ctx: PreparedContext): Wr
 
 const JOURNAL_CAUSES: Record<string, Exclude<CauseCode, "success">> = {
 	"preview-unknown": "refused-preview",
+	"preview-provider-mismatch": "refused-preview",
 	"preview-consumed": "refused-preview",
 	"preview-expired": "refused-preview",
 	"preview-input-mismatch": "refused-preview",
@@ -339,8 +325,15 @@ interface WriteContext {
 // Shared front half of preview and apply: provider choice, the deferred
 // Official refusal, the Community attestation gate, readiness, preparation,
 // argument shaping, and schema confirmation of the shaped arguments.
+function writeReachable(spec: OperationSpec, provider: ProviderName): boolean {
+	return spec.id !== "page.create" && (provider !== "official" || spec.official.reachable);
+}
+
 async function writeContext(session: Session, spec: OperationSpec, input: WriteInput, provider: ProviderName): Promise<WriteContext | Outcome> {
-	if (provider === "official" && !spec.official.reachable) return refusal("operation-unavailable");
+	// Neither pinned route has a qualified space read for safe creation.
+	if (!writeReachable(spec, provider)) return refusal("operation-unavailable");
+	const tool = spec[provider].tool;
+	if (tool === null) return refusal("operation-unavailable");
 	const bound = await session.binding(spec.product);
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
 	const context = bound.binding;
@@ -351,7 +344,7 @@ async function writeContext(session: Session, spec: OperationSpec, input: WriteI
 	const route = session.route(provider, spec.product, context);
 	const placeholder: PreparedContext = { revision: null, baseline: { effectIds: [], commentIds: [], revision: null }, snapshotToken: "pending", currentTitle: "pending", spaceId: "1" };
 	if (provider === "official") placeholder.cloudId = "pending";
-	const ready = await route.ready({ tool: spec[provider].tool, args: writeArguments(spec, provider, input, placeholder).args });
+	const ready = await route.ready({ tool, args: writeArguments(spec, provider, input, placeholder).args });
 	if (ready) return failed(ready);
 	const prepared = await prepare(route, spec.id as WriteOperation, input);
 	if ("outcome" in prepared) return prepared.outcome;
@@ -361,7 +354,6 @@ async function writeContext(session: Session, spec: OperationSpec, input: WriteI
 	}
 	const canonical = canonicalWriteInput(input, prepared.ctx);
 	const shaped = writeArguments(spec, provider, canonical, prepared.ctx);
-	const tool = spec[provider].tool;
 	const shape = route.confirm(tool, shaped.args);
 	if (shape) return failed(shape);
 	return { route, spec, input, canonical, ctx: prepared.ctx, tool, bound: shaped.bound };
@@ -441,12 +433,20 @@ function receiptOutcome(receipt: Receipt, attempt: Attempt | null): Outcome {
 }
 
 export async function applyFlow(session: Session, spec: OperationSpec, input: WriteInput, provider: ProviderName, previewId: string): Promise<Outcome> {
+	let journal: ReturnType<Dependencies["journal"]>;
+	try {
+		journal = session.deps.journal(session.tenant);
+		const preview = journal.preview(previewId);
+		if (preview.provider !== provider || preview.operation !== spec.id) return refusal("refused-preview", `${REPAIR_TEXT["refused-preview"]}; preview-provider-mismatch`);
+	} catch (error) {
+		return journalRefusal(error);
+	}
 	const context = await writeContext(session, spec, input, provider);
 	if ("cause" in context) return context;
 	let attempt: Attempt | null = null;
 	try {
-		const receipt = await session.deps.journal(session.tenant).apply(
-			{ previewId, canonicalInput: context.canonical, providerArgs: context.bound, revision: context.ctx.revision, baseline: context.ctx.baseline, spaceInstructions: context.ctx.spaceInstructions },
+		const receipt = await journal.apply(
+			{ previewId, provider, canonicalInput: context.canonical, providerArgs: context.bound, revision: context.ctx.revision, baseline: context.ctx.baseline, spaceInstructions: context.ctx.spaceInstructions },
 			async (_intent, sending, boundArgs) => {
 				const shape = context.route.confirm(context.tool, boundArgs);
 				if (shape) {
@@ -614,6 +614,7 @@ export async function parityFlow(session: Session, spec: OperationSpec, input: I
 	const user = await guarded(official, OFFICIAL_USER_TOOL, {});
 	if (user.cause !== "success") return failed(user);
 	if (principalOf(user.data) !== principal) return refusal("refused-parity", `${REPAIR_TEXT["refused-parity"]}; principal-mismatch`);
+	if (spec.official.tool === null) return refusal("operation-unavailable");
 	const officialRead = await official.call(spec.official.tool, providerArguments(spec, "official", input, official.cloudId));
 	if (officialRead.cause !== "success") return failed(officialRead);
 	const community = session.route("community", spec.product, context);

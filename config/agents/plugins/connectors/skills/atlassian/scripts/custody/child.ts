@@ -29,6 +29,6 @@ const invocation = parseInvocation(process.argv.slice(2));
 if (!process.env.HOME) fail("credential-unavailable");
 const read = readItem(productItemTitle(invocation.product, invocation.tenant), process.env);
 if (!read.ok) fail(read.cause, read.cause === "credential-wrapper-missing" ? "restore the dotfiles 1Password wrapper" : undefined);
-const resolved = itemBinding(read.item);
+const resolved = itemBinding(read.item, invocation.product);
 if ("cause" in resolved) fail(resolved.cause);
 process.stdout.write(`${encodeBinding(resolved.binding)}\n`);

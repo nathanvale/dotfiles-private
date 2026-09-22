@@ -13,7 +13,7 @@ import { ALLOWED_TOOLS, OPERATION_SPECS, providerRouteFor, registryToolVocabular
 import { attestationMatches, type Dependencies, type ParityAttestation, type ParityEvidence, REPAIR_TEXT, type SchemaTool, type Transport, type TransportResult } from "../scripts/dispatch/engine.ts";
 import { openJournal } from "../scripts/dispatch/journal.ts";
 import { parityStore, routeTransport } from "../scripts/dispatch/runtime.ts";
-import { bindCredential } from "../scripts/custody/index.ts";
+import { bindCredential, type CredentialBinding } from "../scripts/custody/index.ts";
 import type { ProviderFailureCause } from "../scripts/dispatch/translate.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
@@ -42,6 +42,7 @@ function testCanonical(value: unknown): string {
 }
 
 const testDigest = (value: unknown): string => new Bun.CryptoHasher("sha256").update(testCanonical(value)).digest("hex");
+const testCredentialDigest = (product: "jira" | "confluence", itemVersion = ITEM_VERSION): string => testDigest({ product, principal: PRINCIPAL, itemVersion, origin: ORIGIN });
 const EXPECTED_OPERATIONS = ["issue.get", "issue.search", "issue.create", "issue.update", "issue.comment", "page.get", "page.search", "page.create", "page.update", "page.comment"] as const;
 const EXPECTED_PATHS = ["atlassian.adjudicate", "atlassian.issue.comment", "atlassian.issue.create", "atlassian.issue.get", "atlassian.issue.search", "atlassian.issue.update", "atlassian.page.comment", "atlassian.page.create", "atlassian.page.get", "atlassian.page.search", "atlassian.page.update", "atlassian.parity", "atlassian.receipt", "atlassian.receipts", "atlassian.unlock"];
 
@@ -49,7 +50,7 @@ const EXPECTED_PATHS = ["atlassian.adjudicate", "atlassian.issue.comment", "atla
 // default Official endpoint reaches it as a primary tool, from the Stage
 // Manager decision, the Atlassian supported-tools page, and the v0.23.1
 // Community reference.
-const EXPECTED_TOOLS: Record<string, [string, boolean, string, "jira" | "confluence"]> = {
+const EXPECTED_TOOLS: Record<string, [string | null, boolean, string, "jira" | "confluence"]> = {
 	"issue.get": ["getJiraIssue", true, "jira_get_issue", "jira"],
 	"issue.search": ["searchJiraIssuesUsingJql", true, "jira_search", "jira"],
 	"issue.create": ["createJiraIssue", true, "jira_create_issue", "jira"],
@@ -57,9 +58,9 @@ const EXPECTED_TOOLS: Record<string, [string, boolean, string, "jira" | "conflue
 	"issue.comment": ["addOrEditJiraIssueComment", true, "jira_add_comment", "jira"],
 	"page.get": ["getConfluenceContent", true, "confluence_get_page", "confluence"],
 	"page.search": ["searchConfluence", true, "confluence_search", "confluence"],
-	"page.create": ["createConfluenceContent", true, "confluence_create_page", "confluence"],
+	"page.create": ["createConfluenceContent", false, "confluence_create_page", "confluence"],
 	"page.update": ["updateConfluenceContent", true, "confluence_update_page", "confluence"],
-	"page.comment": ["createConfluenceComment", false, "confluence_add_comment", "confluence"],
+	"page.comment": [null, false, "confluence_add_comment", "confluence"],
 };
 
 const tool = (name: string, required: string[], optional: string[] = []): SchemaTool => ({
@@ -83,8 +84,7 @@ const SCHEMAS: Record<string, SchemaTool[]> = {
 		USER,
 		tool("getConfluenceContent", ["cloudId", "content_id"], ["content_format", "detail", "include_metadata"]),
 		tool("searchConfluence", ["cloudId", "cql"], ["maxResults"]),
-		tool("getConfluenceSpace", ["cloudId", "spaceId"]),
-		tool("createConfluenceContent", ["cloudId", "parent", "contentType", "title", "body"]),
+		tool("createConfluenceContent", ["cloudId", "parent", "title", "body"]),
 		tool("updateConfluenceContent", ["cloudId", "contentId", "snapshotToken", "body"], ["title", "versionMessage"]),
 	],
 	[CJ]: [
@@ -97,7 +97,6 @@ const SCHEMAS: Record<string, SchemaTool[]> = {
 	[CC]: [
 		tool("confluence_get_page", ["page_id"], ["detail", "include_metadata"]),
 		tool("confluence_search", ["query"], ["limit"]),
-		tool("confluence_get_space", ["space_key"]),
 		tool("confluence_get_comments", ["page_id"]),
 		tool("confluence_create_page", ["space_key", "title"], ["content", "parent_id", "content_format"]),
 		tool("confluence_update_page", ["page_id", "title"], ["content", "version_comment", "content_format"]),
@@ -117,7 +116,7 @@ const attested = (operation: ParityAttestation["operation"], inputShape: string[
 		operation,
 		inputShape,
 		origin: ORIGIN,
-		credentialDigest: testDigest({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN }),
+		credentialDigest: testCredentialDigest(operation.startsWith("issue.") ? "jira" : "confluence"),
 		objectSemantics: ({ "issue.get": "issue:key+id", "issue.search": "issues:key-set", "page.get": "page:id+version+title", "page.search": "pages:id-set" } as Record<string, string>)[operation] ?? "",
 		recordedAt: NOW - 1000,
 		expiresAt: NOW + 1000,
@@ -134,12 +133,15 @@ interface Call {
 
 function fakeTransport(results: Record<string, TransportResult | ((args: Record<string, unknown>) => TransportResult)> = {}, schemas: Record<string, SchemaTool[] | TransportResult> = {}, observe?: (call: Call) => void) {
 	const calls: Call[] = [];
+	const bindings: { server: string; binding: CredentialBinding }[] = [];
 	const transport: Transport = {
-		async listTools(_context, server) {
+		async listTools(binding, server) {
+			bindings.push({ server, binding });
 			const schema = schemas[server] ?? SCHEMAS[server] ?? [];
 			return Array.isArray(schema) ? { ok: true, data: schema } : schema;
 		},
-		async call(_context, server, name, args) {
+		async call(binding, server, name, args) {
+			bindings.push({ server, binding });
 			const call = { server, tool: name, args };
 			calls.push(call);
 			observe?.(call);
@@ -152,7 +154,7 @@ function fakeTransport(results: Record<string, TransportResult | ((args: Record<
 			return { ok: true, data: { fake: `${server}.${name}` } };
 		},
 	};
-	return { transport, calls };
+	return { transport, calls, bindings };
 }
 
 let stateRoot: string;
@@ -171,7 +173,7 @@ function deps(overrides: Partial<Dependencies> = {}): Dependencies {
 		transport: fakeTransport().transport,
 		bindCredential: async (tenant, product) => {
 			seen.push({ tenant, product });
-			return { ok: true, binding: { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN } };
+			return { ok: true, binding: { product, principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN } };
 		},
 		parity: async () => UNPROVEN,
 		attestParity: async (attestation) => {
@@ -218,25 +220,27 @@ describe("operation contract and routes", () => {
 		expect(providerRouteFor("atlassian-official-bitbucket")).toBeNull();
 		expect(ALLOWED_TOOLS).toEqual({
 			[OJ]: ["atlassianUserInfo", "getAccessibleAtlassianResources", "getJiraIssue", "searchJiraIssuesUsingJql", "createJiraIssue", "editJiraIssue", "addOrEditJiraIssueComment"],
-			[OC]: ["atlassianUserInfo", "getAccessibleAtlassianResources", "getConfluenceContent", "searchConfluence", "getConfluenceSpace", "createConfluenceContent", "updateConfluenceContent"],
+			[OC]: ["atlassianUserInfo", "getAccessibleAtlassianResources", "getConfluenceContent", "searchConfluence", "createConfluenceContent", "updateConfluenceContent"],
 			[CJ]: ["jira_get_issue", "jira_search", "jira_create_issue", "jira_update_issue", "jira_add_comment"],
-			[CC]: ["confluence_get_page", "confluence_search", "confluence_get_space", "confluence_get_comments", "confluence_create_page", "confluence_update_page", "confluence_add_comment"],
+			[CC]: ["confluence_get_page", "confluence_search", "confluence_get_comments", "confluence_create_page", "confluence_update_page", "confluence_add_comment"],
 		});
-		for (const tools of Object.values(ALLOWED_TOOLS)) for (const broad of ["executeWrite", "executeRead", "executeDestructive", "discover", "createConfluenceComment"]) expect(tools).not.toContain(broad);
+		for (const tools of Object.values(ALLOWED_TOOLS)) for (const broad of ["executeWrite", "executeRead", "executeDestructive", "discover"]) expect(tools).not.toContain(broad);
+		expect(ALLOWED_TOOLS[OC]).not.toContain("getConfluenceSpace");
 	});
 
 	test("the registry and its derived runtime vocabulary have exact independent allow-lists", () => {
 		const registry = JSON.parse(readFileSync(path.join(SKILL, "config", "mcporter.json"), "utf8")) as { mcpServers: Record<string, { allowedTools: string[]; env: Record<string, string>; command: string }> };
 		const expected = {
 			[OJ]: ["atlassianUserInfo", "getAccessibleAtlassianResources", "getJiraIssue", "searchJiraIssuesUsingJql", "createJiraIssue", "editJiraIssue", "addOrEditJiraIssueComment"],
-			[OC]: ["atlassianUserInfo", "getAccessibleAtlassianResources", "getConfluenceContent", "searchConfluence", "getConfluenceSpace", "createConfluenceContent", "updateConfluenceContent"],
+			[OC]: ["atlassianUserInfo", "getAccessibleAtlassianResources", "getConfluenceContent", "searchConfluence", "createConfluenceContent", "updateConfluenceContent"],
 			[CJ]: ["jira_get_issue", "jira_search", "jira_create_issue", "jira_update_issue", "jira_add_comment"],
-			[CC]: ["confluence_get_page", "confluence_search", "confluence_get_space", "confluence_get_comments", "confluence_create_page", "confluence_update_page", "confluence_add_comment"],
+			[CC]: ["confluence_get_page", "confluence_search", "confluence_get_comments", "confluence_create_page", "confluence_update_page", "confluence_add_comment"],
 		};
 		expect(Object.fromEntries(Object.entries(registry.mcpServers).map(([server, entry]) => [server, entry.allowedTools]))).toEqual(expected);
 		expect(ALLOWED_TOOLS).toEqual(expected);
 		for (const server of SERVERS) {
 			const entry = registry.mcpServers[server];
+			expect([server, entry?.env.ATLASSIAN_PROVIDER]).toEqual([server, server.includes("-official-") ? "official" : "community"]);
 			expect([server, entry?.env.ATLASSIAN_PRODUCT]).toEqual([server, server.endsWith("-jira") ? "jira" : "confluence"]);
 			expect([server, entry?.env.ATLASSIAN_TENANT]).toEqual([server, "${ATLASSIAN_TENANT}"]);
 			expect([server, entry?.command]).toEqual([server, server.includes("official") ? "../scripts/atlassian-official-provider.ts" : "../scripts/atlassian-community-provider.ts"]);
@@ -308,7 +312,7 @@ describe("Official reads", () => {
 	});
 
 	test("one semantic operation binds one immutable context through schema list and every call", async () => {
-		const contexts: { principal: string; itemVersion: string; origin: string }[] = [];
+		const contexts: CredentialBinding[] = [];
 		let reads = 0;
 		const transport: Transport = {
 			async listTools(context, server) {
@@ -323,15 +327,15 @@ describe("Official reads", () => {
 		};
 		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({
 			transport,
-			bindCredential: async () => {
+			bindCredential: async (_tenant, product) => {
 				reads += 1;
-				return { ok: true, binding: { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN } };
+				return { ok: true, binding: { product, principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN } };
 			},
 		}));
 		expect([envelope.result.causeCode, reads, contexts]).toEqual(["success", 1, [
-			{ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN },
-			{ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN },
-			{ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN },
+			{ product: "jira", principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN },
+			{ product: "jira", principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN },
+			{ product: "jira", principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN },
 		]]);
 	});
 
@@ -471,10 +475,14 @@ describe("read fallback gate", () => {
 	});
 
 	test("with an exact attestation and a confirmed Community tool, a read fails over once to the same product's Community route", async () => {
-		const { transport, calls } = fakeTransport({ [`${OJ}.getJiraIssue`]: transportFailure, [`${CJ}.jira_get_issue`]: { ok: true, data: { key: "PROJ-1", via: "community" } } });
+		const { transport, calls, bindings } = fakeTransport({ [`${OJ}.getJiraIssue`]: transportFailure, [`${CJ}.jira_get_issue`]: { ok: true, data: { key: "PROJ-1", via: "community" } } });
+		seen.length = 0;
 		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport, parity: async () => attested("issue.get", ["issueKey"]) }));
 		expect(envelope.result.outcome).toBe("success");
 		expect(envelope.result.data).toEqual({ key: "PROJ-1", via: "community" });
+		expect(seen).toEqual([{ tenant: "example", product: "jira" }]);
+		expect(bindings.every((row) => row.binding.product === "jira" && row.binding.itemVersion === ITEM_VERSION)).toBe(true);
+		expect(bindings.every((row) => row.binding === bindings[0]?.binding)).toBe(true);
 		expect(calls.map((call) => [call.server, call.tool, call.args])).toEqual([
 			[OJ, "getAccessibleAtlassianResources", {}],
 			[OJ, "getJiraIssue", { cloudId: "cloud-example", issueIdOrKey: "PROJ-1" }],
@@ -538,9 +546,22 @@ describe("read fallback gate", () => {
 		expect(envelope.result.repairAction).toContain("parity-unproven");
 		expect(refused.calls).toEqual([]);
 		const allowed = fakeTransport();
+		seen.length = 0;
 		const ok = await dispatch(["--provider", "community", "page.get", "--input", '{"pageId":"123"}'], deps({ transport: allowed.transport, parity: async () => attested("page.get", ["pageId"]) }));
 		expect(ok.result.outcome).toBe("success");
+		expect(seen).toEqual([{ tenant: "example", product: "confluence" }]);
 		expect(allowed.calls).toEqual([{ server: CC, tool: "confluence_get_page", args: { page_id: "123" } }]);
+		expect(allowed.bindings.every((row) => row.server === CC && row.binding.product === "confluence")).toBe(true);
+	});
+
+	test("a binding for another product refuses before a Community process starts", async () => {
+			const { transport, calls } = fakeTransport();
+			const result = await dispatch(["--provider", "community", "issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({
+				transport,
+				bindCredential: async () => ({ ok: true, binding: { product: "confluence", principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN } }),
+				parity: async () => attested("issue.get", ["issueKey"]),
+			}));
+			expect([result.result.causeCode, calls]).toEqual(["refused-precondition", []]);
 	});
 });
 
@@ -625,6 +646,13 @@ describe("journaled writes", () => {
 		const { transport, calls } = fakeTransport({ [`${OJ}.addOrEditJiraIssueComment`]: commentReply });
 		const dependencies = deps({ transport, parity: async () => attested("issue.get", ["issueKey"]) });
 		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--preview"], dependencies));
+		let applyBindings = 0;
+		const mismatchDependencies = deps({
+			transport,
+			bindCredential: async () => { applyBindings += 1; throw new Error("custody reached"); },
+		});
+		const mismatched = await dispatch(["--provider", "community", "issue.comment", "--input", JSON.stringify(COMMENT), "--apply", preview.previewId], mismatchDependencies);
+		expect([mismatched.result.causeCode, applyBindings]).toEqual(["refused-preview", 0]);
 		const changed = await dispatch(["issue.comment", "--input", JSON.stringify({ ...COMMENT, body: "edited" }), "--apply", preview.previewId], dependencies);
 		expect([changed.result.causeCode, changed.result.repairAction?.endsWith("preview-input-mismatch")]).toEqual(["refused-preview", true]);
 		const unknown = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", "nope"], dependencies);
@@ -737,41 +765,11 @@ describe("journaled writes", () => {
 		const freshRun = (freshApply.result.data as { runId: string }).runId;
 		const freshResolved = await dispatch(["adjudicate", "--run", freshRun, "--input", JSON.stringify(freshInput)], freshDeps);
 		expect([freshApply.result.transactionState, freshResolved.result.transactionState, freshResolved.result.effects.completed]).toEqual(["unknown", "completed", ["confluence-comment:43"]]);
+		expect(fresh.calls.filter((call) => call.tool === "confluence_add_comment")).toHaveLength(1);
+		expect(fresh.calls.every((call) => call.server === CC)).toBe(true);
+		expect(fresh.bindings.every((row) => row.server === CC && row.binding.product === "confluence")).toBe(true);
 	});
 
-	test("public Confluence create adjudication rejects a historical title and accepts only a new content id", async () => {
-		const input = { space: { id: "9001", key: "ENG" }, title: "Baseline-safe page", body: "body" };
-		const space = { ok: true as const, data: { results: [{ id: "555", space: { id: "9001", key: "ENG" } }] } };
-		const instructions = { ok: true as const, data: { metadata: { hasSpaceInstructions: false } } };
-		const response = (newAfter: number | null) => {
-			let reads = 0;
-			return (args: Record<string, unknown>) => {
-				if (String(args.cql).includes('space = "ENG"')) return space;
-				const id = newAfter !== null && reads++ >= newAfter ? "557" : "556";
-			return { ok: true as const, data: { results: [{ id, title: input.title, space: { id: "9001", key: "ENG" } }] } };
-			};
-		};
-		const historical = fakeTransport({ [`${OC}.searchConfluence`]: response(null), [`${OC}.getConfluenceSpace`]: instructions, [`${OC}.createConfluenceContent`]: failure("failed-transport") });
-		const historicalDeps = deps({ transport: historical.transport });
-		const oldPreview = previewData(await dispatch(["page.create", "--input", JSON.stringify(input), "--preview"], historicalDeps));
-		const oldApply = await dispatch(["page.create", "--input", JSON.stringify(input), "--apply", oldPreview.previewId], historicalDeps);
-		const oldRun = (oldApply.result.data as { runId: string }).runId;
-		expect((await dispatch(["adjudicate", "--run", oldRun, "--input", JSON.stringify(input)], historicalDeps)).result.causeCode).toBe("refused-evidence");
-
-		const freshInput = { space: { key: "ENG" }, title: "Baseline-safe page two", body: "body" };
-		const fresh = fakeTransport({ [`${OC}.searchConfluence`]: (args) => {
-			if (String(args.cql).includes('space = "ENG"')) return space;
-			return { ok: true, data: { results: [] } };
-		}, [`${OC}.getConfluenceSpace`]: instructions, [`${OC}.createConfluenceContent`]: failure("failed-transport") });
-		const freshDeps = deps({ transport: fresh.transport });
-		const freshPreview = previewData(await dispatch(["page.create", "--input", JSON.stringify(freshInput), "--preview"], freshDeps));
-		const freshApply = await dispatch(["page.create", "--input", JSON.stringify(freshInput), "--apply", freshPreview.previewId], freshDeps);
-		const freshRun = (freshApply.result.data as { runId: string }).runId;
-		// A new, stable content id appears only during operator read-back.
-		const resolvedTransport = fakeTransport({ [`${OC}.searchConfluence`]: (args) => String(args.cql).includes('space = "ENG"') ? space : { ok: true, data: { results: [{ id: "557", title: freshInput.title, space: { id: "9001", key: "ENG" } }] } }, [`${OC}.getConfluenceSpace`]: instructions });
-		const freshResolved = await dispatch(["adjudicate", "--run", freshRun, "--input", JSON.stringify(freshInput)], deps({ transport: resolvedTransport.transport }));
-		expect([freshApply.result.transactionState, freshResolved.result.transactionState, freshResolved.result.effects.completed]).toEqual(["unknown", "completed", ["confluence-content:557"]]);
-	});
 
 	test("a refusal before the send mark settles unchanged and keeps the object free", async () => {
 		const { transport, calls } = fakeTransport({}, { [OJ]: [GUARD, tool("addOrEditJiraIssueComment", ["cloudId", "issueIdOrKey", "commentBody", "visibility"])] });
@@ -855,21 +853,14 @@ describe("journaled writes", () => {
 		expect(calls.filter((call) => call.tool === "updateConfluenceContent")).toHaveLength(1);
 	});
 
-	test("Official page.create resolves a space key to its numeric id through a page search before previewing; an unresolvable key refuses", async () => {
-		const search = { ok: true as const, data: { results: [{ id: "555", title: "Home", space: { id: "9001", key: "ENG" } }] } };
-		const { transport, calls } = fakeTransport({ [`${OC}.searchConfluence`]: search, [`${OC}.getConfluenceSpace`]: { ok: true, data: { metadata: { hasSpaceInstructions: false } } }, [`${OC}.createConfluenceContent`]: { ok: true, data: { id: "556", title: "Roadmap draft" } } });
-		const dependencies = deps({ transport });
-		const input = { space: { key: "ENG" }, title: "Roadmap draft", body: "x" };
-		const preview = previewData(await dispatch(["page.create", "--input", JSON.stringify(input), "--preview"], dependencies));
-		expect(preview.objectIdentity).toMatch(/^space:9001:create:root:[0-9a-f]{16}$/);
-		expect(preview.arguments).toEqual({ cloudId: "cloud-example", parent: { spaceId: "9001" }, contentType: "page", title: "Roadmap draft", body: { format: "markdown", value: "x" } });
-		expect(calls.find((call) => call.tool === "searchConfluence")?.args).toEqual({ cloudId: "cloud-example", cql: 'type = page AND space = "ENG"', maxResults: 5 });
-		const applied = await dispatch(["page.create", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.effects.completed]).toEqual(["success", ["confluence-content:556"]]);
-		const empty = fakeTransport({ [`${OC}.searchConfluence`]: { ok: true, data: { results: [] } } });
-		const unresolved = await dispatch(["page.create", "--input", JSON.stringify(input), "--preview"], deps({ transport: empty.transport }));
-		expect([unresolved.result.outcome, unresolved.result.causeCode]).toEqual(["refused", "space-unresolved"]);
-		expect(readJsonDir(previewsDir())).toHaveLength(1);
+	test("page.create refuses with the pinned Community registry before preview, custody, or send", async () => {
+		const { transport, calls, bindings } = fakeTransport();
+		const input = '{"space":{"id":"9001","key":"ENG"},"title":"First page","body":"hello"}';
+		for (const argv of [["page.create", "--input", input, "--preview"], ["--provider", "community", "page.create", "--input", input, "--preview"]]) {
+			const result = await dispatch(argv, deps({ transport, parity: async () => attested("page.get", ["pageId"]) }));
+			expect([result.result.outcome, result.result.causeCode]).toEqual(["refused", "operation-unavailable"]);
+		}
+		expect([calls, bindings, readJsonDir(previewsDir())]).toEqual([[], [], []]);
 	});
 
 	test("Confluence writes require the current authoritative false instruction observation before preview or any write call", async () => {
@@ -879,17 +870,17 @@ describe("journaled writes", () => {
 				[`${OC}.getConfluenceContent`]: { ok: true, data: { id: "123", title: "Roadmap", snapshotToken: "snap-7", metadata: { version: 7, ...metadata }, body: { format: "markdown", value: "old" } } },
 			});
 			const refused = await dispatch(["page.update", "--input", JSON.stringify(input), "--preview"], deps({ transport }));
-			expect([refused.result.causeCode, refused.result.repairAction?.includes("getConfluenceSpace retrieval")]).toEqual(["capability-unavailable", true]);
+			expect([refused.result.causeCode, refused.result.repairAction?.includes("space instructions are absent")]).toEqual(["capability-unavailable", true]);
 			expect(calls.map((call) => call.tool)).not.toContain("updateConfluenceContent");
 			expect(readJsonDir(previewsDir())).toEqual([]);
 		}
 	});
 
 	test("Confluence create and Community comment do not create previews or call write tools without authoritative false instructions", async () => {
-		const create = fakeTransport({ [`${OC}.searchConfluence`]: { ok: true, data: { results: [{ id: "555", space: { id: "9001", key: "ENG" } }] } } });
-		const createEnvelope = await dispatch(["page.create", "--input", '{"space":{"key":"ENG"},"title":"Roadmap","body":"x"}', "--preview"], deps({ transport: create.transport }));
-		expect(createEnvelope.result.causeCode).toBe("capability-unavailable");
-		expect(create.calls.map((call) => call.tool)).not.toContain("createConfluenceContent");
+		const create = fakeTransport();
+		const createEnvelope = await dispatch(["page.create", "--input", '{"space":{"key":"ENG"},"title":"Roadmap","body":"x"}', "--preview"], deps({ transport: create.transport, parity: async () => attested("page.get", ["pageId"]) }));
+		expect(createEnvelope.result.causeCode).toBe("operation-unavailable");
+		expect(create.calls.map((call) => call.tool)).not.toContain("confluence_create_page");
 		expect(readJsonDir(previewsDir())).toEqual([]);
 
 		const comment = fakeTransport();
@@ -914,24 +905,38 @@ describe("journaled writes", () => {
 	test("Official page.comment is unavailable by contract; Community carries it only behind the product's base-read attestation", async () => {
 		const { transport, calls } = fakeTransport({ [`${CC}.confluence_get_page`]: { ok: true, data: { id: "123", metadata: { version: 7, hasSpaceInstructions: false } } }, [`${CC}.confluence_add_comment`]: { ok: true, data: { success: true, comment: { id: "42", body: "hello" } } } });
 		const input = { pageId: "123", body: "hello" };
-		const official = await dispatch(["page.comment", "--input", JSON.stringify(input), "--preview"], deps({ transport }));
+		const official = await dispatch(["--provider", "official", "page.comment", "--input", JSON.stringify(input), "--preview"], deps({ transport }));
 		expect([official.result.outcome, official.result.causeCode, official.result.exitCode]).toEqual(["refused", "operation-unavailable", 3]);
-		expect(official.result.repairAction).toContain("executeWrite");
+		expect(official.result.repairAction).toContain("cannot be safely prepared on Official");
 		const ungated = await dispatch(["--provider", "community", "page.comment", "--input", JSON.stringify(input), "--preview"], deps({ transport }));
 		expect([ungated.result.causeCode, ungated.result.repairAction?.includes("parity-unproven")]).toEqual(["refused-parity", true]);
 		expect(calls).toEqual([]);
 		const gated = deps({ transport, parity: async (request) => (request.operation === "page.get" && request.inputShape.join() === "pageId" ? attested("page.get", ["pageId"]) : UNPROVEN) });
-		const preview = previewData(await dispatch(["--provider", "community", "page.comment", "--input", JSON.stringify(input), "--preview"], gated));
+		const preview = previewData(await dispatch(["page.comment", "--input", JSON.stringify(input), "--preview"], gated));
 		expect([preview.server, preview.tool, preview.arguments]).toEqual([CC, "confluence_add_comment", { page_id: "123", body: "hello" }]);
-		const applied = await dispatch(["--provider", "community", "page.comment", "--input", JSON.stringify(input), "--apply", preview.previewId], gated);
+		expect(calls.every((call) => call.server === CC)).toBe(true);
+		const applied = await dispatch(["page.comment", "--input", JSON.stringify(input), "--apply", preview.previewId], gated);
 		expect([applied.result.outcome, applied.result.effects.completed]).toEqual(["success", ["confluence-comment:42"]]);
+		expect(calls.filter((call) => call.tool === "confluence_add_comment")).toHaveLength(1);
+		expect(calls.every((call) => call.server === CC)).toBe(true);
+	});
+
+	test("all page.create selections refuse before startup with no preview", async () => {
+		const input = { space: { id: "9001", key: "ENG" }, title: "New page", body: "body" };
+		const { transport, calls, bindings } = fakeTransport();
+		const gated = deps({ transport, parity: async (request) => request.operation === "page.get" ? attested("page.get", ["pageId"]) : UNPROVEN });
+		for (const provider of ["official", "community"] as const) {
+			const result = await dispatch(["--provider", provider, "page.create", "--input", JSON.stringify(input), "--preview"], gated);
+			expect(result.result.causeCode).toBe("operation-unavailable");
+		}
+		expect([calls, bindings, readJsonDir(previewsDir())]).toEqual([[], [], []]);
 	});
 
 	test("unlock clears a dead holder's lock through the receipt or its preview and refuses an unknown reference", async () => {
 		const dependencies = deps();
 		const journal = dependencies.journal("example");
 		const preview = journal.recordPreview({ operation: "issue.comment", provider: "official", canonicalInput: COMMENT, providerArgs: COMMENT, revision: null });
-		const receipt = await journal.apply({ previewId: preview.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: null }, async () => ({ proof: "unknown" }));
+		const receipt = await journal.apply({ provider: "official", previewId: preview.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: null }, async () => ({ proof: "unknown" }));
 		writeFileSync(path.join(stateRoot, "connectors", "atlassian", "example", "locks", "issue_PROJ-1.lock"), JSON.stringify({ pid: 2_147_483_000, lockId: "dead", at: NOW }), { mode: 0o600 });
 		const unlocked = await dispatch(["unlock", "--run", receipt.runId], dependencies);
 		expect([unlocked.result.outcome, unlocked.result.effectClass, unlocked.result.data]).toEqual(["success", "repository-local", { runId: receipt.runId, objectIdentity: "issue:PROJ-1", unlocked: true }]);
@@ -968,7 +973,7 @@ describe("parity attestation", () => {
 				operation: "issue.get",
 				inputShape: ["issueKey"],
 				origin: ORIGIN,
-				credentialDigest: testDigest({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN }),
+				credentialDigest: testCredentialDigest("jira"),
 				objectSemantics: "issue:key+id",
 				recordedAt: NOW,
 				expiresAt: NOW + 7 * 24 * 60 * 60 * 1000,
@@ -994,7 +999,7 @@ describe("parity attestation", () => {
 		const envelope = await dispatch(["--provider", "community", "issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({
 			transport,
 			parity: async () => stale,
-			bindCredential: async () => ({ ok: true, binding: { principal: "other@example.invalid", itemVersion: "onepassword-item-version:2", origin: ORIGIN } }),
+			bindCredential: async (_tenant, product) => ({ ok: true, binding: { product, principal: "other@example.invalid", itemVersion: "onepassword-item-version:2", origin: ORIGIN } }),
 		}));
 		expect([envelope.result.causeCode, envelope.result.repairAction?.includes("parity-mismatch")]).toEqual(["refused-parity", true]);
 		expect(calls).toEqual([]);
@@ -1018,7 +1023,7 @@ describe("parity attestation", () => {
 		const store = parityStore(env);
 		const attestation = (attested("issue.get", ["issueKey"]) as { attestation: ParityAttestation }).attestation;
 		await store.attestParity(attestation);
-		const request = { tenant: "example", product: "jira" as const, operation: "issue.get" as const, inputShape: ["issueKey"], origin: ORIGIN, credentialDigest: testDigest({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN }), now: NOW };
+		const request = { tenant: "example", product: "jira" as const, operation: "issue.get" as const, inputShape: ["issueKey"], origin: ORIGIN, credentialDigest: testCredentialDigest("jira"), now: NOW };
 		expect(await store.parity(request)).toEqual({ status: "attested", attestation });
 		const directory = path.join(stateRoot, "connectors", "atlassian", "example", "parity");
 		const [file] = readdirSync(directory);
@@ -1029,6 +1034,18 @@ describe("parity attestation", () => {
 		chmodSync(path.join(directory, file ?? ""), 0o600);
 		expect(await store.parity({ ...request, inputShape: ["issueKey", "fields"] })).toEqual({ status: "unproven" });
 		for (const file of readdirSync(directory)) writeFileSync(path.join(directory, file), '{"tenant":"example"}');
+		expect(await store.parity(request)).toEqual({ status: "unproven" });
+	});
+
+	test("a two-item credentialSetDigest record is unproven", async () => {
+		const store = parityStore({ XDG_STATE_HOME: stateRoot });
+		const current = (attested("issue.get", ["issueKey"]) as { attestation: ParityAttestation }).attestation;
+		await store.attestParity(current);
+		const directory = path.join(stateRoot, "connectors", "atlassian", "example", "parity");
+		const [name] = readdirSync(directory);
+		const { credentialDigest: _discarded, ...legacy } = current;
+		writeFileSync(path.join(directory, name ?? ""), JSON.stringify({ ...legacy, credentialSetDigest: testDigest(["obsolete", "pair"]) }));
+		const request = { tenant: "example", product: "jira" as const, operation: "issue.get" as const, inputShape: ["issueKey"], origin: ORIGIN, credentialDigest: testCredentialDigest("jira"), now: NOW };
 		expect(await store.parity(request)).toEqual({ status: "unproven" });
 	});
 });
@@ -1047,12 +1064,53 @@ describe("production adapters", () => {
 		return result.binding;
 	};
 
+	test("public page.create refuses before custody, preview, or send with the pinned registry", async () => {
+		const input = '{"space":{"id":"9001","key":"ENG"},"title":"First page","body":"hello"}';
+		for (const selection of [[], ["--provider", "community"]]) {
+			const result = await harness.run(["--tenant", "example", ...selection, "page.create", "--input", input, "--preview", "--json"], {}, DISPATCH);
+			const envelope = JSON.parse(result.stdout) as { result: { causeCode: string } };
+			expect([result.code, result.stderr, envelope.result.causeCode]).toEqual([3, "", "operation-unavailable"]);
+		}
+		expect(harness.has("wrapper.log")).toBe(false);
+		expect(harness.has("mcporter.json")).toBe(false);
+		expect(readJsonDir(path.join(harness.root, "connectors", "atlassian", "example", "previews"))).toEqual([]);
+	});
+
+	test("the public dispatcher never substitutes a Confluence item for a missing Jira item", async () => {
+		harness.write("items.json", JSON.stringify({ CONFLUENCE_EXAMPLE_API_TOKEN: fields({ username: PRINCIPAL, credential: "confluence-only-secret", site_url: ORIGIN }, 1) }));
+		const result = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
+		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string } };
+		expect([result.code, envelope.result.causeCode, result.stderr]).toEqual([3, "refused-precondition", ""]);
+		expect(readFileSync(path.join(harness.root, "wrapper.log"), "utf8").trim()).toBe("op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json");
+		expect(harness.has("mcporter.json")).toBe(false);
+		for (const stream of [result.stdout, result.stderr]) expect(stream).not.toContain("confluence-only-secret");
+	});
+
+	test("public apply refuses a different resolved provider before credential or provider startup", async () => {
+		const input = { issueKey: "PROJ-1", body: "hello" };
+		const preview = openJournal("example", { stateRoot: harness.root }).recordPreview({
+			operation: "issue.comment",
+			provider: "official",
+			canonicalInput: input,
+			providerArgs: input,
+			revision: null,
+		});
+		const result = await harness.run(["--tenant", "example", "--provider", "community", "issue.comment", "--input", JSON.stringify(input), "--apply", preview.previewId], {}, DISPATCH);
+		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string } };
+		expect([result.code, result.stderr, envelope.result.causeCode]).toEqual([3, "", "refused-preview"]);
+		expect(harness.has("wrapper.log")).toBe(false);
+		expect(harness.has("mcporter.json")).toBe(false);
+	});
+
 	test("the public dispatcher reports a missing Official bridge as a local precondition before MCPorter starts", async () => {
 		harness.dispose();
 		harness = createHarness({});
+		const owned = path.join(harness.root, "connectors", "bridge", "0.5.0", "hyper-mcp-remote");
+		mkdirSync(path.dirname(owned), { recursive: true, mode: 0o700 });
+		writeFileSync(owned, "tampered bridge bytes", { mode: 0o700 });
 		const secret = "fixture-custody-secret";
 		harness.write("item.json", fields({ username: PRINCIPAL, credential: secret, site_url: ORIGIN }, 1));
-		const result = await harness.run(["--tenant", "example", "issue.search", "--input", '{"jql":"x"}', "--json"], { PATH: harness.binDir }, DISPATCH);
+		const result = await harness.run(["--tenant", "example", "issue.search", "--input", '{"jql":"x"}', "--json"], { PATH: harness.binDir, CONNECTORS_BRIDGE_OFFLINE: "1" }, DISPATCH);
 		expect([result.code, result.stderr]).toEqual([3, ""]);
 		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; repairAction: string; transactionState: string } };
 		expect([envelope.result.causeCode, envelope.result.repairAction, envelope.result.transactionState]).toEqual([
@@ -1146,7 +1204,7 @@ describe("production adapters", () => {
 	});
 
 	test("route registry and selector planning refuse before a Provider preflight process starts", async () => {
-		const binding = { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN };
+		const binding: CredentialBinding = { product: "jira", principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN };
 		const validRegistry = { imports: [], mcpServers: { [OJ]: { allowedTools: ["searchJiraIssuesUsingJql"] } } };
 		const validRoute = { defaultProvider: OJ, dispatcherOwned: true, selectors: { tenant: "ATLASSIAN_TENANT" } };
 		for (const [label, registry, route] of [
@@ -1170,6 +1228,15 @@ describe("production adapters", () => {
 		expect(harness.has("bridge.json")).toBe(false);
 	});
 
+	test("runtime rejects a binding for another server before Provider or MCPorter effects", async () => {
+		const wrong: CredentialBinding = { product: "confluence", principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN };
+		const result = await routeTransport(env(), "example").listTools(wrong, OJ);
+		expect(result).toEqual({ ok: false, cause: "refused-precondition", hint: "the credential binding does not match the Provider Route", contentObserved: false });
+		expect(harness.has("wrapper.log")).toBe(false);
+		expect(harness.has("bridge.json")).toBe(false);
+		expect(harness.has("mcporter.json")).toBe(false);
+	});
+
 	test("the public dispatcher never emits the item secret and refuses Community before MCPorter starts", async () => {
 		const secret = "fixture-custody-secret";
 		harness.write("item.json", fields({ username: PRINCIPAL, site_url: ORIGIN, credential: secret }, 42));
@@ -1186,15 +1253,14 @@ describe("production adapters", () => {
 		expect([configured.code, envelope.result.causeCode]).toEqual([3, "refused-parity"]);
 	});
 
-	test("a top-level item version change invalidates durable parity evidence", async () => {
-		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 42));
+	test("rotation of the shared product item invalidates durable parity evidence", async () => {
+		harness.write("items.json", JSON.stringify({ JIRA_EXAMPLE_API_TOKEN: fields({ username: PRINCIPAL, credential: "shared-secret", site_url: ORIGIN }, 42) }));
 		const first = bound("jira");
 		const store = parityStore(env());
 		const attestation = (attested("issue.get", ["issueKey"], { credentialDigest: testDigest(first) }) as { attestation: ParityAttestation }).attestation;
 		await store.attestParity(attestation);
-		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 43));
-		const rotated = bound("jira");
-		const request = { tenant: "example", product: "jira" as const, operation: "issue.get" as const, inputShape: ["issueKey"], origin: ORIGIN, credentialDigest: testDigest(rotated), now: NOW };
+		harness.write("items.json", JSON.stringify({ JIRA_EXAMPLE_API_TOKEN: fields({ username: PRINCIPAL, credential: "rotated-secret", site_url: ORIGIN }, 43) }));
+		const request = { tenant: "example", product: "jira" as const, operation: "issue.get" as const, inputShape: ["issueKey"], origin: ORIGIN, credentialDigest: testDigest(bound("jira")), now: NOW };
 		expect(attestationMatches(await store.parity(request), request)).toEqual({ ok: false, reason: "fallback-ineligible:parity-mismatch" });
 	});
 
@@ -1266,6 +1332,45 @@ describe("production adapters", () => {
 		expect(envelope.result.data).toEqual({ key: "PROJ-1", summary: "canned" });
 		expect(envelope.result.provenance.map((entry) => [entry.provider, entry.tool])).toEqual([[OJ, "getAccessibleAtlassianResources"], [OJ, "getJiraIssue"]]);
 		expect(custody.argv.slice(2)).toEqual(["call", `${OJ}.getJiraIssue`, "--args", '{"cloudId":"cloud-example","issueIdOrKey":"PROJ-1"}', "--output", "json", "--timeout", "30000", "--no-oauth"]);
+	});
+
+	test("the public default page.comment route starts only Community and sends once", async () => {
+		harness.dispose();
+		harness = createHarness({ uvx: path.join(SKILL, "tests", "fixtures", "uvx-fake.ts") });
+		for (const [operation, input] of [
+			["page.comment", '{"pageId":"123","body":"hello"}'],
+			["page.create", '{"space":{"key":"ENG"},"title":"New page","body":"hello"}'],
+		] as const) {
+			const explicit = await harness.run(["--tenant", "example", "--provider", "official", operation, "--input", input, "--preview"], { CONNECTORS_BRIDGE_OFFLINE: "1" }, DISPATCH);
+			expect([explicit.code, (JSON.parse(explicit.stdout) as { result: { causeCode: string } }).result.causeCode]).toEqual([3, "operation-unavailable"]);
+		}
+		expect(harness.has("wrapper.log")).toBe(false);
+		expect(harness.has("mcporter.json")).toBe(false);
+		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 1));
+		const current = Date.now();
+		const attestation = (attested("page.get", ["pageId"], {
+			credentialDigest: testDigest(bound("confluence")),
+			recordedAt: current - 1_000,
+			expiresAt: current + 60_000,
+		}) as { attestation: ParityAttestation }).attestation;
+		await parityStore(env()).attestParity(attestation);
+		const canned = path.join(harness.root, "canned", CC);
+		mkdirSync(canned, { recursive: true });
+		writeFileSync(path.join(canned, "list.json"), JSON.stringify({ tools: SCHEMAS[CC] }));
+		writeFileSync(path.join(canned, "confluence_get_page.json"), JSON.stringify({ id: "123", metadata: { version: 7, hasSpaceInstructions: false } }));
+		writeFileSync(path.join(canned, "confluence_get_comments.json"), JSON.stringify({ comments: [] }));
+		writeFileSync(path.join(canned, "confluence_add_comment.json"), JSON.stringify({ success: true, comment: { id: "42", body: "hello" } }));
+		const input = '{"pageId":"123","body":"hello"}';
+		const preview = await harness.run(["--tenant", "example", "page.comment", "--input", input, "--preview"], { CONNECTORS_BRIDGE_OFFLINE: "1" }, DISPATCH);
+		expect([preview.code, preview.stderr]).toEqual([0, ""]);
+		const previewData = (JSON.parse(preview.stdout) as { result: { data: { previewId: string; provider: string; server: string } } }).result.data;
+		expect([previewData.provider, previewData.server]).toEqual(["community", CC]);
+		const applied = await harness.run(["--tenant", "example", "page.comment", "--input", input, "--apply", previewData.previewId], { CONNECTORS_BRIDGE_OFFLINE: "1" }, DISPATCH);
+		const outcome = JSON.parse(applied.stdout) as { result: { outcome: string; effects: { completed: string[] }; provenance: { provider: string; tool: string }[] } };
+		expect([applied.code, applied.stderr, outcome.result.outcome, outcome.result.effects.completed]).toEqual([0, "", "success", ["confluence-comment:42"]]);
+		expect(outcome.result.provenance.filter((entry) => entry.tool === "confluence_add_comment")).toHaveLength(1);
+		expect(outcome.result.provenance.every((entry) => entry.provider === CC)).toBe(true);
+		for (const stream of [preview.stdout, applied.stdout, preview.stderr, applied.stderr]) expect(stream).not.toContain("fixture-custody-secret");
 	});
 
 	test("a public-process write previews and applies through the real route and the private journal under XDG_STATE_HOME", async () => {

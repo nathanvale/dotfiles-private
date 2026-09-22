@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Atlassian dispatcher: one semantic Jira or Confluence operation for one
-// tenant, Official by default, Community only with live-parity attestation,
+// tenant, Official for supported operations, Community with current parity,
 // every write behind a durable preview and apply journal, and the operator
 // path that inspects and adjudicates what the journal holds. Raw
 // provider-route is the transport primitive underneath; this module owns the
@@ -209,7 +209,9 @@ async function writeFlow(session: Session, invocation: Invocation, spec: Operati
 	const validated = writeInput(spec.id as Parameters<typeof writeInput>[0], invocation.input);
 	if (!validated.ok) return refused("input-invalid", validated.reason);
 	const input: WriteInput = validated.input;
-	const provider = invocation.provider ?? "official";
+	// Unsupported Official writes select Community before custody or transport.
+	// This is one initial route, never a retry after a write attempt.
+	const provider = invocation.provider ?? (spec.official.reachable ? "official" : "community");
 	return mode.kind === "preview" ? previewFlow(session, spec, input, provider) : applyFlow(session, spec, input, provider, mode.previewId);
 }
 

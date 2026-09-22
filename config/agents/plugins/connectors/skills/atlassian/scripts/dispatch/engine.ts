@@ -58,7 +58,7 @@ export interface ParityRequest {
 // nonsecret item revision or fingerprint supplied by that owner, never from a
 // credential value. An unavailable revision makes parity unproven.
 export function credentialDigest(binding: CredentialBinding): string {
-	return canonicalDigest({ principal: binding.principal.toLowerCase(), itemVersion: binding.itemVersion, origin: binding.origin });
+	return canonicalDigest({ product: binding.product, principal: binding.principal.toLowerCase(), itemVersion: binding.itemVersion, origin: binding.origin.toLowerCase() });
 }
 
 // What the parity command compares per read operation; an attestation whose
@@ -240,7 +240,7 @@ export function readSchema(result: TransportResult): SchemaTool[] | null {
 // envelope.
 export const REPAIR_TEXT: Record<Exclude<CauseCode, "success">, string> = {
 	"usage-invalid": "correct the invocation",
-	"operation-unavailable": "the default Official endpoint reaches this operation only through its broad executeWrite dispatcher, which this route never exposes; select --provider community, or qualify the flat Official endpoint first",
+	"operation-unavailable": "this operation cannot be safely prepared on Official; use the default route or select --provider community with current parity evidence",
 	"input-invalid": "correct the input object",
 	"site-unresolved": "the tenant's credential item must expose a valid site_url field",
 	"space-unresolved": "no readable page named the space's numeric id; supply space as {id, key} from the space settings page",
@@ -271,12 +271,18 @@ const sameShape = (a: string[], b: string[]) => a.length === b.length && a.every
 // trusted origin, principal, and object semantics that has not expired. Auth,
 // permission, tenant, precondition, and uncertain outcomes never fall over.
 export function fallbackDecision(spec: OperationSpec, cause: CauseCode, contentObserved: boolean, parity: ParityEvidence, request: ParityRequest): { eligible: boolean; reason: string } {
-	if (spec.kind !== "read") return { eligible: false, reason: "fallback-ineligible:write" };
-	if (!FALLBACK_CAUSES.has(cause)) return { eligible: false, reason: `fallback-ineligible:${cause}` };
-	if (contentObserved) return { eligible: false, reason: "fallback-ineligible:content-observed" };
+	const precondition = fallbackPrecondition(spec, cause, contentObserved);
+	if (!precondition.eligible) return precondition;
 	const attested = attestationMatches(parity, request);
 	if (!attested.ok) return { eligible: false, reason: attested.reason };
 	return { eligible: true, reason: `fallback-eligible:${attested.source}` };
+}
+
+export function fallbackPrecondition(spec: OperationSpec, cause: CauseCode, contentObserved: boolean): { eligible: boolean; reason: string } {
+	if (spec.kind !== "read") return { eligible: false, reason: "fallback-ineligible:write" };
+	if (!FALLBACK_CAUSES.has(cause)) return { eligible: false, reason: `fallback-ineligible:${cause}` };
+	if (contentObserved) return { eligible: false, reason: "fallback-ineligible:content-observed" };
+	return { eligible: true, reason: "fallback-eligible:cause" };
 }
 
 // The same exact-match policy gates an explicit Community selection: naming
@@ -284,6 +290,7 @@ export function fallbackDecision(spec: OperationSpec, cause: CauseCode, contentO
 export function attestationMatches(parity: ParityEvidence, request: ParityRequest): { ok: true; source: string } | { ok: false; reason: string } {
 	if (parity.status !== "attested") return { ok: false, reason: "fallback-ineligible:parity-unproven" };
 	const a = parity.attestation;
+	if (typeof a.credentialDigest !== "string") return { ok: false, reason: "fallback-ineligible:parity-unproven" };
 	const exact =
 		a.tenant === request.tenant &&
 		a.product === request.product &&

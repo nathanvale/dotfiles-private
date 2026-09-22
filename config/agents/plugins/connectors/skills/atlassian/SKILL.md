@@ -1,6 +1,6 @@
 ---
 name: atlassian
-description: Read, search, create, update, or comment on Jira issues and Confluence pages for one named tenant through the skill's Bun dispatcher. Use for Jira tickets, Confluence pages, Atlassian links, JQL, or CQL. Atlassian Official is the default; Atlassian Community only behind live parity evidence. Deletion and administration are outside this skill.
+description: Read and search Jira issues and Confluence pages; create, update, or comment on Jira issues; and update or comment on Confluence pages for one named tenant through the skill's Bun dispatcher. Use for Jira tickets, Confluence pages, Atlassian links, JQL, or CQL. Atlassian Official is the default; Atlassian Community only behind live parity evidence. Page creation, deletion, and administration are outside the available route.
 ---
 
 # Atlassian
@@ -27,11 +27,13 @@ Require an explicit lowercase tenant slug for every run. If the request does
 not identify the site unambiguously, ask the operator which tenant to use. Never
 infer one tenant from issue keys, page titles, or the last call.
 
-The tenant's product credential items (`JIRA_<TENANT>_API_TOKEN`,
-`CONFLUENCE_<TENANT>_API_TOKEN` in the `API Credentials` vault) must carry a
-`username` field and a custom `site_url` field naming the site, for example
-`https://example.atlassian.net`. The dispatcher reads only those two fields as
-metadata; the built-in `url` field is token management and is never used. A
+Both Providers select the same product item in the `API Credentials` vault:
+Jira uses `JIRA_<TENANT>_API_TOKEN`; Confluence uses
+`CONFLUENCE_<TENANT>_API_TOKEN`. Each item needs a `username` and custom
+`site_url` naming the site, for example `https://example.atlassian.net`.
+Custody returns only product-tagged, nonsecret metadata to the dispatcher. Official
+uses the scoped personal token as Basic `username:token` below MCPorter. The
+built-in `url` field is token management and is never used. A
 missing or malformed `site_url` stops every operation with `site-unresolved`
 before any provider call. Official requests proceed only when the provider's
 accessible resources include that exact origin (`refused-tenant` otherwise).
@@ -54,8 +56,9 @@ bun "$DISPATCH" --tenant <tenant> page.search  --input '{"cql":"type = page AND 
 ## Writes
 
 Every write is two calls with identical input. The preview binds the exact
-provider arguments, stable candidate or comment identifiers, and the target's
-current revision; the apply refuses when any of that evidence moved.
+provider selection and arguments, stable candidate or comment identifiers,
+and the target's current revision; the apply refuses when that evidence or
+the selected provider moved, before credential custody or a provider starts.
 Preview, adjudication, unlock, and parity persistence use the canonical
 `repository-local` effect class; apply uses `external`.
 
@@ -69,7 +72,7 @@ bun "$DISPATCH" --tenant <tenant> issue.comment --input '{"issueKey":"PROJ-1","b
 | `issue.create` | `projectKey`, `issueType`, `summary`, `description?`, `assignee?` | none |
 | `issue.update` | `issueKey`, `fields` (flat object) | provider stable revision, never `updated` alone |
 | `issue.comment` | `issueKey`, `body` | none |
-| `page.create` | `space` (`{id}`, `{key}`, or both), `title`, `body`, `parentId?` | none |
+| `page.create` | `space` (`{key}` or `{id, key}`), `title`, `body`, `parentId?` | unavailable on both routes |
 | `page.update` | `pageId`, `body`, `title?`, `versionMessage?` | page version |
 | `page.comment` | `pageId`, `body` | page version |
 
@@ -80,15 +83,17 @@ Rules the dispatcher enforces; state them when they refuse:
   preview envelope and wait for confirmation before `--apply`.
 - A preview expires after 15 minutes and is consumed by one apply
   (`refused-preview`).
-- `page.create` needs the space's numeric id. A key alone is resolved from any
-  readable page in that space; if none is found, `space-unresolved` asks for
-  `space: {"id": "...", "key": "..."}` from the space settings page.
+- `page.create` refuses with `operation-unavailable` before custody, preview,
+  or send on either route. Official lacks the qualified space read; pinned
+  Community v0.23.1 does not register `confluence_get_space`. No empty-space
+  creation path is qualified.
 - `page.update` reads the page with full detail first and sends the Official
   snapshot token of the version it read. Community keeps the current title when
   `title` is omitted.
-- `page.comment` is unavailable on Official (`operation-unavailable`): the
-  default Official endpoint reaches it only through a broad dispatcher this
-  route never exposes. It runs on Community only, behind parity.
+- `page.comment` selects Community before startup because the live Official
+  schema has no qualified comment operation. Both Community page writes need
+  current `page.get` parity. Explicit `--provider official` refuses with
+  `operation-unavailable` before any process starts.
 - Never retry a write through the other provider. Never fan one write out to both.
 
 ### Unknown outcomes and adjudication
@@ -114,11 +119,16 @@ until live schema qualification proves it. It never marks success by hand. `unlo
 
 ## Community and parity
 
-Official is the default. Community is selectable with `--provider community`,
+Official is the default for supported operations. Default `page.comment`
+selects Community directly before startup. Community is also
+selectable with `--provider community`,
 and reads may fall over to it automatically, only when an unexpired Parity
 Attestation exists for the same tenant, product, operation, input shape,
-trusted origin, and principal. Record one with a read that both providers can
-answer:
+trusted origin, normalized principal, and current revision of the shared
+product Credential Binding. The dispatcher binds that item once per operation.
+Eligible fallback starts Community only after Official fails; explicit
+Community selection starts only Community. Record an
+attestation with a read that both Providers can answer:
 
 ```sh
 bun "$DISPATCH" --tenant <tenant> parity --operation issue.get --input '{"issueKey":"PROJ-1"}'
@@ -126,7 +136,9 @@ bun "$DISPATCH" --tenant <tenant> parity --operation page.get  --input '{"pageId
 ```
 
 Parity is refused (`refused-parity`) unless Official's user info names the
-item's `username` and both providers return the same object identity.
+item's `username` and both Providers return the same object identity. Rotation
+of the shared item invalidates the attestation; two-item records from the
+discarded experiment are unproven.
 Authentication, permission, tenant, precondition, and partial-answer failures
 never fall over, with or without an attestation. Community writes require the
 product's base-read attestation (`issue.get` or `page.get`).
@@ -140,6 +152,17 @@ Report which state each claim reached:
 - Schema-qualified: the live `tools/list` exposed the documented tool and arguments.
 - Authenticated: a live `atlassianUserInfo` or Community profile succeeded.
 - Live-read-proven, live-write-proven: external outcomes separately observed; a write needs separate authorization.
+
+On 2026-09-23, both existing Monash product items authenticated to Official
+with Basic (initialize HTTP 200), and direct schema discovery returned the same
+21-tool catalog. It included `executeWrite`, `createConfluenceContent`, and
+`updateConfluenceContent`, but not `getConfluenceSpace`. The catalog did not
+qualify a page comment operation name or `contentType`. These are direct
+authentication and schema observations; the public launcher has no live-read
+proof. Its earlier preflight stopped at a missing local pinned bridge. The
+Connectors runtime now provisions the archive- and executable-digest-pinned
+bridge in its own state directory on first use, with a bounded download, or
+through `bun run bridge:install` in the plugin. A PATH executable is not used.
 
 Prerequisites are declared by the provider runtime and its pinned registry.
 

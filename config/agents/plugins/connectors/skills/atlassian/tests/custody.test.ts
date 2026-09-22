@@ -28,9 +28,35 @@ const env = () => ({ HOME: harness.home, PATH: process.env.PATH ?? "", TMPDIR: h
 const wrapperLog = () => (harness.has("wrapper.log") ? readFileSync(path.join(harness.root, "wrapper.log"), "utf8") : "");
 
 describe("bindCredential", () => {
+	test("selects one item per tenant and product, independent of Provider", () => {
+		const entries = {
+			JIRA_EXAMPLE_API_TOKEN: itemJson({ username: PRINCIPAL, credential: "jira", site_url: ORIGIN }, 12),
+			CONFLUENCE_EXAMPLE_API_TOKEN: itemJson({ username: PRINCIPAL, credential: "confluence", site_url: ORIGIN }, 13),
+		};
+		harness.write("items.json", JSON.stringify(entries));
+		for (const [product, title, version] of [
+			["jira", "JIRA_EXAMPLE_API_TOKEN", 12],
+			["confluence", "CONFLUENCE_EXAMPLE_API_TOKEN", 13],
+		] as const) {
+			expect(bindCredential("example", product, env())).toEqual({ ok: true, binding: { product, principal: PRINCIPAL, itemVersion: `onepassword-item-version:${version}`, origin: ORIGIN } });
+			expect(wrapperLog().trim().split("\n").at(-1)).toBe(`op item get ${title} --vault API Credentials --format json`);
+		}
+	});
+
+	test("a missing Jira item cannot substitute the Confluence item", () => {
+		harness.write("items.json", JSON.stringify({ CONFLUENCE_EXAMPLE_API_TOKEN: itemJson({ username: PRINCIPAL, credential: "confluence", site_url: ORIGIN }, 1) }));
+		expect(bindCredential("example", "jira", env())).toEqual({ ok: false, cause: "refused-precondition", detail: UNSTABLE_DETAIL });
+		expect(wrapperLog().trim()).toBe("op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json");
+	});
+
+	test("an invalid product refuses before the credential helper runs", () => {
+		expect(bindCredential("example", "both" as "jira", env())).toEqual({ ok: false, cause: "refused-precondition", detail: "credential custody received an invalid product" });
+		expect(wrapperLog()).toBe("");
+	});
+
 	test("performs one complete read through the custody child and returns only the typed nonsecret binding", () => {
 		harness.write("item.json", itemJson({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: "https://Example.atlassian.net/" }, 42));
-		expect(bindCredential("example", "confluence", env())).toEqual({ ok: true, binding: { principal: PRINCIPAL, itemVersion: "onepassword-item-version:42", origin: ORIGIN } });
+		expect(bindCredential("example", "confluence", env())).toEqual({ ok: true, binding: { product: "confluence", principal: PRINCIPAL, itemVersion: "onepassword-item-version:42", origin: ORIGIN } });
 		expect(wrapperLog().trim()).toBe("op item get CONFLUENCE_EXAMPLE_API_TOKEN --vault API Credentials --format json");
 	});
 
@@ -73,8 +99,8 @@ describe("bindCredential", () => {
 		expect(JSON.stringify(result)).not.toContain(harness.root);
 	});
 
-	test("the binding channel is the exact three-key JSON line the Providers parse", () => {
-		expect(bindingChannel({ principal: PRINCIPAL, itemVersion: "onepassword-item-version:42", origin: ORIGIN })).toBe('{"principal":"service@example.invalid","itemVersion":"onepassword-item-version:42","origin":"https://example.atlassian.net"}');
+	test("the binding channel is the exact product-tagged four-key JSON line the Providers parse", () => {
+		expect(bindingChannel({ product: "jira", principal: PRINCIPAL, itemVersion: "onepassword-item-version:42", origin: ORIGIN })).toBe('{"product":"jira","principal":"service@example.invalid","itemVersion":"onepassword-item-version:42","origin":"https://example.atlassian.net"}');
 	});
 });
 
@@ -83,7 +109,7 @@ describe("custody child process", () => {
 		const secret = "fixture-custody-secret";
 		harness.write("item.json", itemJson({ username: PRINCIPAL, credential: secret, site_url: ORIGIN }, 42));
 		const result = await harness.run(["--tenant", "example", "--product", "jira"], {}, CHILD);
-		expect([result.code, result.stdout, result.stderr]).toEqual([0, '{"principal":"service@example.invalid","itemVersion":"onepassword-item-version:42","origin":"https://example.atlassian.net"}\n', ""]);
+		expect([result.code, result.stdout, result.stderr]).toEqual([0, '{"product":"jira","principal":"service@example.invalid","itemVersion":"onepassword-item-version:42","origin":"https://example.atlassian.net"}\n', ""]);
 		expect(JSON.stringify({ stdout: result.stdout, stderr: result.stderr, log: wrapperLog() })).not.toContain(secret);
 		expect(wrapperLog().trim()).toBe("op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json");
 	});
@@ -96,7 +122,7 @@ describe("custody child process", () => {
 
 	test("refuses malformed arguments before any helper access", async () => {
 		harness.write("item.json", itemJson({ username: PRINCIPAL, site_url: ORIGIN }, 1));
-		for (const argv of [[], ["--tenant", "example"], ["--tenant", "Example", "--product", "jira"], ["--tenant", "example", "--product", "bitbucket"], ["--tenant", "example", "--tenant", "example"], ["--product", "jira", "--tenant", "example", "extra"]]) {
+		for (const argv of [[], ["--tenant", "example"], ["--tenant", "Example", "--product", "jira"], ["--tenant", "example", "--provider", "community", "--product", "jira"], ["--tenant", "example", "--product", "bitbucket"], ["--tenant", "example", "--tenant", "example"], ["--product", "jira", "--tenant", "example", "extra"]]) {
 			const result = await harness.run(argv, {}, CHILD);
 			expect([argv.join(" "), result.code, result.stdout, result.stderr]).toEqual([argv.join(" "), 3, "", "atlassian-credential-binding:error:arguments-invalid\n"]);
 		}

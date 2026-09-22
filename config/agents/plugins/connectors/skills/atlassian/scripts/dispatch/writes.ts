@@ -108,10 +108,9 @@ export type Preparation =
 	| { kind: "none" }
 	| { kind: "issue"; issueKey: string }
 	| { kind: "page"; pageId: string }
-	| { kind: "space"; key?: string; id?: string }
 	| { kind: "refused"; reason: string };
 
-export function preparation(operation: WriteOperation, provider: ProviderName, input: WriteInput): Preparation {
+export function preparation(operation: WriteOperation, _provider: ProviderName, input: WriteInput): Preparation {
 	switch (operation) {
 		case "issue.create":
 		case "issue.comment":
@@ -121,12 +120,8 @@ export function preparation(operation: WriteOperation, provider: ProviderName, i
 		case "page.update":
 		case "page.comment":
 			return { kind: "page", pageId: input.pageId as string };
-		case "page.create": {
-			const space = spaceOf(input);
-			if (space.key !== undefined) return space.id === undefined ? { kind: "space", key: space.key } : { kind: "space", key: space.key, id: space.id };
-			if (space.id !== undefined && provider === "official") return { kind: "space", id: space.id };
-			return { kind: "refused", reason: "the Community route needs space.key; supply space as {id, key}" };
-		}
+		case "page.create":
+			return { kind: "refused", reason: "Neither pinned route has a qualified space preparation tool" };
 	}
 }
 
@@ -186,15 +181,8 @@ function officialArguments(operation: WriteOperation, input: WriteInput, ctx: Pr
 			assign(args, "issueIdOrKey", input.issueKey);
 			assign(args, "commentBody", input.body);
 			break;
-		case "page.create": {
-			const parent: Record<string, unknown> = { spaceId: spaceOf(input).id ?? ctx.spaceId };
-			assign(parent, "parentContentId", input.parentId);
-			args.parent = parent;
-			args.contentType = "page";
-			assign(args, "title", input.title);
-			args.body = { format: "markdown", value: input.body };
-			break;
-		}
+		case "page.create":
+			throw new Error("operation-unavailable: Official page creation lacks qualified preparation");
 		case "page.update": {
 			assign(args, "contentId", input.pageId);
 			assign(args, "title", input.title);
@@ -204,11 +192,7 @@ function officialArguments(operation: WriteOperation, input: WriteInput, ctx: Pr
 			return { args, bound: args };
 		}
 		case "page.comment":
-			// Deferred on the default Official endpoint; the contract marks it
-			// unavailable there, so this arm is never reached in dispatch.
-			assign(args, "pageId", input.pageId);
-			assign(args, "body", input.body);
-			break;
+			throw new Error("operation-unavailable: Official page comments have no qualified tool");
 	}
 	return { args, bound: args };
 }
@@ -448,6 +432,14 @@ export function observeSpaceInstructions(reply: unknown): false | true | undefin
 	if (!isRecord(data) || !isRecord(data.metadata) || !("hasSpaceInstructions" in data.metadata)) return undefined;
 	const value = data.metadata.hasSpaceInstructions;
 	return value === false || value === true ? value : undefined;
+}
+
+export function observeSpaceIdentity(reply: unknown): { id: string; key: string } | undefined {
+	const data = unwrapReply(reply);
+	if (!isRecord(data)) return undefined;
+	const id = stringAt(data, "id", "spaceId");
+	const key = stringAt(data, "key", "spaceKey");
+	return id !== undefined && NUMERIC_ID.test(id) && key !== undefined && SPACE_KEY.test(key) ? { id, key } : undefined;
 }
 
 export interface IssueObservation {

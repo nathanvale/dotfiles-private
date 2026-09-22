@@ -1,13 +1,10 @@
-// Atlassian dispatch contract: the ten semantic operations, their exact
-// provider tools, the allow-lists the registry must mirror, the operator
-// commands, and the closed cause and exit vocabulary. Tool names are
-// documented, not live-verified; the engine binds one only after live schema
-// confirmation.
+// Atlassian dispatch contract: ten semantic operations, selected exact tools,
+// the registry allow-list, operator commands, and closed cause vocabulary.
+// Unqualified Official operations have no callable tool here.
 
 import { PRODUCTS, type Product } from "../custody/index.ts";
 
 export { PRODUCTS, type Product } from "../custody/index.ts";
-
 export const PROVIDERS = ["official", "community"] as const;
 export type ProviderName = (typeof PROVIDERS)[number];
 
@@ -51,9 +48,6 @@ function registrySource(): unknown {
 }
 
 export const ALLOWED_TOOLS = registryToolVocabulary(registrySource());
-// The default Official endpoint cannot expose this exact tool under the sealed
-// allow-list, but the semantic operation still needs its documented identity.
-export const OFFICIAL_PAGE_COMMENT_TOOL = "createConfluenceComment";
 
 // This is the operation descriptor registry: route selection, product, write
 // policy admission, and exact provider tool identity live behind this one
@@ -62,10 +56,10 @@ interface OperationDescriptor {
 	id: string;
 	kind: "read" | "write";
 	product: Product;
-	// A tool that the default Official endpoint only reaches through its broad
-	// executeWrite dispatcher is unreachable here: the exact-name allow-list
-	// cannot bind executeWrite to one operation.
-	official: { tool: string; reachable: boolean };
+	// Reachability includes both live tool presence and safe preparation. A
+	// missing qualified tool uses null; an exposed tool may still be unreachable
+	// when its prerequisites cannot be prepared safely.
+	official: { tool: string | null; reachable: boolean };
 	community: { tool: string };
 }
 
@@ -80,12 +74,12 @@ const OPERATION_REGISTRY = [
 	{ id: "issue.comment", kind: "write", product: "jira", official: { tool: "addOrEditJiraIssueComment", reachable: true }, community: { tool: "jira_add_comment" } },
 	{ id: "page.get", kind: "read", product: "confluence", official: { tool: "getConfluenceContent", reachable: true }, community: { tool: "confluence_get_page" } },
 	{ id: "page.search", kind: "read", product: "confluence", official: { tool: "searchConfluence", reachable: true }, community: { tool: "confluence_search" } },
-	{ id: "page.create", kind: "write", product: "confluence", official: { tool: "createConfluenceContent", reachable: true }, community: { tool: "confluence_create_page" } },
+	// The live schema has createConfluenceContent, but lacks the space read
+	// needed to prepare this write safely on Official.
+	{ id: "page.create", kind: "write", product: "confluence", official: { tool: "createConfluenceContent", reachable: false }, community: { tool: "confluence_create_page" } },
 	{ id: "page.update", kind: "write", product: "confluence", official: { tool: "updateConfluenceContent", reachable: true }, community: { tool: "confluence_update_page" } },
-	// Deferred on the default Official endpoint (reachable only through
-	// executeWrite, or as a direct tool on the unqualified `?tools=all`
-	// endpoint), so Official refuses it and Community carries it.
-	{ id: "page.comment", kind: "write", product: "confluence", official: { tool: OFFICIAL_PAGE_COMMENT_TOOL, reachable: false }, community: { tool: "confluence_add_comment" } },
+	// No page comment name was qualified in the live Official catalog.
+	{ id: "page.comment", kind: "write", product: "confluence", official: { tool: null, reachable: false }, community: { tool: "confluence_add_comment" } },
 ] as const satisfies readonly OperationDescriptor[];
 
 export type OperationId = (typeof OPERATION_REGISTRY)[number]["id"];
@@ -99,7 +93,7 @@ export interface OperationSpec {
 	id: OperationId;
 	kind: "read" | "write";
 	product: Product;
-	official: { tool: string; reachable: boolean };
+	official: { tool: string | null; reachable: boolean };
 	community: { tool: string };
 }
 
@@ -111,7 +105,7 @@ function exactTool(server: ServerName, tool: string): string {
 function admittedSpec(spec: (typeof OPERATION_REGISTRY)[number]): OperationSpec {
 	return {
 		...spec,
-		official: { tool: spec.official.reachable ? exactTool(serverFor("official", spec.product), spec.official.tool) : spec.official.tool, reachable: spec.official.reachable },
+		official: { tool: spec.official.reachable && spec.official.tool !== null ? exactTool(serverFor("official", spec.product), spec.official.tool) : spec.official.tool, reachable: spec.official.reachable },
 		community: { tool: exactTool(serverFor("community", spec.product), spec.community.tool) },
 	};
 }

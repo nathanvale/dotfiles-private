@@ -1,7 +1,7 @@
 // Fake 1Password helper. Records references and arguments, never values.
 // Mirrors the real helper's contract: `inject` forwards only HOME, PATH, LANG,
 // LC_ALL, TMPDIR plus the one requested secret; `op item get` returns the
-// receipts-directory item.json when present.
+// receipts-directory items.json by exact title, or item.json for older cases.
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -27,6 +27,14 @@ if (args[0] === "inject") {
 	process.exit(child.exitCode);
 }
 if (args[0] === "op" && args[1] === "item" && args[2] === "get" && args.includes("--format")) {
+	const keyed = path.join(receipts, "items.json");
+	if (existsSync(keyed)) {
+		const items = JSON.parse(readFileSync(keyed, "utf8")) as Record<string, string>;
+		const value = items[args[3] ?? ""];
+		if (value === undefined) process.exit(1);
+		process.stdout.write(value);
+		process.exit(0);
+	}
 	const item = path.join(receipts, "item.json");
 	if (!existsSync(item)) process.exit(1);
 	process.stdout.write(readFileSync(item, "utf8"));

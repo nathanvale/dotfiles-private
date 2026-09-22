@@ -50,13 +50,16 @@ has no analogue: its endpoint is fixed and its identity is the account.
 _Avoid_: Token-management URL, provider-reported URL
 
 **Credential Binding**:
-The nonsecret record custody returns for one Atlassian Tenant and product: the
-principal, the credential item revision, and the Trusted Site Origin. It
-crosses the route; the credential value never does.
+The nonsecret record custody returns for one Atlassian Tenant and product:
+product tag, principal, credential item revision, and Trusted Site Origin. Both
+Providers use the same product binding. The credential value never crosses it.
 _Avoid_: Context, token, credential
 
 **Atlassian Official**:
 The Atlassian-operated MCP Provider for Atlassian Cloud products.
+On 2026-09-23 both existing Monash product items authenticated to its live
+endpoint with Basic (initialize HTTP 200), and direct schema discovery returned
+the same 21-tool catalog. This is distinct from a dispatcher live read.
 _Avoid_: Official route, default provider, Rovo
 
 **Atlassian Community**:
@@ -66,14 +69,19 @@ _Avoid_: Community route, fallback provider, backup provider, legacy connector
 **Provider Parity**:
 Live evidence that Atlassian Official and Atlassian Community answered the same
 Atlassian Operation for the same Atlassian Tenant, Trusted Site Origin, and
-principal with the same object. Without it, one Provider never stands in for
-the other.
+normalized principal with the same object, using the same product Credential
+Binding. Without it, one Provider never stands in for the other.
+Default selection of Community for an operation Official cannot safely prepare
+is made before a process starts and still requires the Community write gate;
+it is not a retry after an Official attempt.
 _Avoid_: Fallback, compatibility, equivalence
 
 **Parity Attestation**:
 The durable, expiring record of one proven Provider Parity for one Atlassian
-Operation and input shape. It gates both automatic fallback and explicit
-selection of Atlassian Community.
+Operation and input shape. It binds the safe revision of the shared product
+credential item, so rotation invalidates it. It gates automatic fallback and explicit
+selection of Atlassian Community, including direct capability selection for
+unsupported Official writes.
 _Avoid_: Cache, allowlist, override
 
 ## Canva sessions
@@ -106,7 +114,8 @@ _Avoid_: Page title alone, provider-assigned id, target
 
 **Write Preview**:
 The durable record that binds an intended write to its exact input, provider
-arguments, Object Identity, and observed revision before anything is sent.
+selection and arguments, Object Identity, and observed revision before anything
+is sent. Apply refuses a different selected Provider before credential custody.
 _Avoid_: Dry run, plan, draft
 
 **Write Receipt**:
