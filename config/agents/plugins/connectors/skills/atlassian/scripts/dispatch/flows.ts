@@ -502,9 +502,16 @@ export function receiptFlow(session: Session, runId: string): Outcome {
 export function unlockFlow(session: Session, runId: string): Outcome {
 	try {
 		const journal = session.deps.journal(session.tenant);
-		const receipt = journal.receipt(runId);
-		journal.unlock(receipt.objectIdentity);
-		return success({ runId, objectIdentity: receipt.objectIdentity, unlocked: true });
+		try {
+			const receipt = journal.receipt(runId);
+			journal.unlock(receipt.objectIdentity);
+			return success({ runId, objectIdentity: receipt.objectIdentity, unlocked: true });
+		} catch (error) {
+			if (!(error instanceof JournalError) || error.code !== "receipt-unknown") throw error;
+			const preview = journal.preview(runId);
+			journal.unlock(preview.objectIdentity);
+			return success({ previewId: preview.previewId, objectIdentity: preview.objectIdentity, unlocked: true });
+		}
 	} catch (error) {
 		return journalRefusal(error);
 	}
@@ -593,8 +600,7 @@ function sameObject(operation: OperationId, official: unknown, community: unknow
 		case "page.get": {
 			const a = observePage(official);
 			const b = observePage(community);
-			const idOf = (reply: unknown) => keySet(reply, "id")[0];
-			return a.version !== null && a.version === b.version && a.title !== undefined && a.title === b.title && idOf(official) !== undefined && idOf(official) === idOf(community);
+			return a.id !== undefined && a.id === b.id && a.version !== null && a.version === b.version && a.title !== undefined && a.title === b.title;
 		}
 		case "page.search":
 			return keySet(official, "id").length > 0 && keySet(official, "id").join(",") === keySet(community, "id").join(",");

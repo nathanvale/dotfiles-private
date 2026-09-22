@@ -107,7 +107,7 @@ preview baseline. A historical matching title, summary, or comment is not an
 effect. `unchanged` needs a stable revision that did not move or an unsent
 receipt; plain absence after a possible send remains unknown. A route that
 does not expose the needed stable ids or revision is `capability-unavailable`
-until live schema qualification proves it. It never marks success by hand. `unlock --run <runId>` clears a dead process's lock only;
+until live schema qualification proves it. It never marks success by hand. `unlock --run <runId-or-previewId>` clears a dead process's lock only;
 `refused-state` names a journal condition an operator must inspect by hand.
 
 ## Community and parity

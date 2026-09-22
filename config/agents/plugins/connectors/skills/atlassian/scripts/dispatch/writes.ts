@@ -343,6 +343,7 @@ export function bodyText(value: unknown, depth = 0): string {
 // Observations a preparatory read must yield. A reply that does not expose
 // the field is reported as missing so the caller can refuse rather than guess.
 export interface PageObservation {
+	id: string | undefined;
 	version: string | null;
 	snapshotToken: string | undefined;
 	title: string | undefined;
@@ -375,6 +376,7 @@ function pageSpaceInstructions(record: Record<string, unknown>): false | true | 
 
 function observePageRecord(previous: PageObservationState, record: Record<string, unknown>): PageObservationState {
 	return {
+		id: previous.id,
 		version: previous.version ?? pageVersion(record) ?? null,
 		snapshotToken: previous.snapshotToken ?? stringAt(record, "snapshotToken"),
 		title: previous.title ?? stringAt(record, "title"),
@@ -385,7 +387,8 @@ function observePageRecord(previous: PageObservationState, record: Record<string
 
 export function observePage(reply: unknown): PageObservation {
 	const data = unwrapReply(reply);
-	let observation: PageObservationState = { version: null, snapshotToken: undefined, title: undefined, spaceId: undefined, spaceInstructions: undefined };
+	const top = isRecord(data) ? data : {};
+	let observation: PageObservationState = { id: stringAt(top, "id"), version: null, snapshotToken: undefined, title: undefined, spaceId: undefined, spaceInstructions: undefined };
 	for (const record of records(data)) {
 		observation = observePageRecord(observation, record);
 	}
@@ -464,18 +467,37 @@ function newEffects(kind: Effect["kind"], ids: Iterable<string>, baseline: reado
 	return novel.length === 0 ? { kind: "absent", revisionUnchanged: false } : { kind: "found", effects: novel.map((id) => ({ kind, id })) };
 }
 
+type IssueCreateMatch = string | { reason: string } | undefined;
+
+function issueTypeName(value: unknown): string | undefined {
+	if (typeof value === "string") return value;
+	return isRecord(value) && typeof value.name === "string" ? value.name : undefined;
+}
+
+function issueCreateMatch(record: Record<string, unknown>, wanted: string, wantedType: string, projectKey: string): IssueCreateMatch {
+	if (!isRecord(record.fields)) return undefined;
+	const fields = record.fields;
+	const summary = stringAt(fields, "summary");
+	if (summary === undefined || normalised(summary) !== wanted) return undefined;
+	const observedType = issueTypeName(fields.issuetype);
+	const normalisedObservedType = observedType === undefined ? undefined : normalised(observedType);
+	if (normalisedObservedType === undefined || normalisedObservedType.length === 0) return { reason: "a matching issue search result carries no stable issue type" };
+	if (normalisedObservedType !== wantedType) return undefined;
+	const id = stringAt(record, "key");
+	if (id === undefined || !ISSUE_KEY.test(id) || !id.startsWith(`${projectKey}-`)) return { reason: "a matching issue search result carries no stable issue key" };
+	return id;
+}
+
 function issueCreateEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
 	const wanted = normalised(input.summary as string);
 	if (wanted.length === 0) return { kind: "indeterminate", reason: "the requested issue summary has no stable read-back representation" };
+	const wantedType = normalised(input.issueType as string);
+	if (wantedType.length === 0) return { kind: "indeterminate", reason: "the requested issue type has no stable read-back representation" };
 	const ids = new Set<string>();
 	for (const record of records(unwrapReply(reply))) {
-		if (!isRecord(record.fields)) continue;
-		const fields = isRecord(record.fields) ? record.fields : record;
-		const summary = stringAt(fields, "summary");
-		if (summary === undefined || normalised(summary) !== wanted) continue;
-		const id = stringAt(record, "key");
-		if (id === undefined || !ISSUE_KEY.test(id) || !id.startsWith(`${input.projectKey as string}-`)) return { kind: "indeterminate", reason: "a matching issue search result carries no stable issue key" };
-		ids.add(id);
+		const match = issueCreateMatch(record, wanted, wantedType, input.projectKey as string);
+		if (typeof match === "string") ids.add(match);
+		else if (match !== undefined) return { kind: "indeterminate", reason: match.reason };
 	}
 	return newEffects("jira-issue", ids, baseline.effectIds);
 }
@@ -493,6 +515,7 @@ const sameValue = (wanted: unknown, observed: unknown): boolean => {
 function issueUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline): ReadBack {
 	const issue = observeIssue(reply);
 	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply is not an issue" };
+	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
 	if (issue.revision === null || baseline.revision === null) return { kind: "indeterminate", reason: "the Jira reply carries no stable revision; live qualification is required" };
 	const wanted = input.fields as Record<string, unknown>;
 	const observedAll = Object.entries(wanted).every(([key, value]) => key in issue.fields && sameValue(value, issue.fields[key]));

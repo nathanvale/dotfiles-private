@@ -132,6 +132,7 @@ export interface Journal {
 	resolve(runId: string, evidence: Evidence): Receipt;
 	openReceipts(): Receipt[];
 	receipt(runId: string): Receipt;
+	preview(previewId: string): Preview;
 	// Operator recovery only: never called automatically. A stale meta-lock has
 	// no programmatic recovery at all; see withMeta.
 	unlock(objectIdentity: string): void;
@@ -554,6 +555,10 @@ class FileJournal implements Journal {
 
 	receipt(runId: string): Receipt {
 		return this.readReceipt(runId);
+	}
+
+	preview(previewId: string): Preview {
+		return this.readPreview(previewId);
 	}
 
 	// Object locks are never reclaimed automatically: a dead holder still blocks

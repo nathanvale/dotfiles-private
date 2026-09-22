@@ -143,7 +143,7 @@ export function parityStore(env: Environment): Pick<Dependencies, "parity" | "at
 			} catch {
 				return { status: "unproven" };
 			}
-			if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== os.userInfo().uid) return { status: "unproven" };
+			if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== os.userInfo().uid || (metadata.mode & 0o7777) !== 0o600) return { status: "unproven" };
 			const attestation = asAttestation(parseJson(readFileSync(file, "utf8")));
 			const evidence: ParityEvidence = attestation ? { status: "attested", attestation } : { status: "unproven" };
 			return evidence;

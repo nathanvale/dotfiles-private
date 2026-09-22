@@ -502,7 +502,7 @@ describe("cross-process safety", () => {
 		expect(real().openReceipts()).toEqual([]);
 		// The crashed holder's lock is never reclaimed automatically.
 		expect((await finish(spawnWorker(p.previewId, "hold", "10"))).lines.at(-1)).toBe("error write-locked");
-		real().unlock(objectIdentity("issue.comment", COMMENT));
+			real().unlock(real().preview(p.previewId).objectIdentity);
 		const later = await finish(spawnWorker(p.previewId, "hold", "10"));
 		expect(later.lines.at(-1)).toBe("done completed");
 		expect(markers()).toBe(1);

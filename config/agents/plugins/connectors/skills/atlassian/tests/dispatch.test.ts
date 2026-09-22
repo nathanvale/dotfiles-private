@@ -4,7 +4,7 @@
 // Policy is proved in-process with an in-memory transport and a real journal in
 // a temp state root; public-process cases cross the real route.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { assertCustody, createHarness, itemJson, type Harness, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
@@ -682,7 +682,7 @@ describe("journaled writes", () => {
 
 	test("public Jira create adjudication rejects a historical title and accepts only a new issue key", async () => {
 		const input = { projectKey: "PROJ", issueType: "Bug", summary: "Baseline-safe create" };
-		const historical = { ok: true as const, data: { issues: [{ key: "PROJ-9", fields: { summary: input.summary } }] } };
+		const historical = { ok: true as const, data: { issues: [{ key: "PROJ-9", fields: { summary: input.summary, issuetype: { name: input.issueType } } }] } };
 		const old = fakeTransport({ [`${OJ}.createJiraIssue`]: process_("process", 1, "connect ECONNRESET"), [`${OJ}.searchJiraIssuesUsingJql`]: historical });
 		const oldDeps = deps({ transport: old.transport });
 		const oldPreview = previewData(await dispatch(["issue.create", "--input", JSON.stringify(input), "--preview"], oldDeps));
@@ -692,7 +692,7 @@ describe("journaled writes", () => {
 
 		const freshInput = { ...input, summary: "Baseline-safe create two" };
 		let reads = 0;
-		const fresh = fakeTransport({ [`${OJ}.createJiraIssue`]: process_("process", 1, "connect ECONNRESET"), [`${OJ}.searchJiraIssuesUsingJql`]: () => ({ ok: true, data: { issues: reads++ >= 3 ? [{ key: "PROJ-10", fields: { summary: freshInput.summary } }] : [] } }) });
+		const fresh = fakeTransport({ [`${OJ}.createJiraIssue`]: process_("process", 1, "connect ECONNRESET"), [`${OJ}.searchJiraIssuesUsingJql`]: () => ({ ok: true, data: { issues: reads++ >= 3 ? [{ key: "PROJ-10", fields: { summary: freshInput.summary, issuetype: { name: freshInput.issueType } } }] : [] } }) });
 		const freshDeps = deps({ transport: fresh.transport });
 		const freshPreview = previewData(await dispatch(["issue.create", "--input", JSON.stringify(freshInput), "--preview"], freshDeps));
 		const freshApply = await dispatch(["issue.create", "--input", JSON.stringify(freshInput), "--apply", freshPreview.previewId], freshDeps);
@@ -865,7 +865,7 @@ describe("journaled writes", () => {
 		expect([applied.result.outcome, applied.result.effects.completed]).toEqual(["success", ["confluence-comment:42"]]);
 	});
 
-	test("unlock clears a dead holder's lock through the receipt and refuses when no receipt exists", async () => {
+	test("unlock clears a dead holder's lock through the receipt or its preview and refuses an unknown reference", async () => {
 		const dependencies = deps();
 		const journal = dependencies.journal("example");
 		const preview = journal.recordPreview({ operation: "issue.comment", provider: "official", canonicalInput: COMMENT, providerArgs: COMMENT, revision: null });
@@ -874,8 +874,12 @@ describe("journaled writes", () => {
 		const unlocked = await dispatch(["unlock", "--run", receipt.runId], dependencies);
 		expect([unlocked.result.outcome, unlocked.result.effectClass, unlocked.result.data]).toEqual(["success", "local", { runId: receipt.runId, objectIdentity: "issue:PROJ-1", unlocked: true }]);
 		expect(readdirSync(path.join(stateRoot, "connectors", "atlassian", "example", "locks"))).toEqual([]);
+		const preIntentPreview = journal.recordPreview({ operation: "issue.comment", provider: "official", canonicalInput: COMMENT, providerArgs: COMMENT, revision: null });
+		writeFileSync(path.join(stateRoot, "connectors", "atlassian", "example", "locks", "issue_PROJ-1.lock"), JSON.stringify({ pid: 2_147_483_000, lockId: "dead", at: NOW }), { mode: 0o600 });
+		const recovered = await dispatch(["unlock", "--run", preIntentPreview.previewId], dependencies);
+		expect([recovered.result.outcome, recovered.result.effectClass, recovered.result.data]).toEqual(["success", "local", { previewId: preIntentPreview.previewId, objectIdentity: "issue:PROJ-1", unlocked: true }]);
 		const missing = await dispatch(["unlock", "--run", "nope"], dependencies);
-		expect([missing.result.causeCode, missing.result.repairAction?.endsWith("receipt-unknown")]).toEqual(["refused-preview", true]);
+		expect([missing.result.causeCode, missing.result.repairAction?.endsWith("preview-unknown")]).toEqual(["refused-preview", true]);
 		const shown = await dispatch(["receipt", "--run", receipt.runId], dependencies);
 		expect((shown.result.data as { status: string }).status).toBe("unknown");
 	});
@@ -912,6 +916,16 @@ describe("parity attestation", () => {
 		expect(JSON.stringify(envelope)).not.toContain(PRINCIPAL);
 	});
 
+	test("refuses page parity when only nested ids agree", async () => {
+		const { transport } = fakeTransport({
+			[`${OC}.getConfluenceContent`]: { ok: true, data: { id: "9002", title: "Roadmap", version: 7, space: { id: "100" } } },
+			[`${CC}.confluence_get_page`]: { ok: true, data: { id: "9003", title: "Roadmap", version: 7, space: { id: "100" } } },
+		});
+		const envelope = await dispatch(["parity", "--operation", "page.get", "--input", '{"pageId":"123"}'], deps({ transport }));
+		expect([envelope.result.causeCode, envelope.result.repairAction?.endsWith("object-mismatch")]).toEqual(["refused-parity", true]);
+		expect(attestations).toEqual([]);
+	});
+
 	test("credential revision and principal changes invalidate stored parity before Community is spawned", async () => {
 		const { transport, calls } = fakeTransport();
 		const stale = attested("issue.get", ["issueKey"]);
@@ -944,8 +958,14 @@ describe("parity attestation", () => {
 		await store.attestParity(attestation);
 		const request = { tenant: "example", product: "jira" as const, operation: "issue.get" as const, inputShape: ["issueKey"], origin: ORIGIN, credentialDigest: testDigest({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN }), now: NOW };
 		expect(await store.parity(request)).toEqual({ status: "attested", attestation });
-		expect(await store.parity({ ...request, inputShape: ["issueKey", "fields"] })).toEqual({ status: "unproven" });
 		const directory = path.join(stateRoot, "connectors", "atlassian", "example", "parity");
+		const [file] = readdirSync(directory);
+		chmodSync(path.join(directory, file ?? ""), 0o640);
+		expect(await store.parity(request)).toEqual({ status: "unproven" });
+		chmodSync(path.join(directory, file ?? ""), 0o4600);
+		expect(await store.parity(request)).toEqual({ status: "unproven" });
+		chmodSync(path.join(directory, file ?? ""), 0o600);
+		expect(await store.parity({ ...request, inputShape: ["issueKey", "fields"] })).toEqual({ status: "unproven" });
 		for (const file of readdirSync(directory)) writeFileSync(path.join(directory, file), '{"tenant":"example"}');
 		expect(await store.parity(request)).toEqual({ status: "unproven" });
 	});
