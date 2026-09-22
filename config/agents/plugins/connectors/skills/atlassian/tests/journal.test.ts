@@ -132,6 +132,18 @@ describe("preview binding at apply", () => {
 		await expect(applyOk(j, p.previewId)).rejects.toThrow(/preview-consumed/);
 	});
 
+	test("receipt timestamps never move backward when the clock is adjusted", async () => {
+		const j = journal();
+		const p = comment(j);
+		now += 10;
+		const receipt = await j.apply({ previewId: p.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async (_intent, sending) => {
+			sending();
+			now -= 20;
+			return ok;
+		});
+		expect(receipt.updatedAt).toBe(1_700_000_000_010);
+	});
+
 	test("canonical digest is key-order independent and content sensitive", () => {
 		expect(canonicalDigest({ a: 1, b: [1, { c: 2 }] })).toBe(canonicalDigest({ b: [1, { c: 2 }], a: 1 }));
 		expect(canonicalDigest({ a: 1 })).not.toBe(canonicalDigest({ a: 2 }));
@@ -489,7 +501,11 @@ describe("cross-process safety", () => {
 		expect((await finish(spawnWorker(p.previewId, "hold", "10"))).lines.at(-1)).toBe("error write-locked");
 		j.unlock(objectIdentity("issue.comment", COMMENT));
 		const retry = await finish(spawnWorker(p.previewId, "hold", "10"));
-		expect(retry.lines.at(-1)).toBe("error write-blocked-open-receipt");
+		expect(retry.lines.at(-1)).toBe("error preview-consumed");
+		const receipt = j.openReceipts()[0];
+		j.resolve(receipt?.runId ?? "", { proof: "unchanged", basis: "readback-absent" });
+		const afterResolution = await finish(spawnWorker(p.previewId, "hold", "10"));
+		expect(afterResolution.lines.at(-1)).toBe("error preview-consumed");
 		expect(markers()).toBe(0);
 	});
 

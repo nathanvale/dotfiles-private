@@ -324,8 +324,9 @@ export function effectsFromReply(operation: WriteOperation, input: WriteInput, r
 // are not part of a comment's or title's identity across providers.
 export const normalised = (value: string): string =>
 	value
+		.normalize("NFKC")
 		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, " ")
+		.replace(/[^\p{L}\p{N}]+/gu, " ")
 		.trim();
 
 // Flatten a body that may be a string, a Confluence body object, or an ADF
@@ -458,25 +459,33 @@ export function readBackPlan(operation: WriteOperation, provider: ProviderName, 
 
 const EMPTY_BASELINE: WriteBaseline = { effectIds: [], commentIds: [], revision: null };
 
-function newEffect(kind: Effect["kind"], id: string, baseline: readonly string[]): ReadBack {
-	return baseline.includes(id) ? { kind: "absent", revisionUnchanged: false } : { kind: "found", effects: [{ kind, id }] };
+function newEffects(kind: Effect["kind"], ids: Iterable<string>, baseline: readonly string[]): ReadBack {
+	const novel = [...new Set(ids)].filter((id) => !baseline.includes(id));
+	return novel.length === 0 ? { kind: "absent", revisionUnchanged: false } : { kind: "found", effects: novel.map((id) => ({ kind, id })) };
 }
 
 function issueCreateEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
 	const wanted = normalised(input.summary as string);
+	if (wanted.length === 0) return { kind: "indeterminate", reason: "the requested issue summary has no stable read-back representation" };
+	const ids = new Set<string>();
 	for (const record of records(unwrapReply(reply))) {
+		if (!isRecord(record.fields)) continue;
 		const fields = isRecord(record.fields) ? record.fields : record;
 		const summary = stringAt(fields, "summary");
 		if (summary === undefined || normalised(summary) !== wanted) continue;
 		const id = stringAt(record, "key");
 		if (id === undefined || !ISSUE_KEY.test(id) || !id.startsWith(`${input.projectKey as string}-`)) return { kind: "indeterminate", reason: "a matching issue search result carries no stable issue key" };
-		return newEffect("jira-issue", id, baseline.effectIds);
+		ids.add(id);
 	}
-	return { kind: "absent", revisionUnchanged: false };
+	return newEffects("jira-issue", ids, baseline.effectIds);
 }
 
 const sameValue = (wanted: unknown, observed: unknown): boolean => {
-	if (typeof wanted === "string") return typeof observed === "string" ? normalised(observed) === normalised(wanted) : isRecord(observed) && (sameValue(wanted, observed.name) || sameValue(wanted, observed.value) || normalised(bodyText(observed)) === normalised(wanted));
+	if (typeof wanted === "string") {
+		const normalisedWanted = normalised(wanted);
+		if (normalisedWanted.length === 0) return false;
+		return typeof observed === "string" ? normalised(observed) === normalisedWanted : isRecord(observed) && (sameValue(wanted, observed.name) || sameValue(wanted, observed.value) || normalised(bodyText(observed)) === normalisedWanted);
+	}
 	if (Array.isArray(wanted)) return Array.isArray(observed) && wanted.length === observed.length && wanted.every((entry, index) => sameValue(entry, observed[index]));
 	return observed === wanted || String(observed) === String(wanted);
 };
@@ -487,47 +496,57 @@ function issueUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, 
 	if (issue.revision === null || baseline.revision === null) return { kind: "indeterminate", reason: "the Jira reply carries no stable revision; live qualification is required" };
 	const wanted = input.fields as Record<string, unknown>;
 	const observedAll = Object.entries(wanted).every(([key, value]) => key in issue.fields && sameValue(value, issue.fields[key]));
-	if (observedAll && !revisionMatches(issue.revision)) return newEffect("jira-issue", issue.key, baseline.effectIds);
+	if (observedAll && !revisionMatches(issue.revision)) return { kind: "found", effects: [{ kind: "jira-issue", id: issue.key }] };
 	if (revisionMatches(issue.revision)) return { kind: "absent", revisionUnchanged: true };
 	return { kind: "absent", revisionUnchanged: false };
 }
 
 function commentEvidence(kind: Effect["kind"], body: string, comments: { id: string; text: string }[], baseline: WriteBaseline): ReadBack {
 	const wanted = normalised(body);
-	const hit = comments.find((comment) => comment.text === wanted || (wanted.length >= 24 && comment.text.includes(wanted)));
-	if (hit) return newEffect(kind, hit.id, baseline.commentIds);
-	return { kind: "absent", revisionUnchanged: false };
+	if (wanted.length === 0) return { kind: "indeterminate", reason: "the requested comment has no stable read-back representation" };
+	return newEffects(
+		kind,
+		comments.filter((comment) => comment.text === wanted || (wanted.length >= 24 && comment.text.includes(wanted))).map((comment) => comment.id),
+		baseline.commentIds,
+	);
 }
 
-function pageCreateRecordEvidence(record: Record<string, unknown>, wanted: string, space: { id?: string; key?: string }, baseline: WriteBaseline): ReadBack | undefined {
+function pageCreateRecordEvidence(record: Record<string, unknown>, wanted: string, space: { id?: string; key?: string }): { id: string } | { reason: string } | undefined {
 	const title = stringAt(record, "title");
 	if (title === undefined || normalised(title) !== wanted) return undefined;
+	if (!("id" in record) && !("space" in record) && !("spaceId" in record)) return undefined;
 	const id = stringAt(record, "id");
-	if (id === undefined || !NUMERIC_ID.test(id)) return { kind: "indeterminate", reason: "a matching page search result carries no stable content id" };
+	if (id === undefined || !NUMERIC_ID.test(id)) return { reason: "a matching page search result carries no stable content id" };
 	const spaceRecord = isRecord(record.space) ? record.space : {};
 	const observedId = stringAt(record, "spaceId") ?? stringAt(spaceRecord, "id");
 	const observedKey = stringAt(spaceRecord, "key");
-	if ((space.id !== undefined && observedId === space.id) || (space.key !== undefined && observedKey === space.key)) return newEffect("confluence-content", id, baseline.effectIds);
-	if (observedId === undefined && observedKey === undefined) return { kind: "indeterminate", reason: "a matching title was found but the reply names no space" };
+	if ((space.id !== undefined && observedId === space.id) || (space.key !== undefined && observedKey === space.key)) return { id };
+	if (observedId === undefined && observedKey === undefined) return { reason: "a matching title was found but the reply names no space" };
 	return undefined;
 }
 
 function pageCreateEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
 	const wanted = normalised(input.title as string);
+	if (wanted.length === 0) return { kind: "indeterminate", reason: "the requested page title has no stable read-back representation" };
 	const space = spaceOf(input);
+	const ids = new Set<string>();
 	for (const record of records(unwrapReply(reply))) {
-		const evidence = pageCreateRecordEvidence(record, wanted, space, baseline);
-		if (evidence !== undefined) return evidence;
+		const evidence = pageCreateRecordEvidence(record, wanted, space);
+		if (evidence === undefined) continue;
+		if ("reason" in evidence) return { kind: "indeterminate", reason: evidence.reason };
+		ids.add(evidence.id);
 	}
-	return { kind: "absent", revisionUnchanged: false };
+	return newEffects("confluence-content", ids, baseline.effectIds);
 }
 
 function pageUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline): ReadBack {
 	const page = observePage(reply);
 	if (page.version === null || baseline.revision === null) return { kind: "indeterminate", reason: "the read-back reply carries no stable version" };
 	if (revisionMatches(page.version)) return { kind: "absent", revisionUnchanged: true };
-	const bodyMatches = normalised(page.body).includes(normalised(input.body as string));
-	const titleMatches = input.title === undefined || (page.title !== undefined && normalised(page.title) === normalised(input.title as string));
+	const wantedBody = normalised(input.body as string);
+	const bodyMatches = wantedBody.length > 0 && normalised(page.body) === wantedBody;
+	const wantedTitle = input.title === undefined ? undefined : normalised(input.title as string);
+	const titleMatches = wantedTitle === undefined || (wantedTitle.length > 0 && page.title !== undefined && normalised(page.title) === wantedTitle);
 	if (bodyMatches && titleMatches) return { kind: "found", effects: [{ kind: "confluence-content", id: input.pageId as string }] };
 	return { kind: "indeterminate", reason: "the page moved to another version whose content is not this update" };
 }

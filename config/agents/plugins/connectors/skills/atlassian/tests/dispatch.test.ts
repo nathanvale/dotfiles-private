@@ -359,6 +359,13 @@ describe("refusals that never fall back", () => {
 		expect(calls).toEqual([]);
 	});
 
+	test("credential custody failures preserve a precondition refusal instead of claiming the site is unresolved", async () => {
+		const { transport, calls } = fakeTransport();
+		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport, credentialContext: async () => { throw new Error("credential-context-unavailable"); } }));
+		expect([envelope.result.outcome, envelope.result.causeCode, envelope.result.repairAction]).toEqual(["refused", "refused-precondition", "a provider precondition failed before any request; run the provider readiness checks"]);
+		expect(calls).toEqual([]);
+	});
+
 	test("auth and permission failures refuse without Community, even with an attestation", async () => {
 		for (const failure of [toolError("Authentication failed for Jira (403). Token may be expired"), process_("process", 1, "HTTP 401 Unauthorized")]) {
 			const { transport, calls } = fakeTransport({ [`${OJ}.getJiraIssue`]: failure });
@@ -719,7 +726,7 @@ describe("journaled writes", () => {
 		const oldRun = (oldApply.result.data as { runId: string }).runId;
 		expect((await dispatch(["adjudicate", "--run", oldRun, "--input", JSON.stringify(input)], historicalDeps)).result.causeCode).toBe("refused-evidence");
 
-		const freshInput = { ...input, title: "Baseline-safe page two" };
+		const freshInput = { space: { key: "ENG" }, title: "Baseline-safe page two", body: "body" };
 		const fresh = fakeTransport({ [`${OC}.searchConfluence`]: (args) => {
 			if (String(args.cql).includes('space = "ENG"')) return space;
 			return { ok: true, data: { results: [] } };
@@ -1014,7 +1021,7 @@ describe("production adapters", () => {
 		writeFileSync(path.join(canned, "list.json"), JSON.stringify({ tools: SCHEMAS[OJ] }));
 		writeFileSync(path.join(canned, "getAccessibleAtlassianResources.json"), JSON.stringify(RESOURCES));
 		writeFileSync(path.join(canned, "getJiraIssue.json"), JSON.stringify({ key: "PROJ-1", summary: "legacy" }));
-		harness.write("item.json", fields({ url: "https://Example.atlassian.net/" }));
+		harness.write("item.json", fields({ username: PRINCIPAL, url: "https://Example.atlassian.net/" }));
 		const result = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
 		expect([result.code, result.stderr]).toEqual([3, ""]);
 		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string } };
@@ -1023,7 +1030,7 @@ describe("production adapters", () => {
 	});
 
 	test("an invalid site_url wins over a valid legacy url and stops before MCPorter", async () => {
-		harness.write("item.json", fields({ site_url: "https://example.atlassian.net/wiki", url: ORIGIN }));
+		harness.write("item.json", fields({ username: PRINCIPAL, site_url: "https://example.atlassian.net/wiki", url: ORIGIN }));
 		const result = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
 		expect(result.code).toBe(3);
 		expect(result.stderr).toBe("");

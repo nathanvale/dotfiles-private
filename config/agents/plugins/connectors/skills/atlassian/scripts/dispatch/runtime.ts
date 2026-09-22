@@ -15,6 +15,15 @@ const CALL_TIMEOUT_MS = "30000";
 
 export type Environment = Record<string, string | undefined>;
 
+export class CredentialContextError extends Error {
+	constructor(
+		readonly causeCode: "site-unresolved" | "refused-precondition",
+		readonly detail: string,
+	) {
+		super(`credential-context-unavailable: ${detail}`);
+	}
+}
+
 function scrubbed(env: Environment): Record<string, string> {
 	return safeEnvironment(env);
 }
@@ -49,7 +58,7 @@ function parseJson(text: string): unknown | undefined {
 export function routeTransport(env: Environment, tenant: string): Transport {
 	if (!TENANT_PATTERN.test(tenant)) throw new Error("tenant-invalid: the transport needs the validated tenant slug");
 	const toResult = (run: { code: number; stdout: string; stderr: string }): TransportResult => {
-		const contentObserved = run.stdout.trim().length > 0 || run.stderr.trim().length > 0;
+		const contentObserved = run.stdout.trim().length > 0;
 		if (run.code !== 0) return { ok: false, kind: "process", exitCode: run.code, stderr: run.stderr, stdout: run.stdout, contentObserved };
 		const data = parseJson(run.stdout);
 		if (data === undefined) return { ok: false, kind: "malformed", message: "MCPorter output was not JSON", contentObserved };
@@ -75,9 +84,13 @@ export async function resolveCredentialContext(tenant: string, product: "jira" |
 		stdout: "pipe",
 		stderr: "pipe",
 	});
-	if (read.exitCode !== 0) throw new Error("credential-context-unavailable: credential custody could not produce a stable context");
+	if (read.exitCode !== 0) {
+		const code = /^atlassian-credential-binding:error:([a-z-]+)(?::[^\n]*)?$/m.exec(read.stderr.toString())?.[1];
+		if (code === "site-url-invalid") throw new CredentialContextError("site-unresolved", "the tenant's credential item must expose a valid site_url field");
+		throw new CredentialContextError("refused-precondition", "credential custody could not produce a stable context");
+	}
 	const context = parseInvocationContext(read.stdout.toString());
-	if (!context) throw new Error("credential-context-unavailable: credential custody returned an invalid context");
+	if (!context) throw new CredentialContextError("refused-precondition", "credential custody returned an invalid context");
 	return context;
 }
 

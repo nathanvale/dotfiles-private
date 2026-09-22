@@ -28,7 +28,8 @@ import {
 	type TransportResult,
 } from "./engine.ts";
 import { canonicalDigest, type Effect, type Evidence, JournalError, type Receipt, type WriteOperation } from "./journal.ts";
-import { baselineFromReply, effectsFromReply, observeIssue, observePage, observeSpaceInstructions, type PreparedContext, preparation, readBackEvidence, readBackPlan, type ReadBack, type RevisionMatch, spaceIdFromSearch, spaceSearchPlan, unwrapReply, type WriteInput, writeArguments } from "./writes.ts";
+import { baselineFromReply, effectsFromReply, observeIssue, observePage, observeSpaceInstructions, type PreparedContext, preparation, readBackEvidence, readBackPlan, type ReadBack, type RevisionMatch, spaceIdFromSearch, spaceSearchPlan, unwrapReply, type WriteInput, writeArguments, writeInput } from "./writes.ts";
+import { CredentialContextError } from "./runtime.ts";
 
 export interface Outcome {
 	cause: CauseCode;
@@ -61,11 +62,16 @@ export class Session {
 
 	// Trusted site origin from the tenant's credential item metadata; the error
 	// message carries only its cause, never a value.
-	async origin(product: Product): Promise<{ origin: string } | { cause: "site-unresolved" }> {
+	async origin(product: Product): Promise<{ origin: string } | { cause: CauseCode; detail?: string }> {
 		try {
 			return { origin: (await this.context(product)).origin };
-		} catch {
-			return { cause: "site-unresolved" };
+		} catch (error) {
+			if (error instanceof CredentialContextError || (typeof error === "object" && error !== null && "causeCode" in error && (error as { causeCode?: unknown }).causeCode !== undefined)) {
+				const contextError = error as { causeCode: "site-unresolved" | "refused-precondition"; detail?: unknown };
+				return typeof contextError.detail === "string" ? { cause: contextError.causeCode, detail: contextError.detail } : { cause: contextError.causeCode };
+			}
+			if (error instanceof Error && error.message.startsWith("site-unresolved:")) return { cause: "site-unresolved" };
+			return { cause: "refused-precondition" };
 		}
 	}
 
@@ -188,7 +194,7 @@ async function communityGate(session: Session, spec: OperationSpec, input: Recor
 // fallback also fails, so the caller sees why the default route failed.
 export async function readFlow(session: Session, spec: OperationSpec, input: Input, provider: ProviderName | undefined): Promise<Outcome> {
 	const resolved = await session.origin(spec.product);
-	if ("cause" in resolved) return refusal(resolved.cause);
+	if ("cause" in resolved) return refusal(resolved.cause, resolved.detail);
 	const context = await session.context(spec.product);
 	const attempt = async (name: ProviderName) => {
 		const route = session.route(name, spec.product, context);
@@ -307,7 +313,7 @@ async function prepare(route: Route, operation: WriteOperation, input: WriteInpu
 
 // The canonical input the journal binds: the caller's input with a resolved
 // space id folded in, so key-only input and id input derive one identity.
-function canonicalWriteInput(input: WriteInput, ctx: PreparedContext): WriteInput {
+export function canonicalWriteInput(input: WriteInput, ctx: PreparedContext): WriteInput {
 	if (ctx.spaceId === undefined) return input;
 	const space = typeof input.space === "object" && input.space !== null ? input.space : {};
 	return { ...input, space: { ...space, id: ctx.spaceId } };
@@ -355,7 +361,7 @@ interface WriteContext {
 async function writeContext(session: Session, spec: OperationSpec, input: WriteInput, provider: ProviderName): Promise<WriteContext | Outcome> {
 	if (provider === "official" && !spec.official.reachable) return refusal("operation-unavailable");
 	const resolved = await session.origin(spec.product);
-	if ("cause" in resolved) return refusal(resolved.cause);
+	if ("cause" in resolved) return refusal(resolved.cause, resolved.detail);
 	const context = await session.context(spec.product);
 	if (provider === "community") {
 		const gate = await communityGate(session, spec, input, context);
@@ -504,6 +510,22 @@ export function unlockFlow(session: Session, runId: string): Outcome {
 	}
 }
 
+async function canonicalAdjudicationInput(route: Route, receipt: Receipt, rawInput: unknown): Promise<WriteInput | Outcome> {
+	const validated = writeInput(receipt.operation, rawInput);
+	if (!validated.ok) return refusal("input-invalid", validated.reason);
+	let canonical = validated.input;
+	if (receipt.operation === "page.create") {
+		const prepared = await prepare(route, receipt.operation, canonical);
+		if ("outcome" in prepared) return prepared.outcome;
+		canonical = canonicalWriteInput(canonical, prepared.ctx);
+	}
+	return canonicalDigest(canonical) === receipt.inputDigest ? canonical : refusal("input-invalid", "the supplied input is not the input this receipt was recorded from");
+}
+
+function isOutcome(value: WriteInput | Outcome): value is Outcome {
+	return "cause" in value && "transactionState" in value;
+}
+
 // Operator adjudication: read the object back through the receipt's own
 // provider and resolve only on evidence. Read-back absence releases an object
 // only when the receipt never reached the send mark or a monotonic revision
@@ -518,16 +540,16 @@ export async function adjudicateFlow(session: Session, runId: string, rawInput: 
 		return journalRefusal(error);
 	}
 	if (receipt.status === "completed" || receipt.status === "unchanged") return refusal("refused-evidence", `${REPAIR_TEXT["refused-evidence"]}; receipt-already-resolved`);
-	if (canonicalDigest(rawInput) !== receipt.inputDigest) return refusal("input-invalid", "the supplied input is not the input this receipt was recorded from");
-	const input = rawInput as WriteInput;
 	const spec = OPERATION_SPECS[receipt.operation];
 	const resolved = await session.origin(spec.product);
-	if ("cause" in resolved) return refusal(resolved.cause);
+	if ("cause" in resolved) return refusal(resolved.cause, resolved.detail);
 	const route = session.route(receipt.provider, spec.product, await session.context(spec.product));
 	const ready = await route.ready();
 	if (ready) return failed(ready);
+	const canonical = await canonicalAdjudicationInput(route, receipt, rawInput);
+	if (isOutcome(canonical)) return canonical;
 	const digestOf = (observed: string) => new Bun.CryptoHasher("sha256").update(observed).digest("hex");
-	const readBack = await readBackFor(route, receipt.operation, input, (observed) => receipt.revisionDigest !== null && digestOf(observed) === receipt.revisionDigest, receipt.baseline);
+	const readBack = await readBackFor(route, receipt.operation, canonical, (observed) => receipt.revisionDigest !== null && digestOf(observed) === receipt.revisionDigest, receipt.baseline);
 	if (readBack.kind === "indeterminate") return refusal("refused-evidence", `${REPAIR_TEXT["refused-evidence"]}; ${readBack.reason}`);
 	const evidence: Evidence = readBack.kind === "found" ? { proof: "completed", effects: readBack.effects } : { proof: "unchanged", basis: readBack.revisionUnchanged ? "revision-unchanged" : "readback-absent" };
 	try {
@@ -597,7 +619,7 @@ export async function parityFlow(session: Session, spec: OperationSpec, input: I
 	const semantics = OBJECT_SEMANTICS[spec.id];
 	if (spec.kind !== "read" || semantics === undefined) return refusal("usage-invalid", "parity attests a read operation");
 	const resolved = await session.origin(spec.product);
-	if ("cause" in resolved) return refusal(resolved.cause);
+	if ("cause" in resolved) return refusal(resolved.cause, resolved.detail);
 	let context: InvocationContext;
 	try {
 		context = await session.context(spec.product);

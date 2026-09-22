@@ -128,14 +128,23 @@ export interface InvocationContext {
 	origin: string;
 }
 
-export function itemInvocationContext(item: unknown): InvocationContext | null {
-	if (typeof item !== "object" || item === null || Array.isArray(item)) return null;
+export type InvocationContextFailure = "credential-invalid" | "credential-revision-unavailable" | "site-url-invalid";
+
+export function itemInvocationContextResult(item: unknown): { context: InvocationContext } | { cause: InvocationContextFailure } {
+	if (typeof item !== "object" || item === null || Array.isArray(item)) return { cause: "credential-invalid" };
 	const version = versionOf(item as Record<string, unknown>);
 	const fields = itemFieldMap(item);
 	const principal = fields?.get("username");
 	const siteUrl = fields?.get(SITE_URL_FIELD);
-	if (!version || !principal || !singleLine(principal) || principal.includes(":" ) || !siteUrl || !validSiteUrl(siteUrl)) return null;
-	return { principal, itemVersion: `onepassword-item-version:${version}`, origin: `https://${new URL(siteUrl).hostname}` };
+	if (!fields || !principal || !singleLine(principal) || principal.includes(":")) return { cause: "credential-invalid" };
+	if (!siteUrl || !validSiteUrl(siteUrl)) return { cause: "site-url-invalid" };
+	if (!version) return { cause: "credential-revision-unavailable" };
+	return { context: { principal, itemVersion: `onepassword-item-version:${version}`, origin: `https://${new URL(siteUrl).hostname}` } };
+}
+
+export function itemInvocationContext(item: unknown): InvocationContext | null {
+	const result = itemInvocationContextResult(item);
+	return "context" in result ? result.context : null;
 }
 
 export function encodeInvocationContext(context: InvocationContext): string {

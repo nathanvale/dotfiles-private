@@ -4,7 +4,7 @@
 // 2026 (Atlassian v2 skill examples; mcp-atlassian v0.23.1 source).
 import { describe, expect, test } from "bun:test";
 import { OPERATION_SPECS } from "../scripts/dispatch/contract.ts";
-import { effectsFromReply, preparation, readBackEvidence, readBackPlan, spaceIdFromSearch, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
+import { baselineFromReply, effectsFromReply, normalised, preparation, readBackEvidence, readBackPlan, spaceIdFromSearch, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
 
 const never = () => false;
 const CREATE = { projectKey: "PROJ", issueType: "Bug", summary: "Billing broken", description: "first\nsecond" };
@@ -108,10 +108,19 @@ describe("effects and read-back", () => {
 		const update = { pageId: "123", body: "# New body" };
 		const pageBaseline = { effectIds: ["123"], commentIds: [], revision: "7" };
 		expect(readBackEvidence("page.update", update, (observed) => observed === "7", { id: "123", version: 7, content: { value: "old" } }, pageBaseline)).toEqual({ kind: "absent", revisionUnchanged: true });
-		expect(readBackEvidence("page.update", update, (observed) => observed === "7", { id: "123", metadata: { version: 8 }, body: { value: "# New body\nmore" } }, pageBaseline)).toEqual({ kind: "found", effects: [{ kind: "confluence-content", id: "123" }] });
+		expect(readBackEvidence("page.update", update, (observed) => observed === "7", { id: "123", metadata: { version: 8 }, body: { value: "# New body\nmore" } }, pageBaseline)).toEqual({ kind: "indeterminate", reason: "the page moved to another version whose content is not this update" });
 		expect(readBackEvidence("page.update", update, (observed) => observed === "7", { id: "123", version: 8, content: { value: "someone else" } }, pageBaseline)).toEqual({ kind: "indeterminate", reason: "the page moved to another version whose content is not this update" });
 		expect(readBackEvidence("page.update", update, never, { id: "123" })).toEqual({ kind: "indeterminate", reason: "the read-back reply carries no stable version" });
 		expect(readBackEvidence("page.comment", { pageId: "123", body: "hello there" }, never, [{ id: "42", body: "Hello, there!" }])).toEqual({ kind: "found", effects: [{ kind: "confluence-comment", id: "42" }] });
+	});
+
+	test("read-back keeps Unicode text and records every pre-existing matching identifier", () => {
+		expect(normalised("你好，世界")).toBe("你好 世界");
+		expect(readBackEvidence("issue.update", { issueKey: "PROJ-1", fields: { summary: "你好" } }, never, { key: "PROJ-1", fields: { summary: "你好", version: 2 } }, { effectIds: ["PROJ-1"], commentIds: [], revision: "1" })).toEqual({ kind: "found", effects: [{ kind: "jira-issue", id: "PROJ-1" }] });
+		expect(readBackEvidence("issue.comment", { issueKey: "PROJ-1", body: "!!!" }, never, { key: "PROJ-1", fields: { comment: { comments: [{ id: "1", body: "???" }] } } })).toEqual({ kind: "indeterminate", reason: "the requested comment has no stable read-back representation" });
+		expect(baselineFromReply("issue.create", CREATE, { issues: [{ key: "PROJ-1", fields: { summary: CREATE.summary } }, { key: "PROJ-2", fields: { summary: CREATE.summary } }] })).toEqual({ kind: "observed", baseline: { effectIds: ["PROJ-1", "PROJ-2"], commentIds: [], revision: null } });
+		expect(baselineFromReply("issue.comment", { issueKey: "PROJ-1", body: "same comment" }, { key: "PROJ-1", fields: { comment: { comments: [{ id: "1", body: "same comment" }, { id: "2", body: "same comment" }] } } })).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: ["1", "2"], revision: null } });
+		expect(baselineFromReply("page.create", { space: { id: "9" }, title: "Same page", body: "body" }, { results: [{ id: "556", title: "Same page", space: { id: "9" } }, { id: "557", title: "Same page", space: { id: "9" } }] })).toEqual({ kind: "observed", baseline: { effectIds: ["556", "557"], commentIds: [], revision: null } });
 	});
 
 	test("a space key resolves to its numeric id only from a page that names both", () => {

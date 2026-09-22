@@ -2,10 +2,10 @@
 // Credential custody for the semantic dispatcher. This child is the only
 // dispatcher-adjacent process allowed to read a complete 1Password item. Its
 // stdout is a deliberately small nonsecret envelope.
-import { CREDENTIAL_VAULT, credentialWrapperPath, credentialWrapperPresent, itemInvocationContext, PRODUCTS, productItemTitle, TENANT_PATTERN, type Product } from "./atlassian-provider-common.ts";
+import { CREDENTIAL_VAULT, credentialWrapperPath, credentialWrapperPresent, itemInvocationContextResult, PRODUCTS, productItemTitle, TENANT_PATTERN, type Product } from "./atlassian-provider-common.ts";
 import { safeEnvironment } from "../../../bin/safe-environment.ts";
 
-function fail(cause: "arguments-invalid" | "credential-wrapper-missing" | "credential-unavailable" | "credential-invalid" | "credential-revision-unavailable", repair?: string): never {
+function fail(cause: "arguments-invalid" | "credential-wrapper-missing" | "credential-unavailable" | "credential-invalid" | "credential-revision-unavailable" | "site-url-invalid", repair?: string): never {
 	process.stderr.write(`atlassian-credential-binding:error:${cause}${repair ? `:${repair}` : ""}\n`);
 	process.exit(3);
 }
@@ -43,6 +43,6 @@ try {
 } catch {
 	fail("credential-invalid");
 }
-const resolved = itemInvocationContext(item);
-if (!resolved) fail("credential-revision-unavailable");
-process.stdout.write(`${JSON.stringify(resolved)}\n`);
+const resolved = itemInvocationContextResult(item);
+if ("cause" in resolved) fail(resolved.cause);
+process.stdout.write(`${JSON.stringify(resolved.context)}\n`);

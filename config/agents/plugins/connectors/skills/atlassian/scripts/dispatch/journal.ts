@@ -592,6 +592,9 @@ class FileJournal implements Journal {
 		// check just bound to the preview, so a well-formed but foreign identity
 		// in the preview file cannot steer the lock or the open-receipt check.
 		if (objectIdentity(preview.operation, request.canonicalInput) !== preview.objectIdentity) corrupt("preview identity");
+		if (this.allReceipts().some((entry) => entry.previewId === preview.previewId)) {
+			throw new JournalError("preview-consumed", "the preview was already applied");
+		}
 		if (this.openReceipts().some((entry) => entry.objectIdentity === preview.objectIdentity)) {
 			throw new JournalError("write-blocked-open-receipt", "an unresolved write exists for this object; resolve it first");
 		}
@@ -625,7 +628,7 @@ class FileJournal implements Journal {
 	// Read-back absence releases an object only when the receipt never reached
 	// the send mark; after a possible send it is not evidence of no effect.
 	private settled(receipt: Receipt, evidence: unknown): Receipt {
-		const next: Receipt = { ...receipt, updatedAt: this.now() };
+		const next: Receipt = { ...receipt, updatedAt: Math.max(receipt.updatedAt, this.now()) };
 		if (!validEvidence(evidence) || evidence.proof === "unknown") {
 			next.status = "unknown";
 		} else if (evidence.proof === "completed") {
@@ -646,7 +649,7 @@ class FileJournal implements Journal {
 		const current = this.readReceipt(runId);
 		if (current.status !== "intent" || current.holder.pid !== process.pid) throw new JournalError("receipt-not-in-flight", "only the live holder of an in-flight intent can mark it sending");
 		if (current.send === "possible") return;
-		writeDurable(this.receipts, `${runId}.json`, { ...current, send: "possible", updatedAt: this.now() });
+		writeDurable(this.receipts, `${runId}.json`, { ...current, send: "possible", updatedAt: Math.max(current.updatedAt, this.now()) });
 	}
 
 	async apply(request: ApplyRequest, dispatch: Dispatch): Promise<Receipt> {

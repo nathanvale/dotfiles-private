@@ -94,8 +94,8 @@ The dispatcher resolves the Trusted Site Origin from the product item's
 provider's accessible resources include that exact origin.
 
 Writes are journaled. A preview binds the exact input, the shaped provider
-arguments, the Object Identity, and the target's current revision (Jira
-`updated`, Confluence version) in a private 0700 state directory. An apply
+arguments, the Object Identity, and the target's current stable revision
+(never Jira `updated`; Confluence version) in a private 0700 state directory. An apply
 re-reads the target, refuses on any change, records durable intent and a send
 mark before the request leaves the process, hands the dispatcher the
 journal-bound arguments, and settles from the provider reply or an immediate

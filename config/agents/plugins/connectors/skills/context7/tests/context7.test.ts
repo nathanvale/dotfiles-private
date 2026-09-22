@@ -23,9 +23,9 @@ describe("Context7 hosted provider", () => {
 	});
 
 	test("call composes the documented tool on the context7 server", async () => {
-		const result = await harness.run(["context7", "--", "call", "resolve-library-id", "--args", '{"libraryName":"bun"}']);
+		const result = await harness.run(["context7", "--", "call", "resolve-library-id", "--args", '{"libraryName":"bun","query":"Bun test assertions"}']);
 		expect(result.code).toBe(0);
-		expect(assertCustody(harness, result, []).argv.slice(2)).toEqual(["call", "context7.resolve-library-id", "--args", '{"libraryName":"bun"}', "--no-oauth"]);
+		expect(assertCustody(harness, result, []).argv.slice(2)).toEqual(["call", "context7.resolve-library-id", "--args", '{"libraryName":"bun","query":"Bun test assertions"}', "--no-oauth"]);
 	});
 
 	test("a selection is refused because this skill declares none", async () => {
