@@ -4,7 +4,7 @@
 // the strict cli-design-check matrix. Expected values are literals; the
 // production contract is enumerated for coverage only.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
@@ -23,14 +23,13 @@ let root: string;
 let fake: FakeAuthorizationServer;
 beforeEach(() => {
 	root = mkdtempSync(path.join(os.tmpdir(), "canva-auth-"));
-	fake = startAuthorizationServer();
 });
 // The "stuck" fixture is a session file with the macOS immutable flag, the
 // one way an owned file refuses removal without privileges. It is cleared
 // before the root is removed.
 const immutable = (file: string, on: boolean) => Bun.spawnSync(["chflags", on ? "uchg" : "nouchg", file]);
 afterEach(() => {
-	fake.stop();
+	fake?.stop();
 	const stuck = path.join(root, "connectors", "canva", "stuck", "session.json");
 	if (existsSync(stuck)) immutable(stuck, false);
 	rmSync(root, { recursive: true, force: true });
@@ -41,12 +40,12 @@ const accountDirectory = (account: string) => path.join(root, "connectors", "can
 // The fixture tree the checker and the process rows share: personal (valid),
 // tampered (invalid record), busy (held lock), stuck (unremovable directory).
 function writeFixtures(): void {
-	writeSessionFixture(root, { account: "personal", now: NOW, server: fake });
-	writeSessionFixture(root, { account: "tampered", now: NOW, server: fake });
+	writeSessionFixture(root, { account: "personal", now: NOW, overrides: { revocationEndpoint: null } });
+	writeSessionFixture(root, { account: "tampered", now: NOW });
 	writeFileSync(path.join(accountDirectory("tampered"), "session.json"), "{}", { mode: 0o600 });
-	writeSessionFixture(root, { account: "busy", now: NOW, server: fake });
+	writeSessionFixture(root, { account: "busy", now: NOW });
 	writeFileSync(path.join(accountDirectory("busy"), "refresh.lock"), "{}", { mode: 0o600 });
-	writeSessionFixture(root, { account: "stuck", now: NOW, server: fake, overrides: { revocationEndpoint: null } });
+	writeSessionFixture(root, { account: "stuck", now: NOW, overrides: { revocationEndpoint: null } });
 	immutable(path.join(accountDirectory("stuck"), "session.json"), true);
 }
 
@@ -76,10 +75,10 @@ describe("canva-auth public process", () => {
 		const { result, availablePaths } = machine.envelope();
 		expect(availablePaths).toEqual(EXPECTED_PATHS);
 		expect(result).toMatchObject({ commandIdentity: "canva-auth.status", outcome: "success", causeCode: "SUCCESS_UNCHANGED", effectClass: "inspect", transactionState: "unchanged", failureClass: null, exitCode: 0, retryable: false, repairAction: null, nextAction: "canva-auth status --account <slug>", effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true } });
-		expect(result.data).toEqual({ account: "personal", clientMode: "dcr", clientId: "fixture-client-1", issuer: fake.issuer, resource: fake.resource, scope: "design:meta:read", obtainedAt: NOW, expiresAt: NOW + 3_600_000, refreshable: true });
+		expect(result.data).toEqual({ account: "personal", clientMode: "dcr", clientId: "fixture-client-1", issuer: "https://mcp.canva.com", resource: "https://mcp.canva.com/mcp", scope: "design:meta:read", obtainedAt: NOW, expiresAt: NOW + 3_600_000, refreshable: true });
 		expect(Object.keys(result).sort()).toEqual(["causeCode", "commandIdentity", "data", "effectClass", "effects", "exitCode", "failureClass", "nextAction", "outcome", "repairAction", "retryable", "runId", "transactionState"]);
 		const human = await runCli(["status", "--account", "personal"]);
-		expect([human.code, human.stderr, human.stdout]).toEqual([0, "", `account personal: client dcr fixture-client-1, issuer ${fake.issuer}, expires 2023-11-14T23:13:20.000Z, refreshable\n`]);
+		expect([human.code, human.stderr, human.stdout]).toEqual([0, "", "account personal: client dcr fixture-client-1, issuer https://mcp.canva.com, expires 2023-11-14T23:13:20.000Z, refreshable\n"]);
 	});
 
 	test("missing, tampered, busy, and unremovable sessions map to the contract's domain, schema, transient, and internal rows", async () => {
@@ -99,18 +98,29 @@ describe("canva-auth public process", () => {
 		expect([humanBusy.code, humanBusy.stdout, humanBusy.stderr]).toEqual([75, "", "canva-auth: TRANSIENT_NOT_STARTED: Stop all canva-auth and Canva Provider processes for this account, remove only refresh.lock from its private state directory, then run status before retrying\n"]);
 	});
 
-	test("logout revokes through the session's revocation endpoint and removes the directory; a second logout is unchanged", async () => {
+	test("logout without a revocation endpoint removes the selected session; a second logout is unchanged", async () => {
 		writeFixtures();
 		const first = await runCli(["logout", "--account", "personal", "--json"]);
-		expect([first.code, first.envelope().result.causeCode, first.envelope().result.effects]).toEqual([0, "SUCCESS_COMPLETED", { completed: ["canva-grant:personal", "canva-session:personal"], remaining: [], uncertain: [], inventoryComplete: true }]);
-		expect(first.envelope().result.data).toEqual({ account: "personal", removed: true, revoked: "confirmed" });
-		expect(fake.calls.revocations).toEqual([REFRESH_TOKEN]);
+		expect([first.code, first.envelope().result.causeCode, first.envelope().result.effects]).toEqual([0, "SUCCESS_COMPLETED", { completed: ["canva-session:personal"], remaining: [], uncertain: [], inventoryComplete: true }]);
+		expect(first.envelope().result.data).toEqual({ account: "personal", removed: true, revoked: "unsupported" });
 		// The session state is gone; the owned directory outlives it.
 		expect([existsSync(path.join(accountDirectory("personal"), "session.json")), existsSync(path.join(accountDirectory("personal"), "refresh.lock")), existsSync(accountDirectory("personal"))]).toEqual([false, false, true]);
 		const second = await runCli(["logout", "--account", "personal", "--json"]);
 		expect([second.code, second.envelope().result.causeCode, second.envelope().result.transactionState]).toEqual([0, "SUCCESS_UNCHANGED", "unchanged"]);
 		const human = await runCli(["logout", "--account", "tampered"]);
 		expect([human.code, human.stdout]).toEqual([0, "logout succeeded for account tampered\n"]);
+	});
+
+	test("logout refuses a foreign revocation endpoint and preserves the grant", async () => {
+		const file = writeSessionFixture(root, { overrides: { revocationEndpoint: "https://mcp.canva.com/mcp" } });
+		const before = readFileSync(file, "utf8");
+		const statusBefore = await runCli(["status", "--account", "personal", "--json"]);
+		expect([statusBefore.code, statusBefore.envelope().result.causeCode, readFileSync(file, "utf8")]).toEqual([0, "SUCCESS_UNCHANGED", before]);
+		const result = await runCli(["logout", "--account", "personal", "--json"]);
+		expect([result.code, result.stderr, result.envelope().result.causeCode, result.envelope().message]).toEqual([3, "", "DOMAIN_PRECONDITION_UNMET", "logout refused: session-binding-invalid"]);
+		expect(result.envelope().result.repairAction).toBe("Restore the original matching oauth.json and private registration.json and retry logout; if that is impossible, revoke this client's access in Canva connected apps, stop Provider processes for this account, then have the operator remove only this account's private session.json and registration.json before a new attended login");
+		expect(result.envelope().result.nextAction).toBe("restore the original oauth.json for this session, then retry canva-auth logout --account <slug>");
+		expect(readFileSync(file, "utf8")).toBe(before);
 	});
 
 	test("usage refusals are one stderr line in human mode and a USAGE_ envelope in machine mode, with no state touched", async () => {
@@ -167,8 +177,9 @@ describe("canva-auth public process", () => {
 });
 
 describe("canva-auth login rendering", () => {
+	beforeEach(() => { fake = startAuthorizationServer(); });
 	const deps = (overrides: Record<string, unknown> = {}): CliDeps => {
-		const config = parseOAuthConfig({ resource: fake.resource, client: { mode: "dcr", clientName: "Connectors plugin" }, loopbackPort: 0, callbackTimeoutMs: 300, refreshLockWaitMs: 100, ...overrides });
+		const config = parseOAuthConfig({ resource: fake.resource, client: { mode: "dcr", clientName: "Connectors plugin" }, loopbackPort: 0, callbackTimeoutMs: 300, refreshLockWaitMs: 100, ...overrides }, true);
 		if (!config) throw new Error("test config invalid");
 		const clock = { now: () => NOW, sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)) };
 		return {

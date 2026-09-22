@@ -22,9 +22,9 @@ export interface SessionFixtureOptions {
 }
 
 const DEFAULT_SERVER: FixtureServer = {
-	url: "http://127.0.0.1:1",
-	issuer: "http://127.0.0.1:1",
-	resource: "http://127.0.0.1:1/mcp",
+	url: "https://mcp.canva.com",
+	issuer: "https://mcp.canva.com",
+	resource: "https://mcp.canva.com/mcp",
 };
 
 export function writeSessionFixture(stateRoot: string, options: SessionFixtureOptions = {}): string {
@@ -36,11 +36,11 @@ export function writeSessionFixture(stateRoot: string, options: SessionFixtureOp
 	const record: SessionRecord = {
 		version: 1,
 		account,
-		client: { mode: "dcr", clientId: "fixture-client-1", redirectUri: "http://127.0.0.1:1/callback" },
+		client: { mode: "dcr", clientId: "fixture-client-1", redirectUri: "http://127.0.0.1:47391/callback" },
 		issuer: server.issuer,
 		resource: server.resource,
 		tokenEndpoint: `${server.url}/token`,
-		revocationEndpoint: `${server.url}/revoke`,
+		revocationEndpoint: `${server.url}${server.url.startsWith("http://127.0.0.1:") ? "/revoke" : "/token"}`,
 		scope: "design:meta:read",
 		accessToken: FIXTURE_ACCESS_TOKEN,
 		accessTokenExpiresAt: now + 3_600_000,

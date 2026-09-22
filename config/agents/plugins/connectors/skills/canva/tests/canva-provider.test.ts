@@ -1,13 +1,11 @@
 // Public-process proof of the Canva Provider, invoked the way MCPorter invokes
 // it: no arguments, cwd at the skill config directory, the account slug in
 // the environment, the bridge fake on PATH, and a private session under
-// XDG_STATE_HOME. Refresh crosses a real loopback HTTP call to the fake
-// authorization server in this test process.
+// XDG_STATE_HOME. The separate session tests observe outbound requests.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { AMBIENT_SENTINEL, createHarness, FIXTURES, type Harness, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
-import { type FakeAuthorizationServer, startAuthorizationServer } from "./fixtures/authorization-server.ts";
 import { FIXTURE_ACCESS_TOKEN as ACCESS_TOKEN, FIXTURE_REFRESH_TOKEN as REFRESH_TOKEN, writeSessionFixture } from "./fixtures/session.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
@@ -16,13 +14,10 @@ const PROVIDER = path.join(SKILL, "scripts", "canva-provider.ts");
 const SECRETS = [ACCESS_TOKEN, REFRESH_TOKEN, "fixture-access-token", "fixture-refresh-token", OP_TOKEN_SENTINEL];
 
 let harness: Harness;
-let fake: FakeAuthorizationServer;
 beforeEach(() => {
 	harness = createHarness({ "hyper-mcp-remote": path.join(FIXTURES, "bridge-fake.ts") });
-	fake = startAuthorizationServer();
 });
 afterEach(() => {
-	fake.stop();
 	harness.dispose();
 });
 
@@ -56,7 +51,7 @@ async function runProvider(args: string[] = [], env: Record<string, string> = {}
 
 describe("Canva Provider process", () => {
 	test("execs the pinned bridge against the Canva endpoint with --no-auth and a Bearer template; only the access token crosses", async () => {
-		writeSessionFixture(harness.root, { server: fake });
+		writeSessionFixture(harness.root);
 		const result = await runProvider();
 		expect([result.code, result.stderr]).toEqual([0, ""]);
 		const bridge = harness.receipt("bridge.json");
@@ -67,21 +62,15 @@ describe("Canva Provider process", () => {
 		expect(bridge.logPath).toBe(logPath);
 		expect(statSync(logPath).mode & 0o777).toBe(0o700);
 		expect(JSON.stringify(bridge)).not.toContain(REFRESH_TOKEN);
-		expect(fake.calls.tokenRequests).toBe(0);
 	});
 
-	test("rotates an expiring token through the session module before exec, with one token request", async () => {
-		writeSessionFixture(harness.root, { server: fake, overrides: { accessTokenExpiresAt: Date.now() + 10_000 } });
-		fake.currentRefreshToken = REFRESH_TOKEN;
+	test("refuses a stored loopback token endpoint before refresh or bridge execution", async () => {
+		writeSessionFixture(harness.root, { overrides: { tokenEndpoint: "http://127.0.0.1:1/token", accessTokenExpiresAt: Date.now() + 10_000 } });
 		const result = await runProvider();
-		expect([result.code, result.stderr]).toEqual([0, ""]);
-		expect([fake.calls.tokenRequests, fake.calls.refreshRequests]).toEqual([1, 1]);
-		expect(fake.tokenBodies[0]?.get("refresh_token")).toBe(REFRESH_TOKEN);
-		const bridge = harness.receipt("bridge.json");
-		expect(bridge.canvaTokenMatches).toBe(false);
-		expect(bridge.environmentKeys).toContain("CANVA_ACCESS_TOKEN");
+		expect([result.code, result.stderr.startsWith("canva-provider:error:session-binding-invalid:")]).toEqual([3, true]);
+		expect(harness.has("bridge.json")).toBe(false);
 		const session = JSON.parse(readFileSync(sessionFile(), "utf8"));
-		expect([session.accessToken, session.refreshToken]).toEqual(["fixture-access-token-1", "fixture-refresh-token-1"]);
+		expect([session.accessToken, session.refreshToken]).toEqual([ACCESS_TOKEN, REFRESH_TOKEN]);
 		expect(statSync(sessionFile()).mode & 0o7777).toBe(0o600);
 	});
 
@@ -91,14 +80,12 @@ describe("Canva Provider process", () => {
 		expect(harness.has("bridge.json")).toBe(false);
 	});
 
-	test("a revoked grant refuses with auth-expired and removes the session; the next run is auth-required", async () => {
-		writeSessionFixture(harness.root, { server: fake, overrides: { accessTokenExpiresAt: Date.now() - 1 } });
-		fake.options.invalidGrantNext = true;
-		const expired = await runProvider();
-		expect([expired.code, expired.stderr]).toEqual([3, "canva-provider:error:auth-expired:the session was revoked or expired at Canva and has been removed; run canva-auth login\n"]);
+	test("a fresh token for another resource refuses before bridge execution", async () => {
+		writeSessionFixture(harness.root, { overrides: { resource: "https://mcp.canva.com/other" } });
+		const result = await runProvider();
+		expect([result.code, result.stderr.startsWith("canva-provider:error:session-binding-invalid:")]).toEqual([3, true]);
 		expect(harness.has("bridge.json")).toBe(false);
-		const again = await runProvider();
-		expect(again.stderr).toBe("canva-provider:error:auth-required:no session exists for this account; run canva-auth login\n");
+		expect(readFileSync(sessionFile(), "utf8")).toContain("https://mcp.canva.com/other");
 	});
 
 	test("a bridge pin mismatch refuses before any session read", async () => {
@@ -109,7 +96,7 @@ describe("Canva Provider process", () => {
 	});
 
 	test("a world-readable or tampered session refuses with session-invalid and makes no token request", async () => {
-		writeSessionFixture(harness.root, { server: fake, overrides: { accessTokenExpiresAt: Date.now() - 1 } });
+		writeSessionFixture(harness.root, { overrides: { accessTokenExpiresAt: Date.now() - 1 } });
 		chmodSync(sessionFile(), 0o644);
 		const readable = await runProvider();
 		expect([readable.code, readable.stderr.startsWith("canva-provider:error:session-invalid:")]).toEqual([3, true]);
@@ -117,12 +104,11 @@ describe("Canva Provider process", () => {
 		writeFileSync(sessionFile(), "{}", { mode: 0o600 });
 		const tampered = await runProvider();
 		expect([tampered.code, tampered.stderr.startsWith("canva-provider:error:session-invalid:")]).toEqual([3, true]);
-		expect(fake.calls.tokenRequests).toBe(0);
 		expect(harness.has("bridge.json")).toBe(false);
 	});
 
 	test("refuses arguments and a missing or non-semantic account before anything else", async () => {
-		writeSessionFixture(harness.root, { server: fake });
+		writeSessionFixture(harness.root);
 		expect((await runProvider(["--verbose"])).stderr).toBe("canva-provider:error:arguments-invalid:no provider arguments are accepted\n");
 		for (const account of ["", "Personal", "personal team", "../x"]) {
 			const result = await runProvider([], { CANVA_ACCOUNT: account });
@@ -132,7 +118,7 @@ describe("Canva Provider process", () => {
 	});
 
 	test("sessions are keyed by account and never cross", async () => {
-		writeSessionFixture(harness.root, { account: "other", server: fake });
+		writeSessionFixture(harness.root, { account: "other" });
 		const result = await runProvider();
 		expect(result.stderr).toBe("canva-provider:error:auth-required:no session exists for this account; run canva-auth login\n");
 		expect(harness.has("bridge.json")).toBe(false);

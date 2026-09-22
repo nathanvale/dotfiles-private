@@ -34,7 +34,7 @@ const browser = async (url: string) => {
 const sessionFile = (account = "personal") => path.join(root, "connectors", "canva", account, "session.json");
 const sessionText = (account = "personal") => readFileSync(sessionFile(account), "utf8");
 const deps = (overrides: Partial<SessionDeps> = {}, config: Record<string, unknown> = {}): SessionDeps => {
-	const parsed = parseOAuthConfig({ resource: fake.resource, client: { mode: "dcr", clientName: "Connectors plugin" }, loopbackPort: 0, callbackTimeoutMs: 2000, refreshLockWaitMs: 300, ...config });
+	const parsed = parseOAuthConfig({ resource: fake.resource, client: { mode: "dcr", clientName: "Connectors plugin" }, loopbackPort: 0, callbackTimeoutMs: 2000, refreshLockWaitMs: 300, ...config }, true);
 	if (!parsed) throw new Error("test config invalid");
 	return {
 		fetch,
@@ -68,9 +68,23 @@ describe("login", () => {
 		expect([url.origin + url.pathname, url.searchParams.get("response_type"), url.searchParams.get("code_challenge_method")]).toEqual([`${fake.url}/authorize`, "code", "S256"]);
 		expect(url.searchParams.get("state")?.length).toBeGreaterThan(20);
 		expect(statSync(sessionFile()).mode & 0o7777).toBe(0o600);
+		const receiptFile = path.join(path.dirname(sessionFile()), "registration.json");
+		expect(statSync(receiptFile).mode & 0o7777).toBe(0o600);
+		expect(JSON.parse(readFileSync(receiptFile, "utf8"))).toMatchObject({ version: 1, account: "personal", issuer: fake.issuer, resource: fake.resource, client: { mode: "dcr", clientId: "fixture-client-1" } });
 		expect(statSync(path.dirname(sessionFile())).mode & 0o7777).toBe(0o700);
-		expect(JSON.parse(sessionText())).toMatchObject({ version: 1, account: "personal", accessToken: "fixture-access-token-1", refreshToken: "fixture-refresh-token-1", tokenEndpoint: `${fake.url}/token`, revocationEndpoint: `${fake.url}/revoke` });
+		expect(JSON.parse(sessionText())).toMatchObject({ version: 1, dcrReceipt: 1, account: "personal", accessToken: "fixture-access-token-1", refreshToken: "fixture-refresh-token-1", tokenEndpoint: `${fake.url}/token`, revocationEndpoint: `${fake.url}/revoke` });
 		for (const secret of SECRETS) expect(JSON.stringify(result)).not.toContain(secret);
+	});
+
+	test("a receipt orphaned before session persistence is replaced by the next clean login", async () => {
+		const directory = path.dirname(sessionFile());
+		mkdirSync(directory, { recursive: true, mode: 0o700 });
+		const receiptFile = path.join(directory, "registration.json");
+		writeFileSync(receiptFile, `${JSON.stringify({ version: 1, account: "personal", issuer: fake.issuer, resource: fake.resource, client: { mode: "dcr", clientId: "abandoned-registration", redirectUri: "http://127.0.0.1:1/callback" } })}\n`, { mode: 0o600 });
+		expect(existsSync(sessionFile())).toBe(false);
+		expect(await login("personal", { noBrowser: false }, deps())).toMatchObject({ ok: true });
+		expect(JSON.parse(readFileSync(receiptFile, "utf8"))).toMatchObject({ client: { clientId: "fixture-client-1" } });
+		expect(JSON.parse(sessionText())).toMatchObject({ dcrReceipt: 1, client: { clientId: "fixture-client-1" } });
 	});
 
 	test("--no-browser surfaces the URL and never opens a browser", async () => {
@@ -188,6 +202,44 @@ describe("login", () => {
 });
 
 describe("accessToken", () => {
+	test("rejects foreign resource, issuer, client, and credential endpoints before fresh return, refresh, or revocation", async () => {
+		expect((await login("personal", { noBrowser: false }, deps())).ok).toBe(true);
+		const original = JSON.parse(sessionText()) as Record<string, unknown>;
+		const cases: { name: string; change: Record<string, unknown> }[] = [
+			{ name: "resource", change: { resource: `${fake.url}/other` } },
+			{ name: "issuer", change: { issuer: "https://other.example/" } },
+			{ name: "same-origin issuer", change: { issuer: `${fake.url}/other` } },
+			{ name: "token endpoint", change: { tokenEndpoint: "https://other.example/token" } },
+			{ name: "loopback token endpoint", change: { tokenEndpoint: "http://127.0.0.1:1/token" } },
+			{ name: "revocation endpoint", change: { revocationEndpoint: "https://other.example/revoke" } },
+			{ name: "client mode", change: { client: { mode: "registered", clientId: "portal-client", redirectUri: "http://127.0.0.1:47391/callback" } } },
+			{ name: "client redirect", change: { client: { mode: "dcr", clientId: "fixture-client-1", redirectUri: "http://other.example/callback" } } },
+		];
+		const outbound: string[] = [];
+		const observed = deps({ fetch: async (input, init) => {
+			if (init?.method === "POST") outbound.push(String(input));
+			return fetch(input, init);
+		} });
+		for (const scenario of cases) {
+			const record = { ...original, ...scenario.change };
+			writeFileSync(sessionFile(), `${JSON.stringify(record)}\n`, { mode: 0o600 });
+			for (const at of [NOW, NOW + 3_600_000]) {
+				now = at;
+				expect(causeOf(await accessToken("personal", observed)), scenario.name).toBe("session-binding-invalid");
+			}
+			expect(await logout("personal", observed), scenario.name).toMatchObject({ ok: false, cause: "session-binding-invalid", revoked: "not-needed" });
+			expect(JSON.parse(sessionText())).toEqual(record);
+		}
+		expect(outbound).toEqual([]);
+		expect([fake.calls.refreshRequests, fake.calls.revocations]).toEqual([0, []]);
+	});
+
+	test("production configuration rejects HTTP loopback while the test fixture policy admits it", () => {
+		const raw = { resource: fake.resource, client: { mode: "dcr", clientName: "Connectors plugin" }, loopbackPort: 0 };
+		expect(parseOAuthConfig(raw)).toBeNull();
+		expect(parseOAuthConfig(raw, true)?.resource).toBe(fake.resource);
+	});
+
 	test("returns the stored token while fresh, then rotates the single-use refresh token once", async () => {
 		expect((await login("personal", { noBrowser: false }, deps())).ok).toBe(true);
 		expect(await accessToken("personal", deps())).toMatchObject({ ok: true, token: "fixture-access-token-1" });
@@ -198,7 +250,7 @@ describe("accessToken", () => {
 		expect(fake.calls.refreshRequests).toBe(1);
 		expect(fake.tokenBodies.at(-1)?.get("refresh_token")).toBe("fixture-refresh-token-1");
 		expect(JSON.parse(sessionText()).refreshToken).toBe("fixture-refresh-token-2");
-		expect(readdirSync(path.dirname(sessionFile()))).toEqual(["session.json"]);
+		expect(readdirSync(path.dirname(sessionFile())).sort()).toEqual(["registration.json", "session.json"]);
 	});
 
 	test("two concurrent refreshes make exactly one token request", async () => {
@@ -254,7 +306,7 @@ describe("accessToken", () => {
 		now = NOW + 3_600_000;
 		const expected = { ok: false, cause: "client-secret-unavailable", detail: "the stored registered client cannot authenticate because CANVA_CLIENT_SECRET is missing or does not match oauth.json; restore the scoped secret and matching registered client configuration, then retry" } as const;
 		expect(await accessToken("work", deps({ env: {} }, registeredConfig))).toEqual(expected);
-		expect(await accessToken("work", deps({ env: { CANVA_CLIENT_SECRET: secret } }, { client: { mode: "registered", clientId: "other-client" }, loopbackPort: 47_391 }))).toEqual(expected);
+		expect(await accessToken("work", deps({ env: { CANVA_CLIENT_SECRET: secret } }, { client: { mode: "registered", clientId: "other-client" }, loopbackPort: 47_391 }))).toMatchObject({ ok: false, cause: "session-binding-invalid" });
 		expect([fake.calls.refreshRequests, existsSync(sessionFile("work")), sessionText("work").includes(secret)]).toEqual([0, true, false]);
 	});
 
@@ -305,9 +357,19 @@ describe("status and logout", () => {
 		for (const secret of SECRETS) expect(JSON.stringify(shown)).not.toContain(secret);
 		expect(await logout("personal", deps())).toEqual({ ok: true, removed: true, revoked: "confirmed" });
 		expect(fake.calls.revocations).toEqual(["fixture-refresh-token-1"]);
-		// The session state is removed; the owned directory outlives it and holds no lock.
-		expect([existsSync(sessionFile()), readdirSync(path.dirname(sessionFile()))]).toEqual([false, []]);
+		// The grant is removed; the independent DCR identity remains for later login.
+		expect([existsSync(sessionFile()), readdirSync(path.dirname(sessionFile()))]).toEqual([false, ["registration.json"]]);
 		expect(await logout("personal", deps())).toEqual({ ok: true, removed: false, revoked: "not-needed" });
+	});
+
+	test("a later login reuses the private DCR registration for the same redirect URI", async () => {
+		expect((await login("personal", { noBrowser: false }, deps())).ok).toBe(true);
+		const receiptFile = path.join(path.dirname(sessionFile()), "registration.json");
+		const receipt = JSON.parse(readFileSync(receiptFile, "utf8"));
+		expect(await logout("personal", deps())).toMatchObject({ ok: true, removed: true });
+		const port = Number(new URL(receipt.client.redirectUri).port);
+		expect((await login("personal", { noBrowser: false }, deps({}, { loopbackPort: port }))).ok).toBe(true);
+		expect([fake.calls.registrations, JSON.parse(readFileSync(receiptFile, "utf8")).client.clientId]).toEqual([1, receipt.client.clientId]);
 	});
 
 	test("a registered session rehydrates its scoped secret for refresh and revoke without persisting it", async () => {
@@ -342,7 +404,7 @@ describe("status and logout", () => {
 		expect((await login("work", { noBrowser: false }, registered)).ok).toBe(true);
 		const expected = { ok: false, cause: "client-secret-unavailable", detail: "the stored registered client cannot authenticate because CANVA_CLIENT_SECRET is missing or does not match oauth.json; restore the scoped secret and matching registered client configuration, then retry", revoked: "not-needed" } as const;
 		expect(await logout("work", deps({ env: {} }, registeredConfig))).toEqual(expected);
-		expect(await logout("work", deps({ env: { CANVA_CLIENT_SECRET: secret } }, { client: { mode: "registered", clientId: "other-client" }, loopbackPort: 47_391 }))).toEqual(expected);
+		expect(await logout("work", deps({ env: { CANVA_CLIENT_SECRET: secret } }, { client: { mode: "registered", clientId: "other-client" }, loopbackPort: 47_391 }))).toMatchObject({ ok: false, cause: "session-binding-invalid", revoked: "not-needed" });
 		expect([fake.calls.revocations, existsSync(sessionFile("work")), sessionText("work").includes(secret)]).toEqual([[], true, false]);
 	});
 
