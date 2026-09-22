@@ -57,7 +57,7 @@ The Connectors plugin's `atlassian` skill owns:
   API tokens, credential items, and tool surfaces are product-specific; each
   carries an exact-name `allowedTools` list of primary read and write tools
   and never a broad dispatcher;
-- Bun/TypeScript provider processes that receive credentials below MCPorter;
+- Bun/TypeScript provider processes and one custody child below MCPorter;
 - a Bun semantic dispatcher (`scripts/atlassian-dispatch.ts`) that is the only
   supported entrypoint: ten Atlassian Operations, tenant guard, live schema
   confirmation, provider selection, the write journal, and the operator
@@ -74,7 +74,11 @@ lack an explicit `allowedTools` array.
 The launcher passes only the non-secret tenant slug to MCPorter. Each product
 route maps the slug and its static product to the 1Password item
 `JIRA_<TENANT>_API_TOKEN` or `CONFLUENCE_<TENANT>_API_TOKEN`; that mapping has
-one owner in the provider common module. The Official provider reads the
+one owner in the provider common module. The dispatcher invokes a custody child
+with only that tenant and product; the child reads the complete mapped item,
+validates its top-level positive `version` and exact `username`, and returns
+only a namespaced nonsecret principal/version binding. The dispatcher never
+reads the complete item or asks an operator to maintain a revision field. The Official provider reads the
 item's `username` as metadata, injects only the `credential` field into its own
 injected phase through the credential helper, composes the Basic value inside
 that process, and execs a pinned `hyper-mcp-remote` v0.5.0 child with a
@@ -193,10 +197,13 @@ Atlassian authentication.
 Offline, fixture-proven (plugin test suite):
 
 - Both Connectors plugin manifests and marketplace versions validate.
-- The registry mirrors the contract allow-lists; the launcher refuses missing
-  allow-lists, ad-hoc overrides, and undeclared selectors.
-- MCPorter holds no credential; only the selected provider child receives its
-  scoped value; Official receives Basic and never Bearer or the raw token.
+- `config/mcporter.json` is the runtime allow-list source; its validated
+  vocabulary drives the contract, and the launcher refuses missing allow-lists,
+  ad-hoc overrides, and undeclared selectors.
+- MCPorter and the dispatcher hold no credential value. The custody child may
+  inspect the selected complete item only to emit its nonsecret binding; the
+  selected provider receives its scoped value. Official receives Basic and
+  never Bearer or the raw token.
 - Each provider fails closed without `site_url`; the built-in `url` is never
   a tenant origin.
 - Dispatcher tenant guard, schema confirmation, read fallback gate, explicit

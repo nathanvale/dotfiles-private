@@ -12,8 +12,8 @@ CLIs, raw MCPorter calls, and browser automation outside this route.
 
 ```sh
 SKILL_DIR="<directory containing this SKILL.md>"
-DISPATCH="bun $SKILL_DIR/scripts/atlassian-dispatch.ts"
-$DISPATCH --discover
+DISPATCH="$SKILL_DIR/scripts/atlassian-dispatch.ts"
+bun "$DISPATCH" --discover
 ```
 
 Every call prints one JSON envelope on stdout and exits 0 on success, 2 for a
@@ -39,10 +39,10 @@ accessible resources include that exact origin (`refused-tenant` otherwise).
 ## Reads
 
 ```sh
-$DISPATCH --tenant <tenant> issue.get    --input '{"issueKey":"PROJ-1","fields":["summary"]}'
-$DISPATCH --tenant <tenant> issue.search --input '{"jql":"project = PROJ","maxResults":10}'
-$DISPATCH --tenant <tenant> page.get     --input '{"pageId":"123","detail":"full"}'
-$DISPATCH --tenant <tenant> page.search  --input '{"cql":"type = page AND title ~ \"roadmap\"","maxResults":10}'
+bun "$DISPATCH" --tenant <tenant> issue.get    --input '{"issueKey":"PROJ-1","fields":["summary"]}'
+bun "$DISPATCH" --tenant <tenant> issue.search --input '{"jql":"project = PROJ","maxResults":10}'
+bun "$DISPATCH" --tenant <tenant> page.get     --input '{"pageId":"123","detail":"full"}'
+bun "$DISPATCH" --tenant <tenant> page.search  --input '{"cql":"type = page AND title ~ \"roadmap\"","maxResults":10}'
 ```
 
 - Inputs are the neutral keys above only; unknown keys refuse with `input-invalid`.
@@ -58,8 +58,8 @@ provider arguments, stable candidate or comment identifiers, and the target's
 current revision; the apply refuses when any of that evidence moved.
 
 ```sh
-$DISPATCH --tenant <tenant> issue.comment --input '{"issueKey":"PROJ-1","body":"..."}' --preview
-$DISPATCH --tenant <tenant> issue.comment --input '{"issueKey":"PROJ-1","body":"..."}' --apply <previewId>
+bun "$DISPATCH" --tenant <tenant> issue.comment --input '{"issueKey":"PROJ-1","body":"..."}' --preview
+bun "$DISPATCH" --tenant <tenant> issue.comment --input '{"issueKey":"PROJ-1","body":"..."}' --apply <previewId>
 ```
 
 | Operation | Input keys | Revision bound |
@@ -96,9 +96,9 @@ request may have reached the provider without a confirmed effect. The object is
 blocked for every write until the receipt resolves. Do not retry. Run:
 
 ```sh
-$DISPATCH --tenant <tenant> receipts
-$DISPATCH --tenant <tenant> receipt    --run <runId>
-$DISPATCH --tenant <tenant> adjudicate --run <runId> --input '<the identical input>'
+bun "$DISPATCH" --tenant <tenant> receipts
+bun "$DISPATCH" --tenant <tenant> receipt    --run <runId>
+bun "$DISPATCH" --tenant <tenant> adjudicate --run <runId> --input '<the identical input>'
 ```
 
 Adjudicate reads the object back through the receipt's own provider. It settles
@@ -119,8 +119,8 @@ trusted origin, and principal. Record one with a read that both providers can
 answer:
 
 ```sh
-$DISPATCH --tenant <tenant> parity --operation issue.get --input '{"issueKey":"PROJ-1"}'
-$DISPATCH --tenant <tenant> parity --operation page.get  --input '{"pageId":"123"}'
+bun "$DISPATCH" --tenant <tenant> parity --operation issue.get --input '{"issueKey":"PROJ-1"}'
+bun "$DISPATCH" --tenant <tenant> parity --operation page.get  --input '{"pageId":"123"}'
 ```
 
 Parity is refused (`refused-parity`) unless Official's user info names the

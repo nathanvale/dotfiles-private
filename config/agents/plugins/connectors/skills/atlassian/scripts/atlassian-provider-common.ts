@@ -4,16 +4,15 @@
 // process replacement. Nothing here prints a secret value.
 import { existsSync, statSync } from "node:fs";
 import path from "node:path";
+import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "../../../bin/safe-environment.ts";
 
 export const TENANT_PATTERN = /^[a-z][a-z0-9-]*$/;
 export const PRODUCTS = ["jira", "confluence"] as const;
 export type Product = (typeof PRODUCTS)[number];
 export const CREDENTIAL_VAULT = "API Credentials";
-// The trusted site origin prefers a custom `site_url` field. Providers accept
-// the built-in `url` field only as a strictly validated compatibility value.
+// The trusted site origin is the custom `site_url` field only.
 export const SITE_URL_FIELD = "site_url";
-const SAFE_ENV = ["HOME", "PATH", "LANG", "LC_ALL", "TMPDIR", "XDG_STATE_HOME"] as const;
-// Raw input must be a bare authority with an optional default port and slash.
+// Raw input must be a bare authority with an optional trailing slash.
 // The WHATWG parser normalises an explicit default port, so authority checks
 // run on the raw string first to reject credentials and non-default ports.
 const RAW_SITE_URL = /^https:\/\/([^\/?#]*)\/?$/i;
@@ -54,15 +53,17 @@ export function credentialWrapperPath(home: string | undefined): string {
 
 export function credentialWrapper(): string {
 	const wrapper = credentialWrapperPath(process.env.HOME);
-	let executable = false;
+	if (!credentialWrapperPresent(wrapper)) fail("credential-wrapper-missing", "restore the dotfiles 1Password wrapper");
+	return wrapper;
+}
+
+export function credentialWrapperPresent(wrapper: string): boolean {
 	try {
 		const metadata = statSync(wrapper);
-		executable = metadata.isFile() && (metadata.mode & 0o111) !== 0;
+		return metadata.isFile() && (metadata.mode & 0o111) !== 0;
 	} catch {
-		executable = false;
+		return false;
 	}
-	if (!executable) fail("credential-wrapper-missing", "restore the dotfiles 1Password wrapper");
-	return wrapper;
 }
 
 export function executableOnPath(name: string): string {
@@ -72,12 +73,7 @@ export function executableOnPath(name: string): string {
 }
 
 export function cleanEnvironment(): Record<string, string> {
-	const environment: Record<string, string> = {};
-	for (const key of SAFE_ENV) {
-		const value = process.env[key];
-		if (value !== undefined) environment[key] = value;
-	}
-	return environment;
+	return safeEnvironment(process.env);
 }
 
 export function singleLine(value: string | undefined): value is string {
@@ -120,6 +116,80 @@ export function itemFieldMap(data: unknown): Map<string, string> | null {
 	return values;
 }
 
+function versionOf(item: Record<string, unknown>): string | null {
+	const version = item.version;
+	if (typeof version === "number") return Number.isSafeInteger(version) && version > 0 ? String(version) : null;
+	return typeof version === "string" && /^(?:[1-9][0-9]*)$/.test(version) ? version : null;
+}
+
+export interface InvocationContext {
+	principal: string;
+	itemVersion: string;
+	origin: string;
+}
+
+export function itemInvocationContext(item: unknown): InvocationContext | null {
+	if (typeof item !== "object" || item === null || Array.isArray(item)) return null;
+	const version = versionOf(item as Record<string, unknown>);
+	const fields = itemFieldMap(item);
+	const principal = fields?.get("username");
+	const siteUrl = fields?.get(SITE_URL_FIELD);
+	if (!version || !principal || !singleLine(principal) || principal.includes(":" ) || !siteUrl || !validSiteUrl(siteUrl)) return null;
+	return { principal, itemVersion: `onepassword-item-version:${version}`, origin: `https://${new URL(siteUrl).hostname}` };
+}
+
+export function encodeInvocationContext(context: InvocationContext): string {
+	return JSON.stringify(context);
+}
+
+export function parseInvocationContext(value: string | undefined): InvocationContext | null {
+	try {
+		const parsed: unknown = JSON.parse(value ?? "");
+		if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+		const record = parsed as Record<string, unknown>;
+		if (Object.keys(record).length !== 3 || typeof record.principal !== "string" || typeof record.itemVersion !== "string" || typeof record.origin !== "string") return null;
+		if (!singleLine(record.principal) || record.principal.includes(":" ) || !/^onepassword-item-version:[1-9][0-9]*$/.test(record.itemVersion) || !validSiteUrl(record.origin)) return null;
+		return { principal: record.principal, itemVersion: record.itemVersion, origin: record.origin };
+	} catch {
+		return null;
+	}
+}
+
+// Provider startup receives only the dispatcher-bound safe context. The exact
+// full item is read separately by readBoundItem immediately before a child
+// executable can be probed or spawned.
+export function selectedProviderInvocation(): { tenant: string; product: Product; itemTitle: string; context: InvocationContext } {
+	const tenant = tenantFromEnvironment();
+	const product = productFromEnvironment();
+	const context = parseInvocationContext(process.env[INTERNAL_INVOCATION_CONTEXT_ENV]);
+	if (!context) fail("credential-context-invalid", "restart through the semantic dispatcher");
+	return { tenant, product, itemTitle: productItemTitle(product, tenant), context };
+}
+
+export function readCredentialItem(itemTitle: string): unknown {
+	const wrapper = credentialWrapper();
+	const read = Bun.spawnSync([wrapper, "op", "item", "get", itemTitle, "--vault", CREDENTIAL_VAULT, "--format", "json"], { env: cleanEnvironment(), stdin: "ignore" });
+	if (read.exitCode !== 0) fail("credential-unavailable", `cannot read ${itemTitle}; run with-one-password-token check`);
+	try {
+		return JSON.parse(read.stdout.toString());
+	} catch {
+		return fail("credential-invalid", `${itemTitle} returned invalid JSON`);
+	}
+}
+
+// A Provider re-reads the exact item immediately before its downstream
+// executable starts. A rotated item or changed site is a precondition failure,
+// never a retry or a provider fallback.
+export function readBoundItem(itemTitle: string, expected: InvocationContext): Map<string, string> {
+	const item = readCredentialItem(itemTitle);
+	const actual = itemInvocationContext(item);
+	if (!actual) fail("credential-invalid", `${itemTitle} needs a valid version, username, and ${SITE_URL_FIELD}`);
+	if (actual.principal !== expected.principal || actual.itemVersion !== expected.itemVersion || actual.origin !== expected.origin) fail("credential-context-stale", "credential item changed; restart the semantic operation");
+	const fields = itemFieldMap(item);
+	if (!fields) fail("credential-invalid", `${itemTitle} returned an invalid item or duplicate field labels`);
+	return fields;
+}
+
 // Metadata or full item read through the credential helper, inside this
 // process. With `fields`, only those labels are requested from 1Password.
 export function readItemFields(itemTitle: string, fields?: readonly string[]): Map<string, string> {
@@ -149,8 +219,7 @@ export function validSiteUrl(url: string): boolean {
 	if (authority.includes("@")) return false;
 	const portIndex = authority.lastIndexOf(":");
 	const host = (portIndex === -1 ? authority : authority.slice(0, portIndex)).toLowerCase();
-	const port = portIndex === -1 ? "" : authority.slice(portIndex + 1);
-	if (portIndex !== -1 && port !== "443") return false;
+	if (portIndex !== -1) return false;
 	let parsed: URL;
 	try {
 		parsed = new URL(url);
@@ -161,7 +230,7 @@ export function validSiteUrl(url: string): boolean {
 }
 
 export function siteOrigins(url: string): { origin: string; jira: string; confluence: string } {
-	if (!validSiteUrl(url)) fail("site-url-invalid", "the selected site_url or url field must be an https://*.atlassian.net origin");
+	if (!validSiteUrl(url)) fail("site-url-invalid", "the site_url field must be an https://*.atlassian.net origin");
 	const origin = `https://${new URL(url).hostname}`;
 	return { origin, jira: origin, confluence: `${origin}/wiki` };
 }

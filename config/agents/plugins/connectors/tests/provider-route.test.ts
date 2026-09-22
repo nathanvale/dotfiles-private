@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
-import { planRoute, RouteError } from "../bin/provider-route.ts";
+import { planDispatcherRoute, planRoute, RouteError } from "../bin/provider-route.ts";
+import { INTERNAL_INVOCATION_CONTEXT_ENV } from "../bin/safe-environment.ts";
 import { AMBIENT_SENTINEL, assertCustody, createHarness, FIXTURE_ROUTE, FIXTURES, type Harness, PLUGIN_ROOT, ROUTE } from "./harness.ts";
 
 // Independent oracle: the MCPorter release whose stdio semantics the fake mirrors.
@@ -30,6 +31,28 @@ describe("route plan (in-process)", () => {
 			{},
 		);
 		expect(plan.argv.slice(2)).toEqual(["call", "probe.probe", "limit=1", "query:bun", "note=@@literal", "--output", "json", "--timeout=5000", "--args", '{"a":1}', "--no-oauth"]);
+	});
+
+	test("the private dispatcher seam accepts one fixed context channel and rejects old environment-map collisions", () => {
+		const argv = ["probe-skill", "--select", "selection=example", "--", "list", "--json"];
+		const plan = planDispatcherRoute(argv, FIXTURES, { PATH: "/safe/bin" }, "context-v1");
+		expect(plan.env).toEqual({ MCPORTER_NO_KEEPALIVE: "*", PATH: "/safe/bin", PROBE_SELECTION: "example", [INTERNAL_INVOCATION_CONTEXT_ENV]: "context-v1" });
+		const rejectionCode = (attemptedMetadata: unknown) => {
+			try {
+				planDispatcherRoute(argv, FIXTURES, { PATH: "/safe/bin" }, attemptedMetadata as string);
+			} catch (error) {
+				if (error instanceof RouteError) return error.code;
+				throw error;
+			}
+			return "accepted";
+		};
+		for (const attemptedMetadata of [
+			{ PATH: "/attacker/bin" },
+			{ PROBE_SELECTION: "other" },
+			{ MCPORTER_NO_KEEPALIVE: "off" },
+		] as const) {
+			expect(rejectionCode(attemptedMetadata)).toBe("internal-context-invalid");
+		}
 	});
 
 	test("refusals carry a closed cause and a Contract Core exit class", () => {
@@ -133,8 +156,19 @@ describe("public process route", () => {
 	});
 
 	test("a dispatcher-owned Atlassian tool refuses before MCPorter or either provider process can start", async () => {
-		const result = await harness.run(["atlassian", "--provider", "atlassian-official-jira", "--select", "tenant=example", "--", "call", "createJiraIssue", "--args", '{"cloudId":"cloud-example","projectKey":"PROJ","issueType":"Bug","summary":"must not spawn"}']);
+		const secret = "fixture-atlassian-api-key";
+		const result = await harness.run(["atlassian", "--provider", "atlassian-official-jira", "--select", "tenant=example", "--", "call", "createJiraIssue", "--args", '{"cloudId":"cloud-example","projectKey":"PROJ","issueType":"Bug","summary":"must not spawn"}'], { FIXTURE_SECRET: secret });
 		expect([result.code, result.stdout, result.stderr.includes("provider-route:error:dispatcher-owned:")]).toEqual([3, "", true]);
+		expect(`${result.stdout}${result.stderr}`).not.toContain(secret);
+		expect(harness.has("mcporter.json")).toBe(false);
+		expect(harness.has("wrapper.log")).toBe(false);
+	});
+
+	test("a dispatcher-owned Atlassian registry list also refuses before MCPorter or either provider process can start", async () => {
+		const secret = "fixture-community-secret";
+		const result = await harness.run(["atlassian", "--provider", "atlassian-official-jira", "--select", "tenant=example", "--", "list", "--json"], { FIXTURE_SECRET: secret });
+		expect([result.code, result.stdout, result.stderr.includes("provider-route:error:dispatcher-owned:")]).toEqual([3, "", true]);
+		expect(`${result.stdout}${result.stderr}`).not.toContain(secret);
 		expect(harness.has("mcporter.json")).toBe(false);
 		expect(harness.has("wrapper.log")).toBe(false);
 	});

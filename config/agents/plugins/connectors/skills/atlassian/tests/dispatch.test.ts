@@ -7,15 +7,16 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createHarness, type Harness, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
+import { assertCustody, createHarness, itemJson, type Harness, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
 import { run } from "../scripts/atlassian-dispatch.ts";
-import { ALLOWED_TOOLS, OPERATION_SPECS, OPERATIONS, SERVERS, serverFor } from "../scripts/dispatch/contract.ts";
-import { type Dependencies, type ParityAttestation, type ParityEvidence, REPAIR_TEXT, type SchemaTool, type Transport, type TransportResult } from "../scripts/dispatch/engine.ts";
+import { ALLOWED_TOOLS, OPERATION_SPECS, OPERATIONS, registryToolVocabulary, SERVERS, serverFor } from "../scripts/dispatch/contract.ts";
+import { attestationMatches, type Dependencies, type ParityAttestation, type ParityEvidence, REPAIR_TEXT, type SchemaTool, type Transport, type TransportResult } from "../scripts/dispatch/engine.ts";
 import { canonicalDigest, openJournal } from "../scripts/dispatch/journal.ts";
-import { parityStore, resolvePrincipal, resolveSiteOrigin } from "../scripts/dispatch/runtime.ts";
+import { parityStore, resolveCredentialContext } from "../scripts/dispatch/runtime.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
 const DISPATCH = path.join(SKILL, "scripts", "atlassian-dispatch.ts");
+const CREDENTIAL_BINDING = path.join(SKILL, "scripts", "atlassian-credential-binding.ts");
 const ORIGIN = "https://example.atlassian.net";
 const MANAGEMENT_URL = "https://id.atlassian.com/manage-profile/security/api-tokens";
 const OJ = "atlassian-official-jira";
@@ -23,7 +24,7 @@ const OC = "atlassian-official-confluence";
 const CJ = "atlassian-community-jira";
 const CC = "atlassian-community-confluence";
 const PRINCIPAL = "service@example.invalid";
-const CREDENTIAL_REVISION = "item-revision-1";
+const ITEM_VERSION = "onepassword-item-version:1";
 const NOW = 1_700_000_000_000;
 
 // Independent oracle: the exact provider tool per operation and whether the
@@ -98,7 +99,7 @@ const attested = (operation: ParityAttestation["operation"], inputShape: string[
 		operation,
 		inputShape,
 		origin: ORIGIN,
-		credentialDigest: canonicalDigest({ principal: PRINCIPAL, revision: CREDENTIAL_REVISION }),
+		credentialDigest: canonicalDigest({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN }),
 		objectSemantics: ({ "issue.get": "issue:key+id", "issue.search": "issues:key-set", "page.get": "page:id+version+title", "page.search": "pages:id-set" } as Record<string, string>)[operation] ?? "",
 		recordedAt: NOW - 1000,
 		expiresAt: NOW + 1000,
@@ -116,11 +117,11 @@ interface Call {
 function fakeTransport(results: Record<string, TransportResult | ((args: Record<string, unknown>) => TransportResult)> = {}, schemas: Record<string, SchemaTool[] | TransportResult> = {}, observe?: (call: Call) => void) {
 	const calls: Call[] = [];
 	const transport: Transport = {
-		async listTools(server) {
+		async listTools(_context, server) {
 			const schema = schemas[server] ?? SCHEMAS[server] ?? [];
 			return Array.isArray(schema) ? { ok: true, data: schema } : schema;
 		},
-		async call(server, name, args) {
+		async call(_context, server, name, args) {
 			const call = { server, tool: name, args };
 			calls.push(call);
 			observe?.(call);
@@ -149,11 +150,10 @@ const seen: { tenant: string; product: string }[] = [];
 function deps(overrides: Partial<Dependencies> = {}): Dependencies {
 	return {
 		transport: fakeTransport().transport,
-		siteOrigin: async (tenant, product) => {
+		credentialContext: async (tenant, product) => {
 			seen.push({ tenant, product });
-			return ORIGIN;
+			return { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN };
 		},
-		credentialBinding: async () => ({ principal: PRINCIPAL, revision: CREDENTIAL_REVISION }),
 		parity: async () => UNPROVEN,
 		attestParity: async (attestation) => {
 			attestations.push(attestation);
@@ -198,16 +198,30 @@ describe("operation contract and routes", () => {
 		for (const tools of Object.values(ALLOWED_TOOLS)) for (const broad of ["executeWrite", "executeRead", "executeDestructive", "discover", "createConfluenceComment"]) expect(tools).not.toContain(broad);
 	});
 
-	test("the registry mirrors the contract: servers, allow-lists, and static product per route", () => {
+	test("the registry and its derived runtime vocabulary have exact independent allow-lists", () => {
 		const registry = JSON.parse(readFileSync(path.join(SKILL, "config", "mcporter.json"), "utf8")) as { mcpServers: Record<string, { allowedTools: string[]; env: Record<string, string>; command: string }> };
-		expect(Object.keys(registry.mcpServers).sort()).toEqual([...SERVERS].sort());
+		const expected = {
+			[OJ]: ["atlassianUserInfo", "getAccessibleAtlassianResources", "getJiraIssue", "searchJiraIssuesUsingJql", "createJiraIssue", "editJiraIssue", "addOrEditJiraIssueComment"],
+			[OC]: ["atlassianUserInfo", "getAccessibleAtlassianResources", "getConfluenceContent", "searchConfluence", "getConfluenceSpace", "createConfluenceContent", "updateConfluenceContent"],
+			[CJ]: ["jira_get_issue", "jira_search", "jira_create_issue", "jira_update_issue", "jira_add_comment"],
+			[CC]: ["confluence_get_page", "confluence_search", "confluence_get_space", "confluence_get_comments", "confluence_create_page", "confluence_update_page", "confluence_add_comment"],
+		};
+		expect(Object.fromEntries(Object.entries(registry.mcpServers).map(([server, entry]) => [server, entry.allowedTools]))).toEqual(expected);
+		expect(ALLOWED_TOOLS).toEqual(expected);
 		for (const server of SERVERS) {
 			const entry = registry.mcpServers[server];
-			expect([server, entry?.allowedTools]).toEqual([server, [...ALLOWED_TOOLS[server]]]);
 			expect([server, entry?.env.ATLASSIAN_PRODUCT]).toEqual([server, server.endsWith("-jira") ? "jira" : "confluence"]);
 			expect([server, entry?.env.ATLASSIAN_TENANT]).toEqual([server, "${ATLASSIAN_TENANT}"]);
 			expect([server, entry?.command]).toEqual([server, server.includes("official") ? "../scripts/atlassian-official-provider.ts" : "../scripts/atlassian-community-provider.ts"]);
 		}
+	});
+
+	test("registry vocabulary parsing fails closed for a broad dispatcher or an incomplete server set", () => {
+		const registry = JSON.parse(readFileSync(path.join(SKILL, "config", "mcporter.json"), "utf8")) as { mcpServers: Record<string, { allowedTools: string[] }> };
+		registry.mcpServers[OJ]!.allowedTools = ["executeRead"];
+		expect(() => registryToolVocabulary(registry)).toThrow(/registry-invalid/);
+		delete registry.mcpServers[CC];
+		expect(() => registryToolVocabulary(registry)).toThrow(/registry-invalid/);
 	});
 
 	test("discovery lists every operation and command with the exit meanings, without a tenant", async () => {
@@ -266,6 +280,34 @@ describe("Official reads", () => {
 		]);
 	});
 
+	test("one semantic operation binds one immutable context through schema list and every call", async () => {
+		const contexts: { principal: string; itemVersion: string; origin: string }[] = [];
+		let reads = 0;
+		const transport: Transport = {
+			async listTools(context, server) {
+				contexts.push(context);
+				return { ok: true, data: SCHEMAS[server] ?? [] };
+			},
+			async call(context, _server, tool) {
+				contexts.push(context);
+				if (tool === "getAccessibleAtlassianResources") return { ok: true, data: RESOURCES };
+				return { ok: true, data: { key: "PROJ-1" } };
+			},
+		};
+		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({
+			transport,
+			credentialContext: async () => {
+				reads += 1;
+				return { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN };
+			},
+		}));
+		expect([envelope.result.causeCode, reads, contexts]).toEqual(["success", 1, [
+			{ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN },
+			{ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN },
+			{ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN },
+		]]);
+	});
+
 	test("issue.search, page.get, and page.search shape their arguments per tool on the product route", async () => {
 		const { transport, calls } = fakeTransport();
 		seen.length = 0;
@@ -311,9 +353,9 @@ describe("refusals that never fall back", () => {
 
 	test("an unresolved site origin refuses before any provider call", async () => {
 		const { transport, calls } = fakeTransport();
-		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport, siteOrigin: async () => { throw new Error("site-unresolved: no site_url or url"); } }));
+		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport, credentialContext: async () => { throw new Error("site-unresolved: no site_url"); } }));
 		expect([envelope.result.outcome, envelope.result.causeCode]).toEqual(["refused", "site-unresolved"]);
-		expect(envelope.result.repairAction).toBe("the tenant's credential item must expose a valid site_url or compatible url field");
+		expect(envelope.result.repairAction).toBe("the tenant's credential item must expose a valid site_url field");
 		expect(calls).toEqual([]);
 	});
 
@@ -836,7 +878,7 @@ describe("parity attestation", () => {
 				operation: "issue.get",
 				inputShape: ["issueKey"],
 				origin: ORIGIN,
-				credentialDigest: canonicalDigest({ principal: PRINCIPAL, revision: CREDENTIAL_REVISION }),
+				credentialDigest: canonicalDigest({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN }),
 				objectSemantics: "issue:key+id",
 				recordedAt: NOW,
 				expiresAt: NOW + 7 * 24 * 60 * 60 * 1000,
@@ -852,7 +894,7 @@ describe("parity attestation", () => {
 		const envelope = await dispatch(["--provider", "community", "issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({
 			transport,
 			parity: async () => stale,
-			credentialBinding: async () => ({ principal: "other@example.invalid", revision: "item-revision-2" }),
+			credentialContext: async () => ({ principal: "other@example.invalid", itemVersion: "onepassword-item-version:2", origin: ORIGIN }),
 		}));
 		expect([envelope.result.causeCode, envelope.result.repairAction?.includes("parity-mismatch")]).toEqual(["refused-parity", true]);
 		expect(calls).toEqual([]);
@@ -876,7 +918,7 @@ describe("parity attestation", () => {
 		const store = parityStore(env);
 		const attestation = (attested("issue.get", ["issueKey"]) as { attestation: ParityAttestation }).attestation;
 		await store.attestParity(attestation);
-		const request = { tenant: "example", product: "jira" as const, operation: "issue.get" as const, inputShape: ["issueKey"], origin: ORIGIN, credentialDigest: canonicalDigest({ principal: PRINCIPAL, revision: CREDENTIAL_REVISION }), now: NOW };
+		const request = { tenant: "example", product: "jira" as const, operation: "issue.get" as const, inputShape: ["issueKey"], origin: ORIGIN, credentialDigest: canonicalDigest({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN }), now: NOW };
 		expect(await store.parity(request)).toEqual({ status: "attested", attestation });
 		expect(await store.parity({ ...request, inputShape: ["issueKey", "fields"] })).toEqual({ status: "unproven" });
 		const directory = path.join(stateRoot, "connectors", "atlassian", "example", "parity");
@@ -892,32 +934,66 @@ describe("production adapters", () => {
 	});
 	afterEach(() => harness.dispose());
 	const env = () => ({ HOME: harness.home, PATH: process.env.PATH ?? "", TMPDIR: harness.root, XDG_STATE_HOME: harness.root });
-	const fields = (entries: Record<string, string>) => JSON.stringify({ fields: Object.entries(entries).map(([label, value]) => ({ id: label, label, value })) });
+	const fields = itemJson;
 
-	test("the site resolver prefers site_url and returns its canonical origin", async () => {
-		harness.write("item.json", fields({ url: "https://other.atlassian.net", site_url: "https://Example.atlassian.net/" }));
-		expect(await resolveSiteOrigin("example", "confluence", env())).toBe(ORIGIN);
-		expect(readFileSync(path.join(harness.root, "wrapper.log"), "utf8").trim()).toBe("op item get CONFLUENCE_EXAMPLE_API_TOKEN --vault API Credentials --fields label=site_url,label=url --format json");
+	test("the custody child performs one complete read and returns only the typed nonsecret context", async () => {
+		harness.write("item.json", fields({ username: PRINCIPAL, credential: "x", site_url: "https://Example.atlassian.net/" }, 42));
+		expect(await resolveCredentialContext("example", "confluence", env())).toEqual({ principal: PRINCIPAL, itemVersion: "onepassword-item-version:42", origin: ORIGIN });
+		expect(readFileSync(path.join(harness.root, "wrapper.log"), "utf8").trim()).toBe("op item get CONFLUENCE_EXAMPLE_API_TOKEN --vault API Credentials --format json");
 	});
 
-	test("the site resolver accepts the canonical legacy url when site_url is absent", async () => {
-		harness.write("item.json", fields({ url: "https://Example.atlassian.net:443/" }));
-		expect(await resolveSiteOrigin("example", "jira", env())).toBe(ORIGIN);
-		expect(readFileSync(path.join(harness.root, "wrapper.log"), "utf8").trim()).toBe("op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --fields label=site_url,label=url --format json");
+	test("the credential-binding custody child reads a full item but emits only a nonsecret version binding", async () => {
+		const secret = "fixture-custody-secret";
+		harness.write("item.json", fields({ username: PRINCIPAL, credential: secret, site_url: ORIGIN }, 42));
+		const result = await harness.run(["--tenant", "example", "--product", "jira"], {}, CREDENTIAL_BINDING);
+		expect([result.code, result.stdout, result.stderr]).toEqual([0, '{"principal":"service@example.invalid","itemVersion":"onepassword-item-version:42","origin":"https://example.atlassian.net"}\n', ""]);
+		const log = readFileSync(path.join(harness.root, "wrapper.log"), "utf8");
+		expect(JSON.stringify({ stdout: result.stdout, stderr: result.stderr, log, argv: ["--tenant", "example", "--product", "jira"] })).not.toContain(secret);
+		expect(log.trim()).toBe("op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json");
 	});
 
-	test("the principal resolver reads only the username field", async () => {
-		harness.write("item.json", fields({ username: PRINCIPAL, credential: "x" }));
-		expect(await resolvePrincipal("example", "jira", env())).toBe(PRINCIPAL);
-		expect(readFileSync(path.join(harness.root, "wrapper.log"), "utf8").trim()).toBe("op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --fields label=username --format json");
+	test("the custody child reports a fixed wrapper repair cause without secret output", async () => {
+		const result = await harness.run(["--tenant", "example", "--product", "jira"], { HOME: path.join(harness.root, "missing-wrapper-home") }, CREDENTIAL_BINDING);
+		expect([result.code, result.stdout, result.stderr]).toEqual([3, "", "atlassian-credential-binding:error:credential-wrapper-missing:restore the dotfiles 1Password wrapper\n"]);
+		expect(`${result.stdout}${result.stderr}`).not.toContain(OP_TOKEN_SENTINEL);
+	});
+
+	test("the dispatcher receives only the custody binding, and a missing item version refuses before Community starts", async () => {
+		const secret = "fixture-custody-secret";
+		harness.write("item.json", fields({ username: PRINCIPAL, site_url: ORIGIN, credential: secret }, 42));
+		const bound = await resolveCredentialContext("example", "jira", env());
+		expect(bound).toEqual({ principal: PRINCIPAL, itemVersion: "onepassword-item-version:42", origin: ORIGIN });
+		const configured = await harness.run(["--tenant", "example", "--provider", "community", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
+		const log = readFileSync(path.join(harness.root, "wrapper.log"), "utf8");
+		for (const value of [secret, OP_TOKEN_SENTINEL]) {
+			expect(configured.stdout).not.toContain(value);
+			expect(configured.stderr).not.toContain(value);
+			expect(log).not.toContain(value);
+			expect(JSON.stringify(["--tenant", "example", "--provider", "community", "issue.get"])).not.toContain(value);
+		}
+		expect(harness.has("mcporter.json")).toBe(false);
+		harness.write("item.json", fields({ username: PRINCIPAL, site_url: ORIGIN, credential: secret }));
+		await expect(resolveCredentialContext("example", "jira", env())).rejects.toThrow(/credential-context-unavailable/);
+	});
+
+	test("a top-level item version change invalidates durable parity evidence", async () => {
+		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 42));
+		const first = await resolveCredentialContext("example", "jira", env());
+		const store = parityStore(env());
+		const attestation = (attested("issue.get", ["issueKey"], { credentialDigest: canonicalDigest(first) }) as { attestation: ParityAttestation }).attestation;
+		await store.attestParity(attestation);
+		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 43));
+		const rotated = await resolveCredentialContext("example", "jira", env());
+		const request = { tenant: "example", product: "jira" as const, operation: "issue.get" as const, inputShape: ["issueKey"], origin: ORIGIN, credentialDigest: canonicalDigest(rotated), now: NOW };
+		expect(attestationMatches(await store.parity(request), request)).toEqual({ ok: false, reason: "fallback-ineligible:parity-mismatch" });
 	});
 
 	test("the token-management url is never used as the origin, and bad site urls are refused", async () => {
 		harness.write("item.json", fields({ url: MANAGEMENT_URL }));
-		await expect(resolveSiteOrigin("example", "jira", env())).rejects.toThrow(/site-url-invalid/);
+		await expect(resolveCredentialContext("example", "jira", env())).rejects.toThrow(/credential-context-unavailable/);
 		for (const url of [MANAGEMENT_URL, "https://example.example.com", "https://user@example.atlassian.net", "https://example.atlassian.net/wiki", "https://example.atlassian.net?x=1", "https://example.atlassian.net#frag", "https://example.atlassian.net:8443"]) {
 			harness.write("item.json", fields({ site_url: url, url: ORIGIN }));
-			await expect(resolveSiteOrigin("example", "jira", env())).rejects.toThrow(/site-url-invalid/);
+			await expect(resolveCredentialContext("example", "jira", env())).rejects.toThrow(/credential-context-unavailable/);
 		}
 	});
 
@@ -928,11 +1004,11 @@ describe("production adapters", () => {
 		expect(result.stderr).toBe("");
 		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; repairAction: string } };
 		expect(envelope.result.causeCode).toBe("site-unresolved");
-		expect(envelope.result.repairAction).toBe("the tenant's credential item must expose a valid site_url or compatible url field");
+		expect(envelope.result.repairAction).toBe("the tenant's credential item must expose a valid site_url field");
 		expect(harness.has("mcporter.json")).toBe(false);
 });
 
-	test("the public process accepts a canonical legacy url when site_url is absent", async () => {
+	test("the public process refuses a legacy url when site_url is absent before MCPorter", async () => {
 		const canned = path.join(harness.root, "canned", OJ);
 		mkdirSync(canned, { recursive: true });
 		writeFileSync(path.join(canned, "list.json"), JSON.stringify({ tools: SCHEMAS[OJ] }));
@@ -940,9 +1016,10 @@ describe("production adapters", () => {
 		writeFileSync(path.join(canned, "getJiraIssue.json"), JSON.stringify({ key: "PROJ-1", summary: "legacy" }));
 		harness.write("item.json", fields({ url: "https://Example.atlassian.net/" }));
 		const result = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
-		expect([result.code, result.stderr]).toEqual([0, ""]);
-		const envelope = JSON.parse(result.stdout) as { result: { outcome: string; data: unknown } };
-		expect([envelope.result.outcome, envelope.result.data]).toEqual(["success", { key: "PROJ-1", summary: "legacy" }]);
+		expect([result.code, result.stderr]).toEqual([3, ""]);
+		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string } };
+		expect(envelope.result.causeCode).toBe("site-unresolved");
+		expect(harness.has("mcporter.json")).toBe(false);
 	});
 
 	test("an invalid site_url wins over a valid legacy url and stops before MCPorter", async () => {
@@ -952,7 +1029,7 @@ describe("production adapters", () => {
 		expect(result.stderr).toBe("");
 		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; repairAction: string } };
 		expect(envelope.result.causeCode).toBe("site-unresolved");
-		expect(envelope.result.repairAction).toBe("the tenant's credential item must expose a valid site_url or compatible url field");
+		expect(envelope.result.repairAction).toBe("the tenant's credential item must expose a valid site_url field");
 		expect(harness.has("mcporter.json")).toBe(false);
 	});
 
@@ -962,16 +1039,16 @@ describe("production adapters", () => {
 		writeFileSync(path.join(canned, "list.json"), JSON.stringify({ tools: SCHEMAS[OJ] }));
 		writeFileSync(path.join(canned, "getAccessibleAtlassianResources.json"), JSON.stringify(RESOURCES));
 		writeFileSync(path.join(canned, "getJiraIssue.json"), JSON.stringify({ key: "PROJ-1", summary: "canned" }));
-		harness.write("item.json", fields({ url: MANAGEMENT_URL, site_url: ORIGIN }));
+		harness.write("item.json", fields({ username: PRINCIPAL, url: MANAGEMENT_URL, site_url: ORIGIN }, 1));
 		const result = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
 		expect(result.stderr).toBe("");
 		expect(result.code).toBe(0);
+		const custody = assertCustody(harness, result, ["fixture-atlassian-api-key", "fixture-community-secret"], "child");
 		const envelope = JSON.parse(result.stdout) as { result: { outcome: string; data: unknown; provenance: { provider: string; tool: string }[] } };
 		expect(envelope.result.outcome).toBe("success");
 		expect(envelope.result.data).toEqual({ key: "PROJ-1", summary: "canned" });
 		expect(envelope.result.provenance.map((entry) => [entry.provider, entry.tool])).toEqual([[OJ, "getAccessibleAtlassianResources"], [OJ, "getJiraIssue"]]);
-		const receipt = harness.receipt<{ argv: string[] }>("mcporter.json");
-		expect(receipt.argv.slice(2)).toEqual(["call", `${OJ}.getJiraIssue`, "--args", '{"cloudId":"cloud-example","issueIdOrKey":"PROJ-1"}', "--output", "json", "--timeout", "30000", "--no-oauth"]);
+		expect(custody.argv.slice(2)).toEqual(["call", `${OJ}.getJiraIssue`, "--args", '{"cloudId":"cloud-example","issueIdOrKey":"PROJ-1"}', "--output", "json", "--timeout", "30000", "--no-oauth"]);
 	});
 
 	test("a public-process write previews and applies through the real route and the private journal under XDG_STATE_HOME", async () => {
@@ -981,7 +1058,7 @@ describe("production adapters", () => {
 		writeFileSync(path.join(canned, "getAccessibleAtlassianResources.json"), JSON.stringify(RESOURCES));
 		writeFileSync(path.join(canned, "getJiraIssue.json"), JSON.stringify({ key: "PROJ-1", fields: { comment: { comments: [] } } }));
 		writeFileSync(path.join(canned, "addOrEditJiraIssueComment.json"), JSON.stringify({ id: "10001", body: "canned" }));
-		harness.write("item.json", fields({ url: MANAGEMENT_URL, site_url: ORIGIN }));
+		harness.write("item.json", fields({ username: PRINCIPAL, url: MANAGEMENT_URL, site_url: ORIGIN }, 1));
 		const input = '{"issueKey":"PROJ-1","body":"canned"}';
 		const preview = await harness.run(["--tenant", "example", "issue.comment", "--input", input, "--preview"], {}, DISPATCH);
 		expect([preview.code, preview.stderr]).toEqual([0, ""]);

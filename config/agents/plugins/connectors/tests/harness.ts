@@ -13,6 +13,11 @@ export const FIXTURE_ROUTE = path.join(FIXTURES, "provider-route-fixture.ts");
 export const AMBIENT_SENTINEL = "must-not-cross-route";
 export const OP_TOKEN_SENTINEL = "fixture-op-service-account-token";
 
+export const itemJson = (entries: Record<string, string>, version?: number | string): string => JSON.stringify({
+	...(version === undefined ? {} : { version }),
+	fields: Object.entries(entries).map(([label, value]) => ({ id: label, label, value })),
+});
+
 export interface RunResult {
 	code: number;
 	stdout: string;
@@ -98,7 +103,7 @@ export interface McporterReceipt {
 // The custody claim shared by every connector: MCPorter itself never holds a
 // credential or ambient authority, the route always disables OAuth and the
 // keep-alive daemon, and no fixture secret reaches a public stream.
-export function assertCustody(harness: Harness, result: RunResult, secrets: string[]): McporterReceipt {
+export function assertCustody(harness: Harness, result: RunResult, secrets: string[], ownership: "replacement" | "child" = "replacement"): McporterReceipt {
 	const receipt = harness.receipt<McporterReceipt>("mcporter.json");
 	for (const key of ["AMBIENT_SENTINEL", "OP_SERVICE_ACCOUNT_TOKEN"]) {
 		expect(receipt.env).not.toHaveProperty(key);
@@ -106,7 +111,8 @@ export function assertCustody(harness: Harness, result: RunResult, secrets: stri
 	expect(receipt.env.MCPORTER_NO_KEEPALIVE).toBe("*");
 	expect(receipt.argv[0]).toBe("--config");
 	expect(receipt.argv.filter((token) => token === "--no-oauth")).toHaveLength(1);
-	expect(receipt.pid).toBe(result.pid);
+	if (ownership === "replacement") expect(receipt.pid).toBe(result.pid);
+	else expect(receipt.pid).not.toBe(result.pid);
 	const serialized = JSON.stringify(receipt);
 	for (const secret of [OP_TOKEN_SENTINEL, ...secrets]) {
 		expect(serialized).not.toContain(secret);

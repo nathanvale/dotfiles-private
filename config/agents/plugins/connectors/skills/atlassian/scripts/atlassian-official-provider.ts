@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // Official Atlassian Provider, one product per route. Phase one (no
-// arguments) validates tenant and product, probes the bridge pin before any
-// credential access, confirms the item's username as metadata, then execs the
+// arguments) validates tenant and product, re-reads the bound complete item,
+// probes the bridge pin only after that precondition, then execs the
 // credential helper to inject the API token into phase two. Phase two
 // (--injected) runs only below the helper: it re-probes the bridge pin,
 // re-reads the username as metadata, composes the Basic credential inside
@@ -14,16 +14,20 @@ import path from "node:path";
 import {
 	cleanEnvironment,
 	CREDENTIAL_VAULT,
+	encodeInvocationContext,
+	parseInvocationContext,
 	credentialWrapper,
 	executableOnPath,
 	fail,
 	productFromEnvironment,
 	productItemTitle,
-	readItemFields,
+	readBoundItem,
 	replaceProcess,
+	selectedProviderInvocation,
 	singleLine,
 	tenantFromEnvironment,
 } from "./atlassian-provider-common.ts";
+import { INTERNAL_INVOCATION_CONTEXT_ENV } from "../../../bin/safe-environment.ts";
 
 const BRIDGE_VERSION = "0.5.0";
 const BRIDGE_URL = "https://mcp.atlassian.com/v2/mcp";
@@ -51,18 +55,21 @@ function bridgeExecutable(): string {
 
 // The username is item metadata, read through the helper without the secret.
 // A colon would corrupt the Basic pair, so it is refused.
-function username(itemTitle: string): string {
-	const value = readItemFields(itemTitle, ["username"]).get("username");
+function username(itemTitle: string, context: ReturnType<typeof parseInvocationContext>): string {
+	if (!context) fail("credential-context-invalid", "restart through the semantic dispatcher");
+	const value = readBoundItem(itemTitle, context).get("username");
 	if (value === undefined) fail("username-missing", `${itemTitle} needs a username field for Basic API-token authentication`);
 	if (!singleLine(value) || value.includes(":")) fail("credential-invalid", `${itemTitle} has a malformed username`);
 	return value;
 }
 
-function injectedPhase(itemTitle: string): never {
+function injectedPhase(itemTitle: string, context: ReturnType<typeof parseInvocationContext>): never {
+	// Revalidate before probing or spawning the bridge; the helper phase may
+	// have raced a rotation after its parent checked the item.
+	const user = username(itemTitle, context);
 	const bridge = bridgeExecutable();
 	const token = process.env[KEY_ENV];
 	if (!singleLine(token)) fail("credential-invalid", "the injected credential is unavailable or malformed");
-	const user = username(itemTitle);
 	const stateHome = process.env.XDG_STATE_HOME ?? "";
 	const stateRoot = path.isAbsolute(stateHome) ? stateHome : path.join(process.env.HOME ?? "", ".local", "state");
 	const privateRoot = path.join(stateRoot, "atlassian-mcporter");
@@ -86,25 +93,28 @@ function injectedPhase(itemTitle: string): never {
 // any helper or bridge access.
 const ENV_BINARY = "/usr/bin/env";
 
-function boundItemTitle(argv: string[]): string {
+function boundItemTitle(argv: string[]): { itemTitle: string; context: NonNullable<ReturnType<typeof parseInvocationContext>> } {
 	if (argv.length !== 3) fail("arguments-invalid", "the injected phase needs the selected tenant and product", 2);
 	const tenant = tenantFromEnvironment();
 	const product = productFromEnvironment();
 	if (argv[1] !== tenant || argv[2] !== product) fail("injection-mismatch", "the injected pair does not match the selected tenant and product", 2);
-	return productItemTitle(product, tenant);
+	const context = parseInvocationContext(process.env[INTERNAL_INVOCATION_CONTEXT_ENV]);
+	if (!context) fail("credential-context-invalid", "restart through the semantic dispatcher");
+	return { itemTitle: productItemTitle(product, tenant), context };
 }
 
 function main(argv: string[]): never {
-	if (argv[0] === "--injected") injectedPhase(boundItemTitle(argv));
+	if (argv[0] === "--injected") {
+		const bound = boundItemTitle(argv);
+		injectedPhase(bound.itemTitle, bound.context);
+	}
 	if (argv.length !== 0) fail("arguments-invalid", "no provider arguments are accepted", 2);
-	const tenant = tenantFromEnvironment();
-	const product = productFromEnvironment();
-	const itemTitle = productItemTitle(product, tenant);
+	const { tenant, product, itemTitle, context } = selectedProviderInvocation();
+	const user = username(itemTitle, context);
 	bridgeExecutable();
 	const wrapper = credentialWrapper();
-	username(itemTitle);
 	const reference = `op://${CREDENTIAL_VAULT}/${itemTitle}/credential`;
-	const target = [ENV_BINARY, `ATLASSIAN_TENANT=${tenant}`, `ATLASSIAN_PRODUCT=${product}`, Bun.main, "--injected", tenant, product];
+	const target = [ENV_BINARY, `ATLASSIAN_TENANT=${tenant}`, `ATLASSIAN_PRODUCT=${product}`, `${INTERNAL_INVOCATION_CONTEXT_ENV}=${encodeInvocationContext(context)}`, Bun.main, "--injected", tenant, product];
 	replaceProcess(wrapper, [wrapper, "inject", KEY_ENV, reference, "--", ...target], cleanEnvironment());
 }
 

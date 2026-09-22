@@ -5,6 +5,7 @@
 // that the CLI renders into one envelope. Provider text never leaves the
 // engine's classifier; the outcomes carry fixed text and identifiers only.
 import { type CauseCode, OFFICIAL_RESOURCES_TOOL, OFFICIAL_USER_TOOL, type OperationId, type OperationSpec, OPERATION_SPECS, type Product, type Provenance, type ProviderName, serverFor, type TransactionState } from "./contract.ts";
+import type { InvocationContext } from "../atlassian-provider-common.ts";
 import {
 	attestationMatches,
 	classifyFailure,
@@ -52,6 +53,7 @@ const effectId = (effect: Effect) => `${effect.kind}:${effect.id}`;
 
 export class Session {
 	readonly provenance: Provenance[] = [];
+	private readonly contexts = new Map<Product, Promise<InvocationContext>>();
 	constructor(
 		readonly deps: Dependencies,
 		readonly tenant: string,
@@ -61,14 +63,23 @@ export class Session {
 	// message carries only its cause, never a value.
 	async origin(product: Product): Promise<{ origin: string } | { cause: "site-unresolved" }> {
 		try {
-			return { origin: await this.deps.siteOrigin(this.tenant, product) };
+			return { origin: (await this.context(product)).origin };
 		} catch {
 			return { cause: "site-unresolved" };
 		}
 	}
 
-	route(provider: ProviderName, product: Product, origin: string): Route {
-		return new Route(this, provider, product, origin);
+	context(product: Product): Promise<InvocationContext> {
+		let context = this.contexts.get(product);
+		if (!context) {
+			context = this.deps.credentialContext(this.tenant, product);
+			this.contexts.set(product, context);
+		}
+		return context;
+	}
+
+	route(provider: ProviderName, product: Product, context: InvocationContext): Route {
+		return new Route(this, provider, product, context);
 	}
 }
 
@@ -84,7 +95,7 @@ export class Route {
 		private readonly session: Session,
 		readonly provider: ProviderName,
 		readonly product: Product,
-		private readonly origin: string,
+		private readonly context: InvocationContext,
 	) {
 		this.server = serverFor(provider, product);
 	}
@@ -108,7 +119,7 @@ export class Route {
 	// takes one, because only the guard can supply the real value.
 	async ready(intent?: { tool: string; args: Record<string, unknown> }): Promise<Attempt | null> {
 		if (this.tools) return null;
-		const listed = await this.session.deps.transport.listTools(this.server);
+		const listed = await this.session.deps.transport.listTools(this.context, this.server);
 		if (!listed.ok) return this.failure("list", listed);
 		const tools = readSchema(listed);
 		if (!tools) return this.unavailable();
@@ -118,7 +129,7 @@ export class Route {
 		if (!confirmSchema(tools, OFFICIAL_RESOURCES_TOOL, {}).ok) return this.unavailable();
 		const resources = await this.transportCall(OFFICIAL_RESOURCES_TOOL, {});
 		if (resources.cause !== "success") return resources;
-		const matched = matchCloudId(resources.data, this.origin);
+		const matched = matchCloudId(resources.data, this.context.origin);
 		if (!matched) return { cause: "refused-tenant", data: null, detail: REPAIR_TEXT["refused-tenant"], contentObserved: true };
 		this.cloudId = matched;
 		return null;
@@ -133,7 +144,7 @@ export class Route {
 	private async transportCall(tool: string, args: Record<string, unknown>): Promise<Attempt> {
 		let result: TransportResult;
 		try {
-			result = await this.session.deps.transport.call(this.server, tool, args);
+			result = await this.session.deps.transport.call(this.context, this.server, tool, args);
 		} catch {
 			this.session.provenance.push({ provider: this.server, tool, status: "failed-unknown" });
 			return { cause: "failed-unknown", data: null, detail: REPAIR_TEXT["failed-unknown"], contentObserved: false };
@@ -159,15 +170,15 @@ const BASE_READ: Record<Product, { operation: OperationId; shape: string[] }> = 
 	confluence: { operation: "page.get", shape: ["pageId"] },
 };
 
-async function communityGate(session: Session, spec: OperationSpec, input: Record<string, unknown>, origin: string): Promise<Outcome | null> {
+async function communityGate(session: Session, spec: OperationSpec, input: Record<string, unknown>, context: InvocationContext): Promise<Outcome | null> {
 	const base = spec.kind === "read" ? { operation: spec.id, shape: inputShape(input) } : BASE_READ[spec.product];
 	let digest: string;
 	try {
-		digest = credentialDigest(await session.deps.credentialBinding(session.tenant, spec.product));
+		digest = credentialDigest(context);
 	} catch {
 		return refusal("refused-parity", `${REPAIR_TEXT["refused-parity"]}; credential-revision-unavailable`);
 	}
-	const request: ParityRequest = { tenant: session.tenant, product: spec.product, operation: base.operation, inputShape: base.shape, origin, credentialDigest: digest, now: session.deps.now() };
+	const request: ParityRequest = { tenant: session.tenant, product: spec.product, operation: base.operation, inputShape: base.shape, origin: context.origin, credentialDigest: digest, now: session.deps.now() };
 	const verdict = attestationMatches(await session.deps.parity(request), request);
 	return verdict.ok ? null : refusal("refused-parity", `${REPAIR_TEXT["refused-parity"]}; ${verdict.reason}`);
 }
@@ -178,26 +189,21 @@ async function communityGate(session: Session, spec: OperationSpec, input: Recor
 export async function readFlow(session: Session, spec: OperationSpec, input: Input, provider: ProviderName | undefined): Promise<Outcome> {
 	const resolved = await session.origin(spec.product);
 	if ("cause" in resolved) return refusal(resolved.cause);
+	const context = await session.context(spec.product);
 	const attempt = async (name: ProviderName) => {
-		const route = session.route(name, spec.product, resolved.origin);
+		const route = session.route(name, spec.product, context);
 		const ready = await route.ready({ tool: spec[name].tool, args: providerArguments(spec, name, input, name === "official" ? "pending" : undefined) });
 		if (ready) return ready;
 		return route.call(spec[name].tool, providerArguments(spec, name, input, route.cloudId));
 	};
 	if (provider === "community") {
-		const gate = await communityGate(session, spec, input, resolved.origin);
+		const gate = await communityGate(session, spec, input, context);
 		if (gate) return gate;
 	}
 	const primary = await attempt(provider ?? "official");
 	if (primary.cause === "success") return success(primary.data);
 	if (provider !== undefined) return failed(primary);
-	let digest: string;
-	try {
-		digest = credentialDigest(await session.deps.credentialBinding(session.tenant, spec.product));
-	} catch {
-		return { ...failed(primary), detail: `${primary.detail ?? primary.cause}; fallback-ineligible:credential-revision-unavailable` };
-	}
-	const request: ParityRequest = { tenant: session.tenant, product: spec.product, operation: spec.id, inputShape: inputShape(input), origin: resolved.origin, credentialDigest: digest, now: session.deps.now() };
+	const request: ParityRequest = { tenant: session.tenant, product: spec.product, operation: spec.id, inputShape: inputShape(input), origin: context.origin, credentialDigest: credentialDigest(context), now: session.deps.now() };
 	const decision = fallbackDecision(spec, primary.cause, primary.contentObserved, await session.deps.parity(request), request);
 	const detail = primary.detail ?? primary.cause;
 	if (!decision.eligible) return { ...failed(primary), detail: `${detail}; ${decision.reason}` };
@@ -350,11 +356,12 @@ async function writeContext(session: Session, spec: OperationSpec, input: WriteI
 	if (provider === "official" && !spec.official.reachable) return refusal("operation-unavailable");
 	const resolved = await session.origin(spec.product);
 	if ("cause" in resolved) return refusal(resolved.cause);
+	const context = await session.context(spec.product);
 	if (provider === "community") {
-		const gate = await communityGate(session, spec, input, resolved.origin);
+		const gate = await communityGate(session, spec, input, context);
 		if (gate) return gate;
 	}
-	const route = session.route(provider, spec.product, resolved.origin);
+	const route = session.route(provider, spec.product, context);
 	const placeholder: PreparedContext = { revision: null, baseline: { effectIds: [], commentIds: [], revision: null }, snapshotToken: "pending", currentTitle: "pending", spaceId: "1" };
 	if (provider === "official") placeholder.cloudId = "pending";
 	const ready = await route.ready({ tool: spec[provider].tool, args: writeArguments(spec, provider, input, placeholder).args });
@@ -516,7 +523,7 @@ export async function adjudicateFlow(session: Session, runId: string, rawInput: 
 	const spec = OPERATION_SPECS[receipt.operation];
 	const resolved = await session.origin(spec.product);
 	if ("cause" in resolved) return refusal(resolved.cause);
-	const route = session.route(receipt.provider, spec.product, resolved.origin);
+	const route = session.route(receipt.provider, spec.product, await session.context(spec.product));
 	const ready = await route.ready();
 	if (ready) return failed(ready);
 	const digestOf = (observed: string) => new Bun.CryptoHasher("sha256").update(observed).digest("hex");
@@ -591,21 +598,21 @@ export async function parityFlow(session: Session, spec: OperationSpec, input: I
 	if (spec.kind !== "read" || semantics === undefined) return refusal("usage-invalid", "parity attests a read operation");
 	const resolved = await session.origin(spec.product);
 	if ("cause" in resolved) return refusal(resolved.cause);
-	let binding: { principal: string; revision: string };
+	let context: InvocationContext;
 	try {
-		binding = await session.deps.credentialBinding(session.tenant, spec.product);
+		context = await session.context(spec.product);
 	} catch {
 		return refusal("refused-precondition", `${REPAIR_TEXT["refused-precondition"]}; credential custody must supply a nonsecret principal and revision`);
 	}
-	const principal = binding.principal.toLowerCase();
-	const boundCredential = credentialDigest({ principal, revision: binding.revision });
-	const official = session.route("official", spec.product, resolved.origin);
+	const principal = context.principal.toLowerCase();
+	const boundCredential = credentialDigest(context);
+	const official = session.route("official", spec.product, context);
 	const user = await guarded(official, OFFICIAL_USER_TOOL, {});
 	if (user.cause !== "success") return failed(user);
 	if (principalOf(user.data) !== principal) return refusal("refused-parity", `${REPAIR_TEXT["refused-parity"]}; principal-mismatch`);
 	const officialRead = await official.call(spec.official.tool, providerArguments(spec, "official", input, official.cloudId));
 	if (officialRead.cause !== "success") return failed(officialRead);
-	const community = session.route("community", spec.product, resolved.origin);
+	const community = session.route("community", spec.product, context);
 	const communityRead = await guarded(community, spec.community.tool, providerArguments(spec, "community", input));
 	if (communityRead.cause !== "success") return failed(communityRead);
 	if (!sameObject(spec.id, officialRead.data, communityRead.data)) return refusal("refused-parity", `${REPAIR_TEXT["refused-parity"]}; object-mismatch`);
@@ -615,7 +622,7 @@ export async function parityFlow(session: Session, spec: OperationSpec, input: I
 		product: spec.product,
 		operation: spec.id,
 		inputShape: inputShape(input),
-		origin: resolved.origin,
+		origin: context.origin,
 		credentialDigest: boundCredential,
 		objectSemantics: semantics,
 		recordedAt: now,

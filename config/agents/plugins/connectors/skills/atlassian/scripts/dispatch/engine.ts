@@ -3,6 +3,7 @@
 // gate. No I/O; the runtime supplies a Transport and evidence.
 import { type CauseCode, type OperationId, type OperationSpec, type Product, type ProviderName, OPERATION_SPECS } from "./contract.ts";
 import { canonicalDigest, type Journal } from "./journal.ts";
+import type { InvocationContext } from "../atlassian-provider-common.ts";
 
 export interface SchemaTool {
 	name: string;
@@ -20,8 +21,8 @@ export type TransportResult =
 export type TransportFailure = Exclude<TransportResult, { ok: true }>;
 
 export interface Transport {
-	listTools(server: string): Promise<TransportResult>;
-	call(server: string, tool: string, args: Record<string, unknown>): Promise<TransportResult>;
+	listTools(context: InvocationContext, server: string): Promise<TransportResult>;
+	call(context: InvocationContext, server: string, tool: string, args: Record<string, unknown>): Promise<TransportResult>;
 }
 
 // Live-parity attestation: recorded only by the parity command after both
@@ -58,13 +59,8 @@ export interface ParityRequest {
 // Credential custody owns this narrow seam. `revision` must come from a
 // nonsecret item revision or fingerprint supplied by that owner, never from a
 // credential value. An unavailable revision makes parity unproven.
-export interface CredentialBinding {
-	principal: string;
-	revision: string;
-}
-
-export function credentialDigest(binding: CredentialBinding): string {
-	return canonicalDigest({ principal: binding.principal.toLowerCase(), revision: binding.revision });
+export function credentialDigest(context: InvocationContext): string {
+	return canonicalDigest({ principal: context.principal.toLowerCase(), itemVersion: context.itemVersion, origin: context.origin });
 }
 
 // What the parity command compares per read operation; an attestation whose
@@ -78,11 +74,9 @@ export const OBJECT_SEMANTICS: Partial<Record<OperationId, string>> = {
 
 export interface Dependencies {
 	transport: Transport;
-	// The trusted site origin for one tenant and product, from the product's
-	// credential item metadata; never from a provider response.
-	siteOrigin(tenant: string, product: Product): Promise<string>;
-	// The principal the product's credential item names, metadata only.
-	credentialBinding(tenant: string, product: Product): Promise<CredentialBinding>;
+	// One complete exact-item read supplies an immutable nonsecret context for
+	// every schema list and provider call in one semantic operation.
+	credentialContext(tenant: string, product: Product): Promise<InvocationContext>;
 	parity(request: ParityRequest): Promise<ParityEvidence>;
 	attestParity(attestation: ParityAttestation): Promise<void>;
 	journal(tenant: string): Journal;
@@ -249,11 +243,13 @@ const PROVIDER_CAUSE_HINTS: Record<string, string> = {
 	"bridge-version-invalid": "install the pinned hyper-mcp-remote bridge version",
 	"executable-missing": "install the missing provider executable on PATH",
 	"credential-wrapper-missing": "restore the dotfiles 1Password helper",
+	"credential-context-invalid": "restart through the semantic dispatcher",
+	"credential-context-stale": "credential item metadata changed; restart the semantic operation",
 	"credential-unavailable": "the credential item could not be read; run the helper's check",
 	"credential-invalid": "the credential item has malformed fields",
 	"username-missing": "add a username field to the tenant's product credential item",
-	"community-fields-missing": "the product credential item needs username, credential, and a site_url or compatible url field",
-	"site-url-invalid": "the selected site_url or compatible url field must be a plain https atlassian.net origin",
+	"community-fields-missing": "the product credential item needs username, credential, and a site_url field",
+	"site-url-invalid": "the site_url field must be a plain https atlassian.net origin",
 	"tenant-invalid": "the tenant slug was rejected by the provider",
 	"product-invalid": "the provider route has no valid product",
 	"arguments-invalid": "the provider was invoked with unexpected arguments",
@@ -274,7 +270,7 @@ export const REPAIR_TEXT: Record<Exclude<CauseCode, "success">, string> = {
 	"usage-invalid": "correct the invocation",
 	"operation-unavailable": "the default Official endpoint reaches this operation only through its broad executeWrite dispatcher, which this route never exposes; select --provider community, or qualify the flat Official endpoint first",
 	"input-invalid": "correct the input object",
-	"site-unresolved": "the tenant's credential item must expose a valid site_url or compatible url field",
+	"site-unresolved": "the tenant's credential item must expose a valid site_url field",
 	"space-unresolved": "no readable page named the space's numeric id; supply space as {id, key} from the space settings page",
 	"refused-preview": "the preview is unknown, consumed, expired, or no longer matches the input, provider arguments, or target revision; preview again",
 	"refused-write-blocked": "an unresolved write or a held lock blocks this object; run receipts, then adjudicate or unlock only after confirming no live writer",

@@ -4,32 +4,27 @@
 import { lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { CREDENTIAL_VAULT, credentialWrapperPath, itemFieldMap, type Product, productItemTitle, SITE_URL_FIELD, TENANT_PATTERN, validSiteUrl } from "../atlassian-provider-common.ts";
+import { encodeInvocationContext, type InvocationContext, parseInvocationContext, TENANT_PATTERN } from "../atlassian-provider-common.ts";
 import { OPERATIONS, type OperationId } from "./contract.ts";
-import type { CredentialBinding, Dependencies, ParityAttestation, ParityEvidence, ParityRequest, Transport, TransportResult } from "./engine.ts";
+import type { Dependencies, ParityAttestation, ParityEvidence, ParityRequest, Transport, TransportResult } from "./engine.ts";
 import { canonicalDigest, openJournal } from "./journal.ts";
 import { planDispatcherRoute, type RoutePlan } from "../../../../bin/provider-route.ts";
+import { safeEnvironment } from "../../../../bin/safe-environment.ts";
 
-const SAFE_ENV = ["HOME", "PATH", "LANG", "LC_ALL", "TMPDIR", "XDG_STATE_HOME"] as const;
 const CALL_TIMEOUT_MS = "30000";
 
 export type Environment = Record<string, string | undefined>;
 
 function scrubbed(env: Environment): Record<string, string> {
-	const out: Record<string, string> = {};
-	for (const key of SAFE_ENV) {
-		const value = env[key];
-		if (value !== undefined) out[key] = value;
-	}
-	return out;
+	return safeEnvironment(env);
 }
 
 // One route call at a time; the dispatcher never overlaps provider calls, so a
 // synchronous spawn is sufficient and keeps the process tree simple.
-function spawnRoute(env: Environment, tenant: string, server: string, mcporterArgs: string[]): { code: number; stdout: string; stderr: string } {
+function spawnRoute(env: Environment, tenant: string, context: InvocationContext, server: string, mcporterArgs: string[]): { code: number; stdout: string; stderr: string } {
 	let plan: RoutePlan;
 	try {
-		plan = planDispatcherRoute(["atlassian", "--provider", server, "--select", `tenant=${tenant}`, "--", ...mcporterArgs], path.resolve(import.meta.dir, "..", "..", "..", "..", "skills"), scrubbed(env));
+		plan = planDispatcherRoute(["atlassian", "--provider", server, "--select", `tenant=${tenant}`, "--", ...mcporterArgs], path.resolve(import.meta.dir, "..", "..", "..", "..", "skills"), scrubbed(env), encodeInvocationContext(context));
 	} catch {
 		return { code: 3, stdout: "", stderr: "internal dispatcher transport refused" };
 	}
@@ -64,62 +59,26 @@ export function routeTransport(env: Environment, tenant: string): Transport {
 		return { ok: true, data };
 	};
 	return {
-		async listTools(server) {
-			return toResult(spawnRoute(env, tenant, server, ["list", "--schema", "--json", "--timeout", CALL_TIMEOUT_MS]));
+		async listTools(context, server) {
+			return toResult(spawnRoute(env, tenant, context, server, ["list", "--schema", "--json", "--timeout", CALL_TIMEOUT_MS]));
 		},
-		async call(server, tool, args) {
-			return toResult(spawnRoute(env, tenant, server, ["call", tool, "--args", JSON.stringify(args), "--output", "json", "--timeout", CALL_TIMEOUT_MS]));
+		async call(context, server, tool, args) {
+			return toResult(spawnRoute(env, tenant, context, server, ["call", tool, "--args", JSON.stringify(args), "--output", "json", "--timeout", CALL_TIMEOUT_MS]));
 		},
 	};
 }
-
-// Metadata fields of the product's item, read through the credential helper;
-// no secret value is ever requested. The error carries a cause, never a value.
-function itemMetadataFields(tenant: string, product: Product, fields: readonly string[], env: Environment): Map<string, string> {
-	const title = productItemTitle(product, tenant);
-	const selector = fields.map((field) => `label=${field}`).join(",");
-	const read = Bun.spawnSync([credentialWrapperPath(env.HOME), "op", "item", "get", title, "--vault", CREDENTIAL_VAULT, "--fields", selector, "--format", "json"], {
+export async function resolveCredentialContext(tenant: string, product: "jira" | "confluence", env: Environment): Promise<InvocationContext> {
+	const child = path.resolve(import.meta.dir, "..", "atlassian-credential-binding.ts");
+	const read = Bun.spawnSync([process.execPath, child, "--tenant", tenant, "--product", product], {
 		env: scrubbed(env),
 		stdin: "ignore",
+		stdout: "pipe",
+		stderr: "pipe",
 	});
-	if (read.exitCode !== 0) throw new Error(`site-unresolved: cannot read credential metadata for ${title}`);
-	const values = itemFieldMap(parseJson(read.stdout.toString()));
-	if (!values) throw new Error(`site-unresolved: ${title} returned invalid credential metadata`);
-	return values;
-}
-
-function itemMetadata(tenant: string, product: Product, field: string, env: Environment): string {
-	const value = itemMetadataFields(tenant, product, [field], env).get(field);
-	if (value === undefined) throw new Error(`site-unresolved: ${productItemTitle(product, tenant)} has no ${field} field`);
-	return value;
-}
-
-// Prefer the custom site_url field; accept the built-in url only as a
-// strictly validated compatibility value when site_url is absent.
-export async function resolveSiteOrigin(tenant: string, product: Product, env: Environment): Promise<string> {
-	const fields = itemMetadataFields(tenant, product, [SITE_URL_FIELD, "url"], env);
-	const url = fields.get(SITE_URL_FIELD) ?? fields.get("url");
-	if (url === undefined) throw new Error(`site-unresolved: ${productItemTitle(product, tenant)} has no site_url or compatible url field`);
-	if (!validSiteUrl(url)) throw new Error("site-url-invalid: the selected site_url or url field must be an https://*.atlassian.net origin");
-	return `https://${new URL(url).hostname}`;
-}
-
-// The principal both routes authenticate as: the item's username. Official
-// confirms it live through atlassianUserInfo; Community sends it as the Basic
-// user, so it is the Community principal by construction.
-export async function resolvePrincipal(tenant: string, product: Product, env: Environment): Promise<string> {
-	const username = itemMetadata(tenant, product, "username", env);
-	if (username.includes("\n") || username.includes(":")) throw new Error("credential-invalid: malformed username");
-	return username;
-}
-
-// 1Password's currently-used metadata lane exposes the nonsecret username but
-// no safe, stable item revision. Keep that limitation explicit: parity is
-// unavailable until credential custody supplies this value. Never derive a
-// revision or fingerprint from the credential field.
-export async function resolveCredentialBinding(tenant: string, product: Product, env: Environment): Promise<CredentialBinding> {
-	const principal = await resolvePrincipal(tenant, product, env);
-	throw new Error(`credential-revision-unavailable: credential custody must supply a safe revision for ${productItemTitle(product, tenant)} (${principal.length})`);
+	if (read.exitCode !== 0) throw new Error("credential-context-unavailable: credential custody could not produce a stable context");
+	const context = parseInvocationContext(read.stdout.toString());
+	if (!context) throw new Error("credential-context-unavailable: credential custody returned an invalid context");
+	return context;
 }
 
 // Attestations live beside the journal, one owned 0600 file per tenant,
@@ -196,8 +155,7 @@ export const isOperation = (value: string): value is OperationId => (OPERATIONS 
 export function productionDependencies(tenant: string, env: Environment): Dependencies {
 	return {
 		transport: routeTransport(env, tenant),
-		siteOrigin: (slug, product) => resolveSiteOrigin(slug, product, env),
-		credentialBinding: (slug, product) => resolveCredentialBinding(slug, product, env),
+		credentialContext: (slug, product) => resolveCredentialContext(slug, product, env),
 		...parityStore(env),
 		journal: (slug) => openJournal(slug, { env }),
 		now: Date.now,

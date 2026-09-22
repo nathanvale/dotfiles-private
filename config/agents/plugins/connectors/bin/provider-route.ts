@@ -12,12 +12,12 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "./safe-environment.ts";
 
 const PROGRAM = "provider-route";
 // Observed with MCPorter 0.13.13 on 2026-09-22: a stdio child inherits the
 // whole MCPorter environment, so this scrub is the only barrier before a
 // Provider process.
-const SAFE_ENV = ["HOME", "PATH", "LANG", "LC_ALL", "TMPDIR", "XDG_STATE_HOME"] as const;
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
 const SELECTION_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const ALLOWED_FLAGS = {
@@ -263,27 +263,34 @@ function checkFlags(verb: Verb, flags: string[]): string[] {
 	return flags.includes("--no-oauth") ? flags : [...flags, "--no-oauth"];
 }
 
-function plan(argv: string[], skillsRoot: string, env: Record<string, string | undefined>, dispatcherTransport: boolean): RoutePlan {
+function validInternalContext(value: unknown): value is string {
+	return typeof value === "string" && value.length > 0 && value.length <= 4096 && !value.includes("\n") && !value.includes("\r");
+}
+
+function plan(argv: string[], skillsRoot: string, env: Record<string, string | undefined>, dispatcherTransport: boolean, internalContext?: string): RoutePlan {
 	const invocation = parseInvocation(argv);
 	const configDir = path.join(skillsRoot, invocation.skill, "config");
 	const configPath = path.join(configDir, "mcporter.json");
-	const servers = readRegistry(configPath);
+	if (!existsSync(configPath)) throw new RouteError("skill-config-missing", `${configPath} is missing`, 3);
 	const declaration = readDeclaration(path.join(configDir, "route.json"));
-	if (declaration.dispatcherOwned && invocation.verb === "call" && !dispatcherTransport) {
-		throw new RouteError("dispatcher-owned", `skill ${invocation.skill} accepts calls only through its semantic dispatcher`, 3);
+	if (declaration.dispatcherOwned && !dispatcherTransport) {
+		throw new RouteError("dispatcher-owned", `skill ${invocation.skill} accepts provider transport only through its semantic dispatcher`, 3);
 	}
+	const servers = readRegistry(configPath);
 	const server = invocation.provider ?? declaration.defaultProvider;
 	if (!servers.has(server)) {
 		throw new RouteError("provider-invalid", `provider ${server} is not declared by skill ${invocation.skill}`);
 	}
 	const selections = selectionEnvironment(invocation.skill, declaration.selectors, invocation.selections);
 	const { target, flags } = targetAndFlags(invocation.verb, server, invocation.rest);
-	const routeEnv: Record<string, string> = { MCPORTER_NO_KEEPALIVE: "*" };
-	for (const key of SAFE_ENV) {
-		const value = env[key];
-		if (value !== undefined) routeEnv[key] = value;
-	}
+	const routeEnv: Record<string, string> = { MCPORTER_NO_KEEPALIVE: "*", ...safeEnvironment(env) };
 	Object.assign(routeEnv, selections);
+	if (internalContext !== undefined) {
+		if (!dispatcherTransport || !validInternalContext(internalContext)) throw new RouteError("internal-context-invalid", "the dispatcher context must be one non-empty single-line value", 3);
+		// This fixed channel is unavailable to planRoute and cannot overwrite
+		// selectors, keep-alive policy, or any safe route environment key.
+		routeEnv[INTERNAL_INVOCATION_CONTEXT_ENV] = internalContext;
+	}
 	return {
 		configPath,
 		server,
@@ -292,15 +299,15 @@ function plan(argv: string[], skillsRoot: string, env: Record<string, string | u
 	};
 }
 
-// The public launcher may list a registry but may not call a Connector Skill
-// whose tools belong to its semantic dispatcher.
+// The public launcher cannot reach a Connector Skill whose provider transport
+// belongs to its semantic dispatcher.
 export function planRoute(argv: string[], skillsRoot: string, env: Record<string, string | undefined>): RoutePlan {
 	return plan(argv, skillsRoot, env, false);
 }
 
 // Internal seam for a dispatcher after it has enforced its own policy.
-export function planDispatcherRoute(argv: string[], skillsRoot: string, env: Record<string, string | undefined>): RoutePlan {
-	return plan(argv, skillsRoot, env, true);
+export function planDispatcherRoute(argv: string[], skillsRoot: string, env: Record<string, string | undefined>, internalContext: string): RoutePlan {
+	return plan(argv, skillsRoot, env, true, internalContext);
 }
 
 function refuse(code: string, message: string, exitCode: number): never {

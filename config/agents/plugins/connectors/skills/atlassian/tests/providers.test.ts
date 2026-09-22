@@ -5,15 +5,15 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync, statSync } from "node:fs";
 import path from "node:path";
-import { AMBIENT_SENTINEL, createHarness, type Harness, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
+import { AMBIENT_SENTINEL, createHarness, itemJson, type Harness, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
 const FIXTURES = path.join(SKILL, "tests", "fixtures");
 const OFFICIAL = path.join(SKILL, "scripts", "atlassian-official-provider.ts");
 const COMMUNITY = path.join(SKILL, "scripts", "atlassian-community-provider.ts");
 const SECRETS = ["fixture-atlassian-api-key", "fixture-community-secret", OP_TOKEN_SENTINEL, Buffer.from("service@example.invalid:fixture-atlassian-api-key").toString("base64")];
-const item = (fields: Record<string, string>) =>
-	JSON.stringify({ fields: Object.entries(fields).map(([label, value]) => ({ id: label, label, value })) });
+const item = (entries: Record<string, string>, version: number | string = 1) => itemJson({ site_url: "https://example.atlassian.net", ...entries }, version);
+const rawItem = itemJson;
 // The built-in url is token management, never the tenant origin.
 const MANAGEMENT_URL = "https://id.atlassian.com/manage-profile/security/api-tokens";
 const FULL_ITEM = item({ username: "service@example.invalid", credential: "fixture-community-secret", url: MANAGEMENT_URL, site_url: "https://Example.atlassian.net/" });
@@ -36,7 +36,8 @@ async function runProvider(script: string, args: string[] = [], env: Record<stri
 			TMPDIR: harness.root,
 			XDG_STATE_HOME: harness.root,
 			ATLASSIAN_TENANT: "example",
-			ATLASSIAN_PRODUCT: "jira",
+		ATLASSIAN_PRODUCT: "jira",
+		CONNECTORS_INTERNAL_INVOCATION_CONTEXT: '{"principal":"service@example.invalid","itemVersion":"onepassword-item-version:1","origin":"https://example.atlassian.net"}',
 			AMBIENT_SENTINEL,
 			OP_SERVICE_ACCOUNT_TOKEN: OP_TOKEN_SENTINEL,
 			...env,
@@ -64,9 +65,9 @@ describe("Official provider process", () => {
 		// injected phase re-reads the username as metadata rather than taking
 		// it from argv or env.
 		expect(wrapperLines()).toEqual([
-			"op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --fields label=username --format json",
-			`inject ATLASSIAN_API_KEY op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential -- /usr/bin/env ATLASSIAN_TENANT=example ATLASSIAN_PRODUCT=jira ${OFFICIAL} --injected example jira`,
-			"op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --fields label=username --format json",
+			"op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json",
+			`inject ATLASSIAN_API_KEY op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential -- /usr/bin/env ATLASSIAN_TENANT=example ATLASSIAN_PRODUCT=jira CONNECTORS_INTERNAL_INVOCATION_CONTEXT={"principal":"service@example.invalid","itemVersion":"onepassword-item-version:1","origin":"https://example.atlassian.net"} ${OFFICIAL} --injected example jira`,
+			"op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json",
 		]);
 		const bridge = harness.receipt("official-provider.json");
 		expect(bridge.argv).toEqual(["https://mcp.atlassian.com/v2/mcp", "--no-auth", "--header", "Authorization: Basic ${ATLASSIAN_BASIC}"]);
@@ -82,7 +83,7 @@ describe("Official provider process", () => {
 	test("confluence: selects the CONFLUENCE item for the same tenant", async () => {
 		harness.write("item.json", item({ username: "service@example.invalid", credential: "x" }));
 		expect((await runProvider(OFFICIAL, [], { ATLASSIAN_PRODUCT: "confluence" })).code).toBe(0);
-		expect(wrapperLines()[0]).toBe("op item get CONFLUENCE_EXAMPLE_API_TOKEN --vault API Credentials --fields label=username --format json");
+		expect(wrapperLines()[0]).toBe("op item get CONFLUENCE_EXAMPLE_API_TOKEN --vault API Credentials --format json");
 		expect(wrapperLines()[1]).toContain("op://API Credentials/CONFLUENCE_EXAMPLE_API_TOKEN/credential");
 	});
 
@@ -121,7 +122,7 @@ describe("Official provider process", () => {
 		const result = await runProvider(OFFICIAL);
 		expect(result.code).toBe(4);
 		expect(result.stderr).toContain("atlassian-provider:error:bridge-version-invalid:");
-		expect(wrapperLines()).toEqual([]);
+		expect(wrapperLines()).toEqual(["op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json"]);
 		expect(harness.has("official-provider.json")).toBe(false);
 	});
 
@@ -129,7 +130,7 @@ describe("Official provider process", () => {
 		harness.write("item.json", item({ credential: "x", url: MANAGEMENT_URL }));
 		const missing = await runProvider(OFFICIAL);
 		expect(missing.code).toBe(4);
-		expect(missing.stderr).toContain("atlassian-provider:error:username-missing:");
+		expect(missing.stderr).toContain("atlassian-provider:error:credential-invalid:");
 		harness.write("item.json", item({ username: "bad:user\n", credential: "x" }));
 		const malformed = await runProvider(OFFICIAL);
 		expect(malformed.code).toBe(4);
@@ -158,7 +159,7 @@ describe("Official provider process", () => {
 		expect(malformed.stderr).toContain("atlassian-provider:error:credential-invalid:");
 		harness.write("item.json", item({ credential: "x" }));
 		const noUser = await runProvider(OFFICIAL, injected, { ATLASSIAN_API_KEY: "fixture-atlassian-api-key" });
-		expect(noUser.stderr).toContain("atlassian-provider:error:username-missing:");
+		expect(noUser.stderr).toContain("atlassian-provider:error:credential-invalid:");
 		expect(harness.has("official-provider.json")).toBe(false);
 	});
 
@@ -198,12 +199,28 @@ describe("Official provider process", () => {
 		// The matching pair reads exactly the selected item and reaches the bridge.
 		const bound = await runProvider(OFFICIAL, ["--injected", "example", "jira"], key);
 		expect(bound.code).toBe(0);
-		expect(wrapperLines()).toEqual(["op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --fields label=username --format json"]);
+		expect(wrapperLines()).toEqual(["op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json"]);
 		expect(harness.receipt("official-provider.json").basicMatches).toBe(true);
 	});
 });
 
 describe("Community provider process", () => {
+	test("a rotated item version or trusted origin refuses before either Provider executable starts", async () => {
+		const secret = "fixture-community-secret";
+		for (const [label, changed] of [
+			["version", item({ username: "service@example.invalid", credential: secret }, 2)],
+			["origin", item({ username: "service@example.invalid", credential: secret, site_url: "https://other.atlassian.net" }, 1)],
+		] as const) {
+			harness.write("item.json", changed);
+			for (const script of [OFFICIAL, COMMUNITY]) {
+				const result = await runProvider(script);
+				expect([label, result.code, result.stderr.includes("atlassian-provider:error:credential-context-stale:")]).toEqual([label, 4, true]);
+				expect(harness.has("official-provider.json") || harness.has("community-provider.json")).toBe(false);
+				for (const stream of [result.stdout, result.stderr, readFileSync(path.join(harness.root, "wrapper.log"), "utf8")]) expect(stream).not.toContain(secret);
+			}
+		}
+	});
+
 	test("jira: injects only the Jira triplet from the JIRA item and the site_url origin", async () => {
 		harness.write("item.json", FULL_ITEM);
 		const result = await runProvider(COMMUNITY);
@@ -227,18 +244,19 @@ describe("Community provider process", () => {
 		expect(harness.receipt("community-provider.json").jiraUrl).toBe("https://example.atlassian.net");
 	});
 
-	test("falls back to a canonical legacy url when site_url is absent", async () => {
-		harness.write("item.json", item({ username: "service@example.invalid", credential: "fixture-community-secret", url: "https://Example.atlassian.net:443/" }));
+	test("refuses a legacy url when site_url is absent", async () => {
+		harness.write("item.json", rawItem({ username: "service@example.invalid", credential: "fixture-community-secret", url: "https://Example.atlassian.net:443/" }, 1));
 		const result = await runProvider(COMMUNITY);
-		expect(result.code).toBe(0);
-		expect(harness.receipt("community-provider.json").jiraUrl).toBe("https://example.atlassian.net");
+		expect(result.code).toBe(4);
+		expect(result.stderr).toContain("atlassian-provider:error:credential-invalid:");
+		expect(harness.has("community-provider.json")).toBe(false);
 	});
 
 	test("refuses an invalid site_url without falling back to a valid legacy url", async () => {
 		harness.write("item.json", item({ username: "service@example.invalid", credential: "fixture-community-secret", url: "https://example.atlassian.net", site_url: "https://example.atlassian.net/wiki" }));
 		const result = await runProvider(COMMUNITY);
 		expect(result.code).toBe(4);
-		expect(result.stderr).toContain("atlassian-provider:error:site-url-invalid:");
+		expect(result.stderr).toContain("atlassian-provider:error:credential-invalid:");
 		expect(result.stderr).not.toContain("https://example.atlassian.net/wiki");
 		expect(harness.has("community-provider.json")).toBe(false);
 	});
@@ -255,10 +273,10 @@ describe("Community provider process", () => {
 	});
 
 	test("never uses the built-in token-management url as the site origin", async () => {
-		harness.write("item.json", item({ username: "service@example.invalid", credential: "fixture-community-secret", url: MANAGEMENT_URL }));
+		harness.write("item.json", rawItem({ username: "service@example.invalid", credential: "fixture-community-secret", url: MANAGEMENT_URL }, 1));
 		const result = await runProvider(COMMUNITY);
 		expect(result.code).toBe(4);
-		expect(result.stderr).toContain("atlassian-provider:error:site-url-invalid:");
+		expect(result.stderr).toContain("atlassian-provider:error:credential-invalid:");
 		expect(result.stderr).not.toContain(MANAGEMENT_URL);
 		expect(harness.has("community-provider.json")).toBe(false);
 	});
@@ -267,7 +285,7 @@ describe("Community provider process", () => {
 		const unreadable = await runProvider(COMMUNITY);
 		expect(unreadable.stderr).toContain("atlassian-provider:error:credential-unavailable:");
 		harness.write("item.json", item({ credential: "fixture-community-secret", site_url: "https://example.atlassian.net" }));
-		expect((await runProvider(COMMUNITY)).stderr).toContain("atlassian-provider:error:community-fields-missing:");
+		expect((await runProvider(COMMUNITY)).stderr).toContain("atlassian-provider:error:credential-invalid:");
 		harness.write("item.json", JSON.stringify({ fields: [{ label: "username", value: "a" }, { label: "Username", value: "b" }, { label: "credential", value: "c" }, { label: "site_url", value: "https://example.atlassian.net" }] }));
 		expect((await runProvider(COMMUNITY)).stderr).toContain("atlassian-provider:error:credential-invalid:");
 		harness.write("item.json", item({ username: "service@example.invalid\n", credential: "c", site_url: "https://example.atlassian.net" }));
@@ -276,7 +294,7 @@ describe("Community provider process", () => {
 	});
 
 	test("an empty field label falls back to the field id", async () => {
-		harness.write("item.json", JSON.stringify({ fields: [
+		harness.write("item.json", JSON.stringify({ version: 1, fields: [
 			{ id: "username", label: "", value: "service@example.invalid" },
 			{ id: "credential", label: "", value: "fixture-community-secret" },
 			{ id: "site_url", label: "", value: "https://example.atlassian.net" },
@@ -294,6 +312,7 @@ describe("Community provider process", () => {
 			"https://user@other.atlassian.net",
 			"https://user:password@example.atlassian.net",
 			"http://example.atlassian.net",
+			"https://example.atlassian.net:443",
 			"https://example.atlassian.net:8443",
 			"https://@example.atlassian.net",
 			"https://example.atlassian.net@evil.example",
@@ -306,11 +325,11 @@ describe("Community provider process", () => {
 		]) {
 			harness.write("item.json", item({ username: "service@example.invalid", credential: "fixture-community-secret", site_url: url }));
 			const result = await runProvider(COMMUNITY);
-			expect({ url, code: result.code, cause: result.stderr.includes("atlassian-provider:error:site-url-invalid:") }).toEqual({ url, code: 4, cause: true });
+			expect({ url, code: result.code, cause: result.stderr.includes("atlassian-provider:error:credential-invalid:") }).toEqual({ url, code: 4, cause: true });
 			expect(result.stderr).not.toContain(url);
-			harness.write("item.json", item({ username: "service@example.invalid", credential: "fixture-community-secret", url }));
+				harness.write("item.json", rawItem({ username: "service@example.invalid", credential: "fixture-community-secret", url }, 1));
 			const legacy = await runProvider(COMMUNITY);
-			expect({ url, code: legacy.code, cause: legacy.stderr.includes("atlassian-provider:error:site-url-invalid:") }).toEqual({ url, code: 4, cause: true });
+			expect({ url, code: legacy.code, cause: legacy.stderr.includes("atlassian-provider:error:credential-invalid:") }).toEqual({ url, code: 4, cause: true });
 			expect(legacy.stderr).not.toContain(url);
 		}
 		expect(harness.has("community-provider.json")).toBe(false);
