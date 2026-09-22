@@ -1,5 +1,7 @@
-import { describe, expect, test } from "bun:test";
-import { homedir } from "node:os";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
 import { renderCommandUsage } from "@side-quest/cli-command-facade";
 import { assertCommandHelpFlagSurface } from "@side-quest/cli-command-facade/testing";
 import { WORKTREE_DIAGNOSTIC_CODES, worktreeContracts } from "./command-contract.ts";
@@ -17,6 +19,43 @@ import {
 	type CommandResult,
 	type WorkTreeRuntime,
 } from "./worktree.ts";
+
+// The engine writes runtime run and failure records through the real
+// filesystem even with a fake git runner, so route them to a throwaway XDG
+// state home and prove the real store is untouched (review S8). The
+// integration test in this package carries the same guard for its spawned
+// processes.
+let unitStateHome: string;
+let previousStateHome: string | undefined;
+let realStoreEntryCountBefore: number;
+
+function realAgentWorktreeStoreEntryCount(): number {
+	try {
+		return readdirSync(join(homedir(), ".local", "state", "agent-worktree")).length;
+	} catch {
+		return 0;
+	}
+}
+
+beforeAll(() => {
+	realStoreEntryCountBefore = realAgentWorktreeStoreEntryCount();
+	previousStateHome = process.env.XDG_STATE_HOME;
+	unitStateHome = mkdtempSync(join(tmpdir(), "worktree-unit-state-"));
+	process.env.XDG_STATE_HOME = unitStateHome;
+});
+
+afterAll(() => {
+	try {
+		expect(realAgentWorktreeStoreEntryCount()).toBe(realStoreEntryCountBefore);
+	} finally {
+		if (previousStateHome === undefined) {
+			delete process.env.XDG_STATE_HOME;
+		} else {
+			process.env.XDG_STATE_HOME = previousStateHome;
+		}
+		rmSync(unitStateHome, { recursive: true, force: true });
+	}
+});
 
 function runtimeFixtureFor(cwd = "/code/my-repo", includeStray = false): string {
 	const ownerRoot = cwd.includes("/code/other-repo") ? "/code/other-repo" : "/code/my-repo";

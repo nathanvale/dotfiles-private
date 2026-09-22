@@ -58,7 +58,9 @@ const PINNED_DIGESTS = {
 	'vault-git':
 		'f22e836bcfc9bb9f623b9d2f7915bd0d8ed81c0506ed0803b01b537b74b5142f',
 	fallow: 'c26764f0957c51ae4a799e51766d44d5f40378b35a9c2b210b422c9a4d4a0a63',
-	draft: '505280541dacb973e4e4be96f7235fc92443e5e0895a399912bda3e353c63854',
+	// Re-pinned 2026-09-22: the draft's record storage moved from the
+	// checkout-local .agent-worktree/ to the XDG state home (dotfiles PR #65).
+	draft: 'f38e2cf43130c6bf45e053e9f244206e74e589197925a8b870717f7403e5c638',
 } as const
 
 /**
