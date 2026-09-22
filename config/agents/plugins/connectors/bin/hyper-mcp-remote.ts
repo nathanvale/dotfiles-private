@@ -11,7 +11,8 @@ const REPORTED = new RegExp(`^(?:${BRIDGE}\\s+)?${BRIDGE_VERSION.replaceAll(".",
 
 // The bridge on PATH, only when it reports the pinned version.
 export function bridgeExecutable(proc: ProviderProcess): string {
-	const bridge = proc.executableOnPath(BRIDGE);
+	const bridge = Bun.which(BRIDGE, { PATH: proc.cleanEnvironment().PATH ?? "" });
+	if (!bridge) proc.fail("bridge-version-invalid", `${BRIDGE} ${BRIDGE_VERSION} is required`);
 	const probe = Bun.spawnSync([bridge, "--version"], { env: proc.cleanEnvironment(), stdin: "ignore" });
 	if (probe.exitCode !== 0 || !REPORTED.test(probe.stdout.toString().trim())) proc.fail("bridge-version-invalid", `${BRIDGE} ${BRIDGE_VERSION} is required`);
 	return bridge;

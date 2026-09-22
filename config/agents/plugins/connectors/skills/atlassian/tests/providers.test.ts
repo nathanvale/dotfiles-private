@@ -57,6 +57,30 @@ async function runProvider(script: string, args: string[] = [], env: Record<stri
 const wrapperLines = () => (harness.has("wrapper.log") ? readFileSync(path.join(harness.root, "wrapper.log"), "utf8").trim().split("\n") : []);
 
 describe("Official provider process", () => {
+	test("preflight proves local readiness without injecting a credential or starting the bridge", async () => {
+		harness.write("item.json", item({ username: "service@example.invalid", credential: "x" }));
+		const result = await runProvider(OFFICIAL, ["--preflight"]);
+		expect([result.code, result.stdout, result.stderr]).toEqual([0, "", ""]);
+		expect(wrapperLines()).toEqual(["op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json"]);
+		expect(harness.has("bridge.json")).toBe(false);
+	});
+
+	test("preflight rejects a missing or malformed credential before the bridge or injection can start", async () => {
+		for (const [label, credential] of [
+			["missing", undefined],
+			["malformed", "private-value\nsecond-line"],
+		] as const) {
+			harness.write("item.json", item({ username: "service@example.invalid", ...(credential === undefined ? {} : { credential }) }));
+			const result = await runProvider(OFFICIAL, ["--preflight"]);
+			expect([label, result.code, result.stdout]).toEqual([label, 4, ""]);
+			expect(result.stderr).toContain("atlassian-provider:error:credential-invalid:");
+			expect(result.stderr).not.toContain("private-value");
+			expect(result.stderr).not.toContain("second-line");
+		}
+		expect(wrapperLines().some((line) => line.startsWith("inject"))).toBe(false);
+		expect(harness.has("bridge.json")).toBe(false);
+	});
+
 	test("jira: probes the bridge pin, reads the username as metadata, injects the credential, then sends Basic to the bridge", async () => {
 		harness.write("item.json", item({ username: "service@example.invalid", credential: "x", url: MANAGEMENT_URL }));
 		const result = await runProvider(OFFICIAL);
@@ -205,6 +229,14 @@ describe("Official provider process", () => {
 });
 
 describe("Community provider process", () => {
+	test("preflight proves local readiness without starting the pinned package", async () => {
+		harness.write("item.json", FULL_ITEM);
+		const result = await runProvider(COMMUNITY, ["--preflight"]);
+		expect([result.code, result.stdout, result.stderr]).toEqual([0, "", ""]);
+		expect(wrapperLines()).toEqual(["op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json"]);
+		expect(harness.has("community-provider.json")).toBe(false);
+	});
+
 	test("a rotated item version or trusted origin refuses before either Provider executable starts", async () => {
 		const secret = "fixture-community-secret";
 		for (const [label, changed] of [

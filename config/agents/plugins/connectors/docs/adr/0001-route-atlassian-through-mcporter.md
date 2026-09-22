@@ -96,6 +96,15 @@ The dispatcher resolves the Trusted Site Origin from the product item's
 `site_url` field only, and accepts an Official `cloudId` only when the
 provider's accessible resources include that exact origin.
 
+Before each MCPorter list or call, the dispatcher runs the selected Provider's
+local `--preflight`. The Provider revalidates the bound item and its required
+executables, then exits without credential injection, downstream process
+startup, or network transport. A refusal is translated before MCPorter starts.
+This keeps prerequisite knowledge inside each Provider while preventing
+MCPorter 0.13.13 from flattening a child refusal into `offline / Connection
+closed`, which would otherwise look like a fallback-eligible transport
+failure. MCPorter remains the only data transport after readiness passes.
+
 Writes are journaled. A preview binds the exact input, the shaped provider
 arguments, the Object Identity, and the target's current stable revision
 (never Jira `updated`; Confluence version) in a private 0700 state directory. An apply
@@ -172,6 +181,10 @@ provider accepts the existing credentials.
   it never assumes a reply shape beyond the fields it checks.
 - MCPorter's `--no-oauth` does not control a child bridge. Qualify the pinned
   bridge's `--no-auth` behavior on HTTP 401 before live use.
+- MCPorter 0.13.13 omits child stderr from its JSON startup failure. The
+  Provider readiness operation therefore owns local prerequisite failures;
+  MCPorter's own offline JSON is transport metadata and never counts as
+  provider content.
 - Write tool argument names come from Atlassian's v2 skill examples and the
   v0.23.1 Community source, not from a published schema. A live `tools/list`
   must confirm them; an unrecognized argument is refused at confirmation, not
@@ -213,6 +226,16 @@ Offline, fixture-proven (plugin test suite):
   Community gate, content-observed refusal, journaled preview and apply,
   send-mark ordering, receipt-bound outbound arguments, unknown outcome
   blocking, adjudication, unlock, and parity attestation.
+- Both Providers expose a silent local readiness operation that validates the
+  selected binding and executable prerequisites without injecting a token or
+  starting the bridge or Community package. The public dispatcher preserves a
+  readiness refusal even when MCPorter would discard the child stderr.
+
+On 23 September, credential-safe read-only canaries for Jira and Confluence on
+both configured tenants stopped before network access with
+`refused-precondition`, named the missing pinned bridge, kept the transaction
+unchanged, and refused Community fallback. This qualifies failure handling,
+not authentication or a live read.
 
 Live-only, still required before acceptance:
 

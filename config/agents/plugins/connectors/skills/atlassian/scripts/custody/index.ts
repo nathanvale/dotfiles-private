@@ -100,6 +100,6 @@ export const credentialReference = (invocation: ProviderInvocation): string => `
 
 // The three variables an injected relaunch must re-supply so its phase two
 // recovers the same invocation.
-export function invocationEnvironment(invocation: ProviderInvocation): Record<string, string> {
+export function invocationEnvironment(invocation: Pick<ProviderInvocation, "tenant" | "product" | "binding">): Record<string, string> {
 	return { [TENANT_ENV]: invocation.tenant, [PRODUCT_ENV]: invocation.product, [INTERNAL_INVOCATION_CONTEXT_ENV]: encodeBinding(invocation.binding) };
 }

@@ -1,7 +1,7 @@
 // Shared public-process harness for every connector test. One owner of the
 // fake processes and custody assertions; per-skill tests add expectations only.
 import { expect } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -51,6 +51,7 @@ export function createHarness(fakes: Record<string, string>): Harness {
 	const binDir = path.join(root, "bin");
 	shim(path.join(home, "code", "dotfiles", "bin", "with-one-password-token"), path.join(FIXTURES, "one-password-fake.ts"));
 	shim(path.join(binDir, "mcporter"), path.join(FIXTURES, "mcporter-fake.ts"));
+	symlinkSync(process.execPath, path.join(binDir, "bun"));
 	for (const [name, modulePath] of Object.entries(fakes)) shim(path.join(binDir, name), modulePath);
 	return {
 		root,

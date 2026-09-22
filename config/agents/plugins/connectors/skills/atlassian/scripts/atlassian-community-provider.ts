@@ -16,16 +16,23 @@ function productEnvironment(product: Product, item: BoundItem, credential: strin
 	return { CONFLUENCE_URL: `${item.origin}/wiki`, CONFLUENCE_USERNAME: item.principal, CONFLUENCE_API_TOKEN: credential };
 }
 
-function main(argv: string[]): never {
-	refuseArguments(argv);
+function prerequisites(): { invocation: ReturnType<typeof providerInvocation>; item: BoundItem; credential: string; uvx: string } {
 	const invocation = providerInvocation();
-	// This full-item read and comparison happens before uvx is probed or spawned.
 	const item = boundItem(invocation);
 	const uvx = executableOnPath("uvx");
 	if (item.credential === undefined) fail("community-fields-missing", `${invocation.itemTitle} needs username, credential, and a site_url field`);
 	if (!singleLine(item.credential)) fail("credential-invalid", `${invocation.itemTitle} has malformed fields`);
-	const environment = { ...cleanEnvironment(), ...productEnvironment(invocation.product, item, item.credential) };
-	replaceProcess(uvx, ["uvx", "--system-certs", "--no-env-file", "--from", PACKAGE_PIN, "mcp-atlassian"], environment);
+	return { invocation, item, credential: item.credential, uvx };
+}
+
+function main(argv: string[]): never {
+	const preflight = argv.length === 1 && argv[0] === "--preflight";
+	if (!preflight) refuseArguments(argv);
+	// This full-item read and comparison happens before uvx is probed or spawned.
+	const ready = prerequisites();
+	if (preflight) process.exit(0);
+	const environment = { ...cleanEnvironment(), ...productEnvironment(ready.invocation.product, ready.item, ready.credential) };
+	replaceProcess(ready.uvx, ["uvx", "--system-certs", "--no-env-file", "--from", PACKAGE_PIN, "mcp-atlassian"], environment);
 }
 
 main(process.argv.slice(2));

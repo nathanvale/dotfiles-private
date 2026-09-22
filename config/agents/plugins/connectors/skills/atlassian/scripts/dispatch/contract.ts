@@ -133,6 +133,15 @@ export function serverFor(provider: ProviderName, product: Product): ServerName 
 	return `atlassian-${provider}-${product}`;
 }
 
+export function providerRouteFor(server: string): { provider: ProviderName; product: Product } | null {
+	for (const provider of PROVIDERS) {
+		for (const product of PRODUCTS) {
+			if (serverFor(provider, product) === server) return { provider, product };
+		}
+	}
+	return null;
+}
+
 
 export type CauseCode =
 	| "success"

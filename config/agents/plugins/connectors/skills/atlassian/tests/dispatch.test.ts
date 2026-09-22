@@ -7,12 +7,12 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assertCustody, createHarness, itemJson, type Harness, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
+import { assertCustody, createHarness, FIXTURES, itemJson, type Harness, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
 import { run } from "../scripts/atlassian-dispatch.ts";
-import { ALLOWED_TOOLS, OPERATION_SPECS, registryToolVocabulary, SERVERS, serverFor } from "../scripts/dispatch/contract.ts";
+import { ALLOWED_TOOLS, OPERATION_SPECS, providerRouteFor, registryToolVocabulary, SERVERS, serverFor } from "../scripts/dispatch/contract.ts";
 import { attestationMatches, type Dependencies, type ParityAttestation, type ParityEvidence, REPAIR_TEXT, type SchemaTool, type Transport, type TransportResult } from "../scripts/dispatch/engine.ts";
 import { openJournal } from "../scripts/dispatch/journal.ts";
-import { parityStore } from "../scripts/dispatch/runtime.ts";
+import { parityStore, routeTransport } from "../scripts/dispatch/runtime.ts";
 import { bindCredential } from "../scripts/custody/index.ts";
 import type { ProviderFailureCause } from "../scripts/dispatch/translate.ts";
 
@@ -209,6 +209,13 @@ describe("operation contract and routes", () => {
 		expect([...SERVERS]).toEqual([OJ, OC, CJ, CC]);
 		expect(serverFor("official", "jira")).toBe(OJ);
 		expect(serverFor("community", "confluence")).toBe(CC);
+		expect(SERVERS.map((server) => [server, providerRouteFor(server)])).toEqual([
+			[OJ, { provider: "official", product: "jira" }],
+			[OC, { provider: "official", product: "confluence" }],
+			[CJ, { provider: "community", product: "jira" }],
+			[CC, { provider: "community", product: "confluence" }],
+		]);
+		expect(providerRouteFor("atlassian-official-bitbucket")).toBeNull();
 		expect(ALLOWED_TOOLS).toEqual({
 			[OJ]: ["atlassianUserInfo", "getAccessibleAtlassianResources", "getJiraIssue", "searchJiraIssuesUsingJql", "createJiraIssue", "editJiraIssue", "addOrEditJiraIssueComment"],
 			[OC]: ["atlassianUserInfo", "getAccessibleAtlassianResources", "getConfluenceContent", "searchConfluence", "getConfluenceSpace", "createConfluenceContent", "updateConfluenceContent"],
@@ -1029,7 +1036,7 @@ describe("parity attestation", () => {
 describe("production adapters", () => {
 	let harness: Harness;
 	beforeEach(() => {
-		harness = createHarness({});
+		harness = createHarness({ "hyper-mcp-remote": path.join(FIXTURES, "bridge-fake.ts") });
 	});
 	afterEach(() => harness.dispose());
 	const env = () => ({ HOME: harness.home, PATH: process.env.PATH ?? "", TMPDIR: harness.root, XDG_STATE_HOME: harness.root });
@@ -1039,6 +1046,129 @@ describe("production adapters", () => {
 		if (!result.ok) throw new Error(result.cause);
 		return result.binding;
 	};
+
+	test("the public dispatcher reports a missing Official bridge as a local precondition before MCPorter starts", async () => {
+		harness.dispose();
+		harness = createHarness({});
+		const secret = "fixture-custody-secret";
+		harness.write("item.json", fields({ username: PRINCIPAL, credential: secret, site_url: ORIGIN }, 1));
+		const result = await harness.run(["--tenant", "example", "issue.search", "--input", '{"jql":"x"}', "--json"], { PATH: harness.binDir }, DISPATCH);
+		expect([result.code, result.stderr]).toEqual([3, ""]);
+		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; repairAction: string; transactionState: string } };
+		expect([envelope.result.causeCode, envelope.result.repairAction, envelope.result.transactionState]).toEqual([
+			"refused-precondition",
+			"a provider precondition failed before any request; run the provider readiness checks; install the pinned hyper-mcp-remote bridge version; fallback-ineligible:refused-precondition",
+			"unchanged",
+		]);
+		expect(harness.has("mcporter.json")).toBe(false);
+		for (const stream of [result.stdout, result.stderr]) {
+			expect(stream).not.toContain(secret);
+			expect(stream).not.toContain(OP_TOKEN_SENTINEL);
+		}
+	});
+
+	test("the public dispatcher rejects a missing or malformed Official credential before MCPorter starts", async () => {
+		for (const [label, credential] of [
+			["missing", undefined],
+			["malformed", "fixture-private-value\nsecond-line"],
+		] as const) {
+			harness.write("item.json", fields({ username: PRINCIPAL, site_url: ORIGIN, ...(credential === undefined ? {} : { credential }) }, 1));
+			const result = await harness.run(["--tenant", "example", "issue.search", "--input", '{"jql":"x"}', "--json"], {}, DISPATCH);
+			expect([label, result.code, result.stderr]).toEqual([label, 3, ""]);
+			const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; repairAction: string; transactionState: string } };
+			expect([envelope.result.causeCode, envelope.result.repairAction, envelope.result.transactionState]).toEqual([
+				"refused-precondition",
+				"a provider precondition failed before any request; run the provider readiness checks; the credential item has malformed fields; fallback-ineligible:refused-precondition",
+				"unchanged",
+			]);
+			for (const stream of [result.stdout, result.stderr]) {
+				expect(stream).not.toContain("fixture-private-value");
+				expect(stream).not.toContain("second-line");
+				expect(stream).not.toContain(OP_TOKEN_SENTINEL);
+			}
+		}
+		expect(harness.has("mcporter.json")).toBe(false);
+		expect(harness.has("bridge.json")).toBe(false);
+	});
+
+	test("MCPorter diagnostic JSON from a failed Provider start is not provider content", async () => {
+		const secret = "fixture-custody-secret";
+		harness.write("item.json", fields({ username: PRINCIPAL, credential: secret, site_url: ORIGIN }, 1));
+		harness.write(
+			"mcporter-failure.json",
+			JSON.stringify({
+				code: 1,
+				stdout: `${JSON.stringify({ mode: "server", name: OJ, status: "offline", durationMs: 1, transport: "STDIO ../scripts/atlassian-official-provider.ts", issue: { kind: "offline", rawMessage: "Connection closed" }, error: "offline" })}\n`,
+				stderr: "",
+			}),
+		);
+		const result = await harness.run(["--tenant", "example", "issue.search", "--input", '{"jql":"x"}', "--json"], {}, DISPATCH);
+		expect([result.code, result.stderr]).toEqual([3, ""]);
+		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; repairAction: string } };
+		expect([envelope.result.causeCode, envelope.result.repairAction]).toEqual([
+			"failed-transport",
+			"the provider did not answer; inspect provider status before retrying the read; fallback-ineligible:parity-unproven",
+		]);
+		for (const stream of [result.stdout, result.stderr]) expect(stream).not.toContain(secret);
+	});
+
+	test("near-match MCPorter diagnostics remain observed content and cannot widen fallback", async () => {
+		const base = {
+			mode: "server",
+			name: OJ,
+			status: "offline",
+			durationMs: 1,
+			transport: "STDIO ../scripts/atlassian-official-provider.ts",
+			issue: { kind: "offline", rawMessage: "Connection closed" },
+			error: "offline",
+		};
+		const nearMatches: [string, Record<string, unknown>][] = [
+			["other server", { ...base, name: OC }],
+			["other status", { ...base, status: "error" }],
+			["provider-like error", { ...base, error: "offline after provider output" }],
+			["provider-like issue", { ...base, issue: { kind: "offline", rawMessage: "Connection closed after provider output" } }],
+			["non-stdio transport", { ...base, transport: "HTTP https://example.invalid" }],
+			["extra provider field", { ...base, content: { answer: "provider output" } }],
+		];
+		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 1));
+		for (const [label, diagnostic] of nearMatches) {
+			harness.write("mcporter-failure.json", JSON.stringify({ code: 1, stdout: `${JSON.stringify(diagnostic)}\n`, stderr: "" }));
+			const result = await harness.run(["--tenant", "example", "issue.search", "--input", '{"jql":"x"}', "--json"], {}, DISPATCH);
+			const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; repairAction: string } };
+			expect([label, result.code, envelope.result.causeCode, envelope.result.repairAction]).toEqual([
+				label,
+				3,
+				"failed-transport",
+				"the provider did not answer; inspect provider status before retrying the read; fallback-ineligible:content-observed",
+			]);
+			expect(result.stderr).toBe("");
+		}
+	});
+
+	test("route registry and selector planning refuse before a Provider preflight process starts", async () => {
+		const binding = { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN };
+		const validRegistry = { imports: [], mcpServers: { [OJ]: { allowedTools: ["searchJiraIssuesUsingJql"] } } };
+		const validRoute = { defaultProvider: OJ, dispatcherOwned: true, selectors: { tenant: "ATLASSIAN_TENANT" } };
+		for (const [label, registry, route] of [
+			["imports", { ...validRegistry, imports: ["ambient"] }, validRoute],
+			["allow-list", { imports: [], mcpServers: { [OJ]: {} } }, validRoute],
+			["selectors", validRegistry, { ...validRoute, selectors: { account: "ATLASSIAN_TENANT" } }],
+		] as const) {
+			const skillsRoot = path.join(harness.root, `skills-${label}`);
+			const config = path.join(skillsRoot, "atlassian", "config");
+			mkdirSync(config, { recursive: true });
+			writeFileSync(path.join(config, "mcporter.json"), JSON.stringify(registry));
+			writeFileSync(path.join(config, "route.json"), JSON.stringify(route));
+			const result = await routeTransport(env(), "example", skillsRoot).listTools(binding, OJ);
+			expect([label, result]).toEqual([
+				label,
+				{ ok: false, cause: "refused-precondition", hint: "repair the Connector Skill route registry", contentObserved: false },
+			]);
+		}
+		expect(harness.has("wrapper.log")).toBe(false);
+		expect(harness.has("mcporter.json")).toBe(false);
+		expect(harness.has("bridge.json")).toBe(false);
+	});
 
 	test("the public dispatcher never emits the item secret and refuses Community before MCPorter starts", async () => {
 		const secret = "fixture-custody-secret";
@@ -1112,7 +1242,7 @@ describe("production adapters", () => {
 		writeFileSync(path.join(canned, "list.json"), JSON.stringify({ tools: SCHEMAS[OJ] }));
 		writeFileSync(path.join(canned, "getAccessibleAtlassianResources.json"), JSON.stringify(RESOURCES));
 		writeFileSync(path.join(canned, "getJiraIssue.json"), JSON.stringify({ isError: true, content: [{ type: "text", text: leak }] }));
-		harness.write("item.json", fields({ username: PRINCIPAL, site_url: ORIGIN }, 1));
+		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 1));
 		const result = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
 		expect([result.code, result.stderr]).toEqual([3, ""]);
 		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; repairAction: string } };
@@ -1126,7 +1256,7 @@ describe("production adapters", () => {
 		writeFileSync(path.join(canned, "list.json"), JSON.stringify({ tools: SCHEMAS[OJ] }));
 		writeFileSync(path.join(canned, "getAccessibleAtlassianResources.json"), JSON.stringify(RESOURCES));
 		writeFileSync(path.join(canned, "getJiraIssue.json"), JSON.stringify({ key: "PROJ-1", summary: "canned" }));
-		harness.write("item.json", fields({ username: PRINCIPAL, url: MANAGEMENT_URL, site_url: ORIGIN }, 1));
+		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", url: MANAGEMENT_URL, site_url: ORIGIN }, 1));
 		const result = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
 		expect(result.stderr).toBe("");
 		expect(result.code).toBe(0);
@@ -1145,7 +1275,7 @@ describe("production adapters", () => {
 		writeFileSync(path.join(canned, "getAccessibleAtlassianResources.json"), JSON.stringify(RESOURCES));
 		writeFileSync(path.join(canned, "getJiraIssue.json"), JSON.stringify({ key: "PROJ-1", fields: { comment: { comments: [] } } }));
 		writeFileSync(path.join(canned, "addOrEditJiraIssueComment.json"), JSON.stringify({ id: "10001", body: "canned" }));
-		harness.write("item.json", fields({ username: PRINCIPAL, url: MANAGEMENT_URL, site_url: ORIGIN }, 1));
+		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", url: MANAGEMENT_URL, site_url: ORIGIN }, 1));
 		const input = '{"issueKey":"PROJ-1","body":"canned"}';
 		const preview = await harness.run(["--tenant", "example", "issue.comment", "--input", input, "--preview"], {}, DISPATCH);
 		expect([preview.code, preview.stderr]).toEqual([0, ""]);

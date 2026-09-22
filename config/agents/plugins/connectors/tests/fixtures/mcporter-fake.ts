@@ -37,6 +37,17 @@ if (!entry) {
 	process.stderr.write(`fake-mcporter: unknown server ${server}\n`);
 	process.exit(1);
 }
+// One test-owned process failure can replace the Provider spawn. This mirrors
+// MCPorter 0.13.13's public JSON failure shape, including its loss of child
+// stderr, without teaching the fake how to classify a Provider failure.
+const forcedFailure = path.join(receipts, "mcporter-failure.json");
+if (existsSync(forcedFailure)) {
+	const failure = JSON.parse(readFileSync(forcedFailure, "utf8")) as { code: number; stdout: string; stderr: string };
+	record("mcporter.json", { ...base, kind: "forced-failure" });
+	process.stdout.write(failure.stdout);
+	process.stderr.write(failure.stderr);
+	process.exit(failure.code);
+}
 // Canned responses: TMPDIR/canned/<server>/list.json for a listing, or
 // TMPDIR/canned/<server>/<tool>.json for a call, replace any provider spawn.
 const cannedName = verb === "call" ? (target.split(".")[1] ?? "") : "list";

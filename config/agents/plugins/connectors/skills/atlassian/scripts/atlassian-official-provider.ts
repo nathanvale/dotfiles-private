@@ -46,16 +46,26 @@ function injectedPhase(invocation: ProviderInvocation): never {
 // selection and a mismatch is refused before any helper or bridge access.
 const ENV_BINARY = "/usr/bin/env";
 
+function prerequisites(): { helper: string; invocation: ProviderInvocation } {
+	const invocation = providerInvocation();
+	const item = boundItem(invocation);
+	if (!singleLine(item.credential)) fail("credential-invalid", `${invocation.itemTitle} needs a valid credential field`);
+	bridgeExecutable(atlassianProcess);
+	return { helper: credentialHelper(), invocation };
+}
+
 function main(argv: string[]): never {
 	if (argv[0] === "--injected") {
 		if (argv.length !== 3) fail("arguments-invalid", "the injected phase needs the selected tenant and product", 2);
 		injectedPhase(providerInvocation(process.env, { tenant: argv[1] ?? "", product: argv[2] ?? "" }));
 	}
+	if (argv[0] === "--preflight") {
+		if (argv.length !== 1) fail("arguments-invalid", "the preflight phase accepts no other arguments", 2);
+		prerequisites();
+		process.exit(0);
+	}
 	if (argv.length !== 0) fail("arguments-invalid", "no provider arguments are accepted", 2);
-	const invocation = providerInvocation();
-	boundItem(invocation);
-	bridgeExecutable(atlassianProcess);
-	const helper = credentialHelper();
+	const { helper, invocation } = prerequisites();
 	const relaunch = Object.entries(invocationEnvironment(invocation)).map(([key, value]) => `${key}=${value}`);
 	const target = [ENV_BINARY, ...relaunch, Bun.main, "--injected", invocation.tenant, invocation.product];
 	replaceProcess(helper, [helper, "inject", KEY_ENV, credentialReference(invocation), "--", ...target], cleanEnvironment());
