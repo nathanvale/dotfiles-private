@@ -192,6 +192,11 @@ branch refs/heads/feat/x
 			// Independent oracle: verified with `printf '%s' /repo | shasum -a 256`.
 			"/state/agent-worktree/816fc349d3faebf8",
 		);
+		expect(discovery.issues).toContainEqual({
+			code: "worktree_list_failed",
+			status: "unknown",
+			summary: "Git worktree list could not be read.",
+		});
 	});
 
 	test("does not classify worktree directories as stale without a worktree list", async () => {

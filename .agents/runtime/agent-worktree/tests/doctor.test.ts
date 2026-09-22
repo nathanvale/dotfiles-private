@@ -286,7 +286,7 @@ branch refs/heads/feat/x
 		expect(map.repo.strayWorktreeCount).toBeUndefined();
 		expect(check?.status).toBe("unknown");
 		expect(check?.summary).toBe(
-			"Stray worktrees unknown until the main owner root can be resolved.",
+			"Stray worktrees unknown until repo ownership is resolved.",
 		);
 	});
 
