@@ -1,9 +1,11 @@
 // Pure dispatch policy: input validation, provider argument shaping, live
-// schema confirmation, failure classification, and the read-only fallback
-// gate. No I/O; the runtime supplies a Transport and evidence.
+// schema confirmation, and the read-only fallback gate. No I/O and no
+// provider text; the runtime supplies a Transport that has already translated
+// every failure into a closed cause.
 import { type CauseCode, type OperationId, type OperationSpec, type Product, type ProviderName, OPERATION_SPECS } from "./contract.ts";
 import { canonicalDigest, type Journal } from "./journal.ts";
 import type { BindResult, CredentialBinding } from "../custody/index.ts";
+import type { ProviderFailure } from "./translate.ts";
 
 export interface SchemaTool {
 	name: string;
@@ -13,11 +15,7 @@ export interface SchemaTool {
 // Every failure says whether provider content was observed: a nonzero exit or
 // timeout that still produced output may have been answered, and is never
 // treated as a clean transport failure.
-export type TransportResult =
-	| { ok: true; data: unknown }
-	| { ok: false; kind: "process"; exitCode: number; stderr: string; stdout: string; contentObserved: boolean }
-	| { ok: false; kind: "tool-error"; message: string; contentObserved: boolean }
-	| { ok: false; kind: "malformed"; message: string; contentObserved: boolean };
+export type TransportResult = { ok: true; data: unknown } | ({ ok: false } & ProviderFailure);
 export type TransportFailure = Exclude<TransportResult, { ok: true }>;
 
 export interface Transport {
@@ -236,37 +234,10 @@ export function readSchema(result: TransportResult): SchemaTool[] | null {
 	return tools;
 }
 
-const AUTH_PATTERN = /\b(401|403)\b|authentication failed|unauthori[sz]ed|forbidden|permission/i;
-const NOT_FOUND_PATTERN = /\b404\b|not found|does not exist/i;
-// Our own Provider cause codes: a closed list, matched exactly. Each maps to
-// fixed public guidance; the Provider's message text is never carried.
-const PROVIDER_CAUSE_HINTS: Record<string, string> = {
-	"bridge-version-invalid": "install the pinned hyper-mcp-remote bridge version",
-	"executable-missing": "install the missing provider executable on PATH",
-	"credential-wrapper-missing": "restore the dotfiles 1Password helper",
-	"credential-context-invalid": "restart through the semantic dispatcher",
-	"credential-context-stale": "credential item metadata changed; restart the semantic operation",
-	"credential-unavailable": "the credential item could not be read; run the helper's check",
-	"credential-invalid": "the credential item has malformed fields",
-	"username-missing": "add a username field to the tenant's product credential item",
-	"community-fields-missing": "the product credential item needs username, credential, and a site_url field",
-	"site-url-invalid": "the site_url field must be a plain https atlassian.net origin",
-	"tenant-invalid": "the tenant slug was rejected by the provider",
-	"product-invalid": "the provider route has no valid product",
-	"arguments-invalid": "the provider was invoked with unexpected arguments",
-};
-const PRECONDITION_PATTERN = new RegExp(`atlassian-provider:error:(${Object.keys(PROVIDER_CAUSE_HINTS).join("|")}):`);
-
-export function preconditionHint(text: string): string | null {
-	const code = PRECONDITION_PATTERN.exec(text)?.[1];
-	return code === undefined ? null : (PROVIDER_CAUSE_HINTS[code] ?? null);
-}
-const CAPABILITY_PATTERN = /unknown tool|tool .* not found|no such tool|not exposed/i;
-const TRANSPORT_PATTERN = /timed? ?out|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ENOTFOUND|offline|connection|socket/i;
-
-// Provider text is classified inside the engine and never leaves it. Public
-// repair guidance is fixed per cause, so no provider stdout, stderr, or tool
-// message can carry a secret or private content into the envelope.
+// Public repair guidance is fixed per cause. Provider text is translated at
+// the transport seam and never reaches this module, so no provider stdout,
+// stderr, or tool message can carry a secret or private content into the
+// envelope.
 export const REPAIR_TEXT: Record<Exclude<CauseCode, "success">, string> = {
 	"usage-invalid": "correct the invocation",
 	"operation-unavailable": "the default Official endpoint reaches this operation only through its broad executeWrite dispatcher, which this route never exposes; select --provider community, or qualify the flat Official endpoint first",
@@ -287,17 +258,6 @@ export const REPAIR_TEXT: Record<Exclude<CauseCode, "success">, string> = {
 	"failed-transport": "the provider did not answer; inspect provider status before retrying the read",
 	"failed-unknown": "the provider failed for an unclassified reason; inspect provider diagnostics",
 };
-
-export function classifyFailure(failure: TransportFailure): Exclude<CauseCode, "success"> {
-	const text = failure.kind === "process" ? `${failure.stderr}\n${failure.stdout}` : failure.message;
-	if (PRECONDITION_PATTERN.test(text)) return "refused-precondition";
-	if (AUTH_PATTERN.test(text)) return "refused-auth";
-	if (NOT_FOUND_PATTERN.test(text)) return "not-found";
-	if (CAPABILITY_PATTERN.test(text)) return "capability-unavailable";
-	if (failure.kind === "malformed") return "failed-unknown";
-	if (TRANSPORT_PATTERN.test(text)) return "failed-transport";
-	return "failed-unknown";
-}
 
 // Only compatibility failures may fall over. A precondition failure (credential
 // helper, bridge pin, item fields) is a local readiness problem, not a

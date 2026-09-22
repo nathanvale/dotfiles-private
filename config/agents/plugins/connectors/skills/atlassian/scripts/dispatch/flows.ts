@@ -2,13 +2,12 @@
 // live schema confirmation in front of every call; the read flow with its
 // gated fallback; the journaled write flow (preview, apply); and the operator
 // flows (receipts, adjudicate, unlock, parity). Each flow returns an Outcome
-// that the CLI renders into one envelope. Provider text never leaves the
-// engine's classifier; the outcomes carry fixed text and identifiers only.
+// that the CLI renders into one envelope. Provider text never crosses the
+// transport seam; the outcomes carry fixed text and identifiers only.
 import { type CauseCode, OFFICIAL_RESOURCES_TOOL, OFFICIAL_USER_TOOL, type OperationId, type OperationSpec, OPERATION_SPECS, type Product, type Provenance, type ProviderName, serverFor, type TransactionState } from "./contract.ts";
 import type { BindResult, CredentialBinding } from "../custody/index.ts";
 import {
 	attestationMatches,
-	classifyFailure,
 	confirmSchema,
 	credentialDigest,
 	type Dependencies,
@@ -19,7 +18,6 @@ import {
 	OBJECT_SEMANTICS,
 	type ParityAttestation,
 	type ParityRequest,
-	preconditionHint,
 	providerArguments,
 	REPAIR_TEXT,
 	readSchema,
@@ -92,12 +90,11 @@ export class Route {
 		this.server = serverFor(provider, product);
 	}
 
+	// The transport already translated the failure; this records provenance
+	// and attaches the fixed repair text plus the fixed hint, if any.
 	private failure(tool: string, failure: TransportFailure): Attempt {
-		const cause = classifyFailure(failure);
-		this.session.provenance.push({ provider: this.server, tool, status: cause });
-		const text = failure.kind === "process" ? `${failure.stderr}\n${failure.stdout}` : failure.message;
-		const hint = cause === "refused-precondition" ? preconditionHint(text) : null;
-		return { cause, data: null, detail: hint ? `${REPAIR_TEXT[cause]}; ${hint}` : REPAIR_TEXT[cause], contentObserved: failure.contentObserved };
+		this.session.provenance.push({ provider: this.server, tool, status: failure.cause });
+		return { cause: failure.cause, data: null, detail: failure.hint ? `${REPAIR_TEXT[failure.cause]}; ${failure.hint}` : REPAIR_TEXT[failure.cause], contentObserved: failure.contentObserved };
 	}
 
 	private unavailable(): Attempt {

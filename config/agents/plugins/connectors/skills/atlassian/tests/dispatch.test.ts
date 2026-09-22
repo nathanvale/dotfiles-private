@@ -14,6 +14,7 @@ import { attestationMatches, type Dependencies, type ParityAttestation, type Par
 import { openJournal } from "../scripts/dispatch/journal.ts";
 import { parityStore } from "../scripts/dispatch/runtime.ts";
 import { bindCredential } from "../scripts/custody/index.ts";
+import type { ProviderFailureCause } from "../scripts/dispatch/translate.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
 const DISPATCH = path.join(SKILL, "scripts", "atlassian-dispatch.ts");
@@ -189,8 +190,9 @@ const dispatch = (argv: string[], dependencies: Dependencies) =>
 const receiptsDir = () => path.join(stateRoot, "connectors", "atlassian", "example", "receipts");
 const previewsDir = () => path.join(stateRoot, "connectors", "atlassian", "example", "previews");
 const readJsonDir = (directory: string) => (existsSync(directory) ? readdirSync(directory) : []).filter((name) => name.endsWith(".json")).map((name) => JSON.parse(readFileSync(path.join(directory, name), "utf8")) as Record<string, unknown>);
-const process_ = (kind: "process", exitCode: number, stderr: string, stdout = ""): TransportResult => ({ ok: false, kind, exitCode, stderr, stdout, contentObserved: stdout.trim().length > 0 });
-const toolError = (message: string): TransportResult => ({ ok: false, kind: "tool-error", message, contentObserved: true });
+// The in-memory transport emits translated failures, exactly as the runtime
+// adapter does after translate.ts; raw provider text never enters policy.
+const failure = (cause: ProviderFailureCause, contentObserved = false, hint: string | null = null): TransportResult => ({ ok: false, cause, hint, contentObserved });
 
 describe("operation contract and routes", () => {
 	test("maps every operation to its exact provider tools and marks the deferred Official comment unreachable", () => {
@@ -384,8 +386,8 @@ describe("refusals that never fall back", () => {
 	});
 
 	test("auth and permission failures refuse without Community, even with an attestation", async () => {
-		for (const failure of [toolError("Authentication failed for Jira (403). Token may be expired"), process_("process", 1, "HTTP 401 Unauthorized")]) {
-			const { transport, calls } = fakeTransport({ [`${OJ}.getJiraIssue`]: failure });
+		for (const translated of [failure("refused-auth", true), failure("refused-auth")]) {
+			const { transport, calls } = fakeTransport({ [`${OJ}.getJiraIssue`]: translated });
 			const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport, parity: async () => attested("issue.get", ["issueKey"]) }));
 			expect([envelope.result.outcome, envelope.result.causeCode]).toEqual(["refused", "refused-auth"]);
 			expect(calls.map((call) => call.server)).not.toContain(CJ);
@@ -417,8 +419,8 @@ describe("refusals that never fall back", () => {
 	});
 
 	test("a missing username is a precondition refusal with fixed guidance and no fallback", async () => {
-		const failure = process_("process", 4, "atlassian-provider:error:username-missing:JIRA_EXAMPLE_API_TOKEN needs a username field");
-		const { transport, calls } = fakeTransport({ [`${OJ}.getJiraIssue`]: failure });
+		const translated = failure("refused-precondition", false, "add a username field to the tenant's product credential item");
+		const { transport, calls } = fakeTransport({ [`${OJ}.getJiraIssue`]: translated });
 		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport, parity: async () => attested("issue.get", ["issueKey"]) }));
 		expect([envelope.result.outcome, envelope.result.causeCode]).toEqual(["refused", "refused-precondition"]);
 		expect(envelope.result.repairAction).toContain("username");
@@ -450,7 +452,7 @@ describe("refusals that never fall back", () => {
 });
 
 describe("read fallback gate", () => {
-	const transportFailure = process_("process", 1, "connect ETIMEDOUT mcp.atlassian.com");
+	const transportFailure = failure("failed-transport");
 
 	test("without an attestation a transport failure stays on Official and reports why", async () => {
 		const { transport, calls } = fakeTransport({ [`${OJ}.getJiraIssue`]: transportFailure });
@@ -497,7 +499,7 @@ describe("read fallback gate", () => {
 	});
 
 	test("a failure that produced provider content is never fallback-safe, even with an attestation", async () => {
-		const partial = process_("process", 1, "connect ETIMEDOUT mid-stream", '{"partial":"answer"}');
+		const partial = failure("failed-transport", true);
 		const { transport, calls } = fakeTransport({ [`${OJ}.getJiraIssue`]: partial });
 		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport, parity: async () => attested("issue.get", ["issueKey"]) }));
 		expect([envelope.result.outcome, envelope.result.causeCode]).toEqual(["failed", "failed-transport"]);
@@ -538,13 +540,18 @@ describe("provider text never reaches the envelope", () => {
 	const PRIVATE = ["fixture-secret-value", "customer SSN 123-45-6789", "PROJ-99 confidential merger", OP_TOKEN_SENTINEL, "op://", "Bearer", "Basic "];
 	const leak = `token=fixture-secret-value Authorization: Basic ${OP_TOKEN_SENTINEL} Bearer x op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential; issue PROJ-99 confidential merger; customer SSN 123-45-6789; connect ETIMEDOUT`;
 
-	test("classified failures carry fixed repair text, never stderr or stdout", async () => {
-		for (const failure of [process_("process", 1, leak), process_("process", 1, "", leak), toolError(leak)]) {
-			const { transport } = fakeTransport({ [`${OJ}.getJiraIssue`]: failure });
+	test("translated failures carry fixed repair text and provenance; a hint is fixed text, never a message", async () => {
+		const precondition = failure("refused-precondition", false, "add a username field to the tenant's product credential item");
+		for (const [translated, cause, detail] of [
+			[failure("failed-transport"), "failed-transport", `${REPAIR_TEXT["failed-transport"]}; fallback-ineligible:parity-unproven`],
+			[failure("failed-transport", true), "failed-transport", `${REPAIR_TEXT["failed-transport"]}; fallback-ineligible:content-observed`],
+			[failure("refused-auth", true), "refused-auth", `${REPAIR_TEXT["refused-auth"]}; fallback-ineligible:refused-auth`],
+			[precondition, "refused-precondition", `${REPAIR_TEXT["refused-precondition"]}; add a username field to the tenant's product credential item; fallback-ineligible:refused-precondition`],
+		] as const) {
+			const { transport } = fakeTransport({ [`${OJ}.getJiraIssue`]: translated });
 			const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
-			const serialized = JSON.stringify(envelope);
-			for (const fragment of PRIVATE) expect(serialized).not.toContain(fragment);
-			expect(envelope.result.causeCode).toBe("failed-transport");
+			expect([envelope.result.causeCode, envelope.result.repairAction]).toEqual([cause, detail]);
+			expect(envelope.result.provenance.at(-1)).toEqual({ provider: OJ, tool: "getJiraIssue", status: cause });
 		}
 	});
 
@@ -619,7 +626,7 @@ describe("journaled writes", () => {
 	});
 
 	test("a lost reply after the send mark is an unknown outcome that blocks the object; read-back proof through adjudicate releases it", async () => {
-		const lost = process_("process", 1, "connect ECONNRESET");
+		const lost = failure("failed-transport");
 		const { transport, calls } = fakeTransport({ [`${OJ}.addOrEditJiraIssueComment`]: lost, [`${OJ}.getJiraIssue`]: { ok: true, data: { key: "PROJ-1", fields: { updated: "t1", comment: { comments: [{ id: "777", body: "unrelated" }] } } } } });
 		const dependencies = deps({ transport });
 		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--preview"], dependencies));
@@ -655,7 +662,7 @@ describe("journaled writes", () => {
 
 	test("a public adjudication does not count an identical historical Jira comment as a newly completed effect", async () => {
 		const historical = { ok: true as const, data: { key: "PROJ-1", fields: { comment: { comments: [{ id: "777", body: COMMENT.body }] } } } };
-		const { transport } = fakeTransport({ [`${OJ}.addOrEditJiraIssueComment`]: process_("process", 1, "connect ECONNRESET"), [`${OJ}.getJiraIssue`]: historical });
+		const { transport } = fakeTransport({ [`${OJ}.addOrEditJiraIssueComment`]: failure("failed-transport"), [`${OJ}.getJiraIssue`]: historical });
 		const dependencies = deps({ transport });
 		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--preview"], dependencies));
 		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", preview.previewId], dependencies);
@@ -669,7 +676,7 @@ describe("journaled writes", () => {
 	test("a public Jira comment adjudication completes only when a new comment id appears after its baseline", async () => {
 		let reads = 0;
 		const { transport } = fakeTransport({
-			[`${OJ}.addOrEditJiraIssueComment`]: process_("process", 1, "connect ECONNRESET"),
+			[`${OJ}.addOrEditJiraIssueComment`]: failure("failed-transport"),
 			[`${OJ}.getJiraIssue`]: () => ({ ok: true, data: { key: "PROJ-1", fields: { comment: { comments: reads++ >= 3 ? [{ id: "778", body: COMMENT.body }] : [] } } } }),
 		});
 		const dependencies = deps({ transport });
@@ -683,7 +690,7 @@ describe("journaled writes", () => {
 	test("public Jira create adjudication rejects a historical title and accepts only a new issue key", async () => {
 		const input = { projectKey: "PROJ", issueType: "Bug", summary: "Baseline-safe create" };
 		const historical = { ok: true as const, data: { issues: [{ key: "PROJ-9", fields: { summary: input.summary, issuetype: { name: input.issueType } } }] } };
-		const old = fakeTransport({ [`${OJ}.createJiraIssue`]: process_("process", 1, "connect ECONNRESET"), [`${OJ}.searchJiraIssuesUsingJql`]: historical });
+		const old = fakeTransport({ [`${OJ}.createJiraIssue`]: failure("failed-transport"), [`${OJ}.searchJiraIssuesUsingJql`]: historical });
 		const oldDeps = deps({ transport: old.transport });
 		const oldPreview = previewData(await dispatch(["issue.create", "--input", JSON.stringify(input), "--preview"], oldDeps));
 		const oldApply = await dispatch(["issue.create", "--input", JSON.stringify(input), "--apply", oldPreview.previewId], oldDeps);
@@ -692,7 +699,7 @@ describe("journaled writes", () => {
 
 		const freshInput = { ...input, summary: "Baseline-safe create two" };
 		let reads = 0;
-		const fresh = fakeTransport({ [`${OJ}.createJiraIssue`]: process_("process", 1, "connect ECONNRESET"), [`${OJ}.searchJiraIssuesUsingJql`]: () => ({ ok: true, data: { issues: reads++ >= 3 ? [{ key: "PROJ-10", fields: { summary: freshInput.summary, issuetype: { name: freshInput.issueType } } }] : [] } }) });
+		const fresh = fakeTransport({ [`${OJ}.createJiraIssue`]: failure("failed-transport"), [`${OJ}.searchJiraIssuesUsingJql`]: () => ({ ok: true, data: { issues: reads++ >= 3 ? [{ key: "PROJ-10", fields: { summary: freshInput.summary, issuetype: { name: freshInput.issueType } } }] : [] } }) });
 		const freshDeps = deps({ transport: fresh.transport });
 		const freshPreview = previewData(await dispatch(["issue.create", "--input", JSON.stringify(freshInput), "--preview"], freshDeps));
 		const freshApply = await dispatch(["issue.create", "--input", JSON.stringify(freshInput), "--apply", freshPreview.previewId], freshDeps);
@@ -705,7 +712,7 @@ describe("journaled writes", () => {
 		const input = { pageId: "123", body: "baseline-safe comment" };
 		const page = { ok: true as const, data: { id: "123", metadata: { version: 7, hasSpaceInstructions: false } } };
 		const gate = async () => attested("page.get", ["pageId"]);
-		const historical = fakeTransport({ [`${CC}.confluence_get_page`]: page, [`${CC}.confluence_add_comment`]: process_("process", 1, "connect ECONNRESET"), [`${CC}.confluence_get_comments`]: { ok: true, data: [{ id: "42", body: input.body }] } });
+		const historical = fakeTransport({ [`${CC}.confluence_get_page`]: page, [`${CC}.confluence_add_comment`]: failure("failed-transport"), [`${CC}.confluence_get_comments`]: { ok: true, data: [{ id: "42", body: input.body }] } });
 		const historicalDeps = deps({ transport: historical.transport, parity: gate });
 		const oldPreview = previewData(await dispatch(["--provider", "community", "page.comment", "--input", JSON.stringify(input), "--preview"], historicalDeps));
 		const oldApply = await dispatch(["--provider", "community", "page.comment", "--input", JSON.stringify(input), "--apply", oldPreview.previewId], historicalDeps);
@@ -715,7 +722,7 @@ describe("journaled writes", () => {
 		const freshInput = { pageId: "124", body: "baseline-safe comment two" };
 		const freshPage = { ok: true as const, data: { id: "124", metadata: { version: 7, hasSpaceInstructions: false } } };
 		let reads = 0;
-		const fresh = fakeTransport({ [`${CC}.confluence_get_page`]: freshPage, [`${CC}.confluence_add_comment`]: process_("process", 1, "connect ECONNRESET"), [`${CC}.confluence_get_comments`]: () => ({ ok: true, data: reads++ >= 3 ? [{ id: "43", body: freshInput.body }] : [] }) });
+		const fresh = fakeTransport({ [`${CC}.confluence_get_page`]: freshPage, [`${CC}.confluence_add_comment`]: failure("failed-transport"), [`${CC}.confluence_get_comments`]: () => ({ ok: true, data: reads++ >= 3 ? [{ id: "43", body: freshInput.body }] : [] }) });
 		const freshDeps = deps({ transport: fresh.transport, parity: gate });
 		const freshPreview = previewData(await dispatch(["--provider", "community", "page.comment", "--input", JSON.stringify(freshInput), "--preview"], freshDeps));
 		const freshApply = await dispatch(["--provider", "community", "page.comment", "--input", JSON.stringify(freshInput), "--apply", freshPreview.previewId], freshDeps);
@@ -736,7 +743,7 @@ describe("journaled writes", () => {
 			return { ok: true as const, data: { results: [{ id, title: input.title, space: { id: "9001", key: "ENG" } }] } };
 			};
 		};
-		const historical = fakeTransport({ [`${OC}.searchConfluence`]: response(null), [`${OC}.getConfluenceSpace`]: instructions, [`${OC}.createConfluenceContent`]: process_("process", 1, "connect ECONNRESET") });
+		const historical = fakeTransport({ [`${OC}.searchConfluence`]: response(null), [`${OC}.getConfluenceSpace`]: instructions, [`${OC}.createConfluenceContent`]: failure("failed-transport") });
 		const historicalDeps = deps({ transport: historical.transport });
 		const oldPreview = previewData(await dispatch(["page.create", "--input", JSON.stringify(input), "--preview"], historicalDeps));
 		const oldApply = await dispatch(["page.create", "--input", JSON.stringify(input), "--apply", oldPreview.previewId], historicalDeps);
@@ -747,7 +754,7 @@ describe("journaled writes", () => {
 		const fresh = fakeTransport({ [`${OC}.searchConfluence`]: (args) => {
 			if (String(args.cql).includes('space = "ENG"')) return space;
 			return { ok: true, data: { results: [] } };
-		}, [`${OC}.getConfluenceSpace`]: instructions, [`${OC}.createConfluenceContent`]: process_("process", 1, "connect ECONNRESET") });
+		}, [`${OC}.getConfluenceSpace`]: instructions, [`${OC}.createConfluenceContent`]: failure("failed-transport") });
 		const freshDeps = deps({ transport: fresh.transport });
 		const freshPreview = previewData(await dispatch(["page.create", "--input", JSON.stringify(freshInput), "--preview"], freshDeps));
 		const freshApply = await dispatch(["page.create", "--input", JSON.stringify(freshInput), "--apply", freshPreview.previewId], freshDeps);
@@ -840,7 +847,7 @@ describe("journaled writes", () => {
 
 	test("issue.update fails closed until the selected Provider exposes a stable revision, never treating updated as one", async () => {
 		const issue = { ok: true as const, data: { key: "PROJ-1", fields: { updated: "2026-09-22T01:00:00.000+0000", summary: "old" } } };
-		const { transport, calls } = fakeTransport({ [`${OJ}.getJiraIssue`]: issue, [`${OJ}.editJiraIssue`]: process_("process", 1, "connect ECONNRESET") });
+		const { transport, calls } = fakeTransport({ [`${OJ}.getJiraIssue`]: issue, [`${OJ}.editJiraIssue`]: failure("failed-transport") });
 		const dependencies = deps({ transport });
 		const input = { issueKey: "PROJ-1", fields: { summary: "new" } };
 		const preview = await dispatch(["issue.update", "--input", JSON.stringify(input), "--preview"], dependencies);
@@ -1047,6 +1054,22 @@ describe("production adapters", () => {
 		expect(envelope.result.causeCode).toBe("site-unresolved");
 		expect(envelope.result.repairAction).toBe("the tenant's credential item must expose a valid site_url field");
 		expect(harness.has("mcporter.json")).toBe(false);
+	});
+
+	test("hostile provider text in a real tool error is translated at the transport seam and never reaches stdout or stderr", async () => {
+		const PRIVATE = ["fixture-secret-value", "customer SSN 123-45-6789", "PROJ-99 confidential merger", OP_TOKEN_SENTINEL, "op://", "Bearer", "Basic "];
+		const leak = `HTTP 401 Unauthorized token=fixture-secret-value Authorization: Basic ${OP_TOKEN_SENTINEL} Bearer x op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential; issue PROJ-99 confidential merger; customer SSN 123-45-6789`;
+		const canned = path.join(harness.root, "canned", OJ);
+		mkdirSync(canned, { recursive: true });
+		writeFileSync(path.join(canned, "list.json"), JSON.stringify({ tools: SCHEMAS[OJ] }));
+		writeFileSync(path.join(canned, "getAccessibleAtlassianResources.json"), JSON.stringify(RESOURCES));
+		writeFileSync(path.join(canned, "getJiraIssue.json"), JSON.stringify({ isError: true, content: [{ type: "text", text: leak }] }));
+		harness.write("item.json", fields({ username: PRINCIPAL, site_url: ORIGIN }, 1));
+		const result = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
+		expect([result.code, result.stderr]).toEqual([3, ""]);
+		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; repairAction: string } };
+		expect([envelope.result.causeCode, envelope.result.repairAction]).toEqual(["refused-auth", `${REPAIR_TEXT["refused-auth"]}; fallback-ineligible:refused-auth`]);
+		for (const fragment of PRIVATE) expect(result.stdout).not.toContain(fragment);
 	});
 
 	test("the public process crosses the real route on the Jira product server with canned MCPorter responses", async () => {

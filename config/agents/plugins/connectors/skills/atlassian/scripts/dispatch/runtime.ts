@@ -8,6 +8,7 @@ import { bindCredential, bindingChannel, type CredentialBinding, TENANT_PATTERN 
 import { OPERATIONS, PRODUCTS, type OperationId } from "./contract.ts";
 import type { Dependencies, ParityAttestation, ParityEvidence, ParityRequest, Transport, TransportResult } from "./engine.ts";
 import { canonicalDigest, openJournal } from "./journal.ts";
+import { translateFailure } from "./translate.ts";
 import { planDispatcherRoute, type RoutePlan } from "../../../../bin/provider-route.ts";
 import { safeEnvironment } from "../../../../bin/safe-environment.ts";
 
@@ -45,16 +46,17 @@ function parseJson(text: string): unknown | undefined {
 // MCPorter's JSON shapes are not fully documented; a result that is not JSON is
 // reported as malformed rather than guessed. Every failure records whether any
 // provider content was observed, because a partial answer is never a clean
-// transport failure.
+// transport failure. This adapter is the only place provider text is seen; it
+// leaves here as a translated closed cause.
 export function routeTransport(env: Environment, tenant: string): Transport {
 	if (!TENANT_PATTERN.test(tenant)) throw new Error("tenant-invalid: the transport needs the validated tenant slug");
 	const toResult = (run: { code: number; stdout: string; stderr: string }): TransportResult => {
 		const contentObserved = run.stdout.trim().length > 0;
-		if (run.code !== 0) return { ok: false, kind: "process", exitCode: run.code, stderr: run.stderr, stdout: run.stdout, contentObserved };
+		if (run.code !== 0) return { ok: false, ...translateFailure({ kind: "process", exitCode: run.code, stderr: run.stderr, stdout: run.stdout, contentObserved }) };
 		const data = parseJson(run.stdout);
-		if (data === undefined) return { ok: false, kind: "malformed", message: "MCPorter output was not JSON", contentObserved };
+		if (data === undefined) return { ok: false, ...translateFailure({ kind: "malformed", message: "MCPorter output was not JSON", contentObserved }) };
 		if (typeof data === "object" && data !== null && (data as { isError?: unknown }).isError === true) {
-			return { ok: false, kind: "tool-error", message: JSON.stringify(data).slice(0, 2000), contentObserved: true };
+			return { ok: false, ...translateFailure({ kind: "tool-error", message: JSON.stringify(data).slice(0, 2000), contentObserved: true }) };
 		}
 		return { ok: true, data };
 	};
