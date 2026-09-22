@@ -255,18 +255,23 @@ export function envelope(rendering: Rendering): Envelope {
 	return { envelopeVersion: ENVELOPE_VERSION, contractVersion: CONTRACT_VERSION, message: rendering.message, availablePaths: [...AVAILABLE_PATHS], result };
 }
 
-// fallow-ignore-next-line code-duplication -- Contract Core 2.0 correlation truth is restated per CLI; this contract owner stays independent of the separately locked playground exemplar package.
+// Contract Core 2.0 state and effect correlation as one declarative table:
+// per state, which effect collections must be empty, which must not, and
+// whether the inventory must be complete. "unknown" is the one state that
+// is satisfied by an incomplete inventory alone.
+type Presence = "empty" | "some" | "any";
+const EFFECT_SHAPES: Record<TransactionState, { completed: Presence; remaining: Presence; uncertain: Presence; inventoryComplete: boolean | "any" }> = {
+	unchanged: { completed: "empty", remaining: "any", uncertain: "empty", inventoryComplete: true },
+	completed: { completed: "some", remaining: "empty", uncertain: "empty", inventoryComplete: true },
+	"partially-completed": { completed: "some", remaining: "some", uncertain: "empty", inventoryComplete: true },
+	unknown: { completed: "any", remaining: "any", uncertain: "any", inventoryComplete: "any" },
+};
+const presenceHolds = (presence: Presence, values: string[]): boolean => presence === "any" || (presence === "empty") === (values.length === 0);
+
 function stateEffectsAgree(state: TransactionState, effects: Effects): boolean {
-	switch (state) {
-		case "unchanged":
-			return effects.inventoryComplete && effects.completed.length === 0 && effects.uncertain.length === 0;
-		case "completed":
-			return effects.inventoryComplete && effects.completed.length > 0 && effects.remaining.length === 0 && effects.uncertain.length === 0;
-		case "partially-completed":
-			return effects.inventoryComplete && effects.completed.length > 0 && effects.remaining.length > 0 && effects.uncertain.length === 0;
-		case "unknown":
-			return !effects.inventoryComplete || effects.uncertain.length > 0;
-	}
+	if (state === "unknown") return !effects.inventoryComplete || effects.uncertain.length > 0;
+	const shape = EFFECT_SHAPES[state];
+	return presenceHolds(shape.completed, effects.completed) && presenceHolds(shape.remaining, effects.remaining) && presenceHolds(shape.uncertain, effects.uncertain) && (shape.inventoryComplete === "any" || effects.inventoryComplete === shape.inventoryComplete);
 }
 
 // The validation the serializer runs immediately before output: every
