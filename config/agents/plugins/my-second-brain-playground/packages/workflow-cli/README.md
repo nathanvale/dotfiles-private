@@ -38,11 +38,11 @@ This source also carries the verified same-session task switch,
 [Spec #51](https://github.com/nathanvale/dotfiles-private/issues/51)
 revision 4 (story 12, LKR-04) and
 [Ticket #56](https://github.com/nathanvale/dotfiles-private/issues/56)
-revision 2 (AC4) require. Spec #57 revision 5 deferred that switch to "the
+revision 2 (AC4) require. [Spec #57](https://github.com/nathanvale/dotfiles-private/issues/57) revision 5 deferred that switch to "the
 explicit verified protocol" and read "no flag overrides that refusal"; the
 switch here is not an override (it names the owner it replaces and changes
 nothing else), and it was implemented on Nathan's completion direction for
-Ticket #56. Spec #57 revision 6 is published and governs `bind --from`: it
+[Ticket #56](https://github.com/nathanvale/dotfiles-private/issues/56). [Spec #57](https://github.com/nathanvale/dotfiles-private/issues/57) revision 6 is published and governs `bind --from`: it
 admits the verified switch, so this source and its Spec agree on that clause.
 Command identities, effect stances, Contract Core `1.0.0`, schema v3, and the
 marker are unchanged by the switch.
