@@ -12,7 +12,7 @@ import path from "node:path";
 import { bridgeArgv, bridgeExecutable, bridgeLogDirectory } from "../../../bin/hyper-mcp-remote.ts";
 import { stateRoot } from "../../../bin/private-state.ts";
 import { type ProviderProcess, providerProcess } from "../../../bin/provider-process.ts";
-import { ACCOUNT_PATTERN, accessToken, loadOAuthConfig, type SessionDeps } from "./session/index.ts";
+import { ACCOUNT_PATTERN, accessToken, clientEnvironment, loadOAuthConfig, type SessionDeps } from "./session/index.ts";
 
 const proc: ProviderProcess = providerProcess("canva-provider");
 const ACCOUNT_ENV = "CANVA_ACCOUNT";
@@ -40,7 +40,7 @@ async function main(argv: string[]): Promise<never> {
 		clock: { now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) },
 		random: (bytes) => crypto.getRandomValues(new Uint8Array(bytes)),
 		stateRoot: stateRoot(environment),
-		env: environment,
+		env: clientEnvironment(process.env),
 		config,
 	};
 	const token = await accessToken(account, deps);

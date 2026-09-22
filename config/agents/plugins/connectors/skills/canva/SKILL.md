@@ -35,16 +35,20 @@ bun "$AUTH" logout --account <slug> --json
   `SCHEMA_INVALID_INPUT` (exit 4) means a damaged session, run `logout` then `login`.
 - `login` is Attended Login: it opens the system browser once and waits up to
   five minutes for Nathan to grant access. With `--no-browser` the URL is
-  written the moment it exists, before the wait: on stdout in human mode, as
-  one `canva-auth: authorization-url: <url>` line on stderr with `--json`
-  (stdout stays one envelope). Show Nathan that URL and wait; never drive the
-  browser. Consent denied or a callback that is not this login's is
+  written to stdout the moment it exists, before the wait. Human mode is
+  required because `--no-browser --json` is refused so machine completion
+  keeps stderr empty. Show Nathan that URL and wait; never drive the browser.
+  An existing session refuses before authorization; run `logout` before a new
+  login. Consent denied or a callback that is not this login's is
   `DOMAIN_AUTHORITY_REQUIRED`; a missed window is `DOMAIN_DEADLINE_UNCHANGED`;
   a grant that could not be stored is `DOMAIN_RECOVERY_HANDOFF_REQUIRED`.
 - `logout` revokes the grant when Canva confirms it and removes the local
   session. `DOMAIN_RECOVERY_HANDOFF_REQUIRED` means the local session is gone
   but Canva did not confirm revocation: tell Nathan to revoke the Connectors
-  plugin in Canva connected apps.
+  plugin in Canva connected apps. `DOMAIN_PRECONDITION_UNMET` with
+  `client-secret-unavailable` preserves a registered session: restore the
+  scoped `CANVA_CLIENT_SECRET` and matching registered client in `oauth.json`,
+  then retry.
 - `--discover --json` and `--discover-command <identity> --json` publish the
   full contract and every possible outcome.
 
@@ -67,8 +71,19 @@ Refusals to state as met:
 - `canva-provider:error:auth-required` (exit 3): no session for the slug; run `login`.
 - `canva-provider:error:auth-expired` (exit 3): Canva revoked or expired the
   grant and the session was removed; run `login`.
+- `canva-provider:error:client-secret-unavailable` (exit 3): a stored
+  registered session cannot authenticate because scoped `CANVA_CLIENT_SECRET`
+  is missing or does not match the registered client in `oauth.json`. Restore
+  both and retry. The session is preserved; never put the secret in config,
+  session state, arguments, or output.
 - `canva-provider:error:auth-busy` (exit 3): another process is rotating the
-  token; retry shortly.
+  token. Retry once after one second. If the lock remains, stop all
+  `canva-auth` and Canva Provider processes for that account, remove only
+  `<state root>/connectors/canva/<slug>/refresh.lock`, then run `status`; the
+  state root is absolute `$XDG_STATE_HOME` or `~/.local/state`.
+- `canva-provider:error:refresh-uncertain` (exit 3): the refresh request may
+  have consumed its single-use token and the session was removed. Inspect
+  Canva connected apps, then run `login`; never retry the old session.
 - `canva-provider:error:bridge-version-invalid` (exit 4): the pinned
   `hyper-mcp-remote` 0.5.0 is not on PATH.
 - `provider-route:error:select-missing` (exit 2): `--select account=<slug>` is required.

@@ -23,6 +23,25 @@ export type ClientResult = { ok: true; client: ClientIdentity } | { ok: false; r
 
 export const CLIENT_SECRET_ENV = "CANVA_CLIENT_SECRET";
 
+// The one secret-bearing environment route admitted by the Canva client
+// adapter. Callers keep this projection inside the session module and use the
+// shared safe environment for every child process.
+export function clientEnvironment(source: EnvironmentSource): EnvironmentSource {
+	const secret = source[CLIENT_SECRET_ENV];
+	return typeof secret === "string" && secret.length > 0 ? { [CLIENT_SECRET_ENV]: secret } : {};
+}
+
+// Rehydrate a stored client for token and revocation requests. The session
+// carries only nonsecret identity; a registered client's secret must still
+// match the active scoped configuration and enters from the environment for
+// this request only.
+export function clientForSession(stored: Omit<ClientIdentity, "secret">, config: ClientConfig | null, env: EnvironmentSource): ClientIdentity | null {
+	if (stored.mode !== "registered") return { ...stored, secret: null };
+	if (config?.mode !== "registered" || config.clientId !== stored.clientId) return null;
+	const secret = env[CLIENT_SECRET_ENV];
+	return typeof secret === "string" && secret.length > 0 ? { ...stored, secret } : null;
+}
+
 
 async function register(config: ClientConfig, server: AuthorizationServer, redirectUri: string, fetchFn: Fetch): Promise<ClientResult> {
 	if (server.registrationEndpoint === null) return { ok: false, reason: "registration-unsupported" };
@@ -64,7 +83,7 @@ export async function resolveClient(config: ClientConfig, server: AuthorizationS
 			}
 			return register(config, server, redirectUri, fetchFn);
 		case "registered": {
-			const secret = env[CLIENT_SECRET_ENV];
+			const secret = clientEnvironment(env)[CLIENT_SECRET_ENV];
 			return { ok: true, client: { mode: "registered", clientId: config.clientId ?? "", redirectUri, secret: typeof secret === "string" && secret.length > 0 ? secret : null } };
 		}
 		case "cimd":

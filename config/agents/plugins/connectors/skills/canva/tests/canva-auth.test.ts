@@ -110,14 +110,14 @@ describe("canva-auth public process", () => {
 		const tampered = await runCli(["status", "--account", "tampered", "--json"]);
 		expect([tampered.code, tampered.envelope().result.causeCode, tampered.envelope().result.failureClass]).toEqual([4, "SCHEMA_INVALID_INPUT", "schema"]);
 		const busy = await runCli(["logout", "--account", "busy", "--json"]);
-		expect([busy.code, busy.envelope().result.causeCode, busy.envelope().result.retryable, busy.envelope().result.retryDelayMilliseconds]).toEqual([75, "TRANSIENT_NOT_STARTED", true, 1000]);
+		expect([busy.code, busy.envelope().result.causeCode, busy.envelope().result.retryable, busy.envelope().result.repairAction]).toEqual([75, "TRANSIENT_NOT_STARTED", true, "Stop all canva-auth and Canva Provider processes for this account, remove only refresh.lock from its private state directory, then run status before retrying"]);
 		expect(existsSync(path.join(accountDirectory("busy"), "session.json"))).toBe(true);
 		const stuck = await runCli(["logout", "--account", "stuck", "--json"]);
 		const result = stuck.envelope().result;
 		expect([stuck.code, result.causeCode, result.transactionState, result.effects, result.handoff]).toEqual([1, "INTERNAL_RESULT_UNCHANGED", "unchanged", { completed: [], remaining: ["canva-session:stuck"], uncertain: [], inventoryComplete: true }, { owner: "operator", reason: "The local session could not be removed.", inspect: ["canva-auth status --account <slug>"] }]);
 		expect("nextAction" in result).toBe(false);
 		const humanBusy = await runCli(["logout", "--account", "busy"]);
-		expect([humanBusy.code, humanBusy.stdout, humanBusy.stderr]).toEqual([75, "", "canva-auth: TRANSIENT_NOT_STARTED: Another process holds the refresh lock for this account; retry after 1000 ms\n"]);
+		expect([humanBusy.code, humanBusy.stdout, humanBusy.stderr]).toEqual([75, "", "canva-auth: TRANSIENT_NOT_STARTED: Stop all canva-auth and Canva Provider processes for this account, remove only refresh.lock from its private state directory, then run status before retrying\n"]);
 	});
 
 	test("logout revokes through the session's revocation endpoint and removes the directory; a second logout is unchanged", async () => {
@@ -175,6 +175,7 @@ describe("canva-auth public process", () => {
 			["SUCCESS_COMPLETED", "success", "completed", 0, false],
 			["SUCCESS_UNCHANGED", "success", "unchanged", 0, false],
 			["USAGE_INVALID_INVOCATION", "refused", "unchanged", 2, false],
+			["DOMAIN_PRECONDITION_UNMET", "refused", "unchanged", 3, false],
 			["TRANSIENT_NOT_STARTED", "refused", "unchanged", 75, true],
 			["DOMAIN_RECOVERY_HANDOFF_REQUIRED", "failed", "unknown", 3, false],
 			["INTERNAL_RESULT_UNCHANGED", "failed", "unchanged", 1, false],
@@ -200,6 +201,15 @@ describe("canva-auth login rendering", () => {
 	};
 
 	const SECRETS = ["fixture-access-token", "fixture-refresh-token", "fixture-code"];
+
+	test("logout preserves a stored registered session when its scoped client secret is unavailable", async () => {
+		writeSessionFixture("registered", { client: { mode: "registered", clientId: "portal-client", redirectUri: "http://127.0.0.1:47391/callback" } });
+		const registered = deps({ client: { mode: "registered", clientId: "portal-client" }, loopbackPort: 47_391 });
+		const output = renderOutput((await run(["logout", "--account", "registered"], registered)).rendering, true);
+		const result = (JSON.parse(output.stdout) as { result: Record<string, unknown> }).result;
+		expect([output.exitCode, output.stderr, result.causeCode, result.transactionState, result.repairAction]).toEqual([3, "", "DOMAIN_PRECONDITION_UNMET", "unchanged", "Restore CANVA_CLIENT_SECRET and the matching registered client in oauth.json, then retry; the stored session was preserved"]);
+		expect([fake.calls.revocations, existsSync(path.join(accountDirectory("registered"), "session.json"))]).toEqual([[], true]);
+	});
 
 	test("a completed login is SUCCESS_COMPLETED with the grant and session effects and no token in the envelope", async () => {
 		const { rendering, urls } = await run(["login", "--account", "personal"], deps());
@@ -242,8 +252,7 @@ describe("canva-auth login rendering", () => {
 		expect([opened, notices.length, urls, rendering.cause]).toEqual([0, 1, [url], "SUCCESS_COMPLETED"]);
 		expect(JSON.parse(renderOutput(rendering, true).stdout).result.data.authorizationUrlPrinted).toBe(true);
 		for (const secret of SECRETS) expect(url).not.toContain(secret);
-		expect(authorizationNotice(url, false)).toEqual({ stream: "stdout", text: `Open this URL in your browser to continue, then return here:\n${url}\n` });
-		expect(authorizationNotice(url, true)).toEqual({ stream: "stderr", text: `canva-auth: authorization-url: ${url}\n` });
+		expect(authorizationNotice(url)).toEqual({ stream: "stdout", text: `Open this URL in your browser to continue, then return here:\n${url}\n` });
 	});
 
 	test("--no-browser with no callback is the deadline row; the notice still fired before the wait", async () => {
@@ -258,6 +267,14 @@ describe("canva-auth login rendering", () => {
 		const human = renderOutput(rendering, false);
 		expect([human.exitCode, human.stdout, human.stderr]).toEqual([3, "", "canva-auth: DOMAIN_DEADLINE_UNCHANGED: No callback arrived within the login window; run login again and complete the browser step\n"]);
 		expect(renderOutput(rendering, true).stderr).toBe("");
+	});
+
+	test("--no-browser with --json refuses before login so ordinary machine completion keeps stderr empty", async () => {
+		const notices: string[] = [];
+		const { rendering, urls } = await run(["login", "--account", "personal", "--no-browser", "--json"], deps(), (url) => notices.push(url));
+		const output = renderOutput(rendering, true);
+		const result = (JSON.parse(output.stdout) as { result: Record<string, unknown> }).result;
+		expect([output.exitCode, output.stderr, result.causeCode, urls, notices, fake.calls.registrations]).toEqual([2, "", "USAGE_INVALID_INVOCATION", [], [], 0]);
 	});
 
 	test("denied consent, a mismatched state, a failed exchange, and a held session lock each map to their stations", async () => {
@@ -280,7 +297,7 @@ describe("canva-auth login rendering", () => {
 		mkdirSync(accountDirectory("personal"), { recursive: true, mode: 0o700 });
 		writeFileSync(path.join(accountDirectory("personal"), "refresh.lock"), '{"owner":"someone-else"}', { mode: 0o600 });
 		const busy = await run(["login", "--account", "personal"], deps());
-		expect([busy.rendering.cause, busy.rendering.message]).toEqual(["DOMAIN_RECOVERY_HANDOFF_REQUIRED", "login failed: session-busy"]);
+		expect([busy.rendering.cause, busy.rendering.message, busy.rendering.repairAction]).toEqual(["TRANSIENT_NOT_STARTED", "login refused: session-busy", "Stop all canva-auth and Canva Provider processes for this account, remove only refresh.lock from its private state directory, then run status before retrying"]);
 		expect(existsSync(path.join(accountDirectory("personal"), "session.json"))).toBe(false);
 	});
 

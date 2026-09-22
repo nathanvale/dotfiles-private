@@ -6,7 +6,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import os from "node:os";
 import path from "node:path";
 
-import { accessToken, login, logout, parseOAuthConfig, type SessionDeps, status } from "../scripts/session/index.ts";
+import { accessToken, clientEnvironment, login, logout, parseOAuthConfig, type SessionDeps, status } from "../scripts/session/index.ts";
 import { type FakeAuthorizationServer, preRegister, startAuthorizationServer } from "./fixtures/authorization-server.ts";
 
 let fake: FakeAuthorizationServer;
@@ -52,6 +52,11 @@ const SECRETS = ["fixture-access-token", "fixture-refresh-token", "fixture-code"
 const causeOf = (result: { ok: true } | { ok: false; cause: string }): string => (result.ok ? "ok" : result.cause);
 
 describe("login", () => {
+	test("the client environment admits only the registered secret key", () => {
+		expect(clientEnvironment({ CANVA_CLIENT_SECRET: "fixture-secret", HOME: "/tmp/home", PATH: "/bin" })).toEqual({ CANVA_CLIENT_SECRET: "fixture-secret" });
+		expect(clientEnvironment({ CANVA_CLIENT_SECRET: "" })).toEqual({});
+	});
+
 	test("registers a client, runs PKCE S256 with state and resource, exchanges the code, and stores an exact-0600 session", async () => {
 		const result = await login("personal", { noBrowser: false }, deps());
 		expect(result).toEqual({ ok: true, status: { account: "personal", clientMode: "dcr", clientId: "fixture-client-1", issuer: fake.issuer, resource: fake.resource, scope: "design:meta:read", obtainedAt: NOW, expiresAt: NOW + 3_600_000, refreshable: true } });
@@ -78,12 +83,39 @@ describe("login", () => {
 		expect(opened).toEqual([]);
 	});
 
-	test("a second login reuses the same dcr client only for the same redirect URI, else registers again", async () => {
+	test("a second login refuses before authorization while a session exists", async () => {
 		expect((await login("personal", { noBrowser: false }, deps())).ok).toBe(true);
-		// Ephemeral ports differ per login, so the registration repeats.
 		const again = await login("personal", { noBrowser: false }, deps());
-		expect(again.ok && again.status.clientId).toBe("fixture-client-2");
-		expect(fake.calls.registrations).toBe(2);
+		expect(again).toEqual({ ok: false, cause: "session-exists", detail: "a session already exists for this account; run canva-auth logout before login" });
+		expect([fake.calls.registrations, fake.calls.authorizations, fake.calls.tokenRequests]).toEqual([1, 1, 1]);
+	});
+
+	test("concurrent login rechecks under the mutation lock and never creates a second grant", async () => {
+		let releaseFirst: () => void = () => undefined;
+		let firstOpened = false;
+		const gate = new Promise<void>((resolve) => {
+			releaseFirst = resolve;
+		});
+		const first = login("personal", { noBrowser: false }, deps({
+			openBrowser: async (url) => {
+				firstOpened = true;
+				await gate;
+				await browser(url);
+			},
+		}, { refreshLockWaitMs: 2000 }));
+		while (!firstOpened) await new Promise((resolve) => setTimeout(resolve, 5));
+		let secondOpened = false;
+		const second = login("personal", { noBrowser: false }, deps({
+			openBrowser: async () => {
+				secondOpened = true;
+			},
+		}, { refreshLockWaitMs: 2000 }));
+		await new Promise((resolve) => setTimeout(resolve, 50));
+		releaseFirst();
+		const [firstResult, secondResult] = await Promise.all([first, second]);
+		expect(firstResult.ok).toBe(true);
+		expect(secondResult).toMatchObject({ ok: false, cause: "session-exists" });
+		expect([secondOpened, fake.calls.registrations, fake.calls.authorizations, fake.calls.tokenRequests]).toEqual([false, 1, 1, 1]);
 	});
 
 	test("denied consent, a mismatched state, a timeout, and a failed exchange each refuse with a closed cause and no session", async () => {
@@ -176,11 +208,51 @@ describe("accessToken", () => {
 		expect(await accessToken("personal", deps())).toMatchObject({ ok: false, cause: "auth-required" });
 	});
 
+	test("every ambiguous refresh result removes the old single-use token and cannot replay it", async () => {
+		const cases = [
+			{ account: "thrown", response: async () => { throw new Error("connection reset"); } },
+			{ account: "server-error", response: async () => new Response('{"error":"server_error"}', { status: 500 }) },
+			{ account: "malformed", response: async () => new Response('{"access_token":', { status: 200 }) },
+		] as const;
+		for (const scenario of cases) {
+			expect((await login(scenario.account, { noBrowser: false }, deps())).ok).toBe(true);
+			now = NOW + 3_600_000;
+			let attempts = 0;
+			const ambiguous = deps({
+				fetch: async (input, init) => {
+					if (String(input).endsWith("/token") && new URLSearchParams(String(init?.body)).get("grant_type") === "refresh_token") {
+						attempts += 1;
+						return scenario.response();
+					}
+					return fetch(input, init);
+				},
+			});
+			expect(await accessToken(scenario.account, ambiguous)).toEqual({ ok: false, cause: "refresh-uncertain", detail: "the refresh request may have consumed the single-use token; the session was removed; inspect Canva connected apps, then run canva-auth login" });
+			expect([attempts, existsSync(sessionFile(scenario.account))]).toEqual([1, false]);
+			expect(await accessToken(scenario.account, ambiguous)).toMatchObject({ ok: false, cause: "auth-required" });
+			expect(attempts).toBe(1);
+			now = NOW;
+		}
+	});
+
+	test("a stored registered session refuses refresh when its scoped secret is missing or its client configuration changed", async () => {
+		const secret = "fixture-client-secret";
+		preRegister(fake, "portal-client", ["http://127.0.0.1:47391/callback"]);
+		const registeredConfig = { client: { mode: "registered", clientId: "portal-client" }, loopbackPort: 47_391 };
+		const registered = deps({ env: { CANVA_CLIENT_SECRET: secret } }, registeredConfig);
+		expect((await login("work", { noBrowser: false }, registered)).ok).toBe(true);
+		now = NOW + 3_600_000;
+		const expected = { ok: false, cause: "client-secret-unavailable", detail: "the stored registered client cannot authenticate because CANVA_CLIENT_SECRET is missing or does not match oauth.json; restore the scoped secret and matching registered client configuration, then retry" } as const;
+		expect(await accessToken("work", deps({ env: {} }, registeredConfig))).toEqual(expected);
+		expect(await accessToken("work", deps({ env: { CANVA_CLIENT_SECRET: secret } }, { client: { mode: "registered", clientId: "other-client" }, loopbackPort: 47_391 }))).toEqual(expected);
+		expect([fake.calls.refreshRequests, existsSync(sessionFile("work")), sessionText("work").includes(secret)]).toEqual([0, true, false]);
+	});
+
 	test("invalid_grant removes the session and reports auth-expired; a held lock reports auth-busy", async () => {
 		expect((await login("personal", { noBrowser: false }, deps())).ok).toBe(true);
 		now = NOW + 3_600_000;
 		writeFileSync(path.join(path.dirname(sessionFile()), "refresh.lock"), "{}", { mode: 0o600 });
-		expect(await accessToken("personal", deps())).toEqual({ ok: false, cause: "auth-busy", detail: "another process holds the refresh lock for this account; retry shortly" });
+		expect(await accessToken("personal", deps())).toEqual({ ok: false, cause: "auth-busy", detail: "the account session lock may be active or abandoned; stop all canva-auth and Canva Provider processes for this account, remove only refresh.lock from the account's private state directory, then run status before retrying" });
 		rmSync(path.join(path.dirname(sessionFile()), "refresh.lock"));
 		fake.options.invalidGrantNext = true;
 		expect(await accessToken("personal", deps())).toEqual({ ok: false, cause: "auth-expired", detail: "the session was revoked or expired at Canva and has been removed; run canva-auth login" });
@@ -228,6 +300,42 @@ describe("status and logout", () => {
 		expect(await logout("personal", deps())).toEqual({ ok: true, removed: false, revoked: "not-needed" });
 	});
 
+	test("a registered session rehydrates its scoped secret for refresh and revoke without persisting it", async () => {
+		const secret = "fixture-client-secret";
+		preRegister(fake, "portal-client", ["http://127.0.0.1:47391/callback"]);
+		const registered = deps({ env: { CANVA_CLIENT_SECRET: secret } }, { client: { mode: "registered", clientId: "portal-client" }, loopbackPort: 47_391 });
+		expect((await login("work", { noBrowser: false }, registered)).ok).toBe(true);
+		expect(sessionText("work")).not.toContain(secret);
+		now = NOW + 3_600_000;
+		const authorizations: string[] = [];
+		const withObservedAuth = deps({
+			env: { CANVA_CLIENT_SECRET: secret },
+			fetch: async (input, init) => {
+				if (String(input).endsWith("/token") || String(input).endsWith("/revoke")) authorizations.push(new Headers(init?.headers).get("authorization") ?? "");
+				return fetch(input, init);
+			},
+		}, { client: { mode: "registered", clientId: "portal-client" }, loopbackPort: 47_391 });
+		expect((await accessToken("work", withObservedAuth)).ok).toBe(true);
+		expect(sessionText("work")).not.toContain(secret);
+		expect(await logout("work", withObservedAuth)).toEqual({ ok: true, removed: true, revoked: "confirmed" });
+		expect(authorizations).toHaveLength(2);
+		for (const header of authorizations) expect(header).toStartWith("Basic ");
+		expect(JSON.stringify(authorizations)).not.toContain(secret);
+		expect(existsSync(sessionFile("work"))).toBe(false);
+	});
+
+	test("a stored registered session refuses logout when its scoped secret is missing or its client configuration changed", async () => {
+		const secret = "fixture-client-secret";
+		preRegister(fake, "portal-client", ["http://127.0.0.1:47391/callback"]);
+		const registeredConfig = { client: { mode: "registered", clientId: "portal-client" }, loopbackPort: 47_391 };
+		const registered = deps({ env: { CANVA_CLIENT_SECRET: secret } }, registeredConfig);
+		expect((await login("work", { noBrowser: false }, registered)).ok).toBe(true);
+		const expected = { ok: false, cause: "client-secret-unavailable", detail: "the stored registered client cannot authenticate because CANVA_CLIENT_SECRET is missing or does not match oauth.json; restore the scoped secret and matching registered client configuration, then retry", revoked: "not-needed" } as const;
+		expect(await logout("work", deps({ env: {} }, registeredConfig))).toEqual(expected);
+		expect(await logout("work", deps({ env: { CANVA_CLIENT_SECRET: secret } }, { client: { mode: "registered", clientId: "other-client" }, loopbackPort: 47_391 }))).toEqual(expected);
+		expect([fake.calls.revocations, existsSync(sessionFile("work")), sessionText("work").includes(secret)]).toEqual([[], true, false]);
+	});
+
 	test("logout releases only the lock it owns; a lock taken over by another process is left in place", async () => {
 		expect((await login("personal", { noBrowser: false }, deps())).ok).toBe(true);
 		const lock = path.join(path.dirname(sessionFile()), "refresh.lock");
@@ -248,7 +356,7 @@ describe("status and logout", () => {
 		expect(await accessToken("personal", deps())).toMatchObject({ ok: false, cause: "auth-required" });
 	});
 
-	test("a login's exchange and write wait for a logout holding the lock, and the new session survives", async () => {
+	test("login refuses while a logout still owns the existing session", async () => {
 		expect((await login("personal", { noBrowser: false }, deps())).ok).toBe(true);
 		let releaseRevoke: () => void = () => undefined;
 		const gate = new Promise<void>((resolve) => {
@@ -268,8 +376,8 @@ describe("status and logout", () => {
 		expect(fake.calls.tokenRequests).toBe(1);
 		releaseRevoke();
 		const [loggedOut, loggedIn] = await Promise.all([logoutPending, loginPending]);
-		expect([loggedOut, loggedIn.ok, fake.calls.tokenRequests]).toEqual([{ ok: true, removed: true, revoked: "confirmed" }, true, 2]);
-		expect(JSON.parse(sessionText()).accessToken).toBe("fixture-access-token-2");
+		expect([loggedOut, loggedIn, fake.calls.tokenRequests]).toEqual([{ ok: true, removed: true, revoked: "confirmed" }, { ok: false, cause: "session-exists", detail: "a session already exists for this account; run canva-auth logout before login" }, 1]);
+		expect(existsSync(sessionFile())).toBe(false);
 	});
 
 	test("logout still removes the session when revocation is unreachable", async () => {
