@@ -1,6 +1,6 @@
 ---
 name: beads-workflow
-description: Run or resume one bounded planning or research journey on native Beads through direct bd commands. Use when a dispatch or a fresh-context resume names a Bead, a workflow kind, or a bd write on the isolated store.
+description: Run or resume one bounded journey of the planning and research kind or the engineering kind on native Beads through direct bd commands. Use when a dispatch or a fresh-context resume names a Bead, a workflow kind, or a bd write on the isolated store, or when an engineering run reaches a repair prerequisite that blocks a join, a mid-repair Handback, or a lane substitution.
 ---
 
 # Beads Workflow
@@ -20,7 +20,7 @@ selection cannot rewrite an active run.
 | Kind | Reference | State |
 | --- | --- | --- |
 | Planning and research | [`references/planning-research-r2.md`](references/planning-research-r2.md) | Revision 2 for every new run. Revision 1, [`references/planning-research.md`](references/planning-research.md), only for a Bead that already records it. |
-| Engineering | [Ticket #52](https://github.com/nathanvale/dotfiles-private/issues/52) revision 3 and its receipts in the rollout packet | Precedent only; its procedure is a later unit |
+| Engineering | [`references/engineering.md`](references/engineering.md) | Revision 2 |
 
 Read the shared rules below, then the kind's reference.
 
