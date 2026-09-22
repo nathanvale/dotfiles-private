@@ -1,0 +1,6 @@
+{
+	"defaultProvider": "probe",
+	"selectors": {
+		"selection": "PROBE_SELECTION"
+	}
+}

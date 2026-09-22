@@ -1,0 +1,15 @@
+{
+  "name": "connectors",
+  "version": "0.1.0",
+  "description": "Nathan's service connectors for Codex and Claude Code.",
+  "author": {
+    "name": "Nathan Vale"
+  },
+  "keywords": [
+    "connectors",
+    "atlassian",
+    "jira",
+    "confluence",
+    "mcporter"
+  ]
+}

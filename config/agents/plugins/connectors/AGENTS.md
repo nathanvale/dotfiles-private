@@ -1,0 +1,29 @@
+# Connectors Plugin
+
+Read [CONTEXT.md](CONTEXT.md) for the plugin's vocabulary before naming anything.
+
+## Invariants
+
+- The worktree candidate under `config/agents/plugins/connectors` is the source. An installed plugin cache is a copy: never edit it, and never treat its presence as activation proof.
+- Shared transport lives only in `bin/provider-route.ts`. It names no service; it selects one Connector Skill's registry and replaces itself with MCPorter.
+- Every skill registry sets `imports: []` and gives every server an explicit exact-name `allowedTools` array. The route refuses a registry that omits either, before any process starts. Broad dispatcher tools (`discover`, `executeRead`, `executeWrite`, `executeDestructive`) never enter an allow-list.
+- Credential custody stays below MCPorter, inside a Provider process that resolves its own 1Password item. Only non-secret Route Selection values cross the route; secret values never enter plugin config, arguments, envelopes, tests, or docs.
+- Each service family co-locates its `SKILL.md`, `config/mcporter.json`, `config/route.json`, owned tests, and any launcher or Provider code under `skills/<name>/`.
+- Tests state independent expectations (literal tool names, causes, exit codes, file contents) and prove refusals as well as successes. A passing fixture, tool listing, or schema is configuration proof, not live authorization or a completed external effect.
+- Report configured, fixture-tested, schema-qualified, authenticated, live-read-proven, and live-write-proven as distinct states. Claim only the state current evidence proves.
+
+## Adding a connector
+
+1. Choose the shape. A keyless hosted MCP endpoint (Context7, Firecrawl) needs a registry, a route declaration, a `SKILL.md`, and one owned test through `tests/harness.ts`. A credentialed or multi-provider service (Atlassian) adds Provider scripts below MCPorter and a semantic dispatcher that owns Route Selection, tenant guard, and any write policy.
+2. Copy the closest existing skill as the template: `skills/context7/` for the keyless shape, `skills/atlassian/` for the credentialed shape. Rename, then remove everything the new service does not need.
+3. Declare the registry: `imports: []`, one server per Provider and product, exact `allowedTools` confirmed against live schema discovery, `${SELECTOR}` placeholders only for non-secret Route Selection values declared in `route.json`.
+4. Write the skill for the agent: the dispatcher or route command it must use, the inputs it must supply, the refusals it will meet, and the live states it cannot assume. Invoke `writing-for-agents` first.
+5. Add the owned test file beside the skill: route composition, custody through `assertCustody`, refusals with literal causes, and no secret in any stream.
+6. Any write capability follows the Atlassian pattern: preview and apply through a durable journal, exact provider write tools, and an operator adjudication path. Read [`docs/adr/0001-route-atlassian-through-mcporter.md`](docs/adr/0001-route-atlassian-through-mcporter.md) before designing it.
+7. For plugin development, installation, refresh, or activation lifecycle, follow the repository's [`docs/agents/skills.md`](../../../../docs/agents/skills.md). Discovery canaries there are the only activation proof.
+
+## Verification
+
+- Plugin gates: `bun run test` and `bun run typecheck` in this directory.
+- Repository gates from the worktree root: `bun run biome:check`, `bun run typecheck`, and `bun run --silent quality:fallow --changed-since <task-start-commit>` (see `docs/agents/fallow.md`).
+- Completion reports name each gate's result, then separately list the live proof that was unavailable: authentication, live schema, tenant match, read parity, and any write.

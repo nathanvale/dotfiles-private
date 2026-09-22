@@ -51,6 +51,15 @@
         "name": "Nathan Vale"
       },
       "source": "./personal"
+    },
+    {
+      "name": "connectors",
+      "description": "Nathan's service connectors for Codex and Claude Code.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Nathan Vale"
+      },
+      "source": "./connectors"
     }
   ]
 }

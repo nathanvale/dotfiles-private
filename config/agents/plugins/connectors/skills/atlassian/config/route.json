@@ -1,0 +1,7 @@
+{
+	"defaultProvider": "atlassian-official-jira",
+	"dispatcherOwned": true,
+	"selectors": {
+		"tenant": "ATLASSIAN_TENANT"
+	}
+}

@@ -1,0 +1,29 @@
+{
+  "name": "connectors",
+  "version": "0.1.0",
+  "description": "Nathan's service connectors for Codex and Claude Code.",
+  "author": {
+    "name": "Nathan Vale"
+  },
+  "keywords": [
+    "connectors",
+    "atlassian",
+    "jira",
+    "confluence",
+    "mcporter"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Connectors",
+    "shortDescription": "Work with connected services",
+    "longDescription": "Service connectors shared by Codex and Claude Code, beginning with MCPorter-backed Jira and Confluence access.",
+    "developerName": "Nathan Vale",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Help me find the relevant Jira issue and Confluence context through Atlassian Official."
+  }
+}

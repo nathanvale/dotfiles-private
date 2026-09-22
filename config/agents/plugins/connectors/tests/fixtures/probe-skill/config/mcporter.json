@@ -1,0 +1,13 @@
+{
+	"imports": [],
+	"mcpServers": {
+		"probe": {
+			"description": "Test-only stdio probe used to observe the real MCPorter seam through the route",
+			"command": "../../stdio-probe-server.ts",
+			"env": {
+				"PROBE_SELECTION": "${PROBE_SELECTION}"
+			},
+			"allowedTools": ["probe"]
+		}
+	}
+}
