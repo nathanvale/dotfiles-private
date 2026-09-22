@@ -1,0 +1,4 @@
+interface:
+  display_name: "Atlassian"
+  short_description: "Work with Jira and Confluence through scoped MCPorter providers"
+  default_prompt: "Use $atlassian to find the relevant Jira issue and linked Confluence context through MCPorter."

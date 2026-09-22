@@ -1,0 +1,11 @@
+{
+	"$schema": "https://raw.githubusercontent.com/openclaw/mcporter/main/mcporter.schema.json",
+	"imports": [],
+	"mcpServers": {
+		"context7": {
+			"description": "Context7 hosted documentation MCP, keyless rate-limited tier",
+			"baseUrl": "https://mcp.context7.com/mcp",
+			"allowedTools": ["resolve-library-id", "query-docs"]
+		}
+	}
+}

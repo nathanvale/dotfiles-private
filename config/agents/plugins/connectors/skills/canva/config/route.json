@@ -1,0 +1,6 @@
+{
+	"defaultProvider": "canva",
+	"selectors": {
+		"account": "CANVA_ACCOUNT"
+	}
+}

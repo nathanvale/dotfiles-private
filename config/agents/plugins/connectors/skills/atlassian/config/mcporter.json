@@ -1,0 +1,46 @@
+{
+	"$schema": "https://raw.githubusercontent.com/openclaw/mcporter/main/mcporter.schema.json",
+	"imports": [],
+	"mcpServers": {
+		"atlassian-official-jira": {
+			"description": "Official Atlassian MCP, Jira API token, through the credential-scoped stdio bridge",
+			"command": "../scripts/atlassian-official-provider.ts",
+			"env": {
+				"ATLASSIAN_TENANT": "${ATLASSIAN_TENANT}",
+				"ATLASSIAN_PRODUCT": "jira",
+				"CONNECTORS_INTERNAL_INVOCATION_CONTEXT": "${CONNECTORS_INTERNAL_INVOCATION_CONTEXT}"
+			},
+			"allowedTools": ["atlassianUserInfo", "getAccessibleAtlassianResources", "getJiraIssue", "searchJiraIssuesUsingJql", "createJiraIssue", "editJiraIssue", "addOrEditJiraIssueComment"]
+		},
+		"atlassian-official-confluence": {
+			"description": "Official Atlassian MCP, Confluence API token, through the credential-scoped stdio bridge",
+			"command": "../scripts/atlassian-official-provider.ts",
+			"env": {
+				"ATLASSIAN_TENANT": "${ATLASSIAN_TENANT}",
+				"ATLASSIAN_PRODUCT": "confluence",
+				"CONNECTORS_INTERNAL_INVOCATION_CONTEXT": "${CONNECTORS_INTERNAL_INVOCATION_CONTEXT}"
+			},
+			"allowedTools": ["atlassianUserInfo", "getAccessibleAtlassianResources", "getConfluenceContent", "searchConfluence", "getConfluenceSpace", "createConfluenceContent", "updateConfluenceContent"]
+		},
+		"atlassian-community-jira": {
+			"description": "Community mcp-atlassian, Jira only",
+			"command": "../scripts/atlassian-community-provider.ts",
+			"env": {
+				"ATLASSIAN_TENANT": "${ATLASSIAN_TENANT}",
+				"ATLASSIAN_PRODUCT": "jira",
+				"CONNECTORS_INTERNAL_INVOCATION_CONTEXT": "${CONNECTORS_INTERNAL_INVOCATION_CONTEXT}"
+			},
+			"allowedTools": ["jira_get_issue", "jira_search", "jira_create_issue", "jira_update_issue", "jira_add_comment"]
+		},
+		"atlassian-community-confluence": {
+			"description": "Community mcp-atlassian, Confluence only",
+			"command": "../scripts/atlassian-community-provider.ts",
+			"env": {
+				"ATLASSIAN_TENANT": "${ATLASSIAN_TENANT}",
+				"ATLASSIAN_PRODUCT": "confluence",
+				"CONNECTORS_INTERNAL_INVOCATION_CONTEXT": "${CONNECTORS_INTERNAL_INVOCATION_CONTEXT}"
+			},
+			"allowedTools": ["confluence_get_page", "confluence_search", "confluence_get_space", "confluence_get_comments", "confluence_create_page", "confluence_update_page", "confluence_add_comment"]
+		}
+	}
+}

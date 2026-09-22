@@ -1,0 +1,4 @@
+interface:
+  display_name: "Canva"
+  short_description: "Find and inspect Canva designs for one named account through the OAuth session route"
+  default_prompt: "Use $canva to find the relevant Canva design for the named account and report its edit link."

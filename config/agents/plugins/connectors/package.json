@@ -1,0 +1,10 @@
+{
+	"name": "connectors-plugin",
+	"private": true,
+	"version": "0.2.0",
+	"type": "module",
+	"scripts": {
+		"test": "bun test",
+		"typecheck": "../../../../node_modules/.bin/tsc --noEmit -p tsconfig.json"
+	}
+}

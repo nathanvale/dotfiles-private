@@ -1,0 +1,11 @@
+{
+	"$schema": "https://raw.githubusercontent.com/openclaw/mcporter/main/mcporter.schema.json",
+	"imports": [],
+	"mcpServers": {
+		"firecrawl": {
+			"description": "Firecrawl hosted MCP v2, keyless limited public-web search and scrape",
+			"baseUrl": "https://mcp.firecrawl.dev/v2/mcp",
+			"allowedTools": ["firecrawl_search", "firecrawl_scrape"]
+		}
+	}
+}

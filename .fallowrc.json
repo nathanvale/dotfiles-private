@@ -83,7 +83,10 @@
     "config/agents/plugins/proof/hooks/**/*.ts",
     "pilot/generate.ts",
     "tests/type-contracts.ts",
-    "tests/type-contracts-loose.ts"
+    "tests/type-contracts-loose.ts",
+    "config/agents/plugins/connectors/bin/provider-route.ts",
+    "config/agents/plugins/connectors/skills/*/scripts/*.ts",
+    "config/agents/plugins/connectors/skills/atlassian/scripts/custody/child.ts"
   ],
   "ignoreDependencies": [
     "vscode",

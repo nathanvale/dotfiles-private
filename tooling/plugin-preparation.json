@@ -8,6 +8,12 @@
 			"reason": "Browser Lanes tests are dependency-free and do not carry a Bun lockfile."
 		},
 		{
+			"name": "connectors",
+			"path": "config/agents/plugins/connectors",
+			"ownership": "no-nested-install",
+			"reason": "Connectors tests use local tools and do not carry a Bun lockfile."
+		},
+		{
 			"name": "my-second-brain-playground",
 			"path": "config/agents/plugins/my-second-brain-playground",
 			"ownership": "independent-lock",
