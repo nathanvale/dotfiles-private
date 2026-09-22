@@ -60,7 +60,7 @@ describe("preparation and provider arguments", () => {
 		expect(writeArguments(OPERATION_SPECS["page.create"], "community", { space: { id: "9", key: "ENG" }, parentId: "77", title: "T", body: "b" }, ctx).args).toEqual({ space_key: "ENG", title: "T", content: "b", parent_id: "77", content_format: "markdown" });
 		const update = writeArguments(OPERATION_SPECS["page.update"], "community", { pageId: "123", body: "b" }, ctx);
 		expect(update.args).toEqual({ page_id: "123", title: "Old", content: "b", content_format: "markdown" });
-		expect(update.bound).toEqual(update.args);
+		expect(update.bound).toEqual({ page_id: "123", title: "Old", content: "b", content_format: "markdown" });
 		expect(writeArguments(OPERATION_SPECS["page.comment"], "community", { pageId: "123", body: "hi" }, ctx).args).toEqual({ page_id: "123", body: "hi" });
 	});
 });
