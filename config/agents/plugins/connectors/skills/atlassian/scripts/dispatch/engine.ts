@@ -164,7 +164,7 @@ export function providerArguments(spec: OperationSpec, provider: ProviderName, i
 			case "page.search":
 				// Documented by the v2 skill examples as cql; confirmed only by the live schema.
 				assign(args, "cql", input.cql);
-				assign(args, "maxResults", input.maxResults);
+				assign(args, "limit", input.maxResults);
 				break;
 		}
 		return args;

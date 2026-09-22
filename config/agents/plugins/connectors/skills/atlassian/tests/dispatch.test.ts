@@ -83,7 +83,7 @@ const SCHEMAS: Record<string, SchemaTool[]> = {
 		GUARD,
 		USER,
 		tool("getConfluenceContent", ["cloudId", "content_id"], ["content_format", "detail", "include_metadata"]),
-		tool("searchConfluence", ["cloudId", "cql"], ["maxResults"]),
+		tool("searchConfluence", ["cloudId", "cql"], ["limit"]),
 		tool("createConfluenceContent", ["cloudId", "parent", "title", "body"]),
 		tool("updateConfluenceContent", ["cloudId", "contentId", "snapshotToken", "body"], ["title", "versionMessage"]),
 	],
@@ -348,7 +348,7 @@ describe("Official reads", () => {
 		expect(calls.filter((call) => call.tool !== "getAccessibleAtlassianResources").map((call) => [call.server, call.tool, call.args])).toEqual([
 			[OJ, "searchJiraIssuesUsingJql", { cloudId: "cloud-example", jql: "project = PROJ", maxResults: 5, fields: ["summary"] }],
 			[OC, "getConfluenceContent", { cloudId: "cloud-example", content_id: "123", detail: "full" }],
-			[OC, "searchConfluence", { cloudId: "cloud-example", cql: "type=page", maxResults: 3 }],
+			[OC, "searchConfluence", { cloudId: "cloud-example", cql: "type=page", limit: 3 }],
 		]);
 		expect(seen.map((entry) => entry.product)).toEqual(["jira", "confluence", "confluence"]);
 	});
