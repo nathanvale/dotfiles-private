@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { STATIONS } from "../../src/branch-station-catalog.ts"
-import { BEAD, bindingPath, bindSession, createRoot, envelopeOf, OTHER_BEAD, removeRoot, resultOf, type Root, type Run, runCli, runCliOnPlatform, runCliWithStoreFault, runCliWithThrowingBeads, spawnLockHolder, steerBd } from "../fixtures/harness.ts"
+import { BEAD, bindingPath, bindSession, createRoot, envelopeOf, OTHER_BEAD, removeRoot, resultOf, type Root, type Run, runCli, runCliOnPlatform, runCliWithStoreFault, runCliWithThrowingBeads, SECRET_BEAD, spawnLockHolder, steerBd } from "../fixtures/harness.ts"
 
 // Catalog layer. STATIONS supplies the domain to enumerate only. EXPECTED is the independent oracle restated from
 // Spec #57, Ticket #58 and Contract Core 1.0.0: outcome, causeCode, effectClass, transactionState, retryable,
@@ -14,7 +14,7 @@ import { BEAD, bindingPath, bindSession, createRoot, envelopeOf, OTHER_BEAD, rem
 type Guidance = "next-action" | "handoff" | "none"
 type Expected = readonly [outcome: string, causeCode: string | null, effectClass: string, transactionState: string, retryable: boolean, delay: number | null, guidance: Guidance, exit: number]
 
-const DECLARED_STATION_COUNT = 50
+const DECLARED_STATION_COUNT = 53
 const INSPECT = "inspect"
 const LOCAL = "repository-local"
 
@@ -72,6 +72,9 @@ const EXPECTED: Readonly<Record<string, Expected>> = {
 	"msb-workflow.bind#write-failed": ["failed", "UNAVAILABLE_WRITE_FAILED", LOCAL, "unchanged", true, null, "next-action", 75],
 	"msb-workflow.bind#write-unknown": ["unknown", "INTERNAL_WRITE_OUTCOME_UNKNOWN", LOCAL, "unknown", false, null, "next-action", 1],
 	"msb-workflow.bind#bound": ["success", null, LOCAL, "completed", false, null, "next-action", 0],
+	"msb-workflow.bind#switched": ["success", null, LOCAL, "completed", false, null, "next-action", 0],
+	"msb-workflow.bind#switch-from-mismatch": domain("DOMAIN_SWITCH_FROM_MISMATCH", LOCAL),
+	"msb-workflow.bind#binding-absent": domain("DOMAIN_BINDING_ABSENT", LOCAL),
 	"msb-workflow.recover#recovered": ["success", null, INSPECT, "unchanged", false, null, "next-action", 0],
 	"msb-workflow.recover#binding-absent": domain("DOMAIN_BINDING_ABSENT", INSPECT),
 	"msb-workflow.recover#binding-workspace-mismatch": domain("DOMAIN_BINDING_WORKSPACE_MISMATCH", INSPECT),
@@ -79,6 +82,7 @@ const EXPECTED: Readonly<Record<string, Expected>> = {
 
 const SESSION = "session-1"
 const bindArgv = (root: Root, extra: string[] = []): string[] => ["bind", "--workspace", root.workspace, "--session", SESSION, "--bead", BEAD, ...extra, "--json"]
+const switchArgv = (root: Root, from: string): string[] => ["bind", "--workspace", root.workspace, "--session", SESSION, "--bead", OTHER_BEAD, "--from", from, "--json"]
 const recoverArgv = (root: Root, workspace = root.workspace): string[] => ["recover", "--workspace", workspace, "--session", SESSION, "--json"]
 const inspectArgv = (root: Root): string[] => ["inspect", "--workspace", root.workspace, "--session", SESSION, "--json"]
 
@@ -208,6 +212,15 @@ const REACH: Readonly<Record<string, (root: Root) => Promise<Run>>> = {
 	"msb-workflow.bind#write-failed": (root) => runCliWithStoreFault(root, bindArgv(root), "before-rename"),
 	"msb-workflow.bind#write-unknown": (root) => runCliWithStoreFault(root, bindArgv(root), "after-rename"),
 	"msb-workflow.bind#bound": (root) => runCli(root, bindArgv(root)),
+	"msb-workflow.bind#switched": async (root) => {
+		await bindSession(root, SESSION)
+		return runCli(root, switchArgv(root, BEAD))
+	},
+	"msb-workflow.bind#switch-from-mismatch": async (root) => {
+		await bindSession(root, SESSION)
+		return runCli(root, switchArgv(root, SECRET_BEAD))
+	},
+	"msb-workflow.bind#binding-absent": (root) => runCli(root, switchArgv(root, BEAD)),
 	"msb-workflow.recover#recovered": async (root) => {
 		await bindSession(root, SESSION)
 		return runCli(root, recoverArgv(root))

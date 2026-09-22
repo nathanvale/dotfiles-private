@@ -27,7 +27,7 @@ export interface CliOptions {
 	readonly hookFaults?: HookFaults | undefined
 }
 
-type Routed = { readonly command: "inspect" | "recover"; readonly workspace: string; readonly session: string | null } | { readonly command: "bind"; readonly workspace: string; readonly session: string | null; readonly beadId: string; readonly evidence: string | null }
+type Routed = { readonly command: "inspect" | "recover"; readonly workspace: string; readonly session: string | null } | { readonly command: "bind"; readonly workspace: string; readonly session: string | null; readonly beadId: string; readonly evidence: string | null; readonly from: string | null }
 
 type Parsed =
 	| { kind: "help" }
@@ -37,7 +37,7 @@ type Parsed =
 	| { kind: "command"; identity: CommandIdentity; request: Routed }
 
 const SILENT_DIAGNOSTICS: Diagnostics = { log: () => undefined, setStation: () => undefined, flush: () => undefined, dispose: () => ({ file: null, written: 0, dropped: 0, refused: 0, failure: "open", closed: true }) }
-const VALUE_OPTIONS = new Set(["--workspace", "--session", "--bead", "--evidence"])
+const VALUE_OPTIONS = new Set(["--workspace", "--session", "--bead", "--evidence", "--from"])
 const COMMAND_WORDS: Readonly<Record<string, CommandIdentity>> = { inspect: "msb-workflow.inspect", bind: "msb-workflow.bind", recover: "msb-workflow.recover", hook: "msb-workflow.hook" }
 
 interface Scan {
@@ -94,9 +94,12 @@ function buildCommand(scan: Scan, identity: CommandIdentity): Parsed {
 	const word = scan.word
 	const workspace = get("--workspace")
 	if (word === "bind") {
-		const issue = optionIssue(scan, ["--workspace", "--bead"], ["--workspace", "--bead", "--session", "--evidence"])
+		const issue = optionIssue(scan, ["--workspace", "--bead"], ["--workspace", "--bead", "--session", "--evidence", "--from"])
 		if (issue !== null || workspace === null) return usage(issue ?? "bind requires --workspace")
-		return { kind: "command", identity, request: { command: "bind", workspace, session: get("--session"), beadId: get("--bead") as string, evidence: get("--evidence") } }
+		const from = get("--from")
+		// The switch replaces one owner with another; naming the same Bead on both sides is refused before any I/O.
+		if (from !== null && from === get("--bead")) return usage("--from must name the saved Bead being replaced, not the Bead given to --bead")
+		return { kind: "command", identity, request: { command: "bind", workspace, session: get("--session"), beadId: get("--bead") as string, evidence: get("--evidence"), from } }
 	}
 	const issue = optionIssue(scan, ["--workspace"], ["--workspace", "--session"])
 	if (issue !== null || workspace === null) return usage(issue ?? `${word} requires --workspace`)

@@ -3277,7 +3277,7 @@ var COMMANDS = [
   { identity: "msb-workflow.help", argv: "msb-workflow --help", effectClass: "inspect", description: "Print one usage line and one example" },
   { identity: "msb-workflow.discover", argv: "msb-workflow --discover --json", effectClass: "inspect", description: "Describe the contract, commands, effect classes, exit meanings, machine mode and the private binding schema" },
   { identity: "msb-workflow.inspect", argv: "msb-workflow inspect --workspace <absolute-path> [--session <id>]", effectClass: "inspect", description: "Check the pinned bd executable, the selected store, the state root, the binding, the marker and the lock files without writing" },
-  { identity: "msb-workflow.bind", argv: "msb-workflow bind --workspace <absolute-path> --bead <bead-id> [--session <id>] [--evidence <absolute-file>]", effectClass: "repository-local", description: "Bind this session to one Bead in the selected store, or refresh the same owner; the one private local write" },
+  { identity: "msb-workflow.bind", argv: "msb-workflow bind --workspace <absolute-path> --bead <bead-id> [--session <id>] [--evidence <absolute-file>] [--from <bead-id>]", effectClass: "repository-local", description: "Bind this session to one Bead in the selected store, refresh the same owner, or with --from switch it from the saved Bead it names; the one private local write" },
   { identity: "msb-workflow.recover", argv: "msb-workflow recover --workspace <absolute-path> [--session <id>]", effectClass: "inspect", description: "Rebuild this session's Resume Panel from current read-only bd reads and name one next safe action" },
   { identity: "msb-workflow.hook", argv: "msb-workflow hook", effectClass: "repository-local", description: "Deliver session guidance or the Resume Panel for one Harness event read from stdin; Harness JSON out, always exit 0" }
 ];
@@ -3295,6 +3295,7 @@ var HELP_TEXT = [
   ...COMMANDS.slice(2).map((command) => `  ${command.argv}`),
   "",
   "--session or CODEX_SESSION_ID supplies the session; both present and different refuses.",
+  "bind --from <bead-id> is the verified same-session switch: it must name the saved Bead, in the same workspace, with an explicit --session.",
   "MSB_WORKFLOW_BD_EXECUTABLE names the pinned bd for inspect and bind; recover and hook use the bound one.",
   "Add --json anywhere for one Contract Core 1.0.0 envelope on stdout. Run msb-workflow --discover --json for the machine contract.",
   ""
@@ -4553,19 +4554,21 @@ var ROWS = [
   ...shared("state-unsafe", "A private state ancestor, lock file, marker, or binding has unsafe ownership, type, mode, link count, or identity", "refused", "DOMAIN_STATE_UNSAFE", "unchanged", false, null, "next-action", READERS),
   ...shared("binding-invalid", "The saved binding is not one bounded schema-v3 object: malformed bytes, duplicate keys, unknown or missing fields, null identities, or future skew", "refused", "SCHEMA_BINDING_INVALID", "unchanged", false, null, "next-action", READERS),
   ...shared("bead-missing", "The pinned bd reports the named Bead absent from the selected store", "refused", "DOMAIN_BEAD_MISSING", "unchanged", false, null, "next-action", READERS),
+  ...shared("binding-absent", "No binding exists for the selected session: recover has nothing to rebuild, and bind --from has no saved owner to replace, so nothing is written", "refused", "DOMAIN_BINDING_ABSENT", "unchanged", false, null, "next-action", READERS),
   ["inspected", INSPECT, "Every prerequisite passed: executable, store, state root, binding, marker and lock files", "success", null, "unchanged", false, null, "next-action"],
   ["inspect-refused", INSPECT, "At least one prerequisite failed; each failure and one repair are named in the result", "refused", "DOMAIN_PREREQUISITE_FAILED", "unchanged", false, null, "next-action"],
   ["source-repository-missing", BIND, "bind ran outside a Git working directory, so sourceRepository cannot be derived", "refused", "DOMAIN_SOURCE_REPOSITORY_MISSING", "unchanged", false, null, "next-action"],
   ["evidence-invalid", BIND, "--evidence is not a canonical regular file inside sourceRepository", "refused", "DOMAIN_EVIDENCE_INVALID", "unchanged", false, null, "next-action"],
-  ["binding-owner-conflict", BIND, "A saved binding for this session names a different Bead or workspace; the saved bytes are preserved", "refused", "DOMAIN_BINDING_OWNERSHIP_CONFLICT", "unchanged", false, null, "next-action"],
-  ["binding-inherited-conflict", BIND, "The session came only from CODEX_SESSION_ID and a saved binding names a different owner; an inherited identity is not worker ownership", "refused", "DOMAIN_SESSION_INHERITED_CONFLICT", "unchanged", false, null, "next-action"],
+  ["binding-owner-conflict", BIND, "A saved binding for this session names a different Bead without --from, or a different workspace with or without it; the saved bytes are preserved and the repair names the verified switch", "refused", "DOMAIN_BINDING_OWNERSHIP_CONFLICT", "unchanged", false, null, "next-action"],
+  ["binding-inherited-conflict", BIND, "The session came only from CODEX_SESSION_ID and either a saved binding names a different owner or --from asks for a switch; an inherited identity is not worker ownership", "refused", "DOMAIN_SESSION_INHERITED_CONFLICT", "unchanged", false, null, "next-action"],
+  ["switch-from-mismatch", BIND, "--from was given and the saved binding for this session and workspace names a Bead other than --from; the saved bytes are preserved and the result carries savedBeadId (a saved Bead equal to --bead means the switch already happened)", "refused", "DOMAIN_SWITCH_FROM_MISMATCH", "unchanged", false, null, "next-action"],
   ["storage-busy", BIND, "A cooperating process held the workspace or session flock for the complete 2,000 ms bound", "failed", "UNAVAILABLE_STORAGE_BUSY", "unchanged", true, 2000, "next-action"],
   ["platform-unsupported", BIND, "The selected platform has no admitted process-lock Adapter", "failed", "UNAVAILABLE_LOCK_UNSUPPORTED", "unchanged", false, null, "next-action"],
   ["write-failed", BIND, "The binding write failed before the rename became visible; nothing changed", "failed", "UNAVAILABLE_WRITE_FAILED", "unchanged", true, null, "next-action"],
   ["write-unknown", BIND, "The binding write failed after the rename became visible; the durable state is unknown until recover reads it", "unknown", "INTERNAL_WRITE_OUTCOME_UNKNOWN", "unknown", false, null, "next-action"],
   ["bound", BIND, "The binding was written or the same owner refreshed", "success", null, "completed", false, null, "next-action"],
+  ["switched", BIND, "--from named the saved owner in the same workspace for an explicit session, the new Bead verified, and the binding was replaced atomically and read back", "success", null, "completed", false, null, "next-action"],
   ["recovered", RECOVER, "The binding was read, every native read agreed, and the Resume Panel was built from current facts", "success", null, "unchanged", false, null, "next-action"],
-  ["binding-absent", RECOVER, "No binding exists for the selected session", "refused", "DOMAIN_BINDING_ABSENT", "unchanged", false, null, "next-action"],
   ["binding-workspace-mismatch", RECOVER, "The stored workspace differs from --workspace", "refused", "DOMAIN_BINDING_WORKSPACE_MISMATCH", "unchanged", false, null, "next-action"]
 ];
 function failureClassOf(causeCode) {
@@ -4729,24 +4732,63 @@ function writeOutcome(error, workspace, session) {
   const reason = error instanceof Error ? error.message : "binding write failed";
   return { station: "write-failed", message: reason, result: { station: "write-failed", reason }, repairAction: "Repair the private state directory (owner, mode 0700, free space), then retry the same bind", nextAction: `msb-workflow inspect --workspace ${workspace} --session ${session}`, availablePaths: [], handoffPrerequisites: [] };
 }
+var recoverAction = (workspace, session) => `msb-workflow recover --workspace ${workspace} --session ${session}`;
+var switchAction = (saved, beadId) => `msb-workflow bind --workspace ${saved.workspace} --bead ${beadId} --from ${saved.beadId} --session ${saved.sessionIdentity}`;
+function ownerConflictRepair(saved, binding) {
+  if (saved.workspace !== binding.workspace)
+    return `Recover the saved binding with --workspace ${saved.workspace} and continue ${saved.beadId}, or use a different session for ${binding.workspace}; a saved workspace is never switched`;
+  return `Recover the saved binding and continue ${saved.beadId}, or switch this session to ${binding.beadId} only through the verified switch that names the owner it replaces: ${switchAction(saved, binding.beadId)}; no flag replaces a saved owner without naming it`;
+}
+var refused = (outcome) => ({ kind: "refused", outcome });
+function ownerConflict(input, saved) {
+  const { binding } = input;
+  input.diagnostics.log("binding.conflict", { savedBeadId: saved.beadId, requestedBeadId: binding.beadId, sessionSource: input.source });
+  const detail = `session ${binding.sessionIdentity} is bound to ${saved.beadId} in ${saved.workspace}; requested ${binding.beadId} in ${binding.workspace}`;
+  const facts = { savedBeadId: saved.beadId, savedWorkspace: saved.workspace };
+  if (input.source === "environment")
+    return refusal("binding-inherited-conflict", `inherited session identity cannot replace a saved owner: ${detail}`, "An inherited CODEX_SESSION_ID is not worker ownership. Verify your own Harness session identity and pass it with --session; the saved binding is preserved", recoverAction(saved.workspace, binding.sessionIdentity), facts);
+  return refusal("binding-owner-conflict", `saved binding names a different owner: ${detail}`, ownerConflictRepair(saved, binding), recoverAction(saved.workspace, binding.sessionIdentity), facts);
+}
+function assertReadBack(store, binding) {
+  const read2 = store.readBinding(binding.sessionIdentity, Date.parse(binding.observedAt));
+  if (read2.status !== "available")
+    throw new RuntimeFailure("uncertain", `read-back after the switch found the binding ${read2.status}${read2.status === "absent" ? "" : `: ${read2.reason}`}`);
+  if (JSON.stringify(read2.binding) !== JSON.stringify(binding))
+    throw new RuntimeFailure("uncertain", `read-back after the switch returned a binding naming ${read2.binding.beadId}, not the written ${binding.beadId}`);
+}
+function switchOwner(input, saved, from) {
+  const { store, binding } = input;
+  const session = binding.sessionIdentity;
+  if (saved.status === "absent") {
+    const again = `msb-workflow bind --workspace ${binding.workspace} --bead ${binding.beadId} --session ${session}`;
+    return refused(refusal("binding-absent", `no binding exists for session ${session}; --from ${from} names no saved owner`, `Bind this session without --from: ${again}`, again, { bindingPath: store.bindingPath(session), from }));
+  }
+  if (saved.binding.workspace !== binding.workspace)
+    return refused(ownerConflict(input, saved.binding));
+  if (saved.binding.beadId !== from) {
+    input.diagnostics.log("binding.switch-mismatch", { savedBeadId: saved.binding.beadId, from, requestedBeadId: binding.beadId });
+    return refused(refusal("switch-from-mismatch", `saved binding for session ${session} names ${saved.binding.beadId}, not --from ${from}; ${binding.beadId} was not written`, `Recover the saved binding to read the current owner: a saved ${binding.beadId} means this switch already happened, and any other saved Bead must be named in --from before it can be replaced`, recoverAction(binding.workspace, session), { savedBeadId: saved.binding.beadId, from, requestedBeadId: binding.beadId }));
+  }
+  store.writeBinding(binding);
+  assertReadBack(store, binding);
+  input.diagnostics.log("binding.switched", { previousBeadId: from, beadId: binding.beadId });
+  return { kind: "switched", previous: saved.binding };
+}
 function lockedWrite(input) {
   const { store, binding } = input;
   const saved = store.readBinding(binding.sessionIdentity, Date.parse(binding.observedAt));
   if (saved.status === "unsafe")
-    return { refusal: stateUnsafeOutcome(saved.reason, binding.workspace), refreshed: false };
+    return refused(stateUnsafeOutcome(saved.reason, binding.workspace));
   if (saved.status === "unavailable")
     throw new RuntimeFailure("unavailable", saved.reason);
   if (saved.status === "invalid")
-    return { refusal: bindingInvalidOutcome(saved.reason, store.bindingPath(binding.sessionIdentity), binding.workspace, binding.sessionIdentity), refreshed: false };
-  if (saved.status === "available" && !sameOwner(saved.binding, binding)) {
-    input.diagnostics.log("binding.conflict", { savedBeadId: saved.binding.beadId, requestedBeadId: binding.beadId, sessionSource: input.source });
-    const detail = `session ${binding.sessionIdentity} is bound to ${saved.binding.beadId} in ${saved.binding.workspace}; requested ${binding.beadId} in ${binding.workspace}`;
-    if (input.source === "environment")
-      return { refusal: refusal("binding-inherited-conflict", `inherited session identity cannot replace a saved owner: ${detail}`, "An inherited CODEX_SESSION_ID is not worker ownership. Verify your own Harness session identity and pass it with --session; the saved binding is preserved", `msb-workflow recover --workspace ${saved.binding.workspace} --session ${binding.sessionIdentity}`, { savedBeadId: saved.binding.beadId, savedWorkspace: saved.binding.workspace }), refreshed: false };
-    return { refusal: refusal("binding-owner-conflict", `saved binding names a different owner: ${detail}`, "Recover the saved binding and continue that Bead, or use a different session for the new Bead; no flag replaces a saved owner and a deliberate task switch is a later verified protocol", `msb-workflow recover --workspace ${saved.binding.workspace} --session ${binding.sessionIdentity}`, { savedBeadId: saved.binding.beadId, savedWorkspace: saved.binding.workspace }), refreshed: false };
-  }
+    return refused(bindingInvalidOutcome(saved.reason, store.bindingPath(binding.sessionIdentity), binding.workspace, binding.sessionIdentity));
+  if (input.from !== null)
+    return switchOwner(input, saved, input.from);
+  if (saved.status === "available" && !sameOwner(saved.binding, binding))
+    return refused(ownerConflict(input, saved.binding));
   store.writeBinding(binding);
-  return { refusal: null, refreshed: saved.status === "available" };
+  return { kind: "bound", refreshed: saved.status === "available" };
 }
 async function readOwner(beads, request) {
   const storeRead = await beads.verifyStore(true);
@@ -4767,6 +4809,8 @@ async function prepare(request, context) {
   const session = resolveSession(request.session, context.env);
   if (session.status !== "resolved")
     return sessionOutcome(session);
+  if (request.from !== null && session.source === "environment")
+    return refusal("binding-inherited-conflict", `inherited session identity cannot switch a saved owner: --from ${request.from} to ${request.beadId} for session ${session.session}`, "An inherited CODEX_SESSION_ID is not worker ownership. Verify your own Harness session identity and pass it with --session; the saved binding is preserved", recoverAction(request.workspace, session.session), { from: request.from });
   const sourceRepository = await context.gitTopLevel(context.cwd);
   const again = `msb-workflow bind --workspace ${request.workspace} --bead ${request.beadId} --session ${session.session}`;
   if (sourceRepository === null)
@@ -4792,6 +4836,10 @@ function bindingFor(request, prepared, owner, now) {
     observedAt: now
   };
 }
+function switchedOutcome(previous, binding, bindingPath, panel) {
+  const replaced = { beadId: previous.beadId, beadObservedAt: previous.beadObservedAt, observedAt: previous.observedAt, evidencePath: previous.evidencePath };
+  return success("switched", `binding switched for ${binding.sessionIdentity}: ${previous.beadId} -> ${binding.beadId}`, { bindingPath, previous: replaced, readBack: true, ...panel.facts }, panel.nextSafeAction);
+}
 async function runBind(request, context, stateHome, diagnostics) {
   const prepared = await prepare(request, context);
   if ("station" in prepared)
@@ -4803,20 +4851,25 @@ async function runBind(request, context, stateHome, diagnostics) {
     return { outcome: owner, knownSecretValues: secrets() };
   const binding = bindingFor(request, prepared, owner, context.now().toISOString());
   const recoveryStore = context.openStore(stateHome);
-  diagnostics.log("bind.started", { beadId: request.beadId, sessionSource: prepared.source, executableDigest: owner.store.executableDigest });
+  diagnostics.log("bind.started", { beadId: request.beadId, sessionSource: prepared.source, executableDigest: owner.store.executableDigest, ...request.from === null ? {} : { from: request.from } });
   let written;
   try {
-    written = await recoveryStore.withLocks(request.workspace, prepared.session, async () => lockedWrite({ store: recoveryStore, binding, source: prepared.source, diagnostics }));
+    written = await recoveryStore.withLocks(request.workspace, prepared.session, async () => lockedWrite({ store: recoveryStore, binding, source: prepared.source, from: request.from, diagnostics }));
   } catch (error) {
     diagnostics.log("bind.failed", { kind: error instanceof RuntimeFailure ? error.kind : "unknown" });
     return { outcome: writeOutcome(error, request.workspace, prepared.session), knownSecretValues: secrets() };
   }
-  if (written.refusal !== null)
-    return { outcome: written.refusal, knownSecretValues: secrets() };
+  if (written.kind === "refused")
+    return { outcome: written.outcome, knownSecretValues: secrets() };
   const panel = buildPanel({ binding, stale: false, store: owner.store, bead: owner.bead, gates: owner.gates, prime: null });
+  const bindingPath = recoveryStore.bindingPath(prepared.session);
+  if (written.kind === "switched") {
+    diagnostics.log("bind.completed", { beadId: request.beadId, from: written.previous.beadId });
+    return { outcome: switchedOutcome(written.previous, binding, bindingPath, panel), knownSecretValues: secrets() };
+  }
   diagnostics.log("bind.completed", { beadId: request.beadId, refreshed: written.refreshed });
   const message = `binding ${written.refreshed ? "refreshed" : "written"} for ${prepared.session} -> ${request.beadId}`;
-  return { outcome: success("bound", message, { bindingPath: recoveryStore.bindingPath(prepared.session), refreshed: written.refreshed, binding: { ...binding }, ...panel.facts }, panel.nextSafeAction), knownSecretValues: secrets() };
+  return { outcome: success("bound", message, { bindingPath, refreshed: written.refreshed, binding: { ...binding }, ...panel.facts }, panel.nextSafeAction), knownSecretValues: secrets() };
 }
 
 // packages/workflow-cli/src/commands/hook.ts
@@ -4937,7 +4990,7 @@ function guidance(binding) {
     `Session identity: ${binding.sessionIdentity}`,
     `Bound to Bead ${binding.beadId} in ${binding.workspace} (store ${binding.storePath}).`,
     `Rebuild the Resume Panel at any time: msb-workflow recover --workspace ${shellQuote(binding.workspace)} --session ${shellQuote(binding.sessionIdentity)} --json`,
-    `Refresh or rebind with this exact session identity: msb-workflow bind --workspace ${shellQuote(binding.workspace)} --bead <bead-id> --session ${shellQuote(binding.sessionIdentity)}`,
+    `Refresh this binding with this exact session identity: msb-workflow bind --workspace ${shellQuote(binding.workspace)} --bead ${shellQuote(binding.beadId)} --session ${shellQuote(binding.sessionIdentity)}`,
     "After compaction the Resume Panel is delivered once: on the next prompt (Codex) or at SessionStart compact (Claude Code)."
   ].join(`
 `);
@@ -5180,7 +5233,7 @@ var SILENT_DIAGNOSTICS = { log: () => {
 }, flush: () => {
   return;
 }, dispose: () => ({ file: null, written: 0, dropped: 0, refused: 0, failure: "open", closed: true }) };
-var VALUE_OPTIONS = new Set(["--workspace", "--session", "--bead", "--evidence"]);
+var VALUE_OPTIONS = new Set(["--workspace", "--session", "--bead", "--evidence", "--from"]);
 var COMMAND_WORDS = { inspect: "msb-workflow.inspect", bind: "msb-workflow.bind", recover: "msb-workflow.recover", hook: "msb-workflow.hook" };
 function noteIssue(scan, issue) {
   scan.issue ??= issue;
@@ -5236,10 +5289,13 @@ function buildCommand(scan, identity) {
   const word = scan.word;
   const workspace = get("--workspace");
   if (word === "bind") {
-    const issue2 = optionIssue(scan, ["--workspace", "--bead"], ["--workspace", "--bead", "--session", "--evidence"]);
+    const issue2 = optionIssue(scan, ["--workspace", "--bead"], ["--workspace", "--bead", "--session", "--evidence", "--from"]);
     if (issue2 !== null || workspace === null)
       return usage(issue2 ?? "bind requires --workspace");
-    return { kind: "command", identity, request: { command: "bind", workspace, session: get("--session"), beadId: get("--bead"), evidence: get("--evidence") } };
+    const from = get("--from");
+    if (from !== null && from === get("--bead"))
+      return usage("--from must name the saved Bead being replaced, not the Bead given to --bead");
+    return { kind: "command", identity, request: { command: "bind", workspace, session: get("--session"), beadId: get("--bead"), evidence: get("--evidence"), from } };
   }
   const issue = optionIssue(scan, ["--workspace"], ["--workspace", "--session"]);
   if (issue !== null || workspace === null)

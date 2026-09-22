@@ -14,6 +14,7 @@ const PRODUCTION_CLI = resolve(import.meta.dir, "../../src/cli.ts")
 const FIXTURE_CLI = resolve(import.meta.dir, "checker/cli.ts")
 const NATIVE = resolve(import.meta.dir, "../../src/adapters/native.ts")
 const FIXTURE_CONTEXT = resolve(import.meta.dir, "checker/fixture-context.ts")
+const RUNTIME = resolve(import.meta.dir, "../../src/runtime.ts")
 export const FIXTURE_BD = resolve(import.meta.dir, "checker/bd")
 export const SECRET_MARKER = "CHECK_FIXTURE_SECRET_MARKER"
 export const BEAD = "lkr-fixture"
@@ -113,18 +114,29 @@ export function runHook(root: Root, event: unknown, options: RunOptions = {}): P
 	return spawnBun(["run", entryOf(options), "hook"], root, { ...options, stdin: typeof event === "string" ? event : JSON.stringify(event) })
 }
 
-export type StoreFaultMode = "before-rename" | "after-rename" | "hold-lock-3s"
+export type StoreFaultMode = "before-rename" | "after-rename" | "tamper-after-rename" | "hold-lock-3s"
+
+/** The Bead a `tamper-after-rename` fault writes into the visible binding, in place, before the helper reads it back. */
+export const TAMPERED_BEAD = "lkr-tampered"
 
 /** A fresh process drives runCli's public parser, dispatch, envelope and exit while the Recovery Adapter fails at
- * the documented write seam: before the rename (unchanged) or after it (unknown), or holds the locked section. */
+ * the documented write seam: before the rename (unchanged) or after it (unknown), or holds the locked section, or
+ * rewrites the visible binding in place after the rename so the read-back sees another owner (a same-user tamper). */
 export function runCliWithStoreFault(root: Root, argv: readonly string[], mode: StoreFaultMode, options: RunOptions = {}): Promise<Run> {
 	const script = `
+import { readFileSync, writeFileSync } from "node:fs"
 import { main } from ${JSON.stringify(PRODUCTION_CLI)}
 import { fixtureContext } from ${JSON.stringify(FIXTURE_CONTEXT)}
+import { stateAddresses } from ${JSON.stringify(RUNTIME)}
 const mode = ${JSON.stringify(mode)}
+const argv = ${JSON.stringify(argv)}
 const fail = () => { throw new Error("controlled " + mode + " failure") }
-const hooks = mode === "before-rename" ? { beforeReplace: fail } : mode === "after-rename" ? { afterReplace: fail } : { beforeReplace: () => Bun.sleepSync(3000) }
-process.argv = [process.argv[0], "cli", ...${JSON.stringify(argv)}]
+const tamper = () => {
+	const path = stateAddresses(process.env.MSB_WORKFLOW_STATE_HOME).binding(argv[argv.indexOf("--session") + 1])
+	writeFileSync(path, JSON.stringify({ ...JSON.parse(readFileSync(path, "utf8")), beadId: ${JSON.stringify(TAMPERED_BEAD)} }) + "\\n", { mode: 0o600 })
+}
+const hooks = mode === "before-rename" ? { beforeReplace: fail } : mode === "after-rename" ? { afterReplace: fail } : mode === "tamper-after-rename" ? { afterReplace: tamper } : { beforeReplace: () => Bun.sleepSync(3000) }
+process.argv = [process.argv[0], "cli", ...argv]
 main(fixtureContext({ storeHooks: { bindingWrite: hooks } }))
 `
 	return spawnBun(["-e", script], root, options)

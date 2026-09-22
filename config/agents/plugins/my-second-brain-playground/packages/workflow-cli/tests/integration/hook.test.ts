@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
-import { BEAD, bindingPath, bindSession, createRoot, diagnosticsDirectory, FIXTURE_BD, hookEvent, hookOutputOf, markerPath, modeOf, readJsonFile, removeRoot, resultOf, retainedBytes, type Root, type Run, runCli, runHook, runHookWithFault, SECRET_BEAD, SECRET_MARKER, spawnLockHolder, stateListing, steerBd } from "../fixtures/harness.ts"
+import { BEAD, bindingPath, bindSession, createRoot, diagnosticsDirectory, FIXTURE_BD, hookEvent, hookOutputOf, markerPath, modeOf, OTHER_BEAD, readJsonFile, removeRoot, resultOf, retainedBytes, type Root, type Run, runCli, runHook, runHookWithFault, SECRET_BEAD, SECRET_MARKER, spawnLockHolder, stateListing, steerBd } from "../fixtures/harness.ts"
 
 // The `hook` command through a real process: one Harness event on stdin, Harness JSON or silence on stdout, exit 0
 // and empty stderr on every path. Expected deliveries, marker states and texts are literals from Spec #57's hook
@@ -251,7 +251,9 @@ describe("SessionStart and PreCompact", () => {
 			expect(output?.additionalContext).toContain(`Session identity: ${SESSION}`)
 			expect(output?.additionalContext).toContain(`Bound to Bead ${BEAD} in ${root.workspace}`)
 			expect(output?.additionalContext).toContain(`msb-workflow recover --workspace ${root.workspace} --session ${SESSION} --json`)
-			expect(output?.additionalContext).toContain(`msb-workflow bind --workspace ${root.workspace} --bead <bead-id> --session ${SESSION}`)
+			// The bind line is the refresh of this exact owner; it never says "rebind", because a change of Bead is `bind --from`.
+			expect(output?.additionalContext).toContain(`Refresh this binding with this exact session identity: msb-workflow bind --workspace ${root.workspace} --bead ${BEAD} --session ${SESSION}`)
+			expect(output?.additionalContext).not.toContain("rebind")
 			// The hook cannot tell the Harness apart, so the guidance names both delivery paths (review L4).
 			expect(output?.additionalContext).toContain("After compaction the Resume Panel is delivered once: on the next prompt (Codex) or at SessionStart compact (Claude Code).")
 			expect(output?.additionalContext).not.toContain("# Resume Panel")
@@ -317,10 +319,10 @@ describe("the recover and bind commands in the guidance and the notice are quote
 		// Hand-derived POSIX single quoting (independent oracle): the whole workspace is one single-quoted word with '
 		// spelled '\''; the private root is a plain temporary path and contributes no character needing an escape.
 		const recover = `msb-workflow recover --workspace '${root.privateRoot}/work sp'\\''ace' --session ${SESSION} --json`
-		const bind = `msb-workflow bind --workspace '${root.privateRoot}/work sp'\\''ace' --bead <bead-id> --session ${SESSION}`
+		const bind = `msb-workflow bind --workspace '${root.privateRoot}/work sp'\\''ace' --bead ${BEAD} --session ${SESSION}`
 		const guidance = expectHook(await runHook(root, startup()))
 		expect(guidance?.additionalContext).toContain(`Rebuild the Resume Panel at any time: ${recover}\n`)
-		expect(guidance?.additionalContext).toContain(`Refresh or rebind with this exact session identity: ${bind}\n`)
+		expect(guidance?.additionalContext).toContain(`Refresh this binding with this exact session identity: ${bind}\n`)
 		expectSilent(await runHook(root, postCompact()))
 		await runHookWithFault(root, prompt(), "kill-after-claim")
 		const notice = expectHook(await runHook(root, prompt()))
@@ -329,15 +331,14 @@ describe("the recover and bind commands in the guidance and the notice are quote
 		expect(panel.exit).toBe(0)
 		expect((resultOf(panel).readOnlyCommands as string[])[3]).toBe(recover)
 		// A real sh re-parses each rendered command into the exact words: the workspace stays one word, nothing is
-		// expanded. The bind line is reparsed once its `<bead-id>` placeholder is replaced by a concrete Bead ID, as a
-		// user would paste it; the placeholder itself is never shell input.
+		// expanded. The bind line names the bound Bead, so it is pasted exactly as rendered.
 		const reparse = (command: string): string => {
 			const shell = Bun.spawnSync(["sh", "-c", `set -- ${command}; printf '%s\\n' "$@"`], { env: { PATH: process.env.PATH ?? "", HOME: "/nonexistent" }, stdout: "pipe", stderr: "pipe" })
 			expect(shell.stderr.toString()).toBe("")
 			return shell.stdout.toString()
 		}
 		expect(reparse(recover)).toBe(`${["msb-workflow", "recover", "--workspace", workspace, "--session", SESSION, "--json"].join("\n")}\n`)
-		expect(reparse(bind.replace("<bead-id>", BEAD))).toBe(`${["msb-workflow", "bind", "--workspace", workspace, "--bead", BEAD, "--session", SESSION].join("\n")}\n`)
+		expect(reparse(bind)).toBe(`${["msb-workflow", "bind", "--workspace", workspace, "--bead", BEAD, "--session", SESSION].join("\n")}\n`)
 	})
 })
 
@@ -510,6 +511,61 @@ describe("PostCompact and UserPromptSubmit: exactly one panel per prompt", () =>
 		expect(notice?.additionalContext).toContain("generation(s) 1 was claimed but never recorded delivered")
 		expect(generations(root, SESSION)).toEqual([[1, "notified"]])
 		expectSilent(await runHook(root, prompt()))
+	})
+})
+
+describe("a same-session switch (bind --from) changes what every later delivery is built from; no marker rule is added", () => {
+	const switchTo = (session: string, bead: string, from: string): Promise<Run> => runCli(root, ["bind", "--workspace", root.workspace, "--session", session, "--bead", bead, "--from", from, "--json"])
+
+	test("a generation pending before the switch is delivered once, as B's panel, on the next prompt; then silence", async () => {
+		await bindSession(root, SESSION)
+		expectSilent(await runHook(root, postCompact()))
+		const markerBefore = readFileSync(markerPath(root, SESSION))
+		expect((await switchTo(SESSION, OTHER_BEAD, BEAD)).exit).toBe(0)
+		// The switch is the binding write alone: the marker bytes and the pending generation are untouched.
+		expect(readFileSync(markerPath(root, SESSION)).equals(markerBefore)).toBe(true)
+		expect(generations(root, SESSION)).toEqual([[1, "pending"]])
+		const output = expectHook(await runHook(root, prompt()))
+		expect(output?.hookEventName).toBe("UserPromptSubmit")
+		const text = output?.additionalContext ?? ""
+		expect(text.startsWith(PANEL_HEAD)).toBe(true)
+		expect(text).toContain(`Bead: ${OTHER_BEAD} Another Bead`)
+		expect(text).not.toContain(`Bead: ${BEAD} `)
+		expect(generations(root, SESSION)).toEqual([[1, "delivered"]])
+		expectSilent(await runHook(root, prompt()))
+	})
+
+	test("after the switch, SessionStart compact delivers B's panel and startup guidance names B", async () => {
+		await bindSession(root, SESSION)
+		expect((await switchTo(SESSION, OTHER_BEAD, BEAD)).exit).toBe(0)
+		const compacted = expectHook(await runHook(root, compact()))
+		expect(compacted?.additionalContext.startsWith(PANEL_HEAD)).toBe(true)
+		expect(compacted?.additionalContext).toContain(`Bead: ${OTHER_BEAD} Another Bead`)
+		const recover = await runCli(root, ["recover", "--workspace", root.workspace, "--session", SESSION, "--json"])
+		expect(recover.exit).toBe(0)
+		expect(compacted?.additionalContext).toBe(resultOf(recover).resumePanel as string)
+		const started = expectHook(await runHook(root, startup()))
+		expect(started?.additionalContext).toContain(`Bound to Bead ${OTHER_BEAD} in ${root.workspace}`)
+		expect(started?.additionalContext).toContain(`msb-workflow bind --workspace ${root.workspace} --bead ${OTHER_BEAD} --session ${SESSION}`)
+		expect(started?.additionalContext).not.toContain(BEAD)
+	})
+
+	test("another session bound to A is untouched by this session's switch: its binding and marker bytes are identical and its deliveries still name A", async () => {
+		await bindSession(root, SESSION)
+		await bindSession(root, OTHER_SESSION)
+		expectSilent(await runHook(root, postCompact({ session_id: OTHER_SESSION })))
+		const otherBinding = readFileSync(bindingPath(root, OTHER_SESSION))
+		const otherMarker = readFileSync(markerPath(root, OTHER_SESSION))
+		expect((await switchTo(SESSION, OTHER_BEAD, BEAD)).exit).toBe(0)
+		expect(readFileSync(bindingPath(root, OTHER_SESSION)).equals(otherBinding)).toBe(true)
+		expect(readFileSync(markerPath(root, OTHER_SESSION)).equals(otherMarker)).toBe(true)
+		const other = expectHook(await runHook(root, prompt({ session_id: OTHER_SESSION })))
+		expect(other?.additionalContext).toContain(`Bead: ${BEAD} M1: fixture Bead`)
+		expect(other?.additionalContext).not.toContain(`Bead: ${OTHER_BEAD} `)
+		expect(expectHook(await runHook(root, startup({ session_id: OTHER_SESSION })))?.additionalContext).toContain(`Bound to Bead ${BEAD} in`)
+		expect(expectHook(await runHook(root, startup()))?.additionalContext).toContain(`Bound to Bead ${OTHER_BEAD} in`)
+		// A session that was never bound still finds nothing: the switch created no binding it could read.
+		expectSilent(await runHook(root, startup({ session_id: "session-3" })))
 	})
 })
 

@@ -33,6 +33,21 @@ sits beside the manifest test in
 source state only. Installation, activation, and merge are separate facts
 recorded in the Ticket #52 evidence, not claimed here.
 
+This source also carries the verified same-session task switch,
+`bind --from <saved-bead-id>` (the "Task switch" section below), which
+[Spec #51](https://github.com/nathanvale/dotfiles-private/issues/51)
+revision 4 (story 12, LKR-04) and
+[Ticket #56](https://github.com/nathanvale/dotfiles-private/issues/56)
+revision 2 (AC4) require. Spec #57 revision 5 defers that switch to "the
+explicit verified protocol" and its published text still reads "no flag
+overrides that refusal"; the switch here is not an override (it names the
+owner it replaces and changes nothing else), and it was implemented on Nathan's
+completion direction for Ticket #56. The Spec #57 amendment that admits it
+(revision 6, exact text in the task-switch handback) is a pending foreground
+write, so until it publishes this source runs ahead of its Spec on that one
+clause. Command identities, effect stances, Contract Core `1.0.0`, schema v3,
+and the marker are unchanged by the switch.
+
 ## Purpose and boundary
 
 Beads owns task state. Native `bd` owns Beads, dependencies, claims, human
@@ -67,7 +82,7 @@ complete mapping.
 | --- | --- | --- |
 | `checkpoint --help` | `--help` | Retained. Human usage text; the machine form is discovery. |
 | `checkpoint schema` | `--discover --json`, `result.bindingSchema` | Folded into discovery. |
-| `checkpoint write` (validate one checkpoint JSON object on stdin and write its session file) | none | Not carried. Every binding field is derived from verified owners; a deliberate same-session task switch is a later verified protocol under Spec #51. |
+| `checkpoint write` (validate one checkpoint JSON object on stdin and write its session file) | none | Not carried. Every binding field is derived from verified owners; the deliberate same-session task switch is `bind --from <saved-bead-id>` (the "Task switch" section), never a raw write. |
 | `checkpoint bind <GOAL.md> --agent-ledger <executable>` | `bind --workspace <path> --bead <id>` | Retained. The Agent Ledger Task and `GOAL.md` are replaced by one Bead in the selected `.beads` store. |
 | `checkpoint recover` | `recover --workspace <path>` | Retained. The panel comes from live `bd` reads, not from stored checkpoint fields. |
 | `hook` | `hook` | Retained. Adds the PreCompact, PostCompact, and UserPromptSubmit lifecycle and the marker. |
@@ -96,7 +111,7 @@ exist; discovery lists exactly these.
 | `msb-workflow.help` | `msb-workflow --help` | `inspect` | One usage line, one example, the command list, and the environment rules. |
 | `msb-workflow.discover` | `msb-workflow --discover --json` | `inspect` | The contract: name, versions, commands, exit meanings, machine mode, `logtape: true`, and the additive `bindingSchema`. |
 | `msb-workflow.inspect` | `msb-workflow inspect --workspace <absolute-path> [--session <id>]` | `inspect` | Checks the executable pin, the store identity, the state root, the diagnostics directory, and (with a session) the binding, the marker, the lock files, and the sessions directory when it exists. Names each failure with one repair. Writes no binding, marker, or lock file; in machine mode it writes its diagnostics run file, the accepted reading of "without writing". |
-| `msb-workflow.bind` | `msb-workflow bind --workspace <absolute-path> --bead <bead-id> [--session <id>] [--evidence <absolute-file>]` | `repository-local` | The one private write. Verifies the store and the Bead, takes the workspace lock then the session lock, reads any saved binding, and writes the binding atomically. Same owner refreshes; a different Bead, a different workspace, or malformed saved bytes refuses and preserves the saved bytes. No override flag exists. |
+| `msb-workflow.bind` | `msb-workflow bind --workspace <absolute-path> --bead <bead-id> [--session <id>] [--evidence <absolute-file>] [--from <bead-id>]` | `repository-local` | The one private write. Verifies the store and the Bead, takes the workspace lock then the session lock, reads any saved binding, and writes the binding atomically. Same owner refreshes; a different Bead, a different workspace, or malformed saved bytes refuses and preserves the saved bytes. No override flag exists. With `--from <saved-bead-id>` it is the verified same-session switch: an expected-owner compare-and-swap that replaces exactly the named saved Bead in the same workspace for an explicit session, then reads the binding back before reporting `switched`. |
 | `msb-workflow.recover` | `msb-workflow recover --workspace <absolute-path> [--session <id>]` | `inspect` | Reads this session's binding, verifies its stored workspace, repeats the store gate with the bound executable, reads the Bead and the Gates now, and returns the Resume Panel with one next safe action. Writes nothing but diagnostics. |
 | `msb-workflow.hook` | `msb-workflow hook` with the Harness event JSON on stdin | `repository-local` | Delivers session guidance, the availability check, the generation marker, or the Resume Panel for one Harness event. Harness JSON out, always exit `0`. |
 
@@ -117,10 +132,56 @@ Environment and arguments:
   canonical top level of that directory and there is no `--source` flag.
   `--evidence`, when given, must be a canonical regular file inside
   `sourceRepository`.
+- `--from <bead-id>` is accepted by `bind` alone and must differ from `--bead`
+  (equal values exit `2` before any I/O). It requires an explicit `--session`;
+  an identity that came only from `CODEX_SESSION_ID` refuses the switch before
+  any store read or lock.
 - No arguments exits `2` with one stderr line naming `--help`. Nothing ever
   prompts; stdin is read only by `hook`.
 - Every `bd` call runs with `BEADS_DIR=<workspace>/.beads`, a filtered
   environment, and a 20 second bound.
+
+## Task switch
+
+`bind --workspace <W> --bead <B> --from <A> --session <S>` is the one way this
+session's binding changes from Bead A to Bead B. It is a compare-and-swap on
+the saved owner, not an override: the same-owner refresh and every ordinary
+refusal are unchanged byte for byte when `--from` is absent.
+
+Order of checks, and the station each failure reaches:
+
+1. Before any I/O: `--from` must differ from `--bead` (`usage-refused`); the
+   session must be explicit (`binding-inherited-conflict`).
+2. Before any lock: the store gate and the read of B, exactly as an ordinary
+   bind reads them (`store-mismatch`, `bead-missing`, `beads-unavailable`).
+   B is verified before the saved binding is touched.
+3. Under the workspace lock then the session lock, the saved binding must be
+   readable (`state-unsafe`, `binding-invalid`), present (`binding-absent`),
+   in the same workspace (`binding-owner-conflict`; a workspace is never
+   switched), and must name exactly `--from` (`switch-from-mismatch`,
+   `DOMAIN_SWITCH_FROM_MISMATCH`, exit `3`, with `savedBeadId` in the result).
+4. Then the binding is replaced atomically and read back under the same locks.
+   A failure before the rename is `write-failed` (A stays saved); a failure
+   after it, or a read-back that is not the written binding, is
+   `write-unknown` with `recover` as the next action. Nothing is replayed.
+5. `switched` (`completed`, exit `0`) carries `result.previous` (`beadId`,
+   `beadObservedAt`, `observedAt`, `evidencePath` of the replaced owner),
+   `result.readBack: true`, and B's Resume Panel facts. Resume B only after
+   `recover` shows it.
+
+After the switch, `bind --bead A` (no `--from`) refuses
+`DOMAIN_BINDING_OWNERSHIP_CONFLICT` with `savedBeadId: B` and a repair that
+names the exact switch invocation; `recover`, `inspect`, `SessionStart
+compact`, and the next `UserPromptSubmit` are all built from B. A retry of a
+switch that already completed (for example after `UNAVAILABLE_STORAGE_BUSY`)
+sees saved B, not `--from A`, and returns `switch-from-mismatch` with
+`savedBeadId: B`: the caller learns the switch happened, and no second write
+occurs. The marker is untouched, so a generation pending before the switch is
+delivered once, as B's panel, on the next prompt. The helper writes no Beads
+and enforces no workflow state on A or B: checkpointing A and claiming B are
+skill and Stage Manager work through native `bd`. Two sessions and two
+workspaces cannot read or change each other's binding or marker, before or
+after a switch.
 
 ## Public envelope and exits
 
@@ -136,7 +197,7 @@ errors included, with the same exit code.
 | `0` | success | none (`causeCode` is `null`) |
 | `1` | internal | `INTERNAL_UNEXPECTED` (handoff, nothing written), `INTERNAL_WRITE_OUTCOME_UNKNOWN` (`transactionState: unknown`, next action `recover`), `INTERNAL_RENDER_FAILURE` (the fixed fallback envelope) |
 | `2` | usage | `USAGE_INVALID_INVOCATION` |
-| `3` | domain | `DOMAIN_STATE_ROOT_UNSAFE`, `DOMAIN_WORKSPACE_INVALID`, `DOMAIN_SESSION_INVALID`, `DOMAIN_SESSION_CONFLICT`, `DOMAIN_EXECUTABLE_INVALID`, `DOMAIN_STORE_MISMATCH`, `DOMAIN_STATE_UNSAFE`, `DOMAIN_BEAD_MISSING`, `DOMAIN_PREREQUISITE_FAILED`, `DOMAIN_SOURCE_REPOSITORY_MISSING`, `DOMAIN_EVIDENCE_INVALID`, `DOMAIN_BINDING_OWNERSHIP_CONFLICT`, `DOMAIN_SESSION_INHERITED_CONFLICT`, `DOMAIN_BINDING_ABSENT`, `DOMAIN_BINDING_WORKSPACE_MISMATCH` |
+| `3` | domain | `DOMAIN_STATE_ROOT_UNSAFE`, `DOMAIN_WORKSPACE_INVALID`, `DOMAIN_SESSION_INVALID`, `DOMAIN_SESSION_CONFLICT`, `DOMAIN_EXECUTABLE_INVALID`, `DOMAIN_STORE_MISMATCH`, `DOMAIN_STATE_UNSAFE`, `DOMAIN_BEAD_MISSING`, `DOMAIN_PREREQUISITE_FAILED`, `DOMAIN_SOURCE_REPOSITORY_MISSING`, `DOMAIN_EVIDENCE_INVALID`, `DOMAIN_BINDING_OWNERSHIP_CONFLICT`, `DOMAIN_SESSION_INHERITED_CONFLICT`, `DOMAIN_SWITCH_FROM_MISMATCH`, `DOMAIN_BINDING_ABSENT` (`recover`, and `bind --from` with nothing saved), `DOMAIN_BINDING_WORKSPACE_MISMATCH` |
 | `4` | schema | `SCHEMA_BINDING_INVALID` (the saved binding is not one bounded schema-v3 object; the bytes are preserved) |
 | `75` | unavailable | `UNAVAILABLE_BEADS_READ` (retryable, 1,000 ms hint), `UNAVAILABLE_STORAGE_BUSY` (retryable, 2,000 ms hint), `UNAVAILABLE_WRITE_FAILED` (retryable, nothing changed), `UNAVAILABLE_LOCK_UNSUPPORTED` (not retryable) |
 
@@ -473,7 +534,9 @@ Helper-side recovery, by cause:
 | `UNAVAILABLE_BEADS_READ`, `UNAVAILABLE_WRITE_FAILED` | Repair the named cause (store present, no other `bd` holding it, private directory owner and mode, free space), then repeat the same command. |
 | `SCHEMA_BINDING_INVALID` | Read the named file, move or delete it, then bind again. The helper never rewrites a malformed binding. |
 | `DOMAIN_STATE_UNSAFE`, an unsafe lock file in `inspect` | Repair the named entry (owner, mode `0600` or `0700`, no symlink, one link) or remove it; a removed lock file is recreated `0600` on the next locked write. |
-| `DOMAIN_BINDING_OWNERSHIP_CONFLICT` | Recover the saved binding and continue that Bead, or use a different session for the new Bead. No flag replaces a saved owner. |
+| `DOMAIN_BINDING_OWNERSHIP_CONFLICT` | Recover the saved binding and continue that Bead, or use a different session for the new Bead. No flag replaces a saved owner without naming it: a deliberate change of Bead in the same workspace is `bind --bead <new> --from <saved> --session <id>` (the "Task switch" section); a saved workspace is never switched. |
+| `DOMAIN_SWITCH_FROM_MISMATCH` | Run `recover` to read the saved owner. A saved Bead equal to the requested `--bead` means the switch already happened; any other saved Bead must be named in `--from` before it can be replaced. Nothing was written. |
+| `DOMAIN_BINDING_ABSENT` from `bind --from` | There is no saved owner to replace; bind this session without `--from`. |
 | Uncertain marker generations | Run `recover`; the next prompt hook emits the notice, not the panel, and settles them. |
 
 Rollback of the helper: there is nothing to unwind in Beads because the helper
