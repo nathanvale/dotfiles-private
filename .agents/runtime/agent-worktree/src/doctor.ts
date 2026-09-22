@@ -184,9 +184,7 @@ function doctorMapFromDiscoveryWithContext(
 ): DoctorMap {
 	const issueChecks = checksFromDiscoveryIssues(discovery);
 	const strays = findStrayWorktrees(discovery);
-	const strayWorktreeCountKnown = !discovery.issues.some(
-		(issue) => issue.code === "worktree_list_failed",
-	);
+	const strayWorktreeCountKnown = isStrayWorktreeCountKnown(discovery);
 	const checks: DoctorCheck[] = [
 		repoCheck(discovery),
 		worktreesCheck(discovery),
@@ -301,12 +299,15 @@ function strayWorktreesCheck(
 	discovery: RepoDiscovery,
 	strays: readonly DiscoveredWorktree[],
 ): DoctorCheck {
-	if (discovery.issues.some((issue) => issue.code === "worktree_list_failed")) {
+	if (!isStrayWorktreeCountKnown(discovery)) {
 		return {
 			id: "stray_worktrees",
 			owner: "discovery",
 			status: "unknown",
-			summary: "Stray worktrees unknown until the worktree list can be read.",
+			summary:
+				discovery.mainOwnerRoot === undefined
+					? "Stray worktrees unknown until repo ownership is resolved."
+					: "Stray worktrees unknown until the worktree list can be read.",
 			blockers: [],
 			nextActions: ["doctor"],
 		};
@@ -325,6 +326,13 @@ function strayWorktreesCheck(
 		blockers: [],
 		nextActions: [],
 	};
+}
+
+function isStrayWorktreeCountKnown(discovery: RepoDiscovery): boolean {
+	return (
+		discovery.mainOwnerRoot !== undefined &&
+		!discovery.issues.some((issue) => issue.code === "worktree_list_failed")
+	);
 }
 
 function storeCheck(

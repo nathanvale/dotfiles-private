@@ -293,20 +293,21 @@ export async function discoverRepo(
 	}
 
 	const mainOwnerRoot =
-		worktrees.find((worktree) => worktree.isMain)?.path ?? gitRoot;
+		worktrees.find((worktree) => worktree.isMain)?.path ??
+		(isolation === "main" ? gitRoot : undefined);
 	const activeWorktree =
 		findActiveWorktree(requestedRoot, worktrees) ??
 		worktrees.find((worktree) => worktree.path === gitRoot);
-	const staleDirs = await findStaleWorktreeDirs(mainOwnerRoot, worktrees).catch(
-		() => {
-			issues.push({
-				code: "stale_dir_scan_failed",
-				status: "warn",
-				summary: "Stale worktree directory scan failed.",
-			});
-			return [] as string[];
-		},
-	);
+	const staleDirs = mainOwnerRoot
+		? await findStaleWorktreeDirs(mainOwnerRoot, worktrees).catch(() => {
+				issues.push({
+					code: "stale_dir_scan_failed",
+					status: "warn",
+					summary: "Stale worktree directory scan failed.",
+				});
+				return [] as string[];
+			})
+		: [];
 
 	return {
 		requestedRoot,
@@ -319,7 +320,9 @@ export async function discoverRepo(
 		staleDirs,
 		currentBranch: branchResult.ok ? branchResult.stdout.trim() : undefined,
 		defaultBranch,
-		storeRoot: resolveAgentWorktreeStoreRoot(mainOwnerRoot, options.env),
+		storeRoot: mainOwnerRoot
+			? resolveAgentWorktreeStoreRoot(mainOwnerRoot, options.env)
+			: undefined,
 		issues,
 	};
 }

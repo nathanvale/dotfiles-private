@@ -209,6 +209,46 @@ branch refs/heads/feat/x
 		expect(discovery.isolation).toBe("linked_worktree");
 	});
 
+	test("leaves owner and store unknown in a linked checkout when worktree list fails", async () => {
+		const outputs = linkedRepoGitOutputs("/repo", "/repo/.worktrees/feat-x");
+		delete outputs["git worktree list --porcelain"];
+
+		const discovery = await discoverRepo({
+			cwd: "/repo/.worktrees/feat-x",
+			run: fakeGitRunner(outputs),
+		});
+
+		expect(discovery.isolation).toBe("linked_worktree");
+		expect(discovery.mainOwnerRoot).toBeUndefined();
+		expect(discovery.storeRoot).toBeUndefined();
+		expect(discovery.staleDirs).toEqual([]);
+		expect(discovery.issues).toContainEqual({
+			code: "worktree_list_failed",
+			status: "unknown",
+			summary: "Git worktree list could not be read.",
+		});
+	});
+
+	test("uses gitRoot as owner in a main checkout when worktree list fails", async () => {
+		const outputs = mainRepoGitOutputs("/repo");
+		delete outputs["git worktree list --porcelain"];
+
+		const discovery = await discoverRepo({
+			cwd: "/repo",
+			env: { XDG_STATE_HOME: "/state" },
+			run: fakeGitRunner(outputs),
+		});
+
+		expect(discovery.isolation).toBe("main");
+		expect(discovery.mainOwnerRoot).toBe("/repo");
+		expect(discovery.storeRoot).toBe("/state/agent-worktree/816fc349d3faebf8");
+		expect(discovery.issues).toContainEqual({
+			code: "worktree_list_failed",
+			status: "unknown",
+			summary: "Git worktree list could not be read.",
+		});
+	});
+
 	test("classifies a submodule before treating differing git dirs as linked", async () => {
 		const outputs = {
 			...mainRepoGitOutputs("/repo"),

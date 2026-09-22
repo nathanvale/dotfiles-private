@@ -57,6 +57,10 @@ describe("agent-worktree doctor", () => {
 		expect(map.status).toBe("blocked");
 		expect(map.mutationReadiness).toBe("blocked");
 		expect(map.nextActions).toContain("handoff");
+		expect(map.repo.strayWorktreeCount).toBeUndefined();
+		expect(
+			map.checks.find((check) => check.id === "stray_worktrees")?.status,
+		).toBe("unknown");
 	});
 
 	test("keeps worktree list failures as unknown readable data", () => {
