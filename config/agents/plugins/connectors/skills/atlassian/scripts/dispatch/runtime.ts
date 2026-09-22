@@ -1,14 +1,13 @@
 // Production adapters for the dispatcher: the route-backed MCPorter transport,
 // trusted site origin and principal from the product item's metadata, the
 // private write journal, and the durable live-parity attestation store.
-import { lstatSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { bindCredential, bindingChannel, type CredentialBinding, TENANT_PATTERN } from "../custody/index.ts";
 import { OPERATIONS, PRODUCTS, type OperationId } from "./contract.ts";
 import type { Dependencies, ParityAttestation, ParityEvidence, ParityRequest, Transport, TransportResult } from "./engine.ts";
 import { canonicalDigest, openJournal } from "./journal.ts";
 import { translateFailure } from "./translate.ts";
+import { ownedDirectory, readPrivateFile, stateRoot, writePrivateFile } from "../../../../bin/private-state.ts";
 import { planDispatcherRoute, type RoutePlan } from "../../../../bin/provider-route.ts";
 import { safeEnvironment } from "../../../../bin/safe-environment.ts";
 
@@ -76,12 +75,6 @@ export function routeTransport(env: Environment, tenant: string): Transport {
 const HEX64 = /^[0-9a-f]{64}$/;
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isInteger(value) && value >= 0;
 
-function stateRoot(env: Environment): string {
-	const xdg = env.XDG_STATE_HOME ?? "";
-	if (path.isAbsolute(xdg)) return xdg;
-	return path.join(env.HOME ?? os.homedir(), ".local", "state");
-}
-
 function parityDirectory(env: Environment, tenant: string): string {
 	return path.join(stateRoot(env), "connectors", "atlassian", tenant, "parity");
 }
@@ -112,26 +105,18 @@ function asAttestation(value: unknown): ParityAttestation | null {
 export function parityStore(env: Environment): Pick<Dependencies, "parity" | "attestParity"> {
 	return {
 		async parity(request) {
-			const file = path.join(parityDirectory(env, request.tenant), attestationName(request));
-			let metadata: ReturnType<typeof lstatSync>;
-			try {
-				metadata = lstatSync(file);
-			} catch {
-				return { status: "unproven" };
-			}
-			if (!metadata.isFile() || metadata.isSymbolicLink() || metadata.uid !== os.userInfo().uid || (metadata.mode & 0o7777) !== 0o600) return { status: "unproven" };
-			const attestation = asAttestation(parseJson(readFileSync(file, "utf8")));
+			const read = readPrivateFile(path.join(parityDirectory(env, request.tenant), attestationName(request)));
+			if (!read.ok) return { status: "unproven" };
+			const attestation = asAttestation(parseJson(read.text));
 			const evidence: ParityEvidence = attestation ? { status: "attested", attestation } : { status: "unproven" };
 			return evidence;
 		},
 		async attestParity(attestation) {
 			const directory = parityDirectory(env, attestation.tenant);
-			mkdirSync(directory, { recursive: true, mode: 0o700 });
-			const metadata = lstatSync(directory);
-			if (!metadata.isDirectory() || metadata.isSymbolicLink() || metadata.uid !== os.userInfo().uid) throw new Error("state-invalid: the parity directory must be an owned directory");
-			const temp = path.join(directory, `.${crypto.randomUUID()}.tmp`);
-			writeFileSync(temp, `${JSON.stringify(attestation)}\n`, { mode: 0o600, flag: "wx" });
-			renameSync(temp, path.join(directory, attestationName(attestation)));
+			const owned = ownedDirectory(directory);
+			if (!owned.ok) throw new Error(`state-invalid: the parity directory must be an owned directory (${owned.reason})`);
+			const written = writePrivateFile(path.join(directory, attestationName(attestation)), `${JSON.stringify(attestation)}\n`);
+			if (!written.ok) throw new Error(`state-invalid: the attestation could not be written (${written.reason})`);
 		},
 	};
 }

@@ -8,9 +8,8 @@
 // process, creates the private log path, and execs the pinned bridge with a
 // literal header template that the bridge expands. Bearer is a different
 // credential type and is never sent or auto-detected.
-import { chmodSync, lstatSync, mkdirSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
+import { ownedDirectory, stateRoot } from "../../../bin/private-state.ts";
 import { boundItem, credentialHelper, credentialReference, invocationEnvironment, type ProviderInvocation, providerInvocation } from "./custody/index.ts";
 import { atlassianProcess, type ProviderProcess, singleLine } from "./provider-process.ts";
 
@@ -23,12 +22,7 @@ const HEADER_TEMPLATE = "Authorization: Basic ${ATLASSIAN_BASIC}";
 const KEY_ENV = "ATLASSIAN_API_KEY";
 
 function privateDirectory(directory: string): void {
-	mkdirSync(directory, { recursive: true, mode: 0o700 });
-	const metadata = lstatSync(directory);
-	if (!metadata.isDirectory() || metadata.uid !== os.userInfo().uid) {
-		fail("log-path-invalid", "the bridge log directory must be an owned directory");
-	}
-	chmodSync(directory, 0o700);
+	if (!ownedDirectory(directory).ok) fail("log-path-invalid", "the bridge log directory must be an owned directory");
 }
 
 function bridgeExecutable(): string {
@@ -48,9 +42,7 @@ function injectedPhase(invocation: ProviderInvocation): never {
 	const bridge = bridgeExecutable();
 	const token = process.env[KEY_ENV];
 	if (!singleLine(token)) fail("credential-invalid", "the injected credential is unavailable or malformed");
-	const stateHome = process.env.XDG_STATE_HOME ?? "";
-	const stateRoot = path.isAbsolute(stateHome) ? stateHome : path.join(process.env.HOME ?? "", ".local", "state");
-	const privateRoot = path.join(stateRoot, "atlassian-mcporter");
+	const privateRoot = path.join(stateRoot(process.env), "atlassian-mcporter");
 	const logPath = path.join(privateRoot, "hyper-mcp-remote");
 	privateDirectory(privateRoot);
 	privateDirectory(logPath);
