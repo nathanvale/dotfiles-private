@@ -3,7 +3,7 @@
 // tenant slug and product in the environment, fakes on PATH, the credential
 // helper below HOME. Two static routes: one per product.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFileSync, realpathSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, realpathSync, statSync, symlinkSync } from "node:fs";
 import path from "node:path";
 import { AMBIENT_SENTINEL, createHarness, type Harness, itemJson, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
 
@@ -58,6 +58,20 @@ describe("Community provider process", () => {
 		const result = await runProvider(COMMUNITY, ["--preflight"]);
 		expect([result.code, result.stdout, result.stderr]).toEqual([0, "", ""]);
 		expect(wrapperLines()).toEqual(["op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json"]);
+		expect(harness.has("community-provider.json")).toBe(false);
+		const outbox = path.join(harness.root, "connectors", "atlassian", "example", "outbox");
+		expect((statSync(outbox).mode & 0o777).toString(8)).toBe("700");
+	});
+
+	test("preflight refuses a symlinked Upload Outbox before starting the package", async () => {
+		harness.write("item.json", FULL_ITEM);
+		const outbox = path.join(harness.root, "connectors", "atlassian", "example", "outbox");
+		mkdirSync(path.dirname(outbox), { recursive: true });
+		const outside = path.join(harness.root, "outside");
+		mkdirSync(outside);
+		symlinkSync(outside, outbox);
+		const result = await runProvider(COMMUNITY, ["--preflight"]);
+		expect([result.code, result.stdout, result.stderr.includes("atlassian-provider:error:outbox-unavailable:")]).toEqual([4, "", true]);
 		expect(harness.has("community-provider.json")).toBe(false);
 	});
 

@@ -54,7 +54,9 @@ function inBandError(data: unknown): string | undefined {
 	if (typeof payload !== "object" || payload === null || Array.isArray(payload)) return undefined;
 	const record = payload as Record<string, unknown>;
 	const keys = Object.keys(record);
-	return typeof record.error === "string" && keys.length <= 2 && keys.every((key) => key === "error" || key === "success") ? record.error : undefined;
+	if (typeof record.error !== "string") return undefined;
+	if (record.success === false) return record.error;
+	return keys.length === 1 ? record.error : undefined;
 }
 
 // The Provider's local readiness operation, run before MCPorter starts.

@@ -635,7 +635,7 @@ describe("journaled writes", () => {
 		const historicalDeps = deps({ transport: historical.transport });
 		const oldPreview = previewData(await dispatch(["page.create", "--input", JSON.stringify(input), "--preview"], historicalDeps));
 		expect(oldPreview.objectIdentity).toMatch(/^space:ENG:create:root:[0-9a-f]{16}$/);
-		expect(historical.calls).toEqual([{ server: CC, tool: "confluence_search", args: { query: 'type = page AND title = "Baseline-safe page"', limit: 20 } }]);
+		expect(historical.calls).toEqual([{ server: CC, tool: "confluence_search", args: { query: 'type = page AND space = "ENG" AND title = "Baseline-safe page"', limit: 20 } }]);
 		const oldApply = await dispatch(["page.create", "--input", JSON.stringify(input), "--apply", oldPreview.previewId], historicalDeps);
 		const oldRun = (oldApply.result.data as { runId: string }).runId;
 		expect((await dispatch(["adjudicate", "--run", oldRun, "--input", JSON.stringify(input)], historicalDeps)).result.causeCode).toBe("refused-evidence");
@@ -748,7 +748,7 @@ describe("journaled writes", () => {
 		const preview = previewData(await dispatch(["page.create", "--input", JSON.stringify(input), "--preview"], dependencies));
 		expect(preview.objectIdentity).toMatch(/^space:ENG:create:root:[0-9a-f]{16}$/);
 		expect(preview.arguments).toEqual({ space_key: "ENG", title: "Roadmap draft", content: "x", content_format: "markdown" });
-		expect(calls.map((call) => [call.tool, call.args])).toEqual([["confluence_search", { query: 'type = page AND title = "Roadmap draft"', limit: 20 }]]);
+		expect(calls.map((call) => [call.tool, call.args])).toEqual([["confluence_search", { query: 'type = page AND space = "ENG" AND title = "Roadmap draft"', limit: 20 }]]);
 		const applied = await dispatch(["page.create", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
 		expect([applied.result.outcome, applied.result.effects.completed]).toEqual(["success", ["confluence-content:556"]]);
 		const legacy = await dispatch(["page.create", "--input", '{"space":{"key":"ENG"},"title":"Roadmap draft","body":"x"}', "--preview"], dependencies);
@@ -819,6 +819,23 @@ describe("journaled writes", () => {
 		const missing = await dispatch(["issue.comment.update", "--input", JSON.stringify({ ...input, commentId: "1" }), "--preview"], dependencies);
 		expect([missing.result.outcome, missing.result.causeCode, missing.result.repairAction]).toEqual(["failed", "not-found", "the issue has no comment with that id among its first 100 comments"]);
 		expect(calls.filter((call) => call.tool === "jira_edit_comment")).toHaveLength(1);
+	});
+
+	test("issue.comment.update refuses a missing comment timestamp at preview and apply before a write", async () => {
+		let updated: string | undefined;
+		const { transport, calls } = fakeTransport({
+			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { result: JSON.stringify({ key: "PROJ-1", comments: [{ id: "454166", body: "old", ...(updated === undefined ? {} : { updated }) }] }) } }),
+		});
+		const dependencies = deps({ transport });
+		const input = { issueKey: "PROJ-1", commentId: "454166", body: "edited" };
+		const missingAtPreview = await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--preview"], dependencies);
+		expect([missingAtPreview.result.causeCode, missingAtPreview.result.repairAction]).toEqual(["capability-unavailable", "the comment read exposes no updated timestamp to bind the revision"]);
+		updated = "u1";
+		const preview = previewData(await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--preview"], dependencies));
+		updated = undefined;
+		const missingAtApply = await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
+		expect([missingAtApply.result.causeCode, missingAtApply.result.repairAction]).toEqual(["capability-unavailable", "the comment read exposes no updated timestamp to bind the revision"]);
+		expect(calls.some((call) => call.tool === "jira_edit_comment")).toBe(false);
 	});
 
 	test("issue.attach sends one absolute local file on the update tool and completes only from a new attachment id in read-back", async () => {
@@ -1074,7 +1091,9 @@ describe("historical records from the retired Official route", () => {
 		const secondInput = { ...COMMENT, body: "a second retired preview" };
 		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(secondInput), "--apply", openPreview.previewId], dependencies);
 		expect([applied.result.outcome, applied.result.causeCode, applied.result.exitCode, applied.result.repairAction]).toEqual(["refused", "refused-preview", 3, `${REPAIR_TEXT["refused-preview"]}; preview-provider-retired`]);
-		expect(calls.map((call) => call.tool)).toEqual(["jira_get_issue"]);
+		// Refused before any binding or provider call: the retired provider is read
+		// from the preview itself, ahead of the preparatory jira_get_issue read.
+		expect(calls).toEqual([]);
 		const unlocked = await dispatch(["unlock", "--run", openPreview.previewId], dependencies);
 		expect([unlocked.result.outcome, unlocked.result.causeCode, unlocked.result.repairAction]).toEqual(["refused", "refused-preview", `${REPAIR_TEXT["refused-preview"]}; preview-provider-retired`]);
 		expect(fileBytes(previewsDir())).toEqual(before);
@@ -1261,8 +1280,17 @@ describe("production adapters", () => {
 		const result = await harness.run(["--tenant", "example", "page.get", "--input", '{"pageId":"123"}', "--json"], {}, DISPATCH);
 		expect([result.code, result.stderr]).toEqual([3, ""]);
 		const envelope = parse(result.stdout);
-		expect([envelope.outcome, envelope.causeCode, envelope.data, envelope.repairAction]).toEqual(["failed", "not-found", null, REPAIR_TEXT["not-found"]]);
+		expect([envelope.outcome, envelope.causeCode, envelope.data, envelope.repairAction]).toEqual(["failed", "failed-unknown", null, REPAIR_TEXT["failed-unknown"]]);
 		expect(result.stdout).not.toContain("Failed to retrieve");
+	});
+
+	test("an in-band failure with extra provider fields is still an error", async () => {
+		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 1));
+		canned(CC, { confluence_get_page: { result: JSON.stringify({ success: false, error: "HTTP 403 Forbidden", requestId: "opaque" }) } });
+		const result = await harness.run(["--tenant", "example", "page.get", "--input", '{"pageId":"123"}', "--json"], {}, DISPATCH);
+		const envelope = parse(result.stdout);
+		expect([result.code, envelope.causeCode, envelope.data]).toEqual([3, "refused-auth", null]);
+		expect(result.stdout).not.toContain("opaque");
 	});
 
 	test("hostile provider text in a real tool error is translated at the transport seam and never reaches stdout or stderr", async () => {

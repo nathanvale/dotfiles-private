@@ -168,7 +168,8 @@ async function prepareComment(route: Route, ctx: PreparedContext, issueKey: stri
 	if ("outcome" in read) return read;
 	const comment = read.issue.comments.find((entry) => entry.id === commentId);
 	if (comment === undefined) return { outcome: refusal("not-found", "the issue has no comment with that id among its first 100 comments") };
-	return { ctx: { ...ctx, revision: comment.updated ?? null } };
+	if (comment.updated === undefined) return { outcome: refusal("capability-unavailable", "the comment read exposes no updated timestamp to bind the revision") };
+	return { ctx: { ...ctx, revision: comment.updated } };
 }
 
 // The page version is the revision; the current title is kept for an update
@@ -361,6 +362,17 @@ function receiptOutcome(receipt: Receipt, attempt: Attempt | null): Outcome {
 }
 
 export async function applyFlow(session: Session, spec: OperationSpec, input: WriteInput, previewId: string): Promise<Outcome> {
+	// A preview recorded for a Provider this route no longer has is refused
+	// before any binding or provider call: `writeContext` below binds
+	// credentials, lists the live schema, and runs preparatory reads, none of
+	// which a retired preview may cause. `recordIntent` re-checks the same
+	// condition under the object lock as the atomic, authoritative guard.
+	try {
+		const recorded = session.deps.journal(session.tenant).preview(previewId);
+		if (recorded.provider !== PROVIDER) throw new JournalError("preview-provider-retired", "the preview was recorded for a Provider this route no longer has; preview again");
+	} catch (error) {
+		return journalRefusal(error);
+	}
 	const context = await writeContext(session, spec, input);
 	if ("cause" in context) return context;
 	let attempt: Attempt | null = null;

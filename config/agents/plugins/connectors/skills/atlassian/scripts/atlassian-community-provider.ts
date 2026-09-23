@@ -33,9 +33,9 @@ function main(argv: string[]): never {
 	if (!preflight) refuseArguments(argv);
 	// This full-item read and comparison happens before uvx is probed or spawned.
 	const ready = prerequisites();
-	if (preflight) process.exit(0);
 	const outbox = outboxDirectory(ready.invocation.tenant, process.env);
 	if (!ownedDirectory(outbox).ok) fail("outbox-unavailable", "the tenant's private upload outbox could not be prepared");
+	if (preflight) process.exit(0);
 	process.chdir(outbox);
 	const environment = { ...cleanEnvironment(), ...productEnvironment(ready.invocation.product, ready.item, ready.credential) };
 	replaceProcess(ready.uvx, ["uvx", "--system-certs", "--no-env-file", "--from", PACKAGE_PIN, "mcp-atlassian"], environment);

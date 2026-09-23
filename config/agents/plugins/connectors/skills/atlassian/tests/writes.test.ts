@@ -147,11 +147,30 @@ describe("effects and read-back", () => {
 		// Observed live: numeric ids and no destination, so the name is the status reached.
 		expect(transitionTo(wrapped([{ id: 2, name: "Backlog", to_status: null }, { id: 4, name: "In Progress", to_status: null }]), "in progress")).toBe("4");
 		expect(transitionTo(wrapped([{ id: 4, name: "In Progress", to_status: null }]), "Done")).toBeUndefined();
-		expect(readBackPlan("page.create", { ...PAGE, title: 'T "quoted"' })).toEqual({ tool: "confluence_search", args: { query: 'type = page AND title = "T \\"quoted\\""', limit: 20 } });
+		// A destination's category is not its name: a same-category "In Review" listed
+		// first must not shadow the real "In Progress" destination.
+		const sameCategoryTransitions = wrapped([{ id: "21", name: "Send to Review", to_status: { name: "In Review", category: "In Progress" } }, { id: "11", name: "Start Progress", to_status: { name: "In Progress", category: "In Progress" } }]);
+		expect(transitionTo(sameCategoryTransitions, "In Progress")).toBe("11");
+		expect(readBackPlan("page.create", { ...PAGE, title: 'T "quoted"' })).toEqual({ tool: "confluence_search", args: { query: 'type = page AND space = "ENG" AND title = "T \\"quoted\\""', limit: 20 } });
 		expect(readBackPlan("page.update", { pageId: "123", body: "b" })).toEqual({ tool: "confluence_get_page", args: { page_id: "123", include_metadata: true } });
 		expect(readBackPlan("page.delete", { pageId: "123" })).toEqual({ tool: "confluence_get_page", args: { page_id: "123", include_metadata: true } });
 		expect(readBackPlan("page.comment", { pageId: "123", body: "b" })).toEqual({ tool: "confluence_get_comments", args: { page_id: "123" } });
 		expect(readBackPlan("page.attach", PAGE_ATTACH)).toEqual({ tool: "confluence_get_attachments", args: { content_id: "123" } });
+	});
+
+	test("page.create confines the first 20 search results to its requested space", () => {
+		expect(readBackPlan("page.create", { spaceKey: "DOCS", title: "Roadmap", body: "b" })).toEqual({
+			tool: "confluence_search",
+			args: { query: 'type = page AND space = "DOCS" AND title = "Roadmap"', limit: 20 },
+		});
+	});
+
+	test("transition preview treats a category match as a different status", () => {
+		expect(baselineFromReply("issue.transition", { issueKey: "PROJ-1", toStatus: "In Progress" }, wrapped({
+			key: "PROJ-1",
+			status: { name: "In Review", category: "In Progress" },
+			updated: "u1",
+		}))).toMatchObject({ kind: "observed", baseline: { effectIds: ["PROJ-1"] } });
 	});
 
 	test("read-back evidence is found, absent, or indeterminate, and only an unchanged revision proves absence after a send", () => {
@@ -213,6 +232,8 @@ describe("effects and read-back", () => {
 		const stateBaseline = { effectIds: ["PROJ-1"], commentIds: [], revision: "0".repeat(64) };
 		expect(readBackEvidence("issue.transition", { issueKey: "PROJ-1", toStatus: "In Progress" }, never, wrapped({ key: "PROJ-1", status: { name: "In Progress", category: "In Progress", color: "yellow" }, updated: "t2" }), stateBaseline)).toEqual({ kind: "found", effects: [{ kind: "jira-issue", id: "PROJ-1" }] });
 		expect(readBackEvidence("issue.transition", { issueKey: "PROJ-1", toStatus: "In Progress" }, (observed) => observed === "t1", wrapped({ key: "PROJ-1", status: { name: "Backlog" }, updated: "t1" }), stateBaseline)).toEqual({ kind: "absent", revisionUnchanged: true });
+		// A live status's category equalling the requested text must not settle the transition: "In Review" is in the "In Progress" category, but it is not "In Progress".
+		expect(readBackEvidence("issue.transition", { issueKey: "PROJ-1", toStatus: "In Progress" }, (observed) => observed === "t1", wrapped({ key: "PROJ-1", status: { name: "In Review", category: "In Progress" }, updated: "t1" }), stateBaseline)).toEqual({ kind: "absent", revisionUnchanged: true });
 		expect(readBackEvidence("issue.assign", { issueKey: "PROJ-1", assignee: "service@example.invalid" }, never, wrapped({ key: "PROJ-1", assignee: { display_name: "Service", email: "service@example.invalid" }, updated: "t2" }), stateBaseline)).toEqual({ kind: "found", effects: [{ kind: "jira-issue", id: "PROJ-1" }] });
 		expect(readBackEvidence("issue.assign", { issueKey: "PROJ-1" }, never, wrapped({ key: "PROJ-1", assignee: { display_name: "Unassigned" }, updated: "t2" }), stateBaseline)).toEqual({ kind: "found", effects: [{ kind: "jira-issue", id: "PROJ-1" }] });
 		expect(readBackEvidence("issue.assign", { issueKey: "PROJ-1" }, (observed) => observed === "t1", wrapped({ key: "PROJ-1", assignee: { display_name: "Service" }, updated: "t1" }), stateBaseline)).toEqual({ kind: "absent", revisionUnchanged: true });
@@ -263,7 +284,7 @@ describe("effects and read-back", () => {
 		const commentBaseline = baselineFromReply("issue.comment.update", COMMENT_UPDATE, wrapped({ key: "PROJ-1", comments: [{ id: "454166", body: "old body", updated: "u1" }] }));
 		expect(commentBaseline).toMatchObject({ kind: "observed", baseline: { effectIds: ["PROJ-1"], commentIds: ["454166"] } });
 		expect((commentBaseline as { baseline: { revision: string } }).baseline.revision).toMatch(/^[0-9a-f]{64}$/);
-		expect(baselineFromReply("issue.comment.update", COMMENT_UPDATE, wrapped({ key: "PROJ-1", comments: [{ id: "454166", body: "Edited body!" }] }))).toEqual({ kind: "refused", reason: "the comment already holds the requested body; nothing to change" });
+		expect(baselineFromReply("issue.comment.update", COMMENT_UPDATE, wrapped({ key: "PROJ-1", comments: [{ id: "454166", body: "Edited body!", updated: "u1" }] }))).toEqual({ kind: "refused", reason: "the comment already holds the requested body; nothing to change" });
 		expect(baselineFromReply("issue.comment.update", COMMENT_UPDATE, wrapped({ key: "PROJ-1", comments: [{ id: "1", body: "x" }] }))).toEqual({ kind: "indeterminate", reason: "the Jira reply names no such comment on this issue" });
 		expect(baselineFromReply("issue.attach", ATTACH, wrapped({ key: "PROJ-1", attachments: [{ id: "10499", filename: "report.pdf" }, { id: "10501", filename: "other.pdf" }] }))).toEqual({ kind: "observed", baseline: { effectIds: ["10499"], commentIds: [], revision: null } });
 		expect(baselineFromReply("issue.delete", { issueKey: "PROJ-1" }, wrapped({ key: "PROJ-1", summary: "x", updated: "t1" }))).toMatchObject({ kind: "observed", baseline: { effectIds: ["PROJ-1"], commentIds: [] } });
@@ -277,6 +298,23 @@ describe("effects and read-back", () => {
 		expect(baselineFromReply("page.update", { pageId: "123", body: "new" }, { id: "999", version: 7 })).toEqual({ kind: "indeterminate", reason: "the page read names a different page" });
 		expect(baselineFromReply("page.delete", { pageId: "123" }, { id: "123", version: 7 })).toEqual({ kind: "observed", baseline: { effectIds: ["123"], commentIds: [], revision: "7" } });
 		expect(baselineFromReply("page.comment", { pageId: "123", body: "same comment" }, [{ id: "4", body: "same comment" }])).toEqual({ kind: "observed", baseline: { effectIds: ["123"], commentIds: ["4"], revision: null } });
-		expect(baselineFromReply("page.attach", PAGE_ATTACH, wrapped({ attachments: [{ id: "att1", title: "report.pdf" }] }))).toEqual({ kind: "observed", baseline: { effectIds: ["att1"], commentIds: [], revision: null } });
+		// Confluence versions a same-named attachment under its existing id, which no read-back could ever tell apart from "nothing uploaded"; refuse before that write is sent.
+		expect(baselineFromReply("page.attach", PAGE_ATTACH, wrapped({ attachments: [{ id: "att1", title: "report.pdf" }] }))).toEqual({ kind: "refused", reason: "the page already has an attachment with this file name; run page.attachment.delete first" });
+		expect(baselineFromReply("page.attach", PAGE_ATTACH, wrapped({ attachments: [{ id: "att1", title: "other.pdf" }] }))).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: [], revision: null } });
+	});
+
+	test("comment edit baseline requires the named comment's updated timestamp", () => {
+		const missingTimestamp = wrapped({ key: "PROJ-1", updated: "issue-u1", comments: [{ id: "454166", body: "old body" }] });
+		expect(baselineFromReply("issue.comment.update", COMMENT_UPDATE, missingTimestamp)).toEqual({
+			kind: "indeterminate",
+			reason: "the comment read exposes no updated timestamp to bind the revision",
+		});
+	});
+
+	test("page attachment preview refuses an existing file name even when its id is missing", () => {
+		expect(baselineFromReply("page.attach", PAGE_ATTACH, wrapped({ attachments: [{ title: "report.pdf" }] }))).toEqual({
+			kind: "refused",
+			reason: "the page already has an attachment with this file name; run page.attachment.delete first",
+		});
 	});
 });

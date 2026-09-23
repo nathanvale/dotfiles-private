@@ -377,10 +377,13 @@ function attachmentId(record: Record<string, unknown>): string | undefined {
 }
 
 // Jira names an attachment by `filename`, Confluence by `title`.
+function attachmentNameMatches(record: Record<string, unknown>, file: string): boolean {
+	return stringAt(record, "filename", "title", "name") === path.basename(file);
+}
+
 function attachmentRecord(record: Record<string, unknown>, file: string): string | undefined {
-	const name = stringAt(record, "filename", "title", "name");
 	const id = attachmentId(record);
-	return name !== undefined && id !== undefined && EFFECT_ID.test(id) && name === path.basename(file) ? id : undefined;
+	return id !== undefined && EFFECT_ID.test(id) && attachmentNameMatches(record, file) ? id : undefined;
 }
 
 function effectFromRecord(operation: WriteOperation, input: WriteInput, kind: Effect["kind"], record: Record<string, unknown>): Effect | undefined {
@@ -541,7 +544,7 @@ export function readBackPlan(operation: WriteOperation, input: WriteInput): Read
 		case "issue.delete":
 			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "summary,updated" } };
 		case "page.create": {
-			const cql = `type = page AND title = ${cqlString(input.title as string)}`;
+			const cql = `type = page AND space = ${cqlString(input.spaceKey as string)} AND title = ${cqlString(input.title as string)}`;
 			return { tool: "confluence_search", args: { query: cql, limit: 20 } };
 		}
 		case "page.update":
@@ -555,6 +558,19 @@ export function readBackPlan(operation: WriteOperation, input: WriteInput): Read
 	}
 }
 
+// A Jira status is identified by its name; its category ("To Do", "In
+// Progress", "Done") groups statuses and is not itself a status. `sameValue`
+// would match a status record by any of its string fields, so a transition
+// or a live status whose category happens to equal the wanted text would
+// false-match. Compare only the name.
+function sameStatus(wanted: string, observed: unknown): boolean {
+	const target = normalised(wanted);
+	if (target.length === 0) return false;
+	if (typeof observed === "string") return normalised(observed) === target;
+	const name = isRecord(observed) ? stringAt(observed, "name") : undefined;
+	return name !== undefined && normalised(name) === target;
+}
+
 // The live transition whose destination is the requested status, from the
 // Community transition list ({id, name, to_status?: {name}}). When the site
 // reports no destination (observed live), the transition name is the status
@@ -566,7 +582,7 @@ export function transitionTo(reply: unknown, toStatus: string): string | undefin
 		const id = stringAt(record, "id");
 		if (id === undefined || !("name" in record)) continue;
 		const destination = isRecord(record.to_status) ? record.to_status : isRecord(record.to) ? record.to : undefined;
-		const matches = destination !== undefined ? sameValue(toStatus, destination) : sameValue(toStatus, record.name);
+		const matches = destination !== undefined ? sameStatus(toStatus, destination) : sameStatus(toStatus, record.name);
 		if (matches) return id;
 	}
 	return undefined;
@@ -669,7 +685,7 @@ function issueStateEvidence(input: WriteInput, revisionMatches: RevisionMatch, r
 	return { kind: "absent", revisionUnchanged: revisionMatches(issue.revision) };
 }
 
-const statusHolds = (input: WriteInput) => (issue: IssueObservation) => sameValue(input.toStatus, issue.fields.status);
+const statusHolds = (input: WriteInput) => (issue: IssueObservation) => sameStatus(input.toStatus as string, issue.fields.status);
 const assigneeHolds = (input: WriteInput) => (issue: IssueObservation) => assigneeMatches(input.assignee, issue.fields.assignee);
 
 function issueCommentEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
@@ -894,8 +910,9 @@ function issueCommentUpdateBaseline(input: WriteInput, reply: unknown): Baseline
 	if (isIndeterminate(issue)) return issue;
 	const comment = issue.comments.find((entry) => entry.id === input.commentId);
 	if (comment === undefined) return { kind: "indeterminate", reason: "the Jira reply names no such comment on this issue" };
+	if (comment.updated === undefined) return { kind: "indeterminate", reason: "the comment read exposes no updated timestamp to bind the revision" };
 	if (comment.text === normalised(input.body as string)) return { kind: "refused", reason: "the comment already holds the requested body; nothing to change" };
-	return { kind: "observed", baseline: { effectIds: [issue.key as string], commentIds: [comment.id], revision: comment.updated === undefined ? null : digest(comment.updated) } };
+	return { kind: "observed", baseline: { effectIds: [issue.key as string], commentIds: [comment.id], revision: digest(comment.updated) } };
 }
 
 function pageCommentBaseline(input: WriteInput, reply: unknown): BaselineObservation {
@@ -976,8 +993,18 @@ export function baselineFromReply(operation: WriteOperation, input: WriteInput, 
 			return pageRevisionBaseline(input, reply);
 		case "page.comment":
 			return pageCommentBaseline(input, reply);
-		case "page.attach":
-			return baselineWithEffectIds(pageAttachEvidence(input, reply, EMPTY_BASELINE));
+		case "page.attach": {
+			// Confluence replaces a same-named attachment under its existing id rather
+			// than creating a new one, which no later read-back can tell apart from no
+			// upload at all. Refuse here, before the write leaves the operator with an
+			// unresolvable receipt; SKILL.md already directs page.attachment.delete first.
+			const existing = pageAttachEvidence(input, reply, EMPTY_BASELINE);
+			if (existing.kind === "indeterminate") return existing;
+			if (records(unwrapReply(reply)).some((record) => attachmentNameMatches(record, input.file as string))) {
+				return { kind: "refused", reason: "the page already has an attachment with this file name; run page.attachment.delete first" };
+			}
+			return baselineWithEffectIds(existing);
+		}
 		case "page.attachment.delete":
 			return pageAttachmentDeleteBaseline(input, reply);
 	}

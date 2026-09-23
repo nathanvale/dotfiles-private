@@ -19,9 +19,8 @@ export interface ProviderFailure {
 
 const AUTH_PATTERN = /\b(401|403)\b|authentication failed|unauthori[sz]ed|forbidden|permission/i;
 const NOT_FOUND_PATTERN = /\b404\b|not found|does not exist/i;
-// Confluence answers a missing page with one sentence that also mentions
-// permission; the missing-content half is the specific signal and wins.
 const MISSING_CONTENT_PATTERN = /no content with the given id/i;
+const AMBIGUOUS_CONTENT_PATTERN = /no content with the given id[^\n]*\bor\b[^\n]*\bpermission\b/i;
 const CAPABILITY_PATTERN = /unknown tool|tool .* not found|no such tool|not exposed/i;
 const TRANSPORT_PATTERN = /timed? ?out|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ENOTFOUND|offline|connection|socket/i;
 
@@ -48,6 +47,9 @@ const PRECONDITION_PATTERN = new RegExp(`atlassian-provider:error:(${Object.keys
 
 function classify(observed: ObservedFailure, text: string): ProviderFailureCause {
 	if (PRECONDITION_PATTERN.test(text)) return "refused-precondition";
+	// A missing page and an inaccessible page are indistinguishable in this
+	// response. Neither outcome proves a page.delete completed.
+	if (AMBIGUOUS_CONTENT_PATTERN.test(text)) return "failed-unknown";
 	if (MISSING_CONTENT_PATTERN.test(text)) return "not-found";
 	if (AUTH_PATTERN.test(text)) return "refused-auth";
 	if (NOT_FOUND_PATTERN.test(text)) return "not-found";
