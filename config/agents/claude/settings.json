@@ -164,7 +164,8 @@
   "enabledPlugins": {
     "proof@personal": true,
     "my-second-brain-playground@personal": true,
-    "personal@personal": true
+    "personal@personal": true,
+    "connectors@personal": true
   },
   "extraKnownMarketplaces": {
     "my-second-brain": {
