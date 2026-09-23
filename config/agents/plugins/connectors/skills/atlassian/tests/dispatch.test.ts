@@ -45,21 +45,24 @@ function testCanonical(value: unknown): string {
 }
 
 const testDigest = (value: unknown): string => new Bun.CryptoHasher("sha256").update(testCanonical(value)).digest("hex");
-const EXPECTED_OPERATIONS = ["issue.get", "issue.search", "issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.attach", "issue.delete", "page.get", "page.search", "page.create", "page.update", "page.comment", "page.attach", "page.delete"] as const;
+const EXPECTED_OPERATIONS = ["issue.get", "issue.search", "issue.transitions", "issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete", "page.get", "page.search", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"] as const;
 const EXPECTED_COMMANDS = ["receipts", "receipt", "adjudicate", "unlock"];
 const EXPECTED_PATHS = [...EXPECTED_OPERATIONS, ...EXPECTED_COMMANDS].map((entry) => `atlassian.${entry}`).sort();
-const WRITE_OPERATIONS = ["issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.attach", "issue.delete", "page.create", "page.update", "page.comment", "page.attach", "page.delete"];
+const WRITE_OPERATIONS = EXPECTED_OPERATIONS.filter((id) => !id.endsWith(".get") && !id.endsWith(".search") && id !== "issue.transitions");
 
 // Independent oracle: the exact Community tool and product per operation,
 // from the v0.23.1 Community reference.
 const EXPECTED_TOOLS: Record<string, [string, "read" | "write", "jira" | "confluence"]> = {
 	"issue.get": ["jira_get_issue", "read", "jira"],
 	"issue.search": ["jira_search", "read", "jira"],
+	"issue.transitions": ["jira_get_transitions", "read", "jira"],
 	"issue.create": ["jira_create_issue", "write", "jira"],
 	"issue.update": ["jira_update_issue", "write", "jira"],
 	"issue.comment": ["jira_add_comment", "write", "jira"],
 	"issue.comment.update": ["jira_edit_comment", "write", "jira"],
 	"issue.attach": ["jira_update_issue", "write", "jira"],
+	"issue.transition": ["jira_transition_issue", "write", "jira"],
+	"issue.assign": ["jira_assign_issue", "write", "jira"],
 	"issue.delete": ["jira_delete_issue", "write", "jira"],
 	"page.get": ["confluence_get_page", "read", "confluence"],
 	"page.search": ["confluence_search", "read", "confluence"],
@@ -67,13 +70,14 @@ const EXPECTED_TOOLS: Record<string, [string, "read" | "write", "jira" | "conflu
 	"page.update": ["confluence_update_page", "write", "confluence"],
 	"page.comment": ["confluence_add_comment", "write", "confluence"],
 	"page.attach": ["confluence_upload_attachment", "write", "confluence"],
+	"page.attachment.delete": ["confluence_delete_attachment", "write", "confluence"],
 	"page.delete": ["confluence_delete_page", "write", "confluence"],
 };
 // Exactly the tools the live 2026-09-23 tools/list exposed under these names
 // (mcp-atlassian 0.23.1 has no confluence_get_space and no comment deletion).
 const EXPECTED_ALLOW_LISTS = {
-	[CJ]: ["jira_get_issue", "jira_search", "jira_create_issue", "jira_update_issue", "jira_add_comment", "jira_edit_comment", "jira_delete_issue"],
-	[CC]: ["confluence_get_page", "confluence_search", "confluence_get_comments", "confluence_get_attachments", "confluence_create_page", "confluence_update_page", "confluence_add_comment", "confluence_upload_attachment", "confluence_delete_page"],
+	[CJ]: ["jira_get_issue", "jira_search", "jira_get_transitions", "jira_create_issue", "jira_update_issue", "jira_add_comment", "jira_edit_comment", "jira_transition_issue", "jira_assign_issue", "jira_delete_issue"],
+	[CC]: ["confluence_get_page", "confluence_search", "confluence_get_comments", "confluence_get_attachments", "confluence_create_page", "confluence_update_page", "confluence_add_comment", "confluence_upload_attachment", "confluence_delete_attachment", "confluence_delete_page"],
 };
 
 const tool = (name: string, required: string[], optional: string[] = []): SchemaTool => ({
@@ -88,6 +92,9 @@ const SCHEMAS: Record<string, SchemaTool[]> = {
 		tool("jira_update_issue", ["issue_key", "fields"], ["additional_fields", "components", "attachments", "return_fields"]),
 		tool("jira_add_comment", ["issue_key", "body"], ["visibility", "public"]),
 		tool("jira_edit_comment", ["issue_key", "comment_id", "body"], ["visibility"]),
+		tool("jira_get_transitions", ["issue_key"]),
+		tool("jira_transition_issue", ["issue_key", "transition_id"], ["fields", "comment"]),
+		tool("jira_assign_issue", ["issue_key"], ["assignee"]),
 		tool("jira_delete_issue", ["issue_key"]),
 	],
 	[CC]: [
@@ -99,6 +106,7 @@ const SCHEMAS: Record<string, SchemaTool[]> = {
 		tool("confluence_update_page", ["page_id", "title"], ["content", "version_comment", "content_format"]),
 		tool("confluence_add_comment", ["page_id", "body"]),
 		tool("confluence_upload_attachment", ["content_id"], ["file_path", "file_content", "filename", "comment"]),
+		tool("confluence_delete_attachment", ["attachment_id"]),
 		tool("confluence_delete_page", ["page_id"]),
 	],
 };
@@ -298,12 +306,14 @@ describe("Community reads", () => {
 		await dispatch(["issue.search", "--input", '{"jql":"project = PROJ","maxResults":5,"fields":["summary"]}'], deps({ transport }));
 		await dispatch(["page.get", "--input", '{"pageId":"123"}'], deps({ transport }));
 		await dispatch(["page.search", "--input", '{"cql":"type=page","maxResults":3}'], deps({ transport }));
+		await dispatch(["issue.transitions", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
 		expect(calls.map((call) => [call.server, call.tool, call.args])).toEqual([
 			[CJ, "jira_search", { jql: "project = PROJ", limit: 5, fields: "summary" }],
 			[CC, "confluence_get_page", { page_id: "123" }],
 			[CC, "confluence_search", { query: "type=page", limit: 3 }],
+			[CJ, "jira_get_transitions", { issue_key: "PROJ-1" }],
 		]);
-		expect(seen.map((entry) => entry.product)).toEqual(["jira", "confluence", "confluence"]);
+		expect(seen.map((entry) => entry.product)).toEqual(["jira", "confluence", "confluence", "jira"]);
 	});
 
 	test("product swap is impossible: a Jira operation never touches the Confluence route, even when only that route has the tool", async () => {
@@ -865,6 +875,80 @@ describe("journaled writes", () => {
 		expect([applied.result.outcome, applied.result.effects.completed]).toEqual(["success", ["confluence-attachment:att900"]]);
 		expect(calls.map((call) => call.tool)).toEqual(["confluence_get_page", "confluence_get_attachments", "confluence_get_page", "confluence_get_attachments", "confluence_upload_attachment"]);
 		expect(calls.at(-1)?.args).toEqual({ content_id: "123", file_path: "staged/report.pdf" });
+	});
+
+	test("issue.transition resolves the transition by destination status at preview and apply, refuses a no-op or an unavailable status, and completes from read-back", async () => {
+		let status = "Backlog";
+		let updated = "t1";
+		const { transport, calls } = fakeTransport({
+			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { result: JSON.stringify({ key: "PROJ-1", status: { name: status, category: status }, updated }) } }),
+			[`${CJ}.jira_get_transitions`]: { ok: true, data: { result: JSON.stringify([{ id: "11", name: "Start Progress", to_status: { name: "In Progress" } }, { id: "31", name: "Done", to_status: { name: "Done" } }]) } },
+			[`${CJ}.jira_transition_issue`]: (args) => {
+				status = args.transition_id === "11" ? "In Progress" : "Done";
+				updated = "t2";
+				return { ok: true, data: { result: JSON.stringify({ message: "Issue PROJ-1 transitioned successfully" }) } };
+			},
+		});
+		const dependencies = deps({ transport });
+		const input = { issueKey: "PROJ-1", toStatus: "In Progress" };
+		const preview = previewData(await dispatch(["issue.transition", "--input", JSON.stringify(input), "--preview"], dependencies));
+		expect([preview.tool, preview.revision, preview.objectIdentity, preview.arguments]).toEqual(["jira_transition_issue", "t1", "issue:PROJ-1", { issue_key: "PROJ-1", transition_id: "11" }]);
+		expect(calls.map((call) => call.tool)).toEqual(["jira_get_issue", "jira_get_transitions", "jira_get_issue"]);
+		const applied = await dispatch(["issue.transition", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
+		expect([applied.result.outcome, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "completed", ["jira-issue:PROJ-1"]]);
+		expect(calls.map((call) => call.tool).slice(3)).toEqual(["jira_get_issue", "jira_get_transitions", "jira_get_issue", "jira_transition_issue", "jira_get_issue"]);
+		const noop = await dispatch(["issue.transition", "--input", JSON.stringify(input), "--preview"], dependencies);
+		expect([noop.result.causeCode, noop.result.repairAction]).toEqual(["input-invalid", "the issue already has the requested status; nothing to change"]);
+		const unavailable = await dispatch(["issue.transition", "--input", '{"issueKey":"PROJ-1","toStatus":"Cancelled"}', "--preview"], dependencies);
+		expect([unavailable.result.outcome, unavailable.result.causeCode, unavailable.result.repairAction]).toEqual(["failed", "not-found", "no transition available to this principal leads to that status"]);
+		expect(calls.filter((call) => call.tool === "jira_transition_issue")).toHaveLength(1);
+	});
+
+	test("issue.assign assigns by identifier or unassigns when none is given, refusing a no-op", async () => {
+		let assignee: Record<string, unknown> = { display_name: "Unassigned" };
+		let updated = "t1";
+		const { transport, calls } = fakeTransport({
+			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { result: JSON.stringify({ key: "PROJ-1", assignee, updated }) } }),
+			[`${CJ}.jira_assign_issue`]: (args) => {
+				assignee = args.assignee === "" ? { display_name: "Unassigned" } : { display_name: "Service Account", email: String(args.assignee) };
+				updated = `${updated}+`;
+				return { ok: true, data: { result: JSON.stringify({ message: "Issue PROJ-1 assigned successfully", issue: { key: "PROJ-1" } }) } };
+			},
+		});
+		const dependencies = deps({ transport });
+		const assign = { issueKey: "PROJ-1", assignee: PRINCIPAL };
+		const preview = previewData(await dispatch(["issue.assign", "--input", JSON.stringify(assign), "--preview"], dependencies));
+		expect([preview.tool, preview.revision, preview.arguments]).toEqual(["jira_assign_issue", "t1", { issue_key: "PROJ-1", assignee: PRINCIPAL }]);
+		const applied = await dispatch(["issue.assign", "--input", JSON.stringify(assign), "--apply", preview.previewId], dependencies);
+		expect([applied.result.outcome, applied.result.effects.completed]).toEqual(["success", ["jira-issue:PROJ-1"]]);
+		const unassignPreview = previewData(await dispatch(["issue.assign", "--input", '{"issueKey":"PROJ-1"}', "--preview"], dependencies));
+		expect(unassignPreview.arguments).toEqual({ issue_key: "PROJ-1", assignee: "" });
+		const unassigned = await dispatch(["issue.assign", "--input", '{"issueKey":"PROJ-1"}', "--apply", unassignPreview.previewId], dependencies);
+		expect([unassigned.result.outcome, unassigned.result.effects.completed]).toEqual(["success", ["jira-issue:PROJ-1"]]);
+		const noop = await dispatch(["issue.assign", "--input", '{"issueKey":"PROJ-1"}', "--preview"], dependencies);
+		expect([noop.result.causeCode, noop.result.repairAction]).toEqual(["input-invalid", "the issue already has the requested assignee; nothing to change"]);
+		expect(calls.filter((call) => call.tool === "jira_assign_issue").map((call) => call.args.assignee)).toEqual([PRINCIPAL, ""]);
+	});
+
+	test("page.attachment.delete needs the attachment on the page and completes when the listing no longer carries it", async () => {
+		let listed = [{ id: "att900", title: "report.pdf" }, { id: "att901", title: "other.pdf" }];
+		const { transport, calls } = fakeTransport({
+			[`${CC}.confluence_get_page`]: { ok: true, data: { result: JSON.stringify({ metadata: { id: "123", title: "Roadmap", version: 7 } }) } },
+			[`${CC}.confluence_get_attachments`]: () => ({ ok: true, data: { result: JSON.stringify({ attachments: listed }) } }),
+			[`${CC}.confluence_delete_attachment`]: () => {
+				listed = listed.filter((entry) => entry.id !== "att900");
+				return { ok: true, data: { result: JSON.stringify({ success: true, message: "Attachment deleted successfully" }) } };
+			},
+		});
+		const dependencies = deps({ transport });
+		const input = { pageId: "123", attachmentId: "att900" };
+		const preview = previewData(await dispatch(["page.attachment.delete", "--input", JSON.stringify(input), "--preview"], dependencies));
+		expect([preview.tool, preview.revision, preview.objectIdentity, preview.baseline.effectIds, preview.arguments]).toEqual(["confluence_delete_attachment", "7", "page:123", ["att900"], { attachment_id: "att900" }]);
+		const applied = await dispatch(["page.attachment.delete", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
+		expect([applied.result.outcome, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "completed", ["confluence-attachment:att900"]]);
+		expect(calls.map((call) => call.tool)).toEqual(["confluence_get_page", "confluence_get_attachments", "confluence_get_page", "confluence_get_attachments", "confluence_delete_attachment", "confluence_get_attachments"]);
+		const missing = await dispatch(["page.attachment.delete", "--input", JSON.stringify(input), "--preview"], dependencies);
+		expect([missing.result.causeCode, missing.result.repairAction]).toEqual(["input-invalid", "the page has no attachment with that id"]);
 	});
 
 	test("deletes bind the target's revision and complete only when the Provider's read-back refuses with not-found", async () => {

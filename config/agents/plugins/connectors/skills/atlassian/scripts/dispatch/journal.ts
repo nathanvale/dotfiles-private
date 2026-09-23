@@ -227,11 +227,14 @@ export function objectIdentity(operation: WriteOperation, canonicalInput: unknow
 		case "issue.comment":
 		case "issue.comment.update":
 		case "issue.attach":
+		case "issue.transition":
+		case "issue.assign":
 		case "issue.delete":
 			return `issue:${identifier(canonicalInput.issueKey, "issueKey")}`;
 		case "page.update":
 		case "page.comment":
 		case "page.attach":
+		case "page.attachment.delete":
 		case "page.delete":
 			return `page:${identifier(canonicalInput.pageId, "pageId")}`;
 		case "issue.create":
@@ -330,10 +333,13 @@ const IDENTITY_SHAPES: Record<WriteOperation, RegExp> = {
 	"issue.comment": ISSUE_IDENTITY,
 	"issue.comment.update": ISSUE_IDENTITY,
 	"issue.attach": ISSUE_IDENTITY,
+	"issue.transition": ISSUE_IDENTITY,
+	"issue.assign": ISSUE_IDENTITY,
 	"issue.delete": ISSUE_IDENTITY,
 	"page.update": PAGE_IDENTITY,
 	"page.comment": PAGE_IDENTITY,
 	"page.attach": PAGE_IDENTITY,
+	"page.attachment.delete": PAGE_IDENTITY,
 	"page.delete": PAGE_IDENTITY,
 	"issue.create": /^project:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}:create:[a-z0-9][a-z0-9-]{0,63}:[0-9a-f]{16}$/,
 	"page.create": /^space:[A-Za-z0-9~][A-Za-z0-9_.-]{0,254}:create:(?:root|[A-Za-z0-9][A-Za-z0-9_.-]{0,127}):[0-9a-f]{16}$/,

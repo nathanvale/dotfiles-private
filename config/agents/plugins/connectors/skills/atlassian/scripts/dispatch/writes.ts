@@ -27,6 +27,7 @@ const SPACE_KEY = /^[A-Za-z0-9~][A-Za-z0-9_.-]{0,254}$/;
 // One absolute local file for the Provider process to read. The Community
 // Jira tool joins several paths with commas, so a comma is refused here.
 const LOCAL_FILE = /^\/[^\n,]{1,1023}$/;
+const ATTACHMENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const BODY_LIMIT = 200_000;
 
 // Neutral input per write operation. Unknown keys are refused so a caller
@@ -43,6 +44,11 @@ const WRITE_INPUTS: Record<WriteOperation, Record<string, Field>> = {
 	"issue.comment": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, body: { kind: "body", required: true } },
 	"issue.comment.update": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, commentId: { kind: "text", required: true, pattern: NUMERIC_ID }, body: { kind: "body", required: true } },
 	"issue.attach": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, file: { kind: "path", required: true } },
+	// toStatus names the status the issue must reach; the transition that leads
+	// there is resolved from the live transition list at preview and apply.
+	"issue.transition": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, toStatus: { kind: "text", required: true } },
+	// An omitted assignee unassigns the issue.
+	"issue.assign": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, assignee: { kind: "text", required: false } },
 	"issue.delete": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY } },
 	"page.create": {
 		spaceKey: { kind: "text", required: true, pattern: SPACE_KEY },
@@ -58,6 +64,7 @@ const WRITE_INPUTS: Record<WriteOperation, Record<string, Field>> = {
 	},
 	"page.comment": { pageId: { kind: "text", required: true, pattern: NUMERIC_ID }, body: { kind: "body", required: true } },
 	"page.attach": { pageId: { kind: "text", required: true, pattern: NUMERIC_ID }, file: { kind: "path", required: true } },
+	"page.attachment.delete": { pageId: { kind: "text", required: true, pattern: NUMERIC_ID }, attachmentId: { kind: "text", required: true, pattern: ATTACHMENT_ID } },
 	"page.delete": { pageId: { kind: "text", required: true, pattern: NUMERIC_ID } },
 };
 
@@ -104,7 +111,7 @@ export function writeInput(operation: WriteOperation, raw: unknown): WriteValida
 // changed target is still the same container. Attachments bind the target's
 // revision because an upload moves it, which lets an unchanged revision prove
 // that a possibly-sent upload never landed.
-export type Preparation = { kind: "none" } | { kind: "issue"; issueKey: string } | { kind: "comment"; issueKey: string; commentId: string } | { kind: "page"; pageId: string };
+export type Preparation = { kind: "none" } | { kind: "issue"; issueKey: string } | { kind: "comment"; issueKey: string; commentId: string } | { kind: "transition"; issueKey: string; toStatus: string } | { kind: "page"; pageId: string };
 
 export function preparation(operation: WriteOperation, input: WriteInput): Preparation {
 	switch (operation) {
@@ -114,13 +121,17 @@ export function preparation(operation: WriteOperation, input: WriteInput): Prepa
 			return { kind: "none" };
 		case "issue.update":
 		case "issue.attach":
+		case "issue.assign":
 		case "issue.delete":
 			return { kind: "issue", issueKey: input.issueKey as string };
 		case "issue.comment.update":
 			return { kind: "comment", issueKey: input.issueKey as string, commentId: input.commentId as string };
+		case "issue.transition":
+			return { kind: "transition", issueKey: input.issueKey as string, toStatus: input.toStatus as string };
 		case "page.update":
 		case "page.comment":
 		case "page.attach":
+		case "page.attachment.delete":
 		case "page.delete":
 			return { kind: "page", pageId: input.pageId as string };
 	}
@@ -136,6 +147,8 @@ export interface PreparedContext {
 	currentTitle?: string;
 	// The staged copy of an upload, relative to the Provider's outbox.
 	stagedFile?: string;
+	// The live transition id that leads to the requested status.
+	transitionId?: string;
 	// Provider identifiers and stable revisions observed before the write. This
 	// is persisted with the preview and compared by read-back, not inferred from
 	// text that may have existed before the preview.
@@ -181,6 +194,15 @@ export function writeArguments(spec: OperationSpec, input: WriteInput, ctx: Prep
 			args.fields = "{}";
 			assign(args, "attachments", ctx.stagedFile ?? input.file);
 			break;
+		case "issue.transition":
+			assign(args, "issue_key", input.issueKey);
+			assign(args, "transition_id", ctx.transitionId);
+			break;
+		case "issue.assign":
+			// The Community tool unassigns on an empty string.
+			assign(args, "issue_key", input.issueKey);
+			args.assignee = input.assignee ?? "";
+			break;
 		case "issue.delete":
 			assign(args, "issue_key", input.issueKey);
 			break;
@@ -208,6 +230,9 @@ export function writeArguments(spec: OperationSpec, input: WriteInput, ctx: Prep
 			assign(args, "content_id", input.pageId);
 			assign(args, "file_path", ctx.stagedFile ?? input.file);
 			break;
+		case "page.attachment.delete":
+			assign(args, "attachment_id", input.attachmentId);
+			break;
 		case "page.delete":
 			assign(args, "page_id", input.pageId);
 			break;
@@ -224,12 +249,21 @@ const EFFECT_KIND: Record<WriteOperation, Effect["kind"]> = {
 	"issue.comment": "jira-comment",
 	"issue.comment.update": "jira-comment",
 	"issue.attach": "jira-attachment",
+	"issue.transition": "jira-issue",
+	"issue.assign": "jira-issue",
 	"page.create": "confluence-content",
 	"page.update": "confluence-content",
 	"page.delete": "confluence-content",
 	"page.comment": "confluence-comment",
 	"page.attach": "confluence-attachment",
+	"page.attachment.delete": "confluence-attachment",
 };
+
+// Writes whose effect is the object they name, proven by read-back.
+const TARGET_OPERATIONS: ReadonlySet<WriteOperation> = new Set<WriteOperation>(["issue.update", "issue.transition", "issue.assign", "page.update"]);
+// Writes proven by the Provider refusing to find the object afterwards.
+const OBJECT_DELETES: ReadonlySet<WriteOperation> = new Set<WriteOperation>(["issue.delete", "page.delete"]);
+export const isObjectDelete = (operation: WriteOperation): boolean => OBJECT_DELETES.has(operation);
 
 export const effectKindOf = (operation: WriteOperation): Effect["kind"] => EFFECT_KIND[operation];
 
@@ -368,6 +402,7 @@ function effectFromRecord(operation: WriteOperation, input: WriteInput, kind: Ef
 // Provider's explicit success message.
 // The object an update or delete names in its own input.
 function targetOf(operation: WriteOperation, input: WriteInput): string {
+	if (operation === "page.attachment.delete") return input.attachmentId as string;
 	return (operation.startsWith("issue.") ? input.issueKey : input.pageId) as string;
 }
 
@@ -381,7 +416,7 @@ export function effectsFromReply(operation: WriteOperation, input: WriteInput, r
 	if (!replyNamesRequestedObject(operation, input, reply)) return [];
 	const data = unwrapReply(reply);
 	if (operation.endsWith(".delete")) return deleteEffect(operation, input, kind, data);
-	if (operation.endsWith(".update") && !operation.endsWith(".comment.update")) return [{ kind, id: targetOf(operation, input) }];
+	if (TARGET_OPERATIONS.has(operation)) return [{ kind, id: targetOf(operation, input) }];
 	for (const record of records(data)) {
 		const effect = effectFromRecord(operation, input, kind, record);
 		if (effect !== undefined) return [effect];
@@ -499,6 +534,10 @@ export function readBackPlan(operation: WriteOperation, input: WriteInput): Read
 			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "comment,updated", comment_limit: 100 } };
 		case "issue.attach":
 			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "attachment,updated" } };
+		case "issue.transition":
+			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "status,updated" } };
+		case "issue.assign":
+			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "assignee,updated" } };
 		case "issue.delete":
 			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "summary,updated" } };
 		case "page.create": {
@@ -511,8 +550,35 @@ export function readBackPlan(operation: WriteOperation, input: WriteInput): Read
 		case "page.comment":
 			return { tool: "confluence_get_comments", args: { page_id: input.pageId } };
 		case "page.attach":
+		case "page.attachment.delete":
 			return { tool: "confluence_get_attachments", args: { content_id: input.pageId } };
 	}
+}
+
+// The live transition whose destination is the requested status, from the
+// Community transition list ({id, name, to_status?: {name}}). When the site
+// reports no destination (observed live), the transition name is the status
+// it leads to.
+export function transitionTo(reply: unknown, toStatus: string): string | undefined {
+	const wanted = normalised(toStatus);
+	if (wanted.length === 0) return undefined;
+	for (const record of records(unwrapReply(reply))) {
+		const id = stringAt(record, "id");
+		if (id === undefined || !("name" in record)) continue;
+		const destination = isRecord(record.to_status) ? record.to_status : isRecord(record.to) ? record.to : undefined;
+		const matches = destination !== undefined ? sameValue(toStatus, destination) : sameValue(toStatus, record.name);
+		if (matches) return id;
+	}
+	return undefined;
+}
+
+const UNASSIGNED = "unassigned";
+
+// Whether the observed assignee is the requested one, or nobody when the
+// request names nobody.
+function assigneeMatches(wanted: unknown, observed: unknown): boolean {
+	if (wanted === undefined) return observed === undefined || observed === null || sameValue(UNASSIGNED, observed);
+	return sameValue(wanted, observed);
 }
 
 const EMPTY_BASELINE: WriteBaseline = { effectIds: [], commentIds: [], revision: null };
@@ -593,6 +659,18 @@ function issueUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, 
 	if (fieldsHold(issue, wantedFields(input))) return { kind: "found", effects: [{ kind: "jira-issue", id: issue.key }] };
 	return { kind: "absent", revisionUnchanged: revisionMatches(issue.revision) };
 }
+
+function issueStateEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline, holds: (issue: IssueObservation) => boolean): ReadBack {
+	const issue = observeIssue(reply);
+	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply is not an issue" };
+	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
+	if (issue.revision === null || baseline.revision === null) return { kind: "indeterminate", reason: "the Jira reply carries no revision" };
+	if (holds(issue)) return { kind: "found", effects: [{ kind: "jira-issue", id: issue.key }] };
+	return { kind: "absent", revisionUnchanged: revisionMatches(issue.revision) };
+}
+
+const statusHolds = (input: WriteInput) => (issue: IssueObservation) => sameValue(input.toStatus, issue.fields.status);
+const assigneeHolds = (input: WriteInput) => (issue: IssueObservation) => assigneeMatches(input.assignee, issue.fields.assignee);
 
 function issueCommentEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
 	const issue = observeIssue(reply);
@@ -711,6 +789,15 @@ function pageCommentEvidence(input: WriteInput, reply: unknown, baseline: WriteB
 	return commentEvidence("confluence-comment", input.body as string, comments, baseline);
 }
 
+// Removal is proven by the attachment no longer being listed; a listing that
+// still carries it proves the delete did not land.
+function pageAttachmentDeleteEvidence(input: WriteInput, reply: unknown): ReadBack {
+	const observedPage = pageIdentity(reply, false);
+	if (observedPage !== undefined && observedPage !== input.pageId) return { kind: "indeterminate", reason: "the read-back reply names a different page" };
+	const present = records(unwrapReply(reply)).some((record) => attachmentId(record) === input.attachmentId);
+	return present ? { kind: "absent", revisionUnchanged: true } : { kind: "found", effects: [{ kind: "confluence-attachment", id: input.attachmentId as string }] };
+}
+
 function pageAttachEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
 	const observedPage = pageIdentity(reply, false);
 	if (observedPage !== undefined && observedPage !== input.pageId) return { kind: "indeterminate", reason: "the read-back reply names a different page" };
@@ -741,6 +828,10 @@ export function readBackEvidence(operation: WriteOperation, input: WriteInput, r
 			return issueCommentUpdateEvidence(input, revisionMatches, reply);
 		case "issue.attach":
 			return issueAttachEvidence(input, revisionMatches, reply, baseline);
+		case "issue.transition":
+			return issueStateEvidence(input, revisionMatches, reply, baseline, statusHolds(input));
+		case "issue.assign":
+			return issueStateEvidence(input, revisionMatches, reply, baseline, assigneeHolds(input));
 		case "issue.delete":
 			return issueDeleteEvidence(input, revisionMatches, reply);
 		case "page.create":
@@ -751,6 +842,8 @@ export function readBackEvidence(operation: WriteOperation, input: WriteInput, r
 			return pageCommentEvidence(input, reply, baseline);
 		case "page.attach":
 			return pageAttachEvidence(input, reply, baseline);
+		case "page.attachment.delete":
+			return pageAttachmentDeleteEvidence(input, reply);
 		case "page.delete":
 			return pageDeleteEvidence(input, revisionMatches, reply);
 	}
@@ -823,6 +916,24 @@ function issueUpdateBaseline(input: WriteInput, reply: unknown): BaselineObserva
 	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [issue.key as string], revision: digest(JSON.stringify(snapshot)) } };
 }
 
+// A state change must change state: the current status or assignee is
+// digested as the baseline revision and a target already there is refused.
+function issueStateBaseline(input: WriteInput, reply: unknown, holds: (issue: IssueObservation) => boolean, field: string, what: string): BaselineObservation {
+	const issue = issueFor(input, reply);
+	if (isIndeterminate(issue)) return issue;
+	if (issue.revision === null) return { kind: "indeterminate", reason: "the Jira reply carries no revision" };
+	if (holds(issue)) return { kind: "refused", reason: `the issue already has the requested ${what}; nothing to change` };
+	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [issue.key as string], revision: digest(JSON.stringify(issue.fields[field] ?? null)) } };
+}
+
+function pageAttachmentDeleteBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+	const observedPage = pageIdentity(reply, false);
+	if (observedPage !== undefined && observedPage !== input.pageId) return { kind: "indeterminate", reason: "the attachment listing names a different page" };
+	const present = records(unwrapReply(reply)).some((record) => attachmentId(record) === input.attachmentId);
+	if (!present) return { kind: "refused", reason: "the page has no attachment with that id" };
+	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [input.attachmentId as string] } };
+}
+
 function issueDeleteBaseline(input: WriteInput, reply: unknown): BaselineObservation {
 	const issue = issueFor(input, reply);
 	if (isIndeterminate(issue)) return issue;
@@ -852,6 +963,10 @@ export function baselineFromReply(operation: WriteOperation, input: WriteInput, 
 			return issueCommentUpdateBaseline(input, reply);
 		case "issue.attach":
 			return baselineWithEffectIds(issueAttachEvidence(input, () => false, reply, EMPTY_BASELINE));
+		case "issue.transition":
+			return issueStateBaseline(input, reply, statusHolds(input), "status", "status");
+		case "issue.assign":
+			return issueStateBaseline(input, reply, assigneeHolds(input), "assignee", "assignee");
 		case "issue.delete":
 			return issueDeleteBaseline(input, reply);
 		case "page.create":
@@ -863,5 +978,7 @@ export function baselineFromReply(operation: WriteOperation, input: WriteInput, 
 			return pageCommentBaseline(input, reply);
 		case "page.attach":
 			return baselineWithEffectIds(pageAttachEvidence(input, reply, EMPTY_BASELINE));
+		case "page.attachment.delete":
+			return pageAttachmentDeleteBaseline(input, reply);
 	}
 }

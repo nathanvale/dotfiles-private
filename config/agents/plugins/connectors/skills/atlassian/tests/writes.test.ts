@@ -4,7 +4,7 @@
 // 22 September 2026 and reply shapes observed live on 23 September 2026.
 import { describe, expect, test } from "bun:test";
 import { OPERATION_SPECS } from "../scripts/dispatch/contract.ts";
-import { baselineFromReply, effectsFromReply, normalised, preparation, readBackEvidence, readBackPlan, uploadFailed, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
+import { baselineFromReply, effectsFromReply, normalised, preparation, readBackEvidence, readBackPlan, transitionTo, uploadFailed, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
 
 const never = () => false;
 const CREATE = { projectKey: "PROJ", issueType: "Bug", summary: "Billing broken", description: "first\nsecond" };
@@ -17,7 +17,13 @@ const wrapped = (value: unknown) => ({ result: JSON.stringify(value) });
 
 describe("neutral write inputs", () => {
 	test("every write operation has a contract; unknown keys, bad shapes, and missing required keys refuse", () => {
-		expect(WRITE_OPERATIONS).toEqual(["issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.attach", "issue.delete", "page.create", "page.update", "page.comment", "page.attach", "page.delete"]);
+		expect(WRITE_OPERATIONS).toEqual(["issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"]);
+		expect(writeInput("issue.transition", { issueKey: "PROJ-1", toStatus: "In Progress" })).toEqual({ ok: true, input: { issueKey: "PROJ-1", toStatus: "In Progress" } });
+		expect(writeInput("issue.transition", { issueKey: "PROJ-1", transitionId: "31" }).ok).toBe(false);
+		expect(writeInput("issue.assign", { issueKey: "PROJ-1" })).toEqual({ ok: true, input: { issueKey: "PROJ-1" } });
+		expect(writeInput("issue.assign", { issueKey: "PROJ-1", assignee: "" }).ok).toBe(false);
+		expect(writeInput("page.attachment.delete", { pageId: "123", attachmentId: "att900" })).toEqual({ ok: true, input: { pageId: "123", attachmentId: "att900" } });
+		expect(writeInput("page.attachment.delete", { pageId: "123", attachmentId: "att 900" }).ok).toBe(false);
 		expect(writeInput("issue.create", CREATE)).toEqual({ ok: true, input: CREATE });
 		expect(writeInput("issue.create", { ...CREATE, labels: ["x"] })).toEqual({ ok: false, reason: "unknown input key labels" });
 		expect(writeInput("issue.create", { ...CREATE, projectKey: "proj" })).toEqual({ ok: false, reason: "input key projectKey is invalid" });
@@ -49,6 +55,9 @@ describe("preparation and provider arguments", () => {
 		expect(preparation("issue.attach", ATTACH)).toEqual({ kind: "issue", issueKey: "PROJ-1" });
 		expect(preparation("issue.update", { issueKey: "PROJ-1", fields: { summary: "x" } })).toEqual({ kind: "issue", issueKey: "PROJ-1" });
 		expect(preparation("issue.delete", { issueKey: "PROJ-1" })).toEqual({ kind: "issue", issueKey: "PROJ-1" });
+		expect(preparation("issue.assign", { issueKey: "PROJ-1", assignee: "a@b" })).toEqual({ kind: "issue", issueKey: "PROJ-1" });
+		expect(preparation("issue.transition", { issueKey: "PROJ-1", toStatus: "Done" })).toEqual({ kind: "transition", issueKey: "PROJ-1", toStatus: "Done" });
+		expect(preparation("page.attachment.delete", { pageId: "123", attachmentId: "att900" })).toEqual({ kind: "page", pageId: "123" });
 		expect(preparation("issue.comment.update", COMMENT_UPDATE)).toEqual({ kind: "comment", issueKey: "PROJ-1", commentId: "454166" });
 		expect(preparation("page.create", PAGE)).toEqual({ kind: "none" });
 		expect(preparation("page.attach", PAGE_ATTACH)).toEqual({ kind: "page", pageId: "123" });
@@ -65,6 +74,10 @@ describe("preparation and provider arguments", () => {
 		expect(writeArguments(OPERATION_SPECS["issue.comment.update"], COMMENT_UPDATE, ctx).args).toEqual({ issue_key: "PROJ-1", comment_id: "454166", body: "edited body" });
 		expect(writeArguments(OPERATION_SPECS["issue.attach"], ATTACH, ctx).args).toEqual({ issue_key: "PROJ-1", fields: "{}", attachments: "/tmp/evidence/report.pdf" });
 		expect(writeArguments(OPERATION_SPECS["issue.delete"], { issueKey: "PROJ-1" }, ctx).args).toEqual({ issue_key: "PROJ-1" });
+		expect(writeArguments(OPERATION_SPECS["issue.transition"], { issueKey: "PROJ-1", toStatus: "Done" }, { ...ctx, transitionId: "31" }).args).toEqual({ issue_key: "PROJ-1", transition_id: "31" });
+		expect(writeArguments(OPERATION_SPECS["issue.assign"], { issueKey: "PROJ-1", assignee: "a@b" }, ctx).args).toEqual({ issue_key: "PROJ-1", assignee: "a@b" });
+		expect(writeArguments(OPERATION_SPECS["issue.assign"], { issueKey: "PROJ-1" }, ctx).args).toEqual({ issue_key: "PROJ-1", assignee: "" });
+		expect(writeArguments(OPERATION_SPECS["page.attachment.delete"], { pageId: "123", attachmentId: "att900" }, ctx).args).toEqual({ attachment_id: "att900" });
 		expect(writeArguments(OPERATION_SPECS["page.create"], { ...PAGE, parentId: "77", title: "T" }, ctx).args).toEqual({ space_key: "ENG", title: "T", content: "b", parent_id: "77", content_format: "markdown" });
 		const update = writeArguments(OPERATION_SPECS["page.update"], { pageId: "123", body: "b" }, ctx);
 		expect(update.args).toEqual({ page_id: "123", title: "Old", content: "b", content_format: "markdown" });
@@ -93,6 +106,11 @@ describe("effects and read-back", () => {
 		expect(effectsFromReply("issue.attach", ATTACH, wrapped({ message: "Issue updated successfully", issue: { key: "PROJ-1", attachments: [{ id: "10500", filename: "report.pdf" }, { id: "10501", filename: "other.pdf" }] } }))).toEqual([{ kind: "jira-attachment", id: "10500" }]);
 		expect(effectsFromReply("issue.attach", ATTACH, wrapped({ message: "Issue updated successfully", issue: { key: "PROJ-1" } }))).toEqual([]);
 		expect(effectsFromReply("issue.delete", { issueKey: "PROJ-1" }, wrapped({ message: "Issue PROJ-1 has been deleted successfully" }))).toEqual([{ kind: "jira-issue", id: "PROJ-1" }]);
+		expect(effectsFromReply("issue.transition", { issueKey: "PROJ-1", toStatus: "Done" }, wrapped({ message: "Issue PROJ-1 transitioned successfully" }))).toEqual([{ kind: "jira-issue", id: "PROJ-1" }]);
+		expect(effectsFromReply("issue.assign", { issueKey: "PROJ-1", assignee: "a@b" }, wrapped({ message: "Issue PROJ-1 assigned successfully", issue: { key: "PROJ-1" } }))).toEqual([{ kind: "jira-issue", id: "PROJ-1" }]);
+		expect(effectsFromReply("issue.assign", { issueKey: "PROJ-1", assignee: "a@b" }, wrapped({ issue: { key: "PROJ-2" } }))).toEqual([]);
+		expect(effectsFromReply("page.attachment.delete", { pageId: "123", attachmentId: "att900" }, wrapped({ success: true, message: "Attachment deleted successfully" }))).toEqual([{ kind: "confluence-attachment", id: "att900" }]);
+		expect(effectsFromReply("page.attachment.delete", { pageId: "123", attachmentId: "att900" }, wrapped({ success: false, error: "nope" }))).toEqual([]);
 		expect(effectsFromReply("issue.delete", { issueKey: "PROJ-1" }, wrapped({ message: "Error deleting issue PROJ-1" }))).toEqual([]);
 		expect(effectsFromReply("issue.delete", { issueKey: "PROJ-1" }, wrapped({ message: "Issue PROJ-2 has been deleted successfully", key: "PROJ-2" }))).toEqual([]);
 		expect(effectsFromReply("page.create", PAGE, { message: "Page created successfully", page: { id: "556", title: "Roadmap" } })).toEqual([{ kind: "confluence-content", id: "556" }]);
@@ -118,6 +136,17 @@ describe("effects and read-back", () => {
 		expect(readBackPlan("issue.comment.update", COMMENT_UPDATE)).toEqual({ tool: "jira_get_issue", args: { issue_key: "PROJ-1", fields: "comment,updated", comment_limit: 100 } });
 		expect(readBackPlan("issue.attach", ATTACH)).toEqual({ tool: "jira_get_issue", args: { issue_key: "PROJ-1", fields: "attachment,updated" } });
 		expect(readBackPlan("issue.delete", { issueKey: "PROJ-1" })).toEqual({ tool: "jira_get_issue", args: { issue_key: "PROJ-1", fields: "summary,updated" } });
+		expect(readBackPlan("issue.transition", { issueKey: "PROJ-1", toStatus: "Done" })).toEqual({ tool: "jira_get_issue", args: { issue_key: "PROJ-1", fields: "status,updated" } });
+		expect(readBackPlan("issue.assign", { issueKey: "PROJ-1" })).toEqual({ tool: "jira_get_issue", args: { issue_key: "PROJ-1", fields: "assignee,updated" } });
+		expect(readBackPlan("page.attachment.delete", { pageId: "123", attachmentId: "att900" })).toEqual({ tool: "confluence_get_attachments", args: { content_id: "123" } });
+		// The transition is chosen by the status it leads to (Community list shape: id, name, to_status).
+		const transitions = wrapped([{ id: "11", name: "Start Progress", to_status: { name: "In Progress", category: "In Progress" } }, { id: "31", name: "Done", to_status: { name: "Done", category: "Done" } }]);
+		expect(transitionTo(transitions, "in progress")).toBe("11");
+		expect(transitionTo(transitions, "Done")).toBe("31");
+		expect(transitionTo(transitions, "Cancelled")).toBeUndefined();
+		// Observed live: numeric ids and no destination, so the name is the status reached.
+		expect(transitionTo(wrapped([{ id: 2, name: "Backlog", to_status: null }, { id: 4, name: "In Progress", to_status: null }]), "in progress")).toBe("4");
+		expect(transitionTo(wrapped([{ id: 4, name: "In Progress", to_status: null }]), "Done")).toBeUndefined();
 		expect(readBackPlan("page.create", { ...PAGE, title: 'T "quoted"' })).toEqual({ tool: "confluence_search", args: { query: 'type = page AND title = "T \\"quoted\\""', limit: 20 } });
 		expect(readBackPlan("page.update", { pageId: "123", body: "b" })).toEqual({ tool: "confluence_get_page", args: { page_id: "123", include_metadata: true } });
 		expect(readBackPlan("page.delete", { pageId: "123" })).toEqual({ tool: "confluence_get_page", args: { page_id: "123", include_metadata: true } });
@@ -180,6 +209,16 @@ describe("effects and read-back", () => {
 		expect(readBackEvidence("issue.attach", ATTACH, never, wrapped({ key: "PROJ-2", attachments: [{ id: "10500", filename: "report.pdf" }] }))).toEqual({ kind: "indeterminate", reason: "the read-back reply names a different issue" });
 		expect(readBackEvidence("page.attach", PAGE_ATTACH, never, wrapped({ attachments: [{ id: "att900", title: "report.pdf" }], total: 1 }))).toEqual({ kind: "found", effects: [{ kind: "confluence-attachment", id: "att900" }] });
 		expect(readBackEvidence("page.attach", PAGE_ATTACH, never, wrapped({ attachments: [{ id: "att900", title: "report.pdf" }] }), { effectIds: ["att900"], commentIds: [], revision: null })).toEqual({ kind: "absent", revisionUnchanged: false });
+		// Transition and assign: the requested state present proves the write; otherwise only an unchanged `updated` proves absence.
+		const stateBaseline = { effectIds: ["PROJ-1"], commentIds: [], revision: "0".repeat(64) };
+		expect(readBackEvidence("issue.transition", { issueKey: "PROJ-1", toStatus: "In Progress" }, never, wrapped({ key: "PROJ-1", status: { name: "In Progress", category: "In Progress", color: "yellow" }, updated: "t2" }), stateBaseline)).toEqual({ kind: "found", effects: [{ kind: "jira-issue", id: "PROJ-1" }] });
+		expect(readBackEvidence("issue.transition", { issueKey: "PROJ-1", toStatus: "In Progress" }, (observed) => observed === "t1", wrapped({ key: "PROJ-1", status: { name: "Backlog" }, updated: "t1" }), stateBaseline)).toEqual({ kind: "absent", revisionUnchanged: true });
+		expect(readBackEvidence("issue.assign", { issueKey: "PROJ-1", assignee: "service@example.invalid" }, never, wrapped({ key: "PROJ-1", assignee: { display_name: "Service", email: "service@example.invalid" }, updated: "t2" }), stateBaseline)).toEqual({ kind: "found", effects: [{ kind: "jira-issue", id: "PROJ-1" }] });
+		expect(readBackEvidence("issue.assign", { issueKey: "PROJ-1" }, never, wrapped({ key: "PROJ-1", assignee: { display_name: "Unassigned" }, updated: "t2" }), stateBaseline)).toEqual({ kind: "found", effects: [{ kind: "jira-issue", id: "PROJ-1" }] });
+		expect(readBackEvidence("issue.assign", { issueKey: "PROJ-1" }, (observed) => observed === "t1", wrapped({ key: "PROJ-1", assignee: { display_name: "Service" }, updated: "t1" }), stateBaseline)).toEqual({ kind: "absent", revisionUnchanged: true });
+		// Attachment removal is proven by the listing no longer carrying the id; a listing that still does proves nothing landed.
+		expect(readBackEvidence("page.attachment.delete", { pageId: "123", attachmentId: "att900" }, never, wrapped({ attachments: [{ id: "att901", title: "other.pdf" }] }))).toEqual({ kind: "found", effects: [{ kind: "confluence-attachment", id: "att900" }] });
+		expect(readBackEvidence("page.attachment.delete", { pageId: "123", attachmentId: "att900" }, never, wrapped({ attachments: [{ id: "att900", title: "report.pdf" }] }))).toEqual({ kind: "absent", revisionUnchanged: true });
 		// Deletes: a successful read-back means the object is still there; the dispatcher maps a not-found refusal to the found effect before this seam.
 		expect(readBackEvidence("issue.delete", { issueKey: "PROJ-1" }, (observed) => observed === "t1", wrapped({ key: "PROJ-1", summary: "x", updated: "t1" }))).toEqual({ kind: "absent", revisionUnchanged: true });
 		expect(readBackEvidence("issue.delete", { issueKey: "PROJ-1" }, never, wrapped({ key: "PROJ-1", summary: "x", updated: "t2" }))).toEqual({ kind: "absent", revisionUnchanged: false });
@@ -228,6 +267,12 @@ describe("effects and read-back", () => {
 		expect(baselineFromReply("issue.comment.update", COMMENT_UPDATE, wrapped({ key: "PROJ-1", comments: [{ id: "1", body: "x" }] }))).toEqual({ kind: "indeterminate", reason: "the Jira reply names no such comment on this issue" });
 		expect(baselineFromReply("issue.attach", ATTACH, wrapped({ key: "PROJ-1", attachments: [{ id: "10499", filename: "report.pdf" }, { id: "10501", filename: "other.pdf" }] }))).toEqual({ kind: "observed", baseline: { effectIds: ["10499"], commentIds: [], revision: null } });
 		expect(baselineFromReply("issue.delete", { issueKey: "PROJ-1" }, wrapped({ key: "PROJ-1", summary: "x", updated: "t1" }))).toMatchObject({ kind: "observed", baseline: { effectIds: ["PROJ-1"], commentIds: [] } });
+		expect(baselineFromReply("issue.transition", { issueKey: "PROJ-1", toStatus: "Done" }, wrapped({ key: "PROJ-1", status: { name: "Backlog" }, updated: "t1" }))).toMatchObject({ kind: "observed", baseline: { effectIds: ["PROJ-1"] } });
+		expect(baselineFromReply("issue.transition", { issueKey: "PROJ-1", toStatus: "Backlog" }, wrapped({ key: "PROJ-1", status: { name: "Backlog" }, updated: "t1" }))).toEqual({ kind: "refused", reason: "the issue already has the requested status; nothing to change" });
+		expect(baselineFromReply("issue.assign", { issueKey: "PROJ-1" }, wrapped({ key: "PROJ-1", assignee: { display_name: "Unassigned" }, updated: "t1" }))).toEqual({ kind: "refused", reason: "the issue already has the requested assignee; nothing to change" });
+		expect(baselineFromReply("issue.assign", { issueKey: "PROJ-1", assignee: "a@b" }, wrapped({ key: "PROJ-1", assignee: { display_name: "Unassigned" }, updated: "t1" }))).toMatchObject({ kind: "observed", baseline: { effectIds: ["PROJ-1"] } });
+		expect(baselineFromReply("page.attachment.delete", { pageId: "123", attachmentId: "att900" }, wrapped({ attachments: [{ id: "att900", title: "report.pdf" }] }))).toEqual({ kind: "observed", baseline: { effectIds: ["att900"], commentIds: [], revision: null } });
+		expect(baselineFromReply("page.attachment.delete", { pageId: "123", attachmentId: "att900" }, wrapped({ attachments: [] }))).toEqual({ kind: "refused", reason: "the page has no attachment with that id" });
 		expect(baselineFromReply("page.create", { ...PAGE, title: "Same page" }, { results: [{ id: "556", title: "Same page", space: { key: "ENG" } }, { id: "557", title: "Same page", space: { key: "ENG" } }] })).toEqual({ kind: "observed", baseline: { effectIds: ["556", "557"], commentIds: [], revision: null } });
 		expect(baselineFromReply("page.update", { pageId: "123", body: "new" }, { id: "999", version: 7 })).toEqual({ kind: "indeterminate", reason: "the page read names a different page" });
 		expect(baselineFromReply("page.delete", { pageId: "123" }, { id: "123", version: 7 })).toEqual({ kind: "observed", baseline: { effectIds: ["123"], commentIds: [], revision: "7" } });

@@ -67,10 +67,11 @@ The Connectors plugin's `atlassian` skill owns:
 - one Bun/TypeScript Community Provider process and one custody child below
   MCPorter;
 - a Bun semantic dispatcher (`scripts/atlassian-dispatch.ts`) that is the only
-  supported entrypoint: fifteen Atlassian Operations (four reads; create,
-  update, comment, comment edit, attach, and delete per product), tenant and
-  origin binding, live schema confirmation, the Upload Outbox, the write
-  journal, and the operator commands `receipts`, `receipt`, `adjudicate`, and
+  supported entrypoint: nineteen Atlassian Operations (five reads; create,
+  update, comment, comment edit, attach, and delete per product; transition
+  and assign for issues; attachment delete for pages), tenant and origin
+  binding, live schema confirmation, the Upload Outbox, the write journal,
+  and the operator commands `receipts`, `receipt`, `adjudicate`, and
   `unlock`;
 - the write policy below.
 
@@ -251,7 +252,15 @@ Live, Jira route, one configured tenant, 23 September 2026:
   completed the receipt with the created key. Both shapes are now fixture
   tests. The fail-closed path behaved as designed: no duplicate was sent.
 - Not exposed on the route: comment deletion (absent from mcp-atlassian at
-  every version), attachment deletion, transitions, and links.
+  every version), Jira attachment deletion, links, watchers, and labels.
+
+Live, uplift tier 1, same tenant, later on 23 September 2026: `issue.assign`
+(unassign, then assign by email), `issue.transition` (to In Progress and
+back, resolved from `issue.transitions`), and on a fresh disposable page
+`page.attach`, `page.attachment.delete`, and `page.delete` all completed with
+receipt-bound effects and no open receipt. The site's transition list carries
+no destination status, so a transition is matched by its name when the
+destination is absent.
 
 Live, both products, one configured tenant, later on 23 September 2026, all
 under Nathan's authorization against disposable objects:
@@ -276,6 +285,12 @@ Live-only, still required before acceptance:
 2. Fresh Claude Code and Codex skill-discovery canaries per
    `docs/agents/skills.md`.
 3. A second tenant, to prove the route selection and outbox are per tenant.
+
+Uplift after acceptance, in order: discovery reads (project issue types and
+create fields, page children and tree, search pagination and space filters);
+then sprint and board reads, batch create, changelogs, labels, watchers,
+links, page moves and section edits, and the remote Jira-to-Confluence link,
+each only when a workflow needs it.
 
 ## References
 

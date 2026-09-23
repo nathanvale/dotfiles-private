@@ -43,6 +43,9 @@ export type Field = { kind: "text"; required: boolean } | { kind: "count"; requi
 export const READ_INPUTS: Partial<Record<OperationId, Record<string, Field>>> = {
 	"issue.get": { issueKey: { kind: "text", required: true }, fields: { kind: "names", required: false } },
 	"issue.search": { jql: { kind: "text", required: true }, maxResults: { kind: "count", required: false }, fields: { kind: "names", required: false } },
+	// The statuses an issue.transition may name: the transitions the site
+	// currently allows this principal on the issue.
+	"issue.transitions": { issueKey: { kind: "text", required: true } },
 	"page.get": { pageId: { kind: "text", required: true } },
 	"page.search": { cql: { kind: "text", required: true }, maxResults: { kind: "count", required: false } },
 };
@@ -101,6 +104,9 @@ export function providerArguments(spec: OperationSpec, input: Input): Record<str
 			assign(args, "jql", input.jql);
 			assign(args, "limit", input.maxResults);
 			assign(args, "fields", names?.join(","));
+			break;
+		case "issue.transitions":
+			assign(args, "issue_key", input.issueKey);
 			break;
 		case "page.get":
 			assign(args, "page_id", input.pageId);

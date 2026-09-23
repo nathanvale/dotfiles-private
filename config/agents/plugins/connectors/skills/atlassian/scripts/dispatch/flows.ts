@@ -8,7 +8,7 @@ import type { BindResult, CredentialBinding } from "../custody/index.ts";
 import { type CauseCode, OPERATION_SPECS, type OperationSpec, type Product, PROVIDER, type Provenance, serverFor, type TransactionState } from "./contract.ts";
 import { confirmSchema, type Dependencies, type Input, providerArguments, REPAIR_TEXT, readSchema, type SchemaTool, type TransportFailure, type TransportResult } from "./engine.ts";
 import { canonicalDigest, type Effect, type Evidence, JournalError, type Receipt, type WriteOperation } from "./journal.ts";
-import { baselineFromReply, effectKindOf, effectsFromReply, observeIssue, observePage, type PreparedContext, preparation, readBackEvidence, readBackPlan, type ReadBack, type RevisionMatch, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
+import { baselineFromReply, effectKindOf, effectsFromReply, isObjectDelete, observeIssue, observePage, type PreparedContext, preparation, readBackEvidence, readBackPlan, type ReadBack, type RevisionMatch, transitionTo, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
 
 export interface Outcome {
 	cause: CauseCode;
@@ -149,6 +149,19 @@ async function prepareIssue(route: Route, ctx: PreparedContext, issueKey: string
 	return { ctx: { ...ctx, revision: read.issue.revision } };
 }
 
+// The issue's `updated` binds it; the transition id is resolved live from the
+// transitions the site currently allows, by the status it leads to.
+async function prepareTransition(route: Route, ctx: PreparedContext, issueKey: string, toStatus: string): Promise<Prepared> {
+	const read = await readIssue(route, issueKey, { fields: "status,updated" });
+	if ("outcome" in read) return read;
+	if (read.issue.revision === null) return { outcome: refusal("capability-unavailable", "the Jira reply exposes no revision or updated timestamp") };
+	const listed = await route.call("jira_get_transitions", { issue_key: issueKey });
+	if (listed.cause !== "success") return { outcome: failed(listed) };
+	const transitionId = transitionTo(listed.data, toStatus);
+	if (transitionId === undefined) return { outcome: refusal("not-found", "no transition available to this principal leads to that status") };
+	return { ctx: { ...ctx, revision: read.issue.revision, transitionId } };
+}
+
 // The comment's own `updated` timestamp binds it between preview and apply.
 async function prepareComment(route: Route, ctx: PreparedContext, issueKey: string, commentId: string): Promise<Prepared> {
 	const read = await readIssue(route, issueKey, { fields: "comment,updated", comment_limit: 100 });
@@ -198,6 +211,9 @@ async function prepare(route: Route, operation: WriteOperation, input: WriteInpu
 			break;
 		case "comment":
 			prepared = await prepareComment(route, ctx, step.issueKey, step.commentId);
+			break;
+		case "transition":
+			prepared = await prepareTransition(route, ctx, step.issueKey, step.toStatus);
 			break;
 		case "page":
 			prepared = await preparePage(route, ctx, step.pageId);
@@ -249,7 +265,7 @@ async function writeContext(session: Session, spec: OperationSpec, input: WriteI
 	const bound = await session.binding(spec.product);
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
 	const route = session.route(spec.product, bound.binding);
-	const placeholder: PreparedContext = { revision: null, baseline: { effectIds: [], commentIds: [], revision: null }, currentTitle: "pending" };
+	const placeholder: PreparedContext = { revision: null, baseline: { effectIds: [], commentIds: [], revision: null }, currentTitle: "pending", transitionId: "pending" };
 	const ready = await route.ready({ tool: spec.tool, args: writeArguments(spec, input, placeholder).args });
 	if (ready) return failed(ready);
 	const prepared = await prepare(route, spec.id as WriteOperation, input);
@@ -322,7 +338,7 @@ async function settleEvidence(context: WriteContext, attempt: Attempt): Promise<
 async function readBackFor(route: Route, operation: WriteOperation, input: WriteInput, revisionMatches: RevisionMatch, baseline: PreparedContext["baseline"]): Promise<ReadBack> {
 	const plan = readBackPlan(operation, input);
 	const read = await route.call(plan.tool, plan.args);
-	if (read.cause === "not-found" && operation.endsWith(".delete")) {
+	if (read.cause === "not-found" && isObjectDelete(operation)) {
 		return { kind: "found", effects: [{ kind: effectKindOf(operation), id: (operation === "issue.delete" ? input.issueKey : input.pageId) as string }] };
 	}
 	if (read.cause !== "success") return { kind: "indeterminate", reason: read.cause };

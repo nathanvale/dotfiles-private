@@ -1,4 +1,4 @@
-// Atlassian dispatch contract: the fifteen semantic operations, their exact
+// Atlassian dispatch contract: the nineteen semantic operations, their exact
 // Community provider tools, the allow-lists the registry must mirror, the
 // operator commands, and the closed cause and exit vocabulary. Tool names are
 // documented, not live-verified; the engine binds one only after live schema
@@ -72,11 +72,14 @@ interface OperationDescriptor {
 const OPERATION_REGISTRY = [
 	{ id: "issue.get", kind: "read", product: "jira", tool: "jira_get_issue" },
 	{ id: "issue.search", kind: "read", product: "jira", tool: "jira_search" },
+	{ id: "issue.transitions", kind: "read", product: "jira", tool: "jira_get_transitions" },
 	{ id: "issue.create", kind: "write", product: "jira", tool: "jira_create_issue" },
 	{ id: "issue.update", kind: "write", product: "jira", tool: "jira_update_issue" },
 	{ id: "issue.comment", kind: "write", product: "jira", tool: "jira_add_comment" },
 	{ id: "issue.comment.update", kind: "write", product: "jira", tool: "jira_edit_comment" },
 	{ id: "issue.attach", kind: "write", product: "jira", tool: "jira_update_issue" },
+	{ id: "issue.transition", kind: "write", product: "jira", tool: "jira_transition_issue" },
+	{ id: "issue.assign", kind: "write", product: "jira", tool: "jira_assign_issue" },
 	{ id: "issue.delete", kind: "write", product: "jira", tool: "jira_delete_issue" },
 	{ id: "page.get", kind: "read", product: "confluence", tool: "confluence_get_page" },
 	{ id: "page.search", kind: "read", product: "confluence", tool: "confluence_search" },
@@ -84,6 +87,7 @@ const OPERATION_REGISTRY = [
 	{ id: "page.update", kind: "write", product: "confluence", tool: "confluence_update_page" },
 	{ id: "page.comment", kind: "write", product: "confluence", tool: "confluence_add_comment" },
 	{ id: "page.attach", kind: "write", product: "confluence", tool: "confluence_upload_attachment" },
+	{ id: "page.attachment.delete", kind: "write", product: "confluence", tool: "confluence_delete_attachment" },
 	{ id: "page.delete", kind: "write", product: "confluence", tool: "confluence_delete_page" },
 ] as const satisfies readonly OperationDescriptor[];
 

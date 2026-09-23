@@ -1,6 +1,6 @@
 ---
 name: atlassian
-description: Read, search, create, update, comment, attach files to, or delete Jira issues and Confluence pages for one named tenant through the skill's Bun dispatcher over the Atlassian Community Provider. Use for Jira tickets, Confluence pages, Atlassian links, JQL, or CQL. Comment deletion and administration are outside this skill.
+description: Read, search, create, update, transition, assign, comment, attach files to, or delete Jira issues and Confluence pages for one named tenant through the skill's Bun dispatcher over the Atlassian Community Provider. Use for Jira tickets, Confluence pages, Atlassian links, JQL, or CQL. Comment deletion and administration are outside this skill.
 ---
 
 # Atlassian
@@ -43,6 +43,7 @@ operation with `site-unresolved` before any provider call; a missing
 ```sh
 bun "$DISPATCH" --tenant <tenant> issue.get    --input '{"issueKey":"PROJ-1","fields":["summary"]}'
 bun "$DISPATCH" --tenant <tenant> issue.search --input '{"jql":"project = PROJ","maxResults":10}'
+bun "$DISPATCH" --tenant <tenant> issue.transitions --input '{"issueKey":"PROJ-1"}'
 bun "$DISPATCH" --tenant <tenant> page.get     --input '{"pageId":"123"}'
 bun "$DISPATCH" --tenant <tenant> page.search  --input '{"cql":"type = page AND title ~ \"roadmap\"","maxResults":10}'
 ```
@@ -83,11 +84,14 @@ bun "$DISPATCH" --tenant <tenant> issue.comment --input '{"issueKey":"PROJ-1","b
 | `issue.comment` | `issueKey`, `body` | none |
 | `issue.comment.update` | `issueKey`, `commentId`, `body` | comment `updated` |
 | `issue.attach` | `issueKey`, `file` (absolute local path) | issue `updated` |
+| `issue.transition` | `issueKey`, `toStatus` (a status named by `issue.transitions`) | issue `updated` |
+| `issue.assign` | `issueKey`, `assignee?` (email, name, or account id; omitted unassigns) | issue `updated` |
 | `issue.delete` | `issueKey` | issue `updated` |
 | `page.create` | `spaceKey`, `title`, `body`, `parentId?` | none |
 | `page.update` | `pageId`, `body`, `title?`, `versionMessage?` | page version |
 | `page.comment` | `pageId`, `body` | page version |
 | `page.attach` | `pageId`, `file` (absolute local path) | page version |
+| `page.attachment.delete` | `pageId`, `attachmentId` (from the attach effect or the page's attachments) | page version |
 | `page.delete` | `pageId` | page version |
 
 Rules the dispatcher enforces; state them when they refuse:
@@ -98,9 +102,13 @@ Rules the dispatcher enforces; state them when they refuse:
   `--apply`. A delete of anything the operator did not name is never inferred.
 - A preview expires after 15 minutes and is consumed by one apply
   (`refused-preview`).
-- `issue.update` and `issue.comment.update` refuse a no-op (`input-invalid`):
-  the target must not already hold the requested values, because the later
-  read-back proves the write by finding them.
+- `issue.update`, `issue.comment.update`, `issue.transition`, and
+  `issue.assign` refuse a no-op (`input-invalid`): the target must not already
+  hold the requested values, because the later read-back proves the write by
+  finding them.
+- `issue.transition` names the destination status, never a transition id. Run
+  `issue.transitions` first; a status the site does not offer this principal
+  is `not-found`.
 - Jira has no monotonic issue revision. The `updated` timestamp only detects a
   target that moved between preview and apply; it is never proof on its own.
 - `page.update` reads the page first, binds its version, and keeps the current
@@ -111,14 +119,14 @@ Rules the dispatcher enforces; state them when they refuse:
   outbox and can read nothing else. A changed file refuses the apply. Staged
   copies untouched for an hour are pruned by the next staging.
 - A delete completes only when the read-back afterwards refuses with
-  `not-found`; a target still present at the same revision settles
-  `unchanged`. `issue.delete` needs the Delete Issues project permission
-  (`refused-auth` otherwise).
+  `not-found`, or, for an attachment, no longer lists it; a target still
+  present at the same revision settles `unchanged`. `issue.delete` needs the
+  Delete Issues project permission (`refused-auth` otherwise).
 - Never retry a write. Never re-shape one for another tool.
 
 Not available on this route: Jira or Confluence comment deletion (no such
-tool in mcp-atlassian 0.23.1), attachment deletion, transitions, and links.
-Say so; do not reach for REST.
+tool in mcp-atlassian at any version), Jira attachment deletion, links,
+watchers, and labels. Say so; do not reach for REST.
 
 ### Unknown outcomes and adjudication
 
@@ -162,11 +170,12 @@ flows this route does not expose.
 - Triage: `issue.search` (`project = KEY AND resolution = EMPTY ORDER BY created DESC`),
   `issue.get` on each candidate, `issue.update` for `assignee` or `priority`,
   `issue.comment` with the decision.
-- Work an issue: `issue.get`, `issue.comment` or `issue.comment.update`,
-  `issue.attach` for evidence files, `issue.update` for fields.
+- Work an issue: `issue.get`, `issue.assign`, `issue.transitions` then
+  `issue.transition` to move it, `issue.comment` or `issue.comment.update`,
+  `issue.attach` for evidence files, `issue.update` for other fields.
 - Document: `page.search` to find the parent and check the title is free,
   `page.create` with `parentId`, `page.update` for revisions, `page.comment`,
-  `page.attach`.
+  `page.attach`, `page.attachment.delete` to replace a stale file.
 - Retire: `page.delete` or `issue.delete`, only for an object the operator
   named; both complete only on a not-found read-back.
 

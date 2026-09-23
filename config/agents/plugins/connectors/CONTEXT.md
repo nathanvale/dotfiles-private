@@ -37,8 +37,8 @@ _Avoid_: Provider, server, credential
 
 **Atlassian Operation**:
 One semantic Jira or Confluence action the Connector Skill exposes: get,
-search, create, update, comment, edit a comment, attach a file, or delete an
-issue or page.
+search, list transitions, create, update, transition, assign, comment, edit a
+comment, attach a file, delete an attachment, or delete an issue or page.
 _Avoid_: Tool, tool call, command
 
 **Upload Outbox**:
