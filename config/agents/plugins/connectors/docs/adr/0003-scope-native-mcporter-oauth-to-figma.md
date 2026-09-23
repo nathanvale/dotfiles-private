@@ -55,9 +55,19 @@ Declare `oauth: "mcporter"` only on Figma's route. The shared launcher permits a
 
 The public launcher tests must show Figma attended auth, cached-token reads, refusal of auth for other skills, exact endpoint and tools, and scrubbed child environment. A separate attended live canary may show login and schema for the exact candidate; it cannot establish provider approval. Revisit this decision when Figma offers a distinct admitted client identity or when Canva's own native OAuth qualification and migration decision are complete.
 
+## Evidence and remaining qualification
+
+- Documented by Figma: the hosted endpoint uses OAuth, and Figma limits remote MCP access to clients in its MCP Catalog. A new client must seek registration through Figma. The catalog lists Claude Code and Codex, but does not list this Connectors Plugin as an admitted client.
+- Documented by Figma: `whoami`, `get_design_context`, `get_screenshot`, `get_variable_defs`, and `get_metadata` are read tools. Figma's public MCP setup and tool pages do not specify the Connectors client's registration or redirect rules, scopes, token-endpoint authentication, access-token lifetime, refresh replacement, or revocation contract.
+- Documented by MCPorter: `auth` performs attended OAuth; `--no-oauth` uses cached tokens without interactive consent. An explicit `--config` selects only that registry, and MCPorter owns the private credential vault for native OAuth.
+- Locally observed on 24 September 2026: MCPorter 0.14.0 received HTTP 403 during dynamic registration with its default client identity. A separate isolated registry with `clientName: "Claude Code"` completed attended OAuth and listed 40 tools. A fresh `list figma --json --no-oauth` from that isolated cache exited 0. These observations prove local interoperability for the borrowed name, not admission of the actual Connectors client.
+- Unproved: authentication and principal through this exact plugin candidate, a private Figma design read, provider approval of the borrowed name, and Figma-specific registration, redirect, scope, refresh, or revocation behavior. Leave [issue #68](https://github.com/nathanvale/dotfiles-private/issues/68) open against its current acceptance criteria. The foreground coordinator can amend [Spec #67](https://github.com/nathanvale/dotfiles-private/issues/67) and that ticket to the explicitly chosen local workaround; a separately supported Connectors identity still requires Figma's admission path.
+
 ## References
 
 - [Figma remote MCP installation](https://developers.figma.com/docs/figma-mcp-server/remote-server-installation/)
+- [Figma MCP client catalog](https://www.figma.com/mcp-catalog/)
+- [Figma MCP tools](https://developers.figma.com/docs/figma-mcp-server/tools-and-prompts/)
 - [MCPorter CLI reference](https://github.com/openclaw/mcporter/blob/main/docs/cli-reference.md)
 - [MCPorter configuration](https://github.com/openclaw/mcporter/blob/main/docs/config.md)
 - [Canva OAuth proposal](0002-own-canva-per-user-oauth-below-mcporter.md)
