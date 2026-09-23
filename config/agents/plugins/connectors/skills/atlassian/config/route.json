@@ -1,5 +1,5 @@
 {
-	"defaultProvider": "atlassian-official-jira",
+	"defaultProvider": "atlassian-community-jira",
 	"dispatcherOwned": true,
 	"selectors": {
 		"tenant": "ATLASSIAN_TENANT"

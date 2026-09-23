@@ -9,6 +9,7 @@ writeFileSync(
 	path.join(env.TMPDIR ?? "/tmp", "community-provider.json"),
 	JSON.stringify({
 		argv: process.argv.slice(2),
+		cwd: process.cwd(),
 		jiraUrl: env.JIRA_URL ?? null,
 		confluenceUrl: env.CONFLUENCE_URL ?? null,
 		username: env.JIRA_USERNAME ?? env.CONFLUENCE_USERNAME ?? null,

@@ -1,28 +1,27 @@
 #!/usr/bin/env bun
 // Atlassian dispatcher: one semantic Jira or Confluence operation for one
-// tenant, Official by default, explicit Community reads through one Provider,
-// every write behind a durable preview and apply journal, and the operator
-// path that inspects and adjudicates what the journal holds. Raw
-// provider-route is the transport primitive underneath; this module owns the
-// safety policy and renders one envelope per invocation.
+// tenant through the Atlassian Community Provider, every write behind a
+// durable preview and apply journal, and the operator path that inspects and
+// adjudicates what the journal holds. Raw provider-route is the transport
+// primitive underneath; this module owns the safety policy and renders one
+// envelope per invocation.
 //
-//   atlassian-dispatch --tenant <slug> <read-operation> [--input <json>] [--provider official|community]
-//   atlassian-dispatch --tenant <slug> <write-operation> --input <json> --preview [--provider official|community]
-//   atlassian-dispatch --tenant <slug> <write-operation> --input <json> --apply <previewId> [--provider official|community]
+//   atlassian-dispatch --tenant <slug> <read-operation> [--input <json>]
+//   atlassian-dispatch --tenant <slug> <write-operation> --input <json> --preview
+//   atlassian-dispatch --tenant <slug> <write-operation> --input <json> --apply <previewId>
 //   atlassian-dispatch --tenant <slug> receipts
 //   atlassian-dispatch --tenant <slug> receipt --run <runId>
 //   atlassian-dispatch --tenant <slug> adjudicate --run <runId> --input <json>
 //   atlassian-dispatch --tenant <slug> unlock --run <runId>
-//   atlassian-dispatch --tenant <slug> parity --operation <read-operation> --input <json>
 //   atlassian-dispatch --discover
 import { TENANT_PATTERN } from "./custody/index.ts";
-import { CAUSES, type CauseCode, type CommandId, COMMANDS, type Envelope, OPERATION_SPECS, OPERATIONS, type OperationSpec, type ProviderName } from "./dispatch/contract.ts";
+import { CAUSES, type CauseCode, type CommandId, COMMANDS, type Envelope, OPERATION_SPECS, OPERATIONS, type OperationSpec, PROVIDER } from "./dispatch/contract.ts";
 import { type Dependencies, readInput, REPAIR_TEXT, specFor } from "./dispatch/engine.ts";
-import { adjudicateFlow, applyFlow, type Outcome, parityFlow, previewFlow, readFlow, receiptFlow, receiptsFlow, Session, unlockFlow } from "./dispatch/flows.ts";
+import { adjudicateFlow, applyFlow, type Outcome, previewFlow, readFlow, receiptFlow, receiptsFlow, Session, unlockFlow } from "./dispatch/flows.ts";
 import { productionDependencies } from "./dispatch/runtime.ts";
 import { type WriteInput, writeInput } from "./dispatch/writes.ts";
 
-const VALUE_OPTIONS = ["--tenant", "--provider", "--input", "--apply", "--run", "--operation"] as const;
+const VALUE_OPTIONS = ["--tenant", "--input", "--apply", "--run"] as const;
 const FLAG_OPTIONS = ["--preview", "--json", "--discover", "--help"] as const;
 type ValueOption = (typeof VALUE_OPTIONS)[number];
 type FlagOption = (typeof FLAG_OPTIONS)[number];
@@ -76,11 +75,9 @@ export type Mode = { kind: "read" } | { kind: "preview" } | { kind: "apply"; pre
 export interface Invocation {
 	tenant: string;
 	path: string;
-	provider: ProviderName | undefined;
 	input: unknown;
 	mode: Mode;
 	runId: string | undefined;
-	operation: string | undefined;
 }
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
@@ -111,13 +108,11 @@ export function parseArgv(argv: string[]): Parsed<Invocation> {
 	if (!parsed.ok) return parsed;
 	const options = parsed.value;
 	if (options.flags.has("--discover") || options.flags.has("--help")) {
-		return { ok: true, value: { tenant: "", path: "discover", provider: undefined, input: {}, mode: { kind: "discover" }, runId: undefined, operation: undefined } };
+		return { ok: true, value: { tenant: "", path: "discover", input: {}, mode: { kind: "discover" }, runId: undefined } };
 	}
 	const tenant = options.values["--tenant"];
-	const provider = options.values["--provider"];
 	const runId = options.values["--run"];
 	if (!tenant || !TENANT_PATTERN.test(tenant)) return usage("--tenant must be a lowercase tenant slug");
-	if (provider !== undefined && provider !== "official" && provider !== "community") return usage("--provider must be official or community");
 	if (runId !== undefined && !IDENTIFIER.test(runId)) return usage("--run needs a receipt run id");
 	if (options.path === undefined) return usage(`an operation or command is required: ${[...OPERATIONS, ...COMMANDS].join(", ")}`);
 	const mode = parseMode(options);
@@ -128,7 +123,7 @@ export function parseArgv(argv: string[]): Parsed<Invocation> {
 	} catch {
 		return { ok: false, reason: "--input must be a JSON object", cause: "input-invalid" };
 	}
-	return { ok: true, value: { tenant, path: options.path, provider, input, mode: mode.value, runId, operation: options.values["--operation"] } };
+	return { ok: true, value: { tenant, path: options.path, input, mode: mode.value, runId } };
 }
 
 type EffectClass = Envelope["result"]["effectClass"];
@@ -172,7 +167,8 @@ const discovery = (): Outcome => ({
 	cause: "success",
 	data: {
 		contractVersion: "2.0.0",
-		operations: Object.values(OPERATION_SPECS).map((spec) => ({ id: spec.id, kind: spec.kind, product: spec.product, official: spec.official, community: spec.community })),
+		provider: PROVIDER,
+		operations: Object.values(OPERATION_SPECS).map((spec) => ({ id: spec.id, kind: spec.kind, product: spec.product, tool: spec.tool })),
 		commands: [...COMMANDS],
 		exitMeanings: { 0: "success", 2: "usage refusal", 3: "domain refusal or failure", 4: "schema refusal" },
 		writes: "preview with --preview, then --apply <previewId> with the identical input; an unknown outcome blocks the object until adjudicate resolves it",
@@ -195,13 +191,6 @@ async function commandFlow(session: Session, invocation: Invocation, command: Co
 			return { identity, effectClass: "repository-local", outcome: runId ? unlockFlow(session, runId) : refused("usage-invalid", "unlock needs --run <runId>") };
 		case "adjudicate":
 			return { identity, effectClass: "repository-local", outcome: runId ? await adjudicateFlow(session, runId, invocation.input) : refused("usage-invalid", "adjudicate needs --run <runId> and --input <json>") };
-		case "parity": {
-			const spec = invocation.operation === undefined ? undefined : specFor(invocation.operation);
-			if (!spec || spec.kind !== "read") return { identity, effectClass: "repository-local", outcome: refused("usage-invalid", "parity needs --operation <read-operation>") };
-			const validated = readInput(spec.id, invocation.input);
-			if (!validated.ok) return { identity, effectClass: "repository-local", outcome: refused("input-invalid", validated.reason) };
-			return { identity, effectClass: "repository-local", outcome: await parityFlow(session, spec, validated.input) };
-		}
 	}
 }
 
@@ -209,8 +198,7 @@ async function writeFlow(session: Session, invocation: Invocation, spec: Operati
 	const validated = writeInput(spec.id as Parameters<typeof writeInput>[0], invocation.input);
 	if (!validated.ok) return refused("input-invalid", validated.reason);
 	const input: WriteInput = validated.input;
-	const provider = invocation.provider ?? "official";
-	return mode.kind === "preview" ? previewFlow(session, spec, input, provider) : applyFlow(session, spec, input, provider, mode.previewId);
+	return mode.kind === "preview" ? previewFlow(session, spec, input) : applyFlow(session, spec, input, mode.previewId);
 }
 
 // Dependencies are built once, from the validated tenant, so the transport,
@@ -229,7 +217,7 @@ export async function run(argv: string[], dependencies: (tenant: string) => Depe
 	if (!spec) return envelope("atlassian.unknown", "inspect", refused("usage-invalid", REPAIR_TEXT["usage-invalid"]), []);
 	if (invocation.mode.kind === "read") {
 		const validated = readInput(spec.id, invocation.input);
-		const outcome = validated.ok ? await readFlow(session, spec, validated.input, invocation.provider) : refused("input-invalid", validated.reason);
+		const outcome = validated.ok ? await readFlow(session, spec, validated.input) : refused("input-invalid", validated.reason);
 		return envelope(`atlassian.${spec.id}`, "inspect", outcome, session.provenance);
 	}
 	const outcome = await writeFlow(session, invocation, spec, invocation.mode);

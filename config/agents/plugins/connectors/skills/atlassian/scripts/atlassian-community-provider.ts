@@ -2,8 +2,11 @@
 // Community mcp-atlassian Provider, one product per route. Re-reads the
 // selected product's bound item (username, credential, and site_url) inside
 // this process, and execs the pinned package with only that product's
-// environment triplet.
+// environment triplet, started in the tenant's private outbox so the package
+// can read staged uploads and nothing else.
+import { ownedDirectory } from "../../../bin/private-state.ts";
 import { type BoundItem, boundItem, type Product, providerInvocation } from "./custody/index.ts";
+import { outboxDirectory } from "./outbox.ts";
 import { atlassianProcess, type ProviderProcess, singleLine } from "./provider-process.ts";
 
 const { cleanEnvironment, executableOnPath, refuseArguments } = atlassianProcess;
@@ -31,6 +34,9 @@ function main(argv: string[]): never {
 	// This full-item read and comparison happens before uvx is probed or spawned.
 	const ready = prerequisites();
 	if (preflight) process.exit(0);
+	const outbox = outboxDirectory(ready.invocation.tenant, process.env);
+	if (!ownedDirectory(outbox).ok) fail("outbox-unavailable", "the tenant's private upload outbox could not be prepared");
+	process.chdir(outbox);
 	const environment = { ...cleanEnvironment(), ...productEnvironment(ready.invocation.product, ready.item, ready.credential) };
 	replaceProcess(ready.uvx, ["uvx", "--system-certs", "--no-env-file", "--from", PACKAGE_PIN, "mcp-atlassian"], environment);
 }

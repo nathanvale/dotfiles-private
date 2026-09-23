@@ -1,15 +1,12 @@
 // Failure translation at the transport seam. This is the only module that
 // inspects provider text: the route transport adapter hands it what a process
-// or tool produced, and dispatch policy receives a closed cause, a fixed hint
-// from the precondition table, and whether content was observed. No provider
-// stdout, stderr, or tool message survives translation.
+// or tool produced, and dispatch policy receives a closed cause and a fixed
+// hint from the precondition table. No provider stdout, stderr, or tool
+// message survives translation.
 import type { CauseCode } from "./contract.ts";
 
 // What the transport adapter observed. Text here is untrusted.
-export type ObservedFailure =
-	| { kind: "process"; exitCode: number; stderr: string; stdout: string; contentObserved: boolean }
-	| { kind: "tool-error"; message: string; contentObserved: boolean }
-	| { kind: "malformed"; message: string; contentObserved: boolean };
+export type ObservedFailure = { kind: "process"; exitCode: number; stderr: string; stdout: string } | { kind: "tool-error"; message: string } | { kind: "malformed"; message: string };
 
 export type ProviderFailureCause = Extract<CauseCode, "refused-precondition" | "refused-auth" | "not-found" | "capability-unavailable" | "failed-transport" | "failed-unknown">;
 
@@ -18,18 +15,19 @@ export type ProviderFailureCause = Extract<CauseCode, "refused-precondition" | "
 export interface ProviderFailure {
 	cause: ProviderFailureCause;
 	hint: string | null;
-	contentObserved: boolean;
 }
 
 const AUTH_PATTERN = /\b(401|403)\b|authentication failed|unauthori[sz]ed|forbidden|permission/i;
 const NOT_FOUND_PATTERN = /\b404\b|not found|does not exist/i;
+// Confluence answers a missing page with one sentence that also mentions
+// permission; the missing-content half is the specific signal and wins.
+const MISSING_CONTENT_PATTERN = /no content with the given id/i;
 const CAPABILITY_PATTERN = /unknown tool|tool .* not found|no such tool|not exposed/i;
 const TRANSPORT_PATTERN = /timed? ?out|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ENOTFOUND|offline|connection|socket/i;
 
 // Our own Provider cause codes: a closed list, matched exactly. Each maps to
 // fixed public guidance; the Provider's message text is never carried.
 const PROVIDER_CAUSE_HINTS: Record<string, string> = {
-	"bridge-version-invalid": "install the pinned hyper-mcp-remote bridge version",
 	"executable-missing": "install the missing provider executable on PATH",
 	"credential-wrapper-missing": "restore the dotfiles 1Password helper",
 	"credential-context-invalid": "restart through the semantic dispatcher",
@@ -42,15 +40,15 @@ const PROVIDER_CAUSE_HINTS: Record<string, string> = {
 	"tenant-invalid": "the tenant slug was rejected by the provider",
 	"product-invalid": "the provider route has no valid product",
 	"arguments-invalid": "the provider was invoked with unexpected arguments",
-	"log-path-invalid": "restore the Provider's owned bridge log directory",
+	"outbox-unavailable": "the tenant's private upload outbox could not be prepared under the state root",
 	"execve-unavailable": "run the Provider with a Bun runtime that supports process replacement",
 	"exec-failed": "inspect the Provider executable and runtime",
-	"injection-mismatch": "restart through the semantic dispatcher",
 };
 const PRECONDITION_PATTERN = new RegExp(`atlassian-provider:error:(${Object.keys(PROVIDER_CAUSE_HINTS).join("|")}):`);
 
 function classify(observed: ObservedFailure, text: string): ProviderFailureCause {
 	if (PRECONDITION_PATTERN.test(text)) return "refused-precondition";
+	if (MISSING_CONTENT_PATTERN.test(text)) return "not-found";
 	if (AUTH_PATTERN.test(text)) return "refused-auth";
 	if (NOT_FOUND_PATTERN.test(text)) return "not-found";
 	if (CAPABILITY_PATTERN.test(text)) return "capability-unavailable";
@@ -65,5 +63,5 @@ export function translateFailure(observed: ObservedFailure): ProviderFailure {
 	const text = observed.kind === "process" ? `${observed.stderr}\n${observed.stdout}` : observed.message;
 	const cause = classify(observed, text);
 	const code = cause === "refused-precondition" ? PRECONDITION_PATTERN.exec(text)?.[1] : undefined;
-	return { cause, hint: code === undefined ? null : (PROVIDER_CAUSE_HINTS[code] ?? null), contentObserved: observed.contentObserved };
+	return { cause, hint: code === undefined ? null : (PROVIDER_CAUSE_HINTS[code] ?? null) };
 }

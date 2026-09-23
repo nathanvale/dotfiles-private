@@ -12,10 +12,15 @@ import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, read
 import os from "node:os";
 import path from "node:path";
 import { TENANT_PATTERN } from "../custody/index.ts";
-import { OPERATION_SPECS, PROVIDERS, type OperationId, type ProviderName, type WriteOperation } from "./contract.ts";
+import { OPERATION_SPECS, PROVIDER, type ProviderName, type WriteOperation } from "./contract.ts";
 
 export type { WriteOperation } from "./contract.ts";
-const EFFECT_KINDS = ["jira-issue", "jira-comment", "confluence-content", "confluence-comment"] as const;
+// Every Provider a persisted record may name. "official" is the retired
+// Atlassian Official route: its records stay readable and keep blocking their
+// objects, but no active route can apply, read back, or resolve them.
+const PERSISTED_PROVIDERS = ["official", PROVIDER] as const;
+export type PersistedProvider = (typeof PERSISTED_PROVIDERS)[number];
+const EFFECT_KINDS = ["jira-issue", "jira-comment", "jira-attachment", "confluence-content", "confluence-comment", "confluence-attachment"] as const;
 export type EffectKind = (typeof EFFECT_KINDS)[number];
 export interface Effect {
 	kind: EffectKind;
@@ -49,7 +54,7 @@ export type SendState = (typeof SEND_STATES)[number];
 export interface Preview {
 	previewId: string;
 	operation: WriteOperation;
-	provider: ProviderName;
+	provider: PersistedProvider;
 	objectIdentity: string;
 	inputDigest: string;
 	// Digest of the exact provider arguments the preview was shaped into, so an
@@ -68,7 +73,7 @@ export interface Receipt {
 	runId: string;
 	previewId: string;
 	operation: WriteOperation;
-	provider: ProviderName;
+	provider: PersistedProvider;
 	objectIdentity: string;
 	inputDigest: string;
 	argsDigest: string;
@@ -111,6 +116,9 @@ export interface PreviewRequest {
 
 export interface ApplyRequest {
 	previewId: string;
+	// The active Provider the apply will send through; a preview recorded for
+	// any other Provider is refused, never re-shaped.
+	provider: ProviderName;
 	canonicalInput: unknown;
 	providerArgs: unknown;
 	revision: string | null;
@@ -154,7 +162,8 @@ const PREVIEW_STATUS_SET: ReadonlySet<string> = new Set(PREVIEW_STATUSES);
 const RECEIPT_STATUS_SET: ReadonlySet<string> = new Set(RECEIPT_STATUSES);
 const SEND_STATE_SET: ReadonlySet<string> = new Set(SEND_STATES);
 const UNCHANGED_BASIS_SET: ReadonlySet<string> = new Set(UNCHANGED_BASES);
-const SPACE_ID = /^[1-9][0-9]{0,19}$/;
+const PROVIDER_SET: ReadonlySet<string> = new Set(PERSISTED_PROVIDERS);
+const SPACE_KEY = /^[A-Za-z0-9~][A-Za-z0-9_.-]{0,254}$/;
 const DEFAULT_PREVIEW_TTL_MS = 15 * 60 * 1000;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -216,20 +225,24 @@ export function objectIdentity(operation: WriteOperation, canonicalInput: unknow
 	switch (operation) {
 		case "issue.update":
 		case "issue.comment":
+		case "issue.comment.update":
+		case "issue.attach":
+		case "issue.delete":
 			return `issue:${identifier(canonicalInput.issueKey, "issueKey")}`;
 		case "page.update":
 		case "page.comment":
+		case "page.attach":
+		case "page.delete":
 			return `page:${identifier(canonicalInput.pageId, "pageId")}`;
 		case "issue.create":
 			return `project:${identifier(canonicalInput.projectKey, "projectKey")}:create:${discriminator(canonicalInput.issueType, "issueType")}:${subjectDigest(canonicalInput.summary, "summary")}`;
 		case "page.create": {
-			// One canonical container: the resolved numeric space id. A key is
-			// an alias of the same space and would open a second write path
-			// around a pending receipt, so key-only input is refused here.
-			const space = isRecord(canonicalInput.space) ? canonicalInput.space : {};
-			if (typeof space.id !== "string" || !SPACE_ID.test(space.id)) throw new JournalError("input-invalid", "space.id must be the resolved numeric space id; resolve a space key before previewing");
+			// One canonical container: the space key, which is the only space
+			// identity the Community route exposes.
+			const space = canonicalInput.spaceKey;
+			if (typeof space !== "string" || !SPACE_KEY.test(space)) throw new JournalError("input-invalid", "spaceKey must be the Confluence space key");
 			const parent = canonicalInput.parentId === undefined ? "root" : identifier(canonicalInput.parentId, "parentId");
-			return `space:${space.id}:create:${parent}:${subjectDigest(canonicalInput.title, "title")}`;
+			return `space:${space}:create:${parent}:${subjectDigest(canonicalInput.title, "title")}`;
 		}
 	}
 }
@@ -310,15 +323,21 @@ function readRecord(file: string): Record<string, unknown> | null {
 // operation derives, digests must be hex, timestamps finite and ordered, the
 // holder pid a positive integer, and effects consistent with the status.
 const HEX64 = /^[0-9a-f]{64}$/;
+const ISSUE_IDENTITY = /^issue:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
+const PAGE_IDENTITY = /^page:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/;
 const IDENTITY_SHAPES: Record<WriteOperation, RegExp> = {
-	"issue.update": /^issue:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/,
-	"issue.comment": /^issue:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/,
-	"page.update": /^page:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/,
-	"page.comment": /^page:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$/,
+	"issue.update": ISSUE_IDENTITY,
+	"issue.comment": ISSUE_IDENTITY,
+	"issue.comment.update": ISSUE_IDENTITY,
+	"issue.attach": ISSUE_IDENTITY,
+	"issue.delete": ISSUE_IDENTITY,
+	"page.update": PAGE_IDENTITY,
+	"page.comment": PAGE_IDENTITY,
+	"page.attach": PAGE_IDENTITY,
+	"page.delete": PAGE_IDENTITY,
 	"issue.create": /^project:[A-Za-z0-9][A-Za-z0-9_.-]{0,127}:create:[a-z0-9][a-z0-9-]{0,63}:[0-9a-f]{16}$/,
-	"page.create": /^space:[1-9][0-9]{0,19}:create:(?:root|[A-Za-z0-9][A-Za-z0-9_.-]{0,127}):[0-9a-f]{16}$/,
+	"page.create": /^space:[A-Za-z0-9~][A-Za-z0-9_.-]{0,254}:create:(?:root|[A-Za-z0-9][A-Za-z0-9_.-]{0,127}):[0-9a-f]{16}$/,
 };
-const PROVIDER_SET: ReadonlySet<string> = new Set(PROVIDERS);
 
 // A function declaration, so TypeScript narrows after each guard call.
 function corrupt(what: string): never {
@@ -590,6 +609,7 @@ class FileJournal implements Journal {
 	private recordIntent(request: ApplyRequest): Receipt {
 		const preview = this.readPreview(request.previewId);
 		if (preview.status === "consumed") throw new JournalError("preview-consumed", "the preview was already applied");
+		if (preview.provider !== request.provider) throw new JournalError("preview-provider-retired", "the preview was recorded for a Provider this route no longer has; preview again");
 		if (this.now() > preview.expiresAt) throw new JournalError("preview-expired", "the preview has expired; preview again");
 		if (canonicalDigest(request.canonicalInput) !== preview.inputDigest) throw new JournalError("preview-input-mismatch", "the input differs from the previewed input");
 		if (canonicalDigest(request.providerArgs) !== preview.argsDigest) throw new JournalError("preview-args-mismatch", "the provider arguments differ from the previewed arguments");
@@ -697,6 +717,10 @@ class FileJournal implements Journal {
 	resolve(runId: string, evidence: Evidence): Receipt {
 		if (!validEvidence(evidence)) throw new JournalError("evidence-invalid", "evidence must be unknown, unchanged with readback-absent, or completed with closed-vocabulary effects");
 		const located = this.readReceipt(runId);
+		// A receipt from a retired Provider has no route to read back through, so
+		// no evidence can settle it here; it stays open and keeps its object
+		// blocked until an operator resolves it by hand.
+		if (located.provider !== PROVIDER) throw new JournalError("receipt-provider-retired", "the receipt was recorded through a Provider this route no longer has; resolve it by hand");
 		const release = this.acquireLock(located.objectIdentity);
 		try {
 			const receipt = this.readReceipt(runId);

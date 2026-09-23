@@ -75,8 +75,8 @@ describe("route plan (in-process)", () => {
 
 describe("public process refusals: nothing reaches MCPorter or the credential helper", () => {
 	const cases: [string, string[]][] = [
-		["provider-invalid", ["probe-skill", "--provider", "atlassian-official", "--select", "selection=x", "--", "list"]],
-		["tool-invalid", ["probe-skill", "--select", "selection=x", "--", "call", "atlassian-official.executeRead"]],
+		["provider-invalid", ["probe-skill", "--provider", "probe-unknown", "--select", "selection=x", "--", "list"]],
+		["tool-invalid", ["probe-skill", "--select", "selection=x", "--", "call", "probe-unknown.executeRead"]],
 		["tool-invalid", ["probe-skill", "--select", "selection=x", "--", "call", "https://example.invalid/mcp.tool"]],
 		["flag-forbidden", ["probe-skill", "--select", "selection=x", "--", "list", "--http-url=https://example.invalid/mcp"]],
 		["flag-forbidden", ["probe-skill", "--select", "selection=x", "--", "list", "--config", "/etc/other.json"]],
@@ -155,18 +155,18 @@ describe("public process route", () => {
 		expect(harness.has("mcporter.json")).toBe(false);
 	});
 
-	test("a dispatcher-owned Atlassian tool refuses before MCPorter or either provider process can start", async () => {
-		const secret = "fixture-atlassian-api-key";
-		const result = await harness.run(["atlassian", "--provider", "atlassian-official-jira", "--select", "tenant=example", "--", "call", "createJiraIssue", "--args", '{"cloudId":"cloud-example","projectKey":"PROJ","issueType":"Bug","summary":"must not spawn"}'], { FIXTURE_SECRET: secret });
+	test("a dispatcher-owned Atlassian tool refuses before MCPorter or the Provider process can start", async () => {
+		const secret = "fixture-community-secret";
+		const result = await harness.run(["atlassian", "--provider", "atlassian-community-jira", "--select", "tenant=example", "--", "call", "jira_create_issue", "--args", '{"project_key":"PROJ","issue_type":"Bug","summary":"must not spawn"}'], { FIXTURE_SECRET: secret });
 		expect([result.code, result.stdout, result.stderr.includes("provider-route:error:dispatcher-owned:")]).toEqual([3, "", true]);
 		expect(`${result.stdout}${result.stderr}`).not.toContain(secret);
 		expect(harness.has("mcporter.json")).toBe(false);
 		expect(harness.has("wrapper.log")).toBe(false);
 	});
 
-	test("a dispatcher-owned Atlassian registry list also refuses before MCPorter or either provider process can start", async () => {
+	test("a dispatcher-owned Atlassian registry list also refuses before MCPorter or the Provider process can start", async () => {
 		const secret = "fixture-community-secret";
-		const result = await harness.run(["atlassian", "--provider", "atlassian-official-jira", "--select", "tenant=example", "--", "list", "--json"], { FIXTURE_SECRET: secret });
+		const result = await harness.run(["atlassian", "--provider", "atlassian-community-jira", "--select", "tenant=example", "--", "list", "--json"], { FIXTURE_SECRET: secret });
 		expect([result.code, result.stdout, result.stderr.includes("provider-route:error:dispatcher-owned:")]).toEqual([3, "", true]);
 		expect(`${result.stdout}${result.stderr}`).not.toContain(secret);
 		expect(harness.has("mcporter.json")).toBe(false);

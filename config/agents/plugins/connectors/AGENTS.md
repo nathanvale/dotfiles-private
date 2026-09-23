@@ -15,9 +15,9 @@ Read [CONTEXT.md](CONTEXT.md) for the plugin's vocabulary before naming anything
 
 ## Adding a connector
 
-1. Choose the shape. A keyless hosted MCP endpoint (Context7, Firecrawl) needs a registry, a route declaration, a `SKILL.md`, and one owned test through `tests/harness.ts`. A credentialed or multi-provider service (Atlassian) adds Provider scripts below MCPorter and a semantic dispatcher that owns Route Selection, tenant guard, and any write policy. A per-user OAuth service (Canva) adds a session module with an attended login CLI, a Provider that hands one fresh access token to the pinned bridge, and an account selector; read [`docs/adr/0002-own-canva-per-user-oauth-below-mcporter.md`](docs/adr/0002-own-canva-per-user-oauth-below-mcporter.md) before copying it.
+1. Choose the shape. A keyless hosted MCP endpoint (Context7, Firecrawl) needs a registry, a route declaration, a `SKILL.md`, and one owned test through `tests/harness.ts`. A credentialed service (Atlassian) adds one Provider script below MCPorter and a semantic dispatcher that owns Route Selection, the trusted-origin binding, and any write policy. A per-user OAuth service (Canva) adds a session module with an attended login CLI, a Provider that hands one fresh access token to the pinned bridge, and an account selector; read [`docs/adr/0002-own-canva-per-user-oauth-below-mcporter.md`](docs/adr/0002-own-canva-per-user-oauth-below-mcporter.md) before copying it.
 2. Copy the closest existing skill as the template: `skills/context7/` for the keyless shape, `skills/atlassian/` for the credentialed shape, `skills/canva/` for the OAuth shape. Rename, then remove everything the new service does not need.
-3. Declare the registry: `imports: []`, one server per Provider and product, exact `allowedTools` confirmed against live schema discovery, `${SELECTOR}` placeholders only for non-secret Route Selection values declared in `route.json`.
+3. Declare the registry: `imports: []`, one server per product, exact `allowedTools` confirmed against live schema discovery, `${SELECTOR}` placeholders only for non-secret Route Selection values declared in `route.json`.
 4. Write the skill for the agent: the dispatcher or route command it must use, the inputs it must supply, the refusals it will meet, and the live states it cannot assume. Invoke `writing-for-agents` first.
 5. Add the owned test file beside the skill: route composition, custody through `assertCustody`, refusals with literal causes, and no secret in any stream.
 6. Any write capability follows the Atlassian pattern: preview and apply through a durable journal, exact provider write tools, and an operator adjudication path. Read [`docs/adr/0001-route-atlassian-through-mcporter.md`](docs/adr/0001-route-atlassian-through-mcporter.md) before designing it.
@@ -27,4 +27,4 @@ Read [CONTEXT.md](CONTEXT.md) for the plugin's vocabulary before naming anything
 
 - Plugin gates: `bun run test` and `bun run typecheck` in this directory.
 - Repository gates from the worktree root: `bun run biome:check`, `bun run typecheck`, and `bun run --silent quality:fallow --changed-since <task-start-commit>` (see `docs/agents/fallow.md`).
-- Completion reports name each gate's result, then separately list the live proof that was unavailable: authentication, live schema, tenant match, read parity, and any write.
+- Completion reports name each gate's result, then separately list the live proof that was unavailable: authentication, live schema, live reads, and any write.
