@@ -107,13 +107,13 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 		if (run.code !== 0 && isMcporterOfflineEnvelope(parsed, server)) {
 			return { ok: false, cause: "failed-transport", hint: null, contentObserved: false };
 		}
+		if (isRecord(parsed) && parsed.isError === true) {
+			return { ok: false, ...translateFailure({ kind: "tool-error", contentObserved: true }) };
+		}
 		const contentObserved = run.stdout.trim().length > 0;
 		if (run.code !== 0) return { ok: false, ...translateFailure({ kind: "process", exitCode: run.code, stderr: run.stderr, stdout: run.stdout, contentObserved }) };
 		const data = parsed;
 		if (data === undefined) return { ok: false, ...translateFailure({ kind: "malformed", message: "MCPorter output was not JSON", contentObserved }) };
-		if (typeof data === "object" && data !== null && (data as { isError?: unknown }).isError === true) {
-			return { ok: false, ...translateFailure({ kind: "tool-error", message: JSON.stringify(data).slice(0, 2000), contentObserved: true }) };
-		}
 		return { ok: true, data };
 	};
 	const request = (binding: CredentialBinding, server: string, mcporterArgs: string[]): TransportResult => {

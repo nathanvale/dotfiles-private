@@ -1,14 +1,13 @@
-// Failure translation at the transport seam. This is the only module that
-// inspects provider text: the route transport adapter hands it what a process
-// or tool produced, and dispatch policy receives a closed cause, a fixed hint
-// from the precondition table, and whether content was observed. No provider
-// stdout, stderr, or tool message survives translation.
+// Failure translation at the transport seam. Process text is inspected for
+// closed causes. Tool-error content is never
+// inspected; dispatch policy receives a closed cause, fixed hint, and whether
+// content was observed. No provider text survives translation.
 import type { CauseCode } from "./contract.ts";
 
 // What the transport adapter observed. Text here is untrusted.
 export type ObservedFailure =
 	| { kind: "process"; exitCode: number; stderr: string; stdout: string; contentObserved: boolean }
-	| { kind: "tool-error"; message: string; contentObserved: boolean }
+	| { kind: "tool-error"; contentObserved: boolean }
 	| { kind: "malformed"; message: string; contentObserved: boolean };
 
 export type ProviderFailureCause = Extract<CauseCode, "refused-precondition" | "refused-auth" | "not-found" | "capability-unavailable" | "failed-transport" | "failed-unknown">;
@@ -62,6 +61,7 @@ function classify(observed: ObservedFailure, text: string): ProviderFailureCause
 // A precondition line from our own Provider beats any other signal, because
 // it means no request was made. Everything else is classified in order.
 export function translateFailure(observed: ObservedFailure): ProviderFailure {
+	if (observed.kind === "tool-error") return { cause: "failed-unknown", hint: null, contentObserved: observed.contentObserved };
 	const text = observed.kind === "process" ? `${observed.stderr}\n${observed.stdout}` : observed.message;
 	const cause = classify(observed, text);
 	const code = cause === "refused-precondition" ? PRECONDITION_PATTERN.exec(text)?.[1] : undefined;

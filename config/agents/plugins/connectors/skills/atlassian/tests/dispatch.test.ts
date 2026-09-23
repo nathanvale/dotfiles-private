@@ -1323,20 +1323,27 @@ describe("production adapters", () => {
 		expect(harness.has("mcporter.json")).toBe(false);
 	});
 
-	test("hostile provider text in a real tool error is translated at the transport seam and never reaches stdout or stderr", async () => {
-		const PRIVATE = ["fixture-secret-value", "customer SSN 123-45-6789", "PROJ-99 confidential merger", OP_TOKEN_SENTINEL, "op://", "Bearer", "Basic "];
-		const leak = `HTTP 401 Unauthorized token=fixture-secret-value Authorization: Basic ${OP_TOKEN_SENTINEL} Bearer x op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential; issue PROJ-99 confidential merger; customer SSN 123-45-6789`;
+	test("text-only MCP tool errors remain unknown and never expose provider text", async () => {
+		const PRIVATE = ["fixture-secret-value", "customer SSN 123-45-6789", "Secret Roadmap Title", "https://private.example.invalid/path", OP_TOKEN_SENTINEL, "op://", "Bearer", "Basic "];
+		const privateText = `token=fixture-secret-value Authorization: Basic ${OP_TOKEN_SENTINEL} Bearer x op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential; title Secret Roadmap Title; customer SSN 123-45-6789; https://private.example.invalid/path`;
 		const canned = path.join(harness.root, "canned", OJ);
 		mkdirSync(canned, { recursive: true });
 		writeFileSync(path.join(canned, "list.json"), JSON.stringify({ tools: SCHEMAS[OJ] }));
 		writeFileSync(path.join(canned, "getAccessibleAtlassianResources.json"), JSON.stringify(RESOURCES));
-		writeFileSync(path.join(canned, "getJiraIssue.json"), JSON.stringify({ isError: true, content: [{ type: "text", text: leak }] }));
 		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 1));
-		const result = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
-		expect([result.code, result.stderr]).toEqual([3, ""]);
-		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; repairAction: string } };
-		expect([envelope.result.causeCode, envelope.result.repairAction]).toEqual(["refused-auth", "the provider refused authentication or permission; verify the credential type, scopes, and product permissions with their owner; fallback-ineligible:refused-auth"]);
-		for (const fragment of PRIVATE) expect(result.stdout).not.toContain(fragment);
+		for (const [label, message] of [
+			["auth wording", `HTTP 401 Unauthorized; ${privateText}`],
+			["capability wording", `unknown tool getJiraIssue; ${privateText}`],
+			["transport wording", `connect ECONNRESET; ${privateText}`],
+		] as const) {
+			writeFileSync(path.join(canned, "getJiraIssue.json"), JSON.stringify({ isError: true, content: [{ type: "text", text: message }] }));
+			const result = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
+			expect([label, result.code, result.stderr]).toEqual([label, 3, ""]);
+			const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; repairAction: string; provenance: { provider: string; tool: string; status: string }[] } };
+			expect([label, envelope.result.causeCode, envelope.result.repairAction]).toEqual([label, "failed-unknown", "the provider failed for an unclassified reason; inspect provider diagnostics; fallback-ineligible:failed-unknown"]);
+			expect(envelope.result.provenance.map((entry) => [entry.provider, entry.tool, entry.status])).toEqual([[OJ, "getAccessibleAtlassianResources", "success"], [OJ, "getJiraIssue", "failed-unknown"]]);
+			for (const fragment of PRIVATE) expect(result.stdout).not.toContain(fragment);
+		}
 	});
 
 	test("the public process crosses the real route on the Jira product server with canned MCPorter responses", async () => {
