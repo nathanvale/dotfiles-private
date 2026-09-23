@@ -1192,6 +1192,28 @@ describe("production adapters", () => {
 		expect(custody.argv.slice(2)).toEqual(["call", `${CJ}.jira_get_issue`, "--args", '{"issue_key":"PROJ-1"}', "--output", "json", "--timeout", "30000", "--no-oauth"]);
 	});
 
+	test("the public dispatcher uses only Community for an explicit Confluence read", async () => {
+		const secret = "fixture-confluence-custody-secret";
+		harness.write("item.json", fields({ username: "confluence@example.invalid", site_url: ORIGIN, credential: secret }, 7));
+		const canned = path.join(harness.root, "canned", CC);
+		mkdirSync(canned, { recursive: true });
+		writeFileSync(path.join(canned, "list.json"), JSON.stringify({ tools: SCHEMAS[CC] }));
+		writeFileSync(path.join(canned, "confluence_get_page.json"), JSON.stringify({ id: "123", title: "canned page" }));
+		const result = await harness.run(["--tenant", "example", "--provider", "community", "page.get", "--input", '{"pageId":"123"}', "--json"], {}, DISPATCH);
+		expect([result.code, result.stderr]).toEqual([0, ""]);
+		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; data: unknown; provenance: { provider: string; tool: string; status: string }[] } };
+		expect([envelope.result.causeCode, envelope.result.data]).toEqual(["success", { id: "123", title: "canned page" }]);
+		expect(envelope.result.provenance).toEqual([{ provider: CC, tool: "confluence_get_page", status: "success" }]);
+		const custody = assertCustody(harness, result, [secret, OP_TOKEN_SENTINEL], "child");
+		expect(custody.argv.slice(2)).toEqual(["call", `${CC}.confluence_get_page`, "--args", '{"page_id":"123"}', "--output", "json", "--timeout", "30000", "--no-oauth"]);
+		expect(harness.has("bridge.json")).toBe(false);
+		const log = readFileSync(path.join(harness.root, "wrapper.log"), "utf8");
+		expect(log).toContain("CONFLUENCE_EXAMPLE_API_TOKEN");
+		expect(log).not.toContain("JIRA_EXAMPLE_API_TOKEN");
+		expect(log).not.toContain(secret);
+		expect(log).not.toContain(OP_TOKEN_SENTINEL);
+	});
+
 	test("a top-level item version change invalidates durable parity evidence", async () => {
 		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 42));
 		const first = bound("jira");
