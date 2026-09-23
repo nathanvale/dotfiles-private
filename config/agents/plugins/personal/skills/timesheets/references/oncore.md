@@ -1,10 +1,11 @@
 # OnCore
 
-Expected origin: `https://iteraterecruitment.oncoreservices.com`.
+Open `https://iteraterecruitment.oncoreservices.com/` for sign-in. After sign-in,
+follow the site's redirect to authenticated `/pages/ContractorSummary.aspx`.
+Do not open bare `/ContractorSummary.aspx`: it redirects to NotFound after login.
 
-Canonical target: authenticated `ContractorSummary.aspx` with the contract
-selection and outstanding-period list. A login page, report, or opened period
-detail is not the canonical target.
+Canonical target: the summary with the contract selection and outstanding-period
+list. A login page, report, or opened period detail is not the canonical target.
 
 ## Read and propose
 
