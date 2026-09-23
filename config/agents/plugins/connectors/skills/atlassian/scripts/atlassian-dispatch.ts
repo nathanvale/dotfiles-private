@@ -1,6 +1,6 @@
 #!/usr/bin/env bun
 // Atlassian dispatcher: one semantic Jira or Confluence operation for one
-// tenant, Official by default, Community only with live-parity attestation,
+// tenant, Official by default, explicit Community reads through one Provider,
 // every write behind a durable preview and apply journal, and the operator
 // path that inspects and adjudicates what the journal holds. Raw
 // provider-route is the transport primitive underneath; this module owns the

@@ -1,5 +1,5 @@
 // Atlassian dispatcher: ten semantic operations over four static product
-// routes, Official default, Community only behind live-parity attestation,
+// routes, Official default, explicit Community reads through one provider,
 // writes behind the durable preview and apply journal, and the operator path.
 // Policy is proved in-process with an in-memory transport and a real journal in
 // a temp state root; public-process cases cross the real route.
@@ -531,16 +531,16 @@ describe("read fallback gate", () => {
 		expect(calls.filter((call) => call.tool === "jira_get_issue")).toHaveLength(1);
 	});
 
-	test("an explicit --provider community read is refused without the same exact attestation, and allowed with it", async () => {
-		const refused = fakeTransport();
-		const envelope = await dispatch(["--provider", "community", "page.get", "--input", '{"pageId":"123"}'], deps({ transport: refused.transport }));
-		expect([envelope.result.outcome, envelope.result.causeCode, envelope.result.exitCode]).toEqual(["refused", "refused-parity", 3]);
-		expect(envelope.result.repairAction).toContain("parity-unproven");
-		expect(refused.calls).toEqual([]);
-		const allowed = fakeTransport();
-		const ok = await dispatch(["--provider", "community", "page.get", "--input", '{"pageId":"123"}'], deps({ transport: allowed.transport, parity: async () => attested("page.get", ["pageId"]) }));
-		expect(ok.result.outcome).toBe("success");
-		expect(allowed.calls).toEqual([{ server: CC, tool: "confluence_get_page", args: { page_id: "123" } }]);
+	test("an explicit --provider community read uses only the selected provider without parity", async () => {
+		for (const [operation, input, server, toolName, args] of [
+			["issue.get", '{"issueKey":"PROJ-1"}', CJ, "jira_get_issue", { issue_key: "PROJ-1" }],
+			["page.get", '{"pageId":"123"}', CC, "confluence_get_page", { page_id: "123" }],
+		] as const) {
+			const selected = fakeTransport();
+			const envelope = await dispatch(["--provider", "community", operation, "--input", input], deps({ transport: selected.transport }));
+			expect([operation, envelope.result.outcome, envelope.result.causeCode, envelope.result.exitCode]).toEqual([operation, "success", "success", 0]);
+			expect(selected.calls).toEqual([{ server, tool: toolName, args }]);
+		}
 	});
 });
 
@@ -988,10 +988,10 @@ describe("parity attestation", () => {
 		expect(attestations).toEqual([]);
 	});
 
-	test("credential revision and principal changes invalidate stored parity before Community is spawned", async () => {
+	test("credential revision and principal changes block Community writes before it is spawned", async () => {
 		const { transport, calls } = fakeTransport();
 		const stale = attested("issue.get", ["issueKey"]);
-		const envelope = await dispatch(["--provider", "community", "issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({
+		const envelope = await dispatch(["--provider", "community", "issue.comment", "--input", '{"issueKey":"PROJ-1","body":"hello"}', "--preview"], deps({
 			transport,
 			parity: async () => stale,
 			bindCredential: async () => ({ ok: true, binding: { principal: "other@example.invalid", itemVersion: "onepassword-item-version:2", origin: ORIGIN } }),
@@ -1170,9 +1170,13 @@ describe("production adapters", () => {
 		expect(harness.has("bridge.json")).toBe(false);
 	});
 
-	test("the public dispatcher never emits the item secret and refuses Community before MCPorter starts", async () => {
+	test("the public dispatcher uses only Community for an explicit read without exposing the item secret", async () => {
 		const secret = "fixture-custody-secret";
 		harness.write("item.json", fields({ username: PRINCIPAL, site_url: ORIGIN, credential: secret }, 42));
+		const canned = path.join(harness.root, "canned", CJ);
+		mkdirSync(canned, { recursive: true });
+		writeFileSync(path.join(canned, "list.json"), JSON.stringify({ tools: SCHEMAS[CJ] }));
+		writeFileSync(path.join(canned, "jira_get_issue.json"), JSON.stringify({ key: "PROJ-1", summary: "canned" }));
 		const configured = await harness.run(["--tenant", "example", "--provider", "community", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
 		const log = readFileSync(path.join(harness.root, "wrapper.log"), "utf8");
 		for (const value of [secret, OP_TOKEN_SENTINEL]) {
@@ -1181,9 +1185,33 @@ describe("production adapters", () => {
 			expect(log).not.toContain(value);
 			expect(JSON.stringify(["--tenant", "example", "--provider", "community", "issue.get"])).not.toContain(value);
 		}
-		expect(harness.has("mcporter.json")).toBe(false);
-		const envelope = JSON.parse(configured.stdout) as { result: { causeCode: string } };
-		expect([configured.code, envelope.result.causeCode]).toEqual([3, "refused-parity"]);
+		const envelope = JSON.parse(configured.stdout) as { result: { causeCode: string; data: unknown; provenance: { provider: string; tool: string; status: string }[] } };
+		expect([configured.code, configured.stderr, envelope.result.causeCode, envelope.result.data]).toEqual([0, "", "success", { key: "PROJ-1", summary: "canned" }]);
+		expect(envelope.result.provenance).toEqual([{ provider: CJ, tool: "jira_get_issue", status: "success" }]);
+		const custody = assertCustody(harness, configured, [secret, OP_TOKEN_SENTINEL], "child");
+		expect(custody.argv.slice(2)).toEqual(["call", `${CJ}.jira_get_issue`, "--args", '{"issue_key":"PROJ-1"}', "--output", "json", "--timeout", "30000", "--no-oauth"]);
+	});
+
+	test("the public dispatcher uses only Community for an explicit Confluence read", async () => {
+		const secret = "fixture-confluence-custody-secret";
+		harness.write("item.json", fields({ username: "confluence@example.invalid", site_url: ORIGIN, credential: secret }, 7));
+		const canned = path.join(harness.root, "canned", CC);
+		mkdirSync(canned, { recursive: true });
+		writeFileSync(path.join(canned, "list.json"), JSON.stringify({ tools: SCHEMAS[CC] }));
+		writeFileSync(path.join(canned, "confluence_get_page.json"), JSON.stringify({ id: "123", title: "canned page" }));
+		const result = await harness.run(["--tenant", "example", "--provider", "community", "page.get", "--input", '{"pageId":"123"}', "--json"], {}, DISPATCH);
+		expect([result.code, result.stderr]).toEqual([0, ""]);
+		const envelope = JSON.parse(result.stdout) as { result: { causeCode: string; data: unknown; provenance: { provider: string; tool: string; status: string }[] } };
+		expect([envelope.result.causeCode, envelope.result.data]).toEqual(["success", { id: "123", title: "canned page" }]);
+		expect(envelope.result.provenance).toEqual([{ provider: CC, tool: "confluence_get_page", status: "success" }]);
+		const custody = assertCustody(harness, result, [secret, OP_TOKEN_SENTINEL], "child");
+		expect(custody.argv.slice(2)).toEqual(["call", `${CC}.confluence_get_page`, "--args", '{"page_id":"123"}', "--output", "json", "--timeout", "30000", "--no-oauth"]);
+		expect(harness.has("bridge.json")).toBe(false);
+		const log = readFileSync(path.join(harness.root, "wrapper.log"), "utf8");
+		expect(log).toContain("CONFLUENCE_EXAMPLE_API_TOKEN");
+		expect(log).not.toContain("JIRA_EXAMPLE_API_TOKEN");
+		expect(log).not.toContain(secret);
+		expect(log).not.toContain(OP_TOKEN_SENTINEL);
 	});
 
 	test("a top-level item version change invalidates durable parity evidence", async () => {

@@ -1,6 +1,6 @@
 ---
 name: atlassian
-description: Read, search, create, update, or comment on Jira issues and Confluence pages for one named tenant through the skill's Bun dispatcher. Use for Jira tickets, Confluence pages, Atlassian links, JQL, or CQL. Atlassian Official is the default; Atlassian Community only behind live parity evidence. Deletion and administration are outside this skill.
+description: Read, search, create, update, or comment on Jira issues and Confluence pages for one named tenant through the skill's Bun dispatcher. Use for Jira tickets, Confluence pages, Atlassian links, JQL, or CQL. Atlassian Official is the default; explicit Atlassian Community reads are available. Deletion and administration are outside this skill.
 ---
 
 # Atlassian
@@ -43,6 +43,7 @@ bun "$DISPATCH" --tenant <tenant> issue.get    --input '{"issueKey":"PROJ-1","fi
 bun "$DISPATCH" --tenant <tenant> issue.search --input '{"jql":"project = PROJ","maxResults":10}'
 bun "$DISPATCH" --tenant <tenant> page.get     --input '{"pageId":"123","detail":"full"}'
 bun "$DISPATCH" --tenant <tenant> page.search  --input '{"cql":"type = page AND title ~ \"roadmap\"","maxResults":10}'
+bun "$DISPATCH" --tenant <tenant> --provider community issue.get --input '{"issueKey":"PROJ-1"}'
 ```
 
 - Inputs are the neutral keys above only; unknown keys refuse with `input-invalid`.
@@ -114,11 +115,14 @@ until live schema qualification proves it. It never marks success by hand. `unlo
 
 ## Community and parity
 
-Official is the default. Community is selectable with `--provider community`,
-and reads may fall over to it automatically, only when an unexpired Parity
-Attestation exists for the same tenant, product, operation, input shape,
-trusted origin, and principal. Record one with a read that both providers can
-answer:
+Official is the default. Select Community explicitly for a read with
+`--provider community` when Official is unavailable. This executes only the
+selected Community route after credential binding and live schema confirmation.
+It does not call Official or retry through another provider.
+
+Automatic read fallback and Community writes require an unexpired Parity
+Attestation for the same tenant, product, operation, input shape, trusted
+origin, and principal. Record one with a read that both providers can answer:
 
 ```sh
 bun "$DISPATCH" --tenant <tenant> parity --operation issue.get --input '{"issueKey":"PROJ-1"}'
