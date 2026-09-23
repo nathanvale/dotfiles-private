@@ -20,12 +20,12 @@ export type DiscoveryResult = { ok: true; server: AuthorizationServer } | { ok: 
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
 // https, or http on the loopback host only.
-export function secureUrl(value: unknown): value is string {
+export function secureUrl(value: unknown, allowLoopback = false): value is string {
 	if (typeof value !== "string") return false;
 	try {
 		const url = new URL(value);
 		if (url.username !== "" || url.password !== "" || url.hash !== "") return false;
-		return url.protocol === "https:" || (url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost"));
+		return url.protocol === "https:" || (allowLoopback && url.protocol === "http:" && (url.hostname === "127.0.0.1" || url.hostname === "localhost"));
 	} catch {
 		return false;
 	}
@@ -59,13 +59,13 @@ async function firstJson(fetchFn: Fetch, urls: string[]): Promise<unknown | unde
 	return undefined;
 }
 
-function optionalEndpoint(record: Record<string, unknown>, key: string): string | null | undefined {
+function optionalEndpoint(record: Record<string, unknown>, key: string, allowLoopback: boolean): string | null | undefined {
 	const value = record[key];
 	if (value === undefined) return null;
-	return secureUrl(value) ? value : undefined;
+	return secureUrl(value, allowLoopback) ? value : undefined;
 }
 
-function parseServer(document: unknown, issuer: string): DiscoveryResult {
+function parseServer(document: unknown, issuer: string, allowLoopback: boolean): DiscoveryResult {
 	if (!isRecord(document)) return { ok: false, reason: "authorization-server-invalid" };
 	if (document.issuer !== issuer) return { ok: false, reason: "issuer-mismatch" };
 	const methods = document.code_challenge_methods_supported;
@@ -73,19 +73,19 @@ function parseServer(document: unknown, issuer: string): DiscoveryResult {
 	const authorizationEndpoint = document.authorization_endpoint;
 	const tokenEndpoint = document.token_endpoint;
 	if (typeof authorizationEndpoint !== "string" || typeof tokenEndpoint !== "string") return { ok: false, reason: "authorization-server-invalid" };
-	const registrationEndpoint = optionalEndpoint(document, "registration_endpoint");
-	const revocationEndpoint = optionalEndpoint(document, "revocation_endpoint");
-	if (!secureUrl(authorizationEndpoint) || !secureUrl(tokenEndpoint) || registrationEndpoint === undefined || revocationEndpoint === undefined) return { ok: false, reason: "insecure-endpoint" };
+	const registrationEndpoint = optionalEndpoint(document, "registration_endpoint", allowLoopback);
+	const revocationEndpoint = optionalEndpoint(document, "revocation_endpoint", allowLoopback);
+	if (!secureUrl(authorizationEndpoint, allowLoopback) || !secureUrl(tokenEndpoint, allowLoopback) || registrationEndpoint === undefined || revocationEndpoint === undefined) return { ok: false, reason: "insecure-endpoint" };
 	return { ok: true, server: { issuer, authorizationEndpoint, tokenEndpoint, registrationEndpoint, revocationEndpoint } };
 }
 
-export async function discover(resource: string, fetchFn: Fetch): Promise<DiscoveryResult> {
+export async function discover(resource: string, fetchFn: Fetch, allowLoopback = false): Promise<DiscoveryResult> {
 	const resourceMetadata = await firstJson(fetchFn, wellKnown(resource, "oauth-protected-resource"));
 	if (resourceMetadata === undefined) return { ok: false, reason: "resource-metadata-unavailable" };
 	if (!isRecord(resourceMetadata) || resourceMetadata.resource !== resource || !Array.isArray(resourceMetadata.authorization_servers)) return { ok: false, reason: "resource-metadata-invalid" };
 	const issuer = resourceMetadata.authorization_servers[0];
-	if (!secureUrl(issuer)) return { ok: false, reason: "resource-metadata-invalid" };
+	if (!secureUrl(issuer, allowLoopback)) return { ok: false, reason: "resource-metadata-invalid" };
 	const serverMetadata = await firstJson(fetchFn, [...wellKnown(issuer, "oauth-authorization-server"), ...wellKnown(issuer, "openid-configuration")]);
 	if (serverMetadata === undefined) return { ok: false, reason: "authorization-server-unavailable" };
-	return parseServer(serverMetadata, issuer);
+	return parseServer(serverMetadata, issuer, allowLoopback);
 }

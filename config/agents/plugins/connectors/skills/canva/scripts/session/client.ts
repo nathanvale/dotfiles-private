@@ -36,10 +36,25 @@ export function clientEnvironment(source: EnvironmentSource): EnvironmentSource 
 // match the active scoped configuration and enters from the environment for
 // this request only.
 export function clientForSession(stored: Omit<ClientIdentity, "secret">, config: ClientConfig | null, env: EnvironmentSource): ClientIdentity | null {
+	if (!clientBound(stored, config, null)) return null;
 	if (stored.mode !== "registered") return { ...stored, secret: null };
-	if (config?.mode !== "registered" || config.clientId !== stored.clientId) return null;
 	const secret = env[CLIENT_SECRET_ENV];
 	return typeof secret === "string" && secret.length > 0 ? { ...stored, secret } : null;
+}
+
+export function clientBound(stored: Omit<ClientIdentity, "secret">, config: ClientConfig | null, loopbackPort: number | null): boolean {
+	if (config?.mode !== stored.mode || stored.clientId.length === 0) return false;
+	// DCR has no configured ID. This check covers mode and shape; the session
+	// module separately compares its ID with the account registration receipt.
+	if (stored.mode === "registered" && config.clientId !== stored.clientId) return false;
+	if (stored.mode === "cimd" && config.metadataUrl !== stored.clientId) return false;
+	try {
+		const redirect = new URL(stored.redirectUri);
+		const port = Number(redirect.port);
+		return redirect.protocol === "http:" && redirect.hostname === "127.0.0.1" && port > 0 && port <= 65535 && redirect.pathname === "/callback" && redirect.search === "" && redirect.hash === "" && redirect.username === "" && redirect.password === "" && (loopbackPort === null || stored.mode === "dcr" || port === loopbackPort);
+	} catch {
+		return false;
+	}
 }
 
 

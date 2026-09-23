@@ -21,6 +21,8 @@ export interface ClientConfig {
 
 export interface OAuthConfig {
 	resource: string;
+	// Only test-owned configurations admit HTTP loopback discovery.
+	allowLoopback: boolean;
 	client: ClientConfig;
 	// 0 asks the OS for a port; only a dcr client can register it per login.
 	loopbackPort: number;
@@ -56,8 +58,8 @@ function parseClient(value: unknown): ClientConfig | null {
 	return { mode, clientName, clientId, metadataUrl };
 }
 
-export function parseOAuthConfig(value: unknown): OAuthConfig | null {
-	if (!isRecord(value) || !secureUrl(value.resource)) return null;
+export function parseOAuthConfig(value: unknown, allowLoopback = false): OAuthConfig | null {
+	if (!isRecord(value) || !secureUrl(value.resource, allowLoopback)) return null;
 	const client = parseClient(value.client);
 	if (!client) return null;
 	const loopbackPort = value.loopbackPort;
@@ -67,7 +69,7 @@ export function parseOAuthConfig(value: unknown): OAuthConfig | null {
 	const callbackTimeoutMs = positiveInteger(value.callbackTimeoutMs, 300_000);
 	const refreshLockWaitMs = positiveInteger(value.refreshLockWaitMs, 10_000);
 	if (scope === undefined || callbackTimeoutMs === undefined || refreshLockWaitMs === undefined) return null;
-	return { resource: value.resource, client, loopbackPort: loopbackPort as number, scope, callbackTimeoutMs, refreshLockWaitMs };
+	return { resource: value.resource, allowLoopback, client, loopbackPort: loopbackPort as number, scope, callbackTimeoutMs, refreshLockWaitMs };
 }
 
 export function loadOAuthConfig(file: string = CONFIG_PATH): OAuthConfig | null {

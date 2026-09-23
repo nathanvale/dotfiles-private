@@ -9,11 +9,11 @@
 // injected. Tokens never appear in a result other than `accessToken`'s.
 import type { EnvironmentSource } from "../../../../bin/safe-environment.ts";
 import { type CallbackResult, listenForCallback } from "./callback.ts";
-import { CLIENT_SECRET_ENV, clientEnvironment, clientForSession, type ClientIdentity, resolveClient } from "./client.ts";
+import { CLIENT_SECRET_ENV, clientBound, clientEnvironment, clientForSession, type ClientIdentity, resolveClient } from "./client.ts";
 import type { OAuthConfig } from "./config.ts";
-import { discover, type Fetch } from "./discovery.ts";
+import { discover, type Fetch, secureUrl } from "./discovery.ts";
 import { codeChallenge, codeVerifier, type Random, stateValue } from "./pkce.ts";
-import { ACCOUNT_PATTERN, type LockClock, prepareAccountDirectory, readSession, removeSession, type SessionRecord, withRefreshLock, writeSession } from "./store.ts";
+import { ACCOUNT_PATTERN, type LockClock, prepareAccountDirectory, readRegistrationReceipt, readSession, removeSession, type RegistrationReceipt, type SessionRecord, withRefreshLock, writeRegistrationReceipt, writeSession } from "./store.ts";
 import { exchangeCode, refreshTokens, revokeToken, type TokenSet } from "./token.ts";
 
 export { loadOAuthConfig, type OAuthConfig, parseOAuthConfig } from "./config.ts";
@@ -45,9 +45,9 @@ export interface SessionStatus {
 }
 
 export type LoginCause = "account-invalid" | "discovery-failed" | "client-unresolved" | "client-secret-required" | "login-denied" | "login-mismatch" | "login-timeout" | "login-invalid" | "exchange-failed" | "session-busy" | "session-exists" | "session-unwritable";
-export type TokenCause = "account-invalid" | "auth-required" | "session-invalid" | "auth-expired" | "auth-busy" | "client-secret-unavailable" | "refresh-uncertain" | "refresh-incomplete" | "session-unwritable";
+export type TokenCause = "account-invalid" | "auth-required" | "session-invalid" | "session-binding-invalid" | "auth-expired" | "auth-busy" | "client-secret-unavailable" | "refresh-uncertain" | "refresh-incomplete" | "session-unwritable";
 export type LogoutRevocation = "confirmed" | "uncertain" | "unsupported" | "not-needed";
-export type LogoutCause = "account-invalid" | "auth-busy" | "client-secret-unavailable" | "session-unremovable";
+export type LogoutCause = "account-invalid" | "auth-busy" | "session-binding-invalid" | "client-secret-unavailable" | "session-unremovable";
 
 export type LoginResult = { ok: true; status: SessionStatus } | { ok: false; cause: LoginCause; detail: string };
 export type AccessTokenResult = { ok: true; token: string; status: SessionStatus } | { ok: false; cause: TokenCause; detail: string };
@@ -81,6 +81,7 @@ const DETAILS: Record<LoginCause | TokenCause | LogoutCause, string> = {
 	"session-unwritable": "the private session directory is not an owned 0700 directory",
 	"auth-required": "no session exists for this account; run canva-auth login",
 	"session-invalid": "the session file is not an owned exact-0600 record; run canva-auth logout, then login",
+	"session-binding-invalid": "the session does not match this Canva resource, authorization server, client registration receipt, or credential endpoint; restore the original private registration.json and configuration, then retry logout; if that is impossible, revoke access in Canva connected apps and have the operator remove only this account's private session.json and registration.json before a new login",
 	"auth-expired": "the session was revoked or expired at Canva and has been removed; run canva-auth login",
 	"auth-busy": "the account session lock may be active or abandoned; stop all canva-auth and Canva Provider processes for this account, remove only refresh.lock from the account's private state directory, then run status before retrying",
 	"refresh-uncertain": "the refresh request may have consumed the single-use token; the session was removed; inspect Canva connected apps, then run canva-auth login",
@@ -102,9 +103,59 @@ export const statusOf = (session: SessionRecord): SessionStatus => ({
 
 const validAccount = (account: string): boolean => ACCOUNT_PATTERN.test(account);
 
-function recordFrom(previous: Pick<SessionRecord, "account" | "issuer" | "resource" | "tokenEndpoint" | "revocationEndpoint" | "client">, tokens: TokenSet, now: number): SessionRecord {
+// Canva's documented MCP, authorization, and token URLs share one origin.
+// The selected resource supplies that trusted origin; stored URLs never do.
+function providerUrl(value: string, config: OAuthConfig): boolean {
+	return secureUrl(value, config.allowLoopback) && new URL(value).origin === new URL(config.resource).origin;
+}
+
+function providerIssuer(value: string, config: OAuthConfig): boolean {
+	return providerUrl(value, config) && new URL(value).href === `${new URL(config.resource).origin}/`;
+}
+
+function tokenEndpointBound(value: string, config: OAuthConfig): boolean {
+	return providerUrl(value, config) && new URL(value).href === `${new URL(config.resource).origin}/token`;
+}
+
+function revocationEndpointBound(value: string, config: OAuthConfig): boolean {
+	// https://mcp.canva.com/.well-known/oauth-authorization-server advertises
+	// /token for revocation. The test-owned loopback server advertises /revoke.
+	const path = config.allowLoopback && new URL(config.resource).protocol === "http:" ? "/revoke" : "/token";
+	return providerUrl(value, config) && new URL(value).href === `${new URL(config.resource).origin}${path}`;
+}
+
+function serverBound(server: { issuer: string; authorizationEndpoint: string; tokenEndpoint: string; registrationEndpoint: string | null; revocationEndpoint: string | null }, config: OAuthConfig): boolean {
+	return providerIssuer(server.issuer, config) && providerUrl(server.authorizationEndpoint, config) && tokenEndpointBound(server.tokenEndpoint, config) && (server.registrationEndpoint === null || providerUrl(server.registrationEndpoint, config)) && (server.revocationEndpoint === null || revocationEndpointBound(server.revocationEndpoint, config));
+}
+
+function sessionBound(session: SessionRecord, config: OAuthConfig): boolean {
+	return session.resource === config.resource && providerIssuer(session.issuer, config) && tokenEndpointBound(session.tokenEndpoint, config) && (session.revocationEndpoint === null || revocationEndpointBound(session.revocationEndpoint, config)) && clientBound(session.client, config.client, config.loopbackPort);
+}
+
+// Called only with the account mutation lock held. A legacy owned 0600
+// session is trusted once when no receipt exists; that cannot establish that
+// its DCR client ID originally came from Canva. Subsequent use requires the
+// independently persisted receipt, including when the access token is fresh.
+function receiptMatches(session: SessionRecord, receipt: RegistrationReceipt): boolean {
+	return receipt.account === session.account && receipt.issuer === session.issuer && receipt.resource === session.resource && receipt.client.clientId === session.client.clientId && receipt.client.redirectUri === session.client.redirectUri;
+}
+
+function ensureDcrReceipt(session: SessionRecord, stateRoot: string): "ok" | "binding-invalid" | "unwritable" {
+	if (session.client.mode !== "dcr") return "ok";
+	const read = readRegistrationReceipt(stateRoot, session.account);
+	if (read.ok) {
+		if (!receiptMatches(session, read.receipt)) return "binding-invalid";
+		return session.dcrReceipt === 1 || writeSession(stateRoot, { ...session, dcrReceipt: 1 }).ok ? "ok" : "unwritable";
+	}
+	if (read.reason !== "absent" || session.dcrReceipt === 1) return "binding-invalid";
+	if (!writeRegistrationReceipt(stateRoot, session).ok) return "unwritable";
+	return writeSession(stateRoot, { ...session, dcrReceipt: 1 }).ok ? "ok" : "unwritable";
+}
+
+function recordFrom(previous: Pick<SessionRecord, "account" | "issuer" | "resource" | "tokenEndpoint" | "revocationEndpoint" | "client"> & Pick<SessionRecord, "dcrReceipt">, tokens: TokenSet, now: number): SessionRecord {
 	return {
 		version: 1,
+		...(previous.dcrReceipt === 1 ? { dcrReceipt: 1 as const } : {}),
 		account: previous.account,
 		client: previous.client,
 		issuer: previous.issuer,
@@ -135,15 +186,28 @@ function authorizationUrl(endpoint: string, client: ClientIdentity, challenge: s
 const loginFailure = (cause: LoginCause): LoginResult => ({ ok: false, cause, detail: DETAILS[cause] });
 const tokenFailure = (cause: TokenCause): AccessTokenResult => ({ ok: false, cause, detail: DETAILS[cause] });
 
+function priorDcrClient(account: string, deps: SessionDeps, issuer: string): { ok: true; previous: Parameters<typeof resolveClient>[3] } | { ok: false } {
+	if (deps.config.client.mode !== "dcr") return { ok: true, previous: null };
+	const read = readRegistrationReceipt(deps.stateRoot, account);
+	if (!read.ok) return read.reason === "absent" ? { ok: true, previous: null } : { ok: false };
+	if (read.receipt.issuer !== issuer || read.receipt.resource !== deps.config.resource) {
+		const session = readSession(deps.stateRoot, account);
+		return !session.ok && session.reason === "absent" ? { ok: true, previous: null } : { ok: false };
+	}
+	return { ok: true, previous: { ...read.receipt.client, issuer: read.receipt.issuer } };
+}
+
 async function attendedLogin(account: string, options: LoginOptions, deps: SessionDeps): Promise<LoginResult> {
-	const discovered = await discover(deps.config.resource, deps.fetch);
-	if (!discovered.ok) return loginFailure("discovery-failed");
+	const discovered = await discover(deps.config.resource, deps.fetch, deps.config.allowLoopback);
+	if (!discovered.ok || !serverBound(discovered.server, deps.config)) return loginFailure("discovery-failed");
 	const server = discovered.server;
+	const registration = priorDcrClient(account, deps, server.issuer);
+	if (!registration.ok) return loginFailure("client-unresolved");
 	// One state value binds the listener's check and the authorization URL.
 	const state = stateValue(deps.random);
 	const listener = listenForCallback({ port: deps.config.loopbackPort, state, timeoutMs: deps.config.callbackTimeoutMs });
 	try {
-		const resolved = await resolveClient(deps.config.client, server, listener.redirectUri, null, deps.fetch, deps.env);
+		const resolved = await resolveClient(deps.config.client, server, listener.redirectUri, registration.previous, deps.fetch, deps.env);
 		if (!resolved.ok) return loginFailure(resolved.reason === "client-secret-required" ? "client-secret-required" : "client-unresolved");
 		const verifier = codeVerifier(deps.random);
 		const url = authorizationUrl(server.authorizationEndpoint, resolved.client, codeChallenge(verifier), state, deps.config);
@@ -154,10 +218,13 @@ async function attendedLogin(account: string, options: LoginOptions, deps: Sessi
 		const exchanged = await exchangeCode({ tokenEndpoint: server.tokenEndpoint, client: resolved.client, code: callback.code, codeVerifier: verifier, redirectUri: listener.redirectUri, resource: deps.config.resource }, deps.fetch);
 		if (!exchanged.ok) return loginFailure("exchange-failed");
 		const record = recordFrom(
-			{ account, issuer: server.issuer, resource: deps.config.resource, tokenEndpoint: server.tokenEndpoint, revocationEndpoint: server.revocationEndpoint, client: { mode: resolved.client.mode, clientId: resolved.client.clientId, redirectUri: resolved.client.redirectUri } },
+			{ account, issuer: server.issuer, resource: deps.config.resource, tokenEndpoint: server.tokenEndpoint, revocationEndpoint: server.revocationEndpoint, client: { mode: resolved.client.mode, clientId: resolved.client.clientId, redirectUri: resolved.client.redirectUri }, ...(resolved.client.mode === "dcr" ? { dcrReceipt: 1 as const } : {}) },
 			exchanged.tokens,
 			deps.clock.now(),
 		);
+		// Write the receipt first: a crash cannot leave a marked session with
+		// no receipt. An orphan receipt has no grant and the next login can replace it.
+		if (record.client.mode === "dcr" && !writeRegistrationReceipt(deps.stateRoot, record).ok) return loginFailure("session-unwritable");
 		if (!writeSession(deps.stateRoot, record).ok) return loginFailure("session-unwritable");
 		return { ok: true, status: statusOf(record) };
 	} finally {
@@ -191,6 +258,7 @@ const CALLBACK_CAUSES: Record<Exclude<CallbackResult, { ok: true }>["reason"], L
 const fresh = (session: SessionRecord, now: number): boolean => session.accessTokenExpiresAt === null || session.accessTokenExpiresAt - now > REFRESH_SKEW_MS;
 
 async function rotate(account: string, session: SessionRecord, deps: SessionDeps): Promise<AccessTokenResult> {
+	if (!sessionBound(session, deps.config)) return tokenFailure("session-binding-invalid");
 	if (session.refreshToken === null) {
 		removeSession(deps.stateRoot, account);
 		return tokenFailure("auth-expired");
@@ -222,6 +290,16 @@ async function rotate(account: string, session: SessionRecord, deps: SessionDeps
 	return { ok: true, token: record.accessToken, status: statusOf(record) };
 }
 
+function freshTokenWithoutMutation(session: SessionRecord, deps: SessionDeps): AccessTokenResult | null {
+	if (!fresh(session, deps.clock.now())) return null;
+	if (session.client.mode === "dcr") {
+		if (session.dcrReceipt !== 1) return null;
+		const receipt = readRegistrationReceipt(deps.stateRoot, session.account);
+		if (!receipt.ok || !receiptMatches(session, receipt.receipt)) return tokenFailure("session-binding-invalid");
+	}
+	return { ok: true, token: session.accessToken, status: statusOf(session) };
+}
+
 // A token that is fresh now. Refresh runs under the per-account lock and
 // re-reads the session first, so two Providers racing an expiry make exactly
 // one token request.
@@ -229,12 +307,18 @@ export async function accessToken(account: string, deps: SessionDeps): Promise<A
 	if (!validAccount(account)) return tokenFailure("account-invalid");
 	const read = readSession(deps.stateRoot, account);
 	if (!read.ok) return tokenFailure(read.reason === "absent" ? "auth-required" : "session-invalid");
-	if (fresh(read.session, deps.clock.now())) return { ok: true, token: read.session.accessToken, status: statusOf(read.session) };
+	if (!sessionBound(read.session, deps.config)) return tokenFailure("session-binding-invalid");
+	const ready = freshTokenWithoutMutation(read.session, deps);
+	if (ready !== null) return ready;
 	const locked = await withRefreshLock(deps.stateRoot, account, deps.clock, deps.config.refreshLockWaitMs, async () => {
 		const again = readSession(deps.stateRoot, account);
 		if (!again.ok) return tokenFailure(again.reason === "absent" ? "auth-required" : "session-invalid");
-		if (fresh(again.session, deps.clock.now())) return { ok: true as const, token: again.session.accessToken, status: statusOf(again.session) };
-		return rotate(account, again.session, deps);
+		if (!sessionBound(again.session, deps.config)) return tokenFailure("session-binding-invalid");
+		const receipt = ensureDcrReceipt(again.session, deps.stateRoot);
+		if (receipt !== "ok") return tokenFailure(receipt === "binding-invalid" ? "session-binding-invalid" : "session-unwritable");
+		const bound = again.session.client.mode === "dcr" ? { ...again.session, dcrReceipt: 1 as const } : again.session;
+		if (fresh(bound, deps.clock.now())) return { ok: true as const, token: bound.accessToken, status: statusOf(bound) };
+		return rotate(account, bound, deps);
 	});
 	if (!locked.ok) return tokenFailure(locked.reason === "auth-busy" ? "auth-busy" : "session-unwritable");
 	return locked.value;
@@ -250,11 +334,15 @@ export function status(account: string, deps: Pick<SessionDeps, "stateRoot">): S
 	return { ok: true, status: statusOf(read.session) };
 }
 
-type RevokeSessionResult = { ok: true; revoked: LogoutRevocation } | { ok: false; cause: "client-secret-unavailable" };
+type RevokeSessionResult = { ok: true; revoked: LogoutRevocation } | { ok: false; cause: "client-secret-unavailable" | "session-binding-invalid" | "session-unremovable" };
 
 async function revokeSession(account: string, deps: Pick<SessionDeps, "stateRoot" | "fetch"> & Partial<Pick<SessionDeps, "config" | "env">>): Promise<RevokeSessionResult> {
 	const read = readSession(deps.stateRoot, account);
-	if (!read.ok || read.session.refreshToken === null) return { ok: true, revoked: "not-needed" };
+	if (!read.ok) return { ok: true, revoked: "not-needed" };
+	if (!deps.config || !sessionBound(read.session, deps.config)) return { ok: false, cause: "session-binding-invalid" };
+	const receipt = ensureDcrReceipt(read.session, deps.stateRoot);
+	if (receipt !== "ok") return { ok: false, cause: receipt === "binding-invalid" ? "session-binding-invalid" : "session-unremovable" };
+	if (read.session.refreshToken === null) return { ok: true, revoked: "not-needed" };
 	if (read.session.revocationEndpoint === null) return { ok: true, revoked: "unsupported" };
 	const client = clientForSession(read.session.client, deps.config?.client ?? null, deps.env ?? {});
 	if (client === null) return { ok: false, cause: "client-secret-unavailable" };

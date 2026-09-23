@@ -2,7 +2,7 @@
 // literals, then the real launcher crossing the fake MCPorter into the real
 // Provider and the shared bridge fake, with the session under XDG_STATE_HOME.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { assertCustody, createHarness, FIXTURES, type Harness } from "../../../tests/harness.ts";
 import { FIXTURE_ACCESS_TOKEN as ACCESS_TOKEN, FIXTURE_REFRESH_TOKEN as REFRESH_TOKEN, writeSessionFixture } from "./fixtures/session.ts";
@@ -42,7 +42,8 @@ describe("Canva activated route", () => {
 	});
 
 	test("a call crosses the route, MCPorter, the Provider, and the bridge with only the access token below MCPorter", async () => {
-		writeSessionFixture(harness.root, { overrides: { revocationEndpoint: null } });
+		const file = writeSessionFixture(harness.root);
+		const before = readFileSync(file, "utf8");
 		const result = await harness.run(["canva", "--select", "account=personal", "--", "call", "search-designs", "--args", '{"query":"onboarding"}']);
 		expect([result.code, result.stderr]).toEqual([0, ""]);
 		const mcporter = assertCustody(harness, result, [ACCESS_TOKEN, REFRESH_TOKEN]);
@@ -53,6 +54,38 @@ describe("Canva activated route", () => {
 		const bridge = harness.receipt("bridge.json");
 		expect(bridge.argv).toEqual(["https://mcp.canva.com/mcp", "--no-auth", "--header", "Authorization: Bearer ${CANVA_ACCESS_TOKEN}"]);
 		expect([bridge.canvaTokenMatches, bridge.canvaRefreshPresent, bridge.ambient, bridge.opToken]).toEqual([true, false, false, false]);
+		expect(JSON.parse(readFileSync(file, "utf8"))).toMatchObject({ ...JSON.parse(before), dcrReceipt: 1 });
+		expect(existsSync(path.join(path.dirname(file), "registration.json"))).toBe(true);
+	});
+
+	test("a marked session with a different DCR client than its receipt refuses before the bridge", async () => {
+		const file = writeSessionFixture(harness.root);
+		const original = JSON.parse(readFileSync(file, "utf8"));
+		const receiptFile = path.join(path.dirname(file), "registration.json");
+		writeFileSync(receiptFile, `${JSON.stringify({ version: 1, account: "personal", issuer: original.issuer, resource: original.resource, client: original.client })}\n`, { mode: 0o600 });
+		const tampered = `${JSON.stringify({ ...original, dcrReceipt: 1, client: { ...original.client, clientId: "other-dcr-client" } })}\n`;
+		writeFileSync(file, tampered);
+		const receipt = readFileSync(receiptFile, "utf8");
+		const result = await harness.run(["canva", "--select", "account=personal", "--", "list", "--schema", "--json"]);
+		expect([result.code, result.stdout, result.stderr.startsWith("canva-provider:error:session-binding-invalid:")]).toEqual([3, "", true]);
+		assertCustody(harness, result, [ACCESS_TOKEN, REFRESH_TOKEN]);
+		expect([harness.has("bridge.json"), readFileSync(file, "utf8"), readFileSync(receiptFile, "utf8")]).toEqual([false, tampered, receipt]);
+	});
+
+	test("the public route refuses a foreign resource, client, or credential endpoint before credential use", async () => {
+		for (const overrides of [
+			{ resource: "https://mcp.figma.com/mcp" },
+			{ client: { mode: "cimd" as const, clientId: "https://other.example/client.json", redirectUri: "http://127.0.0.1:47391/callback" } },
+			{ tokenEndpoint: "http://127.0.0.1:1/token", accessTokenExpiresAt: Date.now() - 1 },
+			{ revocationEndpoint: "https://mcp.canva.com/mcp" },
+		]) {
+			const file = writeSessionFixture(harness.root, { overrides });
+			const before = readFileSync(file, "utf8");
+			const result = await harness.run(["canva", "--select", "account=personal", "--", "list", "--schema", "--json"]);
+			expect([result.code, result.stdout, result.stderr.startsWith("canva-provider:error:session-binding-invalid:")]).toEqual([3, "", true]);
+			const mcporter = assertCustody(harness, result, [ACCESS_TOKEN, REFRESH_TOKEN]);
+			expect([mcporter.kind, mcporter.env.CANVA_ACCOUNT, harness.has("bridge.json"), readFileSync(file, "utf8")]).toEqual(["stdio", "personal", false, before]);
+		}
 	});
 
 	test("a fresh tree refuses at the Provider with auth-required before any bridge starts", async () => {
@@ -62,7 +95,7 @@ describe("Canva activated route", () => {
 	});
 
 	test("a missing or malformed account selector refuses at the route before MCPorter", async () => {
-		writeSessionFixture(harness.root, { overrides: { revocationEndpoint: null } });
+		writeSessionFixture(harness.root);
 		const missing = await harness.run(["canva", "--", "call", "search-designs"]);
 		expect([missing.code, missing.stdout, missing.stderr]).toEqual([2, "", "provider-route:error:select-missing:skill canva requires --select account=<value>\n"]);
 		const undeclared = await harness.run(["canva", "--select", "tenant=personal", "--", "call", "search-designs"]);

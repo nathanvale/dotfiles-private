@@ -1,6 +1,6 @@
 // Private per-account session storage under
 // <state root>/connectors/canva/<account>/: an owned 0700 directory that
-// outlives the session, one exact-0600 session.json, the Provider's log
+// outlives the session, exact-0600 session.json and registration.json, the Provider's log
 // directory, and a refresh.lock that serialises every mutation of that state
 // across processes. Everything below the record shape is bin/private-state.
 import { closeSync, openSync, readFileSync, rmSync, writeSync } from "node:fs";
@@ -11,13 +11,18 @@ import { isRecord } from "./validate.ts";
 
 export const ACCOUNT_PATTERN = /^[a-z][a-z0-9-]{0,63}$/;
 const SESSION_FILE = "session.json";
+const REGISTRATION_FILE = "registration.json";
 const LOCK_FILE = "refresh.lock";
 // The session state a logout removes; the directory and the lock stay.
+// The DCR registration is an account identity and can be reused by a later
+// login; removing a grant does not remove that independent identity.
 const SESSION_STATE = [SESSION_FILE, "hyper-mcp-remote"] as const;
 const LOCK_POLL_MS = 50;
 
 export interface SessionRecord {
 	version: 1;
+	// Once set, a missing receipt is a binding failure, never a legacy migration.
+	dcrReceipt?: 1;
 	account: string;
 	client: { mode: ClientMode; clientId: string; redirectUri: string };
 	issuer: string;
@@ -30,6 +35,9 @@ export interface SessionRecord {
 	refreshToken: string | null;
 	obtainedAt: number;
 }
+
+export type RegistrationReceipt = Pick<SessionRecord, "account" | "issuer" | "resource" | "client"> & { version: 1 };
+export type ReceiptReadResult = { ok: true; receipt: RegistrationReceipt } | { ok: false; reason: "absent" | "invalid" };
 
 export type SessionReadResult = { ok: true; session: SessionRecord } | { ok: false; reason: "absent" | "invalid" };
 
@@ -64,12 +72,36 @@ function parseSession(text: string, account: string): SessionRecord | null {
 	} catch {
 		return null;
 	}
-	if (!isRecord(value) || value.version !== 1 || value.account !== account) return null;
+	if (!isRecord(value) || value.version !== 1 || value.account !== account || (value.dcrReceipt !== undefined && value.dcrReceipt !== 1)) return null;
 	const client = parseClient(value.client);
 	const endpoints = parseEndpoints(value);
 	const tokens = parseTokens(value);
 	if (!client || !endpoints || !tokens) return null;
-	return { version: 1, account, client, ...endpoints, ...tokens };
+	return { version: 1, account, client, ...endpoints, ...tokens, ...(value.dcrReceipt === 1 ? { dcrReceipt: 1 as const } : {}) };
+}
+
+export function readRegistrationReceipt(root: string, account: string): ReceiptReadResult {
+	const read = readPrivateFile(path.join(accountDirectory(root, account), REGISTRATION_FILE));
+	if (!read.ok) return { ok: false, reason: read.reason === "absent" ? "absent" : "invalid" };
+	let value: unknown;
+	try {
+		value = JSON.parse(read.text);
+	} catch {
+		return { ok: false, reason: "invalid" };
+	}
+	if (!isRecord(value) || value.version !== 1 || value.account !== account || typeof value.issuer !== "string" || typeof value.resource !== "string") return { ok: false, reason: "invalid" };
+	const client = parseClient(value.client);
+	if (!client || client.mode !== "dcr" || !client.clientId || !client.redirectUri) return { ok: false, reason: "invalid" };
+	return { ok: true, receipt: { version: 1, account, issuer: value.issuer, resource: value.resource, client } };
+}
+
+export function writeRegistrationReceipt(root: string, session: SessionRecord): { ok: true } | { ok: false; reason: string } {
+	const directory = accountDirectory(root, session.account);
+	const owned = ownedDirectory(directory);
+	if (!owned.ok) return { ok: false, reason: `directory-${owned.reason}` };
+	const receipt: RegistrationReceipt = { version: 1, account: session.account, issuer: session.issuer, resource: session.resource, client: session.client };
+	const written = writePrivateFile(path.join(directory, REGISTRATION_FILE), `${JSON.stringify(receipt)}\n`);
+	return written.ok ? { ok: true } : { ok: false, reason: `file-${written.reason}` };
 }
 
 // The account directory as an owned 0700 directory, created if absent.
