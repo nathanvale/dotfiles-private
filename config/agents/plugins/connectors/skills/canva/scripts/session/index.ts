@@ -190,7 +190,10 @@ function priorDcrClient(account: string, deps: SessionDeps, issuer: string): { o
 	if (deps.config.client.mode !== "dcr") return { ok: true, previous: null };
 	const read = readRegistrationReceipt(deps.stateRoot, account);
 	if (!read.ok) return read.reason === "absent" ? { ok: true, previous: null } : { ok: false };
-	if (read.receipt.issuer !== issuer || read.receipt.resource !== deps.config.resource) return { ok: false };
+	if (read.receipt.issuer !== issuer || read.receipt.resource !== deps.config.resource) {
+		const session = readSession(deps.stateRoot, account);
+		return !session.ok && session.reason === "absent" ? { ok: true, previous: null } : { ok: false };
+	}
 	return { ok: true, previous: { ...read.receipt.client, issuer: read.receipt.issuer } };
 }
 

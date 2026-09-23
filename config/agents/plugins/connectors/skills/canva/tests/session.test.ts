@@ -87,6 +87,33 @@ describe("login", () => {
 		expect(JSON.parse(sessionText())).toMatchObject({ dcrReceipt: 1, client: { clientId: "fixture-client-1" } });
 	});
 
+	test("clean login replaces orphaned receipts from another resource or issuer", async () => {
+		for (const [account, issuer, resource] of [
+			["old-resource", fake.issuer, "https://previous.canva.example/mcp"],
+			["old-issuer", "https://previous.canva.example/", fake.resource],
+		] as const) {
+			const directory = path.dirname(sessionFile(account));
+			mkdirSync(directory, { recursive: true, mode: 0o700 });
+			const receiptFile = path.join(directory, "registration.json");
+			writeFileSync(receiptFile, `${JSON.stringify({ version: 1, account, issuer, resource, client: { mode: "dcr", clientId: "stale-client", redirectUri: "http://127.0.0.1:1/callback" } })}\n`, { mode: 0o600 });
+			expect(existsSync(sessionFile(account))).toBe(false);
+			expect(await login(account, { noBrowser: false }, deps())).toMatchObject({ ok: true });
+			expect(JSON.parse(readFileSync(receiptFile, "utf8"))).toMatchObject({ account, issuer: fake.issuer, resource: fake.resource });
+			expect(JSON.parse(sessionText(account))).toMatchObject({ account, issuer: fake.issuer, resource: fake.resource, dcrReceipt: 1 });
+		}
+		expect([fake.calls.registrations, fake.calls.authorizations, fake.calls.tokenRequests]).toEqual([2, 2, 2]);
+	});
+
+	test("a mismatched receipt cannot overwrite an unreadable session", async () => {
+		const directory = path.dirname(sessionFile());
+		mkdirSync(directory, { recursive: true, mode: 0o700 });
+		writeFileSync(path.join(directory, "registration.json"), `${JSON.stringify({ version: 1, account: "personal", issuer: fake.issuer, resource: "https://previous.canva.example/mcp", client: { mode: "dcr", clientId: "stale-client", redirectUri: "http://127.0.0.1:1/callback" } })}\n`, { mode: 0o600 });
+		writeFileSync(sessionFile(), "unreadable session\n", { mode: 0o600 });
+		expect(causeOf(await login("personal", { noBrowser: false }, deps()))).toBe("client-unresolved");
+		expect(readFileSync(sessionFile(), "utf8")).toBe("unreadable session\n");
+		expect([fake.calls.registrations, fake.calls.authorizations, fake.calls.tokenRequests]).toEqual([0, 0, 0]);
+	});
+
 	test("--no-browser surfaces the URL and never opens a browser", async () => {
 		const urls: string[] = [];
 		const pending = login("personal", { noBrowser: true, onAuthorizationUrl: (url) => urls.push(url) }, deps());
