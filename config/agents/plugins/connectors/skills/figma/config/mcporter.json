@@ -1,0 +1,13 @@
+{
+	"$schema": "https://raw.githubusercontent.com/openclaw/mcporter/main/mcporter.schema.json",
+	"imports": [],
+	"mcpServers": {
+		"figma": {
+			"description": "Figma hosted MCP, attended local OAuth",
+			"baseUrl": "https://mcp.figma.com/mcp",
+			"auth": "oauth",
+			"clientName": "Claude Code",
+			"allowedTools": ["whoami", "get_metadata", "get_screenshot", "get_design_context", "get_variable_defs"]
+		}
+	}
+}

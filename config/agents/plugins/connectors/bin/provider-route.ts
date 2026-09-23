@@ -4,7 +4,7 @@
 // registry. It knows nothing about any service. Selections are non-secret
 // process metadata whose meaning belongs to the Provider below MCPorter.
 //
-//   provider-route <skill> [--provider <server>] [--select name=value ...] -- <list|call> [tool] [flags]
+//   provider-route <skill> [--provider <server>] [--select name=value ...] -- <auth|list|call> [tool] [flags]
 //
 // Exit meanings follow Contract Core 2.0 for refusals: 2 usage, 3 precondition,
 // 4 schema. Success is MCPorter's own exit status and output; no envelope is
@@ -15,12 +15,13 @@ import path from "node:path";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "./safe-environment.ts";
 
 const PROGRAM = "provider-route";
-// Observed with MCPorter 0.13.13 on 2026-09-22: a stdio child inherits the
-// whole MCPorter environment, so this scrub is the only barrier before a
-// Provider process.
+// Observed with MCPorter 0.13.13 and rechecked with 0.14.0: a stdio child
+// inherits the whole MCPorter environment, so this scrub is the only barrier
+// before a Provider process.
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
 const SELECTION_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const ALLOWED_FLAGS = {
+	auth: new Set(["--json", "--no-browser"]),
 	list: new Set([
 		"--status",
 		"--json",
@@ -91,6 +92,7 @@ interface RouteDeclaration {
 	defaultProvider: string;
 	selectors: Map<string, string>;
 	dispatcherOwned: boolean;
+	oauth: "mcporter" | undefined;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -126,7 +128,7 @@ function parseInvocation(argv: string[]): Invocation {
 	if (!skill || !NAME_PATTERN.test(skill)) {
 		throw new RouteError("skill-invalid", "the first argument must be a Connector Skill name matching ^[a-z][a-z0-9-]*$");
 	}
-	if (verb !== "list" && verb !== "call") throw new RouteError("command-invalid", "only list and call are supported");
+	if (verb !== "auth" && verb !== "list" && verb !== "call") throw new RouteError("command-invalid", "only auth, list and call are supported");
 	return { skill, ...parseRouteOptions(options), verb, rest };
 }
 
@@ -139,7 +141,7 @@ function readJson(file: string, missingCode: RouteErrorCode): unknown {
 	}
 }
 
-function readRegistry(configPath: string): Set<string> {
+function readRegistry(configPath: string): Map<string, Record<string, unknown>> {
 	const registry = readJson(configPath, "skill-config-missing");
 	if (!isRecord(registry) || !isRecord(registry.mcpServers)) {
 		throw new RouteError("config-invalid", `${configPath} must declare mcpServers`, 4);
@@ -150,13 +152,29 @@ function readRegistry(configPath: string): Set<string> {
 	// Every server carries an explicit, array-shaped exact-name allow-list.
 	// MCPorter treats a missing list as "allow everything"; this route treats
 	// it as a configuration defect and refuses before any process starts.
+	const servers = new Map<string, Record<string, unknown>>();
 	for (const [name, entry] of Object.entries(registry.mcpServers)) {
-		const allowed = isRecord(entry) ? entry.allowedTools : undefined;
-		if (!Array.isArray(allowed) || !allowed.every((tool) => typeof tool === "string" && tool.length > 0)) {
+		if (!isRecord(entry) || !Array.isArray(entry.allowedTools) || !entry.allowedTools.every((tool) => typeof tool === "string" && tool.length > 0)) {
 			throw new RouteError("allowlist-missing", `${configPath} server ${name} must declare an explicit allowedTools array`, 4);
 		}
+		servers.set(name, entry);
 	}
-	return new Set(Object.keys(registry.mcpServers));
+	return servers;
+}
+
+function checkOAuthEntry(configPath: string, server: string, entry: Record<string, unknown>): void {
+	const endpoint = entry.baseUrl ?? entry.url;
+	let hostedHttps = false;
+	if (typeof endpoint === "string") {
+		try {
+			hostedHttps = new URL(endpoint).protocol === "https:";
+		} catch {
+			// An invalid URL is a configuration refusal below.
+		}
+	}
+	if (entry.auth !== "oauth" || !hostedHttps) {
+		throw new RouteError("config-invalid", `${configPath} server ${server} must declare OAuth on a hosted HTTPS endpoint`, 4);
+	}
 }
 
 function readDeclaration(routePath: string): RouteDeclaration {
@@ -177,7 +195,10 @@ function readDeclaration(routePath: string): RouteDeclaration {
 	if (declaration.dispatcherOwned !== undefined && typeof declaration.dispatcherOwned !== "boolean") {
 		throw new RouteError("config-invalid", `${routePath} dispatcherOwned must be a boolean`, 4);
 	}
-	return { defaultProvider: declaration.defaultProvider, selectors, dispatcherOwned: declaration.dispatcherOwned === true };
+	if (declaration.oauth !== undefined && declaration.oauth !== "mcporter") {
+		throw new RouteError("config-invalid", `${routePath} oauth must be mcporter`, 4);
+	}
+	return { defaultProvider: declaration.defaultProvider, selectors, dispatcherOwned: declaration.dispatcherOwned === true, oauth: declaration.oauth };
 }
 
 function selectionEnvironment(skill: string, declared: Map<string, string>, given: Map<string, string>): Record<string, string> {
@@ -197,7 +218,7 @@ function selectionEnvironment(skill: string, declared: Map<string, string>, give
 }
 
 function targetAndFlags(verb: Verb, server: string, rest: string[]): { target: string; flags: string[] } {
-	if (verb === "list") return { target: server, flags: rest };
+	if (verb === "list" || verb === "auth") return { target: server, flags: rest };
 	const tool = rest[0];
 	if (!tool || tool.startsWith("-") || !/^[A-Za-z0-9_-]+$/.test(tool)) {
 		throw new RouteError("tool-invalid", "call needs a bare tool name on the selected provider");
@@ -275,11 +296,11 @@ function checkFlags(verb: Verb, flags: string[]): string[] {
 			index += checkOption(verb, flags, index);
 			continue;
 		}
-		if (verb === "list") throw new RouteError("arguments-invalid", `unexpected list argument: ${token}`);
+		if (verb !== "call") throw new RouteError("arguments-invalid", `unexpected ${verb} argument: ${token}`);
 		checkToolArgument(token);
 		index += 1;
 	}
-	return flags.includes("--no-oauth") ? flags : [...flags, "--no-oauth"];
+	return verb === "auth" || flags.includes("--no-oauth") ? flags : [...flags, "--no-oauth"];
 }
 
 function validInternalContext(value: unknown): value is string {
@@ -295,11 +316,15 @@ function plan(argv: string[], skillsRoot: string, env: Record<string, string | u
 	if (declaration.dispatcherOwned && !dispatcherTransport) {
 		throw new RouteError("dispatcher-owned", `skill ${invocation.skill} accepts provider transport only through its semantic dispatcher`, 3);
 	}
+	if (invocation.verb === "auth" && declaration.oauth !== "mcporter") {
+		throw new RouteError("command-invalid", `skill ${invocation.skill} does not declare MCPorter OAuth`);
+	}
 	const servers = readRegistry(configPath);
 	const server = invocation.provider ?? declaration.defaultProvider;
 	if (!servers.has(server)) {
 		throw new RouteError("provider-invalid", `provider ${server} is not declared by skill ${invocation.skill}`);
 	}
+	if (invocation.verb === "auth") checkOAuthEntry(configPath, server, servers.get(server)!);
 	const selections = selectionEnvironment(invocation.skill, declaration.selectors, invocation.selections);
 	const { target, flags } = targetAndFlags(invocation.verb, server, invocation.rest);
 	const routeEnv: Record<string, string> = { MCPORTER_NO_KEEPALIVE: "*", ...safeEnvironment(env) };
