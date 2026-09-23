@@ -13,7 +13,7 @@ beforeEach(() => {
 afterEach(() => harness.dispose());
 
 describe("Figma hosted Provider", () => {
-	test("registry fixes the hosted endpoint and a read-only tool list", () => {
+	test("registry fixes the hosted endpoint and admits only identity", () => {
 		const registry = JSON.parse(readFileSync(CONFIG, "utf8"));
 		expect(registry.imports).toEqual([]);
 		expect(registry.mcpServers).toEqual({
@@ -22,7 +22,7 @@ describe("Figma hosted Provider", () => {
 				baseUrl: "https://mcp.figma.com/mcp",
 				auth: "oauth",
 				clientName: "Claude Code",
-				allowedTools: ["whoami", "get_metadata", "get_screenshot", "get_design_context", "get_variable_defs"],
+				allowedTools: ["whoami"],
 			},
 		});
 	});
