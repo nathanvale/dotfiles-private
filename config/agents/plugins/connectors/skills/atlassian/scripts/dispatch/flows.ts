@@ -152,8 +152,8 @@ async function guarded(route: Route, tool: string, args: Record<string, unknown>
 	return (await route.ready({ tool, args })) ?? route.call(tool, args);
 }
 
-// Explicit Community selection needs the same exact attestation as an
-// automatic fallback. A write attests on its product's base read.
+// Community writes need an exact attestation on the product's base read.
+// Explicit Community reads use one selected Provider and do not fall over.
 const BASE_READ: Record<Product, { operation: OperationId; shape: string[] }> = {
 	jira: { operation: "issue.get", shape: ["issueKey"] },
 	confluence: { operation: "page.get", shape: ["pageId"] },
@@ -179,10 +179,6 @@ export async function readFlow(session: Session, spec: OperationSpec, input: Inp
 		if (ready) return ready;
 		return route.call(spec[name].tool, providerArguments(spec, name, input, route.cloudId));
 	};
-	if (provider === "community") {
-		const gate = await communityGate(session, spec, input, context);
-		if (gate) return gate;
-	}
 	const primary = await attempt(provider ?? "official");
 	if (primary.cause === "success") return success(primary.data);
 	if (provider !== undefined) return failed(primary);

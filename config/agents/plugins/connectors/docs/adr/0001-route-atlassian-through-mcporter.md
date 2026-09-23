@@ -33,6 +33,8 @@ effects when a provider reply is uncertain?
 - Never automatically retry a write through another provider, and never let a
   lost reply become a duplicate write.
 - Fall a read over to the other provider only on exact live parity evidence.
+- Permit an operator-selected Community read through one provider when the
+  trusted site origin and product credential are bound; do not infer parity.
 - Avoid generated code until stable repeated workflows justify it.
 
 ## Considered Options
@@ -116,14 +118,15 @@ blocks the object until `adjudicate` proves the effect found or proven absent
 through the receipt's own provider; read-back absence releases an object only
 before the send mark or when a monotonic revision did not move.
 
-Official is the default. Atlassian Community is reached, automatically for a
-read that failed without producing content or explicitly with
-`--provider community`, only when an unexpired Parity Attestation matches the
-tenant, product, operation, input shape, Trusted Site Origin, principal, and
-object semantics exactly. The `parity` command records one only when Official's
-user info names the item's `username` and both providers return the same
-object. Authentication, permission, tenant, precondition, partial-answer, and
-write failures never fall over.
+Official is the default. An explicit `--provider community` read selects only
+Community after credential binding and live schema confirmation. It never
+falls over or attests parity. Automatic read fallback and Community writes
+require an unexpired Parity Attestation matching the tenant, product,
+operation, input shape, Trusted Site Origin, principal, and object semantics.
+The `parity` command records one only when Official's user info names the
+item's `username` and both providers return the same object. Authentication,
+permission, tenant, precondition, partial-answer, and write failures never
+fall over.
 
 `page.comment` is unavailable on Official: the default endpoint reaches
 `createConfluenceComment` only through `executeWrite`, which the allow-list
@@ -169,8 +172,8 @@ provider accepts the existing credentials.
 - Negative: a possibly-sent write with no read-back proof, or a stale journal
   meta-lock, blocks its object until an operator acts; this is the fail-closed
   posture and the refusal text says so.
-- Neutral: Community and the Official tenant guard remain unavailable until each
-  product item carries a custom `site_url` field.
+- Neutral: Community and the Official tenant guard require a custom `site_url`
+  field in each product item.
 - Deferred: Official `page.comment`, the `?tools=all` endpoint, and a generated
   CLI.
 
@@ -223,7 +226,7 @@ Offline, fixture-proven (plugin test suite):
 - Each provider fails closed without `site_url`; the built-in `url` is never
   a tenant origin.
 - Dispatcher tenant guard, schema confirmation, read fallback gate, explicit
-  Community gate, content-observed refusal, journaled preview and apply,
+  single-provider Community reads, Community write gate, content-observed refusal, journaled preview and apply,
   send-mark ordering, receipt-bound outbound arguments, unknown outcome
   blocking, adjudication, unlock, and parity attestation.
 - Both Providers expose a silent local readiness operation that validates the
