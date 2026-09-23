@@ -21,22 +21,31 @@ the Atlassian Tenant. A Route Selection never carries a credential.
 _Avoid_: Credential, configuration, environment
 
 **Provider**:
-One external MCP tool surface that a Connector Skill can select. Two Providers
-may expose different operations for the same service.
+One external MCP tool surface that a Connector Skill selects. Atlassian has
+exactly one active Provider, Atlassian Community; a retired Provider survives
+only as a name on persisted records.
 _Avoid_: Connector Skill, Provider Route, service account
 
 **Provider Route**:
 The selected path from a Connector Skill to one Provider for one product and
-one request. Atlassian has two Providers but four Provider Routes, one per
-Provider and product.
+one request. Atlassian has one Provider but two Provider Routes, one per
+product, because the API token, credential item, and tool surface are
+product-specific.
 _Avoid_: Provider, server, credential
 
 ## Atlassian routing
 
 **Atlassian Operation**:
 One semantic Jira or Confluence action the Connector Skill exposes: get,
-search, create, update, or comment on an issue or page.
+search, list transitions, create, update, transition, assign, comment, edit a
+comment, attach a file, delete an attachment, or delete an issue or page.
 _Avoid_: Tool, tool call, command
+
+**Upload Outbox**:
+The tenant's private 0700 directory under the state root where the dispatcher
+stages every file to upload under a digest of its content, and where the
+Provider starts so it can read staged uploads and nothing else.
+_Avoid_: Temp directory, working directory, cache
 
 **Atlassian Tenant**:
 The Atlassian site intended for one request, distinct from the credential that
@@ -55,26 +64,18 @@ principal, the credential item revision, and the Trusted Site Origin. It
 crosses the route; the credential value never does.
 _Avoid_: Context, token, credential
 
-**Atlassian Official**:
-The Atlassian-operated MCP Provider for Atlassian Cloud products.
-_Avoid_: Official route, default provider, Rovo
-
 **Atlassian Community**:
-The independent `sooperset/mcp-atlassian` MCP Provider for Jira and Confluence.
+The independent `sooperset/mcp-atlassian` MCP Provider for Jira and Confluence,
+the only active Atlassian Provider.
 _Avoid_: Community route, fallback provider, backup provider, legacy connector
 
-**Provider Parity**:
-Live evidence that Atlassian Official and Atlassian Community answered the same
-Atlassian Operation for the same Atlassian Tenant, Trusted Site Origin, and
-principal with the same object. Without it, one Provider never stands in for
-the other.
-_Avoid_: Fallback, compatibility, equivalence
-
-**Parity Attestation**:
-The durable, expiring record of one proven Provider Parity for one Atlassian
-Operation and input shape. It gates both automatic fallback and explicit
-selection of Atlassian Community.
-_Avoid_: Cache, allowlist, override
+**Retired Provider**:
+A Provider name that persisted Write Previews and Write Receipts may still
+carry after its route was removed; today only `official`, the former
+Atlassian-operated MCP Provider. Its records stay readable and keep blocking
+their Object Identity, and no active route applies, adjudicates, or unlocks
+them.
+_Avoid_: Legacy provider, fallback, migration
 
 ## Canva sessions
 
@@ -117,11 +118,14 @@ _Avoid_: Log entry, transaction, response
 **Write Outcome**:
 What a Write Receipt proves about the external object: completed with a named
 effect, unchanged with a named basis, or unknown. Unknown is a state to
-resolve, never a result to retry.
+resolve, never a result to retry. A delete completes only on a not-found
+read-back; an update completes only when the requested values, absent at
+preview, are found.
 _Avoid_: Status code, success or failure, error
 
 **Adjudication**:
 Operator-directed read-back through the Write Receipt's own Provider Route that
-settles an unknown Write Outcome only on evidence found or proven absent. It
-is never a retry and never a manual mark of success.
+settles an unknown Write Outcome only on evidence found or proven absent. A
+Write Receipt from a Retired Provider has no such route and is refused. It is
+never a retry and never a manual mark of success.
 _Avoid_: Retry, override, manual resolve, recovery run

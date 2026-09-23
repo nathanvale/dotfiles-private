@@ -1,9 +1,9 @@
 // Proof of the Atlassian credential custody module at its interface: the
 // dispatcher's bindCredential crosses the custody child to the fake 1Password
 // helper under a temp HOME, and the child itself is proved as a public process.
-// Provider-side custody (providerInvocation, boundItem, credentialHelper,
-// credentialReference, invocationEnvironment) is proved through the Provider
-// processes in providers.test.ts, because those functions refuse by exiting.
+// Provider-side custody (providerInvocation, boundItem, invocationEnvironment)
+// is proved through the Provider process in providers.test.ts, because those
+// functions refuse by exiting.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import path from "node:path";

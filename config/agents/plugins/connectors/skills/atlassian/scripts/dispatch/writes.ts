@@ -1,11 +1,13 @@
-// Write policy for the six Atlassian write operations, pure and I/O free.
-// One neutral input contract per operation; provider argument adapters for
-// Official and Community; the preparatory read each write needs (revision,
-// snapshot token, space identity); effect extraction from a provider reply;
-// and read-back evidence for operator adjudication. Provider names are taken
-// from current provider documentation and are confirmed only by the live
-// schema at dispatch time; nothing here assumes a reply shape without checking.
-import { WRITE_OPERATION_IDS, type OperationSpec, type ProviderName } from "./contract.ts";
+// Write policy for the Atlassian write operations, pure and I/O free. One
+// neutral input contract per operation; the Community provider argument
+// adapter; the preparatory read each write needs (revision, current title);
+// effect extraction from a provider reply; and read-back evidence for operator
+// adjudication. Argument names are taken from the v0.23.1 Community source and
+// are confirmed only by the live schema at dispatch time; reply shapes are the
+// ones observed live on 2026-09-23 plus the REST shapes, and nothing here
+// assumes a shape without checking.
+import path from "node:path";
+import { type OperationSpec, WRITE_OPERATION_IDS } from "./contract.ts";
 import { collectInput } from "./engine.ts";
 import type { Effect, WriteBaseline, WriteOperation } from "./journal.ts";
 
@@ -16,17 +18,20 @@ type Field =
 	| { kind: "text"; required: boolean; pattern?: RegExp }
 	| { kind: "body"; required: boolean }
 	| { kind: "fields"; required: boolean }
-	| { kind: "space"; required: boolean };
+	| { kind: "path"; required: boolean };
 
 const ISSUE_KEY = /^[A-Z][A-Z0-9_]+-[0-9]+$/;
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]+$/;
 const NUMERIC_ID = /^[1-9][0-9]{0,19}$/;
 const SPACE_KEY = /^[A-Za-z0-9~][A-Za-z0-9_.-]{0,254}$/;
+// One absolute local file for the Provider process to read. The Community
+// Jira tool joins several paths with commas, so a comma is refused here.
+const LOCAL_FILE = /^\/[^\n,]{1,1023}$/;
+const ATTACHMENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const BODY_LIMIT = 200_000;
 
 // Neutral input per write operation. Unknown keys are refused so a caller
-// cannot smuggle provider arguments through the semantic seam. `space` takes
-// the numeric id, the key, or both; the id is the one canonical container.
+// cannot smuggle provider arguments through the semantic seam.
 const WRITE_INPUTS: Record<WriteOperation, Record<string, Field>> = {
 	"issue.create": {
 		projectKey: { kind: "text", required: true, pattern: PROJECT_KEY },
@@ -37,8 +42,16 @@ const WRITE_INPUTS: Record<WriteOperation, Record<string, Field>> = {
 	},
 	"issue.update": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, fields: { kind: "fields", required: true } },
 	"issue.comment": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, body: { kind: "body", required: true } },
+	"issue.comment.update": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, commentId: { kind: "text", required: true, pattern: NUMERIC_ID }, body: { kind: "body", required: true } },
+	"issue.attach": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, file: { kind: "path", required: true } },
+	// toStatus names the status the issue must reach; the transition that leads
+	// there is resolved from the live transition list at preview and apply.
+	"issue.transition": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, toStatus: { kind: "text", required: true } },
+	// An omitted assignee unassigns the issue.
+	"issue.assign": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, assignee: { kind: "text", required: false } },
+	"issue.delete": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY } },
 	"page.create": {
-		space: { kind: "space", required: true },
+		spaceKey: { kind: "text", required: true, pattern: SPACE_KEY },
 		title: { kind: "text", required: true },
 		body: { kind: "body", required: true },
 		parentId: { kind: "text", required: false, pattern: NUMERIC_ID },
@@ -50,6 +63,9 @@ const WRITE_INPUTS: Record<WriteOperation, Record<string, Field>> = {
 		versionMessage: { kind: "text", required: false },
 	},
 	"page.comment": { pageId: { kind: "text", required: true, pattern: NUMERIC_ID }, body: { kind: "body", required: true } },
+	"page.attach": { pageId: { kind: "text", required: true, pattern: NUMERIC_ID }, file: { kind: "path", required: true } },
+	"page.attachment.delete": { pageId: { kind: "text", required: true, pattern: NUMERIC_ID }, attachmentId: { kind: "text", required: true, pattern: ATTACHMENT_ID } },
+	"page.delete": { pageId: { kind: "text", required: true, pattern: NUMERIC_ID } },
 };
 
 export const WRITE_OPERATIONS = WRITE_OPERATION_IDS;
@@ -60,15 +76,6 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const text = (value: unknown, pattern?: RegExp): value is string =>
 	typeof value === "string" && value.trim().length > 0 && !value.includes("\n") && value.length <= 1024 && (pattern === undefined || pattern.test(value));
-
-function validSpace(value: unknown): boolean {
-	if (!isRecord(value)) return false;
-	const keys = Object.keys(value);
-	if (keys.length === 0 || keys.some((key) => key !== "id" && key !== "key")) return false;
-	if ("id" in value && !(typeof value.id === "string" && NUMERIC_ID.test(value.id))) return false;
-	if ("key" in value && !(typeof value.key === "string" && SPACE_KEY.test(value.key))) return false;
-	return true;
-}
 
 // Update fields are a flat object of scalar or string-list values; nested
 // objects are refused because their meaning is provider-specific.
@@ -89,8 +96,8 @@ function validField(field: Field, value: unknown): boolean {
 			return typeof value === "string" && value.trim().length > 0 && value.length <= BODY_LIMIT;
 		case "fields":
 			return validFields(value);
-		case "space":
-			return validSpace(value);
+		case "path":
+			return typeof value === "string" && LOCAL_FILE.test(value) && path.isAbsolute(value) && path.basename(value).length > 0;
 	}
 }
 
@@ -98,54 +105,50 @@ export function writeInput(operation: WriteOperation, raw: unknown): WriteValida
 	return collectInput(raw, WRITE_INPUTS[operation], validField);
 }
 
-export const spaceOf = (input: WriteInput): { id?: string; key?: string } => (isRecord(input.space) ? (input.space as { id?: string; key?: string }) : {});
-
 // What a write needs to read before it can be previewed or applied. The read
-// is repeated at apply so the revision and token are current, and the journal
-// refuses the apply when the revision moved. Jira comments and Jira creates
-// bind no revision: a changed issue is still the same comment target.
-export type Preparation =
-	| { kind: "none" }
-	| { kind: "issue"; issueKey: string }
-	| { kind: "page"; pageId: string }
-	| { kind: "space"; key?: string; id?: string }
-	| { kind: "refused"; reason: string };
+// is repeated at apply so the revision is current, and the journal refuses the
+// apply when the revision moved. Creates and comments bind no revision: a
+// changed target is still the same container. Attachments bind the target's
+// revision because an upload moves it, which lets an unchanged revision prove
+// that a possibly-sent upload never landed.
+export type Preparation = { kind: "none" } | { kind: "issue"; issueKey: string } | { kind: "comment"; issueKey: string; commentId: string } | { kind: "transition"; issueKey: string; toStatus: string } | { kind: "page"; pageId: string };
 
-export function preparation(operation: WriteOperation, provider: ProviderName, input: WriteInput): Preparation {
+export function preparation(operation: WriteOperation, input: WriteInput): Preparation {
 	switch (operation) {
 		case "issue.create":
 		case "issue.comment":
+		case "page.create":
 			return { kind: "none" };
 		case "issue.update":
+		case "issue.attach":
+		case "issue.assign":
+		case "issue.delete":
 			return { kind: "issue", issueKey: input.issueKey as string };
+		case "issue.comment.update":
+			return { kind: "comment", issueKey: input.issueKey as string, commentId: input.commentId as string };
+		case "issue.transition":
+			return { kind: "transition", issueKey: input.issueKey as string, toStatus: input.toStatus as string };
 		case "page.update":
 		case "page.comment":
+		case "page.attach":
+		case "page.attachment.delete":
+		case "page.delete":
 			return { kind: "page", pageId: input.pageId as string };
-		case "page.create": {
-			const space = spaceOf(input);
-			if (space.key !== undefined) return space.id === undefined ? { kind: "space", key: space.key } : { kind: "space", key: space.key, id: space.id };
-			if (space.id !== undefined && provider === "official") return { kind: "space", id: space.id };
-			return { kind: "refused", reason: "the Community route needs space.key; supply space as {id, key}" };
-		}
 	}
 }
 
 export interface PreparedContext {
-	cloudId?: string;
 	// Revision of the target as observed by the preparatory read; null when the
-	// operation binds none.
+	// operation binds none. Jira exposes no monotonic issue revision, so the
+	// issue or comment `updated` timestamp stands in for staleness detection
+	// only; it is never read-back proof on its own.
 	revision: string | null;
-	// Official Confluence updates must carry the snapshot token of the version
-	// that was read; it is sent but never digested, because the revision
-	// already binds it.
-	snapshotToken?: string;
 	// Current title of a page, needed by Community updates that keep it.
 	currentTitle?: string;
-	// Space resolved from a key when the input carried none.
-	spaceId?: string;
-	// An exact false observation is durable preview evidence. It is re-read at
-	// apply; true, absent, and malformed never reach a provider write.
-	spaceInstructions?: false;
+	// The staged copy of an upload, relative to the Provider's outbox.
+	stagedFile?: string;
+	// The live transition id that leads to the requested status.
+	transitionId?: string;
 	// Provider identifiers and stable revisions observed before the write. This
 	// is persisted with the preview and compared by read-back, not inferred from
 	// text that may have existed before the preview.
@@ -154,8 +157,8 @@ export interface PreparedContext {
 
 export interface ShapedArguments {
 	args: Record<string, unknown>;
-	// The subset of args the journal digests: everything except tokens that are
-	// implied by the bound revision.
+	// The exact args the journal digests, so an apply sends only what was
+	// previewed.
 	bound: Record<string, unknown>;
 }
 
@@ -163,63 +166,14 @@ function assign(target: Record<string, unknown>, key: string, value: unknown): v
 	if (value !== undefined) target[key] = value;
 }
 
-// Fields both providers take under the same name for a Jira create.
-function assignIssueCreateCommon(args: Record<string, unknown>, input: WriteInput): void {
-	for (const key of ["summary", "description", "assignee"]) assign(args, key, input[key]);
-}
-
-function officialArguments(operation: WriteOperation, input: WriteInput, ctx: PreparedContext): ShapedArguments {
-	const args: Record<string, unknown> = {};
-	assign(args, "cloudId", ctx.cloudId);
-	switch (operation) {
-		case "issue.create":
-			assign(args, "projectKey", input.projectKey);
-			assign(args, "issueType", input.issueType);
-			assignIssueCreateCommon(args, input);
-			break;
-		case "issue.update":
-			assign(args, "issueIdOrKey", input.issueKey);
-			assign(args, "fields", input.fields);
-			if (isRecord(input.fields) && "description" in input.fields) args.contentFormat = "markdown";
-			break;
-		case "issue.comment":
-			assign(args, "issueIdOrKey", input.issueKey);
-			assign(args, "commentBody", input.body);
-			break;
-		case "page.create": {
-			const parent: Record<string, unknown> = { spaceId: spaceOf(input).id ?? ctx.spaceId };
-			assign(parent, "parentContentId", input.parentId);
-			args.parent = parent;
-			args.contentType = "page";
-			assign(args, "title", input.title);
-			args.body = { format: "markdown", value: input.body };
-			break;
-		}
-		case "page.update": {
-			assign(args, "contentId", input.pageId);
-			assign(args, "title", input.title);
-			args.body = { format: "markdown", value: input.body };
-			assign(args, "versionMessage", input.versionMessage);
-			assign(args, "snapshotToken", ctx.snapshotToken);
-			return { args, bound: args };
-		}
-		case "page.comment":
-			// Deferred on the default Official endpoint; the contract marks it
-			// unavailable there, so this arm is never reached in dispatch.
-			assign(args, "pageId", input.pageId);
-			assign(args, "body", input.body);
-			break;
-	}
-	return { args, bound: args };
-}
-
-function communityArguments(operation: WriteOperation, input: WriteInput, ctx: PreparedContext): ShapedArguments {
+export function writeArguments(spec: OperationSpec, input: WriteInput, ctx: PreparedContext): ShapedArguments {
+	const operation = spec.id as WriteOperation;
 	const args: Record<string, unknown> = {};
 	switch (operation) {
 		case "issue.create":
 			assign(args, "project_key", input.projectKey);
 			assign(args, "issue_type", input.issueType);
-			assignIssueCreateCommon(args, input);
+			for (const key of ["summary", "description", "assignee"]) assign(args, key, input[key]);
 			break;
 		case "issue.update":
 			assign(args, "issue_key", input.issueKey);
@@ -229,8 +183,31 @@ function communityArguments(operation: WriteOperation, input: WriteInput, ctx: P
 			assign(args, "issue_key", input.issueKey);
 			assign(args, "body", input.body);
 			break;
+		case "issue.comment.update":
+			assign(args, "issue_key", input.issueKey);
+			assign(args, "comment_id", input.commentId);
+			assign(args, "body", input.body);
+			break;
+		case "issue.attach":
+			// The Community upload rides on the update tool with no field change.
+			assign(args, "issue_key", input.issueKey);
+			args.fields = "{}";
+			assign(args, "attachments", ctx.stagedFile ?? input.file);
+			break;
+		case "issue.transition":
+			assign(args, "issue_key", input.issueKey);
+			assign(args, "transition_id", ctx.transitionId);
+			break;
+		case "issue.assign":
+			// The Community tool unassigns on an empty string.
+			assign(args, "issue_key", input.issueKey);
+			args.assignee = input.assignee ?? "";
+			break;
+		case "issue.delete":
+			assign(args, "issue_key", input.issueKey);
+			break;
 		case "page.create":
-			assign(args, "space_key", spaceOf(input).key);
+			assign(args, "space_key", input.spaceKey);
 			assign(args, "title", input.title);
 			assign(args, "content", input.body);
 			assign(args, "parent_id", input.parentId);
@@ -249,26 +226,49 @@ function communityArguments(operation: WriteOperation, input: WriteInput, ctx: P
 			assign(args, "page_id", input.pageId);
 			assign(args, "body", input.body);
 			break;
+		case "page.attach":
+			assign(args, "content_id", input.pageId);
+			assign(args, "file_path", ctx.stagedFile ?? input.file);
+			break;
+		case "page.attachment.delete":
+			assign(args, "attachment_id", input.attachmentId);
+			break;
+		case "page.delete":
+			assign(args, "page_id", input.pageId);
+			break;
 	}
 	return { args, bound: args };
 }
 
-export function writeArguments(spec: OperationSpec, provider: ProviderName, input: WriteInput, ctx: PreparedContext): ShapedArguments {
-	const operation = spec.id as WriteOperation;
-	return provider === "official" ? officialArguments(operation, input, ctx) : communityArguments(operation, input, ctx);
-}
-
-// Effect kinds per operation; the id comes from the provider reply.
+// Effect kinds per operation; the id comes from the provider reply or the
+// read-back, or is the target itself for an update or delete.
 const EFFECT_KIND: Record<WriteOperation, Effect["kind"]> = {
 	"issue.create": "jira-issue",
 	"issue.update": "jira-issue",
+	"issue.delete": "jira-issue",
 	"issue.comment": "jira-comment",
+	"issue.comment.update": "jira-comment",
+	"issue.attach": "jira-attachment",
+	"issue.transition": "jira-issue",
+	"issue.assign": "jira-issue",
 	"page.create": "confluence-content",
 	"page.update": "confluence-content",
+	"page.delete": "confluence-content",
 	"page.comment": "confluence-comment",
+	"page.attach": "confluence-attachment",
+	"page.attachment.delete": "confluence-attachment",
 };
 
+// Writes whose effect is the object they name, proven by read-back.
+const TARGET_OPERATIONS: ReadonlySet<WriteOperation> = new Set<WriteOperation>(["issue.update", "issue.transition", "issue.assign", "page.update"]);
+// Writes proven by the Provider refusing to find the object afterwards.
+const OBJECT_DELETES: ReadonlySet<WriteOperation> = new Set<WriteOperation>(["issue.delete", "page.delete"]);
+export const isObjectDelete = (operation: WriteOperation): boolean => OBJECT_DELETES.has(operation);
+
+export const effectKindOf = (operation: WriteOperation): Effect["kind"] => EFFECT_KIND[operation];
+
 const EFFECT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const DELETED_MESSAGE = /deleted successfully/i;
 
 function stringAt(record: Record<string, unknown>, ...keys: string[]): string | undefined {
 	for (const key of keys) {
@@ -288,21 +288,29 @@ function records(data: unknown, depth = 0): Record<string, unknown>[] {
 	return [data, ...Object.values(data).flatMap((entry) => records(entry, depth + 1))];
 }
 
-// MCPorter returns tool text content; a JSON string inside a text block is
-// unwrapped once so provider replies serialised as text still yield records.
-export function unwrapReply(data: unknown): unknown {
-	if (!isRecord(data) || !Array.isArray(data.content)) return data;
-	const texts = data.content.filter((entry): entry is { type: "text"; text: string } => isRecord(entry) && entry.type === "text" && typeof entry.text === "string");
-	if (texts.length !== 1) return data;
+function parsedJson(text: string): unknown | undefined {
 	try {
-		return JSON.parse(texts[0]?.text ?? "");
+		return JSON.parse(text);
 	} catch {
-		return data;
+		return undefined;
 	}
 }
 
+// MCPorter returns tool text content: with --output json as one JSON string
+// under result (observed live, MCPorter 0.13.13), otherwise as text blocks.
+// A JSON string is unwrapped once so provider replies serialised as text still
+// yield records.
+export function unwrapReply(data: unknown): unknown {
+	if (!isRecord(data)) return data;
+	if (typeof data.result === "string" && Object.keys(data).length === 1) return parsedJson(data.result) ?? data;
+	if (!Array.isArray(data.content)) return data;
+	const texts = data.content.filter((entry): entry is { type: "text"; text: string } => isRecord(entry) && entry.type === "text" && typeof entry.text === "string");
+	if (texts.length !== 1) return data;
+	return parsedJson(texts[0]?.text ?? "") ?? data;
+}
+
 // Normalised text for read-back matching: case, whitespace, and punctuation
-// are not part of a comment's or title's identity across providers.
+// are not part of a comment's or title's identity.
 export const normalised = (value: string): string =>
 	value
 		.normalize("NFKC")
@@ -336,13 +344,16 @@ function pageIdentity(reply: unknown, includePlainId: boolean): string | undefin
 	return undefined;
 }
 
+const issueScoped = (operation: WriteOperation) => operation.startsWith("issue.") && operation !== "issue.create";
+const pageScoped = (operation: WriteOperation) => operation.startsWith("page.") && operation !== "page.create";
+
 function replyNamesRequestedObject(operation: WriteOperation, input: WriteInput, reply: unknown): boolean {
-	if (operation.startsWith("issue.") && operation !== "issue.create") {
+	if (issueScoped(operation)) {
 		const observed = issueIdentity(reply);
 		return observed === undefined || observed === input.issueKey;
 	}
-	if (operation.startsWith("page.") && operation !== "page.create") {
-		const observed = pageIdentity(reply, operation === "page.update");
+	if (pageScoped(operation)) {
+		const observed = pageIdentity(reply, operation === "page.update" || operation === "page.delete");
 		return observed === undefined || observed === input.pageId;
 	}
 	return true;
@@ -354,23 +365,62 @@ function commentRecordMatches(record: Record<string, unknown>, input: WriteInput
 	return wanted.length > 0 && normalised(bodyText(record.body)) === wanted;
 }
 
+// The Community Jira attachment record carries no id field (observed live):
+// the id is the last segment of its content url.
+const ATTACHMENT_URL_ID = /\/attachment\/(?:content\/)?([A-Za-z0-9_-]+)\/?$/;
+
+function attachmentId(record: Record<string, unknown>): string | undefined {
+	const own = stringAt(record, "id");
+	if (own !== undefined) return own;
+	const url = stringAt(record, "url", "content_url", "self");
+	return url === undefined ? undefined : ATTACHMENT_URL_ID.exec(url)?.[1];
+}
+
+// Jira names an attachment by `filename`, Confluence by `title`.
+function attachmentNameMatches(record: Record<string, unknown>, file: string): boolean {
+	return stringAt(record, "filename", "title", "name") === path.basename(file);
+}
+
+function attachmentRecord(record: Record<string, unknown>, file: string): string | undefined {
+	const id = attachmentId(record);
+	return id !== undefined && EFFECT_ID.test(id) && attachmentNameMatches(record, file) ? id : undefined;
+}
+
 function effectFromRecord(operation: WriteOperation, input: WriteInput, kind: Effect["kind"], record: Record<string, unknown>): Effect | undefined {
+	if (kind.endsWith("-attachment")) {
+		const id = attachmentRecord(record, input.file as string);
+		return id === undefined ? undefined : { kind, id };
+	}
 	const id = operation === "issue.create" ? stringAt(record, "key") : stringAt(record, "id");
 	if (id === undefined || !EFFECT_ID.test(id)) return undefined;
 	if (operation === "issue.create" && !ISSUE_KEY.test(id)) return undefined;
+	if (operation === "issue.comment.update" && id !== input.commentId) return undefined;
 	if (kind.endsWith("-comment") && !commentRecordMatches(record, input)) return undefined;
 	return { kind, id };
 }
 
-// The identifier of the object a write created or changed, read from the
-// provider reply. Updates fall back to the target the caller named only when
-// the reply does not name a different object.
+// The identifier of the object a write created, changed, or removed, read
+// from the provider reply. Updates fall back to the target the caller named
+// only when the reply does not name a different object; a delete needs the
+// Provider's explicit success message.
+// The object an update or delete names in its own input.
+function targetOf(operation: WriteOperation, input: WriteInput): string {
+	if (operation === "page.attachment.delete") return input.attachmentId as string;
+	return (operation.startsWith("issue.") ? input.issueKey : input.pageId) as string;
+}
+
+function deleteEffect(operation: WriteOperation, input: WriteInput, kind: Effect["kind"], data: unknown): Effect[] {
+	const message = isRecord(data) ? stringAt(data, "message") : undefined;
+	return message !== undefined && DELETED_MESSAGE.test(message) ? [{ kind, id: targetOf(operation, input) }] : [];
+}
+
 export function effectsFromReply(operation: WriteOperation, input: WriteInput, reply: unknown): Effect[] {
 	const kind = EFFECT_KIND[operation];
 	if (!replyNamesRequestedObject(operation, input, reply)) return [];
-	const target = operation === "issue.update" ? (input.issueKey as string) : operation === "page.update" ? (input.pageId as string) : undefined;
-	if (target !== undefined) return [{ kind, id: target }];
-	for (const record of records(unwrapReply(reply))) {
+	const data = unwrapReply(reply);
+	if (operation.endsWith(".delete")) return deleteEffect(operation, input, kind, data);
+	if (TARGET_OPERATIONS.has(operation)) return [{ kind, id: targetOf(operation, input) }];
+	for (const record of records(data)) {
 		const effect = effectFromRecord(operation, input, kind, record);
 		if (effect !== undefined) return [effect];
 	}
@@ -393,10 +443,7 @@ export function bodyText(value: unknown, depth = 0): string {
 export interface PageObservation {
 	id: string | undefined;
 	version: string | null;
-	snapshotToken: string | undefined;
 	title: string | undefined;
-	spaceId: string | undefined;
-	spaceInstructions: false | true | undefined;
 	body: string;
 }
 
@@ -409,103 +456,145 @@ function pageVersion(record: Record<string, unknown>): string | undefined {
 	return undefined;
 }
 
-function pageSpaceId(record: Record<string, unknown>): string | undefined {
-	const direct = stringAt(record, "spaceId");
-	if (direct !== undefined) return direct;
-	return isRecord(record.space) ? stringAt(record.space, "id") : undefined;
-}
-
-function pageSpaceInstructions(record: Record<string, unknown>): false | true | undefined {
-	const metadata = record.metadata;
-	if (!isRecord(metadata) || !("hasSpaceInstructions" in metadata)) return undefined;
-	const value = metadata.hasSpaceInstructions;
-	return value === false || value === true ? value : undefined;
-}
-
 function observePageRecord(previous: PageObservationState, record: Record<string, unknown>): PageObservationState {
 	return {
 		id: previous.id,
 		version: previous.version ?? pageVersion(record) ?? null,
-		snapshotToken: previous.snapshotToken ?? stringAt(record, "snapshotToken"),
 		title: previous.title ?? stringAt(record, "title"),
-		spaceId: previous.spaceId ?? pageSpaceId(record),
-		spaceInstructions: previous.spaceInstructions ?? pageSpaceInstructions(record),
 	};
 }
 
+// The Community page read with include_metadata wraps the page as
+// {metadata: {...}} (observed live); other replies put the page on top.
 export function observePage(reply: unknown): PageObservation {
 	const data = unwrapReply(reply);
 	const top = isRecord(data) ? data : {};
-	let observation: PageObservationState = { id: stringAt(top, "id"), version: null, snapshotToken: undefined, title: undefined, spaceId: undefined, spaceInstructions: undefined };
-	for (const record of records(data)) {
+	const page = isRecord(top.metadata) && !("id" in top) ? top.metadata : top;
+	let observation: PageObservationState = { id: stringAt(page, "id"), version: null, title: undefined };
+	for (const record of records(page)) {
 		observation = observePageRecord(observation, record);
 	}
-	return { ...observation, body: bodyText(data) };
+	return { ...observation, body: bodyText(page) };
 }
 
-export function observeSpaceInstructions(reply: unknown): false | true | undefined {
-	const data = unwrapReply(reply);
-	if (!isRecord(data) || !isRecord(data.metadata) || !("hasSpaceInstructions" in data.metadata)) return undefined;
-	const value = data.metadata.hasSpaceInstructions;
-	return value === false || value === true ? value : undefined;
+export interface IssueComment {
+	id: string;
+	text: string;
+	// The comment's own `updated` timestamp when the reply carries one.
+	updated: string | undefined;
 }
 
 export interface IssueObservation {
 	key: string | undefined;
-	// Jira's `updated` timestamp is not a stable revision and is never evidence
-	// for an unknown write. A provider must expose an explicit version/revision.
+	// A provider revision when one exists, else the `updated` timestamp: enough
+	// to detect that the issue moved between preview and apply, never enough on
+	// its own to prove what landed.
 	revision: string | null;
 	fields: Record<string, unknown>;
-	comments: { id: string; text: string }[];
+	comments: IssueComment[];
+	attachments: { id: string; name: string }[];
 }
 
 export function observeIssue(reply: unknown): IssueObservation {
 	const data = unwrapReply(reply);
 	const top = isRecord(data) ? data : {};
 	const fields = isRecord(top.fields) ? { ...top, ...top.fields } : top;
-	const comments: { id: string; text: string }[] = [];
+	const comments: IssueComment[] = [];
+	const attachments: { id: string; name: string }[] = [];
 	for (const record of records(data)) {
-		const id = stringAt(record, "id");
-		if (id !== undefined && "body" in record && EFFECT_ID.test(id) && !("key" in record)) comments.push({ id, text: normalised(bodyText(record.body)) });
+		if ("key" in record) continue;
+		const name = stringAt(record, "filename");
+		const id = name === undefined ? stringAt(record, "id") : attachmentId(record);
+		if (id === undefined || !EFFECT_ID.test(id)) continue;
+		if ("body" in record) comments.push({ id, text: normalised(bodyText(record.body)), updated: stringAt(record, "updated") });
+		if (name !== undefined) attachments.push({ id, name });
 	}
-	return { key: stringAt(top, "key"), revision: stringAt(fields, "version", "revision") ?? null, fields, comments };
+	return { key: stringAt(top, "key"), revision: stringAt(fields, "version", "revision", "updated") ?? null, fields, comments, attachments };
 }
 
-export type ReadBack =
-	| { kind: "found"; effects: Effect[] }
-	| { kind: "absent"; revisionUnchanged: boolean }
-	| { kind: "indeterminate"; reason: string };
+export type ReadBack = { kind: "found"; effects: Effect[] } | { kind: "absent"; revisionUnchanged: boolean } | { kind: "indeterminate"; reason: string };
 
-// Which read proves a write's effect, per provider. The dispatcher runs it and
+// Which Community read proves a write's effect. The dispatcher runs it and
 // hands the reply back to readBackEvidence.
-export type ReadBackPlan = { tool: string; args: Record<string, unknown> } | { refused: string };
+export interface ReadBackPlan {
+	tool: string;
+	args: Record<string, unknown>;
+}
 
 const jqlString = (value: string) => `"${value.replace(/[\\"]/g, (char) => `\\${char}`)}"`;
 const cqlString = jqlString;
 
-export function readBackPlan(operation: WriteOperation, provider: ProviderName, input: WriteInput, cloudId: string | undefined): ReadBackPlan {
-	const official = provider === "official";
-	const withCloud = (args: Record<string, unknown>) => (official ? { cloudId, ...args } : args);
+export function readBackPlan(operation: WriteOperation, input: WriteInput): ReadBackPlan {
 	switch (operation) {
 		case "issue.create": {
 			const jql = `project = ${jqlString(input.projectKey as string)} AND summary ~ ${jqlString(input.summary as string)} ORDER BY created DESC`;
-			return official ? { tool: "searchJiraIssuesUsingJql", args: withCloud({ jql, maxResults: 20, fields: ["summary", "issuetype", "created"] }) } : { tool: "jira_search", args: { jql, limit: 20, fields: "summary,issuetype,created" } };
+			return { tool: "jira_search", args: { jql, limit: 20, fields: "summary,issuetype,created" } };
 		}
 		case "issue.update":
-			return official
-				? { tool: "getJiraIssue", args: withCloud({ issueIdOrKey: input.issueKey, fields: [...Object.keys(input.fields as Record<string, unknown>), "version"] }) }
-				: { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: [...Object.keys(input.fields as Record<string, unknown>), "version"].join(",") } };
+			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: [...Object.keys(input.fields as Record<string, unknown>), "updated"].join(",") } };
 		case "issue.comment":
-			return official ? { tool: "getJiraIssue", args: withCloud({ issueIdOrKey: input.issueKey, fields: ["comment", "updated"] }) } : { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "comment,updated", comment_limit: 100 } };
+		case "issue.comment.update":
+			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "comment,updated", comment_limit: 100 } };
+		case "issue.attach":
+			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "attachment,updated" } };
+		case "issue.transition":
+			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "status,updated" } };
+		case "issue.assign":
+			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "assignee,updated" } };
+		case "issue.delete":
+			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "summary,updated" } };
 		case "page.create": {
-			const cql = `type = page AND title = ${cqlString(input.title as string)}`;
-			return official ? { tool: "searchConfluence", args: withCloud({ cql, maxResults: 20 }) } : { tool: "confluence_search", args: { query: cql, limit: 20 } };
+			const cql = `type = page AND space = ${cqlString(input.spaceKey as string)} AND title = ${cqlString(input.title as string)}`;
+			return { tool: "confluence_search", args: { query: cql, limit: 20 } };
 		}
 		case "page.update":
-			return official ? { tool: "getConfluenceContent", args: withCloud({ content_id: input.pageId, content_format: "markdown", detail: "full", include_metadata: true }) } : { tool: "confluence_get_page", args: { page_id: input.pageId, include_metadata: true } };
+		case "page.delete":
+			return { tool: "confluence_get_page", args: { page_id: input.pageId, include_metadata: true } };
 		case "page.comment":
-			return official ? { refused: "Official exposes no comment read on the default endpoint" } : { tool: "confluence_get_comments", args: { page_id: input.pageId } };
+			return { tool: "confluence_get_comments", args: { page_id: input.pageId } };
+		case "page.attach":
+		case "page.attachment.delete":
+			return { tool: "confluence_get_attachments", args: { content_id: input.pageId } };
 	}
+}
+
+// A Jira status is identified by its name; its category ("To Do", "In
+// Progress", "Done") groups statuses and is not itself a status. `sameValue`
+// would match a status record by any of its string fields, so a transition
+// or a live status whose category happens to equal the wanted text would
+// false-match. Compare only the name.
+function sameStatus(wanted: string, observed: unknown): boolean {
+	const target = normalised(wanted);
+	if (target.length === 0) return false;
+	if (typeof observed === "string") return normalised(observed) === target;
+	const name = isRecord(observed) ? stringAt(observed, "name") : undefined;
+	return name !== undefined && normalised(name) === target;
+}
+
+// The live transition whose destination is the requested status, from the
+// Community transition list ({id, name, to_status?: {name}}). When the site
+// reports no destination (observed live), the transition name is the status
+// it leads to.
+export function transitionTo(reply: unknown, toStatus: string): string | undefined {
+	const wanted = normalised(toStatus);
+	if (wanted.length === 0) return undefined;
+	for (const record of records(unwrapReply(reply))) {
+		const id = stringAt(record, "id");
+		if (id === undefined || !("name" in record)) continue;
+		const destination = isRecord(record.to_status) ? record.to_status : isRecord(record.to) ? record.to : undefined;
+		const matches = destination !== undefined ? sameStatus(toStatus, destination) : sameStatus(toStatus, record.name);
+		if (matches) return id;
+	}
+	return undefined;
+}
+
+const UNASSIGNED = "unassigned";
+
+// Whether the observed assignee is the requested one, or nobody when the
+// request names nobody.
+function assigneeMatches(wanted: unknown, observed: unknown): boolean {
+	if (wanted === undefined) return observed === undefined || observed === null || sameValue(UNASSIGNED, observed);
+	return sameValue(wanted, observed);
 }
 
 const EMPTY_BASELINE: WriteBaseline = { effectIds: [], commentIds: [], revision: null };
@@ -522,12 +611,17 @@ function issueTypeName(value: unknown): string | undefined {
 	return isRecord(value) && typeof value.name === "string" ? value.name : undefined;
 }
 
+// A search result is either the REST shape (summary and issuetype under
+// fields) or the Community v0.23.1 shape (summary and issue_type beside the
+// key). A record with neither its own key nor a fields object is a nested
+// fragment, never a candidate.
 function issueCreateMatch(record: Record<string, unknown>, wanted: string, wantedType: string, projectKey: string): IssueCreateMatch {
-	if (!isRecord(record.fields)) return undefined;
-	const fields = record.fields;
+	const nested = isRecord(record.fields) ? record.fields : undefined;
+	if (nested === undefined && stringAt(record, "key") === undefined) return undefined;
+	const fields = nested ?? record;
 	const summary = stringAt(fields, "summary");
 	if (summary === undefined || normalised(summary) !== wanted) return undefined;
-	const observedType = issueTypeName(fields.issuetype);
+	const observedType = issueTypeName(fields.issuetype ?? fields.issue_type);
 	const normalisedObservedType = observedType === undefined ? undefined : normalised(observedType);
 	if (normalisedObservedType === undefined || normalisedObservedType.length === 0) return { reason: "a matching issue search result carries no stable issue type" };
 	if (normalisedObservedType !== wantedType) return undefined;
@@ -550,33 +644,105 @@ function issueCreateEvidence(input: WriteInput, reply: unknown, baseline: WriteB
 	return newEffects("jira-issue", ids, baseline.effectIds);
 }
 
+// A wanted value matches an observed scalar, list, or record. A record matches
+// when any of its own string values is the wanted text, which covers a user
+// named by email, display name, or account id, and a named option.
 const sameValue = (wanted: unknown, observed: unknown): boolean => {
 	if (typeof wanted === "string") {
 		const normalisedWanted = normalised(wanted);
 		if (normalisedWanted.length === 0) return false;
-		return typeof observed === "string" ? normalised(observed) === normalisedWanted : isRecord(observed) && (sameValue(wanted, observed.name) || sameValue(wanted, observed.value) || normalised(bodyText(observed)) === normalisedWanted);
+		if (typeof observed === "string") return normalised(observed) === normalisedWanted;
+		if (!isRecord(observed)) return false;
+		return Object.values(observed).some((value) => typeof value === "string" && normalised(value) === normalisedWanted) || normalised(bodyText(observed)) === normalisedWanted;
 	}
 	if (Array.isArray(wanted)) return Array.isArray(observed) && wanted.length === observed.length && wanted.every((entry, index) => sameValue(entry, observed[index]));
 	return observed === wanted || String(observed) === String(wanted);
 };
 
+const wantedFields = (input: WriteInput) => input.fields as Record<string, unknown>;
+
+function fieldsHold(issue: IssueObservation, wanted: Record<string, unknown>): boolean {
+	return Object.entries(wanted).every(([key, value]) => key in issue.fields && sameValue(value, issue.fields[key]));
+}
+
 function issueUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline): ReadBack {
 	const issue = observeIssue(reply);
 	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply is not an issue" };
 	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
-	if (issue.revision === null || baseline.revision === null) return { kind: "indeterminate", reason: "the Jira reply carries no stable revision; live qualification is required" };
-	const wanted = input.fields as Record<string, unknown>;
-	const observedAll = Object.entries(wanted).every(([key, value]) => key in issue.fields && sameValue(value, issue.fields[key]));
-	if (observedAll && !revisionMatches(issue.revision)) return { kind: "found", effects: [{ kind: "jira-issue", id: issue.key }] };
-	if (revisionMatches(issue.revision)) return { kind: "absent", revisionUnchanged: true };
-	return { kind: "absent", revisionUnchanged: false };
+	if (issue.revision === null || baseline.revision === null) return { kind: "indeterminate", reason: "the Jira reply carries no revision" };
+	// The preview refused a no-op, so the requested values present now were
+	// not present before the write.
+	if (fieldsHold(issue, wantedFields(input))) return { kind: "found", effects: [{ kind: "jira-issue", id: issue.key }] };
+	return { kind: "absent", revisionUnchanged: revisionMatches(issue.revision) };
 }
+
+function issueStateEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline, holds: (issue: IssueObservation) => boolean): ReadBack {
+	const issue = observeIssue(reply);
+	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply is not an issue" };
+	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
+	if (issue.revision === null || baseline.revision === null) return { kind: "indeterminate", reason: "the Jira reply carries no revision" };
+	if (holds(issue)) return { kind: "found", effects: [{ kind: "jira-issue", id: issue.key }] };
+	return { kind: "absent", revisionUnchanged: revisionMatches(issue.revision) };
+}
+
+const statusHolds = (input: WriteInput) => (issue: IssueObservation) => sameStatus(input.toStatus as string, issue.fields.status);
+const assigneeHolds = (input: WriteInput) => (issue: IssueObservation) => assigneeMatches(input.assignee, issue.fields.assignee);
 
 function issueCommentEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
 	const issue = observeIssue(reply);
 	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply names no issue key" };
 	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
 	return commentEvidence("jira-comment", input.body as string, issue.comments, baseline);
+}
+
+function issueCommentUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown): ReadBack {
+	const issue = observeIssue(reply);
+	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply names no issue key" };
+	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
+	const comment = issue.comments.find((entry) => entry.id === input.commentId);
+	if (comment === undefined) return { kind: "indeterminate", reason: "the read-back reply names no such comment" };
+	const wanted = normalised(input.body as string);
+	if (wanted.length === 0) return { kind: "indeterminate", reason: "the requested comment has no stable read-back representation" };
+	if (comment.text === wanted) return { kind: "found", effects: [{ kind: "jira-comment", id: comment.id }] };
+	return { kind: "absent", revisionUnchanged: comment.updated !== undefined && revisionMatches(comment.updated) };
+}
+
+function issueAttachEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline): ReadBack {
+	const issue = observeIssue(reply);
+	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply names no issue key" };
+	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
+	const name = path.basename(input.file as string);
+	const found = newEffects("jira-attachment", issue.attachments.filter((entry) => entry.name === name).map((entry) => entry.id), baseline.effectIds);
+	if (found.kind === "found") return found;
+	return { kind: "absent", revisionUnchanged: issue.revision !== null && revisionMatches(issue.revision) };
+}
+
+// The Community update tool reports a failed upload inside an otherwise
+// successful reply; the issue is then untouched.
+export function uploadFailed(reply: unknown): boolean {
+	for (const record of records(unwrapReply(reply))) {
+		const results = record.attachment_results;
+		if (isRecord(results) && Array.isArray(results.failed) && results.failed.length > 0) return true;
+		if (isRecord(results) && results.success === false) return true;
+	}
+	return false;
+}
+
+// A delete's read-back succeeding means the object is still there. Its
+// absence is proven only by the Provider's not-found refusal, which the
+// dispatcher maps to a found effect before this function is reached.
+function issueDeleteEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown): ReadBack {
+	const issue = observeIssue(reply);
+	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply names no issue key" };
+	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
+	return { kind: "absent", revisionUnchanged: issue.revision !== null && revisionMatches(issue.revision) };
+}
+
+function pageDeleteEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown): ReadBack {
+	const page = observePage(reply);
+	if (page.id === undefined) return { kind: "indeterminate", reason: "the read-back reply names no page" };
+	if (page.id !== input.pageId) return { kind: "indeterminate", reason: "the read-back reply names a different page" };
+	return { kind: "absent", revisionUnchanged: page.version !== null && revisionMatches(page.version) };
 }
 
 function commentEvidence(kind: Effect["kind"], body: string, comments: { id: string; text: string }[], baseline: WriteBaseline): ReadBack {
@@ -589,27 +755,24 @@ function commentEvidence(kind: Effect["kind"], body: string, comments: { id: str
 	);
 }
 
-function pageCreateRecordEvidence(record: Record<string, unknown>, wanted: string, space: { id?: string; key?: string }): { id: string } | { reason: string } | undefined {
+function pageCreateRecordEvidence(record: Record<string, unknown>, wanted: string, spaceKey: string): { id: string } | { reason: string } | undefined {
 	const title = stringAt(record, "title");
 	if (title === undefined || normalised(title) !== wanted) return undefined;
-	if (!("id" in record) && !("space" in record) && !("spaceId" in record)) return undefined;
+	if (!("id" in record) && !("space" in record) && !("spaceKey" in record)) return undefined;
 	const id = stringAt(record, "id");
 	if (id === undefined || !NUMERIC_ID.test(id)) return { reason: "a matching page search result carries no stable content id" };
 	const spaceRecord = isRecord(record.space) ? record.space : {};
-	const observedId = stringAt(record, "spaceId") ?? stringAt(spaceRecord, "id");
-	const observedKey = stringAt(spaceRecord, "key");
-	if ((space.id !== undefined && observedId === space.id) || (space.key !== undefined && observedKey === space.key)) return { id };
-	if (observedId === undefined && observedKey === undefined) return { reason: "a matching title was found but the reply names no space" };
-	return undefined;
+	const observedKey = stringAt(record, "spaceKey") ?? stringAt(spaceRecord, "key");
+	if (observedKey === undefined) return { reason: "a matching title was found but the reply names no space" };
+	return observedKey === spaceKey ? { id } : undefined;
 }
 
 function pageCreateEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
 	const wanted = normalised(input.title as string);
 	if (wanted.length === 0) return { kind: "indeterminate", reason: "the requested page title has no stable read-back representation" };
-	const space = spaceOf(input);
 	const ids = new Set<string>();
 	for (const record of records(unwrapReply(reply))) {
-		const evidence = pageCreateRecordEvidence(record, wanted, space);
+		const evidence = pageCreateRecordEvidence(record, wanted, input.spaceKey as string);
 		if (evidence === undefined) continue;
 		if ("reason" in evidence) return { kind: "indeterminate", reason: evidence.reason };
 		ids.add(evidence.id);
@@ -642,13 +805,33 @@ function pageCommentEvidence(input: WriteInput, reply: unknown, baseline: WriteB
 	return commentEvidence("confluence-comment", input.body as string, comments, baseline);
 }
 
+// Removal is proven by the attachment no longer being listed; a listing that
+// still carries it proves the delete did not land.
+function pageAttachmentDeleteEvidence(input: WriteInput, reply: unknown): ReadBack {
+	const observedPage = pageIdentity(reply, false);
+	if (observedPage !== undefined && observedPage !== input.pageId) return { kind: "indeterminate", reason: "the read-back reply names a different page" };
+	const present = records(unwrapReply(reply)).some((record) => attachmentId(record) === input.attachmentId);
+	return present ? { kind: "absent", revisionUnchanged: true } : { kind: "found", effects: [{ kind: "confluence-attachment", id: input.attachmentId as string }] };
+}
+
+function pageAttachEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
+	const observedPage = pageIdentity(reply, false);
+	if (observedPage !== undefined && observedPage !== input.pageId) return { kind: "indeterminate", reason: "the read-back reply names a different page" };
+	const ids: string[] = [];
+	for (const record of records(unwrapReply(reply))) {
+		const id = attachmentRecord(record, input.file as string);
+		if (id !== undefined) ids.push(id);
+	}
+	return newEffects("confluence-attachment", ids, baseline.effectIds);
+}
+
 // Whether an observed revision is the one the preview bound. The apply flow
 // compares values; adjudication compares against the persisted digest.
 export type RevisionMatch = (observed: string) => boolean;
 
-// Read-back proof after a write with a lost or uncertain reply. `found` names
-// the effect; `absent` with revisionUnchanged proves no effect through a
-// monotonic revision; plain `absent` proves nothing after a possible send.
+// The read-back plan's reply, judged against the neutral input: the effect
+// found, proven absent (only an unchanged revision proves absence after a
+// send), or indeterminate.
 export function readBackEvidence(operation: WriteOperation, input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline = EMPTY_BASELINE): ReadBack {
 	switch (operation) {
 		case "issue.create":
@@ -657,16 +840,34 @@ export function readBackEvidence(operation: WriteOperation, input: WriteInput, r
 			return issueUpdateEvidence(input, revisionMatches, reply, baseline);
 		case "issue.comment":
 			return issueCommentEvidence(input, reply, baseline);
+		case "issue.comment.update":
+			return issueCommentUpdateEvidence(input, revisionMatches, reply);
+		case "issue.attach":
+			return issueAttachEvidence(input, revisionMatches, reply, baseline);
+		case "issue.transition":
+			return issueStateEvidence(input, revisionMatches, reply, baseline, statusHolds(input));
+		case "issue.assign":
+			return issueStateEvidence(input, revisionMatches, reply, baseline, assigneeHolds(input));
+		case "issue.delete":
+			return issueDeleteEvidence(input, revisionMatches, reply);
 		case "page.create":
 			return pageCreateEvidence(input, reply, baseline);
 		case "page.update":
 			return pageUpdateEvidence(input, revisionMatches, reply, baseline);
 		case "page.comment":
 			return pageCommentEvidence(input, reply, baseline);
+		case "page.attach":
+			return pageAttachEvidence(input, reply, baseline);
+		case "page.attachment.delete":
+			return pageAttachmentDeleteEvidence(input, reply);
+		case "page.delete":
+			return pageDeleteEvidence(input, revisionMatches, reply);
 	}
 }
 
-export type BaselineObservation = { kind: "observed"; baseline: WriteBaseline } | { kind: "indeterminate"; reason: string };
+// What the preparatory read established: the baseline to compare against, a
+// refusal when the write would change nothing, or an indeterminate reply.
+export type BaselineObservation = { kind: "observed"; baseline: WriteBaseline } | { kind: "refused"; reason: string } | { kind: "indeterminate"; reason: string };
 
 function evidenceIds(evidence: ReadBack): string[] {
 	return evidence.kind === "found" ? evidence.effects.map((effect) => effect.id) : [];
@@ -682,36 +883,81 @@ function baselineWithCommentIds(evidence: ReadBack): BaselineObservation {
 	return { kind: "observed", baseline: { ...EMPTY_BASELINE, commentIds: evidenceIds(evidence) } };
 }
 
-function issueCreateBaseline(input: WriteInput, reply: unknown): BaselineObservation {
-	return baselineWithEffectIds(issueCreateEvidence(input, reply, EMPTY_BASELINE));
-}
+// Timestamps and text snapshots enter the persisted baseline only as a digest,
+// which fits the journal's stable-revision shape.
+const digest = (value: string): string => new Bun.CryptoHasher("sha256").update(value).digest("hex");
 
-function pageCreateBaseline(input: WriteInput, reply: unknown): BaselineObservation {
-	return baselineWithEffectIds(pageCreateEvidence(input, reply, EMPTY_BASELINE));
-}
+type Indeterminate = { kind: "indeterminate"; reason: string };
 
-function issueCommentBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+function issueFor(input: WriteInput, reply: unknown): IssueObservation | Indeterminate {
 	const issue = observeIssue(reply);
 	if (issue.key === undefined) return { kind: "indeterminate", reason: "the Jira reply names no issue key" };
 	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the Jira reply names a different issue" };
+	return issue;
+}
+
+const isIndeterminate = <T>(value: T | Indeterminate): value is Indeterminate => typeof value === "object" && value !== null && "kind" in value;
+
+function issueCommentBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+	const issue = issueFor(input, reply);
+	if (isIndeterminate(issue)) return issue;
 	const observed = baselineWithCommentIds(commentEvidence("jira-comment", input.body as string, issue.comments, EMPTY_BASELINE));
-	return observed.kind === "indeterminate" ? observed : { kind: "observed", baseline: { ...observed.baseline, effectIds: [issue.key] } };
+	return observed.kind !== "observed" ? observed : { kind: "observed", baseline: { ...observed.baseline, effectIds: [issue.key as string] } };
+}
+
+function issueCommentUpdateBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+	const issue = issueFor(input, reply);
+	if (isIndeterminate(issue)) return issue;
+	const comment = issue.comments.find((entry) => entry.id === input.commentId);
+	if (comment === undefined) return { kind: "indeterminate", reason: "the Jira reply names no such comment on this issue" };
+	if (comment.updated === undefined) return { kind: "indeterminate", reason: "the comment read exposes no updated timestamp to bind the revision" };
+	if (comment.text === normalised(input.body as string)) return { kind: "refused", reason: "the comment already holds the requested body; nothing to change" };
+	return { kind: "observed", baseline: { effectIds: [issue.key as string], commentIds: [comment.id], revision: digest(comment.updated) } };
 }
 
 function pageCommentBaseline(input: WriteInput, reply: unknown): BaselineObservation {
 	const observed = baselineWithCommentIds(pageCommentEvidence(input, reply, EMPTY_BASELINE));
-	return observed.kind === "indeterminate" ? observed : { kind: "observed", baseline: { ...observed.baseline, effectIds: [input.pageId as string] } };
+	return observed.kind !== "observed" ? observed : { kind: "observed", baseline: { ...observed.baseline, effectIds: [input.pageId as string] } };
 }
 
+// The requested values must differ from the current ones, so a later
+// read-back that shows them proves this write and not the status quo. The
+// baseline revision is a digest of the current values of the requested fields.
 function issueUpdateBaseline(input: WriteInput, reply: unknown): BaselineObservation {
-	const issue = observeIssue(reply);
-	if (issue.key === undefined) return { kind: "indeterminate", reason: "the Jira reply names no issue key" };
-	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the Jira reply names a different issue" };
-	if (issue.revision === null) return { kind: "indeterminate", reason: "the Jira reply carries no stable revision; live qualification is required" };
-	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [issue.key], revision: issue.revision } };
+	const issue = issueFor(input, reply);
+	if (isIndeterminate(issue)) return issue;
+	if (issue.revision === null) return { kind: "indeterminate", reason: "the Jira reply carries no revision" };
+	const wanted = wantedFields(input);
+	if (fieldsHold(issue, wanted)) return { kind: "refused", reason: "the issue already holds every requested value; nothing to change" };
+	const snapshot = Object.fromEntries(Object.keys(wanted).map((key) => [key, issue.fields[key] ?? null]));
+	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [issue.key as string], revision: digest(JSON.stringify(snapshot)) } };
 }
 
-function pageUpdateBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+// A state change must change state: the current status or assignee is
+// digested as the baseline revision and a target already there is refused.
+function issueStateBaseline(input: WriteInput, reply: unknown, holds: (issue: IssueObservation) => boolean, field: string, what: string): BaselineObservation {
+	const issue = issueFor(input, reply);
+	if (isIndeterminate(issue)) return issue;
+	if (issue.revision === null) return { kind: "indeterminate", reason: "the Jira reply carries no revision" };
+	if (holds(issue)) return { kind: "refused", reason: `the issue already has the requested ${what}; nothing to change` };
+	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [issue.key as string], revision: digest(JSON.stringify(issue.fields[field] ?? null)) } };
+}
+
+function pageAttachmentDeleteBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+	const observedPage = pageIdentity(reply, false);
+	if (observedPage !== undefined && observedPage !== input.pageId) return { kind: "indeterminate", reason: "the attachment listing names a different page" };
+	const present = records(unwrapReply(reply)).some((record) => attachmentId(record) === input.attachmentId);
+	if (!present) return { kind: "refused", reason: "the page has no attachment with that id" };
+	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [input.attachmentId as string] } };
+}
+
+function issueDeleteBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+	const issue = issueFor(input, reply);
+	if (isIndeterminate(issue)) return issue;
+	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [issue.key as string], revision: issue.revision === null ? null : digest(issue.revision) } };
+}
+
+function pageRevisionBaseline(input: WriteInput, reply: unknown): BaselineObservation {
 	const page = observePage(reply);
 	if (page.id === undefined) return { kind: "indeterminate", reason: "the page read names no page id" };
 	if (page.id !== input.pageId) return { kind: "indeterminate", reason: "the page read names a different page" };
@@ -721,38 +967,45 @@ function pageUpdateBaseline(input: WriteInput, reply: unknown): BaselineObservat
 
 // Capture only the pre-existing candidates that could otherwise be mistaken
 // for this write. The later read-back must name a different stable identifier,
-// or, for an update, a different stable revision.
+// or, for an update, the requested values that were absent before.
 export function baselineFromReply(operation: WriteOperation, input: WriteInput, reply: unknown): BaselineObservation {
 	switch (operation) {
 		case "issue.create":
-			return issueCreateBaseline(input, reply);
+			return baselineWithEffectIds(issueCreateEvidence(input, reply, EMPTY_BASELINE));
 		case "issue.update":
 			return issueUpdateBaseline(input, reply);
 		case "issue.comment":
 			return issueCommentBaseline(input, reply);
+		case "issue.comment.update":
+			return issueCommentUpdateBaseline(input, reply);
+		case "issue.attach":
+			return baselineWithEffectIds(issueAttachEvidence(input, () => false, reply, EMPTY_BASELINE));
+		case "issue.transition":
+			return issueStateBaseline(input, reply, statusHolds(input), "status", "status");
+		case "issue.assign":
+			return issueStateBaseline(input, reply, assigneeHolds(input), "assignee", "assignee");
+		case "issue.delete":
+			return issueDeleteBaseline(input, reply);
 		case "page.create":
-			return pageCreateBaseline(input, reply);
+			return baselineWithEffectIds(pageCreateEvidence(input, reply, EMPTY_BASELINE));
 		case "page.update":
-			return pageUpdateBaseline(input, reply);
+		case "page.delete":
+			return pageRevisionBaseline(input, reply);
 		case "page.comment":
 			return pageCommentBaseline(input, reply);
+		case "page.attach": {
+			// Confluence replaces a same-named attachment under its existing id rather
+			// than creating a new one, which no later read-back can tell apart from no
+			// upload at all. Refuse here, before the write leaves the operator with an
+			// unresolvable receipt; SKILL.md already directs page.attachment.delete first.
+			const existing = pageAttachEvidence(input, reply, EMPTY_BASELINE);
+			if (existing.kind === "indeterminate") return existing;
+			if (records(unwrapReply(reply)).some((record) => attachmentNameMatches(record, input.file as string))) {
+				return { kind: "refused", reason: "the page already has an attachment with this file name; run page.attachment.delete first" };
+			}
+			return baselineWithEffectIds(existing);
+		}
+		case "page.attachment.delete":
+			return pageAttachmentDeleteBaseline(input, reply);
 	}
-}
-
-// Space resolution from a key, through a Confluence search reply: any page in
-// the space names its numeric space id. No primary Official or Community tool
-// lists spaces directly, so a space with no readable page cannot be resolved.
-export function spaceIdFromSearch(key: string, reply: unknown): string | undefined {
-	for (const record of records(unwrapReply(reply))) {
-		const spaceRecord = isRecord(record.space) ? record.space : undefined;
-		const observedKey = spaceRecord ? stringAt(spaceRecord, "key") : stringAt(record, "spaceKey");
-		const observedId = (spaceRecord ? stringAt(spaceRecord, "id") : undefined) ?? stringAt(record, "spaceId");
-		if (observedKey === key && observedId !== undefined && NUMERIC_ID.test(observedId)) return observedId;
-	}
-	return undefined;
-}
-
-export function spaceSearchPlan(key: string, provider: ProviderName, cloudId: string | undefined): { tool: string; args: Record<string, unknown> } {
-	const cql = `type = page AND space = ${cqlString(key)}`;
-	return provider === "official" ? { tool: "searchConfluence", args: { cloudId, cql, maxResults: 5 } } : { tool: "confluence_search", args: { query: cql, limit: 5 } };
 }

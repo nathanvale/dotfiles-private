@@ -4,9 +4,9 @@ import { describe, expect, test } from "bun:test";
 import { OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
 import { type ObservedFailure, type ProviderFailureCause, translateFailure } from "../scripts/dispatch/translate.ts";
 
-const process_ = (stderr: string, stdout = "", exitCode = 1): ObservedFailure => ({ kind: "process", exitCode, stderr, stdout, contentObserved: stdout.trim().length > 0 });
-const toolError = (message: string): ObservedFailure => ({ kind: "tool-error", message, contentObserved: true });
-const malformed = (message: string): ObservedFailure => ({ kind: "malformed", message, contentObserved: false });
+const process_ = (stderr: string, stdout = "", exitCode = 1): ObservedFailure => ({ kind: "process", exitCode, stderr, stdout });
+const toolError = (message: string): ObservedFailure => ({ kind: "tool-error", message });
+const malformed = (message: string): ObservedFailure => ({ kind: "malformed", message });
 
 describe("translateFailure", () => {
 	// Test-owned table: observed provider text and the cause it must become.
@@ -19,6 +19,8 @@ describe("translateFailure", () => {
 		["permission wording", toolError("You do not have permission to view this issue"), "refused-auth"],
 		["404", toolError("Issue does not exist or you do not have permission to see it."), "refused-auth"],
 		["not found", process_("HTTP 404 Not Found"), "not-found"],
+		["ambiguous Confluence absence or permission cannot prove a delete", toolError("Failed to retrieve page by ID '123': Error retrieving page content: There is no content with the given id, or the calling user does not have permission to view the content"), "failed-unknown"],
+		["unambiguous Confluence absence", toolError("There is no content with the given id"), "not-found"],
 		["unknown tool", toolError("unknown tool getJiraIssue"), "capability-unavailable"],
 		["tool not exposed", toolError("tool searchConfluence is not exposed on this server"), "capability-unavailable"],
 		["connection reset", process_("connect ECONNRESET"), "failed-transport"],
@@ -28,10 +30,13 @@ describe("translateFailure", () => {
 		["malformed output", malformed("MCPorter output was not JSON"), "failed-unknown"],
 		["malformed output that mentions a timeout", malformed("timed out while parsing"), "failed-unknown"],
 		["precondition line", process_("atlassian-provider:error:username-missing:JIRA_EXAMPLE_API_TOKEN needs a username field", "", 4), "refused-precondition"],
-		["precondition beats a 401 substring", process_("atlassian-provider:error:bridge-version-invalid:hyper-mcp-remote 0.5.0 is required\nHTTP 401 Unauthorized", "", 4), "refused-precondition"],
+		["precondition beats a 401 substring", process_("atlassian-provider:error:executable-missing:uvx is required\nHTTP 401 Unauthorized", "", 4), "refused-precondition"],
 		["precondition on stdout", process_("", "atlassian-provider:error:credential-context-stale:credential item changed", 4), "refused-precondition"],
 		["auth beats not-found", toolError("401 Unauthorized: issue not found"), "refused-auth"],
 		["not-found beats capability", toolError("unknown tool not found"), "not-found"],
+		// Retired Official codes are no longer our own precondition lines.
+		["retired bridge code", process_("atlassian-provider:error:bridge-version-invalid:hyper-mcp-remote 0.5.0 is required", "", 4), "failed-unknown"],
+		["retired injection code", process_("atlassian-provider:error:injection-mismatch:pair differs", "", 4), "failed-unknown"],
 	];
 	for (const [label, observed, cause] of TABLE) {
 		test(`${label} -> ${cause}`, () => {
@@ -41,15 +46,15 @@ describe("translateFailure", () => {
 
 	test("a precondition line yields the fixed hint for its code and nothing from the message", () => {
 		const translated = translateFailure(process_("atlassian-provider:error:username-missing:JIRA_EXAMPLE_API_TOKEN needs a username field", "", 4));
-		expect(translated).toEqual({ cause: "refused-precondition", hint: "add a username field to the tenant's product credential item", contentObserved: false });
+		expect(translated).toEqual({ cause: "refused-precondition", hint: "add a username field to the tenant's product credential item" });
 		expect(translateFailure(process_("atlassian-provider:error:credential-context-stale:credential item changed; restart the semantic operation", "", 4)).hint).toBe("credential item metadata changed; restart the semantic operation");
 		for (const [code, hint] of [
-			["log-path-invalid", "restore the Provider's owned bridge log directory"],
+			["executable-missing", "install the missing provider executable on PATH"],
+			["community-fields-missing", "the product credential item needs username, credential, and a site_url field"],
 			["execve-unavailable", "run the Provider with a Bun runtime that supports process replacement"],
 			["exec-failed", "inspect the Provider executable and runtime"],
-			["injection-mismatch", "restart through the semantic dispatcher"],
 		] as const) {
-			expect(translateFailure(process_(`atlassian-provider:error:${code}:untrusted provider detail`, "", 4))).toEqual({ cause: "refused-precondition", hint, contentObserved: false });
+			expect(translateFailure(process_(`atlassian-provider:error:${code}:untrusted provider detail`, "", 4))).toEqual({ cause: "refused-precondition", hint });
 		}
 	});
 
@@ -57,12 +62,6 @@ describe("translateFailure", () => {
 		for (const observed of [toolError("HTTP 401"), process_("HTTP 404 Not Found"), toolError("unknown tool"), process_("connect ECONNRESET"), malformed("x"), process_("boom")]) {
 			expect(translateFailure(observed).hint).toBeNull();
 		}
-	});
-
-	test("content observed is carried through unchanged", () => {
-		expect(translateFailure(process_("connect ETIMEDOUT mid-stream", '{"partial":"answer"}')).contentObserved).toBe(true);
-		expect(translateFailure(process_("connect ETIMEDOUT")).contentObserved).toBe(false);
-		expect(translateFailure(toolError("x")).contentObserved).toBe(true);
 	});
 
 	test("hostile provider text never survives translation on any path", () => {

@@ -11,7 +11,7 @@ import path from "node:path";
 import { type EnvironmentSource, INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "../../../../bin/safe-environment.ts";
 import { atlassianProcess } from "../provider-process.ts";
 import { type CredentialBinding, encodeBinding, parseBinding } from "./channel.ts";
-import { CREDENTIAL_VAULT, credentialHelperPath, credentialHelperPresent, isProduct, itemBinding, itemFieldMap, type Product, productItemTitle, readItem, SITE_URL_FIELD, TENANT_PATTERN } from "./item.ts";
+import { isProduct, itemBinding, itemFieldMap, type Product, productItemTitle, readItem, SITE_URL_FIELD, TENANT_PATTERN } from "./item.ts";
 
 export { PRODUCTS, type Product, TENANT_PATTERN } from "./item.ts";
 export type { CredentialBinding } from "./channel.ts";
@@ -47,15 +47,12 @@ export interface ProviderInvocation {
 }
 
 // A Provider's startup selection: tenant and product from the route, the
-// binding from the internal channel. An injected relaunch also names the pair
-// it was launched for, which must equal the selected pair before the channel
-// is even read.
-export function providerInvocation(env: EnvironmentSource = process.env, injected?: { tenant: string; product: string }): ProviderInvocation {
+// binding from the internal channel.
+export function providerInvocation(env: EnvironmentSource = process.env): ProviderInvocation {
 	const tenant = env[TENANT_ENV] ?? "";
 	if (!TENANT_PATTERN.test(tenant)) atlassianProcess.fail("tenant-invalid", "expected a lowercase tenant slug", 2);
 	const product = env[PRODUCT_ENV] ?? "";
 	if (!isProduct(product)) atlassianProcess.fail("product-invalid", "expected ATLASSIAN_PRODUCT to be jira or confluence", 2);
-	if (injected && (injected.tenant !== tenant || injected.product !== product)) atlassianProcess.fail("injection-mismatch", "the injected pair does not match the selected tenant and product", 2);
 	const binding = parseBinding(env[INTERNAL_INVOCATION_CONTEXT_ENV]);
 	if (!binding) atlassianProcess.fail("credential-context-invalid", "restart through the semantic dispatcher");
 	return { tenant, product, itemTitle: productItemTitle(product, tenant), binding };
@@ -68,8 +65,8 @@ export interface BoundItem {
 }
 
 // The exact item, re-read immediately before a downstream executable starts.
-// A rotated item or changed site is a precondition failure, never a retry or
-// a provider fallback. The credential value stays inside the calling process.
+// A rotated item or changed site is a precondition failure, never a retry.
+// The credential value stays inside the calling process.
 export function boundItem(invocation: ProviderInvocation, env: EnvironmentSource = process.env): BoundItem {
 	const { itemTitle, binding } = invocation;
 	const read = readItem(itemTitle, env);
@@ -87,19 +84,9 @@ export function boundItem(invocation: ProviderInvocation, env: EnvironmentSource
 	return { principal: fresh.principal, origin: fresh.origin, credential: itemFieldMap(read.item)?.get("credential") };
 }
 
-// The credential helper the Official Provider execs for injection, present
-// and executable, or a fixed refusal.
-export function credentialHelper(env: EnvironmentSource = process.env): string {
-	const helper = credentialHelperPath(env.HOME);
-	if (!credentialHelperPresent(helper)) atlassianProcess.fail("credential-wrapper-missing", "restore the dotfiles 1Password wrapper");
-	return helper;
-}
-
-// The op:// reference for the item's secret field.
-export const credentialReference = (invocation: ProviderInvocation): string => `op://${CREDENTIAL_VAULT}/${invocation.itemTitle}/credential`;
-
-// The three variables an injected relaunch must re-supply so its phase two
-// recovers the same invocation.
+// The three variables that select one Provider invocation: what the route
+// registry supplies to the Provider, and what the dispatcher's readiness
+// probe supplies when it runs the Provider's --preflight directly.
 export function invocationEnvironment(invocation: Pick<ProviderInvocation, "tenant" | "product" | "binding">): Record<string, string> {
 	return { [TENANT_ENV]: invocation.tenant, [PRODUCT_ENV]: invocation.product, [INTERNAL_INVOCATION_CONTEXT_ENV]: encodeBinding(invocation.binding) };
 }

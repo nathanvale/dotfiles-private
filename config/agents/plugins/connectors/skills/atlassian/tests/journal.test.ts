@@ -13,7 +13,7 @@ const WORKER = path.resolve(import.meta.dir, "fixtures", "journal-worker.ts");
 const PRIVATE = ["fixture-secret-value", "Quarterly numbers are down", "https://example.atlassian.net", "Billing broken", "Roadmap draft"];
 const COMMENT = { issueKey: "PROJ-1", body: "Quarterly numbers are down; fixture-secret-value; https://example.atlassian.net" };
 const CREATE = { projectKey: "PROJ", issueType: "Bug", summary: "Billing broken", description: "first" };
-const PAGE = { space: { id: "123" }, parentId: "77", title: "Roadmap draft", body: "x" };
+const PAGE = { spaceKey: "ENG", parentId: "77", title: "Roadmap draft", body: "x" };
 
 // Test-owned stable digest oracle. Journal representation changes must be
 // observable here without calculating an expected digest through production.
@@ -29,8 +29,8 @@ function testCanonical(value: unknown): string {
 }
 
 const testDigest = (value: unknown): string => new Bun.CryptoHasher("sha256").update(testCanonical(value)).digest("hex");
-// The same space named by its key alongside its id: one space, one identity.
-const PAGE_ALIAS = { ...PAGE, space: { id: "123", key: "ENG" }, body: "y" };
+// The same space and title with a different body: one container, one identity.
+const PAGE_ALIAS = { ...PAGE, body: "y" };
 
 let root: string;
 let now: number;
@@ -48,11 +48,11 @@ const dir = (name: string) => path.join(tenantDir(), name);
 const listing = (name: string) => readdirSync(dir(name)).filter((entry) => !entry.startsWith("."));
 const stored = () => ["previews", "receipts", "locks"].flatMap((name) => listing(name).map((entry) => readFileSync(path.join(dir(name), entry), "utf8"))).join("\n");
 const markers = () => readdirSync(path.join(root, "markers")).length;
-const comment = (j = journal(), input: unknown = COMMENT, revision: string | null = "v7") => j.recordPreview({ operation: "issue.comment", provider: "official", canonicalInput: input, providerArgs: input, revision });
+const comment = (j = journal(), input: unknown = COMMENT, revision: string | null = "v7") => j.recordPreview({ operation: "issue.comment", provider: "community", canonicalInput: input, providerArgs: input, revision });
 const ok = { proof: "completed" as const, effects: [{ kind: "jira-comment" as const, id: "10001" }] };
 const unknown = { proof: "unknown" as const };
 const applyOk = (j: ReturnType<typeof journal>, previewId: string, input: unknown = COMMENT, revision: string | null = "v7") =>
-	j.apply({ previewId, canonicalInput: input, providerArgs: input, revision }, async () => ok);
+	j.apply({ provider: "community", previewId, canonicalInput: input, providerArgs: input, revision }, async () => ok);
 
 describe("identity is a pure function of input", () => {
 	test("update and comment identities are the object; creates use container, discriminator, and subject digest", () => {
@@ -62,20 +62,20 @@ describe("identity is a pure function of input", () => {
 		expect(objectIdentity("issue.create", CREATE)).toMatch(/^project:PROJ:create:bug:[0-9a-f]{16}$/);
 		expect(objectIdentity("issue.create", { ...CREATE, description: "edited", issueType: " BUG " , summary: " billing   BROKEN" })).toBe(objectIdentity("issue.create", CREATE));
 		expect(objectIdentity("issue.create", { ...CREATE, summary: "Invoice missing" })).not.toBe(objectIdentity("issue.create", CREATE));
-		expect(objectIdentity("page.create", PAGE)).toMatch(/^space:123:create:77:[0-9a-f]{16}$/);
-		expect(objectIdentity("page.create", { ...PAGE, parentId: undefined })).toMatch(/^space:123:create:root:/);
+		expect(objectIdentity("page.create", PAGE)).toMatch(/^space:ENG:create:77:[0-9a-f]{16}$/);
+		expect(objectIdentity("page.create", { ...PAGE, parentId: undefined })).toMatch(/^space:ENG:create:root:/);
 		expect(objectIdentity("page.create", PAGE_ALIAS)).toBe(objectIdentity("page.create", PAGE));
 		for (const [operation, bad] of [
 			["issue.comment", {}],
 			["issue.comment", { issueKey: "PROJ 1" }],
 			["issue.create", { ...CREATE, summary: "  " }],
-			["page.create", { ...PAGE, space: {} }],
+			["page.create", { ...PAGE, spaceKey: "" }],
 		] as const) {
 			expect(() => objectIdentity(operation, bad)).toThrow(JournalError);
 		}
-		// A space key alone, a non-canonical id, or a numeric id are not one canonical container.
-		for (const space of [{ key: "ENG" }, { id: "0123" }, { id: 123 }, { id: "ENG" }, {}]) {
-			expect(() => objectIdentity("page.create", { ...PAGE, space })).toThrow(/input-invalid/);
+		// Only a well-formed space key names the container.
+		for (const spaceKey of [{ key: "ENG" }, "bad key", 123, "", undefined]) {
+			expect(() => objectIdentity("page.create", { ...PAGE, spaceKey })).toThrow(/input-invalid/);
 		}
 		expect(() => objectIdentity("issue.get" as never, COMMENT)).toThrow(/operation-invalid/);
 	});
@@ -86,7 +86,7 @@ describe("private state and privacy", () => {
 		const j = journal();
 		const p = comment(j);
 		await applyOk(j, p.previewId);
-		j.recordPreview({ operation: "issue.create", provider: "official", canonicalInput: CREATE, providerArgs: CREATE, revision: null });
+		j.recordPreview({ operation: "issue.create", provider: "community", canonicalInput: CREATE, providerArgs: CREATE, revision: null });
 		j.recordPreview({ operation: "page.create", provider: "community", canonicalInput: PAGE, providerArgs: PAGE, revision: null });
 		for (const name of ["previews", "receipts", "locks"]) {
 			expect(lstatSync(dir(name)).mode & 0o777).toBe(0o700);
@@ -103,7 +103,7 @@ describe("private state and privacy", () => {
 
 	test("falls back from XDG_STATE_HOME to HOME", () => {
 		const home = path.join(root, "home");
-		openJournal("example", { env: { HOME: home } }).recordPreview({ operation: "issue.comment", provider: "official", canonicalInput: COMMENT, providerArgs: COMMENT, revision: "1" });
+		openJournal("example", { env: { HOME: home } }).recordPreview({ operation: "issue.comment", provider: "community", canonicalInput: COMMENT, providerArgs: COMMENT, revision: "1" });
 		expect(existsSync(path.join(home, ".local", "state", "connectors", "atlassian", "example", "previews"))).toBe(true);
 	});
 
@@ -122,7 +122,7 @@ describe("private state and privacy", () => {
 		const previewFile = path.join(dir("previews"), `${p.previewId}.json`);
 		rmSync(previewFile);
 		symlinkSync(path.join(root, "elsewhere", "target.json"), previewFile);
-		await expect(j2.apply({ previewId: p.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => ok)).rejects.toThrow(/state-invalid/);
+		await expect(j2.apply({ provider: "community", previewId: p.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => ok)).rejects.toThrow(/state-invalid/);
 		chmodSync(dir("locks"), 0o755);
 		expect(() => journal()).toThrow(/state-invalid/);
 		expect(markers()).toBe(0);
@@ -133,13 +133,13 @@ describe("preview binding at apply", () => {
 	test("exact input and the revision supplied at apply are checked; expiry and unknown ids refuse", async () => {
 		const j = journal();
 		const p = comment(j);
-		await expect(j.apply({ previewId: p.previewId, canonicalInput: { ...COMMENT, body: "changed" }, providerArgs: { ...COMMENT, body: "changed" }, revision: "v7" }, async () => ok)).rejects.toThrow(/preview-input-mismatch/);
-		await expect(j.apply({ previewId: p.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v8" }, async () => ok)).rejects.toThrow(/preview-revision-changed/);
+		await expect(j.apply({ provider: "community", previewId: p.previewId, canonicalInput: { ...COMMENT, body: "changed" }, providerArgs: { ...COMMENT, body: "changed" }, revision: "v7" }, async () => ok)).rejects.toThrow(/preview-input-mismatch/);
+		await expect(j.apply({ provider: "community", previewId: p.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v8" }, async () => ok)).rejects.toThrow(/preview-revision-changed/);
 		// The provider arguments are bound too: an apply may send only what was previewed.
-		await expect(j.apply({ previewId: p.previewId, canonicalInput: COMMENT, providerArgs: { ...COMMENT, extra: "smuggled" }, revision: "v7" }, async () => ok)).rejects.toThrow(/preview-args-mismatch/);
-		await expect(j.apply({ previewId: "nope", canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => ok)).rejects.toThrow(/preview-unknown/);
+		await expect(j.apply({ provider: "community", previewId: p.previewId, canonicalInput: COMMENT, providerArgs: { ...COMMENT, extra: "smuggled" }, revision: "v7" }, async () => ok)).rejects.toThrow(/preview-args-mismatch/);
+		await expect(j.apply({ provider: "community", previewId: "nope", canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => ok)).rejects.toThrow(/preview-unknown/);
 		now += 15 * 60 * 1000 + 1;
-		await expect(j.apply({ previewId: p.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => ok)).rejects.toThrow(/preview-expired/);
+		await expect(j.apply({ provider: "community", previewId: p.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => ok)).rejects.toThrow(/preview-expired/);
 		expect(listing("receipts")).toEqual([]);
 		expect(markers()).toBe(0);
 	});
@@ -156,7 +156,7 @@ describe("preview binding at apply", () => {
 		const j = journal();
 		const p = comment(j);
 		now += 10;
-		const receipt = await j.apply({ previewId: p.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async (_intent, sending) => {
+		const receipt = await j.apply({ provider: "community", previewId: p.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async (_intent, sending) => {
 			sending();
 			now -= 20;
 			return ok;
@@ -166,7 +166,7 @@ describe("preview binding at apply", () => {
 
 	test("persisted preview digest uses the canonical input, independent of key order", () => {
 		const reordered = { body: COMMENT.body, issueKey: COMMENT.issueKey };
-		const preview = journal().recordPreview({ operation: "issue.comment", provider: "official", canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" });
+		const preview = journal().recordPreview({ operation: "issue.comment", provider: "community", canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" });
 		expect(preview.inputDigest).toBe(testDigest(reordered));
 		expect(preview.inputDigest).not.toBe(testDigest({ ...COMMENT, body: "changed" }));
 	});
@@ -177,7 +177,7 @@ describe("intent, settlement, and evidence", () => {
 		const j = journal();
 		const p = comment(j);
 		const seen: string[] = [];
-		const receipt = await j.apply({ previewId: p.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async (intent) => {
+		const receipt = await j.apply({ provider: "community", previewId: p.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async (intent) => {
 			seen.push((JSON.parse(readFileSync(path.join(dir("receipts"), `${intent.runId}.json`), "utf8")) as { status: string }).status);
 			seen.push((JSON.parse(readFileSync(path.join(dir("previews"), `${p.previewId}.json`), "utf8")) as { status: string }).status);
 			return ok;
@@ -190,15 +190,15 @@ describe("intent, settlement, and evidence", () => {
 
 	test("unknown, thrown, and private or malformed evidence all leave an unresolved receipt with nothing private stored", async () => {
 		const j = journal();
-		const a = await j.apply({ previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => unknown);
-		const b = await j.apply({ previewId: comment(j, { issueKey: "PROJ-2", body: "b" }).previewId, canonicalInput: { issueKey: "PROJ-2", body: "b" }, providerArgs: { issueKey: "PROJ-2", body: "b" }, revision: "v7" }, async () => {
+		const a = await j.apply({ provider: "community", previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => unknown);
+		const b = await j.apply({ provider: "community", previewId: comment(j, { issueKey: "PROJ-2", body: "b" }).previewId, canonicalInput: { issueKey: "PROJ-2", body: "b" }, providerArgs: { issueKey: "PROJ-2", body: "b" }, revision: "v7" }, async () => {
 			throw new Error("died fixture-secret-value");
 		});
-		const c = await j.apply({ previewId: comment(j, { issueKey: "PROJ-3", body: "c" }).previewId, canonicalInput: { issueKey: "PROJ-3", body: "c" }, providerArgs: { issueKey: "PROJ-3", body: "c" }, revision: "v7" }, async () => ({
+		const c = await j.apply({ provider: "community", previewId: comment(j, { issueKey: "PROJ-3", body: "c" }).previewId, canonicalInput: { issueKey: "PROJ-3", body: "c" }, providerArgs: { issueKey: "PROJ-3", body: "c" }, revision: "v7" }, async () => ({
 			proof: "completed",
 			effects: [{ kind: "jira-comment", id: "Quarterly numbers are down" }],
 		}));
-		const d = await j.apply({ previewId: comment(j, { issueKey: "PROJ-4", body: "d" }).previewId, canonicalInput: { issueKey: "PROJ-4", body: "d" }, providerArgs: { issueKey: "PROJ-4", body: "d" }, revision: "v7" }, async () => ({
+		const d = await j.apply({ provider: "community", previewId: comment(j, { issueKey: "PROJ-4", body: "d" }).previewId, canonicalInput: { issueKey: "PROJ-4", body: "d" }, providerArgs: { issueKey: "PROJ-4", body: "d" }, revision: "v7" }, async () => ({
 			proof: "completed",
 			effects: [{ kind: "customer-record" as never, id: "1" }],
 		}));
@@ -209,24 +209,24 @@ describe("intent, settlement, and evidence", () => {
 
 	test("an unresolved receipt blocks any write operation on the same object, across operations, but not another object", async () => {
 		const j = journal();
-		await j.apply({ previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => unknown);
-		const update = j.recordPreview({ operation: "issue.update", provider: "official", canonicalInput: { issueKey: "PROJ-1", fields: { summary: "x" } }, providerArgs: { issueKey: "PROJ-1", fields: { summary: "x" } }, revision: "v7" });
-		await expect(j.apply({ previewId: update.previewId, canonicalInput: { issueKey: "PROJ-1", fields: { summary: "x" } }, providerArgs: { issueKey: "PROJ-1", fields: { summary: "x" } }, revision: "v7" }, async () => ok)).rejects.toThrow(/write-blocked-open-receipt/);
-		const pageUpdate = j.recordPreview({ operation: "page.update", provider: "official", canonicalInput: { pageId: "123", body: "a" }, providerArgs: { pageId: "123", body: "a" }, revision: "3" });
-		await j.apply({ previewId: pageUpdate.previewId, canonicalInput: { pageId: "123", body: "a" }, providerArgs: { pageId: "123", body: "a" }, revision: "3" }, async () => unknown);
-		const pageComment = j.recordPreview({ operation: "page.comment", provider: "official", canonicalInput: { pageId: "123", body: "c" }, providerArgs: { pageId: "123", body: "c" }, revision: null });
-		await expect(j.apply({ previewId: pageComment.previewId, canonicalInput: { pageId: "123", body: "c" }, providerArgs: { pageId: "123", body: "c" }, revision: null }, async () => ok)).rejects.toThrow(/write-blocked-open-receipt/);
+		await j.apply({ provider: "community", previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => unknown);
+		const update = j.recordPreview({ operation: "issue.update", provider: "community", canonicalInput: { issueKey: "PROJ-1", fields: { summary: "x" } }, providerArgs: { issueKey: "PROJ-1", fields: { summary: "x" } }, revision: "v7" });
+		await expect(j.apply({ provider: "community", previewId: update.previewId, canonicalInput: { issueKey: "PROJ-1", fields: { summary: "x" } }, providerArgs: { issueKey: "PROJ-1", fields: { summary: "x" } }, revision: "v7" }, async () => ok)).rejects.toThrow(/write-blocked-open-receipt/);
+		const pageUpdate = j.recordPreview({ operation: "page.update", provider: "community", canonicalInput: { pageId: "123", body: "a" }, providerArgs: { pageId: "123", body: "a" }, revision: "3" });
+		await j.apply({ provider: "community", previewId: pageUpdate.previewId, canonicalInput: { pageId: "123", body: "a" }, providerArgs: { pageId: "123", body: "a" }, revision: "3" }, async () => unknown);
+		const pageComment = j.recordPreview({ operation: "page.comment", provider: "community", canonicalInput: { pageId: "123", body: "c" }, providerArgs: { pageId: "123", body: "c" }, revision: null });
+		await expect(j.apply({ provider: "community", previewId: pageComment.previewId, canonicalInput: { pageId: "123", body: "c" }, providerArgs: { pageId: "123", body: "c" }, revision: null }, async () => ok)).rejects.toThrow(/write-blocked-open-receipt/);
 		const other = comment(j, { issueKey: "PROJ-2", body: "b" });
-		expect((await j.apply({ previewId: other.previewId, canonicalInput: { issueKey: "PROJ-2", body: "b" }, providerArgs: { issueKey: "PROJ-2", body: "b" }, revision: "v7" }, async () => ok)).status).toBe("completed");
+		expect((await j.apply({ provider: "community", previewId: other.previewId, canonicalInput: { issueKey: "PROJ-2", body: "b" }, providerArgs: { issueKey: "PROJ-2", body: "b" }, revision: "v7" }, async () => ok)).status).toBe("completed");
 		expect(markers()).toBe(0);
 	});
 
-	test("a space alias cannot open a second write path around a pending page create", async () => {
+	test("a second body for the same title cannot open a second write path around a pending page create", async () => {
 		const j = journal();
-		const create = (input: unknown) => j.recordPreview({ operation: "page.create", provider: "official", canonicalInput: input, providerArgs: input, revision: null });
-		expect(() => create({ ...PAGE, space: { key: "ENG" } })).toThrow(/input-invalid/);
-		await j.apply({ previewId: create(PAGE).previewId, canonicalInput: PAGE, providerArgs: PAGE, revision: null }, async () => unknown);
-		await expect(j.apply({ previewId: create(PAGE_ALIAS).previewId, canonicalInput: PAGE_ALIAS, providerArgs: PAGE_ALIAS, revision: null }, async () => ok)).rejects.toThrow(/write-blocked-open-receipt/);
+		const create = (input: unknown) => j.recordPreview({ operation: "page.create", provider: "community", canonicalInput: input, providerArgs: input, revision: null });
+		expect(() => create({ ...PAGE, spaceKey: "bad key" })).toThrow(/input-invalid/);
+		await j.apply({ provider: "community", previewId: create(PAGE).previewId, canonicalInput: PAGE, providerArgs: PAGE, revision: null }, async () => unknown);
+		await expect(j.apply({ provider: "community", previewId: create(PAGE_ALIAS).previewId, canonicalInput: PAGE_ALIAS, providerArgs: PAGE_ALIAS, revision: null }, async () => ok)).rejects.toThrow(/write-blocked-open-receipt/);
 		expect(markers()).toBe(0);
 		expect(j.openReceipts()).toHaveLength(1);
 		expect(listing("previews").length).toBe(2);
@@ -235,7 +235,7 @@ describe("intent, settlement, and evidence", () => {
 	test("read-back absence releases an object only while the receipt is unsent; after the send mark it stays blocked until read-back finds the effect", async () => {
 		const j = journal();
 		// Refused before the request left: unchanged is still reachable.
-		const unsent = await j.apply({ previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => {
+		const unsent = await j.apply({ provider: "community", previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => {
 			throw new Error("blocked by configuration");
 		});
 		expect([unsent.status, unsent.send]).toEqual(["unknown", "unsent"]);
@@ -243,7 +243,7 @@ describe("intent, settlement, and evidence", () => {
 		// Marked sending, then read back absent: not evidence of no effect.
 		const input = { ...COMMENT, body: "sent" };
 		const seen: string[] = [];
-		const sent = await j.apply({ previewId: comment(j, input).previewId, canonicalInput: input, providerArgs: input, revision: "v7" }, async (intent, sending) => {
+		const sent = await j.apply({ provider: "community", previewId: comment(j, input).previewId, canonicalInput: input, providerArgs: input, revision: "v7" }, async (intent, sending) => {
 			sending();
 			sending();
 			seen.push((JSON.parse(readFileSync(path.join(dir("receipts"), `${intent.runId}.json`), "utf8")) as { send: string }).send);
@@ -255,7 +255,7 @@ describe("intent, settlement, and evidence", () => {
 		expect(j.openReceipts().map((entry) => entry.runId)).toEqual([sent.runId]);
 		expect(() => j.resolve(sent.runId, { proof: "unchanged", basis: "guess" as never })).toThrow(/evidence-invalid/);
 		const again = { ...COMMENT, body: "again" };
-		await expect(j.apply({ previewId: comment(j, again).previewId, canonicalInput: again, providerArgs: again, revision: "v7" }, async () => ok)).rejects.toThrow(/write-blocked-open-receipt/);
+		await expect(j.apply({ provider: "community", previewId: comment(j, again).previewId, canonicalInput: again, providerArgs: again, revision: "v7" }, async () => ok)).rejects.toThrow(/write-blocked-open-receipt/);
 		expect(j.resolve(sent.runId, ok).status).toBe("completed");
 		expect(j.openReceipts()).toEqual([]);
 		expect(markers()).toBe(0);
@@ -263,7 +263,7 @@ describe("intent, settlement, and evidence", () => {
 
 	test("a revision that did not move proves no effect even after a possible send, and the basis is persisted", async () => {
 		const j = journal();
-		const sent = await j.apply({ previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async (_intent, sending) => {
+		const sent = await j.apply({ provider: "community", previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async (_intent, sending) => {
 			sending();
 			return unknown;
 		});
@@ -273,7 +273,7 @@ describe("intent, settlement, and evidence", () => {
 		expect((JSON.parse(readFileSync(path.join(dir("receipts"), `${sent.runId}.json`), "utf8")) as { basis: string }).basis).toBe("revision-unchanged");
 		expect(j.openReceipts()).toEqual([]);
 		// The same basis inside apply settles unchanged directly.
-		const direct = await j.apply({ previewId: comment(j, { ...COMMENT, body: "2" }).previewId, canonicalInput: { ...COMMENT, body: "2" }, providerArgs: { ...COMMENT, body: "2" }, revision: "v7" }, async (_intent, sending) => {
+		const direct = await j.apply({ provider: "community", previewId: comment(j, { ...COMMENT, body: "2" }).previewId, canonicalInput: { ...COMMENT, body: "2" }, providerArgs: { ...COMMENT, body: "2" }, revision: "v7" }, async (_intent, sending) => {
 			sending();
 			return { proof: "unchanged", basis: "revision-unchanged" };
 		});
@@ -283,12 +283,12 @@ describe("intent, settlement, and evidence", () => {
 
 	test("an edited body after an unknown create is still blocked; a different subject is not", async () => {
 		const j = journal();
-		const create = (input: unknown) => j.recordPreview({ operation: "issue.create", provider: "official", canonicalInput: input, providerArgs: input, revision: null });
-		await j.apply({ previewId: create(CREATE).previewId, canonicalInput: CREATE, providerArgs: CREATE, revision: null }, async () => unknown);
+		const create = (input: unknown) => j.recordPreview({ operation: "issue.create", provider: "community", canonicalInput: input, providerArgs: input, revision: null });
+		await j.apply({ provider: "community", previewId: create(CREATE).previewId, canonicalInput: CREATE, providerArgs: CREATE, revision: null }, async () => unknown);
 		const edited = { ...CREATE, description: "edited" };
-		await expect(j.apply({ previewId: create(edited).previewId, canonicalInput: edited, providerArgs: edited, revision: null }, async () => ok)).rejects.toThrow(/write-blocked-open-receipt/);
+		await expect(j.apply({ provider: "community", previewId: create(edited).previewId, canonicalInput: edited, providerArgs: edited, revision: null }, async () => ok)).rejects.toThrow(/write-blocked-open-receipt/);
 		const different = { ...CREATE, summary: "Invoice missing" };
-		expect((await j.apply({ previewId: create(different).previewId, canonicalInput: different, providerArgs: different, revision: null }, async () => ({ proof: "completed", effects: [{ kind: "jira-issue", id: "PROJ-9" }] }))).status).toBe("completed");
+		expect((await j.apply({ provider: "community", previewId: create(different).previewId, canonicalInput: different, providerArgs: different, revision: null }, async () => ({ proof: "completed", effects: [{ kind: "jira-issue", id: "PROJ-9" }] }))).status).toBe("completed");
 	});
 
 	test("corrupt or malformed local state fails closed for every entry point", async () => {
@@ -309,7 +309,7 @@ describe("intent, settlement, and evidence", () => {
 	test("tampered persisted records fail closed at every entry point", async () => {
 		const j = journal();
 		const p = comment(j);
-		const receipt = await j.apply({ previewId: comment(j, { ...COMMENT, body: "x" }).previewId, canonicalInput: { ...COMMENT, body: "x" }, providerArgs: { ...COMMENT, body: "x" }, revision: "v7" }, async () => unknown);
+		const receipt = await j.apply({ provider: "community", previewId: comment(j, { ...COMMENT, body: "x" }).previewId, canonicalInput: { ...COMMENT, body: "x" }, providerArgs: { ...COMMENT, body: "x" }, revision: "v7" }, async () => unknown);
 		const receiptFile = path.join(dir("receipts"), `${receipt.runId}.json`);
 		const good = JSON.parse(readFileSync(receiptFile, "utf8")) as Record<string, unknown>;
 		const tampered: [string, Record<string, unknown>][] = [
@@ -322,7 +322,7 @@ describe("intent, settlement, and evidence", () => {
 			["identity well formed but another object than its preview", { ...good, objectIdentity: "issue:PROJ-2" }],
 			["preview missing", { ...good, previewId: "missing" }],
 			["operation differs from its preview", { ...good, operation: "issue.update" }],
-			["provider differs from its preview", { ...good, provider: "community" }],
+			["provider differs from its preview", { ...good, provider: "official" }],
 			["input digest differs from its preview", { ...good, inputDigest: "f".repeat(64) }],
 			["revision digest differs from its preview", { ...good, revisionDigest: null }],
 			["holder pid not a positive integer", { ...good, holder: { pid: "1" } }],
@@ -364,7 +364,7 @@ describe("intent, settlement, and evidence", () => {
 
 	test("a well-formed foreign identity on an unresolved receipt or on the preview never lets a same-object write dispatch", async () => {
 		const j = journal();
-		const open = await j.apply({ previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => unknown);
+		const open = await j.apply({ provider: "community", previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => unknown);
 		const receiptFile = path.join(dir("receipts"), `${open.runId}.json`);
 		const good = JSON.parse(readFileSync(receiptFile, "utf8")) as Record<string, unknown>;
 		// The open receipt now claims another object; a second write on PROJ-1 must not slip past it.
@@ -390,7 +390,7 @@ describe("intent, settlement, and evidence", () => {
 
 	test("completed evidence without effects is refused before settlement, and the journal still reloads", async () => {
 		const j = journal();
-		const receipt = await j.apply({ previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => ({ proof: "completed", effects: [] }));
+		const receipt = await j.apply({ provider: "community", previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => ({ proof: "completed", effects: [] }));
 		expect(receipt.status).toBe("unknown");
 		expect(receipt.effects).toEqual([]);
 		expect(j.openReceipts().map((entry) => entry.runId)).toEqual([receipt.runId]);
@@ -431,7 +431,7 @@ describe("intent, settlement, and evidence", () => {
 
 	test("resolve needs evidence, never presumes no effect, refuses invalid evidence, and is final", async () => {
 		const j = journal();
-		const receipt = await j.apply({ previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => unknown);
+		const receipt = await j.apply({ provider: "community", previewId: comment(j).previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" }, async () => unknown);
 		expect(j.resolve(receipt.runId, unknown).status).toBe("unknown");
 		expect(() => j.resolve(receipt.runId, { proof: "completed", effects: [{ kind: "jira-comment", id: "has space" }] })).toThrow(/evidence-invalid/);
 		expect(j.resolve(receipt.runId, { proof: "unchanged", basis: "readback-absent" }).status).toBe("unchanged");
@@ -553,7 +553,7 @@ describe("cross-process safety", () => {
 		"const root = process.env.JOURNAL_ROOT;",
 		'const journal = openJournal("example", { stateRoot: root });',
 		"await journal.apply(",
-		"  { previewId: process.env.JOURNAL_PREVIEW, canonicalInput: JSON.parse(process.env.JOURNAL_INPUT), providerArgs: JSON.parse(process.env.JOURNAL_INPUT), revision: process.env.JOURNAL_REVISION ?? null },",
+		"  { provider: \"community\", previewId: process.env.JOURNAL_PREVIEW, canonicalInput: JSON.parse(process.env.JOURNAL_INPUT), providerArgs: JSON.parse(process.env.JOURNAL_INPUT), revision: process.env.JOURNAL_REVISION ?? null },",
 		"  async (intent, sending) => { sending(); writeFileSync(`${root}/markers/${intent.runId}.marker`, \"\"); process.exit(9); },",
 		");",
 	].join("\n");

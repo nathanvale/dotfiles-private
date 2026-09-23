@@ -1,14 +1,15 @@
 ---
 name: atlassian
-description: Read, search, create, update, or comment on Jira issues and Confluence pages for one named tenant through the skill's Bun dispatcher. Use for Jira tickets, Confluence pages, Atlassian links, JQL, or CQL. Atlassian Official is the default; explicit Atlassian Community reads are available. Deletion and administration are outside this skill.
+description: Read, search, create, update, transition, assign, comment, attach files to, or delete Jira issues and Confluence pages for one named tenant through the skill's Bun dispatcher over the Atlassian Community Provider. Use for Jira tickets, Confluence pages, Atlassian links, JQL, or CQL. Comment deletion and administration are outside this skill.
 ---
 
 # Atlassian
 
 The dispatcher is the only supported entrypoint. It owns tenant selection, the
-trusted-origin guard, live schema confirmation, provider selection, and the
-write journal. Keep native Harness MCP tools, direct REST calls, other Jira
-CLIs, raw MCPorter calls, and browser automation outside this route.
+trusted-origin binding, live schema confirmation, the one Community route per
+product, the private upload outbox, and the write journal. Keep native Harness
+MCP tools, direct REST calls, other Jira CLIs, raw MCPorter calls, and browser
+automation outside this route.
 
 ```sh
 SKILL_DIR="<directory containing this SKILL.md>"
@@ -29,25 +30,36 @@ infer one tenant from issue keys, page titles, or the last call.
 
 The tenant's product credential items (`JIRA_<TENANT>_API_TOKEN`,
 `CONFLUENCE_<TENANT>_API_TOKEN` in the `API Credentials` vault) must carry a
-`username` field and a custom `site_url` field naming the site, for example
-`https://example.atlassian.net`. The dispatcher reads only those two fields as
-metadata; the built-in `url` field is token management and is never used. A
-missing or malformed `site_url` stops every operation with `site-unresolved`
-before any provider call. Official requests proceed only when the provider's
-accessible resources include that exact origin (`refused-tenant` otherwise).
+`username` field, a `credential` field, and a custom `site_url` field naming
+the site, for example `https://example.atlassian.net`. The dispatcher reads
+only `username` and `site_url` as metadata; the Community Provider reads the
+credential inside its own process. The built-in `url` field is token
+management and is never used. A missing or malformed `site_url` stops every
+operation with `site-unresolved` before any provider call; a missing
+`credential` or `uvx` stops it with `refused-precondition`.
 
 ## Reads
 
 ```sh
 bun "$DISPATCH" --tenant <tenant> issue.get    --input '{"issueKey":"PROJ-1","fields":["summary"]}'
 bun "$DISPATCH" --tenant <tenant> issue.search --input '{"jql":"project = PROJ","maxResults":10}'
-bun "$DISPATCH" --tenant <tenant> page.get     --input '{"pageId":"123","detail":"full"}'
+bun "$DISPATCH" --tenant <tenant> issue.transitions --input '{"issueKey":"PROJ-1"}'
+bun "$DISPATCH" --tenant <tenant> page.get     --input '{"pageId":"123"}'
 bun "$DISPATCH" --tenant <tenant> page.search  --input '{"cql":"type = page AND title ~ \"roadmap\"","maxResults":10}'
-bun "$DISPATCH" --tenant <tenant> --provider community issue.get --input '{"issueKey":"PROJ-1"}'
 ```
 
 - Inputs are the neutral keys above only; unknown keys refuse with `input-invalid`.
 - Start searches at 10 results. Fetch the issue or page after search; a snippet is not the source.
+- Writing JQL beyond `project = KEY`, `assignee = currentUser()`, or a date
+  window such as `created >= "-7d"`: read the upstream
+  [JQL guide](https://mcp-atlassian.soomiles.com/docs/guides/jql-guide) first.
+  Always end with `ORDER BY`; quote values with spaces; some functions such as
+  `issueHistory()` are Cloud-only.
+- The Provider's text arrives as one JSON string under `result.data.result`;
+  parse it before reading fields.
+- One attempt on the product route. `refused-auth`, `not-found`, and
+  `failed-transport` are final: report the cause; there is no other Provider
+  and the dispatcher never retries.
 - `capability-unavailable` means the live schema did not expose the tool or its
   arguments as documented. Report it; do not guess another tool.
 - Provider text never reaches the envelope. Repair guidance is fixed per cause.
@@ -57,8 +69,8 @@ bun "$DISPATCH" --tenant <tenant> --provider community issue.get --input '{"issu
 Every write is two calls with identical input. The preview binds the exact
 provider arguments, stable candidate or comment identifiers, and the target's
 current revision; the apply refuses when any of that evidence moved.
-Preview, adjudication, unlock, and parity persistence use the canonical
-`repository-local` effect class; apply uses `external`.
+Preview, adjudication, and unlock use the canonical `repository-local` effect
+class; apply uses `external`.
 
 ```sh
 bun "$DISPATCH" --tenant <tenant> issue.comment --input '{"issueKey":"PROJ-1","body":"..."}' --preview
@@ -68,29 +80,53 @@ bun "$DISPATCH" --tenant <tenant> issue.comment --input '{"issueKey":"PROJ-1","b
 | Operation | Input keys | Revision bound |
 | --- | --- | --- |
 | `issue.create` | `projectKey`, `issueType`, `summary`, `description?`, `assignee?` | none |
-| `issue.update` | `issueKey`, `fields` (flat object) | provider stable revision, never `updated` alone |
+| `issue.update` | `issueKey`, `fields` (flat object; `assignee` takes an email, name, or account id) | issue `updated` |
 | `issue.comment` | `issueKey`, `body` | none |
-| `page.create` | `space` (`{id}`, `{key}`, or both), `title`, `body`, `parentId?` | none |
+| `issue.comment.update` | `issueKey`, `commentId`, `body` | comment `updated` |
+| `issue.attach` | `issueKey`, `file` (absolute local path) | issue `updated` |
+| `issue.transition` | `issueKey`, `toStatus` (a status named by `issue.transitions`) | issue `updated` |
+| `issue.assign` | `issueKey`, `assignee?` (email, name, or account id; omitted unassigns) | issue `updated` |
+| `issue.delete` | `issueKey` | issue `updated` |
+| `page.create` | `spaceKey`, `title`, `body`, `parentId?` | none |
 | `page.update` | `pageId`, `body`, `title?`, `versionMessage?` | page version |
 | `page.comment` | `pageId`, `body` | page version |
+| `page.attach` | `pageId`, `file` (absolute local path) | page version |
+| `page.attachment.delete` | `pageId`, `attachmentId` (from the attach effect or the page's attachments) | page version |
+| `page.delete` | `pageId` | page version |
 
 Rules the dispatcher enforces; state them when they refuse:
 
-- An explicit request for one named create, update, or comment authorizes that
-  operation. For an inferred target, ambiguous content, or a batch, show the
-  preview envelope and wait for confirmation before `--apply`.
+- An explicit request for one named create, update, comment, attachment, or
+  delete authorizes that operation. For an inferred target, ambiguous content,
+  or a batch, show the preview envelope and wait for confirmation before
+  `--apply`. A delete of anything the operator did not name is never inferred.
 - A preview expires after 15 minutes and is consumed by one apply
   (`refused-preview`).
-- `page.create` needs the space's numeric id. A key alone is resolved from any
-  readable page in that space; if none is found, `space-unresolved` asks for
-  `space: {"id": "...", "key": "..."}` from the space settings page.
-- `page.update` reads the page with full detail first and sends the Official
-  snapshot token of the version it read. Community keeps the current title when
-  `title` is omitted.
-- `page.comment` is unavailable on Official (`operation-unavailable`): the
-  default Official endpoint reaches it only through a broad dispatcher this
-  route never exposes. It runs on Community only, behind parity.
-- Never retry a write through the other provider. Never fan one write out to both.
+- `issue.update`, `issue.comment.update`, `issue.transition`, and
+  `issue.assign` refuse a no-op (`input-invalid`): the target must not already
+  hold the requested values, because the later read-back proves the write by
+  finding them.
+- `issue.transition` names the destination status, never a transition id. Run
+  `issue.transitions` first; a status the site does not offer this principal
+  is `not-found`.
+- Jira has no monotonic issue revision. The `updated` timestamp only detects a
+  target that moved between preview and apply; it is never proof on its own.
+- `page.update` reads the page first, binds its version, and keeps the current
+  title when `title` is omitted.
+- `file` is copied into the tenant's private outbox
+  (`$XDG_STATE_HOME/connectors/atlassian/<tenant>/outbox/<sha256>/<name>`,
+  0700) before preview and again before apply; the Provider starts in that
+  outbox and can read nothing else. A changed file refuses the apply. Staged
+  copies untouched for an hour are pruned by the next staging.
+- A delete completes only when the read-back afterwards refuses with
+  `not-found`, or, for an attachment, no longer lists it; a target still
+  present at the same revision settles `unchanged`. `issue.delete` needs the
+  Delete Issues project permission (`refused-auth` otherwise).
+- Never retry a write. Never re-shape one for another tool.
+
+Not available on this route: Jira or Confluence comment deletion (no such
+tool in mcp-atlassian at any version), Jira attachment deletion, links,
+watchers, and labels. Say so; do not reach for REST.
 
 ### Unknown outcomes and adjudication
 
@@ -104,51 +140,72 @@ bun "$DISPATCH" --tenant <tenant> receipt    --run <runId>
 bun "$DISPATCH" --tenant <tenant> adjudicate --run <runId> --input '<the identical input>'
 ```
 
-Adjudicate reads the object back through the receipt's own provider. It settles
-`completed` only when a new stable effect id or revision is observed after the
-preview baseline. A historical matching title, summary, or comment is not an
-effect. `unchanged` needs a stable revision that did not move or an unsent
-receipt; plain absence after a possible send remains unknown. A route that
-does not expose the needed stable ids or revision is `capability-unavailable`
-until live schema qualification proves it. It never marks success by hand. `unlock --run <runId-or-previewId>` clears a dead process's lock only;
+Adjudicate reads the object back through the product's Community route. It
+settles `completed` only when a new stable effect id, the requested values, or
+a not-found after a delete is observed against the preview baseline. A
+historical matching title, summary, or comment is not an effect. `unchanged`
+needs a revision that did not move or an unsent receipt; plain absence after a
+possible send remains unknown. It never marks success by hand.
+`unlock --run <runId-or-previewId>` clears a dead process's lock only;
 `refused-state` names a journal condition an operator must inspect by hand.
 
-## Community and parity
+### Records from the retired Official route
 
-Official is the default. Select Community explicitly for a read with
-`--provider community` when Official is unavailable. This executes only the
-selected Community route after credential binding and live schema confirmation.
-It does not call Official or retry through another provider.
+`receipts` and `receipt` still list previews and receipts recorded through the
+retired Atlassian Official route (`provider: "official"`). They keep blocking
+their object. `--apply` refuses one with `preview-provider-retired`;
+`adjudicate` and `unlock` refuse one with `receipt-provider-retired` or
+`preview-provider-retired`, before any provider call. Resolve such a record by
+hand against the live object; the dispatcher never reinterprets it through the
+Community tools.
 
-Automatic read fallback and Community writes require an unexpired Parity
-Attestation for the same tenant, product, operation, input shape, trusted
-origin, and principal. Record one with a read that both providers can answer:
+## Daily workflows
 
-```sh
-bun "$DISPATCH" --tenant <tenant> parity --operation issue.get --input '{"issueKey":"PROJ-1"}'
-bun "$DISPATCH" --tenant <tenant> parity --operation page.get  --input '{"pageId":"123"}'
-```
+Each is a sequence of the operations above; every write is still preview then
+apply. The upstream
+[common workflows guide](https://mcp-atlassian.soomiles.com/docs/guides/common-workflows)
+describes the same flows in tool terms, plus sprint, batch, and changelog
+flows this route does not expose.
 
-Parity is refused (`refused-parity`) unless Official's user info names the
-item's `username` and both providers return the same object identity.
-Authentication, permission, tenant, precondition, and partial-answer failures
-never fall over, with or without an attestation. Community writes require the
-product's base-read attestation (`issue.get` or `page.get`).
+- Triage: `issue.search` (`project = KEY AND resolution = EMPTY ORDER BY created DESC`),
+  `issue.get` on each candidate, `issue.update` for `assignee` or `priority`,
+  `issue.comment` with the decision.
+- Work an issue: `issue.get`, `issue.assign`, `issue.transitions` then
+  `issue.transition` to move it, `issue.comment` or `issue.comment.update`,
+  `issue.attach` for evidence files, `issue.update` for other fields.
+- Document: `page.search` to find the parent and check the title is free,
+  `page.create` with `parentId`, `page.update` for revisions, `page.comment`,
+  `page.attach`, `page.attachment.delete` to replace a stale file.
+- Retire: `page.delete` or `issue.delete`, only for an object the operator
+  named; both complete only on a not-found read-back.
+
+A request for a workflow not listed here: read the upstream workflows guide
+and tools reference, compose it from the operations above, and add it to this
+list in the source skill (`config/agents/plugins/connectors`, on a branch,
+never the installed copy) before running it, or right after the run when the
+operator wants the result first. A workflow that needs a tool this route does
+not expose is a tier in the ADR's uplift plan, not an ad hoc call.
+
+Live-proven on 23 September 2026: every operation above except
+`issue.delete`, which the site refused for want of the Delete Issues
+permission. For the full tool surface the Provider could expose, see the
+[tools reference](https://mcp-atlassian.soomiles.com/docs/tools-reference);
+only the allow-listed tools in `config/mcporter.json` are reachable.
 
 ## Proof states
 
 Report which state each claim reached:
 
 - Configured: registry, route, and items named; proven by tests here.
-- Fixture-tested: dispatcher, journal, providers, and route behaviour under fakes.
+- Fixture-tested: dispatcher, journal, Provider, and route behaviour under fakes.
 - Schema-qualified: the live `tools/list` exposed the documented tool and arguments.
-- Authenticated: a live `atlassianUserInfo` or Community profile succeeded.
+- Authenticated: a live Community read returned the tenant's object.
 - Live-read-proven, live-write-proven: external outcomes separately observed; a write needs separate authorization.
 
-Prerequisites are declared by the provider runtime and its pinned registry.
+Prerequisites are declared by the Provider runtime and its pinned registry.
 
 ## Completion
 
-Report the tenant, provider, operation, and exact objects read or changed; the
-proof state reached; verified links when a URL was returned; every refusal
-cause met; and any receipt left open with its `runId`.
+Report the tenant, operation, and exact objects read or changed; the proof
+state reached; verified links when a URL was returned; every refusal cause
+met; and any receipt left open with its `runId`.

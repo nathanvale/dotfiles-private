@@ -25,6 +25,6 @@
       "Read",
       "Write"
     ],
-    "defaultPrompt": "Help me find the relevant Jira issue and Confluence context through Atlassian Official."
+    "defaultPrompt": "Help me find the relevant Jira issue and Confluence context through the Atlassian skill."
   }
 }

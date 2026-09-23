@@ -16,7 +16,7 @@ const journal = openJournal("example", {
 const input = JSON.parse(process.env.JOURNAL_INPUT ?? "{}") as unknown;
 const revision = process.env.JOURNAL_REVISION ?? null;
 try {
-	const receipt = await journal.apply({ previewId, canonicalInput: input, providerArgs: input, revision }, async (intent) => {
+	const receipt = await journal.apply({ provider: "community", previewId, canonicalInput: input, providerArgs: input, revision }, async (intent) => {
 		writeFileSync(path.join(stateRoot, "markers", `${intent.runId}.marker`), "");
 		process.stdout.write("dispatching\n");
 		if (mode === "crash-in-dispatch") process.exit(9);
