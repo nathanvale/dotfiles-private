@@ -102,6 +102,22 @@ export async function downloadOfficial(assets: readonly OfficialAsset[], timeout
 	}
 }
 
+const officialProvenanceUrl = "https://github.com/openclaw/mcporter/releases/download/v0.14.0/provenance.json";
+
+// Process-test seam: an http origin on 127.0.0.1 replaces only the scheme,
+// host, and port of each official asset URL and shortens the deadline. The
+// production pins and provenance checks still decide acceptance. Any other
+// value refuses before a request, so the seam can never reach a remote host.
+const loopbackTimeoutMs = 3_000;
+
+function officialDownload(env: EnvironmentSource): { rebase: (url: string) => string; timeoutMs: number } {
+	const value = env.CONNECTORS_TEST_MCPORTER_ORIGIN;
+	if (!value) return { rebase: (url) => url, timeoutMs: downloadTimeoutMs };
+	const origin = URL.canParse(value) ? new URL(value) : null;
+	if (!origin || origin.protocol !== "http:" || origin.hostname !== "127.0.0.1" || origin.pathname !== "/" || origin.username || origin.password || origin.search || origin.hash) throw new Error("release-origin-invalid");
+	return { rebase: (url) => new URL(new URL(url).pathname, origin).href, timeoutMs: loopbackTimeoutMs };
+}
+
 async function verifiedStaging(root: string, env: EnvironmentSource): Promise<string> {
 	const staging = mkdtempSync(path.join(root, ".staging-"));
 	try {
@@ -115,10 +131,11 @@ async function verifiedStaging(root: string, env: EnvironmentSource): Promise<st
 			copyFileSync(path.join(fixture, "mcporter_0.14.0_darwin_arm64.tar.gz"), archive);
 			copyFileSync(path.join(fixture, "provenance.json"), provenance);
 		} else {
+			const { rebase, timeoutMs } = officialDownload(env);
 			await downloadOfficial([
-				{ url: MCPORTER_RELEASE.archiveUrl, target: archive, maxBytes: 64 * 1024 * 1024 },
-				{ url: "https://github.com/openclaw/mcporter/releases/download/v0.14.0/provenance.json", target: provenance, maxBytes: 64 * 1024 },
-			]);
+				{ url: rebase(MCPORTER_RELEASE.archiveUrl), target: archive, maxBytes: 64 * 1024 * 1024 },
+				{ url: rebase(officialProvenanceUrl), target: provenance, maxBytes: 64 * 1024 },
+			], timeoutMs);
 		}
 		const result = verifyAndExtractMcporterRelease(archive, provenance, staging);
 		if (!result.ok) throw new Error(result.cause);

@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createBundle, createFakeMcporterBinDir, PLUGIN_ROOT, runBundle } from "./harness.ts";
 
@@ -373,3 +373,72 @@ test.skipIf(!official)("a second process waits for the lock and reclaims it afte
 		expect(JSON.parse(readFileSync(path.join(state, "connectors", "mcporter", "current", "release.json"), "utf8"))).toEqual({ version: "0.14.0" });
 	} finally { if (stopped) process.kill(child.pid, "SIGCONT"); hostile.dispose(); bundle.dispose(); }
 }, 30000);
+
+// Independent literals: the official asset paths the loopback seam must keep.
+const OFFICIAL_ARCHIVE_PATH = "/openclaw/mcporter/releases/download/v0.14.0/mcporter_0.14.0_darwin_arm64.tar.gz";
+const OFFICIAL_PROVENANCE_PATH = "/openclaw/mcporter/releases/download/v0.14.0/provenance.json";
+const SENTINEL = "ghp_connectorsStalledReleaseSentinel000000";
+
+function stalledReleaseHost() {
+	const requests: string[] = [];
+	const server = Bun.serve({ hostname: "127.0.0.1", port: 0, idleTimeout: 0, fetch(request) {
+		requests.push(new URL(request.url).pathname);
+		// Headers and a first chunk arrive, then the body never progresses.
+		return new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(16)); } }));
+	} });
+	return { server, requests };
+}
+
+async function firstUseAgainst(origin: (port: number) => string) {
+	const bundle = createBundle();
+	const host = stalledReleaseHost();
+	const home = path.join(bundle.root, "home");
+	const state = path.join(bundle.root, "state");
+	mkdirSync(home);
+	bundle.addSkill("keyless-fixture-skill");
+	const started = performance.now();
+	const run = await runBundle(bundle, ["schema", "keyless-fixture-skill"], { home, timeoutMs: 15_000, extraEnv: {
+		XDG_STATE_HOME: state, GITHUB_TOKEN: SENTINEL, CONNECTORS_TEST_MCPORTER_ORIGIN: origin(host.server.port!),
+	} });
+	return { bundle, host, run, elapsed: performance.now() - started, selectionRoot: path.join(state, "connectors", "mcporter") };
+}
+
+function expectBootstrapRefusal(run: Awaited<ReturnType<typeof runBundle>>) {
+	expect(run.code).toBe(3);
+	expect(run.stderr).toBe("");
+	expect(run.stdout.trim().split("\n")).toHaveLength(1);
+	expect(run.stdout).not.toContain(SENTINEL);
+	const envelope = JSON.parse(run.stdout);
+	expect(envelope.message).toContain("bootstrap-failed");
+	expect(envelope.result.commandIdentity).toBe("connectors.schema");
+	expect(envelope.result.causeCode).toBe("DOMAIN_MCPORTER_REPAIR_REQUIRED");
+	expect(envelope.result.transactionState).toBe("unchanged");
+	expect(envelope.result.repairAction).toBe("Run connectors deps repair mcporter");
+}
+
+test("packaged first use behind a stalled release host refuses at its deadline and leaves no lock or staging", async () => {
+	const { bundle, host, run, elapsed, selectionRoot } = await firstUseAgainst((port) => `http://127.0.0.1:${port}/`);
+	try {
+		expectBootstrapRefusal(run);
+		// The loopback deadline is 3 s; a hang would reach the 15 s process bound.
+		expect(elapsed).toBeGreaterThanOrEqual(2_900);
+		expect(elapsed).toBeLessThan(10_000);
+		expect(host.requests.slice().sort()).toEqual([OFFICIAL_ARCHIVE_PATH, OFFICIAL_PROVENANCE_PATH]);
+		expect(readdirSync(selectionRoot)).toEqual([]);
+	} finally {
+		host.server.stop(true);
+		bundle.dispose();
+	}
+}, 20_000);
+
+test("packaged first use refuses a release origin that is not literal 127.0.0.1 before any request", async () => {
+	const { bundle, host, run, selectionRoot } = await firstUseAgainst((port) => `http://localhost:${port}/`);
+	try {
+		expectBootstrapRefusal(run);
+		expect(host.requests).toEqual([]);
+		expect(readdirSync(selectionRoot)).toEqual([]);
+	} finally {
+		host.server.stop(true);
+		bundle.dispose();
+	}
+}, 20_000);
