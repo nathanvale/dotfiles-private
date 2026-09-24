@@ -502,7 +502,6 @@ export interface IssueComment {
 
 export interface IssueObservation {
 	key: string | undefined;
-	browseOrigin: string | undefined;
 	// A provider revision when one exists, else the `updated` timestamp: enough
 	// to detect that the issue moved between preview and apply, never enough on
 	// its own to prove what landed.
@@ -510,18 +509,6 @@ export interface IssueObservation {
 	fields: Record<string, unknown>;
 	comments: IssueComment[];
 	attachments: { id: string; name: string }[];
-}
-
-function issueBrowseOrigin(issue: Record<string, unknown>): string | undefined {
-	const key = stringAt(issue, "key");
-	const browse = stringAt(issue, "browse_url");
-	if (key === undefined || browse === undefined) return undefined;
-	try {
-		const url = new URL(browse);
-		return url.protocol === "https:" && url.hostname.endsWith(".atlassian.net") && url.pathname === `/browse/${key}` ? url.origin : undefined;
-	} catch {
-		return undefined;
-	}
 }
 
 export function observeIssue(reply: unknown): IssueObservation {
@@ -538,7 +525,7 @@ export function observeIssue(reply: unknown): IssueObservation {
 		if ("body" in record) comments.push({ id, text: bodyText(record.body), updated: stringAt(record, "updated") });
 		if (name !== undefined) attachments.push({ id, name });
 	}
-	return { key: stringAt(top, "key"), browseOrigin: issueBrowseOrigin(top), revision: stringAt(fields, "version", "revision", "updated") ?? null, fields, comments, attachments };
+	return { key: stringAt(top, "key"), revision: stringAt(fields, "version", "revision", "updated") ?? null, fields, comments, attachments };
 }
 
 export type ReadBack = { kind: "found"; effects: Effect[] } | { kind: "absent"; revisionUnchanged: boolean } | { kind: "indeterminate"; reason: string };
@@ -717,22 +704,22 @@ function issueStateEvidence(input: WriteInput, revisionMatches: RevisionMatch, r
 const statusHolds = (input: WriteInput) => (issue: IssueObservation) => sameStatus(input.toStatus as string, issue.fields.status);
 const assigneeHolds = (input: WriteInput) => (issue: IssueObservation) => assigneeMatches(input.assignee, issue.fields.assignee);
 
-function issueCommentEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
+function issueCommentEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline, trustedOrigin?: string): ReadBack {
 	const issue = observeIssue(reply);
 	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply names no issue key" };
 	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
-	return commentEvidence("jira-comment", input.body as string, issue.comments, baseline, issue.browseOrigin);
+	return commentEvidence("jira-comment", input.body as string, issue.comments, baseline, trustedOrigin);
 }
 
-function issueCommentUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown): ReadBack {
+function issueCommentUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, trustedOrigin?: string): ReadBack {
 	const issue = observeIssue(reply);
 	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply names no issue key" };
 	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
 	const comment = issue.comments.find((entry) => entry.id === input.commentId);
 	if (comment === undefined) return { kind: "indeterminate", reason: "the read-back reply names no such comment" };
-	const wanted = jiraCommentNormalised(input.body as string, issue.browseOrigin);
+	const wanted = jiraCommentNormalised(input.body as string, trustedOrigin);
 	if (wanted.length === 0) return { kind: "indeterminate", reason: "the requested comment has no stable read-back representation" };
-	if (jiraCommentNormalised(comment.text, issue.browseOrigin) === wanted) return { kind: "found", effects: [{ kind: "jira-comment", id: comment.id }] };
+	if (jiraCommentNormalised(comment.text, trustedOrigin) === wanted) return { kind: "found", effects: [{ kind: "jira-comment", id: comment.id }] };
 	return { kind: "absent", revisionUnchanged: comment.updated !== undefined && revisionMatches(comment.updated) };
 }
 
@@ -861,16 +848,16 @@ export type RevisionMatch = (observed: string) => boolean;
 // The read-back plan's reply, judged against the neutral input: the effect
 // found, proven absent (only an unchanged revision proves absence after a
 // send), or indeterminate.
-export function readBackEvidence(operation: WriteOperation, input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline = EMPTY_BASELINE): ReadBack {
+export function readBackEvidence(operation: WriteOperation, input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline = EMPTY_BASELINE, trustedOrigin?: string): ReadBack {
 	switch (operation) {
 		case "issue.create":
 			return issueCreateEvidence(input, reply, baseline);
 		case "issue.update":
 			return issueUpdateEvidence(input, revisionMatches, reply, baseline);
 		case "issue.comment":
-			return issueCommentEvidence(input, reply, baseline);
+			return issueCommentEvidence(input, reply, baseline, trustedOrigin);
 		case "issue.comment.update":
-			return issueCommentUpdateEvidence(input, revisionMatches, reply);
+			return issueCommentUpdateEvidence(input, revisionMatches, reply, trustedOrigin);
 		case "issue.attach":
 			return issueAttachEvidence(input, revisionMatches, reply, baseline);
 		case "issue.transition":
@@ -927,20 +914,20 @@ function issueFor(input: WriteInput, reply: unknown): IssueObservation | Indeter
 
 const isIndeterminate = <T>(value: T | Indeterminate): value is Indeterminate => typeof value === "object" && value !== null && "kind" in value;
 
-function issueCommentBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+function issueCommentBaseline(input: WriteInput, reply: unknown, trustedOrigin?: string): BaselineObservation {
 	const issue = issueFor(input, reply);
 	if (isIndeterminate(issue)) return issue;
-	const observed = baselineWithCommentIds(commentEvidence("jira-comment", input.body as string, issue.comments, EMPTY_BASELINE, issue.browseOrigin));
+	const observed = baselineWithCommentIds(commentEvidence("jira-comment", input.body as string, issue.comments, EMPTY_BASELINE, trustedOrigin));
 	return observed.kind !== "observed" ? observed : { kind: "observed", baseline: { ...observed.baseline, effectIds: [issue.key as string] } };
 }
 
-function issueCommentUpdateBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+function issueCommentUpdateBaseline(input: WriteInput, reply: unknown, trustedOrigin?: string): BaselineObservation {
 	const issue = issueFor(input, reply);
 	if (isIndeterminate(issue)) return issue;
 	const comment = issue.comments.find((entry) => entry.id === input.commentId);
 	if (comment === undefined) return { kind: "indeterminate", reason: "the Jira reply names no such comment on this issue" };
 	if (comment.updated === undefined) return { kind: "indeterminate", reason: "the comment read exposes no updated timestamp to bind the revision" };
-	if (jiraCommentNormalised(comment.text, issue.browseOrigin) === jiraCommentNormalised(input.body as string, issue.browseOrigin)) return { kind: "refused", reason: "the comment already holds the requested body; nothing to change" };
+	if (jiraCommentNormalised(comment.text, trustedOrigin) === jiraCommentNormalised(input.body as string, trustedOrigin)) return { kind: "refused", reason: "the comment already holds the requested body; nothing to change" };
 	return { kind: "observed", baseline: { effectIds: [issue.key as string], commentIds: [comment.id], revision: digest(comment.updated) } };
 }
 
@@ -997,16 +984,16 @@ function pageRevisionBaseline(input: WriteInput, reply: unknown): BaselineObserv
 // Capture only the pre-existing candidates that could otherwise be mistaken
 // for this write. The later read-back must name a different stable identifier,
 // or, for an update, the requested values that were absent before.
-export function baselineFromReply(operation: WriteOperation, input: WriteInput, reply: unknown): BaselineObservation {
+export function baselineFromReply(operation: WriteOperation, input: WriteInput, reply: unknown, trustedOrigin?: string): BaselineObservation {
 	switch (operation) {
 		case "issue.create":
 			return baselineWithEffectIds(issueCreateEvidence(input, reply, EMPTY_BASELINE));
 		case "issue.update":
 			return issueUpdateBaseline(input, reply);
 		case "issue.comment":
-			return issueCommentBaseline(input, reply);
+			return issueCommentBaseline(input, reply, trustedOrigin);
 		case "issue.comment.update":
-			return issueCommentUpdateBaseline(input, reply);
+			return issueCommentUpdateBaseline(input, reply, trustedOrigin);
 		case "issue.attach":
 			return baselineWithEffectIds(issueAttachEvidence(input, () => false, reply, EMPTY_BASELINE));
 		case "issue.transition":

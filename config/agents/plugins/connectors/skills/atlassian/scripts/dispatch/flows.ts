@@ -68,6 +68,10 @@ export class Route {
 		this.server = serverFor(product);
 	}
 
+	get trustedOrigin(): string {
+		return this.binding.origin;
+	}
+
 	// The transport already translated the failure; this records provenance
 	// and attaches the fixed repair text plus the fixed hint, if any.
 	private failure(tool: string, failure: TransportFailure): Attempt {
@@ -190,7 +194,7 @@ async function bindBaseline(route: Route, operation: WriteOperation, input: Writ
 	const plan = readBackPlan(operation, input);
 	const read = await route.call(plan.tool, plan.args);
 	if (read.cause !== "success") return { outcome: failed(read) };
-	const observed = baselineFromReply(operation, input, read.data);
+	const observed = baselineFromReply(operation, input, read.data, route.trustedOrigin);
 	if (observed.kind === "refused") return { outcome: refusal("input-invalid", observed.reason) };
 	if (observed.kind === "indeterminate") return { outcome: refusal("capability-unavailable", `${observed.reason}; live qualification is required`) };
 	return { ctx: { ...ctx, baseline: observed.baseline } };
@@ -343,7 +347,7 @@ async function readBackFor(route: Route, operation: WriteOperation, input: Write
 		return { kind: "found", effects: [{ kind: effectKindOf(operation), id: (operation === "issue.delete" ? input.issueKey : input.pageId) as string }] };
 	}
 	if (read.cause !== "success") return { kind: "indeterminate", reason: read.cause };
-	return readBackEvidence(operation, input, revisionMatches, read.data, baseline);
+	return readBackEvidence(operation, input, revisionMatches, read.data, baseline, route.trustedOrigin);
 }
 
 function receiptOutcome(receipt: Receipt, attempt: Attempt | null): Outcome {

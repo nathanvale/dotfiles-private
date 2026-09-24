@@ -222,9 +222,11 @@ Report which state each claim reached:
 - Live-read-proven, live-write-proven: external outcomes separately observed; a write needs separate authorization.
 
 Prerequisites are declared by the Provider runtime and its pinned registry.
-MCPorter 0.14.0 is the qualified requirement; check `mcporter --version` when
-setting up or diagnosing this route. The test suite checks the installed
-version, but the dispatcher does not pin the executable at runtime.
+MCPorter 0.14.0 is the qualified runtime requirement; check `mcporter --version`
+when setting up or diagnosing this route. The real-process canaries run only
+when MCPorter is installed: a green suite without it does not establish runtime
+qualification. The dispatcher refuses a missing executable but does not enforce
+the version at runtime.
 
 ## Completion
 

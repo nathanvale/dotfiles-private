@@ -196,8 +196,8 @@ describe("route source and skill registries", () => {
 	});
 });
 
-describe("real MCPorter seam (credential-free)", () => {
-	test.skipIf(!realMcporter)("the installed MCPorter is the required release", () => {
+describe("optional real MCPorter canaries (credential-free)", () => {
+	test.skipIf(!realMcporter)("an installed MCPorter matches the qualified release", () => {
 		const version = Bun.spawnSync(["mcporter", "--version"]).stdout.toString().trim();
 		expect(version).toBe(PINNED_MCPORTER_VERSION);
 	});

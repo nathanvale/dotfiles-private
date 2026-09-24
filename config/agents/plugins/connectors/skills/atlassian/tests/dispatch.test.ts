@@ -609,7 +609,7 @@ describe("journaled writes", () => {
 		let reads = 0;
 		const { transport, calls } = fakeTransport({
 			[`${CJ}.jira_add_comment`]: failure("failed-transport"),
-			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", browse_url: "https://example.atlassian.net/browse/PROJ-1", comments: reads++ >= 3 ? [{ id: "779", body: `**Bold** for User:${accountId}. See [PROJ-1](https://example.atlassian.net/browse/PROJ-1).` }] : [] } }),
+			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", comments: reads++ >= 3 ? [{ id: "779", body: `**Bold** for User:${accountId}. See [PROJ-1](https://example.atlassian.net/browse/PROJ-1).` }] : [] } }),
 		});
 		const dependencies = deps({ transport });
 		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(input), "--preview"], dependencies));
@@ -620,16 +620,26 @@ describe("journaled writes", () => {
 		expect(calls.filter((call) => call.tool === "jira_add_comment")).toHaveLength(1);
 	});
 
+	test("a Jira comment preview binds historical autolinks to the credential origin", async () => {
+		const input = { issueKey: "PROJ-1", body: "See PROJ-1." };
+		const { transport } = fakeTransport({
+			[`${CJ}.jira_get_issue`]: { ok: true, data: { key: "PROJ-1", browse_url: "https://other.atlassian.net/browse/PROJ-1", comments: [{ id: "781", body: "See [PROJ-1](https://example.atlassian.net/browse/PROJ-1)." }] } },
+		});
+		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(input), "--preview"], deps({ transport })));
+		expect(preview.baseline.commentIds).toEqual(["781"]);
+	});
+
 	test.each([
-		["different target key", "https://example.atlassian.net/browse/PROJ-2"],
-		["external target host", "https://example.invalid/browse/PROJ-1"],
-		["another Atlassian tenant", "https://other.atlassian.net/browse/PROJ-1"],
-	])("Jira adjudication rejects an auto-link with %s", async (_case, link) => {
+		["different target key", "https://example.atlassian.net/browse/PROJ-2", "https://example.atlassian.net/browse/PROJ-1"],
+		["external target host", "https://example.invalid/browse/PROJ-1", "https://example.atlassian.net/browse/PROJ-1"],
+		["another Atlassian tenant", "https://other.atlassian.net/browse/PROJ-1", "https://example.atlassian.net/browse/PROJ-1"],
+		["provider-reported other tenant", "https://other.atlassian.net/browse/PROJ-1", "https://other.atlassian.net/browse/PROJ-1"],
+	])("Jira adjudication rejects an auto-link with %s", async (_case, link, browseUrl) => {
 		const input = { issueKey: "PROJ-1", body: "See PROJ-1." };
 		let reads = 0;
 		const { transport } = fakeTransport({
 			[`${CJ}.jira_add_comment`]: failure("failed-transport"),
-			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", browse_url: "https://example.atlassian.net/browse/PROJ-1", comments: reads++ >= 3 ? [{ id: "780", body: `See [PROJ-1](${link}).` }] : [] } }),
+			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", browse_url: browseUrl, comments: reads++ >= 3 ? [{ id: "780", body: `See [PROJ-1](${link}).` }] : [] } }),
 		});
 		const dependencies = deps({ transport });
 		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(input), "--preview"], dependencies));
