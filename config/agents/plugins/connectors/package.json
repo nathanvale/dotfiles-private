@@ -5,7 +5,7 @@
 	"type": "module",
 	"scripts": {
 		"build": "bun build ./bin/connectors.ts --compile --target=bun-darwin-arm64 --outfile bin/connectors --minify",
-		"test": "bun test && bun run build",
+		"test": "bun run build && bun test",
 		"typecheck": "../../../../node_modules/.bin/tsc --noEmit -p tsconfig.json"
 	}
 }
