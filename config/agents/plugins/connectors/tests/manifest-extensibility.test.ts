@@ -9,9 +9,9 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { createBundle, createFakeMcporterBinDir, runBundle } from "./harness.ts";
+import { createBundle, createFakeMcporterBinDir, createFixtureAuthorityBinDir, runBundle } from "./harness.ts";
 
-// A fake mcporter is put on PATH for every refusal test below so it could
+// A fake mcporter is put on PATH for each AC13 refusal test below so it could
 // leave its own receipt if it were ever invoked; each refusal then asserts
 // that receipt is absent, an observable process fact independent of
 // connectors.ts's own output, proving the defect was caught before any
@@ -131,39 +131,55 @@ describe("Spec AC13: manifest-only Connector Skill addition", () => {
 });
 
 describe("Spec AC23: packaged auth adapter extensibility", () => {
-	test("doctor succeeds through the compiled process when the adapter's local check is ready", async () => {
+	test("doctor reports a declared adapter without claiming custody or authentication", async () => {
 		const bundle = createBundle();
 		try {
 			bundle.addSkill("adapter-fixture-skill");
 			const result = await runBundle(bundle, ["doctor", "adapter-fixture-skill"], { home: bundle.root });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(0);
+			expect(result.stderr).toBe("");
 			expect(envelope.result.outcome).toBe("success");
-			expect(envelope.result.data.custodyChecked).toBe(true);
+			expect(envelope.result.data).toEqual({
+				connector: "adapter-fixture-skill",
+				configured: true,
+				localReady: null,
+				custodyChecked: null,
+				authenticated: false,
+				schemaQualified: false,
+				liveReadProven: false,
+				liveWriteProven: false,
+				fixtureTested: null,
+			});
 		} finally {
 			bundle.dispose();
 		}
 	});
 
-	test("doctor refuses through the compiled process when the adapter's local check is not ready, with a repair action naming the exact defect", async () => {
+	test("a missing reference leaves doctor truthful and makes fixture-auth refuse before authority spawn", async () => {
 		const bundle = createBundle();
-		const mcporterBin = createFakeMcporterBinDir();
+		const authority = createFixtureAuthorityBinDir(bundle);
 		try {
 			bundle.addSkill("adapter-fixture-skill");
 			const manifestPath = path.join(bundle.skillsRoot, "adapter-fixture-skill", "config", "manifest.json");
 			const manifest = JSON.parse(await Bun.file(manifestPath).text());
 			writeFileSync(manifestPath, JSON.stringify({ ...manifest, credentials: null }));
 
-			const result = await runBundle(bundle, ["doctor", "adapter-fixture-skill"], { home: bundle.root, binDir: mcporterBin.binDir });
+			const doctor = await runBundle(bundle, ["doctor", "adapter-fixture-skill"], { home: bundle.root, binDir: authority.binDir });
+			expect(doctor.code).toBe(0);
+			expect(doctor.stderr).toBe("");
+			expect(JSON.parse(doctor.stdout).result.data.custodyChecked).toBeNull();
+			const result = await runBundle(bundle, ["fixture-auth", "adapter-fixture-skill"], { home: bundle.root, binDir: authority.binDir });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(3);
+			expect(result.stderr).toBe("");
 			expect(envelope.result.outcome).toBe("refused");
 			expect(envelope.result.failureClass).toBe("domain");
-			expect(envelope.result.causeCode).toBe("DOMAIN_ADAPTER_REFUSED");
+			expect(envelope.result.causeCode).toBe("DOMAIN_FIXTURE_AUTH_REFUSED");
 			expect(envelope.result.repairAction).toContain("credentials.reference");
-			assertNoProviderAttempt(bundle);
+			expect(existsSync(path.join(bundle.root, "fixture-authority.json"))).toBe(false);
 		} finally {
-			mcporterBin.dispose();
+			authority.dispose();
 			bundle.dispose();
 		}
 	});

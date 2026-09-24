@@ -20,6 +20,7 @@ const AVAILABLE_PATHS = [
 	"connectors.discovery",
 	"connectors.dispatch",
 	"connectors.doctor",
+	"connectors.fixtureAuth",
 	"connectors.help",
 	"connectors.list",
 	"connectors.schema",

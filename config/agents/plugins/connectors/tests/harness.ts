@@ -40,10 +40,27 @@ export interface Harness {
 // Sole owner of "spawn a process and capture stdout/stderr/exit code";
 // every real-process runner in this file composes it instead of repeating
 // the Bun.spawn + Promise.all shape.
-async function spawnCapture(argv: string[], env: Record<string, string>): Promise<RunResult> {
+async function spawnCapture(argv: string[], env: Record<string, string>, timeoutMs?: number): Promise<RunResult> {
 	const proc = Bun.spawn(argv, { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-	const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-	return { code, stdout, stderr, pid: proc.pid };
+	const captured = Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		const result = timeoutMs === undefined
+			? captured
+			: Promise.race([
+				captured,
+				new Promise<never>((_, reject) => {
+					timer = setTimeout(() => {
+						proc.kill();
+						reject(new Error(`process exceeded ${timeoutMs} ms: ${argv[0]}`));
+					}, timeoutMs);
+				}),
+			]);
+		const [stdout, stderr, code] = await result;
+		return { code, stdout, stderr, pid: proc.pid };
+	} finally {
+		if (timer !== undefined) clearTimeout(timer);
+	}
 }
 
 function shim(file: string, modulePath: string): void {
@@ -170,6 +187,7 @@ export function createBundle(): Bundle {
 	}
 	cpSync(FRONT_DOOR, binary);
 	chmodSync(binary, 0o755);
+	cpSync(path.join(PLUGIN_ROOT, "requirements.json"), path.join(root, "requirements.json"));
 	const skillsRoot = path.join(root, "skills");
 	mkdirSync(skillsRoot, { recursive: true });
 	for (const id of REAL_KEYLESS_SKILLS) {
@@ -197,9 +215,9 @@ export function createBundle(): Bundle {
 // Runs a bundle's own compiled binary (never the shared FRONT_DOOR path
 // directly), with a fully controlled HOME/PATH/TMPDIR so a schema fetch can
 // resolve a fake `mcporter` from binDir without touching any real network.
-export async function runBundle(bundle: Bundle, argv: string[], env: { home: string; binDir?: string; extraEnv?: Record<string, string> }): Promise<RunResult> {
+export async function runBundle(bundle: Bundle, argv: string[], env: { home: string; binDir?: string; extraEnv?: Record<string, string>; timeoutMs?: number }): Promise<RunResult> {
 	const path_ = env.binDir ? `${env.binDir}:/usr/bin:/bin` : "/usr/bin:/bin";
-	return spawnCapture([bundle.binary, ...argv], { HOME: env.home, PATH: path_, TMPDIR: bundle.root, ...env.extraEnv });
+	return spawnCapture([bundle.binary, ...argv], { HOME: env.home, PATH: path_, TMPDIR: bundle.root, ...env.extraEnv }, env.timeoutMs);
 }
 
 // A PATH directory carrying only the fake mcporter (and the bun shebang
@@ -216,4 +234,29 @@ export function createFakeMcporterBinDir(): { binDir: string; dispose(): void } 
 			rmSync(root, { recursive: true, force: true });
 		},
 	};
+}
+
+// T2 (Ticket #89 under Spec #87, Spec AC23): put the independent authority
+// at the test bundle's fixed path. The PATH directory supplies only Bun for
+// its shebang; the adapter never resolves the authority from PATH. This
+// fixture file is absent from a real install by design.
+export function createFixtureAuthorityBinDir(bundle: Bundle): { binDir: string; dispose(): void } {
+	const root = mkdtempSync(path.join(os.tmpdir(), "connectors-fixture-authority-bin-"));
+	// Only the test bundle carries this authority. The adapter resolves this
+	// bundle-owned path, never a same-named executable supplied by PATH.
+	shim(path.join(bundle.root, "tests", "fixture-authority"), path.join(FIXTURES, "fixture-authority-fake.ts"));
+	symlinkSync(process.execPath, path.join(root, "bun"));
+	return {
+		binDir: root,
+		dispose() {
+			rmSync(root, { recursive: true, force: true });
+		},
+	};
+}
+
+export function createChallengeAuthorityBinDir(bundle: Bundle): { binDir: string; dispose(): void } {
+	const root = mkdtempSync(path.join(os.tmpdir(), "connectors-challenge-authority-bin-"));
+	shim(path.join(bundle.root, "tests", "challenge-authority"), path.join(FIXTURES, "challenge-authority-fake.ts"));
+	symlinkSync(process.execPath, path.join(root, "bun"));
+	return { binDir: root, dispose() { rmSync(root, { recursive: true, force: true }); } };
 }

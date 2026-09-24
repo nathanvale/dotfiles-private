@@ -4,6 +4,8 @@
 // real child process. Expected values are independent literals, never
 // re-derived from bin/connectors.ts's own envelope-building code.
 import { describe, expect, test } from "bun:test";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import path from "node:path";
 import { createBundle, createFakeMcporterBinDir, runBundle } from "./harness.ts";
 
 describe("connectors list", () => {
@@ -12,10 +14,11 @@ describe("connectors list", () => {
 		try {
 			const result = await runBundle(bundle, ["list"], { home: bundle.root });
 			expect(result.code).toBe(0);
+			expect(result.stderr).toBe("");
 			const envelope = JSON.parse(result.stdout);
 			expect(envelope.result.data.connectors).toEqual([
-				{ id: "context7", adapter: null, keyless: true, requirements: [] },
-				{ id: "firecrawl", adapter: null, keyless: true, requirements: [] },
+				{ id: "context7", adapter: null, keyless: true, requirements: ["mcporter"] },
+				{ id: "firecrawl", adapter: null, keyless: true, requirements: ["mcporter"] },
 			]);
 			expect(envelope.result.data.problems).toEqual([]);
 		} finally {
@@ -30,13 +33,14 @@ describe("connectors status: Spec AC21 truthful evidence states", () => {
 	// anything, so the full two-connector map is asserted by toEqual instead
 	// of iterated. Both ids and the complete evidence shape are hand-typed
 	// here, never read back from the manifest or the live envelope.
-	const KEYLESS_EVIDENCE = { configured: true, localReady: true, custodyChecked: null, authenticated: false, schemaQualified: false, liveReadProven: false, liveWriteProven: false, fixtureTested: null };
+	const KEYLESS_EVIDENCE = { configured: true, localReady: null, custodyChecked: null, authenticated: false, schemaQualified: false, liveReadProven: false, liveWriteProven: false, fixtureTested: null };
 
 	test("pins the exact evidence map for both known connectors and reports exactly two, never zero", async () => {
 		const bundle = createBundle();
 		try {
 			const result = await runBundle(bundle, ["status"], { home: bundle.root });
 			expect(result.code).toBe(0);
+			expect(result.stderr).toBe("");
 			const envelope = JSON.parse(result.stdout);
 			expect(envelope.result.data.connectors).toEqual([
 				{ id: "context7", evidence: KEYLESS_EVIDENCE },
@@ -48,12 +52,79 @@ describe("connectors status: Spec AC21 truthful evidence states", () => {
 		}
 	});
 
+	test("both status forms refuse one malformed packaged requirements file before dependency effects", async () => {
+		const bundle = createBundle();
+		const mcporterBin = createFakeMcporterBinDir();
+		const sentinel = "SENTINEL_PRIVATE_CREDENTIAL_VALUE";
+		try {
+			writeFileSync(path.join(bundle.root, "requirements.json"), '{"schemaVersion":1,"pins":{"mcporter":14}}');
+			for (const argv of [["status"], ["status", "context7"]]) {
+				const result = await runBundle(bundle, argv, { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
+				expect(result.code).toBe(4);
+				expect(result.stderr).toBe("");
+				expect(result.stdout).not.toContain(sentinel);
+				const envelope = JSON.parse(result.stdout);
+				expect(envelope.envelopeVersion).toBe(2);
+				expect(envelope.result).toEqual({
+					runId: expect.stringMatching(/^run-[0-9a-f-]{36}$/),
+					commandIdentity: "connectors.status",
+					outcome: "refused",
+					failureClass: "schema",
+					exitCode: 4,
+					data: null,
+					retryable: false,
+					repairAction: expect.any(String),
+					nextAction: "connectors.config.validate",
+					effectClass: "inspect",
+					transactionState: "unchanged",
+					causeCode: "SCHEMA_REQUIREMENTS_INVALID",
+					effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+				});
+				expect(envelope.result.repairAction.length).toBeGreaterThan(0);
+				expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
+			}
+		} finally {
+			mcporterBin.dispose();
+			bundle.dispose();
+		}
+	});
+
+	test("valid and absent requirements preserve truthful status evidence in both forms", async () => {
+		const bundle = createBundle();
+		const mcporterBin = createFakeMcporterBinDir();
+		const sentinel = "SENTINEL_PRIVATE_CREDENTIAL_VALUE";
+		try {
+			for (const requirements of ["valid", "absent"]) {
+				if (requirements === "absent") rmSync(path.join(bundle.root, "requirements.json"));
+				for (const [argv, expectedConnectors] of [
+					[["status"], [{ id: "context7", evidence: KEYLESS_EVIDENCE }, { id: "firecrawl", evidence: KEYLESS_EVIDENCE }]],
+					[["status", "context7"], [{ id: "context7", evidence: KEYLESS_EVIDENCE }]],
+				] as const) {
+					const result = await runBundle(bundle, [...argv], { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
+					expect(result.code).toBe(0);
+					expect(result.stderr).toBe("");
+					expect(result.stdout).not.toContain(sentinel);
+					const envelope = JSON.parse(result.stdout);
+					expect(envelope.result.commandIdentity).toBe("connectors.status");
+					expect(envelope.result.outcome).toBe("success");
+					expect(envelope.result.causeCode).toBe("SUCCESS_UNCHANGED");
+					expect(envelope.result.data).toEqual({ connectors: expectedConnectors, problems: [] });
+					expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
+				}
+			}
+		} finally {
+			mcporterBin.dispose();
+			bundle.dispose();
+		}
+	});
+
 	test("an unknown connector id refuses with a usage cause naming the exact repair, never a crash", async () => {
 		const bundle = createBundle();
 		try {
 			const result = await runBundle(bundle, ["status", "not-a-real-connector"], { home: bundle.root });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(2);
+			expect(result.stderr).toBe("");
 			expect(envelope.result.outcome).toBe("refused");
 			expect(envelope.result.causeCode).toBe("USAGE_CONNECTOR_UNKNOWN");
 		} finally {
@@ -63,16 +134,269 @@ describe("connectors status: Spec AC21 truthful evidence states", () => {
 });
 
 describe("connectors config show: Spec AC24 resolved provenance", () => {
-	test("identifies the source of every effective nonsecret value, distinguishing packaged defaults from invocation selectors", async () => {
+	test("a packaged selector default yields to an invocation selector with distinct provenance", async () => {
 		const bundle = createBundle();
 		try {
 			bundle.addSkill("keyless-fixture-skill");
-			const result = await runBundle(bundle, ["config", "show", "keyless-fixture-skill", "--resolved", "--json", "--select", "region=au"], { home: bundle.root });
-			expect(result.code).toBe(0);
-			const envelope = JSON.parse(result.stdout);
-			expect(envelope.result.data.values.custodyMode).toEqual({ value: "keyless", source: "packaged-manifest-default" });
-			expect(envelope.result.data.values.region).toEqual({ value: "au", source: "invocation-selector" });
+			const manifestPath = path.join(bundle.skillsRoot, "keyless-fixture-skill", "config", "manifest.json");
+			const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+			manifest.selectors.region.default = "us";
+			writeFileSync(manifestPath, JSON.stringify(manifest));
+			const defaults = await runBundle(bundle, ["config", "show", "keyless-fixture-skill", "--resolved", "--json"], { home: bundle.root });
+			expect(defaults.code).toBe(0);
+			expect(defaults.stderr).toBe("");
+			expect(JSON.parse(defaults.stdout).result.data.values).toEqual({
+				connector: { value: "keyless-fixture-skill", source: "invocation" },
+				adapter: { value: "none", source: "packaged-manifest-default" },
+				custodyMode: { value: "keyless", source: "packaged-manifest-default" },
+				transportRegistry: { value: "./mcporter.json", source: "packaged-manifest-default" },
+				requirements: { value: [], source: "packaged-manifest-default" },
+				region: { value: "us", source: "packaged-manifest-default" },
+			});
+			const selected = await runBundle(bundle, ["config", "show", "keyless-fixture-skill", "--resolved", "--json", "--select", "region=au"], { home: bundle.root });
+			expect(selected.code).toBe(0);
+			expect(selected.stderr).toBe("");
+			expect(JSON.parse(selected.stdout).result.data.values.region).toEqual({ value: "au", source: "invocation-selector" });
 		} finally {
+			bundle.dispose();
+		}
+	});
+
+	test("a packaged default outside its declared pattern refuses before becoming effective", async () => {
+		const bundle = createBundle();
+		const mcporterBin = createFakeMcporterBinDir();
+		const sentinel = "SENTINEL_PRIVATE_CREDENTIAL_VALUE";
+		try {
+			bundle.addSkill("keyless-fixture-skill");
+			const manifestPath = path.join(bundle.skillsRoot, "keyless-fixture-skill", "config", "manifest.json");
+			const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+			for (const invalidDefault of ["AU", "au\n"]) {
+				manifest.selectors.region.default = invalidDefault;
+				writeFileSync(manifestPath, JSON.stringify(manifest));
+				for (const argv of [
+					["config", "validate", "keyless-fixture-skill"],
+					["config", "show", "keyless-fixture-skill", "--resolved", "--json", "--select", "region=au"],
+				]) {
+					const result = await runBundle(bundle, argv, { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
+					expect(result.code).toBe(4);
+					expect(result.stderr).toBe("");
+					expect(result.stdout).not.toContain(sentinel);
+					const envelope = JSON.parse(result.stdout);
+					expect(envelope.result.outcome).toBe("refused");
+					expect(envelope.result.causeCode).toBe("SCHEMA_SELECTOR_INVALID");
+					expect(envelope.result.data).toBeNull();
+					expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
+				}
+			}
+		} finally {
+			mcporterBin.dispose();
+			bundle.dispose();
+		}
+	});
+
+	test("reserved selector names cannot replace resolved fields or dependency provenance", async () => {
+		const bundle = createBundle();
+		const mcporterBin = createFakeMcporterBinDir();
+		const sentinel = "SENTINEL_PRIVATE_CREDENTIAL_VALUE";
+		try {
+			bundle.addSkill("keyless-fixture-skill");
+			const manifestPath = path.join(bundle.skillsRoot, "keyless-fixture-skill", "config", "manifest.json");
+			const original = JSON.parse(readFileSync(manifestPath, "utf8"));
+			for (const name of ["connector", "custodyMode", "dependency:mcporter"]) {
+				writeFileSync(manifestPath, JSON.stringify({ ...original, selectors: { [name]: { default: "attacker" } } }));
+				const result = await runBundle(bundle, ["config", "show", "keyless-fixture-skill", "--resolved", "--json"], { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
+				expect(result.code).toBe(4);
+				expect(result.stderr).toBe("");
+				expect(result.stdout).not.toContain(sentinel);
+				const envelope = JSON.parse(result.stdout);
+				expect(envelope.result.outcome).toBe("refused");
+				expect(envelope.result.causeCode).toBe("SCHEMA_SELECTOR_INVALID");
+				expect(envelope.result.data).toBeNull();
+				expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
+			}
+		} finally {
+			mcporterBin.dispose();
+			bundle.dispose();
+		}
+	});
+
+	test("conflicting repeated selections refuse while an identical repeat stays effective", async () => {
+		const bundle = createBundle();
+		const sentinel = "SENTINEL_PRIVATE_CREDENTIAL_VALUE";
+		try {
+			bundle.addSkill("keyless-fixture-skill");
+			const base = ["config", "show", "keyless-fixture-skill", "--resolved", "--json", "--select", "region=au", "--select"];
+			const conflicting = await runBundle(bundle, [...base, "region=us"], { home: bundle.root, extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
+			expect(conflicting.code).toBe(2);
+			expect(conflicting.stderr).toBe("");
+			expect(conflicting.stdout).not.toContain(sentinel);
+			const refusal = JSON.parse(conflicting.stdout);
+			expect(refusal.result.commandIdentity).toBe("connectors.config.show");
+			expect(refusal.result.outcome).toBe("refused");
+			expect(refusal.result.causeCode).toBe("USAGE_MALFORMED_ARGUMENTS");
+			expect(refusal.result.data).toBeNull();
+			const identical = await runBundle(bundle, [...base, "region=au"], { home: bundle.root });
+			expect(identical.code).toBe(0);
+			expect(identical.stderr).toBe("");
+			expect(JSON.parse(identical.stdout).result.data.values.region).toEqual({ value: "au", source: "invocation-selector" });
+			const help = await runBundle(bundle, ["--help"], { home: bundle.root });
+			expect(help.code).toBe(0);
+			expect(help.stderr).toBe("");
+			expect(help.stdout).toContain("Repeated --select names must carry identical values");
+			const discovery = await runBundle(bundle, ["--discover", "--json"], { home: bundle.root });
+			expect(discovery.code).toBe(0);
+			expect(discovery.stderr).toBe("");
+			expect(JSON.parse(discovery.stdout).result.data.commands.filter((command: { commandIdentity: string }) => command.commandIdentity === "connectors.config.show")).toEqual([
+				{
+					commandIdentity: "connectors.config.show",
+					route: ["config", "show"],
+					effectClass: "inspect",
+					summary: "Show resolved nonsecret values and provenance; conflicting repeated selectors refuse",
+				},
+			]);
+		} finally {
+			bundle.dispose();
+		}
+	});
+
+	test("an adapter without a credential reference has no effective custody mode", async () => {
+		const bundle = createBundle();
+		const mcporterBin = createFakeMcporterBinDir();
+		const sentinel = "SENTINEL_PRIVATE_CREDENTIAL_VALUE";
+		try {
+			bundle.addSkill("adapter-fixture-skill");
+			const manifestPath = path.join(bundle.skillsRoot, "adapter-fixture-skill", "config", "manifest.json");
+			const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
+			manifest.credentials = null;
+			writeFileSync(manifestPath, JSON.stringify(manifest));
+			const result = await runBundle(bundle, ["config", "show", "adapter-fixture-skill", "--resolved", "--json"], { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
+			expect(result.code).toBe(0);
+			expect(result.stderr).toBe("");
+			expect(result.stdout).not.toContain(sentinel);
+			expect(JSON.parse(result.stdout).result.data).toEqual({
+				connector: "adapter-fixture-skill",
+				values: {
+					connector: { value: "adapter-fixture-skill", source: "invocation" },
+					adapter: { value: "test-auth", source: "packaged-manifest-default" },
+					custodyMode: { value: null, source: "not-yet-effective" },
+					transportRegistry: { value: "./mcporter.json", source: "packaged-manifest-default" },
+					requirements: { value: [], source: "packaged-manifest-default" },
+				},
+			});
+			expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
+		} finally {
+			mcporterBin.dispose();
+			bundle.dispose();
+		}
+	});
+
+	test("a credential reference does not declare an effective custody mode", async () => {
+		const bundle = createBundle();
+		const sentinel = "SENTINEL_PRIVATE_CREDENTIAL_VALUE";
+		try {
+			bundle.addSkill("adapter-fixture-skill");
+			const result = await runBundle(bundle, ["config", "show", "adapter-fixture-skill", "--resolved", "--json"], {
+				home: bundle.root,
+				extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel },
+			});
+			expect(result.code).toBe(0);
+			expect(result.stderr).toBe("");
+			expect(result.stdout).not.toContain(sentinel);
+			const envelope = JSON.parse(result.stdout);
+			expect(envelope.result.commandIdentity).toBe("connectors.config.show");
+			expect(envelope.result.outcome).toBe("success");
+			expect(envelope.result.data).toEqual({
+				connector: "adapter-fixture-skill",
+				values: {
+					connector: { value: "adapter-fixture-skill", source: "invocation" },
+					adapter: { value: "test-auth", source: "packaged-manifest-default" },
+					custodyMode: { value: null, source: "not-yet-effective" },
+					transportRegistry: { value: "./mcporter.json", source: "packaged-manifest-default" },
+					requirements: { value: [], source: "packaged-manifest-default" },
+				},
+			});
+			expect(existsSync(path.join(bundle.root, "fixture-authority.json"))).toBe(false);
+		} finally {
+			bundle.dispose();
+		}
+	});
+
+	test("reports the packaged dependency pin and every effective Context7 value from literal sources", async () => {
+		const bundle = createBundle();
+		try {
+			const result = await runBundle(bundle, ["config", "show", "context7", "--resolved", "--json"], { home: bundle.root });
+			expect(result.code).toBe(0);
+			expect(result.stderr).toBe("");
+			expect(JSON.parse(result.stdout).result.data).toEqual({
+				connector: "context7",
+				values: {
+					connector: { value: "context7", source: "invocation" },
+					adapter: { value: "none", source: "packaged-manifest-default" },
+					custodyMode: { value: "keyless", source: "packaged-manifest-default" },
+					transportRegistry: { value: "./mcporter.json", source: "packaged-manifest-default" },
+					requirements: { value: ["mcporter"], source: "packaged-manifest-default" },
+					"dependency:mcporter": { value: "0.14.0", source: "packaged-requirements-pin" },
+				},
+			});
+		} finally {
+			bundle.dispose();
+		}
+	});
+
+	test("an absent requirements file reports an unpinned dependency without inventing a version", async () => {
+		const bundle = createBundle();
+		try {
+			rmSync(path.join(bundle.root, "requirements.json"));
+			const result = await runBundle(bundle, ["config", "show", "context7", "--resolved", "--json"], { home: bundle.root });
+			expect(result.code).toBe(0);
+			expect(result.stderr).toBe("");
+			expect(JSON.parse(result.stdout).result.data.values["dependency:mcporter"]).toEqual({ value: null, source: "not-yet-effective" });
+		} finally {
+			bundle.dispose();
+		}
+	});
+
+	test("a malformed requirements pin refuses instead of appearing unpinned", async () => {
+		const bundle = createBundle();
+		try {
+			writeFileSync(path.join(bundle.root, "requirements.json"), '{"schemaVersion":1,"pins":{"mcporter":14}}');
+			const result = await runBundle(bundle, ["config", "show", "context7", "--resolved", "--json"], { home: bundle.root });
+			expect(result.code).toBe(4);
+			expect(result.stderr).toBe("");
+			const envelope = JSON.parse(result.stdout);
+			expect(envelope.result.outcome).toBe("refused");
+			expect(envelope.result.causeCode).toBe("SCHEMA_REQUIREMENTS_INVALID");
+			expect(envelope.result.data).toBeNull();
+		} finally {
+			bundle.dispose();
+		}
+	});
+
+	test("config validate and doctor refuse a malformed packaged requirements pin without dependency effects", async () => {
+		const bundle = createBundle();
+		const mcporterBin = createFakeMcporterBinDir();
+		const sentinel = "SENTINEL_PRIVATE_CREDENTIAL_VALUE";
+		try {
+			writeFileSync(path.join(bundle.root, "requirements.json"), '{"schemaVersion":1,"pins":{"mcporter":14}}');
+			const cases: [string[], string][] = [
+				[["config", "validate"], "connectors.config.validate"],
+				[["config", "validate", "context7"], "connectors.config.validate"],
+				[["doctor", "context7"], "connectors.doctor"],
+			];
+			for (const [argv, identity] of cases) {
+				const result = await runBundle(bundle, argv, { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
+				expect(result.code).toBe(4);
+				expect(result.stderr).toBe("");
+				expect(result.stdout).not.toContain(sentinel);
+				const envelope = JSON.parse(result.stdout);
+				expect(envelope.result.commandIdentity).toBe(identity);
+				expect(envelope.result.outcome).toBe("refused");
+				expect(envelope.result.causeCode).toBe("SCHEMA_REQUIREMENTS_INVALID");
+				expect(envelope.result.data).toBeNull();
+				expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
+			}
+		} finally {
+			mcporterBin.dispose();
 			bundle.dispose();
 		}
 	});
@@ -84,6 +408,7 @@ describe("connectors config show: Spec AC24 resolved provenance", () => {
 			const result = await runBundle(bundle, ["config", "show", "keyless-fixture-skill", "--resolved", "--json"], { home: bundle.root });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(4);
+			expect(result.stderr).toBe("");
 			expect(envelope.result.causeCode).toBe("SCHEMA_SELECTOR_INVALID");
 		} finally {
 			bundle.dispose();
@@ -96,6 +421,7 @@ describe("connectors config show: Spec AC24 resolved provenance", () => {
 		try {
 			const result = await runBundle(bundle, ["config", "show", "context7", "--resolved", "--json"], { home: bundle.root, extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
 			expect(result.code).toBe(0);
+			expect(result.stderr).toBe("");
 			expect(result.stdout).not.toContain(sentinel);
 			expect(result.stderr).not.toContain(sentinel);
 		} finally {
@@ -105,13 +431,47 @@ describe("connectors config show: Spec AC24 resolved provenance", () => {
 });
 
 describe("connectors doctor", () => {
-	test("a keyless connector is locally ready with no custody claim", async () => {
+	test("a keyless manifest check leaves readiness and custody unproved", async () => {
 		const bundle = createBundle();
 		try {
 			const result = await runBundle(bundle, ["doctor", "firecrawl"], { home: bundle.root });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(0);
-			expect(envelope.result.data).toEqual({ connector: "firecrawl", localReady: true, custodyChecked: null });
+			expect(result.stderr).toBe("");
+			expect(envelope.result.data).toEqual({
+				connector: "firecrawl",
+				configured: true,
+				localReady: null,
+				custodyChecked: null,
+				authenticated: false,
+				schemaQualified: false,
+				liveReadProven: false,
+				liveWriteProven: false,
+				fixtureTested: null,
+			});
+		} finally {
+			bundle.dispose();
+		}
+	});
+
+	test("an adapter declaration does not promote doctor into custody or authentication proof", async () => {
+		const bundle = createBundle();
+		try {
+			bundle.addSkill("adapter-fixture-skill");
+			const result = await runBundle(bundle, ["doctor", "adapter-fixture-skill"], { home: bundle.root });
+			expect(result.code).toBe(0);
+			expect(result.stderr).toBe("");
+			expect(JSON.parse(result.stdout).result.data).toEqual({
+				connector: "adapter-fixture-skill",
+				configured: true,
+				localReady: null,
+				custodyChecked: null,
+				authenticated: false,
+				schemaQualified: false,
+				liveReadProven: false,
+				liveWriteProven: false,
+				fixtureTested: null,
+			});
 		} finally {
 			bundle.dispose();
 		}
@@ -129,15 +489,69 @@ describe("connectors schema: Spec AC20 contribution (Context7 and Firecrawl reac
 		context7: { url: "https://mcp.context7.com/mcp", allowedTools: ["resolve-library-id", "query-docs"] },
 		firecrawl: { url: "https://mcp.firecrawl.dev/v2/mcp", allowedTools: ["firecrawl_search", "firecrawl_scrape"] },
 	};
+	const NOISY_STDERR_BYTES = 2_097_152;
+
+	test("drains more than pipe capacity from MCPorter stderr and returns one clean schema envelope", async () => {
+		const bundle = createBundle();
+		const mcporterBin = createFakeMcporterBinDir();
+		const sentinel = "SENTINEL_PRIVATE_CREDENTIAL_VALUE";
+		try {
+			writeFileSync(path.join(bundle.root, "mcporter-noisy-stderr-request.json"), JSON.stringify({ bytes: NOISY_STDERR_BYTES }));
+			const result = await runBundle(bundle, ["schema", "context7"], {
+				home: bundle.root,
+				binDir: mcporterBin.binDir,
+				timeoutMs: 10_000,
+				extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel, AMBIENT_SENTINEL: sentinel },
+			});
+			expect(result.code).toBe(0);
+			expect(result.stderr).toBe("");
+			expect(result.stdout).not.toContain(sentinel);
+			const envelope = JSON.parse(result.stdout);
+			expect(envelope.envelopeVersion).toBe(2);
+			expect(envelope.message).toBe("schema evidence fetched for context7");
+			expect(envelope.result).toEqual({
+				runId: expect.stringMatching(/^run-[0-9a-f-]{36}$/),
+				commandIdentity: "connectors.schema",
+				outcome: "success",
+				failureClass: null,
+				exitCode: 0,
+				data: {
+					connector: "context7",
+					server: "context7",
+					allowedTools: ["resolve-library-id", "query-docs"],
+					schema: { fake: true, kind: "http", server: "context7", url: "https://mcp.context7.com/mcp" },
+				},
+				retryable: false,
+				repairAction: null,
+				nextAction: "connectors.status",
+				effectClass: "inspect",
+				transactionState: "unchanged",
+				causeCode: "SUCCESS_UNCHANGED",
+				effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+			});
+			const receipt = JSON.parse(readFileSync(path.join(bundle.root, "mcporter.json"), "utf8"));
+			expect(receipt.kind).toBe("http");
+			expect(receipt.argv.slice(-4)).toEqual(["list", "context7", "--json", "--no-oauth"]);
+			expect(receipt.env.MCPORTER_NO_KEEPALIVE).toBe("*");
+			expect(receipt.env).not.toHaveProperty("OP_SERVICE_ACCOUNT_TOKEN");
+			expect(receipt.env).not.toHaveProperty("AMBIENT_SENTINEL");
+			expect(JSON.parse(readFileSync(path.join(bundle.root, "mcporter-noisy-stderr-receipt.json"), "utf8"))).toEqual({ bytesWritten: NOISY_STDERR_BYTES });
+		} finally {
+			mcporterBin.dispose();
+			bundle.dispose();
+		}
+	});
 
 	test("reaches Context7 and Firecrawl through the identical generic code path, unbypassed by any connector-name branch", async () => {
 		const bundle = createBundle();
 		const mcporterBin = createFakeMcporterBinDir();
 		try {
+			expect(Object.keys(REAL_KEYLESS_CONNECTORS)).toEqual(["context7", "firecrawl"]);
 			for (const [id, expected] of Object.entries(REAL_KEYLESS_CONNECTORS)) {
 				const result = await runBundle(bundle, ["schema", id], { home: bundle.root, binDir: mcporterBin.binDir });
 				const envelope = JSON.parse(result.stdout);
 				expect(result.code).toBe(0);
+				expect(result.stderr).toBe("");
 				expect(envelope.result.outcome).toBe("success");
 				expect(envelope.result.data.connector).toBe(id);
 				expect(envelope.result.data.server).toBe(id);
@@ -172,6 +586,7 @@ describe("connectors schema: Spec AC20 contribution (Context7 and Firecrawl reac
 			const result = await runBundle(bundle, ["schema", "keyless-fixture-skill"], { home: bundle.root, binDir: mcporterBin.binDir });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(0);
+			expect(result.stderr).toBe("");
 			expect(envelope.result.data.connector).toBe("keyless-fixture-skill");
 			// Independent literal, hand-copied from the checked-in fixture's own
 			// config/mcporter.json, not read from disk at test time: its one
@@ -197,6 +612,7 @@ describe("connectors schema: Spec AC20 contribution (Context7 and Firecrawl reac
 			const result = await runBundle(bundle, ["schema", "adapter-fixture-skill"], { home: bundle.root });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(3);
+			expect(result.stderr).toBe("");
 			expect(envelope.result.causeCode).toBe("DOMAIN_CUSTODY_NOT_SUPPORTED");
 		} finally {
 			bundle.dispose();

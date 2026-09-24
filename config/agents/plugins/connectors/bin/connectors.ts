@@ -1,17 +1,19 @@
 #!/usr/bin/env bun
 // Compiled Connectors front door. T1 (Ticket #88) shipped a discovery-only
 // skeleton. T2 (Ticket #89 under Spec #87) adds the generic manifest-driven
-// command core: list, config validate/show, status, doctor, and a minimal
-// schema reachability seam for keyless connectors. `bin/provider-route.ts`
-// remains the sole owner of the existing per-Skill auth/list/call launcher
-// every Skill's SKILL.md still documents; this file never imports it and
-// never branches on a connector's name. All connector-specific behavior
-// lives in a schema-validated Connector Manifest (bin/manifest.ts) and a
-// packaged adapter registry (bin/adapters/index.ts).
+// command core: list, config validate/show, status, doctor, a minimal schema
+// reachability seam for keyless connectors, and a fixture-auth seam proving
+// packaged auth-adapter extensibility. `bin/provider-route.ts` remains the
+// sole owner of the existing per-Skill auth/list/call launcher every Skill's
+// SKILL.md still documents; this file never imports it and never branches
+// on a connector's name. All connector-specific behavior lives in a
+// schema-validated Connector Manifest (bin/manifest.ts) and a packaged
+// adapter registry (bin/adapters/index.ts).
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
-import { discoverManifests, loadOneManifest, ManifestError, type ConnectorManifest } from "./manifest.ts";
+import { discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
+import { safeEnvironment } from "./safe-environment.ts";
 
 const CONTRACT_VERSION = "2.0.0";
 const PROGRAM = "connectors";
@@ -21,10 +23,10 @@ const SIGNAL_EXITS = { "130": "SIGINT", "143": "SIGTERM" } as const;
 // What this binary does not do yet. Keep honest: only list an exclusion
 // once it is actually true, and drop it in the Ticket that stops excluding it.
 const EFFECT_EXCLUSIONS = [
-	"any credential or custody access beyond a packaged adapter's local, nonsecret reference check",
+	"any real credential value or T5 custody access; fixture-auth only presents a nonsecret reference to a fixture-tested authority",
 	"any dependency install, setup, or MCPorter bootstrap",
 	"any provider write operation",
-	"setup, deps, auth, or run (later Tickets own the complete production flows)",
+	"setup, deps, real auth, or run (later Tickets own the complete production flows)",
 ] as const;
 
 // Exported: each appears in the exported Envelope's public signature.
@@ -45,8 +47,11 @@ export type CauseCode =
 	| "SCHEMA_ADAPTER_UNKNOWN"
 	| "SCHEMA_SELECTOR_INVALID"
 	| "SCHEMA_MANIFEST_INVALID"
-	| "DOMAIN_ADAPTER_REFUSED"
+	| "SCHEMA_REQUIREMENTS_INVALID"
 	| "DOMAIN_CUSTODY_NOT_SUPPORTED"
+	| "DOMAIN_ADAPTER_NOT_DECLARED"
+	| "DOMAIN_FIXTURE_AUTHORITY_UNAVAILABLE"
+	| "DOMAIN_FIXTURE_AUTH_REFUSED"
 	| "TRANSIENT_PROVIDER_UNREACHABLE"
 	| "INTERNAL_UNEXPECTED_UNCHANGED";
 
@@ -66,11 +71,17 @@ const COMMANDS: readonly CommandDescriptor[] = [
 	{ commandIdentity: "connectors.help", route: ["--help"], effectClass: "inspect", summary: "Show help and usage" },
 	{ commandIdentity: "connectors.discovery", route: ["--discover", "--json"], effectClass: "inspect", summary: "Describe the commands and the contract" },
 	{ commandIdentity: "connectors.list", route: ["list"], effectClass: "inspect", summary: "List connectors declared by a Connector Manifest" },
-	{ commandIdentity: "connectors.config.validate", route: ["config", "validate"], effectClass: "inspect", summary: "Validate one or every connector manifest and its registry" },
-	{ commandIdentity: "connectors.config.show", route: ["config", "show"], effectClass: "inspect", summary: "Show one connector's resolved nonsecret configuration and its provenance" },
+	{ commandIdentity: "connectors.config.validate", route: ["config", "validate"], effectClass: "inspect", summary: "Validate connector manifests, registries, and packaged requirements" },
+	{ commandIdentity: "connectors.config.show", route: ["config", "show"], effectClass: "inspect", summary: "Show resolved nonsecret values and provenance; conflicting repeated selectors refuse" },
 	{ commandIdentity: "connectors.status", route: ["status"], effectClass: "inspect", summary: "Report truthful evidence state per connector" },
 	{ commandIdentity: "connectors.doctor", route: ["doctor"], effectClass: "inspect", summary: "Local readiness gate for one connector" },
 	{ commandIdentity: "connectors.schema", route: ["schema"], effectClass: "inspect", summary: "Fetch live schema evidence for one keyless connector" },
+	{
+		commandIdentity: "connectors.fixtureAuth",
+		route: ["fixture-auth"],
+		effectClass: "inspect",
+		summary: "Attempt a packaged, secret-free fixture auth operation for one connector (fixture-tested proof only, never real credential custody)",
+	},
 ];
 
 // Contract Core 2.0 requires sorted, unique availablePaths, independent of
@@ -228,8 +239,11 @@ const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	SCHEMA_ADAPTER_UNKNOWN: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	SCHEMA_SELECTOR_INVALID: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	SCHEMA_MANIFEST_INVALID: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
-	DOMAIN_ADAPTER_REFUSED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	SCHEMA_REQUIREMENTS_INVALID: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	DOMAIN_CUSTODY_NOT_SUPPORTED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_ADAPTER_NOT_DECLARED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_FIXTURE_AUTHORITY_UNAVAILABLE: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_FIXTURE_AUTH_REFUSED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	TRANSIENT_PROVIDER_UNREACHABLE: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_UNEXPECTED_UNCHANGED: { outcome: "failed", effectClass: "inspect", transactionState: "unchanged", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 };
@@ -394,8 +408,9 @@ function helpText(): string {
 		"  --help                                          Show this human-readable help",
 		"  --help --json                                   Show help as a machine Contract Core envelope",
 		"  list                                            List connectors declared by a manifest",
-		"  config validate [connector]                     Validate one or every connector manifest and registry",
+		"  config validate [connector]                     Validate manifests, registries, and packaged requirements",
 		"  config show <connector> --resolved --json       Show resolved nonsecret configuration and provenance",
+		"                                                  Repeated --select names must carry identical values",
 		"  status [connector]                              Report truthful evidence state",
 		"  doctor <connector>                              Local readiness gate for one connector",
 		"  schema <connector>                               Fetch live schema evidence for one keyless connector",
@@ -467,6 +482,13 @@ function skillsRoot(): string {
 	return path.resolve(path.dirname(process.execPath), "..", "skills");
 }
 
+// The plugin root sibling of skillsRoot(): where the packaged, nonsecret
+// requirements.json (Spec AC24) lives, resolved the same way and for the
+// same reason.
+function pluginRoot(): string {
+	return path.dirname(skillsRoot());
+}
+
 function manifestErrorCause(error: ManifestError): CauseCode {
 	switch (error.code) {
 		case "manifest-missing":
@@ -477,6 +499,8 @@ function manifestErrorCause(error: ManifestError): CauseCode {
 			return "SCHEMA_ADAPTER_UNKNOWN";
 		case "selector-invalid":
 			return "SCHEMA_SELECTOR_INVALID";
+		case "requirements-invalid":
+			return "SCHEMA_REQUIREMENTS_INVALID";
 		default:
 			return "SCHEMA_MANIFEST_INVALID";
 	}
@@ -566,29 +590,37 @@ function handleConfigValidate(args: readonly string[]): void {
 			);
 			return;
 		}
-		emitSuccess("connectors.config.validate", `${discovered.length} connector manifest(s) valid`, { validated: discovered.map((entry) => entry.id) }, "connectors.list");
+		try {
+			loadRequirementsPins(pluginRoot());
+		} catch (error) {
+			if (error instanceof ManifestError) {
+				emitRefusal("connectors.config.validate", `${PROGRAM}: packaged requirements are invalid: ${error.message}`, manifestErrorCause(error), "Fix or remove the malformed requirements.json", "connectors.config.validate");
+				return;
+			}
+			throw error;
+		}
+		emitSuccess("connectors.config.validate", `${discovered.length} connector configuration(s) valid`, { validated: discovered.map((entry) => entry.id) }, "connectors.list");
 		return;
 	}
 	const id = args[0] ?? "";
 	try {
 		loadOneManifest(root, id, ADAPTER_IDS);
+		loadRequirementsPins(pluginRoot());
 	} catch (error) {
 		if (error instanceof ManifestError) {
 			emitRefusal(
 				"connectors.config.validate",
-				`${PROGRAM}: connector ${id} manifest is invalid: ${error.message}`,
+				`${PROGRAM}: connector ${id} configuration is invalid: ${error.message}`,
 				manifestErrorCause(error),
-				"Fix the named manifest or registry, then run config validate again",
+				"Fix the named manifest, registry, or requirements file, then run config validate again",
 				"connectors.list",
 			);
 			return;
 		}
 		throw error;
 	}
-	emitSuccess("connectors.config.validate", `connector ${id} manifest is valid`, { validated: [id] }, "connectors.config.show");
+	emitSuccess("connectors.config.validate", `connector ${id} configuration is valid`, { validated: [id] }, "connectors.config.show");
 }
-
-const SELECTOR_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 
 interface ResolvedSelectors {
 	readonly values: Record<string, { readonly value: string; readonly source: "packaged-manifest-default" | "invocation-selector" }>;
@@ -596,16 +628,17 @@ interface ResolvedSelectors {
 }
 
 interface SelectorResolution {
-	readonly value?: { readonly value: string; readonly source: "invocation-selector" };
+	readonly value?: { readonly value: string; readonly source: "invocation-selector" | "packaged-manifest-default" };
 	readonly problem?: string;
 }
 
 function resolveOneSelector(name: string, declaration: ConnectorManifest["selectors"][string], given: ReadonlyMap<string, string>): SelectorResolution {
 	const value = given.get(name);
 	if (value === undefined) {
+		if (declaration.default !== undefined) return { value: { value: declaration.default, source: "packaged-manifest-default" } };
 		return declaration.required ? { problem: `selector ${name} is required; pass --select ${name}=<value>` } : {};
 	}
-	if (!SELECTOR_VALUE_PATTERN.test(value)) return { problem: `selector ${name} must match ${SELECTOR_VALUE_PATTERN.source}` };
+	if (SELECTOR_VALUE_PATTERN.exec(value)?.[0] !== value) return { problem: `selector ${name} must match ${SELECTOR_VALUE_PATTERN.source}` };
 	if (declaration.pattern && !new RegExp(declaration.pattern).test(value)) return { problem: `selector ${name} must match ${declaration.pattern}` };
 	if (declaration.enum && !declaration.enum.includes(value)) return { problem: `selector ${name} must be one of ${declaration.enum.join(", ")}` };
 	return { value: { value, source: "invocation-selector" } };
@@ -619,7 +652,7 @@ function resolveSelectors(manifest: ConnectorManifest, given: ReadonlyMap<string
 		if (resolution.value) values[name] = resolution.value;
 	}
 	for (const name of given.keys()) {
-		if (!(name in manifest.selectors)) return { values, problem: `connector ${manifest.id} does not declare selector ${name}` };
+		if (!Object.hasOwn(manifest.selectors, name)) return { values, problem: `connector ${manifest.id} does not declare selector ${name}` };
 	}
 	return { values, problem: null };
 }
@@ -635,7 +668,10 @@ function consumeSelectToken(rest: readonly string[], index: number, given: Map<s
 	const value = rest[index + 1];
 	const equals = value?.indexOf("=") ?? -1;
 	if (!value || equals <= 0) return null;
-	given.set(value.slice(0, equals), value.slice(equals + 1));
+	const name = value.slice(0, equals);
+	const selected = value.slice(equals + 1);
+	if (given.has(name) && given.get(name) !== selected) return null;
+	given.set(name, selected);
 	return index + 1;
 }
 
@@ -690,30 +726,54 @@ function handleConfigShow(args: readonly string[]): void {
 		emitRefusal("connectors.config.show", `${PROGRAM}: ${selectors.problem}`, "SCHEMA_SELECTOR_INVALID", selectors.problem, "connectors.config.validate");
 		return;
 	}
+	let pins: Readonly<Record<string, string>>;
+	try {
+		pins = loadRequirementsPins(pluginRoot());
+	} catch (error) {
+		if (error instanceof ManifestError) {
+			emitRefusal("connectors.config.show", `${PROGRAM}: ${error.message}`, manifestErrorCause(error), "Fix or remove the malformed requirements.json", "connectors.config.validate");
+			return;
+		}
+		throw error;
+	}
+	// Dependency version provenance (Spec AC24): a declared requirement pinned
+	// in the packaged Requirements Manifest resolves to that accepted version;
+	// an unpinned one resolves honestly to "not yet effective", never an
+	// invented value. Neither is ever overridable by a selector or setting.
+	const dependencies: Record<string, { value: string | null; source: string }> = {};
+	for (const name of manifest.requirements) {
+		const pinned = pins[name];
+		dependencies[`dependency:${name}`] = pinned !== undefined ? { value: pinned, source: "packaged-requirements-pin" } : { value: null, source: "not-yet-effective" };
+	}
+	// A reference says which nonsecret item was named, not who holds a
+	// credential. T5 will add the declared custody mode and its proof.
+	const custodyMode = manifest.adapter === null
+		? { value: "keyless", source: "packaged-manifest-default" }
+		: { value: null, source: "not-yet-effective" };
 	const values: Record<string, { value: unknown; source: string }> = {
+		connector: { value: manifest.id, source: "invocation" },
 		adapter: { value: manifest.adapter ?? "none", source: "packaged-manifest-default" },
-		custodyMode: { value: manifest.adapter === null ? "keyless" : "credential-reference", source: "packaged-manifest-default" },
+		custodyMode,
 		transportRegistry: { value: manifest.transportRegistry, source: "packaged-manifest-default" },
 		requirements: { value: manifest.requirements, source: "packaged-manifest-default" },
+		...dependencies,
 		...selectors.values,
 	};
 	emitSuccess("connectors.config.show", `resolved nonsecret configuration for ${id}`, { connector: id, values }, "connectors.status");
 }
 
-function evidenceFor(manifest: ConnectorManifest): Record<string, unknown> {
-	let custodyChecked: boolean | null = null;
-	if (manifest.adapter) {
-		const adapter = ADAPTERS[manifest.adapter];
-		custodyChecked = adapter ? adapter.inspectLocal(manifest).ready : false;
-	}
-	// authenticated/schemaQualified/liveReadProven/liveWriteProven stay false
-	// unconditionally: none of them is ever attempted by this command surface,
-	// so no local or fixture check may promote a connector past what it
-	// actually proves (Spec AC21).
+// A validated manifest proves only that it is configured (Spec AC21).
+// localReady needs a real dependency/route check (MCPorter, op, uv — none
+// exist yet) and custodyChecked needs usable custody proof (T5's real
+// 1Password/MCPorter custody); neither is ever inferred from manifest
+// validity or a packaged adapter's fixture auth attempt (connectors
+// fixture-auth is the only command that exercises that attempt), so both
+// stay unknown until their owning Ticket lands.
+function evidenceFor(): Record<string, unknown> {
 	return {
 		configured: true,
-		localReady: true,
-		custodyChecked,
+		localReady: null,
+		custodyChecked: null,
 		authenticated: false,
 		schemaQualified: false,
 		liveReadProven: false,
@@ -727,20 +787,27 @@ function handleStatus(args: readonly string[]): void {
 		usageMalformed("connectors.status", "status [connector]");
 		return;
 	}
+	try {
+		loadRequirementsPins(pluginRoot());
+	} catch (error) {
+		if (error instanceof ManifestError) {
+			emitRefusal("connectors.status", `${PROGRAM}: packaged requirements are invalid: ${error.message}`, manifestErrorCause(error), "Fix or remove the malformed requirements.json", "connectors.config.validate");
+			return;
+		}
+		throw error;
+	}
 	const root = skillsRoot();
 	if (args.length === 0) {
 		const discovered = discoverManifests(root, ADAPTER_IDS);
-		const connectors = discovered
-			.filter((entry): entry is typeof entry & { manifest: ConnectorManifest } => entry.manifest !== null)
-			.map((entry) => ({ id: entry.id, evidence: evidenceFor(entry.manifest) }));
+		const connectors = discovered.filter((entry) => entry.manifest !== null).map((entry) => ({ id: entry.id, evidence: evidenceFor() }));
 		const problems = discovered.filter((entry) => entry.error !== null).map((entry) => ({ id: entry.id, code: entry.error?.code, message: entry.error?.message }));
 		emitSuccess("connectors.status", `${connectors.length} connector(s) reporting evidence state`, { connectors, problems }, "connectors.doctor");
 		return;
 	}
 	const id = args[0] ?? "";
 	try {
-		const manifest = loadOneManifest(root, id, ADAPTER_IDS);
-		emitSuccess("connectors.status", `evidence state for ${id}`, { connectors: [{ id, evidence: evidenceFor(manifest) }], problems: [] }, "connectors.doctor");
+		loadOneManifest(root, id, ADAPTER_IDS);
+		emitSuccess("connectors.status", `evidence state for ${id}`, { connectors: [{ id, evidence: evidenceFor() }], problems: [] }, "connectors.doctor");
 	} catch (error) {
 		if (error instanceof ManifestError) {
 			emitRefusal("connectors.status", `${PROGRAM}: ${error.message}`, manifestErrorCause(error), "Run config validate to see the exact defect", "connectors.config.validate");
@@ -750,9 +817,37 @@ function handleStatus(args: readonly string[]): void {
 	}
 }
 
+// Local readiness gate only (Spec AC21): once a connector's manifest,
+// registry, and packaged requirements validate, doctor succeeds. It never
+// exercises a connector's adapter — connectors fixture-auth does, so
+// doctor's own success can never be mistaken for auth proof.
 function handleDoctor(args: readonly string[]): void {
 	if (args.length !== 1) {
 		usageMalformed("connectors.doctor", "doctor <connector>");
+		return;
+	}
+	const id = args[0] ?? "";
+	try {
+		loadOneManifest(skillsRoot(), id, ADAPTER_IDS);
+		loadRequirementsPins(pluginRoot());
+	} catch (error) {
+		if (error instanceof ManifestError) {
+			emitRefusal("connectors.doctor", `${PROGRAM}: ${error.message}`, manifestErrorCause(error), "Run config validate to see the exact defect", "connectors.config.validate");
+			return;
+		}
+		throw error;
+	}
+	emitSuccess("connectors.doctor", `${id} passed its declared local checks`, { connector: id, ...evidenceFor() }, "connectors.status");
+}
+
+// The only command that exercises a packaged adapter's auth-shaped
+// operation (Spec AC23): the adapter presents the manifest's nonsecret
+// reference to an independent fixture authority process and this command
+// relays that process's verdict. Fixture-tested only; T5 keeps real
+// 1Password/MCPorter custody.
+async function handleFixtureAuth(args: readonly string[]): Promise<void> {
+	if (args.length !== 1) {
+		usageMalformed("connectors.fixtureAuth", "fixture-auth <connector>");
 		return;
 	}
 	const id = args[0] ?? "";
@@ -761,28 +856,37 @@ function handleDoctor(args: readonly string[]): void {
 		manifest = loadOneManifest(skillsRoot(), id, ADAPTER_IDS);
 	} catch (error) {
 		if (error instanceof ManifestError) {
-			emitRefusal("connectors.doctor", `${PROGRAM}: ${error.message}`, manifestErrorCause(error), "Run config validate to see the exact defect", "connectors.config.validate");
+			emitRefusal("connectors.fixtureAuth", `${PROGRAM}: ${error.message}`, manifestErrorCause(error), "Run config validate to see the exact defect", "connectors.config.validate");
 			return;
 		}
 		throw error;
 	}
 	if (manifest.adapter === null) {
-		emitSuccess("connectors.doctor", `${id} is locally ready (keyless)`, { connector: id, localReady: true, custodyChecked: null }, "connectors.status");
-		return;
-	}
-	const adapter = ADAPTERS[manifest.adapter];
-	const inspection = adapter?.inspectLocal(manifest) ?? { ready: false, cause: "ADAPTER_MISSING", detail: "declared adapter is not packaged" };
-	if (!inspection.ready) {
 		emitRefusal(
-			"connectors.doctor",
-			`${PROGRAM}: ${id} is not locally ready: ${inspection.detail ?? inspection.cause ?? "unknown"}`,
-			"DOMAIN_ADAPTER_REFUSED",
-			inspection.detail ?? "Repair the named local defect",
+			"connectors.fixtureAuth",
+			`${PROGRAM}: ${id} declares no adapter; fixture-auth needs one`,
+			"DOMAIN_ADAPTER_NOT_DECLARED",
+			"Declare an adapter in the connector manifest, or use a connector that already does",
 			"connectors.config.show",
 		);
 		return;
 	}
-	emitSuccess("connectors.doctor", `${id} is locally ready`, { connector: id, localReady: true, custodyChecked: true }, "connectors.status");
+	// manifest.adapter is already validated against the packaged registry by
+	// loadOneManifest/loadManifest, so this lookup can never miss in practice;
+	// the optional chain only satisfies the type system's own uncertainty.
+	const attempt = await ADAPTERS[manifest.adapter]?.attemptAuth(manifest);
+	if (!attempt || attempt.outcome === "refused") {
+		const cause: CauseCode = attempt?.cause === "FIXTURE_AUTHORITY_UNAVAILABLE" ? "DOMAIN_FIXTURE_AUTHORITY_UNAVAILABLE" : "DOMAIN_FIXTURE_AUTH_REFUSED";
+		emitRefusal(
+			"connectors.fixtureAuth",
+			`${PROGRAM}: ${id} fixture auth was refused: ${attempt?.detail ?? attempt?.cause ?? "unknown"}`,
+			cause,
+			attempt?.detail ?? "Repair the named defect and retry",
+			"connectors.status",
+		);
+		return;
+	}
+	emitSuccess("connectors.fixtureAuth", `${id} fixture auth succeeded`, { connector: id, outcome: "success", fixtureTested: true }, "connectors.status");
 }
 
 async function handleSchema(args: readonly string[]): Promise<void> {
@@ -825,13 +929,25 @@ async function handleSchema(args: readonly string[]): Promise<void> {
 	// (and a test) can confirm this reached the connector's real declared
 	// tools, not merely an opaque success.
 	const allowedTools = registry.mcpServers?.[server]?.allowedTools ?? [];
-	const mcporter = Bun.which("mcporter");
+	// Matches bin/provider-route.ts's own guarded MCPorter invocation exactly:
+	// a scrubbed environment (only the safe allow-list crosses, plus the
+	// keepalive suppression), mcporter resolved only through that same
+	// explicit PATH value (never the raw ambient environment/PATH a second,
+	// unguarded resolution could pick up), and a forced --no-oauth so this
+	// keyless-only command can never fall into an interactive auth prompt.
+	const routeEnv: Record<string, string> = { MCPORTER_NO_KEEPALIVE: "*", ...safeEnvironment(process.env) };
+	const mcporter = Bun.which("mcporter", { PATH: routeEnv.PATH ?? "" });
 	if (!mcporter) {
 		emitRefusal("connectors.schema", `${PROGRAM}: mcporter is not available on PATH`, "TRANSIENT_PROVIDER_UNREACHABLE", "Install mcporter, or run connectors setup once it exists", "connectors.doctor");
 		return;
 	}
-	const proc = Bun.spawn([mcporter, "--config", manifest.registryPath, "list", server, "--json"], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
-	const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+	const proc = Bun.spawn([mcporter, "--config", manifest.registryPath, "list", server, "--json", "--no-oauth"], { env: routeEnv, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+	// Both pipes must drain concurrently: awaiting only stdout+exited while
+	// stderr sits unread lets a noisy child fill the OS pipe buffer, block on
+	// its own write, and never reach exit. The drained stderr text is
+	// deliberately discarded, never echoed into this command's own envelope
+	// or stderr.
+	const [stdout, , exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
 	if (exitCode !== 0) {
 		emitRefusal("connectors.schema", `${PROGRAM}: ${id} schema fetch did not complete`, "TRANSIENT_PROVIDER_UNREACHABLE", "Retry; this attempted no write and is safe to repeat", "connectors.doctor");
 		return;
@@ -845,25 +961,7 @@ async function handleSchema(args: readonly string[]): Promise<void> {
 	emitSuccess("connectors.schema", `schema evidence fetched for ${id}`, { connector: id, server, allowedTools, schema: parsed }, "connectors.status");
 }
 
-async function main(): Promise<void> {
-	const args = process.argv.slice(2);
-	if (args.length === 2 && args[0] === "--discover" && args[1] === "--json") {
-		discover();
-		return;
-	}
-	if (args.length === 1 && args[0] === "--help") {
-		writeStdout(helpText());
-		process.exitCode = 0;
-		return;
-	}
-	if (args.length === 2 && args[0] === "--help" && args[1] === "--json") {
-		helpEnvelope();
-		return;
-	}
-	if (args.length === 0) {
-		refuse(`${PROGRAM}: no command given. Run with --discover --json to see available commands.`);
-		return;
-	}
+async function dispatchCommand(args: readonly string[]): Promise<void> {
 	if (args[0] === "list") {
 		handleList();
 		return;
@@ -888,10 +986,36 @@ async function main(): Promise<void> {
 		await handleSchema(args.slice(1));
 		return;
 	}
+	if (args[0] === "fixture-auth") {
+		await handleFixtureAuth(args.slice(1));
+		return;
+	}
 	// Never echo the caller's raw argv into public output: an argument can
 	// carry a secret-shaped value, and machine stdout must stay redacted
 	// regardless of what was actually typed. Fixed message only.
 	refuse(`${PROGRAM}: unsupported command. Run with --discover --json to see available commands.`);
+}
+
+async function main(): Promise<void> {
+	const args = process.argv.slice(2);
+	if (args.length === 2 && args[0] === "--discover" && args[1] === "--json") {
+		discover();
+		return;
+	}
+	if (args.length === 1 && args[0] === "--help") {
+		writeStdout(helpText());
+		process.exitCode = 0;
+		return;
+	}
+	if (args.length === 2 && args[0] === "--help" && args[1] === "--json") {
+		helpEnvelope();
+		return;
+	}
+	if (args.length === 0) {
+		refuse(`${PROGRAM}: no command given. Run with --discover --json to see available commands.`);
+		return;
+	}
+	await dispatchCommand(args);
 }
 
 // Guarded so a test can `import` this module (to reach buildInternalFailureEnvelope

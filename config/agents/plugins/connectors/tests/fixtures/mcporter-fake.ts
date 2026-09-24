@@ -5,7 +5,7 @@
 // whole parent environment plus the entry env with ${VAR} resolved; a missing
 // placeholder aborts before any child runs; HTTP entries are recorded, never
 // contacted. Receipts go to TMPDIR, the only writable path the route forwards.
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import path from "node:path";
 
 interface Entry {
@@ -57,6 +57,19 @@ if (existsSync(canned)) {
 	record("mcporter.json", { ...base, kind: "canned", canned });
 	process.stdout.write(readFileSync(canned, "utf8"));
 	process.exit(0);
+}
+
+// Test-owned noisy-success trigger. Synchronous writes exceed the OS pipe
+// capacity before the HTTP response, so a CLI waiting for child exit while
+// leaving stderr unread cannot reach its envelope. The receipt is written
+// only after every byte was accepted by the pipe.
+const noisyRequest = path.join(receipts, "mcporter-noisy-stderr-request.json");
+if (existsSync(noisyRequest)) {
+	const { bytes } = JSON.parse(readFileSync(noisyRequest, "utf8")) as { bytes: number };
+	const chunk = "N".repeat(1024);
+	let bytesWritten = 0;
+	while (bytesWritten < bytes) bytesWritten += writeSync(2, chunk.slice(0, bytes - bytesWritten));
+	record("mcporter-noisy-stderr-receipt.json", { bytesWritten });
 }
 
 const url = entry.baseUrl ?? entry.url;

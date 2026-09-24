@@ -17,7 +17,8 @@ export type ManifestErrorCode =
 	| "adapter-unknown"
 	| "registry-missing"
 	| "registry-invalid"
-	| "selector-invalid";
+	| "selector-invalid"
+	| "requirements-invalid";
 
 export class ManifestError extends Error {
 	readonly code: ManifestErrorCode;
@@ -31,6 +32,7 @@ export interface SelectorDeclaration {
 	readonly pattern?: string;
 	readonly enum?: readonly string[];
 	readonly required?: boolean;
+	readonly default?: string;
 }
 
 export interface ConnectorManifest {
@@ -46,6 +48,9 @@ export interface ConnectorManifest {
 }
 
 const ID_PATTERN = /^[a-z][a-z0-9-]*$/;
+const SELECTOR_NAME_PATTERN = /^[A-Za-z][A-Za-z0-9_-]*$/;
+const RESERVED_RESOLVED_FIELDS = new Set(["connector", "adapter", "custodyMode", "transportRegistry", "requirements"]);
+export const SELECTOR_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const SUPPORTED_SCHEMA_VERSION = 1;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -61,21 +66,51 @@ function validRegex(source: string): boolean {
 	}
 }
 
-function checkSelectorDeclaration(name: string, raw: unknown): SelectorDeclaration {
-	if (!isRecord(raw)) throw new ManifestError("selector-invalid", `selector ${name} must be an object`);
-	if (raw.pattern !== undefined && (typeof raw.pattern !== "string" || !validRegex(raw.pattern))) {
+function checkSelectorPattern(name: string, raw: Record<string, unknown>): string | undefined {
+	if (raw.pattern === undefined) return undefined;
+	if (typeof raw.pattern !== "string" || !validRegex(raw.pattern)) {
 		throw new ManifestError("selector-invalid", `selector ${name} pattern must be a valid regular expression`);
 	}
-	if (raw.enum !== undefined && (!Array.isArray(raw.enum) || !raw.enum.every((value) => typeof value === "string"))) {
+	return raw.pattern;
+}
+
+function checkSelectorEnum(name: string, raw: Record<string, unknown>): readonly string[] | undefined {
+	if (raw.enum === undefined) return undefined;
+	if (!Array.isArray(raw.enum) || !raw.enum.every((value) => typeof value === "string")) {
 		throw new ManifestError("selector-invalid", `selector ${name} enum must be an array of strings`);
 	}
-	if (raw.required !== undefined && typeof raw.required !== "boolean") {
-		throw new ManifestError("selector-invalid", `selector ${name} required must be a boolean`);
+	return raw.enum;
+}
+
+function checkSelectorRequired(name: string, raw: Record<string, unknown>): boolean | undefined {
+	if (raw.required === undefined) return undefined;
+	if (typeof raw.required !== "boolean") throw new ManifestError("selector-invalid", `selector ${name} required must be a boolean`);
+	return raw.required;
+}
+
+function checkSelectorDefault(name: string, raw: Record<string, unknown>, enumValues: readonly string[] | undefined, pattern: string | undefined): string | undefined {
+	if (raw.default === undefined) return undefined;
+	if (typeof raw.default !== "string") throw new ManifestError("selector-invalid", `selector ${name} default must be a string`);
+	if (SELECTOR_VALUE_PATTERN.exec(raw.default)?.[0] !== raw.default || (pattern !== undefined && !new RegExp(pattern).test(raw.default))) {
+		throw new ManifestError("selector-invalid", `selector ${name} default does not match its declared value pattern`);
 	}
-	const declaration: { pattern?: string; enum?: readonly string[]; required?: boolean } = {};
-	if (raw.pattern !== undefined) declaration.pattern = raw.pattern as string;
-	if (raw.enum !== undefined) declaration.enum = raw.enum as readonly string[];
-	if (raw.required !== undefined) declaration.required = raw.required as boolean;
+	if (enumValues !== undefined && !enumValues.includes(raw.default)) {
+		throw new ManifestError("selector-invalid", `selector ${name} default must be one of its own enum`);
+	}
+	return raw.default;
+}
+
+function checkSelectorDeclaration(name: string, raw: unknown): SelectorDeclaration {
+	if (!isRecord(raw)) throw new ManifestError("selector-invalid", `selector ${name} must be an object`);
+	const pattern = checkSelectorPattern(name, raw);
+	const enumValues = checkSelectorEnum(name, raw);
+	const required = checkSelectorRequired(name, raw);
+	const defaultValue = checkSelectorDefault(name, raw, enumValues, pattern);
+	const declaration: { pattern?: string; enum?: readonly string[]; required?: boolean; default?: string } = {};
+	if (pattern !== undefined) declaration.pattern = pattern;
+	if (enumValues !== undefined) declaration.enum = enumValues;
+	if (required !== undefined) declaration.required = required;
+	if (defaultValue !== undefined) declaration.default = defaultValue;
 	return declaration;
 }
 
@@ -84,6 +119,9 @@ function checkSelectors(selectors: unknown): Record<string, SelectorDeclaration>
 	if (!isRecord(selectors)) throw new ManifestError("selector-invalid", "selectors must be an object");
 	const result: Record<string, SelectorDeclaration> = {};
 	for (const [name, raw] of Object.entries(selectors)) {
+		if (SELECTOR_NAME_PATTERN.exec(name)?.[0] !== name || RESERVED_RESOLVED_FIELDS.has(name)) {
+			throw new ManifestError("selector-invalid", "selector name is invalid or reserved for resolved configuration");
+		}
 		result[name] = checkSelectorDeclaration(name, raw);
 	}
 	return result;
@@ -227,4 +265,36 @@ export function loadOneManifest(skillsRoot: string, id: string, adapterIds: Read
 		throw new ManifestError("manifest-missing", `no manifest declared for connector ${JSON.stringify(id)}`);
 	}
 	return loadManifest(skillDir, adapterIds);
+}
+
+// The plugin-wide Requirements Manifest: the single owner of accepted,
+// already-published dependency version pins (Spec AC24). T2 only reports
+// through this file; it never installs, verifies, or invents a pin.
+//
+// Absence is a distinct, honest fact from invalidity: a missing file simply
+// means no dependency is pinned yet, so every declared requirement resolves
+// to "not yet effective". A *present* file that is unparsable, carries an
+// unsupported schemaVersion, or declares a non-string pin value is a real
+// configuration defect and must refuse before any further work, never
+// silently collapse to the same "no pins" state as absence.
+export function loadRequirementsPins(pluginRoot: string): Readonly<Record<string, string>> {
+	const requirementsPath = path.join(pluginRoot, "requirements.json");
+	if (!existsSync(requirementsPath)) return {};
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(readFileSync(requirementsPath, "utf8"));
+	} catch {
+		throw new ManifestError("requirements-invalid", `${requirementsPath} is not valid JSON`);
+	}
+	if (!isRecord(parsed)) throw new ManifestError("requirements-invalid", `${requirementsPath} must be a JSON object`);
+	if (parsed.schemaVersion !== SUPPORTED_SCHEMA_VERSION) {
+		throw new ManifestError("requirements-invalid", `${requirementsPath} schemaVersion must be ${SUPPORTED_SCHEMA_VERSION}`);
+	}
+	if (!isRecord(parsed.pins)) throw new ManifestError("requirements-invalid", `${requirementsPath} must declare pins as an object`);
+	const pins: Record<string, string> = {};
+	for (const [name, value] of Object.entries(parsed.pins)) {
+		if (typeof value !== "string") throw new ManifestError("requirements-invalid", `${requirementsPath} pin ${name} must be a string`);
+		pins[name] = value;
+	}
+	return pins;
 }

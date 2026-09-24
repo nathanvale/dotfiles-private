@@ -3,7 +3,7 @@
 	"id": "context7",
 	"transport": { "registry": "./mcporter.json" },
 	"selectors": {},
-	"requirements": [],
+	"requirements": ["mcporter"],
 	"adapter": null,
 	"credentials": null
 }

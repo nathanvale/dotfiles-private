@@ -5,9 +5,11 @@
 // registration. No arbitrary user-supplied executable adapter is admitted:
 // this map is the complete, closed set.
 import type { Adapter } from "./contract.ts";
+import { challengeAuthAdapter } from "./challenge-auth.ts";
 import { testAuthAdapter } from "./test-auth.ts";
 
 export const ADAPTERS: Readonly<Record<string, Adapter>> = {
+	[challengeAuthAdapter.id]: challengeAuthAdapter,
 	[testAuthAdapter.id]: testAuthAdapter,
 };
 
