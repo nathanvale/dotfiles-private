@@ -1,7 +1,7 @@
 # Track an already-adopted legacy Agent Ledger Task
 
 Agent Ledger is retired as the default route for new work; new Tasks track in
-Beads through [beads-workflow](../beads-workflow/SKILL.md). Use this branch
+Beads through [beads-workflow](../../beads-workflow/SKILL.md). Use this branch
 only for a Task an already-adopted legacy project still tracks in Agent
 Ledger, to preserve its existing identity and persistence without stranding
 that work. Nathan's earlier direction toward later Notes, Progress, and
@@ -17,7 +17,7 @@ checkpoint binding responsibility.
 Apply this branch to an authorized implementation or evaluation slice whose
 Task an already-adopted legacy project still tracks in Agent Ledger. A new
 Task tracks in Beads instead; follow
-[beads-workflow](../beads-workflow/SKILL.md). Planning alone does not create a
+[beads-workflow](../../beads-workflow/SKILL.md). Planning alone does not create a
 Task or activate a goal.
 
 1. Read the playground's storage and project-map rules, active `GOAL.md`, and
@@ -37,7 +37,7 @@ Task or activate a goal.
    the exact Register and receipt before retrying. Uncertainty is not absence.
 4. Bind project, Register, and accepted Task in `GOAL.md` and the existing slice
    proof, never README. Once project, readable goal, and evidence pointers exist,
-   use the installed [checkpoint contract](compaction-recovery.md#save-a-bounded-checkpoint)
+   use the installed [checkpoint contract](compaction-recovery.md#save-a-bounded-checkpoint-legacy-schema-v2)
    to write private recovery state at meaningful boundaries, such as
    an accepted change, handoff, or interruption. Reuse current pointers; avoid
    checkpoint writes for every command. For missing, stale, uncertain, or
@@ -62,7 +62,7 @@ evidence, and missing capability without another append or the original conversa
 Scope: an already-adopted legacy project's Agent Ledger Tasks. Use this
 branch for their lifecycle changes, reconciliation, or a bounded creation the
 legacy route already covers. A Beads-adopted project creates and tracks
-Tasks through [beads-workflow](../beads-workflow/SKILL.md) instead. The
+Tasks through [beads-workflow](../../beads-workflow/SKILL.md) instead. The
 caller can perform a simple update directly. Delegate a bounded batch,
 ambiguous reconciliation, or parallel-worker closeout to `msb_ledger_steward`
 when the handoff saves work. Resolve the installed role through

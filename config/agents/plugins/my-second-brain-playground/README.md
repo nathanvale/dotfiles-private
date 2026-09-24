@@ -4,10 +4,12 @@ Build new My Second Brain skills here, one usable vertical slice at a time.
 Use [playground-slice](skills/playground-slice/SKILL.md) to resume the baseline,
 choose the next experiment, and prove an agreed improvement through real use.
 Use [evaluate-slice](skills/evaluate-slice/SKILL.md) to define observable criteria
-and obtain independent process, persistence, and recovery evidence. New work
-tracks Tasks in Beads through beads-workflow and msb-workflow; Agent Ledger
-remains the tracked owner only for a Task an already-adopted legacy project
-has not yet cut over, and the slice skill owns that legacy route.
+and obtain independent process, persistence, and recovery evidence. Track new
+work by its project's declared owner: a Beads-adopted project tracks Tasks in
+Beads through native `bd` and beads-workflow, with msb-workflow for session
+binding and recovery only; an already-adopted legacy project keeps its Agent
+Ledger Task route; a vault-native project may have no execution store. The
+slice skill owns each route.
 The first slice gives Codex and Claude Code isolated Git commits for concurrent
 playground-vault work.
 

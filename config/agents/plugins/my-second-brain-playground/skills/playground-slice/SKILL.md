@@ -58,7 +58,11 @@ For an authorized note update under an existing Task, use this short route.
    refers to, scope, uncertainty, and whether it is a suggestion, decision, or
    observed action. Retain source links. Edit only the authorized note, run
    `bun run check`. Keep existing READMEs unchanged.
-5. Before returning, follow [tracking closeout](references/tasks-first.md#closeout).
+5. Before returning, close out by the Task's owner. A Beads Task closes with
+   native `bd close` per [beads-workflow](../beads-workflow/SKILL.md); an
+   already-adopted legacy project's Agent Ledger Task follows
+   [tracking closeout](references/tasks-first.md#closeout); a vault-native
+   project without an adopted execution store closes with no invented Task.
    Compare the Task's full acceptance with available independent evidence; a
    note edit may cover only part of it. When acceptance is pending, hand back
    the evidence and preserve the active run for continuation. When its verdict
@@ -88,13 +92,20 @@ work binding; compaction alone does not require repeating it.
   the topic needed to resolve the slice's question.
 - On a new session or a lifecycle, dashboard, storage, or integration slice,
   read [the system direction](references/system-direction.md).
-- For implementation or evaluation, follow
+- For implementation or evaluation, resume the Task by its owner. A Beads
+  Task resumes through native `bd` per
+  [beads-workflow](../beads-workflow/SKILL.md); an already-adopted legacy
+  project's Agent Ledger Task follows
   [Tasks and checkpoint use](references/tasks-first.md#use-tasks-and-checkpoints-for-the-slice).
-  Resume the accepted Task and use the installed checkpoint at meaningful
-  boundaries. Future Notes and Progress need no substitute.
-- After compaction, use the installed
-  [recovery control panel](references/tasks-first.md#recover-with-the-control-panel)
-  to re-read authoritative state and regain the next safe action.
+  A vault-native project without an adopted execution store resumes no Task.
+  Use the installed checkpoint at meaningful boundaries. Future Notes and
+  Progress need no substitute.
+- After compaction, recover by the Task's owner. A Beads Task recovers
+  through `bin/msb-workflow` session binding and native `bd` state per
+  [beads-workflow](../beads-workflow/SKILL.md); an already-adopted legacy
+  project uses the installed
+  [recovery control panel](references/tasks-first.md#recover-with-the-control-panel).
+  Re-read authoritative state and regain the next safe action.
 - For a compaction-recovery slice, read
   [recovery checkpoints and qualification](references/compaction-recovery.md).
   Refresh its bounded checkpoint at meaningful work boundaries and recover
@@ -118,9 +129,13 @@ Describe the slice compactly in the conversation or the existing work owner:
 - **Stop:** What completed outcome or experimental result ends this slice?
 
 Planning-only requests create no Tasks or goals automatically. For an authorized
-implementation or evaluation slice, bind its accepted Register and Task in the
-readable `GOAL.md` and existing proof, never the README. Preserve that identity
-across sessions; unavailable commands cannot create an accepted ID.
+implementation or evaluation slice, bind its accepted Task identity in the
+readable `GOAL.md` and existing proof, never the README, by the project's
+declared owner: a Beads Task binds its native `bd` identity; an
+already-adopted legacy project's Task binds its Agent Ledger Register and
+Task; a vault-native project without an adopted execution store invents no
+Task ID. Preserve that identity across sessions; unavailable commands cannot
+create an accepted ID.
 
 Prefer the smallest journey that removes the largest observed obstacle. Include
 creation, persistence, retrieval, and later use when the question crosses those
@@ -131,13 +146,15 @@ New abstractions need pressure from this slice. Build a skill from scratch when
 its actual workflow earns one; reuse proven runtime behavior underneath it.
 Keep speculative platform work as a candidate in the existing planning owner.
 
-New work creates and tracks its Task in Beads: follow
+Track a new Task by its project's declared owner. A Beads-adopted project
+creates and tracks its Task in Beads: follow
 [beads-workflow](../beads-workflow/SKILL.md) for creation, dependencies, and
-lifecycle through native `bd`. Use [Ledger Steward](references/tasks-first.md#ledger-steward)
-only for lifecycle changes or batch reconciliation on a Task an
-already-adopted legacy project still tracks in Agent Ledger; do not adopt
-Agent Ledger for a new Task. Use that branch before work begins and at
-closeout; keep simple updates in the current session.
+lifecycle through native `bd`. An already-adopted legacy project uses
+[Ledger Steward](references/tasks-first.md#ledger-steward) only for
+lifecycle changes or batch reconciliation on its Agent Ledger Task; do not
+adopt Agent Ledger for a new Task. Use that branch before work begins and at
+closeout. A vault-native project without an adopted execution store invents
+no Task; keep simple updates in the current session.
 
 ## Build and exercise
 
