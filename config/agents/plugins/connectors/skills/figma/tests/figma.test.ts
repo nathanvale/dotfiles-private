@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readFileSync, realpathSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { assertCustody, createHarness, type Harness } from "../../../tests/harness.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
 const CONFIG = path.join(SKILL, "config", "mcporter.json");
+const ROUTE = path.join(SKILL, "config", "route.json");
+const realMcporter = Bun.which("mcporter");
 
 let harness: Harness;
 beforeEach(() => {
@@ -59,5 +62,26 @@ describe("Figma hosted Provider", () => {
 		expect(result.code).toBe(2);
 		expect(result.stderr).toContain("provider-route:error:provider-invalid:");
 		expect(harness.has("mcporter.json")).toBe(false);
+	});
+
+	test.skipIf(!realMcporter)("installed MCPorter does not load an ambient figma OAuth grant for this route", async () => {
+		const executable = realMcporter ?? "mcporter";
+		const version = Bun.spawnSync([executable, "--version"]);
+		expect(version.exitCode).toBe(0);
+		expect(version.stdout.toString().trim()).toBe("0.14.0");
+
+		const dist = path.dirname(realpathSync(executable));
+		const vault = await import(pathToFileURL(path.join(dist, "oauth-vault.js")).href);
+		const runtime = await import(pathToFileURL(path.join(dist, "runtime", "environment.js")).href);
+		const dataHome = path.join(harness.root, "xdg-data");
+		await runtime.withRuntimeEnvironment({ HOME: harness.home, XDG_DATA_HOME: dataHome }, async () => {
+			expect(vault.getOAuthVaultPath()).toBe(path.join(dataHome, "mcporter", "credentials.json"));
+			const ambient = { name: "figma", command: { kind: "http", url: new URL("https://mcp.figma.com/mcp") } };
+			const route = JSON.parse(readFileSync(ROUTE, "utf8")) as { defaultProvider: string };
+			const selected = { ...ambient, name: route.defaultProvider };
+			await vault.saveVaultEntry(ambient, { tokens: { access_token: "synthetic-ambient-token", token_type: "Bearer" } });
+			expect((await vault.loadVaultEntry(ambient))?.tokens?.access_token).toBe("synthetic-ambient-token");
+			expect(await vault.loadVaultEntry(selected)).toBeUndefined();
+		});
 	});
 });
