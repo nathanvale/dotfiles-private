@@ -1,7 +1,7 @@
 import { afterAll, describe, expect, test } from "bun:test"
 import { chmodSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
-import { declaredStation, STATION_IDS, stationIdOf, stationIdOfRow } from "../../src/branch-station-catalog.ts"
+import { stationIdOfRow } from "../../src/branch-station-catalog.ts"
 import { type Handoff, STATIONS } from "../../src/command-contract.ts"
 import { BRANCH_STATIONS, type CatalogueDeclaration, type CatalogueObservation, type PublicStation, validateCatalogue } from "../../src/station-catalogue.ts"
 import { defineStationRows } from "../../src/station-rows.ts"
@@ -521,7 +521,7 @@ async function observe(binding: Binding): Promise<Observation> {
 	const outer = envelopeOf(run)
 	const envelope = outer.result as Record<string, unknown>
 	const directEffectState = binding.lifecycleMode === undefined ? undefined : directDeadlineState(root, before as ReturnType<typeof readState>, binding)
-	const observation = { binding, tuple: stationIdOf({ commandIdentity: String(envelope.commandIdentity), outcome: String(envelope.outcome), causeCode: String(envelope.causeCode) }), envelope, exit: run.exit, ...(directEffectState === undefined ? {} : { directEffectState }) }
+	const observation = { binding, tuple: JSON.stringify([String(envelope.commandIdentity), String(envelope.outcome), String(envelope.causeCode)]), envelope, exit: run.exit, ...(directEffectState === undefined ? {} : { directEffectState }) }
 	observations.push(observation)
 	return observation
 }
@@ -576,18 +576,12 @@ function assertData(binding: Binding, envelope: Record<string, unknown>, signatu
 }
 
 describe("station catalogue", () => {
-	test("STATIONS enumerates the same tuples the independent oracle expects; no tuple is declared with two signatures", () => {
-		const declared = new Set(STATION_IDS)
+	test("STATIONS enumerates the same tuples the independent oracle expects; no tuple is declared twice", () => {
+		const declared = new Set<string>(STATIONS.map(stationIdOfRow))
 		const expected = new Set(EXPECTED_STATIONS.keys())
 		expect([...declared].filter((key) => !expected.has(key))).toEqual([])
 		expect([...expected].filter((key) => !declared.has(key))).toEqual([])
-		const collisions = STATION_IDS.filter((key) => {
-			const rows = declaredStation(key)
-			return new Set(rows.map((row) => `${row.transactionState}|${row.guidance}|${row.retryable}|${row.retryDelayMilliseconds}|${row.exit}|${row.effectClass}`)).size !== 1
-		})
-		expect(collisions).toEqual([])
-		expect(STATIONS.map((row) => stationIdOfRow(row)).every((key) => expected.has(key))).toBe(true)
-		expect(STATIONS).toHaveLength(STATION_IDS.length)
+		expect(STATIONS).toHaveLength(declared.size)
 		expect(() => defineStationRows([STATIONS[0] as (typeof STATIONS)[number], STATIONS[0] as (typeof STATIONS)[number]])).toThrow("duplicate station declaration")
 	})
 	test("every declaration matches the oracle's signature field by field", () => {
@@ -613,7 +607,7 @@ describe("station catalogue", () => {
 		expect(observations).toHaveLength(193)
 		const observed = new Set(observations.map((observation) => observation.tuple))
 		const boundTuples = new Set(BINDINGS.map((binding) => binding.tuple))
-		const declared = new Set(STATION_IDS)
+		const declared = new Set<string>(STATIONS.map(stationIdOfRow))
 		const expected = new Set(EXPECTED_STATIONS.keys())
 		const unreached = [...declared].filter((key) => !observed.has(key)).map((key) => `STATION_UNREACHED ${key}`)
 		const undeclared = [...observed].filter((key) => !declared.has(key)).map((key) => `STATION_UNDECLARED ${key}`)
