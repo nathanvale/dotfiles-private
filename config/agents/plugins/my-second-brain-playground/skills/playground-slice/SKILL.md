@@ -19,13 +19,15 @@ For an authorized note update under an existing Task, use this short route.
    `bun run list --family <family>`. Preserve the accepted Task and scope.
 2. For a missing session binding, use this installed playground plugin. Its
    root is `../..` from this SKILL.md's directory. Assign that resolved absolute
-   path to `PLUGIN_ROOT`. New work binds through
-   [beads-workflow](../beads-workflow/SKILL.md) and `bin/msb-workflow bind`.
-   Main and dev My Second Brain plugins are separate owners. Use the legacy
-   manual binding below only for a Task an already-adopted legacy project
-   still tracks in Agent Ledger; it is not the route for new adoption. That
-   legacy binding, run once from the configured playground root, returns its
-   control panel synchronously:
+   path to `PLUGIN_ROOT`. For a project that has adopted Beads, new work binds
+   through [beads-workflow](../beads-workflow/SKILL.md) and
+   `bin/msb-workflow bind`. Main and dev My Second Brain plugins are separate
+   owners. A vault-native project without an adopted execution store needs no
+   binding here. Use the legacy manual binding below only for a Task an
+   already-adopted legacy project still tracks in Agent Ledger; it is not the
+   route for new adoption, and it does not apply to a Beads-adopted or
+   vault-native project. That legacy binding, run once from the configured
+   playground root, returns its control panel synchronously:
 
    ```sh
    "${PLUGIN_ROOT}/hooks/recovery-checkpoint" bind projects/<project>/GOAL.md --agent-ledger /absolute/path/to/agent-ledger
@@ -43,8 +45,12 @@ For an authorized note update under an existing Task, use this short route.
    that gap; the caller's explicit goal still scopes independent note work.
    A refused bind is not permission to replace another owner's checkpoint.
    Continue from the returned control panel; after compaction, re-read the
-   goal. On refusal or uncertain context,
-   follow the configured vault's `docs/agents/recovery.md` before effects.
+   goal. On refusal or uncertain context, first resolve the project's declared
+   owner (Beads-adopted, already-adopted legacy Agent Ledger, or vault-native
+   with no adopted store) through the configured vault's
+   `docs/agents/project-maps.md`; only when that adoption status itself stays
+   uncertain, follow the configured vault's `docs/agents/recovery.md` before
+   effects.
 3. Before editing, use the Task's own store. For a Task tracked in Beads, read
    and claim it with native `bd` per [beads-workflow](../beads-workflow/SKILL.md).
    For a Task an already-adopted legacy project still tracks in Agent Ledger,
@@ -75,9 +81,14 @@ are not prerequisites for an existing Task's bounded note update.
 
 ## Recover the starting point
 
-For continuation after compaction, use the delivered control panel and read the
-goal for the next action. The full entry route below is for new work or a missing
-work binding; compaction alone does not require repeating it.
+For continuation after compaction, recover by the Task's declared owner and
+read the goal for the next action: a Beads Task recovers through
+`bin/msb-workflow` session binding and native `bd` state; an already-adopted
+legacy project continues from its delivered Agent Ledger control panel; a
+vault-native project without an adopted execution store has no installed
+checkpoint and recovers instead from its canonical `GOAL.md`, README, and
+latest proof. The full entry route below is for new work or a missing work
+binding; compaction alone does not require repeating it.
 
 - Resolve the synthetic vault from the caller or
   `~/.config/my-second-brain-playground/vault.json`. Read its `AGENTS.md`,
