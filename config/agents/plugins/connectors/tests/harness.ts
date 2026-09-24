@@ -40,8 +40,8 @@ export interface Harness {
 // Sole owner of "spawn a process and capture stdout/stderr/exit code";
 // every real-process runner in this file composes it instead of repeating
 // the Bun.spawn + Promise.all shape.
-async function spawnCapture(argv: string[], env: Record<string, string>, timeoutMs?: number): Promise<RunResult> {
-	const proc = Bun.spawn(argv, { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+async function spawnCapture(argv: string[], env: Record<string, string>, timeoutMs?: number, cwd?: string): Promise<RunResult> {
+	const proc = Bun.spawn(argv, { env, ...(cwd === undefined ? {} : { cwd }), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
 	const captured = Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	try {
@@ -215,9 +215,9 @@ export function createBundle(): Bundle {
 // Runs a bundle's own compiled binary (never the shared FRONT_DOOR path
 // directly), with a fully controlled HOME/PATH/TMPDIR so a schema fetch can
 // resolve a fake `mcporter` from binDir without touching any real network.
-export async function runBundle(bundle: Bundle, argv: string[], env: { home: string; binDir?: string; extraEnv?: Record<string, string>; timeoutMs?: number }): Promise<RunResult> {
+export async function runBundle(bundle: Bundle, argv: string[], env: { home: string; binDir?: string; extraEnv?: Record<string, string>; timeoutMs?: number; cwd?: string }): Promise<RunResult> {
 	const path_ = env.binDir ? `${env.binDir}:/usr/bin:/bin` : "/usr/bin:/bin";
-	return spawnCapture([bundle.binary, ...argv], { HOME: env.home, PATH: path_, TMPDIR: bundle.root, ...env.extraEnv }, env.timeoutMs);
+	return spawnCapture([bundle.binary, ...argv], { HOME: env.home, PATH: path_, TMPDIR: bundle.root, ...env.extraEnv }, env.timeoutMs, env.cwd);
 }
 
 // A PATH directory carrying only the fake mcporter (and the bun shebang

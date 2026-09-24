@@ -17,6 +17,7 @@ const CONTRACT_VERSION = "2.0.0";
 const AVAILABLE_PATHS = [
 	"connectors.config.show",
 	"connectors.config.validate",
+	"connectors.deps.repair.mcporter",
 	"connectors.discovery",
 	"connectors.dispatch",
 	"connectors.doctor",
@@ -251,7 +252,7 @@ describe("compiled front door: assertEnvelope rejects fabricated envelopes (unit
 	test("nonempty completed effects while transactionState is unchanged", () => {
 		const base = valid();
 		const envelope = { ...base, result: { ...base.result, effects: { ...base.result.effects, completed: ["effect.fake"] } } } as unknown as ReturnType<typeof valid>;
-		expect(() => assertEnvelope(envelope)).toThrow(/effects\.completed must be empty/);
+		expect(() => assertEnvelope(envelope)).toThrow(/unchanged result cannot report a completed effect/);
 	});
 
 	test("commandIdentity naming a command T1 does not admit", () => {

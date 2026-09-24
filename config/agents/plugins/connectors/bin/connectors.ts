@@ -14,6 +14,7 @@ import path from "node:path";
 import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
 import { discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
 import { safeEnvironment } from "./safe-environment.ts";
+import { ensureMcporter, lockRecovery, repairMcporter } from "./mcporter-custody.ts";
 
 const CONTRACT_VERSION = "2.0.0";
 const PROGRAM = "connectors";
@@ -24,13 +25,13 @@ const SIGNAL_EXITS = { "130": "SIGINT", "143": "SIGTERM" } as const;
 // once it is actually true, and drop it in the Ticket that stops excluding it.
 const EFFECT_EXCLUSIONS = [
 	"any real credential value or T5 custody access; fixture-auth only presents a nonsecret reference to a fixture-tested authority",
-	"any dependency install, setup, or MCPorter bootstrap",
+	"any dependency setup other than first-use MCPorter bootstrap",
 	"any provider write operation",
-	"setup, deps, real auth, or run (later Tickets own the complete production flows)",
+	"setup, other deps commands, real auth, or run (later Tickets own the complete production flows)",
 ] as const;
 
 // Exported: each appears in the exported Envelope's public signature.
-export type EffectClass = "inspect";
+export type EffectClass = "inspect" | "repository-local";
 export type Outcome = "success" | "refused" | "failed";
 export type FailureClass = "usage" | "internal" | "domain" | "schema" | "transient" | null;
 // INTERNAL_UNEXPECTED_UNCHANGED (not the _UNKNOWN cause), because every command
@@ -40,6 +41,14 @@ export type FailureClass = "usage" | "internal" | "domain" | "schema" | "transie
 // own unchanged/unknown split.
 export type CauseCode =
 	| "SUCCESS_UNCHANGED"
+	| "SUCCESS_BOOTSTRAPPED"
+	| "SUCCESS_MCPORTER_REPAIRED"
+	| "SUCCESS_MCPORTER_RECOVERED"
+	| "DOMAIN_MCPORTER_REPAIR_FAILED"
+	| "DOMAIN_MCPORTER_REPAIR_FAILED_AFTER_COMMIT"
+	| "DOMAIN_MCPORTER_RECOVERED_REPAIR_FAILED"
+	| "INTERNAL_MCPORTER_REPAIR_UNKNOWN"
+	| "INTERNAL_MCPORTER_SELECTION_UNKNOWN"
 	| "USAGE_UNKNOWN_COMMAND"
 	| "USAGE_MALFORMED_ARGUMENTS"
 	| "USAGE_CONNECTOR_UNKNOWN"
@@ -53,7 +62,18 @@ export type CauseCode =
 	| "DOMAIN_FIXTURE_AUTHORITY_UNAVAILABLE"
 	| "DOMAIN_FIXTURE_AUTH_REFUSED"
 	| "TRANSIENT_PROVIDER_UNREACHABLE"
-	| "INTERNAL_UNEXPECTED_UNCHANGED";
+	| "TRANSIENT_PROVIDER_AFTER_BOOTSTRAP"
+	| "TRANSIENT_PROVIDER_AFTER_RECOVERY"
+	| "DOMAIN_MCPORTER_REPAIR_REQUIRED"
+	| "DOMAIN_MCPORTER_REPAIR_AFTER_BOOTSTRAP"
+	| "DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY"
+	| "INTERNAL_UNEXPECTED_UNCHANGED"
+	| "INTERNAL_UNEXPECTED_AFTER_BOOTSTRAP"
+	| "INTERNAL_UNEXPECTED_AFTER_REPAIR";
+
+let bootstrapCompleted = false;
+let recoveryCompleted = false;
+let repairCompleted = false;
 
 interface CommandDescriptor {
 	readonly commandIdentity: string;
@@ -75,7 +95,8 @@ const COMMANDS: readonly CommandDescriptor[] = [
 	{ commandIdentity: "connectors.config.show", route: ["config", "show"], effectClass: "inspect", summary: "Show resolved nonsecret values and provenance; conflicting repeated selectors refuse" },
 	{ commandIdentity: "connectors.status", route: ["status"], effectClass: "inspect", summary: "Report truthful evidence state per connector" },
 	{ commandIdentity: "connectors.doctor", route: ["doctor"], effectClass: "inspect", summary: "Local readiness gate for one connector" },
-	{ commandIdentity: "connectors.schema", route: ["schema"], effectClass: "inspect", summary: "Fetch live schema evidence for one keyless connector" },
+	{ commandIdentity: "connectors.schema", route: ["schema"], effectClass: "repository-local", summary: "Fetch keyless schema, bootstrapping the pinned MCPorter on first use" },
+	{ commandIdentity: "connectors.deps.repair.mcporter", route: ["deps", "repair", "mcporter"], effectClass: "repository-local", summary: "Explicitly replace the selected MCPorter with a verified official release" },
 	{
 		commandIdentity: "connectors.fixtureAuth",
 		route: ["fixture-auth"],
@@ -104,7 +125,7 @@ export interface Envelope {
 		readonly repairAction: string | null;
 		readonly nextAction: string | null;
 		readonly effectClass: EffectClass;
-		readonly transactionState: "unchanged";
+		readonly transactionState: "unchanged" | "completed" | "unknown";
 		readonly causeCode: CauseCode;
 		readonly effects: {
 			readonly completed: readonly string[];
@@ -216,7 +237,7 @@ function checkDiagnostics(diagnostics: Envelope["diagnostics"]): string[] {
 interface CauseRow {
 	readonly outcome: Outcome;
 	readonly effectClass: EffectClass;
-	readonly transactionState: "unchanged";
+	readonly transactionState: "unchanged" | "completed" | "unknown";
 	readonly failureClass: FailureClass;
 	readonly exitCode: number;
 	readonly retryable: boolean;
@@ -232,6 +253,14 @@ interface CauseRow {
 // existing one.
 const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	SUCCESS_UNCHANGED: { outcome: "success", effectClass: "inspect", transactionState: "unchanged", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	SUCCESS_BOOTSTRAPPED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	SUCCESS_MCPORTER_REPAIRED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	SUCCESS_MCPORTER_RECOVERED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	DOMAIN_MCPORTER_REPAIR_FAILED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_MCPORTER_REPAIR_FAILED_AFTER_COMMIT: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_MCPORTER_RECOVERED_REPAIR_FAILED: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	INTERNAL_MCPORTER_REPAIR_UNKNOWN: { outcome: "failed", effectClass: "repository-local", transactionState: "unknown", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	INTERNAL_MCPORTER_SELECTION_UNKNOWN: { outcome: "failed", effectClass: "repository-local", transactionState: "unknown", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	USAGE_UNKNOWN_COMMAND: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	USAGE_MALFORMED_ARGUMENTS: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	USAGE_CONNECTOR_UNKNOWN: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
@@ -245,7 +274,14 @@ const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	DOMAIN_FIXTURE_AUTHORITY_UNAVAILABLE: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	DOMAIN_FIXTURE_AUTH_REFUSED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	TRANSIENT_PROVIDER_UNREACHABLE: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
+	TRANSIENT_PROVIDER_AFTER_BOOTSTRAP: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
+	TRANSIENT_PROVIDER_AFTER_RECOVERY: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_MCPORTER_REPAIR_REQUIRED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_MCPORTER_REPAIR_AFTER_BOOTSTRAP: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_UNEXPECTED_UNCHANGED: { outcome: "failed", effectClass: "inspect", transactionState: "unchanged", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	INTERNAL_UNEXPECTED_AFTER_BOOTSTRAP: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	INTERNAL_UNEXPECTED_AFTER_REPAIR: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 };
 
 // Scalar fields a cause row pins to one exact value; table-driven so this
@@ -290,7 +326,7 @@ function checkEffectsEmptyAndComplete(effects: Envelope["result"]["effects"]): s
 	const problems: string[] = [...checkExactKeys(effects, EFFECTS_KEYS, "result.effects")];
 	for (const key of ["completed", "remaining", "uncertain"] as const) {
 		if (!Array.isArray(effects[key])) problems.push(`result.effects.${key} must be an array`);
-		else if (effects[key].length > 0) problems.push(`result.effects.${key} must be empty; T1 never attempts an effect`);
+		else if (key === "completed" ? !["[]", '["mcporter-bootstrap"]', '["mcporter-repair"]', '["mcporter-recovery"]', '["mcporter-recovery","mcporter-repair"]'].includes(JSON.stringify(effects[key])) : key === "uncertain" ? !["[]", '["mcporter-repair"]', '["mcporter-recovery"]'].includes(JSON.stringify(effects[key])) : effects[key].length > 0) problems.push(`result.effects.${key} has an undeclared effect`);
 	}
 	if (effects.inventoryComplete !== true) problems.push("result.effects.inventoryComplete must be true for T1");
 	return problems;
@@ -303,6 +339,9 @@ export function assertEnvelope(envelope: Envelope): void {
 		...checkResultIdentity(envelope.result),
 		...checkCauseRow(envelope.result),
 		...checkEffectsEmptyAndComplete(envelope.result.effects),
+		...(envelope.result.transactionState === "completed" && envelope.result.effects.completed.length === 0 ? ["completed dependency effect requires its receipt"] : []),
+		...(envelope.result.transactionState === "unchanged" && envelope.result.effects.completed.length > 0 ? ["unchanged result cannot report a completed effect"] : []),
+		...(envelope.result.transactionState === "unknown" && envelope.result.effects.uncertain.length !== 1 ? ["unknown repair requires an uncertain effect"] : []),
 		...checkDataIsJsonSafe(envelope.result.data),
 		...checkDiagnostics(envelope.diagnostics),
 	];
@@ -311,15 +350,22 @@ export function assertEnvelope(envelope: Envelope): void {
 
 // Hand-verified, dependency-free fallback for the one path that must never
 // itself depend on assertEnvelope succeeding: if envelope construction or
-// validation throws anywhere above, this is what ships. T1 is inspect-only,
-// so a caught failure here always has zero attempted effects (never partial
-// or uncertain), independent of what specifically went wrong.
+// validation throws before an output attempt, this is what ships. Record
+// durable selection effects before envelope construction can fail.
 //
 // Deliberately takes no detail from the caught exception: `error.message`
 // is arbitrary text this front door does not control, and could echo a
 // secret-shaped argv value back through a thrown validation message. This
 // fallback's `diagnostics.detail` is always the same fixed, safe string.
+function completedSelectionEffects(): string[] {
+	if (repairCompleted) return recoveryCompleted ? ["mcporter-recovery", "mcporter-repair"] : ["mcporter-repair"];
+	if (bootstrapCompleted) return ["mcporter-bootstrap"];
+	if (recoveryCompleted) return ["mcporter-recovery"];
+	return [];
+}
+
 export function buildInternalFailureEnvelope(): Envelope {
+	const completed = completedSelectionEffects();
 	return {
 		envelopeVersion: 2,
 		contractVersion: CONTRACT_VERSION,
@@ -335,10 +381,10 @@ export function buildInternalFailureEnvelope(): Envelope {
 			retryable: false,
 			repairAction: "Report this internal error; the requested command was not completed",
 			nextAction: "connectors.help",
-			effectClass: "inspect",
-			transactionState: "unchanged",
-			causeCode: "INTERNAL_UNEXPECTED_UNCHANGED",
-			effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+			effectClass: completed.length > 0 ? "repository-local" : "inspect",
+			transactionState: completed.length > 0 ? "completed" : "unchanged",
+			causeCode: repairCompleted ? "INTERNAL_UNEXPECTED_AFTER_REPAIR" : bootstrapCompleted || recoveryCompleted ? "INTERNAL_UNEXPECTED_AFTER_BOOTSTRAP" : "INTERNAL_UNEXPECTED_UNCHANGED",
+			effects: { completed, remaining: [], uncertain: [], inventoryComplete: true },
 		},
 		diagnostics: { detail: FIXED_INTERNAL_DIAGNOSTIC_DETAIL },
 	};
@@ -414,6 +460,7 @@ function helpText(): string {
 		"  status [connector]                              Report truthful evidence state",
 		"  doctor <connector>                              Local readiness gate for one connector",
 		"  schema <connector>                               Fetch live schema evidence for one keyless connector",
+		"  deps repair mcporter                             Explicitly replace selected MCPorter after mismatch",
 		"",
 		"Examples:",
 		`  ${PROGRAM} --discover --json`,
@@ -506,7 +553,7 @@ function manifestErrorCause(error: ManifestError): CauseCode {
 	}
 }
 
-function emitSuccess(commandIdentity: string, message: string, data: Record<string, unknown>, nextAction: string): void {
+function emitSuccess(commandIdentity: string, message: string, data: Record<string, unknown>, nextAction: string, bootstrapped = false, recovered = false): void {
 	emit({
 		envelopeVersion: 2,
 		contractVersion: CONTRACT_VERSION,
@@ -522,10 +569,10 @@ function emitSuccess(commandIdentity: string, message: string, data: Record<stri
 			retryable: false,
 			repairAction: null,
 			nextAction,
-			effectClass: "inspect",
-			transactionState: "unchanged",
-			causeCode: "SUCCESS_UNCHANGED",
-			effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+			effectClass: bootstrapped || recovered ? "repository-local" : "inspect",
+			transactionState: bootstrapped || recovered ? "completed" : "unchanged",
+			causeCode: bootstrapped ? "SUCCESS_BOOTSTRAPPED" : recovered ? "SUCCESS_MCPORTER_RECOVERED" : "SUCCESS_UNCHANGED",
+			effects: { completed: bootstrapped ? ["mcporter-bootstrap"] : recovered ? ["mcporter-recovery"] : [], remaining: [], uncertain: [], inventoryComplete: true },
 		},
 	});
 }
@@ -533,7 +580,7 @@ function emitSuccess(commandIdentity: string, message: string, data: Record<stri
 // Composes with ADMITTED_CAUSE_ROWS so every call site's outcome, failure
 // class, exit code, and retryability come from the one table, never a second
 // hand-typed copy that could drift from it.
-function emitRefusal(commandIdentity: string, message: string, causeCode: CauseCode, repairAction: string, nextAction: string): void {
+function emitRefusal(commandIdentity: string, message: string, causeCode: CauseCode, repairAction: string, nextAction: string, bootstrapped = false, recovered = false): void {
 	const row = ADMITTED_CAUSE_ROWS[causeCode];
 	emit({
 		envelopeVersion: 2,
@@ -550,16 +597,72 @@ function emitRefusal(commandIdentity: string, message: string, causeCode: CauseC
 			retryable: row.retryable,
 			repairAction,
 			nextAction,
-			effectClass: "inspect",
-			transactionState: "unchanged",
+			effectClass: bootstrapped || recovered ? "repository-local" : "inspect",
+			transactionState: bootstrapped || recovered ? "completed" : "unchanged",
 			causeCode,
-			effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+			effects: { completed: bootstrapped ? ["mcporter-bootstrap"] : recovered ? ["mcporter-recovery"] : [], remaining: [], uncertain: [], inventoryComplete: true },
 		},
 	});
 }
 
 function usageMalformed(commandIdentity: string, usage: string): void {
 	emitRefusal(commandIdentity, `${PROGRAM}: usage: ${usage}`, "USAGE_MALFORMED_ARGUMENTS", `Run ${PROGRAM} ${usage}`, "connectors.list");
+}
+
+function repairFailureEffects(effect: string): string[] {
+	if (effect === "unknown") return [];
+	if (effect === "recovered-and-completed") return ["mcporter-recovery", "mcporter-repair"];
+	return [effect === "recovered" ? "mcporter-recovery" : "mcporter-repair"];
+}
+
+function repairFailureAction(cause: string, uncertain: boolean): string {
+	if (cause === "selection-lock-failed") return lockRecovery;
+	return uncertain ? "Inspect the selected MCPorter state before another repair" : "Inspect the selected MCPorter revision before retrying repair";
+}
+
+function emitMcporterRepairFailure(result: Extract<Awaited<ReturnType<typeof repairMcporter>>, { ok: false }>): void {
+	if (result.effect === "unchanged") {
+		emitRefusal("connectors.deps.repair.mcporter", `${PROGRAM}: MCPorter ${result.cause}`, "DOMAIN_MCPORTER_REPAIR_FAILED", "Retry connectors deps repair mcporter after checking local release availability", "connectors.doctor");
+		return;
+	}
+	const uncertain = result.effect === "unknown";
+	const recovered = result.effect === "recovered";
+	emit({ envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message: `${PROGRAM}: MCPorter ${result.cause}`, availablePaths: AVAILABLE_PATHS,
+		result: { runId: runId(), commandIdentity: "connectors.deps.repair.mcporter", outcome: "failed", failureClass: uncertain ? "internal" : "domain",
+			exitCode: uncertain ? 1 : 3, data: null, retryable: false,
+			repairAction: repairFailureAction(result.cause, uncertain),
+			nextAction: "connectors.doctor", effectClass: "repository-local", transactionState: uncertain ? "unknown" : "completed",
+			causeCode: uncertain ? "INTERNAL_MCPORTER_REPAIR_UNKNOWN" : recovered ? "DOMAIN_MCPORTER_RECOVERED_REPAIR_FAILED" : "DOMAIN_MCPORTER_REPAIR_FAILED_AFTER_COMMIT",
+			effects: { completed: repairFailureEffects(result.effect), remaining: [], uncertain: uncertain ? ["mcporter-repair"] : [], inventoryComplete: true } } });
+}
+
+async function handleMcporterRepair(args: readonly string[]): Promise<void> {
+	if (args.length !== 0) {
+		usageMalformed("connectors.deps.repair.mcporter", "deps repair mcporter");
+		return;
+	}
+	const result = await repairMcporter(process.env);
+	if (!result.ok) {
+		recoveryCompleted = result.effect === "recovered" || result.effect === "recovered-and-completed";
+		repairCompleted = result.effect === "completed" || result.effect === "recovered-and-completed";
+		emitMcporterRepairFailure(result);
+		return;
+	}
+	recoveryCompleted = result.recovered;
+	repairCompleted = true;
+	emit({
+		envelopeVersion: 2,
+		contractVersion: CONTRACT_VERSION,
+		message: "Selected MCPorter repaired from verified official release",
+		availablePaths: AVAILABLE_PATHS,
+		result: {
+			runId: runId(), commandIdentity: "connectors.deps.repair.mcporter", outcome: "success", failureClass: null,
+			exitCode: 0, data: { version: "0.14.0" }, retryable: false, repairAction: null,
+			nextAction: "connectors.schema", effectClass: "repository-local", transactionState: "completed",
+			causeCode: "SUCCESS_MCPORTER_REPAIRED",
+			effects: { completed: result.recovered ? ["mcporter-recovery", "mcporter-repair"] : ["mcporter-repair"], remaining: [], uncertain: [], inventoryComplete: true },
+		},
+	});
 }
 
 function handleList(): void {
@@ -929,6 +1032,24 @@ async function handleSchema(args: readonly string[]): Promise<void> {
 	// (and a test) can confirm this reached the connector's real declared
 	// tools, not merely an opaque success.
 	const allowedTools = registry.mcpServers?.[server]?.allowedTools ?? [];
+	await fetchKeylessSchema(id, manifest.registryPath, server, allowedTools);
+}
+
+function emitSelectionFailure(selection: Extract<Awaited<ReturnType<typeof ensureMcporter>>, { ok: false }>): void {
+	bootstrapCompleted = selection.bootstrapped === true;
+	recoveryCompleted = selection.recovered === true;
+	if (selection.uncertain) {
+		emit({ envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message: `${PROGRAM}: MCPorter recovery outcome requires inspection`, availablePaths: AVAILABLE_PATHS,
+			result: { runId: runId(), commandIdentity: "connectors.schema", outcome: "failed", failureClass: "internal", exitCode: 1,
+				data: null, retryable: false, repairAction: "Inspect current and previous MCPorter revisions before retrying", nextAction: "connectors.doctor",
+				effectClass: "repository-local", transactionState: "unknown", causeCode: "INTERNAL_MCPORTER_SELECTION_UNKNOWN",
+				effects: { completed: recoveryCompleted ? ["mcporter-recovery"] : [], remaining: [], uncertain: [recoveryCompleted ? "mcporter-repair" : "mcporter-recovery"], inventoryComplete: true } } });
+		return;
+	}
+	emitRefusal("connectors.schema", `${PROGRAM}: MCPorter ${selection.cause}`, bootstrapCompleted ? "DOMAIN_MCPORTER_REPAIR_AFTER_BOOTSTRAP" : recoveryCompleted ? "DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY" : "DOMAIN_MCPORTER_REPAIR_REQUIRED", selection.repair, "connectors.doctor", bootstrapCompleted, recoveryCompleted);
+}
+
+async function fetchKeylessSchema(id: string, registryPath: string, server: string, allowedTools: readonly string[]): Promise<void> {
 	// Matches bin/provider-route.ts's own guarded MCPorter invocation exactly:
 	// a scrubbed environment (only the safe allow-list crosses, plus the
 	// keepalive suppression), mcporter resolved only through that same
@@ -936,12 +1057,14 @@ async function handleSchema(args: readonly string[]): Promise<void> {
 	// unguarded resolution could pick up), and a forced --no-oauth so this
 	// keyless-only command can never fall into an interactive auth prompt.
 	const routeEnv: Record<string, string> = { MCPORTER_NO_KEEPALIVE: "*", ...safeEnvironment(process.env) };
-	const mcporter = Bun.which("mcporter", { PATH: routeEnv.PATH ?? "" });
-	if (!mcporter) {
-		emitRefusal("connectors.schema", `${PROGRAM}: mcporter is not available on PATH`, "TRANSIENT_PROVIDER_UNREACHABLE", "Install mcporter, or run connectors setup once it exists", "connectors.doctor");
+	const selection = await ensureMcporter(process.env);
+	if (!selection.ok) {
+		emitSelectionFailure(selection);
 		return;
 	}
-	const proc = Bun.spawn([mcporter, "--config", manifest.registryPath, "list", server, "--json", "--no-oauth"], { env: routeEnv, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+	bootstrapCompleted = selection.bootstrapped;
+	recoveryCompleted = selection.recovered === true;
+	const proc = Bun.spawn([selection.binary, "--config", registryPath, "list", server, "--json", "--no-oauth"], { env: routeEnv, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
 	// Both pipes must drain concurrently: awaiting only stdout+exited while
 	// stderr sits unread lets a noisy child fill the OS pipe buffer, block on
 	// its own write, and never reach exit. The drained stderr text is
@@ -949,7 +1072,7 @@ async function handleSchema(args: readonly string[]): Promise<void> {
 	// or stderr.
 	const [stdout, , exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
 	if (exitCode !== 0) {
-		emitRefusal("connectors.schema", `${PROGRAM}: ${id} schema fetch did not complete`, "TRANSIENT_PROVIDER_UNREACHABLE", "Retry; this attempted no write and is safe to repeat", "connectors.doctor");
+		emitRefusal("connectors.schema", `${PROGRAM}: ${id} schema fetch did not complete`, selection.bootstrapped ? "TRANSIENT_PROVIDER_AFTER_BOOTSTRAP" : recoveryCompleted ? "TRANSIENT_PROVIDER_AFTER_RECOVERY" : "TRANSIENT_PROVIDER_UNREACHABLE", "Retry the schema request", "connectors.doctor", selection.bootstrapped, recoveryCompleted);
 		return;
 	}
 	let parsed: unknown;
@@ -958,10 +1081,14 @@ async function handleSchema(args: readonly string[]): Promise<void> {
 	} catch {
 		parsed = { raw: stdout };
 	}
-	emitSuccess("connectors.schema", `schema evidence fetched for ${id}`, { connector: id, server, allowedTools, schema: parsed }, "connectors.status");
+	emitSuccess("connectors.schema", `schema evidence fetched for ${id}`, { connector: id, server, allowedTools, schema: parsed }, "connectors.status", selection.bootstrapped, recoveryCompleted);
 }
 
 async function dispatchCommand(args: readonly string[]): Promise<void> {
+	if (args[0] === "deps" && args[1] === "repair" && args[2] === "mcporter") {
+		await handleMcporterRepair(args.slice(3));
+		return;
+	}
 	if (args[0] === "list") {
 		handleList();
 		return;

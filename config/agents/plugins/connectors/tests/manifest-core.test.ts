@@ -4,7 +4,7 @@
 // real child process. Expected values are independent literals, never
 // re-derived from bin/connectors.ts's own envelope-building code.
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createBundle, createFakeMcporterBinDir, runBundle } from "./harness.ts";
 
@@ -491,119 +491,103 @@ describe("connectors schema: Spec AC20 contribution (Context7 and Firecrawl reac
 	};
 	const NOISY_STDERR_BYTES = 2_097_152;
 
+	const official = process.env.CONNECTORS_OFFICIAL_RELEASE_FIXTURE;
+	function releaseEnv(root: string): Record<string, string> {
+		if (!official) throw new Error("CONNECTORS_OFFICIAL_RELEASE_FIXTURE must name verified official MCPorter fixture bytes");
+		return { XDG_STATE_HOME: root, CONNECTORS_TEST_RELEASE_DIR: official };
+	}
+
 	test("drains more than pipe capacity from MCPorter stderr and returns one clean schema envelope", async () => {
 		const bundle = createBundle();
-		const mcporterBin = createFakeMcporterBinDir();
+		const hostile = createFakeMcporterBinDir();
 		const sentinel = "SENTINEL_PRIVATE_CREDENTIAL_VALUE";
 		try {
+			bundle.addSkill("keyless-fixture-skill");
 			writeFileSync(path.join(bundle.root, "mcporter-noisy-stderr-request.json"), JSON.stringify({ bytes: NOISY_STDERR_BYTES }));
-			const result = await runBundle(bundle, ["schema", "context7"], {
+			const result = await runBundle(bundle, ["schema", "keyless-fixture-skill"], {
 				home: bundle.root,
-				binDir: mcporterBin.binDir,
-				timeoutMs: 10_000,
-				extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel, AMBIENT_SENTINEL: sentinel },
+				binDir: hostile.binDir,
+				timeoutMs: 30_000,
+				extraEnv: { ...releaseEnv(bundle.root), OP_SERVICE_ACCOUNT_TOKEN: sentinel, AMBIENT_SENTINEL: sentinel },
 			});
 			expect(result.code).toBe(0);
 			expect(result.stderr).toBe("");
+			expect(result.stdout.trim().split("\n")).toHaveLength(1);
 			expect(result.stdout).not.toContain(sentinel);
 			const envelope = JSON.parse(result.stdout);
-			expect(envelope.envelopeVersion).toBe(2);
-			expect(envelope.message).toBe("schema evidence fetched for context7");
-			expect(envelope.result).toEqual({
-				runId: expect.stringMatching(/^run-[0-9a-f-]{36}$/),
-				commandIdentity: "connectors.schema",
-				outcome: "success",
-				failureClass: null,
-				exitCode: 0,
-				data: {
-					connector: "context7",
-					server: "context7",
-					allowedTools: ["resolve-library-id", "query-docs"],
-					schema: { fake: true, kind: "http", server: "context7", url: "https://mcp.context7.com/mcp" },
-				},
-				retryable: false,
-				repairAction: null,
-				nextAction: "connectors.status",
-				effectClass: "inspect",
-				transactionState: "unchanged",
-				causeCode: "SUCCESS_UNCHANGED",
-				effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
-			});
-			const receipt = JSON.parse(readFileSync(path.join(bundle.root, "mcporter.json"), "utf8"));
-			expect(receipt.kind).toBe("http");
-			expect(receipt.argv.slice(-4)).toEqual(["list", "context7", "--json", "--no-oauth"]);
-			expect(receipt.env.MCPORTER_NO_KEEPALIVE).toBe("*");
-			expect(receipt.env).not.toHaveProperty("OP_SERVICE_ACCOUNT_TOKEN");
-			expect(receipt.env).not.toHaveProperty("AMBIENT_SENTINEL");
+			expect(envelope.result.commandIdentity).toBe("connectors.schema");
+			expect(envelope.result.causeCode).toBe("SUCCESS_BOOTSTRAPPED");
+			expect(envelope.result.effects.completed).toEqual(["mcporter-bootstrap"]);
+			expect(envelope.result.data.allowedTools).toEqual(["probe"]);
+			expect(JSON.stringify(envelope.result.data.schema)).toContain("probe");
 			expect(JSON.parse(readFileSync(path.join(bundle.root, "mcporter-noisy-stderr-receipt.json"), "utf8"))).toEqual({ bytesWritten: NOISY_STDERR_BYTES });
+			expect(readFileSync(path.join(bundle.root, "probe-spawned"), "utf8")).toBe("spawned\n");
+			expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
 		} finally {
-			mcporterBin.dispose();
+			hostile.dispose();
 			bundle.dispose();
 		}
-	});
+	}, 30_000);
 
-	test("reaches Context7 and Firecrawl through the identical generic code path, unbypassed by any connector-name branch", async () => {
+	test("keeps Context7 and Firecrawl exact registries while the generic schema path uses selected MCPorter", async () => {
 		const bundle = createBundle();
-		const mcporterBin = createFakeMcporterBinDir();
+		const hostile = createFakeMcporterBinDir();
 		try {
+			const home = path.join(bundle.root, "hostile-home");
+			const cwd = path.join(bundle.root, "hostile-cwd");
+			mkdirSync(home); mkdirSync(cwd);
+			const ambientRegistry = JSON.stringify({ imports: ["ambient-import"], mcpServers: { "keyless-fixture-skill": { baseUrl: "http://127.0.0.1:1/hostile", allowedTools: ["ambient-tool"] } } });
+			writeFileSync(path.join(home, "mcporter.json"), ambientRegistry);
+			writeFileSync(path.join(cwd, "mcporter.json"), ambientRegistry);
+			writeFileSync(path.join(hostile.binDir, "mcporter"), '#!/bin/sh\nprintf "called\\n" > "$TMPDIR/ambient-shim-called"\nexit 91\n');
 			expect(Object.keys(REAL_KEYLESS_CONNECTORS)).toEqual(["context7", "firecrawl"]);
 			for (const [id, expected] of Object.entries(REAL_KEYLESS_CONNECTORS)) {
-				const result = await runBundle(bundle, ["schema", id], { home: bundle.root, binDir: mcporterBin.binDir });
-				const envelope = JSON.parse(result.stdout);
-				expect(result.code).toBe(0);
-				expect(result.stderr).toBe("");
-				expect(envelope.result.outcome).toBe("success");
-				expect(envelope.result.data.connector).toBe(id);
-				expect(envelope.result.data.server).toBe(id);
-				expect(envelope.result.data.allowedTools).toEqual(expected.allowedTools);
-				// mcporter-fake.ts's documented http-branch contract (unmodified
-				// shared test infrastructure, not this Ticket's own code): its
-				// stdout is exactly {fake:true, kind:"http", server, url}, so the
-				// live envelope's schema field is checked against that exact
-				// external shape, not merely "is an object".
-				expect(envelope.result.data.schema).toEqual({ fake: true, kind: "http", server: id, url: expected.url });
-				// The fake mcporter's own receipt (an observable process fact,
-				// independent of connectors.ts) proves this run actually spawned
-				// a process against the connector's real declared endpoint,
-				// through the identical schema() code path for both ids.
-				const receipt = JSON.parse(await Bun.file(`${bundle.root}/mcporter.json`).text());
-				expect(receipt.kind).toBe("http");
-				expect(receipt.url).toBe(expected.url);
-				expect(receipt.argv).toContain("--config");
-				expect(receipt.argv.some((token: string) => token.endsWith(`/skills/${id}/config/mcporter.json`))).toBe(true);
+				const registry = JSON.parse(readFileSync(path.join(bundle.skillsRoot, id, "config", "mcporter.json"), "utf8"));
+				expect(registry.imports).toEqual([]);
+				expect(Object.keys(registry.mcpServers)).toEqual([id]);
+				expect(registry.mcpServers[id].baseUrl).toBe(expected.url);
+				expect(registry.mcpServers[id].allowedTools).toEqual(expected.allowedTools);
+				const validation = await runBundle(bundle, ["config", "validate", id], { home: bundle.root });
+				expect(validation.code).toBe(0);
+				expect(validation.stderr).toBe("");
 			}
+			bundle.addSkill("keyless-fixture-skill");
+			const result = await runBundle(bundle, ["schema", "keyless-fixture-skill"], { home, cwd, binDir: hostile.binDir, extraEnv: releaseEnv(bundle.root), timeoutMs: 30_000 });
+			expect(result.code).toBe(0);
+			expect(result.stderr).toBe("");
+			const data = JSON.parse(result.stdout).result.data;
+			expect(data.connector).toBe("keyless-fixture-skill");
+			expect(data.server).toBe("keyless-fixture-skill");
+			expect(data.allowedTools).toEqual(["probe"]);
+			expect(JSON.stringify(data.schema)).toContain('"name":"probe"');
+			expect(JSON.stringify(data.schema)).not.toContain("ambient-tool");
+			expect(readFileSync(path.join(bundle.root, "probe-spawned"), "utf8")).toBe("spawned\n");
+			expect(existsSync(path.join(bundle.root, "ambient-shim-called"))).toBe(false);
+			expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
 		} finally {
-			mcporterBin.dispose();
+			hostile.dispose();
 			bundle.dispose();
 		}
-	});
+	}, 30_000);
 
 	test("reaches a manifest-only keyless fixture Skill through the same generic path via a real stdio child", async () => {
 		const bundle = createBundle();
-		const mcporterBin = createFakeMcporterBinDir();
+		const hostile = createFakeMcporterBinDir();
 		try {
 			bundle.addSkill("keyless-fixture-skill");
-			const result = await runBundle(bundle, ["schema", "keyless-fixture-skill"], { home: bundle.root, binDir: mcporterBin.binDir });
-			const envelope = JSON.parse(result.stdout);
+			const result = await runBundle(bundle, ["schema", "keyless-fixture-skill"], { home: bundle.root, binDir: hostile.binDir, extraEnv: releaseEnv(bundle.root), timeoutMs: 30_000 });
 			expect(result.code).toBe(0);
 			expect(result.stderr).toBe("");
+			const envelope = JSON.parse(result.stdout);
 			expect(envelope.result.data.connector).toBe("keyless-fixture-skill");
-			// Independent literal, hand-copied from the checked-in fixture's own
-			// config/mcporter.json, not read from disk at test time: its one
-			// declared tool name.
 			expect(envelope.result.data.allowedTools).toEqual(["probe"]);
-			// Independent of connectors.ts's own output: the fake mcporter's own
-			// receipt proves it actually spawned the fixture's declared stdio
-			// child (never an http branch, never a different server), through
-			// the identical schema() code path used for context7/firecrawl above.
-			const receipt = JSON.parse(await Bun.file(`${bundle.root}/mcporter.json`).text());
-			expect(receipt.kind).toBe("stdio");
-			expect(receipt.command.endsWith("/skills/stdio-probe-server.ts")).toBe(true);
+			expect(readFileSync(path.join(bundle.root, "probe-spawned"), "utf8")).toBe("spawned\n");
+			expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
 		} finally {
-			mcporterBin.dispose();
+			hostile.dispose();
 			bundle.dispose();
 		}
-	});
+	}, 30_000);
 
 	test("refuses for a credential-bearing connector with a clear domain cause, never a silent or crashed attempt", async () => {
 		const bundle = createBundle();

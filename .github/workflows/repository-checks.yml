@@ -68,6 +68,24 @@ jobs:
       - name: Prepare root and independently locked dependencies
         id: preparation
         run: bun run prepare:check -- --receipt-dir "$RUNNER_TEMP/dotfiles-preparation"
+      - name: Prepare the official MCPorter process fixture
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_dir="$RUNNER_TEMP/connectors-mcporter-release"
+          mkdir -m 0700 "$fixture_dir"
+          curl --fail --location --silent --show-error \
+            'https://github.com/openclaw/mcporter/releases/download/v0.14.0/mcporter_0.14.0_darwin_arm64.tar.gz' \
+            --output "$fixture_dir/mcporter_0.14.0_darwin_arm64.tar.gz"
+          curl --fail --location --silent --show-error \
+            'https://github.com/openclaw/mcporter/releases/download/v0.14.0/provenance.json' \
+            --output "$fixture_dir/provenance.json"
+          printf '%s  %s\n' \
+            '4e4a0c579219ffc0da07ed95196c2c25f278b0d432d232c9554ee43118f5150b' \
+            "$fixture_dir/mcporter_0.14.0_darwin_arm64.tar.gz" \
+            '7a4256c6a3a921e2319386c3142ec33b4f0b5d693af5c652fe97ee884f30f2ab' \
+            "$fixture_dir/provenance.json" | shasum -a 256 -c -
+          printf 'CONNECTORS_OFFICIAL_RELEASE_FIXTURE=%s\n' "$fixture_dir" >> "$GITHUB_ENV"
       - name: Run the complete repository gate
         run: bun run check
       - name: Check the audit's public shell processes
