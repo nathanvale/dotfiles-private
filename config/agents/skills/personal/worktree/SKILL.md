@@ -1,15 +1,12 @@
 ---
 name: worktree
-description: "WorkTree: inspect, render, and open shared git worktree projects."
+description: "WorkTree: create, remove, prune, inspect, or render git worktrees; sync, focus, or open VS Code workspaces and Codex App projects across shared repo-local worktrees; choose the next worktree action."
 role: tool-workflow
 ---
 
 # WorkTree
 
-Triggers: render/sync/focus/color/open VS Code workspaces across git worktrees.
-Triggers: open Codex App projects from shared repo-local worktrees.
-Triggers: create/remove/prune worktrees through the `worktree` workflow entry point.
-Triggers: inspect current WorkTree state or choose the next worktree action.
+Create, remove, and prune worktrees through the `worktree` workflow entry point.
 
 Do not hand-edit the generated `.code-workspace`. Edit the registry; let `worktree` render.
 Do not shell out to old worktree wrappers. `worktree` calls the shared `.agents/runtime/agent-worktree` library.

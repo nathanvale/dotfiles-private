@@ -136,8 +136,7 @@ actions are exposed. Check Stream Deck's `MCP Actions` profile and descriptions.
   tools when configured and Stream Deck is running.
 - `mcporter call elgato.streamdeck__get_executable_actions --args '{}' --timeout 15000`
   returns action data or `{"actions":[]}`.
-- For broken MCP state, run `bun run skills/mcp-doctor/scripts/mcp-doctor.ts --json`
-  from the `claude-code-config` repo root.
+- For broken MCP state, run the `mcp-doctor` skill's `scripts/mcp-doctor.ts --json`.
 
 ## Next Safe Actions
 

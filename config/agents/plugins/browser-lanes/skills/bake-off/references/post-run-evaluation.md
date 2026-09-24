@@ -6,7 +6,7 @@ and observed results. Evaluation after Stop is report-only; it authorizes no
 browser action, retry, reset, or worker release.
 
 Use the current coordinator or executing agent. Add no default reviewer pool.
-Return at most 200 words plus evidence paths:
+Return a short handback the coordinator can scan, plus evidence paths:
 
 - Outcome: success assertions, completed and uncertain effects, cleanup limits.
 - Friction: failed steps, fallbacks, repeated reads, user interventions, and

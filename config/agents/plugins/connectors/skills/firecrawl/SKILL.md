@@ -7,8 +7,6 @@ description: Search and scrape public web pages through the plugin's MCPorter-ba
 
 Use the shared Bun launcher at `../../bin/provider-route.ts`, resolved from this skill directory. The keyless hosted route exposes only `firecrawl_search` and `firecrawl_scrape`.
 
-The plugin also ships a compiled front door at `../../bin/connectors`, resolved from this same skill directory, no global command and no dotfiles path required. It answers only `--discover --json`, `--help`, and `--help --json` today; it does not yet carry this skill's operations, which still go through the launcher above.
-
 1. Discover the live schema with `bun <plugin-root>/bin/provider-route.ts firecrawl -- list --schema --json`.
 2. Start with `firecrawl_search` for an unknown URL; use a small `limit` and fetch content only when the question needs it.
 3. Use `firecrawl_scrape` for one known public URL. Bound follow-up URLs and explain when a page cannot be fetched.

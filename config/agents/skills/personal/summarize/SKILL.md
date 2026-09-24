@@ -27,14 +27,7 @@ metadata:
 
 Fast CLI to summarize URLs, local files, and YouTube links.
 
-## When to use (trigger phrases)
-
-Use this skill immediately when the user asks any of:
-
-- "use summarize.sh"
-- "what's this link/video about?"
-- "summarize this URL/article"
-- "transcribe this YouTube/video" (best-effort transcript extraction; no `yt-dlp` needed)
+YouTube transcript extraction is best-effort and needs no `yt-dlp`.
 
 ## Quick start
 
@@ -81,7 +74,7 @@ Default model is `auto`; config may choose the provider/model.
 Optional config file: `~/.summarize/config.json`
 
 ```json
-{ "model": "openai/gpt-5.2" }
+{ "model": "<provider>/<model>" }
 ```
 
 Optional services:

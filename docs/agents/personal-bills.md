@@ -11,19 +11,13 @@
 
 ## Orchestrate
 
-1. Keep root on Sol / High. Root owns intent, decomposition, route choice,
-   verification, escalation, and acceptance.
-2. Select the smallest delivery route before task tools:
-   - `solo`: default for work root can complete and verify directly.
-   - `luna`: delegate one complete, bounded, fully specified unit to a fresh
-     `default` agent with `fork_turns: none`, model `gpt-5.6-luna`, and effort
-     `xhigh`.
-   - `terra`: delegate one complete judgment-heavy or high-risk unit to a fresh
-     `default` agent with `fork_turns: none`, model `gpt-5.6-terra`, and effort
-     `high`.
-   - `review`: after root verification, spawn a fresh
-     `sol_advisor_sol_reviewer` with `fork_turns: none` when Nathan requests a
-     review or independent scrutiny would materially reduce risk.
+1. Root owns intent, decomposition, route choice, verification, escalation,
+   and acceptance.
+2. Work solo by default. Delegate only one complete, bounded, fully specified
+   unit to a fresh worker with no forked history; request an independent
+   review after root verification when Nathan asks or scrutiny would
+   materially reduce risk. Model and effort per role come from the harness's
+   agent configuration.
 3. Use one auxiliary at a time. Use more only when Nathan explicitly requests
    independent parallel reviews and their scopes do not overlap. Make delegated
    work substitute for root work.

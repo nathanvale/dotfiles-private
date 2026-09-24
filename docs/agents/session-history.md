@@ -59,10 +59,9 @@ state through Codex; preserve its database rather than editing SQL rows.
   evidence outside dotfiles; session titles can contain personal or employer details.
 - Recheck metadata and files when refreshing. Index presence does not prove that
   a rollout exists, and a Scratch location does not prove native archive state.
-- The current picker adapter's ordinary `snapshot` command replaces its cache
-  and caps it at 200 entries. This task expanded the existing snapshot from the
-  full metadata inventory and verified file-only headers; the adapter itself
-  is unchanged. Ordinary refresh will discard that broader coverage.
+- The picker's ordinary `snapshot` command replaces its cache and caps it at
+  200 entries, discarding full-inventory coverage. Use the full-refresh
+  procedure below when the register must stay complete.
 - For another full refresh, reconcile the local Codex metadata, local rollout
   paths, and every Scratch batch. Deduplicate by UUID, exclude explicit subagents
   and the current session, and preserve unknown dates and titles as unknown.
@@ -75,10 +74,7 @@ state through Codex; preserve its database rather than editing SQL rows.
 - Nathan owns retention. Keep the register while Scratch history is retained;
   private worker receipts can be removed after acceptance. Preserve session originals.
 
-## Change and rollback
-
-This guide and its discovery pointers live in the dotfiles repository. They
-change no picker code.
+## Snapshot rollback
 
 The previous snapshot is preserved at
 `~/.local/state/session-picker/recovery-20260910/snapshot-before.json`.

@@ -97,7 +97,7 @@ they introduce no separate repair worker pool, queue, or retry engine.
    accepted revision. Until promotion succeeds, report the candidate's status
    and preserve the prior verified revision with its known limitations.
 
-Return at most 200 words plus evidence paths: selected recipe/revision, task
+Return a short handback the coordinator can scan, plus evidence paths: selected recipe/revision, task
 outcome, completed and uncertain effects, repair/acceptance state, cleanup, and
 next safe action. Report unavailable acceptance or promotion as pending; never
 imply a repaired candidate has replaced the verified recipe.

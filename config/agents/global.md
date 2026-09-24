@@ -1,4 +1,4 @@
-g# Personal Agent Instructions
+# Personal Agent Instructions
 
 ## Nathan
 

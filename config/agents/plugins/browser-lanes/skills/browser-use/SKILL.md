@@ -1,6 +1,6 @@
 ---
 name: browser-use
-description: "Route browser automation through a declared profile lane, hand tab admission to the human, and choose Agent Browser, Playwright, Puppeteer, or Chrome DevTools. Use before browser interaction, tab-access diagnosis, or CDP-engine selection on Nathan's machine."
+description: "Route browser automation through a declared profile lane, hand tab admission to the human, and choose Agent Browser, Playwright, Puppeteer, or Chrome DevTools. Use before browser interaction, tab-access diagnosis, or CDP-engine selection on Nathan's machine. Not for the standalone attended quiet-profile read (browser-use plugin)."
 ---
 
 # Browser Use
