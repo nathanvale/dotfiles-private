@@ -11,6 +11,18 @@ file or any package standards file.
 
 ## Rules
 
+### Test execution
+
+- Before changing tests, complete the owning test-design brief. Prove the
+  public, process, or durable-state seam named by the requirement; helper-only
+  proof does not substitute for it.
+- After a broad suite failure, inventory every failing row, partition failures
+  by cause, and reproduce one representative per group before editing. Never
+  mass-update expectations.
+- Before rerunning an expensive suite, name the new evidence sought, retain its
+  complete output, and pass focused proof for the changed cause.
+- Bun test, coverage, repair, or triage: use `test-runner`.
+
 ### Fallow enforces
 
 - Export only symbols another module imports; unused exports are errors.
