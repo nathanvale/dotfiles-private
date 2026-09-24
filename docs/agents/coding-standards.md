@@ -34,6 +34,11 @@ Assert test-owned expected identities before checking each returned row, or
 assert an independently expected count when identities do not matter. An empty
 collection must not pass a row-by-row check vacuously.
 
+Name the observable behavior each test proves and one plausible wrong behavior
+that makes it fail. A matching helper result or mock call count alone does not
+prove a public outcome. For a new or disputed proof claim, demonstrate RED with
+a disposable perturbation, then restore GREEN in the same harness.
+
 Lesson: four packages carried this defect on one audit day. ASMG review caught
 a hoist that replaced a test's literal list with the predicate under test;
 vault-git and warm-chrome each compared a catalog to itself through copied
