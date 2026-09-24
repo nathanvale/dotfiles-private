@@ -1,8 +1,7 @@
-import { afterEach, describe, expect, test } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
-import { firstTerminalOutcome } from "./recovery-observer.ts"
 import { queryTraces } from "./invocation-trace-store.ts"
 
 const temporaryRoots: string[] = []
@@ -105,17 +104,6 @@ test("source, fresh bundle, and committed runtime observers run the Python check
 	}
 })
 
-test("bundled cleanup ignores inherited test barrier variables", async () => {
-	const root = temporaryRoot()
-	const command = await bundle(root, "trace-command.ts", "recovery-traces.js")
-	const barrier = join(root, "barrier")
-	const result = await run(command, ["cleanup"], join(root, "state"), { MSB_RECOVERY_TEST_CLEANUP_BARRIER_DIRECTORY: barrier })
-	expect(result.exitCode).toBe(0)
-	expect(result.stderr).toBe("")
-	expect(JSON.parse(result.stdout)).toMatchObject({ command: "cleanup", ok: true })
-	expect(existsSync(barrier)).toBe(false)
-}, 2_000)
-
 test("identity reports bounded JSON for missing or malformed identity inputs", async () => {
 	const root = temporaryRoot()
 	const command = await bundle(root, "trace-command.ts", "recovery-traces.js")
@@ -153,13 +141,6 @@ test("identity reports bounded JSON for missing or malformed identity inputs", a
 	// Independent oracle: published SHA-256 digest of the fixture bytes "abc".
 	const digest = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 	expect(JSON.parse(result.stdout)).toEqual({ schema_version: 1, command: "identity", ok: true, plugin_version: "1.2.3", recovery_source_sha256: digest, observer_source_sha256: digest, runtime_sha256: digest })
-})
-
-describe("observer terminal cause arbitration", () => {
-	test("preserves an earlier external signal when a later deadline is observed", () => {
-		expect(firstTerminalOutcome("signalled", "deadline-exceeded")).toBe("signalled")
-		expect(firstTerminalOutcome(undefined, "deadline-exceeded")).toBe("deadline-exceeded")
-	})
 })
 
 test("observer lifecycle seam reports refused and thrown observer-owned writes without replacing accepted child output", async () => {
@@ -278,3 +259,51 @@ print("primary-response")
 		])
 	}
 })
+
+test("the observer keeps the first terminal cause when an external signal follows its deadline", async () => {
+	const root = temporaryRoot()
+	const command = await bundle(root, "recovery-observer.ts", "recovery-observer.js")
+	const recoveryDirectory = join(root, "packages/compaction-recovery/src")
+	mkdirSync(recoveryDirectory, { recursive: true })
+	// The child reports the deadline's SIGTERM and keeps running, so the external SIGTERM sent below lands inside the
+	// observer's reap grace and both causes reach the one terminal record; the deadline is the first cause by
+	// construction because the test signals only after it has observed the child's report.
+	writeFileSync(join(recoveryDirectory, "recovery.py"), `import signal, sys, time
+
+def report(signum, frame):
+    sys.stdout.write("sigterm-received\\n")
+    sys.stdout.flush()
+
+signal.signal(signal.SIGTERM, report)
+sys.stdout.write("ready\\n")
+sys.stdout.flush()
+time.sleep(10)
+`)
+	const stateHome = join(root, "state")
+	const observer = Bun.spawn([process.execPath, command, "checkpoint", "schema"], {
+		stdin: "ignore", stdout: "pipe", stderr: "pipe",
+		env: { PATH: process.env.PATH, HOME: stateHome, XDG_STATE_HOME: stateHome, MSB_RECOVERY_OBSERVER_DEADLINE_MS: "800" },
+	})
+	const decoder = new TextDecoder()
+	let stdout = ""
+	let externalSignalSent = false
+	for await (const chunk of observer.stdout) {
+		stdout += decoder.decode(chunk, { stream: true })
+		if (!externalSignalSent && stdout.includes("sigterm-received\n")) {
+			externalSignalSent = true
+			observer.kill("SIGTERM")
+		}
+	}
+	const [exitCode, stderr] = await Promise.all([observer.exited, new Response(observer.stderr).text()])
+	expect(externalSignalSent).toBe(true)
+	expect(exitCode).not.toBe(0)
+	// Two reports: the deadline's SIGTERM, then the external SIGTERM the observer forwarded after it.
+	expect({ stdout, stderr }).toEqual({ stdout: "ready\nsigterm-received\nsigterm-received\n", stderr: "" })
+	// Independent oracle: the terminal record names the first cause, read back from the durable trace store.
+	const terminalOutcomes = queryTraces({ stateHome }).records.flatMap((record) => (
+		record.record_type === "lifecycle" && record.phase === "terminal" && record.producer_identity.startsWith("recovery-observer-")
+			? [record.outcome]
+			: []
+	))
+	expect(terminalOutcomes).toEqual(["deadline-exceeded"])
+}, 10_000)

@@ -404,9 +404,6 @@ function retainObserverFailureDiagnostic(store) {
 `);
   } catch {}
 }
-function firstTerminalOutcome(existing, observed) {
-  return existing ?? observed;
-}
 function scheduleCleanup(journeyIdentity, parentRecordIdentity) {
   try {
     const root = observerRoot();
@@ -571,7 +568,7 @@ async function runRecoveryObserver(arguments_, dependencies = {}) {
   let terminalOutcome;
   let reapTimer;
   const stopChild = (signal, outcome) => {
-    terminalOutcome = firstTerminalOutcome(terminalOutcome, outcome);
+    terminalOutcome ??= outcome;
     try {
       process.stdin.destroy();
     } catch {}
@@ -635,6 +632,5 @@ if (import.meta.main) {
   process.exitCode = await runRecoveryObserver(process.argv.slice(2));
 }
 export {
-  firstTerminalOutcome,
   runRecoveryObserver
 };
