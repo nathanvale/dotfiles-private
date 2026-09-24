@@ -153,7 +153,7 @@ g# Personal Agent Instructions
   `$HOME/code/dotfiles/docs/agents/architecture-decisions.md` first.
 - Sorting a rule into gate, clause, or delete: read
   `$HOME/code/dotfiles/docs/agents/determinism-and-steering.md` first.
-- Code or test authoring or review: read
+- Code or test authoring, review, execution, coverage, repair or triage: read
   `$HOME/code/dotfiles/docs/agents/coding-standards.md`. A package's own
   `CODING_STANDARDS.md` extends it; neither restates the other.
 - New tool or capability: search current dependencies and existing products
@@ -175,15 +175,6 @@ g# Personal Agent Instructions
   handoff boundary; start the next unit only with authority.
 - Preserve every explicit requirement. Report missing proof as incomplete;
   never defer, narrow, or replace it because another path is easier or green.
-- Before changing tests, complete the owning test-design brief. Prove the
-  public, process, or durable-state seam named by the requirement; helper-only
-  proof does not substitute for it.
-- After a broad suite failure, inventory every failing row, partition failures
-  by cause, and reproduce one representative per group before editing. Never
-  mass-update expectations.
-- Before rerunning an expensive suite, name the new evidence sought, retain its
-  complete output, and pass focused proof for the changed cause.
-- Bun test, coverage, repair, or triage: use `test-runner`.
 - Use existing contract and discovery owners. Keep throwaway probes outside
   repositories; never invent placeholder commands, states, or interfaces to
   make a test pass.
