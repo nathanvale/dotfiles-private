@@ -97,6 +97,11 @@ g# Personal Agent Instructions
   `$HOME/.config/context/vault.md` before execution. Follow the selected vault's
   Repository Instructions and workflow owners; use `context-advisor` when
   ownership is unclear.
+- Before any write to the configured vault, use the installed
+  `my-second-brain-playground:vault-steward` route: run `begin` for the exact
+  paths, then edit only its returned candidate worktree. Never edit the
+  canonical checkout directly; if the Steward route is unavailable, stop and
+  report it. The skill and CLI own preview, apply, and recovery.
 - Personal bill, payment notice, billing renewal, billing account, or
   bill-payment portal: read
   `$HOME/code/dotfiles/docs/agents/personal-bills.md` before advising or acting.
