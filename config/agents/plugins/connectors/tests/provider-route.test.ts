@@ -5,7 +5,7 @@ import { planDispatcherRoute, planRoute, RouteError } from "../bin/provider-rout
 import { INTERNAL_INVOCATION_CONTEXT_ENV } from "../bin/safe-environment.ts";
 import { AMBIENT_SENTINEL, assertCustody, createHarness, FIXTURE_ROUTE, FIXTURES, type Harness, PLUGIN_ROOT, ROUTE } from "./harness.ts";
 
-// Independent oracle: the installed MCPorter release whose route semantics these real-process checks exercise.
+// Independent oracle: the MCPorter release qualified by the real process canaries below.
 const PINNED_MCPORTER_VERSION = "0.14.0";
 const SKILLS_ROOT = path.join(PLUGIN_ROOT, "skills");
 const realMcporter = Bun.which("mcporter");
@@ -267,8 +267,8 @@ describe("route source and skill registries", () => {
 	});
 });
 
-describe("real MCPorter seam (credential-free)", () => {
-	test.skipIf(!realMcporter)("the installed MCPorter is the release the fake mirrors", () => {
+describe("optional real MCPorter canaries (credential-free)", () => {
+	test.skipIf(!realMcporter)("an installed MCPorter matches the qualified release", () => {
 		const version = Bun.spawnSync(["mcporter", "--version"]).stdout.toString().trim();
 		expect(version).toBe(PINNED_MCPORTER_VERSION);
 	});
