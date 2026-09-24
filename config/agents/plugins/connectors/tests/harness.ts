@@ -7,6 +7,7 @@ import path from "node:path";
 
 export const PLUGIN_ROOT = path.resolve(import.meta.dir, "..");
 export const ROUTE = path.join(PLUGIN_ROOT, "bin", "provider-route.ts");
+export const FRONT_DOOR = path.join(PLUGIN_ROOT, "bin", "connectors");
 export const FIXTURES = path.join(PLUGIN_ROOT, "tests", "fixtures");
 // Same launcher main, bound to the fixture skills under tests/fixtures.
 export const FIXTURE_ROUTE = path.join(FIXTURES, "provider-route-fixture.ts");
@@ -36,6 +37,15 @@ export interface Harness {
 	dispose(): void;
 }
 
+// Sole owner of "spawn a process and capture stdout/stderr/exit code";
+// every real-process runner in this file composes it instead of repeating
+// the Bun.spawn + Promise.all shape.
+async function spawnCapture(argv: string[], env: Record<string, string>): Promise<RunResult> {
+	const proc = Bun.spawn(argv, { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+	const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+	return { code, stdout, stderr, pid: proc.pid };
+}
+
 function shim(file: string, modulePath: string): void {
 	mkdirSync(path.dirname(file), { recursive: true });
 	writeFileSync(file, `#!/usr/bin/env bun\nimport "${modulePath}";\n`);
@@ -58,22 +68,15 @@ export function createHarness(fakes: Record<string, string>): Harness {
 		home,
 		binDir,
 		async run(argv, extraEnv = {}, entry = ROUTE) {
-			const proc = Bun.spawn([process.execPath, entry, ...argv], {
-				env: {
-					HOME: home,
-					PATH: `${binDir}:${process.env.PATH ?? ""}`,
-					TMPDIR: root,
-					XDG_STATE_HOME: root,
-					AMBIENT_SENTINEL,
-					OP_SERVICE_ACCOUNT_TOKEN: OP_TOKEN_SENTINEL,
-					...extraEnv,
-				},
-				stdin: "ignore",
-				stdout: "pipe",
-				stderr: "pipe",
+			return spawnCapture([process.execPath, entry, ...argv], {
+				HOME: home,
+				PATH: `${binDir}:${process.env.PATH ?? ""}`,
+				TMPDIR: root,
+				XDG_STATE_HOME: root,
+				AMBIENT_SENTINEL,
+				OP_SERVICE_ACCOUNT_TOKEN: OP_TOKEN_SENTINEL,
+				...extraEnv,
 			});
-			const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-			return { code, stdout, stderr, pid: proc.pid };
 		},
 		receipt(name) {
 			return JSON.parse(readFileSync(path.join(root, name), "utf8"));
@@ -88,6 +91,23 @@ export function createHarness(fakes: Record<string, string>): Harness {
 			rmSync(root, { recursive: true, force: true });
 		},
 	};
+}
+
+// Spawns the compiled front door itself (never the .ts source, never through
+// `bun`), with an empty HOME and a PATH holding only fixed system directories,
+// no Bun, Node, mise, or op shim of any kind. Fails loudly if the packaged
+// binary is missing rather than silently falling back to the interpreted
+// source: a missing artifact is a build gap, not a lower-layer substitute.
+export async function runFrontDoor(argv: string[]): Promise<RunResult> {
+	if (!existsSync(FRONT_DOOR)) {
+		throw new Error(`compiled front door missing at ${FRONT_DOOR}; run \`bun run build\` in the plugin directory first`);
+	}
+	const home = mkdtempSync(path.join(os.tmpdir(), "connectors-front-door-home-"));
+	try {
+		return await spawnCapture([FRONT_DOOR, ...argv], { HOME: home, PATH: "/usr/bin:/bin" });
+	} finally {
+		rmSync(home, { recursive: true, force: true });
+	}
 }
 
 export interface McporterReceipt {

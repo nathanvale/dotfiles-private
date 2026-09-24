@@ -11,7 +11,8 @@
     "config/agents/plugins/my-second-brain-playground/packages/cli-design-check/fixtures/**",
     "config/agents/plugins/my-second-brain-playground/runtime/**",
     "config/agents/skills/third-party/**",
-    ".agents/**"
+    ".agents/**",
+    "config/agents/plugins/connectors/bin/connectors"
   ],
   "typeAware": {
     "enabled": true,
@@ -85,6 +86,7 @@
     "tests/type-contracts.ts",
     "tests/type-contracts-loose.ts",
     "config/agents/plugins/connectors/bin/provider-route.ts",
+    "config/agents/plugins/connectors/bin/connectors.ts",
     "config/agents/plugins/connectors/skills/*/scripts/*.ts",
     "config/agents/plugins/connectors/skills/atlassian/scripts/custody/child.ts"
   ],

@@ -10,6 +10,11 @@ its own Canva Session in private state, and no organisation or service
 identity exists. Keep native Harness MCP tools, direct Canva API calls,
 `mcporter auth`, and browser automation outside this route.
 
+The plugin also ships a compiled front door at `../../bin/connectors`,
+resolved from this skill directory, no global command and no dotfiles path
+required. It answers only `--discover --json`, `--help`, and `--help --json` today; it does not yet carry
+this skill's operations, which still go through the route below.
+
 ```sh
 SKILL_DIR="<directory containing this SKILL.md>"
 ROUTE="$SKILL_DIR/../../bin/provider-route.ts"
