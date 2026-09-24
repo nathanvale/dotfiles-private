@@ -107,7 +107,8 @@ const officialProvenanceUrl = "https://github.com/openclaw/mcporter/releases/dow
 // Process-test seam: an http origin on 127.0.0.1 replaces only the scheme,
 // host, and port of each official asset URL and shortens the deadline. The
 // production pins and provenance checks still decide acceptance. Any other
-// value refuses before a request, so the seam can never reach a remote host.
+// value refuses before a request, so the first request always targets
+// 127.0.0.1; fetch still follows redirects that the loopback server returns.
 const loopbackTimeoutMs = 3_000;
 
 function officialDownload(env: EnvironmentSource): { rebase: (url: string) => string; timeoutMs: number } {
