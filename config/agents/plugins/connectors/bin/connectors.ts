@@ -30,18 +30,17 @@ const EFFECT_EXCLUSIONS = [
 	"any real credential value or T5 custody access; fixture-auth only presents a nonsecret reference to a fixture-tested authority",
 	"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
 	"any provider write operation",
-	"deps, real auth, or run (later Tickets own the complete production flows)",
+	"real auth or run (later Tickets own the complete production flows); deps covers only explicit MCPorter repair",
 ] as const;
 
 // Exported: each appears in the exported Envelope's public signature.
 export type EffectClass = "inspect" | "repository-local";
 export type Outcome = "success" | "refused" | "failed";
 export type FailureClass = "usage" | "internal" | "domain" | "schema" | "transient" | null;
-// INTERNAL_UNEXPECTED_UNCHANGED (not the _UNKNOWN cause), because every command
-// here is inspect-only and never attempts an effect: assertEnvelope always runs
-// before the one stdout write, so a caught internal failure has zero attempted
-// effects, never an uncertain one. Matches the existing Contract Core owner's
-// own unchanged/unknown split.
+// A caught internal failure reports INTERNAL_UNEXPECTED_UNCHANGED only when no
+// effect was attempted. MCPorter bootstrap, recovery, or repair progress and
+// explicit setup progress select their own completed or unknown causes, so the
+// fallback never claims an unchanged result after an attempted effect.
 export type CauseCode =
 	| "SUCCESS_UNCHANGED"
 	| "SUCCESS_BOOTSTRAPPED"
@@ -96,8 +95,8 @@ interface CommandDescriptor {
 
 // This is the complete command surface. Do not add a route here without also
 // implementing it, so discovery never advertises a command this binary
-// cannot actually answer. setup/deps/auth/run are later Tickets' work and are
-// deliberately absent.
+// cannot actually answer. setup and deps repair mcporter are implemented;
+// auth and run are later Tickets' work and are deliberately absent.
 const COMMANDS: readonly CommandDescriptor[] = [
 	{ commandIdentity: "connectors.dispatch", route: [], effectClass: "inspect", summary: "Refuse a missing, unknown, or incompatible command selection" },
 	{ commandIdentity: "connectors.help", route: ["--help"], effectClass: "inspect", summary: "Show help and usage" },
@@ -1149,7 +1148,7 @@ function emitSelectionFailure(selection: Extract<Awaited<ReturnType<typeof ensur
 	if (selection.uncertain) {
 		emit({ envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message: `${PROGRAM}: MCPorter recovery outcome requires inspection`, availablePaths: AVAILABLE_PATHS,
 			result: { runId: runId(), commandIdentity: "connectors.schema", outcome: "failed", failureClass: "internal", exitCode: 1,
-				data: null, retryable: false, repairAction: "Inspect current and previous MCPorter revisions before retrying", nextAction: "connectors.doctor",
+				data: null, retryable: false, repairAction: selection.cause === "selection-lock-failed" ? selection.repair : "Inspect current and previous MCPorter revisions before retrying", nextAction: "connectors.doctor",
 				effectClass: "repository-local", transactionState: "unknown", causeCode: "INTERNAL_MCPORTER_SELECTION_UNKNOWN",
 				effects: { completed: recoveryCompleted ? ["mcporter-recovery"] : [], remaining: [], uncertain: [recoveryCompleted ? "mcporter-repair" : "mcporter-recovery"], inventoryComplete: true } } });
 		return;

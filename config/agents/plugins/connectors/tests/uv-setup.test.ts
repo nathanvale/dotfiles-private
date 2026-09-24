@@ -160,11 +160,16 @@ test.skipIf(!officialMise)("official uv installs inside plugin state despite hos
 		expect(run.result).toEqual({ ok: true, executable: path.join(state, "installs", "aqua-astral-sh-uv", "0.12.18", "uv-aarch64-apple-darwin", "uv"), version: "0.12.18" });
 		expect(existsSync(path.join(root, "hostile-data"))).toBe(false);
 		expect(existsSync(path.join(state, "installs", "aqua-astral-sh-uv", "0.1.0"))).toBe(false);
-		const workspaces = readdirSync(state).filter((entry) => entry.startsWith(".uv-install-"));
-		expect(workspaces).toHaveLength(1);
-		expect(readFileSync(path.join(state, workspaces[0]!, "mise.toml"), "utf8")).toBe(config);
-		expect(readFileSync(path.join(state, workspaces[0]!, "mise.lock"), "utf8")).toBe(lock);
-		const workspace = path.join(state, workspaces[0]!);
+		// The per-run workspace is removed after install, so repeated setup
+		// leaves no staging residue beside the retained installs.
+		expect(readdirSync(state).filter((entry) => entry.startsWith(".uv-install-"))).toEqual([]);
+		// Re-stage the same validated sources at the production workspace depth
+		// to prove which config mise selects there under the hostile parents.
+		const workspace = path.join(state, ".uv-install-probe");
+		mkdirSync(workspace, { mode: 0o700 });
+		stageValidatedUvSources(workspace, readValidatedUvSources(path.resolve(import.meta.dir, "../requirements.json"), path.resolve(import.meta.dir, "../config/mise.toml"), path.resolve(import.meta.dir, "../config/mise.lock"))!);
+		expect(readFileSync(path.join(workspace, "mise.toml"), "utf8")).toBe(config);
+		expect(readFileSync(path.join(workspace, "mise.lock"), "utf8")).toBe(lock);
 		const privateEnv = {
 			HOME: path.join(state, "home"), PATH: "/usr/bin:/bin", MISE_CONFIG_DIR: path.join(state, "config"),
 			MISE_GLOBAL_CONFIG_FILE: path.join(state, "config", "global.toml"), MISE_SYSTEM_CONFIG_DIR: path.join(state, "system"),

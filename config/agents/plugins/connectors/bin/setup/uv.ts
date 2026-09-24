@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ownedDirectory, readPrivateFile, stateRoot } from "../private-state.ts";
@@ -76,6 +76,9 @@ function safeExistingPart(current: string, root: string): boolean {
 		const entry = lstatSync(current);
 		if (entry.isSymbolicLink() || (current === root && !entry.isDirectory())) return false;
 		if (!entry.isDirectory() || (current !== root && !current.startsWith(`${root}${path.sep}`))) return true;
+		// The XDG state root is the user's, often 0755; only Connectors' own
+		// descendants must be private.
+		if (current === root) return entry.uid === os.userInfo().uid;
 		const mode = entry.mode & 0o777;
 		const installedTool = current.startsWith(`${root}${path.sep}connectors${path.sep}setup${path.sep}uv${path.sep}installs${path.sep}`);
 		return entry.uid === os.userInfo().uid && (installedTool ? (mode & 0o022) === 0 : mode === 0o700);
@@ -108,9 +111,8 @@ function selectedMise(miseExecutable: string, root: string): boolean {
 	}
 }
 
-function prepareState(stateDirectory: string): { workspace: string; installs: string; env: Record<string, string> } | null {
+function prepareState(stateDirectory: string): { installs: string; env: Record<string, string> } | null {
 	if (!ownedDirectory(stateDirectory).ok) return null;
-	const workspace = mkdtempSync(path.join(stateDirectory, ".uv-install-"));
 	const dirs: Record<string, string> = {};
 	for (const name of ["home", "config", "system", "data", "cache", "state", "installs", "shims", "temp"]) {
 		const value = directory(stateDirectory, name);
@@ -126,7 +128,7 @@ function prepareState(stateDirectory: string): { workspace: string; installs: st
 		MISE_STATE_DIR: dirs.state!, MISE_INSTALLS_DIR: dirs.installs!, MISE_SHIMS_DIR: dirs.shims!,
 		MISE_TMP_DIR: dirs.temp!, MISE_CEILING_PATHS: stateDirectory,
 	};
-	return { workspace, installs: dirs.installs!, env };
+	return { installs: dirs.installs!, env };
 }
 
 export async function installPinnedUv(miseExecutable: string, stateDirectory: string, pluginDirectory = path.resolve(import.meta.dir, "../..")): Promise<UvInstallResult> {
@@ -135,10 +137,15 @@ export async function installPinnedUv(miseExecutable: string, stateDirectory: st
 	const root = stateRoot(process.env);
 	if (stateDirectory !== path.join(root, "connectors", "setup", "uv") || !safePath(stateDirectory, root)) return { ok: false, reason: "state-invalid" };
 	if (!selectedMise(miseExecutable, root)) return { ok: false, reason: "config-invalid" };
+	let workspace: string | null = null;
 	try {
 		const prepared = prepareState(stateDirectory);
 		if (!prepared) return { ok: false, reason: "state-invalid" };
-		const { workspace, installs, env } = prepared;
+		const { installs, env } = prepared;
+		// A fresh per-run workspace holds only the staged config and lock; the
+		// installed tool lives under installs/, so removing it never touches
+		// a good install and stops one leftover directory per setup run.
+		workspace = mkdtempSync(path.join(stateDirectory, ".uv-install-"));
 		stageValidatedUvSources(workspace, sources);
 		const child = Bun.spawn([miseExecutable, "install", "--locked"], { cwd: workspace, env, stdout: "pipe", stderr: "pipe" });
 		const [exit, stdout, stderr] = await Promise.all([child.exited, new Response(child.stdout).text(), new Response(child.stderr).text()]);
@@ -155,5 +162,7 @@ export async function installPinnedUv(miseExecutable: string, stateDirectory: st
 		return { ok: true, executable, version: UV_VERSION };
 	} catch {
 		return { ok: false, reason: "install-failed" };
+	} finally {
+		if (workspace) rmSync(workspace, { recursive: true, force: true });
 	}
 }

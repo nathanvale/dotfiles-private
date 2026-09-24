@@ -50,8 +50,14 @@ describe("compiled front door: discovery", () => {
 		expect(envelope.result.data.commands.map((c: { commandIdentity: string }) => c.commandIdentity).slice().sort()).toEqual(AVAILABLE_PATHS);
 		expect(envelope.result.data.exitMeanings).toEqual(EXIT_MEANINGS);
 		expect(envelope.result.data.signalExits).toEqual(SIGNAL_EXITS);
-		expect(Array.isArray(envelope.result.data.effectExclusions)).toBe(true);
-		expect(envelope.result.data.effectExclusions.length).toBeGreaterThan(0);
+		// Independent literal of the accepted exclusions: setup and MCPorter
+		// repair are advertised above, so no exclusion may deny them.
+		expect(envelope.result.data.effectExclusions).toEqual([
+			"any real credential value or T5 custody access; fixture-auth only presents a nonsecret reference to a fixture-tested authority",
+			"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
+			"any provider write operation",
+			"real auth or run (later Tickets own the complete production flows); deps covers only explicit MCPorter repair",
+		]);
 	});
 
 	test("availablePaths is sorted and has no duplicates", async () => {
