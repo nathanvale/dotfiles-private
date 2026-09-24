@@ -130,6 +130,12 @@ The coordinating Cast Member that assigns work, preserves boundaries, receives
 handbacks, requests repair, and dismisses finished Cast Members.
 _Avoid_: Supervisor, orchestrator, coordinator
 
+**Model Guide**:
+Reviewed guidance for one exact model identity running in one Harness, with
+its sources, review date and applicable boundary. It applies only to the
+performer whose observed model and Harness it names.
+_Avoid_: Prompt pack, model notes, persona
+
 **Live Cast**:
 The Cast Members currently visible and in flight for one Herdr Session.
 _Avoid_: Team, swarm, agents
