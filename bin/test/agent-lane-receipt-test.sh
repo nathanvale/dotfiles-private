@@ -696,9 +696,22 @@ fi
 # receipt must name the sibling harness it delegated to and carry that harness's
 # own plan and skip counts, so a supervisor can tell a delegated verdict from a
 # reimplemented one.
-run_generator --lane test-delegate --snapshot "$safe_snapshot" \
-  --product-version 'test 1.0' --replay-contract
-if [[ "$gen_status" -eq 0 ]]; then
+#
+# The sibling harness ships in this repository, so a non-zero exit here is a
+# delegation or contract failure, never an unavailable environment. A nested
+# hostile-regression run drives a perturbed copy from outside the repository,
+# and the generator finds the sibling from its own path, so delegation cannot
+# run there; the top-level run owns these rows.
+if [[ -n "${AGENT_LANE_RECEIPT_UNDER_TEST:-}" ]]; then
+  skip 'delegated shell contract (nested run)'
+  skip 'delegated contract assertion count (nested run)'
+  skip 'delegated contract verdict (nested run)'
+  skip 'delegated run disclosure (nested run)'
+else
+  run_generator --lane test-delegate --snapshot "$safe_snapshot" \
+    --product-version 'test 1.0' --replay-contract
+  [[ "$gen_status" -eq 0 ]] ||
+    fail "delegated run: generator exited $gen_status; the delegated shell contract failed or could not run"
   assert_contains "$gen_out" 'contract=bin/test/zsh-effective-behavior-test.sh' \
     'delegated run names the reused shell contract'
   contract_plan="$(grep '^contract_assertions=' <<<"$gen_out" | sed 's/^contract_assertions=//')"
@@ -709,11 +722,6 @@ if [[ "$gen_status" -eq 0 ]]; then
     'PASS' 'delegated run carries the contract verdict'
   stream_is_clean "$gen_out" || fail 'delegated run: stdout disclosed a protected value'
   pass 'delegated run: stdout discloses no protected value'
-else
-  skip 'delegated shell contract (sibling harness unavailable in this environment)'
-  skip 'delegated contract assertion count'
-  skip 'delegated contract verdict'
-  skip 'delegated run disclosure'
 fi
 
 # --- Hostile regressions: the rows above must be sensitive ------------------
