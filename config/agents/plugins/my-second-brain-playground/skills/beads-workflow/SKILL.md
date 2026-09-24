@@ -27,11 +27,9 @@ Read the shared rules below, then the kind's reference.
 ## Dispatch
 
 The Stage Manager's dispatch names the store root, the `bd` executable, the
-parent Bead, the adopted readable intent owner (GitHub issue, or vault
-Spec/Ticket/Goal for a vault-native project) with its exact external-ref and
-Spec revision where supplied, the workflow kind with its reference revision
-from the table above, the performing Cast Role, and the writes it
-authorizes. Capability resolution lives with the Stage
+parent Bead, the GitHub issue, the Spec revision, the workflow kind with its
+reference revision from the table above, the performing Cast Role, and the
+writes it authorizes. Capability resolution lives with the Stage
 Manager and the vault's `projects/engineering-workflow/cast.md`; this skill
 names no model or Harness, and the same role runs under any lane. A dispatch
 that grants no write authority yields a proposed command file (the
