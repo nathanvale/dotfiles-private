@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmodSync, linkSync, lstatSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, linkSync, lstatSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ownedDirectory, stateRoot, writePrivateFile } from "../private-state.ts";
@@ -109,6 +109,27 @@ function extractVerifiedBinary(pkg: string, stage: string): OpInstallResult | st
 	}
 }
 
+// Publishes only an already verified binary. A new revision is linked without
+// replacement. An existing regular file is kept only at exact mode 0700 with
+// the official digest; any other regular file is damaged and is atomically
+// replaced from the same filesystem, so the pinned name holds either the old
+// entry or the verified binary. The mode check precedes the read, so an
+// unreadable file is replaced rather than failing setup. A symlink, directory,
+// or other entry at the revision name refuses without following it.
+function publishRevision(verified: string, revision: string): boolean {
+	try {
+		linkSync(verified, revision);
+		return true;
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code !== "EEXIST") return false;
+	}
+	const existing = lstatSync(revision);
+	if (!existing.isFile()) return false;
+	if ((existing.mode & 0o7777) === 0o700 && digest(readFileSync(revision)) === OP_RELEASE.binarySha256) return true;
+	renameSync(verified, revision);
+	return true;
+}
+
 // The caller cannot supply a release identity. Every package operation uses
 // the private copy of the bytes checked against the fixed release digest.
 export function installVerifiedOp(input: OpInstallInput): OpInstallResult {
@@ -127,11 +148,7 @@ export function installVerifiedOp(input: OpInstallInput): OpInstallResult {
 		if (typeof extracted !== "string") return extracted;
 		const revision = path.join(input.stateDirectory, `op-${OP_RELEASE.version}-${OP_RELEASE.binarySha256}`);
 		chmodSync(extracted, 0o700);
-		try {
-			linkSync(extracted, revision); // Atomic no-replace publication.
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException).code !== "EEXIST" || !lstatSync(revision).isFile() || digest(readFileSync(revision)) !== OP_RELEASE.binarySha256) return { ok: false, reason: "install-failed" };
-		}
+		if (!publishRevision(extracted, revision)) return { ok: false, reason: "install-failed" };
 		const selected = writePrivateFile(path.join(input.stateDirectory, "op-selected"), path.basename(revision));
 		if (!selected.ok) return { ok: false, reason: "install-failed" };
 		return { ok: true, executable: revision };

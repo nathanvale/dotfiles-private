@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { createBundle, createFakeMcporterBinDir, PLUGIN_ROOT, runBundle } from "./harness.ts";
 
@@ -19,19 +19,32 @@ const ALL_REMAINING = { completed: [], remaining: ["op", "mise", "uv"], uncertai
 // A parent config that would add a tool and downgrade uv if mise inherited it.
 const HOSTILE_MISE_CONFIG = '[tools]\n"aqua:astral-sh/uv" = "0.1.0"\n"aqua:jqlang/jq" = "1.7.1"\n';
 
-function officialFixtures(): { op: string; manifest: string; signature: string; archive: string } | null {
+type ReleaseFixtures = { op: string; manifest?: string; signature?: string; archive?: string };
+
+function officialOpFixture(): string | null {
 	const op = process.env.CONNECTORS_TEST_OP_PACKAGE;
+	if (!op) {
+		if (process.env.CI) throw new Error("CI requires the official op release fixture before compiled setup tests");
+		return null;
+	}
+	if (!path.isAbsolute(op)) throw new Error("official setup fixture paths must be absolute");
+	if (!statSync(op).isFile()) throw new Error("official setup fixture is not a regular file");
+	if (sha256(op) !== PINNED_OP_SHA256) throw new Error("official setup fixture digest mismatch");
+	return op;
+}
+
+function officialFixtures(op: string | null): Required<ReleaseFixtures> | null {
 	const root = process.env.CONNECTORS_TEST_MISE_RELEASE_DIR;
 	if (!op || !root) {
 		if (process.env.CI) throw new Error("CI requires official op and mise release fixtures before compiled setup tests");
 		return null;
 	}
-	if (!path.isAbsolute(op) || !path.isAbsolute(root)) throw new Error("official setup fixture paths must be absolute");
+	if (!path.isAbsolute(root)) throw new Error("official setup fixture paths must be absolute");
 	const files = { op, manifest: path.join(root, "SHASUMS256.txt"), signature: path.join(root, "SHASUMS256.txt.minisig"), archive: path.join(root, "mise.tar.xz") };
 	for (const file of Object.values(files)) {
 		if (!statSync(file).isFile()) throw new Error("official setup fixture is not a regular file");
 	}
-	if (sha256(op) !== PINNED_OP_SHA256 || sha256(files.archive) !== PINNED_MISE_SHA256) throw new Error("official setup fixture digest mismatch");
+	if (sha256(files.archive) !== PINNED_MISE_SHA256) throw new Error("official setup fixture digest mismatch");
 	return files;
 }
 
@@ -39,15 +52,16 @@ function sha256(file: string): string {
 	return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
-const fixtures = officialFixtures();
+const opFixture = officialOpFixture();
+const fixtures = officialFixtures(opFixture);
 // Supplied by the test runner from an independently fetched MCPorter release.
 const officialMcporter = process.env.CONNECTORS_OFFICIAL_RELEASE_FIXTURE;
 
 type ServerHook = (pathname: string) => Response | null;
 
-function fixtureServer(files: NonNullable<typeof fixtures>, hook: ServerHook = () => null) {
+function fixtureServer(files: ReleaseFixtures, hook: ServerHook = () => null) {
 	const requests: string[] = [];
-	const routes: Record<string, string> = {
+	const routes: Record<string, string | undefined> = {
 		[OP_PATH]: files.op,
 		[`${MISE_BASE}/SHASUMS256.txt`]: files.manifest,
 		[`${MISE_BASE}/SHASUMS256.txt.minisig`]: files.signature,
@@ -413,6 +427,186 @@ test.skipIf(fixtures === null)("official compiled setup reports mise as uncertai
 		bundle.dispose();
 	}
 }, 100_000);
+
+const MISE_INTERRUPTED: ServerHook = (pathname) => pathname === `${MISE_BASE}/SHASUMS256.txt` ? new Response("fixture interruption", { status: 503 }) : null;
+const OP_INTERRUPTED: ServerHook = (pathname) => pathname === OP_PATH ? new Response("interrupted fixture bytes", { status: 200 }) : null;
+
+// Ticket #103: bytes a partial copy or local edit could leave at the pinned
+// revision name. Independent of every production digest.
+const DAMAGED_OP_BYTES = "wrong-bytes";
+// A selection left by an earlier setup, so restoring op-selected is observable.
+const PREVIOUS_OP_SELECTED = `op-2.38.0-${"0".repeat(64)}`;
+// Independent oracle: the only permission bits a published op revision holds.
+const PUBLISHED_OP_MODE = 0o700;
+
+async function runOpSetup(bundle: ReturnType<typeof createBundle>, state: string, hook: ServerHook) {
+	if (!opFixture) throw new Error("official op fixture missing");
+	const { server, requests } = fixtureServer({ op: opFixture }, hook);
+	try {
+		const home = path.join(bundle.root, "home");
+		mkdirSync(home, { recursive: true });
+		const result = await runBundle(bundle, ["setup"], { home, timeoutMs: 90_000, extraEnv: { XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_ORIGIN: `http://127.0.0.1:${server.port}/` } });
+		expect(result.stderr).toBe("");
+		expect(result.stdout.trim().split("\n")).toHaveLength(1);
+		return { code: result.code, envelope: JSON.parse(result.stdout), requests, home };
+	} finally {
+		server.stop(true);
+	}
+}
+
+// The selected revision is a runnable official op, not merely matching bytes.
+function opVersion(executable: string, home: string): string {
+	const probe = Bun.spawnSync([executable, "--version"], { env: { PATH: "/usr/bin:/bin", HOME: home }, stdout: "pipe", stderr: "pipe" });
+	expect(probe.exitCode).toBe(0);
+	return probe.stdout.toString().trim();
+}
+
+function opPaths(bundle: ReturnType<typeof createBundle>) {
+	const state = path.join(realpathSync(bundle.root), "state");
+	const opState = path.join(state, "connectors", "setup", "op");
+	return { state, opState, revision: path.join(opState, OP_SELECTED), selection: path.join(opState, "op-selected") };
+}
+
+type OpPaths = ReturnType<typeof opPaths>;
+
+// A verified packaged run leaves the official binary at the pinned revision, so
+// a row can then damage only its mode.
+async function seedOfficialRevision(bundle: ReturnType<typeof createBundle>, paths: OpPaths) {
+	const seeded = await runOpSetup(bundle, paths.state, MISE_INTERRUPTED);
+	expect(seeded.envelope.result.effects.completed).toEqual(["op"]);
+	expect(sha256(paths.revision)).toBe(OP_BINARY_SHA256);
+}
+
+async function seedWrongBytes(_bundle: ReturnType<typeof createBundle>, paths: OpPaths) {
+	writeFileSync(paths.revision, DAMAGED_OP_BYTES);
+}
+
+// Ticket #103: each row leaves a damaged regular file at the pinned revision.
+// Explicit setup publishes the verified stage file over it; it never keeps,
+// rewrites, or re-modes the damaged entry in place. The 0700 row is the
+// reproduced defect: its mode matches, so only the digest marks it damaged.
+// `selected` is op-selected before the run. The in-field state keeps the
+// selection on the damaged revision, so a selection is never proof of bytes.
+const DAMAGED_REVISIONS: ReadonlyArray<{ name: string; mode: number; selected: string; seed: (bundle: ReturnType<typeof createBundle>, paths: OpPaths) => Promise<void> }> = [
+	{ name: "wrong bytes at published mode 0700", mode: 0o700, selected: PREVIOUS_OP_SELECTED, seed: seedWrongBytes },
+	{ name: "wrong bytes at published mode 0700 while op-selected already names it", mode: 0o700, selected: OP_SELECTED, seed: seedWrongBytes },
+	{ name: "wrong bytes at mode 0600", mode: 0o600, selected: PREVIOUS_OP_SELECTED, seed: seedWrongBytes },
+	{ name: "official bytes at mode 0600", mode: 0o600, selected: PREVIOUS_OP_SELECTED, seed: seedOfficialRevision },
+	{ name: "official bytes at world-writable mode 0777", mode: 0o777, selected: PREVIOUS_OP_SELECTED, seed: seedOfficialRevision },
+	{ name: "official bytes at unreadable mode 0000", mode: 0o000, selected: PREVIOUS_OP_SELECTED, seed: seedOfficialRevision },
+];
+
+for (const row of DAMAGED_REVISIONS) {
+	test.skipIf(opFixture === null)(`official compiled setup restores the pinned op revision from ${row.name}`, async () => {
+		const bundle = createBundle();
+		try {
+			const paths = opPaths(bundle);
+			mkdirSync(paths.opState, { recursive: true, mode: 0o700 });
+			await row.seed(bundle, paths);
+			chmodSync(paths.revision, row.mode);
+			writeFileSync(paths.selection, row.selected, { mode: 0o600 });
+			const damaged = lstatSync(paths.revision);
+			expect(damaged.mode & 0o7777).toBe(row.mode);
+			expect(readFileSync(paths.selection, "utf8")).toBe(row.selected);
+			const { code, envelope, requests, home } = await runOpSetup(bundle, paths.state, MISE_INTERRUPTED);
+			expect(code).toBe(3);
+			expect(envelope.result.commandIdentity).toBe("connectors.setup");
+			expect(envelope.result.causeCode).toBe("DOMAIN_SETUP_FAILED_PARTIAL");
+			expect(envelope.result.effects).toEqual({ completed: ["op"], remaining: ["mise", "uv"], uncertain: [], inventoryComplete: true });
+			expect(requests).toEqual([OP_PATH, `${MISE_BASE}/SHASUMS256.txt`]);
+			expect(readdirSync(paths.opState).sort()).toEqual([OP_SELECTED, "op-selected"].sort());
+			expect(readFileSync(paths.selection, "utf8")).toBe(OP_SELECTED);
+			const published = lstatSync(paths.revision);
+			expect(published.isFile()).toBe(true);
+			expect(published.ino).not.toBe(damaged.ino);
+			expect(published.mode & 0o7777).toBe(PUBLISHED_OP_MODE);
+			expect(sha256(paths.revision)).toBe(OP_BINARY_SHA256);
+			expect(opVersion(paths.revision, home)).toBe("2.39.0");
+		} finally {
+			bundle.dispose();
+		}
+	}, 200_000);
+}
+
+const OUTSIDE_BYTES = "outside bytes";
+const OUTSIDE_MODE = 0o640;
+
+// Any entry other than a regular file at the pinned revision refuses after
+// verification. Nothing it points at is followed, replaced, or re-moded.
+const NON_FILE_REVISIONS: ReadonlyArray<{ name: string; plant: (revision: string, outside: string) => void; entry: (revision: string) => boolean }> = [
+	{ name: "symlink to an outside file", plant: (revision, outside) => symlinkSync(outside, revision), entry: (revision) => lstatSync(revision).isSymbolicLink() },
+	{ name: "directory", plant: (revision) => mkdirSync(revision), entry: (revision) => lstatSync(revision).isDirectory() },
+];
+
+for (const row of NON_FILE_REVISIONS) {
+	test.skipIf(opFixture === null)(`official compiled setup refuses a ${row.name} at the pinned op revision`, async () => {
+		const bundle = createBundle();
+		try {
+			const paths = opPaths(bundle);
+			mkdirSync(paths.opState, { recursive: true, mode: 0o700 });
+			const outside = path.join(bundle.root, "outside");
+			writeFileSync(outside, OUTSIDE_BYTES);
+			chmodSync(outside, OUTSIDE_MODE);
+			row.plant(paths.revision, outside);
+			writeFileSync(paths.selection, "previous", { mode: 0o600 });
+			const { code, envelope, requests } = await runOpSetup(bundle, paths.state, MISE_INTERRUPTED);
+			expect(code).toBe(3);
+			expect(envelope.message).toBe("connectors: op setup failed: install-failed");
+			expect(envelope.result.causeCode).toBe("DOMAIN_SETUP_FAILED_UNCHANGED");
+			expect(envelope.result.transactionState).toBe("unchanged");
+			expect(envelope.result.effects).toEqual(ALL_REMAINING);
+			expect(requests).toEqual([OP_PATH]);
+			expect(row.entry(paths.revision)).toBe(true);
+			expect(readFileSync(outside, "utf8")).toBe(OUTSIDE_BYTES);
+			expect(lstatSync(outside).mode & 0o7777).toBe(OUTSIDE_MODE);
+			expect(readFileSync(paths.selection, "utf8")).toBe("previous");
+			expect(readdirSync(paths.opState).sort()).toEqual([OP_SELECTED, "op-selected"].sort());
+		} finally {
+			bundle.dispose();
+		}
+	}, 100_000);
+}
+
+// The corrupt body fails the package digest in the download step, before op
+// verification or publication runs. Interrupted verification or publication
+// inside op setup is inferred from source order and rename atomicity only.
+test.skipIf(opFixture === null)("a corrupt op download never publishes its bytes and preserves damaged bytes or a working selection", async () => {
+	const bundle = createBundle();
+	try {
+		const { state, opState, revision } = opPaths(bundle);
+
+		// Damaged bytes are never replaced by unverified package bytes.
+		mkdirSync(opState, { recursive: true, mode: 0o700 });
+		writeFileSync(revision, DAMAGED_OP_BYTES, { mode: 0o700 });
+		const damaged = await runOpSetup(bundle, state, OP_INTERRUPTED);
+		expect(damaged.code).toBe(3);
+		expect(damaged.envelope.result.causeCode).toBe("DOMAIN_SETUP_FAILED_UNCHANGED");
+		expect(damaged.envelope.result.effects.completed).toEqual([]);
+		expect(readFileSync(revision, "utf8")).toBe(DAMAGED_OP_BYTES);
+		expect(readdirSync(opState)).toEqual([OP_SELECTED]);
+
+		// A verified run establishes a working selection.
+		rmSync(revision);
+		const working = await runOpSetup(bundle, state, MISE_INTERRUPTED);
+		expect(working.envelope.result.effects.completed).toEqual(["op"]);
+		const observe = () => ({ selected: readFileSync(path.join(opState, "op-selected"), "utf8"), digest: sha256(revision), inode: lstatSync(revision).ino });
+		const before = observe();
+		expect(before.selected).toBe(OP_SELECTED);
+		expect(before.digest).toBe(OP_BINARY_SHA256);
+
+		// A corrupt download neither unlinks, replaces, nor reselects it.
+		const later = await runOpSetup(bundle, state, OP_INTERRUPTED);
+		expect(later.code).toBe(3);
+		expect(later.envelope.result.causeCode).toBe("DOMAIN_SETUP_FAILED_UNCHANGED");
+		expect(later.envelope.result.transactionState).toBe("unchanged");
+		expect(later.requests).toEqual([OP_PATH]);
+		expect(observe()).toEqual(before);
+		expect(readdirSync(opState).sort()).toEqual([OP_SELECTED, "op-selected"].sort());
+		expect(opVersion(revision, later.home)).toBe("2.39.0");
+	} finally {
+		bundle.dispose();
+	}
+}, 200_000);
 
 // Fault injection for the post-commit station: a test-only build whose final
 // success envelope names an unchanged outcome while reporting completed
