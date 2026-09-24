@@ -76,5 +76,6 @@ For delegated task tracking and evidence-based reconciliation on an
 already-adopted legacy project's Agent Ledger Task, use the slice skill's
 [Ledger Steward route](skills/playground-slice/references/tasks-first.md#ledger-steward).
 The [specification](specs/ledger-steward.md) records this role's boundary and
-proof. New work tracks Tasks in Beads through
-[beads-workflow](skills/beads-workflow/SKILL.md) instead.
+proof. A project that has explicitly adopted Beads tracks a new Task through
+[beads-workflow](skills/beads-workflow/SKILL.md) instead; a vault-native
+project without an adopted execution store invents no Task.

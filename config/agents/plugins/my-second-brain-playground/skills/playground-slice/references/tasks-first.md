@@ -1,12 +1,12 @@
 # Track an already-adopted legacy Agent Ledger Task
 
-Agent Ledger is retired as the default route for new work; new Tasks track in
-Beads through [beads-workflow](../../beads-workflow/SKILL.md). Use this branch
-only for a Task an already-adopted legacy project still tracks in Agent
-Ledger, to preserve its existing identity and persistence without stranding
-that work. Nathan's earlier direction toward later Notes, Progress, and
-coordination-decision releases applies only to that legacy route; verify each
-capability before using it.
+Agent Ledger is retired as the default route for a new project; Beads applies
+only to a project that has explicitly adopted it. Use this branch for a Task
+an already-adopted legacy project tracks in Agent Ledger, including a new
+Task inside that continuing project, to preserve its existing identity and
+persistence without stranding that work. Nathan's earlier direction toward
+later Notes, Progress, and coordination-decision releases applies only to
+that legacy route; verify each capability before using it.
 
 For a delegated tracking assignment on such a legacy Task, enter
 [Ledger Steward](#ledger-steward) directly. The caller retains project and

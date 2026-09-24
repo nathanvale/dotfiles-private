@@ -45,7 +45,7 @@ workflow is requested; its primary-session prerequisites remain its own.
 | --- | --- |
 | Creative Director | Nathan |
 | Stage Manager | Current coordinating session |
-| Task tracking | New work tracks in Beads through the performing Cast Role; Ledger Steward records the coordinator-authorized tracking subset for an already-adopted legacy project |
+| Task tracking | New work tracks in Beads through the performing Cast Role for a project that has adopted Beads; an already-adopted legacy project keeps its Task tracking in Agent Ledger, with Ledger Steward recording the coordinator-authorized subset |
 | Project Steward; People, Organization, Product, Systems and Area Stewards | Vault Steward with the matching family workflow |
 | Decision Secretary | Vault Steward records an already accepted decision through its adopted owner; never invent Ledger capability or acceptance |
 | Researcher | Vault Analyst for bounded evidence and synthesis; existing research skill owns collection |

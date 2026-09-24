@@ -152,11 +152,12 @@ Track a new Task by its project's declared owner. A Beads-adopted project
 creates and tracks its Task in Beads: follow
 [beads-workflow](../beads-workflow/SKILL.md) for creation, dependencies, and
 lifecycle through native `bd`. An already-adopted legacy project uses
-[Ledger Steward](references/tasks-first.md#ledger-steward) only for
-lifecycle changes or batch reconciliation on its Agent Ledger Task; do not
-adopt Agent Ledger for a new Task. Use that branch before work begins and at
-closeout. A vault-native project without an adopted execution store invents
-no Task; keep simple updates in the current session.
+[Ledger Steward](references/tasks-first.md#ledger-steward) for lifecycle
+changes, batch reconciliation, or a bounded new Task the legacy route already
+covers; do not newly adopt Agent Ledger for a project that has not already
+adopted it. Use that branch before work begins and at closeout. A vault-native
+project without an adopted execution store invents no Task; keep simple
+updates in the current session.
 
 ## Build and exercise
 
@@ -206,11 +207,13 @@ recurs; keep isolated minor friction as evidence.
 ## Keep the result recoverable
 
 New work tracks Tasks, dependencies, and coordination decisions in Beads
-through native `bd`, per [beads-workflow](../beads-workflow/SKILL.md), with
-recovery through `bin/msb-workflow`. Agent Ledger remains the tracked owner
-only for a Task an already-adopted legacy project has not yet cut over;
-retain that named existing owner for each responsibility not yet transferred,
-and do not adopt Agent Ledger for a new Task, Note, or Progress record.
+through native `bd`, per [beads-workflow](../beads-workflow/SKILL.md), for a
+project that has adopted Beads, with recovery through `bin/msb-workflow`.
+Agent Ledger remains the tracked owner, including a new Task, for an
+already-adopted legacy project until its explicit cutover; retain that named
+existing owner for each responsibility not yet transferred, and do not newly
+adopt Agent Ledger for a new Task, Note, or Progress record in a project that
+has not already adopted it.
 Discover each executable's actual commands and use its public process
 contract against the same store. Keep readable artifact bodies in Markdown
 and raw receipts in private runtime state.
