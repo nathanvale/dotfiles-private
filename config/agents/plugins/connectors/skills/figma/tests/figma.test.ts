@@ -42,6 +42,13 @@ describe("Figma hosted Provider", () => {
 		expect(receipt.env).not.toHaveProperty("AMBIENT_SENTINEL");
 	});
 
+	test("attended reset targets only the isolated Figma server", async () => {
+		const result = await harness.run(["figma", "--", "auth", "--reset"]);
+		expect(result.code).toBe(0);
+		const receipt = harness.receipt<{ argv: string[] }>("mcporter.json");
+		expect(receipt.argv).toEqual(["--config", CONFIG, "auth", "figma-connectors", "--reset"]);
+	});
+
 	test("routine discovery uses cached OAuth without starting login", async () => {
 		const result = await harness.run(["figma", "--", "list", "--schema", "--json"]);
 		expect(result.code).toBe(0);
@@ -64,7 +71,7 @@ describe("Figma hosted Provider", () => {
 		expect(harness.has("mcporter.json")).toBe(false);
 	});
 
-	test.skipIf(!realMcporter)("installed MCPorter does not load an ambient figma OAuth grant for this route", async () => {
+	test.skipIf(!realMcporter)("installed MCPorter isolates the route grant and reset from ambient figma", async () => {
 		const executable = realMcporter ?? "mcporter";
 		const version = Bun.spawnSync([executable, "--version"]);
 		expect(version.exitCode).toBe(0);
@@ -72,6 +79,7 @@ describe("Figma hosted Provider", () => {
 
 		const dist = path.dirname(realpathSync(executable));
 		const vault = await import(pathToFileURL(path.join(dist, "oauth-vault.js")).href);
+		const persistence = await import(pathToFileURL(path.join(dist, "oauth-persistence.js")).href);
 		const runtime = await import(pathToFileURL(path.join(dist, "runtime", "environment.js")).href);
 		const dataHome = path.join(harness.root, "xdg-data");
 		await runtime.withRuntimeEnvironment({ HOME: harness.home, XDG_DATA_HOME: dataHome }, async () => {
@@ -82,6 +90,10 @@ describe("Figma hosted Provider", () => {
 			await vault.saveVaultEntry(ambient, { tokens: { access_token: "synthetic-ambient-token", token_type: "Bearer" } });
 			expect((await vault.loadVaultEntry(ambient))?.tokens?.access_token).toBe("synthetic-ambient-token");
 			expect(await vault.loadVaultEntry(selected)).toBeUndefined();
+			await vault.saveVaultEntry(selected, { tokens: { access_token: "synthetic-route-token", token_type: "Bearer" } });
+			await persistence.clearOAuthCaches(selected);
+			expect(await vault.loadVaultEntry(selected)).toBeUndefined();
+			expect((await vault.loadVaultEntry(ambient))?.tokens?.access_token).toBe("synthetic-ambient-token");
 		});
 	});
 });

@@ -12,6 +12,8 @@ Use the shared route at `<plugin-root>/bin/provider-route.ts` with the `figma` s
 3. Discover the admitted identity tool with `bun <plugin-root>/bin/provider-route.ts figma -- list --schema --json --timeout 15000`. The route uses cached credentials and does not start browser login on a read.
 4. When Nathan requests identity verification, use `bun <plugin-root>/bin/provider-route.ts figma -- call whoami --output json`. Compare the returned principal with the intended account before any later design-read workflow. The registry admits no design-content tools in this connection slice.
 
+When Nathan requests a fresh grant, run `bun <plugin-root>/bin/provider-route.ts figma -- auth --reset` with attended consent. MCPorter clears this route's local cached grant before reauthorization. This does not prove Figma revoked the old grant.
+
 ## Auth output
 
 - Use `--no-browser` for an attended handoff when the execution host cannot open a browser Nathan can use.

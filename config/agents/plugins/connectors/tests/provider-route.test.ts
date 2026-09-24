@@ -150,6 +150,14 @@ describe("public process route", () => {
 		expect(receipt.env.MCPORTER_NO_KEEPALIVE).toBe("*");
 	});
 
+	test("declared MCPorter OAuth forwards reset only to its selected server", async () => {
+		const entry = oauthFixture();
+		const result = await harness.run(["oauth-skill", "--", "auth", "--reset"], {}, entry);
+		expect(result.code).toBe(0);
+		const receipt = harness.receipt<{ argv: string[] }>("mcporter.json");
+		expect(receipt.argv).toEqual(["--config", path.join(harness.root, "skills", "oauth-skill", "config", "mcporter.json"), "auth", "probe", "--reset"]);
+	});
+
 	test("declared OAuth still uses cached-token mode for list and call", async () => {
 		const entry = oauthFixture();
 		for (const [operation, expected] of [
@@ -167,7 +175,7 @@ describe("public process route", () => {
 		const entry = oauthFixture();
 		for (const argv of [
 			["probe-skill", "--select", "selection=x", "--", "auth"],
-			["oauth-skill", "--", "auth", "--reset"],
+			["probe-skill", "--select", "selection=x", "--", "auth", "--reset"],
 			["oauth-skill", "--", "auth", "--http-url", "https://other.invalid/mcp"],
 			["oauth-skill", "--", "auth", "other-server"],
 		]) {

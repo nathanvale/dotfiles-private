@@ -21,7 +21,7 @@ const PROGRAM = "provider-route";
 const NAME_PATTERN = /^[a-z][a-z0-9-]*$/;
 const SELECTION_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
 const ALLOWED_FLAGS = {
-	auth: new Set(["--json", "--no-browser"]),
+	auth: new Set(["--json", "--no-browser", "--reset"]),
 	list: new Set([
 		"--status",
 		"--json",
