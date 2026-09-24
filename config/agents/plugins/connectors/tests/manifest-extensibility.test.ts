@@ -109,6 +109,61 @@ describe("Spec AC13: manifest-only Connector Skill addition", () => {
 		}
 	});
 
+	// PR #99 review defect: adapter null decides keyless reporting and the
+	// keyless schema route, so a manifest that also declares credentials would
+	// be treated as keyless. The reference carries a secret-shaped sentinel to
+	// prove the refusal never echoes it.
+	test("credentials without a packaged adapter refuse before the keyless route, while an unchanged keyless manifest stays valid", async () => {
+		const bundle = createBundle();
+		const mcporterBin = createFakeMcporterBinDir();
+		const sentinel = "SENTINEL_PRIVATE_CREDENTIAL_VALUE";
+		const state = path.join(bundle.root, "state");
+		mkdirSync(state);
+		// A missing release source keeps any wrongly reached bootstrap offline.
+		const extraEnv = { XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: path.join(bundle.root, "missing-source") };
+		try {
+			bundle.addSkill("keyless-fixture-skill");
+			const env = { home: bundle.root, binDir: mcporterBin.binDir, extraEnv };
+			const keyless = await runBundle(bundle, ["config", "validate", "keyless-fixture-skill"], env);
+			expect(keyless.code).toBe(0);
+			expect(JSON.parse(keyless.stdout).result.causeCode).toBe("SUCCESS_UNCHANGED");
+
+			const manifestPath = path.join(bundle.skillsRoot, "keyless-fixture-skill", "config", "manifest.json");
+			const manifest = JSON.parse(await Bun.file(manifestPath).text());
+			writeFileSync(manifestPath, JSON.stringify({ ...manifest, adapter: null, credentials: { reference: sentinel } }));
+
+			for (const [argv, commandIdentity] of [
+				[["schema", "keyless-fixture-skill"], "connectors.schema"],
+				[["config", "validate", "keyless-fixture-skill"], "connectors.config.validate"],
+			] as const) {
+				const result = await runBundle(bundle, [...argv], env);
+				expect(result.code).toBe(4);
+				expect(result.stderr).toBe("");
+				expect(result.stdout.trim().split("\n")).toHaveLength(1);
+				expect(result.stdout).not.toContain(sentinel);
+				const envelope = JSON.parse(result.stdout).result;
+				expect(envelope.commandIdentity).toBe(commandIdentity);
+				expect(envelope.outcome).toBe("refused");
+				expect(envelope.failureClass).toBe("schema");
+				expect(envelope.causeCode).toBe("SCHEMA_MANIFEST_INVALID");
+				expect(envelope.transactionState).toBe("unchanged");
+				expect(envelope.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true });
+			}
+
+			const list = await runBundle(bundle, ["list"], env);
+			expect(list.stdout).not.toContain(sentinel);
+			const listed = JSON.parse(list.stdout).result.data;
+			expect(listed.connectors.map((c: { id: string }) => c.id)).not.toContain("keyless-fixture-skill");
+			expect(listed.problems.map((p: { id: string; code: string }) => [p.id, p.code])).toEqual([["keyless-fixture-skill", "manifest-invalid"]]);
+
+			assertNoProviderAttempt(bundle);
+			expect(existsSync(path.join(state, "connectors"))).toBe(false);
+		} finally {
+			mcporterBin.dispose();
+			bundle.dispose();
+		}
+	});
+
 	test("a missing registry refuses before any dependency, credential, or provider access", async () => {
 		const bundle = createBundle();
 		const mcporterBin = createFakeMcporterBinDir();

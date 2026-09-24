@@ -219,6 +219,11 @@ function loadManifest(skillDir: string, adapterIds: ReadonlySet<string>): Connec
 	const requirements = checkRequirements(parsed, manifestPath);
 	const adapter = checkAdapterField(parsed, manifestPath, adapterIds);
 	const credentials = checkCredentialsField(parsed, manifestPath);
+	// A null adapter is what makes a connector keyless downstream, so a
+	// credential declared without one would be silently routed as keyless.
+	if (adapter === null && credentials !== null) {
+		throw new ManifestError("manifest-invalid", `${manifestPath} declares credentials without a packaged adapter`);
+	}
 	return {
 		schemaVersion: 1,
 		id,
