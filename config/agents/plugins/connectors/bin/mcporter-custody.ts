@@ -67,10 +67,39 @@ async function withSelectionLock<T>(root: string, action: () => Promise<T>): Pro
 	}
 }
 
-async function saveOfficial(url: string, target: string): Promise<void> {
-	const response = await fetch(url, { redirect: "follow" });
-	if (!response.ok) throw new Error("download failed");
-	writeFileSync(target, new Uint8Array(await response.arrayBuffer()), { mode: 0o600 });
+export type OfficialAsset = { url: string; target: string; maxBytes: number };
+
+// First use runs under the selection lock, so a stalled or oversized download
+// must fail closed instead of holding the lock for the life of the process.
+const downloadTimeoutMs = 120_000;
+
+async function saveBounded(asset: OfficialAsset, signal: AbortSignal): Promise<void> {
+	const response = await fetch(asset.url, { redirect: "follow", signal });
+	if (!response.ok || !response.body) throw new Error("download-failed");
+	if (Number(response.headers.get("content-length")) > asset.maxBytes) throw new Error("download-too-large");
+	const chunks: Uint8Array[] = [];
+	let size = 0;
+	for await (const chunk of response.body) {
+		size += chunk.byteLength;
+		if (size > asset.maxBytes) throw new Error("download-too-large");
+		chunks.push(chunk);
+	}
+	writeFileSync(asset.target, Buffer.concat(chunks), { mode: 0o600 });
+}
+
+// One deadline covers every asset. The first failure aborts its siblings so no
+// request outlives the refusal.
+export async function downloadOfficial(assets: readonly OfficialAsset[], timeoutMs = downloadTimeoutMs): Promise<void> {
+	const controller = new AbortController();
+	const timer = setTimeout(() => controller.abort(new Error("download-timeout")), timeoutMs);
+	try {
+		await Promise.all(assets.map((asset) => saveBounded(asset, controller.signal).catch((error: unknown) => {
+			controller.abort(error);
+			throw error;
+		})));
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 async function verifiedStaging(root: string, env: EnvironmentSource): Promise<string> {
@@ -86,9 +115,9 @@ async function verifiedStaging(root: string, env: EnvironmentSource): Promise<st
 			copyFileSync(path.join(fixture, "mcporter_0.14.0_darwin_arm64.tar.gz"), archive);
 			copyFileSync(path.join(fixture, "provenance.json"), provenance);
 		} else {
-			await Promise.all([
-				saveOfficial(MCPORTER_RELEASE.archiveUrl, archive),
-				saveOfficial("https://github.com/openclaw/mcporter/releases/download/v0.14.0/provenance.json", provenance),
+			await downloadOfficial([
+				{ url: MCPORTER_RELEASE.archiveUrl, target: archive, maxBytes: 64 * 1024 * 1024 },
+				{ url: "https://github.com/openclaw/mcporter/releases/download/v0.14.0/provenance.json", target: provenance, maxBytes: 64 * 1024 },
 			]);
 		}
 		const result = verifyAndExtractMcporterRelease(archive, provenance, staging);

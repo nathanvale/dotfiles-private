@@ -85,6 +85,10 @@ jobs:
             "$fixture_dir/mcporter_0.14.0_darwin_arm64.tar.gz" \
             '7a4256c6a3a921e2319386c3142ec33b4f0b5d693af5c652fe97ee884f30f2ab' \
             "$fixture_dir/provenance.json" | shasum -a 256 -c -
+          /usr/bin/tar -xzf "$fixture_dir/mcporter_0.14.0_darwin_arm64.tar.gz" -C "$fixture_dir" mcporter
+          printf '%s  %s\n' \
+            '01d99ede8b6a88dd282eaeda2afb7086dca5bdbc04c05c8c21744703575adb27' \
+            "$fixture_dir/mcporter" | shasum -a 256 -c -
           printf 'CONNECTORS_OFFICIAL_RELEASE_FIXTURE=%s\n' "$fixture_dir" >> "$GITHUB_ENV"
       - name: Prepare the signed official mise fixture for Connectors setup
         if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
