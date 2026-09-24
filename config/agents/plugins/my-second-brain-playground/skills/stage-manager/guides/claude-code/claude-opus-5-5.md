@@ -3,8 +3,12 @@ model: Claude Opus 5.5
 model_id: claude-opus-5-5
 harness: claude-code
 harness_min_version: 2.1.280
+author: herdr-projects-s2-worker
 reviewed: 2026-09-25
-reviewed_by: herdr-projects-s2-worker (author; independent review pending on hpr-f5n.2)
+reviewed_by: >-
+  independent Code Reviewer, 2026-09-25, commit 87419e33. Verified the
+  model-config, Opus 5.5 overview and Prompting Claude Opus 5.5 sources; the
+  models overview was not fetched.
 sources:
   - https://platform.claude.com/docs/en/models/opus-5-5/overview
   - https://platform.claude.com/docs/en/about-claude/models/overview
@@ -16,8 +20,9 @@ sources:
 
 Apply this guide only to a performer whose observed Harness is Claude Code at
 `harness_min_version` or later and whose observed model ID is exactly
-`claude-opus-5-5`. Each rule below restates a cited source; the Anthropic
-pages stay authoritative, so re-read them when this guide and they disagree.
+`claude-opus-5-5`. Each rule below restates a cited source unless it is marked
+observed or extrapolated; the Anthropic pages stay authoritative, so re-read
+them when this guide and they disagree.
 
 ## Boundary
 
@@ -33,24 +38,31 @@ pages stay authoritative, so re-read them when this guide and they disagree.
 
 ## Observe identity
 
-- Read the running model from `/status` or a configured status line
-  (model-config), or from the session's own statement of its exact model ID.
-  The last is observed Claude Code behavior on 2026-09-25, not a documented
-  contract.
-- Read the Harness version from the running session, such as the version in
-  its executable path. `claude --version` reports the binary on `PATH`, which
-  can differ from the running session after an update.
+Read these yourself. Each is Claude Code behavior observed on 2026-09-25 in
+v2.1.282, not a documented contract, so mark a missing value `unknown`.
+
+- Model: the system context's statement of the exact model ID, such as "The
+  exact model ID is claude-opus-5-5".
+- Harness: `CLAUDECODE=1` and `CLAUDE_CODE_ENTRYPOINT` in your environment.
+- Version: the version segment of `CLAUDE_CODE_EXECPATH`, such as
+  `.../claude/versions/2.1.282`. `claude --version` reports the binary on
+  `PATH`, which can differ from the running session after an update.
+- Effort: `CLAUDE_EFFORT` when set.
+- Human-supplied: `/status` and a configured status line show the model
+  (model-config). You cannot run them yourself; use them only when Nathan
+  reports what they show.
 
 ## Effort
 
-- Default effort for Opus 5.5 in Claude Code is `medium` (model-config;
-  model overview). Record the effort you observe; under D7 the first launch
-  keeps the Harness default.
+- Record only the effort you observe, such as `CLAUDE_EFFORT`. A documented
+  default is not an observation; with no observed value, record `unknown`.
 - Thinking is always on and cannot be disabled (model overview). Effort is the
   control: lower effort before writing "be brief" or "think less" prompts
   (prompting guide, Calibrate effort).
 - Leave "think carefully" and "don't think" lines out of briefs. The model
-  sets its own thinking depth (prompting guide, Thinking instructions).
+  sets its own thinking depth. This extrapolates to worker briefs from a
+  source written for chat system prompts (prompting guide, Thinking
+  instructions in chat system prompts).
 - Ask for results and evidence, never for the worker's internal reasoning in
   the reply. Such requests can be declined under the `reasoning_extraction`
   category (prompting guide, Safeguard refusals).
