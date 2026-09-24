@@ -15,8 +15,9 @@ checkpoint binding responsibility.
 ## Use Tasks and checkpoints for the slice
 
 Apply this branch to an authorized implementation or evaluation slice whose
-Task an already-adopted legacy project still tracks in Agent Ledger. A new
-Task tracks in Beads instead; follow
+Task an already-adopted legacy project tracks in Agent Ledger, including a
+new Task inside that continuing project. A project that has explicitly
+adopted Beads tracks its new Task there instead; follow
 [beads-workflow](../../beads-workflow/SKILL.md). Planning alone does not create a
 Task or activate a goal.
 
@@ -114,8 +115,9 @@ acceptance criteria, create another tracking file, or bind a worker's checkpoint
 
 ## Recover with the control panel
 
-After compaction, verify that the installed hook delivers a small control panel
-with exact commands to:
+No registered hook delivers this legacy control panel; run
+`${PLUGIN_ROOT}/hooks/recovery-checkpoint recover` after compaction to return
+it manually, with exact commands to:
 
 - open or read the active project map, goal, and evidence owners;
 - discover the selected Agent Ledger executable's current command surface;

@@ -26,7 +26,7 @@ question benefits from it; keep its result distinct from delivered capability.
 | --- | --- |
 | Skills and plugin implementation | Playground plugin source; later qualified Agent Plugin Kit integration |
 | Human-readable knowledge, research, and synthesis | Canonical Markdown notes in the appropriate family or project |
-| Accepted tasks, dependencies, coordination choices, and lessons | Beads through native `bd` and beads-workflow for new work, with msb-workflow for session binding and recovery only; Agent Ledger remains the tracked owner only for a Task an already-adopted legacy project has not yet cut over |
+| Accepted tasks, dependencies, coordination choices, and lessons | Beads through native `bd` and beads-workflow for a project that has adopted Beads, with msb-workflow for session binding and recovery only; Agent Ledger remains the tracked owner, including a new Task, for an already-adopted legacy project until its explicit cutover |
 | Repository issues, implementation contracts, code, and checks | Owning repository and its declared issue tracker |
 | Agent launch and supervision | Execution harness or workflow adapter |
 | Dashboard | Read-only projection and navigation over those owners |

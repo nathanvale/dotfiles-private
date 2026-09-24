@@ -97,9 +97,11 @@ work binding; compaction alone does not require repeating it.
   [beads-workflow](../beads-workflow/SKILL.md); an already-adopted legacy
   project's Agent Ledger Task follows
   [Tasks and checkpoint use](references/tasks-first.md#use-tasks-and-checkpoints-for-the-slice).
-  A vault-native project without an adopted execution store resumes no Task.
-  Use the installed checkpoint at meaningful boundaries. Future Notes and
-  Progress need no substitute.
+  Use the installed checkpoint at meaningful boundaries for either Task owner;
+  future Notes and Progress need no substitute. A vault-native project without
+  an adopted execution store resumes no Task and has no installed checkpoint;
+  recover instead from its canonical `GOAL.md`, README, and latest proof, Git
+  history for a prior revision, and ask when context stays uncertain.
 - After compaction, recover by the Task's owner. A Beads Task recovers
   through `bin/msb-workflow` session binding and native `bd` state per
   [beads-workflow](../beads-workflow/SKILL.md); an already-adopted legacy
