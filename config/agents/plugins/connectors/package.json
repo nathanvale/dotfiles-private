@@ -4,7 +4,8 @@
 	"version": "0.3.0",
 	"type": "module",
 	"scripts": {
-		"test": "bun test",
+		"build": "bun build ./bin/connectors.ts --compile --target=bun-darwin-arm64 --outfile bin/connectors --minify",
+		"test": "bun run build && bun test",
 		"typecheck": "../../../../node_modules/.bin/tsc --noEmit -p tsconfig.json"
 	}
 }
