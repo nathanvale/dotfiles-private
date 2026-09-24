@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { createBundle, createFakeMcporterBinDir, runBundle } from "./harness.ts";
+import { createBundle, createFakeMcporterBinDir, PLUGIN_ROOT, runBundle } from "./harness.ts";
 
 const OP_PATH = "/dist/1P/op2/pkg/v2.39.0/op_apple_universal_v2.39.0.pkg";
 const MISE_BASE = "/jdx/mise/releases/download/v2026.9.12";
@@ -413,3 +413,57 @@ test.skipIf(fixtures === null)("official compiled setup reports mise as uncertai
 		bundle.dispose();
 	}
 }, 100_000);
+
+// Fault injection for the post-commit station: a test-only build whose final
+// success envelope names an unchanged outcome while reporting completed
+// effects, so output validation throws after op, mise and uv are committed and
+// before any stdout write. The shipped source has no such fault.
+test.skipIf(fixtures === null)("official compiled setup reports committed effects when output validation fails after uv", async () => {
+	if (!fixtures) throw new Error("official fixture missing");
+	const bundle = createBundle();
+	const { server, requests } = fixtureServer(fixtures);
+	try {
+		const sourceBin = path.join(PLUGIN_ROOT, "bin");
+		const testBin = path.join(bundle.root, "test-source");
+		cpSync(sourceBin, testBin, { recursive: true, filter: (source) => source !== path.join(sourceBin, "connectors") });
+		const entry = path.join(testBin, "connectors.ts");
+		const original = readFileSync(entry, "utf8");
+		const successEmit = 'emitSetup("SUCCESS_COMPLETED", completed,';
+		expect(original.split(successEmit)).toHaveLength(2);
+		writeFileSync(entry, original.replace(successEmit, 'emitSetup("DOMAIN_SETUP_FAILED_UNCHANGED", completed,'));
+		const built = Bun.spawnSync(["bun", "build", entry, "--compile", "--target=bun-darwin-arm64", "--outfile", bundle.binary], { stdout: "pipe", stderr: "pipe" });
+		if (built.exitCode !== 0) throw new Error(new TextDecoder().decode(built.stderr));
+		const home = path.join(bundle.root, "home");
+		mkdirSync(home);
+		const state = path.join(realpathSync(bundle.root), "state");
+		const setup = path.join(state, "connectors", "setup");
+		const result = await runBundle(bundle, ["setup"], { home, timeoutMs: 180_000, extraEnv: {
+			XDG_STATE_HOME: state,
+			CONNECTORS_TEST_RELEASE_ORIGIN: `http://127.0.0.1:${server.port}/`,
+			OP_SERVICE_ACCOUNT_TOKEN: "SENTINEL_PRIVATE_VALUE",
+		} });
+		expect(result.code).toBe(1);
+		expect(result.stderr).toBe("");
+		expect(result.stdout.trim().split("\n")).toHaveLength(1);
+		expect(result.stdout).not.toContain("SENTINEL_PRIVATE_VALUE");
+		const envelope = JSON.parse(result.stdout);
+		expect(envelope.result.commandIdentity).toBe("connectors.setup");
+		expect(envelope.result.outcome).toBe("failed");
+		expect(envelope.result.failureClass).toBe("internal");
+		expect(envelope.result.causeCode).toBe("INTERNAL_SETUP_AFTER_COMMIT");
+		expect(envelope.result.transactionState).toBe("completed");
+		expect(envelope.result.effects).toEqual({ completed: ["op", "mise", "uv"], remaining: [], uncertain: [], inventoryComplete: true });
+		expect(envelope.diagnostics).toEqual({ detail: "internal contract validation or serialization failed before output" });
+		expect(requests).toEqual([OP_PATH, `${MISE_BASE}/SHASUMS256.txt`, `${MISE_BASE}/SHASUMS256.txt.minisig`, `${MISE_BASE}/mise-v2026.9.12-macos-arm64.tar.xz`]);
+		// The reported completed effects are durable, not merely claimed.
+		expect(readFileSync(path.join(setup, "op", "op-selected"), "utf8")).toBe(OP_SELECTED);
+		expect(sha256(path.join(setup, "op", OP_SELECTED))).toBe(OP_BINARY_SHA256);
+		expect(readFileSync(path.join(setup, "mise", "mise-selected"), "utf8")).toBe(MISE_SELECTED);
+		expect(sha256(path.join(setup, "mise", MISE_SELECTED))).toBe(MISE_BINARY_SHA256);
+		expect(sha256(path.join(setup, "uv", "installs", "aqua-astral-sh-uv", "0.12.18", "uv-aarch64-apple-darwin", "uv"))).toBe(UV_BINARY_SHA256);
+		expect(readdirSync(path.join(setup, "downloads"))).toEqual([]);
+	} finally {
+		server.stop(true);
+		bundle.dispose();
+	}
+}, 240_000);
