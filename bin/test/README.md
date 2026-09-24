@@ -47,10 +47,12 @@ disposable Git fixtures and runs it under an empty environment. It proves the
 interactive pseudo-terminal approval and refusal routes, explicit force,
 noninteractive refusal, mode-600 versioned recovery manifests, public restore,
 creation and final-link-verification rollback, preserved literal sentinel bytes,
-and that the managed process does not call recursive `rm`. Its base-revision
-negative control demonstrates the old interactive route removes the real
-directory and has no restore interface. It does not activate a live profile or
-claim signal-interruption recovery.
+and that the managed process does not call recursive `rm`. Its negative
+control runs a test-owned fixture that models the retired interactive
+`rm -rf` route against a disposable HOME, showing that route removes the real
+directory and offers no restore interface; it exercises the fixture, not the
+public symlink manager. It does not activate a live profile or claim
+signal-interruption recovery.
 
 `toolchain-status-test.sh` copies the public status and preview command into a
 temporary Git fixture and supplies independent fake Node, Bun, Python, Beads,
