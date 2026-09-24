@@ -1,34 +1,54 @@
 #!/usr/bin/env bun
-// Compiled Connectors front door (T1, Ticket #88 under Spec #87): a
-// discovery-only skeleton. It knows nothing about route selection or any
-// Provider: `bin/provider-route.ts` remains the sole owner of that logic
-// until a later Ticket folds real commands in here. This file exists only
-// so the plugin can ship a compiled macOS arm64 `bin/connectors` executable
-// that boots and answers one trivial discovery command with a Contract Core
-// 2.0 envelope, standalone, with no ambient Bun, Node, mise, or op required.
+// Compiled Connectors front door. T1 (Ticket #88) shipped a discovery-only
+// skeleton. T2 (Ticket #89 under Spec #87) adds the generic manifest-driven
+// command core: list, config validate/show, status, doctor, and a minimal
+// schema reachability seam for keyless connectors. `bin/provider-route.ts`
+// remains the sole owner of the existing per-Skill auth/list/call launcher
+// every Skill's SKILL.md still documents; this file never imports it and
+// never branches on a connector's name. All connector-specific behavior
+// lives in a schema-validated Connector Manifest (bin/manifest.ts) and a
+// packaged adapter registry (bin/adapters/index.ts).
+import { existsSync } from "node:fs";
+import path from "node:path";
+import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
+import { discoverManifests, loadOneManifest, ManifestError, type ConnectorManifest } from "./manifest.ts";
 
 const CONTRACT_VERSION = "2.0.0";
 const PROGRAM = "connectors";
 
 const EXIT_MEANINGS = { "0": "success", "1": "internal", "2": "usage", "3": "domain", "4": "schema", "75": "transient" } as const;
 const SIGNAL_EXITS = { "130": "SIGINT", "143": "SIGTERM" } as const;
-// What this T1 skeleton does not do yet. Keep honest: only list an exclusion
+// What this binary does not do yet. Keep honest: only list an exclusion
 // once it is actually true, and drop it in the Ticket that stops excluding it.
 const EFFECT_EXCLUSIONS = [
-	"any credential or custody access",
+	"any credential or custody access beyond a packaged adapter's local, nonsecret reference check",
 	"any dependency install, setup, or MCPorter bootstrap",
-	"any provider operation",
-	"route selection or dispatch to any Provider (bin/provider-route.ts remains the sole owner)",
+	"any provider write operation",
+	"setup, deps, auth, or run (later Tickets own the complete production flows)",
 ] as const;
 
 // Exported: each appears in the exported Envelope's public signature.
 export type EffectClass = "inspect";
 export type Outcome = "success" | "refused" | "failed";
-// INTERNAL_UNEXPECTED_UNCHANGED (not the _UNKNOWN cause), because T1's inspect-only
-// surface never attempts an effect: assertEnvelope always runs before the one stdout
-// write, so a caught internal failure has zero attempted effects, never an uncertain
-// one. Matches the existing Contract Core owner's own unchanged/unknown split.
-export type CauseCode = "SUCCESS_UNCHANGED" | "USAGE_UNKNOWN_COMMAND" | "INTERNAL_UNEXPECTED_UNCHANGED";
+export type FailureClass = "usage" | "internal" | "domain" | "schema" | "transient" | null;
+// INTERNAL_UNEXPECTED_UNCHANGED (not the _UNKNOWN cause), because every command
+// here is inspect-only and never attempts an effect: assertEnvelope always runs
+// before the one stdout write, so a caught internal failure has zero attempted
+// effects, never an uncertain one. Matches the existing Contract Core owner's
+// own unchanged/unknown split.
+export type CauseCode =
+	| "SUCCESS_UNCHANGED"
+	| "USAGE_UNKNOWN_COMMAND"
+	| "USAGE_MALFORMED_ARGUMENTS"
+	| "USAGE_CONNECTOR_UNKNOWN"
+	| "SCHEMA_VERSION_UNSUPPORTED"
+	| "SCHEMA_ADAPTER_UNKNOWN"
+	| "SCHEMA_SELECTOR_INVALID"
+	| "SCHEMA_MANIFEST_INVALID"
+	| "DOMAIN_ADAPTER_REFUSED"
+	| "DOMAIN_CUSTODY_NOT_SUPPORTED"
+	| "TRANSIENT_PROVIDER_UNREACHABLE"
+	| "INTERNAL_UNEXPECTED_UNCHANGED";
 
 interface CommandDescriptor {
 	readonly commandIdentity: string;
@@ -37,14 +57,20 @@ interface CommandDescriptor {
 	readonly summary: string;
 }
 
-// This is the complete T1 command surface: discovery, help, and the refusal
-// station dispatch falls into on anything else. Later Tickets grow this list;
-// do not add a route here without also implementing it, so discovery never
-// advertises a command this binary cannot actually answer.
+// This is the complete command surface. Do not add a route here without also
+// implementing it, so discovery never advertises a command this binary
+// cannot actually answer. setup/deps/auth/run are later Tickets' work and are
+// deliberately absent.
 const COMMANDS: readonly CommandDescriptor[] = [
 	{ commandIdentity: "connectors.dispatch", route: [], effectClass: "inspect", summary: "Refuse a missing, unknown, or incompatible command selection" },
 	{ commandIdentity: "connectors.help", route: ["--help"], effectClass: "inspect", summary: "Show help and usage" },
 	{ commandIdentity: "connectors.discovery", route: ["--discover", "--json"], effectClass: "inspect", summary: "Describe the commands and the contract" },
+	{ commandIdentity: "connectors.list", route: ["list"], effectClass: "inspect", summary: "List connectors declared by a Connector Manifest" },
+	{ commandIdentity: "connectors.config.validate", route: ["config", "validate"], effectClass: "inspect", summary: "Validate one or every connector manifest and its registry" },
+	{ commandIdentity: "connectors.config.show", route: ["config", "show"], effectClass: "inspect", summary: "Show one connector's resolved nonsecret configuration and its provenance" },
+	{ commandIdentity: "connectors.status", route: ["status"], effectClass: "inspect", summary: "Report truthful evidence state per connector" },
+	{ commandIdentity: "connectors.doctor", route: ["doctor"], effectClass: "inspect", summary: "Local readiness gate for one connector" },
+	{ commandIdentity: "connectors.schema", route: ["schema"], effectClass: "inspect", summary: "Fetch live schema evidence for one keyless connector" },
 ];
 
 // Contract Core 2.0 requires sorted, unique availablePaths, independent of
@@ -60,7 +86,7 @@ export interface Envelope {
 		readonly runId: string;
 		readonly commandIdentity: string;
 		readonly outcome: Outcome;
-		readonly failureClass: "usage" | "internal" | null;
+		readonly failureClass: FailureClass;
 		readonly exitCode: number;
 		readonly data: Record<string, unknown> | null;
 		readonly retryable: boolean;
@@ -180,21 +206,31 @@ interface CauseRow {
 	readonly outcome: Outcome;
 	readonly effectClass: EffectClass;
 	readonly transactionState: "unchanged";
-	readonly failureClass: "usage" | "internal" | null;
+	readonly failureClass: FailureClass;
 	readonly exitCode: number;
 	readonly retryable: boolean;
 	readonly dataRule: "object" | "null";
 	readonly repairActionRule: "null" | "nonempty-string";
 }
 
-// The complete, closed set of cause codes T1 may ever emit, each pinned to
-// every other field a fabricated envelope could otherwise mismatch (a
-// "failed" outcome carrying SUCCESS_UNCHANGED, an unchanged transactionState
-// carrying a non-empty completed list, and so on). A later Ticket that adds
-// a cause code must add its own row here, never widen an existing one.
+// The complete, closed set of cause codes this binary may ever emit, each
+// pinned to every other field a fabricated envelope could otherwise mismatch
+// (a "failed" outcome carrying SUCCESS_UNCHANGED, an unchanged
+// transactionState carrying a non-empty completed list, and so on). A later
+// Ticket that adds a cause code must add its own row here, never widen an
+// existing one.
 const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	SUCCESS_UNCHANGED: { outcome: "success", effectClass: "inspect", transactionState: "unchanged", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
 	USAGE_UNKNOWN_COMMAND: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	USAGE_MALFORMED_ARGUMENTS: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	USAGE_CONNECTOR_UNKNOWN: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	SCHEMA_VERSION_UNSUPPORTED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	SCHEMA_ADAPTER_UNKNOWN: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	SCHEMA_SELECTOR_INVALID: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	SCHEMA_MANIFEST_INVALID: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_ADAPTER_REFUSED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_CUSTODY_NOT_SUPPORTED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	TRANSIENT_PROVIDER_UNREACHABLE: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_UNEXPECTED_UNCHANGED: { outcome: "failed", effectClass: "inspect", transactionState: "unchanged", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 };
 
@@ -351,16 +387,23 @@ function discover(): void {
 
 function helpText(): string {
 	return [
-		`${PROGRAM}: Connectors plugin front door (T1 discovery skeleton)`,
+		`${PROGRAM}: Connectors plugin front door`,
 		"",
 		"Commands:",
-		"  --discover --json   Describe the commands and the contract (machine JSON)",
-		"  --help              Show this human-readable help",
-		"  --help --json       Show help as a machine Contract Core envelope",
+		"  --discover --json                              Describe the commands and the contract (machine JSON)",
+		"  --help                                          Show this human-readable help",
+		"  --help --json                                   Show help as a machine Contract Core envelope",
+		"  list                                            List connectors declared by a manifest",
+		"  config validate [connector]                     Validate one or every connector manifest and registry",
+		"  config show <connector> --resolved --json       Show resolved nonsecret configuration and provenance",
+		"  status [connector]                              Report truthful evidence state",
+		"  doctor <connector>                              Local readiness gate for one connector",
+		"  schema <connector>                               Fetch live schema evidence for one keyless connector",
 		"",
 		"Examples:",
 		`  ${PROGRAM} --discover --json`,
-		`  ${PROGRAM} --help`,
+		`  ${PROGRAM} list`,
+		`  ${PROGRAM} doctor context7`,
 		"",
 	].join("\n");
 }
@@ -413,7 +456,396 @@ function refuse(message: string): void {
 	});
 }
 
-function main(): void {
+// Resolves the real skills/ directory relative to wherever this compiled
+// binary currently is, never to Bun's own installation: import.meta.dir
+// inside a --compile executable is a virtual embedded path, not the running
+// binary's real location, so process.execPath is the only reliable anchor.
+// This is also what makes the "same unchanged binary, isolated bundle"
+// extensibility proof possible: copying bin/connectors plus a skills/
+// directory elsewhere and running that copy resolves against the copy.
+function skillsRoot(): string {
+	return path.resolve(path.dirname(process.execPath), "..", "skills");
+}
+
+function manifestErrorCause(error: ManifestError): CauseCode {
+	switch (error.code) {
+		case "manifest-missing":
+			return "USAGE_CONNECTOR_UNKNOWN";
+		case "schema-version-unsupported":
+			return "SCHEMA_VERSION_UNSUPPORTED";
+		case "adapter-unknown":
+			return "SCHEMA_ADAPTER_UNKNOWN";
+		case "selector-invalid":
+			return "SCHEMA_SELECTOR_INVALID";
+		default:
+			return "SCHEMA_MANIFEST_INVALID";
+	}
+}
+
+function emitSuccess(commandIdentity: string, message: string, data: Record<string, unknown>, nextAction: string): void {
+	emit({
+		envelopeVersion: 2,
+		contractVersion: CONTRACT_VERSION,
+		message,
+		availablePaths: AVAILABLE_PATHS,
+		result: {
+			runId: runId(),
+			commandIdentity,
+			outcome: "success",
+			failureClass: null,
+			exitCode: 0,
+			data,
+			retryable: false,
+			repairAction: null,
+			nextAction,
+			effectClass: "inspect",
+			transactionState: "unchanged",
+			causeCode: "SUCCESS_UNCHANGED",
+			effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+		},
+	});
+}
+
+// Composes with ADMITTED_CAUSE_ROWS so every call site's outcome, failure
+// class, exit code, and retryability come from the one table, never a second
+// hand-typed copy that could drift from it.
+function emitRefusal(commandIdentity: string, message: string, causeCode: CauseCode, repairAction: string, nextAction: string): void {
+	const row = ADMITTED_CAUSE_ROWS[causeCode];
+	emit({
+		envelopeVersion: 2,
+		contractVersion: CONTRACT_VERSION,
+		message,
+		availablePaths: AVAILABLE_PATHS,
+		result: {
+			runId: runId(),
+			commandIdentity,
+			outcome: row.outcome,
+			failureClass: row.failureClass,
+			exitCode: row.exitCode,
+			data: null,
+			retryable: row.retryable,
+			repairAction,
+			nextAction,
+			effectClass: "inspect",
+			transactionState: "unchanged",
+			causeCode,
+			effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+		},
+	});
+}
+
+function usageMalformed(commandIdentity: string, usage: string): void {
+	emitRefusal(commandIdentity, `${PROGRAM}: usage: ${usage}`, "USAGE_MALFORMED_ARGUMENTS", `Run ${PROGRAM} ${usage}`, "connectors.list");
+}
+
+function handleList(): void {
+	const discovered = discoverManifests(skillsRoot(), ADAPTER_IDS);
+	const connectors = discovered
+		.filter((entry): entry is typeof entry & { manifest: ConnectorManifest } => entry.manifest !== null)
+		.map((entry) => ({ id: entry.manifest.id, adapter: entry.manifest.adapter, keyless: entry.manifest.adapter === null, requirements: entry.manifest.requirements }));
+	const problems = discovered.filter((entry) => entry.error !== null).map((entry) => ({ id: entry.id, code: entry.error?.code, message: entry.error?.message }));
+	emitSuccess("connectors.list", `${connectors.length} connector(s) declared by a manifest`, { connectors, problems }, "connectors.config.validate");
+}
+
+function handleConfigValidate(args: readonly string[]): void {
+	if (args.length > 1) {
+		usageMalformed("connectors.config.validate", "config validate [connector]");
+		return;
+	}
+	const root = skillsRoot();
+	if (args.length === 0) {
+		const discovered = discoverManifests(root, ADAPTER_IDS);
+		const problem = discovered.find((entry) => entry.error !== null);
+		if (problem?.error) {
+			emitRefusal(
+				"connectors.config.validate",
+				`${PROGRAM}: connector ${problem.id} manifest is invalid: ${problem.error.message}`,
+				manifestErrorCause(problem.error),
+				"Fix the named manifest or registry, then run config validate again",
+				"connectors.list",
+			);
+			return;
+		}
+		emitSuccess("connectors.config.validate", `${discovered.length} connector manifest(s) valid`, { validated: discovered.map((entry) => entry.id) }, "connectors.list");
+		return;
+	}
+	const id = args[0] ?? "";
+	try {
+		loadOneManifest(root, id, ADAPTER_IDS);
+	} catch (error) {
+		if (error instanceof ManifestError) {
+			emitRefusal(
+				"connectors.config.validate",
+				`${PROGRAM}: connector ${id} manifest is invalid: ${error.message}`,
+				manifestErrorCause(error),
+				"Fix the named manifest or registry, then run config validate again",
+				"connectors.list",
+			);
+			return;
+		}
+		throw error;
+	}
+	emitSuccess("connectors.config.validate", `connector ${id} manifest is valid`, { validated: [id] }, "connectors.config.show");
+}
+
+const SELECTOR_VALUE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+interface ResolvedSelectors {
+	readonly values: Record<string, { readonly value: string; readonly source: "packaged-manifest-default" | "invocation-selector" }>;
+	readonly problem: string | null;
+}
+
+interface SelectorResolution {
+	readonly value?: { readonly value: string; readonly source: "invocation-selector" };
+	readonly problem?: string;
+}
+
+function resolveOneSelector(name: string, declaration: ConnectorManifest["selectors"][string], given: ReadonlyMap<string, string>): SelectorResolution {
+	const value = given.get(name);
+	if (value === undefined) {
+		return declaration.required ? { problem: `selector ${name} is required; pass --select ${name}=<value>` } : {};
+	}
+	if (!SELECTOR_VALUE_PATTERN.test(value)) return { problem: `selector ${name} must match ${SELECTOR_VALUE_PATTERN.source}` };
+	if (declaration.pattern && !new RegExp(declaration.pattern).test(value)) return { problem: `selector ${name} must match ${declaration.pattern}` };
+	if (declaration.enum && !declaration.enum.includes(value)) return { problem: `selector ${name} must be one of ${declaration.enum.join(", ")}` };
+	return { value: { value, source: "invocation-selector" } };
+}
+
+function resolveSelectors(manifest: ConnectorManifest, given: ReadonlyMap<string, string>): ResolvedSelectors {
+	const values: ResolvedSelectors["values"] = {};
+	for (const [name, declaration] of Object.entries(manifest.selectors)) {
+		const resolution = resolveOneSelector(name, declaration, given);
+		if (resolution.problem) return { values, problem: resolution.problem };
+		if (resolution.value) values[name] = resolution.value;
+	}
+	for (const name of given.keys()) {
+		if (!(name in manifest.selectors)) return { values, problem: `connector ${manifest.id} does not declare selector ${name}` };
+	}
+	return { values, problem: null };
+}
+
+interface ParsedConfigShowArgs {
+	readonly id: string;
+	readonly given: ReadonlyMap<string, string>;
+}
+
+// Returns null for any malformed input; the single caller emits the one
+// usage refusal, so this stays a pure parser with no envelope side effect.
+function consumeSelectToken(rest: readonly string[], index: number, given: Map<string, string>): number | null {
+	const value = rest[index + 1];
+	const equals = value?.indexOf("=") ?? -1;
+	if (!value || equals <= 0) return null;
+	given.set(value.slice(0, equals), value.slice(equals + 1));
+	return index + 1;
+}
+
+function parseConfigShowArgs(args: readonly string[]): ParsedConfigShowArgs | null {
+	const id = args[0];
+	let resolvedFlag = false;
+	let jsonFlag = false;
+	const given = new Map<string, string>();
+	const rest = args.slice(1);
+	for (let index = 0; index < rest.length; index += 1) {
+		const token = rest[index];
+		if (token === "--resolved") {
+			resolvedFlag = true;
+			continue;
+		}
+		if (token === "--json") {
+			jsonFlag = true;
+			continue;
+		}
+		if (token === "--select") {
+			const nextIndex = consumeSelectToken(rest, index, given);
+			if (nextIndex === null) return null;
+			index = nextIndex;
+			continue;
+		}
+		return null;
+	}
+	if (!id || !resolvedFlag || !jsonFlag) return null;
+	return { id, given };
+}
+
+function handleConfigShow(args: readonly string[]): void {
+	const usage = "config show <connector> --resolved --json [--select name=value ...]";
+	const parsedArgs = parseConfigShowArgs(args);
+	if (!parsedArgs) {
+		usageMalformed("connectors.config.show", usage);
+		return;
+	}
+	const { id, given } = parsedArgs;
+	let manifest: ConnectorManifest;
+	try {
+		manifest = loadOneManifest(skillsRoot(), id, ADAPTER_IDS);
+	} catch (error) {
+		if (error instanceof ManifestError) {
+			emitRefusal("connectors.config.show", `${PROGRAM}: ${error.message}`, manifestErrorCause(error), "Run config validate to see the exact defect", "connectors.config.validate");
+			return;
+		}
+		throw error;
+	}
+	const selectors = resolveSelectors(manifest, given);
+	if (selectors.problem) {
+		emitRefusal("connectors.config.show", `${PROGRAM}: ${selectors.problem}`, "SCHEMA_SELECTOR_INVALID", selectors.problem, "connectors.config.validate");
+		return;
+	}
+	const values: Record<string, { value: unknown; source: string }> = {
+		adapter: { value: manifest.adapter ?? "none", source: "packaged-manifest-default" },
+		custodyMode: { value: manifest.adapter === null ? "keyless" : "credential-reference", source: "packaged-manifest-default" },
+		transportRegistry: { value: manifest.transportRegistry, source: "packaged-manifest-default" },
+		requirements: { value: manifest.requirements, source: "packaged-manifest-default" },
+		...selectors.values,
+	};
+	emitSuccess("connectors.config.show", `resolved nonsecret configuration for ${id}`, { connector: id, values }, "connectors.status");
+}
+
+function evidenceFor(manifest: ConnectorManifest): Record<string, unknown> {
+	let custodyChecked: boolean | null = null;
+	if (manifest.adapter) {
+		const adapter = ADAPTERS[manifest.adapter];
+		custodyChecked = adapter ? adapter.inspectLocal(manifest).ready : false;
+	}
+	// authenticated/schemaQualified/liveReadProven/liveWriteProven stay false
+	// unconditionally: none of them is ever attempted by this command surface,
+	// so no local or fixture check may promote a connector past what it
+	// actually proves (Spec AC21).
+	return {
+		configured: true,
+		localReady: true,
+		custodyChecked,
+		authenticated: false,
+		schemaQualified: false,
+		liveReadProven: false,
+		liveWriteProven: false,
+		fixtureTested: null,
+	};
+}
+
+function handleStatus(args: readonly string[]): void {
+	if (args.length > 1) {
+		usageMalformed("connectors.status", "status [connector]");
+		return;
+	}
+	const root = skillsRoot();
+	if (args.length === 0) {
+		const discovered = discoverManifests(root, ADAPTER_IDS);
+		const connectors = discovered
+			.filter((entry): entry is typeof entry & { manifest: ConnectorManifest } => entry.manifest !== null)
+			.map((entry) => ({ id: entry.id, evidence: evidenceFor(entry.manifest) }));
+		const problems = discovered.filter((entry) => entry.error !== null).map((entry) => ({ id: entry.id, code: entry.error?.code, message: entry.error?.message }));
+		emitSuccess("connectors.status", `${connectors.length} connector(s) reporting evidence state`, { connectors, problems }, "connectors.doctor");
+		return;
+	}
+	const id = args[0] ?? "";
+	try {
+		const manifest = loadOneManifest(root, id, ADAPTER_IDS);
+		emitSuccess("connectors.status", `evidence state for ${id}`, { connectors: [{ id, evidence: evidenceFor(manifest) }], problems: [] }, "connectors.doctor");
+	} catch (error) {
+		if (error instanceof ManifestError) {
+			emitRefusal("connectors.status", `${PROGRAM}: ${error.message}`, manifestErrorCause(error), "Run config validate to see the exact defect", "connectors.config.validate");
+			return;
+		}
+		throw error;
+	}
+}
+
+function handleDoctor(args: readonly string[]): void {
+	if (args.length !== 1) {
+		usageMalformed("connectors.doctor", "doctor <connector>");
+		return;
+	}
+	const id = args[0] ?? "";
+	let manifest: ConnectorManifest;
+	try {
+		manifest = loadOneManifest(skillsRoot(), id, ADAPTER_IDS);
+	} catch (error) {
+		if (error instanceof ManifestError) {
+			emitRefusal("connectors.doctor", `${PROGRAM}: ${error.message}`, manifestErrorCause(error), "Run config validate to see the exact defect", "connectors.config.validate");
+			return;
+		}
+		throw error;
+	}
+	if (manifest.adapter === null) {
+		emitSuccess("connectors.doctor", `${id} is locally ready (keyless)`, { connector: id, localReady: true, custodyChecked: null }, "connectors.status");
+		return;
+	}
+	const adapter = ADAPTERS[manifest.adapter];
+	const inspection = adapter?.inspectLocal(manifest) ?? { ready: false, cause: "ADAPTER_MISSING", detail: "declared adapter is not packaged" };
+	if (!inspection.ready) {
+		emitRefusal(
+			"connectors.doctor",
+			`${PROGRAM}: ${id} is not locally ready: ${inspection.detail ?? inspection.cause ?? "unknown"}`,
+			"DOMAIN_ADAPTER_REFUSED",
+			inspection.detail ?? "Repair the named local defect",
+			"connectors.config.show",
+		);
+		return;
+	}
+	emitSuccess("connectors.doctor", `${id} is locally ready`, { connector: id, localReady: true, custodyChecked: true }, "connectors.status");
+}
+
+async function handleSchema(args: readonly string[]): Promise<void> {
+	if (args.length !== 1) {
+		usageMalformed("connectors.schema", "schema <connector>");
+		return;
+	}
+	const id = args[0] ?? "";
+	let manifest: ConnectorManifest;
+	try {
+		manifest = loadOneManifest(skillsRoot(), id, ADAPTER_IDS);
+	} catch (error) {
+		if (error instanceof ManifestError) {
+			emitRefusal("connectors.schema", `${PROGRAM}: ${error.message}`, manifestErrorCause(error), "Run config validate to see the exact defect", "connectors.config.validate");
+			return;
+		}
+		throw error;
+	}
+	if (manifest.adapter !== null) {
+		emitRefusal(
+			"connectors.schema",
+			`${PROGRAM}: ${id} needs a declared credential; schema is not yet supported for it`,
+			"DOMAIN_CUSTODY_NOT_SUPPORTED",
+			"Use doctor to check local readiness; live schema for credentialed connectors is a later Ticket",
+			"connectors.doctor",
+		);
+		return;
+	}
+	if (!existsSync(manifest.registryPath)) {
+		emitRefusal("connectors.schema", `${PROGRAM}: ${id} registry is missing`, "SCHEMA_MANIFEST_INVALID", "Run config validate to see the exact defect", "connectors.config.validate");
+		return;
+	}
+	const registry = JSON.parse(await Bun.file(manifest.registryPath).text()) as { mcpServers?: Record<string, { allowedTools?: readonly string[] }> };
+	const server = Object.keys(registry.mcpServers ?? {})[0];
+	if (!server) {
+		emitRefusal("connectors.schema", `${PROGRAM}: ${id} declares no server`, "SCHEMA_MANIFEST_INVALID", "Fix the registry to declare at least one server", "connectors.config.validate");
+		return;
+	}
+	// Surfaces the already-validated registry's own allow-list, so a caller
+	// (and a test) can confirm this reached the connector's real declared
+	// tools, not merely an opaque success.
+	const allowedTools = registry.mcpServers?.[server]?.allowedTools ?? [];
+	const mcporter = Bun.which("mcporter");
+	if (!mcporter) {
+		emitRefusal("connectors.schema", `${PROGRAM}: mcporter is not available on PATH`, "TRANSIENT_PROVIDER_UNREACHABLE", "Install mcporter, or run connectors setup once it exists", "connectors.doctor");
+		return;
+	}
+	const proc = Bun.spawn([mcporter, "--config", manifest.registryPath, "list", server, "--json"], { stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+	const [stdout, exitCode] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
+	if (exitCode !== 0) {
+		emitRefusal("connectors.schema", `${PROGRAM}: ${id} schema fetch did not complete`, "TRANSIENT_PROVIDER_UNREACHABLE", "Retry; this attempted no write and is safe to repeat", "connectors.doctor");
+		return;
+	}
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(stdout);
+	} catch {
+		parsed = { raw: stdout };
+	}
+	emitSuccess("connectors.schema", `schema evidence fetched for ${id}`, { connector: id, server, allowedTools, schema: parsed }, "connectors.status");
+}
+
+async function main(): Promise<void> {
 	const args = process.argv.slice(2);
 	if (args.length === 2 && args[0] === "--discover" && args[1] === "--json") {
 		discover();
@@ -430,6 +862,30 @@ function main(): void {
 	}
 	if (args.length === 0) {
 		refuse(`${PROGRAM}: no command given. Run with --discover --json to see available commands.`);
+		return;
+	}
+	if (args[0] === "list") {
+		handleList();
+		return;
+	}
+	if (args[0] === "config" && args[1] === "validate") {
+		handleConfigValidate(args.slice(2));
+		return;
+	}
+	if (args[0] === "config" && args[1] === "show") {
+		handleConfigShow(args.slice(2));
+		return;
+	}
+	if (args[0] === "status") {
+		handleStatus(args.slice(1));
+		return;
+	}
+	if (args[0] === "doctor") {
+		handleDoctor(args.slice(1));
+		return;
+	}
+	if (args[0] === "schema") {
+		await handleSchema(args.slice(1));
 		return;
 	}
 	// Never echo the caller's raw argv into public output: an argument can
@@ -460,8 +916,11 @@ if (import.meta.main) {
 		void error;
 		process.exitCode = 1;
 	});
+	// main() is async only because connectors.schema spawns mcporter as a real
+	// child process; every other route still resolves synchronously inside it.
+	void (async () => {
 	try {
-		main();
+		await main();
 	} catch {
 		process.exitCode = 1;
 		if (outputStarted) {
@@ -485,4 +944,5 @@ if (import.meta.main) {
 			}
 		}
 	}
+	})();
 }

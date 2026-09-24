@@ -1,8 +1,10 @@
-// T1 (Ticket #88 under Spec #87): the compiled front door boots standalone,
-// with an empty HOME and no ambient Bun/Node/mise/op on PATH, and answers a
-// trivial discovery command with a Contract Core 2.0 envelope. Expected
-// values below are independent literals, never re-derived by importing
-// bin/connectors.ts's own envelope-building code.
+// T1 (Ticket #88 under Spec #87) shipped the discovery-only skeleton; T2
+// (Ticket #89 under Spec #87) added the generic manifest-driven command
+// core. The compiled front door boots standalone, with an empty HOME and no
+// ambient Bun/Node/mise/op on PATH, and answers a trivial discovery command
+// with a Contract Core 2.0 envelope. Expected values below are independent
+// literals, never re-derived by importing bin/connectors.ts's own
+// envelope-building code.
 import { describe, expect, test } from "bun:test";
 import { accessSync, constants } from "node:fs";
 import path from "node:path";
@@ -12,7 +14,17 @@ import { FRONT_DOOR, PLUGIN_ROOT, runFrontDoor } from "./harness.ts";
 const CONTRACT_VERSION = "2.0.0";
 // Contract Core 2.0 requires availablePaths sorted and unique; this literal
 // is alphabetical, independent of bin/connectors.ts's own COMMANDS order.
-const AVAILABLE_PATHS = ["connectors.discovery", "connectors.dispatch", "connectors.help"];
+const AVAILABLE_PATHS = [
+	"connectors.config.show",
+	"connectors.config.validate",
+	"connectors.discovery",
+	"connectors.dispatch",
+	"connectors.doctor",
+	"connectors.help",
+	"connectors.list",
+	"connectors.schema",
+	"connectors.status",
+];
 const EXIT_MEANINGS = { "0": "success", "1": "internal", "2": "usage", "3": "domain", "4": "schema", "75": "transient" };
 const SIGNAL_EXITS = { "130": "SIGINT", "143": "SIGTERM" };
 

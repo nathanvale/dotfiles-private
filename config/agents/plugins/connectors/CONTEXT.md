@@ -33,6 +33,30 @@ product, because the API token, credential item, and tool surface are
 product-specific.
 _Avoid_: Provider, server, credential
 
+## Generic command core
+
+**Front Door**:
+The single plugin-wide compiled `bin/connectors` executable through which
+humans and agents list, validate, and inspect Connector Skills; later
+Tickets extend it to set up, diagnose, authenticate, repair and run them.
+_Avoid_: wrapper, launcher, script
+
+**Connector Manifest**:
+The schema-validated, nonsecret `config/manifest.json` declaration of one
+Connector Skill: its transport registry reference, selectors, requirements,
+declared adapter, and any Custody Mode reference. Adding a keyless Connector
+Skill needs only this file and its transport registry; the Front Door's own
+source never changes for it.
+_Avoid_: config, settings, mcporter.json
+
+**Custody Mode**:
+Where a Connector Skill's credential lives and which owner reads it, declared
+per Connector Skill in its manifest as a nonsecret reference; it names a place
+and an owner, never a credential value. `null` marks a keyless Connector
+Skill. A packaged adapter's local check may confirm a reference is declared
+without ever reading or holding the credential itself.
+_Avoid_: auth type, login method, source
+
 ## Atlassian routing
 
 **Atlassian Operation**:

@@ -1,7 +1,7 @@
 // Shared public-process harness for every connector test. One owner of the
 // fake processes and custody assertions; per-skill tests add expectations only.
 import { expect } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
@@ -142,4 +142,78 @@ export function assertCustody(harness: Harness, result: RunResult, secrets: stri
 		expect(result.stderr).not.toContain(secret);
 	}
 	return receipt;
+}
+
+// T2 (Ticket #89 under Spec #87): an isolated bundle of the compiled binary
+// plus a skills/ directory, laid out exactly like the installed plugin
+// (<bundle>/bin/connectors, <bundle>/skills/<id>/config/...). The generic
+// command core resolves skills/ relative to process.execPath, so copying the
+// binary elsewhere and mutating the copy's own skills/ directory between two
+// runs of the exact same binary file is what proves manifest-only Connector
+// Skill extensibility, never a git-diff or SHA assertion inside a test.
+export interface Bundle {
+	readonly root: string;
+	readonly binary: string;
+	readonly skillsRoot: string;
+	addSkill(fixtureName: string): void;
+	dispose(): void;
+}
+
+const REAL_KEYLESS_SKILLS = ["context7", "firecrawl"] as const;
+
+export function createBundle(): Bundle {
+	const root = mkdtempSync(path.join(os.tmpdir(), "connectors-bundle-"));
+	mkdirSync(path.join(root, "bin"), { recursive: true });
+	const binary = path.join(root, "bin", "connectors");
+	if (!existsSync(FRONT_DOOR)) {
+		throw new Error(`compiled front door missing at ${FRONT_DOOR}; run \`bun run build\` in the plugin directory first`);
+	}
+	cpSync(FRONT_DOOR, binary);
+	chmodSync(binary, 0o755);
+	const skillsRoot = path.join(root, "skills");
+	mkdirSync(skillsRoot, { recursive: true });
+	for (const id of REAL_KEYLESS_SKILLS) {
+		cpSync(path.join(PLUGIN_ROOT, "skills", id, "config"), path.join(skillsRoot, id, "config"), { recursive: true });
+	}
+	return {
+		root,
+		binary,
+		skillsRoot,
+		addSkill(fixtureName: string) {
+			cpSync(path.join(FIXTURES, fixtureName, "config"), path.join(skillsRoot, fixtureName, "config"), { recursive: true });
+			// The fixture's own mcporter.json declares its stdio command as
+			// "../../stdio-probe-server.ts", relative to tests/fixtures/ in the
+			// real repository layout; carry that one shared probe server into
+			// the bundle at the same relative position so the copied registry
+			// resolves identically once mounted under <bundle>/skills/.
+			cpSync(path.join(FIXTURES, "stdio-probe-server.ts"), path.join(skillsRoot, "stdio-probe-server.ts"));
+		},
+		dispose() {
+			rmSync(root, { recursive: true, force: true });
+		},
+	};
+}
+
+// Runs a bundle's own compiled binary (never the shared FRONT_DOOR path
+// directly), with a fully controlled HOME/PATH/TMPDIR so a schema fetch can
+// resolve a fake `mcporter` from binDir without touching any real network.
+export async function runBundle(bundle: Bundle, argv: string[], env: { home: string; binDir?: string; extraEnv?: Record<string, string> }): Promise<RunResult> {
+	const path_ = env.binDir ? `${env.binDir}:/usr/bin:/bin` : "/usr/bin:/bin";
+	return spawnCapture([bundle.binary, ...argv], { HOME: env.home, PATH: path_, TMPDIR: bundle.root, ...env.extraEnv });
+}
+
+// A PATH directory carrying only the fake mcporter (and the bun shebang
+// target it needs), independent of createHarness's own dotfiles-shaped
+// binDir: the generic command core never resolves a below-MCPorter dotfiles
+// wrapper, only `mcporter` itself.
+export function createFakeMcporterBinDir(): { binDir: string; dispose(): void } {
+	const root = mkdtempSync(path.join(os.tmpdir(), "connectors-mcporter-bin-"));
+	shim(path.join(root, "mcporter"), path.join(FIXTURES, "mcporter-fake.ts"));
+	symlinkSync(process.execPath, path.join(root, "bun"));
+	return {
+		binDir: root,
+		dispose() {
+			rmSync(root, { recursive: true, force: true });
+		},
+	};
 }

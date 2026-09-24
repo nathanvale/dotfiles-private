@@ -1,0 +1,9 @@
+{
+	"schemaVersion": 1,
+	"id": "context7",
+	"transport": { "registry": "./mcporter.json" },
+	"selectors": {},
+	"requirements": [],
+	"adapter": null,
+	"credentials": null
+}
