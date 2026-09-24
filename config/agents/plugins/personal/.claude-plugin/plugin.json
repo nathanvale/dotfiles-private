@@ -1,12 +1,13 @@
 {
   "name": "personal",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Nathan's personal workflows for Codex and Claude Code.",
   "author": {
     "name": "Nathan Vale"
   },
   "keywords": [
     "personal",
+    "bestie",
     "timesheets",
     "fasttrack360",
     "oncore"

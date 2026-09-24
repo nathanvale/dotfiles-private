@@ -1,0 +1,6 @@
+interface:
+  display_name: "Bestie"
+  short_description: "Reply to Melanie and create BestieOS memes"
+  default_prompt: "Use $bestie to help me reply to Melanie in my own voice."
+policy:
+  allow_implicit_invocation: false
