@@ -180,7 +180,7 @@ pass 'failed run points at the managed installer'
 refuse_brew 'failed managed install'
 
 for owner in setup.sh verify_install.sh config/brew/Brewfile; do
-  if grep -Eq 'brew( install)?[^\n]*codex|cask "codex"' "$REPO_ROOT/$owner"; then
+  if grep -Eq 'brew.*codex|cask "codex"' "$REPO_ROOT/$owner"; then
     fail "$owner still carries a Homebrew Codex CLI route"
   fi
   pass "$owner carries no Homebrew Codex CLI route"
