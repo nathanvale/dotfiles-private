@@ -1,6 +1,7 @@
 # Connectors Plugin
 
 Read [CONTEXT.md](CONTEXT.md) for the plugin's vocabulary before naming anything.
+Read [CODING_STANDARDS.md](CODING_STANDARDS.md) before Connectors code or test work.
 
 ## Invariants
 
@@ -10,7 +11,6 @@ Read [CONTEXT.md](CONTEXT.md) for the plugin's vocabulary before naming anything
 - Credential custody stays below MCPorter for existing Providers. Figma's declared native OAuth route is the scoped exception: MCPorter owns its private token cache and attended login; read [`docs/adr/0003-scope-native-mcporter-oauth-to-figma.md`](docs/adr/0003-scope-native-mcporter-oauth-to-figma.md) before changing it. Only non-secret Route Selection values cross the route; secret values never enter plugin config, arguments, envelopes, tests, or docs.
 - Shared Provider plumbing lives in `bin/`: `provider-process.ts` (refusal prefix, PATH lookup, scrub, exec), `private-state.ts` (owned 0700 directories, exact-0600 files), `hyper-mcp-remote.ts` (the pinned bridge). A skill's custody module is imported only through its `index.ts`.
 - Each service family co-locates its `SKILL.md`, `config/mcporter.json`, `config/route.json`, owned tests, and any launcher or Provider code under `skills/<name>/`.
-- Tests state independent expectations (literal tool names, causes, exit codes, file contents) and prove refusals as well as successes. A passing fixture, tool listing, or schema is configuration proof, not live authorization or a completed external effect.
 - Report configured, fixture-tested, schema-qualified, authenticated, live-read-proven, and live-write-proven as distinct states. Claim only the state current evidence proves.
 
 ## Adding a connector
