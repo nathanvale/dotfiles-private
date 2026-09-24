@@ -29,9 +29,9 @@ not an admitted rule.
 ## Further upstream GitHub guidance
 
 These are first-party `AGENTS.md`, `CLAUDE.md`, or `CONTRIBUTING.md` files,
-not `CODING_STANDARDS.md` files. The first four rows cover four repositories
-from the requested MCPorter, Bun, MCP SDK, mise and 1Password shortlist.
-The final two rows are additional OpenAI sources supplied for fit review.
+not `CODING_STANDARDS.md` files. The first five rows cover the requested
+MCPorter, Bun, MCP SDK, mise and 1Password shortlist. The final two rows are
+additional OpenAI sources supplied for fit review.
 
 | Repository and actual document | Connectors fit, duplicate coverage and conflict |
 | --- | --- |
@@ -39,6 +39,7 @@ The final two rows are additional OpenAI sources supplied for fit review.
 | Bun [CLAUDE.md](https://github.com/oven-sh/bun/blob/main/CLAUDE.md#L62-L108) runs the changed executable in isolated process fixtures, checks streams and exit status, avoids public Internet in ordinary tests, and waits for conditions instead of sleeping. | The isolated process and stream assertions duplicate Connectors `CODING_STANDARDS.md`. A useful test-design check is to keep fixture tests offline and await observable readiness, consistent with the shared readiness rule. Bun's debug-build command and snapshot preference are specific to Bun; snapshots cannot replace Connectors' test-owned literal command and cause oracles. |
 | MCP TypeScript SDK [CONTRIBUTING.md](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/CONTRIBUTING.md#L79-L127) asks for focused tests with new functionality and points to self-verifying client/server example pairs across transport variants. | A real client/server pair could qualify a Connector transport claim when that claim is in scope. Connectors already distinguishes fixture, schema and live evidence, so examples cannot promote a fixture to a hosted or authenticated claim. Its pnpm build and test commands do not transfer to this Bun plugin. |
 | mise [AGENTS.md](https://github.com/jdx/mise/blob/main/AGENTS.md#L21-L55) separates unit and CLI end-to-end tests and regenerates usage and completions; its [test structure](https://github.com/jdx/mise/blob/main/AGENTS.md#L107-L113) gives E2E fixtures a harness owner. | Connectors already requires packaged CLI process tests and updates implementation, catalogue, discovery and help together. If generated usage or completions become part of its accepted surface, mise's source-then-regenerate pattern is a useful check. Its snapshot output oracle and Rust-specific harness/commands must not displace Connectors' independently pinned identities. |
+| 1Password Shell Plugins [CONTRIBUTING.md](https://github.com/1Password/shell-plugins/blob/main/CONTRIBUTING.md#L218-L247) pairs local-build trials with plugin tests and warns that locally built plugins take precedence over installed ones. | Reinforces the existing candidate-versus-installed proof distinction in Connectors `AGENTS.md`. For a 1Password-backed Connector, fixture values can prove parsing without using real secrets. Do not copy its Go `plugintest` harness or infer that a local build proves the intended installed plugin identity. |
 | Codex Security [AGENTS.md](https://github.com/openai/codex-security/blob/main/AGENTS.md#L36-L60) rejects speculative restrictions and tests invented only to enforce them; it treats CLI syntax, accepted values, environment variables and defaults as public API. | Strong fit for the accepted-contract boundary: refuse only contract-defined cases and update help, schemas, docs and process tests together when public CLI behavior changes. Connectors already requires a typed command owner and coordinated help/discovery updates. Do not import its broad warning against new sanitization as a reason to weaken Connectors' established credential and path custody. |
 | Codex [AGENTS.md](https://github.com/openai/codex/blob/main/AGENTS.md#L29-L31) discourages tests of static values or removed logic and favors whole-object assertions. | Useful when a test merely mirrors a private constant or obsolete branch. A blanket ban conflicts with Connectors' valid public process assertion that discovery emits the accepted command identities. Those test-owned literals are independent oracles for observable CLI output, not tests of a static implementation value. |
 
@@ -57,6 +58,19 @@ security boundary, or a witnessed defect, rather than inventing a restriction
 and proving only that invention. The other upstream guidance sharpens offline
 fixtures and observable readiness while leaving Connectors' own process and
 literal oracles authoritative.
+
+## Candidate disposition
+
+| Candidate from the sources above | Disposition and owner |
+| --- | --- |
+| Public CLI process proof, independent stdout/stderr and exit assertions, secret-safe early refusal, test-owned oracles, nonempty collections, and a RED/GREEN sensitivity check. | **Admitted.** Shared `docs/agents/coding-standards.md` owns cross-package test design; Connectors `CODING_STANDARDS.md` owns packaged CLI and refusal proof. |
+| One vocabulary/fake owner, write preview and journal, readiness, and candidate-versus-installed qualification. | **Already owned.** Shared standards, Connectors `AGENTS.md`, and the accepted Spec and Tickets carry these. No duplicate clause. |
+| Fixture tests offline with observable readiness; client/server transport pair when transport behavior is claimed; generated help/completions from their source when added to the accepted CLI surface. | **Conditional.** Use in the applicable Ticket or test-design brief; no unconditional standard without an accepted contract and observed need. |
+| A non-interactive alternative to attended OAuth. | **Conditional design question.** Preserve the accepted attended auth boundary unless a Ticket requires unattended use. |
+| Blanket provider separation, database-inspection ban, static-value-test ban, snapshot oracle, and source-repository build commands. | **Rejected for Connectors.** Each either conflicts with its accepted process/effect proof or names another repository's implementation seam. |
+
+This accounts for every transferable candidate found in the scoped sources.
+It does not claim every line of each upstream document is a candidate.
 
 ## Source paths
 
