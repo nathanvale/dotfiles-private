@@ -14,7 +14,7 @@
     },
     {
       "name": "my-second-brain-playground",
-      "version": "0.14.0",
+      "version": "0.14.1",
       "source": {
         "source": "local",
         "path": "./my-second-brain-playground"
