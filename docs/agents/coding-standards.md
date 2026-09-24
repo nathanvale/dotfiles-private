@@ -21,7 +21,7 @@ file or any package standards file.
 - Give every inline `fallow-ignore` a human-readable reason; use it only for a genuine false positive.
 - Close out each code-changing turn per the `AGENTS.md` Proof section.
 
-### Independent oracle
+### Independent oracle: no tautological tests
 
 A test's expected value comes from a source independent of the code that
 produced the actual value: a literal, a test-owned table, or a separately
@@ -29,6 +29,10 @@ admitted constant. A catalog or sealed vocabulary supplies the domain to
 enumerate, never the expected value. Mark a deliberately restated constant as
 an independent oracle so a dedupe pass does not hoist it into the code under
 test.
+
+Assert test-owned expected identities before checking each returned row, or
+assert an independently expected count when identities do not matter. An empty
+collection must not pass a row-by-row check vacuously.
 
 Lesson: four packages carried this defect on one audit day. ASMG review caught
 a hoist that replaced a test's literal list with the predicate under test;
