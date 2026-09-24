@@ -2,7 +2,7 @@
 	"$schema": "https://raw.githubusercontent.com/openclaw/mcporter/main/mcporter.schema.json",
 	"imports": [],
 	"mcpServers": {
-		"figma": {
+		"figma-connectors": {
 			"description": "Figma hosted MCP, attended local OAuth",
 			"baseUrl": "https://mcp.figma.com/mcp",
 			"auth": "oauth",

@@ -1,4 +1,4 @@
 {
-	"defaultProvider": "figma",
+	"defaultProvider": "figma-connectors",
 	"oauth": "mcporter"
 }

@@ -17,7 +17,7 @@ describe("Figma hosted Provider", () => {
 		const registry = JSON.parse(readFileSync(CONFIG, "utf8"));
 		expect(registry.imports).toEqual([]);
 		expect(registry.mcpServers).toEqual({
-			figma: {
+			"figma-connectors": {
 				description: "Figma hosted MCP, attended local OAuth",
 				baseUrl: "https://mcp.figma.com/mcp",
 				auth: "oauth",
@@ -31,7 +31,7 @@ describe("Figma hosted Provider", () => {
 		const result = await harness.run(["figma", "--", "auth"]);
 		expect(result.code).toBe(0);
 		const receipt = harness.receipt<{ argv: string[]; env: Record<string, string>; pid: number; kind: string; url: string }>("mcporter.json");
-		expect(receipt.argv).toEqual(["--config", CONFIG, "auth", "figma"]);
+		expect(receipt.argv).toEqual(["--config", CONFIG, "auth", "figma-connectors"]);
 		expect(receipt.pid).toBe(result.pid);
 		expect(receipt.kind).toBe("http");
 		expect(receipt.url).toBe("https://mcp.figma.com/mcp");
@@ -45,17 +45,17 @@ describe("Figma hosted Provider", () => {
 		const receipt = assertCustody(harness, result, []);
 		expect(receipt.kind).toBe("http");
 		expect(receipt.url).toBe("https://mcp.figma.com/mcp");
-		expect(receipt.argv).toEqual(["--config", CONFIG, "list", "figma", "--schema", "--json", "--no-oauth"]);
+		expect(receipt.argv).toEqual(["--config", CONFIG, "list", "figma-connectors", "--schema", "--json", "--no-oauth"]);
 	});
 
 	test("read-tool call stays on the Figma server and uses cached OAuth", async () => {
 		const result = await harness.run(["figma", "--", "call", "whoami", "--output", "json"]);
 		expect(result.code).toBe(0);
-		expect(assertCustody(harness, result, []).argv).toEqual(["--config", CONFIG, "call", "figma.whoami", "--output", "json", "--no-oauth"]);
+		expect(assertCustody(harness, result, []).argv).toEqual(["--config", CONFIG, "call", "figma-connectors.whoami", "--output", "json", "--no-oauth"]);
 	});
 
-	test("route cannot select a second server", async () => {
-		const result = await harness.run(["figma", "--provider", "other", "--", "auth"]);
+	test("route cannot select the ambient figma server", async () => {
+		const result = await harness.run(["figma", "--provider", "figma", "--", "auth"]);
 		expect(result.code).toBe(2);
 		expect(result.stderr).toContain("provider-route:error:provider-invalid:");
 		expect(harness.has("mcporter.json")).toBe(false);
