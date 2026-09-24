@@ -1,25 +1,36 @@
-# Adopt Agent Ledger through Tasks
+# Track an already-adopted legacy Agent Ledger Task
 
-Use the current Task process seam to establish identity and persistence now.
-Nathan expects later releases to add Notes, Progress, and coordination decisions.
-Treat that as the product direction; verify each capability before using it.
+Agent Ledger is retired as the default route for new work; new Tasks track in
+Beads through [beads-workflow](../beads-workflow/SKILL.md). Use this branch
+only for a Task an already-adopted legacy project still tracks in Agent
+Ledger, to preserve its existing identity and persistence without stranding
+that work. Nathan's earlier direction toward later Notes, Progress, and
+coordination-decision releases applies only to that legacy route; verify each
+capability before using it.
 
-For a delegated tracking assignment, enter [Ledger Steward](#ledger-steward)
-directly. The caller retains project and checkpoint binding responsibility.
+For a delegated tracking assignment on such a legacy Task, enter
+[Ledger Steward](#ledger-steward) directly. The caller retains project and
+checkpoint binding responsibility.
 
 ## Use Tasks and checkpoints for the slice
 
-Apply this branch to authorized implementation and evaluation slices. Planning
-alone does not create a Task or activate a goal.
+Apply this branch to an authorized implementation or evaluation slice whose
+Task an already-adopted legacy project still tracks in Agent Ledger. A new
+Task tracks in Beads instead; follow
+[beads-workflow](../beads-workflow/SKILL.md). Planning alone does not create a
+Task or activate a goal.
 
 1. Read the playground's storage and project-map rules, active `GOAL.md`, and
    current evidence owner. Resolve the selected Agent Ledger executable and
    discover its public command contract. Reuse the recorded project and Register;
    keep an adopted Register outside Git and transient evaluation receipts.
 2. Look for the existing accepted Task in those owners and verify it through a
-   supported read command. Resume that identity. Only when absence is established,
+   supported read command. Resume that identity. Only when absence is
+   established, and only within a project this legacy route already covers,
    append exactly one Task for the bounded outcome through the public compiled
-   process, using its actual request contract. Never use direct SQL product writes.
+   process, using its actual request contract. Never use direct SQL product
+   writes, and never open a new Agent Ledger Task for a project that has
+   adopted Beads.
 3. Preserve the append receipt privately and verify acceptance after exit. An
    independent read-only SQLite inspection can confirm durable bytes when public
    reads are absent; label it diagnostic proof. After an uncertain append, inspect
@@ -48,8 +59,11 @@ evidence, and missing capability without another append or the original conversa
 
 ## Ledger Steward
 
-Use this branch for task creation, supported lifecycle changes, or reconciliation.
-The caller can perform a simple update directly. Delegate a bounded batch,
+Scope: an already-adopted legacy project's Agent Ledger Tasks. Use this
+branch for their lifecycle changes, reconciliation, or a bounded creation the
+legacy route already covers. A Beads-adopted project creates and tracks
+Tasks through [beads-workflow](../beads-workflow/SKILL.md) instead. The
+caller can perform a simple update directly. Delegate a bounded batch,
 ambiguous reconciliation, or parallel-worker closeout to `msb_ledger_steward`
 when the handoff saves work. Resolve the installed role through
 [vault agent routes](vault-agents.md); unavailable native roles are a delivery

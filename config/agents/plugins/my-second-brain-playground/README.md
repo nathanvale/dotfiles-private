@@ -4,8 +4,10 @@ Build new My Second Brain skills here, one usable vertical slice at a time.
 Use [playground-slice](skills/playground-slice/SKILL.md) to resume the baseline,
 choose the next experiment, and prove an agreed improvement through real use.
 Use [evaluate-slice](skills/evaluate-slice/SKILL.md) to define observable criteria
-and obtain independent process, persistence, and recovery evidence. Agent Ledger
-adoption starts with Tasks; the slice skill owns the route for later capabilities.
+and obtain independent process, persistence, and recovery evidence. New work
+tracks Tasks in Beads through beads-workflow and msb-workflow; Agent Ledger
+remains the tracked owner only for a Task an already-adopted legacy project
+has not yet cut over, and the slice skill owns that legacy route.
 The first slice gives Codex and Claude Code isolated Git commits for concurrent
 playground-vault work.
 
@@ -68,6 +70,9 @@ own project knowledge, task state, decisions, or completion proof. Follow the
 slice skill's [trace inspection and cleanup route](skills/playground-slice/references/compaction-recovery.md#inspect-recovery-traces)
 for storage limits, excluded content, deletion ownership, and interpretation.
 
-For delegated task tracking and evidence-based reconciliation, use the slice
-skill's [Ledger Steward route](skills/playground-slice/references/tasks-first.md#ledger-steward).
-The [specification](specs/ledger-steward.md) records this role's boundary and proof.
+For delegated task tracking and evidence-based reconciliation on an
+already-adopted legacy project's Agent Ledger Task, use the slice skill's
+[Ledger Steward route](skills/playground-slice/references/tasks-first.md#ledger-steward).
+The [specification](specs/ledger-steward.md) records this role's boundary and
+proof. New work tracks Tasks in Beads through
+[beads-workflow](skills/beads-workflow/SKILL.md) instead.

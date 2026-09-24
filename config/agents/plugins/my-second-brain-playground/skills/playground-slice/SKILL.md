@@ -19,10 +19,13 @@ For an authorized note update under an existing Task, use this short route.
    `bun run list --family <family>`. Preserve the accepted Task and scope.
 2. For a missing session binding, use this installed playground plugin. Its
    root is `../..` from this SKILL.md's directory. Assign that resolved absolute
-   path to `PLUGIN_ROOT`; use the selected Ledger executable from the goal or
-   project owner. Main and dev My Second Brain plugins are separate owners.
-   The legacy manual binding, run once from the configured playground root,
-   returns its control panel synchronously:
+   path to `PLUGIN_ROOT`. New work binds through
+   [beads-workflow](../beads-workflow/SKILL.md) and `bin/msb-workflow bind`.
+   Main and dev My Second Brain plugins are separate owners. Use the legacy
+   manual binding below only for a Task an already-adopted legacy project
+   still tracks in Agent Ledger; it is not the route for new adoption. That
+   legacy binding, run once from the configured playground root, returns its
+   control panel synchronously:
 
    ```sh
    "${PLUGIN_ROOT}/hooks/recovery-checkpoint" bind projects/<project>/GOAL.md --agent-ledger /absolute/path/to/agent-ledger
@@ -32,8 +35,7 @@ For an authorized note update under an existing Task, use this short route.
    work without a Bead gets no hook-delivered refresh after compaction; the
    installed manifest is Ticket #52 evidence, not this skill's claim.
    [`packages/workflow-cli/README.md`](../../packages/workflow-cli/README.md)
-   owns the registered hook. LKR Beads work binds through
-   [beads-workflow](../beads-workflow/SKILL.md). Codex uses
+   owns the registered hook. Codex uses
    `CODEX_SESSION_ID`; Claude adds `--session` with the exact
    identity delivered by its startup hook. Native workers first compare the
    exposed session ID with their independently supplied thread identity: a missing
@@ -43,10 +45,13 @@ For an authorized note update under an existing Task, use this short route.
    Continue from the returned control panel; after compaction, re-read the
    goal. On refusal or uncertain context,
    follow the configured vault's `docs/agents/recovery.md` before effects.
-3. Before editing, use [Ledger Steward](references/tasks-first.md#ledger-steward)
-   to inspect the Task and record this execution's start, or resume its owned
-   active run. Keep a simple transition in this session. Binding verifies Task
-   identity; it does not start work or transfer another agent's execution.
+3. Before editing, use the Task's own store. For a Task tracked in Beads, read
+   and claim it with native `bd` per [beads-workflow](../beads-workflow/SKILL.md).
+   For a Task an already-adopted legacy project still tracks in Agent Ledger,
+   use [Ledger Steward](references/tasks-first.md#ledger-steward) to inspect
+   it and record this execution's start, or resume its owned active run. Keep
+   a simple transition in this session. Binding verifies Task identity; it
+   does not start work or transfer another agent's execution.
 4. With a valid panel, read the goal and affected artifact as needed; inspect
    uncertain prior effects before retrying. For evidence-derived edits, compare
    each changed claim with its source before saving: preserve who or what it
@@ -126,9 +131,13 @@ New abstractions need pressure from this slice. Build a skill from scratch when
 its actual workflow earns one; reuse proven runtime behavior underneath it.
 Keep speculative platform work as a candidate in the existing planning owner.
 
-For task creation, lifecycle changes or batch reconciliation, follow
-[Ledger Steward](references/tasks-first.md#ledger-steward). Use that branch before
-work begins and at closeout; keep simple updates in the current session.
+New work creates and tracks its Task in Beads: follow
+[beads-workflow](../beads-workflow/SKILL.md) for creation, dependencies, and
+lifecycle through native `bd`. Use [Ledger Steward](references/tasks-first.md#ledger-steward)
+only for lifecycle changes or batch reconciliation on a Task an
+already-adopted legacy project still tracks in Agent Ledger; do not adopt
+Agent Ledger for a new Task. Use that branch before work begins and at
+closeout; keep simple updates in the current session.
 
 ## Build and exercise
 
@@ -177,11 +186,15 @@ recurs; keep isolated minor friction as evidence.
 
 ## Keep the result recoverable
 
-Adopt Agent Ledger by responsibility: Tasks first, then Notes, Progress, and
-coordination decisions as supported releases are qualified. Retain the named
-existing owner for each responsibility not yet transferred. Discover the actual
-binary's commands and use its public process contract against the same Register.
-Keep readable artifact bodies in Markdown and raw receipts in private runtime state.
+New work tracks Tasks, dependencies, and coordination decisions in Beads
+through native `bd`, per [beads-workflow](../beads-workflow/SKILL.md), with
+recovery through `bin/msb-workflow`. Agent Ledger remains the tracked owner
+only for a Task an already-adopted legacy project has not yet cut over;
+retain that named existing owner for each responsibility not yet transferred,
+and do not adopt Agent Ledger for a new Task, Note, or Progress record.
+Discover each executable's actual commands and use its public process
+contract against the same store. Keep readable artifact bodies in Markdown
+and raw receipts in private runtime state.
 
 Reuse the project's goal and evidence view through its project-map contract.
 Keep evaluation runs in private runtime state; another test run does not earn
@@ -198,9 +211,12 @@ and links to current work and evidence. Store changing task state in its tracker
 Treat an unavailable query as unavailable; retain the current owner until a
 replacement works. Build template enforcement only when it is the selected slice.
 
-Before claiming completion, reconcile the slice's Tasks through
-[tracking closeout](references/tasks-first.md#closeout). Report unavailable Ledger
-updates explicitly; a completed note alone does not establish synchronization.
+Before claiming completion, reconcile the slice's Tasks: close a Beads Task
+with native `bd close` per [beads-workflow](../beads-workflow/SKILL.md), or
+reconcile an already-adopted legacy Agent Ledger Task through
+[tracking closeout](references/tasks-first.md#closeout). Report unavailable
+Ledger updates explicitly; a completed note alone does not establish
+synchronization.
 
 Close with what changed, evidence against each criterion, remaining limits,
 exact source/result pointers, and one recommended next slice. Persist accepted

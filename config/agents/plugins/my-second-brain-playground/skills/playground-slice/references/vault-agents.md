@@ -15,7 +15,8 @@ cost optimum. A successful run qualifies that run, not the routing policy.
 | --- | --- | --- |
 | Routine note updates, known-scope project packets, knowledge lookup | Vault Steward, Luna max | playground-slice routine route and the relevant family contract |
 | Ambiguous evidence, synthesis, ownership or open planning | Vault Analyst, Terra high | Matching research, planning or context skill; caller names the responsibility |
-| Task creation, supported transitions, evidence-based reconciliation and batch closeout | Ledger Steward, Terra high | tasks-first Ledger Steward branch; explicit Register, Task set and transition authority |
+| New Task creation, dependencies, claims, Gates, and closeout | The performing Cast Role, no delegated agent | beads-workflow native `bd` primitives under the Stage Manager's dispatch |
+| An already-adopted legacy project's Agent Ledger Task transitions, evidence-based reconciliation and batch closeout | Ledger Steward, Terra high | tasks-first Ledger Steward branch; explicit Register, Task set and transition authority |
 | Independent fidelity, retrieval, scope and ceremony judgment | Vault Evaluator, Sol high | evaluate-slice with frozen criteria and actual artifacts |
 
 The plugin's `agents/msb-vault-*.toml` and `agents/msb-ledger-steward.toml` files own exact model pins and role
@@ -44,7 +45,7 @@ workflow is requested; its primary-session prerequisites remain its own.
 | --- | --- |
 | Creative Director | Nathan |
 | Stage Manager | Current coordinating session |
-| Task tracking | Ledger Steward records the coordinator-authorized tracking subset |
+| Task tracking | New work tracks in Beads through the performing Cast Role; Ledger Steward records the coordinator-authorized tracking subset for an already-adopted legacy project |
 | Project Steward; People, Organization, Product, Systems and Area Stewards | Vault Steward with the matching family workflow |
 | Decision Secretary | Vault Steward records an already accepted decision through its adopted owner; never invent Ledger capability or acceptance |
 | Researcher | Vault Analyst for bounded evidence and synthesis; existing research skill owns collection |
