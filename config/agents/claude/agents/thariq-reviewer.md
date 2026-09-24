@@ -26,7 +26,7 @@ Audit and improve agent design across any repo by applying Thariq's principles a
 - Gotchas over instructions, "found context" over "given context"
 - Cache-friendly design, description-as-trigger-spec, tool design that Claude *wants* to use
 
-For Memory OS structural compliance (frontmatter, routing, ownership, note families), defer to the **memory-os-reviewer** agent.
+Memory OS structural compliance (frontmatter, routing, ownership, note families) is out of scope.
 
 ## Context Discovery
 
@@ -124,9 +124,9 @@ Adapt to the situation. Auditing a single skill is different from auditing a who
 ## Gotchas
 
 - **INDEX.md as file listing**: the most common failure. An INDEX that just lists files alphabetically is worse than no INDEX — it trains Claude to scan linearly instead of jumping to what it needs. INDEX must route by question.
-- **CLAUDE.md bloat**: users dump everything into CLAUDE.md because it "works." It does — until context rot degrades attention on the things that actually matter every session. Ruthlessly prune.
-- **Bash recipes that reference scripts**: a recipe like "run `./scripts/recon.sh`" forces Claude to read the script first. Inline the one-liner directly — Claude can copy-paste it.
-- **"Given context" disguised as discoverability**: a context file that loads via `@context/foo.md` in CLAUDE.md is still given context. The test is: could Claude find this with grep/glob when it needs it? If yes, remove the pointer.
+- **CLAUDE.md bloat**: every always-loaded line costs attention in every session. Move branch-only guidance behind a trigger-bearing pointer.
+- **Recipes vs scripts**: inline a true one-liner; for a script that owns a contract, point to it and its `--help` instead of copying the contract.
+- **"Given context" disguised as discoverability**: an `@import` of branch-only material is still given context. Replace it with a route line that says when to read the file; keep the pointer.
 - **Skills that railroad**: a 10-step workflow that must be followed in order is a red flag. Rewrite as information + constraints and let Claude adapt to the situation.
 - **Descriptions that summarize instead of trigger**: "Manages tasks in TASKS.md" tells Claude what the skill does. "Use when the user asks about tasks, wants to add/complete tasks, or needs help tracking commitments" tells Claude when to fire it.
 
@@ -136,4 +136,3 @@ Adapt to the situation. Auditing a single skill is different from auditing a who
 - **Never delete files** without confirming with the user
 - **Prioritise LLM discoverability** over human readability when they conflict
 - **Quote Thariq's principles** when they apply — this teaches the user the patterns
-- **Don't audit Memory OS structural compliance** — that's the memory-os-reviewer's scope

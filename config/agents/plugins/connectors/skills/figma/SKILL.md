@@ -1,6 +1,6 @@
 ---
 name: figma
-description: Connect to Figma's hosted MCP through the Connectors plugin for attended OAuth and identity discovery.
+description: Connect to Figma's hosted MCP through the Connectors plugin for attended OAuth and identity discovery. Use only to connect, reauthorize, or verify identity for the MCPorter Figma route; not for design reads, canvas work, or the native Figma MCP.
 ---
 
 # Figma hosted MCP

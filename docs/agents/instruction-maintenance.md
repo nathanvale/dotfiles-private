@@ -2,7 +2,8 @@
 
 - Invoke `writing-for-agents` before changing `AGENTS.md`, `CLAUDE.md`, or a
   `SKILL.md`, or a document reached by their pointer.
-- Telegraph; noun-phrases ok; drop grammar; min tokens.
+- Write compactly: cut filler, not reasons. Keep the reason beside any
+  constraint whose purpose is not obvious.
 - One idea per bullet.
 - Imperative voice.
 - Use Markdown structure. Reserve XML tags for machine-parsed boundaries.
@@ -17,9 +18,10 @@
 - Preserve one source of truth. Point to it instead of copying its contract.
 - Before editing, inspect the current owner and check for duplicate,
   contradictory, stale, or broader guidance.
-- Show the exact path-limited change, startup-context delta, proof, and
-  rollback. Ask for approval before writing.
-- After approval, verify every changed pointer.
+- Before writing, show the exact path-limited change, startup-context delta,
+  proof, and rollback. Ask for approval when Nathan did not explicitly request
+  the change.
+- Verify every changed pointer.
 - The `Weekly agent instruction structure check` Codex automation owns file and
   adapter proof.
 - The `Monthly agent instruction loading canary` Codex automation owns root and

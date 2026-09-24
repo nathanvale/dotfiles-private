@@ -16,10 +16,10 @@ on your machine yet fails on the runner, or you're about to push-to-see-the-erro
 
 ## First safe action
 
-Run the mechanical CI-repro setup, then read the diagnosis technique:
+Set `SKILL_DIR` to this skill's directory. Run the mechanical CI-repro setup, then read the diagnosis technique:
 
 ```
-bun run skills/ci-testbed/scripts/ci-repro.ts --ref origin/main --test "<test glob>"
+bun run "$SKILL_DIR/scripts/ci-repro.ts" --ref origin/main --test "<test glob>"
 ```
 
 It builds a **fresh worktree off the CI base ref**, runs a real

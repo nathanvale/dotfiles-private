@@ -54,7 +54,7 @@ workflow is requested; its primary-session prerequisites remain its own.
 | Idea Scout | Vault Analyst proposes ideas; coordinator routes and Nathan resolves consequential choices |
 | Context Librarian | Vault Analyst using context-advisor for placement advice; content stays with its steward |
 | Vault Caretaker | Vault Steward runs approved checks; fixes and maintenance remain separately scoped |
-| Continuity Keeper | Existing checkpoint and vault-note-commits workflows; no new Git manager |
+| Continuity Keeper | Existing checkpoint and vault-steward workflows; no new Git manager |
 | Casting Director | Coordinator resolves installed capabilities through their existing supply-chain owner |
 | Repository Engineer | Owning code repository and its implementation workflow |
 | Relationship Reviewer | Deferred separate specialist with approved evidence scope and lens; no implicit Analyst authority |

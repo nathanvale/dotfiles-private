@@ -135,5 +135,3 @@ mcporter list notion --brief
 mcporter resource notion
 mcporter call notion.notion-search query=healthcheck page_size=1 --output json
 ```
-
-YAML-parse this file after edits.

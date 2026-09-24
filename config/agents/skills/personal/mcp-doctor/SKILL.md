@@ -11,13 +11,13 @@ makes a server look configured but dead; this finds it and names the fix.
 
 ## Owner Paths
 
-- Health check script: `skills/mcp-doctor/scripts/mcp-doctor.ts`.
+- Health check script: `$SKILL_DIR/scripts/mcp-doctor.ts`, where `SKILL_DIR` is this skill's directory.
 - Secret injection owner: `skills/one-password/SKILL.md`.
 - Runtime/discovery engine: `mcporter` CLI (`mcporter list`).
 
 ## Entry-Screen Route
 
-1. Run `bun run skills/mcp-doctor/scripts/mcp-doctor.ts` for a human report, or
+1. Run `bun run "$SKILL_DIR/scripts/mcp-doctor.ts"` for a human report, or
    `--json` for machine output.
 2. Read each broken server's `fix` line; apply the smallest one.
 3. For an empty key or `token-missing`, convert the server to the inject pattern
@@ -54,8 +54,7 @@ receives one value and no broker authority.
 
 Do not use `op run`. The launcher rejects it because it can forward
 `OP_SERVICE_ACCOUNT_TOKEN` to the child, and a config calling `op` directly
-bypasses the launcher entirely. A live audit on 2026-08-18 found five such
-entries; all were migrated to `inject`.
+bypasses the launcher entirely.
 
 ## Rules
 
@@ -69,7 +68,7 @@ entries; all were migrated to `inject`.
 
 ## Verification
 
-- Run `bun run skills/mcp-doctor/scripts/mcp-doctor.ts --json`; exit 0 means all healthy, 1 means broken, 2 means the doctor itself could not run.
+- Run `bun run "$SKILL_DIR/scripts/mcp-doctor.ts" --json`; exit 0 means all healthy, 1 means broken, 2 means the doctor itself could not run.
 
 ## Next Safe Action
 

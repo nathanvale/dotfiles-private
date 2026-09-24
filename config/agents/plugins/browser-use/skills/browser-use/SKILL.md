@@ -1,6 +1,6 @@
 ---
 name: browser-use
-description: Run one bounded, attended, read-only browser task in regular Google Chrome with the dedicated automation profile. Use when Nathan must visibly complete sign-in before an agent resumes one approved read.
+description: Run one bounded, attended, read-only browser task in regular Google Chrome with the dedicated automation profile. Use when Nathan must visibly complete sign-in before an agent resumes one approved read. Only for the dedicated automation profile outside Browser Lanes; not for declared profile lanes.
 ---
 
 # Browser Use

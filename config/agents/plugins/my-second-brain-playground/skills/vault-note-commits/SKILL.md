@@ -1,6 +1,6 @@
 ---
 name: vault-note-commits
-description: "Commit finished playground-vault notes from parallel agents without disturbing concurrent local work."
+description: "Legacy alias of vault-steward. Use only to finish a candidate already begun through vault-note-commits; start new vault commits with my-second-brain-playground:vault-steward."
 ---
 
 # Vault Note Commits
@@ -11,8 +11,7 @@ resolve the installed plugin root. Inspect the helper contract with
 The helper discovers the synthetic vault through
 `~/.config/my-second-brain-playground/vault.json`. When configuration is
 missing or invalid, read [configuration](references/configuration.md).
-The Vault Steward CLI (`vault-steward`) succeeds this helper and keeps
-`vault-note-commits` as its alias through the migration period; read
+`vault-note-commits` is an alias of the Vault Steward CLI (`vault-steward`); read
 [guardrails](references/guardrails.md) when a result carries `warnings`, a
 `guard` field, or `GUARD_INCOMPATIBLE`.
 

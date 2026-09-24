@@ -157,7 +157,6 @@ target, risk, or write authority. Bold exactly one recommended default.
 
 ## Verification
 
-- YAML-parse this file after edits.
 - `mcporter config doctor`.
 - `mcporter config get streamdeck-author`.
 - `mcporter list streamdeck-author --schema --timeout 60000`.
