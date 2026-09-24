@@ -318,6 +318,22 @@ export const normalised = (value: string): string =>
 		.replace(/[^\p{L}\p{N}]+/gu, " ")
 		.trim();
 
+// The Community Jira read path renders an ADF mention as User:<accountId>,
+// while its write path accepts Markdown mention syntax. Keep the account ID
+// and all surrounding text in the comparison; only the display name changes.
+const JIRA_MENTION = /@\[[^\]\r\n]{1,256}\]\(accountid:([A-Za-z0-9][A-Za-z0-9:_-]{0,127})\)/g;
+const JIRA_RENDERED_MENTION = /\bUser:([A-Za-z0-9][A-Za-z0-9:_-]{0,127})(?=$|[^A-Za-z0-9:_-])/g;
+// Jira turns a bare key into a Markdown link to that same key on its Cloud site.
+// A different link label, target key, or non-Atlassian host is not equivalent.
+const JIRA_AUTOLINK = /\[([A-Z][A-Z0-9_]+-[0-9]+)\]\((https:\/\/[a-z0-9-]+\.atlassian\.net\/browse\/\1)\)/g;
+const jiraCommentNormalised = (value: string, issueOrigin?: string): string =>
+	normalised(
+		value
+			.replace(JIRA_MENTION, (_mention, accountId: string) => `User:${accountId}`)
+			.replace(JIRA_RENDERED_MENTION, (_rendered, accountId: string) => `User${Buffer.from(accountId).toString("hex")}`)
+			.replace(JIRA_AUTOLINK, (link, key: string, target: string) => (issueOrigin !== undefined && target === `${issueOrigin}/browse/${key}` ? key : link)),
+	);
+
 function namedIdentity(reply: unknown, keys: string[]): string | undefined {
 	for (const record of records(unwrapReply(reply))) {
 		const identity = stringAt(record, ...keys);
@@ -359,10 +375,10 @@ function replyNamesRequestedObject(operation: WriteOperation, input: WriteInput,
 	return true;
 }
 
-function commentRecordMatches(record: Record<string, unknown>, input: WriteInput): boolean {
+function commentRecordMatches(record: Record<string, unknown>, input: WriteInput, kind: Effect["kind"]): boolean {
 	if (!("body" in record)) return false;
-	const wanted = normalised(input.body as string);
-	return wanted.length > 0 && normalised(bodyText(record.body)) === wanted;
+	const wanted = kind === "jira-comment" ? jiraCommentNormalised(input.body as string) : normalised(input.body as string);
+	return wanted.length > 0 && (kind === "jira-comment" ? jiraCommentNormalised(bodyText(record.body)) : normalised(bodyText(record.body))) === wanted;
 }
 
 // The Community Jira attachment record carries no id field (observed live):
@@ -395,7 +411,7 @@ function effectFromRecord(operation: WriteOperation, input: WriteInput, kind: Ef
 	if (id === undefined || !EFFECT_ID.test(id)) return undefined;
 	if (operation === "issue.create" && !ISSUE_KEY.test(id)) return undefined;
 	if (operation === "issue.comment.update" && id !== input.commentId) return undefined;
-	if (kind.endsWith("-comment") && !commentRecordMatches(record, input)) return undefined;
+	if (kind.endsWith("-comment") && !commentRecordMatches(record, input, kind)) return undefined;
 	return { kind, id };
 }
 
@@ -486,6 +502,7 @@ export interface IssueComment {
 
 export interface IssueObservation {
 	key: string | undefined;
+	browseOrigin: string | undefined;
 	// A provider revision when one exists, else the `updated` timestamp: enough
 	// to detect that the issue moved between preview and apply, never enough on
 	// its own to prove what landed.
@@ -493,6 +510,18 @@ export interface IssueObservation {
 	fields: Record<string, unknown>;
 	comments: IssueComment[];
 	attachments: { id: string; name: string }[];
+}
+
+function issueBrowseOrigin(issue: Record<string, unknown>): string | undefined {
+	const key = stringAt(issue, "key");
+	const browse = stringAt(issue, "browse_url");
+	if (key === undefined || browse === undefined) return undefined;
+	try {
+		const url = new URL(browse);
+		return url.protocol === "https:" && url.hostname.endsWith(".atlassian.net") && url.pathname === `/browse/${key}` ? url.origin : undefined;
+	} catch {
+		return undefined;
+	}
 }
 
 export function observeIssue(reply: unknown): IssueObservation {
@@ -506,10 +535,10 @@ export function observeIssue(reply: unknown): IssueObservation {
 		const name = stringAt(record, "filename");
 		const id = name === undefined ? stringAt(record, "id") : attachmentId(record);
 		if (id === undefined || !EFFECT_ID.test(id)) continue;
-		if ("body" in record) comments.push({ id, text: normalised(bodyText(record.body)), updated: stringAt(record, "updated") });
+		if ("body" in record) comments.push({ id, text: bodyText(record.body), updated: stringAt(record, "updated") });
 		if (name !== undefined) attachments.push({ id, name });
 	}
-	return { key: stringAt(top, "key"), revision: stringAt(fields, "version", "revision", "updated") ?? null, fields, comments, attachments };
+	return { key: stringAt(top, "key"), browseOrigin: issueBrowseOrigin(top), revision: stringAt(fields, "version", "revision", "updated") ?? null, fields, comments, attachments };
 }
 
 export type ReadBack = { kind: "found"; effects: Effect[] } | { kind: "absent"; revisionUnchanged: boolean } | { kind: "indeterminate"; reason: string };
@@ -692,7 +721,7 @@ function issueCommentEvidence(input: WriteInput, reply: unknown, baseline: Write
 	const issue = observeIssue(reply);
 	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply names no issue key" };
 	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
-	return commentEvidence("jira-comment", input.body as string, issue.comments, baseline);
+	return commentEvidence("jira-comment", input.body as string, issue.comments, baseline, issue.browseOrigin);
 }
 
 function issueCommentUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown): ReadBack {
@@ -701,9 +730,9 @@ function issueCommentUpdateEvidence(input: WriteInput, revisionMatches: Revision
 	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
 	const comment = issue.comments.find((entry) => entry.id === input.commentId);
 	if (comment === undefined) return { kind: "indeterminate", reason: "the read-back reply names no such comment" };
-	const wanted = normalised(input.body as string);
+	const wanted = jiraCommentNormalised(input.body as string, issue.browseOrigin);
 	if (wanted.length === 0) return { kind: "indeterminate", reason: "the requested comment has no stable read-back representation" };
-	if (comment.text === wanted) return { kind: "found", effects: [{ kind: "jira-comment", id: comment.id }] };
+	if (jiraCommentNormalised(comment.text, issue.browseOrigin) === wanted) return { kind: "found", effects: [{ kind: "jira-comment", id: comment.id }] };
 	return { kind: "absent", revisionUnchanged: comment.updated !== undefined && revisionMatches(comment.updated) };
 }
 
@@ -745,12 +774,12 @@ function pageDeleteEvidence(input: WriteInput, revisionMatches: RevisionMatch, r
 	return { kind: "absent", revisionUnchanged: page.version !== null && revisionMatches(page.version) };
 }
 
-function commentEvidence(kind: Effect["kind"], body: string, comments: { id: string; text: string }[], baseline: WriteBaseline): ReadBack {
-	const wanted = normalised(body);
+function commentEvidence(kind: Effect["kind"], body: string, comments: { id: string; text: string }[], baseline: WriteBaseline, issueOrigin?: string): ReadBack {
+	const wanted = kind === "jira-comment" ? jiraCommentNormalised(body, issueOrigin) : normalised(body);
 	if (wanted.length === 0) return { kind: "indeterminate", reason: "the requested comment has no stable read-back representation" };
 	return newEffects(
 		kind,
-		comments.filter((comment) => comment.text === wanted).map((comment) => comment.id),
+		comments.filter((comment) => (kind === "jira-comment" ? jiraCommentNormalised(comment.text, issueOrigin) : normalised(comment.text)) === wanted).map((comment) => comment.id),
 		baseline.commentIds,
 	);
 }
@@ -901,7 +930,7 @@ const isIndeterminate = <T>(value: T | Indeterminate): value is Indeterminate =>
 function issueCommentBaseline(input: WriteInput, reply: unknown): BaselineObservation {
 	const issue = issueFor(input, reply);
 	if (isIndeterminate(issue)) return issue;
-	const observed = baselineWithCommentIds(commentEvidence("jira-comment", input.body as string, issue.comments, EMPTY_BASELINE));
+	const observed = baselineWithCommentIds(commentEvidence("jira-comment", input.body as string, issue.comments, EMPTY_BASELINE, issue.browseOrigin));
 	return observed.kind !== "observed" ? observed : { kind: "observed", baseline: { ...observed.baseline, effectIds: [issue.key as string] } };
 }
 
@@ -911,7 +940,7 @@ function issueCommentUpdateBaseline(input: WriteInput, reply: unknown): Baseline
 	const comment = issue.comments.find((entry) => entry.id === input.commentId);
 	if (comment === undefined) return { kind: "indeterminate", reason: "the Jira reply names no such comment on this issue" };
 	if (comment.updated === undefined) return { kind: "indeterminate", reason: "the comment read exposes no updated timestamp to bind the revision" };
-	if (comment.text === normalised(input.body as string)) return { kind: "refused", reason: "the comment already holds the requested body; nothing to change" };
+	if (jiraCommentNormalised(comment.text, issue.browseOrigin) === jiraCommentNormalised(input.body as string, issue.browseOrigin)) return { kind: "refused", reason: "the comment already holds the requested body; nothing to change" };
 	return { kind: "observed", baseline: { effectIds: [issue.key as string], commentIds: [comment.id], revision: digest(comment.updated) } };
 }
 

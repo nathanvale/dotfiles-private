@@ -94,6 +94,24 @@ bun "$DISPATCH" --tenant <tenant> issue.comment --input '{"issueKey":"PROJ-1","b
 | `page.attachment.delete` | `pageId`, `attachmentId` (from the attach effect or the page's attachments) | page version |
 | `page.delete` | `pageId` | page version |
 
+### Jira comment formatting and mentions
+
+- Put Markdown in the `body` of `issue.comment` or `issue.comment.update`.
+  Bold, italics, inline code, bullets, and a bare issue key rendered on the
+  disposable Jira test issue. Read the stored comment back; inspect it in Jira
+  when presentation matters. This proof does not cover every Markdown construct
+  or Confluence comments.
+- For a Jira mention, use `@[Display Name](accountid:<verified-account-id>)`.
+  Obtain the account ID from a trusted Jira read, not a guessed email or name.
+  The Community read path may return the mention as `User:<account-id>` and may
+  turn a bare issue key into a link to that key on the same site. The dispatcher
+  reconciles these forms against the exact account ID, surrounding text, and
+  issue site; a different identity or link stays unmatched.
+- A rendered mention badge proves presentation, not notification delivery.
+  Confirm a notification with the recipient before relying on it. If apply
+  reports `outcome-unknown`, use the receipt and identical input to adjudicate
+  before any further write to that issue.
+
 Rules the dispatcher enforces; state them when they refuse:
 
 - An explicit request for one named create, update, comment, attachment, or
@@ -203,6 +221,9 @@ Report which state each claim reached:
 - Live-read-proven, live-write-proven: external outcomes separately observed; a write needs separate authorization.
 
 Prerequisites are declared by the Provider runtime and its pinned registry.
+MCPorter 0.14.0 is the qualified requirement; check `mcporter --version` when
+setting up or diagnosing this route. The test suite checks the installed
+version, but the dispatcher does not pin the executable at runtime.
 
 ## Completion
 

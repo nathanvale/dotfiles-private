@@ -1,5 +1,6 @@
 // Fake MCPorter: the one owner of the public process seam in tests. Mirrors
-// MCPorter 0.13.13 as observed on 2026-09-22 with a real stdio child:
+// MCPorter 0.13.13 as observed on 2026-09-22 with a real stdio child, with
+// the route, cwd, environment, and allow-list requalified on 0.14.0:
 // explicit --config only; stdio cwd is the config directory; the child gets the
 // whole parent environment plus the entry env with ${VAR} resolved; a missing
 // placeholder aborts before any child runs; HTTP entries are recorded, never

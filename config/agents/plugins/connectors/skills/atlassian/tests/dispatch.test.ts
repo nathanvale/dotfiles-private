@@ -584,6 +584,86 @@ describe("journaled writes", () => {
 		expect([applied.result.transactionState, resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["unknown", "completed", ["jira-comment:778"]]);
 	});
 
+	test("a Jira mention comment adjudicates from a new id when read-back renders the account as User:id", async () => {
+		const accountId = "712020:00000000-0000-4000-8000-000000000001";
+		const input = { issueKey: "PROJ-1", body: `Mention test. @[Test Person](accountid:${accountId}) No action needed.` };
+		let reads = 0;
+		const { transport, calls } = fakeTransport({
+			[`${CJ}.jira_add_comment`]: failure("failed-transport"),
+			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", comments: reads++ >= 3 ? [{ id: "778", body: `Mention test. User:${accountId} No action needed.` }] : [] } }),
+		});
+		const dependencies = deps({ transport });
+		const previewEnvelope = await dispatch(["issue.comment", "--input", JSON.stringify(input), "--preview"], dependencies);
+		expect(previewEnvelope.result.causeCode).toBe("success");
+		const preview = previewData(previewEnvelope);
+		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
+		const runId = (applied.result.data as { runId: string }).runId;
+		const resolved = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(input)], dependencies);
+		expect([applied.result.transactionState, resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["unknown", "completed", ["jira-comment:778"]]);
+		expect(calls.filter((call) => call.tool === "jira_add_comment")).toHaveLength(1);
+	});
+
+	test("Jira adjudicates a new formatted mention comment when it auto-links a matching issue key", async () => {
+		const accountId = "712020:00000000-0000-4000-8000-000000000001";
+		const input = { issueKey: "PROJ-1", body: `**Bold** for @[Test Person](accountid:${accountId}). See PROJ-1.` };
+		let reads = 0;
+		const { transport, calls } = fakeTransport({
+			[`${CJ}.jira_add_comment`]: failure("failed-transport"),
+			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", browse_url: "https://example.atlassian.net/browse/PROJ-1", comments: reads++ >= 3 ? [{ id: "779", body: `**Bold** for User:${accountId}. See [PROJ-1](https://example.atlassian.net/browse/PROJ-1).` }] : [] } }),
+		});
+		const dependencies = deps({ transport });
+		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
+		const runId = (applied.result.data as { runId: string }).runId;
+		const adjudicated = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(input)], dependencies);
+		expect([adjudicated.result.transactionState, adjudicated.result.effects.completed]).toEqual(["completed", ["jira-comment:779"]]);
+		expect(calls.filter((call) => call.tool === "jira_add_comment")).toHaveLength(1);
+	});
+
+	test.each([
+		["different target key", "https://example.atlassian.net/browse/PROJ-2"],
+		["external target host", "https://example.invalid/browse/PROJ-1"],
+		["another Atlassian tenant", "https://other.atlassian.net/browse/PROJ-1"],
+	])("Jira adjudication rejects an auto-link with %s", async (_case, link) => {
+		const input = { issueKey: "PROJ-1", body: "See PROJ-1." };
+		let reads = 0;
+		const { transport } = fakeTransport({
+			[`${CJ}.jira_add_comment`]: failure("failed-transport"),
+			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", browse_url: "https://example.atlassian.net/browse/PROJ-1", comments: reads++ >= 3 ? [{ id: "780", body: `See [PROJ-1](${link}).` }] : [] } }),
+		});
+		const dependencies = deps({ transport });
+		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
+		const runId = (applied.result.data as { runId: string }).runId;
+		const adjudicated = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(input)], dependencies);
+		expect([adjudicated.result.causeCode, adjudicated.result.effects.completed]).toEqual(["refused-evidence", []]);
+		expect((await dispatch(["receipt", "--run", runId], dependencies)).result.data).toMatchObject({ status: "unknown" });
+	});
+
+	test.each([
+		["another account", "Mention test. User:712020:00000000-0000-4000-8000-000000000002 No action needed.", false],
+		["an account with different separators", "Mention test. User:712020-00000000-0000-4000-8000-000000000001 No action needed.", false],
+		["different surrounding text", "Different test. User:712020:00000000-0000-4000-8000-000000000001 No action needed.", false],
+		["a historical matching comment", "Mention test. User:712020:00000000-0000-4000-8000-000000000001 No action needed.", true],
+	])("Jira mention adjudication rejects %s", async (_case, observedBody, historical) => {
+		const accountId = "712020:00000000-0000-4000-8000-000000000001";
+		const input = { issueKey: "PROJ-1", body: `Mention test. @[Test Person](accountid:${accountId}) No action needed.` };
+		let reads = 0;
+		const { transport, calls } = fakeTransport({
+			[`${CJ}.jira_add_comment`]: failure("failed-transport"),
+			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", comments: historical || reads++ >= 3 ? [{ id: "778", body: observedBody }] : [] } }),
+		});
+		const dependencies = deps({ transport });
+		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
+		const runId = (applied.result.data as { runId: string }).runId;
+		const adjudicated = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(input)], dependencies);
+		expect([adjudicated.result.causeCode, adjudicated.result.transactionState, adjudicated.result.effects.completed]).toEqual(["refused-evidence", "unchanged", []]);
+		const receipt = await dispatch(["receipt", "--run", runId], dependencies);
+		expect((receipt.result.data as { status: string }).status).toBe("unknown");
+		expect(calls.filter((call) => call.tool === "jira_add_comment")).toHaveLength(1);
+	});
+
 	test("Jira create adjudication rejects a historical title and accepts only a new issue key", async () => {
 		const input = { projectKey: "PROJ", issueType: "Bug", summary: "Baseline-safe create" };
 		const historical = { ok: true as const, data: { issues: [{ key: "PROJ-9", fields: { summary: input.summary, issuetype: { name: input.issueType } } }] } };
@@ -818,6 +898,28 @@ describe("journaled writes", () => {
 		expect([noop.result.causeCode, noop.result.repairAction]).toEqual(["input-invalid", "the comment already holds the requested body; nothing to change"]);
 		const missing = await dispatch(["issue.comment.update", "--input", JSON.stringify({ ...input, commentId: "1" }), "--preview"], dependencies);
 		expect([missing.result.outcome, missing.result.causeCode, missing.result.repairAction]).toEqual(["failed", "not-found", "the issue has no comment with that id among its first 100 comments"]);
+		expect(calls.filter((call) => call.tool === "jira_edit_comment")).toHaveLength(1);
+	});
+
+	test("a Jira mention edit completes from its named comment and refuses a second identical edit", async () => {
+		const accountId = "712020:00000000-0000-4000-8000-000000000001";
+		const input = { issueKey: "PROJ-1", commentId: "454166", body: `**Updated** for @[Test Person](accountid:${accountId}).` };
+		let body = "Original text";
+		let updated = "u1";
+		const { transport, calls } = fakeTransport({
+			[`${CJ}.jira_get_issue`]: () => ({ ok: true, data: { key: "PROJ-1", comments: [{ id: "454166", body, updated }] } }),
+			[`${CJ}.jira_edit_comment`]: () => {
+				body = `Updated for User:${accountId}.`;
+				updated = "u2";
+				return { ok: true, data: { id: "454166", body, updated } };
+			},
+		});
+		const dependencies = deps({ transport });
+		const preview = previewData(await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--preview"], dependencies));
+		const applied = await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--apply", preview.previewId], dependencies);
+		expect([applied.result.transactionState, applied.result.effects.completed]).toEqual(["completed", ["jira-comment:454166"]]);
+		const noop = await dispatch(["issue.comment.update", "--input", JSON.stringify(input), "--preview"], dependencies);
+		expect(noop.result.causeCode).toBe("input-invalid");
 		expect(calls.filter((call) => call.tool === "jira_edit_comment")).toHaveLength(1);
 	});
 
