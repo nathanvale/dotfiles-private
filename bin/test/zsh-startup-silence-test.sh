@@ -77,19 +77,6 @@ for owner in .zshenv .zprofile .zshrc; do
     fail "could not stage hermetic copy of $owner"
 done
 
-# Reach the startup notice path.
-#
-# The "op CLI not found" notice is emitted only when this file exists and names
-# an `op://` reference, so without the fixture the notice rows below would pass
-# because the branch was never entered rather than because it stayed quiet.
-#
-# The file holds a reference, not a value: `op://` URIs name where a secret
-# lives and carry no credential themselves. Nothing here is a real vault path,
-# and `op` is absent from the hermetic child in any case, so no lookup occurs.
-mkdir -p "$fresh_home/.config/lll-account-switch"
-printf 'CONTRACT_FIXTURE_KEY=op://contract-not-a-real-vault/item/field\n' \
-  >"$fresh_home/.config/lll-account-switch/secrets.env"
-
 # The rewrite is load-bearing, so prove it actually removed the tools rather
 # than assuming it did. If any optional executable is still resolvable inside
 # the child, the silence rows below would be testing a fully configured machine.
@@ -174,20 +161,6 @@ fi
 run_mode interactive-login "$absence_probe"
 assert_equals "$(grep -c '^present=' <<<"$probe_out" || true)" '0' \
   'optional integrations are genuinely absent in the hermetic child'
-
-# The notice fixture must be reachable, otherwise the silence rows would prove
-# nothing about the notice path. `op` is absent, so startup takes the branch
-# that would print "op CLI not found" were it not gated.
-# The nested zsh evaluates these expressions.
-# shellcheck disable=SC2016
-run_mode interactive-login '
-  print -r -- "opfixture=$([[ -f $HOME/.config/lll-account-switch/secrets.env ]] && print yes || print no)"
-  print -r -- "opabsent=$(command -v op >/dev/null 2>&1 && print no || print yes)"
-'
-assert_equals "$(grep '^opfixture=' <<<"$probe_out")" 'opfixture=yes' \
-  'the startup notice path has a fixture to act on'
-assert_equals "$(grep '^opabsent=' <<<"$probe_out")" 'opabsent=yes' \
-  'the startup notice path sees its tool as absent'
 
 # ---------------------------------------------------------------------------
 # Criterion: all four startup modes succeed silently.

@@ -358,11 +358,9 @@ make_verifier_fixture manager-matrix >/dev/null
 fixture="$TEST_ROOT/manager-matrix"
 desktop_records="$(prepare_links "$fixture" desktop)"
 assert_manager_shape "$fixture" desktop "$desktop_records"
-pass 'desktop manager process emits machine-readable all-profile status'
 
 server_records="$(manager_output "$fixture" server "$fixture/home")"
 assert_manager_shape "$fixture" server "$server_records"
-pass 'server manager process emits machine-readable all-profile status'
 
 common_destination="$(awk -F '\t' '$1 == "DOTFILES_SYMLINK_RECORD" && $3 == "common" { print $4; exit }' <<<"$desktop_records")"
 common_expected="$(awk -F '\t' '$1 == "DOTFILES_SYMLINK_RECORD" && $3 == "common" { print $5; exit }' <<<"$desktop_records")"
@@ -497,5 +495,5 @@ assert_not_equals "$RUN_EXIT" 0 'verifier fails closed when the manager status o
 assert_contains "$RUN_OUTPUT" 'Managed symlink status contract' 'malformed manager output names the repair contract'
 assert_contains "$RUN_OUTPUT" 'DOTFILES_VERIFY_SUMMARY version=1 status=failed' 'malformed manager output remains a failed completion record'
 
-[[ "$assertion_count" -eq 88 ]] || fail "expected 88 assertions, observed $assertion_count"
+[[ "$assertion_count" -eq 86 ]] || fail "expected 86 assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"
