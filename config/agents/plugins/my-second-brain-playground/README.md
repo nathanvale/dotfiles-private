@@ -4,8 +4,12 @@ Build new My Second Brain skills here, one usable vertical slice at a time.
 Use [playground-slice](skills/playground-slice/SKILL.md) to resume the baseline,
 choose the next experiment, and prove an agreed improvement through real use.
 Use [evaluate-slice](skills/evaluate-slice/SKILL.md) to define observable criteria
-and obtain independent process, persistence, and recovery evidence. Agent Ledger
-adoption starts with Tasks; the slice skill owns the route for later capabilities.
+and obtain independent process, persistence, and recovery evidence. Track new
+work by its project's declared owner: a Beads-adopted project tracks Tasks in
+Beads through native `bd` and beads-workflow, with msb-workflow for session
+binding and recovery only; an already-adopted legacy project keeps its Agent
+Ledger Task route; a vault-native project may have no execution store. The
+slice skill owns each route.
 The first slice gives Codex and Claude Code isolated Git commits for concurrent
 playground-vault work.
 
@@ -68,6 +72,10 @@ own project knowledge, task state, decisions, or completion proof. Follow the
 slice skill's [trace inspection and cleanup route](skills/playground-slice/references/compaction-recovery.md#inspect-recovery-traces)
 for storage limits, excluded content, deletion ownership, and interpretation.
 
-For delegated task tracking and evidence-based reconciliation, use the slice
-skill's [Ledger Steward route](skills/playground-slice/references/tasks-first.md#ledger-steward).
-The [specification](specs/ledger-steward.md) records this role's boundary and proof.
+For delegated task tracking and evidence-based reconciliation on an
+already-adopted legacy project's Agent Ledger Task, use the slice skill's
+[Ledger Steward route](skills/playground-slice/references/tasks-first.md#ledger-steward).
+The [specification](specs/ledger-steward.md) records this role's boundary and
+proof. A project that has explicitly adopted Beads tracks a new Task through
+[beads-workflow](skills/beads-workflow/SKILL.md) instead; a vault-native
+project without an adopted execution store invents no Task.

@@ -68,7 +68,7 @@ audit trail names the Cast Role. Read with `--readonly --json`.
 
 | Move | Command |
 | --- | --- |
-| Create | `"$BD_EXECUTABLE" create "<title>" --parent <bead> --external-ref <issue> --spec-id <spec> --body-file <file> --actor <role>` |
+| Create | `"$BD_EXECUTABLE" create "<title>" --parent <bead> --external-ref <external-ref> --spec-id <spec> --body-file <file> --actor <role>` |
 | Depend | `"$BD_EXECUTABLE" dep add <blocked> <blocker> --actor <role>` |
 | Ready | `"$BD_EXECUTABLE" ready --readonly --json`; `"$BD_EXECUTABLE" blocked --readonly --json` |
 | Claim | `"$BD_EXECUTABLE" update <id> --claim --actor <role>` |
