@@ -1,6 +1,8 @@
 {
-	"defaultProvider": "canva",
+	"defaultProvider": "canva-connectors",
 	"selectors": {
 		"account": "CANVA_ACCOUNT"
-	}
+	},
+	"oauth": "mcporter",
+	"dispatcherOwned": true
 }

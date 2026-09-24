@@ -101,23 +101,39 @@ their Object Identity, and no active route applies, adjudicates, or unlocks
 them.
 _Avoid_: Legacy provider, fallback, migration
 
-## Canva sessions
+## Canva custody
 
 **Canva Account**:
-The nonsecret slug that selects one Canva user's session for a request. It is
-the Route Selection for Canva; sessions, locks, and logs never cross accounts.
+The nonsecret slug that selects one Canva user's grant for a request. It is
+the Route Selection for Canva; grants, vault roots, and logs never cross
+accounts.
 _Avoid_: User, tenant, profile, login
 
-**Canva Session**:
-The private per-account record of one authorised grant: its client identity,
-authorization server, access token, and refresh token. It exists only below
-MCPorter and ends by logout or by Canva revoking the grant.
-_Avoid_: Credential, cache, cookie
+**Account Vault**:
+The private owned directory per Canva Account that the Canva launcher gives
+MCPorter as its data and cache home, so MCPorter's native OAuth vault for that
+account is independent of every other account and of MCPorter's default
+home vault. MCPorter alone reads and writes the grant inside it; Connectors
+claims no encryption for it.
+_Avoid_: Session, token store, keychain
+
+**Client Mode**:
+The declared Canva client identity MCPorter registers with: `dcr`, dynamic
+client registration, the working first-release mode; or `approved`, a
+reserved future Developer Portal or metadata-document client that refuses
+until separately built and admitted. No fallback runs between modes.
+_Avoid_: Auth type, login method
+
+**Canva Session** (former):
+The below-MCPorter per-account record of client identity and tokens that the
+Canva launcher no longer uses (proposed ADR 0004). Its files stay where they
+are, unread and unimported; no retirement or revocation policy is decided.
+_Avoid_: Current custody, Account Vault
 
 **Attended Login**:
 The one-time flow in which the system browser is opened for the user to grant
 access and the loopback callback returns the code. Nathan completes it; no
-agent drives the browser.
+agent drives the browser. For Canva it is MCPorter's own `auth`.
 _Avoid_: Automated login, headless login, OAuth flow
 
 ## Atlassian writes
