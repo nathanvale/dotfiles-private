@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, readdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { planDispatcherRoute, planRoute, RouteError } from "../bin/provider-route.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV } from "../bin/safe-environment.ts";
@@ -15,6 +15,17 @@ beforeEach(() => {
 	harness = createHarness({});
 });
 afterEach(() => harness.dispose());
+
+function oauthFixture(oauth: unknown = "mcporter", registryAuth: unknown = "oauth", endpoint = "https://example.invalid/mcp"): string {
+	const skills = path.join(harness.root, "skills");
+	const config = path.join(skills, "oauth-skill", "config");
+	mkdirSync(config, { recursive: true });
+	writeFileSync(path.join(config, "route.json"), JSON.stringify({ defaultProvider: "probe", oauth }));
+	writeFileSync(path.join(config, "mcporter.json"), JSON.stringify({ imports: [], mcpServers: { probe: { baseUrl: endpoint, auth: registryAuth, allowedTools: ["probe"] } } }));
+	const entry = path.join(harness.root, "oauth-route.ts");
+	writeFileSync(entry, `import { main } from ${JSON.stringify(ROUTE)};\nmain(process.argv.slice(2), ${JSON.stringify(skills)});\n`);
+	return entry;
+}
 
 describe("route plan (in-process)", () => {
 	test("composes the explicit config, verb, target, and disabled OAuth", () => {
@@ -126,6 +137,74 @@ describe("public process refusals: nothing reaches MCPorter or the credential he
 });
 
 describe("public process route", () => {
+	test("declared MCPorter OAuth runs auth for the fixed server with a scrubbed environment", async () => {
+		const entry = oauthFixture();
+		const result = await harness.run(["oauth-skill", "--", "auth", "--no-browser", "--json"], {}, entry);
+		expect(result.code).toBe(0);
+		const receipt = harness.receipt<{ argv: string[]; env: Record<string, string>; pid: number; kind: string }>("mcporter.json");
+		expect(receipt.argv).toEqual(["--config", path.join(harness.root, "skills", "oauth-skill", "config", "mcporter.json"), "auth", "probe", "--no-browser", "--json"]);
+		expect(receipt.pid).toBe(result.pid);
+		expect(receipt.kind).toBe("http");
+		expect(receipt.env).not.toHaveProperty("AMBIENT_SENTINEL");
+		expect(receipt.env).not.toHaveProperty("OP_SERVICE_ACCOUNT_TOKEN");
+		expect(receipt.env.MCPORTER_NO_KEEPALIVE).toBe("*");
+	});
+
+	test("declared MCPorter OAuth forwards reset only to its selected server", async () => {
+		const entry = oauthFixture();
+		const result = await harness.run(["oauth-skill", "--", "auth", "--reset"], {}, entry);
+		expect(result.code).toBe(0);
+		const receipt = harness.receipt<{ argv: string[] }>("mcporter.json");
+		expect(receipt.argv).toEqual(["--config", path.join(harness.root, "skills", "oauth-skill", "config", "mcporter.json"), "auth", "probe", "--reset"]);
+	});
+
+	test("declared OAuth still uses cached-token mode for list and call", async () => {
+		const entry = oauthFixture();
+		for (const [operation, expected] of [
+			[["list"], ["list", "probe", "--no-oauth"]],
+			[["call", "probe"], ["call", "probe.probe", "--no-oauth"]],
+		] as const) {
+			const result = await harness.run(["oauth-skill", "--", ...operation], {}, entry);
+			expect(result.code).toBe(0);
+			const receipt = harness.receipt<{ argv: string[] }>("mcporter.json");
+			expect(receipt.argv.slice(2)).toEqual([...expected]);
+		}
+	});
+
+	test("auth refuses undeclared routes and unsafe options before MCPorter starts", async () => {
+		const entry = oauthFixture();
+		for (const argv of [
+			["probe-skill", "--select", "selection=x", "--", "auth"],
+			["probe-skill", "--select", "selection=x", "--", "auth", "--reset"],
+			["oauth-skill", "--", "auth", "--http-url", "https://other.invalid/mcp"],
+			["oauth-skill", "--", "auth", "other-server"],
+		]) {
+			const result = await harness.run(argv, {}, argv[0] === "probe-skill" ? FIXTURE_ROUTE : entry);
+			expect(result.code).not.toBe(0);
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toContain("provider-route:error:");
+			expect(harness.has("mcporter.json")).toBe(false);
+		}
+	});
+
+	test("an unknown OAuth route declaration is a configuration refusal", async () => {
+		const entry = oauthFixture("other");
+		const result = await harness.run(["oauth-skill", "--", "auth"], {}, entry);
+		expect(result.code).toBe(4);
+		expect(result.stderr).toContain("provider-route:error:config-invalid:");
+		expect(harness.has("mcporter.json")).toBe(false);
+	});
+
+	test("auth refuses a selected registry entry without OAuth or hosted HTTPS", async () => {
+		for (const [registryAuth, endpoint] of [["none", "https://example.invalid/mcp"], ["oauth", "http://example.invalid/mcp"]] as const) {
+			const entry = oauthFixture("mcporter", registryAuth, endpoint);
+			const result = await harness.run(["oauth-skill", "--", "auth"], {}, entry);
+			expect(result.code).toBe(4);
+			expect(result.stderr).toContain("provider-route:error:config-invalid:");
+			expect(harness.has("mcporter.json")).toBe(false);
+		}
+	});
+
 	test("replaces itself with MCPorter under a scrubbed environment", async () => {
 		const result = await harness.run(["probe-skill", "--select", "selection=example", "--", "list", "--status", "--json"], {}, FIXTURE_ROUTE);
 		expect(result.code).toBe(0);
@@ -186,7 +265,7 @@ describe("route source and skill registries", () => {
 		const skills = readdirSync(SKILLS_ROOT)
 			.filter((name) => existsSync(path.join(SKILLS_ROOT, name, "config", "mcporter.json")))
 			.sort();
-		expect(skills).toEqual(["atlassian", "canva", "context7", "firecrawl"]);
+		expect(skills).toEqual(["atlassian", "canva", "context7", "figma", "firecrawl"]);
 		for (const skill of skills) {
 			const registry = JSON.parse(readFileSync(path.join(SKILLS_ROOT, skill, "config", "mcporter.json"), "utf8")) as { imports: unknown; mcpServers: Record<string, unknown> };
 			const route = JSON.parse(readFileSync(path.join(SKILLS_ROOT, skill, "config", "route.json"), "utf8")) as { defaultProvider: string };

@@ -101,9 +101,10 @@ export interface McporterReceipt {
 	command?: string;
 }
 
-// The custody claim shared by every connector: MCPorter itself never holds a
-// credential or ambient authority, the route always disables OAuth and the
-// keep-alive daemon, and no fixture secret reaches a public stream.
+// Below-MCPorter Provider custody assertion. Native OAuth routes use
+// MCPorter's private cache and assert their attended auth path separately.
+// Ordinary calls still disable interactive OAuth and keep-alive; fixture
+// secrets and ambient authority stay out of public streams.
 export function assertCustody(harness: Harness, result: RunResult, secrets: string[], ownership: "replacement" | "child" = "replacement"): McporterReceipt {
 	const receipt = harness.receipt<McporterReceipt>("mcporter.json");
 	for (const key of ["AMBIENT_SENTINEL", "OP_SERVICE_ACCOUNT_TOKEN"]) {

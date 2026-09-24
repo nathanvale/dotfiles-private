@@ -1,6 +1,6 @@
 {
   "name": "connectors",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Nathan's service connectors for Codex and Claude Code.",
   "author": {
     "name": "Nathan Vale"
@@ -9,6 +9,7 @@
     "connectors",
     "atlassian",
     "canva",
+    "figma",
     "jira",
     "confluence",
     "mcporter"
