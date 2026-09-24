@@ -1,9 +1,10 @@
 # Connectors Portable CLI standards research
 
 Date: 2026-09-24 (Australia/Melbourne). Scope: the four named local first-party
-`CODING_STANDARDS.md` files and two Matt Pocock upstream standards files,
-compared with the current dotfiles shared standards and Connectors candidate.
-This is a fit review input, not an admitted rule.
+`CODING_STANDARDS.md` files, two Matt Pocock upstream standards files, and
+the upstream contributor and agent guidance below, compared with the current
+dotfiles shared standards and Connectors candidate. This is a fit review input,
+not an admitted rule.
 
 ## Findings
 
@@ -25,6 +26,22 @@ This is a fit review input, not an admitted rule.
 | [Sandcastle provider rule](https://github.com/mattpocock/sandcastle/blob/main/.sandcastle/CODING_STANDARDS.md#L41-L45) keeps provider-specific SDK integration separate and shares only provider-agnostic utilities. | Connectors `AGENTS.md:9,12-13,18-20` already gives precise ownership: service code stays with its skill while common process, private-state and bridge plumbing lives in `bin/`. Copying Sandcastle's blanket provider rule would contradict that accepted seam. |
 | [Sandcastle interactive CLI rule](https://github.com/mattpocock/sandcastle/blob/main/.sandcastle/CODING_STANDARDS.md#L71-L75) pairs each prompt with a non-interactive flag and fails clearly without a TTY. | Potential design question for an attended auth command. Connectors `AGENTS.md:11,18,22` already distinguishes attended native OAuth and its process proof. Adopt a matching non-interactive path only if the accepted auth command needs unattended use; otherwise retain its deliberate attended boundary. |
 
+## Further upstream GitHub guidance
+
+These are first-party `AGENTS.md`, `CLAUDE.md`, or `CONTRIBUTING.md` files,
+not `CODING_STANDARDS.md` files. The first four rows cover four repositories
+from the requested MCPorter, Bun, MCP SDK, mise and 1Password shortlist.
+The final two rows are additional OpenAI sources supplied for fit review.
+
+| Repository and actual document | Connectors fit, duplicate coverage and conflict |
+| --- | --- |
+| MCPorter [AGENTS.md](https://github.com/openclaw/mcporter/blob/main/AGENTS.md#L1-L8) calls for focused regressions and project checks, while keeping live DeepWiki tests opt-in. | Reinforces separating fixture/process results from live provider claims. Connectors `AGENTS.md` already names distinct proof states and its Bun gates, so there is no new standards clause. MCPorter's pnpm commands and live-test switch are repository-specific and must not replace Connectors' Bun commands or imply live proof from a fixture. |
+| Bun [CLAUDE.md](https://github.com/oven-sh/bun/blob/main/CLAUDE.md#L62-L108) runs the changed executable in isolated process fixtures, checks streams and exit status, avoids public Internet in ordinary tests, and waits for conditions instead of sleeping. | The isolated process and stream assertions duplicate Connectors `CODING_STANDARDS.md`. A useful test-design check is to keep fixture tests offline and await observable readiness, consistent with the shared readiness rule. Bun's debug-build command and snapshot preference are specific to Bun; snapshots cannot replace Connectors' test-owned literal command and cause oracles. |
+| MCP TypeScript SDK [CONTRIBUTING.md](https://github.com/modelcontextprotocol/typescript-sdk/blob/main/CONTRIBUTING.md#L79-L127) asks for focused tests with new functionality and points to self-verifying client/server example pairs across transport variants. | A real client/server pair could qualify a Connector transport claim when that claim is in scope. Connectors already distinguishes fixture, schema and live evidence, so examples cannot promote a fixture to a hosted or authenticated claim. Its pnpm build and test commands do not transfer to this Bun plugin. |
+| mise [AGENTS.md](https://github.com/jdx/mise/blob/main/AGENTS.md#L21-L55) separates unit and CLI end-to-end tests and regenerates usage and completions; its [test structure](https://github.com/jdx/mise/blob/main/AGENTS.md#L107-L113) gives E2E fixtures a harness owner. | Connectors already requires packaged CLI process tests and updates implementation, catalogue, discovery and help together. If generated usage or completions become part of its accepted surface, mise's source-then-regenerate pattern is a useful check. Its snapshot output oracle and Rust-specific harness/commands must not displace Connectors' independently pinned identities. |
+| Codex Security [AGENTS.md](https://github.com/openai/codex-security/blob/main/AGENTS.md#L36-L60) rejects speculative restrictions and tests invented only to enforce them; it treats CLI syntax, accepted values, environment variables and defaults as public API. | Strong fit for the accepted-contract boundary: refuse only contract-defined cases and update help, schemas, docs and process tests together when public CLI behavior changes. Connectors already requires a typed command owner and coordinated help/discovery updates. Do not import its broad warning against new sanitization as a reason to weaken Connectors' established credential and path custody. |
+| Codex [AGENTS.md](https://github.com/openai/codex/blob/main/AGENTS.md#L29-L31) discourages tests of static values or removed logic and favors whole-object assertions. | Useful when a test merely mirrors a private constant or obsolete branch. A blanket ban conflicts with Connectors' valid public process assertion that discovery emits the accepted command identities. Those test-owned literals are independent oracles for observable CLI output, not tests of a static implementation value. |
+
 ## Recommendation
 
 Keep the independent-oracle, process-proof, count, perturbation and proof-layer
@@ -34,6 +51,12 @@ Connectors standard now asks for process assertions on those observables. It
 also requires early missing-config refusal before capability acquisition.
 The Matt Pocock sources reinforce public behavior proof, but their database,
 provider and interactive CLI rules depend on those repositories' seams.
+The narrow accepted-contract refusal rule is now in Connectors
+`CODING_STANDARDS.md`: trace each tested refusal to the contract, a declared
+security boundary, or a witnessed defect, rather than inventing a restriction
+and proving only that invention. The other upstream guidance sharpens offline
+fixtures and observable readiness while leaving Connectors' own process and
+literal oracles authoritative.
 
 ## Source paths
 
@@ -41,6 +64,6 @@ provider and interactive CLI rules depend on those repositories' seams.
 - `/Users/nathanvale/code/coding-agent-qualifier/CODING_STANDARDS.md`
 - `/Users/nathanvale/code/agent-ledger/CODING_STANDARDS.md`
 - `/Users/nathanvale/code/my-second-brain-plugin/plugin/skills/new-skill/CODING_STANDARDS.md`
-- `/Users/nathanvale/code/dotfiles/.worktrees/standards-no-tautological-tests/docs/agents/coding-standards.md`
-- `/Users/nathanvale/code/dotfiles/.worktrees/standards-no-tautological-tests/config/agents/plugins/connectors/AGENTS.md`
-- `/Users/nathanvale/code/dotfiles/.worktrees/standards-no-tautological-tests/config/agents/plugins/connectors/CODING_STANDARDS.md`
+- `docs/agents/coding-standards.md` in this repository
+- `config/agents/plugins/connectors/AGENTS.md` in this repository
+- `config/agents/plugins/connectors/CODING_STANDARDS.md` in this repository

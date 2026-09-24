@@ -33,6 +33,9 @@ code and tests prove their claims.
   Pin expectations from the accepted contract, never from the production
   catalogue or manifest. Useful negative controls include accepting an unknown
   command, selecting a global MCPorter, and leaking a sentinel.
+- Tie each refusal test to an accepted contract, a declared security boundary,
+  or a reproduced defect. Do not invent a restriction and then write a test
+  whose only purpose is to preserve it.
 - Keep fixture, process, installed, authenticated, and live-effect claims tied
   to the boundary actually observed. A fake's success response does not prove
   installation, hosted behavior, or an external write.
