@@ -1,6 +1,25 @@
 {
 	"schemaVersion": 1,
 	"pins": {
-		"mcporter": "0.14.0"
+		"mcporter": "0.14.0",
+		"op": "2.39.0",
+		"mise": "2026.9.12",
+		"uv": "0.12.18"
+	},
+	"sources": {
+		"op": {
+			"url": "https://cache.agilebits.com/dist/1P/op2/pkg/v2.39.0/op_apple_universal_v2.39.0.pkg",
+			"sha256": "bde261468f3232484e2738e337e39c674c11a4537f4c6ed314f933eae558a405"
+		},
+		"mise": {
+			"url": "https://github.com/jdx/mise/releases/download/v2026.9.12/mise-v2026.9.12-macos-arm64.tar.xz",
+			"sha256": "01b15ea733709a2000a801533203e99c1490d9a3c13d45c8eb90ccefd0bd21f3",
+			"signedManifest": "https://github.com/jdx/mise/releases/download/v2026.9.12/SHASUMS256.txt.minisig"
+		},
+		"uv": {
+			"url": "https://github.com/astral-sh/uv/releases/download/0.12.18/uv-aarch64-apple-darwin.tar.gz",
+			"sha256": "cf40e0c6a202190ccd9e0406dcfdd5b2d6668a9a5c779b17948963df32aafe5b",
+			"provenance": "https://github.com/astral-sh/uv/releases/tag/0.12.18"
+		}
 	}
 }

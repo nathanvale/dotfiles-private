@@ -25,6 +25,7 @@ const AVAILABLE_PATHS = [
 	"connectors.help",
 	"connectors.list",
 	"connectors.schema",
+	"connectors.setup",
 	"connectors.status",
 ];
 const EXIT_MEANINGS = { "0": "success", "1": "internal", "2": "usage", "3": "domain", "4": "schema", "75": "transient" };
@@ -243,9 +244,9 @@ describe("compiled front door: assertEnvelope rejects fabricated envelopes (unit
 		expect(() => assertEnvelope(envelope)).toThrow(/nextAction must be a non-empty string/);
 	});
 
-	test("nextAction names a command T1 does not admit", () => {
+	test("nextAction names a command the CLI does not admit", () => {
 		const base = valid();
-		const envelope = { ...base, result: { ...base.result, nextAction: "connectors.setup" } } as unknown as ReturnType<typeof valid>;
+		const envelope = { ...base, result: { ...base.result, nextAction: "connectors.unavailable" } } as unknown as ReturnType<typeof valid>;
 		expect(() => assertEnvelope(envelope)).toThrow(/admitted commands/);
 	});
 

@@ -86,6 +86,57 @@ jobs:
             '7a4256c6a3a921e2319386c3142ec33b4f0b5d693af5c652fe97ee884f30f2ab' \
             "$fixture_dir/provenance.json" | shasum -a 256 -c -
           printf 'CONNECTORS_OFFICIAL_RELEASE_FIXTURE=%s\n' "$fixture_dir" >> "$GITHUB_ENV"
+      - name: Prepare the signed official mise fixture for Connectors setup
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_root="$RUNNER_TEMP/connectors-mise-fixture"
+          install -d -m 0700 "$fixture_root/downloads"
+          release="https://github.com/jdx/mise/releases/download/v2026.9.12"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --max-time 120 \
+            "$release/SHASUMS256.txt" --output "$fixture_root/downloads/SHASUMS256.txt"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --max-time 120 \
+            "$release/SHASUMS256.txt.minisig" --output "$fixture_root/downloads/SHASUMS256.txt.minisig"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --max-time 120 \
+            "$release/mise-v2026.9.12-macos-arm64.tar.xz" --output "$fixture_root/downloads/mise.tar.xz"
+          mise_binary="$(XDG_STATE_HOME="$fixture_root/state" CONNECTORS_MISE_FIXTURE_ROOT="$fixture_root" bun -e '
+            import { installVerifiedMise } from "./config/agents/plugins/connectors/bin/setup/mise.ts";
+            const root = process.env.CONNECTORS_MISE_FIXTURE_ROOT;
+            if (!root) throw new Error("fixture root missing");
+            const result = installVerifiedMise({
+              archiveFile: `${root}/downloads/mise.tar.xz`,
+              manifestFile: `${root}/downloads/SHASUMS256.txt`,
+              signatureFile: `${root}/downloads/SHASUMS256.txt.minisig`,
+              stateDirectory: `${root}/state/connectors/setup/mise`,
+            });
+            if (!result.ok) throw new Error(`official mise fixture verification failed: ${result.reason}`);
+            console.log(result.executable);
+          ')"
+          printf 'CONNECTORS_TEST_MISE_BINARY=%s\n' "$mise_binary" >> "$GITHUB_ENV"
+          printf 'CONNECTORS_TEST_MISE_RELEASE_DIR=%s\n' "$fixture_root/downloads" >> "$GITHUB_ENV"
+      - name: Prepare the signed official op fixture for compiled setup
+        if: ${{ !cancelled() && steps.preparation.outcome == 'success' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          fixture_root="$RUNNER_TEMP/connectors-op-fixture"
+          install -d -m 0700 "$fixture_root"
+          package="$fixture_root/op_apple_universal_v2.39.0.pkg"
+          curl --proto '=https' --tlsv1.2 --fail --location --retry 3 --max-time 120 \
+            'https://cache.agilebits.com/dist/1P/op2/pkg/v2.39.0/op_apple_universal_v2.39.0.pkg' \
+            --output "$package"
+          printf '%s  %s\n' \
+            'bde261468f3232484e2738e337e39c674c11a4537f4c6ed314f933eae558a405' \
+            "$package" | shasum -a 256 -c -
+          signature="$(/usr/sbin/pkgutil --check-signature "$package")"
+          grep -Fq 'Status: signed by a developer certificate issued by Apple for distribution' <<< "$signature"
+          grep -Fq 'Notarization: trusted by the Apple notary service' <<< "$signature"
+          grep -Fq 'Developer ID Installer: AgileBits Inc. (2BUA8C4S2C)' <<< "$signature"
+          assessment="$(/usr/sbin/spctl --assess --type install -vv "$package" 2>&1)"
+          grep -Fq 'source=Notarized Developer ID' <<< "$assessment"
+          grep -Fq 'origin=Developer ID Installer: AgileBits Inc. (2BUA8C4S2C)' <<< "$assessment"
+          printf 'CONNECTORS_TEST_OP_PACKAGE=%s\n' "$package" >> "$GITHUB_ENV"
       - name: Run the complete repository gate
         run: bun run check
       - name: Check the audit's public shell processes

@@ -15,6 +15,9 @@ import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
 import { discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
 import { safeEnvironment } from "./safe-environment.ts";
 import { ensureMcporter, lockRecovery, repairMcporter } from "./mcporter-custody.ts";
+import { downloadAndInstallMise, downloadAndInstallOp } from "./setup/download.ts";
+import { installPinnedUv, readValidatedUvSources } from "./setup/uv.ts";
+import { stateRoot } from "./private-state.ts";
 
 const CONTRACT_VERSION = "2.0.0";
 const PROGRAM = "connectors";
@@ -25,9 +28,9 @@ const SIGNAL_EXITS = { "130": "SIGINT", "143": "SIGTERM" } as const;
 // once it is actually true, and drop it in the Ticket that stops excluding it.
 const EFFECT_EXCLUSIONS = [
 	"any real credential value or T5 custody access; fixture-auth only presents a nonsecret reference to a fixture-tested authority",
-	"any dependency setup other than first-use MCPorter bootstrap",
+	"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
 	"any provider write operation",
-	"setup, other deps commands, real auth, or run (later Tickets own the complete production flows)",
+	"deps, real auth, or run (later Tickets own the complete production flows)",
 ] as const;
 
 // Exported: each appears in the exported Envelope's public signature.
@@ -49,6 +52,13 @@ export type CauseCode =
 	| "DOMAIN_MCPORTER_RECOVERED_REPAIR_FAILED"
 	| "INTERNAL_MCPORTER_REPAIR_UNKNOWN"
 	| "INTERNAL_MCPORTER_SELECTION_UNKNOWN"
+	| "SUCCESS_COMPLETED"
+	| "DOMAIN_SETUP_FAILED_UNCHANGED"
+	| "DOMAIN_SETUP_FAILED_PARTIAL"
+	| "SCHEMA_SETUP_CONFIG_INVALID"
+	| "USAGE_SETUP_MALFORMED"
+	| "INTERNAL_SETUP_UNKNOWN"
+	| "INTERNAL_SETUP_AFTER_COMMIT"
 	| "USAGE_UNKNOWN_COMMAND"
 	| "USAGE_MALFORMED_ARGUMENTS"
 	| "USAGE_CONNECTOR_UNKNOWN"
@@ -74,6 +84,8 @@ export type CauseCode =
 let bootstrapCompleted = false;
 let recoveryCompleted = false;
 let repairCompleted = false;
+let setupStarted = false;
+let setupCompleted: string[] = [];
 
 interface CommandDescriptor {
 	readonly commandIdentity: string;
@@ -91,6 +103,7 @@ const COMMANDS: readonly CommandDescriptor[] = [
 	{ commandIdentity: "connectors.help", route: ["--help"], effectClass: "inspect", summary: "Show help and usage" },
 	{ commandIdentity: "connectors.discovery", route: ["--discover", "--json"], effectClass: "inspect", summary: "Describe the commands and the contract" },
 	{ commandIdentity: "connectors.list", route: ["list"], effectClass: "inspect", summary: "List connectors declared by a Connector Manifest" },
+	{ commandIdentity: "connectors.setup", route: ["setup"], effectClass: "repository-local", summary: "Explicitly install verified op and plugin-owned mise and pinned uv" },
 	{ commandIdentity: "connectors.config.validate", route: ["config", "validate"], effectClass: "inspect", summary: "Validate connector manifests, registries, and packaged requirements" },
 	{ commandIdentity: "connectors.config.show", route: ["config", "show"], effectClass: "inspect", summary: "Show resolved nonsecret values and provenance; conflicting repeated selectors refuse" },
 	{ commandIdentity: "connectors.status", route: ["status"], effectClass: "inspect", summary: "Report truthful evidence state per connector" },
@@ -125,7 +138,7 @@ export interface Envelope {
 		readonly repairAction: string | null;
 		readonly nextAction: string | null;
 		readonly effectClass: EffectClass;
-		readonly transactionState: "unchanged" | "completed" | "unknown";
+		readonly transactionState: "unchanged" | "completed" | "partially-completed" | "unknown";
 		readonly causeCode: CauseCode;
 		readonly effects: {
 			readonly completed: readonly string[];
@@ -237,7 +250,7 @@ function checkDiagnostics(diagnostics: Envelope["diagnostics"]): string[] {
 interface CauseRow {
 	readonly outcome: Outcome;
 	readonly effectClass: EffectClass;
-	readonly transactionState: "unchanged" | "completed" | "unknown";
+	readonly transactionState: Envelope["result"]["transactionState"];
 	readonly failureClass: FailureClass;
 	readonly exitCode: number;
 	readonly retryable: boolean;
@@ -261,6 +274,13 @@ const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	DOMAIN_MCPORTER_RECOVERED_REPAIR_FAILED: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_MCPORTER_REPAIR_UNKNOWN: { outcome: "failed", effectClass: "repository-local", transactionState: "unknown", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_MCPORTER_SELECTION_UNKNOWN: { outcome: "failed", effectClass: "repository-local", transactionState: "unknown", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	SUCCESS_COMPLETED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	DOMAIN_SETUP_FAILED_UNCHANGED: { outcome: "failed", effectClass: "repository-local", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_SETUP_FAILED_PARTIAL: { outcome: "failed", effectClass: "repository-local", transactionState: "partially-completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	SCHEMA_SETUP_CONFIG_INVALID: { outcome: "refused", effectClass: "repository-local", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	USAGE_SETUP_MALFORMED: { outcome: "refused", effectClass: "repository-local", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	INTERNAL_SETUP_UNKNOWN: { outcome: "failed", effectClass: "repository-local", transactionState: "unknown", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	INTERNAL_SETUP_AFTER_COMMIT: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	USAGE_UNKNOWN_COMMAND: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	USAGE_MALFORMED_ARGUMENTS: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	USAGE_CONNECTOR_UNKNOWN: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
@@ -316,7 +336,8 @@ function checkCauseRow(result: Envelope["result"]): string[] {
 	const row = ADMITTED_CAUSE_ROWS[result.causeCode as CauseCode];
 	if (!row) return [`result.causeCode ${JSON.stringify(result.causeCode)} is not one of T1's admitted cause rows`];
 	const cause = result.causeCode;
-	return [...checkCauseRowScalars(result, row, cause), ...checkCauseRowData(result, row, cause), ...checkCauseRowRepairAction(result, row, cause)];
+	const setupCause = cause === "SUCCESS_COMPLETED" || cause === "DOMAIN_SETUP_FAILED_UNCHANGED" || cause === "DOMAIN_SETUP_FAILED_PARTIAL" || cause === "SCHEMA_SETUP_CONFIG_INVALID" || cause === "USAGE_SETUP_MALFORMED" || cause === "INTERNAL_SETUP_UNKNOWN" || cause === "INTERNAL_SETUP_AFTER_COMMIT";
+	return [...(setupCause !== (result.commandIdentity === "connectors.setup") ? ["setup cause and command identity must agree"] : []), ...checkCauseRowScalars(result, row, cause), ...checkCauseRowData(result, row, cause), ...checkCauseRowRepairAction(result, row, cause)];
 }
 
 // T1 never attempts an effect, so every envelope's effects are vacuously
@@ -332,13 +353,28 @@ function checkEffectsEmptyAndComplete(effects: Envelope["result"]["effects"]): s
 	return problems;
 }
 
+function checkSetupEffects(result: Envelope["result"]): string[] {
+	if (result.commandIdentity !== "connectors.setup") return checkEffectsEmptyAndComplete(result.effects);
+	const effects = result.effects;
+	const problems = checkExactKeys(effects, EFFECTS_KEYS, "result.effects");
+	const expected = ["op", "mise", "uv"];
+	if (!Array.isArray(effects.completed) || !Array.isArray(effects.remaining) || !Array.isArray(effects.uncertain)) return [...problems, "setup effect inventories must be arrays"];
+	if (effects.inventoryComplete !== true) problems.push("setup effect inventory must be complete");
+	if (JSON.stringify([...effects.completed, ...effects.uncertain, ...effects.remaining]) !== JSON.stringify(expected)) problems.push("setup effects must partition op, mise, uv in order");
+	if (result.transactionState === "completed" && effects.remaining.length !== 0) problems.push("completed setup has remaining effects");
+	if (result.transactionState === "partially-completed" && (effects.completed.length === 0 || effects.remaining.length === 0)) problems.push("partial setup requires completed and remaining effects");
+	if (result.transactionState === "unchanged" && effects.completed.length !== 0) problems.push("unchanged setup has completed effects");
+	if (result.transactionState !== "unknown" && effects.uncertain.length !== 0) problems.push("known setup result has uncertain effects");
+	return problems;
+}
+
 export function assertEnvelope(envelope: Envelope): void {
 	const problems = [
 		...checkEnvelopeShape(envelope),
 		...checkAvailablePaths(envelope.availablePaths),
 		...checkResultIdentity(envelope.result),
 		...checkCauseRow(envelope.result),
-		...checkEffectsEmptyAndComplete(envelope.result.effects),
+		...checkSetupEffects(envelope.result),
 		...(envelope.result.transactionState === "completed" && envelope.result.effects.completed.length === 0 ? ["completed dependency effect requires its receipt"] : []),
 		...(envelope.result.transactionState === "unchanged" && envelope.result.effects.completed.length > 0 ? ["unchanged result cannot report a completed effect"] : []),
 		...(envelope.result.transactionState === "unknown" && envelope.result.effects.uncertain.length !== 1 ? ["unknown repair requires an uncertain effect"] : []),
@@ -364,8 +400,31 @@ function completedSelectionEffects(): string[] {
 	return [];
 }
 
-export function buildInternalFailureEnvelope(): Envelope {
+type FailureProgress = Pick<Envelope["result"], "commandIdentity" | "effectClass" | "transactionState" | "causeCode" | "effects">;
+
+function setupFailureProgress(): FailureProgress {
+	const committed = setupCompleted.length === SETUP_EFFECTS.length;
+	const uncertain = committed ? [] : [SETUP_EFFECTS[setupCompleted.length]!];
+	return {
+		commandIdentity: "connectors.setup", effectClass: "repository-local",
+		transactionState: committed ? "completed" : "unknown",
+		causeCode: committed ? "INTERNAL_SETUP_AFTER_COMMIT" : "INTERNAL_SETUP_UNKNOWN",
+		effects: { completed: setupCompleted, remaining: SETUP_EFFECTS.slice(setupCompleted.length + uncertain.length), uncertain, inventoryComplete: true },
+	};
+}
+
+function selectionFailureProgress(): FailureProgress {
 	const completed = completedSelectionEffects();
+	return {
+		commandIdentity: "connectors.dispatch", effectClass: completed.length > 0 ? "repository-local" : "inspect",
+		transactionState: completed.length > 0 ? "completed" : "unchanged",
+		causeCode: repairCompleted ? "INTERNAL_UNEXPECTED_AFTER_REPAIR" : bootstrapCompleted || recoveryCompleted ? "INTERNAL_UNEXPECTED_AFTER_BOOTSTRAP" : "INTERNAL_UNEXPECTED_UNCHANGED",
+		effects: { completed, remaining: [], uncertain: [], inventoryComplete: true },
+	};
+}
+
+export function buildInternalFailureEnvelope(): Envelope {
+	const progress = setupStarted ? setupFailureProgress() : selectionFailureProgress();
 	return {
 		envelopeVersion: 2,
 		contractVersion: CONTRACT_VERSION,
@@ -373,7 +432,6 @@ export function buildInternalFailureEnvelope(): Envelope {
 		availablePaths: AVAILABLE_PATHS,
 		result: {
 			runId: runId(),
-			commandIdentity: "connectors.dispatch",
 			outcome: "failed",
 			failureClass: "internal",
 			exitCode: 1,
@@ -381,10 +439,7 @@ export function buildInternalFailureEnvelope(): Envelope {
 			retryable: false,
 			repairAction: "Report this internal error; the requested command was not completed",
 			nextAction: "connectors.help",
-			effectClass: completed.length > 0 ? "repository-local" : "inspect",
-			transactionState: completed.length > 0 ? "completed" : "unchanged",
-			causeCode: repairCompleted ? "INTERNAL_UNEXPECTED_AFTER_REPAIR" : bootstrapCompleted || recoveryCompleted ? "INTERNAL_UNEXPECTED_AFTER_BOOTSTRAP" : "INTERNAL_UNEXPECTED_UNCHANGED",
-			effects: { completed, remaining: [], uncertain: [], inventoryComplete: true },
+			...progress,
 		},
 		diagnostics: { detail: FIXED_INTERNAL_DIAGNOSTIC_DETAIL },
 	};
@@ -454,6 +509,7 @@ function helpText(): string {
 		"  --help                                          Show this human-readable help",
 		"  --help --json                                   Show help as a machine Contract Core envelope",
 		"  list                                            List connectors declared by a manifest",
+		"  setup                                           Install verified op, mise, and pinned uv explicitly",
 		"  config validate [connector]                     Validate manifests, registries, and packaged requirements",
 		"  config show <connector> --resolved --json       Show resolved nonsecret configuration and provenance",
 		"                                                  Repeated --select names must carry identical values",
@@ -663,6 +719,58 @@ async function handleMcporterRepair(args: readonly string[]): Promise<void> {
 			effects: { completed: result.recovered ? ["mcporter-recovery", "mcporter-repair"] : ["mcporter-repair"], remaining: [], uncertain: [], inventoryComplete: true },
 		},
 	});
+}
+
+const SETUP_EFFECTS = ["op", "mise", "uv"] as const;
+
+function emitSetup(causeCode: "SUCCESS_COMPLETED" | "DOMAIN_SETUP_FAILED_UNCHANGED" | "DOMAIN_SETUP_FAILED_PARTIAL" | "SCHEMA_SETUP_CONFIG_INVALID" | "USAGE_SETUP_MALFORMED", completed: string[], message: string): void {
+	const row = ADMITTED_CAUSE_ROWS[causeCode];
+	emit({
+		envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message, availablePaths: AVAILABLE_PATHS,
+		result: {
+			runId: runId(), commandIdentity: "connectors.setup", outcome: row.outcome, failureClass: row.failureClass,
+			exitCode: row.exitCode, data: row.outcome === "success" ? { installed: SETUP_EFFECTS } : null,
+			retryable: false, repairAction: row.outcome === "success" ? null : "Inspect the selected plugin-owned setup state, then run connectors setup again",
+			nextAction: row.outcome === "success" ? "connectors.status" : "connectors.setup",
+			effectClass: "repository-local", transactionState: row.transactionState, causeCode,
+			effects: { completed, remaining: SETUP_EFFECTS.slice(completed.length), uncertain: [], inventoryComplete: true },
+		},
+	});
+}
+
+async function handleSetup(args: readonly string[]): Promise<void> {
+	if (args.length !== 0) {
+		emitSetup("USAGE_SETUP_MALFORMED", [], "connectors: setup takes no arguments");
+		return;
+	}
+	const root = pluginRoot();
+	if (!readValidatedUvSources(path.join(root, "requirements.json"), path.join(root, "config", "mise.toml"), path.join(root, "config", "mise.lock"))) {
+		emitSetup("SCHEMA_SETUP_CONFIG_INVALID", [], "connectors: packaged setup configuration is invalid");
+		return;
+	}
+	setupStarted = true;
+	const completed: string[] = [];
+	setupCompleted = completed;
+	const source = process.env.CONNECTORS_TEST_RELEASE_ORIGIN ? { localReleaseOrigin: process.env.CONNECTORS_TEST_RELEASE_ORIGIN } : undefined;
+	const op = await downloadAndInstallOp(source);
+	if (!op.ok) {
+		emitSetup("DOMAIN_SETUP_FAILED_UNCHANGED", completed, `connectors: op setup failed: ${op.reason}`);
+		return;
+	}
+	completed.push("op");
+	const mise = await downloadAndInstallMise(source);
+	if (!mise.ok) {
+		emitSetup("DOMAIN_SETUP_FAILED_PARTIAL", completed, `connectors: mise setup failed: ${mise.reason}`);
+		return;
+	}
+	completed.push("mise");
+	const uv = await installPinnedUv(mise.executable, path.join(stateRoot(process.env), "connectors", "setup", "uv"), root);
+	if (!uv.ok) {
+		emitSetup("DOMAIN_SETUP_FAILED_PARTIAL", completed, `connectors: uv setup failed: ${uv.reason}`);
+		return;
+	}
+	completed.push("uv");
+	emitSetup("SUCCESS_COMPLETED", completed, "connectors: verified op, mise, and pinned uv installed");
 }
 
 function handleList(): void {
@@ -1087,6 +1195,10 @@ async function fetchKeylessSchema(id: string, registryPath: string, server: stri
 async function dispatchCommand(args: readonly string[]): Promise<void> {
 	if (args[0] === "deps" && args[1] === "repair" && args[2] === "mcporter") {
 		await handleMcporterRepair(args.slice(3));
+		return;
+	}
+	if (args[0] === "setup") {
+		await handleSetup(args.slice(1));
 		return;
 	}
 	if (args[0] === "list") {
