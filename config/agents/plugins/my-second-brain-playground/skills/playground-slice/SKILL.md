@@ -45,12 +45,17 @@ For an authorized note update under an existing Task, use this short route.
    that gap; the caller's explicit goal still scopes independent note work.
    A refused bind is not permission to replace another owner's checkpoint.
    Continue from the returned control panel; after compaction, re-read the
-   goal. On refusal or uncertain context, first resolve the project's declared
-   owner (Beads-adopted, already-adopted legacy Agent Ledger, or vault-native
-   with no adopted store) through the configured vault's
-   `docs/agents/project-maps.md`; only when that adoption status itself stays
-   uncertain, follow the configured vault's `docs/agents/recovery.md` before
-   effects.
+   goal. On refusal or uncertain context, resolve the project's declared owner
+   through the configured vault's `docs/agents/project-maps.md` first: a
+   Beads-adopted project recovers through its own native `bd`/
+   `bin/msb-workflow` route; an already-adopted legacy project recovers
+   through the explicit manual `recovery-checkpoint recover` command below;
+   a vault-native project without an adopted execution store recovers from
+   its `GOAL.md`, README, and latest proof, with no panel at all. When
+   project-maps.md itself leaves adoption status unknown, inspect the
+   project's declared owners there and pause further effects; the vault's
+   `docs/agents/recovery.md` assumes an adopted Ledger and is not the route
+   for resolving unknown adoption.
 3. Before editing, use the Task's own store. For a Task tracked in Beads, read
    and claim it with native `bd` per [beads-workflow](../beads-workflow/SKILL.md).
    For a Task an already-adopted legacy project still tracks in Agent Ledger,
@@ -58,12 +63,19 @@ For an authorized note update under an existing Task, use this short route.
    it and record this execution's start, or resume its owned active run. Keep
    a simple transition in this session. Binding verifies Task identity; it
    does not start work or transfer another agent's execution.
-4. With a valid panel, read the goal and affected artifact as needed; inspect
-   uncertain prior effects before retrying. For evidence-derived edits, compare
-   each changed claim with its source before saving: preserve who or what it
-   refers to, scope, uncertainty, and whether it is a suggestion, decision, or
-   observed action. Retain source links. Edit only the authorized note, run
-   `bun run check`. Keep existing READMEs unchanged.
+4. Read the goal and affected artifact as needed by the Task's declared
+   owner: a Beads Task confirms state through its own native `bd` claim
+   (step 3); an already-adopted legacy project confirms state through its
+   valid recovered control panel; a vault-native project without an adopted
+   execution store has no panel and reads its `GOAL.md`, README, and latest
+   proof directly instead. If ownership itself is still unresolved at this
+   point, pause here and resolve it before editing rather than proceeding on
+   an assumed panel. Inspect uncertain prior effects before retrying. For
+   evidence-derived edits, compare each changed claim with its source before
+   saving: preserve who or what it refers to, scope, uncertainty, and whether
+   it is a suggestion, decision, or observed action. Retain source links. Edit
+   only the authorized note, run `bun run check`. Keep existing READMEs
+   unchanged.
 5. Before returning, close out by the Task's owner. A Beads Task closes with
    native `bd close` per [beads-workflow](../beads-workflow/SKILL.md); an
    already-adopted legacy project's Agent Ledger Task follows
@@ -84,11 +96,12 @@ are not prerequisites for an existing Task's bounded note update.
 For continuation after compaction, recover by the Task's declared owner and
 read the goal for the next action: a Beads Task recovers through
 `bin/msb-workflow` session binding and native `bd` state; an already-adopted
-legacy project continues from its delivered Agent Ledger control panel; a
-vault-native project without an adopted execution store has no installed
-checkpoint and recovers instead from its canonical `GOAL.md`, README, and
-latest proof. The full entry route below is for new work or a missing work
-binding; compaction alone does not require repeating it.
+legacy project recovers through the explicit manual
+`recovery-checkpoint recover` command below — no hook delivers that panel
+automatically; a vault-native project without an adopted execution store has
+no installed checkpoint and recovers instead from its canonical `GOAL.md`,
+README, and latest proof. The full entry route below is for new work or a
+missing work binding; compaction alone does not require repeating it.
 
 - Resolve the synthetic vault from the caller or
   `~/.config/my-second-brain-playground/vault.json`. Read its `AGENTS.md`,
