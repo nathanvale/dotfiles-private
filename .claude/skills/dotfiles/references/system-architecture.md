@@ -46,8 +46,11 @@ profiles, state management, and setup.sh phases.
 5. `$BUN_INSTALL/bin` (`~/.bun`) -- Bun
 6. `$HOME/.local/bin` -- user local
 7. `~/code/dotfiles/bin/*` -- dotfiles scripts (6 subdirs added individually)
-8. `~/.local/share/fnm/aliases/default/bin` -- fnm Node
-9. `/opt/homebrew/bin` -- Homebrew (last = highest priority)
+8. `/opt/homebrew/bin` -- Homebrew (last = highest priority)
+
+`~/.local/share/mise/shims` is prepended by `config/mise/bootstrap.sh` from
+`.zshenv` when a verified applied revision is selected; interactive zsh then
+runs `mise activate zsh`. Contract: `bin/test/toolchain-bootstrap-test.sh`.
 
 ### .env File Hierarchy
 
@@ -74,8 +77,8 @@ own what each one loads and why; `bin/test/zsh-startup-silence-test.sh` and
 | `PAGER` | `bat` | Default pager |
 | `LANG` | `en_AU.UTF-8` | Australian English |
 
-`.zshrc` deliberately sets no `CDPATH` and no `FNM_STRICT`; each says why at its
-own site. Contract: `bin/test/zsh-effective-behavior-test.sh`.
+`.zshrc` deliberately sets no `CDPATH`; it says why at its own site. Contract:
+`bin/test/zsh-effective-behavior-test.sh`.
 
 ---
 

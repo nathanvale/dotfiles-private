@@ -670,7 +670,7 @@ assert_equals "$gen_status" '0' 'binding: a trailing slash is not a mismatch'
 # --- Containment: a bound run deposits nothing in the repository ------------
 #
 # Closes a leak found during implementation. The probe child was given the
-# ZDOTDIR as its HOME, so fnm and atuin initialised under it and wrote
+# ZDOTDIR as its HOME, so the runtime manager and atuin initialised under it and wrote
 # `.config/` and `.local/` straight into the worktree. The binding must decide
 # which startup files are READ without deciding where tool state is WRITTEN.
 #

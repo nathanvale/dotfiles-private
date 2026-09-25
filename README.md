@@ -122,8 +122,10 @@ applied. Setup now declares and installs Mise, publishes one verified applied
 revision, and configures terminals and Git hooks to select it. Those repository
 changes are implemented and hermetically tested; this checkout does not by
 itself prove that the laptop has been installed, activated, or live-qualified.
-fnm, pyenv, and Homebrew remain installed fallbacks during that qualification,
-so do not treat a Homebrew update as a selected-runtime update.
+Mise is the only configured Node owner; fnm is retired from setup, shell
+startup, Git hooks, and the Brewfile (ADR 0012). pyenv and Homebrew remain
+installed fallbacks during that qualification, so do not treat a Homebrew
+update as a selected-runtime update.
 
 Check the current Node, Bun, Python, Git, and npm baseline without changing the machine:
 

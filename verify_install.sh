@@ -17,12 +17,7 @@ set -uo pipefail
 # redirect checks to a different checkout or fixture.
 DOTFILES="$(CDPATH='' cd "$(dirname "$0")" && pwd -P)"
 STATE_DIR="$HOME/.dotfiles_state"
-NODE_VERSION_FILE="$DOTFILES/config/node/version"
 PROFILE_REQUIREMENTS_FILE="$DOTFILES/config/brew/profile-requirements.tsv"
-NODE_VERSION=""
-if [[ -f "$NODE_VERSION_FILE" ]]; then
-    NODE_VERSION=$(< "$NODE_VERSION_FILE")
-fi
 
 # Ensure Homebrew is in PATH for this script (Apple Silicon)
 if [[ -x /opt/homebrew/bin/brew ]]; then
@@ -269,24 +264,6 @@ verify_profile_requirements() {
     done < "$PROFILE_REQUIREMENTS_FILE"
 }
 
-# Called indirectly through the command string passed to verify().
-# shellcheck disable=SC2329
-node_version_declared() {
-    [[ "$NODE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
-}
-
-# Called indirectly through the command string passed to verify().
-# shellcheck disable=SC2329
-fnm_default_matches_declaration() {
-    [[ "$(fnm default)" == "v$NODE_VERSION" ]]
-}
-
-# Called indirectly through the command string passed to verify().
-# shellcheck disable=SC2329
-node_default_matches_declaration() {
-    [[ "$(fnm exec --using=default node --version)" == "v$NODE_VERSION" ]]
-}
-
 # Called indirectly through the command strings passed to verify(). These keep
 # malformed declarations separate from the expected source-only qualification
 # warning while the current fallback runtimes remain intentionally active.
@@ -328,6 +305,32 @@ mise_applied_selection_healthy() {
             . "$DOTFILES/config/mise/bootstrap.sh"
             [ "${DOTFILES_MISE_ACTIVE:-0}" = 1 ] &&
                 [ -r "$MISE_GLOBAL_CONFIG_FILE" ]
+        '
+}
+
+# Called indirectly through verify(). Resolve one Node-owned executable the way
+# a Git hook or noninteractive shell does: a fresh environment, the shared POSIX
+# bootstrap, then PATH lookup. The tool passes only when it resolves under the
+# selected Mise layout and runs. An inherited interactive PATH, or a runtime
+# manager that is no longer configured, cannot satisfy this from outside.
+# shellcheck disable=SC2329
+mise_selected_tool_runs() {
+    local tool="$1" mise_path
+    mise_path="$(command -v mise 2>/dev/null)" || return 1
+    mise_path="${mise_path%/*}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    # The child expands these variables after env supplies its isolated values.
+    # shellcheck disable=SC2016
+    env -i HOME="$HOME" DOTFILES="$DOTFILES" \
+        PATH="$mise_path" CONTRACT_TOOL="$tool" \
+        /bin/sh -c '
+            . "$DOTFILES/config/mise/bootstrap.sh"
+            [ "${DOTFILES_MISE_ACTIVE:-0}" = 1 ] || exit 69
+            resolved="$(command -v "$CONTRACT_TOOL")" || exit 1
+            case "$resolved" in
+                "$MISE_SHIMS_DIR"/*|"$MISE_INSTALLS_DIR"/*) ;;
+                *) exit 1 ;;
+            esac
+            "$CONTRACT_TOOL" --version >/dev/null 2>&1
         '
 }
 
@@ -652,13 +655,9 @@ verify "UV" "command -v uv"
 verify "Mise" "command -v mise"
 verify "Mise applied selection" "mise_applied_selection_healthy"
 verify "Mise effective toolchain ownership" "mise_effective_toolchain_healthy"
-verify "fnm (Node)" "command -v fnm"
-verify "Node version declaration" "node_version_declared"
-verify "fnm default Node" "fnm_default_matches_declaration"
-verify "Node $NODE_VERSION" "node_default_matches_declaration"
-verify "npm" "fnm exec --using=default npm --version"
-verify "npx" "fnm exec --using=default npx --version"
-verify "Corepack" "fnm exec --using=default corepack --version"
+verify "Node (Mise)" "mise_selected_tool_runs node"
+verify "npm (Mise)" "mise_selected_tool_runs npm"
+verify "npx (Mise)" "mise_selected_tool_runs npx"
 verify "pnpm" "command -v pnpm"
 verify "shellcheck" "command -v shellcheck"
 verify "Toolchain declaration manifest" "toolchain_manifest_healthy"
@@ -825,7 +824,7 @@ if [[ $FAIL_COUNT -gt 0 || $WARN_COUNT -gt 0 ]]; then
                 "Toolchain reconstruction qualification")
                     action "$YELLOW" "Toolchain reconstruction qualification" "live selection is separate from clean-machine exact reconstruction" \
                         "Check: $DOTFILES/bin/dotfiles/toolchain status --json" \
-                        "Keep fnm, pyenv, and Homebrew fallbacks until a clean no-cache Mac and exact Git owner are qualified"
+                        "Keep pyenv and Homebrew fallbacks until a clean no-cache Mac and exact Git owner are qualified; Mise is the only configured Node owner"
                     ;;
                 "OrbStack")
                     action "$YELLOW" "OrbStack" "not installed (may be an orphaned app issue)" \

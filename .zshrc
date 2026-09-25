@@ -21,9 +21,6 @@ export PATH="$HOME/bin:$PATH"
 export PATH="$HOME/bin/tmux:$PATH"
 export PATH="$HOME/bin/env:$PATH"
 
-# fnm default node (makes node/npm/npx available in non-interactive shells)
-export PATH="$HOME/.local/share/fnm/aliases/default/bin:$PATH"
-
 # Homebrew takes priority (must be last)
 export PATH="/opt/homebrew/bin:$PATH"
 
@@ -205,77 +202,11 @@ sync-launchctl-env() {
   fi
 }
 
-# ----------------------------------------------------------------------------
-# FNM (Fast Node Manager) - Faster alternative to NVM
-# ----------------------------------------------------------------------------
-# Skip fnm hook when shell is non-interactive (e.g. automation, MCP subprocesses).
-# Also skip when fnm multishell state isn't writable (restricted sandboxes).
-#
-# The `command -v` gate is what keeps a fresh machine silent: without it, a
-# missing fnm makes startup print "command not found: fnm" on stderr, and an
-# agent capturing that stream sees a diagnostic it did not cause.
-# Contract: bin/test/zsh-startup-silence-test.sh
-if [[ "${DOTFILES_MISE_ACTIVE:-0}" != 1 ]] && [[ -o interactive ]] && command -v fnm >/dev/null 2>&1 &&
-  [[ ! -e "$HOME/.local/state/fnm_multishells" || -w "$HOME/.local/state/fnm_multishells" ]]; then
-  # `--log-level error` rather than `quiet`.
-  #
-  # `quiet` suppresses fnm's own error output, which would make the wrapper below
-  # hide the missing-version diagnostic instead of merely making it non-fatal.
-  # Against the installed fnm 1.39.0 (levels: quiet, error, info), `error` is the
-  # narrowest level that still reports a real failure: ordinary startup and a
-  # satisfiable version file stay silent, and only an uninstalled pinned version
-  # emits. That keeps startup silence intact while leaving the runtime
-  # diagnosable.
-  eval "$(fnm env --use-on-cd --shell zsh --log-level error --version-file-strategy recursive)"
-
-  # Keep a missing project runtime diagnosable rather than fatal.
-  #
-  # `fnm env --use-on-cd` installs `_fnm_autoload_hook` as a chpwd hook, and that
-  # hook's `fnm use` exits non-zero when a project pins a Node version that is
-  # not installed. A failing chpwd hook is not a harmless warning: under
-  # ERR_EXIT it aborts the shell at the `cd` itself, so an agent that enters a
-  # project to diagnose its missing runtime never reaches the next command.
-  #
-  # The original hook fnm generated is copied under
-  # `_fnm_original_autoload_hook` and the hook name is rebound to a wrapper that
-  # calls that copy and then discards its status. Only fatality changes: the
-  # copied hook still runs, still switches the version when it can, and still
-  # writes its own diagnostic to stderr at the `error` log level selected above.
-  # So a missing runtime is reported and navigation continues.
-  #
-  # Guarded on the hook existing: a future fnm that names or shapes its hook
-  # differently leaves startup untouched rather than binding a wrapper around
-  # nothing.
-  # Contract: bin/test/zsh-startup-silence-test.sh
-  if (( ${+functions[_fnm_autoload_hook]} )); then
-    functions[_fnm_original_autoload_hook]="${functions[_fnm_autoload_hook]}"
-    _fnm_autoload_hook() { _fnm_original_autoload_hook || true; }
-  fi
-fi
-
-# Ensure active node is in PATH for subprocesses (silences Bun's fnm warning)
-if node_bin_path="$(command -v node 2>/dev/null)"; then
-  node_bin_dir="${node_bin_path%/*}"
-  if [[ -n "$node_bin_dir" && ":$PATH:" != *":$node_bin_dir:"* ]]; then
-    export PATH="$node_bin_dir:$PATH"
-  fi
-fi
-unset node_bin_path node_bin_dir
+# Node, npm, and npx are owned by the applied Mise revision selected in
+# .zshenv; interactive activation runs later, after the other PATH owners. No
+# other Node manager is configured. Contract: bin/test/toolchain-bootstrap-test.sh
 typeset -U path PATH
 sanitize-path
-
-# No ambient strict Node version behavior is exported here.
-#
-# `FNM_STRICT` is not defined by the installed fnm (1.39.0); exporting it only
-# looked like a safety net. What the installed runtime actually does is fail the
-# `fnm use` run inside its own chpwd hook when a project pins an uninstalled
-# version. Under `ERR_EXIT` that failing hook aborts the shell at the `cd`
-# itself, so entering a project to diagnose its missing runtime became
-# impossible.
-#
-# The hook is wrapped below so a missing project runtime stays diagnosable:
-# navigation succeeds and the diagnostic is the only consequence.
-# Contract: bin/test/zsh-startup-silence-test.sh
 
 # ----------------------------------------------------------------------------
 # Zsh Function Lookup
@@ -585,7 +516,7 @@ alias sz="source ~/.zshrc"
 morning() {
   echo "☕ Good morning, Nathan!"
   echo "Node versions installed:"
-  fnm list  # See what you have
+  mise ls node  # See what you have
   echo "---"
   echo "Recent projects:"
   eza -l --sort=modified --reverse ~/code | head -5
