@@ -37,14 +37,52 @@ assert_not_contains() {
   pass "$label"
 }
 
+# A held launch keeps about four processes alive (test subshell, wrapper, op or
+# target, sleep). Starting all 240 at once needs about 1,000 concurrent
+# processes, which can exceed the per-user process budget on a hosted macOS
+# runner: fork then fails inside the wrapper's custody checks, the wrapper
+# fails closed, and the suite reports a fixture failure unrelated to argv
+# custody. The burst size is also what stretches the argv race window enough
+# for the sampler to see it, so each wave is the largest the live budget
+# allows (all 240 at once on a roomy machine) rather than a fixed small wave.
+# Every one of the 240 launches still runs while the sampler watches.
+HELD_LAUNCH_TOTAL=240
+HELD_LAUNCH_PROCESS_COST=6
+HELD_LAUNCH_RESERVE=128
+HELD_LAUNCH_MIN_WAVE=20
+
+held_launch_wave_size() {
+  local budget
+  local kernel_budget
+  local in_use
+  local wave
+  budget="$(ulimit -u)"
+  kernel_budget="$(sysctl -n kern.maxprocperuid 2>/dev/null || true)"
+  if [[ "$kernel_budget" =~ ^[0-9]+$ ]] && { [[ ! "$budget" =~ ^[0-9]+$ ]] || ((kernel_budget < budget)); }; then
+    budget="$kernel_budget"
+  fi
+  if [[ ! "$budget" =~ ^[0-9]+$ ]]; then
+    printf '%s' "$HELD_LAUNCH_TOTAL"
+    return
+  fi
+  in_use="$(ps -U "$(id -u)" -o pid= | wc -l | tr -d ' ')"
+  wave=$(((budget - in_use - HELD_LAUNCH_RESERVE) / HELD_LAUNCH_PROCESS_COST))
+  ((wave <= HELD_LAUNCH_TOTAL)) || wave="$HELD_LAUNCH_TOTAL"
+  ((wave >= HELD_LAUNCH_MIN_WAVE)) || wave="$HELD_LAUNCH_MIN_WAVE"
+  printf '%s' "$wave"
+}
+
 start_argv_sampler() {
   local sentinel="$1"
   local result="$2"
+  local stop="$3"
 
   # Pass the sentinel only through the sampler's environment. Passing it as a
-  # positional argument would make the sampler itself a false positive.
-  SAMPLER_SENTINEL="$sentinel" SAMPLER_RESULT="$result" /bin/bash -c '
-    for ((round = 0; round < 35; round++)); do
+  # positional argument would make the sampler itself a false positive. The
+  # sampler runs until the stop file exists, so it overlaps every launch wave;
+  # it also stops when the EXIT trap removes the test root after a failure.
+  SAMPLER_SENTINEL="$sentinel" SAMPLER_RESULT="$result" SAMPLER_STOP="$stop" /bin/bash -c '
+    while [[ ! -e "$SAMPLER_STOP" && -d "${SAMPLER_STOP%/*}" ]]; do
       while IFS= read -r process_command; do
         case "$process_command" in
           *"$SAMPLER_SENTINEL"*)
@@ -58,11 +96,59 @@ start_argv_sampler() {
   ARGV_SAMPLER_PID="$!"
 }
 
-wait_for_pids() {
-  local pid
-  for pid in "$@"; do
-    wait "$pid" || fail 'held fixture process exits successfully'
+# Wait for the whole wave before judging it, so a failure report names the
+# held process's own error and the EXIT trap never deletes the fixture under
+# still-running launches.
+wait_for_held_wave() {
+  local stderr_prefix="$1"
+  shift
+  local entry
+  local status
+  local failed_attempt=''
+  local failed_status=0
+  for entry in "$@"; do
+    status=0
+    wait "${entry%%:*}" || status=$?
+    if [[ "$status" -ne 0 && -z "$failed_attempt" ]]; then
+      failed_attempt="${entry#*:}"
+      failed_status="$status"
+    fi
   done
+  if [[ -n "$failed_attempt" ]]; then
+    printf '# held launch %s exited %s; its stderr follows\n' "$failed_attempt" "$failed_status" >&2
+    sed 's/^/#   /' "$stderr_prefix-$failed_attempt" >&2 || true
+    fail 'held fixture process exits successfully'
+  fi
+}
+
+# Usage: run_held_launches <sentinel> <result-file> <wrapper arguments...>
+run_held_launches() {
+  local sentinel="$1"
+  local result="$2"
+  shift 2
+  local stderr_prefix="$result.launch"
+  local sampler_pid
+  local wave_start
+  local attempt
+  local wave
+  local wave_size
+
+  wave_size="$(held_launch_wave_size)"
+  printf '# held launches: %s in waves of %s\n' "$HELD_LAUNCH_TOTAL" "$wave_size"
+  start_argv_sampler "$sentinel" "$result" "$result.stop"
+  sampler_pid="$ARGV_SAMPLER_PID"
+  for ((wave_start = 0; wave_start < HELD_LAUNCH_TOTAL; wave_start += wave_size)); do
+    wave=()
+    for ((attempt = wave_start; attempt < wave_start + wave_size && attempt < HELD_LAUNCH_TOTAL; attempt++)); do
+      (
+        DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" "$@" >/dev/null 2>"$stderr_prefix-$attempt"
+      ) &
+      wave+=("$!:$attempt")
+    done
+    wait_for_held_wave "$stderr_prefix" "${wave[@]}"
+  done
+  : >"$result.stop"
+  wait "$sampler_pid"
 }
 
 make_fixture() {
@@ -283,47 +369,17 @@ pass 'preflight helpers receive no ambient secrets or hostile environment names'
 # prepares the final child process. Held children let the sampler overlap many
 # independent launches without teaching the fake op about the implementation.
 service_argv_result="$TEST_ROOT/service-argv-result"
-start_argv_sampler 'ops_SERVICE_SENTINEL' "$service_argv_result"
-service_sampler_pid="$ARGV_SAMPLER_PID"
-service_hold_pids=()
-for ((attempt = 0; attempt < 240; attempt++)); do
-  (
-    DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" op hold >/dev/null 2>&1
-  ) &
-  service_hold_pids+=("$!")
-done
-wait_for_pids "${service_hold_pids[@]}"
-wait "$service_sampler_pid"
+run_held_launches 'ops_SERVICE_SENTINEL' "$service_argv_result" op hold
 [[ ! -e "$service_argv_result" ]] || fail 'service token never appears in process arguments during held op launches'
 pass 'service token never appears in process arguments during held op launches'
 
 inject_argv_result="$TEST_ROOT/inject-argv-result"
-start_argv_sampler 'UPLOAD_SECRET_SENTINEL' "$inject_argv_result"
-inject_sampler_pid="$ARGV_SAMPLER_PID"
-inject_hold_pids=()
-for ((attempt = 0; attempt < 240; attempt++)); do
-  (
-    DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" inject EXPERIENCE_EXTENSION_UPLOAD_TOKEN op://known-vault/known-item/credential -- "$fixture/bin/hold-target" >/dev/null 2>&1
-  ) &
-  inject_hold_pids+=("$!")
-done
-wait_for_pids "${inject_hold_pids[@]}"
-wait "$inject_sampler_pid"
+run_held_launches 'UPLOAD_SECRET_SENTINEL' "$inject_argv_result" inject EXPERIENCE_EXTENSION_UPLOAD_TOKEN op://known-vault/known-item/credential -- "$fixture/bin/hold-target"
 [[ ! -e "$inject_argv_result" ]] || fail 'injected secret never appears in process arguments during held target launches'
 pass 'injected secret never appears in process arguments during held target launches'
 
 stdin_argv_result="$TEST_ROOT/stdin-argv-result"
-start_argv_sampler 'UPLOAD_SECRET_SENTINEL' "$stdin_argv_result"
-stdin_sampler_pid="$ARGV_SAMPLER_PID"
-stdin_hold_pids=()
-for ((attempt = 0; attempt < 240; attempt++)); do
-  (
-    DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" inject-stdin op://known-vault/known-item/credential -- "$fixture/bin/hold-target" >/dev/null 2>&1
-  ) &
-  stdin_hold_pids+=("$!")
-done
-wait_for_pids "${stdin_hold_pids[@]}"
-wait "$stdin_sampler_pid"
+run_held_launches 'UPLOAD_SECRET_SENTINEL' "$stdin_argv_result" inject-stdin op://known-vault/known-item/credential -- "$fixture/bin/hold-target"
 [[ ! -e "$stdin_argv_result" ]] || fail 'stdin-delivered secret never appears in process arguments during held target launches'
 pass 'stdin-delivered secret never appears in process arguments during held target launches'
 
@@ -426,12 +482,15 @@ set -e
 pass 'stdin-only delivery rejects a non-op reference with usage status'
 assert_contains "$stdin_reference_error" 'reference-invalid' 'stdin-only delivery has a stable reference validation code'
 
+rm -f "$fixture/bin/no-launch-target-called"
 set +e
-DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" inject EXPERIENCE_EXTENSION_UPLOAD_TOKEN op://known-vault/wrong-item/credential -- true >/dev/null 2>&1
-unexpected_reference_status=$?
+DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" inject EXPERIENCE_EXTENSION_UPLOAD_TOKEN op://known-vault/wrong-item/credential -- "$fixture/bin/no-launch-target" >/dev/null 2>&1
+inject_failure_status=$?
 set -e
-[[ "$unexpected_reference_status" -eq 18 ]] || fail 'unexpected op reference is rejected by the fixture'
-pass 'unexpected op reference is rejected by the fixture'
+[[ "$inject_failure_status" -eq 18 ]] || fail 'inject preserves failed op read status'
+pass 'inject preserves failed op read status'
+[[ ! -e "$fixture/bin/no-launch-target-called" ]] || fail 'failed inject lookup does not launch the child'
+pass 'failed inject lookup does not launch the child'
 
 set +e
 run_error="$(DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" op run -- true 2>&1)"

@@ -20,7 +20,6 @@ import {
 import { tmpdir } from "node:os"
 import { dirname, join, relative, resolve } from "node:path"
 
-const hookCommand = resolve(import.meta.dir, "../../../hooks/recover-context")
 const checkpointCommand = resolve(import.meta.dir, "../../../hooks/recovery-checkpoint")
 const recoveryEngine = resolve(import.meta.dir, "recovery.py")
 const observationPipeHarness = resolve(import.meta.dir, "test-fixtures/observation-pipe-harness.py")
@@ -285,9 +284,13 @@ function normalizeCheckpoint(contents: string): Record<string, unknown> {
 	return parsed
 }
 
-function percentile95(samples: readonly number[]): number {
+function percentile(samples: readonly number[], fraction: number): number {
 	const ordered = [...samples].sort((left, right) => left - right)
-	return ordered[Math.ceil(ordered.length * 0.95) - 1] ?? Number.NaN
+	return ordered[Math.ceil(ordered.length * fraction) - 1] ?? Number.NaN
+}
+
+function percentile95(samples: readonly number[]): number {
+	return percentile(samples, 0.95)
 }
 
 function pairedStdoutEofDeltas(observed: readonly TimedProcessResult[], baseline: readonly TimedProcessResult[]): number[] {
@@ -343,23 +346,30 @@ async function startAtBarrier(
 	}
 }
 
-function hookEvent(
-	fixture: Fixture,
-	source = "compact",
-	cwd = fixture.vault,
-	session = sessionIdentity,
-): string {
-	return JSON.stringify({
-		session_id: session,
-		transcript_path: join(fixture.root, "transcript-with-private-content.jsonl"),
-		cwd,
-		hook_event_name: "SessionStart",
-		source,
-	})
+function recover(fixture: Fixture, session = sessionIdentity): ProcessResult {
+	return run(checkpointCommand, fixture.vault, "", { ...environment(fixture), CODEX_SESSION_ID: session }, ["recover"])
 }
 
-function runHook(fixture: Fixture, input = hookEvent(fixture), cwd = fixture.vault): ProcessResult {
-	return run(hookCommand, cwd, input, environment(fixture))
+function recoveredPanel(fixture: Fixture, session = sessionIdentity): string {
+	const result = recover(fixture, session)
+	expect(result.exitCode).toBe(0)
+	expect(result.stderr).toBe("")
+	return (JSON.parse(result.stdout) as { data: { controlPanel: string } }).data.controlPanel
+}
+
+// Independent oracle: the refusal the checkpoint route owes whenever its stored context cannot be trusted; the panel
+// and the accepted Task identity must never leak through a refusal.
+function expectRecoverRefused(fixture: Fixture, session = sessionIdentity): void {
+	const result = recover(fixture, session)
+	expect(result.exitCode).toBe(1)
+	expect(result.stderr).toBe("")
+	expect(JSON.parse(result.stdout)).toMatchObject({
+		operation: "recover",
+		status: "error",
+		transactionState: "not-started",
+		error: { code: "RECOVERY_CONTEXT_UNAVAILABLE", action: "CHECK_OWNERS", errorFamily: "validation" },
+	})
+	expect(result.stdout).not.toContain(taskIdentity)
 }
 
 function machineEnvelope(
@@ -541,31 +551,17 @@ afterEach(() => {
 	for (const root of temporaryRoots.splice(0)) rmSync(root, { recursive: true, force: true })
 })
 
-test("a valid compact SessionStart emits only verified bounded recovery context", () => {
-	const current = fixture()
-	write(join(current.root, "transcript-with-private-content.jsonl"), "PRIVATE TRANSCRIPT SENTINEL\n")
-
-	const result = runHook(current)
-
-	expect(result.exitCode).toBe(0)
-	expect(result.stderr).toBe("")
-	expect(JSON.parse(result.stdout)).toEqual({
-		hookSpecificOutput: {
-			hookEventName: "SessionStart",
-			additionalContext: expectedContext(current, "fresh"),
-		},
-	})
-	expect(result.stdout).not.toContain("PRIVATE TRANSCRIPT SENTINEL")
-	expect(result.stdout).not.toContain("transcript-with-private-content")
-	expect(existsSync(`${current.agentLedger}.executed`)).toBe(false)
+test("recover returns the exact verified control panel for fresh and stale checkpoints without executing its commands", () => {
+	for (const [freshness, observedSecondsAgo] of [["fresh", 0], ["stale", 2 * 60 * 60]] as const) {
+		const current = fixture({ observedSecondsAgo })
+		expect(recoveredPanel(current)).toBe(expectedContext(current, freshness))
+		expect(existsSync(`${current.agentLedger}.executed`)).toBe(false)
+	}
 })
 
 test("quoted owner, Task diagnostic, and Git history controls execute at their read-only seams", () => {
 	const current = fixture()
-	const output = JSON.parse(runHook(current).stdout) as {
-		hookSpecificOutput: { additionalContext: string }
-	}
-	const lines = output.hookSpecificOutput.additionalContext.split("\n")
+	const lines = recoveredPanel(current).split("\n")
 	const commandFor = (label: string): string => {
 		const line = lines.find((candidate) => candidate.startsWith(`${label}: `))
 		expect(line).toBeDefined()
@@ -625,147 +621,79 @@ test("quoted owner, Task diagnostic, and Git history controls execute at their r
 	expect(history.stdout).toContain("fixture history")
 })
 
-test("startup and resume expose only the hook-supplied session identity", () => {
-	const current = fixture()
-	for (const source of ["startup", "resume"]) {
-		const result = runHook(current, hookEvent(current, source))
-		expect(result.exitCode).toBe(0)
-		expect(result.stderr).toBe("")
-		expect(JSON.parse(result.stdout)).toEqual({
-			hookSpecificOutput: {
-				hookEventName: "SessionStart",
-				additionalContext: [
-					"My Second Brain recovery session.",
-					`Session identity: ${sessionIdentity}`,
-					"Use this exact sessionIdentity when writing this session's recovery checkpoint.",
-				].join("\n"),
-			},
-		})
-	}
-})
-
-test("unregistered SessionStart sources and other hook events stay silent", () => {
-	const current = fixture()
-	const cases = [
-		hookEvent(current, "clear"),
-		JSON.stringify({
-			session_id: sessionIdentity,
-			hook_event_name: "Stop",
-			source: "compact",
-			cwd: current.vault,
-		}),
-	]
-	for (const input of cases) {
-		expect(runHook(current, input)).toEqual({ exitCode: 0, stdout: "", stderr: "" })
-	}
-})
-
-test("a compact event whose cwd is outside the configured vault stays silent", () => {
-	const current = fixture()
-	const outside = join(current.root, "outside")
-	mkdirSync(outside)
-
-	expect(runHook(current, hookEvent(current, "compact", outside), outside)).toEqual({
-		exitCode: 0,
-		stdout: "",
-		stderr: "",
-	})
-})
-
-test("malformed and oversized hook inputs fail open without output", () => {
-	const current = fixture()
-	const malformed = '{"hook_event_name":"SessionStart",'
-	const duplicate = `{"hook_event_name":"SessionStart","hook_event_name":"SessionStart","source":"compact","cwd":${JSON.stringify(current.vault)}}`
-	const oversized = " ".repeat(128 * 1024 + 1)
-
-	for (const input of [malformed, duplicate, oversized]) {
-		expect(runHook(current, input)).toEqual({ exitCode: 0, stdout: "", stderr: "" })
-	}
-})
-
-test("missing, malformed, public, and symbolic checkpoint state stays silent", () => {
+test("recover refuses a global, malformed, public, oversized, or symbolic checkpoint", () => {
 	const current = fixture()
 	rmSync(current.checkpointPath)
-	expect(runHook(current)).toEqual({ exitCode: 0, stdout: "", stderr: "" })
 
 	const globalCheckpoint = join(dirname(dirname(current.checkpointPath)), "current.json")
 	write(globalCheckpoint, `${JSON.stringify(current.checkpoint)}\n`, 0o600)
-	expect(runHook(current)).toEqual({ exitCode: 0, stdout: "", stderr: "" })
+	expectRecoverRefused(current)
 
 	write(current.checkpointPath, "{", 0o600)
-	expect(runHook(current)).toEqual({ exitCode: 0, stdout: "", stderr: "" })
+	expectRecoverRefused(current)
 
 	write(current.checkpointPath, `${JSON.stringify(current.checkpoint)}\n`, 0o644)
-	expect(runHook(current)).toEqual({ exitCode: 0, stdout: "", stderr: "" })
+	expectRecoverRefused(current)
 
 	write(current.checkpointPath, " ".repeat(16 * 1024 + 1), 0o600)
-	expect(runHook(current)).toEqual({ exitCode: 0, stdout: "", stderr: "" })
+	expectRecoverRefused(current)
 
 	write(current.checkpointPath, `${JSON.stringify(current.checkpoint)}\n`, 0o600)
 	const privateTarget = join(current.root, "private-checkpoint.json")
 	renameSync(current.checkpointPath, privateTarget)
 	chmodSync(privateTarget, 0o600)
 	symlinkSync(privateTarget, current.checkpointPath)
-	expect(runHook(current)).toEqual({ exitCode: 0, stdout: "", stderr: "" })
+	expectRecoverRefused(current)
 })
 
-test("missing and malformed vault configuration stays silent", () => {
+test("recover refuses missing and malformed vault configuration", () => {
 	const current = fixture()
 	const config = join(current.home, ".config/my-second-brain-playground/vault.json")
 	rmSync(config)
-	expect(runHook(current)).toEqual({ exitCode: 0, stdout: "", stderr: "" })
+	expectRecoverRefused(current)
 
 	write(config, `${JSON.stringify({ schemaVersion: 1, vault: current.vault, extra: true })}\n`)
-	expect(runHook(current)).toEqual({ exitCode: 0, stdout: "", stderr: "" })
+	expectRecoverRefused(current)
 })
 
-test("mismatched Task, Register, and contained-path relationships stay silent", () => {
+test("recover refuses mismatched Task, Register, and contained-path relationships", () => {
 	const current = fixture()
 	replaceCheckpoint(current, { taskIdentity: "wrong-task-identity" })
-	expect(runHook(current).stdout).toBe("")
+	expectRecoverRefused(current)
 
 	const otherRegister = join(current.data, "my-second-brain-playground/registers/other.sqlite3")
 	cpSync(current.register, otherRegister)
 	replaceCheckpoint(current, { registerPath: realpathSync(otherRegister) })
-	expect(runHook(current).stdout).toBe("")
+	expectRecoverRefused(current)
 
 	write(join(current.root, "outside.md"), "# Outside\n")
 	replaceCheckpoint(current, { evidencePath: "../outside.md" })
-	expect(runHook(current).stdout).toBe("")
+	expectRecoverRefused(current)
 })
 
-test("unsafe Agent Ledger executable paths stay silent", () => {
+test("recover refuses unsafe Agent Ledger executable paths", () => {
 	const current = fixture()
 	chmodSync(current.agentLedger, 0o600)
-	expect(runHook(current).stdout).toBe("")
+	expectRecoverRefused(current)
 
 	chmodSync(current.agentLedger, 0o700)
 	const link = join(current.root, "agent-ledger-link")
 	symlinkSync(current.agentLedger, link)
 	replaceCheckpoint(current, { agentLedgerExecutable: link })
-	expect(runHook(current).stdout).toBe("")
+	expectRecoverRefused(current)
 
 	replaceCheckpoint(current, { agentLedgerExecutable: join(current.root, "missing-agent-ledger") })
-	expect(runHook(current).stdout).toBe("")
+	expectRecoverRefused(current)
 })
 
-test("invalid or mismatched session identities stay silent", () => {
+test("recover refuses an invalid session token and a checkpoint bound to another session", () => {
 	const current = fixture()
-	expect(runHook(current, hookEvent(current, "compact", current.vault, "../other"))).toEqual({
-		exitCode: 0,
-		stdout: "",
-		stderr: "",
-	})
-	expect(runHook(current, hookEvent(current, "compact", current.vault, "other-session"))).toEqual({
-		exitCode: 0,
-		stdout: "",
-		stderr: "",
-	})
+	expectRecoverRefused(current, "../other")
 	replaceCheckpoint(current, { sessionIdentity: "other-session" })
-	expect(runHook(current).stdout).toBe("")
+	expectRecoverRefused(current)
 })
 
-test("two checkpoint writes and compact sessions recover only their own Task control panel", () => {
+test("two checkpoint writes and two recover sessions read only their own Task control panel", () => {
 	const current = fixture({ writeCheckpoint: false })
 	const secondSession = "session-second"
 	const secondTask = "prove-second-task-9b45cdee"
@@ -823,19 +751,16 @@ test("two checkpoint writes and compact sessions recover only their own Task con
 	expect(existsSync(current.checkpointPath)).toBe(true)
 	expect(existsSync(secondCheckpointPath)).toBe(true)
 
-	const first = runHook(current)
-	const second = runHook(
-		current,
-		hookEvent(current, "compact", current.vault, secondSession),
-	)
-	expect(first.stdout).toContain(taskIdentity)
-	expect(first.stdout).not.toContain(secondTask)
-	expect(first.stdout).toContain("projects/ledger-workflow/GOAL.md")
-	expect(first.stdout).not.toContain("projects/second-work/GOAL.md")
-	expect(second.stdout).toContain(secondTask)
-	expect(second.stdout).not.toContain(taskIdentity)
-	expect(second.stdout).toContain("projects/second-work/GOAL.md")
-	expect(second.stdout).not.toContain("projects/ledger-workflow/GOAL.md")
+	const first = recoveredPanel(current)
+	const second = recoveredPanel(current, secondSession)
+	expect(first).toContain(taskIdentity)
+	expect(first).not.toContain(secondTask)
+	expect(first).toContain("projects/ledger-workflow/GOAL.md")
+	expect(first).not.toContain("projects/second-work/GOAL.md")
+	expect(second).toContain(secondTask)
+	expect(second).not.toContain(taskIdentity)
+	expect(second).toContain("projects/second-work/GOAL.md")
+	expect(second).not.toContain("projects/ledger-workflow/GOAL.md")
 })
 
 test("a version 1 checkpoint is rejected", () => {
@@ -867,58 +792,6 @@ test("a version 1 checkpoint is rejected", () => {
 	expect(existsSync(current.checkpointPath)).toBe(false)
 })
 
-test("a stale checkpoint is labelled stale while preserving the fixed next action", () => {
-	const current = fixture({ observedSecondsAgo: 2 * 60 * 60 })
-
-	const result = runHook(current)
-
-	expect(result.exitCode).toBe(0)
-	expect(result.stderr).toBe("")
-	expect(JSON.parse(result.stdout)).toEqual({
-		hookSpecificOutput: {
-			hookEventName: "SessionStart",
-			additionalContext: expectedContext(current, "stale"),
-		},
-	})
-})
-
-test("the read-only hook changes no checkpoint or fixture state outside private traces", () => {
-	const current = fixture()
-	const before = observePrimaryTree(current.root)
-
-	const result = runHook(current)
-
-	expect(result.stdout).not.toBe("")
-	expect(observePrimaryTree(current.root)).toEqual(before)
-})
-
-test("the production hook supervisor preserves Python bytes and records the hook-supplied worker identity", () => {
-	const current = fixture()
-	const input = hookEvent(current)
-	const direct = run("/usr/bin/python3", current.vault, input, environment(current), ["-B", recoveryEngine, "hook"])
-	const supervised = runHook(current, input)
-
-	expect(supervised).toEqual(direct)
-	const records = lifecycleRecords(current)
-	expect(records.some((record) => (
-		record.operation === "hook" &&
-		record.observed_worker_identity === sessionIdentity &&
-		record.observed_worker_identity_source === "hook-payload"
-	))).toBe(true)
-	expect(records.some((record) => record.inherited_parent_identity !== undefined)).toBe(false)
-	const observerInvocation = records.find((record) => (
-		record.operation === "hook" &&
-		record.phase === "invocation" &&
-		String(record.producer_identity).startsWith("recovery-observer-")
-	))
-	if (!observerInvocation) throw new Error("observer invocation was not retained")
-	const producerRecords = records.filter((record) => String(record.producer_identity).startsWith("recovery-python-"))
-	expect(producerRecords.length).toBeGreaterThan(0)
-	expect(producerRecords.some((record) => record.journey_identity === "session-fixture")).toBe(true)
-	expect(new Set(producerRecords.map((record) => record.invocation_identity))).toEqual(new Set([observerInvocation.invocation_identity]))
-	expect(new Set(producerRecords.map((record) => record.parent_record_identity))).toEqual(new Set([observerInvocation.record_identity]))
-})
-
 test("bind and recovery share a session journey with distinct explicitly linked invocations", () => {
 	const current = fixture()
 	const env = { ...environment(current), CODEX_SESSION_ID: sessionIdentity }
@@ -946,9 +819,10 @@ test("bind and recovery share a session journey with distinct explicitly linked 
 	expect(journey.some((record) => record.observed_worker_identity !== undefined)).toBe(false)
 })
 
-test("the public hook supervisor records a real child signal while the producer has no terminal record", async () => {
+test("the checkpoint supervisor records a real child signal while the producer has no terminal record", async () => {
+	// `write` holds the Python child on stdin until the pipe closes, so the external SIGTERM lands on a live child.
 	const current = fixture()
-	const observer = Bun.spawn([hookCommand], {
+	const observer = Bun.spawn([checkpointCommand, "write"], {
 		cwd: current.vault,
 		stdin: "pipe",
 		stdout: "pipe",
@@ -968,7 +842,7 @@ test("the public hook supervisor records a real child signal while the producer 
 	expect(await stderr).toBe("")
 	const diagnostics = lifecycleRecords(current, "diagnostic")
 	expect(diagnostics.some((record) => record.event === "observer-failure" && record.level === "error")).toBe(true)
-	const records = lifecycleRecords(current).filter((record) => record.operation === "hook")
+	const records = lifecycleRecords(current).filter((record) => record.operation === "write")
 	expect(records.some((record) => record.phase === "terminal" && record.outcome === "signalled")).toBe(true)
 	expect(records.some((record) => (
 		String(record.producer_identity).startsWith("recovery-python-") && record.phase === "terminal"
@@ -976,8 +850,9 @@ test("the public hook supervisor records a real child signal while the producer 
 }, 10_000)
 
 test("the observer deadline is a known terminal observation while a missing producer terminal remains unknown", async () => {
+	// `write` holds the Python child on stdin until the pipe closes, so the deadline is the only way the child ends.
 	const current = fixture()
-	const observer = Bun.spawn([hookCommand], {
+	const observer = Bun.spawn([checkpointCommand, "write"], {
 		cwd: current.vault,
 		stdin: "pipe",
 		stdout: "pipe",
@@ -986,7 +861,6 @@ test("the observer deadline is a known terminal observation while a missing prod
 	})
 	const stdout = new Response(observer.stdout).text()
 	const stderr = new Response(observer.stderr).text()
-	// A 50 ms child can exit between scheduler turns; the signal test owns PID reaping proof.
 	try {
 		expect(await observer.exited).not.toBe(0)
 	} finally {
@@ -994,7 +868,7 @@ test("the observer deadline is a known terminal observation while a missing prod
 	}
 	expect(await stdout).toBe("")
 	expect(await stderr).toBe("")
-	const records = lifecycleRecords(current).filter((record) => record.operation === "hook")
+	const records = lifecycleRecords(current).filter((record) => record.operation === "write")
 	expect(records.some((record) => (
 		record.phase === "terminal" &&
 		record.outcome === "deadline-exceeded" &&
@@ -1114,7 +988,7 @@ test("the checkpoint supervisor records accepted write and schema lifecycle oper
 	expect(schemaObserverRecords.map((record) => record.phase)).toEqual(["invocation", "response-available", "terminal"])
 })
 
-test("capture enabled, disabled, and unavailable preserve bind, recover, hook, and durable primary results", () => {
+test("capture enabled, disabled, and unavailable preserve bind, recover, and durable primary results", () => {
 	const current = fixture({ writeCheckpoint: false })
 	const registerBefore = readFileSync(current.register).toString("base64")
 	const tracePath = join(current.state, "my-second-brain-playground", "recovery-traces")
@@ -1144,7 +1018,6 @@ test("capture enabled, disabled, and unavailable preserve bind, recover, hook, a
 			"--session",
 			"conflicting-session",
 		])
-		const hook = run(hookCommand, current.vault, hookEvent(current), env)
 
 		expect(readFileSync(current.checkpointPath, "utf8")).toBe(checkpointAfterBind)
 		expect(readFileSync(current.register).toString("base64")).toBe(registerBefore)
@@ -1152,7 +1025,6 @@ test("capture enabled, disabled, and unavailable preserve bind, recover, hook, a
 			bind: normalizePrimaryResult(binding),
 			recover: normalizePrimaryResult(recovered),
 			identityRefusal: normalizePrimaryResult(identityRefusal),
-			hook: normalizePrimaryResult(hook),
 			checkpoint: normalizeCheckpoint(checkpointAfterBind),
 			register: readFileSync(current.register).toString("base64"),
 			traceFiles: existsSync(tracePath) && statSync(tracePath).isDirectory()
@@ -1328,10 +1200,10 @@ test("the Task identity check is sensitive to a wrong goal identity", () => {
 	const correctGoal = readFileSync(goal, "utf8")
 	writeFileSync(goal, correctGoal.replace(taskIdentity, "wrong-task-identity"))
 
-	expect(runHook(current).stdout).toBe("")
+	expectRecoverRefused(current)
 
 	writeFileSync(goal, correctGoal)
-	expect(runHook(current).stdout).not.toBe("")
+	expect(recoveredPanel(current)).toContain(`Task identity: ${taskIdentity}`)
 })
 
 test("the checkpoint process exposes its exact versioned field contract", () => {
@@ -1407,7 +1279,7 @@ test("unknown arguments report a versioned not-started usage failure with a fixe
 	})
 })
 
-test("Codex and Claude declarations register bin/msb-workflow hook and keep the legacy launchers pinned and unregistered as provenance only", () => {
+test("Codex and Claude declarations register bin/msb-workflow hook and keep the legacy checkpoint launcher pinned and unregistered as provenance only", () => {
 	const pluginRoot = resolve(import.meta.dir, "../../..")
 	const fileSha256 = (path: string): string => createHash("sha256").update(readFileSync(join(pluginRoot, path))).digest("hex")
 	const codex = JSON.parse(readFileSync(join(pluginRoot, "hooks/codex/hooks.json"), "utf8"))
@@ -1439,10 +1311,10 @@ test("Codex and Claude declarations register bin/msb-workflow hook and keep the 
 	})
 	expect(statSync(join(pluginRoot, "bin/msb-workflow")).mode & 0o111).not.toBe(0)
 
-	// Independent oracle: the manifest bytes are the rollback unit (restoring the pre-change bytes re-registers
-	// `hooks/recover-context`), so the current identities are pinned here from the accepted M2 readiness packet. The
-	// rollback targets live in that packet as provenance (Claude `c2c8e250…`, Codex `d9f8532a…`); the Codex manifest's
-	// M2 release-candidate identity (`dba51eb5…`) is superseded by the F2 context-limit repair.
+	// Independent oracle: the current manifest identities are pinned here from the accepted M2 readiness packet. The
+	// pre-change identities in that packet (Claude `c2c8e250…`, Codex `d9f8532a…`) named `hooks/recover-context`, which
+	// Spec #120 retired, so they are provenance only and no longer a rollback unit; the Codex manifest's M2
+	// release-candidate identity (`dba51eb5…`) is superseded by the F2 context-limit repair.
 	const manifestBytes = {
 		"hooks/claude/hooks.json": "609dfbe4e1ce188ce8d1db21a436cea2498e59301c8f0a49077b84b0c877e694",
 		"hooks/codex/hooks.json": "14423919a22f7c58683e0fafbd2bc8ce2427baf698c879e1147c0100bfa5f5ff",
@@ -1451,57 +1323,16 @@ test("Codex and Claude declarations register bin/msb-workflow hook and keep the 
 		expect(fileSha256(path)).toBe(identity)
 	}
 
-	// Independent oracle: the legacy launchers and the Python owner stay unregistered as provenance only; they are not a
-	// rollback route (Ticket #52 revision 3, Spec #57 revision 3). LKR never edited `hooks/recover-context`: its accepted
-	// hash was `2ffa42ad…` until `origin/main` `bf79fbc1` (PR #61, Vault Steward guard audit line) changed the bytes,
-	// so the merged-main bytes are the landing baseline pinned here. That guard-audit line (`hooks/recover-context:13-24`,
-	// Vault Steward row F3) is therefore unregistered from this source under M2; the workflow-cli README owns its
-	// retirement statement, and the next row is the source-registered command canary for it.
-	expect(fileSha256("hooks/recover-context")).toBe("2e11156c6737b3bd3731686337cddbe655998d79eb0dbdbdfc37488c10cda8cc")
-	expect(statSync(join(pluginRoot, "hooks/recover-context")).mode & 0o111).not.toBe(0)
+	// Independent oracle: the legacy checkpoint launcher and the Python owner stay unregistered as provenance only; they
+	// are not a rollback route (Ticket #52 revision 3, Spec #57 revision 3). Spec #120 retired the `hooks/recover-context`
+	// launcher and the Python hook mode, so the Python identity below is the post-#120 checkpoint-route baseline; the
+	// launcher bytes are unchanged since M2.
 	expect(fileSha256("hooks/recovery-checkpoint")).toBe("8981956b243b998942a431da595115dbab73b51c9474b5aa0db49e751636be92")
 	expect(statSync(join(pluginRoot, "hooks/recovery-checkpoint")).mode & 0o111).not.toBe(0)
-	expect(fileSha256("packages/compaction-recovery/src/recovery.py")).toBe("2c960f6302859781ef157bae5404800d99a92480691cf98ce9d1fc49823b8594")
-	expect(JSON.stringify([codex, claude])).not.toContain("hooks/recover-context")
+	expect(fileSha256("packages/compaction-recovery/src/recovery.py")).toBe("9c8ed0b3af16ad6eeba9d50106bbc2c5b95d903bedd29059cf1df77a68c15aa4")
 })
 
-test("the registered Claude SessionStart command prints no guard-audit line where the legacy launcher prints one", () => {
-	// Source-registered command canary for the PR #61 guard-audit line (`hooks/recover-context:13-24`, Vault Steward row
-	// F3): that line is a live behaviour of the unregistered legacy launcher, not of `bin/msb-workflow hook`. It retires
-	// from the registered hook path and its surfacing is re-homed through the existing Vault Steward `guard:audit` route
-	// (Ticket #52 criterion 2; the workflow-cli README owns the statement). Under one F3 findings fixture the legacy
-	// launcher is the liveness control and the command the Claude manifest registers for `startup` is the target.
-	const pluginRoot = resolve(import.meta.dir, "../../..")
-	const current = fixture({ writeCheckpoint: false })
-	write(join(current.vault, "package.json"), `${JSON.stringify({ private: true, scripts: { "guard:audit": "bun run audit.ts" } })}\n`)
-	write(
-		join(current.vault, "audit.ts"),
-		'console.log(JSON.stringify({ schemaVersion: 1, ok: false, findings: [{ id: "guard-hook-missing", severity: "error" }] }))\nprocess.exit(1)\n',
-	)
-	// One environment, cwd, and `startup` event reach both processes. The cwd is the fixture root, outside the configured
-	// vault, so the preserved recovery route behind the legacy launcher stays silent and the control isolates the guard
-	// line. The helper's first-resolved state root is pinned and the ambient session and bd identities are scrubbed, so
-	// the registered hook's fail-open (no binding under the fixture state root, Spec #57 hook lifecycle) never depends on
-	// the caller's shell.
-	const env: Record<string, string> = { ...environment(current), MSB_WORKFLOW_STATE_HOME: current.state, CLAUDE_PLUGIN_ROOT: pluginRoot }
-	delete env.CODEX_SESSION_ID
-	delete env.MSB_WORKFLOW_BD_EXECUTABLE
-	const startup = hookEvent(current, "startup", current.root)
-	// Independent oracle: the F3 line contract restated as a literal (startup-audit.test.ts row F3), never read from
-	// `startup-audit.ts`; one error finding rather than the F3 three-finding envelope, so this is a control, not a copy.
-	const guardLine = `vault-guard: 1 finding(s) in ${current.vault}: guard-hook-missing (run 'bun run guard:audit --json' there)\n`
-
-	expect(run(hookCommand, current.root, startup, env)).toEqual({ exitCode: 0, stdout: guardLine, stderr: "" })
-
-	// The target is the manifest's own command string, run through the shell with `CLAUDE_PLUGIN_ROOT` in the child
-	// environment as the Harness supplies it, so the `${CLAUDE_PLUGIN_ROOT}` reference and the quoting are honoured by
-	// the shell; nothing here rewrites the command. The sibling row pins the matcher that admits `startup`.
-	const claude = JSON.parse(readFileSync(join(pluginRoot, "hooks/claude/hooks.json"), "utf8"))
-	const registered = run("/bin/sh", current.root, startup, env, ["-c", claude.hooks.SessionStart[0].hooks[0].command])
-	expect(registered).toEqual({ exitCode: 0, stdout: "", stderr: "" })
-}, 15_000)
-
-test("the checkpoint writer atomically creates private state accepted by the hook", () => {
+test("the checkpoint writer atomically creates private state accepted by recover", () => {
 	const current = fixture({ writeCheckpoint: false })
 	const result = run(
 		checkpointCommand,
@@ -1525,7 +1356,7 @@ test("the checkpoint writer atomically creates private state accepted by the hoo
 	expect(statSync(dirname(current.checkpointPath)).mode & 0o777).toBe(0o700)
 	expect(statSync(current.checkpointPath).mode & 0o777).toBe(0o600)
 	expect(JSON.parse(readFileSync(current.checkpointPath, "utf8"))).toEqual(current.checkpoint)
-	expect(runHook(current).stdout).not.toBe("")
+	expect(recoveredPanel(current)).toContain(`Task identity: ${taskIdentity}`)
 })
 
 test("an invalid checkpoint write reports no change and creates no checkpoint", () => {
@@ -1630,7 +1461,6 @@ test("bind derives identity from the goal and recover returns the same session p
 		`Read live Task lifecycle (public Agent Ledger status projection; accepted Task appears in activeTasks while active): ${shellCommand(current.agentLedger, "register", "status", "--db", current.register)}`,
 	)
 	expect(observePrimaryTree(current.root)).toEqual(before)
- expect(runHook(current).stdout).toContain(taskIdentity)
 })
 
 test("bind accepts evidence anywhere under the project subtree and renders it", () => {
@@ -1657,13 +1487,6 @@ test("bind accepts evidence anywhere under the project subtree and renders it", 
 	expect(recovered.exitCode).toBe(0)
 	machineEnvelope(recovered, "recover", "success")
 	expect(JSON.parse(recovered.stdout).data.controlPanel).toContain(expectedEvidenceLine)
-	const hook = runHook(current)
-	expect(hook.exitCode).toBe(0)
-	expect(hook.stderr).toBe("")
-	const hookOutput = JSON.parse(hook.stdout) as {
-		hookSpecificOutput: { additionalContext: string }
-	}
-	expect(hookOutput.hookSpecificOutput.additionalContext).toContain(expectedEvidenceLine)
 })
 
 test("bind defaults evidence to the project README", () => {
@@ -1698,12 +1521,12 @@ test("evidence outside the bound project stays refused", () => {
 
 	replaceCheckpoint(current, { evidencePath: otherEvidencePath })
 	const outsideProjectBefore = observePrimaryTree(current.root)
-	expect(runHook(current).stdout).toBe("")
+	expectRecoverRefused(current)
 	expect(observePrimaryTree(current.root)).toEqual(outsideProjectBefore)
 
 	replaceCheckpoint(current, { evidencePath: "README.md" })
 	const vaultRootBefore = observePrimaryTree(current.root)
-	expect(runHook(current).stdout).toBe("")
+	expectRecoverRefused(current)
 	expect(observePrimaryTree(current.root)).toEqual(vaultRootBefore)
 
 	const escapePath = join(current.vault, "projects/ledger-workflow/proofs/escape.md")
@@ -1711,7 +1534,7 @@ test("evidence outside the bound project stays refused", () => {
 	symlinkSync(join(current.vault, otherEvidencePath), escapePath)
 	replaceCheckpoint(current, { evidencePath: "projects/ledger-workflow/proofs/escape.md" })
 	const escapingSymlinkBefore = observePrimaryTree(current.root)
-	expect(runHook(current).stdout).toBe("")
+	expectRecoverRefused(current)
 	expect(observePrimaryTree(current.root)).toEqual(escapingSymlinkBefore)
 
 	const unbound = fixture({ writeCheckpoint: false })
@@ -1784,10 +1607,6 @@ test("bind and recovery recognize a committed WAL Task without changing Register
 			data: { taskIdentity, sessionIdentity },
 		})
 		expect(recovered.exitCode).toBe(0)
-		const hook = runHook(current)
-		expect(hook.exitCode).toBe(0)
-		expect(hook.stderr).toBe("")
-		expect(hook.stdout).toContain(`Task identity: ${taskIdentity}`)
 		expect(readFileSync(current.checkpointPath)).toEqual(checkpointBefore)
 		expect(readFileSync(current.register)).toEqual(databaseBefore)
 		expect(readFileSync(`${current.register}-wal`)).toEqual(walBefore)
@@ -1918,10 +1737,10 @@ test("bind refreshes the same accepted work owner", () => {
 		taskIdentity, sessionIdentity, registerPath: current.register, programIdentity,
 	})
 	expect(readFileSync(current.register)).toEqual(beforeRegister)
-	expect(runHook(current).stdout).toContain(taskIdentity)
+	expect(recoveredPanel(current)).toContain(`Task identity: ${taskIdentity}`)
 })
 
-test("paired cold processes keep capture-enabled and unavailable primary-response p95 within 100 ms", async () => {
+test("paired cold processes keep capture-enabled and unavailable primary-response median overhead within 100 ms", async () => {
 	const sampleCount = 20
 	const disabled = fixture()
 	const enabled = fixture()
@@ -1980,11 +1799,18 @@ test("paired cold processes keep capture-enabled and unavailable primary-respons
 		enabled: percentile95(pairedStdoutEofDeltas(rows.enabled, rows.disabled)),
 		unavailable: percentile95(pairedStdoutEofDeltas(rows.unavailable, rows.disabled)),
 	}
+	// Each paired delta subtracts two independent cold launches, so its tail is launch jitter, not capture cost: on a
+	// loaded runner the negative tail grows as far as the positive one while the median stays near the true overhead.
+	const pairedDeltaMedian = {
+		enabled: percentile(pairedStdoutEofDeltas(rows.enabled, rows.disabled), 0.5),
+		unavailable: percentile(pairedStdoutEofDeltas(rows.unavailable, rows.disabled), 0.5),
+	}
 	const pluginRoot = resolve(import.meta.dir, "../../..")
 	const sha256 = (path: string): string => createHash("sha256").update(readFileSync(path)).digest("hex")
 	const plugin = JSON.parse(readFileSync(join(pluginRoot, "package.json"), "utf8")) as { version: string }
-	// The accepted qualification contract is paired p95 overhead. Independent
-	// per-mode p95 values remain diagnostic so CI failures expose both statistics.
+	// The accepted qualification contract is paired median overhead (revised from
+	// paired p95 on 2026-09-26). Paired p95 and independent per-mode p95 values
+	// remain diagnostic so CI failures expose every statistic.
 	const observerPhaseP95 = {
 		observer_open_ms: percentile95(observerPhases.map((phase) => phase.observerOpenMs)),
 		response_available_ms: percentile95(observerPhases.map((phase) => phase.responseAvailableMs)),
@@ -2021,6 +1847,7 @@ test("paired cold processes keep capture-enabled and unavailable primary-respons
 			p95_ms: p95,
 			delta_p95_ms: { enabled: enabledDelta, unavailable: unavailableDelta },
 			paired_delta_p95_ms: pairedDeltaP95,
+			paired_delta_median_ms: pairedDeltaMedian,
 			observer_phase_p95_ms: observerPhaseP95,
 			observer_phase_invocation_identities: observerPhases.map((phase) => phase.invocationIdentity),
 			paired_stdout_eof_delta_samples_ms: {
@@ -2047,6 +1874,6 @@ test("paired cold processes keep capture-enabled and unavailable primary-respons
 	}))
 
 	expect(observerPhases).toHaveLength(sampleCount)
-	expect(pairedDeltaP95.enabled).toBeLessThanOrEqual(100)
-	expect(pairedDeltaP95.unavailable).toBeLessThanOrEqual(100)
+	expect(pairedDeltaMedian.enabled).toBeLessThanOrEqual(100)
+	expect(pairedDeltaMedian.unavailable).toBeLessThanOrEqual(100)
 }, 30_000)

@@ -29,9 +29,14 @@ scan_unexpected_consumers() {
     "$root/bin"
     "$root/config"
   )
+  # BSD grep is the scanner because the CI runner carries no ripgrep. It does
+  # not honour .gitignore, so third-party node_modules trees are excluded
+  # explicitly and the suite's own directory is filtered below.
   while IFS= read -r matched_path; do
-    printf '%s\n' "${matched_path#"$root/"}"
-  done < <(rg -l 'with-env|\.env\.1password' "${search_paths[@]}" -g '!bin/test/**' 2>/dev/null | LC_ALL=C sort)
+    matched_path="${matched_path#"$root/"}"
+    [[ "$matched_path" != bin/test/* ]] || continue
+    printf '%s\n' "$matched_path"
+  done < <(grep -rlIE 'with-env|\.env\.1password' "${search_paths[@]}" --exclude-dir=node_modules 2>/dev/null | LC_ALL=C sort)
 }
 
 # A wrapper that delegates to the launcher is the supported shape. The defect is
@@ -43,9 +48,9 @@ scan_provider_auth_bins() {
   while IFS= read -r matched_path; do
     matched_path="${matched_path#"$root/"}"
     [[ "$matched_path" != 'bin/with-one-password-token' ]] || continue
-    rg -q 'with-one-password-token|CREDENTIAL_WRAPPER' "$root/$matched_path" 2>/dev/null && continue
+    grep -Eq 'with-one-password-token|CREDENTIAL_WRAPPER' "$root/$matched_path" 2>/dev/null && continue
     printf '%s\n' "$matched_path"
-  done < <(rg -l '(^|[^-[:alnum:]])op (item get|read|run)' "$root/bin" -g '!**/test/**' 2>/dev/null || true)
+  done < <(grep -rlIE '(^|[^-[:alnum:]])op (item get|read|run)' "$root/bin" --exclude-dir=test 2>/dev/null | LC_ALL=C sort)
 }
 
 unexpected_consumers="$(scan_unexpected_consumers "$REPO_ROOT")"

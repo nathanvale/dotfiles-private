@@ -3,11 +3,12 @@
 # Applied Mise shell-bootstrap contract.
 #
 # Runs the production startup owners in real zsh and /bin/sh processes under a
-# test-owned HOME. Mise and fnm are process fakes; selected state, exported
-# config, PATH, activation calls, fallback calls, streams, and exit status are
-# observed outside the child. This does not install Mise or prove real runtime
-# downloads, arbitrary GUI hosts, or a clean no-cache Mac. Project precedence
-# is proved with a test-owned Mise shim adapter and independent version oracles.
+# test-owned HOME. Mise, pyenv, and a retired fnm are process fakes; selected
+# state, exported config, PATH, activation calls, fallback calls, streams, and
+# exit status are observed outside the child. This does not install Mise or prove real runtime
+# downloads, arbitrary GUI hosts, or a clean no-cache Mac. Runtime shims are
+# empty test-owned executables: the suite proves which executable wins PATH
+# resolution, never what a runtime prints.
 
 set -euo pipefail
 
@@ -40,15 +41,28 @@ FAKE_BIN="$TEST_ROOT/fake-bin"
 EXTERNAL="$TEST_ROOT/external"
 RECORD_DIR="$TEST_ROOT/records"
 EMPTY_PREFIX="$TEST_ROOT/empty-prefix"
+HUSKY_PREFIX="$TEST_ROOT/husky-prefix"
 REVISION_ID='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-mkdir -p "$HOME_FIXTURE/.config/mise" "$HOME_FIXTURE/.config/fnm" \
+mkdir -p "$HOME_FIXTURE/.config/mise" \
   "$HOME_FIXTURE/.config/husky" "$FAKE_BIN" "$EXTERNAL" "$RECORD_DIR" \
-  "$EMPTY_PREFIX/bin"
+  "$EMPTY_PREFIX/bin" "$HUSKY_PREFIX/bin"
 HOME_CANONICAL="$(CDPATH='' cd -P "$HOME_FIXTURE" && pwd)"
 cp "$REPO_ROOT/config/mise/bootstrap.sh" "$HOME_FIXTURE/.config/mise/bootstrap.sh"
-sed "s#/opt/homebrew#${EMPTY_PREFIX}#g" "$REPO_ROOT/config/fnm/bootstrap.sh" \
-  >"$HOME_FIXTURE/.config/fnm/bootstrap.sh"
-cp "$REPO_ROOT/config/husky/init.sh" "$HOME_FIXTURE/.config/husky/init.sh"
+# The Husky init restores the Homebrew prefix itself because Git hooks can
+# inherit the launchd PATH. Point that prefix at a test-owned directory so the
+# launchd-PATH row below observes the guard rather than this machine's Homebrew.
+sed "s#/opt/homebrew#${HUSKY_PREFIX}#g" "$REPO_ROOT/config/husky/init.sh" \
+  >"$HOME_FIXTURE/.config/husky/init.sh"
+# Live ~/.config is the repository's config/ directory, so every tracked
+# owner bootstrap is reachable from startup. Mirror them all into the fixture:
+# a reintroduced `source "$HOME/.config/<owner>/bootstrap.sh"` line then runs
+# here too instead of vanishing behind its own -f guard.
+for owner_bootstrap in "$REPO_ROOT"/config/*/bootstrap.sh; do
+  owner_dir="$HOME_FIXTURE/.config/$(basename "$(dirname "$owner_bootstrap")")"
+  mkdir -p "$owner_dir"
+  [[ -e "$owner_dir/bootstrap.sh" ]] ||
+    sed "s#/opt/homebrew#${EMPTY_PREFIX}#g" "$owner_bootstrap" >"$owner_dir/bootstrap.sh"
+done
 for startup_owner in .zshenv .zprofile .zshrc; do
   sed "s#/opt/homebrew#${EMPTY_PREFIX}#g" "$REPO_ROOT/$startup_owner" \
     >"$HOME_FIXTURE/$startup_owner"
@@ -63,12 +77,12 @@ fi
 STUB
 chmod +x "$FAKE_BIN/mise"
 
+# fnm is retired as a configured Node owner. The fake stays resolvable and
+# records every call, so the no-fnm rows below fail on a reintroduced hook or
+# bootstrap rather than passing because the executable was absent.
 cat >"$FAKE_BIN/fnm" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >>"$RECORD_DIR/fnm-calls"
-if [ "${1:-}" = env ]; then
-  printf '%s\n' 'export CONTRACT_FNM_BOOTSTRAPPED=1'
-fi
 STUB
 chmod +x "$FAKE_BIN/fnm"
 
@@ -229,39 +243,28 @@ assert_equals "$(grep -E '^(installs|shims)=' <<<"$bootstrap_out" | tr '\n' '|')
   'installs=unset|shims=unset|' \
   'missing Mise executable clears inherited installs and shims overrides'
 
-# Run all four real zsh startup modes against valid applied state. A fake fnm
-# and pyenv remain visible so the calls receipt proves active Mise gates their
-# interactive ownership hooks rather than relying on absence.
-PROJECT_DIR="$TEST_ROOT/project"
-OUTSIDE_DIR="$TEST_ROOT/outside"
-mkdir -p "$PROJECT_DIR" "$OUTSIDE_DIR" "$HOME_FIXTURE/.local/share/mise/shims"
-printf '%s\n' '[tools]' 'node = "22.14.0"' 'bun = "1.2.3"' \
-  'python = "3.12.2"' >"$PROJECT_DIR/mise.toml"
-cat >"$HOME_FIXTURE/.local/share/mise/shims/runtime-adapter" <<'STUB'
-#!/bin/sh
-tool=${0##*/}
-case "$tool" in
-  node) version='26.9.0'; prefix='v' ;;
-  bun) version='1.4.0'; prefix='' ;;
-  python) version='3.11.9'; prefix='Python ' ;;
-  bd) version='1.3.0'; prefix='bd version ' ;;
-  npm) version='11.19.1'; prefix='' ;;
-  *) exit 97 ;;
-esac
-if [ -r "$PWD/mise.toml" ]; then
-  if [ "$tool" = npm ]; then
-    selected=$(awk -F '"' '$1 ~ "^[[:space:]]*node[[:space:]]*=" { print $2; exit }' "$PWD/mise.toml")
-    [ "$selected" = '22.14.0' ] && version='10.9.2'
-  else
-    selected=$(awk -F '"' -v tool="$tool" '$1 ~ "^[[:space:]]*" tool "[[:space:]]*=" { print $2; exit }' "$PWD/mise.toml")
-    [ -n "$selected" ] && version=$selected
-  fi
-fi
-printf '%s%s\n' "$prefix" "$version"
-STUB
-chmod +x "$HOME_FIXTURE/.local/share/mise/shims/runtime-adapter"
-for runtime in node bun python bd npm; do
-  ln -s runtime-adapter "$HOME_FIXTURE/.local/share/mise/shims/$runtime"
+# Run all four real zsh startup modes against valid applied state. A fake pyenv
+# remains visible so the calls receipt proves active Mise gates its interactive
+# ownership hook rather than relying on absence; the fake fnm proves startup
+# never launches the retired manager in any mode.
+#
+# Every applied runtime exists twice: an empty Mise shim, and a decoy under
+# ~/.local/bin, the user command directory .zshenv places ahead of the runtime
+# bootstraps so a verified Mise selection can take priority over it. Resolution
+# is observed with command -v, so no fake runtime supplies its own oracle.
+# Interactive .zshrc deliberately restores ~/.local/bin ahead of the shims and
+# delegates runtime precedence to mise activate, which the fake activation
+# cannot prove; interactive rows therefore pin only that the shims stay on PATH.
+SHIMS_DIR="$HOME_CANONICAL/.local/share/mise/shims"
+DECOY_BIN="$HOME_FIXTURE/.local/bin"
+mkdir -p "$HOME_FIXTURE/.local/share/mise/shims" "$DECOY_BIN"
+APPLIED_RUNTIMES=(node bun python bd npm)
+expected_shim_resolution=''
+for runtime in "${APPLIED_RUNTIMES[@]}"; do
+  printf '#!/bin/sh\nexit 0\n' >"$HOME_FIXTURE/.local/share/mise/shims/$runtime"
+  printf '#!/bin/sh\nexit 96\n' >"$DECOY_BIN/$runtime"
+  chmod +x "$HOME_FIXTURE/.local/share/mise/shims/$runtime" "$DECOY_BIN/$runtime"
+  expected_shim_resolution+="$runtime=$SHIMS_DIR/$runtime|"
 done
 APPLIED_CONFIG="$HOME_CANONICAL/.dotfiles_state/toolchain/revisions/$REVISION_ID/config.toml"
 applied_hash_before="$(shasum -a 256 "$APPLIED_CONFIG" | awk '{print $1}')"
@@ -284,40 +287,40 @@ for mode in "${all_modes[@]}"; do
       PATH="$FAKE_BIN:$EXTERNAL/mise/shims:/usr/bin:/bin" \
       MISE_DATA_DIR="$EXTERNAL/mise" MISE_INSTALLS_DIR="$EXTERNAL/installs" \
       MISE_SHIMS_DIR="$EXTERNAL/direct-shims" \
-      RECORD_DIR="$RECORD_DIR" TERM=dumb CONTRACT_PROJECT_DIR="$PROJECT_DIR" \
-      CONTRACT_OUTSIDE_DIR="$OUTSIDE_DIR" \
+      RECORD_DIR="$RECORD_DIR" TERM=dumb CONTRACT_SHIMS_DIR="$SHIMS_DIR" \
       /bin/zsh "${flags[@]}" '
         print -r -- "active=${DOTFILES_MISE_ACTIVE-unset}"
         print -r -- "config=${MISE_GLOBAL_CONFIG_FILE-unset}"
         print -r -- "activated=${CONTRACT_MISE_ACTIVATED-unset}"
         print -r -- "directories=${MISE_DATA_DIR-unset}|${MISE_INSTALLS_DIR-unset}|${MISE_SHIMS_DIR-unset}"
         if alias python >/dev/null 2>&1; then print -r -- alias=yes; else print -r -- alias=no; fi
-        cd "$CONTRACT_PROJECT_DIR"
-        print -r -- "project-node=$(node --version)"
-        print -r -- "project-bun=$(bun --version)"
-        print -r -- "project-python=$(python --version)"
-        print -r -- "project-npm=$(npm --version)"
-        cd "$CONTRACT_OUTSIDE_DIR"
-        print -r -- "global-node=$(node --version)"
-        print -r -- "global-bun=$(bun --version)"
-        print -r -- "global-python=$(python --version)"
-        print -r -- "global-bd=$(bd --version)"
-        print -r -- "global-npm=$(npm --version)"
+        resolved=""
+        for runtime in node bun python bd npm; do
+          resolved+="$runtime=$(command -v "$runtime" 2>/dev/null || print -r -- missing)|"
+        done
+        print -r -- "resolved=$resolved"
+        case ":$PATH:" in
+          *":$CONTRACT_SHIMS_DIR:"*) print -r -- shims-on-path=yes ;;
+          *) print -r -- shims-on-path=no ;;
+        esac
       '
   } 2>"$err_file")"
   zsh_status=$?
   set -e
   assert_equals "$zsh_status" '0' "$mode zsh startup exits zero"
   assert_equals "$(wc -c <"$err_file" | tr -d ' ')" '0' "$mode zsh startup keeps stderr empty"
+  if [[ -e "$RECORD_DIR/fnm-calls" ]]; then
+    fail "$mode launched fnm; Mise is the only configured Node owner"
+  fi
+  pass "$mode launches no fnm process"
   grep -Fxq 'active=1' <<<"$zsh_out" || fail "$mode did not select applied Mise state"
   pass "$mode selects applied Mise state"
   grep -Fxq "directories=$HOME_CANONICAL/.local/share/mise|$HOME_CANONICAL/.local/share/mise/installs|$HOME_CANONICAL/.local/share/mise/shims" <<<"$zsh_out" ||
     fail "$mode retained a hostile Mise directory override"
   pass "$mode exports the canonical Mise directory layout"
-  assert_equals "$(grep -E '^(project|global)-(node|bun|python|bd|npm)=' <<<"$zsh_out" | tr '\n' '|')" \
-    'project-node=v22.14.0|project-bun=1.2.3|project-python=Python 3.12.2|project-npm=10.9.2|global-node=v26.9.0|global-bun=1.4.0|global-python=Python 3.11.9|global-bd=bd version 1.3.0|global-npm=11.19.1|' \
-    "$mode honors project runtimes and Node-owned npm then resumes personal defaults"
   if [[ "$mode" == interactive-* ]]; then
+    grep -Fxq 'shims-on-path=yes' <<<"$zsh_out" || fail "$mode dropped the applied Mise shims from PATH"
+    pass "$mode keeps the applied Mise shims on PATH for activation"
     grep -Fxq 'activated=1' <<<"$zsh_out" || fail "$mode did not run Mise activation"
     pass "$mode runs normal Mise activation"
     grep -Fxq 'alias=no' <<<"$zsh_out" || fail "$mode retained the fallback Python alias"
@@ -328,11 +331,9 @@ for mode in "${all_modes[@]}"; do
       fail "$mode invoked pyenv while applied Mise was active"
     fi
     pass "$mode does not initialize pyenv while applied Mise is active"
-    if [[ -e "$RECORD_DIR/fnm-calls" ]] && grep -Fq -- '--use-on-cd' "$RECORD_DIR/fnm-calls"; then
-      fail "$mode invoked the interactive fnm hook while applied Mise was active"
-    fi
-    pass "$mode does not initialize the interactive fnm hook"
   else
+    assert_equals "$(grep '^resolved=' <<<"$zsh_out")" "resolved=$expected_shim_resolution" \
+      "$mode resolves every applied runtime to its Mise shim ahead of ~/.local/bin"
     grep -Fxq 'activated=unset' <<<"$zsh_out" || fail "$mode unexpectedly activated Mise"
     pass "$mode uses shims without interactive activation"
     if [[ -e "$RECORD_DIR/mise-calls" ]]; then
@@ -345,27 +346,27 @@ done
 agent_err="$TEST_ROOT/agent-lane.err"
 : >"$agent_err"
 set +e
-# The isolated agent zsh child expands the fixture paths and runtime commands.
+# The isolated agent zsh child expands the runtime lookups.
 # shellcheck disable=SC2016
 agent_out="$({
   env -i HOME="$HOME_FIXTURE" ZDOTDIR="$HOME_FIXTURE" \
     PATH="$FAKE_BIN:/usr/bin:/bin" RECORD_DIR="$RECORD_DIR" \
-    CONTRACT_PROJECT_DIR="$PROJECT_DIR" CONTRACT_OUTSIDE_DIR="$OUTSIDE_DIR" \
     "$REPO_ROOT/bin/agent-lane-zsh" -c '
-      cd "$CONTRACT_PROJECT_DIR"
-      print -r -- "project=$(node --version)|$(bun --version)|$(python --version)|$(npm --version)"
-      cd "$CONTRACT_OUTSIDE_DIR"
-      print -r -- "global=$(node --version)|$(bun --version)|$(python --version)|$(bd --version)|$(npm --version)"
+      resolved=""
+      for runtime in node bun python bd npm; do
+        resolved+="$runtime=$(command -v "$runtime" 2>/dev/null || print -r -- missing)|"
+      done
+      print -r -- "$resolved"
     '
 } 2>"$agent_err")"
 agent_status=$?
 set -e
-assert_equals "$agent_status" '0' 'agent zsh launch exits zero with project overrides'
-assert_equals "$agent_out" $'project=v22.14.0|1.2.3|Python 3.12.2|10.9.2\nglobal=v26.9.0|1.4.0|Python 3.11.9|bd version 1.3.0|11.19.1' \
-  'agent zsh launch keeps npm under project-selected Node then resumes personal defaults'
-assert_equals "$(wc -c <"$agent_err" | tr -d ' ')" '0' 'agent zsh project override launch stays silent'
+assert_equals "$agent_status" '0' 'agent zsh launch exits zero'
+assert_equals "$agent_out" "$expected_shim_resolution" \
+  'agent zsh launch resolves every applied runtime to its Mise shim ahead of ~/.local/bin'
+assert_equals "$(wc -c <"$agent_err" | tr -d ' ')" '0' 'agent zsh launch stays silent'
 assert_equals "$(shasum -a 256 "$APPLIED_CONFIG" | awk '{print $1}')" "$applied_hash_before" \
-  'project overrides preserve the applied personal default config bytes'
+  'zsh startup and the agent launch preserve the applied config bytes'
 
 rm -f "$RECORD_DIR"/*
 husky_err="$TEST_ROOT/husky.err"
@@ -380,7 +381,6 @@ husky_out="$({
     RECORD_DIR="$RECORD_DIR" /bin/sh -c '
       . "$HOME/.config/husky/init.sh"
       printf "active=%s\n" "${DOTFILES_MISE_ACTIVE-unset}"
-      printf "fnm=%s\n" "${CONTRACT_FNM_BOOTSTRAPPED-unset}"
       printf "data=%s\n" "${MISE_DATA_DIR-unset}"
       printf "directories=%s|%s|%s\n" "${MISE_DATA_DIR-unset}" "${MISE_INSTALLS_DIR-unset}" "${MISE_SHIMS_DIR-unset}"
       printf "path=%s\n" "$PATH"
@@ -393,8 +393,10 @@ assert_equals "$(wc -c <"$husky_err" | tr -d ' ')" '0' \
   'Husky POSIX bootstrap stays silent'
 grep -Fxq 'active=1' <<<"$husky_out" || fail 'Husky did not select applied Mise state'
 pass 'Husky selects applied Mise state'
-grep -Fxq 'fnm=1' <<<"$husky_out" || fail 'Husky did not run the retained fnm fallback first'
-pass 'Husky runs the retained fnm fallback before Mise selection'
+if [[ -e "$RECORD_DIR/fnm-calls" ]]; then
+  fail 'Husky launched fnm; Mise is the only configured Node owner'
+fi
+pass 'Husky launches no fnm process'
 assert_equals "$(grep '^data=' <<<"$husky_out")" \
   "data=$HOME_CANONICAL/.local/share/mise" \
   'Husky exports the canonical Mise data root'
@@ -409,17 +411,33 @@ if [[ -e "$RECORD_DIR/mise-calls" ]]; then
 fi
 pass 'Husky uses shims without interactive Mise activation'
 
+# A hook started by a Dock-launched Git client inherits the launchd PATH, which
+# has no package prefix at all. The init must restore it before Mise selection
+# can find the executable; with only /usr/bin:/bin the fake Mise lives solely
+# under the test-owned prefix the init was rewritten to.
+cp "$FAKE_BIN/mise" "$HUSKY_PREFIX/bin/mise"
+rm -f "$RECORD_DIR"/*
+# The isolated POSIX child expands HOME and the bootstrap variables.
+# shellcheck disable=SC2016
+husky_launchd_out="$(env -i HOME="$HOME_FIXTURE" PATH="/usr/bin:/bin" \
+  RECORD_DIR="$RECORD_DIR" /bin/sh -c '
+    . "$HOME/.config/husky/init.sh"
+    printf "active=%s\n" "${DOTFILES_MISE_ACTIVE-unset}"
+  ' 2>/dev/null)"
+grep -Fxq 'active=1' <<<"$husky_launchd_out" ||
+  fail 'Husky under the launchd PATH did not select applied Mise state'
+pass 'Husky under the launchd PATH selects applied Mise state'
+
 # Exercise the public verifier with a small test-owned toolchain adapter. Other
 # machine checks intentionally fail in this isolated HOME; this slice observes
 # only the three new checks and their distinct repair paths.
 VERIFY_DOTFILES="$TEST_ROOT/verify-dotfiles"
 HOSTILE_DOTFILES="$TEST_ROOT/hostile-dotfiles"
 mkdir -p "$VERIFY_DOTFILES/bin/dotfiles" "$VERIFY_DOTFILES/config/mise" \
-  "$VERIFY_DOTFILES/config/node" "$HOSTILE_DOTFILES/config/mise"
+  "$HOSTILE_DOTFILES/config/mise"
 sed "s#/opt/homebrew#${EMPTY_PREFIX}#g" "$REPO_ROOT/verify_install.sh" \
   >"$VERIFY_DOTFILES/verify_install.sh"
 cp "$REPO_ROOT/config/mise/bootstrap.sh" "$VERIFY_DOTFILES/config/mise/bootstrap.sh"
-cp "$REPO_ROOT/config/node/version" "$VERIFY_DOTFILES/config/node/version"
 chmod +x "$VERIFY_DOTFILES/verify_install.sh"
 cat >"$HOSTILE_DOTFILES/config/mise/bootstrap.sh" <<'STUB'
 #!/bin/sh
@@ -494,7 +512,7 @@ grep -Fq 'update --apply --retry --json' <<<"$verifier_out" ||
   fail 'effective owner drift guidance omitted bounded retry'
 pass 'effective owner drift guidance names bounded apply retry'
 
-expected_assertions=132
+expected_assertions=135
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

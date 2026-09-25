@@ -574,7 +574,7 @@ function validateAllowedKeys(
 // Action ids are controlled enum identifiers, not agent-facing prose. They
 // are gated by SHAPE (a bounded lowercase token), never by the free-text
 // vocabulary scan: an id may legitimately contain a banned prose word (e.g.
-// browser-use's create-credential-clean-profile), and scanning it as free
+// a `create-credential-clean-profile` action), and scanning it as free
 // text makes the envelope for that continuation unconstructible. Same split
 // as the env-var NAME gate vs the free-text VALUE scan in runtime-text-safety.
 const RUNTIME_ACTION_ID_PATTERN = /^[a-z][a-z0-9_-]*$/;

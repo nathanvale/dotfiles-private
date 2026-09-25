@@ -22,9 +22,9 @@ one-off page instance to redefine a canonical component.
 
 - `figma`: hard dependency when Figma is a source. Missing state: blocked for
   Figma comparison. Next repair: follow its MCP state route.
-- `browser-use`: hard dependency for live browser proof. Missing state:
-  blocked. Next repair: install the `browser-lanes` plugin and pass its lane
-  health.
+- Native Harness browser (`$HOME/code/dotfiles/docs/agents/browser-automation.md`):
+  hard dependency for live browser proof. Missing state: blocked. Next repair:
+  Claude Code: relaunch with `--chrome`; Codex: use `@Browser`.
 - `path-component-parity`: optional handoff for component-level Path parity.
   Missing state: degraded to screenshot and computed-style evidence without
   the component measurement driver.
@@ -35,7 +35,8 @@ one-off page instance to redefine a canonical component.
    target page or component.
 2. Classify the task as page composition, component parity, or both. Keep the
    evidence and fixes separate when both apply.
-3. Hand Figma extraction to `figma`. Use `browser-use` for Storybook or the prepared live surface.
+3. Hand Figma extraction to `figma`. Use the native Harness browser for
+   Storybook or the prepared live surface.
 4. For component parity, hand the canonical story pair and selectors to
    `path-component-parity`.
 5. Compare equivalent screenshots and computed styles. Name each delta and

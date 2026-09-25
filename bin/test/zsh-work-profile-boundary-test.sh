@@ -522,14 +522,16 @@ done
 printf 'export CONTRACT_PLAIN_SENTINEL=plain-fixture-value\n' \
   >"$secret_home/.config/lll-account-switch/secrets.env"
 
-secret_probe="$(
-  env -i HOME="$secret_home" ZDOTDIR="$secret_home" PATH=/usr/bin:/bin TERM=dumb \
-    /bin/zsh -i -l -c '
-      print -r -- "plain=${CONTRACT_PLAIN_SENTINEL:-none}"
-    ' 2>/dev/null
-)"
-assert_equals "$(grep '^plain=' <<<"$secret_probe")" 'plain=none' \
-  'startup does not source a plain secret file into the shell'
+for startup_flags in -il -i; do
+  secret_probe="$(
+    env -i HOME="$secret_home" ZDOTDIR="$secret_home" PATH=/usr/bin:/bin TERM=dumb \
+      /bin/zsh "$startup_flags" -c '
+        print -r -- "plain=${CONTRACT_PLAIN_SENTINEL:-none}"
+      ' 2>/dev/null
+  )"
+  assert_equals "$(grep '^plain=' <<<"$secret_probe")" 'plain=none' \
+    "zsh $startup_flags startup does not source a plain secret file into the shell"
+done
 
 # The same file in `op://` shape must not be evaluated either. The reference is
 # not a real vault path and carries no credential. The retired lane ran only when

@@ -35,7 +35,8 @@
 
 1. Start from the live bill, payment notice, billing correspondence, or
    bill-payment portal. Fetch it through the applicable owning skill, such as
-   `gog-gmail` for accessible Gmail or `browser-use` for a bill-payment portal.
+   `gog-gmail` for accessible Gmail or the native Harness browser in
+   [`browser-automation.md`](browser-automation.md) for a bill-payment portal.
 2. Extract exact entity names and stable aliases or relationships, including
    the people, organization, property, owners corporation, manager, billing
    account label, and portal when relevant.
@@ -54,7 +55,8 @@
 
 1. Route the requested work through the applicable owning skill, such as
    `context-advisor` for unclear placement,
-   `browser-use` for bill-payment portal work, `gog-gmail` for Gmail,
+   the native Harness browser ([`browser-automation.md`](browser-automation.md))
+   for bill-payment portal work, `gog-gmail` for Gmail,
    `gog-calendar` for calendar work, `apple-reminders` for reminders, and
    `draft-message` or the applicable channel skill for messages. Follow that
    skill's procedure and approval rules.

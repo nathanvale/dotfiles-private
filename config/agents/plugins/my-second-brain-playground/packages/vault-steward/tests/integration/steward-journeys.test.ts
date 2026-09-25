@@ -2,7 +2,7 @@ import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { cleanupFixtures, fixture, git, installRewriteHook, lockFiles, write } from "../helpers/harness.ts"
-import { apply, candidate, data, integrate, must, preview, run, stewardAsync, stewardEnvironment, waitForOwner } from "../helpers/steward.ts"
+import { apply, candidate, data, integrate, must, preview, run, stewardAsync, stewardEnvironment, waitForBarrierArrival, waitForOwner } from "../helpers/steward.ts"
 
 // The Vault Steward CLI 2.0 journeys through real child processes: preview and apply binding (CONTRACT.md 3.8), the
 // no-changes plan, receipts and diagnostics custody, two-process safety for apply and recover (one effect, the other
@@ -99,6 +99,9 @@ test("two CLI applies against a dead lock recheck under the reclaim mutex: one c
 	const release = join(f.root, "reclaim-release")
 	const published = join(f.root, "reclaimer-published")
 	const juror = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=lock-judged:${published}` })
+	// Start the reclaimer only after the juror has judged the dead owner. Started together, a late juror can find the
+	// lock path empty between the reclaimer's rename and re-create, take the lock itself and skip the recheck under test.
+	await waitForBarrierArrival(published)
 	const reclaimer = stewardAsync(f.vault, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { ...env, VAULT_STEWARD_FAULT: `barrier=lock-held:${release}` })
 	await waitForOwner(join(lock, "owner.json"), deadOwner)
 	// Only the reclaimer can change the dead owner record. That witness releases the juror from lock-judged.

@@ -45,10 +45,6 @@
 		"typecheck": "tsc --noEmit -p tsconfig.json && bun run --filter '*' typecheck",
 		"validate": "bun run check && bun run lint:scripts && bun run lint:workflows"
 	},
-	"dependencies": {
-		"puppeteer": "^24.32.0",
-		"tldts": "7.4.13"
-	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.15",
 		"@commitlint/cli": "^20.1.0",

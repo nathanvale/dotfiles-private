@@ -101,13 +101,13 @@ echo '<slug>' > ~/.dotfiles_state/work-profile
 
 **Symptom:** Scripts or CI can't find `node`.
 
-**Cause:** fnm alias not in PATH for non-interactive shells.
+**Cause:** no verified applied Mise revision is selected, so
+`config/mise/bootstrap.sh` leaves the Mise shims off PATH.
 
-**Fix:** Check that `~/.local/share/fnm/aliases/default/bin` exists:
+**Fix:** Check the selection, then apply the declared revision:
 ```bash
-ls ~/.local/share/fnm/aliases/default/bin/node
-# If missing, set the default:
-fnm default <version>
+bin/dotfiles/toolchain status --json
+bin/dotfiles/toolchain update --apply
 ```
 
 ### 1Password Access Fails

@@ -19,9 +19,10 @@ to a standalone installation. A
 declaration alone does not satisfy this check. Setup and shell bootstrap are now configured to install Mise, apply one
 verified revision, and select it across terminal and Git-hook launches. The
 implementation is hermetically tested but not yet evidence of live machine
-installation or activation. fnm, pyenv, and Homebrew remain installed fallbacks
-during qualification. System Git remains `unqualified`: its exact supported
-owner is explicitly unresolved.
+installation or activation. Mise is the only configured Node owner; fnm is
+retired from configuration (ADR 0012). pyenv and Homebrew remain installed
+fallbacks during qualification. System Git remains `unqualified`: its exact
+supported owner is explicitly unresolved.
 
 `source_declared` means an exact version appears in tracked source, including
 npm's child expectation in the manifest. It does not

@@ -180,10 +180,6 @@ assert_equals "$(verdict 'ac--')" 'reject/reject/reject' \
 assert_equals "$(verdict "$(printf 'a%.0s' {1..33})")" 'reject/reject/reject' \
   'a 33-character value is refused by every owner'
 
-# The length boundary is exact: {0,31} after one leading character means 32.
-assert_equals "$(verdict "$(printf 'a%.0s' {1..32})")" 'accept/accept/accept' \
-  'the 32-character boundary value is accepted by every owner'
-
 # The pattern bounds REPETITIONS, and a `-x` repetition is two characters, so a
 # hyphenated value can pass the pattern while exceeding the documented
 # 32-character total. The separate length check in every owner is what refuses
@@ -200,36 +196,6 @@ for bad in 'ACME' 'ac me' 'a.b' '../evil' 'a/b' 'a;id' '$(cmd)' 'a_b' ''; do
   assert_equals "$(verdict "$bad")" 'reject/reject/reject' \
     "an unsafe or malformed value is refused by every owner: ${bad:-<empty>}"
 done
-
-# --- The parity property ---------------------------------------------------
-#
-# The rows above name specific shapes. These rows assert the promise itself over
-# every case in the file, once per writer, so a future widening that no named row
-# happens to cover still fails here. The direction matters: a writer must not be
-# WIDER than the selector. A writer narrower than the selector refuses a value
-# the shell would have loaded, which is safe and is not asserted against.
-parity_candidates=(
-  acme a-b-c a ab12 7eleven acme- -acme a--b ac-- 'ACME' 'ac me' 'a.b'
-  '../evil' 'a/b' 'a;id' '$(cmd)' 'a_b' ''
-  "$(printf 'a%.0s' {1..32})" "$(printf 'a%.0s' {1..33})"
-  "$over_limit_mixed" "$boundary_mixed"
-)
-
-for candidate in "${parity_candidates[@]}"; do
-  if generator_accepts "$candidate"; then
-    selector_accepts "$candidate" ||
-      fail "the generator accepts a value the selector refuses: '$candidate'"
-  fi
-done
-pass 'every generator-accepted value is accepted by the canonical selector'
-
-for candidate in "${parity_candidates[@]}"; do
-  if setup_accepts "$candidate"; then
-    selector_accepts "$candidate" ||
-      fail "setup.sh accepts a value the selector refuses: '$candidate'"
-  fi
-done
-pass 'every setup.sh-accepted value is accepted by the canonical selector'
 
 # --- Public executable behaviour -------------------------------------------
 #

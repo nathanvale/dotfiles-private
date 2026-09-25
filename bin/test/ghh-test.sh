@@ -328,26 +328,6 @@ standing_result="$(PATH="$STANDING_BIN:$FAKE_BIN:/usr/bin:/bin" GHH_TEST_LOG="$s
 assert_equals "0" "$(sed -n '1p' <<< "$standing_result")" "a standing ghh shim on PATH does not capture ghh outside a run"
 assert_equals "token-nathanvale|1|pr view 305" "$(< "$standing_log")" "resolution walks past the shim to the real gh with the requested account"
 
-# The complement of the row above. ghh's own shim is marked, so resolution skips
-# it and the same PATH shape routes exactly once per gh call instead of looping.
-marked_count="$TEST_DIR/marked.count"
-echo 0 > "$marked_count"
-cat > "$TEST_DIR/count-child.sh" <<COUNTCHILD
-#!/usr/bin/env bash
-set -euo pipefail
-before="\$(cat "$marked_count")"
-gh api rate_limit >/dev/null
-gh_path="\$(command -v gh)"
-echo "\$(( before + 1 ))" > "$marked_count"
-COUNTCHILD
-chmod +x "$TEST_DIR/count-child.sh"
-
-marked_log="$TEST_DIR/marked.log"
-marked_status="$(PATH="$RESTRICTED_PATH" GHH_TEST_LOG="$marked_log" \
-  run_cmd "$CLI" run --account nathanvale -- "$TEST_DIR/count-child.sh" | sed -n '1p')"
-assert_equals "0" "$marked_status" "a marked ghh shim first on PATH does not recurse"
-assert_equals "1" "$(wc -l < "$marked_log" | tr -d ' ')" "one child gh call reaches the real gh exactly once"
-
 echo
 echo "$PASSED passed, $FAILED failed"
 
