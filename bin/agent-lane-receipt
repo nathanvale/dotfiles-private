@@ -363,7 +363,7 @@ run_probe() {
   local err_file="$probe_root/stderr"
   : >"$err_file"
   # HOME is a scratch directory, never the ZDOTDIR. zsh reads startup owners
-  # from ZDOTDIR, but the tools those owners initialise (fnm, atuin) write their
+  # from ZDOTDIR, but the tools those owners initialise (atuin, Mise) write their
   # state under HOME. Pointing HOME at the worktree made a probe deposit
   # .config/ and .local/ into the repository, so the two are kept separate: the
   # binding decides which files are READ, the scratch home absorbs what is

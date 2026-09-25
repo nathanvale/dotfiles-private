@@ -183,9 +183,10 @@ For signing in to a website. The credential goes from 1Password into the page.
 The agent drives the browser and reads the resulting page state; it never
 receives the credential and never types one.
 
-Route browser work through the `browser-use` skill. When confidential fill is
-unavailable for a site, the run blocks or hands off to Nathan rather than
-falling back to passing a value through the agent.
+Route browser work through the native Harness browser;
+`$HOME/code/dotfiles/docs/agents/browser-automation.md` owns that rule. When
+confidential fill is unavailable for a site, the run blocks or hands off to
+Nathan rather than falling back to passing a value through the agent.
 
 ---
 

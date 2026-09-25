@@ -1,8 +1,6 @@
 // The Unit 1 reference-transaction hook text, embedded so plugin tests run from a clean plugin checkout without the
-// vault (OPEN-DECISIONS D5). The digest is computed from the accepted file, never from prose; Unit 1's own tests pin the
-// same digest against scripts/git-hooks/reference-transaction in the vault, so drift fails on whichever side changes.
-export const HOOK_SHA256 = "80d081bad079dbede935c785c0f5d2e4772736a22674df475386263b40e31e13"
-
+// vault (OPEN-DECISIONS D5). hook-text.test.ts pins its sha256 to the accepted digest; Unit 1's own tests pin the same
+// digest against scripts/git-hooks/reference-transaction in the vault, so drift fails on whichever side changes.
 export const HOOK_TEXT = String.raw`#!/bin/sh
 # reference-transaction: vault main-only gate (Unit 0 final: fail-open guards added)
 state=$1

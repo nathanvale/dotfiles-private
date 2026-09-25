@@ -154,6 +154,7 @@ run_phase() {
 refuse_brew() {
   local label="$1"
   [[ ! -e "$record_dir/brew-calls" ]] || fail "$label invoked brew"
+  [[ -s "$record_dir/log" ]] || fail "$label left no log to inspect for Homebrew guidance"
   if grep -qi 'brew' "$record_dir/log"; then
     fail "$label recommended brew (route the CLI through the native installer)"
   fi
@@ -249,6 +250,7 @@ run_verifier() {
 }
 
 run_verifier "$verifier_without_claude_home"
+verifier_without_claude_output="$verifier_output"
 grep -Fq '⚠ Claude Code' <<<"$verifier_output" ||
   fail 'verifier keeps the Claude warning when no executable is installed'
 pass 'verifier keeps the Claude warning when no executable is installed'
@@ -275,13 +277,11 @@ grep -Fq '⚠ AI rescue marker' <<<"$verifier_output" ||
 pass 'verifier keeps the rescue-marker warning for a Claude directory placeholder'
 
 # ---------------------------------------------------------------------------
-# Repair guidance text.
+# Repair guidance.
 # ---------------------------------------------------------------------------
 #
-# verify_install.sh's fix strings are output data, so the text layer is the
-# honest ceiling here: its live checks read this machine's real state and
-# cannot run hermetically. Any claude-code mention in either executable is a
-# Homebrew cask route; the native world names the binary claude.
+# Any claude-code mention in either executable is a Homebrew cask route; the
+# native world names the binary claude.
 for owner in setup.sh verify_install.sh; do
   if grep -q 'claude-code' "$REPO_ROOT/$owner"; then
     fail "$owner still names the claude-code cask (route the CLI through the native installer)"
@@ -289,9 +289,12 @@ for owner in setup.sh verify_install.sh; do
   pass "$owner carries no Homebrew route for the Claude Code CLI"
 done
 
+# The hermetic verifier run without Claude reports two failures that name the
+# CLI: the Claude Code check and the AI rescue marker. Each must print the
+# native installer as its repair, so the count is pinned on the observed output.
 native_fix_count="$(grep -Fc 'Fix: curl -fsSL https://claude.ai/install.sh | bash' \
-  "$REPO_ROOT/verify_install.sh" || true)"
+  <<<"$verifier_without_claude_output" || true)"
 assert_equals "$native_fix_count" '2' \
-  'verify_install.sh recommends the native installer at both Claude Code fix sites'
+  'verifier without Claude recommends the native installer for both Claude Code repairs'
 
 printf '1..%d\n' "$assertion_count"

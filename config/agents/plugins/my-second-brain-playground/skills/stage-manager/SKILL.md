@@ -7,7 +7,7 @@ description: Take the Stage Manager role as a project's coordinator. Use at coor
 
 The Stage Manager is the coordinating Cast Member defined in the plugin
 [glossary](../../CONTEXT.md): it assigns work, preserves boundaries, receives
-Handbacks, requests Repair and dismisses the Cast Members it cast. It owns
+Handbacks, requests Repair, and dismisses the Cast Members it casts. It owns
 conversation, dispatch, progress and synthesis. Workers do the Task work.
 
 ## Launch a coordinator
@@ -148,13 +148,17 @@ matter holds:
 - `verdict`: `accepted`, or another verdict, which refuses.
 - `guide_sha256`: the sha256 of the exact guide bytes reviewed.
 - `handback_path` and `handback_sha256`: the reviewer's own Handback file and
-  the sha256 of its bytes.
+  the sha256 of its bytes. The path is relative to the review record's
+  directory and names a file committed beside it, conventionally
+  `<model-id>.review-handback.md`, so installed copies can verify it. An
+  absolute path, or one outside the plugin, refuses.
 
 Step 4 accepts only when all of these hold:
 
 - The record's `verdict` is `accepted`, and its `guide_sha256` equals the
   loaded guide's sha256.
-- The Handback file exists and hashes to `handback_sha256`.
+- The Handback file, resolved relative to the review record, exists inside
+  the plugin and hashes to `handback_sha256`.
 - It contains the line `GUIDE_VERDICT: accept guide_sha256=<hash>`, and
   `<hash>` equals the loaded guide's sha256.
 - The `reviewer` identity differs from the guide's `author` identity in both

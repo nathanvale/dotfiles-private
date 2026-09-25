@@ -16,20 +16,16 @@ plugin-owned hook manifests (`hooks/claude/hooks.json` and
 `hooks/codex/hooks.json`) to `bin/msb-workflow hook`, so on this source the
 helper is the registered hook path. The Python route
 (`packages/compaction-recovery/src/recovery.py`), the schema-v2 checkpoints,
-and both legacy launchers under `hooks/` are retained byte-identical and
-unregistered as provenance only; they are not a rollback route and are not
-rehearsed (Spec #57 revision 3 onward, Ticket #52 revision 3). One live
-behaviour of `hooks/recover-context` is not carried into `bin/msb-workflow
-hook`: the Vault Steward guard-audit line that
-[PR #61](https://github.com/nathanvale/dotfiles-private/pull/61) added
-(`hooks/recover-context:13-24`, row F3, one `vault-guard:` line at
-SessionStart when the configured vault's `guard:audit` reports error or warn
-findings). On this source that line is unregistered under `M2` and retired
-from the registered hook path; its surfacing is re-homed through the existing
-Vault Steward `guard:audit` route, with no new command or hook, and the helper
-never runs `guard:audit`. The source-registered command canary for that break
-sits beside the manifest test in
-`packages/compaction-recovery/src/main.test.ts`. This README states
+and the legacy checkpoint launcher `hooks/recovery-checkpoint` are retained
+byte-identical and unregistered as provenance only; they are not a rollback
+route and are not rehearsed (Spec #57 revision 3 onward, Ticket #52 revision
+3). [Spec #120](https://github.com/nathanvale/dotfiles-private/issues/120)
+retired the other legacy launcher, `hooks/recover-context`, with the Python
+hook mode, the recovery observer's hook kind, and the Vault Steward guard-audit
+line that [PR #61](https://github.com/nathanvale/dotfiles-private/pull/61) had
+added to it (row F3). That line's surfacing stays with the existing Vault
+Steward `guard:audit` route, with no new command or hook, and the helper never
+runs `guard:audit`. This README states
 source state only. Installation, activation, and merge are separate facts
 recorded in the Ticket #52 evidence, not claimed here.
 
@@ -539,17 +535,16 @@ Helper-side recovery, by cause:
 | Uncertain marker generations | Run `recover`; the next prompt hook emits the notice, not the panel, and settles them. |
 
 Rollback of the helper: there is nothing to unwind in Beads because the helper
-never wrote it. The hook rollback unit is the two manifest files: restoring the
-preserved pre-change bytes of `hooks/claude/hooks.json` and
-`hooks/codex/hooks.json` (their pre-change and current SHA-256 identities are
-pinned in `packages/compaction-recovery/src/main.test.ts`; the bytes are in the
-Ticket #52 receipt) is a reversible source change that names
-`hooks/recover-context` again. That restoration is not a qualified legacy
-recovery route: the legacy launchers under `hooks/`, the Python route, and the
-schema-v2 checkpoints were never changed and are retained as provenance only,
-and no recovery through them is newly certified, claimed, or rehearsed by this
-source (Ticket #52 revision 3). Keep the helper's private v3 state readable and
-do not translate it to schema v2.
+never wrote it. The pre-change bytes of `hooks/claude/hooks.json` and
+`hooks/codex/hooks.json` named `hooks/recover-context`, which Spec #120
+retired, so restoring them is no longer a source rollback; the current manifest
+identities are pinned in `packages/compaction-recovery/src/main.test.ts` and
+the pre-change bytes stay in the Ticket #52 receipt as provenance only. The
+legacy checkpoint launcher, the Python checkpoint route, and the schema-v2
+checkpoints were never changed and are retained as provenance only, and no
+recovery through them is newly certified, claimed, or rehearsed by this source
+(Ticket #52 revision 3). Keep the helper's private v3 state readable and do not
+translate it to schema v2.
 
 ## Build, run, and prove
 

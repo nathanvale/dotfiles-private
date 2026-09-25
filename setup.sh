@@ -1741,26 +1741,15 @@ main() {
     phase_4_development() {
         log_phase 4 "Development Toolchain"
 
-        local node_version_file="$DOTFILES_DIR/config/node/version"
-        if [[ ! -f "$node_version_file" ]]; then
-            log_error "Node version declaration not found: $node_version_file"
-            return 1
-        fi
-
-        local node_version
-        node_version=$(< "$node_version_file")
-        if [[ ! "$node_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
-            log_error "Invalid Node version declaration: $node_version_file"
-            return 1
-        fi
-
+        # Node is declared once, in config/mise/source.toml, and installed
+        # through the verified toolchain apply below. No other Node manager is
+        # configured here.
         local dev_tools=(
             bun
             python
             uv
             pipx
             pyenv
-            fnm
             mise
             pnpm
             shfmt
@@ -1780,22 +1769,6 @@ main() {
                 brew install "$tool" || log_warn "Failed to install $tool"
             fi
         done
-
-        if ! command -v fnm &>/dev/null; then
-            log_error "fnm is unavailable; cannot install Node $node_version"
-            return 1
-        fi
-
-        log "Installing Node $node_version with Corepack..."
-        if ! fnm install --corepack-enabled "$node_version"; then
-            log_error "Failed to install Node $node_version with fnm"
-            return 1
-        fi
-
-        if ! fnm default "$node_version"; then
-            log_error "Failed to set Node $node_version as the fnm default"
-            return 1
-        fi
 
         if ! brew list mise &>/dev/null; then
             log_error "The Brewfile-declared Mise formula is unavailable"

@@ -3,9 +3,9 @@
 ## Owners
 
 - Reconciliation contract and private Xero state: `xero-cli commands --json`.
-- Live browser connection and action: the `browser-lanes`
-  plugin's `browser-use` entry skill in the `daily-driver` lane; Nathan
-  admits the one Xero tab through its admission handoff.
+- Live browser connection and action: the native Harness browser in Nathan's
+  signed-in Chrome (`$HOME/code/dotfiles/docs/agents/browser-automation.md`);
+  Nathan signs in and returns the one Xero tab.
 - Gmail reads and drafts: the `gog gmail` command contract.
 - Quarter handoff evidence: `skills/xero/scripts/quarter-ledger.ts`.
 - Standard quarterly BAS due-date reference:
@@ -22,7 +22,7 @@ halts reconciliation but does not block read-only ledger status.
 2. Read the due-date reference. Prefer an entity-specific generated BAS date or
    accountant-confirmed date when available.
 3. Verify and download the bound QIF.
-4. Verify its Xero import through `browser-use` in the user's Chrome.
+4. Verify its Xero import in the native Harness browser in Nathan's Chrome.
 5. Run `xero-cli commands --json` and `xero-cli workspace status --json`, then
    follow only the returned `nextSafeAction`. Never inspect XDG state directly.
 6. Complete `xero-cli` reconciliation.
@@ -41,15 +41,15 @@ or due date is blocked, report the cause and stop before writes.
 ## Reconcile
 
 1. Ask `xero-cli` to prepare the named quarter.
-2. For each browser observation request, invoke `browser-use` with the exact
-   Xero page URL, let the lane resolve the one admitted Xero tab, and return
-   only the required observations. Page order is portal-owned.
+2. For each browser observation request, open the exact Xero page URL in the
+   native Harness browser, stay in the one Xero tab, and return only the
+   required observations. Page order is portal-owned.
 3. Show the bound preview: trusted and exception counts, totals by account,
    compact exceptions, and the preview and intent-set digests.
 4. Obtain explicit approval for that exact trusted pass.
 5. Ask `xero-cli` for at most one intent. Validate its one-use permit
-   immediately before submit, perform that one browser action through
-   `browser-use`, and checkpoint the receipt.
+   immediately before submit, perform that one browser action in the native
+   Harness browser, and checkpoint the receipt.
 6. Repeat from CLI status until the quarter is complete or blocked.
 7. Record `reconciled` only from a Xero receipt or explicit manual confirmation.
 

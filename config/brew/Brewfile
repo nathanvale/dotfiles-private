@@ -61,7 +61,6 @@ brew "gh"                      # GitHub CLI
 brew "jq"                      # JSON processor
 brew "yq"                      # YAML processor
 brew "lazygit"                 # Git TUI
-brew "fnm"                     # Fast Node Manager
 brew "mise"                    # Verified applied toolchain owner
 brew "shfmt"                   # Shell script formatter
 brew "shellcheck"              # Shell script linter

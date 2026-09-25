@@ -117,6 +117,11 @@ The single file or system that decides one contract. Other documents point at
 it rather than restating it.
 _Avoid_: Source of truth, authority; `OWNER` as a forge role is unrelated
 
+**Recovery Copy**:
+An installed but unconfigured copy kept only for rollback; it owns nothing and
+no configuration selects it. Distinct from an Owner, which decides a contract.
+_Avoid_: fallback
+
 ### Ownership and tracking
 
 **User Scope**:

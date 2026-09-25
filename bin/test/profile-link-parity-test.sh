@@ -15,7 +15,6 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 MANAGER_SOURCE="$REPO_ROOT/bin/dotfiles/symlinks/symlinks_manage.sh"
 COLOUR_SOURCE="$REPO_ROOT/bin/colour_log.sh"
 VERIFIER_SOURCE="$REPO_ROOT/verify_install.sh"
-NODE_VERSION_SOURCE="$REPO_ROOT/config/node/version"
 BREWFILE_SOURCE="$REPO_ROOT/config/brew/Brewfile"
 PROFILE_REQUIREMENTS_SOURCE="$REPO_ROOT/config/brew/profile-requirements.tsv"
 
@@ -258,11 +257,10 @@ make_verifier_fixture() {
 	local fixture="$TEST_ROOT/$name"
 	local dotfiles="$fixture/dotfiles"
 
-	mkdir -p "$dotfiles/bin/dotfiles/symlinks" "$dotfiles/config/node" "$dotfiles/config/brew"
+	mkdir -p "$dotfiles/bin/dotfiles/symlinks" "$dotfiles/config/brew"
 	cp "$MANAGER_SOURCE" "$dotfiles/bin/dotfiles/symlinks/symlinks_manage.sh"
 	cp "$COLOUR_SOURCE" "$dotfiles/bin/colour_log.sh"
 	cp "$VERIFIER_SOURCE" "$dotfiles/verify_install.sh"
-	cp "$NODE_VERSION_SOURCE" "$dotfiles/config/node/version"
 	cp "$BREWFILE_SOURCE" "$dotfiles/config/brew/Brewfile"
 	cp "$PROFILE_REQUIREMENTS_SOURCE" "$dotfiles/config/brew/profile-requirements.tsv"
 	chmod 700 "$dotfiles/bin/dotfiles/symlinks/symlinks_manage.sh" "$dotfiles/verify_install.sh"
@@ -358,11 +356,9 @@ make_verifier_fixture manager-matrix >/dev/null
 fixture="$TEST_ROOT/manager-matrix"
 desktop_records="$(prepare_links "$fixture" desktop)"
 assert_manager_shape "$fixture" desktop "$desktop_records"
-pass 'desktop manager process emits machine-readable all-profile status'
 
 server_records="$(manager_output "$fixture" server "$fixture/home")"
 assert_manager_shape "$fixture" server "$server_records"
-pass 'server manager process emits machine-readable all-profile status'
 
 common_destination="$(awk -F '\t' '$1 == "DOTFILES_SYMLINK_RECORD" && $3 == "common" { print $4; exit }' <<<"$desktop_records")"
 common_expected="$(awk -F '\t' '$1 == "DOTFILES_SYMLINK_RECORD" && $3 == "common" { print $5; exit }' <<<"$desktop_records")"
@@ -480,9 +476,8 @@ ln -s "$common_expected" "$common_destination"
 malformed="$TEST_ROOT/malformed"
 malformed_dotfiles="$malformed/dotfiles"
 malformed_home="$malformed/home"
-mkdir -p "$malformed_dotfiles/config/node" "$malformed_dotfiles/bin/dotfiles/symlinks" "$malformed_home"
+mkdir -p "$malformed_dotfiles/bin/dotfiles/symlinks" "$malformed_home"
 cp "$VERIFIER_SOURCE" "$malformed_dotfiles/verify_install.sh"
-cp "$NODE_VERSION_SOURCE" "$malformed_dotfiles/config/node/version"
 cat >"$malformed_dotfiles/bin/dotfiles/symlinks/symlinks_manage.sh" <<'EOF'
 #!/usr/bin/env bash
 printf 'DOTFILES_SYMLINK_STATUS version=1 profile=%s records=1\n' "${DOTFILES_PROFILE:-desktop}"
@@ -497,5 +492,5 @@ assert_not_equals "$RUN_EXIT" 0 'verifier fails closed when the manager status o
 assert_contains "$RUN_OUTPUT" 'Managed symlink status contract' 'malformed manager output names the repair contract'
 assert_contains "$RUN_OUTPUT" 'DOTFILES_VERIFY_SUMMARY version=1 status=failed' 'malformed manager output remains a failed completion record'
 
-[[ "$assertion_count" -eq 88 ]] || fail "expected 88 assertions, observed $assertion_count"
+[[ "$assertion_count" -eq 86 ]] || fail "expected 86 assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

@@ -1,8 +1,9 @@
 // Public process seam for the Vault Steward CLI 2.0 front door: spawn `src/main.ts` (or $VAULT_STEWARD_COMMAND) against
 // the fixtures of harness.ts with a pinned environment, parse the one stdout envelope through a test-owned shape, and
 // derive the catalogue observation the station tests compare. Nothing here reads the production catalogue.
+import { readFileSync } from "node:fs"
 import { resolve } from "node:path"
-import type { Fixture } from "./harness.ts"
+import { type Fixture, write } from "./harness.ts"
 
 const sourceCommand = resolve(import.meta.dir, "../../src/main.ts")
 const command = process.env.VAULT_STEWARD_COMMAND ?? sourceCommand
@@ -73,4 +74,49 @@ export function observationOf(envelope: Envelope): { identity: string; nextActio
 	const result = envelope.result
 	const handoff = result.handoff as { owner?: string } | undefined
 	return { identity: JSON.stringify([result.commandIdentity, result.outcome, result.causeCode]), nextAction: typeof result.nextAction === "string" ? result.nextAction : null, handoffOwner: handoff?.owner ?? null }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Shared journey setup (one owner): begin a candidate, preview it, apply a preview, and the lock-owner witness.
+
+export function run(f: Fixture, args: string[], extra: Record<string, string> = {}): StewardRun {
+	return steward(f.vault, args, stewardEnvironment(f, extra))
+}
+
+// The candidate worktree of a fresh begin; `contents` null leaves the admitted path untouched (a no-changes candidate).
+export function candidate(f: Fixture, path = "projects/demo/GOAL.md", contents: string | null = "# Goal\n\nCompleted.\n"): string {
+	const started = must(run(f, ["begin", "--vault", f.vault, "--path", path]), "SUCCESS_COMPLETED")
+	const worktree = (data(started).candidate as { worktree: string }).worktree
+	if (contents !== null) write(worktree, path, contents)
+	return worktree
+}
+
+export function preview(f: Fixture, worktree: string, message = "docs: change"): string {
+	return data(must(run(f, ["finish", "--preview", "--worktree", worktree, "--message", message]), "SUCCESS_COMPLETED")).previewId as string
+}
+
+export function apply(f: Fixture, worktree: string, previewId: string): StewardRun {
+	return run(f, ["finish", "--apply", "--preview-id", previewId, "--worktree", worktree])
+}
+
+// Preview then apply; the caller asserts the apply's outcome.
+export function integrate(f: Fixture, worktree: string, message = "docs: change"): StewardRun {
+	return apply(f, worktree, preview(f, worktree, message))
+}
+
+// The filesystem owner record is the inter-process ordering witness. The 10 s bound only detects a hung child process;
+// the ordering oracle is the holder's fault barrier, published after that record.
+export async function waitForOwner(path: string, previous?: string): Promise<void> {
+	const deadline = Date.now() + 10_000
+	let observed: string | null = null
+	while (Date.now() < deadline) {
+		try {
+			observed = readFileSync(path, "utf8")
+			if (previous === undefined || observed !== previous) break
+		} catch {
+			observed = null
+		}
+		await Bun.sleep(20)
+	}
+	if (observed === null || (previous !== undefined && observed === previous)) throw new Error(`owner record ${path} was not published within 10 s`)
 }

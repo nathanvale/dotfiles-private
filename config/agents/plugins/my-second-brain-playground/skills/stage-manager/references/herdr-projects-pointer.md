@@ -28,7 +28,7 @@ session that inherited its `HERDR_PANE_ID`.
 ```markdown
 - Coordinator only: when your `HERDR_PANE_ID` equals `pane_id` in this
   project's `.state/coordinator.json`, invoke
-  `my-second-brain-playground:stage-manager` and finish its startup before any
+  `/my-second-brain-playground:stage-manager` and finish its startup before any
   cast, then read `library/stage-manager-handoff.md`. Otherwise keep the role
   your brief names.
 ```

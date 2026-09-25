@@ -18,12 +18,14 @@ owns the synthetic vault fixtures and exercises. This plugin owns the skills
 that will operate on those fixtures. Add each skill from scratch under
 `skills/<name>/SKILL.md` when its slice is ready to implement and exercise.
 
-The source lives beside `browser-lanes` in the personal plugin directory.
+The source lives in the personal plugin directory beside the other personal
+plugins.
 Harness installation and fresh-session discovery are separate from source
-creation. `vault-note-commits` lets parallel agents prepare isolated note
-commits and integrates disjoint candidates onto local `main` one at a time.
-It checks new files as well as existing edits, reports unchanged candidates
-as successful no-ops, and retains private completion receipts for safe retries.
+creation. The [Vault Steward CLI](skills/vault-steward/SKILL.md) lets parallel
+agents prepare isolated note commits and integrates disjoint candidates onto
+local `main` one at a time. It checks new files as well as existing edits,
+reports unchanged candidates as successful no-ops, and retains private
+completion receipts for safe retries.
 
 Use the playground's `bun run list --family <name>` to discover current notes.
 New notes appear through their metadata; family indexes remain curated
@@ -50,10 +52,12 @@ and activation are Ticket #52 evidence, not claims here). The
 [beads-workflow](skills/beads-workflow/SKILL.md) skill owns the LKR Beads
 route.
 
-The legacy checkpoint contract (`hooks/recovery-checkpoint`,
-`hooks/recover-context`, the Python owner, schema-v2 checkpoints) is provenance
-under Spec #57: kept byte-identical, registered by no manifest, never read by
-the registered hook. It remains a manual route whose help owns its syntax, and
+The legacy checkpoint contract (`hooks/recovery-checkpoint`, the Python
+checkpoint owner, schema-v2 checkpoints) is provenance under Spec #57: kept
+byte-identical, registered by no manifest, never read by the registered hook.
+[Spec #120](https://github.com/nathanvale/dotfiles-private/issues/120) retired
+the unregistered `hooks/recover-context` launcher and the Python hook mode. The
+checkpoint launcher remains a manual route whose help owns its syntax, and
 recovery traces record only that legacy route. Resolve the installed plugin
 root from the selected Harness metadata, assign it to `PLUGIN_ROOT`, then:
 
@@ -71,7 +75,7 @@ not that vault document.
 
 The legacy writer validates the configured playground, project files, Agent
 Ledger Register, and accepted Task before replacing its checkpoint; the legacy
-hook delivered verified pointers and one fixed recovery action. Raw transcripts
+launcher's `recover` returns verified pointers and one fixed recovery action. Raw transcripts
 remain with their Harness and never become checkpoint or binding input.
 
 Recovery traces are private operational evidence under XDG state. They do not

@@ -86,7 +86,7 @@ Created by `setup.sh` to track installation progress:
 | 1 | Foundation | ~2m | Xcode CLT + Homebrew + repo clone |
 | 2 | AI Rescue | ~30s | Native Claude Code + managed Codex CLIs |
 | 3 | Core Tools | ~3m | Essential CLI: git, zsh, tmux, fzf, ripgrep, bat, eza, gh... |
-| 4 | Development | ~5m | Language runtimes: bun, python, node/fnm, pnpm |
+| 4 | Development | ~5m | Language runtimes: bun, python, pnpm; Node via Mise toolchain apply |
 | 5 | Applications | ~10m | GUI apps from Brewfile (profile-aware) |
 | 6 | Configuration | ~2m | Symlinks + macOS preferences |
 
@@ -149,7 +149,7 @@ Defaults to `desktop` if unset.
 | Category | Profile | Examples |
 |----------|---------|----------|
 | Core CLI | all | tmux, zoxide, ripgrep, bat, eza, fzf, gh, jq, lazygit |
-| Dev tools | all | bun, python, uv, pnpm, fnm, ast-grep |
+| Dev tools | all | bun, python, uv, pnpm, mise, ast-grep |
 | Shell | all | zsh, zsh-syntax-highlighting, zsh-autosuggestions |
 | AI CLI | all | aider, gemini-cli, whisper-cpp |
 | Cloud | all | awscli, az, flyctl |
@@ -336,7 +336,7 @@ with-one-password-token inject <ENV_KEY> <op://reference> -- <command>
 | Symlink shows WRONG | Target changed | `symlinks_manage.sh --link --force` |
 | `with-one-password-token check` blocked | OP_SERVICE_ACCOUNT_TOKEN missing or file mode wrong | Add to `~/code/dotfiles/.env`, mode 0600 |
 | `brew bundle` ignores env var | Missing HOMEBREW_ prefix | Rename to `HOMEBREW_<name>` |
-| Node not found in non-interactive shell | fnm alias not in PATH | Check `~/.local/share/fnm/aliases/default/bin` |
+| Node not found in non-interactive shell | No applied Mise revision selected | `bin/dotfiles/toolchain status --json`; apply with `toolchain update --apply` |
 | macOS prefs not applied | Needs restart | `killall SystemUIServer` or restart |
 | `gh` auth missing after fresh setup | `hosts.yml` not generated | Run `symlinks_manage.sh --link` then `gh auth login` |
 | `hosts.yml` shows in `git status` | Not gitignored | Check `.gitignore` has `config/gh/hosts.yml` entry |
