@@ -10,6 +10,8 @@ whole `# Instructions` section into every thread brief, so every worker reads
 this line too. Prose scoping cannot keep a worker out. The role therefore
 turns on an observable pane check: your own `HERDR_PANE_ID` must equal the
 `pane_id` Herdr Projects recorded in `.state/coordinator.json`, read-only.
+The skill also confirms you are that pane's own agent process, not a nested
+session that inherited its `HERDR_PANE_ID`.
 
 ## Pointer text
 

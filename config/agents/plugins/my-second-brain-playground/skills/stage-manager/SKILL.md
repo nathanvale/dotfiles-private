@@ -20,14 +20,21 @@ too.
 1. Read your own `HERDR_PANE_ID`.
 2. Read the coordinator pane Herdr Projects recorded, read-only:
    `pane_id` in `<project folder>/.state/coordinator.json`.
-3. The role is yours only when the two values are equal and a grant names
-   you: the project's `PROJECT.md` pointer
+3. Confirm you are that pane's agent, not a session nested inside it. A
+   subagent or child process inherits `HERDR_PANE_ID`. The agent pid listed
+   by `herdr pane process-info --pane "$HERDR_PANE_ID"` under
+   `foreground_processes` must equal your own agent pid, found by the parent
+   chain walk in startup step 2.
+4. The role is yours only when the pane IDs are equal, the pids are equal,
+   and a grant names you: the project's `PROJECT.md` pointer
    ([pointer text](references/herdr-projects-pointer.md)) or Nathan in chat.
 
-A missing value, a mismatch, or a brief under `.herdr-project/` means you are
-a worker. Keep the worker role your brief names, such as Code Implementer, and
-report the mismatch in your thread report. Outside Herdr, only Nathan naming
-you Stage Manager in chat grants the role.
+Inside Herdr (`HERDR_PANE_ID` set), the pane check is required for every
+grant, including Nathan's. Invoking this skill is never itself a grant. A
+missing value, a mismatch, or a brief under `.herdr-project/` means you are a
+worker: keep the worker role your brief names, such as Code Implementer, and
+report the mismatch in your thread report. Outside Herdr, only Nathan's
+explicit chat statement grants the role.
 
 ## Start up before any cast
 
@@ -39,14 +46,24 @@ context, not a grant.
    `../../.claude-plugin/plugin.json`, plus the last commit touching this
    directory when it is loaded from a Git checkout (`uncommitted` when dirty).
    Done when both values are written down.
-2. **Observe.** Record your own Harness, its version, your exact model ID and
-   your effort from evidence you can read yourself: the Harness's statement of
-   the running model in your system context, and your process environment.
-   The guide for your Harness names the exact variables. A status screen
-   such as `/status` counts only when Nathan reports what it shows.
-   `PROJECT.md` `coordinator_agent`, launch flags, config defaults, documented
-   defaults and aliases such as `opus` are claims, not observations. Done when
-   each value is observed or marked `unknown`.
+2. **Observe.** Before any guide lookup, record your own Harness, its
+   version, your exact model ID and your effort from evidence you can read
+   yourself:
+   - **Launch argv** of your own agent process: the nearest ancestor on the
+     parent chain whose argv0 is an agent CLI, such as `claude` or `codex`.
+     Walk the chain with `ps -o pid=,ppid=,command= -p <pid>`, starting from
+     your shell's `$PPID` (verified on 2026-09-25). Its argv0 names the
+     Harness, and a `--model <id>` or `-m <id>` value is observed launch
+     evidence. `herdr pane process-info` reports the pane's foreground agent,
+     which is a parent process when you run nested, such as a subagent or a
+     `claude -p` child that inherits `HERDR_PANE_ID`.
+   - **Harness self-evidence** named in `references/harnesses/<harness>.md`.
+   - **Nathan's chat statement** of the model.
+
+   An alias or family name, such as `opus` or `gpt-6`, is never an exact ID,
+   even when it appears in argv. Brief text, `PROJECT.md` settings, config
+   files and documented defaults are claims. Done when each value is observed
+   or marked `unknown`.
 3. **Resolve.** Look up `guides/<harness>/<model-id>.md` beside this file,
    where `<harness>` is the lowercase hyphenated name (`claude-code`, `codex`). It
    matches only when its front matter `harness` and `model_id` equal the
@@ -54,7 +71,8 @@ context, not a grant.
    is at or above `harness_min_version`. Done when you hold one matching guide
    or a named miss.
 4. **Verify.** Read the matched guide in full. Confirm its front matter names
-   `model`, `model_id`, `harness`, `harness_min_version`, `author`,
+   `model`, `model_id`, `harness`, `harness_min_version`, `author` (role,
+   `native_session`, and `herdr_projects_thread` or `herdr_pane`),
    `reviewed` (the author's source-check date) and at least one source. Then
    compute the sha256 of the guide file's bytes as loaded
    (`shasum -a 256 <guide>`) and check its
@@ -69,15 +87,20 @@ context, not a grant.
 
 ### Refuse on a miss
 
-An `unknown` identity, a missing guide or a failed field check makes the
-verdict `refused`. Refuse to cast and name the repair in the receipt:
+Each cause refuses casting separately. Name its repair in the receipt.
+
+An exact model ID or Harness that stays `unknown` after step 2:
+
+> Casting refused: identity unavailable. Repair: launch with an explicit
+> model and retry, or Nathan confirms the model in chat.
+
+A missing guide or a failed field check:
 
 > Casting refused: no exact guide for `<model-id>` in `<harness>`. Repair: add
 > `skills/stage-manager/guides/<harness>/<model-id>.md` in the Playground
 > plugin, citing the vendor's official documentation.
 
-A missing review record, a verdict other than `accepted`, or a
-`guide_sha256` that differs from the loaded guide also makes it `refused`:
+A missing review record, or one that fails any [review check](#review-record):
 
 > Casting refused: the guide for `<model-id>` in `<harness>` has no accepted
 > review of its current bytes. Repair: request an independent guide review of
@@ -94,14 +117,27 @@ The review record sits beside its guide as `<model-id>.review.md`. Its front
 matter holds:
 
 - `reviewer_role`: the reviewer's Cast Role, such as `Code Reviewer`.
+- `reviewer`: `native_session`, and `herdr_projects_thread` or `herdr_pane`.
 - `date`: the review date.
 - `verdict`: `accepted`, or another verdict, which refuses.
 - `guide_sha256`: the sha256 of the exact guide bytes reviewed.
+- `handback_path` and `handback_sha256`: the reviewer's own Handback file and
+  the sha256 of its bytes.
 
-Its body quotes the reviewer's Handback. The Stage Manager, or an implementer
-quoting that Handback, writes it; the guide's author never issues its own
-review. The hash covers content rather than a Git commit, so installed copies
-without Git still verify, and writing the record leaves the guide unchanged.
+Step 4 accepts only when all of these hold:
+
+- The record's `verdict` is `accepted`, and its `guide_sha256` equals the
+  loaded guide's sha256.
+- The Handback file exists and hashes to `handback_sha256`.
+- It contains the line `GUIDE_VERDICT: accept guide_sha256=<hash>`, and
+  `<hash>` equals the loaded guide's sha256.
+- The `reviewer` identity differs from the guide's `author` identity in both
+  native session and thread or pane.
+
+The Stage Manager, or an implementer quoting the Handback, writes the record;
+the guide's author never issues its own review. The hash covers content
+rather than a Git commit, so installed copies without Git still verify, and
+writing the record leaves the guide unchanged.
 
 ## Cast a worker
 
@@ -116,10 +152,10 @@ without Git still verify, and writing the record leaves the guide unchanged.
    the Handback, and the worker role. Frame it with the worker's guide.
 4. Keep the brief a worker's brief. It grants the worker role only: leave out
    this skill, coordinator instructions and the Stage Manager handoff. Herdr
-   Projects copies `PROJECT.md` instructions into every brief, so keep any
-   coordinator line there scoped to the project folder.
+   Projects copies `PROJECT.md` instructions into every brief, so any
+   coordinator line there stays gated on the pane check.
 5. Label the pane `Role • Model` from the observed launch. Record the cast
-   (thread, tab, pane, route, guide revision) as a comment on the worker's Bead.
+   (thread, tab, pane, route, guide sha256) as a comment on the worker's Bead.
 
 ## Authority
 
@@ -140,5 +176,5 @@ without Git still verify, and writing the record leaves the guide unchanged.
 - **To Nathan:** what was done, the PR's state, what it needs from Nathan and
   what it assumed.
 - **To your successor:** before a pause or relaunch, write a handoff with the
-  role revision, guide revision, live identities and next safe action. The
+  role revision, guide sha256, live identities and next safe action. The
   successor reruns startup before acting on it.
