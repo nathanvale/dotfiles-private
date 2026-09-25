@@ -16,16 +16,24 @@
 // pure: it refuses a bad action, selector, operation, or input before any
 // dependency, credential, or Provider capability.
 //
-// An execute plan is for a connector whose semantics span several calls. Its
-// execute step may start only the binary selectMcporter() returns, only with a
-// planDispatcherRoute plan from bin/provider-route.ts, and reaches credential
-// custody only through the adapter's own internal roles, so the front-door
-// process never holds a credential value.
+// An execute plan is for a connector whose semantics span several calls. The
+// only MCPorter its execute step may start is the one selectMcporter()
+// returns, only with a planDispatcherRoute plan from bin/provider-route.ts;
+// any other process it starts is one of the adapter's own internal roles,
+// which alone reach credential custody, so the front-door process never holds
+// a credential value.
 //
 // prepareSchema is the optional live-schema seam for a connector that needs
 // an adapter to reach its transport. It answers like prepare, and a transport
 // plan must be a read: the core never runs attended login for schema. An
 // adapter without it keeps credentialed schema unsupported.
+//
+// prepareWrite and prepareRecover are the optional journaled-write seams:
+// `run ... --preview | --apply <previewId>` and `recover`. They answer like
+// prepare, refusing a bad request before any capability, and their only
+// non-refusal answer is an execute plan, whose Executed outcome names every
+// journal and Provider effect it caused. An adapter without them has no
+// writes: the core refuses through the catalogue.
 import type { ConnectorManifest } from "../manifest.ts";
 import type { EnvironmentSource } from "../safe-environment.ts";
 
@@ -55,6 +63,25 @@ export interface AdapterRequest {
 }
 
 export type SchemaRequest = Omit<AdapterRequest, "action">;
+
+// A preview records the exact write durably; an apply sends only what the
+// named preview recorded.
+export type WritePhase = { readonly kind: "preview" } | { readonly kind: "apply"; readonly previewId: string };
+
+export interface WriteRequest extends SchemaRequest {
+	readonly operation: string;
+	readonly input: Readonly<Record<string, unknown>> | null;
+	readonly phase: WritePhase;
+}
+
+// Without a runId, recover lists the open receipts; with one, it shows that
+// receipt, or settles it on read-back evidence, or releases its object lock.
+export type Recovery = { readonly kind: "inspect" } | { readonly kind: "adjudicate"; readonly input: Readonly<Record<string, unknown>> } | { readonly kind: "unlock" };
+
+export interface RecoverRequest extends SchemaRequest {
+	readonly runId: string | null;
+	readonly recovery: Recovery;
+}
 
 // Each kind maps to one core cause row; connectorCause is the adapter's own
 // closed code and is reported beside it.
@@ -94,11 +121,25 @@ export interface ExecutionCapabilities {
 	internalCommand(role: string): readonly string[];
 }
 
+// A journal record an execute step completed on its own: a write preview, an
+// adjudication that settled a receipt, or an operator unlock.
+export type RecordedEffect = "write-preview" | "write-adjudication" | "write-unlock";
+
 // failed: a read that did not complete, with no external effect.
+// recorded: one journal record completed, and nothing was sent.
+// applied: the write receipt and the Provider write both completed.
+// effect-unknown: the write receipt completed and the Provider write may have
+// happened; the object stays blocked until recovery settles it.
+// failed-after-record: the write receipt completed and the Provider is proven
+// unchanged.
 export type Executed =
 	| { readonly kind: "success"; readonly data: Record<string, unknown> }
 	| { readonly kind: "refused"; readonly refusal: AdapterRefusal }
-	| { readonly kind: "failed"; readonly connectorCause: string; readonly repair: string };
+	| { readonly kind: "failed"; readonly connectorCause: string; readonly repair: string }
+	| { readonly kind: "recorded"; readonly effect: RecordedEffect; readonly data: Record<string, unknown> }
+	| { readonly kind: "applied"; readonly data: Record<string, unknown> }
+	| { readonly kind: "effect-unknown"; readonly data: Record<string, unknown>; readonly repair: string }
+	| { readonly kind: "failed-after-record"; readonly connectorCause: string; readonly data: Record<string, unknown>; readonly repair: string };
 
 export type Prepared =
 	| { readonly kind: "refused"; readonly refusal: AdapterRefusal }
@@ -128,4 +169,6 @@ export interface Adapter {
 	attemptAuth?(manifest: ConnectorManifest): Promise<AuthAttempt>;
 	prepare?(request: AdapterRequest): Prepared;
 	prepareSchema?(request: SchemaRequest): Prepared;
+	prepareWrite?(request: WriteRequest): Prepared;
+	prepareRecover?(request: RecoverRequest): Prepared;
 }

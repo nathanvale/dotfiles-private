@@ -350,8 +350,15 @@ async function readBackFor(route: Route, operation: WriteOperation, input: Write
 	return readBackEvidence(operation, input, revisionMatches, read.data, baseline, route.trustedOrigin);
 }
 
+// An open receipt that never reached the send mark: the journal recorded the
+// write but could not release or settle it, so nothing was sent and the
+// object stays blocked until recovery.
+const RECORDED_UNSENT =
+	"the write was recorded but never sent, and its receipt stays open and blocks the object; once no connectors process is running, remove any leftover journal meta-lock by hand, then unlock and adjudicate this run with the same input";
+
 function receiptOutcome(receipt: Receipt, attempt: Attempt | null): Outcome {
 	const base = { runId: receipt.runId, previewId: receipt.previewId, operation: receipt.operation, provider: receipt.provider, objectIdentity: receipt.objectIdentity, status: receipt.status, send: receipt.send, effects: receipt.effects };
+	if (receipt.status === "intent" && receipt.send === "unsent") return { cause: "refused-state", data: base, detail: RECORDED_UNSENT, transactionState: "unchanged", effects: [], uncertain: [] };
 	switch (receipt.status) {
 		case "completed":
 			return { cause: "success", data: { ...base, reply: attempt?.data ?? null }, detail: null, transactionState: "completed", effects: receipt.effects.map(effectId), uncertain: [] };
@@ -416,7 +423,8 @@ export function receiptFlow(session: Session, runId: string): Outcome {
 	}
 }
 
-// Operator lock recovery through a receipt or its preview. A record from a
+// Operator lock recovery through a receipt or its preview; unlocked says
+// whether a lock was actually removed. A record from a
 // retired Provider is refused here as everywhere else: its object stays
 // blocked until an operator resolves it by hand, never through this route.
 export function unlockFlow(session: Session, runId: string): Outcome {
@@ -425,14 +433,12 @@ export function unlockFlow(session: Session, runId: string): Outcome {
 		try {
 			const receipt = journal.receipt(runId);
 			if (receipt.provider !== PROVIDER) return refusal("refused-state", `${REPAIR_TEXT["refused-state"]}; receipt-provider-retired`);
-			journal.unlock(receipt.objectIdentity);
-			return success({ runId, objectIdentity: receipt.objectIdentity, unlocked: true });
+			return success({ runId, objectIdentity: receipt.objectIdentity, unlocked: journal.unlock(receipt.objectIdentity) });
 		} catch (error) {
 			if (!(error instanceof JournalError) || error.code !== "receipt-unknown") throw error;
 			const preview = journal.preview(runId);
 			if (preview.provider !== PROVIDER) return refusal("refused-preview", `${REPAIR_TEXT["refused-preview"]}; preview-provider-retired`);
-			journal.unlock(preview.objectIdentity);
-			return success({ previewId: preview.previewId, objectIdentity: preview.objectIdentity, unlocked: true });
+			return success({ previewId: preview.previewId, objectIdentity: preview.objectIdentity, unlocked: journal.unlock(preview.objectIdentity) });
 		}
 	} catch (error) {
 		return journalRefusal(error);
@@ -466,14 +472,16 @@ export async function adjudicateFlow(session: Session, runId: string, rawInput: 
 	}
 	if (receipt.status === "completed" || receipt.status === "unchanged") return refusal("refused-evidence", `${REPAIR_TEXT["refused-evidence"]}; receipt-already-resolved`);
 	if (receipt.provider !== PROVIDER) return refusal("refused-state", `${REPAIR_TEXT["refused-state"]}; receipt-provider-retired`);
+	// The input is checked against the receipt before any credential or
+	// Provider capability, so a wrong input starts nothing.
+	const canonical = canonicalAdjudicationInput(receipt, rawInput);
+	if (isOutcome(canonical)) return canonical;
 	const spec = OPERATION_SPECS[receipt.operation];
 	const bound = await session.binding(spec.product);
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
 	const route = session.route(spec.product, bound.binding);
 	const ready = await route.ready();
 	if (ready) return failed(ready);
-	const canonical = canonicalAdjudicationInput(receipt, rawInput);
-	if (isOutcome(canonical)) return canonical;
 	const digestOf = (observed: string) => new Bun.CryptoHasher("sha256").update(observed).digest("hex");
 	const readBack = await readBackFor(route, receipt.operation, canonical, (observed) => receipt.revisionDigest !== null && digestOf(observed) === receipt.revisionDigest, receipt.baseline);
 	if (readBack.kind === "indeterminate") return refusal("refused-evidence", `${REPAIR_TEXT["refused-evidence"]}; ${readBack.reason}`);

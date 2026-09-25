@@ -556,6 +556,48 @@ describe("journaled writes", () => {
 		expect(readJsonDir(receiptsDir()).map((entry) => entry.status)).toEqual(["completed"]);
 	});
 
+	test("a failed object-lock release after the durable intent answers with the recorded, unsent receipt and never sends", async () => {
+		let armed = false;
+		const tampered: string[] = [];
+		const journal: Dependencies["journal"] = (tenant) =>
+			openJournal(tenant, {
+				stateRoot,
+				now: () => NOW,
+				hooks: {
+					// Once armed, a foreign holder replaces the object lock before its release; the meta-lock is left alone.
+					beforeRelease: (lockFile) => {
+						if (!armed || lockFile.endsWith(".meta")) return;
+						tampered.push(path.basename(lockFile));
+						writeFileSync(lockFile, JSON.stringify({ pid: process.pid, lockId: "foreign", at: NOW }), { mode: 0o600 });
+					},
+				},
+			});
+		const { transport, calls } = fakeTransport({ [`${CJ}.jira_add_comment`]: commentReply });
+		const dependencies = deps({ transport, journal });
+		const preview = previewData(await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--preview"], dependencies));
+		armed = true;
+		const envelope = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", preview.previewId], dependencies);
+		armed = false;
+		expect(tampered).toHaveLength(1);
+		// Disk oracle, read without the journal: one open receipt, never marked sent, and the preview consumed.
+		const receipts = readJsonDir(receiptsDir());
+		expect(receipts.map((entry) => [entry.previewId, entry.status, entry.send, entry.effects])).toEqual([[preview.previewId, "intent", "unsent", []]]);
+		expect(readJsonDir(previewsDir()).map((entry) => [entry.previewId, entry.status])).toEqual([[preview.previewId, "consumed"]]);
+		// The envelope acknowledges that recorded receipt as an unchanged failure, never an external or uncertain effect.
+		const data = envelope.result.data as { runId: string; previewId: string; status: string; send: string };
+		expect([data.runId, data.previewId, data.status, data.send]).toEqual([receipts[0]?.runId as string, preview.previewId, "intent", "unsent"]);
+		expect([envelope.result.outcome, envelope.result.transactionState, envelope.result.retryable]).toEqual(["refused", "unchanged", false]);
+		expect(envelope.result.causeCode).toBe("refused-state");
+		expect(envelope.result.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true });
+		expect(envelope.result.repairAction).toEqual(expect.stringContaining("unlock"));
+		// The Provider write tool was never called, and a second apply of the same preview cannot send either.
+		expect(calls.filter((call) => call.tool === "jira_add_comment")).toEqual([]);
+		const again = await dispatch(["issue.comment", "--input", JSON.stringify(COMMENT), "--apply", preview.previewId], dependencies);
+		expect(again.result.outcome).toBe("refused");
+		expect(calls.filter((call) => call.tool === "jira_add_comment")).toEqual([]);
+		expect(readJsonDir(receiptsDir())).toHaveLength(1);
+	});
+
 	test("adjudication does not count an identical historical Jira comment as a newly completed effect", async () => {
 		const historical = { ok: true as const, data: { key: "PROJ-1", fields: { comment: { comments: [{ id: "777", body: COMMENT.body }] } } } };
 		const { transport } = fakeTransport({ [`${CJ}.jira_add_comment`]: failure("failed-transport"), [`${CJ}.jira_get_issue`]: historical });

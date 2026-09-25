@@ -14,7 +14,7 @@
 // adapter registry (bin/adapters/index.ts).
 import { closeSync, existsSync, openSync } from "node:fs";
 import path from "node:path";
-import type { Adapter, AdapterAction, AdapterRefusal, AdapterRefusalKind, Executed, ExecutionCapabilities, InternalRole, LocalEffect, LoginOption, Prepared, SchemaRequest } from "./adapters/contract.ts";
+import type { Adapter, AdapterAction, AdapterRefusal, AdapterRefusalKind, Executed, ExecutionCapabilities, InternalRole, LocalEffect, LoginOption, Prepared, Recovery, SchemaRequest, WritePhase } from "./adapters/contract.ts";
 import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
 import { discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
@@ -33,8 +33,8 @@ const SIGNAL_EXITS = { "130": "SIGINT", "143": "SIGTERM" } as const;
 const EFFECT_EXCLUSIONS = [
 	"any credential value read by the front-door process; a 1Password-custody credential is read only by this executable started in its adapter's internal custody or Provider role, fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
 	"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
-	"any provider write operation",
-	"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, and auth logout for every connector; deps covers only explicit MCPorter repair",
+	"any provider write without a recorded preview and a durable write receipt, and any retry or replay of a write whose effect is unknown",
+	"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, run --preview or --apply and recover for one with no write or recovery step, and auth logout for every connector; deps covers only explicit MCPorter repair",
 ] as const;
 
 // The closed auth verb vocabulary (Spec AC19). Each connector's adapter
@@ -100,7 +100,11 @@ export type CauseCode =
 	| "USAGE_ADAPTER_REFUSED"
 	| "DOMAIN_ADAPTER_REFUSED"
 	| "SCHEMA_ADAPTER_REFUSED"
-	| "DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION";
+	| "DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION"
+	| "SUCCESS_RUN_RECORDED"
+	| "SUCCESS_RUN_APPLIED"
+	| "DOMAIN_RUN_EFFECT_UNKNOWN"
+	| "DOMAIN_RUN_FAILED_RECORDED";
 
 let bootstrapCompleted = false;
 let recoveryCompleted = false;
@@ -141,6 +145,11 @@ const COMMANDS: readonly CommandDescriptor[] = [
 	},
 	{ commandIdentity: "connectors.auth", route: ["auth"], effectClass: "external", summary: "Inspect or perform one connector's declared auth verb through its packaged adapter; login is attended only and alone takes --no-browser and --reset" },
 	{ commandIdentity: "connectors.run", route: ["run"], effectClass: "repository-local", summary: "Run one declared read operation for a connector through its packaged adapter and the selected MCPorter" },
+	{ commandIdentity: "connectors.run.preview", route: ["run", "--preview"], effectClass: "repository-local", summary: "Record a durable preview of one declared write through the connector's packaged adapter; nothing is sent" },
+	{ commandIdentity: "connectors.run.apply", route: ["run", "--apply"], effectClass: "external", summary: "Apply one recorded preview with its identical input: a durable receipt first, then at most one Provider write" },
+	{ commandIdentity: "connectors.recover", route: ["recover"], effectClass: "inspect", summary: "List a connector's open write receipts, or show one with --run" },
+	{ commandIdentity: "connectors.recover.adjudicate", route: ["recover", "--adjudicate"], effectClass: "repository-local", summary: "Settle one open write receipt on read-back evidence, with the write's identical input" },
+	{ commandIdentity: "connectors.recover.unlock", route: ["recover", "--unlock"], effectClass: "repository-local", summary: "Release the write lock a receipt (by runId) or a preview (by previewId) left behind once its holder has exited" },
 ];
 
 // Contract Core 2.0 requires sorted, unique availablePaths, independent of
@@ -341,6 +350,12 @@ const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	DOMAIN_ADAPTER_REFUSED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
 	SCHEMA_ADAPTER_REFUSED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
 	DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	SUCCESS_RUN_RECORDED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	SUCCESS_RUN_APPLIED: { outcome: "success", effectClass: "external", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	// A write that may have reached the Provider is not an internal defect:
+	// like DOMAIN_AUTH_LOGIN_UNKNOWN, it is a domain failure with an unknown state.
+	DOMAIN_RUN_EFFECT_UNKNOWN: { outcome: "failed", effectClass: "external", transactionState: "unknown", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	DOMAIN_RUN_FAILED_RECORDED: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
 };
 
 // Scalar fields a cause row pins to one exact value; table-driven so this
@@ -376,18 +391,47 @@ function checkCauseRowRepairAction(result: Envelope["result"], row: CauseRow, ca
 // account effect belong to run and adapter-backed schema alone.
 const SETUP_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_COMPLETED", "DOMAIN_SETUP_FAILED_UNCHANGED", "DOMAIN_SETUP_FAILED_PARTIAL", "SCHEMA_SETUP_CONFIG_INVALID", "USAGE_SETUP_MALFORMED", "INTERNAL_SETUP_UNKNOWN", "INTERNAL_SETUP_AFTER_COMMIT"]);
 const ADAPTER_READ_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_AFTER_ACCOUNT_EFFECT", "TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT", "DOMAIN_PROVIDER_CALL_FAILED", "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT"]);
+// A write preview, apply, or adjudication reads the Provider before it
+// records anything, so its read may fail like a run's.
+const PROVIDER_READ_COMMANDS: ReadonlySet<string> = new Set(["connectors.run", "connectors.schema", "connectors.run.preview", "connectors.run.apply", "connectors.recover.adjudicate"]);
 
 function checkCauseCommand(cause: CauseCode, commandIdentity: string): string[] {
 	if (SETUP_CAUSES.has(cause) !== (commandIdentity === "connectors.setup")) return ["setup cause and command identity must agree"];
-	if (ADAPTER_READ_CAUSES.has(cause) && commandIdentity !== "connectors.run" && commandIdentity !== "connectors.schema") return ["adapter read cause and command identity must agree"];
+	if (ADAPTER_READ_CAUSES.has(cause) && !PROVIDER_READ_COMMANDS.has(commandIdentity)) return ["adapter read cause and command identity must agree"];
 	return [];
+}
+
+// Journaled-write effects, in the one order an inventory may list them.
+const WRITE_EFFECT_ORDER: readonly string[] = ["write-preview", "write-receipt", "provider-write", "write-adjudication", "write-unlock"];
+const NO_WRITE_EFFECTS = { completed: [], uncertain: [] } as const;
+
+// Each journaled-write station: its cause and command identity, and the exact
+// write effects it reports. Every other envelope reports none.
+const WRITE_STATIONS: Readonly<Record<string, { readonly completed: readonly string[]; readonly uncertain: readonly string[] }>> = {
+	"SUCCESS_RUN_RECORDED connectors.run.preview": { completed: ["write-preview"], uncertain: [] },
+	"SUCCESS_RUN_RECORDED connectors.recover.adjudicate": { completed: ["write-adjudication"], uncertain: [] },
+	"SUCCESS_RUN_RECORDED connectors.recover.unlock": { completed: ["write-unlock"], uncertain: [] },
+	"SUCCESS_RUN_APPLIED connectors.run.apply": { completed: ["write-receipt", "provider-write"], uncertain: [] },
+	"DOMAIN_RUN_EFFECT_UNKNOWN connectors.run.apply": { completed: ["write-receipt"], uncertain: ["provider-write"] },
+	"DOMAIN_RUN_FAILED_RECORDED connectors.run.apply": { completed: ["write-receipt"], uncertain: [] },
+};
+const WRITE_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_RUN_RECORDED", "SUCCESS_RUN_APPLIED", "DOMAIN_RUN_EFFECT_UNKNOWN", "DOMAIN_RUN_FAILED_RECORDED"]);
+
+const writeEffects = (effects: unknown): string => JSON.stringify(Array.isArray(effects) ? effects.filter((effect) => WRITE_EFFECT_ORDER.includes(effect as string)) : []);
+
+function checkWriteStation(result: Envelope["result"]): string[] {
+	const station = WRITE_STATIONS[`${result.causeCode} ${result.commandIdentity}`];
+	if (WRITE_CAUSES.has(result.causeCode) && !station) return ["write cause and command identity must agree"];
+	const expected = station ?? NO_WRITE_EFFECTS;
+	const matches = writeEffects(result.effects.completed) === JSON.stringify(expected.completed) && writeEffects(result.effects.uncertain) === JSON.stringify(expected.uncertain);
+	return matches ? [] : [`${result.causeCode} under ${result.commandIdentity} reports the wrong write effects`];
 }
 
 function checkCauseRow(result: Envelope["result"]): string[] {
 	const row = ADMITTED_CAUSE_ROWS[result.causeCode as CauseCode];
 	if (!row) return [`result.causeCode ${JSON.stringify(result.causeCode)} is not one of T1's admitted cause rows`];
 	const cause = result.causeCode;
-	return [...checkCauseCommand(cause, result.commandIdentity), ...checkCauseRowScalars(result, row, cause), ...checkCauseRowData(result, row, cause), ...checkCauseRowRepairAction(result, row, cause)];
+	return [...checkCauseCommand(cause, result.commandIdentity), ...checkWriteStation(result), ...checkCauseRowScalars(result, row, cause), ...checkCauseRowData(result, row, cause), ...checkCauseRowRepairAction(result, row, cause)];
 }
 
 // T1 never attempts an effect, so every envelope's effects are vacuously
@@ -398,17 +442,19 @@ function checkCauseRow(result: Envelope["result"]): string[] {
 const ADMITTED_EFFECTS: Readonly<Record<"selection" | "remaining" | "uncertain", readonly string[]>> = {
 	selection: ["[]", '["mcporter-bootstrap"]', '["mcporter-repair"]', '["mcporter-recovery"]', '["mcporter-recovery","mcporter-repair"]'],
 	remaining: ["[]"],
-	uncertain: ["[]", '["mcporter-repair"]', '["mcporter-recovery"]', '["account-grant"]'],
+	uncertain: ["[]", '["mcporter-repair"]', '["mcporter-recovery"]', '["account-grant"]', '["provider-write"]'],
 };
 
 // A completed inventory is one selection inventory followed by connector
-// account effects, each at most once and in this order.
+// account effects and then journaled-write effects, each at most once and in
+// this order.
 const ACCOUNT_EFFECT_ORDER: readonly string[] = ["account-vault", "mcporter-vault-file", "account-grant"] satisfies readonly (LocalEffect | "account-grant")[];
+const CONNECTOR_EFFECT_ORDER: readonly string[] = [...ACCOUNT_EFFECT_ORDER, ...WRITE_EFFECT_ORDER];
 
 function isAdmittedCompleted(completed: readonly unknown[]): boolean {
-	const split = completed.findIndex((effect) => ACCOUNT_EFFECT_ORDER.includes(effect as string));
+	const split = completed.findIndex((effect) => CONNECTOR_EFFECT_ORDER.includes(effect as string));
 	const selection = split < 0 ? completed : completed.slice(0, split);
-	const positions = split < 0 ? [] : completed.slice(split).map((effect) => ACCOUNT_EFFECT_ORDER.indexOf(effect as string));
+	const positions = split < 0 ? [] : completed.slice(split).map((effect) => CONNECTOR_EFFECT_ORDER.indexOf(effect as string));
 	return ADMITTED_EFFECTS.selection.includes(JSON.stringify(selection)) && positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]!));
 }
 
@@ -591,6 +637,14 @@ function helpText(): string {
 		"                                                  Print the consent URL instead of opening a browser; clear the cached grant first",
 		"  run <connector> [--select name=value] <operation> [--input <json-object>]",
 		"                                                  Run one declared read operation through MCPorter",
+		"  run <connector> [--select name=value] <write-operation> --input <json-object> --preview",
+		"                                                  Record a durable preview of one write; nothing is sent",
+		"  run <connector> [--select name=value] <write-operation> --input <json-object> --apply <previewId>",
+		"                                                  Apply that preview with the identical input, at most once",
+		"  recover <connector> [--select name=value] [--run <runId> [--adjudicate --input <json-object>]]",
+		"                                                  List open write receipts, show one, or settle it on read-back",
+		"  recover <connector> [--select name=value] --run <runId|previewId> --unlock",
+		"                                                  Release the lock a receipt or preview left behind once its holder exited",
 		"",
 		"Examples:",
 		`  ${PROGRAM} --discover --json`,
@@ -1291,10 +1345,18 @@ async function fetchKeylessSchema(id: string, registryPath: string, server: stri
 
 // schema is the core's own action: an adapter answers it through
 // prepareSchema, never through prepare.
-type CommandAction = AdapterAction | { readonly kind: "schema" };
+// write and recover are the core's journaled-write actions: an adapter
+// answers them through prepareWrite and prepareRecover.
+type CommandAction =
+	| AdapterAction
+	| { readonly kind: "schema" }
+	| { readonly kind: "write"; readonly operation: string; readonly input: Readonly<Record<string, unknown>> | null; readonly phase: WritePhase }
+	| { readonly kind: "recover"; readonly runId: string | null; readonly recovery: Recovery };
+
+type AdapterCommandIdentity = "connectors.auth" | "connectors.run" | "connectors.run.preview" | "connectors.run.apply" | "connectors.schema" | "connectors.recover" | "connectors.recover.adjudicate" | "connectors.recover.unlock";
 
 interface AdapterCommand {
-	readonly commandIdentity: "connectors.auth" | "connectors.run" | "connectors.schema";
+	readonly commandIdentity: AdapterCommandIdentity;
 	readonly id: string;
 	readonly given: ReadonlyMap<string, string>;
 	readonly action: CommandAction;
@@ -1303,7 +1365,8 @@ interface AdapterCommand {
 type TransportPlan = Extract<Prepared, { kind: "transport" }>;
 
 const AUTH_USAGE = "auth <verb> <connector> [--select name=value ...] [--no-browser] [--reset]";
-const RUN_USAGE = "run <connector> [--select name=value ...] <operation> [--input <json-object>]";
+const RUN_USAGE = "run <connector> [--select name=value ...] <operation> [--input <json-object>] [--preview | --apply <previewId>]";
+const RECOVER_USAGE = "recover <connector> [--select name=value ...] [--run <runId> [--adjudicate --input <json-object>] | --run <runId|previewId> --unlock]";
 const SCHEMA_USAGE = "schema <connector> [--select name=value ...]";
 
 const REFUSAL_CAUSE: Readonly<Record<AdapterRefusalKind, CauseCode>> = {
@@ -1374,16 +1437,70 @@ function parseInputObject(text: string | undefined): Record<string, unknown> | n
 	}
 }
 
+interface RunOptions {
+	readonly input: Readonly<Record<string, unknown>> | null;
+	readonly phase: WritePhase | null;
+}
+
+// The options after a run operation, in any order: --input <json-object>, and
+// at most one of --preview or --apply <previewId>, each at most once.
+function parseRunOptions(after: readonly string[]): RunOptions | null {
+	let input: Readonly<Record<string, unknown>> | null = null;
+	let phase: WritePhase | null = null;
+	let index = 0;
+	while (index < after.length) {
+		const token = after[index];
+		const value = after[index + 1];
+		if (token === "--preview" && phase === null) {
+			phase = { kind: "preview" };
+			index += 1;
+		} else if (token === "--input" && input === null) {
+			input = parseInputObject(value);
+			if (input === null) return null;
+			index += 2;
+		} else if (token === "--apply" && phase === null && value !== undefined && !value.startsWith("-")) {
+			phase = { kind: "apply", previewId: value };
+			index += 2;
+		} else {
+			return null;
+		}
+	}
+	return { input, phase };
+}
+
 function parseRunArgs(args: readonly string[]): AdapterCommand | null {
 	const [id, ...rest] = args;
 	const given = new Map<string, string>();
 	const at = consumeSelections(rest, given);
 	const operation = at === null ? undefined : rest[at];
 	if (!id || at === null || !operation || operation.startsWith("-")) return null;
-	const after = rest.slice(at + 1);
-	if (after.length === 0) return { commandIdentity: "connectors.run", id, given, action: { kind: "run", operation, input: null } };
-	const input = after.length === 2 && after[0] === "--input" ? parseInputObject(after[1]) : null;
-	return input === null ? null : { commandIdentity: "connectors.run", id, given, action: { kind: "run", operation, input } };
+	const options = parseRunOptions(rest.slice(at + 1));
+	if (options === null) return null;
+	const { input, phase } = options;
+	if (phase === null) return { commandIdentity: "connectors.run", id, given, action: { kind: "run", operation, input } };
+	return { commandIdentity: phase.kind === "preview" ? "connectors.run.preview" : "connectors.run.apply", id, given, action: { kind: "write", operation, input, phase } };
+}
+
+const RECOVERY_IDENTITY: Readonly<Record<Recovery["kind"], AdapterCommandIdentity>> = { inspect: "connectors.recover", adjudicate: "connectors.recover.adjudicate", unlock: "connectors.recover.unlock" };
+
+function parseRecovery(tail: readonly string[]): Recovery | null {
+	if (tail.length === 0) return { kind: "inspect" };
+	if (tail.length === 1 && tail[0] === "--unlock") return { kind: "unlock" };
+	const input = tail.length === 3 && tail[0] === "--adjudicate" && tail[1] === "--input" ? parseInputObject(tail[2]) : null;
+	return input === null ? null : { kind: "adjudicate", input };
+}
+
+// Without --run, recover lists; --run names one receipt, and only with it
+// may --adjudicate or --unlock follow.
+function parseRecoverArgs(args: readonly string[]): AdapterCommand | null {
+	const [id, ...rest] = args;
+	const given = new Map<string, string>();
+	const at = consumeSelections(rest, given);
+	if (!id || at === null) return null;
+	const [flag, runId, ...tail] = rest.slice(at);
+	if (flag === undefined) return { commandIdentity: "connectors.recover", id, given, action: { kind: "recover", runId: null, recovery: { kind: "inspect" } } };
+	const recovery = flag === "--run" && runId !== undefined && !runId.startsWith("-") ? parseRecovery(tail) : null;
+	return recovery === null || runId === undefined ? null : { commandIdentity: RECOVERY_IDENTITY[recovery.kind], id, given, action: { kind: "recover", runId, recovery } };
 }
 
 function emitAdapterEnvelope(command: AdapterCommand, causeCode: CauseCode, message: string, data: Record<string, unknown> | null, repairAction: string | null, effects: { completed: string[]; uncertain: string[] }, nextAction?: string): void {
@@ -1438,7 +1555,12 @@ function prepareThroughAdapter(command: AdapterCommand, manifest: ConnectorManif
 	return prepareAction(adapter, command.action, { manifest, selectors: values, skillsRoot: skillsRoot(), env: process.env });
 }
 
+// An adapter without journaled writes refuses them through the catalogue.
+const NO_WRITES: Prepared = { kind: "refused", refusal: { kind: "domain", connectorCause: "adapter-has-no-writes", repair: "Use a connector whose packaged adapter supports preview, apply, and recover" } };
+
 function prepareAction(adapter: Adapter, action: CommandAction, request: SchemaRequest): Prepared {
+	if (action.kind === "write") return adapter.prepareWrite ? adapter.prepareWrite({ ...request, operation: action.operation, input: action.input, phase: action.phase }) : NO_WRITES;
+	if (action.kind === "recover") return adapter.prepareRecover ? adapter.prepareRecover({ ...request, runId: action.runId, recovery: action.recovery }) : NO_WRITES;
 	if (action.kind === "schema" && adapter.prepareSchema) return adapter.prepareSchema(request);
 	if (action.kind === "schema" || !adapter.prepare) {
 		const kind = action.kind === "auth" ? "verb-unsupported" : "operation-unknown";
@@ -1583,6 +1705,9 @@ async function runAdapterCommand(command: AdapterCommand, manifest: ConnectorMan
 		await runExecution(command, manifest, prepared);
 		return;
 	}
+	// A journaled write answers only with an execute plan, whose outcome names
+	// its effects; any other plan is an adapter defect, reported before any effect.
+	if (command.action.kind === "write" || command.action.kind === "recover") throw new Error("adapter planned a journaled write without an execute step");
 	// Only an auth verb may reach browser consent; any other attended plan is
 	// an adapter defect, reported as an internal failure before any effect.
 	if (prepared.effect === "attended-login" && command.action.kind !== "auth") throw new Error("adapter planned attended login outside auth");
@@ -1622,28 +1747,50 @@ function executionCapabilities(manifest: ConnectorManifest, failure: { value: Se
 	};
 }
 
-// A read reports only this invocation's MCPorter selection effect: an execute
-// step owns no connector account effect.
+// An execute step owns no connector account effect: its inventory is this
+// invocation's MCPorter selection effect, then the journaled-write effects its
+// outcome names.
 function emitExecuted(command: AdapterCommand, executed: Executed): void {
 	const completed = completedSelectionEffects();
-	if (executed.kind === "refused") {
-		emitAdapterRefusal(command, executed.refusal);
-		return;
+	const data = (extra: Record<string, unknown>) => ({ connector: command.id, ...extra });
+	switch (executed.kind) {
+		case "refused":
+			emitAdapterRefusal(command, executed.refusal);
+			return;
+		case "failed":
+			emitAdapterEnvelope(command, completed.length > 0 ? "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT" : "DOMAIN_PROVIDER_CALL_FAILED", `${PROGRAM}: ${command.id} provider call did not complete (${executed.connectorCause})`, null, executed.repair, { completed, uncertain: [] }, "connectors.auth");
+			return;
+		case "success":
+			emitAdapterEnvelope(command, readSuccessCause([]), `${command.id}${operationLabel(command)} completed`, data(executed.data), null, { completed, uncertain: [] });
+			return;
+		case "recorded":
+			emitAdapterEnvelope(command, "SUCCESS_RUN_RECORDED", `${command.id}${operationLabel(command)} recorded ${executed.effect}`, data(executed.data), null, { completed: [...completed, executed.effect], uncertain: [] }, executed.effect === "write-preview" ? "connectors.run.apply" : undefined);
+			return;
+		case "applied":
+			emitAdapterEnvelope(command, "SUCCESS_RUN_APPLIED", `${command.id}${operationLabel(command)} applied`, data(executed.data), null, { completed: [...completed, "write-receipt", "provider-write"], uncertain: [] });
+			return;
+		case "effect-unknown":
+			emitAdapterEnvelope(command, "DOMAIN_RUN_EFFECT_UNKNOWN", `${PROGRAM}: ${command.id}${operationLabel(command)} may have reached the Provider; its effect is unknown`, data(executed.data), executed.repair, { completed: [...completed, "write-receipt"], uncertain: ["provider-write"] }, "connectors.recover");
+			return;
+		case "failed-after-record":
+			emitAdapterEnvelope(command, "DOMAIN_RUN_FAILED_RECORDED", `${PROGRAM}: ${command.id}${operationLabel(command)} did not change the Provider (${executed.connectorCause})`, data({ connectorCause: executed.connectorCause, ...executed.data }), executed.repair, { completed: [...completed, "write-receipt"], uncertain: [] }, "connectors.recover");
 	}
-	if (executed.kind === "failed") {
-		emitAdapterEnvelope(command, completed.length > 0 ? "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT" : "DOMAIN_PROVIDER_CALL_FAILED", `${PROGRAM}: ${command.id} provider call did not complete (${executed.connectorCause})`, null, executed.repair, { completed, uncertain: [] }, "connectors.auth");
-		return;
-	}
-	const operation = command.action.kind === "run" ? ` ${command.action.operation}` : "";
-	emitAdapterEnvelope(command, readSuccessCause([]), `${command.id}${operation} completed`, { connector: command.id, ...executed.data }, null, { completed, uncertain: [] });
+}
+
+// The adapter admitted the operation before any effect, so naming it echoes
+// no caller value it did not declare.
+function operationLabel(command: AdapterCommand): string {
+	return command.action.kind === "run" || command.action.kind === "write" ? ` ${command.action.operation}` : "";
 }
 
 async function runExecution(command: AdapterCommand, manifest: ConnectorManifest, prepared: Extract<Prepared, { kind: "execute" }>): Promise<void> {
 	const failure: { value: SelectionFailure | null } = { value: null };
 	const executed = await prepared.execute(executionCapabilities(manifest, failure));
 	// Nothing was sent without a selected binary, so the selection failure is
-	// the whole answer and the adapter's own result is not reported.
+	// the whole answer and the adapter's own result is not reported. An
+	// outcome naming a journal or Provider effect contradicts that.
 	if (failure.value) {
+		if (executed.kind !== "success" && executed.kind !== "refused" && executed.kind !== "failed") throw new Error("an execute step reported an effect without a selected MCPorter");
 		emitSelectionFailure(failure.value, command.commandIdentity);
 		return;
 	}
@@ -1669,6 +1816,10 @@ async function dispatchCommand(args: readonly string[]): Promise<void> {
 	}
 	if (args[0] === "run") {
 		await handleAdapterCommand(parseRunArgs(args.slice(1)), RUN_USAGE, "connectors.run");
+		return;
+	}
+	if (args[0] === "recover") {
+		await handleAdapterCommand(parseRecoverArgs(args.slice(1)), RECOVER_USAGE, "connectors.recover");
 		return;
 	}
 	if (args[0] === "deps" && args[1] === "repair" && args[2] === "mcporter") {

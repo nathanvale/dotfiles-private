@@ -136,14 +136,18 @@ export interface Journal {
 	// evidence of the effect, or stays unresolved. The journal hands the
 	// dispatcher the provider arguments it verified against the preview, so
 	// the outbound request is the receipt-bound object and not a caller's copy.
+	// A lock or settle failure after the intent is durable answers with that
+	// receipt, still open if it could not settle, instead of a refusal; only a
+	// receipt another actor settled before the send mark is refused.
 	apply(request: ApplyRequest, dispatch: Dispatch): Promise<Receipt>;
 	resolve(runId: string, evidence: Evidence): Receipt;
 	openReceipts(): Receipt[];
 	receipt(runId: string): Receipt;
 	preview(previewId: string): Preview;
 	// Operator recovery only: never called automatically. A stale meta-lock has
-	// no programmatic recovery at all; see withMeta.
-	unlock(objectIdentity: string): void;
+	// no programmatic recovery at all; see withMeta. Answers whether a lock
+	// was removed.
+	unlock(objectIdentity: string): boolean;
 }
 
 export class JournalError extends Error {
@@ -427,6 +431,21 @@ function validEvidence(evidence: unknown): evidence is Evidence {
 
 const lockName = (identity: string) => `${identity.replace(/[^A-Za-z0-9_-]/g, "_")}.lock`;
 const META_LOCK = ".meta";
+// Every meta-lock holder keeps it for a few file operations, so a held one is
+// ordinary contention first. A failed exclusive create changes nothing, so the
+// claim retries within this bound; past it the lock is treated as stale.
+const META_WAIT_MS = 1_000;
+const META_RETRY_MS = 10;
+
+// An exclusive create of a lock file, or null when one already exists.
+function createExclusive(file: string): number | null {
+	try {
+		return openSync(file, "wx", 0o600);
+	} catch (error) {
+		if ((error as NodeJS.ErrnoException).code === "EEXIST") return null;
+		throw error;
+	}
+}
 
 interface LockRecord {
 	pid: number;
@@ -460,15 +479,22 @@ class FileJournal implements Journal {
 	}
 
 	// Writes a lock file atomically with this process's pid and a fresh lockId.
-	private claimLock(file: string, code: string, message: string): string {
-		regularFileOrAbsent(file);
-		const lockId = crypto.randomUUID();
-		let fd: number;
-		try {
-			fd = openSync(file, "wx", 0o600);
-		} catch {
-			throw new JournalError(code, message);
+	// An existing lock is retried until waitMs has passed, then refused.
+	private claimLock(file: string, code: string, message: string, waitMs = 0): string {
+		const deadline = performance.now() + waitMs;
+		let fd: number | null;
+		for (;;) {
+			regularFileOrAbsent(file);
+			try {
+				fd = createExclusive(file);
+			} catch {
+				throw new JournalError(code, message);
+			}
+			if (fd !== null || performance.now() >= deadline) break;
+			Bun.sleepSync(META_RETRY_MS);
 		}
+		if (fd === null) throw new JournalError(code, message);
+		const lockId = crypto.randomUUID();
 		try {
 			writeSync(fd, `${JSON.stringify({ pid: process.pid, lockId, at: this.now() })}\n`);
 			fsyncSync(fd);
@@ -491,10 +517,11 @@ class FileJournal implements Journal {
 	// check-then-remove on it can be made race-free: a recoverer that read a
 	// dead holder could unlink a lock a fresh writer claimed in between. A stale
 	// meta-lock is therefore removed only by an operator, by hand, once no
-	// connectors process is running.
+	// connectors process is running. A claim waits out ordinary contention
+	// first, up to META_WAIT_MS.
 	private withMeta<T>(fn: () => T): T {
 		const file = path.join(this.locks, META_LOCK);
-		const lockId = this.claimLock(file, "meta-locked", `the journal meta-lock is held; if no connectors process is running, remove ${file} by hand`);
+		const lockId = this.claimLock(file, "meta-locked", `the journal meta-lock is held; if no connectors process is running, remove ${file} by hand`, META_WAIT_MS);
 		try {
 			return fn();
 		} finally {
@@ -588,20 +615,31 @@ class FileJournal implements Journal {
 
 	// Object locks are never reclaimed automatically: a dead holder still blocks
 	// until an explicit unlock, because pid liveness cannot rule out pid reuse.
-	// Acquire and release both run under the meta-lock.
-	private acquireLock(identity: string): () => void {
+	// Acquire and release both run under the meta-lock. A held object lock
+	// refuses at once unless waitMs is given; each retry re-enters the
+	// meta-lock and none waits holding it, so the holder can still release.
+	private acquireLock(identity: string, waitMs = 0): () => void {
 		const file = path.join(this.locks, lockName(identity));
-		const lockId = this.withMeta(() => this.claimLock(file, "write-locked", "another process holds the lock for this object; run unlock only after confirming no live writer"));
-		return () => this.withMeta(() => this.releaseLock(file, lockId));
+		const deadline = performance.now() + waitMs;
+		for (;;) {
+			try {
+				const lockId = this.withMeta(() => this.claimLock(file, "write-locked", "another process holds the lock for this object; run unlock only after confirming no live writer"));
+				return () => this.withMeta(() => this.releaseLock(file, lockId));
+			} catch (error) {
+				if (!(error instanceof JournalError) || error.code !== "write-locked" || performance.now() >= deadline) throw error;
+			}
+			Bun.sleepSync(META_RETRY_MS);
+		}
 	}
 
-	unlock(objectIdentity: string): void {
+	unlock(objectIdentity: string): boolean {
 		const file = path.join(this.locks, lockName(objectIdentity));
-		this.withMeta(() => {
+		return this.withMeta(() => {
 			const current = readLock(file);
-			if (!current) return;
+			if (!current) return false;
 			if (processAlive(current.pid)) throw new JournalError("lock-held", "the lock holder is still alive");
 			rmSync(file, { force: true });
+			return true;
 		});
 	}
 
@@ -611,8 +649,8 @@ class FileJournal implements Journal {
 
 	// Critical section under the object lock: reread the preview, bind input
 	// and revision, refuse if an unresolved receipt exists for the object,
-	// write the intent durably, then mark the preview consumed.
-	private recordIntent(request: ApplyRequest): Receipt {
+	// then write the intent durably. apply marks the preview consumed after.
+	private recordIntent(request: ApplyRequest): { intent: Receipt; preview: Preview } {
 		const preview = this.readPreview(request.previewId);
 		if (preview.status === "consumed") throw new JournalError("preview-consumed", "the preview was already applied");
 		if (preview.provider !== request.provider) throw new JournalError("preview-provider-retired", "the preview was recorded for a Provider this route no longer has; preview again");
@@ -656,9 +694,14 @@ class FileJournal implements Journal {
 			updatedAt: createdAt,
 		};
 		writeDurable(this.receipts, `${intent.runId}.json`, intent);
+		return { intent, preview };
+	}
+
+	// Still under the object lock. The intent's previewId alone already refuses
+	// a second apply, so the consumed status is a convenience for readers.
+	private markConsumed(preview: Preview): void {
 		this.crash("after-intent");
 		writeDurable(this.previews, `${preview.previewId}.json`, { ...preview, status: "consumed" });
-		return intent;
 	}
 
 	// Read-back absence releases an object only when the receipt never reached
@@ -691,22 +734,57 @@ class FileJournal implements Journal {
 	async apply(request: ApplyRequest, dispatch: Dispatch): Promise<Receipt> {
 		if (!isRecord(request.providerArgs)) throw new JournalError("input-invalid", "provider arguments must be an object");
 		const preview = this.readPreview(request.previewId);
-		let release = this.acquireLock(preview.objectIdentity);
-		let intent: Receipt;
+		const release = this.acquireLock(preview.objectIdentity);
+		let recorded: { intent: Receipt; preview: Preview };
 		try {
-			intent = this.recordIntent(request);
-		} finally {
+			recorded = this.recordIntent(request);
+		} catch (error) {
 			release();
+			throw error;
+		}
+		const { intent } = recorded;
+		// The intent is durable from here, so no failure is a refusal. A failed
+		// consumed mark or release may leave the preview open or the object lock
+		// held: nothing is dispatched, and the open, unsent receipt answers.
+		try {
+			try {
+				this.markConsumed(recorded.preview);
+			} finally {
+				release();
+			}
+		} catch {
+			return this.readReceipt(intent.runId);
 		}
 		let evidence: unknown;
+		let sent = false;
+		const sending = () => {
+			this.markSending(intent.runId);
+			sent = true;
+		};
 		try {
-			evidence = await dispatch(intent, () => this.markSending(intent.runId), Object.freeze(JSON.parse(canonical(request.providerArgs)) as Record<string, unknown>));
+			evidence = await dispatch(intent, sending, Object.freeze(JSON.parse(canonical(request.providerArgs)) as Record<string, unknown>));
 		} catch {
 			evidence = { proof: "unknown" };
 		}
-		// Settle with compare-and-set under the lock so a resolve that raced the
-		// dispatch is never overwritten.
-		release = this.acquireLock(intent.objectIdentity);
+		try {
+			return this.settle(intent, evidence);
+		} catch (error) {
+			// A failed settlement is never reported as a refusal: the durable
+			// receipt answers instead, final if the settle was written, else
+			// still open, so it keeps the object blocked until adjudicated. Its
+			// send mark says whether the request may have left the process.
+			// Before that mark, a receipt settled by another actor is not this
+			// apply's record, so that refusal stands.
+			if (!sent && error instanceof JournalError && error.code === "receipt-not-in-flight") throw error;
+			return this.readReceipt(intent.runId);
+		}
+	}
+
+	// Settle with compare-and-set under the lock so a resolve that raced the
+	// dispatch is never overwritten. A competing apply holds the object lock
+	// only for a few file operations, so settle waits it out like the meta-lock.
+	private settle(intent: Receipt, evidence: unknown): Receipt {
+		const release = this.acquireLock(intent.objectIdentity, META_WAIT_MS);
 		try {
 			const current = this.readReceipt(intent.runId);
 			if (current.status !== "intent" || current.holder.pid !== process.pid) throw new JournalError("receipt-not-in-flight", "the receipt was settled elsewhere");

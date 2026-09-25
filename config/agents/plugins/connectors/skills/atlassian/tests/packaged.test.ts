@@ -1,5 +1,6 @@
-// Ticket #92 U1: Atlassian reads and the custody check through the packaged
-// front door (Spec #87 AC8, AC9, AC11, AC19, and AC20, reads only). Every row
+// Ticket #92 U1 and U2: Atlassian reads, the custody check, journaled writes,
+// and recovery through the packaged front door (Spec #87 AC8, AC9, AC11, AC16,
+// AC19, and AC20; configure and status are U3's). Every row
 // spawns the compiled bin/connectors of the verified substituted plugin copy
 // (plugin-copy.ts), which is compiled from source whose Keychain-read leaf is
 // the test-owned reader fake and whose manifest admits the fake op and uv;
@@ -12,7 +13,7 @@
 // live Provider.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { CustodyFixture, OFFICIAL_MCPORTER, PROVIDER_TOKEN, SERVICE_TOKEN, seedMcporter } from "./fixtures/custody-fixture.ts";
 import { SHIPPED_ROOT, substitutedPluginRoot } from "./fixtures/plugin-copy.ts";
@@ -33,8 +34,12 @@ const OP_ENV_KEYS = ["HOME", "OP_SERVICE_ACCOUNT_TOKEN", "PATH"];
 const ITEM_HANDOFF = "create the Atlassian API token in your Atlassian account settings and store it yourself in the 1Password item JIRA_EXAMPLE_API_TOKEN in the API Credentials vault; Connectors never creates, rotates, or imports a token";
 const KEYCHAIN_HANDOFF = "store the Connectors 1Password service-account token in the login Keychain yourself: security add-generic-password -s connectors.1password.service-account -a connectors -w (it prompts for the value; Connectors never receives it)";
 const UV_SETUP_REPAIR = "the plugin-owned uv is not set up; run connectors setup";
-const WRITE_PHASE_REPAIR = "Atlassian writes and receipt commands are not reachable through connectors run yet; use a read operation";
-const UNKNOWN_OPERATION_REPAIR = "Use one Atlassian read operation: issue.get, issue.search, issue.transitions, page.get, or page.search";
+const WRITE_PHASE_REPAIR = "An Atlassian write needs --preview first, then --apply <previewId> with the identical --input";
+const READ_PHASE_REPAIR = "An Atlassian read takes neither --preview nor --apply; run it without them";
+const RECOVER_REPAIR = "Receipts, adjudication, and unlock are recover commands: run connectors recover atlassian --select tenant=<value> [--run <runId>]";
+const USAGE_REPAIR = "Check the connectors run or recover arguments against connectors --help";
+const UNKNOWN_OPERATION_REPAIR =
+	"Use one Atlassian operation: issue.get, issue.search, issue.transitions, issue.create, issue.update, issue.comment, issue.comment.update, issue.attach, issue.transition, issue.assign, issue.delete, page.get, page.search, page.create, page.update, page.comment, page.attach, page.attachment.delete, page.delete";
 const MCPORTER_REPAIR = "Run connectors deps repair mcporter";
 // The dispatcher's fixed repair text for a not-found read.
 const NOT_FOUND_REPAIR = "the target object was not found or is not visible to this principal";
@@ -44,7 +49,13 @@ const CONFLUENCE_PROVIDER_KEYS = ["CONFLUENCE_API_TOKEN", "CONFLUENCE_URL", "CON
 // The official MCPorter 0.14.0 darwin arm64 binary, as CI pins it.
 const OFFICIAL_MCPORTER_SHA256 = "01d99ede8b6a88dd282eaeda2afb7086dca5bdbc04c05c8c21744703575adb27";
 const tool = (name: string, required: string[], optional: string[] = []) => ({ name, description: name, inputSchema: { type: "object", required, properties: Object.fromEntries([...required, ...optional].map((key) => [key, { type: "string" }])) } });
-const JIRA_TOOLS = [tool("jira_get_issue", ["issue_key"], ["fields"]), tool("jira_search", ["jql"], ["limit", "fields"]), tool("jira_get_transitions", ["issue_key"])];
+const JIRA_TOOLS = [
+	tool("jira_get_issue", ["issue_key"], ["fields", "comment_limit"]),
+	tool("jira_search", ["jql"], ["limit", "fields"]),
+	tool("jira_get_transitions", ["issue_key"]),
+	tool("jira_add_comment", ["issue_key", "body"], ["visibility", "public"]),
+	tool("jira_update_issue", ["issue_key", "fields"], ["additional_fields", "components", "attachments", "return_fields"]),
+];
 const CONFLUENCE_TOOLS = [tool("confluence_get_page", ["page_id"]), tool("confluence_search", ["query"], ["limit"])];
 const JIRA_REPLY = { key: "EX-1", summary: "canned packaged issue" };
 const CONFLUENCE_REPLY = { id: "123", title: "canned packaged page" };
@@ -59,6 +70,15 @@ const READ_PROVIDER_STARTS = 2;
 
 interface Envelope {
 	result: { commandIdentity: string; outcome: string; causeCode: string; exitCode: number; repairAction: string | null; nextAction: string; effectClass: string; transactionState: string; data: Record<string, unknown> | null; effects: { completed: string[]; uncertain: string[] } };
+}
+// The journal record a write or recover envelope carries under data.result.
+interface JournalRecord {
+	previewId: string;
+	runId: string;
+	objectIdentity: string;
+	status: string;
+	send: string;
+	effects: { kind: string; id: string }[];
 }
 interface CommunityStart {
 	argv: string[];
@@ -96,11 +116,12 @@ function expectNoHostile(fixture: CustodyFixture): void {
 
 // The service token reached op and only op; the provider token reached the
 // Provider's replacement and never MCPorter, the process that started it.
-function expectConfinedRead(fixture: CustodyFixture, item: string, providerKeys: string[]): CommunityStart[] {
-	expect(fixture.lines("op-calls.jsonl")).toEqual(Array.from({ length: READ_OP_CALLS }, () => ({ argv: ITEM_READ(item), envKeys: OP_ENV_KEYS, serviceTokenMatches: true })));
-	expect(fixture.lines("keychain-reads.jsonl")).toEqual(Array.from({ length: READ_OP_CALLS }, () => keychainRead(fixture)));
+// Counts default to one read; a write row pins its own from its sequence.
+function expectConfinedRead(fixture: CustodyFixture, item: string, providerKeys: string[], counts = { opReads: READ_OP_CALLS, providerStarts: READ_PROVIDER_STARTS }): CommunityStart[] {
+	expect(fixture.lines("op-calls.jsonl")).toEqual(Array.from({ length: counts.opReads }, () => ({ argv: ITEM_READ(item), envKeys: OP_ENV_KEYS, serviceTokenMatches: true })));
+	expect(fixture.lines("keychain-reads.jsonl")).toEqual(Array.from({ length: counts.opReads }, () => keychainRead(fixture)));
 	const starts = fixture.lines<CommunityStart>("community-starts.jsonl");
-	expect(starts).toHaveLength(READ_PROVIDER_STARTS);
+	expect(starts).toHaveLength(counts.providerStarts);
 	const selected = realpathSync(selectedMcporter(fixture));
 	for (const start of starts) {
 		expect([start.argv, start.envKeys]).toEqual([COMMUNITY_ARGV, providerKeys]);
@@ -193,18 +214,23 @@ describe("refusals before any dependency, credential, or Provider", () => {
 		}
 	});
 
-	test("a write, an operator command, and an unknown operation refuse by their literal causes and start nothing", async () => {
+	test("a write without a phase, a phase on a read, an operator command, a bad write input, a bad receipt id, and an unknown operation refuse by their literal causes and start nothing", async () => {
 		fresh({ seed: false });
 		const sentinel = "EX-write-sentinel-must-not-echo";
-		for (const [operation, input, cause, exit, connectorCause, repair] of [
-			["issue.create", { projectKey: "EX", summary: sentinel, issueType: "Task" }, "USAGE_ADAPTER_REFUSED", 2, "write-phase-unavailable", WRITE_PHASE_REPAIR],
-			["receipts", null, "USAGE_ADAPTER_REFUSED", 2, "write-phase-unavailable", WRITE_PHASE_REPAIR],
-			["issue.nuke", { issueKey: sentinel }, "USAGE_OPERATION_UNKNOWN", 2, "operation-unknown", UNKNOWN_OPERATION_REPAIR],
+		// [argv after the tenant, identity, cause, exit, connectorCause, repair]
+		for (const [argv, identity, cause, exit, connectorCause, repair] of [
+			[["run", "issue.create", "--input", JSON.stringify({ projectKey: "EX", summary: sentinel, issueType: "Task" })], "connectors.run", "USAGE_ADAPTER_REFUSED", 2, "write-phase-required", WRITE_PHASE_REPAIR],
+			[["run", "issue.get", "--input", JSON.stringify({ issueKey: sentinel }), "--preview"], "connectors.run.preview", "USAGE_ADAPTER_REFUSED", 2, "read-takes-no-phase", READ_PHASE_REPAIR],
+			[["run", "receipts"], "connectors.run", "USAGE_ADAPTER_REFUSED", 2, "recover-command", RECOVER_REPAIR],
+			[["run", "issue.comment", "--input", JSON.stringify({ issueKey: "EX-1", body: "x", bogus: sentinel }), "--preview"], "connectors.run.preview", "SCHEMA_ADAPTER_REFUSED", 4, "input-invalid", "Correct the --input object to the operation's declared input"],
+			[["recover", "--run", `bad/${sentinel}`], "connectors.recover", "USAGE_ADAPTER_REFUSED", 2, "usage-invalid", USAGE_REPAIR],
+			[["run", "issue.nuke", "--input", JSON.stringify({ issueKey: sentinel })], "connectors.run", "USAGE_OPERATION_UNKNOWN", 2, "operation-unknown", UNKNOWN_OPERATION_REPAIR],
 		] as const) {
-			const result = await fixture.frontDoor(["run", "atlassian", ...TENANT, operation, ...(input === null ? [] : ["--input", JSON.stringify(input)])]);
-			expect([operation, result.code, result.stderr]).toEqual([operation, exit, ""]);
+			const [command, ...rest] = argv;
+			const result = await fixture.frontDoor([command, "atlassian", ...TENANT, ...rest]);
+			expect([argv[1], result.code, result.stderr]).toEqual([argv[1], exit, ""]);
 			const envelope = parse(result.stdout).result;
-			expect([operation, envelope.causeCode, envelope.repairAction, envelope.transactionState, envelope.data]).toEqual([operation, cause, repair, "unchanged", { connector: "atlassian", connectorCause }]);
+			expect([argv[1], envelope.commandIdentity, envelope.causeCode, envelope.repairAction, envelope.transactionState, envelope.effects.completed, envelope.data]).toEqual([argv[1], identity, cause, repair, "unchanged", [], { connector: "atlassian", connectorCause }]);
 			for (const stream of [result.stdout, result.stderr]) expect(stream).not.toContain(sentinel);
 		}
 		expect([fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl")]).toEqual([[], [], []]);
@@ -285,7 +311,7 @@ describe("custody check and credential handoffs", () => {
 	});
 });
 
-describe.skipIf(!OFFICIAL_MCPORTER)("reads through the verified MCPorter", () => {
+describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the verified MCPorter", () => {
 	let firstUse: { code: number; stdout: string; stderr: string } | undefined;
 	beforeAll(async () => {
 		// One production first-use bootstrap through the packaged front door;
@@ -374,4 +400,204 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads through the verified MCPorter", () =>
 		for (const stream of [result.stdout, result.stderr]) expect(stream).not.toContain(sentinel);
 		expectNoSecret(fixture, [result.stdout, result.stderr]);
 	}, 60_000);
+
+	// Journaled writes (U2). The oracle for every Provider write is the fake's
+	// effects.jsonl, never an envelope. A comment binds no revision, so its
+	// preview sends two MCPorter requests (the schema list and the baseline
+	// issue read) and its apply three (those two, then the comment); each binds
+	// its product once, and each request reads the item twice (preflight and
+	// Provider).
+	const COMMENT = { issueKey: "EX-1", body: "packaged comment" };
+	const COMMENT_ARGS = { issue_key: "EX-1", body: "packaged comment" };
+	const issueWithComments = (comments: { id: string; body: string }[]) => ({ key: "EX-1", fields: { updated: "2026-09-25 09:00:00 AEST", comment: { comments } } });
+	const PREVIEW_OP_CALLS = 1 + 2 * 2;
+	const APPLY_OP_CALLS = 1 + 3 * 2;
+	const PREVIEW_REFUSED = "the preview is unknown, consumed, expired, or no longer matches the input, provider arguments, or target revision; preview again";
+	const write = (operation: string, input: unknown, phase: string[]) => fixture.frontDoor(["run", "atlassian", ...TENANT, operation, "--input", JSON.stringify(input), ...phase]);
+	const recover = (...argv: string[]) => fixture.frontDoor(["recover", "atlassian", ...TENANT, ...argv]);
+	const record = <T = JournalRecord>(envelope: Envelope["result"]): T => envelope.data?.result as T;
+	const writesTo = (name: string) => fixture.lines<{ product: string; tool: string; args: unknown }>("effects.jsonl").filter((call) => call.tool === name);
+	const station = (envelope: Envelope["result"]) => [envelope.commandIdentity, envelope.outcome, envelope.causeCode, envelope.effectClass, envelope.transactionState, envelope.effects.completed, envelope.effects.uncertain];
+	async function previewComment(input: { issueKey: string; body: string } = COMMENT): Promise<JournalRecord> {
+		const result = await write("issue.comment", input, ["--preview"]);
+		expect([result.code, result.stderr]).toEqual([0, ""]);
+		return record(parse(result.stdout).result);
+	}
+
+	test("a comment preview records it without sending, its apply sends it once behind a durable receipt, and recover shows that receipt", async () => {
+		fresh();
+		fixture.canned("jira", "jira_get_issue", issueWithComments([]));
+		fixture.canned("jira", "jira_add_comment", { id: "10001", body: "packaged comment" });
+		const preview = await write("issue.comment", COMMENT, ["--preview"]);
+		expect([preview.code, preview.stderr]).toEqual([0, ""]);
+		const previewed = parse(preview.stdout).result;
+		expect(station(previewed)).toEqual(["connectors.run.preview", "success", "SUCCESS_RUN_RECORDED", "repository-local", "completed", ["write-preview"], []]);
+		expect(previewed.nextAction).toBe("connectors.run.apply");
+		expect(writesTo("jira_add_comment")).toEqual([]);
+		const apply = await write("issue.comment", COMMENT, ["--apply", record(previewed).previewId]);
+		expect([apply.code, apply.stderr]).toEqual([0, ""]);
+		const applied = parse(apply.stdout).result;
+		expect(station(applied)).toEqual(["connectors.run.apply", "success", "SUCCESS_RUN_APPLIED", "external", "completed", ["write-receipt", "provider-write"], []]);
+		const receipt = record(applied);
+		expect([receipt.previewId, receipt.status, receipt.send, receipt.effects]).toEqual([record(previewed).previewId, "completed", "possible", [{ kind: "jira-comment", id: "10001" }]]);
+		expect(writesTo("jira_add_comment")).toEqual([{ product: "jira", tool: "jira_add_comment", args: COMMENT_ARGS }]);
+		const listed = await recover();
+		expect([listed.code, listed.stderr]).toEqual([0, ""]);
+		const list = parse(listed.stdout).result;
+		expect([list.commandIdentity, list.causeCode, list.effects.completed, list.data]).toEqual(["connectors.recover", "SUCCESS_UNCHANGED", [], { connector: "atlassian", command: "receipts", result: { open: [] }, provenance: [] }]);
+		const shown = parse((await recover("--run", receipt.runId)).stdout).result;
+		expect([shown.commandIdentity, shown.causeCode, record(shown).runId, record(shown).status]).toEqual(["connectors.recover", "SUCCESS_UNCHANGED", receipt.runId, "completed"]);
+		// Recovery inspection reads only the journal: no custody, op, or Provider.
+		expectConfinedRead(fixture, JIRA_ITEM, JIRA_PROVIDER_KEYS, { opReads: PREVIEW_OP_CALLS + APPLY_OP_CALLS, providerStarts: 5 });
+		expectNoSecret(fixture, [preview.stdout, preview.stderr, apply.stdout, apply.stderr, listed.stdout, listed.stderr]);
+	}, 90_000);
+
+	test("a preview whose target revision moved is refused at apply and sends no write", async () => {
+		fresh();
+		fixture.canned("jira", "jira_get_issue", { key: "EX-1", fields: { updated: "2026-09-25 09:00:00 AEST", summary: "old" } });
+		fixture.canned("jira", "jira_update_issue", { key: "EX-1" });
+		const input = { issueKey: "EX-1", fields: { summary: "new" } };
+		const previewed = await write("issue.update", input, ["--preview"]);
+		expect([previewed.code, parse(previewed.stdout).result.causeCode]).toEqual([0, "SUCCESS_RUN_RECORDED"]);
+		fixture.canned("jira", "jira_get_issue", { key: "EX-1", fields: { updated: "2026-09-25 09:05:00 AEST", summary: "changed elsewhere" } });
+		const apply = await write("issue.update", input, ["--apply", record(parse(previewed.stdout).result).previewId]);
+		expect([apply.code, apply.stderr]).toEqual([3, ""]);
+		const refused = parse(apply.stdout).result;
+		expect([...station(refused), refused.repairAction, refused.data]).toEqual([
+			"connectors.run.apply", "refused", "DOMAIN_ADAPTER_REFUSED", "inspect", "unchanged", [], [],
+			`${PREVIEW_REFUSED}; preview-revision-changed`, { connector: "atlassian", connectorCause: "refused-preview" },
+		]);
+		expect(writesTo("jira_update_issue")).toEqual([]);
+		expectNoSecret(fixture, [apply.stdout, apply.stderr]);
+	}, 90_000);
+
+	// The Provider refuses the write, and its read-back shows the revision
+	// the preview bound: the receipt settles unchanged and the object is free.
+	test("an apply the Provider refused, with the revision unchanged on read-back, reports the recorded receipt and no Provider change", async () => {
+		fresh();
+		const sentinel = "EX-tool-error-sentinel-must-not-echo";
+		fixture.canned("jira", "jira_get_issue", { key: "EX-1", fields: { updated: "2026-09-25 09:00:00 AEST", summary: "old" } });
+		fixture.canned("jira", "jira_update_issue", { toolErrorText: sentinel });
+		const input = { issueKey: "EX-1", fields: { summary: "new" } };
+		const previewed = await write("issue.update", input, ["--preview"]);
+		expect([previewed.code, parse(previewed.stdout).result.causeCode]).toEqual([0, "SUCCESS_RUN_RECORDED"]);
+		const apply = await write("issue.update", input, ["--apply", record(parse(previewed.stdout).result).previewId]);
+		expect([apply.code, apply.stderr]).toEqual([3, ""]);
+		const failed = parse(apply.stdout).result;
+		expect([...station(failed), failed.nextAction, failed.data?.connectorCause]).toEqual(["connectors.run.apply", "failed", "DOMAIN_RUN_FAILED_RECORDED", "repository-local", "completed", ["write-receipt"], [], "connectors.recover", "failed-unknown"]);
+		expect([record(failed).status, record(failed).send]).toEqual(["unchanged", "possible"]);
+		expect(writesTo("jira_update_issue")).toEqual([{ product: "jira", tool: "jira_update_issue", args: { issue_key: "EX-1", fields: '{"summary":"new"}' } }]);
+		expect(record<{ open: JournalRecord[] }>(parse((await recover()).stdout).result)).toEqual({ open: [] });
+		for (const stream of [apply.stdout, apply.stderr]) expect(stream).not.toContain(sentinel);
+		expectNoSecret(fixture, [apply.stdout, apply.stderr]);
+	}, 90_000);
+
+	// Spec AC16, Ticket #92 criterion 7: the accepted oracle, unchanged in
+	// substance. The write count and both causes are one expectation, so a
+	// failure reports how many writes the race produced.
+	test("two competing applies of one preview produce exactly one provider write and one refusal", async () => {
+		fresh();
+		fixture.canned("jira", "jira_get_issue", issueWithComments([]));
+		fixture.canned("jira", "jira_add_comment", { id: "20002", body: "once" });
+		const input = { issueKey: "EX-1", body: "once" };
+		const previewId = (await previewComment(input)).previewId;
+		const [left, right] = await Promise.all([write("issue.comment", input, ["--apply", previewId]), write("issue.comment", input, ["--apply", previewId])]);
+		const outcomes = [left, right].map((result) => parse(result.stdout).result).map((envelope) => [envelope.causeCode, envelope.effects.completed.join(","), String(envelope.data?.connectorCause ?? "")]).sort();
+		expect({ writes: writesTo("jira_add_comment").length, causes: outcomes.map(([cause, effects]) => [cause, effects]), stderr: [left.stderr, right.stderr] }).toEqual({
+			writes: 1,
+			causes: [["DOMAIN_ADAPTER_REFUSED", ""], ["SUCCESS_RUN_APPLIED", "write-receipt,provider-write"]],
+			stderr: ["", ""],
+		});
+		// The loser meets either the consumed preview or the winner's object lock.
+		expect(["refused-preview", "refused-write-blocked"]).toContain(String(outcomes[0]?.[2]));
+		expect(writesTo("jira_add_comment")).toEqual([{ product: "jira", tool: "jira_add_comment", args: { issue_key: "EX-1", body: "once" } }]);
+		expectNoSecret(fixture, [left.stdout, left.stderr, right.stdout, right.stderr]);
+	}, 90_000);
+
+	// Regression for t5-competing-applies-diagnosis: the journal meta-lock held
+	// after the write was sent. It was reported refused and unchanged; a sent
+	// write must be reported unknown and stay recoverable.
+	test("a meta-lock still held after the write was sent reports the effect unknown, never refused, and recover settles it on read-back", async () => {
+		fresh();
+		fixture.canned("jira", "jira_get_issue", issueWithComments([]));
+		fixture.canned("jira", "jira_add_comment", { plantMetaLock: true, reply: { id: "30003", body: "packaged comment" } });
+		const previewId = (await previewComment()).previewId;
+		const apply = await write("issue.comment", COMMENT, ["--apply", previewId]);
+		expect([apply.code, apply.stderr]).toEqual([3, ""]);
+		const unknown = parse(apply.stdout).result;
+		expect([...station(unknown), unknown.nextAction, writesTo("jira_add_comment").length]).toEqual(["connectors.run.apply", "failed", "DOMAIN_RUN_EFFECT_UNKNOWN", "external", "unknown", ["write-receipt"], ["provider-write"], "connectors.recover", 1]);
+		const receipt = record(unknown);
+		expect([receipt.status, receipt.send]).toEqual(["intent", "possible"]);
+		expect(unknown.repairAction).toBe(`Do not retry the write. Run connectors recover atlassian --select tenant=<value> --run ${receipt.runId} to inspect it, then settle it with --adjudicate --input and the identical input`);
+		expect(writesTo("jira_add_comment")).toHaveLength(1);
+		const listed = record<{ open: JournalRecord[] }>(parse((await recover()).stdout).result);
+		expect(listed.open.map((entry) => [entry.runId, entry.status, entry.send])).toEqual([[receipt.runId, "intent", "possible"]]);
+		// Operator recovery of a stale meta-lock is by hand, once no process runs.
+		rmSync(path.join(fixture.state, "connectors", "atlassian", "example", "locks", ".meta"));
+		fixture.canned("jira", "jira_get_issue", issueWithComments([{ id: "30003", body: "packaged comment" }]));
+		const adjudicate = await recover("--run", receipt.runId, "--adjudicate", "--input", JSON.stringify(COMMENT));
+		expect([adjudicate.code, adjudicate.stderr]).toEqual([0, ""]);
+		const settled = parse(adjudicate.stdout).result;
+		expect([...station(settled), record(settled).status, record(settled).effects]).toEqual(["connectors.recover.adjudicate", "success", "SUCCESS_RUN_RECORDED", "repository-local", "completed", ["write-adjudication"], [], "completed", [{ kind: "jira-comment", id: "30003" }]]);
+		expect(record<{ open: JournalRecord[] }>(parse((await recover()).stdout).result)).toEqual({ open: [] });
+		expect(writesTo("jira_add_comment")).toHaveLength(1);
+		expectNoSecret(fixture, [apply.stdout, apply.stderr, adjudicate.stdout, adjudicate.stderr]);
+	}, 90_000);
+
+	test("a Provider that dies after receiving the write leaves the effect unknown, the object blocked, and the receipt open for recovery", async () => {
+		fresh();
+		fixture.canned("jira", "jira_get_issue", issueWithComments([]));
+		fixture.canned("jira", "jira_add_comment", { exitAfterRecord: true });
+		const apply = await write("issue.comment", COMMENT, ["--apply", (await previewComment()).previewId]);
+		expect([apply.code, apply.stderr]).toEqual([3, ""]);
+		const unknown = parse(apply.stdout).result;
+		expect(station(unknown)).toEqual(["connectors.run.apply", "failed", "DOMAIN_RUN_EFFECT_UNKNOWN", "external", "unknown", ["write-receipt"], ["provider-write"]]);
+		expect([record(unknown).status, record(unknown).send]).toEqual(["unknown", "possible"]);
+		// A different write to the same issue is blocked until recovery.
+		const again = { issueKey: "EX-1", body: "second comment" };
+		const blocked = parse((await write("issue.comment", again, ["--apply", (await previewComment(again)).previewId])).stdout).result;
+		expect([...station(blocked), blocked.data]).toEqual(["connectors.run.apply", "refused", "DOMAIN_ADAPTER_REFUSED", "inspect", "unchanged", [], [], { connector: "atlassian", connectorCause: "refused-write-blocked" }]);
+		const listed = record<{ open: JournalRecord[] }>(parse((await recover()).stdout).result);
+		expect(listed.open.map((entry) => [entry.runId, entry.status])).toEqual([[record(unknown).runId, "unknown"]]);
+		expect(writesTo("jira_add_comment")).toEqual([{ product: "jira", tool: "jira_add_comment", args: COMMENT_ARGS }]);
+		// Adjudication checks its input against the receipt before any custody,
+		// op, or Provider start: a different input and a malformed one refuse.
+		const capabilityLogs = () => [fixture.lines("keychain-reads.jsonl").length, fixture.lines("op-calls.jsonl").length, fixture.lines("community-starts.jsonl").length];
+		const before = capabilityLogs();
+		const sentinel = "EX-adjudicate-sentinel-must-not-echo";
+		for (const input of [{ issueKey: "EX-1", body: sentinel }, { issueKey: sentinel }]) {
+			const refused = await recover("--run", record(unknown).runId, "--adjudicate", "--input", JSON.stringify(input));
+			expect([refused.code, refused.stderr]).toEqual([4, ""]);
+			const envelope = parse(refused.stdout).result;
+			expect([...station(envelope), envelope.data]).toEqual(["connectors.recover.adjudicate", "refused", "SCHEMA_ADAPTER_REFUSED", "inspect", "unchanged", [], [], { connector: "atlassian", connectorCause: "input-invalid" }]);
+			for (const stream of [refused.stdout, refused.stderr]) expect(stream).not.toContain(sentinel);
+		}
+		expect(capabilityLogs()).toEqual(before);
+		expect(record<{ open: JournalRecord[] }>(parse((await recover()).stdout).result).open.map((entry) => entry.status)).toEqual(["unknown"]);
+		expectNoSecret(fixture, [apply.stdout, apply.stderr]);
+	}, 90_000);
+
+	test("unlock releases a lock its holder left behind, and the blocked apply then sends once", async () => {
+		fresh();
+		fixture.canned("jira", "jira_get_issue", issueWithComments([]));
+		fixture.canned("jira", "jira_add_comment", { id: "50005", body: "packaged comment" });
+		const previewed = await previewComment();
+		// A holder that exited before its intent leaves only its object lock.
+		const lockName = `${previewed.objectIdentity.replace(/[^A-Za-z0-9_-]/g, "_")}.lock`;
+		writeFileSync(path.join(fixture.state, "connectors", "atlassian", "example", "locks", lockName), JSON.stringify({ pid: 2_147_483_000, lockId: "exited", at: 0 }), { mode: 0o600 });
+		const blocked = parse((await write("issue.comment", COMMENT, ["--apply", previewed.previewId])).stdout).result;
+		expect([blocked.causeCode, blocked.data]).toEqual(["DOMAIN_ADAPTER_REFUSED", { connector: "atlassian", connectorCause: "refused-write-blocked" }]);
+		const unlock = await recover("--run", previewed.previewId, "--unlock");
+		expect([unlock.code, unlock.stderr]).toEqual([0, ""]);
+		expect(station(parse(unlock.stdout).result)).toEqual(["connectors.recover.unlock", "success", "SUCCESS_RUN_RECORDED", "repository-local", "completed", ["write-unlock"], []]);
+		const applied = parse((await write("issue.comment", COMMENT, ["--apply", previewed.previewId])).stdout).result;
+		expect(station(applied)).toEqual(["connectors.run.apply", "success", "SUCCESS_RUN_APPLIED", "external", "completed", ["write-receipt", "provider-write"], []]);
+		expect(writesTo("jira_add_comment")).toHaveLength(1);
+		// Unlock also takes the receipt's runId. The apply released its lock, so
+		// this unlock removes nothing and reports no write.
+		const noop = await recover("--run", record(applied).runId, "--unlock");
+		expect([noop.code, noop.stderr]).toEqual([0, ""]);
+		const unchanged = parse(noop.stdout).result;
+		expect([...station(unchanged), record<{ runId: string; objectIdentity: string; unlocked: boolean }>(unchanged)]).toEqual(["connectors.recover.unlock", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", [], [], { runId: record(applied).runId, objectIdentity: previewed.objectIdentity, unlocked: false }]);
+	}, 90_000);
 });

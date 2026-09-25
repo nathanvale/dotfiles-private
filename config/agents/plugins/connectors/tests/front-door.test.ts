@@ -26,7 +26,12 @@ const AVAILABLE_PATHS = [
 	"connectors.fixtureAuth",
 	"connectors.help",
 	"connectors.list",
+	"connectors.recover",
+	"connectors.recover.adjudicate",
+	"connectors.recover.unlock",
 	"connectors.run",
+	"connectors.run.apply",
+	"connectors.run.preview",
 	"connectors.schema",
 	"connectors.setup",
 	"connectors.status",
@@ -52,14 +57,16 @@ describe("compiled front door: discovery", () => {
 		expect(envelope.result.causeCode).toBe("SUCCESS_UNCHANGED");
 		expect(envelope.result.data.commands.map((c: { commandIdentity: string }) => c.commandIdentity).slice().sort()).toEqual(AVAILABLE_PATHS);
 		expect(envelope.result.data.exitMeanings).toEqual(EXIT_MEANINGS);
+		// Unlock is the one recovery route that takes a previewId as well.
+		expect(envelope.result.data.commands.find((c: { commandIdentity: string }) => c.commandIdentity === "connectors.recover.unlock")?.summary).toBe("Release the write lock a receipt (by runId) or a preview (by previewId) left behind once its holder has exited");
 		expect(envelope.result.data.signalExits).toEqual(SIGNAL_EXITS);
 		// Independent literal of the accepted exclusions: setup and MCPorter
 		// repair are advertised above, so no exclusion may deny them.
 		expect(envelope.result.data.effectExclusions).toEqual([
 			"any credential value read by the front-door process; a 1Password-custody credential is read only by this executable started in its adapter's internal custody or Provider role, fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
 			"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
-			"any provider write operation",
-			"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, and auth logout for every connector; deps covers only explicit MCPorter repair",
+			"any provider write without a recorded preview and a durable write receipt, and any retry or replay of a write whose effect is unknown",
+			"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, run --preview or --apply and recover for one with no write or recovery step, and auth logout for every connector; deps covers only explicit MCPorter repair",
 		]);
 	});
 
@@ -89,6 +96,9 @@ describe("compiled front door: discovery", () => {
 		expect(result.stdout).toContain("Examples:");
 		expect(result.stdout).toContain("schema <connector> [--select name=value ...]");
 		expect(result.stdout).toContain("auth login <connector> [--select name=value ...] [--no-browser] [--reset]");
+		expect(result.stdout).toContain("run <connector> [--select name=value] <write-operation> --input <json-object> --apply <previewId>");
+		expect(result.stdout).toContain("recover <connector> [--select name=value] [--run <runId> [--adjudicate --input <json-object>]]");
+		expect(result.stdout).toContain("recover <connector> [--select name=value] --run <runId|previewId> --unlock");
 	});
 
 	test("--help --json answers with its own Contract Core envelope", async () => {
@@ -430,6 +440,56 @@ describe("compiled front door: run through the packaged fixture adapter (public 
 				causeCode: "DOMAIN_ADAPTER_REFUSED", transactionState: "unchanged", data: { connector: CONNECTOR, connectorCause: "fixture-authority-unavailable" },
 				effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
 			});
+			expect(fixture.stub.calls).toBe(0);
+			expect(existsSync(path.join(fixture.state, "connectors"))).toBe(false);
+		} finally {
+			fixture.dispose();
+		}
+	}, 30_000);
+
+	test("an adapter with no write or recovery step refuses preview, apply, and recover through the catalogue before any selection or state", async () => {
+		const fixture = fixtureRun({ authority: false });
+		try {
+			for (const [argv, identity] of [
+				[["run", CONNECTOR, "--select", "account=a", "probe", "--preview"], "connectors.run.preview"],
+				[["run", CONNECTOR, "--select", "account=a", "probe", "--apply", "p-1"], "connectors.run.apply"],
+				[["recover", CONNECTOR, "--select", "account=a"], "connectors.recover"],
+				[["recover", CONNECTOR, "--select", "account=a", "--run", "r-1", "--unlock"], "connectors.recover.unlock"],
+			] as const) {
+				const result = await fixture.run([...argv]);
+				expect([identity, result.code, result.stderr]).toEqual([identity, 3, ""]);
+				expect(JSON.parse(result.stdout).result).toMatchObject({
+					commandIdentity: identity, causeCode: "DOMAIN_ADAPTER_REFUSED", transactionState: "unchanged",
+					data: { connector: CONNECTOR, connectorCause: "adapter-has-no-writes" }, repairAction: "Use a connector whose packaged adapter supports preview, apply, and recover",
+					effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+				});
+			}
+			expect(fixture.stub.calls).toBe(0);
+			expect(existsSync(path.join(fixture.state, "connectors"))).toBe(false);
+		} finally {
+			fixture.dispose();
+		}
+	}, 30_000);
+
+	test("run and recover refuse a malformed write phase or recovery grammar before loading any adapter", async () => {
+		const fixture = fixtureRun({ authority: false });
+		try {
+			// Independent literals of the accepted grammar: unlock alone names a
+			// runId or a previewId.
+			const runRepair = "Run connectors run <connector> [--select name=value ...] <operation> [--input <json-object>] [--preview | --apply <previewId>]";
+			const recoverRepair = "Run connectors recover <connector> [--select name=value ...] [--run <runId> [--adjudicate --input <json-object>] | --run <runId|previewId> --unlock]";
+			for (const [argv, identity, repair] of [
+				[["run", CONNECTOR, "probe", "--preview", "--apply", "p-1"], "connectors.run", runRepair],
+				[["run", CONNECTOR, "probe", "--apply"], "connectors.run", runRepair],
+				[["run", CONNECTOR, "probe", "--preview", "--preview"], "connectors.run", runRepair],
+				[["recover", CONNECTOR, "--unlock"], "connectors.recover", recoverRepair],
+				[["recover", CONNECTOR, "--run", "r-1", "--adjudicate"], "connectors.recover", recoverRepair],
+				[["recover", CONNECTOR, "--run", "r-1", "--unlock", "--adjudicate", "--input", "{}"], "connectors.recover", recoverRepair],
+			] as const) {
+				const result = await fixture.run([...argv]);
+				expect([argv.join(" "), result.code, result.stderr]).toEqual([argv.join(" "), 2, ""]);
+				expect(JSON.parse(result.stdout).result).toMatchObject({ commandIdentity: identity, causeCode: "USAGE_MALFORMED_ARGUMENTS", transactionState: "unchanged", repairAction: repair });
+			}
 			expect(fixture.stub.calls).toBe(0);
 			expect(existsSync(path.join(fixture.state, "connectors"))).toBe(false);
 		} finally {

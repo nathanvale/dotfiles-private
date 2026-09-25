@@ -6,7 +6,7 @@
 // test's independent count of provider requests. Replies come from
 // canned/<product>/ files read at call time.
 import { dlopen, FFIType, ptr } from "bun:ffi";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 // A process's argv then environment, space-joined as `ps -E -ww -o command=`
@@ -86,9 +86,19 @@ for await (const chunk of Bun.stdin.stream()) {
 		else if (message.method === "tools/call") {
 			const tool = message.params?.name ?? "";
 			appendFileSync(path.join(root, "effects.jsonl"), `${JSON.stringify({ product, tool, args: message.params?.arguments ?? null })}\n`);
-			const value = canned(tool) as { toolErrorText?: string } | null;
+			const value = canned(tool) as { toolErrorText?: string; exitAfterRecord?: true; plantMetaLock?: true; reply?: unknown } | null;
+			// Test-owned write behaviors, after the call is recorded above:
+			// {exitAfterRecord} dies without replying, as a Provider that received
+			// the write and then failed; {plantMetaLock, reply} first leaves the
+			// tenant journal's meta-lock held by an exited process, then replies.
+			if (value?.exitAfterRecord === true) process.exit(1);
+			if (value?.plantMetaLock === true) {
+				const meta = path.join(env.XDG_STATE_HOME ?? "/nonexistent", "connectors", "atlassian", "example", "locks", ".meta");
+				writeFileSync(meta, JSON.stringify({ pid: 2_147_483_000, lockId: "fixture-held", at: Date.now() }), { mode: 0o600 });
+				reply(message.id, { content: [{ type: "text", text: JSON.stringify(value.reply) }] });
+			}
 			// A canned {toolErrorText} is a real MCP tool error, not data.
-			if (typeof value?.toolErrorText === "string") reply(message.id, { isError: true, content: [{ type: "text", text: value.toolErrorText }] });
+			else if (typeof value?.toolErrorText === "string") reply(message.id, { isError: true, content: [{ type: "text", text: value.toolErrorText }] });
 			else reply(message.id, { content: [{ type: "text", text: JSON.stringify(value) }] });
 		} else if (message.id !== undefined) process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "not found" } })}\n`);
 	}
