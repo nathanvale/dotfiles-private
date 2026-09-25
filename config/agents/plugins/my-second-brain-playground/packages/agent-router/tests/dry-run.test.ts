@@ -83,12 +83,12 @@ describe("gates and pick", () => {
 		writeRoutes(created, [
 			route("dry-only", { launch: "dry-run-only" }),
 			route("other-host", { hosts: ["mini"] }),
-			route("no-guide", { harness: "codex", model: { id: "gpt-6-sol" } }),
+			route("no-guide", { harness: "codex", model: { id: "fixture-model-without-guide" } }),
 		])
 		const result = card(created)
 		expect(routeOf(result, "dry-only").refusal).toEqual({ gate: "G5", reason: "declared dry-run-only" })
 		expect(routeOf(result, "other-host").refusal).toEqual({ gate: "G2", reason: "declared for mini, but this host is laptop" })
-		expect(routeOf(result, "no-guide").refusal).toEqual({ gate: "G5", reason: "no Model Guide exists for codex and gpt-6-sol" })
+		expect(routeOf(result, "no-guide").refusal).toEqual({ gate: "G5", reason: "no Model Guide exists for codex and fixture-model-without-guide" })
 		expect(result.result.data.pick).toMatchObject({ status: "none-eligible", route: null, modelGuideRevision: null })
 		expect(result.result.nextAction).toBe("Resolve the listed refusals and gaps, then rerun the dry run.")
 	})
