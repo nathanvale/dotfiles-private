@@ -479,6 +479,9 @@ unset MISE_TEST_NOISY
 first_status="$(sed -n '1p' <<<"$first")"
 first_json="$(sed -n '2,$p' <<<"$first")"
 [[ -n "$first_json" ]] || { cat "$TEST_ROOT/stderr" >&2; fail 'first apply returns structured JSON'; }
+# A nonzero first apply names its structured error before the assertion fails,
+# so a runner-only failure is diagnosable from the suite output alone.
+[[ "$first_status" == 0 ]] || { printf 'first apply stderr:\n' >&2; cat "$TEST_ROOT/stderr" >&2; printf 'first apply output: %s\n' "$first_json" >&2; }
 assert_equals '0' "$first_status" 'first apply succeeds despite unresolved Git ownership'
 assert_equals 'state_write_and_tool_install' "$(jq -r '.side_effect' <<<"$first_json")" 'applied result truthfully reports state and install effects'
 assert_equals '3' "$(grep -Ec '^fixture (lock|install) progress$' "$TEST_ROOT/stderr")" 'noisy Mise output stays on diagnostic stderr'

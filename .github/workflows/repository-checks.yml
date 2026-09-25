@@ -78,18 +78,33 @@ jobs:
           failures=0
           failed_suites=()
           suites=(
-            bin/test/symlinks-manage-test.sh
-            bin/test/symlinks-real-directory-test.sh
-            bin/test/setup-completion-test.sh
-            bin/test/setup-state-recovery-test.sh
-            bin/test/profile-link-parity-test.sh
+            bin/test/agent-lane-audit-test.sh
+            bin/test/agent-lane-launch-test.sh
+            bin/test/agent-lane-receipt-test.sh
+            bin/test/agent-lane-zsh-test.sh
+            bin/test/atuin-agent-history-test.sh
             bin/test/bun-core-install-test.sh
             bin/test/claude-native-install-test.sh
+            bin/test/cloudflare-access-headers-test.sh
+            bin/test/codex-ambient-credential-boundary-test.sh
             bin/test/codex-managed-install-test.sh
+            bin/test/generic-credential-consumer-test.sh
+            bin/test/ghh-test.sh
+            bin/test/git-effective-behavior-test.sh
+            bin/test/lm-studio-ensure-test.sh
+            bin/test/profile-link-parity-test.sh
+            bin/test/setup-completion-test.sh
+            bin/test/setup-state-recovery-test.sh
+            bin/test/symlinks-manage-test.sh
+            bin/test/symlinks-real-directory-test.sh
+            bin/test/toolchain-apply-test.sh
+            bin/test/toolchain-bootstrap-test.sh
+            bin/test/toolchain-status-test.sh
+            bin/test/with-one-password-token-test.sh
+            bin/test/work-profile-slug-parity-test.sh
             bin/test/zsh-effective-behavior-test.sh
             bin/test/zsh-startup-silence-test.sh
             bin/test/zsh-work-profile-boundary-test.sh
-            bin/test/codex-ambient-credential-boundary-test.sh
           )
           for suite in "${suites[@]}"; do
             if bash "$suite"; then

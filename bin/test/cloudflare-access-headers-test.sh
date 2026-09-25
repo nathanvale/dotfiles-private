@@ -65,7 +65,7 @@ if run_helper "$wrapper" >"$TEST_ROOT/out"; then
   fail 'helper succeeded when the wrapper failed'
 fi
 [[ ! -s "$TEST_ROOT/out" ]] || fail 'helper wrote output when the wrapper failed'
-rg -q 'credential-unavailable' "$TEST_ROOT/stderr" || fail 'missing credential-unavailable code'
+grep -q 'credential-unavailable' "$TEST_ROOT/stderr" || fail 'missing credential-unavailable code'
 pass 'fails closed and silently when the credential is unavailable'
 
 wrapper="$(make_wrapper '[{"label":"client_id","value":"abc.access"}]')"
@@ -73,7 +73,7 @@ if run_helper "$wrapper" >"$TEST_ROOT/out"; then
   fail 'helper succeeded with only a client_id'
 fi
 [[ ! -s "$TEST_ROOT/out" ]] || fail 'helper emitted a partial credential'
-rg -q 'credential-incomplete' "$TEST_ROOT/stderr" || fail 'missing credential-incomplete code'
+grep -q 'credential-incomplete' "$TEST_ROOT/stderr" || fail 'missing credential-incomplete code'
 pass 'never emits a partial header pair'
 
 wrapper="$(make_wrapper 'not json at all')"
@@ -87,22 +87,22 @@ wrapper="$(make_wrapper '[{"label":"client_id","value":"abc.access"},{"label":"c
 if CLOUDFLARE_ACCESS_HEADERS_WRAPPER="$wrapper" "$HELPER" extra-argument >"$TEST_ROOT/out" 2>"$TEST_ROOT/stderr"; then
   fail 'helper accepted an unexpected argument'
 fi
-rg -q 'usage-invalid' "$TEST_ROOT/stderr" || fail 'missing usage-invalid code'
+grep -q 'usage-invalid' "$TEST_ROOT/stderr" || fail 'missing usage-invalid code'
 pass 'rejects unexpected arguments'
 
 if CLOUDFLARE_ACCESS_HEADERS_WRAPPER="$TEST_ROOT/absent" "$HELPER" >"$TEST_ROOT/out" 2>"$TEST_ROOT/stderr"; then
   fail 'helper succeeded without its credential wrapper'
 fi
-rg -q 'wrapper-missing' "$TEST_ROOT/stderr" || fail 'missing wrapper-missing code'
+grep -q 'wrapper-missing' "$TEST_ROOT/stderr" || fail 'missing wrapper-missing code'
 pass 'fails closed when the governed launcher is absent'
 
 # --- containment ------------------------------------------------------------
 
-rg -q 'op item get' "$HELPER" || fail 'helper no longer reads through an op item get'
-rg -q 'with-one-password-token' "$HELPER" || fail 'helper does not default to the governed launcher'
+grep -q 'op item get' "$HELPER" || fail 'helper no longer reads through an op item get'
+grep -q 'with-one-password-token' "$HELPER" || fail 'helper does not default to the governed launcher'
 pass 'reads only through the governed launcher'
 
-if rg -q 'CF-Access-Client-Secret=|--header' "$HELPER"; then
+if grep -Eq 'CF-Access-Client-Secret=|--header' "$HELPER"; then
   fail 'helper places a credential on a command line'
 fi
 pass 'no credential reaches argv'
