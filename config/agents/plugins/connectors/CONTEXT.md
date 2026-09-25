@@ -127,7 +127,11 @@ _Avoid_: Auth type, login method
 **Canva Session** (former):
 The below-MCPorter per-account record of client identity and tokens that the
 packaged Canva adapter never uses (ADR 0004). Its files stay where they
-are, unread and unimported; no retirement or revocation policy is decided.
+are, unopened and unimported. After that account's replacement login and
+reads pass, Nathan retires its `session.json`: an attended step removes
+exactly that one file, never opened, copied, backed up, or printed, and
+confirms absence by an existence check only. Connectors carries no remote
+revocation and no automatic deletion.
 _Avoid_: Current custody, Account Vault
 
 **Attended Login**:

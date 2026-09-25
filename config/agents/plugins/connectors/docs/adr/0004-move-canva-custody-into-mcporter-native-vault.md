@@ -28,8 +28,9 @@ vault as every other MCPorter grant. MCPorter also migrates a
 - Each Canva Account has an independently selected vault.
 - Login is attended and separate from reads; reads never open a browser.
 - Client identity changes only through one declared switch, with no fallback.
-- Existing Canva Session files are preserved until an explicit migration
-  policy exists.
+- Existing Canva Session files are preserved until the replacement login is
+  proven for their account; retirement removes only that file in an
+  attended, recorded step, never automatically.
 - No claim about the vault's cryptographic properties.
 
 ## Decision
@@ -66,6 +67,47 @@ The custody interface is `skills/canva/scripts/custody/index.ts`;
 login, schema, and read. No other Canva route exists; the public shared route
 refuses Canva.
 
+### Legacy Canva Session retirement
+
+A legacy Canva Session file
+(`<state root>/connectors/canva/<account>/session.json`, written under ADR
+0002 and holding that account's access and refresh tokens) stays on disk,
+unopened and unused, until both conditions hold for that account on that
+machine:
+
+1. Its attended MCPorter `auth login` under `dcr` has succeeded.
+2. Live-only steps 1 through 3 under Confirmation have passed for the same
+   account through the packaged adapter.
+
+Then Nathan retires that one file in an attended, target-specific step: one
+account on one machine, naming the exact path. To retire is to remove
+exactly that one file. The step never opens, reads, copies, moves, renames,
+backs up, or prints the file, because any surviving copy still holds the
+tokens, and it touches no other file in the account folder. Absence is then
+confirmed by metadata only: an existence check on the named path, such as
+`auth status` reporting `legacySession` as `absent`, never a read of the
+file. Any other legacy file stays until its own account meets both
+conditions.
+
+Each retirement receipt names the account, machine, path, the proof it
+relied on, the absence check, and the outcome, and never any file content.
+Its owner is private runtime evidence under
+`$XDG_STATE_HOME/my-second-brain-playground/connectors-portable-cli/evidence/`,
+reached from Bead `cpc-dep.6`; neither this record nor the repository holds
+a receipt.
+
+No Connectors command, adapter, test, setup step, or automation opens,
+moves, or deletes a legacy file. `auth status` may check whether the legacy
+path exists, by `lstat` alone, and never opens it. This record adds no
+automated deletion path. Retiring the local file does not revoke the grant
+at Canva; Connectors carries no remote revocation. Remote revocation stays a
+separate decision Nathan takes in Canva connected apps, and this record
+makes no claim about how Canva groups the legacy and replacement grants
+there.
+
+This policy records timing and method only. It claims no login, live proof, or
+retirement has happened.
+
 ## Consequences
 
 - Positive: MCPorter's own refresh and refresh lock serve each account
@@ -76,10 +118,17 @@ refuses Canva.
   with its own storage format and refresh semantics.
 - Negative: logout is not yet carried; `login --reset` clears the local grant
   and remote revocation stays in Canva connected apps.
-- Negative: old Canva Session files
-  (`<state root>/connectors/canva/<account>/session.json`, which hold a
-  refresh token) remain on disk, unread and unused. No retirement or
-  revocation policy is decided; Spec #87 AC8 evidence waits on that decision.
+- Negative: old Canva Session files, each holding access and refresh tokens,
+  remain on disk until their account's recorded retirement step. While one
+  remains on a machine, Spec #87 AC8 evidence cannot pass on that machine,
+  because an ordinary token file still holds a provider credential.
+  Removing it is necessary, not sufficient: the account folder also keeps
+  `registration.json`, `hyper-mcp-remote/`, and `refresh.lock`, and AC8 still
+  needs a full on-disk inspection showing no token file ever holds a
+  credential. This record claims no AC8 pass.
+- Negative: retirement is manual, per account, and live-proof dependent;
+  fixtures prove only that Connectors preserves legacy files, never that one
+  was retired.
 - Neutral: the pinned `hyper-mcp-remote` bridge has no remaining Canva consumer.
 
 ## Options and Tradeoffs
@@ -123,10 +172,20 @@ Live-only, each separately authorised, in order:
 4. A second account's login, confirming separate vault files.
 5. A refresh after access-token expiry, confirming silent MCPorter rotation.
 
+Legacy retirement, outside that order: for each
+account and machine that holds a legacy Canva Session file, once steps 1
+through 3 pass for that account, the retirement step under Decision, then
+the metadata-only absence check and that account's `auth status` and one
+read still succeeding. It never waits for steps 4 or 5, so a machine with one
+Canva Account can retire its file.
+
 ## Authority
 
 Decision authority: Nathan, who accepted this record on 2026-09-25, including
-that v1 carries no Connectors Canva logout or remote revocation command. It
+that v1 carries no Connectors Canva logout or remote revocation command. On
+the same date Nathan chose to retire each unused legacy Canva Session file
+after its account's new login, as the conditional local policy under
+Decision records; this amendment keeps the record accepted. It
 supersedes ADR 0002, which is `status: superseded` with `superseded_by`
 pointing back.
 
