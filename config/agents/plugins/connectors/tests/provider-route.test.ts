@@ -265,7 +265,7 @@ describe("route source and skill registries", () => {
 		const skills = readdirSync(SKILLS_ROOT)
 			.filter((name) => existsSync(path.join(SKILLS_ROOT, name, "config", "mcporter.json")))
 			.sort();
-		expect(skills).toEqual(["atlassian", "canva", "context7", "figma", "firecrawl"]);
+		expect(skills).toEqual(["atlassian", "canva", "context7", "figma", "firecrawl", "mermaid"]);
 		for (const skill of skills) {
 			const registry = JSON.parse(readFileSync(path.join(SKILLS_ROOT, skill, "config", "mcporter.json"), "utf8")) as { imports: unknown; mcpServers: Record<string, unknown> };
 			const route = JSON.parse(readFileSync(path.join(SKILLS_ROOT, skill, "config", "route.json"), "utf8")) as { defaultProvider: string };

@@ -772,7 +772,7 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 	test("list admits the Atlassian manifest beside the other packaged connectors", async () => {
 		fresh();
 		const envelope = parse((await fixture.frontDoor(["list"])).stdout).result;
-		expect((envelope.data?.connectors as { id: string }[]).map((entry) => entry.id)).toEqual(["atlassian", "canva", "context7", "firecrawl"]);
+		expect((envelope.data?.connectors as { id: string }[]).map((entry) => entry.id)).toEqual(["atlassian", "canva", "context7", "firecrawl", "mermaid"]);
 	});
 
 	test("a Jira read reaches the declared operation through the plugin-owned MCPorter and confines both tokens", async () => {

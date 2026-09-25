@@ -536,9 +536,8 @@ function problemOf(envelope: Parameters<typeof assertEnvelope>[0]): string | nul
 
 describe("compiled front door: per-Skill resolution (Q11a)", () => {
 	// Each in-scope Skill resolves the front door as `../../bin/connectors`
-	// from its own directory, no global command, no dotfiles path. Mermaid is
-	// out of scope for T1 and is not listed here.
-	const inScopeSkills = ["atlassian", "canva", "context7", "firecrawl"];
+	// from its own directory, no global command, no dotfiles path.
+	const inScopeSkills = ["atlassian", "canva", "context7", "firecrawl", "mermaid"];
 
 	for (const skill of inScopeSkills) {
 		test(`${skill} resolves the front door from its own plugin path`, async () => {

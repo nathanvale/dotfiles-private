@@ -1,0 +1,11 @@
+{
+	"$schema": "https://raw.githubusercontent.com/openclaw/mcporter/main/mcporter.schema.json",
+	"imports": [],
+	"mcpServers": {
+		"mermaid": {
+			"description": "Mermaid hosted MCP, keyless tier",
+			"baseUrl": "https://mcp.mermaid.ai/mcp",
+			"allowedTools": ["validate_and_render_mermaid_diagram", "get_diagram_title", "get_diagram_summary", "search_mermaid_icons", "get_mermaid_syntax_document"]
+		}
+	}
+}
