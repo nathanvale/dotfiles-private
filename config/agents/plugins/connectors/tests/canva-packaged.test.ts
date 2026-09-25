@@ -21,6 +21,25 @@ if (process.env.CI && !official) throw new Error("CONNECTORS_OFFICIAL_RELEASE_FI
 const DENY_NETWORK = '(version 1)(allow default)(deny network-outbound (remote ip))(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))(deny process-exec (literal "/usr/bin/security"))';
 const GRANT_SENTINEL = "SENTINEL_CANVA_GRANT_VALUE";
 const ARGV_SENTINEL = "SENTINEL_CANVA_ARGV_VALUE";
+const LEGACY_SENTINEL = "SENTINEL_CANVA_LEGACY_REFRESH_TOKEN";
+// Ambient caller variables a leaky route would carry into MCPorter's
+// environment; every fixture process starts with them set.
+const AMBIENT_SECRETS = { CANVA_CLIENT_SECRET: "SENTINEL_CANVA_AMBIENT_CLIENT_SECRET", CANVA_ACCESS_TOKEN: "SENTINEL_CANVA_AMBIENT_ACCESS_TOKEN" };
+// Independent oracle: MCPorter's camelCase and snake_case client identity,
+// metadata-document, token-cache, bearer, and command spellings, plus an
+// unknown key; each would change identity or move the grant behind the switch.
+const REGISTRY_OVERRIDES: ReadonlyArray<Record<string, unknown>> = [
+	{ oauthClientMetadataUrl: "https://example.test/client.json" },
+	{ oauthClientId: "portal-client" },
+	{ tokenCacheDir: "~/shared" },
+	{ oauth_client_id: "portal-client" },
+	{ oauth_client_metadata_url: "https://example.test/client.json" },
+	{ token_cache_dir: "~/shared" },
+	{ bearerToken: "fixture" },
+	{ bearer_token_env: "CANVA_TOKEN" },
+	{ oauthCommand: { args: ["login"] } },
+	{ futureOption: true },
+];
 // Independent oracle: MCPorter 0.14.0's vault format, restated by hand.
 const SEEDED_VAULT = JSON.stringify({
 	version: 2,
@@ -61,6 +80,7 @@ function canvaFixture(): Fixture {
 		PATH: `${hostile.binDir}:/usr/bin:/bin`,
 		TMPDIR: bundle.root,
 		XDG_STATE_HOME: state,
+		...AMBIENT_SECRETS,
 		CONNECTORS_TEST_RELEASE_DIR: official ?? path.join(bundle.root, "no-release-fixture"),
 	};
 	return {
@@ -94,6 +114,20 @@ function ownedVault(root: string): string {
 	return path.join(root, "data", "mcporter", "credentials.json");
 }
 
+function seedLegacySession(state: string, account: string): string {
+	const file = path.join(state, "connectors", "canva", account, "session.json");
+	mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+	writeFileSync(file, JSON.stringify({ refresh_token: LEGACY_SENTINEL }), { mode: 0o600 });
+	return file;
+}
+
+function overrideRegistry(fixture: Fixture, override: Record<string, unknown>): void {
+	const file = path.join(fixture.bundle.skillsRoot, "canva", "config", "mcporter.json");
+	const registry = JSON.parse(readFileSync(file, "utf8"));
+	registry.mcpServers["canva-connectors"] = { ...registry.mcpServers["canva-connectors"], ...override };
+	writeFileSync(file, JSON.stringify(registry));
+}
+
 function onlyEnvelope(result: { stdout: string; stderr: string }): { message: string; result: Record<string, any> } {
 	expect(result.stderr).toBe("");
 	expect(result.stdout.trim().split("\n")).toHaveLength(1);
@@ -105,11 +139,45 @@ function filesUnder(root: string): string[] {
 	return readdirSync(root, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => path.join(entry.parentPath, entry.name));
 }
 
-// Holds MCPorter on a FIFO vault file and reads its argv from the process
-// table while it waits, then releases it onto a regular grant-free vault so
-// any later read finds a file. Returns the argv from "auth" on, or null when
-// MCPorter never opened the vault. Paths under the fixture hold no spaces.
-async function mcporterAuthArgv(fifo: string, state: string, done: Promise<unknown>): Promise<string[] | null> {
+// Pid to args for every process, without environments.
+function processArgs(): Map<string, string> {
+	const table = new Map<string, string>();
+	for (const line of execFileSync("/bin/ps", ["-axww", "-o", "pid=,args="], { encoding: "utf8" }).split("\n")) {
+		const row = /^\s*(\d+) (.*)$/.exec(line);
+		if (row?.[1] !== undefined && row[2] !== undefined) table.set(row[1], row[2]);
+	}
+	return table;
+}
+
+// One process's args followed by its environment. ps reads only that pid, so
+// no other process's environment is ever collected. A pid that has already
+// exited yields an empty string, never ps's error text.
+function processArgsWithEnv(pid: string): string {
+	try {
+		return execFileSync("/bin/ps", ["-Eww", "-o", "args=", "-p", pid], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+	} catch {
+		return "";
+	}
+}
+
+// The held MCPorter's environment carries the account's own vault roots and
+// the route's no-keepalive pin, and no ambient Canva secret by name or value.
+// The roots are the positive control: an empty or unparsed capture fails them.
+// Failures show only fixture paths, literal names, and booleans.
+function expectAccountEnv(fixture: Fixture, account: string, env: readonly string[]): void {
+	const pinned = env.filter((entry) => ["XDG_DATA_HOME=", "XDG_CACHE_HOME=", "MCPORTER_NO_KEEPALIVE="].some((name) => entry.startsWith(name))).sort();
+	expect({ account, pinned }).toEqual({ account, pinned: ["MCPORTER_NO_KEEPALIVE=*", `XDG_CACHE_HOME=${fixture.vault(account)}/cache`, `XDG_DATA_HOME=${fixture.vault(account)}/data`] });
+	for (const [name, secret] of Object.entries(AMBIENT_SECRETS)) {
+		expect({ account, name, leaked: env.some((entry) => entry.startsWith(`${name}=`) || entry.includes(secret)) }).toEqual({ account, name, leaked: false });
+	}
+}
+
+// Holds MCPorter on a FIFO vault file and reads its argv and environment from
+// the process table while it waits, then releases it onto a regular grant-free
+// vault so any later read finds a file. Returns the argv from `verb` on and the
+// environment entries, or null when MCPorter never opened the vault. Paths and
+// environment values under the fixture hold no spaces.
+async function heldMcporter(fifo: string, state: string, verb: string, done: Promise<unknown>): Promise<{ argv: string[]; env: string[] } | null> {
 	let settled = false;
 	void done.finally(() => { settled = true; });
 	while (!settled) {
@@ -120,15 +188,17 @@ async function mcporterAuthArgv(fifo: string, state: string, done: Promise<unkno
 			await Bun.sleep(5);
 			continue;
 		}
-		const line = execFileSync("/bin/ps", ["-axww", "-o", "args="], { encoding: "utf8" }).split("\n").find((args) => args.startsWith(`${state}/`) && args.includes(" auth "));
+		const held = [...processArgs()].find(([, args]) => args.startsWith(`${state}/`) && args.includes(` ${verb} `));
+		const withEnv = held ? processArgsWithEnv(held[0]) : "";
 		const empty = JSON.stringify({ version: 2, entries: {} });
 		writeFileSync(`${fifo}.next`, empty, { mode: 0o600 });
 		renameSync(`${fifo}.next`, fifo);
 		writeSync(fd, empty);
 		closeSync(fd);
-		if (!line) return null;
-		const argv = line.trim().split(" ");
-		return argv.slice(argv.indexOf("auth"));
+		if (!held) return null;
+		const args = held[1].trim();
+		const argv = args.split(" ");
+		return { argv: argv.slice(argv.indexOf(verb)), env: withEnv.slice(args.length).trim().split(" ") };
 	}
 	return null;
 }
@@ -213,6 +283,31 @@ test.skipIf(!official)("schema reads only the selected account's vault through t
 	}
 }, 60_000);
 
+test.skipIf(!official)("run and schema hand the verified MCPorter a no-consent read with the account's vault roots and no ambient secret", async () => {
+	const fixture = canvaFixture();
+	// [account, command argv, MCPorter argv from its verb on], restated from
+	// ADR 0004: every Canva read carries --no-oauth, so it never starts consent.
+	const reads: ReadonlyArray<readonly [string, string[], readonly [string, ...string[]]]> = [
+		["reader", ["run", "canva", "--select", "account=reader", "search-designs", "--input", '{"query":"poster"}'], ["call", "canva-connectors.search-designs", "--args", '{"query":"poster"}', "--output", "json", "--no-oauth"]],
+		["schemer", ["schema", "canva", "--select", "account=schemer"], ["list", "canva-connectors", "--schema", "--json", "--no-oauth"]],
+	];
+	try {
+		for (const [account, argv, expected] of reads) {
+			const fifo = ownedVault(fixture.vault(account));
+			execFileSync("/usr/bin/mkfifo", [fifo]);
+			const running = fixture.run(argv);
+			const held = await heldMcporter(fifo, fixture.state, expected[0], running);
+			const result = await running;
+			expect({ account, argv: held?.argv }).toEqual({ account, argv: [...expected] });
+			expectAccountEnv(fixture, account, held?.env ?? []);
+			for (const secret of Object.values(AMBIENT_SECRETS)) expect(result.stdout).not.toContain(secret);
+			onlyEnvelope(result);
+		}
+	} finally {
+		fixture.dispose();
+	}
+}, 60_000);
+
 test.skipIf(!official)("a run reports the vault directories it creates or narrows, and status reads a grant-free index as unknown", async () => {
 	const fixture = canvaFixture();
 	try {
@@ -257,6 +352,7 @@ test.skipIf(!official)("a run for the grant-holding account keeps the grant insi
 	try {
 		const grant = ownedVault(fixture.vault("a"));
 		writeFileSync(grant, SEEDED_VAULT, { mode: 0o600 });
+		const legacy = seedLegacySession(fixture.state, "a");
 		const result = await fixture.run(["run", "canva", "--select", "account=a", "get-design", "--input", '{"design_id":"D1"}']);
 		expect(result.code).toBe(75);
 		// Offline, MCPorter still rewrites the grant-holding file with its index.
@@ -264,6 +360,9 @@ test.skipIf(!official)("a run for the grant-holding account keeps the grant insi
 		expect(result.stdout).not.toContain(GRANT_SENTINEL);
 		const holders = [...filesUnder(fixture.state), ...filesUnder(fixture.home), ...filesUnder(path.join(fixture.bundle.skillsRoot, "canva"))].filter((file) => readFileSync(file).includes(GRANT_SENTINEL));
 		expect(holders).toEqual([grant]);
+		// The former Canva Session stays where it was, unchanged and never echoed.
+		expect(result.stdout).not.toContain(LEGACY_SENTINEL);
+		expect(readFileSync(legacy, "utf8")).toBe(JSON.stringify({ refresh_token: LEGACY_SENTINEL }));
 	} finally {
 		fixture.dispose();
 	}
@@ -284,6 +383,10 @@ test("approved client mode refuses login, run, and schema with no fallback, no M
 				repairAction: "Set mode to dcr in skills/canva/config/client.json; the approved client is not yet built",
 			});
 		}
+		// Inspect still reports which mode the switch selects, and that it is not admitted.
+		const status = await fixture.run(["auth", "status", "canva", "--select", "account=a"]);
+		expect(status.code).toBe(0);
+		expect(onlyEnvelope(status).result.data).toMatchObject({ connector: "canva", account: "a", clientMode: "approved", clientModeAdmitted: false });
 		expect(existsSync(path.join(fixture.state, "connectors"))).toBe(false);
 	} finally {
 		fixture.dispose();
@@ -341,15 +444,18 @@ test("auth status reports the vault index per account, never a grant it has not 
 	const fixture = canvaFixture();
 	try {
 		writeFileSync(ownedVault(fixture.vault("a")), SEEDED_VAULT, { mode: 0o600 });
-		const expected = { a: ["present", "unknown"], b: ["absent", "absent"] } as const;
-		for (const [account, [vaultIndex, grant]] of Object.entries(expected)) {
+		const legacy = seedLegacySession(fixture.state, "a");
+		const expected = { a: ["present", "unknown", "preserved"], b: ["absent", "absent", "absent"] } as const;
+		for (const [account, [vaultIndex, grant, legacySession]] of Object.entries(expected)) {
 			const result = await fixture.run(["auth", "status", "canva", "--select", `account=${account}`]);
 			expect(result.code).toBe(0);
 			const envelope = onlyEnvelope(result);
 			expect(envelope.result).toMatchObject({ commandIdentity: "connectors.auth", causeCode: "SUCCESS_UNCHANGED", effectClass: "inspect", transactionState: "unchanged" });
-			expect(envelope.result.data).toEqual({ connector: "canva", account, custody: "mcporter-native", clientMode: "dcr", clientModeAdmitted: true, vaultIndex, grant, legacySession: "absent" });
+			expect(envelope.result.data).toEqual({ connector: "canva", account, custody: "mcporter-native", clientMode: "dcr", clientModeAdmitted: true, vaultIndex, grant, legacySession });
 			expect(result.stdout).not.toContain(GRANT_SENTINEL);
+			expect(result.stdout).not.toContain(LEGACY_SENTINEL);
 		}
+		expect(readFileSync(legacy, "utf8")).toBe(JSON.stringify({ refresh_token: LEGACY_SENTINEL }));
 		expect(existsSync(path.join(fixture.state, "connectors", "mcporter"))).toBe(false);
 		expect(existsSync(fixture.vault("b"))).toBe(false);
 	} finally {
@@ -358,25 +464,29 @@ test("auth status reports the vault index per account, never a grant it has not 
 }, 30_000);
 
 test("adapter preconditions refuse on their own cause rows before any MCPorter selection", async () => {
-	// [setup, argv, exit, cause, connectorCause], restated from the accepted catalogue.
-	const cases: ReadonlyArray<readonly [(fixture: Fixture) => void, string[], number, string, string]> = [
-		[(fixture) => mkdirSync(path.join(fixture.home, ".mcporter", "canva-connectors"), { recursive: true }), ["run", "canva", "--select", "account=a", "search-designs"], 3, "DOMAIN_ADAPTER_REFUSED", "legacy-cache-present"],
-		[(fixture) => mkdirSync(path.join(fixture.home, ".mcporter", "canva-connectors"), { recursive: true }), ["schema", "canva", "--select", "account=a"], 3, "DOMAIN_ADAPTER_REFUSED", "legacy-cache-present"],
-		[(fixture) => writeFileSync(path.join(fixture.bundle.skillsRoot, "canva", "config", "client.json"), JSON.stringify({ mode: "portal" })), ["auth", "status", "canva", "--select", "account=a"], 4, "SCHEMA_ADAPTER_REFUSED", "client-mode-invalid"],
+	// [label, setup, argv, exit, cause, connectorCause], restated from the accepted catalogue.
+	// A registry row's label names the override key it plants.
+	type Row = readonly [string, (fixture: Fixture) => void, string[], number, string, string];
+	const cases: ReadonlyArray<Row> = [
+		["legacy home cache on run", (fixture) => mkdirSync(path.join(fixture.home, ".mcporter", "canva-connectors"), { recursive: true }), ["run", "canva", "--select", "account=a", "search-designs"], 3, "DOMAIN_ADAPTER_REFUSED", "legacy-cache-present"],
+		["legacy home cache on schema", (fixture) => mkdirSync(path.join(fixture.home, ".mcporter", "canva-connectors"), { recursive: true }), ["schema", "canva", "--select", "account=a"], 3, "DOMAIN_ADAPTER_REFUSED", "legacy-cache-present"],
+		["unknown client mode", (fixture) => writeFileSync(path.join(fixture.bundle.skillsRoot, "canva", "config", "client.json"), JSON.stringify({ mode: "portal" })), ["auth", "status", "canva", "--select", "account=a"], 4, "SCHEMA_ADAPTER_REFUSED", "client-mode-invalid"],
+		...REGISTRY_OVERRIDES.map((override): Row => [`registry override ${Object.keys(override).join(",")}`, (fixture) => overrideRegistry(fixture, override), ["run", "canva", "--select", "account=a", "search-designs"], 4, "SCHEMA_ADAPTER_REFUSED", "registry-identity-invalid"]),
 	];
-	for (const [setup, argv, exit, cause, connectorCause] of cases) {
+	expect(cases).toHaveLength(13);
+	for (const [label, setup, argv, exit, cause, connectorCause] of cases) {
 		const fixture = canvaFixture();
 		try {
 			setup(fixture);
 			const result = await fixture.run(argv);
-			expect({ cause, code: result.code }).toEqual({ cause, code: exit });
+			expect({ label, connectorCause, code: result.code }).toEqual({ label, connectorCause, code: exit });
 			expect(onlyEnvelope(result).result).toMatchObject({ causeCode: cause, transactionState: "unchanged", data: { connector: "canva", connectorCause }, effects: { completed: [], uncertain: [] } });
 			expect(existsSync(path.join(fixture.state, "connectors"))).toBe(false);
 		} finally {
 			fixture.dispose();
 		}
 	}
-}, 30_000);
+}, 60_000);
 
 test.skipIf(!official)("after MCPorter selection, a symlinked vault root refuses and an offline attended login reports an uncertain grant", async () => {
 	const fixture = canvaFixture();
@@ -420,7 +530,9 @@ test.skipIf(!official)("attended login hands --no-browser and --reset to the ver
 			data: { connector: "canva", verb: "login", account, clientMode: "dcr" },
 			effects: { remaining: [], uncertain: ["account-grant"], inventoryComplete: true },
 		});
-		for (const output of [result.stdout, result.terminal]) expect(output).not.toContain(GRANT_SENTINEL);
+		for (const output of [result.stdout, result.terminal]) {
+			for (const secret of [GRANT_SENTINEL, ...Object.values(AMBIENT_SECRETS)]) expect(output).not.toContain(secret);
+		}
 	};
 	try {
 		// [account, caller flags, MCPorter argv from "auth" on]. The flags arrive
@@ -433,9 +545,11 @@ test.skipIf(!official)("attended login hands --no-browser and --reset to the ver
 			const fifo = ownedVault(fixture.vault(account));
 			execFileSync("/usr/bin/mkfifo", [fifo]);
 			const running = login(account, flags);
-			const argv = await mcporterAuthArgv(fifo, fixture.state, running);
+			const held = await heldMcporter(fifo, fixture.state, "auth", running);
 			await running;
-			expect({ account, argv }).toEqual({ account, argv: [...expected] });
+			expect({ account, argv: held?.argv ?? null }).toEqual({ account, argv: [...expected] });
+			// Login spawns MCPorter from its own site, so its environment is proved apart from the reads.
+			expectAccountEnv(fixture, account, held?.env ?? []);
 		}
 		// A plain login leaves the seeded grant in place, so only --reset clears
 		// it, and only in the selected account's vault.

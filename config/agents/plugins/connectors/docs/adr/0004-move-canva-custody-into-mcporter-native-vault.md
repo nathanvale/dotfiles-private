@@ -38,19 +38,21 @@ The Canva registry declares one hosted OAuth server, `canva-connectors`, on
 four read tools. Its route declares `oauth: "mcporter"` and
 `dispatcherOwned: true`, so the public shared route refuses Canva.
 
-`skills/canva/scripts/canva.ts` is the Canva launcher. It takes the shared
-route's own plan through `planDispatcherRoute`, then sets MCPorter's
-`XDG_DATA_HOME` and `XDG_CACHE_HOME` to the Account Vault
+`skills/canva/adapter.ts` is the packaged Canva adapter behind the front
+door's `bin/connectors auth`, `run`, and `schema`, which reach the verified
+MCPorter the front door selects. The adapter takes the shared route's own plan
+through `planCanvaRoute`, which sets MCPorter's `XDG_DATA_HOME` and
+`XDG_CACHE_HOME` to the Account Vault
 `<state root>/connectors/canva-mcporter/<account>/{data,cache}`, created as
-owned 0700 directories only after every check and the MCPorter lookup pass,
-and replaces itself with MCPorter. `login` runs
-MCPorter `auth` (attended, `--no-browser` and `--reset` only); `list` and
-`call` carry `--no-oauth`; `status` reports only file existence.
+owned 0700 directories only after every check and the MCPorter selection
+pass. `auth login` runs MCPorter `auth` (attended, `--no-browser` and
+`--reset` only); `run` and `schema` carry `--no-oauth`; `auth status` reports
+only file existence.
 
 `config/client.json` holds the Client Mode. `dcr` is admitted. `approved` is
 reserved and refuses every login and read with `client-mode-not-admitted`.
 The Canva server entry may carry only `description`, `baseUrl`, `auth`,
-`clientName`, and `allowedTools`; the launcher refuses every other key.
+`clientName`, and `allowedTools`; the custody interface refuses every other key.
 MCPorter accepts camelCase and snake_case spellings of client, secret,
 metadata-document, token-cache, bearer, header, env, and command options, and
 any of them would change identity, fall back from a metadata document to
@@ -59,7 +61,9 @@ quote caller argv or the shared route's argv-bearing message. It refuses when `~
 MCPorter would import it into the selected account.
 
 The custody interface is `skills/canva/scripts/custody/index.ts`;
-`planCanvaRoute` is the seam a generic `connectors run` calls for Canva.
+`planCanvaRoute` is the seam the packaged adapter calls for every Canva
+login, schema, and read. No other Canva route exists; the public shared route
+refuses Canva.
 
 ## Consequences
 
@@ -86,32 +90,35 @@ The custody interface is `skills/canva/scripts/custody/index.ts`;
 
 ### One MCPorter entry through the shared route
 
-- Good: no launcher.
+- Good: no Canva-owned code.
 - Bad: every account shares one home vault key; isolation fails.
 
-### Per-account Account Vault through a Canva launcher
+### Per-account Account Vault through a packaged Canva adapter
 
 - Good: independent vault per account with no shared-route change.
-- Bad: one more service-owned launcher until the generic run carries it.
+- Good: the generic front door carries Canva with no service-name branch.
+- Bad: Canva keeps one service-owned adapter in the closed packaged registry.
 
 ## Confirmation
 
-Fixture-proven in `skills/canva/tests/canva.test.ts` through the real
-launcher process and the shared MCPorter fake: exact registry and route,
-attended `auth` argv, per-account private vault roots, `--no-oauth` reads,
-the approved-mode refusal with no MCPorter start, identity-override and home
-cache refusals, secret sentinels absent from argv, output, and MCPorter's
-environment, preserved legacy files, the public route's refusal of Canva,
-Figma's unchanged route environment, snake_case and unknown registry keys
-refusing, a secret-shaped argv sentinel absent from every refusal, a
-symlinked vault root refusing, and a missing MCPorter refusing before any
-vault directory exists.
+Fixture-proven in `tests/canva-packaged.test.ts` through the packaged
+`bin/connectors` with network denied and the official MCPorter 0.14.0 it
+verifies: attended `auth` argv with `--no-browser` and `--reset`, per-account
+vault reads and `--reset`, `--no-oauth` on `run` and `schema`, per-account
+private vault roots in MCPorter's environment with ambient Canva secrets
+absent, the approved-mode refusal with no MCPorter selection, camelCase,
+snake_case, and unknown registry keys refusing, home cache and symlinked
+vault root refusals, the grant sentinel confined to its vault, preserved
+legacy files, and a secret-shaped argv sentinel absent from every refusal.
+`skills/canva/tests/canva.test.ts` pins the registry, route, and client
+switch, and the public route's refusal of Canva;
+`skills/figma/tests/figma.test.ts` pins Figma's unchanged route environment.
 
 Live-only, each separately authorised, in order:
 
-1. Attended `login` for one account under MCPorter 0.14.0 with `dcr`.
-2. `status`, then `list --schema --json`; reconcile the four admitted names.
-3. One `search-designs` and one `get-design` of a known design.
+1. Attended `auth login` for one account under MCPorter 0.14.0 with `dcr`.
+2. `auth status`, then `schema`; reconcile the four admitted names.
+3. One `run` of `search-designs` and one of `get-design` for a known design.
 4. A second account's login, confirming separate vault files.
 5. A refresh after access-token expiry, confirming silent MCPorter rotation.
 

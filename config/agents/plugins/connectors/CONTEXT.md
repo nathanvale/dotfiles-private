@@ -110,8 +110,8 @@ accounts.
 _Avoid_: User, tenant, profile, login
 
 **Account Vault**:
-The private owned directory per Canva Account that the Canva launcher gives
-MCPorter as its data and cache home, so MCPorter's native OAuth vault for that
+The private owned directory per Canva Account that the packaged Canva adapter
+gives MCPorter as its data and cache home, so MCPorter's native OAuth vault for that
 account is independent of every other account and of MCPorter's default
 home vault. MCPorter alone reads and writes the grant inside it; Connectors
 claims no encryption for it.
@@ -126,7 +126,7 @@ _Avoid_: Auth type, login method
 
 **Canva Session** (former):
 The below-MCPorter per-account record of client identity and tokens that the
-Canva launcher no longer uses (proposed ADR 0004). Its files stay where they
+packaged Canva adapter never uses (proposed ADR 0004). Its files stay where they
 are, unread and unimported; no retirement or revocation policy is decided.
 _Avoid_: Current custody, Account Vault
 
