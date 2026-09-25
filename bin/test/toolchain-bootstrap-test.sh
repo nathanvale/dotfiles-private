@@ -3,9 +3,9 @@
 # Applied Mise shell-bootstrap contract.
 #
 # Runs the production startup owners in real zsh and /bin/sh processes under a
-# test-owned HOME. Mise and fnm are process fakes; selected state, exported
-# config, PATH, activation calls, fallback calls, streams, and exit status are
-# observed outside the child. This does not install Mise or prove real runtime
+# test-owned HOME. Mise, pyenv, and a retired fnm are process fakes; selected
+# state, exported config, PATH, activation calls, fallback calls, streams, and
+# exit status are observed outside the child. This does not install Mise or prove real runtime
 # downloads, arbitrary GUI hosts, or a clean no-cache Mac. Runtime shims are
 # empty test-owned executables: the suite proves which executable wins PATH
 # resolution, never what a runtime prints.
@@ -41,15 +41,28 @@ FAKE_BIN="$TEST_ROOT/fake-bin"
 EXTERNAL="$TEST_ROOT/external"
 RECORD_DIR="$TEST_ROOT/records"
 EMPTY_PREFIX="$TEST_ROOT/empty-prefix"
+HUSKY_PREFIX="$TEST_ROOT/husky-prefix"
 REVISION_ID='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-mkdir -p "$HOME_FIXTURE/.config/mise" "$HOME_FIXTURE/.config/fnm" \
+mkdir -p "$HOME_FIXTURE/.config/mise" \
   "$HOME_FIXTURE/.config/husky" "$FAKE_BIN" "$EXTERNAL" "$RECORD_DIR" \
-  "$EMPTY_PREFIX/bin"
+  "$EMPTY_PREFIX/bin" "$HUSKY_PREFIX/bin"
 HOME_CANONICAL="$(CDPATH='' cd -P "$HOME_FIXTURE" && pwd)"
 cp "$REPO_ROOT/config/mise/bootstrap.sh" "$HOME_FIXTURE/.config/mise/bootstrap.sh"
-sed "s#/opt/homebrew#${EMPTY_PREFIX}#g" "$REPO_ROOT/config/fnm/bootstrap.sh" \
-  >"$HOME_FIXTURE/.config/fnm/bootstrap.sh"
-cp "$REPO_ROOT/config/husky/init.sh" "$HOME_FIXTURE/.config/husky/init.sh"
+# The Husky init restores the Homebrew prefix itself because Git hooks can
+# inherit the launchd PATH. Point that prefix at a test-owned directory so the
+# launchd-PATH row below observes the guard rather than this machine's Homebrew.
+sed "s#/opt/homebrew#${HUSKY_PREFIX}#g" "$REPO_ROOT/config/husky/init.sh" \
+  >"$HOME_FIXTURE/.config/husky/init.sh"
+# Live ~/.config is the repository's config/ directory, so every tracked
+# owner bootstrap is reachable from startup. Mirror them all into the fixture:
+# a reintroduced `source "$HOME/.config/<owner>/bootstrap.sh"` line then runs
+# here too instead of vanishing behind its own -f guard.
+for owner_bootstrap in "$REPO_ROOT"/config/*/bootstrap.sh; do
+  owner_dir="$HOME_FIXTURE/.config/$(basename "$(dirname "$owner_bootstrap")")"
+  mkdir -p "$owner_dir"
+  [[ -e "$owner_dir/bootstrap.sh" ]] ||
+    sed "s#/opt/homebrew#${EMPTY_PREFIX}#g" "$owner_bootstrap" >"$owner_dir/bootstrap.sh"
+done
 for startup_owner in .zshenv .zprofile .zshrc; do
   sed "s#/opt/homebrew#${EMPTY_PREFIX}#g" "$REPO_ROOT/$startup_owner" \
     >"$HOME_FIXTURE/$startup_owner"
@@ -64,12 +77,12 @@ fi
 STUB
 chmod +x "$FAKE_BIN/mise"
 
+# fnm is retired as a configured Node owner. The fake stays resolvable and
+# records every call, so the no-fnm rows below fail on a reintroduced hook or
+# bootstrap rather than passing because the executable was absent.
 cat >"$FAKE_BIN/fnm" <<'STUB'
 #!/bin/sh
 printf '%s\n' "$*" >>"$RECORD_DIR/fnm-calls"
-if [ "${1:-}" = env ]; then
-  printf '%s\n' 'export CONTRACT_FNM_BOOTSTRAPPED=1'
-fi
 STUB
 chmod +x "$FAKE_BIN/fnm"
 
@@ -230,9 +243,10 @@ assert_equals "$(grep -E '^(installs|shims)=' <<<"$bootstrap_out" | tr '\n' '|')
   'installs=unset|shims=unset|' \
   'missing Mise executable clears inherited installs and shims overrides'
 
-# Run all four real zsh startup modes against valid applied state. A fake fnm
-# and pyenv remain visible so the calls receipt proves active Mise gates their
-# interactive ownership hooks rather than relying on absence.
+# Run all four real zsh startup modes against valid applied state. A fake pyenv
+# remains visible so the calls receipt proves active Mise gates its interactive
+# ownership hook rather than relying on absence; the fake fnm proves startup
+# never launches the retired manager in any mode.
 #
 # Every applied runtime exists twice: an empty Mise shim, and a decoy under
 # ~/.local/bin, the user command directory .zshenv places ahead of the runtime
@@ -295,6 +309,10 @@ for mode in "${all_modes[@]}"; do
   set -e
   assert_equals "$zsh_status" '0' "$mode zsh startup exits zero"
   assert_equals "$(wc -c <"$err_file" | tr -d ' ')" '0' "$mode zsh startup keeps stderr empty"
+  if [[ -e "$RECORD_DIR/fnm-calls" ]]; then
+    fail "$mode launched fnm; Mise is the only configured Node owner"
+  fi
+  pass "$mode launches no fnm process"
   grep -Fxq 'active=1' <<<"$zsh_out" || fail "$mode did not select applied Mise state"
   pass "$mode selects applied Mise state"
   grep -Fxq "directories=$HOME_CANONICAL/.local/share/mise|$HOME_CANONICAL/.local/share/mise/installs|$HOME_CANONICAL/.local/share/mise/shims" <<<"$zsh_out" ||
@@ -313,10 +331,6 @@ for mode in "${all_modes[@]}"; do
       fail "$mode invoked pyenv while applied Mise was active"
     fi
     pass "$mode does not initialize pyenv while applied Mise is active"
-    if [[ -e "$RECORD_DIR/fnm-calls" ]] && grep -Fq -- '--use-on-cd' "$RECORD_DIR/fnm-calls"; then
-      fail "$mode invoked the interactive fnm hook while applied Mise was active"
-    fi
-    pass "$mode does not initialize the interactive fnm hook"
   else
     assert_equals "$(grep '^resolved=' <<<"$zsh_out")" "resolved=$expected_shim_resolution" \
       "$mode resolves every applied runtime to its Mise shim ahead of ~/.local/bin"
@@ -367,7 +381,6 @@ husky_out="$({
     RECORD_DIR="$RECORD_DIR" /bin/sh -c '
       . "$HOME/.config/husky/init.sh"
       printf "active=%s\n" "${DOTFILES_MISE_ACTIVE-unset}"
-      printf "fnm=%s\n" "${CONTRACT_FNM_BOOTSTRAPPED-unset}"
       printf "data=%s\n" "${MISE_DATA_DIR-unset}"
       printf "directories=%s|%s|%s\n" "${MISE_DATA_DIR-unset}" "${MISE_INSTALLS_DIR-unset}" "${MISE_SHIMS_DIR-unset}"
       printf "path=%s\n" "$PATH"
@@ -380,8 +393,10 @@ assert_equals "$(wc -c <"$husky_err" | tr -d ' ')" '0' \
   'Husky POSIX bootstrap stays silent'
 grep -Fxq 'active=1' <<<"$husky_out" || fail 'Husky did not select applied Mise state'
 pass 'Husky selects applied Mise state'
-grep -Fxq 'fnm=1' <<<"$husky_out" || fail 'Husky did not run the retained fnm fallback first'
-pass 'Husky runs the retained fnm fallback before Mise selection'
+if [[ -e "$RECORD_DIR/fnm-calls" ]]; then
+  fail 'Husky launched fnm; Mise is the only configured Node owner'
+fi
+pass 'Husky launches no fnm process'
 assert_equals "$(grep '^data=' <<<"$husky_out")" \
   "data=$HOME_CANONICAL/.local/share/mise" \
   'Husky exports the canonical Mise data root'
@@ -396,17 +411,33 @@ if [[ -e "$RECORD_DIR/mise-calls" ]]; then
 fi
 pass 'Husky uses shims without interactive Mise activation'
 
+# A hook started by a Dock-launched Git client inherits the launchd PATH, which
+# has no package prefix at all. The init must restore it before Mise selection
+# can find the executable; with only /usr/bin:/bin the fake Mise lives solely
+# under the test-owned prefix the init was rewritten to.
+cp "$FAKE_BIN/mise" "$HUSKY_PREFIX/bin/mise"
+rm -f "$RECORD_DIR"/*
+# The isolated POSIX child expands HOME and the bootstrap variables.
+# shellcheck disable=SC2016
+husky_launchd_out="$(env -i HOME="$HOME_FIXTURE" PATH="/usr/bin:/bin" \
+  RECORD_DIR="$RECORD_DIR" /bin/sh -c '
+    . "$HOME/.config/husky/init.sh"
+    printf "active=%s\n" "${DOTFILES_MISE_ACTIVE-unset}"
+  ' 2>/dev/null)"
+grep -Fxq 'active=1' <<<"$husky_launchd_out" ||
+  fail 'Husky under the launchd PATH did not select applied Mise state'
+pass 'Husky under the launchd PATH selects applied Mise state'
+
 # Exercise the public verifier with a small test-owned toolchain adapter. Other
 # machine checks intentionally fail in this isolated HOME; this slice observes
 # only the three new checks and their distinct repair paths.
 VERIFY_DOTFILES="$TEST_ROOT/verify-dotfiles"
 HOSTILE_DOTFILES="$TEST_ROOT/hostile-dotfiles"
 mkdir -p "$VERIFY_DOTFILES/bin/dotfiles" "$VERIFY_DOTFILES/config/mise" \
-  "$VERIFY_DOTFILES/config/node" "$HOSTILE_DOTFILES/config/mise"
+  "$HOSTILE_DOTFILES/config/mise"
 sed "s#/opt/homebrew#${EMPTY_PREFIX}#g" "$REPO_ROOT/verify_install.sh" \
   >"$VERIFY_DOTFILES/verify_install.sh"
 cp "$REPO_ROOT/config/mise/bootstrap.sh" "$VERIFY_DOTFILES/config/mise/bootstrap.sh"
-cp "$REPO_ROOT/config/node/version" "$VERIFY_DOTFILES/config/node/version"
 chmod +x "$VERIFY_DOTFILES/verify_install.sh"
 cat >"$HOSTILE_DOTFILES/config/mise/bootstrap.sh" <<'STUB'
 #!/bin/sh
@@ -481,7 +512,7 @@ grep -Fq 'update --apply --retry --json' <<<"$verifier_out" ||
   fail 'effective owner drift guidance omitted bounded retry'
 pass 'effective owner drift guidance names bounded apply retry'
 
-expected_assertions=132
+expected_assertions=135
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

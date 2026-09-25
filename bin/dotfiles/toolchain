@@ -1536,7 +1536,7 @@ while IFS= read -r manifest_line || [[ -n "$manifest_line" ]]; do
 		npm) [[ "$npm_seen" == false ]] || emit_error 'manifest_duplicate_tool' 'repair_manifest' true 'duplicate toolchain manifest row for npm' 65 'error'; npm_seen=true; [[ "$selected" == mise && "$parent" == node ]] || emit_error 'manifest_invalid' 'repair_manifest' true 'npm must be Mise-owned beneath node' 65 'error' ;;
 		*) emit_error 'manifest_unknown_tool' 'repair_manifest' true "unknown toolchain manifest tool: $tool" 65 'error' ;;
 	esac
-	case "$selected" in mise|fnm|homebrew|system) ;; *) emit_error 'manifest_invalid' 'repair_manifest' true "invalid selected owner for $tool: $selected" 65 'error' ;; esac
+	case "$selected" in mise|homebrew|system) ;; *) emit_error 'manifest_invalid' 'repair_manifest' true "invalid selected owner for $tool: $selected" 65 'error' ;; esac
 	[[ "$expected" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || emit_error 'manifest_invalid' 'repair_manifest' true "toolchain manifest version for $tool must use exact three-part numeric syntax" 65 'error'
 	case "$row_qualification" in source_declared|unqualified) ;; qualified) emit_error 'manifest_invalid' 'repair_manifest' true "qualified toolchain manifest rows need an external qualification receipt; this source-only command accepts source_declared or unqualified" 65 'error' ;; *) emit_error 'manifest_invalid' 'repair_manifest' true "invalid qualification for $tool: $row_qualification" 65 'error' ;; esac
 	MANIFEST_ROWS+=("$tool|$expected|$selected|$row_qualification|$parent")

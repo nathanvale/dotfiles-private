@@ -79,9 +79,10 @@ overrides, clean-machine reconstruction, or exact Git ownership.
 server profiles, rejects duplicate normalized formula ownership, then extracts
 setup Phases 4 and 5 into hermetic Bash processes. Its fakes prove the common
 Mise declaration, one fully qualified Peekaboo owner, retained Bun, Python,
-pyenv, fnm, and pnpm fallbacks, Mise installation before exactly one public
-toolchain apply, and failure before the completion or post-phase checkpoint
-seams when toolchain apply or the profile Brew bundle fails. It does not run
+pyenv, and pnpm fallbacks, Mise installation before exactly one public
+toolchain apply with no fnm process launched, and failure before the completion
+or post-phase checkpoint seams when toolchain apply or the profile Brew bundle
+fails. It does not run
 Homebrew or prove a checkpoint on a live machine.
 
 `toolchain-bootstrap-test.sh` runs the POSIX bootstrap, all four real zsh
@@ -91,11 +92,12 @@ data, installs, and shims directory replacement, hostile empty, relative,
 duplicate, and stale shim PATH
 removal, inactive malformed and symlinked state, shim-only
 noninteractive launches, interactive activation, Beads shim selection,
-fallback-manager suppression
-only while applied Mise is active, script-relative verifier custody despite a
-hostile inherited `DOTFILES`, and silent zero-exit startup. Mise, fnm, and
-pyenv are process fakes, so this does not prove a Homebrew install, real runtime
-download, project-local override, arbitrary GUI host, or clean no-cache Mac.
+pyenv suppression only while applied Mise is active, no fnm process in any
+startup mode or in the Husky init, script-relative verifier custody despite a
+hostile inherited `DOTFILES`, and silent zero-exit startup. Mise, pyenv, and
+the retired fnm are process fakes, so this does not prove a Homebrew install,
+real runtime download, project-local override, arbitrary GUI host, or clean
+no-cache Mac.
 
 `setup-completion-test.sh` runs the complete public `setup.sh` process in a
 disposable HOME fixture. It proves phase-option arity and range validation,
@@ -411,7 +413,7 @@ baseline.
 
 Making the optional integrations genuinely absent is load-bearing and is not
 achieved by a minimal `PATH`. `.zshrc` prepends the Homebrew prefix
-unconditionally, so `fnm`, `atuin`, `direnv`, and `pyenv` all remain resolvable
+unconditionally, so `atuin`, `direnv`, and `pyenv` all remain resolvable
 however small the inbound `PATH` was, and every silence row would pass
 vacuously. The contract instead copies the startup owners with the Homebrew
 prefix rewritten to an empty directory, so each optional executable and
@@ -425,42 +427,6 @@ The prompt hook is invoked directly rather than waited for. `precmd` runs before
 each prompt and a `-c` shell never draws one, so calling it is what makes the
 terminal title sequence and the colour-coded timing line observable in the
 captured stream.
-
-The missing-Node-version lane executes the installed `fnm` against a real
-uninstalled version pin under `ERR_EXIT`, because `fnm env --use-on-cd` installs
-a chpwd hook whose failure aborts the shell at the `cd` itself. `ERR_EXIT` is
-what makes that a behavioural claim: without it the failing hook is invisible.
-
-It runs three lanes. Two are a control pair that eval the same generated hook
-and differ only in whether the production wrapper is applied: the raw lane must
-exit nonzero and stop before the marker after the `cd`, the wrapped lane must
-reach it. Comparing the two lanes' stderr sizes is what makes "the wrapper
-changes only fatality" a measurement rather than a description. The third lane
-starts a real shell against this repository's startup owners and proves `.zshrc`
-actually installs that wrapper.
-
-That third lane asserts wrapper identity before it asserts navigation, and the
-order matters. Navigation surviving is satisfiable without any wrapper, for
-instance by returning fnm to `--log-level quiet`, so navigation alone cannot
-tell "the repair is installed" from "the symptom went away". The identity rows
-read the started shell's own function table: the generated hook must be
-preserved under `_fnm_original_autoload_hook` with the body fnm generated, and
-`_fnm_autoload_hook` must no longer hold that body but call the preserved hook
-and discard only its failing status. The expected body is captured from a
-separate unwrapped run of the installed fnm rather than hardcoded, so the rows
-do not pin the contract to one fnm version. Deleting the wrapper block from
-`.zshrc` fails these rows while both control lanes stay green.
-
-Navigation and reporting are asserted separately because they can fail
-independently. `.zshrc` selects `fnm --log-level error` rather than `quiet`:
-`quiet` suppresses fnm's own error output, so the wrapper would hide the
-missing-version diagnostic instead of merely making it non-fatal. Against the
-installed fnm 1.39.0 (levels `quiet`, `error`, `info`) `error` is the narrowest
-level that keeps ordinary startup silent while still reporting a real failure.
-The diagnostic rows assert only that the channel is nonempty, never its text.
-
-The lane is reported as a skip, row by row, when `fnm` is unavailable.
-
 
 `git-effective-behavior-test.sh` runs the real `git` CLI under a hermetic `HOME`
 holding copies of this repository's Git owners, with `GIT_CONFIG_NOSYSTEM=1` so

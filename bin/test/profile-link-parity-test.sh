@@ -15,7 +15,6 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 MANAGER_SOURCE="$REPO_ROOT/bin/dotfiles/symlinks/symlinks_manage.sh"
 COLOUR_SOURCE="$REPO_ROOT/bin/colour_log.sh"
 VERIFIER_SOURCE="$REPO_ROOT/verify_install.sh"
-NODE_VERSION_SOURCE="$REPO_ROOT/config/node/version"
 BREWFILE_SOURCE="$REPO_ROOT/config/brew/Brewfile"
 PROFILE_REQUIREMENTS_SOURCE="$REPO_ROOT/config/brew/profile-requirements.tsv"
 
@@ -258,11 +257,10 @@ make_verifier_fixture() {
 	local fixture="$TEST_ROOT/$name"
 	local dotfiles="$fixture/dotfiles"
 
-	mkdir -p "$dotfiles/bin/dotfiles/symlinks" "$dotfiles/config/node" "$dotfiles/config/brew"
+	mkdir -p "$dotfiles/bin/dotfiles/symlinks" "$dotfiles/config/brew"
 	cp "$MANAGER_SOURCE" "$dotfiles/bin/dotfiles/symlinks/symlinks_manage.sh"
 	cp "$COLOUR_SOURCE" "$dotfiles/bin/colour_log.sh"
 	cp "$VERIFIER_SOURCE" "$dotfiles/verify_install.sh"
-	cp "$NODE_VERSION_SOURCE" "$dotfiles/config/node/version"
 	cp "$BREWFILE_SOURCE" "$dotfiles/config/brew/Brewfile"
 	cp "$PROFILE_REQUIREMENTS_SOURCE" "$dotfiles/config/brew/profile-requirements.tsv"
 	chmod 700 "$dotfiles/bin/dotfiles/symlinks/symlinks_manage.sh" "$dotfiles/verify_install.sh"
@@ -478,9 +476,8 @@ ln -s "$common_expected" "$common_destination"
 malformed="$TEST_ROOT/malformed"
 malformed_dotfiles="$malformed/dotfiles"
 malformed_home="$malformed/home"
-mkdir -p "$malformed_dotfiles/config/node" "$malformed_dotfiles/bin/dotfiles/symlinks" "$malformed_home"
+mkdir -p "$malformed_dotfiles/bin/dotfiles/symlinks" "$malformed_home"
 cp "$VERIFIER_SOURCE" "$malformed_dotfiles/verify_install.sh"
-cp "$NODE_VERSION_SOURCE" "$malformed_dotfiles/config/node/version"
 cat >"$malformed_dotfiles/bin/dotfiles/symlinks/symlinks_manage.sh" <<'EOF'
 #!/usr/bin/env bash
 printf 'DOTFILES_SYMLINK_STATUS version=1 profile=%s records=1\n' "${DOTFILES_PROFILE:-desktop}"
