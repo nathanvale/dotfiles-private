@@ -1467,7 +1467,8 @@ async function runRead(command: AdapterCommand, plan: TransportPlan, binary: str
 async function runAttendedLogin(command: AdapterCommand, plan: TransportPlan, binary: string, terminal: number, local: readonly LocalEffect[]): Promise<void> {
 	const proc = Bun.spawn([binary, ...plan.argv], { env: { ...plan.env }, stdin: terminal, stdout: terminal, stderr: terminal });
 	const exitCode = await proc.exited;
-	const completed = [...completedSelectionEffects(), ...local];
+	// MCPorter may write its vault file whether or not consent completed.
+	const completed = [...completedSelectionEffects(), ...local, ...plan.settle()];
 	const data = { connector: command.id, verb: "login", ...plan.data };
 	if (exitCode === 0) {
 		emitAdapterEnvelope(command, "SUCCESS_AUTH_LOGIN", `${PROGRAM}: ${command.id} attended login completed`, data, null, { completed: [...completed, "account-grant"], uncertain: [] });

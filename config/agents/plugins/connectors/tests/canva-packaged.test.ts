@@ -306,6 +306,7 @@ test.skipIf(!official)("after MCPorter selection, a symlinked vault root refuses
 			effects: { completed: ["mcporter-bootstrap"], remaining: [], uncertain: [], inventoryComplete: true },
 		});
 		expect(readdirSync(elsewhere)).toEqual([]);
+		expect(filesUnder(fixture.vault("fresh"))).toEqual([]);
 		const login = await fixture.runAttended(["auth", "login", "canva", "--select", "account=fresh"]);
 		expect(login.code).toBe(3);
 		expect(login.stderr).toBe("");
@@ -313,9 +314,11 @@ test.skipIf(!official)("after MCPorter selection, a symlinked vault root refuses
 		expect(login.stdout.trim().split("\n")).toHaveLength(1);
 		expect(envelope.result).toMatchObject({
 			commandIdentity: "connectors.auth", outcome: "failed", exitCode: 3, causeCode: "DOMAIN_AUTH_LOGIN_UNKNOWN", effectClass: "external", transactionState: "unknown",
-			effects: { completed: ["account-vault"], remaining: [], uncertain: ["account-grant"], inventoryComplete: true },
+			// MCPorter writes its vault index even when consent never completes.
+			effects: { completed: ["account-vault", "mcporter-vault-file"], remaining: [], uncertain: ["account-grant"], inventoryComplete: true },
 			repairAction: "Run connectors auth status canva --select account=<value> to inspect the account vault before retrying login",
 		});
+		expect(filesUnder(fixture.vault("fresh"))).toEqual([path.join(fixture.vault("fresh"), "data", "mcporter", "credentials.json")]);
 	} finally {
 		fixture.dispose();
 	}

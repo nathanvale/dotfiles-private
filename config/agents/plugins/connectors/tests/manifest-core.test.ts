@@ -6,6 +6,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { startLoopbackMcpStub } from "./fixtures/loopback-mcp-stub.ts";
 import { createBundle, createFakeMcporterBinDir, runBundle } from "./harness.ts";
 
 describe("connectors list", () => {
@@ -569,6 +570,43 @@ describe("connectors schema: Spec AC20 contribution (Context7 and Firecrawl reac
 			bundle.dispose();
 		}
 	}, 30_000);
+
+	test("schema reaches Context7 and Firecrawl through each one's own registry and the selected MCPorter, loopback only", async () => {
+		const bundle = createBundle();
+		const hostile = createFakeMcporterBinDir();
+		const stub = startLoopbackMcpStub();
+		try {
+			writeFileSync(path.join(hostile.binDir, "mcporter"), '#!/bin/sh\nprintf "called\\n" > "$TMPDIR/ambient-shim-called"\nexit 91\n');
+			expect(Object.keys(REAL_KEYLESS_CONNECTORS)).toEqual(["context7", "firecrawl"]);
+			for (const [id, expected] of Object.entries(REAL_KEYLESS_CONNECTORS)) {
+				// Only this id's registry reaches the stub; the other points at a
+				// closed port, so a request routed through the wrong registry fails.
+				for (const other of Object.keys(REAL_KEYLESS_CONNECTORS)) {
+					const registryPath = path.join(bundle.skillsRoot, other, "config", "mcporter.json");
+					const registry = JSON.parse(readFileSync(registryPath, "utf8"));
+					registry.mcpServers[other].baseUrl = other === id ? stub.url : "http://127.0.0.1:1/mcp";
+					writeFileSync(registryPath, JSON.stringify(registry));
+				}
+				const result = await runBundle(bundle, ["schema", id], { home: bundle.root, binDir: hostile.binDir, extraEnv: releaseEnv(bundle.root), timeoutMs: 30_000 });
+				expect({ id, code: result.code, stderr: result.stderr, lines: result.stdout.trim().split("\n").length }).toEqual({ id, code: 0, stderr: "", lines: 1 });
+				const envelope = JSON.parse(result.stdout);
+				expect(envelope.result.commandIdentity).toBe("connectors.schema");
+				expect({ connector: envelope.result.data.connector, server: envelope.result.data.server, allowedTools: envelope.result.data.allowedTools }).toEqual({ connector: id, server: id, allowedTools: expected.allowedTools });
+				// MCPorter's own output: it listed this id's server from this id's
+				// registry over the stub, and its allow-list hid the stub's "probe".
+				const schema = envelope.result.data.schema;
+				expect({ name: schema.name, status: schema.status, transport: schema.transport, source: schema.source, tools: schema.tools }).toEqual({
+					name: id, status: "ok", transport: `HTTP ${stub.url}`, source: { kind: "local", path: expect.stringMatching(new RegExp(`/skills/${id}/config/mcporter\\.json$`)) }, tools: [],
+				});
+			}
+			expect(existsSync(path.join(bundle.root, "ambient-shim-called"))).toBe(false);
+			expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
+		} finally {
+			stub.stop();
+			hostile.dispose();
+			bundle.dispose();
+		}
+	}, 60_000);
 
 	test("reaches a manifest-only keyless fixture Skill through the same generic path via a real stdio child", async () => {
 		const bundle = createBundle();

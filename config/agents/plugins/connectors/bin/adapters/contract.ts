@@ -10,9 +10,10 @@
 // manifest and selectors; the adapter answers with no dependency acquired yet:
 // a refusal, an inspection result, or a MCPorter transport plan. The core then
 // selects the verified MCPorter, calls commit() for the adapter's own state
-// preparation, runs the plan, and after a read asks settle() what the child
-// changed in adapter-owned state. An adapter never reads a credential value,
-// never spawns MCPorter itself, and its refusal text never echoes caller input.
+// preparation, runs the plan, and after a read or attended login asks settle()
+// what the child changed in adapter-owned state. An adapter never reads a
+// credential value, never spawns MCPorter itself, and its refusal text never
+// echoes caller input.
 import type { ConnectorManifest } from "../manifest.ts";
 import type { EnvironmentSource } from "../safe-environment.ts";
 
