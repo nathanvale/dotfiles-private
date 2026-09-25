@@ -29,9 +29,9 @@ export const ITEM_ID_REPAIR = `expected a 26-character 1Password item ID from th
 export const CONFIGURE_INPUT_REPAIR = `auth configure needs --input '{"jiraItem":"<id>","confluenceItem":"<id>"}' with exactly those two keys; ${ITEM_ID_REPAIR}`;
 const CONFIGURE_COMMAND = `connectors auth configure atlassian --select tenant=<value> --input '{"jiraItem":"<id>","confluenceItem":"<id>"}'`;
 const REPOINT_STEPS = `confirm connectors recover atlassian --select tenant=<value> lists no open receipt and wait 15 minutes after the tenant's last preview, so no receipt or preview made under the old items can still act; then remove registration.json from the tenant's Connectors state directory by hand and run ${CONFIGURE_COMMAND} again`;
-export const REGISTRATION_EXISTS_REPAIR = `the tenant is already registered with different item IDs, and a registration never changes in place; to re-point it, ${REPOINT_STEPS}`;
-export const UNREGISTERED_REPAIR = `register the tenant first with ${CONFIGURE_COMMAND}, giving the two 26-character 1Password item IDs from the ${CREDENTIAL_VAULT} vault`;
-export const REGISTRATION_INVALID_REPAIR = `the tenant's registration.json is not the exact private file auth configure writes; to replace it, ${REPOINT_STEPS}`;
+const REGISTRATION_EXISTS_REPAIR = `the tenant is already registered with different item IDs, and a registration never changes in place; to re-point it, ${REPOINT_STEPS}`;
+const UNREGISTERED_REPAIR = `register the tenant first with ${CONFIGURE_COMMAND}, giving the two 26-character 1Password item IDs from the ${CREDENTIAL_VAULT} vault`;
+const REGISTRATION_INVALID_REPAIR = `the tenant's registration.json is not the exact private file auth configure writes; to replace it, ${REPOINT_STEPS}`;
 const REGISTRATION_UNAVAILABLE_REPAIR = "the tenant's private Connectors state directory could not be prepared; check that it is an owned, non-symlink directory";
 
 export type ConfigureInput = { ok: true; items: RegisteredItems } | { ok: false; cause: "input-invalid" | "item-reference-invalid" };

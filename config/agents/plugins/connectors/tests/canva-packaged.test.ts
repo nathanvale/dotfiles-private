@@ -221,6 +221,16 @@ async function watchFifo(fifo: string, done: Promise<unknown>): Promise<boolean>
 	return false;
 }
 
+// MCPorter 0.14.0 replaces the vault it read, by rename, with its own regular
+// index file naming the server it reached. The FIFO write in watchFifo also
+// moves the FIFO's modification time, so the reported vault-file effect alone
+// cannot show MCPorter's replacement; a regular file with that index can. A
+// file that is still a FIFO is never opened, since that would block.
+const REPLACED_INDEX_SERVERS = { "canva-connectors": "https://mcp.canva.com/mcp" };
+function replacedIndexServers(vaultFile: string): unknown {
+	return lstatSync(vaultFile).isFile() ? JSON.parse(readFileSync(vaultFile, "utf8")).serverUrls : "not a regular file";
+}
+
 test.skipIf(!official)("run opens only the selected account's vault through the verified MCPorter", async () => {
 	const fixture = canvaFixture();
 	try {
@@ -232,10 +242,10 @@ test.skipIf(!official)("run opens only the selected account's vault through the 
 		const result = await running;
 		expect({ openedA, openedB }).toEqual({ openedA: false, openedB: true });
 		expect(lstatSync(fifoA).isFIFO()).toBe(true);
+		expect(replacedIndexServers(fifoB)).toEqual(REPLACED_INDEX_SERVERS);
 		expect(result.code).toBe(75);
 		const envelope = onlyEnvelope(result);
 		expect(envelope.message).toBe("connectors: canva provider call did not complete");
-		// MCPorter replaced b's vault file with its own index after reading it.
 		expect(envelope.result).toMatchObject({
 			commandIdentity: "connectors.run", outcome: "refused", failureClass: "transient", exitCode: 75,
 			causeCode: "TRANSIENT_PROVIDER_AFTER_BOOTSTRAP", effectClass: "repository-local", transactionState: "completed",
@@ -259,6 +269,7 @@ test.skipIf(!official)("schema reads only the selected account's vault through t
 		const [openedA, openedB] = await Promise.all([watchFifo(fifoA, running), watchFifo(fifoB, running)]);
 		const selected = await running;
 		expect({ openedA, openedB }).toEqual({ openedA: false, openedB: true });
+		expect(replacedIndexServers(fifoB)).toEqual(REPLACED_INDEX_SERVERS);
 		expect(selected.code).toBe(75);
 		const envelope = onlyEnvelope(selected);
 		expect(envelope.message).toBe("connectors: canva provider call did not complete");

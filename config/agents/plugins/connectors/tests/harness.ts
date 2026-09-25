@@ -14,11 +14,6 @@ export const FIXTURE_ROUTE = path.join(FIXTURES, "provider-route-fixture.ts");
 export const AMBIENT_SENTINEL = "must-not-cross-route";
 export const OP_TOKEN_SENTINEL = "fixture-op-service-account-token";
 
-export const itemJson = (entries: Record<string, string>, version?: number | string): string => JSON.stringify({
-	...(version === undefined ? {} : { version }),
-	fields: Object.entries(entries).map(([label, value]) => ({ id: label, label, value })),
-});
-
 export interface RunResult {
 	code: number;
 	stdout: string;
@@ -70,13 +65,11 @@ function shim(file: string, modulePath: string): void {
 }
 
 // `fakes` maps an executable name on PATH to the TypeScript module that
-// implements it. The 1Password helper is always installed at the path the
-// Providers resolve below HOME.
+// implements it.
 export function createHarness(fakes: Record<string, string>): Harness {
 	const root = mkdtempSync(path.join(os.tmpdir(), "connectors-test-"));
 	const home = path.join(root, "home");
 	const binDir = path.join(root, "bin");
-	shim(path.join(home, "code", "dotfiles", "bin", "with-one-password-token"), path.join(FIXTURES, "one-password-fake.ts"));
 	shim(path.join(binDir, "mcporter"), path.join(FIXTURES, "mcporter-fake.ts"));
 	symlinkSync(process.execPath, path.join(binDir, "bun"));
 	for (const [name, modulePath] of Object.entries(fakes)) shim(path.join(binDir, name), modulePath);

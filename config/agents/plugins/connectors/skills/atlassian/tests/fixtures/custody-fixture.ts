@@ -30,7 +30,7 @@ export const PROVIDER_TOKEN = "fixture-atlassian-provider-token-sentinel";
 // registers them for the tenant `example`.
 export const JIRA_ITEM_ID = "jirafixtureitem00000000001";
 export const CONFLUENCE_ITEM_ID = "conffixtureitem00000000002";
-export const FIXTURE_TENANT = "example";
+const FIXTURE_TENANT = "example";
 // Independent oracle: the registration literal auth configure writes, restated
 // here from the accepted contract, never from the production renderer.
 export const registrationLiteral = (tenant: string, jira: string, confluence: string): string =>
@@ -121,10 +121,6 @@ export class CustodyFixture {
 		chmodSync(file, 0o600);
 	}
 
-	removeRegistration(tenant: string = FIXTURE_TENANT): void {
-		rmSync(this.registrationFile(tenant), { force: true });
-	}
-
 	// Stores the one service-token item. The attended mode creates a fresh
 	// keychain each time, because updating an existing item can wait on an
 	// interactive access prompt.
@@ -193,23 +189,6 @@ export class CustodyFixture {
 	lines<T = Record<string, unknown>>(name: "op-calls.jsonl" | "community-starts.jsonl" | "effects.jsonl" | "hostile-mcporter.jsonl" | "hostile-recorders.jsonl" | "keychain-reads.jsonl"): T[] {
 		const file = path.join(this.root, name);
 		return existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as T) : [];
-	}
-
-	// Every byte of plugin state the Atlassian dispatcher owns: journal,
-	// receipts, locks, the Upload Outbox, and the tenant registration.
-	atlassianStateText(): string {
-		const base = path.join(this.state, "connectors", "atlassian");
-		const texts: string[] = [];
-		const walk = (directory: string) => {
-			if (!existsSync(directory)) return;
-			for (const entry of readdirSync(directory)) {
-				const full = path.join(directory, entry);
-				if (statSync(full).isDirectory()) walk(full);
-				else texts.push(readFileSync(full, "utf8"));
-			}
-		};
-		walk(base);
-		return texts.join("\n");
 	}
 
 	// Every file the run could have written under the fixture root: HOME,

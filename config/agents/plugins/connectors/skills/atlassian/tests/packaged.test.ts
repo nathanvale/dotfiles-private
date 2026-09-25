@@ -20,6 +20,7 @@ import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, 
 import os from "node:os";
 import path from "node:path";
 import { compileFrontDoor } from "../../../tests/compile-front-door.ts";
+import { OPERATION_SPECS } from "../scripts/dispatch/contract.ts";
 import { CONFLUENCE_ITEM_ID, CustodyFixture, JIRA_ITEM_ID, OFFICIAL_MCPORTER, PROVIDER_TOKEN, registrationLiteral, SERVICE_TOKEN, seedMcporter } from "./fixtures/custody-fixture.ts";
 import { changedPaths, SHIPPED_ROOT, substitutedPluginRoot } from "./fixtures/plugin-copy.ts";
 
@@ -51,6 +52,10 @@ const UNKNOWN_OPERATION_REPAIR =
 const MCPORTER_REPAIR = "Run connectors deps repair mcporter";
 // The dispatcher's fixed repair text for a not-found read.
 const NOT_FOUND_REPAIR = "the target object was not found or is not visible to this principal";
+// The 14 accepted write operations. The write station sweep keys its rows by
+// this literal; the ungated agreement row checks it against the contract.
+const WRITE_OPERATIONS = ["issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"] as const;
+type WriteOperation = (typeof WRITE_OPERATIONS)[number];
 const COMMUNITY_ARGV = ["tool", "run", "--system-certs", "--no-env-file", "--from", "mcp-atlassian==0.23.1", "mcp-atlassian"];
 const JIRA_PROVIDER_KEYS = ["HOME", "JIRA_API_TOKEN", "JIRA_URL", "JIRA_USERNAME", "PATH", "TMPDIR", "XDG_STATE_HOME"];
 const CONFLUENCE_PROVIDER_KEYS = ["CONFLUENCE_API_TOKEN", "CONFLUENCE_URL", "CONFLUENCE_USERNAME", "HOME", "PATH", "TMPDIR", "XDG_STATE_HOME"];
@@ -336,6 +341,8 @@ describe("custody check and credential handoffs", () => {
 			expect([argv[0], result.code, result.stderr]).toEqual([argv[0], 3, ""]);
 			const envelope = parse(result.stdout).result;
 			expect([argv[0], envelope.causeCode, envelope.repairAction, envelope.data]).toEqual([argv[0], "DOMAIN_ADAPTER_REFUSED", ITEM_HANDOFF, { connector: "atlassian", connectorCause: "refused-credential-unconfigured" }]);
+			// op did receive the service token, so its streams and the fixture sweep must hold neither token.
+			expectNoSecret(fixture, [result.stdout, result.stderr]);
 		}
 		expect(fixture.lines<{ argv: string[] }>("op-calls.jsonl").map((call) => call.argv)).toEqual([ITEM_READ(JIRA_ITEM), ITEM_READ(JIRA_ITEM)]);
 		expect(fixture.lines("community-starts.jsonl")).toEqual([]);
@@ -745,6 +752,26 @@ faultMock.module("node:fs", () => ({
 	});
 });
 
+// Listing needs no MCPorter, so it runs wherever the packaged tests run.
+describe("packaged connector listing", () => {
+	test("list admits the Atlassian manifest beside the other packaged connectors", async () => {
+		fresh();
+		const envelope = parse((await fixture.frontDoor(["list"])).stdout).result;
+		expect((envelope.data?.connectors as { id: string }[]).map((entry) => entry.id)).toEqual(["atlassian", "canva", "context7", "firecrawl", "mermaid"]);
+	});
+});
+
+// Agreement needs no MCPorter or process, so it runs wherever this file runs.
+// The literal proves the accepted set; agreement proves the contract declares
+// exactly that set, so a write added to or dropped from the contract fails here.
+describe("write operation catalogue agreement", () => {
+	test("the write operations the dispatch contract declares are exactly the 14 accepted write operations", () => {
+		const declared = Object.values(OPERATION_SPECS).filter((spec) => spec.kind === "write").map((spec) => spec.id);
+		expect(WRITE_OPERATIONS).toHaveLength(14);
+		expect([...declared].sort()).toEqual([...WRITE_OPERATIONS].sort());
+	});
+});
+
 describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the verified MCPorter", () => {
 	let firstUse: { code: number; stdout: string; stderr: string } | undefined;
 	beforeAll(async () => {
@@ -767,12 +794,6 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		const envelope = parse(firstUse?.stdout ?? "").result;
 		expect([envelope.commandIdentity, envelope.outcome, envelope.causeCode, envelope.transactionState, envelope.effects.completed, envelope.effects.uncertain]).toEqual(["connectors.run", "success", "SUCCESS_BOOTSTRAPPED", "completed", ["mcporter-bootstrap"], []]);
 		expect(envelope.data).toEqual({ connector: "atlassian", operation: "issue.get", result: JIRA_REPLY, provenance: [{ provider: "atlassian-community-jira", tool: "jira_get_issue", status: "success" }] });
-	});
-
-	test("list admits the Atlassian manifest beside the other packaged connectors", async () => {
-		fresh();
-		const envelope = parse((await fixture.frontDoor(["list"])).stdout).result;
-		expect((envelope.data?.connectors as { id: string }[]).map((entry) => entry.id)).toEqual(["atlassian", "canva", "context7", "firecrawl", "mermaid"]);
 	});
 
 	test("a Jira read reaches the declared operation through the plugin-owned MCPorter and confines both tokens", async () => {
@@ -873,10 +894,6 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		["in-band failure with extra provider fields", "page.get", { pageId: "123" }, "confluence", "confluence_get_page", { page_id: "123" }, { success: false, error: "HTTP 403 Forbidden", requestId: "opaque-request-id-sentinel" }, DOMAIN_REFUSED, AUTH_REPAIR, { connector: "atlassian", connectorCause: "refused-auth" }, ["opaque-request-id-sentinel", "HTTP 403 Forbidden"], ["opaque-request-id-sentinel"]],
 		["hostile tool error text", "issue.get", { issueKey: "PROJ-1" }, "jira", "jira_get_issue", { issue_key: "PROJ-1" }, { toolErrorText: HOSTILE }, DOMAIN_REFUSED, AUTH_REPAIR, { connector: "atlassian", connectorCause: "refused-auth" }, ["fixture-secret-value", "customer SSN 123-45-6789", "PROJ-99 confidential merger", "op://", "Bearer", "Basic "], ["fixture-secret-value", "123-45-6789", "PROJ-99 confidential merger"]],
 	];
-	test("the Provider row table names exactly the three migrated in-band and hostile cases", () => {
-		expect(PROVIDER_ROWS.map(([label]) => label)).toEqual(["in-band error payload", "in-band failure with extra provider fields", "hostile tool error text"]);
-	});
-
 	test.each(PROVIDER_ROWS)("%s is translated at the transport seam to its published cause and never reaches a stream or file", async (_label, operation, input, product, providerTool, args, canned, tuple, repair, data, streamFragments, fileFragments) => {
 		fresh();
 		fixture.canned(product, providerTool, canned);
@@ -1100,8 +1117,6 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 	// assigns, comment edits, and deletes settle only from a read-back, so
 	// their rows name the reply a read returns once the fake has recorded the
 	// write (community-mcp-fake.ts post-write state).
-	const WRITE_OPERATIONS = ["issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"] as const;
-	type WriteOperation = (typeof WRITE_OPERATIONS)[number];
 	// Independent oracle: every Community read tool the dispatcher may call; any
 	// other recorded call is a write.
 	const READ_TOOLS = new Set(["jira_get_issue", "jira_search", "jira_get_transitions", "confluence_get_page", "confluence_search", "confluence_get_comments", "confluence_get_attachments"]);
@@ -1416,7 +1431,7 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 	// Positive controls: the Provider did receive its token, op did receive the
 	// service token, and the sweep and process-table reads saw what they claim
 	// to.
-	test("capture sweep: across configure, check, reads, writes, an attachment, an unknown outcome, recovery, and refusals, no token reaches any stream, file, MCPorter, or op parent, and no stdin sentinel or mistyped token reaches any stream, file, op argv, or Community argv, while the Provider still receives its token", async () => {
+	test("capture sweep: across configure, check, reads, writes, an attachment, an unknown outcome, recovery, and refusals, no token reaches any stream, fixture file, or the exec-time argv and environment of op's parent or of each MCPorter that parented a Provider, and no stdin sentinel or mistyped token reaches any stream, fixture file, op argv, or Community argv, while the Provider still receives its token", async () => {
 		fresh({ registered: false });
 		fixture.canned("jira", "list", WRITE_JIRA_TOOLS);
 		fixture.canned("confluence", "list", WRITE_CONFLUENCE_TOOLS);

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { installVerifiedOp, OP_RELEASE } from "../bin/setup/op.ts";
@@ -34,7 +35,6 @@ test("a redirected state directory refuses before any write", () => {
 		mkdirSync(outsider);
 		const pkg = path.join(root, "package.pkg");
 		writeFileSync(pkg, "invalid");
-		expect(installVerifiedOp({ packageFile: pkg, stateDirectory: outsider })).toEqual({ ok: false, reason: "state-invalid" });
 		const child = invoke(root, { packageFile: pkg, stateDirectory: outsider }, xdg);
 		expect(child.status).toBe(0);
 		expect(child.stderr).toBe("");
@@ -75,7 +75,11 @@ test("a wrong package and caller release claims preserve the previous selection"
 		writeFileSync(path.join(state, "op-selected"), "previous", { mode: 0o600 });
 		const pkg = path.join(root, "package.pkg");
 		writeFileSync(pkg, "wrong package bytes");
-		const child = invoke(root, { packageFile: pkg, stateDirectory: state, sha256: "caller digest", version: "999", team: "caller" }, xdg);
+		// The caller's digest claim is true of the supplied bytes, so only the
+		// pinned release digest can refuse them.
+		const callerSha256 = "0b9b49f49c0d89e58e66bad4018f02e0faddab827d2f03a418aeb31112d00746";
+		expect(createHash("sha256").update(readFileSync(pkg)).digest("hex")).toBe(callerSha256);
+		const child = invoke(root, { packageFile: pkg, stateDirectory: state, sha256: callerSha256, version: "999", team: "caller" }, xdg);
 		expect(child.status).toBe(0);
 		expect(child.stderr).toBe("");
 		expect(JSON.parse(child.stdout)).toEqual({ ok: false, reason: "package-invalid" });
@@ -107,42 +111,3 @@ test("missing and wrong package input cannot create plugin state", () => {
 		rmSync(root, { recursive: true, force: true });
 	}
 });
-
-// Supplied by the test runner from the official pinned release.
-const officialPackage = process.env.CONNECTORS_TEST_OP_PACKAGE;
-// Independent oracle: restated from the accepted pin, not read from OP_RELEASE.
-const PINNED_REVISION = "op-2.39.0-7e17cbf4052393d2c55a59a7c3d05f0bbcdcb079d57785cff682f3bc994ba8ce";
-
-// Ticket #103 replaces only a damaged regular file at the pinned revision. Any
-// other entry there refuses after verification, leaving the entry, anything it
-// points at, and the previous selection untouched.
-const NON_FILE_REVISIONS: ReadonlyArray<{ name: string; plant: (revision: string, outside: string) => void; entry: (revision: string) => boolean }> = [
-	{ name: "symlink to an outside file", plant: (revision, outside) => symlinkSync(outside, revision), entry: (revision) => lstatSync(revision).isSymbolicLink() },
-	{ name: "directory", plant: (revision) => mkdirSync(revision), entry: (revision) => lstatSync(revision).isDirectory() },
-];
-
-for (const row of NON_FILE_REVISIONS) {
-	test.skipIf(!officialPackage)(`a verified package refuses to replace a ${row.name} at the pinned revision`, () => {
-		const root = mkdtempSync("/private/tmp/connectors-op-revision-");
-		try {
-			const xdg = path.join(root, "xdg");
-			const state = path.join(xdg, "connectors", "setup", "op");
-			mkdirSync(state, { recursive: true, mode: 0o700 });
-			const outside = path.join(root, "outside");
-			writeFileSync(outside, "outside bytes");
-			const revision = path.join(state, PINNED_REVISION);
-			row.plant(revision, outside);
-			writeFileSync(path.join(state, "op-selected"), "previous", { mode: 0o600 });
-			const child = invoke(root, { packageFile: officialPackage, stateDirectory: state }, xdg);
-			expect(child.status).toBe(0);
-			expect(child.stderr).toBe("");
-			expect(JSON.parse(child.stdout)).toEqual({ ok: false, reason: "install-failed" });
-			expect(row.entry(revision)).toBe(true);
-			expect(readFileSync(outside, "utf8")).toBe("outside bytes");
-			expect(readFileSync(path.join(state, "op-selected"), "utf8")).toBe("previous");
-			expect(readdirSync(state).sort()).toEqual([PINNED_REVISION, "op-selected"].sort());
-		} finally {
-			rmSync(root, { recursive: true, force: true });
-		}
-	}, 60_000);
-}

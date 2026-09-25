@@ -5,5 +5,4 @@
 // missing, unselected, or changed copy is null, and the caller refuses with
 // the setup repair so a wrong copy is never run.
 export { installedOp as selectedOp } from "../../../../bin/setup/op.ts";
-export { installedUv as selectedUv } from "../../../../bin/setup/uv.ts";
 export const UV_SETUP_REPAIR = "the plugin-owned uv is not set up; run connectors setup";

@@ -21,11 +21,13 @@ import { type CredentialBinding, encodeBinding, parseBinding } from "./channel.t
 import { custodyContext } from "./child.ts";
 import { isItemId, isProduct, itemBinding, itemFieldMap, type Product, SITE_URL_FIELD, TENANT_PATTERN } from "./item.ts";
 import { itemHandoff, OP_SETUP_REPAIR, readOnePasswordItem, SERVICE_TOKEN_HANDOFF } from "./one-password.ts";
-import { selectedUv, UV_SETUP_REPAIR } from "./plugin-tools.ts";
+import { installedUv as selectedUv } from "../../../../bin/setup/uv.ts";
+import { UV_SETUP_REPAIR } from "./plugin-tools.ts";
 
 export { runCustodyChild } from "./child.ts";
 export { PRODUCTS, type Product, TENANT_PATTERN } from "./item.ts";
-export { selectedUv, UV_SETUP_REPAIR } from "./plugin-tools.ts";
+export { installedUv as selectedUv } from "../../../../bin/setup/uv.ts";
+export { UV_SETUP_REPAIR } from "./plugin-tools.ts";
 export { CREDENTIAL_VAULT } from "./one-password.ts";
 export { CONFIGURE_INPUT_REPAIR, configureInput, configureTenant, ITEM_ID_REPAIR, type RegisteredItems, registeredTenant } from "./registration.ts";
 export type { CredentialBinding } from "./channel.ts";

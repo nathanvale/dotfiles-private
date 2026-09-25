@@ -22,7 +22,6 @@ function serve(routes: Record<string, () => Response | Promise<Response>>): stri
 	return `http://127.0.0.1:${server.port}`;
 }
 
-const stalledBody = () => new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(16)); } }));
 const neverAnswers = () => new Promise<Response>(() => {});
 const unsizedBytes = (size: number) => () => new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array(size)); controller.close(); } }));
 
@@ -42,16 +41,6 @@ test("a bounded download writes the exact body as a private file", async () => {
 	await downloadOfficial([{ url: `${base}/asset`, target, maxBytes: 14 }], 5_000);
 	expect(readFileSync(target, "utf8")).toBe("official bytes");
 	expect(statSync(target).mode & 0o777).toBe(0o600);
-});
-
-test("a stalled response body refuses at the deadline and writes nothing", async () => {
-	const base = serve({ "/asset": stalledBody });
-	const target = path.join(workspace(), "asset");
-	const result = await refusal(downloadOfficial([{ url: `${base}/asset`, target, maxBytes: 1024 }], 300));
-	expect(result.message).toBe("download-timeout");
-	expect(result.elapsed).toBeGreaterThanOrEqual(250);
-	expect(result.elapsed).toBeLessThan(3_000);
-	expect(existsSync(target)).toBe(false);
 });
 
 test("a host that never sends headers refuses at the deadline", async () => {

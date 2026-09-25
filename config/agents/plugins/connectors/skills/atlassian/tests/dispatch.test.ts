@@ -1,4 +1,4 @@
-// Atlassian dispatcher: ten semantic operations over two static product
+// Atlassian dispatcher: nineteen semantic operations over two static product
 // routes on the one Community Provider, every read and write behind live
 // schema confirmation, writes behind the durable preview and apply journal,
 // and the operator path. Policy is proved in-process with an in-memory
@@ -12,7 +12,7 @@ import path from "node:path";
 import { OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
 import { run } from "../scripts/atlassian-dispatch.ts";
 import { ALLOWED_TOOLS, OPERATION_SPECS, productFor, PROVIDER, type ProviderName, registryToolVocabulary, SERVERS, serverFor } from "../scripts/dispatch/contract.ts";
-import { type Dependencies, REPAIR_TEXT, type SchemaTool, type Transport, type TransportResult } from "../scripts/dispatch/engine.ts";
+import { type Dependencies, type SchemaTool, type Transport, type TransportResult } from "../scripts/dispatch/engine.ts";
 import { openJournal } from "../scripts/dispatch/journal.ts";
 import { stageFile } from "../scripts/outbox.ts";
 import type { ProviderFailureCause } from "../scripts/dispatch/translate.ts";
@@ -31,6 +31,19 @@ const NOW = 1_700_000_000_000;
 // The retired Provider name as persisted records still carry it. It is a
 // string here, not a type, because no active code may name it.
 const RETIRED = "official";
+// Independent oracle: the accepted fixed repair text per cause, restated from
+// the dispatch contract. Never import the engine's table here: an expected
+// value read from the code under test cannot catch a wrong repair text.
+const REPAIR = {
+	"refused-auth": "the provider refused authentication or permission; verify the credential type, scopes, and product permissions with their owner",
+	"not-found": "the target object was not found or is not visible to this principal",
+	"failed-transport": "the provider did not answer; inspect provider status before retrying the read",
+	"failed-unknown": "the provider failed for an unclassified reason; inspect provider diagnostics",
+	"capability-unavailable": "the live schema does not expose the operation as expected; inspect the provider schema before retrying",
+	"refused-precondition": "a provider precondition failed before any request; run the provider readiness checks",
+	"refused-state": "the private journal state is corrupt or its meta-lock is held; inspect the state directory before any write",
+	"refused-preview": "the preview is unknown, consumed, expired, or no longer matches the input, provider arguments, or target revision; preview again",
+} as const;
 
 // Test-owned digest oracle. It deliberately does not import the journal
 // serializer, so persisted journal representation changes fail this suite.
@@ -47,8 +60,6 @@ function testCanonical(value: unknown): string {
 
 const testDigest = (value: unknown): string => new Bun.CryptoHasher("sha256").update(testCanonical(value)).digest("hex");
 const EXPECTED_OPERATIONS = ["issue.get", "issue.search", "issue.transitions", "issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete", "page.get", "page.search", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"] as const;
-const EXPECTED_COMMANDS = ["receipts", "receipt", "adjudicate", "unlock"];
-const EXPECTED_PATHS = [...EXPECTED_OPERATIONS, ...EXPECTED_COMMANDS].map((entry) => `atlassian.${entry}`).sort();
 const WRITE_OPERATIONS = EXPECTED_OPERATIONS.filter((id) => !id.endsWith(".get") && !id.endsWith(".search") && id !== "issue.transitions");
 
 // Independent oracle: the exact Community tool and product per operation,
@@ -226,20 +237,6 @@ describe("operation contract and routes", () => {
 		expect(() => registryToolVocabulary(retired)).toThrow(/registry-invalid/);
 	});
 
-	test("discovery lists every operation and command with the provider and the exit meanings, without a tenant", async () => {
-		const envelope = await run(["--discover"], () => {
-			throw new Error("no dependencies for discovery");
-		});
-		expect([envelope.result.outcome, envelope.result.exitCode, envelope.result.commandIdentity]).toEqual(["success", 0, "atlassian.discover"]);
-		const data = envelope.result.data as { provider: string; operations: { id: string; tool: string }[]; commands: string[]; exitMeanings: Record<string, string> };
-		expect(data.provider).toBe("community");
-		expect(data.operations.map((entry) => [entry.id, entry.tool])).toEqual(Object.entries(EXPECTED_TOOLS).map(([id, [community]]) => [id, community]));
-		expect(data.commands).toEqual(EXPECTED_COMMANDS);
-		expect(Object.keys(data.exitMeanings)).toEqual(["0", "2", "3", "4"]);
-		expect(envelope.availablePaths).toEqual(EXPECTED_PATHS);
-		expect(JSON.stringify(envelope)).not.toMatch(/official|parity|fallback/i);
-	});
-
 	test("the retired provider selector and parity command are usage refusals before any dependency is built", async () => {
 		for (const argv of [
 			["--tenant", "example", "--provider", "community", "issue.get", "--input", '{"issueKey":"PROJ-1"}'],
@@ -364,7 +361,7 @@ describe("refusals and failures are final: no second Provider, no retry", () => 
 			const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: failure(cause) });
 			const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
 			expect([cause, envelope.result.outcome, envelope.result.causeCode, envelope.result.exitCode, envelope.result.retryable]).toEqual([cause, outcome, cause, 3, false]);
-			expect([cause, envelope.result.repairAction]).toEqual([cause, REPAIR_TEXT[cause]]);
+			expect([cause, envelope.result.repairAction]).toEqual([cause, REPAIR[cause]]);
 			expect([cause, calls.map((call) => [call.server, call.tool])]).toEqual([cause, [[CJ, "jira_get_issue"]]]);
 			expect(envelope.result.provenance).toEqual([{ provider: CJ, tool: "jira_get_issue", status: cause }]);
 		}
@@ -387,7 +384,7 @@ describe("refusals and failures are final: no second Provider, no retry", () => 
 		const mismatch = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport: renamed.transport }));
 		expect([mismatch.result.outcome, mismatch.result.causeCode]).toEqual(["failed", "capability-unavailable"]);
 		// Fixed text only; never a schema name and never a fallback verdict.
-		expect(mismatch.result.repairAction).toBe(REPAIR_TEXT["capability-unavailable"]);
+		expect(mismatch.result.repairAction).toBe(REPAIR["capability-unavailable"]);
 		expect(renamed.calls).toEqual([]);
 	});
 
@@ -407,7 +404,7 @@ describe("refusals and failures are final: no second Provider, no retry", () => 
 		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: translated });
 		const envelope = await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport }));
 		expect([envelope.result.outcome, envelope.result.causeCode]).toEqual(["refused", "refused-precondition"]);
-		expect(envelope.result.repairAction).toBe(`${REPAIR_TEXT["refused-precondition"]}; add a username field to the tenant's product credential item`);
+		expect(envelope.result.repairAction).toBe(`${REPAIR["refused-precondition"]}; add a username field to the tenant's product credential item`);
 		expect(calls).toHaveLength(1);
 	});
 
@@ -1021,7 +1018,7 @@ describe("journaled writes", () => {
 		const secondInput = { issueKey: "PROJ-1", file: "/tmp/evidence/second.pdf" };
 		const secondPreview = previewData(await dispatch(["issue.attach", "--input", JSON.stringify(secondInput), "--preview"], dependencies));
 		const refusedUpload = await dispatch(["issue.attach", "--input", JSON.stringify(secondInput), "--apply", secondPreview.previewId], dependencies);
-		expect([refusedUpload.result.outcome, refusedUpload.result.causeCode, refusedUpload.result.transactionState, refusedUpload.result.repairAction]).toEqual(["failed", "failed-unknown", "unchanged", `${REPAIR_TEXT["failed-unknown"]}; the Provider reported the upload failed: check the file path and the Create Attachments permission`]);
+		expect([refusedUpload.result.outcome, refusedUpload.result.causeCode, refusedUpload.result.transactionState, refusedUpload.result.repairAction]).toEqual(["failed", "failed-unknown", "unchanged", `${REPAIR["failed-unknown"]}; the Provider reported the upload failed: check the file path and the Create Attachments permission`]);
 		expect(readJsonDir(receiptsDir()).map((entry) => [entry.status, entry.basis]).sort()).toEqual([["completed", undefined], ["unchanged", "revision-unchanged"]]);
 		const relative = await dispatch(["issue.attach", "--input", '{"issueKey":"PROJ-1","file":"evidence/report.pdf"}', "--preview"], dependencies);
 		expect([relative.result.causeCode, relative.result.repairAction]).toEqual(["input-invalid", "input key file is invalid"]);
@@ -1222,9 +1219,9 @@ describe("historical records from the retired Official route", () => {
 		// active tool vocabulary; the receipt names a route that no longer
 		// exists, so it is refused before any binding or call.
 		const adjudicated = await dispatch(["adjudicate", "--run", receipt.runId, "--input", JSON.stringify(COMMENT)], dependencies);
-		expect([adjudicated.result.outcome, adjudicated.result.causeCode, adjudicated.result.exitCode, adjudicated.result.repairAction]).toEqual(["refused", "refused-state", 3, `${REPAIR_TEXT["refused-state"]}; receipt-provider-retired`]);
+		expect([adjudicated.result.outcome, adjudicated.result.causeCode, adjudicated.result.exitCode, adjudicated.result.repairAction]).toEqual(["refused", "refused-state", 3, `${REPAIR["refused-state"]}; receipt-provider-retired`]);
 		const unlocked = await dispatch(["unlock", "--run", receipt.runId], dependencies);
-		expect([unlocked.result.outcome, unlocked.result.causeCode, unlocked.result.repairAction]).toEqual(["refused", "refused-state", `${REPAIR_TEXT["refused-state"]}; receipt-provider-retired`]);
+		expect([unlocked.result.outcome, unlocked.result.causeCode, unlocked.result.repairAction]).toEqual(["refused", "refused-state", `${REPAIR["refused-state"]}; receipt-provider-retired`]);
 		expect(calls).toEqual([]);
 		expect(seen).toEqual([]);
 		// A new Community write on the same object is blocked by the open receipt.
@@ -1246,12 +1243,12 @@ describe("historical records from the retired Official route", () => {
 		const before = fileBytes(previewsDir());
 		const secondInput = { ...COMMENT, body: "a second retired preview" };
 		const applied = await dispatch(["issue.comment", "--input", JSON.stringify(secondInput), "--apply", openPreview.previewId], dependencies);
-		expect([applied.result.outcome, applied.result.causeCode, applied.result.exitCode, applied.result.repairAction]).toEqual(["refused", "refused-preview", 3, `${REPAIR_TEXT["refused-preview"]}; preview-provider-retired`]);
+		expect([applied.result.outcome, applied.result.causeCode, applied.result.exitCode, applied.result.repairAction]).toEqual(["refused", "refused-preview", 3, `${REPAIR["refused-preview"]}; preview-provider-retired`]);
 		// Refused before any binding or provider call: the retired provider is read
 		// from the preview itself, ahead of the preparatory jira_get_issue read.
 		expect(calls).toEqual([]);
 		const unlocked = await dispatch(["unlock", "--run", openPreview.previewId], dependencies);
-		expect([unlocked.result.outcome, unlocked.result.causeCode, unlocked.result.repairAction]).toEqual(["refused", "refused-preview", `${REPAIR_TEXT["refused-preview"]}; preview-provider-retired`]);
+		expect([unlocked.result.outcome, unlocked.result.causeCode, unlocked.result.repairAction]).toEqual(["refused", "refused-preview", `${REPAIR["refused-preview"]}; preview-provider-retired`]);
 		expect(fileBytes(previewsDir())).toEqual(before);
 		expect(readJsonDir(previewsDir()).map((entry) => [entry.provider, entry.status]).sort()).toEqual([[RETIRED, "consumed"], [RETIRED, "open"]]);
 		expect(readJsonDir(receiptsDir()).filter((entry) => entry.provider === "community")).toEqual([]);

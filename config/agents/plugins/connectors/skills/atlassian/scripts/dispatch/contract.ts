@@ -6,7 +6,7 @@
 
 import { PRODUCTS, type Product } from "../custody/index.ts";
 
-export { PRODUCTS, type Product } from "../custody/index.ts";
+export type { Product } from "../custody/index.ts";
 
 // Bundled at compile time: inside the packaged front door this module's own
 // directory is virtual, so the registry cannot be read from disk beside it.
@@ -148,12 +148,12 @@ export type CauseCode =
 	| "failed-unknown"
 	| "outcome-unknown";
 
-export type Outcome = "success" | "refused" | "failed";
+export type OutcomeKind = "success" | "refused" | "failed";
 export type FailureClass = "usage" | "domain" | "schema" | "internal" | null;
 export type TransactionState = "unchanged" | "completed" | "unknown";
 
 export interface CauseRow {
-	outcome: Outcome;
+	outcome: OutcomeKind;
 	failureClass: FailureClass;
 	exitCode: 0 | 2 | 3 | 4;
 }
@@ -194,7 +194,7 @@ export interface Envelope {
 	result: {
 		runId: string;
 		commandIdentity: string;
-		outcome: Outcome;
+		outcome: OutcomeKind;
 		// inspect reads; repository-local changes only private journal state;
 		// external reaches the provider with a write.
 		effectClass: "inspect" | "repository-local" | "external";

@@ -27,7 +27,7 @@ import { compileFrontDoor } from "../../../../tests/compile-front-door.ts";
 export const SHIPPED_ROOT = path.resolve(import.meta.dir, "..", "..", "..", "..");
 // Plugin-relative path of the one file a copy may change.
 export const KEYCHAIN_LEAF = path.join("skills", "atlassian", "scripts", "custody", "keychain-read.ts");
-export const FAKE_READER = path.join(import.meta.dir, "keychain-read-fake.ts");
+const FAKE_READER = path.join(import.meta.dir, "keychain-read-fake.ts");
 // Present in the fake and nowhere the shipped plugin runs.
 export const FAKE_MARKER = "connectors-test-keychain-reader-fake";
 export const REQUIREMENTS = "requirements.json";
@@ -35,7 +35,7 @@ export const REQUIREMENTS = "requirements.json";
 export const FRONT_DOOR = path.join("bin", "connectors");
 // A string only the fake reader's compiled code contains; minification drops
 // the marker comment, so the compiled copy is recognised by this instead.
-const FAKE_READER_LOG = "keychain-reads.jsonl";
+export const FAKE_READER_LOG = "keychain-reads.jsonl";
 const FAKE_OP = path.join(import.meta.dir, "op-fake.ts");
 const FAKE_UV = path.join(import.meta.dir, "community-mcp-fake.ts");
 

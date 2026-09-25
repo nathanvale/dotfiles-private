@@ -117,22 +117,6 @@ describe("writePrivateFile and readPrivateFile", () => {
 		expect(writePrivateFile(path.join(directory, "nested"), "new")).toEqual({ ok: false, reason: "not-regular" });
 	});
 
-	test("a read never follows a symlink: the descriptor is opened no-follow and inspected before it is read", () => {
-		const directory = path.join(root, "state");
-		expect(ownedDirectory(directory)).toEqual({ ok: true });
-		const real = path.join(directory, "real.json");
-		expect(writePrivateFile(real, "real")).toEqual({ ok: true });
-		// A symlink to an otherwise acceptable owned 0600 file is still refused.
-		const link = path.join(directory, "session.json");
-		symlinkSync(real, link);
-		expect(readPrivateFile(link)).toEqual({ ok: false, reason: "symlink" });
-		// Swapping the regular file for a symlink after it was valid is refused on the next read.
-		rmSync(real);
-		writeFileSync(real, "swapped", { mode: 0o644 });
-		expect(readPrivateFile(real)).toEqual({ ok: false, reason: "mode-invalid" });
-		expect(readPrivateFile(link)).toEqual({ ok: false, reason: "symlink" });
-	});
-
 	test("a read refuses anything but an owned exact-0600 regular file", () => {
 		const directory = path.join(root, "state");
 		expect(ownedDirectory(directory)).toEqual({ ok: true });

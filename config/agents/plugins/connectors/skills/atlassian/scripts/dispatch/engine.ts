@@ -36,11 +36,11 @@ export interface Dependencies {
 export type Input = Record<string, string | number | string[]>;
 export type Validation = { ok: true; input: Input } | { ok: false; reason: string };
 
-export type Field = { kind: "text"; required: boolean } | { kind: "count"; required: boolean } | { kind: "names"; required: boolean };
+type Field = { kind: "text"; required: boolean } | { kind: "count"; required: boolean } | { kind: "names"; required: boolean };
 
 // Neutral input per read operation; unknown keys are refused so a caller
 // cannot smuggle provider-specific arguments through the semantic seam.
-export const READ_INPUTS: Partial<Record<OperationId, Record<string, Field>>> = {
+const READ_INPUTS: Partial<Record<OperationId, Record<string, Field>>> = {
 	"issue.get": { issueKey: { kind: "text", required: true }, fields: { kind: "names", required: false } },
 	"issue.search": { jql: { kind: "text", required: true }, maxResults: { kind: "count", required: false }, fields: { kind: "names", required: false } },
 	// The statuses an issue.transition may name: the transitions the site
