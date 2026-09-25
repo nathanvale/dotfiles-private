@@ -15,7 +15,7 @@ command. Always pass `--json` and act on `result.nextAction`, `handoff`, and
 `repairAction`. The vault comes from
 `~/.config/my-second-brain-playground/vault.json` or `--vault`; when
 configuration is missing or invalid, read
-[configuration](../vault-note-commits/references/configuration.md).
+[configuration](references/configuration.md).
 
 ## Journey
 
@@ -44,7 +44,7 @@ configuration is missing or invalid, read
   state, retry policy, and next actions.
 - `data.guard` and `data.warnings` report the vault's Git gate; warnings never
   block. `DOMAIN_GUARD_INCOMPATIBLE` needs `bun run guard:install` in the vault.
-  Codes and meanings: [guardrails](../vault-note-commits/references/guardrails.md).
+  Codes and meanings: [guardrails](references/guardrails.md).
 - `bun run guard:audit --json`, run directly in the vault, is the on-demand
   route for a full guard report outside any `begin`/`finish`/`inspect`
   transaction. Command and finding IDs: `docs/agents/git-guardrails.md` in the
@@ -54,7 +54,3 @@ configuration is missing or invalid, read
 - `diagnostics.file` names the private per-run JSONL under
   `~/.local/state/vault-steward/diagnostics/`; diagnostic loss never changes
   the result.
-
-The alias `vault-note-commits` keeps the single-step `finish` and the
-`schemaVersion: 1` envelope through the migration period; both front doors
-share one run store, so a candidate begun by either finishes through the other.

@@ -1,6 +1,6 @@
 // Policy and state transitions of the Vault Steward CLI. Every I/O call goes through the Runtime port; every refusal is
-// a Refusal carrying a sealed reason and facts, rendered by a front door (legacy schemaVersion 1 today, Contract Core
-// 2.0 in the next unit). The step order is the legacy sequence inventoried in CONTRACT.md 2.6.
+// a Refusal carrying a sealed reason and facts, rendered by the Contract Core 2.0 front door in cli.ts. The step order
+// is the sequence inventoried in CONTRACT.md 2.6.
 import { createHash, randomUUID } from "node:crypto"
 import { isAbsolute, join, normalize, relative, resolve, sep } from "node:path"
 import { acquireLock, lockPath, ownerIsLive, releaseLock } from "./integration-lock.ts"
@@ -449,7 +449,7 @@ export function validateCandidate(rt: Runtime, manifest: Manifest, message: stri
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Completion and integration (legacy phase D)
+// Completion and integration (phase D)
 
 // Completion ref, receipt, then best-effort candidate removal. The receipt is the completion boundary.
 function recordCompletion(rt: Runtime, manifest: Manifest, commit?: string, completedBefore: EffectId[] = []): Completion {
@@ -556,29 +556,6 @@ function canonicalReady(rt: Runtime, manifest: Manifest, commit: string | undefi
 		refuse("canonical-not-ready", candidateFacts(manifest, commit))
 	}
 	return vault
-}
-
-// Under the integration lock: receipt re-read, canonical checks, optional rebase, fast-forward, completion record.
-export function integrate(rt: Runtime, manifest: Manifest, commit: string): IntegrationResult {
-	return withLock(rt, manifest, () => {
-		const completed = readReceipt(rt, manifest.worktree)
-		if (completed) return { kind: "receipt", receipt: completed }
-		const vault = canonicalReady(rt, manifest, commit)
-		const currentMain = git(rt, vault, ["rev-parse", "HEAD"], context(manifest))
-		const observation = observeMainAt(rt, manifest, commit, vault, currentMain)
-		const integrated = observation.rebase ? performRebase(rt, manifest, commit, currentMain) : commit
-		fastForward(rt, manifest, vault, commit, integrated)
-		return { kind: "completion", completion: recordCompletion(rt, manifest, integrated, ["main.fast-forward"]) }
-	})
-}
-
-// The no-changes completion and the hazard H1 record share one shape: under the lock, re-read the receipt, else record.
-export function completeWithoutIntegration(rt: Runtime, manifest: Manifest, commit?: string): IntegrationResult {
-	return withLock(rt, manifest, () => {
-		const completed = readReceipt(rt, manifest.worktree)
-		if (completed) return { kind: "receipt", receipt: completed }
-		return { kind: "completion", completion: recordCompletion(rt, manifest, commit) }
-	})
 }
 
 // ---------------------------------------------------------------------------------------------------------------------

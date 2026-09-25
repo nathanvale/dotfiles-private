@@ -20,10 +20,11 @@ that will operate on those fixtures. Add each skill from scratch under
 
 The source lives beside `browser-lanes` in the personal plugin directory.
 Harness installation and fresh-session discovery are separate from source
-creation. `vault-note-commits` lets parallel agents prepare isolated note
-commits and integrates disjoint candidates onto local `main` one at a time.
-It checks new files as well as existing edits, reports unchanged candidates
-as successful no-ops, and retains private completion receipts for safe retries.
+creation. The [Vault Steward CLI](skills/vault-steward/SKILL.md) lets parallel
+agents prepare isolated note commits and integrates disjoint candidates onto
+local `main` one at a time. It checks new files as well as existing edits,
+reports unchanged candidates as successful no-ops, and retains private
+completion receipts for safe retries.
 
 Use the playground's `bun run list --family <name>` to discover current notes.
 New notes appear through their metadata; family indexes remain curated

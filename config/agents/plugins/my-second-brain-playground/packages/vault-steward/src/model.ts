@@ -1,4 +1,4 @@
-// Domain types and sealed vocabularies shared by every Vault Steward CLI front door. No behaviour lives here.
+// Domain types and sealed vocabularies of the Vault Steward CLI. No behaviour lives here.
 // Naming register: CLI-BRIEF.md section 7 and CONTRACT.md 1.2 (frozen strings).
 
 export const schemaVersion = 1 as const
@@ -85,8 +85,7 @@ export interface Completion {
 
 export type TransactionState = "unchanged" | "partially-completed" | "unknown"
 
-// The closed refusal vocabulary of the shared engine. Each reason maps to exactly one Contract Core 2.0 cause
-// (CONTRACT.md 3.3); the legacy front door maps the same reasons to schemaVersion 1 codes (CONTRACT.md 4.1).
+// The closed refusal vocabulary of the engine. Each reason maps to exactly one Contract Core 2.0 cause (CONTRACT.md 3.3).
 export const REASON_CAUSES = {
 	"config-home-invalid": "SCHEMA_INVALID_INPUT",
 	"config-absent": "DOMAIN_CONFIG_MISSING",

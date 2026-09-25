@@ -18885,7 +18885,7 @@ commands:
   --discover --json                                                describe the commands and the contract
   --discover-command <identity> --json                             describe the possible outcomes of one command
 
-Remote sync (push, fetch, publish) is a separate workflow. The alias vault-note-commits keeps the schemaVersion 1 envelope.
+Remote sync (push, fetch, publish) is a separate workflow.
 
 example:
   vault-steward begin --vault /path/to/vault --path projects/demo/GOAL.md --json
