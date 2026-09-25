@@ -61,7 +61,7 @@ flag.
 - For remaining evidence gaps, use one fresh Luna / Medium preparation agent
   across the run, alongside the coordinator's brief preparation. Give it exact
   files and relevant excerpts, not conversation history or site solutions.
-- Request at most 200 words: reuse decision, supporting evidence, missing
+- Request a short, scannable handback: reuse decision, supporting evidence, missing
   checks, and next safe action. Retain the result; refresh only changed evidence.
 - Escalate conflicting evidence or unclear adapter fit to Terra / High only
   when Luna identifies that ambiguity. The coordinator owns the handoff; no

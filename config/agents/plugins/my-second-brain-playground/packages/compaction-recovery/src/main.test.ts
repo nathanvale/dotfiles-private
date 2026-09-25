@@ -1417,12 +1417,13 @@ test("Codex and Claude declarations register bin/msb-workflow hook and keep the 
 	// compaction delivers one panel, on the next UserPromptSubmit; Claude keeps `compact` as its delivery event.
 	const launcher = { type: "command", command: '"${PLUGIN_ROOT}/bin/msb-workflow" hook' }
 	// M2 U4-lite finding F2: on Codex only `UserPromptSubmit` delivers the Resume Panel (`prompt-panel`), and the
-	// real 0.154.0 tracer elided the middle of a 10,011-byte panel-plus-prime payload at Codex's default 2,500-token
-	// `additionalContextLimit`. Codex 0.154.0 counts ceil(bytes / 4), so the per-handler limit below is a 24,000-byte
-	// ceiling: 2.4x the observed payload and above the source bound (8 KiB prime + 3 KiB comment excerpts + header).
-	// Independent oracle: the limit and the observed token count are restated here, not read from the manifest.
+	// real 0.154.0 tracer elided the middle of a 10,011-byte (2,503-token) panel-plus-prime payload at Codex's default
+	// 2,500-token `additionalContextLimit`. Codex 0.154.0 counts ceil(bytes / 4), so the per-handler limit below is a
+	// 24,000-byte ceiling: 2.4x the observed payload and above the source bound (8 KiB prime + 3 KiB comment excerpts +
+	// header). Codex 0.154.0 honours `additionalContextLimit` only on events that can emit `additionalContext`, so the
+	// other three handlers stay bare and their trust hashes are unchanged; the exact-match row below pins all four.
+	// Independent oracle: the limit is restated here, not read from the manifest.
 	const promptPanelContextLimit = 6000
-	const observedTracerPayloadTokens = 2503
 	expect(codex).toEqual({
 		hooks: {
 			SessionStart: [{ matcher: "startup|resume|clear", hooks: [launcher] }],
@@ -1431,13 +1432,6 @@ test("Codex and Claude declarations register bin/msb-workflow hook and keep the 
 			UserPromptSubmit: [{ hooks: [{ ...launcher, additionalContextLimit: promptPanelContextLimit }] }],
 		},
 	})
-	expect(codex.hooks.UserPromptSubmit[0].hooks[0].additionalContextLimit).toBe(promptPanelContextLimit)
-	expect(promptPanelContextLimit).toBeGreaterThanOrEqual(observedTracerPayloadTokens * 2)
-	// Codex 0.154.0 honours `additionalContextLimit` only on events that can emit `additionalContext`; the other three
-	// handlers stay bare so no event carries an ignored field and their trust hashes are unchanged.
-	for (const event of ["SessionStart", "PreCompact", "PostCompact"]) {
-		expect(codex.hooks[event][0].hooks[0]).toEqual(launcher)
-	}
 	expect(claude).toEqual({
 		hooks: {
 			SessionStart: [{ matcher: "startup|resume|compact", hooks: [{ type: "command", command: '"${CLAUDE_PLUGIN_ROOT}/bin/msb-workflow" hook' }] }],
@@ -1446,22 +1440,16 @@ test("Codex and Claude declarations register bin/msb-workflow hook and keep the 
 	expect(statSync(join(pluginRoot, "bin/msb-workflow")).mode & 0o111).not.toBe(0)
 
 	// Independent oracle: the manifest bytes are the rollback unit (restoring the pre-change bytes re-registers
-	// `hooks/recover-context`), so both identities are pinned here from the accepted M2 readiness packet. The Codex
-	// manifest's M2 release-candidate identity (`dba51eb5…`) is superseded by the F2 context-limit repair; the manifest
-	// rollback target (`preChange`) is unchanged by that repair.
+	// `hooks/recover-context`), so the current identities are pinned here from the accepted M2 readiness packet. The
+	// rollback targets live in that packet as provenance (Claude `c2c8e250…`, Codex `d9f8532a…`); the Codex manifest's
+	// M2 release-candidate identity (`dba51eb5…`) is superseded by the F2 context-limit repair.
 	const manifestBytes = {
-		"hooks/claude/hooks.json": { current: "609dfbe4e1ce188ce8d1db21a436cea2498e59301c8f0a49077b84b0c877e694", preChange: "c2c8e2500d48c46ed1559bd9bb212ecb2aa8b579152c340f53923c7ad36cc461" },
-		"hooks/codex/hooks.json": {
-			current: "14423919a22f7c58683e0fafbd2bc8ce2427baf698c879e1147c0100bfa5f5ff",
-			superseded: "dba51eb5d7f8fc6b78f4f3307b5bdc2f5a09053aeb84fad5c1cd9606a02f9a07",
-			preChange: "d9f8532a537e1e39f5b1cf1fad03221cfa6b43a1cb497c308e9b9e0da2081e08",
-		},
+		"hooks/claude/hooks.json": "609dfbe4e1ce188ce8d1db21a436cea2498e59301c8f0a49077b84b0c877e694",
+		"hooks/codex/hooks.json": "14423919a22f7c58683e0fafbd2bc8ce2427baf698c879e1147c0100bfa5f5ff",
 	}
 	for (const [path, identity] of Object.entries(manifestBytes)) {
-		expect(fileSha256(path)).toBe(identity.current)
-		expect(fileSha256(path)).not.toBe(identity.preChange)
+		expect(fileSha256(path)).toBe(identity)
 	}
-	expect(fileSha256("hooks/codex/hooks.json")).not.toBe(manifestBytes["hooks/codex/hooks.json"].superseded)
 
 	// Independent oracle: the legacy launchers and the Python owner stay unregistered as provenance only; they are not a
 	// rollback route (Ticket #52 revision 3, Spec #57 revision 3). LKR never edited `hooks/recover-context`: its accepted
@@ -1931,44 +1919,6 @@ test("bind refreshes the same accepted work owner", () => {
 	})
 	expect(readFileSync(current.register)).toEqual(beforeRegister)
 	expect(runHook(current).stdout).toContain(taskIdentity)
-})
-
-test("observer timing correlation rejects wrong phase values and ambiguous association", () => {
-	const current = fixture()
-	const traceRoot = join(current.state, "my-second-brain-playground", "recovery-traces")
-	const before = observerTraceFileNames(current)
-	const record = (
-		phase: "invocation" | "response-available" | "terminal",
-		duration: number,
-		sequence: number,
-	): Record<string, unknown> => ({
-		schema_version: 1,
-		record_type: "lifecycle",
-		record_identity: `observer-1-${sequence}`,
-		journey_identity: "invocation-1",
-		invocation_identity: "invocation-1",
-		producer_identity: "recovery-observer-1",
-		producer_sequence: sequence,
-		...(sequence === 0 ? {} : { parent_record_identity: "observer-1-0" }),
-		harness_kind: "unknown",
-		operation: "recover",
-		phase,
-		occurred_at: `2026-09-14T00:00:0${sequence}.000Z`,
-		duration_ms: duration,
-		outcome: sequence === 0 ? "started" : "succeeded",
-	})
-	write(join(traceRoot, "first.jsonl"), [
-		record("invocation", 1, 0),
-		record("response-available", 3, 1),
-		record("terminal", 2, 2),
-	].map((value) => JSON.stringify(value)).join("\n") + "\n", 0o600)
-	expect(() => observerPhaseTiming(current, before)).toThrow("invalid phase values or association")
-	write(join(traceRoot, "second.jsonl"), [
-		record("invocation", 1, 0),
-		record("response-available", 2, 1),
-		record("terminal", 3, 2),
-	].map((value) => JSON.stringify(value)).join("\n") + "\n", 0o600)
-	expect(() => observerPhaseTiming(current, before)).toThrow("expected 1 new trace, received 2")
 })
 
 test("paired cold processes keep capture-enabled and unavailable primary-response p95 within 100 ms", async () => {

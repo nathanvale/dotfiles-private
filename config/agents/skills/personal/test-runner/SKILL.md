@@ -43,17 +43,6 @@ Agent Runner for Bun test context.
 - Run `bun --filter test-runner-scripts typecheck` after TypeScript edits.
 - Run the fixed-gate benchmark before changing normal runner guidance.
 
-## Workflow
-
-- Start with the plan or benchmark question.
-- Choose repair mode when the failing file is already in context.
-- Choose triage mode when the failure source may be unopened.
-- Use detail lookup with a source-run handle when the packet is too terse.
-- Run the focused local runner for Bun test, coverage, repair, or triage context.
-- Run the Runner Benchmark Harness before any guidance change.
-- Require fixed-gate benchmark evidence before changing normal runner guidance.
-- Keep lint and typecheck on current guidance.
-
 ## Safety
 
 - Pass test-target args only after the runner separator.
@@ -64,8 +53,4 @@ Agent Runner for Bun test context.
 
 ## Next Safe Action
 
-- For a routine Bun test gate, run compact mode.
-- For coverage, pass Bun coverage args after `--`.
-- For a failing edited test file, run repair mode and use detail lookup only if needed.
-- For a broader failing suite, run triage mode and then narrow with compact or repair mode.
-- For future guidance changes, run fixed-gate benchmark evidence first.
+- Run compact mode for a routine Bun test gate; pass coverage args after `--`.

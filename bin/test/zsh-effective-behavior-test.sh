@@ -524,9 +524,10 @@ done
 # command-resolution probes all failed, because the harness had the option set
 # before startup ran and startup left it alone.
 #
-# These rows start the same shells with the three hazards already enabled, via
-# `-o` at launch so the state arrives the way a harness delivers it rather than
-# through a file this contract also owns. Startup must actively normalise them.
+# These rows start the same shells with the three hazards already enabled and
+# NOMATCH already disabled, via `-o`/`+o` at launch so the state arrives the way
+# a harness delivers it rather than through a file this contract also owns.
+# Startup must actively normalise them.
 #
 # The behavioural row is the one that matters: with EXTENDED_GLOB and NULL_GLOB
 # on, an unquoted `HEAD^` expands to a pattern and is then deleted entirely, so
@@ -555,7 +556,7 @@ run_hostile_mode() {
       TERM=dumb \
       CONTRACT_WORK="$work" \
       CONTRACT_SECRET="$DISCLOSURE_SENTINEL" \
-      /bin/zsh -o extendedglob -o nullglob -o globdots "${flags[@]}" "$probe" 2>"$err_file"
+      /bin/zsh -o extendedglob -o nullglob -o globdots +o nomatch "${flags[@]}" "$probe" 2>"$err_file"
   )"
   probe_status=$?
   set -e

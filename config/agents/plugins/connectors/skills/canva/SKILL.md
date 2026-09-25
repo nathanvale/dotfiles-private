@@ -10,9 +10,6 @@ account's OAuth grant in its own native vault, under a private per-account
 data root this skill selects. Keep native Harness MCP tools, direct Canva API
 calls, bare `mcporter`, and browser automation outside this route.
 
-The plugin's compiled front door at `../../bin/connectors` does not yet carry
-Canva auth or reads; use the launcher below.
-
 ```sh
 SKILL_DIR="<directory containing this SKILL.md>"
 CANVA="$SKILL_DIR/scripts/canva.ts"

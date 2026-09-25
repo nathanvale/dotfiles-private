@@ -248,10 +248,6 @@ export const MachineEnvelopeSchema = z.strictObject({
 })
 export type EnvelopeV2 = z.infer<typeof MachineEnvelopeSchema>
 
-export function parseMachineEnvelope(input: unknown): { ok: true; value: EnvelopeV2 } | { ok: false; issues: string[] } {
-	const parsed = MachineEnvelopeSchema.safeParse(input)
-	return parsed.success ? { ok: true, value: parsed.data } : { ok: false, issues: parsed.error.issues.map((issue) => `${issue.path.join(".") || "<root>"}: ${issue.message}`) }
-}
 export function exitFor(failureClass: FailureClass | null): ExitCode { return EXIT[failureClass ?? "success"] }
 export function isSafeJson(input: unknown, maximumDepth = 64): input is JsonValue {
 	const seen = new Set<object>()

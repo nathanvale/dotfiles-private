@@ -30,12 +30,8 @@ scan_unexpected_consumers() {
     "$root/config"
   )
   while IFS= read -r matched_path; do
-    matched_path="${matched_path#"$root/"}"
-    case "$matched_path" in
-      bin/with-env | bin/env/add-api-key | bin/env/sync-api-keys) ;;
-      *) printf '%s\n' "$matched_path" ;;
-    esac
-  done < <(rg -l 'with-env|\.env\.1password' "${search_paths[@]}" -g '!bin/test/**' 2>/dev/null || true)
+    printf '%s\n' "${matched_path#"$root/"}"
+  done < <(rg -l 'with-env|\.env\.1password' "${search_paths[@]}" -g '!bin/test/**' 2>/dev/null | LC_ALL=C sort)
 }
 
 # A wrapper that delegates to the launcher is the supported shape. The defect is
@@ -62,16 +58,16 @@ pass 'no bin reads a secret outside with-one-password-token'
 
 fixture="$TEST_ROOT/fixture"
 mkdir -p "$fixture/bin/env" "$fixture/config"
-printf '# legacy owner: with-env\n' >"$fixture/bin/with-env"
-printf '# legacy owner: .env.1password\n' >"$fixture/bin/env/add-api-key"
-printf '# legacy owner: .env.1password\n' >"$fixture/bin/env/sync-api-keys"
+printf '# retired owner: with-env\n' >"$fixture/bin/with-env"
+printf '# retired owner: .env.1password\n' >"$fixture/bin/env/add-api-key"
 printf '{"command":"with-env"}\n' >"$fixture/config/unowned-client.json"
 printf 'source .env.1password\n' >"$fixture/.zprofile"
 printf 'exec with-one-password-token inject TOKEN op://vault/item/credential -- provider\n' >"$fixture/bin/provider-login"
 printf 'TOKEN="$(op item get PROVIDER --reveal)"\n' >"$fixture/bin/provider-direct"
 fixture_result="$(scan_unexpected_consumers "$fixture")"
-[[ "$fixture_result" == $'.zprofile\nconfig/unowned-client.json' ]] || fail 'fixture detects unowned startup and client consumers'
-pass 'fixture detects unowned startup and client consumers'
+[[ "$fixture_result" == $'.zprofile\nbin/env/add-api-key\nbin/with-env\nconfig/unowned-client.json' ]] ||
+  fail "fixture detects unowned startup, client, and re-created retired consumers, got: $fixture_result"
+pass 'fixture detects unowned startup, client, and re-created retired consumers'
 
 fixture_auth_bins="$(scan_provider_auth_bins "$fixture")"
 [[ "$fixture_auth_bins" == 'bin/provider-direct' ]] || fail "fixture detects a direct op reader, got: $fixture_auth_bins"

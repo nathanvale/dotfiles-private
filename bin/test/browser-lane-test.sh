@@ -2367,7 +2367,7 @@ assert_contains "$(<"$preadmission_open_argv")" "$preadmission_url" \
   'pre-admission start sends the intended page only to the visible opener'
 
 run_cli handoff resume --lane daily-driver --account-role owner \
-  --nonce-file "$(printf 'd%.0s' {1..64})" --page-url "$preadmission_url" --json
+  --nonce-file "$(token_fixture "$(printf 'd%.0s' {1..64})")" --page-url "$preadmission_url" --json
 assert_equals "$cli_status" '21' 'invalid pre-admission recovery evidence is refused'
 assert_contains "$cli_err" 'handoff_token_invalid' \
   'invalid pre-admission recovery evidence has a typed repair path'
@@ -2583,7 +2583,7 @@ assert_equals "$(jq -r '.data | has("profile")' <<<"$cli_out")" 'false' \
   'handoff output omits profile identity metadata'
 assert_equals "$(jq -r '.data | has("account_role")' <<<"$cli_out")" 'false' \
   'handoff output omits account-role metadata'
-assert_not_contains "$cli_out" 'Daily Driver' 'handoff output omits the profile display name'
+assert_not_contains "$cli_out" 'Daily' 'handoff output omits the profile display name'
 assert_not_contains "$cli_out" '/login' 'handoff output omits the page path'
 assert_not_contains "$cli_out" 'QUERY-SENTINEL' 'handoff output omits the page query'
 assert_not_contains "$cli_out" 'FRAGMENT-SENTINEL' 'handoff output omits the page fragment'
@@ -2667,7 +2667,7 @@ run_cli run --lane daily-driver --account-role owner --run-id stale-blocked -- \
 assert_equals "$cli_status" '20' 'a stale handoff still blocks an engine run'
 assert_contains "$cli_err" 'handoff_stale' 'stale-handoff engine refusal is typed'
 
-run_cli handoff resume --lane daily-driver --account-role owner --nonce-file "$(printf 'f%.0s' {1..64})" \
+run_cli handoff resume --lane daily-driver --account-role owner --nonce-file "$(token_fixture "$(printf 'f%.0s' {1..64})")" \
   --page-url "$handoff_full_url" --json
 assert_equals "$cli_status" '21' 'handoff resume refuses a wrong token'
 assert_contains "$cli_err" 'handoff_token_invalid' 'wrong-token resume refusal is typed'
@@ -2702,7 +2702,7 @@ assert_not_contains "$cli_out" 'SECOND-QUERY-SENTINEL' 'text-mode handoff output
 release_nonce="$(<"$last_token_output")"
 assert_matches "$release_nonce" '^[0-9a-f]{64}$' 'text-mode handoff open writes its token privately'
 
-run_cli handoff release --lane daily-driver --nonce-file "$(printf 'e%.0s' {1..64})" --json
+run_cli handoff release --lane daily-driver --nonce-file "$(token_fixture "$(printf 'e%.0s' {1..64})")" --json
 assert_equals "$cli_status" '21' 'handoff release refuses a wrong token'
 assert_present "$handoff_record" 'wrong-token release preserves the reservation'
 

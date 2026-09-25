@@ -19,19 +19,6 @@ Update a skill's SKILL.md and related files based on corrections discovered duri
 
 Analyze the conversation to detect which skill is running, reflect on what went wrong, propose specific fixes, get user approval, then apply changes with optional commit.
 
-## Context
-
-Skill detection: !`ls -1 ./skills/*/SKILL.md | head -5`
-
-## Quick Start
-
-0. **Read the owners** - follow `docs/agents/skills.md#skill-work-routing` before any edit
-1. **Detect skill** from conversation context (invocation messages, recent SKILL.md references)
-2. **Reflect** on what went wrong and how you discovered the fix
-3. **Present** proposed changes with before/after diffs
-4. **Get approval** before making any edits
-5. **Apply** changes and optionally commit
-
 ## Process
 
 ### Step 0: Read the owners
@@ -46,7 +33,7 @@ Identify the skill from conversation context:
 - Check which SKILL.md was recently referenced
 - Examine current task context
 
-Set: `SKILL_NAME=[skill-name]` and `SKILL_DIR=./skills/$SKILL_NAME`
+Set `SKILL_NAME` from the detected skill and `SKILL_DIR` to the directory of its loaded SKILL.md (resolve symlinks).
 
 If unclear, ask the user.
 

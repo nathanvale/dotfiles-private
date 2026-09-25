@@ -10,12 +10,6 @@ Mine the superwhisper recording database for domain-term misrecognitions using
 fuzzy edit-distance matching, present candidates for approval, and patch
 `settings.json` with new vocabulary terms and replacement pairs.
 
-## Trigger
-
-- "refresh my vocab", "vocab refresh", "update superwhisper vocabulary"
-- "voice is mangling X", "superwhisper keeps getting X wrong"
-- After onboarding a new project with unfamiliar jargon
-
 ## Paths
 
 - Settings: `~/Documents/Superwhisper/settings/settings.json`

@@ -13,25 +13,23 @@ allowed-tools: Bash, Read, Grep, Glob
 
 # Dotfiles Knowledge Base & Setup Orchestrator
 
-This skill is the single source of truth for Nathan's dotfiles system at
-`~/code/dotfiles`. It covers everything from "how does X work?" questions to
+This skill orients you to Nathan's dotfiles system at `~/code/dotfiles`; the
+files and commands it names own the details. It covers everything from "how does X work?" questions to
 full machine setup orchestration. Read the inline knowledge below to answer
 questions directly. Use the router at the bottom for action workflows.
 
 ---
 
-## Security -- Read This First
-
-**CATASTROPHIC RISK: Work content in the public dotfiles repo.**
+## Security: keep work content out of this public repo
 
 Work laptops contain employer-sensitive material: company email addresses, internal
 hostnames, VPN endpoints, API keys, SSH keys, Jira project IDs, internal tool names,
-git signing identities, and proprietary aliases. If ANY of this leaks into the public
-dotfiles repo, security scanners will flag it and Nathan faces disciplinary action.
+git signing identities, and proprietary aliases. If any of this reaches the public
+dotfiles repo, security scanners flag it and Nathan faces disciplinary action.
 
-### Hard rules -- no exceptions, no workarounds
+### Rules
 
-- **ALL work config goes in ~/code/<employer>-dotfiles/** (private repo, separate git remote) -- including "harmless" aliases
+- **All work config goes in ~/code/<employer>-dotfiles/** (private repo, separate git remote) -- including "harmless" aliases
 - **Public dotfiles name the employer only through the work-profile slug** -- keep literal employer names out of `.zshrc`, `.gitconfig`, `Brewfile`, and every tracked file
 - **Symlinks point from private to public, never the reverse**
 - **Credentials live in 1Password** and reach a process through
@@ -41,7 +39,7 @@ dotfiles repo, security scanners will flag it and Nathan faces disciplinary acti
 - **If in doubt, it goes in the private repo.** There is no grey area.
 
 The work-profile slug exists specifically to avoid employer names in the public
-repo. The `Work profile config` block in `.zshrc` is the ONLY bridge, and it
+repo. The `Work profile config` block in `.zshrc` is the only bridge, and it
 reads a validated slug from machine state rather than a hardcoded name. Adding a
 second loader that names an employer literally bypasses that validation and puts
 the name in a public repo.
@@ -280,7 +278,7 @@ Every employer gets a private git repo at `~/code/<employer>-dotfiles/`.
 +-- .gitconfig.work          # Work git identity
 +-- ssh_config.work          # SSH config (optional)
 +-- Brewfile.work            # Employer packages (optional)
-+-- Codex/                  # Work-specific Codex config
++-- claude/                 # Work-specific Claude Code config
     +-- AGENTS.md
     +-- commands/
     +-- skills/
@@ -299,7 +297,7 @@ Every employer gets a private git repo at `~/code/<employer>-dotfiles/`.
 The `work-profile-init.sh` script creates the canonical structure:
 
 ```bash
-.Codex/skills/dotfiles/scripts/work-profile-init.sh <employer>
+.claude/skills/dotfiles/scripts/work-profile-init.sh <employer>
 ```
 
 It's idempotent -- skips if the directory already exists.

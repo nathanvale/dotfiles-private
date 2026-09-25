@@ -6,7 +6,7 @@ role: tool-workflow
 
 # Fix Microphone
 
-Quick read-only triage for a Mac mic that is selected but silent. Fix the cheapest cause first; stop as soon as level bars move.
+Quick triage for a Mac mic that is selected but silent. Diagnostics are read-only; ask before any sudo command or install. Fix the cheapest cause first; stop as soon as level bars move.
 
 ## Trigger
 
@@ -117,7 +117,7 @@ sudo killall coreaudiod
 ```
 Restarts Core Audio, re-enumerates all devices. ~2s audio blip. Equivalent to unplugging and replugging the mic. Use as a one-shot fix; if the delay recurs, use Branch 3 instead.
 
-Passwordless sudoers entry is installed at `/etc/sudoers.d/coreaudiod-reset` — Claude Code can run this directly without prompting. To reinstall if missing:
+A passwordless sudoers entry exists at `/etc/sudoers.d/coreaudiod-reset`; it removes the password prompt, not the ask-first rule above. To reinstall if missing:
 ```bash
 sudo sh -c 'echo "nathanvale ALL=(ALL) NOPASSWD: /usr/bin/killall coreaudiod" > /etc/sudoers.d/coreaudiod-reset && chmod 440 /etc/sudoers.d/coreaudiod-reset'
 ```

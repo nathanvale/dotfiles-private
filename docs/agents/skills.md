@@ -24,9 +24,8 @@ the routing policy in this map only.
   those commands or the official references beside each route below, and to
   `$HOME/code/my-second-brain-plugin/docs/installing.md` for the production
   owner. Never route an external plugin through an `npx` skill installer.
-- The separate My Second Brain checkout's own dev-mode is not ready; it is not
-  an accepted development route today. Revisit it only once that lifecycle is
-  ready and accepted.
+- The separate My Second Brain checkout's own dev-mode is not an accepted
+  development route.
 - Keep candidate, installed, invoked, hook-trusted, and released evidence
   distinct. A build, a staged payload, or a cache/installation receipt is not
   activation proof. Require a fresh Harness invocation. Resolve exact flags
@@ -110,9 +109,6 @@ topology key sets are incomplete.
   `productivity-sync`, `prompt-system-router`, `prompt-system-workflow`,
   `record-decision`, `runbook-orchestrator`, `skill-self-audit-loop`,
   `skills-sync`, `unit-closeout`, and `work-style-convert`.
-- Read `kills-sync` as `skills-sync`.
-- Read `issue-to-pr.lll-account-switch` as `issue-to-pr` and
-  `lll-account-switch`.
 - Retire `skill-author`. Follow the [skill-work routing](#skill-work-routing)
   map for its surviving responsibilities.
 - Retire `fallow` (façade; the name now belongs to the generated project-scope
@@ -277,15 +273,8 @@ Use these direct same-name Tracking Links:
 | `~/.codex/AGENTS.md` | `config/agents/AGENTS.md` |
 | `~/.claude/CLAUDE.md` | `config/agents/claude/CLAUDE.md` |
 
-Fresh outside, root, and nested Claude Code and Codex canaries passed against
-the direct links. The adapter sources, `agent-adapter-setup`, and its
-Instruction Core route are retired.
-
 ## Cutover boundary
 
-- Migrate the legacy personal corpus in bounded tranches.
 - Preserve Codex-owned and plugin-owned payloads byte-identically.
-- Keep the retired `skills-sync` workflow retired.
-- Finish and prove this topology before starting personal-plugin workflow work.
 - Treat third-party upgrades, skill repairs, portability work, publication,
   commits, and pushes as separate authority.

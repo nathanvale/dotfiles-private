@@ -69,7 +69,7 @@ The Esther Perel-inspired profile review does not replace its meme archetype.
 
 ### Nathan's visual preferences
 
-Apply these corrections from 22 September 2026 alongside the verbatim source:
+Nathan's standing visual preferences; they override the verbatim source where they differ:
 
 - Preserve the established youthful adult cartoon appearance: smooth faces,
   large expressive eyes, clean shading, and simplified facial contours.

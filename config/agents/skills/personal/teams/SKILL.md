@@ -1,6 +1,6 @@
 ---
 name: teams
-description: "Read your own local Microsoft Teams cache, and send or quote-reply to Teams messages. Reading: what was said in a channel, who mentioned you, unread items, a ticket's discussion timeline, links or code someone shared, who a person is, or which of two same-named people said something. Sending: stage a message into a channel or DM via the teams-send / teams-reply commands (see Sending Messages). Triggers include \"what did X say in Teams\", \"Teams digest\", \"who mentioned me\", \"catch me up on the channel\", \"find that Teams message\", \"what was discussed about TICKET-123\", \"send a Teams message\", \"post to the dev channel\", \"reply to that message\". macOS only; reads are local-cache only with no network to Microsoft, sends drive the Teams app UI."
+description: "Read your own local Microsoft Teams cache, and send or quote-reply to Teams messages. Reading: what was said in a channel, who mentioned you, unread items, a ticket's discussion timeline, links or code someone shared, who a person is, or which of two same-named people said something. Sending: stage a message into a channel or DM via the teams-send / teams-reply commands (see Sending Messages). macOS only; reads are local-cache only with no network to Microsoft, sends drive the Teams app UI."
 ---
 
 # Teams Local Reader
@@ -38,21 +38,7 @@ pick by the shape of the question, not by habit.
 | An exact string, ticket key, or **recent** message (last days/weeks) | `search "<text>"` / `ticket <KEY>` / `digest [--hours N]` | Direct **live-cache** read. Fast enough (~sub-second to a few seconds) and catches fresh messages not yet in the corpus. |
 | Keyword recall on recent chat, scoped by date or person | `search "<kw>" --since YYYY-MM-DD [--until …] [--from NAME\|MRI]` | Live-cache substring with frontmatter-equivalent filters (`m.time`, author, `creator_mri`). The default for scoped **recent** keyword lookups. |
 | **Fast** keyword recall over **months** of history | `qmd search "<kw>" -c teams` | BM25 over the durable corpus. **Sub-second**, and retains messages the live cache has already aged out. Fastest historical path. |
-| A **meaning-based** question over months — paraphrases, "who worried about X" | `qmd query "<question>" -c teams` | Vector + rerank. The **only** engine that finds paraphrases, but **10s–160s** per call. Deep one-shot recall only. |
-
-**Fast path wins — route by speed, then reach for semantics only when you must.**
-Measured on this corpus (formal A/B, 2026-07-29):
-
-- **Direct CLI** (`search`/`digest`/`ticket`) — reads the **live cache**, ~sub-second
-  to a few seconds. Catches fresh and not-yet-corpused messages. Can miss history that
-  has aged out of the cache. **Default for anything recent.**
-- **`qmd search` (BM25)** — reads the **durable corpus**, **~0.5s**. Retains aged-out
-  history the live cache dropped, and is ~10× faster than the direct CLI for old
-  keyword lookups. **Use it for fast historical keyword recall.** (This is a real niche:
-  it beats the CLI on old messages and beats `qmd query` on speed.)
-- **`qmd query` (vector+rerank)** — **10s–160s**, wildly variable. The only engine that
-  recalls paraphrases with no shared keyword. **Never wire into a sync/batch path** —
-  reserve for deep, one-shot "find where someone said X" questions where waiting is fine.
+| A **meaning-based** question over months — paraphrases, "who worried about X" | `qmd query "<question>" -c teams` | Vector + rerank. The **only** engine that finds paraphrases, but **10s–160s** per call. Deep one-shot recall only; keep it out of sync and batch paths because of that latency. |
 
 Rule of thumb: try the **fast** path first (direct CLI for recent, `qmd search` for old),
 and escalate to `qmd query` only when a keyword search comes back empty and the question
@@ -220,11 +206,8 @@ each one be simple.
 
 - **`digest --hours N` is the pull path, and covers everything.** The time
   window IS the filter: a conversation with activity in the window is relevant
-  by definition, one without contributes nothing. It never narrows by channel.
-  (Measured 2026-07-30: a 24h window had 12 active conversations out of 156
-  cached, only 4 of which were on the watch list — the old allowlist behaviour
-  was silently dropping the other 8, including the channel where PRs are
-  reviewed.) Pass `--only-watched` to get the old narrowing back.
+  by definition, one without contributes nothing. It never narrows by channel;
+  pass `--only-watched` to limit it to the watch list.
 - **`poll` is the notify path, and that is what `watch` is for.** It appends
   new messages in watched channels, plus any `@mention` wherever it lands, to a
   tailable log (default `$XDG_STATE_HOME/teams/watch.log`, mode `0600`). Own
@@ -233,8 +216,8 @@ each one be simple.
   `$XDG_STATE_HOME/teams/poll-cursor.json` — separate from the corpus cursor,
   so polling never consumes a window `digest` or `sync` would otherwise see.
 
-`watch` therefore no longer affects `digest` at all. Its only job is deciding
-what is worth interrupting you for.
+`watch` affects only `poll`. Its job is deciding what is worth interrupting
+you for.
 
 ## Gotchas That Change Results
 
@@ -247,11 +230,10 @@ what is worth interrupting you for.
   alongside real conversations, addressed as `48:notifications` (the activity /
   mentions panel) and `48:calllogs`. Every record in them is stored with *your*
   MRI as `creator` and `isSentByCurrentUser=True`, because you own the feed —
-  not because you wrote the message. The reader now forces `from_me=False` and
+  not because you wrote the message. The reader sets `from_me=False` and
   `creator_mri=None` on these, so they cannot be misattributed to you; their
-  `author` reads `(unknown)`. They are **not** filtered out, because 10 of the
-  12 notification entries in this store exist only there with no real twin, so
-  dropping them would lose real content. Treat a `48:*` message as "something
+  `author` reads `(unknown)`. They are **not** filtered out, because many
+  notification entries exist only there with no real twin. Treat a `48:*` message as "something
   addressed to you, sender unrecoverable from this record" — find the real
   sender by searching the message text in its source conversation.
 - **Unread is not per-message.** This cache keeps no per-message read horizon.

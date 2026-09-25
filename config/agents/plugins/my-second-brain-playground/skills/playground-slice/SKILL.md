@@ -33,9 +33,8 @@ For an authorized note update under an existing Task, use this short route.
    "${PLUGIN_ROOT}/hooks/recovery-checkpoint" bind projects/<project>/GOAL.md --agent-ledger /absolute/path/to/agent-ledger
    ```
 
-   On this source no registered hook reads that legacy checkpoint, so note
-   work without a Bead gets no hook-delivered refresh after compaction; the
-   installed manifest is Ticket #52 evidence, not this skill's claim.
+   No hook delivers the legacy checkpoint after compaction; recover it
+   manually with `recovery-checkpoint recover`.
    [`packages/workflow-cli/README.md`](../../packages/workflow-cli/README.md)
    owns the registered hook. Codex uses
    `CODEX_SESSION_ID`; Claude adds `--session` with the exact

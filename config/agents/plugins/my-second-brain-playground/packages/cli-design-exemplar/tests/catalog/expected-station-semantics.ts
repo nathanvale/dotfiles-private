@@ -2,7 +2,7 @@ import type { CommandSummary, FailureClass, WireTransactionState } from "../../s
 import type { PublicStation } from "../../src/station-catalogue.ts"
 
 // B1 independent oracle (CDS-BC-1; accepted C0 packet, PublicStation and template rules). Every expected public
-// value below is authored from the accepted C0 and TC-D6 meanings; nothing is read from STATIONS, stationIdOf, the
+// value below is authored from the accepted C0 and TC-D6 meanings; nothing is read from STATIONS, stationIdOfRow, the
 // renderer, a production guidance helper or a process envelope. The tuple inventory is test-owned and literal: the
 // compiler rejects a tuple outside the production vocabulary, but production never supplies an expected value.
 // Marked independent oracle: a dedupe pass must not hoist these tables into the production catalogue.

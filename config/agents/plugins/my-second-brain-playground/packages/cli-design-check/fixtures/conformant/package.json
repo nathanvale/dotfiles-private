@@ -1,1 +1,0 @@
-{"name":"conformant-config-peek-fixture","private":true,"type":"module","scripts":{"config-peek":"bun run src/cli.ts"}}

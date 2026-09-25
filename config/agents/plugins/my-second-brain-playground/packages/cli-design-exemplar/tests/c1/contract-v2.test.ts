@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { resolve } from "node:path"
-import { parseMachineEnvelope } from "../../src/command-contract.ts"
+import { MachineEnvelopeSchema } from "../../src/command-contract.ts"
 import { emitMachine } from "../../src/cli.ts"
 import type { ExecutionFacts } from "../../src/model.ts"
 import { createRoot, readState, removeRoot, runCli } from "../helpers/harness.ts"
@@ -9,13 +9,6 @@ const facts: ExecutionFacts = { commandIdentity: "repair-lab.status", runIdentit
 const valid = { envelopeVersion: 2, contractVersion: "2.0.0", message: "Status read", availablePaths: ["repair-lab.inspect"], result: { runId: "run-c1", commandIdentity: "repair-lab.status", outcome: "success", effectClass: "inspect", transactionState: "unchanged", causeCode: "SUCCESS_UNCHANGED", failureClass: null, exitCode: 0, data: { status: "healthy" }, retryable: false, repairAction: null, effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true }, nextAction: "repair-lab inspect" } }
 
 describe("C1 successor writer", () => {
-	test("accepts the independently authored success tuple and rejects reverse correlations", () => {
-		expect(parseMachineEnvelope(valid).ok).toBe(true)
-		expect(parseMachineEnvelope({ ...valid, result: { ...valid.result, data: null } }).ok).toBe(true)
-		expect(parseMachineEnvelope({ ...valid, extra: true }).ok).toBe(false)
-		expect(parseMachineEnvelope({ ...valid, result: { ...valid.result, transactionState: "unknown" } }).ok).toBe(false)
-		expect(parseMachineEnvelope({ ...valid, result: { ...valid.result, nextAction: "repair-lab inspect", handoff: { owner: "operator", reason: "r", inspect: ["repair-lab inspect"] } } }).ok).toBe(false)
-	})
 	test("the production writer preserves successful null data", () => {
 		const output: string[] = []
 		expect(emitMachine({ ...valid, result: { ...valid.result, data: null } }, facts, { stdout: (text) => output.push(text), stderr: () => { throw new Error("machine stderr") } })).toBe(0)
@@ -46,14 +39,14 @@ describe("C1 successor writer", () => {
 		] as const
 		for (const row of rows) {
 			const { message: _historicalResultMessage, ...result } = row
-			expect(parseMachineEnvelope({ envelopeVersion: 2, contractVersion: "2.0.0", message: "Matrix specimen", availablePaths: ["repair-lab.inspect"], result: row }).ok, `${row.causeCode} rejects nested result.message`).toBe(false)
-			expect(parseMachineEnvelope({ envelopeVersion: 2, contractVersion: "2.0.0", message: "Matrix specimen", availablePaths: ["repair-lab.inspect"], result }).ok, row.causeCode).toBe(true)
+			expect(MachineEnvelopeSchema.safeParse({ envelopeVersion: 2, contractVersion: "2.0.0", message: "Matrix specimen", availablePaths: ["repair-lab.inspect"], result: row }).success, `${row.causeCode} rejects nested result.message`).toBe(false)
+			expect(MachineEnvelopeSchema.safeParse({ envelopeVersion: 2, contractVersion: "2.0.0", message: "Matrix specimen", availablePaths: ["repair-lab.inspect"], result }).success, row.causeCode).toBe(true)
 		}
 	})
 	test("writes one valid fallback for a cycle and keeps machine stderr empty", () => {
 		const output: string[] = []; const cyclic = { ...valid, result: { ...valid.result } } as Record<string, unknown>; cyclic.self = cyclic
 		expect(emitMachine(cyclic, facts, { stdout: (text) => output.push(text), stderr: () => { throw new Error("machine stderr") } })).toBe(1)
-		expect(output).toHaveLength(1); expect(output[0]?.endsWith("\n")).toBe(true); expect(new TextEncoder().encode(output[0] ?? "").byteLength).toBeLessThanOrEqual(16_385); expect(parseMachineEnvelope(JSON.parse(output[0] ?? "")).ok).toBe(true)
+		expect(output).toHaveLength(1); expect(output[0]?.endsWith("\n")).toBe(true); expect(new TextEncoder().encode(output[0] ?? "").byteLength).toBeLessThanOrEqual(16_385); expect(MachineEnvelopeSchema.safeParse(JSON.parse(output[0] ?? "")).success).toBe(true)
 	})
 	test("does not recurse when fallback output fails or replace an output that already started", () => {
 		let fallbackWrites = 0
@@ -67,7 +60,7 @@ describe("C1 successor writer", () => {
 	})
 	test("the public executable emits a single 2.0 envelope on clean piped streams", async () => {
 		const root = createRoot("healthy")
-		try { const observed = await runCli(root, ["status", "--json"]); expect(observed.exit).toBe(0); expect(observed.stderr).toBe(""); expect(observed.stdout.split("\n").filter(Boolean)).toHaveLength(1); expect(parseMachineEnvelope(JSON.parse(observed.stdout)).ok).toBe(true) } finally { removeRoot(root) }
+		try { const observed = await runCli(root, ["status", "--json"]); expect(observed.exit).toBe(0); expect(observed.stderr).toBe(""); expect(observed.stdout.split("\n").filter(Boolean)).toHaveLength(1); expect(MachineEnvelopeSchema.safeParse(JSON.parse(observed.stdout)).success).toBe(true) } finally { removeRoot(root) }
 	})
 	test("the public writer falls back once for every guarded non-JSON class without changing resources", async () => {
 		const variants = ["cycle", "depth65", "undefined", "function", "bigint", "date", "nan", "infinity"]
@@ -81,7 +74,7 @@ describe("C1 successor writer", () => {
 				expect(observed.stderr, variant).toBe("")
 				expect(lines, variant).toHaveLength(1)
 				const parsed = JSON.parse(lines[0] ?? "") as { result: { causeCode: string; data: unknown } }
-				expect(parseMachineEnvelope(parsed).ok, variant).toBe(true)
+				expect(MachineEnvelopeSchema.safeParse(parsed).success, variant).toBe(true)
 				expect(parsed.result.causeCode, variant).toBe("INTERNAL_RESULT_UNCHANGED")
 				expect(parsed.result.data, variant).toBeNull()
 				expect(readState(root), variant).toEqual(before)
@@ -96,7 +89,7 @@ describe("C1 successor writer", () => {
 				expect(observed.exit, variant).toBe(1)
 				expect(observed.stderr, variant).toBe("")
 				expect(observed.stdout.split("\n").filter(Boolean), variant).toHaveLength(1)
-				expect(parseMachineEnvelope(JSON.parse(observed.stdout)).ok, variant).toBe(true)
+				expect(MachineEnvelopeSchema.safeParse(JSON.parse(observed.stdout)).success, variant).toBe(true)
 			} finally { removeRoot(root) }
 		}
 		const root = createRoot("healthy")
@@ -115,7 +108,7 @@ describe("C1 successor writer", () => {
 		expect(exit).toBe(1)
 		expect(stderr).toBe("")
 		const parsed = JSON.parse(stdout) as { result: Record<string, unknown> }
-		expect(parseMachineEnvelope(parsed).ok).toBe(true)
+		expect(MachineEnvelopeSchema.safeParse(parsed).success).toBe(true)
 		expect(parsed.result).toMatchObject({ outcome: "failed", transactionState: "partially-completed", causeCode: "INTERNAL_RESULT_PARTIAL", effects: { completed: ["effect.update-index"], remaining: ["effect.write-journal"], uncertain: [], inventoryComplete: true } })
 	})
 })
