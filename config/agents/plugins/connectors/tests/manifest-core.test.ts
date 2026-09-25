@@ -60,7 +60,7 @@ describe("connectors status: Spec AC21 truthful evidence states", () => {
 		try {
 			writeFileSync(path.join(bundle.root, "requirements.json"), '{"schemaVersion":1,"pins":{"mcporter":14}}');
 			for (const argv of [["status"], ["status", "context7"]]) {
-				const result = await runBundle(bundle, argv, { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
+				const result = await runBundle(bundle, argv, { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { XDG_STATE_HOME: bundle.root, OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
 				expect(result.code).toBe(4);
 				expect(result.stderr).toBe("");
 				expect(result.stdout).not.toContain(sentinel);
@@ -82,7 +82,7 @@ describe("connectors status: Spec AC21 truthful evidence states", () => {
 					effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
 				});
 				expect(envelope.result.repairAction.length).toBeGreaterThan(0);
-				expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
+				expect(existsSync(path.join(bundle.root, "connectors"))).toBe(false);
 			}
 		} finally {
 			mcporterBin.dispose();
@@ -178,7 +178,7 @@ describe("connectors config show: Spec AC24 resolved provenance", () => {
 					["config", "validate", "keyless-fixture-skill"],
 					["config", "show", "keyless-fixture-skill", "--resolved", "--json", "--select", "region=au"],
 				]) {
-					const result = await runBundle(bundle, argv, { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
+					const result = await runBundle(bundle, argv, { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { XDG_STATE_HOME: bundle.root, OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
 					expect(result.code).toBe(4);
 					expect(result.stderr).toBe("");
 					expect(result.stdout).not.toContain(sentinel);
@@ -186,7 +186,7 @@ describe("connectors config show: Spec AC24 resolved provenance", () => {
 					expect(envelope.result.outcome).toBe("refused");
 					expect(envelope.result.causeCode).toBe("SCHEMA_SELECTOR_INVALID");
 					expect(envelope.result.data).toBeNull();
-					expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
+					expect(existsSync(path.join(bundle.root, "connectors"))).toBe(false);
 				}
 			}
 		} finally {
@@ -205,7 +205,7 @@ describe("connectors config show: Spec AC24 resolved provenance", () => {
 			const original = JSON.parse(readFileSync(manifestPath, "utf8"));
 			for (const name of ["connector", "custodyMode", "dependency:mcporter"]) {
 				writeFileSync(manifestPath, JSON.stringify({ ...original, selectors: { [name]: { default: "attacker" } } }));
-				const result = await runBundle(bundle, ["config", "show", "keyless-fixture-skill", "--resolved", "--json"], { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
+				const result = await runBundle(bundle, ["config", "show", "keyless-fixture-skill", "--resolved", "--json"], { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { XDG_STATE_HOME: bundle.root, OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
 				expect(result.code).toBe(4);
 				expect(result.stderr).toBe("");
 				expect(result.stdout).not.toContain(sentinel);
@@ -213,7 +213,7 @@ describe("connectors config show: Spec AC24 resolved provenance", () => {
 				expect(envelope.result.outcome).toBe("refused");
 				expect(envelope.result.causeCode).toBe("SCHEMA_SELECTOR_INVALID");
 				expect(envelope.result.data).toBeNull();
-				expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
+				expect(existsSync(path.join(bundle.root, "connectors"))).toBe(false);
 			}
 		} finally {
 			mcporterBin.dispose();
@@ -385,7 +385,7 @@ describe("connectors config show: Spec AC24 resolved provenance", () => {
 				[["doctor", "context7"], "connectors.doctor"],
 			];
 			for (const [argv, identity] of cases) {
-				const result = await runBundle(bundle, argv, { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
+				const result = await runBundle(bundle, argv, { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { XDG_STATE_HOME: bundle.root, OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
 				expect(result.code).toBe(4);
 				expect(result.stderr).toBe("");
 				expect(result.stdout).not.toContain(sentinel);
@@ -394,7 +394,7 @@ describe("connectors config show: Spec AC24 resolved provenance", () => {
 				expect(envelope.result.outcome).toBe("refused");
 				expect(envelope.result.causeCode).toBe("SCHEMA_REQUIREMENTS_INVALID");
 				expect(envelope.result.data).toBeNull();
-				expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
+				expect(existsSync(path.join(bundle.root, "connectors"))).toBe(false);
 			}
 		} finally {
 			mcporterBin.dispose();

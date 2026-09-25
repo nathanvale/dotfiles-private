@@ -9,16 +9,11 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { createBundle, createFakeMcporterBinDir, createFixtureAuthorityBinDir, runBundle } from "./harness.ts";
+import { createBundle, createFixtureAuthorityBinDir, runBundle } from "./harness.ts";
 
-// A fake mcporter is put on PATH for each AC13 refusal test below so it could
-// leave its own receipt if it were ever invoked; each refusal then asserts
-// that receipt is absent, an observable process fact independent of
-// connectors.ts's own output, proving the defect was caught before any
-// dependency, credential, or provider access, not merely that mcporter was
-// unavailable to try.
-function assertNoProviderAttempt(bundle: { root: string }): void {
-	expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
+// A rejected manifest must not start the plugin-owned dependency bootstrap.
+function assertNoDependencyState(bundle: { root: string }): void {
+	expect(existsSync(path.join(bundle.root, "connectors"))).toBe(false);
 }
 
 describe("Spec AC13: manifest-only Connector Skill addition", () => {
@@ -49,62 +44,56 @@ describe("Spec AC13: manifest-only Connector Skill addition", () => {
 
 	test("an incompatible schemaVersion refuses before any dependency, credential, or provider access", async () => {
 		const bundle = createBundle();
-		const mcporterBin = createFakeMcporterBinDir();
 		try {
 			bundle.addSkill("keyless-fixture-skill");
 			const manifestPath = path.join(bundle.skillsRoot, "keyless-fixture-skill", "config", "manifest.json");
 			const manifest = JSON.parse(await Bun.file(manifestPath).text());
 			writeFileSync(manifestPath, JSON.stringify({ ...manifest, schemaVersion: 2 }));
 
-			const result = await runBundle(bundle, ["config", "validate", "keyless-fixture-skill"], { home: bundle.root, binDir: mcporterBin.binDir });
+			const result = await runBundle(bundle, ["config", "validate", "keyless-fixture-skill"], { home: bundle.root, extraEnv: { XDG_STATE_HOME: bundle.root } });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(4);
 			expect(envelope.result.outcome).toBe("refused");
 			expect(envelope.result.failureClass).toBe("schema");
 			expect(envelope.result.causeCode).toBe("SCHEMA_VERSION_UNSUPPORTED");
-			assertNoProviderAttempt(bundle);
+			assertNoDependencyState(bundle);
 		} finally {
-			mcporterBin.dispose();
 			bundle.dispose();
 		}
 	});
 
 	test("an unknown adapter id refuses before any dependency, credential, or provider access", async () => {
 		const bundle = createBundle();
-		const mcporterBin = createFakeMcporterBinDir();
 		try {
 			bundle.addSkill("keyless-fixture-skill");
 			const manifestPath = path.join(bundle.skillsRoot, "keyless-fixture-skill", "config", "manifest.json");
 			const manifest = JSON.parse(await Bun.file(manifestPath).text());
 			writeFileSync(manifestPath, JSON.stringify({ ...manifest, adapter: "not-a-packaged-adapter" }));
 
-			const result = await runBundle(bundle, ["config", "validate", "keyless-fixture-skill"], { home: bundle.root, binDir: mcporterBin.binDir });
+			const result = await runBundle(bundle, ["config", "validate", "keyless-fixture-skill"], { home: bundle.root, extraEnv: { XDG_STATE_HOME: bundle.root } });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(4);
 			expect(envelope.result.causeCode).toBe("SCHEMA_ADAPTER_UNKNOWN");
-			assertNoProviderAttempt(bundle);
+			assertNoDependencyState(bundle);
 		} finally {
-			mcporterBin.dispose();
 			bundle.dispose();
 		}
 	});
 
 	test("an invalid selector declaration refuses before any dependency, credential, or provider access", async () => {
 		const bundle = createBundle();
-		const mcporterBin = createFakeMcporterBinDir();
 		try {
 			bundle.addSkill("keyless-fixture-skill");
 			const manifestPath = path.join(bundle.skillsRoot, "keyless-fixture-skill", "config", "manifest.json");
 			const manifest = JSON.parse(await Bun.file(manifestPath).text());
 			writeFileSync(manifestPath, JSON.stringify({ ...manifest, selectors: { region: { pattern: "(unterminated" } } }));
 
-			const result = await runBundle(bundle, ["config", "validate", "keyless-fixture-skill"], { home: bundle.root, binDir: mcporterBin.binDir });
+			const result = await runBundle(bundle, ["config", "validate", "keyless-fixture-skill"], { home: bundle.root, extraEnv: { XDG_STATE_HOME: bundle.root } });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(4);
 			expect(envelope.result.causeCode).toBe("SCHEMA_SELECTOR_INVALID");
-			assertNoProviderAttempt(bundle);
+			assertNoDependencyState(bundle);
 		} finally {
-			mcporterBin.dispose();
 			bundle.dispose();
 		}
 	});
@@ -115,7 +104,6 @@ describe("Spec AC13: manifest-only Connector Skill addition", () => {
 	// prove the refusal never echoes it.
 	test("credentials without a packaged adapter refuse before the keyless route, while an unchanged keyless manifest stays valid", async () => {
 		const bundle = createBundle();
-		const mcporterBin = createFakeMcporterBinDir();
 		const sentinel = "SENTINEL_PRIVATE_CREDENTIAL_VALUE";
 		const state = path.join(bundle.root, "state");
 		mkdirSync(state);
@@ -123,7 +111,7 @@ describe("Spec AC13: manifest-only Connector Skill addition", () => {
 		const extraEnv = { XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: path.join(bundle.root, "missing-source") };
 		try {
 			bundle.addSkill("keyless-fixture-skill");
-			const env = { home: bundle.root, binDir: mcporterBin.binDir, extraEnv };
+			const env = { home: bundle.root, extraEnv };
 			const keyless = await runBundle(bundle, ["config", "validate", "keyless-fixture-skill"], env);
 			expect(keyless.code).toBe(0);
 			expect(JSON.parse(keyless.stdout).result.causeCode).toBe("SUCCESS_UNCHANGED");
@@ -156,30 +144,26 @@ describe("Spec AC13: manifest-only Connector Skill addition", () => {
 			expect(listed.connectors.map((c: { id: string }) => c.id)).not.toContain("keyless-fixture-skill");
 			expect(listed.problems.map((p: { id: string; code: string }) => [p.id, p.code])).toEqual([["keyless-fixture-skill", "manifest-invalid"]]);
 
-			assertNoProviderAttempt(bundle);
 			expect(existsSync(path.join(state, "connectors"))).toBe(false);
 		} finally {
-			mcporterBin.dispose();
 			bundle.dispose();
 		}
 	});
 
 	test("a missing registry refuses before any dependency, credential, or provider access", async () => {
 		const bundle = createBundle();
-		const mcporterBin = createFakeMcporterBinDir();
 		try {
 			mkdirSync(path.join(bundle.skillsRoot, "broken-fixture-skill", "config"), { recursive: true });
 			writeFileSync(
 				path.join(bundle.skillsRoot, "broken-fixture-skill", "config", "manifest.json"),
 				JSON.stringify({ schemaVersion: 1, id: "broken-fixture-skill", transport: { registry: "./mcporter.json" }, selectors: {}, requirements: [], adapter: null, credentials: null }),
 			);
-			const result = await runBundle(bundle, ["config", "validate", "broken-fixture-skill"], { home: bundle.root, binDir: mcporterBin.binDir });
+			const result = await runBundle(bundle, ["config", "validate", "broken-fixture-skill"], { home: bundle.root, extraEnv: { XDG_STATE_HOME: bundle.root } });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(4);
 			expect(envelope.result.causeCode).toBe("SCHEMA_MANIFEST_INVALID");
-			assertNoProviderAttempt(bundle);
+			assertNoDependencyState(bundle);
 		} finally {
-			mcporterBin.dispose();
 			bundle.dispose();
 		}
 	});
