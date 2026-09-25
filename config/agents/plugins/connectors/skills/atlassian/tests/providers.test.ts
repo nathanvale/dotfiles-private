@@ -1,5 +1,6 @@
-// Public-process proof of the Bun Atlassian Community Provider, invoked the
-// way MCPorter invokes it: no arguments, cwd at the skill config directory,
+// Public-process proof of the Atlassian Community Provider, the copy's
+// compiled front door in its internal Provider role, invoked the way MCPorter
+// invokes it: the registry's role arguments, cwd at the skill config directory,
 // tenant slug and product in the environment. Custody is the 1Password mode:
 // the test Keychain reader in the substituted plugin copy (see plugin-copy.ts)
 // answers the service-token read, and the plugin-owned op and uv are fakes at
@@ -12,7 +13,7 @@ import { CustodyFixture, PROVIDER_TOKEN, SERVICE_TOKEN } from "./fixtures/custod
 import { substitutedPluginRoot } from "./fixtures/plugin-copy.ts";
 
 const SKILL = path.join(substitutedPluginRoot(), "skills", "atlassian");
-const COMMUNITY = path.join(SKILL, "scripts", "atlassian-community-provider.ts");
+const COMMUNITY = [path.join(SKILL, "..", "..", "bin", "connectors"), "__internal", "atlassian", "provider"];
 const AMBIENT_SENTINEL = "must-not-cross-provider";
 const AMBIENT_OP_TOKEN = "ops_ambient-token-must-not-cross";
 const SECRETS = [PROVIDER_TOKEN, SERVICE_TOKEN, AMBIENT_OP_TOKEN];
@@ -46,8 +47,8 @@ const started = () => fixture.lines("community-starts.jsonl").length > 0;
 const lastStart = () => fixture.lines<CommunityStart>("community-starts.jsonl").at(-1) as CommunityStart;
 const opLines = () => fixture.lines<{ argv: string[] }>("op-calls.jsonl").map((call) => ["op", ...call.argv].join(" "));
 
-async function runProvider(script: string, args: string[] = [], env: Record<string, string> = {}) {
-	const proc = Bun.spawn([script, ...args], {
+async function runProvider(command: readonly string[], args: string[] = [], env: Record<string, string> = {}) {
+	const proc = Bun.spawn([...command, ...args], {
 		cwd: path.join(SKILL, "config"),
 		env: {
 			HOME: fixture.home,

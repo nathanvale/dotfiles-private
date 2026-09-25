@@ -1,11 +1,13 @@
 // The custody tests' plugin roots: private copies of the whole Connectors
-// plugin that differ from source only in two declared places. The Keychain
-// leaf may be replaced by the test-owned reader fake, and requirements.json
-// may name the measured digests of the test-owned fake op and uv launchers as
-// the qualified op and uv binaries, changing no other manifest field. Every
-// process the tests start (dispatcher, custody child, Provider preflight and
-// Provider) resolves its modules and the manifest through import.meta.dir, so
-// all of them run the copy's leaf and admit only the copy's digests. Admitting
+// plugin that differ from source only in declared places. The Keychain leaf
+// may be replaced by the test-owned reader fake, and requirements.json may
+// name the measured digests of the test-owned fake op and uv launchers as the
+// qualified op and uv binaries, changing no other manifest field. The copy's
+// bin/connectors is then compiled from that substituted source, because the
+// custody child and the Provider start only as its internal roles and the
+// binary carries its own leaf and digests. Every process the tests start
+// (front door, dispatcher, custody child, Provider preflight and Provider)
+// therefore runs the copy's leaf and admits only the copy's digests. Admitting
 // a fake takes a package edit, never an environment value.
 //
 // Shapes: routine (fake reader, fixture manifest); production anchor (fake
@@ -20,6 +22,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, cpSync, lstatSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { compileFrontDoor } from "../../../../tests/compile-front-door.ts";
 
 export const SHIPPED_ROOT = path.resolve(import.meta.dir, "..", "..", "..", "..");
 // Plugin-relative path of the one file a copy may change.
@@ -28,6 +31,11 @@ export const FAKE_READER = path.join(import.meta.dir, "keychain-read-fake.ts");
 // Present in the fake and nowhere the shipped plugin runs.
 export const FAKE_MARKER = "connectors-test-keychain-reader-fake";
 export const REQUIREMENTS = "requirements.json";
+// Plugin-relative path of the compiled front door every copy rebuilds.
+export const FRONT_DOOR = path.join("bin", "connectors");
+// A string only the fake reader's compiled code contains; minification drops
+// the marker comment, so the compiled copy is recognised by this instead.
+const FAKE_READER_LOG = "keychain-reads.jsonl";
 const FAKE_OP = path.join(import.meta.dir, "op-fake.ts");
 const FAKE_UV = path.join(import.meta.dir, "community-mcp-fake.ts");
 
@@ -78,29 +86,42 @@ export function changedPaths(source: string, copy: string): string[] {
 	return [...new Set([...left.keys(), ...right.keys()])].filter((file) => left.get(file) !== right.get(file)).sort();
 }
 
+// The copy's front door must be compiled from the copy: it carries the fake
+// reader's code exactly when the reader is fake, and the fake launchers'
+// digests exactly when the manifest is the fixture's.
+function verifyCompiledFrontDoor(copy: string, shape: CopyShape): void {
+	const binary = readFileSync(path.join(copy, FRONT_DOOR));
+	const carries = [binary.includes(FAKE_READER_LOG), binary.includes(sha256(FAKE_OP_LAUNCHER)) && binary.includes(sha256(FAKE_UV_LAUNCHER))];
+	if (JSON.stringify(carries) !== JSON.stringify([shape.reader === "fake", shape.manifest === "fixture"])) throw new Error("substituted plugin copy's bin/connectors was not compiled from its substituted source");
+}
+
 // Throws unless the copy differs from source by exactly its shape: the leaf
-// holding the fake when the reader is fake, and a manifest whose only
-// changes are the fake launchers' op and uv digests when it is the fixture's.
+// holding the fake when the reader is fake, a manifest whose only changes are
+// the fake launchers' op and uv digests when it is the fixture's, and the
+// front door compiled from that source.
 export function verifySubstitutedCopy(copy: string, shape: CopyShape = ROUTINE, source: string = SHIPPED_ROOT): void {
-	const expected = [...(shape.manifest === "fixture" ? [REQUIREMENTS] : []), ...(shape.reader === "fake" ? [KEYCHAIN_LEAF] : [])];
+	const expected = [FRONT_DOOR, ...(shape.manifest === "fixture" ? [REQUIREMENTS] : []), ...(shape.reader === "fake" ? [KEYCHAIN_LEAF] : [])];
 	const changed = changedPaths(source, copy);
-	if (expected.length === 0 || JSON.stringify(changed) !== JSON.stringify(expected)) throw new Error(`substituted plugin copy does not change exactly ${JSON.stringify(expected)}: ${JSON.stringify(changed)}`);
+	if (expected.length === 1 || JSON.stringify(changed) !== JSON.stringify(expected)) throw new Error(`substituted plugin copy does not change exactly ${JSON.stringify(expected)}: ${JSON.stringify(changed)}`);
 	if (shape.manifest === "fixture" && !Bun.deepEquals(JSON.parse(readFileSync(path.join(copy, REQUIREMENTS), "utf8")), fixtureRequirements(source), true)) throw new Error("substituted plugin copy changes a manifest field other than the fake op and uv digests");
 	if (shape.reader === "fake") {
 		const fake = readFileSync(FAKE_READER);
 		if (!fake.includes(FAKE_MARKER) || !readFileSync(path.join(copy, KEYCHAIN_LEAF)).equals(fake)) throw new Error("substituted plugin copy does not hold the test Keychain reader");
 	}
 	if (readFileSync(path.join(source, KEYCHAIN_LEAF), "utf8").includes(FAKE_MARKER)) throw new Error("the shipped Keychain leaf carries the test reader marker");
+	verifyCompiledFrontDoor(copy, shape);
 }
 
-// A fresh private copy of the plugin in the given shape. The caller owns
-// removal; nothing is verified here.
+// A fresh private copy of the plugin in the given shape, with its front door
+// compiled from the copy's own source. The caller owns removal; nothing is
+// verified here.
 export function copyWithFakeReader(prefix: string, shape: CopyShape = ROUTINE): string {
 	const copy = mkdtempSync(path.join(os.tmpdir(), prefix));
 	chmodSync(copy, 0o700);
 	cpSync(SHIPPED_ROOT, copy, { recursive: true, verbatimSymlinks: true });
 	if (shape.reader === "fake") writeFileSync(path.join(copy, KEYCHAIN_LEAF), readFileSync(FAKE_READER));
 	if (shape.manifest === "fixture") writeFileSync(path.join(copy, REQUIREMENTS), `${JSON.stringify(fixtureRequirements(SHIPPED_ROOT), null, "\t")}\n`);
+	compileFrontDoor(path.join(copy, "bin", "connectors.ts"), path.join(copy, FRONT_DOOR));
 	return copy;
 }
 

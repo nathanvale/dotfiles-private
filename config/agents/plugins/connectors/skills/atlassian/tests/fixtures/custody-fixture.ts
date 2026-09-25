@@ -147,7 +147,7 @@ export class CustodyFixture {
 		writeFileSync(path.join(this.root, "canned", product, `${name}.json`), JSON.stringify(value));
 	}
 
-	lines<T = Record<string, unknown>>(name: "op-calls.jsonl" | "community-starts.jsonl" | "effects.jsonl" | "hostile-mcporter.jsonl" | "keychain-reads.jsonl"): T[] {
+	lines<T = Record<string, unknown>>(name: "op-calls.jsonl" | "community-starts.jsonl" | "effects.jsonl" | "hostile-mcporter.jsonl" | "hostile-recorders.jsonl" | "keychain-reads.jsonl"): T[] {
 		const file = path.join(this.root, name);
 		return existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").filter(Boolean).map((line) => JSON.parse(line) as T) : [];
 	}
@@ -195,6 +195,22 @@ export class CustodyFixture {
 			...(OFFICIAL_MCPORTER ? { CONNECTORS_TEST_RELEASE_DIR: OFFICIAL_MCPORTER } : {}),
 			...extra,
 		};
+	}
+
+	// The packaged front door's machine: no Bun, Node, op, uv, uvx, or
+	// MCPorter reachable through PATH, only same-named hostile recorders
+	// before the system directories.
+	packagedEnvironment(extra: Record<string, string> = {}): Record<string, string> {
+		for (const name of ["bun", "node", "op", "uv", "uvx"]) executable(path.join(this.hostileBin, name), fakeLauncher(path.join(FIXTURES, "hostile-recorder.ts")));
+		return { ...this.environment(extra), PATH: `${this.hostileBin}:/usr/bin:/bin` };
+	}
+
+	// One packaged front-door process with stdin closed: the copy's compiled
+	// bin/connectors unless another binary is named.
+	async frontDoor(argv: string[], options: { binary?: string; extra?: Record<string, string> } = {}): Promise<RunResult> {
+		const proc = Bun.spawn([options.binary ?? path.join(this.pluginRoot, "bin", "connectors"), ...argv], { env: this.packagedEnvironment(options.extra), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+		const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+		return { code, stdout, stderr };
 	}
 
 	async dispatch(argv: string[], extra: Record<string, string> = {}): Promise<RunResult> {

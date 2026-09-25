@@ -12,7 +12,7 @@
 
 import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "./safe-environment.ts";
+import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
 
 const PROGRAM = "provider-route";
 // Observed with MCPorter 0.13.13 and rechecked with 0.14.0: a stdio child
@@ -301,10 +301,6 @@ function checkFlags(verb: Verb, flags: string[]): string[] {
 		index += 1;
 	}
 	return verb === "auth" || flags.includes("--no-oauth") ? flags : [...flags, "--no-oauth"];
-}
-
-function validInternalContext(value: unknown): value is string {
-	return typeof value === "string" && value.length > 0 && value.length <= 4096 && !value.includes("\n") && !value.includes("\r");
 }
 
 function plan(argv: string[], skillsRoot: string, env: Record<string, string | undefined>, dispatcherTransport: boolean, internalContext?: string): RoutePlan {

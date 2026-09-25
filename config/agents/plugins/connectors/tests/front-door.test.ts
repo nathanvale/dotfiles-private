@@ -56,7 +56,7 @@ describe("compiled front door: discovery", () => {
 		// Independent literal of the accepted exclusions: setup and MCPorter
 		// repair are advertised above, so no exclusion may deny them.
 		expect(envelope.result.data.effectExclusions).toEqual([
-			"any credential value read by this binary or T5 custody access; fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
+			"any credential value read by the front-door process; a 1Password-custody credential is read only by this executable started in its adapter's internal custody or Provider role, fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
 			"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
 			"any provider write operation",
 			"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, and auth logout for every connector; deps covers only explicit MCPorter repair",

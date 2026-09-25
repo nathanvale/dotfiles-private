@@ -86,8 +86,7 @@
     "tests/type-contracts-loose.ts",
     "config/agents/plugins/connectors/bin/provider-route.ts",
     "config/agents/plugins/connectors/bin/connectors.ts",
-    "config/agents/plugins/connectors/skills/*/scripts/*.ts",
-    "config/agents/plugins/connectors/skills/atlassian/scripts/custody/child.ts"
+    "config/agents/plugins/connectors/skills/*/scripts/*.ts"
   ],
   "ignoreDependencies": [
     "vscode",

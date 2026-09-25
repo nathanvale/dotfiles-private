@@ -3,8 +3,9 @@
 // the attended module, only the attended suite asks for an attended fixture,
 // and the shipped leaf is the fixed /usr/bin/security reader with no test
 // marker. Copy integrity: the substituted plugin copy the routine custody
-// tests run from differs from source by exactly that leaf and the manifest's
-// op and uv digests, and the guard refuses any other difference.
+// tests run from differs from source by exactly that leaf, the manifest's op
+// and uv digests, and the front door compiled from them, and the guard
+// refuses any other difference.
 import { describe, expect, test } from "bun:test";
 import { appendFileSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -17,6 +18,7 @@ const ATTENDED_MODULE = path.join("tests", "fixtures", "attended-keychain.ts");
 // shipped leaf's one spawn.
 const LEAF = "skills/atlassian/scripts/custody/keychain-read.ts";
 const MANIFEST = "requirements.json";
+const FRONT_DOOR = "bin/connectors";
 const SECOND = "skills/atlassian/scripts/custody/one-password.ts";
 const SHIPPED_SPAWN = 'spawnSync("/usr/bin/security", argv,';
 // A security subcommand as a spawn argument: a quoted array element.
@@ -72,9 +74,9 @@ describe("substituted plugin copy", () => {
 	const digest = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
 	const manifest = (root: string) => JSON.parse(readFileSync(path.join(root, MANIFEST), "utf8")) as { sources: Record<string, Record<string, unknown>> };
 
-	test("differs from source by exactly the Keychain leaf and the fake op and uv digests", () => {
+	test("differs from source by exactly the Keychain leaf, the fake op and uv digests, and its recompiled front door", () => {
 		const copy = substitutedPluginRoot();
-		expect(changedPaths(SHIPPED_ROOT, copy)).toEqual([MANIFEST, LEAF]);
+		expect(changedPaths(SHIPPED_ROOT, copy)).toEqual([FRONT_DOOR, MANIFEST, LEAF]);
 		expect(readFileSync(path.join(copy, LEAF), "utf8")).toContain(FAKE_MARKER);
 		const [shipped, copied] = [manifest(SHIPPED_ROOT), manifest(copy)];
 		expect([copied.sources.op?.binarySha256, copied.sources.uv?.binarySha256]).toEqual([digest(FAKE_OP_LAUNCHER), digest(FAKE_UV_LAUNCHER)]);
@@ -83,23 +85,31 @@ describe("substituted plugin copy", () => {
 	});
 
 	test("the production-anchor copy keeps the shipped manifest bytes and the attended copy keeps the shipped reader", () => {
-		expect(changedPaths(SHIPPED_ROOT, substitutedPluginRoot({ reader: "fake", manifest: "shipped" }))).toEqual([LEAF]);
-		expect(changedPaths(SHIPPED_ROOT, substitutedPluginRoot({ reader: "shipped", manifest: "fixture" }))).toEqual([MANIFEST]);
+		expect(changedPaths(SHIPPED_ROOT, substitutedPluginRoot({ reader: "fake", manifest: "shipped" }))).toEqual([FRONT_DOOR, LEAF]);
+		expect(changedPaths(SHIPPED_ROOT, substitutedPluginRoot({ reader: "shipped", manifest: "fixture" }))).toEqual([FRONT_DOOR, MANIFEST]);
 	});
 
-	test("the guard refuses a second changed file, another manifest change, and an incomplete substitution", () => {
+	test("the guard refuses a second changed file, another manifest change, an incomplete substitution, and a front door not compiled from the copy", () => {
 		const copy = copyWithFakeReader("connectors-copy-guard-");
 		try {
 			appendFileSync(path.join(copy, SECOND), "\n// changed\n");
-			expect(() => verifySubstitutedCopy(copy)).toThrow(`substituted plugin copy does not change exactly ${JSON.stringify([MANIFEST, LEAF])}: ${JSON.stringify([MANIFEST, LEAF, SECOND])}`);
+			expect(() => verifySubstitutedCopy(copy)).toThrow(`substituted plugin copy does not change exactly ${JSON.stringify([FRONT_DOOR, MANIFEST, LEAF])}: ${JSON.stringify([FRONT_DOOR, MANIFEST, LEAF, SECOND])}`);
 			writeFileSync(path.join(copy, SECOND), readFileSync(path.join(SHIPPED_ROOT, SECOND)));
 			const widened = manifest(copy);
 			widened.sources.op = { ...widened.sources.op, sha256: "0".repeat(64) };
 			writeFileSync(path.join(copy, MANIFEST), JSON.stringify(widened));
 			expect(() => verifySubstitutedCopy(copy)).toThrow("substituted plugin copy changes a manifest field other than the fake op and uv digests");
+			writeFileSync(path.join(copy, MANIFEST), readFileSync(path.join(substitutedPluginRoot(), MANIFEST)));
+			// A front door compiled from other source beside a correctly
+			// substituted tree: it would run without the copy's fake digests.
+			const compiled = readFileSync(path.join(copy, FRONT_DOOR));
+			writeFileSync(path.join(copy, FRONT_DOOR), readFileSync(path.join(substitutedPluginRoot({ reader: "fake", manifest: "shipped" }), FRONT_DOOR)));
+			expect(() => verifySubstitutedCopy(copy)).toThrow("substituted plugin copy's bin/connectors was not compiled from its substituted source");
+			writeFileSync(path.join(copy, FRONT_DOOR), compiled);
+			verifySubstitutedCopy(copy);
 			writeFileSync(path.join(copy, MANIFEST), readFileSync(path.join(SHIPPED_ROOT, MANIFEST)));
 			writeFileSync(path.join(copy, LEAF), readFileSync(path.join(SHIPPED_ROOT, LEAF)));
-			expect(() => verifySubstitutedCopy(copy)).toThrow(`substituted plugin copy does not change exactly ${JSON.stringify([MANIFEST, LEAF])}: []`);
+			expect(() => verifySubstitutedCopy(copy)).toThrow(`substituted plugin copy does not change exactly ${JSON.stringify([FRONT_DOOR, MANIFEST, LEAF])}: ${JSON.stringify([FRONT_DOOR])}`);
 		} finally {
 			rmSync(copy, { recursive: true, force: true });
 		}

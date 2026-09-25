@@ -5,7 +5,9 @@
 // reachability seam for keyless connectors, and a fixture-auth seam proving
 // packaged auth-adapter extensibility. T6 (Ticket #93) adds auth and run
 // through a packaged adapter's prepare step, and credentialed schema through
-// its prepareSchema step. `bin/provider-route.ts` remains the
+// its prepareSchema step. T5 (Ticket #92) adds an adapter execute step for
+// multi-call semantics and closed adapter internal roles of this same
+// executable. `bin/provider-route.ts` remains the
 // sole owner of the existing per-Skill auth/list/call launcher every Skill's
 // SKILL.md still documents; this file never imports it and never branches
 // on a connector's name. All connector-specific behavior lives in a
@@ -13,10 +15,10 @@
 // adapter registry (bin/adapters/index.ts).
 import { closeSync, existsSync, openSync } from "node:fs";
 import path from "node:path";
-import type { Adapter, AdapterAction, AdapterRefusal, AdapterRefusalKind, LocalEffect, LoginOption, Prepared, SchemaRequest } from "./adapters/contract.ts";
+import type { Adapter, AdapterAction, AdapterRefusal, AdapterRefusalKind, Executed, ExecutionCapabilities, InternalRole, LocalEffect, LoginOption, Prepared, SchemaRequest } from "./adapters/contract.ts";
 import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
 import { discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
-import { safeEnvironment } from "./safe-environment.ts";
+import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
 import { ensureMcporter, lockRecovery, repairMcporter } from "./mcporter-custody.ts";
 import { downloadAndInstallMise, downloadAndInstallOp } from "./setup/download.ts";
 import { installPinnedUv, readValidatedUvSources } from "./setup/uv.ts";
@@ -30,7 +32,7 @@ const SIGNAL_EXITS = { "130": "SIGINT", "143": "SIGTERM" } as const;
 // What this binary does not do yet. Keep honest: only list an exclusion
 // once it is actually true, and drop it in the Ticket that stops excluding it.
 const EFFECT_EXCLUSIONS = [
-	"any credential value read by this binary or T5 custody access; fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
+	"any credential value read by the front-door process; a 1Password-custody credential is read only by this executable started in its adapter's internal custody or Provider role, fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
 	"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
 	"any provider write operation",
 	"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, and auth logout for every connector; deps covers only explicit MCPorter repair",
@@ -1578,6 +1580,10 @@ async function runAdapterCommand(command: AdapterCommand, manifest: ConnectorMan
 		emitSuccess(command.commandIdentity, `${command.id} inspection completed`, { connector: command.id, ...prepared.data }, "connectors.status");
 		return;
 	}
+	if (prepared.kind === "execute") {
+		await runExecution(command, manifest, prepared);
+		return;
+	}
 	// Only an auth verb may reach browser consent; any other attended plan is
 	// an adapter defect, reported as an internal failure before any effect.
 	if (prepared.effect === "attended-login" && command.action.kind !== "auth") throw new Error("adapter planned attended login outside auth");
@@ -1591,6 +1597,70 @@ async function runAdapterCommand(command: AdapterCommand, manifest: ConnectorMan
 	} finally {
 		if (terminal !== null) closeSync(terminal);
 	}
+}
+
+type Selection = Awaited<ReturnType<typeof ensureMcporter>>;
+type SelectionFailure = Extract<Selection, { ok: false }>;
+
+// The capabilities an execute step receives. MCPorter is selected lazily and
+// at most once, so a step that never needs it (a custody check) bootstraps
+// nothing; a failed selection is remembered for the core to render.
+function executionCapabilities(manifest: ConnectorManifest, failure: { value: SelectionFailure | null }): ExecutionCapabilities {
+	let selected: Promise<string | null> | undefined;
+	const select = async (): Promise<string | null> => {
+		const selection = await ensureMcporter(process.env);
+		if (!selection.ok) {
+			failure.value = selection;
+			return null;
+		}
+		bootstrapCompleted = selection.bootstrapped;
+		recoveryCompleted = selection.recovered === true;
+		return selection.binary;
+	};
+	return {
+		selectMcporter: () => (selected ??= select()),
+		internalCommand: (role) => [process.execPath, "__internal", manifest.adapter ?? "", role],
+	};
+}
+
+// A read reports only this invocation's MCPorter selection effect: an execute
+// step owns no connector account effect.
+function emitExecuted(command: AdapterCommand, executed: Executed): void {
+	const completed = completedSelectionEffects();
+	if (executed.kind === "refused") {
+		emitAdapterRefusal(command, executed.refusal);
+		return;
+	}
+	if (executed.kind === "failed") {
+		emitAdapterEnvelope(command, completed.length > 0 ? "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT" : "DOMAIN_PROVIDER_CALL_FAILED", `${PROGRAM}: ${command.id} provider call did not complete (${executed.connectorCause})`, null, executed.repair, { completed, uncertain: [] }, "connectors.auth");
+		return;
+	}
+	const operation = command.action.kind === "run" ? ` ${command.action.operation}` : "";
+	emitAdapterEnvelope(command, readSuccessCause([]), `${command.id}${operation} completed`, { connector: command.id, ...executed.data }, null, { completed, uncertain: [] });
+}
+
+async function runExecution(command: AdapterCommand, manifest: ConnectorManifest, prepared: Extract<Prepared, { kind: "execute" }>): Promise<void> {
+	const failure: { value: SelectionFailure | null } = { value: null };
+	const executed = await prepared.execute(executionCapabilities(manifest, failure));
+	// Nothing was sent without a selected binary, so the selection failure is
+	// the whole answer and the adapter's own result is not reported.
+	if (failure.value) {
+		emitSelectionFailure(failure.value, command.commandIdentity);
+		return;
+	}
+	emitExecuted(command, executed);
+}
+
+// The one entry into an adapter's internal role. It is reachable only with a
+// valid internal invocation context and a role the packaged adapter
+// registered; anything else is an ordinary unknown command. The context is a
+// guard against accidental and agent-documented use, not a security boundary
+// against the same local user.
+function internalRole(args: readonly string[]): InternalRole | null {
+	const [marker, adapterId = "", roleName = ""] = args;
+	if (marker !== "__internal" || !validInternalContext(process.env[INTERNAL_INVOCATION_CONTEXT_ENV])) return null;
+	const roles = Object.hasOwn(ADAPTERS, adapterId) ? ADAPTERS[adapterId]?.internalRoles : undefined;
+	return roles && Object.hasOwn(roles, roleName) ? (roles[roleName] ?? null) : null;
 }
 
 async function dispatchCommand(args: readonly string[]): Promise<void> {
@@ -1644,8 +1714,29 @@ async function dispatchCommand(args: readonly string[]): Promise<void> {
 	refuse(`${PROGRAM}: unsupported command. Run with --discover --json to see available commands.`);
 }
 
+// The one line an internal role that throws writes: a fixed nonsecret cause,
+// never the thrown text, which may carry a credential or a path.
+const INTERNAL_ROLE_FAILURE = "connectors-internal-role:error:unhandled\n";
+
+// An internal role never emits an envelope, even when it fails: stdout
+// belongs to its own protocol, and stderr carries only the fixed cause.
+async function runInternalRole(role: InternalRole, argv: readonly string[]): Promise<void> {
+	outputStarted = true;
+	try {
+		await role.run(argv);
+	} catch {
+		process.stderr.write(INTERNAL_ROLE_FAILURE);
+		process.exitCode = 1;
+	}
+}
+
 async function main(): Promise<void> {
 	const args = process.argv.slice(2);
+	const role = internalRole(args);
+	if (role) {
+		await runInternalRole(role, args.slice(3));
+		return;
+	}
 	if (args.length === 2 && args[0] === "--discover" && args[1] === "--json") {
 		discover();
 		return;

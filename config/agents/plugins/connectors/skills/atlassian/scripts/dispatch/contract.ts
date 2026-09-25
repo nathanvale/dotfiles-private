@@ -8,8 +8,11 @@ import { PRODUCTS, type Product } from "../custody/index.ts";
 
 export { PRODUCTS, type Product } from "../custody/index.ts";
 
-import { readFileSync } from "node:fs";
-import path from "node:path";
+// Bundled at compile time: inside the packaged front door this module's own
+// directory is virtual, so the registry cannot be read from disk beside it.
+// MCPorter still enforces the on-disk allow-list, so the effective set is the
+// intersection of the two.
+import registry from "../../config/mcporter.json" with { type: "json" };
 
 // The one active Provider. The journal persists this name on every preview
 // and receipt so a record from a retired Provider is recognised, never
@@ -46,15 +49,7 @@ export function registryToolVocabulary(registry: unknown): ToolVocabulary {
 	return Object.freeze(vocabulary);
 }
 
-function registrySource(): unknown {
-	try {
-		return JSON.parse(readFileSync(path.resolve(import.meta.dir, "..", "..", "config", "mcporter.json"), "utf8"));
-	} catch {
-		return registryInvalid();
-	}
-}
-
-export const ALLOWED_TOOLS = registryToolVocabulary(registrySource());
+export const ALLOWED_TOOLS = registryToolVocabulary(registry);
 
 // This is the operation descriptor registry: product, write policy admission,
 // and exact provider tool identity live behind this one interface. Consumers

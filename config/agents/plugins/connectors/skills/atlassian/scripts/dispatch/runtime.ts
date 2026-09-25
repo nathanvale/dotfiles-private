@@ -1,11 +1,15 @@
 // Production adapters for the dispatcher: the route-backed transport through
 // the plugin-owned verified MCPorter, trusted site origin and principal from
-// the product item's metadata, and the private write journal.
+// the product item's metadata, and the private write journal. The packaged
+// front door supplies its MCPorter selection and its own internal-role
+// command; the Bun script entry selects MCPorter here and reaches the plugin's
+// compiled front door from source.
 import path from "node:path";
+import type { ExecutionCapabilities } from "../../../../bin/adapters/contract.ts";
 import { ensureMcporter } from "../../../../bin/mcporter-custody.ts";
 import { planDispatcherRoute, type RoutePlan } from "../../../../bin/provider-route.ts";
 import { safeEnvironment } from "../../../../bin/safe-environment.ts";
-import { bindCredential, bindingChannel, type CredentialBinding, invocationEnvironment, TENANT_PATTERN } from "../custody/index.ts";
+import { bindCredential, bindingChannel, type CredentialBinding, invocationEnvironment, sourceInternalCommand, TENANT_PATTERN } from "../custody/index.ts";
 import { stageFile } from "../outbox.ts";
 import { productFor } from "./contract.ts";
 import type { Dependencies, Transport, TransportFailure, TransportResult } from "./engine.ts";
@@ -14,7 +18,6 @@ import { translateFailure } from "./translate.ts";
 
 const CALL_TIMEOUT_MS = "30000";
 const SKILLS_ROOT = path.resolve(import.meta.dir, "..", "..", "..", "..", "skills");
-const PROVIDER_SCRIPT = path.resolve(import.meta.dir, "..", "atlassian-community-provider.ts");
 
 export type Environment = Record<string, string | undefined>;
 
@@ -37,15 +40,26 @@ function spawnRoute(mcporter: string, plan: RoutePlan): { code: number; stdout: 
 	return { code: run.exitCode, stdout: run.stdout.toString(), stderr: run.stderr.toString() };
 }
 
+type McporterSelection = () => Promise<{ ok: true; binary: string } | TransportFailure>;
+
 // The plugin-owned MCPorter, selected once per transport. PATH never
 // supplies it; first use may bootstrap the pinned release, and any later
 // mismatch refuses with the explicit repair.
-function verifiedMcporter(env: Environment): () => Promise<{ ok: true; binary: string } | TransportFailure> {
+function verifiedMcporter(env: Environment): McporterSelection {
 	let selection: ReturnType<typeof ensureMcporter> | undefined;
 	return async () => {
 		selection ??= ensureMcporter(env);
 		const selected = await selection;
 		return selected.ok ? { ok: true, binary: selected.binary } : { ok: false, cause: "refused-precondition", hint: selected.repair };
+	};
+}
+
+// The packaged front door's selection. It renders its own failure, so this
+// transport only stops before any send.
+function packagedMcporter(capabilities: ExecutionCapabilities): McporterSelection {
+	return async () => {
+		const binary = await capabilities.selectMcporter();
+		return binary === null ? { ok: false, cause: "refused-precondition", hint: null } : { ok: true, binary };
 	};
 }
 
@@ -75,10 +89,10 @@ function inBandError(data: unknown): string | undefined {
 // failure, so a Provider refusal that ran under MCPorter would be flattened
 // into an offline transport failure; running --preflight here first keeps the
 // refusal and its fixed hint.
-function providerReadiness(env: Environment, tenant: string, binding: CredentialBinding, server: string): TransportResult | null {
+function providerReadiness(env: Environment, tenant: string, binding: CredentialBinding, server: string, providerCommand: readonly string[]): TransportResult | null {
 	const product = productFor(server);
 	if (!product) return { ok: false, ...translateFailure({ kind: "malformed", message: "unknown Provider route" }) };
-	const run = Bun.spawnSync([process.execPath, PROVIDER_SCRIPT, "--preflight"], {
+	const run = Bun.spawnSync([...providerCommand, "--preflight"], {
 		env: { ...scrubbed(env), ...invocationEnvironment({ tenant, product, binding }) },
 		stdin: "ignore",
 		stdout: "pipe",
@@ -96,7 +110,7 @@ function providerReadiness(env: Environment, tenant: string, binding: Credential
 // MCPorter's JSON shapes are not fully documented; a result that is not JSON is
 // reported as malformed rather than guessed. This adapter is the only place
 // provider text is seen; it leaves here as a translated closed cause.
-export function routeTransport(env: Environment, tenant: string, skillsRoot: string = SKILLS_ROOT): Transport {
+export function routeTransport(env: Environment, tenant: string, skillsRoot: string = SKILLS_ROOT, packaged?: ExecutionCapabilities): Transport {
 	if (!TENANT_PATTERN.test(tenant)) throw new Error("tenant-invalid: the transport needs the validated tenant slug");
 	const toResult = (run: { code: number; stdout: string; stderr: string }): TransportResult => {
 		if (run.code !== 0) return { ok: false, ...translateFailure({ kind: "process", exitCode: run.code, stderr: run.stderr, stdout: run.stdout }) };
@@ -109,11 +123,12 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 		if (inBand !== undefined) return { ok: false, ...translateFailure({ kind: "tool-error", message: inBand.slice(0, 2000) }) };
 		return { ok: true, data };
 	};
-	const mcporter = verifiedMcporter(env);
+	const mcporter = packaged ? packagedMcporter(packaged) : verifiedMcporter(env);
+	const providerCommand = packaged ? packaged.internalCommand("provider") : sourceInternalCommand("provider");
 	const request = async (binding: CredentialBinding, server: string, mcporterArgs: string[]): Promise<TransportResult> => {
 		const planned = planRoute(env, tenant, binding, server, mcporterArgs, skillsRoot);
 		if ("ok" in planned) return planned;
-		const readiness = providerReadiness(env, tenant, binding, server);
+		const readiness = providerReadiness(env, tenant, binding, server, providerCommand);
 		if (readiness) return readiness;
 		const selected = await mcporter();
 		if (!selected.ok) return selected;
@@ -131,11 +146,13 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 
 // The production dependency set for one validated tenant. Built exactly once
 // per invocation from the parsed tenant, so the transport, the credential
-// item, and the trusted origin can never name different tenants.
-export function productionDependencies(tenant: string, env: Environment): Dependencies {
+// item, and the trusted origin can never name different tenants. The packaged
+// front door passes its physical skills root and its capabilities.
+export function productionDependencies(tenant: string, env: Environment, packaged?: { skillsRoot: string; capabilities: ExecutionCapabilities }): Dependencies {
+	const custodyCommand = packaged ? packaged.capabilities.internalCommand("custody-child") : sourceInternalCommand("custody-child");
 	return {
-		transport: routeTransport(env, tenant),
-		bindCredential: async (slug, product) => bindCredential(slug, product, env),
+		transport: routeTransport(env, tenant, packaged?.skillsRoot, packaged?.capabilities),
+		bindCredential: async (slug, product) => bindCredential(slug, product, env, custodyCommand),
 		journal: (slug) => openJournal(slug, { env }),
 		stage: (slug, file) => stageFile(slug, env, file),
 		now: Date.now,

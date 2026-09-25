@@ -1,0 +1,9 @@
+{
+	"schemaVersion": 1,
+	"id": "atlassian",
+	"transport": { "registry": "./mcporter.json" },
+	"selectors": { "tenant": { "pattern": "^[a-z][a-z0-9-]*$", "required": true } },
+	"requirements": ["mcporter", "op", "uv"],
+	"adapter": "atlassian",
+	"credentials": { "reference": "1Password:API Credentials" }
+}

@@ -2,7 +2,8 @@
 // dispatcher's bindCredential crosses the custody child, which reads the
 // service token through the test Keychain reader in the substituted plugin
 // copy (see plugin-copy.ts) and the item through the plugin-owned op fake;
-// the child itself is proved as a public process. Both run from the copy:
+// the child itself is proved as a public process: the copy's compiled front
+// door in its internal custody role. Both run from the copy:
 // substituted-reader process proof. The real Keychain read is the gated
 // attended suite's proof.
 // Provider-side custody (providerInvocation, boundItem, invocationEnvironment)
@@ -17,7 +18,8 @@ import { substitutedPluginRoot } from "./fixtures/plugin-copy.ts";
 // The copy's custody module, so bindCredential starts the copy's child.
 const SKILL = path.join(substitutedPluginRoot(), "skills", "atlassian");
 const { bindCredential, bindingChannel } = (await import(path.join(SKILL, "scripts", "custody", "index.ts"))) as typeof import("../scripts/custody/index.ts");
-const CHILD = path.join(SKILL, "scripts", "custody", "child.ts");
+const CHILD = [path.join(SKILL, "..", "..", "bin", "connectors"), "__internal", "atlassian", "custody-child"];
+const JIRA_CONTEXT = '{"tenant":"example","product":"jira"}';
 const PRINCIPAL = "service@example.invalid";
 const ORIGIN = "https://example.atlassian.net";
 const MANAGEMENT_URL = "https://id.atlassian.com/manage-profile/security/api-tokens";
@@ -36,8 +38,8 @@ afterEach(() => fixture.dispose());
 const env = () => ({ HOME: fixture.home, PATH: process.env.PATH ?? "", TMPDIR: fixture.root, XDG_STATE_HOME: fixture.state });
 const writeItem = (text: string) => writeFileSync(path.join(fixture.root, "item.json"), text);
 const opReads = () => fixture.lines<{ argv: string[] }>("op-calls.jsonl").map((call) => call.argv);
-async function child(argv: string[], extra: Record<string, string> = {}) {
-	const proc = Bun.spawn([process.execPath, CHILD, ...argv], { env: { ...env(), ...extra }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+async function child(context: string, extra: Record<string, string> = {}, argv: string[] = []) {
+	const proc = Bun.spawn([...CHILD, ...argv], { env: { ...env(), CONNECTORS_INTERNAL_INVOCATION_CONTEXT: context, ...extra }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
 	const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
 	return { code, stdout, stderr };
 }
@@ -109,32 +111,53 @@ describe("bindCredential", () => {
 describe("custody child process", () => {
 	test("reads a full item but emits only the nonsecret binding line", async () => {
 		writeItem(itemJson({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN }, 42));
-		const result = await child(["--tenant", "example", "--product", "jira"]);
+		const result = await child(JIRA_CONTEXT);
 		expect([result.code, result.stdout, result.stderr]).toEqual([0, '{"principal":"service@example.invalid","itemVersion":"onepassword-item-version:42","origin":"https://example.atlassian.net"}\n', ""]);
 		for (const secret of [PROVIDER_TOKEN, SERVICE_TOKEN]) expect(`${result.stdout}${result.stderr}`).not.toContain(secret);
 		expect(opReads()).toEqual([opRead("JIRA_EXAMPLE_API_TOKEN")]);
+	});
+
+	// A fault inside the role (here the reader leaf cannot write under an
+	// absent HOME parent) is not a closed custody cause: the front door names
+	// one fixed nonsecret line and never the thrown text, and the dispatcher
+	// then refuses with the unstable-context detail.
+	test("a role that throws names the fixed internal-role cause and no path", async () => {
+		writeItem(itemJson({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN }, 1));
+		const absentHome = path.join(fixture.root, "absent", "home");
+		const result = await child(JIRA_CONTEXT, { HOME: absentHome });
+		expect([result.code, result.stdout, result.stderr]).toEqual([1, "", "connectors-internal-role:error:unhandled\n"]);
+		expect(bindCredential("example", "jira", { ...env(), HOME: absentHome })).toEqual({ ok: false, cause: "refused-precondition", detail: UNSTABLE_DETAIL });
+		expect(opReads()).toEqual([]);
 	});
 
 	test("reports each closed custody cause on stderr without a value or path", async () => {
 		const missingOp = new CustodyFixture();
 		try {
 			missingOp.installKeychainToken();
-			const noOp = await child(["--tenant", "example", "--product", "jira"], { HOME: missingOp.home, XDG_STATE_HOME: missingOp.state });
+			const noOp = await child(JIRA_CONTEXT, { HOME: missingOp.home, XDG_STATE_HOME: missingOp.state });
 			expect([noOp.code, noOp.stdout, noOp.stderr]).toEqual([3, "", "atlassian-credential-binding:error:op-unavailable\n"]);
 		} finally {
 			missingOp.dispose();
 		}
 		fixture.removeKeychainToken();
-		const noToken = await child(["--tenant", "example", "--product", "jira"]);
+		const noToken = await child(JIRA_CONTEXT);
 		expect([noToken.code, noToken.stdout, noToken.stderr]).toEqual([3, "", "atlassian-credential-binding:error:service-token-missing\n"]);
 		expect(fixture.lines("op-calls.jsonl")).toEqual([]);
 	});
 
-	test("refuses malformed arguments before any custody access", async () => {
+	test("refuses a malformed invocation context or any argument before any custody access", async () => {
 		writeItem(itemJson({ username: PRINCIPAL, site_url: ORIGIN }, 1));
-		for (const argv of [[], ["--tenant", "example"], ["--tenant", "Example", "--product", "jira"], ["--tenant", "example", "--product", "bitbucket"], ["--tenant", "example", "--tenant", "example"], ["--product", "jira", "--tenant", "example", "extra"]]) {
-			const result = await child(argv);
-			expect([argv.join(" "), result.code, result.stdout, result.stderr]).toEqual([argv.join(" "), 3, "", "atlassian-credential-binding:error:arguments-invalid\n"]);
+		for (const [context, argv] of [
+			['{"tenant":"example"}', []],
+			['{"tenant":"Example","product":"jira"}', []],
+			['{"tenant":"example","product":"bitbucket"}', []],
+			['{"product":"jira","tenant":"example"}', []],
+			['{"tenant":"example","product":"jira","extra":1}', []],
+			["not json", []],
+			[JIRA_CONTEXT, ["--tenant", "example"]],
+		] as const) {
+			const result = await child(context, {}, [...argv]);
+			expect([context, argv.join(" "), result.code, result.stdout, result.stderr]).toEqual([context, argv.join(" "), 3, "", "atlassian-credential-binding:error:arguments-invalid\n"]);
 		}
 		expect(fixture.lines("op-calls.jsonl")).toEqual([]);
 	});
@@ -147,7 +170,7 @@ describe("custody child process", () => {
 			["not json", "credential-invalid"],
 		] as const) {
 			writeItem(item);
-			const result = await child(["--tenant", "example", "--product", "jira"]);
+			const result = await child(JIRA_CONTEXT);
 			expect([cause, result.code, result.stdout, result.stderr]).toEqual([cause, 3, "", `atlassian-credential-binding:error:${cause}\n`]);
 		}
 	});

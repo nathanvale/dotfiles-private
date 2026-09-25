@@ -11,9 +11,16 @@
 // a refusal, an inspection result, or a MCPorter transport plan. The core then
 // selects the verified MCPorter, calls commit() for the adapter's own state
 // preparation, runs the plan, and after a read or attended login asks settle()
-// what the child changed in adapter-owned state. An adapter never reads a
-// credential value, never spawns MCPorter itself, and its refusal text never
-// echoes caller input.
+// what the child changed in adapter-owned state. An adapter never selects
+// MCPorter, and its refusal text never echoes caller input. prepare stays
+// pure: it refuses a bad action, selector, operation, or input before any
+// dependency, credential, or Provider capability.
+//
+// An execute plan is for a connector whose semantics span several calls. Its
+// execute step may start only the binary selectMcporter() returns, only with a
+// planDispatcherRoute plan from bin/provider-route.ts, and reaches credential
+// custody only through the adapter's own internal roles, so the front-door
+// process never holds a credential value.
 //
 // prepareSchema is the optional live-schema seam for a connector that needs
 // an adapter to reach its transport. It answers like prepare, and a transport
@@ -77,8 +84,25 @@ export interface Committed {
 	readonly completed: readonly LocalEffect[];
 }
 
+export interface ExecutionCapabilities {
+	// The core's verified plugin-owned MCPorter, selected on the first call
+	// only. null means selection failed; the core renders that failure itself.
+	selectMcporter(): Promise<string | null>;
+	// The compiled self in one of this adapter's internal roles. The core
+	// checks no role name here; the adapter narrows its own calls to the
+	// roles it registers, and an unregistered one is refused at the gate.
+	internalCommand(role: string): readonly string[];
+}
+
+// failed: a read that did not complete, with no external effect.
+export type Executed =
+	| { readonly kind: "success"; readonly data: Record<string, unknown> }
+	| { readonly kind: "refused"; readonly refusal: AdapterRefusal }
+	| { readonly kind: "failed"; readonly connectorCause: string; readonly repair: string };
+
 export type Prepared =
 	| { readonly kind: "refused"; readonly refusal: AdapterRefusal }
+	| { readonly kind: "execute"; execute(capabilities: ExecutionCapabilities): Promise<Executed> }
 	| { readonly kind: "inspected"; readonly data: Record<string, unknown> }
 	| {
 		readonly kind: "transport";
@@ -90,8 +114,17 @@ export type Prepared =
 		settle(): readonly LocalEffect[];
 	};
 
+// A process the compiled front door becomes, reached only as
+// `__internal <adapter> <role>` with a valid internal invocation context. It
+// speaks its own line or MCP stdio protocol, then exits or replaces itself,
+// and never emits a Contract Core envelope.
+export interface InternalRole {
+	run(argv: readonly string[]): void | Promise<void>;
+}
+
 export interface Adapter {
 	readonly id: string;
+	readonly internalRoles?: Readonly<Record<string, InternalRole>>;
 	attemptAuth?(manifest: ConnectorManifest): Promise<AuthAttempt>;
 	prepare?(request: AdapterRequest): Prepared;
 	prepareSchema?(request: SchemaRequest): Prepared;

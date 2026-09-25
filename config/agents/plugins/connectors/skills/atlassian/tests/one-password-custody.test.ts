@@ -206,8 +206,9 @@ describe("refusals before any Provider or MCPorter start", () => {
 		const result = await fixture.dispatch(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}']);
 		const envelope = parse(result.stdout).result;
 		expect([result.code, result.stderr, envelope.causeCode, envelope.repairAction]).toEqual([3, "", "refused-precondition", "the plugin-owned uv is not set up; run connectors setup"]);
-		// The custody child, the only op caller, meets the shipped op digest.
-		const child = Bun.spawnSync([process.execPath, path.join(fixture.skill, "scripts", "custody", "child.ts"), "--tenant", "example", "--product", "jira"], { env: fixture.environment(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+		// The custody child, the only op caller, meets the shipped op digest. It
+		// starts as the copy's compiled internal custody role.
+		const child = Bun.spawnSync([path.join(fixture.pluginRoot, "bin", "connectors"), "__internal", "atlassian", "custody-child"], { env: fixture.environment({ CONNECTORS_INTERNAL_INVOCATION_CONTEXT: '{"tenant":"example","product":"jira"}' }), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
 		expect([child.exitCode, child.stdout.toString(), child.stderr.toString()]).toEqual([3, "", "atlassian-credential-binding:error:op-unavailable\n"]);
 		expect([fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl")]).toEqual([[], [], []]);
 	});

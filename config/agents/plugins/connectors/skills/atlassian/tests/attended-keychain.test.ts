@@ -33,8 +33,9 @@ describe.skipIf(!ATTENDED_KEYCHAIN)("attended real Keychain read", () => {
 	test("the real security read hands the service token to op alone and leaves the search list unchanged", async () => {
 		fixture = new CustodyFixture({ keychain: "attended" }).installAll();
 		expect(userSearchList()).toEqual(before);
-		// The shipped leaf, the real reader; only the manifest admits the fakes.
-		expect(changedPaths(SHIPPED_ROOT, fixture.pluginRoot)).toEqual(["requirements.json"]);
+		// The shipped leaf, the real reader; only the manifest admits the fakes,
+		// and the front door is recompiled from that manifest.
+		expect(changedPaths(SHIPPED_ROOT, fixture.pluginRoot)).toEqual(["bin/connectors", "requirements.json"]);
 		expect(readFileSync(path.join(fixture.pluginRoot, KEYCHAIN_LEAF), "utf8")).toContain('spawnSync("/usr/bin/security"');
 		const result = await fixture.dispatch(READ);
 		expect([result.code, result.stderr]).toEqual([3, ""]);

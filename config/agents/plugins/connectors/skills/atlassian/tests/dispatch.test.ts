@@ -195,7 +195,7 @@ describe("operation contract and routes", () => {
 	});
 
 	test("the registry and its derived runtime vocabulary have exact independent allow-lists and one Community command per route", () => {
-		const registry = JSON.parse(readFileSync(path.join(SKILL, "config", "mcporter.json"), "utf8")) as { imports: unknown[]; mcpServers: Record<string, { allowedTools: string[]; env: Record<string, string>; command: string }> };
+		const registry = JSON.parse(readFileSync(path.join(SKILL, "config", "mcporter.json"), "utf8")) as { imports: unknown[]; mcpServers: Record<string, { allowedTools: string[]; env: Record<string, string>; command: string; args: string[] }> };
 		expect(registry.imports).toEqual([]);
 		expect(Object.fromEntries(Object.entries(registry.mcpServers).map(([server, entry]) => [server, entry.allowedTools]))).toEqual(EXPECTED_ALLOW_LISTS);
 		expect(ALLOWED_TOOLS).toEqual(EXPECTED_ALLOW_LISTS);
@@ -203,7 +203,8 @@ describe("operation contract and routes", () => {
 			const entry = registry.mcpServers[server];
 			expect([server, entry?.env.ATLASSIAN_PRODUCT ?? null]).toEqual([server, productFor(server)]);
 			expect([server, entry?.env.ATLASSIAN_TENANT]).toEqual([server, "${ATLASSIAN_TENANT}"]);
-			expect([server, entry?.command]).toEqual([server, "../scripts/atlassian-community-provider.ts"]);
+			// The compiled front door's internal Provider role, never a .ts entry.
+			expect([server, entry?.command, entry?.args]).toEqual([server, "../../../bin/connectors", ["__internal", "atlassian", "provider"]]);
 		}
 		const route = JSON.parse(readFileSync(path.join(SKILL, "config", "route.json"), "utf8")) as { defaultProvider: string; dispatcherOwned: boolean };
 		expect([route.defaultProvider, route.dispatcherOwned]).toEqual([CJ, true]);

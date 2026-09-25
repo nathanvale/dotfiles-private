@@ -6,22 +6,24 @@
 // route on an internal channel. A Provider process recovers its invocation
 // from that channel, re-reads the exact item immediately before any child
 // executable can start, and refuses when the item no longer matches the
-// binding. Secret values never leave boundItem's caller process. The Provider
+// binding. Secret values never leave boundItem's caller process. The child and
+// the Provider start only as internal roles of the compiled front door. The Provider
 // cannot start without the plugin-owned uv, so a missing or changed uv
 // refuses before any credential is read.
 import path from "node:path";
 import { type EnvironmentSource, INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "../../../../bin/safe-environment.ts";
 import { atlassianProcess } from "../provider-process.ts";
 import { type CredentialBinding, encodeBinding, parseBinding } from "./channel.ts";
+import { custodyContext } from "./child.ts";
 import { isProduct, itemBinding, itemFieldMap, type Product, productItemTitle, SITE_URL_FIELD, TENANT_PATTERN } from "./item.ts";
 import { itemHandoff, OP_SETUP_REPAIR, readOnePasswordItem, SERVICE_TOKEN_HANDOFF } from "./one-password.ts";
 import { selectedUv, UV_SETUP_REPAIR } from "./plugin-tools.ts";
 
+export { runCustodyChild } from "./child.ts";
 export { PRODUCTS, type Product, TENANT_PATTERN } from "./item.ts";
 export { selectedUv, UV_SETUP_REPAIR } from "./plugin-tools.ts";
 export type { CredentialBinding } from "./channel.ts";
 
-const CHILD = path.resolve(import.meta.dir, "child.ts");
 const CHILD_FAILURE = /^atlassian-credential-binding:error:([a-z-]+)(?::[^\n]*)?$/m;
 const TENANT_ENV = "ATLASSIAN_TENANT";
 const PRODUCT_ENV = "ATLASSIAN_PRODUCT";
@@ -46,11 +48,24 @@ function childFailure(code: string | undefined, itemTitle: string): BindFailure 
 	}
 }
 
+// The one owner of the Atlassian internal-role vocabulary: the adapter id
+// and the role names the packaged adapter registers. The registry's
+// mcporter.json restates the provider role as a literal, pinned by a test.
+export const ATLASSIAN_ADAPTER_ID = "atlassian";
+export type AtlassianInternalRole = "custody-child" | "provider";
+
+// The plugin's compiled front door in one Atlassian internal role, reached
+// from source through this module's own location. The packaged front door
+// passes its own command instead, because its module location is virtual.
+export function sourceInternalCommand(role: AtlassianInternalRole): readonly string[] {
+	return [path.resolve(import.meta.dir, "..", "..", "..", "..", "bin", "connectors"), "__internal", ATLASSIAN_ADAPTER_ID, role];
+}
+
 // The dispatcher's only credential access. The child inspects the complete
 // item; this process sees one JSON line or a closed cause.
-export function bindCredential(tenant: string, product: Product, env: EnvironmentSource): BindResult {
+export function bindCredential(tenant: string, product: Product, env: EnvironmentSource, custodyCommand: readonly string[] = sourceInternalCommand("custody-child")): BindResult {
 	if (selectedUv(env) === null) return { ok: false, cause: "refused-precondition", detail: UV_SETUP_REPAIR };
-	const read = Bun.spawnSync([process.execPath, CHILD, "--tenant", tenant, "--product", product], { env: safeEnvironment(env), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+	const read = Bun.spawnSync([...custodyCommand], { env: { ...safeEnvironment(env), [INTERNAL_INVOCATION_CONTEXT_ENV]: custodyContext(tenant, product) }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
 	if (read.exitCode !== 0) return childFailure(CHILD_FAILURE.exec(read.stderr.toString())?.[1], productItemTitle(product, tenant));
 	const binding = parseBinding(read.stdout.toString());
 	return binding ? { ok: true, binding } : { ok: false, cause: "refused-precondition", detail: "credential custody returned an invalid context" };

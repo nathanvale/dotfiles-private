@@ -1,5 +1,5 @@
-#!/usr/bin/env bun
-// Community mcp-atlassian Provider, one product per route. Re-reads the
+// Community mcp-atlassian Provider, one product per route, run only as the
+// Atlassian adapter's internal Provider role of the compiled front door. Re-reads the
 // selected product's bound item (username, credential, and site_url) inside
 // this process through 1Password custody, and execs the pinned package through
 // the plugin-owned uv with only that product's environment triplet, started in
@@ -32,9 +32,11 @@ function prerequisites(): { invocation: ReturnType<typeof providerInvocation>; i
 	return { invocation, item, credential: item.credential, uv };
 }
 
-function main(argv: string[]): never {
+// MCPorter starts this role with no arguments; the dispatcher's readiness
+// probe starts it with --preflight alone.
+export function runProvider(argv: readonly string[]): never {
 	const preflight = argv.length === 1 && argv[0] === "--preflight";
-	if (!preflight) refuseArguments(argv);
+	if (!preflight) refuseArguments([...argv]);
 	// uv is verified, then the full item is read and compared, before uv starts.
 	const ready = prerequisites();
 	const outbox = outboxDirectory(ready.invocation.tenant, process.env);
@@ -44,5 +46,3 @@ function main(argv: string[]): never {
 	const environment = { ...cleanEnvironment(), ...productEnvironment(ready.invocation.product, ready.item, ready.credential) };
 	replaceProcess(ready.uv, ["uv", "tool", "run", "--system-certs", "--no-env-file", "--from", PACKAGE_PIN, "mcp-atlassian"], environment);
 }
-
-main(process.argv.slice(2));
