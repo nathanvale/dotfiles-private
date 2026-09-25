@@ -21,6 +21,15 @@ const READ = ["run", "atlassian", "--select", "tenant=example", "issue.get", "--
 // restated from the accepted adapter mapping.
 const HANDOFF_DATA = { connector: "atlassian", connectorCause: "refused-credential-unconfigured" };
 type Refusal = { result: { causeCode: string; repairAction: string; data: unknown } };
+// Test-owned skip rationale for the gated suite below, asserted by an
+// always-run row so a routine run records why the suite did not run.
+const ATTENDED_SKIP_RATIONALE =
+	"attended only: runs with CONNECTORS_ATTENDED_KEYCHAIN_TEST=1 after Nathan authorizes a Keychain test plan, because the real /usr/bin/security creates a throwaway keychain and so edits the user-level keychain search list";
+
+test("the attended Keychain suite's skip carries a non-empty rationale naming its environment gate", () => {
+	expect(ATTENDED_SKIP_RATIONALE.trim().length).toBeGreaterThan(0);
+	expect(ATTENDED_SKIP_RATIONALE).toContain("CONNECTORS_ATTENDED_KEYCHAIN_TEST=1");
+});
 
 describe.skipIf(!ATTENDED_KEYCHAIN)("attended real Keychain read", () => {
 	let before: string[];

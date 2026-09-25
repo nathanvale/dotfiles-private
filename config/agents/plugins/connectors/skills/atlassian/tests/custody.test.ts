@@ -55,7 +55,7 @@ describe("bindCredential", () => {
 	});
 
 	// The item is the configured ID alone; no title is derived from the tenant.
-	test("reads exactly the configured item ID for a dashed tenant slug", () => {
+	test("reads only the configured item ID, never a title derived from the tenant", () => {
 		writeItem(itemJson({ username: PRINCIPAL, credential: "x", site_url: ORIGIN }, 1));
 		expect(bindCredential("example-team", "jira", JIRA_ITEM_ID, env()).ok).toBe(true);
 		expect(opReads()).toEqual([opRead(JIRA_ITEM_ID)]);

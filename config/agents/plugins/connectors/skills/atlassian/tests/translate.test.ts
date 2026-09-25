@@ -17,7 +17,7 @@ describe("translateFailure", () => {
 		["bare 401 status", toolError("status 401"), "refused-auth"],
 		["forbidden wording", process_("request forbidden by policy"), "refused-auth"],
 		["permission wording", toolError("You do not have permission to view this issue"), "refused-auth"],
-		["404", toolError("Issue does not exist or you do not have permission to see it."), "refused-auth"],
+		["absence worded with permission", toolError("Issue does not exist or you do not have permission to see it."), "refused-auth"],
 		["not found", process_("HTTP 404 Not Found"), "not-found"],
 		["ambiguous Confluence absence or permission cannot prove a delete", toolError("Failed to retrieve page by ID '123': Error retrieving page content: There is no content with the given id, or the calling user does not have permission to view the content"), "failed-unknown"],
 		["unambiguous Confluence absence", toolError("There is no content with the given id"), "not-found"],
