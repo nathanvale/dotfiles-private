@@ -25,29 +25,35 @@ them when this guide and they disagree.
 
 ## Boundary
 
-- Covers: Claude Code sessions reporting model ID `claude-sonnet-5`, on the
-  Anthropic API, a Claude subscription, or a qualified Microsoft Foundry
-  deployment. Claude Code requires v2.1.197 or later for this model
-  (model-config).
-- The Monash Foundry route: a session on this route carries
+- Covers: Claude Code sessions reporting model ID `claude-sonnet-5`, on any
+  account — the Anthropic API, a Claude subscription, or a Microsoft Foundry
+  deployment, Monash's included. Claude Code requires v2.1.197 or later for
+  this model (model-config). This guide's advice applies wherever that exact
+  identity is observed; it does not depend on, and is not limited by, which
+  account is serving it.
+- Route qualification is a separate, narrower claim from guide applicability
+  above: it says only whether the Monash Foundry route is known to work, not
+  who is authenticated on it. A session on the Monash Foundry route carries
   `CLAUDE_CODE_USE_FOUNDRY=1` and
   `ANTHROPIC_FOUNDRY_RESOURCE=monash-edu-smst-ai-claude-code` in its own
   environment (observed, this session; host `laptop`), and `herdr pane get`
   reports `billing_identity: monash-foundry`. Confirm the route is qualified
   with `monash models --json` — snapshot only, do not pass `--refresh` for
-  this check — before applying this guide there: as of its
-  `observed_at: 2026-09-09`, `claude-sonnet-5` binds to that same resource
-  (Azure resource group `monash-edu-smst-smstai-degreeworks-scribe`) with
+  this check — before relying on it: as of its `observed_at: 2026-09-09`,
+  `claude-sonnet-5` binds to that same resource (Azure resource group
+  `monash-edu-smst-smstai-degreeworks-scribe`) with
   `protocol: azure-anthropic-messages`, and the `claude`-agent route is
   `compatibility: compatible`, `status: qualified`: "Native inference and
   harmless file-read tool passed on laptop, 2026-09-09; other hosts require
   their own qualification."
-- Excludes a personal Claude account: a personal-account session authenticates
-  without the `ANTHROPIC_FOUNDRY_*` variables above and reports a different
-  `billing_identity` (not `monash-foundry`), even when its Harness, model ID
-  and observed effort match exactly. Treat it as a separate, unqualified route
-  under this snapshot — recheck `monash models --json` (still snapshot only)
-  or ask Nathan before carrying the "qualified" claim above over to it.
+- This Monash qualification never transfers to a personal route. It qualifies
+  neither personal authentication nor personal account ownership — only that
+  the Monash Foundry route itself is known to work. Missing
+  `ANTHROPIC_FOUNDRY_*` variables or a different `billing_identity` do not by
+  themselves establish that a session is on a personal serving account:
+  treat such a session as a separate, unqualified route, and name an
+  independent source, or get Nathan's confirmation, before casting it as
+  qualified.
 - Excludes: provider-prefixed IDs such as Bedrock `anthropic.claude-sonnet-5`,
   Sonnet 5 outside Claude Code (direct API calls), Codex or any other Harness,
   and every other model, including Claude Sonnet 4.6. Each needs its own
@@ -71,9 +77,15 @@ them when this guide and they disagree.
   above and beyond," which risks under-thinking on moderately complex `low`
   effort tasks (prompting guide, Calibrating effort and thinking depth).
 - Manual extended thinking (`thinking: {type: "enabled", budget_tokens: N}`)
-  is not supported on Sonnet 5 and returns a 400 error; effort is the only
-  depth control (prompting guide, Calibrating effort and thinking depth).
-  This is an API-level detail, extrapolated to Claude Code, where effort is
+  is not supported on Sonnet 5 and returns a 400 error, but effort is the
+  primary depth control, not the only one: the API also lets you disable
+  thinking entirely (`thinking: {type: "disabled"}`) and steer its triggering
+  through prompts (prompting guide, Calibrating effort and thinking depth).
+  Claude Code documents the same prompt-steering lever within the effort
+  setting: "you can say so directly in your prompt or in `CLAUDE.md`; the
+  model responds to that guidance within its effort setting" (model-config,
+  Adaptive reasoning and fixed thinking budgets). Keep these as API controls,
+  distinct from the effort value itself, which is observed Harness behavior
   set at launch (`--effort`) or with `/effort`, not a per-request `thinking`
   field.
 - Unlike the Opus 5.5 guide's "leave it out" rule, Sonnet 5's own guidance
