@@ -10,19 +10,20 @@ import {
 	discoveryData,
 	type Envelope,
 	isCommandIdentity,
+	serializeEnvelope,
 	STATIONS,
 	StationError,
 	stationResult,
 	success,
 } from "./contract.ts"
-import { loadObservations, loadRoutes } from "./declarations.ts"
+import { loadRoutes } from "./declarations.ts"
 import { collectEvidence } from "./evidence.ts"
 import { renderCard, renderInventory } from "./render.ts"
 
 const USAGE = [
 	"Usage:",
-	"  agent-router routes [--routes-file PATH] [--observations-file PATH] [--probe-timeout-ms N] [--json]",
-	"  agent-router run TASK --dry-run [--project NAME] [--herdr-projects-root DIR] [--routes-file PATH] [--observations-file PATH] [--probe-timeout-ms N] [--json]",
+	"  agent-router routes [--routes-file PATH] [--probe-timeout-ms N] [--json]",
+	"  agent-router run TASK --dry-run [--project NAME] [--herdr-projects-root DIR] [--routes-file PATH] [--probe-timeout-ms N] [--json]",
 	"  agent-router --discover [--json] | --discover-command COMMAND_IDENTITY [--json] | --help [--json]",
 ]
 
@@ -30,7 +31,6 @@ const OPTIONS = [
 	{ name: "--json", valueName: null, summary: "Emit one Contract Core 2.0 envelope on stdout." },
 	{ name: "--dry-run", valueName: null, summary: "Required by run: show the decision card; nothing is launched." },
 	{ name: "--routes-file", valueName: "PATH", summary: "Routes file; default $XDG_CONFIG_HOME/agent-router/routes.json." },
-	{ name: "--observations-file", valueName: "PATH", summary: "Observations file; default $XDG_STATE_HOME/agent-router/observations.json." },
 	{ name: "--probe-timeout-ms", valueName: "N", summary: "Time budget per read-only probe, 1 to 600000; default 10000." },
 	{ name: "--project", valueName: "NAME", summary: "Herdr Projects project the worker would join." },
 	{ name: "--herdr-projects-root", valueName: "DIR", summary: "Herdr Projects root; default $HERDR_PROJECTS_ROOT." },
@@ -90,17 +90,17 @@ function xdg(variable: string, fallback: string): string {
 async function inputs(parsed: Parsed, requireRoutes: boolean, target: { root: string | null; project: string | null }): Promise<Inputs> {
 	const routesFile = loadRoutes(resolve(parsed.values.get("--routes-file") ?? join(xdg("XDG_CONFIG_HOME", ".config"), "agent-router", "routes.json")))
 	if (routesFile.status === "missing" && requireRoutes) throw new StationError("routesMissing", `No routes file exists at ${routesFile.path}.`)
-	const observationsFile = loadObservations(resolve(parsed.values.get("--observations-file") ?? join(xdg("XDG_STATE_HOME", ".local/state"), "agent-router", "observations.json")))
 	const evidence = await collectEvidence({
 		harnesses: routesFile.routes.map((route) => route.harness),
+		declaredHosts: routesFile.routes.flatMap((route) => route.hosts),
 		timeoutMs: timeout(parsed),
 		herdrProjectsRoot: target.root,
 		project: target.project,
 	})
-	return { routesFile, observationsFile, evidence, now: Date.now() }
+	return { routesFile, evidence, now: Date.now() }
 }
 
-const COMMON = ["--routes-file", "--observations-file", "--probe-timeout-ms"]
+const COMMON = ["--routes-file", "--probe-timeout-ms"]
 
 async function routesCommand(parsed: Parsed): Promise<Output> {
 	allowOnly(parsed, COMMON)
@@ -120,7 +120,6 @@ function targetOf(parsed: Parsed): { root: string | null; project: string | null
 }
 
 const PICK_ACTIONS: Record<string, (route: string | null, candidates: string[], confirm: string[]) => string> = {
-	selected: (route) => `Review the card; launching ${route} belongs to the approved Herdr Projects launch path.`,
 	"needs-confirmation": (route, _candidates, confirm) => `Ask Nathan to confirm ${confirm.join(", ")} for ${route} before any launch.`,
 	ask: (_route, candidates) => `Ask Nathan to choose one route: ${candidates.join(", ")}.`,
 	"none-eligible": () => "Resolve the listed refusals and gaps, then rerun the dry run.",
@@ -182,57 +181,59 @@ function refusal(identity: CommandIdentity | "agent-router.dispatch", error: unk
 	return { envelope: stationResult(identity, "inputUnreadable", "The command failed unexpectedly before producing a result."), human: "" }
 }
 
-let failureReported = false
-let asynchronousStdoutFailure = false
+let humanFailureReported = false
+let transportFailed = false
 
+/** Human mode only: one repair line on stderr. Machine mode never writes stderr. */
 function reportToStderr(envelope: Envelope): void {
-	if (failureReported) return
-	failureReported = true
+	if (humanFailureReported) return
+	humanFailureReported = true
 	process.stderr.write(`${envelope.message} Repair: ${String(envelope.result.repairAction)}\n`)
 }
 
-function internal(identity: CommandIdentity | "agent-router.dispatch", key: "serialization" | "emission", json: boolean): number {
-	const envelope = stationResult(identity, key, STATIONS[key].trigger)
-	if (!json) {
-		reportToStderr(envelope)
-		return 1
-	}
-	try {
-		process.stdout.write(`${JSON.stringify(envelope)}\n`)
-	} catch {
-		reportToStderr(envelope)
-	}
+/**
+ * A transport failure (stdout cannot be written, including a closed pipe) is not a serialization failure: machine
+ * mode keeps stderr empty, preserves whatever was observed and never emits a replacement envelope.
+ */
+function transportFailure(json: boolean): number {
+	transportFailed = true
+	if (!json) reportToStderr(stationResult("agent-router.dispatch", "emission", STATIONS.emission.trigger))
 	return 1
 }
 
+function write(text: string, json: boolean): number | null {
+	try {
+		process.stdout.write(text)
+		return null
+	} catch {
+		return transportFailure(json)
+	}
+}
+
+/** Machine output: the validated envelope, else the validated internal fallback, else nothing. */
+function emitMachine(identity: CommandIdentity | "agent-router.dispatch", envelope: Envelope): number {
+	const text = serializeEnvelope(envelope)
+	if (text !== null) return write(text, true) ?? (envelope.result.exitCode as number)
+	const fallback = serializeEnvelope(stationResult(identity, "serialization", STATIONS.serialization.trigger))
+	if (fallback === null) return 1
+	return write(fallback, true) ?? 1
+}
+
 function emit(identity: CommandIdentity | "agent-router.dispatch", output: Output, json: boolean): number {
+	if (json) return emitMachine(identity, output.envelope)
 	const exitCode = output.envelope.result.exitCode as number
-	if (!json && exitCode !== 0) {
+	if (exitCode !== 0) {
 		reportToStderr(output.envelope)
 		return exitCode
 	}
-	let text: string
-	try {
-		text = json ? `${JSON.stringify(output.envelope)}\n` : `${output.human}\n`
-	} catch {
-		return internal(identity, "serialization", json)
-	}
-	try {
-		process.stdout.write(text)
-	} catch {
-		return internal(identity, "emission", json)
-	}
-	return exitCode
+	return write(`${output.human}\n`, false) ?? exitCode
 }
 
 async function main(argv: string[]): Promise<number> {
 	const separator = argv.indexOf("--")
 	const json = (separator === -1 ? argv : argv.slice(0, separator)).includes("--json")
 	const args = argv.filter((value) => value !== "--json")
-	process.stdout.on("error", () => {
-		asynchronousStdoutFailure = true
-		reportToStderr(stationResult("agent-router.dispatch", "emission", STATIONS.emission.trigger))
-	})
+	process.stdout.on("error", () => transportFailure(json))
 	let parsed: Parsed | null = null
 	let output: Output
 	try {
@@ -245,4 +246,4 @@ async function main(argv: string[]): Promise<number> {
 }
 
 const exitCode = await main(process.argv.slice(2))
-process.exitCode = asynchronousStdoutFailure ? 1 : exitCode
+process.exitCode = transportFailed ? 1 : exitCode

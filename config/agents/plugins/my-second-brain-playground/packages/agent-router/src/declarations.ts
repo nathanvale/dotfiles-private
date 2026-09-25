@@ -1,8 +1,7 @@
-// Owner of the two user-side inputs: the version 1 routes file (Nathan's non-secret route declarations, D2) and the
-// optional observations file (evidence another owner recorded). Both are validated from unknown with closed keys, so
-// a secret-bearing or misspelt field is refused instead of being carried into a card.
+// Owner of the version 1 routes file: Nathan's non-secret route declarations (D2). It is validated from unknown with
+// closed keys, so a secret-bearing or misspelt field is refused instead of being carried into a card.
 import { readFileSync, statSync } from "node:fs"
-import { StationError, type StationKey } from "./contract.ts"
+import { StationError } from "./contract.ts"
 
 export const HARNESSES = ["claude-code", "codex", "opencode"] as const
 export type Harness = (typeof HARNESSES)[number]
@@ -22,15 +21,6 @@ export interface DeclaredRoute {
 	account: { alias: string; ownership: Ownership; plan?: string }
 	hosts: string[]
 	launch: (typeof LAUNCH)[number]
-}
-
-export interface Observation {
-	route: string
-	kind: "account" | "quota"
-	observedAt: string
-	source: string
-	observedAlias?: string
-	state?: "available" | "exhausted"
 }
 
 type Json = Record<string, unknown>
@@ -55,13 +45,6 @@ function text(value: unknown, path: string, pattern: RegExp): string {
 function choice<T extends string>(value: unknown, path: string, options: readonly T[]): T {
 	if (typeof value !== "string" || !(options as readonly string[]).includes(value)) throw new Invalid(`${path} must be one of ${options.join(", ")}`)
 	return value as T
-}
-
-function timestamp(value: unknown, path: string): string {
-	if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value) || Number.isNaN(Date.parse(value))) {
-		throw new Invalid(`${path} must be a UTC ISO 8601 timestamp`)
-	}
-	return value
 }
 
 function model(value: unknown, path: string): DeclaredRoute["model"] {
@@ -107,29 +90,6 @@ function parseRoutes(value: unknown): DeclaredRoute[] {
 	return routes
 }
 
-function observation(value: unknown, path: string): Observation {
-	const raw = record(value, path, { required: ["route", "kind", "observedAt", "source"], optional: ["observedAlias", "state"] })
-	const base = {
-		route: text(raw.route, `${path}.route`, IDENTIFIER),
-		kind: choice(raw.kind, `${path}.kind`, ["account", "quota"] as const),
-		observedAt: timestamp(raw.observedAt, `${path}.observedAt`),
-		source: text(raw.source, `${path}.source`, /^[A-Za-z0-9 ._:/@-]{1,120}$/),
-	}
-	if (base.kind === "account") {
-		if (raw.state !== undefined) throw new Invalid(`${path}.state belongs to quota observations`)
-		return { ...base, observedAlias: text(raw.observedAlias, `${path}.observedAlias`, IDENTIFIER) }
-	}
-	if (raw.observedAlias !== undefined) throw new Invalid(`${path}.observedAlias belongs to account observations`)
-	return { ...base, state: choice(raw.state, `${path}.state`, ["available", "exhausted"] as const) }
-}
-
-function parseObservations(value: unknown): Observation[] {
-	const raw = record(value, "observations file", { required: ["schemaVersion", "observations"] })
-	if (raw.schemaVersion !== 1) throw new Invalid("observations file.schemaVersion must be 1")
-	if (!Array.isArray(raw.observations)) throw new Invalid("observations file.observations must be an array")
-	return raw.observations.map((entry, index) => observation(entry, `observations[${index}]`))
-}
-
 /** Reads a regular file, or returns null when nothing exists at the path. Any other read failure is internal. */
 export function readOptionalFile(path: string): string | null {
 	try {
@@ -142,12 +102,12 @@ export function readOptionalFile(path: string): string | null {
 	}
 }
 
-function decode<T>(path: string, contents: string, station: StationKey, parse: (value: unknown) => T): T {
+function decode(path: string, contents: string): DeclaredRoute[] {
 	try {
-		return parse(JSON.parse(contents))
+		return parseRoutes(JSON.parse(contents))
 	} catch (error) {
 		const reason = error instanceof Invalid ? error.message : "the file is not valid JSON"
-		throw new StationError(station, `${path}: ${reason}.`)
+		throw new StationError("routesInvalid", `${path}: ${reason}.`)
 	}
 }
 
@@ -156,13 +116,5 @@ export type RoutesFile = { path: string; status: "present"; routes: DeclaredRout
 export function loadRoutes(path: string): RoutesFile {
 	const contents = readOptionalFile(path)
 	if (contents === null) return { path, status: "missing", routes: [] }
-	return { path, status: "present", routes: decode(path, contents, "routesInvalid", parseRoutes) }
-}
-
-export type ObservationsFile = { path: string; status: "present" | "missing"; observations: Observation[] }
-
-export function loadObservations(path: string): ObservationsFile {
-	const contents = readOptionalFile(path)
-	if (contents === null) return { path, status: "missing", observations: [] }
-	return { path, status: "present", observations: decode(path, contents, "malformedInput", parseObservations) }
+	return { path, status: "present", routes: decode(path, contents) }
 }

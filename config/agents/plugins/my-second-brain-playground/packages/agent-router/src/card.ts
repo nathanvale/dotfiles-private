@@ -1,11 +1,12 @@
 // The U1-shaped decision card (D3): gates G1 to G5 in order for every route, one refusal per route, unknown kept
 // distinct from stale, a provisional pick without TypeSafe (D10), owned gaps, the Herdr Projects target and the
 // Model Guide revision. Pure over the declarations and evidence; it performs no reads of its own.
-import type { DeclaredRoute, Harness, Observation, ObservationsFile, Ownership, RoutesFile } from "./declarations.ts"
+//
+// No owner yet observes account identity or quota, so G3 and G4 are always unknown: a personal route can reach at
+// best needs-confirmation (D4, D5), and an employer or shared route is refused. S4 adds observed evidence.
+import type { DeclaredRoute, Harness, Ownership, RoutesFile } from "./declarations.ts"
 import type { Evidence, GuideEvidence, HarnessEvidence, MonashRoute } from "./evidence.ts"
-
-const FRESHNESS_DAYS = 7
-const DAY_MILLISECONDS = 86_400_000
+import { FRESHNESS_DAYS, type Freshness, freshness } from "./freshness.ts"
 
 const GATE_ORDER = [
 	{ gate: "G1", name: "model listed" },
@@ -26,12 +27,6 @@ interface GateResult {
 	reason: string
 }
 
-interface Freshness {
-	state: "fresh" | "stale" | "not-observed"
-	observedAt: string | null
-	ageDays: number | null
-}
-
 interface Route {
 	id: string
 	origin: "routes-file" | "monash-snapshot"
@@ -39,8 +34,8 @@ interface Route {
 	harnessVersion: string | null
 	model: { id: string; alias: string | null; listedBy: string }
 	effort: { declared: string | null; observed: "unknown" }
-	account: { alias: string | null; ownership: Ownership; plan: string | null; proof: "verified" | "mismatch" | "unknown" | "stale"; freshness: Freshness }
-	quota: { state: "available" | "exhausted" | "unknown"; source: string | null; freshness: Freshness }
+	account: { alias: string | null; ownership: Ownership; plan: string | null; proof: "unknown" }
+	quota: { state: "unknown"; freshness: Freshness }
 	hosts: { declared: string[]; qualified: string[]; unmappedEvidenceHosts: number }
 	availability: { state: string; freshness: Freshness } | null
 	launch: "allowed" | "dry-run-only" | "not-declared"
@@ -56,34 +51,13 @@ interface Gap {
 	owner: string
 }
 
-function freshness(observedAt: string | null, now: number): Freshness {
-	if (observedAt === null) return { state: "not-observed", observedAt: null, ageDays: null }
-	const ageDays = Math.floor((now - Date.parse(observedAt)) / DAY_MILLISECONDS)
-	return { state: ageDays > FRESHNESS_DAYS ? "stale" : "fresh", observedAt, ageDays }
-}
-
-function latest(observations: Observation[], route: string, kind: Observation["kind"]): Observation | null {
-	const matching = observations.filter((entry) => entry.route === route && entry.kind === kind)
-	return matching.sort((left, right) => Date.parse(right.observedAt) - Date.parse(left.observedAt))[0] ?? null
-}
-
-function accountFacts(declared: { alias: string | null; ownership: Ownership; plan: string | null }, observed: Observation | null, now: number): Route["account"] {
-	const fresh = freshness(observed?.observedAt ?? null, now)
-	if (observed === null) return { ...declared, proof: "unknown", freshness: fresh }
-	if (fresh.state === "stale") return { ...declared, proof: "stale", freshness: fresh }
-	return { ...declared, proof: observed.observedAlias === declared.alias ? "verified" : "mismatch", freshness: fresh }
-}
-
-function quotaFacts(observed: Observation | null, now: number): Route["quota"] {
-	if (observed === null) return { state: "unknown", source: null, freshness: freshness(null, now) }
-	return { state: observed.state ?? "unknown", source: observed.source, freshness: freshness(observed.observedAt, now) }
-}
-
 function guideFacts(guide: GuideEvidence): Route["modelGuide"] {
 	return { status: guide.status, path: guide.path, revision: guide.status === "reviewed" ? guide.sha256 : null }
 }
 
-function declaredRoute(route: DeclaredRoute, evidence: Evidence, observations: Observation[], now: number): Route {
+const UNKNOWN_QUOTA: Route["quota"] = { state: "unknown", freshness: { state: "not-observed", observedAt: null, ageDays: null } }
+
+function declaredRoute(route: DeclaredRoute, evidence: Evidence): Route {
 	const harness: HarnessEvidence | undefined = evidence.harnesses[route.harness]
 	return {
 		id: route.id,
@@ -92,8 +66,8 @@ function declaredRoute(route: DeclaredRoute, evidence: Evidence, observations: O
 		harnessVersion: harness?.version ?? null,
 		model: { id: route.model.id, alias: route.model.alias ?? null, listedBy: "routes file declaration" },
 		effort: { declared: route.effort, observed: "unknown" },
-		account: accountFacts({ alias: route.account.alias, ownership: route.account.ownership, plan: route.account.plan ?? null }, latest(observations, route.id, "account"), now),
-		quota: quotaFacts(latest(observations, route.id, "quota"), now),
+		account: { alias: route.account.alias, ownership: route.account.ownership, plan: route.account.plan ?? null, proof: "unknown" },
+		quota: UNKNOWN_QUOTA,
 		hosts: { declared: route.hosts, qualified: [], unmappedEvidenceHosts: 0 },
 		availability: null,
 		launch: route.launch,
@@ -102,7 +76,7 @@ function declaredRoute(route: DeclaredRoute, evidence: Evidence, observations: O
 	}
 }
 
-function monashRoute(route: MonashRoute, evidence: Evidence, observations: Observation[], now: number): Route {
+function monashRoute(route: MonashRoute, evidence: Evidence, now: number): Route {
 	return {
 		id: route.id,
 		origin: "monash-snapshot",
@@ -110,8 +84,8 @@ function monashRoute(route: MonashRoute, evidence: Evidence, observations: Obser
 		harnessVersion: evidence.harnesses[route.harness]?.version ?? null,
 		model: { id: route.modelId, alias: null, listedBy: "Monash snapshot" },
 		effort: { declared: null, observed: "unknown" },
-		account: accountFacts({ alias: null, ownership: "employer", plan: null }, latest(observations, route.id, "account"), now),
-		quota: quotaFacts(latest(observations, route.id, "quota"), now),
+		account: { alias: null, ownership: "employer", plan: null, proof: "unknown" },
+		quota: UNKNOWN_QUOTA,
 		hosts: { declared: [], qualified: route.qualifiedHosts, unmappedEvidenceHosts: route.unmappedEvidenceHosts },
 		availability: { state: route.availability, freshness: freshness(evidence.monash.snapshotObservedAt, now) },
 		launch: "not-declared",
@@ -122,10 +96,11 @@ function monashRoute(route: MonashRoute, evidence: Evidence, observations: Obser
 
 // ---- gates ----
 
-/** Unknown or stale evidence on a personal route asks Nathan (D4, D5); on any other route it refuses. */
-function uncertain(route: Route, gate: GateId, evidence: "unknown" | "stale", reason: string): GateResult {
+/** Unknown evidence on a personal route asks Nathan (D4, D5); on any other route it refuses. */
+function uncertain(route: Route, gate: GateId, reason: string): GateResult {
 	const personal = route.account.ownership === "personal"
-	return { gate, verdict: personal ? "confirm" : "refuse", evidence, reason: personal ? `${reason}; Nathan must confirm` : `${reason}; ${route.account.ownership === "employer" ? "an" : "a"} ${route.account.ownership} route never launches on it` }
+	const article = route.account.ownership === "employer" ? "an" : "a"
+	return { gate, verdict: personal ? "confirm" : "refuse", evidence: "unknown", reason: personal ? `${reason}; Nathan must confirm` : `${reason}; ${article} ${route.account.ownership} route never launches on it` }
 }
 
 function gateModel(route: Route): GateResult {
@@ -137,7 +112,7 @@ function gateModel(route: Route): GateResult {
 function gateDeclaredHost(route: Route, evidence: Evidence): GateResult {
 	const harness = evidence.harnesses[route.harness]
 	if (harness?.status !== "observed") return { gate: "G2", verdict: "refuse", evidence: "unknown", reason: `${route.harness} is ${harness?.status ?? "not-found"} on this host (${harness?.source ?? "--version"})` }
-	if (evidence.host.role === null) return uncertain(route, "G2", "unknown", `this host's role is unknown: ${evidence.host.reason}`)
+	if (evidence.host.role === null) return uncertain(route, "G2", `this host's role is unknown: ${evidence.host.reason}`)
 	if (!route.hosts.declared.includes(evidence.host.role)) {
 		return { gate: "G2", verdict: "refuse", evidence: "observed", reason: `declared for ${route.hosts.declared.join(", ")}, but this host is ${evidence.host.role}` }
 	}
@@ -147,28 +122,22 @@ function gateDeclaredHost(route: Route, evidence: Evidence): GateResult {
 function gateMonashAvailability(route: Route): GateResult {
 	const availability = route.availability
 	if (availability === null || availability.state !== "available") return { gate: "G2", verdict: "refuse", evidence: "observed", reason: `the snapshot reports ${availability?.state ?? "no"} availability` }
-	if (availability.freshness.state === "stale") {
-		return { gate: "G2", verdict: "refuse", evidence: "stale", reason: `available per a snapshot ${availability.freshness.ageDays} days old (over ${FRESHNESS_DAYS}); stale evidence blocks launch` }
+	const fresh = availability.freshness
+	if (fresh.state === "invalid") return { gate: "G2", verdict: "refuse", evidence: "unknown", reason: `the snapshot timestamp ${fresh.observedAt} is in the future or unreadable, so it is not evidence` }
+	if (fresh.state === "stale") {
+		return { gate: "G2", verdict: "refuse", evidence: "stale", reason: `available per a snapshot ${fresh.ageDays} days old (older than ${FRESHNESS_DAYS} days); stale evidence blocks launch` }
 	}
-	return { gate: "G2", verdict: "pass", evidence: "observed", reason: `available per the snapshot of ${availability.freshness.observedAt}` }
+	return { gate: "G2", verdict: "pass", evidence: "observed", reason: `available per the snapshot of ${fresh.observedAt}` }
 }
 
 function gateAccount(route: Route): GateResult {
 	const label = route.account.alias === null ? `${route.account.ownership} account` : `declared alias ${route.account.alias}`
-	if (route.account.proof === "verified") return { gate: "G3", verdict: "pass", evidence: "observed", reason: `observed identity matches ${label}` }
-	if (route.account.proof === "mismatch") return { gate: "G3", verdict: "refuse", evidence: "observed", reason: `observed identity does not match ${label}` }
-	if (route.account.proof === "stale") return uncertain(route, "G3", "stale", `identity evidence for ${label} is ${route.account.freshness.ageDays} days old`)
-	return uncertain(route, "G3", "unknown", `identity unknown for ${label}; a login is not proof`)
+	return uncertain(route, "G3", `identity unknown for ${label}; no owner observes identity yet and a login is not proof`)
 }
 
 function gateQuota(route: Route): GateResult {
-	if (route.origin === "monash-snapshot" && route.quota.state === "unknown") {
-		return { gate: "G4", verdict: "refuse", evidence: "unknown", reason: "Monash reserve is refused until a supported usage source exists" }
-	}
-	if (route.quota.state === "exhausted" && route.quota.freshness.state === "fresh") return { gate: "G4", verdict: "refuse", evidence: "observed", reason: `quota exhausted per ${route.quota.source}` }
-	if (route.quota.freshness.state === "stale") return uncertain(route, "G4", "stale", `quota evidence is ${route.quota.freshness.ageDays} days old`)
-	if (route.quota.state === "unknown") return uncertain(route, "G4", "unknown", "quota unknown: no usage source observed")
-	return { gate: "G4", verdict: "pass", evidence: "observed", reason: `quota available per ${route.quota.source} (${route.quota.freshness.ageDays} days old)` }
+	if (route.origin === "monash-snapshot") return { gate: "G4", verdict: "refuse", evidence: "unknown", reason: "Monash reserve is refused until a supported usage source exists" }
+	return uncertain(route, "G4", "quota unknown: no usage source observed")
 }
 
 function versionAtLeast(version: string | null, minimum: string | null): boolean {
@@ -202,17 +171,18 @@ function gateQualification(route: Route, evidence: Evidence): GateResult {
 	return { gate: "G5", verdict: "pass", evidence: "observed", reason: `launch allowed; reviewed Model Guide ${guide.path}` }
 }
 
-function gates(route: Route, evidence: Evidence): GateResult[] {
-	const host = route.origin === "routes-file" ? gateDeclaredHost(route, evidence) : gateMonashAvailability(route)
-	return [gateModel(route), host, gateAccount(route), gateQuota(route), gateQualification(route, evidence)]
-}
-
 function judge(route: Route, evidence: Evidence) {
-	const results = gates(route, evidence)
+	const host = route.origin === "routes-file" ? gateDeclaredHost(route, evidence) : gateMonashAvailability(route)
+	const results = [gateModel(route), host, gateAccount(route), gateQuota(route), gateQualification(route, evidence)]
 	const refusal = results.find((result) => result.verdict === "refuse") ?? null
 	const confirmations = results.filter((result) => result.verdict === "confirm").map((result) => result.gate)
-	const decision = refusal !== null ? "refused" : confirmations.length > 0 ? "needs-confirmation" : "eligible"
-	return { ...route, gates: results, decision, refusal: refusal === null ? null : { gate: refusal.gate, reason: refusal.reason }, confirmations }
+	return {
+		...route,
+		gates: results,
+		decision: refusal === null ? "needs-confirmation" : "refused",
+		refusal: refusal === null ? null : { gate: refusal.gate, reason: refusal.reason },
+		confirmations,
+	}
 }
 
 type JudgedRoute = ReturnType<typeof judge>
@@ -227,26 +197,32 @@ function routeGaps(route: Route): Omit<Gap, "id" | "routes">[] {
 			: { field: "effort (observed)", reason: `declared ${route.effort.declared}; no inspect probe observes effort (D7)`, owner: "hpr-f5n.4 launch receipt" },
 	]
 	if (!monash) gaps.push({ field: "model (native setting)", reason: "declared only; launch must check the native setting (D2)", owner: "hpr-f5n.4 launch receipt" })
-	if (route.account.proof === "unknown" || route.account.proof === "stale") {
-		gaps.push({ field: "account proof", reason: `identity is ${route.account.proof}; no non-secret identity observation`, owner: monash ? "Monash CLI owner" : "a non-secret identity status source (harness owner)" })
-	}
-	if (route.quota.state === "unknown" || route.quota.freshness.state === "stale") {
-		gaps.push({ field: "quota", reason: route.quota.state === "unknown" ? "no usage source observed" : "quota evidence is stale", owner: monash ? "Monash CLI owner or Agent Router" : "a supported usage source" })
-	}
+	gaps.push({ field: "account proof", reason: "identity unknown; no owner observes identity yet", owner: monash ? "Monash CLI owner" : "a non-secret identity source observed at launch (hpr-f5n.4)" })
+	gaps.push({ field: "quota", reason: "no usage source observed", owner: monash ? "Monash CLI owner or Agent Router" : "a supported usage source" })
 	if (route.modelGuide.status !== "reviewed") {
 		gaps.push({ field: "model guide", reason: `${route.modelGuide.status}: no accepted guide for the exact harness and model`, owner: "Stage Manager skill guides (Code Reviewer acceptance)" })
 	}
-	if (route.hosts.unmappedEvidenceHosts > 0) gaps.push({ field: "qualification host", reason: "evidence names a host that maps to no host profile", owner: "Monash snapshot owner" })
+	if (route.hosts.unmappedEvidenceHosts > 0) {
+		gaps.push({ field: "qualification host", reason: "evidence names a host that is neither this host's role nor a declared host", owner: "Monash snapshot owner" })
+	}
 	return gaps
+}
+
+function snapshotGap(evidence: Evidence, now: number): Omit<Gap, "id"> | null {
+	if (evidence.monash.status !== "observed") return { routes: ["monash"], field: "Monash snapshot", reason: `snapshot ${evidence.monash.status}`, owner: "Monash CLI owner" }
+	const fresh = freshness(evidence.monash.snapshotObservedAt, now)
+	if (fresh.state === "stale") {
+		return { routes: ["monash"], field: "snapshot freshness", reason: `observed ${fresh.observedAt}, older than ${FRESHNESS_DAYS} days`, owner: "Nathan (monash models --refresh is outside this command)" }
+	}
+	if (fresh.state === "invalid") return { routes: ["monash"], field: "snapshot freshness", reason: `observed_at ${fresh.observedAt} is in the future or unreadable`, owner: "Monash CLI owner" }
+	return null
 }
 
 function sharedGaps(evidence: Evidence, now: number): Omit<Gap, "id">[] {
 	const gaps: Omit<Gap, "id">[] = []
 	if (evidence.host.role === null) gaps.push({ routes: ["all"], field: "this host's role", reason: evidence.host.reason, owner: "Monash Foundry installation manifest" })
-	if (evidence.monash.status !== "observed") gaps.push({ routes: ["monash"], field: "Monash snapshot", reason: `snapshot ${evidence.monash.status}`, owner: "Monash CLI owner" })
-	else if (freshness(evidence.monash.snapshotObservedAt, now).state === "stale") {
-		gaps.push({ routes: ["monash"], field: "snapshot freshness", reason: `observed ${evidence.monash.snapshotObservedAt}, older than ${FRESHNESS_DAYS} days`, owner: "Nathan (monash models --refresh is outside this command)" })
-	}
+	const snapshot = snapshotGap(evidence, now)
+	if (snapshot !== null) gaps.push(snapshot)
 	if (evidence.target.status !== "present") gaps.push({ routes: ["all"], field: "Herdr Projects target", reason: `target ${evidence.target.status}`, owner: "Stage Manager (--project and --herdr-projects-root)" })
 	return gaps
 }
@@ -269,38 +245,29 @@ function mergeGaps(routes: Route[], shared: Omit<Gap, "id">[]): Gap[] {
 function pick(routes: JudgedRoute[]) {
 	const candidates = routes.filter((route) => route.decision !== "refused")
 	const base = { provisional: true, typeSafe: "not-consulted", order: "routes file order, then Monash snapshot order" }
-	if (candidates.length === 0) return { ...base, status: "none-eligible", route: null, candidates: [], confirmations: [], modelGuideRevision: null }
 	const [only] = candidates
-	if (candidates.length > 1 || only === undefined) {
-		return { ...base, status: "ask", route: null, candidates: candidates.map((route) => route.id), confirmations: [], modelGuideRevision: null }
-	}
-	const status = only.decision === "eligible" ? "selected" : "needs-confirmation"
-	return { ...base, status, route: only.id, candidates: [only.id], confirmations: only.confirmations, modelGuideRevision: only.modelGuide.revision }
+	if (only === undefined) return { ...base, status: "none-eligible", route: null, candidates: [], confirmations: [], modelGuideRevision: null }
+	if (candidates.length > 1) return { ...base, status: "ask", route: null, candidates: candidates.map((route) => route.id), confirmations: [], modelGuideRevision: null }
+	return { ...base, status: "needs-confirmation", route: only.id, candidates: [only.id], confirmations: only.confirmations, modelGuideRevision: only.modelGuide.revision }
 }
 
 // ---- public builders ----
 
 export interface Inputs {
 	routesFile: RoutesFile
-	observationsFile: ObservationsFile
 	evidence: Evidence
 	now: number
 }
 
 function routesOf(inputs: Inputs): Route[] {
 	const { evidence, now } = inputs
-	const observations = inputs.observationsFile.observations
-	return [
-		...inputs.routesFile.routes.map((route) => declaredRoute(route, evidence, observations, now)),
-		...evidence.monash.routes.map((route) => monashRoute(route, evidence, observations, now)),
-	]
+	return [...inputs.routesFile.routes.map((route) => declaredRoute(route, evidence)), ...evidence.monash.routes.map((route) => monashRoute(route, evidence, now))]
 }
 
 function sources(inputs: Inputs) {
 	const { evidence, now } = inputs
 	return {
 		routesFile: { path: inputs.routesFile.path, status: inputs.routesFile.status },
-		observationsFile: { path: inputs.observationsFile.path, status: inputs.observationsFile.status },
 		monash: {
 			status: evidence.monash.status,
 			source: evidence.monash.source,

@@ -34,10 +34,10 @@ const AVAILABLE_PATHS = [
 	"agent-router.run",
 ]
 
-type Guidance = { nextAction: string } | { handoff: { owner: "human"; reason: string; inspect: string[] } }
+export type Guidance = { nextAction: string } | { handoff: { owner: "human"; reason: string; inspect: string[] } }
 
 /** A refusal or failure station. Cause, outcome, exit and retry policy agree with the Contract Core cause table. */
-interface Station {
+export interface Station {
 	causeCode: string
 	outcome: "refused" | "failed"
 	failureClass: "usage" | "domain" | "schema" | "internal" | "transient"
@@ -65,8 +65,8 @@ export const STATIONS = {
 		outcome: "refused",
 		failureClass: "schema",
 		exitCode: 4,
-		trigger: "An operand, option value or the observations file does not match its declared format.",
-		repairAction: "Pass a Beads Task identifier (never Task text) and well-formed option values, or repair the observations file.",
+		trigger: "An operand or option value does not match its declared format.",
+		repairAction: "Pass a Beads Task identifier (never Task text) and well-formed option values.",
 		guidance: { nextAction: "Read agent-router --help --json for each value format, then retry." },
 	},
 	routesInvalid: {
@@ -132,7 +132,7 @@ export const STATIONS = {
 		outcome: "failed",
 		failureClass: "internal",
 		exitCode: 1,
-		trigger: "The machine result cannot be serialized.",
+		trigger: "The result cannot be serialized, or the serialized value fails envelope validation.",
 		repairAction: "Inspect the serialization failure before retrying.",
 		guidance: { nextAction: "Inspect the runtime and retry the command." },
 	},
@@ -141,7 +141,7 @@ export const STATIONS = {
 		outcome: "failed",
 		failureClass: "internal",
 		exitCode: 1,
-		trigger: "The result output cannot be emitted.",
+		trigger: "stdout cannot be written. Machine mode then emits no envelope and nothing on stderr; human mode prints this repair on stderr.",
 		repairAction: "Inspect the output stream before retrying.",
 		guidance: { nextAction: "Inspect the output stream and retry the command." },
 	},
@@ -150,61 +150,178 @@ export const STATIONS = {
 export type StationKey = keyof typeof STATIONS
 
 const COMMAND_STATIONS: Record<CommandIdentity, readonly StationKey[]> = {
-	"agent-router.routes": ["malformedInput", "routesInvalid", "probeTimeout", "inputUnreadable", "serialization", "emission"],
+	"agent-router.routes": ["usage", "malformedInput", "routesInvalid", "probeTimeout", "inputUnreadable", "serialization", "emission"],
 	"agent-router.run": ["usage", "malformedInput", "routesInvalid", "routesMissing", "launchRefused", "probeTimeout", "inputUnreadable", "serialization", "emission"],
 }
 
 const SUCCESS_TRIGGERS: Record<CommandIdentity, string> = {
 	"agent-router.routes": "The route inventory completes; unknown or stale evidence is reported, never hidden.",
-	"agent-router.run": "The dry-run card completes; its pick is selected, needs-confirmation, ask or none-eligible.",
+	"agent-router.run": "The dry-run card completes; its pick is needs-confirmation, ask or none-eligible.",
 }
 
-function effects() {
+export type Handoff = { owner: "human"; reason: string; inspect: string[] }
+export type Effects = { completed: []; inventoryComplete: true; remaining: []; uncertain: [] }
+
+export interface ResultBase {
+	runId: string
+	commandIdentity: CommandIdentity | ControlIdentity
+	effectClass: "inspect"
+	transactionState: "unchanged"
+	effects: Effects
+}
+
+export interface SuccessResult extends ResultBase {
+	outcome: "success"
+	causeCode: "SUCCESS_UNCHANGED"
+	failureClass: null
+	exitCode: 0
+	data: unknown
+	retryable: false
+	repairAction: null
+	nextAction: string
+}
+
+export type StationArm = ResultBase & {
+	outcome: Station["outcome"]
+	causeCode: string
+	failureClass: Station["failureClass"]
+	exitCode: Station["exitCode"]
+	data: null
+	repairAction: string
+} & ({ retryable: false } | { retryable: true; retryDelayMilliseconds: number }) &
+	({ nextAction: string } | { handoff: Handoff })
+
+export interface Envelope {
+	envelopeVersion: 2
+	contractVersion: typeof CONTRACT_VERSION
+	message: string
+	availablePaths: string[]
+	result: SuccessResult | StationArm
+}
+
+function effects(): Effects {
 	return { completed: [], inventoryComplete: true, remaining: [], uncertain: [] }
 }
 
-function envelope(message: string, result: Record<string, unknown>) {
-	return { envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message, availablePaths: AVAILABLE_PATHS, result }
-}
-
-export type Envelope = ReturnType<typeof envelope>
-
 export function success(commandIdentity: CommandIdentity | ControlIdentity, data: unknown, message: string, nextAction: string): Envelope {
-	return envelope(message, {
-		runId: randomUUID(),
-		commandIdentity,
-		outcome: "success",
-		effectClass: "inspect",
-		transactionState: "unchanged",
-		causeCode: "SUCCESS_UNCHANGED",
-		failureClass: null,
-		exitCode: 0,
-		data,
-		retryable: false,
-		repairAction: null,
-		effects: effects(),
-		nextAction,
-	})
+	return {
+		envelopeVersion: 2,
+		contractVersion: CONTRACT_VERSION,
+		message,
+		availablePaths: AVAILABLE_PATHS,
+		result: {
+			runId: randomUUID(),
+			commandIdentity,
+			outcome: "success",
+			effectClass: "inspect",
+			transactionState: "unchanged",
+			causeCode: "SUCCESS_UNCHANGED",
+			failureClass: null,
+			exitCode: 0,
+			data,
+			retryable: false,
+			repairAction: null,
+			effects: effects(),
+			nextAction,
+		},
+	}
 }
 
 export function stationResult(commandIdentity: CommandIdentity | ControlIdentity, key: StationKey, message: string): Envelope {
 	const station: Station = STATIONS[key]
-	const retry = station.retryDelayMilliseconds === undefined ? { retryable: false } : { retryable: true, retryDelayMilliseconds: station.retryDelayMilliseconds }
-	return envelope(message, {
-		runId: randomUUID(),
-		commandIdentity,
-		outcome: station.outcome,
-		effectClass: "inspect",
-		transactionState: "unchanged",
-		causeCode: station.causeCode,
-		failureClass: station.failureClass,
-		exitCode: station.exitCode,
-		data: null,
-		...retry,
-		repairAction: station.repairAction,
-		effects: effects(),
-		...station.guidance,
-	})
+	const retry = station.retryDelayMilliseconds === undefined ? { retryable: false as const } : { retryable: true as const, retryDelayMilliseconds: station.retryDelayMilliseconds }
+	return {
+		envelopeVersion: 2,
+		contractVersion: CONTRACT_VERSION,
+		message,
+		availablePaths: AVAILABLE_PATHS,
+		result: {
+			runId: randomUUID(),
+			commandIdentity,
+			outcome: station.outcome,
+			effectClass: "inspect",
+			transactionState: "unchanged",
+			causeCode: station.causeCode,
+			failureClass: station.failureClass,
+			exitCode: station.exitCode,
+			data: null,
+			...retry,
+			repairAction: station.repairAction,
+			effects: effects(),
+			...station.guidance,
+		},
+	}
+}
+
+// ---- validated serialization ----
+
+type Json = Record<string, unknown>
+
+const IDENTITIES: readonly string[] = COMMANDS.map((command) => command.commandIdentity)
+const ENVELOPE_KEYS = ["availablePaths", "contractVersion", "envelopeVersion", "message", "result"]
+const BASE_RESULT_KEYS = ["causeCode", "commandIdentity", "data", "effectClass", "effects", "exitCode", "failureClass", "outcome", "repairAction", "retryable", "runId", "transactionState"]
+
+function isRecord(value: unknown): value is Json {
+	return typeof value === "object" && value !== null && !Array.isArray(value)
+}
+
+function nonblank(value: unknown): boolean {
+	return typeof value === "string" && value.trim() !== ""
+}
+
+function sameKeys(value: Json, keys: string[]): boolean {
+	return JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort())
+}
+
+function envelopeHolds(value: Json): boolean {
+	const paths = value.availablePaths
+	if (!sameKeys(value, ENVELOPE_KEYS) || value.envelopeVersion !== 2 || value.contractVersion !== CONTRACT_VERSION || !nonblank(value.message)) return false
+	if (!Array.isArray(paths) || !paths.every((path) => typeof path === "string" && IDENTITIES.includes(path))) return false
+	return JSON.stringify(paths) === JSON.stringify([...new Set(paths)].sort())
+}
+
+function baseHolds(result: Json): boolean {
+	const effects = result.effects
+	if (!nonblank(result.runId) || !IDENTITIES.includes(String(result.commandIdentity))) return false
+	if (result.effectClass !== "inspect" || result.transactionState !== "unchanged" || !isRecord(effects)) return false
+	return JSON.stringify(effects) === JSON.stringify({ completed: [], inventoryComplete: true, remaining: [], uncertain: [] })
+}
+
+function successHolds(result: Json): boolean {
+	if (!sameKeys(result, [...BASE_RESULT_KEYS, "nextAction"]) || !nonblank(result.nextAction)) return false
+	return result.causeCode === "SUCCESS_UNCHANGED" && result.failureClass === null && result.exitCode === 0 && result.retryable === false && result.repairAction === null
+}
+
+function handoffHolds(value: unknown): boolean {
+	if (!isRecord(value) || !sameKeys(value, ["inspect", "owner", "reason"]) || value.owner !== "human" || !nonblank(value.reason)) return false
+	return Array.isArray(value.inspect) && value.inspect.length > 0 && value.inspect.every(nonblank)
+}
+
+/** A refusal or failure row must match its declared station exactly: cause, outcome, class, exit, retry and guidance arm. */
+function stationHolds(result: Json): boolean {
+	const station: Station | undefined = Object.values(STATIONS).find((entry: Station) => entry.causeCode === result.causeCode)
+	if (station === undefined || result.data !== null || result.repairAction !== station.repairAction) return false
+	if (result.outcome !== station.outcome || result.failureClass !== station.failureClass || result.exitCode !== station.exitCode) return false
+	const retryKeys = station.retryDelayMilliseconds === undefined ? [] : ["retryDelayMilliseconds"]
+	if (result.retryable !== (station.retryDelayMilliseconds !== undefined) || result.retryDelayMilliseconds !== station.retryDelayMilliseconds) return false
+	const guidance = "handoff" in station.guidance ? "handoff" : "nextAction"
+	if (!sameKeys(result, [...BASE_RESULT_KEYS, ...retryKeys, guidance])) return false
+	return guidance === "handoff" ? handoffHolds(result.handoff) : nonblank(result.nextAction)
+}
+
+function envelopeValid(value: unknown): boolean {
+	if (!isRecord(value) || !envelopeHolds(value) || !isRecord(value.result) || !baseHolds(value.result)) return false
+	return value.result.outcome === "success" ? successHolds(value.result) : stationHolds(value.result)
+}
+
+/** Serializes, then validates the complete serialized value against the correlated result arms. Null means unsafe. */
+export function serializeEnvelope(envelope: Envelope): string | null {
+	try {
+		const text = JSON.stringify(envelope)
+		return typeof text === "string" && envelopeValid(JSON.parse(text)) ? `${text}\n` : null
+	} catch {
+		return null
+	}
 }
 
 export function discoveryData() {

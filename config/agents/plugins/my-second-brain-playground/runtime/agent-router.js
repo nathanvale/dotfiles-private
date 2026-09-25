@@ -1,11 +1,22 @@
 // @bun
 // packages/agent-router/src/cli.ts
-import { homedir } from "os";
+import { homedir as homedir2 } from "os";
 import { isAbsolute, join as join2, resolve } from "path";
 
-// packages/agent-router/src/card.ts
+// packages/agent-router/src/freshness.ts
 var FRESHNESS_DAYS = 7;
 var DAY_MILLISECONDS = 86400000;
+var LIMIT_MILLISECONDS = FRESHNESS_DAYS * DAY_MILLISECONDS;
+function freshness(observedAt, now) {
+  if (observedAt === null)
+    return { state: "not-observed", observedAt: null, ageDays: null };
+  const elapsed = now - Date.parse(observedAt);
+  if (Number.isNaN(elapsed) || elapsed < 0)
+    return { state: "invalid", observedAt, ageDays: null };
+  return { state: elapsed > LIMIT_MILLISECONDS ? "stale" : "fresh", observedAt, ageDays: Math.floor(elapsed / DAY_MILLISECONDS) };
+}
+
+// packages/agent-router/src/card.ts
 var GATE_ORDER = [
   { gate: "G1", name: "model listed" },
   { gate: "G2", name: "available on host" },
@@ -13,33 +24,11 @@ var GATE_ORDER = [
   { gate: "G4", name: "quota and reserve" },
   { gate: "G5", name: "route qualification" }
 ];
-function freshness(observedAt, now) {
-  if (observedAt === null)
-    return { state: "not-observed", observedAt: null, ageDays: null };
-  const ageDays = Math.floor((now - Date.parse(observedAt)) / DAY_MILLISECONDS);
-  return { state: ageDays > FRESHNESS_DAYS ? "stale" : "fresh", observedAt, ageDays };
-}
-function latest(observations, route, kind) {
-  const matching = observations.filter((entry) => entry.route === route && entry.kind === kind);
-  return matching.sort((left, right) => Date.parse(right.observedAt) - Date.parse(left.observedAt))[0] ?? null;
-}
-function accountFacts(declared, observed, now) {
-  const fresh = freshness(observed?.observedAt ?? null, now);
-  if (observed === null)
-    return { ...declared, proof: "unknown", freshness: fresh };
-  if (fresh.state === "stale")
-    return { ...declared, proof: "stale", freshness: fresh };
-  return { ...declared, proof: observed.observedAlias === declared.alias ? "verified" : "mismatch", freshness: fresh };
-}
-function quotaFacts(observed, now) {
-  if (observed === null)
-    return { state: "unknown", source: null, freshness: freshness(null, now) };
-  return { state: observed.state ?? "unknown", source: observed.source, freshness: freshness(observed.observedAt, now) };
-}
 function guideFacts(guide) {
   return { status: guide.status, path: guide.path, revision: guide.status === "reviewed" ? guide.sha256 : null };
 }
-function declaredRoute(route, evidence, observations, now) {
+var UNKNOWN_QUOTA = { state: "unknown", freshness: { state: "not-observed", observedAt: null, ageDays: null } };
+function declaredRoute(route, evidence) {
   const harness = evidence.harnesses[route.harness];
   return {
     id: route.id,
@@ -48,8 +37,8 @@ function declaredRoute(route, evidence, observations, now) {
     harnessVersion: harness?.version ?? null,
     model: { id: route.model.id, alias: route.model.alias ?? null, listedBy: "routes file declaration" },
     effort: { declared: route.effort, observed: "unknown" },
-    account: accountFacts({ alias: route.account.alias, ownership: route.account.ownership, plan: route.account.plan ?? null }, latest(observations, route.id, "account"), now),
-    quota: quotaFacts(latest(observations, route.id, "quota"), now),
+    account: { alias: route.account.alias, ownership: route.account.ownership, plan: route.account.plan ?? null, proof: "unknown" },
+    quota: UNKNOWN_QUOTA,
     hosts: { declared: route.hosts, qualified: [], unmappedEvidenceHosts: 0 },
     availability: null,
     launch: route.launch,
@@ -57,7 +46,7 @@ function declaredRoute(route, evidence, observations, now) {
     modelGuide: guideFacts(evidence.guide(route.harness, route.model.id))
   };
 }
-function monashRoute(route, evidence, observations, now) {
+function monashRoute(route, evidence, now) {
   return {
     id: route.id,
     origin: "monash-snapshot",
@@ -65,8 +54,8 @@ function monashRoute(route, evidence, observations, now) {
     harnessVersion: evidence.harnesses[route.harness]?.version ?? null,
     model: { id: route.modelId, alias: null, listedBy: "Monash snapshot" },
     effort: { declared: null, observed: "unknown" },
-    account: accountFacts({ alias: null, ownership: "employer", plan: null }, latest(observations, route.id, "account"), now),
-    quota: quotaFacts(latest(observations, route.id, "quota"), now),
+    account: { alias: null, ownership: "employer", plan: null, proof: "unknown" },
+    quota: UNKNOWN_QUOTA,
     hosts: { declared: [], qualified: route.qualifiedHosts, unmappedEvidenceHosts: route.unmappedEvidenceHosts },
     availability: { state: route.availability, freshness: freshness(evidence.monash.snapshotObservedAt, now) },
     launch: "not-declared",
@@ -74,9 +63,10 @@ function monashRoute(route, evidence, observations, now) {
     modelGuide: guideFacts(evidence.guide(route.harness, route.modelId))
   };
 }
-function uncertain(route, gate, evidence, reason) {
+function uncertain(route, gate, reason) {
   const personal = route.account.ownership === "personal";
-  return { gate, verdict: personal ? "confirm" : "refuse", evidence, reason: personal ? `${reason}; Nathan must confirm` : `${reason}; ${route.account.ownership === "employer" ? "an" : "a"} ${route.account.ownership} route never launches on it` };
+  const article = route.account.ownership === "employer" ? "an" : "a";
+  return { gate, verdict: personal ? "confirm" : "refuse", evidence: "unknown", reason: personal ? `${reason}; Nathan must confirm` : `${reason}; ${article} ${route.account.ownership} route never launches on it` };
 }
 function gateModel(route) {
   const alias = route.model.alias === null ? "" : ` (alias ${route.model.alias})`;
@@ -88,7 +78,7 @@ function gateDeclaredHost(route, evidence) {
   if (harness?.status !== "observed")
     return { gate: "G2", verdict: "refuse", evidence: "unknown", reason: `${route.harness} is ${harness?.status ?? "not-found"} on this host (${harness?.source ?? "--version"})` };
   if (evidence.host.role === null)
-    return uncertain(route, "G2", "unknown", `this host's role is unknown: ${evidence.host.reason}`);
+    return uncertain(route, "G2", `this host's role is unknown: ${evidence.host.reason}`);
   if (!route.hosts.declared.includes(evidence.host.role)) {
     return { gate: "G2", verdict: "refuse", evidence: "observed", reason: `declared for ${route.hosts.declared.join(", ")}, but this host is ${evidence.host.role}` };
   }
@@ -98,32 +88,22 @@ function gateMonashAvailability(route) {
   const availability = route.availability;
   if (availability === null || availability.state !== "available")
     return { gate: "G2", verdict: "refuse", evidence: "observed", reason: `the snapshot reports ${availability?.state ?? "no"} availability` };
-  if (availability.freshness.state === "stale") {
-    return { gate: "G2", verdict: "refuse", evidence: "stale", reason: `available per a snapshot ${availability.freshness.ageDays} days old (over ${FRESHNESS_DAYS}); stale evidence blocks launch` };
+  const fresh = availability.freshness;
+  if (fresh.state === "invalid")
+    return { gate: "G2", verdict: "refuse", evidence: "unknown", reason: `the snapshot timestamp ${fresh.observedAt} is in the future or unreadable, so it is not evidence` };
+  if (fresh.state === "stale") {
+    return { gate: "G2", verdict: "refuse", evidence: "stale", reason: `available per a snapshot ${fresh.ageDays} days old (older than ${FRESHNESS_DAYS} days); stale evidence blocks launch` };
   }
-  return { gate: "G2", verdict: "pass", evidence: "observed", reason: `available per the snapshot of ${availability.freshness.observedAt}` };
+  return { gate: "G2", verdict: "pass", evidence: "observed", reason: `available per the snapshot of ${fresh.observedAt}` };
 }
 function gateAccount(route) {
   const label = route.account.alias === null ? `${route.account.ownership} account` : `declared alias ${route.account.alias}`;
-  if (route.account.proof === "verified")
-    return { gate: "G3", verdict: "pass", evidence: "observed", reason: `observed identity matches ${label}` };
-  if (route.account.proof === "mismatch")
-    return { gate: "G3", verdict: "refuse", evidence: "observed", reason: `observed identity does not match ${label}` };
-  if (route.account.proof === "stale")
-    return uncertain(route, "G3", "stale", `identity evidence for ${label} is ${route.account.freshness.ageDays} days old`);
-  return uncertain(route, "G3", "unknown", `identity unknown for ${label}; a login is not proof`);
+  return uncertain(route, "G3", `identity unknown for ${label}; no owner observes identity yet and a login is not proof`);
 }
 function gateQuota(route) {
-  if (route.origin === "monash-snapshot" && route.quota.state === "unknown") {
+  if (route.origin === "monash-snapshot")
     return { gate: "G4", verdict: "refuse", evidence: "unknown", reason: "Monash reserve is refused until a supported usage source exists" };
-  }
-  if (route.quota.state === "exhausted" && route.quota.freshness.state === "fresh")
-    return { gate: "G4", verdict: "refuse", evidence: "observed", reason: `quota exhausted per ${route.quota.source}` };
-  if (route.quota.freshness.state === "stale")
-    return uncertain(route, "G4", "stale", `quota evidence is ${route.quota.freshness.ageDays} days old`);
-  if (route.quota.state === "unknown")
-    return uncertain(route, "G4", "unknown", "quota unknown: no usage source observed");
-  return { gate: "G4", verdict: "pass", evidence: "observed", reason: `quota available per ${route.quota.source} (${route.quota.freshness.ageDays} days old)` };
+  return uncertain(route, "G4", "quota unknown: no usage source observed");
 }
 function versionAtLeast(version, minimum) {
   if (minimum === null)
@@ -162,16 +142,18 @@ function gateQualification(route, evidence) {
     return { gate: "G5", verdict: "refuse", evidence: guide.status === "reviewed" ? "observed" : "unknown", reason: problems.join("; ") };
   return { gate: "G5", verdict: "pass", evidence: "observed", reason: `launch allowed; reviewed Model Guide ${guide.path}` };
 }
-function gates(route, evidence) {
-  const host = route.origin === "routes-file" ? gateDeclaredHost(route, evidence) : gateMonashAvailability(route);
-  return [gateModel(route), host, gateAccount(route), gateQuota(route), gateQualification(route, evidence)];
-}
 function judge(route, evidence) {
-  const results = gates(route, evidence);
+  const host = route.origin === "routes-file" ? gateDeclaredHost(route, evidence) : gateMonashAvailability(route);
+  const results = [gateModel(route), host, gateAccount(route), gateQuota(route), gateQualification(route, evidence)];
   const refusal = results.find((result) => result.verdict === "refuse") ?? null;
   const confirmations = results.filter((result) => result.verdict === "confirm").map((result) => result.gate);
-  const decision = refusal !== null ? "refused" : confirmations.length > 0 ? "needs-confirmation" : "eligible";
-  return { ...route, gates: results, decision, refusal: refusal === null ? null : { gate: refusal.gate, reason: refusal.reason }, confirmations };
+  return {
+    ...route,
+    gates: results,
+    decision: refusal === null ? "needs-confirmation" : "refused",
+    refusal: refusal === null ? null : { gate: refusal.gate, reason: refusal.reason },
+    confirmations
+  };
 }
 function routeGaps(route) {
   const monash = route.origin === "monash-snapshot";
@@ -180,28 +162,34 @@ function routeGaps(route) {
   ];
   if (!monash)
     gaps.push({ field: "model (native setting)", reason: "declared only; launch must check the native setting (D2)", owner: "hpr-f5n.4 launch receipt" });
-  if (route.account.proof === "unknown" || route.account.proof === "stale") {
-    gaps.push({ field: "account proof", reason: `identity is ${route.account.proof}; no non-secret identity observation`, owner: monash ? "Monash CLI owner" : "a non-secret identity status source (harness owner)" });
-  }
-  if (route.quota.state === "unknown" || route.quota.freshness.state === "stale") {
-    gaps.push({ field: "quota", reason: route.quota.state === "unknown" ? "no usage source observed" : "quota evidence is stale", owner: monash ? "Monash CLI owner or Agent Router" : "a supported usage source" });
-  }
+  gaps.push({ field: "account proof", reason: "identity unknown; no owner observes identity yet", owner: monash ? "Monash CLI owner" : "a non-secret identity source observed at launch (hpr-f5n.4)" });
+  gaps.push({ field: "quota", reason: "no usage source observed", owner: monash ? "Monash CLI owner or Agent Router" : "a supported usage source" });
   if (route.modelGuide.status !== "reviewed") {
     gaps.push({ field: "model guide", reason: `${route.modelGuide.status}: no accepted guide for the exact harness and model`, owner: "Stage Manager skill guides (Code Reviewer acceptance)" });
   }
-  if (route.hosts.unmappedEvidenceHosts > 0)
-    gaps.push({ field: "qualification host", reason: "evidence names a host that maps to no host profile", owner: "Monash snapshot owner" });
+  if (route.hosts.unmappedEvidenceHosts > 0) {
+    gaps.push({ field: "qualification host", reason: "evidence names a host that is neither this host's role nor a declared host", owner: "Monash snapshot owner" });
+  }
   return gaps;
+}
+function snapshotGap(evidence, now) {
+  if (evidence.monash.status !== "observed")
+    return { routes: ["monash"], field: "Monash snapshot", reason: `snapshot ${evidence.monash.status}`, owner: "Monash CLI owner" };
+  const fresh = freshness(evidence.monash.snapshotObservedAt, now);
+  if (fresh.state === "stale") {
+    return { routes: ["monash"], field: "snapshot freshness", reason: `observed ${fresh.observedAt}, older than ${FRESHNESS_DAYS} days`, owner: "Nathan (monash models --refresh is outside this command)" };
+  }
+  if (fresh.state === "invalid")
+    return { routes: ["monash"], field: "snapshot freshness", reason: `observed_at ${fresh.observedAt} is in the future or unreadable`, owner: "Monash CLI owner" };
+  return null;
 }
 function sharedGaps(evidence, now) {
   const gaps = [];
   if (evidence.host.role === null)
     gaps.push({ routes: ["all"], field: "this host's role", reason: evidence.host.reason, owner: "Monash Foundry installation manifest" });
-  if (evidence.monash.status !== "observed")
-    gaps.push({ routes: ["monash"], field: "Monash snapshot", reason: `snapshot ${evidence.monash.status}`, owner: "Monash CLI owner" });
-  else if (freshness(evidence.monash.snapshotObservedAt, now).state === "stale") {
-    gaps.push({ routes: ["monash"], field: "snapshot freshness", reason: `observed ${evidence.monash.snapshotObservedAt}, older than ${FRESHNESS_DAYS} days`, owner: "Nathan (monash models --refresh is outside this command)" });
-  }
+  const snapshot = snapshotGap(evidence, now);
+  if (snapshot !== null)
+    gaps.push(snapshot);
   if (evidence.target.status !== "present")
     gaps.push({ routes: ["all"], field: "Herdr Projects target", reason: `target ${evidence.target.status}`, owner: "Stage Manager (--project and --herdr-projects-root)" });
   return gaps;
@@ -223,28 +211,21 @@ function mergeGaps(routes, shared) {
 function pick(routes) {
   const candidates = routes.filter((route) => route.decision !== "refused");
   const base = { provisional: true, typeSafe: "not-consulted", order: "routes file order, then Monash snapshot order" };
-  if (candidates.length === 0)
-    return { ...base, status: "none-eligible", route: null, candidates: [], confirmations: [], modelGuideRevision: null };
   const [only] = candidates;
-  if (candidates.length > 1 || only === undefined) {
+  if (only === undefined)
+    return { ...base, status: "none-eligible", route: null, candidates: [], confirmations: [], modelGuideRevision: null };
+  if (candidates.length > 1)
     return { ...base, status: "ask", route: null, candidates: candidates.map((route) => route.id), confirmations: [], modelGuideRevision: null };
-  }
-  const status = only.decision === "eligible" ? "selected" : "needs-confirmation";
-  return { ...base, status, route: only.id, candidates: [only.id], confirmations: only.confirmations, modelGuideRevision: only.modelGuide.revision };
+  return { ...base, status: "needs-confirmation", route: only.id, candidates: [only.id], confirmations: only.confirmations, modelGuideRevision: only.modelGuide.revision };
 }
 function routesOf(inputs) {
   const { evidence, now } = inputs;
-  const observations = inputs.observationsFile.observations;
-  return [
-    ...inputs.routesFile.routes.map((route) => declaredRoute(route, evidence, observations, now)),
-    ...evidence.monash.routes.map((route) => monashRoute(route, evidence, observations, now))
-  ];
+  return [...inputs.routesFile.routes.map((route) => declaredRoute(route, evidence)), ...evidence.monash.routes.map((route) => monashRoute(route, evidence, now))];
 }
 function sources(inputs) {
   const { evidence, now } = inputs;
   return {
     routesFile: { path: inputs.routesFile.path, status: inputs.routesFile.status },
-    observationsFile: { path: inputs.observationsFile.path, status: inputs.observationsFile.status },
     monash: {
       status: evidence.monash.status,
       source: evidence.monash.source,
@@ -321,8 +302,8 @@ var STATIONS = {
     outcome: "refused",
     failureClass: "schema",
     exitCode: 4,
-    trigger: "An operand, option value or the observations file does not match its declared format.",
-    repairAction: "Pass a Beads Task identifier (never Task text) and well-formed option values, or repair the observations file.",
+    trigger: "An operand or option value does not match its declared format.",
+    repairAction: "Pass a Beads Task identifier (never Task text) and well-formed option values.",
     guidance: { nextAction: "Read agent-router --help --json for each value format, then retry." }
   },
   routesInvalid: {
@@ -388,7 +369,7 @@ var STATIONS = {
     outcome: "failed",
     failureClass: "internal",
     exitCode: 1,
-    trigger: "The machine result cannot be serialized.",
+    trigger: "The result cannot be serialized, or the serialized value fails envelope validation.",
     repairAction: "Inspect the serialization failure before retrying.",
     guidance: { nextAction: "Inspect the runtime and retry the command." }
   },
@@ -397,60 +378,135 @@ var STATIONS = {
     outcome: "failed",
     failureClass: "internal",
     exitCode: 1,
-    trigger: "The result output cannot be emitted.",
+    trigger: "stdout cannot be written. Machine mode then emits no envelope and nothing on stderr; human mode prints this repair on stderr.",
     repairAction: "Inspect the output stream before retrying.",
     guidance: { nextAction: "Inspect the output stream and retry the command." }
   }
 };
 var COMMAND_STATIONS = {
-  "agent-router.routes": ["malformedInput", "routesInvalid", "probeTimeout", "inputUnreadable", "serialization", "emission"],
+  "agent-router.routes": ["usage", "malformedInput", "routesInvalid", "probeTimeout", "inputUnreadable", "serialization", "emission"],
   "agent-router.run": ["usage", "malformedInput", "routesInvalid", "routesMissing", "launchRefused", "probeTimeout", "inputUnreadable", "serialization", "emission"]
 };
 var SUCCESS_TRIGGERS = {
   "agent-router.routes": "The route inventory completes; unknown or stale evidence is reported, never hidden.",
-  "agent-router.run": "The dry-run card completes; its pick is selected, needs-confirmation, ask or none-eligible."
+  "agent-router.run": "The dry-run card completes; its pick is needs-confirmation, ask or none-eligible."
 };
 function effects() {
   return { completed: [], inventoryComplete: true, remaining: [], uncertain: [] };
 }
-function envelope(message, result) {
-  return { envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message, availablePaths: AVAILABLE_PATHS, result };
-}
 function success(commandIdentity, data, message, nextAction) {
-  return envelope(message, {
-    runId: randomUUID(),
-    commandIdentity,
-    outcome: "success",
-    effectClass: "inspect",
-    transactionState: "unchanged",
-    causeCode: "SUCCESS_UNCHANGED",
-    failureClass: null,
-    exitCode: 0,
-    data,
-    retryable: false,
-    repairAction: null,
-    effects: effects(),
-    nextAction
-  });
+  return {
+    envelopeVersion: 2,
+    contractVersion: CONTRACT_VERSION,
+    message,
+    availablePaths: AVAILABLE_PATHS,
+    result: {
+      runId: randomUUID(),
+      commandIdentity,
+      outcome: "success",
+      effectClass: "inspect",
+      transactionState: "unchanged",
+      causeCode: "SUCCESS_UNCHANGED",
+      failureClass: null,
+      exitCode: 0,
+      data,
+      retryable: false,
+      repairAction: null,
+      effects: effects(),
+      nextAction
+    }
+  };
 }
 function stationResult(commandIdentity, key, message) {
   const station = STATIONS[key];
   const retry = station.retryDelayMilliseconds === undefined ? { retryable: false } : { retryable: true, retryDelayMilliseconds: station.retryDelayMilliseconds };
-  return envelope(message, {
-    runId: randomUUID(),
-    commandIdentity,
-    outcome: station.outcome,
-    effectClass: "inspect",
-    transactionState: "unchanged",
-    causeCode: station.causeCode,
-    failureClass: station.failureClass,
-    exitCode: station.exitCode,
-    data: null,
-    ...retry,
-    repairAction: station.repairAction,
-    effects: effects(),
-    ...station.guidance
-  });
+  return {
+    envelopeVersion: 2,
+    contractVersion: CONTRACT_VERSION,
+    message,
+    availablePaths: AVAILABLE_PATHS,
+    result: {
+      runId: randomUUID(),
+      commandIdentity,
+      outcome: station.outcome,
+      effectClass: "inspect",
+      transactionState: "unchanged",
+      causeCode: station.causeCode,
+      failureClass: station.failureClass,
+      exitCode: station.exitCode,
+      data: null,
+      ...retry,
+      repairAction: station.repairAction,
+      effects: effects(),
+      ...station.guidance
+    }
+  };
+}
+var IDENTITIES = COMMANDS.map((command) => command.commandIdentity);
+var ENVELOPE_KEYS = ["availablePaths", "contractVersion", "envelopeVersion", "message", "result"];
+var BASE_RESULT_KEYS = ["causeCode", "commandIdentity", "data", "effectClass", "effects", "exitCode", "failureClass", "outcome", "repairAction", "retryable", "runId", "transactionState"];
+function isRecord(value) {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+function nonblank(value) {
+  return typeof value === "string" && value.trim() !== "";
+}
+function sameKeys(value, keys) {
+  return JSON.stringify(Object.keys(value).sort()) === JSON.stringify([...keys].sort());
+}
+function envelopeHolds(value) {
+  const paths = value.availablePaths;
+  if (!sameKeys(value, ENVELOPE_KEYS) || value.envelopeVersion !== 2 || value.contractVersion !== CONTRACT_VERSION || !nonblank(value.message))
+    return false;
+  if (!Array.isArray(paths) || !paths.every((path) => typeof path === "string" && IDENTITIES.includes(path)))
+    return false;
+  return JSON.stringify(paths) === JSON.stringify([...new Set(paths)].sort());
+}
+function baseHolds(result) {
+  const effects2 = result.effects;
+  if (!nonblank(result.runId) || !IDENTITIES.includes(String(result.commandIdentity)))
+    return false;
+  if (result.effectClass !== "inspect" || result.transactionState !== "unchanged" || !isRecord(effects2))
+    return false;
+  return JSON.stringify(effects2) === JSON.stringify({ completed: [], inventoryComplete: true, remaining: [], uncertain: [] });
+}
+function successHolds(result) {
+  if (!sameKeys(result, [...BASE_RESULT_KEYS, "nextAction"]) || !nonblank(result.nextAction))
+    return false;
+  return result.causeCode === "SUCCESS_UNCHANGED" && result.failureClass === null && result.exitCode === 0 && result.retryable === false && result.repairAction === null;
+}
+function handoffHolds(value) {
+  if (!isRecord(value) || !sameKeys(value, ["inspect", "owner", "reason"]) || value.owner !== "human" || !nonblank(value.reason))
+    return false;
+  return Array.isArray(value.inspect) && value.inspect.length > 0 && value.inspect.every(nonblank);
+}
+function stationHolds(result) {
+  const station = Object.values(STATIONS).find((entry) => entry.causeCode === result.causeCode);
+  if (station === undefined || result.data !== null || result.repairAction !== station.repairAction)
+    return false;
+  if (result.outcome !== station.outcome || result.failureClass !== station.failureClass || result.exitCode !== station.exitCode)
+    return false;
+  const retryKeys = station.retryDelayMilliseconds === undefined ? [] : ["retryDelayMilliseconds"];
+  if (result.retryable !== (station.retryDelayMilliseconds !== undefined) || result.retryDelayMilliseconds !== station.retryDelayMilliseconds)
+    return false;
+  const guidance = "handoff" in station.guidance ? "handoff" : "nextAction";
+  if (!sameKeys(result, [...BASE_RESULT_KEYS, ...retryKeys, guidance]))
+    return false;
+  return guidance === "handoff" ? handoffHolds(result.handoff) : nonblank(result.nextAction);
+}
+function envelopeValid(value) {
+  if (!isRecord(value) || !envelopeHolds(value) || !isRecord(value.result) || !baseHolds(value.result))
+    return false;
+  return value.result.outcome === "success" ? successHolds(value.result) : stationHolds(value.result);
+}
+function serializeEnvelope(envelope) {
+  try {
+    const text = JSON.stringify(envelope);
+    return typeof text === "string" && envelopeValid(JSON.parse(text)) ? `${text}
+` : null;
+  } catch {
+    return null;
+  }
 }
 function discoveryData() {
   return {
@@ -558,12 +614,6 @@ function choice(value, path, options) {
     throw new Invalid(`${path} must be one of ${options.join(", ")}`);
   return value;
 }
-function timestamp(value, path) {
-  if (typeof value !== "string" || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$/.test(value) || Number.isNaN(Date.parse(value))) {
-    throw new Invalid(`${path} must be a UTC ISO 8601 timestamp`);
-  }
-  return value;
-}
 function model(value, path) {
   const raw = record(value, path, { required: ["id"], optional: ["alias"] });
   const id = text(raw.id, `${path}.id`, IDENTIFIER);
@@ -607,31 +657,6 @@ function parseRoutes(value) {
     throw new Invalid(`route id ${repeated} is declared twice`);
   return routes;
 }
-function observation(value, path) {
-  const raw = record(value, path, { required: ["route", "kind", "observedAt", "source"], optional: ["observedAlias", "state"] });
-  const base = {
-    route: text(raw.route, `${path}.route`, IDENTIFIER),
-    kind: choice(raw.kind, `${path}.kind`, ["account", "quota"]),
-    observedAt: timestamp(raw.observedAt, `${path}.observedAt`),
-    source: text(raw.source, `${path}.source`, /^[A-Za-z0-9 ._:/@-]{1,120}$/)
-  };
-  if (base.kind === "account") {
-    if (raw.state !== undefined)
-      throw new Invalid(`${path}.state belongs to quota observations`);
-    return { ...base, observedAlias: text(raw.observedAlias, `${path}.observedAlias`, IDENTIFIER) };
-  }
-  if (raw.observedAlias !== undefined)
-    throw new Invalid(`${path}.observedAlias belongs to account observations`);
-  return { ...base, state: choice(raw.state, `${path}.state`, ["available", "exhausted"]) };
-}
-function parseObservations(value) {
-  const raw = record(value, "observations file", { required: ["schemaVersion", "observations"] });
-  if (raw.schemaVersion !== 1)
-    throw new Invalid("observations file.schemaVersion must be 1");
-  if (!Array.isArray(raw.observations))
-    throw new Invalid("observations file.observations must be an array");
-  return raw.observations.map((entry, index) => observation(entry, `observations[${index}]`));
-}
 function readOptionalFile(path) {
   try {
     if (!statSync(path).isFile())
@@ -645,31 +670,25 @@ function readOptionalFile(path) {
     throw new StationError("inputUnreadable", `${path} could not be read.`);
   }
 }
-function decode(path, contents, station, parse) {
+function decode(path, contents) {
   try {
-    return parse(JSON.parse(contents));
+    return parseRoutes(JSON.parse(contents));
   } catch (error) {
     const reason = error instanceof Invalid ? error.message : "the file is not valid JSON";
-    throw new StationError(station, `${path}: ${reason}.`);
+    throw new StationError("routesInvalid", `${path}: ${reason}.`);
   }
 }
 function loadRoutes(path) {
   const contents = readOptionalFile(path);
   if (contents === null)
     return { path, status: "missing", routes: [] };
-  return { path, status: "present", routes: decode(path, contents, "routesInvalid", parseRoutes) };
-}
-function loadObservations(path) {
-  const contents = readOptionalFile(path);
-  if (contents === null)
-    return { path, status: "missing", observations: [] };
-  return { path, status: "present", observations: decode(path, contents, "malformedInput", parseObservations) };
+  return { path, status: "present", routes: decode(path, contents) };
 }
 
 // packages/agent-router/src/evidence.ts
 import { createHash } from "crypto";
-import { existsSync, realpathSync } from "fs";
-import { hostname } from "os";
+import { existsSync } from "fs";
+import { homedir, hostname } from "os";
 import { dirname, join } from "path";
 async function probe(executable, args, timeoutMs) {
   const child = Bun.spawn([executable, ...args], { stdin: "ignore", stdout: "pipe", stderr: "ignore" });
@@ -690,42 +709,37 @@ function basename(path) {
 function asRecord(value) {
   return typeof value === "object" && value !== null && !Array.isArray(value) ? value : null;
 }
-function parseJsonFile(path) {
-  const contents = readOptionalFile(path);
-  if (contents === null)
-    return null;
+var MANIFEST = join(".local", "share", "monash-foundry", "installation-manifest.json");
+var HOST_ID = /^[a-z0-9][a-z0-9.-]{0,62}$/;
+function hostEvidence() {
+  const source = `~/${MANIFEST} host_role`;
+  const manifest = readOptionalFile(join(homedir(), MANIFEST));
+  if (manifest === null)
+    return { status: "unknown", role: null, reason: "the Monash installation manifest is absent", source };
+  let role = null;
   try {
-    return asRecord(JSON.parse(contents));
+    role = asRecord(JSON.parse(manifest))?.host_role;
   } catch {
-    return null;
+    role = null;
   }
-}
-function hostEvidence(installDir) {
-  const source = "monash installation-manifest.json host_role and config.json host_profiles";
-  if (installDir === null)
-    return { status: "unknown", role: null, reason: "monash is not installed, so no host role is recorded", profiles: [], source };
-  const profiles = Object.keys(asRecord(parseJsonFile(join(installDir, "config.json"))?.host_profiles) ?? {}).sort();
-  const role = parseJsonFile(join(installDir, "installation-manifest.json"))?.host_role;
-  if (typeof role !== "string" || role === "")
-    return { status: "unknown", role: null, reason: "the installation manifest records no readable host_role", profiles, source };
-  if (!profiles.includes(role))
-    return { status: "unknown", role: null, reason: "the recorded host_role is not a configured host profile", profiles, source };
-  return { status: "observed", role, reason: "recorded host_role matches a configured host profile", profiles, source };
+  if (typeof role !== "string" || !HOST_ID.test(role))
+    return { status: "unknown", role: null, reason: "the installation manifest records no readable host_role", source };
+  return { status: "observed", role, reason: "recorded host_role in the Monash installation manifest", source };
 }
 var MONASH_AGENTS = { claude: "claude-code", codex: "codex", opencode: "opencode" };
-function normaliseHost(value, host) {
+function normaliseHost(value, host, known) {
   if (typeof value !== "string")
     return null;
-  if (host.profiles.includes(value))
+  if (known.includes(value))
     return value;
   const local = hostname().replace(/\.local$/i, "").toLowerCase();
   if (host.role !== null && value.replace(/\.local$/i, "").toLowerCase() === local)
     return host.role;
   return null;
 }
-function evidenceHosts(evidence, host) {
+function evidenceHosts(evidence, host, known) {
   const rows = Array.isArray(evidence) ? evidence.map(asRecord).filter((row) => row !== null && row.observed === true) : [];
-  const mapped = rows.map((row) => normaliseHost(row?.host, host));
+  const mapped = rows.map((row) => normaliseHost(row?.host, host, known));
   const hosts2 = [...new Set(mapped.filter((value) => value !== null))].sort();
   return { hosts: hosts2, unmapped: mapped.filter((value) => value === null).length };
 }
@@ -734,11 +748,11 @@ function protocolsFor(bindings, resourceId) {
   const matches = rows.filter((row) => row !== null && row.resource_id === resourceId && row.availability === "available");
   return [...new Set(matches.map((row) => String(row?.protocol)))].sort();
 }
-function monashRoute2(model2, raw, host) {
+function monashRoute2(model2, raw, host, known) {
   const harness = MONASH_AGENTS[String(raw.agent)];
   if (harness === undefined || raw.status !== "qualified" || raw.implemented !== true)
     return null;
-  const { hosts: hosts2, unmapped } = evidenceHosts(raw.evidence, host);
+  const { hosts: hosts2, unmapped } = evidenceHosts(raw.evidence, host, known);
   return {
     id: `monash-foundry-${String(raw.agent)}-${String(model2.id)}`,
     harness,
@@ -750,7 +764,7 @@ function monashRoute2(model2, raw, host) {
     unmappedEvidenceHosts: unmapped
   };
 }
-function monashRoutes(snapshot, host) {
+function monashRoutes(snapshot, host, known) {
   if (!Array.isArray(snapshot.models))
     return null;
   const routes = [];
@@ -759,7 +773,7 @@ function monashRoutes(snapshot, host) {
     if (model2 === null || typeof model2.id !== "string" || !Array.isArray(model2.routes))
       return null;
     for (const raw of model2.routes.map(asRecord)) {
-      const route2 = raw === null ? null : monashRoute2(model2, raw, host);
+      const route2 = raw === null ? null : monashRoute2(model2, raw, host, known);
       if (route2 === null)
         unqualified += 1;
       else
@@ -768,7 +782,7 @@ function monashRoutes(snapshot, host) {
   }
   return { routes, unqualified };
 }
-async function monashEvidence(executable, host, timeoutMs) {
+async function monashEvidence(executable, host, known, timeoutMs) {
   const readAt = new Date().toISOString();
   const source = "monash models --json (installed snapshot; never --refresh)";
   const empty = { snapshotObservedAt: null, readAt, source, routes: [], unqualifiedCombinations: 0 };
@@ -783,7 +797,7 @@ async function monashEvidence(executable, host, timeoutMs) {
   } catch {
     snapshot = null;
   }
-  const parsed = snapshot === null ? null : monashRoutes(snapshot, host);
+  const parsed = snapshot === null ? null : monashRoutes(snapshot, host, known);
   const observedAt = snapshot?.observed_at;
   if (parsed === null || typeof observedAt !== "string" || Number.isNaN(Date.parse(observedAt)))
     return { status: "invalid", ...empty };
@@ -853,9 +867,9 @@ function targetEvidence(root, project) {
 }
 async function collectEvidence(request) {
   const monash = Bun.which("monash");
-  const installDir = monash === null ? null : dirname(realpathSync(monash));
-  const host = hostEvidence(installDir);
-  const snapshot = await monashEvidence(monash, host, request.timeoutMs);
+  const host = hostEvidence();
+  const known = [...new Set([...host.role === null ? [] : [host.role], ...request.declaredHosts])];
+  const snapshot = await monashEvidence(monash, host, known, request.timeoutMs);
   const harnesses = {};
   const probed = new Set([...request.harnesses, ...snapshot.routes.map((route2) => route2.harness)]);
   for (const harness of HARNESSES.filter((entry) => probed.has(entry)))
@@ -874,6 +888,8 @@ async function collectEvidence(request) {
 function freshnessText(value) {
   if (value.state === "not-observed")
     return "not observed";
+  if (value.state === "invalid")
+    return `invalid timestamp ${value.observedAt}`;
   return `${value.state}, ${value.ageDays} days, observed ${value.observedAt}`;
 }
 function sourceLines(sources2) {
@@ -882,7 +898,6 @@ function sourceLines(sources2) {
   const harnesses = Object.entries(sources2.harnesses).map(([name, value]) => `${name} ${value?.version ?? value?.status}`);
   return [
     `Routes file: ${sources2.routesFile.path} (${sources2.routesFile.status})`,
-    `Observations file: ${sources2.observationsFile.path} (${sources2.observationsFile.status})`,
     `This host: ${host}`,
     `Monash: ${monash}`,
     `Harnesses: ${harnesses.length === 0 ? "none probed" : harnesses.join(", ")}`
@@ -947,15 +962,14 @@ function renderCard(card) {
 // packages/agent-router/src/cli.ts
 var USAGE = [
   "Usage:",
-  "  agent-router routes [--routes-file PATH] [--observations-file PATH] [--probe-timeout-ms N] [--json]",
-  "  agent-router run TASK --dry-run [--project NAME] [--herdr-projects-root DIR] [--routes-file PATH] [--observations-file PATH] [--probe-timeout-ms N] [--json]",
+  "  agent-router routes [--routes-file PATH] [--probe-timeout-ms N] [--json]",
+  "  agent-router run TASK --dry-run [--project NAME] [--herdr-projects-root DIR] [--routes-file PATH] [--probe-timeout-ms N] [--json]",
   "  agent-router --discover [--json] | --discover-command COMMAND_IDENTITY [--json] | --help [--json]"
 ];
 var OPTIONS = [
   { name: "--json", valueName: null, summary: "Emit one Contract Core 2.0 envelope on stdout." },
   { name: "--dry-run", valueName: null, summary: "Required by run: show the decision card; nothing is launched." },
   { name: "--routes-file", valueName: "PATH", summary: "Routes file; default $XDG_CONFIG_HOME/agent-router/routes.json." },
-  { name: "--observations-file", valueName: "PATH", summary: "Observations file; default $XDG_STATE_HOME/agent-router/observations.json." },
   { name: "--probe-timeout-ms", valueName: "N", summary: "Time budget per read-only probe, 1 to 600000; default 10000." },
   { name: "--project", valueName: "NAME", summary: "Herdr Projects project the worker would join." },
   { name: "--herdr-projects-root", valueName: "DIR", summary: "Herdr Projects root; default $HERDR_PROJECTS_ROOT." },
@@ -1006,22 +1020,22 @@ function timeout(parsed) {
 }
 function xdg(variable, fallback) {
   const value = process.env[variable];
-  return value !== undefined && isAbsolute(value) ? value : join2(homedir(), fallback);
+  return value !== undefined && isAbsolute(value) ? value : join2(homedir2(), fallback);
 }
 async function inputs(parsed, requireRoutes, target) {
   const routesFile = loadRoutes(resolve(parsed.values.get("--routes-file") ?? join2(xdg("XDG_CONFIG_HOME", ".config"), "agent-router", "routes.json")));
   if (routesFile.status === "missing" && requireRoutes)
     throw new StationError("routesMissing", `No routes file exists at ${routesFile.path}.`);
-  const observationsFile = loadObservations(resolve(parsed.values.get("--observations-file") ?? join2(xdg("XDG_STATE_HOME", ".local/state"), "agent-router", "observations.json")));
   const evidence = await collectEvidence({
     harnesses: routesFile.routes.map((route2) => route2.harness),
+    declaredHosts: routesFile.routes.flatMap((route2) => route2.hosts),
     timeoutMs: timeout(parsed),
     herdrProjectsRoot: target.root,
     project: target.project
   });
-  return { routesFile, observationsFile, evidence, now: Date.now() };
+  return { routesFile, evidence, now: Date.now() };
 }
-var COMMON = ["--routes-file", "--observations-file", "--probe-timeout-ms"];
+var COMMON = ["--routes-file", "--probe-timeout-ms"];
 async function routesCommand(parsed) {
   allowOnly(parsed, COMMON);
   if (parsed.words.length !== 1)
@@ -1041,7 +1055,6 @@ function targetOf(parsed) {
   return { root, project };
 }
 var PICK_ACTIONS = {
-  selected: (route2) => `Review the card; launching ${route2} belongs to the approved Herdr Projects launch path.`,
   "needs-confirmation": (route2, _candidates, confirm) => `Ask Nathan to confirm ${confirm.join(", ")} for ${route2} before any launch.`,
   ask: (_route, candidates) => `Ask Nathan to choose one route: ${candidates.join(", ")}.`,
   "none-eligible": () => "Resolve the listed refusals and gaps, then rerun the dry run."
@@ -1104,58 +1117,54 @@ function refusal(identity, error) {
     return { envelope: stationResult(identity, "usage", error.message), human: "" };
   return { envelope: stationResult(identity, "inputUnreadable", "The command failed unexpectedly before producing a result."), human: "" };
 }
-var failureReported = false;
-var asynchronousStdoutFailure = false;
-function reportToStderr(envelope2) {
-  if (failureReported)
+var humanFailureReported = false;
+var transportFailed = false;
+function reportToStderr(envelope) {
+  if (humanFailureReported)
     return;
-  failureReported = true;
-  process.stderr.write(`${envelope2.message} Repair: ${String(envelope2.result.repairAction)}
+  humanFailureReported = true;
+  process.stderr.write(`${envelope.message} Repair: ${String(envelope.result.repairAction)}
 `);
 }
-function internal(identity, key, json) {
-  const envelope2 = stationResult(identity, key, STATIONS[key].trigger);
-  if (!json) {
-    reportToStderr(envelope2);
-    return 1;
-  }
-  try {
-    process.stdout.write(`${JSON.stringify(envelope2)}
-`);
-  } catch {
-    reportToStderr(envelope2);
-  }
+function transportFailure(json) {
+  transportFailed = true;
+  if (!json)
+    reportToStderr(stationResult("agent-router.dispatch", "emission", STATIONS.emission.trigger));
   return 1;
 }
+function write(text2, json) {
+  try {
+    process.stdout.write(text2);
+    return null;
+  } catch {
+    return transportFailure(json);
+  }
+}
+function emitMachine(identity, envelope) {
+  const text2 = serializeEnvelope(envelope);
+  if (text2 !== null)
+    return write(text2, true) ?? envelope.result.exitCode;
+  const fallback = serializeEnvelope(stationResult(identity, "serialization", STATIONS.serialization.trigger));
+  if (fallback === null)
+    return 1;
+  return write(fallback, true) ?? 1;
+}
 function emit(identity, output, json) {
+  if (json)
+    return emitMachine(identity, output.envelope);
   const exitCode = output.envelope.result.exitCode;
-  if (!json && exitCode !== 0) {
+  if (exitCode !== 0) {
     reportToStderr(output.envelope);
     return exitCode;
   }
-  let text2;
-  try {
-    text2 = json ? `${JSON.stringify(output.envelope)}
-` : `${output.human}
-`;
-  } catch {
-    return internal(identity, "serialization", json);
-  }
-  try {
-    process.stdout.write(text2);
-  } catch {
-    return internal(identity, "emission", json);
-  }
-  return exitCode;
+  return write(`${output.human}
+`, false) ?? exitCode;
 }
 async function main(argv) {
   const separator = argv.indexOf("--");
   const json = (separator === -1 ? argv : argv.slice(0, separator)).includes("--json");
   const args = argv.filter((value) => value !== "--json");
-  process.stdout.on("error", () => {
-    asynchronousStdoutFailure = true;
-    reportToStderr(stationResult("agent-router.dispatch", "emission", STATIONS.emission.trigger));
-  });
+  process.stdout.on("error", () => transportFailure(json));
   let parsed = null;
   let output;
   try {
@@ -1167,4 +1176,4 @@ async function main(argv) {
   return emit(parsed === null ? "agent-router.dispatch" : commandOf(parsed), output, json);
 }
 var exitCode = await main(process.argv.slice(2));
-process.exitCode = asynchronousStdoutFailure ? 1 : exitCode;
+process.exitCode = transportFailed ? 1 : exitCode;

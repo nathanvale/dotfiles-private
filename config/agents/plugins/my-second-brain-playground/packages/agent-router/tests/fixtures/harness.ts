@@ -1,11 +1,13 @@
 // Process seam for Agent Router tests. Each fixture is a private root with its own HOME, XDG directories, and a PATH
 // holding only shim executables (monash, claude, codex, opencode) plus the system directories. The shims record their
-// argv to a log so tests can prove which read-only probes ran. Nothing here imports the modules under test.
+// argv to a log outside the root so tests can prove which read-only probes ran. Credential-bearing files (the Monash
+// config.json and harness auth files) exist but are unreadable (mode 000): the router fails with INTERNAL_UNEXPECTED
+// if it ever opens one. Nothing here imports the modules under test.
 import { expect } from "bun:test"
 import { createHash } from "node:crypto"
 import { chmodSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join, resolve } from "node:path"
+import { dirname, join, resolve } from "node:path"
 
 export const CLI = resolve(import.meta.dir, "../../src/cli.ts")
 export const SECRET_MARKER = "AGENT_ROUTER_FIXTURE_SECRET_MARKER"
@@ -17,16 +19,20 @@ export function guideRevision(): string {
 	return createHash("sha256").update(readFileSync(GUIDE)).digest("hex")
 }
 
+export function ago(milliseconds: number): string {
+	return new Date(Date.now() - milliseconds).toISOString()
+}
+
 export function daysAgo(days: number): string {
-	return new Date(Date.now() - days * DAY).toISOString()
+	return ago(days * DAY)
 }
 
 export interface Fixture {
 	root: string
 	env: Record<string, string>
 	routesPath: string
-	observationsPath: string
 	probeLog: string
+	credentialSentinels: string[]
 }
 
 export interface FixtureOptions {
@@ -40,7 +46,7 @@ function shim(path: string, log: string, body: string): void {
 	chmodSync(path, 0o755)
 }
 
-/** A synthetic snapshot in the installed monash models --json shape; no employer resource names. */
+/** A synthetic snapshot in the installed monash models --json shape; its references carry a secret marker. */
 export function snapshot(observedAt: string, evidenceHosts: string[] = ["laptop"]): unknown {
 	return {
 		command: "models",
@@ -48,15 +54,23 @@ export function snapshot(observedAt: string, evidenceHosts: string[] = ["laptop"
 		state: "snapshot",
 		schema_version: 1,
 		observed_at: observedAt,
-		resources: [],
+		resources: [{ id: "r1", resource: SECRET_MARKER, availability: "available" }],
 		models: [
 			{
 				id: "model-a",
 				display_name: "Model A",
 				availability: "available",
-				bindings: [{ resource_id: "r1", protocol: "protocol-a", availability: "available" }],
+				bindings: [{ resource_id: "r1", resource: SECRET_MARKER, protocol: "protocol-a", availability: "available" }],
 				routes: [
-					{ agent: "claude", binding_resource_id: "r1", status: "qualified", implemented: true, compatibility: "compatible", reason: "fixture", evidence: evidenceHosts.map((host) => ({ host, kind: "fixture", observed: true, reference: "fixture" })) },
+					{
+						agent: "claude",
+						binding_resource_id: "r1",
+						status: "qualified",
+						implemented: true,
+						compatibility: "compatible",
+						reason: SECRET_MARKER,
+						evidence: evidenceHosts.map((host) => ({ host, kind: "fixture", observed: true, reference: SECRET_MARKER })),
+					},
 					{ agent: "opencode", binding_resource_id: "r1", status: "untested", implemented: false, compatibility: "incompatible", reason: "fixture", evidence: [] },
 				],
 			},
@@ -64,29 +78,36 @@ export function snapshot(observedAt: string, evidenceHosts: string[] = ["laptop"
 	}
 }
 
+function sentinel(path: string): string {
+	mkdirSync(dirname(path), { recursive: true })
+	writeFileSync(path, JSON.stringify({ apiKey: SECRET_MARKER, token: SECRET_MARKER }))
+	chmodSync(path, 0o000)
+	return path
+}
+
 export function createFixture(options: FixtureOptions = {}): Fixture {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "agent-router-")))
 	const bin = join(root, "bin")
-	const install = join(root, "monash-install")
 	const home = join(root, "home")
-	for (const directory of [bin, install, home, join(root, "config", "agent-router"), join(root, "state", "agent-router")]) mkdirSync(directory, { recursive: true })
-	// Outside the root, so the root tree (HOME, XDG, routes, Monash install) stays a pure no-effect witness.
+	const install = join(home, ".local", "share", "monash-foundry")
+	for (const directory of [bin, install, join(root, "config", "agent-router")]) mkdirSync(directory, { recursive: true })
 	const probeLog = `${root}.probes.log`
+	writeFileSync(probeLog, "")
 	writeFileSync(join(install, "snapshot.json"), JSON.stringify(options.snapshot ?? snapshot(daysAgo(1))))
 	const delay = options.monashDelaySeconds === undefined ? "" : `sleep ${options.monashDelaySeconds}\n`
 	shim(join(install, "monash"), probeLog, `${delay}cat '${join(install, "snapshot.json")}'`)
 	symlinkSync(join(install, "monash"), join(bin, "monash"))
 	const role = options.hostRole === undefined ? "laptop" : options.hostRole
 	writeFileSync(join(install, "installation-manifest.json"), JSON.stringify(role === null ? { format: 1 } : { format: 1, host_role: role }))
-	writeFileSync(join(install, "config.json"), JSON.stringify({ host_profiles: { laptop: { transport: "local" }, mini: { transport: "ssh" } }, subscription: { apiKey: SECRET_MARKER } }))
+	const credentialSentinels = [join(install, "config.json"), join(home, ".codex", "auth.json"), join(home, ".claude", ".credentials.json")].map(sentinel)
 	shim(join(bin, "claude"), probeLog, 'echo "2.1.282 (Claude Code)"')
 	shim(join(bin, "codex"), probeLog, 'echo "codex-cli 0.156.1"')
 	shim(join(bin, "opencode"), probeLog, 'echo "1.18.31"')
 	return {
 		root,
 		probeLog,
+		credentialSentinels,
 		routesPath: join(root, "config", "agent-router", "routes.json"),
-		observationsPath: join(root, "state", "agent-router", "observations.json"),
 		env: {
 			HOME: home,
 			PATH: `${bin}:/usr/bin:/bin`,
@@ -128,18 +149,6 @@ export function writeRoutes(fixture: Fixture, routes: unknown[]): void {
 	writeFileSync(fixture.routesPath, JSON.stringify({ schemaVersion: 1, routes }))
 }
 
-export function writeObservations(fixture: Fixture, observations: unknown[]): void {
-	writeFileSync(fixture.observationsPath, JSON.stringify({ schemaVersion: 1, observations }))
-}
-
-export function account(routeId: string, observedAlias: string, observedAt: string) {
-	return { route: routeId, kind: "account", observedAt, source: "fixture identity probe", observedAlias }
-}
-
-export function quota(routeId: string, state: string, observedAt: string) {
-	return { route: routeId, kind: "quota", observedAt, source: "fixture usage probe", state }
-}
-
 export interface Invocation {
 	exitCode: number
 	stdout: string
@@ -159,17 +168,21 @@ export function envelope(invocation: Invocation): any {
 	return JSON.parse(invocation.stdout)
 }
 
-/** Path, size, mode and content hash of every entry under a directory, for no-effect comparison. */
+function describeEntry(path: string): string {
+	const stat = statSync(path)
+	if (stat.isDirectory()) return `${path}/ ${stat.mode}`
+	if ((stat.mode & 0o444) === 0) return `${path} ${stat.mode} ${stat.mtimeMs} unreadable ${stat.size}`
+	return `${path} ${stat.mode} ${stat.mtimeMs} ${createHash("sha256").update(readFileSync(path)).digest("hex")}`
+}
+
+/** Path, mode, mtime and content hash (size for unreadable files) of every entry, for no-effect comparison. */
 export function tree(directory: string): string[] {
 	const rows: string[] = []
 	const walk = (path: string): void => {
 		for (const name of readdirSync(path).sort()) {
 			const child = join(path, name)
-			const stat = statSync(child)
-			if (stat.isDirectory()) {
-				rows.push(`${child}/ ${stat.mode}`)
-				walk(child)
-			} else rows.push(`${child} ${stat.mode} ${stat.mtimeMs} ${createHash("sha256").update(readFileSync(child)).digest("hex")}`)
+			rows.push(describeEntry(child))
+			if (statSync(child).isDirectory()) walk(child)
 		}
 	}
 	walk(directory)

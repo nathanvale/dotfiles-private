@@ -1,10 +1,10 @@
 // Read-only evidence probes. Each probe names its owner and source, reports what it observed or why it could not,
-// and never reads a credential: Monash through its installed snapshot (never --refresh), the host role from the
-// manifest beside the resolved monash executable, harness presence through --version, and Model Guides from the
-// Playground plugin's Stage Manager skill.
+// and never reads a credential: Monash routes through its installed snapshot (never --refresh), the host role from
+// the Monash installation manifest only (never the Monash config.json, which holds credential fields), harness
+// presence through --version, and Model Guides from the Playground plugin's Stage Manager skill.
 import { createHash } from "node:crypto"
-import { existsSync, realpathSync } from "node:fs"
-import { hostname } from "node:os"
+import { existsSync } from "node:fs"
+import { homedir, hostname } from "node:os"
 import { dirname, join } from "node:path"
 import { StationError } from "./contract.ts"
 import { HARNESSES, type Harness, readOptionalFile } from "./declarations.ts"
@@ -35,34 +35,30 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 	return typeof value === "object" && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : null
 }
 
-function parseJsonFile(path: string): Record<string, unknown> | null {
-	const contents = readOptionalFile(path)
-	if (contents === null) return null
-	try {
-		return asRecord(JSON.parse(contents))
-	} catch {
-		return null
-	}
-}
-
 // ---- host role (Monash Foundry installation owner) ----
+
+const MANIFEST = join(".local", "share", "monash-foundry", "installation-manifest.json")
+const HOST_ID = /^[a-z0-9][a-z0-9.-]{0,62}$/
 
 export interface HostEvidence {
 	status: "observed" | "unknown"
 	role: string | null
 	reason: string
-	profiles: string[]
 	source: string
 }
 
-function hostEvidence(installDir: string | null): HostEvidence {
-	const source = "monash installation-manifest.json host_role and config.json host_profiles"
-	if (installDir === null) return { status: "unknown", role: null, reason: "monash is not installed, so no host role is recorded", profiles: [], source }
-	const profiles = Object.keys(asRecord(parseJsonFile(join(installDir, "config.json"))?.host_profiles) ?? {}).sort()
-	const role = parseJsonFile(join(installDir, "installation-manifest.json"))?.host_role
-	if (typeof role !== "string" || role === "") return { status: "unknown", role: null, reason: "the installation manifest records no readable host_role", profiles, source }
-	if (!profiles.includes(role)) return { status: "unknown", role: null, reason: "the recorded host_role is not a configured host profile", profiles, source }
-	return { status: "observed", role, reason: "recorded host_role matches a configured host profile", profiles, source }
+function hostEvidence(): HostEvidence {
+	const source = `~/${MANIFEST} host_role`
+	const manifest = readOptionalFile(join(homedir(), MANIFEST))
+	if (manifest === null) return { status: "unknown", role: null, reason: "the Monash installation manifest is absent", source }
+	let role: unknown = null
+	try {
+		role = asRecord(JSON.parse(manifest))?.host_role
+	} catch {
+		role = null
+	}
+	if (typeof role !== "string" || !HOST_ID.test(role)) return { status: "unknown", role: null, reason: "the installation manifest records no readable host_role", source }
+	return { status: "observed", role, reason: "recorded host_role in the Monash installation manifest", source }
 }
 
 // ---- Monash Foundry snapshot ----
@@ -89,18 +85,19 @@ export interface MonashEvidence {
 	unqualifiedCombinations: number
 }
 
-function normaliseHost(value: unknown, host: HostEvidence): string | null {
+/** Known host ids are this host's recorded role and the hosts Nathan declared; nothing else is guessed. */
+function normaliseHost(value: unknown, host: HostEvidence, known: readonly string[]): string | null {
 	if (typeof value !== "string") return null
-	if (host.profiles.includes(value)) return value
+	if (known.includes(value)) return value
 	const local = hostname().replace(/\.local$/i, "").toLowerCase()
 	// A raw hostname counts only when it is this machine and this machine's recorded role is known.
 	if (host.role !== null && value.replace(/\.local$/i, "").toLowerCase() === local) return host.role
 	return null
 }
 
-function evidenceHosts(evidence: unknown, host: HostEvidence): { hosts: string[]; unmapped: number } {
+function evidenceHosts(evidence: unknown, host: HostEvidence, known: readonly string[]): { hosts: string[]; unmapped: number } {
 	const rows = Array.isArray(evidence) ? evidence.map(asRecord).filter((row) => row !== null && row.observed === true) : []
-	const mapped = rows.map((row) => normaliseHost(row?.host, host))
+	const mapped = rows.map((row) => normaliseHost(row?.host, host, known))
 	const hosts = [...new Set(mapped.filter((value): value is string => value !== null))].sort()
 	return { hosts, unmapped: mapped.filter((value) => value === null).length }
 }
@@ -111,10 +108,10 @@ function protocolsFor(bindings: unknown, resourceId: unknown): string[] {
 	return [...new Set(matches.map((row) => String(row?.protocol)))].sort()
 }
 
-function monashRoute(model: Record<string, unknown>, raw: Record<string, unknown>, host: HostEvidence): MonashRoute | null {
+function monashRoute(model: Record<string, unknown>, raw: Record<string, unknown>, host: HostEvidence, known: readonly string[]): MonashRoute | null {
 	const harness = MONASH_AGENTS[String(raw.agent)]
 	if (harness === undefined || raw.status !== "qualified" || raw.implemented !== true) return null
-	const { hosts, unmapped } = evidenceHosts(raw.evidence, host)
+	const { hosts, unmapped } = evidenceHosts(raw.evidence, host, known)
 	return {
 		id: `monash-foundry-${String(raw.agent)}-${String(model.id)}`,
 		harness,
@@ -127,14 +124,14 @@ function monashRoute(model: Record<string, unknown>, raw: Record<string, unknown
 	}
 }
 
-function monashRoutes(snapshot: Record<string, unknown>, host: HostEvidence): { routes: MonashRoute[]; unqualified: number } | null {
+function monashRoutes(snapshot: Record<string, unknown>, host: HostEvidence, known: readonly string[]): { routes: MonashRoute[]; unqualified: number } | null {
 	if (!Array.isArray(snapshot.models)) return null
 	const routes: MonashRoute[] = []
 	let unqualified = 0
 	for (const model of snapshot.models.map(asRecord)) {
 		if (model === null || typeof model.id !== "string" || !Array.isArray(model.routes)) return null
 		for (const raw of model.routes.map(asRecord)) {
-			const route = raw === null ? null : monashRoute(model, raw, host)
+			const route = raw === null ? null : monashRoute(model, raw, host, known)
 			if (route === null) unqualified += 1
 			else routes.push(route)
 		}
@@ -142,7 +139,7 @@ function monashRoutes(snapshot: Record<string, unknown>, host: HostEvidence): { 
 	return { routes, unqualified }
 }
 
-async function monashEvidence(executable: string | null, host: HostEvidence, timeoutMs: number): Promise<MonashEvidence> {
+async function monashEvidence(executable: string | null, host: HostEvidence, known: readonly string[], timeoutMs: number): Promise<MonashEvidence> {
 	const readAt = new Date().toISOString()
 	const source = "monash models --json (installed snapshot; never --refresh)"
 	const empty = { snapshotObservedAt: null, readAt, source, routes: [], unqualifiedCombinations: 0 }
@@ -155,7 +152,7 @@ async function monashEvidence(executable: string | null, host: HostEvidence, tim
 	} catch {
 		snapshot = null
 	}
-	const parsed = snapshot === null ? null : monashRoutes(snapshot, host)
+	const parsed = snapshot === null ? null : monashRoutes(snapshot, host, known)
 	const observedAt = snapshot?.observed_at
 	if (parsed === null || typeof observedAt !== "string" || Number.isNaN(Date.parse(observedAt))) return { status: "invalid", ...empty }
 	return { status: "observed", snapshotObservedAt: observedAt, readAt, source, routes: parsed.routes, unqualifiedCombinations: parsed.unqualified }
@@ -259,6 +256,7 @@ export interface Evidence {
 
 export interface EvidenceRequest {
 	harnesses: Harness[]
+	declaredHosts: string[]
 	timeoutMs: number
 	herdrProjectsRoot: string | null
 	project: string | null
@@ -266,9 +264,9 @@ export interface EvidenceRequest {
 
 export async function collectEvidence(request: EvidenceRequest): Promise<Evidence> {
 	const monash = Bun.which("monash")
-	const installDir = monash === null ? null : dirname(realpathSync(monash))
-	const host = hostEvidence(installDir)
-	const snapshot = await monashEvidence(monash, host, request.timeoutMs)
+	const host = hostEvidence()
+	const known = [...new Set([...(host.role === null ? [] : [host.role]), ...request.declaredHosts])]
+	const snapshot = await monashEvidence(monash, host, known, request.timeoutMs)
 	const harnesses: Partial<Record<Harness, HarnessEvidence>> = {}
 	const probed = new Set([...request.harnesses, ...snapshot.routes.map((route) => route.harness)])
 	for (const harness of HARNESSES.filter((entry) => probed.has(entry))) harnesses[harness] = await harnessEvidence(harness, request.timeoutMs)

@@ -8,6 +8,7 @@ type Gap = Inventory["gaps"][number]
 
 function freshnessText(value: { state: string; observedAt: string | null; ageDays: number | null }): string {
 	if (value.state === "not-observed") return "not observed"
+	if (value.state === "invalid") return `invalid timestamp ${value.observedAt}`
 	return `${value.state}, ${value.ageDays} days, observed ${value.observedAt}`
 }
 
@@ -17,7 +18,6 @@ function sourceLines(sources: Sources): string[] {
 	const harnesses = Object.entries(sources.harnesses).map(([name, value]) => `${name} ${value?.version ?? value?.status}`)
 	return [
 		`Routes file: ${sources.routesFile.path} (${sources.routesFile.status})`,
-		`Observations file: ${sources.observationsFile.path} (${sources.observationsFile.status})`,
 		`This host: ${host}`,
 		`Monash: ${monash}`,
 		`Harnesses: ${harnesses.length === 0 ? "none probed" : harnesses.join(", ")}`,

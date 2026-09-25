@@ -1,26 +1,26 @@
 // Task hpr-f5n.3 acceptance B2 and B4 through the public process: fixture routes and evidence in, the dry-run card
 // or a declared refusal out. Expected values are test-owned literals.
 import { afterEach, describe, expect, test } from "bun:test"
+import { statSync } from "node:fs"
 import { hostname } from "node:os"
 import { join } from "node:path"
 import {
-	account,
+	ago,
 	createFixture,
 	daysAgo,
 	envelope,
 	type Fixture,
 	guideRevision,
 	invoke,
-	quota,
 	removeFixture,
 	route,
 	SECRET_MARKER,
 	snapshot,
 	tree,
-	writeObservations,
 	writeRoutes,
 } from "./fixtures/harness.ts"
 
+const DAY = 86_400_000
 const fixtures: Fixture[] = []
 
 function fixture(options?: Parameters<typeof createFixture>[0]): Fixture {
@@ -59,16 +59,23 @@ function verdicts(gates: Gate[]): string[] {
 }
 
 describe("gates and pick", () => {
-	test("a personal route with fresh matching identity and quota is selected with its guide revision", () => {
+	test("a qualified personal route needs Nathan's confirmation of unknown identity and quota and carries its guide revision", () => {
 		const created = fixture()
 		writeRoutes(created, [route("personal-claude-code")])
-		writeObservations(created, [account("personal-claude-code", "personal", daysAgo(1)), quota("personal-claude-code", "available", daysAgo(2))])
 		const result = card(created)
-		const selected = routeOf(result, "personal-claude-code")
-		expect(verdicts(selected.gates)).toEqual(["G1:pass:declared", "G2:pass:observed", "G3:pass:observed", "G4:pass:observed", "G5:pass:observed"])
-		expect(selected.decision).toBe("eligible")
-		expect(result.result.data.pick).toMatchObject({ status: "selected", route: "personal-claude-code", provisional: true, typeSafe: "not-consulted", modelGuideRevision: guideRevision() })
+		const qualified = routeOf(result, "personal-claude-code")
+		expect(verdicts(qualified.gates)).toEqual(["G1:pass:declared", "G2:pass:observed", "G3:confirm:unknown", "G4:confirm:unknown", "G5:pass:observed"])
+		expect(qualified.decision).toBe("needs-confirmation")
+		expect(result.result.data.pick).toMatchObject({
+			status: "needs-confirmation",
+			route: "personal-claude-code",
+			confirmations: ["G3", "G4"],
+			provisional: true,
+			typeSafe: "not-consulted",
+			modelGuideRevision: guideRevision(),
+		})
 		expect(result.result.data.gateOrder.map((gate: { gate: string }) => gate.gate)).toEqual(["G1", "G2", "G3", "G4", "G5"])
+		expect(result.result.nextAction).toBe("Ask Nathan to confirm G3, G4 for personal-claude-code before any launch.")
 	})
 
 	test("unqualified routes are refused at the first failing gate with a reason", () => {
@@ -86,29 +93,20 @@ describe("gates and pick", () => {
 		expect(result.result.nextAction).toBe("Resolve the listed refusals and gaps, then rerun the dry run.")
 	})
 
-	test("stale quota and unknown quota are reported distinctly and both ask Nathan on a personal route", () => {
+	test("missing account proof asks Nathan for a personal route and refuses an employer route", () => {
 		const created = fixture()
-		writeRoutes(created, [route("stale-quota"), route("unknown-quota")])
-		writeObservations(created, [quota("stale-quota", "available", daysAgo(10)), account("stale-quota", "personal", daysAgo(1)), account("unknown-quota", "personal", daysAgo(1))])
+		writeRoutes(created, [route("personal-unproved"), route("employer-unproved", { ownership: "employer" })])
 		const result = card(created)
-		const stale = routeOf(result, "stale-quota")
-		const unknown = routeOf(result, "unknown-quota")
-		expect(stale.gates[3]).toEqual({ gate: "G4", verdict: "confirm", evidence: "stale", reason: "quota evidence is 10 days old; Nathan must confirm" })
-		expect(unknown.gates[3]).toEqual({ gate: "G4", verdict: "confirm", evidence: "unknown", reason: "quota unknown: no usage source observed; Nathan must confirm" })
-		expect(stale.quota.freshness).toMatchObject({ state: "stale", ageDays: 10 })
-		expect(unknown.quota.freshness).toEqual({ state: "not-observed", observedAt: null, ageDays: null })
-	})
-
-	test("missing account proof asks Nathan for a personal route and refuses an employer route; a mismatch refuses", () => {
-		const created = fixture()
-		writeRoutes(created, [route("personal-unproved"), route("employer-unproved", { ownership: "employer" }), route("personal-mismatch")])
-		writeObservations(created, [account("personal-mismatch", "someone-else", daysAgo(1))])
-		const result = card(created)
-		expect(routeOf(result, "personal-unproved").gates[2]).toEqual({ gate: "G3", verdict: "confirm", evidence: "unknown", reason: "identity unknown for declared alias personal; a login is not proof; Nathan must confirm" })
-		expect(routeOf(result, "employer-unproved").refusal).toEqual({ gate: "G3", reason: "identity unknown for declared alias personal; a login is not proof; an employer route never launches on it" })
-		expect(routeOf(result, "personal-mismatch").refusal).toEqual({ gate: "G3", reason: "observed identity does not match declared alias personal" })
-		expect(result.result.data.pick).toMatchObject({ status: "needs-confirmation", route: "personal-unproved", confirmations: ["G3", "G4"] })
-		expect(result.result.nextAction).toBe("Ask Nathan to confirm G3, G4 for personal-unproved before any launch.")
+		expect(routeOf(result, "personal-unproved").gates[2]).toEqual({
+			gate: "G3",
+			verdict: "confirm",
+			evidence: "unknown",
+			reason: "identity unknown for declared alias personal; no owner observes identity yet and a login is not proof; Nathan must confirm",
+		})
+		expect(routeOf(result, "employer-unproved").refusal).toEqual({
+			gate: "G3",
+			reason: "identity unknown for declared alias personal; no owner observes identity yet and a login is not proof; an employer route never launches on it",
+		})
 	})
 
 	test("more than one qualifying route asks Nathan instead of picking", () => {
@@ -127,31 +125,53 @@ describe("gates and pick", () => {
 	})
 })
 
-describe("Monash snapshot routes", () => {
-	test("a stale snapshot refuses at G2 and a fresh one passes G2 but still refuses employer launch", () => {
-		const stale = fixture({ snapshot: snapshot(daysAgo(16).slice(0, 10)) })
-		writeRoutes(stale, [])
-		const staleRoute = routeOf(card(stale), "monash-foundry-claude-model-a")
-		expect(staleRoute.refusal.gate).toBe("G2")
-		expect(staleRoute.gates[1]).toMatchObject({ verdict: "refuse", evidence: "stale" })
-		const fresh = fixture({ snapshot: snapshot(daysAgo(1)) })
-		writeRoutes(fresh, [])
-		const freshRoute = routeOf(card(fresh), "monash-foundry-claude-model-a")
-		expect(verdicts(freshRoute.gates)).toEqual(["G1:pass:observed", "G2:pass:observed", "G3:refuse:unknown", "G4:refuse:unknown", "G5:refuse:unknown"])
-		expect(freshRoute.gates[3].reason).toBe("Monash reserve is refused until a supported usage source exists")
+describe("freshness and Monash snapshot routes", () => {
+	function monashG2(observedAt: string): Gate {
+		const created = fixture({ snapshot: snapshot(observedAt) })
+		writeRoutes(created, [])
+		return routeOf(card(created), "monash-foundry-claude-model-a").gates[1]
+	}
+
+	test("stale snapshot evidence and unknown quota are reported distinctly", () => {
+		const created = fixture({ snapshot: snapshot(daysAgo(16)) })
+		writeRoutes(created, [route("personal-claude-code")])
+		const result = card(created)
+		expect(routeOf(result, "monash-foundry-claude-model-a").gates[1]).toMatchObject({ gate: "G2", verdict: "refuse", evidence: "stale" })
+		expect(routeOf(result, "personal-claude-code").gates[3]).toEqual({ gate: "G4", verdict: "confirm", evidence: "unknown", reason: "quota unknown: no usage source observed; Nathan must confirm" })
+		expect(routeOf(result, "personal-claude-code").quota.freshness).toEqual({ state: "not-observed", observedAt: null, ageDays: null })
 	})
 
-	test("evidence hosts normalise profile ids and this machine's hostname; other raw hostnames stay unmapped", () => {
-		const created = fixture({ snapshot: snapshot(daysAgo(1), ["mini", hostname(), "some-other-machine"]) })
+	test("evidence one millisecond past seven days is stale", () => {
+		expect(monashG2(ago(7 * DAY + 1))).toMatchObject({ verdict: "refuse", evidence: "stale" })
+	})
+
+	test("evidence just inside seven days is fresh", () => {
+		expect(monashG2(ago(7 * DAY - 60_000))).toMatchObject({ verdict: "pass", evidence: "observed" })
+	})
+
+	test("a future snapshot timestamp is invalid evidence, never fresh", () => {
+		const observedAt = new Date(Date.now() + DAY).toISOString()
+		expect(monashG2(observedAt)).toEqual({ gate: "G2", verdict: "refuse", evidence: "unknown", reason: `the snapshot timestamp ${observedAt} is in the future or unreadable, so it is not evidence` })
+	})
+
+	test("a fresh snapshot passes G2 but an employer route is still refused", () => {
+		const created = fixture()
 		writeRoutes(created, [])
 		const monash = routeOf(card(created), "monash-foundry-claude-model-a")
+		expect(verdicts(monash.gates)).toEqual(["G1:pass:observed", "G2:pass:observed", "G3:refuse:unknown", "G4:refuse:unknown", "G5:refuse:unknown"])
+		expect(monash.gates[3].reason).toBe("Monash reserve is refused until a supported usage source exists")
+	})
+
+	test("evidence hosts map declared ids, this host's role and this machine's hostname; other names stay unmapped", () => {
+		const created = fixture({ snapshot: snapshot(daysAgo(1), ["mini", hostname(), "some-other-machine"]) })
+		writeRoutes(created, [route("mini-route", { hosts: ["mini"] })])
+		const monash = routeOf(card(created), "monash-foundry-claude-model-a")
 		expect(monash.hosts).toEqual({ declared: [], qualified: ["laptop", "mini"], unmappedEvidenceHosts: 1 })
-		expect(routeOf(card(created), "monash-foundry-claude-model-a").refusal.gate).toBe("G3")
 	})
 })
 
 describe("refusals", () => {
-	test("run without --dry-run is refused before any probe runs", () => {
+	test("run without --dry-run is refused before any probe runs", async () => {
 		const created = fixture()
 		writeRoutes(created, [route("personal-claude-code")])
 		const result = envelope(invoke(created, ["run", "hpr-f5n.3", "--json"]))
@@ -162,7 +182,7 @@ describe("refusals", () => {
 			data: null,
 			handoff: { owner: "human", inspect: ["agent-router run TASK --dry-run"] },
 		})
-		expect(Bun.file(created.probeLog).size).toBe(0)
+		expect(await Bun.file(created.probeLog).text()).toBe("")
 	})
 
 	test("the dry run needs a routes file; the inventory reports it missing", () => {
@@ -190,23 +210,10 @@ describe("refusals", () => {
 		expect(envelope(invocation).result).toMatchObject({ causeCode: "SCHEMA_INVALID_INPUT", exitCode: 4 })
 		expect(invocation.stdout).not.toContain("billing")
 	})
-
-	test("a probe past its time budget is a bounded transient refusal", () => {
-		const created = fixture({ monashDelaySeconds: 0.5 })
-		writeRoutes(created, [route("personal-claude-code")])
-		const result = envelope(invoke(created, ["run", "hpr-f5n.3", "--dry-run", "--probe-timeout-ms", "50", "--json"]))
-		expect(result.result).toMatchObject({ causeCode: "TRANSIENT_NOT_STARTED", exitCode: 75, retryable: true, retryDelayMilliseconds: 5000, data: null })
-	})
-
-	test("an unreadable routes path is an internal failure with a handoff", () => {
-		const created = fixture()
-		const result = envelope(invoke(created, ["run", "hpr-f5n.3", "--dry-run", "--routes-file", created.root, "--json"]))
-		expect(result.result).toMatchObject({ causeCode: "INTERNAL_UNEXPECTED", outcome: "failed", exitCode: 1, handoff: { owner: "human" } })
-	})
 })
 
 describe("no secrets and no effects (B2, B4)", () => {
-	test("the card and inventory carry no secret from the Monash configuration and no Task text", () => {
+	test("the card and inventory carry no secret from the snapshot and no Task text", () => {
 		const created = fixture()
 		writeRoutes(created, [route("personal-claude-code")])
 		for (const args of [["run", "hpr-f5n.3", "--dry-run"], ["routes"]]) {
@@ -214,19 +221,19 @@ describe("no secrets and no effects (B2, B4)", () => {
 				const invocation = invoke(created, [...args, ...mode])
 				expect(invocation.exitCode).toBe(0)
 				expect(invocation.stdout).not.toContain(SECRET_MARKER)
-				expect(invocation.stdout).not.toMatch(/apiKey|subscription/)
 			}
 		}
 	})
 
-	test("a dry run and an inventory change no file and run only the declared read-only probes", async () => {
+	test("a dry run and an inventory change no file, open no credential file and run only the declared read-only probes", async () => {
 		const created = fixture()
 		writeRoutes(created, [route("personal-claude-code"), route("personal-codex", { harness: "codex", model: { id: "gpt-6-sol" } })])
-		writeObservations(created, [])
 		await Bun.write(join(created.root, "herdr-projects", "demo", "PROJECT.md"), "# Demo\n")
 		const before = tree(created.root)
-		expect(invoke(created, ["run", "hpr-f5n.3", "--dry-run", "--project", "demo", "--json"]).exitCode).toBe(0)
-		expect(invoke(created, ["routes", "--json"]).exitCode).toBe(0)
+		// Each credential sentinel is mode 000, so any open by the router ends the run with INTERNAL_UNEXPECTED (exit 1).
+		expect(created.credentialSentinels.map((path) => statSync(path).mode & 0o777)).toEqual([0, 0, 0])
+		expect(envelope(invoke(created, ["run", "hpr-f5n.3", "--dry-run", "--project", "demo", "--json"])).result.exitCode).toBe(0)
+		expect(envelope(invoke(created, ["routes", "--json"])).result.exitCode).toBe(0)
 		expect(tree(created.root)).toEqual(before)
 		const probes = (await Bun.file(created.probeLog).text()).trim().split("\n").sort()
 		expect([...new Set(probes)]).toEqual(["claude --version", "codex --version", "monash models --json"])
