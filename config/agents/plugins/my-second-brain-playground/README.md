@@ -35,6 +35,13 @@ User-local vault selection lives at
 `~/.config/my-second-brain-playground/vault.json`. Production vault
 configuration remains separate.
 
+## Agent Router
+
+`bin/agent-router` is the inspect-only route inventory and dry-run decision
+card for the Herdr Projects goal. It never launches an agent.
+[`packages/agent-router/README.md`](packages/agent-router/README.md) owns the
+routes-file schema, gates and evidence owners; `--help` owns the syntax.
+
 ## Compaction recovery
 
 Both hook manifests (`hooks/claude/hooks.json`, `hooks/codex/hooks.json`)
