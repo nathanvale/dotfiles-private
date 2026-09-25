@@ -57,7 +57,6 @@ path remains valid when a caller has not activated the managed tree.
 | public | `bin/agent-lane-zsh` | `CLAUDE_CODE_SHELL=.../bin/agent-lane-zsh ...` | Source: self. Covering commands: `bin/test/agent-lane-zsh-test.sh` and `bin/test/toolchain-bootstrap-test.sh`. |
 | public | `bin/agent-skills-inventory` | `agent-skills-inventory [--json]` | Source: self. Owner docs: `docs/agents/skills.md:199`; covering command: `bun test bin/test/agent-skills-inventory.test.ts` (the test is non-executable). |
 | public | `bin/atuin-agent-history` | `atuin-agent-history search ...` | Source: self. Covering command: `bin/test/atuin-agent-history-test.sh`. |
-| public | `bin/browser-lane` | `browser-lane <command> ...` | Source: self. Owner doc: `docs/agents/browser-automation.md:13`; covering command: `bin/test/browser-lane-test.sh`. |
 | unqualified | `bin/claude-migrate-native` | `bin/claude-migrate-native` | Source: self. It is an effectful migration route; current tracked caller and dedicated covering test are unverified. |
 | public | `bin/cloudflare-access-headers` | `bin/cloudflare-access-headers` | Source: self. Owner doc: `.claude/skills/dotfiles/references/sensitive-material-access.md:96`; covering command: `bin/test/cloudflare-access-headers-test.sh`. |
 | helper | `bin/colour_log.sh` | `source bin/colour_log.sh` | Source owner: sourced logger. Consumers: `bin/dotfiles/symlinks/symlinks_manage.sh`, `bin/system/fonts/nerd_fonts_manage.sh`, `config/macos/defaults.common.sh`; covering commands: `bin/test/symlinks-manage-test.sh` and `bin/test/symlinks-real-directory-test.sh`. |
@@ -99,9 +98,6 @@ class says so, or through the owner that names them.
 
 | Status | File | Intended invocation | Path class | Source owner and covering route |
 | --- | --- | --- | --- | --- |
-| retired | `bin/dev/homebrew/brew_install.sh` | explicit path returns nonzero retirement guidance | `DIRECT` | Source: self. Canonical replacement owner: `setup.sh` and `config/brew/Brewfile`. Covering command: `bin/test/legacy-homebrew-helpers-test.sh`. |
-| retired | `bin/dev/homebrew/brew_remote_bundle.sh` | explicit path returns nonzero retirement guidance | `DIRECT` | Source: self. Canonical replacement owner: `setup.sh` and `config/brew/Brewfile`. Covering command: `bin/test/legacy-homebrew-helpers-test.sh`. |
-| retired | `bin/dev/homebrew/brew_uninstall.sh` | explicit path returns nonzero retirement guidance | `DIRECT` | Source: self. Canonical replacement owner: `setup.sh` and `config/brew/Brewfile`. Covering command: `bin/test/legacy-homebrew-helpers-test.sh`. |
 | public | `bin/dotfiles/symlinks/symlinks_manage.sh` | `bin/dotfiles/symlinks/symlinks_manage.sh --link\|--unlink\|--status [--force]` | `DIRECT` | Source owner and single mapping owner: this script. Routes: `setup.sh:240-247`, `setup.sh:299-302`, `verify_install.sh:475-477`; covering commands: `bin/test/symlinks-manage-test.sh` and `bin/test/symlinks-real-directory-test.sh`. |
 | public | `bin/dotfiles/toolchain` | `bin/dotfiles/toolchain status\|update [--json]` | `DIRECT` | Source owner: this script. Routes: `setup.sh:642`, `verify_install.sh:165`, `config/toolchain/README.md:45`; covering commands: `bin/test/toolchain-status-test.sh`, `bin/test/toolchain-apply-test.sh`, and `bin/test/toolchain-bootstrap-test.sh`. |
 | unqualified | `bin/env/sync-docker-mcp` | `sync-docker-mcp [--dry-run\|--setup\|--filter PATTERN]` | `ENV` | Source: self help. It is available as `HOME/bin/env/sync-docker-mcp` in interactive zsh; current tracked caller and covering test are unverified. |
@@ -152,7 +148,6 @@ invocation map and describes the process and qualification boundaries.
 | test | `bin/test/agent-lane-receipt-test.sh` | `bin/agent-lane-receipt` and the zsh contract handoff | Test source: this file. Run: `bin/test/agent-lane-receipt-test.sh`. |
 | test | `bin/test/agent-lane-zsh-test.sh` | `bin/agent-lane-zsh` | Test source: this file. Run: `bin/test/agent-lane-zsh-test.sh`. |
 | test | `bin/test/atuin-agent-history-test.sh` | `bin/atuin-agent-history` | Test source: this file. Run: `bin/test/atuin-agent-history-test.sh`. The direct command is also listed in `bin/test/README.md`. |
-| test | `bin/test/browser-lane-test.sh` | `bin/browser-lane` and its browser helper processes | Test source: this file. Run: `bin/test/browser-lane-test.sh [focused mode]`. |
 | test | `bin/test/bun-core-install-test.sh` | `setup.sh` package and toolchain phases | Test source: this file. Run: `bin/test/bun-core-install-test.sh`. The direct command is also listed in `bin/test/README.md`. |
 | test | `bin/test/claude-native-install-test.sh` | `setup.sh` native Claude installer phase | Test source: this file. Run: `bin/test/claude-native-install-test.sh`. |
 | test | `bin/test/cloudflare-access-headers-test.sh` | `bin/cloudflare-access-headers` | Test source: this file. Run: `bin/test/cloudflare-access-headers-test.sh`. |
@@ -165,7 +160,6 @@ invocation map and describes the process and qualification boundaries.
 | test | `bin/test/setup-completion-test.sh` | `setup input and truthful completion` | Test source: this file. Run: `bin/test/setup-completion-test.sh`. |
 | test | `bin/test/setup-state-recovery-test.sh` | `setup locking, state validation and interruption` | Test source: this file. Run: `bin/test/setup-state-recovery-test.sh`. |
 | test | `bin/test/profile-link-parity-test.sh` | `profile prerequisites and exact managed links` | Test source: this file. Run: `bin/test/profile-link-parity-test.sh`. |
-| test | `bin/test/legacy-homebrew-helpers-test.sh` | `retired helper guidance without mutation` | Test source: this file. Run: `bin/test/legacy-homebrew-helpers-test.sh`. |
 | test | `bin/test/symlinks-manage-test.sh` | `bin/dotfiles/symlinks/symlinks_manage.sh` | Test source: this file. Run: `bin/test/symlinks-manage-test.sh`. |
 | test | `bin/test/symlinks-real-directory-test.sh` | `bin/dotfiles/symlinks/symlinks_manage.sh` replacement and recovery | Test source: this file. Run: `bin/test/symlinks-real-directory-test.sh`. |
 | test | `bin/test/toolchain-apply-test.sh` | `bin/dotfiles/toolchain update --apply` | Test source: this file. Run: `bin/test/toolchain-apply-test.sh`. |
@@ -192,11 +186,6 @@ it is not a public basename command.
 | helper | `bin/dotfiles/symlinks/symlinks_install.sh` | `bash .../symlinks_install.sh` delegates `--link` | Source owner: `bin/dotfiles/symlinks/symlinks_manage.sh`; covering command: `bin/dotfiles/symlinks/symlinks_manage.sh --link`. Mode is non-executable. |
 | helper | `bin/dotfiles/symlinks/symlinks_uninstall.sh` | `bash .../symlinks_uninstall.sh` delegates `--unlink` | Source owner: `bin/dotfiles/symlinks/symlinks_manage.sh`; covering command: `bin/dotfiles/symlinks/symlinks_manage.sh --unlink`. Mode is non-executable. |
 | unqualified | `bin/kill-all-zombies.sh` | `bash bin/kill-all-zombies.sh` | Source: self. Mode is non-executable; it has no current tracked caller or test verified. |
-| helper | `bin/lib/browser-lane-handoff.py` | imported by `bin/browser-lane` recovery paths | Source owner: `bin/browser-lane`; covering command: `bin/test/browser-lane-test.sh`. |
-| helper | `bin/lib/browser-lane-open.js` | launched by `bin/lib/browser-lane-open.py` | Source owner: `bin/browser-lane`; covering command: `bin/test/browser-lane-test.sh`. |
-| helper | `bin/lib/browser-lane-open.py` | launched by `bin/browser-lane` native opener path | Source owner: `bin/browser-lane`; covering command: `bin/test/browser-lane-test.sh`. |
-| helper | `bin/lib/browser-lane-playwright.js` | launched by `bin/browser-lane` Playwright path | Source owner: `bin/browser-lane`; covering command: `bin/test/browser-lane-test.sh`. |
-| helper | `bin/lib/browser-lane-puppeteer.js` | launched by `bin/browser-lane` Puppeteer path | Source owner: `bin/browser-lane`; covering command: `bin/test/browser-lane-test.sh`. |
 | helper | `bin/lib/teams-automation.sh` | sourced by `bin/teams-send` and `bin/teams-reply` | Source owner: the two Teams commands; no dedicated covering test is recorded. |
 | unqualified | `bin/superwhisper-minimize-on-startup.sh` | `bash bin/superwhisper-minimize-on-startup.sh` | Source: self. Mode is non-executable; current tracked caller and test are unverified. |
 | helper | `bin/system/fonts/nerd_fonts_install.sh` | `bash .../nerd_fonts_install.sh` delegates `nerd_fonts_manage.sh --add` | Source owner: `bin/system/fonts/nerd_fonts_manage.sh`; no external covering route is verified. |
@@ -212,7 +201,6 @@ it is not a public basename command.
 | documentation | `bin/templates/README.md` | read before copying a CLI template | Owner: template directory. Covering route: the document's `cp` example. |
 | documentation | `bin/test/README.md` | read before running tests | Owner: test directory. Covering route: its Commands block and per-test notes. |
 | test-support | `bin/test/agent-skills-inventory.test.ts` | `bun test bin/test/agent-skills-inventory.test.ts` | Covers `bin/agent-skills-inventory`; mode is non-executable. |
-| test-support | `bin/test/browser-lane-native-host.cjs` | loaded by `bin/test/browser-lane-test.sh` fixtures | Covers `bin/browser-lane`; mode is non-executable. |
 | test-support | `bin/test/teams-scraper.test.ts` | `bun test bin/test/teams-scraper.test.ts` | Covers `bin/teams/teams-scraper.ts`; mode is non-executable. |
 | test-support | `bin/test/fixtures/teams/help.txt` | expected help output for `bin/test/teams-scraper.test.ts` | Source owner: the Teams scraper test; no direct command. |
 | test-support | `bin/test/fixtures/teams/chrome-only.{expected.json,stdout.txt,txt}` | fixtures for `bin/test/teams-scraper.test.ts` | Source owner: the Teams scraper test; no direct command. |

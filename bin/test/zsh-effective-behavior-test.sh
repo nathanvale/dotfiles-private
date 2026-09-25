@@ -122,17 +122,13 @@ printf '#!/bin/sh\nprintf bun-fallback\\n\n' >"$priority_bun_command"
 chmod 755 "$priority_home_command" "$priority_local_command" "$priority_bun_command"
 
 # Account-switch ownership fixture. The non-secret env file is the only startup
-# input allowed to set this value. A separate secret-file marker proves the
-# startup owners do not read the retired secret route while preserving the
-# sourced value through the complete shell process.
+# input allowed to set this value; the startup owners not reading the retired
+# secret route is the work-profile boundary contract's claim, proved there.
 account_switch_dir="$home/.config/lll-account-switch"
 account_switch_env="$account_switch_dir/env"
-account_switch_secret="$account_switch_dir/secrets.env"
 mkdir -p "$account_switch_dir"
 printf 'export LLL_ACCOUNT_SWITCH_KNOWN_REPOS="/synthetic/repo-one:/synthetic/repo-two"\n' \
   >"$account_switch_env"
-printf 'print -r -- sourced > "$HOME/.config/lll-account-switch/secret-read-marker"\n' \
-  >"$account_switch_secret"
 
 # Negative control for the disclosure detector.
 #
@@ -338,7 +334,6 @@ command_lookup_probe='
   print -r -- "local_bin_count=$local_bin_count"
   print -r -- "local_env_sourced=$([[ -e "$HOME/.local/bin/contract-local-env-sourced" ]] && print yes || print no)"
   print -r -- "known_repos=${LLL_ACCOUNT_SWITCH_KNOWN_REPOS:-}"
-  print -r -- "secret_read=$([[ -e "$HOME/.config/lll-account-switch/secret-read-marker" ]] && print yes || print no)"
 '
 
 # Probe emitting the effective executable search path, one entry per line.
@@ -430,8 +425,6 @@ for mode in noninteractive-nonlogin noninteractive-login interactive-nonlogin in
     interactive-nonlogin|interactive-login)
       assert_equals "$(grep '^known_repos=' <<<"$probe_out")" 'known_repos=/synthetic/repo-one:/synthetic/repo-two' \
         "$mode: sourced non-secret account-switch repos survive startup"
-      assert_equals "$(grep '^secret_read=' <<<"$probe_out")" 'secret_read=no' \
-        "$mode: account-switch secret file is not read during startup"
       ;;
   esac
 done
@@ -524,9 +517,10 @@ done
 # command-resolution probes all failed, because the harness had the option set
 # before startup ran and startup left it alone.
 #
-# These rows start the same shells with the three hazards already enabled, via
-# `-o` at launch so the state arrives the way a harness delivers it rather than
-# through a file this contract also owns. Startup must actively normalise them.
+# These rows start the same shells with the three hazards already enabled and
+# NOMATCH already disabled, via `-o`/`+o` at launch so the state arrives the way
+# a harness delivers it rather than through a file this contract also owns.
+# Startup must actively normalise them.
 #
 # The behavioural row is the one that matters: with EXTENDED_GLOB and NULL_GLOB
 # on, an unquoted `HEAD^` expands to a pattern and is then deleted entirely, so
@@ -555,7 +549,7 @@ run_hostile_mode() {
       TERM=dumb \
       CONTRACT_WORK="$work" \
       CONTRACT_SECRET="$DISCLOSURE_SENTINEL" \
-      /bin/zsh -o extendedglob -o nullglob -o globdots "${flags[@]}" "$probe" 2>"$err_file"
+      /bin/zsh -o extendedglob -o nullglob -o globdots +o nomatch "${flags[@]}" "$probe" 2>"$err_file"
   )"
   probe_status=$?
   set -e

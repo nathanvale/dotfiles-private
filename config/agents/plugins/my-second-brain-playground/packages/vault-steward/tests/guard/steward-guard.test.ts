@@ -1,8 +1,8 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync } from "node:fs"
+import { chmodSync, existsSync } from "node:fs"
 import { join } from "node:path"
-import { cleanupFixtures, type Fixture, fixture, git, installHook, write } from "../helpers/harness.ts"
-import { data, must, steward, stewardEnvironment } from "../helpers/steward.ts"
+import { cleanupFixtures, fixture, git, installHook, write } from "../helpers/harness.ts"
+import { candidate, data, integrate, must, run, steward, stewardEnvironment } from "../helpers/steward.ts"
 import { HOOK_TEXT } from "./hook-text.ts"
 
 // The 2.0 forms of rows V2 and V4 (GUARD-INTERACTION.md section 6) through finish --preview, finish --apply, inspect
@@ -12,15 +12,7 @@ import { HOOK_TEXT } from "./hook-text.ts"
 setDefaultTimeout(60_000)
 afterEach(cleanupFixtures)
 
-const run = (f: Fixture, args: string[]) => steward(f.vault, args, stewardEnvironment(f))
 const HOSTILE = HOOK_TEXT.replace("    refs/heads/main) ;;\n", "    refs/heads/main) ;;\n    refs/vault-note-commits/*)\n      printf 'VAULT_GUARD_BRANCH_CREATE_DENIED %s\\n' \"$ref\" >&2\n      exit 1 ;;\n")
-
-function candidate(f: Fixture): string {
-	const started = must(run(f, ["begin", "--vault", f.vault, "--path", "projects/demo/GOAL.md"]), "SUCCESS_COMPLETED")
-	const worktree = (started.result.data as { candidate: { worktree: string } }).candidate.worktree
-	write(worktree, "projects/demo/GOAL.md", "# Goal\n\nCompleted.\n")
-	return worktree
-}
 
 test("V2 fixture 1: preview and apply report guard.selfTest pass with no warnings", () => {
 	const f = fixture()
@@ -71,7 +63,7 @@ test("inspect reports an incompatible hook without refusing the recovery view", 
 	expect(data(inspected)).toMatchObject({ guard: { selfTest: "incompatible" }, recovery: { state: "not-started" } })
 })
 
-test("V2 fixtures 3 to 5 and the probe-allowed hook are warnings with detail on begin, never refusals", () => {
+test("V2 fixtures 3 to 5, the probe-allowed, current, foreign-denial and non-executable hooks are warnings with detail on begin, never refusals", () => {
 	const missing = fixture({ hook: false })
 	expect(data(must(run(missing, ["begin", "--vault", missing.vault, "--path", "a.md", "--preview"]), "SUCCESS_UNCHANGED"))).toMatchObject({ guard: { installed: false, selfTest: "missing" }, warnings: [{ code: "GUARD_MISSING", detail: `${missing.hookPath} is absent` }] })
 	const stale = fixture({ hookSource: `${HOOK_TEXT}# newer\n` })
@@ -82,6 +74,22 @@ test("V2 fixtures 3 to 5 and the probe-allowed hook are warnings with detail on 
 	expect(Date.now() - started).toBeLessThan(5_000)
 	const permissive = fixture({ hook: "#!/bin/sh\nexit 0\n" })
 	expect(data(must(run(permissive, ["begin", "--vault", permissive.vault, "--path", "a.md", "--preview"]), "SUCCESS_UNCHANGED"))).toMatchObject({ guard: { selfTest: "probe-allowed" }, warnings: [{ code: "GUARD_PROBE_ALLOWED" }] })
+	const current = fixture({ hookSource: HOOK_TEXT })
+	expect(data(must(run(current, ["begin", "--vault", current.vault, "--path", "a.md", "--preview"]), "SUCCESS_UNCHANGED"))).toMatchObject({ guard: { current: true, selfTest: "pass" }, warnings: [] })
+	const foreign = fixture({ hook: "#!/bin/sh\nif grep -q refs/heads/probe-; then echo 'foreign hook says no' >&2; exit 1; fi\nexit 0\n" })
+	expect(data(must(run(foreign, ["begin", "--vault", foreign.vault, "--path", "a.md", "--preview"]), "SUCCESS_UNCHANGED"))).toMatchObject({ guard: { selfTest: "error" }, warnings: [{ code: "GUARD_SELFTEST_ERROR", detail: "unexpected exit 1" }] })
+	const unexecutable = fixture()
+	chmodSync(unexecutable.hookPath, 0o644)
+	expect(data(must(run(unexecutable, ["begin", "--vault", unexecutable.vault, "--path", "a.md", "--preview"]), "SUCCESS_UNCHANGED"))).toMatchObject({ guard: { installed: true, executable: false, selfTest: "missing" }, warnings: [{ code: "GUARD_MISSING", detail: `${unexecutable.hookPath} is not executable` }] })
+})
+
+test("V4: a first no-changes completion runs the self-test because it writes the completion ref", () => {
+	const f = fixture()
+	const worktree = candidate(f, "projects/demo/GOAL.md", null)
+	const applied = data(must(integrate(f, worktree), "SUCCESS_COMPLETED"))
+	expect(applied.integration).toMatchObject({ kind: "no-changes", commit: null })
+	expect(applied.guard).toMatchObject({ selfTest: "pass" })
+	expect(git(f.vault, "rev-parse", `refs/vault-note-commits/${(applied.candidate as { runId: string }).runId}`)).toBe(f.initialHead)
 })
 
 test("V3 in 2.0 form: sprawl and a foreign worktree are warnings on inspect and the apply still integrates", () => {

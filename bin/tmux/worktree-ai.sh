@@ -343,11 +343,10 @@ switch_node_version() {
         return 0
     fi
 
-    # Try fnm first (faster), then nvm
-    if command -v fnm &>/dev/null; then
-        info "Switching Node version (fnm)..." >&2
-        (cd "$worktree_path" && eval "$(fnm env --shell bash)" && fnm use --install-if-missing) >&2 2>/dev/null || true
-    elif [[ -s "$HOME/.nvm/nvm.sh" ]]; then
+    # Mise reads .nvmrc and .node-version itself (idiomatic version files are
+    # enabled for node in config/mise/source.toml), so an applied Mise
+    # selection needs no switch here. nvm remains the only manual fallback.
+    if [[ -s "$HOME/.nvm/nvm.sh" ]]; then
         info "Switching Node version (nvm)..." >&2
         # shellcheck source=/dev/null
         (cd "$worktree_path" && source "$HOME/.nvm/nvm.sh" && nvm use) >&2 2>/dev/null || true

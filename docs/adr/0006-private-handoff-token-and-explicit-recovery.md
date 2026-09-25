@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: superseded
+superseded_by: 0011-native-harness-browsers.md
 supersedes: 0005-attended-browser-login-handoff.md
 ---
 

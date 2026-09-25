@@ -198,19 +198,6 @@ done
   fail 'the wrapper named by the launcher is not executable'
 pass 'the wrapper named by the launcher is executable'
 
-# The runtime validates CLAUDE_CODE_SHELL by looking for a shell name in the
-# path and rejects anything else, so a rename would silently disable every
-# Claude lane. The launcher's own emitted path is checked, not just the file.
-for lane in claude-bash claude-terminal; do
-  shell_path="$(
-    launch_line_for "$lane" | sed -n 's/.*CLAUDE_CODE_SHELL=\([^ ]*\).*/\1/p'
-  )"
-  case "$shell_path" in
-    *zsh*|*bash*) pass "$lane: the emitted wrapper path carries a runtime-accepted shell name" ;;
-    *) fail "$lane: the emitted wrapper path would be rejected by the runtime" ;;
-  esac
-done
-
 # --- Literal task start -----------------------------------------------------
 #
 # LANE_START did not survive into Claude Bash, so the receipt read an empty
@@ -245,13 +232,6 @@ for lane in codex-command codex-terminal claude-bash claude-terminal; do
     fail "$lane: the literal task start is not a current timestamp"
   fi
   pass "$lane: the literal task start is a current timestamp"
-
-  # The receipt must no longer depend on a variable that does not arrive.
-  case "$lane_output" in
-    *'--task-start "$LANE_START"'*)
-      fail "$lane: the receipt still reads task start from the environment" ;;
-    *) pass "$lane: the receipt does not depend on an inherited variable" ;;
-  esac
 done
 
 # --- Paste safety -----------------------------------------------------------

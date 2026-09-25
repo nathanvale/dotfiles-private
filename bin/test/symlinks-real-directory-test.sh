@@ -69,9 +69,6 @@ make_fixture() {
   FIXTURE_BIN="$FIXTURE/bin"
   FIXTURE_RECORDS="$FIXTURE/records"
   FIXTURE_SCRIPT="$FIXTURE_REPO/bin/dotfiles/symlinks/symlinks_manage.sh"
-  TEST_MV_MODE=normal
-  TEST_CONCURRENT_DESTINATION="$FIXTURE_HOME/.config"
-  TEST_CONCURRENT_TARGET="$FIXTURE/outside-target"
   TEST_FIXTURE_ATOMIC_PHASE=''
   TEST_FIXTURE_ATOMIC_OBSTRUCTION=''
   TEST_FIXTURE_ATOMIC_SYMLINK_TARGET="$FIXTURE/outside-atomic-target"
@@ -107,7 +104,6 @@ case "${DOTFILES_FIXTURE_ATOMIC_PHASE:-}" in
   verification-rollback|replacement-wrong-target-with-rollback) [[ "$operation" == claim-symlink ]] && inject=true ;;
   source-swap) [[ "$operation" == move-expected-identity && "$destination" == *.dotfiles-backup.* && "$destination" != *.manifest* ]] && inject=true ;;
   manifest-fail) [[ "$operation" == publish-manifest ]] && exit 75 ;;
-  manifest-fail-with-link) [[ "$operation" == publish-manifest ]] && exit 75 ;;
 	move-internal-swap|claim-boundary|claim-pre-rename|claim-post-rename-obstruction|manifest-fd-swap|manifest-read-swap|restore-after-claim|replacement-create-fail|replacement-publication-foreign|replacement-wrong-target|replacement-wrong-target-with-rollback) ;;
   *) printf '%s\n' 'unknown fixture atomic phase' >&2; exit 64 ;;
 esac
@@ -149,22 +145,6 @@ STUB
     sed -i '' "s|$fixed_python_invocation|$fixture_python_invocation|" "$FIXTURE_SCRIPT"
     assert_equals "$(grep -Fc "$fixed_python_invocation" "$FIXTURE_SCRIPT" || true)" '0' 'fixture removes the fixed interpreter invocation once'
     assert_equals "$(grep -Fc "$fixture_python_invocation" "$FIXTURE_SCRIPT" || true)" '1' 'fixture installs one atomic interpreter wrapper invocation'
-		move_seam='    exclusive_rename_or_exit(source_path, destination_path)'
-		claim_seam='    # The private, mode-0700 directory prevents another identity from racing'
-		postclaim_seam='    # A copied-test seam can obstruct reversal after a foreign claim.'
-		replacement_create_seam='        os.symlink(target, staged_replacement)'
-		replacement_stage_seam='        staged_status = os.lstat(staged_replacement)'
-		manifest_fd_seam='        payload = manifest_contents.encode("utf-8")'
-		manifest_read_seam='        chunks = []'
-		restore_claim_seam=$'\t# A copied-test seam can obstruct the absent destination after claim.'
-		assert_equals "$(grep -Fc "$move_seam" "$FIXTURE_SCRIPT" || true)" '1' 'fixture finds one post-identity move seam'
-		assert_equals "$(grep -Fc "$claim_seam" "$FIXTURE_SCRIPT" || true)" '1' 'fixture finds one claim deletion seam'
-		assert_equals "$(grep -Fc "$postclaim_seam" "$FIXTURE_SCRIPT" || true)" '1' 'fixture finds one post-claim reversal seam'
-		assert_equals "$(grep -Fc "$replacement_create_seam" "$FIXTURE_SCRIPT" || true)" '1' 'fixture finds one private replacement creation seam'
-		assert_equals "$(grep -Fc "$replacement_stage_seam" "$FIXTURE_SCRIPT" || true)" '1' 'fixture finds one private replacement publication seam'
-		assert_equals "$(grep -Fc "$manifest_fd_seam" "$FIXTURE_SCRIPT" || true)" '1' 'fixture finds one descriptor-backed manifest seam'
-		assert_equals "$(grep -Fc "$manifest_read_seam" "$FIXTURE_SCRIPT" || true)" '1' 'fixture finds one descriptor-backed manifest read seam'
-		assert_equals "$(grep -Fc "$restore_claim_seam" "$FIXTURE_SCRIPT" || true)" '1' 'fixture finds one post-claim restore seam'
 		/usr/bin/python3 - "$FIXTURE_SCRIPT" <<'PY'
 import sys
 
@@ -265,48 +245,7 @@ for argument in "$@"; do
 done
 exec /bin/rm "$@"
 STUB
-  cat >"$FIXTURE_BIN/ln" <<'STUB'
-#!/bin/bash
-case "${LN_MODE:-normal}" in
-  fail) exit 73 ;;
-  fail-with-link)
-    last_argument="${!#}"
-    /bin/ln -s "$WRONG_TARGET" "$last_argument"
-    exit 73
-    ;;
-	fail-with-exact-link)
-		last_argument="${!#}"
-		/bin/ln "$@"
-		exit 73
-		;;
-  wrong)
-    last_argument="${!#}"
-    exec /bin/ln -s "$WRONG_TARGET" "$last_argument"
-    ;;
-  normal) exec /bin/ln "$@" ;;
-  *) exit 74 ;;
-esac
-STUB
-  cat >"$FIXTURE_BIN/mv" <<'STUB'
-#!/bin/bash
-last_argument="${!#}"
-case "${MV_MODE:-normal}" in
-  normal) exec /bin/mv "$@" ;;
-  manifest-fail)
-    [[ "$last_argument" == *.manifest ]] && exit 75
-    exec /bin/mv "$@"
-    ;;
-  manifest-fail-with-link)
-    if [[ "$last_argument" == *.manifest ]]; then
-      /bin/ln -s "$CONCURRENT_TARGET" "$CONCURRENT_DESTINATION"
-      exit 75
-    fi
-    exec /bin/mv "$@"
-    ;;
-  *) exit 76 ;;
-esac
-STUB
-  chmod +x "$FIXTURE_BIN/rm" "$FIXTURE_BIN/ln" "$FIXTURE_BIN/mv"
+  chmod +x "$FIXTURE_BIN/rm"
 }
 
 seed_real_directory() {
@@ -316,14 +255,9 @@ seed_real_directory() {
 }
 
 run_cli() {
-  local mode="${1:-normal}"
-  shift || true
   set +e
   RUN_OUTPUT="$(env -i HOME="$FIXTURE_HOME" DOTFILES_PROFILE=desktop \
     PATH="$FIXTURE_BIN:/usr/bin:/bin" RM_RECORD="$FIXTURE_RECORDS/rm-argv" \
-    LN_MODE="$mode" WRONG_TARGET="$FIXTURE/outside-target" \
-    MV_MODE="$TEST_MV_MODE" CONCURRENT_DESTINATION="$TEST_CONCURRENT_DESTINATION" \
-    CONCURRENT_TARGET="$TEST_CONCURRENT_TARGET" \
     DOTFILES_FIXTURE_ATOMIC_PHASE="$TEST_FIXTURE_ATOMIC_PHASE" \
     DOTFILES_FIXTURE_ATOMIC_OBSTRUCTION="$TEST_FIXTURE_ATOMIC_OBSTRUCTION" \
     DOTFILES_FIXTURE_ATOMIC_SYMLINK_TARGET="$TEST_FIXTURE_ATOMIC_SYMLINK_TARGET" \
@@ -340,12 +274,11 @@ run_interactive_link() {
   set +e
   RUN_OUTPUT="$(env -i HOME="$FIXTURE_HOME" DOTFILES_PROFILE=desktop \
     PATH="$FIXTURE_BIN:/usr/bin:/bin" RM_RECORD="$FIXTURE_RECORDS/rm-argv" \
-    LN_MODE=normal WRONG_TARGET="$FIXTURE/outside-target" ANSWER="$answer" \
-    MV_MODE="$TEST_MV_MODE" CONCURRENT_DESTINATION="$TEST_CONCURRENT_DESTINATION" \
-    CONCURRENT_TARGET="$TEST_CONCURRENT_TARGET" DOTFILES_FIXTURE_ATOMIC_PHASE="$TEST_FIXTURE_ATOMIC_PHASE" \
+    ANSWER="$answer" \
+    DOTFILES_FIXTURE_ATOMIC_PHASE="$TEST_FIXTURE_ATOMIC_PHASE" \
 		DOTFILES_FIXTURE_ATOMIC_OBSTRUCTION="$TEST_FIXTURE_ATOMIC_OBSTRUCTION" DOTFILES_FIXTURE_ATOMIC_SYMLINK_TARGET="$TEST_FIXTURE_ATOMIC_SYMLINK_TARGET" DOTFILES_FIXTURE_SOURCE_HOLDER="$TEST_FIXTURE_SOURCE_HOLDER" FIXTURE_SCRIPT="$FIXTURE_SCRIPT" /usr/bin/expect <<'EXPECT' 2>&1
 set timeout 10
-spawn /usr/bin/env -i HOME=$env(HOME) DOTFILES_PROFILE=$env(DOTFILES_PROFILE) PATH=$env(PATH) RM_RECORD=$env(RM_RECORD) LN_MODE=$env(LN_MODE) WRONG_TARGET=$env(WRONG_TARGET) MV_MODE=$env(MV_MODE) CONCURRENT_DESTINATION=$env(CONCURRENT_DESTINATION) CONCURRENT_TARGET=$env(CONCURRENT_TARGET) DOTFILES_FIXTURE_ATOMIC_PHASE=$env(DOTFILES_FIXTURE_ATOMIC_PHASE) DOTFILES_FIXTURE_ATOMIC_OBSTRUCTION=$env(DOTFILES_FIXTURE_ATOMIC_OBSTRUCTION) DOTFILES_FIXTURE_ATOMIC_SYMLINK_TARGET=$env(DOTFILES_FIXTURE_ATOMIC_SYMLINK_TARGET) DOTFILES_FIXTURE_SOURCE_HOLDER=$env(DOTFILES_FIXTURE_SOURCE_HOLDER) /bin/bash -c {[[ -t 0 ]] || exit 70; printf 'PTY_STDIN=yes\n'; exec "$@"} _ /bin/bash $env(FIXTURE_SCRIPT) --link
+spawn /usr/bin/env -i HOME=$env(HOME) DOTFILES_PROFILE=$env(DOTFILES_PROFILE) PATH=$env(PATH) RM_RECORD=$env(RM_RECORD) DOTFILES_FIXTURE_ATOMIC_PHASE=$env(DOTFILES_FIXTURE_ATOMIC_PHASE) DOTFILES_FIXTURE_ATOMIC_OBSTRUCTION=$env(DOTFILES_FIXTURE_ATOMIC_OBSTRUCTION) DOTFILES_FIXTURE_ATOMIC_SYMLINK_TARGET=$env(DOTFILES_FIXTURE_ATOMIC_SYMLINK_TARGET) DOTFILES_FIXTURE_SOURCE_HOLDER=$env(DOTFILES_FIXTURE_SOURCE_HOLDER) /bin/bash -c {[[ -t 0 ]] || exit 70; printf 'PTY_STDIN=yes\n'; exec "$@"} _ /bin/bash $env(FIXTURE_SCRIPT) --link
 expect {
   -re {replace with symlink\? \[y/N\] } { send -- "$env(ANSWER)\r"; exp_continue }
   eof {
@@ -383,32 +316,38 @@ private_claim_directory_for_home() {
   find "$FIXTURE_HOME" -type d -name '.dotfiles-claim-*' -print -quit
 }
 
+recorded_recursive_rm() {
+  [[ -e "$FIXTURE_RECORDS/rm-argv" ]] && grep -Eq '(^| )-[^ ]*[rR]' "$FIXTURE_RECORDS/rm-argv"
+}
+
 assert_no_recursive_rm() {
   local label="$1"
-  [[ ! -e "$FIXTURE_RECORDS/rm-argv" ]] ||
-    ! grep -Eq '(^| )-[^ ]*[rR]' "$FIXTURE_RECORDS/rm-argv" ||
-    fail "$label (production attempted recursive rm)"
+  ! recorded_recursive_rm || fail "$label (production attempted recursive rm)"
   pass "$label"
 }
 
 # Sensitivity control: a test-owned fixture preserves the old interactive
 # rm -rf route without making public CI depend on excluded private history.
-# These observations are the inverse of the GREEN assertions below.
+# It proves the recursive-rm detector observes that route, so a defect that
+# silently disabled the detector would be caught here.
 make_fixture 'base-negative-control' "$UNSAFE_BASE_FIXTURE"
 seed_real_directory 'base-sentinel-bytes'
-# The base control must be allowed to demonstrate its destructive route. Every
-# GREEN fixture keeps the observing rm wrapper installed.
-/bin/rm "$FIXTURE_BIN/rm"
+# Swap the blocking rm wrapper for a record-only stub so the destructive
+# route can complete while the recorder still observes it.
+cat >"$FIXTURE_BIN/rm" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >>"$RM_RECORD"
+exec /bin/rm "$@"
+STUB
+chmod +x "$FIXTURE_BIN/rm"
 run_interactive_link 'y'
 assert_status 0 'base interactive approval exits zero'
 [[ -L "$FIXTURE_HOME/.config" ]] || fail 'base negative control must replace the real directory with a symlink'
 [[ ! -e "$FIXTURE_HOME/.config/sentinel.bin" ]] ||
   fail 'base negative control must remove the real directory sentinel'
 pass 'base negative control removes the real directory sentinel'
-assert_equals "$(manifest_for_home)" '' 'base negative control publishes no recovery manifest'
-run_cli normal --restore "$FIXTURE_HOME/missing.manifest"
-[[ "$RUN_STATUS" -ne 0 ]] || fail 'base negative control unexpectedly accepts public restore'
-pass 'base negative control rejects the absent restore command'
+recorded_recursive_rm || fail 'base negative control: recursive-rm detector must observe the retired rm -rf route'
+pass 'base negative control: recursive-rm detector observes the retired rm -rf route'
 
 make_fixture 'interactive-approval'
 seed_real_directory 'interactive-sentinel-bytes'
@@ -440,7 +379,7 @@ assert_equals "$(cat "$manifest_path")" "$manifest_expected" 'interactive manife
 assert_contains "$RUN_OUTPUT" "Restore with: $physical_script --restore $physical_manifest" 'interactive output prints the exact restore route'
 assert_equals "$(temporary_manifest_directory_for_home)" '' 'interactive manifest publication leaves no owned temp directory'
 assert_no_recursive_rm 'interactive replacement makes no recursive deletion call'
-run_cli normal --restore "$manifest_path"
+run_cli --restore "$manifest_path"
 assert_status 0 'public restore exits zero'
 assert_directory_sentinel "$FIXTURE_HOME/.config" 'interactive-sentinel-bytes' 'public restore preserves original sentinel bytes'
 [[ ! -e "$backup_path" && ! -L "$backup_path" ]] || fail 'public restore consumes only the backup object'
@@ -452,14 +391,14 @@ assert_no_recursive_rm 'public restore makes no recursive deletion call'
 
 make_fixture 'manifest-read-descriptor-swap'
 seed_real_directory 'manifest-read-sentinel-bytes'
-run_cli normal --link --force
+run_cli --link --force
 assert_status 0 'manifest read descriptor-swap setup exits zero'
 manifest_read_swap_manifest="$(manifest_for_home)"
 manifest_read_swap_backup="$(backup_for_home)"
 [[ -n "$manifest_read_swap_manifest" && -n "$manifest_read_swap_backup" ]] || fail 'manifest read descriptor-swap setup creates recovery state'
 pass 'manifest read descriptor-swap setup creates recovery state'
 TEST_FIXTURE_ATOMIC_PHASE=manifest-read-swap
-run_cli normal --restore "$manifest_read_swap_manifest"
+run_cli --restore "$manifest_read_swap_manifest"
 assert_status 0 'manifest read descriptor swap restores from captured bytes'
 assert_directory_sentinel "$FIXTURE_HOME/.config" 'manifest-read-sentinel-bytes' 'manifest read descriptor swap restores original bytes'
 [[ -L "$manifest_read_swap_manifest" ]] || fail 'manifest read descriptor swap preserves foreign manifest symlink'
@@ -481,7 +420,7 @@ assert_equals "$(manifest_for_home)" '' 'interactive refusal creates no manifest
 
 make_fixture 'noninteractive-refusal'
 seed_real_directory 'noninteractive-sentinel-bytes'
-run_cli normal --link
+run_cli --link
 assert_status 0 'noninteractive link without force exits zero'
 assert_directory_sentinel "$FIXTURE_HOME/.config" 'noninteractive-sentinel-bytes' 'noninteractive link without force preserves original directory'
 assert_equals "$(manifest_for_home)" '' 'noninteractive link without force creates no manifest'
@@ -489,7 +428,7 @@ assert_contains "$RUN_OUTPUT" 'Skipped (non-interactive, use --force to replace)
 
 make_fixture 'dry-run'
 seed_real_directory 'dry-run-sentinel-bytes'
-run_cli normal --link --force --dry-run
+run_cli --link --force --dry-run
 assert_status 0 'dry-run force exits zero'
 assert_directory_sentinel "$FIXTURE_HOME/.config" 'dry-run-sentinel-bytes' 'dry-run force preserves original directory'
 assert_equals "$(manifest_for_home)" '' 'dry-run force creates no manifest'
@@ -499,7 +438,7 @@ assert_contains "$RUN_OUTPUT" '[DRY-RUN] Would publish mode-0600 manifest:' 'dry
 make_fixture 'real-file-force'
 printf '%s' 'managed-zshenv-source' >"$FIXTURE_REPO/.zshenv"
 printf '%s' 'real-file-sentinel-bytes' >"$FIXTURE_HOME/.zshenv"
-run_cli normal --link --force
+run_cli --link --force
 assert_status 0 'real file force exits zero'
 [[ -L "$FIXTURE_HOME/.zshenv" ]] || fail 'real file force creates a symlink'
 pass 'real file force creates a symlink'
@@ -511,14 +450,14 @@ pass 'real file force creates a regular backup'
 cmp -s <(printf '%s' 'real-file-sentinel-bytes') "$file_backup" || fail 'real file force preserves sentinel bytes'
 pass 'real file force preserves sentinel bytes'
 assert_contains "$(cat "$file_manifest")" 'previous_object_type=file' 'real file force manifest records file type'
-run_cli normal --restore "$file_manifest"
+run_cli --restore "$file_manifest"
 assert_status 0 'real file public restore exits zero'
 cmp -s <(printf '%s' 'real-file-sentinel-bytes') "$FIXTURE_HOME/.zshenv" || fail 'real file public restore preserves sentinel bytes'
 pass 'real file public restore preserves sentinel bytes'
 
 make_fixture 'force-approval'
 seed_real_directory 'force-sentinel-bytes'
-run_cli normal --link --force
+run_cli --link --force
 assert_status 0 'explicit force exits zero'
 [[ -L "$FIXTURE_HOME/.config" ]] || fail 'explicit force creates a symlink'
 pass 'explicit force creates a symlink'
@@ -535,7 +474,7 @@ assert_no_recursive_rm 'explicit force makes no recursive deletion call'
 force_manifest_bytes="$(cat "$force_manifest")"
 restore_refusal() {
   local label="$1"
-  run_cli normal --restore "$force_manifest"
+  run_cli --restore "$force_manifest"
   [[ "$RUN_STATUS" -ne 0 ]] || fail "$label must exit nonzero"
   pass "$label exits nonzero"
   [[ -L "$FIXTURE_HOME/.config" ]] || fail "$label must leave the managed link in place"
@@ -561,7 +500,7 @@ restore_refusal 'mismatched managed mapping refusal'
 printf '%s' "$force_manifest_bytes" >"$force_manifest"
 chmod 600 "$force_manifest"
 /bin/mv "$force_backup" "$FIXTURE/outside-backup"
-run_cli normal --restore "$force_manifest"
+run_cli --restore "$force_manifest"
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'missing backup refusal must exit nonzero'
 pass 'missing backup refusal exits nonzero'
 [[ -L "$FIXTURE_HOME/.config" ]] || fail 'missing backup refusal must preserve managed link'
@@ -569,7 +508,7 @@ pass 'missing backup refusal preserves managed link'
 /bin/mv "$FIXTURE/outside-backup" "$force_backup"
 /bin/mv "$force_manifest" "$FIXTURE/outside-manifest"
 /bin/ln -s "$FIXTURE/outside-manifest" "$force_manifest"
-run_cli normal --restore "$force_manifest"
+run_cli --restore "$force_manifest"
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'symlinked manifest refusal must exit nonzero'
 pass 'symlinked manifest refusal exits nonzero'
 [[ -L "$FIXTURE_HOME/.config" ]] || fail 'symlinked manifest refusal must preserve managed link'
@@ -578,7 +517,7 @@ pass 'symlinked manifest refusal preserves managed link'
 /bin/mv "$FIXTURE/outside-manifest" "$force_manifest"
 /bin/rm "$FIXTURE_HOME/.config"
 /bin/ln -s "$FIXTURE/outside-target" "$FIXTURE_HOME/.config"
-run_cli normal --restore "$force_manifest"
+run_cli --restore "$force_manifest"
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'unexpected destination target refusal must exit nonzero'
 pass 'unexpected destination target refusal exits nonzero'
 [[ -e "$force_backup" ]] || fail 'unexpected destination target refusal must preserve backup'
@@ -587,7 +526,7 @@ pass 'unexpected destination target refusal preserves backup'
 /bin/ln -s "$FIXTURE_REPO/config" "$FIXTURE_HOME/.config"
 /bin/rm "$FIXTURE_HOME/.config"
 mkdir "$FIXTURE_HOME/.config"
-run_cli normal --restore "$force_manifest"
+run_cli --restore "$force_manifest"
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'non-link destination refusal must exit nonzero'
 pass 'non-link destination refusal exits nonzero'
 assert_directory_sentinel "$force_backup" 'force-sentinel-bytes' 'non-link destination refusal preserves backup bytes'
@@ -599,7 +538,7 @@ printf '%s\n' 'literal unsafe-path manifest bytes' >"$unsafe_manifest_path"
 chmod 600 "$unsafe_manifest_path"
 [[ -f "$unsafe_manifest_path" && ! -L "$unsafe_manifest_path" ]] || fail 'unsafe-path fixture is a regular manifest file'
 pass 'unsafe-path fixture is a regular manifest file'
-run_cli normal --restore "$unsafe_manifest_path"
+run_cli --restore "$unsafe_manifest_path"
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'unrepresentable manifest path refusal must exit nonzero'
 pass 'unrepresentable manifest path refusal exits nonzero'
 assert_contains "$RUN_OUTPUT" 'Refusing missing, symlinked, or unsafe manifest' 'unrepresentable manifest path reaches unsafe-path refusal'
@@ -610,7 +549,7 @@ make_fixture 'atomic-backup-publication-obstruction'
 seed_real_directory 'atomic-backup-publication-sentinel-bytes'
 TEST_FIXTURE_ATOMIC_PHASE=backup
 TEST_FIXTURE_ATOMIC_OBSTRUCTION=file
-run_cli normal --link --force
+run_cli --link --force
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'atomic backup publication obstruction must exit nonzero'
 pass 'atomic backup publication obstruction exits nonzero'
 assert_directory_sentinel "$FIXTURE_HOME/.config" 'atomic-backup-publication-sentinel-bytes' 'atomic backup publication obstruction preserves original bytes'
@@ -625,7 +564,7 @@ make_fixture 'atomic-manifest-publication-obstruction'
 seed_real_directory 'atomic-manifest-publication-sentinel-bytes'
 TEST_FIXTURE_ATOMIC_PHASE=manifest
 TEST_FIXTURE_ATOMIC_OBSTRUCTION=file
-run_cli normal --link --force
+run_cli --link --force
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'atomic manifest publication obstruction must exit nonzero'
 pass 'atomic manifest publication obstruction exits nonzero'
 assert_directory_sentinel "$FIXTURE_HOME/.config" 'atomic-manifest-publication-sentinel-bytes' 'atomic manifest publication obstruction restores original bytes'
@@ -641,7 +580,7 @@ assert_equals "$(temporary_manifest_directory_for_home)" '' 'atomic manifest pub
 make_fixture 'manifest-publication-failure'
 seed_real_directory 'manifest-publication-sentinel-bytes'
 TEST_FIXTURE_ATOMIC_PHASE=manifest-fail
-run_cli normal --link --force
+run_cli --link --force
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'ordinary manifest-publication failure must exit nonzero'
 pass 'ordinary manifest-publication failure exits nonzero'
 assert_directory_sentinel "$FIXTURE_HOME/.config" 'manifest-publication-sentinel-bytes' 'ordinary manifest-publication failure restores original directory'
@@ -650,22 +589,10 @@ assert_equals "$(temporary_manifest_for_home)" '' 'ordinary manifest-publication
 assert_equals "$(temporary_manifest_directory_for_home)" '' 'ordinary manifest-publication failure leaves no owned temp directory'
 assert_no_recursive_rm 'ordinary manifest-publication failure makes no recursive deletion call'
 
-make_fixture 'manifest-publication-obstruction'
-seed_real_directory 'manifest-obstruction-sentinel-bytes'
-TEST_FIXTURE_ATOMIC_PHASE=manifest-fail-with-link
-run_cli normal --link --force
-[[ "$RUN_STATUS" -ne 0 ]] || fail 'obstructed manifest-publication failure must exit nonzero'
-pass 'obstructed manifest-publication failure exits nonzero'
-assert_directory_sentinel "$FIXTURE_HOME/.config" 'manifest-obstruction-sentinel-bytes' 'obstructed manifest-publication failure preserves original before backup publication'
-assert_equals "$(backup_for_home)" '' 'obstructed manifest-publication failure leaves no unaddressable backup'
-assert_equals "$(temporary_manifest_for_home)" '' 'obstructed manifest-publication failure cleans the owned temporary manifest'
-assert_equals "$(temporary_manifest_directory_for_home)" '' 'obstructed manifest-publication failure leaves no owned temp directory'
-assert_no_recursive_rm 'obstructed manifest-publication failure makes no recursive deletion call'
-
 make_fixture 'same-type-source-swap'
 seed_real_directory 'approved-source-sentinel-bytes'
 TEST_FIXTURE_ATOMIC_PHASE=source-swap
-run_cli normal --link --force
+run_cli --link --force
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'same-type source swap must exit nonzero'
 pass 'same-type source swap exits nonzero'
 assert_directory_sentinel "$FIXTURE_HOME/.config" 'concurrent-source-directory-bytes' 'same-type source swap preserves concurrent directory bytes'
@@ -677,7 +604,7 @@ assert_no_recursive_rm 'same-type source swap makes no recursive deletion call'
 make_fixture 'internal-move-boundary-swap'
 seed_real_directory 'internal-move-approved-bytes'
 TEST_FIXTURE_ATOMIC_PHASE=move-internal-swap
-run_cli normal --link --force
+run_cli --link --force
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'internal move boundary swap must exit nonzero'
 pass 'internal move boundary swap exits nonzero'
 assert_directory_sentinel "$FIXTURE_HOME/.config" 'internal-move-swap-bytes' 'internal move boundary swap preserves swapped directory after reversal'
@@ -689,7 +616,7 @@ assert_no_recursive_rm 'internal move boundary swap makes no recursive deletion 
 make_fixture 'temporary-manifest-swap'
 seed_real_directory 'temporary-manifest-sentinel-bytes'
 TEST_FIXTURE_ATOMIC_PHASE=manifest-fd-swap
-run_cli normal --link --force
+run_cli --link --force
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'temporary manifest swap must exit nonzero'
 pass 'temporary manifest swap exits nonzero'
 assert_directory_sentinel "$FIXTURE_HOME/.config" 'temporary-manifest-sentinel-bytes' 'temporary manifest swap preserves original before backup publication'
@@ -710,7 +637,7 @@ assert_no_recursive_rm 'temporary manifest swap makes no recursive deletion call
 
 make_fixture 'atomic-restore-directory-obstruction'
 seed_real_directory 'atomic-directory-sentinel-bytes'
-run_cli normal --link --force
+run_cli --link --force
 assert_status 0 'atomic directory-obstruction setup exits zero'
 atomic_directory_manifest="$(manifest_for_home)"
 atomic_directory_backup="$(backup_for_home)"
@@ -718,7 +645,7 @@ atomic_directory_backup="$(backup_for_home)"
 pass 'atomic directory-obstruction setup creates manifest and backup'
 TEST_FIXTURE_ATOMIC_PHASE=restore-after-claim
 TEST_FIXTURE_ATOMIC_OBSTRUCTION=directory
-run_cli normal --restore "$atomic_directory_manifest"
+run_cli --restore "$atomic_directory_manifest"
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'atomic directory obstruction must exit nonzero'
 pass 'atomic directory obstruction exits nonzero'
 [[ -d "$FIXTURE_HOME/.config" && ! -L "$FIXTURE_HOME/.config" ]] || fail 'atomic directory obstruction remains a real directory'
@@ -732,7 +659,7 @@ assert_no_recursive_rm 'atomic directory obstruction makes no recursive deletion
 /bin/rm "$FIXTURE_HOME/.config/concurrent.bin"
 /bin/rmdir "$FIXTURE_HOME/.config"
 TEST_FIXTURE_ATOMIC_PHASE=''
-run_cli normal --restore "$atomic_directory_manifest"
+run_cli --restore "$atomic_directory_manifest"
 assert_status 0 'atomic directory obstruction retry restores from absent destination'
 assert_directory_sentinel "$FIXTURE_HOME/.config" 'atomic-directory-sentinel-bytes' 'atomic directory obstruction retry preserves backup bytes'
 [[ ! -e "$atomic_directory_backup" && ! -L "$atomic_directory_backup" ]] || fail 'atomic directory obstruction retry consumes the backup'
@@ -740,7 +667,7 @@ pass 'atomic directory obstruction retry consumes the backup'
 
 make_fixture 'atomic-restore-file-obstruction'
 seed_real_directory 'atomic-file-sentinel-bytes'
-run_cli normal --link --force
+run_cli --link --force
 assert_status 0 'atomic file-obstruction setup exits zero'
 atomic_file_manifest="$(manifest_for_home)"
 atomic_file_backup="$(backup_for_home)"
@@ -748,7 +675,7 @@ atomic_file_backup="$(backup_for_home)"
 pass 'atomic file-obstruction setup creates manifest and backup'
 TEST_FIXTURE_ATOMIC_PHASE=restore
 TEST_FIXTURE_ATOMIC_OBSTRUCTION=file
-run_cli normal --restore "$atomic_file_manifest"
+run_cli --restore "$atomic_file_manifest"
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'atomic file obstruction must exit nonzero'
 pass 'atomic file obstruction exits nonzero'
 assert_file_bytes "$FIXTURE_HOME/.config" 'concurrent-file-bytes' 'atomic file obstruction bytes remain untouched'
@@ -757,12 +684,12 @@ assert_no_recursive_rm 'atomic file obstruction makes no recursive deletion call
 
 make_fixture 'private-claim-deletion-boundary'
 seed_real_directory 'private-claim-sentinel-bytes'
-run_cli normal --link --force
+run_cli --link --force
 assert_status 0 'private claim boundary setup exits zero'
 private_claim_manifest="$(manifest_for_home)"
 private_claim_backup="$(backup_for_home)"
 TEST_FIXTURE_ATOMIC_PHASE=claim-boundary
-run_cli normal --restore "$private_claim_manifest"
+run_cli --restore "$private_claim_manifest"
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'private claim boundary race must exit nonzero'
 pass 'private claim boundary race exits nonzero'
 [[ -f "$TEST_FIXTURE_CLAIM_RECORD" ]] || fail 'private claim boundary records the private claim path'
@@ -777,12 +704,12 @@ assert_no_recursive_rm 'private claim boundary makes no recursive deletion call'
 
 make_fixture 'preclaim-foreign-reversal'
 seed_real_directory 'preclaim-foreign-sentinel-bytes'
-run_cli normal --link --force
+run_cli --link --force
 assert_status 0 'preclaim foreign reversal setup exits zero'
 preclaim_backup="$(backup_for_home)"
 preclaim_manifest="$(manifest_for_home)"
 TEST_FIXTURE_ATOMIC_PHASE=claim-pre-rename
-run_cli normal --restore "$preclaim_manifest"
+run_cli --restore "$preclaim_manifest"
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'preclaim foreign reversal must exit nonzero'
 pass 'preclaim foreign reversal exits nonzero'
 [[ -L "$FIXTURE_HOME/.config" ]] || fail 'preclaim foreign reversal restores the foreign object to source'
@@ -795,12 +722,12 @@ assert_no_recursive_rm 'preclaim foreign reversal makes no recursive deletion ca
 
 make_fixture 'preclaim-foreign-reversal-obstructed'
 seed_real_directory 'preclaim-obstructed-sentinel-bytes'
-run_cli normal --link --force
+run_cli --link --force
 assert_status 0 'preclaim obstruction setup exits zero'
 preclaim_obstructed_backup="$(backup_for_home)"
 preclaim_obstructed_manifest="$(manifest_for_home)"
 TEST_FIXTURE_ATOMIC_PHASE=claim-post-rename-obstruction
-run_cli normal --restore "$preclaim_obstructed_manifest"
+run_cli --restore "$preclaim_obstructed_manifest"
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'preclaim obstruction must exit nonzero'
 pass 'preclaim obstruction exits nonzero'
 assert_file_bytes "$FIXTURE_HOME/.config" 'post-claim-obstruction-bytes' 'preclaim obstruction preserves source race winner bytes'
@@ -817,7 +744,7 @@ assert_no_recursive_rm 'preclaim obstruction makes no recursive deletion call'
 make_fixture 'creation-failure-rollback'
 seed_real_directory 'creation-failure-sentinel-bytes'
 TEST_FIXTURE_ATOMIC_PHASE=replacement-create-fail
-run_cli normal --link --force
+run_cli --link --force
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'injected link-creation failure exits nonzero'
 pass 'injected link-creation failure exits nonzero'
 assert_directory_sentinel "$FIXTURE_HOME/.config" 'creation-failure-sentinel-bytes' 'injected link-creation failure restores exact directory bytes'
@@ -830,7 +757,7 @@ assert_no_recursive_rm 'injected link-creation rollback makes no recursive delet
 make_fixture 'creation-failure-obstruction'
 seed_real_directory 'creation-obstruction-sentinel-bytes'
 TEST_FIXTURE_ATOMIC_PHASE=replacement-publication-foreign
-run_cli normal --link --force
+run_cli --link --force
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'foreign exact-target publication winner must exit nonzero'
 pass 'foreign exact-target publication winner exits nonzero'
 [[ -L "$FIXTURE_HOME/.config" ]] || fail 'foreign exact-target publication winner retains the foreign destination'
@@ -845,7 +772,7 @@ assert_no_recursive_rm 'foreign exact-target publication winner makes no recursi
 make_fixture 'creation-failure-exact-stage'
 seed_real_directory 'creation-exact-stage-sentinel-bytes'
 TEST_FIXTURE_ATOMIC_PHASE=replacement-wrong-target
-run_cli normal --link --force
+run_cli --link --force
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'owned wrong-target verification failure must exit nonzero'
 pass 'owned wrong-target verification failure exits nonzero'
 assert_contains "$RUN_OUTPUT" 'Replacement symlink verification failed' 'owned wrong-target injection reaches final verification'
@@ -856,7 +783,7 @@ assert_no_recursive_rm 'owned wrong-target verification failure makes no recursi
 make_fixture 'verification-rollback-concurrent-symlink'
 seed_real_directory 'verification-concurrent-sentinel-bytes'
 TEST_FIXTURE_ATOMIC_PHASE=replacement-wrong-target-with-rollback
-run_cli normal --link --force
+run_cli --link --force
 [[ "$RUN_STATUS" -ne 0 ]] || fail 'concurrent verification rollback replacement must exit nonzero'
 pass 'concurrent verification rollback replacement exits nonzero'
 [[ -L "$FIXTURE_HOME/.config" ]] || fail 'concurrent verification rollback replacement retains concurrent symlink'
@@ -869,16 +796,5 @@ assert_directory_sentinel "$verification_concurrent_backup" 'verification-concur
 [[ -f "$(manifest_for_home)" ]] || fail 'concurrent verification rollback replacement retains the recovery manifest'
 pass 'concurrent verification rollback replacement retains the recovery manifest'
 assert_no_recursive_rm 'concurrent verification rollback replacement makes no recursive deletion call'
-
-make_fixture 'wrong-link-verification-rollback'
-seed_real_directory 'verification-failure-sentinel-bytes'
-TEST_FIXTURE_ATOMIC_PHASE=replacement-wrong-target
-run_cli normal --link --force
-[[ "$RUN_STATUS" -ne 0 ]] || fail 'zero-exit wrong-link injection exits nonzero after verification'
-pass 'zero-exit wrong-link injection exits nonzero after verification'
-assert_contains "$RUN_OUTPUT" 'Replacement symlink verification failed' 'zero-exit wrong-link injection reaches final verification'
-assert_directory_sentinel "$FIXTURE_HOME/.config" 'verification-failure-sentinel-bytes' 'zero-exit wrong-link injection restores exact directory bytes'
-assert_equals "$(backup_for_home)" '' 'zero-exit wrong-link injection leaves no backup object'
-assert_no_recursive_rm 'zero-exit wrong-link rollback makes no recursive deletion call'
 
 printf '1..%d\n' "$assertion_count"

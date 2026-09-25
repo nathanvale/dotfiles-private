@@ -9,7 +9,7 @@ TEST_ROOT="$(CDPATH='' cd "$TEST_ROOT" && pwd -P)"
 FIXTURE_REPO="$TEST_ROOT/repository"
 FAKE_BIN="$TEST_ROOT/fake-bin"
 CLI="$FIXTURE_REPO/bin/dotfiles/symlinks/symlinks_manage.sh"
-EXPECTED_ASSERTIONS=26
+EXPECTED_ASSERTIONS=22
 DASHED_RAW_TARGET='-prior-raw-target'
 assertion_count=0
 wrong_home="$TEST_ROOT/wrong-home"
@@ -17,7 +17,6 @@ wrong_former="$wrong_home/former-directory"
 dangling_home="$TEST_ROOT/dangling-home"
 correct_home="$TEST_ROOT/correct-home"
 missing_home="$TEST_ROOT/missing-home"
-directory_home="$TEST_ROOT/directory-home"
 creation_failure_home="$TEST_ROOT/creation-failure-home"
 creation_failure_former="$creation_failure_home/former-directory"
 creation_failure_log="$TEST_ROOT/creation-failure-ln.log"
@@ -30,15 +29,15 @@ cleanup() {
 	rm -f -- \
 		"$wrong_home/.config" "$wrong_home/bin" "$wrong_former/sentinel" \
 		"$dangling_home/.config" "$dangling_home/bin" "$correct_home/.config" "$correct_home/bin" \
-		"$missing_home/.config" "$missing_home/bin" "$directory_home/bin" "$directory_home/.config/sentinel" \
+		"$missing_home/.config" "$missing_home/bin" \
 		"$creation_failure_home/.config" "$creation_failure_home/bin" "$creation_failure_log" \
 		"$lying_home/.config" "$lying_home/bin" "$lying_former/sentinel" "$lying_log" \
 		"$TEST_ROOT/wrong-ln.log" "$TEST_ROOT/dangling-ln.log" "$TEST_ROOT/correct-ln.log" \
-		"$TEST_ROOT/missing-ln.log" "$TEST_ROOT/directory-ln.log" "$FAKE_BIN/ln" \
+		"$TEST_ROOT/missing-ln.log" "$FAKE_BIN/ln" \
 		"$FIXTURE_REPO/bin/dotfiles/symlinks/symlinks_manage.sh" "$FIXTURE_REPO/bin/colour_log.sh"
 	rmdir -- \
 		"$wrong_former" "$wrong_home" "$dangling_home" "$correct_home" "$missing_home" \
-		"$directory_home/.config" "$directory_home" "$creation_failure_former" "$creation_failure_home" \
+		"$creation_failure_former" "$creation_failure_home" \
 		"$lying_former" "$lying_home" "$FAKE_BIN" "$FIXTURE_REPO/config" \
 		"$FIXTURE_REPO/bin/dotfiles/symlinks" "$FIXTURE_REPO/bin/dotfiles" "$FIXTURE_REPO/bin" \
 		"$FIXTURE_REPO" "$TEST_ROOT" 2>/dev/null
@@ -193,14 +192,6 @@ mkdir -p "$missing_home"
 run_link "$missing_home" pass "$TEST_ROOT/missing-ln.log"
 assert_equals "$last_status" '0' 'missing symlink creation exits zero'
 assert_equals "$(readlink "$missing_home/.config")" "$FIXTURE_REPO/config" 'missing symlink receives the literal intended target'
-
-mkdir -p "$directory_home/.config"
-printf 'real-directory-sentinel-bytes' >"$directory_home/.config/sentinel"
-run_link "$directory_home" pass "$TEST_ROOT/directory-ln.log"
-assert_equals "$last_status" '0' 'noninteractive real directory refusal leaves overall link run successful'
-assert_equals "$(test -d "$directory_home/.config" && test ! -L "$directory_home/.config" && printf 'directory')" 'directory' 'noninteractive real directory remains a real directory'
-assert_equals "$(<"$directory_home/.config/sentinel")" 'real-directory-sentinel-bytes' 'noninteractive real directory preserves bytes'
-assert_contains "$last_output" "Skipped (non-interactive, use --force to replace): $directory_home/.config" 'noninteractive real directory reports refusal'
 
 mkdir -p "$creation_failure_former"
 /bin/ln -s -- "$DASHED_RAW_TARGET" "$creation_failure_home/.config"

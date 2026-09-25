@@ -414,12 +414,19 @@ assert_contains "$audit_out" 'does not belong to this lane' \
 [[ "$audit_status" -ne 0 ]] || fail 'a mislabelled receipt must not exit zero'
 pass 'a mislabelled receipt does not exit zero'
 
-# A receipt whose lane field is absent is equally unattributable.
+# A receipt whose lane field is absent is equally unattributable. The
+# freshness triple is included so the only thing wrong with this receipt is
+# the absent lane field; without it, this row would report FAIL even with the
+# lane-attribution guard deleted, because the missing freshness fields alone
+# force a FAIL further down.
 rm -f "$receipt_dir"/*.receipt
 {
   printf 'product=test\n'
   printf 'profile_binding=worktree\n'
   printf 'snapshot_sha256=%s\n' "$SHA_A"
+  printf 'task_start_epoch=%s\n' "$FIXTURE_TASK_START"
+  printf 'boundary_epoch=%s\n' "$FIXTURE_BOUNDARY"
+  printf 'snapshot_mtime=%s\n' "$FIXTURE_MTIME"
   printf 'verdict=PASS\n'
 } >"$receipt_dir/codex-command.receipt"
 run_audit --lanes codex-command

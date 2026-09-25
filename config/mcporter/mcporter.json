@@ -20,7 +20,7 @@
 		"chrome-devtools": {
 			"command": "npx",
 			"args": ["-y", "chrome-devtools-mcp", "--autoConnect"],
-			"description": "Chrome DevTools MCP through the OpenClaw extension relay"
+			"description": "Chrome DevTools MCP attached to a running Chrome"
 		}
 	}
 }
