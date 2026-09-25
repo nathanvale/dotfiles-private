@@ -94,7 +94,7 @@ export function readValidatedUvSources(requirementsPath: string, configPath: str
 	}
 }
 
-export function stageValidatedUvSources(workspace: string, sources: ValidatedUvSources): void {
+function stageValidatedUvSources(workspace: string, sources: ValidatedUvSources): void {
 	writeFileSync(path.join(workspace, "mise.toml"), sources.configText, { mode: 0o600 });
 	writeFileSync(path.join(workspace, "mise.lock"), sources.lockText, { mode: 0o600 });
 }

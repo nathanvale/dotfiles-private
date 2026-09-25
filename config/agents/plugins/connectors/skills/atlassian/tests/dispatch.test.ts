@@ -47,8 +47,6 @@ function testCanonical(value: unknown): string {
 
 const testDigest = (value: unknown): string => new Bun.CryptoHasher("sha256").update(testCanonical(value)).digest("hex");
 const EXPECTED_OPERATIONS = ["issue.get", "issue.search", "issue.transitions", "issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete", "page.get", "page.search", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"] as const;
-const EXPECTED_COMMANDS = ["receipts", "receipt", "adjudicate", "unlock"];
-const EXPECTED_PATHS = [...EXPECTED_OPERATIONS, ...EXPECTED_COMMANDS].map((entry) => `atlassian.${entry}`).sort();
 const WRITE_OPERATIONS = EXPECTED_OPERATIONS.filter((id) => !id.endsWith(".get") && !id.endsWith(".search") && id !== "issue.transitions");
 
 // Independent oracle: the exact Community tool and product per operation,
@@ -224,20 +222,6 @@ describe("operation contract and routes", () => {
 		const retired = structuredClone(registry);
 		retired.mcpServers["atlassian-official-jira"] = { allowedTools: ["getJiraIssue"] };
 		expect(() => registryToolVocabulary(retired)).toThrow(/registry-invalid/);
-	});
-
-	test("discovery lists every operation and command with the provider and the exit meanings, without a tenant", async () => {
-		const envelope = await run(["--discover"], () => {
-			throw new Error("no dependencies for discovery");
-		});
-		expect([envelope.result.outcome, envelope.result.exitCode, envelope.result.commandIdentity]).toEqual(["success", 0, "atlassian.discover"]);
-		const data = envelope.result.data as { provider: string; operations: { id: string; tool: string }[]; commands: string[]; exitMeanings: Record<string, string> };
-		expect(data.provider).toBe("community");
-		expect(data.operations.map((entry) => [entry.id, entry.tool])).toEqual(Object.entries(EXPECTED_TOOLS).map(([id, [community]]) => [id, community]));
-		expect(data.commands).toEqual(EXPECTED_COMMANDS);
-		expect(Object.keys(data.exitMeanings)).toEqual(["0", "2", "3", "4"]);
-		expect(envelope.availablePaths).toEqual(EXPECTED_PATHS);
-		expect(JSON.stringify(envelope)).not.toMatch(/official|parity|fallback/i);
 	});
 
 	test("the retired provider selector and parity command are usage refusals before any dependency is built", async () => {

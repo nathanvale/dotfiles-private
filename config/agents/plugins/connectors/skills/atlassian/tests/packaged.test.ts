@@ -745,6 +745,15 @@ faultMock.module("node:fs", () => ({
 	});
 });
 
+// Listing needs no MCPorter, so it runs wherever the packaged tests run.
+describe("packaged connector listing", () => {
+	test("list admits the Atlassian manifest beside the other packaged connectors", async () => {
+		fresh();
+		const envelope = parse((await fixture.frontDoor(["list"])).stdout).result;
+		expect((envelope.data?.connectors as { id: string }[]).map((entry) => entry.id)).toEqual(["atlassian", "canva", "context7", "firecrawl", "mermaid"]);
+	});
+});
+
 describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the verified MCPorter", () => {
 	let firstUse: { code: number; stdout: string; stderr: string } | undefined;
 	beforeAll(async () => {
@@ -767,12 +776,6 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		const envelope = parse(firstUse?.stdout ?? "").result;
 		expect([envelope.commandIdentity, envelope.outcome, envelope.causeCode, envelope.transactionState, envelope.effects.completed, envelope.effects.uncertain]).toEqual(["connectors.run", "success", "SUCCESS_BOOTSTRAPPED", "completed", ["mcporter-bootstrap"], []]);
 		expect(envelope.data).toEqual({ connector: "atlassian", operation: "issue.get", result: JIRA_REPLY, provenance: [{ provider: "atlassian-community-jira", tool: "jira_get_issue", status: "success" }] });
-	});
-
-	test("list admits the Atlassian manifest beside the other packaged connectors", async () => {
-		fresh();
-		const envelope = parse((await fixture.frontDoor(["list"])).stdout).result;
-		expect((envelope.data?.connectors as { id: string }[]).map((entry) => entry.id)).toEqual(["atlassian", "canva", "context7", "firecrawl", "mermaid"]);
 	});
 
 	test("a Jira read reaches the declared operation through the plugin-owned MCPorter and confines both tokens", async () => {
@@ -873,10 +876,6 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		["in-band failure with extra provider fields", "page.get", { pageId: "123" }, "confluence", "confluence_get_page", { page_id: "123" }, { success: false, error: "HTTP 403 Forbidden", requestId: "opaque-request-id-sentinel" }, DOMAIN_REFUSED, AUTH_REPAIR, { connector: "atlassian", connectorCause: "refused-auth" }, ["opaque-request-id-sentinel", "HTTP 403 Forbidden"], ["opaque-request-id-sentinel"]],
 		["hostile tool error text", "issue.get", { issueKey: "PROJ-1" }, "jira", "jira_get_issue", { issue_key: "PROJ-1" }, { toolErrorText: HOSTILE }, DOMAIN_REFUSED, AUTH_REPAIR, { connector: "atlassian", connectorCause: "refused-auth" }, ["fixture-secret-value", "customer SSN 123-45-6789", "PROJ-99 confidential merger", "op://", "Bearer", "Basic "], ["fixture-secret-value", "123-45-6789", "PROJ-99 confidential merger"]],
 	];
-	test("the Provider row table names exactly the three migrated in-band and hostile cases", () => {
-		expect(PROVIDER_ROWS.map(([label]) => label)).toEqual(["in-band error payload", "in-band failure with extra provider fields", "hostile tool error text"]);
-	});
-
 	test.each(PROVIDER_ROWS)("%s is translated at the transport seam to its published cause and never reaches a stream or file", async (_label, operation, input, product, providerTool, args, canned, tuple, repair, data, streamFragments, fileFragments) => {
 		fresh();
 		fixture.canned(product, providerTool, canned);

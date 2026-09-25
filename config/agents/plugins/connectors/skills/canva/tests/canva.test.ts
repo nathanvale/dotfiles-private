@@ -1,11 +1,9 @@
 // Canva's source-level proof (Ticket #93 under Spec #87): the registry and
-// route declarations, the custody interface's physical-path seam for the
-// packaged adapter, and the public shared route's refusal of Canva. The
+// route declarations and the public shared route's refusal of Canva. The
 // packaged front door's process proof lives in tests/canva-packaged.test.ts.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import path from "node:path";
-import { planCanvaRoute, readClientMode } from "../scripts/custody/index.ts";
 import { createHarness, type Harness } from "../../../tests/harness.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
@@ -19,8 +17,6 @@ beforeEach(() => {
 	harness = createHarness({});
 });
 afterEach(() => harness.dispose());
-
-const vaultRoot = (account: string) => path.join(harness.root, "connectors", "canva-mcporter", account);
 
 describe("Canva native custody configuration", () => {
 	test("registry declares only dynamic-registration OAuth on the fixed endpoint with the four read tools", () => {
@@ -47,27 +43,6 @@ describe("Canva native custody configuration", () => {
 			dispatcherOwned: true,
 		});
 		expect(JSON.parse(readFileSync(path.join(SKILL, "config", "client.json"), "utf8"))).toEqual({ mode: "dcr" });
-	});
-});
-
-describe("physical-path seam for a packaged adapter", () => {
-	// Private-module proof: a compiled binary cannot use import.meta.dir, so the
-	// adapter must be able to name the physical skills root and config dir.
-	test("an explicit skills root and config dir are honoured and planning creates no vault", () => {
-		const skillsRoot = path.join(harness.root, "physical", "skills");
-		cpSync(SKILL, path.join(skillsRoot, "canva"), { recursive: true });
-		const configDir = path.join(skillsRoot, "canva", "config");
-		writeFileSync(path.join(configDir, "client.json"), JSON.stringify({ mode: "approved" }));
-		const env = { HOME: harness.home, PATH: "/usr/bin:/bin", XDG_STATE_HOME: harness.root };
-		const { plan, vault } = planCanvaRoute(env, "personal", ["list"], skillsRoot);
-		expect([readClientMode(configDir), readClientMode(), plan.configPath, plan.env.XDG_DATA_HOME, vault.root]).toEqual([
-			"approved",
-			"dcr",
-			path.join(skillsRoot, "canva", "config", "mcporter.json"),
-			path.join(vaultRoot("personal"), "data"),
-			vaultRoot("personal"),
-		]);
-		expect(existsSync(vaultRoot("personal"))).toBe(false);
 	});
 });
 

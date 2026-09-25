@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { accessSync, chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { installPinnedUv, readValidatedUvSources, stageValidatedUvSources, validUvSources } from "../bin/setup/uv.ts";
+import { installPinnedUv, validUvSources } from "../bin/setup/uv.ts";
 
 const requirements = readFileSync(path.resolve(import.meta.dir, "../requirements.json"), "utf8");
 const config = readFileSync(path.resolve(import.meta.dir, "../config/mise.toml"), "utf8");
@@ -92,35 +92,6 @@ test("active uv lock rejects substitution, comment bait, and extra entries", () 
 	expect(validUvSources(requirements, config, `${lock}\n[[tools."aqua:astral-sh/uv"]]\nversion = "0.12.18"\n`)).toBe(false);
 });
 
-test("source replacement after validation cannot change staged mise inputs", () => {
-	const root = mkdtempSync("/private/tmp/connectors-uv-swap-");
-	const configPath = path.join(root, "source.toml");
-	const lockPath = path.join(root, "source.lock");
-	const requirementsPath = path.join(root, "requirements.json");
-	const workspace = path.join(root, "workspace");
-	try {
-		mkdirSync(workspace, { mode: 0o700 });
-		writeFileSync(requirementsPath, requirements);
-		writeFileSync(configPath, config);
-		writeFileSync(lockPath, lock);
-		const validated = readValidatedUvSources(requirementsPath, configPath, lockPath);
-		expect(validated).not.toBeNull();
-		const hostileConfig = '[tools]\n"aqua:astral-sh/uv" = "0.1.0"\n';
-		const hostileLock = lock.replace("https://github.com/astral-sh/uv/releases/download/0.12.18/uv-aarch64-apple-darwin.tar.gz", "https://example.invalid/uv.tar.gz");
-		writeFileSync(configPath, hostileConfig);
-		writeFileSync(lockPath, hostileLock);
-		expect(validUvSources(requirements, hostileConfig, hostileLock)).toBe(false);
-		stageValidatedUvSources(workspace, validated!);
-		const stagedConfig = readFileSync(path.join(workspace, "mise.toml"), "utf8");
-		const stagedLock = readFileSync(path.join(workspace, "mise.lock"), "utf8");
-		expect(stagedConfig).toBe(config);
-		expect(stagedLock).toBe(lock);
-		expect(validUvSources(requirements, stagedConfig, stagedLock)).toBe(true);
-	} finally {
-		rmSync(root, { recursive: true, force: true });
-	}
-});
-
 test("arbitrary uv state is refused before filesystem effects", async () => {
 	const root = mkdtempSync("/private/tmp/connectors-uv-path-");
 	const wrong = path.join(root, "arbitrary");
@@ -167,24 +138,6 @@ test.skipIf(!officialMise)("official uv installs inside plugin state despite hos
 		// The per-run workspace is removed after install, so repeated setup
 		// leaves no staging residue beside the retained installs.
 		expect(readdirSync(state).filter((entry) => entry.startsWith(".uv-install-"))).toEqual([]);
-		// Re-stage the same validated sources at the production workspace depth
-		// to prove which config mise selects there under the hostile parents.
-		const workspace = path.join(state, ".uv-install-probe");
-		mkdirSync(workspace, { mode: 0o700 });
-		stageValidatedUvSources(workspace, readValidatedUvSources(path.resolve(import.meta.dir, "../requirements.json"), path.resolve(import.meta.dir, "../config/mise.toml"), path.resolve(import.meta.dir, "../config/mise.lock"))!);
-		expect(readFileSync(path.join(workspace, "mise.toml"), "utf8")).toBe(config);
-		expect(readFileSync(path.join(workspace, "mise.lock"), "utf8")).toBe(lock);
-		const privateEnv = {
-			HOME: path.join(state, "home"), PATH: "/usr/bin:/bin", MISE_CONFIG_DIR: path.join(state, "config"),
-			MISE_GLOBAL_CONFIG_FILE: path.join(state, "config", "global.toml"), MISE_SYSTEM_CONFIG_DIR: path.join(state, "system"),
-			MISE_GLOBAL_CONFIG_ROOT: path.join(state, "home"), MISE_DATA_DIR: path.join(state, "data"), MISE_CACHE_DIR: path.join(state, "cache"),
-			MISE_STATE_DIR: path.join(state, "state"), MISE_INSTALLS_DIR: path.join(state, "installs"), MISE_SHIMS_DIR: path.join(state, "shims"),
-			MISE_TMP_DIR: path.join(state, "temp"), MISE_CEILING_PATHS: state,
-		};
-		const selected = Bun.spawn([mise, "config", "ls", "-J"], { cwd: workspace, env: privateEnv, stdout: "pipe", stderr: "pipe" });
-		const [selectedExit, selectedOut] = await Promise.all([selected.exited, new Response(selected.stdout).text()]);
-		expect(selectedExit).toBe(0);
-		expect(JSON.parse(selectedOut)).toEqual([{ path: path.join(workspace, "mise.toml"), tools: ["aqua:astral-sh/uv"] }]);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}

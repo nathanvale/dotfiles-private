@@ -7,13 +7,13 @@
 // (adapter.ts), behind `bin/connectors run` and `recover`; it has no entry of
 // its own.
 import { TENANT_PATTERN } from "./custody/index.ts";
-import { CAUSES, type CauseCode, type CommandId, COMMANDS, type Envelope, OPERATION_SPECS, OPERATIONS, type OperationSpec, PROVIDER } from "./dispatch/contract.ts";
+import { CAUSES, type CauseCode, type CommandId, COMMANDS, type Envelope, OPERATIONS, type OperationSpec } from "./dispatch/contract.ts";
 import { type Dependencies, readInput, REPAIR_TEXT, specFor } from "./dispatch/engine.ts";
 import { adjudicateFlow, applyFlow, type Outcome, previewFlow, readFlow, receiptFlow, receiptsFlow, Session, unlockFlow } from "./dispatch/flows.ts";
 import { type WriteInput, writeInput } from "./dispatch/writes.ts";
 
 const VALUE_OPTIONS = ["--tenant", "--input", "--apply", "--run"] as const;
-const FLAG_OPTIONS = ["--preview", "--json", "--discover", "--help"] as const;
+const FLAG_OPTIONS = ["--preview"] as const;
 type ValueOption = (typeof VALUE_OPTIONS)[number];
 type FlagOption = (typeof FLAG_OPTIONS)[number];
 const VALUE_SET: ReadonlySet<string> = new Set(VALUE_OPTIONS);
@@ -61,7 +61,7 @@ function parseOptions(argv: string[]): Parsed<Options> {
 	return { ok: true, value: options };
 }
 
-export type Mode = { kind: "read" } | { kind: "preview" } | { kind: "apply"; previewId: string } | { kind: "command"; command: CommandId } | { kind: "discover" };
+export type Mode = { kind: "read" } | { kind: "preview" } | { kind: "apply"; previewId: string } | { kind: "command"; command: CommandId };
 
 export interface Invocation {
 	tenant: string;
@@ -98,9 +98,6 @@ export function parseArgv(argv: string[]): Parsed<Invocation> {
 	const parsed = parseOptions(argv);
 	if (!parsed.ok) return parsed;
 	const options = parsed.value;
-	if (options.flags.has("--discover") || options.flags.has("--help")) {
-		return { ok: true, value: { tenant: "", path: "discover", input: {}, mode: { kind: "discover" }, runId: undefined } };
-	}
 	const tenant = options.values["--tenant"];
 	const runId = options.values["--run"];
 	if (!tenant || !TENANT_PATTERN.test(tenant)) return usage("--tenant must be a lowercase tenant slug");
@@ -154,22 +151,6 @@ function nextAction(outcome: Outcome): string {
 
 const refused = (cause: CauseCode, detail: string): Outcome => ({ cause, data: null, detail, transactionState: "unchanged", effects: [], uncertain: [] });
 
-const discovery = (): Outcome => ({
-	cause: "success",
-	data: {
-		contractVersion: "2.0.0",
-		provider: PROVIDER,
-		operations: Object.values(OPERATION_SPECS).map((spec) => ({ id: spec.id, kind: spec.kind, product: spec.product, tool: spec.tool })),
-		commands: [...COMMANDS],
-		exitMeanings: { 0: "success", 2: "usage refusal", 3: "domain refusal or failure", 4: "schema refusal" },
-		writes: "preview with --preview, then --apply <previewId> with the identical input; an unknown outcome blocks the object until adjudicate resolves it",
-	},
-	detail: null,
-	transactionState: "unchanged",
-	effects: [],
-	uncertain: [],
-});
-
 async function commandFlow(session: Session, invocation: Invocation, command: CommandId): Promise<{ identity: string; effectClass: EffectClass; outcome: Outcome }> {
 	const identity = `atlassian.${command}`;
 	const runId = invocation.runId;
@@ -198,7 +179,6 @@ export async function run(argv: string[], dependencies: (tenant: string) => Depe
 	const parsed = parseArgv(argv);
 	if (!parsed.ok) return envelope("atlassian.unknown", "inspect", refused(parsed.cause, parsed.reason), []);
 	const invocation = parsed.value;
-	if (invocation.mode.kind === "discover") return envelope("atlassian.discover", "inspect", discovery(), []);
 	const session = new Session(dependencies(invocation.tenant), invocation.tenant);
 	if (invocation.mode.kind === "command") {
 		const result = await commandFlow(session, invocation, invocation.mode.command);

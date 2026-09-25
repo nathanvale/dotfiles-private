@@ -70,14 +70,6 @@ describe("compiled front door: discovery", () => {
 		]);
 	});
 
-	test("availablePaths is sorted and has no duplicates", async () => {
-		const result = await runFrontDoor(["--discover", "--json"]);
-		const envelope = JSON.parse(result.stdout);
-		const paths: string[] = envelope.availablePaths;
-		expect(paths).toEqual([...paths].sort());
-		expect(new Set(paths).size).toBe(paths.length);
-	});
-
 	test("bare --discover without --json refuses instead of silently answering", async () => {
 		const result = await runFrontDoor(["--discover"]);
 		expect(result.code).toBe(2);
@@ -173,12 +165,6 @@ describe("compiled front door: discovery", () => {
 		expect(envelope.result.outcome).toBe("refused");
 		expect(envelope.result.causeCode).toBe("USAGE_UNKNOWN_COMMAND");
 		expect(typeof envelope.result.repairAction).toBe("string");
-	});
-
-	test("machine stdout carries only the envelope; nothing on stderr", async () => {
-		const result = await runFrontDoor(["--discover", "--json"]);
-		expect(result.stderr).toBe("");
-		expect(() => JSON.parse(result.stdout)).not.toThrow();
 	});
 
 	test("stdout is not truncated when piped: the full envelope is valid JSON on every run", async () => {

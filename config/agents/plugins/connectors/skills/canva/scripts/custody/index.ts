@@ -15,8 +15,6 @@ import { type EnvironmentSource, safeEnvironment } from "../../../../bin/safe-en
 import { CanvaError } from "../contract.ts";
 
 const ACCOUNT_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
-const SKILLS_ROOT = path.resolve(import.meta.dir, "..", "..", "..");
-const CONFIG_DIR = path.join(SKILLS_ROOT, "canva", "config");
 const CANVA_ENDPOINT = "https://mcp.canva.com/mcp";
 // The exact keys the Canva server entry may carry. MCPorter accepts camelCase
 // and snake_case spellings of client, secret, metadata, token-cache, bearer,
@@ -48,10 +46,10 @@ export function accountVault(env: EnvironmentSource, account: string): AccountVa
 	return { account, root, dataHome: path.join(root, "data"), cacheHome: path.join(root, "cache") };
 }
 
-// configDir and skillsRoot default to this source tree. A compiled binary
-// resolves import.meta.dir inside its virtual filesystem, so a packaged
-// adapter passes the physical <skillsRoot>/canva/config and <skillsRoot>.
-export function readClientMode(configDir = CONFIG_DIR): ClientMode {
+// A compiled binary resolves import.meta.dir inside its virtual filesystem,
+// so the packaged adapter names the physical <skillsRoot>/canva/config and
+// <skillsRoot>; nothing defaults to this source tree.
+export function readClientMode(configDir: string): ClientMode {
 	let mode: unknown;
 	try {
 		mode = (JSON.parse(readFileSync(path.join(configDir, "client.json"), "utf8")) as { mode?: unknown }).mode;
@@ -132,7 +130,7 @@ function registryEntry(plan: RoutePlan): unknown {
 // Planning changes no state; the caller runs prepareVault only after every
 // dependency resolves. The route's message is dropped because it can quote
 // caller argv; its sealed code carries the cause.
-export function planCanvaRoute(env: EnvironmentSource, account: string, mcporterArgs: readonly string[], skillsRoot = SKILLS_ROOT): { plan: RoutePlan; vault: AccountVault } {
+export function planCanvaRoute(env: EnvironmentSource, account: string, mcporterArgs: readonly string[], skillsRoot: string): { plan: RoutePlan; vault: AccountVault } {
 	let plan: RoutePlan;
 	try {
 		plan = planDispatcherRoute(["canva", "--select", `account=${account}`, "--", ...mcporterArgs], skillsRoot, safeEnvironment(env), `canva-account=${account}`);

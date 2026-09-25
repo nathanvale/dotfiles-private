@@ -19,7 +19,7 @@ export interface Outcome {
 	uncertain: string[];
 }
 
-export interface Attempt {
+interface Attempt {
 	cause: CauseCode;
 	data: unknown;
 	detail: string | null;
@@ -49,14 +49,13 @@ export class Session {
 		return bound;
 	}
 
-	route(product: Product, binding: CredentialBinding): Route {
-		return new Route(this, product, binding);
-	}
 }
+
+const routeFor = (session: Session, product: Product, binding: CredentialBinding): Route => new Route(session, product, binding);
 
 // One product route for one call sequence: lists the live schema once and
 // confirms every tool against it before the tool is called.
-export class Route {
+class Route {
 	readonly server: string;
 	private tools: SchemaTool[] | undefined;
 
@@ -126,7 +125,7 @@ export class Route {
 export async function readFlow(session: Session, spec: OperationSpec, input: Input): Promise<Outcome> {
 	const bound = await session.binding(spec.product);
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
-	const route = session.route(spec.product, bound.binding);
+	const route = routeFor(session, spec.product, bound.binding);
 	const args = providerArguments(spec, input);
 	const attempt = (await route.ready({ tool: spec.tool, args })) ?? (await route.call(spec.tool, args));
 	return attempt.cause === "success" ? success(attempt.data) : failed(attempt);
@@ -269,7 +268,7 @@ interface WriteContext {
 async function writeContext(session: Session, spec: OperationSpec, input: WriteInput): Promise<WriteContext | Outcome> {
 	const bound = await session.binding(spec.product);
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
-	const route = session.route(spec.product, bound.binding);
+	const route = routeFor(session, spec.product, bound.binding);
 	const placeholder: PreparedContext = { revision: null, baseline: { effectIds: [], commentIds: [], revision: null }, currentTitle: "pending", transitionId: "pending" };
 	const ready = await route.ready({ tool: spec.tool, args: writeArguments(spec, input, placeholder).args });
 	if (ready) return failed(ready);
@@ -479,7 +478,7 @@ export async function adjudicateFlow(session: Session, runId: string, rawInput: 
 	const spec = OPERATION_SPECS[receipt.operation];
 	const bound = await session.binding(spec.product);
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
-	const route = session.route(spec.product, bound.binding);
+	const route = routeFor(session, spec.product, bound.binding);
 	const ready = await route.ready();
 	if (ready) return failed(ready);
 	const digestOf = (observed: string) => new Bun.CryptoHasher("sha256").update(observed).digest("hex");

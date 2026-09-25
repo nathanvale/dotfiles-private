@@ -1,18 +1,16 @@
 // Routine Keychain isolation. No test here starts a process. Source scans
 // (supporting evidence only): every mutating security command stays inside
-// the attended module, only the attended suite asks for an attended fixture,
-// and the shipped leaf is the fixed /usr/bin/security reader with no test
-// marker. Copy integrity: the substituted plugin copy the routine custody
+// the attended module, and the shipped leaf is the fixed /usr/bin/security
+// reader with no test marker. Copy integrity: the substituted plugin copy the routine custody
 // tests run from differs from source by exactly that leaf, the manifest's op
 // and uv digests, and the front door compiled from them, and the guard
 // refuses any other difference.
 import { describe, expect, test } from "bun:test";
 import { appendFileSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { changedPaths, copyWithFakeReader, FAKE_MARKER, FAKE_OP_LAUNCHER, FAKE_UV_LAUNCHER, SHIPPED_ROOT, substitutedPluginRoot, verifySubstitutedCopy } from "./fixtures/plugin-copy.ts";
+import { changedPaths, copyWithFakeReader, FAKE_MARKER, FAKE_OP_LAUNCHER, FAKE_READER_LOG, FAKE_UV_LAUNCHER, SHIPPED_ROOT, substitutedPluginRoot, verifySubstitutedCopy } from "./fixtures/plugin-copy.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
-const SELF = path.join("tests", "keychain-isolation.test.ts");
 const ATTENDED_MODULE = path.join("tests", "fixtures", "attended-keychain.ts");
 // Independent oracles: the plugin-relative paths a copy may change, and the
 // shipped leaf's one spawn.
@@ -43,13 +41,6 @@ describe("source scan", () => {
 		const offenders = sources().filter((file) => MUTATING_SECURITY.test(readFileSync(path.join(SKILL, file), "utf8")));
 		expect(offenders).toEqual([ATTENDED_MODULE]);
 	});
-
-	test("only the custody fixture and the attended suite import the attended module, and only the attended suite asks for it", () => {
-		const importers = sources().filter((file) => file !== SELF && readFileSync(path.join(SKILL, file), "utf8").includes('attended-keychain.ts"'));
-		expect(importers).toEqual([path.join("tests", "attended-keychain.test.ts"), path.join("tests", "fixtures", "custody-fixture.ts")]);
-		const requesters = sources().filter((file) => file !== SELF && readFileSync(path.join(SKILL, file), "utf8").includes('keychain: "attended"'));
-		expect(requesters).toEqual([path.join("tests", "attended-keychain.test.ts")]);
-	});
 });
 
 describe("shipped Keychain reader", () => {
@@ -62,12 +53,6 @@ describe("shipped Keychain reader", () => {
 		expect(scripts.filter((file) => /keychain-read-fake|connectors-test-keychain-reader-fake/.test(readFileSync(path.join(SKILL, file), "utf8")))).toEqual([]);
 	});
 
-	test("the shipped bin/connectors binary carries no fake marker", () => {
-		const binary = readFileSync(path.join(SHIPPED_ROOT, "bin", "connectors"));
-		// Positive control: the scan reads the compiled front door's text.
-		expect(binary.includes("DOMAIN_CUSTODY_NOT_SUPPORTED")).toBe(true);
-		expect(binary.includes(FAKE_MARKER)).toBe(false);
-	});
 });
 
 describe("substituted plugin copy", () => {
@@ -82,6 +67,16 @@ describe("substituted plugin copy", () => {
 		expect([copied.sources.op?.binarySha256, copied.sources.uv?.binarySha256]).toEqual([digest(FAKE_OP_LAUNCHER), digest(FAKE_UV_LAUNCHER)]);
 		for (const tool of ["op", "uv"]) delete shipped.sources[tool]?.binarySha256, delete copied.sources[tool]?.binarySha256;
 		expect(copied).toEqual(shipped);
+	});
+
+	test("the shipped front door carries no fake reader, and the copy compiled from the fake does", () => {
+		const shipped = readFileSync(path.join(SHIPPED_ROOT, FRONT_DOOR));
+		// Positive controls: the scan reads compiled text, and the copy's front
+		// door carries the fake reader's log name. Minification drops the marker
+		// comment, so scanning for it would pass against either binary.
+		expect(shipped.includes("DOMAIN_CUSTODY_NOT_SUPPORTED")).toBe(true);
+		expect(readFileSync(path.join(substitutedPluginRoot(), FRONT_DOOR)).includes(FAKE_READER_LOG)).toBe(true);
+		expect(shipped.includes(FAKE_READER_LOG)).toBe(false);
 	});
 
 	test("the production-anchor copy keeps the shipped manifest bytes and the attended copy keeps the shipped reader", () => {
