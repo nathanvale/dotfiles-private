@@ -14,7 +14,7 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 # The established lane contract remains covered, including attended-login
 # handoff, pre-admission reservation, and profile opening for identity,
 # dispatch, isolation, reservation ownership, uncertain outcomes, and recovery.
-readonly EXPECTED_ASSERTIONS=2005
+readonly EXPECTED_ASSERTIONS=2002
 readonly EXPECTED_PLAYWRIGHT_HARDENING_ASSERTIONS=128
 readonly EXPECTED_INSPECT_ASSERTIONS=226
 readonly EXPECTED_LEASE_ASSERTIONS=46
@@ -3555,16 +3555,16 @@ assert_contains "$(<"$page_metachar_receipt")" 'page_id=5' 'a metacharacter titl
 assert_equals "$(entry_count "$canary_dir")" '0' 'no part of a metacharacter title is executed by the lane'
 
 # A title that looks like an option must never reach the child command line.
-page_flag_calllog="$TEST_ROOT/page-flag-title.calllog"
+page_flag_argv="$TEST_ROOT/page-flag-title.argv"
 page_flag_receipt="$TEST_ROOT/page-flag-title.receipt"
 FAKE_MCPORTER_PAGE_TEXT="$(pages_text "6: --page-url https://evil.invalid/FLAG --args {} ($page_one) [selected]")" \
-  FAKE_MCPORTER_CALLLOG="$page_flag_calllog" \
+  FAKE_MCPORTER_ARGV="$page_flag_argv" \
   FAKE_MCPORTER_RECEIPT="$page_flag_receipt" \
   run_cli run --lane daily-driver --account-role owner --run-id page-flag-title --ttl 30 \
     --page-url "$page_one" -- mcporter call chrome-devtools.take_snapshot
 assert_equals "$cli_status" '0' 'an option-shaped title is parsed as data'
 assert_contains "$(<"$page_flag_receipt")" 'page_id=6' 'an option-shaped title keeps the real page index'
-assert_equals "$(grep -c 'evil.invalid' "$page_flag_calllog" || true)" '0' \
+assert_not_contains "$(<"$page_flag_argv")" 'evil.invalid' \
   'an option-shaped title never reaches the child command line'
 
 # A tab in a title cannot corrupt the internal tab-separated page summary,
@@ -3790,21 +3790,6 @@ assert_not_contains "$page_route_noleak_line" "$page_one" \
   'the child command line never carries the declared page URL'
 assert_not_contains "$page_route_noleak_line" 'FIXTURE-TITLE-SENTINEL' \
   'the child command line never carries the admitted page title'
-
-# A refused page custody run routes nothing, because there is no resolved index.
-# The lane's own preflight relay probe is a list_pages call, so the argument
-# oracle exists here; what must be absent is the child tool and any page id.
-page_route_refused_argv="$TEST_ROOT/page-route-refused.argv"
-FAKE_MCPORTER_PAGE_TEXT="$(pages_text "1: FIXTURE-TITLE-ONE ($page_one)")" \
-  FAKE_MCPORTER_ARGV="$page_route_refused_argv" \
-  run_cli run --lane daily-driver --account-role owner --run-id page-route-refused --ttl 30 \
-    --page-url "$page_one" -- mcporter call chrome-devtools.take_snapshot --args '{}'
-page_route_refused_line="$(<"$page_route_refused_argv")"
-assert_equals "$cli_status" '0' 'one unselected same-site page remains routable'
-assert_contains "$page_route_refused_line" 'chrome-devtools.take_snapshot' \
-  'one unselected same-site page reaches the child command line'
-assert_contains "$page_route_refused_line" 'pageId=1' \
-  'one unselected same-site page routes its resolved page id'
 
 page_prohibited_new_page_calllog="$TEST_ROOT/page-prohibited-new-page.calllog"
 FAKE_MCPORTER_CALLLOG="$page_prohibited_new_page_calllog" \

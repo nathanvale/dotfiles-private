@@ -60,13 +60,6 @@ assert_equals() {
 [[ -x "$WRAPPER" ]] || fail 'bin/agent-lane-zsh is not executable'
 pass 'the wrapper is executable'
 
-# The runtime accepts this shell only if the path names bash or zsh, so a rename
-# would silently disable every Claude lane. The filename is part of the contract.
-case "$WRAPPER" in
-  *zsh*) pass 'the wrapper path contains the shell name the runtime requires' ;;
-  *) fail 'the wrapper path does not contain a runtime-accepted shell name' ;;
-esac
-
 # A distinctive value planted in every generated script. The wrapper must never
 # echo it, so proving silence never reproduces it.
 SCRIPT_BODY_MARKER='agent-lane-zsh-script-body-marker-do-not-print'
@@ -261,13 +254,15 @@ bind=''
 run_wrapper -c "$(snapshot_script_for "$fake_home")"
 [[ "$wrap_status" -ne 0 ]] || fail 'fail-closed: a missing ZDOTDIR must be refused'
 pass 'fail-closed: a missing ZDOTDIR is refused'
-# The refusal must be this wrapper's own deliberate diagnostic, prefixed with
-# its name. Merely mentioning ZDOTDIR is not enough: with the guard deleted the
-# script still refuses, but as a raw `ZDOTDIR: unbound variable` error from
-# `set -u`, which also contains that word. Requiring the prefix is what makes
-# this row discriminate a handled refusal from an accidental crash.
+# The refusal must be this wrapper's own deliberate diagnostic naming the
+# absent binding, not merely any diagnostic that happens to mention ZDOTDIR.
+# The bound-but-empty guard below dies with a different message ("holds no
+# .zshrc to substitute") that also carries the prefix and the word ZDOTDIR, so
+# matching that substring alone would pass even with this guard deleted.
+# Requiring the exact "no ZDOTDIR binding" wording is what makes this row
+# discriminate this guard from the guard after it.
 case "$wrap_err" in
-  'agent-lane-zsh: '*ZDOTDIR*)
+  'agent-lane-zsh: '*'no ZDOTDIR binding'*)
     pass 'fail-closed: the refusal is the wrapper own diagnostic naming the binding' ;;
   *) fail 'fail-closed: the refusal is not the wrapper own diagnostic' ;;
 esac

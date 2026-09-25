@@ -611,12 +611,10 @@ pass 'a lane refused for ordering leaves no receipt'
 #
 # `--zdotdir` must be a measurement, not a label. These rows run the generator
 # with a real ZDOTDIR in the environment and vary whether it agrees with the
-# claim, so a generator that merely echoed the flag fails them.
-run_generator_with_zdotdir "$REPO_ROOT" --lane test-bind-match \
-  --snapshot "$safe_snapshot" --product-version 'test 1.0' --zdotdir "$REPO_ROOT"
-assert_equals "$gen_status" '0' 'binding: a claim matching the real ZDOTDIR is accepted'
-assert_equals "$(grep '^profile_binding=' <<<"$gen_out" | sed 's/^profile_binding=//')" \
-  'worktree' 'binding: a matching claim reports a worktree binding'
+# claim, so a generator that merely echoed the flag fails them. The matching
+# case itself is already proved above ("bound lane: receipt reports a worktree
+# profile binding"), so only the mismatch and absent cases need their own rows
+# here.
 
 # The claim names the repository; the process actually ran somewhere else.
 # A label-only implementation reports `worktree` here and is wrong.
