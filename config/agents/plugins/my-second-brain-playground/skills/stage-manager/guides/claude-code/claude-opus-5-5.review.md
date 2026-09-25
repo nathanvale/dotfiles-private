@@ -8,7 +8,7 @@ reviewer:
 date: 2026-09-25
 verdict: accepted
 guide_sha256: db4edad95d8f58e1bb6404f156bc50852bbcdcdfe78d996dd5258846a23dd644
-handback_path: /Users/nathanvale/.local/state/my-second-brain-playground/herdr-projects-s2-20260925/codex-review-5d92e4d0.md
+handback_path: claude-opus-5-5.review-handback.md
 handback_sha256: 66d5f9f71f823bf7ccf33167b717da0adf5cd4f34974eacd2b0569c25e3bb518
 ---
 
