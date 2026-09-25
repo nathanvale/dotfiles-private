@@ -79,7 +79,6 @@
     "config/opencode/**/*.js",
     "config/agents/plugins/my-second-brain-playground/packages/*/src/{main,trace-command,recovery-observer}.ts",
     "config/agents/plugins/my-second-brain-playground/packages/cli-design-check/src/successor/main.ts",
-    "config/agents/plugins/my-second-brain-playground/packages/vault-steward/src/startup-audit.ts",
     "config/agents/plugins/proof/hooks/**/*.ts",
     "pilot/generate.ts",
     "tests/type-contracts.ts",

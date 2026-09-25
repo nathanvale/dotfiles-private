@@ -19,7 +19,6 @@ from typing import Any, Dict, Iterable, Mapping, NoReturn, Optional, Tuple
 from urllib.parse import quote
 
 
-INPUT_LIMIT_BYTES = 128 * 1024
 CONFIG_LIMIT_BYTES = 4 * 1024
 CHECKPOINT_LIMIT_BYTES = 16 * 1024
 MARKDOWN_LIMIT_BYTES = 256 * 1024
@@ -104,8 +103,6 @@ def observe_lifecycle(
     outcome: str,
     started_ns: Optional[int] = None,
     journey_identity: Optional[str] = None,
-    observed_worker_identity: Optional[str] = None,
-    observed_worker_identity_source: Optional[str] = None,
     inherited_parent_identity: Optional[str] = None,
     ledger_task_identity: Optional[str] = None,
     refusal_code: Optional[str] = None,
@@ -121,8 +118,6 @@ def observe_lifecycle(
             _OBSERVATION_PRODUCER = "recovery-python-" + secrets.token_hex(12)
         sequence = _OBSERVATION_SEQUENCE
         _OBSERVATION_SEQUENCE += 1
-        worker = _observation_identity(observed_worker_identity)
-        source = observed_worker_identity_source if worker is not None else None
         parent = _observation_identity(inherited_parent_identity)
         parent_record = _observation_identity(os.environ.get("MSB_RECOVERY_OBSERVATION_PARENT_RECORD_IDENTITY"))
         task = _observation_identity(ledger_task_identity)
@@ -144,9 +139,6 @@ def observe_lifecycle(
             record["parent_record_identity"] = parent_record
         if started_ns is not None:
             record["duration_ms"] = (time.monotonic_ns() - started_ns) / 1_000_000
-        if worker is not None and source in ("hook-payload", "supervisor"):
-            record["observed_worker_identity"] = worker
-            record["observed_worker_identity_source"] = source
         if parent is not None:
             record["inherited_parent_identity"] = parent
         if task is not None:
@@ -507,9 +499,9 @@ def require_private_directory(path: Path) -> None:
         os.close(descriptor)
 
 
-def read_checkpoint(home: Path, vault: Path, session_identity: str, operation: str = "recover") -> Mapping[str, Any]:
+def read_checkpoint(home: Path, vault: Path, session_identity: str) -> Mapping[str, Any]:
     started_ns = time.monotonic_ns()
-    observe_lifecycle(operation, "checkpoint-read", "started", journey_identity=session_identity)
+    observe_lifecycle("recover", "checkpoint-read", "started", journey_identity=session_identity)
     try:
         path = checkpoint_path(home, session_identity)
         require_private_directory(path.parent.parent.parent)
@@ -518,49 +510,13 @@ def read_checkpoint(home: Path, vault: Path, session_identity: str, operation: s
         raw = parse_json_bytes(read_private_file(path, CHECKPOINT_LIMIT_BYTES), CHECKPOINT_LIMIT_BYTES)
         checkpoint = validate_checkpoint(raw, home, vault, session_identity)
     except BaseException:
-        observe_lifecycle(operation, "checkpoint-read", "failed", started_ns, journey_identity=session_identity)
+        observe_lifecycle("recover", "checkpoint-read", "failed", started_ns, journey_identity=session_identity)
         raise
     observe_lifecycle(
-        operation, "checkpoint-read", "succeeded", started_ns,
+        "recover", "checkpoint-read", "succeeded", started_ns,
         journey_identity=checkpoint["sessionIdentity"], ledger_task_identity=checkpoint["taskIdentity"],
     )
     return checkpoint
-
-
-def validate_hook_event(raw: Any, vault: Path) -> Tuple[str, str]:
-    if not isinstance(raw, dict):
-        reject()
-    if raw.get("hook_event_name") != "SessionStart" or raw.get("source") not in (
-        "startup",
-        "resume",
-        "compact",
-    ):
-        reject()
-    source = raw["source"]
-    session_identity = exact_session_identity(raw.get("session_id"))
-    raw_cwd = raw.get("cwd")
-    if not isinstance(raw_cwd, str) or len(raw_cwd) > 2048 or any(c in raw_cwd for c in "\x00\r\n"):
-        reject()
-    candidate = Path(raw_cwd)
-    if not candidate.is_absolute():
-        reject()
-    try:
-        cwd = candidate.resolve(strict=True)
-    except OSError:
-        reject()
-    if not cwd.is_dir() or not is_within(cwd, vault):
-        reject()
-    return source, session_identity
-
-
-def session_context(session_identity: str) -> str:
-    return "\n".join(
-        (
-            "My Second Brain recovery session.",
-            f"Session identity: {session_identity}",
-            "Use this exact sessionIdentity when writing this session's recovery checkpoint.",
-        )
-    )
 
 
 def shell_command(*arguments: str) -> str:
@@ -633,42 +589,6 @@ def additional_context(checkpoint: Mapping[str, Any]) -> str:
 
 def emit_json(value: Mapping[str, Any]) -> None:
     sys.stdout.write(json.dumps(value, ensure_ascii=True, separators=(",", ":")) + "\n")
-
-
-def run_hook() -> int:
-    started_ns = time.monotonic_ns()
-    observe_lifecycle("hook", "invocation", "started")
-    try:
-        event = parse_json_bytes(read_bounded_stdin(INPUT_LIMIT_BYTES), INPUT_LIMIT_BYTES)
-        home = home_directory()
-        vault = configured_vault(home)
-        source, session_identity = validate_hook_event(event, vault)
-        observe_lifecycle(
-            "hook", "validation", "accepted", started_ns,
-            journey_identity=session_identity, observed_worker_identity=session_identity,
-            observed_worker_identity_source="hook-payload",
-        )
-        if source == "compact":
-            context = additional_context(read_checkpoint(home, vault, session_identity, "hook"))
-        else:
-            context = session_context(session_identity)
-        emit_json(
-            {
-                "hookSpecificOutput": {
-                    "hookEventName": "SessionStart",
-                    "additionalContext": context,
-                }
-            }
-        )
-    except (Rejected, OSError, ValueError, TypeError, UnicodeError):
-        observe_lifecycle("hook", "terminal", "failed", started_ns)
-        return 0
-    observe_lifecycle(
-        "hook", "terminal", "succeeded", started_ns,
-        journey_identity=session_identity, observed_worker_identity=session_identity,
-        observed_worker_identity_source="hook-payload",
-    )
-    return 0
 
 
 def schema_document() -> Mapping[str, Any]:
@@ -1054,8 +974,6 @@ def run_checkpoint(arguments: list[str]) -> int:
 
 
 def main(arguments: list[str]) -> int:
-    if arguments == ["hook"]:
-        return run_hook()
     if arguments and arguments[0] == "checkpoint":
         return run_checkpoint(arguments[1:])
     return 2
