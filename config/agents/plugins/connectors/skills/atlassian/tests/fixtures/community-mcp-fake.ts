@@ -6,7 +6,7 @@
 // test's independent count of provider requests. Replies come from
 // canned/<product>/ files read at call time.
 import { dlopen, FFIType, ptr } from "bun:ffi";
-import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 
 // A process's argv then environment, space-joined as `ps -E -ww -o command=`
@@ -66,8 +66,26 @@ if (existsSync(path.join(root, "community-crash"))) {
 	process.exit(1);
 }
 
+// Test-owned post-write state: once this product's effects.jsonl records a
+// call to <write tool>, canned/<product>/<name>.after.<write tool>.json
+// replaces <name>.json, as a site shows a landed write to later reads. The
+// only trigger is the fake's own recorded call; the dispatcher still decides
+// what each read proves.
+const recordedTools = (): Set<string> => {
+	const file = path.join(root, "effects.jsonl");
+	if (!existsSync(file)) return new Set();
+	const calls = readFileSync(file, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line) as { product: string; tool: string });
+	return new Set(calls.filter((call) => call.product === product).map((call) => call.tool));
+};
 const canned = (name: string): unknown => {
-	const file = path.join(root, "canned", product, `${name}.json`);
+	const directory = path.join(root, "canned", product);
+	const prefix = `${name}.after.`;
+	const written = recordedTools();
+	const after = existsSync(directory) ? readdirSync(directory).filter((entry) => entry.startsWith(prefix) && entry.endsWith(".json") && written.has(entry.slice(prefix.length, -".json".length))) : [];
+	// Fixture invariant: at most one post-write reply applies to a read, so the
+	// choice never depends on directory order.
+	if (after.length > 1) throw new Error(`community-mcp-fake: more than one post-write reply for ${name}`);
+	const file = path.join(directory, after[0] ?? `${name}.json`);
 	return existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : null;
 };
 const reply = (id: unknown, result: unknown) => process.stdout.write(`${JSON.stringify({ jsonrpc: "2.0", id, result })}\n`);

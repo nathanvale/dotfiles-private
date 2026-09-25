@@ -63,7 +63,10 @@ const JIRA_TOOLS = [
 	tool("jira_add_comment", ["issue_key", "body"], ["visibility", "public"]),
 	tool("jira_update_issue", ["issue_key", "fields"], ["additional_fields", "components", "attachments", "return_fields"]),
 ];
-const CONFLUENCE_TOOLS = [tool("confluence_get_page", ["page_id"]), tool("confluence_search", ["query"], ["limit"])];
+// The Confluence read tools in their v0.23.1 live shape: a page read also
+// accepts a title and space instead of an id, and include_metadata for the
+// preparatory reads of the write rows.
+const CONFLUENCE_TOOLS = [tool("confluence_get_page", [], ["page_id", "title", "space_key", "include_metadata", "convert_to_markdown"]), tool("confluence_search", ["query"], ["limit", "spaces_filter"])];
 const JIRA_REPLY = { key: "EX-1", summary: "canned packaged issue" };
 const CONFLUENCE_REPLY = { id: "123", title: "canned packaged page" };
 const SEARCH_REPLY = { issues: [{ key: "EX-2", summary: "canned packaged search hit" }] };
@@ -706,7 +709,10 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 	// Provider).
 	const COMMENT = { issueKey: "EX-1", body: "packaged comment" };
 	const COMMENT_ARGS = { issue_key: "EX-1", body: "packaged comment" };
-	const issueWithComments = (comments: { id: string; body: string }[]) => ({ key: "EX-1", fields: { updated: "2026-09-25 09:00:00 AEST", comment: { comments } } });
+	const UPDATED = "2026-09-25 09:00:00 AEST";
+	const MOVED = "2026-09-25 09:10:00 AEST";
+	const issue = (fields: Record<string, unknown>, updated = UPDATED) => ({ key: "EX-1", fields: { updated, ...fields } });
+	const issueWithComments = (comments: { id: string; body: string }[]) => issue({ comment: { comments } });
 	const PREVIEW_OP_CALLS = 1 + 2 * 2;
 	const APPLY_OP_CALLS = 1 + 3 * 2;
 	const PREVIEW_REFUSED = "the preview is unknown, consumed, expired, or no longer matches the input, provider arguments, or target revision; preview again";
@@ -721,23 +727,19 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		return record(parse(result.stdout).result);
 	}
 
-	test("a comment preview records it without sending, its apply sends it once behind a durable receipt, and recover shows that receipt", async () => {
+	// The write station sweep below owns the preview, apply, and receipt
+	// contract for every write; this row keeps recovery inspection and the
+	// credential confinement of the whole comment sequence.
+	test("recover lists and shows a completed comment receipt, and inspection starts no custody, op, or Provider", async () => {
 		fresh();
 		fixture.canned("jira", "jira_get_issue", issueWithComments([]));
 		fixture.canned("jira", "jira_add_comment", { id: "10001", body: "packaged comment" });
 		const preview = await write("issue.comment", COMMENT, ["--preview"]);
-		expect([preview.code, preview.stderr]).toEqual([0, ""]);
 		const previewed = parse(preview.stdout).result;
-		expect(station(previewed)).toEqual(["connectors.run.preview", "success", "SUCCESS_RUN_RECORDED", "repository-local", "completed", ["write-preview"], []]);
 		expect(previewed.nextAction).toBe("connectors.run.apply");
-		expect(writesTo("jira_add_comment")).toEqual([]);
 		const apply = await write("issue.comment", COMMENT, ["--apply", record(previewed).previewId]);
-		expect([apply.code, apply.stderr]).toEqual([0, ""]);
-		const applied = parse(apply.stdout).result;
-		expect(station(applied)).toEqual(["connectors.run.apply", "success", "SUCCESS_RUN_APPLIED", "external", "completed", ["write-receipt", "provider-write"], []]);
-		const receipt = record(applied);
-		expect([receipt.previewId, receipt.status, receipt.send, receipt.effects]).toEqual([record(previewed).previewId, "completed", "possible", [{ kind: "jira-comment", id: "10001" }]]);
-		expect(writesTo("jira_add_comment")).toEqual([{ product: "jira", tool: "jira_add_comment", args: COMMENT_ARGS }]);
+		const receipt = record(parse(apply.stdout).result);
+		expect([preview.code, apply.code, receipt.status]).toEqual([0, 0, "completed"]);
 		const listed = await recover();
 		expect([listed.code, listed.stderr]).toEqual([0, ""]);
 		const list = parse(listed.stdout).result;
@@ -896,5 +898,319 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		expect([noop.code, noop.stderr]).toEqual([0, ""]);
 		const unchanged = parse(noop.stdout).result;
 		expect([...station(unchanged), record<{ runId: string; objectIdentity: string; unlocked: boolean }>(unchanged)]).toEqual(["connectors.recover.unlock", "success", "SUCCESS_UNCHANGED", "inspect", "unchanged", [], [], { runId: record(applied).runId, objectIdentity: previewed.objectIdentity, unlocked: false }]);
+	}, 90_000);
+
+	// T5 U3b-1a: every write station through the packaged front door. Each row
+	// is a test-owned literal of the accepted contract: its input, the Provider
+	// replies it needs before and after the write, the exact write tool and
+	// arguments, and the effect its receipt must carry. Updates, transitions,
+	// assigns, comment edits, and deletes settle only from a read-back, so
+	// their rows name the reply a read returns once the fake has recorded the
+	// write (community-mcp-fake.ts post-write state).
+	const WRITE_OPERATIONS = ["issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"] as const;
+	type WriteOperation = (typeof WRITE_OPERATIONS)[number];
+	// Independent oracle: every Community read tool the dispatcher may call; any
+	// other recorded call is a write.
+	const READ_TOOLS = new Set(["jira_get_issue", "jira_search", "jira_get_transitions", "confluence_get_page", "confluence_search", "confluence_get_comments", "confluence_get_attachments"]);
+	const WRITE_JIRA_TOOLS = [
+		...JIRA_TOOLS,
+		tool("jira_create_issue", ["project_key", "summary", "issue_type"], ["description", "assignee"]),
+		tool("jira_edit_comment", ["issue_key", "comment_id", "body"], ["visibility"]),
+		tool("jira_transition_issue", ["issue_key", "transition_id"], ["fields", "comment"]),
+		tool("jira_assign_issue", ["issue_key"], ["assignee"]),
+		tool("jira_delete_issue", ["issue_key"]),
+	];
+	const WRITE_CONFLUENCE_TOOLS = [
+		...CONFLUENCE_TOOLS,
+		tool("confluence_get_comments", ["page_id"]),
+		tool("confluence_get_attachments", ["content_id"], ["start", "limit", "filename", "media_type"]),
+		tool("confluence_create_page", ["space_key", "title"], ["content", "parent_id", "content_format"]),
+		tool("confluence_update_page", ["page_id", "title"], ["content", "version_comment", "content_format"]),
+		tool("confluence_add_comment", ["page_id", "body"]),
+		tool("confluence_upload_attachment", ["content_id"], ["file_path", "file_content", "filename", "comment"]),
+		tool("confluence_delete_attachment", ["attachment_id"]),
+		tool("confluence_delete_page", ["page_id"]),
+	];
+	const page = (version: number, extra: Record<string, unknown> = {}) => ({ metadata: { id: "123", title: "Roadmap", version, ...extra } });
+	const UPLOAD_NAME = "notes.txt";
+	const UPLOAD_BYTES = "packaged upload bytes\n";
+	interface WriteRow {
+		product: "jira" | "confluence";
+		input: Record<string, unknown>;
+		// Replies before the write, by tool, and after it, by read tool.
+		before: Record<string, unknown>;
+		after: Record<string, unknown>;
+		tool: string;
+		args: Record<string, unknown>;
+		reply: unknown;
+		effects: { kind: string; id: string }[];
+		// Independent oracle: the calls the apply makes after its write. A row
+		// settled from the reply makes none; a row whose reply cannot prove its
+		// effect reads the object back, and that read settles the receipt.
+		readBack: string[];
+		// The provider argument that names the staged copy of an upload, and
+		// the Provider starts of the whole row: each MCPorter request starts
+		// one. The preview sends three (schema list, target read, baseline
+		// read); the apply repeats them, sends the write, and issue.attach
+		// then reads the issue back (3 + 5 = 8), while page.attach settles
+		// from its reply (3 + 4 = 7).
+		upload?: { argument: string; providerStarts: number };
+	}
+	const WRITE_ROWS: Record<WriteOperation, WriteRow> = {
+		"issue.create": {
+			product: "jira",
+			input: { projectKey: "EX", issueType: "Task", summary: "packaged create" },
+			before: { jira_search: SEARCH_REPLY },
+			after: {},
+			tool: "jira_create_issue",
+			args: { project_key: "EX", issue_type: "Task", summary: "packaged create" },
+			reply: { message: "Issue created successfully", issue: { key: "EX-9", summary: "packaged create", issue_type: { name: "Task" } } },
+			effects: [{ kind: "jira-issue", id: "EX-9" }],
+			readBack: [],
+		},
+		"issue.update": {
+			product: "jira",
+			input: { issueKey: "EX-1", fields: { summary: "new summary" } },
+			before: { jira_get_issue: issue({ summary: "old summary" }) },
+			after: { jira_get_issue: issue({ summary: "new summary" }, MOVED) },
+			tool: "jira_update_issue",
+			args: { issue_key: "EX-1", fields: '{"summary":"new summary"}' },
+			reply: { message: "Issue updated successfully", issue: { key: "EX-1" } },
+			effects: [{ kind: "jira-issue", id: "EX-1" }],
+			readBack: ["jira_get_issue"],
+		},
+		"issue.comment": {
+			product: "jira",
+			input: { issueKey: "EX-1", body: "packaged comment" },
+			before: { jira_get_issue: issue({ comment: { comments: [] } }) },
+			after: {},
+			tool: "jira_add_comment",
+			args: { issue_key: "EX-1", body: "packaged comment" },
+			reply: { id: "10001", body: "packaged comment" },
+			effects: [{ kind: "jira-comment", id: "10001" }],
+			readBack: [],
+		},
+		"issue.comment.update": {
+			product: "jira",
+			input: { issueKey: "EX-1", commentId: "10001", body: "edited comment" },
+			before: { jira_get_issue: issue({ comment: { comments: [{ id: "10001", body: "original comment", updated: UPDATED }] } }) },
+			after: { jira_get_issue: issue({ comment: { comments: [{ id: "10001", body: "edited comment", updated: MOVED }] } }, MOVED) },
+			tool: "jira_edit_comment",
+			args: { issue_key: "EX-1", comment_id: "10001", body: "edited comment" },
+			reply: { id: "10001", body: "edited comment" },
+			effects: [{ kind: "jira-comment", id: "10001" }],
+			readBack: ["jira_get_issue"],
+		},
+		"issue.attach": {
+			product: "jira",
+			input: { issueKey: "EX-1" },
+			before: { jira_get_issue: issue({ attachment: [] }) },
+			after: { jira_get_issue: issue({ attachment: [{ filename: UPLOAD_NAME, url: `${ORIGIN}/rest/api/3/attachment/content/10100` }] }, MOVED) },
+			tool: "jira_update_issue",
+			args: { issue_key: "EX-1", fields: "{}" },
+			reply: { message: "Issue updated successfully", issue: { key: "EX-1" } },
+			effects: [{ kind: "jira-attachment", id: "10100" }],
+			readBack: ["jira_get_issue"],
+			upload: { argument: "attachments", providerStarts: 8 },
+		},
+		"issue.transition": {
+			product: "jira",
+			input: { issueKey: "EX-1", toStatus: "Done" },
+			before: { jira_get_issue: issue({ status: { name: "In Progress" } }), jira_get_transitions: TRANSITIONS_REPLY },
+			after: { jira_get_issue: issue({ status: { name: "Done" } }, MOVED) },
+			tool: "jira_transition_issue",
+			args: { issue_key: "EX-1", transition_id: "31" },
+			reply: { message: "Issue EX-1 transitioned successfully" },
+			effects: [{ kind: "jira-issue", id: "EX-1" }],
+			readBack: ["jira_get_issue"],
+		},
+		"issue.assign": {
+			product: "jira",
+			input: { issueKey: "EX-1", assignee: PRINCIPAL },
+			before: { jira_get_issue: issue({ assignee: { display_name: "Unassigned" } }) },
+			after: { jira_get_issue: issue({ assignee: { display_name: "Service Account", email: PRINCIPAL } }, MOVED) },
+			tool: "jira_assign_issue",
+			args: { issue_key: "EX-1", assignee: PRINCIPAL },
+			reply: { message: "Issue EX-1 assigned successfully", issue: { key: "EX-1" } },
+			effects: [{ kind: "jira-issue", id: "EX-1" }],
+			readBack: ["jira_get_issue"],
+		},
+		"issue.delete": {
+			product: "jira",
+			input: { issueKey: "EX-1" },
+			before: { jira_get_issue: issue({ summary: "disposable" }) },
+			after: { jira_get_issue: { toolErrorText: "Issue EX-1 does not exist" } },
+			tool: "jira_delete_issue",
+			args: { issue_key: "EX-1" },
+			reply: { message: "Issue EX-1 has been deleted successfully" },
+			effects: [{ kind: "jira-issue", id: "EX-1" }],
+			readBack: ["jira_get_issue"],
+		},
+		"page.create": {
+			product: "confluence",
+			input: { spaceKey: "EX", title: "Packaged page", body: "packaged page body" },
+			before: { confluence_search: PAGE_SEARCH_REPLY },
+			after: {},
+			tool: "confluence_create_page",
+			args: { space_key: "EX", title: "Packaged page", content: "packaged page body", content_format: "markdown" },
+			reply: { message: "Page created successfully", page: { id: "789", title: "Packaged page" } },
+			effects: [{ kind: "confluence-content", id: "789" }],
+			readBack: [],
+		},
+		"page.update": {
+			product: "confluence",
+			input: { pageId: "123", body: "updated page body" },
+			before: { confluence_get_page: page(7) },
+			after: { confluence_get_page: page(8, { content: { value: "updated page body" } }) },
+			tool: "confluence_update_page",
+			// An omitted title keeps the one the preparatory read observed.
+			args: { page_id: "123", title: "Roadmap", content: "updated page body", content_format: "markdown" },
+			reply: { message: "Page updated successfully", page: { id: "123", title: "Roadmap" } },
+			effects: [{ kind: "confluence-content", id: "123" }],
+			readBack: ["confluence_get_page"],
+		},
+		"page.comment": {
+			product: "confluence",
+			input: { pageId: "123", body: "packaged page comment" },
+			before: { confluence_get_page: page(7), confluence_get_comments: [] },
+			after: {},
+			tool: "confluence_add_comment",
+			args: { page_id: "123", body: "packaged page comment" },
+			reply: { id: "700", body: "packaged page comment" },
+			effects: [{ kind: "confluence-comment", id: "700" }],
+			readBack: [],
+		},
+		"page.attach": {
+			product: "confluence",
+			input: { pageId: "123" },
+			before: { confluence_get_page: page(7), confluence_get_attachments: { attachments: [], total: 0 } },
+			after: {},
+			tool: "confluence_upload_attachment",
+			args: { content_id: "123" },
+			reply: { message: "Attachment uploaded successfully", attachment: { id: "att900", title: UPLOAD_NAME } },
+			effects: [{ kind: "confluence-attachment", id: "att900" }],
+			readBack: [],
+			upload: { argument: "file_path", providerStarts: 7 },
+		},
+		"page.attachment.delete": {
+			product: "confluence",
+			input: { pageId: "123", attachmentId: "att900" },
+			before: { confluence_get_page: page(7), confluence_get_attachments: { attachments: [{ id: "att900", title: "report.pdf" }] } },
+			after: { confluence_get_attachments: { attachments: [] } },
+			tool: "confluence_delete_attachment",
+			args: { attachment_id: "att900" },
+			reply: { success: true, message: "Attachment deleted successfully" },
+			effects: [{ kind: "confluence-attachment", id: "att900" }],
+			readBack: ["confluence_get_attachments"],
+		},
+		"page.delete": {
+			product: "confluence",
+			input: { pageId: "123" },
+			before: { confluence_get_page: page(7) },
+			after: { confluence_get_page: { toolErrorText: "Page 123 not found" } },
+			tool: "confluence_delete_page",
+			args: { page_id: "123" },
+			reply: { success: true, message: "Page 123 deleted successfully" },
+			effects: [{ kind: "confluence-content", id: "123" }],
+			readBack: ["confluence_get_page"],
+		},
+	};
+	const outbox = () => path.join(fixture.state, "connectors", "atlassian", "example", "outbox");
+	const modeOf = (file: string) => statSync(file).mode & 0o7777;
+	// One fresh fixture with every write tool listed and the row's replies.
+	interface StagedUpload {
+		digest: string;
+		source: string;
+		providerStarts: number;
+	}
+	function freshWrite(row: WriteRow, operation: string): { input: Record<string, unknown>; args: Record<string, unknown>; upload: StagedUpload | null } {
+		fresh();
+		fixture.canned("jira", "list", WRITE_JIRA_TOOLS);
+		fixture.canned("confluence", "list", WRITE_CONFLUENCE_TOOLS);
+		for (const [name, value] of Object.entries(row.before)) fixture.canned(row.product, name, value);
+		for (const [name, value] of Object.entries(row.after)) fixture.canned(row.product, `${name}.after.${row.tool}`, value);
+		fixture.canned(row.product, row.tool, row.reply);
+		if (row.upload === undefined) return { input: row.input, args: row.args, upload: null };
+		// Test-owned bytes; the expected staged path is computed here from them.
+		const source = path.join(fixture.root, `upload-${operation}`, UPLOAD_NAME);
+		mkdirSync(path.dirname(source));
+		writeFileSync(source, UPLOAD_BYTES);
+		const digest = createHash("sha256").update(UPLOAD_BYTES).digest("hex");
+		return { input: { ...row.input, file: source }, args: { ...row.args, [row.upload.argument]: `${digest}/${UPLOAD_NAME}` }, upload: { digest, source, providerStarts: row.upload.providerStarts } };
+	}
+	const writeCalls = () => fixture.lines<{ product: string; tool: string; args: unknown }>("effects.jsonl").filter((call) => !READ_TOOLS.has(call.tool));
+
+	test("write station sweep: the table names exactly the 14 accepted write operations", () => {
+		expect(WRITE_OPERATIONS).toHaveLength(14);
+		expect(Object.keys(WRITE_ROWS)).toEqual([...WRITE_OPERATIONS]);
+	});
+
+	test.each(WRITE_OPERATIONS.map((operation) => [operation] as const))(
+		"write station sweep: %s previews without sending, applies its exact write once behind a completed durable receipt, and leaves no open receipt",
+		async (operation) => {
+			const row = WRITE_ROWS[operation];
+			const { input, args, upload } = freshWrite(row, operation);
+			const preview = await write(operation, input, ["--preview"]);
+			expect([operation, preview.code, preview.stderr]).toEqual([operation, 0, ""]);
+			const previewed = parse(preview.stdout).result;
+			expect(station(previewed)).toEqual(["connectors.run.preview", "success", "SUCCESS_RUN_RECORDED", "repository-local", "completed", ["write-preview"], []]);
+			const bound = record<{ previewId: string; tool: string; arguments: unknown }>(previewed);
+			expect([bound.tool, bound.arguments]).toEqual([row.tool, args]);
+			expect(writeCalls()).toEqual([]);
+			const apply = await write(operation, input, ["--apply", bound.previewId]);
+			expect([operation, apply.code, apply.stderr]).toEqual([operation, 0, ""]);
+			const applied = parse(apply.stdout).result;
+			expect(station(applied)).toEqual(["connectors.run.apply", "success", "SUCCESS_RUN_APPLIED", "external", "completed", ["write-receipt", "provider-write"], []]);
+			expect(writeCalls()).toEqual([{ product: row.product, tool: row.tool, args }]);
+			// What settled the receipt: the calls after the write, test-owned per row.
+			const calls = fixture.lines<{ tool: string }>("effects.jsonl").map((call) => call.tool);
+			expect([operation, calls.slice(calls.indexOf(row.tool) + 1)]).toEqual([operation, row.readBack]);
+			const receipt = record(applied);
+			expect([receipt.previewId, receipt.status, receipt.send, receipt.effects]).toEqual([bound.previewId, "completed", "possible", row.effects]);
+			// The durable receipt, read from the journal file, not the envelope.
+			const durable = JSON.parse(readFileSync(path.join(fixture.state, "connectors", "atlassian", "example", "receipts", `${receipt.runId}.json`), "utf8")) as JournalRecord;
+			expect([durable.runId, durable.previewId, durable.status, durable.send, durable.effects]).toEqual([receipt.runId, bound.previewId, "completed", "possible", row.effects]);
+			const listed = await recover();
+			expect([listed.code, listed.stderr, record<{ open: JournalRecord[] }>(parse(listed.stdout).result)]).toEqual([0, "", { open: [] }]);
+			if (upload !== null) {
+				// The Upload Outbox holds exactly the test's bytes under their digest,
+				// private; the write names the staged copy relative to the outbox, and
+				// every Provider start runs in the outbox. The fake never opens the
+				// file, so what the real package reads is not observed here.
+				const staged = path.join(outbox(), upload.digest, UPLOAD_NAME);
+				expect([readdirSync(outbox()), readdirSync(path.dirname(staged))]).toEqual([[upload.digest], [UPLOAD_NAME]]);
+				expect([modeOf(outbox()), modeOf(path.dirname(staged)), modeOf(staged), readFileSync(staged, "utf8")]).toEqual([0o700, 0o700, 0o600, UPLOAD_BYTES]);
+				const starts = fixture.lines<CommunityStart & { cwd: string }>("community-starts.jsonl");
+				expect(starts).toHaveLength(upload.providerStarts);
+				expect(new Set(starts.map((start) => start.cwd))).toEqual(new Set([realpathSync(outbox())]));
+				expect(readFileSync(upload.source, "utf8")).toBe(UPLOAD_BYTES);
+			}
+			expectNoSecret(fixture, [preview.stdout, preview.stderr, apply.stdout, apply.stderr, listed.stdout, listed.stderr]);
+		},
+		90_000,
+	);
+
+	// SKILL.md: a file changed after its preview refuses the apply. The new
+	// bytes stage under a new digest, so the journal-bound arguments differ.
+	test("outbox: a file changed between preview and apply refuses the apply and sends nothing", async () => {
+		const { input, upload } = freshWrite(WRITE_ROWS["issue.attach"], "issue.attach");
+		if (upload === null) throw new Error("the issue.attach row stages an upload");
+		const preview = await write("issue.attach", input, ["--preview"]);
+		expect([preview.code, preview.stderr]).toEqual([0, ""]);
+		const previewId = record(parse(preview.stdout).result).previewId;
+		const changed = "changed after the preview\n";
+		writeFileSync(upload.source, changed);
+		const apply = await write("issue.attach", input, ["--apply", previewId]);
+		expect([apply.code, apply.stderr]).toEqual([3, ""]);
+		const refused = parse(apply.stdout).result;
+		expect([...station(refused), refused.repairAction, refused.data]).toEqual([
+			"connectors.run.apply", "refused", "DOMAIN_ADAPTER_REFUSED", "inspect", "unchanged", [], [],
+			`${PREVIEW_REFUSED}; preview-args-mismatch`, { connector: "atlassian", connectorCause: "refused-preview" },
+		]);
+		expect(writeCalls()).toEqual([]);
+		expect(atlassianFiles(fixture).filter((file) => file.startsWith("example/receipts/"))).toEqual([]);
+		// Both versions were staged under their own digests; neither was sent.
+		expect(readdirSync(outbox()).sort()).toEqual([upload.digest, createHash("sha256").update(changed).digest("hex")].sort());
+		expectNoSecret(fixture, [preview.stdout, preview.stderr, apply.stdout, apply.stderr]);
 	}, 90_000);
 });
