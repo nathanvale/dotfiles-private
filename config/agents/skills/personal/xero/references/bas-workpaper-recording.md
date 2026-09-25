@@ -83,8 +83,8 @@ redirect URL. None are copied here.
 
 For future browser automation:
 
-- invoke the `browser-use` entry skill with the exact Xero page URL; the lane
-  resolves the one admitted Xero tab and the agent never selects a page
+- open the exact Xero page URL in the native Harness browser and stay in that
+  one Xero tab (`$HOME/code/dotfiles/docs/agents/browser-automation.md`)
 - resolve the live Xero target and organisation every run
 - use accessible names such as **Reporting**, **Activity Statement**,
   **Prepare**, **Finalise & create draft bill**, **Export**, and **Excel**

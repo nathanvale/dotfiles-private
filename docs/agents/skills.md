@@ -46,7 +46,7 @@ the routing policy in this map only.
 - Installed Codex copy: register the `personal` marketplace once with
   `codex plugin marketplace add "$HOME/code/dotfiles/config/agents/plugins"
   --json`. After a version bump, run
-  `codex plugin add browser-lanes@personal --json`, then start a fresh task for
+  `codex plugin add my-second-brain-playground@personal --json`, then start a fresh task for
   activation proof. Keep that production identity separate from the admitted
   development marketplace's candidate.
 - Treat promotion through the production marketplace as a separate release
@@ -80,9 +80,10 @@ persistent install at both addresses.
 The `herdrdev/herdr` `herdr` payload is also an accepted persistent install at
 both addresses. Pin its reviewed source to the installed Herdr release so
 `herdr --skill` and the installed skill stay byte-identical.
-The `browser-use` name belongs to the `browser-lanes` plugin's entry skill; the
-former `steipete/agent-scripts` payload is retired by
-[ADR-0004](../adr/0004-browser-use-entry-ownership.md).
+The `browser-use` and `browser-lanes` plugins and the former
+`steipete/agent-scripts` `browser-use` payload are retired by
+[ADR-0011](../adr/0011-native-harness-browsers.md); browser work routes through
+[`browser-automation.md`](browser-automation.md).
 The 30 locked `openclaw/gogcli` skills use
 `config/agents/skills/third-party/openclaw/gogcli/<skill>` as their canonical
 source and are linked at `~/.agents/skills/<skill>` and
