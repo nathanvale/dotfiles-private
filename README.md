@@ -122,8 +122,10 @@ applied. Setup now declares and installs Mise, publishes one verified applied
 revision, and configures terminals and Git hooks to select it. Those repository
 changes are implemented and hermetically tested; this checkout does not by
 itself prove that the laptop has been installed, activated, or live-qualified.
-fnm, pyenv, and Homebrew remain installed fallbacks during that qualification,
-so do not treat a Homebrew update as a selected-runtime update.
+Mise is the only configured Node owner; fnm is retired from setup, shell
+startup, Git hooks, and the Brewfile (ADR 0012). pyenv and Homebrew remain
+installed fallbacks during that qualification, so do not treat a Homebrew
+update as a selected-runtime update.
 
 Check the current Node, Bun, Python, Git, and npm baseline without changing the machine:
 
@@ -161,9 +163,7 @@ bun run check
 ```
 
 Preparation runs the root frozen install first, then the independently locked
-My Second Brain Playground. The Browser Lanes plugin is declared
-dependency-free for this preparation step and receive no nested Bun install.
-The ownership manifest refuses an unclassified plugin lock or a missing
+My Second Brain Playground. The ownership manifest refuses an unclassified plugin lock or a missing
 independent lock; the frozen install rejects a stale lock before checks run. When `--receipt-dir` is supplied, root and
 nested stdout/stderr are retained in separate mode-restricted files.
 

@@ -8,18 +8,9 @@
   },
   "plugins": [
     {
-      "name": "browser-lanes",
-      "description": "Lane-first browser automation, attended login, and adapter bake-offs that produce reusable recipes.",
-      "version": "0.5.16-dev",
-      "author": {
-        "name": "Nathan Vale"
-      },
-      "source": "./browser-lanes"
-    },
-    {
       "name": "my-second-brain-playground",
       "description": "A playground for building My Second Brain skills one vertical slice at a time.",
-      "version": "0.14.2",
+      "version": "0.16.1",
       "author": {
         "name": "Nathan Vale"
       },
@@ -35,18 +26,9 @@
       "source": "./proof"
     },
     {
-      "name": "browser-use",
-      "description": "Direct, attended browser reads in an isolated Google Chrome profile.",
-      "version": "0.1.0",
-      "author": {
-        "name": "Nathan Vale"
-      },
-      "source": "./browser-use"
-    },
-    {
       "name": "personal",
       "description": "Nathan's personal workflows for Codex and Claude Code.",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "author": {
         "name": "Nathan Vale"
       },

@@ -27,9 +27,9 @@ Load this file only after selecting a route in
 
 1. Require an explicit requested state. If automatic policy or trigger is
    missing, show the live choices and ask one question.
-2. Invoke the `browser-use` skill for the live Codex settings UI. Let that
-   owner handle lane admission, snapshots, and actions; Nathan admits the one
-   settings tab through its admission handoff.
+2. Open the live Codex settings UI in the native Harness browser (Codex
+   `@Chrome`, or Claude in Chrome); `$HOME/code/dotfiles/docs/agents/browser-automation.md`
+   owns the rule. Nathan completes any sign-in and returns the settings tab.
 3. Turn on Code review for the exact repository.
 4. If requested, set Automatic reviews and the selected live trigger policy.
 5. Save, then re-read the repository row and the GitHub App repository list.

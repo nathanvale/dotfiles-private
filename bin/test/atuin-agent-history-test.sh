@@ -33,6 +33,16 @@ assert_not_contains() {
   pass "$label"
 }
 
+# The fake logs one Atuin argument per line, so a flag's value is the next line.
+# Exact positions, not substrings: `--search-mode` contains `search`, and a date
+# argument contains most digits.
+assert_atuin_value() {
+  local flag="$1" expected="$2" label="$3" actual
+  actual="$(awk -v flag="$flag" 'found { print; exit } $0 == flag { found = 1 }' <<<"$atuin_args")"
+  [[ "$actual" == "$expected" ]] || fail "$label (expected [$expected] after [$flag], got [$actual])"
+  pass "$label"
+}
+
 run_cli() {
   local stdout_file="$TEST_ROOT/stdout" stderr_file="$TEST_ROOT/stderr"
   set +e
@@ -109,10 +119,11 @@ assert_not_contains "$cli_stdout" 'synthetic-positional-secret' 'stdout omits po
 assert_not_contains "$cli_stdout" 'frontier' 'stdout omits query terms'
 
 atuin_args="$(<"$FAKE_LOG")"
-assert_contains "$atuin_args" 'search' 'the wrapper invokes only the Atuin search command'
-assert_contains "$atuin_args" '$all-user' 'the wrapper limits results to human-authored history'
-assert_contains "$atuin_args" 'fulltext' 'the wrapper uses explicit full-text search'
-assert_contains "$atuin_args" '3' 'the wrapper forwards the bounded result limit'
+[[ "$(sed -n 1p <<<"$atuin_args")" == 'search' ]] || fail 'the wrapper invokes only the Atuin search command'
+pass 'the wrapper invokes only the Atuin search command'
+assert_atuin_value '--author' '$all-user' 'the wrapper limits results to human-authored history'
+assert_atuin_value '--search-mode' 'fulltext' 'the wrapper uses explicit full-text search'
+assert_atuin_value '--limit' '3' 'the wrapper forwards the bounded result limit'
 assert_not_contains "$atuin_args" '--delete' 'the wrapper never forwards Atuin deletion flags'
 
 run_cli recent --limit 2
@@ -134,17 +145,15 @@ printf '%s\n' "$cli_stdout" | jq -e -c . >/dev/null || fail 'session recent stdo
 pass 'session recent stdout is valid JSONL'
 
 atuin_args="$(<"$FAKE_LOG")"
-assert_contains "$atuin_args" '--filter-mode' 'session recent selects an Atuin filter mode'
-assert_contains "$atuin_args" 'session' 'session recent selects the inherited Atuin session'
-assert_contains "$atuin_args" '$all-user' 'session recent remains limited to human-authored history'
+assert_atuin_value '--filter-mode' 'session' 'session recent selects the inherited Atuin session'
+assert_atuin_value '--author' '$all-user' 'session recent remains limited to human-authored history'
 assert_not_contains "$atuin_args" 'synthetic-session' 'session identity stays in the environment'
 
 run_cli search --session -- git
 [[ "$cli_status" -eq 0 ]] || fail "session search exits zero (got $cli_status, stderr [$cli_stderr])"
 pass 'session search exits zero'
 atuin_args="$(<"$FAKE_LOG")"
-assert_contains "$atuin_args" '--filter-mode' 'session search selects an Atuin filter mode'
-assert_contains "$atuin_args" 'session' 'session search selects the inherited Atuin session'
+assert_atuin_value '--filter-mode' 'session' 'session search selects the inherited Atuin session'
 
 set +e
 env -u ATUIN_SESSION \

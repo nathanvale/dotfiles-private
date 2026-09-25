@@ -12,6 +12,8 @@ HOME_CANONICAL="$(CDPATH='' cd -P "$HOME_ROOT" && pwd)"
 FAKE_BIN="$TEST_ROOT/bin"
 MISE_BIN="$TEST_ROOT/mise-bin"
 READY_BIN="$TEST_ROOT/ready-bin"
+READY_REPO="$TEST_ROOT/ready-repo"
+READY_CLI="$READY_REPO/bin/dotfiles/toolchain"
 SHIM_DATA="$HOME_CANONICAL/.local/share/mise"
 SHIM_BIN="$SHIM_DATA/shims"
 HOSTILE_MISE_DATA="$TEST_ROOT/hostile-mise-data"
@@ -216,12 +218,11 @@ printf 'unrelated dirty input\n' >"$PREVIEW_REPO/unrelated-untracked-file"
 ln -s unrelated-untracked-file "$PREVIEW_REPO/unrelated-link"
 mkdir "$PREVIEW_REPO/unrelated-empty-directory"
 
-mkdir -p "$VERIFY_REPO/bin/dotfiles" "$VERIFY_REPO/config/toolchain" "$VERIFY_REPO/config/mise" "$VERIFY_REPO/config/node"
+mkdir -p "$VERIFY_REPO/bin/dotfiles" "$VERIFY_REPO/config/toolchain" "$VERIFY_REPO/config/mise"
 cp "$REPO_ROOT/verify_install.sh" "$VERIFY_REPO/verify_install.sh"
 cp "$CLI" "$VERIFY_REPO/bin/dotfiles/toolchain"
 cp "$REPO_ROOT/config/toolchain/versions.tsv" "$VERIFY_REPO/config/toolchain/versions.tsv"
 cp "$REPO_ROOT/config/mise/source.toml" "$VERIFY_REPO/config/mise/source.toml"
-cp "$REPO_ROOT/config/node/version" "$VERIFY_REPO/config/node/version"
 chmod +x "$VERIFY_REPO/verify_install.sh" "$VERIFY_REPO/bin/dotfiles/toolchain"
 
 help_output="$($CLI --help)"
@@ -271,12 +272,29 @@ assert_equals '1' "$(awk -v expected="$CANONICAL_MISE_CUSTODY" 'NF && $0 != expe
 # A fully ready selection still returns 2 while the source-only declaration is
 # not qualified. Keep system Git out of the fixture PATH so this row proves the
 # command's distinct ready-but-unqualified exit contract.
+#
+# The command observes system Git only at /usr/bin/git, which no fixture PATH
+# can shadow, and readiness requires that executable to report the declared
+# version. The host's system Git version varies by macOS release, so the ready
+# fixture declares whatever the host reports. Every other declaration stays
+# the repository's own; the row proves the exit contract, not the Git pin.
+[[ -x /usr/bin/git ]] || fail 'ready fixture requires the system Git executable at /usr/bin/git'
+host_git_raw="$(/usr/bin/git --version)" || fail 'ready fixture could not read the system Git version'
+host_git_version="${host_git_raw#git version }"
+host_git_version="${host_git_version%% *}"
+[[ "$host_git_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "ready fixture could not parse a system Git version from [$host_git_raw]"
+mkdir -p "$READY_REPO/bin/dotfiles" "$READY_REPO/config/toolchain" "$READY_REPO/config/mise"
+cp "$CLI" "$READY_CLI"
+cp "$REPO_ROOT/config/mise/source.toml" "$READY_REPO/config/mise/source.toml"
+awk -F '|' -v version="$host_git_version" 'BEGIN { OFS = FS } $1 == "git" { $2 = version } { print }' \
+	"$REPO_ROOT/config/toolchain/versions.tsv" >"$READY_REPO/config/toolchain/versions.tsv"
+chmod +x "$READY_CLI"
 mkdir -p "$READY_BIN"
 for tool in node bun python bd npm; do
 	cp "$FAKE_BIN/$tool" "$READY_BIN/$tool"
 done
 chmod +x "$READY_BIN/node" "$READY_BIN/bun" "$READY_BIN/python" "$READY_BIN/bd" "$READY_BIN/npm"
-ready_result="$(MISE_TEST_RESULT_DIR="$READY_BIN" run_cli_in_path "$MISE_BIN:$READY_BIN" "$CLI" status --json)"
+ready_result="$(MISE_TEST_RESULT_DIR="$READY_BIN" run_cli_in_path "$MISE_BIN:$READY_BIN" "$READY_CLI" status --json)"
 ready_status="$(sed -n '1p' <<<"$ready_result")"
 ready_json="$(sed -n '2,$p' <<<"$ready_result")"
 assert_equals '2' "$ready_status" 'ready but source-only status preserves the qualification exit'
@@ -288,6 +306,7 @@ for tool in node bun python bd npm; do
 done
 assert_equals '/usr/bin/git' "$(jq -r '.tools[] | select(.name == "git") | .executable_path' <<<"$ready_json")" 'ready status reports the selected system Git path'
 assert_equals 'system' "$(jq -r '.tools[] | select(.name == "git") | .observed_owner' <<<"$ready_json")" 'ready status observes system Git ownership'
+assert_equals "$host_git_version" "$(jq -r '.tools[] | select(.name == "git") | .effective_version' <<<"$ready_json")" 'ready status reports the system Git version the host actually runs'
 
 SPLIT_NODE_BIN="$TEST_ROOT/split-node/bin"
 SPLIT_NPM_BIN="$TEST_ROOT/split-npm/bin"
@@ -436,6 +455,17 @@ unknown_repo="$TEST_ROOT/unknown-repo"
 cp -R "$PREVIEW_REPO" "$unknown_repo"
 printf 'unknown|0.0.0|mise|source_declared|-\n' >>"$unknown_repo/config/toolchain/versions.tsv"
 manifest_error "$unknown_repo" 'manifest_unknown_tool' 'unknown tool manifest'
+
+# fnm is retired as a configured Node owner (ADR 0012). A manifest that selects
+# it again is refused before any process probe, so the retired owner cannot
+# re-enter through versions.tsv.
+fnm_owner_repo="$TEST_ROOT/fnm-owner-repo"
+cp -R "$PREVIEW_REPO" "$fnm_owner_repo"
+awk -F '|' 'BEGIN { OFS="|" } $1 == "node" { $3 = "fnm" } { print }' "$fnm_owner_repo/config/toolchain/versions.tsv" >"$fnm_owner_repo/config/toolchain/versions.next"
+mv "$fnm_owner_repo/config/toolchain/versions.next" "$fnm_owner_repo/config/toolchain/versions.tsv"
+: >"$LEDGER"
+manifest_error "$fnm_owner_repo" 'manifest_invalid' 'retired fnm selected owner'
+assert_equals '0' "$(wc -c <"$LEDGER" | tr -d ' ')" 'retired fnm selected owner is rejected before any process probe'
 
 bad_npm_parent_repo="$TEST_ROOT/bad-npm-parent-repo"
 cp -R "$PREVIEW_REPO" "$bad_npm_parent_repo"

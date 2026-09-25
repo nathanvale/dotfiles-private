@@ -1,13 +1,12 @@
 import { expect, test } from "bun:test"
 import { machineMode, routeRawArgv } from "../../src/cli.ts"
-import { causeRule, COMMANDS, EXIT, EXIT_MEANINGS, exitFor, MachineEnvelopeSchema, sortedUnique, WIRE_CAUSES } from "../../src/command-contract.ts"
+import { causeRule, MachineEnvelopeSchema, sortedUnique, WIRE_CAUSES } from "../../src/command-contract.ts"
 import { parseFaults } from "../../src/faults.ts"
-import { BRANCH_STATIONS, catalogueSchemaIssues } from "../../src/station-catalogue.ts"
 
 // Contract enumeration: the wire vocabulary is exactly the Contract Core 2.0 core rows plus the CONTRACT.md 3.3 product
 // causes this CLI emits, every cause's rule row is the literal restated here (independent oracle, not read from the
-// checker or the contract module), the exit map is the six accepted exits, and raw argv routing keeps the command
-// identity for usage refusals.
+// checker or the contract module), and raw argv routing keeps the command identity for usage refusals. Exit meanings
+// and command identities are proven through --discover --json in tests/catalog/command-discovery.test.ts.
 
 const EXPECTED_RULES: Record<string, [string | null, string, string, boolean, string]> = {
 	SUCCESS_UNCHANGED: [null, "success", "unchanged", false, "next"],
@@ -56,14 +55,6 @@ test("the wire cause vocabulary and its rule rows are exactly the expected liter
 	}
 })
 
-test("the exit map and meanings are the six accepted exits", () => {
-	expect(EXIT as Record<string, number>).toEqual({ success: 0, internal: 1, usage: 2, domain: 3, schema: 4, transient: 75 })
-	expect(EXIT_MEANINGS as Record<string, string>).toEqual({ "0": "success", "1": "internal", "2": "usage", "3": "domain", "4": "schema", "75": "transient" })
-	expect(exitFor(null)).toBe(0)
-	expect(exitFor("transient")).toBe(75)
-	expect(COMMANDS.map((command) => command.commandIdentity)).toEqual(["vault-steward.dispatch", "vault-steward.help", "vault-steward.discovery", "vault-steward.command-discovery", "vault-steward.begin", "vault-steward.finish-preview", "vault-steward.finish-apply", "vault-steward.inspect", "vault-steward.recover"])
-})
-
 test("raw argv routing derives the identity before strict parsing and --json anywhere before -- is machine mode", () => {
 	expect(routeRawArgv(["begin", "--bogus"]).identity).toBe("vault-steward.begin")
 	expect(routeRawArgv(["finish", "--preview", "--worktree", "/w"]).identity).toBe("vault-steward.finish-preview")
@@ -97,8 +88,7 @@ test("the fault channel grammar is closed", () => {
 	expect(parseFaults("pause=after-lock:0")).toBeNull()
 })
 
-test("every declared station passes the strict catalogue schema and the envelope schema rejects a malformed result", () => {
-	for (const station of BRANCH_STATIONS) expect(catalogueSchemaIssues(station), station.identity).toEqual([])
+test("the envelope schema accepts a minimal valid result and rejects a malformed one", () => {
 	const envelope = {
 		envelopeVersion: 2,
 		contractVersion: "2.0.0",

@@ -41,7 +41,9 @@ explicit directory layout.
 Noninteractive, login, and Git-hook launches use the selected Mise shims.
 Interactive zsh additionally runs normal `mise activate zsh` after its other
 PATH owners. Missing or invalid applied state leaves the Mise variables unset,
-so fnm, pyenv, and Homebrew fallbacks continue to work.
+so pyenv and Homebrew fallbacks continue to work. No other Node manager is
+configured: fnm is retired (ADR 0012), and Mise reads project `.nvmrc` and
+`.node-version` files itself.
 
 The repository is configured and hermetically tested for installation and
 activation. That is not evidence that this machine is already installed or

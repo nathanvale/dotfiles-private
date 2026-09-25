@@ -1,0 +1,6 @@
+interface:
+  display_name: "Home Assistant"
+  short_description: "Inspect and plan calm home controls safely"
+  default_prompt: "Use $home-assistant-use to inspect my home setup and propose the smallest safe next step."
+policy:
+  allow_implicit_invocation: false

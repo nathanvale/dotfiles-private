@@ -90,6 +90,7 @@ export const EXPECTED_STATIONS: readonly Spec[] = [
 	[apply, "refused", "DOMAIN_PREVIEW_STALE", next("domain", RL, [preview])],
 	[apply, "refused", "DOMAIN_GUARD_INCOMPATIBLE", next("domain", RL, [inspect])],
 	[apply, "refused", "DOMAIN_CANONICAL_NOT_READY", next("domain", RL, [apply])],
+	[apply, "refused", "DOMAIN_CANDIDATE_INVALID", handoff("domain")],
 	[apply, "failed", "DOMAIN_REBASED_CHECK_FAILED", next("domain", RL, [preview])],
 	[apply, "failed", "DOMAIN_REBASE_CONFLICT", handoff("domain")],
 	[apply, "refused", "TRANSIENT_INTEGRATION_BUSY", next("transient", RL, [apply])],
@@ -122,7 +123,7 @@ export const EXPECTED_STATIONS: readonly Spec[] = [
 	[recover, "failed", "INTERNAL_UNEXPECTED_UNCHANGED", handoff("internal")],
 ]
 
-export const EXPECTED_STATION_COUNT = 86
+export const EXPECTED_STATION_COUNT = 87
 export const identityOf = (command: string, outcome: string, cause: string): string => JSON.stringify([command, outcome, cause])
 export const EXPECTED_BY_IDENTITY: ReadonlyMap<string, ExpectedStation> = new Map(EXPECTED_STATIONS.map(([command, outcome, cause, expected]) => [identityOf(command, outcome, cause), expected]))
 

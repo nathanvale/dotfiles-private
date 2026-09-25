@@ -2,12 +2,6 @@
 	"version": 1,
 	"plugins": [
 		{
-			"name": "browser-lanes",
-			"path": "config/agents/plugins/browser-lanes",
-			"ownership": "no-nested-install",
-			"reason": "Browser Lanes tests are dependency-free and do not carry a Bun lockfile."
-		},
-		{
 			"name": "connectors",
 			"path": "config/agents/plugins/connectors",
 			"ownership": "no-nested-install",
