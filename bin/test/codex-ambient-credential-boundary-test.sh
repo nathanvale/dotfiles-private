@@ -165,19 +165,13 @@ LAUNCHCTL_CALLS="$TEST_ROOT/launchctl-calls" HOME="$home" PATH="$home/bin:/usr/b
 assert_has_line "$(<"$TEST_ROOT/launchctl-calls")" 'unsetenv OP_SERVICE_ACCOUNT_TOKEN' \
   'launchctl helper clears a stale service token even with no env file'
 
-# ---------------------------------------------------------------------------
-# Startup holds no credential delivery lane.
-# ---------------------------------------------------------------------------
-#
-# The retired shape read a secrets file from the account-switch config and put
-# its values into every zsh process, which an agent harness then captured. The
-# behavioural proof that it is gone lives in the work-profile boundary contract,
-# which starts a real child against a fixture secrets file in both its plain and
-# its `op://` shapes. These two rows keep the retired mechanisms named here so a
-# reintroduction is caught in the contract that owns ambient credentials.
-assert_not_contains "$(<"$REPO_ROOT/.zshrc")" 'op inject -i' 'startup runs no op inject lane'
-assert_not_contains "$(<"$REPO_ROOT/.zshrc")" 'source "$HOME/.config/lll-account-switch/secrets.env"' \
-  'startup sources no secrets file'
+# Startup holds no credential delivery lane. The retired shape read a secrets
+# file from the account-switch config and put its values into every zsh
+# process, which an agent harness then captured. The behavioural proof that it
+# is gone lives in the work-profile boundary contract, which starts a real
+# child against a fixture secrets file in both its plain and its `op://`
+# shapes and asserts the sentinel never reaches the child's environment.
+# Contract: bin/test/zsh-work-profile-boundary-test.sh
 
 example_text="$(<"$REPO_ROOT/.env.example")"
 assert_contains "$example_text" 'bin/with-one-password-token' 'example names the scoped token owner'

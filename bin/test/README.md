@@ -162,11 +162,12 @@ state. They do not prove live tab focus or profile selection.
 repository targets into a non-Git fixture, then runs `--link` in disposable
 server-profile HOMEs. Independent filesystem reads prove wrong and dangling
 directory links are replaced as links, former referents receive no child and
-retain sentinel bytes, correct and missing links behave normally, real
-directories remain untouched without `--force`, and injected intended-creation
-or zero-exit lying-link failures restore the exact prior raw target. It does
-not prove canonical-checkout activation, interactive real-directory migration,
-or failures beyond the controlled link-creation seam.
+retain sentinel bytes, correct and missing links behave normally, and injected
+intended-creation or zero-exit lying-link failures restore the exact prior raw
+target. It does not prove canonical-checkout activation, interactive
+real-directory migration, or failures beyond the controlled link-creation
+seam. Noninteractive real-directory refusal is owned by
+`symlinks-real-directory-test.sh` (`noninteractive-refusal`).
 
 The attended-login rows prove both handoff start modes through the public
 command. The pre-admission path must create its private reservation before the
@@ -554,8 +555,8 @@ prompts that also use `=~`.
 The expected verdicts are written by hand from the grammar's prose contract
 rather than by running any expression, so no owner is its own oracle. Each named
 row reports `generator/setup/selector`, which localises a drift to the owner that
-moved. Two further rows assert the parity property per writer over every
-candidate in the file, catching a widening no named row happens to cover; the
-direction is one-way by design, since a writer narrower than the selector is
-safe. The closing rows run the real script, so rejection is proved as exit status
-and stderr with nothing scaffolded, not as a regex result.
+moved and, by asserting full three-way agreement per case, already proves the
+one-way parity property (a writer must not be wider than the selector) for
+every case the file exercises. The closing rows run the real script, so
+rejection is proved as exit status and stderr with nothing scaffolded, not as a
+regex result.
