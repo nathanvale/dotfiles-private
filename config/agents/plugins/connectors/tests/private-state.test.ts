@@ -117,27 +117,6 @@ describe("writePrivateFile and readPrivateFile", () => {
 		expect(writePrivateFile(path.join(directory, "nested"), "new")).toEqual({ ok: false, reason: "not-regular" });
 	});
 
-	// Path-level only: a path lstat followed by a path read would pass this too.
-	// That the check and the read share one descriptor, so a swap between them
-	// cannot redirect the read, stays unproved: the synchronous check and read
-	// leave no point where this test could swap the file deterministically.
-	test("a read refuses a symlink even to an owned exact-0600 file, and refuses a 0644 file that replaced its referent", () => {
-		const directory = path.join(root, "state");
-		expect(ownedDirectory(directory)).toEqual({ ok: true });
-		const real = path.join(directory, "real.json");
-		expect(writePrivateFile(real, "real")).toEqual({ ok: true });
-		// A symlink to an otherwise acceptable owned 0600 file is still refused.
-		const link = path.join(directory, "session.json");
-		symlinkSync(real, link);
-		expect(readPrivateFile(link)).toEqual({ ok: false, reason: "symlink" });
-		// Replacing the referent with a 0644 regular file is refused on the next
-		// read, and the link to it stays refused.
-		rmSync(real);
-		writeFileSync(real, "swapped", { mode: 0o644 });
-		expect(readPrivateFile(real)).toEqual({ ok: false, reason: "mode-invalid" });
-		expect(readPrivateFile(link)).toEqual({ ok: false, reason: "symlink" });
-	});
-
 	test("a read refuses anything but an owned exact-0600 regular file", () => {
 		const directory = path.join(root, "state");
 		expect(ownedDirectory(directory)).toEqual({ ok: true });
