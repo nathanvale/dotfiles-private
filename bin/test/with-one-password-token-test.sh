@@ -426,12 +426,15 @@ set -e
 pass 'stdin-only delivery rejects a non-op reference with usage status'
 assert_contains "$stdin_reference_error" 'reference-invalid' 'stdin-only delivery has a stable reference validation code'
 
+rm -f "$fixture/bin/no-launch-target-called"
 set +e
-DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" inject EXPERIENCE_EXTENSION_UPLOAD_TOKEN op://known-vault/wrong-item/credential -- true >/dev/null 2>&1
-unexpected_reference_status=$?
+DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" inject EXPERIENCE_EXTENSION_UPLOAD_TOKEN op://known-vault/wrong-item/credential -- "$fixture/bin/no-launch-target" >/dev/null 2>&1
+inject_failure_status=$?
 set -e
-[[ "$unexpected_reference_status" -eq 18 ]] || fail 'unexpected op reference is rejected by the fixture'
-pass 'unexpected op reference is rejected by the fixture'
+[[ "$inject_failure_status" -eq 18 ]] || fail 'inject preserves failed op read status'
+pass 'inject preserves failed op read status'
+[[ ! -e "$fixture/bin/no-launch-target-called" ]] || fail 'failed inject lookup does not launch the child'
+pass 'failed inject lookup does not launch the child'
 
 set +e
 run_error="$(DOTFILES_DIR="$fixture" PATH="$fixture/bin:$PATH" "$SUBJECT" op run -- true 2>&1)"
