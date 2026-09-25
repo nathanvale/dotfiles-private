@@ -1,5 +1,6 @@
 ---
-status: proposed
+status: accepted
+supersedes: 0002-own-canva-per-user-oauth-below-mcporter.md
 ---
 
 # Move Canva custody into MCPorter's native vault
@@ -124,10 +125,10 @@ Live-only, each separately authorised, in order:
 
 ## Authority
 
-Decision authority: Nathan. This record stays `proposed` until Nathan accepts
-it. Acceptance adds `supersedes: 0002-own-canva-per-user-oauth-below-mcporter.md`
-here and, in the same change, sets ADR 0002 to `status: superseded` with
-`superseded_by` pointing back.
+Decision authority: Nathan, who accepted this record on 2026-09-25, including
+that v1 carries no Connectors Canva logout or remote revocation command. It
+supersedes ADR 0002, which is `status: superseded` with `superseded_by`
+pointing back.
 
 ## References
 

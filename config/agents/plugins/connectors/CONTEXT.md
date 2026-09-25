@@ -126,7 +126,7 @@ _Avoid_: Auth type, login method
 
 **Canva Session** (former):
 The below-MCPorter per-account record of client identity and tokens that the
-packaged Canva adapter never uses (proposed ADR 0004). Its files stay where they
+packaged Canva adapter never uses (ADR 0004). Its files stay where they
 are, unread and unimported; no retirement or revocation policy is decided.
 _Avoid_: Current custody, Account Vault
 
