@@ -5,10 +5,6 @@ harness: claude-code
 harness_min_version: 2.1.280
 author: herdr-projects-s2-worker
 reviewed: 2026-09-25
-reviewed_by: >-
-  independent Code Reviewer, 2026-09-25, commit 87419e33. Verified the
-  model-config, Opus 5.5 overview and Prompting Claude Opus 5.5 sources; the
-  models overview was not fetched.
 sources:
   - https://platform.claude.com/docs/en/models/opus-5-5/overview
   - https://platform.claude.com/docs/en/about-claude/models/overview

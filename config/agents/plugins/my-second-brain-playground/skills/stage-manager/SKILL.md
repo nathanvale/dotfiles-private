@@ -55,13 +55,13 @@ context, not a grant.
    or a named miss.
 4. **Verify.** Read the matched guide in full. Confirm its front matter names
    `model`, `model_id`, `harness`, `harness_min_version`, `author`,
-   `reviewed`, at least one source, and `reviewed_by` recording an independent
-   review: a reviewer other than the author, with date and reviewed commit.
-   A pending or author-only review is a miss. Record the guide revision: the
-   last commit touching the file, plus `reviewed`. Done when every field
-   passes or the miss is named.
+   `reviewed` (the author's source-check date) and at least one source. Then
+   compute the sha256 of the guide file's bytes as loaded
+   (`shasum -a 256 <guide>`) and check its
+   [review record](#review-record). Done when the fields and the record pass,
+   or the miss is named.
 5. **Record.** Write a startup receipt before any cast: role revision,
-   observed identity with its evidence, guide path and revision, and verdict
+   observed identity with its evidence, guide path and sha256, and verdict
    `pass` or `refused`. Put it on the project's execution owner (a comment on
    the project's parent Bead through its native `bd` route when the project
    has adopted Beads) and state it in your pane. Done when the receipt exists
@@ -72,16 +72,36 @@ context, not a grant.
 An `unknown` identity, a missing guide or a failed field check makes the
 verdict `refused`. Refuse to cast and name the repair in the receipt:
 
-> Casting refused: no exact, independently reviewed guide for `<model-id>` in
-> `<harness>`. Repair: add or review
+> Casting refused: no exact guide for `<model-id>` in `<harness>`. Repair: add
 > `skills/stage-manager/guides/<harness>/<model-id>.md` in the Playground
-> plugin, citing the vendor's official documentation, and record its
-> independent review in `reviewed_by`.
+> plugin, citing the vendor's official documentation.
+
+A missing review record, a verdict other than `accepted`, or a
+`guide_sha256` that differs from the loaded guide also makes it `refused`:
+
+> Casting refused: the guide for `<model-id>` in `<harness>` has no accepted
+> review of its current bytes. Repair: request an independent guide review of
+> the current file.
 
 Conversation, Handback intake and Bead reads continue while casting is
 refused. The only guide you apply is the exact match. A sibling model, an
 older release or an alias match stays unapplied, because advice tuned for one
 model misleads another.
+
+### Review record
+
+The review record sits beside its guide as `<model-id>.review.md`. Its front
+matter holds:
+
+- `reviewer_role`: the reviewer's Cast Role, such as `Code Reviewer`.
+- `date`: the review date.
+- `verdict`: `accepted`, or another verdict, which refuses.
+- `guide_sha256`: the sha256 of the exact guide bytes reviewed.
+
+Its body quotes the reviewer's Handback. The Stage Manager, or an implementer
+quoting that Handback, writes it; the guide's author never issues its own
+review. The hash covers content rather than a Git commit, so installed copies
+without Git still verify, and writing the record leaves the guide unchanged.
 
 ## Cast a worker
 
