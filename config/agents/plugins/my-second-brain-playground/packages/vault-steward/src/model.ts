@@ -1,4 +1,4 @@
-// Domain types and sealed vocabularies shared by every Vault Steward CLI front door. No behaviour lives here.
+// Domain types and sealed vocabularies of the Vault Steward CLI. No behaviour lives here.
 // Naming register: CLI-BRIEF.md section 7 and CONTRACT.md 1.2 (frozen strings).
 
 export const schemaVersion = 1 as const
@@ -48,16 +48,7 @@ export interface GuardStatus {
 	worktrees: string[]
 }
 
-export const WARNING_CODES = [
-	"GUARD_MISSING",
-	"GUARD_STALE",
-	"GUARD_PROBE_ALLOWED",
-	"GUARD_SELFTEST_ERROR",
-	"BRANCH_SPRAWL_PRESENT",
-	"FOREIGN_WORKTREE_PRESENT",
-	"HOOKS_PATH_OVERRIDE",
-] as const
-export type WarningCode = (typeof WARNING_CODES)[number]
+export type WarningCode = "GUARD_MISSING" | "GUARD_STALE" | "GUARD_PROBE_ALLOWED" | "GUARD_SELFTEST_ERROR" | "BRANCH_SPRAWL_PRESENT" | "FOREIGN_WORKTREE_PRESENT" | "HOOKS_PATH_OVERRIDE"
 
 export interface Warning {
 	code: WarningCode
@@ -85,9 +76,8 @@ export interface Completion {
 
 export type TransactionState = "unchanged" | "partially-completed" | "unknown"
 
-// The closed refusal vocabulary of the shared engine. Each reason maps to exactly one Contract Core 2.0 cause
-// (CONTRACT.md 3.3); the legacy front door maps the same reasons to schemaVersion 1 codes (CONTRACT.md 4.1).
-export const REASON_CAUSES = {
+// The closed refusal vocabulary of the engine. Each reason maps to exactly one Contract Core 2.0 cause (CONTRACT.md 3.3).
+const REASON_CAUSES = {
 	"config-home-invalid": "SCHEMA_INVALID_INPUT",
 	"config-absent": "DOMAIN_CONFIG_MISSING",
 	"config-unparseable": "SCHEMA_CONFIG_INVALID",
@@ -115,7 +105,9 @@ export const REASON_CAUSES = {
 	"main-diverged": "DOMAIN_MAIN_DIVERGED",
 	"semantic-overlap": "DOMAIN_SEMANTIC_OVERLAP",
 	"rebase-failed": "DOMAIN_REBASE_CONFLICT",
-	"rebased-path-set-mismatch": "DOMAIN_REBASED_PATH_SET_MISMATCH",
+	// A rebased commit whose paths differ from the admitted set is an invalid candidate (the pre-rebase commit is restored,
+	// A8); the separate REBASED_PATH_SET_MISMATCH code stays off the wire (vault decision 2026-09-19).
+	"rebased-path-set-mismatch": "DOMAIN_CANDIDATE_INVALID",
 	"rebased-check-failed": "DOMAIN_REBASED_CHECK_FAILED",
 	"integration-unproved": "INTERNAL_INTEGRATION_UNPROVED",
 	"completion-record-failed": "INTERNAL_COMPLETION_RECORD_FAILED",
