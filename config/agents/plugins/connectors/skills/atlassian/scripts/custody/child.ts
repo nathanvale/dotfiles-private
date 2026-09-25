@@ -3,10 +3,11 @@
 // read a complete 1Password item; its stdout is one nonsecret binding line and
 // its stderr codes are internal to the custody module.
 import { encodeBinding } from "./channel.ts";
-import { type BindingFailure, isProduct, type ItemReadFailure, itemBinding, type Product, productItemTitle, readItem, TENANT_PATTERN } from "./item.ts";
+import { type BindingFailure, isProduct, itemBinding, type Product, productItemTitle, TENANT_PATTERN } from "./item.ts";
+import { type OnePasswordFailure, readOnePasswordItem } from "./one-password.ts";
 
-function fail(cause: "arguments-invalid" | ItemReadFailure | BindingFailure, repair?: string): never {
-	process.stderr.write(`atlassian-credential-binding:error:${cause}${repair ? `:${repair}` : ""}\n`);
+function fail(cause: "arguments-invalid" | OnePasswordFailure | BindingFailure): never {
+	process.stderr.write(`atlassian-credential-binding:error:${cause}\n`);
 	process.exit(3);
 }
 
@@ -27,8 +28,8 @@ function parseInvocation(argv: string[]): { tenant: string; product: Product } {
 
 const invocation = parseInvocation(process.argv.slice(2));
 if (!process.env.HOME) fail("credential-unavailable");
-const read = readItem(productItemTitle(invocation.product, invocation.tenant), process.env);
-if (!read.ok) fail(read.cause, read.cause === "credential-wrapper-missing" ? "restore the dotfiles 1Password wrapper" : undefined);
+const read = readOnePasswordItem(productItemTitle(invocation.product, invocation.tenant), process.env);
+if (!read.ok) fail(read.cause);
 const resolved = itemBinding(read.item);
 if ("cause" in resolved) fail(resolved.cause);
 process.stdout.write(`${encodeBinding(resolved.binding)}\n`);

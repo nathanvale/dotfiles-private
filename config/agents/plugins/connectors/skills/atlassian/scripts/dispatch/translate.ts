@@ -27,11 +27,14 @@ const TRANSPORT_PATTERN = /timed? ?out|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ENOTFOU
 // Our own Provider cause codes: a closed list, matched exactly. Each maps to
 // fixed public guidance; the Provider's message text is never carried.
 const PROVIDER_CAUSE_HINTS: Record<string, string> = {
-	"executable-missing": "install the missing provider executable on PATH",
-	"credential-wrapper-missing": "restore the dotfiles 1Password helper",
+	"uv-unavailable": "the plugin-owned uv is not set up; run connectors setup",
+	"op-unavailable": "the plugin-owned 1Password CLI is not set up; run connectors setup",
+	"service-token-missing": "the Connectors 1Password service-account token is not in the login Keychain; its owner must store it there",
+	"service-token-unavailable": "the login Keychain did not release the Connectors 1Password service-account token; unlock it and retry",
+	"item-missing": "the product credential item is not in 1Password; its owner must create and store it",
 	"credential-context-invalid": "restart through the semantic dispatcher",
 	"credential-context-stale": "credential item metadata changed; restart the semantic operation",
-	"credential-unavailable": "the credential item could not be read; run the helper's check",
+	"credential-unavailable": "the credential item could not be read through 1Password custody",
 	"credential-invalid": "the credential item has malformed fields",
 	"username-missing": "add a username field to the tenant's product credential item",
 	"community-fields-missing": "the product credential item needs username, credential, and a site_url field",

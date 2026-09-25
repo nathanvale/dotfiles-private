@@ -147,6 +147,7 @@ export type CauseCode =
 	| "refused-evidence"
 	| "not-found"
 	| "refused-precondition"
+	| "refused-credential-unconfigured"
 	| "capability-unavailable"
 	| "failed-transport"
 	| "failed-unknown"
@@ -175,6 +176,7 @@ export const CAUSES: Record<CauseCode, CauseRow> = {
 	"refused-evidence": { outcome: "refused", failureClass: "domain", exitCode: 3 },
 	"not-found": { outcome: "failed", failureClass: "domain", exitCode: 3 },
 	"refused-precondition": { outcome: "refused", failureClass: "domain", exitCode: 3 },
+	"refused-credential-unconfigured": { outcome: "refused", failureClass: "domain", exitCode: 3 },
 	"capability-unavailable": { outcome: "failed", failureClass: "domain", exitCode: 3 },
 	"failed-transport": { outcome: "failed", failureClass: "domain", exitCode: 3 },
 	"failed-unknown": { outcome: "failed", failureClass: "domain", exitCode: 3 },

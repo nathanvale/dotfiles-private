@@ -1,17 +1,13 @@
 // Credential item rules: the semantic tenant slug, the product, the
 // product-specific 1Password item title, the item's field map, its top-level
-// version, and the trusted site origin. Reads go through the dotfiles
-// credential helper; nothing here prints a value.
-import { statSync } from "node:fs";
-import path from "node:path";
-import { type EnvironmentSource, safeEnvironment } from "../../../../bin/safe-environment.ts";
+// version, and the trusted site origin. one-password.ts reads the item;
+// nothing here prints a value.
 import { singleLine } from "../provider-process.ts";
 import type { CredentialBinding } from "./channel.ts";
 
 export const TENANT_PATTERN = /^[a-z][a-z0-9-]*$/;
 export const PRODUCTS = ["jira", "confluence"] as const;
 export type Product = (typeof PRODUCTS)[number];
-export const CREDENTIAL_VAULT = "API Credentials";
 // The trusted site origin is the custom `site_url` field only.
 export const SITE_URL_FIELD = "site_url";
 // Raw input must be a bare authority with an optional trailing slash.
@@ -28,19 +24,6 @@ export function productItemTitle(product: Product, tenant: string): string {
 	if (!TENANT_PATTERN.test(tenant)) throw new Error("tenant-invalid: expected a lowercase tenant slug");
 	if (!isProduct(product)) throw new Error("product-invalid: expected jira or confluence");
 	return `${product.toUpperCase()}_${tenant.replaceAll("-", "_").toUpperCase()}_API_TOKEN`;
-}
-
-export function credentialHelperPath(home: string | undefined): string {
-	return path.join(home ?? "", "code", "dotfiles", "bin", "with-one-password-token");
-}
-
-export function credentialHelperPresent(helper: string): boolean {
-	try {
-		const metadata = statSync(helper);
-		return metadata.isFile() && (metadata.mode & 0o111) !== 0;
-	} catch {
-		return false;
-	}
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -117,19 +100,4 @@ export function itemBinding(item: unknown): { binding: CredentialBinding } | { c
 	if (!siteUrl || !validSiteUrl(siteUrl)) return { cause: "site-url-invalid" };
 	if (!version) return { cause: "credential-revision-unavailable" };
 	return { binding: { principal, itemVersion: `onepassword-item-version:${version}`, origin: `https://${new URL(siteUrl).hostname}` } };
-}
-
-export type ItemReadFailure = "credential-wrapper-missing" | "credential-unavailable" | "credential-invalid";
-
-// One complete item read through the credential helper, inside this process.
-export function readItem(itemTitle: string, env: EnvironmentSource): { ok: true; item: unknown } | { ok: false; cause: ItemReadFailure } {
-	const helper = credentialHelperPath(env.HOME);
-	if (!credentialHelperPresent(helper)) return { ok: false, cause: "credential-wrapper-missing" };
-	const read = Bun.spawnSync([helper, "op", "item", "get", itemTitle, "--vault", CREDENTIAL_VAULT, "--format", "json"], { env: safeEnvironment(env), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-	if (read.exitCode !== 0) return { ok: false, cause: "credential-unavailable" };
-	try {
-		return { ok: true, item: JSON.parse(read.stdout.toString()) };
-	} catch {
-		return { ok: false, cause: "credential-invalid" };
-	}
 }

@@ -179,6 +179,7 @@ export const REPAIR_TEXT: Record<Exclude<CauseCode, "success">, string> = {
 	"refused-auth": "the provider refused authentication or permission; verify the credential type, scopes, and product permissions with their owner",
 	"not-found": "the target object was not found or is not visible to this principal",
 	"refused-precondition": "a provider precondition failed before any request; run the provider readiness checks",
+	"refused-credential-unconfigured": "a required credential is not configured; its owner must place it in custody outside Connectors",
 	"capability-unavailable": "the live schema does not expose the operation as expected; inspect the provider schema before retrying",
 	"failed-transport": "the provider did not answer; inspect provider status before retrying the read",
 	"failed-unknown": "the provider failed for an unclassified reason; inspect provider diagnostics",

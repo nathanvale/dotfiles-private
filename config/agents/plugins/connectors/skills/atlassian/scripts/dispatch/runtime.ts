@@ -1,7 +1,8 @@
-// Production adapters for the dispatcher: the route-backed MCPorter transport,
-// trusted site origin and principal from the product item's metadata, and the
-// private write journal.
+// Production adapters for the dispatcher: the route-backed transport through
+// the plugin-owned verified MCPorter, trusted site origin and principal from
+// the product item's metadata, and the private write journal.
 import path from "node:path";
+import { ensureMcporter } from "../../../../bin/mcporter-custody.ts";
 import { planDispatcherRoute, type RoutePlan } from "../../../../bin/provider-route.ts";
 import { safeEnvironment } from "../../../../bin/safe-environment.ts";
 import { bindCredential, bindingChannel, type CredentialBinding, invocationEnvironment, TENANT_PATTERN } from "../custody/index.ts";
@@ -31,11 +32,21 @@ function planRoute(env: Environment, tenant: string, binding: CredentialBinding,
 	}
 }
 
-function spawnRoute(plan: RoutePlan): { code: number; stdout: string; stderr: string } {
-	const mcporter = Bun.which("mcporter", { PATH: plan.env.PATH ?? "" });
-	if (!mcporter) return { code: 3, stdout: "", stderr: "mcporter is not available" };
+function spawnRoute(mcporter: string, plan: RoutePlan): { code: number; stdout: string; stderr: string } {
 	const run = Bun.spawnSync([mcporter, ...plan.argv], { env: plan.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
 	return { code: run.exitCode, stdout: run.stdout.toString(), stderr: run.stderr.toString() };
+}
+
+// The plugin-owned MCPorter, selected once per transport. PATH never
+// supplies it; first use may bootstrap the pinned release, and any later
+// mismatch refuses with the explicit repair.
+function verifiedMcporter(env: Environment): () => Promise<{ ok: true; binary: string } | TransportFailure> {
+	let selection: ReturnType<typeof ensureMcporter> | undefined;
+	return async () => {
+		selection ??= ensureMcporter(env);
+		const selected = await selection;
+		return selected.ok ? { ok: true, binary: selected.binary } : { ok: false, cause: "refused-precondition", hint: selected.repair };
+	};
 }
 
 function parseJson(text: string): unknown | undefined {
@@ -98,18 +109,21 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 		if (inBand !== undefined) return { ok: false, ...translateFailure({ kind: "tool-error", message: inBand.slice(0, 2000) }) };
 		return { ok: true, data };
 	};
-	const request = (binding: CredentialBinding, server: string, mcporterArgs: string[]): TransportResult => {
+	const mcporter = verifiedMcporter(env);
+	const request = async (binding: CredentialBinding, server: string, mcporterArgs: string[]): Promise<TransportResult> => {
 		const planned = planRoute(env, tenant, binding, server, mcporterArgs, skillsRoot);
 		if ("ok" in planned) return planned;
 		const readiness = providerReadiness(env, tenant, binding, server);
 		if (readiness) return readiness;
-		return toResult(spawnRoute(planned));
+		const selected = await mcporter();
+		if (!selected.ok) return selected;
+		return toResult(spawnRoute(selected.binary, planned));
 	};
 	return {
-		async listTools(binding, server) {
+		listTools(binding, server) {
 			return request(binding, server, ["list", "--schema", "--json", "--timeout", CALL_TIMEOUT_MS]);
 		},
-		async call(binding, server, tool, args) {
+		call(binding, server, tool, args) {
 			return request(binding, server, ["call", tool, "--args", JSON.stringify(args), "--output", "json", "--timeout", CALL_TIMEOUT_MS]);
 		},
 	};

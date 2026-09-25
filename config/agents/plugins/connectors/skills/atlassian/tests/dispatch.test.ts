@@ -8,20 +8,18 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { assertCustody, createHarness, type Harness, itemJson, OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
+import { OP_TOKEN_SENTINEL } from "../../../tests/harness.ts";
 import { run } from "../scripts/atlassian-dispatch.ts";
 import { ALLOWED_TOOLS, OPERATION_SPECS, productFor, PROVIDER, type ProviderName, registryToolVocabulary, SERVERS, serverFor } from "../scripts/dispatch/contract.ts";
 import { type Dependencies, REPAIR_TEXT, type SchemaTool, type Transport, type TransportResult } from "../scripts/dispatch/engine.ts";
 import { openJournal } from "../scripts/dispatch/journal.ts";
-import { routeTransport } from "../scripts/dispatch/runtime.ts";
 import { stageFile } from "../scripts/outbox.ts";
 import type { ProviderFailureCause } from "../scripts/dispatch/translate.ts";
+import { CustodyFixture, OFFICIAL_MCPORTER, PROVIDER_TOKEN, SERVICE_TOKEN } from "./fixtures/custody-fixture.ts";
+import { substitutedPluginRoot } from "./fixtures/plugin-copy.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
-const DISPATCH = path.join(SKILL, "scripts", "atlassian-dispatch.ts");
-const UVX_FAKE = path.join(SKILL, "tests", "fixtures", "uvx-fake.ts");
 const ORIGIN = "https://example.atlassian.net";
-const MANAGEMENT_URL = "https://id.atlassian.com/manage-profile/security/api-tokens";
 const CJ = "atlassian-community-jira";
 const CC = "atlassian-community-confluence";
 const PRINCIPAL = "service@example.invalid";
@@ -1215,74 +1213,42 @@ describe("historical records from the retired Official route", () => {
 });
 
 describe("production adapters", () => {
-	let harness: Harness;
-	beforeEach(() => {
-		harness = createHarness({ uvx: UVX_FAKE });
+	// Public processes over the 1Password custody fixture, all run from the
+	// substituted plugin copy (see plugin-copy.ts): the test Keychain reader,
+	// plugin-owned op and uv fakes, and, when the official release fixture is
+	// present, the verified MCPorter itself. Substituted-reader process proof.
+	let fixture: CustodyFixture;
+	// The copy's transport, so any Provider preflight it could start is the copy's.
+	let routeTransport: typeof import("../scripts/dispatch/runtime.ts").routeTransport;
+	beforeEach(async () => {
+		({ routeTransport } = (await import(path.join(substitutedPluginRoot(), "skills", "atlassian", "scripts", "dispatch", "runtime.ts"))) as typeof import("../scripts/dispatch/runtime.ts"));
+		fixture = new CustodyFixture().installAll();
+		for (const [product, server] of [["jira", CJ], ["confluence", CC]] as const) fixture.canned(product, "list", (SCHEMAS[server] ?? []).map((entry) => ({ ...entry, description: entry.name, inputSchema: { type: "object", ...entry.inputSchema } })));
 	});
-	afterEach(() => harness.dispose());
-	const env = () => ({ HOME: harness.home, PATH: process.env.PATH ?? "", TMPDIR: harness.root, XDG_STATE_HOME: harness.root });
-	const fields = itemJson;
-	const canned = (server: string, files: Record<string, unknown>) => {
-		const directory = path.join(harness.root, "canned", server);
-		mkdirSync(directory, { recursive: true });
-		writeFileSync(path.join(directory, "list.json"), JSON.stringify({ tools: SCHEMAS[server] }));
-		for (const [name, value] of Object.entries(files)) writeFileSync(path.join(directory, `${name}.json`), JSON.stringify(value));
-	};
+	afterEach(() => fixture.dispose());
+	const env = () => fixture.environment();
 	const parse = (stdout: string) => (JSON.parse(stdout) as { result: { outcome: string; causeCode: string; repairAction: string | null; transactionState: string; data: unknown; provenance: { provider: string; tool: string; status: string }[]; effects: { completed: string[] } } }).result;
-
-	test("the public dispatcher reports a missing Community executable as a local precondition before MCPorter starts", async () => {
-		harness.dispose();
-		harness = createHarness({});
-		const secret = "fixture-custody-secret";
-		harness.write("item.json", fields({ username: PRINCIPAL, credential: secret, site_url: ORIGIN }, 1));
-		const result = await harness.run(["--tenant", "example", "issue.search", "--input", '{"jql":"x"}', "--json"], { PATH: harness.binDir }, DISPATCH);
-		expect([result.code, result.stderr]).toEqual([3, ""]);
-		const envelope = parse(result.stdout);
-		expect([envelope.causeCode, envelope.repairAction, envelope.transactionState]).toEqual(["refused-precondition", `${REPAIR_TEXT["refused-precondition"]}; install the missing provider executable on PATH`, "unchanged"]);
-		expect(harness.has("mcporter.json")).toBe(false);
-		for (const stream of [result.stdout, result.stderr]) {
-			expect(stream).not.toContain(secret);
-			expect(stream).not.toContain(OP_TOKEN_SENTINEL);
-		}
-	});
+	const opTitles = () => fixture.lines<{ argv: string[] }>("op-calls.jsonl").map((call) => call.argv[2]);
+	const dispatchRead = (operation: string, input: string) => fixture.dispatch(["--tenant", "example", operation, "--input", input, "--json"]);
 
 	test("the public dispatcher rejects a missing or malformed Community credential before MCPorter starts", async () => {
 		for (const [label, credential, hint] of [
 			["missing", undefined, "the product credential item needs username, credential, and a site_url field"],
 			["malformed", "fixture-private-value\nsecond-line", "the credential item has malformed fields"],
 		] as const) {
-			harness.write("item.json", fields({ username: PRINCIPAL, site_url: ORIGIN, ...(credential === undefined ? {} : { credential }) }, 1));
-			const result = await harness.run(["--tenant", "example", "issue.search", "--input", '{"jql":"x"}', "--json"], {}, DISPATCH);
+			fixture.writeItem({ username: PRINCIPAL, site_url: ORIGIN, ...(credential === undefined ? {} : { credential }) });
+			const result = await dispatchRead("issue.search", '{"jql":"x"}');
 			expect([label, result.code, result.stderr]).toEqual([label, 3, ""]);
 			const envelope = parse(result.stdout);
 			expect([label, envelope.causeCode, envelope.repairAction, envelope.transactionState]).toEqual([label, "refused-precondition", `${REPAIR_TEXT["refused-precondition"]}; ${hint}`, "unchanged"]);
 			for (const stream of [result.stdout, result.stderr]) {
 				expect(stream).not.toContain("fixture-private-value");
 				expect(stream).not.toContain("second-line");
-				expect(stream).not.toContain(OP_TOKEN_SENTINEL);
+				expect(stream).not.toContain(SERVICE_TOKEN);
 			}
 		}
-		expect(harness.has("mcporter.json")).toBe(false);
-		expect(harness.has("community-provider.json")).toBe(false);
-	});
-
-	test("MCPorter diagnostic JSON from a failed Provider start is a final transport failure, never provider content", async () => {
-		const secret = "fixture-custody-secret";
-		harness.write("item.json", fields({ username: PRINCIPAL, credential: secret, site_url: ORIGIN }, 1));
-		const base = { mode: "server", name: CJ, status: "offline", durationMs: 1, transport: "STDIO ../scripts/atlassian-community-provider.ts", issue: { kind: "offline", rawMessage: "Connection closed" }, error: "offline" };
-		for (const [label, diagnostic] of [
-			["offline", base],
-			["other status", { ...base, status: "error" }],
-			["provider-like error", { ...base, error: "offline after provider output" }],
-			["extra provider field", { ...base, content: { answer: "provider output" } }],
-		] as const) {
-			harness.write("mcporter-failure.json", JSON.stringify({ code: 1, stdout: `${JSON.stringify(diagnostic)}\n`, stderr: "" }));
-			const result = await harness.run(["--tenant", "example", "issue.search", "--input", '{"jql":"x"}', "--json"], {}, DISPATCH);
-			const envelope = parse(result.stdout);
-			expect([label, result.code, result.stderr, envelope.causeCode, envelope.repairAction]).toEqual([label, 3, "", "failed-transport", REPAIR_TEXT["failed-transport"]]);
-			expect(envelope.provenance).toEqual([{ provider: CJ, tool: "list", status: "failed-transport" }]);
-			for (const stream of [result.stdout, result.stderr]) expect(stream).not.toContain(secret);
-		}
+		expect(existsSync(path.join(fixture.state, "connectors", "mcporter"))).toBe(false);
+		expect(fixture.lines("community-starts.jsonl")).toEqual([]);
 	});
 
 	test("route registry and selector planning refuse before a Provider preflight process starts", async () => {
@@ -1294,7 +1260,7 @@ describe("production adapters", () => {
 			["allow-list", { imports: [], mcpServers: { [CJ]: {} } }, validRoute],
 			["selectors", validRegistry, { ...validRoute, selectors: { account: "ATLASSIAN_TENANT" } }],
 		] as const) {
-			const skillsRoot = path.join(harness.root, `skills-${label}`);
+			const skillsRoot = path.join(fixture.root, `skills-${label}`);
 			const config = path.join(skillsRoot, "atlassian", "config");
 			mkdirSync(config, { recursive: true });
 			writeFileSync(path.join(config, "mcporter.json"), JSON.stringify(registry));
@@ -1302,23 +1268,23 @@ describe("production adapters", () => {
 			const result = await routeTransport(env(), "example", skillsRoot).listTools(binding, CJ);
 			expect([label, result]).toEqual([label, { ok: false, cause: "refused-precondition", hint: "repair the Connector Skill route registry" }]);
 		}
-		expect(harness.has("wrapper.log")).toBe(false);
-		expect(harness.has("mcporter.json")).toBe(false);
-		expect(harness.has("community-provider.json")).toBe(false);
+		expect(fixture.lines("op-calls.jsonl")).toEqual([]);
+		expect(fixture.lines("community-starts.jsonl")).toEqual([]);
+		expect(existsSync(path.join(fixture.state, "connectors", "mcporter"))).toBe(false);
 	});
 
 	test("staging copies an upload into the tenant's 0700 outbox under its content digest and refuses a missing or non-regular file", async () => {
-		const source = path.join(harness.root, "evidence.txt");
+		const source = path.join(fixture.root, "evidence.txt");
 		writeFileSync(source, "evidence bytes");
 		const digest = new Bun.CryptoHasher("sha256").update("evidence bytes").digest("hex");
 		const staged = stageFile("example", env(), source);
 		expect(staged).toEqual({ ok: true, relative: `${digest}/evidence.txt` });
-		const outbox = path.join(harness.root, "connectors", "atlassian", "example", "outbox");
+		const outbox = path.join(fixture.state, "connectors", "atlassian", "example", "outbox");
 		expect(readFileSync(path.join(outbox, digest, "evidence.txt"), "utf8")).toBe("evidence bytes");
 		for (const directory of [outbox, path.join(outbox, digest)]) expect((statSync(directory).mode & 0o777).toString(8)).toBe("700");
 		expect(stageFile("example", env(), source)).toEqual(staged);
-		expect(stageFile("example", env(), path.join(harness.root, "missing.txt"))).toEqual({ ok: false, reason: "file-unreadable" });
-		expect(stageFile("example", env(), harness.root)).toEqual({ ok: false, reason: "file-unreadable" });
+		expect(stageFile("example", env(), path.join(fixture.root, "missing.txt"))).toEqual({ ok: false, reason: "file-unreadable" });
+		expect(stageFile("example", env(), fixture.root)).toEqual({ ok: false, reason: "file-unreadable" });
 		// Digest directories untouched for over an hour are pruned by the next staging; the fresh one and foreign entries stay.
 		const stale = path.join(outbox, "f".repeat(64));
 		mkdirSync(stale, { recursive: true });
@@ -1330,111 +1296,88 @@ describe("production adapters", () => {
 		expect(readdirSync(outbox).sort()).toEqual([digest, "notes"].sort());
 	});
 
-	test("the public dispatcher reads Jira through the Community route by default without exposing the item secret", async () => {
-		const secret = "fixture-custody-secret";
-		harness.write("item.json", fields({ username: PRINCIPAL, site_url: ORIGIN, credential: secret }, 42));
-		canned(CJ, { jira_get_issue: { key: "PROJ-1", summary: "canned" } });
-		const configured = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
-		const log = readFileSync(path.join(harness.root, "wrapper.log"), "utf8");
-		for (const value of [secret, OP_TOKEN_SENTINEL]) {
-			expect(configured.stdout).not.toContain(value);
-			expect(configured.stderr).not.toContain(value);
-			expect(log).not.toContain(value);
-		}
-		expect(log).toContain("JIRA_EXAMPLE_API_TOKEN");
-		expect(log).not.toContain("CONFLUENCE_EXAMPLE_API_TOKEN");
-		const envelope = parse(configured.stdout);
-		expect([configured.code, configured.stderr, envelope.causeCode, envelope.data]).toEqual([0, "", "success", { key: "PROJ-1", summary: "canned" }]);
-		expect(envelope.provenance).toEqual([{ provider: CJ, tool: "jira_get_issue", status: "success" }]);
-		const custody = assertCustody(harness, configured, [secret, OP_TOKEN_SENTINEL], "child");
-		expect(custody.argv.slice(2)).toEqual(["call", `${CJ}.jira_get_issue`, "--args", '{"issue_key":"PROJ-1"}', "--output", "json", "--timeout", "30000", "--no-oauth"]);
-		// Canned MCPorter answers replace the Provider spawn; the readiness
-		// preflight ran in this process tree and never started the package.
-		expect(harness.has("community-provider.json")).toBe(false);
-	});
-
-	test("the public dispatcher reads Confluence through the Community route with the Confluence item", async () => {
-		const secret = "fixture-confluence-custody-secret";
-		harness.write("item.json", fields({ username: "confluence@example.invalid", site_url: ORIGIN, credential: secret }, 7));
-		canned(CC, { confluence_get_page: { id: "123", title: "canned page" } });
-		const result = await harness.run(["--tenant", "example", "page.get", "--input", '{"pageId":"123"}', "--json"], {}, DISPATCH);
-		expect([result.code, result.stderr]).toEqual([0, ""]);
-		const envelope = parse(result.stdout);
-		expect([envelope.causeCode, envelope.data]).toEqual(["success", { id: "123", title: "canned page" }]);
-		expect(envelope.provenance).toEqual([{ provider: CC, tool: "confluence_get_page", status: "success" }]);
-		const custody = assertCustody(harness, result, [secret, OP_TOKEN_SENTINEL], "child");
-		expect(custody.argv.slice(2)).toEqual(["call", `${CC}.confluence_get_page`, "--args", '{"page_id":"123"}', "--output", "json", "--timeout", "30000", "--no-oauth"]);
-		const log = readFileSync(path.join(harness.root, "wrapper.log"), "utf8");
-		expect(log).toContain("CONFLUENCE_EXAMPLE_API_TOKEN");
-		expect(log).not.toContain("JIRA_EXAMPLE_API_TOKEN");
-		expect(log).not.toContain(secret);
-		expect(log).not.toContain(OP_TOKEN_SENTINEL);
-	});
-
 	test("the public process stops before MCPorter when the site origin is absent, legacy only, or invalid", async () => {
-		for (const [label, item] of [
-			["absent", fields({ username: PRINCIPAL })],
-			["legacy url only", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", url: "https://Example.atlassian.net/" }, 1)],
-			["invalid site_url beside a valid legacy url", fields({ username: PRINCIPAL, site_url: "https://example.atlassian.net/wiki", url: ORIGIN })],
+		for (const [label, entries] of [
+			["absent", { username: PRINCIPAL }],
+			["legacy url only", { username: PRINCIPAL, credential: PROVIDER_TOKEN, url: "https://Example.atlassian.net/" }],
+			["invalid site_url beside a valid legacy url", { username: PRINCIPAL, site_url: "https://example.atlassian.net/wiki", url: ORIGIN }],
 		] as const) {
-			harness.write("item.json", item);
-			const result = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
+			fixture.writeItem(entries);
+			const result = await dispatchRead("issue.get", '{"issueKey":"PROJ-1"}');
 			expect([label, result.code, result.stderr]).toEqual([label, 3, ""]);
 			const envelope = parse(result.stdout);
 			expect([label, envelope.causeCode, envelope.repairAction]).toEqual([label, "site-unresolved", "the tenant's credential item must expose a valid site_url field"]);
-			expect(harness.has("mcporter.json")).toBe(false);
+			expect(existsSync(path.join(fixture.state, "connectors", "mcporter"))).toBe(false);
 		}
 	});
 
-	test("an in-band error payload from a successful tool call is translated at the transport seam, never returned as data", async () => {
-		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 1));
-		canned(CC, { confluence_get_page: { result: JSON.stringify({ error: "Failed to retrieve page by ID '123': Error retrieving page content: There is no content with the given id, or the calling user does not have permission to view the content" }) } });
-		const result = await harness.run(["--tenant", "example", "page.get", "--input", '{"pageId":"123"}', "--json"], {}, DISPATCH);
-		expect([result.code, result.stderr]).toEqual([3, ""]);
-		const envelope = parse(result.stdout);
-		expect([envelope.outcome, envelope.causeCode, envelope.data, envelope.repairAction]).toEqual(["failed", "failed-unknown", null, REPAIR_TEXT["failed-unknown"]]);
-		expect(result.stdout).not.toContain("Failed to retrieve");
-	});
+	describe.skipIf(!OFFICIAL_MCPORTER)("through the verified MCPorter", () => {
+		test("Jira reads use only the Jira item and the Jira route", async () => {
+			fixture.writeItem({ username: PRINCIPAL, site_url: ORIGIN, credential: PROVIDER_TOKEN }, 42);
+			fixture.canned("jira", "jira_get_issue", { key: "PROJ-1", summary: "canned" });
+			const result = await dispatchRead("issue.get", '{"issueKey":"PROJ-1"}');
+			expect([result.code, result.stderr]).toEqual([0, ""]);
+			const envelope = parse(result.stdout);
+			expect([envelope.causeCode, envelope.data]).toEqual(["success", { key: "PROJ-1", summary: "canned" }]);
+			expect(envelope.provenance).toEqual([{ provider: CJ, tool: "jira_get_issue", status: "success" }]);
+			expect(new Set(opTitles())).toEqual(new Set(["JIRA_EXAMPLE_API_TOKEN"]));
+			expect(fixture.lines("effects.jsonl")).toEqual([{ product: "jira", tool: "jira_get_issue", args: { issue_key: "PROJ-1" } }]);
+			for (const secret of [PROVIDER_TOKEN, SERVICE_TOKEN]) expect(result.stdout).not.toContain(secret);
+		}, 60_000);
 
-	test("an in-band failure with extra provider fields is still an error", async () => {
-		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 1));
-		canned(CC, { confluence_get_page: { result: JSON.stringify({ success: false, error: "HTTP 403 Forbidden", requestId: "opaque" }) } });
-		const result = await harness.run(["--tenant", "example", "page.get", "--input", '{"pageId":"123"}', "--json"], {}, DISPATCH);
-		const envelope = parse(result.stdout);
-		expect([result.code, envelope.causeCode, envelope.data]).toEqual([3, "refused-auth", null]);
-		expect(result.stdout).not.toContain("opaque");
-	});
+		test("Confluence reads use only the Confluence item and the Confluence route", async () => {
+			fixture.writeItem({ username: "confluence@example.invalid", site_url: ORIGIN, credential: PROVIDER_TOKEN }, 7);
+			fixture.canned("confluence", "confluence_get_page", { id: "123", title: "canned page" });
+			const result = await dispatchRead("page.get", '{"pageId":"123"}');
+			expect([result.code, result.stderr]).toEqual([0, ""]);
+			const envelope = parse(result.stdout);
+			expect([envelope.causeCode, envelope.data]).toEqual(["success", { id: "123", title: "canned page" }]);
+			expect(envelope.provenance).toEqual([{ provider: CC, tool: "confluence_get_page", status: "success" }]);
+			expect(new Set(opTitles())).toEqual(new Set(["CONFLUENCE_EXAMPLE_API_TOKEN"]));
+			const starts = fixture.lines<{ confluenceUrl: string | null }>("community-starts.jsonl");
+			expect(starts.map((start) => start.confluenceUrl)).toEqual(starts.map(() => "https://example.atlassian.net/wiki"));
+		}, 60_000);
 
-	test("hostile provider text in a real tool error is translated at the transport seam and never reaches stdout or stderr", async () => {
-		const PRIVATE = ["fixture-secret-value", "customer SSN 123-45-6789", "PROJ-99 confidential merger", OP_TOKEN_SENTINEL, "op://", "Bearer", "Basic "];
-		const leak = `HTTP 401 Unauthorized token=fixture-secret-value Authorization: Basic ${OP_TOKEN_SENTINEL} Bearer x op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential; issue PROJ-99 confidential merger; customer SSN 123-45-6789`;
-		canned(CJ, { jira_get_issue: { isError: true, content: [{ type: "text", text: leak }] } });
-		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", site_url: ORIGIN }, 1));
-		const result = await harness.run(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}', "--json"], {}, DISPATCH);
-		expect([result.code, result.stderr]).toEqual([3, ""]);
-		const envelope = parse(result.stdout);
-		expect([envelope.causeCode, envelope.repairAction]).toEqual(["refused-auth", REPAIR_TEXT["refused-auth"]]);
-		for (const fragment of PRIVATE) expect(result.stdout).not.toContain(fragment);
-	});
+		test("a Provider that dies at start is a final transport failure from MCPorter's own diagnostic, never provider content", async () => {
+			fixture.writeItem({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN });
+			writeFileSync(path.join(fixture.root, "community-crash"), "");
+			const result = await dispatchRead("issue.search", '{"jql":"x"}');
+			const envelope = parse(result.stdout);
+			expect([result.code, result.stderr, envelope.causeCode, envelope.repairAction]).toEqual([3, "", "failed-transport", REPAIR_TEXT["failed-transport"]]);
+			expect(envelope.provenance).toEqual([{ provider: CJ, tool: "list", status: "failed-transport" }]);
+			expect(result.stdout).not.toContain("fixture-private-crash-text");
+			expect(fixture.lines("effects.jsonl")).toEqual([]);
+		}, 60_000);
 
-	test("a public-process write previews and applies through the real route and the private journal under XDG_STATE_HOME", async () => {
-		// Replies in the shape MCPorter --output json produces live: the tool text as one JSON string under result.
-		canned(CJ, { jira_get_issue: { result: JSON.stringify({ key: "PROJ-1", fields: { comment: { comments: [] } } }) }, jira_add_comment: { result: JSON.stringify({ id: "10001", body: "canned" }) } });
-		harness.write("item.json", fields({ username: PRINCIPAL, credential: "fixture-custody-secret", url: MANAGEMENT_URL, site_url: ORIGIN }, 1));
-		const input = '{"issueKey":"PROJ-1","body":"canned"}';
-		const preview = await harness.run(["--tenant", "example", "issue.comment", "--input", input, "--preview"], {}, DISPATCH);
-		expect([preview.code, preview.stderr]).toEqual([0, ""]);
-		const previewed = parse(preview.stdout).data as { previewId: string; provider: string };
-		expect(previewed.provider).toBe("community");
-		const apply = await harness.run(["--tenant", "example", "issue.comment", "--input", input, "--apply", previewed.previewId], {}, DISPATCH);
-		expect([apply.code, apply.stderr]).toEqual([0, ""]);
-		const envelope = parse(apply.stdout);
-		expect([envelope.transactionState, envelope.effects.completed]).toEqual(["completed", ["jira-comment:10001"]]);
-		const sent = harness.receipt<{ argv: string[] }>("mcporter.json").argv;
-		expect(sent.slice(2, 5)).toEqual(["call", `${CJ}.jira_add_comment`, "--args"]);
-		// The outbound object is the receipt-bound one, in the journal's canonical key order.
-		expect(JSON.parse(sent[5] ?? "")).toEqual({ issue_key: "PROJ-1", body: "canned" });
-		const receipts = readJsonDir(path.join(harness.root, "connectors", "atlassian", "example", "receipts"));
-		expect(receipts.map((entry) => [entry.provider, entry.status, entry.send])).toEqual([["community", "completed", "possible"]]);
+		test("an in-band error payload from a successful tool call is translated at the transport seam, never returned as data", async () => {
+			fixture.writeItem({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN });
+			fixture.canned("confluence", "confluence_get_page", { error: "Failed to retrieve page by ID '123': Error retrieving page content: There is no content with the given id, or the calling user does not have permission to view the content" });
+			const result = await dispatchRead("page.get", '{"pageId":"123"}');
+			expect([result.code, result.stderr]).toEqual([3, ""]);
+			const envelope = parse(result.stdout);
+			expect([envelope.outcome, envelope.causeCode, envelope.data, envelope.repairAction]).toEqual(["failed", "failed-unknown", null, REPAIR_TEXT["failed-unknown"]]);
+			expect(result.stdout).not.toContain("Failed to retrieve");
+		}, 60_000);
+
+		test("an in-band failure with extra provider fields is still an error", async () => {
+			fixture.writeItem({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN });
+			fixture.canned("confluence", "confluence_get_page", { success: false, error: "HTTP 403 Forbidden", requestId: "opaque" });
+			const result = await dispatchRead("page.get", '{"pageId":"123"}');
+			const envelope = parse(result.stdout);
+			expect([result.code, envelope.causeCode, envelope.data]).toEqual([3, "refused-auth", null]);
+			expect(result.stdout).not.toContain("opaque");
+		}, 60_000);
+
+		test("hostile provider text in a real tool error is translated at the transport seam and never reaches stdout or stderr", async () => {
+			const PRIVATE = ["fixture-secret-value", "customer SSN 123-45-6789", "PROJ-99 confidential merger", SERVICE_TOKEN, "op://", "Bearer", "Basic "];
+			const leak = `HTTP 401 Unauthorized token=fixture-secret-value Authorization: Basic ${SERVICE_TOKEN} Bearer x op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential; issue PROJ-99 confidential merger; customer SSN 123-45-6789`;
+			fixture.canned("jira", "jira_get_issue", { toolErrorText: leak });
+			fixture.writeItem({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN });
+			const result = await dispatchRead("issue.get", '{"issueKey":"PROJ-1"}');
+			expect([result.code, result.stderr]).toEqual([3, ""]);
+			const envelope = parse(result.stdout);
+			expect([envelope.causeCode, envelope.repairAction]).toEqual(["refused-auth", REPAIR_TEXT["refused-auth"]]);
+			for (const fragment of PRIVATE) expect(result.stdout).not.toContain(fragment);
+		}, 60_000);
 	});
 });
