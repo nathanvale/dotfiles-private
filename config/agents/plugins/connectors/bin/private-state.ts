@@ -237,6 +237,11 @@ function syncDirectory(directory: string): void {
 // exactly one links; the other reads what the winner published, through
 // readPrivateFile, and returns it as existing. Same parent rules as
 // writePrivateFile.
+// The successful link is the publication, so the temp removal and directory
+// fsync after it are best effort and never turn it into a failure. A failed
+// removal can leave the exact-0600 temp beside the target; after a failed
+// fsync the entry is visible but its crash durability is uncertain, and
+// nothing retries that fsync.
 export function publishPrivateFileOnce(file: string, content: string): PrivateStateResult<{ published: true } | { published: false; existing: string }> {
 	const prepared = prepareTarget(file);
 	if (!prepared.ok) return prepared;
@@ -252,11 +257,15 @@ export function publishPrivateFileOnce(file: string, content: string): PrivateSt
 	}
 	try {
 		rmSync(temp, { force: true });
-		syncDirectory(prepared.directory);
-		return { ok: true, published: true };
 	} catch {
-		return { ok: false, reason: "write-failed" };
+		// Best effort: the target is already published.
 	}
+	try {
+		syncDirectory(prepared.directory);
+	} catch {
+		// Best effort: the target is already published.
+	}
+	return { ok: true, published: true };
 }
 
 // An owned executable in Connector state and the SHA-256 of its bytes, read

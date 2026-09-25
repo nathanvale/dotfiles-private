@@ -15,10 +15,12 @@
 // live Provider.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { compileFrontDoor } from "../../../tests/compile-front-door.ts";
 import { CONFLUENCE_ITEM_ID, CustodyFixture, JIRA_ITEM_ID, OFFICIAL_MCPORTER, PROVIDER_TOKEN, registrationLiteral, SERVICE_TOKEN, seedMcporter } from "./fixtures/custody-fixture.ts";
-import { SHIPPED_ROOT, substitutedPluginRoot } from "./fixtures/plugin-copy.ts";
+import { changedPaths, SHIPPED_ROOT, substitutedPluginRoot } from "./fixtures/plugin-copy.ts";
 
 if (process.env.CI && !OFFICIAL_MCPORTER) throw new Error("CONNECTORS_OFFICIAL_RELEASE_FIXTURE is required for the packaged Atlassian process proof");
 // Taken at module scope so its removal binds to this file, not to the
@@ -338,10 +340,14 @@ describe("tenant registration: configure, status, and the gate before custody", 
 	const STALE_HINT = "a provider precondition failed before any request; run the provider readiness checks; credential item metadata changed; restart the semantic operation";
 	const OTHER_ID = "otheritemfixture0000000003";
 	const REGISTRATION = registrationLiteral("example", JIRA_ITEM_ID, CONFLUENCE_ITEM_ID);
-	const configure = (items: Record<string, unknown>, options: { stdinSentinel?: string } = {}) => fixture.frontDoor(["auth", "configure", "atlassian", ...TENANT, "--input", JSON.stringify(items)], options);
+	const configure = (items: Record<string, unknown>, options: Parameters<CustodyFixture["frontDoor"]>[1] = {}) => fixture.frontDoor(["auth", "configure", "atlassian", ...TENANT, "--input", JSON.stringify(items)], options);
 	const IDS = { jiraItem: JIRA_ITEM_ID, confluenceItem: CONFLUENCE_ITEM_ID };
 	const noCapability = () => [fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl"), fixture.lines("effects.jsonl"), existsSync(path.join(fixture.state, "connectors", "mcporter"))];
 	const NONE = [[], [], [], [], false];
+	// The recorded configure envelope and its data, shared by every row that publishes.
+	const recordedFields = (result: Envelope["result"]) => [result.commandIdentity, result.outcome, result.causeCode, result.effectClass, result.transactionState, result.effects.completed, result.effects.uncertain, result.nextAction];
+	const RECORDED = ["connectors.auth", "success", "SUCCESS_RUN_RECORDED", "repository-local", "completed", ["custody-registration"], [], "connectors.auth"];
+	const RECORDED_DATA = { connector: "atlassian", tenant: "example", vault: "API Credentials", items: { jira: "jirafixtureitem00000000001", confluence: "conffixtureitem00000000002" }, nextStep: "connectors auth check atlassian --select tenant=example" };
 	const registration = () => {
 		const file = fixture.registrationFile();
 		return { text: readFileSync(file, "utf8"), mode: statSync(file).mode & 0o7777, parentMode: statSync(path.dirname(file)).mode & 0o7777, inode: statSync(file).ino };
@@ -353,8 +359,8 @@ describe("tenant registration: configure, status, and the gate before custody", 
 		const first = await configure(IDS, { stdinSentinel: sentinel });
 		expect([first.code, first.stderr]).toEqual([0, ""]);
 		const published = parse(first.stdout).result;
-		expect([published.commandIdentity, published.outcome, published.causeCode, published.effectClass, published.transactionState, published.effects.completed, published.effects.uncertain, published.nextAction]).toEqual(["connectors.auth", "success", "SUCCESS_RUN_RECORDED", "repository-local", "completed", ["custody-registration"], [], "connectors.auth"]);
-		expect(published.data).toEqual({ connector: "atlassian", tenant: "example", vault: "API Credentials", items: { jira: "jirafixtureitem00000000001", confluence: "conffixtureitem00000000002" }, nextStep: "connectors auth check atlassian --select tenant=example" });
+		expect(recordedFields(published)).toEqual(RECORDED);
+		expect(published.data).toEqual(RECORDED_DATA);
 		const written = registration();
 		expect([written.text, written.mode, written.parentMode]).toEqual([REGISTRATION, 0o600, 0o700]);
 		expect(atlassianFiles(fixture)).toEqual(["example/registration.json"]);
@@ -367,6 +373,75 @@ describe("tenant registration: configure, status, and the gate before custody", 
 		expect(noCapability()).toEqual(NONE);
 		expectNoHostile(fixture);
 		for (const stream of [first.stdout, again.stdout]) expect(stream).not.toContain(sentinel);
+	});
+
+	// S4/F2: once the link has published registration.json, a failed temp
+	// removal or directory fsync must not deny the effect. The faulted front
+	// door is this file's substituted plugin copy with one prologue in
+	// bin/connectors.ts, compiled by the package build flags: inside that
+	// process only, bun:test's module mock makes node:fs throw EIO at exactly
+	// one post-link step and log that it fired.
+	describe("after a post-link publication fault", () => {
+		const ANCHOR = 'import { stateRoot } from "./private-state.ts";';
+		const PROLOGUE = String.raw`
+import { mock as faultMock } from "bun:test";
+import * as faultFs from "node:fs";
+const faultReal = { ...faultFs };
+const faultStep = process.env.CONNECTORS_TEST_POST_LINK_FAULT;
+const faultFire = (step: string): never => {
+	faultReal.appendFileSync(FAULT_LOG, step + "\n");
+	throw Object.assign(new Error("injected post-link fault"), { code: "EIO" });
+};
+faultMock.module("node:fs", () => ({
+	...faultReal,
+	rmSync: (target: string, options?: object) => (faultStep === "temp-removal" && /^\.registration\.json\..+\.tmp$/.test(path.basename(target)) ? faultFire(faultStep) : faultReal.rmSync(target, options)),
+	openSync: (target: string, ...rest: never[]) => (faultStep === "directory-sync" && target.endsWith(path.join("atlassian", "example")) ? faultFire(faultStep) : faultReal.openSync(target, ...rest)),
+}));
+`;
+		let faulted = "";
+		let binary = "";
+		let faultLog = "";
+		beforeAll(() => {
+			faulted = mkdtempSync(path.join(os.tmpdir(), "connectors-post-link-fault-"));
+			chmodSync(faulted, 0o700);
+			const substituted = substitutedPluginRoot();
+			cpSync(substituted, faulted, { recursive: true, verbatimSymlinks: true });
+			faultLog = path.join(faulted, "fault.log");
+			const entry = path.join(faulted, "bin", "connectors.ts");
+			const source = readFileSync(entry, "utf8");
+			expect(source.split(ANCHOR)).toHaveLength(2);
+			writeFileSync(entry, source.replace(ANCHOR, `${ANCHOR}${PROLOGUE.replace("FAULT_LOG", JSON.stringify(faultLog))}`));
+			binary = path.join(faulted, "bin", "connectors");
+			compileFrontDoor(entry, binary);
+			// Fail closed: the faulted copy differs from the verified one only by the prologue and its build.
+			expect(changedPaths(substituted, faulted)).toEqual(["bin/connectors", "bin/connectors.ts"]);
+		}, 120_000);
+		afterAll(() => {
+			if (faulted !== "") rmSync(faulted, { recursive: true, force: true });
+		});
+		const TEMP = /^example\/\.registration\.json\.[0-9a-f-]{36}\.tmp$/;
+
+		// The failed removal keeps one exact-0600 temp beside the registration;
+		// a failed directory fsync follows a completed removal.
+		for (const [step, leftovers] of [["temp-removal", 1], ["directory-sync", 0]] as const) {
+			test(`a ${step} fault still reports the published registration as recorded and starts nothing`, async () => {
+				fresh({ seed: false, registered: false });
+				rmSync(faultLog, { force: true });
+				const result = await configure(IDS, { binary, extra: { CONNECTORS_TEST_POST_LINK_FAULT: step } });
+				expect(readFileSync(faultLog, "utf8")).toBe(`${step}\n`);
+				expect([result.code, result.stderr]).toEqual([0, ""]);
+				const recorded = parse(result.stdout).result;
+				expect(recordedFields(recorded)).toEqual(RECORDED);
+				expect(recorded.data).toEqual(RECORDED_DATA);
+				const written = registration();
+				expect([written.text, written.mode, written.parentMode]).toEqual([REGISTRATION, 0o600, 0o700]);
+				const temps = atlassianFiles(fixture).filter((entry) => entry !== "example/registration.json");
+				expect([atlassianFiles(fixture).includes("example/registration.json"), temps.length]).toEqual([true, leftovers]);
+				for (const temp of temps) expect([TEMP.test(temp), statSync(path.join(fixture.state, "connectors", "atlassian", temp)).mode & 0o7777]).toEqual([true, 0o600]);
+				expect(noCapability()).toEqual(NONE);
+				expectNoHostile(fixture);
+			});
+		}
 	});
 
 	test("configure refuses anything but two strict item IDs, stores nothing, and never echoes the value", async () => {
