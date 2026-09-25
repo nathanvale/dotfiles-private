@@ -2555,8 +2555,9 @@ assert_present "$handoff_record" 'pre-admission reservation exists before contro
 run_cli run --lane daily-driver --account-role owner --run-id preadmission-contender -- \
   mcporter call chrome-devtools.list_pages
 assert_equals "$cli_status" '13' 'a contender sees lane busy during pre-admission dispatch'
-wait "$preadmission_bg_pid"
-assert_equals "$?" '0' 'background pre-admission dispatch completes'
+preadmission_bg_status=0
+wait "$preadmission_bg_pid" || preadmission_bg_status=$?
+assert_equals "$preadmission_bg_status" '0' 'background pre-admission dispatch completes'
 preadmission_order_nonce="$(<"$TEST_ROOT/preadmission-bg-token")"
 run_cli run --lane daily-driver --account-role owner --run-id preadmission-after -- \
   mcporter call chrome-devtools.list_pages
