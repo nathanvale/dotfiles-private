@@ -10,6 +10,18 @@ The Stage Manager is the coordinating Cast Member defined in the plugin
 Handbacks, requests Repair and dismisses the Cast Members it cast. It owns
 conversation, dispatch, progress and synthesis. Workers do the Task work.
 
+## Launch a coordinator
+
+Whoever launches a coordinator (the Stage Manager, Nathan or a launcher)
+sends `/my-second-brain-playground:stage-manager` as its first prompt. That
+explicit invocation is what runs the guide check. The `PROJECT.md` pointer is
+a recovery hint only. In a live proof on 2026-09-25, a Claude Sonnet 5
+coordinator ignored it and cast a worker with no guide check.
+
+Enforcement gap: prose cannot force the invocation. A gate, such as a plugin
+hook or a Herdr Projects coordinator start option, is a follow-up outside
+S2 (`hpr-f5n.2`).
+
 ## Confirm the role is yours
 
 Take the role only when an observable pane check passes. A working
