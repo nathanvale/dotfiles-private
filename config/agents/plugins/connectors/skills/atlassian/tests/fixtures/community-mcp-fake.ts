@@ -5,40 +5,18 @@
 // booleans, never values. Every tools/call is appended to effects.jsonl, the
 // test's independent count of provider requests. Replies come from
 // canned/<product>/ files read at call time.
-import { dlopen, FFIType, ptr } from "bun:ffi";
 import { appendFileSync, existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-
-// A process's argv then environment, space-joined as `ps -E -ww -o command=`
-// prints them, read through sysctl KERN_PROCARGS2, the table ps reads. ps
-// itself is setuid, and macOS refuses a setuid exec inside a sandbox.
-function commandLine(pid: number): string {
-	const libc = dlopen("/usr/lib/libSystem.B.dylib", { sysctl: { args: [FFIType.ptr, FFIType.u32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.i32 } });
-	const CTL_KERN = 1;
-	const KERN_PROCARGS2 = 49;
-	const name = new Int32Array([CTL_KERN, KERN_PROCARGS2, pid]);
-	const size = new BigUint64Array([1n << 20n]);
-	const buffer = new Uint8Array(Number(size[0]));
-	const failed = libc.symbols.sysctl(ptr(name), name.length, ptr(buffer), ptr(size), null, 0) !== 0;
-	libc.close();
-	if (failed) return "";
-	// Layout: argc, the exec path, NUL padding, then argv and environment
-	// strings, each NUL-terminated, ending at the first empty string.
-	const [, ...fields] = Buffer.from(buffer.subarray(4, Number(size[0])))
-		.toString("utf8")
-		.split("\0");
-	const start = fields.findIndex((field) => field !== "");
-	const strings = start === -1 ? [] : fields.slice(start);
-	const end = strings.indexOf("");
-	return (end === -1 ? strings : strings.slice(0, end)).join(" ");
-}
+import { processStrings } from "./process-table.ts";
 
 const root = process.env.TMPDIR ?? "/nonexistent";
 const env = process.env;
 const serviceToken = readFileSync(path.join(root, "expected-service-token"), "utf8");
 const providerToken = readFileSync(path.join(root, "expected-provider-token"), "utf8");
 const product = env.JIRA_URL !== undefined ? "jira" : "confluence";
-const parent = commandLine(process.ppid);
+const parent = processStrings(process.ppid);
+// argv then environment, space-joined as `ps -E -ww -o command=` prints them.
+const parentCommandLine = [...parent.argv, ...parent.environment].join(" ");
 const envValues = Object.values(env).join("\n");
 appendFileSync(
 	path.join(root, "community-starts.jsonl"),
@@ -52,10 +30,10 @@ appendFileSync(
 		username: env.JIRA_USERNAME ?? env.CONFLUENCE_USERNAME ?? null,
 		providerTokenMatches: (env.JIRA_API_TOKEN ?? env.CONFLUENCE_API_TOKEN) === providerToken,
 		serviceTokenInEnvironment: envValues.includes(serviceToken),
-		parentExecutable: parent.trim().split(" ", 1)[0] ?? "",
-		parentEnvironmentVisible: parent.includes("MCPORTER_NO_KEEPALIVE="),
-		parentHoldsServiceToken: parent.includes(serviceToken),
-		parentHoldsProviderToken: parent.includes(providerToken),
+		parentExecutable: parent.argv[0] ?? "",
+		parentEnvironmentVisible: parentCommandLine.includes("MCPORTER_NO_KEEPALIVE="),
+		parentHoldsServiceToken: parentCommandLine.includes(serviceToken),
+		parentHoldsProviderToken: parentCommandLine.includes(providerToken),
 	})}\n`,
 );
 

@@ -9,10 +9,11 @@
 // the production-anchor row spawns the shipped binary. PATH holds only
 // hostile recorders before /usr/bin:/bin, so no Bun, Node, op, uv, uvx, or
 // MCPorter is reachable through it. MCPorter is the verified official release
-// selected by the production bootstrap. The only process-table read is the
-// fake uv's own parent-pid booleans. Substituted-source packaged process proof
-// only: nothing here reads the real Keychain, runs the real op, or reaches a
-// live Provider.
+// selected by the production bootstrap. The only process-table reads are the
+// fake uv's and the fake op's reads of their own parent: its executable path,
+// op's also its role argv, and token booleans, never a token value.
+// Substituted-source packaged process proof only: nothing here reads the real
+// Keychain, runs the real op, or reaches a live Provider.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
@@ -1405,4 +1406,145 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		expect(readdirSync(outbox()).sort()).toEqual([upload.digest, createHash("sha256").update(changed).digest("hex")].sort());
 		expectNoSecret(fixture, [preview.stdout, preview.stderr, apply.stdout, apply.stderr]);
 	}, 90_000);
+
+	// T5 U3b-1d (Spec AC10 and AC11): one fixture, one cumulative cycle through
+	// every command and effect class. Every spawn holds its own token-shaped
+	// stdin sentinel open until it exits. Each command's streams are checked
+	// for every secret as soon as it exits, so a leak fails at its own command;
+	// then the whole fixture, the op and Community argv, and (for the two
+	// tokens only) the parents of op and of the Provider are checked once.
+	// Positive controls: the Provider did receive its token, op did receive the
+	// service token, and the sweep and process-table reads saw what they claim
+	// to.
+	test("capture sweep: across configure, check, reads, writes, an attachment, an unknown outcome, recovery, and refusals, no token reaches any stream, file, MCPorter, or op parent, and no stdin sentinel or mistyped token reaches any stream, file, op argv, or Community argv, while the Provider still receives its token", async () => {
+		fresh({ registered: false });
+		fixture.canned("jira", "list", WRITE_JIRA_TOOLS);
+		fixture.canned("confluence", "list", WRITE_CONFLUENCE_TOOLS);
+		fixture.canned("jira", "jira_get_issue", issueWithComments([]));
+		fixture.canned("jira", "jira_add_comment", { id: "10001", body: "sweep comment" });
+		fixture.canned("confluence", "confluence_get_page", page(7));
+		fixture.canned("confluence", "confluence_get_attachments", { attachments: [], total: 0 });
+		fixture.canned("confluence", "confluence_upload_attachment", { message: "Attachment uploaded successfully", attachment: { id: "att901", title: UPLOAD_NAME } });
+		const uploadBytes = "capture sweep upload bytes\n";
+		const upload = path.join(fixture.root, "upload-sweep", UPLOAD_NAME);
+		mkdirSync(path.dirname(upload));
+		writeFileSync(upload, uploadBytes);
+		// Independent oracle: an Atlassian API token pasted as an item ID. It
+		// crosses the test's own spawn argv (F3 fact 2) and must reach nothing else.
+		const MISTYPED = "ATATT3xFfGF0capture-sweep-mistyped-token";
+		const sentinels: string[] = [];
+		const streams: string[] = [];
+		const observed: unknown[][] = [];
+		const secrets = () => [SERVICE_TOKEN, PROVIDER_TOKEN, MISTYPED, ...sentinels];
+		const step = async (label: string, argv: string[]): Promise<Envelope["result"]> => {
+			const stdinSentinel = `ops_capture-stdin-sentinel-${String(sentinels.length + 1).padStart(2, "0")}-end`;
+			sentinels.push(stdinSentinel);
+			const result = await fixture.frontDoor(argv, { stdinSentinel });
+			for (const secret of secrets()) expect([label, secret, result.stdout.includes(secret), result.stderr.includes(secret)]).toEqual([label, secret, false, false]);
+			streams.push(result.stdout, result.stderr);
+			const envelope = parse(result.stdout).result;
+			observed.push([label, envelope.commandIdentity, envelope.causeCode, envelope.effectClass, result.code, result.stderr]);
+			return envelope;
+		};
+		// A missing id stays a string, so a failed step fails in the matrix below.
+		const idOf = (envelope: Envelope["result"], key: "previewId" | "runId") => String((envelope.data?.result as Record<string, unknown> | undefined)?.[key] ?? "missing");
+		const run = ["run", "atlassian", ...TENANT];
+		const auth = (verb: string) => ["auth", verb, "atlassian", ...TENANT];
+		const recoverArgv = ["recover", "atlassian", ...TENANT];
+		const ids = JSON.stringify({ jiraItem: JIRA_ITEM, confluenceItem: CONFLUENCE_ITEM });
+		const comment = JSON.stringify({ issueKey: "EX-1", body: "sweep comment" });
+		const attach = JSON.stringify({ pageId: "123", file: upload });
+		const unknownComment = JSON.stringify({ issueKey: "EX-1", body: "sweep unknown comment" });
+
+		await step("unregistered read", [...run, "issue.get", "--input", '{"issueKey":"EX-1"}']);
+		await step("mistyped-token configure", [...auth("configure"), "--input", JSON.stringify({ jiraItem: MISTYPED, confluenceItem: CONFLUENCE_ITEM })]);
+		await step("configure", [...auth("configure"), "--input", ids]);
+		await step("identical configure", [...auth("configure"), "--input", ids]);
+		await step("status", auth("status"));
+		await step("auth check", auth("check"));
+		await step("Jira read", [...run, "issue.get", "--input", '{"issueKey":"EX-1"}']);
+		await step("Confluence read", [...run, "page.get", "--input", '{"pageId":"123"}']);
+		const commentPreview = idOf(await step("issue.comment preview", [...run, "issue.comment", "--input", comment, "--preview"]), "previewId");
+		const commentReceipt = idOf(await step("issue.comment apply", [...run, "issue.comment", "--input", comment, "--apply", commentPreview]), "runId");
+		const attachPreview = idOf(await step("page.attach preview", [...run, "page.attach", "--input", attach, "--preview"]), "previewId");
+		await step("page.attach apply", [...run, "page.attach", "--input", attach, "--apply", attachPreview]);
+		fixture.canned("jira", "jira_add_comment", { exitAfterRecord: true });
+		const unknownPreview = idOf(await step("unknown-outcome preview", [...run, "issue.comment", "--input", unknownComment, "--preview"]), "previewId");
+		const unknownRun = idOf(await step("unknown-outcome apply", [...run, "issue.comment", "--input", unknownComment, "--apply", unknownPreview]), "runId");
+		await step("recover list", recoverArgv);
+		await step("recover run", [...recoverArgv, "--run", unknownRun]);
+		fixture.canned("jira", "jira_get_issue", issueWithComments([{ id: "40004", body: "sweep unknown comment" }]));
+		await step("adjudicate", [...recoverArgv, "--run", unknownRun, "--adjudicate", "--input", unknownComment]);
+		await step("unlock", [...recoverArgv, "--run", unknownRun, "--unlock"]);
+		await step("schema refusal", [...run, "issue.get", "--input", JSON.stringify({ issueKey: "EX-1", bogus: 1 })]);
+		await step("unknown command", ["no-such-command"]);
+
+		// Independent oracle: [label, command identity, cause, effect class, exit, stderr].
+		const MATRIX = [
+			["unregistered read", "connectors.run", "DOMAIN_ADAPTER_REFUSED", "inspect", 3, ""],
+			["mistyped-token configure", "connectors.auth", "SCHEMA_ADAPTER_REFUSED", "inspect", 4, ""],
+			["configure", "connectors.auth", "SUCCESS_RUN_RECORDED", "repository-local", 0, ""],
+			["identical configure", "connectors.auth", "SUCCESS_UNCHANGED", "inspect", 0, ""],
+			["status", "connectors.auth", "SUCCESS_UNCHANGED", "inspect", 0, ""],
+			["auth check", "connectors.auth", "SUCCESS_UNCHANGED", "inspect", 0, ""],
+			["Jira read", "connectors.run", "SUCCESS_UNCHANGED", "inspect", 0, ""],
+			["Confluence read", "connectors.run", "SUCCESS_UNCHANGED", "inspect", 0, ""],
+			["issue.comment preview", "connectors.run.preview", "SUCCESS_RUN_RECORDED", "repository-local", 0, ""],
+			["issue.comment apply", "connectors.run.apply", "SUCCESS_RUN_APPLIED", "external", 0, ""],
+			["page.attach preview", "connectors.run.preview", "SUCCESS_RUN_RECORDED", "repository-local", 0, ""],
+			["page.attach apply", "connectors.run.apply", "SUCCESS_RUN_APPLIED", "external", 0, ""],
+			["unknown-outcome preview", "connectors.run.preview", "SUCCESS_RUN_RECORDED", "repository-local", 0, ""],
+			["unknown-outcome apply", "connectors.run.apply", "DOMAIN_RUN_EFFECT_UNKNOWN", "external", 3, ""],
+			["recover list", "connectors.recover", "SUCCESS_UNCHANGED", "inspect", 0, ""],
+			["recover run", "connectors.recover", "SUCCESS_UNCHANGED", "inspect", 0, ""],
+			["adjudicate", "connectors.recover.adjudicate", "SUCCESS_RUN_RECORDED", "repository-local", 0, ""],
+			["unlock", "connectors.recover.unlock", "SUCCESS_UNCHANGED", "inspect", 0, ""],
+			["schema refusal", "connectors.run", "SCHEMA_ADAPTER_REFUSED", "inspect", 4, ""],
+			["unknown command", "connectors.dispatch", "USAGE_UNKNOWN_COMMAND", "inspect", 2, ""],
+		];
+		expect(MATRIX).toHaveLength(20);
+		expect(observed).toEqual(MATRIX);
+		expect([...new Set(observed.map((row) => row[3]))].sort()).toEqual(["external", "inspect", "repository-local"]);
+		expect(new Set(sentinels).size).toBe(20);
+
+		// The fixture sweep, after the upload source is gone, so the upload bytes
+		// can come only from the outbox copy. It must hold the fakes' logs, the
+		// registration, the comment's preview and receipt, the outbox copy, and
+		// op's parent records, or an empty sweep would pass.
+		rmSync(path.dirname(upload), { recursive: true });
+		const sweep = fixture.sweepText();
+		for (const expected of ['"envKeys"', '"parentRole"', registrationLiteral("example", JIRA_ITEM_ID, CONFLUENCE_ITEM_ID), commentPreview, commentReceipt, uploadBytes]) expect([expected, sweep.includes(expected)]).toEqual([expected, true]);
+		for (const surface of [...streams, sweep]) for (const secret of secrets()) expect([secret, surface.includes(secret)]).toEqual([secret, false]);
+
+		// op: only item reads of the two registered IDs, with the service token
+		// (positive control) and exactly its three environment keys.
+		const opCalls = fixture.lines("op-calls.jsonl");
+		const opRead = (item: string) => JSON.stringify({ argv: ITEM_READ(item), envKeys: OP_ENV_KEYS, serviceTokenMatches: true });
+		expect(new Set(opCalls.map((call) => JSON.stringify(call)))).toEqual(new Set([opRead(JIRA_ITEM), opRead(CONFLUENCE_ITEM)]));
+		expect(fixture.lines("keychain-reads.jsonl")).toEqual(Array.from({ length: opCalls.length }, () => keychainRead(fixture)));
+		// The Provider's replacement: the pinned Community argv, the provider
+		// token received (positive control), and MCPorter, its parent, visible
+		// and holding neither token.
+		const starts = fixture.lines<CommunityStart & { product: string }>("community-starts.jsonl");
+		expect(new Set(starts.map((start) => start.product))).toEqual(new Set(["jira", "confluence"]));
+		const selected = realpathSync(selectedMcporter(fixture));
+		for (const start of starts) {
+			expect(start.argv).toEqual(COMMUNITY_ARGV);
+			expect([start.providerTokenMatches, start.serviceTokenInEnvironment]).toEqual([true, false]);
+			expect(realpathSync(start.parentExecutable)).toBe(selected);
+			expect([start.parentEnvironmentVisible, start.parentHoldsServiceToken, start.parentHoldsProviderToken]).toEqual([true, false, false]);
+		}
+		// op's parent, one record per op call: the copy's front door in each
+		// custody role, its environment visible, and neither token in its argv
+		// or environment.
+		const opParents = readFileSync(path.join(fixture.root, "op-parents.jsonl"), "utf8").trim().split("\n").map((line) => JSON.parse(line) as { parentExecutable: string; parentRole: string[]; parentEnvironmentVisible: boolean; parentHoldsServiceToken: boolean; parentHoldsProviderToken: boolean });
+		expect(opParents).toHaveLength(opCalls.length);
+		expect(new Set(opParents.map((parent) => parent.parentRole.join(" ")))).toEqual(new Set(["__internal atlassian custody-child", "__internal atlassian provider --preflight", "__internal atlassian provider"]));
+		const frontDoor = realpathSync(path.join(fixture.pluginRoot, "bin", "connectors"));
+		for (const parent of opParents) {
+			expect([parent.parentRole, parent.parentEnvironmentVisible, parent.parentHoldsServiceToken, parent.parentHoldsProviderToken]).toEqual([parent.parentRole, true, false, false]);
+			expect([parent.parentRole, realpathSync(parent.parentExecutable)]).toEqual([parent.parentRole, frontDoor]);
+		}
+		expectNoHostile(fixture);
+	}, 180_000);
 });
