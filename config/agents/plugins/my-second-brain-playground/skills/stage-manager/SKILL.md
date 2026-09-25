@@ -47,23 +47,30 @@ context, not a grant.
    directory when it is loaded from a Git checkout (`uncommitted` when dirty).
    Done when both values are written down.
 2. **Observe.** Before any guide lookup, record your own Harness, its
-   version, your exact model ID and your effort from evidence you can read
-   yourself:
-   - **Launch argv** of your own agent process: the nearest ancestor on the
-     parent chain whose argv0 is an agent CLI, such as `claude` or `codex`.
+   version, the model selected at launch, the model serving now, and your
+   effort, from evidence you can read yourself:
+   - **Launch selection**, from the argv of your own agent process: the
+     nearest ancestor on the parent chain whose argv0 is an agent CLI, such
+     as `claude` or `codex`.
      Walk the chain with `ps -o pid=,ppid=,command= -p <pid>`, starting from
      your shell's `$PPID` (verified on 2026-09-25). Its argv0 names the
-     Harness, and a `--model <id>` or `-m <id>` value is observed launch
-     evidence. `herdr pane process-info` reports the pane's foreground agent,
+     Harness, and a `--model <id>` or `-m <id>` value records what launch
+     requested. `herdr pane process-info` reports the pane's foreground agent,
      which is a parent process when you run nested, such as a subagent or a
      `claude -p` child that inherits `HERDR_PANE_ID`.
-   - **Harness self-evidence** named in `references/harnesses/<harness>.md`.
-   - **Nathan's chat statement** of the model.
+   - **Serving model**, from current evidence: the Harness self-evidence
+     named in `references/harnesses/<harness>.md`, or Nathan's chat statement
+     of the model serving now. Launch argv never changes, but the serving
+     model can: a `/model` switch or an automatic fallback keeps the session
+     on another model
+     ([automatic model fallback](https://code.claude.com/docs/en/model-config#automatic-model-fallback)).
 
-   An alias or family name, such as `opus` or `gpt-6`, is never an exact ID,
-   even when it appears in argv. Brief text, `PROJECT.md` settings, config
-   files and documented defaults are claims. Done when each value is observed
-   or marked `unknown`.
+   The serving model is the exact ID used for guide lookup. An alias or
+   family name, such as `opus` or `gpt-6`, is never an exact ID, even when it
+   appears in argv. Brief text, `PROJECT.md` settings, config files and
+   documented defaults are claims. Done when each value is observed or marked
+   `unknown`, and the serving model is compared with an exact launch
+   selection.
 3. **Resolve.** Look up `guides/<harness>/<model-id>.md` beside this file,
    where `<harness>` is the lowercase hyphenated name (`claude-code`, `codex`). It
    matches only when its front matter `harness` and `model_id` equal the
@@ -89,10 +96,17 @@ context, not a grant.
 
 Each cause refuses casting separately. Name its repair in the receipt.
 
-An exact model ID or Harness that stays `unknown` after step 2:
+An exact serving model or Harness that stays `unknown` after step 2:
 
 > Casting refused: identity unavailable. Repair: launch with an explicit
 > model and retry, or Nathan confirms the model in chat.
+
+An exact launch selection that differs from the serving model, or serving
+evidence missing after a known model switch or fallback notice:
+
+> Casting refused: identity conflict between launch `<launch-id>` and serving
+> `<serving-id or unknown>`. Repair: Nathan confirms the serving model in chat,
+> or relaunch with the intended model.
 
 A missing guide or a failed field check:
 

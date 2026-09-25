@@ -1,10 +1,13 @@
 # Codex self-evidence
 
-Not yet qualified. Task `hpr-f5n.7` owns the Codex self-evidence and Codex
-guides.
+Not qualified in this skill. Task `hpr-f5n.7` owns Codex self-evidence and
+Codex guides; S2 (`hpr-f5n.2`) does not.
 
-Until it lands, a Codex performer observes only through the Harness-neutral
-routes in startup step 2: its launch argv (`-m <id>` or `--model <id>`) and
-Nathan's chat statement. `CODEX_VERSION` was seen in one Codex session, but it
-is unqualified here. With no exact ID observed, the verdict is
-`identity unavailable`.
+Until `hpr-f5n.7` lands, a Codex coordinator startup, or a cast of a Codex
+worker, refuses with one of two causes:
+
+- `identity unavailable`: no qualified serving-model or version evidence.
+- `no exact guide`: no reviewed guide for the Codex model.
+
+Codex sessions have shown `CODEX_VERSION`, `CODEX_SESSION_ID` and
+`CODEX_THREAD_ID`, but none of them is qualified here.
