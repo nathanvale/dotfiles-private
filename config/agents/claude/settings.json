@@ -4,21 +4,14 @@
     "pr": ""
   },
   "permissions": {
-    "allow": [
-      "Bash",
-      "Bash(rm -rf /tmp/**)",
-      "Bash(rm -rf /private/tmp/**)",
-      "Bash(rm -rf /var/folders/**)",
-      "Bash(rm -fr /tmp/**)",
-      "Bash(rm -fr /private/tmp/**)",
-      "Bash(rm -fr /var/folders/**)"
-    ],
+    "allow": [],
     "deny": [
       "AskUserQuestion"
     ],
     "ask": [],
     "defaultMode": "bypassPermissions"
   },
+  "model": "claude-fable-5-1",
   "enableAllProjectMcpServers": false,
   "disabledMcpjsonServers": [],
   "disableClaudeAiConnectors": true,
@@ -185,7 +178,7 @@
   "effortLevel": "high",
   "modelSettings": {
     "claude-opus-5-5": {
-      "effortLevel": "medium"
+      "effortLevel": "high"
     },
     "claude-opus-5": {
       "effortLevel": "high"
@@ -200,5 +193,34 @@
   "theme": "dark",
   "autoCompactEnabled": true,
   "agentPushNotifEnabled": true,
-  "skipAutoPermissionPrompt": true
+  "skipAutoPermissionPrompt": true,
+  "autoMode": {
+    "environment": [
+      "### Org-wide",
+      "**Organization**: None configured",
+      "**Cloud provider(s)**: None configured",
+      "**Repository visibility**: assume private unless the remote host and repo name indicate otherwise, or a visibility check in the transcript shows public (gh check not queryable here — remote uses a custom SSH host alias `github-myagentdojo`, org/repo not derivable)",
+      "**Internal sharing / snippet hosting**: None configured — treat public paste/gist services as outside the trust boundary",
+      "**Secrets management**: None configured",
+      "**Default / protected branches**: main (default branch, per repo facts); protection status not queryable here",
+      "**CI/CD deploy targets**: None configured",
+      "**Network posture**: None configured",
+      "**Host containment**: None configured — assume Claude Code runs on an ordinary developer machine or CI runner with open internet",
+      "**Source control**: The trusted repo (my-second-brain-playground, remote `github-myagentdojo:myagentdojo/my-second-brain-playground.git`) and its remote only — no additional orgs configured",
+      "**Trusted internal domains**: None configured",
+      "**Trusted cloud buckets**: None configured",
+      "**Key internal services**: None configured",
+      "**Internal package registry**: None configured",
+      "**Sensitive data locations & audiences**: any file or store holding personal data, confidential business data, credentials, regulated data, or similarly sensitive material; preserve exact handles when known and share only with audiences cleared at the [named+specifics] bar — includes `inbox/agent-browser-credential-provider-evaluation.md` and `projects/my-second-brain/research/event-ledger-retention-and-deletion.md`",
+      "**Data retention / declassification**: None configured",
+      "**Sensitive remote targets**: any namespace, host, or container whose name carries `prod` or `production` as a whole word or name segment",
+      "**Protected deployment namespaces / environments**: None configured — fall back to the Sensitive remote targets heuristic",
+      "**Protected IaC scopes**: IAM, RBAC, networking, quota, and node-pool resources; anything whose name or tag carries `prod` or `production` as a whole word or name segment",
+      "### User-specific",
+      "**Primary use of Claude Code**: personal knowledge-vault / second-brain project work (routine under this repo)",
+      "**Trusted repo**: `~/code/my-second-brain-playground` (remote `github-myagentdojo:myagentdojo/my-second-brain-playground.git`); visibility not confirmed, treat as private by default",
+      "**Org-specific CLIs**: None configured (herdr, ghh, vault-steward, mise, mcporter, bd seen frequently in this project's transcripts but not corroborated as org-specific tooling)",
+      "routine under `~/code/my-second-brain-playground/` prefix"
+    ]
+  }
 }
