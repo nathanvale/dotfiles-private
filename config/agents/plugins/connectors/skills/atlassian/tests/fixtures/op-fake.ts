@@ -5,9 +5,11 @@
 // kernel's process table it also records its parent (the process that ran op)
 // in op-parents.jsonl, one line per call: the executable path, the role argv,
 // and booleans for environment visibility and each token; never a token value.
+// It records its grandparent (the process that started op's parent, such as
+// MCPorter for a Provider role) the same way, without its argv.
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { processStrings } from "./process-table.ts";
+import { parentPid, processStrings } from "./process-table.ts";
 
 const root = path.dirname(process.env.HOME ?? "/nonexistent");
 const argv = process.argv.slice(2);
@@ -19,6 +21,8 @@ appendFileSync(
 const parent = processStrings(process.ppid);
 const providerToken = readFileSync(path.join(root, "expected-provider-token"), "utf8");
 const parentStrings = [...parent.argv, ...parent.environment];
+const grandparent = processStrings(parentPid(process.ppid));
+const grandparentStrings = [...grandparent.argv, ...grandparent.environment];
 appendFileSync(
 	path.join(root, "op-parents.jsonl"),
 	`${JSON.stringify({
@@ -29,6 +33,10 @@ appendFileSync(
 		parentEnvironmentVisible: parent.environment.includes(`HOME=${process.env.HOME}`),
 		parentHoldsServiceToken: parentStrings.some((entry) => entry.includes(expected)),
 		parentHoldsProviderToken: parentStrings.some((entry) => entry.includes(providerToken)),
+		grandparentExecutable: grandparent.executable,
+		grandparentEnvironmentVisible: grandparent.environment.includes(`HOME=${process.env.HOME}`),
+		grandparentHoldsServiceToken: grandparentStrings.some((entry) => entry.includes(expected)),
+		grandparentHoldsProviderToken: grandparentStrings.some((entry) => entry.includes(providerToken)),
 	})}\n`,
 );
 if (process.env.OP_SERVICE_ACCOUNT_TOKEN !== expected) {

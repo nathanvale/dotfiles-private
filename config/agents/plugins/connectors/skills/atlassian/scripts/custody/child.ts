@@ -8,7 +8,7 @@
 import { type EnvironmentSource, INTERNAL_INVOCATION_CONTEXT_ENV } from "../../../../bin/safe-environment.ts";
 import { encodeBinding } from "./channel.ts";
 import { type BindingFailure, isItemId, isProduct, itemBinding, type Product, TENANT_PATTERN } from "./item.ts";
-import { type OnePasswordFailure, readOnePasswordItem } from "./one-password.ts";
+import { type OnePasswordFailure, readAtlassianItem } from "./one-password.ts";
 
 function fail(cause: "arguments-invalid" | OnePasswordFailure | Exclude<BindingFailure, "item-id-mismatch">): never {
 	process.stderr.write(`atlassian-credential-binding:error:${cause}\n`);
@@ -39,7 +39,7 @@ function parseInvocation(argv: readonly string[], env: EnvironmentSource): { ten
 export function runCustodyChild(argv: readonly string[], env: EnvironmentSource = process.env): void {
 	const invocation = parseInvocation(argv, env);
 	if (!env.HOME) fail("credential-unavailable");
-	const read = readOnePasswordItem(invocation.item, env);
+	const read = readAtlassianItem(invocation.item, env);
 	if (!read.ok) fail(read.cause);
 	const resolved = itemBinding(read.item, invocation.item);
 	// A returned item that is not the one requested is an invalid credential.

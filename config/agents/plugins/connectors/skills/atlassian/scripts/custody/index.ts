@@ -20,7 +20,7 @@ import { atlassianProcess } from "../provider-process.ts";
 import { type CredentialBinding, encodeBinding, parseBinding } from "./channel.ts";
 import { custodyContext } from "./child.ts";
 import { isItemId, isProduct, itemBinding, itemFieldMap, type Product, SITE_URL_FIELD, TENANT_PATTERN } from "./item.ts";
-import { itemHandoff, OP_SETUP_REPAIR, readOnePasswordItem, SERVICE_TOKEN_HANDOFF } from "./one-password.ts";
+import { itemHandoff, OP_SETUP_REPAIR, readAtlassianItem, SERVICE_TOKEN_HANDOFF } from "./one-password.ts";
 import { installedUv as selectedUv } from "../../../../bin/setup/uv.ts";
 import { UV_SETUP_REPAIR } from "./plugin-tools.ts";
 
@@ -116,7 +116,7 @@ export interface BoundItem {
 export function boundItem(invocation: ProviderInvocation, env: EnvironmentSource = process.env): BoundItem {
 	const { binding } = invocation;
 	const label = `1Password item ${binding.item}`;
-	const read = readOnePasswordItem(binding.item, env);
+	const read = readAtlassianItem(binding.item, env);
 	if (!read.ok) atlassianProcess.fail(read.cause, `${label} could not be read through 1Password custody`);
 	const actual = itemBinding(read.item, binding.item);
 	if ("cause" in actual && actual.cause === "item-id-mismatch") atlassianProcess.fail("credential-context-stale", "credential item changed; restart the semantic operation");

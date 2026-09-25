@@ -22,6 +22,18 @@ const TOKEN_SENTINEL = "SENTINEL_MERMAID_API_TOKEN_VALUE";
 const OP_SENTINEL = "SENTINEL_MERMAID_OP_SERVICE_TOKEN";
 // Independent oracle: the keyless Mermaid read tools in the live receipt.
 const KEYLESS_TOOLS = ["validate_and_render_mermaid_diagram", "get_diagram_title", "get_diagram_summary", "search_mermaid_icons", "get_mermaid_syntax_document"];
+// Independent oracle: the account tier's tools in the authenticated
+// 2026-09-26 receipt, three reads then two writes, and the whole catalogue
+// Ticket #94 declares, each with its tier and kind.
+const ACCOUNT_TOOLS = ["list_mermaid_chart_projects", "list_mermaid_chart_diagrams", "get_mermaid_chart_diagram", "create_mermaid_chart_diagram", "update_mermaid_chart_diagram"];
+const CATALOGUE = [
+	...KEYLESS_TOOLS.map((name) => ({ name, tier: "keyless", kind: "read" })),
+	{ name: "list_mermaid_chart_projects", tier: "account", kind: "read" },
+	{ name: "list_mermaid_chart_diagrams", tier: "account", kind: "read" },
+	{ name: "get_mermaid_chart_diagram", tier: "account", kind: "read" },
+	{ name: "create_mermaid_chart_diagram", tier: "account", kind: "write" },
+	{ name: "update_mermaid_chart_diagram", tier: "account", kind: "write" },
+];
 // Independent oracle: the accepted evidence state before any live proof.
 const UNPROVEN_EVIDENCE = { configured: true, localReady: null, custodyChecked: null, authenticated: false, schemaQualified: false, liveReadProven: false, liveWriteProven: false, fixtureTested: null };
 
@@ -111,7 +123,7 @@ test.skipIf(!official)("keyless run reaches each allow-listed Mermaid read with 
 	}
 }, 90_000);
 
-test.skipIf(!official)("schema returns only the allow-listed keyless tools the hosted server lists", async () => {
+test.skipIf(!official)("schema returns the keyless tools the hosted server lists and declares the account read and write tools", async () => {
 	const fixture = mermaidFixture();
 	try {
 		const result = await fixture.run(["schema", "mermaid"]);
@@ -120,6 +132,8 @@ test.skipIf(!official)("schema returns only the allow-listed keyless tools the h
 		expect(data.allowedTools).toEqual(KEYLESS_TOOLS);
 		expect((data.schema.tools as { name: string }[]).map((tool) => tool.name).sort()).toEqual([...KEYLESS_TOOLS].sort());
 		expect({ connector: data.connector, tier: data.tier, server: data.server }).toEqual({ connector: "mermaid", tier: "keyless", server: "mermaid" });
+		// Declared, not live-listed: the account schema needs the credential.
+		expect({ accountServer: data.accountServer, accountTools: data.accountTools, operations: data.operations }).toEqual({ accountServer: "mermaid-account", accountTools: ACCOUNT_TOOLS, operations: CATALOGUE });
 		expect(fixture.stub.calls).toEqual([]);
 		expectNoCredentialSent(fixture.stub);
 	} finally {
@@ -127,15 +141,22 @@ test.skipIf(!official)("schema returns only the allow-listed keyless tools the h
 	}
 }, 60_000);
 
-test("undeclared tools, writes, auth, and a credentialed registry refuse before any Provider contact", async () => {
+test("undeclared tools, misphased or malformed writes, unsupported auth, and a credentialed registry refuse before any Provider contact", async () => {
 	const fixture = mermaidFixture();
 	try {
 		const secretInput = JSON.stringify({ owner: "o", repo: "r", path: "a.mmd", content: TOKEN_SENTINEL, branch: "main", message: "m", clientName: "connectors" });
+		const secretWrite = JSON.stringify({ projectID: "proj-1", title: "t", clientName: "connectors", color: TOKEN_SENTINEL });
+		const update = JSON.stringify({ documentID: "doc-1", projectID: "proj-1", title: "t", clientName: "connectors" });
 		// [argv, exit, cause, connectorCause]; the header row rewrites the registry first.
 		const rows: ReadonlyArray<readonly [string[], number, string, string]> = [
 			[["run", "mermaid", "push_file", "--input", secretInput], 2, "USAGE_OPERATION_UNKNOWN", "operation-not-allowed"],
-			[["run", "mermaid", "validate_and_render_mermaid_diagram", "--input", secretInput, "--preview"], 3, "DOMAIN_ADAPTER_REFUSED", "adapter-has-no-writes"],
-			[["auth", "login", "mermaid"], 3, "DOMAIN_AUTH_VERB_UNSUPPORTED", "keyless-tier-has-no-auth"],
+			[["run", "mermaid", "repair_mermaid_chart_diagram", "--input", secretInput], 2, "USAGE_OPERATION_UNKNOWN", "operation-not-allowed"],
+			[["run", "mermaid", "validate_and_render_mermaid_diagram", "--input", secretInput, "--preview"], 2, "USAGE_ADAPTER_REFUSED", "read-takes-no-phase"],
+			[["run", "mermaid", "update_mermaid_chart_diagram", "--input", update], 2, "USAGE_ADAPTER_REFUSED", "write-phase-required"],
+			[["run", "mermaid", "create_mermaid_chart_diagram", "--input", secretWrite, "--preview"], 4, "SCHEMA_ADAPTER_REFUSED", "input-invalid"],
+			[["run", "mermaid", "update_mermaid_chart_diagram", "--input", JSON.stringify({ documentID: "doc-1", projectID: "proj-1", clientName: "connectors" }), "--preview"], 4, "SCHEMA_ADAPTER_REFUSED", "input-invalid"],
+			[["recover", "mermaid", "--run", "not-a-run-id"], 2, "USAGE_ADAPTER_REFUSED", "run-invalid"],
+			[["auth", "login", "mermaid"], 3, "DOMAIN_AUTH_VERB_UNSUPPORTED", "auth-verb-unsupported"],
 			[["run", "mermaid", "get_diagram_title", "--input", secretInput], 4, "SCHEMA_ADAPTER_REFUSED", "registry-not-keyless"],
 		];
 		for (const [index, [argv, exit, cause, connectorCause]] of rows.entries()) {

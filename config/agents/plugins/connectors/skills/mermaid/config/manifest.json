@@ -3,7 +3,7 @@
 	"id": "mermaid",
 	"transport": { "registry": "./mcporter.json" },
 	"selectors": {},
-	"requirements": ["mcporter"],
+	"requirements": ["mcporter", "op"],
 	"adapter": "mermaid",
-	"credentials": null
+	"credentials": { "reference": "1Password:API Credentials" }
 }

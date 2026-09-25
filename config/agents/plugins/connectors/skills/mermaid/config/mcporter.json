@@ -6,6 +6,15 @@
 			"description": "Mermaid hosted MCP, keyless tier",
 			"baseUrl": "https://mcp.mermaid.ai/mcp",
 			"allowedTools": ["validate_and_render_mermaid_diagram", "get_diagram_title", "get_diagram_summary", "search_mermaid_icons", "get_mermaid_syntax_document"]
+		},
+		"mermaid-account": {
+			"description": "Mermaid hosted MCP, account tier through the scoped Provider",
+			"command": "../../../bin/connectors",
+			"args": ["__internal", "mermaid", "provider"],
+			"env": {
+				"CONNECTORS_INTERNAL_INVOCATION_CONTEXT": "${CONNECTORS_INTERNAL_INVOCATION_CONTEXT}"
+			},
+			"allowedTools": ["list_mermaid_chart_projects", "list_mermaid_chart_diagrams", "get_mermaid_chart_diagram", "create_mermaid_chart_diagram", "update_mermaid_chart_diagram"]
 		}
 	}
 }

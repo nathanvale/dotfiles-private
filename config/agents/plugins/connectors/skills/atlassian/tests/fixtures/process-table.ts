@@ -13,6 +13,17 @@ export interface ProcessStrings {
 	environment: string[];
 }
 
+// A process's parent pid through proc_pidinfo PROC_PIDTBSDINFO: pbi_ppid is
+// the fifth u32 of struct proc_bsdinfo (136 bytes). 0 when unreadable.
+export function parentPid(pid: number): number {
+	const libc = dlopen("/usr/lib/libSystem.B.dylib", { proc_pidinfo: { args: [FFIType.i32, FFIType.i32, FFIType.u64, FFIType.ptr, FFIType.i32], returns: FFIType.i32 } });
+	const PROC_PIDTBSDINFO = 3;
+	const info = new Uint8Array(136);
+	const read = libc.symbols.proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, ptr(info), info.length);
+	libc.close();
+	return read === info.length ? new DataView(info.buffer).getUint32(16, true) : 0;
+}
+
 export function processStrings(pid: number): ProcessStrings {
 	const libc = dlopen("/usr/lib/libSystem.B.dylib", {
 		sysctl: { args: [FFIType.ptr, FFIType.u32, FFIType.ptr, FFIType.ptr, FFIType.ptr, FFIType.u64], returns: FFIType.i32 },
