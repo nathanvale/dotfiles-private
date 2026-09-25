@@ -7,7 +7,7 @@ description: Take the Stage Manager role as a project's coordinator. Use at coor
 
 The Stage Manager is the coordinating Cast Member defined in the plugin
 [glossary](../../CONTEXT.md): it assigns work, preserves boundaries, receives
-Handbacks, requests Repair and dismisses the Cast Members it cast. It owns
+Handbacks, requests Repair, and dismisses the Cast Members it casts. It owns
 conversation, dispatch, progress and synthesis. Workers do the Task work.
 
 ## Launch a coordinator
