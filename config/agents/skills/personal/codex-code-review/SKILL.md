@@ -40,7 +40,8 @@ Configure or request Codex GitHub reviews for one proven target. Invoke as
 ## Owners
 
 - Route detail: [GitHub review workflow](references/github-review.md).
-- Browser attachment and UI mechanics: the `browser-use` skill.
+- Browser attachment and UI mechanics: the native Harness browser,
+  `$HOME/code/dotfiles/docs/agents/browser-automation.md`.
 - Product behavior: [OpenAI Codex GitHub review documentation](https://learn.chatgpt.com/docs/third-party/github).
 
 ## Next Safe Action

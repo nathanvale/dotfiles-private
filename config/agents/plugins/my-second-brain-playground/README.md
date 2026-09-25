@@ -18,7 +18,8 @@ owns the synthetic vault fixtures and exercises. This plugin owns the skills
 that will operate on those fixtures. Add each skill from scratch under
 `skills/<name>/SKILL.md` when its slice is ready to implement and exercise.
 
-The source lives beside `browser-lanes` in the personal plugin directory.
+The source lives in the personal plugin directory beside the other personal
+plugins.
 Harness installation and fresh-session discovery are separate from source
 creation. The [Vault Steward CLI](skills/vault-steward/SKILL.md) lets parallel
 agents prepare isolated note commits and integrates disjoint candidates onto

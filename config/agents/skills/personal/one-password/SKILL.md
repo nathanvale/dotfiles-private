@@ -23,11 +23,9 @@ No-args or unclear request: start at Workflow step 1 — name the owning capabil
   This CLI workflow never fetches a browser-login secret, fills a browser,
   transfers a credential through the clipboard, or puts authentication material
   in an adapter plan.
-- At a browser login wall, invoke the `browser-use` skill's attended login
-  handoff. Its durable reservation keeps compliant browser automation off the
-  selected lane until the human finishes and the agent proves the same-origin
-  handback. The nonce authorizes resume or release; it is not a credential and
-  never belongs in a message to the human.
+- At a browser login wall, stop and let Nathan sign in inside the native
+  Harness browser; `$HOME/code/dotfiles/docs/agents/browser-automation.md`
+  owns that rule. Resume only after he returns the same visible tab.
 - Keep explicit vault listing and item create/update requests in this workflow.
 
 ## Workflow

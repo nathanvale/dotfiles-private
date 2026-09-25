@@ -161,9 +161,7 @@ bun run check
 ```
 
 Preparation runs the root frozen install first, then the independently locked
-My Second Brain Playground. The Browser Lanes plugin is declared
-dependency-free for this preparation step and receive no nested Bun install.
-The ownership manifest refuses an unclassified plugin lock or a missing
+My Second Brain Playground. The ownership manifest refuses an unclassified plugin lock or a missing
 independent lock; the frozen install rejects a stale lock before checks run. When `--receipt-dir` is supplied, root and
 nested stdout/stderr are retained in separate mode-restricted files.
 
