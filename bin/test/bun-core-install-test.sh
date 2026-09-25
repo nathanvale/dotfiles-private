@@ -4,9 +4,9 @@
 #
 # Proves that both Brewfile profiles declare Mise and the retained runtime
 # fallbacks, and that fresh-machine setup Phase 4 makes Mise available before
-# one explicit applied-revision update. It keeps the existing Bun and fnm
-# contract. The production phase is extracted verbatim from setup.sh and runs
-# in a real hermetic Bash child. Homebrew, fnm, Mise, and the public toolchain
+# one explicit applied-revision update, with no other Node manager invoked.
+# The production phase is extracted verbatim from setup.sh and runs in a real
+# hermetic Bash child. Homebrew, Mise, a retired fnm, and the public toolchain
 # executable are stubbed at their process boundaries; recorded argv, ordering,
 # exit status, and the phase log are the independent observables.
 #
@@ -77,7 +77,7 @@ for profile_name in desktop server; do
     load ARGV.fetch(0)
   ' "$REPO_ROOT/config/brew/Brewfile" >"$brewfile_rows" ||
     fail "$profile_name Brewfile evaluation failed"
-  for formula in mise bun python pyenv fnm pnpm; do
+  for formula in mise bun python pyenv pnpm; do
     grep -Fxq "$formula" "$brewfile_rows" ||
       fail "$profile_name Brewfile omits retained formula $formula"
   done
@@ -264,14 +264,9 @@ pass 'phase_4_development is extracted from setup.sh'
 STUB_BIN="$TEST_ROOT/stub-bin"
 RECORD_DIR="$TEST_ROOT/records"
 FIXTURE_DOTFILES="$TEST_ROOT/dotfiles"
-mkdir -p "$STUB_BIN" "$RECORD_DIR" "$FIXTURE_DOTFILES/config/node" \
+mkdir -p "$STUB_BIN" "$RECORD_DIR" \
   "$FIXTURE_DOTFILES/config/brew" \
   "$FIXTURE_DOTFILES/bin/dotfiles"
-# Independent oracle: a fixture-owned Node version, distinct from the real
-# pin, so the fnm assertions below prove Phase 4 propagates whatever the
-# version file declares instead of coincidentally matching today's pin.
-FIXTURE_NODE_VERSION='9.9.9'
-printf '%s\n' "$FIXTURE_NODE_VERSION" >"$FIXTURE_DOTFILES/config/node/version"
 cp "$REPO_ROOT/config/brew/Brewfile" "$FIXTURE_DOTFILES/config/brew/Brewfile"
 
 cat >"$STUB_BIN/brew" <<'STUB'
@@ -328,6 +323,9 @@ exit 0
 STUB
 chmod +x "$STUB_BIN/brew"
 
+# fnm is retired as a configured Node owner. The stub stays on PATH and records
+# any call, so the row below fails if Phase 4 ever launches it again rather
+# than passing because the executable was absent.
 cat >"$STUB_BIN/fnm" <<'STUB'
 #!/bin/bash
 {
@@ -443,12 +441,10 @@ assert_recorded $'install\tpython' \
   'fresh run continues to the next development tool'
 assert_recorded $'list\tmise' 'fresh run checks Mise by its declared formula name'
 assert_recorded $'install\tmise' 'fresh run installs Mise before toolchain apply'
-grep -Fxq $'install\t--corepack-enabled\t'"$FIXTURE_NODE_VERSION" "$RECORD_DIR/fnm-calls" ||
-  fail "fresh run does not install Node $FIXTURE_NODE_VERSION with Corepack"
-pass "fresh run installs Node $FIXTURE_NODE_VERSION with Corepack"
-grep -Fxq $'default\t'"$FIXTURE_NODE_VERSION" "$RECORD_DIR/fnm-calls" ||
-  fail "fresh run does not set Node $FIXTURE_NODE_VERSION as the fnm default"
-pass "fresh run sets Node $FIXTURE_NODE_VERSION as the fnm default"
+if [[ -e "$RECORD_DIR/fnm-calls" ]]; then
+  fail 'fresh run launched fnm; Mise is the only configured Node owner'
+fi
+pass 'fresh run launches no fnm process'
 assert_exact_count 1 $'toolchain\tupdate\t--apply' "$RECORD_DIR/toolchain-calls" \
   'fresh run invokes exactly one explicit toolchain apply'
 mise_install_line="$(grep -nFx $'brew\tinstall\tmise' "$RECORD_DIR/sequence" | cut -d: -f1)"
@@ -476,12 +472,6 @@ assert_recorded $'install\tpython' \
   'preinstalled run continues to the next development tool'
 assert_recorded $'list\tmise' 'preinstalled run checks Mise by its declared formula name'
 assert_not_recorded $'install\tmise' 'preinstalled run skips the Mise install'
-grep -Fxq $'install\t--corepack-enabled\t'"$FIXTURE_NODE_VERSION" "$RECORD_DIR/fnm-calls" ||
-  fail "preinstalled run does not reconcile Node $FIXTURE_NODE_VERSION with Corepack"
-pass "preinstalled run reconciles Node $FIXTURE_NODE_VERSION with Corepack"
-grep -Fxq $'default\t'"$FIXTURE_NODE_VERSION" "$RECORD_DIR/fnm-calls" ||
-  fail 'preinstalled run does not reconcile the fnm default'
-pass 'preinstalled run reconciles the fnm default'
 assert_exact_count 1 $'toolchain\tupdate\t--apply' "$RECORD_DIR/toolchain-calls" \
   'preinstalled run invokes exactly one explicit toolchain apply'
 
@@ -591,7 +581,7 @@ if [[ -e "$RECORD_DIR/checkpoint" ]]; then
 fi
 pass 'two failed bundle attempts prevent the post-phase checkpoint'
 
-expected_assertions=104
+expected_assertions=101
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

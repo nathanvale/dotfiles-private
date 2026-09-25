@@ -10,7 +10,6 @@ import {
 	type RecoveryOperation,
 } from "./serialized-values.ts"
 
-type InvocationKind = "hook" | "checkpoint"
 type TerminalOutcome = "signalled" | "deadline-exceeded"
 
 const MAX_OBSERVER_DEADLINE_MS = 60_000
@@ -41,8 +40,7 @@ function observerRoot(): string {
 		: resolve(import.meta.dir, "..")
 }
 
-function observerOperation(kind: InvocationKind, arguments_: readonly string[]): RecoveryOperation {
-	if (kind === "hook") return "hook"
+function observerOperation(arguments_: readonly string[]): RecoveryOperation {
 	const command = arguments_[1]
 	if (command === undefined || command === "--help" || command === "-h") return "help"
 	if (command === "bind" || command === "recover" || command === "write" || command === "schema") return command
@@ -193,15 +191,13 @@ export async function runRecoveryObserver(
 	arguments_: readonly string[],
 	dependencies: { readonly createTraceStore?: typeof createInvocationTraceStore } = {},
 ): Promise<number> {
-	const kind = arguments_[0]
-	if (kind !== "hook" && kind !== "checkpoint") return 2
-	const invocationKind: InvocationKind = kind
-	const operation = observerOperation(invocationKind, arguments_)
+	if (arguments_[0] !== "checkpoint") return 2
+	const operation = observerOperation(arguments_)
 	const started = process.hrtime.bigint()
 	const invocationIdentity = identity("recovery-invocation")
 	let journeyIdentity = invocationIdentity
 	const observerIdentity = identity("recovery-observer")
-	const inheritedParentIdentity = invocationKind === "checkpoint" ? optionalIdentity(process.env.CODEX_SESSION_ID) : undefined
+	const inheritedParentIdentity = optionalIdentity(process.env.CODEX_SESSION_ID)
 	const traceStore = (dependencies.createTraceStore ?? createInvocationTraceStore)({ invocationIdentity })
 	let diagnosticReported = false
 	const reportObserverFailure = () => {
@@ -253,7 +249,7 @@ export async function runRecoveryObserver(
 				"/usr/bin/python3",
 				"-B",
 				join(observerRoot(), "packages/compaction-recovery/src/recovery.py"),
-				invocationKind,
+				"checkpoint",
 				...arguments_.slice(1),
 			],
 			{

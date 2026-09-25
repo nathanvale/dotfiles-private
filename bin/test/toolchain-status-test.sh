@@ -218,12 +218,11 @@ printf 'unrelated dirty input\n' >"$PREVIEW_REPO/unrelated-untracked-file"
 ln -s unrelated-untracked-file "$PREVIEW_REPO/unrelated-link"
 mkdir "$PREVIEW_REPO/unrelated-empty-directory"
 
-mkdir -p "$VERIFY_REPO/bin/dotfiles" "$VERIFY_REPO/config/toolchain" "$VERIFY_REPO/config/mise" "$VERIFY_REPO/config/node"
+mkdir -p "$VERIFY_REPO/bin/dotfiles" "$VERIFY_REPO/config/toolchain" "$VERIFY_REPO/config/mise"
 cp "$REPO_ROOT/verify_install.sh" "$VERIFY_REPO/verify_install.sh"
 cp "$CLI" "$VERIFY_REPO/bin/dotfiles/toolchain"
 cp "$REPO_ROOT/config/toolchain/versions.tsv" "$VERIFY_REPO/config/toolchain/versions.tsv"
 cp "$REPO_ROOT/config/mise/source.toml" "$VERIFY_REPO/config/mise/source.toml"
-cp "$REPO_ROOT/config/node/version" "$VERIFY_REPO/config/node/version"
 chmod +x "$VERIFY_REPO/verify_install.sh" "$VERIFY_REPO/bin/dotfiles/toolchain"
 
 help_output="$($CLI --help)"
@@ -456,6 +455,17 @@ unknown_repo="$TEST_ROOT/unknown-repo"
 cp -R "$PREVIEW_REPO" "$unknown_repo"
 printf 'unknown|0.0.0|mise|source_declared|-\n' >>"$unknown_repo/config/toolchain/versions.tsv"
 manifest_error "$unknown_repo" 'manifest_unknown_tool' 'unknown tool manifest'
+
+# fnm is retired as a configured Node owner (ADR 0012). A manifest that selects
+# it again is refused before any process probe, so the retired owner cannot
+# re-enter through versions.tsv.
+fnm_owner_repo="$TEST_ROOT/fnm-owner-repo"
+cp -R "$PREVIEW_REPO" "$fnm_owner_repo"
+awk -F '|' 'BEGIN { OFS="|" } $1 == "node" { $3 = "fnm" } { print }' "$fnm_owner_repo/config/toolchain/versions.tsv" >"$fnm_owner_repo/config/toolchain/versions.next"
+mv "$fnm_owner_repo/config/toolchain/versions.next" "$fnm_owner_repo/config/toolchain/versions.tsv"
+: >"$LEDGER"
+manifest_error "$fnm_owner_repo" 'manifest_invalid' 'retired fnm selected owner'
+assert_equals '0' "$(wc -c <"$LEDGER" | tr -d ' ')" 'retired fnm selected owner is rejected before any process probe'
 
 bad_npm_parent_repo="$TEST_ROOT/bad-npm-parent-repo"
 cp -R "$PREVIEW_REPO" "$bad_npm_parent_repo"

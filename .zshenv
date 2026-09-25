@@ -45,8 +45,8 @@ esac
 
 # User command directories are safe, side-effect-free PATH inputs owned here so
 # login, interactive, and non-interactive zsh processes share one lookup rule.
-# Keep them ahead of the runtime bootstraps below; a verified fnm or Mise
-# selection can then establish its own runtime priority without being shadowed.
+# Keep them ahead of the runtime bootstrap below; a verified Mise selection can
+# then establish its own runtime priority without being shadowed.
 typeset -U path PATH
 case ":${PATH:-}:" in
   *":$HOME/.local/bin:"*) ;;
@@ -61,12 +61,10 @@ export PATH
 # Keep the 1Password service-account token out of shell startup.
 # bin/with-one-password-token reads dotfiles/.env for the exact `op` child only.
 
-# Shared Node runtime bootstrap. Keeps VS Code, tmux, Ghostty, and non-interactive
-# zsh scripts aligned with project .nvmrc/.node-version files.
-[ -f "$HOME/.config/fnm/bootstrap.sh" ] && source "$HOME/.config/fnm/bootstrap.sh"
-
-# A verified applied Mise revision takes precedence over the fallback above.
-# The bootstrap stays inactive when current is missing or invalid.
+# Shared toolchain bootstrap. A verified applied Mise revision owns Node, Bun,
+# Python, and Beads for VS Code, tmux, Ghostty, and non-interactive zsh scripts;
+# Mise reads project .nvmrc/.node-version files itself. The bootstrap stays
+# inactive when current is missing or invalid.
 [ -f "$HOME/.config/mise/bootstrap.sh" ] && source "$HOME/.config/mise/bootstrap.sh"
 
 # ----------------------------------------------------------------------------

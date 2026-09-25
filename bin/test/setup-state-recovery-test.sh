@@ -202,7 +202,7 @@ reset_fixture() {
     "$RECORD_DIR/rm-crash-barrier" \
     "$RECORD_DIR/A-holding" \
     "$RECORD_DIR/B-done" "$RECORD_DIR/race" \
-    "$RECORD_DIR/canonical-brew-calls" "$RECORD_DIR/fnm-calls" \
+    "$RECORD_DIR/canonical-brew-calls" \
     "$RECORD_DIR/inherited-brew-calls" "$RECORD_DIR/toolchain-calls" \
     "$RECORD_DIR/git-probe-calls" \
     "$CANONICAL_ARM_HOMEBREW_PREFIX" "$CANONICAL_INTEL_HOMEBREW_PREFIX" \
@@ -216,9 +216,8 @@ install_canonical_homebrew_fixture() {
   local prefix="$1"
   local prefix_bin="$prefix/bin"
 
-  mkdir -p "$prefix_bin" "$FIXTURE_DOTFILES/config/node" \
+  mkdir -p "$prefix_bin" \
     "$FIXTURE_DOTFILES/config/brew" "$FIXTURE_DOTFILES/bin/dotfiles"
-  printf '%s\n' 22.14.0 >"$FIXTURE_DOTFILES/config/node/version"
   : >"$FIXTURE_DOTFILES/config/brew/Brewfile"
 
   cat >"$prefix_bin/brew" <<'EOF'
@@ -234,11 +233,6 @@ case "${1:-}" in
     ;;
 esac
 EOF
-  cat >"$prefix_bin/fnm" <<'EOF'
-#!/usr/bin/env bash
-set -euo pipefail
-printf 'fnm %s\n' "$*" >>"$RECORD_DIR/fnm-calls"
-EOF
   cat >"$prefix_bin/mise" <<'EOF'
 #!/usr/bin/env bash
 set -euo pipefail
@@ -249,7 +243,7 @@ EOF
 set -euo pipefail
 printf 'toolchain %s\n' "$*" >>"$RECORD_DIR/toolchain-calls"
 EOF
-  chmod +x "$prefix_bin/brew" "$prefix_bin/fnm" "$prefix_bin/mise" \
+  chmod +x "$prefix_bin/brew" "$prefix_bin/mise" \
     "$FIXTURE_DOTFILES/bin/dotfiles/toolchain"
 }
 
@@ -569,8 +563,6 @@ for homebrew_case in arm intel; do
     "$homebrew_case canonical Homebrew supplies the resumed shell environment"
   assert_file_contains "$RECORD_DIR/canonical-brew-calls" 'brew list bun' \
     "$homebrew_case canonical Homebrew receives Phase 4 package probes"
-  assert_file_contains "$RECORD_DIR/fnm-calls" 'fnm install --corepack-enabled 22.14.0' \
-    "$homebrew_case hydrated PATH exposes fnm to Phase 4"
   assert_file_contains "$RECORD_DIR/toolchain-calls" 'toolchain update --apply' \
     "$homebrew_case resume reaches the verified toolchain apply seam"
   assert_file_absent "$RECORD_DIR/inherited-brew-calls" \

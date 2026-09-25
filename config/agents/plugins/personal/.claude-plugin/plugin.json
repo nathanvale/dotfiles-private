@@ -1,6 +1,6 @@
 {
   "name": "personal",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Nathan's personal workflows for Codex and Claude Code.",
   "author": {
     "name": "Nathan Vale"
@@ -10,6 +10,7 @@
     "bestie",
     "timesheets",
     "fasttrack360",
-    "oncore"
+    "oncore",
+    "home-assistant"
   ]
 }

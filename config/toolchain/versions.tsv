@@ -3,8 +3,9 @@
 # This is the declared desktop and server baseline. It records the exact versions consumed
 # by `bin/dotfiles/toolchain`; it is not an installer lockfile or an apply plan.
 # Mise owns the selected Node, Bun, Python, Beads, and npm defaults. npm is
-# explicitly subordinate to Node. The existing fnm, pyenv, and Homebrew
-# runtimes remain live fallbacks until a separately authorized migration.
+# explicitly subordinate to Node. Mise is the only configured Node owner; the
+# existing pyenv and Homebrew runtimes remain live fallbacks until a separately
+# authorized migration.
 # `source_declared` means configuration exists but clean-machine qualification
 # has not happened. It never proves exact reconstruction.
 node|26.9.0|mise|source_declared|-

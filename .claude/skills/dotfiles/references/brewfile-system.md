@@ -51,7 +51,7 @@ brew "tmux"
 ### Core CLI Tools (all profiles)
 
 tmux, zoxide, direnv, tmuxinator, atuin, ripgrep, bat, eza, fd, fzf, gh, jq,
-yq, lazygit, fnm, shfmt, shellcheck, wget, git-delta, coreutils, tree, watch,
+yq, lazygit, mise, shfmt, shellcheck, wget, git-delta, coreutils, tree, watch,
 gnu-sed, htop, lnav
 
 ### Development Tools (all profiles)

@@ -1,5 +1,6 @@
 ---
-status: accepted
+status: superseded
+superseded_by: 0011-native-harness-browsers.md
 ---
 
 # Browser Use entry is the browser-lanes plugin skill
