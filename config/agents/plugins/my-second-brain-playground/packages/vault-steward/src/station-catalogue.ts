@@ -75,7 +75,7 @@ function declarationOf(row: StationRow): CatalogueDeclaration {
 
 // Strict catalogue schema: every declaration agrees with its cause's accepted rule, its exit class, its retry policy,
 // its guidance arm, and its reachability rationale. Each check is one (holds, message) row.
-export function catalogueSchemaIssues(declaration: CatalogueDeclaration): readonly string[] {
+function catalogueSchemaIssues(declaration: CatalogueDeclaration): readonly string[] {
 	const rule = causeRule(declaration.causeCode)
 	const { guidance, retryDelayPolicy: policy } = declaration
 	const checks: readonly (readonly [holds: boolean, message: string])[] = [

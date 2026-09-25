@@ -48,16 +48,7 @@ export interface GuardStatus {
 	worktrees: string[]
 }
 
-export const WARNING_CODES = [
-	"GUARD_MISSING",
-	"GUARD_STALE",
-	"GUARD_PROBE_ALLOWED",
-	"GUARD_SELFTEST_ERROR",
-	"BRANCH_SPRAWL_PRESENT",
-	"FOREIGN_WORKTREE_PRESENT",
-	"HOOKS_PATH_OVERRIDE",
-] as const
-export type WarningCode = (typeof WARNING_CODES)[number]
+export type WarningCode = "GUARD_MISSING" | "GUARD_STALE" | "GUARD_PROBE_ALLOWED" | "GUARD_SELFTEST_ERROR" | "BRANCH_SPRAWL_PRESENT" | "FOREIGN_WORKTREE_PRESENT" | "HOOKS_PATH_OVERRIDE"
 
 export interface Warning {
 	code: WarningCode
@@ -86,7 +77,7 @@ export interface Completion {
 export type TransactionState = "unchanged" | "partially-completed" | "unknown"
 
 // The closed refusal vocabulary of the engine. Each reason maps to exactly one Contract Core 2.0 cause (CONTRACT.md 3.3).
-export const REASON_CAUSES = {
+const REASON_CAUSES = {
 	"config-home-invalid": "SCHEMA_INVALID_INPUT",
 	"config-absent": "DOMAIN_CONFIG_MISSING",
 	"config-unparseable": "SCHEMA_CONFIG_INVALID",
