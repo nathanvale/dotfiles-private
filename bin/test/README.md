@@ -161,11 +161,12 @@ state. They do not prove live tab focus or profile selection.
 repository targets into a non-Git fixture, then runs `--link` in disposable
 server-profile HOMEs. Independent filesystem reads prove wrong and dangling
 directory links are replaced as links, former referents receive no child and
-retain sentinel bytes, correct and missing links behave normally, real
-directories remain untouched without `--force`, and injected intended-creation
-or zero-exit lying-link failures restore the exact prior raw target. It does
-not prove canonical-checkout activation, interactive real-directory migration,
-or failures beyond the controlled link-creation seam.
+retain sentinel bytes, correct and missing links behave normally, and injected
+intended-creation or zero-exit lying-link failures restore the exact prior raw
+target. It does not prove canonical-checkout activation, interactive
+real-directory migration, or failures beyond the controlled link-creation
+seam. Noninteractive real-directory refusal is owned by
+`symlinks-real-directory-test.sh` (`noninteractive-refusal`).
 
 The attended-login rows prove both handoff start modes through the public
 command. The pre-admission path must create its private reservation before the
