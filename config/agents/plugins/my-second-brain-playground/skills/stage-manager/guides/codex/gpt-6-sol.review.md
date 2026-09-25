@@ -8,7 +8,7 @@ reviewer:
 date: 2026-09-25
 verdict: accepted
 guide_sha256: aad2ee0e33d6c933a08c1e9d053100261a34eac9d1e2bdac6f17bdb50c4b9edc
-handback_path: /Users/nathanvale/.local/state/my-second-brain-playground/herdr-projects-s2c-20260925/codex-guides-review-529f0767.md
+handback_path: gpt-6.review-handback.md
 handback_sha256: c01331d0310d9ee96e2f36d429f2a9608f3eb6d2b7faa247fa2dccdab879d065
 ---
 
