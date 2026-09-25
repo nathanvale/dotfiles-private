@@ -6,7 +6,7 @@
 // literals, never re-derived by importing bin/connectors.ts's own
 // envelope-building code.
 import { describe, expect, test } from "bun:test";
-import { accessSync, constants, existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { assertEnvelope, buildInternalFailureEnvelope } from "../bin/connectors.ts";
 import { startLoopbackMcpStub } from "./fixtures/loopback-mcp-stub.ts";
@@ -203,12 +203,13 @@ describe("compiled front door: closed-pipe output boundary", () => {
 });
 
 describe("compiled front door: internal-failure fallback (unit-layer, supporting evidence)", () => {
-	// This narrow claim cannot honestly be forced through the black-box
-	// process seam: under correct code there is no reachable argv that
-	// makes assertEnvelope throw, so there is nothing to spawn against.
-	// Proven at the unit layer instead, importing the pure builder/validator
-	// directly; the primary process-level proof above stays the main claim
-	// for every ordinary success/refusal path.
+	// Under correct code no argv makes assertEnvelope throw. A faulted compile
+	// (tests/faulted-front-door.ts) could reach this path through the process
+	// seam, as the setup and MCPorter custody process tests do for their own
+	// internal causes, but each fault costs one full front-door compile. The
+	// fallback is a pure builder's output, so the unit layer proves its shape
+	// for the price of a call; the process-level proof above stays the main
+	// claim for every ordinary success/refusal path.
 	test("the fallback envelope is itself a valid envelope, and never carries dynamic exception text", () => {
 		const envelope = buildInternalFailureEnvelope();
 		expect(() => assertEnvelope(envelope)).not.toThrow();
@@ -443,7 +444,7 @@ describe("compiled front door: run through the packaged fixture adapter (public 
 		}
 	}, 90_000);
 
-	test("outside a test bundle the fixture adapter refuses before MCPorter selection or state", async () => {
+	test("without the fixture authority installed the fixture adapter refuses before MCPorter selection or state", async () => {
 		const fixture = fixtureRun({ authority: false });
 		try {
 			const result = await fixture.run(["run", CONNECTOR, "--select", "account=a", "probe"]);
@@ -521,24 +522,27 @@ function problemOf(envelope: Parameters<typeof assertEnvelope>[0]): string | nul
 }
 
 describe("compiled front door: per-Skill resolution (Q11a)", () => {
-	// Each in-scope Skill resolves the front door as `../../bin/connectors`
-	// from its own directory, no global command, no dotfiles path.
-	const inScopeSkills = ["atlassian", "canva", "context7", "firecrawl", "mermaid"];
+	// Independent oracle: the shipped Skills whose SKILL.md reaches the front
+	// door, and the exact line each declares to resolve it from its own
+	// directory (no global command, no dotfiles path). Context7, Firecrawl, and
+	// Figma route through bin/provider-route.ts and must not declare it.
+	const FRONT_DOOR_SKILLS = ["atlassian", "canva", "mermaid"];
+	const RELATIVE = "../../bin/connectors";
+	const INVOCATION = `CONNECTORS="$SKILL_DIR/${RELATIVE}"`;
 
-	for (const skill of inScopeSkills) {
-		test(`${skill} resolves the front door from its own plugin path`, async () => {
-			const skillDir = path.join(PLUGIN_ROOT, "skills", skill);
-			const resolved = path.join(skillDir, "..", "..", "bin", "connectors");
-			expect(() => accessSync(resolved, constants.X_OK)).not.toThrow();
-			const proc = Bun.spawn([resolved, "--discover", "--json"], {
-				env: { HOME: "/tmp", PATH: "/usr/bin:/bin" },
-				stdin: "ignore",
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-			const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-			expect(code).toBe(0);
-			expect(JSON.parse(stdout).result.outcome).toBe("success");
-		});
-	}
+	test("exactly the front-door Skills declare the invocation line, and it resolves from each Skill directory to the executable front door", async () => {
+		const skillsRoot = path.join(PLUGIN_ROOT, "skills");
+		const declaring = readdirSync(skillsRoot)
+			.filter((skill) => existsSync(path.join(skillsRoot, skill, "SKILL.md")))
+			.filter((skill) => readFileSync(path.join(skillsRoot, skill, "SKILL.md"), "utf8").split("\n").includes(INVOCATION))
+			.sort();
+		expect(declaring).toEqual(FRONT_DOOR_SKILLS);
+		const resolved = [...new Set(FRONT_DOOR_SKILLS.map((skill) => path.resolve(skillsRoot, skill, RELATIVE)))];
+		expect(resolved).toEqual([FRONT_DOOR]);
+		expect(() => accessSync(FRONT_DOOR, constants.X_OK)).not.toThrow();
+		const proc = Bun.spawn([FRONT_DOOR, "--discover", "--json"], { env: { HOME: "/tmp", PATH: "/usr/bin:/bin" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+		const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+		expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+		expect(JSON.parse(stdout).result).toMatchObject({ commandIdentity: "connectors.discovery", outcome: "success" });
+	});
 });
