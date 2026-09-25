@@ -7,11 +7,10 @@
 // through a packaged adapter's prepare step, and credentialed schema through
 // its prepareSchema step. T5 (Ticket #92) adds an adapter execute step for
 // multi-call semantics and closed adapter internal roles of this same
-// executable. `bin/provider-route.ts` remains the
-// sole owner of the existing per-Skill auth/list/call launcher every Skill's
-// SKILL.md still documents; this file never imports it and never branches
-// on a connector's name. All connector-specific behavior lives in a
-// schema-validated Connector Manifest (bin/manifest.ts) and a packaged
+// executable. `bin/provider-route.ts` remains the shared route-selection
+// owner for direct Skills and adapter-owned Provider plans; this file never
+// imports it or branches on a connector's name. Connector-specific behavior
+// lives in a schema-validated Connector Manifest (bin/manifest.ts) and a packaged
 // adapter registry (bin/adapters/index.ts).
 import { closeSync, existsSync, openSync } from "node:fs";
 import path from "node:path";
