@@ -102,6 +102,14 @@ interface CommunityStart {
 	parentHoldsServiceToken: boolean;
 	parentHoldsProviderToken: boolean;
 }
+// Independent oracles, restated from the accepted adapter mapping; never
+// import them from production. A dispatcher domain refusal publishes
+// DOMAIN_ADAPTER_REFUSED, and a dispatcher read failure
+// DOMAIN_PROVIDER_CALL_FAILED; both exit 3 and change nothing. runStation
+// projects an envelope onto the same fields.
+const DOMAIN_REFUSED = ["connectors.run", "refused", "DOMAIN_ADAPTER_REFUSED", 3, "inspect", "unchanged", [], []];
+const PROVIDER_CALL_FAILED = ["connectors.run", "failed", "DOMAIN_PROVIDER_CALL_FAILED", 3, "inspect", "unchanged", [], []];
+const runStation = (result: Envelope["result"]) => [result.commandIdentity, result.outcome, result.causeCode, result.exitCode, result.effectClass, result.transactionState, result.effects.completed, result.effects.uncertain];
 
 const parse = (stdout: string): Envelope => {
 	expect(stdout.trim().split("\n")).toHaveLength(1);
@@ -393,6 +401,64 @@ describe("custody check and credential handoffs", () => {
 			fixture.dispose();
 		}
 	}, 90_000);
+});
+
+// T5 U3b-1c: the legacy Bun-route refusals of the Community credential item
+// (dispatch.test.ts), migrated to the packaged front door. The expected
+// tuple is DOMAIN_REFUSED with its connectorCause and the dispatcher's fixed
+// repair text.
+describe("migrated Community item refusals before MCPorter", () => {
+	const PRECONDITION_REPAIR = "a provider precondition failed before any request; run the provider readiness checks";
+	const SITE_REPAIR = "the tenant's credential item must expose a valid site_url field";
+	const CREDENTIAL_SENTINEL = "credential-sentinel-must-not-echo";
+
+	// The custody bind accepts the item (it never reads the credential); the
+	// Provider preflight then refuses it before MCPorter is selected.
+	test("a missing or malformed Community credential refuses at the Provider preflight with the precondition repair, never echoes it, and starts no Provider", async () => {
+		const rows: [string, Record<string, string>, string][] = [
+			["missing", { username: PRINCIPAL, site_url: ORIGIN }, "the product credential item needs username, credential, and a site_url field"],
+			["malformed", { username: PRINCIPAL, site_url: ORIGIN, credential: `${CREDENTIAL_SENTINEL}\nsecond-line-sentinel` }, "the credential item has malformed fields"],
+		];
+		expect(rows).toHaveLength(2);
+		for (const [label, entries, hint] of rows) {
+			fresh({ seed: false });
+			fixture.writeItem(entries);
+			const result = await fixture.frontDoor(["run", "atlassian", ...TENANT, "issue.search", "--input", '{"jql":"x"}']);
+			expect([label, result.code, result.stderr]).toEqual([label, 3, ""]);
+			const envelope = parse(result.stdout).result;
+			expect([label, ...runStation(envelope), envelope.repairAction, envelope.data]).toEqual([label, ...DOMAIN_REFUSED, `${PRECONDITION_REPAIR}; ${hint}`, { connector: "atlassian", connectorCause: "refused-precondition" }]);
+			// One custody bind and one Provider preflight each read the item once.
+			expect([label, fixture.lines<{ argv: string[] }>("op-calls.jsonl").map((call) => call.argv)]).toEqual([label, [ITEM_READ(JIRA_ITEM), ITEM_READ(JIRA_ITEM)]]);
+			expect([label, fixture.lines("community-starts.jsonl"), fixture.lines("effects.jsonl"), existsSync(path.join(fixture.state, "connectors", "mcporter")), atlassianFiles(fixture)]).toEqual([label, [], [], false, ["example/registration.json"]]);
+			expectNoHostile(fixture);
+			expectNoSecret(fixture, [result.stdout, result.stderr], [CREDENTIAL_SENTINEL, "second-line-sentinel"]);
+			fixture.dispose();
+		}
+	});
+
+	// The trusted origin is the site_url field only: custody refuses before
+	// the Provider preflight reads the item.
+	test("a site origin that is absent, legacy url only, or invalid beside a valid legacy url refuses at custody and starts no Provider", async () => {
+		const rows: [string, Record<string, string>][] = [
+			["absent", { username: PRINCIPAL, credential: PROVIDER_TOKEN }],
+			["legacy url only", { username: PRINCIPAL, credential: PROVIDER_TOKEN, url: "https://Example.atlassian.net/" }],
+			["invalid site_url beside a valid legacy url", { username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: "https://example.atlassian.net/wiki", url: ORIGIN }],
+		];
+		expect(rows).toHaveLength(3);
+		for (const [label, entries] of rows) {
+			fresh({ seed: false });
+			fixture.writeItem(entries);
+			const result = await fixture.frontDoor(["run", "atlassian", ...TENANT, "issue.get", "--input", '{"issueKey":"EX-1"}']);
+			expect([label, result.code, result.stderr]).toEqual([label, 3, ""]);
+			const envelope = parse(result.stdout).result;
+			expect([label, ...runStation(envelope), envelope.repairAction, envelope.data]).toEqual([label, ...DOMAIN_REFUSED, SITE_REPAIR, { connector: "atlassian", connectorCause: "site-unresolved" }]);
+			expect([label, fixture.lines<{ argv: string[] }>("op-calls.jsonl").map((call) => call.argv)]).toEqual([label, [ITEM_READ(JIRA_ITEM)]]);
+			expect([label, fixture.lines("community-starts.jsonl"), fixture.lines("effects.jsonl"), existsSync(path.join(fixture.state, "connectors", "mcporter")), atlassianFiles(fixture)]).toEqual([label, [], [], false, ["example/registration.json"]]);
+			expectNoHostile(fixture);
+			expectNoSecret(fixture, [result.stdout, result.stderr]);
+			fixture.dispose();
+		}
+	});
 });
 
 // T5 U3a (D2a, Q-import): the tenant registration. Independent literals of
@@ -767,6 +833,65 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		for (const stream of [result.stdout, result.stderr]) expect(stream).not.toContain(sentinel);
 		expectNoSecret(fixture, [result.stdout, result.stderr]);
 	}, 60_000);
+
+	// T5 U3b-1c: the legacy Bun-route Provider failures (dispatch.test.ts),
+	// migrated to the packaged front door. The expected tuples are
+	// PROVIDER_CALL_FAILED with null data and DOMAIN_REFUSED with its
+	// connectorCause; both carry the dispatcher's fixed repair text.
+	const TRANSPORT_REPAIR = "the provider did not answer; inspect provider status before retrying the read";
+	const UNKNOWN_REPAIR = "the provider failed for an unclassified reason; inspect provider diagnostics";
+	const AUTH_REPAIR = "the provider refused authentication or permission; verify the credential type, scopes, and product permissions with their owner";
+
+	// One attempt: the Provider started for the schema list dies before
+	// serving, so MCPorter's own diagnostic ends the read and no call is sent.
+	test("a Provider that dies at start is a provider-call failure with the transport repair, never its text, and sends nothing", async () => {
+		fresh();
+		writeFileSync(path.join(fixture.root, "community-crash"), "");
+		const result = await fixture.frontDoor(["run", "atlassian", ...TENANT, "issue.search", "--input", '{"jql":"x"}']);
+		expect([result.code, result.stderr]).toEqual([3, ""]);
+		const envelope = parse(result.stdout).result;
+		expect([...runStation(envelope), envelope.repairAction, envelope.data]).toEqual([...PROVIDER_CALL_FAILED, TRANSPORT_REPAIR, null]);
+		expect(fixture.lines("effects.jsonl")).toEqual([]);
+		// How often MCPorter restarts a Provider that dies is its own; so the
+		// counts are not pinned, but every read and every start is confined.
+		const reads = fixture.lines("op-calls.jsonl");
+		const starts = fixture.lines<CommunityStart>("community-starts.jsonl");
+		expect([reads.length > 0, starts.length > 0]).toEqual([true, true]);
+		expectConfinedRead(fixture, JIRA_ITEM, JIRA_PROVIDER_KEYS, { opReads: reads.length, providerStarts: starts.length });
+		expect(result.stdout).not.toContain("fixture-private-crash-text");
+		expectNoSecret(fixture, [result.stdout, result.stderr]);
+	}, 90_000);
+
+	// [label, operation, input, product, tool, provider args, canned reply,
+	// expected tuple, repair, data, fragments that must not reach a stream,
+	// fragments that must not reach any file once the canned replies are gone]
+	const HOSTILE = `HTTP 401 Unauthorized token=fixture-secret-value Authorization: Basic ${SERVICE_TOKEN} Bearer x op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential; issue PROJ-99 confidential merger; customer SSN 123-45-6789`;
+	const IN_BAND = "Failed to retrieve page by ID '123': Error retrieving page content: There is no content with the given id, or the calling user does not have permission to view the content";
+	const PROVIDER_ROWS: [string, string, Record<string, string>, "jira" | "confluence", string, Record<string, string>, unknown, unknown[], string, unknown, string[], string[]][] = [
+		["in-band error payload", "page.get", { pageId: "123" }, "confluence", "confluence_get_page", { page_id: "123" }, { error: IN_BAND }, PROVIDER_CALL_FAILED, UNKNOWN_REPAIR, null, ["Failed to retrieve", "no content with the given id"], ["Failed to retrieve"]],
+		["in-band failure with extra provider fields", "page.get", { pageId: "123" }, "confluence", "confluence_get_page", { page_id: "123" }, { success: false, error: "HTTP 403 Forbidden", requestId: "opaque-request-id-sentinel" }, DOMAIN_REFUSED, AUTH_REPAIR, { connector: "atlassian", connectorCause: "refused-auth" }, ["opaque-request-id-sentinel", "HTTP 403 Forbidden"], ["opaque-request-id-sentinel"]],
+		["hostile tool error text", "issue.get", { issueKey: "PROJ-1" }, "jira", "jira_get_issue", { issue_key: "PROJ-1" }, { toolErrorText: HOSTILE }, DOMAIN_REFUSED, AUTH_REPAIR, { connector: "atlassian", connectorCause: "refused-auth" }, ["fixture-secret-value", "customer SSN 123-45-6789", "PROJ-99 confidential merger", "op://", "Bearer", "Basic "], ["fixture-secret-value", "123-45-6789", "PROJ-99 confidential merger"]],
+	];
+	test("the Provider row table names exactly the three migrated in-band and hostile cases", () => {
+		expect(PROVIDER_ROWS.map(([label]) => label)).toEqual(["in-band error payload", "in-band failure with extra provider fields", "hostile tool error text"]);
+	});
+
+	test.each(PROVIDER_ROWS)("%s is translated at the transport seam to its published cause and never reaches a stream or file", async (_label, operation, input, product, providerTool, args, canned, tuple, repair, data, streamFragments, fileFragments) => {
+		fresh();
+		fixture.canned(product, providerTool, canned);
+		const result = await fixture.frontDoor(["run", "atlassian", ...TENANT, operation, "--input", JSON.stringify(input)]);
+		expect([result.code, result.stderr]).toEqual([3, ""]);
+		const envelope = parse(result.stdout).result;
+		expect<unknown[]>([...runStation(envelope), envelope.repairAction, envelope.data]).toEqual([...tuple, repair, data]);
+		// The one read call did reach the Provider; nothing else was sent.
+		expect(fixture.lines("effects.jsonl")).toEqual([{ product, tool: providerTool, args }]);
+		expectConfinedRead(fixture, product === "jira" ? JIRA_ITEM : CONFLUENCE_ITEM, product === "jira" ? JIRA_PROVIDER_KEYS : CONFLUENCE_PROVIDER_KEYS);
+		for (const stream of [result.stdout, result.stderr]) for (const fragment of streamFragments) expect(stream).not.toContain(fragment);
+		// The canned reply holds the Provider's text by design; without it, the
+		// sweep proves no other file kept that text or a token.
+		rmSync(path.join(fixture.root, "canned"), { recursive: true, force: true });
+		expectNoSecret(fixture, [result.stdout, result.stderr], fileFragments);
+	}, 90_000);
 
 	// Journaled writes (U2). The oracle for every Provider write is the fake's
 	// effects.jsonl, never an envelope. A comment binds no revision, so its
