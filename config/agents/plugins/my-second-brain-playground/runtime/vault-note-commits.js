@@ -551,7 +551,7 @@ function performRebase(rt, manifest, commit, currentMain) {
   try {
     const rebasedPaths = splitNul(git(rt, manifest.worktree, ["diff", "--name-only", "-z", `${integrated}^`, integrated, "--"], context(manifest))).sort();
     if (!samePaths(rebasedPaths, manifest.paths))
-      refuse("rebased-path-set-mismatch", { ...candidateFacts(manifest, integrated), afterRebase: true });
+      refuse("rebased-path-set-mismatch", { ...candidateFacts(manifest, integrated), afterRebase: true, detail: `rebased commit ${integrated} changes ${rebasedPaths.join(", ")}` });
     runChecker(rt, manifest, true);
     checkWhitespace(rt, manifest, [`${integrated}^`, integrated], { ...candidateFacts(manifest, integrated), afterRebase: true });
   } catch (error) {

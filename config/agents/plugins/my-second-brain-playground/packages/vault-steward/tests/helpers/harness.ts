@@ -73,6 +73,13 @@ export function installHook(vault: string, text = HOOK_TEXT, hooksDirectory = jo
 	return hookPath
 }
 
+// A post-rewrite hook that adds an unadmitted file to a rebased commit. Once semantic overlap is ruled out this is the
+// one way the rebased commit's path set can differ from the admitted set; it reaches that refusal through the public CLI.
+export function installRewriteHook(vault: string): void {
+	write(vault, ".git/hooks/post-rewrite", "#!/bin/sh\ncase \"$1\" in rebase) printf 'x\\n' > unexpected.md; git add unexpected.md; git commit -q --amend --no-edit ;; esac\nexit 0\n")
+	chmodSync(join(vault, ".git/hooks/post-rewrite"), 0o700)
+}
+
 export function fixture(options: { hook?: boolean | string; hookSource?: string } = {}): Fixture {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "vault-steward-test-")))
 	temporaryRoots.push(root)

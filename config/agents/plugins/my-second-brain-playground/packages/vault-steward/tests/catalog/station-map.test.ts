@@ -4,7 +4,7 @@ import { join } from "node:path"
 import { STATION_IDS } from "../../src/branch-station-catalog.ts"
 import { BRANCH_STATIONS, type CatalogueObservation, validateCatalogue } from "../../src/station-catalogue.ts"
 import { HOOK_TEXT } from "../guard/hook-text.ts"
-import { cleanupFixtures, type Fixture, fixture, git, installHook, write } from "../helpers/harness.ts"
+import { cleanupFixtures, type Fixture, fixture, git, installHook, installRewriteHook, write } from "../helpers/harness.ts"
 import { data, observationOf, steward, stewardEnvironment, type StewardRun } from "../helpers/steward.ts"
 import { EXPECTED_BY_IDENTITY, EXPECTED_STATION_COUNT, identityOf } from "./expected-station-semantics.ts"
 
@@ -170,6 +170,7 @@ const scenarios: Scenario[] = [
 	{ name: "apply preview stale", run: () => { const f = fixture(); const w = beginCandidate(f); const id = previewCandidate(f, w); write(w, "projects/demo/GOAL.md", "# Goal\n\nEdited after preview.\n"); return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", w]) }, cause: "DOMAIN_PREVIEW_STALE", exit: 3, nextAction: PREVIEW },
 	{ name: "apply guard incompatible", run: () => { const f = fixture(); const w = beginCandidate(f); const id = previewCandidate(f, w); installHook(f.vault, HOSTILE_HOOK); return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", w]) }, cause: "DOMAIN_GUARD_INCOMPATIBLE", exit: 3, nextAction: INSPECT },
 	{ name: "apply canonical not ready", run: () => { const f = fixture(); const w = beginCandidate(f); const id = previewCandidate(f, w); write(f.vault, "personal-draft.md", "draft\n"); return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", w]) }, cause: "DOMAIN_CANONICAL_NOT_READY", exit: 3, nextAction: APPLY },
+	{ name: "apply rebased path set mismatch", run: () => { const f = fixture(); const { worktree, previewId } = rebasePlan(f); installRewriteHook(f.vault); return run(f, ["finish", "--apply", "--preview-id", previewId, "--worktree", worktree]) }, cause: "DOMAIN_CANDIDATE_INVALID", exit: 3, handoffOwner: "operator" },
 	{ name: "apply rebased check failed", run: () => { const f = fixture(); const { worktree, previewId } = rebasePlan(f, "BROKEN", "fail\n"); return run(f, ["finish", "--apply", "--preview-id", previewId, "--worktree", worktree]) }, cause: "DOMAIN_REBASED_CHECK_FAILED", exit: 3, nextAction: PREVIEW },
 	{ name: "apply rebase conflict", run: () => { const f = fixture(); const w = beginCandidate(f, "projects/x/y.md", "# y\n"); write(f.vault, "projects/x", "a file where the candidate needs a directory\n"); git(f.vault, "add", "--", "projects/x"); git(f.vault, "commit", "-m", "docs: file at projects/x"); const id = previewCandidate(f, w); return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", w]) }, cause: "DOMAIN_REBASE_CONFLICT", exit: 3, handoffOwner: "human" },
 	{ name: "apply busy", run: () => { const f = fixture(); const w = beginCandidate(f); const id = previewCandidate(f, w); holdLock(f); return run(f, ["finish", "--apply", "--preview-id", id, "--worktree", w]) }, cause: "TRANSIENT_INTEGRATION_BUSY", exit: 75, nextAction: APPLY },

@@ -1,7 +1,7 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
-import { cleanupFixtures, type Fixture, fixture, git, lockFiles, write } from "../helpers/harness.ts"
+import { cleanupFixtures, type Fixture, fixture, git, installRewriteHook, lockFiles, write } from "../helpers/harness.ts"
 import { data, must, steward, stewardAsync, stewardEnvironment } from "../helpers/steward.ts"
 
 // The Vault Steward CLI 2.0 journeys through real child processes: preview and apply binding (CONTRACT.md 3.8), the
@@ -293,6 +293,31 @@ test("a rebased-check refusal restores the pre-rebase commit; once main is fixed
 	const applied = must(run(f, ["finish", "--apply", "--preview-id", again, "--worktree", worktree]), "SUCCESS_COMPLETED")
 	expect((applied.result.data as { integration: { kind: string } }).integration.kind).toBe("integrate")
 	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("3")
+})
+
+// A rebased commit whose path set differs from the admitted set (here, a post-rewrite hook amended it) is refused as an
+// invalid candidate with a declared station, the pre-rebase commit is restored (A8), and main is untouched.
+test("a rebased commit with an unadmitted path is refused DOMAIN_CANDIDATE_INVALID, restored, and re-previewable", () => {
+	const f = fixture()
+	const worktree = candidate(f)
+	write(f.vault, "README.md", "# Fixture vault\n\nMoved.\n")
+	git(f.vault, "add", "--", "README.md")
+	git(f.vault, "commit", "-m", "docs: main moves")
+	const id = preview(f, worktree)
+	const committed = git(worktree, "rev-parse", "HEAD")
+	installRewriteHook(f.vault)
+	const refused = run(f, ["finish", "--apply", "--preview-id", id, "--worktree", worktree])
+	expect(refused.exitCode).toBe(3)
+	expect(refused.stderr).toBe("")
+	expect(refused.envelope?.result).toMatchObject({ commandIdentity: "vault-steward.finish-apply", outcome: "refused", causeCode: "DOMAIN_CANDIDATE_INVALID", transactionState: "unchanged", effects: { completed: [], remaining: ["completion.receipt", "completion.ref", "main.fast-forward"], uncertain: [], inventoryComplete: true }, handoff: { owner: "operator", resource: { kind: "candidate-worktree", id: worktree } } })
+	expect(refused.envelope?.message).toMatch(/rebased commit [a-f0-9]{40} changes projects\/demo\/GOAL\.md, unexpected\.md/)
+	expect(git(worktree, "rev-parse", "HEAD")).toBe(committed)
+	expect(git(worktree, "status", "--porcelain")).toBe("")
+	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("1")
+	expect((data(run(f, ["inspect", "--worktree", worktree])).recovery as { state: string }).state).toBe("not-started")
+	Bun.spawnSync(["rm", join(f.vault, ".git/hooks/post-rewrite")])
+	must(run(f, ["finish", "--apply", "--preview-id", preview(f, worktree), "--worktree", worktree]), "SUCCESS_COMPLETED")
+	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("2")
 })
 
 test("inspect reports a moved main as a stale preview and names the real preview id when it is current", () => {

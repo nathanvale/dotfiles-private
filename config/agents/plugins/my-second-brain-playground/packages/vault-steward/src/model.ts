@@ -115,7 +115,9 @@ export const REASON_CAUSES = {
 	"main-diverged": "DOMAIN_MAIN_DIVERGED",
 	"semantic-overlap": "DOMAIN_SEMANTIC_OVERLAP",
 	"rebase-failed": "DOMAIN_REBASE_CONFLICT",
-	"rebased-path-set-mismatch": "DOMAIN_REBASED_PATH_SET_MISMATCH",
+	// A rebased commit whose paths differ from the admitted set is an invalid candidate (the pre-rebase commit is restored,
+	// A8); the separate REBASED_PATH_SET_MISMATCH code stays off the wire (vault decision 2026-09-19).
+	"rebased-path-set-mismatch": "DOMAIN_CANDIDATE_INVALID",
 	"rebased-check-failed": "DOMAIN_REBASED_CHECK_FAILED",
 	"integration-unproved": "INTERNAL_INTEGRATION_UNPROVED",
 	"completion-record-failed": "INTERNAL_COMPLETION_RECORD_FAILED",

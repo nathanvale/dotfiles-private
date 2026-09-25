@@ -14375,6 +14375,7 @@ var ROWS = [
   ["vault-steward.finish-apply", "refused", "DOMAIN_PREVIEW_STALE", RL, "unchanged", ...N3, [PREVIEW], "required", null],
   ["vault-steward.finish-apply", "refused", "DOMAIN_GUARD_INCOMPATIBLE", RL, "unchanged", ...N3, [INSPECT], "required", null],
   ["vault-steward.finish-apply", "refused", "DOMAIN_CANONICAL_NOT_READY", RL, "unchanged", ...N3, [APPLY], "required", null],
+  ["vault-steward.finish-apply", "refused", "DOMAIN_CANDIDATE_INVALID", RL, "unchanged", ...H3, HANDOFF, "required", null],
   ["vault-steward.finish-apply", "failed", "DOMAIN_REBASED_CHECK_FAILED", RL, "unchanged", ...N3, [PREVIEW], "required", null],
   ["vault-steward.finish-apply", "failed", "DOMAIN_REBASE_CONFLICT", RL, "unchanged", ...H3, HANDOFF, "required", null],
   ["vault-steward.finish-apply", "refused", "TRANSIENT_INTEGRATION_BUSY", RL, "unchanged", ...T75, [APPLY], "required", null],
@@ -17721,7 +17722,7 @@ var REASON_CAUSES = {
   "main-diverged": "DOMAIN_MAIN_DIVERGED",
   "semantic-overlap": "DOMAIN_SEMANTIC_OVERLAP",
   "rebase-failed": "DOMAIN_REBASE_CONFLICT",
-  "rebased-path-set-mismatch": "DOMAIN_REBASED_PATH_SET_MISMATCH",
+  "rebased-path-set-mismatch": "DOMAIN_CANDIDATE_INVALID",
   "rebased-check-failed": "DOMAIN_REBASED_CHECK_FAILED",
   "integration-unproved": "INTERNAL_INTEGRATION_UNPROVED",
   "completion-record-failed": "INTERNAL_COMPLETION_RECORD_FAILED",
@@ -18279,7 +18280,7 @@ function performRebase(rt, manifest, commit, currentMain) {
   try {
     const rebasedPaths = splitNul(git(rt, manifest.worktree, ["diff", "--name-only", "-z", `${integrated}^`, integrated, "--"], context(manifest))).sort();
     if (!samePaths(rebasedPaths, manifest.paths))
-      refuse("rebased-path-set-mismatch", { ...candidateFacts(manifest, integrated), afterRebase: true });
+      refuse("rebased-path-set-mismatch", { ...candidateFacts(manifest, integrated), afterRebase: true, detail: `rebased commit ${integrated} changes ${rebasedPaths.join(", ")}` });
     runChecker(rt, manifest, true);
     checkWhitespace(rt, manifest, [`${integrated}^`, integrated], { ...candidateFacts(manifest, integrated), afterRebase: true });
   } catch (error51) {
@@ -19280,7 +19281,6 @@ var REPAIR = {
   DOMAIN_PREVIEW_CONSUMED: { repair: "Inspect the candidate; the preview was consumed by an earlier apply.", next: "vault-steward.inspect" },
   DOMAIN_PREVIEW_STALE: { repair: "Run finish --preview again and apply the new preview id.", next: "vault-steward.finish-preview" },
   DOMAIN_REBASE_CONFLICT: { repair: "Resolve the conflict with Nathan, then run finish --preview again.", next: null },
-  DOMAIN_REBASED_PATH_SET_MISMATCH: { repair: "Inspect the rebased candidate commit, then run finish --preview again.", next: "vault-steward.inspect" },
   DOMAIN_REBASED_CHECK_FAILED: { repair: "Fix the candidate against the moved main, then run finish --preview again.", next: "vault-steward.finish-preview" },
   DOMAIN_RECOVERY_UNPROVABLE: { repair: "Inspect main and the candidate with Nathan; nothing is replayed automatically.", next: null },
   TRANSIENT_INTEGRATION_BUSY: { repair: "Wait for the active finisher to release the local integration lock, then retry the same command.", next: null },
@@ -19316,7 +19316,6 @@ var SENTENCE = {
   DOMAIN_PREVIEW_CONSUMED: "The preview was already consumed by an earlier apply.",
   DOMAIN_PREVIEW_STALE: "The preview no longer matches the candidate or main.",
   DOMAIN_REBASE_CONFLICT: "The rebase onto the moved main conflicted and was aborted.",
-  DOMAIN_REBASED_PATH_SET_MISMATCH: "The rebased candidate commit's paths differ from the admitted set.",
   DOMAIN_REBASED_CHECK_FAILED: "The checker failed on the rebased candidate.",
   DOMAIN_RECOVERY_UNPROVABLE: "Git does not prove that main contains the candidate's own commit.",
   TRANSIENT_INTEGRATION_BUSY: "Another finisher holds the local integration lock.",
