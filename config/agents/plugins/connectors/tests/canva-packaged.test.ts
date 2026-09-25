@@ -1,12 +1,13 @@
-// Ticket #93 under Spec #87 (AC12, AC14, AC19, AC20, AC25): the packaged
-// `bin/connectors` reaches Canva through the generic auth and run commands.
+// Ticket #93 under Spec #87 (AC12, AC14, AC19, AC20, AC22, AC25): the packaged
+// `bin/connectors` reaches Canva through the generic auth, run, and schema
+// commands.
 // Every process runs inside a macOS sandbox that denies outbound network, so
 // no Canva endpoint, OAuth server, or release host can be reached. MCPorter is
 // the official 0.14.0 release selected by the binary's own verification from
 // local fixture bytes; a hostile `mcporter` sits first on PATH and must stay
 // unused. Expected values are test-owned literals.
 import { expect, test } from "bun:test";
-import { chmodSync, closeSync, constants, cpSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
+import { chmodSync, closeSync, constants, cpSync, existsSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, symlinkSync, writeFileSync, writeSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
 import { type Bundle, createBundle, createFakeMcporterBinDir, PLUGIN_ROOT } from "./harness.ts";
@@ -25,6 +26,13 @@ const SEEDED_VAULT = JSON.stringify({
 	version: 2,
 	entries: { "canva-connectors|seeded": { serverName: "canva-connectors", serverUrl: "https://mcp.canva.com/mcp", tokens: { access_token: GRANT_SENTINEL, token_type: "Bearer", refresh_token: GRANT_SENTINEL } } },
 });
+// Independent oracle: the same grant under the exact key MCPorter 0.14.0
+// derives for this registry entry, name|sha256({name,url,command})[:16], with
+// the updatedAt its vault requires, so its own --reset can find and clear it.
+const KEYED_VAULT = JSON.stringify({
+	version: 2,
+	entries: { "canva-connectors|9d1be6da9c0f5a76": { serverName: "canva-connectors", serverUrl: "https://mcp.canva.com/mcp", updatedAt: "2026-09-25T00:00:00.000Z", tokens: { access_token: GRANT_SENTINEL, token_type: "Bearer", refresh_token: GRANT_SENTINEL } } },
+});
 
 interface Fixture {
 	readonly bundle: Bundle;
@@ -34,8 +42,9 @@ interface Fixture {
 	vault(account: string): string;
 	run(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }>;
 	// The binary's stdin is a pseudo-terminal, so /dev/tty exists for an
-	// attended login; its stdout and stderr still land in files.
-	runAttended(argv: string[]): Promise<{ code: number; stdout: string; stderr: string }>;
+	// attended login; its stdout and stderr still land in files, and terminal
+	// is everything written to the pseudo-terminal itself.
+	runAttended(argv: string[]): Promise<{ code: number; stdout: string; stderr: string; terminal: string }>;
 	dispose(): void;
 }
 
@@ -65,12 +74,13 @@ function canvaFixture(): Fixture {
 		async runAttended(argv) {
 			const out = path.join(bundle.root, "attended.out");
 			const err = path.join(bundle.root, "attended.err");
+			const tty = path.join(bundle.root, "attended.tty");
 			const shell = '"$@" >"$ATTENDED_OUT" 2>"$ATTENDED_ERR"; echo $? >"$ATTENDED_OUT.code"';
-			const proc = Bun.spawn(["/usr/bin/sandbox-exec", "-p", DENY_NETWORK, "/usr/bin/script", "-q", "/dev/null", "/bin/sh", "-c", shell, "sh", bundle.binary, ...argv], {
+			const proc = Bun.spawn(["/usr/bin/sandbox-exec", "-p", DENY_NETWORK, "/usr/bin/script", "-q", tty, "/bin/sh", "-c", shell, "sh", bundle.binary, ...argv], {
 				env: { ...env, ATTENDED_OUT: out, ATTENDED_ERR: err }, stdin: "ignore", stdout: "ignore", stderr: "ignore",
 			});
 			await proc.exited;
-			return { code: Number(readFileSync(`${out}.code`, "utf8")), stdout: readFileSync(out, "utf8"), stderr: readFileSync(err, "utf8") };
+			return { code: Number(readFileSync(`${out}.code`, "utf8")), stdout: readFileSync(out, "utf8"), stderr: readFileSync(err, "utf8"), terminal: readFileSync(tty, "utf8") };
 		},
 		dispose() {
 			hostile.dispose();
@@ -93,6 +103,34 @@ function onlyEnvelope(result: { stdout: string; stderr: string }): { message: st
 function filesUnder(root: string): string[] {
 	if (!existsSync(root)) return [];
 	return readdirSync(root, { recursive: true, withFileTypes: true }).filter((entry) => entry.isFile()).map((entry) => path.join(entry.parentPath, entry.name));
+}
+
+// Holds MCPorter on a FIFO vault file and reads its argv from the process
+// table while it waits, then releases it onto a regular grant-free vault so
+// any later read finds a file. Returns the argv from "auth" on, or null when
+// MCPorter never opened the vault. Paths under the fixture hold no spaces.
+async function mcporterAuthArgv(fifo: string, state: string, done: Promise<unknown>): Promise<string[] | null> {
+	let settled = false;
+	void done.finally(() => { settled = true; });
+	while (!settled) {
+		let fd: number;
+		try {
+			fd = openSync(fifo, constants.O_WRONLY | constants.O_NONBLOCK);
+		} catch {
+			await Bun.sleep(5);
+			continue;
+		}
+		const line = execFileSync("/bin/ps", ["-axww", "-o", "args="], { encoding: "utf8" }).split("\n").find((args) => args.startsWith(`${state}/`) && args.includes(" auth "));
+		const empty = JSON.stringify({ version: 2, entries: {} });
+		writeFileSync(`${fifo}.next`, empty, { mode: 0o600 });
+		renameSync(`${fifo}.next`, fifo);
+		writeSync(fd, empty);
+		closeSync(fd);
+		if (!line) return null;
+		const argv = line.trim().split(" ");
+		return argv.slice(argv.indexOf("auth"));
+	}
+	return null;
 }
 
 // A non-blocking open for writing succeeds only while a reader holds the FIFO,
@@ -133,6 +171,41 @@ test.skipIf(!official)("run opens only the selected account's vault through the 
 			causeCode: "TRANSIENT_PROVIDER_AFTER_BOOTSTRAP", effectClass: "repository-local", transactionState: "completed",
 			effects: { completed: ["mcporter-bootstrap", "mcporter-vault-file"], remaining: [], uncertain: [], inventoryComplete: true },
 		});
+		expect(existsSync(path.join(fixture.home, ".mcporter"))).toBe(false);
+		expect(existsSync(path.join(fixture.bundle.root, "mcporter.json"))).toBe(false);
+	} finally {
+		fixture.dispose();
+	}
+}, 60_000);
+
+test.skipIf(!official)("schema reads only the selected account's vault through the verified MCPorter, and stays a read on a terminal", async () => {
+	const fixture = canvaFixture();
+	const offline = "Retry the schema request; if it keeps failing, run connectors auth status canva --select account=<value>";
+	try {
+		const fifoA = ownedVault(fixture.vault("a"));
+		const fifoB = ownedVault(fixture.vault("b"));
+		for (const fifo of [fifoA, fifoB]) execFileSync("/usr/bin/mkfifo", [fifo]);
+		const running = fixture.run(["schema", "canva", "--select", "account=b"]);
+		const [openedA, openedB] = await Promise.all([watchFifo(fifoA, running), watchFifo(fifoB, running)]);
+		const selected = await running;
+		expect({ openedA, openedB }).toEqual({ openedA: false, openedB: true });
+		expect(selected.code).toBe(75);
+		const envelope = onlyEnvelope(selected);
+		expect(envelope.message).toBe("connectors: canva provider call did not complete");
+		expect(envelope.result).toMatchObject({
+			commandIdentity: "connectors.schema", outcome: "refused", failureClass: "transient", causeCode: "TRANSIENT_PROVIDER_AFTER_BOOTSTRAP", data: null, repairAction: offline,
+			effects: { completed: ["mcporter-bootstrap", "mcporter-vault-file"], remaining: [], uncertain: [], inventoryComplete: true },
+		});
+		// With a terminal present, a first schema for a new account still only
+		// reads: it creates the private vault and never reaches browser consent.
+		const fresh = await fixture.runAttended(["schema", "canva", "--select", "account=fresh"]);
+		expect({ code: fresh.code, stderr: fresh.stderr, lines: fresh.stdout.trim().split("\n").length }).toEqual({ code: 75, stderr: "", lines: 1 });
+		expect(JSON.parse(fresh.stdout).result).toMatchObject({
+			commandIdentity: "connectors.schema", causeCode: "TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT", effectClass: "repository-local", transactionState: "completed", repairAction: offline,
+			effects: { completed: ["account-vault", "mcporter-vault-file"], remaining: [], uncertain: [], inventoryComplete: true },
+		});
+		const root = fixture.vault("fresh");
+		for (const directory of [root, path.join(root, "data"), path.join(root, "cache")]) expect({ directory, mode: lstatSync(directory).mode & 0o777 }).toEqual({ directory, mode: 0o700 });
 		expect(existsSync(path.join(fixture.home, ".mcporter"))).toBe(false);
 		expect(existsSync(path.join(fixture.bundle.root, "mcporter.json"))).toBe(false);
 	} finally {
@@ -196,11 +269,11 @@ test.skipIf(!official)("a run for the grant-holding account keeps the grant insi
 	}
 }, 60_000);
 
-test("approved client mode refuses login and run with no fallback, no MCPorter selection, and no vault", async () => {
+test("approved client mode refuses login, run, and schema with no fallback, no MCPorter selection, and no vault", async () => {
 	const fixture = canvaFixture();
 	try {
 		writeFileSync(path.join(fixture.bundle.skillsRoot, "canva", "config", "client.json"), JSON.stringify({ mode: "approved" }));
-		for (const argv of [["auth", "login", "canva", "--select", "account=a"], ["run", "canva", "--select", "account=a", "search-designs"]]) {
+		for (const argv of [["auth", "login", "canva", "--select", "account=a"], ["run", "canva", "--select", "account=a", "search-designs"], ["schema", "canva", "--select", "account=a"]]) {
 			const result = await fixture.run(argv);
 			expect(result.code).toBe(3);
 			const envelope = onlyEnvelope(result);
@@ -226,6 +299,15 @@ test("unsupported verbs, unattended login, and bad input refuse before any depen
 		[["auth", "logout", "canva", "--select", "account=a"], 3, "DOMAIN_AUTH_VERB_UNSUPPORTED", "auth-verb-unsupported", null],
 		[["auth", "check", "canva", "--select", "account=a"], 3, "DOMAIN_AUTH_VERB_UNSUPPORTED", "auth-verb-unsupported", null],
 		[["auth", "login", "canva", "--select", "account=a"], 3, "DOMAIN_ATTENDED_REQUIRED", null, "Run connectors auth login canva --select account=<value> yourself in a terminal; an agent cannot complete browser consent"],
+		// The closed login options: accepted only after login, repeated in its repair, and refused on every other verb or when unknown.
+		[["auth", "login", "canva", "--reset", "--select", "account=a", "--no-browser"], 3, "DOMAIN_ATTENDED_REQUIRED", null, "Run connectors auth login canva --select account=<value> --no-browser --reset yourself in a terminal; an agent cannot complete browser consent"],
+		[["auth", "status", "canva", "--select", "account=a", "--reset"], 2, "USAGE_MALFORMED_ARGUMENTS", null, null],
+		[["auth", "status", "canva", "--select", "account=a", "--no-browser"], 2, "USAGE_MALFORMED_ARGUMENTS", null, null],
+		[["auth", "login", "canva", "--select", "account=a", "--json"], 2, "USAGE_MALFORMED_ARGUMENTS", null, null],
+		[["auth", "login", "canva", "--select", "account=a", "--no-browser", "--json"], 2, "USAGE_MALFORMED_ARGUMENTS", null, null],
+		[["auth", "login", "canva", "--select", "account=a", `--${ARGV_SENTINEL}`], 2, "USAGE_MALFORMED_ARGUMENTS", null, null],
+		[["run", "canva", "--select", "account=a", "search-designs", "--reset"], 2, "USAGE_MALFORMED_ARGUMENTS", null, null],
+		[["schema", "canva", "--select", "account=a", "--no-browser"], 2, "USAGE_MALFORMED_ARGUMENTS", null, null],
 		[["run", "canva", "--select", "account=a", "export-design"], 2, "USAGE_OPERATION_UNKNOWN", "operation-not-allowed", null],
 		[["run", "canva", "--select", `account=${ARGV_SENTINEL}`, "search-designs"], 2, "USAGE_ADAPTER_REFUSED", "account-invalid", null],
 		[["run", "canva", "search-designs"], 4, "SCHEMA_SELECTOR_INVALID", null, "Run connectors config show canva --resolved --json --select account=<value> to see its declared selectors"],
@@ -233,6 +315,9 @@ test("unsupported verbs, unattended login, and bad input refuse before any depen
 		[["run", "canva", "--select", "account=a", "search-designs", "--input", `[${ARGV_SENTINEL}]`], 2, "USAGE_MALFORMED_ARGUMENTS", null, null],
 		[["run", ARGV_SENTINEL.toLowerCase(), "search-designs"], 2, "USAGE_CONNECTOR_UNKNOWN", null, null],
 		[["auth", "frobnicate", "canva"], 2, "USAGE_MALFORMED_ARGUMENTS", null, null],
+		[["schema", "canva"], 4, "SCHEMA_SELECTOR_INVALID", null, "Run connectors config show canva --resolved --json --select account=<value> to see its declared selectors"],
+		[["schema", "canva", "--select", `account=${ARGV_SENTINEL}`], 2, "USAGE_ADAPTER_REFUSED", "account-invalid", null],
+		[["schema", "canva", "--select", "account=a", ARGV_SENTINEL], 2, "USAGE_MALFORMED_ARGUMENTS", null, null],
 	];
 	try {
 		for (const [argv, exit, cause, connectorCause, repairAction] of cases) {
@@ -276,6 +361,7 @@ test("adapter preconditions refuse on their own cause rows before any MCPorter s
 	// [setup, argv, exit, cause, connectorCause], restated from the accepted catalogue.
 	const cases: ReadonlyArray<readonly [(fixture: Fixture) => void, string[], number, string, string]> = [
 		[(fixture) => mkdirSync(path.join(fixture.home, ".mcporter", "canva-connectors"), { recursive: true }), ["run", "canva", "--select", "account=a", "search-designs"], 3, "DOMAIN_ADAPTER_REFUSED", "legacy-cache-present"],
+		[(fixture) => mkdirSync(path.join(fixture.home, ".mcporter", "canva-connectors"), { recursive: true }), ["schema", "canva", "--select", "account=a"], 3, "DOMAIN_ADAPTER_REFUSED", "legacy-cache-present"],
 		[(fixture) => writeFileSync(path.join(fixture.bundle.skillsRoot, "canva", "config", "client.json"), JSON.stringify({ mode: "portal" })), ["auth", "status", "canva", "--select", "account=a"], 4, "SCHEMA_ADAPTER_REFUSED", "client-mode-invalid"],
 	];
 	for (const [setup, argv, exit, cause, connectorCause] of cases) {
@@ -319,6 +405,48 @@ test.skipIf(!official)("after MCPorter selection, a symlinked vault root refuses
 			repairAction: "Run connectors auth status canva --select account=<value> to inspect the account vault before retrying login",
 		});
 		expect(filesUnder(fixture.vault("fresh"))).toEqual([path.join(fixture.vault("fresh"), "data", "mcporter", "credentials.json")]);
+	} finally {
+		fixture.dispose();
+	}
+}, 90_000);
+
+test.skipIf(!official)("attended login hands --no-browser and --reset to the verified MCPorter's auth, and --reset clears only the selected account's grant", async () => {
+	const fixture = canvaFixture();
+	const login = async (account: string, flags: readonly string[]) => {
+		const result = await fixture.runAttended(["auth", "login", "canva", ...flags.slice(0, 1), "--select", `account=${account}`, ...flags.slice(1)]);
+		expect({ account, code: result.code, stderr: result.stderr, lines: result.stdout.trim().split("\n").length }).toEqual({ account, code: 3, stderr: "", lines: 1 });
+		expect(JSON.parse(result.stdout).result).toMatchObject({
+			commandIdentity: "connectors.auth", outcome: "failed", causeCode: "DOMAIN_AUTH_LOGIN_UNKNOWN", transactionState: "unknown",
+			data: { connector: "canva", verb: "login", account, clientMode: "dcr" },
+			effects: { remaining: [], uncertain: ["account-grant"], inventoryComplete: true },
+		});
+		for (const output of [result.stdout, result.terminal]) expect(output).not.toContain(GRANT_SENTINEL);
+	};
+	try {
+		// [account, caller flags, MCPorter argv from "auth" on]. The flags arrive
+		// on either side of --select and leave in one fixed order.
+		const handed: ReadonlyArray<readonly [string, readonly string[], readonly string[]]> = [
+			["bare", [], ["auth", "canva-connectors"]],
+			["flagged", ["--reset", "--no-browser"], ["auth", "canva-connectors", "--no-browser", "--reset"]],
+		];
+		for (const [account, flags, expected] of handed) {
+			const fifo = ownedVault(fixture.vault(account));
+			execFileSync("/usr/bin/mkfifo", [fifo]);
+			const running = login(account, flags);
+			const argv = await mcporterAuthArgv(fifo, fixture.state, running);
+			await running;
+			expect({ account, argv }).toEqual({ account, argv: [...expected] });
+		}
+		// A plain login leaves the seeded grant in place, so only --reset clears
+		// it, and only in the selected account's vault.
+		const [plain, reset, other] = [ownedVault(fixture.vault("plain")), ownedVault(fixture.vault("reset")), ownedVault(fixture.vault("other"))];
+		for (const file of [plain, reset, other]) writeFileSync(file, KEYED_VAULT, { mode: 0o600 });
+		await login("plain", []);
+		await login("reset", ["--reset"]);
+		const holders = [...filesUnder(fixture.state), ...filesUnder(fixture.home)].filter((file) => readFileSync(file).includes(GRANT_SENTINEL));
+		expect(holders.sort()).toEqual([plain, other].sort());
+		expect(lstatSync(reset).isFile()).toBe(true);
+		expect(existsSync(path.join(fixture.home, ".mcporter"))).toBe(false);
 	} finally {
 		fixture.dispose();
 	}

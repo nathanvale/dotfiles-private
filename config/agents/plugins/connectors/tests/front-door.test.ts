@@ -59,7 +59,7 @@ describe("compiled front door: discovery", () => {
 			"any credential value read by this binary or T5 custody access; fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
 			"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
 			"any provider write operation",
-			"auth or run for a connector whose packaged adapter has no prepare step, and auth logout for every connector; deps covers only explicit MCPorter repair",
+			"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, and auth logout for every connector; deps covers only explicit MCPorter repair",
 		]);
 	});
 
@@ -87,6 +87,8 @@ describe("compiled front door: discovery", () => {
 		expect(result.stdout).toContain("--help");
 		expect(result.stdout).toContain("Commands:");
 		expect(result.stdout).toContain("Examples:");
+		expect(result.stdout).toContain("schema <connector> [--select name=value ...]");
+		expect(result.stdout).toContain("auth login <connector> [--select name=value ...] [--no-browser] [--reset]");
 	});
 
 	test("--help --json answers with its own Contract Core envelope", async () => {
@@ -331,13 +333,14 @@ describe("compiled front door: assertEnvelope admits run success (unit-layer, di
 		for (const [cause, completed] of admitted) expect({ cause, completed, problem: problemOf(runSuccess(cause, completed)) }).toEqual({ cause, completed, problem: null });
 	});
 
-	test("setup's causes stay setup-only, and run's own causes stay run-only", () => {
+	test("setup's causes stay setup-only, and adapter read causes stay with run and schema", () => {
 		expect(problemOf(runSuccess("SUCCESS_COMPLETED", ["mcporter-vault-file"]))).toContain("setup cause and command identity must agree");
-		expect(problemOf(runSuccess("SUCCESS_AFTER_ACCOUNT_EFFECT", ["mcporter-vault-file"], "connectors.schema"))).toContain("run cause and command identity must agree");
+		// An adapter-backed schema read reports its account effects like a run.
+		expect(problemOf(runSuccess("SUCCESS_AFTER_ACCOUNT_EFFECT", ["mcporter-vault-file"], "connectors.schema"))).toBeNull();
 		// A row-coherent transient refusal under auth: identity is its only fault.
 		const base = runSuccess("TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT", ["mcporter-vault-file"], "connectors.auth");
 		const transient = { ...base, result: { ...base.result, outcome: "refused", failureClass: "transient", exitCode: 75, retryable: true, data: null, repairAction: "Retry the run" } } as typeof base;
-		expect(problemOf(transient)).toBe("internal contract violation: run cause and command identity must agree");
+		expect(problemOf(transient)).toBe("internal contract violation: adapter read cause and command identity must agree");
 	});
 });
 

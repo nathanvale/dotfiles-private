@@ -14,6 +14,11 @@
 // what the child changed in adapter-owned state. An adapter never reads a
 // credential value, never spawns MCPorter itself, and its refusal text never
 // echoes caller input.
+//
+// prepareSchema is the optional live-schema seam for a connector that needs
+// an adapter to reach its transport. It answers like prepare, and a transport
+// plan must be a read: the core never runs attended login for schema. An
+// adapter without it keeps credentialed schema unsupported.
 import type { ConnectorManifest } from "../manifest.ts";
 import type { EnvironmentSource } from "../safe-environment.ts";
 
@@ -23,8 +28,13 @@ export interface AuthAttempt {
 	readonly detail?: string;
 }
 
+// The closed login options the core admits, only after `auth login`, in this
+// fixed order; every other verb carries none. An adapter maps each to its own
+// transport flag and never sees an unknown option.
+export type LoginOption = "no-browser" | "reset";
+
 export type AdapterAction =
-	| { readonly kind: "auth"; readonly verb: string }
+	| { readonly kind: "auth"; readonly verb: string; readonly loginOptions: readonly LoginOption[] }
 	| { readonly kind: "run"; readonly operation: string; readonly input: Readonly<Record<string, unknown>> | null };
 
 export interface AdapterRequest {
@@ -36,6 +46,8 @@ export interface AdapterRequest {
 	readonly skillsRoot: string;
 	readonly env: EnvironmentSource;
 }
+
+export type SchemaRequest = Omit<AdapterRequest, "action">;
 
 // Each kind maps to one core cause row; connectorCause is the adapter's own
 // closed code and is reported beside it.
@@ -82,4 +94,5 @@ export interface Adapter {
 	readonly id: string;
 	attemptAuth?(manifest: ConnectorManifest): Promise<AuthAttempt>;
 	prepare?(request: AdapterRequest): Prepared;
+	prepareSchema?(request: SchemaRequest): Prepared;
 }

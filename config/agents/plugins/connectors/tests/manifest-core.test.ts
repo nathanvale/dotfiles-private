@@ -627,11 +627,33 @@ describe("connectors schema: Spec AC20 contribution (Context7 and Firecrawl reac
 		}
 	}, 30_000);
 
+	test("refuses any selector on a keyless connector before MCPorter selection, without echoing it", async () => {
+		const bundle = createBundle();
+		const sentinel = "sentinel-private-selector-value";
+		try {
+			bundle.addSkill("keyless-fixture-skill");
+			// The fixture declares region, so a declared selector refuses too.
+			for (const selection of [`${sentinel}=a`, `region=${sentinel}`]) {
+				const result = await runBundle(bundle, ["schema", "keyless-fixture-skill", "--select", selection], { home: bundle.root, extraEnv: { XDG_STATE_HOME: bundle.root } });
+				expect({ selection, code: result.code, stderr: result.stderr }).toEqual({ selection, code: 2, stderr: "" });
+				expect(result.stdout).not.toContain(sentinel);
+				expect(JSON.parse(result.stdout).result).toMatchObject({
+					commandIdentity: "connectors.schema", causeCode: "USAGE_MALFORMED_ARGUMENTS", transactionState: "unchanged",
+					effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+				});
+			}
+			expect(existsSync(path.join(bundle.root, "connectors"))).toBe(false);
+		} finally {
+			bundle.dispose();
+		}
+	});
+
 	test("refuses for a credential-bearing connector with a clear domain cause, never a silent or crashed attempt", async () => {
 		const bundle = createBundle();
 		try {
-			bundle.addSkill("adapter-fixture-skill");
-			const result = await runBundle(bundle, ["schema", "adapter-fixture-skill"], { home: bundle.root });
+			// challenge-auth declares a credential and has no prepareSchema step.
+			bundle.addSkill("challenge-fixture-skill");
+			const result = await runBundle(bundle, ["schema", "challenge-fixture-skill"], { home: bundle.root });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(3);
 			expect(result.stderr).toBe("");

@@ -4,7 +4,8 @@
 // command core: list, config validate/show, status, doctor, a minimal schema
 // reachability seam for keyless connectors, and a fixture-auth seam proving
 // packaged auth-adapter extensibility. T6 (Ticket #93) adds auth and run
-// through a packaged adapter's prepare step. `bin/provider-route.ts` remains the
+// through a packaged adapter's prepare step, and credentialed schema through
+// its prepareSchema step. `bin/provider-route.ts` remains the
 // sole owner of the existing per-Skill auth/list/call launcher every Skill's
 // SKILL.md still documents; this file never imports it and never branches
 // on a connector's name. All connector-specific behavior lives in a
@@ -12,7 +13,7 @@
 // adapter registry (bin/adapters/index.ts).
 import { closeSync, existsSync, openSync } from "node:fs";
 import path from "node:path";
-import type { AdapterAction, AdapterRefusal, AdapterRefusalKind, LocalEffect, Prepared } from "./adapters/contract.ts";
+import type { Adapter, AdapterAction, AdapterRefusal, AdapterRefusalKind, LocalEffect, LoginOption, Prepared, SchemaRequest } from "./adapters/contract.ts";
 import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
 import { discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
 import { safeEnvironment } from "./safe-environment.ts";
@@ -32,7 +33,7 @@ const EFFECT_EXCLUSIONS = [
 	"any credential value read by this binary or T5 custody access; fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
 	"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
 	"any provider write operation",
-	"auth or run for a connector whose packaged adapter has no prepare step, and auth logout for every connector; deps covers only explicit MCPorter repair",
+	"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, and auth logout for every connector; deps covers only explicit MCPorter repair",
 ] as const;
 
 // The closed auth verb vocabulary (Spec AC19). Each connector's adapter
@@ -116,7 +117,8 @@ interface CommandDescriptor {
 // This is the complete command surface. Do not add a route here without also
 // implementing it, so discovery never advertises a command this binary
 // cannot actually answer. auth and run reach only connectors whose packaged
-// adapter has a prepare step; every other connector refuses through the
+// adapter has a prepare step, and schema reaches a credentialed connector only
+// through a prepareSchema step; every other connector refuses through the
 // catalogue.
 const COMMANDS: readonly CommandDescriptor[] = [
 	{ commandIdentity: "connectors.dispatch", route: [], effectClass: "inspect", summary: "Refuse a missing, unknown, or incompatible command selection" },
@@ -128,7 +130,7 @@ const COMMANDS: readonly CommandDescriptor[] = [
 	{ commandIdentity: "connectors.config.show", route: ["config", "show"], effectClass: "inspect", summary: "Show resolved nonsecret values and provenance; conflicting repeated selectors refuse" },
 	{ commandIdentity: "connectors.status", route: ["status"], effectClass: "inspect", summary: "Report truthful evidence state per connector" },
 	{ commandIdentity: "connectors.doctor", route: ["doctor"], effectClass: "inspect", summary: "Local readiness gate for one connector" },
-	{ commandIdentity: "connectors.schema", route: ["schema"], effectClass: "repository-local", summary: "Fetch keyless schema, bootstrapping the pinned MCPorter on first use" },
+	{ commandIdentity: "connectors.schema", route: ["schema"], effectClass: "repository-local", summary: "Fetch live schema for a keyless connector, or a credentialed one through its packaged adapter; bootstraps the pinned MCPorter on first use" },
 	{ commandIdentity: "connectors.deps.repair.mcporter", route: ["deps", "repair", "mcporter"], effectClass: "repository-local", summary: "Explicitly replace the selected MCPorter with a verified official release" },
 	{
 		commandIdentity: "connectors.fixtureAuth",
@@ -136,7 +138,7 @@ const COMMANDS: readonly CommandDescriptor[] = [
 		effectClass: "inspect",
 		summary: "Attempt a packaged, secret-free fixture auth operation for one connector (fixture-tested proof only, never real credential custody)",
 	},
-	{ commandIdentity: "connectors.auth", route: ["auth"], effectClass: "external", summary: "Inspect or perform one connector's declared auth verb through its packaged adapter; login is attended only" },
+	{ commandIdentity: "connectors.auth", route: ["auth"], effectClass: "external", summary: "Inspect or perform one connector's declared auth verb through its packaged adapter; login is attended only and alone takes --no-browser and --reset" },
 	{ commandIdentity: "connectors.run", route: ["run"], effectClass: "repository-local", summary: "Run one declared read operation for a connector through its packaged adapter and the selected MCPorter" },
 ];
 
@@ -368,15 +370,15 @@ function checkCauseRowRepairAction(result: Envelope["result"], row: CauseRow, ca
 	return [];
 }
 
-// Setup's causes belong to setup alone, and setup emits no other cause. A
-// run's own success and provider failures after or without an account effect
-// belong to run alone.
+// Setup's causes belong to setup alone, and setup emits no other cause. An
+// adapter read's own success and provider failures after or without an
+// account effect belong to run and adapter-backed schema alone.
 const SETUP_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_COMPLETED", "DOMAIN_SETUP_FAILED_UNCHANGED", "DOMAIN_SETUP_FAILED_PARTIAL", "SCHEMA_SETUP_CONFIG_INVALID", "USAGE_SETUP_MALFORMED", "INTERNAL_SETUP_UNKNOWN", "INTERNAL_SETUP_AFTER_COMMIT"]);
-const RUN_ONLY_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_AFTER_ACCOUNT_EFFECT", "TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT", "DOMAIN_PROVIDER_CALL_FAILED", "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT"]);
+const ADAPTER_READ_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_AFTER_ACCOUNT_EFFECT", "TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT", "DOMAIN_PROVIDER_CALL_FAILED", "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT"]);
 
 function checkCauseCommand(cause: CauseCode, commandIdentity: string): string[] {
 	if (SETUP_CAUSES.has(cause) !== (commandIdentity === "connectors.setup")) return ["setup cause and command identity must agree"];
-	if (RUN_ONLY_CAUSES.has(cause) && commandIdentity !== "connectors.run") return ["run cause and command identity must agree"];
+	if (ADAPTER_READ_CAUSES.has(cause) && commandIdentity !== "connectors.run" && commandIdentity !== "connectors.schema") return ["adapter read cause and command identity must agree"];
 	return [];
 }
 
@@ -581,9 +583,11 @@ function helpText(): string {
 		"                                                  Repeated --select names must carry identical values",
 		"  status [connector]                              Report truthful evidence state",
 		"  doctor <connector>                              Local readiness gate for one connector",
-		"  schema <connector>                               Fetch live schema evidence for one keyless connector",
+		"  schema <connector> [--select name=value ...]     Fetch live schema; a credentialed connector reads through its adapter",
 		"  deps repair mcporter                             Explicitly replace selected MCPorter after mismatch",
 		"  auth <verb> <connector> [--select name=value]    Run one declared auth verb; login needs your terminal",
+		"  auth login <connector> [--select name=value ...] [--no-browser] [--reset]",
+		"                                                  Print the consent URL instead of opening a browser; clear the cached grant first",
 		"  run <connector> [--select name=value] <operation> [--input <json-object>]",
 		"                                                  Run one declared read operation through MCPorter",
 		"",
@@ -591,6 +595,7 @@ function helpText(): string {
 		`  ${PROGRAM} --discover --json`,
 		`  ${PROGRAM} list`,
 		`  ${PROGRAM} doctor context7`,
+		`  ${PROGRAM} schema canva --select account=work`,
 		`  ${PROGRAM} run canva --select account=work search-designs --input '{"query":"poster"}'`,
 		"",
 	].join("\n");
@@ -1170,15 +1175,18 @@ async function handleFixtureAuth(args: readonly string[]): Promise<void> {
 	emitSuccess("connectors.fixtureAuth", `${id} fixture auth succeeded`, { connector: id, outcome: "success", fixtureTested: true }, "connectors.status");
 }
 
+// A keyless connector fetches schema directly. A connector with a packaged
+// adapter reads it through the adapter transport, like run, with its
+// declared selectors.
 async function handleSchema(args: readonly string[]): Promise<void> {
-	if (args.length !== 1) {
-		usageMalformed("connectors.schema", "schema <connector>");
+	const command = parseSchemaArgs(args);
+	if (!command) {
+		usageMalformed("connectors.schema", SCHEMA_USAGE);
 		return;
 	}
-	const id = args[0] ?? "";
 	let manifest: ConnectorManifest;
 	try {
-		manifest = loadOneManifest(skillsRoot(), id, ADAPTER_IDS);
+		manifest = loadOneManifest(skillsRoot(), command.id, ADAPTER_IDS);
 	} catch (error) {
 		if (error instanceof ManifestError) {
 			emitRefusal("connectors.schema", `${PROGRAM}: ${error.message}`, manifestErrorCause(error), "Run config validate to see the exact defect", "connectors.config.validate");
@@ -1187,15 +1195,18 @@ async function handleSchema(args: readonly string[]): Promise<void> {
 		throw error;
 	}
 	if (manifest.adapter !== null) {
-		emitRefusal(
-			"connectors.schema",
-			`${PROGRAM}: ${id} needs a declared credential; schema is not yet supported for it`,
-			"DOMAIN_CUSTODY_NOT_SUPPORTED",
-			"Use doctor to check local readiness; live schema for credentialed connectors is a later Ticket",
-			"connectors.doctor",
-		);
+		await runAdapterCommand(command, manifest);
 		return;
 	}
+	// Keyless schema selects nothing, so it takes no selector, as before.
+	if (command.given.size > 0) {
+		usageMalformed("connectors.schema", SCHEMA_USAGE);
+		return;
+	}
+	await handleKeylessSchema(command.id, manifest);
+}
+
+async function handleKeylessSchema(id: string, manifest: ConnectorManifest): Promise<void> {
 	if (!existsSync(manifest.registryPath)) {
 		emitRefusal("connectors.schema", `${PROGRAM}: ${id} registry is missing`, "SCHEMA_MANIFEST_INVALID", "Run config validate to see the exact defect", "connectors.config.validate");
 		return;
@@ -1272,22 +1283,27 @@ async function fetchKeylessSchema(id: string, registryPath: string, server: stri
 	emitSuccess("connectors.schema", `schema evidence fetched for ${id}`, { connector: id, server, allowedTools, schema: parsed }, "connectors.status", selection.bootstrapped, recoveryCompleted);
 }
 
-// Packaged adapter auth and run (Spec AC19, AC20). The core parses, loads the
+// Packaged adapter auth, run, and schema (Spec AC19, AC20). The core parses, loads the
 // manifest, resolves selectors, asks the adapter for a plan, selects the
 // verified MCPorter, lets the adapter commit its own state, then runs the plan.
 // It never names a connector, and no refusal here echoes caller input.
 
+// schema is the core's own action: an adapter answers it through
+// prepareSchema, never through prepare.
+type CommandAction = AdapterAction | { readonly kind: "schema" };
+
 interface AdapterCommand {
-	readonly commandIdentity: "connectors.auth" | "connectors.run";
+	readonly commandIdentity: "connectors.auth" | "connectors.run" | "connectors.schema";
 	readonly id: string;
 	readonly given: ReadonlyMap<string, string>;
-	readonly action: AdapterAction;
+	readonly action: CommandAction;
 }
 
 type TransportPlan = Extract<Prepared, { kind: "transport" }>;
 
-const AUTH_USAGE = "auth <verb> <connector> [--select name=value ...]";
+const AUTH_USAGE = "auth <verb> <connector> [--select name=value ...] [--no-browser] [--reset]";
 const RUN_USAGE = "run <connector> [--select name=value ...] <operation> [--input <json-object>]";
+const SCHEMA_USAGE = "schema <connector> [--select name=value ...]";
 
 const REFUSAL_CAUSE: Readonly<Record<AdapterRefusalKind, CauseCode>> = {
 	usage: "USAGE_ADAPTER_REFUSED",
@@ -1310,12 +1326,42 @@ function consumeSelections(rest: readonly string[], given: Map<string, string>):
 	return index;
 }
 
+// The closed login options, accepted in any order among the selectors after
+// `auth login` only. Anything else, --json included, is malformed.
+const LOGIN_OPTIONS: ReadonlyMap<string, LoginOption> = new Map([["--no-browser", "no-browser"], ["--reset", "reset"]]);
+const LOGIN_OPTION_ORDER: readonly LoginOption[] = ["no-browser", "reset"];
+
 function parseAuthArgs(args: readonly string[]): AdapterCommand | null {
 	const [verb, id, ...rest] = args;
 	if (!verb || !AUTH_VERBS.has(verb) || !id) return null;
 	const given = new Map<string, string>();
-	if (consumeSelections(rest, given) !== rest.length) return null;
-	return { commandIdentity: "connectors.auth", id, given, action: { kind: "auth", verb } };
+	const options = new Set<LoginOption>();
+	let index = 0;
+	while (index < rest.length) {
+		const option = verb === "login" ? LOGIN_OPTIONS.get(rest[index] ?? "") : undefined;
+		if (option) {
+			options.add(option);
+			index += 1;
+			continue;
+		}
+		const at = consumeSelections(rest.slice(index), given);
+		if (!at) return null;
+		index += at;
+	}
+	return { commandIdentity: "connectors.auth", id, given, action: { kind: "auth", verb, loginOptions: LOGIN_OPTION_ORDER.filter((name) => options.has(name)) } };
+}
+
+// A login repair repeats the caller's login options, which are closed names
+// and never values.
+function loginFlags(command: AdapterCommand): string {
+	return command.action.kind === "auth" ? command.action.loginOptions.map((option) => ` --${option}`).join("") : "";
+}
+
+function parseSchemaArgs(args: readonly string[]): AdapterCommand | null {
+	const [id, ...rest] = args;
+	const given = new Map<string, string>();
+	if (!id || consumeSelections(rest, given) !== rest.length) return null;
+	return { commandIdentity: "connectors.schema", id, given, action: { kind: "schema" } };
 }
 
 function parseInputObject(text: string | undefined): Record<string, unknown> | null {
@@ -1377,18 +1423,27 @@ function prepareThroughAdapter(command: AdapterCommand, manifest: ConnectorManif
 		emitRefusal(command.commandIdentity, `${PROGRAM}: ${command.id} declares no packaged adapter`, "DOMAIN_ADAPTER_NOT_DECLARED", "Use a connector whose manifest declares a packaged adapter", "connectors.list");
 		return null;
 	}
+	if (command.action.kind === "schema" && !adapter.prepareSchema) {
+		emitRefusal("connectors.schema", `${PROGRAM}: ${command.id} needs a declared credential; its packaged adapter has no schema step`, "DOMAIN_CUSTODY_NOT_SUPPORTED", "Use doctor to check local readiness; this connector's adapter does not read live schema", "connectors.doctor");
+		return null;
+	}
 	const selectors = resolveSelectors(manifest, command.given);
 	if (selectors.problem) {
 		const required = Object.entries(manifest.selectors).filter(([, declaration]) => declaration.required && declaration.default === undefined).map(([name]) => name);
 		emitRefusal(command.commandIdentity, `${PROGRAM}: the selectors for ${command.id} do not match its manifest`, "SCHEMA_SELECTOR_INVALID", `Run connectors config show ${command.id} --resolved --json${selectPlaceholders(required)} to see its declared selectors`, "connectors.config.show");
 		return null;
 	}
-	if (!adapter.prepare) {
-		const kind = command.action.kind === "auth" ? "verb-unsupported" : "operation-unknown";
+	const values = Object.fromEntries(Object.entries(selectors.values).map(([name, entry]) => [name, entry.value]));
+	return prepareAction(adapter, command.action, { manifest, selectors: values, skillsRoot: skillsRoot(), env: process.env });
+}
+
+function prepareAction(adapter: Adapter, action: CommandAction, request: SchemaRequest): Prepared {
+	if (action.kind === "schema" && adapter.prepareSchema) return adapter.prepareSchema(request);
+	if (action.kind === "schema" || !adapter.prepare) {
+		const kind = action.kind === "auth" ? "verb-unsupported" : "operation-unknown";
 		return { kind: "refused", refusal: { kind, connectorCause: "adapter-has-no-prepare", repair: "Use a connector whose packaged adapter supports auth and run" } };
 	}
-	const values = Object.fromEntries(Object.entries(selectors.values).map(([name, entry]) => [name, entry.value]));
-	return adapter.prepare({ action: command.action, manifest, selectors: values, skillsRoot: skillsRoot(), env: process.env });
+	return adapter.prepare({ ...request, action });
 }
 
 // Attended login writes MCPorter's browser prompts to the user's terminal, so
@@ -1449,9 +1504,7 @@ async function runRead(command: AdapterCommand, plan: TransportPlan, binary: str
 	const effects = { completed, uncertain: [] };
 	if (exitCode !== 0) {
 		const failure = readFailure(stdout);
-		const selectors = selectFlags(command);
-		const repair = failure === "offline" ? `Retry the run; if it keeps failing, run connectors auth status ${command.id}${selectors}` : `If the grant expired, run connectors auth login ${command.id}${selectors} yourself in a terminal; otherwise correct the operation or its --input before running again`;
-		emitAdapterEnvelope(command, readCause(completed, failure), `${PROGRAM}: ${command.id} provider call did not complete`, null, repair, effects, "connectors.auth");
+		emitAdapterEnvelope(command, readCause(completed, failure), `${PROGRAM}: ${command.id} provider call did not complete`, null, readRepair(command, failure), effects, "connectors.auth");
 		return;
 	}
 	let result: unknown;
@@ -1460,8 +1513,19 @@ async function runRead(command: AdapterCommand, plan: TransportPlan, binary: str
 	} catch {
 		result = { raw: stdout };
 	}
-	const operation = command.action.kind === "run" ? command.action.operation : null;
-	emitAdapterEnvelope(command, readCause(completed, null), `${command.id} ${operation} completed`, { connector: command.id, operation, ...plan.data, result }, null, effects);
+	if (command.action.kind !== "run") {
+		emitAdapterEnvelope(command, readCause(completed, null), `schema evidence fetched for ${command.id}`, { connector: command.id, ...plan.data, schema: result }, null, effects);
+		return;
+	}
+	emitAdapterEnvelope(command, readCause(completed, null), `${command.id} ${command.action.operation} completed`, { connector: command.id, operation: command.action.operation, ...plan.data, result }, null, effects);
+}
+
+function readRepair(command: AdapterCommand, failure: ReadFailure): string {
+	const selectors = selectFlags(command);
+	const request = command.action.kind === "run" ? "run" : "schema request";
+	if (failure === "offline") return `Retry the ${request}; if it keeps failing, run connectors auth status ${command.id}${selectors}`;
+	const correction = command.action.kind === "run" ? "correct the operation or its --input before running again" : `run connectors auth status ${command.id}${selectors} before retrying`;
+	return `If the grant expired, run connectors auth login ${command.id}${selectors} yourself in a terminal; otherwise ${correction}`;
 }
 
 async function runAttendedLogin(command: AdapterCommand, plan: TransportPlan, binary: string, terminal: number, local: readonly LocalEffect[]): Promise<void> {
@@ -1500,7 +1564,11 @@ async function handleAdapterCommand(command: AdapterCommand | null, usage: strin
 		return;
 	}
 	const manifest = loadAdapterManifest(command);
-	const prepared = manifest && prepareThroughAdapter(command, manifest);
+	if (manifest) await runAdapterCommand(command, manifest);
+}
+
+async function runAdapterCommand(command: AdapterCommand, manifest: ConnectorManifest): Promise<void> {
+	const prepared = prepareThroughAdapter(command, manifest);
 	if (!prepared) return;
 	if (prepared.kind === "refused") {
 		emitAdapterRefusal(command, prepared.refusal);
@@ -1510,9 +1578,12 @@ async function handleAdapterCommand(command: AdapterCommand | null, usage: strin
 		emitSuccess(command.commandIdentity, `${command.id} inspection completed`, { connector: command.id, ...prepared.data }, "connectors.status");
 		return;
 	}
+	// Only an auth verb may reach browser consent; any other attended plan is
+	// an adapter defect, reported as an internal failure before any effect.
+	if (prepared.effect === "attended-login" && command.action.kind !== "auth") throw new Error("adapter planned attended login outside auth");
 	const terminal = prepared.effect === "attended-login" ? openTerminal() : null;
 	if (prepared.effect === "attended-login" && terminal === null) {
-		emitAdapterEnvelope(command, "DOMAIN_ATTENDED_REQUIRED", `${PROGRAM}: ${command.id} login needs an attended terminal`, { connector: command.id }, `Run connectors auth login ${command.id}${selectFlags(command)} yourself in a terminal; an agent cannot complete browser consent`, { completed: [], uncertain: [] });
+		emitAdapterEnvelope(command, "DOMAIN_ATTENDED_REQUIRED", `${PROGRAM}: ${command.id} login needs an attended terminal`, { connector: command.id }, `Run connectors auth login ${command.id}${selectFlags(command)}${loginFlags(command)} yourself in a terminal; an agent cannot complete browser consent`, { completed: [], uncertain: [] });
 		return;
 	}
 	try {

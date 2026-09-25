@@ -7,15 +7,16 @@
 // only); this adapter never reads, holds, or transmits a credential value,
 // and never claims T5's real 1Password custody.
 //
-// prepare (Ticket #93, Spec AC19) gives the generic run path a keyless
-// fixture read, admitted only where that same test-bundle authority exists.
+// prepare and prepareSchema (Ticket #93, Spec AC19) give the generic run and
+// schema paths a keyless fixture read, admitted only where that same
+// test-bundle authority exists.
 // It plans MCPorter through the shared route with a private per-account data
 // root, and reports only effects it observes on disk; the core composes the
 // cause and the effect inventory.
 import { safeEnvironment } from "../safe-environment.ts";
 import { accessSync, constants, lstatSync } from "node:fs";
 import path from "node:path";
-import type { Adapter, AdapterRefusal, AdapterRequest, AuthAttempt, Committed, LocalEffect, Prepared } from "./contract.ts";
+import type { Adapter, AdapterRefusal, AdapterRequest, AuthAttempt, Committed, LocalEffect, Prepared, SchemaRequest } from "./contract.ts";
 import type { ConnectorManifest } from "../manifest.ts";
 import { ownedDirectory, stateRoot } from "../private-state.ts";
 import { planDispatcherRoute, RouteError } from "../provider-route.ts";
@@ -94,20 +95,35 @@ function accountEffects(root: string): { commit(): Committed; settle(): readonly
 	};
 }
 
-function prepare(request: AdapterRequest): Prepared {
+function authorityRefusal(): Prepared | null {
 	try {
 		accessSync(AUTHORITY_PATH, constants.X_OK);
+		return null;
 	} catch {
 		return refused("domain", "fixture-authority-unavailable", "This adapter runs only inside the Connectors packaged-process test bundle");
 	}
+}
+
+function prepare(request: AdapterRequest): Prepared {
+	const unavailable = authorityRefusal();
+	if (unavailable) return unavailable;
 	const { action } = request;
-	if (action.kind === "auth") return refused("verb-unsupported", "auth-verb-unsupported", "The fixture adapter supports run only");
+	if (action.kind === "auth") return refused("verb-unsupported", "auth-verb-unsupported", "The fixture adapter supports run and schema only");
+	const flags = action.input === null ? [] : ["--args", JSON.stringify(action.input)];
+	return planRead(request, ["call", action.operation, ...flags, "--output", "json"]);
+}
+
+// A schema read lists the stub's tools; the shared route adds --no-oauth.
+function prepareSchema(request: SchemaRequest): Prepared {
+	return authorityRefusal() ?? planRead(request, ["list", "--schema", "--json"]);
+}
+
+function planRead(request: SchemaRequest, mcporterArgs: readonly string[]): Prepared {
 	const account = request.selectors.account;
 	if (account === undefined || ACCOUNT_PATTERN.exec(account)?.[0] !== account) return refused("usage", "account-invalid", "Pass --select account=<lowercase-slug>");
-	const flags = action.input === null ? [] : ["--args", JSON.stringify(action.input)];
 	let plan: ReturnType<typeof planDispatcherRoute>;
 	try {
-		plan = planDispatcherRoute([request.manifest.id, "--select", `account=${account}`, "--", "call", action.operation, ...flags, "--output", "json"], request.skillsRoot, safeEnvironment(request.env), `test-auth-account=${account}`);
+		plan = planDispatcherRoute([request.manifest.id, "--select", `account=${account}`, "--", ...mcporterArgs], request.skillsRoot, safeEnvironment(request.env), `test-auth-account=${account}`);
 	} catch (error) {
 		if (error instanceof RouteError) return refused("schema", "route-invalid", "Fix the fixture skill's registry or route declaration");
 		throw error;
@@ -117,4 +133,4 @@ function prepare(request: AdapterRequest): Prepared {
 	return { kind: "transport", effect: "read", argv: plan.argv, env, data: {}, ...accountEffects(root) };
 }
 
-export const testAuthAdapter: Adapter = { id: "test-auth", attemptAuth, prepare };
+export const testAuthAdapter: Adapter = { id: "test-auth", attemptAuth, prepare, prepareSchema };

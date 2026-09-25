@@ -1,16 +1,16 @@
-// Canva's packaged adapter for the generic `connectors auth` and `run`
-// commands (Ticket #93 under Spec #87). It composes the Canva custody
+// Canva's packaged adapter for the generic `connectors auth`, `run`, and
+// `schema` commands (Ticket #93 under Spec #87). It composes the Canva custody
 // interface unchanged: client-mode switch, per-account MCPorter vault, and the
 // shared route plan. Paths come from the core's physical skills root, because
 // the custody defaults resolve inside the compiled binary's virtual bundle.
 import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
-import type { Adapter, AdapterRefusal, AdapterRequest, Committed, LocalEffect, Prepared } from "../../bin/adapters/contract.ts";
+import type { Adapter, AdapterRefusal, AdapterRequest, Committed, LocalEffect, LoginOption, Prepared, SchemaRequest } from "../../bin/adapters/contract.ts";
 import { CanvaError } from "./scripts/contract.ts";
 import { type AccountVault, accountVault, checkAccount, inspectVault, planCanvaRoute, prepareVault, readClientMode, requireAdmittedMode } from "./scripts/custody/index.ts";
 
 const REPAIR: Readonly<Record<AdapterRefusal["kind"], string>> = {
-	usage: "Check the connectors run or auth arguments against connectors --help",
+	usage: "Check the connectors run, auth, or schema arguments against connectors --help",
 	domain: "Resolve the named Canva precondition, then retry",
 	schema: "Fix the packaged Canva configuration named by the cause",
 	"verb-unsupported": "Canva supports auth status and auth login; run connectors auth status canva --select account=<slug>",
@@ -36,8 +36,13 @@ function allowedTools(configPath: string, server: string): readonly string[] {
 // yet, so only these two auth verbs exist for Canva.
 const AUTH_VERBS = new Set(["status", "login"]);
 
+// MCPorter 0.14.0's own auth flags: --no-browser prints the consent URL
+// instead of opening a browser, and --reset clears the account vault's cached
+// grant before consent.
+const MCPORTER_LOGIN_FLAGS: Readonly<Record<LoginOption, string>> = { "no-browser": "--no-browser", reset: "--reset" };
+
 function mcporterArgs(action: AdapterRequest["action"]): readonly string[] {
-	if (action.kind === "auth") return ["auth"];
+	if (action.kind === "auth") return ["auth", ...action.loginOptions.map((option) => MCPORTER_LOGIN_FLAGS[option])];
 	const flags = action.input === null ? [] : ["--args", JSON.stringify(action.input)];
 	return ["call", action.operation, ...flags, "--output", "json"];
 }
@@ -116,13 +121,32 @@ function prepareCanva(request: AdapterRequest): Prepared {
 	};
 }
 
-function prepare(request: AdapterRequest): Prepared {
-	try {
-		return prepareCanva(request);
-	} catch (error) {
-		if (error instanceof CanvaError) return { kind: "refused", refusal: fromCanvaError(error) };
-		throw error;
-	}
+// Live schema is a read with the account's cached grant: the shared route
+// adds --no-oauth to list, so MCPorter never opens browser consent here.
+function prepareCanvaSchema(request: SchemaRequest): Prepared {
+	const account = checkAccount(request.selectors.account);
+	const mode = readClientMode(path.join(request.skillsRoot, "canva", "config"));
+	requireAdmittedMode(mode);
+	const { plan, vault } = planCanvaRoute(request.env, account, ["list", "--schema", "--json"], request.skillsRoot);
+	return {
+		kind: "transport",
+		effect: "read",
+		argv: plan.argv,
+		env: plan.env,
+		data: { account, clientMode: mode, server: plan.server, allowedTools: allowedTools(plan.configPath, plan.server) },
+		...vaultEffects(vault),
+	};
 }
 
-export const canvaAdapter: Adapter = { id: "canva", prepare };
+function refusingCanvaErrors<T>(prepareFor: (request: T) => Prepared): (request: T) => Prepared {
+	return (request) => {
+		try {
+			return prepareFor(request);
+		} catch (error) {
+			if (error instanceof CanvaError) return { kind: "refused", refusal: fromCanvaError(error) };
+			throw error;
+		}
+	};
+}
+
+export const canvaAdapter: Adapter = { id: "canva", prepare: refusingCanvaErrors(prepareCanva), prepareSchema: refusingCanvaErrors(prepareCanvaSchema) };
