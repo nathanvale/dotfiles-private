@@ -1,6 +1,6 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { cleanupFixtures, type Fixture, fixture, git, write } from "../helpers/harness.ts"
-import { data, must, STEWARD_PREFIX, steward, stewardEnvironment } from "../helpers/steward.ts"
+import { cleanupFixtures, type Fixture, fixture, git } from "../helpers/harness.ts"
+import { candidate, data, STEWARD_PREFIX, steward, stewardEnvironment } from "../helpers/steward.ts"
 
 // Process lifecycle through real children: stdin held open or closed never prompts or blocks, SIGINT and SIGTERM
 // before output exit 130 and 143 with empty streams, a closed stdout reader (EPIPE) ends the process without a
@@ -8,13 +8,6 @@ import { data, must, STEWARD_PREFIX, steward, stewardEnvironment } from "../help
 
 setDefaultTimeout(60_000)
 afterEach(cleanupFixtures)
-
-function candidate(f: Fixture): string {
-	const started = must(steward(f.vault, ["begin", "--vault", f.vault, "--path", "projects/demo/GOAL.md"], stewardEnvironment(f)), "SUCCESS_COMPLETED")
-	const worktree = (started.result.data as { candidate: { worktree: string } }).candidate.worktree
-	write(worktree, "projects/demo/GOAL.md", "# Goal\n\nCompleted.\n")
-	return worktree
-}
 
 function spawn(f: Fixture, args: string[], extra: Record<string, string> = {}, stdin: "pipe" | "ignore" = "ignore") {
 	return Bun.spawn([...STEWARD_PREFIX, ...args, "--json"], { cwd: f.vault, stdin, stdout: "pipe", stderr: "pipe", env: { ...process.env, ...stewardEnvironment(f, extra), GIT_TERMINAL_PROMPT: "0" } })

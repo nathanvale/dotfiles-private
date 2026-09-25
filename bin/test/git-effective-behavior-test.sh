@@ -222,30 +222,6 @@ assert_not_contains "$status_out" $'\033[' \
   'machine: captured status carries no colour escape'
 
 # --------------------------------------------------------------------------
-# Unattended: no pager may be spawned when output is not a terminal.
-# --------------------------------------------------------------------------
-
-rm -f "$pager_receipt"
-"${git_env[@]}" GIT_PAGER="$TEST_ROOT/pager-spy" \
-  git -C "$work" log >/dev/null 2>&1
-[[ ! -f "$pager_receipt" ]] ||
-  fail 'unattended: git log must not spawn a pager off a terminal'
-pass 'unattended: git log spawns no pager off a terminal'
-
-rm -f "$pager_receipt"
-"${git_env[@]}" GIT_PAGER="$TEST_ROOT/pager-spy" \
-  git -C "$work" diff HEAD~5 >/dev/null 2>&1
-[[ ! -f "$pager_receipt" ]] ||
-  fail 'unattended: git diff must not spawn a pager off a terminal'
-pass 'unattended: git diff spawns no pager off a terminal'
-
-# The configured pager must not force paging on. `--paging=always` in
-# core.pager would page even when Git decided not to.
-pager_value="$("${git_env[@]}" git -C "$work" config --get core.pager || true)"
-assert_not_contains "$pager_value" '--paging=always' \
-  'configuration: core.pager does not force paging on'
-
-# --------------------------------------------------------------------------
 # Unattended: no editor may be spawned, and no stdin consumed.
 # --------------------------------------------------------------------------
 

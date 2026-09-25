@@ -374,9 +374,7 @@ function observerRoot() {
   const sourceRoot = resolve2(import.meta.dir, "../../..");
   return join2(sourceRoot, "packages/recovery-observability/src") === import.meta.dir ? sourceRoot : resolve2(import.meta.dir, "..");
 }
-function observerOperation(kind, arguments_) {
-  if (kind === "hook")
-    return "hook";
+function observerOperation(arguments_) {
   const command = arguments_[1];
   if (command === undefined || command === "--help" || command === "-h")
     return "help";
@@ -403,9 +401,6 @@ function retainObserverFailureDiagnostic(store) {
     store.writeDiagnostic(`${JSON.stringify(record)}
 `);
   } catch {}
-}
-function firstTerminalOutcome(existing, observed) {
-  return existing ?? observed;
 }
 function scheduleCleanup(journeyIdentity, parentRecordIdentity) {
   try {
@@ -495,16 +490,14 @@ async function closePrimaryResponseDescriptors() {
   })));
 }
 async function runRecoveryObserver(arguments_, dependencies = {}) {
-  const kind = arguments_[0];
-  if (kind !== "hook" && kind !== "checkpoint")
+  if (arguments_[0] !== "checkpoint")
     return 2;
-  const invocationKind = kind;
-  const operation = observerOperation(invocationKind, arguments_);
+  const operation = observerOperation(arguments_);
   const started = process.hrtime.bigint();
   const invocationIdentity = identity("recovery-invocation");
   let journeyIdentity = invocationIdentity;
   const observerIdentity = identity("recovery-observer");
-  const inheritedParentIdentity = invocationKind === "checkpoint" ? optionalIdentity(process.env.CODEX_SESSION_ID) : undefined;
+  const inheritedParentIdentity = optionalIdentity(process.env.CODEX_SESSION_ID);
   const traceStore = (dependencies.createTraceStore ?? createInvocationTraceStore)({ invocationIdentity });
   let diagnosticReported = false;
   const reportObserverFailure = () => {
@@ -549,7 +542,7 @@ async function runRecoveryObserver(arguments_, dependencies = {}) {
       "/usr/bin/python3",
       "-B",
       join2(observerRoot(), "packages/compaction-recovery/src/recovery.py"),
-      invocationKind,
+      "checkpoint",
       ...arguments_.slice(1)
     ], {
       cwd: process.cwd(),
@@ -571,7 +564,7 @@ async function runRecoveryObserver(arguments_, dependencies = {}) {
   let terminalOutcome;
   let reapTimer;
   const stopChild = (signal, outcome) => {
-    terminalOutcome = firstTerminalOutcome(terminalOutcome, outcome);
+    terminalOutcome ??= outcome;
     try {
       process.stdin.destroy();
     } catch {}
@@ -635,6 +628,5 @@ if (import.meta.main) {
   process.exitCode = await runRecoveryObserver(process.argv.slice(2));
 }
 export {
-  firstTerminalOutcome,
   runRecoveryObserver
 };

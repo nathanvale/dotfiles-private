@@ -15,7 +15,7 @@ Scope, admission, and the edit rule:
 | [`work-placement.md`](work-placement.md) | Choosing or changing the owner of code, repositories, project packets, notes, plans, evidence, or runtime output |
 | [`skills.md`](skills.md) | Developing, installing, refreshing, or activating a personal plugin; or creating, reviewing, sourcing, migrating, or retiring a skill |
 | [`email.md`](email.md) | Answering a question about an accessible email |
-| [`browser-automation.md`](browser-automation.md) | Automating Chrome, routing a profile lane, choosing an adapter or CDP engine, or naming `browser-use` or `browser-lanes` |
+| [`browser-automation.md`](browser-automation.md) | Opening, reading, or acting on a web page, a signed-in portal, or a local page in a browser from Codex or Claude Code |
 | [`personal-bills.md`](personal-bills.md) | Advising or acting on a personal bill, payment notice, billing renewal, billing account, or bill-payment portal |
 | [`diagnostic-traps.md`](diagnostic-traps.md) | Running `/plugin`, or a command reports a confident result that other evidence denies |
 | [`issue-tracker.md`](issue-tracker.md) | Creating, reading, labelling, or closing an issue |

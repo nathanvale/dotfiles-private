@@ -441,9 +441,8 @@ assert_file_contains "$RUN_STDOUT" 'verification log' \
 # ---------------------------------------------------------------------------
 actual_verifier_home="$TEST_ROOT/actual-verifier-home"
 actual_verifier_dotfiles="$TEST_ROOT/actual-verifier-dotfiles"
-mkdir -p "$actual_verifier_dotfiles/config/node"
+mkdir -p "$actual_verifier_dotfiles"
 cp "$REPO_ROOT/verify_install.sh" "$actual_verifier_dotfiles/verify_install.sh"
-cp "$REPO_ROOT/config/node/version" "$actual_verifier_dotfiles/config/node/version"
 chmod +x "$actual_verifier_dotfiles/verify_install.sh"
 set +e
 env -i HOME="$actual_verifier_home" PATH="/usr/bin:/bin" \

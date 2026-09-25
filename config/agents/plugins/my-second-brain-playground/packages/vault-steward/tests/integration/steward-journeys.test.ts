@@ -1,46 +1,16 @@
 import { afterEach, expect, setDefaultTimeout, test } from "bun:test"
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
-import { cleanupFixtures, type Fixture, fixture, git, lockFiles, write } from "../helpers/harness.ts"
-import { data, must, steward, stewardAsync, stewardEnvironment } from "../helpers/steward.ts"
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
+import { dirname, join } from "node:path"
+import { cleanupFixtures, fixture, git, installRewriteHook, lockFiles, write } from "../helpers/harness.ts"
+import { apply, candidate, data, integrate, must, preview, run, stewardAsync, stewardEnvironment, waitForOwner } from "../helpers/steward.ts"
 
 // The Vault Steward CLI 2.0 journeys through real child processes: preview and apply binding (CONTRACT.md 3.8), the
-// no-changes plan, receipts, two-process safety for apply and recover (one effect, the other refuses), the crash
-// boundary between the fast-forward and the receipt (3.9) resolved by inspect then recover, and the alias sharing
-// one run store with the 2.0 front door.
+// no-changes plan, receipts and diagnostics custody, two-process safety for apply and recover (one effect, the other
+// refuses), the crash boundary between the fast-forward and the receipt (3.9) resolved by inspect then recover, and the
+// negative controls that keep a moved candidate HEAD from counting as completion evidence.
 
 setDefaultTimeout(60_000)
 afterEach(cleanupFixtures)
-
-const run = (f: Fixture, args: string[], extra: Record<string, string> = {}) => steward(f.vault, args, stewardEnvironment(f, extra))
-
-function candidate(f: Fixture, path = "projects/demo/GOAL.md", contents = "# Goal\n\nCompleted.\n"): string {
-	const started = must(run(f, ["begin", "--vault", f.vault, "--path", path]), "SUCCESS_COMPLETED")
-	const worktree = (started.result.data as { candidate: { worktree: string } }).candidate.worktree
-	write(worktree, path, contents)
-	return worktree
-}
-
-function preview(f: Fixture, worktree: string): string {
-	return data(run(f, ["finish", "--preview", "--worktree", worktree, "--message", "docs: change"])).previewId as string
-}
-
-// The filesystem owner record is the inter-process witness. The 10-s bound detects a hung test process; it is not the
-// ordering oracle, which is the holder's fault pause after that record is published.
-async function waitForOwner(path: string, previous?: string): Promise<void> {
-	const deadline = Date.now() + 10_000
-	let observed: string | null = null
-	while (Date.now() < deadline) {
-		try {
-			observed = readFileSync(path, "utf8")
-			if (previous === undefined || observed !== previous) break
-		} catch {
-			observed = null
-		}
-		await Bun.sleep(20)
-	}
-	expect(observed !== null && (previous === undefined || observed !== previous)).toBe(true)
-}
 
 test("preview binds the apply: a stale candidate, a superseded id, and a moved main each refuse before any effect", () => {
 	const f = fixture()
@@ -243,16 +213,6 @@ test("recover never replays: a candidate whose commit is not on main hands off t
 	expect(git(f.vault, "for-each-ref", "refs/vault-note-commits")).toBe("")
 })
 
-test("the alias and the 2.0 front door share one run store: a candidate begun by one finishes through the other", () => {
-	const f = fixture()
-	const worktree = candidate(f)
-	const alias = Bun.spawnSync([process.execPath, join(import.meta.dir, "../../src/legacy/main.ts"), "finish", "--worktree", worktree, "--message", "docs: alias finish", "--json"], { cwd: f.vault, stdout: "pipe", stderr: "pipe", env: { ...process.env, ...stewardEnvironment(f), GIT_TERMINAL_PROMPT: "0" } })
-	const legacy = JSON.parse(new TextDecoder().decode(alias.stdout)) as { code: string; commit: string }
-	expect(legacy.code).toBe("INTEGRATED")
-	const again = must(run(f, ["finish", "--preview", "--worktree", worktree, "--message", "x"]), "SUCCESS_UNCHANGED")
-	expect((again.result.data as { completion: { originalCode: string; commit: string } }).completion).toMatchObject({ originalCode: "INTEGRATED", commit: legacy.commit })
-})
-
 test("the self-test and inspect never take a Git lock: the lock-file set is unchanged around an inspect during a held lock", () => {
 	const f = fixture()
 	const worktree = candidate(f)
@@ -295,6 +255,31 @@ test("a rebased-check refusal restores the pre-rebase commit; once main is fixed
 	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("3")
 })
 
+// A rebased commit whose path set differs from the admitted set (here, a post-rewrite hook amended it) is refused as an
+// invalid candidate with a declared station, the pre-rebase commit is restored (A8), and main is untouched.
+test("a rebased commit with an unadmitted path is refused DOMAIN_CANDIDATE_INVALID, restored, and re-previewable", () => {
+	const f = fixture()
+	const worktree = candidate(f)
+	write(f.vault, "README.md", "# Fixture vault\n\nMoved.\n")
+	git(f.vault, "add", "--", "README.md")
+	git(f.vault, "commit", "-m", "docs: main moves")
+	const id = preview(f, worktree)
+	const committed = git(worktree, "rev-parse", "HEAD")
+	installRewriteHook(f.vault)
+	const refused = run(f, ["finish", "--apply", "--preview-id", id, "--worktree", worktree])
+	expect(refused.exitCode).toBe(3)
+	expect(refused.stderr).toBe("")
+	expect(refused.envelope?.result).toMatchObject({ commandIdentity: "vault-steward.finish-apply", outcome: "refused", causeCode: "DOMAIN_CANDIDATE_INVALID", transactionState: "unchanged", effects: { completed: [], remaining: ["completion.receipt", "completion.ref", "main.fast-forward"], uncertain: [], inventoryComplete: true }, handoff: { owner: "operator", resource: { kind: "candidate-worktree", id: worktree } } })
+	expect(refused.envelope?.message).toMatch(/rebased commit [a-f0-9]{40} changes projects\/demo\/GOAL\.md, unexpected\.md/)
+	expect(git(worktree, "rev-parse", "HEAD")).toBe(committed)
+	expect(git(worktree, "status", "--porcelain")).toBe("")
+	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("1")
+	expect((data(run(f, ["inspect", "--worktree", worktree])).recovery as { state: string }).state).toBe("not-started")
+	Bun.spawnSync(["rm", join(f.vault, ".git/hooks/post-rewrite")])
+	must(run(f, ["finish", "--apply", "--preview-id", preview(f, worktree), "--worktree", worktree]), "SUCCESS_COMPLETED")
+	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("2")
+})
+
 test("inspect reports a moved main as a stale preview and names the real preview id when it is current", () => {
 	const f = fixture()
 	const worktree = candidate(f)
@@ -334,10 +319,110 @@ test("the shipped bundle ignores VAULT_STEWARD_FAULT", () => {
 	expect(result.exitCode).toBe(0)
 })
 
-test("the shipped alias bundle ignores VAULT_STEWARD_FAULT", () => {
+test("a failing checker preserves the candidate and writes a private diagnostics file; whitespace findings name file and line", () => {
 	const f = fixture()
-	const shim = join(import.meta.dir, "../../../../runtime/vault-note-commits.js")
-	const result = Bun.spawnSync([process.execPath, shim, "begin", "--vault", f.vault, "--path", "projects/demo/GOAL.md", "--json"], { cwd: f.vault, stdout: "pipe", stderr: "pipe", env: { ...process.env, XDG_STATE_HOME: f.state, VAULT_STEWARD_FAULT: "git-failure=rev-parse", GIT_TERMINAL_PROMPT: "0" } })
-	expect(result.exitCode).toBe(0)
-	expect(JSON.parse(new TextDecoder().decode(result.stdout))).toMatchObject({ ok: true, code: "CANDIDATE_READY" })
+	const broken = candidate(f, "BROKEN", "fail\n")
+	const failed = run(f, ["finish", "--preview", "--worktree", broken, "--message", "docs: broken"])
+	expect(failed.exitCode).toBe(3)
+	expect(failed.envelope?.result.causeCode).toBe("DOMAIN_CHECK_FAILED")
+	const diagnostics = /checker diagnostics at (\S+)/.exec(failed.envelope?.message ?? "")?.[1]
+	if (diagnostics === undefined) throw new Error(`no diagnostics path in ${failed.stdout}`)
+	expect(statSync(diagnostics).mode & 0o777).toBe(0o600)
+	expect(JSON.parse(readFileSync(diagnostics, "utf8"))).toMatchObject({ exitCode: 1 })
+	expect(readFileSync(diagnostics, "utf8")).toContain("broken fixture")
+	expect(readFileSync(join(broken, "BROKEN"), "utf8")).toBe("fail\n")
+	expect(git(f.vault, "rev-parse", "HEAD")).toBe(f.initialHead)
+	const lamp = candidate(f, "products/lamp.md", "# Lamp\n\n\n")
+	const format = run(f, ["finish", "--preview", "--worktree", lamp, "--message", "docs: lamp"])
+	expect(format.envelope?.result.causeCode).toBe("DOMAIN_FORMAT_FAILED")
+	expect(format.envelope?.message).toContain("products/lamp.md:2: new blank line at EOF.")
+	expect(git(lamp, "rev-parse", "HEAD")).toBe(f.initialHead)
+	write(lamp, "products/lamp.md", "# Lamp\n")
+	must(integrate(f, lamp, "docs: lamp"), "SUCCESS_COMPLETED")
+})
+
+test("a dirty canonical checkout refuses the apply; the same preview id applies once it is clean, and the receipt is private", () => {
+	const f = fixture()
+	const worktree = candidate(f)
+	const id = preview(f, worktree)
+	const committed = git(worktree, "rev-parse", "HEAD")
+	write(f.vault, "README.md", "# Nathan's staged draft\n")
+	git(f.vault, "add", "--", "README.md")
+	write(f.vault, "personal-draft.md", "Nathan's work\n")
+	const originalStatus = git(f.vault, "status", "--short")
+	const blocked = apply(f, worktree, id)
+	expect(blocked.exitCode).toBe(3)
+	expect(blocked.envelope?.result).toMatchObject({ causeCode: "DOMAIN_CANONICAL_NOT_READY", nextAction: "vault-steward.finish-apply", effects: { completed: [] } })
+	expect(git(f.vault, "rev-parse", "HEAD")).toBe(f.initialHead)
+	expect(git(f.vault, "status", "--short")).toBe(originalStatus)
+	expect(readFileSync(join(f.vault, "personal-draft.md"), "utf8")).toBe("Nathan's work\n")
+	git(f.vault, "restore", "--staged", "README.md")
+	write(f.vault, "README.md", "# Fixture vault\n")
+	rmSync(join(f.vault, "personal-draft.md"))
+	const applied = data(must(apply(f, worktree, id), "SUCCESS_COMPLETED"))
+	expect((applied.integration as { commit: string }).commit).toBe(committed)
+	const receipt = (applied.completion as { receipt: string }).receipt
+	expect(statSync(receipt).mode & 0o777).toBe(0o600)
+	expect(statSync(dirname(receipt)).mode & 0o777).toBe(0o700)
+	expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({ code: "INTEGRATED", commit: committed })
+	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("1")
+})
+
+test("no changes means no authored changes even when canonical main moved the admitted path", () => {
+	const f = fixture()
+	const worktree = candidate(f, "projects/demo/GOAL.md", null)
+	write(f.vault, "projects/demo/GOAL.md", "# Goal\n\nChanged concurrently.\n")
+	git(f.vault, "add", "--", "projects/demo/GOAL.md")
+	git(f.vault, "commit", "-m", "docs: concurrent goal")
+	const head = git(f.vault, "rev-parse", "HEAD")
+	const previewed = data(must(run(f, ["finish", "--preview", "--worktree", worktree, "--message", "docs: nothing"]), "SUCCESS_COMPLETED"))
+	expect(previewed.plan).toMatchObject({ kind: "no-changes", rebase: false })
+	const applied = data(must(apply(f, worktree, previewed.previewId as string), "SUCCESS_COMPLETED"))
+	expect(applied.integration).toMatchObject({ kind: "no-changes", commit: null })
+	expect(git(f.vault, "rev-parse", "HEAD")).toBe(head)
+})
+
+test("a crash after a rebased fast-forward is recoverable: recover records the rebased commit without replaying", () => {
+	const f = fixture()
+	const worktree = candidate(f)
+	write(f.vault, "README.md", "# Fixture vault\n\nMoved.\n")
+	git(f.vault, "add", "--", "README.md")
+	git(f.vault, "commit", "-m", "docs: main moves first")
+	const movedMain = git(f.vault, "rev-parse", "HEAD")
+	const id = preview(f, worktree)
+	const crashed = run(f, ["finish", "--apply", "--preview-id", id, "--worktree", worktree], { VAULT_STEWARD_FAULT: "halt=after-ff-merge" })
+	expect(crashed.signal).toBe("SIGKILL")
+	const rebased = git(f.vault, "rev-parse", "main")
+	expect(git(f.vault, "rev-parse", `${rebased}^`)).toBe(movedMain)
+	expect((data(must(run(f, ["inspect", "--worktree", worktree]), "SUCCESS_UNCHANGED")).recovery as { state: string }).state).toBe("recoverable")
+	const recovered = data(must(run(f, ["recover", "--worktree", worktree]), "SUCCESS_COMPLETED"))
+	expect((recovered.completion as { commit: string }).commit).toBe(rebased)
+	expect(git(f.vault, "rev-parse", "main")).toBe(rebased)
+	expect(git(f.vault, "rev-parse", `refs/vault-note-commits/${(recovered.candidate as { runId: string }).runId}`)).toBe(rebased)
+	expect(git(f.vault, "rev-list", "--count", `${f.initialHead}..main`)).toBe("2")
+})
+
+// Review finding 1 negative controls: a candidate HEAD merely moved onto main's tip is never completion evidence, even
+// though main contains that commit with exactly the admitted paths. recover hands off and the preview refuses.
+test.each([
+	["a dirty candidate moved onto main's tip", (b: string) => { git(b, "checkout", "--detach", "main"); write(b, "projects/demo/GOAL.md", "# Goal\n\nB wrote.\n") }, "DOMAIN_CANDIDATE_INVALID"],
+	["a clean candidate moved onto main's tip", (b: string) => { git(b, "checkout", "--detach", "main") }, "DOMAIN_SEMANTIC_OVERLAP"],
+	["a commit made in the candidate on top of a moved HEAD", (b: string) => { git(b, "checkout", "--detach", "main"); write(b, "projects/demo/GOAL.md", "# Goal\n\nB wrote.\n"); git(b, "add", "--", "projects/demo/GOAL.md"); git(b, "commit", "-m", "docs: B outside the CLI") }, "DOMAIN_CANDIDATE_INVALID"],
+	["a clean candidate fast-forwarded by a no-op git rebase main", (b: string) => { git(b, "rebase", "main") }, "DOMAIN_SEMANTIC_OVERLAP"],
+] as const)("%s is not recovery evidence and its preview refuses", (_name, mutate, previewCause) => {
+	const f = fixture()
+	const a = candidate(f, "projects/demo/GOAL.md", "# Goal\n\nA wrote.\n")
+	const b = candidate(f, "projects/demo/GOAL.md", null)
+	must(integrate(f, a, "docs: A change"), "SUCCESS_COMPLETED")
+	const x = git(f.vault, "rev-parse", "main")
+	mutate(b)
+	const refused = run(f, ["recover", "--worktree", b])
+	expect(refused.exitCode).toBe(3)
+	expect(refused.envelope?.result).toMatchObject({ causeCode: "DOMAIN_RECOVERY_UNPROVABLE", handoff: { owner: "human" } })
+	const previewed = run(f, ["finish", "--preview", "--worktree", b, "--message", "docs: B change"])
+	expect(previewed.exitCode).toBe(3)
+	expect(previewed.envelope?.result.causeCode).toBe(previewCause)
+	expect(git(f.vault, "rev-parse", "main")).toBe(x)
+	expect(git(f.vault, "for-each-ref", "--format=%(refname)", "refs/vault-note-commits").split("\n")).toHaveLength(1)
+	expect(existsSync(b)).toBe(true)
 })

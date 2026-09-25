@@ -611,12 +611,10 @@ pass 'a lane refused for ordering leaves no receipt'
 #
 # `--zdotdir` must be a measurement, not a label. These rows run the generator
 # with a real ZDOTDIR in the environment and vary whether it agrees with the
-# claim, so a generator that merely echoed the flag fails them.
-run_generator_with_zdotdir "$REPO_ROOT" --lane test-bind-match \
-  --snapshot "$safe_snapshot" --product-version 'test 1.0' --zdotdir "$REPO_ROOT"
-assert_equals "$gen_status" '0' 'binding: a claim matching the real ZDOTDIR is accepted'
-assert_equals "$(grep '^profile_binding=' <<<"$gen_out" | sed 's/^profile_binding=//')" \
-  'worktree' 'binding: a matching claim reports a worktree binding'
+# claim, so a generator that merely echoed the flag fails them. The matching
+# case itself is already proved above ("bound lane: receipt reports a worktree
+# profile binding"), so only the mismatch and absent cases need their own rows
+# here.
 
 # The claim names the repository; the process actually ran somewhere else.
 # A label-only implementation reports `worktree` here and is wrong.
@@ -672,7 +670,7 @@ assert_equals "$gen_status" '0' 'binding: a trailing slash is not a mismatch'
 # --- Containment: a bound run deposits nothing in the repository ------------
 #
 # Closes a leak found during implementation. The probe child was given the
-# ZDOTDIR as its HOME, so fnm and atuin initialised under it and wrote
+# ZDOTDIR as its HOME, so the runtime manager and atuin initialised under it and wrote
 # `.config/` and `.local/` straight into the worktree. The binding must decide
 # which startup files are READ without deciding where tool state is WRITTEN.
 #
@@ -696,9 +694,22 @@ fi
 # receipt must name the sibling harness it delegated to and carry that harness's
 # own plan and skip counts, so a supervisor can tell a delegated verdict from a
 # reimplemented one.
-run_generator --lane test-delegate --snapshot "$safe_snapshot" \
-  --product-version 'test 1.0' --replay-contract
-if [[ "$gen_status" -eq 0 ]]; then
+#
+# The sibling harness ships in this repository, so a non-zero exit here is a
+# delegation or contract failure, never an unavailable environment. A nested
+# hostile-regression run drives a perturbed copy from outside the repository,
+# and the generator finds the sibling from its own path, so delegation cannot
+# run there; the top-level run owns these rows.
+if [[ -n "${AGENT_LANE_RECEIPT_UNDER_TEST:-}" ]]; then
+  skip 'delegated shell contract (nested run)'
+  skip 'delegated contract assertion count (nested run)'
+  skip 'delegated contract verdict (nested run)'
+  skip 'delegated run disclosure (nested run)'
+else
+  run_generator --lane test-delegate --snapshot "$safe_snapshot" \
+    --product-version 'test 1.0' --replay-contract
+  [[ "$gen_status" -eq 0 ]] ||
+    fail "delegated run: generator exited $gen_status; the delegated shell contract failed or could not run"
   assert_contains "$gen_out" 'contract=bin/test/zsh-effective-behavior-test.sh' \
     'delegated run names the reused shell contract'
   contract_plan="$(grep '^contract_assertions=' <<<"$gen_out" | sed 's/^contract_assertions=//')"
@@ -709,11 +720,6 @@ if [[ "$gen_status" -eq 0 ]]; then
     'PASS' 'delegated run carries the contract verdict'
   stream_is_clean "$gen_out" || fail 'delegated run: stdout disclosed a protected value'
   pass 'delegated run: stdout discloses no protected value'
-else
-  skip 'delegated shell contract (sibling harness unavailable in this environment)'
-  skip 'delegated contract assertion count'
-  skip 'delegated contract verdict'
-  skip 'delegated run disclosure'
 fi
 
 # --- Hostile regressions: the rows above must be sensitive ------------------

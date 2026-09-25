@@ -5,16 +5,8 @@
   },
   "plugins": [
     {
-      "name": "browser-lanes",
-      "version": "0.5.16-dev",
-      "source": {
-        "source": "local",
-        "path": "./browser-lanes"
-      }
-    },
-    {
       "name": "my-second-brain-playground",
-      "version": "0.14.2",
+      "version": "0.16.3",
       "source": {
         "source": "local",
         "path": "./my-second-brain-playground"
@@ -29,21 +21,8 @@
       }
     },
     {
-      "name": "browser-use",
-      "version": "0.1.0",
-      "source": {
-        "source": "local",
-        "path": "./browser-use"
-      },
-      "policy": {
-        "installation": "AVAILABLE",
-        "authentication": "ON_INSTALL"
-      },
-      "category": "Productivity"
-    },
-    {
       "name": "personal",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "source": {
         "source": "local",
         "path": "./personal"

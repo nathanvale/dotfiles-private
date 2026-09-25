@@ -1,15 +1,15 @@
 {
   "name": "my-second-brain-playground-plugin",
-  "version": "0.14.2",
+  "version": "0.16.3",
   "private": true,
   "type": "module",
   "workspaces": [
     "packages/*"
   ],
   "scripts": {
-    "build": "bun build packages/vault-steward/src/main.ts --target=bun --outfile=runtime/vault-steward.js && bun build packages/vault-steward/src/legacy/main.ts --target=bun --outfile=runtime/vault-note-commits.js && bun build packages/vault-steward/src/startup-audit.ts --target=bun --outfile=runtime/vault-guard-startup.js && bun build packages/recovery-observability/src/trace-command.ts --target=bun --outfile=runtime/recovery-traces.js && bun build packages/recovery-observability/src/recovery-observer.ts --target=bun --outfile=runtime/recovery-observer.js && bun build packages/cli-design-check/src/successor/main.ts --target=bun --outfile=runtime/cli-design-check.js && bun build packages/cli-design-compose/src/main.ts --target=bun --outfile=runtime/cli-design.js && bun build packages/workflow-cli/src/cli.ts --target=bun --outfile=runtime/msb-workflow.js",
+    "build": "bun build packages/vault-steward/src/main.ts --target=bun --outfile=runtime/vault-steward.js && bun build packages/recovery-observability/src/trace-command.ts --target=bun --outfile=runtime/recovery-traces.js && bun build packages/recovery-observability/src/recovery-observer.ts --target=bun --outfile=runtime/recovery-observer.js && bun build packages/cli-design-check/src/successor/main.ts --target=bun --outfile=runtime/cli-design-check.js && bun build packages/cli-design-compose/src/main.ts --target=bun --outfile=runtime/cli-design.js && bun build packages/workflow-cli/src/cli.ts --target=bun --outfile=runtime/msb-workflow.js",
     "cli-design": "bun run packages/cli-design-compose/src/main.ts",
-    "test": "bun test packages/vault-note-commits/src/main.test.ts packages/vault-steward/tests packages/compaction-recovery/src/main.test.ts packages/recovery-observability/src/*.test.ts packages/cli-design-check/src/successor/main.test.ts packages/cli-design-check/src/successor/lifecycle-observation.test.ts packages/cli-design-compose/src/main.test.ts packages/cli-design-exemplar/tests packages/workflow-cli/tests/unit packages/workflow-cli/tests/integration packages/workflow-cli/tests/catalog",
+    "test": "bun test packages/vault-steward/tests packages/compaction-recovery/src/main.test.ts packages/recovery-observability/src/*.test.ts packages/cli-design-check/src/successor/main.test.ts packages/cli-design-check/src/successor/lifecycle-observation.test.ts packages/cli-design-compose/src/main.test.ts packages/cli-design-exemplar/tests packages/workflow-cli/tests/unit packages/workflow-cli/tests/integration packages/workflow-cli/tests/catalog",
     "test:recovery-observability": "bun test packages/recovery-observability/src/*.test.ts",
     "test:workflow-cli": "bun test packages/workflow-cli/tests/unit packages/workflow-cli/tests/integration packages/workflow-cli/tests/catalog",
     "typecheck": "tsc --noEmit -p tsconfig.json"

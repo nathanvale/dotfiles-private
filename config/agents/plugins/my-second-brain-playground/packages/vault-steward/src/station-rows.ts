@@ -103,6 +103,7 @@ const ROWS = [
 	["vault-steward.finish-apply", "refused", "DOMAIN_PREVIEW_STALE", RL, "unchanged", ...N3, [PREVIEW], "required", null],
 	["vault-steward.finish-apply", "refused", "DOMAIN_GUARD_INCOMPATIBLE", RL, "unchanged", ...N3, [INSPECT], "required", null],
 	["vault-steward.finish-apply", "refused", "DOMAIN_CANONICAL_NOT_READY", RL, "unchanged", ...N3, [APPLY], "required", null],
+	["vault-steward.finish-apply", "refused", "DOMAIN_CANDIDATE_INVALID", RL, "unchanged", ...H3, HANDOFF, "required", null],
 	["vault-steward.finish-apply", "failed", "DOMAIN_REBASED_CHECK_FAILED", RL, "unchanged", ...N3, [PREVIEW], "required", null],
 	["vault-steward.finish-apply", "failed", "DOMAIN_REBASE_CONFLICT", RL, "unchanged", ...H3, HANDOFF, "required", null],
 	["vault-steward.finish-apply", "refused", "TRANSIENT_INTEGRATION_BUSY", RL, "unchanged", ...T75, [APPLY], "required", null],

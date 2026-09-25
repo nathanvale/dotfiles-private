@@ -10,11 +10,14 @@ owns its contract and the source-only boundary, and
 [beads-workflow](../../beads-workflow/SKILL.md) owns the LKR Beads route.
 
 The sections below describe the legacy schema-v2 route, provenance under Spec
-#57 and not a rollback route: `hooks/recovery-checkpoint` and
-`hooks/recover-context` are kept byte-identical and registered by no manifest,
-so their checkpoints are written and read manually and no registered hook
-delivers them. Note work without a Bead therefore has no automatic
-hook-delivered refresh on this candidate. Inspect the legacy contract with
+#57 and not a rollback route: `hooks/recovery-checkpoint` is kept
+byte-identical and registered by no manifest, so its checkpoints are written
+and read manually and no registered hook delivers them.
+[Spec #120](https://github.com/nathanvale/dotfiles-private/issues/120) retired
+the unregistered `hooks/recover-context` launcher and the Python hook mode, so
+the launcher's `recover` command is the only reader of a legacy checkpoint.
+Note work without a Bead therefore has no automatic hook-delivered refresh on
+this candidate. Inspect the legacy contract with
 `${PLUGIN_ROOT}/hooks/recovery-checkpoint schema`; keep field names, size
 limits, and validation with that executable owner. If the installed command is
 unavailable, report the delivery gap before claiming checkpoint proof.
@@ -57,8 +60,8 @@ Bind the checkpoint to:
 - the narrow pending scope, outstanding criterion, and next safe action;
 - any uncertain operation whose actual outcome needs inspection before retry.
 
-Keep validated owner pointers and concise observations. The hook derives the
-control-panel commands from these fields; adding a command does not add
+Keep validated owner pointers and concise observations. The launcher derives
+the control-panel commands from these fields; adding a command does not add
 checkpoint fields unless it needs a new authority owner. Never use raw
 transcripts as recovery context. Preserve raw receipts under their private
 evidence owner. If a Task has not been adopted, name the declared fallback and
@@ -83,19 +86,19 @@ and inspect the affected artifact after an uncertain operation. Treat stale,
 mismatched, missing, or unavailable context as a recovery gap; continue bounded
 read-only discovery until the next write's authority is established.
 
-Read only the checkpoint whose session identity matches the compact event. A
-missing session checkpoint is a recovery gap. Never fall back to `current.json`
+Read only the checkpoint whose session identity matches the supplied session
+identity. A missing session checkpoint is a recovery gap. Never fall back to `current.json`
 or another session's checkpoint.
 
 Preserve Task identity across continuation. Keep the README a stable map and
 changing task state with its adopted owner. A checkpoint supplies commands and
-hints, not authorization or a second tracker. The hook renders commands but
-never executes them.
+hints, not authorization or a second tracker. The launcher renders commands
+but never executes them.
 
 ## Inspect recovery traces
 
 Use the installed plugin command for bounded operational evidence about
-legacy-launcher bind, recover, and hook invocations; `msb-workflow` keeps its
+legacy-launcher bind, recover, write, and schema invocations; `msb-workflow` keeps its
 own diagnostics at the address its README names and writes no trace here:
 
 ```sh

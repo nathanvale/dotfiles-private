@@ -522,20 +522,34 @@ done
 printf 'export CONTRACT_PLAIN_SENTINEL=plain-fixture-value\n' \
   >"$secret_home/.config/lll-account-switch/secrets.env"
 
-secret_probe="$(
-  env -i HOME="$secret_home" ZDOTDIR="$secret_home" PATH=/usr/bin:/bin TERM=dumb \
-    /bin/zsh -i -l -c '
-      print -r -- "plain=${CONTRACT_PLAIN_SENTINEL:-none}"
-    ' 2>/dev/null
-)"
-assert_equals "$(grep '^plain=' <<<"$secret_probe")" 'plain=none' \
-  'startup does not source a plain secret file into the shell'
+for startup_flags in -il -i; do
+  secret_probe="$(
+    env -i HOME="$secret_home" ZDOTDIR="$secret_home" PATH=/usr/bin:/bin TERM=dumb \
+      /bin/zsh "$startup_flags" -c '
+        print -r -- "plain=${CONTRACT_PLAIN_SENTINEL:-none}"
+      ' 2>/dev/null
+  )"
+  assert_equals "$(grep '^plain=' <<<"$secret_probe")" 'plain=none' \
+    "zsh $startup_flags startup does not source a plain secret file into the shell"
+done
 
 # The same file in `op://` shape must not be evaluated either. The reference is
-# not a real vault path and carries no credential; `op` is absent from the child
-# in any case. The sentinel would appear only if the file were evaluated.
+# not a real vault path and carries no credential. The retired lane ran only when
+# `op` resolved, so without an `op` this row passes with the lane restored. The
+# child gets a stand-in function, appended to the fixture's .zshenv copy so it
+# exists before .zshrc runs and outranks any real `op` on PATH: `op inject -i
+# FILE` echoes FILE unresolved, which is enough for an `eval` to export the
+# sentinel. A PATH stand-in cannot work here: .zshrc drops temporary entries.
+printf '%s\n' 'op() { [[ "$1" == inject && "$2" == -i ]] && cat -- "$3"; }' \
+  >>"$secret_home/.zshenv"
 printf 'CONTRACT_REF_SENTINEL=op://contract-not-a-real-vault/item/field\nexport CONTRACT_EVAL_SENTINEL=eval-fixture-value\n' \
   >"$secret_home/.config/lll-account-switch/secrets.env"
+op_kind="$(
+  env -i HOME="$secret_home" ZDOTDIR="$secret_home" PATH=/usr/bin:/bin TERM=dumb \
+    /bin/zsh -i -l -c 'whence -w op' 2>/dev/null
+)" || true
+[[ "$op_kind" == 'op: function' ]] ||
+  fail "reference-bearing secret row: startup child lost the stand-in op (got [$op_kind])"
 ref_probe="$(
   env -i HOME="$secret_home" ZDOTDIR="$secret_home" PATH=/usr/bin:/bin TERM=dumb \
     /bin/zsh -i -l -c '

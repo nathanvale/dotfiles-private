@@ -425,7 +425,7 @@ describe("public trace command and scoped cleanup", () => {
 			schema_version: 1,
 			command: "identity",
 			ok: true,
-			plugin_version: "0.14.2",
+			plugin_version: "0.16.3",
 			recovery_source_sha256: sha256(join(pluginRoot, "packages/compaction-recovery/src/recovery.py")),
 			observer_source_sha256: sha256(join(pluginRoot, "packages/recovery-observability/src/recovery-observer.ts")),
 			runtime_sha256: sha256(join(pluginRoot, "runtime/recovery-observer.js")),
