@@ -11,15 +11,15 @@ Vercel's headless browser automation CLI designed for AI agents. Uses ref-based 
 
 ```bash
 # Check installation
-command -v agent-browser >/dev/null 2>&1 && echo "Installed" || echo "NOT INSTALLED - run: npm install -g agent-browser && agent-browser install"
+command -v agent-browser >/dev/null 2>&1 && echo "Installed" || echo "NOT INSTALLED"
 ```
 
-### Install if needed
+### If not installed
 
-```bash
-npm install -g agent-browser
-agent-browser install  # Downloads Chromium
-```
+Stop and tell Nathan: `agent-browser` was retired from active use (Decision,
+2026-09-25). It is reachable only at
+`~/.local/share/fnm/aliases/default/bin/agent-browser` as a Recovery Copy. Do
+not install it.
 
 ## Core Workflow
 
