@@ -233,7 +233,11 @@ async function main(argv: string[]): Promise<number> {
 	const separator = argv.indexOf("--")
 	const json = (separator === -1 ? argv : argv.slice(0, separator)).includes("--json")
 	const args = argv.filter((value) => value !== "--json")
-	process.stdout.on("error", () => transportFailure(json))
+	// A pipe error can arrive after main() returned and the exit status was assigned; it must still fail the run.
+	process.stdout.on("error", () => {
+		transportFailure(json)
+		if (process.exitCode === undefined || process.exitCode === 0) process.exitCode = 1
+	})
 	let parsed: Parsed | null = null
 	let output: Output
 	try {

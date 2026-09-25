@@ -1164,7 +1164,11 @@ async function main(argv) {
   const separator = argv.indexOf("--");
   const json = (separator === -1 ? argv : argv.slice(0, separator)).includes("--json");
   const args = argv.filter((value) => value !== "--json");
-  process.stdout.on("error", () => transportFailure(json));
+  process.stdout.on("error", () => {
+    transportFailure(json);
+    if (process.exitCode === undefined || process.exitCode === 0)
+      process.exitCode = 1;
+  });
   let parsed = null;
   let output;
   try {

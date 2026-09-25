@@ -61,6 +61,15 @@ const STDOUT_THROWS = `process.stdout.write = () => {
 }
 `
 
+// The write returns normally and the pipe error arrives about 10 ms later, after main() has returned.
+const STDOUT_FAILS_LATER = `const write = process.stdout.write.bind(process.stdout)
+process.stdout.write = (chunk, ...rest) => {
+	const result = write(chunk, ...rest)
+	setTimeout(() => process.stdout.emit("error", Object.assign(new Error("fixture delayed EPIPE"), { code: "EPIPE" })), 10)
+	return result
+}
+`
+
 describe("help and discovery", () => {
 	test("human help names both commands and the dry-run requirement", () => {
 		const result = invoke(fixture, ["--help"])
@@ -159,6 +168,19 @@ describe("validated output and transport failure", () => {
 	test("machine mode: a failed stdout write leaves stderr empty and emits no replacement envelope", async () => {
 		const result = invoke(fixture, ["routes", "--json"], await preload("stdout", STDOUT_THROWS))
 		expect(result).toEqual({ exitCode: 1, stdout: "", stderr: "" })
+	})
+
+	test("machine mode: a pipe error delivered after the write returned still exits 1 with empty stderr", async () => {
+		const result = invoke(fixture, ["--help", "--json"], await preload("late", STDOUT_FAILS_LATER))
+		expect(result.exitCode).toBe(1)
+		expect(result.stderr).toBe("")
+	})
+
+	test("human mode: a pipe error delivered after the write returned exits 1 with one repair line", async () => {
+		const result = invoke(fixture, ["--help"], await preload("late", STDOUT_FAILS_LATER))
+		expect(result.exitCode).toBe(1)
+		expect(result.stderr).toStartWith("stdout cannot be written.")
+		expect(result.stderr.trim().split("\n")).toHaveLength(1)
 	})
 
 	test("human mode: a failed stdout write prints one repair line on stderr", async () => {
