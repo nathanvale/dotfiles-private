@@ -1,5 +1,5 @@
 ---
-status: proposed
+status: accepted
 ---
 
 # Retire fnm; Mise is the only configured Node owner
