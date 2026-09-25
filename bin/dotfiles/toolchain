@@ -1418,18 +1418,9 @@ apply_revision() {
 		remove_owned_tree "$STAGING" "$REVISIONS" '.staging-' || emit_error 'staging_cleanup_failed' 'inspect_toolchain_state_before_retrying' false 'verified staging could not be cleaned before reuse' 73 'error'
 	else
 		chmod 0444 "$STAGING/config.toml" "$STAGING/manifest.tsv" "$STAGING/contract.txt" "$STAGING/mise.lock" "$STAGING/receipt.json" || emit_error 'revision_publish_failed' 'repair_toolchain_state_permissions' false 'revision artifacts could not be made read-only' 73 'error'
-		verify_revision_with_retry "$STAGING" staging || emit_error 'revision_publish_failed' 'inspect_the_staged_revision_and_retry' false "$(verification_message 'read-only revision artifacts did not verify before publication')" 73 'error'
-		# Publish while the directory is still owner-writable, then seal it.
-		# XNU authorizes a directory rename with KAUTH_VNODE_ADD_SUBDIRECTORY
-		# on the directory itself (vn_authorize_renamex_with_paths), and
-		# macOS 15 enforces that even within one parent, so a 0555 staging
-		# directory cannot be renamed there. macOS 26 permits the same-parent
-		# case, which is why the old order only failed on the macOS 15 runner.
+		chmod 0555 "$STAGING" || emit_error 'revision_publish_failed' 'repair_toolchain_state_permissions' false 'revision directory could not be made read-only' 73 'error'
+		verify_revision_with_retry "$STAGING" || emit_error 'revision_publish_failed' 'inspect_the_staged_revision_and_retry' false "$(verification_message 'read-only revision did not verify before publication')" 73 'error'
 		mv "$STAGING" "$destination" || emit_error 'revision_publish_failed' 'inspect_the_revision_store_and_retry' false 'verified revision could not be published' 73 'error'
-		STAGING_OWNED=false
-		STAGING=''
-		chmod 0555 "$destination" || emit_error 'revision_seal_failed' 'repair_toolchain_state_permissions' false 'published revision directory could not be made read-only; it was not selected' 73 'error'
-		verify_revision_with_retry "$destination" || emit_error 'revision_seal_failed' 'inspect_the_revision_store_and_retry' false "$(verification_message 'sealed revision did not verify after publication; it was not selected')" 73 'error'
 	fi
 	atomic_select
 	STAGING_OWNED=false
