@@ -15,7 +15,7 @@
 // live Provider.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { compileFrontDoor } from "../../../tests/compile-front-door.ts";
@@ -206,7 +206,7 @@ describe("refusals before any dependency, credential, or Provider", () => {
 	// The copy compiled with the shipped digests and the fake Keychain reader:
 	// the same rejection as the shipped binary, and a reader that records every
 	// read, so an empty read log is an ordering oracle here.
-	test("the shipped digests reject the fake uv before any Keychain read", async () => {
+	test("the shipped digests reject the fake uv before any Keychain read, and the custody role rejects the fake op at its official name", async () => {
 		fresh({ seed: false, manifest: "shipped" });
 		for (const argv of [["run", "atlassian", ...TENANT, "issue.get", "--input", '{"issueKey":"EX-1"}'], ["auth", "check", "atlassian", ...TENANT]]) {
 			const result = await fixture.frontDoor(argv);
@@ -214,9 +214,16 @@ describe("refusals before any dependency, credential, or Provider", () => {
 			const envelope = parse(result.stdout).result;
 			expect([argv[0], envelope.causeCode, envelope.repairAction, envelope.data]).toEqual([argv[0], "DOMAIN_ADAPTER_REFUSED", UV_SETUP_REPAIR, { connector: "atlassian", connectorCause: "refused-precondition" }]);
 		}
+		// uv is checked first, so the op half is reached only through the custody
+		// role, the only op caller. The fake op sits at the shipped revision name
+		// with a matching record and mode, so only its digest can refuse it.
+		expect(readFileSync(path.join(fixture.opDirectory, "op-selected"), "utf8")).toBe("op-2.39.0-7e17cbf4052393d2c55a59a7c3d05f0bbcdcb079d57785cff682f3bc994ba8ce");
+		const child = await fixture.frontDoor(["__internal", "atlassian", "custody-child"], { extra: { CONNECTORS_INTERNAL_INVOCATION_CONTEXT: `{"tenant":"example","product":"jira","item":"${JIRA_ITEM}"}` } });
+		// The role's closed stderr code, not an envelope.
+		expect([child.code, child.stdout, child.stderr]).toEqual([3, "", "atlassian-credential-binding:error:op-unavailable\n"]);
 		expect([fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl")]).toEqual([[], [], []]);
 		expectNoHostile(fixture);
-	});
+	}, 90_000);
 
 	// The shipped binary carries the real reader, which records nothing, so
 	// this row proves only its cause.
@@ -326,6 +333,66 @@ describe("custody check and credential handoffs", () => {
 		expect(existsSync(path.join(fixture.state, "connectors", "mcporter"))).toBe(false);
 		expectNoHostile(fixture);
 	});
+
+	// Streams and the fixture sweep hold neither token nor the row's sentinels.
+	// These rows start no fake, so the sweep's guard is the seeded registration.
+	const expectNoTokenOutput = (streams: string[], sentinels: string[] = []) => {
+		const sweep = fixture.sweepText();
+		expect(sweep).toContain(registrationLiteral("example", JIRA_ITEM_ID, CONFLUENCE_ITEM_ID));
+		for (const surface of [...streams, sweep]) for (const secret of [SERVICE_TOKEN, PROVIDER_TOKEN, ...sentinels]) expect(surface).not.toContain(secret);
+	};
+
+	test("a malformed Keychain value refuses run and auth check, is never handed to op, and is never echoed", async () => {
+		fresh({ seed: false });
+		const malformed = "not-a-service-account-token-sentinel";
+		fixture.installKeychainToken(malformed);
+		for (const argv of [["run", "atlassian", ...TENANT, "issue.get", "--input", '{"issueKey":"EX-1"}'], ["auth", "check", "atlassian", ...TENANT]]) {
+			const result = await fixture.frontDoor(argv);
+			expect([argv[0], result.code, result.stderr]).toEqual([argv[0], 3, ""]);
+			const envelope = parse(result.stdout).result;
+			expect([argv[0], envelope.causeCode, envelope.repairAction, envelope.data]).toEqual([argv[0], "DOMAIN_ADAPTER_REFUSED", "credential custody could not produce a stable context", { connector: "atlassian", connectorCause: "refused-precondition" }]);
+			expectNoTokenOutput([result.stdout, result.stderr], [malformed]);
+		}
+		// Each command read the Keychain once and stopped there.
+		expect(fixture.lines("keychain-reads.jsonl")).toEqual([keychainRead(fixture), keychainRead(fixture)]);
+		expect([fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl"), existsSync(path.join(fixture.state, "connectors", "mcporter"))]).toEqual([[], [], false]);
+		expectNoHostile(fixture);
+	}, 90_000);
+
+	// Fixture manifest: the fakes' digests are admitted, so each row's damage is
+	// the only reason to refuse. op is checked by the custody role before its
+	// Keychain read; uv is checked before the custody role starts.
+	test("setup-damage: a missing, unselected, or changed op or uv refuses run and auth check with its setup repair before any credential read", async () => {
+		const OP_REPAIR = "the plugin-owned 1Password CLI is not set up; run connectors setup";
+		const opExecutable = (target: CustodyFixture) => path.join(target.opDirectory, readFileSync(path.join(target.opDirectory, "op-selected"), "utf8"));
+		const rows: [string, (target: CustodyFixture) => void, string][] = [
+			["op missing record", (target) => rmSync(path.join(target.opDirectory, "op-selected")), OP_REPAIR],
+			["op wrong record", (target) => writeFileSync(path.join(target.opDirectory, "op-selected"), "op-2.38.0-0000"), OP_REPAIR],
+			["op wrong mode", (target) => chmodSync(opExecutable(target), 0o755), OP_REPAIR],
+			// Name, owner, mode, and record still match, and the changed file
+			// would still run; only its bytes differ.
+			["op changed bytes", (target) => appendFileSync(opExecutable(target), "\n"), OP_REPAIR],
+			["uv missing", (target) => rmSync(target.uvExecutable), UV_SETUP_REPAIR],
+			["uv changed bytes", (target) => appendFileSync(target.uvExecutable, "\n"), UV_SETUP_REPAIR],
+		];
+		expect(rows).toHaveLength(6);
+		for (const [label, damage, repair] of rows) {
+			fresh({ seed: false });
+			damage(fixture);
+			for (const argv of [["run", "atlassian", ...TENANT, "issue.get", "--input", '{"issueKey":"EX-1"}'], ["auth", "check", "atlassian", ...TENANT]]) {
+				const result = await fixture.frontDoor(argv);
+				// One row key, so a failure's diff names its row and command.
+				const row = `${label}: ${argv[0]}`;
+				expect([row, result.code, result.stderr]).toEqual([row, 3, ""]);
+				const envelope = parse(result.stdout).result;
+				expect([row, envelope.causeCode, envelope.transactionState, envelope.repairAction, envelope.data]).toEqual([row, "DOMAIN_ADAPTER_REFUSED", "unchanged", repair, { connector: "atlassian", connectorCause: "refused-precondition" }]);
+				expectNoTokenOutput([result.stdout, result.stderr]);
+			}
+			expect([label, fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl"), existsSync(path.join(fixture.state, "connectors", "mcporter"))]).toEqual([label, [], [], [], false]);
+			expectNoHostile(fixture);
+			fixture.dispose();
+		}
+	}, 90_000);
 });
 
 // T5 U3a (D2a, Q-import): the tenant registration. Independent literals of
