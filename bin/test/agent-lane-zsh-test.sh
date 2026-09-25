@@ -286,10 +286,11 @@ pass 'fail-closed: a binding with no .zshrc is refused'
 # ZDOTDIR entirely ABSENT from the environment, not merely empty.
 #
 # The two cases are distinct and each needs its own row. An empty ZDOTDIR is
-# caught downstream by the missing-.zshrc check, so the rows above pass with or
-# without the emptiness guard. Only a genuinely unset variable reaches the guard
-# first, and under `set -u` an unguarded read would abort with a raw bash error
-# instead of a handled refusal. This row is what holds that guard in place.
+# still refused by the missing-.zshrc check, so the row above holds this guard
+# only through its exact "no ZDOTDIR binding" wording. A genuinely unset
+# variable reaches the guard with no fallback: under `set -u` an unguarded
+# read would abort with a raw bash error instead of a handled refusal. This
+# row holds the handled-refusal shape for that case.
 absent_err="$TEST_ROOT/stderr.absent"
 : >"$absent_err"
 set +e

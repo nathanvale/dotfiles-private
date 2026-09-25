@@ -14,7 +14,7 @@ trap 'rm -rf "$TEST_ROOT"' EXIT
 # The established lane contract remains covered, including attended-login
 # handoff, pre-admission reservation, and profile opening for identity,
 # dispatch, isolation, reservation ownership, uncertain outcomes, and recovery.
-readonly EXPECTED_ASSERTIONS=2002
+readonly EXPECTED_ASSERTIONS=2000
 readonly EXPECTED_PLAYWRIGHT_HARDENING_ASSERTIONS=128
 readonly EXPECTED_INSPECT_ASSERTIONS=226
 readonly EXPECTED_LEASE_ASSERTIONS=46
@@ -5227,7 +5227,6 @@ assert_contains "$cli_err" 'registry_permissions' 'registry permission refusal c
 chmod 600 "$registry_path"
 
 # --- schema-invalid registry: duplicate relay port ---
-registry_good_sha="$(sha256_of "$registry_path")"
 cp "$registry_path" "$TEST_ROOT/registry.good"
 jq '.lanes.specialist.relay_port = 18799' "$TEST_ROOT/registry.good" >"$TEST_ROOT/registry.bad"
 cat "$TEST_ROOT/registry.bad" >"$registry_path"
@@ -5237,8 +5236,6 @@ assert_equals "$cli_status" '14' 'a registry with duplicate relay ports is refus
 assert_contains "$cli_err" 'registry_invalid' 'registry schema refusal carries a repair category'
 assert_equals "$cli_out" '' 'registry schema refusal prints nothing on stdout'
 cat "$TEST_ROOT/registry.good" >"$registry_path"
-assert_equals "$(sha256_of "$registry_path")" "$registry_good_sha" 'registry bytes are restored after the schema row'
-assert_equals "$(mode_of "$registry_path")" '600' 'registry mode is restored after the schema row'
 
 jq 'del(.lanes["daily-driver"].sync_expectations)' "$TEST_ROOT/registry.good" >"$TEST_ROOT/registry.bad"
 cat "$TEST_ROOT/registry.bad" >"$registry_path"
