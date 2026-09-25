@@ -5,8 +5,9 @@
 //   unexpected=<argv fragment>       the first such spawn throws a plain Error (an unclassified exception)
 //   halt=<fault point>               SIGKILL this process at the named engine fault point (no envelope)
 //   pause=<fault point>:<ms>         sleep at the named fault point (two-process tests)
-//   barrier=<fault point>:<path>     wait until the test creates the path at the named fault point
-import { existsSync } from "node:fs"
+//   barrier=<fault point>:<path>     at the named fault point, create <path>.arrived, then wait until the test creates
+//                                    <path>; the arrival file lets a test order another process after this one
+import { existsSync, writeFileSync } from "node:fs"
 import type { Runtime, SpawnOptions, SpawnOutcome } from "./runtime.ts"
 
 export type Fault = { kind: "git-failure" | "unexpected"; occurrence: number; fragment: string } | { kind: "halt"; point: string } | { kind: "pause"; point: string; milliseconds: number } | { kind: "barrier"; point: string; path: string }
@@ -33,6 +34,7 @@ function pause(milliseconds: number): void {
 }
 
 function waitForPath(path: string): void {
+	writeFileSync(`${path}.arrived`, "")
 	while (!existsSync(path)) pause(10)
 }
 

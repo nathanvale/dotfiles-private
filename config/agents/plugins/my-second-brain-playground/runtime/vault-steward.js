@@ -18507,7 +18507,7 @@ function recoverCandidate(rt, manifest) {
 }
 
 // packages/vault-steward/src/faults.ts
-import { existsSync as existsSync2 } from "fs";
+import { existsSync as existsSync2, writeFileSync } from "fs";
 function parseFaults(value) {
   if (value === undefined || value === "")
     return [];
@@ -18534,6 +18534,7 @@ function pause2(milliseconds) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
 }
 function waitForPath(path) {
+  writeFileSync(`${path}.arrived`, "");
   while (!existsSync2(path))
     pause2(10);
 }
@@ -18734,7 +18735,7 @@ import {
   realpathSync,
   renameSync as renameSync3,
   rmSync as rmSync2,
-  writeFileSync
+  writeFileSync as writeFileSync2
 } from "fs";
 import { dirname as dirname2 } from "path";
 function decode3(bytes) {
@@ -18783,7 +18784,7 @@ function createRuntime() {
     readText: (path) => readFileSync(path, "utf8"),
     sha256File: (path) => createHash3("sha256").update(readFileSync(path)).digest("hex"),
     writePrivateText(path, text) {
-      writeFileSync(path, text, { mode: 384 });
+      writeFileSync2(path, text, { mode: 384 });
       chmodSync2(path, 384);
     },
     privateDirectory(path) {
@@ -18797,7 +18798,7 @@ function createRuntime() {
       const temporary = `${path}.${randomUUID2()}.tmp`;
       const descriptor = openSync2(temporary, "wx", 384);
       try {
-        writeFileSync(descriptor, `${JSON.stringify(payload)}
+        writeFileSync2(descriptor, `${JSON.stringify(payload)}
 `);
         fsyncSync(descriptor);
       } finally {
