@@ -46,7 +46,7 @@
     {
       "name": "personal",
       "description": "Nathan's personal workflows for Codex and Claude Code.",
-      "version": "0.2.0",
+      "version": "0.2.1",
       "author": {
         "name": "Nathan Vale"
       },
