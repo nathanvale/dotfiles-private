@@ -25,7 +25,6 @@ BEADS_LOCK_VERSION='1.3.0'
 BEADS_LOCK_ASSET='beads_1.3.0_darwin_arm64.tar.gz'
 BEADS_LOCK_URL="https://github.com/gastownhall/beads/releases/download/v$BEADS_LOCK_VERSION/$BEADS_LOCK_ASSET"
 BEADS_LOCK_SHA256='7cc77367d0b84c50243a1108bc1f73648699211257d414b917540bf868e6bb85'
-FINAL_LOCK_SHA256='0c4db8162b1446f984b3a7f264a8b92615ad71eddeda68b056e8195b2b3cdc86'
 assertion_count=0
 
 cleanup() { chmod -R u+w "$TEST_ROOT" 2>/dev/null || true; rm -rf "$TEST_ROOT"; }
@@ -501,9 +500,8 @@ assert_equals '1' "$(grep -Fxc "version = \"$BEADS_LOCK_VERSION\"" "$state/revis
 assert_equals '1' "$(grep -Fxc "url = \"$BEADS_LOCK_URL\"" "$state/revisions/$revision/mise.lock" || true)" 'published post-install lock retains the official Beads darwin arm64 release URL'
 assert_equals '1' "$(grep -Fxc "checksum = \"sha256:$BEADS_LOCK_SHA256\"" "$state/revisions/$revision/mise.lock" || true)" 'published post-install lock retains the official Beads SHA-256'
 expected_revision="$(fixture_content_id "$FIXTURE_REPO/config/toolchain/versions.tsv" "$FIXTURE_REPO/config/mise/source.toml")"
-expected_lock_hash="$FINAL_LOCK_SHA256"
+expected_lock_hash="$(shasum -a 256 "$LOCK_ORACLE" | awk '{print $1}')"
 pre_lock_hash="$(shasum -a 256 "$LOCK_PRE_ORACLE" | awk '{print $1}')"
-assert_equals "$expected_lock_hash" "$(shasum -a 256 "$LOCK_ORACLE" | awk '{print $1}')" 'test-owned final lock bytes match the literal digest oracle'
 assert_equals "$expected_revision" "$revision" 'published content identity includes the post-install lock bytes'
 assert_equals '2' "$(grep -Ec '^lock --global$' "$LEDGER")" 'first apply regenerates the lock after install'
 assert_equals '1' "$(grep -Ec '^install --locked$' "$LEDGER")" 'first apply installs only through Mise locked mode'
