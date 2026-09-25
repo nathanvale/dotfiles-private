@@ -34,7 +34,6 @@ bin/test/toolchain-bootstrap-test.sh
 bin/test/setup-completion-test.sh
 bin/test/setup-state-recovery-test.sh
 bin/test/profile-link-parity-test.sh
-bin/test/legacy-homebrew-helpers-test.sh
 bin/test/bun-core-install-test.sh
 bin/test/lm-studio-ensure-test.sh
 bin/test/atuin-agent-history-test.sh
@@ -121,10 +120,6 @@ phase collaborators. It covers competing invocation, malformed state,
 interruption and explicit stale recovery. The named phase collaborators are
 fixtures, so this is setup state-boundary proof, not interrupted Homebrew or
 live application recovery qualification.
-
-`legacy-homebrew-helpers-test.sh` runs each retired helper as a public process,
-including a standalone copy. It proves nonzero retirement guidance without
-invoking Homebrew, curl, or a user-state mutation.
 
 `claude-native-install-test.sh` and `codex-managed-install-test.sh` extract
 Phase 2 from `setup.sh` and run it in isolated Bash children. They prove the

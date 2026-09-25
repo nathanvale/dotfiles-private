@@ -99,9 +99,6 @@ class says so, or through the owner that names them.
 
 | Status | File | Intended invocation | Path class | Source owner and covering route |
 | --- | --- | --- | --- | --- |
-| retired | `bin/dev/homebrew/brew_install.sh` | explicit path returns nonzero retirement guidance | `DIRECT` | Source: self. Canonical replacement owner: `setup.sh` and `config/brew/Brewfile`. Covering command: `bin/test/legacy-homebrew-helpers-test.sh`. |
-| retired | `bin/dev/homebrew/brew_remote_bundle.sh` | explicit path returns nonzero retirement guidance | `DIRECT` | Source: self. Canonical replacement owner: `setup.sh` and `config/brew/Brewfile`. Covering command: `bin/test/legacy-homebrew-helpers-test.sh`. |
-| retired | `bin/dev/homebrew/brew_uninstall.sh` | explicit path returns nonzero retirement guidance | `DIRECT` | Source: self. Canonical replacement owner: `setup.sh` and `config/brew/Brewfile`. Covering command: `bin/test/legacy-homebrew-helpers-test.sh`. |
 | public | `bin/dotfiles/symlinks/symlinks_manage.sh` | `bin/dotfiles/symlinks/symlinks_manage.sh --link\|--unlink\|--status [--force]` | `DIRECT` | Source owner and single mapping owner: this script. Routes: `setup.sh:240-247`, `setup.sh:299-302`, `verify_install.sh:475-477`; covering commands: `bin/test/symlinks-manage-test.sh` and `bin/test/symlinks-real-directory-test.sh`. |
 | public | `bin/dotfiles/toolchain` | `bin/dotfiles/toolchain status\|update [--json]` | `DIRECT` | Source owner: this script. Routes: `setup.sh:642`, `verify_install.sh:165`, `config/toolchain/README.md:45`; covering commands: `bin/test/toolchain-status-test.sh`, `bin/test/toolchain-apply-test.sh`, and `bin/test/toolchain-bootstrap-test.sh`. |
 | unqualified | `bin/env/sync-docker-mcp` | `sync-docker-mcp [--dry-run\|--setup\|--filter PATTERN]` | `ENV` | Source: self help. It is available as `HOME/bin/env/sync-docker-mcp` in interactive zsh; current tracked caller and covering test are unverified. |
@@ -165,7 +162,6 @@ invocation map and describes the process and qualification boundaries.
 | test | `bin/test/setup-completion-test.sh` | `setup input and truthful completion` | Test source: this file. Run: `bin/test/setup-completion-test.sh`. |
 | test | `bin/test/setup-state-recovery-test.sh` | `setup locking, state validation and interruption` | Test source: this file. Run: `bin/test/setup-state-recovery-test.sh`. |
 | test | `bin/test/profile-link-parity-test.sh` | `profile prerequisites and exact managed links` | Test source: this file. Run: `bin/test/profile-link-parity-test.sh`. |
-| test | `bin/test/legacy-homebrew-helpers-test.sh` | `retired helper guidance without mutation` | Test source: this file. Run: `bin/test/legacy-homebrew-helpers-test.sh`. |
 | test | `bin/test/symlinks-manage-test.sh` | `bin/dotfiles/symlinks/symlinks_manage.sh` | Test source: this file. Run: `bin/test/symlinks-manage-test.sh`. |
 | test | `bin/test/symlinks-real-directory-test.sh` | `bin/dotfiles/symlinks/symlinks_manage.sh` replacement and recovery | Test source: this file. Run: `bin/test/symlinks-real-directory-test.sh`. |
 | test | `bin/test/toolchain-apply-test.sh` | `bin/dotfiles/toolchain update --apply` | Test source: this file. Run: `bin/test/toolchain-apply-test.sh`. |

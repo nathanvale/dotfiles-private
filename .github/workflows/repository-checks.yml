@@ -86,7 +86,6 @@ jobs:
             bin/test/bun-core-install-test.sh
             bin/test/claude-native-install-test.sh
             bin/test/codex-managed-install-test.sh
-            bin/test/legacy-homebrew-helpers-test.sh
             bin/test/zsh-effective-behavior-test.sh
             bin/test/zsh-startup-silence-test.sh
             bin/test/zsh-work-profile-boundary-test.sh
