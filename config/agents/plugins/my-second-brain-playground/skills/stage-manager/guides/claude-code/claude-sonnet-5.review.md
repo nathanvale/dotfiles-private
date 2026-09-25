@@ -8,7 +8,7 @@ reviewer:
 date: 2026-09-25
 verdict: accepted
 guide_sha256: 947b044b042c51df888cc782a5a3ab6c1a5196b35fac127e0c493a47508d24d2
-handback_path: /Users/nathanvale/.local/state/my-second-brain-playground/herdr-projects-s2b-20260925/guide-review-a83b1129.md
+handback_path: claude-sonnet-5.review-handback.md
 handback_sha256: e39ed851d0756f7981bf3022aea10a9c85c89f78e5b451f69a6aa7ddc0761276
 ---
 
