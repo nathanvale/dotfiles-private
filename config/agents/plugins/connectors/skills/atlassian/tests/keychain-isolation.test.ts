@@ -3,19 +3,20 @@
 // the attended module, only the attended suite asks for an attended fixture,
 // and the shipped leaf is the fixed /usr/bin/security reader with no test
 // marker. Copy integrity: the substituted plugin copy the routine custody
-// tests run from differs from source by exactly that leaf, and the guard
-// refuses any other difference.
+// tests run from differs from source by exactly that leaf and the manifest's
+// op and uv digests, and the guard refuses any other difference.
 import { describe, expect, test } from "bun:test";
 import { appendFileSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { changedPaths, copyWithFakeReader, FAKE_MARKER, SHIPPED_ROOT, substitutedPluginRoot, verifySubstitutedCopy } from "./fixtures/plugin-copy.ts";
+import { changedPaths, copyWithFakeReader, FAKE_MARKER, FAKE_OP_LAUNCHER, FAKE_UV_LAUNCHER, SHIPPED_ROOT, substitutedPluginRoot, verifySubstitutedCopy } from "./fixtures/plugin-copy.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
 const SELF = path.join("tests", "keychain-isolation.test.ts");
 const ATTENDED_MODULE = path.join("tests", "fixtures", "attended-keychain.ts");
-// Independent oracles: the one plugin-relative path a copy may change, and
-// the shipped leaf's one spawn.
+// Independent oracles: the plugin-relative paths a copy may change, and the
+// shipped leaf's one spawn.
 const LEAF = "skills/atlassian/scripts/custody/keychain-read.ts";
+const MANIFEST = "requirements.json";
 const SECOND = "skills/atlassian/scripts/custody/one-password.ts";
 const SHIPPED_SPAWN = 'spawnSync("/usr/bin/security", argv,';
 // A security subcommand as a spawn argument: a quoted array element.
@@ -68,20 +69,37 @@ describe("shipped Keychain reader", () => {
 });
 
 describe("substituted plugin copy", () => {
-	test("differs from source by exactly the Keychain leaf, which holds the fake", () => {
+	const digest = (text: string) => new Bun.CryptoHasher("sha256").update(text).digest("hex");
+	const manifest = (root: string) => JSON.parse(readFileSync(path.join(root, MANIFEST), "utf8")) as { sources: Record<string, Record<string, unknown>> };
+
+	test("differs from source by exactly the Keychain leaf and the fake op and uv digests", () => {
 		const copy = substitutedPluginRoot();
-		expect(changedPaths(SHIPPED_ROOT, copy)).toEqual([LEAF]);
+		expect(changedPaths(SHIPPED_ROOT, copy)).toEqual([MANIFEST, LEAF]);
 		expect(readFileSync(path.join(copy, LEAF), "utf8")).toContain(FAKE_MARKER);
+		const [shipped, copied] = [manifest(SHIPPED_ROOT), manifest(copy)];
+		expect([copied.sources.op?.binarySha256, copied.sources.uv?.binarySha256]).toEqual([digest(FAKE_OP_LAUNCHER), digest(FAKE_UV_LAUNCHER)]);
+		for (const tool of ["op", "uv"]) delete shipped.sources[tool]?.binarySha256, delete copied.sources[tool]?.binarySha256;
+		expect(copied).toEqual(shipped);
 	});
 
-	test("the guard refuses a second changed file and an incomplete substitution", () => {
+	test("the production-anchor copy keeps the shipped manifest bytes and the attended copy keeps the shipped reader", () => {
+		expect(changedPaths(SHIPPED_ROOT, substitutedPluginRoot({ reader: "fake", manifest: "shipped" }))).toEqual([LEAF]);
+		expect(changedPaths(SHIPPED_ROOT, substitutedPluginRoot({ reader: "shipped", manifest: "fixture" }))).toEqual([MANIFEST]);
+	});
+
+	test("the guard refuses a second changed file, another manifest change, and an incomplete substitution", () => {
 		const copy = copyWithFakeReader("connectors-copy-guard-");
 		try {
 			appendFileSync(path.join(copy, SECOND), "\n// changed\n");
-			expect(() => verifySubstitutedCopy(copy)).toThrow(`substituted plugin copy is not exactly the Keychain leaf: ${JSON.stringify([LEAF, SECOND])}`);
+			expect(() => verifySubstitutedCopy(copy)).toThrow(`substituted plugin copy does not change exactly ${JSON.stringify([MANIFEST, LEAF])}: ${JSON.stringify([MANIFEST, LEAF, SECOND])}`);
 			writeFileSync(path.join(copy, SECOND), readFileSync(path.join(SHIPPED_ROOT, SECOND)));
+			const widened = manifest(copy);
+			widened.sources.op = { ...widened.sources.op, sha256: "0".repeat(64) };
+			writeFileSync(path.join(copy, MANIFEST), JSON.stringify(widened));
+			expect(() => verifySubstitutedCopy(copy)).toThrow("substituted plugin copy changes a manifest field other than the fake op and uv digests");
+			writeFileSync(path.join(copy, MANIFEST), readFileSync(path.join(SHIPPED_ROOT, MANIFEST)));
 			writeFileSync(path.join(copy, LEAF), readFileSync(path.join(SHIPPED_ROOT, LEAF)));
-			expect(() => verifySubstitutedCopy(copy)).toThrow("substituted plugin copy is not exactly the Keychain leaf: []");
+			expect(() => verifySubstitutedCopy(copy)).toThrow(`substituted plugin copy does not change exactly ${JSON.stringify([MANIFEST, LEAF])}: []`);
 		} finally {
 			rmSync(copy, { recursive: true, force: true });
 		}

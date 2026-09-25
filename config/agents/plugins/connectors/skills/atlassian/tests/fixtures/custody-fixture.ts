@@ -9,15 +9,19 @@
 // verified substituted plugin copy (plugin-copy.ts), where that leaf is the
 // test-owned reader fake, so its evidence is substituted-reader process
 // proof. The attended mode, constructed only by the gated attended suite,
-// runs the shipped tree, where the real /usr/bin/security reads a throwaway
-// keychain file; see attended-keychain.ts.
+// runs a copy whose leaf is the shipped one, where the real
+// /usr/bin/security reads a throwaway keychain file; see attended-keychain.ts.
+//
+// op and uv: production runs them only when their bytes hash to the plugin
+// root's qualified digests. The fixture manifest names the fake launchers'
+// digests; the "shipped" manifest keeps the shipped digests, so the same
+// fakes must be refused.
 import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { OP_RELEASE } from "../../../../bin/setup/op.ts";
 import { SERVICE_TOKEN_ACCOUNT, SERVICE_TOKEN_SERVICE } from "../../scripts/custody/one-password.ts";
 import { ATTENDED_KEYCHAIN, AttendedKeychain } from "./attended-keychain.ts";
-import { SHIPPED_ROOT, substitutedPluginRoot } from "./plugin-copy.ts";
+import { FAKE_OP_LAUNCHER, FAKE_UV_LAUNCHER, fakeLauncher, REQUIREMENTS, substitutedPluginRoot } from "./plugin-copy.ts";
 
 export const SERVICE_TOKEN = "ops_fixture-service-account-sentinel";
 export const PROVIDER_TOKEN = "fixture-atlassian-provider-token-sentinel";
@@ -31,10 +35,9 @@ export interface RunResult {
 	stderr: string;
 }
 
-// An absolute Bun shebang: the custody reader gives op only /usr/bin:/bin.
-function bunScript(file: string, modulePath: string): void {
+function executable(file: string, content: string): void {
 	mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
-	writeFileSync(file, `#!${process.execPath}\nimport "${modulePath}";\n`);
+	writeFileSync(file, content);
 	chmodSync(file, 0o700);
 }
 
@@ -70,13 +73,13 @@ export class CustodyFixture {
 	readonly skill: string;
 	private readonly attended: AttendedKeychain | null;
 
-	constructor(options: { keychain?: "fake" | "attended" } = {}) {
+	constructor(options: { keychain?: "fake" | "attended"; manifest?: "fixture" | "shipped" } = {}) {
 		this.mode = options.keychain ?? "fake";
 		if (this.mode === "attended" && !ATTENDED_KEYCHAIN) throw new Error("the attended Keychain fixture needs CONNECTORS_ATTENDED_KEYCHAIN_TEST=1");
 		// Fail closed: substitutedPluginRoot throws unless the copy differs from
-		// source by exactly the Keychain leaf.
+		// source by exactly its shape.
 		try {
-			this.pluginRoot = this.mode === "fake" ? substitutedPluginRoot() : SHIPPED_ROOT;
+			this.pluginRoot = substitutedPluginRoot({ reader: this.mode === "fake" ? "fake" : "shipped", manifest: options.manifest ?? "fixture" });
 		} catch (error) {
 			rmSync(this.root, { recursive: true, force: true });
 			throw error;
@@ -88,7 +91,7 @@ export class CustodyFixture {
 		writeFileSync(path.join(this.root, "expected-service-token"), SERVICE_TOKEN);
 		writeFileSync(path.join(this.root, "expected-provider-token"), PROVIDER_TOKEN);
 		// A same-named MCPorter earlier on PATH must never be selected.
-		bunScript(path.join(this.hostileBin, "mcporter"), path.join(FIXTURES, "hostile-mcporter.ts"));
+		executable(path.join(this.hostileBin, "mcporter"), fakeLauncher(path.join(FIXTURES, "hostile-mcporter.ts")));
 	}
 
 	// Stores the one service-token item. The attended mode creates a fresh
@@ -113,16 +116,18 @@ export class CustodyFixture {
 		rmSync(path.join(this.root, "keychain-token"), { force: true });
 	}
 
+	// The fake op under the revision name the plugin root's manifest selects.
 	installOp(): void {
-		const name = `op-${OP_RELEASE.version}-${OP_RELEASE.binarySha256}`;
+		const manifest = JSON.parse(readFileSync(path.join(this.pluginRoot, REQUIREMENTS), "utf8")) as { pins: { op: string }; sources: { op: { binarySha256: string } } };
+		const name = `op-${manifest.pins.op}-${manifest.sources.op.binarySha256}`;
 		privateDirectories(this.state, this.opDirectory);
-		bunScript(path.join(this.opDirectory, name), path.join(FIXTURES, "op-fake.ts"));
+		executable(path.join(this.opDirectory, name), FAKE_OP_LAUNCHER);
 		writeFileSync(path.join(this.opDirectory, "op-selected"), name, { mode: 0o600 });
 	}
 
 	installUv(): void {
 		privateDirectories(this.state, path.dirname(this.uvExecutable));
-		bunScript(this.uvExecutable, path.join(FIXTURES, "community-mcp-fake.ts"));
+		executable(this.uvExecutable, FAKE_UV_LAUNCHER);
 	}
 
 	// The complete configured machine: every custody piece present.

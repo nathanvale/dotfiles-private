@@ -2,12 +2,40 @@ import { createHash } from "node:crypto";
 import { lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ownedDirectory, readPrivateFile, stateRoot } from "../private-state.ts";
+import requirements from "../../requirements.json";
+import { ownedDirectory, ownedExecutableDigest, readPrivateFile, stateRoot, stateRootAdmitsSetup } from "../private-state.ts";
+import type { EnvironmentSource } from "../safe-environment.ts";
 import { MISE_RELEASE } from "./mise.ts";
 
-const UV_VERSION = "0.12.18";
-const UV_BINARY_SHA256 = "17914b3f58e645361bf68424cbc71d834a96a7ada71625b28776bd7c3760afb0";
+// The version and binary digest have one owner, the Requirements Manifest,
+// bundled from this plugin's own requirements.json.
+const UV_VERSION = requirements.pins.uv;
+const UV_BINARY_SHA256 = requirements.sources.uv.binarySha256;
 const TOOL = "aqua:astral-sh/uv";
+const TOOL_INSTALLS = "aqua-astral-sh-uv";
+
+// Where the plugin-owned mise installs the pinned uv below its installs root.
+const uvVersionPath = (installs: string): string => path.join(installs, TOOL_INSTALLS, UV_VERSION);
+
+// The pinned version names exactly one entry of the tool's install
+// directory. Setup removes that entry recursively when ordinary use would
+// refuse it, so a version that would resolve to an ancestor or a sibling is
+// a source defect, refused before any state is touched.
+function versionIsOneEntry(): boolean {
+	const tool = path.join(path.sep, TOOL_INSTALLS);
+	const entry = path.join(tool, UV_VERSION);
+	return path.dirname(entry) === tool && path.basename(entry) === UV_VERSION;
+}
+const uvExecutablePath = (installs: string): string => path.join(uvVersionPath(installs), "uv-aarch64-apple-darwin", "uv");
+
+// The one acceptance rule setup's final check and ordinary use share: an
+// owned executable no group or other user can write, below Connector
+// ancestors no group or other user can write, whose bytes hash to the
+// qualified binary digest.
+function acceptedUv(executable: string): boolean {
+	const measured = ownedExecutableDigest(executable, "not-shared-writable");
+	return measured.ok && measured.sha256 === UV_BINARY_SHA256;
+}
 
 export type UvInstallResult = { ok: true; executable: string; version: string } | { ok: false; reason: "config-invalid" | "state-invalid" | "install-failed" | "version-invalid" };
 
@@ -47,7 +75,7 @@ export function validUvSources(requirementsText: string, configText: string, loc
 		const config: unknown = Bun.TOML.parse(configText);
 		const lock: unknown = Bun.TOML.parse(lockText);
 		if (!record(requirements) || !record(requirements.pins) || !record(requirements.sources) || !record(requirements.sources.uv)) return false;
-		return requirements.pins.uv === UV_VERSION && validConfig(config) && validLock(lock, requirements.sources.uv);
+		return requirements.pins.uv === UV_VERSION && versionIsOneEntry() && validConfig(config) && validLock(lock, requirements.sources.uv);
 	} catch {
 		return false;
 	}
@@ -78,7 +106,7 @@ function safeExistingPart(current: string, root: string): boolean {
 		if (!entry.isDirectory() || (current !== root && !current.startsWith(`${root}${path.sep}`))) return true;
 		// The XDG state root is the user's, often 0755; only Connectors' own
 		// descendants must be private.
-		if (current === root) return entry.uid === os.userInfo().uid;
+		if (current === root) return stateRootAdmitsSetup(root);
 		const mode = entry.mode & 0o777;
 		const installedTool = current.startsWith(`${root}${path.sep}connectors${path.sep}setup${path.sep}uv${path.sep}installs${path.sep}`);
 		return entry.uid === os.userInfo().uid && (installedTool ? (mode & 0o022) === 0 : mode === 0o700);
@@ -94,6 +122,24 @@ function safePath(target: string, root: string): boolean {
 		current = path.join(current, segment);
 		if (!safeExistingPart(current, root)) return false;
 	}
+	return true;
+}
+
+// mise treats an existing version directory as installed and skips it, so a
+// pinned install that ordinary use would refuse is removed before mise runs.
+// Only that version's entry below the plugin's own installs root is removed,
+// after the owned-path walk; a symlink or another user's entry refuses.
+function removeRefusedInstall(installs: string, root: string): boolean {
+	const executable = uvExecutablePath(installs);
+	if (acceptedUv(executable)) return true;
+	const version = uvVersionPath(installs);
+	if (!safePath(version, root)) return false;
+	try {
+		if (lstatSync(version).uid !== os.userInfo().uid) return false;
+	} catch (error) {
+		return (error as NodeJS.ErrnoException).code === "ENOENT";
+	}
+	rmSync(version, { recursive: true, force: true });
 	return true;
 }
 
@@ -142,6 +188,7 @@ export async function installPinnedUv(miseExecutable: string, stateDirectory: st
 		const prepared = prepareState(stateDirectory);
 		if (!prepared) return { ok: false, reason: "state-invalid" };
 		const { installs, env } = prepared;
+		if (!removeRefusedInstall(installs, root)) return { ok: false, reason: "state-invalid" };
 		// A fresh per-run workspace holds only the staged config and lock; the
 		// installed tool lives under installs/, so removing it never touches
 		// a good install and stops one leftover directory per setup run.
@@ -152,10 +199,8 @@ export async function installPinnedUv(miseExecutable: string, stateDirectory: st
 		void stdout;
 		void stderr;
 		if (exit !== 0) return { ok: false, reason: "install-failed" };
-		const executable = path.join(installs, "aqua-astral-sh-uv", UV_VERSION, "uv-aarch64-apple-darwin", "uv");
-		if (!safePath(executable, root)) return { ok: false, reason: "version-invalid" };
-		const entry = lstatSync(executable);
-		if (!entry.isFile() || entry.uid !== os.userInfo().uid || (entry.mode & 0o111) === 0 || createHash("sha256").update(readFileSync(executable)).digest("hex") !== UV_BINARY_SHA256) return { ok: false, reason: "version-invalid" };
+		const executable = uvExecutablePath(installs);
+		if (!safePath(executable, root) || !acceptedUv(executable)) return { ok: false, reason: "version-invalid" };
 		const probe = Bun.spawn([executable, "--version"], { cwd: workspace, env, stdout: "pipe", stderr: "pipe" });
 		const [probeExit, version] = await Promise.all([probe.exited, new Response(probe.stdout).text()]);
 		if (probeExit !== 0 || !version.startsWith(`uv ${UV_VERSION} `)) return { ok: false, reason: "version-invalid" };
@@ -165,4 +210,12 @@ export async function installPinnedUv(miseExecutable: string, stateDirectory: st
 	} finally {
 		if (workspace) rmSync(workspace, { recursive: true, force: true });
 	}
+}
+
+// Ordinary-use selection of the uv setup installed, by the rule setup's
+// final check applies. Anything else is null, so the dispatcher and the
+// Provider refuse with the setup repair before any credential is read.
+export function installedUv(env: EnvironmentSource): string | null {
+	const executable = uvExecutablePath(path.join(stateRoot(env), "connectors", "setup", "uv", "installs"));
+	return acceptedUv(executable) ? executable : null;
 }

@@ -1,8 +1,7 @@
 import { createHash } from "node:crypto";
 import { closeSync, constants, fsyncSync, lstatSync, mkdtempSync, openSync, rmSync, writeSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { ownedDirectory, stateRoot } from "../private-state.ts";
+import { ownedDirectory, stateRoot, stateRootAdmitsSetup } from "../private-state.ts";
 import { installVerifiedMise, MISE_RELEASE, type MiseInstallResult } from "./mise.ts";
 import { installVerifiedOp, OP_RELEASE, type OpInstallResult } from "./op.ts";
 
@@ -20,14 +19,14 @@ const OFFICIAL_HOSTS = new Set(["cache.agilebits.com", "github.com", "release-as
 
 function privateStageDirectory(): string | null {
 	const root = stateRoot(process.env);
-	if (!path.isAbsolute(root)) return null;
+	if (!path.isAbsolute(root) || !stateRootAdmitsSetup(root)) return null;
 	const directory = path.join(root, "connectors", "setup", "downloads");
 	let current = path.parse(directory).root;
 	for (const segment of directory.slice(current.length).split(path.sep).filter(Boolean)) {
 		current = path.join(current, segment);
 		try {
 			const entry = lstatSync(current);
-			if (entry.isSymbolicLink() || !entry.isDirectory() || (current === root && entry.uid !== os.userInfo().uid)) return null;
+			if (entry.isSymbolicLink() || !entry.isDirectory()) return null;
 		} catch (error) {
 			if ((error as NodeJS.ErrnoException).code !== "ENOENT") return null;
 		}

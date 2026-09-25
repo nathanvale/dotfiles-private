@@ -1,20 +1,29 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { chmodSync, linkSync, lstatSync, mkdtempSync, readFileSync, readdirSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
 import path from "node:path";
-import { ownedDirectory, stateRoot, writePrivateFile } from "../private-state.ts";
+import requirements from "../../requirements.json";
+import { ownedDirectory, ownedExecutableDigest, readPrivateFile, stateRoot, stateRootAdmitsSetup, writePrivateFile } from "../private-state.ts";
+import type { EnvironmentSource } from "../safe-environment.ts";
 
-// Locally measured 1Password 2.39.0 universal installer and extracted binary.
-// Apple signature and notarization verification provide independent provenance.
+// The pinned 1Password universal installer and its extracted binary. The
+// version, download location, and binary digest have one owner, the
+// Requirements Manifest, bundled from this plugin's own requirements.json,
+// never from a caller or environment. The locally measured package digest,
+// team, and identifier stay code anchors independent of the manifest, and
+// Apple signature and notarization verification add independent provenance.
 export const OP_RELEASE = {
-	version: "2.39.0",
-	url: "https://cache.agilebits.com/dist/1P/op2/pkg/v2.39.0/op_apple_universal_v2.39.0.pkg",
+	version: requirements.pins.op,
+	url: requirements.sources.op.url,
 	sha256: "bde261468f3232484e2738e337e39c674c11a4537f4c6ed314f933eae558a405",
 	team: "2BUA8C4S2C",
 	identifier: "com.1password.op",
-	binarySha256: "7e17cbf4052393d2c55a59a7c3d05f0bbcdcb079d57785cff682f3bc994ba8ce",
+	binarySha256: requirements.sources.op.binarySha256,
 } as const;
+
+// The file name setup publishes the verified revision under and ordinary use
+// selects.
+const REVISION_NAME = `op-${OP_RELEASE.version}-${OP_RELEASE.binarySha256}`;
 
 export type OpInstallResult = { ok: true; executable: string } | { ok: false; reason: "package-invalid" | "signature-invalid" | "state-invalid" | "verifier-unavailable" | "install-failed" };
 export type OpInstallInput = { packageFile: string; stateDirectory: string };
@@ -40,19 +49,10 @@ function existingAncestorsAreDirectories(directory: string): boolean {
 	return true;
 }
 
-function stateRootIsOwned(root: string): boolean {
-	try {
-		const entry = lstatSync(root);
-		return entry.uid === os.userInfo().uid && entry.isDirectory() && !entry.isSymbolicLink();
-	} catch (error) {
-		return (error as NodeJS.ErrnoException).code === "ENOENT";
-	}
-}
-
 function statePathIsPrivate(directory: string): boolean {
 	const root = stateRoot(process.env);
 	if (!path.isAbsolute(root) || directory !== path.join(root, "connectors", "setup", "op")) return false;
-	if (!existingAncestorsAreDirectories(directory) || !stateRootIsOwned(root)) return false;
+	if (!existingAncestorsAreDirectories(directory) || !stateRootAdmitsSetup(root)) return false;
 	return true;
 }
 
@@ -146,7 +146,7 @@ export function installVerifiedOp(input: OpInstallInput): OpInstallResult {
 		if (signatureFailure) return signatureFailure;
 		const extracted = extractVerifiedBinary(pkg, stage);
 		if (typeof extracted !== "string") return extracted;
-		const revision = path.join(input.stateDirectory, `op-${OP_RELEASE.version}-${OP_RELEASE.binarySha256}`);
+		const revision = path.join(input.stateDirectory, REVISION_NAME);
 		chmodSync(extracted, 0o700);
 		if (!publishRevision(extracted, revision)) return { ok: false, reason: "install-failed" };
 		const selected = writePrivateFile(path.join(input.stateDirectory, "op-selected"), path.basename(revision));
@@ -158,4 +158,19 @@ export function installVerifiedOp(input: OpInstallInput): OpInstallResult {
 	} finally {
 		if (stage) rmSync(stage, { recursive: true, force: true });
 	}
+}
+
+// Ordinary-use selection of the op revision setup published: `op-selected`
+// names the pinned revision, the file is an owned exact-0700 executable, and
+// its bytes hash to the qualified binary digest. Anything else, including
+// changed bytes under the right name, record, owner, and mode, is null: the
+// caller refuses with the setup repair before any token reaches op. This
+// never installs, repairs, or searches PATH.
+export function installedOp(env: EnvironmentSource): string | null {
+	const directory = path.join(stateRoot(env), "connectors", "setup", "op");
+	const record = readPrivateFile(path.join(directory, "op-selected"));
+	if (!record.ok || record.text !== REVISION_NAME) return null;
+	const executable = path.join(directory, REVISION_NAME);
+	const measured = ownedExecutableDigest(executable, "exact-0700");
+	return measured.ok && measured.sha256 === OP_RELEASE.binarySha256 ? executable : null;
 }

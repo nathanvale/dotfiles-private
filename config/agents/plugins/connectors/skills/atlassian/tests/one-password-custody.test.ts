@@ -3,16 +3,16 @@
 // packaged bin/connectors front door, so this is partial evidence toward
 // Spec #87 AC8 to AC11, AC16, and AC20 only, and substituted-reader process
 // proof: every process runs from the verified plugin copy (plugin-copy.ts)
-// whose one changed file is the Keychain-read leaf, replaced by the
-// test-owned reader fake, so no test here reads the macOS Keychain or the
+// whose Keychain-read leaf is the test-owned reader fake, so no test here reads the macOS Keychain or the
 // shipped reader (the real /usr/bin/security read is the gated attended
 // suite's proof). The dispatcher runs as a real process; the verified
 // official MCPorter is selected by the production bootstrap and starts the
-// real Provider; op and uv are fakes at the paths setup publishes.
+// real Provider; op and uv are fakes at the paths setup publishes, admitted
+// only by the copy's requirements.json naming their digests.
 // The fakes and the process-table read report argv, key sets, and booleans, never values, so
 // every sentinel check below reads an independent surface.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, chmodSync, existsSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { CustodyFixture, OFFICIAL_MCPORTER, PROVIDER_TOKEN, SERVICE_TOKEN, seedMcporter } from "./fixtures/custody-fixture.ts";
 import { substitutedPluginRoot } from "./fixtures/plugin-copy.ts";
@@ -156,13 +156,16 @@ describe("refusals before any Provider or MCPorter start", () => {
 		expectNoSecret(fixture, [result.stdout, result.stderr], [malformed]);
 	});
 
-	test("a missing or unselected plugin-owned op refuses with the setup repair; PATH never supplies one", async () => {
-		for (const damage of ["missing record", "wrong record", "wrong mode"] as const) {
+	test("a missing, unselected, or changed plugin-owned op refuses with the setup repair before the token is read", async () => {
+		for (const damage of ["missing record", "wrong record", "wrong mode", "changed bytes"] as const) {
 			fresh();
 			const record = path.join(fixture.opDirectory, "op-selected");
 			if (damage === "missing record") rmSync(record);
 			if (damage === "wrong record") writeFileSync(record, "op-2.38.0-0000");
 			if (damage === "wrong mode") chmodSync(path.join(fixture.opDirectory, readFileSync(record, "utf8")), 0o755);
+			// Name, owner, mode, and record still match; only the bytes differ,
+			// and the changed file would still run.
+			if (damage === "changed bytes") appendFileSync(path.join(fixture.opDirectory, readFileSync(record, "utf8")), "\n");
 			const result = await fixture.dispatch(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}']);
 			const envelope = parse(result.stdout).result;
 			expect([damage, result.code, result.stderr, envelope.causeCode, envelope.repairAction]).toEqual([damage, 3, "", "refused-precondition", "the plugin-owned 1Password CLI is not set up; run connectors setup"]);
@@ -172,20 +175,41 @@ describe("refusals before any Provider or MCPorter start", () => {
 		}
 	});
 
-	test("a missing plugin-owned uv refuses in the Provider preflight before MCPorter starts", async () => {
-		fresh();
-		rmSync(fixture.uvExecutable);
+	test("a missing or changed plugin-owned uv refuses with the setup repair before any credential read or process start", async () => {
+		for (const damage of ["missing", "changed bytes"] as const) {
+			fresh();
+			if (damage === "missing") rmSync(fixture.uvExecutable);
+			// Same path, owner, and mode; only the bytes differ, and the changed
+			// file would still run with the provider token.
+			if (damage === "changed bytes") appendFileSync(fixture.uvExecutable, "\n");
+			const result = await fixture.dispatch(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}']);
+			expect([damage, result.code, result.stderr]).toEqual([damage, 3, ""]);
+			const envelope = parse(result.stdout).result;
+			expect([damage, envelope.causeCode, envelope.repairAction]).toEqual([damage, "refused-precondition", "the plugin-owned uv is not set up; run connectors setup"]);
+			// uv is checked before the dispatcher binds the credential, so no
+			// service token is read, op never starts, and no Provider starts.
+			expect([damage, fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl")]).toEqual([damage, [], [], []]);
+			expect([damage, existsSync(path.join(fixture.state, "connectors", "mcporter"))]).toEqual([damage, false]);
+			expectNoSecret(fixture, [result.stdout, result.stderr]);
+			fixture.dispose();
+		}
+	});
+
+	test("the shipped requirements admit neither fake uv nor fake op, even at the official paths with a matching record and mode", async () => {
+		// Production anchor: the copy's requirements.json is the shipped bytes,
+		// so the fakes sit at the official uv path and op revision name.
+		fixture = new CustodyFixture({ manifest: "shipped" }).installAll();
+		expect(readFileSync(path.join(fixture.opDirectory, "op-selected"), "utf8")).toBe("op-2.39.0-7e17cbf4052393d2c55a59a7c3d05f0bbcdcb079d57785cff682f3bc994ba8ce");
+		expect(fixture.uvExecutable.endsWith(path.join("aqua-astral-sh-uv", "0.12.18", "uv-aarch64-apple-darwin", "uv"))).toBe(true);
+		fixture.writeItem({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN });
+		// The dispatcher checks uv first, so it meets the shipped uv digest.
 		const result = await fixture.dispatch(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}']);
-		expect([result.code, result.stderr]).toEqual([3, ""]);
 		const envelope = parse(result.stdout).result;
-		expect([envelope.causeCode, envelope.repairAction]).toEqual(["refused-precondition", "a provider precondition failed before any request; run the provider readiness checks; the plugin-owned uv is not set up; run connectors setup"]);
-		expect(fixture.lines("community-starts.jsonl")).toEqual([]);
-		// The dispatcher's binding read and the Provider preflight's read, each
-		// after one service-token read.
-		expect(fixture.lines("op-calls.jsonl")).toHaveLength(2);
-		expect(fixture.lines("keychain-reads.jsonl")).toEqual([KEYCHAIN_READ(fixture), KEYCHAIN_READ(fixture)]);
-		expect(existsSync(path.join(fixture.state, "connectors", "mcporter"))).toBe(false);
-		expectNoSecret(fixture, [result.stdout, result.stderr]);
+		expect([result.code, result.stderr, envelope.causeCode, envelope.repairAction]).toEqual([3, "", "refused-precondition", "the plugin-owned uv is not set up; run connectors setup"]);
+		// The custody child, the only op caller, meets the shipped op digest.
+		const child = Bun.spawnSync([process.execPath, path.join(fixture.skill, "scripts", "custody", "child.ts"), "--tenant", "example", "--product", "jira"], { env: fixture.environment(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+		expect([child.exitCode, child.stdout.toString(), child.stderr.toString()]).toEqual([3, "", "atlassian-credential-binding:error:op-unavailable\n"]);
+		expect([fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl")]).toEqual([[], [], []]);
 	});
 });
 

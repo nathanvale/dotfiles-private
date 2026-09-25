@@ -10,7 +10,7 @@ import { existsSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { ATTENDED_KEYCHAIN, recoverAttendedKeychains, userSearchList } from "./fixtures/attended-keychain.ts";
 import { CustodyFixture, SERVICE_TOKEN } from "./fixtures/custody-fixture.ts";
-import { KEYCHAIN_LEAF, SHIPPED_ROOT } from "./fixtures/plugin-copy.ts";
+import { changedPaths, KEYCHAIN_LEAF, SHIPPED_ROOT } from "./fixtures/plugin-copy.ts";
 
 const KEYCHAIN_HANDOFF = "store the Connectors 1Password service-account token in the login Keychain yourself: security add-generic-password -s connectors.1password.service-account -a connectors -w (it prompts for the value; Connectors never receives it)";
 const JIRA_ITEM_READ = ["item", "get", "JIRA_EXAMPLE_API_TOKEN", "--vault", "API Credentials", "--format", "json"];
@@ -33,8 +33,8 @@ describe.skipIf(!ATTENDED_KEYCHAIN)("attended real Keychain read", () => {
 	test("the real security read hands the service token to op alone and leaves the search list unchanged", async () => {
 		fixture = new CustodyFixture({ keychain: "attended" }).installAll();
 		expect(userSearchList()).toEqual(before);
-		// The shipped tree, whose leaf is the real reader, not the copy.
-		expect(fixture.pluginRoot).toBe(SHIPPED_ROOT);
+		// The shipped leaf, the real reader; only the manifest admits the fakes.
+		expect(changedPaths(SHIPPED_ROOT, fixture.pluginRoot)).toEqual(["requirements.json"]);
 		expect(readFileSync(path.join(fixture.pluginRoot, KEYCHAIN_LEAF), "utf8")).toContain('spawnSync("/usr/bin/security"');
 		const result = await fixture.dispatch(READ);
 		expect([result.code, result.stderr]).toEqual([3, ""]);

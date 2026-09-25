@@ -9,7 +9,8 @@
 	"sources": {
 		"op": {
 			"url": "https://cache.agilebits.com/dist/1P/op2/pkg/v2.39.0/op_apple_universal_v2.39.0.pkg",
-			"sha256": "bde261468f3232484e2738e337e39c674c11a4537f4c6ed314f933eae558a405"
+			"sha256": "bde261468f3232484e2738e337e39c674c11a4537f4c6ed314f933eae558a405",
+			"binarySha256": "7e17cbf4052393d2c55a59a7c3d05f0bbcdcb079d57785cff682f3bc994ba8ce"
 		},
 		"mise": {
 			"url": "https://github.com/jdx/mise/releases/download/v2026.9.12/mise-v2026.9.12-macos-arm64.tar.xz",
@@ -19,7 +20,8 @@
 		"uv": {
 			"url": "https://github.com/astral-sh/uv/releases/download/0.12.18/uv-aarch64-apple-darwin.tar.gz",
 			"sha256": "cf40e0c6a202190ccd9e0406dcfdd5b2d6668a9a5c779b17948963df32aafe5b",
-			"provenance": "https://github.com/astral-sh/uv/releases/tag/0.12.18"
+			"provenance": "https://github.com/astral-sh/uv/releases/tag/0.12.18",
+			"binarySha256": "17914b3f58e645361bf68424cbc71d834a96a7ada71625b28776bd7c3760afb0"
 		}
 	}
 }

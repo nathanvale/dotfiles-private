@@ -6,16 +6,19 @@
 // route on an internal channel. A Provider process recovers its invocation
 // from that channel, re-reads the exact item immediately before any child
 // executable can start, and refuses when the item no longer matches the
-// binding. Secret values never leave boundItem's caller process.
+// binding. Secret values never leave boundItem's caller process. The Provider
+// cannot start without the plugin-owned uv, so a missing or changed uv
+// refuses before any credential is read.
 import path from "node:path";
 import { type EnvironmentSource, INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "../../../../bin/safe-environment.ts";
 import { atlassianProcess } from "../provider-process.ts";
 import { type CredentialBinding, encodeBinding, parseBinding } from "./channel.ts";
 import { isProduct, itemBinding, itemFieldMap, type Product, productItemTitle, SITE_URL_FIELD, TENANT_PATTERN } from "./item.ts";
 import { itemHandoff, OP_SETUP_REPAIR, readOnePasswordItem, SERVICE_TOKEN_HANDOFF } from "./one-password.ts";
+import { selectedUv, UV_SETUP_REPAIR } from "./plugin-tools.ts";
 
 export { PRODUCTS, type Product, TENANT_PATTERN } from "./item.ts";
-export { selectedUv } from "./plugin-tools.ts";
+export { selectedUv, UV_SETUP_REPAIR } from "./plugin-tools.ts";
 export type { CredentialBinding } from "./channel.ts";
 
 const CHILD = path.resolve(import.meta.dir, "child.ts");
@@ -46,6 +49,7 @@ function childFailure(code: string | undefined, itemTitle: string): BindFailure 
 // The dispatcher's only credential access. The child inspects the complete
 // item; this process sees one JSON line or a closed cause.
 export function bindCredential(tenant: string, product: Product, env: EnvironmentSource): BindResult {
+	if (selectedUv(env) === null) return { ok: false, cause: "refused-precondition", detail: UV_SETUP_REPAIR };
 	const read = Bun.spawnSync([process.execPath, CHILD, "--tenant", tenant, "--product", product], { env: safeEnvironment(env), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
 	if (read.exitCode !== 0) return childFailure(CHILD_FAILURE.exec(read.stderr.toString())?.[1], productItemTitle(product, tenant));
 	const binding = parseBinding(read.stdout.toString());

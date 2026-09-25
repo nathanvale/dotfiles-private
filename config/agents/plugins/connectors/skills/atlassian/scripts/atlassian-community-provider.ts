@@ -6,7 +6,7 @@
 // the tenant's private outbox so the package can read staged uploads and
 // nothing else. The credential enters only this process and its replacement.
 import { ownedDirectory } from "../../../bin/private-state.ts";
-import { type BoundItem, boundItem, type Product, providerInvocation, selectedUv } from "./custody/index.ts";
+import { type BoundItem, boundItem, type Product, providerInvocation, selectedUv, UV_SETUP_REPAIR } from "./custody/index.ts";
 import { outboxDirectory } from "./outbox.ts";
 import { atlassianProcess, type ProviderProcess, singleLine } from "./provider-process.ts";
 
@@ -22,9 +22,11 @@ function productEnvironment(product: Product, item: BoundItem, credential: strin
 
 function prerequisites(): { invocation: ReturnType<typeof providerInvocation>; item: BoundItem; credential: string; uv: string } {
 	const invocation = providerInvocation();
-	const item = boundItem(invocation);
+	// uv is verified before the item read, so a missing or changed uv never
+	// costs a credential read; the same verified path is the one exec'd.
 	const uv = selectedUv(process.env);
-	if (uv === null) fail("uv-unavailable", "the plugin-owned uv is not set up; run connectors setup");
+	if (uv === null) fail("uv-unavailable", UV_SETUP_REPAIR);
+	const item = boundItem(invocation);
 	if (item.credential === undefined) fail("community-fields-missing", `${invocation.itemTitle} needs username, credential, and a site_url field`);
 	if (!singleLine(item.credential)) fail("credential-invalid", `${invocation.itemTitle} has malformed fields`);
 	return { invocation, item, credential: item.credential, uv };
@@ -33,7 +35,7 @@ function prerequisites(): { invocation: ReturnType<typeof providerInvocation>; i
 function main(argv: string[]): never {
 	const preflight = argv.length === 1 && argv[0] === "--preflight";
 	if (!preflight) refuseArguments(argv);
-	// This full-item read and comparison happens before uv is located or started.
+	// uv is verified, then the full item is read and compared, before uv starts.
 	const ready = prerequisites();
 	const outbox = outboxDirectory(ready.invocation.tenant, process.env);
 	if (!ownedDirectory(outbox).ok) fail("outbox-unavailable", "the tenant's private upload outbox could not be prepared");

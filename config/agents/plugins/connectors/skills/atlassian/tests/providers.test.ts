@@ -6,7 +6,7 @@
 // the paths setup publishes. The Provider runs from the copy:
 // substituted-reader process proof. Two static routes: one per product.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { mkdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { CustodyFixture, PROVIDER_TOKEN, SERVICE_TOKEN } from "./fixtures/custody-fixture.ts";
 import { substitutedPluginRoot } from "./fixtures/plugin-copy.ts";
@@ -255,12 +255,16 @@ describe("Community provider process", () => {
 });
 
 describe("Community provider plugin-owned dependencies", () => {
-	test("a missing plugin-owned uv refuses before the package starts; PATH never supplies one", async () => {
+	test("a missing or changed plugin-owned uv refuses before any credential read or package start; PATH never supplies one", async () => {
 		write(FULL_ITEM);
-		rmSync(fixture.uvExecutable);
-		const result = await runProvider(COMMUNITY, [], { PATH: `${fixture.hostileBin}:${path.dirname(process.execPath)}:/usr/bin:/bin` });
-		expect([result.code, result.stdout, result.stderr]).toEqual([4, "", "atlassian-provider:error:uv-unavailable:the plugin-owned uv is not set up; run connectors setup\n"]);
-		expect(started()).toBe(false);
+		for (const damage of ["changed bytes", "missing"] as const) {
+			// Same path, owner, and mode for changed bytes; only the digest differs.
+			if (damage === "changed bytes") appendFileSync(fixture.uvExecutable, "\n");
+			else rmSync(fixture.uvExecutable);
+			const result = await runProvider(COMMUNITY, [], { PATH: `${fixture.hostileBin}:${path.dirname(process.execPath)}:/usr/bin:/bin` });
+			expect([damage, result.code, result.stdout, result.stderr]).toEqual([damage, 4, "", "atlassian-provider:error:uv-unavailable:the plugin-owned uv is not set up; run connectors setup\n"]);
+			expect([damage, fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), started()]).toEqual([damage, [], [], false]);
+		}
 	});
 
 	test("an absent Keychain service token refuses without starting op or the package", async () => {

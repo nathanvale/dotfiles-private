@@ -2,10 +2,11 @@
 // closed reasons. Ownership by another user cannot be staged without
 // privileges and stays unproved here.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ownedDirectory, readPrivateFile, stateRoot, writePrivateFile } from "../bin/private-state.ts";
+import { ownedDirectory, ownedExecutableDigest, readPrivateFile, stateRoot, writePrivateFile } from "../bin/private-state.ts";
 
 let root: string;
 beforeEach(() => {
@@ -154,5 +155,63 @@ describe("writePrivateFile and readPrivateFile", () => {
 		expect(readPrivateFile(path.join(directory, "alias"))).toEqual({ ok: false, reason: "symlink" });
 		expect(readPrivateFile(directory)).toEqual({ ok: false, reason: "not-regular" });
 		expect(existsSync(file)).toBe(true);
+	});
+});
+
+describe("ownedExecutableDigest", () => {
+	test("a FIFO at a selected path refuses promptly instead of blocking the reader", () => {
+		const directory = path.join(root, "connectors", "setup", "op");
+		expect(ownedDirectory(directory)).toEqual({ ok: true });
+		const fifo = path.join(directory, "op-selected");
+		expect(spawnSync("/usr/bin/mkfifo", ["-m", "0700", fifo]).status).toBe(0);
+		// A blocking open never returns to the event loop, so the probe runs in a
+		// child with a hard timeout; a killed child has a null status.
+		const module = path.resolve(import.meta.dir, "../bin/private-state.ts");
+		const script = `import { ownedExecutableDigest, readPrivateFile } from ${JSON.stringify(module)}; console.log(JSON.stringify([ownedExecutableDigest(process.argv[1], "exact-0700"), readPrivateFile(process.argv[1])]));`;
+		const probe = spawnSync(process.execPath, ["-e", script, fifo], { encoding: "utf8", timeout: 3_000 });
+		expect([probe.status, probe.stderr]).toEqual([0, ""]);
+		expect(JSON.parse(probe.stdout)).toEqual([
+			{ ok: false, reason: "not-regular" },
+			{ ok: false, reason: "not-regular" },
+		]);
+	});
+
+	test("a swappable ancestor from the selected state root down refuses executable selection; 0755 and a sticky root do not", () => {
+		const connectors = path.join(root, "connectors");
+		const setup = path.join(connectors, "setup");
+		const directory = path.join(setup, "uv", "installs");
+		expect(ownedDirectory(directory)).toEqual({ ok: true });
+		const executable = path.join(directory, "uv");
+		writeFileSync(executable, "bytes", { mode: 0o700 });
+		const record = path.join(connectors, "record.json");
+		expect(writePrivateFile(record, "kept")).toEqual({ ok: true });
+		// Independent oracle: the measured sha256 of "bytes".
+		const selected = { ok: true, sha256: "277089d91c0bdf4f2e6862ba7e4a07605119431f5d13f726dd352b06f1b206a9" } as const;
+		const refused = { ok: false, reason: "mode-invalid" } as const;
+		for (const [name, target, wide, expected] of [
+			["root", root, 0o777, refused],
+			["root", root, 0o770, refused],
+			["root", root, 0o707, refused],
+			["root", root, 0o755, selected],
+			// Sticky: another user cannot rename or remove this user's `connectors`.
+			["root", root, 0o1777, selected],
+			["connectors", connectors, 0o777, refused],
+			["connectors", connectors, 0o1777, refused],
+			["connectors", connectors, 0o755, selected],
+			["setup", setup, 0o777, refused],
+			["setup", setup, 0o770, refused],
+			["setup", setup, 0o707, refused],
+			// mise creates its install directories 0755; that remains selectable.
+			["setup", setup, 0o755, selected],
+		] as const) {
+			for (const owned of [root, connectors, setup]) chmodSync(owned, 0o700);
+			chmodSync(target, wide);
+			expect([name, wide.toString(8), ownedExecutableDigest(executable, "not-shared-writable")]).toEqual([name, wide.toString(8), expected]);
+		}
+		// A private-file read keeps its own rule: a wide selected root does not refuse it.
+		for (const owned of [connectors, setup]) chmodSync(owned, 0o700);
+		chmodSync(root, 0o777);
+		expect(readPrivateFile(record)).toEqual({ ok: true, text: "kept" });
+		chmodSync(root, 0o700);
 	});
 });

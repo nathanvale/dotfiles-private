@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import type { downloadAndInstallMise, downloadAndInstallOp } from "../bin/setup/download.ts";
 
@@ -79,6 +79,44 @@ test("an untrusted release origin is refused before creating state", async () =>
 		rmSync(root, { recursive: true, force: true });
 	}
 });
+
+// Independent oracle: test-owned modes and outcomes. A selected state root no
+// other user can swap `connectors` below reaches the download, whose loopback
+// body then fails integrity; a group- or other-writable root that is not
+// sticky refuses before any request or Connector state.
+const STATE_ROOT_ROWS = [
+	{ mode: 0o770, result: { ok: false, reason: "state-invalid" }, requests: [], entries: [] },
+	{ mode: 0o707, result: { ok: false, reason: "state-invalid" }, requests: [], entries: [] },
+	{ mode: 0o700, result: { ok: false, reason: "integrity-refused" }, requests: ["/dist/1P/op2/pkg/v2.39.0/op_apple_universal_v2.39.0.pkg"], entries: ["connectors"] },
+	{ mode: 0o755, result: { ok: false, reason: "integrity-refused" }, requests: ["/dist/1P/op2/pkg/v2.39.0/op_apple_universal_v2.39.0.pkg"], entries: ["connectors"] },
+	{ mode: 0o1777, result: { ok: false, reason: "integrity-refused" }, requests: ["/dist/1P/op2/pkg/v2.39.0/op_apple_universal_v2.39.0.pkg"], entries: ["connectors"] },
+] as const;
+
+for (const row of STATE_ROOT_ROWS) {
+	test(`op setup under a ${row.mode.toString(8)} state root: ${row.result.reason}, ${row.requests.length} request(s)`, async () => {
+		const root = mkdtempSync("/private/tmp/connectors-download-root-mode-");
+		const state = path.join(root, "state");
+		mkdirSync(state);
+		chmodSync(state, row.mode);
+		const requests: string[] = [];
+		const server = Bun.serve({ port: 0, fetch(request) {
+			requests.push(new URL(request.url).pathname);
+			return new Response("not the pinned package");
+		} });
+		try {
+			const run = await invoke("op", root, `http://127.0.0.1:${server.port}/`);
+			expect(run.exit).toBe(0);
+			expect(run.stderr).toBe("");
+			expect(run.result).toEqual(row.result);
+			expect(requests).toEqual([...row.requests]);
+			expect(readdirSync(state)).toEqual([...row.entries]);
+		} finally {
+			server.stop(true);
+			chmodSync(state, 0o700);
+			rmSync(root, { recursive: true, force: true });
+		}
+	});
+}
 
 test("an oversized declared package is refused before its body or selection changes", async () => {
 	const root = mkdtempSync("/private/tmp/connectors-download-size-");

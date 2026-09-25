@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { accessSync, chmodSync, constants, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { accessSync, chmodSync, constants, copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { installPinnedUv, readValidatedUvSources, stageValidatedUvSources, validUvSources } from "../bin/setup/uv.ts";
 
@@ -47,8 +47,7 @@ function isolatedMise(root: string, executable: string): { mise: string; state: 
 	return { mise, state: path.join(stateRoot, "connectors", "setup", "uv") };
 }
 
-async function invoke(mise: string, state: string, root: string) {
-	const modulePath = path.resolve(import.meta.dir, "../bin/setup/uv.ts");
+async function invoke(mise: string, state: string, root: string, modulePath = path.resolve(import.meta.dir, "../bin/setup/uv.ts")) {
 	const script = `import { installPinnedUv } from ${JSON.stringify(modulePath)}; console.log(JSON.stringify(await installPinnedUv(process.env.TEST_MISE!, process.env.TEST_STATE!)));`;
 	const child = Bun.spawn([process.execPath, "-e", script], {
 		env: { HOME: root, XDG_STATE_HOME: path.join(root, "state"), PATH: "/missing", TEST_MISE: mise, TEST_STATE: state,
@@ -76,6 +75,11 @@ test("official mise fixture is optional locally, required in CI, and validated b
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
+});
+
+test("the Requirements Manifest qualifies the official uv binary that setup installs and ordinary use runs", () => {
+	// Independent oracle: the locally measured uv 0.12.18 aarch64 binary, not read from uv.ts.
+	expect((JSON.parse(requirements) as { sources: { uv: { binarySha256: unknown } } }).sources.uv.binarySha256).toBe("17914b3f58e645361bf68424cbc71d834a96a7ada71625b28776bd7c3760afb0");
 });
 
 test("active uv lock rejects substitution, comment bait, and extra entries", () => {
@@ -185,6 +189,85 @@ test.skipIf(!officialMise)("official uv installs inside plugin state despite hos
 		rmSync(root, { recursive: true, force: true });
 	}
 }, 120_000);
+
+test.skipIf(!officialMise)("setup replaces a damaged pinned uv with the official binary instead of refusing", async () => {
+	const root = mkdtempSync("/private/tmp/connectors-uv-restore-");
+	try {
+		const { mise, state } = isolatedMise(root, requiredMise());
+		const executable = path.join(state, "installs", "aqua-astral-sh-uv", "0.12.18", "uv-aarch64-apple-darwin", "uv");
+		expect((await invoke(mise, state, root)).result).toEqual({ ok: true, executable, version: "0.12.18" });
+		// Same path, owner, and mode; only the bytes differ, which ordinary use
+		// refuses with "run connectors setup".
+		writeFileSync(executable, "\n", { flag: "a" });
+		const repaired = await invoke(mise, state, root);
+		expect([repaired.exit, repaired.stderr, repaired.result]).toEqual([0, "", { ok: true, executable, version: "0.12.18" }]);
+		// Independent oracle: the locally measured uv 0.12.18 aarch64 binary.
+		expect(createHash("sha256").update(readFileSync(executable)).digest("hex")).toBe("17914b3f58e645361bf68424cbc71d834a96a7ada71625b28776bd7c3760afb0");
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+}, 240_000);
+
+test.skipIf(!officialMise)("a symlink at the pinned uv version refuses setup's repair without touching its referent", async () => {
+	const root = mkdtempSync("/private/tmp/connectors-uv-restore-link-");
+	try {
+		const { mise, state } = isolatedMise(root, requiredMise());
+		const referent = path.join(root, "outside", "uv-aarch64-apple-darwin");
+		mkdirSync(referent, { recursive: true, mode: 0o700 });
+		writeFileSync(path.join(referent, "uv"), "untouched", { mode: 0o700 });
+		const tool = path.join(state, "installs", "aqua-astral-sh-uv");
+		for (const directory of [state, path.join(state, "installs")]) mkdirSync(directory, { recursive: true, mode: 0o700 });
+		mkdirSync(tool, { mode: 0o755 });
+		symlinkSync(path.dirname(referent), path.join(tool, "0.12.18"));
+		const run = await invoke(mise, state, root);
+		expect([run.exit, run.stderr, run.result]).toEqual([0, "", { ok: false, reason: "state-invalid" }]);
+		expect(readFileSync(path.join(referent, "uv"), "utf8")).toBe("untouched");
+		expect(lstatSync(path.join(tool, "0.12.18")).isSymbolicLink()).toBe(true);
+	} finally {
+		rmSync(root, { recursive: true, force: true });
+	}
+});
+
+// A private plugin copy whose bundled manifest, mise config, and lock agree
+// on one uv version string, so only setup's own version-path rule stands
+// between that string and its recursive removal.
+function pluginWithUvPin(root: string, version: string): string {
+	const copy = path.join(root, "plugin");
+	for (const module of ["private-state.ts", "safe-environment.ts", path.join("setup", "mise.ts"), path.join("setup", "uv.ts")]) {
+		mkdirSync(path.dirname(path.join(copy, "bin", module)), { recursive: true });
+		copyFileSync(path.resolve(import.meta.dir, "../bin", module), path.join(copy, "bin", module));
+	}
+	const manifest = JSON.parse(requirements) as { pins: Record<string, string> };
+	manifest.pins.uv = version;
+	writeFileSync(path.join(copy, "requirements.json"), JSON.stringify(manifest));
+	mkdirSync(path.join(copy, "config"));
+	writeFileSync(path.join(copy, "config", "mise.toml"), config.replaceAll('"0.12.18"', JSON.stringify(version)));
+	writeFileSync(path.join(copy, "config", "mise.lock"), lock.replaceAll('"0.12.18"', JSON.stringify(version)));
+	return path.join(copy, "bin", "setup", "uv.ts");
+}
+
+test.skipIf(!officialMise)("a uv pin that is not one version entry refuses before setup can remove other Connector state", async () => {
+	// Test-owned literals: from the uv installs root, the first names the whole
+	// `connectors` state directory and the second the sibling op install.
+	for (const version of ["../../../..", "../../../op"]) {
+		const root = mkdtempSync("/private/tmp/connectors-uv-pin-path-");
+		try {
+			const { mise, state } = isolatedMise(root, requiredMise());
+			const connectors = path.join(root, "state", "connectors");
+			const receipt = path.join(connectors, "atlassian", "receipt.json");
+			const opSelected = path.join(connectors, "setup", "op", "op-selected");
+			for (const file of [receipt, opSelected]) {
+				mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+				writeFileSync(file, "kept", { mode: 0o600 });
+			}
+			const run = await invoke(mise, state, root, pluginWithUvPin(root, version));
+			expect([version, existsSync(receipt) && readFileSync(receipt, "utf8"), existsSync(opSelected) && readFileSync(opSelected, "utf8")]).toEqual([version, "kept", "kept"]);
+			expect([version, run.exit, run.stderr, run.result]).toEqual([version, 0, "", { ok: false, reason: "config-invalid" }]);
+		} finally {
+			rmSync(root, { recursive: true, force: true });
+		}
+	}
+}, 60_000);
 
 test("an unverified mise executable is refused before creating uv state", async () => {
 	const root = mkdtempSync("/private/tmp/connectors-uv-unverified-");
