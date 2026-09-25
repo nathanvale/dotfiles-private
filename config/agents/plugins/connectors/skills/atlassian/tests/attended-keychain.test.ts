@@ -15,7 +15,12 @@ import { changedPaths, KEYCHAIN_LEAF, SHIPPED_ROOT } from "./fixtures/plugin-cop
 const KEYCHAIN_HANDOFF = "store the Connectors 1Password service-account token in the login Keychain yourself: security add-generic-password -s connectors.1password.service-account -a connectors -w (it prompts for the value; Connectors never receives it)";
 // The fixture's default registered Jira item ID, restated as a test-owned literal.
 const JIRA_ITEM_READ = ["item", "get", "jirafixtureitem00000000001", "--vault", "API Credentials", "--format", "json"];
-const READ = ["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}'];
+// The packaged front door's Jira read for the fixture's registered tenant.
+const READ = ["run", "atlassian", "--select", "tenant=example", "issue.get", "--input", '{"issueKey":"EX-1"}'];
+// Independent oracle: the front door's domain refusal for a credential handoff,
+// restated from the accepted adapter mapping.
+const HANDOFF_DATA = { connector: "atlassian", connectorCause: "refused-credential-unconfigured" };
+type Refusal = { result: { causeCode: string; repairAction: string; data: unknown } };
 
 describe.skipIf(!ATTENDED_KEYCHAIN)("attended real Keychain read", () => {
 	let before: string[];
@@ -38,9 +43,10 @@ describe.skipIf(!ATTENDED_KEYCHAIN)("attended real Keychain read", () => {
 		// and the front door is recompiled from that manifest.
 		expect(changedPaths(SHIPPED_ROOT, fixture.pluginRoot)).toEqual(["bin/connectors", "requirements.json"]);
 		expect(readFileSync(path.join(fixture.pluginRoot, KEYCHAIN_LEAF), "utf8")).toContain('spawnSync("/usr/bin/security"');
-		const result = await fixture.dispatch(READ);
+		const result = await fixture.frontDoor(READ);
 		expect([result.code, result.stderr]).toEqual([3, ""]);
 		// No item is written: op reports the registered item absent after a matching token.
+		expect([(JSON.parse(result.stdout) as Refusal).result.causeCode, (JSON.parse(result.stdout) as Refusal).result.data]).toEqual(["DOMAIN_ADAPTER_REFUSED", HANDOFF_DATA]);
 		expect(fixture.lines("op-calls.jsonl")).toEqual([{ argv: JIRA_ITEM_READ, envKeys: ["HOME", "OP_SERVICE_ACCOUNT_TOKEN", "PATH"], serviceTokenMatches: true }]);
 		for (const stream of [result.stdout, result.stderr, fixture.sweepText()]) expect(stream).not.toContain(SERVICE_TOKEN);
 	}, 60_000);
@@ -48,10 +54,10 @@ describe.skipIf(!ATTENDED_KEYCHAIN)("attended real Keychain read", () => {
 	test("an absent item in the real keychain is the Keychain handoff", async () => {
 		fixture = new CustodyFixture({ keychain: "attended" }).installAll();
 		fixture.removeKeychainToken();
-		const result = await fixture.dispatch(READ);
+		const result = await fixture.frontDoor(READ);
 		expect([result.code, result.stderr]).toEqual([3, ""]);
-		const envelope = (JSON.parse(result.stdout) as { result: { causeCode: string; repairAction: string } }).result;
-		expect([envelope.causeCode, envelope.repairAction]).toEqual(["refused-credential-unconfigured", KEYCHAIN_HANDOFF]);
+		const envelope = (JSON.parse(result.stdout) as Refusal).result;
+		expect([envelope.causeCode, envelope.repairAction, envelope.data]).toEqual(["DOMAIN_ADAPTER_REFUSED", KEYCHAIN_HANDOFF, HANDOFF_DATA]);
 		expect(fixture.lines("op-calls.jsonl")).toEqual([]);
 	}, 60_000);
 

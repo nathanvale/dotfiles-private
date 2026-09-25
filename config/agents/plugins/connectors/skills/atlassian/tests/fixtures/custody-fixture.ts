@@ -264,12 +264,6 @@ export class CustodyFixture {
 		return { code, stdout, stderr };
 	}
 
-	async dispatch(argv: string[], extra: Record<string, string> = {}): Promise<RunResult> {
-		const proc = Bun.spawn([process.execPath, path.join(this.skill, "scripts", "atlassian-dispatch.ts"), ...argv], { env: this.environment(extra), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-		const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
-		return { code, stdout, stderr };
-	}
-
 	// Idempotent. The attended keychain is unregistered and deleted through
 	// security, and any failure is thrown, before the tree is removed.
 	dispose(): void {

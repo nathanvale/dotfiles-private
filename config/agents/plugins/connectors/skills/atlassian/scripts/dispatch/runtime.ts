@@ -145,10 +145,8 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 }
 
 // What a credential binding may use: the item IDs of the tenant's validated
-// registration; the Bun entry's registration refusal, reported at the first
-// bind and so before any custody read; or null for a journal-only command,
-// which never binds.
-export type Custody = { items: RegisteredItems } | { unregistered: string } | null;
+// registration, or null for a journal-only command, which never binds.
+export type Custody = { items: RegisteredItems } | null;
 
 // The production dependency set for one validated tenant. Built exactly once
 // per invocation from the parsed tenant, so the transport, the credential
@@ -163,7 +161,6 @@ export function productionDependencies(tenant: string, env: Environment, custody
 		bindCredential: async (slug, product) => {
 			if (slug !== tenant) throw new Error("an Atlassian binding named another tenant");
 			if (custody === null) throw new Error("an Atlassian binding without a validated registration");
-			if ("unregistered" in custody) return { ok: false, cause: "refused-credential-unconfigured", detail: custody.unregistered };
 			return bindCredential(slug, product, custody.items[product], env, custodyCommand);
 		},
 		journal: (slug) => openJournal(slug, { env }),

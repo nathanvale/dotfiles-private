@@ -2,8 +2,9 @@
 // routes on the one Community Provider, every read and write behind live
 // schema confirmation, writes behind the durable preview and apply journal,
 // and the operator path. Policy is proved in-process with an in-memory
-// transport and a real journal in a temp state root; public-process cases
-// cross the real route.
+// transport and a real journal in a temp state root; the public route is
+// proved through the packaged front door in packaged.test.ts, and one
+// process row here proves the module is no longer an entry.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
@@ -15,7 +16,7 @@ import { type Dependencies, REPAIR_TEXT, type SchemaTool, type Transport, type T
 import { openJournal } from "../scripts/dispatch/journal.ts";
 import { stageFile } from "../scripts/outbox.ts";
 import type { ProviderFailureCause } from "../scripts/dispatch/translate.ts";
-import { CustodyFixture, OFFICIAL_MCPORTER, PROVIDER_TOKEN, SERVICE_TOKEN } from "./fixtures/custody-fixture.ts";
+import { CustodyFixture, PROVIDER_TOKEN } from "./fixtures/custody-fixture.ts";
 import { substitutedPluginRoot } from "./fixtures/plugin-copy.ts";
 
 const SKILL = path.resolve(import.meta.dir, "..");
@@ -1258,10 +1259,11 @@ describe("historical records from the retired Official route", () => {
 });
 
 describe("production adapters", () => {
-	// Public processes over the 1Password custody fixture, all run from the
-	// substituted plugin copy (see plugin-copy.ts): the test Keychain reader,
-	// plugin-owned op and uv fakes, and, when the official release fixture is
-	// present, the verified MCPorter itself. Substituted-reader process proof.
+	// Public processes and the copy's own modules over the 1Password custody
+	// fixture, all from the substituted plugin copy (see plugin-copy.ts): the
+	// test Keychain reader and plugin-owned op and uv fakes. Every packaged
+	// route claim lives in packaged.test.ts; these rows own the route registry
+	// gate, staging, and the retired Bun entry.
 	let fixture: CustodyFixture;
 	// The copy's transport, so any Provider preflight it could start is the copy's.
 	let routeTransport: typeof import("../scripts/dispatch/runtime.ts").routeTransport;
@@ -1272,29 +1274,21 @@ describe("production adapters", () => {
 	});
 	afterEach(() => fixture.dispose());
 	const env = () => fixture.environment();
-	const parse = (stdout: string) => (JSON.parse(stdout) as { result: { outcome: string; causeCode: string; repairAction: string | null; transactionState: string; data: unknown; provenance: { provider: string; tool: string; status: string }[]; effects: { completed: string[] } } }).result;
-	const opTitles = () => fixture.lines<{ argv: string[] }>("op-calls.jsonl").map((call) => call.argv[2]);
-	const dispatchRead = (operation: string, input: string) => fixture.dispatch(["--tenant", "example", operation, "--input", input, "--json"]);
 
-	test("the public dispatcher rejects a missing or malformed Community credential before MCPorter starts", async () => {
-		for (const [label, credential, hint] of [
-			["missing", undefined, "the product credential item needs username, credential, and a site_url field"],
-			["malformed", "fixture-private-value\nsecond-line", "the credential item has malformed fields"],
-		] as const) {
-			fixture.writeItem({ username: PRINCIPAL, site_url: ORIGIN, ...(credential === undefined ? {} : { credential }) });
-			const result = await dispatchRead("issue.search", '{"jql":"x"}');
-			expect([label, result.code, result.stderr]).toEqual([label, 3, ""]);
-			const envelope = parse(result.stdout);
-			expect([label, envelope.causeCode, envelope.repairAction, envelope.transactionState]).toEqual([label, "refused-precondition", `${REPAIR_TEXT["refused-precondition"]}; ${hint}`, "unchanged"]);
-			for (const stream of [result.stdout, result.stderr]) {
-				expect(stream).not.toContain("fixture-private-value");
-				expect(stream).not.toContain("second-line");
-				expect(stream).not.toContain(SERVICE_TOKEN);
-			}
-		}
+	// No-bypass: the dispatcher module is no longer an entry. Bun running it
+	// directly on a fully provisioned, registered machine (Keychain token, op,
+	// uv, item, and canned schema all present, so a live entry would reach each)
+	// prints nothing, exits 0, and reads no credential or starts no route.
+	test("no-bypass: bun running the retired dispatcher script as an entry does nothing on a provisioned, registered machine", async () => {
+		fixture.writeItem({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN });
+		fixture.canned("jira", "jira_get_issue", { key: "EX-1", summary: "canned" });
+		const proc = Bun.spawn([process.execPath, path.join(fixture.skill, "scripts", "atlassian-dispatch.ts"), "--tenant", "example", "issue.get", "--input", '{"issueKey":"EX-1"}'], { env: env(), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+		const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+		expect([code, stdout, stderr]).toEqual([0, "", ""]);
+		expect([fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl"), fixture.lines("effects.jsonl")]).toEqual([[], [], [], []]);
+		expect([fixture.lines("hostile-mcporter.jsonl"), fixture.lines("hostile-recorders.jsonl")]).toEqual([[], []]);
 		expect(existsSync(path.join(fixture.state, "connectors", "mcporter"))).toBe(false);
-		expect(fixture.lines("community-starts.jsonl")).toEqual([]);
-	});
+	}, 30_000);
 
 	test("route registry and selector planning refuse before a Provider preflight process starts", async () => {
 		const binding = { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN, item: ITEM_ID };
@@ -1339,90 +1333,5 @@ describe("production adapters", () => {
 		const later = Date.now() + 2 * 60 * 60 * 1000;
 		expect(stageFile("example", env(), source, later)).toEqual(staged);
 		expect(readdirSync(outbox).sort()).toEqual([digest, "notes"].sort());
-	});
-
-	test("the public process stops before MCPorter when the site origin is absent, legacy only, or invalid", async () => {
-		for (const [label, entries] of [
-			["absent", { username: PRINCIPAL }],
-			["legacy url only", { username: PRINCIPAL, credential: PROVIDER_TOKEN, url: "https://Example.atlassian.net/" }],
-			["invalid site_url beside a valid legacy url", { username: PRINCIPAL, site_url: "https://example.atlassian.net/wiki", url: ORIGIN }],
-		] as const) {
-			fixture.writeItem(entries);
-			const result = await dispatchRead("issue.get", '{"issueKey":"PROJ-1"}');
-			expect([label, result.code, result.stderr]).toEqual([label, 3, ""]);
-			const envelope = parse(result.stdout);
-			expect([label, envelope.causeCode, envelope.repairAction]).toEqual([label, "site-unresolved", "the tenant's credential item must expose a valid site_url field"]);
-			expect(existsSync(path.join(fixture.state, "connectors", "mcporter"))).toBe(false);
-		}
-	});
-
-	describe.skipIf(!OFFICIAL_MCPORTER)("through the verified MCPorter", () => {
-		test("Jira reads use only the Jira item and the Jira route", async () => {
-			fixture.writeItem({ username: PRINCIPAL, site_url: ORIGIN, credential: PROVIDER_TOKEN }, 42);
-			fixture.canned("jira", "jira_get_issue", { key: "PROJ-1", summary: "canned" });
-			const result = await dispatchRead("issue.get", '{"issueKey":"PROJ-1"}');
-			expect([result.code, result.stderr]).toEqual([0, ""]);
-			const envelope = parse(result.stdout);
-			expect([envelope.causeCode, envelope.data]).toEqual(["success", { key: "PROJ-1", summary: "canned" }]);
-			expect(envelope.provenance).toEqual([{ provider: CJ, tool: "jira_get_issue", status: "success" }]);
-			expect(new Set(opTitles())).toEqual(new Set(["jirafixtureitem00000000001"]));
-			expect(fixture.lines("effects.jsonl")).toEqual([{ product: "jira", tool: "jira_get_issue", args: { issue_key: "PROJ-1" } }]);
-			for (const secret of [PROVIDER_TOKEN, SERVICE_TOKEN]) expect(result.stdout).not.toContain(secret);
-		}, 60_000);
-
-		test("Confluence reads use only the Confluence item and the Confluence route", async () => {
-			fixture.writeItem({ username: "confluence@example.invalid", site_url: ORIGIN, credential: PROVIDER_TOKEN }, 7);
-			fixture.canned("confluence", "confluence_get_page", { id: "123", title: "canned page" });
-			const result = await dispatchRead("page.get", '{"pageId":"123"}');
-			expect([result.code, result.stderr]).toEqual([0, ""]);
-			const envelope = parse(result.stdout);
-			expect([envelope.causeCode, envelope.data]).toEqual(["success", { id: "123", title: "canned page" }]);
-			expect(envelope.provenance).toEqual([{ provider: CC, tool: "confluence_get_page", status: "success" }]);
-			expect(new Set(opTitles())).toEqual(new Set(["conffixtureitem00000000002"]));
-			const starts = fixture.lines<{ confluenceUrl: string | null }>("community-starts.jsonl");
-			expect(starts.map((start) => start.confluenceUrl)).toEqual(starts.map(() => "https://example.atlassian.net/wiki"));
-		}, 60_000);
-
-		test("a Provider that dies at start is a final transport failure from MCPorter's own diagnostic, never provider content", async () => {
-			fixture.writeItem({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN });
-			writeFileSync(path.join(fixture.root, "community-crash"), "");
-			const result = await dispatchRead("issue.search", '{"jql":"x"}');
-			const envelope = parse(result.stdout);
-			expect([result.code, result.stderr, envelope.causeCode, envelope.repairAction]).toEqual([3, "", "failed-transport", REPAIR_TEXT["failed-transport"]]);
-			expect(envelope.provenance).toEqual([{ provider: CJ, tool: "list", status: "failed-transport" }]);
-			expect(result.stdout).not.toContain("fixture-private-crash-text");
-			expect(fixture.lines("effects.jsonl")).toEqual([]);
-		}, 60_000);
-
-		test("an in-band error payload from a successful tool call is translated at the transport seam, never returned as data", async () => {
-			fixture.writeItem({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN });
-			fixture.canned("confluence", "confluence_get_page", { error: "Failed to retrieve page by ID '123': Error retrieving page content: There is no content with the given id, or the calling user does not have permission to view the content" });
-			const result = await dispatchRead("page.get", '{"pageId":"123"}');
-			expect([result.code, result.stderr]).toEqual([3, ""]);
-			const envelope = parse(result.stdout);
-			expect([envelope.outcome, envelope.causeCode, envelope.data, envelope.repairAction]).toEqual(["failed", "failed-unknown", null, REPAIR_TEXT["failed-unknown"]]);
-			expect(result.stdout).not.toContain("Failed to retrieve");
-		}, 60_000);
-
-		test("an in-band failure with extra provider fields is still an error", async () => {
-			fixture.writeItem({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN });
-			fixture.canned("confluence", "confluence_get_page", { success: false, error: "HTTP 403 Forbidden", requestId: "opaque" });
-			const result = await dispatchRead("page.get", '{"pageId":"123"}');
-			const envelope = parse(result.stdout);
-			expect([result.code, envelope.causeCode, envelope.data]).toEqual([3, "refused-auth", null]);
-			expect(result.stdout).not.toContain("opaque");
-		}, 60_000);
-
-		test("hostile provider text in a real tool error is translated at the transport seam and never reaches stdout or stderr", async () => {
-			const PRIVATE = ["fixture-secret-value", "customer SSN 123-45-6789", "PROJ-99 confidential merger", SERVICE_TOKEN, "op://", "Bearer", "Basic "];
-			const leak = `HTTP 401 Unauthorized token=fixture-secret-value Authorization: Basic ${SERVICE_TOKEN} Bearer x op://API Credentials/JIRA_EXAMPLE_API_TOKEN/credential; issue PROJ-99 confidential merger; customer SSN 123-45-6789`;
-			fixture.canned("jira", "jira_get_issue", { toolErrorText: leak });
-			fixture.writeItem({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN });
-			const result = await dispatchRead("issue.get", '{"issueKey":"PROJ-1"}');
-			expect([result.code, result.stderr]).toEqual([3, ""]);
-			const envelope = parse(result.stdout);
-			expect([envelope.causeCode, envelope.repairAction]).toEqual(["refused-auth", REPAIR_TEXT["refused-auth"]]);
-			for (const fragment of PRIVATE) expect(result.stdout).not.toContain(fragment);
-		}, 60_000);
 	});
 });
