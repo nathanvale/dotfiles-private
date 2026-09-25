@@ -24,6 +24,8 @@ const CJ = "atlassian-community-jira";
 const CC = "atlassian-community-confluence";
 const PRINCIPAL = "service@example.invalid";
 const ITEM_VERSION = "onepassword-item-version:1";
+// The binding's configured 1Password item ID (a 26-character ID).
+const ITEM_ID = "jiraitem0000000000000000aa";
 const NOW = 1_700_000_000_000;
 // The retired Provider name as persisted records still carry it. It is a
 // string here, not a type, because no active code may name it.
@@ -153,7 +155,7 @@ function deps(overrides: Partial<Dependencies> = {}): Dependencies {
 		transport: fakeTransport().transport,
 		bindCredential: async (tenant, product) => {
 			seen.push({ tenant, product });
-			return { ok: true, binding: { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN } };
+			return { ok: true, binding: { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN, item: ITEM_ID } };
 		},
 		journal: (tenant) => openJournal(tenant, { stateRoot, now: () => NOW }),
 		stage: (_tenant, file) => ({ ok: true, relative: `staged/${path.basename(file)}` }),
@@ -291,7 +293,7 @@ describe("Community reads", () => {
 	test("one semantic operation binds one immutable credential context through the schema list and every call", async () => {
 		const { transport, bindings } = fakeTransport();
 		let binds = 0;
-		const binding = Object.freeze({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN });
+		const binding = Object.freeze({ principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN, item: ITEM_ID });
 		await dispatch(["issue.get", "--input", '{"issueKey":"PROJ-1"}'], deps({ transport, bindCredential: async () => ({ ok: true, binding: { ...binding, itemVersion: `${ITEM_VERSION}:${++binds}` } }) }));
 		expect(binds).toBe(1);
 		expect(bindings).toHaveLength(2);
@@ -1295,7 +1297,7 @@ describe("production adapters", () => {
 	});
 
 	test("route registry and selector planning refuse before a Provider preflight process starts", async () => {
-		const binding = { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN };
+		const binding = { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN, item: ITEM_ID };
 		const validRegistry = { imports: [], mcpServers: { [CJ]: { allowedTools: ["jira_search"] } } };
 		const validRoute = { defaultProvider: CJ, dispatcherOwned: true, selectors: { tenant: "ATLASSIAN_TENANT" } };
 		for (const [label, registry, route] of [
@@ -1363,7 +1365,7 @@ describe("production adapters", () => {
 			const envelope = parse(result.stdout);
 			expect([envelope.causeCode, envelope.data]).toEqual(["success", { key: "PROJ-1", summary: "canned" }]);
 			expect(envelope.provenance).toEqual([{ provider: CJ, tool: "jira_get_issue", status: "success" }]);
-			expect(new Set(opTitles())).toEqual(new Set(["JIRA_EXAMPLE_API_TOKEN"]));
+			expect(new Set(opTitles())).toEqual(new Set(["jirafixtureitem00000000001"]));
 			expect(fixture.lines("effects.jsonl")).toEqual([{ product: "jira", tool: "jira_get_issue", args: { issue_key: "PROJ-1" } }]);
 			for (const secret of [PROVIDER_TOKEN, SERVICE_TOKEN]) expect(result.stdout).not.toContain(secret);
 		}, 60_000);
@@ -1376,7 +1378,7 @@ describe("production adapters", () => {
 			const envelope = parse(result.stdout);
 			expect([envelope.causeCode, envelope.data]).toEqual(["success", { id: "123", title: "canned page" }]);
 			expect(envelope.provenance).toEqual([{ provider: CC, tool: "confluence_get_page", status: "success" }]);
-			expect(new Set(opTitles())).toEqual(new Set(["CONFLUENCE_EXAMPLE_API_TOKEN"]));
+			expect(new Set(opTitles())).toEqual(new Set(["conffixtureitem00000000002"]));
 			const starts = fixture.lines<{ confluenceUrl: string | null }>("community-starts.jsonl");
 			expect(starts.map((start) => start.confluenceUrl)).toEqual(starts.map(() => "https://example.atlassian.net/wiki"));
 		}, 60_000);

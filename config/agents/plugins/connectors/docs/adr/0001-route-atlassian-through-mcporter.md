@@ -97,6 +97,19 @@ through `uvx` with only the selected product's environment triplet, built
 from the item's `username`, `credential`, and `site_url` fields, failing
 closed when any is absent. The credential value never leaves that process.
 
+Dated note, 25 September 2026: decision D2a supersedes the tenant-derived
+`JIRA_<TENANT>_API_TOKEN` and `CONFLUENCE_<TENANT>_API_TOKEN` item mapping
+above. The Tenant Registration published by
+`connectors auth configure atlassian` now names each product's item by its
+strict 26-character 1Password item ID; nothing derives an item from the
+tenant. Every command that reads a credential refuses an absent or invalid
+registration before any Keychain, op, MCPorter, or Provider start. The custody
+child reads exactly the registered ID, the Credential Binding carries it, and
+the Provider re-reads only that ID; both refuse an item whose returned `id`
+differs. The registration is create-or-identical in the CLI; re-pointing it is
+a manual step after open receipts settle and live previews expire. This note
+records the change without altering this ADR's status.
+
 Before each MCPorter list or call, the dispatcher runs the Provider's local
 `--preflight`. The Provider revalidates the bound item and its required
 executable, then exits without downstream process startup or network

@@ -1,11 +1,12 @@
 // The smallest private-state helper for Connectors: an owned 0700 directory,
-// an owned exact-0600 regular file read, an atomic exact-0600 write, and the
-// digest of an owned executable in Connector state.
+// an owned exact-0600 regular file read, an atomic exact-0600 write or
+// create-once publication, and the digest of an owned executable in
+// Connector state.
 // Symlinks are refused everywhere by lstat. Every refusal is a closed reason;
 // no path or content is carried in it. This is not a framework: consumers
 // keep their own record formats and their own recovery policy.
 import { createHash } from "node:crypto";
-import { chmodSync, closeSync, constants, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, type Stats, writeSync } from "node:fs";
+import { chmodSync, closeSync, constants, fchmodSync, fstatSync, fsyncSync, linkSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, type Stats, writeSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { EnvironmentSource } from "./safe-environment.ts";
@@ -171,6 +172,24 @@ export function readPrivateFile(file: string): PrivateStateResult<{ text: string
 // ownedDirectory; this never creates it. An existing target that is a
 // symlink or not a regular file is refused, never replaced.
 export function writePrivateFile(file: string, content: string): PrivateStateResult<Record<never, never>> {
+	const prepared = prepareTarget(file);
+	if (!prepared.ok) return prepared;
+	const { directory } = prepared;
+	const temp = writeTemp(file, content);
+	if (temp === null) return { ok: false, reason: "write-failed" };
+	try {
+		renameSync(temp, file);
+		syncDirectory(directory);
+		return { ok: true };
+	} catch {
+		rmSync(temp, { force: true });
+		return { ok: false, reason: "write-failed" };
+	}
+}
+
+// The checks both writes share: owned, non-symlink ancestors, an exact-0700
+// parent this never creates, and no symlink or non-regular target.
+function prepareTarget(file: string): PrivateStateResult<{ directory: string }> {
 	const directory = path.dirname(file);
 	const ancestors = inspectStateAncestors(directory);
 	if (!ancestors.ok) return ancestors;
@@ -180,7 +199,13 @@ export function writePrivateFile(file: string, content: string): PrivateStateRes
 	const target = inspect(file);
 	if (target.ok && target.metadata.isSymbolicLink()) return { ok: false, reason: "symlink" };
 	if (target.ok && !target.metadata.isFile()) return { ok: false, reason: "not-regular" };
-	const temp = path.join(directory, `.${path.basename(file)}.${crypto.randomUUID()}.tmp`);
+	return { ok: true, directory };
+}
+
+// A fresh exact-0600 temp file beside the target holding content, fsynced;
+// null after removing it when any step fails.
+function writeTemp(file: string, content: string): string | null {
+	const temp = path.join(path.dirname(file), `.${path.basename(file)}.${crypto.randomUUID()}.tmp`);
 	try {
 		const fd = openSync(temp, "wx", FILE_MODE);
 		try {
@@ -190,16 +215,46 @@ export function writePrivateFile(file: string, content: string): PrivateStateRes
 		} finally {
 			closeSync(fd);
 		}
-		renameSync(temp, file);
-		const directoryFd = openSync(directory, constants.O_RDONLY);
-		try {
-			fsyncSync(directoryFd);
-		} finally {
-			closeSync(directoryFd);
-		}
-		return { ok: true };
+		return temp;
 	} catch {
 		rmSync(temp, { force: true });
+		return null;
+	}
+}
+
+function syncDirectory(directory: string): void {
+	const directoryFd = openSync(directory, constants.O_RDONLY);
+	try {
+		fsyncSync(directoryFd);
+	} finally {
+		closeSync(directoryFd);
+	}
+}
+
+// Publish content at a target that does not exist yet, never replacing one
+// that does: the fsynced temp file is hard-linked at the target, which fails
+// with EEXIST when any entry is already there. Of two racing publishers
+// exactly one links; the other reads what the winner published, through
+// readPrivateFile, and returns it as existing. Same parent rules as
+// writePrivateFile.
+export function publishPrivateFileOnce(file: string, content: string): PrivateStateResult<{ published: true } | { published: false; existing: string }> {
+	const prepared = prepareTarget(file);
+	if (!prepared.ok) return prepared;
+	const temp = writeTemp(file, content);
+	if (temp === null) return { ok: false, reason: "write-failed" };
+	try {
+		linkSync(temp, file);
+	} catch (error) {
+		rmSync(temp, { force: true });
+		if ((error as { code?: unknown }).code !== "EEXIST") return { ok: false, reason: "write-failed" };
+		const existing = readPrivateFile(file);
+		return existing.ok ? { ok: true, published: false, existing: existing.text } : existing;
+	}
+	try {
+		rmSync(temp, { force: true });
+		syncDirectory(prepared.directory);
+		return { ok: true, published: true };
+	} catch {
 		return { ok: false, reason: "write-failed" };
 	}
 }

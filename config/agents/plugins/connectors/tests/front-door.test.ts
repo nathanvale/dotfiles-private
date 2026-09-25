@@ -95,10 +95,37 @@ describe("compiled front door: discovery", () => {
 		expect(result.stdout).toContain("Commands:");
 		expect(result.stdout).toContain("Examples:");
 		expect(result.stdout).toContain("schema <connector> [--select name=value ...]");
+		expect(result.stdout).toContain("auth configure <connector> [--select name=value ...] --input <json-object>");
+		expect(result.stdout).toContain("auth status <connector> [--select name=value ...]");
 		expect(result.stdout).toContain("auth login <connector> [--select name=value ...] [--no-browser] [--reset]");
 		expect(result.stdout).toContain("run <connector> [--select name=value] <write-operation> --input <json-object> --apply <previewId>");
 		expect(result.stdout).toContain("recover <connector> [--select name=value] [--run <runId> [--adjudicate --input <json-object>]]");
 		expect(result.stdout).toContain("recover <connector> [--select name=value] --run <runId|previewId> --unlock");
+	});
+
+	// Independent literals of the accepted auth grammar: --input after
+	// configure only, at most once and only as a JSON object; login options
+	// after login only. The parser refuses before any manifest or adapter.
+	test("discovery names configure's --input and status, and --input is refused after every other auth verb", async () => {
+		const discovered = JSON.parse((await runFrontDoor(["--discover", "--json"])).stdout);
+		expect(discovered.result.data.commands.find((c: { commandIdentity: string }) => c.commandIdentity === "connectors.auth")?.summary).toBe(
+			"Inspect or perform one connector's declared auth verb through its packaged adapter; configure alone takes --input <json-object> of nonsecret stored configuration, status inspects that configuration only, and login is attended only and alone takes --no-browser and --reset",
+		);
+		const repair = "Run connectors auth <verb> <connector> [--select name=value ...] [--input <json-object> after configure | --no-browser --reset after login]";
+		const input = ["--input", '{"jiraItem":"jirafixtureitem00000000001","confluenceItem":"conffixtureitem00000000002"}'];
+		const rows = [
+			...["status", "check", "login", "repair", "logout"].map((verb) => ["auth", verb, "atlassian", "--select", "tenant=example", ...input]),
+			["auth", "configure", "atlassian", "--select", "tenant=example", ...input, ...input],
+			["auth", "configure", "atlassian", "--select", "tenant=example", "--input", "[]"],
+			["auth", "configure", "atlassian", "--select", "tenant=example", "--input"],
+			["auth", "configure", "atlassian", "--select", "tenant=example", "--no-browser"],
+		];
+		expect(rows).toHaveLength(9);
+		for (const argv of rows) {
+			const result = await runFrontDoor(argv);
+			expect([argv.join(" "), result.code, result.stderr]).toEqual([argv.join(" "), 2, ""]);
+			expect(JSON.parse(result.stdout).result).toMatchObject({ commandIdentity: "connectors.auth", causeCode: "USAGE_MALFORMED_ARGUMENTS", transactionState: "unchanged", repairAction: repair });
+		}
 	});
 
 	test("--help --json answers with its own Contract Core envelope", async () => {

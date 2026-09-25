@@ -48,8 +48,11 @@ export interface AuthAttempt {
 // transport flag and never sees an unknown option.
 export type LoginOption = "no-browser" | "reset";
 
+// input is the --input JSON object the core admits only after
+// `auth configure`; every other verb carries null. It holds nonsecret stored
+// configuration, never a credential, and never a Route Selection.
 export type AdapterAction =
-	| { readonly kind: "auth"; readonly verb: string; readonly loginOptions: readonly LoginOption[] }
+	| { readonly kind: "auth"; readonly verb: string; readonly loginOptions: readonly LoginOption[]; readonly input: Readonly<Record<string, unknown>> | null }
 	| { readonly kind: "run"; readonly operation: string; readonly input: Readonly<Record<string, unknown>> | null };
 
 export interface AdapterRequest {
@@ -121,9 +124,10 @@ export interface ExecutionCapabilities {
 	internalCommand(role: string): readonly string[];
 }
 
-// A journal record an execute step completed on its own: a write preview, an
-// adjudication that settled a receipt, or an operator unlock.
-export type RecordedEffect = "write-preview" | "write-adjudication" | "write-unlock";
+// A record an execute step completed on its own: a write preview, an
+// adjudication that settled a receipt, an operator unlock, or the custody
+// registration `auth configure` published.
+export type RecordedEffect = "write-preview" | "write-adjudication" | "write-unlock" | "custody-registration";
 
 // failed: a read that did not complete, with no external effect.
 // recorded: one journal record completed, and nothing was sent.

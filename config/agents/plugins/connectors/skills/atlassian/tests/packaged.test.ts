@@ -1,6 +1,8 @@
-// Ticket #92 U1 and U2: Atlassian reads, the custody check, journaled writes,
-// and recovery through the packaged front door (Spec #87 AC8, AC9, AC11, AC16,
-// AC19, and AC20; configure and status are U3's). Every row
+// Ticket #92 U1, U2, and U3a: Atlassian reads, the custody check, journaled
+// writes, recovery, and the tenant registration (auth configure and status,
+// and the registration gate before any custody read) through the packaged
+// front door (Spec #87 AC8, AC9, AC10 configure part, AC11, AC16, AC19, and
+// AC20; D2a). Every row
 // spawns the compiled bin/connectors of the verified substituted plugin copy
 // (plugin-copy.ts), which is compiled from source whose Keychain-read leaf is
 // the test-owned reader fake and whose manifest admits the fake op and uv;
@@ -13,9 +15,9 @@
 // live Provider.
 import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { CustodyFixture, OFFICIAL_MCPORTER, PROVIDER_TOKEN, SERVICE_TOKEN, seedMcporter } from "./fixtures/custody-fixture.ts";
+import { CONFLUENCE_ITEM_ID, CustodyFixture, JIRA_ITEM_ID, OFFICIAL_MCPORTER, PROVIDER_TOKEN, registrationLiteral, SERVICE_TOKEN, seedMcporter } from "./fixtures/custody-fixture.ts";
 import { SHIPPED_ROOT, substitutedPluginRoot } from "./fixtures/plugin-copy.ts";
 
 if (process.env.CI && !OFFICIAL_MCPORTER) throw new Error("CONNECTORS_OFFICIAL_RELEASE_FIXTURE is required for the packaged Atlassian process proof");
@@ -27,11 +29,14 @@ substitutedPluginRoot();
 const PRINCIPAL = "service@example.invalid";
 const ORIGIN = "https://example.atlassian.net";
 const TENANT = ["--select", "tenant=example"];
-const ITEM_READ = (title: string) => ["item", "get", title, "--vault", "API Credentials", "--format", "json"];
-const JIRA_ITEM = "JIRA_EXAMPLE_API_TOKEN";
-const CONFLUENCE_ITEM = "CONFLUENCE_EXAMPLE_API_TOKEN";
+const ITEM_READ = (item: string) => ["item", "get", item, "--vault", "API Credentials", "--format", "json"];
+// The registered item IDs (custody-fixture.ts), distinct per product and
+// unlike the retired tenant-derived titles JIRA_EXAMPLE_API_TOKEN and
+// CONFLUENCE_EXAMPLE_API_TOKEN.
+const JIRA_ITEM = JIRA_ITEM_ID;
+const CONFLUENCE_ITEM = CONFLUENCE_ITEM_ID;
 const OP_ENV_KEYS = ["HOME", "OP_SERVICE_ACCOUNT_TOKEN", "PATH"];
-const ITEM_HANDOFF = "create the Atlassian API token in your Atlassian account settings and store it yourself in the 1Password item JIRA_EXAMPLE_API_TOKEN in the API Credentials vault; Connectors never creates, rotates, or imports a token";
+const ITEM_HANDOFF = "create the Atlassian API token in your Atlassian account settings and store it yourself in the 1Password item with ID jirafixtureitem00000000001, the ID auth configure recorded, in the API Credentials vault; Connectors never creates, rotates, or imports a token";
 const KEYCHAIN_HANDOFF = "store the Connectors 1Password service-account token in the login Keychain yourself: security add-generic-password -s connectors.1password.service-account -a connectors -w (it prompts for the value; Connectors never receives it)";
 const UV_SETUP_REPAIR = "the plugin-owned uv is not set up; run connectors setup";
 const WRITE_PHASE_REPAIR = "An Atlassian write needs --preview first, then --apply <previewId> with the identical --input";
@@ -137,8 +142,8 @@ function expectConfinedRead(fixture: CustodyFixture, item: string, providerKeys:
 
 let template: CustodyFixture | undefined;
 let fixture: CustodyFixture;
-const fresh = (options: { seed?: boolean; manifest?: "fixture" | "shipped" } = {}): CustodyFixture => {
-	fixture = new CustodyFixture({ manifest: options.manifest ?? "fixture" }).installAll();
+const fresh = (options: { seed?: boolean; manifest?: "fixture" | "shipped"; registered?: boolean } = {}): CustodyFixture => {
+	fixture = new CustodyFixture({ manifest: options.manifest ?? "fixture", registered: options.registered !== false }).installAll();
 	fixture.writeItem({ username: PRINCIPAL, credential: PROVIDER_TOKEN, site_url: ORIGIN });
 	fixture.canned("jira", "list", JIRA_TOOLS);
 	fixture.canned("confluence", "list", CONFLUENCE_TOOLS);
@@ -152,6 +157,13 @@ const fresh = (options: { seed?: boolean; manifest?: "fixture" | "shipped" } = {
 };
 afterEach(() => fixture?.dispose());
 
+// Every file under the Atlassian state root, relative to it: before any
+// journal or outbox effect, only the seeded registration.
+const atlassianFiles = (target: CustodyFixture): string[] => {
+	const base = path.join(target.state, "connectors", "atlassian");
+	return existsSync(base) ? (readdirSync(base, { recursive: true }) as string[]).filter((entry) => statSync(path.join(base, entry)).isFile()).sort() : [];
+};
+
 describe("refusals before any dependency, credential, or Provider", () => {
 	test("an invalid read input refuses with the schema cause and starts nothing", async () => {
 		fresh({ seed: false });
@@ -161,7 +173,7 @@ describe("refusals before any dependency, credential, or Provider", () => {
 		const envelope = parse(result.stdout).result;
 		expect([envelope.commandIdentity, envelope.outcome, envelope.causeCode, envelope.transactionState, envelope.data]).toEqual(["connectors.run", "refused", "SCHEMA_ADAPTER_REFUSED", "unchanged", { connector: "atlassian", connectorCause: "input-invalid" }]);
 		expect([fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl")]).toEqual([[], [], []]);
-		expect([existsSync(path.join(fixture.state, "connectors", "mcporter")), existsSync(path.join(fixture.state, "connectors", "atlassian"))]).toEqual([false, false]);
+		expect([existsSync(path.join(fixture.state, "connectors", "mcporter")), atlassianFiles(fixture)]).toEqual([false, ["example/registration.json"]]);
 		expectNoHostile(fixture);
 		for (const stream of [result.stdout, result.stderr]) expect(stream).not.toContain(sentinel);
 	});
@@ -234,7 +246,7 @@ describe("refusals before any dependency, credential, or Provider", () => {
 			for (const stream of [result.stdout, result.stderr]) expect(stream).not.toContain(sentinel);
 		}
 		expect([fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl")]).toEqual([[], [], []]);
-		expect([existsSync(path.join(fixture.state, "connectors", "mcporter")), existsSync(path.join(fixture.state, "connectors", "atlassian"))]).toEqual([false, false]);
+		expect([existsSync(path.join(fixture.state, "connectors", "mcporter")), atlassianFiles(fixture)]).toEqual([false, ["example/registration.json"]]);
 		expectNoHostile(fixture);
 	});
 
@@ -268,8 +280,8 @@ describe("custody check and credential handoffs", () => {
 			connector: "atlassian",
 			custodyChecked: true,
 			bindings: [
-				{ product: "jira", principal: PRINCIPAL, itemVersion: "onepassword-item-version:1", origin: ORIGIN },
-				{ product: "confluence", principal: PRINCIPAL, itemVersion: "onepassword-item-version:1", origin: ORIGIN },
+				{ product: "jira", principal: PRINCIPAL, itemVersion: "onepassword-item-version:1", origin: ORIGIN, item: "jirafixtureitem00000000001" },
+				{ product: "confluence", principal: PRINCIPAL, itemVersion: "onepassword-item-version:1", origin: ORIGIN, item: "conffixtureitem00000000002" },
 			],
 		});
 		expect(fixture.lines<{ argv: string[] }>("op-calls.jsonl").map((call) => call.argv)).toEqual([ITEM_READ(JIRA_ITEM), ITEM_READ(CONFLUENCE_ITEM)]);
@@ -297,7 +309,7 @@ describe("custody check and credential handoffs", () => {
 
 	test("an absent 1Password item is a handoff for run and auth check, and op is only ever asked to read", async () => {
 		fresh({ seed: false });
-		rmSync(path.join(fixture.root, "item.json"));
+		fixture.removeItems();
 		for (const argv of [["run", "atlassian", ...TENANT, "issue.get", "--input", '{"issueKey":"EX-1"}'], ["auth", "check", "atlassian", ...TENANT]]) {
 			const result = await fixture.frontDoor(argv);
 			expect([argv[0], result.code, result.stderr]).toEqual([argv[0], 3, ""]);
@@ -308,6 +320,216 @@ describe("custody check and credential handoffs", () => {
 		expect(fixture.lines("community-starts.jsonl")).toEqual([]);
 		expect(existsSync(path.join(fixture.state, "connectors", "mcporter"))).toBe(false);
 		expectNoHostile(fixture);
+	});
+});
+
+// T5 U3a (D2a, Q-import): the tenant registration. Independent literals of
+// the accepted configure contract; the registration bytes come from the
+// fixture's restated literal, never from the production renderer.
+describe("tenant registration: configure, status, and the gate before custody", () => {
+	const CONFIGURE_COMMAND = `connectors auth configure atlassian --select tenant=<value> --input '{"jiraItem":"<id>","confluenceItem":"<id>"}'`;
+	const ITEM_ID_REPAIR = `expected a 26-character 1Password item ID from the API Credentials vault; copy each ID yourself outside Connectors, for example from op item get "<name>" --vault "API Credentials" --format json in your own op session, or from the item's link in the 1Password app; Connectors never resolves an item name`;
+	const CONFIGURE_INPUT_REPAIR = `auth configure needs --input '{"jiraItem":"<id>","confluenceItem":"<id>"}' with exactly those two keys; ${ITEM_ID_REPAIR}`;
+	const REPOINT = `confirm connectors recover atlassian --select tenant=<value> lists no open receipt and wait 15 minutes after the tenant's last preview, so no receipt or preview made under the old items can still act; then remove registration.json from the tenant's Connectors state directory by hand and run ${CONFIGURE_COMMAND} again`;
+	const EXISTS_REPAIR = `the tenant is already registered with different item IDs, and a registration never changes in place; to re-point it, ${REPOINT}`;
+	const INVALID_REPAIR = `the tenant's registration.json is not the exact private file auth configure writes; to replace it, ${REPOINT}`;
+	const UNREGISTERED_REPAIR = `register the tenant first with ${CONFIGURE_COMMAND}, giving the two 26-character 1Password item IDs from the API Credentials vault`;
+	const UNSTABLE_DETAIL = "credential custody could not produce a stable context";
+	const STALE_HINT = "a provider precondition failed before any request; run the provider readiness checks; credential item metadata changed; restart the semantic operation";
+	const OTHER_ID = "otheritemfixture0000000003";
+	const REGISTRATION = registrationLiteral("example", JIRA_ITEM_ID, CONFLUENCE_ITEM_ID);
+	const configure = (items: Record<string, unknown>, options: { stdinSentinel?: string } = {}) => fixture.frontDoor(["auth", "configure", "atlassian", ...TENANT, "--input", JSON.stringify(items)], options);
+	const IDS = { jiraItem: JIRA_ITEM_ID, confluenceItem: CONFLUENCE_ITEM_ID };
+	const noCapability = () => [fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl"), fixture.lines("effects.jsonl"), existsSync(path.join(fixture.state, "connectors", "mcporter"))];
+	const NONE = [[], [], [], [], false];
+	const registration = () => {
+		const file = fixture.registrationFile();
+		return { text: readFileSync(file, "utf8"), mode: statSync(file).mode & 0o7777, parentMode: statSync(path.dirname(file)).mode & 0o7777, inode: statSync(file).ino };
+	};
+
+	test("configure publishes the exact registration once without reading stdin or starting anything, and an identical configure changes nothing", async () => {
+		fresh({ seed: false, registered: false });
+		const sentinel = "configure-stdin-sentinel-must-not-be-read";
+		const first = await configure(IDS, { stdinSentinel: sentinel });
+		expect([first.code, first.stderr]).toEqual([0, ""]);
+		const published = parse(first.stdout).result;
+		expect([published.commandIdentity, published.outcome, published.causeCode, published.effectClass, published.transactionState, published.effects.completed, published.effects.uncertain, published.nextAction]).toEqual(["connectors.auth", "success", "SUCCESS_RUN_RECORDED", "repository-local", "completed", ["custody-registration"], [], "connectors.auth"]);
+		expect(published.data).toEqual({ connector: "atlassian", tenant: "example", vault: "API Credentials", items: { jira: "jirafixtureitem00000000001", confluence: "conffixtureitem00000000002" }, nextStep: "connectors auth check atlassian --select tenant=example" });
+		const written = registration();
+		expect([written.text, written.mode, written.parentMode]).toEqual([REGISTRATION, 0o600, 0o700]);
+		expect(atlassianFiles(fixture)).toEqual(["example/registration.json"]);
+		const again = await configure(IDS);
+		expect([again.code, again.stderr]).toEqual([0, ""]);
+		const unchanged = parse(again.stdout).result;
+		expect([unchanged.causeCode, unchanged.effectClass, unchanged.transactionState, unchanged.effects.completed]).toEqual(["SUCCESS_UNCHANGED", "inspect", "unchanged", []]);
+		expect(unchanged.data).toEqual(published.data);
+		expect(registration()).toEqual(written);
+		expect(noCapability()).toEqual(NONE);
+		expectNoHostile(fixture);
+		for (const stream of [first.stdout, again.stdout]) expect(stream).not.toContain(sentinel);
+	});
+
+	test("configure refuses anything but two strict item IDs, stores nothing, and never echoes the value", async () => {
+		fresh({ seed: false, registered: false });
+		const rows: [string, Record<string, unknown>, string, string][] = [
+			["item name", { jiraItem: "JIRA_EXAMPLE_API_TOKEN", confluenceItem: CONFLUENCE_ITEM_ID }, "item-reference-invalid", ITEM_ID_REPAIR],
+			["ATATT token", { jiraItem: JIRA_ITEM_ID, confluenceItem: "ATATT3xFfGF0configure-token-sentinel" }, "item-reference-invalid", ITEM_ID_REPAIR],
+			["24-character mixed-case token", { jiraItem: "Ab3dEf6hIj9kLm2nOp5qRs8t", confluenceItem: CONFLUENCE_ITEM_ID }, "item-reference-invalid", ITEM_ID_REPAIR],
+			["stdin form", { jiraItem: "-", confluenceItem: CONFLUENCE_ITEM_ID }, "item-reference-invalid", ITEM_ID_REPAIR],
+			["25 characters", { jiraItem: "abcdefghijklmnopqrstuvwxy", confluenceItem: CONFLUENCE_ITEM_ID }, "item-reference-invalid", ITEM_ID_REPAIR],
+			["27 characters", { jiraItem: "abcdefghijklmnopqrstuvwxyz1", confluenceItem: CONFLUENCE_ITEM_ID }, "item-reference-invalid", ITEM_ID_REPAIR],
+			["uppercase ID", { jiraItem: "JIRAFIXTUREITEM00000000001", confluenceItem: CONFLUENCE_ITEM_ID }, "item-reference-invalid", ITEM_ID_REPAIR],
+			["op reference", { jiraItem: "op://API Credentials/abcdefghijklmnopqrstuvwxyz/credential", confluenceItem: CONFLUENCE_ITEM_ID }, "item-reference-invalid", ITEM_ID_REPAIR],
+			["share link", { jiraItem: "https://share.1password.com/s#abcdefghijklmnopqrstuvwxyz", confluenceItem: CONFLUENCE_ITEM_ID }, "item-reference-invalid", ITEM_ID_REPAIR],
+			["not a string", { jiraItem: 1234567890123, confluenceItem: CONFLUENCE_ITEM_ID }, "item-reference-invalid", ITEM_ID_REPAIR],
+			["missing key", { jiraItem: JIRA_ITEM_ID }, "input-invalid", CONFIGURE_INPUT_REPAIR],
+			["extra key", { ...IDS, token: "extra-key-sentinel-must-not-echo" }, "input-invalid", CONFIGURE_INPUT_REPAIR],
+		];
+		expect(rows).toHaveLength(12);
+		for (const [label, items, connectorCause, repair] of rows) {
+			const result = await configure(items);
+			expect([label, result.code, result.stderr]).toEqual([label, 4, ""]);
+			const envelope = parse(result.stdout).result;
+			expect([label, envelope.commandIdentity, envelope.causeCode, envelope.transactionState, envelope.effects.completed, envelope.repairAction, envelope.data]).toEqual([label, "connectors.auth", "SCHEMA_ADAPTER_REFUSED", "unchanged", [], repair, { connector: "atlassian", connectorCause }]);
+			// A one-character value such as "-" cannot be told apart from envelope text.
+			for (const value of Object.values(items).filter((value) => value !== CONFLUENCE_ITEM_ID && value !== JIRA_ITEM_ID && String(value).length > 1)) expect(result.stdout).not.toContain(String(value));
+		}
+		const bare = await fixture.frontDoor(["auth", "configure", "atlassian", ...TENANT]);
+		expect([bare.code, parse(bare.stdout).result.data]).toEqual([4, { connector: "atlassian", connectorCause: "input-invalid" }]);
+		expect(existsSync(fixture.registrationFile())).toBe(false);
+		expect(noCapability()).toEqual(NONE);
+	});
+
+	test("configure with different IDs for a registered tenant refuses with the re-point repair and never replaces the registration", async () => {
+		fresh({ seed: false });
+		const before = registration();
+		const result = await configure({ jiraItem: OTHER_ID, confluenceItem: CONFLUENCE_ITEM_ID });
+		expect([result.code, result.stderr]).toEqual([3, ""]);
+		const envelope = parse(result.stdout).result;
+		expect([envelope.causeCode, envelope.transactionState, envelope.effects.completed, envelope.repairAction, envelope.data]).toEqual(["DOMAIN_ADAPTER_REFUSED", "unchanged", [], EXISTS_REPAIR, { connector: "atlassian", connectorCause: "registration-exists" }]);
+		expect(registration()).toEqual(before);
+		expect(before.text).toBe(REGISTRATION);
+		expect(noCapability()).toEqual(NONE);
+	});
+
+	// One bounded real-concurrency sample; the deterministic proof is the
+	// publish helper's EEXIST row and the sequential row above.
+	test("two concurrent configures with different IDs produce exactly one registration and one refusal", async () => {
+		fresh({ seed: false, registered: false });
+		const results = await Promise.all([configure(IDS), configure({ jiraItem: OTHER_ID, confluenceItem: CONFLUENCE_ITEM_ID })]);
+		const outcomes = results.map((result) => parse(result.stdout).result);
+		expect(outcomes.map((envelope) => envelope.causeCode).sort()).toEqual(["DOMAIN_ADAPTER_REFUSED", "SUCCESS_RUN_RECORDED"]);
+		const winner = outcomes[0]?.causeCode === "SUCCESS_RUN_RECORDED" ? 0 : 1;
+		expect([results[winner]?.code, results[winner]?.stderr, results[1 - winner]?.code, results[1 - winner]?.stderr]).toEqual([0, "", 3, ""]);
+		expect([outcomes[1 - winner]?.repairAction, outcomes[1 - winner]?.data]).toEqual([EXISTS_REPAIR, { connector: "atlassian", connectorCause: "registration-exists" }]);
+		expect(noCapability()).toEqual(NONE);
+		expect(registration().text).toBe(winner === 0 ? REGISTRATION : registrationLiteral("example", OTHER_ID, CONFLUENCE_ITEM_ID));
+		expect(atlassianFiles(fixture)).toEqual(["example/registration.json"]);
+	});
+
+	test("auth status inspects the registration only: absent before configure, the recorded IDs after, with no Keychain or 1Password read", async () => {
+		fresh({ seed: false, registered: false });
+		const status = async () => {
+			const result = await fixture.frontDoor(["auth", "status", "atlassian", ...TENANT]);
+			expect([result.code, result.stderr]).toEqual([0, ""]);
+			const envelope = parse(result.stdout).result;
+			expect([envelope.commandIdentity, envelope.causeCode, envelope.effectClass, envelope.effects.completed]).toEqual(["connectors.auth", "SUCCESS_UNCHANGED", "inspect", []]);
+			return envelope.data;
+		};
+		expect(await status()).toEqual({ connector: "atlassian", tenant: "example", registration: "absent", nextStep: UNREGISTERED_REPAIR });
+		expect((await configure(IDS)).code).toBe(0);
+		expect(await status()).toEqual({ connector: "atlassian", tenant: "example", registration: "registered", vault: "API Credentials", items: { jira: "jirafixtureitem00000000001", confluence: "conffixtureitem00000000002" }, nextStep: "connectors auth check atlassian --select tenant=example" });
+		expect(noCapability()).toEqual(NONE);
+	});
+
+	test("an unregistered tenant refuses run, preview, apply, auth check, and adjudication before any Keychain, 1Password, MCPorter, or Provider start; inspection and unlock still answer", async () => {
+		fresh({ seed: false, registered: false });
+		const comment = JSON.stringify({ issueKey: "EX-1", body: "unregistered" });
+		const rows: [string, string[], string][] = [
+			["read", ["run", "atlassian", ...TENANT, "issue.get", "--input", '{"issueKey":"EX-1"}'], "connectors.run"],
+			["preview", ["run", "atlassian", ...TENANT, "issue.comment", "--input", comment, "--preview"], "connectors.run.preview"],
+			["apply", ["run", "atlassian", ...TENANT, "issue.comment", "--input", comment, "--apply", "preview-1"], "connectors.run.apply"],
+			["auth check", ["auth", "check", "atlassian", ...TENANT], "connectors.auth"],
+			["adjudicate", ["recover", "atlassian", ...TENANT, "--run", "run-1", "--adjudicate", "--input", comment], "connectors.recover.adjudicate"],
+		];
+		expect(rows).toHaveLength(5);
+		for (const [label, argv, identity] of rows) {
+			const result = await fixture.frontDoor(argv);
+			expect([label, result.code, result.stderr]).toEqual([label, 3, ""]);
+			const envelope = parse(result.stdout).result;
+			expect([label, envelope.commandIdentity, envelope.causeCode, envelope.transactionState, envelope.effects.completed, envelope.repairAction, envelope.data]).toEqual([label, identity, "DOMAIN_ADAPTER_REFUSED", "unchanged", [], UNREGISTERED_REPAIR, { connector: "atlassian", connectorCause: "tenant-unregistered" }]);
+			expect([label, ...noCapability()]).toEqual([label, ...NONE]);
+		}
+		const listed = await fixture.frontDoor(["recover", "atlassian", ...TENANT]);
+		expect([listed.code, parse(listed.stdout).result.causeCode, parse(listed.stdout).result.data]).toEqual([0, "SUCCESS_UNCHANGED", { connector: "atlassian", command: "receipts", result: { open: [] }, provenance: [] }]);
+		const unlock = parse((await fixture.frontDoor(["recover", "atlassian", ...TENANT, "--run", "run-1", "--unlock"])).stdout).result;
+		// The journal answers: it knows no such preview or receipt.
+		expect([unlock.commandIdentity, unlock.data?.connectorCause]).toEqual(["connectors.recover.unlock", "refused-preview"]);
+		expect(noCapability()).toEqual(NONE);
+		expectNoHostile(fixture);
+	});
+
+	test("a registration that is not the exact private file configure writes refuses every gated command before any read and never echoes it", async () => {
+		const sentinel = "registration-sentinel-must-not-echo";
+		const valid = { schemaVersion: 1, tenant: "example", vault: "API Credentials", items: { jira: JIRA_ITEM_ID, confluence: CONFLUENCE_ITEM_ID } };
+		const rows: [string, (target: CustodyFixture) => void][] = [
+			["wrong mode", (target) => chmodSync(target.registrationFile(), 0o644)],
+			["wide tenant directory", (target) => chmodSync(path.dirname(target.registrationFile()), 0o755)],
+			["symlink", (target) => {
+				const elsewhere = path.join(target.root, "elsewhere.json");
+				writeFileSync(elsewhere, REGISTRATION, { mode: 0o600 });
+				rmSync(target.registrationFile());
+				symlinkSync(elsewhere, target.registrationFile());
+			}],
+			["bad JSON", (target) => target.writeRegistration(`{"schemaVersion":1,${sentinel}\n`)],
+			["extra key", (target) => target.writeRegistration(`${JSON.stringify({ ...valid, note: sentinel })}\n`)],
+			["reordered keys", (target) => target.writeRegistration(`${JSON.stringify({ tenant: "example", schemaVersion: 1, vault: "API Credentials", items: valid.items })}\n`)],
+			["no trailing newline", (target) => target.writeRegistration(JSON.stringify(valid))],
+			["schemaVersion 2", (target) => target.writeRegistration(`${JSON.stringify({ ...valid, schemaVersion: 2 })}\n`)],
+			["other tenant", (target) => target.writeRegistration(registrationLiteral("other", JIRA_ITEM_ID, CONFLUENCE_ITEM_ID))],
+			["other vault", (target) => target.writeRegistration(`${JSON.stringify({ ...valid, vault: "Private" })}\n`)],
+			["bad ID", (target) => target.writeRegistration(registrationLiteral("example", "JIRA_EXAMPLE_API_TOKEN", CONFLUENCE_ITEM_ID))],
+		];
+		expect(rows).toHaveLength(11);
+		for (const [label, damage] of rows) {
+			fresh({ seed: false });
+			damage(fixture);
+			for (const argv of [["auth", "check", "atlassian", ...TENANT], ["auth", "status", "atlassian", ...TENANT], ["run", "atlassian", ...TENANT, "issue.get", "--input", '{"issueKey":"EX-1"}']]) {
+				const result = await fixture.frontDoor(argv);
+				expect([label, argv[1], result.code, result.stderr]).toEqual([label, argv[1], 3, ""]);
+				const envelope = parse(result.stdout).result;
+				expect([label, argv[1], envelope.causeCode, envelope.repairAction, envelope.data]).toEqual([label, argv[1], "DOMAIN_ADAPTER_REFUSED", INVALID_REPAIR, { connector: "atlassian", connectorCause: "registration-invalid" }]);
+				expect(result.stdout).not.toContain(sentinel);
+			}
+			expect([label, ...noCapability()]).toEqual([label, ...NONE]);
+			fixture.dispose();
+		}
+	});
+
+	test("custody and the Provider read exactly the configured IDs, and a returned item whose id differs is refused at each", async () => {
+		fresh({ seed: false });
+		const item = (id: string) => JSON.stringify({ id, version: 1, fields: [{ label: "username", value: PRINCIPAL }, { label: "credential", value: PROVIDER_TOKEN }, { label: "site_url", value: ORIGIN }] });
+		// The custody child's read returns another item: auth check refuses.
+		fixture.writeItemText(JIRA_ITEM_ID, item(OTHER_ID));
+		const check = await fixture.frontDoor(["auth", "check", "atlassian", ...TENANT]);
+		expect([check.code, check.stderr]).toEqual([3, ""]);
+		const refused = parse(check.stdout).result;
+		expect([refused.causeCode, refused.repairAction, refused.data]).toEqual(["DOMAIN_ADAPTER_REFUSED", UNSTABLE_DETAIL, { connector: "atlassian", connectorCause: "refused-precondition" }]);
+		expect(fixture.lines<{ argv: string[] }>("op-calls.jsonl").map((call) => call.argv)).toEqual([ITEM_READ(JIRA_ITEM_ID)]);
+		// The custody child's read matches; the Provider's re-read returns
+		// another item: the read refuses stale before MCPorter or the package.
+		// The fake counts reads per reference from its log, so start it afresh.
+		rmSync(path.join(fixture.root, "op-calls.jsonl"));
+		fixture.writeItemText(JIRA_ITEM_ID, item(JIRA_ITEM_ID));
+		fixture.writeItemText(JIRA_ITEM_ID, item(OTHER_ID), "later");
+		const run = await fixture.frontDoor(["run", "atlassian", ...TENANT, "issue.get", "--input", '{"issueKey":"EX-1"}']);
+		expect([run.code, run.stderr]).toEqual([3, ""]);
+		const stale = parse(run.stdout).result;
+		expect([stale.causeCode, stale.repairAction, stale.data]).toEqual(["DOMAIN_ADAPTER_REFUSED", STALE_HINT, { connector: "atlassian", connectorCause: "refused-precondition" }]);
+		// The custody child's read, then the Provider preflight's re-read.
+		expect(fixture.lines<{ argv: string[] }>("op-calls.jsonl").map((call) => call.argv)).toEqual([ITEM_READ(JIRA_ITEM_ID), ITEM_READ(JIRA_ITEM_ID)]);
+		expect([fixture.lines("community-starts.jsonl"), fixture.lines("effects.jsonl"), existsSync(path.join(fixture.state, "connectors", "mcporter"))]).toEqual([[], [], false]);
+		expectNoSecret(fixture, [check.stdout, run.stdout]);
 	});
 });
 

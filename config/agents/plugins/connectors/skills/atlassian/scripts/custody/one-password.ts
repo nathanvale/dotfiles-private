@@ -27,8 +27,8 @@ export type OnePasswordRead = { ok: true; item: unknown } | { ok: false; cause: 
 // The fixed handoffs. They name where the owner puts a credential and never
 // ask for, accept, or echo its value.
 export const SERVICE_TOKEN_HANDOFF = `store the Connectors 1Password service-account token in the login Keychain yourself: security add-generic-password -s ${SERVICE_TOKEN_SERVICE} -a ${SERVICE_TOKEN_ACCOUNT} -w (it prompts for the value; Connectors never receives it)`;
-export const itemHandoff = (itemTitle: string): string =>
-	`create the Atlassian API token in your Atlassian account settings and store it yourself in the 1Password item ${itemTitle} in the ${CREDENTIAL_VAULT} vault; Connectors never creates, rotates, or imports a token`;
+export const itemHandoff = (itemId: string): string =>
+	`create the Atlassian API token in your Atlassian account settings and store it yourself in the 1Password item with ID ${itemId}, the ID auth configure recorded, in the ${CREDENTIAL_VAULT} vault; Connectors never creates, rotates, or imports a token`;
 export const OP_SETUP_REPAIR = "the plugin-owned 1Password CLI is not set up; run connectors setup";
 
 function loginKeychain(env: EnvironmentSource): string | null {
@@ -46,14 +46,15 @@ function serviceToken(env: EnvironmentSource): { ok: true; token: string } | { o
 	return SERVICE_TOKEN_SHAPE.test(token) ? { ok: true, token } : { ok: false, cause: "service-token-unavailable" };
 }
 
-// One complete item read through the plugin-owned op. The op child receives
-// only HOME, a fixed system PATH, and the service-account token.
-export function readOnePasswordItem(itemTitle: string, env: EnvironmentSource): OnePasswordRead {
+// One complete item read, by its configured item ID, through the
+// plugin-owned op. The op child receives only HOME, a fixed system PATH, and
+// the service-account token.
+export function readOnePasswordItem(itemId: string, env: EnvironmentSource): OnePasswordRead {
 	const op = selectedOp(env);
 	if (op === null) return { ok: false, cause: "op-unavailable" };
 	const token = serviceToken(env);
 	if (!token.ok) return token;
-	const read = spawnSync(op, ["item", "get", itemTitle, "--vault", CREDENTIAL_VAULT, "--format", "json"], {
+	const read = spawnSync(op, ["item", "get", itemId, "--vault", CREDENTIAL_VAULT, "--format", "json"], {
 		env: { HOME: env.HOME ?? "", PATH: SYSTEM_PATH, OP_SERVICE_ACCOUNT_TOKEN: token.token },
 		stdio: ["ignore", "pipe", "pipe"],
 		encoding: "utf8",

@@ -14,11 +14,11 @@
 //   atlassian-dispatch --tenant <slug> adjudicate --run <runId> --input <json>
 //   atlassian-dispatch --tenant <slug> unlock --run <runId>
 //   atlassian-dispatch --discover
-import { TENANT_PATTERN } from "./custody/index.ts";
+import { registeredTenant, TENANT_PATTERN } from "./custody/index.ts";
 import { CAUSES, type CauseCode, type CommandId, COMMANDS, type Envelope, OPERATION_SPECS, OPERATIONS, type OperationSpec, PROVIDER } from "./dispatch/contract.ts";
 import { type Dependencies, readInput, REPAIR_TEXT, specFor } from "./dispatch/engine.ts";
 import { adjudicateFlow, applyFlow, type Outcome, previewFlow, readFlow, receiptFlow, receiptsFlow, Session, unlockFlow } from "./dispatch/flows.ts";
-import { productionDependencies } from "./dispatch/runtime.ts";
+import { type Custody, productionDependencies } from "./dispatch/runtime.ts";
 import { type WriteInput, writeInput } from "./dispatch/writes.ts";
 
 const VALUE_OPTIONS = ["--tenant", "--input", "--apply", "--run"] as const;
@@ -224,8 +224,17 @@ export async function run(argv: string[], dependencies: (tenant: string) => Depe
 	return envelope(`atlassian.${spec.id}.${invocation.mode.kind}`, invocation.mode.kind === "apply" ? "external" : "repository-local", outcome, session.provenance);
 }
 
+// Interim until this entry retires (T5 U3b): the tenant registration gates
+// custody here through the same owner as the packaged adapter. An absent or
+// invalid registration refuses at the first bind with the configure handoff,
+// before any Keychain or 1Password read; there is no derived item fallback.
+function entryCustody(tenant: string): Custody {
+	const registered = registeredTenant(tenant, process.env);
+	return registered.ok ? { items: registered.items } : { unregistered: registered.repair };
+}
+
 if (import.meta.main) {
-	const result = await run(process.argv.slice(2), (tenant) => productionDependencies(tenant, process.env));
+	const result = await run(process.argv.slice(2), (tenant) => productionDependencies(tenant, process.env, entryCustody(tenant)));
 	process.stdout.write(`${JSON.stringify(result)}\n`);
 	process.exit(result.result.exitCode);
 }

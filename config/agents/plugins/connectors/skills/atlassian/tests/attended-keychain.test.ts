@@ -13,7 +13,8 @@ import { CustodyFixture, SERVICE_TOKEN } from "./fixtures/custody-fixture.ts";
 import { changedPaths, KEYCHAIN_LEAF, SHIPPED_ROOT } from "./fixtures/plugin-copy.ts";
 
 const KEYCHAIN_HANDOFF = "store the Connectors 1Password service-account token in the login Keychain yourself: security add-generic-password -s connectors.1password.service-account -a connectors -w (it prompts for the value; Connectors never receives it)";
-const JIRA_ITEM_READ = ["item", "get", "JIRA_EXAMPLE_API_TOKEN", "--vault", "API Credentials", "--format", "json"];
+// The fixture's default registered Jira item ID, restated as a test-owned literal.
+const JIRA_ITEM_READ = ["item", "get", "jirafixtureitem00000000001", "--vault", "API Credentials", "--format", "json"];
 const READ = ["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}'];
 
 describe.skipIf(!ATTENDED_KEYCHAIN)("attended real Keychain read", () => {
@@ -39,7 +40,7 @@ describe.skipIf(!ATTENDED_KEYCHAIN)("attended real Keychain read", () => {
 		expect(readFileSync(path.join(fixture.pluginRoot, KEYCHAIN_LEAF), "utf8")).toContain('spawnSync("/usr/bin/security"');
 		const result = await fixture.dispatch(READ);
 		expect([result.code, result.stderr]).toEqual([3, ""]);
-		// No item.json: op reports the item absent after a matching token.
+		// No item is written: op reports the registered item absent after a matching token.
 		expect(fixture.lines("op-calls.jsonl")).toEqual([{ argv: JIRA_ITEM_READ, envKeys: ["HOME", "OP_SERVICE_ACCOUNT_TOKEN", "PATH"], serviceTokenMatches: true }]);
 		for (const stream of [result.stdout, result.stderr, fixture.sweepText()]) expect(stream).not.toContain(SERVICE_TOKEN);
 	}, 60_000);

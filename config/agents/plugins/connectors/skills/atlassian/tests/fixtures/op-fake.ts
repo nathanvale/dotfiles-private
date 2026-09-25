@@ -16,13 +16,20 @@ if (process.env.OP_SERVICE_ACCOUNT_TOKEN !== expected) {
 	process.stderr.write("[ERROR] authentication failed\n");
 	process.exit(1);
 }
+// An item is served only for the exact reference it was stored under, as
+// items/<reference>.json. A reference's items/<reference>.then.json, when
+// present, is served for its second and later reads instead, so a row can
+// change the item between the custody child's read and the Provider's.
 if (argv[0] === "item" && argv[1] === "get") {
-	const item = path.join(root, "item.json");
-	if (!existsSync(item)) {
-		process.stderr.write(`[ERROR] "${argv[2]}" isn't an item in the "API Credentials" vault. Specify the item with its UUID, name, or domain.\n`);
+	const reference = argv[2] ?? "";
+	const item = path.join(root, "items", `${reference}.json`);
+	if (!/^[A-Za-z0-9_-]+$/.test(reference) || !existsSync(item)) {
+		process.stderr.write(`[ERROR] "${reference}" isn't an item in the "API Credentials" vault. Specify the item with its UUID, name, or domain.\n`);
 		process.exit(1);
 	}
-	process.stdout.write(readFileSync(item, "utf8"));
+	const reads = readFileSync(path.join(root, "op-calls.jsonl"), "utf8").trim().split("\n").filter((line) => (JSON.parse(line) as { argv: string[] }).argv[2] === reference).length;
+	const later = path.join(root, "items", `${reference}.then.json`);
+	process.stdout.write(readFileSync(reads > 1 && existsSync(later) ? later : item, "utf8"));
 	process.exit(0);
 }
 process.stderr.write("[ERROR] unsupported fake op command\n");

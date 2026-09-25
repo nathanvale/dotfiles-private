@@ -14,7 +14,7 @@
 // adapter registry (bin/adapters/index.ts).
 import { closeSync, existsSync, openSync } from "node:fs";
 import path from "node:path";
-import type { Adapter, AdapterAction, AdapterRefusal, AdapterRefusalKind, Executed, ExecutionCapabilities, InternalRole, LocalEffect, LoginOption, Prepared, Recovery, SchemaRequest, WritePhase } from "./adapters/contract.ts";
+import type { Adapter, AdapterAction, AdapterRefusal, AdapterRefusalKind, Executed, ExecutionCapabilities, InternalRole, LocalEffect, LoginOption, Prepared, RecordedEffect, Recovery, SchemaRequest, WritePhase } from "./adapters/contract.ts";
 import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
 import { discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
@@ -143,7 +143,7 @@ const COMMANDS: readonly CommandDescriptor[] = [
 		effectClass: "inspect",
 		summary: "Attempt a packaged, secret-free fixture auth operation for one connector (fixture-tested proof only, never real credential custody)",
 	},
-	{ commandIdentity: "connectors.auth", route: ["auth"], effectClass: "external", summary: "Inspect or perform one connector's declared auth verb through its packaged adapter; login is attended only and alone takes --no-browser and --reset" },
+	{ commandIdentity: "connectors.auth", route: ["auth"], effectClass: "external", summary: "Inspect or perform one connector's declared auth verb through its packaged adapter; configure alone takes --input <json-object> of nonsecret stored configuration, status inspects that configuration only, and login is attended only and alone takes --no-browser and --reset" },
 	{ commandIdentity: "connectors.run", route: ["run"], effectClass: "repository-local", summary: "Run one declared read operation for a connector through its packaged adapter and the selected MCPorter" },
 	{ commandIdentity: "connectors.run.preview", route: ["run", "--preview"], effectClass: "repository-local", summary: "Record a durable preview of one declared write through the connector's packaged adapter; nothing is sent" },
 	{ commandIdentity: "connectors.run.apply", route: ["run", "--apply"], effectClass: "external", summary: "Apply one recorded preview with its identical input: a durable receipt first, then at most one Provider write" },
@@ -401,13 +401,15 @@ function checkCauseCommand(cause: CauseCode, commandIdentity: string): string[] 
 	return [];
 }
 
-// Journaled-write effects, in the one order an inventory may list them.
-const WRITE_EFFECT_ORDER: readonly string[] = ["write-preview", "write-receipt", "provider-write", "write-adjudication", "write-unlock"];
+// Recorded effects: the custody registration auth configure publishes, then
+// the journaled-write effects, in the one order an inventory may list them.
+const WRITE_EFFECT_ORDER: readonly string[] = ["custody-registration", "write-preview", "write-receipt", "provider-write", "write-adjudication", "write-unlock"];
 const NO_WRITE_EFFECTS = { completed: [], uncertain: [] } as const;
 
 // Each journaled-write station: its cause and command identity, and the exact
 // write effects it reports. Every other envelope reports none.
 const WRITE_STATIONS: Readonly<Record<string, { readonly completed: readonly string[]; readonly uncertain: readonly string[] }>> = {
+	"SUCCESS_RUN_RECORDED connectors.auth": { completed: ["custody-registration"], uncertain: [] },
 	"SUCCESS_RUN_RECORDED connectors.run.preview": { completed: ["write-preview"], uncertain: [] },
 	"SUCCESS_RUN_RECORDED connectors.recover.adjudicate": { completed: ["write-adjudication"], uncertain: [] },
 	"SUCCESS_RUN_RECORDED connectors.recover.unlock": { completed: ["write-unlock"], uncertain: [] },
@@ -633,6 +635,10 @@ function helpText(): string {
 		"  schema <connector> [--select name=value ...]     Fetch live schema; a credentialed connector reads through its adapter",
 		"  deps repair mcporter                             Explicitly replace selected MCPorter after mismatch",
 		"  auth <verb> <connector> [--select name=value]    Run one declared auth verb; login needs your terminal",
+		"  auth configure <connector> [--select name=value ...] --input <json-object>",
+		"                                                  Record nonsecret credential references once, such as 1Password item IDs",
+		"  auth status <connector> [--select name=value ...]",
+		"                                                  Inspect that stored configuration; reads no credential",
 		"  auth login <connector> [--select name=value ...] [--no-browser] [--reset]",
 		"                                                  Print the consent URL instead of opening a browser; clear the cached grant first",
 		"  run <connector> [--select name=value] <operation> [--input <json-object>]",
@@ -1364,7 +1370,7 @@ interface AdapterCommand {
 
 type TransportPlan = Extract<Prepared, { kind: "transport" }>;
 
-const AUTH_USAGE = "auth <verb> <connector> [--select name=value ...] [--no-browser] [--reset]";
+const AUTH_USAGE = "auth <verb> <connector> [--select name=value ...] [--input <json-object> after configure | --no-browser --reset after login]";
 const RUN_USAGE = "run <connector> [--select name=value ...] <operation> [--input <json-object>] [--preview | --apply <previewId>]";
 const RECOVER_USAGE = "recover <connector> [--select name=value ...] [--run <runId> [--adjudicate --input <json-object>] | --run <runId|previewId> --unlock]";
 const SCHEMA_USAGE = "schema <connector> [--select name=value ...]";
@@ -1391,28 +1397,45 @@ function consumeSelections(rest: readonly string[], given: Map<string, string>):
 }
 
 // The closed login options, accepted in any order among the selectors after
-// `auth login` only. Anything else, --json included, is malformed.
+// `auth login` only; --input <json-object>, at most once, after
+// `auth configure` only. Anything else, --json included, is malformed.
 const LOGIN_OPTIONS: ReadonlyMap<string, LoginOption> = new Map([["--no-browser", "no-browser"], ["--reset", "reset"]]);
 const LOGIN_OPTION_ORDER: readonly LoginOption[] = ["no-browser", "reset"];
+
+interface AuthOptions {
+	readonly login: Set<LoginOption>;
+	input: Readonly<Record<string, unknown>> | null;
+}
+
+// The count of verb-only option tokens at rest[index]: 0 when none is
+// there, null when one is malformed or repeated.
+function consumeAuthOption(verb: string, rest: readonly string[], index: number, options: AuthOptions): number | null {
+	const token = rest[index] ?? "";
+	const option = verb === "login" ? LOGIN_OPTIONS.get(token) : undefined;
+	if (option) {
+		options.login.add(option);
+		return 1;
+	}
+	if (verb !== "configure" || token !== "--input") return 0;
+	if (options.input !== null) return null;
+	options.input = parseInputObject(rest[index + 1]);
+	return options.input === null ? null : 2;
+}
 
 function parseAuthArgs(args: readonly string[]): AdapterCommand | null {
 	const [verb, id, ...rest] = args;
 	if (!verb || !AUTH_VERBS.has(verb) || !id) return null;
 	const given = new Map<string, string>();
-	const options = new Set<LoginOption>();
+	const options: AuthOptions = { login: new Set(), input: null };
 	let index = 0;
 	while (index < rest.length) {
-		const option = verb === "login" ? LOGIN_OPTIONS.get(rest[index] ?? "") : undefined;
-		if (option) {
-			options.add(option);
-			index += 1;
-			continue;
-		}
-		const at = consumeSelections(rest.slice(index), given);
+		const consumed = consumeAuthOption(verb, rest, index, options);
+		if (consumed === null) return null;
+		const at = consumed > 0 ? consumed : consumeSelections(rest.slice(index), given);
 		if (!at) return null;
 		index += at;
 	}
-	return { commandIdentity: "connectors.auth", id, given, action: { kind: "auth", verb, loginOptions: LOGIN_OPTION_ORDER.filter((name) => options.has(name)) } };
+	return { commandIdentity: "connectors.auth", id, given, action: { kind: "auth", verb, loginOptions: LOGIN_OPTION_ORDER.filter((name) => options.login.has(name)), input: options.input } };
 }
 
 // A login repair repeats the caller's login options, which are closed names
@@ -1747,6 +1770,10 @@ function executionCapabilities(manifest: ConnectorManifest, failure: { value: Se
 	};
 }
 
+// The command after a recorded effect: apply follows a preview, and a custody
+// check follows a published registration.
+const RECORDED_NEXT: Partial<Readonly<Record<RecordedEffect, string>>> = { "write-preview": "connectors.run.apply", "custody-registration": "connectors.auth" };
+
 // An execute step owns no connector account effect: its inventory is this
 // invocation's MCPorter selection effect, then the journaled-write effects its
 // outcome names.
@@ -1764,7 +1791,7 @@ function emitExecuted(command: AdapterCommand, executed: Executed): void {
 			emitAdapterEnvelope(command, readSuccessCause([]), `${command.id}${operationLabel(command)} completed`, data(executed.data), null, { completed, uncertain: [] });
 			return;
 		case "recorded":
-			emitAdapterEnvelope(command, "SUCCESS_RUN_RECORDED", `${command.id}${operationLabel(command)} recorded ${executed.effect}`, data(executed.data), null, { completed: [...completed, executed.effect], uncertain: [] }, executed.effect === "write-preview" ? "connectors.run.apply" : undefined);
+			emitAdapterEnvelope(command, "SUCCESS_RUN_RECORDED", `${command.id}${operationLabel(command)} recorded ${executed.effect}`, data(executed.data), null, { completed: [...completed, executed.effect], uncertain: [] }, RECORDED_NEXT[executed.effect]);
 			return;
 		case "applied":
 			emitAdapterEnvelope(command, "SUCCESS_RUN_APPLIED", `${command.id}${operationLabel(command)} applied`, data(executed.data), null, { completed: [...completed, "write-receipt", "provider-write"], uncertain: [] });

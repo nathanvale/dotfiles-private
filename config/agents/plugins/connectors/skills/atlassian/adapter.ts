@@ -1,8 +1,12 @@
-// Atlassian's packaged adapter for the generic `connectors auth check`, `run`,
-// and `recover` commands (Ticket #92 under Spec #87). Every prepare step
-// validates the request with the dispatcher's own pure parser and input
-// contracts, so a bad request refuses before any dependency, credential, or
-// Provider capability. execute runs the unchanged dispatcher in this process
+// Atlassian's packaged adapter for the generic `connectors auth configure`,
+// `auth status`, `auth check`, `run`, and `recover` commands (Ticket #92 under
+// Spec #87). Every prepare step validates the request with the dispatcher's
+// own pure parser and input contracts, so a bad request refuses before any
+// dependency, credential, or Provider capability. Every command that can read
+// custody (run, auth check, and recover --adjudicate) then passes the tenant
+// registration gate (D2a): an absent or invalid registration refuses before
+// any Keychain, 1Password, MCPorter, or Provider start, and a valid one's item
+// IDs are the only ones the invocation binds. execute runs the unchanged dispatcher in this process
 // with the front door's MCPorter selection and its own internal-role command,
 // so credential custody happens only in the internal custody and Provider
 // roles below. Writes go through the dispatcher's durable preview and apply
@@ -10,7 +14,7 @@
 import type { Adapter, AdapterRefusal, AdapterRequest, Executed, ExecutionCapabilities, InternalRole, Prepared, RecordedEffect, Recovery, RecoverRequest, SchemaRequest, WriteRequest } from "../../bin/adapters/contract.ts";
 import { runProvider } from "./scripts/atlassian-community-provider.ts";
 import { parseArgv, run } from "./scripts/atlassian-dispatch.ts";
-import { ATLASSIAN_ADAPTER_ID, type AtlassianInternalRole, bindCredential, PRODUCTS, runCustodyChild } from "./scripts/custody/index.ts";
+import { ATLASSIAN_ADAPTER_ID, type AtlassianInternalRole, bindCredential, CONFIGURE_INPUT_REPAIR, configureInput, configureTenant, CREDENTIAL_VAULT, ITEM_ID_REPAIR, PRODUCTS, type RegisteredItems, registeredTenant, runCustodyChild } from "./scripts/custody/index.ts";
 import { type CauseCode, COMMANDS, type Envelope, OPERATIONS, type WriteOperation } from "./scripts/dispatch/contract.ts";
 import { readInput, specFor } from "./scripts/dispatch/engine.ts";
 import { productionDependencies } from "./scripts/dispatch/runtime.ts";
@@ -21,7 +25,7 @@ type RefusalKind = Extract<AdapterRefusal["kind"], "usage" | "schema" | "verb-un
 const REPAIR: Readonly<Record<RefusalKind, string>> = {
 	usage: "Check the connectors run or recover arguments against connectors --help",
 	schema: "Correct the --input object to the operation's declared input",
-	"verb-unsupported": "Atlassian supports auth check only; run connectors auth check atlassian --select tenant=<value>",
+	"verb-unsupported": "Atlassian supports auth configure, status, and check; run connectors auth status atlassian --select tenant=<value>",
 	"operation-unknown": `Use one Atlassian operation: ${OPERATIONS.join(", ")}`,
 };
 const WRITE_PHASE_REPAIR = "An Atlassian write needs --preview first, then --apply <previewId> with the identical --input";
@@ -37,6 +41,13 @@ function refused(kind: RefusalKind, connectorCause: string, repair: string = REP
 type Station = "read" | "preview" | "apply" | "journal" | "adjudicate" | "unlock";
 
 const RECORDED: Partial<Readonly<Record<Station, RecordedEffect>>> = { preview: "write-preview", adjudicate: "write-adjudication", unlock: "write-unlock" };
+
+// The registration gate. It reads only the registration, so its refusal
+// comes before any Keychain, 1Password, MCPorter, or Provider start.
+function gate(request: SchemaRequest, tenant: string): { ok: true; items: RegisteredItems } | { ok: false; prepared: Prepared } {
+	const registered = registeredTenant(tenant, request.env);
+	return registered.ok ? registered : { ok: false, prepared: { kind: "refused", refusal: { kind: "domain", connectorCause: registered.cause, repair: registered.repair } } };
+}
 
 // Dispatcher causes that end a request with nothing recorded or sent, by the
 // core refusal or failure they become. A journal refusal cannot end a read.
@@ -99,11 +110,13 @@ function translate(envelope: Envelope, station: Station, label: Record<string, s
 	return { kind: "success", data };
 }
 
-function executePlan(request: SchemaRequest, argv: string[], station: Station, label: Record<string, string>): Prepared {
+// items: the gated registration's item IDs, or null for a journal-only
+// command that never binds a credential.
+function executePlan(request: SchemaRequest, argv: string[], station: Station, label: Record<string, string>, items: RegisteredItems | null): Prepared {
 	return {
 		kind: "execute",
 		async execute(capabilities: ExecutionCapabilities): Promise<Executed> {
-			const envelope = await run(argv, (slug) => productionDependencies(slug, request.env, { skillsRoot: request.skillsRoot, capabilities }));
+			const envelope = await run(argv, (slug) => productionDependencies(slug, request.env, items === null ? null : { items }, { skillsRoot: request.skillsRoot, capabilities }));
 			return translate(envelope, station, label);
 		},
 	};
@@ -120,7 +133,9 @@ function prepareRun(request: AdapterRequest, tenant: string, operation: string, 
 	const parsed = parseArgv(argv);
 	if (!parsed.ok) return refused(parsed.cause === "usage-invalid" ? "usage" : "schema", parsed.cause);
 	if (!readInput(spec.id, parsed.value.input).ok) return refused("schema", "input-invalid");
-	return executePlan(request, argv, "read", { operation });
+	const registered = gate(request, tenant);
+	if (!registered.ok) return registered.prepared;
+	return executePlan(request, argv, "read", { operation }, registered.items);
 }
 
 function prepareWrite(request: WriteRequest): Prepared {
@@ -134,7 +149,9 @@ function prepareWrite(request: WriteRequest): Prepared {
 	const parsed = parseArgv(argv);
 	if (!parsed.ok) return refused(parsed.cause === "usage-invalid" ? "usage" : "schema", parsed.cause);
 	if (!writeInput(spec.id as WriteOperation, parsed.value.input).ok) return refused("schema", "input-invalid");
-	return executePlan(request, argv, request.phase.kind, { operation: request.operation });
+	const registered = gate(request, tenant);
+	if (!registered.ok) return registered.prepared;
+	return executePlan(request, argv, request.phase.kind, { operation: request.operation }, registered.items);
 }
 
 const RECOVERY_STATION: Readonly<Record<Recovery["kind"], Station>> = { inspect: "journal", adjudicate: "adjudicate", unlock: "unlock" };
@@ -150,7 +167,9 @@ function recoveryCommand(runId: string, recovery: Recovery): string[] {
 	}
 }
 
-// Without a runId only the open-receipt listing exists.
+// Without a runId only the open-receipt listing exists. Only adjudication
+// reads custody, so only it passes the registration gate: inspection and
+// unlock touch the journal alone, which a re-point needs while unregistered.
 function prepareRecover(request: RecoverRequest): Prepared {
 	const tenant = request.selectors.tenant;
 	if (tenant === undefined) return refused("usage", "tenant-required");
@@ -160,23 +179,29 @@ function prepareRecover(request: RecoverRequest): Prepared {
 	const argv = ["--tenant", tenant, ...command];
 	const parsed = parseArgv(argv);
 	if (!parsed.ok) return refused(parsed.cause === "usage-invalid" ? "usage" : "schema", parsed.cause);
-	return executePlan(request, argv, RECOVERY_STATION[recovery.kind], { command: command[0] ?? "receipts" });
+	if (recovery.kind !== "adjudicate") return executePlan(request, argv, RECOVERY_STATION[recovery.kind], { command: command[0] ?? "receipts" }, null);
+	const registered = gate(request, tenant);
+	if (!registered.ok) return registered.prepared;
+	return executePlan(request, argv, "adjudicate", { command: "adjudicate" }, registered.items);
 }
 
 // The core accepts any role name; this narrows the adapter's own calls to
 // the roles it registers.
 const roleCommand = (capabilities: ExecutionCapabilities, role: AtlassianInternalRole): readonly string[] => capabilities.internalCommand(role);
 
-// A custody check binds both products through the custody role. It proves the
-// items and the service token are in custody; it never starts MCPorter or a
-// Provider, so it never claims authentication.
+// A custody check binds both products' registered items through the custody
+// role. It proves the items and the service token are in custody; it never
+// starts MCPorter or a Provider, so it never claims authentication.
 function prepareAuthCheck(request: AdapterRequest, tenant: string): Prepared {
+	const registered = gate(request, tenant);
+	if (!registered.ok) return registered.prepared;
+	const { items } = registered;
 	return {
 		kind: "execute",
 		async execute(capabilities: ExecutionCapabilities): Promise<Executed> {
 			const bindings: Record<string, string>[] = [];
 			for (const product of PRODUCTS) {
-				const bound = bindCredential(tenant, product, request.env, roleCommand(capabilities, "custody-child"));
+				const bound = bindCredential(tenant, product, items[product], request.env, roleCommand(capabilities, "custody-child"));
 				if (!bound.ok) return { kind: "refused", refusal: { kind: "domain", connectorCause: bound.cause, repair: bound.detail } };
 				bindings.push({ product, ...bound.binding });
 			}
@@ -185,11 +210,52 @@ function prepareAuthCheck(request: AdapterRequest, tenant: string): Prepared {
 	};
 }
 
+const nextCheck = (tenant: string): string => `connectors auth check atlassian --select tenant=${tenant}`;
+
+// Configure records the two item IDs as stored configuration: no stdin,
+// Keychain, 1Password, MCPorter, or Provider. The input is checked here,
+// before anything is written; publication happens at execute.
+function prepareConfigure(request: AdapterRequest, tenant: string, input: Readonly<Record<string, unknown>> | null): Prepared {
+	const parsed = configureInput(input);
+	if (!parsed.ok) return parsed.cause === "input-invalid" ? refused("schema", "input-invalid", CONFIGURE_INPUT_REPAIR) : refused("schema", "item-reference-invalid", ITEM_ID_REPAIR);
+	const { items } = parsed;
+	return {
+		kind: "execute",
+		async execute(): Promise<Executed> {
+			const configured = configureTenant(tenant, items, request.env);
+			if (configured.kind === "refused") return { kind: "refused", refusal: { kind: "domain", connectorCause: configured.cause, repair: configured.repair } };
+			const data = { tenant, vault: CREDENTIAL_VAULT, items: { jira: items.jira, confluence: items.confluence }, nextStep: nextCheck(tenant) };
+			return configured.kind === "published" ? { kind: "recorded", effect: "custody-registration", data } : { kind: "success", data };
+		},
+	};
+}
+
+// Status inspects the registration only; it never reads Keychain or 1Password.
+function prepareStatus(request: AdapterRequest, tenant: string): Prepared {
+	const registered = registeredTenant(tenant, request.env);
+	if (registered.ok) return { kind: "inspected", data: { tenant, registration: "registered", vault: CREDENTIAL_VAULT, items: { jira: registered.items.jira, confluence: registered.items.confluence }, nextStep: nextCheck(tenant) } };
+	if (registered.cause === "registration-invalid") return { kind: "refused", refusal: { kind: "domain", connectorCause: registered.cause, repair: registered.repair } };
+	return { kind: "inspected", data: { tenant, registration: "absent", nextStep: registered.repair } };
+}
+
+function prepareAuth(request: AdapterRequest, tenant: string, verb: string, input: Readonly<Record<string, unknown>> | null): Prepared {
+	switch (verb) {
+		case "configure":
+			return prepareConfigure(request, tenant, input);
+		case "status":
+			return prepareStatus(request, tenant);
+		case "check":
+			return prepareAuthCheck(request, tenant);
+		default:
+			return refused("verb-unsupported", "auth-verb-unsupported");
+	}
+}
+
 function prepareAtlassian(request: AdapterRequest): Prepared {
 	const { action } = request;
 	const tenant = request.selectors.tenant;
 	if (tenant === undefined) return refused("usage", "tenant-required");
-	if (action.kind === "auth") return action.verb === "check" ? prepareAuthCheck(request, tenant) : refused("verb-unsupported", "auth-verb-unsupported");
+	if (action.kind === "auth") return prepareAuth(request, tenant, action.verb, action.input);
 	return prepareRun(request, tenant, action.operation, action.input);
 }
 

@@ -9,7 +9,7 @@ import type { ExecutionCapabilities } from "../../../../bin/adapters/contract.ts
 import { ensureMcporter } from "../../../../bin/mcporter-custody.ts";
 import { planDispatcherRoute, type RoutePlan } from "../../../../bin/provider-route.ts";
 import { safeEnvironment } from "../../../../bin/safe-environment.ts";
-import { bindCredential, bindingChannel, type CredentialBinding, invocationEnvironment, sourceInternalCommand, TENANT_PATTERN } from "../custody/index.ts";
+import { bindCredential, bindingChannel, type CredentialBinding, invocationEnvironment, type RegisteredItems, sourceInternalCommand, TENANT_PATTERN } from "../custody/index.ts";
 import { stageFile } from "../outbox.ts";
 import { productFor } from "./contract.ts";
 import type { Dependencies, Transport, TransportFailure, TransportResult } from "./engine.ts";
@@ -144,15 +144,28 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 	};
 }
 
+// What a credential binding may use: the item IDs of the tenant's validated
+// registration; the Bun entry's registration refusal, reported at the first
+// bind and so before any custody read; or null for a journal-only command,
+// which never binds.
+export type Custody = { items: RegisteredItems } | { unregistered: string } | null;
+
 // The production dependency set for one validated tenant. Built exactly once
 // per invocation from the parsed tenant, so the transport, the credential
-// item, and the trusted origin can never name different tenants. The packaged
-// front door passes its physical skills root and its capabilities.
-export function productionDependencies(tenant: string, env: Environment, packaged?: { skillsRoot: string; capabilities: ExecutionCapabilities }): Dependencies {
+// item, and the trusted origin can never name different tenants: a binding
+// for any other slug is an adapter defect, never a use of another tenant's
+// item IDs. The packaged front door passes its physical skills root and its
+// capabilities.
+export function productionDependencies(tenant: string, env: Environment, custody: Custody, packaged?: { skillsRoot: string; capabilities: ExecutionCapabilities }): Dependencies {
 	const custodyCommand = packaged ? packaged.capabilities.internalCommand("custody-child") : sourceInternalCommand("custody-child");
 	return {
 		transport: routeTransport(env, tenant, packaged?.skillsRoot, packaged?.capabilities),
-		bindCredential: async (slug, product) => bindCredential(slug, product, env, custodyCommand),
+		bindCredential: async (slug, product) => {
+			if (slug !== tenant) throw new Error("an Atlassian binding named another tenant");
+			if (custody === null) throw new Error("an Atlassian binding without a validated registration");
+			if ("unregistered" in custody) return { ok: false, cause: "refused-credential-unconfigured", detail: custody.unregistered };
+			return bindCredential(slug, product, custody.items[product], env, custodyCommand);
+		},
 		journal: (slug) => openJournal(slug, { env }),
 		stage: (slug, file) => stageFile(slug, env, file),
 		now: Date.now,

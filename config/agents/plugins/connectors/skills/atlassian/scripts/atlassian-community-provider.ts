@@ -1,7 +1,8 @@
 // Community mcp-atlassian Provider, one product per route, run only as the
 // Atlassian adapter's internal Provider role of the compiled front door. Re-reads the
-// selected product's bound item (username, credential, and site_url) inside
-// this process through 1Password custody, and execs the pinned package through
+// selected product's bound item (username, credential, and site_url) by the
+// item ID in its binding, never from the tenant registration, inside this
+// process through 1Password custody, and execs the pinned package through
 // the plugin-owned uv with only that product's environment triplet, started in
 // the tenant's private outbox so the package can read staged uploads and
 // nothing else. The credential enters only this process and its replacement.
@@ -27,8 +28,8 @@ function prerequisites(): { invocation: ReturnType<typeof providerInvocation>; i
 	const uv = selectedUv(process.env);
 	if (uv === null) fail("uv-unavailable", UV_SETUP_REPAIR);
 	const item = boundItem(invocation);
-	if (item.credential === undefined) fail("community-fields-missing", `${invocation.itemTitle} needs username, credential, and a site_url field`);
-	if (!singleLine(item.credential)) fail("credential-invalid", `${invocation.itemTitle} has malformed fields`);
+	if (item.credential === undefined) fail("community-fields-missing", `1Password item ${invocation.binding.item} needs username, credential, and a site_url field`);
+	if (!singleLine(item.credential)) fail("credential-invalid", `1Password item ${invocation.binding.item} has malformed fields`);
 	return { invocation, item, credential: item.credential, uv };
 }
 

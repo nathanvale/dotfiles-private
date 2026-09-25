@@ -6,7 +6,7 @@ import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { ownedDirectory, ownedExecutableDigest, readPrivateFile, stateRoot, writePrivateFile } from "../bin/private-state.ts";
+import { ownedDirectory, ownedExecutableDigest, publishPrivateFileOnce, readPrivateFile, stateRoot, writePrivateFile } from "../bin/private-state.ts";
 
 let root: string;
 beforeEach(() => {
@@ -155,6 +155,46 @@ describe("writePrivateFile and readPrivateFile", () => {
 		expect(readPrivateFile(path.join(directory, "alias"))).toEqual({ ok: false, reason: "symlink" });
 		expect(readPrivateFile(directory)).toEqual({ ok: false, reason: "not-regular" });
 		expect(existsSync(file)).toBe(true);
+	});
+});
+
+// Create-or-identical publication: the caller compares what it meant to
+// publish with what exists. The inode and bytes are the independent oracle
+// that an existing file was never replaced.
+describe("publishPrivateFileOnce", () => {
+	test("publishes exact-0600 once, then returns the existing text without replacing it, and leaves no temp file", () => {
+		const directory = path.join(root, "state");
+		expect(ownedDirectory(directory)).toEqual({ ok: true });
+		const file = path.join(directory, "registration.json");
+		expect(publishPrivateFileOnce(file, "first\n")).toEqual({ ok: true, published: true });
+		expect([mode(file), readFileSync(file, "utf8")]).toEqual([0o600, "first\n"]);
+		const inode = statSync(file).ino;
+		for (const content of ["second\n", "first\n"]) {
+			expect(publishPrivateFileOnce(file, content)).toEqual({ ok: true, published: false, existing: "first\n" });
+			expect([statSync(file).ino, readFileSync(file, "utf8"), mode(file)]).toEqual([inode, "first\n", 0o600]);
+		}
+		expect(readdirSync(directory)).toEqual(["registration.json"]);
+	});
+
+	test("refuses a symlink target, a wide parent, and an existing file that is not exact 0600, replacing nothing", () => {
+		const directory = path.join(root, "state");
+		expect(ownedDirectory(directory)).toEqual({ ok: true });
+		const victim = path.join(root, "victim");
+		writeFileSync(victim, "untouched");
+		const link = path.join(directory, "registration.json");
+		symlinkSync(victim, link);
+		expect(publishPrivateFileOnce(link, "new")).toEqual({ ok: false, reason: "symlink" });
+		expect([readFileSync(victim, "utf8"), lstatSync(link).isSymbolicLink()]).toEqual(["untouched", true]);
+		const wide = path.join(root, "wide");
+		mkdirSync(wide, { mode: 0o755 });
+		expect(publishPrivateFileOnce(path.join(wide, "f"), "x")).toEqual({ ok: false, reason: "mode-invalid" });
+		expect(readdirSync(wide)).toEqual([]);
+		const loose = path.join(directory, "loose.json");
+		writeFileSync(loose, "loose", { mode: 0o644 });
+		chmodSync(loose, 0o644);
+		expect(publishPrivateFileOnce(loose, "new")).toEqual({ ok: false, reason: "mode-invalid" });
+		expect(readFileSync(loose, "utf8")).toBe("loose");
+		expect(readdirSync(directory).sort()).toEqual(["loose.json", "registration.json"]);
 	});
 });
 

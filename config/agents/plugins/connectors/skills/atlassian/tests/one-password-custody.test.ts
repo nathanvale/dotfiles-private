@@ -25,9 +25,9 @@ substitutedPluginRoot();
 
 const PRINCIPAL = "service@example.invalid";
 const ORIGIN = "https://example.atlassian.net";
-const JIRA_ITEM_READ = ["item", "get", "JIRA_EXAMPLE_API_TOKEN", "--vault", "API Credentials", "--format", "json"];
+const JIRA_ITEM_READ = ["item", "get", "jirafixtureitem00000000001", "--vault", "API Credentials", "--format", "json"];
 // Test-owned literals of the accepted handoffs and repairs.
-const ITEM_HANDOFF = "create the Atlassian API token in your Atlassian account settings and store it yourself in the 1Password item JIRA_EXAMPLE_API_TOKEN in the API Credentials vault; Connectors never creates, rotates, or imports a token";
+const ITEM_HANDOFF = "create the Atlassian API token in your Atlassian account settings and store it yourself in the 1Password item with ID jirafixtureitem00000000001, the ID auth configure recorded, in the API Credentials vault; Connectors never creates, rotates, or imports a token";
 const KEYCHAIN_HANDOFF = "store the Connectors 1Password service-account token in the login Keychain yourself: security add-generic-password -s connectors.1password.service-account -a connectors -w (it prompts for the value; Connectors never receives it)";
 const KEYCHAIN_READ = (fixture: CustodyFixture) => ({ argv: ["find-generic-password", "-s", "connectors.1password.service-account", "-a", "connectors", "-w", path.join(fixture.home, "Library", "Keychains", "login.keychain-db")], envKeys: ["HOME", "PATH"] });
 const PROVIDER_ENV_KEYS = ["HOME", "JIRA_API_TOKEN", "JIRA_URL", "JIRA_USERNAME", "PATH", "TMPDIR", "XDG_STATE_HOME"];
@@ -117,9 +117,40 @@ const fresh = (seed = true, serviceToken = SERVICE_TOKEN): CustodyFixture => {
 afterEach(() => fixture?.dispose());
 
 describe("refusals before any Provider or MCPorter start", () => {
+	// The interim Bun entry's registration gate (D2a), until T5 U3b retires
+	// this route. Test-owned literals of the accepted repair texts.
+	const CONFIGURE_COMMAND = `connectors auth configure atlassian --select tenant=<value> --input '{"jiraItem":"<id>","confluenceItem":"<id>"}'`;
+	const UNREGISTERED_REPAIR = `register the tenant first with ${CONFIGURE_COMMAND}, giving the two 26-character 1Password item IDs from the API Credentials vault`;
+	const INVALID_REPAIR = `the tenant's registration.json is not the exact private file auth configure writes; to replace it, confirm connectors recover atlassian --select tenant=<value> lists no open receipt and wait 15 minutes after the tenant's last preview, so no receipt or preview made under the old items can still act; then remove registration.json from the tenant's Connectors state directory by hand and run ${CONFIGURE_COMMAND} again`;
+	const noCustodyEffect = () => [fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl"), fixture.lines("hostile-mcporter.jsonl"), existsSync(path.join(fixture.state, "connectors", "mcporter"))];
+	const NO_CUSTODY_EFFECT = [[], [], [], [], false];
+
+	test("an absent or invalid registration refuses the Bun entry's read and preview with the fixed repair before any Keychain, op, MCPorter, or Provider start", async () => {
+		const sentinel = "bun-entry-registration-sentinel-must-not-echo";
+		const read = ["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}'];
+		const preview = ["--tenant", "example", "issue.comment", "--input", JSON.stringify({ issueKey: "PROJ-1", body: "unregistered" }), "--preview"];
+		const rows: [string, (target: CustodyFixture) => void, string[], string][] = [
+			["absent, read", (target) => target.removeRegistration(), read, UNREGISTERED_REPAIR],
+			["absent, preview", (target) => target.removeRegistration(), preview, UNREGISTERED_REPAIR],
+			["invalid, read", (target) => target.writeRegistration(`{"schemaVersion":1,"note":"${sentinel}"}\n`), read, INVALID_REPAIR],
+		];
+		expect(rows).toHaveLength(3);
+		for (const [label, damage, argv, repair] of rows) {
+			fresh(false);
+			damage(fixture);
+			const result = await fixture.dispatch(argv);
+			expect([label, result.code, result.stderr]).toEqual([label, 3, ""]);
+			const envelope = parse(result.stdout).result;
+			expect([label, envelope.outcome, envelope.causeCode, envelope.repairAction, envelope.transactionState]).toEqual([label, "refused", "refused-credential-unconfigured", repair, "unchanged"]);
+			expect([label, ...noCustodyEffect()]).toEqual([label, ...NO_CUSTODY_EFFECT]);
+			expect(result.stdout).not.toContain(sentinel);
+			fixture.dispose();
+		}
+	});
+
 	test("an absent 1Password item refuses with a handoff and never asks op to create anything", async () => {
 		fresh();
-		rmSync(path.join(fixture.root, "item.json"));
+		fixture.removeItems();
 		const result = await fixture.dispatch(["--tenant", "example", "issue.get", "--input", '{"issueKey":"PROJ-1"}']);
 		expect([result.code, result.stderr]).toEqual([3, ""]);
 		const envelope = parse(result.stdout).result;
@@ -208,7 +239,7 @@ describe("refusals before any Provider or MCPorter start", () => {
 		expect([result.code, result.stderr, envelope.causeCode, envelope.repairAction]).toEqual([3, "", "refused-precondition", "the plugin-owned uv is not set up; run connectors setup"]);
 		// The custody child, the only op caller, meets the shipped op digest. It
 		// starts as the copy's compiled internal custody role.
-		const child = Bun.spawnSync([path.join(fixture.pluginRoot, "bin", "connectors"), "__internal", "atlassian", "custody-child"], { env: fixture.environment({ CONNECTORS_INTERNAL_INVOCATION_CONTEXT: '{"tenant":"example","product":"jira"}' }), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+		const child = Bun.spawnSync([path.join(fixture.pluginRoot, "bin", "connectors"), "__internal", "atlassian", "custody-child"], { env: fixture.environment({ CONNECTORS_INTERNAL_INVOCATION_CONTEXT: '{"tenant":"example","product":"jira","item":"jirafixtureitem00000000001"}' }), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
 		expect([child.exitCode, child.stdout.toString(), child.stderr.toString()]).toEqual([3, "", "atlassian-credential-binding:error:op-unavailable\n"]);
 		expect([fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), fixture.lines("community-starts.jsonl")]).toEqual([[], [], []]);
 	});

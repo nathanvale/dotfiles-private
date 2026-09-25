@@ -82,10 +82,17 @@ the only source against which a Provider's reported site may be matched. Canva
 has no analogue: its endpoint is fixed and its identity is the account.
 _Avoid_: Token-management URL, provider-reported URL
 
+**Tenant Registration**:
+The nonsecret record, published once per Atlassian Tenant by `auth configure`,
+naming the 1Password item ID that holds each product's credential. The CLI
+never rewrites it; commands that read a credential refuse without it.
+_Avoid_: Tenant config, item mapping, derived item title
+
 **Credential Binding**:
 The nonsecret record custody returns for one Atlassian Tenant and product: the
-principal, the credential item revision, and the Trusted Site Origin. It
-crosses the route; the credential value never does.
+principal, the credential item revision, the Trusted Site Origin, and the
+registered 1Password item ID it was read from. It crosses the route; the
+credential value never does.
 _Avoid_: Context, token, credential
 
 **Atlassian Community**:

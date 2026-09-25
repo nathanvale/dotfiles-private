@@ -25,6 +25,16 @@ import { FAKE_OP_LAUNCHER, FAKE_UV_LAUNCHER, fakeLauncher, REQUIREMENTS, substit
 
 export const SERVICE_TOKEN = "ops_fixture-service-account-sentinel";
 export const PROVIDER_TOKEN = "fixture-atlassian-provider-token-sentinel";
+// Test-owned 1Password item IDs (26 lowercase letters and digits), distinct
+// per product and unlike any tenant-derived title. The default fixture
+// registers them for the tenant `example`.
+export const JIRA_ITEM_ID = "jirafixtureitem00000000001";
+export const CONFLUENCE_ITEM_ID = "conffixtureitem00000000002";
+export const FIXTURE_TENANT = "example";
+// Independent oracle: the registration literal auth configure writes, restated
+// here from the accepted contract, never from the production renderer.
+export const registrationLiteral = (tenant: string, jira: string, confluence: string): string =>
+	`{"schemaVersion":1,"tenant":"${tenant}","vault":"API Credentials","items":{"jira":"${jira}","confluence":"${confluence}"}}\n`;
 export const OFFICIAL_MCPORTER = process.env.CONNECTORS_OFFICIAL_RELEASE_FIXTURE;
 const FIXTURES = import.meta.dir;
 const UV_VERSION = (JSON.parse(readFileSync(path.resolve(import.meta.dir, "..", "..", "..", "..", "requirements.json"), "utf8")) as { pins: { uv: string } }).pins.uv;
@@ -51,8 +61,8 @@ function privateDirectories(from: string, to: string): void {
 }
 
 // Files that hold a sentinel by design: the fakes' expected values, the
-// fake Keychain item's value, and the fake 1Password item.
-const SECRET_HOLDERS = new Set(["expected-service-token", "expected-provider-token", "keychain-token", "item.json"]);
+// fake Keychain item's value, and the fake 1Password items directory.
+const SECRET_HOLDERS = new Set(["expected-service-token", "expected-provider-token", "keychain-token", "items"]);
 // The sweep reads every file below this size; only the MCPorter executable
 // is larger.
 const SWEEP_LIMIT = 8 * 1024 * 1024;
@@ -73,7 +83,9 @@ export class CustodyFixture {
 	readonly skill: string;
 	private readonly attended: AttendedKeychain | null;
 
-	constructor(options: { keychain?: "fake" | "attended"; manifest?: "fixture" | "shipped" } = {}) {
+	// registered: seed the default tenant's registration (the default), so
+	// every custody row passes the registration gate unless it opts out.
+	constructor(options: { keychain?: "fake" | "attended"; manifest?: "fixture" | "shipped"; registered?: boolean } = {}) {
 		this.mode = options.keychain ?? "fake";
 		if (this.mode === "attended" && !ATTENDED_KEYCHAIN) throw new Error("the attended Keychain fixture needs CONNECTORS_ATTENDED_KEYCHAIN_TEST=1");
 		// Fail closed: substitutedPluginRoot throws unless the copy differs from
@@ -92,6 +104,25 @@ export class CustodyFixture {
 		writeFileSync(path.join(this.root, "expected-provider-token"), PROVIDER_TOKEN);
 		// A same-named MCPorter earlier on PATH must never be selected.
 		executable(path.join(this.hostileBin, "mcporter"), fakeLauncher(path.join(FIXTURES, "hostile-mcporter.ts")));
+		if (options.registered !== false) this.writeRegistration(registrationLiteral(FIXTURE_TENANT, JIRA_ITEM_ID, CONFLUENCE_ITEM_ID));
+	}
+
+	// The tenant's registration path, as auth configure places it.
+	registrationFile(tenant: string = FIXTURE_TENANT): string {
+		return path.join(this.state, "connectors", "atlassian", tenant, "registration.json");
+	}
+
+	// Seeds a registration's exact bytes, 0600 in a 0700 tenant directory,
+	// without the front door: only the rows that prove configure itself use it.
+	writeRegistration(text: string, tenant: string = FIXTURE_TENANT): void {
+		const file = this.registrationFile(tenant);
+		privateDirectories(this.state, path.dirname(file));
+		writeFileSync(file, text, { mode: 0o600 });
+		chmodSync(file, 0o600);
+	}
+
+	removeRegistration(tenant: string = FIXTURE_TENANT): void {
+		rmSync(this.registrationFile(tenant), { force: true });
 	}
 
 	// Stores the one service-token item. The attended mode creates a fresh
@@ -138,8 +169,20 @@ export class CustodyFixture {
 		return this;
 	}
 
+	// The same fields under each registered product item, each carrying its own
+	// top-level id, as op returns it.
 	writeItem(entries: Record<string, string>, version = 1): void {
-		writeFileSync(path.join(this.root, "item.json"), JSON.stringify({ version, fields: Object.entries(entries).map(([label, value]) => ({ id: label, label, value })) }));
+		for (const id of [JIRA_ITEM_ID, CONFLUENCE_ITEM_ID]) this.writeItemText(id, JSON.stringify({ id, version, fields: Object.entries(entries).map(([label, value]) => ({ id: label, label, value })) }));
+	}
+
+	// Exact item text for one reference; later: served from its second read on.
+	writeItemText(reference: string, text: string, read: "first" | "later" = "first"): void {
+		mkdirSync(path.join(this.root, "items"), { recursive: true });
+		writeFileSync(path.join(this.root, "items", read === "first" ? `${reference}.json` : `${reference}.then.json`), text);
+	}
+
+	removeItems(): void {
+		rmSync(path.join(this.root, "items"), { recursive: true, force: true });
 	}
 
 	canned(product: "jira" | "confluence", name: string, value: unknown): void {
@@ -153,7 +196,7 @@ export class CustodyFixture {
 	}
 
 	// Every byte of plugin state the Atlassian dispatcher owns: journal,
-	// receipts, locks, and the Upload Outbox.
+	// receipts, locks, the Upload Outbox, and the tenant registration.
 	atlassianStateText(): string {
 		const base = path.join(this.state, "connectors", "atlassian");
 		const texts: string[] = [];
@@ -178,8 +221,9 @@ export class CustodyFixture {
 			for (const entry of readdirSync(directory)) {
 				const full = path.join(directory, entry);
 				const stats = statSync(full);
+				if (directory === this.root && SECRET_HOLDERS.has(entry)) continue;
 				if (stats.isDirectory()) walk(full);
-				else if (stats.isFile() && stats.size < SWEEP_LIMIT && !(directory === this.root && SECRET_HOLDERS.has(entry))) texts.push(readFileSync(full, "utf8"));
+				else if (stats.isFile() && stats.size < SWEEP_LIMIT) texts.push(readFileSync(full, "utf8"));
 			}
 		};
 		walk(this.root);
@@ -206,10 +250,17 @@ export class CustodyFixture {
 	}
 
 	// One packaged front-door process with stdin closed: the copy's compiled
-	// bin/connectors unless another binary is named.
-	async frontDoor(argv: string[], options: { binary?: string; extra?: Record<string, string> } = {}): Promise<RunResult> {
-		const proc = Bun.spawn([options.binary ?? path.join(this.pluginRoot, "bin", "connectors"), ...argv], { env: this.packagedEnvironment(options.extra), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+	// bin/connectors unless another binary is named. With stdinSentinel, stdin
+	// is instead a pipe holding that text and left open until the process
+	// exits, so a process that reads stdin blocks or sees the sentinel.
+	async frontDoor(argv: string[], options: { binary?: string; extra?: Record<string, string>; stdinSentinel?: string } = {}): Promise<RunResult> {
+		const proc = Bun.spawn([options.binary ?? path.join(this.pluginRoot, "bin", "connectors"), ...argv], { env: this.packagedEnvironment(options.extra), stdin: options.stdinSentinel === undefined ? "ignore" : "pipe", stdout: "pipe", stderr: "pipe" });
+		if (options.stdinSentinel !== undefined && proc.stdin) {
+			proc.stdin.write(options.stdinSentinel);
+			proc.stdin.flush();
+		}
 		const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+		if (options.stdinSentinel !== undefined && proc.stdin) proc.stdin.end();
 		return { code, stdout, stderr };
 	}
 
