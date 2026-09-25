@@ -1,7 +1,8 @@
 import { expect, test } from "bun:test";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, readlinkSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { createBundle, createFakeMcporterBinDir, PLUGIN_ROOT, runBundle } from "./harness.ts";
+import { buildFaultedFrontDoor } from "./faulted-front-door.ts";
+import { createBundle, createFakeMcporterBinDir, runBundle } from "./harness.ts";
 
 // Supplied by the test runner from an independently fetched official release.
 // The process still checks the production pins, Apple signature, and version.
@@ -252,20 +253,11 @@ test.skipIf(!official)("interrupted repair reports both durable recovery and rep
 test.skipIf(!official)("post-repair output validation failure retains the durably completed repair", async () => {
 	const bundle = createBundle();
 	const hostile = createFakeMcporterBinDir();
-	const sourceBin = path.join(PLUGIN_ROOT, "bin");
-	const testBin = path.join(bundle.root, "test-source");
 	const release = path.join(bundle.root, "official-source");
 	const state = path.join(bundle.root, "state");
 	const home = path.join(bundle.root, "home");
 	mkdirSync(release); mkdirSync(state); mkdirSync(home);
-	cpSync(sourceBin, testBin, { recursive: true, filter: (source) => source !== path.join(sourceBin, "connectors") });
-	const entry = path.join(testBin, "connectors.ts");
-	const original = readFileSync(entry, "utf8");
-	const successCause = 'causeCode: "SUCCESS_MCPORTER_REPAIRED",';
-	expect(original.split(successCause)).toHaveLength(2);
-	writeFileSync(entry, original.replace(successCause, 'causeCode: "SUCCESS_UNCHANGED",'));
-	const built = Bun.spawnSync(["bun", "build", entry, "--compile", "--target=bun-darwin-arm64", "--outfile", bundle.binary], { stdout: "pipe", stderr: "pipe" });
-	if (built.exitCode !== 0) throw new Error(new TextDecoder().decode(built.stderr));
+	buildFaultedFrontDoor(bundle.root, bundle.binary, { find: 'causeCode: "SUCCESS_MCPORTER_REPAIRED",', replace: 'causeCode: "SUCCESS_UNCHANGED",' });
 	cpSync(path.join(official!, "mcporter_0.14.0_darwin_arm64.tar.gz"), path.join(release, "mcporter_0.14.0_darwin_arm64.tar.gz"));
 	cpSync(path.join(official!, "provenance.json"), path.join(release, "provenance.json"));
 	const env = { home, binDir: hostile.binDir, extraEnv: { XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: release }, timeoutMs: 30000 };

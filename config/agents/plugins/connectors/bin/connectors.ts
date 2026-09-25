@@ -3,14 +3,16 @@
 // skeleton. T2 (Ticket #89 under Spec #87) adds the generic manifest-driven
 // command core: list, config validate/show, status, doctor, a minimal schema
 // reachability seam for keyless connectors, and a fixture-auth seam proving
-// packaged auth-adapter extensibility. `bin/provider-route.ts` remains the
+// packaged auth-adapter extensibility. T6 (Ticket #93) adds auth and run
+// through a packaged adapter's prepare step. `bin/provider-route.ts` remains the
 // sole owner of the existing per-Skill auth/list/call launcher every Skill's
 // SKILL.md still documents; this file never imports it and never branches
 // on a connector's name. All connector-specific behavior lives in a
 // schema-validated Connector Manifest (bin/manifest.ts) and a packaged
 // adapter registry (bin/adapters/index.ts).
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync } from "node:fs";
 import path from "node:path";
+import type { AdapterAction, AdapterRefusal, AdapterRefusalKind, LocalEffect, Prepared } from "./adapters/contract.ts";
 import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
 import { discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
 import { safeEnvironment } from "./safe-environment.ts";
@@ -27,14 +29,18 @@ const SIGNAL_EXITS = { "130": "SIGINT", "143": "SIGTERM" } as const;
 // What this binary does not do yet. Keep honest: only list an exclusion
 // once it is actually true, and drop it in the Ticket that stops excluding it.
 const EFFECT_EXCLUSIONS = [
-	"any real credential value or T5 custody access; fixture-auth only presents a nonsecret reference to a fixture-tested authority",
+	"any credential value read by this binary or T5 custody access; fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
 	"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
 	"any provider write operation",
-	"real auth or run (later Tickets own the complete production flows); deps covers only explicit MCPorter repair",
+	"auth or run for a connector whose packaged adapter has no prepare step, and auth logout for every connector; deps covers only explicit MCPorter repair",
 ] as const;
 
+// The closed auth verb vocabulary (Spec AC19). Each connector's adapter
+// decides which verbs it supports; the rest refuse through the catalogue.
+const AUTH_VERBS = new Set(["configure", "status", "check", "login", "repair", "logout"]);
+
 // Exported: each appears in the exported Envelope's public signature.
-export type EffectClass = "inspect" | "repository-local";
+export type EffectClass = "inspect" | "repository-local" | "external";
 export type Outcome = "success" | "refused" | "failed";
 export type FailureClass = "usage" | "internal" | "domain" | "schema" | "transient" | null;
 // A caught internal failure reports INTERNAL_UNEXPECTED_UNCHANGED only when no
@@ -73,12 +79,26 @@ export type CauseCode =
 	| "TRANSIENT_PROVIDER_UNREACHABLE"
 	| "TRANSIENT_PROVIDER_AFTER_BOOTSTRAP"
 	| "TRANSIENT_PROVIDER_AFTER_RECOVERY"
+	| "TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT"
+	| "SUCCESS_AFTER_ACCOUNT_EFFECT"
+	| "DOMAIN_PROVIDER_CALL_FAILED"
+	| "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT"
 	| "DOMAIN_MCPORTER_REPAIR_REQUIRED"
 	| "DOMAIN_MCPORTER_REPAIR_AFTER_BOOTSTRAP"
 	| "DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY"
 	| "INTERNAL_UNEXPECTED_UNCHANGED"
 	| "INTERNAL_UNEXPECTED_AFTER_BOOTSTRAP"
-	| "INTERNAL_UNEXPECTED_AFTER_REPAIR";
+	| "INTERNAL_UNEXPECTED_AFTER_REPAIR"
+	| "SUCCESS_AUTH_LOGIN"
+	| "DOMAIN_AUTH_LOGIN_UNKNOWN"
+	| "DOMAIN_AUTH_VERB_UNSUPPORTED"
+	| "DOMAIN_ATTENDED_REQUIRED"
+	| "DOMAIN_CLIENT_MODE_NOT_ADMITTED"
+	| "USAGE_OPERATION_UNKNOWN"
+	| "USAGE_ADAPTER_REFUSED"
+	| "DOMAIN_ADAPTER_REFUSED"
+	| "SCHEMA_ADAPTER_REFUSED"
+	| "DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION";
 
 let bootstrapCompleted = false;
 let recoveryCompleted = false;
@@ -95,8 +115,9 @@ interface CommandDescriptor {
 
 // This is the complete command surface. Do not add a route here without also
 // implementing it, so discovery never advertises a command this binary
-// cannot actually answer. setup and deps repair mcporter are implemented;
-// auth and run are later Tickets' work and are deliberately absent.
+// cannot actually answer. auth and run reach only connectors whose packaged
+// adapter has a prepare step; every other connector refuses through the
+// catalogue.
 const COMMANDS: readonly CommandDescriptor[] = [
 	{ commandIdentity: "connectors.dispatch", route: [], effectClass: "inspect", summary: "Refuse a missing, unknown, or incompatible command selection" },
 	{ commandIdentity: "connectors.help", route: ["--help"], effectClass: "inspect", summary: "Show help and usage" },
@@ -115,6 +136,8 @@ const COMMANDS: readonly CommandDescriptor[] = [
 		effectClass: "inspect",
 		summary: "Attempt a packaged, secret-free fixture auth operation for one connector (fixture-tested proof only, never real credential custody)",
 	},
+	{ commandIdentity: "connectors.auth", route: ["auth"], effectClass: "external", summary: "Inspect or perform one connector's declared auth verb through its packaged adapter; login is attended only" },
+	{ commandIdentity: "connectors.run", route: ["run"], effectClass: "repository-local", summary: "Run one declared read operation for a connector through its packaged adapter and the selected MCPorter" },
 ];
 
 // Contract Core 2.0 requires sorted, unique availablePaths, independent of
@@ -295,12 +318,26 @@ const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	TRANSIENT_PROVIDER_UNREACHABLE: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
 	TRANSIENT_PROVIDER_AFTER_BOOTSTRAP: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
 	TRANSIENT_PROVIDER_AFTER_RECOVERY: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
+	TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
+	SUCCESS_AFTER_ACCOUNT_EFFECT: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	DOMAIN_PROVIDER_CALL_FAILED: { outcome: "failed", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	DOMAIN_MCPORTER_REPAIR_REQUIRED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	DOMAIN_MCPORTER_REPAIR_AFTER_BOOTSTRAP: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_UNEXPECTED_UNCHANGED: { outcome: "failed", effectClass: "inspect", transactionState: "unchanged", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_UNEXPECTED_AFTER_BOOTSTRAP: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_UNEXPECTED_AFTER_REPAIR: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	SUCCESS_AUTH_LOGIN: { outcome: "success", effectClass: "external", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	DOMAIN_AUTH_LOGIN_UNKNOWN: { outcome: "failed", effectClass: "external", transactionState: "unknown", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	DOMAIN_AUTH_VERB_UNSUPPORTED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	DOMAIN_ATTENDED_REQUIRED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	DOMAIN_CLIENT_MODE_NOT_ADMITTED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	USAGE_OPERATION_UNKNOWN: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	USAGE_ADAPTER_REFUSED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	DOMAIN_ADAPTER_REFUSED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	SCHEMA_ADAPTER_REFUSED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
 };
 
 // Scalar fields a cause row pins to one exact value; table-driven so this
@@ -331,22 +368,52 @@ function checkCauseRowRepairAction(result: Envelope["result"], row: CauseRow, ca
 	return [];
 }
 
+// Setup's causes belong to setup alone, and setup emits no other cause. A
+// run's own success and provider failures after or without an account effect
+// belong to run alone.
+const SETUP_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_COMPLETED", "DOMAIN_SETUP_FAILED_UNCHANGED", "DOMAIN_SETUP_FAILED_PARTIAL", "SCHEMA_SETUP_CONFIG_INVALID", "USAGE_SETUP_MALFORMED", "INTERNAL_SETUP_UNKNOWN", "INTERNAL_SETUP_AFTER_COMMIT"]);
+const RUN_ONLY_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_AFTER_ACCOUNT_EFFECT", "TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT", "DOMAIN_PROVIDER_CALL_FAILED", "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT"]);
+
+function checkCauseCommand(cause: CauseCode, commandIdentity: string): string[] {
+	if (SETUP_CAUSES.has(cause) !== (commandIdentity === "connectors.setup")) return ["setup cause and command identity must agree"];
+	if (RUN_ONLY_CAUSES.has(cause) && commandIdentity !== "connectors.run") return ["run cause and command identity must agree"];
+	return [];
+}
+
 function checkCauseRow(result: Envelope["result"]): string[] {
 	const row = ADMITTED_CAUSE_ROWS[result.causeCode as CauseCode];
 	if (!row) return [`result.causeCode ${JSON.stringify(result.causeCode)} is not one of T1's admitted cause rows`];
 	const cause = result.causeCode;
-	const setupCause = cause === "SUCCESS_COMPLETED" || cause === "DOMAIN_SETUP_FAILED_UNCHANGED" || cause === "DOMAIN_SETUP_FAILED_PARTIAL" || cause === "SCHEMA_SETUP_CONFIG_INVALID" || cause === "USAGE_SETUP_MALFORMED" || cause === "INTERNAL_SETUP_UNKNOWN" || cause === "INTERNAL_SETUP_AFTER_COMMIT";
-	return [...(setupCause !== (result.commandIdentity === "connectors.setup") ? ["setup cause and command identity must agree"] : []), ...checkCauseRowScalars(result, row, cause), ...checkCauseRowData(result, row, cause), ...checkCauseRowRepairAction(result, row, cause)];
+	return [...checkCauseCommand(cause, result.commandIdentity), ...checkCauseRowScalars(result, row, cause), ...checkCauseRowData(result, row, cause), ...checkCauseRowRepairAction(result, row, cause)];
 }
 
 // T1 never attempts an effect, so every envelope's effects are vacuously
 // empty and fully inventoried; a fabricated "unchanged" state must not be
 // able to smuggle a fake completed/remaining/uncertain entry through.
+// Admitted selection inventories, as exact serialized lists. account-grant is
+// the attended login's grant, held by MCPorter in the account vault.
+const ADMITTED_EFFECTS: Readonly<Record<"selection" | "remaining" | "uncertain", readonly string[]>> = {
+	selection: ["[]", '["mcporter-bootstrap"]', '["mcporter-repair"]', '["mcporter-recovery"]', '["mcporter-recovery","mcporter-repair"]'],
+	remaining: ["[]"],
+	uncertain: ["[]", '["mcporter-repair"]', '["mcporter-recovery"]', '["account-grant"]'],
+};
+
+// A completed inventory is one selection inventory followed by connector
+// account effects, each at most once and in this order.
+const ACCOUNT_EFFECT_ORDER: readonly string[] = ["account-vault", "mcporter-vault-file", "account-grant"] satisfies readonly (LocalEffect | "account-grant")[];
+
+function isAdmittedCompleted(completed: readonly unknown[]): boolean {
+	const split = completed.findIndex((effect) => ACCOUNT_EFFECT_ORDER.includes(effect as string));
+	const selection = split < 0 ? completed : completed.slice(0, split);
+	const positions = split < 0 ? [] : completed.slice(split).map((effect) => ACCOUNT_EFFECT_ORDER.indexOf(effect as string));
+	return ADMITTED_EFFECTS.selection.includes(JSON.stringify(selection)) && positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]!));
+}
+
 function checkEffectsEmptyAndComplete(effects: Envelope["result"]["effects"]): string[] {
 	const problems: string[] = [...checkExactKeys(effects, EFFECTS_KEYS, "result.effects")];
 	for (const key of ["completed", "remaining", "uncertain"] as const) {
 		if (!Array.isArray(effects[key])) problems.push(`result.effects.${key} must be an array`);
-		else if (key === "completed" ? !["[]", '["mcporter-bootstrap"]', '["mcporter-repair"]', '["mcporter-recovery"]', '["mcporter-recovery","mcporter-repair"]'].includes(JSON.stringify(effects[key])) : key === "uncertain" ? !["[]", '["mcporter-repair"]', '["mcporter-recovery"]'].includes(JSON.stringify(effects[key])) : effects[key].length > 0) problems.push(`result.effects.${key} has an undeclared effect`);
+		else if (key === "completed" ? !isAdmittedCompleted(effects[key]) : !ADMITTED_EFFECTS[key].includes(JSON.stringify(effects[key]))) problems.push(`result.effects.${key} has an undeclared effect`);
 	}
 	if (effects.inventoryComplete !== true) problems.push("result.effects.inventoryComplete must be true for T1");
 	return problems;
@@ -516,11 +583,15 @@ function helpText(): string {
 		"  doctor <connector>                              Local readiness gate for one connector",
 		"  schema <connector>                               Fetch live schema evidence for one keyless connector",
 		"  deps repair mcporter                             Explicitly replace selected MCPorter after mismatch",
+		"  auth <verb> <connector> [--select name=value]    Run one declared auth verb; login needs your terminal",
+		"  run <connector> [--select name=value] <operation> [--input <json-object>]",
+		"                                                  Run one declared read operation through MCPorter",
 		"",
 		"Examples:",
 		`  ${PROGRAM} --discover --json`,
 		`  ${PROGRAM} list`,
 		`  ${PROGRAM} doctor context7`,
+		`  ${PROGRAM} run canva --select account=work search-designs --input '{"query":"poster"}'`,
 		"",
 	].join("\n");
 }
@@ -1084,7 +1155,7 @@ async function handleFixtureAuth(args: readonly string[]): Promise<void> {
 	// manifest.adapter is already validated against the packaged registry by
 	// loadOneManifest/loadManifest, so this lookup can never miss in practice;
 	// the optional chain only satisfies the type system's own uncertainty.
-	const attempt = await ADAPTERS[manifest.adapter]?.attemptAuth(manifest);
+	const attempt = await ADAPTERS[manifest.adapter]?.attemptAuth?.(manifest);
 	if (!attempt || attempt.outcome === "refused") {
 		const cause: CauseCode = attempt?.cause === "FIXTURE_AUTHORITY_UNAVAILABLE" ? "DOMAIN_FIXTURE_AUTHORITY_UNAVAILABLE" : "DOMAIN_FIXTURE_AUTH_REFUSED";
 		emitRefusal(
@@ -1142,18 +1213,34 @@ async function handleSchema(args: readonly string[]): Promise<void> {
 	await fetchKeylessSchema(id, manifest.registryPath, server, allowedTools);
 }
 
-function emitSelectionFailure(selection: Extract<Awaited<ReturnType<typeof ensureMcporter>>, { ok: false }>): void {
+function emitSelectionFailure(selection: Extract<Awaited<ReturnType<typeof ensureMcporter>>, { ok: false }>, commandIdentity = "connectors.schema"): void {
 	bootstrapCompleted = selection.bootstrapped === true;
 	recoveryCompleted = selection.recovered === true;
 	if (selection.uncertain) {
 		emit({ envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message: `${PROGRAM}: MCPorter recovery outcome requires inspection`, availablePaths: AVAILABLE_PATHS,
-			result: { runId: runId(), commandIdentity: "connectors.schema", outcome: "failed", failureClass: "internal", exitCode: 1,
+			result: { runId: runId(), commandIdentity, outcome: "failed", failureClass: "internal", exitCode: 1,
 				data: null, retryable: false, repairAction: selection.cause === "selection-lock-failed" ? selection.repair : "Inspect current and previous MCPorter revisions before retrying", nextAction: "connectors.doctor",
 				effectClass: "repository-local", transactionState: "unknown", causeCode: "INTERNAL_MCPORTER_SELECTION_UNKNOWN",
 				effects: { completed: recoveryCompleted ? ["mcporter-recovery"] : [], remaining: [], uncertain: [recoveryCompleted ? "mcporter-repair" : "mcporter-recovery"], inventoryComplete: true } } });
 		return;
 	}
-	emitRefusal("connectors.schema", `${PROGRAM}: MCPorter ${selection.cause}`, bootstrapCompleted ? "DOMAIN_MCPORTER_REPAIR_AFTER_BOOTSTRAP" : recoveryCompleted ? "DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY" : "DOMAIN_MCPORTER_REPAIR_REQUIRED", selection.repair, "connectors.doctor", bootstrapCompleted, recoveryCompleted);
+	emitRefusal(commandIdentity, `${PROGRAM}: MCPorter ${selection.cause}`, bootstrapCompleted ? "DOMAIN_MCPORTER_REPAIR_AFTER_BOOTSTRAP" : recoveryCompleted ? "DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY" : "DOMAIN_MCPORTER_REPAIR_REQUIRED", selection.repair, "connectors.doctor", bootstrapCompleted, recoveryCompleted);
+}
+
+// Runs MCPorter with stdin closed. Both pipes must drain concurrently:
+// awaiting only stdout+exited while stderr sits unread lets a noisy child fill
+// the OS pipe buffer, block on its own write, and never reach exit. The
+// drained stderr text is deliberately discarded, never echoed into this
+// command's own envelope or stderr.
+async function runDrained(argv: readonly string[], env: Record<string, string>): Promise<{ stdout: string; exitCode: number }> {
+	const proc = Bun.spawn([...argv], { env, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
+	const [stdout, , exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+	return { stdout, exitCode };
+}
+
+// The transient provider cause after this invocation's MCPorter selection.
+function transientCause(): CauseCode {
+	return bootstrapCompleted ? "TRANSIENT_PROVIDER_AFTER_BOOTSTRAP" : recoveryCompleted ? "TRANSIENT_PROVIDER_AFTER_RECOVERY" : "TRANSIENT_PROVIDER_UNREACHABLE";
 }
 
 async function fetchKeylessSchema(id: string, registryPath: string, server: string, allowedTools: readonly string[]): Promise<void> {
@@ -1171,15 +1258,9 @@ async function fetchKeylessSchema(id: string, registryPath: string, server: stri
 	}
 	bootstrapCompleted = selection.bootstrapped;
 	recoveryCompleted = selection.recovered === true;
-	const proc = Bun.spawn([selection.binary, "--config", registryPath, "list", server, "--json", "--no-oauth"], { env: routeEnv, stdout: "pipe", stderr: "pipe", stdin: "ignore" });
-	// Both pipes must drain concurrently: awaiting only stdout+exited while
-	// stderr sits unread lets a noisy child fill the OS pipe buffer, block on
-	// its own write, and never reach exit. The drained stderr text is
-	// deliberately discarded, never echoed into this command's own envelope
-	// or stderr.
-	const [stdout, , exitCode] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+	const { stdout, exitCode } = await runDrained([selection.binary, "--config", registryPath, "list", server, "--json", "--no-oauth"], routeEnv);
 	if (exitCode !== 0) {
-		emitRefusal("connectors.schema", `${PROGRAM}: ${id} schema fetch did not complete`, selection.bootstrapped ? "TRANSIENT_PROVIDER_AFTER_BOOTSTRAP" : recoveryCompleted ? "TRANSIENT_PROVIDER_AFTER_RECOVERY" : "TRANSIENT_PROVIDER_UNREACHABLE", "Retry the schema request", "connectors.doctor", selection.bootstrapped, recoveryCompleted);
+		emitRefusal("connectors.schema", `${PROGRAM}: ${id} schema fetch did not complete`, transientCause(), "Retry the schema request", "connectors.doctor", selection.bootstrapped, recoveryCompleted);
 		return;
 	}
 	let parsed: unknown;
@@ -1191,7 +1272,258 @@ async function fetchKeylessSchema(id: string, registryPath: string, server: stri
 	emitSuccess("connectors.schema", `schema evidence fetched for ${id}`, { connector: id, server, allowedTools, schema: parsed }, "connectors.status", selection.bootstrapped, recoveryCompleted);
 }
 
+// Packaged adapter auth and run (Spec AC19, AC20). The core parses, loads the
+// manifest, resolves selectors, asks the adapter for a plan, selects the
+// verified MCPorter, lets the adapter commit its own state, then runs the plan.
+// It never names a connector, and no refusal here echoes caller input.
+
+interface AdapterCommand {
+	readonly commandIdentity: "connectors.auth" | "connectors.run";
+	readonly id: string;
+	readonly given: ReadonlyMap<string, string>;
+	readonly action: AdapterAction;
+}
+
+type TransportPlan = Extract<Prepared, { kind: "transport" }>;
+
+const AUTH_USAGE = "auth <verb> <connector> [--select name=value ...]";
+const RUN_USAGE = "run <connector> [--select name=value ...] <operation> [--input <json-object>]";
+
+const REFUSAL_CAUSE: Readonly<Record<AdapterRefusalKind, CauseCode>> = {
+	usage: "USAGE_ADAPTER_REFUSED",
+	domain: "DOMAIN_ADAPTER_REFUSED",
+	schema: "SCHEMA_ADAPTER_REFUSED",
+	"verb-unsupported": "DOMAIN_AUTH_VERB_UNSUPPORTED",
+	"operation-unknown": "USAGE_OPERATION_UNKNOWN",
+	"client-mode-not-admitted": "DOMAIN_CLIENT_MODE_NOT_ADMITTED",
+};
+
+// Returns the index of the first token after the leading --select pairs, or
+// null for a malformed or conflicting selection.
+function consumeSelections(rest: readonly string[], given: Map<string, string>): number | null {
+	let index = 0;
+	while (rest[index] === "--select") {
+		const valueIndex = consumeSelectToken(rest, index, given);
+		if (valueIndex === null) return null;
+		index = valueIndex + 1;
+	}
+	return index;
+}
+
+function parseAuthArgs(args: readonly string[]): AdapterCommand | null {
+	const [verb, id, ...rest] = args;
+	if (!verb || !AUTH_VERBS.has(verb) || !id) return null;
+	const given = new Map<string, string>();
+	if (consumeSelections(rest, given) !== rest.length) return null;
+	return { commandIdentity: "connectors.auth", id, given, action: { kind: "auth", verb } };
+}
+
+function parseInputObject(text: string | undefined): Record<string, unknown> | null {
+	try {
+		const parsed: unknown = JSON.parse(text ?? "");
+		return typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? parsed as Record<string, unknown> : null;
+	} catch {
+		return null;
+	}
+}
+
+function parseRunArgs(args: readonly string[]): AdapterCommand | null {
+	const [id, ...rest] = args;
+	const given = new Map<string, string>();
+	const at = consumeSelections(rest, given);
+	const operation = at === null ? undefined : rest[at];
+	if (!id || at === null || !operation || operation.startsWith("-")) return null;
+	const after = rest.slice(at + 1);
+	if (after.length === 0) return { commandIdentity: "connectors.run", id, given, action: { kind: "run", operation, input: null } };
+	const input = after.length === 2 && after[0] === "--input" ? parseInputObject(after[1]) : null;
+	return input === null ? null : { commandIdentity: "connectors.run", id, given, action: { kind: "run", operation, input } };
+}
+
+function emitAdapterEnvelope(command: AdapterCommand, causeCode: CauseCode, message: string, data: Record<string, unknown> | null, repairAction: string | null, effects: { completed: string[]; uncertain: string[] }, nextAction?: string): void {
+	const row = ADMITTED_CAUSE_ROWS[causeCode];
+	emit({
+		envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message, availablePaths: AVAILABLE_PATHS,
+		result: {
+			runId: runId(), commandIdentity: command.commandIdentity, outcome: row.outcome, failureClass: row.failureClass,
+			exitCode: row.exitCode, data, retryable: row.retryable, repairAction,
+			nextAction: nextAction ?? (row.outcome === "success" ? "connectors.status" : "connectors.help"),
+			effectClass: row.effectClass, transactionState: row.transactionState, causeCode,
+			effects: { completed: effects.completed, remaining: [], uncertain: effects.uncertain, inventoryComplete: true },
+		},
+	});
+}
+
+// After a MCPorter bootstrap or recovery, or a local effect the adapter's
+// commit caused, a refusal still reports that completed effect.
+function emitAdapterRefusal(command: AdapterCommand, refusal: AdapterRefusal, local: readonly LocalEffect[] = []): void {
+	const completed = [...completedSelectionEffects(), ...local];
+	const causeCode = completed.length > 0 ? "DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION" : REFUSAL_CAUSE[refusal.kind];
+	emitAdapterEnvelope(command, causeCode, `${PROGRAM}: ${command.id} refused the request (${refusal.connectorCause})`, { connector: command.id, connectorCause: refusal.connectorCause }, refusal.repair, { completed, uncertain: [] });
+}
+
+function loadAdapterManifest(command: AdapterCommand): ConnectorManifest | null {
+	try {
+		return loadOneManifest(skillsRoot(), command.id, ADAPTER_IDS);
+	} catch (error) {
+		if (!(error instanceof ManifestError)) throw error;
+		emitRefusal(command.commandIdentity, `${PROGRAM}: the connector manifest could not be loaded (${error.code})`, manifestErrorCause(error), "Run connectors list, then config validate for the connector", "connectors.list");
+		return null;
+	}
+}
+
+function prepareThroughAdapter(command: AdapterCommand, manifest: ConnectorManifest): Prepared | null {
+	const adapter = manifest.adapter === null ? undefined : ADAPTERS[manifest.adapter];
+	if (!adapter) {
+		emitRefusal(command.commandIdentity, `${PROGRAM}: ${command.id} declares no packaged adapter`, "DOMAIN_ADAPTER_NOT_DECLARED", "Use a connector whose manifest declares a packaged adapter", "connectors.list");
+		return null;
+	}
+	const selectors = resolveSelectors(manifest, command.given);
+	if (selectors.problem) {
+		emitRefusal(command.commandIdentity, `${PROGRAM}: the selectors for ${command.id} do not match its manifest`, "SCHEMA_SELECTOR_INVALID", `Run connectors config show ${command.id} --resolved --json to see its declared selectors`, "connectors.config.show");
+		return null;
+	}
+	if (!adapter.prepare) {
+		const kind = command.action.kind === "auth" ? "verb-unsupported" : "operation-unknown";
+		return { kind: "refused", refusal: { kind, connectorCause: "adapter-has-no-prepare", repair: "Use a connector whose packaged adapter supports auth and run" } };
+	}
+	const values = Object.fromEntries(Object.entries(selectors.values).map(([name, entry]) => [name, entry.value]));
+	return adapter.prepare({ action: command.action, manifest, selectors: values, skillsRoot: skillsRoot(), env: process.env });
+}
+
+// Attended login writes MCPorter's browser prompts to the user's terminal, so
+// stdout keeps exactly one envelope. Without a terminal it refuses.
+function openTerminal(): number | null {
+	if (!process.stdin.isTTY) return null;
+	try {
+		return openSync("/dev/tty", "r+");
+	} catch {
+		return null;
+	}
+}
+
+type ReadFailure = "offline" | "unclassified" | null;
+
+// A read reports the selection effect, then what commit created, then what
+// the adapter observed MCPorter change in its state.
+function readCause(completed: readonly string[], failure: ReadFailure): CauseCode {
+	if (failure === null) return readSuccessCause(completed);
+	if (failure === "unclassified") return completed.length > 0 ? "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT" : "DOMAIN_PROVIDER_CALL_FAILED";
+	return bootstrapCompleted || recoveryCompleted ? transientCause() : completed.length > 0 ? "TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT" : "TRANSIENT_PROVIDER_UNREACHABLE";
+}
+
+function readSuccessCause(completed: readonly string[]): CauseCode {
+	if (bootstrapCompleted) return "SUCCESS_BOOTSTRAPPED";
+	if (recoveryCompleted) return "SUCCESS_MCPORTER_RECOVERED";
+	return completed.length > 0 ? "SUCCESS_AFTER_ACCOUNT_EFFECT" : "SUCCESS_UNCHANGED";
+}
+
+// MCPorter 0.14.0's `call --output json` failure prints one JSON object whose
+// issue.kind is one of auth, http, stdio-exit, offline, or other. Only a
+// positively offline issue is retryable. Every other kind, and output that
+// does not parse, fails closed until a live station qualifies a finer mapping.
+// Only that one key is read; no MCPorter text reaches the envelope.
+function readFailure(stdout: string): ReadFailure {
+	try {
+		const issue: unknown = (JSON.parse(stdout) as { issue?: unknown } | null)?.issue;
+		return typeof issue === "object" && issue !== null && (issue as { kind?: unknown }).kind === "offline" ? "offline" : "unclassified";
+	} catch {
+		return "unclassified";
+	}
+}
+
+// A repair command names each selector the caller passed, never its value, so
+// it stays runnable without echoing an account or tenant back.
+function selectFlags(command: AdapterCommand): string {
+	return [...command.given.keys()].map((name) => ` --select ${name}=<value>`).join("");
+}
+
+async function runRead(command: AdapterCommand, plan: TransportPlan, binary: string, local: readonly LocalEffect[]): Promise<void> {
+	const { stdout, exitCode } = await runDrained([binary, ...plan.argv], { ...plan.env });
+	const completed = [...completedSelectionEffects(), ...local, ...plan.settle()];
+	const effects = { completed, uncertain: [] };
+	if (exitCode !== 0) {
+		const failure = readFailure(stdout);
+		const selectors = selectFlags(command);
+		const repair = failure === "offline" ? `Retry the run; if it keeps failing, run connectors auth status ${command.id}${selectors}` : `If the grant expired, run connectors auth login ${command.id}${selectors} yourself in a terminal; otherwise correct the operation or its --input before running again`;
+		emitAdapterEnvelope(command, readCause(completed, failure), `${PROGRAM}: ${command.id} provider call did not complete`, null, repair, effects, "connectors.auth");
+		return;
+	}
+	let result: unknown;
+	try {
+		result = JSON.parse(stdout);
+	} catch {
+		result = { raw: stdout };
+	}
+	const operation = command.action.kind === "run" ? command.action.operation : null;
+	emitAdapterEnvelope(command, readCause(completed, null), `${command.id} ${operation} completed`, { connector: command.id, operation, ...plan.data, result }, null, effects);
+}
+
+async function runAttendedLogin(command: AdapterCommand, plan: TransportPlan, binary: string, terminal: number, local: readonly LocalEffect[]): Promise<void> {
+	const proc = Bun.spawn([binary, ...plan.argv], { env: { ...plan.env }, stdin: terminal, stdout: terminal, stderr: terminal });
+	const exitCode = await proc.exited;
+	const completed = [...completedSelectionEffects(), ...local];
+	const data = { connector: command.id, verb: "login", ...plan.data };
+	if (exitCode === 0) {
+		emitAdapterEnvelope(command, "SUCCESS_AUTH_LOGIN", `${PROGRAM}: ${command.id} attended login completed`, data, null, { completed: [...completed, "account-grant"], uncertain: [] });
+		return;
+	}
+	emitAdapterEnvelope(command, "DOMAIN_AUTH_LOGIN_UNKNOWN", `${PROGRAM}: ${command.id} attended login did not complete`, data, `Run connectors auth status ${command.id}${selectFlags(command)} to inspect the account vault before retrying login`, { completed, uncertain: ["account-grant"] });
+}
+
+async function runTransport(command: AdapterCommand, plan: TransportPlan, terminal: number | null): Promise<void> {
+	const selection = await ensureMcporter(process.env);
+	if (!selection.ok) {
+		emitSelectionFailure(selection, command.commandIdentity);
+		return;
+	}
+	bootstrapCompleted = selection.bootstrapped;
+	recoveryCompleted = selection.recovered === true;
+	const committed = plan.commit();
+	if (committed.refusal) {
+		emitAdapterRefusal(command, committed.refusal, committed.completed);
+		return;
+	}
+	if (terminal === null) await runRead(command, plan, selection.binary, committed.completed);
+	else await runAttendedLogin(command, plan, selection.binary, terminal, committed.completed);
+}
+
+async function handleAdapterCommand(command: AdapterCommand | null, usage: string, commandIdentity: AdapterCommand["commandIdentity"]): Promise<void> {
+	if (!command) {
+		usageMalformed(commandIdentity, usage);
+		return;
+	}
+	const manifest = loadAdapterManifest(command);
+	const prepared = manifest && prepareThroughAdapter(command, manifest);
+	if (!prepared) return;
+	if (prepared.kind === "refused") {
+		emitAdapterRefusal(command, prepared.refusal);
+		return;
+	}
+	if (prepared.kind === "inspected") {
+		emitSuccess(command.commandIdentity, `${command.id} inspection completed`, { connector: command.id, ...prepared.data }, "connectors.status");
+		return;
+	}
+	const terminal = prepared.effect === "attended-login" ? openTerminal() : null;
+	if (prepared.effect === "attended-login" && terminal === null) {
+		emitAdapterEnvelope(command, "DOMAIN_ATTENDED_REQUIRED", `${PROGRAM}: ${command.id} login needs an attended terminal`, { connector: command.id }, `Run connectors auth login ${command.id}${selectFlags(command)} yourself in a terminal; an agent cannot complete browser consent`, { completed: [], uncertain: [] });
+		return;
+	}
+	try {
+		await runTransport(command, prepared, terminal);
+	} finally {
+		if (terminal !== null) closeSync(terminal);
+	}
+}
+
 async function dispatchCommand(args: readonly string[]): Promise<void> {
+	if (args[0] === "auth") {
+		await handleAdapterCommand(parseAuthArgs(args.slice(1)), AUTH_USAGE, "connectors.auth");
+		return;
+	}
+	if (args[0] === "run") {
+		await handleAdapterCommand(parseRunArgs(args.slice(1)), RUN_USAGE, "connectors.run");
+		return;
+	}
 	if (args[0] === "deps" && args[1] === "repair" && args[2] === "mcporter") {
 		await handleMcporterRepair(args.slice(3));
 		return;

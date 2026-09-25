@@ -2,7 +2,8 @@ import { expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { createBundle, createFakeMcporterBinDir, PLUGIN_ROOT, runBundle } from "./harness.ts";
+import { buildFaultedFrontDoor } from "./faulted-front-door.ts";
+import { createBundle, createFakeMcporterBinDir, runBundle } from "./harness.ts";
 
 const OP_PATH = "/dist/1P/op2/pkg/v2.39.0/op_apple_universal_v2.39.0.pkg";
 const MISE_BASE = "/jdx/mise/releases/download/v2026.9.12";
@@ -617,16 +618,7 @@ test.skipIf(fixtures === null)("official compiled setup reports committed effect
 	const bundle = createBundle();
 	const { server, requests } = fixtureServer(fixtures);
 	try {
-		const sourceBin = path.join(PLUGIN_ROOT, "bin");
-		const testBin = path.join(bundle.root, "test-source");
-		cpSync(sourceBin, testBin, { recursive: true, filter: (source) => source !== path.join(sourceBin, "connectors") });
-		const entry = path.join(testBin, "connectors.ts");
-		const original = readFileSync(entry, "utf8");
-		const successEmit = 'emitSetup("SUCCESS_COMPLETED", completed,';
-		expect(original.split(successEmit)).toHaveLength(2);
-		writeFileSync(entry, original.replace(successEmit, 'emitSetup("DOMAIN_SETUP_FAILED_UNCHANGED", completed,'));
-		const built = Bun.spawnSync(["bun", "build", entry, "--compile", "--target=bun-darwin-arm64", "--outfile", bundle.binary], { stdout: "pipe", stderr: "pipe" });
-		if (built.exitCode !== 0) throw new Error(new TextDecoder().decode(built.stderr));
+		buildFaultedFrontDoor(bundle.root, bundle.binary, { find: 'emitSetup("SUCCESS_COMPLETED", completed,', replace: 'emitSetup("DOMAIN_SETUP_FAILED_UNCHANGED", completed,' });
 		const home = path.join(bundle.root, "home");
 		mkdirSync(home);
 		const state = path.join(realpathSync(bundle.root), "state");

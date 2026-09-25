@@ -15,6 +15,7 @@ const CONTRACT_VERSION = "2.0.0";
 // Contract Core 2.0 requires availablePaths sorted and unique; this literal
 // is alphabetical, independent of bin/connectors.ts's own COMMANDS order.
 const AVAILABLE_PATHS = [
+	"connectors.auth",
 	"connectors.config.show",
 	"connectors.config.validate",
 	"connectors.deps.repair.mcporter",
@@ -24,6 +25,7 @@ const AVAILABLE_PATHS = [
 	"connectors.fixtureAuth",
 	"connectors.help",
 	"connectors.list",
+	"connectors.run",
 	"connectors.schema",
 	"connectors.setup",
 	"connectors.status",
@@ -53,10 +55,10 @@ describe("compiled front door: discovery", () => {
 		// Independent literal of the accepted exclusions: setup and MCPorter
 		// repair are advertised above, so no exclusion may deny them.
 		expect(envelope.result.data.effectExclusions).toEqual([
-			"any real credential value or T5 custody access; fixture-auth only presents a nonsecret reference to a fixture-tested authority",
+			"any credential value read by this binary or T5 custody access; fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
 			"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
 			"any provider write operation",
-			"real auth or run (later Tickets own the complete production flows); deps covers only explicit MCPorter repair",
+			"auth or run for a connector whose packaged adapter has no prepare step, and auth logout for every connector; deps covers only explicit MCPorter repair",
 		]);
 	});
 
@@ -300,6 +302,52 @@ describe("compiled front door: assertEnvelope rejects fabricated envelopes (unit
 		expect(() => assertEnvelope(envelope)).toThrow(/one fixed, safe string/);
 	});
 });
+
+describe("compiled front door: assertEnvelope admits run success (unit-layer, diagnostic only)", () => {
+	// Diagnostic, not station proof: no offline process reaches a run success,
+	// because the Canva registry names only the hosted endpoint. Each envelope is
+	// a test-owned literal of a run that succeeded after these completed effects.
+	const runSuccess = (causeCode: string, completed: readonly string[], commandIdentity = "connectors.run") => ({
+		envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message: "canva search-designs completed", availablePaths: AVAILABLE_PATHS,
+		result: {
+			runId: "run-diagnostic", commandIdentity, outcome: "success", failureClass: null, exitCode: 0,
+			data: { connector: "canva", operation: "search-designs", result: {} }, retryable: false, repairAction: null, nextAction: "connectors.status",
+			effectClass: "repository-local", transactionState: "completed", causeCode,
+			effects: { completed, remaining: [], uncertain: [], inventoryComplete: true },
+		},
+	}) as unknown as Parameters<typeof assertEnvelope>[0];
+
+	// [cause, completed effects], restated from the accepted run inventory.
+	const admitted: ReadonlyArray<readonly [string, readonly string[]]> = [
+		["SUCCESS_AFTER_ACCOUNT_EFFECT", ["mcporter-vault-file"]],
+		["SUCCESS_AFTER_ACCOUNT_EFFECT", ["account-vault"]],
+		["SUCCESS_AFTER_ACCOUNT_EFFECT", ["account-vault", "mcporter-vault-file"]],
+		["SUCCESS_BOOTSTRAPPED", ["mcporter-bootstrap", "account-vault", "mcporter-vault-file"]],
+		["SUCCESS_MCPORTER_RECOVERED", ["mcporter-recovery", "mcporter-vault-file"]],
+	];
+
+	test("a run that succeeded after an account effect is a valid envelope", () => {
+		for (const [cause, completed] of admitted) expect({ cause, completed, problem: problemOf(runSuccess(cause, completed)) }).toEqual({ cause, completed, problem: null });
+	});
+
+	test("setup's causes stay setup-only, and run's own causes stay run-only", () => {
+		expect(problemOf(runSuccess("SUCCESS_COMPLETED", ["mcporter-vault-file"]))).toContain("setup cause and command identity must agree");
+		expect(problemOf(runSuccess("SUCCESS_AFTER_ACCOUNT_EFFECT", ["mcporter-vault-file"], "connectors.schema"))).toContain("run cause and command identity must agree");
+		// A row-coherent transient refusal under auth: identity is its only fault.
+		const base = runSuccess("TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT", ["mcporter-vault-file"], "connectors.auth");
+		const transient = { ...base, result: { ...base.result, outcome: "refused", failureClass: "transient", exitCode: 75, retryable: true, data: null, repairAction: "Retry the run" } } as typeof base;
+		expect(problemOf(transient)).toBe("internal contract violation: run cause and command identity must agree");
+	});
+});
+
+function problemOf(envelope: Parameters<typeof assertEnvelope>[0]): string | null {
+	try {
+		assertEnvelope(envelope);
+		return null;
+	} catch (error) {
+		return (error as Error).message;
+	}
+}
 
 describe("compiled front door: per-Skill resolution (Q11a)", () => {
 	// Each in-scope Skill resolves the front door as `../../bin/connectors`
