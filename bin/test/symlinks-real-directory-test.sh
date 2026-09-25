@@ -245,11 +245,7 @@ for argument in "$@"; do
 done
 exec /bin/rm "$@"
 STUB
-  cat >"$FIXTURE_BIN/ln" <<'STUB'
-#!/bin/bash
-exec /bin/ln "$@"
-STUB
-  chmod +x "$FIXTURE_BIN/rm" "$FIXTURE_BIN/ln"
+  chmod +x "$FIXTURE_BIN/rm"
 }
 
 seed_real_directory() {
@@ -320,32 +316,38 @@ private_claim_directory_for_home() {
   find "$FIXTURE_HOME" -type d -name '.dotfiles-claim-*' -print -quit
 }
 
+recorded_recursive_rm() {
+  [[ -e "$FIXTURE_RECORDS/rm-argv" ]] && grep -Eq '(^| )-[^ ]*[rR]' "$FIXTURE_RECORDS/rm-argv"
+}
+
 assert_no_recursive_rm() {
   local label="$1"
-  [[ ! -e "$FIXTURE_RECORDS/rm-argv" ]] ||
-    ! grep -Eq '(^| )-[^ ]*[rR]' "$FIXTURE_RECORDS/rm-argv" ||
-    fail "$label (production attempted recursive rm)"
+  ! recorded_recursive_rm || fail "$label (production attempted recursive rm)"
   pass "$label"
 }
 
 # Sensitivity control: a test-owned fixture preserves the old interactive
 # rm -rf route without making public CI depend on excluded private history.
-# These observations are the inverse of the GREEN assertions below.
+# It proves the recursive-rm detector observes that route, so a defect that
+# silently disabled the detector would be caught here.
 make_fixture 'base-negative-control' "$UNSAFE_BASE_FIXTURE"
 seed_real_directory 'base-sentinel-bytes'
-# The base control must be allowed to demonstrate its destructive route. Every
-# GREEN fixture keeps the observing rm wrapper installed.
-/bin/rm "$FIXTURE_BIN/rm"
+# Swap the blocking rm wrapper for a record-only stub so the destructive
+# route can complete while the recorder still observes it.
+cat >"$FIXTURE_BIN/rm" <<'STUB'
+#!/bin/bash
+printf '%s\n' "$*" >>"$RM_RECORD"
+exec /bin/rm "$@"
+STUB
+chmod +x "$FIXTURE_BIN/rm"
 run_interactive_link 'y'
 assert_status 0 'base interactive approval exits zero'
 [[ -L "$FIXTURE_HOME/.config" ]] || fail 'base negative control must replace the real directory with a symlink'
 [[ ! -e "$FIXTURE_HOME/.config/sentinel.bin" ]] ||
   fail 'base negative control must remove the real directory sentinel'
 pass 'base negative control removes the real directory sentinel'
-assert_equals "$(manifest_for_home)" '' 'base negative control publishes no recovery manifest'
-run_cli --restore "$FIXTURE_HOME/missing.manifest"
-[[ "$RUN_STATUS" -ne 0 ]] || fail 'base negative control unexpectedly accepts public restore'
-pass 'base negative control rejects the absent restore command'
+recorded_recursive_rm || fail 'base negative control: recursive-rm detector must observe the retired rm -rf route'
+pass 'base negative control: recursive-rm detector observes the retired rm -rf route'
 
 make_fixture 'interactive-approval'
 seed_real_directory 'interactive-sentinel-bytes'
