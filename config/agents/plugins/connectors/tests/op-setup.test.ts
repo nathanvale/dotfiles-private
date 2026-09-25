@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { spawnSync } from "node:child_process";
@@ -74,7 +75,11 @@ test("a wrong package and caller release claims preserve the previous selection"
 		writeFileSync(path.join(state, "op-selected"), "previous", { mode: 0o600 });
 		const pkg = path.join(root, "package.pkg");
 		writeFileSync(pkg, "wrong package bytes");
-		const child = invoke(root, { packageFile: pkg, stateDirectory: state, sha256: "caller digest", version: "999", team: "caller" }, xdg);
+		// The caller's digest claim is true of the supplied bytes, so only the
+		// pinned release digest can refuse them.
+		const callerSha256 = "0b9b49f49c0d89e58e66bad4018f02e0faddab827d2f03a418aeb31112d00746";
+		expect(createHash("sha256").update(readFileSync(pkg)).digest("hex")).toBe(callerSha256);
+		const child = invoke(root, { packageFile: pkg, stateDirectory: state, sha256: callerSha256, version: "999", team: "caller" }, xdg);
 		expect(child.status).toBe(0);
 		expect(child.stderr).toBe("");
 		expect(JSON.parse(child.stdout)).toEqual({ ok: false, reason: "package-invalid" });

@@ -108,7 +108,7 @@ function snapshot(files: readonly string[]): Record<string, { bytes: string; mti
 	return Object.fromEntries(files.map((file) => [file, { bytes: readFileSync(file, "utf8"), mtimeMs: statSync(file).mtimeMs }]));
 }
 
-test("compiled setup refuses malformed arguments before state or network effects", async () => {
+test("compiled setup refuses malformed arguments without echoing them or creating state", async () => {
 	const bundle = createBundle();
 	try {
 		const home = path.join(bundle.root, "home");
@@ -236,19 +236,24 @@ test("compiled setup reports op as uncertain when staging cleanup fails mid-down
 	}
 });
 
-test("ordinary compiled commands do not create setup state or invoke mise", async () => {
+test("an ordinary compiled list does not create setup state or invoke op, mise, or uv from PATH", async () => {
 	const bundle = createBundle();
 	try {
 		const home = path.join(bundle.root, "home");
 		mkdirSync(home);
-		const hostile = path.join(bundle.root, "hostile.toml");
-		writeFileSync(hostile, '[tools]\n"aqua:astral-sh/uv" = "0.1.0"\n');
+		// PATH decoys record any attempt to run a setup-owned tool.
+		const decoys = path.join(bundle.root, "decoy-bin");
+		mkdirSync(decoys);
+		const invoked = path.join(bundle.root, "invoked-tools");
+		for (const tool of ["op", "mise", "uv", "uvx"]) {
+			writeFileSync(path.join(decoys, tool), `#!/bin/sh\necho ${tool} >> '${invoked}'\nexit 0\n`, { mode: 0o755 });
+		}
 		const state = path.join(realpathSync(bundle.root), "state");
-		const result = await runBundle(bundle, ["list"], { home, extraEnv: { XDG_STATE_HOME: state, MISE_CONFIG_FILE: hostile } });
+		const result = await runBundle(bundle, ["list"], { home, binDir: decoys, extraEnv: { XDG_STATE_HOME: state } });
 		expect(result.code).toBe(0);
 		expect(result.stderr).toBe("");
 		expect(JSON.parse(result.stdout).result.commandIdentity).toBe("connectors.list");
-		expect(readFileSync(hostile, "utf8")).toContain("0.1.0");
+		expect(existsSync(invoked)).toBe(false);
 		expect(existsSync(state)).toBe(false);
 	} finally {
 		bundle.dispose();

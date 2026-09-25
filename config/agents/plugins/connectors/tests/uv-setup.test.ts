@@ -77,7 +77,7 @@ test("official mise fixture is optional locally, required in CI, and validated b
 	}
 });
 
-test("the Requirements Manifest qualifies the official uv binary that setup installs and ordinary use runs", () => {
+test("the Requirements Manifest pins the measured uv 0.12.18 aarch64 binary digest", () => {
 	// Independent oracle: the locally measured uv 0.12.18 aarch64 binary, not read from uv.ts.
 	expect((JSON.parse(requirements) as { sources: { uv: { binarySha256: unknown } } }).sources.uv.binarySha256).toBe("17914b3f58e645361bf68424cbc71d834a96a7ada71625b28776bd7c3760afb0");
 });
@@ -222,15 +222,24 @@ test.skipIf(!officialMise)("a uv pin that is not one version entry refuses befor
 	}
 }, 60_000);
 
-test("an unverified mise executable is refused before creating uv state", async () => {
+test("an unverified mise at the selected revision is refused before creating uv state or running it", async () => {
 	const root = mkdtempSync("/private/tmp/connectors-uv-unverified-");
-	const impostor = path.join(root, "mise");
+	// The impostor passes every selection rule but the digest: it sits at the
+	// pinned revision name inside the private state root, owned at exact 0700,
+	// and mise-selected names it. Running it would record the invocation.
+	const directory = path.join(root, "state", "connectors", "setup", "mise");
+	mkdirSync(directory, { recursive: true, mode: 0o700 });
+	const impostor = path.join(directory, miseName);
+	const invoked = path.join(root, "impostor-invoked");
+	writeFileSync(impostor, `#!/bin/sh\necho mise >> '${invoked}'\nexit 0\n`, { mode: 0o700 });
+	writeFileSync(path.join(directory, "mise-selected"), miseName, { mode: 0o600 });
+	expect(lstatSync(impostor).mode & 0o777).toBe(0o700);
 	const state = path.join(root, "state", "connectors", "setup", "uv");
-	writeFileSync(impostor, "impostor", { mode: 0o700 });
 	try {
 		const run = await invoke(impostor, state, root);
-		expect(run.result).toEqual({ ok: false, reason: "config-invalid" });
+		expect([run.exit, run.stderr, run.result]).toEqual([0, "", { ok: false, reason: "config-invalid" }]);
 		expect(existsSync(state)).toBe(false);
+		expect(existsSync(invoked)).toBe(false);
 	} finally {
 		rmSync(root, { recursive: true, force: true });
 	}
