@@ -1,7 +1,7 @@
 // Public process seam for the Vault Steward CLI 2.0 front door: spawn `src/main.ts` (or $VAULT_STEWARD_COMMAND) against
 // the fixtures of harness.ts with a pinned environment, parse the one stdout envelope through a test-owned shape, and
 // derive the catalogue observation the station tests compare. Nothing here reads the production catalogue.
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { resolve } from "node:path"
 import { type Fixture, write } from "./harness.ts"
 
@@ -119,4 +119,15 @@ export async function waitForOwner(path: string, previous?: string): Promise<voi
 		await Bun.sleep(20)
 	}
 	if (observed === null || (previous !== undefined && observed === previous)) throw new Error(`owner record ${path} was not published within 10 s`)
+}
+
+// A barrier fault publishes <path>.arrived when its process reaches the fault point. Awaiting it orders a second
+// process after the first has provably reached that point. The 10 s bound only detects a hung child process.
+export async function waitForBarrierArrival(path: string): Promise<void> {
+	const arrival = `${path}.arrived`
+	const deadline = Date.now() + 10_000
+	while (!existsSync(arrival)) {
+		if (Date.now() >= deadline) throw new Error(`barrier ${path} was not reached within 10 s`)
+		await Bun.sleep(10)
+	}
 }
