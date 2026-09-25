@@ -63,11 +63,6 @@ assert_exact_count() {
   pass "$label"
 }
 
-# Independent oracle: keep the intended parity version literal in the test.
-[[ "$(tr -d '[:space:]' < "$REPO_ROOT/config/node/version")" == "26.9.0" ]] ||
-  fail 'Node version declaration differs from 26.9.0'
-pass 'Node version declaration is 26.9.0'
-
 # Evaluate the real Brewfile as Ruby for each profile. The tiny DSL adapter
 # records literal declarations only; it does not call Homebrew or mutate the
 # machine.
@@ -272,7 +267,11 @@ FIXTURE_DOTFILES="$TEST_ROOT/dotfiles"
 mkdir -p "$STUB_BIN" "$RECORD_DIR" "$FIXTURE_DOTFILES/config/node" \
   "$FIXTURE_DOTFILES/config/brew" \
   "$FIXTURE_DOTFILES/bin/dotfiles"
-cp "$REPO_ROOT/config/node/version" "$FIXTURE_DOTFILES/config/node/version"
+# Independent oracle: a fixture-owned Node version, distinct from the real
+# pin, so the fnm assertions below prove Phase 4 propagates whatever the
+# version file declares instead of coincidentally matching today's pin.
+FIXTURE_NODE_VERSION='9.9.9'
+printf '%s\n' "$FIXTURE_NODE_VERSION" >"$FIXTURE_DOTFILES/config/node/version"
 cp "$REPO_ROOT/config/brew/Brewfile" "$FIXTURE_DOTFILES/config/brew/Brewfile"
 
 cat >"$STUB_BIN/brew" <<'STUB'
@@ -444,12 +443,12 @@ assert_recorded $'install\tpython' \
   'fresh run continues to the next development tool'
 assert_recorded $'list\tmise' 'fresh run checks Mise by its declared formula name'
 assert_recorded $'install\tmise' 'fresh run installs Mise before toolchain apply'
-grep -Fxq $'install\t--corepack-enabled\t26.9.0' "$RECORD_DIR/fnm-calls" ||
-  fail 'fresh run does not install Node 26.9.0 with Corepack'
-pass 'fresh run installs Node 26.9.0 with Corepack'
-grep -Fxq $'default\t26.9.0' "$RECORD_DIR/fnm-calls" ||
-  fail 'fresh run does not set Node 26.9.0 as the fnm default'
-pass 'fresh run sets Node 26.9.0 as the fnm default'
+grep -Fxq $'install\t--corepack-enabled\t'"$FIXTURE_NODE_VERSION" "$RECORD_DIR/fnm-calls" ||
+  fail "fresh run does not install Node $FIXTURE_NODE_VERSION with Corepack"
+pass "fresh run installs Node $FIXTURE_NODE_VERSION with Corepack"
+grep -Fxq $'default\t'"$FIXTURE_NODE_VERSION" "$RECORD_DIR/fnm-calls" ||
+  fail "fresh run does not set Node $FIXTURE_NODE_VERSION as the fnm default"
+pass "fresh run sets Node $FIXTURE_NODE_VERSION as the fnm default"
 assert_exact_count 1 $'toolchain\tupdate\t--apply' "$RECORD_DIR/toolchain-calls" \
   'fresh run invokes exactly one explicit toolchain apply'
 mise_install_line="$(grep -nFx $'brew\tinstall\tmise' "$RECORD_DIR/sequence" | cut -d: -f1)"
@@ -477,10 +476,10 @@ assert_recorded $'install\tpython' \
   'preinstalled run continues to the next development tool'
 assert_recorded $'list\tmise' 'preinstalled run checks Mise by its declared formula name'
 assert_not_recorded $'install\tmise' 'preinstalled run skips the Mise install'
-grep -Fxq $'install\t--corepack-enabled\t26.9.0' "$RECORD_DIR/fnm-calls" ||
-  fail 'preinstalled run does not reconcile Node 26.9.0 with Corepack'
-pass 'preinstalled run reconciles Node 26.9.0 with Corepack'
-grep -Fxq $'default\t26.9.0' "$RECORD_DIR/fnm-calls" ||
+grep -Fxq $'install\t--corepack-enabled\t'"$FIXTURE_NODE_VERSION" "$RECORD_DIR/fnm-calls" ||
+  fail "preinstalled run does not reconcile Node $FIXTURE_NODE_VERSION with Corepack"
+pass "preinstalled run reconciles Node $FIXTURE_NODE_VERSION with Corepack"
+grep -Fxq $'default\t'"$FIXTURE_NODE_VERSION" "$RECORD_DIR/fnm-calls" ||
   fail 'preinstalled run does not reconcile the fnm default'
 pass 'preinstalled run reconciles the fnm default'
 assert_exact_count 1 $'toolchain\tupdate\t--apply' "$RECORD_DIR/toolchain-calls" \
@@ -592,7 +591,7 @@ if [[ -e "$RECORD_DIR/checkpoint" ]]; then
 fi
 pass 'two failed bundle attempts prevent the post-phase checkpoint'
 
-expected_assertions=105
+expected_assertions=104
 [[ "$assertion_count" -eq "$expected_assertions" ]] ||
   fail "expected $expected_assertions assertions, observed $assertion_count"
 printf '1..%d\n' "$assertion_count"

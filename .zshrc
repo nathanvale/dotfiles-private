@@ -123,7 +123,7 @@ export HOMEBREW_BUNDLE_FILE="$HOME/.config/brew/Brewfile"
 #   with-one-password-token inject AZURE_OPENAI_API_KEY \
 #     "op://Vault/Item/credential" -- <command>
 # That delivers one value to one child process and leaves the shell clean.
-# Contract: bin/test/codex-ambient-credential-boundary-test.sh
+# Contract: bin/test/zsh-work-profile-boundary-test.sh
 
 # The account-switch helper's non-secret settings remain readable. This file
 # holds repository lists and account names, never credentials; the contract

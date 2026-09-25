@@ -129,6 +129,7 @@ run_phase() {
 refuse_brew() {
   local label="$1"
   [[ ! -e "$record_dir/brew-calls" ]] || fail "$label invoked brew"
+  [[ -s "$record_dir/log" ]] || fail "$label left no log to inspect for Homebrew guidance"
   grep -qi 'brew.*codex\|codex.*brew' "$record_dir/log" &&
     fail "$label recommended Homebrew for Codex"
   pass "$label carries no Homebrew Codex route"

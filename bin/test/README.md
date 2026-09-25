@@ -34,7 +34,6 @@ bin/test/toolchain-bootstrap-test.sh
 bin/test/setup-completion-test.sh
 bin/test/setup-state-recovery-test.sh
 bin/test/profile-link-parity-test.sh
-bin/test/legacy-homebrew-helpers-test.sh
 bin/test/bun-core-install-test.sh
 bin/test/lm-studio-ensure-test.sh
 bin/test/atuin-agent-history-test.sh
@@ -47,10 +46,11 @@ disposable Git fixtures and runs it under an empty environment. It proves the
 interactive pseudo-terminal approval and refusal routes, explicit force,
 noninteractive refusal, mode-600 versioned recovery manifests, public restore,
 creation and final-link-verification rollback, preserved literal sentinel bytes,
-and that the managed process does not call recursive `rm`. Its base-revision
-negative control demonstrates the old interactive route removes the real
-directory and has no restore interface. It does not activate a live profile or
-claim signal-interruption recovery.
+and that the managed process does not call recursive `rm`. Its negative
+control runs a test-owned fixture that models the retired interactive
+`rm -rf` route against a disposable HOME; it proves the recursive-rm
+detector observes that route, not the public symlink manager. It does not
+activate a live profile or claim signal-interruption recovery.
 
 `toolchain-status-test.sh` copies the public status and preview command into a
 temporary Git fixture and supplies independent fake Node, Bun, Python, Beads,
@@ -122,10 +122,6 @@ interruption and explicit stale recovery. The named phase collaborators are
 fixtures, so this is setup state-boundary proof, not interrupted Homebrew or
 live application recovery qualification.
 
-`legacy-homebrew-helpers-test.sh` runs each retired helper as a public process,
-including a standalone copy. It proves nonzero retirement guidance without
-invoking Homebrew, curl, or a user-state mutation.
-
 `claude-native-install-test.sh` and `codex-managed-install-test.sh` extract
 Phase 2 from `setup.sh` and run it in isolated Bash children. They prove the
 native or managed installer routes, durable outputs, idempotent skips,
@@ -161,11 +157,12 @@ state. They do not prove live tab focus or profile selection.
 repository targets into a non-Git fixture, then runs `--link` in disposable
 server-profile HOMEs. Independent filesystem reads prove wrong and dangling
 directory links are replaced as links, former referents receive no child and
-retain sentinel bytes, correct and missing links behave normally, real
-directories remain untouched without `--force`, and injected intended-creation
-or zero-exit lying-link failures restore the exact prior raw target. It does
-not prove canonical-checkout activation, interactive real-directory migration,
-or failures beyond the controlled link-creation seam.
+retain sentinel bytes, correct and missing links behave normally, and injected
+intended-creation or zero-exit lying-link failures restore the exact prior raw
+target. It does not prove canonical-checkout activation, interactive
+real-directory migration, or failures beyond the controlled link-creation
+seam. Noninteractive real-directory refusal is owned by
+`symlinks-real-directory-test.sh` (`noninteractive-refusal`).
 
 The attended-login rows prove both handoff start modes through the public
 command. The pre-admission path must create its private reservation before the
@@ -553,8 +550,8 @@ prompts that also use `=~`.
 The expected verdicts are written by hand from the grammar's prose contract
 rather than by running any expression, so no owner is its own oracle. Each named
 row reports `generator/setup/selector`, which localises a drift to the owner that
-moved. Two further rows assert the parity property per writer over every
-candidate in the file, catching a widening no named row happens to cover; the
-direction is one-way by design, since a writer narrower than the selector is
-safe. The closing rows run the real script, so rejection is proved as exit status
-and stderr with nothing scaffolded, not as a regex result.
+moved and, by asserting full three-way agreement per case, already proves the
+one-way parity property (a writer must not be wider than the selector) for
+every case the file exercises. The closing rows run the real script, so
+rejection is proved as exit status and stderr with nothing scaffolded, not as a
+regex result.
