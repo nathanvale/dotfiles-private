@@ -6,11 +6,19 @@
 // The authority is absent from a real install by design (fixture-tested
 // only); this adapter never reads, holds, or transmits a credential value,
 // and never claims T5's real 1Password custody.
+//
+// prepare (Ticket #93, Spec AC19) gives the generic run path a keyless
+// fixture read, admitted only where that same test-bundle authority exists.
+// It plans MCPorter through the shared route with a private per-account data
+// root, and reports only effects it observes on disk; the core composes the
+// cause and the effect inventory.
 import { safeEnvironment } from "../safe-environment.ts";
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, lstatSync } from "node:fs";
 import path from "node:path";
-import type { Adapter, AuthAttempt } from "./contract.ts";
+import type { Adapter, AdapterRefusal, AdapterRequest, AuthAttempt, Committed, LocalEffect, Prepared } from "./contract.ts";
 import type { ConnectorManifest } from "../manifest.ts";
+import { ownedDirectory, stateRoot } from "../private-state.ts";
+import { planDispatcherRoute, RouteError } from "../provider-route.ts";
 
 const AUTHORITY_COMMAND = "connectors-fixture-authority";
 // The fixture process is supplied only by the packaged-process test bundle.
@@ -51,4 +59,62 @@ async function attemptAuth(manifest: ConnectorManifest): Promise<AuthAttempt> {
 	return { outcome: "refused", cause: "CREDENTIAL_REFERENCE_REJECTED", detail: "the independent fixture authority refused the declared identity" };
 }
 
-export const testAuthAdapter: Adapter = { id: "test-auth", attemptAuth };
+const ACCOUNT_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
+
+function refused(kind: AdapterRefusal["kind"], connectorCause: string, repair: string): Prepared {
+	return { kind: "refused", refusal: { kind, connectorCause, repair } };
+}
+
+// Metadata only; MCPorter replaces its vault file by rename.
+function stamp(file: string): string | null {
+	try {
+		const stat = lstatSync(file, { bigint: true });
+		return `${stat.ino}:${stat.mtimeNs}:${stat.size}`;
+	} catch {
+		return null;
+	}
+}
+
+// commit reports account-vault only when it created the account root; settle
+// reports mcporter-vault-file only when MCPorter changed its vault file.
+function accountEffects(root: string): { commit(): Committed; settle(): readonly LocalEffect[] } {
+	const vaultFile = path.join(root, "data", "mcporter", "credentials.json");
+	let before: string | null = null;
+	return {
+		commit() {
+			const existed = stamp(root) !== null;
+			const failed = [root, path.join(root, "data"), path.join(root, "cache")].some((directory) => !ownedDirectory(directory).ok);
+			before = stamp(vaultFile);
+			const refusal: AdapterRefusal | null = failed ? { kind: "domain", connectorCause: "vault-root-invalid", repair: "Remove the fixture account root so it can be recreated as a private directory" } : null;
+			return { refusal, completed: existed || stamp(root) === null ? [] : ["account-vault"] };
+		},
+		settle() {
+			return stamp(vaultFile) === before ? [] : ["mcporter-vault-file"];
+		},
+	};
+}
+
+function prepare(request: AdapterRequest): Prepared {
+	try {
+		accessSync(AUTHORITY_PATH, constants.X_OK);
+	} catch {
+		return refused("domain", "fixture-authority-unavailable", "This adapter runs only inside the Connectors packaged-process test bundle");
+	}
+	const { action } = request;
+	if (action.kind === "auth") return refused("verb-unsupported", "auth-verb-unsupported", "The fixture adapter supports run only");
+	const account = request.selectors.account;
+	if (account === undefined || ACCOUNT_PATTERN.exec(account)?.[0] !== account) return refused("usage", "account-invalid", "Pass --select account=<lowercase-slug>");
+	const flags = action.input === null ? [] : ["--args", JSON.stringify(action.input)];
+	let plan: ReturnType<typeof planDispatcherRoute>;
+	try {
+		plan = planDispatcherRoute([request.manifest.id, "--select", `account=${account}`, "--", "call", action.operation, ...flags, "--output", "json"], request.skillsRoot, safeEnvironment(request.env), `test-auth-account=${account}`);
+	} catch (error) {
+		if (error instanceof RouteError) return refused("schema", "route-invalid", "Fix the fixture skill's registry or route declaration");
+		throw error;
+	}
+	const root = path.join(stateRoot(request.env), "connectors", "test-auth-mcporter", account);
+	const env = { ...plan.env, XDG_DATA_HOME: path.join(root, "data"), XDG_CACHE_HOME: path.join(root, "cache") };
+	return { kind: "transport", effect: "read", argv: plan.argv, env, data: {}, ...accountEffects(root) };
+}
+
+export const testAuthAdapter: Adapter = { id: "test-auth", attemptAuth, prepare };

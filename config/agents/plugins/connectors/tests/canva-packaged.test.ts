@@ -219,22 +219,22 @@ test("approved client mode refuses login and run with no fallback, no MCPorter s
 
 test("unsupported verbs, unattended login, and bad input refuse before any dependency or state", async () => {
 	const fixture = canvaFixture();
-	// [argv, exit, cause, connectorCause or null, repairAction or null], restated from the accepted catalogue.
-	// A pinned repairAction is runnable once the caller substitutes their own selector value, and echoes none.
+	// [argv, exit, cause, connectorCause or null when unpinned, pinned repairAction or null when unpinned],
+	// restated from the accepted catalogue. A pinned repairAction is runnable once the caller substitutes
+	// their own selector value, and echoes none.
 	const cases: ReadonlyArray<readonly [string[], number, string, string | null, string | null]> = [
 		[["auth", "logout", "canva", "--select", "account=a"], 3, "DOMAIN_AUTH_VERB_UNSUPPORTED", "auth-verb-unsupported", null],
 		[["auth", "check", "canva", "--select", "account=a"], 3, "DOMAIN_AUTH_VERB_UNSUPPORTED", "auth-verb-unsupported", null],
 		[["auth", "login", "canva", "--select", "account=a"], 3, "DOMAIN_ATTENDED_REQUIRED", null, "Run connectors auth login canva --select account=<value> yourself in a terminal; an agent cannot complete browser consent"],
 		[["run", "canva", "--select", "account=a", "export-design"], 2, "USAGE_OPERATION_UNKNOWN", "operation-not-allowed", null],
 		[["run", "canva", "--select", `account=${ARGV_SENTINEL}`, "search-designs"], 2, "USAGE_ADAPTER_REFUSED", "account-invalid", null],
-		[["run", "canva", "search-designs"], 4, "SCHEMA_SELECTOR_INVALID", null, null],
-		[["run", "canva", "--select", `${ARGV_SENTINEL}=a`, "search-designs"], 4, "SCHEMA_SELECTOR_INVALID", null, null],
+		[["run", "canva", "search-designs"], 4, "SCHEMA_SELECTOR_INVALID", null, "Run connectors config show canva --resolved --json --select account=<value> to see its declared selectors"],
+		[["run", "canva", "--select", `${ARGV_SENTINEL}=a`, "search-designs"], 4, "SCHEMA_SELECTOR_INVALID", null, "Run connectors config show canva --resolved --json --select account=<value> to see its declared selectors"],
 		[["run", "canva", "--select", "account=a", "search-designs", "--input", `[${ARGV_SENTINEL}]`], 2, "USAGE_MALFORMED_ARGUMENTS", null, null],
 		[["run", ARGV_SENTINEL.toLowerCase(), "search-designs"], 2, "USAGE_CONNECTOR_UNKNOWN", null, null],
 		[["auth", "frobnicate", "canva"], 2, "USAGE_MALFORMED_ARGUMENTS", null, null],
 	];
 	try {
-		expect(cases).toHaveLength(10);
 		for (const [argv, exit, cause, connectorCause, repairAction] of cases) {
 			const result = await fixture.run(argv);
 			expect({ argv, code: result.code }).toEqual({ argv, code: exit });
@@ -278,7 +278,6 @@ test("adapter preconditions refuse on their own cause rows before any MCPorter s
 		[(fixture) => mkdirSync(path.join(fixture.home, ".mcporter", "canva-connectors"), { recursive: true }), ["run", "canva", "--select", "account=a", "search-designs"], 3, "DOMAIN_ADAPTER_REFUSED", "legacy-cache-present"],
 		[(fixture) => writeFileSync(path.join(fixture.bundle.skillsRoot, "canva", "config", "client.json"), JSON.stringify({ mode: "portal" })), ["auth", "status", "canva", "--select", "account=a"], 4, "SCHEMA_ADAPTER_REFUSED", "client-mode-invalid"],
 	];
-	expect(cases).toHaveLength(2);
 	for (const [setup, argv, exit, cause, connectorCause] of cases) {
 		const fixture = canvaFixture();
 		try {

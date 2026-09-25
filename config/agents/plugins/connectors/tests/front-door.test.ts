@@ -6,10 +6,11 @@
 // literals, never re-derived by importing bin/connectors.ts's own
 // envelope-building code.
 import { describe, expect, test } from "bun:test";
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { assertEnvelope, buildInternalFailureEnvelope } from "../bin/connectors.ts";
-import { FRONT_DOOR, PLUGIN_ROOT, runFrontDoor } from "./harness.ts";
+import { startLoopbackMcpStub } from "./fixtures/loopback-mcp-stub.ts";
+import { createBundle, createFakeMcporterBinDir, createFixtureAuthorityBinDir, FRONT_DOOR, PLUGIN_ROOT, runFrontDoor } from "./harness.ts";
 
 const CONTRACT_VERSION = "2.0.0";
 // Contract Core 2.0 requires availablePaths sorted and unique; this literal
@@ -304,9 +305,9 @@ describe("compiled front door: assertEnvelope rejects fabricated envelopes (unit
 });
 
 describe("compiled front door: assertEnvelope admits run success (unit-layer, diagnostic only)", () => {
-	// Diagnostic, not station proof: no offline process reaches a run success,
-	// because the Canva registry names only the hosted endpoint. Each envelope is
-	// a test-owned literal of a run that succeeded after these completed effects.
+	// Diagnostic, not station proof: the fixture-adapter process block below
+	// owns the reached run stations. Each envelope here is a test-owned literal
+	// of a run that succeeded after these completed effects.
 	const runSuccess = (causeCode: string, completed: readonly string[], commandIdentity = "connectors.run") => ({
 		envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message: "canva search-designs completed", availablePaths: AVAILABLE_PATHS,
 		result: {
@@ -338,6 +339,100 @@ describe("compiled front door: assertEnvelope admits run success (unit-layer, di
 		const transient = { ...base, result: { ...base.result, outcome: "refused", failureClass: "transient", exitCode: 75, retryable: true, data: null, repairAction: "Retry the run" } } as typeof base;
 		expect(problemOf(transient)).toBe("internal contract violation: run cause and command identity must agree");
 	});
+});
+
+const official = process.env.CONNECTORS_OFFICIAL_RELEASE_FIXTURE;
+if (process.env.CI && !official) throw new Error("CONNECTORS_OFFICIAL_RELEASE_FIXTURE is required for CI process proof");
+
+describe("compiled front door: run through the packaged fixture adapter (public process, loopback only)", () => {
+	// Denies all remote network except loopback, and any Keychain command. A
+	// runner that wraps this file in its own sandbox must use this exact profile.
+	const LOOPBACK_ONLY = '(version 1)(allow default)(deny network-outbound (remote ip))(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))(allow network-outbound (remote ip "localhost:*"))(deny process-exec (literal "/usr/bin/security"))';
+	const PROVIDER_SENTINEL = "SENTINEL_PROVIDER_ERROR_TEXT";
+	const CONNECTOR = "loopback-fixture-skill";
+
+	// The compiled binary in an isolated bundle, the official MCPorter selected
+	// from local release bytes, a hostile mcporter first on PATH, and a keyless
+	// loopback stub as the only reachable MCP server.
+	function fixtureRun(options: { authority: boolean }) {
+		const bundle = createBundle();
+		bundle.addSkill(CONNECTOR);
+		const hostile = createFakeMcporterBinDir();
+		const authority = options.authority ? createFixtureAuthorityBinDir(bundle) : null;
+		const stub = startLoopbackMcpStub();
+		const registry = { imports: [], mcpServers: { [CONNECTOR]: { baseUrl: stub.url, allowedTools: ["probe"] } } };
+		writeFileSync(path.join(bundle.skillsRoot, CONNECTOR, "config", "mcporter.json"), JSON.stringify(registry));
+		const state = path.join(bundle.root, "state");
+		const home = path.join(bundle.root, "home");
+		mkdirSync(state);
+		mkdirSync(home);
+		const env = { HOME: home, PATH: `${hostile.binDir}:/usr/bin:/bin`, TMPDIR: bundle.root, XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: official ?? path.join(bundle.root, "no-release-fixture") };
+		return {
+			bundle, state, home, stub,
+			async run(argv: string[]) {
+				const proc = Bun.spawn(["/usr/bin/sandbox-exec", "-p", LOOPBACK_ONLY, bundle.binary, ...argv], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+				const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+				return { code, stdout, stderr };
+			},
+			dispose() {
+				stub.stop();
+				authority?.dispose();
+				hostile.dispose();
+				bundle.dispose();
+			},
+		};
+	}
+
+	test.skipIf(!official)("the core reports success after an account effect and fails closed on a non-offline provider issue", async () => {
+		const fixture = fixtureRun({ authority: true });
+		try {
+			const fail = "If the grant expired, run connectors auth login loopback-fixture-skill --select account=<value> yourself in a terminal; otherwise correct the operation or its --input before running again";
+			// [account, stub error or null, exit, cause, completed effects, repairAction], in invocation order,
+			// restated from the accepted run inventory. The repeat for b proves effects are observed, not supplied.
+			const runs: ReadonlyArray<readonly [string, string | null, number, string, readonly string[], string | null]> = [
+				["a", null, 0, "SUCCESS_BOOTSTRAPPED", ["mcporter-bootstrap", "account-vault", "mcporter-vault-file"], null],
+				["b", null, 0, "SUCCESS_AFTER_ACCOUNT_EFFECT", ["account-vault", "mcporter-vault-file"], null],
+				["b", null, 0, "SUCCESS_UNCHANGED", [], null],
+				["c", PROVIDER_SENTINEL, 3, "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT", ["account-vault", "mcporter-vault-file"], fail],
+			];
+			for (const [index, [account, failWith, exit, cause, completed, repairAction]] of runs.entries()) {
+				fixture.stub.failWith = failWith;
+				const result = await fixture.run(["run", CONNECTOR, "--select", `account=${account}`, "probe"]);
+				expect({ index, code: result.code, stderr: result.stderr, lines: result.stdout.trim().split("\n").length }).toEqual({ index, code: exit, stderr: "", lines: 1 });
+				const envelope = JSON.parse(result.stdout);
+				expect({ index, cause: envelope.result.causeCode, effects: envelope.result.effects, repairAction: envelope.result.repairAction }).toEqual({
+					index, cause, effects: { completed, remaining: [], uncertain: [], inventoryComplete: true }, repairAction,
+				});
+				expect(envelope.result.commandIdentity).toBe("connectors.run");
+				// The real MCPorter reached the stub once per run.
+				expect({ index, calls: fixture.stub.calls }).toEqual({ index, calls: index + 1 });
+				if (failWith === null) expect(envelope.result.data).toEqual({ connector: CONNECTOR, operation: "probe", result: { content: [{ type: "text", text: "probe-ok" }] } });
+				else expect(envelope.result.data).toBeNull();
+				expect(result.stdout).not.toContain(PROVIDER_SENTINEL);
+			}
+			expect(existsSync(path.join(fixture.bundle.root, "mcporter.json"))).toBe(false);
+			expect(existsSync(path.join(fixture.home, ".mcporter"))).toBe(false);
+		} finally {
+			fixture.dispose();
+		}
+	}, 90_000);
+
+	test("outside a test bundle the fixture adapter refuses before MCPorter selection or state", async () => {
+		const fixture = fixtureRun({ authority: false });
+		try {
+			const result = await fixture.run(["run", CONNECTOR, "--select", "account=a", "probe"]);
+			expect(result.code).toBe(3);
+			expect(result.stderr).toBe("");
+			expect(JSON.parse(result.stdout).result).toMatchObject({
+				causeCode: "DOMAIN_ADAPTER_REFUSED", transactionState: "unchanged", data: { connector: CONNECTOR, connectorCause: "fixture-authority-unavailable" },
+				effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+			});
+			expect(fixture.stub.calls).toBe(0);
+			expect(existsSync(path.join(fixture.state, "connectors"))).toBe(false);
+		} finally {
+			fixture.dispose();
+		}
+	}, 30_000);
 });
 
 function problemOf(envelope: Parameters<typeof assertEnvelope>[0]): string | null {

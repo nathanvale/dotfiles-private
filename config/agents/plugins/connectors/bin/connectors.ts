@@ -1379,7 +1379,8 @@ function prepareThroughAdapter(command: AdapterCommand, manifest: ConnectorManif
 	}
 	const selectors = resolveSelectors(manifest, command.given);
 	if (selectors.problem) {
-		emitRefusal(command.commandIdentity, `${PROGRAM}: the selectors for ${command.id} do not match its manifest`, "SCHEMA_SELECTOR_INVALID", `Run connectors config show ${command.id} --resolved --json to see its declared selectors`, "connectors.config.show");
+		const required = Object.entries(manifest.selectors).filter(([, declaration]) => declaration.required && declaration.default === undefined).map(([name]) => name);
+		emitRefusal(command.commandIdentity, `${PROGRAM}: the selectors for ${command.id} do not match its manifest`, "SCHEMA_SELECTOR_INVALID", `Run connectors config show ${command.id} --resolved --json${selectPlaceholders(required)} to see its declared selectors`, "connectors.config.show");
 		return null;
 	}
 	if (!adapter.prepare) {
@@ -1431,10 +1432,15 @@ function readFailure(stdout: string): ReadFailure {
 	}
 }
 
-// A repair command names each selector the caller passed, never its value, so
-// it stays runnable without echoing an account or tenant back.
+// A repair command names selectors, never a value, so it stays runnable
+// without echoing an account or tenant back. Names come from the caller only
+// after resolveSelectors admitted them, or from the manifest itself.
+function selectPlaceholders(names: Iterable<string>): string {
+	return [...names].map((name) => ` --select ${name}=<value>`).join("");
+}
+
 function selectFlags(command: AdapterCommand): string {
-	return [...command.given.keys()].map((name) => ` --select ${name}=<value>`).join("");
+	return selectPlaceholders(command.given.keys());
 }
 
 async function runRead(command: AdapterCommand, plan: TransportPlan, binary: string, local: readonly LocalEffect[]): Promise<void> {
