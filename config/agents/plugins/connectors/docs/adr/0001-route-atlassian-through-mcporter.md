@@ -110,6 +110,16 @@ differs. The registration is create-or-identical in the CLI; re-pointing it is
 a manual step after open receipts settle and live previews expire. This note
 records the change without altering this ADR's status.
 
+Dated note, 25 September 2026: the plugin's packaged front door
+(`bin/connectors` `run`, `recover`, and `auth` for `atlassian`) is now the
+supported entrypoint the skill documents, in place of the Bun dispatcher named
+"the only supported entrypoint" above. `scripts/atlassian-dispatch.ts` remains
+the semantic owner of the Atlassian Operations, journal, and operator
+commands; the packaged adapter imports it and runs it in process, and
+`recover` reaches `receipts`, `receipt`, `adjudicate`, and `unlock`. Retiring
+the dispatcher's own Bun entry is a separate later change. This note records
+the change without altering this ADR's status.
+
 Before each MCPorter list or call, the dispatcher runs the Provider's local
 `--preflight`. The Provider revalidates the bound item and its required
 executable, then exits without downstream process startup or network
