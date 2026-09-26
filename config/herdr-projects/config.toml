@@ -2,4 +2,4 @@ root = "/Users/nathanvale/.local/share/my-second-brain-playground/herdr-projects
 
 [profiles.codex-safe]
 agent = "codex"
-args = ["--sandbox", "workspace-write", "--ask-for-approval", "on-request", "--search"]
+args = ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "-c", 'sandbox_workspace_write.writable_roots=["/Users/nathanvale/.local/share/my-second-brain-playground/herdr-projects-root"]', "--ask-for-approval", "never", "--search"]
