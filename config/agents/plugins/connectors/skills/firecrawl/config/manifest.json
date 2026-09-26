@@ -3,7 +3,7 @@
 	"id": "firecrawl",
 	"transport": { "registry": "./mcporter.json" },
 	"selectors": {},
-	"requirements": ["mcporter"],
-	"adapter": null,
-	"credentials": null
+	"requirements": ["mcporter", "op"],
+	"adapter": "firecrawl",
+	"credentials": { "reference": "1Password:API Credentials" }
 }

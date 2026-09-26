@@ -7,6 +7,8 @@
 // its Skill under skills/<id>/adapter.ts.
 import { atlassianAdapter } from "../../skills/atlassian/adapter.ts";
 import { canvaAdapter } from "../../skills/canva/adapter.ts";
+import { context7Adapter } from "../../skills/context7/adapter.ts";
+import { firecrawlAdapter } from "../../skills/firecrawl/adapter.ts";
 import { mermaidAdapter } from "../../skills/mermaid/adapter.ts";
 import type { Adapter } from "./contract.ts";
 import { challengeAuthAdapter } from "./challenge-auth.ts";
@@ -15,6 +17,8 @@ import { testAuthAdapter } from "./test-auth.ts";
 export const ADAPTERS: Readonly<Record<string, Adapter>> = {
 	[atlassianAdapter.id]: atlassianAdapter,
 	[canvaAdapter.id]: canvaAdapter,
+	[context7Adapter.id]: context7Adapter,
+	[firecrawlAdapter.id]: firecrawlAdapter,
 	[mermaidAdapter.id]: mermaidAdapter,
 	[challengeAuthAdapter.id]: challengeAuthAdapter,
 	[testAuthAdapter.id]: testAuthAdapter,

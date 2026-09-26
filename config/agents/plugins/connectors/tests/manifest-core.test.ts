@@ -10,7 +10,7 @@ import { startLoopbackMcpStub } from "./fixtures/loopback-mcp-stub.ts";
 import { createBundle, createFakeMcporterBinDir, runBundle } from "./harness.ts";
 
 describe("connectors list", () => {
-	test("lists the real keyless Skills declared by a manifest, sorted", async () => {
+	test("lists the real hosted Skills declared by a manifest, each with its packaged account-key adapter, sorted", async () => {
 		const bundle = createBundle();
 		try {
 			const result = await runBundle(bundle, ["list"], { home: bundle.root });
@@ -18,8 +18,8 @@ describe("connectors list", () => {
 			expect(result.stderr).toBe("");
 			const envelope = JSON.parse(result.stdout);
 			expect(envelope.result.data.connectors).toEqual([
-				{ id: "context7", adapter: null, keyless: true, requirements: ["mcporter"] },
-				{ id: "firecrawl", adapter: null, keyless: true, requirements: ["mcporter"] },
+				{ id: "context7", adapter: "context7", keyless: false, requirements: ["mcporter", "op"] },
+				{ id: "firecrawl", adapter: "firecrawl", keyless: false, requirements: ["mcporter", "op"] },
 			]);
 			expect(envelope.result.data.problems).toEqual([]);
 		} finally {
@@ -317,11 +317,12 @@ describe("connectors config show: Spec AC24 resolved provenance", () => {
 				connector: "context7",
 				values: {
 					connector: { value: "context7", source: "invocation" },
-					adapter: { value: "none", source: "packaged-manifest-default" },
-					custodyMode: { value: "keyless", source: "packaged-manifest-default" },
+					adapter: { value: "context7", source: "packaged-manifest-default" },
+					custodyMode: { value: null, source: "not-yet-effective" },
 					transportRegistry: { value: "./mcporter.json", source: "packaged-manifest-default" },
-					requirements: { value: ["mcporter"], source: "packaged-manifest-default" },
+					requirements: { value: ["mcporter", "op"], source: "packaged-manifest-default" },
 					"dependency:mcporter": { value: "0.14.0", source: "packaged-requirements-pin" },
+					"dependency:op": { value: "2.39.0", source: "packaged-requirements-pin" },
 				},
 			});
 		} finally {
@@ -509,9 +510,10 @@ describe("connectors schema: Spec AC20 contribution (Context7 and Firecrawl reac
 			for (const [id, expected] of Object.entries(REAL_KEYLESS_CONNECTORS)) {
 				const registry = JSON.parse(readFileSync(path.join(bundle.skillsRoot, id, "config", "mcporter.json"), "utf8"));
 				expect(registry.imports).toEqual([]);
-				expect(Object.keys(registry.mcpServers)).toEqual([id]);
+				expect(Object.keys(registry.mcpServers)).toEqual([id, `${id}-account`]);
 				expect(registry.mcpServers[id].baseUrl).toBe(expected.url);
 				expect(registry.mcpServers[id].allowedTools).toEqual(expected.allowedTools);
+				expect(registry.mcpServers[`${id}-account`].allowedTools).toEqual(expected.allowedTools);
 				const validation = await runBundle(bundle, ["config", "validate", id], { home: bundle.root });
 				expect(validation.code).toBe(0);
 				expect(validation.stderr).toBe("");

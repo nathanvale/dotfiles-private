@@ -6,6 +6,15 @@
 			"description": "Firecrawl hosted MCP v2, keyless limited public-web search and scrape",
 			"baseUrl": "https://mcp.firecrawl.dev/v2/mcp",
 			"allowedTools": ["firecrawl_search", "firecrawl_scrape"]
+		},
+		"firecrawl-account": {
+			"description": "Firecrawl hosted MCP, account key through the scoped Provider",
+			"command": "../../../bin/connectors",
+			"args": ["__internal", "firecrawl", "provider"],
+			"env": {
+				"CONNECTORS_INTERNAL_INVOCATION_CONTEXT": "${CONNECTORS_INTERNAL_INVOCATION_CONTEXT}"
+			},
+			"allowedTools": ["firecrawl_search", "firecrawl_scrape"]
 		}
 	}
 }
