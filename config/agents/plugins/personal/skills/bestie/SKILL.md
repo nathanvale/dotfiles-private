@@ -44,10 +44,13 @@ state. Keep personal information within the requested task.
    draft directly. Match his affectionate,
    conversational voice and actual memories. Keep warmth, humour, and
    logistics proportional to this exchange. Separate subjects when requested.
-   Use the iMessage skill's native writing-block format for chat. For email,
-   show the recipient and sending account outside a native email writing block
-   containing the subject and exact body. Keep the block's revision identity
-   during edits. If the host lacks editable blocks, present a plain-text draft.
+   Render each chat reply as a host-native inline writing block. In Codex, use
+   `:::writing{variant="chat_message" id="12345"}` with a unique five-digit ID
+   and a closing `:::`. Put only the exact message body inside; keep the
+   recipient, service, attachments, and explanation outside. Retain the ID
+   when revising that reply. For email, show the recipient and sending account
+   outside a native email writing block containing the subject and exact body.
+   If the host lacks editable blocks, present a plain-text draft.
 4. Treat Nathan's edited block as the current exact text. Send only after
    the channel workflow's required confirmation of recipient, account or
    service, text, and attachments. A confirmation already given for that
