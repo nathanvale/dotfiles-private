@@ -17,7 +17,7 @@ describe("translateFailure", () => {
 		["bare 401 status", toolError("status 401"), "refused-auth"],
 		["forbidden wording", process_("request forbidden by policy"), "refused-auth"],
 		["permission wording", toolError("You do not have permission to view this issue"), "refused-auth"],
-		["404", toolError("Issue does not exist or you do not have permission to see it."), "refused-auth"],
+		["absence worded with permission", toolError("Issue does not exist or you do not have permission to see it."), "refused-auth"],
 		["not found", process_("HTTP 404 Not Found"), "not-found"],
 		["ambiguous Confluence absence or permission cannot prove a delete", toolError("Failed to retrieve page by ID '123': Error retrieving page content: There is no content with the given id, or the calling user does not have permission to view the content"), "failed-unknown"],
 		["unambiguous Confluence absence", toolError("There is no content with the given id"), "not-found"],
@@ -30,7 +30,7 @@ describe("translateFailure", () => {
 		["malformed output", malformed("MCPorter output was not JSON"), "failed-unknown"],
 		["malformed output that mentions a timeout", malformed("timed out while parsing"), "failed-unknown"],
 		["precondition line", process_("atlassian-provider:error:username-missing:JIRA_EXAMPLE_API_TOKEN needs a username field", "", 4), "refused-precondition"],
-		["precondition beats a 401 substring", process_("atlassian-provider:error:executable-missing:uvx is required\nHTTP 401 Unauthorized", "", 4), "refused-precondition"],
+		["precondition beats a 401 substring", process_("atlassian-provider:error:uv-unavailable:uv is required\nHTTP 401 Unauthorized", "", 4), "refused-precondition"],
 		["precondition on stdout", process_("", "atlassian-provider:error:credential-context-stale:credential item changed", 4), "refused-precondition"],
 		["auth beats not-found", toolError("401 Unauthorized: issue not found"), "refused-auth"],
 		["not-found beats capability", toolError("unknown tool not found"), "not-found"],
@@ -49,7 +49,9 @@ describe("translateFailure", () => {
 		expect(translated).toEqual({ cause: "refused-precondition", hint: "add a username field to the tenant's product credential item" });
 		expect(translateFailure(process_("atlassian-provider:error:credential-context-stale:credential item changed; restart the semantic operation", "", 4)).hint).toBe("credential item metadata changed; restart the semantic operation");
 		for (const [code, hint] of [
-			["executable-missing", "install the missing provider executable on PATH"],
+			["uv-unavailable", "the plugin-owned uv is not set up; run connectors setup"],
+			["op-unavailable", "the plugin-owned 1Password CLI is not set up; run connectors setup"],
+			["item-missing", "the product credential item is not in 1Password; its owner must create and store it"],
 			["community-fields-missing", "the product credential item needs username, credential, and a site_url field"],
 			["execve-unavailable", "run the Provider with a Bun runtime that supports process replacement"],
 			["exec-failed", "inspect the Provider executable and runtime"],

@@ -1,5 +1,6 @@
 ---
-status: proposed
+status: superseded
+superseded_by: 0004-move-canva-custody-into-mcporter-native-vault.md
 ---
 
 # Own Canva per-user OAuth below MCPorter

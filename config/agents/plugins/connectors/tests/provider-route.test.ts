@@ -131,7 +131,6 @@ describe("public process refusals: nothing reaches MCPorter or the credential he
 			expect(result.stdout).toBe("");
 			expect(result.stderr).toContain(`provider-route:error:${code}:`);
 			expect(harness.has("mcporter.json")).toBe(false);
-			expect(harness.has("wrapper.log")).toBe(false);
 		});
 	}
 });
@@ -240,7 +239,6 @@ describe("public process route", () => {
 		expect([result.code, result.stdout, result.stderr.includes("provider-route:error:dispatcher-owned:")]).toEqual([3, "", true]);
 		expect(`${result.stdout}${result.stderr}`).not.toContain(secret);
 		expect(harness.has("mcporter.json")).toBe(false);
-		expect(harness.has("wrapper.log")).toBe(false);
 	});
 
 	test("a dispatcher-owned Atlassian registry list also refuses before MCPorter or the Provider process can start", async () => {
@@ -249,7 +247,6 @@ describe("public process route", () => {
 		expect([result.code, result.stdout, result.stderr.includes("provider-route:error:dispatcher-owned:")]).toEqual([3, "", true]);
 		expect(`${result.stdout}${result.stderr}`).not.toContain(secret);
 		expect(harness.has("mcporter.json")).toBe(false);
-		expect(harness.has("wrapper.log")).toBe(false);
 	});
 });
 
@@ -265,7 +262,7 @@ describe("route source and skill registries", () => {
 		const skills = readdirSync(SKILLS_ROOT)
 			.filter((name) => existsSync(path.join(SKILLS_ROOT, name, "config", "mcporter.json")))
 			.sort();
-		expect(skills).toEqual(["atlassian", "canva", "context7", "figma", "firecrawl"]);
+		expect(skills).toEqual(["atlassian", "canva", "context7", "figma", "firecrawl", "mermaid"]);
 		for (const skill of skills) {
 			const registry = JSON.parse(readFileSync(path.join(SKILLS_ROOT, skill, "config", "mcporter.json"), "utf8")) as { imports: unknown; mcpServers: Record<string, unknown> };
 			const route = JSON.parse(readFileSync(path.join(SKILLS_ROOT, skill, "config", "route.json"), "utf8")) as { defaultProvider: string };

@@ -1,0 +1,9 @@
+{
+	"schemaVersion": 1,
+	"id": "mermaid",
+	"transport": { "registry": "./mcporter.json" },
+	"selectors": {},
+	"requirements": ["mcporter", "op"],
+	"adapter": "mermaid",
+	"credentials": { "reference": "1Password:API Credentials" }
+}

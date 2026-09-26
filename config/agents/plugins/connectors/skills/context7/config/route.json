@@ -1,3 +1,4 @@
 {
-	"defaultProvider": "context7"
+	"defaultProvider": "context7",
+	"dispatcherOwned": true
 }

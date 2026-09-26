@@ -2,10 +2,22 @@
 // Minimal MCP stdio server used only to observe what a real MCPorter stdio
 // child receives through the route: cwd, argv, environment key presence, and
 // the non-secret selection. It never prints another environment value.
-import { writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
 
 const spawnMarker = process.env.PROBE_SPAWN_MARKER;
 if (spawnMarker) writeFileSync(spawnMarker, "spawned\n");
+const fixtureRoot = process.env.TMPDIR;
+if (fixtureRoot) {
+	writeFileSync(path.join(fixtureRoot, "probe-spawned"), "spawned\n");
+	if (existsSync(path.join(fixtureRoot, "probe-schema-failure-request"))) process.exit(9);
+	const request = path.join(fixtureRoot, "mcporter-noisy-stderr-request.json");
+	if (existsSync(request)) {
+		const { bytes } = JSON.parse(readFileSync(request, "utf8")) as { bytes: number };
+		await new Promise<void>((resolve, reject) => process.stderr.write("x".repeat(bytes), (error) => (error ? reject(error) : resolve())));
+		writeFileSync(path.join(fixtureRoot, "mcporter-noisy-stderr-receipt.json"), JSON.stringify({ bytesWritten: bytes }));
+	}
+}
 
 const probe = {
 	cwd: process.cwd(),

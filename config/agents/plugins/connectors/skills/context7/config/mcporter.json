@@ -6,6 +6,15 @@
 			"description": "Context7 hosted documentation MCP, keyless rate-limited tier",
 			"baseUrl": "https://mcp.context7.com/mcp",
 			"allowedTools": ["resolve-library-id", "query-docs"]
+		},
+		"context7-account": {
+			"description": "Context7 hosted MCP, account key through the scoped Provider",
+			"command": "../../../bin/connectors",
+			"args": ["__internal", "context7", "provider"],
+			"env": {
+				"CONNECTORS_INTERNAL_INVOCATION_CONTEXT": "${CONNECTORS_INTERNAL_INVOCATION_CONTEXT}"
+			},
+			"allowedTools": ["resolve-library-id", "query-docs"]
 		}
 	}
 }

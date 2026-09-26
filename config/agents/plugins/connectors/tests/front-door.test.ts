@@ -1,18 +1,41 @@
-// T1 (Ticket #88 under Spec #87): the compiled front door boots standalone,
-// with an empty HOME and no ambient Bun/Node/mise/op on PATH, and answers a
-// trivial discovery command with a Contract Core 2.0 envelope. Expected
-// values below are independent literals, never re-derived by importing
-// bin/connectors.ts's own envelope-building code.
+// T1 (Ticket #88 under Spec #87) shipped the discovery-only skeleton; T2
+// (Ticket #89 under Spec #87) added the generic manifest-driven command
+// core. The compiled front door boots standalone, with an empty HOME and no
+// ambient Bun/Node/mise/op on PATH, and answers a trivial discovery command
+// with a Contract Core 2.0 envelope. Expected values below are independent
+// literals, never re-derived by importing bin/connectors.ts's own
+// envelope-building code.
 import { describe, expect, test } from "bun:test";
-import { accessSync, constants } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { assertEnvelope, buildInternalFailureEnvelope } from "../bin/connectors.ts";
-import { FRONT_DOOR, PLUGIN_ROOT, runFrontDoor } from "./harness.ts";
+import { startLoopbackMcpStub } from "./fixtures/loopback-mcp-stub.ts";
+import { createBundle, createFakeMcporterBinDir, createFixtureAuthorityBinDir, FRONT_DOOR, PLUGIN_ROOT, runFrontDoor } from "./harness.ts";
 
 const CONTRACT_VERSION = "2.0.0";
 // Contract Core 2.0 requires availablePaths sorted and unique; this literal
 // is alphabetical, independent of bin/connectors.ts's own COMMANDS order.
-const AVAILABLE_PATHS = ["connectors.discovery", "connectors.dispatch", "connectors.help"];
+const AVAILABLE_PATHS = [
+	"connectors.auth",
+	"connectors.config.show",
+	"connectors.config.validate",
+	"connectors.deps.repair.mcporter",
+	"connectors.discovery",
+	"connectors.dispatch",
+	"connectors.doctor",
+	"connectors.fixtureAuth",
+	"connectors.help",
+	"connectors.list",
+	"connectors.recover",
+	"connectors.recover.adjudicate",
+	"connectors.recover.unlock",
+	"connectors.run",
+	"connectors.run.apply",
+	"connectors.run.preview",
+	"connectors.schema",
+	"connectors.setup",
+	"connectors.status",
+];
 const EXIT_MEANINGS = { "0": "success", "1": "internal", "2": "usage", "3": "domain", "4": "schema", "75": "transient" };
 const SIGNAL_EXITS = { "130": "SIGINT", "143": "SIGTERM" };
 
@@ -34,17 +57,17 @@ describe("compiled front door: discovery", () => {
 		expect(envelope.result.causeCode).toBe("SUCCESS_UNCHANGED");
 		expect(envelope.result.data.commands.map((c: { commandIdentity: string }) => c.commandIdentity).slice().sort()).toEqual(AVAILABLE_PATHS);
 		expect(envelope.result.data.exitMeanings).toEqual(EXIT_MEANINGS);
+		// Unlock is the one recovery route that takes a previewId as well.
+		expect(envelope.result.data.commands.find((c: { commandIdentity: string }) => c.commandIdentity === "connectors.recover.unlock")?.summary).toBe("Release the write lock a receipt (by runId) or a preview (by previewId) left behind once its holder has exited");
 		expect(envelope.result.data.signalExits).toEqual(SIGNAL_EXITS);
-		expect(Array.isArray(envelope.result.data.effectExclusions)).toBe(true);
-		expect(envelope.result.data.effectExclusions.length).toBeGreaterThan(0);
-	});
-
-	test("availablePaths is sorted and has no duplicates", async () => {
-		const result = await runFrontDoor(["--discover", "--json"]);
-		const envelope = JSON.parse(result.stdout);
-		const paths: string[] = envelope.availablePaths;
-		expect(paths).toEqual([...paths].sort());
-		expect(new Set(paths).size).toBe(paths.length);
+		// Independent literal of the accepted exclusions: setup and MCPorter
+		// repair are advertised above, so no exclusion may deny them.
+		expect(envelope.result.data.effectExclusions).toEqual([
+			"any credential value read by the front-door process; a 1Password-custody credential is read only by this executable started in its adapter's internal custody or Provider role, fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
+			"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
+			"any provider write without a recorded preview and a durable write receipt, and any retry or replay of a write whose effect is unknown",
+			"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, run --preview or --apply and recover for one with no write or recovery step, and auth logout for every connector; deps covers only explicit MCPorter repair",
+		]);
 	});
 
 	test("bare --discover without --json refuses instead of silently answering", async () => {
@@ -63,6 +86,38 @@ describe("compiled front door: discovery", () => {
 		expect(result.stdout).toContain("--help");
 		expect(result.stdout).toContain("Commands:");
 		expect(result.stdout).toContain("Examples:");
+		expect(result.stdout).toContain("schema <connector> [--select name=value ...]");
+		expect(result.stdout).toContain("auth configure <connector> [--select name=value ...] --input <json-object>");
+		expect(result.stdout).toContain("auth status <connector> [--select name=value ...]");
+		expect(result.stdout).toContain("auth login <connector> [--select name=value ...] [--no-browser] [--reset]");
+		expect(result.stdout).toContain("run <connector> [--select name=value] <write-operation> --input <json-object> --apply <previewId>");
+		expect(result.stdout).toContain("recover <connector> [--select name=value] [--run <runId> [--adjudicate --input <json-object>]]");
+		expect(result.stdout).toContain("recover <connector> [--select name=value] --run <runId|previewId> --unlock");
+	});
+
+	// Independent literals of the accepted auth grammar: --input after
+	// configure only, at most once and only as a JSON object; login options
+	// after login only. The parser refuses before any manifest or adapter.
+	test("discovery names configure's --input and status, and --input is refused after every other auth verb", async () => {
+		const discovered = JSON.parse((await runFrontDoor(["--discover", "--json"])).stdout);
+		expect(discovered.result.data.commands.find((c: { commandIdentity: string }) => c.commandIdentity === "connectors.auth")?.summary).toBe(
+			"Inspect or perform one connector's declared auth verb through its packaged adapter; configure alone takes --input <json-object> of nonsecret stored configuration, status inspects that configuration only, and login is attended only and alone takes --no-browser and --reset",
+		);
+		const repair = "Run connectors auth <verb> <connector> [--select name=value ...] [--input <json-object> after configure | --no-browser --reset after login]";
+		const input = ["--input", '{"jiraItem":"jirafixtureitem00000000001","confluenceItem":"conffixtureitem00000000002"}'];
+		const rows = [
+			...["status", "check", "login", "repair", "logout"].map((verb) => ["auth", verb, "atlassian", "--select", "tenant=example", ...input]),
+			["auth", "configure", "atlassian", "--select", "tenant=example", ...input, ...input],
+			["auth", "configure", "atlassian", "--select", "tenant=example", "--input", "[]"],
+			["auth", "configure", "atlassian", "--select", "tenant=example", "--input"],
+			["auth", "configure", "atlassian", "--select", "tenant=example", "--no-browser"],
+		];
+		expect(rows).toHaveLength(9);
+		for (const argv of rows) {
+			const result = await runFrontDoor(argv);
+			expect([argv.join(" "), result.code, result.stderr]).toEqual([argv.join(" "), 2, ""]);
+			expect(JSON.parse(result.stdout).result).toMatchObject({ commandIdentity: "connectors.auth", causeCode: "USAGE_MALFORMED_ARGUMENTS", transactionState: "unchanged", repairAction: repair });
+		}
 	});
 
 	test("--help --json answers with its own Contract Core envelope", async () => {
@@ -112,12 +167,6 @@ describe("compiled front door: discovery", () => {
 		expect(typeof envelope.result.repairAction).toBe("string");
 	});
 
-	test("machine stdout carries only the envelope; nothing on stderr", async () => {
-		const result = await runFrontDoor(["--discover", "--json"]);
-		expect(result.stderr).toBe("");
-		expect(() => JSON.parse(result.stdout)).not.toThrow();
-	});
-
 	test("stdout is not truncated when piped: the full envelope is valid JSON on every run", async () => {
 		// Regression guard for calling process.exit() immediately after an
 		// async stdout write, which can race Bun's own flush on a pipe.
@@ -154,12 +203,13 @@ describe("compiled front door: closed-pipe output boundary", () => {
 });
 
 describe("compiled front door: internal-failure fallback (unit-layer, supporting evidence)", () => {
-	// This narrow claim cannot honestly be forced through the black-box
-	// process seam: under correct code there is no reachable argv that
-	// makes assertEnvelope throw, so there is nothing to spawn against.
-	// Proven at the unit layer instead, importing the pure builder/validator
-	// directly; the primary process-level proof above stays the main claim
-	// for every ordinary success/refusal path.
+	// Under correct code no argv makes assertEnvelope throw. A faulted compile
+	// (tests/faulted-front-door.ts) could reach this path through the process
+	// seam, as the setup and MCPorter custody process tests do for their own
+	// internal causes, but each fault costs one full front-door compile. The
+	// fallback is a pure builder's output, so the unit layer proves its shape
+	// for the price of a call; the process-level proof above stays the main
+	// claim for every ordinary success/refusal path.
 	test("the fallback envelope is itself a valid envelope, and never carries dynamic exception text", () => {
 		const envelope = buildInternalFailureEnvelope();
 		expect(() => assertEnvelope(envelope)).not.toThrow();
@@ -229,16 +279,16 @@ describe("compiled front door: assertEnvelope rejects fabricated envelopes (unit
 		expect(() => assertEnvelope(envelope)).toThrow(/nextAction must be a non-empty string/);
 	});
 
-	test("nextAction names a command T1 does not admit", () => {
+	test("nextAction names a command the CLI does not admit", () => {
 		const base = valid();
-		const envelope = { ...base, result: { ...base.result, nextAction: "connectors.setup" } } as unknown as ReturnType<typeof valid>;
+		const envelope = { ...base, result: { ...base.result, nextAction: "connectors.unavailable" } } as unknown as ReturnType<typeof valid>;
 		expect(() => assertEnvelope(envelope)).toThrow(/admitted commands/);
 	});
 
 	test("nonempty completed effects while transactionState is unchanged", () => {
 		const base = valid();
 		const envelope = { ...base, result: { ...base.result, effects: { ...base.result.effects, completed: ["effect.fake"] } } } as unknown as ReturnType<typeof valid>;
-		expect(() => assertEnvelope(envelope)).toThrow(/effects\.completed must be empty/);
+		expect(() => assertEnvelope(envelope)).toThrow(/unchanged result cannot report a completed effect/);
 	});
 
 	test("commandIdentity naming a command T1 does not admit", () => {
@@ -280,26 +330,219 @@ describe("compiled front door: assertEnvelope rejects fabricated envelopes (unit
 	});
 });
 
-describe("compiled front door: per-Skill resolution (Q11a)", () => {
-	// Each in-scope Skill resolves the front door as `../../bin/connectors`
-	// from its own directory, no global command, no dotfiles path. Mermaid is
-	// out of scope for T1 and is not listed here.
-	const inScopeSkills = ["atlassian", "canva", "context7", "firecrawl"];
+describe("compiled front door: assertEnvelope admits run success (unit-layer, diagnostic only)", () => {
+	// Diagnostic, not station proof: the fixture-adapter process block below
+	// owns the reached run stations. Each envelope here is a test-owned literal
+	// of a run that succeeded after these completed effects.
+	const runSuccess = (causeCode: string, completed: readonly string[], commandIdentity = "connectors.run") => ({
+		envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message: "canva search-designs completed", availablePaths: AVAILABLE_PATHS,
+		result: {
+			runId: "run-diagnostic", commandIdentity, outcome: "success", failureClass: null, exitCode: 0,
+			data: { connector: "canva", operation: "search-designs", result: {} }, retryable: false, repairAction: null, nextAction: "connectors.status",
+			effectClass: "repository-local", transactionState: "completed", causeCode,
+			effects: { completed, remaining: [], uncertain: [], inventoryComplete: true },
+		},
+	}) as unknown as Parameters<typeof assertEnvelope>[0];
 
-	for (const skill of inScopeSkills) {
-		test(`${skill} resolves the front door from its own plugin path`, async () => {
-			const skillDir = path.join(PLUGIN_ROOT, "skills", skill);
-			const resolved = path.join(skillDir, "..", "..", "bin", "connectors");
-			expect(() => accessSync(resolved, constants.X_OK)).not.toThrow();
-			const proc = Bun.spawn([resolved, "--discover", "--json"], {
-				env: { HOME: "/tmp", PATH: "/usr/bin:/bin" },
-				stdin: "ignore",
-				stdout: "pipe",
-				stderr: "pipe",
-			});
-			const [stdout, code] = await Promise.all([new Response(proc.stdout).text(), proc.exited]);
-			expect(code).toBe(0);
-			expect(JSON.parse(stdout).result.outcome).toBe("success");
-		});
+	// [cause, completed effects], restated from the accepted run inventory.
+	const admitted: ReadonlyArray<readonly [string, readonly string[]]> = [
+		["SUCCESS_AFTER_ACCOUNT_EFFECT", ["mcporter-vault-file"]],
+		["SUCCESS_AFTER_ACCOUNT_EFFECT", ["account-vault"]],
+		["SUCCESS_AFTER_ACCOUNT_EFFECT", ["account-vault", "mcporter-vault-file"]],
+		["SUCCESS_BOOTSTRAPPED", ["mcporter-bootstrap", "account-vault", "mcporter-vault-file"]],
+		["SUCCESS_MCPORTER_RECOVERED", ["mcporter-recovery", "mcporter-vault-file"]],
+	];
+
+	test("a run that succeeded after an account effect is a valid envelope", () => {
+		for (const [cause, completed] of admitted) expect({ cause, completed, problem: problemOf(runSuccess(cause, completed)) }).toEqual({ cause, completed, problem: null });
+	});
+
+	test("setup's causes stay setup-only, and adapter read causes stay with run and schema", () => {
+		expect(problemOf(runSuccess("SUCCESS_COMPLETED", ["mcporter-vault-file"]))).toContain("setup cause and command identity must agree");
+		// An adapter-backed schema read reports its account effects like a run.
+		expect(problemOf(runSuccess("SUCCESS_AFTER_ACCOUNT_EFFECT", ["mcporter-vault-file"], "connectors.schema"))).toBeNull();
+		// A row-coherent transient refusal under auth: identity is its only fault.
+		const base = runSuccess("TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT", ["mcporter-vault-file"], "connectors.auth");
+		const transient = { ...base, result: { ...base.result, outcome: "refused", failureClass: "transient", exitCode: 75, retryable: true, data: null, repairAction: "Retry the run" } } as typeof base;
+		expect(problemOf(transient)).toBe("internal contract violation: adapter read cause and command identity must agree");
+	});
+});
+
+const official = process.env.CONNECTORS_OFFICIAL_RELEASE_FIXTURE;
+if (process.env.CI && !official) throw new Error("CONNECTORS_OFFICIAL_RELEASE_FIXTURE is required for CI process proof");
+
+describe("compiled front door: run through the packaged fixture adapter (public process, loopback only)", () => {
+	// Denies all remote network except loopback, and any Keychain command. A
+	// runner that wraps this file in its own sandbox must use this exact profile.
+	const LOOPBACK_ONLY = '(version 1)(allow default)(deny network-outbound (remote ip))(deny network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder")))(allow network-outbound (remote ip "localhost:*"))(deny process-exec (literal "/usr/bin/security"))';
+	const PROVIDER_SENTINEL = "SENTINEL_PROVIDER_ERROR_TEXT";
+	const CONNECTOR = "loopback-fixture-skill";
+
+	// The compiled binary in an isolated bundle, the official MCPorter selected
+	// from local release bytes, a hostile mcporter first on PATH, and a keyless
+	// loopback stub as the only reachable MCP server.
+	function fixtureRun(options: { authority: boolean }) {
+		const bundle = createBundle();
+		bundle.addSkill(CONNECTOR);
+		const hostile = createFakeMcporterBinDir();
+		const authority = options.authority ? createFixtureAuthorityBinDir(bundle) : null;
+		const stub = startLoopbackMcpStub();
+		const registry = { imports: [], mcpServers: { [CONNECTOR]: { baseUrl: stub.url, allowedTools: ["probe"] } } };
+		writeFileSync(path.join(bundle.skillsRoot, CONNECTOR, "config", "mcporter.json"), JSON.stringify(registry));
+		const state = path.join(bundle.root, "state");
+		const home = path.join(bundle.root, "home");
+		mkdirSync(state);
+		mkdirSync(home);
+		const env = { HOME: home, PATH: `${hostile.binDir}:/usr/bin:/bin`, TMPDIR: bundle.root, XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: official ?? path.join(bundle.root, "no-release-fixture") };
+		return {
+			bundle, state, home, stub,
+			async run(argv: string[]) {
+				const proc = Bun.spawn(["/usr/bin/sandbox-exec", "-p", LOOPBACK_ONLY, bundle.binary, ...argv], { env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+				const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+				return { code, stdout, stderr };
+			},
+			dispose() {
+				stub.stop();
+				authority?.dispose();
+				hostile.dispose();
+				bundle.dispose();
+			},
+		};
 	}
+
+	test.skipIf(!official)("the core reports success after an account effect and fails closed on a non-offline provider issue", async () => {
+		const fixture = fixtureRun({ authority: true });
+		try {
+			const fail = "If the grant expired, run connectors auth login loopback-fixture-skill --select account=<value> yourself in a terminal; otherwise correct the operation or its --input before running again";
+			// [account, stub error or null, exit, cause, completed effects, repairAction], in invocation order,
+			// restated from the accepted run inventory. The repeat for b proves effects are observed, not supplied.
+			const runs: ReadonlyArray<readonly [string, string | null, number, string, readonly string[], string | null]> = [
+				["a", null, 0, "SUCCESS_BOOTSTRAPPED", ["mcporter-bootstrap", "account-vault", "mcporter-vault-file"], null],
+				["b", null, 0, "SUCCESS_AFTER_ACCOUNT_EFFECT", ["account-vault", "mcporter-vault-file"], null],
+				["b", null, 0, "SUCCESS_UNCHANGED", [], null],
+				["c", PROVIDER_SENTINEL, 3, "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT", ["account-vault", "mcporter-vault-file"], fail],
+			];
+			for (const [index, [account, failWith, exit, cause, completed, repairAction]] of runs.entries()) {
+				fixture.stub.failWith = failWith;
+				const result = await fixture.run(["run", CONNECTOR, "--select", `account=${account}`, "probe"]);
+				expect({ index, code: result.code, stderr: result.stderr, lines: result.stdout.trim().split("\n").length }).toEqual({ index, code: exit, stderr: "", lines: 1 });
+				const envelope = JSON.parse(result.stdout);
+				expect({ index, cause: envelope.result.causeCode, effects: envelope.result.effects, repairAction: envelope.result.repairAction }).toEqual({
+					index, cause, effects: { completed, remaining: [], uncertain: [], inventoryComplete: true }, repairAction,
+				});
+				expect(envelope.result.commandIdentity).toBe("connectors.run");
+				// The real MCPorter reached the stub once per run.
+				expect({ index, calls: fixture.stub.calls }).toEqual({ index, calls: index + 1 });
+				if (failWith === null) expect(envelope.result.data).toEqual({ connector: CONNECTOR, operation: "probe", result: { content: [{ type: "text", text: "probe-ok" }] } });
+				else expect(envelope.result.data).toBeNull();
+				expect(result.stdout).not.toContain(PROVIDER_SENTINEL);
+			}
+			expect(existsSync(path.join(fixture.bundle.root, "mcporter.json"))).toBe(false);
+			expect(existsSync(path.join(fixture.home, ".mcporter"))).toBe(false);
+		} finally {
+			fixture.dispose();
+		}
+	}, 90_000);
+
+	test("without the fixture authority installed the fixture adapter refuses before MCPorter selection or state", async () => {
+		const fixture = fixtureRun({ authority: false });
+		try {
+			const result = await fixture.run(["run", CONNECTOR, "--select", "account=a", "probe"]);
+			expect(result.code).toBe(3);
+			expect(result.stderr).toBe("");
+			expect(JSON.parse(result.stdout).result).toMatchObject({
+				causeCode: "DOMAIN_ADAPTER_REFUSED", transactionState: "unchanged", data: { connector: CONNECTOR, connectorCause: "fixture-authority-unavailable" },
+				effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+			});
+			expect(fixture.stub.calls).toBe(0);
+			expect(existsSync(path.join(fixture.state, "connectors"))).toBe(false);
+		} finally {
+			fixture.dispose();
+		}
+	}, 30_000);
+
+	test("an adapter with no write or recovery step refuses preview, apply, and recover through the catalogue before any selection or state", async () => {
+		const fixture = fixtureRun({ authority: false });
+		try {
+			for (const [argv, identity] of [
+				[["run", CONNECTOR, "--select", "account=a", "probe", "--preview"], "connectors.run.preview"],
+				[["run", CONNECTOR, "--select", "account=a", "probe", "--apply", "p-1"], "connectors.run.apply"],
+				[["recover", CONNECTOR, "--select", "account=a"], "connectors.recover"],
+				[["recover", CONNECTOR, "--select", "account=a", "--run", "r-1", "--unlock"], "connectors.recover.unlock"],
+			] as const) {
+				const result = await fixture.run([...argv]);
+				expect([identity, result.code, result.stderr]).toEqual([identity, 3, ""]);
+				expect(JSON.parse(result.stdout).result).toMatchObject({
+					commandIdentity: identity, causeCode: "DOMAIN_ADAPTER_REFUSED", transactionState: "unchanged",
+					data: { connector: CONNECTOR, connectorCause: "adapter-has-no-writes" }, repairAction: "Use a connector whose packaged adapter supports preview, apply, and recover",
+					effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+				});
+			}
+			expect(fixture.stub.calls).toBe(0);
+			expect(existsSync(path.join(fixture.state, "connectors"))).toBe(false);
+		} finally {
+			fixture.dispose();
+		}
+	}, 30_000);
+
+	test("run and recover refuse a malformed write phase or recovery grammar before loading any adapter", async () => {
+		const fixture = fixtureRun({ authority: false });
+		try {
+			// Independent literals of the accepted grammar: unlock alone names a
+			// runId or a previewId.
+			const runRepair = "Run connectors run <connector> [--select name=value ...] <operation> [--input <json-object>] [--preview | --apply <previewId>]";
+			const recoverRepair = "Run connectors recover <connector> [--select name=value ...] [--run <runId> [--adjudicate --input <json-object>] | --run <runId|previewId> --unlock]";
+			for (const [argv, identity, repair] of [
+				[["run", CONNECTOR, "probe", "--preview", "--apply", "p-1"], "connectors.run", runRepair],
+				[["run", CONNECTOR, "probe", "--apply"], "connectors.run", runRepair],
+				[["run", CONNECTOR, "probe", "--preview", "--preview"], "connectors.run", runRepair],
+				[["recover", CONNECTOR, "--unlock"], "connectors.recover", recoverRepair],
+				[["recover", CONNECTOR, "--run", "r-1", "--adjudicate"], "connectors.recover", recoverRepair],
+				[["recover", CONNECTOR, "--run", "r-1", "--unlock", "--adjudicate", "--input", "{}"], "connectors.recover", recoverRepair],
+			] as const) {
+				const result = await fixture.run([...argv]);
+				expect([argv.join(" "), result.code, result.stderr]).toEqual([argv.join(" "), 2, ""]);
+				expect(JSON.parse(result.stdout).result).toMatchObject({ commandIdentity: identity, causeCode: "USAGE_MALFORMED_ARGUMENTS", transactionState: "unchanged", repairAction: repair });
+			}
+			expect(fixture.stub.calls).toBe(0);
+			expect(existsSync(path.join(fixture.state, "connectors"))).toBe(false);
+		} finally {
+			fixture.dispose();
+		}
+	}, 30_000);
+});
+
+function problemOf(envelope: Parameters<typeof assertEnvelope>[0]): string | null {
+	try {
+		assertEnvelope(envelope);
+		return null;
+	} catch (error) {
+		return (error as Error).message;
+	}
+}
+
+describe("compiled front door: per-Skill resolution (Q11a)", () => {
+	// Independent oracle: the shipped Skills whose SKILL.md reaches the front
+	// door, and the exact line each declares to resolve it from its own
+	// directory (no global command, no dotfiles path). Figma keeps its
+	// standalone route and must not declare this invocation.
+	const FRONT_DOOR_SKILLS = ["atlassian", "canva", "context7", "firecrawl", "mermaid"];
+	const RELATIVE = "../../bin/connectors";
+	const INVOCATION = `CONNECTORS="$SKILL_DIR/${RELATIVE}"`;
+
+	test("exactly the front-door Skills declare the invocation line, and it resolves from each Skill directory to the executable front door", async () => {
+		const skillsRoot = path.join(PLUGIN_ROOT, "skills");
+		const declaring = readdirSync(skillsRoot)
+			.filter((skill) => existsSync(path.join(skillsRoot, skill, "SKILL.md")))
+			.filter((skill) => readFileSync(path.join(skillsRoot, skill, "SKILL.md"), "utf8").split("\n").includes(INVOCATION))
+			.sort();
+		expect(declaring).toEqual(FRONT_DOOR_SKILLS);
+		const resolved = [...new Set(FRONT_DOOR_SKILLS.map((skill) => path.resolve(skillsRoot, skill, RELATIVE)))];
+		expect(resolved).toEqual([FRONT_DOOR]);
+		expect(() => accessSync(FRONT_DOOR, constants.X_OK)).not.toThrow();
+		const proc = Bun.spawn([FRONT_DOOR, "--discover", "--json"], { env: { HOME: "/tmp", PATH: "/usr/bin:/bin" }, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
+		const [stdout, stderr, code] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text(), proc.exited]);
+		expect({ code, stderr }).toEqual({ code: 0, stderr: "" });
+		expect(JSON.parse(stdout).result).toMatchObject({ commandIdentity: "connectors.discovery", outcome: "success" });
+	});
 });

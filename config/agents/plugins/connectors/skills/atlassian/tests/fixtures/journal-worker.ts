@@ -3,7 +3,9 @@
 // points, and lock holders are real. Writes one marker file per dispatch so
 // the test has an oracle outside the journal.
 //   journal-worker <stateRoot> <previewId> <mode> [holdMs]
-//   modes: hold | barrier | crash-before-intent | crash-after-intent | crash-in-dispatch
+//   modes: hold | barrier | send-barrier | crash-before-intent | crash-after-intent | crash-in-dispatch
+//   send-barrier marks sending first, as a dispatcher does before its request
+//   can leave the process; barrier never marks it.
 import { existsSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { JournalError, openJournal } from "../../scripts/dispatch/journal.ts";
@@ -16,11 +18,12 @@ const journal = openJournal("example", {
 const input = JSON.parse(process.env.JOURNAL_INPUT ?? "{}") as unknown;
 const revision = process.env.JOURNAL_REVISION ?? null;
 try {
-	const receipt = await journal.apply({ provider: "community", previewId, canonicalInput: input, providerArgs: input, revision }, async (intent) => {
+	const receipt = await journal.apply({ provider: "community", previewId, canonicalInput: input, providerArgs: input, revision }, async (intent, sending) => {
+		if (mode === "send-barrier") sending();
 		writeFileSync(path.join(stateRoot, "markers", `${intent.runId}.marker`), "");
 		process.stdout.write("dispatching\n");
 		if (mode === "crash-in-dispatch") process.exit(9);
-		if (mode === "barrier") while (!existsSync(path.join(stateRoot, "barrier"))) await Bun.sleep(20);
+		if (mode === "barrier" || mode === "send-barrier") while (!existsSync(path.join(stateRoot, "barrier"))) await Bun.sleep(20);
 		if (mode === "hold") await Bun.sleep(Number(holdMs));
 		return { proof: "completed", effects: [{ kind: "jira-comment", id: "10001" }] };
 	});

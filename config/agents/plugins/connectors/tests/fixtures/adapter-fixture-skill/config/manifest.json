@@ -1,0 +1,9 @@
+{
+	"schemaVersion": 1,
+	"id": "adapter-fixture-skill",
+	"transport": { "registry": "./mcporter.json" },
+	"selectors": {},
+	"requirements": [],
+	"adapter": "test-auth",
+	"credentials": { "reference": "1Password:API Credentials/fixture-item" }
+}

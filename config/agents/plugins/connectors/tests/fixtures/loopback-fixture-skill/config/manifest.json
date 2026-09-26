@@ -1,0 +1,9 @@
+{
+	"schemaVersion": 1,
+	"id": "loopback-fixture-skill",
+	"transport": { "registry": "./mcporter.json" },
+	"selectors": { "account": { "pattern": "^[a-z][a-z0-9-]{0,31}$", "required": true } },
+	"requirements": ["mcporter"],
+	"adapter": "test-auth",
+	"credentials": null
+}

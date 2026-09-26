@@ -1,17 +1,13 @@
 // Credential item rules: the semantic tenant slug, the product, the
-// product-specific 1Password item title, the item's field map, its top-level
-// version, and the trusted site origin. Reads go through the dotfiles
-// credential helper; nothing here prints a value.
-import { statSync } from "node:fs";
-import path from "node:path";
-import { type EnvironmentSource, safeEnvironment } from "../../../../bin/safe-environment.ts";
+// 1Password item ID, the item's field map, its top-level id and version, and
+// the trusted site origin. one-password.ts reads the item; nothing here
+// prints a value.
 import { singleLine } from "../provider-process.ts";
 import type { CredentialBinding } from "./channel.ts";
 
 export const TENANT_PATTERN = /^[a-z][a-z0-9-]*$/;
 export const PRODUCTS = ["jira", "confluence"] as const;
 export type Product = (typeof PRODUCTS)[number];
-export const CREDENTIAL_VAULT = "API Credentials";
 // The trusted site origin is the custom `site_url` field only.
 export const SITE_URL_FIELD = "site_url";
 // Raw input must be a bare authority with an optional trailing slash.
@@ -22,26 +18,14 @@ const SITE_HOST = /^[a-z0-9-]+\.atlassian\.net$/;
 
 export const isProduct = (value: string): value is Product => (PRODUCTS as readonly string[]).includes(value);
 
-// One owner of the mapping from semantic tenant slug and product to the
-// 1Password item title. The two concepts stay distinct.
-export function productItemTitle(product: Product, tenant: string): string {
-	if (!TENANT_PATTERN.test(tenant)) throw new Error("tenant-invalid: expected a lowercase tenant slug");
-	if (!isProduct(product)) throw new Error("product-invalid: expected jira or confluence");
-	return `${product.toUpperCase()}_${tenant.replaceAll("-", "_").toUpperCase()}_API_TOKEN`;
-}
-
-export function credentialHelperPath(home: string | undefined): string {
-	return path.join(home ?? "", "code", "dotfiles", "bin", "with-one-password-token");
-}
-
-export function credentialHelperPresent(helper: string): boolean {
-	try {
-		const metadata = statSync(helper);
-		return metadata.isFile() && (metadata.mode & 0o111) !== 0;
-	} catch {
-		return false;
-	}
-}
+// The one syntax rule for a configured 1Password item reference: a strict
+// item ID. 1Password documents an ID as 26 numbers and letters; lowercase is
+// the observed shape, so an uppercase letter fails closed. An allowlist, not a
+// blocklist: an item name, `-` (op's stdin form), a share link, an op://
+// reference, a URL, and every token shape are refused by construction, so a
+// value that passes is nonsecret and safe to store, pass in argv, and print.
+const ITEM_ID_PATTERN = /^[a-z0-9]{26}$/;
+export const isItemId = (value: unknown): value is string => typeof value === "string" && ITEM_ID_PATTERN.test(value);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -103,12 +87,15 @@ export function validSiteUrl(url: string): boolean {
 	return parsed.protocol === "https:" && SITE_HOST.test(host) && parsed.hostname === host && parsed.username === "" && parsed.password === "" && parsed.port === "" && parsed.pathname === "/" && parsed.search === "" && parsed.hash === "";
 }
 
-export type BindingFailure = "credential-invalid" | "credential-revision-unavailable" | "site-url-invalid";
+export type BindingFailure = "credential-invalid" | "credential-revision-unavailable" | "site-url-invalid" | "item-id-mismatch";
 
-// The nonsecret binding a complete item yields: its principal, its top-level
-// positive version, and the trusted site origin. Every other field stays here.
-export function itemBinding(item: unknown): { binding: CredentialBinding } | { cause: BindingFailure } {
+// The nonsecret binding the item read by requestedId yields: that ID, its
+// principal, its top-level positive version, and the trusted site origin.
+// Identity is checked, never inferred from op's resolution: an item whose
+// top-level id is absent or differs is refused. Every other field stays here.
+export function itemBinding(item: unknown, requestedId: string): { binding: CredentialBinding } | { cause: BindingFailure } {
 	if (!isRecord(item)) return { cause: "credential-invalid" };
+	if (!isItemId(requestedId) || item.id !== requestedId) return { cause: "item-id-mismatch" };
 	const version = versionOf(item);
 	const fields = itemFieldMap(item);
 	const principal = fields?.get("username");
@@ -116,20 +103,5 @@ export function itemBinding(item: unknown): { binding: CredentialBinding } | { c
 	if (!fields || !principal || !singleLine(principal) || principal.includes(":")) return { cause: "credential-invalid" };
 	if (!siteUrl || !validSiteUrl(siteUrl)) return { cause: "site-url-invalid" };
 	if (!version) return { cause: "credential-revision-unavailable" };
-	return { binding: { principal, itemVersion: `onepassword-item-version:${version}`, origin: `https://${new URL(siteUrl).hostname}` } };
-}
-
-export type ItemReadFailure = "credential-wrapper-missing" | "credential-unavailable" | "credential-invalid";
-
-// One complete item read through the credential helper, inside this process.
-export function readItem(itemTitle: string, env: EnvironmentSource): { ok: true; item: unknown } | { ok: false; cause: ItemReadFailure } {
-	const helper = credentialHelperPath(env.HOME);
-	if (!credentialHelperPresent(helper)) return { ok: false, cause: "credential-wrapper-missing" };
-	const read = Bun.spawnSync([helper, "op", "item", "get", itemTitle, "--vault", CREDENTIAL_VAULT, "--format", "json"], { env: safeEnvironment(env), stdin: "ignore", stdout: "pipe", stderr: "pipe" });
-	if (read.exitCode !== 0) return { ok: false, cause: "credential-unavailable" };
-	try {
-		return { ok: true, item: JSON.parse(read.stdout.toString()) };
-	} catch {
-		return { ok: false, cause: "credential-invalid" };
-	}
+	return { binding: { principal, itemVersion: `onepassword-item-version:${version}`, origin: `https://${new URL(siteUrl).hostname}`, item: requestedId } };
 }

@@ -413,9 +413,13 @@ describe("intent, settlement, and evidence", () => {
 		rmSync(meta);
 		expect((await applyOk(j, comment(j).previewId)).status).toBe("completed");
 		expect(listing("locks")).toEqual([]);
-	});
+		// Each of the three refusals first waits out the meta-lock bound.
+	}, 10_000);
 
-	test("release never unlinks an object lock whose lockId it did not write", async () => {
+	// The first object-lock release is the one after the intent is written, so
+	// the failed release leaves a durable record: the apply must answer with
+	// it, not a refusal, and must not dispatch while the lock may be held.
+	test("a release that fails after the intent never unlinks a foreign lock, never dispatches, and answers with the open unsent receipt", async () => {
 		const j = journal({
 			hooks: {
 				// Tamper with the object lock only; the meta-lock release must still verify its own id.
@@ -424,9 +428,28 @@ describe("intent, settlement, and evidence", () => {
 				},
 			},
 		});
-		await expect(applyOk(j, comment(j).previewId)).rejects.toThrow(/lock-tampered/);
+		const p = comment(j);
+		let dispatched = 0;
+		const request = { provider: "community" as const, previewId: p.previewId, canonicalInput: COMMENT, providerArgs: COMMENT, revision: "v7" };
+		const dispatch = async (_intent: unknown, sending: () => void) => {
+			dispatched += 1;
+			sending();
+			return ok;
+		};
+		const answered = await j.apply(request, dispatch);
+		expect([answered.status, answered.send]).toEqual(["intent", "unsent"]);
+		expect(dispatched).toBe(0);
+		// The persisted records, read without the journal, agree with the answer.
+		expect(listing("receipts")).toEqual([`${answered.runId}.json`]);
+		const persisted = JSON.parse(readFileSync(path.join(dir("receipts"), `${answered.runId}.json`), "utf8")) as { status: string; send: string; previewId: string };
+		expect([persisted.status, persisted.send, persisted.previewId]).toEqual(["intent", "unsent", p.previewId]);
+		expect((JSON.parse(readFileSync(path.join(dir("previews"), `${p.previewId}.json`), "utf8")) as { status: string }).status).toBe("consumed");
 		const lockFile = path.join(dir("locks"), `${objectIdentity("issue.comment", COMMENT).replace(/[^A-Za-z0-9_-]/g, "_")}.lock`);
 		expect((JSON.parse(readFileSync(lockFile, "utf8")) as { lockId: string }).lockId).toBe("foreign");
+		// A second apply of the same preview cannot write twice.
+		await expect(j.apply(request, dispatch)).rejects.toThrow(/write-locked/);
+		expect(dispatched).toBe(0);
+		expect(listing("receipts")).toHaveLength(1);
 	});
 
 	test("resolve needs evidence, never presumes no effect, refuses invalid evidence, and is final", async () => {
@@ -631,6 +654,76 @@ describe("cross-process safety", () => {
 		const result = await drain(worker);
 		expect(result.lines.at(-1)).toBe("error receipt-not-in-flight");
 		expect((JSON.parse(readFileSync(file, "utf8")) as { status: string }).status).toBe("unknown");
+	});
+
+	// AC16 regression (t5-competing-applies-diagnosis): another process's
+	// meta-lock met while settling after the send mark. A foreign .meta
+	// planted while the worker waits stands in for a competing apply's brief
+	// hold; the markers, not the worker's own report, count dispatches.
+	const plantMeta = () => {
+		const meta = path.join(dir("locks"), ".meta");
+		writeFileSync(meta, JSON.stringify({ pid: 2_147_483_000, lockId: "competing", at: now }), { mode: 0o600 });
+		return meta;
+	};
+
+	// A competing apply holds the object lock only from its claim to its
+	// release, never across dispatch; settle waits it out without holding the
+	// meta-lock, or the holder could never take the meta-lock to release it.
+	const plantObjectLock = () => {
+		const lock = path.join(dir("locks"), `${objectIdentity("issue.comment", COMMENT).replace(/[^A-Za-z0-9_-]/g, "_")}.lock`);
+		writeFileSync(lock, JSON.stringify({ pid: 2_147_483_000, lockId: "competing", at: now }), { mode: 0o600 });
+		return lock;
+	};
+
+	test.each([
+		["a meta-lock", plantMeta],
+		["an object lock", plantObjectLock],
+	] as const)("%s released within the wait bound after the send mark delays settlement instead of reporting a completed write unknown", async (_kind, plant) => {
+		const p = comment(real());
+		const worker = spawnWorker(p.previewId, "send-barrier");
+		await untilDispatching(worker);
+		const held = plant();
+		writeFileSync(path.join(root, "barrier"), "");
+		await Bun.sleep(200);
+		rmSync(held);
+		const result = await drain(worker);
+		expect([result.code, result.lines.at(-1)]).toEqual([0, "done completed"]);
+		expect(markers()).toBe(1);
+		expect(listing("locks")).toEqual([]);
+		expect(real().openReceipts()).toEqual([]);
+	});
+
+	// Either way the intent is durable, so the worker answers with its open
+	// receipt rather than a refusal. The send mark is what differs: once the
+	// operator removes the stale meta-lock, read-back absence settles only the
+	// receipt that never reached it (the barrier row is the negative control).
+	test.each([
+		["send-barrier", "possible", "evidence-insufficient"],
+		["barrier", "unsent", "unchanged"],
+	] as const)("a meta-lock held beyond the wait bound: a %s worker answers with its open %s receipt, and read-back absence resolves it as %s", async (mode, send, absent) => {
+		const p = comment(real());
+		const worker = spawnWorker(p.previewId, mode);
+		await untilDispatching(worker);
+		const meta = plantMeta();
+		writeFileSync(path.join(root, "barrier"), "");
+		const result = await drain(worker);
+		expect([result.code, result.lines.at(-1)]).toEqual([0, "done intent"]);
+		expect(markers()).toBe(1);
+		expect(existsSync(meta)).toBe(true);
+		expect(listing("locks")).toEqual([]);
+		const j = real();
+		const open = j.openReceipts();
+		expect(open.map((entry) => [entry.status, entry.send])).toEqual([["intent", send]]);
+		rmSync(meta);
+		const resolved = (() => {
+			try {
+				return j.resolve(open[0]?.runId ?? "", { proof: "unchanged", basis: "readback-absent" }).status;
+			} catch (error) {
+				return error instanceof JournalError ? error.code : "unexpected";
+			}
+		})();
+		expect(resolved).toBe(absent);
+		expect(markers()).toBe(1);
 	});
 
 	test("a stale lock is never reclaimed automatically; unlock refuses a live holder and clears a dead one", async () => {

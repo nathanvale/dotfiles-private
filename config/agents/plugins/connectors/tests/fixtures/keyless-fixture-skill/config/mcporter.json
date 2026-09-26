@@ -1,0 +1,10 @@
+{
+	"imports": [],
+	"mcpServers": {
+		"keyless-fixture-skill": {
+			"description": "Test-only stdio probe used to prove manifest-only Connector Skill addition",
+			"command": "../../stdio-probe-server.ts",
+			"allowedTools": ["probe"]
+		}
+	}
+}
