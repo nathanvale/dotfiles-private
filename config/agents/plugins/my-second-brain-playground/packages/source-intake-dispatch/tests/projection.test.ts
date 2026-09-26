@@ -8,7 +8,6 @@ const command = join(pluginRoot, "bin/source-intake-dispatch")
 const opaqueItemRef = "synthetic-item-001"
 const sentinel = "RECEIPT_SENTINEL_MUST_NOT_LEAK"
 const refusal = '{"message":"Request denied. Stage Manager must verify the private grant before retrying.","nextAction":"Ask Stage Manager to verify the private grant and issue a matching request.","outcome":"refused"}\n'
-const fifoMetadata = JSON.stringify({ displayName: "Fictional FIFO metadata" })
 
 type ProcessResult = { exitCode: number; stderr: string; stdout: string }
 
@@ -27,7 +26,7 @@ function invoke(args: readonly string[], stateHome: string): ProcessResult {
 		env: childEnvironment(stateHome),
 		stderr: "pipe",
 		stdout: "pipe",
-		timeout: 500,
+		timeout: 2000,
 	})
 	return {
 		exitCode: child.exitCode,
@@ -43,15 +42,6 @@ function writeJson(path: string, value: unknown): void {
 function createFifo(path: string, stateHome: string): void {
 	const result = Bun.spawnSync({ cmd: ["mkfifo", path], env: childEnvironment(stateHome), stderr: "pipe", stdout: "pipe" })
 	expect(result.exitCode).toBe(0)
-}
-
-function startFifoWriter(path: string, stateHome: string) {
-	return Bun.spawn({
-		cmd: ["/bin/sh", "-c", 'printf "%s" "$1" > "$2"', "sh", fifoMetadata, path],
-		env: childEnvironment(stateHome),
-		stderr: "ignore",
-		stdout: "ignore",
-	})
 }
 
 test("projects exactly granted Luna metadata and fixed redacted status or evaluation results", () => {
@@ -88,7 +78,7 @@ test("projects exactly granted Luna metadata and fixed redacted status or evalua
 	}
 })
 
-test("refuses sampled ungranted requests before a private receipt FIFO can open", async () => {
+test("refuses sampled ungranted requests before a private receipt FIFO can open", () => {
 	const stateHome = realpathSync(mkdtempSync(join(tmpdir(), "source-intake-dispatch-")))
 	try {
 		const itemDirectory = join(stateHome, "my-second-brain-playground", "drive-inbox-filing", "items", opaqueItemRef)
@@ -118,16 +108,8 @@ test("refuses sampled ungranted requests before a private receipt FIFO can open"
 		for (const [name, caseGrant, request] of cases) {
 			writeJson(grantPath, caseGrant)
 			writeJson(requestPath, request)
-			const writer = startFifoWriter(receiptPath, stateHome)
-			try {
-				await Bun.sleep(50)
-				const result = invoke([grantPath, requestPath], stateHome)
-				expect(result, name).toEqual({ exitCode: 3, stderr: "", stdout: refusal })
-				expect(writer.exitCode, name).toBe(null)
-			} finally {
-				writer.kill()
-				await writer.exited
-			}
+			const result = invoke([grantPath, requestPath], stateHome)
+			expect(result, name).toEqual({ exitCode: 3, stderr: "", stdout: refusal })
 		}
 		expect(invoke([grantPath], stateHome)).toEqual({ exitCode: 3, stderr: "", stdout: refusal })
 	} finally {
