@@ -70,7 +70,7 @@ test("projects exactly granted Luna metadata and fixed redacted status or evalua
 	}
 })
 
-test("refuses every ungranted request before a private receipt FIFO can open", () => {
+test("refuses sampled ungranted requests before a private receipt FIFO can open", () => {
 	const stateHome = realpathSync(mkdtempSync(join(tmpdir(), "source-intake-dispatch-")))
 	try {
 		const itemDirectory = join(stateHome, "my-second-brain-playground", "drive-inbox-filing", "items", opaqueItemRef)
