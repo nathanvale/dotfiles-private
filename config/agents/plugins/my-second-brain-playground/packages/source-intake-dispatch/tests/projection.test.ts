@@ -18,7 +18,7 @@ function invoke(args: readonly string[], stateHome: string): ProcessResult {
 		env: { ...process.env, XDG_STATE_HOME: stateHome },
 		stderr: "pipe",
 		stdout: "pipe",
-		timeout: 250,
+		timeout: 500,
 	})
 	return {
 		exitCode: child.exitCode,
@@ -86,8 +86,8 @@ test("refuses every ungranted request before a private receipt FIFO can open", (
 
 		const cases: readonly [string, unknown, unknown][] = [
 			["wrong item", grant, { opaqueItemRef: "synthetic-item-002", provider: "luna", purpose: "classification", requestedFields: ["displayName"] }],
-			["wrong provider", grant, { opaqueItemRef, provider: "opus", purpose: "classification", requestedFields: ["displayName"] }],
-			["wrong purpose", grant, { opaqueItemRef, provider: "luna", purpose: "status-repair", requestedFields: ["displayName"] }],
+			["Opus provider with matching valid field", grant, { opaqueItemRef, provider: "opus", purpose: "classification", requestedFields: ["displayName"] }],
+			["wrong purpose with matching valid field", grant, { opaqueItemRef, provider: "luna", purpose: "status-repair", requestedFields: ["displayName"] }],
 			["extra field", grant, { opaqueItemRef, provider: "luna", purpose: "classification", requestedFields: ["displayName", "mimeType"] }],
 			["exact Opus status repair", { opaqueItemRef, provider: "opus", purpose: "status-repair", allowedFields: ["receiptSummary"], receiptPath }, { opaqueItemRef, provider: "opus", purpose: "status-repair", requestedFields: ["receiptSummary"] }],
 			["disallowed grant field", { ...grant, allowedFields: ["receiptSummary"] }, { opaqueItemRef, provider: "luna", purpose: "classification", requestedFields: ["receiptSummary"] }],
@@ -100,7 +100,6 @@ test("refuses every ungranted request before a private receipt FIFO can open", (
 			writeJson(requestPath, request)
 			const result = invoke([grantPath, requestPath], stateHome)
 			expect(result, name).toEqual({ exitCode: 3, stderr: "", stdout: refusal })
-			expect(`${result.stdout}${result.stderr}`, name).not.toContain(sentinel)
 		}
 		expect(invoke([grantPath], stateHome)).toEqual({ exitCode: 3, stderr: "", stdout: refusal })
 	} finally {

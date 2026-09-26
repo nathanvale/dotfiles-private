@@ -38,8 +38,11 @@ Follow the command contract in
 validates the manifest and request before opening that file. Only its allowed
 projection reaches Luna; a refusal is final until Stage Manager verifies a
 matching grant. Do not give Luna a receipt path or raw item receipt. Status and
-evaluation workers receive only `source-intake-dispatch --redacted status` or
-`source-intake-dispatch --redacted evaluation`; Vault Steward receives only
+evaluation use `source-intake-dispatch --redacted status` or
+`source-intake-dispatch --redacted evaluation` by default. When an exact user
+grant expressly authorizes the DIS-7 fresh-evaluator route, that foreground
+evaluator may inspect the private receipt and exact Drive readback; it is a
+separate route and never a Luna input. Vault Steward receives only
 Nathan-approved note content. This Cast Member is the Luna classifier lane;
 another provider needs its own supported lane and recorded grant. For a
 foreground invocation, obtain the same grant before the model receives source
