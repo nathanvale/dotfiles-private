@@ -8,14 +8,23 @@ const command = join(pluginRoot, "bin/source-intake-dispatch")
 const opaqueItemRef = "synthetic-item-001"
 const sentinel = "RECEIPT_SENTINEL_MUST_NOT_LEAK"
 const refusal = '{"message":"Request denied. Stage Manager must verify the private grant before retrying.","nextAction":"Ask Stage Manager to verify the private grant and issue a matching request.","outcome":"refused"}\n'
+const fifoMetadata = JSON.stringify({ displayName: "Fictional FIFO metadata" })
 
 type ProcessResult = { exitCode: number; stderr: string; stdout: string }
+
+function childEnvironment(stateHome: string): Record<string, string> {
+	return {
+		HOME: process.env.HOME ?? "",
+		PATH: process.env.PATH ?? "",
+		XDG_STATE_HOME: stateHome,
+	}
+}
 
 function invoke(args: readonly string[], stateHome: string): ProcessResult {
 	const child = Bun.spawnSync({
 		cmd: [command, ...args],
 		cwd: pluginRoot,
-		env: { ...process.env, XDG_STATE_HOME: stateHome },
+		env: childEnvironment(stateHome),
 		stderr: "pipe",
 		stdout: "pipe",
 		timeout: 500,
@@ -31,9 +40,18 @@ function writeJson(path: string, value: unknown): void {
 	writeFileSync(path, JSON.stringify(value))
 }
 
-function createFifo(path: string): void {
-	const result = Bun.spawnSync({ cmd: ["mkfifo", path], stderr: "pipe", stdout: "pipe" })
+function createFifo(path: string, stateHome: string): void {
+	const result = Bun.spawnSync({ cmd: ["mkfifo", path], env: childEnvironment(stateHome), stderr: "pipe", stdout: "pipe" })
 	expect(result.exitCode).toBe(0)
+}
+
+function startFifoWriter(path: string, stateHome: string) {
+	return Bun.spawn({
+		cmd: ["/bin/sh", "-c", 'printf "%s" "$1" > "$2"', "sh", fifoMetadata, path],
+		env: childEnvironment(stateHome),
+		stderr: "ignore",
+		stdout: "ignore",
+	})
 }
 
 test("projects exactly granted Luna metadata and fixed redacted status or evaluation results", () => {
@@ -70,15 +88,15 @@ test("projects exactly granted Luna metadata and fixed redacted status or evalua
 	}
 })
 
-test("refuses sampled ungranted requests before a private receipt FIFO can open", () => {
+test("refuses sampled ungranted requests before a private receipt FIFO can open", async () => {
 	const stateHome = realpathSync(mkdtempSync(join(tmpdir(), "source-intake-dispatch-")))
 	try {
 		const itemDirectory = join(stateHome, "my-second-brain-playground", "drive-inbox-filing", "items", opaqueItemRef)
 		mkdirSync(itemDirectory, { recursive: true })
 		const receiptPath = join(itemDirectory, "classification-metadata.json")
 		const outsideReceiptPath = join(stateHome, "outside.json")
-		createFifo(receiptPath)
-		createFifo(outsideReceiptPath)
+		createFifo(receiptPath, stateHome)
+		createFifo(outsideReceiptPath, stateHome)
 		const grantPath = join(stateHome, "grant.json")
 		const requestPath = join(stateHome, "request.json")
 		const grant = { opaqueItemRef, provider: "luna", purpose: "classification", allowedFields: ["displayName"], receiptPath }
@@ -87,7 +105,9 @@ test("refuses sampled ungranted requests before a private receipt FIFO can open"
 		const cases: readonly [string, unknown, unknown][] = [
 			["wrong item", grant, { opaqueItemRef: "synthetic-item-002", provider: "luna", purpose: "classification", requestedFields: ["displayName"] }],
 			["Opus provider with matching valid field", grant, { opaqueItemRef, provider: "opus", purpose: "classification", requestedFields: ["displayName"] }],
+			["unsupported matching Opus provider", { ...grant, provider: "opus" }, { opaqueItemRef, provider: "opus", purpose: "classification", requestedFields: ["displayName"] }],
 			["wrong purpose with matching valid field", grant, { opaqueItemRef, provider: "luna", purpose: "status-repair", requestedFields: ["displayName"] }],
+			["unsupported matching status-repair purpose", { ...grant, purpose: "status-repair" }, { opaqueItemRef, provider: "luna", purpose: "status-repair", requestedFields: ["displayName"] }],
 			["extra field", grant, { opaqueItemRef, provider: "luna", purpose: "classification", requestedFields: ["displayName", "mimeType"] }],
 			["exact Opus status repair", { opaqueItemRef, provider: "opus", purpose: "status-repair", allowedFields: ["receiptSummary"], receiptPath }, { opaqueItemRef, provider: "opus", purpose: "status-repair", requestedFields: ["receiptSummary"] }],
 			["disallowed grant field", { ...grant, allowedFields: ["receiptSummary"] }, { opaqueItemRef, provider: "luna", purpose: "classification", requestedFields: ["receiptSummary"] }],
@@ -98,10 +118,42 @@ test("refuses sampled ungranted requests before a private receipt FIFO can open"
 		for (const [name, caseGrant, request] of cases) {
 			writeJson(grantPath, caseGrant)
 			writeJson(requestPath, request)
-			const result = invoke([grantPath, requestPath], stateHome)
-			expect(result, name).toEqual({ exitCode: 3, stderr: "", stdout: refusal })
+			const writer = startFifoWriter(receiptPath, stateHome)
+			try {
+				await Bun.sleep(50)
+				const result = invoke([grantPath, requestPath], stateHome)
+				expect(result, name).toEqual({ exitCode: 3, stderr: "", stdout: refusal })
+				expect(writer.exitCode, name).toBe(null)
+			} finally {
+				writer.kill()
+				await writer.exited
+			}
 		}
 		expect(invoke([grantPath], stateHome)).toEqual({ exitCode: 3, stderr: "", stdout: refusal })
+	} finally {
+		rmSync(stateHome, { force: true, recursive: true })
+	}
+})
+
+test("refuses matching unsupported provider or purpose with valid metadata", () => {
+	const stateHome = realpathSync(mkdtempSync(join(tmpdir(), "source-intake-dispatch-")))
+	try {
+		const itemDirectory = join(stateHome, "my-second-brain-playground", "drive-inbox-filing", "items", opaqueItemRef)
+		mkdirSync(itemDirectory, { recursive: true })
+		const receiptPath = join(itemDirectory, "classification-metadata.json")
+		const grantPath = join(stateHome, "grant.json")
+		const requestPath = join(stateHome, "request.json")
+		writeJson(receiptPath, { displayName: "Fictional valid metadata" })
+
+		const cases: readonly [unknown, unknown][] = [
+			[{ opaqueItemRef, provider: "opus", purpose: "classification", allowedFields: ["displayName"], receiptPath }, { opaqueItemRef, provider: "opus", purpose: "classification", requestedFields: ["displayName"] }],
+			[{ opaqueItemRef, provider: "luna", purpose: "status-repair", allowedFields: ["displayName"], receiptPath }, { opaqueItemRef, provider: "luna", purpose: "status-repair", requestedFields: ["displayName"] }],
+		]
+		for (const [grant, request] of cases) {
+			writeJson(grantPath, grant)
+			writeJson(requestPath, request)
+			expect(invoke([grantPath, requestPath], stateHome)).toEqual({ exitCode: 3, stderr: "", stdout: refusal })
+		}
 	} finally {
 		rmSync(stateHome, { force: true, recursive: true })
 	}
@@ -116,7 +168,7 @@ test("refuses a symlinked private item directory before its receipt FIFO can ope
 		const receiptPath = join(itemDirectory, "classification-metadata.json")
 		mkdirSync(itemsDirectory, { recursive: true })
 		mkdirSync(redirectedDirectory)
-		createFifo(join(redirectedDirectory, "classification-metadata.json"))
+		createFifo(join(redirectedDirectory, "classification-metadata.json"), stateHome)
 		symlinkSync(redirectedDirectory, itemDirectory)
 		const grantPath = join(stateHome, "grant.json")
 		const requestPath = join(stateHome, "request.json")
