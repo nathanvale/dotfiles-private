@@ -11,7 +11,7 @@
     "ask": [],
     "defaultMode": "bypassPermissions"
   },
-  "model": "claude-fable-5-1",
+  "model": "opus",
   "enableAllProjectMcpServers": false,
   "disabledMcpjsonServers": [],
   "disableClaudeAiConnectors": true,
