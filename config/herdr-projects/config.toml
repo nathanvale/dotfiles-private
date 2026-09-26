@@ -1,0 +1,5 @@
+root = "/Users/nathanvale/.local/share/my-second-brain-playground/herdr-projects-root"
+
+[profiles.codex-safe]
+agent = "codex"
+args = ["--sandbox", "workspace-write", "--ask-for-approval", "on-request", "--search"]
