@@ -278,5 +278,6 @@
 	"workbench.secondarySideBar.showLabels": false,
 	"editor.accessibilitySupport": "on",
 	"diffEditor.codeLens": true,
-	"security.workspace.trust.untrustedFiles": "open"
+	"security.workspace.trust.untrustedFiles": "open",
+	"claudeCode.hideOnboarding": true
 }
