@@ -89,7 +89,9 @@ An apply ends one of three ways:
   unresolved; the object stays blocked. Run
   `recover mermaid --run <runId>` to inspect it, then
   `recover mermaid --run <runId> --adjudicate --input <identical json>`,
-  which settles it only when the read-back finds the effect or proves none.
+  which settles it when the read-back finds the effect. If the request may
+  have left without a reply, an absent effect is inconclusive and the object
+  remains blocked.
 
 `recover mermaid` lists unresolved receipts. `recover mermaid --run <runId>
 --unlock` releases a lock only after its holder has exited. An apply that
