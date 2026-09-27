@@ -32,6 +32,29 @@ export interface RestRequest {
 // dropped.
 export const HEAD_BYTES = 64;
 
+// Read at most `limit` leading bytes from a response body and cancel the rest,
+// so a server that ignores the Range header cannot make the credential-bearing
+// Provider buffer a whole attachment. A chunk larger than the remaining need
+// is still received once, as the stream delivers it, but never more than one.
+export async function readLeadingBytes(body: ReadableStream<Uint8Array> | null, limit: number): Promise<Uint8Array> {
+	if (body === null || limit <= 0) return new Uint8Array();
+	const reader = body.getReader();
+	const leading = new Uint8Array(limit);
+	let filled = 0;
+	try {
+		while (filled < limit) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			const take = Math.min(value.byteLength, limit - filled);
+			leading.set(value.subarray(0, take), filled);
+			filled += take;
+		}
+	} finally {
+		await reader.cancel().catch(() => undefined);
+	}
+	return leading.subarray(0, filled);
+}
+
 export interface RestReply {
 	status: number;
 	body: unknown;

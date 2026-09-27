@@ -7,7 +7,7 @@
 // {status, body} line. The credential exists only in this process's memory
 // and in the Authorization header; it is never printed and never an argument.
 import { boundItem, providerInvocation } from "./custody/index.ts";
-import { authorGuardVerdict, editGuardRequests, HEAD_BYTES, type RestReply, type RestRequest, restRequest } from "./dispatch/rest.ts";
+import { authorGuardVerdict, editGuardRequests, HEAD_BYTES, readLeadingBytes, type RestReply, type RestRequest, restRequest } from "./dispatch/rest.ts";
 import { atlassianProcess, singleLine } from "./provider-process.ts";
 
 const TIMEOUT_MS = 30_000;
@@ -59,8 +59,10 @@ async function perform(origin: string, authorization: string, request: RestReque
 			signal: AbortSignal.timeout(TIMEOUT_MS),
 		});
 		if (request.range !== undefined) {
-			// A bounded binary read: only the leading bytes leave this process, as hex.
-			const bytes = new Uint8Array(await response.arrayBuffer()).subarray(0, HEAD_BYTES);
+			// A bounded binary read: the stream is consumed only up to the leading
+			// bytes and then cancelled, whether or not the server honoured Range,
+			// and only those bytes leave this process, as hex.
+			const bytes = await readLeadingBytes(response.body, HEAD_BYTES);
 			return { status: response.status, body: { bytes: Buffer.from(bytes).toString("hex") } };
 		}
 		return { status: response.status, body: parseBody(await response.text()) };

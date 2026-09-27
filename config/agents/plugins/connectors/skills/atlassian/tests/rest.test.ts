@@ -4,7 +4,7 @@
 // Cloud REST v2 reference and the prototype run on SMSTX-364 (28 September
 // 2026).
 import { describe, expect, test } from "bun:test";
-import { authorGuardVerdict, editGuardRequests, restReply, restRequest, restSchema } from "../scripts/dispatch/rest.ts";
+import { authorGuardVerdict, editGuardRequests, HEAD_BYTES, readLeadingBytes, restReply, restRequest, restSchema } from "../scripts/dispatch/rest.ts";
 
 const RENDERED = "expand=renderedBody";
 
@@ -59,6 +59,29 @@ describe("REST requests", () => {
 		expect(authorGuardVerdict({ emailAddress: "me@example.invalid" }, { id: "454771", author: { accountId: "712020:me" } })).toBe("unverifiable");
 		expect(authorGuardVerdict(null, null)).toBe("unverifiable");
 		expect(authorGuardVerdict({ accountId: "" }, { author: { accountId: "" } })).toBe("unverifiable");
+	});
+
+	test("the head read takes only the leading bytes from a body and cancels the rest, even when the server ignores Range and streams a large body", async () => {
+		// An endless stream of 1 KiB chunks stands in for a server that ignored Range on a large attachment.
+		let pulls = 0;
+		let cancelled = false;
+		const endless = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				pulls += 1;
+				controller.enqueue(new Uint8Array(1024).fill(pulls));
+			},
+			cancel() {
+				cancelled = true;
+			},
+		});
+		const leading = await readLeadingBytes(endless, HEAD_BYTES);
+		expect([leading.byteLength, cancelled, pulls <= 2]).toEqual([HEAD_BYTES, true, true]);
+		expect(leading[0]).toBe(1);
+		// Small bodies come back whole; several small chunks are joined in order; a missing body is empty.
+		const chunks = (...parts: number[][]) => new ReadableStream<Uint8Array>({ start(controller) { for (const part of parts) controller.enqueue(new Uint8Array(part)); controller.close(); } });
+		expect([...(await readLeadingBytes(chunks([1, 2], [3]), HEAD_BYTES))]).toEqual([1, 2, 3]);
+		expect([...(await readLeadingBytes(chunks([1, 2, 3, 4, 5]), 4))]).toEqual([1, 2, 3, 4]);
+		expect((await readLeadingBytes(null, HEAD_BYTES)).byteLength).toBe(0);
 	});
 
 	test("the Provider reply is a status and a body, and nothing else", () => {
