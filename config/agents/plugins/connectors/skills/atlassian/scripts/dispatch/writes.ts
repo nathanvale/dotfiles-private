@@ -987,19 +987,40 @@ export function resolveMediaAttachments(attachments: readonly IssueAttachment[],
 
 // The image type an attachment's first bytes prove, from the REST head read
 // ({bytes: hex}). Only these four signatures are accepted; anything else,
-// including a short or malformed read, is undefined.
+// including a short or malformed read, a redirect page, or a read the
+// Provider could not complete, is undefined.
+//
+// Why this read exists: the Community upload (mcp-atlassian upload_attachment
+// over atlassian-python-api add_attachment) posts the file part with no MIME
+// type, so Jira stores none and every issue.attach upload arrives untyped.
+// Jira serves `attachment/content/<id>?redirect=false` as a JSON string of
+// base64 (observed live, 28 September 2026), so a leading quote means the
+// content is decoded from base64 first; raw bytes are checked as they are.
 const IMAGE_SIGNATURES: readonly [RegExp, string][] = [
 	[/^89504e470d0a1a0a/, "image/png"],
 	[/^ffd8ff/, "image/jpeg"],
 	[/^47494638(?:37|39)61/, "image/gif"],
 	[/^52494646[0-9a-f]{8}57454250/, "image/webp"],
 ];
+const JSON_QUOTE = 0x22;
+const BASE64_ALPHABET = /^[A-Za-z0-9+/=]$/;
+
+function leadingContent(bytes: Uint8Array): Uint8Array {
+	if (bytes[0] !== JSON_QUOTE) return bytes;
+	let end = 1;
+	while (end < bytes.length && BASE64_ALPHABET.test(String.fromCharCode(bytes[end] as number))) end += 1;
+	const run = bytes.subarray(1, end);
+	// A Range read cuts the base64 anywhere; only whole quartets decode.
+	const usable = run.length - (run.length % 4);
+	return usable === 0 ? new Uint8Array() : Uint8Array.from(Buffer.from(Buffer.from(run.subarray(0, usable)).toString("latin1"), "base64"));
+}
 
 export function magicImageType(reply: unknown): string | undefined {
 	const data = unwrapReply(reply);
 	const hex = isRecord(data) && typeof data.bytes === "string" ? data.bytes.toLowerCase() : undefined;
-	if (hex === undefined || !/^[0-9a-f]*$/.test(hex)) return undefined;
-	return IMAGE_SIGNATURES.find(([signature]) => signature.test(hex))?.[1];
+	if (hex === undefined || hex.length % 2 !== 0 || !/^[0-9a-f]*$/.test(hex)) return undefined;
+	const content = Buffer.from(leadingContent(Uint8Array.from(Buffer.from(hex, "hex")))).toString("hex");
+	return IMAGE_SIGNATURES.find(([signature]) => signature.test(content))?.[1];
 }
 
 // The verified types, digested into the preview baseline so an apply whose

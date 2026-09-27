@@ -24,9 +24,13 @@ export interface RestRequest {
 	range?: string;
 }
 
-// How many leading bytes the attachment head read returns: enough for every
-// supported image signature (WebP needs 12).
-export const HEAD_BYTES = 16;
+// How many leading bytes the attachment head read returns. Jira serves the
+// redirect=false content as a JSON string of base64 (observed live, 28
+// September 2026): one quote, then four base64 characters per three content
+// bytes. 64 bytes decode to at least 47 content bytes, enough for every
+// supported image signature (WebP needs 12) with a partial trailing quartet
+// dropped.
+export const HEAD_BYTES = 64;
 
 export interface RestReply {
 	status: number;

@@ -129,9 +129,11 @@ REST route (`provider: "rest"`, server `atlassian-rest-jira`), which the
 ADR 0001 amendment admits as a capability exception. They are never a
 fallback: a Community operation that fails stays failed.
 
-- `body` is wiki markup. Reference each image as `!name.png!` or
-  `!name.png|width=600!`; write a mention as `[~accountid:<account-id>]`, a
-  link as `[label|https://...]`, code as `{{text}}`, bold as `*text*`.
+- `body` is wiki markup. Reference each image as `!name.png!`, which renders
+  it at its actual size; for a 2x capture, `!name.png|width=<css pixels>!`
+  with the image's CSS pixel width. Write a mention as
+  `[~accountid:<account-id>]`, a link as `[label|https://...]`, code as
+  `{{text}}`, bold as `*text*`.
 - `images` lists exactly the file names the body references. A name the body
   does not reference, or a reference `images` does not name, refuses with
   `input-invalid` before any read.

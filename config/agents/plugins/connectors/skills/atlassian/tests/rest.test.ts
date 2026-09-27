@@ -17,7 +17,7 @@ describe("REST requests", () => {
 		expect(restRequest("jira_rest_comment_add", { issue_key: "PROJ-1", body: "!a.png!" })).toEqual({ method: "POST", path: `/rest/api/2/issue/PROJ-1/comment?${RENDERED}`, body: { body: "!a.png!" } });
 		expect(restRequest("jira_rest_comment_edit", { issue_key: "PROJ-1", comment_id: "454771", body: "!a.png!" })).toEqual({ method: "PUT", path: `/rest/api/2/issue/PROJ-1/comment/454771?${RENDERED}`, body: { body: "!a.png!" } });
 		// The head read asks Jira to serve the bytes itself and bounds them to the signature length.
-		expect(restRequest("jira_rest_attachment_head", { attachment_id: "202456" })).toEqual({ method: "GET", path: "/rest/api/2/attachment/content/202456?redirect=false", range: "bytes=0-15" });
+		expect(restRequest("jira_rest_attachment_head", { attachment_id: "202456" })).toEqual({ method: "GET", path: "/rest/api/2/attachment/content/202456?redirect=false", range: "bytes=0-63" });
 		expect(restRequest("jira_rest_attachment_head", { attachment_id: "202456/../1" })).toBeNull();
 		expect(restRequest("jira_rest_attachment_head", { issue_key: "PROJ-1" })).toBeNull();
 	});

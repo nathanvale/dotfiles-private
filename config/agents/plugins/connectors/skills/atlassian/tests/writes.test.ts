@@ -369,7 +369,17 @@ describe("wiki media comments", () => {
 		expect(resolveMediaAttachments([{ id: "2", name: "shot.png", contentType: "application/octet-stream" }], ["shot.png"])).toEqual(notImage);
 		expect(resolveMediaAttachments([{ id: "3", name: "renamed.png" }, { id: "6", name: "report.pdf" }], ["renamed.png", "report.pdf"])).toEqual({ ok: true, ids: ["3", "6"], types: {}, untyped: [{ id: "3", name: "renamed.png" }, { id: "6", name: "report.pdf" }] });
 		expect(resolveMediaAttachments([{ id: "4", name: "Diagram.JPG", contentType: "image/jpeg" }, { id: "5", name: "x.webp", contentType: "IMAGE/WEBP" }], ["Diagram.JPG", "x.webp"])).toEqual({ ok: true, ids: ["4", "5"], types: { "4": "image/jpeg", "5": "image/webp" }, untyped: [] });
-		// First bytes establish the type: the four supported signatures, and nothing else.
+		// First bytes establish the type: the four supported signatures, and nothing else. Jira serves the content as a JSON string of base64 (live, 28 September 2026); raw bytes are accepted too.
+		expect(magicImageType({ bytes: "226956424f5277304b47676f414141414e53556845556741414174413d" })).toBe("image/png");
+		expect(magicImageType({ bytes: "222f396a2f34414151536b5a4a526741424151453d" })).toBe("image/jpeg");
+		expect(magicImageType({ bytes: "2252306c474f446c684151413d22" })).toBe("image/gif");
+		expect(magicImageType({ bytes: "22556b6c47526952614141425852554a51566c413449413d3d" })).toBe("image/webp");
+		expect(magicImageType({ bytes: "224a564245526930784c6a514b4a513d3d" })).toBeUndefined();
+		// A 16-byte Range read of the JSON string decodes to nine content bytes: enough for PNG, too few for WebP's twelve, which is why the read asks for 64.
+		expect(magicImageType({ bytes: "226956424f5277304b47676f41414141" })).toBe("image/png");
+		expect(magicImageType({ bytes: "22556b6c47526952614141425852554a" })).toBeUndefined();
+		// A redirect page instead of content is not an image.
+		expect(magicImageType({ bytes: "3c21444f43545950452068746d6c3e3c68746d6c3e3c686561643e3c7469746c653e33303320536565204f746865723c2f7469746c653e" })).toBeUndefined();
 		expect(magicImageType({ bytes: "89504e470d0a1a0a0000000d49484452" })).toBe("image/png");
 		expect(magicImageType(wrapped({ bytes: "FFD8FFE000104A46494600010101" }))).toBe("image/jpeg");
 		expect(magicImageType({ bytes: "474946383961" })).toBe("image/gif");

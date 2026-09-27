@@ -1244,8 +1244,9 @@ describe("wiki media comments through the owned REST route", () => {
 
 	test("an attachment Jira reports no type for is established from its first bytes before any write: a PNG is accepted and its type bound in the preview, a PDF is refused, and a failed read refuses", async () => {
 		const untypedAttachments = { ok: true as const, data: { key: "PROJ-1", fields: { attachment: [{ id: "202456", filename: "before.png" }, { id: "202457", filename: "after.png", mimeType: "image/png" }] } } };
-		const PNG = { ok: true as const, data: { bytes: "89504e470d0a1a0a0000000d49484452" } };
-		const PDF = { ok: true as const, data: { bytes: "255044462d312e340a25c7ec8fa20a35" } };
+		// Jira serves the redirect=false content as a JSON string of base64 (live, 28 September 2026): a 64-byte Range read.
+		const PNG = { ok: true as const, data: { bytes: "226956424f5277304b47676f414141414e53556845556741414174413d" } };
+		const PDF = { ok: true as const, data: { bytes: "224a564245526930784c6a514b4a513d3d" } };
 		const HEAD_READ = { server: RJ, tool: "jira_rest_attachment_head", args: { attachment_id: "202456" } };
 		const accepted = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: untypedAttachments, [`${RJ}.jira_rest_attachment_head`]: PNG, [`${RJ}.jira_rest_comments_list`]: comments() });
 		const envelope = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: accepted.transport }));
@@ -1263,6 +1264,13 @@ describe("wiki media comments through the owned REST route", () => {
 		const failedRead = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: unreadable.transport }));
 		expect([failedRead.result.outcome, failedRead.result.causeCode]).toEqual(["failed", "not-found"]);
 		expect(unreadable.calls.map((call) => call.tool)).toEqual(["jira_rest_issue_attachments", "jira_rest_attachment_head"]);
+		// A 303 to the media host: the Provider refuses to follow it, so the transport reports an unclassified failure; a redirect page served as content is not an image either.
+		const redirected = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: untypedAttachments, [`${RJ}.jira_rest_attachment_head`]: failure("failed-unknown") });
+		const redirect = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: redirected.transport }));
+		expect([redirect.result.outcome, redirect.result.causeCode]).toEqual(["failed", "failed-unknown"]);
+		const page = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: untypedAttachments, [`${RJ}.jira_rest_attachment_head`]: { ok: true, data: { bytes: "3c21444f43545950452068746d6c3e3c68746d6c3e3c686561643e3c7469746c653e33303320536565204f746865723c2f7469746c653e" } } });
+		const served = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: page.transport }));
+		expect([served.result.causeCode, served.result.repairAction]).toEqual(["input-invalid", "an image named in images is not an image attachment; only image content renders inline"]);
 		expect(readJsonDir(previewsDir()).map((entry) => entry.previewId)).toEqual([preview.previewId]);
 	});
 
