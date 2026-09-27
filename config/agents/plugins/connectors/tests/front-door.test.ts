@@ -25,6 +25,7 @@ const AVAILABLE_PATHS = [
 	"connectors.deps.update.apply",
 	"connectors.deps.update.preview",
 	"connectors.discovery",
+	"connectors.discovery.command",
 	"connectors.dispatch",
 	"connectors.doctor",
 	"connectors.fixtureAuth",
@@ -93,6 +94,7 @@ describe("compiled front door: discovery", () => {
 		expect(result.stderr).toBe("");
 		expect(() => JSON.parse(result.stdout)).toThrow();
 		expect(result.stdout).toContain("--discover --json");
+		expect(result.stdout).toContain("--discover-command <identity> --json");
 		expect(result.stdout).toContain("--help");
 		expect(result.stdout).toContain("deps status [tool]");
 		expect(result.stdout).toContain("deps repair <tool> --preview");
@@ -373,13 +375,13 @@ describe("compiled front door: assertEnvelope admits run success (unit-layer, di
 	});
 
 	test("setup's causes stay setup-only, and adapter read causes stay with run and schema", () => {
-		expect(problemOf(runSuccess("SUCCESS_COMPLETED", ["mcporter-vault-file"]))).toContain("setup cause and command identity must agree");
+		expect(problemOf(runSuccess("SUCCESS_COMPLETED", ["mcporter-vault-file"]))).toContain("SUCCESS_COMPLETED is not a declared station of connectors.run");
 		// An adapter-backed schema read reports its account effects like a run.
 		expect(problemOf(runSuccess("SUCCESS_AFTER_ACCOUNT_EFFECT", ["mcporter-vault-file"], "connectors.schema"))).toBeNull();
 		// A row-coherent transient refusal under auth: identity is its only fault.
 		const base = runSuccess("TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT", ["mcporter-vault-file"], "connectors.auth");
 		const transient = { ...base, result: { ...base.result, outcome: "refused", failureClass: "transient", exitCode: 75, retryable: true, data: null, repairAction: "Retry the run" } } as typeof base;
-		expect(problemOf(transient)).toBe("internal contract violation: adapter read cause and command identity must agree");
+		expect(problemOf(transient)).toBe("internal contract violation: TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT is not a declared station of connectors.auth");
 	});
 });
 

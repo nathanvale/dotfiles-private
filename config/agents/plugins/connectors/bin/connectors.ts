@@ -138,7 +138,33 @@ interface CommandDescriptor {
 	readonly route: readonly string[];
 	readonly effectClass: EffectClass;
 	readonly summary: string;
+	readonly usage: string;
+	// Every cause this command may emit (Spec AC19). assertEnvelope refuses
+	// any other, and --discover-command describes these, never live state.
+	readonly stations: readonly CauseCode[];
 }
+
+// Station families shared by several commands.
+const MANIFEST_REFUSALS: readonly CauseCode[] = ["USAGE_CONNECTOR_UNKNOWN", "SCHEMA_VERSION_UNSUPPORTED", "SCHEMA_ADAPTER_UNKNOWN", "SCHEMA_SELECTOR_INVALID", "SCHEMA_MANIFEST_INVALID", "SCHEMA_REQUIREMENTS_INVALID"];
+const LOCAL_INSPECTION: readonly CauseCode[] = ["SUCCESS_UNCHANGED", "USAGE_MALFORMED_ARGUMENTS", ...MANIFEST_REFUSALS];
+const SELECTED_SUCCESS: readonly CauseCode[] = ["SUCCESS_UNCHANGED", "SUCCESS_BOOTSTRAPPED", "SUCCESS_MCPORTER_RECOVERED"];
+const SELECTION_FAILURES: readonly CauseCode[] = ["INTERNAL_MCPORTER_SELECTION_UNKNOWN", "DOMAIN_MCPORTER_REPAIR_REQUIRED", "DOMAIN_MCPORTER_REPAIR_AFTER_BOOTSTRAP", "DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY"];
+const SELECTED_TRANSIENT: readonly CauseCode[] = ["TRANSIENT_PROVIDER_UNREACHABLE", "TRANSIENT_PROVIDER_AFTER_BOOTSTRAP", "TRANSIENT_PROVIDER_AFTER_RECOVERY"];
+const PROVIDER_CALL_FAILURES: readonly CauseCode[] = ["DOMAIN_PROVIDER_CALL_FAILED", "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT"];
+const ADAPTER_READ: readonly CauseCode[] = [...SELECTED_TRANSIENT, ...PROVIDER_CALL_FAILURES, "SUCCESS_AFTER_ACCOUNT_EFFECT", "TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT"];
+const REFUSAL_CAUSE: Readonly<Record<AdapterRefusalKind, CauseCode>> = {
+	usage: "USAGE_ADAPTER_REFUSED",
+	domain: "DOMAIN_ADAPTER_REFUSED",
+	schema: "SCHEMA_ADAPTER_REFUSED",
+	"verb-unsupported": "DOMAIN_AUTH_VERB_UNSUPPORTED",
+	"operation-unknown": "USAGE_OPERATION_UNKNOWN",
+	"client-mode-not-admitted": "DOMAIN_CLIENT_MODE_NOT_ADMITTED",
+};
+// Every command routed through a packaged adapter: manifest, selector, and
+// adapter refusals, MCPorter selection, and an inspected or executed success.
+const ADAPTER_BASE: readonly CauseCode[] = [...MANIFEST_REFUSALS, "DOMAIN_ADAPTER_NOT_DECLARED", ...Object.values(REFUSAL_CAUSE), "DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION", ...SELECTION_FAILURES, ...SELECTED_SUCCESS];
+const DEPS_PREVIEW: readonly CauseCode[] = ["USAGE_MALFORMED_ARGUMENTS", "SUCCESS_UNCHANGED", "DOMAIN_DEPS_REPAIR_PREREQUISITE", "DOMAIN_DEPS_STATE_INVALID", "INTERNAL_DEPS_PREVIEW_AFTER_RECORD"];
+const DEPS_APPLY: readonly CauseCode[] = ["USAGE_MALFORMED_ARGUMENTS", "DOMAIN_DEPS_PREVIEW_INVALID", "DOMAIN_DEPS_PREVIEW_STALE", "DOMAIN_DEPS_PREVIEW_CONSUMED", "DOMAIN_DEPS_APPLY_LOCKED"];
 
 // This is the complete command surface. Do not add a route here without also
 // implementing it, so discovery never advertises a command this binary
@@ -146,40 +172,135 @@ interface CommandDescriptor {
 // adapter has a prepare step, and schema reaches a credentialed connector only
 // through a prepareSchema step; every other connector refuses through the
 // catalogue.
+const AUTH_USAGE = "auth <verb> <connector> [--select name=value ...] [--input <json-object> after configure | --no-browser --reset after login]";
+const RUN_USAGE = "run <connector> [--select name=value ...] <operation> [--input <json-object>] [--preview | --apply <previewId>]";
+const RECOVER_USAGE = "recover <connector> [--select name=value ...] [--run <runId> [--adjudicate --input <json-object>] | --run <runId|previewId> --unlock]";
+const SCHEMA_USAGE = "schema <connector> [--select name=value ...]";
+
 const COMMANDS: readonly CommandDescriptor[] = [
-	{ commandIdentity: "connectors.dispatch", route: [], effectClass: "inspect", summary: "Refuse a missing, unknown, or incompatible command selection" },
-	{ commandIdentity: "connectors.help", route: ["--help"], effectClass: "inspect", summary: "Show help and usage" },
-	{ commandIdentity: "connectors.discovery", route: ["--discover", "--json"], effectClass: "inspect", summary: "Describe the commands and the contract" },
-	{ commandIdentity: "connectors.list", route: ["list"], effectClass: "inspect", summary: "List connectors declared by a Connector Manifest" },
-	{ commandIdentity: "connectors.setup", route: ["setup"], effectClass: "repository-local", summary: "Explicitly install verified op and plugin-owned mise and pinned uv" },
-	{ commandIdentity: "connectors.config.validate", route: ["config", "validate"], effectClass: "inspect", summary: "Validate connector manifests, registries, and packaged requirements" },
-	{ commandIdentity: "connectors.config.show", route: ["config", "show"], effectClass: "inspect", summary: "Show resolved nonsecret values and provenance; conflicting repeated selectors refuse" },
-	{ commandIdentity: "connectors.status", route: ["status"], effectClass: "inspect", summary: "Report truthful evidence state per connector" },
-	{ commandIdentity: "connectors.doctor", route: ["doctor"], effectClass: "inspect", summary: "Local readiness gate for one connector" },
-	{ commandIdentity: "connectors.schema", route: ["schema"], effectClass: "repository-local", summary: "Fetch live schema for a keyless connector, or a credentialed one through its packaged adapter; bootstraps the pinned MCPorter on first use" },
-	{ commandIdentity: "connectors.deps.status", route: ["deps", "status"], effectClass: "inspect", summary: "Report each declared dependency's required version, verified plugin-owned selection, and one repair route; never installs or searches PATH" },
-	{ commandIdentity: "connectors.deps.repair.preview", route: ["deps", "repair", "--preview"], effectClass: "repository-local", summary: "Record the exact repair of one declared dependency against its observed selection; installs nothing" },
-	{ commandIdentity: "connectors.deps.repair.apply", route: ["deps", "repair", "--apply"], effectClass: "external", summary: "Apply one current repair preview at most once: a durable receipt first, then one verified install of the declared version" },
-	{ commandIdentity: "connectors.deps.update.preview", route: ["deps", "update", "--preview"], effectClass: "repository-local", summary: "Record the exact convergence of every present plugin-owned selection to the one requirements revision packaged in this build; installs nothing and never follows an upstream latest" },
-	{ commandIdentity: "connectors.deps.update.apply", route: ["deps", "update", "--apply"], effectClass: "external", summary: "Apply one current update preview at most once: a durable receipt first, then one verified install per planned tool in order, stopping at the first failure" },
+	{ commandIdentity: "connectors.dispatch", route: [], effectClass: "inspect", summary: "Refuse a missing, unknown, or incompatible command selection", usage: "<command> [arguments]", stations: ["USAGE_UNKNOWN_COMMAND", "INTERNAL_UNEXPECTED_UNCHANGED", "INTERNAL_UNEXPECTED_AFTER_BOOTSTRAP"] },
+	{ commandIdentity: "connectors.help", route: ["--help"], effectClass: "inspect", summary: "Show help and usage", usage: "--help [--json]", stations: ["SUCCESS_UNCHANGED"] },
+	{ commandIdentity: "connectors.discovery", route: ["--discover", "--json"], effectClass: "inspect", summary: "Describe the commands and the contract", usage: "--discover --json", stations: ["SUCCESS_UNCHANGED"] },
+	{ commandIdentity: "connectors.discovery.command", route: ["--discover-command", "--json"], effectClass: "inspect", summary: "Describe one command's route, usage, effect class, and possible stations; never runs it or observes live state", usage: "--discover-command <identity> --json", stations: ["SUCCESS_UNCHANGED", "USAGE_MALFORMED_ARGUMENTS", "USAGE_UNKNOWN_COMMAND"] },
+	{ commandIdentity: "connectors.list", route: ["list"], effectClass: "inspect", summary: "List connectors declared by a Connector Manifest", usage: "list", stations: ["SUCCESS_UNCHANGED"] },
+	{
+		commandIdentity: "connectors.setup",
+		route: ["setup"],
+		effectClass: "repository-local",
+		summary: "Explicitly install verified op and plugin-owned mise and pinned uv",
+		usage: "setup",
+		stations: ["SUCCESS_COMPLETED", "DOMAIN_SETUP_FAILED_UNCHANGED", "DOMAIN_SETUP_FAILED_PARTIAL", "SCHEMA_SETUP_CONFIG_INVALID", "USAGE_SETUP_MALFORMED", "INTERNAL_SETUP_UNKNOWN", "INTERNAL_SETUP_AFTER_COMMIT"],
+	},
+	{ commandIdentity: "connectors.config.validate", route: ["config", "validate"], effectClass: "inspect", summary: "Validate connector manifests, registries, and packaged requirements", usage: "config validate [connector]", stations: LOCAL_INSPECTION },
+	{ commandIdentity: "connectors.config.show", route: ["config", "show"], effectClass: "inspect", summary: "Show resolved nonsecret values and provenance; conflicting repeated selectors refuse", usage: "config show <connector> --resolved --json [--select name=value ...]", stations: LOCAL_INSPECTION },
+	{ commandIdentity: "connectors.status", route: ["status"], effectClass: "inspect", summary: "Report truthful evidence state per connector", usage: "status [connector]", stations: LOCAL_INSPECTION },
+	{ commandIdentity: "connectors.doctor", route: ["doctor"], effectClass: "inspect", summary: "Local readiness gate for one connector", usage: "doctor <connector>", stations: LOCAL_INSPECTION },
+	{
+		commandIdentity: "connectors.schema",
+		route: ["schema"],
+		effectClass: "repository-local",
+		summary: "Fetch live schema for a keyless connector, or a credentialed one through its packaged adapter; bootstraps the pinned MCPorter on first use",
+		usage: SCHEMA_USAGE,
+		stations: ["USAGE_MALFORMED_ARGUMENTS", "DOMAIN_CUSTODY_NOT_SUPPORTED", ...ADAPTER_BASE, ...ADAPTER_READ],
+	},
+	{ commandIdentity: "connectors.deps.status", route: ["deps", "status"], effectClass: "inspect", summary: "Report each declared dependency's required version, verified plugin-owned selection, and one repair route; never installs or searches PATH", usage: "deps status [tool]", stations: ["SUCCESS_UNCHANGED", "USAGE_MALFORMED_ARGUMENTS", "USAGE_DEPENDENCY_UNKNOWN"] },
+	{
+		commandIdentity: "connectors.deps.repair.preview",
+		route: ["deps", "repair", "--preview"],
+		effectClass: "repository-local",
+		summary: "Record the exact repair of one declared dependency against its observed selection; installs nothing",
+		usage: "deps repair <tool> --preview",
+		stations: [...DEPS_PREVIEW, "USAGE_DEPENDENCY_UNKNOWN", "SUCCESS_DEPS_REPAIR_PREVIEWED"],
+	},
+	{
+		commandIdentity: "connectors.deps.repair.apply",
+		route: ["deps", "repair", "--apply"],
+		effectClass: "external",
+		summary: "Apply one current repair preview at most once: a durable receipt first, then one verified install of the declared version",
+		usage: "deps repair <tool> --apply <previewId>",
+		stations: [...DEPS_APPLY, "USAGE_DEPENDENCY_UNKNOWN", "SUCCESS_DEPS_REPAIRED", "DOMAIN_DEPS_REPAIR_FAILED_RECORDED", "DOMAIN_DEPS_REPAIR_EFFECT_UNKNOWN", "INTERNAL_DEPS_REPAIR_UNKNOWN", "INTERNAL_DEPS_REPAIR_AFTER_EFFECT"],
+	},
+	{
+		commandIdentity: "connectors.deps.update.preview",
+		route: ["deps", "update", "--preview"],
+		effectClass: "repository-local",
+		summary: "Record the exact convergence of every present plugin-owned selection to the one requirements revision packaged in this build; installs nothing and never follows an upstream latest",
+		usage: "deps update <revision> --preview",
+		stations: [...DEPS_PREVIEW, "DOMAIN_DEPS_REVISION_NOT_ADMITTED", "SUCCESS_DEPS_UPDATE_PREVIEWED"],
+	},
+	{
+		commandIdentity: "connectors.deps.update.apply",
+		route: ["deps", "update", "--apply"],
+		effectClass: "external",
+		summary: "Apply one current update preview at most once: a durable receipt first, then one verified install per planned tool in order, stopping at the first failure",
+		usage: "deps update <revision> --apply <previewId>",
+		stations: [...DEPS_APPLY, "DOMAIN_DEPS_REVISION_NOT_ADMITTED", "SUCCESS_DEPS_UPDATED", "DOMAIN_DEPS_UPDATE_FAILED_RECORDED", "DOMAIN_DEPS_UPDATE_EFFECT_UNKNOWN", "INTERNAL_DEPS_UPDATE_UNKNOWN", "INTERNAL_DEPS_UPDATE_PARTIAL", "INTERNAL_DEPS_UPDATE_AFTER_EFFECT"],
+	},
 	{
 		commandIdentity: "connectors.fixtureAuth",
 		route: ["fixture-auth"],
 		effectClass: "inspect",
 		summary: "Attempt a packaged, secret-free fixture auth operation for one connector (fixture-tested proof only, never real credential custody)",
+		usage: "fixture-auth <connector>",
+		stations: [...LOCAL_INSPECTION, "DOMAIN_ADAPTER_NOT_DECLARED", "DOMAIN_FIXTURE_AUTHORITY_UNAVAILABLE", "DOMAIN_FIXTURE_AUTH_REFUSED"],
 	},
-	{ commandIdentity: "connectors.auth", route: ["auth"], effectClass: "external", summary: "Inspect or perform one connector's declared auth verb through its packaged adapter; configure alone takes --input <json-object> of nonsecret stored configuration, status inspects that configuration only, and login is attended only and alone takes --no-browser and --reset" },
-	{ commandIdentity: "connectors.run", route: ["run"], effectClass: "repository-local", summary: "Run one declared read operation for a connector through its packaged adapter and the selected MCPorter" },
-	{ commandIdentity: "connectors.run.preview", route: ["run", "--preview"], effectClass: "repository-local", summary: "Record a durable preview of one declared write through the connector's packaged adapter; nothing is sent" },
-	{ commandIdentity: "connectors.run.apply", route: ["run", "--apply"], effectClass: "external", summary: "Apply one recorded preview with its identical input: a durable receipt first, then at most one Provider write" },
-	{ commandIdentity: "connectors.recover", route: ["recover"], effectClass: "inspect", summary: "List a connector's open write receipts, or show one with --run" },
-	{ commandIdentity: "connectors.recover.adjudicate", route: ["recover", "--adjudicate"], effectClass: "repository-local", summary: "Settle one open write receipt on read-back evidence, with the write's identical input" },
-	{ commandIdentity: "connectors.recover.unlock", route: ["recover", "--unlock"], effectClass: "repository-local", summary: "Release the write lock a receipt (by runId) or a preview (by previewId) left behind once its holder has exited" },
+	{
+		commandIdentity: "connectors.auth",
+		route: ["auth"],
+		effectClass: "external",
+		summary: "Inspect or perform one connector's declared auth verb through its packaged adapter; configure alone takes --input <json-object> of nonsecret stored configuration, status inspects that configuration only, and login is attended only and alone takes --no-browser and --reset",
+		usage: AUTH_USAGE,
+		stations: ["USAGE_MALFORMED_ARGUMENTS", ...ADAPTER_BASE, "SUCCESS_RUN_RECORDED", "DOMAIN_ATTENDED_REQUIRED", "SUCCESS_AUTH_LOGIN", "DOMAIN_AUTH_LOGIN_UNKNOWN"],
+	},
+	{
+		commandIdentity: "connectors.run",
+		route: ["run"],
+		effectClass: "repository-local",
+		summary: "Run one declared read operation for a connector through its packaged adapter and the selected MCPorter",
+		usage: "run <connector> [--select name=value ...] <operation> [--input <json-object>]",
+		stations: ["USAGE_MALFORMED_ARGUMENTS", ...ADAPTER_BASE, ...ADAPTER_READ],
+	},
+	{
+		commandIdentity: "connectors.run.preview",
+		route: ["run", "--preview"],
+		effectClass: "repository-local",
+		summary: "Record a durable preview of one declared write through the connector's packaged adapter; nothing is sent",
+		usage: "run <connector> [--select name=value ...] <write-operation> --input <json-object> --preview",
+		stations: [...ADAPTER_BASE, ...PROVIDER_CALL_FAILURES, "SUCCESS_RUN_RECORDED"],
+	},
+	{
+		commandIdentity: "connectors.run.apply",
+		route: ["run", "--apply"],
+		effectClass: "external",
+		summary: "Apply one recorded preview with its identical input: a durable receipt first, then at most one Provider write",
+		usage: "run <connector> [--select name=value ...] <write-operation> --input <json-object> --apply <previewId>",
+		stations: [...ADAPTER_BASE, ...PROVIDER_CALL_FAILURES, "SUCCESS_RUN_APPLIED", "DOMAIN_RUN_EFFECT_UNKNOWN", "DOMAIN_RUN_FAILED_RECORDED"],
+	},
+	{ commandIdentity: "connectors.recover", route: ["recover"], effectClass: "inspect", summary: "List a connector's open write receipts, or show one with --run", usage: "recover <connector> [--select name=value ...] [--run <runId>]", stations: ["USAGE_MALFORMED_ARGUMENTS", ...ADAPTER_BASE] },
+	{
+		commandIdentity: "connectors.recover.adjudicate",
+		route: ["recover", "--adjudicate"],
+		effectClass: "repository-local",
+		summary: "Settle one open write receipt on read-back evidence, with the write's identical input",
+		usage: "recover <connector> [--select name=value ...] --run <runId> --adjudicate --input <json-object>",
+		stations: [...ADAPTER_BASE, ...PROVIDER_CALL_FAILURES, "SUCCESS_RUN_RECORDED"],
+	},
+	{
+		commandIdentity: "connectors.recover.unlock",
+		route: ["recover", "--unlock"],
+		effectClass: "repository-local",
+		summary: "Release the write lock a receipt (by runId) or a preview (by previewId) left behind once its holder has exited",
+		usage: "recover <connector> [--select name=value ...] --run <runId|previewId> --unlock",
+		stations: [...ADAPTER_BASE, "SUCCESS_RUN_RECORDED"],
+	},
 ];
 
 // Contract Core 2.0 requires sorted, unique availablePaths, independent of
 // COMMANDS' own declaration order (which stays readable/logical instead).
 const AVAILABLE_PATHS: readonly string[] = [...new Set(COMMANDS.map((command) => command.commandIdentity))].sort();
+// Generic discovery and help list each command without its stations; the
+// command-scoped route carries those.
+const COMMAND_SUMMARIES = COMMANDS.map(({ commandIdentity, route, effectClass, summary }) => ({ commandIdentity, route, effectClass, summary }));
 
 export interface Envelope {
 	readonly envelopeVersion: 2;
@@ -427,56 +548,16 @@ function checkCauseRowRepairAction(result: Envelope["result"], row: CauseRow, ca
 	return [];
 }
 
-// Setup's causes belong to setup alone, and setup emits no other cause. An
-// adapter read's own success and provider failures after or without an
-// account effect belong to run and adapter-backed schema alone.
-const SETUP_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_COMPLETED", "DOMAIN_SETUP_FAILED_UNCHANGED", "DOMAIN_SETUP_FAILED_PARTIAL", "SCHEMA_SETUP_CONFIG_INVALID", "USAGE_SETUP_MALFORMED", "INTERNAL_SETUP_UNKNOWN", "INTERNAL_SETUP_AFTER_COMMIT"]);
-const ADAPTER_READ_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_AFTER_ACCOUNT_EFFECT", "TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT", "DOMAIN_PROVIDER_CALL_FAILED", "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT"]);
-// A write preview, apply, or adjudication reads the Provider before it
-// records anything, so its read may fail like a run's.
-const PROVIDER_READ_COMMANDS: ReadonlySet<string> = new Set(["connectors.run", "connectors.schema", "connectors.run.preview", "connectors.run.apply", "connectors.recover.adjudicate"]);
-
-// Each explicit deps cause belongs to the commands that can emit it. Shared
-// refusals and the preview crash cause span repair and update.
 const REPAIR_PREVIEW = "connectors.deps.repair.preview";
 const REPAIR_APPLY = "connectors.deps.repair.apply";
 const UPDATE_PREVIEW = "connectors.deps.update.preview";
 const UPDATE_APPLY = "connectors.deps.update.apply";
-const DEPS_CAUSES: Readonly<Partial<Record<CauseCode, readonly string[]>>> = {
-	SUCCESS_DEPS_REPAIR_PREVIEWED: [REPAIR_PREVIEW],
-	DOMAIN_DEPS_REPAIR_PREREQUISITE: [REPAIR_PREVIEW, UPDATE_PREVIEW],
-	DOMAIN_DEPS_STATE_INVALID: [REPAIR_PREVIEW, UPDATE_PREVIEW],
-	INTERNAL_DEPS_PREVIEW_AFTER_RECORD: [REPAIR_PREVIEW, UPDATE_PREVIEW],
-	SUCCESS_DEPS_REPAIRED: [REPAIR_APPLY],
-	DOMAIN_DEPS_PREVIEW_INVALID: [REPAIR_APPLY, UPDATE_APPLY],
-	DOMAIN_DEPS_PREVIEW_STALE: [REPAIR_APPLY, UPDATE_APPLY],
-	DOMAIN_DEPS_PREVIEW_CONSUMED: [REPAIR_APPLY, UPDATE_APPLY],
-	DOMAIN_DEPS_APPLY_LOCKED: [REPAIR_APPLY, UPDATE_APPLY],
-	DOMAIN_DEPS_REPAIR_FAILED_RECORDED: [REPAIR_APPLY],
-	DOMAIN_DEPS_REPAIR_EFFECT_UNKNOWN: [REPAIR_APPLY],
-	INTERNAL_DEPS_REPAIR_UNKNOWN: [REPAIR_APPLY],
-	INTERNAL_DEPS_REPAIR_AFTER_EFFECT: [REPAIR_APPLY],
-	SUCCESS_DEPS_UPDATE_PREVIEWED: [UPDATE_PREVIEW],
-	DOMAIN_DEPS_REVISION_NOT_ADMITTED: [UPDATE_PREVIEW, UPDATE_APPLY],
-	SUCCESS_DEPS_UPDATED: [UPDATE_APPLY],
-	DOMAIN_DEPS_UPDATE_FAILED_RECORDED: [UPDATE_APPLY],
-	DOMAIN_DEPS_UPDATE_EFFECT_UNKNOWN: [UPDATE_APPLY],
-	INTERNAL_DEPS_UPDATE_UNKNOWN: [UPDATE_APPLY],
-	INTERNAL_DEPS_UPDATE_PARTIAL: [UPDATE_APPLY],
-	INTERNAL_DEPS_UPDATE_AFTER_EFFECT: [UPDATE_APPLY],
-};
 
-function checkDepsCauseCommand(cause: CauseCode, commandIdentity: string): string[] {
-	const owners = DEPS_CAUSES[cause];
-	return owners === undefined || owners.includes(commandIdentity) ? [] : ["deps cause and command identity must agree"];
-}
+// A command emits only its own declared stations.
+const STATIONS: ReadonlyMap<string, readonly CauseCode[]> = new Map(COMMANDS.map((command) => [command.commandIdentity, command.stations]));
 
 function checkCauseCommand(cause: CauseCode, commandIdentity: string): string[] {
-	if (SETUP_CAUSES.has(cause) !== (commandIdentity === "connectors.setup")) return ["setup cause and command identity must agree"];
-	const deps = checkDepsCauseCommand(cause, commandIdentity);
-	if (deps.length > 0) return deps;
-	if (ADAPTER_READ_CAUSES.has(cause) && !PROVIDER_READ_COMMANDS.has(commandIdentity)) return ["adapter read cause and command identity must agree"];
-	return [];
+	return STATIONS.get(commandIdentity)?.includes(cause) ? [] : [`${cause} is not a declared station of ${commandIdentity}`];
 }
 
 // Recorded effects: the custody registration auth configure publishes, then
@@ -764,7 +845,7 @@ function discover(): void {
 				contractVersion: CONTRACT_VERSION,
 				generationConventionVersion: CONTRACT_VERSION,
 				profile: "complex",
-				commands: COMMANDS,
+				commands: COMMAND_SUMMARIES,
 				exitMeanings: EXIT_MEANINGS,
 				signalExits: SIGNAL_EXITS,
 				effectExclusions: EFFECT_EXCLUSIONS,
@@ -780,12 +861,41 @@ function discover(): void {
 	});
 }
 
+const DISCOVER_COMMAND_USAGE = "--discover-command <identity> --json";
+const IDENTITY_SHAPE = /^connectors(\.[A-Za-z]+){1,3}$/;
+const DISCOVERY_SCOPE = "possible stations declared by this build; not live state, authorization, or proof";
+
+// Describes one declared command from COMMANDS and ADMITTED_CAUSE_ROWS alone:
+// it runs nothing, reads no state or credential, and never echoes the
+// requested identity.
+function discoverCommand(args: readonly string[]): void {
+	const identity = "connectors.discovery.command";
+	const [requested, json] = args;
+	if (args.length !== 2 || json !== "--json" || requested === undefined || !IDENTITY_SHAPE.test(requested)) {
+		emitRefusal(identity, `${PROGRAM}: usage: ${DISCOVER_COMMAND_USAGE}`, "USAGE_MALFORMED_ARGUMENTS", `Run ${PROGRAM} ${DISCOVER_COMMAND_USAGE} with an identity from ${PROGRAM} --discover --json`, "connectors.discovery");
+		return;
+	}
+	const command = COMMANDS.find((candidate) => candidate.commandIdentity === requested);
+	if (!command) {
+		emitRefusal(identity, `${PROGRAM}: no declared command has that identity`, "USAGE_UNKNOWN_COMMAND", `Run ${PROGRAM} --discover --json to see the declared command identities`, "connectors.discovery");
+		return;
+	}
+	const stations = [...command.stations].sort().map((causeCode) => {
+		const { outcome, failureClass, exitCode, effectClass, transactionState, retryable } = ADMITTED_CAUSE_ROWS[causeCode];
+		return { causeCode, outcome, failureClass, exitCode, effectClass, transactionState, retryable };
+	});
+	const exitMeanings = Object.fromEntries(Object.entries(EXIT_MEANINGS).filter(([code]) => stations.some((station) => String(station.exitCode) === code)));
+	const { commandIdentity, route, effectClass, summary, usage } = command;
+	emitSuccess(identity, `Declared stations of ${commandIdentity}`, { command: { commandIdentity, route, effectClass, summary, usage }, stations, exitMeanings, scope: DISCOVERY_SCOPE }, "connectors.discovery");
+}
+
 function helpText(): string {
 	return [
 		`${PROGRAM}: Connectors plugin front door`,
 		"",
 		"Commands:",
 		"  --discover --json                              Describe the commands and the contract (machine JSON)",
+		"  --discover-command <identity> --json           Describe one command's usage, effect class, and possible stations",
 		"  --help                                          Show this human-readable help",
 		"  --help --json                                   Show help as a machine Contract Core envelope",
 		"  list                                            List connectors declared by a manifest",
@@ -841,7 +951,7 @@ function helpEnvelope(): void {
 			outcome: "success",
 			failureClass: null,
 			exitCode: 0,
-			data: { usage: `${PROGRAM} --discover --json`, commands: COMMANDS },
+			data: { usage: `${PROGRAM} --discover --json`, commands: COMMAND_SUMMARIES },
 			retryable: false,
 			repairAction: null,
 			nextAction: "connectors.discovery",
@@ -1647,19 +1757,7 @@ interface AdapterCommand {
 
 type TransportPlan = Extract<Prepared, { kind: "transport" }>;
 
-const AUTH_USAGE = "auth <verb> <connector> [--select name=value ...] [--input <json-object> after configure | --no-browser --reset after login]";
-const RUN_USAGE = "run <connector> [--select name=value ...] <operation> [--input <json-object>] [--preview | --apply <previewId>]";
-const RECOVER_USAGE = "recover <connector> [--select name=value ...] [--run <runId> [--adjudicate --input <json-object>] | --run <runId|previewId> --unlock]";
-const SCHEMA_USAGE = "schema <connector> [--select name=value ...]";
 
-const REFUSAL_CAUSE: Readonly<Record<AdapterRefusalKind, CauseCode>> = {
-	usage: "USAGE_ADAPTER_REFUSED",
-	domain: "DOMAIN_ADAPTER_REFUSED",
-	schema: "SCHEMA_ADAPTER_REFUSED",
-	"verb-unsupported": "DOMAIN_AUTH_VERB_UNSUPPORTED",
-	"operation-unknown": "USAGE_OPERATION_UNKNOWN",
-	"client-mode-not-admitted": "DOMAIN_CLIENT_MODE_NOT_ADMITTED",
-};
 
 // Returns the index of the first token after the leading --select pairs, or
 // null for a malformed or conflicting selection.
@@ -2202,6 +2300,10 @@ async function main(): Promise<void> {
 	}
 	if (args.length === 2 && args[0] === "--discover" && args[1] === "--json") {
 		discover();
+		return;
+	}
+	if (args[0] === "--discover-command") {
+		discoverCommand(args.slice(1));
 		return;
 	}
 	if (args.length === 1 && args[0] === "--help") {

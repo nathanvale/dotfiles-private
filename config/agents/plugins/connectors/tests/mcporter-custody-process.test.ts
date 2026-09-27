@@ -305,7 +305,7 @@ test.skipIf(!official)("post-repair output validation failure retains the durabl
 	const state = path.join(bundle.root, "state");
 	const home = path.join(bundle.root, "home");
 	mkdirSync(release); mkdirSync(state); mkdirSync(home);
-	buildFaultedFrontDoor(bundle.root, bundle.binary, { find: 'emitDepsRepair(identity, "SUCCESS_DEPS_REPAIRED",', replace: 'emitDepsRepair(identity, "SUCCESS_UNCHANGED",' });
+	buildFaultedFrontDoor(bundle.root, bundle.binary, { find: 'repair: { completed: "SUCCESS_DEPS_REPAIRED",', replace: 'repair: { completed: "SUCCESS_UNCHANGED",' });
 	cpSync(path.join(official!, "mcporter_0.14.0_darwin_arm64.tar.gz"), path.join(release, "mcporter_0.14.0_darwin_arm64.tar.gz"));
 	cpSync(path.join(official!, "provenance.json"), path.join(release, "provenance.json"));
 	const env = { home, binDir: hostile.binDir, extraEnv: { XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: release }, timeoutMs: 30000 };
