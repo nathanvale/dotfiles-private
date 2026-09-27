@@ -18,7 +18,7 @@ import type { Adapter, AdapterAction, AdapterRefusal, AdapterRefusalKind, Custod
 import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
 import { type DiscoveredManifest, discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
-import { ensureMcporter, lockRecovery } from "./mcporter-custody.ts";
+import { ensureMcporter, lockRecovery, releaseInterruptedSelection } from "./mcporter-custody.ts";
 import { type KeylessDataRoot, ownKeylessDataRoot } from "./provider-route.ts";
 import { DEPENDENCY_TOOLS, dependencyStatus, isDependencyTool, REQUIREMENTS_REVISION, type DependencyTool } from "./dependency-status.ts";
 import { applyDeps, PREVIEW_ID, previewDeps, type ApplyResult, type DepsRequest } from "./deps-repair.ts";
@@ -1026,7 +1026,33 @@ export function buildInternalFailureEnvelope(): Envelope {
 // partial stream" rule.
 let outputStarted = false;
 
+// Contract Core bounded stop (Spec #87 AC16): the first SIGINT or SIGTERM
+// stops new work, releases this process's MCPorter staging and selection
+// lock, and exits 130 or 143. Before output both streams stay empty; after
+// output, a bounded flush lets the written stream drain. A repeated signal
+// exits at once. SIGNAL_EXITS is the one owner of both the exits and discovery.
+const SIGNAL_FLUSH_MS = 1_000;
+let stopping = false;
+
+function stopOnSignal(exitCode: number): void {
+	if (stopping) process.exit(exitCode);
+	stopping = true;
+	releaseInterruptedSelection();
+	if (!outputStarted) process.exit(exitCode);
+	setTimeout(() => process.exit(exitCode), SIGNAL_FLUSH_MS);
+	process.stdout.write("", () => process.exit(exitCode));
+}
+
+// Internal roles are children whose parent owns their lifecycle; only the
+// front door installs the stop.
+function installSignalStop(): void {
+	for (const [exitCode, signal] of Object.entries(SIGNAL_EXITS)) process.on(signal, () => stopOnSignal(Number(exitCode)));
+}
+
 function writeStdout(text: string): void {
+	// No output follows a signal: nothing new starts, and nothing replaces
+	// what an earlier write already sent.
+	if (stopping) return;
 	outputStarted = true;
 	process.stdout.write(text);
 }
@@ -2630,6 +2656,7 @@ async function main(): Promise<void> {
 		await runInternalRole(role, args.slice(3));
 		return;
 	}
+	installSignalStop();
 	if (args.length === 2 && args[0] === "--discover" && args[1] === "--json") {
 		discover();
 		return;

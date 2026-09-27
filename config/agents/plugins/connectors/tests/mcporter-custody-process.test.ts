@@ -517,18 +517,22 @@ function stalledReleaseHost() {
 	return { server, requests };
 }
 
-async function firstUseAgainst(origin: (port: number) => string) {
+function firstUseFixture(origin: (port: number) => string) {
 	const bundle = createBundle();
 	const host = stalledReleaseHost();
 	const home = path.join(bundle.root, "home");
 	const state = path.join(bundle.root, "state");
 	mkdirSync(home);
 	bundle.addSkill("keyless-fixture-skill");
+	const extraEnv = { XDG_STATE_HOME: state, GITHUB_TOKEN: SENTINEL, CONNECTORS_TEST_MCPORTER_ORIGIN: origin(host.server.port!) };
+	return { bundle, host, home, extraEnv, selectionRoot: path.join(state, "connectors", "mcporter") };
+}
+
+async function firstUseAgainst(origin: (port: number) => string) {
+	const fixture = firstUseFixture(origin);
 	const started = performance.now();
-	const run = await runBundle(bundle, ["schema", "keyless-fixture-skill"], { home, timeoutMs: 15_000, extraEnv: {
-		XDG_STATE_HOME: state, GITHUB_TOKEN: SENTINEL, CONNECTORS_TEST_MCPORTER_ORIGIN: origin(host.server.port!),
-	} });
-	return { bundle, host, run, elapsed: performance.now() - started, selectionRoot: path.join(state, "connectors", "mcporter") };
+	const run = await runBundle(fixture.bundle, ["schema", "keyless-fixture-skill"], { home: fixture.home, timeoutMs: 15_000, extraEnv: fixture.extraEnv });
+	return { ...fixture, run, elapsed: performance.now() - started };
 }
 
 function expectBootstrapRefusal(run: Awaited<ReturnType<typeof runBundle>>) {
@@ -560,6 +564,44 @@ test("packaged first use behind a stalled release host refuses at its deadline a
 		bundle.dispose();
 	}
 }, 20_000);
+
+// Spec #87 AC16, finding F-T8-AC16-SIGNAL. Independent oracle: Contract
+// Core's signal exits. A stopped first use emits nothing, exits by number
+// rather than dying by the signal, and releases its lock and staging; the
+// unsignaled control is the deadline test above on the same stalled host.
+const SIGNAL_EXITS = { SIGINT: 130, SIGTERM: 143 } as const;
+
+for (const [signal, exit] of Object.entries(SIGNAL_EXITS)) {
+	test(`packaged first use stopped by ${signal} exits ${exit} with empty streams and leaves no lock or staging`, async () => {
+		const { bundle, host, home, extraEnv, selectionRoot } = firstUseFixture((port) => `http://127.0.0.1:${port}/`);
+		const child = Bun.spawn([bundle.binary, "schema", "keyless-fixture-skill"], {
+			env: { HOME: home, PATH: "/usr/bin:/bin", TMPDIR: bundle.root, ...extraEnv },
+			stdin: "ignore", stdout: "pipe", stderr: "pipe",
+		});
+		const streams = Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text()]);
+		try {
+			// In flight: both downloads requested while the lock and staging are held.
+			const inFlight = () => host.requests.length === 2 && existsSync(selectionRoot) && readdirSync(selectionRoot).some((name) => name.startsWith(".staging-")) && readdirSync(selectionRoot).includes(".selection.lock");
+			// Bounds a cold start of the fresh binary copy; the 3 s download deadline starts later.
+			const deadline = Date.now() + 10_000;
+			while (!inFlight() && Date.now() < deadline) await Bun.sleep(10);
+			expect(inFlight()).toBe(true);
+			const signalled = performance.now();
+			process.kill(child.pid, signal);
+			await Promise.race([child.exited, Bun.sleep(10_000)]);
+			// Well inside the 3 s loopback deadline, so the signal ended it.
+			const stoppedWithinBound = performance.now() - signalled < 2_000;
+			const [stdout, stderr] = await streams;
+			// One comparison, so a failure shows the exit, streams, and residue together.
+			expect({ stoppedWithinBound, exitCode: child.exitCode, signalCode: child.signalCode, stdout, stderr, selectionRoot: readdirSync(selectionRoot), requests: host.requests.slice().sort() })
+				.toEqual({ stoppedWithinBound: true, exitCode: exit, signalCode: null, stdout: "", stderr: "", selectionRoot: [], requests: [OFFICIAL_ARCHIVE_PATH, OFFICIAL_PROVENANCE_PATH] });
+		} finally {
+			if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
+			host.server.stop(true);
+			bundle.dispose();
+		}
+	}, 20_000);
+}
 
 test("packaged first use refuses a release origin that is not literal 127.0.0.1 before any request", async () => {
 	const { bundle, host, run, selectionRoot } = await firstUseAgainst((port) => `http://localhost:${port}/`);

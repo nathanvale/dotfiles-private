@@ -80,6 +80,25 @@ export function inspectSelectedMcporter(env: EnvironmentSource): { required: str
 	return { required: MCPORTER_RELEASE.version, present: selection !== null, executable: null, cause: selection?.cause ?? null };
 }
 
+// What this process holds for a bounded stop to release (Spec #87 AC16).
+let heldLock: string | null = null;
+const liveStaging = new Set<string>();
+
+function releaseOwnedLock(lock: string): void {
+	const stat = lstatSync(lock);
+	if (stat.isFile() && !stat.isSymbolicLink() && stat.uid === os.userInfo().uid && readFileSync(lock, "utf8").trim() === String(process.pid)) rmSync(lock);
+}
+
+// Called by the front door's signal stop, just before it exits. A signal
+// handler runs only between awaits. The only await under the lock is the
+// download into staging; every rename that changes the selection is
+// synchronous, so a signal cannot split one. Removing this process's staging
+// and its own lock therefore leaves the selected revision as it was.
+export function releaseInterruptedSelection(): void {
+	for (const staging of liveStaging) try { rmSync(staging, { recursive: true, force: true }); } catch { /* Selection is unchanged. */ }
+	if (heldLock) try { releaseOwnedLock(heldLock); } catch { /* shlock reclaims a dead owner's lock. */ }
+}
+
 // shlock uses an atomic hard link and checks process liveness before reclaiming
 // a dead owner's lock. No elapsed-time heuristic may evict a live downloader.
 // Explicit deps repair takes the same lock over its own records root.
@@ -99,12 +118,13 @@ export async function withSelectionLock<T>(root: string, action: () => Promise<T
 			await new Promise((resolve) => setTimeout(resolve, 50));
 		}
 	}
+	heldLock = lock;
 	try {
 		chmodSync(lock, 0o600);
 		return await action();
 	} finally {
-		const stat = lstatSync(lock);
-		if (stat.isFile() && !stat.isSymbolicLink() && stat.uid === os.userInfo().uid && readFileSync(lock, "utf8").trim() === String(process.pid)) rmSync(lock);
+		heldLock = null;
+		releaseOwnedLock(lock);
 	}
 }
 
@@ -162,6 +182,9 @@ function officialDownload(env: EnvironmentSource): { rebase: (url: string) => st
 
 async function verifiedStaging(root: string, env: EnvironmentSource): Promise<string> {
 	const staging = mkdtempSync(path.join(root, ".staging-"));
+	// Stays registered after promotion: the renamed path no longer exists, so
+	// a later release finds nothing there to remove.
+	liveStaging.add(staging);
 	try {
 		chmodSync(staging, 0o700);
 		const archive = path.join(staging, "release.tar.gz");
