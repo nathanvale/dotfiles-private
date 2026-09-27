@@ -26,7 +26,7 @@ import { downloadAndInstallMise, downloadAndInstallOp } from "./setup/download.t
 import { installPinnedUv, readValidatedUvSources } from "./setup/uv.ts";
 import { stateRoot } from "./private-state.ts";
 import { observeEvidence } from "./evidence-state.ts";
-import { retainObservation } from "./evidence-record.ts";
+import { retainFixtureObservation, retainObservation } from "./evidence-record.ts";
 
 const CONTRACT_VERSION = "2.0.0";
 const PROGRAM = "connectors";
@@ -101,6 +101,7 @@ export type CauseCode =
 	| "DOMAIN_ADAPTER_NOT_DECLARED"
 	| "DOMAIN_FIXTURE_AUTHORITY_UNAVAILABLE"
 	| "DOMAIN_FIXTURE_AUTH_REFUSED"
+	| "SUCCESS_FIXTURE_OBSERVED"
 	| "TRANSIENT_PROVIDER_UNREACHABLE"
 	| "TRANSIENT_PROVIDER_AFTER_BOOTSTRAP"
 	| "TRANSIENT_PROVIDER_AFTER_RECOVERY"
@@ -318,12 +319,12 @@ const COMMANDS: readonly CommandDescriptor[] = [
 	{
 		commandIdentity: "connectors.fixtureAuth",
 		route: ["fixture-auth"],
-		effectClass: "inspect",
-		summary: "Attempt a packaged, secret-free fixture auth operation for one connector (fixture-tested proof only, never real credential custody)",
+		effectClass: "repository-local",
+		summary: "Attempt a packaged, secret-free fixture auth operation for one connector and retain its fixture-tested observation for status (fixture-tested proof only, never real credential custody or a live state)",
 		usage: "fixture-auth <connector>",
 		input: [word(0, "fixture-auth"), connectorAt(1)],
-		reaches: "packaged-files",
-		stations: [...LOCAL_INSPECTION, "DOMAIN_ADAPTER_NOT_DECLARED", "DOMAIN_FIXTURE_AUTHORITY_UNAVAILABLE", "DOMAIN_FIXTURE_AUTH_REFUSED"],
+		reaches: "plugin-state",
+		stations: [...LOCAL_INSPECTION, "DOMAIN_ADAPTER_NOT_DECLARED", "DOMAIN_FIXTURE_AUTHORITY_UNAVAILABLE", "DOMAIN_FIXTURE_AUTH_REFUSED", "SUCCESS_FIXTURE_OBSERVED"],
 	},
 	{
 		commandIdentity: "connectors.auth",
@@ -591,6 +592,7 @@ const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	DOMAIN_ADAPTER_NOT_DECLARED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	DOMAIN_FIXTURE_AUTHORITY_UNAVAILABLE: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	DOMAIN_FIXTURE_AUTH_REFUSED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	SUCCESS_FIXTURE_OBSERVED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
 	TRANSIENT_PROVIDER_UNREACHABLE: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
 	TRANSIENT_PROVIDER_AFTER_BOOTSTRAP: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
 	TRANSIENT_PROVIDER_AFTER_RECOVERY: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
@@ -671,6 +673,7 @@ const STATION_SEMANTICS: Readonly<Record<CauseCode, { readonly reachability: Rea
 	DOMAIN_ADAPTER_NOT_DECLARED: { reachability: "packaged-files", trigger: "the connector declares no packaged adapter for this command" },
 	DOMAIN_FIXTURE_AUTHORITY_UNAVAILABLE: { reachability: "packaged-files", trigger: "no packaged fixture authority exists for the connector" },
 	DOMAIN_FIXTURE_AUTH_REFUSED: { reachability: "packaged-files", trigger: "the packaged fixture authority refused the operation" },
+	SUCCESS_FIXTURE_OBSERVED: { reachability: "plugin-state", trigger: "the packaged fixture authority accepted the operation and its fixture-tested observation was retained" },
 	TRANSIENT_PROVIDER_UNREACHABLE: { reachability: "provider", trigger: "the Provider was unreachable, so no request reached it" },
 	TRANSIENT_PROVIDER_AFTER_BOOTSTRAP: { reachability: "provider", trigger: "the Provider was unreachable after first-use MCPorter bootstrap" },
 	TRANSIENT_PROVIDER_AFTER_RECOVERY: { reachability: "provider", trigger: "the Provider was unreachable after MCPorter selection recovery" },
@@ -1919,7 +1922,43 @@ async function handleFixtureAuth(args: readonly string[]): Promise<void> {
 		);
 		return;
 	}
-	emitSuccess("connectors.fixtureAuth", `${id} fixture auth succeeded`, { connector: id, outcome: "success", fixtureTested: true }, "connectors.status");
+	emitFixtureSuccess(manifest);
+}
+
+// A fixture success is retained for status as fixtureTested only (Spec AC21).
+// The record is a declared local effect; one that could not be kept is
+// reported in data and claims no effect.
+function emitFixtureSuccess(manifest: ConnectorManifest): void {
+	const id = manifest.id;
+	const message = `${id} fixture auth succeeded`;
+	const data = { connector: id, outcome: "success", fixtureTested: true };
+	const retained = retainFixtureObservation(manifest, process.env, new Date());
+	if (retained.kind === "not-retained") {
+		emitSuccess("connectors.fixtureAuth", message, { ...data, observation: { state: "fixtureTested", retained: false, cause: retained.reason } }, "connectors.status");
+		return;
+	}
+	const observation = { state: "fixtureTested", retained: true, observedAt: retained.observedAt, validUntil: retained.validUntil };
+	emit({
+		envelopeVersion: 2,
+		contractVersion: CONTRACT_VERSION,
+		message,
+		availablePaths: AVAILABLE_PATHS,
+		result: {
+			runId: runId(),
+			commandIdentity: "connectors.fixtureAuth",
+			outcome: "success",
+			failureClass: null,
+			exitCode: 0,
+			data: { ...data, observation },
+			retryable: false,
+			repairAction: null,
+			nextAction: "connectors.status",
+			effectClass: "repository-local",
+			transactionState: "completed",
+			causeCode: "SUCCESS_FIXTURE_OBSERVED",
+			effects: { completed: [EVIDENCE_OBSERVATION], remaining: [], uncertain: [], inventoryComplete: true },
+		},
+	});
 }
 
 // A keyless connector fetches schema directly. A connector with a packaged

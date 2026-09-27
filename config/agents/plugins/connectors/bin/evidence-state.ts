@@ -5,13 +5,16 @@
 // selection, and the adapter's effective custody mode read from metadata.
 // schemaQualified and liveReadProven come only from a retained hosted-read
 // observation that bin/evidence-record.ts still admits for this selection;
-// without one they stay unobserved. Nothing here contacts a Provider, reads a
-// credential, or writes state. Custody, authentication, write, and fixture
-// results are not retained, so those stay unobserved rather than promoted. A
-// write is never proven without an exact effect receipt, and status reads none.
+// without one they stay unobserved. fixtureTested comes only from a retained
+// fixture-auth record that bin/evidence-record.ts still admits for these
+// packaged bytes, at the fixture boundary; it feeds no other state. Nothing
+// here contacts a Provider, reads a credential, or writes state. Custody,
+// authentication, and write results are not retained, so those stay
+// unobserved rather than promoted. A write is never proven without an exact
+// effect receipt, and status reads none.
 import type { Adapter, CustodyResolution } from "./adapters/contract.ts";
 import { dependencyStatus, isDependencyTool } from "./dependency-status.ts";
-import { type ObservationKind, readObservation } from "./evidence-record.ts";
+import { type ObservationKind, readFixtureObservation, readObservation } from "./evidence-record.ts";
 import type { ConnectorManifest } from "./manifest.ts";
 import type { EnvironmentSource } from "./safe-environment.ts";
 
@@ -21,7 +24,7 @@ export interface Observation {
 	readonly verdict: Verdict;
 	readonly basis: string;
 	readonly observedAt: string | null;
-	readonly boundary: "local" | "hosted" | null;
+	readonly boundary: "local" | "hosted" | "fixture" | null;
 	readonly [detail: string]: unknown;
 }
 
@@ -110,6 +113,14 @@ function retained(request: EvidenceRequest, kind: ObservationKind): Observation 
 	};
 }
 
+function fixtureTested(request: EvidenceRequest): Observation {
+	const verdict = readFixtureObservation(request.manifest, request.env, Date.parse(request.observedAt));
+	if (verdict.kind === "absent") return { verdict: "unobserved", basis: "status-retains-no-fixture-observation", observedAt: null, boundary: null };
+	if (verdict.kind === "rejected") return { verdict: "unobserved", basis: verdict.basis, observedAt: null, boundary: null };
+	const { record } = verdict;
+	return { verdict: "proven", basis: "retained-fixture-auth", observedAt: record.observedAt, boundary: "fixture", observation: { command: "connectors.fixtureAuth", binding: record.binding, validUntil: record.validUntil } };
+}
+
 export function observeEvidence(request: EvidenceRequest): Record<string, Observation> {
 	return {
 		configured: { verdict: "proven", basis: "manifest-registry-requirements-validated", observedAt: request.observedAt, boundary: "local" },
@@ -119,6 +130,6 @@ export function observeEvidence(request: EvidenceRequest): Record<string, Observ
 		schemaQualified: retained(request, "schema"),
 		liveReadProven: retained(request, "read"),
 		liveWriteProven: liveWrite(request),
-		fixtureTested: { verdict: "unobserved", basis: "status-retains-no-fixture-observation", observedAt: null, boundary: null },
+		fixtureTested: fixtureTested(request),
 	};
 }

@@ -38,14 +38,15 @@ describe("connectors fixture-auth: Spec AC23 independent authority", () => {
 				outcome: "success",
 				failureClass: null,
 				exitCode: 0,
-				data: { connector: "adapter-fixture-skill", outcome: "success", fixtureTested: true },
+				// Spec AC21 (v1): the success is retained as fixtureTested evidence only.
+				data: { connector: "adapter-fixture-skill", outcome: "success", fixtureTested: true, observation: { state: "fixtureTested", retained: true, observedAt: expect.any(String), validUntil: expect.any(String) } },
 				retryable: false,
 				repairAction: null,
 				nextAction: "connectors.status",
-				effectClass: "inspect",
-				transactionState: "unchanged",
-				causeCode: "SUCCESS_UNCHANGED",
-				effects: EFFECTS_UNCHANGED,
+				effectClass: "repository-local",
+				transactionState: "completed",
+				causeCode: "SUCCESS_FIXTURE_OBSERVED",
+				effects: { ...EFFECTS_UNCHANGED, completed: ["evidence-observation"] },
 			});
 			const receiptText = readFileSync(path.join(bundle.root, "fixture-authority.json"), "utf8");
 			expect(JSON.parse(receiptText)).toEqual({

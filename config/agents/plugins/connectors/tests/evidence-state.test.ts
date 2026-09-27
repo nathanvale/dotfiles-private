@@ -7,7 +7,8 @@
 // Expected tables are hand-written literals from the accepted state table in
 // cli-proposal.md, never read from the production module.
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { plantWrongOp } from "./deps-sandbox.ts";
 import { createBundle, createChallengeAuthorityBinDir, createFakeMcporterBinDir, runBundle, type Bundle } from "./harness.ts";
@@ -76,9 +77,11 @@ function normalizeTimes(value: unknown, window: { from: number; to: number }, se
 	}));
 }
 
-async function inspect(b: Box, argv: string[], binDir?: string) {
+// since: the start of an earlier invocation whose retained observation this
+// status may report, so its observedAt is a second instant in the window.
+async function inspect(b: Box, argv: string[], binDir?: string, since?: number) {
 	const before = { home: snapshot(b.home), state: snapshot(b.state) };
-	const from = Math.floor(Date.now() / 1000) * 1000;
+	const from = since ?? Math.floor(Date.now() / 1000) * 1000;
 	const run = await runBundle(b.bundle, argv, { home: b.home, ...(binDir ? { binDir } : {}), extraEnv: { XDG_STATE_HOME: b.state, OP_SERVICE_ACCOUNT_TOKEN: SENTINEL }, timeoutMs: 15_000 });
 	const to = Date.now();
 	expect(run.stderr).toBe("");
@@ -87,7 +90,7 @@ async function inspect(b: Box, argv: string[], binDir?: string) {
 	const envelope = JSON.parse(run.stdout);
 	const seen = new Set<string>();
 	const result = normalizeTimes(envelope.result, { from, to }, seen) as Record<string, unknown>;
-	expect(seen.size).toBeLessThanOrEqual(1);
+	expect(seen.size).toBeLessThanOrEqual(since === undefined ? 1 : 2);
 	return { code: run.code, result };
 }
 
@@ -172,22 +175,58 @@ test("doctor reports the same scoped evidence and never claims its local checks 
 	}
 });
 
-test("a successful fixture auth stays a fixture: status keeps custody, authentication, and fixture evidence unobserved", async () => {
+const sha256 = (file: string): string => createHash("sha256").update(readFileSync(file)).digest("hex");
+const DAY_MS = 24 * 60 * 60 * 1000;
+// Independent oracle: the accepted fixture-observation success station, a literal.
+const FIXTURE_OBSERVED_STATION = {
+	causeCode: "SUCCESS_FIXTURE_OBSERVED", trigger: "the packaged fixture authority accepted the operation and its fixture-tested observation was retained", reachability: "plugin-state",
+	outcome: "success", failureClass: null, exitCode: 0, effectClass: "repository-local", transactionState: "completed",
+	effectEvidence: { mayPopulate: ["completed"], inventoryComplete: true }, retryable: false, retry: { policy: "not-retryable" }, recovery: { kind: "none", repairAction: false },
+};
+
+// Nathan's v1 choice for Ticket #141 F-c: remember the fixture result only.
+// The fixture record proves fixtureTested for exactly the registry, manifest,
+// and build it ran against, and moves no other state.
+test("a successful fixture auth proves fixtureTested only: custody, authentication, and every live state stay unpromoted", async () => {
 	const b = box();
 	const authority = createChallengeAuthorityBinDir(b.bundle);
 	try {
 		b.bundle.addSkill("challenge-fixture-skill");
-		const auth = await runBundle(b.bundle, ["fixture-auth", "challenge-fixture-skill"], { home: b.home, binDir: authority.binDir, extraEnv: { XDG_STATE_HOME: b.state } });
+		const discovered = await runBundle(b.bundle, ["--discover-command", "connectors.fixtureAuth", "--json"], { home: b.home, extraEnv: { XDG_STATE_HOME: b.state }, timeoutMs: 15_000 });
+		expect([discovered.code, discovered.stderr]).toEqual([0, ""]);
+		expect(JSON.parse(discovered.stdout).result.data.stations).toContainEqual(FIXTURE_OBSERVED_STATION);
+		const configDir = path.join(b.bundle.skillsRoot, "challenge-fixture-skill", "config");
+		// Independent oracle: the scope the fixture ran against, hashed here from the bundle's own bytes.
+		const binding = { registrySha256: sha256(path.join(configDir, "mcporter.json")), manifestSha256: sha256(path.join(configDir, "manifest.json")), buildSha256: sha256(path.join(b.bundle.root, "bin", "connectors")) };
+		const since = Math.floor(Date.now() / 1000) * 1000;
+		const auth = await runBundle(b.bundle, ["fixture-auth", "challenge-fixture-skill"], { home: b.home, binDir: authority.binDir, extraEnv: { XDG_STATE_HOME: b.state, OP_SERVICE_ACCOUNT_TOKEN: SENTINEL } });
 		expect(auth.code).toBe(0);
-		expect(JSON.parse(auth.stdout).result.data).toEqual({ connector: "challenge-fixture-skill", outcome: "success", fixtureTested: true });
-		const { code, result } = await inspect(b, ["status", "challenge-fixture-skill"], authority.binDir);
-		expect(code).toBe(0);
-		const [row] = statusRows(result);
+		expect(auth.stderr).toBe("");
+		for (const forbidden of [SENTINEL, b.home, b.state, b.bundle.root]) expect(auth.stdout).not.toContain(forbidden);
+		const authResult = JSON.parse(auth.stdout).result;
+		expect(authResult).toMatchObject({ causeCode: "SUCCESS_FIXTURE_OBSERVED", effectClass: "repository-local", transactionState: "completed", effects: { completed: ["evidence-observation"], remaining: [], uncertain: [], inventoryComplete: true } });
+		const { observedAt, validUntil } = authResult.data.observation;
+		expect(authResult.data).toEqual({ connector: "challenge-fixture-skill", outcome: "success", fixtureTested: true, observation: { state: "fixtureTested", retained: true, observedAt, validUntil } });
+		expect(Date.parse(validUntil) - Date.parse(observedAt)).toBe(30 * DAY_MS);
+
+		const recordFile = path.join(b.state, "connectors", "evidence", "challenge-fixture-skill", "fixture.json");
+		expect(statSync(recordFile).mode & 0o777).toBe(0o600);
+		const recordText = readFileSync(recordFile, "utf8");
+		expect(JSON.parse(recordText)).toEqual({ schemaVersion: 1, connector: "challenge-fixture-skill", kind: "fixture", binding, observedAt, validUntil });
+		for (const forbidden of [SENTINEL, b.home, b.state, b.bundle.root, "fixture-challenge/allowed"]) expect(recordText).not.toContain(forbidden);
+
 		const unresolvable = { verdict: "unobserved", basis: "custody-not-resolvable", observedAt: null, boundary: null, custody: null };
-		expect(row?.evidence).toEqual({
-			configured: CONFIGURED, localReady: ready(), custodyChecked: unresolvable, authenticated: unresolvable,
-			schemaQualified: NO_PROVIDER, liveReadProven: NO_PROVIDER, liveWriteProven: NO_WRITES, fixtureTested: NO_FIXTURE,
-		});
+		const unpromoted = { configured: CONFIGURED, localReady: ready(), custodyChecked: unresolvable, authenticated: unresolvable, schemaQualified: NO_PROVIDER, liveReadProven: NO_PROVIDER, liveWriteProven: NO_WRITES };
+		const status = await inspect(b, ["status", "challenge-fixture-skill"], authority.binDir, since);
+		expect(status.code).toBe(0);
+		const [row] = statusRows(status.result);
+		expect(row?.evidence).toEqual({ ...unpromoted, fixtureTested: { verdict: "proven", basis: "retained-fixture-auth", observedAt: T, boundary: "fixture", observation: { command: "connectors.fixtureAuth", binding, validUntil } } });
+
+		// Negative control: the same record no longer proves anything once the
+		// manifest it was bound to changes.
+		writeFileSync(path.join(configDir, "manifest.json"), `${readFileSync(path.join(configDir, "manifest.json"), "utf8")}\n`);
+		const changed = await inspect(b, ["status", "challenge-fixture-skill"], authority.binDir);
+		expect(statusRows(changed.result)[0]?.evidence).toEqual({ ...unpromoted, fixtureTested: { verdict: "unobserved", basis: "observation-binding-mismatch", observedAt: null, boundary: null } });
 	} finally {
 		authority.dispose();
 		b.bundle.dispose();

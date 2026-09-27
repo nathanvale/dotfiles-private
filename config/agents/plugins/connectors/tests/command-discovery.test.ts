@@ -27,7 +27,7 @@ const COMMANDS: Readonly<Record<string, readonly [string[], string]>> = {
 	"connectors.deps.repair.apply": [["deps", "repair", "--apply"], "external"],
 	"connectors.deps.update.preview": [["deps", "update", "--preview"], "repository-local"],
 	"connectors.deps.update.apply": [["deps", "update", "--apply"], "external"],
-	"connectors.fixtureAuth": [["fixture-auth"], "inspect"],
+	"connectors.fixtureAuth": [["fixture-auth"], "repository-local"],
 	"connectors.auth": [["auth"], "external"],
 	"connectors.run": [["run"], "repository-local"],
 	"connectors.run.preview": [["run", "--preview"], "repository-local"],

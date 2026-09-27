@@ -6,6 +6,10 @@ import { createBundle, createChallengeAuthorityBinDir, runBundle } from "./harne
 const SECRET = "SENTINEL_PRIVATE_CREDENTIAL_VALUE";
 const AMBIENT = "SENTINEL_AMBIENT_AUTHORITY_VALUE";
 const EFFECTS = { completed: [], remaining: [], uncertain: [], inventoryComplete: true };
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/;
+// Accepted AC21 v1 contract: a fixture success is retained as fixtureTested only.
+const FIXTURE_OBSERVED = { state: "fixtureTested", retained: true, observedAt: expect.stringMatching(ISO), validUntil: expect.stringMatching(ISO) };
+const RECORD = path.join(".local", "state", "connectors", "evidence", "challenge-fixture-skill", "fixture.json");
 
 async function runChallenge(reference: string) {
 	const bundle = createBundle();
@@ -86,9 +90,9 @@ describe("Spec AC23: a second packaged challenge adapter", () => {
 		expect(envelope.result).toEqual({
 			runId: expect.stringMatching(/^run-[0-9a-f-]{36}$/),
 			commandIdentity: "connectors.fixtureAuth", outcome: "success", failureClass: null, exitCode: 0,
-			data: { connector: "challenge-fixture-skill", outcome: "success", fixtureTested: true },
-			retryable: false, repairAction: null, nextAction: "connectors.status", effectClass: "inspect",
-			transactionState: "unchanged", causeCode: "SUCCESS_UNCHANGED", effects: EFFECTS,
+			data: { connector: "challenge-fixture-skill", outcome: "success", fixtureTested: true, observation: FIXTURE_OBSERVED },
+			retryable: false, repairAction: null, nextAction: "connectors.status", effectClass: "repository-local",
+			transactionState: "completed", causeCode: "SUCCESS_FIXTURE_OBSERVED", effects: { ...EFFECTS, completed: ["evidence-observation"] },
 		});
 		expect(receipt).toEqual({
 			reference: "fixture-challenge/allowed", nonce: expect.stringMatching(/^[0-9a-f-]{36}$/), accepted: true,
@@ -96,7 +100,7 @@ describe("Spec AC23: a second packaged challenge adapter", () => {
 		});
 	});
 
-	test("Spec AC21: fixture auth success does not promote fresh status or doctor evidence", async () => {
+	test("Spec AC21: fixture auth success proves only fixtureTested in fresh status and doctor evidence", async () => {
 		const bundle = createBundle();
 		const authority = createChallengeAuthorityBinDir(bundle);
 		try {
@@ -114,15 +118,18 @@ describe("Spec AC23: a second packaged challenge adapter", () => {
 			expect(auth.stdout).not.toContain(AMBIENT);
 			const authEnvelope = JSON.parse(auth.stdout);
 			expect(authEnvelope.result.commandIdentity).toBe("connectors.fixtureAuth");
-			expect(authEnvelope.result.data).toEqual({ connector: "challenge-fixture-skill", outcome: "success", fixtureTested: true });
+			expect(authEnvelope.result.data).toEqual({ connector: "challenge-fixture-skill", outcome: "success", fixtureTested: true, observation: FIXTURE_OBSERVED });
 			const authorityReceipt = readFileSync(path.join(bundle.root, "challenge-authority.json"), "utf8");
 			expect(JSON.parse(authorityReceipt).accepted).toBe(true);
 			expect(authorityReceipt).not.toContain(SECRET);
 			expect(authorityReceipt).not.toContain(AMBIENT);
-			expect(readdirSync(bundle.root, { recursive: true, encoding: "utf8" }).sort()).toEqual([...before, "challenge-authority.json"].sort());
+			const retained = ["challenge-authority.json", ".local", path.join(".local", "state"), path.join(".local", "state", "connectors"), path.join(".local", "state", "connectors", "evidence"), path.dirname(RECORD), RECORD];
+			expect(readdirSync(bundle.root, { recursive: true, encoding: "utf8" }).sort()).toEqual([...before, ...retained].sort());
+			const record = readFileSync(path.join(bundle.root, RECORD), "utf8");
+			for (const forbidden of [SECRET, AMBIENT, bundle.root, "fixture-challenge/allowed"]) expect(record).not.toContain(forbidden);
 
 			// Verdicts only (tests/evidence-state.test.ts owns the full
-			// observations): the fixture success stays out of every state.
+			// observations): the fixture success reaches fixtureTested and no other state.
 			const expectedVerdicts = {
 				configured: "proven",
 				localReady: "proven",
@@ -131,7 +138,7 @@ describe("Spec AC23: a second packaged challenge adapter", () => {
 				schemaQualified: "unobserved",
 				liveReadProven: "unobserved",
 				liveWriteProven: "not-applicable",
-				fixtureTested: "unobserved",
+				fixtureTested: "proven",
 			};
 			const verdicts = (evidence: Record<string, { verdict: string }>) => Object.fromEntries(Object.entries(evidence).map(([state, observation]) => [state, observation.verdict]));
 			const status = await runBundle(bundle, ["status", "challenge-fixture-skill"], env);
@@ -152,8 +159,9 @@ describe("Spec AC23: a second packaged challenge adapter", () => {
 			const { connector, ...doctorEvidence } = doctorEnvelope.result.data;
 			expect(connector).toBe("challenge-fixture-skill");
 			expect(verdicts(doctorEvidence)).toEqual(expectedVerdicts);
-			expect(readdirSync(bundle.root, { recursive: true, encoding: "utf8" }).sort()).toEqual([...before, "challenge-authority.json"].sort());
+			expect(readdirSync(bundle.root, { recursive: true, encoding: "utf8" }).sort()).toEqual([...before, ...retained].sort());
 			expect(readFileSync(path.join(bundle.root, "challenge-authority.json"), "utf8")).toBe(authorityReceipt);
+			expect(readFileSync(path.join(bundle.root, RECORD), "utf8")).toBe(record);
 		} finally {
 			authority.dispose();
 			bundle.dispose();
