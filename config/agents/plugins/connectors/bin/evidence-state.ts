@@ -1,15 +1,17 @@
 // Evidence states for `status` and `doctor` (Spec #87 AC21). Each of the
 // eight states names its verdict, the basis for it, when it was observed,
-// and the boundary the observation crossed. Only checks this invocation
-// performs locally are ever observed here: the declared dependency
-// selections, the resolved selection, and the adapter's effective custody
-// mode read from metadata. Nothing here contacts a Provider, reads a
-// credential, or writes state, and no observation owner retains an earlier
-// schema, read, custody, authentication, write, or fixture result, so those
-// stay unobserved rather than promoted. A write is never proven without an
-// exact effect receipt, and status reads none.
+// and the boundary the observation crossed. Local states come from checks
+// this invocation performs: the declared dependency selections, the resolved
+// selection, and the adapter's effective custody mode read from metadata.
+// schemaQualified and liveReadProven come only from a retained hosted-read
+// observation that bin/evidence-record.ts still admits for this selection;
+// without one they stay unobserved. Nothing here contacts a Provider, reads a
+// credential, or writes state. Custody, authentication, write, and fixture
+// results are not retained, so those stay unobserved rather than promoted. A
+// write is never proven without an exact effect receipt, and status reads none.
 import type { Adapter, CustodyResolution } from "./adapters/contract.ts";
 import { dependencyStatus, isDependencyTool } from "./dependency-status.ts";
+import { type ObservationKind, readObservation } from "./evidence-record.ts";
 import type { ConnectorManifest } from "./manifest.ts";
 import type { EnvironmentSource } from "./safe-environment.ts";
 
@@ -19,7 +21,7 @@ export interface Observation {
 	readonly verdict: Verdict;
 	readonly basis: string;
 	readonly observedAt: string | null;
-	readonly boundary: "local" | null;
+	readonly boundary: "local" | "hosted" | null;
 	readonly [detail: string]: unknown;
 }
 
@@ -30,6 +32,7 @@ export interface EvidenceRequest {
 	readonly manifest: ConnectorManifest;
 	readonly adapter: Adapter | undefined;
 	readonly selectionResolved: boolean;
+	readonly selectors: Readonly<Record<string, string>>;
 	readonly custody: CustodyResolution | null;
 	readonly env: EnvironmentSource;
 	readonly observedAt: string;
@@ -85,14 +88,36 @@ function liveWrite(request: EvidenceRequest): Observation {
 
 const noProvider = (): Observation => ({ verdict: "unobserved", basis: "status-contacts-no-provider", observedAt: null, boundary: null });
 
+// A manifest without an adapter is keyless; otherwise the adapter's own
+// effective mode, and null when none is in effect.
+function custodyMode(request: EvidenceRequest): string | null {
+	if (request.manifest.adapter === null) return "keyless";
+	return request.custody?.kind === "resolved" ? (request.custody.effective?.mode ?? null) : null;
+}
+
+function retained(request: EvidenceRequest, kind: ObservationKind): Observation {
+	const verdict = readObservation({ manifest: request.manifest, kind, selectors: request.selectors, custodyMode: custodyMode(request), env: request.env, now: Date.parse(request.observedAt) });
+	if (verdict.kind === "absent") return noProvider();
+	if (verdict.kind === "rejected") return { verdict: "unobserved", basis: verdict.basis, observedAt: null, boundary: null };
+	const { record } = verdict;
+	const operation = record.operation === undefined ? {} : { operation: record.operation };
+	return {
+		verdict: "proven",
+		basis: kind === "schema" ? "retained-hosted-keyless-schema" : "retained-hosted-keyless-read",
+		observedAt: record.observedAt,
+		boundary: "hosted",
+		observation: { route: record.route, ...operation, binding: record.binding, validUntil: record.validUntil },
+	};
+}
+
 export function observeEvidence(request: EvidenceRequest): Record<string, Observation> {
 	return {
 		configured: { verdict: "proven", basis: "manifest-registry-requirements-validated", observedAt: request.observedAt, boundary: "local" },
 		localReady: localReady(request),
 		custodyChecked: custodyState(request, "status-reads-no-credential"),
 		authenticated: custodyState(request, "status-contacts-no-provider"),
-		schemaQualified: noProvider(),
-		liveReadProven: noProvider(),
+		schemaQualified: retained(request, "schema"),
+		liveReadProven: retained(request, "read"),
 		liveWriteProven: liveWrite(request),
 		fixtureTested: { verdict: "unobserved", basis: "status-retains-no-fixture-observation", observedAt: null, boundary: null },
 	};

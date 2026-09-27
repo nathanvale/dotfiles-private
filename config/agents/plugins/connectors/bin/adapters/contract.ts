@@ -145,6 +145,16 @@ export type Executed =
 	| { readonly kind: "effect-unknown"; readonly data: Record<string, unknown>; readonly repair: string }
 	| { readonly kind: "failed-after-record"; readonly connectorCause: string; readonly data: Record<string, unknown>; readonly repair: string };
 
+// A keyless read the core may retain as evidence (Spec AC21) once it
+// succeeds: the registry server the plan calls, the origin its registry entry
+// names, and the one hosted endpoint the adapter was built for. The core, not
+// the adapter, decides whether that origin is admitted.
+export interface HostedRead {
+	readonly server: string;
+	readonly origin: string;
+	readonly hostedEndpoint: string;
+}
+
 export type Prepared =
 	| { readonly kind: "refused"; readonly refusal: AdapterRefusal }
 	| { readonly kind: "execute"; execute(capabilities: ExecutionCapabilities): Promise<Executed> }
@@ -155,6 +165,7 @@ export type Prepared =
 		readonly argv: readonly string[];
 		readonly env: Readonly<Record<string, string>>;
 		readonly data: Record<string, unknown>;
+		readonly hostedRead?: HostedRead;
 		commit(): Committed;
 		settle(): readonly LocalEffect[];
 	};

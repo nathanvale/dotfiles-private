@@ -25,6 +25,7 @@ import { downloadAndInstallMise, downloadAndInstallOp } from "./setup/download.t
 import { installPinnedUv, readValidatedUvSources } from "./setup/uv.ts";
 import { stateRoot } from "./private-state.ts";
 import { observeEvidence } from "./evidence-state.ts";
+import { retainObservation } from "./evidence-record.ts";
 
 const CONTRACT_VERSION = "2.0.0";
 const PROGRAM = "connectors";
@@ -104,6 +105,7 @@ export type CauseCode =
 	| "TRANSIENT_PROVIDER_AFTER_RECOVERY"
 	| "TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT"
 	| "SUCCESS_AFTER_ACCOUNT_EFFECT"
+	| "SUCCESS_READ_OBSERVED"
 	| "DOMAIN_PROVIDER_CALL_FAILED"
 	| "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT"
 	| "DOMAIN_MCPORTER_REPAIR_REQUIRED"
@@ -208,7 +210,7 @@ const SELECTED_SUCCESS: readonly CauseCode[] = ["SUCCESS_UNCHANGED", "SUCCESS_BO
 const SELECTION_FAILURES: readonly CauseCode[] = ["INTERNAL_MCPORTER_SELECTION_UNKNOWN", "DOMAIN_MCPORTER_REPAIR_REQUIRED", "DOMAIN_MCPORTER_REPAIR_AFTER_BOOTSTRAP", "DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY"];
 const SELECTED_TRANSIENT: readonly CauseCode[] = ["TRANSIENT_PROVIDER_UNREACHABLE", "TRANSIENT_PROVIDER_AFTER_BOOTSTRAP", "TRANSIENT_PROVIDER_AFTER_RECOVERY"];
 const PROVIDER_CALL_FAILURES: readonly CauseCode[] = ["DOMAIN_PROVIDER_CALL_FAILED", "DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT"];
-const ADAPTER_READ: readonly CauseCode[] = [...SELECTED_TRANSIENT, ...PROVIDER_CALL_FAILURES, "SUCCESS_AFTER_ACCOUNT_EFFECT", "TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT"];
+const ADAPTER_READ: readonly CauseCode[] = [...SELECTED_TRANSIENT, ...PROVIDER_CALL_FAILURES, "SUCCESS_AFTER_ACCOUNT_EFFECT", "TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT", "SUCCESS_READ_OBSERVED"];
 const REFUSAL_CAUSE: Readonly<Record<AdapterRefusalKind, CauseCode>> = {
 	usage: "USAGE_ADAPTER_REFUSED",
 	domain: "DOMAIN_ADAPTER_REFUSED",
@@ -590,6 +592,7 @@ const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	TRANSIENT_PROVIDER_AFTER_RECOVERY: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
 	TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "transient", exitCode: 75, retryable: true, dataRule: "null", repairActionRule: "nonempty-string" },
 	SUCCESS_AFTER_ACCOUNT_EFFECT: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	SUCCESS_READ_OBSERVED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
 	DOMAIN_PROVIDER_CALL_FAILED: { outcome: "failed", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	DOMAIN_MCPORTER_REPAIR_REQUIRED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
@@ -669,6 +672,7 @@ const STATION_SEMANTICS: Readonly<Record<CauseCode, { readonly reachability: Rea
 	TRANSIENT_PROVIDER_AFTER_RECOVERY: { reachability: "provider", trigger: "the Provider was unreachable after MCPorter selection recovery" },
 	TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT: { reachability: "provider", trigger: "the Provider was unreachable after the adapter recorded account effects" },
 	SUCCESS_AFTER_ACCOUNT_EFFECT: { reachability: "command", trigger: "the read completed after the adapter recorded account effects" },
+	SUCCESS_READ_OBSERVED: { reachability: "provider", trigger: "the read completed on an admitted hosted route and its evidence observation was retained" },
 	DOMAIN_PROVIDER_CALL_FAILED: { reachability: "provider", trigger: "the Provider answered the call with a failure" },
 	DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT: { reachability: "provider", trigger: "the Provider answered with a failure after local effects were recorded" },
 	DOMAIN_MCPORTER_REPAIR_REQUIRED: { reachability: "dependency-selection", trigger: "the selected MCPorter is missing, damaged, or not the pinned version" },
@@ -811,10 +815,11 @@ const ADMITTED_EFFECTS: Readonly<Record<"selection" | "remaining" | "uncertain",
 };
 
 // A completed inventory is one selection inventory followed by connector
-// account effects and then journaled-write effects, each at most once and in
-// this order.
+// account effects, the retained evidence observation of a hosted read, and
+// then journaled-write effects, each at most once and in this order.
 const ACCOUNT_EFFECT_ORDER: readonly string[] = ["account-vault", "mcporter-vault-file", "account-grant"] satisfies readonly (LocalEffect | "account-grant")[];
-const CONNECTOR_EFFECT_ORDER: readonly string[] = [...ACCOUNT_EFFECT_ORDER, ...WRITE_EFFECT_ORDER];
+const EVIDENCE_OBSERVATION = "evidence-observation";
+const CONNECTOR_EFFECT_ORDER: readonly string[] = [...ACCOUNT_EFFECT_ORDER, EVIDENCE_OBSERVATION, ...WRITE_EFFECT_ORDER];
 
 function isAdmittedCompleted(completed: readonly unknown[]): boolean {
 	const split = completed.findIndex((effect) => CONNECTOR_EFFECT_ORDER.includes(effect as string));
@@ -1106,7 +1111,7 @@ function helpText(): string {
 		"  config validate [connector]                     Validate manifests, registries, and packaged requirements",
 		"  config show <connector> --resolved --json       Show resolved nonsecret configuration and provenance",
 		"                                                  Repeated --select names must carry identical values",
-		"  status [connector [--select name=value ...]]    Report eight evidence states from local checks; live states stay unobserved",
+		"  status [connector [--select name=value ...]]    Report eight evidence states from local checks and retained hosted reads",
 		"  doctor <connector>                              Report one connector's locally observed evidence",
 		"  schema <connector> [--select name=value ...]     Fetch live schema; a credentialed connector reads through its adapter",
 		"  deps status [tool]                               Report required and selected dependency versions; changes nothing",
@@ -1745,7 +1750,7 @@ function evidenceRow(manifest: ConnectorManifest, given: ReadonlyMap<string, str
 	const adapter = manifest.adapter === null ? undefined : ADAPTERS[manifest.adapter];
 	const values = Object.fromEntries(Object.entries(selectors.values).map(([name, entry]) => [name, entry.value]));
 	const custody = selectionResolved && adapter?.resolveCustody ? adapter.resolveCustody({ manifest, selectors: values, skillsRoot: skillsRoot(), env: process.env }) : null;
-	return { selection: selectors.values, evidence: observeEvidence({ manifest, adapter, selectionResolved, custody, env: process.env, observedAt }) };
+	return { selection: selectors.values, evidence: observeEvidence({ manifest, adapter, selectionResolved, selectors: values, custody, env: process.env, observedAt }) };
 }
 
 function parseStatusArgs(args: readonly string[]): { id: string | null; given: Map<string, string> } | null {
@@ -2253,7 +2258,8 @@ function readCause(completed: readonly string[], failure: ReadFailure): CauseCod
 function readSuccessCause(completed: readonly string[]): CauseCode {
 	if (bootstrapCompleted) return "SUCCESS_BOOTSTRAPPED";
 	if (recoveryCompleted) return "SUCCESS_MCPORTER_RECOVERED";
-	return completed.length > 0 ? "SUCCESS_AFTER_ACCOUNT_EFFECT" : "SUCCESS_UNCHANGED";
+	if (completed.some((effect) => ACCOUNT_EFFECT_ORDER.includes(effect))) return "SUCCESS_AFTER_ACCOUNT_EFFECT";
+	return completed.includes(EVIDENCE_OBSERVATION) ? "SUCCESS_READ_OBSERVED" : "SUCCESS_UNCHANGED";
 }
 
 // MCPorter 0.14.0's `call --output json` failure prints one JSON object whose
@@ -2281,9 +2287,28 @@ function selectFlags(command: AdapterCommand): string {
 	return selectPlaceholders(command.given.keys());
 }
 
-async function runRead(command: AdapterCommand, plan: TransportPlan, binary: string, local: readonly LocalEffect[]): Promise<void> {
+// After a keyless read succeeds, its hosted observation is retained for
+// status (Spec AC21). The retained record is a declared local effect; a
+// record that could not be kept is reported in data and claims no effect. A
+// plan without a hostedRead, or an origin the record owner does not admit,
+// retains nothing and reports nothing.
+function retainRead(command: AdapterCommand, plan: TransportPlan, manifest: ConnectorManifest, completed: string[]): Record<string, unknown> {
+	if (!plan.hostedRead || (command.action.kind !== "schema" && command.action.kind !== "run")) return {};
+	const kind = command.action.kind === "run" ? "read" : "schema";
+	const selectors = resolveSelectors(manifest, command.given);
+	const values = Object.fromEntries(Object.entries(selectors.values).map(([name, entry]) => [name, entry.value]));
+	const operation = command.action.kind === "run" ? command.action.operation : null;
+	const retained = retainObservation({ manifest, kind, operation, hostedRead: plan.hostedRead, selectors: values, env: process.env, observedAt: new Date() });
+	if (retained.kind === "not-admitted") return {};
+	const state = kind === "schema" ? "schemaQualified" : "liveReadProven";
+	if (retained.kind === "not-retained") return { observation: { state, retained: false, cause: retained.reason } };
+	completed.push(EVIDENCE_OBSERVATION);
+	return { observation: { state, retained: true, observedAt: retained.observedAt, validUntil: retained.validUntil } };
+}
+
+async function runRead(command: AdapterCommand, plan: TransportPlan, manifest: ConnectorManifest, binary: string, local: readonly LocalEffect[]): Promise<void> {
 	const { stdout, exitCode } = await runDrained([binary, ...plan.argv], { ...plan.env });
-	const completed = [...completedSelectionEffects(), ...local, ...plan.settle()];
+	const completed: string[] = [...completedSelectionEffects(), ...local, ...plan.settle()];
 	const effects = { completed, uncertain: [] };
 	if (exitCode !== 0) {
 		const failure = readFailure(stdout);
@@ -2296,11 +2321,12 @@ async function runRead(command: AdapterCommand, plan: TransportPlan, binary: str
 	} catch {
 		result = { raw: stdout };
 	}
+	const observation = retainRead(command, plan, manifest, completed);
 	if (command.action.kind !== "run") {
-		emitAdapterEnvelope(command, readCause(completed, null), `schema evidence fetched for ${command.id}`, { connector: command.id, ...plan.data, schema: result }, null, effects);
+		emitAdapterEnvelope(command, readCause(completed, null), `schema evidence fetched for ${command.id}`, { connector: command.id, ...plan.data, schema: result, ...observation }, null, effects);
 		return;
 	}
-	emitAdapterEnvelope(command, readCause(completed, null), `${command.id} ${command.action.operation} completed`, { connector: command.id, operation: command.action.operation, ...plan.data, result }, null, effects);
+	emitAdapterEnvelope(command, readCause(completed, null), `${command.id} ${command.action.operation} completed`, { connector: command.id, operation: command.action.operation, ...plan.data, result, ...observation }, null, effects);
 }
 
 function readRepair(command: AdapterCommand, failure: ReadFailure): string {
@@ -2324,7 +2350,7 @@ async function runAttendedLogin(command: AdapterCommand, plan: TransportPlan, bi
 	emitAdapterEnvelope(command, "DOMAIN_AUTH_LOGIN_UNKNOWN", `${PROGRAM}: ${command.id} attended login did not complete`, data, `Run connectors auth status ${command.id}${selectFlags(command)} to inspect the account vault before retrying login`, { completed, uncertain: ["account-grant"] });
 }
 
-async function runTransport(command: AdapterCommand, plan: TransportPlan, terminal: number | null): Promise<void> {
+async function runTransport(command: AdapterCommand, plan: TransportPlan, manifest: ConnectorManifest, terminal: number | null): Promise<void> {
 	const selection = await ensureMcporter(process.env);
 	if (!selection.ok) {
 		emitSelectionFailure(selection, command.commandIdentity);
@@ -2337,7 +2363,7 @@ async function runTransport(command: AdapterCommand, plan: TransportPlan, termin
 		emitAdapterRefusal(command, committed.refusal, committed.completed);
 		return;
 	}
-	if (terminal === null) await runRead(command, plan, selection.binary, committed.completed);
+	if (terminal === null) await runRead(command, plan, manifest, selection.binary, committed.completed);
 	else await runAttendedLogin(command, plan, selection.binary, terminal, committed.completed);
 }
 
@@ -2377,7 +2403,7 @@ async function runAdapterCommand(command: AdapterCommand, manifest: ConnectorMan
 		return;
 	}
 	try {
-		await runTransport(command, prepared, terminal);
+		await runTransport(command, prepared, manifest, terminal);
 	} finally {
 		if (terminal !== null) closeSync(terminal);
 	}

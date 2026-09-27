@@ -39,9 +39,14 @@ const refusedExecution = (connectorCause: string, repair: string): Executed => (
 const sameList = (left: unknown, right: unknown): boolean => Array.isArray(left) && Array.isArray(right) && left.length === right.length && left.every((value, index) => value === right[index]);
 const hasKeys = (entry: Record<string, unknown> | undefined, keys: readonly string[]): entry is Record<string, unknown> => entry !== undefined && sameList(Object.keys(entry).sort(), keys);
 
-// The keyless allow-list, only when the registry holds exactly the keyless
-// entry and the packaged account entry with the identical allow-list.
-function allowedTools(connector: AccountKeyConnector, skillsRoot: string): readonly string[] | null {
+interface Registry {
+	readonly tools: readonly string[];
+	readonly keylessOrigin: string;
+}
+
+// The keyless allow-list and origin, only when the registry holds exactly the
+// keyless entry and the packaged account entry with the identical allow-list.
+function packagedRegistry(connector: AccountKeyConnector, skillsRoot: string): Registry | null {
 	let servers: Record<string, Record<string, unknown>>;
 	try {
 		servers = (JSON.parse(readFileSync(path.join(skillsRoot, connector.id, "config", "mcporter.json"), "utf8")) as { mcpServers: Record<string, Record<string, unknown>> }).mcpServers;
@@ -53,7 +58,8 @@ function allowedTools(connector: AccountKeyConnector, skillsRoot: string): reado
 	if (!sameList(Object.keys(servers).sort(), [connector.id, `${connector.id}-account`].sort())) return null;
 	if (!hasKeys(keyless, KEYLESS_KEYS) || !hasKeys(account, ACCOUNT_KEYS)) return null;
 	const packaged = account.command === "../../../bin/connectors" && sameList(account.args, ["__internal", connector.id, "provider"]) && JSON.stringify(account.env) === JSON.stringify({ [INTERNAL_INVOCATION_CONTEXT_ENV]: `\${${INTERNAL_INVOCATION_CONTEXT_ENV}}` });
-	return packaged && sameList(keyless.allowedTools, account.allowedTools) ? (keyless.allowedTools as string[]) : null;
+	if (!packaged || !sameList(keyless.allowedTools, account.allowedTools) || typeof keyless.baseUrl !== "string") return null;
+	return { tools: keyless.allowedTools as string[], keylessOrigin: keyless.baseUrl };
 }
 
 function keyHandoff(connector: AccountKeyConnector, item: string): string {
@@ -121,7 +127,10 @@ function accountStep(connector: AccountKeyConnector, request: SchemaRequest, ite
 	};
 }
 
-function keylessStep(connector: AccountKeyConnector, request: SchemaRequest, mcporterArgs: readonly string[], data: Record<string, unknown>): Prepared {
+// A keyless plan names its registry origin and this connector's hosted
+// endpoint, so the core can retain a successful read as evidence only when
+// the two agree on an admitted origin.
+function keylessStep(connector: AccountKeyConnector, request: SchemaRequest, origin: string, mcporterArgs: readonly string[], data: Record<string, unknown>): Prepared {
 	let plan: ReturnType<typeof planDispatcherRoute>;
 	try {
 		plan = planDispatcherRoute([connector.id, "--", ...mcporterArgs], request.skillsRoot, safeEnvironment(request.env), `${connector.id}-mode=keyless`);
@@ -129,16 +138,17 @@ function keylessStep(connector: AccountKeyConnector, request: SchemaRequest, mcp
 		if (error instanceof RouteError) return refused(error.exitCode === 2 ? "usage" : "schema", `route-${error.code}`, `Restore skills/${connector.id}/config to the packaged registry`);
 		throw error;
 	}
-	return { kind: "transport", effect: "read", argv: plan.argv, env: plan.env, data: { mode: "keyless", ...data }, commit: () => ({ refusal: null, completed: [] }), settle: () => [] };
+	const hostedRead = { server: connector.id, origin, hostedEndpoint: connector.endpoint };
+	return { kind: "transport", effect: "read", argv: plan.argv, env: plan.env, data: { mode: "keyless", ...data }, hostedRead, commit: () => ({ refusal: null, completed: [] }), settle: () => [] };
 }
 
 // Resolve the registry and mode, then hand the chosen mode to its step.
-function modeStep(connector: AccountKeyConnector, request: SchemaRequest, keyless: (tools: readonly string[]) => Prepared, account: (tools: readonly string[], item: string) => Prepared): Prepared {
-	const tools = allowedTools(connector, request.skillsRoot);
-	if (tools === null) return refused("schema", "registry-invalid", `Restore skills/${connector.id}/config/mcporter.json: a keyless entry and the packaged ${connector.id}-account entry with the identical allowedTools`);
+function modeStep(connector: AccountKeyConnector, request: SchemaRequest, keyless: (tools: readonly string[], origin: string) => Prepared, account: (tools: readonly string[], item: string) => Prepared): Prepared {
+	const registry = packagedRegistry(connector, request.skillsRoot);
+	if (registry === null) return refused("schema", "registry-invalid", `Restore skills/${connector.id}/config/mcporter.json: a keyless entry and the packaged ${connector.id}-account entry with the identical allowedTools`);
 	const mode = accountMode(connector.id, connector.label, request.env);
 	if (mode.kind === "invalid") return refused("domain", "registration-invalid", mode.repair);
-	return mode.kind === "account" ? account(tools, mode.item) : keyless(tools);
+	return mode.kind === "account" ? account(registry.tools, mode.item) : keyless(registry.tools, registry.keylessOrigin);
 }
 
 function prepareRun(connector: AccountKeyConnector, request: SchemaRequest, operation: string, input: Readonly<Record<string, unknown>> | null): Prepared {
@@ -147,7 +157,7 @@ function prepareRun(connector: AccountKeyConnector, request: SchemaRequest, oper
 	return modeStep(
 		connector,
 		request,
-		(tools) => (tools.includes(operation) ? keylessStep(connector, request, args, {}) : unknown),
+		(tools, origin) => (tools.includes(operation) ? keylessStep(connector, request, origin, args, {}) : unknown),
 		(tools, item) => (tools.includes(operation) ? accountStep(connector, request, item, args, (result) => ({ operation, mode: "account", result })) : unknown),
 	);
 }
@@ -157,7 +167,7 @@ function prepareSchema(connector: AccountKeyConnector, request: SchemaRequest): 
 	return modeStep(
 		connector,
 		request,
-		(tools) => keylessStep(connector, request, args, { server: connector.id, allowedTools: tools }),
+		(tools, origin) => keylessStep(connector, request, origin, args, { server: connector.id, allowedTools: tools }),
 		(tools, item) => accountStep(connector, request, item, args, (schema) => ({ mode: "account", server: `${connector.id}-account`, allowedTools: tools, schema })),
 	);
 }
