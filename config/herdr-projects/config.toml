@@ -11,3 +11,13 @@ agent = "claude"
 model = "claude-opus-5-5"
 effort = "high"
 description = "Claude Code on Opus 5.5 at high effort: design-sensitive code, live proofs, reviews"
+
+[profiles.claude-sonnet]
+agent = "claude"
+model = "claude-sonnet-5"
+effort = "medium"
+
+[profiles.codex-sol]
+agent = "codex"
+model = "gpt-6-sol"
+effort = "high"
