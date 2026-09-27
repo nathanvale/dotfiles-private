@@ -136,6 +136,89 @@ provider call. They are resolved by hand against the live object.
 Do not generate an Atlassian CLI initially. Revisit a narrow generated CLI only
 after two to four stable workflows emerge.
 
+### Amendment: Jira wiki-comment capability exception (28 September 2026)
+
+Authority: Nathan, 28 September 2026, on the prototype result below.
+
+Problem. Reviewers read before-and-after screenshots in Jira comments. On
+Jira Cloud the Community Provider (mcp-atlassian 0.23.1, and upstream `main`
+at the same date) converts every comment body with its own Markdown-to-ADF
+converter, which emits no media node: `!file.png!` lands as literal text and
+`![alt](url)` becomes a link. Its comment tools accept only a Markdown body.
+The Community read path exposes no media-services id for an attachment, so
+no Provider input can produce an inline image. The Service Management comment
+path renders server-side but answers 403 outside a Service Management
+project.
+
+Evidence. A throwaway probe on 28 September 2026 sent `PUT
+/rest/api/2/issue/SMSTX-364/comment/454771` with a wiki-markup body naming
+three attached files; Jira answered HTTP 200 and `renderedBody` carried one
+`<img>` per attachment (ids 202456, 202457, 202458), the `[~accountid:…]`
+mention as a user link, and the `[label|url]` link as an anchor.
+
+Decision. Admit one narrow exception to the one-Provider, MCPorter-only
+route: the operations `issue.comment.media` and `issue.comment.media.update`,
+which post a Jira wiki-markup comment whose image macros name attachments
+already on the same issue, through an owned REST v2 Provider
+(`scripts/atlassian-rest-provider.ts`, server `atlassian-rest-jira`,
+persisted Provider name `rest`).
+
+- Comments only. The REST Provider's vocabulary is six fixed requests:
+  read the principal, read an issue's attachments, list or read comments
+  with rendered HTML, add a comment, edit a comment. It refuses any other
+  tool or argument before a request leaves.
+- Not a fallback. The operations are named by the caller; a Community
+  operation that fails stays failed, and no route re-shapes a write for the
+  other Provider.
+- Same write contract. Preview then apply through the same journal and
+  receipts; the preview binds the exact wiki body and the ids of every
+  referenced attachment; apply refuses when either moved; read-back proves
+  an `<img>` per bound attachment in `renderedBody`, and for an edit that
+  the comment's `updated` moved. `adjudicate` and `unlock` work unchanged.
+- Author guard. The edit form reads the principal's account id and refuses a
+  comment another account authored before any write.
+- Same custody. The REST Provider recovers the binding from the dispatcher's
+  internal channel and re-reads the exact item inside its own process; the
+  credential exists only there and in the Authorization header, never in
+  argv, the envelope, or a public stream. The dispatcher hands the request
+  on stdin and reads one status-and-body line back; the site origin is the
+  item's Trusted Site Origin, never an argument.
+
+Consequences.
+
+- Negative: a second transport for one capability. Its request shapes,
+  status translation, and rendered-HTML matching are owned here and must be
+  re-qualified when Jira's REST v2 comment endpoints or rendered markup
+  change; the Community Provider's own upgrades do not cover them.
+- Negative: two Provider names on persisted records. The journal accepts
+  `community` and `rest`; each operation's records must name its own
+  Provider, and a record naming any other Provider is refused as retired.
+- Negative: the wiki body is a second comment dialect beside Markdown, with
+  its own mention, link, and code syntax; the skill documents both and the
+  caller chooses by operation.
+- Neutral: the owned schema the dispatcher confirms REST arguments against
+  is static, and the REST Provider refuses the same vocabulary itself; live
+  `tools/list` qualification does not apply to this route.
+- Positive: reviewers see screenshots inline; the exception is one named
+  capability with the same preview, journal, read-back, and adjudication
+  posture as every other write.
+
+Confirmation. Fixture-proven in the plugin suite (28 September 2026): the
+contract names the two operations on the REST server and every other
+operation on its Community route; preview binds arguments and attachment
+ids; a replaced attachment or a moved comment refuses the apply before any
+send; a reply or read-back completes only when every bound attachment
+renders; a lost reply is adjudicated from a new rendering comment and never
+from a historical one; the author guard refuses before any read of the
+edit's body leaves; the REST Provider refuses arguments, a non-Jira
+product, a rotated item, and any tool or argument outside its vocabulary
+before a request, with no secret on any stream. Live qualification required
+before acceptance: one `issue.comment.media` with two inline images on a
+disposable issue, then one `issue.comment.media.update` of it, each read
+back through the dispatcher. Revisit trigger: an upstream mcp-atlassian
+release that emits ADF media nodes from Markdown, which would retire this
+route.
+
 The Connectors plugin was selected for a credential-safe repair on
 21 September 2026. Nathan approved the one-Provider direction on 23 September
 2026. This ADR remains proposed until the Community route is live-qualified.

@@ -5,10 +5,10 @@
 // text never crosses the transport seam; the outcomes carry fixed text and
 // identifiers only.
 import type { BindResult, CredentialBinding } from "../custody/index.ts";
-import { type CauseCode, OPERATION_SPECS, type OperationSpec, type Product, PROVIDER, type Provenance, serverFor, type TransactionState } from "./contract.ts";
+import { type CauseCode, OPERATION_SPECS, type OperationSpec, type Product, type Provenance, type TransactionState } from "./contract.ts";
 import { confirmSchema, type Dependencies, type Input, providerArguments, REPAIR_TEXT, readSchema, type SchemaTool, type TransportFailure, type TransportResult } from "./engine.ts";
 import { canonicalDigest, type Effect, type Evidence, JournalError, type Receipt, type WriteOperation } from "./journal.ts";
-import { baselineFromReply, effectKindOf, effectsFromReply, isObjectDelete, observeIssue, observePage, type PreparedContext, preparation, readBackEvidence, readBackPlan, type ReadBack, type RevisionMatch, transitionTo, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
+import { AUTHOR_GUARD_REASON, accountIdOf, baselineFromReply, effectKindOf, effectsFromReply, isObjectDelete, observeIssue, observePage, observeRestComment, type PreparedContext, preparation, type Preparation, readBackEvidence, readBackPlan, type ReadBack, resolveMediaAttachments, type RevisionMatch, transitionTo, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
 
 export interface Outcome {
 	cause: CauseCode;
@@ -29,6 +29,9 @@ const refusal = (cause: CauseCode, detail: string | null = REPAIR_TEXT[cause as 
 const success = (data: unknown): Outcome => ({ cause: "success", data, detail: null, transactionState: "unchanged", effects: [], uncertain: [] });
 const failed = (attempt: Attempt): Outcome => ({ cause: attempt.cause, data: null, detail: attempt.detail, transactionState: "unchanged", effects: [], uncertain: [] });
 const effectId = (effect: Effect) => `${effect.kind}:${effect.id}`;
+// The Provider an operation's records must name: a persisted record naming
+// any other Provider is retired, never reinterpreted.
+const providerOf = (operation: WriteOperation) => OPERATION_SPECS[operation].provider;
 
 export class Session {
 	readonly provenance: Provenance[] = [];
@@ -49,24 +52,24 @@ export class Session {
 		return bound;
 	}
 
-	route(product: Product, binding: CredentialBinding): Route {
-		return new Route(this, product, binding);
+	route(spec: OperationSpec, binding: CredentialBinding): Route {
+		return new Route(this, spec.product, binding, spec.server);
 	}
 }
 
-// One product route for one call sequence: lists the live schema once and
-// confirms every tool against it before the tool is called.
+// One route server for one call sequence: lists the schema once and confirms
+// every tool against it before the tool is called. The server is the spec's:
+// a Community product route, or the owned REST route for the wiki-comment
+// exception.
 export class Route {
-	readonly server: string;
 	private tools: SchemaTool[] | undefined;
 
 	constructor(
 		private readonly session: Session,
 		readonly product: Product,
 		private readonly binding: CredentialBinding,
-	) {
-		this.server = serverFor(product);
-	}
+		readonly server: string,
+	) {}
 
 	get trustedOrigin(): string {
 		return this.binding.origin;
@@ -126,7 +129,7 @@ export class Route {
 export async function readFlow(session: Session, spec: OperationSpec, input: Input): Promise<Outcome> {
 	const bound = await session.binding(spec.product);
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
-	const route = session.route(spec.product, bound.binding);
+	const route = session.route(spec, bound.binding);
 	const args = providerArguments(spec, input);
 	const attempt = (await route.ready({ tool: spec.tool, args })) ?? (await route.call(spec.tool, args));
 	return attempt.cause === "success" ? success(attempt.data) : failed(attempt);
@@ -190,6 +193,32 @@ async function preparePage(route: Route, ctx: PreparedContext, pageId: string): 
 	return { ctx: prepared };
 }
 
+// The wiki-comment exception binds the attachment ids its body references,
+// through the owned REST route: every referenced image must be attached to
+// the issue exactly once. An edit also reads the principal and the comment,
+// and refuses a comment another account authored before any write.
+async function prepareMedia(route: Route, ctx: PreparedContext, step: Extract<Preparation, { kind: "media" | "media-comment" }>): Promise<Prepared> {
+	const listed = await route.call("jira_rest_issue_attachments", { issue_key: step.issueKey });
+	if (listed.cause !== "success") return { outcome: failed(listed) };
+	const issue = observeIssue(listed.data);
+	if (issue.key !== step.issueKey) return { outcome: refusal("capability-unavailable", "the preparatory Jira read names a different issue") };
+	const resolved = resolveMediaAttachments(issue.attachments, step.images);
+	if (!resolved.ok) return { outcome: refusal(resolved.cause, resolved.reason) };
+	const prepared: PreparedContext = { ...ctx, baseline: { ...ctx.baseline, effectIds: resolved.ids } };
+	if (step.kind === "media") return { ctx: prepared };
+	const me = await route.call("jira_rest_myself", {});
+	if (me.cause !== "success") return { outcome: failed(me) };
+	const principal = accountIdOf(me.data);
+	if (principal === undefined) return { outcome: refusal("capability-unavailable", "the principal read exposes no account id for the author guard") };
+	const read = await route.call("jira_rest_comment_get", { issue_key: step.issueKey, comment_id: step.commentId });
+	if (read.cause !== "success") return { outcome: failed(read) };
+	const comment = observeRestComment(read.data);
+	if (comment.id !== step.commentId) return { outcome: refusal("capability-unavailable", "the comment read names a different comment") };
+	if (comment.authorAccountId !== principal) return { outcome: refusal("input-invalid", AUTHOR_GUARD_REASON) };
+	if (comment.updated === undefined) return { outcome: refusal("capability-unavailable", "the comment read exposes no updated timestamp to bind the revision") };
+	return { ctx: { ...prepared, revision: comment.updated } };
+}
+
 async function bindBaseline(route: Route, operation: WriteOperation, input: WriteInput, ctx: PreparedContext): Promise<Prepared> {
 	const plan = readBackPlan(operation, input);
 	const read = await route.call(plan.tool, plan.args);
@@ -197,7 +226,10 @@ async function bindBaseline(route: Route, operation: WriteOperation, input: Writ
 	const observed = baselineFromReply(operation, input, read.data, route.trustedOrigin);
 	if (observed.kind === "refused") return { outcome: refusal("input-invalid", observed.reason) };
 	if (observed.kind === "indeterminate") return { outcome: refusal("capability-unavailable", `${observed.reason}; live qualification is required`) };
-	return { ctx: { ...ctx, baseline: observed.baseline } };
+	// Identifiers the preparation bound (the media attachment ids) survive the
+	// baseline read, which binds the comment candidates and revision.
+	const effectIds = [...new Set([...ctx.baseline.effectIds, ...observed.baseline.effectIds])];
+	return { ctx: { ...ctx, baseline: { ...observed.baseline, effectIds } } };
 }
 
 // Preparatory reads before a write: the target's current revision, then
@@ -222,6 +254,10 @@ async function prepare(route: Route, operation: WriteOperation, input: WriteInpu
 			break;
 		case "page":
 			prepared = await preparePage(route, ctx, step.pageId);
+			break;
+		case "media":
+		case "media-comment":
+			prepared = await prepareMedia(route, ctx, step);
 			break;
 	}
 	if ("outcome" in prepared) return prepared;
@@ -269,7 +305,7 @@ interface WriteContext {
 async function writeContext(session: Session, spec: OperationSpec, input: WriteInput): Promise<WriteContext | Outcome> {
 	const bound = await session.binding(spec.product);
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
-	const route = session.route(spec.product, bound.binding);
+	const route = session.route(spec, bound.binding);
 	const placeholder: PreparedContext = { revision: null, baseline: { effectIds: [], commentIds: [], revision: null }, currentTitle: "pending", transitionId: "pending" };
 	const ready = await route.ready({ tool: spec.tool, args: writeArguments(spec, input, placeholder).args });
 	if (ready) return failed(ready);
@@ -292,7 +328,7 @@ export async function previewFlow(session: Session, spec: OperationSpec, input: 
 	try {
 		const preview = session.deps.journal(session.tenant).recordPreview({
 			operation: spec.id as WriteOperation,
-			provider: PROVIDER,
+			provider: spec.provider,
 			canonicalInput: context.input,
 			providerArgs: context.bound,
 			revision: context.ctx.revision,
@@ -319,7 +355,8 @@ export async function previewFlow(session: Session, spec: OperationSpec, input: 
 // A reply proves a create, comment, or attachment only with an identifier
 // outside the preview baseline; updates and deletes are always read back.
 function replyEffectIsNew(operation: WriteOperation, id: string, context: WriteContext): boolean {
-	if (operation.endsWith(".comment")) return !context.ctx.baseline.commentIds.includes(id);
+	if (operation.endsWith(".update")) return false;
+	if (effectKindOf(operation).endsWith("-comment")) return !context.ctx.baseline.commentIds.includes(id);
 	if (operation.endsWith(".create") || operation.endsWith(".attach")) return !context.ctx.baseline.effectIds.includes(id);
 	return false;
 }
@@ -328,7 +365,7 @@ function replyEffectIsNew(operation: WriteOperation, id: string, context: WriteC
 async function settleEvidence(context: WriteContext, attempt: Attempt): Promise<Evidence> {
 	const operation = context.spec.id as WriteOperation;
 	if (attempt.cause === "success") {
-		const effects = effectsFromReply(operation, context.input, attempt.data);
+		const effects = effectsFromReply(operation, context.input, attempt.data, context.ctx.baseline);
 		if (effects.length > 0 && effects.every((effect) => replyEffectIsNew(operation, effect.id, context))) return { proof: "completed", effects };
 	}
 	const revisionMatches: RevisionMatch = (observed) => context.ctx.revision !== null && observed === context.ctx.revision;
@@ -373,7 +410,7 @@ export async function applyFlow(session: Session, spec: OperationSpec, input: Wr
 	// condition under the object lock as the atomic, authoritative guard.
 	try {
 		const recorded = session.deps.journal(session.tenant).preview(previewId);
-		if (recorded.provider !== PROVIDER) throw new JournalError("preview-provider-retired", "the preview was recorded for a Provider this route no longer has; preview again");
+		if (recorded.provider !== spec.provider) throw new JournalError("preview-provider-retired", "the preview was recorded for a Provider this route no longer has; preview again");
 	} catch (error) {
 		return journalRefusal(error);
 	}
@@ -382,7 +419,7 @@ export async function applyFlow(session: Session, spec: OperationSpec, input: Wr
 	let attempt: Attempt | null = null;
 	try {
 		const receipt = await session.deps.journal(session.tenant).apply(
-			{ previewId, provider: PROVIDER, canonicalInput: context.input, providerArgs: context.bound, revision: context.ctx.revision, baseline: context.ctx.baseline },
+			{ previewId, provider: spec.provider, canonicalInput: context.input, providerArgs: context.bound, revision: context.ctx.revision, baseline: context.ctx.baseline },
 			async (_intent, sending, boundArgs) => {
 				const shape = context.route.confirm(context.spec.tool, boundArgs);
 				if (shape) {
@@ -424,13 +461,13 @@ export function unlockFlow(session: Session, runId: string): Outcome {
 		const journal = session.deps.journal(session.tenant);
 		try {
 			const receipt = journal.receipt(runId);
-			if (receipt.provider !== PROVIDER) return refusal("refused-state", `${REPAIR_TEXT["refused-state"]}; receipt-provider-retired`);
+			if (receipt.provider !== providerOf(receipt.operation)) return refusal("refused-state", `${REPAIR_TEXT["refused-state"]}; receipt-provider-retired`);
 			journal.unlock(receipt.objectIdentity);
 			return success({ runId, objectIdentity: receipt.objectIdentity, unlocked: true });
 		} catch (error) {
 			if (!(error instanceof JournalError) || error.code !== "receipt-unknown") throw error;
 			const preview = journal.preview(runId);
-			if (preview.provider !== PROVIDER) return refusal("refused-preview", `${REPAIR_TEXT["refused-preview"]}; preview-provider-retired`);
+			if (preview.provider !== providerOf(preview.operation)) return refusal("refused-preview", `${REPAIR_TEXT["refused-preview"]}; preview-provider-retired`);
 			journal.unlock(preview.objectIdentity);
 			return success({ previewId: preview.previewId, objectIdentity: preview.objectIdentity, unlocked: true });
 		}
@@ -465,11 +502,11 @@ export async function adjudicateFlow(session: Session, runId: string, rawInput: 
 		return journalRefusal(error);
 	}
 	if (receipt.status === "completed" || receipt.status === "unchanged") return refusal("refused-evidence", `${REPAIR_TEXT["refused-evidence"]}; receipt-already-resolved`);
-	if (receipt.provider !== PROVIDER) return refusal("refused-state", `${REPAIR_TEXT["refused-state"]}; receipt-provider-retired`);
+	if (receipt.provider !== providerOf(receipt.operation)) return refusal("refused-state", `${REPAIR_TEXT["refused-state"]}; receipt-provider-retired`);
 	const spec = OPERATION_SPECS[receipt.operation];
 	const bound = await session.binding(spec.product);
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
-	const route = session.route(spec.product, bound.binding);
+	const route = session.route(spec, bound.binding);
 	const ready = await route.ready();
 	if (ready) return failed(ready);
 	const canonical = canonicalAdjudicationInput(receipt, rawInput);

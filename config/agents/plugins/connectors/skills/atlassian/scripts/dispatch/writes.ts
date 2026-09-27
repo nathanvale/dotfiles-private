@@ -18,7 +18,8 @@ type Field =
 	| { kind: "text"; required: boolean; pattern?: RegExp }
 	| { kind: "body"; required: boolean }
 	| { kind: "fields"; required: boolean }
-	| { kind: "path"; required: boolean };
+	| { kind: "path"; required: boolean }
+	| { kind: "images"; required: boolean };
 
 const ISSUE_KEY = /^[A-Z][A-Z0-9_]+-[0-9]+$/;
 const PROJECT_KEY = /^[A-Z][A-Z0-9_]+$/;
@@ -29,6 +30,14 @@ const SPACE_KEY = /^[A-Za-z0-9~][A-Za-z0-9_.-]{0,254}$/;
 const LOCAL_FILE = /^\/[^\n,]{1,1023}$/;
 const ATTACHMENT_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 const BODY_LIMIT = 200_000;
+// An attachment file name a wiki image macro can name: no macro delimiters,
+// path separators, or line breaks. The list is bounded because every name
+// becomes one bound attachment id in the preview baseline.
+const IMAGE_NAME = /^[^!|/\\\r\n]{1,255}$/;
+const IMAGES_LIMIT = 20;
+// A wiki image macro: !name.ext! or !name.ext|params!. The name must end in a
+// file extension so prose exclamation marks are not read as references.
+const WIKI_IMAGE = /!([^!|\s][^!|\r\n]*?\.[A-Za-z0-9]{1,5})(?:\|[^!\r\n]*)?!/g;
 
 // Neutral input per write operation. Unknown keys are refused so a caller
 // cannot smuggle provider arguments through the semantic seam.
@@ -43,6 +52,11 @@ const WRITE_INPUTS: Record<WriteOperation, Record<string, Field>> = {
 	"issue.update": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, fields: { kind: "fields", required: true } },
 	"issue.comment": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, body: { kind: "body", required: true } },
 	"issue.comment.update": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, commentId: { kind: "text", required: true, pattern: NUMERIC_ID }, body: { kind: "body", required: true } },
+	// The wiki-comment exception: `body` is Jira wiki markup and `images` names
+	// the attached files its image macros reference; writeInput checks the two
+	// agree, and the preparatory read binds each name to one attachment id.
+	"issue.comment.media": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, body: { kind: "body", required: true }, images: { kind: "images", required: true } },
+	"issue.comment.media.update": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, commentId: { kind: "text", required: true, pattern: NUMERIC_ID }, body: { kind: "body", required: true }, images: { kind: "images", required: true } },
 	"issue.attach": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, file: { kind: "path", required: true } },
 	// toStatus names the status the issue must reach; the transition that leads
 	// there is resolved from the live transition list at preview and apply.
@@ -88,6 +102,10 @@ function validFields(value: unknown): boolean {
 	);
 }
 
+function validImages(value: unknown): value is string[] {
+	return Array.isArray(value) && value.length > 0 && value.length <= IMAGES_LIMIT && value.every((entry) => typeof entry === "string" && IMAGE_NAME.test(entry)) && new Set(value).size === value.length;
+}
+
 function validField(field: Field, value: unknown): boolean {
 	switch (field.kind) {
 		case "text":
@@ -98,11 +116,33 @@ function validField(field: Field, value: unknown): boolean {
 			return validFields(value);
 		case "path":
 			return typeof value === "string" && LOCAL_FILE.test(value) && path.isAbsolute(value) && path.basename(value).length > 0;
+		case "images":
+			return validImages(value);
 	}
 }
 
+// The attachment names a wiki body's image macros reference, in order of first
+// appearance and without repeats.
+export function wikiImageReferences(body: string): string[] {
+	return [...new Set([...body.matchAll(WIKI_IMAGE)].map((match) => match[1] as string))];
+}
+
+const MEDIA_OPERATIONS: ReadonlySet<WriteOperation> = new Set<WriteOperation>(["issue.comment.media", "issue.comment.media.update"]);
+export const isMediaComment = (operation: WriteOperation): boolean => MEDIA_OPERATIONS.has(operation);
+
+// `images` must be exactly the set the body references, so the preview binds
+// every attachment the comment will render and read-back can prove each one.
+function mediaReferencesAgree(input: WriteInput): WriteValidation {
+	const declared = input.images as string[];
+	const referenced = wikiImageReferences(input.body as string);
+	if (referenced.some((name) => !declared.includes(name))) return { ok: false, reason: "the body references an image that images does not name" };
+	if (declared.some((name) => !referenced.includes(name))) return { ok: false, reason: "images names a file the body does not reference as !name! or !name|params!" };
+	return { ok: true, input };
+}
+
 export function writeInput(operation: WriteOperation, raw: unknown): WriteValidation {
-	return collectInput(raw, WRITE_INPUTS[operation], validField);
+	const collected = collectInput(raw, WRITE_INPUTS[operation], validField);
+	return collected.ok && isMediaComment(operation) ? mediaReferencesAgree(collected.input) : collected;
 }
 
 // What a write needs to read before it can be previewed or applied. The read
@@ -111,7 +151,16 @@ export function writeInput(operation: WriteOperation, raw: unknown): WriteValida
 // changed target is still the same container. Attachments bind the target's
 // revision because an upload moves it, which lets an unchanged revision prove
 // that a possibly-sent upload never landed.
-export type Preparation = { kind: "none" } | { kind: "issue"; issueKey: string } | { kind: "comment"; issueKey: string; commentId: string } | { kind: "transition"; issueKey: string; toStatus: string } | { kind: "page"; pageId: string };
+// A media comment binds the attachment ids its images name; a media edit also
+// binds the comment's `updated` and the author guard.
+export type Preparation =
+	| { kind: "none" }
+	| { kind: "issue"; issueKey: string }
+	| { kind: "comment"; issueKey: string; commentId: string }
+	| { kind: "transition"; issueKey: string; toStatus: string }
+	| { kind: "page"; pageId: string }
+	| { kind: "media"; issueKey: string; images: string[] }
+	| { kind: "media-comment"; issueKey: string; commentId: string; images: string[] };
 
 export function preparation(operation: WriteOperation, input: WriteInput): Preparation {
 	switch (operation) {
@@ -119,6 +168,10 @@ export function preparation(operation: WriteOperation, input: WriteInput): Prepa
 		case "issue.comment":
 		case "page.create":
 			return { kind: "none" };
+		case "issue.comment.media":
+			return { kind: "media", issueKey: input.issueKey as string, images: input.images as string[] };
+		case "issue.comment.media.update":
+			return { kind: "media-comment", issueKey: input.issueKey as string, commentId: input.commentId as string, images: input.images as string[] };
 		case "issue.update":
 		case "issue.attach":
 		case "issue.assign":
@@ -166,8 +219,7 @@ function assign(target: Record<string, unknown>, key: string, value: unknown): v
 	if (value !== undefined) target[key] = value;
 }
 
-export function writeArguments(spec: OperationSpec, input: WriteInput, ctx: PreparedContext): ShapedArguments {
-	const operation = spec.id as WriteOperation;
+function jiraArguments(operation: WriteOperation, input: WriteInput, ctx: PreparedContext): Record<string, unknown> {
 	const args: Record<string, unknown> = {};
 	switch (operation) {
 		case "issue.create":
@@ -184,6 +236,17 @@ export function writeArguments(spec: OperationSpec, input: WriteInput, ctx: Prep
 			assign(args, "body", input.body);
 			break;
 		case "issue.comment.update":
+			assign(args, "issue_key", input.issueKey);
+			assign(args, "comment_id", input.commentId);
+			assign(args, "body", input.body);
+			break;
+		case "issue.comment.media":
+			// The REST route sends the wiki body as is; `images` binds attachment
+			// ids in the baseline and never reaches the request.
+			assign(args, "issue_key", input.issueKey);
+			assign(args, "body", input.body);
+			break;
+		case "issue.comment.media.update":
 			assign(args, "issue_key", input.issueKey);
 			assign(args, "comment_id", input.commentId);
 			assign(args, "body", input.body);
@@ -206,6 +269,15 @@ export function writeArguments(spec: OperationSpec, input: WriteInput, ctx: Prep
 		case "issue.delete":
 			assign(args, "issue_key", input.issueKey);
 			break;
+		default:
+			break;
+	}
+	return args;
+}
+
+function confluenceArguments(operation: WriteOperation, input: WriteInput, ctx: PreparedContext): Record<string, unknown> {
+	const args: Record<string, unknown> = {};
+	switch (operation) {
 		case "page.create":
 			assign(args, "space_key", input.spaceKey);
 			assign(args, "title", input.title);
@@ -236,7 +308,15 @@ export function writeArguments(spec: OperationSpec, input: WriteInput, ctx: Prep
 		case "page.delete":
 			assign(args, "page_id", input.pageId);
 			break;
+		default:
+			break;
 	}
+	return args;
+}
+
+export function writeArguments(spec: OperationSpec, input: WriteInput, ctx: PreparedContext): ShapedArguments {
+	const operation = spec.id as WriteOperation;
+	const args = spec.product === "jira" ? jiraArguments(operation, input, ctx) : confluenceArguments(operation, input, ctx);
 	return { args, bound: args };
 }
 
@@ -248,6 +328,8 @@ const EFFECT_KIND: Record<WriteOperation, Effect["kind"]> = {
 	"issue.delete": "jira-issue",
 	"issue.comment": "jira-comment",
 	"issue.comment.update": "jira-comment",
+	"issue.comment.media": "jira-comment",
+	"issue.comment.media.update": "jira-comment",
 	"issue.attach": "jira-attachment",
 	"issue.transition": "jira-issue",
 	"issue.assign": "jira-issue",
@@ -402,16 +484,55 @@ function attachmentRecord(record: Record<string, unknown>, file: string): string
 	return id !== undefined && EFFECT_ID.test(id) && attachmentNameMatches(record, file) ? id : undefined;
 }
 
-function effectFromRecord(operation: WriteOperation, input: WriteInput, kind: Effect["kind"], record: Record<string, unknown>): Effect | undefined {
+// Rendered comment HTML proves an inline image when an <img> element names the
+// bound attachment id in its source, or, when no ids are bound yet, the file
+// name in its source or alt text. Every referenced attachment must have one.
+const IMG_TAG = /<img\b[^>]*>/gi;
+const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+function imgTagsFor(html: string): string[] {
+	return html.match(IMG_TAG) ?? [];
+}
+
+function tagNamesAttachment(tag: string, id: string): boolean {
+	return new RegExp(`/${escaped(id)}(?:[/?&"']|$)`).test(tag);
+}
+
+function tagNamesFile(tag: string, name: string): boolean {
+	return tag.includes(name) || tag.includes(encodeURIComponent(name));
+}
+
+export function renderedImagesPresent(html: string, images: readonly string[], attachmentIds: readonly string[]): boolean {
+	const tags = imgTagsFor(html);
+	if (tags.length === 0) return false;
+	if (attachmentIds.length > 0) return attachmentIds.every((id) => tags.some((tag) => tagNamesAttachment(tag, id)));
+	return images.every((name) => tags.some((tag) => tagNamesFile(tag, name)));
+}
+
+function mediaRecordMatches(record: Record<string, unknown>, input: WriteInput, attachmentIds: readonly string[]): boolean {
+	return typeof record.renderedBody === "string" && renderedImagesPresent(record.renderedBody, input.images as string[], attachmentIds);
+}
+
+// A comment record is this write's effect when it names the edited comment
+// (for an edit) and holds the requested content: the rendered images for a
+// media comment, the body text otherwise.
+function commentRecordIsEffect(operation: WriteOperation, input: WriteInput, kind: Effect["kind"], record: Record<string, unknown>, id: string, attachmentIds: readonly string[]): boolean {
+	if (input.commentId !== undefined && id !== input.commentId) return false;
+	return isMediaComment(operation) ? mediaRecordMatches(record, input, attachmentIds) : commentRecordMatches(record, input, kind);
+}
+
+function effectFromRecord(operation: WriteOperation, input: WriteInput, kind: Effect["kind"], record: Record<string, unknown>, attachmentIds: readonly string[]): Effect | undefined {
 	if (kind.endsWith("-attachment")) {
 		const id = attachmentRecord(record, input.file as string);
 		return id === undefined ? undefined : { kind, id };
 	}
-	const id = operation === "issue.create" ? stringAt(record, "key") : stringAt(record, "id");
+	if (operation === "issue.create") {
+		const key = stringAt(record, "key");
+		return key !== undefined && ISSUE_KEY.test(key) ? { kind, id: key } : undefined;
+	}
+	const id = stringAt(record, "id");
 	if (id === undefined || !EFFECT_ID.test(id)) return undefined;
-	if (operation === "issue.create" && !ISSUE_KEY.test(id)) return undefined;
-	if (operation === "issue.comment.update" && id !== input.commentId) return undefined;
-	if (kind.endsWith("-comment") && !commentRecordMatches(record, input, kind)) return undefined;
+	if (kind.endsWith("-comment") && !commentRecordIsEffect(operation, input, kind, record, id, attachmentIds)) return undefined;
 	return { kind, id };
 }
 
@@ -430,14 +551,16 @@ function deleteEffect(operation: WriteOperation, input: WriteInput, kind: Effect
 	return message !== undefined && DELETED_MESSAGE.test(message) ? [{ kind, id: targetOf(operation, input) }] : [];
 }
 
-export function effectsFromReply(operation: WriteOperation, input: WriteInput, reply: unknown): Effect[] {
+// The preview baseline supplies the bound attachment ids a media comment's
+// reply must render; other operations ignore it.
+export function effectsFromReply(operation: WriteOperation, input: WriteInput, reply: unknown, baseline: WriteBaseline = EMPTY_BASELINE): Effect[] {
 	const kind = EFFECT_KIND[operation];
 	if (!replyNamesRequestedObject(operation, input, reply)) return [];
 	const data = unwrapReply(reply);
 	if (operation.endsWith(".delete")) return deleteEffect(operation, input, kind, data);
 	if (TARGET_OPERATIONS.has(operation)) return [{ kind, id: targetOf(operation, input) }];
 	for (const record of records(data)) {
-		const effect = effectFromRecord(operation, input, kind, record);
+		const effect = effectFromRecord(operation, input, kind, record, isMediaComment(operation) ? baseline.effectIds : []);
 		if (effect !== undefined) return [effect];
 	}
 	return [];
@@ -551,6 +674,10 @@ export function readBackPlan(operation: WriteOperation, input: WriteInput): Read
 		case "issue.comment":
 		case "issue.comment.update":
 			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "comment,updated", comment_limit: 100 } };
+		case "issue.comment.media":
+			return { tool: "jira_rest_comments_list", args: { issue_key: input.issueKey } };
+		case "issue.comment.media.update":
+			return { tool: "jira_rest_comment_get", args: { issue_key: input.issueKey, comment_id: input.commentId } };
 		case "issue.attach":
 			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "attachment,updated" } };
 		case "issue.transition":
@@ -723,6 +850,72 @@ function issueCommentUpdateEvidence(input: WriteInput, revisionMatches: Revision
 	return { kind: "absent", revisionUnchanged: comment.updated !== undefined && revisionMatches(comment.updated) };
 }
 
+// A Jira REST v2 comment as the owned route reads it: its id, its author's
+// account id, its own `updated`, and the rendered HTML when expanded.
+export interface RestComment {
+	id: string | undefined;
+	authorAccountId: string | undefined;
+	updated: string | undefined;
+	renderedBody: string | undefined;
+}
+
+export function observeRestComment(reply: unknown): RestComment {
+	const data = unwrapReply(reply);
+	const top = isRecord(data) ? data : {};
+	const author = isRecord(top.author) ? top.author : {};
+	return { id: stringAt(top, "id"), authorAccountId: stringAt(author, "accountId"), updated: stringAt(top, "updated"), renderedBody: typeof top.renderedBody === "string" ? top.renderedBody : undefined };
+}
+
+// The principal's account id from the REST `myself` reply.
+export function accountIdOf(reply: unknown): string | undefined {
+	const data = unwrapReply(reply);
+	return isRecord(data) ? stringAt(data, "accountId") : undefined;
+}
+
+export const AUTHOR_GUARD_REASON = "commentId names a comment another account authored; the media update edits only the principal's own comments";
+
+export type MediaAttachments = { ok: true; ids: string[] } | { ok: false; cause: "not-found" | "input-invalid"; reason: string };
+
+// Each referenced image must be attached to the issue under exactly one id;
+// the ids become the preview baseline an apply must find unchanged.
+export function resolveMediaAttachments(attachments: readonly { id: string; name: string }[], images: readonly string[]): MediaAttachments {
+	const ids: string[] = [];
+	for (const name of images) {
+		const matching = attachments.filter((entry) => entry.name === name);
+		if (matching.length === 0) return { ok: false, cause: "not-found", reason: "an image named in images is not attached to the issue" };
+		if (matching.length > 1) return { ok: false, cause: "input-invalid", reason: "an image named in images matches more than one attachment on the issue; remove the duplicate first" };
+		ids.push((matching[0] as { id: string }).id);
+	}
+	return { ok: true, ids: [...new Set(ids)].sort() };
+}
+
+// Every comment in a REST list that renders the requested images by the
+// bound ids or, before ids are bound, by file name.
+function renderedMediaCommentIds(reply: unknown, input: WriteInput, attachmentIds: readonly string[]): string[] {
+	const ids: string[] = [];
+	for (const record of records(unwrapReply(reply))) {
+		const id = stringAt(record, "id");
+		if (id !== undefined && EFFECT_ID.test(id) && mediaRecordMatches(record, input, attachmentIds)) ids.push(id);
+	}
+	return ids;
+}
+
+function mediaCommentEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
+	return newEffects("jira-comment", renderedMediaCommentIds(reply, input, baseline.effectIds), baseline.commentIds);
+}
+
+// The edited comment proves the write only by moving to a version that
+// renders the images; an unmoved `updated` proves nothing landed.
+function mediaCommentUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline): ReadBack {
+	const comment = observeRestComment(reply);
+	if (comment.id === undefined) return { kind: "indeterminate", reason: "the read-back reply names no comment" };
+	if (comment.id !== input.commentId) return { kind: "indeterminate", reason: "the read-back reply names a different comment" };
+	if (comment.updated === undefined) return { kind: "indeterminate", reason: "the comment read exposes no updated timestamp" };
+	if (revisionMatches(comment.updated)) return { kind: "absent", revisionUnchanged: true };
+	if (comment.renderedBody !== undefined && renderedImagesPresent(comment.renderedBody, input.images as string[], baseline.effectIds)) return { kind: "found", effects: [{ kind: "jira-comment", id: comment.id }] };
+	return { kind: "indeterminate", reason: "the comment moved to a version that does not render the requested images" };
+}
+
 function issueAttachEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline): ReadBack {
 	const issue = observeIssue(reply);
 	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply names no issue key" };
@@ -858,6 +1051,10 @@ export function readBackEvidence(operation: WriteOperation, input: WriteInput, r
 			return issueCommentEvidence(input, reply, baseline, trustedOrigin);
 		case "issue.comment.update":
 			return issueCommentUpdateEvidence(input, revisionMatches, reply, trustedOrigin);
+		case "issue.comment.media":
+			return mediaCommentEvidence(input, reply, baseline);
+		case "issue.comment.media.update":
+			return mediaCommentUpdateEvidence(input, revisionMatches, reply, baseline);
 		case "issue.attach":
 			return issueAttachEvidence(input, revisionMatches, reply, baseline);
 		case "issue.transition":
@@ -931,6 +1128,23 @@ function issueCommentUpdateBaseline(input: WriteInput, reply: unknown, trustedOr
 	return { kind: "observed", baseline: { effectIds: [issue.key as string], commentIds: [comment.id], revision: digest(comment.updated) } };
 }
 
+// Existing comments that already render the requested images are the
+// candidates a later read-back must not mistake for this write. Attachment ids
+// are not bound yet at this read, so the candidates are matched by file name.
+function mediaCommentBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+	return { kind: "observed", baseline: { ...EMPTY_BASELINE, commentIds: renderedMediaCommentIds(reply, input, []) } };
+}
+
+// The edited comment's own `updated` is the revision; the author guard runs in
+// the preparatory read, which also reads the principal.
+function mediaCommentUpdateBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+	const comment = observeRestComment(reply);
+	if (comment.id === undefined) return { kind: "indeterminate", reason: "the comment read names no comment" };
+	if (comment.id !== input.commentId) return { kind: "indeterminate", reason: "the comment read names a different comment" };
+	if (comment.updated === undefined) return { kind: "indeterminate", reason: "the comment read exposes no updated timestamp to bind the revision" };
+	return { kind: "observed", baseline: { ...EMPTY_BASELINE, commentIds: [comment.id], revision: digest(comment.updated) } };
+}
+
 function pageCommentBaseline(input: WriteInput, reply: unknown): BaselineObservation {
 	const observed = baselineWithCommentIds(pageCommentEvidence(input, reply, EMPTY_BASELINE));
 	return observed.kind !== "observed" ? observed : { kind: "observed", baseline: { ...observed.baseline, effectIds: [input.pageId as string] } };
@@ -994,6 +1208,10 @@ export function baselineFromReply(operation: WriteOperation, input: WriteInput, 
 			return issueCommentBaseline(input, reply, trustedOrigin);
 		case "issue.comment.update":
 			return issueCommentUpdateBaseline(input, reply, trustedOrigin);
+		case "issue.comment.media":
+			return mediaCommentBaseline(input, reply);
+		case "issue.comment.media.update":
+			return mediaCommentUpdateBaseline(input, reply);
 		case "issue.attach":
 			return baselineWithEffectIds(issueAttachEvidence(input, () => false, reply, EMPTY_BASELINE));
 		case "issue.transition":
