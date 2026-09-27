@@ -179,16 +179,19 @@ describe("Spec AC23: packaged auth adapter extensibility", () => {
 			expect(result.code).toBe(0);
 			expect(result.stderr).toBe("");
 			expect(envelope.result.outcome).toBe("success");
+			// A declared credential reference and adapter never make custody or
+			// authentication observed: this adapter resolves no custody.
+			const unresolvable = { verdict: "unobserved", basis: "custody-not-resolvable", observedAt: null, boundary: null, custody: null };
 			expect(envelope.result.data).toEqual({
 				connector: "adapter-fixture-skill",
-				configured: true,
-				localReady: null,
-				custodyChecked: null,
-				authenticated: false,
-				schemaQualified: false,
-				liveReadProven: false,
-				liveWriteProven: false,
-				fixtureTested: null,
+				configured: { verdict: "proven", basis: "manifest-registry-requirements-validated", observedAt: expect.any(String), boundary: "local" },
+				localReady: { verdict: "proven", basis: "declared-dependencies-ready-and-selection-resolved", observedAt: expect.any(String), boundary: "local", dependencies: [] },
+				custodyChecked: unresolvable,
+				authenticated: unresolvable,
+				schemaQualified: { verdict: "unobserved", basis: "status-contacts-no-provider", observedAt: null, boundary: null },
+				liveReadProven: { verdict: "unobserved", basis: "status-contacts-no-provider", observedAt: null, boundary: null },
+				liveWriteProven: { verdict: "not-applicable", basis: "no-write-capability", observedAt: expect.any(String), boundary: "local" },
+				fixtureTested: { verdict: "unobserved", basis: "status-retains-no-fixture-observation", observedAt: null, boundary: null },
 			});
 		} finally {
 			bundle.dispose();
@@ -207,7 +210,7 @@ describe("Spec AC23: packaged auth adapter extensibility", () => {
 			const doctor = await runBundle(bundle, ["doctor", "adapter-fixture-skill"], { home: bundle.root, binDir: authority.binDir });
 			expect(doctor.code).toBe(0);
 			expect(doctor.stderr).toBe("");
-			expect(JSON.parse(doctor.stdout).result.data.custodyChecked).toBeNull();
+			expect(JSON.parse(doctor.stdout).result.data.custodyChecked.verdict).toBe("unobserved");
 			const result = await runBundle(bundle, ["fixture-auth", "adapter-fixture-skill"], { home: bundle.root, binDir: authority.binDir });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(3);

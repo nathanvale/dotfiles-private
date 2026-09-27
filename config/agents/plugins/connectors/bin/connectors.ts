@@ -16,7 +16,7 @@ import { closeSync, existsSync, openSync } from "node:fs";
 import path from "node:path";
 import type { Adapter, AdapterAction, AdapterRefusal, AdapterRefusalKind, CustodyResolution, Executed, ExecutionCapabilities, InternalRole, LocalEffect, LoginOption, Prepared, RecordedEffect, Recovery, SchemaRequest, WritePhase } from "./adapters/contract.ts";
 import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
-import { discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
+import { type DiscoveredManifest, discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
 import { ensureMcporter, lockRecovery } from "./mcporter-custody.ts";
 import { DEPENDENCY_TOOLS, dependencyStatus, isDependencyTool, REQUIREMENTS_REVISION, type DependencyTool } from "./dependency-status.ts";
@@ -24,6 +24,7 @@ import { applyDeps, PREVIEW_ID, previewDeps, type ApplyResult, type DepsRequest 
 import { downloadAndInstallMise, downloadAndInstallOp } from "./setup/download.ts";
 import { installPinnedUv, readValidatedUvSources } from "./setup/uv.ts";
 import { stateRoot } from "./private-state.ts";
+import { observeEvidence } from "./evidence-state.ts";
 
 const CONTRACT_VERSION = "2.0.0";
 const PROGRAM = "connectors";
@@ -235,6 +236,7 @@ const AUTH_USAGE = "auth <verb> <connector> [--select name=value ...] [--input <
 const RUN_USAGE = "run <connector> [--select name=value ...] <operation> [--input <json-object>] [--preview | --apply <previewId>]";
 const RECOVER_USAGE = "recover <connector> [--select name=value ...] [--run <runId> [--adjudicate --input <json-object>] | --run <runId|previewId> --unlock]";
 const SCHEMA_USAGE = "schema <connector> [--select name=value ...]";
+const STATUS_USAGE = "status [connector [--select name=value ...]]";
 
 const COMMANDS: readonly CommandDescriptor[] = [
 	{ commandIdentity: "connectors.dispatch", route: [], effectClass: "inspect", summary: "Refuse a missing, unknown, or incompatible command selection", usage: "<command> [arguments]", input: [positional(0, "command", { type: "string", source: "connectors.discovery" })], reaches: "arguments", stations: ["USAGE_UNKNOWN_COMMAND", "INTERNAL_UNEXPECTED_UNCHANGED", "INTERNAL_UNEXPECTED_AFTER_BOOTSTRAP"] },
@@ -254,8 +256,8 @@ const COMMANDS: readonly CommandDescriptor[] = [
 	},
 	{ commandIdentity: "connectors.config.validate", route: ["config", "validate"], effectClass: "inspect", summary: "Validate connector manifests, registries, and packaged requirements", usage: "config validate [connector]", input: [...words("config", "validate"), connectorAt(2, false)], reaches: "packaged-files", stations: LOCAL_INSPECTION },
 	{ commandIdentity: "connectors.config.show", route: ["config", "show"], effectClass: "inspect", summary: "Show resolved nonsecret values and provenance; conflicting repeated selectors refuse", usage: "config show <connector> --resolved --json [--select name=value ...]", input: [...words("config", "show"), connectorAt(2), option(3, "--resolved", null, true), option(3, "--json", null, true), selectAt(3)], reaches: "plugin-state", stations: [...LOCAL_INSPECTION, ...CUSTODY_REFUSALS] },
-	{ commandIdentity: "connectors.status", route: ["status"], effectClass: "inspect", summary: "Report truthful evidence state per connector", usage: "status [connector]", input: [word(0, "status"), connectorAt(1, false)], reaches: "packaged-files", stations: LOCAL_INSPECTION },
-	{ commandIdentity: "connectors.doctor", route: ["doctor"], effectClass: "inspect", summary: "Local readiness gate for one connector", usage: "doctor <connector>", input: [word(0, "doctor"), connectorAt(1)], reaches: "packaged-files", stations: LOCAL_INSPECTION },
+	{ commandIdentity: "connectors.status", route: ["status"], effectClass: "inspect", summary: "Report each connector's eight evidence states from this invocation's local checks; never contacts a Provider, reads a credential, or promotes a fixture or local check to a live state", usage: STATUS_USAGE, input: [word(0, "status"), connectorAt(1, false), selectAt(2)], reaches: "plugin-state", stations: LOCAL_INSPECTION },
+	{ commandIdentity: "connectors.doctor", route: ["doctor"], effectClass: "inspect", summary: "Local readiness report for one connector", usage: "doctor <connector>", input: [word(0, "doctor"), connectorAt(1)], reaches: "plugin-state", stations: LOCAL_INSPECTION },
 	{
 		commandIdentity: "connectors.schema",
 		route: ["schema"],
@@ -1104,8 +1106,8 @@ function helpText(): string {
 		"  config validate [connector]                     Validate manifests, registries, and packaged requirements",
 		"  config show <connector> --resolved --json       Show resolved nonsecret configuration and provenance",
 		"                                                  Repeated --select names must carry identical values",
-		"  status [connector]                              Report truthful evidence state",
-		"  doctor <connector>                              Local readiness gate for one connector",
+		"  status [connector [--select name=value ...]]    Report eight evidence states from local checks; live states stay unobserved",
+		"  doctor <connector>                              Report one connector's locally observed evidence",
 		"  schema <connector> [--select name=value ...]     Fetch live schema; a credentialed connector reads through its adapter",
 		"  deps status [tool]                               Report required and selected dependency versions; changes nothing",
 		"  deps repair <tool> --preview                     Record the exact repair of one dependency; installs nothing",
@@ -1493,6 +1495,11 @@ async function handleSetup(args: readonly string[]): Promise<void> {
 	emitSetup("SUCCESS_COMPLETED", completed, "connectors: verified op, mise, and pinned uv installed");
 }
 
+// Each discovered manifest that failed to load, as list and status report it.
+function manifestProblems(discovered: readonly DiscoveredManifest[]): { id: string; code: string | undefined; message: string | undefined }[] {
+	return discovered.filter((entry) => entry.error !== null).map((entry) => ({ id: entry.id, code: entry.error?.code, message: entry.error?.message }));
+}
+
 function handleList(args: readonly string[]): void {
 	if (args.length !== 0) {
 		usageMalformed("connectors.list", "list");
@@ -1502,7 +1509,7 @@ function handleList(args: readonly string[]): void {
 	const connectors = discovered
 		.filter((entry): entry is typeof entry & { manifest: ConnectorManifest } => entry.manifest !== null)
 		.map((entry) => ({ id: entry.manifest.id, adapter: entry.manifest.adapter, keyless: entry.manifest.adapter === null, requirements: entry.manifest.requirements }));
-	const problems = discovered.filter((entry) => entry.error !== null).map((entry) => ({ id: entry.id, code: entry.error?.code, message: entry.error?.message }));
+	const problems = manifestProblems(discovered);
 	emitSuccess("connectors.list", `${connectors.length} connector(s) declared by a manifest`, { connectors, problems }, "connectors.config.validate");
 }
 
@@ -1724,29 +1731,36 @@ function handleConfigShow(args: readonly string[]): void {
 	emitSuccess("connectors.config.show", `resolved nonsecret configuration for ${id}`, { connector: id, values }, "connectors.status");
 }
 
-// A validated manifest proves only that it is configured (Spec AC21).
-// localReady needs a real dependency/route check (MCPorter, op, uv — none
-// exist yet) and custodyChecked needs usable custody proof (T5's real
-// 1Password/MCPorter custody); neither is ever inferred from manifest
-// validity or a packaged adapter's fixture auth attempt (connectors
-// fixture-auth is the only command that exercises that attempt), so both
-// stay unknown until their owning Ticket lands.
-function evidenceFor(): Record<string, unknown> {
-	return {
-		configured: true,
-		localReady: null,
-		custodyChecked: null,
-		authenticated: false,
-		schemaQualified: false,
-		liveReadProven: false,
-		liveWriteProven: false,
-		fixtureTested: null,
-	};
+// Evidence rows (Spec AC21) come from checks this invocation performs
+// locally; bin/evidence-state.ts owns the vocabulary. A required selector
+// that was not supplied leaves selection-bound evidence unobserved rather
+// than refusing, since status can report an unready connector; a supplied
+// selector that is invalid or undeclared refuses. Custody is resolved only
+// through the adapter's own metadata-only resolveCustody.
+function evidenceRow(manifest: ConnectorManifest, given: ReadonlyMap<string, string>, observedAt: string): { selection: ResolvedSelectors["values"]; evidence: Record<string, unknown> } | { problem: string } {
+	const optional = Object.fromEntries(Object.entries(manifest.selectors).map(([name, declaration]) => [name, { ...declaration, required: false }]));
+	const selectors = resolveSelectors({ ...manifest, selectors: optional }, given);
+	if (selectors.problem) return { problem: selectors.problem };
+	const selectionResolved = Object.entries(manifest.selectors).every(([name, declaration]) => !declaration.required || Object.hasOwn(selectors.values, name));
+	const adapter = manifest.adapter === null ? undefined : ADAPTERS[manifest.adapter];
+	const values = Object.fromEntries(Object.entries(selectors.values).map(([name, entry]) => [name, entry.value]));
+	const custody = selectionResolved && adapter?.resolveCustody ? adapter.resolveCustody({ manifest, selectors: values, skillsRoot: skillsRoot(), env: process.env }) : null;
+	return { selection: selectors.values, evidence: observeEvidence({ manifest, adapter, selectionResolved, custody, env: process.env, observedAt }) };
+}
+
+function parseStatusArgs(args: readonly string[]): { id: string | null; given: Map<string, string> } | null {
+	const given = new Map<string, string>();
+	if (args.length === 0) return { id: null, given };
+	const id = args[0] ?? "";
+	if (id.startsWith("--")) return null;
+	const rest = args.slice(1);
+	return consumeSelections(rest, given) === rest.length ? { id, given } : null;
 }
 
 function handleStatus(args: readonly string[]): void {
-	if (args.length > 1) {
-		usageMalformed("connectors.status", "status [connector]");
+	const parsed = parseStatusArgs(args);
+	if (!parsed) {
+		usageMalformed("connectors.status", STATUS_USAGE);
 		return;
 	}
 	try {
@@ -1759,17 +1773,24 @@ function handleStatus(args: readonly string[]): void {
 		throw error;
 	}
 	const root = skillsRoot();
-	if (args.length === 0) {
+	const observedAt = new Date().toISOString();
+	if (parsed.id === null) {
 		const discovered = discoverManifests(root, ADAPTER_IDS);
-		const connectors = discovered.filter((entry) => entry.manifest !== null).map((entry) => ({ id: entry.id, evidence: evidenceFor() }));
-		const problems = discovered.filter((entry) => entry.error !== null).map((entry) => ({ id: entry.id, code: entry.error?.code, message: entry.error?.message }));
+		const connectors = discovered.flatMap((entry) => {
+			if (entry.manifest === null) return [];
+			const row = evidenceRow(entry.manifest, parsed.given, observedAt);
+			return "problem" in row ? [] : [{ id: entry.id, ...row }];
+		});
+		// No selection is supplied here, and a manifest's packaged defaults are
+		// validated with it, so evidenceRow reports no problem for a loaded one.
+		const problems = manifestProblems(discovered);
 		emitSuccess("connectors.status", `${connectors.length} connector(s) reporting evidence state`, { connectors, problems }, "connectors.doctor");
 		return;
 	}
-	const id = args[0] ?? "";
+	const id = parsed.id;
+	let manifest: ConnectorManifest;
 	try {
-		loadOneManifest(root, id, ADAPTER_IDS);
-		emitSuccess("connectors.status", `evidence state for ${id}`, { connectors: [{ id, evidence: evidenceFor() }], problems: [] }, "connectors.doctor");
+		manifest = loadOneManifest(root, id, ADAPTER_IDS);
 	} catch (error) {
 		if (error instanceof ManifestError) {
 			emitRefusal("connectors.status", `${PROGRAM}: ${error.message}`, manifestErrorCause(error), "Run config validate to see the exact defect", "connectors.config.validate");
@@ -1777,20 +1798,28 @@ function handleStatus(args: readonly string[]): void {
 		}
 		throw error;
 	}
+	const row = evidenceRow(manifest, parsed.given, observedAt);
+	if ("problem" in row) {
+		emitRefusal("connectors.status", `${PROGRAM}: ${row.problem}`, "SCHEMA_SELECTOR_INVALID", row.problem, "connectors.config.validate");
+		return;
+	}
+	emitSuccess("connectors.status", `evidence state for ${id}`, { connectors: [{ id, ...row }], problems: [] }, "connectors.doctor");
 }
 
-// Local readiness gate only (Spec AC21): once a connector's manifest,
-// registry, and packaged requirements validate, doctor succeeds. It never
-// exercises a connector's adapter — connectors fixture-auth does, so
-// doctor's own success can never be mistaken for auth proof.
+// Local readiness report (Spec AC21): after a connector's manifest,
+// registry, and packaged requirements validate, doctor reports the same
+// locally observed evidence as status. It never exercises a connector's
+// adapter, contacts a Provider, or reads a credential, so its success never
+// stands for custody, authentication, or live proof.
 function handleDoctor(args: readonly string[]): void {
 	if (args.length !== 1) {
 		usageMalformed("connectors.doctor", "doctor <connector>");
 		return;
 	}
 	const id = args[0] ?? "";
+	let manifest: ConnectorManifest;
 	try {
-		loadOneManifest(skillsRoot(), id, ADAPTER_IDS);
+		manifest = loadOneManifest(skillsRoot(), id, ADAPTER_IDS);
 		loadRequirementsPins(pluginRoot());
 	} catch (error) {
 		if (error instanceof ManifestError) {
@@ -1799,7 +1828,11 @@ function handleDoctor(args: readonly string[]): void {
 		}
 		throw error;
 	}
-	emitSuccess("connectors.doctor", `${id} passed its declared local checks`, { connector: id, ...evidenceFor() }, "connectors.status");
+	// doctor takes no selection, and packaged defaults always resolve, so a
+	// selector problem cannot arise here.
+	const row = evidenceRow(manifest, new Map(), new Date().toISOString());
+	const evidence = "problem" in row ? {} : row.evidence;
+	emitSuccess("connectors.doctor", `${id} declared configuration validated; evidence reports local readiness`, { connector: id, ...evidence }, "connectors.status");
 }
 
 // The only command that exercises a packaged adapter's auth-shaped

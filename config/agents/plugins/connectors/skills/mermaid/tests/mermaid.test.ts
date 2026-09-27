@@ -34,8 +34,11 @@ const CATALOGUE = [
 	{ name: "create_mermaid_chart_diagram", tier: "account", kind: "write" },
 	{ name: "update_mermaid_chart_diagram", tier: "account", kind: "write" },
 ];
-// Independent oracle: the accepted evidence state before any live proof.
-const UNPROVEN_EVIDENCE = { configured: true, localReady: null, custodyChecked: null, authenticated: false, schemaQualified: false, liveReadProven: false, liveWriteProven: false, fixtureTested: null };
+// Independent oracle (Spec AC21): keyless custody needs no credential or
+// authentication, and status observes no schema, read, write, or fixture
+// result, so a fixture read never promotes any of them.
+const KEYLESS_UNPROVEN_VERDICTS = { custodyChecked: "not-applicable", authenticated: "not-applicable", schemaQualified: "unobserved", liveReadProven: "unobserved", liveWriteProven: "unobserved", fixtureTested: "unobserved" };
+const verdicts = (evidence: Record<string, { verdict: string }>) => Object.fromEntries(Object.keys(KEYLESS_UNPROVEN_VERDICTS).map((state) => [state, evidence[state]?.verdict]));
 
 interface Fixture {
 	readonly stub: ReturnType<typeof startMermaidStub>;
@@ -117,7 +120,8 @@ test.skipIf(!official)("keyless run reaches each allow-listed Mermaid read with 
 		expectNoCredentialSent(fixture.stub);
 		// A fixture read never promotes Mermaid to any live state.
 		const status = onlyEnvelope(await fixture.run(["status", "mermaid"])).result;
-		expect(status.data.connectors).toEqual([{ id: "mermaid", evidence: UNPROVEN_EVIDENCE }]);
+		expect(status.data.connectors.map((row: { id: string }) => row.id)).toEqual(["mermaid"]);
+		expect(verdicts(status.data.connectors[0].evidence)).toEqual(KEYLESS_UNPROVEN_VERDICTS);
 	} finally {
 		fixture.dispose();
 	}

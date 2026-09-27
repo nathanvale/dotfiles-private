@@ -41,7 +41,22 @@ if (process.env.CI && !OFFICIAL_MCPORTER) throw new Error("CONNECTORS_OFFICIAL_R
 // Independent oracles, restated from the accepted contract.
 const REGISTRATION_LITERAL = `{"schemaVersion":1,"vault":"API Credentials","item":"${ITEM_ID}"}\n`;
 const OP_READ = { argv: ["item", "get", ITEM_ID, "--vault", "API Credentials", "--format", "json"], envKeys: ["HOME", "OP_SERVICE_ACCOUNT_TOKEN", "PATH"], serviceTokenMatches: true };
-const UNPROVEN_EVIDENCE = { configured: true, localReady: null, custodyChecked: null, authenticated: false, schemaQualified: false, liveReadProven: false, liveWriteProven: false, fixtureTested: null };
+// Spec AC21: a registration makes 1Password custody effective, never checked
+// or authenticated, and status reads no effect receipt, so fixture reads and
+// completed fixture writes promote nothing.
+const REGISTERED_UNPROVEN = {
+	custodyChecked: { verdict: "unobserved", basis: "status-reads-no-credential", observedAt: null, boundary: null, custody: { mode: "1password-below-mcporter", source: "plugin-state:registration" } },
+	authenticated: { verdict: "unobserved", basis: "status-contacts-no-provider", observedAt: null, boundary: null, custody: { mode: "1password-below-mcporter", source: "plugin-state:registration" } },
+	schemaQualified: { verdict: "unobserved", basis: "status-contacts-no-provider", observedAt: null, boundary: null },
+	liveReadProven: { verdict: "unobserved", basis: "status-contacts-no-provider", observedAt: null, boundary: null },
+	liveWriteProven: { verdict: "unobserved", basis: "status-reads-no-effect-receipt", observedAt: null, boundary: null },
+	fixtureTested: { verdict: "unobserved", basis: "status-retains-no-fixture-observation", observedAt: null, boundary: null },
+};
+function statusEvidence(envelope: { result: Envelope["result"] }): unknown {
+	const rows = (envelope.result.data?.connectors ?? []) as { id: string; evidence: Record<string, unknown> }[];
+	expect(rows.map((row) => row.id)).toEqual(["mermaid"]);
+	return Object.fromEntries(Object.keys(REGISTERED_UNPROVEN).map((state) => [state, rows[0]?.evidence[state]]));
+}
 const KEYCHAIN_HANDOFF = "store the Connectors 1Password service-account token in the login Keychain yourself: security add-generic-password -s connectors.1password.service-account -a connectors -w (it prompts for the value; Connectors never receives it)";
 const UNREGISTERED_REPAIR = `the Mermaid account tier needs a registration first: run connectors auth configure mermaid --input '{"item":"<id>"}'`;
 const INPUT_SENTINEL = "SENTINEL_MERMAID_INPUT_VALUE";
@@ -158,7 +173,7 @@ test.skipIf(!OFFICIAL_MCPORTER)("account custody gates on the registration and c
 		expect({ ...station(handoff), repair: handoff.result.repairAction }).toEqual({ code: 3, cause: "DOMAIN_ADAPTER_REFUSED", connectorCause: "service-token-missing", completed: [], uncertain: [], repair: KEYCHAIN_HANDOFF });
 		expect(stub.calls).toHaveLength(1);
 
-		expect((await run(["status", "mermaid"])).result.data?.connectors).toEqual([{ id: "mermaid", evidence: UNPROVEN_EVIDENCE }]);
+		expect(statusEvidence(await run(["status", "mermaid"]))).toEqual(REGISTERED_UNPROVEN);
 	}, false);
 }, 120_000);
 
@@ -224,7 +239,7 @@ test.skipIf(!OFFICIAL_MCPORTER)("writes apply only a fresh preview, once; an unk
 		// Journal records hold identifiers and digests, never diagram content,
 		// and a completed fixture write never promotes the live state.
 		expect(machine.sweepText()).not.toContain("C --> D");
-		expect((await run(["status", "mermaid"])).result.data?.connectors).toEqual([{ id: "mermaid", evidence: UNPROVEN_EVIDENCE }]);
+		expect(statusEvidence(await run(["status", "mermaid"]))).toEqual(REGISTERED_UNPROVEN);
 	});
 }, 180_000);
 

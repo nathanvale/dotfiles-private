@@ -121,16 +121,19 @@ describe("Spec AC23: a second packaged challenge adapter", () => {
 			expect(authorityReceipt).not.toContain(AMBIENT);
 			expect(readdirSync(bundle.root, { recursive: true, encoding: "utf8" }).sort()).toEqual([...before, "challenge-authority.json"].sort());
 
-			const expectedEvidence = {
-				configured: true,
-				localReady: null,
-				custodyChecked: null,
-				authenticated: false,
-				schemaQualified: false,
-				liveReadProven: false,
-				liveWriteProven: false,
-				fixtureTested: null,
+			// Verdicts only (tests/evidence-state.test.ts owns the full
+			// observations): the fixture success stays out of every state.
+			const expectedVerdicts = {
+				configured: "proven",
+				localReady: "proven",
+				custodyChecked: "unobserved",
+				authenticated: "unobserved",
+				schemaQualified: "unobserved",
+				liveReadProven: "unobserved",
+				liveWriteProven: "not-applicable",
+				fixtureTested: "unobserved",
 			};
+			const verdicts = (evidence: Record<string, { verdict: string }>) => Object.fromEntries(Object.entries(evidence).map(([state, observation]) => [state, observation.verdict]));
 			const status = await runBundle(bundle, ["status", "challenge-fixture-skill"], env);
 			const doctor = await runBundle(bundle, ["doctor", "challenge-fixture-skill"], env);
 			for (const result of [status, doctor]) {
@@ -141,13 +144,14 @@ describe("Spec AC23: a second packaged challenge adapter", () => {
 			}
 			const statusEnvelope = JSON.parse(status.stdout);
 			expect(statusEnvelope.result.commandIdentity).toBe("connectors.status");
-			expect(statusEnvelope.result.data).toEqual({
-				connectors: [{ id: "challenge-fixture-skill", evidence: expectedEvidence }],
-				problems: [],
-			});
+			expect(statusEnvelope.result.data.problems).toEqual([]);
+			expect(statusEnvelope.result.data.connectors.map((row: { id: string }) => row.id)).toEqual(["challenge-fixture-skill"]);
+			expect(verdicts(statusEnvelope.result.data.connectors[0].evidence)).toEqual(expectedVerdicts);
 			const doctorEnvelope = JSON.parse(doctor.stdout);
 			expect(doctorEnvelope.result.commandIdentity).toBe("connectors.doctor");
-			expect(doctorEnvelope.result.data).toEqual({ connector: "challenge-fixture-skill", ...expectedEvidence });
+			const { connector, ...doctorEvidence } = doctorEnvelope.result.data;
+			expect(connector).toBe("challenge-fixture-skill");
+			expect(verdicts(doctorEvidence)).toEqual(expectedVerdicts);
 			expect(readdirSync(bundle.root, { recursive: true, encoding: "utf8" }).sort()).toEqual([...before, "challenge-authority.json"].sort());
 			expect(readFileSync(path.join(bundle.root, "challenge-authority.json"), "utf8")).toBe(authorityReceipt);
 		} finally {

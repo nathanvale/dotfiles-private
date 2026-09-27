@@ -34,7 +34,12 @@ describe("connectors status: Spec AC21 truthful evidence states", () => {
 	// anything, so the full two-connector map is asserted by toEqual instead
 	// of iterated. Both ids and the complete evidence shape are hand-typed
 	// here, never read back from the manifest or the live envelope.
-	const KEYLESS_EVIDENCE = { configured: true, localReady: null, custodyChecked: null, authenticated: false, schemaQualified: false, liveReadProven: false, liveWriteProven: false, fixtureTested: null };
+	// Verdicts only: tests/evidence-state.test.ts owns each observation's full
+	// basis, time, and boundary. With no plugin-owned dependency selected, the
+	// declared requirements are observed not ready, and keyless custody makes
+	// custody and authentication not applicable.
+	const KEYLESS_VERDICTS = { configured: "proven", localReady: "not-proven", custodyChecked: "not-applicable", authenticated: "not-applicable", schemaQualified: "unobserved", liveReadProven: "unobserved", liveWriteProven: "not-applicable", fixtureTested: "unobserved" };
+	const verdictRows = (rows: { id: string; evidence: Record<string, { verdict: string }> }[]) => rows.map(({ id, evidence }) => ({ id, verdicts: Object.fromEntries(Object.entries(evidence).map(([state, observation]) => [state, observation.verdict])) }));
 
 	test("both status forms refuse one malformed packaged requirements file before dependency effects", async () => {
 		const bundle = createBundle();
@@ -83,8 +88,8 @@ describe("connectors status: Spec AC21 truthful evidence states", () => {
 			for (const requirements of ["valid", "absent"]) {
 				if (requirements === "absent") rmSync(path.join(bundle.root, "requirements.json"));
 				for (const [argv, expectedConnectors] of [
-					[["status"], [{ id: "context7", evidence: KEYLESS_EVIDENCE }, { id: "firecrawl", evidence: KEYLESS_EVIDENCE }]],
-					[["status", "context7"], [{ id: "context7", evidence: KEYLESS_EVIDENCE }]],
+					[["status"], [{ id: "context7", verdicts: KEYLESS_VERDICTS }, { id: "firecrawl", verdicts: KEYLESS_VERDICTS }]],
+					[["status", "context7"], [{ id: "context7", verdicts: KEYLESS_VERDICTS }]],
 				] as const) {
 					const result = await runBundle(bundle, [...argv], { home: bundle.root, binDir: mcporterBin.binDir, extraEnv: { OP_SERVICE_ACCOUNT_TOKEN: sentinel } });
 					expect(result.code).toBe(0);
@@ -94,7 +99,8 @@ describe("connectors status: Spec AC21 truthful evidence states", () => {
 					expect(envelope.result.commandIdentity).toBe("connectors.status");
 					expect(envelope.result.outcome).toBe("success");
 					expect(envelope.result.causeCode).toBe("SUCCESS_UNCHANGED");
-					expect(envelope.result.data).toEqual({ connectors: expectedConnectors, problems: [] });
+					expect(envelope.result.data.problems).toEqual([]);
+					expect(verdictRows(envelope.result.data.connectors)).toEqual([...expectedConnectors]);
 					expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
 				}
 			}
@@ -422,23 +428,24 @@ describe("connectors config show: Spec AC24 resolved provenance", () => {
 });
 
 describe("connectors doctor", () => {
-	test("a keyless manifest check leaves readiness and custody unproved", async () => {
+	test("a keyless manifest check reports readiness not proven and live states unobserved", async () => {
 		const bundle = createBundle();
 		try {
 			const result = await runBundle(bundle, ["doctor", "firecrawl"], { home: bundle.root });
 			const envelope = JSON.parse(result.stdout);
 			expect(result.code).toBe(0);
 			expect(result.stderr).toBe("");
-			expect(envelope.result.data).toEqual({
-				connector: "firecrawl",
-				configured: true,
-				localReady: null,
-				custodyChecked: null,
-				authenticated: false,
-				schemaQualified: false,
-				liveReadProven: false,
-				liveWriteProven: false,
-				fixtureTested: null,
+			const { connector, ...evidence } = envelope.result.data;
+			expect(connector).toBe("firecrawl");
+			expect(Object.fromEntries(Object.entries(evidence as Record<string, { verdict: string }>).map(([state, observation]) => [state, observation.verdict]))).toEqual({
+				configured: "proven",
+				localReady: "not-proven",
+				custodyChecked: "not-applicable",
+				authenticated: "not-applicable",
+				schemaQualified: "unobserved",
+				liveReadProven: "unobserved",
+				liveWriteProven: "not-applicable",
+				fixtureTested: "unobserved",
 			});
 		} finally {
 			bundle.dispose();
