@@ -214,6 +214,16 @@ export async function runBundle(bundle: Bundle, argv: string[], env: { home: str
 	return spawnCapture([bundle.binary, ...argv], { HOME: env.home, PATH: path_, TMPDIR: bundle.root, ...env.extraEnv }, env.timeoutMs, env.cwd);
 }
 
+// A pseudo-terminal is required for attended commands, while the test runner
+// itself remains noninteractive. No credential is typed into this fixture TTY.
+export async function runInteractiveBundle(bundle: Bundle, argv: string[], env: { home: string; extraEnv?: Record<string, string>; timeoutMs?: number }): Promise<RunResult & { terminal: string }> {
+	const output = mkdtempSync(path.join(bundle.root, "attended-output-"));
+	const stdout = path.join(output, "stdout");
+	const stderr = path.join(output, "stderr");
+	const terminal = await spawnCapture(["/usr/bin/script", "-q", "/dev/null", "/bin/sh", "-c", 'out=$1; err=$2; shift 2; exec "$@" >"$out" 2>"$err"', "sh", stdout, stderr, bundle.binary, ...argv], { HOME: env.home, PATH: "/usr/bin:/bin", TMPDIR: bundle.root, ...env.extraEnv }, env.timeoutMs);
+	return { ...terminal, stdout: readFileSync(stdout, "utf8"), stderr: readFileSync(stderr, "utf8"), terminal: terminal.stdout };
+}
+
 // A PATH directory carrying only the fake mcporter (and the bun shebang
 // target it needs), independent of createHarness's own dotfiles-shaped
 // binDir: the generic command core never resolves a below-MCPorter dotfiles

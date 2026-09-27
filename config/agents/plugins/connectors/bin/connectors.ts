@@ -24,6 +24,7 @@ import { DEPENDENCY_TOOLS, dependencyStatus, isDependencyTool, REQUIREMENTS_REVI
 import { applyDeps, PREVIEW_ID, previewDeps, type ApplyResult, type DepsRequest } from "./deps-repair.ts";
 import { downloadAndInstallMise, downloadAndInstallOp } from "./setup/download.ts";
 import { installPinnedUv, readValidatedUvSources } from "./setup/uv.ts";
+import { loginKeychain, storeServiceToken } from "./setup/keychain.ts";
 import { stateRoot } from "./private-state.ts";
 import { observeEvidence } from "./evidence-state.ts";
 import { retainFixtureObservation, retainObservation } from "./evidence-record.ts";
@@ -65,6 +66,8 @@ export type CauseCode =
 	| "DOMAIN_SETUP_FAILED_PARTIAL"
 	| "SCHEMA_SETUP_CONFIG_INVALID"
 	| "USAGE_SETUP_MALFORMED"
+	| "DOMAIN_SETUP_ATTENDED_REQUIRED"
+	| "DOMAIN_SETUP_KEYCHAIN_UNAVAILABLE"
 	| "INTERNAL_SETUP_UNKNOWN"
 	| "INTERNAL_SETUP_AFTER_COMMIT"
 	| "SUCCESS_DEPS_REPAIR_PREVIEWED"
@@ -134,6 +137,7 @@ let bootstrapCompleted = false;
 let recoveryCompleted = false;
 let setupStarted = false;
 let setupCompleted: string[] = [];
+let setupInteractive = false;
 // Explicit deps repair progress: the command, its durable effects, and the
 // one effect an interrupted attempt leaves uncertain.
 let depsProgress: { commandIdentity: string; completed: readonly string[]; uncertain: string | null; remaining: readonly string[] } | null = null;
@@ -260,6 +264,16 @@ const COMMANDS: readonly CommandDescriptor[] = [
 		input: words("setup"),
 		reaches: "dependency-install",
 		stations: ["SUCCESS_COMPLETED", "DOMAIN_SETUP_FAILED_UNCHANGED", "DOMAIN_SETUP_FAILED_PARTIAL", "SCHEMA_SETUP_CONFIG_INVALID", "USAGE_SETUP_MALFORMED", "INTERNAL_SETUP_UNKNOWN", "INTERNAL_SETUP_AFTER_COMMIT"],
+	},
+	{
+		commandIdentity: "connectors.setup.interactive",
+		route: ["setup", "--interactive"],
+		effectClass: "repository-local",
+		summary: "Install verified tools and let macOS privately prompt for the existing 1Password service-account token",
+		usage: "setup --interactive",
+		input: [word(0, "setup"), option(1, "--interactive", null, true)],
+		reaches: "attended-terminal",
+		stations: ["SUCCESS_COMPLETED", "DOMAIN_SETUP_FAILED_UNCHANGED", "DOMAIN_SETUP_FAILED_PARTIAL", "SCHEMA_SETUP_CONFIG_INVALID", "USAGE_SETUP_MALFORMED", "DOMAIN_SETUP_ATTENDED_REQUIRED", "DOMAIN_SETUP_KEYCHAIN_UNAVAILABLE", "INTERNAL_SETUP_UNKNOWN", "INTERNAL_SETUP_AFTER_COMMIT"],
 	},
 	{ commandIdentity: "connectors.config.validate", route: ["config", "validate"], effectClass: "inspect", summary: "Validate connector manifests, registries, and packaged requirements", usage: "config validate [connector]", input: [...words("config", "validate"), connectorAt(2, false)], reaches: "packaged-files", stations: LOCAL_INSPECTION },
 	{ commandIdentity: "connectors.config.show", route: ["config", "show"], effectClass: "inspect", summary: "Show resolved nonsecret values and provenance; conflicting repeated selectors refuse", usage: "config show <connector> --resolved --json [--select name=value ...]", input: [...words("config", "show"), connectorAt(2), option(3, "--resolved", null, true), option(3, "--json", null, true), selectAt(3)], reaches: "plugin-state", stations: [...LOCAL_INSPECTION, ...CUSTODY_REFUSALS] },
@@ -556,6 +570,8 @@ const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	DOMAIN_SETUP_FAILED_PARTIAL: { outcome: "failed", effectClass: "repository-local", transactionState: "partially-completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	SCHEMA_SETUP_CONFIG_INVALID: { outcome: "refused", effectClass: "repository-local", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	USAGE_SETUP_MALFORMED: { outcome: "refused", effectClass: "repository-local", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_SETUP_ATTENDED_REQUIRED: { outcome: "refused", effectClass: "repository-local", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_SETUP_KEYCHAIN_UNAVAILABLE: { outcome: "refused", effectClass: "repository-local", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_SETUP_UNKNOWN: { outcome: "failed", effectClass: "repository-local", transactionState: "unknown", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_SETUP_AFTER_COMMIT: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	SUCCESS_DEPS_REPAIR_PREVIEWED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
@@ -636,8 +652,10 @@ const STATION_SEMANTICS: Readonly<Record<CauseCode, { readonly reachability: Rea
 	DOMAIN_SETUP_FAILED_UNCHANGED: { reachability: "dependency-install", trigger: "the first setup install failed before selecting anything" },
 	DOMAIN_SETUP_FAILED_PARTIAL: { reachability: "dependency-install", trigger: "a later setup install failed after earlier ones were selected" },
 	SCHEMA_SETUP_CONFIG_INVALID: { reachability: "packaged-files", trigger: "the packaged setup requirements or mise configuration failed validation" },
-	USAGE_SETUP_MALFORMED: { reachability: "arguments", trigger: "setup was given arguments" },
-	INTERNAL_SETUP_UNKNOWN: { reachability: "interruption", trigger: "an unexpected failure stopped setup during an install" },
+	USAGE_SETUP_MALFORMED: { reachability: "arguments", trigger: "setup arguments do not match its selected route" },
+	DOMAIN_SETUP_ATTENDED_REQUIRED: { reachability: "attended-terminal", trigger: "interactive setup has no controlling terminal" },
+	DOMAIN_SETUP_KEYCHAIN_UNAVAILABLE: { reachability: "plugin-state", trigger: "the default user Keychain does not resolve to the available login Keychain" },
+	INTERNAL_SETUP_UNKNOWN: { reachability: "interruption", trigger: "an install or Keychain write stopped where its effect cannot be confirmed" },
 	INTERNAL_SETUP_AFTER_COMMIT: { reachability: "interruption", trigger: "an unexpected failure followed a completed setup" },
 	SUCCESS_DEPS_REPAIR_PREVIEWED: { reachability: "command", trigger: "the exact repair was recorded as a preview; nothing was installed" },
 	SUCCESS_DEPS_REPAIRED: { reachability: "command", trigger: "the previewed repair was installed and verified after its receipt" },
@@ -910,17 +928,17 @@ function checkDepsUpdateEffects(result: Envelope["result"]): string[] {
 function checkCommandEffects(result: Envelope["result"]): string[] {
 	if (result.commandIdentity === REPAIR_PREVIEW || result.commandIdentity === REPAIR_APPLY) return checkDepsRepairEffects(result);
 	if (result.commandIdentity === UPDATE_PREVIEW || result.commandIdentity === UPDATE_APPLY) return checkDepsUpdateEffects(result);
-	if (result.commandIdentity === "connectors.setup") return checkSetupEffects(result);
+	if (result.commandIdentity === "connectors.setup" || result.commandIdentity === "connectors.setup.interactive") return checkSetupEffects(result);
 	return checkEffectsEmptyAndComplete(result.effects);
 }
 
 function checkSetupEffects(result: Envelope["result"]): string[] {
 	const effects = result.effects;
 	const problems = checkExactKeys(effects, EFFECTS_KEYS, "result.effects");
-	const expected = ["op", "mise", "uv"];
+	const expected = result.commandIdentity === "connectors.setup.interactive" ? ["op", "mise", "uv", "keychain-service-token"] : ["op", "mise", "uv"];
 	if (!Array.isArray(effects.completed) || !Array.isArray(effects.remaining) || !Array.isArray(effects.uncertain)) return [...problems, "setup effect inventories must be arrays"];
 	if (effects.inventoryComplete !== true) problems.push("setup effect inventory must be complete");
-	if (JSON.stringify([...effects.completed, ...effects.uncertain, ...effects.remaining]) !== JSON.stringify(expected)) problems.push("setup effects must partition op, mise, uv in order");
+	if (JSON.stringify([...effects.completed, ...effects.uncertain, ...effects.remaining]) !== JSON.stringify(expected)) problems.push("setup effects must partition the selected setup route in order");
 	if (result.transactionState === "completed" && effects.remaining.length !== 0) problems.push("completed setup has remaining effects");
 	if (result.transactionState === "partially-completed" && (effects.completed.length === 0 || effects.remaining.length === 0)) problems.push("partial setup requires completed and remaining effects");
 	if (result.transactionState === "unchanged" && effects.completed.length !== 0) problems.push("unchanged setup has completed effects");
@@ -962,13 +980,14 @@ function completedSelectionEffects(): string[] {
 type FailureProgress = Pick<Envelope["result"], "commandIdentity" | "effectClass" | "transactionState" | "causeCode" | "effects">;
 
 function setupFailureProgress(): FailureProgress {
-	const committed = setupCompleted.length === SETUP_EFFECTS.length;
-	const uncertain = committed ? [] : [SETUP_EFFECTS[setupCompleted.length]!];
+	const effects = setupInteractive ? INTERACTIVE_SETUP_EFFECTS : SETUP_EFFECTS;
+	const committed = setupCompleted.length === effects.length;
+	const uncertain = committed ? [] : [effects[setupCompleted.length]!];
 	return {
-		commandIdentity: "connectors.setup", effectClass: "repository-local",
+		commandIdentity: setupInteractive ? "connectors.setup.interactive" : "connectors.setup", effectClass: "repository-local",
 		transactionState: committed ? "completed" : "unknown",
 		causeCode: committed ? "INTERNAL_SETUP_AFTER_COMMIT" : "INTERNAL_SETUP_UNKNOWN",
-		effects: { completed: setupCompleted, remaining: SETUP_EFFECTS.slice(setupCompleted.length + uncertain.length), uncertain, inventoryComplete: true },
+		effects: { completed: setupCompleted, remaining: effects.slice(setupCompleted.length + uncertain.length), uncertain, inventoryComplete: true },
 	};
 }
 
@@ -1141,6 +1160,7 @@ function helpText(): string {
 		"  --help --json                                   Show help as a machine Contract Core envelope",
 		"  list                                            List connectors declared by a manifest",
 		"  setup                                           Install verified op, mise, and pinned uv explicitly",
+		"  setup --interactive                             Install tools and privately store the existing 1Password service token in login Keychain",
 		"  config validate [connector]                     Validate manifests, registries, and packaged requirements",
 		"  config show <connector> --resolved --json       Show resolved nonsecret configuration and provenance",
 		"                                                  Repeated --select names must carry identical values",
@@ -1485,27 +1505,49 @@ async function handleDepsUpdate(args: readonly string[]): Promise<void> {
 }
 
 const SETUP_EFFECTS = ["op", "mise", "uv"] as const;
+const INTERACTIVE_SETUP_EFFECTS = ["op", "mise", "uv", "keychain-service-token"] as const;
 
-function emitSetup(causeCode: "SUCCESS_COMPLETED" | "DOMAIN_SETUP_FAILED_UNCHANGED" | "DOMAIN_SETUP_FAILED_PARTIAL" | "SCHEMA_SETUP_CONFIG_INVALID" | "USAGE_SETUP_MALFORMED", completed: string[], message: string): void {
+function emitSetup(causeCode: "SUCCESS_COMPLETED" | "DOMAIN_SETUP_FAILED_UNCHANGED" | "DOMAIN_SETUP_FAILED_PARTIAL" | "SCHEMA_SETUP_CONFIG_INVALID" | "USAGE_SETUP_MALFORMED" | "DOMAIN_SETUP_ATTENDED_REQUIRED" | "DOMAIN_SETUP_KEYCHAIN_UNAVAILABLE" | "INTERNAL_SETUP_UNKNOWN", completed: string[], message: string): void {
 	const row = ADMITTED_CAUSE_ROWS[causeCode];
+	const effects = setupInteractive ? INTERACTIVE_SETUP_EFFECTS : SETUP_EFFECTS;
+	const uncertain = causeCode === "INTERNAL_SETUP_UNKNOWN" ? [effects[completed.length]!] : [];
 	emit({
 		envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message, availablePaths: AVAILABLE_PATHS,
 		result: {
-			runId: runId(), commandIdentity: "connectors.setup", outcome: row.outcome, failureClass: row.failureClass,
-			exitCode: row.exitCode, data: row.outcome === "success" ? { installed: SETUP_EFFECTS } : null,
-			retryable: false, repairAction: row.outcome === "success" ? null : "Inspect the selected plugin-owned setup state, then run connectors setup again",
-			nextAction: row.outcome === "success" ? "connectors.status" : "connectors.setup",
+			runId: runId(), commandIdentity: setupInteractive ? "connectors.setup.interactive" : "connectors.setup", outcome: row.outcome, failureClass: row.failureClass,
+			exitCode: row.exitCode, data: row.outcome === "success" ? { installed: SETUP_EFFECTS, ...(setupInteractive ? { keychainServiceToken: "stored" } : {}) } : null,
+			retryable: false, repairAction: row.outcome === "success" ? null : causeCode === "INTERNAL_SETUP_UNKNOWN" ? "Inspect the login Keychain item metadata and confirm scoped auth behavior before another setup attempt" : setupInteractive ? "Inspect the reported effects, then run connectors setup --interactive in a terminal" : "Inspect the selected plugin-owned setup state, then run connectors setup again",
+			nextAction: row.outcome === "success" ? "connectors.status" : setupInteractive ? "connectors.setup.interactive" : "connectors.setup",
 			effectClass: "repository-local", transactionState: row.transactionState, causeCode,
-			effects: { completed, remaining: SETUP_EFFECTS.slice(completed.length), uncertain: [], inventoryComplete: true },
+			effects: { completed, remaining: effects.slice(completed.length + uncertain.length), uncertain, inventoryComplete: true },
 		},
 	});
 }
 
-async function handleSetup(args: readonly string[]): Promise<void> {
-	if (args.length !== 0) {
-		emitSetup("USAGE_SETUP_MALFORMED", [], "connectors: setup takes no arguments");
-		return;
+async function installSetupDependencies(root: string, completed: string[]): Promise<boolean> {
+	const source = process.env.CONNECTORS_TEST_RELEASE_ORIGIN ? { localReleaseOrigin: process.env.CONNECTORS_TEST_RELEASE_ORIGIN } : undefined;
+	const op = await downloadAndInstallOp(source);
+	if (!op.ok) {
+		emitSetup("DOMAIN_SETUP_FAILED_UNCHANGED", completed, `connectors: op setup failed: ${op.reason}`);
+		return false;
 	}
+	completed.push("op");
+	const mise = await downloadAndInstallMise(source);
+	if (!mise.ok) {
+		emitSetup("DOMAIN_SETUP_FAILED_PARTIAL", completed, `connectors: mise setup failed: ${mise.reason}`);
+		return false;
+	}
+	completed.push("mise");
+	const uv = await installPinnedUv(mise.executable, path.join(stateRoot(process.env), "connectors", "setup", "uv"), root);
+	if (!uv.ok) {
+		emitSetup("DOMAIN_SETUP_FAILED_PARTIAL", completed, `connectors: uv setup failed: ${uv.reason}`);
+		return false;
+	}
+	completed.push("uv");
+	return true;
+}
+
+async function completeSetup(terminal: number | null): Promise<void> {
 	const root = pluginRoot();
 	if (!readValidatedUvSources(path.join(root, "requirements.json"), path.join(root, "config", "mise.toml"), path.join(root, "config", "mise.lock"))) {
 		emitSetup("SCHEMA_SETUP_CONFIG_INVALID", [], "connectors: packaged setup configuration is invalid");
@@ -1514,26 +1556,39 @@ async function handleSetup(args: readonly string[]): Promise<void> {
 	setupStarted = true;
 	const completed: string[] = [];
 	setupCompleted = completed;
-	const source = process.env.CONNECTORS_TEST_RELEASE_ORIGIN ? { localReleaseOrigin: process.env.CONNECTORS_TEST_RELEASE_ORIGIN } : undefined;
-	const op = await downloadAndInstallOp(source);
-	if (!op.ok) {
-		emitSetup("DOMAIN_SETUP_FAILED_UNCHANGED", completed, `connectors: op setup failed: ${op.reason}`);
+	if (!await installSetupDependencies(root, completed)) return;
+	if (setupInteractive) {
+		if (!storeServiceToken(terminal!, process.env.HOME!)) {
+			emitSetup("INTERNAL_SETUP_UNKNOWN", completed, "connectors: Keychain write could not be confirmed");
+			return;
+		}
+		completed.push("keychain-service-token");
+	}
+	emitSetup("SUCCESS_COMPLETED", completed, setupInteractive ? "connectors: verified tools installed and service token stored in login Keychain" : "connectors: verified op, mise, and pinned uv installed");
+}
+
+async function handleSetup(args: readonly string[]): Promise<void> {
+	setupInteractive = args[0] === "--interactive";
+	if (args.length !== (setupInteractive ? 1 : 0)) {
+		emitSetup("USAGE_SETUP_MALFORMED", [], "connectors: use setup or setup --interactive");
 		return;
 	}
-	completed.push("op");
-	const mise = await downloadAndInstallMise(source);
-	if (!mise.ok) {
-		emitSetup("DOMAIN_SETUP_FAILED_PARTIAL", completed, `connectors: mise setup failed: ${mise.reason}`);
+	const terminal = setupInteractive ? openTerminal() : null;
+	if (setupInteractive && terminal === null) {
+		emitSetup("DOMAIN_SETUP_ATTENDED_REQUIRED", [], "connectors: interactive setup needs a terminal");
 		return;
 	}
-	completed.push("mise");
-	const uv = await installPinnedUv(mise.executable, path.join(stateRoot(process.env), "connectors", "setup", "uv"), root);
-	if (!uv.ok) {
-		emitSetup("DOMAIN_SETUP_FAILED_PARTIAL", completed, `connectors: uv setup failed: ${uv.reason}`);
+	const keychain = setupInteractive ? loginKeychain(process.env.HOME) : null;
+	if (setupInteractive && keychain === null) {
+		if (terminal !== null) closeSync(terminal);
+		emitSetup("DOMAIN_SETUP_KEYCHAIN_UNAVAILABLE", [], "connectors: the default user Keychain must be the available login Keychain");
 		return;
 	}
-	completed.push("uv");
-	emitSetup("SUCCESS_COMPLETED", completed, "connectors: verified op, mise, and pinned uv installed");
+	try {
+		await completeSetup(terminal);
+	} finally {
+		if (terminal !== null) closeSync(terminal);
+	}
 }
 
 // Each discovered manifest that failed to load, as list and status report it.

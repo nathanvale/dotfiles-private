@@ -17,6 +17,7 @@ const COMMANDS: Readonly<Record<string, readonly [string[], string]>> = {
 	"connectors.discovery.command": [["--discover-command", "--json"], "inspect"],
 	"connectors.list": [["list"], "inspect"],
 	"connectors.setup": [["setup"], "repository-local"],
+	"connectors.setup.interactive": [["setup", "--interactive"], "repository-local"],
 	"connectors.config.validate": [["config", "validate"], "inspect"],
 	"connectors.config.show": [["config", "show"], "inspect"],
 	"connectors.status": [["status"], "inspect"],
@@ -105,7 +106,7 @@ const causes = (stations: readonly Station[]): string[] => stations.map((station
 
 describe("command-scoped discovery (packaged process)", () => {
 	test("describes every accepted command identity by its route and effect class, and generic discovery lists the same set", async () => {
-		expect(IDENTITIES).toHaveLength(24);
+		expect(IDENTITIES).toHaveLength(25);
 		const generic = await discoverCommand(["--discover", "--json"]);
 		expect(generic.envelope.availablePaths).toEqual([...IDENTITIES].sort());
 		const described = [];
@@ -119,6 +120,9 @@ describe("command-scoped discovery (packaged process)", () => {
 	test("names the exact stations of setup, list, dispatch, and itself", async () => {
 		expect(causes((await describeCommand("connectors.setup")).stations).sort()).toEqual([
 			"DOMAIN_SETUP_FAILED_PARTIAL", "DOMAIN_SETUP_FAILED_UNCHANGED", "INTERNAL_SETUP_AFTER_COMMIT", "INTERNAL_SETUP_UNKNOWN", "SCHEMA_SETUP_CONFIG_INVALID", "SUCCESS_COMPLETED", "USAGE_SETUP_MALFORMED",
+		]);
+		expect(causes((await describeCommand("connectors.setup.interactive")).stations).sort()).toEqual([
+			"DOMAIN_SETUP_ATTENDED_REQUIRED", "DOMAIN_SETUP_FAILED_PARTIAL", "DOMAIN_SETUP_FAILED_UNCHANGED", "DOMAIN_SETUP_KEYCHAIN_UNAVAILABLE", "INTERNAL_SETUP_AFTER_COMMIT", "INTERNAL_SETUP_UNKNOWN", "SCHEMA_SETUP_CONFIG_INVALID", "SUCCESS_COMPLETED", "USAGE_SETUP_MALFORMED",
 		]);
 		const list = await describeCommand("connectors.list");
 		expect(list.stations).toEqual([

@@ -30,7 +30,7 @@ export type OnePasswordRead = { ok: true; item: unknown } | { ok: false; cause: 
 
 // The fixed handoffs. They name where the owner puts a credential and never
 // ask for, accept, or echo its value.
-export const SERVICE_TOKEN_HANDOFF = `store the Connectors 1Password service-account token in the login Keychain yourself: security add-generic-password -s ${SERVICE_TOKEN_SERVICE} -a ${SERVICE_TOKEN_ACCOUNT} -w (it prompts for the value; Connectors never receives it)`;
+export const SERVICE_TOKEN_HANDOFF = "Run connectors setup --interactive in a terminal to privately store the existing 1Password service-account token in your login Keychain";
 export const OP_SETUP_REPAIR = "the plugin-owned 1Password CLI is not set up; run connectors setup";
 
 function serviceToken(env: EnvironmentSource, readKeychain: KeychainReader): { ok: true; token: string } | { ok: false; cause: "service-token-missing" | "service-token-unavailable" } {

@@ -12,7 +12,7 @@ import { ATTENDED_KEYCHAIN, recoverAttendedKeychains, userSearchList } from "./f
 import { CustodyFixture, SERVICE_TOKEN } from "./fixtures/custody-fixture.ts";
 import { changedPaths, KEYCHAIN_LEAF, SHIPPED_ROOT } from "./fixtures/plugin-copy.ts";
 
-const KEYCHAIN_HANDOFF = "store the Connectors 1Password service-account token in the login Keychain yourself: security add-generic-password -s connectors.1password.service-account -a connectors -w (it prompts for the value; Connectors never receives it)";
+const KEYCHAIN_HANDOFF = "Run connectors setup --interactive in a terminal to privately store the existing 1Password service-account token in your login Keychain";
 // The fixture's default registered Jira item ID, restated as a test-owned literal.
 const JIRA_ITEM_READ = ["item", "get", "jirafixtureitem00000000001", "--vault", "API Credentials", "--format", "json"];
 // The packaged front door's Jira read for the fixture's registered tenant.

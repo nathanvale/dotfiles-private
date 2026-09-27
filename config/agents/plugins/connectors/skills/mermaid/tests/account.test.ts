@@ -57,7 +57,7 @@ function statusEvidence(envelope: { result: Envelope["result"] }): unknown {
 	expect(rows.map((row) => row.id)).toEqual(["mermaid"]);
 	return Object.fromEntries(Object.keys(REGISTERED_UNPROVEN).map((state) => [state, rows[0]?.evidence[state]]));
 }
-const KEYCHAIN_HANDOFF = "store the Connectors 1Password service-account token in the login Keychain yourself: security add-generic-password -s connectors.1password.service-account -a connectors -w (it prompts for the value; Connectors never receives it)";
+const KEYCHAIN_HANDOFF = "Run connectors setup --interactive in a terminal to privately store the existing 1Password service-account token in your login Keychain";
 const UNREGISTERED_REPAIR = `the Mermaid account tier needs a registration first: run connectors auth configure mermaid --input '{"item":"<id>"}'`;
 const INPUT_SENTINEL = "SENTINEL_MERMAID_INPUT_VALUE";
 const AMBIENT_SENTINEL = "SENTINEL_AMBIENT_MERMAID_TOKEN";

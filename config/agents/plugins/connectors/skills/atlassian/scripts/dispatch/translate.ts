@@ -29,7 +29,7 @@ const TRANSPORT_PATTERN = /timed? ?out|ETIMEDOUT|ECONNREFUSED|ECONNRESET|ENOTFOU
 const PROVIDER_CAUSE_HINTS: Record<string, string> = {
 	"uv-unavailable": "the plugin-owned uv is not set up; run connectors setup",
 	"op-unavailable": "the plugin-owned 1Password CLI is not set up; run connectors setup",
-	"service-token-missing": "the Connectors 1Password service-account token is not in the login Keychain; its owner must store it there",
+	"service-token-missing": "the Connectors 1Password service-account token is missing; run connectors setup --interactive in a terminal",
 	"service-token-unavailable": "the login Keychain did not release the Connectors 1Password service-account token; unlock it and retry",
 	"item-missing": "the product credential item is not in 1Password; its owner must create and store it",
 	"credential-context-invalid": "restart through the semantic dispatcher",

@@ -39,6 +39,7 @@ const AVAILABLE_PATHS = [
 	"connectors.run.preview",
 	"connectors.schema",
 	"connectors.setup",
+	"connectors.setup.interactive",
 	"connectors.status",
 ];
 const EXIT_MEANINGS = { "0": "success", "1": "internal", "2": "usage", "3": "domain", "4": "schema", "75": "transient" };

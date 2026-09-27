@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { chmodSync, cpSync, existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { buildFaultedFrontDoor } from "./faulted-front-door.ts";
-import { createBundle, createFakeMcporterBinDir, runBundle } from "./harness.ts";
+import { createBundle, createFakeMcporterBinDir, runBundle, runInteractiveBundle } from "./harness.ts";
 
 const OP_PATH = "/dist/1P/op2/pkg/v2.39.0/op_apple_universal_v2.39.0.pkg";
 const MISE_BASE = "/jdx/mise/releases/download/v2026.9.12";
@@ -126,6 +126,126 @@ test("compiled setup refuses malformed arguments without echoing them or creatin
 		bundle.dispose();
 	}
 });
+
+test("interactive setup refuses without a terminal before any install or Keychain effect", async () => {
+	const bundle = createBundle();
+	try {
+		const home = path.join(bundle.root, "home");
+		mkdirSync(home);
+		const state = path.join(bundle.root, "state");
+		const result = await runBundle(bundle, ["setup", "--interactive"], { home, extraEnv: { XDG_STATE_HOME: state, OP_SERVICE_ACCOUNT_TOKEN: "SENTINEL_PRIVATE_VALUE" } });
+		expect([result.code, result.stderr]).toEqual([3, ""]);
+		expect(result.stdout).not.toContain("SENTINEL_PRIVATE_VALUE");
+		const envelope = JSON.parse(result.stdout);
+		expect([envelope.result.commandIdentity, envelope.result.causeCode, envelope.result.transactionState]).toEqual(["connectors.setup.interactive", "DOMAIN_SETUP_ATTENDED_REQUIRED", "unchanged"]);
+		expect(envelope.result.effects).toEqual({ completed: [], remaining: ["op", "mise", "uv", "keychain-service-token"], uncertain: [], inventoryComplete: true });
+		expect(existsSync(state)).toBe(false);
+		expect(readdirSync(home)).toEqual([]);
+	} finally {
+		bundle.dispose();
+	}
+});
+
+test("interactive setup refuses an unavailable login Keychain before install effects", async () => {
+	const bundle = createBundle();
+	try {
+		const home = path.join(bundle.root, "home");
+		const state = path.join(realpathSync(bundle.root), "state");
+		mkdirSync(home);
+		const result = await runInteractiveBundle(bundle, ["setup", "--interactive"], { home, extraEnv: { XDG_STATE_HOME: state } });
+		expect(result.stderr).toBe("");
+		expect(result.terminal).not.toContain("\"envelopeVersion\"");
+		const envelope = JSON.parse(result.stdout);
+		expect([envelope.result.commandIdentity, envelope.result.causeCode, envelope.result.transactionState, envelope.result.nextAction]).toEqual(["connectors.setup.interactive", "DOMAIN_SETUP_KEYCHAIN_UNAVAILABLE", "unchanged", "connectors.setup.interactive"]);
+		expect(envelope.result.effects).toEqual({ completed: [], remaining: ["op", "mise", "uv", "keychain-service-token"], uncertain: [], inventoryComplete: true });
+		expect(existsSync(state)).toBe(false);
+		expect(readdirSync(home)).toEqual([]);
+	} finally {
+		bundle.dispose();
+	}
+});
+
+test.skipIf(fixtures === null)("attended setup keeps the Keychain write below the compiled front door and reports an uncertain write", async () => {
+	if (!fixtures) throw new Error("official fixture missing");
+	const bundle = createBundle();
+	const { server, requests } = fixtureServer(fixtures);
+	try {
+		const home = path.join(bundle.root, "home");
+		const keychain = path.join(home, "Library", "Keychains", "login.keychain-db");
+		mkdirSync(path.dirname(keychain), { recursive: true });
+		writeFileSync(keychain, "fixture, not a real Keychain");
+		const fakeSecurity = path.join(bundle.root, "security-fixture");
+		writeFileSync(fakeSecurity, `#!/bin/sh
+[ "$1" != "default-keychain" ] || {
+  [ "$#" -eq 3 ] && [ "$2" = "-d" ] && [ "$3" = "user" ] || exit 11
+  [ ! -f "$HOME/security-other-default" ] || { printf '"/tmp/other.keychain-db"\\n'; exit 0; }
+  printf '    "%s"\\n' "$HOME/Library/Keychains/login.keychain-db"
+  exit 0
+}
+[ "$#" -eq 7 ] || exit 11
+[ "$1" = "add-generic-password" ] || exit 11
+[ "$2" = "-U" ] || exit 11
+[ "$3" = "-s" ] || exit 11
+[ "$4" = "connectors.1password.service-account" ] || exit 11
+[ "$5" = "-a" ] || exit 11
+[ "$6" = "connectors" ] || exit 11
+[ "$7" = "-w" ] || exit 11
+[ "$PATH" = "/usr/bin:/bin" ] || exit 11
+[ -z "\${OP_SERVICE_ACCOUNT_TOKEN+x}" ] || exit 11
+[ -t 0 ] && [ -t 1 ] && [ -t 2 ] || exit 11
+printf 'fixture security prompt\\n'
+printf 'called\\n' >> "$HOME/security-invocations"
+[ ! -f "$HOME/security-fail" ] || exit 9
+exit 0
+`);
+		chmodSync(fakeSecurity, 0o755);
+		buildFaultedFrontDoor(bundle.root, bundle.binary, { file: "bin/setup/keychain.ts", find: 'const SECURITY_TOOL = "/usr/bin/security"', replace: `const SECURITY_TOOL = ${JSON.stringify(fakeSecurity)}` });
+		const invoke = () => runInteractiveBundle(bundle, ["setup", "--interactive"], { home, timeoutMs: 180_000, extraEnv: {
+			XDG_STATE_HOME: path.join(realpathSync(bundle.root), "state"),
+			CONNECTORS_TEST_RELEASE_ORIGIN: `http://127.0.0.1:${server.port}/`,
+			OP_SERVICE_ACCOUNT_TOKEN: "SENTINEL_PRIVATE_VALUE",
+		} });
+		const parse = (stdout: string) => JSON.parse(stdout);
+		writeFileSync(path.join(home, "security-other-default"), "fixture mismatch");
+		const mismatch = await invoke();
+		const refused = parse(mismatch.stdout);
+		expect([refused.result.causeCode, refused.result.transactionState]).toEqual(["DOMAIN_SETUP_KEYCHAIN_UNAVAILABLE", "unchanged"]);
+		expect(refused.result.effects).toEqual({ completed: [], remaining: ["op", "mise", "uv", "keychain-service-token"], uncertain: [], inventoryComplete: true });
+		expect(mismatch.stderr).toBe("");
+		expect(requests).toEqual([]);
+		expect(existsSync(path.join(home, "security-invocations"))).toBe(false);
+		rmSync(path.join(home, "security-other-default"));
+		const success = await invoke();
+		const successful = parse(success.stdout);
+		expect(successful.result.commandIdentity).toBe("connectors.setup.interactive");
+		expect(successful.result.causeCode).toBe("SUCCESS_COMPLETED");
+		expect(successful.result.transactionState).toBe("completed");
+		expect(successful.result.data).toEqual({ installed: ["op", "mise", "uv"], keychainServiceToken: "stored" });
+		expect(successful.result.effects).toEqual({ completed: ["op", "mise", "uv", "keychain-service-token"], remaining: [], uncertain: [], inventoryComplete: true });
+		expect(success.stderr).toBe("");
+		expect(success.terminal).toContain("fixture security prompt");
+		expect(success.terminal).not.toContain("\"envelopeVersion\"");
+		expect(success.stdout + success.stderr + success.terminal).not.toContain("SENTINEL_PRIVATE_VALUE");
+		expect(readFileSync(path.join(home, "security-invocations"), "utf8")).toBe("called\n");
+
+		writeFileSync(path.join(home, "security-fail"), "fixture refusal");
+		const failure = await invoke();
+		const uncertain = parse(failure.stdout);
+		expect(uncertain.result.commandIdentity).toBe("connectors.setup.interactive");
+		expect(uncertain.result.causeCode).toBe("INTERNAL_SETUP_UNKNOWN");
+		expect(uncertain.result.transactionState).toBe("unknown");
+		expect(uncertain.result.nextAction).toBe("connectors.setup.interactive");
+		expect(uncertain.result.effects).toEqual({ completed: ["op", "mise", "uv"], remaining: [], uncertain: ["keychain-service-token"], inventoryComplete: true });
+		expect(failure.stderr).toBe("");
+		expect(failure.terminal).toContain("fixture security prompt");
+		expect(failure.terminal).not.toContain("\"envelopeVersion\"");
+		expect(failure.stdout + failure.stderr + failure.terminal).not.toContain("SENTINEL_PRIVATE_VALUE");
+		expect(readFileSync(path.join(home, "security-invocations"), "utf8")).toBe("called\ncalled\n");
+	} finally {
+		server.stop();
+		bundle.dispose();
+	}
+}, 360_000);
 
 // Each row corrupts one packaged file beside the copied executable. The
 // interrupted-release test below runs the same bundle shape with pristine
