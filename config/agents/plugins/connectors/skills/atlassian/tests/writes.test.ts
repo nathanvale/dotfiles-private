@@ -430,6 +430,28 @@ describe("wiki media comments", () => {
 			{ kind: "link", label: "the story", target: "https://x.example/a/b" },
 			{ kind: "text", value: "done" },
 		]);
+		// Documented formatting is its own part, compared exactly; a list bullet is prose.
+		const formatted = "*Change:* merged to {{staging}} (commit {{b7b9aaabe}}).\n\n* {{a.png}} and {{b.png}}: cropped.\n\nLive: https://x.example/a/b now.";
+		expect(wikiParts(formatted)).toEqual([
+			{ kind: "bold", value: "Change:" },
+			{ kind: "text", value: "merged to" },
+			{ kind: "code", value: "staging" },
+			{ kind: "text", value: "commit" },
+			{ kind: "code", value: "b7b9aaabe" },
+			{ kind: "code", value: "a.png" },
+			{ kind: "text", value: "and" },
+			{ kind: "code", value: "b.png" },
+			{ kind: "text", value: "cropped live" },
+			{ kind: "url", target: "https://x.example/a/b" },
+			{ kind: "text", value: "now" },
+		]);
+		// Re-review cases: lost bold, lost code, and a changed bare URL are other content.
+		expect(sameWikiBody(formatted, formatted)).toBe(true);
+		expect(sameWikiBody(formatted, formatted.replace("*Change:*", "Change:"))).toBe(false);
+		expect(sameWikiBody(formatted, formatted.replace("{{staging}}", "staging"))).toBe(false);
+		expect(sameWikiBody(formatted, formatted.replace("https://x.example/a/b", "https://x.example/a?b"))).toBe(false);
+		expect(sameWikiBody(formatted, formatted.replace("{{b7b9aaabe}}", "{{b7b9aaab}}"))).toBe(false);
+		expect(sameWikiBody(formatted, formatted.replace("*Change:*", "*Changed:*"))).toBe(false);
 		expect(sameWikiBody(MEDIA.body, STORED)).toBe(true);
 		expect(sameWikiBody(full, full.replace("[the story|", "[The Story |"))).toBe(true);
 		expect(sameWikiBody(full, full.replace("width=600", 'alt="shot.png",width=600'))).toBe(true);

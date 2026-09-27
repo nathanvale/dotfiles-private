@@ -536,14 +536,25 @@ export function renderedImagesPresent(html: string, attachmentIds: readonly stri
 // A media comment's identity on read-back is this write's own content, read
 // as wiki parts: prose (compared normalised, as every comment path does), an
 // image macro (exact file name and every requested parameter), a link
-// (normalised label, exact target), and a mention (exact account id). Jira
-// may add a parameter such as alt when it converts the stored ADF back to
-// wiki text; a parameter the request did not name is tolerated, a changed or
-// missing one is not. Every other transformation is a different comment
+// (normalised label, exact target), a mention (exact account id), and the
+// documented formatting compared exactly: {{code}}, *bold*, and a bare URL.
+// Jira may add a parameter such as alt when it converts the stored ADF back
+// to wiki text; a parameter the request did not name is tolerated, a changed
+// or missing one is not. Every other transformation is a different comment
 // until a live round trip proves it equivalent.
-export type WikiPart = { kind: "text"; value: string } | { kind: "image"; name: string; params: Map<string, string> } | { kind: "link"; label: string; target: string } | { kind: "mention"; id: string };
+export type WikiPart =
+	| { kind: "text"; value: string }
+	| { kind: "image"; name: string; params: Map<string, string> }
+	| { kind: "link"; label: string; target: string }
+	| { kind: "mention"; id: string }
+	| { kind: "code"; value: string }
+	| { kind: "url"; target: string }
+	| { kind: "bold"; value: string };
 
-const WIKI_PART = /!([^!|\s][^!|\r\n]*?\.[A-Za-z0-9]{1,5})(?:\|([^!\r\n]*))?!|\[~accountid:([^\]\r\n]+)\]|\[([^\]|\r\n]*)\|([^\]\r\n]+)\]/g;
+// Alternatives in precedence order: image macro, mention, labelled link,
+// inline code, bare URL, bold. Bold must start and end on a non-space so a
+// list bullet (`* item`) is never read as an opening star.
+const WIKI_PART = /!([^!|\s][^!|\r\n]*?\.[A-Za-z0-9]{1,5})(?:\|([^!\r\n]*))?!|\[~accountid:([^\]\r\n]+)\]|\[([^\]|\r\n]*)\|([^\]\r\n]+)\]|\{\{([^}\r\n]+)\}\}|(https?:\/\/[^\s\]|)]+)|\*(\S(?:[^*\r\n]*?\S)?)\*/g;
 
 function imageParams(raw: string | undefined): Map<string, string> {
 	const params = new Map<string, string>();
@@ -570,7 +581,10 @@ export function wikiParts(body: string): WikiPart[] {
 		position = match.index + match[0].length;
 		if (match[1] !== undefined) parts.push({ kind: "image", name: match[1], params: imageParams(match[2]) });
 		else if (match[3] !== undefined) parts.push({ kind: "mention", id: match[3].trim() });
-		else parts.push({ kind: "link", label: normalised(match[4] ?? ""), target: (match[5] ?? "").trim() });
+		else if (match[5] !== undefined) parts.push({ kind: "link", label: normalised(match[4] ?? ""), target: match[5].trim() });
+		else if (match[6] !== undefined) parts.push({ kind: "code", value: match[6] });
+		else if (match[7] !== undefined) parts.push({ kind: "url", target: match[7] });
+		else parts.push({ kind: "bold", value: match[8] as string });
 	}
 	prose(body.slice(position));
 	return parts;
@@ -586,6 +600,12 @@ function samePart(wanted: WikiPart, observed: WikiPart): boolean {
 			return observed.kind === "link" && observed.label === wanted.label && observed.target === wanted.target;
 		case "mention":
 			return observed.kind === "mention" && observed.id === wanted.id;
+		case "code":
+			return observed.kind === "code" && observed.value === wanted.value;
+		case "url":
+			return observed.kind === "url" && observed.target === wanted.target;
+		case "bold":
+			return observed.kind === "bold" && observed.value === wanted.value;
 	}
 }
 
