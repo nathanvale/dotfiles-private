@@ -162,6 +162,8 @@ test("undeclared tools, misphased or malformed writes, unsupported auth, and a c
 			[["run", "mermaid", "update_mermaid_chart_diagram", "--input", JSON.stringify({ documentID: "doc-1", projectID: "proj-1", clientName: "connectors" }), "--preview"], 4, "SCHEMA_ADAPTER_REFUSED", "input-invalid"],
 			[["recover", "mermaid", "--run", "not-a-run-id"], 2, "USAGE_ADAPTER_REFUSED", "run-invalid"],
 			[["auth", "login", "mermaid"], 3, "DOMAIN_AUTH_VERB_UNSUPPORTED", "auth-verb-unsupported"],
+			[["auth", "repair", "mermaid"], 3, "DOMAIN_AUTH_VERB_UNSUPPORTED", "auth-verb-unsupported"],
+			[["auth", "logout", "mermaid"], 3, "DOMAIN_AUTH_VERB_UNSUPPORTED", "auth-verb-unsupported"],
 			[["run", "mermaid", "get_diagram_title", "--input", secretInput], 4, "SCHEMA_ADAPTER_REFUSED", "registry-not-keyless"],
 		];
 		for (const [index, [argv, exit, cause, connectorCause]] of rows.entries()) {
