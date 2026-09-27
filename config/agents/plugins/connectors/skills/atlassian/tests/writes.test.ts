@@ -375,16 +375,21 @@ describe("wiki media comments", () => {
 		expect(observeRestComment({ error: "gone" })).toEqual({ id: undefined, authorAccountId: undefined, updated: undefined, renderedBody: undefined });
 	});
 
-	test("rendered HTML proves an image by the bound attachment id in an <img> source, or by file name before ids are bound", () => {
-		expect(renderedImagesPresent(BOTH, MEDIA.images, IDS.effectIds)).toBe(true);
-		expect(renderedImagesPresent(rendered("202456"), MEDIA.images, IDS.effectIds)).toBe(false);
-		expect(renderedImagesPresent('<img src="https://example.atlassian.net/secure/attachment/202456/before.png"><img src="https://example.atlassian.net/secure/thumbnail/202457/after.png?default=false">', MEDIA.images, IDS.effectIds)).toBe(true);
+	test("rendered HTML proves an image only by the bound attachment id as a path segment of an <img> source; alt text and other attributes never count", () => {
+		expect(renderedImagesPresent(BOTH, IDS.effectIds)).toBe(true);
+		expect(renderedImagesPresent(rendered("202456"), IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent('<img src="https://example.atlassian.net/secure/attachment/202456/before.png"><img src=\'https://example.atlassian.net/secure/thumbnail/202457/after.png?default=false#x\'>', IDS.effectIds)).toBe(true);
+		expect(renderedImagesPresent('<img alt="x" src=/secure/attachment/202456/before.png><img src=/secure/attachment/202457/after.png>', IDS.effectIds)).toBe(true);
 		// A longer id that merely starts with the bound one is a different attachment.
-		expect(renderedImagesPresent('<img src="/rest/api/3/attachment/content/2024567"><img src="/rest/api/3/attachment/content/202457">', MEDIA.images, IDS.effectIds)).toBe(false);
-		expect(renderedImagesPresent(BOTH, MEDIA.images, [])).toBe(true);
-		expect(renderedImagesPresent('<img alt="before%20shot.png" src="/x/1"><img alt="after.png" src="/x/2">', ["before shot.png", "after.png"], [])).toBe(true);
-		expect(renderedImagesPresent("<p>Before: before.png after.png</p>", MEDIA.images, [])).toBe(false);
-		expect(renderedImagesPresent("", MEDIA.images, IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent('<img src="/rest/api/3/attachment/content/2024567"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		// The old id in alt while the source points at another attachment is a moved image, not this one.
+		expect(renderedImagesPresent('<img alt="/202456" title="attachment/202456" src="/rest/api/3/attachment/content/999"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		// The id in the query string or as part of a longer segment is not a path segment.
+		expect(renderedImagesPresent('<img src="/rest/api/3/attachment/content/999?attachment=202456"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent('<img src="/a/id-202456/x"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent("<p>Before: before.png after.png 202456 202457</p>", IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent(BOTH, [])).toBe(false);
+		expect(renderedImagesPresent("", IDS.effectIds)).toBe(false);
 	});
 
 	test("a reply proves a media comment only when it holds this write's body and renders every bound image; an edit reply must name the edited comment", () => {
@@ -410,6 +415,9 @@ describe("wiki media comments", () => {
 		expect(readBackEvidence("issue.comment.media", MEDIA, never, list(historical, sameImagesOtherText), { ...IDS, commentIds: ["900"] })).toEqual({ kind: "absent", revisionUnchanged: false });
 		expect(readBackEvidence("issue.comment.media", MEDIA, never, list(historical), { ...IDS, commentIds: ["900"] })).toEqual({ kind: "absent", revisionUnchanged: false });
 		expect(readBackEvidence("issue.comment.media", MEDIA, never, list({ id: "10079", body: STORED, renderedBody: rendered("202456") }), IDS)).toEqual({ kind: "absent", revisionUnchanged: false });
+		// An old id in alt while the source moved to another attachment is not proof (re-review case).
+		const altDecoy = `<img alt="/202456" src="/rest/api/3/attachment/content/999">${rendered("202457")}`;
+		expect(readBackEvidence("issue.comment.media", MEDIA, never, list({ id: "10082", body: STORED, renderedBody: altDecoy }), IDS)).toEqual({ kind: "absent", revisionUnchanged: false });
 		// Two new comments holding this write's content cannot be attributed; the receipt stays open.
 		expect(readBackEvidence("issue.comment.media", MEDIA, never, list(fresh, { ...fresh, id: "10081" }), IDS)).toEqual({ kind: "indeterminate", reason: "more than one new comment holds this write's content; resolve the receipt by hand" });
 		const unmoved = (observed: string) => observed === "u1";
@@ -422,7 +430,7 @@ describe("wiki media comments", () => {
 		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { id: "454771", renderedBody: BOTH }, IDS)).toEqual({ kind: "indeterminate", reason: "the comment read exposes no updated timestamp" });
 		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { errorMessages: ["gone"] }, IDS)).toEqual({ kind: "indeterminate", reason: "the read-back reply names no comment" });
 		// Baselines: existing comments rendering the same files are candidates; an edit binds the comment's own updated.
-		// Candidates are matched by the bound attachment ids: a comment whose image sources carry the ids without the file names is still a candidate.
+		// Candidates are matched by the bound attachment ids in the image sources; a comment whose sources carry the ids without the file names is still a candidate.
 		const idsOnly = { id: "902", body: STORED, renderedBody: '<img src="/secure/attachment/202456/x"><img src="/secure/attachment/202457/y">' };
 		expect(baselineFromReply("issue.comment.media", MEDIA, list(historical, sameImagesOtherText, idsOnly, { id: "901", body: STORED, renderedBody: rendered("202456") }), undefined, IDS)).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: ["900", "902"], revision: null } });
 		const editBaseline = baselineFromReply("issue.comment.media.update", MEDIA_UPDATE, { id: "454771", author: { accountId: "712020:me" }, updated: "u1", renderedBody: "<p>old</p>" });

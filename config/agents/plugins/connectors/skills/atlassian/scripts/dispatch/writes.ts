@@ -484,29 +484,33 @@ function attachmentRecord(record: Record<string, unknown>, file: string): string
 	return id !== undefined && EFFECT_ID.test(id) && attachmentNameMatches(record, file) ? id : undefined;
 }
 
-// Rendered comment HTML proves an inline image when an <img> element names the
-// bound attachment id in its source, or, when no ids are bound yet, the file
-// name in its source or alt text. Every referenced attachment must have one.
+// Rendered comment HTML proves an inline image when an <img> element's source
+// URL has the bound attachment id as one of its path segments. Only the source
+// counts: text in alt, title, or any other attribute never does. Every bound
+// attachment must have one such element.
 const IMG_TAG = /<img\b[^>]*>/gi;
-const escaped = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const IMG_SRC = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i;
 
-function imgTagsFor(html: string): string[] {
-	return html.match(IMG_TAG) ?? [];
+function decodedSegment(segment: string): string {
+	try {
+		return decodeURIComponent(segment);
+	} catch {
+		return segment;
+	}
 }
 
-function tagNamesAttachment(tag: string, id: string): boolean {
-	return new RegExp(`/${escaped(id)}(?:[/?&"']|$)`).test(tag);
+function sourcePathSegments(tag: string): string[] {
+	const match = IMG_SRC.exec(tag);
+	const source = match?.[1] ?? match?.[2] ?? match?.[3];
+	if (source === undefined) return [];
+	const path = source.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, "").replace(/[?#].*$/, "");
+	return path.split("/").filter((segment) => segment.length > 0).map(decodedSegment);
 }
 
-function tagNamesFile(tag: string, name: string): boolean {
-	return tag.includes(name) || tag.includes(encodeURIComponent(name));
-}
-
-export function renderedImagesPresent(html: string, images: readonly string[], attachmentIds: readonly string[]): boolean {
-	const tags = imgTagsFor(html);
-	if (tags.length === 0) return false;
-	if (attachmentIds.length > 0) return attachmentIds.every((id) => tags.some((tag) => tagNamesAttachment(tag, id)));
-	return images.every((name) => tags.some((tag) => tagNamesFile(tag, name)));
+export function renderedImagesPresent(html: string, attachmentIds: readonly string[]): boolean {
+	if (attachmentIds.length === 0) return false;
+	const sources = (html.match(IMG_TAG) ?? []).map(sourcePathSegments);
+	return attachmentIds.every((id) => sources.some((segments) => segments.includes(id)));
 }
 
 // A media comment's identity on read-back is this write's own content: the
@@ -520,7 +524,7 @@ export const wikiNormalised = (value: string): string => normalised(value.replac
 function mediaRecordMatches(record: Record<string, unknown>, input: WriteInput, attachmentIds: readonly string[]): boolean {
 	if (typeof record.renderedBody !== "string" || !("body" in record)) return false;
 	const wanted = wikiNormalised(input.body as string);
-	return wanted.length > 0 && wikiNormalised(bodyText(record.body)) === wanted && renderedImagesPresent(record.renderedBody, input.images as string[], attachmentIds);
+	return wanted.length > 0 && wikiNormalised(bodyText(record.body)) === wanted && renderedImagesPresent(record.renderedBody, attachmentIds);
 }
 
 // A comment record is this write's effect when it names the edited comment
