@@ -36,7 +36,7 @@ export type PreviewResult =
 
 // remaining names each planned effect the apply did not achieve.
 export type ApplyResult =
-	| { kind: "refused"; cause: "invalid" | "consumed" | "stale" | "locked" }
+	| { kind: "refused"; cause: "invalid" | "consumed" | "stale" | "locked" | "state-invalid" }
 	| { kind: "completed" | "failed"; completed: string[]; remaining: string[] }
 	| { kind: "unknown"; completed: string[]; uncertain: string; remaining: string[]; lockFailed?: true };
 
@@ -169,7 +169,9 @@ async function applyLocked(env: EnvironmentSource, id: string, request: DepsRequ
 	const receipt = { previewId: id, ...(request.kind === "repair" ? { tool: request.tool, required: preview.record.required } : { kind: "update", revision: request.revision }), plannedEffects: preview.record.plannedEffects };
 	started();
 	const published = publishPrivateFileOnce(receiptFile(env, id), JSON.stringify({ ...receipt, outcome: "started" }));
-	if (!published.ok) throw new Error("receipt-unwritable");
+	// An unpublishable receipt claims nothing and precedes every attempt: the
+	// preview stays unclaimed and no dependency changed.
+	if (!published.ok) return { kind: "refused", cause: "state-invalid" };
 	if (!published.published) return { kind: "refused", cause: "consumed" };
 	const result = await runPlan(env, request, preview.plan, pluginRoot, progress);
 	if (result.kind !== "refused") progress(result.completed, result.kind === "unknown" ? result.uncertain : null, result.remaining);

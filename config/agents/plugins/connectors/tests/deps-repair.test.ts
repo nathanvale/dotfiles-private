@@ -7,8 +7,9 @@
 // routes are literals from the accepted proposal, never read from the
 // production catalogue.
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, readFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { runBundle } from "./harness.ts";
 import { deps, OP_PATH, PREVIEW_ID, plantWrongMcporter, plantWrongOp, records, refusingHost, sandbox, selections, SENTINEL } from "./deps-sandbox.ts";
 
 const OP_NOT_READY = { tool: "op", owner: "connectors", required: "2.39.0", state: "not-ready", ready: false, selected: null, cause: "selection-invalid", repair: { commandIdentity: "connectors.deps.repair.preview", command: "connectors deps repair op --preview" } };
@@ -156,6 +157,51 @@ test("an apply killed mid-download keeps the prior selection and is never replay
 		const fresh = await deps(box, ["repair", "op", "--preview"]);
 		expect(fresh.result.causeCode).toBe("SUCCESS_DEPS_REPAIR_PREVIEWED");
 		expect(fresh.result.data.observed).toEqual([OP_NOT_READY]);
+	} finally {
+		host.stop();
+		box.bundle.dispose();
+	}
+});
+
+// Protects F-AC19-DEPS-CRASH-IDENTITY: a receipt that cannot be published
+// after the apply holds the deps lock refuses under the apply's own identity
+// at a declared station, claims nothing, and its repair action recovers.
+// Wrong behavior caught: the dispatch crash envelope, an undeclared cause,
+// an attempt without a receipt, or a refusal whose route does not recover.
+test("deps repair --apply with an unpublishable receipt refuses at a declared station and recovers through a fresh preview", async () => {
+	const box = sandbox();
+	plantWrongOp(box.state);
+	const host = refusingHost();
+	const env = { CONNECTORS_TEST_RELEASE_ORIGIN: host.origin, CONNECTORS_TEST_RELEASE_DIR: path.join(box.bundle.root, "missing-release") };
+	const receipts = path.join(box.state, "connectors", "deps", "receipts");
+	try {
+		const preview = await deps(box, ["repair", "op", "--preview"]);
+		const id: string = preview.result.data.previewId;
+		chmodSync(receipts, 0o500);
+		const before = { selections: selections(box.state), previews: records(box.state, "previews") };
+		const refused = await deps(box, ["repair", "op", "--apply", id], env);
+		expect([refused.code, refused.result.commandIdentity, refused.result.causeCode]).toEqual([3, "connectors.deps.repair.apply", "DOMAIN_DEPS_STATE_INVALID"]);
+		expect(refused.result).toMatchObject({ commandIdentity: "connectors.deps.repair.apply", outcome: "refused", failureClass: "domain", causeCode: "DOMAIN_DEPS_STATE_INVALID", effectClass: "inspect", transactionState: "unchanged", retryable: false, data: null, nextAction: "connectors.deps.status", repairAction: "Inspect the plugin-owned XDG state root, then run connectors deps repair op --preview again" });
+		// The refusal claimed nothing, so the same apply refuses again; its
+		// envelope carries the message, which names no privacy defect.
+		const repeated = await runBundle(box.bundle, ["deps", "repair", "op", "--apply", id], { home: box.home, binDir: box.hostile, extraEnv: { XDG_STATE_HOME: box.state, OP_SERVICE_ACCOUNT_TOKEN: SENTINEL, ...env } });
+		expect([repeated.code, repeated.stderr, repeated.stdout.trim().split("\n").length, repeated.stdout.includes(SENTINEL)]).toEqual([3, "", 1, false]);
+		const envelope = JSON.parse(repeated.stdout);
+		expect([envelope.message, envelope.result.causeCode]).toEqual(["connectors: plugin-owned deps state could not record this repair receipt; nothing was attempted", "DOMAIN_DEPS_STATE_INVALID"]);
+		expect(refused.result.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true });
+		expect(host.requests).toEqual([]);
+		expect(records(box.state, "receipts")).toEqual([]);
+		expect({ selections: selections(box.state), previews: records(box.state, "previews") }).toEqual(before);
+		const described = await runBundle(box.bundle, ["--discover-command", "connectors.deps.repair.apply", "--json"], { home: box.home, binDir: box.hostile });
+		expect([described.code, described.stderr]).toEqual([0, ""]);
+		expect(JSON.parse(described.stdout).result.data.stations.map((station: { causeCode: string }) => station.causeCode)).toContain("DOMAIN_DEPS_STATE_INVALID");
+
+		const fresh = await deps(box, ["repair", "op", "--preview"], env);
+		expect(fresh.result.causeCode).toBe("SUCCESS_DEPS_REPAIR_PREVIEWED");
+		const applied = await deps(box, ["repair", "op", "--apply", fresh.result.data.previewId], env);
+		expect(applied.result).toMatchObject({ commandIdentity: "connectors.deps.repair.apply", causeCode: "DOMAIN_DEPS_REPAIR_FAILED_RECORDED" });
+		expect(host.requests).toEqual([OP_PATH]);
+		expect(selections(box.state)).toEqual(before.selections);
 	} finally {
 		host.stop();
 		box.bundle.dispose();

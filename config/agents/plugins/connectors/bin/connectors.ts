@@ -230,7 +230,7 @@ const CUSTODY_REFUSALS: readonly CauseCode[] = [REFUSAL_CAUSE.usage, REFUSAL_CAU
 const ADAPTER_OUTCOMES: readonly CauseCode[] = [...Object.values(REFUSAL_CAUSE), "DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION", ...SELECTION_FAILURES, ...SELECTED_SUCCESS];
 const ADAPTER_BASE: readonly CauseCode[] = [...MANIFEST_REFUSALS, "DOMAIN_ADAPTER_NOT_DECLARED", ...ADAPTER_OUTCOMES];
 const DEPS_PREVIEW: readonly CauseCode[] = ["USAGE_MALFORMED_ARGUMENTS", "SUCCESS_UNCHANGED", "DOMAIN_DEPS_REPAIR_PREREQUISITE", "DOMAIN_DEPS_STATE_INVALID", "INTERNAL_DEPS_PREVIEW_AFTER_RECORD"];
-const DEPS_APPLY: readonly CauseCode[] = ["USAGE_MALFORMED_ARGUMENTS", "DOMAIN_DEPS_PREVIEW_INVALID", "DOMAIN_DEPS_PREVIEW_STALE", "DOMAIN_DEPS_PREVIEW_CONSUMED", "DOMAIN_DEPS_APPLY_LOCKED"];
+const DEPS_APPLY: readonly CauseCode[] = ["USAGE_MALFORMED_ARGUMENTS", "DOMAIN_DEPS_PREVIEW_INVALID", "DOMAIN_DEPS_PREVIEW_STALE", "DOMAIN_DEPS_PREVIEW_CONSUMED", "DOMAIN_DEPS_APPLY_LOCKED", "DOMAIN_DEPS_STATE_INVALID"];
 
 // This is the complete command surface. Do not add a route here without also
 // implementing it, so discovery never advertises a command this binary
@@ -640,7 +640,7 @@ const STATION_SEMANTICS: Readonly<Record<CauseCode, { readonly reachability: Rea
 	SUCCESS_DEPS_REPAIR_PREVIEWED: { reachability: "command", trigger: "the exact repair was recorded as a preview; nothing was installed" },
 	SUCCESS_DEPS_REPAIRED: { reachability: "command", trigger: "the previewed repair was installed and verified after its receipt" },
 	DOMAIN_DEPS_REPAIR_PREREQUISITE: { reachability: "plugin-state", trigger: "the observed selection needs another route before this one" },
-	DOMAIN_DEPS_STATE_INVALID: { reachability: "plugin-state", trigger: "plugin-owned dependency state is not private" },
+	DOMAIN_DEPS_STATE_INVALID: { reachability: "plugin-state", trigger: "plugin-owned dependency state is not private or cannot record an apply receipt" },
 	DOMAIN_DEPS_PREVIEW_INVALID: { reachability: "plugin-state", trigger: "the preview is absent, unreadable, or for another request" },
 	DOMAIN_DEPS_PREVIEW_STALE: { reachability: "plugin-state", trigger: "the observed dependency selection changed after the preview was recorded" },
 	DOMAIN_DEPS_PREVIEW_CONSUMED: { reachability: "plugin-state", trigger: "the preview was already applied" },
@@ -1371,6 +1371,8 @@ function previewData(command: DepsCommand, observed: unknown[]): Record<string, 
 	return request.kind === "repair" ? { tool: request.tool, required: (observed[0] as { required: string }).required, observed } : { revision: request.revision, observed };
 }
 
+const stateRepair = (command: DepsCommand): string => `Inspect the plugin-owned XDG state root, then run ${command.previewCommand} again`;
+
 function handleDepsPreview(command: DepsCommand): void {
 	const identity = command.preview;
 	const preview = previewDeps(process.env, command.request);
@@ -1379,7 +1381,7 @@ function handleDepsPreview(command: DepsCommand): void {
 		return;
 	}
 	if (preview.kind === "state-invalid") {
-		emitDeps(identity, "DOMAIN_DEPS_STATE_INVALID", `${PROGRAM}: plugin-owned deps state is not private`, { data: null, repairAction: `Inspect the plugin-owned XDG state root, then run ${command.previewCommand} again`, nextAction: "connectors.deps.status" });
+		emitDeps(identity, "DOMAIN_DEPS_STATE_INVALID", `${PROGRAM}: plugin-owned deps state is not private`, { data: null, repairAction: stateRepair(command), nextAction: "connectors.deps.status" });
 		return;
 	}
 	if (preview.kind === "ready") {
@@ -1401,6 +1403,7 @@ function applyRefusal(command: DepsCommand, cause: Extract<ApplyResult, { kind: 
 	const { kind } = command.request;
 	if (cause === "invalid") return { cause: "DOMAIN_DEPS_PREVIEW_INVALID", message: `no ${kind} preview with that id for this ${kind === "repair" ? "tool" : "revision"}`, repair: `Run ${command.previewCommand} to record a preview for this ${kind === "repair" ? "tool" : "revision"}`, next: command.preview };
 	if (cause === "stale") return { cause: "DOMAIN_DEPS_PREVIEW_STALE", message: "the selection changed since this preview", repair: `Run ${command.previewCommand} again`, next: command.preview };
+	if (cause === "state-invalid") return { cause: "DOMAIN_DEPS_STATE_INVALID", message: `plugin-owned deps state could not record this ${kind} receipt; nothing was attempted`, repair: stateRepair(command), next: "connectors.deps.status" };
 	if (cause === "consumed") return { cause: "DOMAIN_DEPS_PREVIEW_CONSUMED", message: "this preview was already claimed by an apply", repair: `Run ${depsStatusCommand(command)}; preview a new ${kind} only if it is still not ready`, next: "connectors.deps.status" };
 	return { cause: "DOMAIN_DEPS_APPLY_LOCKED", message: `the deps ${kind} lock is unavailable`, repair: lockRecovery, next: "connectors.deps.status" };
 }
