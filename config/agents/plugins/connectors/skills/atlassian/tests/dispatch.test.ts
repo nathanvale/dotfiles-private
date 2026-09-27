@@ -1204,15 +1204,17 @@ describe("wiki media comments through the owned REST route", () => {
 
 	test("a lost reply blocks the issue until adjudication finds a new comment rendering every bound image; a historical rendering comment never counts", async () => {
 		let reads = 0;
-		const historical = { id: "900", renderedBody: BOTH, updated: "u0" };
+		const historical = { id: "900", body: MEDIA.body, renderedBody: BOTH, updated: "u0" };
+		// Another comment with the same images under other text lands in the same window; it is not this write.
+		const decoy = { id: "10080", body: "Looks good.\n\n!before.png!\n\n!after.png!", renderedBody: BOTH, updated: "u1" };
 		const { transport, calls } = fakeTransport({
 			[`${RJ}.jira_rest_issue_attachments`]: attachmentsReply(),
 			[`${RJ}.jira_rest_comment_add`]: failure("failed-transport"),
-			[`${RJ}.jira_rest_comments_list`]: () => (reads++ >= 3 ? comments(historical, { id: "10078", renderedBody: BOTH, updated: "u1" }, { id: "10079", renderedBody: img("202456", "before.png"), updated: "u1" }) : comments(historical)),
+			[`${RJ}.jira_rest_comments_list`]: () => (reads++ >= 3 ? comments(historical, decoy, { id: "10078", body: MEDIA.body, renderedBody: BOTH, updated: "u1" }, { id: "10079", body: MEDIA.body, renderedBody: img("202456", "before.png"), updated: "u1" }) : comments(historical, decoy)),
 		});
 		const dependencies = deps({ transport });
 		const preview = previewData(await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], dependencies));
-		expect(preview.baseline.commentIds).toEqual(["900"]);
+		expect(preview.baseline).toEqual({ effectIds: ["202456", "202457"], commentIds: ["900"], revision: null });
 		const applied = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--apply", preview.previewId], dependencies);
 		expect([applied.result.causeCode, applied.result.transactionState, applied.result.effects.uncertain]).toEqual(["outcome-unknown", "unknown", ["issue:PROJ-1"]]);
 		const runId = (applied.result.data as { runId: string }).runId;
@@ -1240,14 +1242,16 @@ describe("wiki media comments through the owned REST route", () => {
 		let author = "712020:00000000-0000-4000-8000-00000000000b";
 		let updated = "u1";
 		let rendered = "<p>old text</p>";
+		let body = "old text";
 		const { transport, calls } = fakeTransport({
 			[`${RJ}.jira_rest_issue_attachments`]: attachmentsReply(),
 			[`${RJ}.jira_rest_myself`]: myself,
-			[`${RJ}.jira_rest_comment_get`]: () => ({ ok: true, data: { id: "454771", author: { accountId: author }, updated, renderedBody: rendered } }),
+			[`${RJ}.jira_rest_comment_get`]: () => ({ ok: true, data: { id: "454771", author: { accountId: author }, updated, body, renderedBody: rendered } }),
 			[`${RJ}.jira_rest_comment_edit`]: () => {
 				updated = "u2";
 				rendered = BOTH;
-				return { ok: true, data: { id: "454771", author: { accountId: ME }, updated, renderedBody: rendered } };
+				body = MEDIA.body;
+				return { ok: true, data: { id: "454771", author: { accountId: ME }, updated, body, renderedBody: rendered } };
 			},
 		});
 		const dependencies = deps({ transport });

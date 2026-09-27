@@ -223,7 +223,7 @@ async function bindBaseline(route: Route, operation: WriteOperation, input: Writ
 	const plan = readBackPlan(operation, input);
 	const read = await route.call(plan.tool, plan.args);
 	if (read.cause !== "success") return { outcome: failed(read) };
-	const observed = baselineFromReply(operation, input, read.data, route.trustedOrigin);
+	const observed = baselineFromReply(operation, input, read.data, route.trustedOrigin, ctx.baseline);
 	if (observed.kind === "refused") return { outcome: refusal("input-invalid", observed.reason) };
 	if (observed.kind === "indeterminate") return { outcome: refusal("capability-unavailable", `${observed.reason}; live qualification is required`) };
 	// Identifiers the preparation bound (the media attachment ids) survive the

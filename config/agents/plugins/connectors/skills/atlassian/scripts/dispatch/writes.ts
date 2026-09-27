@@ -509,8 +509,18 @@ export function renderedImagesPresent(html: string, images: readonly string[], a
 	return images.every((name) => tags.some((tag) => tagNamesFile(tag, name)));
 }
 
+// A media comment's identity on read-back is this write's own content: the
+// wiki body, normalised, plus the rendered images. Jira may add or reorder
+// image macro parameters (width, alt) when it converts the stored ADF back to
+// wiki text, so parameters are dropped from both sides and the file name is
+// what identifies each macro.
+const WIKI_IMAGE_PARAMS = /!([^!|\r\n]+)\|[^!\r\n]*!/g;
+export const wikiNormalised = (value: string): string => normalised(value.replace(WIKI_IMAGE_PARAMS, "!$1!"));
+
 function mediaRecordMatches(record: Record<string, unknown>, input: WriteInput, attachmentIds: readonly string[]): boolean {
-	return typeof record.renderedBody === "string" && renderedImagesPresent(record.renderedBody, input.images as string[], attachmentIds);
+	if (typeof record.renderedBody !== "string" || !("body" in record)) return false;
+	const wanted = wikiNormalised(input.body as string);
+	return wanted.length > 0 && wikiNormalised(bodyText(record.body)) === wanted && renderedImagesPresent(record.renderedBody, input.images as string[], attachmentIds);
 }
 
 // A comment record is this write's effect when it names the edited comment
@@ -900,20 +910,26 @@ function renderedMediaCommentIds(reply: unknown, input: WriteInput, attachmentId
 	return ids;
 }
 
+// A new comment outside the baseline that holds this write's content is the
+// effect; two such comments cannot be told apart, so the receipt stays open.
 function mediaCommentEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
-	return newEffects("jira-comment", renderedMediaCommentIds(reply, input, baseline.effectIds), baseline.commentIds);
+	const novel = [...new Set(renderedMediaCommentIds(reply, input, baseline.effectIds))].filter((id) => !baseline.commentIds.includes(id));
+	if (novel.length > 1) return { kind: "indeterminate", reason: "more than one new comment holds this write's content; resolve the receipt by hand" };
+	return newEffects("jira-comment", novel, []);
 }
 
-// The edited comment proves the write only by moving to a version that
-// renders the images; an unmoved `updated` proves nothing landed.
+// The edited comment proves the write only by moving to a version that holds
+// this write's content and renders its images; an unmoved `updated` proves
+// nothing landed; any other version is someone else's edit.
 function mediaCommentUpdateEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline): ReadBack {
 	const comment = observeRestComment(reply);
 	if (comment.id === undefined) return { kind: "indeterminate", reason: "the read-back reply names no comment" };
 	if (comment.id !== input.commentId) return { kind: "indeterminate", reason: "the read-back reply names a different comment" };
 	if (comment.updated === undefined) return { kind: "indeterminate", reason: "the comment read exposes no updated timestamp" };
 	if (revisionMatches(comment.updated)) return { kind: "absent", revisionUnchanged: true };
-	if (comment.renderedBody !== undefined && renderedImagesPresent(comment.renderedBody, input.images as string[], baseline.effectIds)) return { kind: "found", effects: [{ kind: "jira-comment", id: comment.id }] };
-	return { kind: "indeterminate", reason: "the comment moved to a version that does not render the requested images" };
+	const record = unwrapReply(reply);
+	if (isRecord(record) && mediaRecordMatches(record, input, baseline.effectIds)) return { kind: "found", effects: [{ kind: "jira-comment", id: comment.id }] };
+	return { kind: "indeterminate", reason: "the comment moved to a version that does not hold this write's content" };
 }
 
 function issueAttachEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown, baseline: WriteBaseline): ReadBack {
@@ -1128,11 +1144,11 @@ function issueCommentUpdateBaseline(input: WriteInput, reply: unknown, trustedOr
 	return { kind: "observed", baseline: { effectIds: [issue.key as string], commentIds: [comment.id], revision: digest(comment.updated) } };
 }
 
-// Existing comments that already render the requested images are the
-// candidates a later read-back must not mistake for this write. Attachment ids
-// are not bound yet at this read, so the candidates are matched by file name.
-function mediaCommentBaseline(input: WriteInput, reply: unknown): BaselineObservation {
-	return { kind: "observed", baseline: { ...EMPTY_BASELINE, commentIds: renderedMediaCommentIds(reply, input, []) } };
+// Existing comments that already hold this write's content and render its
+// images, matched by the attachment ids the preparation bound, are the
+// candidates a later read-back must not mistake for this write.
+function mediaCommentBaseline(input: WriteInput, reply: unknown, bound: WriteBaseline): BaselineObservation {
+	return { kind: "observed", baseline: { ...EMPTY_BASELINE, commentIds: renderedMediaCommentIds(reply, input, bound.effectIds) } };
 }
 
 // The edited comment's own `updated` is the revision; the author guard runs in
@@ -1198,7 +1214,9 @@ function pageRevisionBaseline(input: WriteInput, reply: unknown): BaselineObserv
 // Capture only the pre-existing candidates that could otherwise be mistaken
 // for this write. The later read-back must name a different stable identifier,
 // or, for an update, the requested values that were absent before.
-export function baselineFromReply(operation: WriteOperation, input: WriteInput, reply: unknown, trustedOrigin?: string): BaselineObservation {
+// `bound` carries identifiers the preparatory reads already established (the
+// media attachment ids); other operations bind nothing before this read.
+export function baselineFromReply(operation: WriteOperation, input: WriteInput, reply: unknown, trustedOrigin?: string, bound: WriteBaseline = EMPTY_BASELINE): BaselineObservation {
 	switch (operation) {
 		case "issue.create":
 			return baselineWithEffectIds(issueCreateEvidence(input, reply, EMPTY_BASELINE));
@@ -1209,7 +1227,7 @@ export function baselineFromReply(operation: WriteOperation, input: WriteInput, 
 		case "issue.comment.update":
 			return issueCommentUpdateBaseline(input, reply, trustedOrigin);
 		case "issue.comment.media":
-			return mediaCommentBaseline(input, reply);
+			return mediaCommentBaseline(input, reply, bound);
 		case "issue.comment.media.update":
 			return mediaCommentUpdateBaseline(input, reply);
 		case "issue.attach":
