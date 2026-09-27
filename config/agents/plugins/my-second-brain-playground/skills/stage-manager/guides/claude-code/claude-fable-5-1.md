@@ -33,8 +33,8 @@ them when this guide and they disagree.
   applies wherever the exact ID is observed.
 - Route qualification is a separate claim. No source says whether a given
   account, such as the Monash Foundry route, serves Fable 5.1 to Claude Code.
-  Treat each route as unqualified until its own evidence or Nathan confirms
-  it.
+  Local Stage Manager rule, extrapolated rather than cited: treat each route
+  as unqualified until its own evidence or Nathan confirms it.
 - Excludes: the Bedrock ID `anthropic.claude-fable-5-1`, Claude Fable 5
   (`claude-fable-5`), Claude Mythos 5.1 (same capabilities, separate
   invitation-only model), Fable 5.1 outside Claude Code (direct API calls),
@@ -43,7 +43,8 @@ them when this guide and they disagree.
   5.1 unless `ANTHROPIC_DEFAULT_FABLE_MODEL` is set, but to Fable 5 in Claude
   apps gateway sessions and on every provider before v2.1.257. `best` follows
   `fable` where Fable is available, otherwise `opus` (model-config, Model
-  aliases). Cast with the exact ID:
+  aliases). Cast with the exact ID, in the local Stage Manager cast form
+  (`SKILL.md`, Cast a worker; not from the cited pages):
   `--agent-arg --model --agent-arg claude-fable-5-1`.
 - Cost: Fable is never the account-type default (model-config, Work with
   Fable), and on some plans its usage bills to usage credits. Interactive
@@ -78,8 +79,10 @@ them when this guide and they disagree.
   guide, Leave room for long outputs at xhigh and max effort). `max` "is prone
   to overthinking" (model-config, Choose an effort level).
 - At `low`, the model calls search and retrieval tools less often and answers
-  from memory more (prompting guide, Search triggering at low effort). Keep
-  lookup-heavy Tasks, such as source audits, off `low`.
+  from memory more (prompting guide, Search triggering at low effort). The
+  source's fixes are raising effort for the affected turns or adding a search
+  nudge. Keeping lookup-heavy Tasks, such as source audits, off `low` is
+  extrapolated from that behavior.
 - To shift how often it thinks within a level, say so in the brief; "the
   model responds to that guidance within its effort setting" (model-config,
   Adaptive reasoning and fixed thinking budgets).
@@ -93,15 +96,18 @@ them when this guide and they disagree.
   prompting" (model-config, Work with Fable). Keep required evidence in the
   acceptance and Handback lists, which state what the report must contain
   rather than remind (extrapolated).
-- Tell the worker it runs unattended. Without that, the model can end its turn
-  describing the next step ("Next, I'll …") or asking permission already
-  granted ("Shall I apply this?"). Paste the first block from the prompting
-  guide's "Finish the whole task" section verbatim; it keeps most of the
-  effect. Its opening sentence, "You are operating autonomously. The user is
-  not watching in real time and cannot answer questions mid-task", carries
-  much of it; keep it as written, and add right after it a sentence listing
-  the confirmations the stop boundary requires. The source targets system
-  prompts; placing it in a brief is extrapolated.
+- Tell the worker it runs unattended and must finish the work its brief
+  already authorizes. Without that, the model can end its turn describing the
+  next step ("Next, I'll …") or asking permission already granted ("Shall I
+  apply this?") (prompting guide, Finish the whole task). Write a short brief
+  line rather than pasting the source's system-prompt block, whose stop rule
+  covers only destructive actions and scope changes. For example: "Nobody is
+  watching this pane in real time. As the <Cast Role> this brief names,
+  finish every step it authorizes without asking. Stop at its stop boundary.
+  Leave pushes, PRs and other external writes to the coordinator. Never
+  merge, release, delete or spend without Nathan's named approval; report
+  what needs it instead." This line is extrapolated from the prompting guide
+  plus the local Stage Manager contract (`SKILL.md`, Authority).
 - For Code Implementer briefs, bound extras explicitly. The model can fix
   nearby code, extend unmentioned behavior or commit more test files than the
   change warrants, and responds well to instructions about what to leave out.
@@ -128,26 +134,34 @@ them when this guide and they disagree.
 ## Read a handback
 
 - A turn that ends on a stated next step or a permission question for work
-  the brief already covered is unfinished, not a report or a decision for
-  Nathan (prompting guide, Finish the whole task). Reply naming that step,
-  unless it crosses the stop boundary.
+  the brief already covered can mean the model stopped early (prompting
+  guide, Finish the whole task). Extrapolated handling: read it as
+  unfinished, not as a report or a decision for Nathan, and reply naming that
+  step unless it crosses the stop boundary.
 - The final message can cover only the last step rather than the whole Task
-  (prompting guide, Ask for user-facing progress updates). Check the report
-  file against every acceptance item. A pane quiet for minutes during a long
-  tool chain is expected at higher effort, not a stall by itself
-  (extrapolated from an API-level source).
-- Check the diff for unrequested fixes, extensions and extra test files
-  (prompting guide, Keep changes and tests to what the task asks for). Treat
-  them as a Repair request or a follow-up, not as accepted scope.
-- Watch for a model switch. A safety-classifier flag re-runs the request on
-  Opus 5 (biology) or Opus 4.8 (cybersecurity), or on the deployment's pinned
-  targets on Bedrock, Agent Platform and Foundry. Claude Code shows a notice
-  in the transcript, and the session stays on that model (model-config,
-  Automatic model fallback). Dismissing a mid-session usage-credit prompt
-  continues the turn on the default model (model-config, Fable and usage
-  credits). After
-  either, this guide no longer applies to the worker; record the identity
-  change with the Handback.
+  (prompting guide, Ask for user-facing progress updates). Extrapolated
+  handling: check the report file against every acceptance item. A pane quiet
+  for minutes during a long tool chain is expected at higher effort, not a
+  stall by itself (extrapolated from an API-level source).
+- The model can add unrequested fixes, extensions and extra test files
+  (prompting guide, Keep changes and tests to what the task asks for).
+  Extrapolated handling under the local Stage Manager Handback rule
+  (`SKILL.md`, Handback): check the diff for them and treat them as a Repair
+  request or a follow-up, not as accepted scope.
+- Watch for a model switch. A safety-classifier flag may re-run the request
+  on Opus 5 (biology) or Opus 4.8 (cybersecurity), or on the deployment's
+  target on Bedrock, Agent Platform and Foundry; Claude Code then shows a
+  notice in the transcript and the session stays on that model. It switches
+  only when automatic switching is on, `availableModels` allows the target,
+  and on those three providers Claude Code can identify both models.
+  Otherwise the session pauses for a choice, or the request ends in a refusal
+  and the model is unchanged (model-config, Automatic model fallback).
+  Dismissing a mid-session usage-credit prompt continues the turn on the
+  default model (model-config, Fable and usage credits).
+- Apply another guide only after observing an actual serving-model change,
+  as startup step 2 observes it; a flag or refusal alone changes nothing.
+  Then record the identity change with the Handback (local Stage Manager
+  rule).
 - A worker pane stopped on a usage-credit consent prompt is waiting on a
   spending decision. Surface it to Nathan rather than answering it
   (model-config, Fable and usage credits; the Herdr pane case is
