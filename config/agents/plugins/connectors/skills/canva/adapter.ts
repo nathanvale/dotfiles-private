@@ -5,7 +5,7 @@
 // the custody defaults resolve inside the compiled binary's virtual bundle.
 import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
-import type { Adapter, AdapterRefusal, AdapterRequest, Committed, LocalEffect, LoginOption, Prepared, SchemaRequest } from "../../bin/adapters/contract.ts";
+import type { Adapter, AdapterRefusal, AdapterRequest, Committed, CustodyResolution, LocalEffect, LoginOption, Prepared, SchemaRequest } from "../../bin/adapters/contract.ts";
 import { CanvaError } from "./scripts/contract.ts";
 import { type AccountVault, accountVault, checkAccount, inspectVault, planCanvaRoute, prepareVault, readClientMode, requireAdmittedMode } from "./scripts/custody/index.ts";
 
@@ -138,6 +138,28 @@ function prepareCanvaSchema(request: SchemaRequest): Prepared {
 	};
 }
 
+// MCPorter's native vault custody is in effect for an account once MCPorter
+// has written that account's vault index; existence alone is checked, the
+// file is never opened, and a grant inside it is never claimed. A reserved
+// client mode keeps it ineffective.
+function resolveCustody(request: SchemaRequest): CustodyResolution {
+	try {
+		const account = checkAccount(request.selectors.account);
+		const subject = { selector: "account", value: account, source: "invocation-selector" } as const;
+		if (readClientMode(path.join(request.skillsRoot, "canva", "config")) !== "dcr") {
+			return { kind: "resolved", effective: null, notYetEffective: { mode: "mcporter-native-vault", source: "packaged-config:client-mode-not-admitted" }, subject };
+		}
+		if (inspectVault(request.env, accountVault(request.env, account)).vaultFile === "present") {
+			return { kind: "resolved", effective: { mode: "mcporter-native-vault", source: "plugin-state:account-vault-index" }, notYetEffective: null, subject };
+		}
+		return { kind: "resolved", effective: null, notYetEffective: { mode: "mcporter-native-vault", source: "plugin-state:account-vault-absent" }, subject };
+	} catch (error) {
+		if (!(error instanceof CanvaError)) throw error;
+		const refusal = fromCanvaError(error);
+		return { kind: "refused", refusal: { ...refusal, kind: refusal.kind === "usage" || refusal.kind === "domain" ? refusal.kind : "schema" } };
+	}
+}
+
 function refusingCanvaErrors<T>(prepareFor: (request: T) => Prepared): (request: T) => Prepared {
 	return (request) => {
 		try {
@@ -149,4 +171,4 @@ function refusingCanvaErrors<T>(prepareFor: (request: T) => Prepared): (request:
 	};
 }
 
-export const canvaAdapter: Adapter = { id: "canva", prepare: refusingCanvaErrors(prepareCanva), prepareSchema: refusingCanvaErrors(prepareCanvaSchema) };
+export const canvaAdapter: Adapter = { id: "canva", prepare: refusingCanvaErrors(prepareCanva), prepareSchema: refusingCanvaErrors(prepareCanvaSchema), resolveCustody };

@@ -15,7 +15,7 @@
 // caller input.
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import type { Adapter, AdapterRefusal, ExecutionCapabilities, Executed, Prepared, SchemaRequest } from "../adapters/contract.ts";
+import type { Adapter, AdapterRefusal, CustodyResolution, ExecutionCapabilities, Executed, Prepared, SchemaRequest } from "../adapters/contract.ts";
 import { CREDENTIAL_VAULT, OP_SETUP_REPAIR, SERVICE_TOKEN_HANDOFF } from "../one-password-custody.ts";
 import { MCPORTER_REPAIR_ACTION } from "../mcporter-custody.ts";
 import { planDispatcherRoute, RouteError } from "../provider-route.ts";
@@ -196,6 +196,15 @@ function prepareAuth(connector: AccountKeyConnector, request: SchemaRequest, ver
 	};
 }
 
+// Keyless is effective until a registration exists; the account key's
+// 1Password custody becomes effective only through that registration.
+function resolveCustody(connector: AccountKeyConnector, request: SchemaRequest): CustodyResolution {
+	const mode = accountMode(connector.id, connector.label, request.env);
+	if (mode.kind === "invalid") return { kind: "refused", refusal: { kind: "domain", connectorCause: "registration-invalid", repair: mode.repair } };
+	if (mode.kind === "account") return { kind: "resolved", effective: { mode: "1password-below-mcporter", source: "plugin-state:registration" }, notYetEffective: null, subject: null };
+	return { kind: "resolved", effective: { mode: "keyless", source: "plugin-state:registration-absent" }, notYetEffective: { mode: "1password-below-mcporter", source: "plugin-state:registration-absent" }, subject: null };
+}
+
 export function accountKeyAdapter(connector: AccountKeyConnector): Adapter {
 	return {
 		id: connector.id,
@@ -204,6 +213,7 @@ export function accountKeyAdapter(connector: AccountKeyConnector): Adapter {
 			return action.kind === "auth" ? prepareAuth(connector, request, action.verb, action.input) : prepareRun(connector, request, action.operation, action.input);
 		},
 		prepareSchema: (request) => prepareSchema(connector, request),
+		resolveCustody: (request) => resolveCustody(connector, request),
 		internalRoles: { provider: { run: (argv) => runProvider(connector, argv) } },
 	};
 }

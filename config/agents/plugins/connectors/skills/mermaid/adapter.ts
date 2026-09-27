@@ -14,7 +14,7 @@
 // caller input.
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import type { Adapter, AdapterRefusal, AdapterRequest, ExecutionCapabilities, Executed, Prepared, RecoverRequest, SchemaRequest, WriteRequest } from "../../bin/adapters/contract.ts";
+import type { Adapter, AdapterRefusal, AdapterRequest, CustodyResolution, ExecutionCapabilities, Executed, Prepared, RecoverRequest, SchemaRequest, WriteRequest } from "../../bin/adapters/contract.ts";
 import { planDispatcherRoute, RouteError } from "../../bin/provider-route.ts";
 import { safeEnvironment } from "../../bin/safe-environment.ts";
 import { ACCOUNT_SERVER, KEYLESS_SERVER, OPERATION_CATALOGUE, OPERATION_NAMES, operationSpec, writeInput } from "./scripts/catalogue.ts";
@@ -194,6 +194,15 @@ function prepareSchema(request: SchemaRequest): Prepared {
 	return keylessRead(request, ["list", "--schema", "--json"], { server: KEYLESS_SERVER, allowedTools, accountServer: ACCOUNT_SERVER, accountTools, operations: OPERATION_CATALOGUE });
 }
 
+// The keyless tier is effective until an account registration exists; the
+// account tier's 1Password custody becomes effective only through it.
+function resolveCustody(request: SchemaRequest): CustodyResolution {
+	const registered = registeredAccount(request.env);
+	if (registered.ok) return { kind: "resolved", effective: { mode: "1password-below-mcporter", source: "plugin-state:registration" }, notYetEffective: null, subject: null };
+	if (registered.cause === "registration-invalid") return { kind: "refused", refusal: { kind: "domain", connectorCause: registered.cause, repair: registered.repair } };
+	return { kind: "resolved", effective: { mode: "keyless", source: "plugin-state:registration-absent" }, notYetEffective: { mode: "1password-below-mcporter", source: "plugin-state:registration-absent" }, subject: null };
+}
+
 export const mermaidAdapter: Adapter = {
 	id: "mermaid",
 	prepare(request) {
@@ -203,5 +212,6 @@ export const mermaidAdapter: Adapter = {
 	prepareSchema,
 	prepareWrite,
 	prepareRecover,
+	resolveCustody,
 	internalRoles: { provider: { run: (argv) => runProvider(argv) } },
 };

@@ -167,10 +167,40 @@ export interface InternalRole {
 	run(argv: readonly string[]): void | Promise<void>;
 }
 
+// Custody resolution (Spec AC24): which custody mode ordinary commands apply
+// for this request now, and what put it into effect, read from the adapter's
+// own nonsecret state by metadata or its exact registration literal only. It
+// reads no credential, starts no process, and returns no item ID or path. A
+// declared mode that nothing has put into effect is notYetEffective, never
+// effective. subject names the selector whose value this custody is bound to.
+export type CustodyMode = "keyless" | "1password-below-mcporter" | "mcporter-native-vault";
+export type CustodySource =
+	| "invocation-selector"
+	| "plugin-state:registration"
+	| "plugin-state:registration-absent"
+	| "plugin-state:account-vault-index"
+	| "plugin-state:account-vault-absent"
+	| "packaged-config:client-mode-not-admitted";
+
+export interface CustodyValue {
+	readonly mode: CustodyMode;
+	readonly source: CustodySource;
+}
+
+export type CustodyResolution =
+	| {
+		readonly kind: "resolved";
+		readonly effective: CustodyValue | null;
+		readonly notYetEffective: CustodyValue | null;
+		readonly subject: { readonly selector: string; readonly value: string; readonly source: CustodySource } | null;
+	}
+	| { readonly kind: "refused"; readonly refusal: AdapterRefusal & { readonly kind: "usage" | "domain" | "schema" } };
+
 export interface Adapter {
 	readonly id: string;
 	readonly internalRoles?: Readonly<Record<string, InternalRole>>;
 	attemptAuth?(manifest: ConnectorManifest): Promise<AuthAttempt>;
+	resolveCustody?(request: SchemaRequest): CustodyResolution;
 	prepare?(request: AdapterRequest): Prepared;
 	prepareSchema?(request: SchemaRequest): Prepared;
 	prepareWrite?(request: WriteRequest): Prepared;

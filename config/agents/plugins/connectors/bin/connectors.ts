@@ -14,7 +14,7 @@
 // adapter registry (bin/adapters/index.ts).
 import { closeSync, existsSync, openSync } from "node:fs";
 import path from "node:path";
-import type { Adapter, AdapterAction, AdapterRefusal, AdapterRefusalKind, Executed, ExecutionCapabilities, InternalRole, LocalEffect, LoginOption, Prepared, RecordedEffect, Recovery, SchemaRequest, WritePhase } from "./adapters/contract.ts";
+import type { Adapter, AdapterAction, AdapterRefusal, AdapterRefusalKind, CustodyResolution, Executed, ExecutionCapabilities, InternalRole, LocalEffect, LoginOption, Prepared, RecordedEffect, Recovery, SchemaRequest, WritePhase } from "./adapters/contract.ts";
 import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
 import { discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
@@ -216,6 +216,9 @@ const REFUSAL_CAUSE: Readonly<Record<AdapterRefusalKind, CauseCode>> = {
 	"operation-unknown": "USAGE_OPERATION_UNKNOWN",
 	"client-mode-not-admitted": "DOMAIN_CLIENT_MODE_NOT_ADMITTED",
 };
+// An adapter's custody resolution refuses only an invalid selection, adapter
+// state, or packaged configuration; config show reports it through these.
+const CUSTODY_REFUSALS: readonly CauseCode[] = [REFUSAL_CAUSE.usage, REFUSAL_CAUSE.domain, REFUSAL_CAUSE.schema];
 // Every command routed through a packaged adapter: manifest, selector, and
 // adapter refusals, MCPorter selection, and an inspected or executed success.
 const ADAPTER_BASE: readonly CauseCode[] = [...MANIFEST_REFUSALS, "DOMAIN_ADAPTER_NOT_DECLARED", ...Object.values(REFUSAL_CAUSE), "DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION", ...SELECTION_FAILURES, ...SELECTED_SUCCESS];
@@ -250,7 +253,7 @@ const COMMANDS: readonly CommandDescriptor[] = [
 		stations: ["SUCCESS_COMPLETED", "DOMAIN_SETUP_FAILED_UNCHANGED", "DOMAIN_SETUP_FAILED_PARTIAL", "SCHEMA_SETUP_CONFIG_INVALID", "USAGE_SETUP_MALFORMED", "INTERNAL_SETUP_UNKNOWN", "INTERNAL_SETUP_AFTER_COMMIT"],
 	},
 	{ commandIdentity: "connectors.config.validate", route: ["config", "validate"], effectClass: "inspect", summary: "Validate connector manifests, registries, and packaged requirements", usage: "config validate [connector]", input: [...words("config", "validate"), connectorAt(2, false)], reaches: "packaged-files", stations: LOCAL_INSPECTION },
-	{ commandIdentity: "connectors.config.show", route: ["config", "show"], effectClass: "inspect", summary: "Show resolved nonsecret values and provenance; conflicting repeated selectors refuse", usage: "config show <connector> --resolved --json [--select name=value ...]", input: [...words("config", "show"), connectorAt(2), option(3, "--resolved", null, true), option(3, "--json", null, true), selectAt(3)], reaches: "packaged-files", stations: LOCAL_INSPECTION },
+	{ commandIdentity: "connectors.config.show", route: ["config", "show"], effectClass: "inspect", summary: "Show resolved nonsecret values and provenance; conflicting repeated selectors refuse", usage: "config show <connector> --resolved --json [--select name=value ...]", input: [...words("config", "show"), connectorAt(2), option(3, "--resolved", null, true), option(3, "--json", null, true), selectAt(3)], reaches: "plugin-state", stations: [...LOCAL_INSPECTION, ...CUSTODY_REFUSALS] },
 	{ commandIdentity: "connectors.status", route: ["status"], effectClass: "inspect", summary: "Report truthful evidence state per connector", usage: "status [connector]", input: [word(0, "status"), connectorAt(1, false)], reaches: "packaged-files", stations: LOCAL_INSPECTION },
 	{ commandIdentity: "connectors.doctor", route: ["doctor"], effectClass: "inspect", summary: "Local readiness gate for one connector", usage: "doctor <connector>", input: [word(0, "doctor"), connectorAt(1)], reaches: "packaged-files", stations: LOCAL_INSPECTION },
 	{
@@ -1635,6 +1638,31 @@ function parseConfigShowArgs(args: readonly string[]): ParsedConfigShowArgs | nu
 	return { id, given };
 }
 
+type ResolvedEntry = { readonly value: unknown; readonly source: string; readonly [detail: string]: unknown };
+
+// Custody provenance (Spec AC24) comes from the connector's own packaged
+// adapter, which alone knows its custody state; a manifest's credential
+// reference only names a nonsecret item and never makes a mode effective.
+// An adapter without resolveCustody reports nothing effective.
+function resolvedCustody(manifest: ConnectorManifest, selectors: ResolvedSelectors["values"]): { kind: "resolved"; mode: ResolvedEntry; subject: ResolvedEntry } | Extract<CustodyResolution, { kind: "refused" }> {
+	if (manifest.adapter === null) return { kind: "resolved", mode: { value: "keyless", source: "packaged-manifest-default" }, subject: { value: null, source: "not-applicable" } };
+	const resolve = ADAPTERS[manifest.adapter]?.resolveCustody;
+	// A fresh object per entry: the envelope's JSON-safety check refuses a
+	// value reached twice.
+	const unresolved = (): ResolvedEntry => ({ value: null, source: "not-yet-effective" });
+	if (!resolve) return { kind: "resolved", mode: unresolved(), subject: unresolved() };
+	const values = Object.fromEntries(Object.entries(selectors).map(([name, entry]) => [name, entry.value]));
+	const resolution = resolve({ manifest, selectors: values, skillsRoot: skillsRoot(), env: process.env });
+	if (resolution.kind === "refused") return resolution;
+	const { effective, notYetEffective, subject } = resolution;
+	const pending = notYetEffective ? { notYetEffective: { value: notYetEffective.mode, source: notYetEffective.source } } : {};
+	return {
+		kind: "resolved",
+		mode: effective ? { value: effective.mode, source: effective.source, ...pending } : { ...unresolved(), ...pending },
+		subject: subject ? { value: subject.value, selector: subject.selector, source: subject.source } : { value: null, source: "not-applicable" },
+	};
+}
+
 function handleConfigShow(args: readonly string[]): void {
 	const usage = "config show <connector> --resolved --json [--select name=value ...]";
 	const parsedArgs = parseConfigShowArgs(args);
@@ -1677,15 +1705,17 @@ function handleConfigShow(args: readonly string[]): void {
 		const pinned = pins[name];
 		dependencies[`dependency:${name}`] = pinned !== undefined ? { value: pinned, source: "packaged-requirements-pin" } : { value: null, source: "not-yet-effective" };
 	}
-	// A reference says which nonsecret item was named, not who holds a
-	// credential. T5 will add the declared custody mode and its proof.
-	const custodyMode = manifest.adapter === null
-		? { value: "keyless", source: "packaged-manifest-default" }
-		: { value: null, source: "not-yet-effective" };
+	const custody = resolvedCustody(manifest, selectors.values);
+	if (custody.kind === "refused") {
+		const { connectorCause, repair } = custody.refusal;
+		emitAdapterEnvelope({ commandIdentity: "connectors.config.show" }, REFUSAL_CAUSE[custody.refusal.kind], `${PROGRAM}: ${id} could not resolve its custody (${connectorCause})`, { connector: id, connectorCause }, repair, { completed: [], uncertain: [] }, "connectors.auth");
+		return;
+	}
 	const values: Record<string, { value: unknown; source: string }> = {
 		connector: { value: manifest.id, source: "invocation" },
 		adapter: { value: manifest.adapter ?? "none", source: "packaged-manifest-default" },
-		custodyMode,
+		custodyMode: custody.mode,
+		"custody:subject": custody.subject,
 		transportRegistry: { value: manifest.transportRegistry, source: "packaged-manifest-default" },
 		requirements: { value: manifest.requirements, source: "packaged-manifest-default" },
 		...dependencies,
@@ -2100,7 +2130,7 @@ function parseRecoverArgs(args: readonly string[]): AdapterCommand | null {
 	return recovery === null || runId === undefined ? null : { commandIdentity: RECOVERY_IDENTITY[recovery.kind], id, given, action: { kind: "recover", runId, recovery } };
 }
 
-function emitAdapterEnvelope(command: AdapterCommand, causeCode: CauseCode, message: string, data: Record<string, unknown> | null, repairAction: string | null, effects: { completed: string[]; uncertain: string[] }, nextAction?: string): void {
+function emitAdapterEnvelope(command: { readonly commandIdentity: string }, causeCode: CauseCode, message: string, data: Record<string, unknown> | null, repairAction: string | null, effects: { completed: string[]; uncertain: string[] }, nextAction?: string): void {
 	const row = ADMITTED_CAUSE_ROWS[causeCode];
 	emit({
 		envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message, availablePaths: AVAILABLE_PATHS,

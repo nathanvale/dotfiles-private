@@ -11,7 +11,7 @@
 // so credential custody happens only in the internal custody and Provider
 // roles below. Writes go through the dispatcher's durable preview and apply
 // journal; recover reaches its receipts, adjudicate, and unlock commands.
-import type { Adapter, AdapterRefusal, AdapterRequest, Executed, ExecutionCapabilities, InternalRole, Prepared, RecordedEffect, Recovery, RecoverRequest, SchemaRequest, WriteRequest } from "../../bin/adapters/contract.ts";
+import type { Adapter, AdapterRefusal, AdapterRequest, CustodyResolution, Executed, ExecutionCapabilities, InternalRole, Prepared, RecordedEffect, Recovery, RecoverRequest, SchemaRequest, WriteRequest } from "../../bin/adapters/contract.ts";
 import { runProvider } from "./scripts/atlassian-community-provider.ts";
 import { parseArgv, run } from "./scripts/atlassian-dispatch.ts";
 import { ATLASSIAN_ADAPTER_ID, type AtlassianInternalRole, bindCredential, CONFIGURE_INPUT_REPAIR, configureInput, configureTenant, CREDENTIAL_VAULT, ITEM_ID_REPAIR, PRODUCTS, type RegisteredItems, registeredTenant, runCustodyChild } from "./scripts/custody/index.ts";
@@ -259,6 +259,18 @@ function prepareAtlassian(request: AdapterRequest): Prepared {
 	return prepareRun(request, tenant, action.operation, action.input);
 }
 
+// The tenant's 1Password custody becomes effective only through its Tenant
+// Registration; the registration is read, never the items it names.
+function resolveCustody(request: SchemaRequest): CustodyResolution {
+	const tenant = request.selectors.tenant;
+	if (tenant === undefined) return { kind: "refused", refusal: { kind: "usage", connectorCause: "tenant-required", repair: REPAIR.usage } };
+	const subject = { selector: "tenant", value: tenant, source: "invocation-selector" } as const;
+	const registered = registeredTenant(tenant, request.env);
+	if (registered.ok) return { kind: "resolved", effective: { mode: "1password-below-mcporter", source: "plugin-state:registration" }, notYetEffective: null, subject };
+	if (registered.cause === "registration-invalid") return { kind: "refused", refusal: { kind: "domain", connectorCause: registered.cause, repair: registered.repair } };
+	return { kind: "resolved", effective: null, notYetEffective: { mode: "1password-below-mcporter", source: "plugin-state:registration-absent" }, subject };
+}
+
 const INTERNAL_ROLES: Readonly<Record<AtlassianInternalRole, InternalRole>> = {
 	"custody-child": { run: (argv) => runCustodyChild(argv) },
 	provider: { run: (argv) => runProvider(argv) },
@@ -269,5 +281,6 @@ export const atlassianAdapter: Adapter = {
 	prepare: prepareAtlassian,
 	prepareWrite,
 	prepareRecover,
+	resolveCustody,
 	internalRoles: INTERNAL_ROLES,
 };
