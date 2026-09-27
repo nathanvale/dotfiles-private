@@ -1234,6 +1234,10 @@ describe("wiki media comments through the owned REST route", () => {
 		// An attached file that is not an image cannot render inline; the preview refuses it before any write.
 		const pdf = await dispatch(["issue.comment.media", "--input", JSON.stringify({ issueKey: "PROJ-1", body: "See !notes.pdf!", images: ["notes.pdf"] }), "--preview"], dependencies);
 		expect([pdf.result.causeCode, pdf.result.exitCode, pdf.result.repairAction]).toEqual(["input-invalid", 4, "an image named in images is not an image attachment; only image content renders inline"]);
+		// An attachment whose type Jira did not report cannot be established as an image; the preview refuses it before any write.
+		const untyped = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: { ok: true, data: { key: "PROJ-1", fields: { attachment: [{ id: "202456", filename: "before.png" }, { id: "202457", filename: "after.png", mimeType: "image/png" }] } } } });
+		const unknown = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: untyped.transport }));
+		expect([unknown.result.causeCode, unknown.result.exitCode, unknown.result.repairAction]).toEqual(["capability-unavailable", 3, "an image named in images has no reported content type, so its image type cannot be established"]);
 		const duplicated = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: { ok: true, data: { key: "PROJ-1", fields: { attachment: [{ id: "202456", filename: "before.png" }, { id: "202499", filename: "before.png" }, { id: "202457", filename: "after.png" }] } } } });
 		const duplicate = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: duplicated.transport }));
 		expect([duplicate.result.causeCode, duplicate.result.repairAction]).toEqual(["input-invalid", "an image named in images matches more than one attachment on the issue; remove the duplicate first"]);

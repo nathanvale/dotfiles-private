@@ -955,19 +955,30 @@ export function accountIdOf(reply: unknown): string | undefined {
 
 export const AUTHOR_GUARD_REASON = "commentId names a comment another account authored; the media update edits only the principal's own comments";
 
-export type MediaAttachments = { ok: true; ids: string[] } | { ok: false; cause: "not-found" | "input-invalid"; reason: string };
+export type MediaAttachments = { ok: true; ids: string[] } | { ok: false; cause: "not-found" | "input-invalid" | "capability-unavailable"; reason: string };
 
-// Only an image can render as an <img>. Jira's MIME type decides when it
-// reports one; a file whose type it omits is judged by its extension.
-const IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
-export function isImageAttachment(attachment: IssueAttachment): boolean {
-	if (attachment.contentType !== undefined) return attachment.contentType.toLowerCase().startsWith("image/");
-	return IMAGE_EXTENSION.test(attachment.name);
+// Only an image can render as an <img>, and only Jira's reported MIME type
+// establishes that; a file name proves nothing about its bytes. An attachment
+// whose type Jira did not report is unverifiable and refused before any write.
+function imageType(attachment: IssueAttachment): "image" | "not-image" | "unknown" {
+	if (attachment.contentType === undefined) return "unknown";
+	return attachment.contentType.toLowerCase().startsWith("image/") ? "image" : "not-image";
+}
+
+function attachmentRefusal(attachment: IssueAttachment): MediaAttachments | null {
+	switch (imageType(attachment)) {
+		case "image":
+			return null;
+		case "not-image":
+			return { ok: false, cause: "input-invalid", reason: "an image named in images is not an image attachment; only image content renders inline" };
+		case "unknown":
+			return { ok: false, cause: "capability-unavailable", reason: "an image named in images has no reported content type, so its image type cannot be established" };
+	}
 }
 
 // Each referenced image must be attached to the issue under exactly one id
-// and be an image; the ids become the preview baseline an apply must find
-// unchanged.
+// and be an image by reported type; the ids become the preview baseline an
+// apply must find unchanged.
 export function resolveMediaAttachments(attachments: readonly IssueAttachment[], images: readonly string[]): MediaAttachments {
 	const ids: string[] = [];
 	for (const name of images) {
@@ -975,7 +986,8 @@ export function resolveMediaAttachments(attachments: readonly IssueAttachment[],
 		if (matching.length === 0) return { ok: false, cause: "not-found", reason: "an image named in images is not attached to the issue" };
 		if (matching.length > 1) return { ok: false, cause: "input-invalid", reason: "an image named in images matches more than one attachment on the issue; remove the duplicate first" };
 		const attachment = matching[0] as IssueAttachment;
-		if (!isImageAttachment(attachment)) return { ok: false, cause: "input-invalid", reason: "an image named in images is not an image attachment; only image content renders inline" };
+		const refused = attachmentRefusal(attachment);
+		if (refused) return refused;
 		ids.push(attachment.id);
 	}
 	return { ok: true, ids: [...new Set(ids)].sort() };

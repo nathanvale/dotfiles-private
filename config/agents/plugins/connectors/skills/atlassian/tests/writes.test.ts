@@ -359,16 +359,18 @@ describe("wiki media comments", () => {
 		expect(writeArguments(OPERATION_SPECS["issue.comment.media.update"], MEDIA_UPDATE, ctx).args).toEqual({ issue_key: "PROJ-1", comment_id: "454771", body: MEDIA.body });
 		expect(readBackPlan("issue.comment.media", MEDIA)).toEqual({ tool: "jira_rest_comments_list", args: { issue_key: "PROJ-1" } });
 		expect(readBackPlan("issue.comment.media.update", MEDIA_UPDATE)).toEqual({ tool: "jira_rest_comment_get", args: { issue_key: "PROJ-1", comment_id: "454771" } });
-		const attachments = [{ id: "202457", name: "after.png", contentType: "image/png" }, { id: "202456", name: "before.png" }, { id: "1", name: "notes.pdf", contentType: "application/pdf" }];
+		const attachments = [{ id: "202457", name: "after.png", contentType: "image/png" }, { id: "202456", name: "before.png", contentType: "image/png" }, { id: "1", name: "notes.pdf", contentType: "application/pdf" }];
 		expect(resolveMediaAttachments(attachments, MEDIA.images)).toEqual({ ok: true, ids: ["202456", "202457"] });
 		expect(resolveMediaAttachments(attachments, ["before.png", "missing.png"])).toEqual({ ok: false, cause: "not-found", reason: "an image named in images is not attached to the issue" });
 		expect(resolveMediaAttachments([...attachments, { id: "202499", name: "after.png" }], MEDIA.images)).toEqual({ ok: false, cause: "input-invalid", reason: "an image named in images matches more than one attachment on the issue; remove the duplicate first" });
-		// Only images render inline: the MIME type decides when Jira reports one; otherwise the extension does.
+		// Only images render inline, and only Jira's reported MIME type establishes one; a file name proves nothing (re-review case).
 		const notImage = { ok: false as const, cause: "input-invalid" as const, reason: "an image named in images is not an image attachment; only image content renders inline" };
+		const unknownType = { ok: false as const, cause: "capability-unavailable" as const, reason: "an image named in images has no reported content type, so its image type cannot be established" };
 		expect(resolveMediaAttachments(attachments, ["notes.pdf", "after.png"])).toEqual(notImage);
 		expect(resolveMediaAttachments([{ id: "2", name: "shot.png", contentType: "application/octet-stream" }], ["shot.png"])).toEqual(notImage);
-		expect(resolveMediaAttachments([{ id: "3", name: "report.pdf" }], ["report.pdf"])).toEqual(notImage);
-		expect(resolveMediaAttachments([{ id: "4", name: "Diagram.JPG" }, { id: "5", name: "x.webp", contentType: "IMAGE/WEBP" }], ["Diagram.JPG", "x.webp"])).toEqual({ ok: true, ids: ["4", "5"] });
+		expect(resolveMediaAttachments([{ id: "3", name: "renamed.png" }], ["renamed.png"])).toEqual(unknownType);
+		expect(resolveMediaAttachments([{ id: "3", name: "report.pdf" }], ["report.pdf"])).toEqual(unknownType);
+		expect(resolveMediaAttachments([{ id: "4", name: "Diagram.JPG", contentType: "image/jpeg" }, { id: "5", name: "x.webp", contentType: "IMAGE/WEBP" }], ["Diagram.JPG", "x.webp"])).toEqual({ ok: true, ids: ["4", "5"] });
 		expect(accountIdOf(wrapped({ accountId: "712020:me", emailAddress: "me@example.invalid" }))).toBe("712020:me");
 		expect(accountIdOf({ self: "x" })).toBeUndefined();
 		expect(observeRestComment({ id: "454771", author: { accountId: "712020:me" }, updated: "u1", renderedBody: "<p>x</p>", body: "x" })).toEqual({ id: "454771", authorAccountId: "712020:me", updated: "u1", renderedBody: "<p>x</p>" });
