@@ -394,11 +394,19 @@ describe("wiki media comments", () => {
 		expect(observeRestComment({ error: "gone" })).toEqual({ id: undefined, authorAccountId: undefined, updated: undefined, renderedBody: undefined });
 	});
 
-	test("rendered HTML proves an image only by the bound attachment id as a path segment of an <img> source; alt text and other attributes never count", () => {
+	test("rendered HTML proves an image only by the displayed src attribute naming a Jira attachment route for the bound id; other attributes and other sources never count", () => {
 		expect(renderedImagesPresent(BOTH, IDS.effectIds)).toBe(true);
 		expect(renderedImagesPresent(rendered("202456"), IDS.effectIds)).toBe(false);
 		expect(renderedImagesPresent('<img src="https://example.atlassian.net/secure/attachment/202456/before.png"><img src=\'https://example.atlassian.net/secure/thumbnail/202457/after.png?default=false#x\'>', IDS.effectIds)).toBe(true);
 		expect(renderedImagesPresent('<img alt="x" src=/secure/attachment/202456/before.png><img src=/secure/attachment/202457/after.png>', IDS.effectIds)).toBe(true);
+		expect(renderedImagesPresent('<img SRC="/rest/api/2/attachment/thumbnail/202456"><img class="a" src = "/rest/api/3/attachment/content/202457" />', IDS.effectIds)).toBe(true);
+		// Re-review decoy: data-src names the bound id while the displayed src points at another attachment.
+		expect(renderedImagesPresent('<img data-src="/secure/attachment/202456/a.png" src="/secure/attachment/999/a.png"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent('<img srcset="/secure/attachment/202456/a.png 2x" src="/secure/attachment/999/a.png"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent('<img data-src="/secure/attachment/202456/a.png"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		// A source that is not a Jira attachment route proves nothing, wherever the id appears in it.
+		expect(renderedImagesPresent('<img src="https://cdn.example/202456/before.png"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent('<img src="/plugins/servlet/202456"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
 		// A longer id that merely starts with the bound one is a different attachment.
 		expect(renderedImagesPresent('<img src="/rest/api/3/attachment/content/2024567"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
 		// The old id in alt while the source points at another attachment is a moved image, not this one.

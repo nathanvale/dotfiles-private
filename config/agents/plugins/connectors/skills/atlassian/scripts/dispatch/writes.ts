@@ -487,12 +487,17 @@ function attachmentRecord(record: Record<string, unknown>, file: string): string
 	return id !== undefined && EFFECT_ID.test(id) && attachmentNameMatches(record, file) ? id : undefined;
 }
 
-// Rendered comment HTML proves an inline image when an <img> element's source
-// URL has the bound attachment id as one of its path segments. Only the source
-// counts: text in alt, title, or any other attribute never does. Every bound
-// attachment must have one such element.
-const IMG_TAG = /<img\b[^>]*>/gi;
-const IMG_SRC = /\bsrc\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))/i;
+// Rendered comment HTML proves an inline image when an <img> element's
+// displayed source is a Jira attachment route for the bound attachment id.
+// The element's attributes are parsed, and only the attribute named exactly
+// `src` counts: data-src, srcset, alt, title, and every other attribute never
+// do. The source must be one of Jira's attachment routes (REST content or
+// thumbnail, or the /secure attachment or thumbnail pages) with the id as its
+// own path segment, so an arbitrary URL that happens to carry the id proves
+// nothing. Every bound attachment must have one such element.
+const IMG_TAG = /<img\b([^>]*)>/gi;
+const HTML_ATTRIBUTE = /([^\s"'=<>`/]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'=<>`]+)))?/g;
+const ATTACHMENT_SOURCE = /^\/(?:rest\/api\/[23]\/attachment\/(?:content|thumbnail)|secure\/(?:attachment|thumbnail))\/([^/]+)(?:\/|$)/;
 
 function decodedSegment(segment: string): string {
 	try {
@@ -502,18 +507,30 @@ function decodedSegment(segment: string): string {
 	}
 }
 
-function sourcePathSegments(tag: string): string[] {
-	const match = IMG_SRC.exec(tag);
-	const source = match?.[1] ?? match?.[2] ?? match?.[3];
-	if (source === undefined) return [];
-	const path = source.replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, "").replace(/[?#].*$/, "");
-	return path.split("/").filter((segment) => segment.length > 0).map(decodedSegment);
+function displayedSource(attributes: string): string | undefined {
+	for (const match of attributes.matchAll(HTML_ATTRIBUTE)) {
+		if ((match[1] as string).toLowerCase() === "src") return match[2] ?? match[3] ?? match[4] ?? "";
+	}
+	return undefined;
+}
+
+// The attachment id a displayed source names, or undefined when the source is
+// not a Jira attachment route.
+function sourceAttachmentId(source: string): string | undefined {
+	const path = source.trim().replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, "").replace(/[?#].*$/, "");
+	const match = ATTACHMENT_SOURCE.exec(path);
+	return match === null ? undefined : decodedSegment(match[1] as string);
 }
 
 export function renderedImagesPresent(html: string, attachmentIds: readonly string[]): boolean {
 	if (attachmentIds.length === 0) return false;
-	const sources = (html.match(IMG_TAG) ?? []).map(sourcePathSegments);
-	return attachmentIds.every((id) => sources.some((segments) => segments.includes(id)));
+	const shown = new Set<string>();
+	for (const tag of html.matchAll(IMG_TAG)) {
+		const source = displayedSource(tag[1] as string);
+		const id = source === undefined ? undefined : sourceAttachmentId(source);
+		if (id !== undefined) shown.add(id);
+	}
+	return attachmentIds.every((id) => shown.has(id));
 }
 
 // A media comment's identity on read-back is this write's own content, read
