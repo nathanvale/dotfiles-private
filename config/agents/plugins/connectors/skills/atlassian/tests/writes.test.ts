@@ -4,7 +4,7 @@
 // 22 September 2026 and reply shapes observed live on 23 September 2026.
 import { describe, expect, test } from "bun:test";
 import { OPERATION_SPECS } from "../scripts/dispatch/contract.ts";
-import { accountIdOf, baselineFromReply, effectsFromReply, normalised, observeRestComment, preparation, readBackEvidence, readBackPlan, renderedImagesPresent, resolveMediaAttachments, transitionTo, uploadFailed, wikiImageReferences, wikiNormalised, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
+import { accountIdOf, baselineFromReply, effectsFromReply, normalised, observeRestComment, preparation, readBackEvidence, readBackPlan, renderedImagesPresent, resolveMediaAttachments, sameWikiBody, transitionTo, uploadFailed, wikiImageReferences, wikiParts, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
 
 const never = () => false;
 const CREATE = { projectKey: "PROJ", issueType: "Bug", summary: "Billing broken", description: "first\nsecond" };
@@ -392,9 +392,33 @@ describe("wiki media comments", () => {
 		expect(renderedImagesPresent("", IDS.effectIds)).toBe(false);
 	});
 
+	test("wiki bodies match by prose, exact image names and requested parameters, exact link and mention targets; a parameter Jira added is tolerated", () => {
+		const full = "Hi [~accountid:712020:abc], see !shot.png|width=600! and [the story|https://x.example/a/b]. Done.";
+		expect(wikiParts(full)).toEqual([
+			{ kind: "text", value: "hi" },
+			{ kind: "mention", id: "712020:abc" },
+			{ kind: "text", value: "see" },
+			{ kind: "image", name: "shot.png", params: new Map([["width", "600"]]) },
+			{ kind: "text", value: "and" },
+			{ kind: "link", label: "the story", target: "https://x.example/a/b" },
+			{ kind: "text", value: "done" },
+		]);
+		expect(sameWikiBody(MEDIA.body, STORED)).toBe(true);
+		expect(sameWikiBody(full, full.replace("[the story|", "[The Story |"))).toBe(true);
+		expect(sameWikiBody(full, full.replace("width=600", 'alt="shot.png",width=600'))).toBe(true);
+		// Re-review cases: a changed width and a changed link target are other content.
+		expect(sameWikiBody(full, full.replace("width=600", "width=100"))).toBe(false);
+		expect(sameWikiBody(full, full.replace("https://x.example/a/b", "https://x.example/a?b"))).toBe(false);
+		expect(sameWikiBody(full, full.replace("width=600", "thumbnail"))).toBe(false);
+		expect(sameWikiBody(full, full.replace("712020:abc", "712020:abd"))).toBe(false);
+		expect(sameWikiBody(full, full.replace("!shot.png|width=600!", "!other.png|width=600!"))).toBe(false);
+		expect(sameWikiBody(full, full.replace("Done.", "Done. More."))).toBe(false);
+		expect(sameWikiBody(full, `${full}\n\n!extra.png!`)).toBe(false);
+		expect(sameWikiBody("!!!", "!!!")).toBe(false);
+	});
+
 	test("a reply proves a media comment only when it holds this write's body and renders every bound image; an edit reply must name the edited comment", () => {
-		expect(wikiNormalised(STORED)).toBe(wikiNormalised(MEDIA.body));
-		expect(wikiNormalised("Other text\n\n!before.png!\n\n!after.png!")).not.toBe(wikiNormalised(MEDIA.body));
+		expect(sameWikiBody(MEDIA.body, "Other text\n\n!before.png!\n\n!after.png!")).toBe(false);
 		expect(effectsFromReply("issue.comment.media", MEDIA, { id: "10077", author: { accountId: "712020:me" }, body: STORED, renderedBody: BOTH, updated: "u1" }, IDS)).toEqual([{ kind: "jira-comment", id: "10077" }]);
 		expect(effectsFromReply("issue.comment.media", MEDIA, { id: "10077", body: STORED, renderedBody: rendered("202456") }, IDS)).toEqual([]);
 		expect(effectsFromReply("issue.comment.media", MEDIA, { id: "10077", body: MEDIA.body }, IDS)).toEqual([]);
@@ -423,6 +447,14 @@ describe("wiki media comments", () => {
 		const unmoved = (observed: string) => observed === "u1";
 		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { id: "454771", updated: "u1", body: "old", renderedBody: "<p>old</p>" }, IDS)).toEqual({ kind: "absent", revisionUnchanged: true });
 		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { id: "454771", updated: "u2", body: STORED, renderedBody: BOTH }, IDS)).toEqual({ kind: "found", effects: [{ kind: "jira-comment", id: "454771" }] });
+		// The same text with a changed image width or link target is other content (re-review cases).
+		const widthChanged = STORED.replace("width=600", "width=100");
+		expect(readBackEvidence("issue.comment.media", MEDIA, never, list({ id: "10083", body: widthChanged, renderedBody: BOTH }), IDS)).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { id: "454771", updated: "u2", body: widthChanged, renderedBody: BOTH }, IDS)).toEqual({ kind: "indeterminate", reason: "the comment moved to a version that does not hold this write's content" });
+		const LINKED = { ...MEDIA, body: `${MEDIA.body}\n\nLive: [open the story|https://x.example/a/b]` };
+		const linkedStored = `${STORED}\n\nLive: [open the story|https://x.example/a/b]`;
+		expect(readBackEvidence("issue.comment.media", LINKED, never, list({ id: "10084", body: linkedStored, renderedBody: BOTH }), IDS)).toEqual({ kind: "found", effects: [{ kind: "jira-comment", id: "10084" }] });
+		expect(readBackEvidence("issue.comment.media", LINKED, never, list({ id: "10085", body: linkedStored.replace("/a/b", "/a?b"), renderedBody: BOTH }), IDS)).toEqual({ kind: "absent", revisionUnchanged: false });
 		// A competing edit with the same images but other text moved the comment; it is not this write.
 		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { id: "454771", updated: "u2", body: "Competing edit.\n\n!before.png!\n\n!after.png!", renderedBody: BOTH }, IDS)).toEqual({ kind: "indeterminate", reason: "the comment moved to a version that does not hold this write's content" });
 		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { id: "454771", updated: "u2", body: STORED, renderedBody: rendered("202456") }, IDS)).toEqual({ kind: "indeterminate", reason: "the comment moved to a version that does not hold this write's content" });

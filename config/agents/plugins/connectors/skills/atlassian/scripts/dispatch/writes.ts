@@ -513,18 +513,71 @@ export function renderedImagesPresent(html: string, attachmentIds: readonly stri
 	return attachmentIds.every((id) => sources.some((segments) => segments.includes(id)));
 }
 
-// A media comment's identity on read-back is this write's own content: the
-// wiki body, normalised, plus the rendered images. Jira may add or reorder
-// image macro parameters (width, alt) when it converts the stored ADF back to
-// wiki text, so parameters are dropped from both sides and the file name is
-// what identifies each macro.
-const WIKI_IMAGE_PARAMS = /!([^!|\r\n]+)\|[^!\r\n]*!/g;
-export const wikiNormalised = (value: string): string => normalised(value.replace(WIKI_IMAGE_PARAMS, "!$1!"));
+// A media comment's identity on read-back is this write's own content, read
+// as wiki parts: prose (compared normalised, as every comment path does), an
+// image macro (exact file name and every requested parameter), a link
+// (normalised label, exact target), and a mention (exact account id). Jira
+// may add a parameter such as alt when it converts the stored ADF back to
+// wiki text; a parameter the request did not name is tolerated, a changed or
+// missing one is not. Every other transformation is a different comment
+// until a live round trip proves it equivalent.
+export type WikiPart = { kind: "text"; value: string } | { kind: "image"; name: string; params: Map<string, string> } | { kind: "link"; label: string; target: string } | { kind: "mention"; id: string };
+
+const WIKI_PART = /!([^!|\s][^!|\r\n]*?\.[A-Za-z0-9]{1,5})(?:\|([^!\r\n]*))?!|\[~accountid:([^\]\r\n]+)\]|\[([^\]|\r\n]*)\|([^\]\r\n]+)\]/g;
+
+function imageParams(raw: string | undefined): Map<string, string> {
+	const params = new Map<string, string>();
+	for (const entry of (raw ?? "").split(",")) {
+		const trimmed = entry.trim();
+		if (trimmed.length === 0) continue;
+		const separator = trimmed.indexOf("=");
+		const key = (separator === -1 ? trimmed : trimmed.slice(0, separator)).trim().toLowerCase();
+		const value = separator === -1 ? "" : trimmed.slice(separator + 1).trim().replace(/^"(.*)"$/, "$1");
+		params.set(key, value);
+	}
+	return params;
+}
+
+export function wikiParts(body: string): WikiPart[] {
+	const parts: WikiPart[] = [];
+	let position = 0;
+	const prose = (value: string) => {
+		const text = normalised(value);
+		if (text.length > 0) parts.push({ kind: "text", value: text });
+	};
+	for (const match of body.matchAll(WIKI_PART)) {
+		prose(body.slice(position, match.index));
+		position = match.index + match[0].length;
+		if (match[1] !== undefined) parts.push({ kind: "image", name: match[1], params: imageParams(match[2]) });
+		else if (match[3] !== undefined) parts.push({ kind: "mention", id: match[3].trim() });
+		else parts.push({ kind: "link", label: normalised(match[4] ?? ""), target: (match[5] ?? "").trim() });
+	}
+	prose(body.slice(position));
+	return parts;
+}
+
+function samePart(wanted: WikiPart, observed: WikiPart): boolean {
+	switch (wanted.kind) {
+		case "text":
+			return observed.kind === "text" && observed.value === wanted.value;
+		case "image":
+			return observed.kind === "image" && observed.name === wanted.name && [...wanted.params].every(([key, value]) => observed.params.get(key) === value);
+		case "link":
+			return observed.kind === "link" && observed.label === wanted.label && observed.target === wanted.target;
+		case "mention":
+			return observed.kind === "mention" && observed.id === wanted.id;
+	}
+}
+
+export function sameWikiBody(wanted: string, observed: string): boolean {
+	const wantedParts = wikiParts(wanted);
+	const observedParts = wikiParts(observed);
+	return wantedParts.length > 0 && wantedParts.length === observedParts.length && wantedParts.every((part, index) => samePart(part, observedParts[index] as WikiPart));
+}
 
 function mediaRecordMatches(record: Record<string, unknown>, input: WriteInput, attachmentIds: readonly string[]): boolean {
 	if (typeof record.renderedBody !== "string" || !("body" in record)) return false;
-	const wanted = wikiNormalised(input.body as string);
-	return wanted.length > 0 && wikiNormalised(bodyText(record.body)) === wanted && renderedImagesPresent(record.renderedBody, attachmentIds);
+	return sameWikiBody(input.body as string, bodyText(record.body)) && renderedImagesPresent(record.renderedBody, attachmentIds);
 }
 
 // A comment record is this write's effect when it names the edited comment
