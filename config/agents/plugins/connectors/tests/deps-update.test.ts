@@ -11,7 +11,7 @@ import { expect, test } from "bun:test";
 import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { runBundle } from "./harness.ts";
-import { deps, OP_PATH, owned, PREVIEW_ID, plantWrongMcporter, plantWrongOp, records, refusingHost, sandbox, selections, SENTINEL } from "./deps-sandbox.ts";
+import { deps, OP_PATH, owned, PREVIEW_ID, plantPriorUv, plantWrongMcporter, plantWrongMise, plantWrongOp, records, refusingHost, sandbox, selections, SENTINEL } from "./deps-sandbox.ts";
 
 // Independent oracle: `jq -c . requirements.json | tr -d '\n' | shasum -a 256`
 // on the packaged requirements (op 2.39.0, mise 2026.9.12, uv 0.12.18,
@@ -131,6 +131,28 @@ test("deps update --preview refuses a present uv without a ready mise, recording
 		expect(code).toBe(3);
 		expect(result).toMatchObject({ commandIdentity: "connectors.deps.update.preview", outcome: "refused", causeCode: "DOMAIN_DEPS_REPAIR_PREREQUISITE", effectClass: "inspect", transactionState: "unchanged", data: null, nextAction: "connectors.deps.repair.preview", repairAction: "Run connectors deps repair mise --preview and apply it first" });
 		expect(existsSync(path.join(box.state, "connectors", "deps"))).toBe(false);
+	} finally {
+		box.bundle.dispose();
+	}
+});
+
+// Protects convergence from a genuinely installed prior uv pin: it is a
+// present selection, so update plans uv after its mise installer, and the
+// old binary is never run or adopted. Wrong behavior caught: a uv reader
+// that sees only the current pin's folder, so the prior install reads absent
+// and update silently leaves it unconverged.
+test("deps update --preview plans uv convergence from an installed prior uv pin without running it", async () => {
+	const box = sandbox();
+	plantWrongMise(box.state);
+	plantPriorUv(box.state, box.marker);
+	try {
+		const before = selections(box.state);
+		const { code, result } = await deps(box, ["update", REVISION, "--preview"]);
+		expect(code).toBe(0);
+		expect(result).toMatchObject({ commandIdentity: "connectors.deps.update.preview", causeCode: "SUCCESS_DEPS_UPDATE_PREVIEWED", transactionState: "completed" });
+		expect(result.data.observed).toEqual([ABSENT_MCPORTER, ABSENT_OP, { ...ABSENT_MISE, state: "not-ready", cause: "selection-invalid" }, WRONG_UV]);
+		expect(result.data.plannedEffects).toEqual(["mise-update", "uv-update"]);
+		expect(selections(box.state)).toEqual(before);
 	} finally {
 		box.bundle.dispose();
 	}

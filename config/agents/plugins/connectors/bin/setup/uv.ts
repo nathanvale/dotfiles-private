@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import requirements from "../../requirements.json";
@@ -231,6 +231,19 @@ function entryPresent(target: string): boolean {
 	}
 }
 
+// Any entry the plugin-owned mise left below its uv tool directory, such as
+// a prior pin's version, is a present install, so it reads not ready and
+// update converges it to the packaged pin. Only names are read: no entry is
+// followed, trusted, selected, or run.
+function uvInstallPresent(installs: string): boolean {
+	const tool = path.join(installs, TOOL_INSTALLS);
+	try {
+		return !lstatSync(tool).isDirectory() || readdirSync(tool).length > 0;
+	} catch {
+		return false;
+	}
+}
+
 function view(required: string, executable: string | null, present: boolean): SelectionView {
 	if (executable) return { required, present: true, executable, cause: null };
 	return { required, present, executable: null, cause: present ? "selection-invalid" : null };
@@ -246,5 +259,5 @@ export function inspectSelectedMise(env: EnvironmentSource): SelectionView {
 }
 
 export function inspectSelectedUv(env: EnvironmentSource): SelectionView {
-	return view(UV_VERSION, installedUv(env), entryPresent(uvVersionPath(path.join(stateRoot(env), "connectors", "setup", "uv", "installs"))));
+	return view(UV_VERSION, installedUv(env), uvInstallPresent(path.join(stateRoot(env), "connectors", "setup", "uv", "installs")));
 }

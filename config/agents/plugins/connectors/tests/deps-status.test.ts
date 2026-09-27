@@ -7,6 +7,7 @@
 import { expect, test } from "bun:test";
 import { chmodSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { plantPriorUv } from "./deps-sandbox.ts";
 import { createBundle, runBundle, type Bundle } from "./harness.ts";
 
 const SENTINEL = "deps-status-secret-sentinel-5c1e";
@@ -180,6 +181,24 @@ test("deps status refuses an undeclared tool without echo and malformed argument
 		expect(extra.code).toBe(2);
 		expectInspectResult(extra.result, "USAGE_MALFORMED_ARGUMENTS", 2, "refused");
 		expect(extra.result.repairAction).toBe("Run connectors deps status [tool]");
+	} finally {
+		box.bundle.dispose();
+	}
+});
+
+// Protects the uv reader against a genuinely installed prior pin: an older
+// version below the plugin-owned installs tree is present but not ready, and
+// status neither runs, adopts, nor changes it. Wrong behavior caught: a
+// reader that sees only the current pin's folder and reports absent, or one
+// that trusts the old binary as selected.
+test("deps status reports an installed prior uv pin not ready, never run and untouched", async () => {
+	const box = sandbox();
+	plantPriorUv(box.state, box.marker);
+	try {
+		const { code, result } = await deps(box, ["status", "uv"]);
+		expect(code).toBe(0);
+		expectInspectResult(result, "SUCCESS_UNCHANGED", 0, "success");
+		expect(result.data.dependencies).toEqual([{ tool: "uv", owner: "connectors", required: REQUIRED.uv, state: "not-ready", ready: false, selected: null, cause: "selection-invalid", repair: repairPreview("uv") }]);
 	} finally {
 		box.bundle.dispose();
 	}

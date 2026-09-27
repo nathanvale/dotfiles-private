@@ -81,6 +81,26 @@ export function plantWrongMcporter(state: string): void {
 	writeFileSync(path.join(current, "mcporter"), "older mcporter bytes", { mode: 0o700 });
 }
 
+// A damaged mise selection record, so a uv plan has its installer planned.
+export function plantWrongMise(state: string): void {
+	const mise = path.join(state, "connectors", "setup", "mise");
+	owned(mise);
+	writeFileSync(path.join(mise, "mise-selected"), `mise-2026.1.1-${"0".repeat(64)}`, { mode: 0o600 });
+}
+
+// A genuinely installed prior uv pin: the layout the plugin-owned mise
+// leaves at an older version, beside mise's own dot-file metadata. Its
+// executable records any invocation in the ambient marker, so a reader
+// that runs or adopts the old binary is a visible failure.
+export const PRIOR_UV = "0.12.10";
+export function plantPriorUv(state: string, marker: string): void {
+	const tool = path.join(state, "connectors", "setup", "uv", "installs", "aqua-astral-sh-uv");
+	const bin = path.join(tool, PRIOR_UV, "uv-aarch64-apple-darwin");
+	owned(bin);
+	writeFileSync(path.join(tool, ".mise.backend"), "aqua:astral-sh/uv\n", { mode: 0o600 });
+	writeFileSync(path.join(bin, "uv"), `#!/bin/sh\necho prior-uv >> '${marker}'\necho 'uv ${PRIOR_UV}'\n`, { mode: 0o700 });
+}
+
 // A loopback release host that refuses every artifact after an optional
 // delay and records each requested path.
 export function refusingHost(delayMs = 0) {
