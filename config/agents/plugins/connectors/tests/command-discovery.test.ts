@@ -155,6 +155,9 @@ describe("command-scoped discovery (packaged process)", () => {
 		const schema = await describeCommand("connectors.schema");
 		expect(schema.stations).toContainEqual({ causeCode: "TRANSIENT_PROVIDER_UNREACHABLE", trigger: "the Provider was unreachable, so no request reached it", reachability: "provider", outcome: "refused", failureClass: "transient", exitCode: 75, effectClass: "inspect", transactionState: "unchanged", effectEvidence: NOTHING_CHANGED, retryable: true, retry: { policy: "same-invocation" }, recovery: { kind: "retry", repairAction: true } });
 		expect(causes(schema.stations)).not.toContain("SUCCESS_RUN_APPLIED");
+		// A null adapter is the keyless schema route, so schema can never
+		// refuse for an undeclared adapter (Ticket #141).
+		expect(causes(schema.stations)).not.toContain("DOMAIN_ADAPTER_NOT_DECLARED");
 	});
 
 	test("every station of every command declares its trigger, reachability, effect evidence, retry policy, and recovery", async () => {

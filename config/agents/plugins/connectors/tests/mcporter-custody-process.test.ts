@@ -17,6 +17,25 @@ const FIRST_USE_RETRY = "Check that the official MCPorter release is reachable, 
 
 type BundleRun = Parameters<typeof runBundle>[2];
 
+// Ticket #140 F-a: Codex's default macOS workspace-write seatbelt withholds
+// Apple's system-policy service. This one-rule profile withholds only that.
+const SYSPOLICY_DENIED = '(version 1)(allow default)(deny mach-lookup (global-name "com.apple.security.syspolicy"))';
+const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
+if (process.env.CI && !existsSync(SANDBOX_EXEC)) throw new Error("sandbox-exec is required for the syspolicy-denied process proof");
+// Independent oracle: Q13c's pinned MCPorter 0.14.0 macOS arm64 binary.
+const PINNED_BINARY_SHA256 = "01d99ede8b6a88dd282eaeda2afb7086dca5bdbc04c05c8c21744703575adb27";
+const PINNED_PROVENANCE_SHA256 = "7a4256c6a3a921e2319386c3142ec33b4f0b5d693af5c652fe97ee884f30f2ab";
+const LIVE_NOTARIZATION = ["/usr/bin/codesign", "--verify", "--strict", "--check-notarization", "-R=notarized", "--verbose=2"];
+
+async function runSyspolicyDenied(bundle: ReturnType<typeof createBundle>, argv: string[], env: BundleRun & { binDir: string }, profile = SYSPOLICY_DENIED) {
+	const child = Bun.spawn([SANDBOX_EXEC, "-p", profile, bundle.binary, ...argv], {
+		env: { HOME: env.home, PATH: `${env.binDir}:/usr/bin:/bin`, TMPDIR: bundle.root, ...env.extraEnv },
+		stdin: "ignore", stdout: "pipe", stderr: "pipe",
+	});
+	const [stdout, stderr, code] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+	return { code, stdout, stderr };
+}
+
 // The only released repair: a preview, then its apply.
 async function previewMcporterRepair(bundle: ReturnType<typeof createBundle>, env: BundleRun): Promise<string> {
 	const preview = await runBundle(bundle, ["deps", "repair", "mcporter", "--preview"], env);
@@ -160,6 +179,76 @@ test.skipIf(!official)("packaged first use selects verified MCPorter despite hos
 		bundle.dispose();
 	}
 }, 30000);
+
+// Accepted AC4 trade-off (27 Sep 2026): Apple's live notarization lookup
+// belongs to release qualification; install and use keep every offline pin.
+test.skipIf(!official)("syspolicy-denied sandbox: first use bootstraps, reuse skips download, mismatch refuses, advised repair works", async () => {
+	const bundle = createBundle();
+	const hostile = createFakeMcporterBinDir();
+	const source = path.join(bundle.root, "official-source");
+	const home = path.join(bundle.root, "home");
+	const state = path.join(bundle.root, "state");
+	mkdirSync(source, { recursive: true });
+	mkdirSync(home, { recursive: true });
+	mkdirSync(state, { recursive: true });
+	cpSync(path.join(official!, "mcporter_0.14.0_darwin_arm64.tar.gz"), path.join(source, "mcporter_0.14.0_darwin_arm64.tar.gz"));
+	cpSync(path.join(official!, "provenance.json"), path.join(source, "provenance.json"));
+	bundle.addSkill("keyless-fixture-skill");
+	const environment = { home, binDir: hostile.binDir, extraEnv: { XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: source, OP_SERVICE_ACCOUNT_TOKEN: "secret-shaped-sentinel" } };
+	const withoutSource = { ...environment, extraEnv: { ...environment.extraEnv, CONNECTORS_TEST_RELEASE_DIR: path.join(bundle.root, "missing-source") } };
+	const selected = path.join(state, "connectors", "mcporter", "current");
+	try {
+		// Negative control: the profile denies the lookup the pinned bytes pass
+		// without it, so a GREEN below cannot come from an inert sandbox.
+		const officialBinary = path.join(official!, "mcporter");
+		expect(Bun.spawnSync([...LIVE_NOTARIZATION, officialBinary], { stdout: "ignore", stderr: "ignore" }).exitCode).toBe(0);
+		expect(Bun.spawnSync([SANDBOX_EXEC, "-p", SYSPOLICY_DENIED, ...LIVE_NOTARIZATION, officialBinary], { stdout: "ignore", stderr: "ignore" }).exitCode).not.toBe(0);
+
+		const first = await runSyspolicyDenied(bundle, ["schema", "keyless-fixture-skill"], environment);
+		expect([first.code, first.stderr, first.stdout.trim().split("\n").length]).toEqual([0, "", 1]);
+		expect(JSON.parse(first.stdout).result).toMatchObject({ commandIdentity: "connectors.schema", causeCode: "SUCCESS_BOOTSTRAPPED", effects: { completed: ["mcporter-bootstrap"] }, data: { allowedTools: ["probe"] } });
+		expect(first.stdout).not.toContain("secret-shaped-sentinel");
+		expect(new Bun.CryptoHasher("sha256").update(readFileSync(path.join(selected, "mcporter"))).digest("hex")).toBe(PINNED_BINARY_SHA256);
+		const firstInode = lstatSync(path.join(selected, "mcporter")).ino;
+
+		const second = await runSyspolicyDenied(bundle, ["schema", "keyless-fixture-skill"], withoutSource);
+		expect([second.code, second.stderr]).toEqual([0, ""]);
+		expect(JSON.parse(second.stdout).result).toMatchObject({ commandIdentity: "connectors.schema", causeCode: "SUCCESS_UNCHANGED", effects: { completed: [] } });
+		expect(lstatSync(path.join(selected, "mcporter")).ino).toBe(firstInode);
+
+		// Per-use provenance: the official record stays in the selection and a
+		// valid binary and marker without it never authorize use.
+		const retained = path.join(selected, "provenance.json");
+		expect(new Bun.CryptoHasher("sha256").update(readFileSync(retained)).digest("hex")).toBe(PINNED_PROVENANCE_SHA256);
+		expect(lstatSync(retained).mode & 0o777).toBe(0o600);
+		expect(readdirSync(selected).sort()).toEqual(["mcporter", "provenance.json", "release.json"]);
+		renameSync(retained, path.join(bundle.root, "set-aside-provenance.json"));
+		const unproven = await runSyspolicyDenied(bundle, ["schema", "keyless-fixture-skill"], withoutSource);
+		expect([unproven.code, unproven.stderr]).toEqual([3, ""]);
+		expect(JSON.parse(unproven.stdout)).toMatchObject({ message: "connectors: MCPorter provenance-invalid", result: { causeCode: "DOMAIN_MCPORTER_REPAIR_REQUIRED", repairAction: PREVIEW_REPAIR, transactionState: "unchanged" } });
+		renameSync(path.join(bundle.root, "set-aside-provenance.json"), retained);
+
+		writeFileSync(path.join(selected, "release.json"), JSON.stringify({ version: "0.0.0" }));
+		const mismatch = await runSyspolicyDenied(bundle, ["schema", "keyless-fixture-skill"], withoutSource);
+		expect([mismatch.code, mismatch.stderr]).toEqual([3, ""]);
+		expect(JSON.parse(mismatch.stdout)).toMatchObject({ message: "connectors: MCPorter version-mismatch", result: { causeCode: "DOMAIN_MCPORTER_REPAIR_REQUIRED", repairAction: PREVIEW_REPAIR, transactionState: "unchanged" } });
+		expect(lstatSync(path.join(selected, "mcporter")).ino).toBe(firstInode);
+
+		// The advised repair must itself work inside the same sandbox.
+		const preview = await runSyspolicyDenied(bundle, ["deps", "repair", "mcporter", "--preview"], environment);
+		expect([preview.code, preview.stderr]).toEqual([0, ""]);
+		const repaired = await runSyspolicyDenied(bundle, ["deps", "repair", "mcporter", "--apply", JSON.parse(preview.stdout).result.data.previewId], environment);
+		expect([repaired.code, repaired.stderr]).toEqual([0, ""]);
+		expect(JSON.parse(repaired.stdout).result).toMatchObject({ causeCode: "SUCCESS_DEPS_REPAIRED", effects: { completed: ["deps-repair-receipt", "mcporter-repair"] } });
+		expect(JSON.parse(readFileSync(path.join(selected, "release.json"), "utf8"))).toEqual({ version: "0.14.0" });
+		const after = await runSyspolicyDenied(bundle, ["schema", "keyless-fixture-skill"], withoutSource);
+		expect([after.code, after.stderr]).toEqual([0, ""]);
+		expect(JSON.parse(after.stdout).result.causeCode).toBe("SUCCESS_UNCHANGED");
+	} finally {
+		hostile.dispose();
+		bundle.dispose();
+	}
+}, 60000);
 
 test.skipIf(!official)("schema child failure after promotion reports the completed bootstrap effect", async () => {
 	const bundle = createBundle();
@@ -453,6 +542,8 @@ function expectBootstrapRefusal(run: Awaited<ReturnType<typeof runBundle>>) {
 	expect(envelope.result.causeCode).toBe("DOMAIN_MCPORTER_REPAIR_REQUIRED");
 	expect(envelope.result.transactionState).toBe("unchanged");
 	expect(envelope.result.repairAction).toBe(FIRST_USE_RETRY);
+	// Only a reachability failure advises the same command again.
+	expect(envelope.result.nextAction).toBe("connectors.schema");
 }
 
 test("packaged first use behind a stalled release host refuses at its deadline and leaves no lock or staging", async () => {
@@ -481,3 +572,62 @@ test("packaged first use refuses a release origin that is not literal 127.0.0.1 
 		bundle.dispose();
 	}
 }, 20_000);
+
+// Ticket #140: a first-use verifier refusal names its exact cause. Retrying
+// fetches the same pinned bytes and nothing is selected, so neither a blind
+// retry nor the repair preview is usable; the envelope hands off to an
+// operator. Independent oracle: the accepted handoff texts.
+const DOWNLOAD_HANDOFF = "The downloaded MCPorter release did not match its pinned official digest or provenance, so nothing was installed. Do not bypass verification. Retry the same command only from a network that does not alter downloads; if it still refuses, report the cause to the Connectors plugin maintainer";
+const LOCAL_HANDOFF = "The pinned MCPorter release could not be verified on this machine, so nothing was installed. Do not bypass verification. Retry the same command where macOS tar, lipo, and codesign can run, outside any sandbox that denies them; if it still refuses, report the cause to the Connectors plugin maintainer";
+const CODESIGN_DENIED = '(version 1)(allow default)(deny process-exec (literal "/usr/bin/codesign"))';
+
+type VerifierCell = { name: string; needsOfficial: boolean; prepare(source: string): void; sandbox?: string; cause: string; handoff: string };
+const VERIFIER_CELLS: VerifierCell[] = [
+	{ name: "corrupt archive", needsOfficial: false, cause: "archive-digest-mismatch", handoff: DOWNLOAD_HANDOFF, prepare(source) {
+		writeFileSync(path.join(source, "mcporter_0.14.0_darwin_arm64.tar.gz"), "corrupt release bytes");
+		writeFileSync(path.join(source, "provenance.json"), "{}");
+	} },
+	{ name: "altered provenance", needsOfficial: true, cause: "provenance-invalid", handoff: DOWNLOAD_HANDOFF, prepare(source) {
+		cpSync(path.join(official!, "mcporter_0.14.0_darwin_arm64.tar.gz"), path.join(source, "mcporter_0.14.0_darwin_arm64.tar.gz"));
+		const record = JSON.parse(readFileSync(path.join(official!, "provenance.json"), "utf8"));
+		writeFileSync(path.join(source, "provenance.json"), JSON.stringify({ ...record, commit: "0".repeat(40) }));
+	} },
+	{ name: "Developer ID check unavailable", needsOfficial: true, sandbox: CODESIGN_DENIED, cause: "signature-invalid", handoff: LOCAL_HANDOFF, prepare(source) {
+		cpSync(path.join(official!, "mcporter_0.14.0_darwin_arm64.tar.gz"), path.join(source, "mcporter_0.14.0_darwin_arm64.tar.gz"));
+		cpSync(path.join(official!, "provenance.json"), path.join(source, "provenance.json"));
+	} },
+];
+
+for (const cell of VERIFIER_CELLS) {
+	test.skipIf(cell.needsOfficial && !official)(`first-use ${cell.name} refuses with its verifier cause and an operator handoff`, async () => {
+		const bundle = createBundle();
+		const hostile = createFakeMcporterBinDir();
+		const source = path.join(bundle.root, "release-source");
+		const home = path.join(bundle.root, "home");
+		const state = path.join(bundle.root, "state");
+		mkdirSync(source);
+		mkdirSync(home);
+		bundle.addSkill("keyless-fixture-skill");
+		cell.prepare(source);
+		const environment = { home, binDir: hostile.binDir, timeoutMs: 30_000, extraEnv: { XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: source, GITHUB_TOKEN: SENTINEL } };
+		try {
+			const run = cell.sandbox
+				? await runSyspolicyDenied(bundle, ["schema", "keyless-fixture-skill"], environment, cell.sandbox)
+				: await runBundle(bundle, ["schema", "keyless-fixture-skill"], environment);
+			expect([run.code, run.stderr, run.stdout.trim().split("\n").length]).toEqual([3, "", 1]);
+			expect(run.stdout).not.toContain(SENTINEL);
+			expect(run.stdout).not.toContain(bundle.root);
+			const envelope = JSON.parse(run.stdout);
+			expect(envelope.message).toBe(`connectors: MCPorter ${cell.cause}`);
+			expect(envelope.result).toMatchObject({ commandIdentity: "connectors.schema", outcome: "refused", causeCode: "DOMAIN_MCPORTER_REPAIR_REQUIRED", transactionState: "unchanged", retryable: false, repairAction: cell.handoff, nextAction: "connectors.doctor" });
+			expect(envelope.result.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true });
+			expect(readdirSync(path.join(state, "connectors", "mcporter"))).toEqual([]);
+			// Receipts the probe Provider and any PATH MCPorter would leave.
+			expect(existsSync(path.join(bundle.root, "probe-spawned"))).toBe(false);
+			expect(existsSync(path.join(bundle.root, "mcporter.json"))).toBe(false);
+		} finally {
+			hostile.dispose();
+			bundle.dispose();
+		}
+	}, 45_000);
+}

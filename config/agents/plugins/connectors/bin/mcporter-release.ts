@@ -71,9 +71,26 @@ export function verifyAndExtractMcporterRelease(archive: string, provenance: str
 	return verifyAndExtractWithPolicy(archive, provenance, candidateDir, MCPORTER_RELEASE, run);
 }
 
-// Recheck a selected copy on every use. A marker alone never authorizes execution.
-export function verifyInstalledMcporter(binary: string, run: ReleaseRun = nativeRun): ReleaseVerification {
-	return verifySelectedBinary(binary, MCPORTER_RELEASE, run);
+// Recheck a selected copy on every use: the pinned binary, its Developer ID
+// signature, and the retained official provenance record. A marker or a
+// binary digest alone never authorizes execution. Every check is offline: a
+// Harness sandbox may deny Apple's system-policy service, so install and use
+// never ask Apple (Ticket #140).
+export function verifyInstalledMcporter(binary: string, provenance: string, run: ReleaseRun = nativeRun): ReleaseVerification {
+	const verified = verifySelectedBinary(binary, MCPORTER_RELEASE, run);
+	if (!verified.ok) return verified;
+	return provenanceMatches(provenance, MCPORTER_RELEASE) ? verified : { ok: false, cause: "provenance-invalid" };
+}
+
+// Release qualification only, never install or use: Apple's live notarization
+// lookup of the exact pinned bytes. Every offline check passes before the
+// lookup and the pinned digest is rechecked after it, so a success binds
+// Apple's verdict to bytes that hash to this pin.
+export function qualifyPinnedMcporterNotarization(binary: string, run: ReleaseRun = nativeRun): ReleaseVerification {
+	const pinned = verifySelectedBinary(binary, MCPORTER_RELEASE, run);
+	if (!pinned.ok) return pinned;
+	if (runClosed(run, ["/usr/bin/codesign", "--verify", "--strict", "--check-notarization", "-R=notarized", "--verbose=2", binary]).exitCode !== 0) return { ok: false, cause: "notarization-invalid" };
+	return digest(binary) === MCPORTER_RELEASE.binarySha256 ? { ok: true } : { ok: false, cause: "binary-digest-mismatch" };
 }
 
 function verifySelectedBinary(binary: string, release: ReleasePolicy, run: ReleaseRun): ReleaseVerification {
@@ -82,7 +99,6 @@ function verifySelectedBinary(binary: string, release: ReleasePolicy, run: Relea
 	if (arch.exitCode !== 0 || arch.stdout !== "arm64") return { ok: false, cause: "architecture-invalid" };
 	const requirement = `identifier "${release.identifier}" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "${release.teamId}"`;
 	if (runClosed(run, ["/usr/bin/codesign", "--verify", "--strict", `-R=${requirement}`, "--verbose=2", binary]).exitCode !== 0) return { ok: false, cause: "signature-invalid" };
-	if (runClosed(run, ["/usr/bin/codesign", "--verify", "--strict", "--check-notarization", "-R=notarized", "--verbose=2", binary]).exitCode !== 0) return { ok: false, cause: "notarization-invalid" };
 	const version = runClosed(run, [binary, "--version"]);
 	if (version.exitCode !== 0 || version.stdout !== release.version) return { ok: false, cause: "version-invalid" };
 	return { ok: true };

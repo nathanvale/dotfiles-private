@@ -3,7 +3,10 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { MCPORTER_RELEASE, verifyAndExtractWithPolicy, verifyAndExtractMcporterRelease, type ReleaseRun } from "../bin/mcporter-release.ts";
+import { MCPORTER_RELEASE, qualifyPinnedMcporterNotarization, verifyAndExtractWithPolicy, verifyAndExtractMcporterRelease, type ReleaseRun } from "../bin/mcporter-release.ts";
+
+// Supplied from an independently fetched official release, as in CI.
+const official = process.env.CONNECTORS_OFFICIAL_RELEASE_FIXTURE;
 
 const sha = (value: string) => createHash("sha256").update(value).digest("hex");
 const signatureRequirement = 'identifier "org.openclaw.mcporter" and anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "FWJYW4S8P8"';
@@ -78,23 +81,63 @@ test("pinned provenance must name the selected archive bytes and official arm64 
 	} finally { f.dispose(); }
 });
 
-test("exact Apple signature and notarization commands gate candidate success", () => {
+// Independent oracle: the exact offline verifier sequence for install and use.
+// Ticket #140: none of these may ask Apple's system-policy service.
+function offlineVerifierCalls(f: ReturnType<typeof fixture>): string[][] {
+	return [
+		["/usr/bin/tar", "-tzf", f.archive],
+		["/usr/bin/tar", "-xzf", f.archive, "-C", f.root, "mcporter"],
+		["/usr/bin/lipo", "-archs", f.binary],
+		["/usr/bin/codesign", "--verify", "--strict", `-R=${signatureRequirement}`, "--verbose=2", f.binary],
+		[f.binary, "--version"],
+	];
+}
+
+test("install and use gate on the exact offline Developer ID check and never ask Apple for notarization", () => {
 	const f = fixture();
 	try {
 		expect(verifyAndExtractWithPolicy(f.archive, f.provenance, f.root, f.policy, f.run)).toEqual({ ok: true });
 		expect(readFileSync(f.binary, "utf8")).toBe("test-owned arm64 executable");
-		expect(f.calls).toContainEqual(["/usr/bin/codesign", "--verify", "--strict", `-R=${signatureRequirement}`, "--verbose=2", f.binary]);
-		expect(f.calls).toContainEqual(["/usr/bin/codesign", "--verify", "--strict", "--check-notarization", "-R=notarized", "--verbose=2", f.binary]);
-		for (const [needle, cause] of [["-R=" + signatureRequirement, "signature-invalid"], ["--check-notarization", "notarization-invalid"]] as const) {
-			const refusing: ReleaseRun = (argv) => argv.includes(needle) ? { exitCode: 1, stdout: "" } : f.run(argv);
-			expect(verifyAndExtractWithPolicy(f.archive, f.provenance, f.root, f.policy, refusing)).toEqual({ ok: false, cause });
-			const throwing: ReleaseRun = (argv) => {
-				if (argv.includes(needle)) throw new Error("verifier unavailable");
-				return f.run(argv);
-			};
-			expect(verifyAndExtractWithPolicy(f.archive, f.provenance, f.root, f.policy, throwing)).toEqual({ ok: false, cause });
-		}
+		expect(f.calls).toEqual(offlineVerifierCalls(f));
+		const needle = "-R=" + signatureRequirement;
+		const refusing: ReleaseRun = (argv) => argv.includes(needle) ? { exitCode: 1, stdout: "" } : f.run(argv);
+		expect(verifyAndExtractWithPolicy(f.archive, f.provenance, f.root, f.policy, refusing)).toEqual({ ok: false, cause: "signature-invalid" });
+		const throwing: ReleaseRun = (argv) => {
+			if (argv.includes(needle)) throw new Error("verifier unavailable");
+			return f.run(argv);
+		};
+		expect(verifyAndExtractWithPolicy(f.archive, f.provenance, f.root, f.policy, throwing)).toEqual({ ok: false, cause: "signature-invalid" });
 	} finally { f.dispose(); }
+});
+
+test("release qualification refuses bytes other than the pinned binary before any Apple lookup", () => {
+	const f = fixture();
+	try {
+		writeFileSync(f.binary, "test-owned arm64 executable");
+		expect(qualifyPinnedMcporterNotarization(f.binary, f.run)).toEqual({ ok: false, cause: "binary-digest-mismatch" });
+		expect(f.calls).toHaveLength(0);
+	} finally { f.dispose(); }
+});
+
+// Release qualification: Apple's live notarization lookup for the exact
+// official bytes the pin names. It runs where the official fixture exists.
+test.skipIf(!official)("release qualification binds Apple notarization to the pinned official binary", () => {
+	const binary = path.join(official!, "mcporter");
+	const calls: string[][] = [];
+	const real: ReleaseRun = (argv) => {
+		calls.push([...argv]);
+		const result = Bun.spawnSync([...argv], { stdin: "ignore", stdout: "pipe", stderr: "pipe", env: { PATH: "/usr/bin:/bin" } });
+		return { exitCode: result.exitCode, stdout: result.stdout.toString().trim() };
+	};
+	expect(qualifyPinnedMcporterNotarization(binary, real)).toEqual({ ok: true });
+	expect(calls).toEqual([
+		["/usr/bin/lipo", "-archs", binary],
+		["/usr/bin/codesign", "--verify", "--strict", `-R=${signatureRequirement}`, "--verbose=2", binary],
+		[binary, "--version"],
+		["/usr/bin/codesign", "--verify", "--strict", "--check-notarization", "-R=notarized", "--verbose=2", binary],
+	]);
+	const denied: ReleaseRun = (argv) => argv.includes("--check-notarization") ? { exitCode: 3, stdout: "" } : real(argv);
+	expect(qualifyPinnedMcporterNotarization(binary, denied)).toEqual({ ok: false, cause: "notarization-invalid" });
 });
 
 test("production wrapper refuses fixture bytes before extraction", () => {

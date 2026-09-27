@@ -3,18 +3,42 @@ import { chmodSync, copyFileSync, existsSync, lstatSync, mkdtempSync, readFileSy
 import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
-import { MCPORTER_RELEASE, verifyAndExtractMcporterRelease, verifyInstalledMcporter } from "./mcporter-release.ts";
+import { MCPORTER_RELEASE, type ReleaseFailure, verifyAndExtractMcporterRelease, verifyInstalledMcporter } from "./mcporter-release.ts";
 import { ownedDirectory, stateRoot } from "./private-state.ts";
 import type { EnvironmentSource } from "./safe-environment.ts";
 
-export type McporterSelection = { ok: true; binary: string; bootstrapped: boolean; recovered?: true } | { ok: false; cause: string; repair: string; bootstrapped?: true; recovered?: true; uncertain?: true };
+// firstUse marks a first-use refusal with nothing selected: "retry" when the
+// release was unreachable, "handoff" when its verifier refused the bytes.
+export type McporterSelection = { ok: true; binary: string; bootstrapped: boolean; recovered?: true } | { ok: false; cause: string; repair: string; bootstrapped?: true; recovered?: true; uncertain?: true; firstUse?: "retry" | "handoff" };
 export type RepairResult = { ok: true; repaired: boolean; recovered: boolean } | { ok: false; cause: string; effect: "unchanged" | "recovered" | "completed" | "recovered-and-completed" | "unknown" };
 // C4: a refused selection after first use names the explicit repair preview.
-// A failed first use has nothing selected to repair, so it names first use
-// again (Q13c); a preview would only refuse and point back here.
+// A failed first use has nothing selected to repair; an unreachable release
+// names first use again (Q13c), since a preview would only refuse.
 export const MCPORTER_REPAIR_ACTION = "Run connectors deps repair mcporter --preview";
 const repair = MCPORTER_REPAIR_ACTION;
 const firstUseRetry = "Check that the official MCPorter release is reachable, then retry the same command; first use installs MCPorter";
+// Ticket #140: retrying a verifier refusal fetches the same pinned bytes, so
+// it hands off to an operator instead. Downloaded bytes that miss the pins
+// point at the network or the release; pinned bytes that fail a local check
+// point at this machine's tools or sandbox.
+const downloadHandoff = "The downloaded MCPorter release did not match its pinned official digest or provenance, so nothing was installed. Do not bypass verification. Retry the same command only from a network that does not alter downloads; if it still refuses, report the cause to the Connectors plugin maintainer";
+const localHandoff = "The pinned MCPorter release could not be verified on this machine, so nothing was installed. Do not bypass verification. Retry the same command where macOS tar, lipo, and codesign can run, outside any sandbox that denies them; if it still refuses, report the cause to the Connectors plugin maintainer";
+const verifierHandoff: Readonly<Record<ReleaseFailure, string>> = {
+	"archive-digest-mismatch": downloadHandoff,
+	"provenance-invalid": downloadHandoff,
+	"archive-inventory-invalid": localHandoff,
+	"extraction-failed": localHandoff,
+	"binary-digest-mismatch": localHandoff,
+	"architecture-invalid": localHandoff,
+	"signature-invalid": localHandoff,
+	"notarization-invalid": localHandoff,
+	"version-invalid": localHandoff,
+};
+
+// Carries only the closed verifier cause, never a path or tool output.
+class ReleaseRefusal extends Error {
+	constructor(readonly failure: ReleaseFailure) { super(failure); }
+}
 export const lockRecovery = "Independently verify the .selection.lock owner identity and that its process has ended, then immediately recheck the lock before removing it and retrying the same command";
 
 function ownedRoot(env: EnvironmentSource): string {
@@ -35,7 +59,7 @@ function selected(root: string, revision = "current"): McporterSelection | null 
 		const binary = path.join(current, "mcporter");
 		const binaryStat = lstatSync(binary);
 		if (!binaryStat.isFile() || binaryStat.isSymbolicLink() || binaryStat.uid !== os.userInfo().uid || (binaryStat.mode & 0o777) !== 0o700) throw new Error("invalid binary");
-		const verified = verifyInstalledMcporter(binary);
+		const verified = verifyInstalledMcporter(binary, path.join(current, "provenance.json"));
 		if (!verified.ok) return { ok: false, cause: verified.cause, repair };
 		return (value as { version: string }).version === MCPORTER_RELEASE.version
 			? { ok: true, binary, bootstrapped: false }
@@ -156,9 +180,11 @@ async function verifiedStaging(root: string, env: EnvironmentSource): Promise<st
 			], timeoutMs);
 		}
 		const result = verifyAndExtractMcporterRelease(archive, provenance, staging);
-		if (!result.ok) throw new Error(result.cause);
+		if (!result.ok) throw new ReleaseRefusal(result.cause);
+		// The official provenance record stays beside the binary so every use
+		// rechecks it without a download; the archive is not needed again.
 		rmSync(archive);
-		rmSync(provenance);
+		chmodSync(provenance, 0o600);
 		chmodSync(path.join(staging, "mcporter"), 0o700);
 		writeFileSync(path.join(staging, "release.json"), JSON.stringify({ version: MCPORTER_RELEASE.version }), { mode: 0o600 });
 		return staging;
@@ -290,9 +316,13 @@ async function bootstrapMissing(root: string, env: EnvironmentSource): Promise<M
 		promoted = true;
 		const promotedSelection = selected(root);
 		return promotedSelection?.ok ? { ...promotedSelection, bootstrapped: true } : { ok: false, cause: promotedSelection?.ok === false ? promotedSelection.cause : "selected-release-invalid", repair, bootstrapped: true };
-	} catch {
+	} catch (error) {
 		if (promoted) return { ok: false, cause: "post-promotion-failed", repair, bootstrapped: true };
-		return selected(root) ?? { ok: false, cause: "bootstrap-failed", repair: firstUseRetry };
+		const existing = selected(root);
+		if (existing) return existing;
+		return error instanceof ReleaseRefusal
+			? { ok: false, cause: error.failure, repair: verifierHandoff[error.failure], firstUse: "handoff" }
+			: { ok: false, cause: "bootstrap-failed", repair: firstUseRetry, firstUse: "retry" };
 	} finally {
 		if (staging) try { rmSync(staging, { recursive: true, force: true }); } catch { /* Selection is unchanged or already committed. */ }
 	}

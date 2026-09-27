@@ -7,8 +7,9 @@
 // Source-unchanged review of bin/connectors.ts itself is a separate, manual
 // step reported alongside this evidence, not asserted here.
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { SENTINEL, sandbox } from "./deps-sandbox.ts";
 import { createBundle, createFixtureAuthorityBinDir, runBundle } from "./harness.ts";
 
 // A rejected manifest must not start the plugin-owned dependency bootstrap.
@@ -167,6 +168,81 @@ describe("Spec AC13: manifest-only Connector Skill addition", () => {
 			bundle.dispose();
 		}
 	});
+});
+
+// Independent oracle (Spec AC19, Ticket #141): the eight adapter commands a
+// connector declaring no packaged adapter must refuse, the next action each
+// refusal names, and what the same argv reaches once the manifest declares
+// the test-auth adapter with no fixture authority present. schema is absent:
+// a null adapter is its keyless route.
+const INPUT = JSON.stringify({ token: SENTINEL });
+const UNDECLARED_ADAPTER_ROWS: ReadonlyArray<readonly [argv: readonly string[], commandIdentity: string, nextAction: string, adapterAnswer: string]> = [
+	[["fixture-auth", "keyless-fixture-skill"], "connectors.fixtureAuth", "connectors.config.show", "DOMAIN_FIXTURE_AUTHORITY_UNAVAILABLE"],
+	[["auth", "status", "keyless-fixture-skill", "--select", "account=acme"], "connectors.auth", "connectors.list", "DOMAIN_ADAPTER_REFUSED"],
+	[["run", "keyless-fixture-skill", "--select", "account=acme", "get", "--input", INPUT], "connectors.run", "connectors.list", "DOMAIN_ADAPTER_REFUSED"],
+	[["run", "keyless-fixture-skill", "--select", "account=acme", "get", "--input", INPUT, "--preview"], "connectors.run.preview", "connectors.list", "DOMAIN_ADAPTER_REFUSED"],
+	[["run", "keyless-fixture-skill", "--select", "account=acme", "get", "--input", INPUT, "--apply", "preview-1"], "connectors.run.apply", "connectors.list", "DOMAIN_ADAPTER_REFUSED"],
+	[["recover", "keyless-fixture-skill", "--select", "account=acme"], "connectors.recover", "connectors.list", "DOMAIN_ADAPTER_REFUSED"],
+	[["recover", "keyless-fixture-skill", "--select", "account=acme", "--run", "run-1", "--adjudicate", "--input", INPUT], "connectors.recover.adjudicate", "connectors.list", "DOMAIN_ADAPTER_REFUSED"],
+	[["recover", "keyless-fixture-skill", "--select", "account=acme", "--run", "run-1", "--unlock"], "connectors.recover.unlock", "connectors.list", "DOMAIN_ADAPTER_REFUSED"],
+];
+
+describe("Spec AC19: a connector without a packaged adapter", () => {
+	test("each adapter command refuses before any dependency, credential, or Provider access, and schema keeps its keyless route", async () => {
+		const box = sandbox();
+		// A missing release source keeps any wrongly reached bootstrap offline.
+		const env = { home: box.home, binDir: box.hostile, extraEnv: { XDG_STATE_HOME: box.state, OP_SERVICE_ACCOUNT_TOKEN: SENTINEL, CONNECTORS_TEST_RELEASE_DIR: path.join(box.bundle.root, "missing-source") }, timeoutMs: 20_000 };
+		const run = async (argv: readonly string[]) => {
+			const result = await runBundle(box.bundle, [...argv], env);
+			expect(result.stderr).toBe("");
+			expect(result.stdout.trim().split("\n")).toHaveLength(1);
+			expect(result.stdout).not.toContain(SENTINEL);
+			expect(existsSync(box.marker)).toBe(false);
+			return { code: result.code, result: JSON.parse(result.stdout).result };
+		};
+		try {
+			box.bundle.addSkill("keyless-fixture-skill");
+			const manifestPath = path.join(box.bundle.skillsRoot, "keyless-fixture-skill", "config", "manifest.json");
+			const manifest = JSON.parse(await Bun.file(manifestPath).text());
+			const selectors = { account: { pattern: "^[a-z][a-z0-9-]*$", required: true } };
+			writeFileSync(manifestPath, JSON.stringify({ ...manifest, selectors, adapter: null, credentials: null }));
+
+			for (const [argv, commandIdentity, nextAction] of UNDECLARED_ADAPTER_ROWS) {
+				const { code, result } = await run(argv);
+				expect([commandIdentity, code, result.commandIdentity, result.causeCode, result.nextAction]).toEqual([commandIdentity, 3, commandIdentity, "DOMAIN_ADAPTER_NOT_DECLARED", nextAction]);
+				expect(result.outcome).toBe("refused");
+				expect(result.failureClass).toBe("domain");
+				expect(result.transactionState).toBe("unchanged");
+				expect(result.data).toBeNull();
+				expect(result.repairAction.length).toBeGreaterThan(0);
+				expect(result.effects).toEqual({ completed: [], remaining: [], uncertain: [], inventoryComplete: true });
+				expect(existsSync(box.state)).toBe(false);
+				expect(readdirSync(box.home)).toEqual([]);
+				// Catalogue agreement: the observed station is one discovery declares.
+				const described = await run(["--discover-command", commandIdentity, "--json"]);
+				expect(described.result.data.stations.map((station: { causeCode: string }) => station.causeCode)).toContain("DOMAIN_ADAPTER_NOT_DECLARED");
+			}
+
+			// Positive control: the same argv against the same manifest with a
+			// declared adapter reaches that adapter's own answer instead.
+			writeFileSync(manifestPath, JSON.stringify({ ...manifest, selectors, adapter: "test-auth", credentials: { reference: "1Password:API Credentials/fixture-item" } }));
+			const reached = [];
+			for (const [argv, commandIdentity] of UNDECLARED_ADAPTER_ROWS) {
+				const { code, result } = await run(argv);
+				reached.push([commandIdentity, code, result.commandIdentity, result.causeCode]);
+			}
+			expect(reached).toEqual(UNDECLARED_ADAPTER_ROWS.map(([, commandIdentity, , adapterAnswer]) => [commandIdentity, 3, commandIdentity, adapterAnswer]));
+			expect(existsSync(box.state)).toBe(false);
+
+			// schema with a null adapter takes the keyless route to first-use
+			// MCPorter bootstrap, which the missing release source refuses.
+			writeFileSync(manifestPath, JSON.stringify({ ...manifest, adapter: null, credentials: null }));
+			const keyless = await run(["schema", "keyless-fixture-skill"]);
+			expect([keyless.code, keyless.result.commandIdentity, keyless.result.causeCode]).toEqual([3, "connectors.schema", "DOMAIN_MCPORTER_REPAIR_REQUIRED"]);
+		} finally {
+			rmSync(box.bundle.root, { recursive: true, force: true });
+		}
+	}, 120_000);
 });
 
 describe("Spec AC23: packaged auth adapter extensibility", () => {

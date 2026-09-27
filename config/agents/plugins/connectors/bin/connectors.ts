@@ -224,7 +224,10 @@ const REFUSAL_CAUSE: Readonly<Record<AdapterRefusalKind, CauseCode>> = {
 const CUSTODY_REFUSALS: readonly CauseCode[] = [REFUSAL_CAUSE.usage, REFUSAL_CAUSE.domain, REFUSAL_CAUSE.schema];
 // Every command routed through a packaged adapter: manifest, selector, and
 // adapter refusals, MCPorter selection, and an inspected or executed success.
-const ADAPTER_BASE: readonly CauseCode[] = [...MANIFEST_REFUSALS, "DOMAIN_ADAPTER_NOT_DECLARED", ...Object.values(REFUSAL_CAUSE), "DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION", ...SELECTION_FAILURES, ...SELECTED_SUCCESS];
+// schema answers a null adapter through its keyless route, so only the
+// commands that require an adapter can refuse one as undeclared.
+const ADAPTER_OUTCOMES: readonly CauseCode[] = [...Object.values(REFUSAL_CAUSE), "DOMAIN_ADAPTER_REFUSED_AFTER_SELECTION", ...SELECTION_FAILURES, ...SELECTED_SUCCESS];
+const ADAPTER_BASE: readonly CauseCode[] = [...MANIFEST_REFUSALS, "DOMAIN_ADAPTER_NOT_DECLARED", ...ADAPTER_OUTCOMES];
 const DEPS_PREVIEW: readonly CauseCode[] = ["USAGE_MALFORMED_ARGUMENTS", "SUCCESS_UNCHANGED", "DOMAIN_DEPS_REPAIR_PREREQUISITE", "DOMAIN_DEPS_STATE_INVALID", "INTERNAL_DEPS_PREVIEW_AFTER_RECORD"];
 const DEPS_APPLY: readonly CauseCode[] = ["USAGE_MALFORMED_ARGUMENTS", "DOMAIN_DEPS_PREVIEW_INVALID", "DOMAIN_DEPS_PREVIEW_STALE", "DOMAIN_DEPS_PREVIEW_CONSUMED", "DOMAIN_DEPS_APPLY_LOCKED"];
 
@@ -268,7 +271,7 @@ const COMMANDS: readonly CommandDescriptor[] = [
 		usage: SCHEMA_USAGE,
 		input: [word(0, "schema"), connectorAt(1), selectAt(2)],
 		reaches: "provider",
-		stations: ["USAGE_MALFORMED_ARGUMENTS", "DOMAIN_CUSTODY_NOT_SUPPORTED", ...ADAPTER_BASE, ...ADAPTER_READ],
+		stations: ["USAGE_MALFORMED_ARGUMENTS", "DOMAIN_CUSTODY_NOT_SUPPORTED", ...MANIFEST_REFUSALS, ...ADAPTER_OUTCOMES, ...ADAPTER_READ],
 	},
 	{ commandIdentity: "connectors.deps.status", route: ["deps", "status"], effectClass: "inspect", summary: "Report each declared dependency's required version, verified plugin-owned selection, and one repair route; never installs or searches PATH", usage: "deps status [tool]", input: [...words("deps", "status"), positional(2, "tool", TOOL_VALUE, false)], reaches: "plugin-state", stations: ["SUCCESS_UNCHANGED", "USAGE_MALFORMED_ARGUMENTS", "USAGE_DEPENDENCY_UNKNOWN"] },
 	{
@@ -1949,7 +1952,8 @@ function emitSelectionFailure(selection: Extract<Awaited<ReturnType<typeof ensur
 				effects: { completed: recoveryCompleted ? ["mcporter-recovery"] : [], remaining: [], uncertain: [recoveryCompleted ? "mcporter-repair" : "mcporter-recovery"], inventoryComplete: true } } });
 		return;
 	}
-	const nextAction = selection.cause === "bootstrap-failed" ? commandIdentity : selection.cause === "state-invalid" ? "connectors.doctor" : "connectors.deps.repair.preview";
+	// A first-use refusal has no selection for the repair preview to replace.
+	const nextAction = selection.firstUse === "retry" ? commandIdentity : selection.firstUse === "handoff" || selection.cause === "state-invalid" ? "connectors.doctor" : "connectors.deps.repair.preview";
 	emitRefusal(commandIdentity, `${PROGRAM}: MCPorter ${selection.cause}`, bootstrapCompleted ? "DOMAIN_MCPORTER_REPAIR_AFTER_BOOTSTRAP" : recoveryCompleted ? "DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY" : "DOMAIN_MCPORTER_REPAIR_REQUIRED", selection.repair, nextAction, bootstrapCompleted, recoveryCompleted);
 }
 
