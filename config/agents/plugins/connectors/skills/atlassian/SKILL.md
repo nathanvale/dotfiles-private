@@ -146,9 +146,12 @@ fallback: a Community operation that fails stays failed.
 - `issue.comment.media.update` edits only a comment the tenant principal
   authored (`input-invalid` otherwise) and replaces the whole body. Read the
   current text first and carry it over.
-- Live-write-proven on one Jira Software issue (SMSTX-364, 28 September
-  2026): three inline images, a wiki mention, and a wiki link rendered. The
-  mention's notification was not confirmed.
+- Proof state: fixture-tested. The wiki-markup mechanism was proven once by a
+  direct REST prototype outside this route (SMSTX-364, 28 September 2026:
+  three inline images, a wiki mention, and a wiki link rendered; notification
+  not confirmed). The dispatcher's own live create and edit are pending; see
+  the ADR 0001 amendment's confirmation items. Until they pass, report a
+  media write as fixture-tested and read the comment back in Jira yourself.
 
 Check authorization before `--apply`. An explicit request for one named create,
 update, comment, attachment, or delete authorizes that operation. For an
@@ -199,9 +202,12 @@ bun "$DISPATCH" --tenant <tenant> receipt    --run <runId>
 bun "$DISPATCH" --tenant <tenant> adjudicate --run <runId> --input '<the identical input>'
 ```
 
-Adjudicate reads the object back through the product's Community route. It
-settles `completed` only when a new stable effect id, the requested values, or
-a not-found after a delete is observed against the preview baseline. A
+Adjudicate reads the object back through the receipt's own Provider route: the
+product's Community route, or the owned REST route (`provider: "rest"`) for an
+`issue.comment.media` receipt, whose read-back is the comment list or the
+comment itself with rendered HTML. It settles `completed` only when a new
+stable effect id, the requested values, or a not-found after a delete is
+observed against the preview baseline. A
 historical matching title, summary, or comment is not an effect. `unchanged`
 needs a revision that did not move or an unsent receipt; plain absence after a
 possible send remains unknown. It never marks success by hand.
