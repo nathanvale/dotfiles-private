@@ -63,6 +63,33 @@ export function restRequest(tool: string, args: unknown): RestRequest | null {
 	}
 }
 
+// The author guard the REST Provider enforces itself before any comment edit,
+// whatever process asked for it: the principal and the comment, read through
+// the same route, must name one account. The dispatcher runs the same guard
+// earlier so a refusal is visible at preview; the Provider's copy is the one
+// that binds the credential.
+export interface EditGuard {
+	myself: RestRequest;
+	comment: RestRequest;
+}
+
+export function editGuardRequests(args: unknown): EditGuard | null {
+	if (!isRecord(args) || !issueKey(args.issue_key) || !commentId(args.comment_id)) return null;
+	const myself = restRequest("jira_rest_myself", {});
+	const comment = restRequest("jira_rest_comment_get", { issue_key: args.issue_key, comment_id: args.comment_id });
+	return myself && comment ? { myself, comment } : null;
+}
+
+export type AuthorVerdict = "match" | "mismatch" | "unverifiable";
+
+// Both account ids must be present to decide; a missing one is never a match.
+export function authorGuardVerdict(myself: unknown, comment: unknown): AuthorVerdict {
+	const principal = isRecord(myself) && typeof myself.accountId === "string" && myself.accountId.length > 0 ? myself.accountId : undefined;
+	const author = isRecord(comment) && isRecord(comment.author) && typeof comment.author.accountId === "string" && comment.author.accountId.length > 0 ? comment.author.accountId : undefined;
+	if (principal === undefined || author === undefined) return "unverifiable";
+	return principal === author ? "match" : "mismatch";
+}
+
 // The schema the dispatcher confirms REST arguments against. It is owned, not
 // live: the REST Provider refuses the same vocabulary independently.
 export function restSchema(): SchemaTool[] {

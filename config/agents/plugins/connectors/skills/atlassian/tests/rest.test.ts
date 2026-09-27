@@ -4,7 +4,7 @@
 // Cloud REST v2 reference and the prototype run on SMSTX-364 (28 September
 // 2026).
 import { describe, expect, test } from "bun:test";
-import { restReply, restRequest, restSchema } from "../scripts/dispatch/rest.ts";
+import { authorGuardVerdict, editGuardRequests, restReply, restRequest, restSchema } from "../scripts/dispatch/rest.ts";
 
 const RENDERED = "expand=renderedBody";
 
@@ -41,6 +41,19 @@ describe("REST requests", () => {
 			["jira_rest_comment_add", ["issue_key", "body"], ["issue_key", "body"]],
 			["jira_rest_comment_edit", ["issue_key", "comment_id", "body"], ["issue_key", "comment_id", "body"]],
 		]);
+	});
+
+	test("the edit guard reads the principal and the exact comment first, and only two present, equal account ids are a match", () => {
+		expect(editGuardRequests({ issue_key: "PROJ-1", comment_id: "454771", body: "x" })).toEqual({ myself: { method: "GET", path: "/rest/api/2/myself" }, comment: { method: "GET", path: `/rest/api/2/issue/PROJ-1/comment/454771?${RENDERED}` } });
+		expect(editGuardRequests({ issue_key: "PROJ-1", body: "x" })).toBeNull();
+		expect(editGuardRequests({ issue_key: "PROJ-1", comment_id: "1/../2" })).toBeNull();
+		const me = { accountId: "712020:me", emailAddress: "me@example.invalid" };
+		expect(authorGuardVerdict(me, { id: "454771", author: { accountId: "712020:me" } })).toBe("match");
+		expect(authorGuardVerdict(me, { id: "454771", author: { accountId: "712020:other" } })).toBe("mismatch");
+		expect(authorGuardVerdict(me, { id: "454771", author: { displayName: "Someone" } })).toBe("unverifiable");
+		expect(authorGuardVerdict({ emailAddress: "me@example.invalid" }, { id: "454771", author: { accountId: "712020:me" } })).toBe("unverifiable");
+		expect(authorGuardVerdict(null, null)).toBe("unverifiable");
+		expect(authorGuardVerdict({ accountId: "" }, { author: { accountId: "" } })).toBe("unverifiable");
 	});
 
 	test("the Provider reply is a status and a body, and nothing else", () => {
