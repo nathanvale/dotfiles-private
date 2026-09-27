@@ -1470,6 +1470,43 @@ describe("production adapters", () => {
 		expect(harness.has("mcporter.json")).toBe(false);
 	});
 
+	// Public-process proof of the media operations through the spawned dispatcher.
+	// The success path needs the REST Provider to reach the item's Trusted Site
+	// Origin, so it is live qualification; every refusal boundary before a
+	// request is proven here with the envelope, streams, exit status, and
+	// journal effects.
+	test("the spawned dispatcher refuses a media preview whose images disagree with the body, refuses one whose REST Provider cannot read the item, and refuses an apply for an unknown preview, with no journal effect", async () => {
+		const media = { issueKey: "PROJ-1", body: "Before:\n\n!before.png|width=600!\n\n!after.png!", images: ["before.png", "after.png"] };
+		const previews = path.join(harness.root, "connectors", "atlassian", "example", "previews");
+		const receipts = path.join(harness.root, "connectors", "atlassian", "example", "receipts");
+		const disagreeing = await harness.run(["--tenant", "example", "issue.comment.media", "--input", JSON.stringify({ ...media, images: ["before.png"] }), "--preview", "--json"], {}, DISPATCH);
+		expect([disagreeing.code, disagreeing.stderr]).toEqual([4, ""]);
+		const refusedInput = parse(disagreeing.stdout);
+		expect([refusedInput.outcome, refusedInput.causeCode, refusedInput.repairAction, refusedInput.provenance, refusedInput.transactionState]).toEqual(["refused", "input-invalid", "the body references an image that images does not name", [], "unchanged"]);
+		expect(JSON.parse(disagreeing.stdout).result.commandIdentity).toBe("atlassian.issue.comment.media.preview");
+		expect(harness.has("wrapper.log")).toBe(false);
+		// The binding succeeds on an item without a credential; the REST Provider then refuses before any request, and the envelope names the REST route.
+		harness.write("item.json", fields({ username: PRINCIPAL, site_url: ORIGIN }, 1));
+		const unreadable = await harness.run(["--tenant", "example", "issue.comment.media", "--input", JSON.stringify(media), "--preview", "--json"], {}, DISPATCH);
+		expect([unreadable.code, unreadable.stderr]).toEqual([3, ""]);
+		const refusedItem = parse(unreadable.stdout);
+		expect([refusedItem.outcome, refusedItem.causeCode, refusedItem.repairAction]).toEqual(["refused", "refused-precondition", `${REPAIR_TEXT["refused-precondition"]}; the product credential item needs username, credential, and a site_url field`]);
+		expect(refusedItem.provenance).toEqual([{ provider: RJ, tool: "jira_rest_issue_attachments", status: "refused-precondition" }]);
+		expect(JSON.parse(unreadable.stdout).result.effectClass).toBe("repository-local");
+		// One read by the custody child, one by the REST Provider; nothing else started.
+		expect(readFileSync(path.join(harness.root, "wrapper.log"), "utf8").trim().split("\n")).toEqual(Array(2).fill("op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json"));
+		expect(harness.has("mcporter.json")).toBe(false);
+		expect(readJsonDir(previews)).toEqual([]);
+		// An apply for a preview the journal never recorded is refused before any binding or Provider process.
+		const applied = await harness.run(["--tenant", "example", "issue.comment.media", "--input", JSON.stringify(media), "--apply", "00000000-0000-4000-8000-000000000000", "--json"], {}, DISPATCH);
+		expect([applied.code, applied.stderr]).toEqual([3, ""]);
+		const refusedApply = parse(applied.stdout);
+		expect([refusedApply.outcome, refusedApply.causeCode, refusedApply.repairAction?.endsWith("preview-unknown"), refusedApply.provenance, refusedApply.effects.completed]).toEqual(["refused", "refused-preview", true, [], []]);
+		expect(JSON.parse(applied.stdout).result.commandIdentity).toBe("atlassian.issue.comment.media.apply");
+		expect([readJsonDir(previews), readJsonDir(receipts)]).toEqual([[], []]);
+		for (const stream of [disagreeing.stdout, unreadable.stdout, applied.stdout]) expect(stream).not.toContain(OP_TOKEN_SENTINEL);
+	});
+
 	test("staging copies an upload into the tenant's 0700 outbox under its content digest and refuses a missing or non-regular file", async () => {
 		const source = path.join(harness.root, "evidence.txt");
 		writeFileSync(source, "evidence bytes");
