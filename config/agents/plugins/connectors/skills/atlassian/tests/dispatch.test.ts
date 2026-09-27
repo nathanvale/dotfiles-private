@@ -101,7 +101,7 @@ const SCHEMAS: Record<string, SchemaTool[]> = {
 		tool("jira_assign_issue", ["issue_key"], ["assignee"]),
 		tool("jira_delete_issue", ["issue_key"]),
 	],
-	[RJ]: [tool("jira_rest_myself", []), tool("jira_rest_issue_attachments", ["issue_key"]), tool("jira_rest_comments_list", ["issue_key"]), tool("jira_rest_comment_get", ["issue_key", "comment_id"]), tool("jira_rest_comment_add", ["issue_key", "body"]), tool("jira_rest_comment_edit", ["issue_key", "comment_id", "body"])],
+	[RJ]: [tool("jira_rest_myself", []), tool("jira_rest_issue_attachments", ["issue_key"]), tool("jira_rest_comments_list", ["issue_key"]), tool("jira_rest_comment_get", ["issue_key", "comment_id"]), tool("jira_rest_comment_add", ["issue_key", "body"]), tool("jira_rest_comment_edit", ["issue_key", "comment_id", "body"]), tool("jira_rest_attachment_head", ["attachment_id"])],
 	[CC]: [
 		tool("confluence_get_page", [], ["page_id", "title", "space_key", "include_metadata", "convert_to_markdown"]),
 		tool("confluence_search", ["query"], ["limit", "spaces_filter"]),
@@ -1185,7 +1185,9 @@ describe("wiki media comments through the owned REST route", () => {
 		const preview = previewData(envelope);
 		expect([preview.provider, preview.server, preview.tool, preview.objectIdentity, preview.revision]).toEqual(["rest", RJ, "jira_rest_comment_add", "issue:PROJ-1", null]);
 		expect(preview.arguments).toEqual({ issue_key: "PROJ-1", body: MEDIA.body });
-		expect(preview.baseline).toEqual({ effectIds: ["202456", "202457"], commentIds: [], revision: null });
+		// The baseline binds the attachment ids and a digest of their verified image types.
+		expect(preview.baseline).toMatchObject({ effectIds: ["202456", "202457"], commentIds: [] });
+		expect(preview.baseline.revision).toMatch(/^[0-9a-f]{64}$/);
 		expect(calls).toEqual([ATTACH_READ, LIST_READ]);
 		expect(readJsonDir(previewsDir()).map((entry) => [entry.provider, entry.status, entry.baseline])).toEqual([["rest", "open", preview.baseline]]);
 		// before.png was deleted and re-attached under a new id: the bound identifiers moved, so nothing is sent.
@@ -1214,7 +1216,7 @@ describe("wiki media comments through the owned REST route", () => {
 		});
 		const dependencies = deps({ transport });
 		const preview = previewData(await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], dependencies));
-		expect(preview.baseline).toEqual({ effectIds: ["202456", "202457"], commentIds: ["900"], revision: null });
+		expect(preview.baseline).toMatchObject({ effectIds: ["202456", "202457"], commentIds: ["900"] });
 		const applied = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--apply", preview.previewId], dependencies);
 		expect([applied.result.causeCode, applied.result.transactionState, applied.result.effects.uncertain]).toEqual(["outcome-unknown", "unknown", ["issue:PROJ-1"]]);
 		const runId = (applied.result.data as { runId: string }).runId;
@@ -1234,14 +1236,34 @@ describe("wiki media comments through the owned REST route", () => {
 		// An attached file that is not an image cannot render inline; the preview refuses it before any write.
 		const pdf = await dispatch(["issue.comment.media", "--input", JSON.stringify({ issueKey: "PROJ-1", body: "See !notes.pdf!", images: ["notes.pdf"] }), "--preview"], dependencies);
 		expect([pdf.result.causeCode, pdf.result.exitCode, pdf.result.repairAction]).toEqual(["input-invalid", 4, "an image named in images is not an image attachment; only image content renders inline"]);
-		// An attachment whose type Jira did not report cannot be established as an image; the preview refuses it before any write.
-		const untyped = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: { ok: true, data: { key: "PROJ-1", fields: { attachment: [{ id: "202456", filename: "before.png" }, { id: "202457", filename: "after.png", mimeType: "image/png" }] } } } });
-		const unknown = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: untyped.transport }));
-		expect([unknown.result.causeCode, unknown.result.exitCode, unknown.result.repairAction]).toEqual(["capability-unavailable", 3, "an image named in images has no reported content type, so its image type cannot be established"]);
 		const duplicated = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: { ok: true, data: { key: "PROJ-1", fields: { attachment: [{ id: "202456", filename: "before.png" }, { id: "202499", filename: "before.png" }, { id: "202457", filename: "after.png" }] } } } });
 		const duplicate = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: duplicated.transport }));
 		expect([duplicate.result.causeCode, duplicate.result.repairAction]).toEqual(["input-invalid", "an image named in images matches more than one attachment on the issue; remove the duplicate first"]);
 		expect(readJsonDir(previewsDir())).toEqual([]);
+	});
+
+	test("an attachment Jira reports no type for is established from its first bytes before any write: a PNG is accepted and its type bound in the preview, a PDF is refused, and a failed read refuses", async () => {
+		const untypedAttachments = { ok: true as const, data: { key: "PROJ-1", fields: { attachment: [{ id: "202456", filename: "before.png" }, { id: "202457", filename: "after.png", mimeType: "image/png" }] } } };
+		const PNG = { ok: true as const, data: { bytes: "89504e470d0a1a0a0000000d49484452" } };
+		const PDF = { ok: true as const, data: { bytes: "255044462d312e340a25c7ec8fa20a35" } };
+		const HEAD_READ = { server: RJ, tool: "jira_rest_attachment_head", args: { attachment_id: "202456" } };
+		const accepted = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: untypedAttachments, [`${RJ}.jira_rest_attachment_head`]: PNG, [`${RJ}.jira_rest_comments_list`]: comments() });
+		const envelope = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: accepted.transport }));
+		expect(envelope.result.causeCode).toBe("success");
+		const preview = previewData(envelope);
+		expect(preview.baseline.effectIds).toEqual(["202456", "202457"]);
+		expect(preview.baseline.revision).toMatch(/^[0-9a-f]{64}$/);
+		expect((envelope.result.data as { imageTypes: Record<string, string> }).imageTypes).toEqual({ "202456": "image/png", "202457": "image/png" });
+		expect(accepted.calls).toEqual([ATTACH_READ, HEAD_READ, LIST_READ]);
+		const refusedPdf = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: untypedAttachments, [`${RJ}.jira_rest_attachment_head`]: PDF });
+		const pdf = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: refusedPdf.transport }));
+		expect([pdf.result.causeCode, pdf.result.exitCode, pdf.result.repairAction]).toEqual(["input-invalid", 4, "an image named in images is not an image attachment; only image content renders inline"]);
+		expect(refusedPdf.calls.map((call) => call.tool)).toEqual(["jira_rest_issue_attachments", "jira_rest_attachment_head"]);
+		const unreadable = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: untypedAttachments, [`${RJ}.jira_rest_attachment_head`]: failure("not-found") });
+		const failedRead = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: unreadable.transport }));
+		expect([failedRead.result.outcome, failedRead.result.causeCode]).toEqual(["failed", "not-found"]);
+		expect(unreadable.calls.map((call) => call.tool)).toEqual(["jira_rest_issue_attachments", "jira_rest_attachment_head"]);
+		expect(readJsonDir(previewsDir()).map((entry) => entry.previewId)).toEqual([preview.previewId]);
 	});
 
 	test("an edit refuses a comment another account authored before any send, binds the comment's updated, and completes only when read-back shows it moved and renders every image", async () => {
@@ -1462,7 +1484,7 @@ describe("production adapters", () => {
 		const binding = { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN };
 		const transport = routeTransport(env(), "example");
 		const listed = await transport.listTools(binding, RJ);
-		expect(listed.ok && (listed.data as { name: string }[]).map((tool) => tool.name)).toEqual(["jira_rest_myself", "jira_rest_issue_attachments", "jira_rest_comments_list", "jira_rest_comment_get", "jira_rest_comment_add", "jira_rest_comment_edit"]);
+		expect(listed.ok && (listed.data as { name: string }[]).map((tool) => tool.name)).toEqual(["jira_rest_myself", "jira_rest_issue_attachments", "jira_rest_comments_list", "jira_rest_comment_get", "jira_rest_comment_add", "jira_rest_comment_edit", "jira_rest_attachment_head"]);
 		expect(harness.has("wrapper.log")).toBe(false);
 		// No item: the Provider's own item read fails closed before stdin is consumed.
 		expect(await transport.call(binding, RJ, "jira_rest_myself", {})).toEqual({ ok: false, cause: "refused-precondition", hint: "the credential item could not be read; run the helper's check" });

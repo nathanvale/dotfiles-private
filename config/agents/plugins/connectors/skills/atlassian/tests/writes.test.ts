@@ -4,7 +4,7 @@
 // 22 September 2026 and reply shapes observed live on 23 September 2026.
 import { describe, expect, test } from "bun:test";
 import { OPERATION_SPECS } from "../scripts/dispatch/contract.ts";
-import { accountIdOf, baselineFromReply, effectsFromReply, normalised, observeRestComment, preparation, readBackEvidence, readBackPlan, renderedImagesPresent, resolveMediaAttachments, sameWikiBody, transitionTo, uploadFailed, wikiImageReferences, wikiParts, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
+import { accountIdOf, baselineFromReply, effectsFromReply, normalised, observeRestComment, preparation, readBackEvidence, readBackPlan, magicImageType, renderedImagesPresent, resolveMediaAttachments, sameWikiBody, transitionTo, uploadFailed, wikiImageReferences, wikiParts, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
 
 const never = () => false;
 const CREATE = { projectKey: "PROJ", issueType: "Bug", summary: "Billing broken", description: "first\nsecond" };
@@ -360,17 +360,24 @@ describe("wiki media comments", () => {
 		expect(readBackPlan("issue.comment.media", MEDIA)).toEqual({ tool: "jira_rest_comments_list", args: { issue_key: "PROJ-1" } });
 		expect(readBackPlan("issue.comment.media.update", MEDIA_UPDATE)).toEqual({ tool: "jira_rest_comment_get", args: { issue_key: "PROJ-1", comment_id: "454771" } });
 		const attachments = [{ id: "202457", name: "after.png", contentType: "image/png" }, { id: "202456", name: "before.png", contentType: "image/png" }, { id: "1", name: "notes.pdf", contentType: "application/pdf" }];
-		expect(resolveMediaAttachments(attachments, MEDIA.images)).toEqual({ ok: true, ids: ["202456", "202457"] });
+		expect(resolveMediaAttachments(attachments, MEDIA.images)).toEqual({ ok: true, ids: ["202456", "202457"], types: { "202456": "image/png", "202457": "image/png" }, untyped: [] });
 		expect(resolveMediaAttachments(attachments, ["before.png", "missing.png"])).toEqual({ ok: false, cause: "not-found", reason: "an image named in images is not attached to the issue" });
 		expect(resolveMediaAttachments([...attachments, { id: "202499", name: "after.png" }], MEDIA.images)).toEqual({ ok: false, cause: "input-invalid", reason: "an image named in images matches more than one attachment on the issue; remove the duplicate first" });
-		// Only images render inline, and only Jira's reported MIME type establishes one; a file name proves nothing (re-review case).
+		// Only images render inline. A reported non-image type refuses; a file Jira reports no type for is handed back for a content read, whatever its name.
 		const notImage = { ok: false as const, cause: "input-invalid" as const, reason: "an image named in images is not an image attachment; only image content renders inline" };
-		const unknownType = { ok: false as const, cause: "capability-unavailable" as const, reason: "an image named in images has no reported content type, so its image type cannot be established" };
 		expect(resolveMediaAttachments(attachments, ["notes.pdf", "after.png"])).toEqual(notImage);
 		expect(resolveMediaAttachments([{ id: "2", name: "shot.png", contentType: "application/octet-stream" }], ["shot.png"])).toEqual(notImage);
-		expect(resolveMediaAttachments([{ id: "3", name: "renamed.png" }], ["renamed.png"])).toEqual(unknownType);
-		expect(resolveMediaAttachments([{ id: "3", name: "report.pdf" }], ["report.pdf"])).toEqual(unknownType);
-		expect(resolveMediaAttachments([{ id: "4", name: "Diagram.JPG", contentType: "image/jpeg" }, { id: "5", name: "x.webp", contentType: "IMAGE/WEBP" }], ["Diagram.JPG", "x.webp"])).toEqual({ ok: true, ids: ["4", "5"] });
+		expect(resolveMediaAttachments([{ id: "3", name: "renamed.png" }, { id: "6", name: "report.pdf" }], ["renamed.png", "report.pdf"])).toEqual({ ok: true, ids: ["3", "6"], types: {}, untyped: [{ id: "3", name: "renamed.png" }, { id: "6", name: "report.pdf" }] });
+		expect(resolveMediaAttachments([{ id: "4", name: "Diagram.JPG", contentType: "image/jpeg" }, { id: "5", name: "x.webp", contentType: "IMAGE/WEBP" }], ["Diagram.JPG", "x.webp"])).toEqual({ ok: true, ids: ["4", "5"], types: { "4": "image/jpeg", "5": "image/webp" }, untyped: [] });
+		// First bytes establish the type: the four supported signatures, and nothing else.
+		expect(magicImageType({ bytes: "89504e470d0a1a0a0000000d49484452" })).toBe("image/png");
+		expect(magicImageType(wrapped({ bytes: "FFD8FFE000104A46494600010101" }))).toBe("image/jpeg");
+		expect(magicImageType({ bytes: "474946383961" })).toBe("image/gif");
+		expect(magicImageType({ bytes: "474946383761" })).toBe("image/gif");
+		expect(magicImageType({ bytes: "52494646245a000057454250565038" })).toBe("image/webp");
+		for (const bytes of ["255044462d312e34", "5249464624", "89504e47", "", "zz", "3c73766720786d6c6e73"]) expect([bytes, magicImageType({ bytes })]).toEqual([bytes, undefined]);
+		expect(magicImageType({ status: 206 })).toBeUndefined();
+		expect(magicImageType(null)).toBeUndefined();
 		expect(accountIdOf(wrapped({ accountId: "712020:me", emailAddress: "me@example.invalid" }))).toBe("712020:me");
 		expect(accountIdOf({ self: "x" })).toBeUndefined();
 		expect(observeRestComment({ id: "454771", author: { accountId: "712020:me" }, updated: "u1", renderedBody: "<p>x</p>", body: "x" })).toEqual({ id: "454771", authorAccountId: "712020:me", updated: "u1", renderedBody: "<p>x</p>" });
@@ -468,8 +475,8 @@ describe("wiki media comments", () => {
 		const idsOnly = { id: "902", body: STORED, renderedBody: '<img src="/secure/attachment/202456/x"><img src="/secure/attachment/202457/y">' };
 		expect(baselineFromReply("issue.comment.media", MEDIA, list(historical, sameImagesOtherText, idsOnly, { id: "901", body: STORED, renderedBody: rendered("202456") }), undefined, IDS)).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: ["900", "902"], revision: null } });
 		const editBaseline = baselineFromReply("issue.comment.media.update", MEDIA_UPDATE, { id: "454771", author: { accountId: "712020:me" }, updated: "u1", renderedBody: "<p>old</p>" });
-		expect(editBaseline).toMatchObject({ kind: "observed", baseline: { effectIds: [], commentIds: ["454771"] } });
-		expect((editBaseline as { baseline: { revision: string } }).baseline.revision).toMatch(/^[0-9a-f]{64}$/);
+		// The comment's updated is the journal revision the preparation binds; the baseline revision is left to the verified image types.
+		expect(editBaseline).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: ["454771"], revision: null } });
 		expect(baselineFromReply("issue.comment.media.update", MEDIA_UPDATE, { id: "454771", renderedBody: "<p>old</p>" })).toEqual({ kind: "indeterminate", reason: "the comment read exposes no updated timestamp to bind the revision" });
 		expect(baselineFromReply("issue.comment.media.update", MEDIA_UPDATE, { id: "1", updated: "u1" })).toEqual({ kind: "indeterminate", reason: "the comment read names a different comment" });
 	});

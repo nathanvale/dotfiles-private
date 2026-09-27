@@ -202,6 +202,9 @@ export interface PreparedContext {
 	stagedFile?: string;
 	// The live transition id that leads to the requested status.
 	transitionId?: string;
+	// The image type established for each attachment a media comment
+	// references, by Jira's reported type or by its first bytes.
+	imageTypes?: Record<string, string>;
 	// Provider identifiers and stable revisions observed before the write. This
 	// is persisted with the preview and compared by read-back, not inferred from
 	// text that may have existed before the preview.
@@ -955,43 +958,53 @@ export function accountIdOf(reply: unknown): string | undefined {
 
 export const AUTHOR_GUARD_REASON = "commentId names a comment another account authored; the media update edits only the principal's own comments";
 
-export type MediaAttachments = { ok: true; ids: string[] } | { ok: false; cause: "not-found" | "input-invalid" | "capability-unavailable"; reason: string };
+// The attachments a media comment references: every id, the image type Jira
+// reported for each, and the ones Jira reported no type for, which the
+// preparation must establish from their content before any write.
+export type MediaAttachments = { ok: true; ids: string[]; types: Record<string, string>; untyped: IssueAttachment[] } | { ok: false; cause: "not-found" | "input-invalid"; reason: string };
 
-// Only an image can render as an <img>, and only Jira's reported MIME type
-// establishes that; a file name proves nothing about its bytes. An attachment
-// whose type Jira did not report is unverifiable and refused before any write.
-function imageType(attachment: IssueAttachment): "image" | "not-image" | "unknown" {
-	if (attachment.contentType === undefined) return "unknown";
-	return attachment.contentType.toLowerCase().startsWith("image/") ? "image" : "not-image";
-}
+export const NOT_IMAGE_REASON = "an image named in images is not an image attachment; only image content renders inline";
 
-function attachmentRefusal(attachment: IssueAttachment): MediaAttachments | null {
-	switch (imageType(attachment)) {
-		case "image":
-			return null;
-		case "not-image":
-			return { ok: false, cause: "input-invalid", reason: "an image named in images is not an image attachment; only image content renders inline" };
-		case "unknown":
-			return { ok: false, cause: "capability-unavailable", reason: "an image named in images has no reported content type, so its image type cannot be established" };
-	}
-}
-
-// Each referenced image must be attached to the issue under exactly one id
-// and be an image by reported type; the ids become the preview baseline an
-// apply must find unchanged.
+// Each referenced image must be attached to the issue under exactly one id.
+// A reported non-image type refuses here; the ids become the preview
+// baseline an apply must find unchanged.
 export function resolveMediaAttachments(attachments: readonly IssueAttachment[], images: readonly string[]): MediaAttachments {
 	const ids: string[] = [];
+	const types: Record<string, string> = {};
+	const untyped: IssueAttachment[] = [];
 	for (const name of images) {
 		const matching = attachments.filter((entry) => entry.name === name);
 		if (matching.length === 0) return { ok: false, cause: "not-found", reason: "an image named in images is not attached to the issue" };
 		if (matching.length > 1) return { ok: false, cause: "input-invalid", reason: "an image named in images matches more than one attachment on the issue; remove the duplicate first" };
 		const attachment = matching[0] as IssueAttachment;
-		const refused = attachmentRefusal(attachment);
-		if (refused) return refused;
+		if (attachment.contentType === undefined) untyped.push(attachment);
+		else if (attachment.contentType.toLowerCase().startsWith("image/")) types[attachment.id] = attachment.contentType.toLowerCase();
+		else return { ok: false, cause: "input-invalid", reason: NOT_IMAGE_REASON };
 		ids.push(attachment.id);
 	}
-	return { ok: true, ids: [...new Set(ids)].sort() };
+	return { ok: true, ids: [...new Set(ids)].sort(), types, untyped };
 }
+
+// The image type an attachment's first bytes prove, from the REST head read
+// ({bytes: hex}). Only these four signatures are accepted; anything else,
+// including a short or malformed read, is undefined.
+const IMAGE_SIGNATURES: readonly [RegExp, string][] = [
+	[/^89504e470d0a1a0a/, "image/png"],
+	[/^ffd8ff/, "image/jpeg"],
+	[/^47494638(?:37|39)61/, "image/gif"],
+	[/^52494646[0-9a-f]{8}57454250/, "image/webp"],
+];
+
+export function magicImageType(reply: unknown): string | undefined {
+	const data = unwrapReply(reply);
+	const hex = isRecord(data) && typeof data.bytes === "string" ? data.bytes.toLowerCase() : undefined;
+	if (hex === undefined || !/^[0-9a-f]*$/.test(hex)) return undefined;
+	return IMAGE_SIGNATURES.find(([signature]) => signature.test(hex))?.[1];
+}
+
+// The verified types, digested into the preview baseline so an apply whose
+// verification differs is refused.
+export const imageTypesDigest = (types: Record<string, string>): string => digest(JSON.stringify(Object.entries(types).sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))));
 
 // Every comment in a REST list that renders the requested images by the
 // bound ids or, before ids are bound, by file name.
@@ -1252,7 +1265,9 @@ function mediaCommentUpdateBaseline(input: WriteInput, reply: unknown): Baseline
 	if (comment.id === undefined) return { kind: "indeterminate", reason: "the comment read names no comment" };
 	if (comment.id !== input.commentId) return { kind: "indeterminate", reason: "the comment read names a different comment" };
 	if (comment.updated === undefined) return { kind: "indeterminate", reason: "the comment read exposes no updated timestamp to bind the revision" };
-	return { kind: "observed", baseline: { ...EMPTY_BASELINE, commentIds: [comment.id], revision: digest(comment.updated) } };
+	// The comment's own `updated` is the journal revision the preparation bound;
+	// the baseline revision carries the verified image types instead.
+	return { kind: "observed", baseline: { ...EMPTY_BASELINE, commentIds: [comment.id] } };
 }
 
 function pageCommentBaseline(input: WriteInput, reply: unknown): BaselineObservation {

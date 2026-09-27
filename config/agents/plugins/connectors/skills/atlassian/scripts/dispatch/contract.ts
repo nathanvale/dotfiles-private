@@ -32,6 +32,9 @@ export const REST_TOOLS = Object.freeze({
 	jira_rest_comment_get: Object.freeze(["issue_key", "comment_id"]),
 	jira_rest_comment_add: Object.freeze(["issue_key", "body"]),
 	jira_rest_comment_edit: Object.freeze(["issue_key", "comment_id", "body"]),
+	// A bounded read of an attachment's first bytes, to establish the image
+	// type of an attachment Jira reports no MIME type for.
+	jira_rest_attachment_head: Object.freeze(["attachment_id"]),
 });
 export type RestTool = keyof typeof REST_TOOLS;
 export const isRestTool = (tool: string): tool is RestTool => Object.hasOwn(REST_TOOLS, tool);

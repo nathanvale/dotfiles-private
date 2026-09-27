@@ -8,7 +8,7 @@ import type { BindResult, CredentialBinding } from "../custody/index.ts";
 import { type CauseCode, OPERATION_SPECS, type OperationSpec, type Product, type Provenance, type TransactionState } from "./contract.ts";
 import { confirmSchema, type Dependencies, type Input, providerArguments, REPAIR_TEXT, readSchema, type SchemaTool, type TransportFailure, type TransportResult } from "./engine.ts";
 import { canonicalDigest, type Effect, type Evidence, JournalError, type Receipt, type WriteOperation } from "./journal.ts";
-import { AUTHOR_GUARD_REASON, accountIdOf, baselineFromReply, effectKindOf, effectsFromReply, isObjectDelete, observeIssue, observePage, observeRestComment, type PreparedContext, preparation, type Preparation, readBackEvidence, readBackPlan, type ReadBack, resolveMediaAttachments, type RevisionMatch, transitionTo, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
+import { AUTHOR_GUARD_REASON, accountIdOf, baselineFromReply, effectKindOf, effectsFromReply, imageTypesDigest, isObjectDelete, type IssueAttachment, magicImageType, NOT_IMAGE_REASON, observeIssue, observePage, observeRestComment, type PreparedContext, preparation, type Preparation, readBackEvidence, readBackPlan, type ReadBack, resolveMediaAttachments, type RevisionMatch, transitionTo, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
 
 export interface Outcome {
 	cause: CauseCode;
@@ -197,6 +197,21 @@ async function preparePage(route: Route, ctx: PreparedContext, pageId: string): 
 // through the owned REST route: every referenced image must be attached to
 // the issue exactly once. An edit also reads the principal and the comment,
 // and refuses a comment another account authored before any write.
+// An attachment Jira reports no type for (every file the Community upload
+// sends arrives that way) is established from its first bytes through the
+// REST route: PNG, JPEG, GIF, or WebP, or refused. A read that fails refuses.
+async function verifiedImageTypes(route: Route, types: Record<string, string>, untyped: readonly IssueAttachment[]): Promise<{ types: Record<string, string> } | { outcome: Outcome }> {
+	const verified = { ...types };
+	for (const attachment of untyped) {
+		const head = await route.call("jira_rest_attachment_head", { attachment_id: attachment.id });
+		if (head.cause !== "success") return { outcome: failed(head) };
+		const type = magicImageType(head.data);
+		if (type === undefined) return { outcome: refusal("input-invalid", NOT_IMAGE_REASON) };
+		verified[attachment.id] = type;
+	}
+	return { types: verified };
+}
+
 async function prepareMedia(route: Route, ctx: PreparedContext, step: Extract<Preparation, { kind: "media" | "media-comment" }>): Promise<Prepared> {
 	const listed = await route.call("jira_rest_issue_attachments", { issue_key: step.issueKey });
 	if (listed.cause !== "success") return { outcome: failed(listed) };
@@ -204,7 +219,9 @@ async function prepareMedia(route: Route, ctx: PreparedContext, step: Extract<Pr
 	if (issue.key !== step.issueKey) return { outcome: refusal("capability-unavailable", "the preparatory Jira read names a different issue") };
 	const resolved = resolveMediaAttachments(issue.attachments, step.images);
 	if (!resolved.ok) return { outcome: refusal(resolved.cause, resolved.reason) };
-	const prepared: PreparedContext = { ...ctx, baseline: { ...ctx.baseline, effectIds: resolved.ids } };
+	const verified = await verifiedImageTypes(route, resolved.types, resolved.untyped);
+	if ("outcome" in verified) return verified;
+	const prepared: PreparedContext = { ...ctx, imageTypes: verified.types, baseline: { ...ctx.baseline, effectIds: resolved.ids, revision: imageTypesDigest(verified.types) } };
 	if (step.kind === "media") return { ctx: prepared };
 	const me = await route.call("jira_rest_myself", {});
 	if (me.cause !== "success") return { outcome: failed(me) };
@@ -226,10 +243,11 @@ async function bindBaseline(route: Route, operation: WriteOperation, input: Writ
 	const observed = baselineFromReply(operation, input, read.data, route.trustedOrigin, ctx.baseline);
 	if (observed.kind === "refused") return { outcome: refusal("input-invalid", observed.reason) };
 	if (observed.kind === "indeterminate") return { outcome: refusal("capability-unavailable", `${observed.reason}; live qualification is required`) };
-	// Identifiers the preparation bound (the media attachment ids) survive the
-	// baseline read, which binds the comment candidates and revision.
+	// What the preparation bound (the media attachment ids and the digest of
+	// their verified image types) survives the baseline read, which binds the
+	// comment candidates and, for other operations, the revision.
 	const effectIds = [...new Set([...ctx.baseline.effectIds, ...observed.baseline.effectIds])];
-	return { ctx: { ...ctx, baseline: { ...observed.baseline, effectIds } } };
+	return { ctx: { ...ctx, baseline: { ...observed.baseline, effectIds, revision: observed.baseline.revision ?? ctx.baseline.revision } } };
 }
 
 // Preparatory reads before a write: the target's current revision, then
@@ -343,6 +361,7 @@ export async function previewFlow(session: Session, spec: OperationSpec, input: 
 			objectIdentity: preview.objectIdentity,
 			revision: context.ctx.revision,
 			baseline: context.ctx.baseline,
+			imageTypes: context.ctx.imageTypes,
 			expiresAt: preview.expiresAt,
 			input: context.input,
 			arguments: context.bound,

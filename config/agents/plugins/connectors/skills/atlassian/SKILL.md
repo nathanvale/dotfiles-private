@@ -135,9 +135,11 @@ fallback: a Community operation that fails stays failed.
 - `images` lists exactly the file names the body references. A name the body
   does not reference, or a reference `images` does not name, refuses with
   `input-invalid` before any read.
-- Every name must be attached to the issue under one id. A missing file
-  refuses `not-found`; a duplicated name refuses `input-invalid`. Attach
-  with `issue.attach` first.
+- Every name must be attached to the issue under one id and be an image:
+  by the type Jira reports, or, when Jira reports none (every file
+  `issue.attach` uploads), by its first bytes (PNG, JPEG, GIF, or WebP). A
+  missing file refuses `not-found`; a duplicated name or a non-image refuses
+  `input-invalid`. Attach with `issue.attach` first.
 - The preview binds the wiki body and the attachment ids; an attachment
   replaced under a new id between preview and apply refuses the apply
   (`refused-preview`). Read-back proves an `<img>` per bound attachment in

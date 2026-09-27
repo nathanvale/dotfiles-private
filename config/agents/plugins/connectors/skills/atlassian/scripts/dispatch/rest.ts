@@ -19,7 +19,14 @@ export interface RestRequest {
 	// them to the origin its own credential item names, never to an argument.
 	path: string;
 	body?: { body: string };
+	// A bounded binary read: the Provider sends this Range and returns the
+	// first bytes as hex instead of parsing JSON.
+	range?: string;
 }
+
+// How many leading bytes the attachment head read returns: enough for every
+// supported image signature (WebP needs 12).
+export const HEAD_BYTES = 16;
 
 export interface RestReply {
 	status: number;
@@ -32,13 +39,14 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 const issueKey = (value: unknown): value is string => typeof value === "string" && ISSUE_KEY.test(value);
 const commentId = (value: unknown): value is string => typeof value === "string" && NUMERIC_ID.test(value);
+const attachmentId = commentId;
 const wikiBody = (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 && value.length <= BODY_LIMIT;
 
 function validArguments(tool: RestTool, args: Record<string, unknown>): boolean {
 	const required = REST_TOOLS[tool];
 	const keys = Object.keys(args);
 	if (keys.length !== required.length || required.some((key) => !(key in args))) return false;
-	return keys.every((key) => (key === "issue_key" ? issueKey(args[key]) : key === "comment_id" ? commentId(args[key]) : key === "body" ? wikiBody(args[key]) : false));
+	return keys.every((key) => (key === "issue_key" ? issueKey(args[key]) : key === "comment_id" ? commentId(args[key]) : key === "attachment_id" ? attachmentId(args[key]) : key === "body" ? wikiBody(args[key]) : false));
 }
 
 // The exact request for one REST tool, or null when the tool or its arguments
@@ -60,6 +68,10 @@ export function restRequest(tool: string, args: unknown): RestRequest | null {
 			return { method: "POST", path: `${issue}/comment?${RENDERED}`, body: { body: args.body as string } };
 		case "jira_rest_comment_edit":
 			return { method: "PUT", path: `${issue}/comment/${args.comment_id as string}?${RENDERED}`, body: { body: args.body as string } };
+		case "jira_rest_attachment_head":
+			// redirect=false makes Jira serve the bytes itself instead of a 303 to
+			// the media store, which the Provider refuses to follow.
+			return { method: "GET", path: `/rest/api/2/attachment/content/${args.attachment_id as string}?redirect=false`, range: `bytes=0-${HEAD_BYTES - 1}` };
 	}
 }
 
