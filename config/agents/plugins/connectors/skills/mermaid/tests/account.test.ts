@@ -187,6 +187,12 @@ test.skipIf(!OFFICIAL_MCPORTER)("writes apply only a fresh preview, once; an unk
 		};
 		const apply = (operation: string, input: string, previewId: string) => run(["run", "mermaid", operation, "--input", input, "--apply", previewId]);
 
+		// Spec AC19: the account tier lists diagrams through run, before any
+		// write, and relays only the listing's identifiers and titles.
+		const listed = await run(["run", "mermaid", "list_mermaid_chart_diagrams", "--input", JSON.stringify({ projectID: "proj-1", clientName: CLIENT })]);
+		expect({ code: listed.code, data: listed.result.data }).toEqual({ code: 0, data: { connector: "mermaid", operation: "list_mermaid_chart_diagrams", tier: "account", result: [{ documentID: "doc-1", title: "Seed" }] } });
+		expect(stub.calls).toEqual([{ name: "list_mermaid_chart_diagrams", arguments: { projectID: "proj-1", clientName: CLIENT } }]);
+
 		// A preview sends nothing; an apply with other input is refused unsent.
 		const first = await preview("update_mermaid_chart_diagram", update("Renamed"));
 		expect(writeCalls(stub)).toEqual([]);
@@ -235,6 +241,7 @@ test.skipIf(!OFFICIAL_MCPORTER)("writes apply only a fresh preview, once; an unk
 		expect(settled.result.data?.receipt).toMatchObject({ status: "completed", effects: [{ kind: "mermaid-diagram", id: "doc-2" }] });
 		expect((await run(["recover", "mermaid"])).result.data?.receipts).toEqual([]);
 		expect(writeCalls(stub)).toHaveLength(3);
+
 
 		// Journal records hold identifiers and digests, never diagram content,
 		// and a completed fixture write never promotes the live state.

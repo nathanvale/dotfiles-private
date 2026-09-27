@@ -301,6 +301,9 @@ test.skipIf(!official)("run and schema hand the verified MCPorter a no-consent r
 	const reads: ReadonlyArray<readonly [string, string[], readonly [string, ...string[]]]> = [
 		["reader", ["run", "canva", "--select", "account=reader", "search-designs", "--input", '{"query":"poster"}'], ["call", "canva-connectors.search-designs", "--args", '{"query":"poster"}', "--output", "json", "--no-oauth"]],
 		["schemer", ["schema", "canva", "--select", "account=schemer"], ["list", "canva-connectors", "--schema", "--json", "--no-oauth"]],
+		// Spec AC19: each remaining declared Canva operation is reachable through run.
+		["pages", ["run", "canva", "--select", "account=pages", "get-design-pages", "--input", '{"design_id":"D1"}'], ["call", "canva-connectors.get-design-pages", "--args", '{"design_id":"D1"}', "--output", "json", "--no-oauth"]],
+		["content", ["run", "canva", "--select", "account=content", "get-design-content", "--input", '{"design_id":"D1"}'], ["call", "canva-connectors.get-design-content", "--args", '{"design_id":"D1"}', "--output", "json", "--no-oauth"]],
 	];
 	try {
 		for (const [account, argv, expected] of reads) {
@@ -312,7 +315,8 @@ test.skipIf(!official)("run and schema hand the verified MCPorter a no-consent r
 			expect({ account, argv: held?.argv }).toEqual({ account, argv: [...expected] });
 			expectAccountEnv(fixture, account, held?.env ?? []);
 			for (const secret of Object.values(AMBIENT_SECRETS)) expect(result.stdout).not.toContain(secret);
-			onlyEnvelope(result);
+			// Offline, the held read reaches MCPorter and then cannot reach Canva.
+			expect({ account, code: result.code, envelope: onlyEnvelope(result).result }).toMatchObject({ account, code: 75, envelope: { commandIdentity: `connectors.${argv[0]}`, outcome: "refused", failureClass: "transient" } });
 		}
 	} finally {
 		fixture.dispose();

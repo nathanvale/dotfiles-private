@@ -100,12 +100,15 @@ test.skipIf(!OFFICIAL_MCPORTER)("unconfigured connectors stay keyless: own endpo
 			expect((await run(["auth", "status", connector.id])).result.data).toEqual({ connector: connector.id, mode: "keyless", nextStep: `to use an account key, run connectors auth configure ${connector.id} --input '{"item":"<id>"}'` });
 			const schema = await run(["schema", connector.id]);
 			expect({ code: schema.code, mode: schema.result.data?.mode, server: schema.result.data?.server, allowedTools: schema.result.data?.allowedTools, listed: toolNames(schema.result.data?.schema) }).toEqual({ code: 0, mode: "keyless", server: connector.id, allowedTools: connector.tools, listed: connector.tools });
-			const read = await run(runArgs(connector));
-			expect({ code: read.code, data: read.result.data }).toEqual({ code: 0, data: { connector: connector.id, operation: connector.tools[0], mode: "keyless", result: { tool: connector.tools[0], arguments: INPUT } } });
+			// Spec AC19: every declared operation is reachable through run.
+			for (const tool of connector.tools) {
+				const read = await run(runArgs(connector, tool));
+				expect({ code: read.code, data: read.result.data }).toEqual({ code: 0, data: { connector: connector.id, operation: tool, mode: "keyless", result: { tool, arguments: INPUT } } });
+			}
 			expect(station(await run(runArgs(connector, UNLISTED_TOOL)))).toEqual({ code: 2, cause: "USAGE_OPERATION_UNKNOWN", connectorCause: "operation-not-allowed" });
 			expect(stub(connector).headers.length).toBeGreaterThan(0);
 			expect(new Set(stub(connector).headers)).toEqual(new Set(["absent"]));
-			expect(stub(connector).calls).toEqual([{ name: connector.tools[0], arguments: INPUT }]);
+			expect(stub(connector).calls).toEqual(connector.tools.map((name) => ({ name, arguments: INPUT })));
 		}
 		expect(machine.lines("op-calls.jsonl")).toEqual([]);
 		expect(machine.lines("keychain-reads.jsonl")).toEqual([]);
@@ -130,8 +133,11 @@ for (const [configured, other] of [[CONTEXT7, FIRECRAWL], [FIRECRAWL, CONTEXT7]]
 
 			const schema = await run(["schema", configured.id]);
 			expect({ code: schema.code, mode: schema.result.data?.mode, allowedTools: schema.result.data?.allowedTools, listed: toolNames(schema.result.data?.schema) }).toEqual({ code: 0, mode: "account", allowedTools: configured.tools, listed: configured.tools });
-			const read = await run(runArgs(configured));
-			expect({ code: read.code, data: read.result.data }).toEqual({ code: 0, data: { connector: configured.id, operation: configured.tools[0], mode: "account", result: { tool: configured.tools[0], arguments: INPUT } } });
+			for (const tool of configured.tools) {
+				const read = await run(runArgs(configured, tool));
+				expect({ code: read.code, data: read.result.data }).toEqual({ code: 0, data: { connector: configured.id, operation: tool, mode: "account", result: { tool, arguments: INPUT } } });
+			}
+			expect(stub(configured).calls).toEqual(configured.tools.map((name) => ({ name, arguments: INPUT })));
 			expect(station(await run(runArgs(configured, UNLISTED_TOOL)))).toEqual({ code: 2, cause: "USAGE_OPERATION_UNKNOWN", connectorCause: "operation-not-allowed" });
 			// Every request to the configured endpoint carried exactly its key.
 			expect(stub(configured).headers.length).toBeGreaterThan(0);
@@ -142,12 +148,14 @@ for (const [configured, other] of [[CONTEXT7, FIRECRAWL], [FIRECRAWL, CONTEXT7]]
 			expect((await run(runArgs(other))).result.data?.mode).toBe("keyless");
 			expect(new Set(stub(other).headers)).toEqual(new Set(["absent"]));
 
-			// The check, then the schema and the read each as preflight plus
-			// Provider: five reads of this item only.
-			expect(machine.lines("op-calls.jsonl")).toEqual(Array(5).fill(opRead(configured.item)));
+			// The check, then the schema and both reads each as preflight plus
+			// Provider: seven reads of this item only.
+			expect(machine.lines("op-calls.jsonl")).toEqual(Array(7).fill(opRead(configured.item)));
 			const provider = ["__internal", configured.id, "provider"];
 			expect(machine.lines<Record<string, unknown>>("op-parents.jsonl").map((row) => [row.parentRole, row.parentEnvironmentVisible, row.parentHoldsServiceToken, row.parentHoldsProviderToken])).toEqual([
 				[[...provider, "--preflight"], true, false, false],
+				[[...provider, "--preflight"], true, false, false],
+				[provider, true, false, false],
 				[[...provider, "--preflight"], true, false, false],
 				[provider, true, false, false],
 				[[...provider, "--preflight"], true, false, false],
@@ -160,6 +168,8 @@ for (const [configured, other] of [[CONTEXT7, FIRECRAWL], [FIRECRAWL, CONTEXT7]]
 			const label = (executable: string) => (realpathSync(executable) === frontDoor ? "front-door" : realpathSync(executable) === mcporter ? "mcporter" : executable);
 			expect(machine.lines<Record<string, unknown>>("op-parents.jsonl").map((row) => [label(row.grandparentExecutable as string), row.grandparentEnvironmentVisible, row.grandparentHoldsServiceToken, row.grandparentHoldsProviderToken])).toEqual([
 				["front-door", true, false, false],
+				["front-door", true, false, false],
+				["mcporter", true, false, false],
 				["front-door", true, false, false],
 				["mcporter", true, false, false],
 				["front-door", true, false, false],
