@@ -6,14 +6,16 @@ import { planDispatcherRoute, type RoutePlan } from "../../../../bin/provider-ro
 import { safeEnvironment } from "../../../../bin/safe-environment.ts";
 import { bindCredential, bindingChannel, type CredentialBinding, invocationEnvironment, TENANT_PATTERN } from "../custody/index.ts";
 import { stageFile } from "../outbox.ts";
-import { productFor } from "./contract.ts";
+import { productFor, REST_SERVER } from "./contract.ts";
 import type { Dependencies, Transport, TransportFailure, TransportResult } from "./engine.ts";
 import { openJournal } from "./journal.ts";
+import { restReply, restSchema } from "./rest.ts";
 import { translateFailure } from "./translate.ts";
 
 const CALL_TIMEOUT_MS = "30000";
 const SKILLS_ROOT = path.resolve(import.meta.dir, "..", "..", "..", "..", "skills");
 const PROVIDER_SCRIPT = path.resolve(import.meta.dir, "..", "atlassian-community-provider.ts");
+const REST_PROVIDER_SCRIPT = path.resolve(import.meta.dir, "..", "atlassian-rest-provider.ts");
 
 export type Environment = Record<string, string | undefined>;
 
@@ -82,6 +84,25 @@ function providerReadiness(env: Environment, tenant: string, binding: Credential
 	return null;
 }
 
+// The owned REST route for the wiki-comment exception: one REST Provider
+// process per call, given the same invocation environment as the Community
+// Provider, the request on stdin, and nothing on argv. Its one stdout line is
+// an HTTP status and body; a non-success status is translated like a tool
+// error and its Jira message text never leaves this adapter.
+function restCall(env: Environment, tenant: string, binding: CredentialBinding, tool: string, args: Record<string, unknown>): TransportResult {
+	const run = Bun.spawnSync([process.execPath, REST_PROVIDER_SCRIPT], {
+		env: { ...scrubbed(env), ...invocationEnvironment({ tenant, product: "jira", binding }) },
+		stdin: Buffer.from(JSON.stringify({ tool, args })),
+		stdout: "pipe",
+		stderr: "pipe",
+	});
+	if (run.exitCode !== 0) return { ok: false, ...translateFailure({ kind: "process", exitCode: run.exitCode, stderr: run.stderr.toString(), stdout: run.stdout.toString() }) };
+	const reply = restReply(parseJson(run.stdout.toString()));
+	if (!reply) return { ok: false, ...translateFailure({ kind: "malformed", message: "REST Provider output was not a status and body" }) };
+	if (reply.status < 200 || reply.status > 299) return { ok: false, ...translateFailure({ kind: "tool-error", message: `HTTP ${reply.status}` }) };
+	return { ok: true, data: reply.body };
+}
+
 // MCPorter's JSON shapes are not fully documented; a result that is not JSON is
 // reported as malformed rather than guessed. This adapter is the only place
 // provider text is seen; it leaves here as a translated closed cause.
@@ -107,9 +128,13 @@ export function routeTransport(env: Environment, tenant: string, skillsRoot: str
 	};
 	return {
 		async listTools(binding, server) {
+			// The REST route's schema is owned, not live; the REST Provider refuses
+			// the same vocabulary itself.
+			if (server === REST_SERVER) return { ok: true, data: restSchema() };
 			return request(binding, server, ["list", "--schema", "--json", "--timeout", CALL_TIMEOUT_MS]);
 		},
 		async call(binding, server, tool, args) {
+			if (server === REST_SERVER) return restCall(env, tenant, binding, tool, args);
 			return request(binding, server, ["call", tool, "--args", JSON.stringify(args), "--output", "json", "--timeout", CALL_TIMEOUT_MS]);
 		},
 	};

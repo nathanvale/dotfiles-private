@@ -168,7 +168,7 @@ const discovery = (): Outcome => ({
 	data: {
 		contractVersion: "2.0.0",
 		provider: PROVIDER,
-		operations: Object.values(OPERATION_SPECS).map((spec) => ({ id: spec.id, kind: spec.kind, product: spec.product, tool: spec.tool })),
+		operations: Object.values(OPERATION_SPECS).map((spec) => ({ id: spec.id, kind: spec.kind, product: spec.product, provider: spec.provider, tool: spec.tool })),
 		commands: [...COMMANDS],
 		exitMeanings: { 0: "success", 2: "usage refusal", 3: "domain refusal or failure", 4: "schema refusal" },
 		writes: "preview with --preview, then --apply <previewId> with the identical input; an unknown outcome blocks the object until adjudicate resolves it",
