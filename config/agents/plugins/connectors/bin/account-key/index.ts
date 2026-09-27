@@ -17,6 +17,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { Adapter, AdapterRefusal, ExecutionCapabilities, Executed, Prepared, SchemaRequest } from "../adapters/contract.ts";
 import { CREDENTIAL_VAULT, OP_SETUP_REPAIR, SERVICE_TOKEN_HANDOFF } from "../one-password-custody.ts";
+import { MCPORTER_REPAIR_ACTION } from "../mcporter-custody.ts";
 import { planDispatcherRoute, RouteError } from "../provider-route.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "../safe-environment.ts";
 import { accountContext, keyRejectedMarker, type ProviderConnector, runProvider } from "./provider.ts";
@@ -112,7 +113,7 @@ function accountStep(connector: AccountKeyConnector, request: SchemaRequest, ite
 			const unready = preflight(connector, request, item, capabilities);
 			if (unready) return unready;
 			const mcporter = await capabilities.selectMcporter();
-			if (mcporter === null) return refusedExecution("mcporter-unselected", "Run connectors deps repair mcporter");
+			if (mcporter === null) return refusedExecution("mcporter-unselected", MCPORTER_REPAIR_ACTION);
 			const run = Bun.spawnSync([mcporter, ...plan.argv], { env: plan.env, stdin: "ignore", stdout: "pipe", stderr: "pipe" });
 			const result = accountResult(connector, item, run.exitCode, run.stdout.toString(), run.stderr.toString());
 			return result.ok ? { kind: "success", data: shape(result.data) } : result.executed;

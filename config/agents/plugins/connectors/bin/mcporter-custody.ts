@@ -9,7 +9,12 @@ import type { EnvironmentSource } from "./safe-environment.ts";
 
 export type McporterSelection = { ok: true; binary: string; bootstrapped: boolean; recovered?: true } | { ok: false; cause: string; repair: string; bootstrapped?: true; recovered?: true; uncertain?: true };
 export type RepairResult = { ok: true; repaired: boolean; recovered: boolean } | { ok: false; cause: string; effect: "unchanged" | "recovered" | "completed" | "recovered-and-completed" | "unknown" };
-const repair = "Run connectors deps repair mcporter";
+// C4: a refused selection after first use names the explicit repair preview.
+// A failed first use has nothing selected to repair, so it names first use
+// again (Q13c); a preview would only refuse and point back here.
+export const MCPORTER_REPAIR_ACTION = "Run connectors deps repair mcporter --preview";
+const repair = MCPORTER_REPAIR_ACTION;
+const firstUseRetry = "Check that the official MCPorter release is reachable, then retry the same command; first use installs MCPorter";
 export const lockRecovery = "Independently verify the .selection.lock owner identity and that its process has ended, then immediately recheck the lock before removing it and retrying the same command";
 
 function ownedRoot(env: EnvironmentSource): string {
@@ -40,9 +45,21 @@ function selected(root: string, revision = "current"): McporterSelection | null 
 	}
 }
 
+// Read-only view for deps status: the rule ordinary use applies, without the
+// selection lock, recovery, or first-use bootstrap. It never creates state.
+// A leftover .previous beside a failing selection is an interrupted repair.
+export function inspectSelectedMcporter(env: EnvironmentSource): { required: string; present: boolean; executable: string | null; cause: string | null } {
+	const root = ownedRoot(env);
+	const selection = selected(root);
+	if (selection?.ok) return { required: MCPORTER_RELEASE.version, present: true, executable: selection.binary, cause: null };
+	if (existsSync(path.join(root, ".previous"))) return { required: MCPORTER_RELEASE.version, present: true, executable: null, cause: "repair-interrupted" };
+	return { required: MCPORTER_RELEASE.version, present: selection !== null, executable: null, cause: selection?.cause ?? null };
+}
+
 // shlock uses an atomic hard link and checks process liveness before reclaiming
 // a dead owner's lock. No elapsed-time heuristic may evict a live downloader.
-async function withSelectionLock<T>(root: string, action: () => Promise<T>): Promise<T> {
+// Explicit deps repair takes the same lock over its own records root.
+export async function withSelectionLock<T>(root: string, action: () => Promise<T>): Promise<T> {
 	const lock = path.join(root, ".selection.lock");
 	const deadline = Date.now() + 30_000;
 	for (;;) {
@@ -275,7 +292,7 @@ async function bootstrapMissing(root: string, env: EnvironmentSource): Promise<M
 		return promotedSelection?.ok ? { ...promotedSelection, bootstrapped: true } : { ok: false, cause: promotedSelection?.ok === false ? promotedSelection.cause : "selected-release-invalid", repair, bootstrapped: true };
 	} catch {
 		if (promoted) return { ok: false, cause: "post-promotion-failed", repair, bootstrapped: true };
-		return selected(root) ?? { ok: false, cause: "bootstrap-failed", repair };
+		return selected(root) ?? { ok: false, cause: "bootstrap-failed", repair: firstUseRetry };
 	} finally {
 		if (staging) try { rmSync(staging, { recursive: true, force: true }); } catch { /* Selection is unchanged or already committed. */ }
 	}

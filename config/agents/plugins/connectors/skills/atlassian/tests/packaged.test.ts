@@ -49,7 +49,9 @@ const RECOVER_REPAIR = "Receipts, adjudication, and unlock are recover commands:
 const USAGE_REPAIR = "Check the connectors run or recover arguments against connectors --help";
 const UNKNOWN_OPERATION_REPAIR =
 	"Use one Atlassian operation: issue.get, issue.search, issue.transitions, issue.create, issue.update, issue.comment, issue.comment.update, issue.attach, issue.transition, issue.assign, issue.delete, page.get, page.search, page.create, page.update, page.comment, page.attach, page.attachment.delete, page.delete";
-const MCPORTER_REPAIR = "Run connectors deps repair mcporter";
+// A failed first use has nothing selected to repair, so it names first use
+// again (Q13c), never the explicit repair preview.
+const MCPORTER_REPAIR = "Check that the official MCPorter release is reachable, then retry the same command; first use installs MCPorter";
 // The dispatcher's fixed repair text for a not-found read.
 const NOT_FOUND_REPAIR = "the target object was not found or is not visible to this principal";
 // The 14 accepted write operations. The write station sweep keys its rows by

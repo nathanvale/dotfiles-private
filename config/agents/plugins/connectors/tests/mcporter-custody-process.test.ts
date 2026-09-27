@@ -9,25 +9,71 @@ import { createBundle, createFakeMcporterBinDir, runBundle } from "./harness.ts"
 const official = process.env.CONNECTORS_OFFICIAL_RELEASE_FIXTURE;
 if (process.env.CI && !official) throw new Error("CONNECTORS_OFFICIAL_RELEASE_FIXTURE is required for CI process proof");
 
-test("explicit repair refuses an unsafe lock with owner-identity recovery instructions", async () => {
+// Independent oracle: the accepted repair texts. A refused installed
+// selection names the explicit preview (C4); a failed first use has no
+// selection to repair, so it names first use again (Q13c).
+const PREVIEW_REPAIR = "Run connectors deps repair mcporter --preview";
+const FIRST_USE_RETRY = "Check that the official MCPorter release is reachable, then retry the same command; first use installs MCPorter";
+
+type BundleRun = Parameters<typeof runBundle>[2];
+
+// The only released repair: a preview, then its apply.
+async function previewMcporterRepair(bundle: ReturnType<typeof createBundle>, env: BundleRun): Promise<string> {
+	const preview = await runBundle(bundle, ["deps", "repair", "mcporter", "--preview"], env);
+	expect([preview.code, preview.stderr]).toEqual([0, ""]);
+	return JSON.parse(preview.stdout).result.data.previewId;
+}
+
+async function repairMcporterThroughPreview(bundle: ReturnType<typeof createBundle>, env: BundleRun) {
+	return runBundle(bundle, ["deps", "repair", "mcporter", "--apply", await previewMcporterRepair(bundle, env)], env);
+}
+
+test("explicit repair apply refuses an unsafe lock with owner-identity recovery instructions", async () => {
 	const bundle = createBundle();
 	const home = path.join(bundle.root, "home");
 	const state = path.join(bundle.root, "state");
 	const mcporter = path.join(state, "connectors", "mcporter");
+	const current = path.join(mcporter, "current");
 	mkdirSync(home);
-	mkdirSync(mcporter, { recursive: true });
+	mkdirSync(current, { recursive: true, mode: 0o700 });
+	writeFileSync(path.join(current, "release.json"), JSON.stringify({ version: "0.13.13" }), { mode: 0o600 });
+	writeFileSync(path.join(current, "mcporter"), "older mcporter bytes", { mode: 0o700 });
 	const external = path.join(bundle.root, "unrelated-lock-target");
 	writeFileSync(external, "do not change\n");
 	symlinkSync(external, path.join(mcporter, ".selection.lock"));
 	try {
-		const run = await runBundle(bundle, ["deps", "repair", "mcporter"], { home, extraEnv: { XDG_STATE_HOME: state }, timeoutMs: 5000 });
-		expect(run.code).toBe(1);
+		const run = await repairMcporterThroughPreview(bundle, { home, extraEnv: { XDG_STATE_HOME: state }, timeoutMs: 5000 });
+		expect(run.code).toBe(3);
 		expect(run.stderr).toBe("");
 		const result = JSON.parse(run.stdout).result;
-		expect(result.causeCode).toBe("INTERNAL_MCPORTER_REPAIR_UNKNOWN");
+		expect(result).toMatchObject({ commandIdentity: "connectors.deps.repair.apply", causeCode: "DOMAIN_DEPS_REPAIR_EFFECT_UNKNOWN", effectClass: "external", transactionState: "unknown" });
+		expect(result.effects).toEqual({ completed: ["deps-repair-receipt"], remaining: [], uncertain: ["mcporter-repair"], inventoryComplete: true });
+		expect(readFileSync(path.join(current, "release.json"), "utf8")).toBe(JSON.stringify({ version: "0.13.13" }));
 		expect(result.repairAction).toBe("Independently verify the .selection.lock owner identity and that its process has ended, then immediately recheck the lock before removing it and retrying the same command");
 		expect(readFileSync(external, "utf8")).toBe("do not change\n");
 		expect(lstatSync(path.join(mcporter, ".selection.lock")).isSymbolicLink()).toBe(true);
+	} finally { bundle.dispose(); }
+});
+
+// A later wrong selection must lead straight to the explicit preview. A
+// generic doctor next action would contradict the repair command in the same
+// envelope and leave an agent without one unambiguous next step.
+test("a mismatched selected MCPorter names repair preview as its next action", async () => {
+	const bundle = createBundle();
+	bundle.addSkill("keyless-fixture-skill");
+	const home = path.join(bundle.root, "home");
+	const state = path.join(bundle.root, "state");
+	const current = path.join(state, "connectors", "mcporter", "current");
+	mkdirSync(home);
+	mkdirSync(current, { recursive: true, mode: 0o700 });
+	writeFileSync(path.join(current, "release.json"), JSON.stringify({ version: "0.13.13" }), { mode: 0o600 });
+	writeFileSync(path.join(current, "mcporter"), "older mcporter bytes", { mode: 0o700 });
+	try {
+		const run = await runBundle(bundle, ["schema", "keyless-fixture-skill"], { home, extraEnv: { XDG_STATE_HOME: state } });
+		expect([run.code, run.stderr, run.stdout.trim().split("\n").length]).toEqual([3, "", 1]);
+		const result = JSON.parse(run.stdout).result;
+		expect(result).toMatchObject({ causeCode: "DOMAIN_MCPORTER_REPAIR_REQUIRED", transactionState: "unchanged", repairAction: PREVIEW_REPAIR, nextAction: "connectors.deps.repair.preview" });
+		expect(readFileSync(path.join(current, "release.json"), "utf8")).toBe(JSON.stringify({ version: "0.13.13" }));
 	} finally { bundle.dispose(); }
 });
 
@@ -78,7 +124,7 @@ test.skipIf(!official)("packaged first use selects verified MCPorter despite hos
 		expect(mismatch.code).toBe(3);
 		expect(mismatch.stderr).toBe("");
 		expect(JSON.parse(mismatch.stdout).result.causeCode).toBe("DOMAIN_MCPORTER_REPAIR_REQUIRED");
-		expect(JSON.parse(mismatch.stdout).result.repairAction).toBe("Run connectors deps repair mcporter");
+		expect(JSON.parse(mismatch.stdout).result.repairAction).toBe(PREVIEW_REPAIR);
 		const priorBinary = readFileSync(path.join(selected, "mcporter"));
 		// Crash window after moving the previous selection aside. The next
 		// ordinary process restores it and still refuses the mismatch.
@@ -91,17 +137,19 @@ test.skipIf(!official)("packaged first use selects verified MCPorter despite hos
 		expect(readFileSync(path.join(selected, "mcporter"))).toEqual(priorBinary);
 		expect(existsSync(path.join(state, "connectors", "mcporter", ".previous"))).toBe(false);
 		writeFileSync(path.join(source, "mcporter_0.14.0_darwin_arm64.tar.gz"), "bad release bytes");
-		const failedRepair = await runBundle(bundle, ["deps", "repair", "mcporter"], { home, binDir: hostile.binDir, extraEnv: environment, timeoutMs: 30000 });
+		const failedRepair = await repairMcporterThroughPreview(bundle, { home, binDir: hostile.binDir, extraEnv: environment, timeoutMs: 30000 });
 		expect(failedRepair.code).toBe(3);
 		expect(failedRepair.stderr).toBe("");
-		expect(JSON.parse(failedRepair.stdout).result.causeCode).toBe("DOMAIN_MCPORTER_REPAIR_FAILED");
+		expect(JSON.parse(failedRepair.stdout).result).toMatchObject({ causeCode: "DOMAIN_DEPS_REPAIR_FAILED_RECORDED", effectClass: "external" });
+		expect(JSON.parse(failedRepair.stdout).result.effects.completed).toEqual(["deps-repair-receipt"]);
 		expect(readFileSync(path.join(selected, "mcporter"))).toEqual(priorBinary);
 		expect(JSON.parse(readFileSync(path.join(selected, "release.json"), "utf8"))).toEqual({ version: "0.0.0" });
 		cpSync(path.join(official!, "mcporter_0.14.0_darwin_arm64.tar.gz"), path.join(source, "mcporter_0.14.0_darwin_arm64.tar.gz"));
-		const repaired = await runBundle(bundle, ["deps", "repair", "mcporter"], { home, binDir: hostile.binDir, extraEnv: environment, timeoutMs: 30000 });
+		const repaired = await repairMcporterThroughPreview(bundle, { home, binDir: hostile.binDir, extraEnv: environment, timeoutMs: 30000 });
 		expect(repaired.code).toBe(0);
 		expect(repaired.stderr).toBe("");
-		expect(JSON.parse(repaired.stdout).result.effects.completed).toEqual(["mcporter-repair"]);
+		expect(JSON.parse(repaired.stdout).result).toMatchObject({ causeCode: "SUCCESS_DEPS_REPAIRED", effectClass: "external" });
+		expect(JSON.parse(repaired.stdout).result.effects.completed).toEqual(["deps-repair-receipt", "mcporter-repair"]);
 		expect(JSON.parse(readFileSync(path.join(selected, "release.json"), "utf8"))).toEqual({ version: "0.14.0" });
 		const requested = await runBundle(bundle, ["schema", "keyless-fixture-skill"], { home, binDir: hostile.binDir, extraEnv: { ...environment, CONNECTORS_TEST_RELEASE_DIR: path.join(bundle.root, "missing-source") }, timeoutMs: 30000 });
 		expect(requested.code).toBe(0);
@@ -173,10 +221,10 @@ test.skipIf(!official)("independent first-use and repair processes serialize sel
 		expect(readFileSync(path.join(current, "mcporter"))).toEqual(readFileSync(path.join(official!, "mcporter")));
 		expect(JSON.parse(readFileSync(path.join(current, "release.json"), "utf8"))).toEqual({ version: "0.14.0" });
 		writeFileSync(path.join(current, "release.json"), JSON.stringify({ version: "0.0.0" }));
-		const repairs = await Promise.all([runBundle(bundle, ["deps", "repair", "mcporter"], environment), runBundle(bundle, ["deps", "repair", "mcporter"], environment)]);
-		expect(repairs.map((run) => run.code)).toEqual([0, 0]);
+		const apply = ["deps", "repair", "mcporter", "--apply", await previewMcporterRepair(bundle, environment)];
+		const repairs = await Promise.all([runBundle(bundle, apply, environment), runBundle(bundle, apply, environment)]);
 		expect(repairs.map((run) => run.stderr)).toEqual(["", ""]);
-		expect(repairs.map((run) => JSON.parse(run.stdout).result.effects.completed)).toEqual([["mcporter-repair"], ["mcporter-repair"]]);
+		expect(repairs.map((run) => JSON.parse(run.stdout).result.causeCode).sort()).toEqual(["DOMAIN_DEPS_PREVIEW_CONSUMED", "SUCCESS_DEPS_REPAIRED"]);
 		expect(readFileSync(path.join(current, "mcporter"))).toEqual(readFileSync(path.join(official!, "mcporter")));
 		expect(JSON.parse(readFileSync(path.join(current, "release.json"), "utf8"))).toEqual({ version: "0.14.0" });
 		expect(existsSync(previous)).toBe(false);
@@ -238,12 +286,12 @@ test.skipIf(!official)("interrupted repair reports both durable recovery and rep
 		writeFileSync(path.join(current, "release.json"), JSON.stringify({ version: "0.0.0" }));
 		const priorBinary = readFileSync(path.join(current, "mcporter"));
 		renameSync(current, path.join(root, ".previous"));
-		const run = await runBundle(bundle, ["deps", "repair", "mcporter"], environment);
+		const run = await repairMcporterThroughPreview(bundle, environment);
 		expect(run.code).toBe(0);
 		expect(run.stderr).toBe("");
 		const result = JSON.parse(run.stdout).result;
-		expect(result.commandIdentity).toBe("connectors.deps.repair.mcporter");
-		expect(result.effects).toEqual({ completed: ["mcporter-recovery", "mcporter-repair"], remaining: [], uncertain: [], inventoryComplete: true });
+		expect(result).toMatchObject({ commandIdentity: "connectors.deps.repair.apply", effectClass: "external" });
+		expect(result.effects).toEqual({ completed: ["deps-repair-receipt", "mcporter-recovery", "mcporter-repair"], remaining: [], uncertain: [], inventoryComplete: true });
 		expect(readFileSync(path.join(current, "mcporter"))).toEqual(priorBinary);
 		expect(JSON.parse(readFileSync(path.join(current, "release.json"), "utf8"))).toEqual({ version: "0.14.0" });
 		expect(existsSync(path.join(root, ".previous"))).toBe(false);
@@ -257,7 +305,7 @@ test.skipIf(!official)("post-repair output validation failure retains the durabl
 	const state = path.join(bundle.root, "state");
 	const home = path.join(bundle.root, "home");
 	mkdirSync(release); mkdirSync(state); mkdirSync(home);
-	buildFaultedFrontDoor(bundle.root, bundle.binary, { find: 'causeCode: "SUCCESS_MCPORTER_REPAIRED",', replace: 'causeCode: "SUCCESS_UNCHANGED",' });
+	buildFaultedFrontDoor(bundle.root, bundle.binary, { find: 'emitDepsRepair(identity, "SUCCESS_DEPS_REPAIRED",', replace: 'emitDepsRepair(identity, "SUCCESS_UNCHANGED",' });
 	cpSync(path.join(official!, "mcporter_0.14.0_darwin_arm64.tar.gz"), path.join(release, "mcporter_0.14.0_darwin_arm64.tar.gz"));
 	cpSync(path.join(official!, "provenance.json"), path.join(release, "provenance.json"));
 	const env = { home, binDir: hostile.binDir, extraEnv: { XDG_STATE_HOME: state, CONNECTORS_TEST_RELEASE_DIR: release }, timeoutMs: 30000 };
@@ -266,25 +314,24 @@ test.skipIf(!official)("post-repair output validation failure retains the durabl
 		expect((await runBundle(bundle, ["schema", "keyless-fixture-skill"], env)).code).toBe(0);
 		const selected = path.join(state, "connectors", "mcporter", "current");
 		writeFileSync(path.join(selected, "release.json"), JSON.stringify({ version: "0.0.0" }));
-		const first = await runBundle(bundle, ["deps", "repair", "mcporter"], env);
+		const first = await repairMcporterThroughPreview(bundle, env);
 		expect(first.code).toBe(1);
 		expect(first.stderr).toBe("");
 		expect(first.stdout.trim().split("\n")).toHaveLength(1);
 		expect(JSON.parse(readFileSync(path.join(selected, "release.json"), "utf8"))).toEqual({ version: "0.14.0" });
 		expect(existsSync(path.join(selected, "mcporter"))).toBe(true);
 		const result = JSON.parse(first.stdout).result;
-		expect(result.causeCode).toBe("INTERNAL_UNEXPECTED_AFTER_REPAIR");
-		expect(result.transactionState).toBe("completed");
-		expect(result.effects.completed).toEqual(["mcporter-repair"]);
+		expect(result).toMatchObject({ commandIdentity: "connectors.deps.repair.apply", causeCode: "INTERNAL_DEPS_REPAIR_AFTER_EFFECT", effectClass: "external", transactionState: "completed" });
+		expect(result.effects.completed).toEqual(["deps-repair-receipt", "mcporter-repair"]);
 		writeFileSync(path.join(selected, "release.json"), JSON.stringify({ version: "0.0.0" }));
 		renameSync(selected, path.join(state, "connectors", "mcporter", ".previous"));
-		const recovered = await runBundle(bundle, ["deps", "repair", "mcporter"], env);
+		const recovered = await repairMcporterThroughPreview(bundle, env);
 		expect(recovered.code).toBe(1);
 		expect(recovered.stderr).toBe("");
 		expect(recovered.stdout.trim().split("\n")).toHaveLength(1);
 		expect(JSON.parse(readFileSync(path.join(selected, "release.json"), "utf8"))).toEqual({ version: "0.14.0" });
 		expect(existsSync(path.join(state, "connectors", "mcporter", ".previous"))).toBe(false);
-		expect(JSON.parse(recovered.stdout).result.effects.completed).toEqual(["mcporter-recovery", "mcporter-repair"]);
+		expect(JSON.parse(recovered.stdout).result.effects.completed).toEqual(["deps-repair-receipt", "mcporter-recovery", "mcporter-repair"]);
 	} finally { hostile.dispose(); bundle.dispose(); }
 }, 30000);
 
@@ -405,7 +452,7 @@ function expectBootstrapRefusal(run: Awaited<ReturnType<typeof runBundle>>) {
 	expect(envelope.result.commandIdentity).toBe("connectors.schema");
 	expect(envelope.result.causeCode).toBe("DOMAIN_MCPORTER_REPAIR_REQUIRED");
 	expect(envelope.result.transactionState).toBe("unchanged");
-	expect(envelope.result.repairAction).toBe("Run connectors deps repair mcporter");
+	expect(envelope.result.repairAction).toBe(FIRST_USE_RETRY);
 }
 
 test("packaged first use behind a stalled release host refuses at its deadline and leaves no lock or staging", async () => {

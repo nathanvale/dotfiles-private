@@ -219,3 +219,32 @@ export function installedUv(env: EnvironmentSource): string | null {
 	const executable = uvExecutablePath(path.join(stateRoot(env), "connectors", "setup", "uv", "installs"));
 	return acceptedUv(executable) ? executable : null;
 }
+
+export type SelectionView = { required: string; present: boolean; executable: string | null; cause: string | null };
+
+function entryPresent(target: string): boolean {
+	try {
+		lstatSync(target);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+function view(required: string, executable: string | null, present: boolean): SelectionView {
+	if (executable) return { required, present: true, executable, cause: null };
+	return { required, present, executable: null, cause: present ? "selection-invalid" : null };
+}
+
+// Read-only views for deps status by the rules uv setup and ordinary use
+// apply. A refused selection record or install is present but not ready.
+export function inspectSelectedMise(env: EnvironmentSource): SelectionView {
+	const root = stateRoot(env);
+	const directory = path.join(root, "connectors", "setup", "mise");
+	const executable = path.join(directory, `mise-${MISE_RELEASE.version}-${MISE_RELEASE.binarySha256}`);
+	return view(MISE_RELEASE.version, selectedMise(executable, root) ? executable : null, entryPresent(path.join(directory, "mise-selected")));
+}
+
+export function inspectSelectedUv(env: EnvironmentSource): SelectionView {
+	return view(UV_VERSION, installedUv(env), entryPresent(uvVersionPath(path.join(stateRoot(env), "connectors", "setup", "uv", "installs"))));
+}

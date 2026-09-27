@@ -19,7 +19,9 @@ const AVAILABLE_PATHS = [
 	"connectors.auth",
 	"connectors.config.show",
 	"connectors.config.validate",
-	"connectors.deps.repair.mcporter",
+	"connectors.deps.repair.apply",
+	"connectors.deps.repair.preview",
+	"connectors.deps.status",
 	"connectors.discovery",
 	"connectors.dispatch",
 	"connectors.doctor",
@@ -60,13 +62,22 @@ describe("compiled front door: discovery", () => {
 		// Unlock is the one recovery route that takes a previewId as well.
 		expect(envelope.result.data.commands.find((c: { commandIdentity: string }) => c.commandIdentity === "connectors.recover.unlock")?.summary).toBe("Release the write lock a receipt (by runId) or a preview (by previewId) left behind once its holder has exited");
 		expect(envelope.result.data.signalExits).toEqual(SIGNAL_EXITS);
-		// Independent literal of the accepted exclusions: setup and MCPorter
-		// repair are advertised above, so no exclusion may deny them.
+	});
+
+	// PARTIAL STATE, RED BY DESIGN (Ticket #141 F-b, unit 2b): the final AC19
+	// and C4 surface also adds deps update preview and apply, so no deps
+	// exclusion remains. This binary still excludes deps update. test.failing
+	// keeps that gap visible; the deps update unit must turn this into an
+	// ordinary test.
+	test.failing("discovery lists the final AC19 exclusions with no deps exclusion (RED until deps update lands)", async () => {
+		const envelope = JSON.parse((await runFrontDoor(["--discover", "--json"])).stdout);
+		// Independent literal of the accepted exclusions: setup and every deps
+		// route are part of the accepted surface, so no exclusion may deny them.
 		expect(envelope.result.data.effectExclusions).toEqual([
 			"any credential value read by the front-door process; a 1Password-custody credential is read only by this executable started in its adapter's internal custody or Provider role, fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
 			"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
 			"any provider write without a recorded preview and a durable write receipt, and any retry or replay of a write whose effect is unknown",
-			"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, run --preview or --apply and recover for one with no write or recovery step, and auth logout for every connector; deps covers only explicit MCPorter repair",
+			"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, run --preview or --apply and recover for one with no write or recovery step, and auth logout for every connector",
 		]);
 	});
 
@@ -84,6 +95,9 @@ describe("compiled front door: discovery", () => {
 		expect(() => JSON.parse(result.stdout)).toThrow();
 		expect(result.stdout).toContain("--discover --json");
 		expect(result.stdout).toContain("--help");
+		expect(result.stdout).toContain("deps status [tool]");
+		expect(result.stdout).toContain("deps repair <tool> --preview");
+		expect(result.stdout).toContain("deps repair <tool> --apply <previewId>");
 		expect(result.stdout).toContain("Commands:");
 		expect(result.stdout).toContain("Examples:");
 		expect(result.stdout).toContain("schema <connector> [--select name=value ...]");

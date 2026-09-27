@@ -6,6 +6,7 @@
 // nothing was sent. Only after MCPorter starts may a request have left, so
 // prepare() does everything before that and send() only starts MCPorter.
 import type { ExecutionCapabilities } from "../../../bin/adapters/contract.ts";
+import { MCPORTER_REPAIR_ACTION } from "../../../bin/mcporter-custody.ts";
 import { planDispatcherRoute } from "../../../bin/provider-route.ts";
 import { type EnvironmentSource, INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment } from "../../../bin/safe-environment.ts";
 import { ACCOUNT_SERVER } from "./catalogue.ts";
@@ -77,7 +78,7 @@ export function accountCaller(env: EnvironmentSource, skillsRoot: string, item: 
 		const unready = providerPreflight(env, item, capabilities);
 		if (unready) return { ok: false, sent: false, ...unready };
 		const mcporter = await capabilities.selectMcporter();
-		if (mcporter === null) return { ok: false, sent: false, cause: "mcporter-unselected", repair: "Run connectors deps repair mcporter" };
+		if (mcporter === null) return { ok: false, sent: false, cause: "mcporter-unselected", repair: MCPORTER_REPAIR_ACTION };
 		return {
 			ok: true,
 			send() {

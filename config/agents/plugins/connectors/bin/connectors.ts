@@ -18,7 +18,9 @@ import type { Adapter, AdapterAction, AdapterRefusal, AdapterRefusalKind, Execut
 import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
 import { discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
-import { ensureMcporter, lockRecovery, repairMcporter } from "./mcporter-custody.ts";
+import { ensureMcporter, lockRecovery } from "./mcporter-custody.ts";
+import { DEPENDENCY_TOOLS, dependencyStatus, isDependencyTool, type DependencyTool } from "./dependency-status.ts";
+import { applyRepair, PREVIEW_ID, previewRepair, type ApplyResult } from "./deps-repair.ts";
 import { downloadAndInstallMise, downloadAndInstallOp } from "./setup/download.ts";
 import { installPinnedUv, readValidatedUvSources } from "./setup/uv.ts";
 import { stateRoot } from "./private-state.ts";
@@ -34,7 +36,7 @@ const EFFECT_EXCLUSIONS = [
 	"any credential value read by the front-door process; a 1Password-custody credential is read only by this executable started in its adapter's internal custody or Provider role, fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
 	"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
 	"any provider write without a recorded preview and a durable write receipt, and any retry or replay of a write whose effect is unknown",
-	"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, run --preview or --apply and recover for one with no write or recovery step, and auth logout for every connector; deps covers only explicit MCPorter repair",
+	"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, run --preview or --apply and recover for one with no write or recovery step, and auth logout for every connector; deps covers dependency status and explicit repair, not deps update",
 ] as const;
 
 // The closed auth verb vocabulary (Spec AC19). Each connector's adapter
@@ -46,18 +48,14 @@ export type EffectClass = "inspect" | "repository-local" | "external";
 export type Outcome = "success" | "refused" | "failed";
 export type FailureClass = "usage" | "internal" | "domain" | "schema" | "transient" | null;
 // A caught internal failure reports INTERNAL_UNEXPECTED_UNCHANGED only when no
-// effect was attempted. MCPorter bootstrap, recovery, or repair progress and
-// explicit setup progress select their own completed or unknown causes, so the
+// effect was attempted. MCPorter bootstrap or recovery progress, explicit
+// setup progress, and explicit deps repair progress select their own
+// completed or unknown causes, so the
 // fallback never claims an unchanged result after an attempted effect.
 export type CauseCode =
 	| "SUCCESS_UNCHANGED"
 	| "SUCCESS_BOOTSTRAPPED"
-	| "SUCCESS_MCPORTER_REPAIRED"
 	| "SUCCESS_MCPORTER_RECOVERED"
-	| "DOMAIN_MCPORTER_REPAIR_FAILED"
-	| "DOMAIN_MCPORTER_REPAIR_FAILED_AFTER_COMMIT"
-	| "DOMAIN_MCPORTER_RECOVERED_REPAIR_FAILED"
-	| "INTERNAL_MCPORTER_REPAIR_UNKNOWN"
 	| "INTERNAL_MCPORTER_SELECTION_UNKNOWN"
 	| "SUCCESS_COMPLETED"
 	| "DOMAIN_SETUP_FAILED_UNCHANGED"
@@ -66,9 +64,23 @@ export type CauseCode =
 	| "USAGE_SETUP_MALFORMED"
 	| "INTERNAL_SETUP_UNKNOWN"
 	| "INTERNAL_SETUP_AFTER_COMMIT"
+	| "SUCCESS_DEPS_REPAIR_PREVIEWED"
+	| "SUCCESS_DEPS_REPAIRED"
+	| "DOMAIN_DEPS_REPAIR_PREREQUISITE"
+	| "DOMAIN_DEPS_STATE_INVALID"
+	| "DOMAIN_DEPS_PREVIEW_INVALID"
+	| "DOMAIN_DEPS_PREVIEW_STALE"
+	| "DOMAIN_DEPS_PREVIEW_CONSUMED"
+	| "DOMAIN_DEPS_APPLY_LOCKED"
+	| "DOMAIN_DEPS_REPAIR_FAILED_RECORDED"
+	| "DOMAIN_DEPS_REPAIR_EFFECT_UNKNOWN"
+	| "INTERNAL_DEPS_REPAIR_UNKNOWN"
+	| "INTERNAL_DEPS_REPAIR_AFTER_EFFECT"
+	| "INTERNAL_DEPS_PREVIEW_AFTER_RECORD"
 	| "USAGE_UNKNOWN_COMMAND"
 	| "USAGE_MALFORMED_ARGUMENTS"
 	| "USAGE_CONNECTOR_UNKNOWN"
+	| "USAGE_DEPENDENCY_UNKNOWN"
 	| "SCHEMA_VERSION_UNSUPPORTED"
 	| "SCHEMA_ADAPTER_UNKNOWN"
 	| "SCHEMA_SELECTOR_INVALID"
@@ -90,7 +102,6 @@ export type CauseCode =
 	| "DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY"
 	| "INTERNAL_UNEXPECTED_UNCHANGED"
 	| "INTERNAL_UNEXPECTED_AFTER_BOOTSTRAP"
-	| "INTERNAL_UNEXPECTED_AFTER_REPAIR"
 	| "SUCCESS_AUTH_LOGIN"
 	| "DOMAIN_AUTH_LOGIN_UNKNOWN"
 	| "DOMAIN_AUTH_VERB_UNSUPPORTED"
@@ -108,9 +119,11 @@ export type CauseCode =
 
 let bootstrapCompleted = false;
 let recoveryCompleted = false;
-let repairCompleted = false;
 let setupStarted = false;
 let setupCompleted: string[] = [];
+// Explicit deps repair progress: the command, its durable effects, and the
+// one effect an interrupted attempt leaves uncertain.
+let depsProgress: { commandIdentity: string; completed: readonly string[]; uncertain: string | null } | null = null;
 
 interface CommandDescriptor {
 	readonly commandIdentity: string;
@@ -136,7 +149,9 @@ const COMMANDS: readonly CommandDescriptor[] = [
 	{ commandIdentity: "connectors.status", route: ["status"], effectClass: "inspect", summary: "Report truthful evidence state per connector" },
 	{ commandIdentity: "connectors.doctor", route: ["doctor"], effectClass: "inspect", summary: "Local readiness gate for one connector" },
 	{ commandIdentity: "connectors.schema", route: ["schema"], effectClass: "repository-local", summary: "Fetch live schema for a keyless connector, or a credentialed one through its packaged adapter; bootstraps the pinned MCPorter on first use" },
-	{ commandIdentity: "connectors.deps.repair.mcporter", route: ["deps", "repair", "mcporter"], effectClass: "repository-local", summary: "Explicitly replace the selected MCPorter with a verified official release" },
+	{ commandIdentity: "connectors.deps.status", route: ["deps", "status"], effectClass: "inspect", summary: "Report each declared dependency's required version, verified plugin-owned selection, and one repair route; never installs or searches PATH" },
+	{ commandIdentity: "connectors.deps.repair.preview", route: ["deps", "repair", "--preview"], effectClass: "repository-local", summary: "Record the exact repair of one declared dependency against its observed selection; installs nothing" },
+	{ commandIdentity: "connectors.deps.repair.apply", route: ["deps", "repair", "--apply"], effectClass: "external", summary: "Apply one current repair preview at most once: a durable receipt first, then one verified install of the declared version" },
 	{
 		commandIdentity: "connectors.fixtureAuth",
 		route: ["fixture-auth"],
@@ -301,12 +316,7 @@ interface CauseRow {
 const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	SUCCESS_UNCHANGED: { outcome: "success", effectClass: "inspect", transactionState: "unchanged", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
 	SUCCESS_BOOTSTRAPPED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
-	SUCCESS_MCPORTER_REPAIRED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
 	SUCCESS_MCPORTER_RECOVERED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
-	DOMAIN_MCPORTER_REPAIR_FAILED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
-	DOMAIN_MCPORTER_REPAIR_FAILED_AFTER_COMMIT: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
-	DOMAIN_MCPORTER_RECOVERED_REPAIR_FAILED: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
-	INTERNAL_MCPORTER_REPAIR_UNKNOWN: { outcome: "failed", effectClass: "repository-local", transactionState: "unknown", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_MCPORTER_SELECTION_UNKNOWN: { outcome: "failed", effectClass: "repository-local", transactionState: "unknown", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	SUCCESS_COMPLETED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
 	DOMAIN_SETUP_FAILED_UNCHANGED: { outcome: "failed", effectClass: "repository-local", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
@@ -315,9 +325,23 @@ const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	USAGE_SETUP_MALFORMED: { outcome: "refused", effectClass: "repository-local", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_SETUP_UNKNOWN: { outcome: "failed", effectClass: "repository-local", transactionState: "unknown", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_SETUP_AFTER_COMMIT: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	SUCCESS_DEPS_REPAIR_PREVIEWED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	SUCCESS_DEPS_REPAIRED: { outcome: "success", effectClass: "external", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	DOMAIN_DEPS_REPAIR_PREREQUISITE: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_DEPS_STATE_INVALID: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_DEPS_PREVIEW_INVALID: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_DEPS_PREVIEW_STALE: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_DEPS_PREVIEW_CONSUMED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_DEPS_APPLY_LOCKED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_DEPS_REPAIR_FAILED_RECORDED: { outcome: "failed", effectClass: "external", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	DOMAIN_DEPS_REPAIR_EFFECT_UNKNOWN: { outcome: "failed", effectClass: "external", transactionState: "unknown", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	INTERNAL_DEPS_REPAIR_UNKNOWN: { outcome: "failed", effectClass: "external", transactionState: "unknown", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	INTERNAL_DEPS_REPAIR_AFTER_EFFECT: { outcome: "failed", effectClass: "external", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	INTERNAL_DEPS_PREVIEW_AFTER_RECORD: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	USAGE_UNKNOWN_COMMAND: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	USAGE_MALFORMED_ARGUMENTS: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	USAGE_CONNECTOR_UNKNOWN: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	USAGE_DEPENDENCY_UNKNOWN: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	SCHEMA_VERSION_UNSUPPORTED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	SCHEMA_ADAPTER_UNKNOWN: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	SCHEMA_SELECTOR_INVALID: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "schema", exitCode: 4, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
@@ -339,7 +363,6 @@ const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY: { outcome: "refused", effectClass: "repository-local", transactionState: "completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_UNEXPECTED_UNCHANGED: { outcome: "failed", effectClass: "inspect", transactionState: "unchanged", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_UNEXPECTED_AFTER_BOOTSTRAP: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
-	INTERNAL_UNEXPECTED_AFTER_REPAIR: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	SUCCESS_AUTH_LOGIN: { outcome: "success", effectClass: "external", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
 	DOMAIN_AUTH_LOGIN_UNKNOWN: { outcome: "failed", effectClass: "external", transactionState: "unknown", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
 	DOMAIN_AUTH_VERB_UNSUPPORTED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
@@ -395,8 +418,32 @@ const ADAPTER_READ_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_AFTER_ACCO
 // records anything, so its read may fail like a run's.
 const PROVIDER_READ_COMMANDS: ReadonlySet<string> = new Set(["connectors.run", "connectors.schema", "connectors.run.preview", "connectors.run.apply", "connectors.recover.adjudicate"]);
 
+// Each explicit deps repair cause belongs to exactly one of its two commands.
+const DEPS_REPAIR_CAUSES: Readonly<Partial<Record<CauseCode, "connectors.deps.repair.preview" | "connectors.deps.repair.apply">>> = {
+	SUCCESS_DEPS_REPAIR_PREVIEWED: "connectors.deps.repair.preview",
+	DOMAIN_DEPS_REPAIR_PREREQUISITE: "connectors.deps.repair.preview",
+	DOMAIN_DEPS_STATE_INVALID: "connectors.deps.repair.preview",
+	SUCCESS_DEPS_REPAIRED: "connectors.deps.repair.apply",
+	DOMAIN_DEPS_PREVIEW_INVALID: "connectors.deps.repair.apply",
+	DOMAIN_DEPS_PREVIEW_STALE: "connectors.deps.repair.apply",
+	DOMAIN_DEPS_PREVIEW_CONSUMED: "connectors.deps.repair.apply",
+	DOMAIN_DEPS_APPLY_LOCKED: "connectors.deps.repair.apply",
+	DOMAIN_DEPS_REPAIR_FAILED_RECORDED: "connectors.deps.repair.apply",
+	DOMAIN_DEPS_REPAIR_EFFECT_UNKNOWN: "connectors.deps.repair.apply",
+	INTERNAL_DEPS_REPAIR_UNKNOWN: "connectors.deps.repair.apply",
+	INTERNAL_DEPS_REPAIR_AFTER_EFFECT: "connectors.deps.repair.apply",
+	INTERNAL_DEPS_PREVIEW_AFTER_RECORD: "connectors.deps.repair.preview",
+};
+
+function checkDepsCauseCommand(cause: CauseCode, commandIdentity: string): string[] {
+	const owner = DEPS_REPAIR_CAUSES[cause];
+	return owner === undefined || owner === commandIdentity ? [] : ["deps repair cause and command identity must agree"];
+}
+
 function checkCauseCommand(cause: CauseCode, commandIdentity: string): string[] {
 	if (SETUP_CAUSES.has(cause) !== (commandIdentity === "connectors.setup")) return ["setup cause and command identity must agree"];
+	const deps = checkDepsCauseCommand(cause, commandIdentity);
+	if (deps.length > 0) return deps;
 	if (ADAPTER_READ_CAUSES.has(cause) && !PROVIDER_READ_COMMANDS.has(commandIdentity)) return ["adapter read cause and command identity must agree"];
 	return [];
 }
@@ -442,7 +489,7 @@ function checkCauseRow(result: Envelope["result"]): string[] {
 // Admitted selection inventories, as exact serialized lists. account-grant is
 // the attended login's grant, held by MCPorter in the account vault.
 const ADMITTED_EFFECTS: Readonly<Record<"selection" | "remaining" | "uncertain", readonly string[]>> = {
-	selection: ["[]", '["mcporter-bootstrap"]', '["mcporter-repair"]', '["mcporter-recovery"]', '["mcporter-recovery","mcporter-repair"]'],
+	selection: ["[]", '["mcporter-bootstrap"]', '["mcporter-recovery"]'],
 	remaining: ["[]"],
 	uncertain: ["[]", '["mcporter-repair"]', '["mcporter-recovery"]', '["account-grant"]', '["provider-write"]'],
 };
@@ -470,8 +517,43 @@ function checkEffectsEmptyAndComplete(effects: Envelope["result"]["effects"]): s
 	return problems;
 }
 
+// A deps repair inventory: the preview alone, or the receipt followed by
+// that apply's MCPorter recovery and at most one tool repair, in this order.
+const DEPS_REPAIR_TAIL: readonly string[] = ["mcporter-recovery", "mcporter-repair", "op-repair", "mise-repair", "uv-repair"];
+const DEPS_TOOL_REPAIRS: readonly string[] = DEPS_REPAIR_TAIL.slice(1);
+const DEPS_RECEIPTED: ReadonlySet<CauseCode> = new Set(["SUCCESS_DEPS_REPAIRED", "DOMAIN_DEPS_REPAIR_FAILED_RECORDED", "DOMAIN_DEPS_REPAIR_EFFECT_UNKNOWN", "INTERNAL_DEPS_REPAIR_UNKNOWN", "INTERNAL_DEPS_REPAIR_AFTER_EFFECT"]);
+
+function depsCompletedAdmitted(cause: CauseCode, completed: readonly unknown[]): boolean {
+	if (cause === "SUCCESS_DEPS_REPAIR_PREVIEWED" || cause === "INTERNAL_DEPS_PREVIEW_AFTER_RECORD") return JSON.stringify(completed) === '["deps-repair-preview"]';
+	if (!DEPS_RECEIPTED.has(cause)) return completed.length === 0;
+	if (completed[0] !== "deps-repair-receipt") return false;
+	const positions = completed.slice(1).map((effect) => DEPS_REPAIR_TAIL.indexOf(effect as string));
+	if (!positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]!))) return false;
+	if (positions.filter((position) => position > 0).length > 1) return false;
+	return cause !== "SUCCESS_DEPS_REPAIRED" || DEPS_TOOL_REPAIRS.includes(completed.at(-1) as string);
+}
+
+function checkDepsRepairEffects(result: Envelope["result"]): string[] {
+	const effects = result.effects;
+	const problems = checkExactKeys(effects, EFFECTS_KEYS, "result.effects");
+	if (!Array.isArray(effects.completed) || !Array.isArray(effects.remaining) || !Array.isArray(effects.uncertain)) return [...problems, "deps repair effect inventories must be arrays"];
+	if (effects.inventoryComplete !== true || effects.remaining.length !== 0) problems.push("deps repair inventory must be complete with nothing remaining");
+	if (!depsCompletedAdmitted(result.causeCode, effects.completed)) problems.push("deps repair completed effects are not admitted for this cause");
+	const unknown = result.transactionState === "unknown";
+	const uncertainAdmitted = unknown ? effects.uncertain.length === 1 && DEPS_TOOL_REPAIRS.includes(effects.uncertain[0] as string) && JSON.stringify(effects.completed) === '["deps-repair-receipt"]' : effects.uncertain.length === 0;
+	if (!uncertainAdmitted) problems.push("deps repair uncertain effects are not admitted");
+	return problems;
+}
+
+// Setup and explicit deps repair own their inventories; every other command
+// reports the shared selection, account, and journaled-write inventory.
+function checkCommandEffects(result: Envelope["result"]): string[] {
+	if (result.commandIdentity === "connectors.deps.repair.preview" || result.commandIdentity === "connectors.deps.repair.apply") return checkDepsRepairEffects(result);
+	if (result.commandIdentity === "connectors.setup") return checkSetupEffects(result);
+	return checkEffectsEmptyAndComplete(result.effects);
+}
+
 function checkSetupEffects(result: Envelope["result"]): string[] {
-	if (result.commandIdentity !== "connectors.setup") return checkEffectsEmptyAndComplete(result.effects);
 	const effects = result.effects;
 	const problems = checkExactKeys(effects, EFFECTS_KEYS, "result.effects");
 	const expected = ["op", "mise", "uv"];
@@ -491,7 +573,7 @@ export function assertEnvelope(envelope: Envelope): void {
 		...checkAvailablePaths(envelope.availablePaths),
 		...checkResultIdentity(envelope.result),
 		...checkCauseRow(envelope.result),
-		...checkSetupEffects(envelope.result),
+		...checkCommandEffects(envelope.result),
 		...(envelope.result.transactionState === "completed" && envelope.result.effects.completed.length === 0 ? ["completed dependency effect requires its receipt"] : []),
 		...(envelope.result.transactionState === "unchanged" && envelope.result.effects.completed.length > 0 ? ["unchanged result cannot report a completed effect"] : []),
 		...(envelope.result.transactionState === "unknown" && envelope.result.effects.uncertain.length !== 1 ? ["unknown repair requires an uncertain effect"] : []),
@@ -511,7 +593,6 @@ export function assertEnvelope(envelope: Envelope): void {
 // secret-shaped argv value back through a thrown validation message. This
 // fallback's `diagnostics.detail` is always the same fixed, safe string.
 function completedSelectionEffects(): string[] {
-	if (repairCompleted) return recoveryCompleted ? ["mcporter-recovery", "mcporter-repair"] : ["mcporter-repair"];
 	if (bootstrapCompleted) return ["mcporter-bootstrap"];
 	if (recoveryCompleted) return ["mcporter-recovery"];
 	return [];
@@ -530,18 +611,27 @@ function setupFailureProgress(): FailureProgress {
 	};
 }
 
+function depsFailureProgress(progress: NonNullable<typeof depsProgress>): FailureProgress {
+	return {
+		commandIdentity: progress.commandIdentity, effectClass: progress.commandIdentity === "connectors.deps.repair.preview" ? "repository-local" : "external",
+		transactionState: progress.uncertain ? "unknown" : "completed",
+		causeCode: progress.uncertain ? "INTERNAL_DEPS_REPAIR_UNKNOWN" : progress.commandIdentity === "connectors.deps.repair.preview" ? "INTERNAL_DEPS_PREVIEW_AFTER_RECORD" : "INTERNAL_DEPS_REPAIR_AFTER_EFFECT",
+		effects: { completed: [...progress.completed], remaining: [], uncertain: progress.uncertain ? [progress.uncertain] : [], inventoryComplete: true },
+	};
+}
+
 function selectionFailureProgress(): FailureProgress {
 	const completed = completedSelectionEffects();
 	return {
 		commandIdentity: "connectors.dispatch", effectClass: completed.length > 0 ? "repository-local" : "inspect",
 		transactionState: completed.length > 0 ? "completed" : "unchanged",
-		causeCode: repairCompleted ? "INTERNAL_UNEXPECTED_AFTER_REPAIR" : bootstrapCompleted || recoveryCompleted ? "INTERNAL_UNEXPECTED_AFTER_BOOTSTRAP" : "INTERNAL_UNEXPECTED_UNCHANGED",
+		causeCode: bootstrapCompleted || recoveryCompleted ? "INTERNAL_UNEXPECTED_AFTER_BOOTSTRAP" : "INTERNAL_UNEXPECTED_UNCHANGED",
 		effects: { completed, remaining: [], uncertain: [], inventoryComplete: true },
 	};
 }
 
 export function buildInternalFailureEnvelope(): Envelope {
-	const progress = setupStarted ? setupFailureProgress() : selectionFailureProgress();
+	const progress = setupStarted ? setupFailureProgress() : depsProgress ? depsFailureProgress(depsProgress) : selectionFailureProgress();
 	return {
 		envelopeVersion: 2,
 		contractVersion: CONTRACT_VERSION,
@@ -633,7 +723,9 @@ function helpText(): string {
 		"  status [connector]                              Report truthful evidence state",
 		"  doctor <connector>                              Local readiness gate for one connector",
 		"  schema <connector> [--select name=value ...]     Fetch live schema; a credentialed connector reads through its adapter",
-		"  deps repair mcporter                             Explicitly replace selected MCPorter after mismatch",
+		"  deps status [tool]                               Report required and selected dependency versions; changes nothing",
+		"  deps repair <tool> --preview                     Record the exact repair of one dependency; installs nothing",
+		"  deps repair <tool> --apply <previewId>           Apply that current preview once: receipt first, then one verified install",
 		"  auth <verb> <connector> [--select name=value]    Run one declared auth verb; login needs your terminal",
 		"  auth configure <connector> [--select name=value ...] --input <json-object>",
 		"                                                  Record nonsecret credential references once, such as 1Password item IDs",
@@ -801,60 +893,113 @@ function usageMalformed(commandIdentity: string, usage: string): void {
 	emitRefusal(commandIdentity, `${PROGRAM}: usage: ${usage}`, "USAGE_MALFORMED_ARGUMENTS", `Run ${PROGRAM} ${usage}`, "connectors.list");
 }
 
-function repairFailureEffects(effect: string): string[] {
-	if (effect === "unknown") return [];
-	if (effect === "recovered-and-completed") return ["mcporter-recovery", "mcporter-repair"];
-	return [effect === "recovered" ? "mcporter-recovery" : "mcporter-repair"];
-}
-
-function repairFailureAction(cause: string, uncertain: boolean): string {
-	if (cause === "selection-lock-failed") return lockRecovery;
-	return uncertain ? "Inspect the selected MCPorter state before another repair" : "Inspect the selected MCPorter revision before retrying repair";
-}
-
-function emitMcporterRepairFailure(result: Extract<Awaited<ReturnType<typeof repairMcporter>>, { ok: false }>): void {
-	if (result.effect === "unchanged") {
-		emitRefusal("connectors.deps.repair.mcporter", `${PROGRAM}: MCPorter ${result.cause}`, "DOMAIN_MCPORTER_REPAIR_FAILED", "Retry connectors deps repair mcporter after checking local release availability", "connectors.doctor");
+// Inspection only: an unhealthy selection is a successful report naming its
+// one repair route, never a repair.
+function handleDepsStatus(args: readonly string[]): void {
+	if (args.length > 1) {
+		usageMalformed("connectors.deps.status", "deps status [tool]");
 		return;
 	}
-	const uncertain = result.effect === "unknown";
-	const recovered = result.effect === "recovered";
-	emit({ envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message: `${PROGRAM}: MCPorter ${result.cause}`, availablePaths: AVAILABLE_PATHS,
-		result: { runId: runId(), commandIdentity: "connectors.deps.repair.mcporter", outcome: "failed", failureClass: uncertain ? "internal" : "domain",
-			exitCode: uncertain ? 1 : 3, data: null, retryable: false,
-			repairAction: repairFailureAction(result.cause, uncertain),
-			nextAction: "connectors.doctor", effectClass: "repository-local", transactionState: uncertain ? "unknown" : "completed",
-			causeCode: uncertain ? "INTERNAL_MCPORTER_REPAIR_UNKNOWN" : recovered ? "DOMAIN_MCPORTER_RECOVERED_REPAIR_FAILED" : "DOMAIN_MCPORTER_REPAIR_FAILED_AFTER_COMMIT",
-			effects: { completed: repairFailureEffects(result.effect), remaining: [], uncertain: uncertain ? ["mcporter-repair"] : [], inventoryComplete: true } } });
+	const [tool] = args;
+	if (tool !== undefined && !isDependencyTool(tool)) {
+		emitRefusal("connectors.deps.status", `${PROGRAM}: undeclared dependency`, "USAGE_DEPENDENCY_UNKNOWN", `Run ${PROGRAM} deps status [${DEPENDENCY_TOOLS.join("|")}]`, "connectors.deps.status");
+		return;
+	}
+	const dependencies = dependencyStatus(process.env, tool === undefined ? DEPENDENCY_TOOLS : [tool]);
+	const pending = dependencies.find((entry) => entry.repair !== null);
+	const message = pending ? "Dependency status reported; a dependency is not ready" : "Dependency status reported; every dependency is ready";
+	emitSuccess("connectors.deps.status", message, { dependencies }, pending?.repair?.commandIdentity ?? "connectors.status");
 }
 
-async function handleMcporterRepair(args: readonly string[]): Promise<void> {
-	if (args.length !== 0) {
-		usageMalformed("connectors.deps.repair.mcporter", "deps repair mcporter");
-		return;
-	}
-	const result = await repairMcporter(process.env);
-	if (!result.ok) {
-		recoveryCompleted = result.effect === "recovered" || result.effect === "recovered-and-completed";
-		repairCompleted = result.effect === "completed" || result.effect === "recovered-and-completed";
-		emitMcporterRepairFailure(result);
-		return;
-	}
-	recoveryCompleted = result.recovered;
-	repairCompleted = true;
+type DepsRepairIdentity = "connectors.deps.repair.preview" | "connectors.deps.repair.apply";
+const DEPS_REPAIR_USAGE = "deps repair <tool> --preview | deps repair <tool> --apply <previewId>";
+
+function emitDepsRepair(commandIdentity: DepsRepairIdentity, causeCode: CauseCode, message: string, fields: { data: Record<string, unknown> | null; repairAction: string | null; nextAction: string; completed?: readonly string[]; uncertain?: string | null }): void {
+	const row = ADMITTED_CAUSE_ROWS[causeCode];
 	emit({
-		envelopeVersion: 2,
-		contractVersion: CONTRACT_VERSION,
-		message: "Selected MCPorter repaired from verified official release",
-		availablePaths: AVAILABLE_PATHS,
+		envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message, availablePaths: AVAILABLE_PATHS,
 		result: {
-			runId: runId(), commandIdentity: "connectors.deps.repair.mcporter", outcome: "success", failureClass: null,
-			exitCode: 0, data: { version: "0.14.0" }, retryable: false, repairAction: null,
-			nextAction: "connectors.schema", effectClass: "repository-local", transactionState: "completed",
-			causeCode: "SUCCESS_MCPORTER_REPAIRED",
-			effects: { completed: result.recovered ? ["mcporter-recovery", "mcporter-repair"] : ["mcporter-repair"], remaining: [], uncertain: [], inventoryComplete: true },
+			runId: runId(), commandIdentity, outcome: row.outcome, failureClass: row.failureClass, exitCode: row.exitCode,
+			data: fields.data, retryable: false, repairAction: fields.repairAction, nextAction: fields.nextAction,
+			effectClass: row.effectClass, transactionState: row.transactionState, causeCode,
+			effects: { completed: [...(fields.completed ?? [])], remaining: [], uncertain: fields.uncertain ? [fields.uncertain] : [], inventoryComplete: true },
 		},
 	});
+}
+
+function handleDepsPreview(tool: DependencyTool): void {
+	const identity = "connectors.deps.repair.preview";
+	const preview = previewRepair(process.env, tool);
+	if (preview.kind === "prerequisite") {
+		emitDepsRepair(identity, "DOMAIN_DEPS_REPAIR_PREREQUISITE", `${PROGRAM}: ${tool} repair needs another route first`, { data: null, repairAction: preview.repairAction, nextAction: preview.nextAction });
+		return;
+	}
+	if (preview.kind === "state-invalid") {
+		emitDepsRepair(identity, "DOMAIN_DEPS_STATE_INVALID", `${PROGRAM}: plugin-owned deps state is not private`, { data: null, repairAction: `Inspect the plugin-owned XDG state root, then run ${PROGRAM} deps repair ${tool} --preview again`, nextAction: "connectors.deps.status" });
+		return;
+	}
+	if (preview.kind === "ready") {
+		emitSuccess(identity, `${tool} is ready; nothing to repair`, { tool, required: preview.required, observed: preview.observed, plannedEffects: [] }, "connectors.deps.status");
+		return;
+	}
+	depsProgress = { commandIdentity: identity, completed: ["deps-repair-preview"], uncertain: null };
+	const { previewId, required, observed, plannedEffects } = preview;
+	emitDepsRepair(identity, "SUCCESS_DEPS_REPAIR_PREVIEWED", `${tool} repair previewed; nothing is installed until apply`, {
+		data: { previewId, tool, required, observed, plannedEffects, apply: `${PROGRAM} deps repair ${tool} --apply ${previewId}` },
+		repairAction: null, nextAction: "connectors.deps.repair.apply", completed: ["deps-repair-preview"],
+	});
+}
+
+const DEPS_APPLY_REFUSALS: Readonly<Record<Extract<ApplyResult, { kind: "refused" }>["cause"], { cause: CauseCode; message: string; repair: (tool: string) => string; next: string }>> = {
+	invalid: { cause: "DOMAIN_DEPS_PREVIEW_INVALID", message: "no repair preview with that id for this tool", repair: (tool) => `Run ${PROGRAM} deps repair ${tool} --preview to record a preview for this tool`, next: "connectors.deps.repair.preview" },
+	stale: { cause: "DOMAIN_DEPS_PREVIEW_STALE", message: "the selection changed since this preview", repair: (tool) => `Run ${PROGRAM} deps repair ${tool} --preview again`, next: "connectors.deps.repair.preview" },
+	consumed: { cause: "DOMAIN_DEPS_PREVIEW_CONSUMED", message: "this preview was already claimed by an apply", repair: (tool) => `Run ${PROGRAM} deps status ${tool}; preview a new repair only if it is still not ready`, next: "connectors.deps.status" },
+	locked: { cause: "DOMAIN_DEPS_APPLY_LOCKED", message: "the deps repair lock is unavailable", repair: () => lockRecovery, next: "connectors.deps.status" },
+};
+
+async function handleDepsApply(tool: DependencyTool, previewId: string): Promise<void> {
+	const identity = "connectors.deps.repair.apply";
+	const result = await applyRepair(process.env, previewId, tool, pluginRoot(), (completed, uncertain) => {
+		depsProgress = { commandIdentity: identity, completed, uncertain };
+	});
+	if (result.kind === "refused") {
+		const refusal = DEPS_APPLY_REFUSALS[result.cause];
+		emitDepsRepair(identity, refusal.cause, `${PROGRAM}: ${refusal.message}`, { data: null, repairAction: refusal.repair(tool), nextAction: refusal.next });
+		return;
+	}
+	const data = { previewId, tool };
+	if (result.kind === "repaired") {
+		emitDepsRepair(identity, "SUCCESS_DEPS_REPAIRED", `${tool} repaired to its declared version`, { data, repairAction: null, nextAction: "connectors.deps.status", completed: result.completed });
+		return;
+	}
+	const unknown = result.kind === "unknown";
+	emitDepsRepair(identity, unknown ? "DOMAIN_DEPS_REPAIR_EFFECT_UNKNOWN" : "DOMAIN_DEPS_REPAIR_FAILED_RECORDED", `${PROGRAM}: ${tool} repair ${unknown ? "outcome is unknown" : "failed"}; this preview is never reapplied`, {
+		data, repairAction: unknown && result.lockFailed ? lockRecovery : `Inspect ${PROGRAM} deps status ${tool}, then preview a new repair if it is still not ready`, nextAction: "connectors.deps.status",
+		completed: result.completed, uncertain: unknown ? result.uncertain : null,
+	});
+}
+
+// deps repair <tool> --preview, or deps repair <tool> --apply <previewId>.
+// Shape, tool, and preview id are checked before any state is read.
+async function handleDepsRepair(args: readonly string[]): Promise<void> {
+	const identity: DepsRepairIdentity = args.includes("--apply") ? "connectors.deps.repair.apply" : "connectors.deps.repair.preview";
+	const [tool, flag, previewId] = args;
+	// The unpreviewed repair is retired: a bare tool names its one preview.
+	if (args.length === 1 && tool !== undefined && isDependencyTool(tool)) {
+		emitRefusal(identity, `${PROGRAM}: deps repair needs --preview, then --apply <previewId>`, "USAGE_MALFORMED_ARGUMENTS", `Run ${PROGRAM} deps repair ${tool} --preview`, "connectors.deps.repair.preview");
+		return;
+	}
+	const shaped = identity === "connectors.deps.repair.preview" ? args.length === 2 && flag === "--preview" : args.length === 3 && flag === "--apply" && previewId !== undefined && PREVIEW_ID.test(previewId);
+	if (!shaped || tool === undefined) {
+		usageMalformed(identity, DEPS_REPAIR_USAGE);
+		return;
+	}
+	if (!isDependencyTool(tool)) {
+		emitRefusal(identity, `${PROGRAM}: undeclared dependency`, "USAGE_DEPENDENCY_UNKNOWN", `Run ${PROGRAM} deps repair [${DEPENDENCY_TOOLS.join("|")}] --preview`, "connectors.deps.status");
+		return;
+	}
+	if (identity === "connectors.deps.repair.preview") handleDepsPreview(tool);
+	else await handleDepsApply(tool, previewId!);
 }
 
 const SETUP_EFFECTS = ["op", "mise", "uv"] as const;
@@ -1296,7 +1441,8 @@ function emitSelectionFailure(selection: Extract<Awaited<ReturnType<typeof ensur
 				effects: { completed: recoveryCompleted ? ["mcporter-recovery"] : [], remaining: [], uncertain: [recoveryCompleted ? "mcporter-repair" : "mcporter-recovery"], inventoryComplete: true } } });
 		return;
 	}
-	emitRefusal(commandIdentity, `${PROGRAM}: MCPorter ${selection.cause}`, bootstrapCompleted ? "DOMAIN_MCPORTER_REPAIR_AFTER_BOOTSTRAP" : recoveryCompleted ? "DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY" : "DOMAIN_MCPORTER_REPAIR_REQUIRED", selection.repair, "connectors.doctor", bootstrapCompleted, recoveryCompleted);
+	const nextAction = selection.cause === "bootstrap-failed" ? commandIdentity : selection.cause === "state-invalid" ? "connectors.doctor" : "connectors.deps.repair.preview";
+	emitRefusal(commandIdentity, `${PROGRAM}: MCPorter ${selection.cause}`, bootstrapCompleted ? "DOMAIN_MCPORTER_REPAIR_AFTER_BOOTSTRAP" : recoveryCompleted ? "DOMAIN_MCPORTER_REPAIR_AFTER_RECOVERY" : "DOMAIN_MCPORTER_REPAIR_REQUIRED", selection.repair, nextAction, bootstrapCompleted, recoveryCompleted);
 }
 
 // Runs MCPorter with stdin closed. Both pipes must drain concurrently:
@@ -1836,6 +1982,14 @@ function internalRole(args: readonly string[]): InternalRole | null {
 	return roles && Object.hasOwn(roles, roleName) ? (roles[roleName] ?? null) : null;
 }
 
+const UNSUPPORTED_COMMAND = `${PROGRAM}: unsupported command. Run with --discover --json to see available commands.`;
+
+async function dispatchDeps(args: readonly string[]): Promise<void> {
+	if (args[0] === "status") handleDepsStatus(args.slice(1));
+	else if (args[0] === "repair") await handleDepsRepair(args.slice(1));
+	else refuse(UNSUPPORTED_COMMAND);
+}
+
 async function dispatchCommand(args: readonly string[]): Promise<void> {
 	if (args[0] === "auth") {
 		await handleAdapterCommand(parseAuthArgs(args.slice(1)), AUTH_USAGE, "connectors.auth");
@@ -1849,8 +2003,8 @@ async function dispatchCommand(args: readonly string[]): Promise<void> {
 		await handleAdapterCommand(parseRecoverArgs(args.slice(1)), RECOVER_USAGE, "connectors.recover");
 		return;
 	}
-	if (args[0] === "deps" && args[1] === "repair" && args[2] === "mcporter") {
-		await handleMcporterRepair(args.slice(3));
+	if (args[0] === "deps") {
+		await dispatchDeps(args.slice(1));
 		return;
 	}
 	if (args[0] === "setup") {
@@ -1888,7 +2042,7 @@ async function dispatchCommand(args: readonly string[]): Promise<void> {
 	// Never echo the caller's raw argv into public output: an argument can
 	// carry a secret-shaped value, and machine stdout must stay redacted
 	// regardless of what was actually typed. Fixed message only.
-	refuse(`${PROGRAM}: unsupported command. Run with --discover --json to see available commands.`);
+	refuse(UNSUPPORTED_COMMAND);
 }
 
 // The one line an internal role that throws writes: a fixed nonsecret cause,

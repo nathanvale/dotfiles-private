@@ -174,3 +174,13 @@ export function installedOp(env: EnvironmentSource): string | null {
 	const measured = ownedExecutableDigest(executable, "exact-0700");
 	return measured.ok && measured.sha256 === OP_RELEASE.binarySha256 ? executable : null;
 }
+
+// Read-only view for deps status by the same rule. A selection record that
+// the rule refuses is present but not ready; no record is absent.
+export function inspectSelectedOp(env: EnvironmentSource): { required: string; present: boolean; executable: string | null; cause: string | null } {
+	const executable = installedOp(env);
+	if (executable) return { required: OP_RELEASE.version, present: true, executable, cause: null };
+	const record = readPrivateFile(path.join(stateRoot(env), "connectors", "setup", "op", "op-selected"));
+	const present = record.ok || record.reason !== "absent";
+	return { required: OP_RELEASE.version, present, executable: null, cause: present ? "selection-invalid" : null };
+}
