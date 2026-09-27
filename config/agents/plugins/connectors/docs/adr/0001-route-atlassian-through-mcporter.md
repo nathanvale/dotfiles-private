@@ -163,10 +163,12 @@ already on the same issue, through an owned REST v2 Provider
 (`scripts/atlassian-rest-provider.ts`, server `atlassian-rest-jira`,
 persisted Provider name `rest`).
 
-- Comments only. The REST Provider's vocabulary is six fixed requests:
-  read the principal, read an issue's attachments, list or read comments
-  with rendered HTML, add a comment, edit a comment. It refuses any other
-  tool or argument before a request leaves.
+- Comments only. The REST Provider's vocabulary is seven fixed requests:
+  read the principal, read an issue's attachments, read the leading bytes of
+  one attachment's content (a bounded, cancelled stream on the Trusted Site
+  Origin with redirects refused, to establish an image type Jira did not
+  report), list or read comments with rendered HTML, add a comment, edit a
+  comment. It refuses any other tool or argument before a request leaves.
 - Not a fallback. The operations are named by the caller; a Community
   operation that fails stays failed, and no route re-shapes a write for the
   other Provider.
@@ -212,12 +214,17 @@ renders; a lost reply is adjudicated from a new rendering comment and never
 from a historical one; the author guard refuses before any read of the
 edit's body leaves; the REST Provider refuses arguments, a non-Jira
 product, a rotated item, and any tool or argument outside its vocabulary
-before a request, with no secret on any stream. Live qualification required
-before acceptance: one `issue.comment.media` with two inline images on a
-disposable issue, then one `issue.comment.media.update` of it, each read
-back through the dispatcher. Revisit trigger: an upstream mcp-atlassian
-release that emits ADF media nodes from Markdown, which would retire this
-route.
+before a request, with no secret on any stream.
+
+Live, one configured tenant, 28 September 2026, the coordinator's run at
+`a3a5e0fb` recorded on PR #145: `issue.comment.media` created a comment on
+SMSTX-364 with inline images through the dispatcher, `issue.comment.media.update`
+edited it, both with receipt-bound comment effects; the author guard refused
+an edit of another account's comment; no receipt was left open. The direct
+REST prototype of the same day proved the wiki mechanism outside the route
+and is distinct from this evidence. Remaining before acceptance: Nathan's
+decision on the status. Revisit trigger: an upstream mcp-atlassian release
+that emits ADF media nodes from Markdown, which would retire this route.
 
 The Connectors plugin was selected for a credential-safe repair on
 21 September 2026. Nathan approved the one-Provider direction on 23 September

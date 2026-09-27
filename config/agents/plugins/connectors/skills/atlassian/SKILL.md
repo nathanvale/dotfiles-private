@@ -129,11 +129,12 @@ REST route (`provider: "rest"`, server `atlassian-rest-jira`), which the
 ADR 0001 amendment admits as a capability exception. They are never a
 fallback: a Community operation that fails stays failed.
 
-- `body` is wiki markup. Reference each image as `!name.png!`, which renders
-  it at its actual size; for a 2x capture, `!name.png|width=<css pixels>!`
-  with the image's CSS pixel width. Write a mention as
-  `[~accountid:<account-id>]`, a link as `[label|https://...]`, code as
-  `{{text}}`, bold as `*text*`.
+- `body` is wiki markup. Reference each image with an explicit width equal
+  to its CSS pixel width, `!name.png|width=<css pixels>!` (screenshots are
+  2x captures, and Jira shrinks an image that has no width). Write a mention
+  as `[~accountid:<account-id>]`, a link as `[label|https://...]`, code as
+  `{{text}}`, bold as `*text*`. Read-back compares these parts exactly, so
+  the stored comment must keep them.
 - `images` lists exactly the file names the body references. A name the body
   does not reference, or a reference `images` does not name, refuses with
   `input-invalid` before any read.
@@ -150,12 +151,12 @@ fallback: a Community operation that fails stays failed.
 - `issue.comment.media.update` edits only a comment the tenant principal
   authored (`input-invalid` otherwise) and replaces the whole body. Read the
   current text first and carry it over.
-- Proof state: fixture-tested. The wiki-markup mechanism was proven once by a
-  direct REST prototype outside this route (SMSTX-364, 28 September 2026:
-  three inline images, a wiki mention, and a wiki link rendered; notification
-  not confirmed). The dispatcher's own live create and edit are pending; see
-  the ADR 0001 amendment's confirmation items. Until they pass, report a
-  media write as fixture-tested and read the comment back in Jira yourself.
+- Proof state: live-write-proven for create and edit through the dispatcher
+  (SMSTX-364, 28 September 2026, the coordinator's run recorded on PR #145:
+  create, edit, and the author-guard refusal completed with receipt-bound
+  effects and no open receipt). The wiki-markup mechanism was first shown the
+  same day by a direct REST prototype outside this route; that is separate
+  evidence. A wiki mention's notification delivery is not confirmed.
 
 Check authorization before `--apply`. An explicit request for one named create,
 update, comment, attachment, or delete authorizes that operation. For an
