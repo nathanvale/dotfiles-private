@@ -1166,7 +1166,7 @@ describe("wiki media comments through the owned REST route", () => {
 	const ME = "712020:00000000-0000-4000-8000-00000000000a";
 	const img = (id: string, name: string) => `<p><span class="image-wrap"><img src="/rest/api/3/attachment/content/${id}" alt="${name}" /></span></p>`;
 	const BOTH = `${img("202456", "before.png")}${img("202457", "after.png")}`;
-	const attachmentsReply = (beforeId = "202456") => ({ ok: true as const, data: { key: "PROJ-1", fields: { updated: "t1", attachment: [{ id: beforeId, filename: "before.png", content: `https://example.atlassian.net/rest/api/2/attachment/content/${beforeId}` }, { id: "202457", filename: "after.png" }, { id: "1", filename: "notes.pdf" }] } } });
+	const attachmentsReply = (beforeId = "202456") => ({ ok: true as const, data: { key: "PROJ-1", fields: { updated: "t1", attachment: [{ id: beforeId, filename: "before.png", mimeType: "image/png", content: `https://example.atlassian.net/rest/api/2/attachment/content/${beforeId}` }, { id: "202457", filename: "after.png", mimeType: "image/png" }, { id: "1", filename: "notes.pdf", mimeType: "application/pdf" }] } } });
 	const comments = (...entries: Record<string, unknown>[]) => ({ ok: true as const, data: { startAt: 0, maxResults: 100, total: entries.length, comments: entries } });
 	const myself = { ok: true as const, data: { accountId: ME, emailAddress: PRINCIPAL } };
 	const ATTACH_READ = { server: RJ, tool: "jira_rest_issue_attachments", args: { issue_key: "PROJ-1" } };
@@ -1231,6 +1231,9 @@ describe("wiki media comments through the owned REST route", () => {
 		expect(calls).toEqual([]);
 		const missing = await dispatch(["issue.comment.media", "--input", JSON.stringify({ issueKey: "PROJ-1", body: "!states.png!", images: ["states.png"] }), "--preview"], dependencies);
 		expect([missing.result.causeCode, missing.result.repairAction]).toEqual(["not-found", "an image named in images is not attached to the issue"]);
+		// An attached file that is not an image cannot render inline; the preview refuses it before any write.
+		const pdf = await dispatch(["issue.comment.media", "--input", JSON.stringify({ issueKey: "PROJ-1", body: "See !notes.pdf!", images: ["notes.pdf"] }), "--preview"], dependencies);
+		expect([pdf.result.causeCode, pdf.result.exitCode, pdf.result.repairAction]).toEqual(["input-invalid", 4, "an image named in images is not an image attachment; only image content renders inline"]);
 		const duplicated = fakeTransport({ [`${RJ}.jira_rest_issue_attachments`]: { ok: true, data: { key: "PROJ-1", fields: { attachment: [{ id: "202456", filename: "before.png" }, { id: "202499", filename: "before.png" }, { id: "202457", filename: "after.png" }] } } } });
 		const duplicate = await dispatch(["issue.comment.media", "--input", JSON.stringify(MEDIA), "--preview"], deps({ transport: duplicated.transport }));
 		expect([duplicate.result.causeCode, duplicate.result.repairAction]).toEqual(["input-invalid", "an image named in images matches more than one attachment on the issue; remove the duplicate first"]);

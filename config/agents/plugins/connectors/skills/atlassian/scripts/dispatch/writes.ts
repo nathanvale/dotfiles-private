@@ -641,7 +641,28 @@ export interface IssueObservation {
 	revision: string | null;
 	fields: Record<string, unknown>;
 	comments: IssueComment[];
-	attachments: { id: string; name: string }[];
+	attachments: IssueAttachment[];
+}
+
+// An attachment as the Jira read exposes it: REST names its MIME type
+// `mimeType`, the Community read `content_type`; either may be absent.
+export interface IssueAttachment {
+	id: string;
+	name: string;
+	contentType?: string;
+}
+
+// A nested record is a comment when it carries a body and an attachment when
+// it carries a file name; either needs a stable id.
+function observeIssueRecord(record: Record<string, unknown>, comments: IssueComment[], attachments: IssueAttachment[]): void {
+	if ("key" in record) return;
+	const name = stringAt(record, "filename");
+	const id = name === undefined ? stringAt(record, "id") : attachmentId(record);
+	if (id === undefined || !EFFECT_ID.test(id)) return;
+	if ("body" in record) comments.push({ id, text: bodyText(record.body), updated: stringAt(record, "updated") });
+	if (name === undefined) return;
+	const contentType = stringAt(record, "mimeType", "content_type");
+	attachments.push(contentType === undefined ? { id, name } : { id, name, contentType });
 }
 
 export function observeIssue(reply: unknown): IssueObservation {
@@ -649,15 +670,8 @@ export function observeIssue(reply: unknown): IssueObservation {
 	const top = isRecord(data) ? data : {};
 	const fields = isRecord(top.fields) ? { ...top, ...top.fields } : top;
 	const comments: IssueComment[] = [];
-	const attachments: { id: string; name: string }[] = [];
-	for (const record of records(data)) {
-		if ("key" in record) continue;
-		const name = stringAt(record, "filename");
-		const id = name === undefined ? stringAt(record, "id") : attachmentId(record);
-		if (id === undefined || !EFFECT_ID.test(id)) continue;
-		if ("body" in record) comments.push({ id, text: bodyText(record.body), updated: stringAt(record, "updated") });
-		if (name !== undefined) attachments.push({ id, name });
-	}
+	const attachments: IssueAttachment[] = [];
+	for (const record of records(data)) observeIssueRecord(record, comments, attachments);
 	return { key: stringAt(top, "key"), revision: stringAt(fields, "version", "revision", "updated") ?? null, fields, comments, attachments };
 }
 
@@ -886,15 +900,26 @@ export const AUTHOR_GUARD_REASON = "commentId names a comment another account au
 
 export type MediaAttachments = { ok: true; ids: string[] } | { ok: false; cause: "not-found" | "input-invalid"; reason: string };
 
-// Each referenced image must be attached to the issue under exactly one id;
-// the ids become the preview baseline an apply must find unchanged.
-export function resolveMediaAttachments(attachments: readonly { id: string; name: string }[], images: readonly string[]): MediaAttachments {
+// Only an image can render as an <img>. Jira's MIME type decides when it
+// reports one; a file whose type it omits is judged by its extension.
+const IMAGE_EXTENSION = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
+export function isImageAttachment(attachment: IssueAttachment): boolean {
+	if (attachment.contentType !== undefined) return attachment.contentType.toLowerCase().startsWith("image/");
+	return IMAGE_EXTENSION.test(attachment.name);
+}
+
+// Each referenced image must be attached to the issue under exactly one id
+// and be an image; the ids become the preview baseline an apply must find
+// unchanged.
+export function resolveMediaAttachments(attachments: readonly IssueAttachment[], images: readonly string[]): MediaAttachments {
 	const ids: string[] = [];
 	for (const name of images) {
 		const matching = attachments.filter((entry) => entry.name === name);
 		if (matching.length === 0) return { ok: false, cause: "not-found", reason: "an image named in images is not attached to the issue" };
 		if (matching.length > 1) return { ok: false, cause: "input-invalid", reason: "an image named in images matches more than one attachment on the issue; remove the duplicate first" };
-		ids.push((matching[0] as { id: string }).id);
+		const attachment = matching[0] as IssueAttachment;
+		if (!isImageAttachment(attachment)) return { ok: false, cause: "input-invalid", reason: "an image named in images is not an image attachment; only image content renders inline" };
+		ids.push(attachment.id);
 	}
 	return { ok: true, ids: [...new Set(ids)].sort() };
 }
