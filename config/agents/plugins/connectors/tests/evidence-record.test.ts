@@ -86,7 +86,7 @@ test.skipIf(!plugin)("a keyless schema and read that succeed on a loopback copie
 			const result = JSON.parse(run.stdout).result as { causeCode: string; exitCode: number; effects: { completed: string[] } };
 			return [result.exitCode, result.causeCode, result.effects.completed];
 		};
-		expect(await call(["schema", "context7"])).toEqual([0, "SUCCESS_BOOTSTRAPPED", ["mcporter-bootstrap"]]);
+		expect(await call(["schema", "context7"])).toEqual([0, "SUCCESS_BOOTSTRAPPED", ["mcporter-bootstrap", "mcporter-vault-file"]]);
 		expect(await call(["run", "context7", "resolve-library-id", "--input", JSON.stringify({ query: "bun" })])).toEqual([0, "SUCCESS_UNCHANGED", []]);
 		expect(await call(["run", "context7", "unlisted_tool", "--input", "{}"])).toEqual([2, "USAGE_OPERATION_UNKNOWN", []]);
 		expect(plugin.stubs.get("context7")?.calls.length).toBe(1);

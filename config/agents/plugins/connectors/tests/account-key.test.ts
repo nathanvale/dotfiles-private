@@ -30,7 +30,7 @@
 // No existing test reaches these adapters, and none needs a production seam
 // beyond the two per-Skill leaves production also uses.
 import { expect, test } from "bun:test";
-import { readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, realpathSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { UNLISTED_TOOL } from "./fixtures/account-key-stub.ts";
 import { AccountKeyMachine, accountKeyPlugin, type ConnectorFixture, type Envelope, OFFICIAL_MCPORTER, SERVICE_TOKEN } from "./fixtures/account-key-machine.ts";
@@ -94,12 +94,26 @@ const station = (run: { code: number; result: Envelope["result"] }) => ({ code: 
 const toolNames = (schema: unknown) => ((schema as { tools?: { name: string }[] }).tools ?? []).map((tool) => tool.name);
 const runArgs = (connector: ConnectorFixture, tool = connector.tools[0] ?? "") => ["run", connector.id, tool, "--input", JSON.stringify(INPUT)];
 
+// Ticket #141 keyless data-root finding: the keyless adapter transport keeps
+// MCPorter in the owned Connectors root and never opens the caller's HOME
+// vault. Fails if MCPorter selected HOME/.mcporter, or if the vault-file
+// effect were supplied rather than observed on disk.
+const CALLER_VAULT = `${JSON.stringify({ version: 2, entries: {}, serverUrls: { SENTINEL_CALLER_HOME_VAULT_ENTRY: "https://caller.invalid/mcp" } })}\n`;
+// The first schema bootstraps and records the first connector's server URL;
+// the second only records its own.
+const FIRST_SCHEMA_EFFECTS = { context7: ["mcporter-bootstrap", "mcporter-vault-file"], firecrawl: ["mcporter-vault-file"] } as const;
+
 test.skipIf(!OFFICIAL_MCPORTER)("unconfigured connectors stay keyless: own endpoint, no header, no custody, exact allow-list", async () => {
 	await withMachine(async ({ machine, run }) => {
+		const callerVault = path.join(machine.home, ".mcporter", "credentials.json");
+		mkdirSync(path.dirname(callerVault), { mode: 0o700 });
+		writeFileSync(callerVault, CALLER_VAULT, { mode: 0o600 });
+		const callerMtime = statSync(callerVault).mtimeMs;
 		for (const connector of CONNECTORS) {
 			expect((await run(["auth", "status", connector.id])).result.data).toEqual({ connector: connector.id, mode: "keyless", nextStep: `to use an account key, run connectors auth configure ${connector.id} --input '{"item":"<id>"}'` });
 			const schema = await run(["schema", connector.id]);
 			expect({ code: schema.code, mode: schema.result.data?.mode, server: schema.result.data?.server, allowedTools: schema.result.data?.allowedTools, listed: toolNames(schema.result.data?.schema) }).toEqual({ code: 0, mode: "keyless", server: connector.id, allowedTools: connector.tools, listed: connector.tools });
+			expect(schema.result.effects.completed).toEqual([...FIRST_SCHEMA_EFFECTS[connector.id]]);
 			// Spec AC19: every declared operation is reachable through run.
 			for (const tool of connector.tools) {
 				const read = await run(runArgs(connector, tool));
@@ -112,6 +126,32 @@ test.skipIf(!OFFICIAL_MCPORTER)("unconfigured connectors stay keyless: own endpo
 		}
 		expect(machine.lines("op-calls.jsonl")).toEqual([]);
 		expect(machine.lines("keychain-reads.jsonl")).toEqual([]);
+		expect({ entries: readdirSync(path.dirname(callerVault)), bytes: readFileSync(callerVault, "utf8"), mtimeMs: statSync(callerVault).mtimeMs }).toEqual({ entries: ["credentials.json"], bytes: CALLER_VAULT, mtimeMs: callerMtime });
+		const keylessVault = path.join(machine.state, "connectors", "mcporter-keyless", "data", "mcporter", "credentials.json");
+		expect((JSON.parse(readFileSync(keylessVault, "utf8")) as { serverUrls?: Record<string, string> }).serverUrls).toEqual(Object.fromEntries(CONNECTORS.map((connector) => [connector.id, stub(connector).url])));
+	});
+}, 120_000);
+
+// Ticket #141: on the shipped adapter route, a keyless root that is not a
+// private owned directory is configuration and refuses before MCPorter
+// selection, bootstrap, or child. Fails if the root were checked only after
+// MCPorter selection (a bootstrap effect), or if the request still ran.
+test.skipIf(!OFFICIAL_MCPORTER)("an invalid keyless root refuses schema before MCPorter selection, with no request and the caller vault unchanged", async () => {
+	await withMachine(async ({ machine, run }) => {
+		const callerVault = path.join(machine.home, ".mcporter", "credentials.json");
+		mkdirSync(path.dirname(callerVault), { mode: 0o700 });
+		writeFileSync(callerVault, CALLER_VAULT, { mode: 0o600 });
+		const callerMtime = statSync(callerVault).mtimeMs;
+		const keylessRoot = path.join(machine.state, "connectors", "mcporter-keyless");
+		writeFileSync(keylessRoot, "not a directory\n");
+		const refused = await run(["schema", CONTEXT7.id]);
+		expect({ code: refused.code, cause: refused.result.causeCode, data: refused.result.data, completed: refused.result.effects.completed, uncertain: refused.result.effects.uncertain }).toEqual({
+			code: 3, cause: "DOMAIN_MCPORTER_REPAIR_REQUIRED", data: null, completed: [], uncertain: [],
+		});
+		expect(existsSync(path.join(machine.state, "connectors", "mcporter"))).toBe(false);
+		expect(stub(CONTEXT7).headers).toEqual([]);
+		expect(readFileSync(keylessRoot, "utf8")).toBe("not a directory\n");
+		expect({ entries: readdirSync(path.dirname(callerVault)), bytes: readFileSync(callerVault, "utf8"), mtimeMs: statSync(callerVault).mtimeMs }).toEqual({ entries: ["credentials.json"], bytes: CALLER_VAULT, mtimeMs: callerMtime });
 	});
 }, 120_000);
 
@@ -197,7 +237,7 @@ test.skipIf(!OFFICIAL_MCPORTER)("a successful tool result may contain the relay 
 test.skipIf(!OFFICIAL_MCPORTER)("a configured key that is missing, invalid, or rejected refuses with a repair and makes no keyless request", async () => {
 	await withMachine(async ({ machine, run }) => {
 		// Bootstrap MCPorter first, so no refusal below also reports that effect.
-		expect((await run(["schema", CONTEXT7.id])).result.effects.completed).toEqual(["mcporter-bootstrap"]);
+		expect((await run(["schema", CONTEXT7.id])).result.effects.completed).toEqual(["mcporter-bootstrap", "mcporter-vault-file"]);
 		for (const each of plugin.stubs.values()) each.reset();
 		for (const connector of CONNECTORS) {
 			const configure = (item: string) => run(["auth", "configure", connector.id, "--input", JSON.stringify({ item })]);

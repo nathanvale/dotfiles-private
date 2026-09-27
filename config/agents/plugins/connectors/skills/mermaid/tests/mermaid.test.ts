@@ -99,7 +99,8 @@ function expectNoCredentialSent(stub: Fixture["stub"]): void {
 test.skipIf(!official)("keyless run reaches each allow-listed Mermaid read with no credential, and status stays unproven", async () => {
 	const fixture = mermaidFixture();
 	try {
-		// [tool, --input], in invocation order; only the first bootstraps MCPorter.
+		// [tool, --input], in invocation order; only the first bootstraps MCPorter
+		// and has MCPorter record the server in its keyless vault file.
 		const rows: ReadonlyArray<readonly [string, Record<string, unknown>]> = [
 			["validate_and_render_mermaid_diagram", { prompt: "two steps", mermaidCode: "flowchart LR\n  A --> B", diagramType: "flowchart", clientName: "connectors" }],
 			["get_diagram_title", { diagramContent: "flowchart LR\n  A --> B", clientName: "connectors" }],
@@ -112,7 +113,7 @@ test.skipIf(!official)("keyless run reaches each allow-listed Mermaid read with 
 			expect({ index, code: result.code }).toEqual({ index, code: 0 });
 			const envelope = onlyEnvelope(result).result;
 			expect({ index, identity: envelope.commandIdentity, cause: envelope.causeCode, completed: envelope.effects.completed }).toEqual({
-				index, identity: "connectors.run", cause: index === 0 ? "SUCCESS_BOOTSTRAPPED" : "SUCCESS_UNCHANGED", completed: index === 0 ? ["mcporter-bootstrap"] : [],
+				index, identity: "connectors.run", cause: index === 0 ? "SUCCESS_BOOTSTRAPPED" : "SUCCESS_UNCHANGED", completed: index === 0 ? ["mcporter-bootstrap", "mcporter-vault-file"] : [],
 			});
 			expect(envelope.data).toEqual({ connector: "mermaid", operation: tool, tier: "keyless", result: STUB_RENDER_RESULT });
 		}

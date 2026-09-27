@@ -19,6 +19,7 @@ import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
 import { type DiscoveredManifest, discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
 import { ensureMcporter, lockRecovery } from "./mcporter-custody.ts";
+import { type KeylessDataRoot, ownKeylessDataRoot } from "./provider-route.ts";
 import { DEPENDENCY_TOOLS, dependencyStatus, isDependencyTool, REQUIREMENTS_REVISION, type DependencyTool } from "./dependency-status.ts";
 import { applyDeps, PREVIEW_ID, previewDeps, type ApplyResult, type DepsRequest } from "./deps-repair.ts";
 import { downloadAndInstallMise, downloadAndInstallOp } from "./setup/download.ts";
@@ -673,8 +674,8 @@ const STATION_SEMANTICS: Readonly<Record<CauseCode, { readonly reachability: Rea
 	TRANSIENT_PROVIDER_UNREACHABLE: { reachability: "provider", trigger: "the Provider was unreachable, so no request reached it" },
 	TRANSIENT_PROVIDER_AFTER_BOOTSTRAP: { reachability: "provider", trigger: "the Provider was unreachable after first-use MCPorter bootstrap" },
 	TRANSIENT_PROVIDER_AFTER_RECOVERY: { reachability: "provider", trigger: "the Provider was unreachable after MCPorter selection recovery" },
-	TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT: { reachability: "provider", trigger: "the Provider was unreachable after the adapter recorded account effects" },
-	SUCCESS_AFTER_ACCOUNT_EFFECT: { reachability: "command", trigger: "the read completed after the adapter recorded account effects" },
+	TRANSIENT_PROVIDER_AFTER_ACCOUNT_EFFECT: { reachability: "provider", trigger: "the Provider was unreachable after account effects, or after MCPorter changed its vault file in an owned Connectors root" },
+	SUCCESS_AFTER_ACCOUNT_EFFECT: { reachability: "command", trigger: "the read completed after account effects, or after MCPorter changed its vault file in an owned Connectors root" },
 	SUCCESS_READ_OBSERVED: { reachability: "provider", trigger: "the read completed on an admitted hosted route and its evidence observation was retained" },
 	DOMAIN_PROVIDER_CALL_FAILED: { reachability: "provider", trigger: "the Provider answered the call with a failure" },
 	DOMAIN_PROVIDER_CALL_FAILED_AFTER_EFFECT: { reachability: "provider", trigger: "the Provider answered with a failure after local effects were recorded" },
@@ -1981,6 +1982,13 @@ async function fetchKeylessSchema(id: string, registryPath: string, server: stri
 	// unguarded resolution could pick up), and a forced --no-oauth so this
 	// keyless-only command can never fall into an interactive auth prompt.
 	const routeEnv: Record<string, string> = { MCPORTER_NO_KEEPALIVE: "*", ...safeEnvironment(process.env) };
+	// The keyless root is configuration: it refuses before any MCPorter
+	// selection, bootstrap, or child.
+	const dataRoot = ownKeylessDataRoot(process.env);
+	if (dataRoot === null) {
+		emitSelectionFailure(KEYLESS_ROOT_INVALID);
+		return;
+	}
 	const selection = await ensureMcporter(process.env);
 	if (!selection.ok) {
 		emitSelectionFailure(selection);
@@ -1988,9 +1996,13 @@ async function fetchKeylessSchema(id: string, registryPath: string, server: stri
 	}
 	bootstrapCompleted = selection.bootstrapped;
 	recoveryCompleted = selection.recovered === true;
-	const { stdout, exitCode } = await runDrained([selection.binary, "--config", registryPath, "list", server, "--json", "--no-oauth"], routeEnv);
+	const before = dataRoot.vaultStamp();
+	const { stdout, exitCode } = await runDrained([selection.binary, "--config", registryPath, "list", server, "--json", "--no-oauth"], { ...routeEnv, ...dataRoot.env });
+	const effects = { completed: [...completedSelectionEffects(), ...vaultChange(dataRoot, before)], uncertain: [] };
 	if (exitCode !== 0) {
-		emitRefusal("connectors.schema", `${PROGRAM}: ${id} schema fetch did not complete`, transientCause(), "Retry the schema request", "connectors.doctor", selection.bootstrapped, recoveryCompleted);
+		// Every generic failure stays transient, as before; readCause only adds
+		// the observed vault change to it.
+		emitAdapterEnvelope({ commandIdentity: "connectors.schema" }, readCause(effects.completed, "offline"), `${PROGRAM}: ${id} schema fetch did not complete`, null, "Retry the schema request", effects, "connectors.doctor");
 		return;
 	}
 	let parsed: unknown;
@@ -1999,7 +2011,16 @@ async function fetchKeylessSchema(id: string, registryPath: string, server: stri
 	} catch {
 		parsed = { raw: stdout };
 	}
-	emitSuccess("connectors.schema", `schema evidence fetched for ${id}`, { connector: id, server, allowedTools, schema: parsed }, "connectors.status", selection.bootstrapped, recoveryCompleted);
+	emitAdapterEnvelope({ commandIdentity: "connectors.schema" }, readSuccessCause(effects.completed), `schema evidence fetched for ${id}`, { connector: id, server, allowedTools, schema: parsed }, null, effects, "connectors.status");
+}
+
+// An invalid keyless root is invalid MCPorter state: the same refusal as an
+// invalid selection root, reached before selection.
+const KEYLESS_ROOT_INVALID: SelectionFailure = { ok: false, cause: "state-invalid", repair: "The keyless MCPorter data root under the Connectors state root is not a private directory you own; move that entry aside, then retry" };
+
+// MCPorter's own vault file in the keyless root, observed on disk.
+function vaultChange(dataRoot: KeylessDataRoot, before: string | null): LocalEffect[] {
+	return dataRoot.vaultStamp() === before ? [] : ["mcporter-vault-file"];
 }
 
 // Packaged adapter auth, run, and schema (Spec AC19, AC20). The core parses, loads the
@@ -2355,6 +2376,11 @@ async function runAttendedLogin(command: AdapterCommand, plan: TransportPlan, bi
 }
 
 async function runTransport(command: AdapterCommand, plan: TransportPlan, manifest: ConnectorManifest, terminal: number | null): Promise<void> {
+	const routed = keylessTransport(plan);
+	if (routed === null) {
+		emitSelectionFailure(KEYLESS_ROOT_INVALID, command.commandIdentity);
+		return;
+	}
 	const selection = await ensureMcporter(process.env);
 	if (!selection.ok) {
 		emitSelectionFailure(selection, command.commandIdentity);
@@ -2362,13 +2388,27 @@ async function runTransport(command: AdapterCommand, plan: TransportPlan, manife
 	}
 	bootstrapCompleted = selection.bootstrapped;
 	recoveryCompleted = selection.recovered === true;
-	const committed = plan.commit();
+	const committed = routed.commit();
 	if (committed.refusal) {
 		emitAdapterRefusal(command, committed.refusal, committed.completed);
 		return;
 	}
-	if (terminal === null) await runRead(command, plan, manifest, selection.binary, committed.completed);
-	else await runAttendedLogin(command, plan, selection.binary, terminal, committed.completed);
+	if (terminal === null) await runRead(command, routed, manifest, selection.binary, committed.completed);
+	else await runAttendedLogin(command, routed, selection.binary, terminal, committed.completed);
+}
+
+// An adapter that owns an MCPorter vault names its data root in the plan
+// (Canva's per-account vault). The shared route never passes one through, so
+// every other transport plan is keyless and runs in the owned keyless root,
+// with MCPorter's vault-file change there settled as an observed effect.
+// It runs before MCPorter selection; an adapter's own commit still runs
+// after it. null when that root is invalid.
+function keylessTransport(plan: TransportPlan): TransportPlan | null {
+	if (plan.env.XDG_DATA_HOME !== undefined) return plan;
+	const dataRoot = ownKeylessDataRoot(process.env);
+	if (dataRoot === null) return null;
+	const before = dataRoot.vaultStamp();
+	return { ...plan, env: { ...plan.env, ...dataRoot.env }, settle: () => [...plan.settle(), ...vaultChange(dataRoot, before)] };
 }
 
 async function handleAdapterCommand(command: AdapterCommand | null, usage: string, commandIdentity: AdapterCommand["commandIdentity"]): Promise<void> {

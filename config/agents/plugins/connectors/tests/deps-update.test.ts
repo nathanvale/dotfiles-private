@@ -8,10 +8,18 @@
 // exits, effect names, and the revision are literals, never read from the
 // production catalogue or requirements.json.
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, lstatSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { runBundle } from "./harness.ts";
 import { deps, OP_PATH, owned, PREVIEW_ID, plantPriorUv, plantWrongMcporter, plantWrongMise, plantWrongOp, records, refusingHost, sandbox, selections, SENTINEL } from "./deps-sandbox.ts";
+
+// Supplied by the test runner from an independently fetched official
+// release. The packaged process still applies every production pin to it.
+const official = process.env.CONNECTORS_OFFICIAL_RELEASE_FIXTURE;
+if (process.env.CI && !official) throw new Error("CONNECTORS_OFFICIAL_RELEASE_FIXTURE is required for CI process proof");
+// Independent oracle: `shasum -a 256` of the binary inside the official
+// MCPorter 0.14.0 macOS arm64 release archive (Q13c).
+const OFFICIAL_MCPORTER_SHA256 = "01d99ede8b6a88dd282eaeda2afb7086dca5bdbc04c05c8c21744703575adb27";
 
 // Independent oracle: `jq -c . requirements.json | tr -d '\n' | shasum -a 256`
 // on the packaged requirements (op 2.39.0, mise 2026.9.12, uv 0.12.18,
@@ -212,6 +220,56 @@ test("deps update --apply attempts each planned install once and keeps the prior
 		box.bundle.dispose();
 	}
 });
+
+// Protects the positive update station with official release bytes: a
+// present wrong MCPorter converges to the verified pinned binary, the
+// receipt records completion, the next preview has nothing to plan, and the
+// consumed preview never runs again. Wrong behavior caught: an apply that
+// reports success without replacing the selection, leaves the prior bytes
+// or a staging or .previous slot behind, reaches a release host, or treats
+// a completed update as replayable.
+test.skipIf(!official)("deps update <packaged revision> --apply converges a present wrong MCPorter to the verified official release once", async () => {
+	const box = sandbox();
+	plantWrongMcporter(box.state);
+	const source = path.join(box.bundle.root, "official-source");
+	owned(source);
+	for (const asset of ["mcporter_0.14.0_darwin_arm64.tar.gz", "provenance.json"]) cpSync(path.join(official!, asset), path.join(source, asset));
+	const host = refusingHost();
+	const env = { CONNECTORS_TEST_RELEASE_ORIGIN: host.origin, CONNECTORS_TEST_MCPORTER_ORIGIN: host.origin, CONNECTORS_TEST_RELEASE_DIR: source };
+	const mcporter = path.join(box.state, "connectors", "mcporter");
+	try {
+		const previewed = await deps(box, ["update", REVISION, "--preview"], env);
+		expect(previewed.result.data.plannedEffects).toEqual(["mcporter-update"]);
+		const id: string = previewed.result.data.previewId;
+		const applied = await deps(box, ["update", REVISION, "--apply", id], env);
+		expect(applied.code).toBe(0);
+		expect(applied.result).toMatchObject({ commandIdentity: "connectors.deps.update.apply", outcome: "success", causeCode: "SUCCESS_DEPS_UPDATED", effectClass: "external", transactionState: "completed", retryable: false, repairAction: null, nextAction: "connectors.deps.status" });
+		expect(applied.result.data).toEqual({ previewId: id, revision: REVISION });
+		expect(applied.result.effects).toEqual({ completed: ["deps-update-receipt", "mcporter-update"], remaining: [], uncertain: [], inventoryComplete: true });
+		const current = path.join(mcporter, "current");
+		expect(readdirSync(current).sort()).toEqual(["mcporter", "provenance.json", "release.json"]);
+		expect(new Bun.CryptoHasher("sha256").update(readFileSync(path.join(current, "mcporter"))).digest("hex")).toBe(OFFICIAL_MCPORTER_SHA256);
+		expect(lstatSync(path.join(current, "mcporter")).mode & 0o777).toBe(0o700);
+		expect(JSON.parse(readFileSync(path.join(current, "release.json"), "utf8"))).toEqual({ version: "0.14.0" });
+		expect(readdirSync(mcporter).filter((name) => name === ".previous" || name.startsWith(".staging-"))).toEqual([]);
+		expect(JSON.parse(readFileSync(path.join(box.state, "connectors", "deps", "receipts", `${id}.json`), "utf8"))).toMatchObject({ previewId: id, revision: REVISION, outcome: "completed" });
+
+		const converged = await deps(box, ["update", REVISION, "--preview"], env);
+		expect(converged.code).toBe(0);
+		expect(converged.result).toMatchObject({ causeCode: "SUCCESS_UNCHANGED", transactionState: "unchanged" });
+		expect(converged.result.data).toEqual({ revision: REVISION, observed: [{ ...ABSENT_MCPORTER, state: "ready", ready: true, selected: { executable: "connectors/mcporter/current/mcporter", version: "0.14.0" }, repair: null }, ABSENT_OP, ABSENT_MISE, ABSENT_UV], plannedEffects: [] });
+
+		const settled = selections(box.state);
+		const replay = await deps(box, ["update", REVISION, "--apply", id], env);
+		expect(replay.code).toBe(3);
+		expect(replay.result).toMatchObject({ commandIdentity: "connectors.deps.update.apply", outcome: "refused", causeCode: "DOMAIN_DEPS_PREVIEW_CONSUMED", transactionState: "unchanged" });
+		expect(selections(box.state)).toEqual(settled);
+		expect(host.requests).toEqual([]);
+	} finally {
+		host.stop();
+		box.bundle.dispose();
+	}
+}, 60_000);
 
 // Protects AC16's stale preview and the preview kind boundary: a selection
 // that changed after the preview, or a repair preview offered to update,

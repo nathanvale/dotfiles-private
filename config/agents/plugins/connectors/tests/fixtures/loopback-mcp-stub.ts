@@ -8,6 +8,8 @@ export interface LoopbackMcpStub {
 	readonly url: string;
 	// Tools/call requests answered so far.
 	readonly calls: number;
+	// Every HTTP request received so far, of any method.
+	readonly requests: number;
 	// A JSON-RPC error message for later tools/call requests, or null to succeed.
 	failWith: string | null;
 	stop(): void;
@@ -15,10 +17,14 @@ export interface LoopbackMcpStub {
 
 export function startLoopbackMcpStub(): LoopbackMcpStub {
 	let calls = 0;
+	let requests = 0;
 	const stub = {
 		url: "",
 		get calls() {
 			return calls;
+		},
+		get requests() {
+			return requests;
 		},
 		failWith: null as string | null,
 		stop() {
@@ -30,6 +36,7 @@ export function startLoopbackMcpStub(): LoopbackMcpStub {
 		port: 0,
 		idleTimeout: 0,
 		async fetch(request) {
+			requests += 1;
 			if (request.method !== "POST") return new Response(null, { status: 405 });
 			const message = (await request.json()) as { id?: number; method: string; params?: { protocolVersion?: string } };
 			if (message.id === undefined) return new Response(null, { status: 202 });

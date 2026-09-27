@@ -10,9 +10,10 @@
 // 4 schema. Success is MCPorter's own exit status and output; no envelope is
 // added because stdout belongs to MCPorter.
 
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
+import { ownedDirectory, stateRoot } from "./private-state.ts";
+import { type EnvironmentSource, INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
 
 const PROGRAM = "provider-route";
 // Observed with MCPorter 0.13.13 and rechecked with 0.14.0: a stdio child
@@ -336,6 +337,40 @@ function plan(argv: string[], skillsRoot: string, env: Record<string, string | u
 		server,
 		argv: ["--config", configPath, invocation.verb, target, ...checkFlags(invocation.verb, flags)],
 		env: routeEnv,
+	};
+}
+
+// MCPorter 0.14.0 keeps its vault at XDG_DATA_HOME/mcporter/credentials.json,
+// else HOME/.mcporter/credentials.json, and records each hosted server's URL
+// there even with no grant. The route passes neither XDG root through, so a
+// keyless MCPorter child gets this one owned private data and cache root under
+// Connectors state instead of the caller's HOME vault. Its location is fixed:
+// no caller, manifest, or environment key chooses it.
+export interface KeylessDataRoot {
+	readonly env: { readonly XDG_DATA_HOME: string; readonly XDG_CACHE_HOME: string };
+	// Metadata of MCPorter's vault file, never its contents; two differing
+	// stamps mean MCPorter changed the file between them.
+	vaultStamp(): string | null;
+}
+
+// Creates the root, or narrows it to 0700, before MCPorter starts; null when
+// any part is not a real directory this user owns below owned state.
+export function ownKeylessDataRoot(env: EnvironmentSource): KeylessDataRoot | null {
+	const root = path.join(stateRoot(env), "connectors", "mcporter-keyless");
+	const dataHome = path.join(root, "data");
+	const cacheHome = path.join(root, "cache");
+	if (![root, dataHome, cacheHome].every((directory) => ownedDirectory(directory).ok)) return null;
+	const vault = path.join(dataHome, "mcporter", "credentials.json");
+	return {
+		env: { XDG_DATA_HOME: dataHome, XDG_CACHE_HOME: cacheHome },
+		vaultStamp() {
+			try {
+				const stat = lstatSync(vault, { bigint: true });
+				return `${stat.ino}:${stat.mtimeNs}:${stat.size}`;
+			} catch {
+				return null;
+			}
+		},
 	};
 }
 

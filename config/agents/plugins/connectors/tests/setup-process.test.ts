@@ -292,7 +292,8 @@ test.skipIf(!officialMcporter)("ordinary first use that bootstraps MCPorter neve
 		expect(envelope.result.commandIdentity).toBe("connectors.schema");
 		expect(envelope.result.causeCode).toBe("SUCCESS_BOOTSTRAPPED");
 		expect(envelope.result.effects.completed).toEqual(["mcporter-bootstrap"]);
-		expect(readdirSync(path.join(state, "connectors"))).toEqual(["mcporter"]);
+		// Only the selected MCPorter and the keyless MCPorter data root; no setup state.
+		expect(readdirSync(path.join(state, "connectors")).sort()).toEqual(["mcporter", "mcporter-keyless"]);
 		expect(existsSync(invoked)).toBe(false);
 		expect(snapshot([hostile])).toEqual(before);
 		for (const directory of HOSTILE_DIRECTORIES) expect(existsSync(path.join(bundle.root, directory))).toBe(false);
