@@ -39,6 +39,10 @@
         "@logtape/redaction": "2.3.1",
       },
     },
+    "packages/source-intake-dispatch": {
+      "name": "source-intake-dispatch",
+      "version": "0.0.0",
+    },
     "packages/vault-steward": {
       "name": "vault-steward",
       "version": "0.0.0",
@@ -78,6 +82,8 @@
     "compaction-recovery": ["compaction-recovery@workspace:packages/compaction-recovery"],
 
     "recovery-observability": ["recovery-observability@workspace:packages/recovery-observability"],
+
+    "source-intake-dispatch": ["source-intake-dispatch@workspace:packages/source-intake-dispatch"],
 
     "vault-steward": ["vault-steward@workspace:packages/vault-steward"],
 
