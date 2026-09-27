@@ -21,3 +21,8 @@ effort = "medium"
 agent = "codex"
 model = "gpt-6-sol"
 effort = "high"
+
+[profiles.claude-fable]
+agent = "claude"
+model = "claude-fable-5-1"
+effort = "high"
