@@ -22,6 +22,8 @@ const AVAILABLE_PATHS = [
 	"connectors.deps.repair.apply",
 	"connectors.deps.repair.preview",
 	"connectors.deps.status",
+	"connectors.deps.update.apply",
+	"connectors.deps.update.preview",
 	"connectors.discovery",
 	"connectors.dispatch",
 	"connectors.doctor",
@@ -64,12 +66,9 @@ describe("compiled front door: discovery", () => {
 		expect(envelope.result.data.signalExits).toEqual(SIGNAL_EXITS);
 	});
 
-	// PARTIAL STATE, RED BY DESIGN (Ticket #141 F-b, unit 2b): the final AC19
-	// and C4 surface also adds deps update preview and apply, so no deps
-	// exclusion remains. This binary still excludes deps update. test.failing
-	// keeps that gap visible; the deps update unit must turn this into an
-	// ordinary test.
-	test.failing("discovery lists the final AC19 exclusions with no deps exclusion (RED until deps update lands)", async () => {
+	// The final AC19 and C4 surface includes deps status, repair, and update,
+	// so no deps exclusion remains.
+	test("discovery lists the final AC19 exclusions with no deps exclusion", async () => {
 		const envelope = JSON.parse((await runFrontDoor(["--discover", "--json"])).stdout);
 		// Independent literal of the accepted exclusions: setup and every deps
 		// route are part of the accepted surface, so no exclusion may deny them.
@@ -98,6 +97,8 @@ describe("compiled front door: discovery", () => {
 		expect(result.stdout).toContain("deps status [tool]");
 		expect(result.stdout).toContain("deps repair <tool> --preview");
 		expect(result.stdout).toContain("deps repair <tool> --apply <previewId>");
+		expect(result.stdout).toContain("deps update <revision> --preview");
+		expect(result.stdout).toContain("deps update <revision> --apply <previewId>");
 		expect(result.stdout).toContain("Commands:");
 		expect(result.stdout).toContain("Examples:");
 		expect(result.stdout).toContain("schema <connector> [--select name=value ...]");

@@ -19,8 +19,8 @@ import { ADAPTERS, ADAPTER_IDS } from "./adapters/index.ts";
 import { discoverManifests, loadOneManifest, loadRequirementsPins, ManifestError, SELECTOR_VALUE_PATTERN, type ConnectorManifest } from "./manifest.ts";
 import { INTERNAL_INVOCATION_CONTEXT_ENV, safeEnvironment, validInternalContext } from "./safe-environment.ts";
 import { ensureMcporter, lockRecovery } from "./mcporter-custody.ts";
-import { DEPENDENCY_TOOLS, dependencyStatus, isDependencyTool, type DependencyTool } from "./dependency-status.ts";
-import { applyRepair, PREVIEW_ID, previewRepair, type ApplyResult } from "./deps-repair.ts";
+import { DEPENDENCY_TOOLS, dependencyStatus, isDependencyTool, REQUIREMENTS_REVISION, type DependencyTool } from "./dependency-status.ts";
+import { applyDeps, PREVIEW_ID, previewDeps, type ApplyResult, type DepsRequest } from "./deps-repair.ts";
 import { downloadAndInstallMise, downloadAndInstallOp } from "./setup/download.ts";
 import { installPinnedUv, readValidatedUvSources } from "./setup/uv.ts";
 import { stateRoot } from "./private-state.ts";
@@ -36,7 +36,7 @@ const EFFECT_EXCLUSIONS = [
 	"any credential value read by the front-door process; a 1Password-custody credential is read only by this executable started in its adapter's internal custody or Provider role, fixture-auth only presents a nonsecret reference to a fixture-tested authority, and an OAuth grant stays inside MCPorter's per-account vault",
 	"any dependency install on ordinary non-setup runs other than first-use MCPorter bootstrap",
 	"any provider write without a recorded preview and a durable write receipt, and any retry or replay of a write whose effect is unknown",
-	"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, run --preview or --apply and recover for one with no write or recovery step, and auth logout for every connector; deps covers dependency status and explicit repair, not deps update",
+	"auth or run for a connector whose packaged adapter has no prepare step, schema for one with no prepareSchema step, run --preview or --apply and recover for one with no write or recovery step, and auth logout for every connector",
 ] as const;
 
 // The closed auth verb vocabulary (Spec AC19). Each connector's adapter
@@ -77,6 +77,14 @@ export type CauseCode =
 	| "INTERNAL_DEPS_REPAIR_UNKNOWN"
 	| "INTERNAL_DEPS_REPAIR_AFTER_EFFECT"
 	| "INTERNAL_DEPS_PREVIEW_AFTER_RECORD"
+	| "SUCCESS_DEPS_UPDATE_PREVIEWED"
+	| "SUCCESS_DEPS_UPDATED"
+	| "DOMAIN_DEPS_REVISION_NOT_ADMITTED"
+	| "DOMAIN_DEPS_UPDATE_FAILED_RECORDED"
+	| "DOMAIN_DEPS_UPDATE_EFFECT_UNKNOWN"
+	| "INTERNAL_DEPS_UPDATE_UNKNOWN"
+	| "INTERNAL_DEPS_UPDATE_PARTIAL"
+	| "INTERNAL_DEPS_UPDATE_AFTER_EFFECT"
 	| "USAGE_UNKNOWN_COMMAND"
 	| "USAGE_MALFORMED_ARGUMENTS"
 	| "USAGE_CONNECTOR_UNKNOWN"
@@ -123,7 +131,7 @@ let setupStarted = false;
 let setupCompleted: string[] = [];
 // Explicit deps repair progress: the command, its durable effects, and the
 // one effect an interrupted attempt leaves uncertain.
-let depsProgress: { commandIdentity: string; completed: readonly string[]; uncertain: string | null } | null = null;
+let depsProgress: { commandIdentity: string; completed: readonly string[]; uncertain: string | null; remaining: readonly string[] } | null = null;
 
 interface CommandDescriptor {
 	readonly commandIdentity: string;
@@ -152,6 +160,8 @@ const COMMANDS: readonly CommandDescriptor[] = [
 	{ commandIdentity: "connectors.deps.status", route: ["deps", "status"], effectClass: "inspect", summary: "Report each declared dependency's required version, verified plugin-owned selection, and one repair route; never installs or searches PATH" },
 	{ commandIdentity: "connectors.deps.repair.preview", route: ["deps", "repair", "--preview"], effectClass: "repository-local", summary: "Record the exact repair of one declared dependency against its observed selection; installs nothing" },
 	{ commandIdentity: "connectors.deps.repair.apply", route: ["deps", "repair", "--apply"], effectClass: "external", summary: "Apply one current repair preview at most once: a durable receipt first, then one verified install of the declared version" },
+	{ commandIdentity: "connectors.deps.update.preview", route: ["deps", "update", "--preview"], effectClass: "repository-local", summary: "Record the exact convergence of every present plugin-owned selection to the one requirements revision packaged in this build; installs nothing and never follows an upstream latest" },
+	{ commandIdentity: "connectors.deps.update.apply", route: ["deps", "update", "--apply"], effectClass: "external", summary: "Apply one current update preview at most once: a durable receipt first, then one verified install per planned tool in order, stopping at the first failure" },
 	{
 		commandIdentity: "connectors.fixtureAuth",
 		route: ["fixture-auth"],
@@ -338,6 +348,14 @@ const ADMITTED_CAUSE_ROWS: Readonly<Record<CauseCode, CauseRow>> = {
 	INTERNAL_DEPS_REPAIR_UNKNOWN: { outcome: "failed", effectClass: "external", transactionState: "unknown", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_DEPS_REPAIR_AFTER_EFFECT: { outcome: "failed", effectClass: "external", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	INTERNAL_DEPS_PREVIEW_AFTER_RECORD: { outcome: "failed", effectClass: "repository-local", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	SUCCESS_DEPS_UPDATE_PREVIEWED: { outcome: "success", effectClass: "repository-local", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	SUCCESS_DEPS_UPDATED: { outcome: "success", effectClass: "external", transactionState: "completed", failureClass: null, exitCode: 0, retryable: false, dataRule: "object", repairActionRule: "null" },
+	DOMAIN_DEPS_REVISION_NOT_ADMITTED: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	DOMAIN_DEPS_UPDATE_FAILED_RECORDED: { outcome: "failed", effectClass: "external", transactionState: "partially-completed", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	DOMAIN_DEPS_UPDATE_EFFECT_UNKNOWN: { outcome: "failed", effectClass: "external", transactionState: "unknown", failureClass: "domain", exitCode: 3, retryable: false, dataRule: "object", repairActionRule: "nonempty-string" },
+	INTERNAL_DEPS_UPDATE_UNKNOWN: { outcome: "failed", effectClass: "external", transactionState: "unknown", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	INTERNAL_DEPS_UPDATE_PARTIAL: { outcome: "failed", effectClass: "external", transactionState: "partially-completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
+	INTERNAL_DEPS_UPDATE_AFTER_EFFECT: { outcome: "failed", effectClass: "external", transactionState: "completed", failureClass: "internal", exitCode: 1, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	USAGE_UNKNOWN_COMMAND: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	USAGE_MALFORMED_ARGUMENTS: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
 	USAGE_CONNECTOR_UNKNOWN: { outcome: "refused", effectClass: "inspect", transactionState: "unchanged", failureClass: "usage", exitCode: 2, retryable: false, dataRule: "null", repairActionRule: "nonempty-string" },
@@ -418,26 +436,39 @@ const ADAPTER_READ_CAUSES: ReadonlySet<CauseCode> = new Set(["SUCCESS_AFTER_ACCO
 // records anything, so its read may fail like a run's.
 const PROVIDER_READ_COMMANDS: ReadonlySet<string> = new Set(["connectors.run", "connectors.schema", "connectors.run.preview", "connectors.run.apply", "connectors.recover.adjudicate"]);
 
-// Each explicit deps repair cause belongs to exactly one of its two commands.
-const DEPS_REPAIR_CAUSES: Readonly<Partial<Record<CauseCode, "connectors.deps.repair.preview" | "connectors.deps.repair.apply">>> = {
-	SUCCESS_DEPS_REPAIR_PREVIEWED: "connectors.deps.repair.preview",
-	DOMAIN_DEPS_REPAIR_PREREQUISITE: "connectors.deps.repair.preview",
-	DOMAIN_DEPS_STATE_INVALID: "connectors.deps.repair.preview",
-	SUCCESS_DEPS_REPAIRED: "connectors.deps.repair.apply",
-	DOMAIN_DEPS_PREVIEW_INVALID: "connectors.deps.repair.apply",
-	DOMAIN_DEPS_PREVIEW_STALE: "connectors.deps.repair.apply",
-	DOMAIN_DEPS_PREVIEW_CONSUMED: "connectors.deps.repair.apply",
-	DOMAIN_DEPS_APPLY_LOCKED: "connectors.deps.repair.apply",
-	DOMAIN_DEPS_REPAIR_FAILED_RECORDED: "connectors.deps.repair.apply",
-	DOMAIN_DEPS_REPAIR_EFFECT_UNKNOWN: "connectors.deps.repair.apply",
-	INTERNAL_DEPS_REPAIR_UNKNOWN: "connectors.deps.repair.apply",
-	INTERNAL_DEPS_REPAIR_AFTER_EFFECT: "connectors.deps.repair.apply",
-	INTERNAL_DEPS_PREVIEW_AFTER_RECORD: "connectors.deps.repair.preview",
+// Each explicit deps cause belongs to the commands that can emit it. Shared
+// refusals and the preview crash cause span repair and update.
+const REPAIR_PREVIEW = "connectors.deps.repair.preview";
+const REPAIR_APPLY = "connectors.deps.repair.apply";
+const UPDATE_PREVIEW = "connectors.deps.update.preview";
+const UPDATE_APPLY = "connectors.deps.update.apply";
+const DEPS_CAUSES: Readonly<Partial<Record<CauseCode, readonly string[]>>> = {
+	SUCCESS_DEPS_REPAIR_PREVIEWED: [REPAIR_PREVIEW],
+	DOMAIN_DEPS_REPAIR_PREREQUISITE: [REPAIR_PREVIEW, UPDATE_PREVIEW],
+	DOMAIN_DEPS_STATE_INVALID: [REPAIR_PREVIEW, UPDATE_PREVIEW],
+	INTERNAL_DEPS_PREVIEW_AFTER_RECORD: [REPAIR_PREVIEW, UPDATE_PREVIEW],
+	SUCCESS_DEPS_REPAIRED: [REPAIR_APPLY],
+	DOMAIN_DEPS_PREVIEW_INVALID: [REPAIR_APPLY, UPDATE_APPLY],
+	DOMAIN_DEPS_PREVIEW_STALE: [REPAIR_APPLY, UPDATE_APPLY],
+	DOMAIN_DEPS_PREVIEW_CONSUMED: [REPAIR_APPLY, UPDATE_APPLY],
+	DOMAIN_DEPS_APPLY_LOCKED: [REPAIR_APPLY, UPDATE_APPLY],
+	DOMAIN_DEPS_REPAIR_FAILED_RECORDED: [REPAIR_APPLY],
+	DOMAIN_DEPS_REPAIR_EFFECT_UNKNOWN: [REPAIR_APPLY],
+	INTERNAL_DEPS_REPAIR_UNKNOWN: [REPAIR_APPLY],
+	INTERNAL_DEPS_REPAIR_AFTER_EFFECT: [REPAIR_APPLY],
+	SUCCESS_DEPS_UPDATE_PREVIEWED: [UPDATE_PREVIEW],
+	DOMAIN_DEPS_REVISION_NOT_ADMITTED: [UPDATE_PREVIEW, UPDATE_APPLY],
+	SUCCESS_DEPS_UPDATED: [UPDATE_APPLY],
+	DOMAIN_DEPS_UPDATE_FAILED_RECORDED: [UPDATE_APPLY],
+	DOMAIN_DEPS_UPDATE_EFFECT_UNKNOWN: [UPDATE_APPLY],
+	INTERNAL_DEPS_UPDATE_UNKNOWN: [UPDATE_APPLY],
+	INTERNAL_DEPS_UPDATE_PARTIAL: [UPDATE_APPLY],
+	INTERNAL_DEPS_UPDATE_AFTER_EFFECT: [UPDATE_APPLY],
 };
 
 function checkDepsCauseCommand(cause: CauseCode, commandIdentity: string): string[] {
-	const owner = DEPS_REPAIR_CAUSES[cause];
-	return owner === undefined || owner === commandIdentity ? [] : ["deps repair cause and command identity must agree"];
+	const owners = DEPS_CAUSES[cause];
+	return owners === undefined || owners.includes(commandIdentity) ? [] : ["deps cause and command identity must agree"];
 }
 
 function checkCauseCommand(cause: CauseCode, commandIdentity: string): string[] {
@@ -545,10 +576,43 @@ function checkDepsRepairEffects(result: Envelope["result"]): string[] {
 	return problems;
 }
 
-// Setup and explicit deps repair own their inventories; every other command
+// A deps update inventory: the preview alone, or the receipt, then the
+// planned tool updates partitioned in order into completed (with any
+// MCPorter recovery before its update), at most one uncertain, and remaining.
+const DEPS_UPDATE_TAIL: readonly string[] = ["mcporter-recovery", "mcporter-update", "op-update", "mise-update", "uv-update"];
+const DEPS_UPDATE_RECEIPTED: ReadonlySet<CauseCode> = new Set(["SUCCESS_DEPS_UPDATED", "DOMAIN_DEPS_UPDATE_FAILED_RECORDED", "DOMAIN_DEPS_UPDATE_EFFECT_UNKNOWN", "INTERNAL_DEPS_UPDATE_UNKNOWN", "INTERNAL_DEPS_UPDATE_PARTIAL", "INTERNAL_DEPS_UPDATE_AFTER_EFFECT"]);
+
+function depsUpdateOrdered(effects: Envelope["result"]["effects"]): boolean {
+	if (effects.completed[0] !== "deps-update-receipt" || effects.uncertain.length > 1) return false;
+	const positions = [...effects.completed.slice(1), ...effects.uncertain, ...effects.remaining].map((effect) => DEPS_UPDATE_TAIL.indexOf(effect as string));
+	return positions.every((position, index) => position >= 0 && (index === 0 || position > positions[index - 1]!)) && !effects.uncertain.includes("mcporter-recovery") && !effects.remaining.includes("mcporter-recovery");
+}
+
+function depsUpdateStateAdmitted(state: string, effects: Envelope["result"]["effects"]): boolean {
+	if (state === "completed") return effects.remaining.length === 0 && effects.uncertain.length === 0;
+	if (state === "partially-completed") return effects.remaining.length > 0 && effects.uncertain.length === 0;
+	return state === "unknown" && effects.uncertain.length === 1;
+}
+
+function checkDepsUpdateEffects(result: Envelope["result"]): string[] {
+	const effects = result.effects;
+	const problems = checkExactKeys(effects, EFFECTS_KEYS, "result.effects");
+	if (!Array.isArray(effects.completed) || !Array.isArray(effects.remaining) || !Array.isArray(effects.uncertain)) return [...problems, "deps update effect inventories must be arrays"];
+	if (effects.inventoryComplete !== true) problems.push("deps update inventory must be complete");
+	const preview = result.causeCode === "SUCCESS_DEPS_UPDATE_PREVIEWED" || result.causeCode === "INTERNAL_DEPS_PREVIEW_AFTER_RECORD";
+	if (preview) {
+		if (JSON.stringify([effects.completed, effects.remaining, effects.uncertain]) !== '[["deps-update-preview"],[],[]]') problems.push("deps update preview records only its preview");
+	} else if (!DEPS_UPDATE_RECEIPTED.has(result.causeCode)) {
+		if (effects.completed.length + effects.remaining.length + effects.uncertain.length !== 0) problems.push("deps update refusal reports no effect");
+	} else if (!depsUpdateOrdered(effects) || !depsUpdateStateAdmitted(result.transactionState, effects)) problems.push("deps update effects are not admitted for this cause");
+	return problems;
+}
+
+// Setup and explicit deps repair and update own their inventories; every other command
 // reports the shared selection, account, and journaled-write inventory.
 function checkCommandEffects(result: Envelope["result"]): string[] {
-	if (result.commandIdentity === "connectors.deps.repair.preview" || result.commandIdentity === "connectors.deps.repair.apply") return checkDepsRepairEffects(result);
+	if (result.commandIdentity === REPAIR_PREVIEW || result.commandIdentity === REPAIR_APPLY) return checkDepsRepairEffects(result);
+	if (result.commandIdentity === UPDATE_PREVIEW || result.commandIdentity === UPDATE_APPLY) return checkDepsUpdateEffects(result);
 	if (result.commandIdentity === "connectors.setup") return checkSetupEffects(result);
 	return checkEffectsEmptyAndComplete(result.effects);
 }
@@ -611,12 +675,21 @@ function setupFailureProgress(): FailureProgress {
 	};
 }
 
+function depsCrashCause(progress: NonNullable<typeof depsProgress>): CauseCode {
+	if (progress.commandIdentity === REPAIR_PREVIEW || progress.commandIdentity === UPDATE_PREVIEW) return "INTERNAL_DEPS_PREVIEW_AFTER_RECORD";
+	if (progress.commandIdentity === REPAIR_APPLY) return progress.uncertain ? "INTERNAL_DEPS_REPAIR_UNKNOWN" : "INTERNAL_DEPS_REPAIR_AFTER_EFFECT";
+	if (progress.uncertain) return "INTERNAL_DEPS_UPDATE_UNKNOWN";
+	return progress.remaining.length > 0 ? "INTERNAL_DEPS_UPDATE_PARTIAL" : "INTERNAL_DEPS_UPDATE_AFTER_EFFECT";
+}
+
 function depsFailureProgress(progress: NonNullable<typeof depsProgress>): FailureProgress {
+	const causeCode = depsCrashCause(progress);
+	const row = ADMITTED_CAUSE_ROWS[causeCode];
+	// Repair reports no remaining effects; update names each unachieved one.
+	const remaining = progress.commandIdentity === UPDATE_APPLY ? [...progress.remaining] : [];
 	return {
-		commandIdentity: progress.commandIdentity, effectClass: progress.commandIdentity === "connectors.deps.repair.preview" ? "repository-local" : "external",
-		transactionState: progress.uncertain ? "unknown" : "completed",
-		causeCode: progress.uncertain ? "INTERNAL_DEPS_REPAIR_UNKNOWN" : progress.commandIdentity === "connectors.deps.repair.preview" ? "INTERNAL_DEPS_PREVIEW_AFTER_RECORD" : "INTERNAL_DEPS_REPAIR_AFTER_EFFECT",
-		effects: { completed: [...progress.completed], remaining: [], uncertain: progress.uncertain ? [progress.uncertain] : [], inventoryComplete: true },
+		commandIdentity: progress.commandIdentity, effectClass: row.effectClass, transactionState: row.transactionState, causeCode,
+		effects: { completed: [...progress.completed], remaining, uncertain: progress.uncertain ? [progress.uncertain] : [], inventoryComplete: true },
 	};
 }
 
@@ -726,6 +799,8 @@ function helpText(): string {
 		"  deps status [tool]                               Report required and selected dependency versions; changes nothing",
 		"  deps repair <tool> --preview                     Record the exact repair of one dependency; installs nothing",
 		"  deps repair <tool> --apply <previewId>           Apply that current preview once: receipt first, then one verified install",
+		"  deps update <revision> --preview                 Record converging present dependencies to this build's requirements revision",
+		"  deps update <revision> --apply <previewId>       Apply that current update preview once, in order, stopping at a failure",
 		"  auth <verb> <connector> [--select name=value]    Run one declared auth verb; login needs your terminal",
 		"  auth configure <connector> [--select name=value ...] --input <json-object>",
 		"                                                  Record nonsecret credential references once, such as 1Password item IDs",
@@ -908,13 +983,16 @@ function handleDepsStatus(args: readonly string[]): void {
 	const dependencies = dependencyStatus(process.env, tool === undefined ? DEPENDENCY_TOOLS : [tool]);
 	const pending = dependencies.find((entry) => entry.repair !== null);
 	const message = pending ? "Dependency status reported; a dependency is not ready" : "Dependency status reported; every dependency is ready";
-	emitSuccess("connectors.deps.status", message, { dependencies }, pending?.repair?.commandIdentity ?? "connectors.status");
+	emitSuccess("connectors.deps.status", message, { requirementsRevision: REQUIREMENTS_REVISION, dependencies }, pending?.repair?.commandIdentity ?? "connectors.status");
 }
 
-type DepsRepairIdentity = "connectors.deps.repair.preview" | "connectors.deps.repair.apply";
+type DepsIdentity = typeof REPAIR_PREVIEW | typeof REPAIR_APPLY | typeof UPDATE_PREVIEW | typeof UPDATE_APPLY;
 const DEPS_REPAIR_USAGE = "deps repair <tool> --preview | deps repair <tool> --apply <previewId>";
+const DEPS_UPDATE_USAGE = "deps update <revision> --preview | deps update <revision> --apply <previewId>";
+// A requirements revision names content, never a channel such as latest.
+const REVISION_SHAPE = /^sha256:[0-9a-f]{64}$/;
 
-function emitDepsRepair(commandIdentity: DepsRepairIdentity, causeCode: CauseCode, message: string, fields: { data: Record<string, unknown> | null; repairAction: string | null; nextAction: string; completed?: readonly string[]; uncertain?: string | null }): void {
+function emitDeps(commandIdentity: DepsIdentity, causeCode: CauseCode, message: string, fields: { data: Record<string, unknown> | null; repairAction: string | null; nextAction: string; completed?: readonly string[]; uncertain?: string | null; remaining?: readonly string[] }): void {
 	const row = ADMITTED_CAUSE_ROWS[causeCode];
 	emit({
 		envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message, availablePaths: AVAILABLE_PATHS,
@@ -922,74 +1000,108 @@ function emitDepsRepair(commandIdentity: DepsRepairIdentity, causeCode: CauseCod
 			runId: runId(), commandIdentity, outcome: row.outcome, failureClass: row.failureClass, exitCode: row.exitCode,
 			data: fields.data, retryable: false, repairAction: fields.repairAction, nextAction: fields.nextAction,
 			effectClass: row.effectClass, transactionState: row.transactionState, causeCode,
-			effects: { completed: [...(fields.completed ?? [])], remaining: [], uncertain: fields.uncertain ? [fields.uncertain] : [], inventoryComplete: true },
+			effects: { completed: [...(fields.completed ?? [])], remaining: [...(fields.remaining ?? [])], uncertain: fields.uncertain ? [fields.uncertain] : [], inventoryComplete: true },
 		},
 	});
 }
 
-function handleDepsPreview(tool: DependencyTool): void {
-	const identity = "connectors.deps.repair.preview";
-	const preview = previewRepair(process.env, tool);
+// What differs between a repair and an update at the front door: identities,
+// names, and routes. The plan, lock, receipt, and attempts are shared.
+interface DepsCommand {
+	readonly request: DepsRequest;
+	readonly preview: DepsIdentity;
+	readonly apply: DepsIdentity;
+	readonly subject: string;
+	readonly previewCommand: string;
+	readonly previewEffect: string;
+}
+
+const repairCommand = (tool: DependencyTool): DepsCommand => ({ request: { kind: "repair", tool }, preview: REPAIR_PREVIEW, apply: REPAIR_APPLY, subject: `${tool} repair`, previewCommand: `${PROGRAM} deps repair ${tool} --preview`, previewEffect: "deps-repair-preview" });
+const updateCommand = (revision: string): DepsCommand => ({ request: { kind: "update", revision }, preview: UPDATE_PREVIEW, apply: UPDATE_APPLY, subject: "dependency update", previewCommand: `${PROGRAM} deps update ${revision} --preview`, previewEffect: "deps-update-preview" });
+
+// The preview result's public data: repair names its tool and version, update
+// its admitted revision.
+function previewData(command: DepsCommand, observed: unknown[]): Record<string, unknown> {
+	const { request } = command;
+	return request.kind === "repair" ? { tool: request.tool, required: (observed[0] as { required: string }).required, observed } : { revision: request.revision, observed };
+}
+
+function handleDepsPreview(command: DepsCommand): void {
+	const identity = command.preview;
+	const preview = previewDeps(process.env, command.request);
 	if (preview.kind === "prerequisite") {
-		emitDepsRepair(identity, "DOMAIN_DEPS_REPAIR_PREREQUISITE", `${PROGRAM}: ${tool} repair needs another route first`, { data: null, repairAction: preview.repairAction, nextAction: preview.nextAction });
+		emitDeps(identity, "DOMAIN_DEPS_REPAIR_PREREQUISITE", `${PROGRAM}: ${command.subject} needs another route first`, { data: null, repairAction: preview.repairAction, nextAction: preview.nextAction });
 		return;
 	}
 	if (preview.kind === "state-invalid") {
-		emitDepsRepair(identity, "DOMAIN_DEPS_STATE_INVALID", `${PROGRAM}: plugin-owned deps state is not private`, { data: null, repairAction: `Inspect the plugin-owned XDG state root, then run ${PROGRAM} deps repair ${tool} --preview again`, nextAction: "connectors.deps.status" });
+		emitDeps(identity, "DOMAIN_DEPS_STATE_INVALID", `${PROGRAM}: plugin-owned deps state is not private`, { data: null, repairAction: `Inspect the plugin-owned XDG state root, then run ${command.previewCommand} again`, nextAction: "connectors.deps.status" });
 		return;
 	}
 	if (preview.kind === "ready") {
-		emitSuccess(identity, `${tool} is ready; nothing to repair`, { tool, required: preview.required, observed: preview.observed, plannedEffects: [] }, "connectors.deps.status");
+		emitSuccess(identity, command.request.kind === "repair" ? `${command.request.tool} is ready; nothing to repair` : "Every present dependency matches this revision; nothing to update", { ...previewData(command, preview.observed), plannedEffects: [] }, "connectors.deps.status");
 		return;
 	}
-	depsProgress = { commandIdentity: identity, completed: ["deps-repair-preview"], uncertain: null };
-	const { previewId, required, observed, plannedEffects } = preview;
-	emitDepsRepair(identity, "SUCCESS_DEPS_REPAIR_PREVIEWED", `${tool} repair previewed; nothing is installed until apply`, {
-		data: { previewId, tool, required, observed, plannedEffects, apply: `${PROGRAM} deps repair ${tool} --apply ${previewId}` },
-		repairAction: null, nextAction: "connectors.deps.repair.apply", completed: ["deps-repair-preview"],
+	depsProgress = { commandIdentity: identity, completed: [command.previewEffect], uncertain: null, remaining: [] };
+	const { previewId, observed, plannedEffects } = preview;
+	const apply = command.request.kind === "repair" ? `${PROGRAM} deps repair ${command.request.tool} --apply ${previewId}` : `${PROGRAM} deps update ${command.request.revision} --apply ${previewId}`;
+	emitDeps(identity, command.request.kind === "repair" ? "SUCCESS_DEPS_REPAIR_PREVIEWED" : "SUCCESS_DEPS_UPDATE_PREVIEWED", `${command.subject} previewed; nothing is installed until apply`, {
+		data: { previewId, ...previewData(command, observed), plannedEffects, apply },
+		repairAction: null, nextAction: command.apply, completed: [command.previewEffect],
 	});
 }
 
-const DEPS_APPLY_REFUSALS: Readonly<Record<Extract<ApplyResult, { kind: "refused" }>["cause"], { cause: CauseCode; message: string; repair: (tool: string) => string; next: string }>> = {
-	invalid: { cause: "DOMAIN_DEPS_PREVIEW_INVALID", message: "no repair preview with that id for this tool", repair: (tool) => `Run ${PROGRAM} deps repair ${tool} --preview to record a preview for this tool`, next: "connectors.deps.repair.preview" },
-	stale: { cause: "DOMAIN_DEPS_PREVIEW_STALE", message: "the selection changed since this preview", repair: (tool) => `Run ${PROGRAM} deps repair ${tool} --preview again`, next: "connectors.deps.repair.preview" },
-	consumed: { cause: "DOMAIN_DEPS_PREVIEW_CONSUMED", message: "this preview was already claimed by an apply", repair: (tool) => `Run ${PROGRAM} deps status ${tool}; preview a new repair only if it is still not ready`, next: "connectors.deps.status" },
-	locked: { cause: "DOMAIN_DEPS_APPLY_LOCKED", message: "the deps repair lock is unavailable", repair: () => lockRecovery, next: "connectors.deps.status" },
+const depsStatusCommand = (command: DepsCommand): string => (command.request.kind === "repair" ? `${PROGRAM} deps status ${command.request.tool}` : `${PROGRAM} deps status`);
+
+function applyRefusal(command: DepsCommand, cause: Extract<ApplyResult, { kind: "refused" }>["cause"]): { cause: CauseCode; message: string; repair: string; next: string } {
+	const { kind } = command.request;
+	if (cause === "invalid") return { cause: "DOMAIN_DEPS_PREVIEW_INVALID", message: `no ${kind} preview with that id for this ${kind === "repair" ? "tool" : "revision"}`, repair: `Run ${command.previewCommand} to record a preview for this ${kind === "repair" ? "tool" : "revision"}`, next: command.preview };
+	if (cause === "stale") return { cause: "DOMAIN_DEPS_PREVIEW_STALE", message: "the selection changed since this preview", repair: `Run ${command.previewCommand} again`, next: command.preview };
+	if (cause === "consumed") return { cause: "DOMAIN_DEPS_PREVIEW_CONSUMED", message: "this preview was already claimed by an apply", repair: `Run ${depsStatusCommand(command)}; preview a new ${kind} only if it is still not ready`, next: "connectors.deps.status" };
+	return { cause: "DOMAIN_DEPS_APPLY_LOCKED", message: `the deps ${kind} lock is unavailable`, repair: lockRecovery, next: "connectors.deps.status" };
+}
+
+const APPLY_CAUSES: Readonly<Record<DepsRequest["kind"], Readonly<Record<"completed" | "failed" | "unknown", CauseCode>>>> = {
+	repair: { completed: "SUCCESS_DEPS_REPAIRED", failed: "DOMAIN_DEPS_REPAIR_FAILED_RECORDED", unknown: "DOMAIN_DEPS_REPAIR_EFFECT_UNKNOWN" },
+	update: { completed: "SUCCESS_DEPS_UPDATED", failed: "DOMAIN_DEPS_UPDATE_FAILED_RECORDED", unknown: "DOMAIN_DEPS_UPDATE_EFFECT_UNKNOWN" },
 };
 
-async function handleDepsApply(tool: DependencyTool, previewId: string): Promise<void> {
-	const identity = "connectors.deps.repair.apply";
-	const result = await applyRepair(process.env, previewId, tool, pluginRoot(), (completed, uncertain) => {
-		depsProgress = { commandIdentity: identity, completed, uncertain };
+async function handleDepsApply(command: DepsCommand, previewId: string): Promise<void> {
+	const identity = command.apply;
+	const result = await applyDeps(process.env, previewId, command.request, pluginRoot(), (completed, uncertain, remaining) => {
+		depsProgress = { commandIdentity: identity, completed, uncertain, remaining };
 	});
 	if (result.kind === "refused") {
-		const refusal = DEPS_APPLY_REFUSALS[result.cause];
-		emitDepsRepair(identity, refusal.cause, `${PROGRAM}: ${refusal.message}`, { data: null, repairAction: refusal.repair(tool), nextAction: refusal.next });
+		const refusal = applyRefusal(command, result.cause);
+		emitDeps(identity, refusal.cause, `${PROGRAM}: ${refusal.message}`, { data: null, repairAction: refusal.repair, nextAction: refusal.next });
 		return;
 	}
-	const data = { previewId, tool };
-	if (result.kind === "repaired") {
-		emitDepsRepair(identity, "SUCCESS_DEPS_REPAIRED", `${tool} repaired to its declared version`, { data, repairAction: null, nextAction: "connectors.deps.status", completed: result.completed });
+	const { request } = command;
+	const data = request.kind === "repair" ? { previewId, tool: request.tool } : { previewId, revision: request.revision };
+	// Repair's inventory reports no remaining effects; update names each one.
+	const remaining = request.kind === "update" ? result.remaining : [];
+	const cause = APPLY_CAUSES[request.kind][result.kind];
+	if (result.kind === "completed") {
+		emitDeps(identity, cause, request.kind === "repair" ? `${request.tool} repaired to its declared version` : `Dependencies converged to requirements revision ${request.revision}`, { data, repairAction: null, nextAction: "connectors.deps.status", completed: result.completed });
 		return;
 	}
 	const unknown = result.kind === "unknown";
-	emitDepsRepair(identity, unknown ? "DOMAIN_DEPS_REPAIR_EFFECT_UNKNOWN" : "DOMAIN_DEPS_REPAIR_FAILED_RECORDED", `${PROGRAM}: ${tool} repair ${unknown ? "outcome is unknown" : "failed"}; this preview is never reapplied`, {
-		data, repairAction: unknown && result.lockFailed ? lockRecovery : `Inspect ${PROGRAM} deps status ${tool}, then preview a new repair if it is still not ready`, nextAction: "connectors.deps.status",
-		completed: result.completed, uncertain: unknown ? result.uncertain : null,
+	emitDeps(identity, cause, `${PROGRAM}: ${command.subject} ${unknown ? "outcome is unknown" : "failed"}; this preview is never reapplied`, {
+		data, repairAction: unknown && result.lockFailed ? lockRecovery : `Inspect ${depsStatusCommand(command)}, then preview a new ${request.kind} if it is still not ready`, nextAction: "connectors.deps.status",
+		completed: result.completed, uncertain: unknown ? result.uncertain : null, remaining,
 	});
 }
 
 // deps repair <tool> --preview, or deps repair <tool> --apply <previewId>.
 // Shape, tool, and preview id are checked before any state is read.
 async function handleDepsRepair(args: readonly string[]): Promise<void> {
-	const identity: DepsRepairIdentity = args.includes("--apply") ? "connectors.deps.repair.apply" : "connectors.deps.repair.preview";
+	const identity = args.includes("--apply") ? REPAIR_APPLY : REPAIR_PREVIEW;
 	const [tool, flag, previewId] = args;
 	// The unpreviewed repair is retired: a bare tool names its one preview.
 	if (args.length === 1 && tool !== undefined && isDependencyTool(tool)) {
-		emitRefusal(identity, `${PROGRAM}: deps repair needs --preview, then --apply <previewId>`, "USAGE_MALFORMED_ARGUMENTS", `Run ${PROGRAM} deps repair ${tool} --preview`, "connectors.deps.repair.preview");
+		emitRefusal(identity, `${PROGRAM}: deps repair needs --preview, then --apply <previewId>`, "USAGE_MALFORMED_ARGUMENTS", `Run ${PROGRAM} deps repair ${tool} --preview`, REPAIR_PREVIEW);
 		return;
 	}
-	const shaped = identity === "connectors.deps.repair.preview" ? args.length === 2 && flag === "--preview" : args.length === 3 && flag === "--apply" && previewId !== undefined && PREVIEW_ID.test(previewId);
+	const shaped = identity === REPAIR_PREVIEW ? args.length === 2 && flag === "--preview" : args.length === 3 && flag === "--apply" && previewId !== undefined && PREVIEW_ID.test(previewId);
 	if (!shaped || tool === undefined) {
 		usageMalformed(identity, DEPS_REPAIR_USAGE);
 		return;
@@ -998,8 +1110,27 @@ async function handleDepsRepair(args: readonly string[]): Promise<void> {
 		emitRefusal(identity, `${PROGRAM}: undeclared dependency`, "USAGE_DEPENDENCY_UNKNOWN", `Run ${PROGRAM} deps repair [${DEPENDENCY_TOOLS.join("|")}] --preview`, "connectors.deps.status");
 		return;
 	}
-	if (identity === "connectors.deps.repair.preview") handleDepsPreview(tool);
-	else await handleDepsApply(tool, previewId!);
+	if (identity === REPAIR_PREVIEW) handleDepsPreview(repairCommand(tool));
+	else await handleDepsApply(repairCommand(tool), previewId!);
+}
+
+// deps update <revision> --preview, or deps update <revision> --apply
+// <previewId>. Only the requirements revision packaged in this build is
+// admitted; the check precedes any state read, and the input is never echoed.
+async function handleDepsUpdate(args: readonly string[]): Promise<void> {
+	const identity = args.includes("--apply") ? UPDATE_APPLY : UPDATE_PREVIEW;
+	const [revision, flag, previewId] = args;
+	const shaped = identity === UPDATE_PREVIEW ? args.length === 2 && flag === "--preview" : args.length === 3 && flag === "--apply" && previewId !== undefined && PREVIEW_ID.test(previewId);
+	if (!shaped || revision === undefined || !REVISION_SHAPE.test(revision)) {
+		emitRefusal(identity, `${PROGRAM}: usage: ${DEPS_UPDATE_USAGE}`, "USAGE_MALFORMED_ARGUMENTS", `Run ${PROGRAM} deps status to read the admitted requirements revision, then ${PROGRAM} deps update <revision> --preview`, "connectors.deps.status");
+		return;
+	}
+	if (revision !== REQUIREMENTS_REVISION) {
+		emitRefusal(identity, `${PROGRAM}: requirements revision is not admitted by this build`, "DOMAIN_DEPS_REVISION_NOT_ADMITTED", `This build admits only requirements revision ${REQUIREMENTS_REVISION}; another revision needs a deliberate Connectors plugin update`, "connectors.deps.status");
+		return;
+	}
+	if (identity === UPDATE_PREVIEW) handleDepsPreview(updateCommand(revision));
+	else await handleDepsApply(updateCommand(revision), previewId!);
 }
 
 const SETUP_EFFECTS = ["op", "mise", "uv"] as const;
@@ -1987,6 +2118,7 @@ const UNSUPPORTED_COMMAND = `${PROGRAM}: unsupported command. Run with --discove
 async function dispatchDeps(args: readonly string[]): Promise<void> {
 	if (args[0] === "status") handleDepsStatus(args.slice(1));
 	else if (args[0] === "repair") await handleDepsRepair(args.slice(1));
+	else if (args[0] === "update") await handleDepsUpdate(args.slice(1));
 	else refuse(UNSUPPORTED_COMMAND);
 }
 

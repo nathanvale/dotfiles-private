@@ -7,94 +7,9 @@
 // routes are literals from the accepted proposal, never read from the
 // production catalogue.
 import { expect, test } from "bun:test";
-import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
-import { createBundle, runBundle, type Bundle } from "./harness.ts";
-
-const SENTINEL = "deps-repair-secret-sentinel-7a2d";
-// Independent oracle: the official op package path below the release host.
-const OP_PATH = "/dist/1P/op2/pkg/v2.39.0/op_apple_universal_v2.39.0.pkg";
-const PREVIEW_ID = /^[0-9a-f]{32}$/;
-
-interface Sandbox {
-	bundle: Bundle;
-	home: string;
-	state: string;
-	hostile: string;
-	marker: string;
-}
-
-function sandbox(): Sandbox {
-	const bundle = createBundle();
-	const home = path.join(bundle.root, "home");
-	const hostile = path.join(bundle.root, "hostile-bin");
-	const marker = path.join(bundle.root, "ambient-invoked");
-	mkdirSync(home);
-	mkdirSync(hostile);
-	for (const tool of ["mcporter", "op", "mise", "uv"]) writeFileSync(path.join(hostile, tool), `#!/bin/sh\necho ${tool} >> '${marker}'\n`, { mode: 0o755 });
-	// Setup's installers refuse a state path below a symlink, and the macOS
-	// temporary directory sits below /var -> /private/var.
-	return { bundle, home, state: path.join(realpathSync(bundle.root), "state"), hostile, marker };
-}
-
-// Path, mode, and bytes of every dependency-selection entry. The deps
-// repair records under connectors/deps are asserted separately, and the
-// installers' own download staging is not a selection.
-const NOT_SELECTION = [path.join("connectors", "deps"), path.join("connectors", "setup", "downloads")];
-
-function selections(state: string): string[] {
-	if (!existsSync(state)) return ["<absent>"];
-	return readdirSync(state, { recursive: true }).map(String).filter((name) => !NOT_SELECTION.some((prefix) => name.startsWith(prefix))).sort().map((name) => {
-		const file = path.join(state, name);
-		const stat = lstatSync(file);
-		return `${name} ${(stat.mode & 0o7777).toString(8)} ${stat.isFile() ? readFileSync(file, "hex") : ""}`;
-	});
-}
-
-function records(state: string, kind: "previews" | "receipts"): string[] {
-	const directory = path.join(state, "connectors", "deps", kind);
-	return existsSync(directory) ? readdirSync(directory).sort() : [];
-}
-
-async function deps(box: Sandbox, argv: string[], extraEnv: Record<string, string> = {}) {
-	const run = await runBundle(box.bundle, ["deps", ...argv], { home: box.home, binDir: box.hostile, extraEnv: { XDG_STATE_HOME: box.state, OP_SERVICE_ACCOUNT_TOKEN: SENTINEL, ...extraEnv }, timeoutMs: 20_000 });
-	expect(run.stderr).toBe("");
-	expect(run.stdout.trim().split("\n")).toHaveLength(1);
-	for (const forbidden of [SENTINEL, box.home, box.state, box.bundle.root, realpathSync(box.bundle.root)]) expect(run.stdout).not.toContain(forbidden);
-	expect(existsSync(box.marker)).toBe(false);
-	return { code: run.code, result: JSON.parse(run.stdout).result };
-}
-
-function owned(directory: string): void {
-	mkdirSync(directory, { recursive: true, mode: 0o700 });
-}
-
-// A damaged op selection an earlier install could leave behind.
-function plantWrongOp(state: string): void {
-	const op = path.join(state, "connectors", "setup", "op");
-	owned(op);
-	writeFileSync(path.join(op, "op-selected"), `op-2.38.0-${"0".repeat(64)}`, { mode: 0o600 });
-	writeFileSync(path.join(op, `op-2.38.0-${"0".repeat(64)}`), "older op bytes", { mode: 0o700 });
-}
-
-function plantWrongMcporter(state: string): void {
-	const current = path.join(state, "connectors", "mcporter", "current");
-	owned(current);
-	writeFileSync(path.join(current, "release.json"), JSON.stringify({ version: "0.13.13" }), { mode: 0o600 });
-	writeFileSync(path.join(current, "mcporter"), "older mcporter bytes", { mode: 0o700 });
-}
-
-// A loopback release host that refuses every artifact after an optional
-// delay and records each requested path.
-function refusingHost(delayMs = 0) {
-	const requests: string[] = [];
-	const server = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(request) {
-		requests.push(new URL(request.url).pathname);
-		if (delayMs) await Bun.sleep(delayMs);
-		return new Response("refused", { status: 404 });
-	} });
-	return { requests, origin: `http://127.0.0.1:${server.port}/`, stop: () => server.stop(true) };
-}
+import { deps, OP_PATH, PREVIEW_ID, plantWrongMcporter, plantWrongOp, records, refusingHost, sandbox, selections, SENTINEL } from "./deps-sandbox.ts";
 
 const OP_NOT_READY = { tool: "op", owner: "connectors", required: "2.39.0", state: "not-ready", ready: false, selected: null, cause: "selection-invalid", repair: { commandIdentity: "connectors.deps.repair.preview", command: "connectors deps repair op --preview" } };
 
@@ -289,27 +204,6 @@ test("deps repair refuses malformed, unknown, and mismatched previews without ec
 		}
 		expect({ selections: selections(box.state), previews: records(box.state, "previews") }).toEqual(before);
 		expect(records(box.state, "receipts")).toEqual([]);
-	} finally {
-		box.bundle.dispose();
-	}
-});
-
-// Protects the accepted deps surface: status, repair preview, and repair
-// apply are the only deps routes, preview is repository-local, and apply is
-// external (cli-proposal command table). Wrong behavior caught: advertising
-// the retired unpreviewed MCPorter repair, or mislabelling apply's effect.
-test("discovery declares exactly the deps status, repair preview, and repair apply routes with their effect classes", async () => {
-	const box = sandbox();
-	try {
-		const run = await runBundle(box.bundle, ["--discover", "--json"], { home: box.home, binDir: box.hostile, extraEnv: { XDG_STATE_HOME: box.state } });
-		expect([run.code, run.stderr]).toEqual([0, ""]);
-		const commands: { commandIdentity: string; route: string[]; effectClass: string }[] = JSON.parse(run.stdout).result.data.commands;
-		expect(commands.filter((command) => command.route[0] === "deps").map(({ commandIdentity, route, effectClass }) => ({ commandIdentity, route, effectClass }))).toEqual([
-			{ commandIdentity: "connectors.deps.status", route: ["deps", "status"], effectClass: "inspect" },
-			{ commandIdentity: "connectors.deps.repair.preview", route: ["deps", "repair", "--preview"], effectClass: "repository-local" },
-			{ commandIdentity: "connectors.deps.repair.apply", route: ["deps", "repair", "--apply"], effectClass: "external" },
-		]);
-		expect(existsSync(box.state)).toBe(false);
 	} finally {
 		box.bundle.dispose();
 	}

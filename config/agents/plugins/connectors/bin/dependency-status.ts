@@ -2,12 +2,19 @@
 // tool's selection owner applies the rule ordinary use applies; this module
 // only names the one explicit route that owns a missing or refused
 // selection. It never installs, repairs, creates state, or searches PATH.
+import { createHash } from "node:crypto";
 import path from "node:path";
+import requirements from "../requirements.json";
 import { inspectSelectedMcporter } from "./mcporter-custody.ts";
 import { stateRoot } from "./private-state.ts";
 import type { EnvironmentSource } from "./safe-environment.ts";
 import { inspectSelectedOp } from "./setup/op.ts";
 import { inspectSelectedMise, inspectSelectedUv, type SelectionView } from "./setup/uv.ts";
+
+// The one requirements revision this build admits: the digest of its
+// bundled Requirements Manifest. deps update names it explicitly; no other
+// revision, and never an upstream latest, is ever selected.
+export const REQUIREMENTS_REVISION = `sha256:${createHash("sha256").update(JSON.stringify(requirements)).digest("hex")}`;
 
 export const DEPENDENCY_TOOLS = ["mcporter", "op", "mise", "uv"] as const;
 export type DependencyTool = (typeof DEPENDENCY_TOOLS)[number];
