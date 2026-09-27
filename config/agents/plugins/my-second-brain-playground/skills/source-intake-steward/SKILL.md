@@ -31,13 +31,10 @@ Task's binding. Reuse this run's Bead and private receipt on resume.
 
 Before a Luna role is cast, Stage Manager verifies Nathan's recorded grant for
 the exact item, Luna as provider, classification purpose, and every metadata
-field in the dispatch. Stage Manager creates a private value-free manifest with
-only the opaque item reference, Luna, classification purpose, allowed field
-names, and private receipt path. It must point to the one flat
-`classification-metadata.json` file under that item's private receipt root.
-Follow the command contract in
+field in the dispatch. Stage Manager prepares the private grant and request
+according to the command contract in
 [`source-intake-dispatch`](../../packages/source-intake-dispatch/README.md): it
-validates the manifest and request before opening that file. Only its allowed
+validates both before opening the classification metadata. Only its allowed
 projection reaches Luna; a refusal is final until Stage Manager verifies a
 matching grant. Do not give Luna a receipt path or raw item receipt. Status and
 evaluation use `source-intake-dispatch --redacted status` or
@@ -79,10 +76,8 @@ Stage Manager reviews and owns any later deletion. No automatic deletion.
 Keep raw account email, permission list, access-bearing links or keys, source
 bytes, and personal filename out of Git and Beads.
 
-Keep the delegated `classification-metadata.json` separate from this receipt's
-action and readback records. It contains only the command's allowlisted flat
-string or number metadata fields: `displayName`, `mimeType`, `modifiedTime`,
-and `sizeBytes`.
+Keep the command's classification metadata input separate from this receipt's
+action and readback records. Use the linked command contract for its fields.
 
 ## 3. Prepare evidence and draft the proposal
 
@@ -101,11 +96,14 @@ Record a separate exact-item grant before any content read or content disclosure
 Keep Luna's draft separate from the Steward's private owner check. A missing or
 refused grant means no model call and an honestly unproved model criterion.
 
-The foreground persists Luna's proposal draft before effects: current and proposed Drive locations,
-scoped original ID and mapped folder IDs, proposed human-readable filename,
-vault owner and canonical `source-artifacts/` note, duplicate and sharing
-observations, classification evidence and uncertainty, necessary folder
-creation, ordered move or rename and note actions, and the next decision.
+The foreground assembles and persists the consolidated private proposal before
+effects. Combine Luna's classification, cited evidence, uncertainty, and
+decision draft with the foreground receipt and readbacks for the current and
+proposed Drive locations, scoped original ID and mapped folder IDs, proposed
+human-readable filename, vault owner and canonical `source-artifacts/` note,
+duplicate and sharing observations, necessary folder creation, ordered move or
+rename and note actions, and the next decision. Keep private fields in the
+foreground receipt; do not send them to Luna without a separate exact-item grant.
 Preserve the extension and evidenced title, date, model or revision. Use a
 document date only when authorized evidence supports it. The foreground Steward
 shows Nathan Luna's decision question with the private proposal and requests an
