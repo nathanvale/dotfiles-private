@@ -1,0 +1,17 @@
+{
+  "name": "xero-history",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "lint": "biome check --diagnostic-level=error .",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "bun test tests",
+    "xero-history": "bun run src/cli.ts"
+  },
+  "dependencies": {
+    "@logtape/logtape": "2.3.1",
+    "@logtape/redaction": "2.3.1",
+    "zod": "4.4.3"
+  }
+}

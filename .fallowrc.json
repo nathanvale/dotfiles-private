@@ -67,6 +67,7 @@
     "config/agents/skills/personal/mcp-doctor/scripts/mcp-doctor.ts",
     "config/agents/skills/personal/session-picker/scripts/archived-sessions.ts",
     "config/agents/skills/personal/xero/scripts/quarter-ledger.ts",
+    "config/agents/plugins/personal/skills/xero-cash-coding/helper/src/cli.ts",
     "config/agents/plugins/**/tests/**/*.{js,mjs,cjs,ts}",
     "**/test-fixtures/**/*.{js,mjs,cjs,ts}",
     "config/crossnote/**/*.{js,less}",
