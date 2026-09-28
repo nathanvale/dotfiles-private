@@ -264,6 +264,10 @@ async function prepareAttachmentDelete(route: Route, ctx: PreparedContext, step:
 	if (read.issue.revision === null) return { outcome: refusal("capability-unavailable", "the Jira reply exposes no revision or updated timestamp") };
 	const bound = bindAttachment(read.data, step.attachmentId);
 	if (!bound.ok) return { outcome: refusal(bound.cause, bound.reason) };
+	// The description must have been read before anything else is; a reply
+	// without it can never clear the attachment.
+	const description = descriptionSource(read.data);
+	if (!description.ok) return { outcome: refusal("capability-unavailable", description.reason) };
 	const me = await readPrincipal(route);
 	if ("outcome" in me) return me;
 	if (bound.attachment.authorAccountId !== me.principal) return { outcome: refusal("input-invalid", ATTACHMENT_AUTHOR_GUARD_REASON) };
@@ -271,7 +275,7 @@ async function prepareAttachmentDelete(route: Route, ctx: PreparedContext, step:
 	if (listed.cause !== "success") return { outcome: failed(listed) };
 	const comments = commentSources(listed.data);
 	if (!comments.ok) return { outcome: refusal("capability-unavailable", comments.reason) };
-	const references = attachmentReferences(bound.attachment, [descriptionSource(read.data), ...comments.sources]);
+	const references = attachmentReferences(bound.attachment, [description.source, ...comments.sources]);
 	if (references.length > 0) return { outcome: refusal("input-invalid", `the attachment is still referenced by ${references.join(", ")}; remove the reference first`) };
 	return {
 		ctx: {

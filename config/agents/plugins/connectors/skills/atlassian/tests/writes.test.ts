@@ -571,16 +571,17 @@ describe("attachment delete", () => {
 			{ source: "clean 3", text: "Looks fine.", rendered: "<p>Looks fine.</p>" },
 			{ source: "clean 4", text: "", rendered: '<img src="https://cdn.example/202456/before-png">' },
 		];
-		expect(attachmentReferences(target, sources)).toEqual(["description", "comment 1", "comment 2", "comment 3", "comment 4", "comment 5", "comment 6", "comment 7"]);
-		expect(attachmentReferences({ id: "1", filename: "a+b (1).png" }, [{ source: "c", text: "see a+b (1).png here", rendered: "" }, { source: "d", text: "see a+b (1) png here", rendered: "" }])).toEqual(["c"]);
+		const plain = (entries: { source: string; text: string; rendered: string }[]) => entries.map((entry) => ({ ...entry, mediaAttributes: [] }));
+		expect(attachmentReferences(target, plain(sources))).toEqual(["description", "comment 1", "comment 2", "comment 3", "comment 4", "comment 5", "comment 6", "comment 7"]);
+		expect(attachmentReferences({ id: "1", filename: "a+b (1).png" }, plain([{ source: "c", text: "see a+b (1).png here", rendered: "" }, { source: "d", text: "see a+b (1) png here", rendered: "" }]))).toEqual(["c"]);
 		expect(attachmentReferences(target, [])).toEqual([]);
 	});
 
 	test("the description source carries the stored text and rendered HTML; comment sources need a complete list with ids", () => {
-		expect(descriptionSource(issue())).toEqual({ source: "description", text: "Plain.", rendered: "<p>Plain.</p>" });
-		expect(descriptionSource({ key: "PROJ-1", fields: { description: null } })).toEqual({ source: "description", text: "", rendered: "" });
+		expect(descriptionSource(issue())).toEqual({ ok: true, source: { source: "description", text: "Plain.", rendered: "<p>Plain.</p>", mediaAttributes: [] } });
+		expect(descriptionSource({ key: "PROJ-1", fields: { description: null } })).toEqual({ ok: true, source: { source: "description", text: "", rendered: "", mediaAttributes: [] } });
 		const list = (total: number, ...comments: Record<string, unknown>[]) => ({ startAt: 0, maxResults: 100, total, comments });
-		expect(commentSources(list(2, { id: "1", body: "a", renderedBody: "<p>a</p>" }, { id: "2", body: "b" }))).toEqual({ ok: true, total: 2, sources: [{ source: "comment 1", text: "a", rendered: "<p>a</p>" }, { source: "comment 2", text: "b", rendered: "" }] });
+		expect(commentSources(list(2, { id: "1", body: "a", renderedBody: "<p>a</p>" }, { id: "2", body: "b" }))).toEqual({ ok: true, total: 2, sources: [{ source: "comment 1", text: "a", rendered: "<p>a</p>", mediaAttributes: [] }, { source: "comment 2", text: "b", rendered: "", mediaAttributes: [] }] });
 		expect(commentSources(list(0))).toEqual({ ok: true, total: 0, sources: [] });
 		expect(commentSources(list(3, { id: "1", body: "a" }))).toEqual({ ok: false, reason: "the issue has 3 comments and the reference guard read 1; it cannot clear the attachment" });
 		expect(commentSources(list(1, { body: "a" }))).toEqual({ ok: false, reason: "a listed comment carries no id" });
@@ -588,12 +589,58 @@ describe("attachment delete", () => {
 		expect(commentSources({ errorMessages: ["gone"] })).toEqual({ ok: false, reason: "the comment list exposes no comments and total" });
 	});
 
-	test("the 204 reply proves nothing; removal is proven only by the issue's attachment list no longer carrying the id, and a list that still does proves the delete did not land", () => {
+	// Repair round 1, finding 2: a source whose content was not read is never
+	// a clear source. An explicitly empty or null description is read.
+	test("a missing description field, an unreadable description, and a comment with neither body form refuse rather than count as checked", () => {
+		expect(descriptionSource({ key: "PROJ-1", fields: { updated: "t1" } })).toEqual({ ok: false, reason: "the issue read exposes no description field; the reference guard cannot clear the attachment" });
+		expect(descriptionSource({ key: "PROJ-1" })).toEqual({ ok: false, reason: "the issue read exposes no description field; the reference guard cannot clear the attachment" });
+		expect(descriptionSource({ key: "PROJ-1", fields: { description: 42 } })).toEqual({ ok: false, reason: "the issue description could not be read; the reference guard cannot clear the attachment" });
+		expect(descriptionSource({ key: "PROJ-1", fields: { description: "" } })).toEqual({ ok: true, source: { source: "description", text: "", rendered: "", mediaAttributes: [] } });
+		expect(descriptionSource({ key: "PROJ-1", fields: { description: null }, renderedFields: { description: "" } })).toEqual({ ok: true, source: { source: "description", text: "", rendered: "", mediaAttributes: [] } });
+		const list = (...comments: Record<string, unknown>[]) => ({ startAt: 0, maxResults: 100, total: comments.length, comments });
+		expect(commentSources(list({ id: "1", body: "a" }, { id: "2", updated: "u1" }))).toEqual({ ok: false, reason: "comment 2 carries no body; the reference guard cannot clear the attachment" });
+		expect(commentSources(list({ id: "3", body: null }))).toEqual({ ok: false, reason: "comment 3 carries no body; the reference guard cannot clear the attachment" });
+		expect(commentSources(list({ id: "4", body: 7 }))).toEqual({ ok: false, reason: "comment 4 carries no body; the reference guard cannot clear the attachment" });
+		// An empty body was read; a rendered body alone was read.
+		expect(commentSources(list({ id: "5", body: "" }))).toEqual({ ok: true, total: 1, sources: [{ source: "comment 5", text: "", rendered: "", mediaAttributes: [] }] });
+		expect(commentSources(list({ id: "6", renderedBody: "<p>x</p>" }))).toEqual({ ok: true, total: 1, sources: [{ source: "comment 6", text: "", rendered: "<p>x</p>", mediaAttributes: [] }] });
+	});
+
+	// Repair round 1, finding 1: an ADF media node names the attachment in its
+	// attributes, not in any text node, and rendered HTML may be absent.
+	test("an ADF media node referencing the attachment by id, alt, url, or collection is a reference, in a description or a comment, without rendered HTML", () => {
+		const target = { id: "202456", filename: "before.png" };
+		const media = (attrs: Record<string, unknown>, type = "media") => ({ type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "text", text: "See the shot." }] }, { type: "mediaSingle", attrs: { layout: "center" }, content: [{ type, attrs }] }] });
+		const byId = descriptionSource({ key: "PROJ-1", fields: { description: media({ id: "202456", type: "file", collection: "jira-10001" }) } });
+		expect(byId.ok && byId.source.mediaAttributes).toEqual(["202456", "file", "jira-10001"]);
+		expect(byId.ok && attachmentReferences(target, [byId.source])).toEqual(["description"]);
+		const byAlt = descriptionSource({ key: "PROJ-1", fields: { description: media({ id: "9f1b3f0a-0000-4000-8000-000000000001", type: "file", collection: "jira-10001", alt: "before.png" }) } });
+		expect(byAlt.ok && attachmentReferences(target, [byAlt.source])).toEqual(["description"]);
+		const byUrl = descriptionSource({ key: "PROJ-1", fields: { description: media({ type: "external", url: "https://example.atlassian.net/secure/attachment/202456/x" }) } });
+		expect(byUrl.ok && attachmentReferences(target, [byUrl.source])).toEqual(["description"]);
+		const inline = descriptionSource({ key: "PROJ-1", fields: { description: { type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "mediaInline", attrs: { id: "202456", type: "file", collection: "c" } }] }] } } });
+		expect(inline.ok && attachmentReferences(target, [inline.source])).toEqual(["description"]);
+		const other = descriptionSource({ key: "PROJ-1", fields: { description: media({ id: "202457", type: "file", collection: "jira-10001", alt: "after.png" }) } });
+		expect(other.ok && attachmentReferences(target, [other.source])).toEqual([]);
+		// The bare number in an ADF text node is still prose, not an id reference.
+		const prose = descriptionSource({ key: "PROJ-1", fields: { description: { type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "text", text: "build 202456 passed" }] }] } } });
+		expect(prose.ok && attachmentReferences(target, [prose.source])).toEqual([]);
+		const comments = commentSources({ startAt: 0, maxResults: 100, total: 2, comments: [{ id: "900", body: media({ id: "202456", type: "file", collection: "c" }) }, { id: "901", body: media({ id: "1", type: "file", collection: "c", alt: "other.png" }) }] });
+		expect(comments.ok && comments.sources.map((entry) => entry.mediaAttributes)).toEqual([["202456", "file", "c"], ["1", "file", "c", "other.png"]]);
+		expect(comments.ok && attachmentReferences(target, comments.sources)).toEqual(["comment 900"]);
+	});
+
+	test("the 204 reply proves nothing; removal is proven only by the issue's attachment list no longer carrying the id; a list that still does proves no effect only while the issue's updated is the bound one", () => {
 		expect(effectsFromReply("issue.attachment.delete", DELETE, null)).toEqual([]);
 		expect(effectsFromReply("issue.attachment.delete", DELETE, { message: "Attachment deleted successfully" })).toEqual([]);
 		expect(readBackEvidence("issue.attachment.delete", DELETE, never, issue([other]))).toEqual({ kind: "found", effects: [{ kind: "jira-attachment", id: "202456" }] });
 		expect(readBackEvidence("issue.attachment.delete", DELETE, never, issue([]))).toEqual({ kind: "found", effects: [{ kind: "jira-attachment", id: "202456" }] });
-		expect(readBackEvidence("issue.attachment.delete", DELETE, never, issue())).toEqual({ kind: "absent", revisionUnchanged: true });
+		// Repair round 1, finding 3: revisionUnchanged comes from the observed issue updated against the bound one, never from presence alone.
+		const boundT1 = (observed: string) => observed === "t1";
+		expect(readBackEvidence("issue.attachment.delete", DELETE, boundT1, issue([record, other], "t1"))).toEqual({ kind: "absent", revisionUnchanged: true });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, boundT1, issue([record, other], "t2"))).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, never, issue())).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, boundT1, { key: "PROJ-1", fields: { attachment: [record] } })).toEqual({ kind: "absent", revisionUnchanged: false });
 		expect(readBackEvidence("issue.attachment.delete", DELETE, never, { key: "PROJ-1", fields: { updated: "t2" } })).toEqual({ kind: "indeterminate", reason: "the read-back reply carries no attachment list" });
 		expect(readBackEvidence("issue.attachment.delete", DELETE, never, { key: "PROJ-2", fields: { attachment: [] } })).toEqual({ kind: "indeterminate", reason: "the read-back reply names a different issue" });
 		expect(readBackEvidence("issue.attachment.delete", DELETE, never, { errorMessages: ["gone"] })).toEqual({ kind: "indeterminate", reason: "the read-back reply names no issue key" });

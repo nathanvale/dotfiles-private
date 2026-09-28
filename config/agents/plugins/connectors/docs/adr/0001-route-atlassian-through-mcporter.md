@@ -263,14 +263,19 @@ one attachment, named by its numeric id, from one issue.
 - Reference guard. The preview reads the description and every comment (the
   comment list is bounded to 100 and refused when the issue's total exceeds
   what was read) and refuses when any still references the attachment by file
-  name as a whole word, in wiki text or rendered HTML, or by id on a Jira
-  attachment route. The preview reports what it checked.
+  name as a whole word, in wiki text, ADF text, or rendered HTML; by id on a
+  Jira attachment route; or through an ADF media node whose attributes (id,
+  alt, url, collection) name it. A source whose content was not read (no
+  description field in the reply, a comment with neither body nor rendered
+  body) refuses rather than counts as clear; an explicitly empty or null
+  description was read. The preview reports what it checked.
 - Read-back completion. Jira answers the delete with no body, and the reply
   never settles the write: completion needs the issue's attachment list, read
   back through the same route, to no longer carry the id, as
   `page.attachment.delete` already settles. A list that still carries it
-  settles `unchanged`; a failed read-back leaves the receipt `outcome-unknown`
-  for `adjudicate`, never a success by hand.
+  settles `unchanged` only when the issue's `updated` is the bound one; a
+  moved issue or a failed read-back leaves the receipt `outcome-unknown` for
+  `adjudicate`, never a success by hand.
 - Not a fallback, same custody, same journal. As the first amendment: the
   operation is named by the caller; no Community failure is re-shaped onto
   it; the credential exists only in the Provider process and its
@@ -300,13 +305,21 @@ non-id form; preview binds the issue `updated` and the attachment facts and
 reports the reference check; a resized attachment or a moved issue refuses
 the apply before any send; the author guard refuses at preview and at apply
 before any comment is read; the reference guard refuses on a wiki macro, a
-rendered id, the description in text or HTML, and an incomplete comment
-list, and clears a containing file name, another id, and a bare number; the
-delete reply never counts and read-back absence completes; a lost reply with
-a failed read-back settles `outcome-unknown`, blocks the issue, and
-adjudicates to `unchanged` while the list still carries the id and to
-`completed` once it does not; the REST Provider refuses a delete without its
-issue key or by file name before any request, with no secret on any stream.
+rendered id, the description in text or HTML, an ADF media node naming the
+attachment in a description or a comment without rendered HTML, a reply with
+no description field, a comment with no body form, and an incomplete comment
+list, and clears a containing file name, another id, a bare number, and an
+empty or null description; the delete reply never counts and read-back
+absence completes; a lost reply with a successful read-back settles
+`unchanged` only at the bound issue `updated`, stays `outcome-unknown` when
+the issue moved, and completes once the id is gone; a lost reply with a
+failed read-back settles `outcome-unknown`, blocks the issue, and adjudicates
+to `unchanged` at the bound `updated` or to `completed` once the id is gone;
+the REST Provider refuses a delete without its issue key or by file name
+before any request, with no secret on any stream; and the spawned public
+dispatcher refuses a file-name input, an unreadable item, and an unknown
+preview with the documented envelope, exit code, empty stderr, and no
+journal effect.
 
 Live: not yet run. The first live qualification is one preview, apply, and
 read-back on one unreferenced attachment the principal uploaded to SMSTX-364,

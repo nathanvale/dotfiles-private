@@ -1142,13 +1142,17 @@ function restAttachmentList(reply: unknown): unknown[] | undefined {
 // Removal is proven only by the issue's own attachment list no longer
 // carrying the id; a list that still carries it proves the delete did not
 // land, whatever the reply said.
-function issueAttachmentDeleteEvidence(input: WriteInput, reply: unknown): ReadBack {
+// A list that still carries the id proves no effect only while the issue's
+// own `updated` is the one the preview bound; a moved issue leaves a
+// possibly-sent delete unknown for adjudication.
+function issueAttachmentDeleteEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown): ReadBack {
 	const issue = observeIssue(reply);
 	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply names no issue key" };
 	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
 	if (restAttachmentList(reply) === undefined) return { kind: "indeterminate", reason: "the read-back reply carries no attachment list" };
 	const present = issue.attachments.some((entry) => entry.id === input.attachmentId);
-	return present ? { kind: "absent", revisionUnchanged: true } : { kind: "found", effects: [{ kind: "jira-attachment", id: input.attachmentId as string }] };
+	if (!present) return { kind: "found", effects: [{ kind: "jira-attachment", id: input.attachmentId as string }] };
+	return { kind: "absent", revisionUnchanged: issue.revision !== null && revisionMatches(issue.revision) };
 }
 
 // The Community update tool reports a failed upload inside an otherwise
@@ -1283,7 +1287,7 @@ export function readBackEvidence(operation: WriteOperation, input: WriteInput, r
 		case "issue.attach":
 			return issueAttachEvidence(input, revisionMatches, reply, baseline);
 		case "issue.attachment.delete":
-			return issueAttachmentDeleteEvidence(input, reply);
+			return issueAttachmentDeleteEvidence(input, revisionMatches, reply);
 		case "issue.transition":
 			return issueStateEvidence(input, revisionMatches, reply, baseline, statusHolds(input));
 		case "issue.assign":
@@ -1522,14 +1526,54 @@ export const attachmentDigest = (attachment: BoundAttachment): string => digest(
 
 export const ATTACHMENT_AUTHOR_GUARD_REASON = "attachmentId names an attachment another account uploaded; the attachment delete removes only the principal's own uploads";
 
-// One text the reference guard inspects: where it came from, the stored text
-// (wiki markup, or the flattened body), and the rendered HTML when Jira
-// supplied it.
+// One text the reference guard inspects: where it came from, every string
+// the stored body holds (wiki markup, or each string leaf of an ADF document,
+// including node attributes), the rendered HTML when Jira supplied it, and
+// the attribute values of every ADF media node, which name an attachment by
+// id, alt, url, or collection rather than in any text node.
 export interface ReferenceSource {
 	source: string;
 	text: string;
 	rendered: string;
+	mediaAttributes: string[];
 }
+
+// The ADF nodes whose attributes identify a file: media and mediaInline carry
+// id, type, collection, alt, and url; their mediaSingle and mediaGroup
+// wrappers carry layout only and are walked for their children.
+const MEDIA_NODE_TYPES: ReadonlySet<string> = new Set(["media", "mediaInline"]);
+
+// Every string leaf of a stored body, whatever its shape, plus the attribute
+// values of its ADF media nodes. Unlike bodyText, which flattens prose for
+// comment matching, this walk descends into every key so that link marks and
+// media attributes are seen; missing a reference would clear a delete.
+function referenceContent(value: unknown, into: { text: string[]; mediaAttributes: string[] }, depth = 0): void {
+	if (depth > 12) return;
+	if (typeof value === "string") {
+		into.text.push(value);
+		return;
+	}
+	if (Array.isArray(value)) {
+		for (const entry of value) referenceContent(entry, into, depth + 1);
+		return;
+	}
+	if (!isRecord(value)) return;
+	if (typeof value.type === "string" && MEDIA_NODE_TYPES.has(value.type) && isRecord(value.attrs)) {
+		for (const attribute of Object.values(value.attrs)) if (typeof attribute === "string") into.mediaAttributes.push(attribute);
+	}
+	for (const entry of Object.values(value)) referenceContent(entry, into, depth + 1);
+}
+
+function referenceSource(source: string, body: unknown, rendered: unknown): ReferenceSource {
+	const into = { text: [] as string[], mediaAttributes: [] as string[] };
+	referenceContent(body, into);
+	return { source, text: into.text.join(" "), rendered: typeof rendered === "string" ? rendered : "", mediaAttributes: into.mediaAttributes };
+}
+
+// A body was read when it is a string (wiki text or plain text) or a record
+// (an ADF document or a Confluence body object). Null, a number, or an
+// absent body was not read.
+const bodyRead = (body: unknown): boolean => typeof body === "string" || isRecord(body);
 
 // What the guard inspected and where it found the attachment, reported in
 // the preview so the operator can see the check was complete.
@@ -1556,27 +1600,39 @@ function referencePatterns(attachment: { id: string; filename: string }): RegExp
 	return [new RegExp(`(?:/attachment/(?:content/|thumbnail/)?|/secure/(?:attachment|thumbnail)/|attachmentId=)${id}(?![0-9])`, "i"), new RegExp(`(?:^|[^A-Za-z0-9_.-])${name}(?![A-Za-z0-9_]|\\.[A-Za-z0-9])`, "iu")];
 }
 
-// The sources that still reference the attachment, in the order given.
+// The sources that still reference the attachment, in the order given. An
+// ADF media attribute equal to the attachment id is a reference on its own.
 export function attachmentReferences(attachment: { id: string; filename: string }, sources: readonly ReferenceSource[]): string[] {
 	const patterns = referencePatterns(attachment);
-	return sources.filter((entry) => patterns.some((pattern) => pattern.test(entry.text) || pattern.test(entry.rendered))).map((entry) => entry.source);
+	return sources.filter((entry) => entry.mediaAttributes.includes(attachment.id) || patterns.some((pattern) => pattern.test(entry.text) || pattern.test(entry.rendered))).map((entry) => entry.source);
 }
 
-// The issue description as the context read exposes it: the stored text and
-// the rendered HTML (expand=renderedFields), either of which may be absent.
-export function descriptionSource(reply: unknown): ReferenceSource {
+export type DescriptionSource = { ok: true; source: ReferenceSource } | { ok: false; reason: string };
+
+const UNREAD = "the reference guard cannot clear the attachment";
+
+// The issue description as the context read exposes it: the stored text or
+// ADF and the rendered HTML (expand=renderedFields). The description field
+// must be present in the reply, so an unread description never counts as
+// checked; an explicitly empty or null description was read.
+export function descriptionSource(reply: unknown): DescriptionSource {
 	const data = unwrapReply(reply);
 	const top = isRecord(data) ? data : {};
-	const fields = isRecord(top.fields) ? top.fields : {};
-	const rendered = isRecord(top.renderedFields) ? top.renderedFields : {};
-	return { source: "description", text: bodyText(fields.description), rendered: typeof rendered.description === "string" ? rendered.description : "" };
+	const fields = isRecord(top.fields) ? top.fields : undefined;
+	if (fields === undefined || !Object.hasOwn(fields, "description")) return { ok: false, reason: `the issue read exposes no description field; ${UNREAD}` };
+	const description = fields.description;
+	if (description !== null && !bodyRead(description)) return { ok: false, reason: `the issue description could not be read; ${UNREAD}` };
+	const rendered = isRecord(top.renderedFields) ? top.renderedFields.description : undefined;
+	return { ok: true, source: referenceSource("description", description ?? "", rendered) };
 }
 
 export type CommentSources = { ok: true; sources: ReferenceSource[]; total: number } | { ok: false; reason: string };
 
 // Every comment in a REST comment list, as a reference source. The list must
 // be complete: a total beyond the comments returned means the guard could not
-// see every comment, so it refuses rather than clear the attachment.
+// see every comment, so it refuses rather than clear the attachment. Each
+// comment must carry a body that was read (a string or an ADF document) or a
+// rendered body; a comment with neither was not read and refuses too.
 export function commentSources(reply: unknown): CommentSources {
 	const data = unwrapReply(reply);
 	const top = isRecord(data) ? data : {};
@@ -1586,7 +1642,9 @@ export function commentSources(reply: unknown): CommentSources {
 		if (!isRecord(entry)) return { ok: false, reason: "the comment list carries a malformed comment" };
 		const id = stringAt(entry, "id");
 		if (id === undefined) return { ok: false, reason: "a listed comment carries no id" };
-		sources.push({ source: `comment ${id}`, text: bodyText(entry.body), rendered: typeof entry.renderedBody === "string" ? entry.renderedBody : "" });
+		const renderedRead = typeof entry.renderedBody === "string";
+		if (!bodyRead(entry.body) && !renderedRead) return { ok: false, reason: `comment ${id} carries no body; ${UNREAD}` };
+		sources.push(referenceSource(`comment ${id}`, bodyRead(entry.body) ? entry.body : "", entry.renderedBody));
 	}
 	if (top.total > sources.length) return { ok: false, reason: `the issue has ${top.total} comments and the reference guard read ${sources.length}; it cannot clear the attachment` };
 	return { ok: true, sources, total: top.total };

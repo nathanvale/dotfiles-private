@@ -180,18 +180,24 @@ comments replaced, and nothing else; it is never a fallback.
   (`input-invalid` otherwise), checked in the dispatcher at preview and apply
   and again inside the REST Provider before the request leaves.
 - Reference guard: the description and every comment are read; any that still
-  names the file (a wiki macro, a link, alt text, or prose) or carries the
-  attachment id on a Jira attachment route refuses with `input-invalid` and
-  names the source. `result.data.referenceCheck` reports how many comments
-  were read against the issue total; an issue with more comments than the
-  guard reads (100) refuses with `capability-unavailable` rather than clear
-  the attachment. Edit or remove the referencing comment first, for the
+  names the file (a wiki macro, a link, alt text, or prose), carries the
+  attachment id on a Jira attachment route, or holds an ADF media node whose
+  attributes name the attachment refuses with `input-invalid` and names the
+  source. Content that was not read never counts as checked: a reply without
+  the description field, or a comment with neither a body nor a rendered
+  body, refuses with `capability-unavailable`; an empty or null description
+  was read. `result.data.referenceCheck` reports how many comments were read
+  against the issue total; an issue with more comments than the guard reads
+  (100) refuses with `capability-unavailable` rather than clear the
+  attachment. Edit or remove the referencing comment first, for the
   principal's own comments with `issue.comment.media.update` or
   `issue.comment.update`.
 - Jira answers the delete with no body, so the reply never settles it: apply
   completes only when the issue's attachment list, read back through the same
-  route, no longer carries the id; a list that still carries it settles
-  `unchanged`; a failed read-back leaves `outcome-unknown` for `adjudicate`.
+  route, no longer carries the id. A list that still carries it settles
+  `unchanged` only while the issue `updated` is the one the preview bound;
+  if the issue moved, or the read-back failed, the receipt stays
+  `outcome-unknown` for `adjudicate`, which completes it once the id is gone.
 - Proof state: fixture-tested. No live delete has run through this route yet;
   the first live qualification is one unreferenced attachment the principal
   uploaded on a ticket the operator names.
