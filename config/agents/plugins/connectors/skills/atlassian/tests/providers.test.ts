@@ -264,13 +264,15 @@ describe("REST provider process", () => {
 			["path escape", request("jira_rest_comment_get", { issue_key: "PROJ-1", comment_id: "1/../2" })],
 			["extra argument", request("jira_rest_comment_add", { issue_key: "PROJ-1", body: "x", visibility: "{}" })],
 			["extra key", JSON.stringify({ tool: "jira_rest_myself", args: {}, url: "https://evil.example" })],
+			["delete without its issue", request("jira_rest_attachment_delete", { attachment_id: "202456" })],
+			["delete by file name", request("jira_rest_attachment_delete", { issue_key: "PROJ-1", attachment_id: "before.png" })],
 			["not JSON", "not json"],
 		] as const) {
 			const result = await runProvider(REST, [], {}, stdin);
 			expect([label, result.code, result.stdout, result.stderr.includes("atlassian-provider:error:arguments-invalid:")]).toEqual([label, 2, "", true]);
 			expect(result.stderr).not.toContain("evil.example");
 		}
-		expect(wrapperLines()).toEqual(Array(6).fill("op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json"));
+		expect(wrapperLines()).toEqual(Array(8).fill("op item get JIRA_EXAMPLE_API_TOKEN --vault API Credentials --format json"));
 	});
 
 	test("a missing or malformed credential field fails closed before the request is read", async () => {

@@ -12,8 +12,9 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 
 // The active Providers. Community is the one Atlassian Provider; `rest` is the
-// owned Jira REST v2 transport that exists for the wiki-comment capability
-// exception only (ADR 0001 amendment, 28 September 2026). The journal persists
+// owned Jira REST v2 transport that exists for the wiki-comment and the
+// attachment-delete capability exceptions only (ADR 0001 amendments,
+// 28 September 2026). The journal persists
 // the name on every preview and receipt so a record from a retired Provider
 // is recognised, never reinterpreted.
 export const PROVIDER = "community" as const;
@@ -22,8 +23,8 @@ export const PROVIDERS = [PROVIDER, REST_PROVIDER] as const;
 export type ProviderName = (typeof PROVIDERS)[number];
 
 // The owned REST route: one static server name and the exact request shapes
-// the wiki-comment exception may make, with the arguments each requires. The
-// REST Provider script refuses any other tool or argument.
+// the two capability exceptions may make, with the arguments each requires.
+// The REST Provider script refuses any other tool or argument.
 export const REST_SERVER = "atlassian-rest-jira" as const;
 export const REST_TOOLS = Object.freeze({
 	jira_rest_myself: Object.freeze([] as string[]),
@@ -35,6 +36,14 @@ export const REST_TOOLS = Object.freeze({
 	// A bounded read of an attachment's first bytes, to establish the image
 	// type of an attachment Jira reports no MIME type for.
 	jira_rest_attachment_head: Object.freeze(["attachment_id"]),
+	// The attachment-delete exception (ADR 0001, second amendment): the issue's
+	// attachments with author, size, and created time beside the description in
+	// wiki text and rendered HTML, so one read binds the attachment and checks
+	// the description for a reference; and the delete of one attachment by id,
+	// with the issue key so the Provider proves the attachment is on that issue
+	// before the request.
+	jira_rest_issue_attachment_context: Object.freeze(["issue_key"]),
+	jira_rest_attachment_delete: Object.freeze(["issue_key", "attachment_id"]),
 });
 export type RestTool = keyof typeof REST_TOOLS;
 export const isRestTool = (tool: string): tool is RestTool => Object.hasOwn(REST_TOOLS, tool);
@@ -106,6 +115,10 @@ const OPERATION_REGISTRY = [
 	{ id: "issue.comment.media", kind: "write", product: "jira", provider: REST_PROVIDER, tool: "jira_rest_comment_add" },
 	{ id: "issue.comment.media.update", kind: "write", product: "jira", provider: REST_PROVIDER, tool: "jira_rest_comment_edit" },
 	{ id: "issue.attach", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_update_issue" },
+	// The attachment-delete capability exception (ADR 0001, second amendment):
+	// one attachment by id, through the owned REST route, because the Community
+	// Provider exposes no Jira attachment delete. Never a fallback.
+	{ id: "issue.attachment.delete", kind: "write", product: "jira", provider: REST_PROVIDER, tool: "jira_rest_attachment_delete" },
 	{ id: "issue.transition", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_transition_issue" },
 	{ id: "issue.assign", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_assign_issue" },
 	{ id: "issue.delete", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_delete_issue" },

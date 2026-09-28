@@ -4,7 +4,7 @@
 // Cloud REST v2 reference and the prototype run on SMSTX-364 (28 September
 // 2026).
 import { describe, expect, test } from "bun:test";
-import { authorGuardVerdict, editGuardRequests, HEAD_BYTES, readLeadingBytes, restReply, restRequest, restSchema } from "../scripts/dispatch/rest.ts";
+import { attachmentOnIssue, authorGuardVerdict, deleteGuardRequests, editGuardRequests, HEAD_BYTES, readLeadingBytes, restReply, restRequest, restSchema } from "../scripts/dispatch/rest.ts";
 
 const RENDERED = "expand=renderedBody";
 
@@ -20,6 +20,12 @@ describe("REST requests", () => {
 		expect(restRequest("jira_rest_attachment_head", { attachment_id: "202456" })).toEqual({ method: "GET", path: "/rest/api/2/attachment/content/202456?redirect=false", range: "bytes=0-63" });
 		expect(restRequest("jira_rest_attachment_head", { attachment_id: "202456/../1" })).toBeNull();
 		expect(restRequest("jira_rest_attachment_head", { issue_key: "PROJ-1" })).toBeNull();
+		// The attachment-delete exception: the context read asks for the description rendered, and the delete is one attachment by id.
+		expect(restRequest("jira_rest_issue_attachment_context", { issue_key: "PROJ-1" })).toEqual({ method: "GET", path: "/rest/api/2/issue/PROJ-1?fields=attachment,updated,description&expand=renderedFields" });
+		expect(restRequest("jira_rest_attachment_delete", { issue_key: "PROJ-1", attachment_id: "202456" })).toEqual({ method: "DELETE", path: "/rest/api/2/attachment/202456" });
+		expect(restRequest("jira_rest_attachment_delete", { attachment_id: "202456" })).toBeNull();
+		expect(restRequest("jira_rest_attachment_delete", { issue_key: "PROJ-1", attachment_id: "202456/../1" })).toBeNull();
+		expect(restRequest("jira_rest_attachment_delete", { issue_key: "PROJ-1", attachment_id: "before.png" })).toBeNull();
 	});
 
 	test("a tool outside the vocabulary, a missing, extra, or malformed argument, and an oversized body are refused as null", () => {
@@ -45,6 +51,8 @@ describe("REST requests", () => {
 			["jira_rest_comment_add", ["issue_key", "body"], ["issue_key", "body"]],
 			["jira_rest_comment_edit", ["issue_key", "comment_id", "body"], ["issue_key", "comment_id", "body"]],
 			["jira_rest_attachment_head", ["attachment_id"], ["attachment_id"]],
+			["jira_rest_issue_attachment_context", ["issue_key"], ["issue_key"]],
+			["jira_rest_attachment_delete", ["issue_key", "attachment_id"], ["issue_key", "attachment_id"]],
 		]);
 	});
 
@@ -59,6 +67,22 @@ describe("REST requests", () => {
 		expect(authorGuardVerdict({ emailAddress: "me@example.invalid" }, { id: "454771", author: { accountId: "712020:me" } })).toBe("unverifiable");
 		expect(authorGuardVerdict(null, null)).toBe("unverifiable");
 		expect(authorGuardVerdict({ accountId: "" }, { author: { accountId: "" } })).toBe("unverifiable");
+	});
+
+	test("the delete guard reads the principal and the issue's attachments first; the attachment must be listed on that issue and the author verdict applies to its record", () => {
+		expect(deleteGuardRequests({ issue_key: "PROJ-1", attachment_id: "202456" })).toEqual({ myself: { method: "GET", path: "/rest/api/2/myself" }, attachments: { method: "GET", path: "/rest/api/2/issue/PROJ-1?fields=attachment,updated" } });
+		expect(deleteGuardRequests({ attachment_id: "202456" })).toBeNull();
+		expect(deleteGuardRequests({ issue_key: "PROJ-1", attachment_id: "1/../2" })).toBeNull();
+		const listed = { key: "PROJ-1", fields: { attachment: [{ id: "202456", filename: "before.png", author: { accountId: "712020:me" } }, { id: 202457, filename: "after.png", author: { accountId: "712020:other" } }] } };
+		expect(attachmentOnIssue(listed, "202456")).toEqual({ id: "202456", filename: "before.png", author: { accountId: "712020:me" } });
+		expect(attachmentOnIssue(listed, "202457")?.filename).toBe("after.png");
+		expect(attachmentOnIssue(listed, "999")).toBeUndefined();
+		expect(attachmentOnIssue({ key: "PROJ-1", fields: {} }, "202456")).toBeUndefined();
+		expect(attachmentOnIssue(null, "202456")).toBeUndefined();
+		const me = { accountId: "712020:me" };
+		expect(authorGuardVerdict(me, attachmentOnIssue(listed, "202456"))).toBe("match");
+		expect(authorGuardVerdict(me, attachmentOnIssue(listed, "202457"))).toBe("mismatch");
+		expect(authorGuardVerdict(me, attachmentOnIssue(listed, "999"))).toBe("unverifiable");
 	});
 
 	test("the head read takes only the leading bytes from a body and cancels the rest, even when the server ignores Range and streams a large body", async () => {
