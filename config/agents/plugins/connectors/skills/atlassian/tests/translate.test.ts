@@ -55,6 +55,8 @@ describe("translateFailure", () => {
 			["community-fields-missing", "the product credential item needs username, credential, and a site_url field"],
 			["execve-unavailable", "run the Provider with a Bun runtime that supports process replacement"],
 			["exec-failed", "inspect the Provider executable and runtime"],
+			["author-mismatch", "the comment was authored by another account; the media update edits only the principal's own comments"],
+			["author-unverifiable", "the principal or the comment author could not be read before the edit; nothing was sent"],
 		] as const) {
 			expect(translateFailure(process_(`atlassian-provider:error:${code}:untrusted provider detail`, "", 4))).toEqual({ cause: "refused-precondition", hint });
 		}

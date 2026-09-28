@@ -8,7 +8,8 @@ description: Read, search, create, update, transition, assign, comment, attach f
 The plugin's packaged front door is the only supported entrypoint. Behind
 `run`, `recover`, and `auth` it owns tenant selection, the tenant registration
 gate, the trusted-origin binding, live schema confirmation, the one Community
-route per product, the private upload outbox, and the write journal. Keep
+route per product, the owned REST route for the two `issue.comment.media`
+operations, the private upload outbox, and the write journal. Keep
 native Harness MCP tools, direct REST calls, other Jira CLIs, raw MCPorter
 calls, and browser automation outside this route.
 
@@ -158,6 +159,8 @@ completed apply answers `SUCCESS_RUN_APPLIED`; its receipt, with `runId` and
 | `issue.update` | `issueKey`, `fields` (flat object; `assignee` takes an email, name, or account id) | issue `updated` |
 | `issue.comment` | `issueKey`, `body` | none |
 | `issue.comment.update` | `issueKey`, `commentId`, `body` | comment `updated` |
+| `issue.comment.media` | `issueKey`, `body` (wiki markup), `images` (attached file names the body references) | attachment ids |
+| `issue.comment.media.update` | `issueKey`, `commentId` (the principal's own comment), `body` (wiki markup), `images` | comment `updated`, attachment ids |
 | `issue.attach` | `issueKey`, `file` (absolute local path) | issue `updated` |
 | `issue.transition` | `issueKey`, `toStatus` (a status named by `issue.transitions`) | issue `updated` |
 | `issue.assign` | `issueKey`, `assignee?` (email, name, or account id; omitted unassigns) | issue `updated` |
@@ -188,6 +191,45 @@ completed apply answers `SUCCESS_RUN_APPLIED`; its receipt, with `runId` and
   Confirm a notification with the recipient before relying on it.
 
 ### Authorization
+
+#### Inline images from the issue's attachments
+
+The Community route posts Markdown as ADF and cannot render an attached image
+inline: `!file.png!` stays literal text and `![alt](url)` becomes a link.
+`issue.comment.media` and `issue.comment.media.update` exist for that one
+need and nothing else. They send Jira wiki markup through the skill's owned
+REST route (`provider: "rest"`, server `atlassian-rest-jira`), which the
+ADR 0001 amendment admits as a capability exception. They are never a
+fallback: a Community operation that fails stays failed.
+
+- `body` is wiki markup. Reference each image with an explicit width equal
+  to its CSS pixel width, `!name.png|width=<css pixels>!` (screenshots are
+  2x captures, and Jira shrinks an image that has no width). Write a mention
+  as `[~accountid:<account-id>]`, a link as `[label|https://...]`, code as
+  `{{text}}`, bold as `*text*`. Read-back compares these parts exactly, so
+  the stored comment must keep them.
+- `images` lists exactly the file names the body references. A name the body
+  does not reference, or a reference `images` does not name, refuses with
+  `input-invalid` before any read.
+- Every name must be attached to the issue under one id and be an image:
+  by the type Jira reports, or, when Jira reports none (every file
+  `issue.attach` uploads), by its first bytes (PNG, JPEG, GIF, or WebP). A
+  missing file refuses `not-found`; a duplicated name or a non-image refuses
+  `input-invalid`. Attach with `issue.attach` first.
+- The preview binds the wiki body and the attachment ids; an attachment
+  replaced under a new id between preview and apply refuses the apply
+  (`refused-preview`). Read-back proves an `<img>` per bound attachment in
+  the comment's rendered HTML; the update form also needs the comment's
+  `updated` to move.
+- `issue.comment.media.update` edits only a comment the tenant principal
+  authored (`input-invalid` otherwise) and replaces the whole body. Read the
+  current text first and carry it over.
+- Proof state: live-write-proven for create and edit through the dispatcher
+  (SMSTX-364, 28 September 2026, the coordinator's run recorded on PR #145:
+  create, edit, and the author-guard refusal completed with receipt-bound
+  effects and no open receipt). The wiki-markup mechanism was first shown the
+  same day by a direct REST prototype outside this route; that is separate
+  evidence. A wiki mention's notification delivery is not confirmed.
 
 Check authorization before `--apply`. An explicit request for one named create,
 update, comment, attachment, or delete authorizes that operation. For an
@@ -249,7 +291,8 @@ text:
 - Bare `recover` lists open receipts under `result.data.result.open`;
   `--run` shows one. Both read the journal only.
 - `--adjudicate` checks the input against the receipt, then reads the object
-  back through the product's Community route. It settles `completed` only when
+  back through its recorded Provider route: Community, or the owned REST route
+  for `issue.comment.media` with rendered HTML. It settles `completed` only when
   a new stable effect id, the requested values, or a not-found after a delete
   is observed against the preview baseline. A historical matching title,
   summary, or comment is not an effect. `unchanged` needs a revision that did

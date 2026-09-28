@@ -1,0 +1,23 @@
+{
+	"schemaVersion": 1,
+	"routes": [
+		{
+			"id": "personal-claude-code",
+			"harness": "claude-code",
+			"model": { "id": "claude-opus-5-5", "alias": "opus" },
+			"effort": "high",
+			"account": { "alias": "personal", "ownership": "personal", "plan": "Claude Max" },
+			"hosts": ["laptop"],
+			"launch": "allowed"
+		},
+		{
+			"id": "personal-codex",
+			"harness": "codex",
+			"model": { "id": "gpt-6-sol" },
+			"effort": "high",
+			"account": { "alias": "personal", "ownership": "personal", "plan": "ChatGPT" },
+			"hosts": ["laptop"],
+			"launch": "allowed"
+		}
+	]
+}

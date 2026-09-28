@@ -130,3 +130,5 @@ config/hyperflow/workspaces.*.json
 *.tsbuildinfo
 
 .worktrees/
+config/bead-me-up-scotty/
+config/bead-me-up-scotty/config.json

@@ -13,6 +13,7 @@
 // journal; recover reaches its receipts, adjudicate, and unlock commands.
 import type { Adapter, AdapterRefusal, AdapterRequest, CustodyResolution, Executed, ExecutionCapabilities, InternalRole, Prepared, RecordedEffect, Recovery, RecoverRequest, SchemaRequest, WriteRequest } from "../../bin/adapters/contract.ts";
 import { runProvider } from "./scripts/atlassian-community-provider.ts";
+import { runRestProvider } from "./scripts/atlassian-rest-provider.ts";
 import { parseArgv, run } from "./scripts/atlassian-dispatch.ts";
 import { ATLASSIAN_ADAPTER_ID, type AtlassianInternalRole, bindCredential, CONFIGURE_INPUT_REPAIR, configureInput, configureTenant, CREDENTIAL_VAULT, ITEM_ID_REPAIR, PRODUCTS, type RegisteredItems, registeredTenant, runCustodyChild } from "./scripts/custody/index.ts";
 import { type CauseCode, COMMANDS, type Envelope, OPERATIONS, type WriteOperation } from "./scripts/dispatch/contract.ts";
@@ -274,6 +275,7 @@ function resolveCustody(request: SchemaRequest): CustodyResolution {
 const INTERNAL_ROLES: Readonly<Record<AtlassianInternalRole, InternalRole>> = {
 	"custody-child": { run: (argv) => runCustodyChild(argv) },
 	provider: { run: (argv) => runProvider(argv) },
+	"rest-provider": { run: (argv) => runRestProvider(argv) },
 };
 
 export const atlassianAdapter: Adapter = {

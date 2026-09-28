@@ -48,13 +48,13 @@ const READ_PHASE_REPAIR = "An Atlassian read takes neither --preview nor --apply
 const RECOVER_REPAIR = "Receipts, adjudication, and unlock are recover commands: run connectors recover atlassian --select tenant=<value> [--run <runId>]";
 const USAGE_REPAIR = "Check the connectors run or recover arguments against connectors --help";
 const UNKNOWN_OPERATION_REPAIR =
-	"Use one Atlassian operation: issue.get, issue.search, issue.transitions, issue.create, issue.update, issue.comment, issue.comment.update, issue.attach, issue.transition, issue.assign, issue.delete, page.get, page.search, page.create, page.update, page.comment, page.attach, page.attachment.delete, page.delete";
+	"Use one Atlassian operation: issue.get, issue.search, issue.transitions, issue.create, issue.update, issue.comment, issue.comment.update, issue.comment.media, issue.comment.media.update, issue.attach, issue.transition, issue.assign, issue.delete, page.get, page.search, page.create, page.update, page.comment, page.attach, page.attachment.delete, page.delete";
 // A failed first use has nothing selected to repair, so it names first use
 // again (Q13c), never the explicit repair preview.
 const MCPORTER_REPAIR = "Check that the official MCPorter release is reachable, then retry the same command; first use installs MCPorter";
 // The dispatcher's fixed repair text for a not-found read.
 const NOT_FOUND_REPAIR = "the target object was not found or is not visible to this principal";
-// The 14 accepted write operations. The write station sweep keys its rows by
+// The 14 Community write operations. The write station sweep keys its rows by
 // this literal; the ungated agreement row checks it against the contract.
 const WRITE_OPERATIONS = ["issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"] as const;
 type WriteOperation = (typeof WRITE_OPERATIONS)[number];
@@ -197,6 +197,17 @@ describe("refusals before any dependency, credential, or Provider", () => {
 		expect([existsSync(path.join(fixture.state, "connectors", "mcporter")), atlassianFiles(fixture)]).toEqual([false, ["example/registration.json"]]);
 		expectNoHostile(fixture);
 		for (const stream of [result.stdout, result.stderr]) expect(stream).not.toContain(sentinel);
+	});
+
+	test("the packaged front door routes a malformed media comment to Atlassian input validation before custody", async () => {
+		fresh({ seed: false });
+		const sentinel = "image-secret-sentinel";
+		const result = await fixture.frontDoor(["run", "atlassian", ...TENANT, "issue.comment.media", "--input", JSON.stringify({ issueKey: "EX-1", body: `!${sentinel}.png!`, images: [] }), "--preview"]);
+		expect([result.code, result.stderr]).toEqual([4, ""]);
+		const envelope = parse(result.stdout).result;
+		expect([envelope.commandIdentity, envelope.outcome, envelope.causeCode, envelope.data]).toEqual(["connectors.run.preview", "refused", "SCHEMA_ADAPTER_REFUSED", { connector: "atlassian", connectorCause: "input-invalid" }]);
+		expect([fixture.lines("keychain-reads.jsonl"), fixture.lines("op-calls.jsonl"), atlassianFiles(fixture)]).toEqual([[], [], ["example/registration.json"]]);
+		expect(result.stdout).not.toContain(sentinel);
 	});
 
 	test("the internal roles answer only with a valid context and a registered role; otherwise they are an unknown command", async () => {
@@ -767,10 +778,11 @@ describe("packaged connector listing", () => {
 // The literal proves the accepted set; agreement proves the contract declares
 // exactly that set, so a write added to or dropped from the contract fails here.
 describe("write operation catalogue agreement", () => {
-	test("the write operations the dispatch contract declares are exactly the 14 accepted write operations", () => {
-		const declared = Object.values(OPERATION_SPECS).filter((spec) => spec.kind === "write").map((spec) => spec.id);
+	test("the write operations the dispatch contract declares are exactly the 16 accepted write operations", () => {
+		const declared: string[] = Object.values(OPERATION_SPECS).filter((spec) => spec.kind === "write").map((spec) => spec.id);
+		const accepted: string[] = [...WRITE_OPERATIONS, "issue.comment.media", "issue.comment.media.update"];
 		expect(WRITE_OPERATIONS).toHaveLength(14);
-		expect([...declared].sort()).toEqual([...WRITE_OPERATIONS].sort());
+		expect([...declared].sort()).toEqual(accepted.sort());
 	});
 });
 

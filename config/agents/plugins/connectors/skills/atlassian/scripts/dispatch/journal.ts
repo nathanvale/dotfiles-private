@@ -12,13 +12,13 @@ import { closeSync, fsyncSync, lstatSync, mkdirSync, openSync, readdirSync, read
 import os from "node:os";
 import path from "node:path";
 import { TENANT_PATTERN } from "../custody/index.ts";
-import { OPERATION_SPECS, PROVIDER, type ProviderName, type WriteOperation } from "./contract.ts";
+import { OPERATION_SPECS, PROVIDERS, type ProviderName, type WriteOperation } from "./contract.ts";
 
 export type { WriteOperation } from "./contract.ts";
 // Every Provider a persisted record may name. "official" is the retired
 // Atlassian Official route: its records stay readable and keep blocking their
 // objects, but no active route can apply, read back, or resolve them.
-const PERSISTED_PROVIDERS = ["official", PROVIDER] as const;
+const PERSISTED_PROVIDERS = ["official", ...PROVIDERS] as const;
 export type PersistedProvider = (typeof PERSISTED_PROVIDERS)[number];
 const EFFECT_KINDS = ["jira-issue", "jira-comment", "jira-attachment", "confluence-content", "confluence-comment", "confluence-attachment"] as const;
 export type EffectKind = (typeof EFFECT_KINDS)[number];
@@ -223,35 +223,30 @@ function isWriteOperation(operation: string): operation is WriteOperation {
 // subject stand in. Two different objects with one subject in one container
 // collide and wait for resolution; that is the accepted trade-off against
 // duplicating an object after an unknown outcome.
+// Writes on an existing object take that object's identity; creates take a
+// container-scoped identity built below.
+const ISSUE_SCOPED: ReadonlySet<WriteOperation> = new Set<WriteOperation>(["issue.update", "issue.comment", "issue.comment.update", "issue.comment.media", "issue.comment.media.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete"]);
+const PAGE_SCOPED: ReadonlySet<WriteOperation> = new Set<WriteOperation>(["page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"]);
+
+function createIdentity(operation: "issue.create" | "page.create", canonicalInput: Record<string, unknown>): string {
+	if (operation === "issue.create") {
+		return `project:${identifier(canonicalInput.projectKey, "projectKey")}:create:${discriminator(canonicalInput.issueType, "issueType")}:${subjectDigest(canonicalInput.summary, "summary")}`;
+	}
+	// One canonical container: the space key, which is the only space
+	// identity the Community route exposes.
+	const space = canonicalInput.spaceKey;
+	if (typeof space !== "string" || !SPACE_KEY.test(space)) throw new JournalError("input-invalid", "spaceKey must be the Confluence space key");
+	const parent = canonicalInput.parentId === undefined ? "root" : identifier(canonicalInput.parentId, "parentId");
+	return `space:${space}:create:${parent}:${subjectDigest(canonicalInput.title, "title")}`;
+}
+
 export function objectIdentity(operation: WriteOperation, canonicalInput: unknown): string {
 	if (!isWriteOperation(operation)) throw new JournalError("operation-invalid", "only write operations are journaled");
 	if (!isRecord(canonicalInput)) throw new JournalError("input-invalid", "input must be an object");
-	switch (operation) {
-		case "issue.update":
-		case "issue.comment":
-		case "issue.comment.update":
-		case "issue.attach":
-		case "issue.transition":
-		case "issue.assign":
-		case "issue.delete":
-			return `issue:${identifier(canonicalInput.issueKey, "issueKey")}`;
-		case "page.update":
-		case "page.comment":
-		case "page.attach":
-		case "page.attachment.delete":
-		case "page.delete":
-			return `page:${identifier(canonicalInput.pageId, "pageId")}`;
-		case "issue.create":
-			return `project:${identifier(canonicalInput.projectKey, "projectKey")}:create:${discriminator(canonicalInput.issueType, "issueType")}:${subjectDigest(canonicalInput.summary, "summary")}`;
-		case "page.create": {
-			// One canonical container: the space key, which is the only space
-			// identity the Community route exposes.
-			const space = canonicalInput.spaceKey;
-			if (typeof space !== "string" || !SPACE_KEY.test(space)) throw new JournalError("input-invalid", "spaceKey must be the Confluence space key");
-			const parent = canonicalInput.parentId === undefined ? "root" : identifier(canonicalInput.parentId, "parentId");
-			return `space:${space}:create:${parent}:${subjectDigest(canonicalInput.title, "title")}`;
-		}
-	}
+	if (ISSUE_SCOPED.has(operation)) return `issue:${identifier(canonicalInput.issueKey, "issueKey")}`;
+	if (PAGE_SCOPED.has(operation)) return `page:${identifier(canonicalInput.pageId, "pageId")}`;
+	if (operation === "issue.create" || operation === "page.create") return createIdentity(operation, canonicalInput);
+	throw new JournalError("operation-invalid", "the write operation has no object identity shape");
 }
 
 function processAlive(pid: number): boolean {
@@ -336,6 +331,8 @@ const IDENTITY_SHAPES: Record<WriteOperation, RegExp> = {
 	"issue.update": ISSUE_IDENTITY,
 	"issue.comment": ISSUE_IDENTITY,
 	"issue.comment.update": ISSUE_IDENTITY,
+	"issue.comment.media": ISSUE_IDENTITY,
+	"issue.comment.media.update": ISSUE_IDENTITY,
 	"issue.attach": ISSUE_IDENTITY,
 	"issue.transition": ISSUE_IDENTITY,
 	"issue.assign": ISSUE_IDENTITY,
@@ -804,7 +801,7 @@ class FileJournal implements Journal {
 		// A receipt from a retired Provider has no route to read back through, so
 		// no evidence can settle it here; it stays open and keeps its object
 		// blocked until an operator resolves it by hand.
-		if (located.provider !== PROVIDER) throw new JournalError("receipt-provider-retired", "the receipt was recorded through a Provider this route no longer has; resolve it by hand");
+		if (located.provider !== OPERATION_SPECS[located.operation].provider) throw new JournalError("receipt-provider-retired", "the receipt was recorded through a Provider this route no longer has; resolve it by hand");
 		const release = this.acquireLock(located.objectIdentity);
 		try {
 			const receipt = this.readReceipt(runId);

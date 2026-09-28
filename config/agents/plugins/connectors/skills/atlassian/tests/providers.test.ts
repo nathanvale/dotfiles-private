@@ -14,6 +14,7 @@ import { substitutedPluginRoot } from "./fixtures/plugin-copy.ts";
 
 const SKILL = path.join(substitutedPluginRoot(), "skills", "atlassian");
 const COMMUNITY = [path.join(SKILL, "..", "..", "bin", "connectors"), "__internal", "atlassian", "provider"];
+const REST = [path.join(SKILL, "..", "..", "bin", "connectors"), "__internal", "atlassian", "rest-provider"];
 const AMBIENT_SENTINEL = "must-not-cross-provider";
 const AMBIENT_OP_TOKEN = "ops_ambient-token-must-not-cross";
 const SECRETS = [PROVIDER_TOKEN, SERVICE_TOKEN, AMBIENT_OP_TOKEN];
@@ -52,7 +53,7 @@ const started = () => fixture.lines("community-starts.jsonl").length > 0;
 const lastStart = () => fixture.lines<CommunityStart>("community-starts.jsonl").at(-1) as CommunityStart;
 const opLines = () => fixture.lines<{ argv: string[] }>("op-calls.jsonl").map((call) => ["op", ...call.argv].join(" "));
 
-async function runProvider(command: readonly string[], args: string[] = [], env: Record<string, string> = {}) {
+async function runProvider(command: readonly string[], args: string[] = [], env: Record<string, string> = {}, stdin: string | undefined = undefined) {
 	const proc = Bun.spawn([...command, ...args], {
 		cwd: path.join(SKILL, "config"),
 		env: {
@@ -67,7 +68,7 @@ async function runProvider(command: readonly string[], args: string[] = [], env:
 			OP_SERVICE_ACCOUNT_TOKEN: AMBIENT_OP_TOKEN,
 			...env,
 		},
-		stdin: "ignore",
+		stdin: stdin === undefined ? "ignore" : Buffer.from(stdin),
 		stdout: "pipe",
 		stderr: "pipe",
 	});
@@ -307,5 +308,53 @@ describe("Community provider plugin-owned dependencies", () => {
 		expect([result.code, result.stderr.startsWith("atlassian-provider:error:service-token-missing:")]).toEqual([4, true]);
 		expect(fixture.lines("op-calls.jsonl")).toEqual([]);
 		expect(started()).toBe(false);
+	});
+});
+
+// The owned REST Provider of the wiki-comment exception: the same custody
+// below the dispatcher as the Community Provider, one request on stdin, and
+// every refusal before a request can leave. No test here reaches the network:
+// each request is refused first, so a green suite proves custody and the
+// closed vocabulary, never a live call.
+describe("REST provider process", () => {
+	const request = (tool: string, args: unknown = {}) => JSON.stringify({ tool, args });
+
+	test("refuses arguments, a non-Jira product, and a rotated item before reading a request", async () => {
+		write(FULL_ITEM);
+		expect((await runProvider(REST, ["--preflight"], {}, request("jira_rest_myself"))).stderr).toContain("atlassian-provider:error:arguments-invalid:");
+		expect(opLines()).toEqual([]);
+		const confluence = await runProvider(REST, [], { ATLASSIAN_PRODUCT: "confluence" }, request("jira_rest_myself"));
+		expect([confluence.code, confluence.stderr.includes("atlassian-provider:error:product-invalid:")]).toEqual([2, true]);
+		write(item({ username: "service@example.invalid", credential: "fixture-community-secret" }, 2));
+		const stale = await runProvider(REST, [], {}, request("jira_rest_myself"));
+		expect([stale.code, stale.stderr.includes("atlassian-provider:error:credential-context-stale:")]).toEqual([4, true]);
+		expect(stale.stdout).toBe("");
+	});
+
+	test("refuses a tool outside the closed vocabulary, malformed arguments, and a non-JSON request after the item read, with no request sent", async () => {
+		write(FULL_ITEM);
+		for (const [label, stdin] of [
+			["unknown tool", request("jira_rest_comment_delete", { issue_key: "PROJ-1", comment_id: "1" })],
+			["Community tool", request("jira_add_comment", { issue_key: "PROJ-1", body: "x" })],
+			["path escape", request("jira_rest_comment_get", { issue_key: "PROJ-1", comment_id: "1/../2" })],
+			["extra argument", request("jira_rest_comment_add", { issue_key: "PROJ-1", body: "x", visibility: "{}" })],
+			["extra key", JSON.stringify({ tool: "jira_rest_myself", args: {}, url: "https://evil.example" })],
+			["not JSON", "not json"],
+		] as const) {
+			const result = await runProvider(REST, [], {}, stdin);
+			expect([label, result.code, result.stdout, result.stderr.includes("atlassian-provider:error:arguments-invalid:")]).toEqual([label, 2, "", true]);
+			expect(result.stderr).not.toContain("evil.example");
+		}
+		expect(opLines()).toEqual(Array(6).fill(opRead(JIRA_ITEM_ID)));
+	});
+
+	test("a missing or malformed credential field fails closed before the request is read", async () => {
+		write(item({ username: "service@example.invalid" }));
+		const missing = await runProvider(REST, [], {}, request("jira_rest_myself"));
+		expect([missing.code, missing.stderr.includes("atlassian-provider:error:community-fields-missing:")]).toEqual([4, true]);
+		write(item({ username: "service@example.invalid", credential: "private-value\nsecond-line" }));
+		const malformed = await runProvider(REST, [], {}, request("jira_rest_myself"));
+		expect([malformed.code, malformed.stderr.includes("atlassian-provider:error:credential-invalid:")]).toEqual([4, true]);
+		expect(malformed.stderr).not.toContain("private-value");
 	});
 });

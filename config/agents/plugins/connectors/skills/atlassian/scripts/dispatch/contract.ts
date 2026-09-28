@@ -14,11 +14,33 @@ export type { Product } from "../custody/index.ts";
 // intersection of the two.
 import registry from "../../config/mcporter.json" with { type: "json" };
 
-// The one active Provider. The journal persists this name on every preview
-// and receipt so a record from a retired Provider is recognised, never
-// reinterpreted.
+// The active Providers. Community is the one Atlassian Provider; `rest` is the
+// owned Jira REST v2 transport that exists for the wiki-comment capability
+// exception only (ADR 0001 amendment, 28 September 2026). The journal persists
+// the name on every preview and receipt so a record from a retired Provider
+// is recognised, never reinterpreted.
 export const PROVIDER = "community" as const;
-export type ProviderName = typeof PROVIDER;
+const REST_PROVIDER = "rest" as const;
+export const PROVIDERS = [PROVIDER, REST_PROVIDER] as const;
+export type ProviderName = (typeof PROVIDERS)[number];
+
+// The owned REST route: one static server name and the exact request shapes
+// the wiki-comment exception may make, with the arguments each requires. The
+// REST Provider script refuses any other tool or argument.
+export const REST_SERVER = "atlassian-rest-jira" as const;
+export const REST_TOOLS = Object.freeze({
+	jira_rest_myself: Object.freeze([] as string[]),
+	jira_rest_issue_attachments: Object.freeze(["issue_key"]),
+	jira_rest_comments_list: Object.freeze(["issue_key"]),
+	jira_rest_comment_get: Object.freeze(["issue_key", "comment_id"]),
+	jira_rest_comment_add: Object.freeze(["issue_key", "body"]),
+	jira_rest_comment_edit: Object.freeze(["issue_key", "comment_id", "body"]),
+	// A bounded read of an attachment's first bytes, to establish the image
+	// type of an attachment Jira reports no MIME type for.
+	jira_rest_attachment_head: Object.freeze(["attachment_id"]),
+});
+export type RestTool = keyof typeof REST_TOOLS;
+export const isRestTool = (tool: string): tool is RestTool => Object.hasOwn(REST_TOOLS, tool);
 
 // Server identities are a small static type boundary: one Community server per
 // product. Tool vocabularies live only in config/mcporter.json and are parsed
@@ -52,12 +74,13 @@ export function registryToolVocabulary(registry: unknown): ToolVocabulary {
 export const ALLOWED_TOOLS = registryToolVocabulary(registry);
 
 // This is the operation descriptor registry: product, write policy admission,
-// and exact provider tool identity live behind this one interface. Consumers
-// must not infer product from a string prefix.
+// Provider, and exact provider tool identity live behind this one interface.
+// Consumers must not infer product or Provider from a string prefix.
 interface OperationDescriptor {
 	id: string;
 	kind: "read" | "write";
 	product: Product;
+	provider: ProviderName;
 	tool: string;
 }
 
@@ -65,25 +88,30 @@ interface OperationDescriptor {
 // write-operation type, route choice, and tool binding are derived from it
 // rather than separately maintained by policy modules.
 const OPERATION_REGISTRY = [
-	{ id: "issue.get", kind: "read", product: "jira", tool: "jira_get_issue" },
-	{ id: "issue.search", kind: "read", product: "jira", tool: "jira_search" },
-	{ id: "issue.transitions", kind: "read", product: "jira", tool: "jira_get_transitions" },
-	{ id: "issue.create", kind: "write", product: "jira", tool: "jira_create_issue" },
-	{ id: "issue.update", kind: "write", product: "jira", tool: "jira_update_issue" },
-	{ id: "issue.comment", kind: "write", product: "jira", tool: "jira_add_comment" },
-	{ id: "issue.comment.update", kind: "write", product: "jira", tool: "jira_edit_comment" },
-	{ id: "issue.attach", kind: "write", product: "jira", tool: "jira_update_issue" },
-	{ id: "issue.transition", kind: "write", product: "jira", tool: "jira_transition_issue" },
-	{ id: "issue.assign", kind: "write", product: "jira", tool: "jira_assign_issue" },
-	{ id: "issue.delete", kind: "write", product: "jira", tool: "jira_delete_issue" },
-	{ id: "page.get", kind: "read", product: "confluence", tool: "confluence_get_page" },
-	{ id: "page.search", kind: "read", product: "confluence", tool: "confluence_search" },
-	{ id: "page.create", kind: "write", product: "confluence", tool: "confluence_create_page" },
-	{ id: "page.update", kind: "write", product: "confluence", tool: "confluence_update_page" },
-	{ id: "page.comment", kind: "write", product: "confluence", tool: "confluence_add_comment" },
-	{ id: "page.attach", kind: "write", product: "confluence", tool: "confluence_upload_attachment" },
-	{ id: "page.attachment.delete", kind: "write", product: "confluence", tool: "confluence_delete_attachment" },
-	{ id: "page.delete", kind: "write", product: "confluence", tool: "confluence_delete_page" },
+	{ id: "issue.get", kind: "read", product: "jira", provider: PROVIDER, tool: "jira_get_issue" },
+	{ id: "issue.search", kind: "read", product: "jira", provider: PROVIDER, tool: "jira_search" },
+	{ id: "issue.transitions", kind: "read", product: "jira", provider: PROVIDER, tool: "jira_get_transitions" },
+	{ id: "issue.create", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_create_issue" },
+	{ id: "issue.update", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_update_issue" },
+	{ id: "issue.comment", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_add_comment" },
+	{ id: "issue.comment.update", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_edit_comment" },
+	// The wiki-comment capability exception: comments whose body renders
+	// attachments already on the issue inline, through the owned REST route.
+	// Never a fallback for a Community operation.
+	{ id: "issue.comment.media", kind: "write", product: "jira", provider: REST_PROVIDER, tool: "jira_rest_comment_add" },
+	{ id: "issue.comment.media.update", kind: "write", product: "jira", provider: REST_PROVIDER, tool: "jira_rest_comment_edit" },
+	{ id: "issue.attach", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_update_issue" },
+	{ id: "issue.transition", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_transition_issue" },
+	{ id: "issue.assign", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_assign_issue" },
+	{ id: "issue.delete", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_delete_issue" },
+	{ id: "page.get", kind: "read", product: "confluence", provider: PROVIDER, tool: "confluence_get_page" },
+	{ id: "page.search", kind: "read", product: "confluence", provider: PROVIDER, tool: "confluence_search" },
+	{ id: "page.create", kind: "write", product: "confluence", provider: PROVIDER, tool: "confluence_create_page" },
+	{ id: "page.update", kind: "write", product: "confluence", provider: PROVIDER, tool: "confluence_update_page" },
+	{ id: "page.comment", kind: "write", product: "confluence", provider: PROVIDER, tool: "confluence_add_comment" },
+	{ id: "page.attach", kind: "write", product: "confluence", provider: PROVIDER, tool: "confluence_upload_attachment" },
+	{ id: "page.attachment.delete", kind: "write", product: "confluence", provider: PROVIDER, tool: "confluence_delete_attachment" },
+	{ id: "page.delete", kind: "write", product: "confluence", provider: PROVIDER, tool: "confluence_delete_page" },
 ] as const satisfies readonly OperationDescriptor[];
 
 export type OperationId = (typeof OPERATION_REGISTRY)[number]["id"];
@@ -97,6 +125,9 @@ export interface OperationSpec {
 	id: OperationId;
 	kind: "read" | "write";
 	product: Product;
+	provider: ProviderName;
+	// The route server the operation's tool is confirmed and called on.
+	server: ServerName | typeof REST_SERVER;
 	tool: string;
 }
 
@@ -106,7 +137,12 @@ function exactTool(server: ServerName, tool: string): string {
 }
 
 function admittedSpec(spec: (typeof OPERATION_REGISTRY)[number]): OperationSpec {
-	return { ...spec, tool: exactTool(serverFor(spec.product), spec.tool) };
+	if (spec.provider === REST_PROVIDER) {
+		if (!isRestTool(spec.tool)) throw new Error(`registry-invalid: ${REST_SERVER} lacks ${spec.tool}`);
+		return { ...spec, server: REST_SERVER };
+	}
+	const server = serverFor(spec.product);
+	return { ...spec, server, tool: exactTool(server, spec.tool) };
 }
 
 export const OPERATION_SPECS: Record<OperationId, OperationSpec> = Object.freeze(Object.fromEntries(OPERATION_REGISTRY.map((spec) => [spec.id, admittedSpec(spec)])) as Record<OperationId, OperationSpec>);

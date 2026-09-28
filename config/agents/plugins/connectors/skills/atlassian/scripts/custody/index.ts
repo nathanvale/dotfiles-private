@@ -60,7 +60,7 @@ function childFailure(code: string | undefined, itemId: string): BindFailure {
 // and the role names the packaged adapter registers. The registry's
 // mcporter.json restates the provider role as a literal, pinned by a test.
 export const ATLASSIAN_ADAPTER_ID = "atlassian";
-export type AtlassianInternalRole = "custody-child" | "provider";
+export type AtlassianInternalRole = "custody-child" | "provider" | "rest-provider";
 
 // The plugin's compiled front door in one Atlassian internal role, reached
 // from source through this module's own location. The packaged front door

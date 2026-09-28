@@ -4,7 +4,7 @@
 // 22 September 2026 and reply shapes observed live on 23 September 2026.
 import { describe, expect, test } from "bun:test";
 import { OPERATION_SPECS } from "../scripts/dispatch/contract.ts";
-import { baselineFromReply, effectsFromReply, normalised, preparation, readBackEvidence, readBackPlan, transitionTo, uploadFailed, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
+import { accountIdOf, baselineFromReply, effectsFromReply, normalised, observeRestComment, preparation, readBackEvidence, readBackPlan, magicImageType, renderedImagesPresent, resolveMediaAttachments, sameWikiBody, transitionTo, uploadFailed, wikiImageReferences, wikiParts, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
 
 const never = () => false;
 const CREATE = { projectKey: "PROJ", issueType: "Bug", summary: "Billing broken", description: "first\nsecond" };
@@ -17,7 +17,7 @@ const wrapped = (value: unknown) => ({ result: JSON.stringify(value) });
 
 describe("neutral write inputs", () => {
 	test("every write operation has a contract; unknown keys, bad shapes, and missing required keys refuse", () => {
-		expect(WRITE_OPERATIONS).toEqual(["issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"]);
+		expect(WRITE_OPERATIONS).toEqual(["issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.comment.media", "issue.comment.media.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"]);
 		expect(writeInput("issue.transition", { issueKey: "PROJ-1", toStatus: "In Progress" })).toEqual({ ok: true, input: { issueKey: "PROJ-1", toStatus: "In Progress" } });
 		expect(writeInput("issue.transition", { issueKey: "PROJ-1", transitionId: "31" }).ok).toBe(false);
 		expect(writeInput("issue.assign", { issueKey: "PROJ-1" })).toEqual({ ok: true, input: { issueKey: "PROJ-1" } });
@@ -316,5 +316,208 @@ describe("effects and read-back", () => {
 			kind: "refused",
 			reason: "the page already has an attachment with this file name; run page.attachment.delete first",
 		});
+	});
+});
+
+// The wiki-comment exception: Jira wiki bodies whose image macros name
+// attachments already on the issue, through the owned REST route. Rendered
+// HTML shapes are the ones the prototype observed on SMSTX-364 (28 September
+// 2026): <img> elements whose src names the attachment id and whose alt names
+// the file.
+describe("wiki media comments", () => {
+	const MEDIA = { issueKey: "PROJ-1", body: "Before:\n\n!before.png|width=600!\n\nAfter:\n\n!after.png!", images: ["before.png", "after.png"] };
+	const MEDIA_UPDATE = { ...MEDIA, commentId: "454771" };
+	const IDS = { effectIds: ["202456", "202457"], commentIds: [], revision: null };
+	const rendered = (...ids: string[]) => ids.map((id) => `<p><span class="image-wrap"><img src="/rest/api/3/attachment/content/${id}" alt="${id === "202456" ? "before.png" : "after.png"}" /></span></p>`).join("");
+	const BOTH = rendered("202456", "202457");
+	// Jira's wiki read-back of the stored comment: image macros carry the
+	// parameters Jira adds, and the text is otherwise the same.
+	const STORED = MEDIA.body.replace("!before.png|width=600!", '!before.png|width=600,alt="before.png"!').replace("!after.png!", '!after.png|alt="after.png"!');
+
+	test("images must be exactly the files the body references as wiki image macros, and each name must be a plain attachment name", () => {
+		expect(writeInput("issue.comment.media", MEDIA)).toEqual({ ok: true, input: MEDIA });
+		expect(writeInput("issue.comment.media.update", MEDIA_UPDATE)).toEqual({ ok: true, input: MEDIA_UPDATE });
+		expect(writeInput("issue.comment.media", { ...MEDIA, images: ["before.png"] })).toEqual({ ok: false, reason: "the body references an image that images does not name" });
+		expect(writeInput("issue.comment.media", { ...MEDIA, images: [...MEDIA.images, "states.png"] })).toEqual({ ok: false, reason: "images names a file the body does not reference as !name! or !name|params!" });
+		expect(writeInput("issue.comment.media", { ...MEDIA, images: ["before.png", "before.png", "after.png"] })).toEqual({ ok: false, reason: "input key images is invalid" });
+		expect(writeInput("issue.comment.media", { issueKey: "PROJ-1", body: "no images here", images: [] })).toEqual({ ok: false, reason: "input key images is invalid" });
+		for (const name of ["a|b.png", "a!b.png", "dir/a.png", "a\nb.png", ""]) expect([name, writeInput("issue.comment.media", { ...MEDIA, images: [name, "after.png"] }).ok]).toEqual([name, false]);
+		expect(writeInput("issue.comment.media", { ...MEDIA, images: Array.from({ length: 21 }, (_entry, index) => `${index}.png`) }).ok).toBe(false);
+		expect(writeInput("issue.comment.media", { ...MEDIA, file: "/tmp/x.png" })).toEqual({ ok: false, reason: "unknown input key file" });
+		expect(writeInput("issue.comment.media.update", { ...MEDIA_UPDATE, commentId: "abc" }).ok).toBe(false);
+		expect(writeInput("issue.comment.media.update", MEDIA)).toEqual({ ok: false, reason: "input key commentId is required" });
+		// Prose exclamation marks are not references; a macro needs a file extension.
+		expect(wikiImageReferences("Great! See !shot.png|thumbnail! and !shot.png! again! Done!")).toEqual(["shot.png"]);
+		expect(wikiImageReferences("!SMSTX-364-after-crop.png|width=600!\n!SMSTX-364-after-states.png!")).toEqual(["SMSTX-364-after-crop.png", "SMSTX-364-after-states.png"]);
+	});
+
+	test("the REST route receives the wiki body only; images bind attachment ids in the preparation, and read-back reads rendered comments", () => {
+		const ctx = { revision: null, baseline: IDS };
+		expect(preparation("issue.comment.media", MEDIA)).toEqual({ kind: "media", issueKey: "PROJ-1", images: MEDIA.images });
+		expect(preparation("issue.comment.media.update", MEDIA_UPDATE)).toEqual({ kind: "media-comment", issueKey: "PROJ-1", commentId: "454771", images: MEDIA.images });
+		expect(writeArguments(OPERATION_SPECS["issue.comment.media"], MEDIA, ctx).args).toEqual({ issue_key: "PROJ-1", body: MEDIA.body });
+		expect(writeArguments(OPERATION_SPECS["issue.comment.media.update"], MEDIA_UPDATE, ctx).args).toEqual({ issue_key: "PROJ-1", comment_id: "454771", body: MEDIA.body });
+		expect(readBackPlan("issue.comment.media", MEDIA)).toEqual({ tool: "jira_rest_comments_list", args: { issue_key: "PROJ-1" } });
+		expect(readBackPlan("issue.comment.media.update", MEDIA_UPDATE)).toEqual({ tool: "jira_rest_comment_get", args: { issue_key: "PROJ-1", comment_id: "454771" } });
+		const attachments = [{ id: "202457", name: "after.png", contentType: "image/png" }, { id: "202456", name: "before.png", contentType: "image/png" }, { id: "1", name: "notes.pdf", contentType: "application/pdf" }];
+		expect(resolveMediaAttachments(attachments, MEDIA.images)).toEqual({ ok: true, ids: ["202456", "202457"], types: { "202456": "image/png", "202457": "image/png" }, untyped: [] });
+		expect(resolveMediaAttachments(attachments, ["before.png", "missing.png"])).toEqual({ ok: false, cause: "not-found", reason: "an image named in images is not attached to the issue" });
+		expect(resolveMediaAttachments([...attachments, { id: "202499", name: "after.png" }], MEDIA.images)).toEqual({ ok: false, cause: "input-invalid", reason: "an image named in images matches more than one attachment on the issue; remove the duplicate first" });
+		// Only images render inline. A reported non-image type refuses; a file Jira reports no type for is handed back for a content read, whatever its name.
+		const notImage = { ok: false as const, cause: "input-invalid" as const, reason: "an image named in images is not an image attachment; only image content renders inline" };
+		expect(resolveMediaAttachments(attachments, ["notes.pdf", "after.png"])).toEqual(notImage);
+		expect(resolveMediaAttachments([{ id: "2", name: "shot.png", contentType: "application/octet-stream" }], ["shot.png"])).toEqual(notImage);
+		expect(resolveMediaAttachments([{ id: "3", name: "renamed.png" }, { id: "6", name: "report.pdf" }], ["renamed.png", "report.pdf"])).toEqual({ ok: true, ids: ["3", "6"], types: {}, untyped: [{ id: "3", name: "renamed.png" }, { id: "6", name: "report.pdf" }] });
+		expect(resolveMediaAttachments([{ id: "4", name: "Diagram.JPG", contentType: "image/jpeg" }, { id: "5", name: "x.webp", contentType: "IMAGE/WEBP" }], ["Diagram.JPG", "x.webp"])).toEqual({ ok: true, ids: ["4", "5"], types: { "4": "image/jpeg", "5": "image/webp" }, untyped: [] });
+		// First bytes establish the type: the four supported signatures, and nothing else. Jira serves the content as a JSON string of base64 (live, 28 September 2026); raw bytes are accepted too.
+		expect(magicImageType({ bytes: "226956424f5277304b47676f414141414e53556845556741414174413d" })).toBe("image/png");
+		expect(magicImageType({ bytes: "222f396a2f34414151536b5a4a526741424151453d" })).toBe("image/jpeg");
+		expect(magicImageType({ bytes: "2252306c474f446c684151413d22" })).toBe("image/gif");
+		expect(magicImageType({ bytes: "22556b6c47526952614141425852554a51566c413449413d3d" })).toBe("image/webp");
+		expect(magicImageType({ bytes: "224a564245526930784c6a514b4a513d3d" })).toBeUndefined();
+		// A 16-byte Range read of the JSON string decodes to nine content bytes: enough for PNG, too few for WebP's twelve, which is why the read asks for 64.
+		expect(magicImageType({ bytes: "226956424f5277304b47676f41414141" })).toBe("image/png");
+		expect(magicImageType({ bytes: "22556b6c47526952614141425852554a" })).toBeUndefined();
+		// A redirect page instead of content is not an image.
+		expect(magicImageType({ bytes: "3c21444f43545950452068746d6c3e3c68746d6c3e3c686561643e3c7469746c653e33303320536565204f746865723c2f7469746c653e" })).toBeUndefined();
+		expect(magicImageType({ bytes: "89504e470d0a1a0a0000000d49484452" })).toBe("image/png");
+		expect(magicImageType(wrapped({ bytes: "FFD8FFE000104A46494600010101" }))).toBe("image/jpeg");
+		expect(magicImageType({ bytes: "474946383961" })).toBe("image/gif");
+		expect(magicImageType({ bytes: "474946383761" })).toBe("image/gif");
+		expect(magicImageType({ bytes: "52494646245a000057454250565038" })).toBe("image/webp");
+		for (const bytes of ["255044462d312e34", "5249464624", "89504e47", "", "zz", "3c73766720786d6c6e73"]) expect([bytes, magicImageType({ bytes })]).toEqual([bytes, undefined]);
+		expect(magicImageType({ status: 206 })).toBeUndefined();
+		expect(magicImageType(null)).toBeUndefined();
+		expect(accountIdOf(wrapped({ accountId: "712020:me", emailAddress: "me@example.invalid" }))).toBe("712020:me");
+		expect(accountIdOf({ self: "x" })).toBeUndefined();
+		expect(observeRestComment({ id: "454771", author: { accountId: "712020:me" }, updated: "u1", renderedBody: "<p>x</p>", body: "x" })).toEqual({ id: "454771", authorAccountId: "712020:me", updated: "u1", renderedBody: "<p>x</p>" });
+		expect(observeRestComment({ error: "gone" })).toEqual({ id: undefined, authorAccountId: undefined, updated: undefined, renderedBody: undefined });
+	});
+
+	test("rendered HTML proves an image only by the displayed src attribute naming a Jira attachment route for the bound id; other attributes and other sources never count", () => {
+		expect(renderedImagesPresent(BOTH, IDS.effectIds)).toBe(true);
+		expect(renderedImagesPresent(rendered("202456"), IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent('<img src="https://example.atlassian.net/secure/attachment/202456/before.png"><img src=\'https://example.atlassian.net/secure/thumbnail/202457/after.png?default=false#x\'>', IDS.effectIds)).toBe(true);
+		expect(renderedImagesPresent('<img alt="x" src=/secure/attachment/202456/before.png><img src=/secure/attachment/202457/after.png>', IDS.effectIds)).toBe(true);
+		expect(renderedImagesPresent('<img SRC="/rest/api/2/attachment/thumbnail/202456"><img class="a" src = "/rest/api/3/attachment/content/202457" />', IDS.effectIds)).toBe(true);
+		// Re-review decoy: data-src names the bound id while the displayed src points at another attachment.
+		expect(renderedImagesPresent('<img data-src="/secure/attachment/202456/a.png" src="/secure/attachment/999/a.png"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent('<img srcset="/secure/attachment/202456/a.png 2x" src="/secure/attachment/999/a.png"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent('<img data-src="/secure/attachment/202456/a.png"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		// A source that is not a Jira attachment route proves nothing, wherever the id appears in it.
+		expect(renderedImagesPresent('<img src="https://cdn.example/202456/before.png"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent('<img src="/plugins/servlet/202456"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		// A longer id that merely starts with the bound one is a different attachment.
+		expect(renderedImagesPresent('<img src="/rest/api/3/attachment/content/2024567"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		// The old id in alt while the source points at another attachment is a moved image, not this one.
+		expect(renderedImagesPresent('<img alt="/202456" title="attachment/202456" src="/rest/api/3/attachment/content/999"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		// The id in the query string or as part of a longer segment is not a path segment.
+		expect(renderedImagesPresent('<img src="/rest/api/3/attachment/content/999?attachment=202456"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent('<img src="/a/id-202456/x"><img src="/rest/api/3/attachment/content/202457">', IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent("<p>Before: before.png after.png 202456 202457</p>", IDS.effectIds)).toBe(false);
+		expect(renderedImagesPresent(BOTH, [])).toBe(false);
+		expect(renderedImagesPresent("", IDS.effectIds)).toBe(false);
+	});
+
+	test("wiki bodies match by prose, exact image names and requested parameters, exact link and mention targets; a parameter Jira added is tolerated", () => {
+		const full = "Hi [~accountid:712020:abc], see !shot.png|width=600! and [the story|https://x.example/a/b]. Done.";
+		expect(wikiParts(full)).toEqual([
+			{ kind: "text", value: "hi" },
+			{ kind: "mention", id: "712020:abc" },
+			{ kind: "text", value: "see" },
+			{ kind: "image", name: "shot.png", params: new Map([["width", "600"]]) },
+			{ kind: "text", value: "and" },
+			{ kind: "link", label: "the story", target: "https://x.example/a/b" },
+			{ kind: "text", value: "done" },
+		]);
+		// Documented formatting is its own part, compared exactly; a list bullet is prose.
+		const formatted = "*Change:* merged to {{staging}} (commit {{b7b9aaabe}}).\n\n* {{a.png}} and {{b.png}}: cropped.\n\nLive: https://x.example/a/b now.";
+		expect(wikiParts(formatted)).toEqual([
+			{ kind: "bold", value: "Change:" },
+			{ kind: "text", value: "merged to" },
+			{ kind: "code", value: "staging" },
+			{ kind: "text", value: "commit" },
+			{ kind: "code", value: "b7b9aaabe" },
+			{ kind: "code", value: "a.png" },
+			{ kind: "text", value: "and" },
+			{ kind: "code", value: "b.png" },
+			{ kind: "text", value: "cropped live" },
+			{ kind: "url", target: "https://x.example/a/b" },
+			{ kind: "text", value: "now" },
+		]);
+		// Re-review cases: lost bold, lost code, and a changed bare URL are other content.
+		expect(sameWikiBody(formatted, formatted)).toBe(true);
+		expect(sameWikiBody(formatted, formatted.replace("*Change:*", "Change:"))).toBe(false);
+		expect(sameWikiBody(formatted, formatted.replace("{{staging}}", "staging"))).toBe(false);
+		expect(sameWikiBody(formatted, formatted.replace("https://x.example/a/b", "https://x.example/a?b"))).toBe(false);
+		expect(sameWikiBody(formatted, formatted.replace("{{b7b9aaabe}}", "{{b7b9aaab}}"))).toBe(false);
+		expect(sameWikiBody(formatted, formatted.replace("*Change:*", "*Changed:*"))).toBe(false);
+		expect(sameWikiBody(MEDIA.body, STORED)).toBe(true);
+		expect(sameWikiBody(full, full.replace("[the story|", "[The Story |"))).toBe(true);
+		expect(sameWikiBody(full, full.replace("width=600", 'alt="shot.png",width=600'))).toBe(true);
+		// Re-review cases: a changed width and a changed link target are other content.
+		expect(sameWikiBody(full, full.replace("width=600", "width=100"))).toBe(false);
+		expect(sameWikiBody(full, full.replace("https://x.example/a/b", "https://x.example/a?b"))).toBe(false);
+		expect(sameWikiBody(full, full.replace("width=600", "thumbnail"))).toBe(false);
+		expect(sameWikiBody(full, full.replace("712020:abc", "712020:abd"))).toBe(false);
+		expect(sameWikiBody(full, full.replace("!shot.png|width=600!", "!other.png|width=600!"))).toBe(false);
+		expect(sameWikiBody(full, full.replace("Done.", "Done. More."))).toBe(false);
+		expect(sameWikiBody(full, `${full}\n\n!extra.png!`)).toBe(false);
+		expect(sameWikiBody("!!!", "!!!")).toBe(false);
+	});
+
+	test("a reply proves a media comment only when it holds this write's body and renders every bound image; an edit reply must name the edited comment", () => {
+		expect(sameWikiBody(MEDIA.body, "Other text\n\n!before.png!\n\n!after.png!")).toBe(false);
+		expect(effectsFromReply("issue.comment.media", MEDIA, { id: "10077", author: { accountId: "712020:me" }, body: STORED, renderedBody: BOTH, updated: "u1" }, IDS)).toEqual([{ kind: "jira-comment", id: "10077" }]);
+		expect(effectsFromReply("issue.comment.media", MEDIA, { id: "10077", body: STORED, renderedBody: rendered("202456") }, IDS)).toEqual([]);
+		expect(effectsFromReply("issue.comment.media", MEDIA, { id: "10077", body: MEDIA.body }, IDS)).toEqual([]);
+		// The same images under different text is another write, never this one.
+		expect(effectsFromReply("issue.comment.media", MEDIA, { id: "10077", body: "Other text\n\n!before.png!\n\n!after.png!", renderedBody: BOTH }, IDS)).toEqual([]);
+		expect(effectsFromReply("issue.comment.media", MEDIA, { id: "10077", renderedBody: BOTH }, IDS)).toEqual([]);
+		expect(effectsFromReply("issue.comment.media.update", MEDIA_UPDATE, { id: "454771", body: STORED, renderedBody: BOTH, updated: "u2" }, IDS)).toEqual([{ kind: "jira-comment", id: "454771" }]);
+		expect(effectsFromReply("issue.comment.media.update", MEDIA_UPDATE, { id: "454772", body: STORED, renderedBody: BOTH, updated: "u2" }, IDS)).toEqual([]);
+	});
+
+	test("read-back finds a new rendering comment outside the baseline; an edit is found only after its own updated moved and it renders the images", () => {
+		const list = (...comments: Record<string, unknown>[]) => ({ startAt: 0, maxResults: 100, total: comments.length, comments });
+		const historical = { id: "900", author: { accountId: "712020:me" }, body: STORED, renderedBody: BOTH, updated: "u0" };
+		const fresh = { id: "10078", author: { accountId: "712020:me" }, body: STORED, renderedBody: BOTH, updated: "u1" };
+		// Another author's comment with the same images and other text is not this write.
+		const sameImagesOtherText = { id: "10080", author: { accountId: "712020:other" }, body: "Looks good.\n\n!before.png!\n\n!after.png!", renderedBody: BOTH, updated: "u1" };
+		expect(readBackEvidence("issue.comment.media", MEDIA, never, list(historical, fresh, sameImagesOtherText), { ...IDS, commentIds: ["900"] })).toEqual({ kind: "found", effects: [{ kind: "jira-comment", id: "10078" }] });
+		expect(readBackEvidence("issue.comment.media", MEDIA, never, list(historical, sameImagesOtherText), { ...IDS, commentIds: ["900"] })).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.comment.media", MEDIA, never, list(historical), { ...IDS, commentIds: ["900"] })).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.comment.media", MEDIA, never, list({ id: "10079", body: STORED, renderedBody: rendered("202456") }), IDS)).toEqual({ kind: "absent", revisionUnchanged: false });
+		// An old id in alt while the source moved to another attachment is not proof (re-review case).
+		const altDecoy = `<img alt="/202456" src="/rest/api/3/attachment/content/999">${rendered("202457")}`;
+		expect(readBackEvidence("issue.comment.media", MEDIA, never, list({ id: "10082", body: STORED, renderedBody: altDecoy }), IDS)).toEqual({ kind: "absent", revisionUnchanged: false });
+		// Two new comments holding this write's content cannot be attributed; the receipt stays open.
+		expect(readBackEvidence("issue.comment.media", MEDIA, never, list(fresh, { ...fresh, id: "10081" }), IDS)).toEqual({ kind: "indeterminate", reason: "more than one new comment holds this write's content; resolve the receipt by hand" });
+		const unmoved = (observed: string) => observed === "u1";
+		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { id: "454771", updated: "u1", body: "old", renderedBody: "<p>old</p>" }, IDS)).toEqual({ kind: "absent", revisionUnchanged: true });
+		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { id: "454771", updated: "u2", body: STORED, renderedBody: BOTH }, IDS)).toEqual({ kind: "found", effects: [{ kind: "jira-comment", id: "454771" }] });
+		// The same text with a changed image width or link target is other content (re-review cases).
+		const widthChanged = STORED.replace("width=600", "width=100");
+		expect(readBackEvidence("issue.comment.media", MEDIA, never, list({ id: "10083", body: widthChanged, renderedBody: BOTH }), IDS)).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { id: "454771", updated: "u2", body: widthChanged, renderedBody: BOTH }, IDS)).toEqual({ kind: "indeterminate", reason: "the comment moved to a version that does not hold this write's content" });
+		const LINKED = { ...MEDIA, body: `${MEDIA.body}\n\nLive: [open the story|https://x.example/a/b]` };
+		const linkedStored = `${STORED}\n\nLive: [open the story|https://x.example/a/b]`;
+		expect(readBackEvidence("issue.comment.media", LINKED, never, list({ id: "10084", body: linkedStored, renderedBody: BOTH }), IDS)).toEqual({ kind: "found", effects: [{ kind: "jira-comment", id: "10084" }] });
+		expect(readBackEvidence("issue.comment.media", LINKED, never, list({ id: "10085", body: linkedStored.replace("/a/b", "/a?b"), renderedBody: BOTH }), IDS)).toEqual({ kind: "absent", revisionUnchanged: false });
+		// A competing edit with the same images but other text moved the comment; it is not this write.
+		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { id: "454771", updated: "u2", body: "Competing edit.\n\n!before.png!\n\n!after.png!", renderedBody: BOTH }, IDS)).toEqual({ kind: "indeterminate", reason: "the comment moved to a version that does not hold this write's content" });
+		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { id: "454771", updated: "u2", body: STORED, renderedBody: rendered("202456") }, IDS)).toEqual({ kind: "indeterminate", reason: "the comment moved to a version that does not hold this write's content" });
+		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { id: "454772", updated: "u2", body: STORED, renderedBody: BOTH }, IDS)).toEqual({ kind: "indeterminate", reason: "the read-back reply names a different comment" });
+		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { id: "454771", renderedBody: BOTH }, IDS)).toEqual({ kind: "indeterminate", reason: "the comment read exposes no updated timestamp" });
+		expect(readBackEvidence("issue.comment.media.update", MEDIA_UPDATE, unmoved, { errorMessages: ["gone"] }, IDS)).toEqual({ kind: "indeterminate", reason: "the read-back reply names no comment" });
+		// Baselines: existing comments rendering the same files are candidates; an edit binds the comment's own updated.
+		// Candidates are matched by the bound attachment ids in the image sources; a comment whose sources carry the ids without the file names is still a candidate.
+		const idsOnly = { id: "902", body: STORED, renderedBody: '<img src="/secure/attachment/202456/x"><img src="/secure/attachment/202457/y">' };
+		expect(baselineFromReply("issue.comment.media", MEDIA, list(historical, sameImagesOtherText, idsOnly, { id: "901", body: STORED, renderedBody: rendered("202456") }), undefined, IDS)).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: ["900", "902"], revision: null } });
+		const editBaseline = baselineFromReply("issue.comment.media.update", MEDIA_UPDATE, { id: "454771", author: { accountId: "712020:me" }, updated: "u1", renderedBody: "<p>old</p>" });
+		// The comment's updated is the journal revision the preparation binds; the baseline revision is left to the verified image types.
+		expect(editBaseline).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: ["454771"], revision: null } });
+		expect(baselineFromReply("issue.comment.media.update", MEDIA_UPDATE, { id: "454771", renderedBody: "<p>old</p>" })).toEqual({ kind: "indeterminate", reason: "the comment read exposes no updated timestamp to bind the revision" });
+		expect(baselineFromReply("issue.comment.media.update", MEDIA_UPDATE, { id: "1", updated: "u1" })).toEqual({ kind: "indeterminate", reason: "the comment read names a different comment" });
 	});
 });
