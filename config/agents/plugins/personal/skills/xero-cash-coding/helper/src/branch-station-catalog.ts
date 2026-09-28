@@ -30,16 +30,21 @@ function station(command: string, trigger: string, cause: string, effect: Effect
 const STATIONS: Station[] = [
   station("status", "Cache present or missing.", "SUCCESS_UNCHANGED", "inspect", "success", "unchanged", 0, null, null),
   station("status", "Unsafe cache path.", "DOMAIN_PRECONDITION_UNMET", "inspect", "refused", "unchanged", 3, "domain", "Repair private cache path."),
+  station("status", "Internal cache operation failed.", "INTERNAL_RESULT_UNCHANGED", "inspect", "failed", "unchanged", 1, "internal", "Inspect local permissions and the journal before retrying."),
   station("lookup", "Examples present or cache miss.", "SUCCESS_UNCHANGED", "inspect", "success", "unchanged", 0, null, null),
   station("lookup", "Unsafe cache path.", "DOMAIN_PRECONDITION_UNMET", "inspect", "refused", "unchanged", 3, "domain", "Repair private cache path."),
+  station("lookup", "Internal cache operation failed.", "INTERNAL_RESULT_UNCHANGED", "inspect", "failed", "unchanged", 1, "internal", "Inspect local permissions and the journal before retrying."),
   station("preview", "Observation accepted and preview saved.", "SUCCESS_COMPLETED", "repository-local", "success", "completed", 0, null, null),
   station("preview", "Malformed observation or cache.", "SCHEMA_INVALID_INPUT", "repository-local", "refused", "unchanged", 4, "schema", "Repair input or preserve damaged cache."),
   station("preview", "Previous apply pending.", "DOMAIN_RECOVERY_HANDOFF_REQUIRED", "repository-local", "refused", "unchanged", 3, "domain", "Run recover before another preview."),
   station("preview", "An active writer holds the account.", "TRANSIENT_NOT_STARTED", "repository-local", "refused", "unchanged", 75, "transient", "Retry preview after 250 ms or continue live browser reads."),
+  station("preview", "Internal cache operation failed.", "INTERNAL_RESULT_UNCHANGED", "repository-local", "failed", "unchanged", 1, "internal", "Inspect local permissions and the journal before retrying."),
   station("apply", "Approved preview committed and read back.", "SUCCESS_COMPLETED", "repository-local", "success", "completed", 0, null, null),
   station("apply", "Preview stale, missing, or lock held.", "DOMAIN_PRECONDITION_UNMET", "repository-local", "refused", "unchanged", 3, "domain", "Create a fresh preview or inspect the lock."),
   station("apply", "Previous apply pending.", "DOMAIN_RECOVERY_HANDOFF_REQUIRED", "repository-local", "refused", "unchanged", 3, "domain", "Run recover before another apply."),
+  station("apply", "Apply attempted; effect uncertain.", "DOMAIN_RECOVERY_HANDOFF_REQUIRED", "repository-local", "failed", "unknown", 3, "domain", "Run recover and inspect before another apply."),
   station("apply", "An active writer holds the account.", "TRANSIENT_NOT_STARTED", "repository-local", "refused", "unchanged", 75, "transient", "Retry after 250 ms or continue live browser reads."),
+  station("apply", "Internal cache operation failed.", "INTERNAL_RESULT_UNCHANGED", "repository-local", "failed", "unchanged", 1, "internal", "Inspect local permissions and the journal before retrying."),
   station("recover", "No interrupted apply.", "SUCCESS_UNCHANGED", "inspect", "success", "unchanged", 0, null, null),
   station("recover", "Completed row before preview consumption.", "SUCCESS_COMPLETED", "repository-local", "success", "completed", 0, null, null, "Create a fresh preview; never retry the consumed effect ID."),
   station("recover", "Live writer holds the account.", "TRANSIENT_NOT_STARTED", "inspect", "refused", "unchanged", 75, "transient", "Wait for the writer and run recover again."),
@@ -47,6 +52,7 @@ const STATIONS: Station[] = [
   station("recover", "Pending intent with unchanged cache.", "DOMAIN_RECOVERY_HANDOFF_REQUIRED", "inspect", "refused", "unchanged", 3, "domain", "Inspect and archive the pending journal before another preview."),
   station("recover", "Pending intent with completed cache.", "DOMAIN_RECOVERY_HANDOFF_REQUIRED", "inspect", "refused", "unchanged", 3, "domain", "Inspect and archive the pending journal before another preview."),
   station("recover", "Interrupted effect remains uncertain.", "DOMAIN_RECOVERY_HANDOFF_REQUIRED", "inspect", "refused", "unchanged", 3, "domain", "Inspect journal and cache without replay."),
+  station("recover", "Internal cache operation failed.", "INTERNAL_RESULT_UNCHANGED", "inspect", "failed", "unchanged", 1, "internal", "Inspect local permissions and the journal before retrying."),
 ];
 export function stationsFor(commandIdentity: string): Station[] {
   return STATIONS.filter((item) => item.commandIdentity === commandIdentity);

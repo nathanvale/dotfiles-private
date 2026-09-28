@@ -311,8 +311,15 @@ test("completion before preview consumption is recovered without a second cache 
     stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });
   expect(interrupted.exitCode).toBe(3);
-  expect(JSON.parse(interrupted.stdout.toString()).result).toMatchObject({ outcome: "failed", transactionState: "unknown", data: null,
+  expect(JSON.parse(interrupted.stdout.toString()).result).toMatchObject({ causeCode: "DOMAIN_RECOVERY_HANDOFF_REQUIRED", effectClass: "repository-local",
+    outcome: "failed", transactionState: "unknown", data: null,
     effects: { completed: [], remaining: [], uncertain: [`cache:${id}`], inventoryComplete: true } });
+  const discovery = call(root, "--discover-command", "xero-history.apply");
+  expect(discovery.exitCode).toBe(0);
+  expect(discovery.envelope.result.data.stations).toContainEqual(expect.objectContaining({
+    trigger: "Apply attempted; effect uncertain.", causeCode: "DOMAIN_RECOVERY_HANDOFF_REQUIRED", effectClass: "repository-local",
+    outcome: "failed", transactionState: "unknown", exitCode: 3, failureClass: "domain",
+  }));
   const before = await readFile(cachePath(root));
   const recovery = call(root, "recover", ...ids);
   expect(recovery.envelope.result).toMatchObject({ causeCode: "SUCCESS_COMPLETED", transactionState: "completed" });
