@@ -26,3 +26,10 @@ effort = "high"
 agent = "claude"
 model = "claude-fable-5-1"
 effort = "high"
+
+[profiles.codex-luna-max]
+agent = "codex"
+model = "gpt-6-luna"
+effort = "ultra"
+description = "GPT-6-Luna at max effort: Figma and Chrome parity checks"
+args = ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "-c", 'sandbox_workspace_write.writable_roots=["/Users/nathanvale/.local/share/my-second-brain-playground/herdr-projects-root"]', "--ask-for-approval", "never", "--search"]
