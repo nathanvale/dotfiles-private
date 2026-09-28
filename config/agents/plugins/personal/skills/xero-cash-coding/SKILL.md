@@ -27,10 +27,12 @@ prove all bank activity has been imported or the BAS has been lodged.
 ## Learn only what the batch needs
 
 Read [the cache contract](references/history-cache.md) before using local history.
-From `config/agents/plugins/personal/skills/xero-cash-coding/helper/`, run
-`bun --no-install dist/xero-history.js <command> [options]`. In the repository,
-`bun run --silent xero-history <command> [options]` uses the same committed
-bundle. Single-quote the route code in shell commands, for example
+Resolve `skill_dir` from the directory containing this loaded `SKILL.md`, then
+run `bun --no-install "$skill_dir/helper/dist/xero-history.js" <command> [options]`.
+Use the helper beside the loaded skill; never fall back to a
+repository checkout path. For repository development only, run
+`bun run --silent xero-history <command> [options]` from the repository skill's
+`helper/` directory. Single-quote the route code in shell commands, for example
 `--organisation-id '!Ab12c'`, to keep `!` literal. Use `status` and `lookup`
 for cached examples, and `recover` to inspect an interrupted update. Feed only
 verified browser observations to `preview`, review its added and replaced
