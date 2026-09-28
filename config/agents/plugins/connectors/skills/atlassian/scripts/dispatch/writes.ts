@@ -131,7 +131,7 @@ export function wikiImageReferences(body: string): string[] {
 }
 
 const MEDIA_OPERATIONS: ReadonlySet<WriteOperation> = new Set<WriteOperation>(["issue.comment.media", "issue.comment.media.update"]);
-export const isMediaComment = (operation: WriteOperation): boolean => MEDIA_OPERATIONS.has(operation);
+const isMediaComment = (operation: WriteOperation): boolean => MEDIA_OPERATIONS.has(operation);
 
 // `images` must be exactly the set the body references, so the preview binds
 // every attachment the comment will render and read-back can prove each one.
@@ -402,7 +402,7 @@ function parsedJson(text: string): unknown | undefined {
 // under result (observed live, MCPorter 0.13.13), otherwise as text blocks.
 // A JSON string is unwrapped once so provider replies serialised as text still
 // yield records.
-export function unwrapReply(data: unknown): unknown {
+function unwrapReply(data: unknown): unknown {
 	if (!isRecord(data)) return data;
 	if (typeof data.result === "string" && Object.keys(data).length === 1) return parsedJson(data.result) ?? data;
 	if (!Array.isArray(data.content)) return data;
@@ -695,7 +695,7 @@ export function effectsFromReply(operation: WriteOperation, input: WriteInput, r
 
 // Flatten a body that may be a string, a Confluence body object, or an ADF
 // document into plain text.
-export function bodyText(value: unknown, depth = 0): string {
+function bodyText(value: unknown, depth = 0): string {
 	if (depth > 12) return "";
 	if (typeof value === "string") return value;
 	if (Array.isArray(value)) return value.map((entry) => bodyText(entry, depth + 1)).join(" ");

@@ -114,15 +114,15 @@ async function guardDelete(origin: string, authorization: string, args: unknown)
 	if (verdict === "unverifiable") atlassianProcess.fail("attachment-author-unverifiable", "the principal or the attachment author could not be read", 3);
 }
 
-async function main(argv: string[]): Promise<never> {
-	atlassianProcess.refuseArguments(argv);
+export async function runRestProvider(argv: readonly string[]): Promise<never> {
+	atlassianProcess.refuseArguments([...argv]);
 	const invocation = providerInvocation();
 	if (invocation.product !== "jira") atlassianProcess.fail("product-invalid", "the REST route serves Jira only", 2);
 	// The full-item read and comparison happen before stdin is consumed or any
 	// request is shaped.
 	const item = boundItem(invocation);
-	if (item.credential === undefined) atlassianProcess.fail("community-fields-missing", `${invocation.itemTitle} needs username, credential, and a site_url field`);
-	if (!singleLine(item.credential)) atlassianProcess.fail("credential-invalid", `${invocation.itemTitle} has malformed fields`);
+	if (item.credential === undefined) atlassianProcess.fail("community-fields-missing", `1Password item ${invocation.binding.item} needs username, credential, and a site_url field`);
+	if (!singleLine(item.credential)) atlassianProcess.fail("credential-invalid", `1Password item ${invocation.binding.item} has malformed fields`);
 	const stdin = await Bun.stdin.text();
 	if (stdin.length > REQUEST_LIMIT) atlassianProcess.fail("arguments-invalid", "the request is too large", 2);
 	const { tool, args, request } = requestFromStdin(stdin);
@@ -132,4 +132,4 @@ async function main(argv: string[]): Promise<never> {
 	return emit(await perform(item.origin, authorization, request));
 }
 
-await main(process.argv.slice(2));
+if (import.meta.main) await runRestProvider(process.argv.slice(2));

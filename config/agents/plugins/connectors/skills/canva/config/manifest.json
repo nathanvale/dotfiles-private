@@ -1,0 +1,9 @@
+{
+	"schemaVersion": 1,
+	"id": "canva",
+	"transport": { "registry": "./mcporter.json" },
+	"selectors": { "account": { "required": true } },
+	"requirements": ["mcporter"],
+	"adapter": "canva",
+	"credentials": null
+}

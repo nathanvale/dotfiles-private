@@ -1,0 +1,11 @@
+{
+	"schemaVersion": 1,
+	"id": "keyless-fixture-skill",
+	"transport": { "registry": "./mcporter.json" },
+	"selectors": {
+		"region": { "pattern": "^[a-z][a-z0-9-]*$", "required": true }
+	},
+	"requirements": [],
+	"adapter": null,
+	"credentials": null
+}

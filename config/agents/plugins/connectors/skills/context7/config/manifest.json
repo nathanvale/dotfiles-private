@@ -1,0 +1,9 @@
+{
+	"schemaVersion": 1,
+	"id": "context7",
+	"transport": { "registry": "./mcporter.json" },
+	"selectors": {},
+	"requirements": ["mcporter", "op"],
+	"adapter": "context7",
+	"credentials": { "reference": "1Password:API Credentials" }
+}

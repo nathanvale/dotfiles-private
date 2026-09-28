@@ -6,10 +6,13 @@
 
 import { PRODUCTS, type Product } from "../custody/index.ts";
 
-export { PRODUCTS, type Product } from "../custody/index.ts";
+export type { Product } from "../custody/index.ts";
 
-import { readFileSync } from "node:fs";
-import path from "node:path";
+// Bundled at compile time: inside the packaged front door this module's own
+// directory is virtual, so the registry cannot be read from disk beside it.
+// MCPorter still enforces the on-disk allow-list, so the effective set is the
+// intersection of the two.
+import registry from "../../config/mcporter.json" with { type: "json" };
 
 // The active Providers. Community is the one Atlassian Provider; `rest` is the
 // owned Jira REST v2 transport that exists for the wiki-comment and the
@@ -18,7 +21,7 @@ import path from "node:path";
 // the name on every preview and receipt so a record from a retired Provider
 // is recognised, never reinterpreted.
 export const PROVIDER = "community" as const;
-export const REST_PROVIDER = "rest" as const;
+const REST_PROVIDER = "rest" as const;
 export const PROVIDERS = [PROVIDER, REST_PROVIDER] as const;
 export type ProviderName = (typeof PROVIDERS)[number];
 
@@ -77,15 +80,7 @@ export function registryToolVocabulary(registry: unknown): ToolVocabulary {
 	return Object.freeze(vocabulary);
 }
 
-function registrySource(): unknown {
-	try {
-		return JSON.parse(readFileSync(path.resolve(import.meta.dir, "..", "..", "config", "mcporter.json"), "utf8"));
-	} catch {
-		return registryInvalid();
-	}
-}
-
-export const ALLOWED_TOOLS = registryToolVocabulary(registrySource());
+export const ALLOWED_TOOLS = registryToolVocabulary(registry);
 
 // This is the operation descriptor registry: product, write policy admission,
 // Provider, and exact provider tool identity live behind this one interface.
@@ -196,17 +191,18 @@ export type CauseCode =
 	| "refused-evidence"
 	| "not-found"
 	| "refused-precondition"
+	| "refused-credential-unconfigured"
 	| "capability-unavailable"
 	| "failed-transport"
 	| "failed-unknown"
 	| "outcome-unknown";
 
-export type Outcome = "success" | "refused" | "failed";
+export type OutcomeKind = "success" | "refused" | "failed";
 export type FailureClass = "usage" | "domain" | "schema" | "internal" | null;
 export type TransactionState = "unchanged" | "completed" | "unknown";
 
 export interface CauseRow {
-	outcome: Outcome;
+	outcome: OutcomeKind;
 	failureClass: FailureClass;
 	exitCode: 0 | 2 | 3 | 4;
 }
@@ -224,6 +220,7 @@ export const CAUSES: Record<CauseCode, CauseRow> = {
 	"refused-evidence": { outcome: "refused", failureClass: "domain", exitCode: 3 },
 	"not-found": { outcome: "failed", failureClass: "domain", exitCode: 3 },
 	"refused-precondition": { outcome: "refused", failureClass: "domain", exitCode: 3 },
+	"refused-credential-unconfigured": { outcome: "refused", failureClass: "domain", exitCode: 3 },
 	"capability-unavailable": { outcome: "failed", failureClass: "domain", exitCode: 3 },
 	"failed-transport": { outcome: "failed", failureClass: "domain", exitCode: 3 },
 	"failed-unknown": { outcome: "failed", failureClass: "domain", exitCode: 3 },
@@ -246,7 +243,7 @@ export interface Envelope {
 	result: {
 		runId: string;
 		commandIdentity: string;
-		outcome: Outcome;
+		outcome: OutcomeKind;
 		// inspect reads; repository-local changes only private journal state;
 		// external reaches the provider with a write.
 		effectClass: "inspect" | "repository-local" | "external";

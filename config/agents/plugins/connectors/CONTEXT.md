@@ -33,6 +33,30 @@ product, because the API token, credential item, and tool surface are
 product-specific.
 _Avoid_: Provider, server, credential
 
+## Generic command core
+
+**Front Door**:
+The single plugin-wide compiled `bin/connectors` executable through which
+humans and agents list, validate, and inspect Connector Skills; later
+Tickets extend it to set up, diagnose, authenticate, repair and run them.
+_Avoid_: wrapper, launcher, script
+
+**Connector Manifest**:
+The schema-validated, nonsecret `config/manifest.json` declaration of one
+Connector Skill: its transport registry reference, selectors, requirements,
+declared adapter, and any Custody Mode reference. Adding a keyless Connector
+Skill needs only this file and its transport registry; the Front Door's own
+source never changes for it.
+_Avoid_: config, settings, mcporter.json
+
+**Custody Mode**:
+Where a Connector Skill's credential lives and which owner reads it, declared
+per Connector Skill in its manifest as a nonsecret reference; it names a place
+and an owner, never a credential value. `null` marks a keyless Connector
+Skill. A packaged adapter's local check may confirm a reference is declared
+without ever reading or holding the credential itself.
+_Avoid_: auth type, login method, source
+
 ## Atlassian routing
 
 **Atlassian Operation**:
@@ -58,10 +82,17 @@ the only source against which a Provider's reported site may be matched. Canva
 has no analogue: its endpoint is fixed and its identity is the account.
 _Avoid_: Token-management URL, provider-reported URL
 
+**Tenant Registration**:
+The nonsecret record, published once per Atlassian Tenant by `auth configure`,
+naming the 1Password item ID that holds each product's credential. The CLI
+never rewrites it; commands that read a credential refuse without it.
+_Avoid_: Tenant config, item mapping, derived item title
+
 **Credential Binding**:
 The nonsecret record custody returns for one Atlassian Tenant and product: the
-principal, the credential item revision, and the Trusted Site Origin. It
-crosses the route; the credential value never does.
+principal, the credential item revision, the Trusted Site Origin, and the
+registered 1Password item ID it was read from. It crosses the route; the
+credential value never does.
 _Avoid_: Context, token, credential
 
 **Atlassian Community**:
@@ -77,23 +108,43 @@ their Object Identity, and no active route applies, adjudicates, or unlocks
 them.
 _Avoid_: Legacy provider, fallback, migration
 
-## Canva sessions
+## Canva custody
 
 **Canva Account**:
-The nonsecret slug that selects one Canva user's session for a request. It is
-the Route Selection for Canva; sessions, locks, and logs never cross accounts.
+The nonsecret slug that selects one Canva user's grant for a request. It is
+the Route Selection for Canva; grants, vault roots, and logs never cross
+accounts.
 _Avoid_: User, tenant, profile, login
 
-**Canva Session**:
-The private per-account record of one authorised grant: its client identity,
-authorization server, access token, and refresh token. It exists only below
-MCPorter and ends by logout or by Canva revoking the grant.
-_Avoid_: Credential, cache, cookie
+**Account Vault**:
+The private owned directory per Canva Account that the packaged Canva adapter
+gives MCPorter as its data and cache home, so MCPorter's native OAuth vault for that
+account is independent of every other account and of MCPorter's default
+home vault. MCPorter alone reads and writes the grant inside it; Connectors
+claims no encryption for it.
+_Avoid_: Session, token store, keychain
+
+**Client Mode**:
+The declared Canva client identity MCPorter registers with: `dcr`, dynamic
+client registration, the working first-release mode; or `approved`, a
+reserved future Developer Portal or metadata-document client that refuses
+until separately built and admitted. No fallback runs between modes.
+_Avoid_: Auth type, login method
+
+**Canva Session** (former):
+The below-MCPorter per-account record of client identity and tokens that the
+packaged Canva adapter never uses (ADR 0004). Its files stay where they
+are, unopened and unimported. After that account's replacement login and
+reads pass, Nathan retires its `session.json`: an attended step removes
+exactly that one file, never opened, copied, backed up, or printed, and
+confirms absence by an existence check only. Connectors carries no remote
+revocation and no automatic deletion.
+_Avoid_: Current custody, Account Vault
 
 **Attended Login**:
 The one-time flow in which the system browser is opened for the user to grant
 access and the loopback callback returns the code. Nathan completes it; no
-agent drives the browser.
+agent drives the browser. For Canva it is MCPorter's own `auth`.
 _Avoid_: Automated login, headless login, OAuth flow
 
 ## Atlassian writes

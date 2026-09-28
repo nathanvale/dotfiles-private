@@ -4,7 +4,8 @@
 	"mcpServers": {
 		"atlassian-community-jira": {
 			"description": "Community mcp-atlassian, Jira only",
-			"command": "../scripts/atlassian-community-provider.ts",
+			"command": "../../../bin/connectors",
+			"args": ["__internal", "atlassian", "provider"],
 			"env": {
 				"ATLASSIAN_TENANT": "${ATLASSIAN_TENANT}",
 				"ATLASSIAN_PRODUCT": "jira",
@@ -25,7 +26,8 @@
 		},
 		"atlassian-community-confluence": {
 			"description": "Community mcp-atlassian, Confluence only",
-			"command": "../scripts/atlassian-community-provider.ts",
+			"command": "../../../bin/connectors",
+			"args": ["__internal", "atlassian", "provider"],
 			"env": {
 				"ATLASSIAN_TENANT": "${ATLASSIAN_TENANT}",
 				"ATLASSIAN_PRODUCT": "confluence",

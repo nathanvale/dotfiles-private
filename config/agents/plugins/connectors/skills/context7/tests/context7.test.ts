@@ -1,8 +1,12 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import path from "node:path";
-import { assertCustody, createHarness, type Harness } from "../../../tests/harness.ts";
+// Ticket #137 under Spec #87 (AC11, AC26): the Context7 facts only this Skill
+// owns. Its keyless and account behavior through the packaged front door is
+// proved in tests/account-key.test.ts.
+import { afterEach, beforeEach, expect, test } from "bun:test";
+import { ACCOUNT_ENDPOINT } from "../scripts/endpoint.ts";
+import { createHarness, type Harness } from "../../../tests/harness.ts";
 
-const SKILL = path.resolve(import.meta.dir, "..");
+// Independent oracle: the one hosted origin the Context7 key may reach.
+const HOSTED_ENDPOINT = "https://mcp.context7.com/mcp";
 
 let harness: Harness;
 beforeEach(() => {
@@ -10,28 +14,17 @@ beforeEach(() => {
 });
 afterEach(() => harness.dispose());
 
-describe("Context7 hosted provider", () => {
-	test("list reaches the hosted entry with no selection and no header", async () => {
-		const result = await harness.run(["context7", "--", "list", "--schema", "--json"]);
-		expect(result.code).toBe(0);
-		const receipt = assertCustody(harness, result, []);
-		expect(receipt.kind).toBe("http");
-		expect(receipt.url).toBe("https://mcp.context7.com/mcp");
-		expect(receipt.headers).toBeNull();
-		expect(receipt.argv.slice(1)).toEqual([path.join(SKILL, "config", "mcporter.json"), "list", "context7", "--schema", "--json", "--no-oauth"]);
-		expect(Object.keys(receipt.env).sort()).toEqual(["HOME", "MCPORTER_NO_KEEPALIVE", "PATH", "TMPDIR", "XDG_STATE_HOME"]);
-	});
+// Fails if the shipped endpoint leaf names any other origin. Process tests
+// substitute this leaf in a copy, so only this test observes the shipped
+// value; tests/account-key.test.ts proves the Provider sends only to the leaf.
+test("the shipped endpoint leaf names only the hosted Context7 endpoint", () => {
+	expect(ACCOUNT_ENDPOINT).toBe(HOSTED_ENDPOINT);
+});
 
-	test("call composes the documented tool on the context7 server", async () => {
-		const result = await harness.run(["context7", "--", "call", "resolve-library-id", "--args", '{"libraryName":"bun","query":"Bun test assertions"}']);
-		expect(result.code).toBe(0);
-		expect(assertCustody(harness, result, []).argv.slice(2)).toEqual(["call", "context7.resolve-library-id", "--args", '{"libraryName":"bun","query":"Bun test assertions"}', "--no-oauth"]);
-	});
-
-	test("a selection is refused because this skill declares none", async () => {
-		const result = await harness.run(["context7", "--select", "tenant=example", "--", "list"]);
-		expect(result.code).toBe(2);
-		expect(result.stderr).toContain("provider-route:error:select-undeclared:");
-		expect(harness.has("mcporter.json")).toBe(false);
-	});
+// Fails if the direct launcher still reached Context7: after configure, that
+// keyless route would bypass the account key.
+test("the direct launcher refuses Context7, whose transport belongs to the front door", async () => {
+	const result = await harness.run(["context7", "--", "call", "resolve-library-id", "--args", '{"query":"bun"}']);
+	expect([result.code, result.stdout, result.stderr.includes("provider-route:error:dispatcher-owned:")]).toEqual([3, "", true]);
+	expect(harness.has("mcporter.json")).toBe(false);
 });

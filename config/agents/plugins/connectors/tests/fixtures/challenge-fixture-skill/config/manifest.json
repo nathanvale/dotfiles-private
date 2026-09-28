@@ -1,0 +1,9 @@
+{
+	"schemaVersion": 1,
+	"id": "challenge-fixture-skill",
+	"transport": { "registry": "./mcporter.json" },
+	"selectors": {},
+	"requirements": [],
+	"adapter": "challenge-auth",
+	"credentials": { "reference": "fixture-challenge/allowed" }
+}

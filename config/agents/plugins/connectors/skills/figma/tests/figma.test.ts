@@ -49,6 +49,16 @@ describe("Figma hosted Provider", () => {
 		expect(receipt.argv).toEqual(["--config", CONFIG, "auth", "figma-connectors", "--reset"]);
 	});
 
+	// Canva moves MCPorter's data and cache homes into a per-account vault;
+	// Figma's route must keep MCPorter's default vault and gain no Canva selector.
+	test("attended auth keeps MCPorter's default vault with no Canva data root", async () => {
+		const result = await harness.run(["figma", "--", "auth", "--no-browser"]);
+		expect([result.code, result.stderr]).toEqual([0, ""]);
+		const receipt = harness.receipt<{ argv: string[]; env: Record<string, string> }>("mcporter.json");
+		expect(receipt.argv).toEqual(["--config", CONFIG, "auth", "figma-connectors", "--no-browser"]);
+		expect([receipt.env.XDG_DATA_HOME, receipt.env.XDG_CACHE_HOME, receipt.env.CANVA_ACCOUNT]).toEqual([undefined, undefined, undefined]);
+	});
+
 	test("routine discovery uses cached OAuth without starting login", async () => {
 		const result = await harness.run(["figma", "--", "list", "--schema", "--json"]);
 		expect(result.code).toBe(0);
