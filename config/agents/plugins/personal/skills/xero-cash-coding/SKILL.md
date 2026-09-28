@@ -25,7 +25,11 @@ prove all bank activity has been imported or the BAS has been lodged.
 ## Learn only what the batch needs
 
 Read [the cache contract](references/history-cache.md) before using local history.
-Use cached examples to identify likely matches, then inspect Account transactions
+Run the local `xero-history` helper from `helper/`: use `status` and `lookup` for
+cached examples, and `recover` to inspect an interrupted update. Feed only
+verified browser observations to `preview`, review its added and replaced
+transaction IDs, then use `apply --approve` for that exact preview. Use cached
+examples to identify likely matches, then inspect Account transactions
 for missing, conflicting, or stale evidence. Open transaction details to obtain
 the actual account, tax treatment, splits, and contact: a list row saying
 Reconciled proves none of those coding choices by itself.
@@ -59,7 +63,8 @@ with a small batch on the first run; enlarge batches after a verified result.
 After saving, inspect the result and confirm affected transactions in Xero. If a
 save times out or its outcome is unclear, inspect those transactions before any
 retry; leave unknown outcomes unresolved. A changed queue count alone does not
-prove correct coding. Update the cache only from verified saved details.
+prove correct coding. Update the cache from verified saved details through
+`xero-history preview` and `apply`.
 
 Report confirmed reconciliations, exceptions, and unresolved outcomes separately.
 Keep history collection resumable; a partial cache is sufficient to start a batch.

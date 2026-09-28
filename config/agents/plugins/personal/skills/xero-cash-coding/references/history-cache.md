@@ -9,15 +9,22 @@ Resolve an absolute `XDG_STATE_HOME`, falling back to `$HOME/.local/state` when
 unset or relative. Use `xero-cash-coding/<organisation-key>/<account-key>/history.json`
 beneath it. Derive directory keys from verified stable Xero identifiers using only
 letters, digits, and hyphens; store the observed display names inside the file.
+The helper encodes each exact verified ID as `id-<lowercase UTF-8 hex>` so IDs
+that differ by case have distinct keys on case-insensitive filesystems. Beside
+`history.json`, it keeps `history.json.preview.json`,
+`history.json.journal.jsonl`, and `history.json.lock` in the same account folder.
 Reject symlinks in the cache path. Keep directories owner-only (0700) and files
 owner-only (0600); create the private directory before writing financial data.
 
-Use normal file tools to read and update JSON. Read before merging, preserve
-unrelated observations, and validate the resulting JSON. Replace through a sibling
-temporary file and atomic rename when available. If another session is writing
-the same account, stop cache writes and continue live reads. A missing, malformed,
-or incompatible cache is a cache miss, not a reconciliation blocker; preserve a
-damaged file for recovery instead of overwriting it.
+Use `xero-history status` and `lookup` to read cached examples. Submit verified
+observations through `preview`; review its added and replaced IDs before the
+exact `apply --approve`. The helper reads before merging, preserves unrelated
+observations, validates JSON, and replaces through a sibling temporary file and
+atomic rename. If another session is writing the same account, stop cache writes
+and continue live reads. Use read-only `recover` for interrupted updates and
+follow its operator repair steps for a pending journal or dead writer lock. A
+missing, malformed, or incompatible cache is a cache miss, not a reconciliation
+blocker; preserve a damaged file for recovery instead of overwriting it.
 
 Keep this data outside Git, vault notes, shared folders, and plugin payloads. Store
 no credentials, cookies, authentication-bearing URLs, screenshots, or full bank

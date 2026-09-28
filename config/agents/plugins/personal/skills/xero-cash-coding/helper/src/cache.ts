@@ -124,13 +124,19 @@ function writerActive(path: string): boolean {
     catch (error) { return error instanceof Error && "code" in error && error.code === "EPERM"; }
   } catch { return false; }
 }
+let activeClaim: { release: () => void; intentStarted: boolean } | null = null;
+let signalRequested = false;
+export function stopForSignal(): void {
+  signalRequested = true;
+  if (activeClaim && !activeClaim.intentStarted) activeClaim.release();
+}
 function journal(path: string, value: unknown): void {
   assertOrdinary(journalPath(path));
   const fd = openSync(journalPath(path), "a", 0o600);
   try { fchmodSync(fd, 0o600); writeFileSync(fd, `${JSON.stringify(value)}\n`); fsyncSync(fd); }
   finally { closeSync(fd); }
 }
-interface JournalRow { phase: "intent" | "completed"; id: string; hash: string }
+interface JournalRow { phase: "intent" | "completed"; id: string; hash: string; baseHash?: string | null }
 function journalRows(path: string): JournalRow[] {
   assertOrdinary(journalPath(path));
   let bytes: string;
@@ -147,14 +153,18 @@ function journalRows(path: string): JournalRow[] {
         (row.phase !== "intent" && row.phase !== "completed") || typeof row.id !== "string" || !/^[a-f0-9]{64}$/.test(String(row.hash))) {
         throw new Error("bad journal row");
       }
-      return { phase: row.phase, id: row.id, hash: String(row.hash) };
+      if (row.phase === "intent" && "baseHash" in row && row.baseHash !== null &&
+        (typeof row.baseHash !== "string" || !/^[a-f0-9]{64}$/.test(row.baseHash))) throw new Error("bad base hash");
+      return { phase: row.phase, id: row.id, hash: String(row.hash),
+        ...("baseHash" in row ? { baseHash: row.baseHash as string | null } : {}) };
     });
   } catch { throw new CacheProblem("malformed", "Malformed journal preserved; inspect it before another apply."); }
 }
-function pending(path: string): { id: string; hash: string } | null {
-  let intent: { id: string; hash: string } | null = null;
+function pending(path: string): { id: string; hash: string; baseHash?: string | null } | null {
+  let intent: { id: string; hash: string; baseHash?: string | null } | null = null;
   for (const row of journalRows(path)) {
-    if (row.phase === "intent" && intent === null) intent = { id: row.id, hash: row.hash };
+    if (row.phase === "intent" && intent === null) intent = { id: row.id, hash: row.hash,
+      ...(row.baseHash !== undefined ? { baseHash: row.baseHash } : {}) };
     else if (row.phase === "completed" && intent?.id === row.id && intent.hash === row.hash) intent = null;
     else throw new CacheProblem("malformed", "Malformed journal sequence preserved; inspect it before another apply.");
   }
@@ -163,15 +173,17 @@ function pending(path: string): { id: string; hash: string } | null {
 function completedEffect(path: string, effectId: string): boolean {
   return journalRows(path).some((row) => row.phase === "completed" && row.id === effectId);
 }
-export async function prepare(observation: unknown): Promise<{ id: string; path: string; count: number }> {
+export async function prepare(observation: unknown): Promise<{ id: string; path: string; count: number; addedIds: string[]; replacedIds: string[] }> {
   const parsed = Observation.safeParse(observation);
   if (!parsed.success) throw new CacheProblem("invalid", "Observation JSON does not match schema version 1.");
   const path = accountPath(parsed.data.organisation.id, parsed.data.bankAccount.id);
   privateDirectory(dirname(path));
   if (writerActive(path)) throw new CacheProblem("busy", "Another active writer holds this account; retry preview after 250 ms.");
-  if (existsSync(lockPath(path))) throw new CacheProblem("locked", "Crash residue holds this account lock; inspect recover before another preview.");
+  if (existsSync(lockPath(path))) throw new CacheProblem("locked", "Account lock residue blocks writes. Run recover for the exact manual repair path.");
   if (pending(path)) throw new CacheProblem("pending", "Run recover before preparing another update.");
   const current = await readCache(path);
+  const addedIds = parsed.data.transactions.filter((item) => !current.cache?.transactions[item.id]).map((item) => item.id);
+  const replacedIds = parsed.data.transactions.filter((item) => !!current.cache?.transactions[item.id]).map((item) => item.id);
   const proposed = merge(current.cache, parsed.data);
   const id = randomUUID();
   const proposedBytes = `${JSON.stringify(proposed)}\n`;
@@ -180,7 +192,7 @@ export async function prepare(observation: unknown): Promise<{ id: string; path:
     proposed, consumed: false,
   };
   replacePrivate(previewPath(path), `${JSON.stringify(preview)}\n`);
-  return { id, path, count: parsed.data.transactions.length };
+  return { id, path, count: parsed.data.transactions.length, addedIds, replacedIds };
 }
 function readPreview(path: string): Preview {
   assertOrdinary(previewPath(path));
@@ -211,25 +223,41 @@ function claimLock(path: string): () => void {
     closeSync(fd);
   } catch (error) {
     if (error instanceof Error && "code" in error && error.code === "EEXIST") {
-      throw new CacheProblem(writerActive(path) ? "busy" : "locked", "Another writer or crash residue holds this account lock.");
+      const active = writerActive(path);
+      throw new CacheProblem(active ? "busy" : "locked", active
+        ? "Another active writer holds this account; retry after 250 ms."
+        : "Account lock residue blocks writes. Run recover for the exact manual repair path.");
     }
     throw error;
   }
-  return () => {
+  const claim = { intentStarted: false, release: () => {
     try {
       const current = lstatSync(lock);
       if (current.dev === owned.dev && current.ino === owned.ino) unlinkSync(lock);
     } catch { /* Preserve missing or replaced locks. */ }
-  };
+    if (activeClaim === claim) activeClaim = null;
+  } };
+  activeClaim = claim;
+  return claim.release;
 }
 async function publishPreview(path: string, preview: Preview, effectId: string): Promise<void> {
   const bytes = `${JSON.stringify(preview.proposed)}\n`;
-  journal(path, { phase: "intent", id: effectId, hash: preview.expectedHash });
+  if (process.env.NODE_ENV === "test" && process.env.XERO_HISTORY_TEST_BEFORE_INTENT) {
+    writeFileSync(process.env.XERO_HISTORY_TEST_BEFORE_INTENT, "ready", { mode: 0o600 });
+    await Bun.sleep(2000);
+  }
+  if (signalRequested) throw new CacheProblem("busy", "Apply stopped before writing an intent; create a fresh preview.");
+  if (activeClaim) activeClaim.intentStarted = true;
+  journal(path, { phase: "intent", id: effectId, hash: preview.expectedHash, baseHash: preview.baseHash });
   if (process.env.NODE_ENV === "test" && process.env.XERO_HISTORY_TEST_AFTER_INTENT) {
     writeFileSync(process.env.XERO_HISTORY_TEST_AFTER_INTENT, "ready", { mode: 0o600 });
     await Bun.sleep(2000);
   }
   replacePrivate(path, bytes);
+  if (process.env.NODE_ENV === "test" && process.env.XERO_HISTORY_TEST_AFTER_RENAME) {
+    writeFileSync(process.env.XERO_HISTORY_TEST_AFTER_RENAME, "ready", { mode: 0o600 });
+    await Bun.sleep(2000);
+  }
   const after = await readCache(path);
   if (after.hash !== preview.expectedHash) throw new CacheProblem("pending", "Cache read-back differed; run recover.");
   journal(path, { phase: "completed", id: effectId, hash: preview.expectedHash });
@@ -261,20 +289,42 @@ export async function apply(organisationId: string, accountId: string, previewId
     release();
   }
 }
-export async function recover(organisationId: string, accountId: string): Promise<{ state: "none" | "completed" | "unknown"; effectId: string | null }> {
-  const path = accountPath(organisationId, accountId);
-  const intent = pending(path);
-  if (!intent) {
-    if (!existsSync(previewPath(path))) return { state: "none", effectId: null };
-    const preview = readPreview(path);
-    const effectId = `cache:${preview.previewId}`;
-    if (!preview.consumed && completedEffect(path, effectId)) return { state: "completed", effectId };
-    return { state: "none", effectId: null };
-  }
+export interface Recovery {
+  state: "none" | "unchanged" | "completed" | "unknown" | "lock-residue" | "writer-active";
+  effectId: string | null;
+  pending: boolean;
+  repair: string | null;
+}
+async function inspectPending(path: string, intent: NonNullable<ReturnType<typeof pending>>): Promise<Recovery> {
+  const inspected = `Inspect ${journalPath(path)}, ${previewPath(path)}, and ${path}.`;
+  const resolved = `After verifying the effect and writer PID, archive ${journalPath(path)} and ${previewPath(path)} by moving them aside; remove ${lockPath(path)} only if its PID is dead. Then create a fresh preview.`;
   try {
     const current = await readCache(path);
-    return { state: current.hash === intent.hash ? "completed" : "unknown", effectId: intent.id };
-  } catch { return { state: "unknown", effectId: intent.id }; }
+    if (current.hash === intent.hash) return { state: "completed", effectId: intent.id, pending: true,
+      repair: `The cache matches the intended hash. ${inspected} ${resolved}` };
+    if (intent.baseHash !== undefined && current.hash === intent.baseHash) return { state: "unchanged", effectId: intent.id, pending: true,
+      repair: `The cache matches the pre-apply hash. ${inspected} ${resolved}` };
+  } catch { /* An unreadable cache leaves the effect uncertain. */ }
+  return { state: "unknown", effectId: intent.id, pending: true,
+    repair: `The cache does not prove the pre-apply or intended state. ${inspected} Preserve all files and resolve the effect manually before removing any lock or journal.` };
+}
+function inspectWithoutPending(path: string, lockResidue: boolean): Recovery {
+  if (lockResidue) return { state: "lock-residue", effectId: null, pending: false,
+    repair: `Verify the writer PID is dead, then remove only ${lockPath(path)} after inspecting ${journalPath(path)} and ${path}. Run recover again before writing.` };
+  if (!existsSync(previewPath(path))) return { state: "none", effectId: null, pending: false, repair: null };
+  const preview = readPreview(path);
+  const effectId = `cache:${preview.previewId}`;
+  if (!preview.consumed && completedEffect(path, effectId)) return { state: "completed", effectId, pending: false,
+    repair: "This preview was applied. Create a fresh preview for another update; never retry its ID." };
+  return { state: "none", effectId: null, pending: false, repair: null };
+}
+export async function recover(organisationId: string, accountId: string): Promise<Recovery> {
+  const path = accountPath(organisationId, accountId);
+  const intent = pending(path);
+  const hasLock = existsSync(lockPath(path));
+  if (hasLock && writerActive(path)) return { state: "writer-active", effectId: intent?.id ?? null,
+    pending: intent !== null, repair: "An active writer holds this account. Wait for it to finish, then run recover again before writing." };
+  return intent ? inspectPending(path, intent) : inspectWithoutPending(path, hasLock);
 }
 export interface LookupContext {
   direction?: "in" | "out";

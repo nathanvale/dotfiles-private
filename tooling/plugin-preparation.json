@@ -14,12 +14,6 @@
 			"reason": "The Playground is an independently locked nested Bun workspace."
 		},
 		{
-			"name": "personal",
-			"path": "config/agents/plugins/personal",
-			"ownership": "no-nested-install",
-			"reason": "The Xero history helper is a root workspace member; the root lock owns its dependencies."
-		},
-		{
 			"name": "proof",
 			"path": "config/agents/plugins/proof",
 			"ownership": "root-workspace",

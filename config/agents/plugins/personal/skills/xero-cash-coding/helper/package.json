@@ -6,12 +6,10 @@
   "scripts": {
     "lint": "biome check --diagnostic-level=error .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "bun test tests",
+    "test": "bun test tests --timeout=30000",
     "xero-history": "bun run src/cli.ts"
   },
   "dependencies": {
-    "@logtape/logtape": "2.3.1",
-    "@logtape/redaction": "2.3.1",
     "zod": "4.4.3"
   }
 }

@@ -1,14 +1,14 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { stationsFor } from "./branch-station-catalog.ts";
-import { accountPath, apply, CacheProblem, prepare, readCache, recover, select } from "./cache.ts";
+import { accountPath, apply, CacheProblem, prepare, readCache, recover, select, stopForSignal } from "./cache.ts";
+import type { Recovery } from "./cache.ts";
 import { COMMANDS, envelope } from "./command-contract.ts";
-import { attemptEmergencyDiagnostic, recordDiagnostic } from "./diagnostics.ts";
 import type { OperationResult } from "./model.ts";
 import { systemProcessLifecycle } from "./process-lifecycle.ts";
 
-const lifecycle = systemProcessLifecycle(attemptEmergencyDiagnostic);
-process.on("SIGINT", () => lifecycle.terminate(130));
-process.on("SIGTERM", () => lifecycle.terminate(143));
+const lifecycle = systemProcessLifecycle();
+process.on("SIGINT", () => { stopForSignal(); lifecycle.terminate(130); });
+process.on("SIGTERM", () => { stopForSignal(); lifecycle.terminate(143); });
 
 const HELP = `Usage: xero-history COMMAND [options]
 
@@ -107,7 +107,7 @@ function validAccountOptions(options: Options): boolean {
 function validOptions(command: Command, options: Options): boolean {
   if (command === "preview") return validPreviewOptions(options);
   if (!validAccountOptions(options)) return false;
-  if (command === "lookup") return options.query !== undefined && !options.previewId && !options.approve && validLookupContext(options);
+  if (command === "lookup") return !!options.query?.trim() && !options.previewId && !options.approve && validLookupContext(options);
   if (command === "apply") return !!options.previewId && options.approve && !options.query && !hasLookupContext(options);
   return !options.query && !options.previewId && !options.approve && !hasLookupContext(options);
 }
@@ -207,7 +207,8 @@ async function previewResult(options: Options): Promise<OperationResult> {
   catch { throw new CacheProblem("invalid", "Input must be an accessible JSON observation file."); }
   const prepared = await prepare(observation);
   const value = result("xero-history.preview", "repository-local",
-    { previewId: prepared.id, count: prepared.count, partition: prepared.path }, "Cache update previewed.");
+    { previewId: prepared.id, count: prepared.count, partition: prepared.path,
+      addedTransactionIds: prepared.addedIds, replacedTransactionIds: prepared.replacedIds }, "Cache update previewed.");
   value.causeCode = "SUCCESS_COMPLETED";
   value.transactionState = "completed";
   value.effects = effects([`preview:${prepared.id}`]);
@@ -221,29 +222,46 @@ async function applyResult(options: Options): Promise<OperationResult> {
   value.effects = effects([effectId]);
   return value;
 }
+function activeWriterResult(observation: Recovery): OperationResult {
+  const value = result("xero-history.recover", "inspect", observation, "Active writer inspected.");
+  value.causeCode = "TRANSIENT_NOT_STARTED";
+  value.outcome = "refused";
+  value.failureClass = "transient";
+  value.exitCode = 75;
+  value.retryable = true;
+  value.retryDelayMilliseconds = 250;
+  value.repairAction = required(observation.repair ?? undefined);
+  value.nextAction = value.repairAction;
+  return value;
+}
+function blockedRecoveryResult(observation: Recovery): OperationResult {
+  const uncertain = observation.state === "unknown";
+  const value = result("xero-history.recover", observation.effectId ? "repository-local" : "inspect", observation, "Interrupted update needs operator repair.");
+  value.causeCode = uncertain ? "INTERNAL_RESULT_UNKNOWN" : "DOMAIN_RECOVERY_HANDOFF_REQUIRED";
+  value.outcome = uncertain ? "failed" : "refused";
+  value.transactionState = observation.state === "completed" ? "completed" : uncertain ? "unknown" : "unchanged";
+  value.failureClass = uncertain ? "internal" : "domain";
+  value.exitCode = uncertain ? 1 : 3;
+  value.repairAction = required(observation.repair ?? undefined);
+  value.effects = effects(observation.state === "completed" && observation.effectId ? [observation.effectId] : [],
+    uncertain && observation.effectId ? [observation.effectId] : []);
+  value.handoff = { owner: "operator", reason: value.repairAction, inspect: ["journal", "cache", "lock"] };
+  return value;
+}
+function completedRecoveryResult(observation: Recovery): OperationResult {
+  const value = result("xero-history.recover", "repository-local", observation, "Completed update inspected.");
+  value.causeCode = "SUCCESS_COMPLETED";
+  value.transactionState = "completed";
+  value.effects = effects([required(observation.effectId ?? undefined)]);
+  value.nextAction = required(observation.repair ?? undefined);
+  return value;
+}
 async function recoveryResult(options: Options): Promise<OperationResult> {
   const observation = await recover(required(options.organisationId), required(options.accountId));
-  const value = result("xero-history.recover", "inspect", observation,
-    observation.state === "none" ? "No interrupted update." : "Interrupted update inspected.");
-  if (observation.state === "completed") {
-    value.effectClass = "repository-local";
-    value.causeCode = "SUCCESS_COMPLETED";
-    value.transactionState = "completed";
-    value.effects = effects([required(observation.effectId ?? undefined)]);
-  }
-  if (observation.state === "unknown") {
-    value.effectClass = "repository-local";
-    value.causeCode = "INTERNAL_RESULT_UNKNOWN";
-    value.outcome = "failed";
-    value.transactionState = "unknown";
-    value.failureClass = "internal";
-    value.exitCode = 1;
-    value.data = null;
-    value.repairAction = "Inspect the journal and cache before any further apply.";
-    value.effects = effects([], [required(observation.effectId ?? undefined)]);
-    value.handoff = { owner: "operator", reason: value.repairAction, inspect: ["journal", "cache"] };
-  }
-  return value;
+  if (observation.state === "writer-active") return activeWriterResult(observation);
+  if (observation.state === "lock-residue" || observation.pending) return blockedRecoveryResult(observation);
+  if (observation.state === "completed") return completedRecoveryResult(observation);
+  return result("xero-history.recover", "inspect", observation, "No interrupted update.");
 }
 async function inspectResult(command: "status" | "lookup", options: Options): Promise<OperationResult> {
   const path = accountPath(required(options.organisationId), required(options.accountId));
@@ -273,7 +291,6 @@ async function inspectResult(command: "status" | "lookup", options: Options): Pr
   }, "Cached examples inspected.");
 }
 async function execute(parsed: Parsed): Promise<OperationResult> {
-  await recordDiagnostic(`xero-history.${parsed.command}`);
   if (parsed.command === "preview") return previewResult(parsed.options);
   if (parsed.command === "apply") return applyResult(parsed.options);
   if (parsed.command === "recover") return recoveryResult(parsed.options);

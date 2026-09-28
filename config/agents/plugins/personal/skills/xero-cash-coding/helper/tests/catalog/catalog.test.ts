@@ -12,5 +12,13 @@ test("all five public commands disclose distinct relevant stations", () => {
     expect(stations.length).toBeGreaterThan(0);
     expect(stations.every((station) => station.commandIdentity === item.commandIdentity)).toBe(true);
   }
-  expect(stationsFor("xero-history.recover").map((station) => station.transactionState).sort()).toEqual(["completed", "unchanged", "unknown"]);
+  expect(stationsFor("xero-history.recover").map((station) => [station.causeCode, station.transactionState])).toEqual([
+    ["SUCCESS_UNCHANGED", "unchanged"],
+    ["SUCCESS_COMPLETED", "completed"],
+    ["TRANSIENT_NOT_STARTED", "unchanged"],
+    ["DOMAIN_RECOVERY_HANDOFF_REQUIRED", "unchanged"],
+    ["DOMAIN_RECOVERY_HANDOFF_REQUIRED", "unchanged"],
+    ["DOMAIN_RECOVERY_HANDOFF_REQUIRED", "completed"],
+    ["INTERNAL_RESULT_UNKNOWN", "unknown"],
+  ]);
 });

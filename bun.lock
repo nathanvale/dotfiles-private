@@ -77,8 +77,6 @@
       "name": "xero-history",
       "version": "0.1.0",
       "dependencies": {
-        "@logtape/logtape": "2.3.1",
-        "@logtape/redaction": "2.3.1",
         "zod": "4.4.3",
       },
     },
@@ -233,8 +231,6 @@
     "@local/xero-skill": ["@local/xero-skill@workspace:config/agents/skills/personal/xero"],
 
     "@logtape/logtape": ["@logtape/logtape@2.3.1", "", {}, "sha512-nYLsBWMKk0Llp62U6cDbQxNcEKc0E0s5hWbAxkmUM8ax6VchGkPSjPrVp3ixFQUuvUB9ku7MSgPzFhmVTSh2Jw=="],
-
-    "@logtape/redaction": ["@logtape/redaction@2.3.1", "", { "peerDependencies": { "@logtape/logtape": "^2.3.1" } }, "sha512-djd6+dl7QvwW4miYAX9p63gylz8EUKDANH9dlrkU6OzobELiTq7uqB1u5fINMtVsrJIQnukc1FpGx+fcZdeqVQ=="],
 
     "@side-quest/agent-native-state-machine-generator": ["@side-quest/agent-native-state-machine-generator@workspace:.agents/runtime/agent-native-state-machine-generator"],
 

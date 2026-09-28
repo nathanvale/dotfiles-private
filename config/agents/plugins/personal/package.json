@@ -1,9 +1,0 @@
-{
-  "name": "personal-plugin",
-  "version": "0.2.2",
-  "private": true,
-  "scripts": {
-    "test": "bun run --cwd skills/xero-cash-coding/helper test",
-    "typecheck": "bun run --cwd skills/xero-cash-coding/helper typecheck"
-  }
-}

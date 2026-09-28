@@ -1,7 +1,6 @@
 type TimerHandle = ReturnType<typeof setTimeout>;
 
 interface ProcessLifecycleDependencies {
-  attemptEmergencyDiagnostics(): void;
   clearTimer(handle: TimerHandle): void;
   exit(code: number): void;
   finishDiagnostics(): Promise<void>;
@@ -96,11 +95,6 @@ function createProcessLifecycle(
     crash() {
       if (terminal) return;
       stopping = true;
-      try {
-        dependencies.attemptEmergencyDiagnostics();
-      } catch {
-        // Emergency diagnostics remain best-effort.
-      }
       exitOnce(1);
     },
     isStopping: () => stopping,
@@ -125,11 +119,8 @@ async function finishDiagnostics(): Promise<void> {
   }
 }
 
-export function systemProcessLifecycle(
-  attemptEmergencyDiagnostics: () => void,
-): ProcessLifecycle {
+export function systemProcessLifecycle(): ProcessLifecycle {
   const lifecycle = createProcessLifecycle({
-    attemptEmergencyDiagnostics,
     clearTimer: clearTimeout,
     exit: (code) => process.exit(code),
     finishDiagnostics,

@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, unlink, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readFile, realpath, rename, rm, symlink, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -129,6 +129,53 @@ test("lookup ranks the bank movement and surfaces line basis differences", async
   expect(lookup.envelope.result.data.conflicts).toMatchObject({ accounts: ["401", "402"], taxTypes: ["GST on Expenses", "GST Free Expenses"] });
 });
 
+test("lookup prefers bank movement over a newer line-amount decoy and excludes equal bases", async () => {
+  const root = await fixture();
+  apply(root, await preview(root, observation("bank-amount-match")));
+  const decoy = observation("line-amount-decoy", -999);
+  decoy.transactions[0]!.date = "2026-04-03";
+  decoy.transactions[0]!.lines[0]!.amountMinor = -1250;
+  decoy.transactions[0]!.lines[1]!.amountMinor = 251;
+  apply(root, await preview(root, decoy));
+  const lookup = call(root, "lookup", ...ids, "--query", "Synthetic Merchant", "--amount-minor", "-1250", "--amount-basis", "tax-inclusive");
+  expect(lookup.exitCode).toBe(0);
+  expect(lookup.envelope.result.data.matches.map((item: { id: string }) => item.id)).toEqual(["bank-amount-match", "line-amount-decoy"]);
+  expect(lookup.envelope.result.data.basisExceptions).toEqual([
+    { transactionId: "bank-amount-match", lineIndex: 1, observedBasis: "no-tax", pendingBasis: "tax-inclusive" },
+    { transactionId: "line-amount-decoy", lineIndex: 1, observedBasis: "no-tax", pendingBasis: "tax-inclusive" },
+  ]);
+});
+
+test("whitespace-only lookup query is refused before a cache search", async () => {
+  const root = await fixture();
+  const lookup = call(root, "lookup", ...ids, "--query", "   \t  ");
+  expect(lookup.exitCode).toBe(2);
+  expect(lookup.envelope.result.causeCode).toBe("USAGE_INVALID_INVOCATION");
+});
+
+test("preview lists added and replaced IDs and rejects a changed cache at apply", async () => {
+  const root = await fixture();
+  apply(root, await preview(root, observation("existing-id")));
+  const observed = observation("existing-id", -1300);
+  observed.transactions.push({ ...observation("added-id").transactions[0]! });
+  const input = join(root, "refresh.json");
+  await writeFile(input, JSON.stringify(observed));
+  const prepared = call(root, "preview", "--input", input);
+  expect(prepared.exitCode).toBe(0);
+  expect(prepared.envelope.result.data).toMatchObject({ addedTransactionIds: ["added-id"], replacedTransactionIds: ["existing-id"] });
+  const previewId = prepared.envelope.result.data.previewId as string;
+  const path = cachePath(root);
+  const changed = JSON.parse(await readFile(path, "utf8"));
+  changed.transactions["external-change"] = { ...observation("external-change").transactions[0] };
+  await writeFile(path, `${JSON.stringify(changed)}\n`);
+  const before = await readFile(path);
+  const stale = apply(root, previewId);
+  expect(stale.exitCode).toBe(3);
+  expect(stale.envelope.result).toMatchObject({ causeCode: "DOMAIN_PRECONDITION_UNMET", transactionState: "unchanged" });
+  expect(stale.envelope.message).toContain("Cache changed since preview");
+  expect(await readFile(path)).toEqual(before);
+});
+
 test("malformed cache is a named cache miss and remains byte-for-byte untouched", async () => {
   const root = await fixture();
   const path = cachePath(root);
@@ -148,7 +195,7 @@ test("malformed cache is a named cache miss and remains byte-for-byte untouched"
   expect(await readFile(path, "utf8")).toBe("{broken");
 });
 
-test("interrupted apply is reported by read-only recover and cannot be replayed", async () => {
+test("intent interrupted before rename is unchanged, read-only recover names repair, and replay is refused", async () => {
   const root = await fixture();
   const id = await preview(root, observation("transaction-1"));
   const marker = join(root, "intent-ready");
@@ -161,19 +208,86 @@ test("interrupted apply is reported by read-only recover and cannot be replayed"
   expect(await Bun.file(marker).exists()).toBe(true);
   child.kill("SIGTERM");
   expect(await child.exited).toBe(143);
+  const journalBefore = await readFile(`${cachePath(root)}.journal.jsonl`);
   const recovery = call(root, "recover", ...ids);
-  expect(recovery.exitCode).toBe(1);
-  expect(recovery.envelope.result).toMatchObject({ outcome: "failed", transactionState: "unknown", retryable: false });
+  expect(recovery.exitCode).toBe(3);
+  expect(recovery.envelope.result).toMatchObject({ outcome: "refused", transactionState: "unchanged", retryable: false,
+    data: { state: "unchanged", pending: true, repair: expect.stringContaining("history.json.journal.jsonl") } });
+  expect(recovery.envelope.result.repairAction).toContain(`${cachePath(root)}.lock`);
+  expect(await readFile(`${cachePath(root)}.journal.jsonl`)).toEqual(journalBefore);
   expect(await Bun.file(cachePath(root)).exists()).toBe(false);
   const replay = apply(root, id);
   expect(replay.exitCode).toBe(3);
-  await unlink(`${cachePath(root)}.lock`);
-  const pendingApply = apply(root, id);
-  expect(pendingApply.envelope.result).toMatchObject({ causeCode: "DOMAIN_RECOVERY_HANDOFF_REQUIRED", transactionState: "unknown" });
   const pendingInput = join(root, "pending-observation.json");
   await writeFile(pendingInput, JSON.stringify(observation("transaction-2")));
   const pendingPreview = call(root, "preview", "--input", pendingInput);
-  expect(pendingPreview.envelope.result).toMatchObject({ causeCode: "DOMAIN_RECOVERY_HANDOFF_REQUIRED", transactionState: "unknown" });
+  expect(pendingPreview.exitCode).toBe(3);
+  const damaged = JSON.parse(await readFile(`${cachePath(root)}.preview.json`, "utf8")).proposed;
+  damaged.updatedAt = "2026-09-29T00:00:00.000Z";
+  await writeFile(cachePath(root), `${JSON.stringify(damaged)}\n`, { mode: 0o600 });
+  const uncertain = call(root, "recover", ...ids);
+  expect(uncertain.exitCode).toBe(1);
+  expect(uncertain.envelope.result).toMatchObject({ transactionState: "unknown", data: { state: "unknown", pending: true } });
+});
+
+test.each(["SIGINT", "SIGTERM"] as const)("%s before intent releases its lock and permits a fresh preview", async (signal) => {
+  const root = await fixture();
+  const id = await preview(root, observation("transaction-1"));
+  const marker = join(root, "before-intent");
+  const child = Bun.spawn([process.execPath, "run", "src/cli.ts", "apply", ...ids, "--preview-id", id, "--approve", "--json"], {
+    cwd: PACKAGE, env: { ...process.env, HOME: root, XDG_STATE_HOME: root, NODE_ENV: "test", XERO_HISTORY_TEST_BEFORE_INTENT: marker },
+    stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const deadline = Date.now() + 2000;
+  while (!(await Bun.file(marker).exists()) && Date.now() < deadline) await Bun.sleep(5);
+  expect(await Bun.file(marker).exists()).toBe(true);
+  child.kill(signal);
+  expect(await child.exited).toBe(signal === "SIGINT" ? 130 : 143);
+  expect(await Bun.file(`${cachePath(root)}.lock`).exists()).toBe(false);
+  expect(call(root, "recover", ...ids).envelope.result.data.state).toBe("none");
+  await preview(root, observation("transaction-2"));
+});
+
+test("intent followed by rename remains blocked with completed effect and an operator repair", async () => {
+  const root = await fixture();
+  const id = await preview(root, observation("transaction-1"));
+  const marker = join(root, "after-rename");
+  const child = Bun.spawn([process.execPath, "run", "src/cli.ts", "apply", ...ids, "--preview-id", id, "--approve", "--json"], {
+    cwd: PACKAGE, env: { ...process.env, HOME: root, XDG_STATE_HOME: root, NODE_ENV: "test", XERO_HISTORY_TEST_AFTER_RENAME: marker },
+    stdin: "ignore", stdout: "pipe", stderr: "pipe",
+  });
+  const deadline = Date.now() + 2000;
+  while (!(await Bun.file(marker).exists()) && Date.now() < deadline) await Bun.sleep(5);
+  expect(await Bun.file(marker).exists()).toBe(true);
+  child.kill("SIGTERM");
+  expect(await child.exited).toBe(143);
+  const before = await readFile(cachePath(root));
+  const recovery = call(root, "recover", ...ids);
+  expect(recovery.exitCode).toBe(3);
+  expect(recovery.envelope.result).toMatchObject({ outcome: "refused", transactionState: "completed",
+    data: { state: "completed", pending: true, repair: expect.stringContaining("journal") } });
+  expect(recovery.envelope.result.effects.completed).toEqual([`cache:${id}`]);
+  expect(await readFile(cachePath(root))).toEqual(before);
+  expect(apply(root, id).exitCode).toBe(3);
+  await rename(`${cachePath(root)}.journal.jsonl`, `${cachePath(root)}.journal.reviewed`);
+  await rename(`${cachePath(root)}.preview.json`, `${cachePath(root)}.preview.reviewed`);
+  await unlink(`${cachePath(root)}.lock`);
+  expect(call(root, "recover", ...ids).envelope.result.data.state).toBe("none");
+  await preview(root, observation("transaction-2"));
+});
+
+test("dead writer lock without an intent has an exact read-only repair path", async () => {
+  const root = await fixture();
+  await preview(root, observation("transaction-1"));
+  await writeFile(`${cachePath(root)}.lock`, '{"pid":99999999}\n', { mode: 0o600 });
+  const recovery = call(root, "recover", ...ids);
+  expect(recovery.exitCode).toBe(3);
+  expect(recovery.envelope.result.data).toMatchObject({ state: "lock-residue", pending: false });
+  expect(recovery.envelope.result.repairAction).toContain(`${cachePath(root)}.lock`);
+  expect(await readFile(`${cachePath(root)}.lock`, "utf8")).toBe('{"pid":99999999}\n');
+  const input = join(root, "fresh.json");
+  await writeFile(input, JSON.stringify(observation("transaction-2")));
+  expect(call(root, "preview", "--input", input).exitCode).toBe(3);
 });
 
 test("completion before preview consumption is recovered without a second cache write", async () => {
@@ -204,6 +318,9 @@ test("two concurrent applies yield one effect and one bounded busy refusal", asy
   const deadline = Date.now() + 2000;
   while (!(await Bun.file(marker).exists()) && Date.now() < deadline) await Bun.sleep(5);
   expect(await Bun.file(marker).exists()).toBe(true);
+  const recovery = call(root, "recover", ...ids);
+  expect(recovery.exitCode).toBe(75);
+  expect(recovery.envelope.result.data.state).toBe("writer-active");
   const second = apply(root, id);
   expect(second.exitCode).toBe(75);
   expect(second.envelope.result).toMatchObject({ outcome: "refused", failureClass: "transient", retryable: true, retryDelayMilliseconds: 250 });
