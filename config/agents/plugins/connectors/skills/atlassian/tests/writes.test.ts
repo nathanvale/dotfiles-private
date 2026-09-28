@@ -4,7 +4,7 @@
 // 22 September 2026 and reply shapes observed live on 23 September 2026.
 import { describe, expect, test } from "bun:test";
 import { OPERATION_SPECS } from "../scripts/dispatch/contract.ts";
-import { accountIdOf, baselineFromReply, effectsFromReply, normalised, observeRestComment, preparation, readBackEvidence, readBackPlan, magicImageType, renderedImagesPresent, resolveMediaAttachments, sameWikiBody, transitionTo, uploadFailed, wikiImageReferences, wikiParts, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
+import { accountIdOf, attachmentDigest, attachmentReferences, baselineFromReply, bindAttachment, commentSources, descriptionSource, effectsFromReply, normalised, observeRestComment, preparation, readBackEvidence, readBackPlan, magicImageType, renderedImagesPresent, resolveMediaAttachments, sameWikiBody, transitionTo, uploadFailed, wikiImageReferences, wikiParts, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
 
 const never = () => false;
 const CREATE = { projectKey: "PROJ", issueType: "Bug", summary: "Billing broken", description: "first\nsecond" };
@@ -17,7 +17,7 @@ const wrapped = (value: unknown) => ({ result: JSON.stringify(value) });
 
 describe("neutral write inputs", () => {
 	test("every write operation has a contract; unknown keys, bad shapes, and missing required keys refuse", () => {
-		expect(WRITE_OPERATIONS).toEqual(["issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.comment.media", "issue.comment.media.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"]);
+		expect(WRITE_OPERATIONS).toEqual(["issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.comment.media", "issue.comment.media.update", "issue.attach", "issue.attachment.delete", "issue.transition", "issue.assign", "issue.delete", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"]);
 		expect(writeInput("issue.transition", { issueKey: "PROJ-1", toStatus: "In Progress" })).toEqual({ ok: true, input: { issueKey: "PROJ-1", toStatus: "In Progress" } });
 		expect(writeInput("issue.transition", { issueKey: "PROJ-1", transitionId: "31" }).ok).toBe(false);
 		expect(writeInput("issue.assign", { issueKey: "PROJ-1" })).toEqual({ ok: true, input: { issueKey: "PROJ-1" } });
@@ -519,5 +519,87 @@ describe("wiki media comments", () => {
 		expect(editBaseline).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: ["454771"], revision: null } });
 		expect(baselineFromReply("issue.comment.media.update", MEDIA_UPDATE, { id: "454771", renderedBody: "<p>old</p>" })).toEqual({ kind: "indeterminate", reason: "the comment read exposes no updated timestamp to bind the revision" });
 		expect(baselineFromReply("issue.comment.media.update", MEDIA_UPDATE, { id: "1", updated: "u1" })).toEqual({ kind: "indeterminate", reason: "the comment read names a different comment" });
+	});
+});
+
+// The attachment-delete exception: one attachment by numeric id on one issue,
+// bound by the facts the REST issue read exposes, cleared by the reference
+// guard, and proven only by the issue's attachment list.
+describe("attachment delete", () => {
+	const DELETE = { issueKey: "PROJ-1", attachmentId: "202456" };
+	const ME = "712020:me";
+	const record = { id: "202456", filename: "before.png", size: 48123, mimeType: "image/png", created: "2026-09-28T01:02:03.000+1000", author: { accountId: ME, displayName: "Service" } };
+	const other = { id: "202457", filename: "after.png", size: 10, created: "c2", author: { accountId: ME } };
+	const issue = (attachments: unknown[] = [record, other], updated = "t1") => ({ key: "PROJ-1", fields: { updated, attachment: attachments, description: "Plain." }, renderedFields: { description: "<p>Plain.</p>" } });
+
+	test("the input is one issue key and one numeric attachment id; a filename, glob, list, or unknown key refuses", () => {
+		expect(writeInput("issue.attachment.delete", DELETE)).toEqual({ ok: true, input: DELETE });
+		for (const attachmentId of ["before.png", "*", "202456,202457", "att900", "", 202456, ["202456"]]) expect([attachmentId, writeInput("issue.attachment.delete", { issueKey: "PROJ-1", attachmentId }).ok]).toEqual([attachmentId, false]);
+		expect(writeInput("issue.attachment.delete", { issueKey: "PROJ-1", filename: "before.png" })).toEqual({ ok: false, reason: "unknown input key filename" });
+		expect(writeInput("issue.attachment.delete", { attachmentId: "202456" })).toEqual({ ok: false, reason: "input key issueKey is required" });
+		expect(preparation("issue.attachment.delete", DELETE)).toEqual({ kind: "attachment-delete", issueKey: "PROJ-1", attachmentId: "202456" });
+		const ctx = { revision: "t1", baseline: { effectIds: ["202456"], commentIds: [], revision: null } };
+		expect(writeArguments(OPERATION_SPECS["issue.attachment.delete"], DELETE, ctx)).toEqual({ args: { issue_key: "PROJ-1", attachment_id: "202456" }, bound: { issue_key: "PROJ-1", attachment_id: "202456" } });
+		expect(readBackPlan("issue.attachment.delete", DELETE)).toEqual({ tool: "jira_rest_issue_attachments", args: { issue_key: "PROJ-1" } });
+	});
+
+	test("the bound attachment is the one record with every fact; its digest changes with any fact; a missing fact or list cannot be bound", () => {
+		expect(bindAttachment(issue(), "202456")).toEqual({ ok: true, attachment: { id: "202456", filename: "before.png", size: 48123, authorAccountId: ME, created: "2026-09-28T01:02:03.000+1000" } });
+		expect(bindAttachment(issue(), "999")).toEqual({ ok: false, cause: "not-found", reason: "the issue has no attachment with that id" });
+		expect(bindAttachment({ key: "PROJ-1", fields: { updated: "t1" } }, "202456")).toEqual({ ok: false, cause: "capability-unavailable", reason: "the Jira reply carries no attachment list" });
+		for (const partial of [{ ...record, size: undefined }, { ...record, author: {} }, { ...record, created: undefined }, { ...record, filename: undefined }, { ...record, size: "48123" }]) {
+			expect(bindAttachment(issue([partial]), "202456")).toEqual({ ok: false, cause: "capability-unavailable", reason: "the attachment record exposes no filename, size, author account id, or created time to bind" });
+		}
+		const bound = { id: "202456", filename: "before.png", size: 48123, authorAccountId: ME, created: "c1" };
+		expect(attachmentDigest(bound)).toMatch(/^[0-9a-f]{64}$/);
+		for (const moved of [{ ...bound, filename: "Before.png" }, { ...bound, size: 48124 }, { ...bound, authorAccountId: "712020:other" }, { ...bound, created: "c2" }, { ...bound, id: "202457" }]) expect(attachmentDigest(moved)).not.toBe(attachmentDigest(bound));
+	});
+
+	test("a reference is the file name as a whole word or the id on a Jira attachment route, in stored text or rendered HTML; a containing name, another id, or the bare number is not", () => {
+		const target = { id: "202456", filename: "before.png" };
+		const sources = [
+			{ source: "description", text: "Repro: [^before.png]", rendered: "" },
+			{ source: "comment 1", text: "!before.png|width=600!", rendered: "" },
+			{ source: "comment 2", text: "See the shot.", rendered: '<img src="/rest/api/3/attachment/content/202456" alt="x">' },
+			{ source: "comment 3", text: "", rendered: '<a href="https://example.atlassian.net/secure/attachment/202456/before.png">x</a>' },
+			{ source: "comment 4", text: "https://example.atlassian.net/secure/thumbnail/202456/_thumb.png", rendered: "" },
+			{ source: "comment 5", text: "", rendered: '<img alt="BEFORE.PNG" src="/x">' },
+			{ source: "comment 6", text: "Compare before.png.", rendered: "" },
+			{ source: "comment 7", text: "?attachmentId=202456&x=1", rendered: "" },
+			{ source: "clean 1", text: "See !new-before.png! and !before.png.bak!", rendered: "" },
+			{ source: "clean 2", text: "build 202456 passed", rendered: '<img src="/rest/api/3/attachment/content/2024567"><img src="/rest/api/3/attachment/content/202457">' },
+			{ source: "clean 3", text: "Looks fine.", rendered: "<p>Looks fine.</p>" },
+			{ source: "clean 4", text: "", rendered: '<img src="https://cdn.example/202456/before-png">' },
+		];
+		expect(attachmentReferences(target, sources)).toEqual(["description", "comment 1", "comment 2", "comment 3", "comment 4", "comment 5", "comment 6", "comment 7"]);
+		expect(attachmentReferences({ id: "1", filename: "a+b (1).png" }, [{ source: "c", text: "see a+b (1).png here", rendered: "" }, { source: "d", text: "see a+b (1) png here", rendered: "" }])).toEqual(["c"]);
+		expect(attachmentReferences(target, [])).toEqual([]);
+	});
+
+	test("the description source carries the stored text and rendered HTML; comment sources need a complete list with ids", () => {
+		expect(descriptionSource(issue())).toEqual({ source: "description", text: "Plain.", rendered: "<p>Plain.</p>" });
+		expect(descriptionSource({ key: "PROJ-1", fields: { description: null } })).toEqual({ source: "description", text: "", rendered: "" });
+		const list = (total: number, ...comments: Record<string, unknown>[]) => ({ startAt: 0, maxResults: 100, total, comments });
+		expect(commentSources(list(2, { id: "1", body: "a", renderedBody: "<p>a</p>" }, { id: "2", body: "b" }))).toEqual({ ok: true, total: 2, sources: [{ source: "comment 1", text: "a", rendered: "<p>a</p>" }, { source: "comment 2", text: "b", rendered: "" }] });
+		expect(commentSources(list(0))).toEqual({ ok: true, total: 0, sources: [] });
+		expect(commentSources(list(3, { id: "1", body: "a" }))).toEqual({ ok: false, reason: "the issue has 3 comments and the reference guard read 1; it cannot clear the attachment" });
+		expect(commentSources(list(1, { body: "a" }))).toEqual({ ok: false, reason: "a listed comment carries no id" });
+		expect(commentSources({ comments: [] })).toEqual({ ok: false, reason: "the comment list exposes no comments and total" });
+		expect(commentSources({ errorMessages: ["gone"] })).toEqual({ ok: false, reason: "the comment list exposes no comments and total" });
+	});
+
+	test("the 204 reply proves nothing; removal is proven only by the issue's attachment list no longer carrying the id, and a list that still does proves the delete did not land", () => {
+		expect(effectsFromReply("issue.attachment.delete", DELETE, null)).toEqual([]);
+		expect(effectsFromReply("issue.attachment.delete", DELETE, { message: "Attachment deleted successfully" })).toEqual([]);
+		expect(readBackEvidence("issue.attachment.delete", DELETE, never, issue([other]))).toEqual({ kind: "found", effects: [{ kind: "jira-attachment", id: "202456" }] });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, never, issue([]))).toEqual({ kind: "found", effects: [{ kind: "jira-attachment", id: "202456" }] });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, never, issue())).toEqual({ kind: "absent", revisionUnchanged: true });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, never, { key: "PROJ-1", fields: { updated: "t2" } })).toEqual({ kind: "indeterminate", reason: "the read-back reply carries no attachment list" });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, never, { key: "PROJ-2", fields: { attachment: [] } })).toEqual({ kind: "indeterminate", reason: "the read-back reply names a different issue" });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, never, { errorMessages: ["gone"] })).toEqual({ kind: "indeterminate", reason: "the read-back reply names no issue key" });
+		// The baseline read must still list the attachment; the preparation's digest is kept as the baseline revision.
+		expect(baselineFromReply("issue.attachment.delete", DELETE, issue())).toEqual({ kind: "observed", baseline: { effectIds: ["202456"], commentIds: [], revision: null } });
+		expect(baselineFromReply("issue.attachment.delete", DELETE, issue([other]))).toEqual({ kind: "refused", reason: "the issue has no attachment with that id" });
+		expect(baselineFromReply("issue.attachment.delete", DELETE, { key: "PROJ-1", fields: { updated: "t1" } })).toEqual({ kind: "indeterminate", reason: "the Jira reply carries no attachment list" });
 	});
 });

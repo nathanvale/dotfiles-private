@@ -8,7 +8,7 @@ import type { BindResult, CredentialBinding } from "../custody/index.ts";
 import { type CauseCode, OPERATION_SPECS, type OperationSpec, type Product, type Provenance, type TransactionState } from "./contract.ts";
 import { confirmSchema, type Dependencies, type Input, providerArguments, REPAIR_TEXT, readSchema, type SchemaTool, type TransportFailure, type TransportResult } from "./engine.ts";
 import { canonicalDigest, type Effect, type Evidence, JournalError, type Receipt, type WriteOperation } from "./journal.ts";
-import { AUTHOR_GUARD_REASON, accountIdOf, baselineFromReply, effectKindOf, effectsFromReply, imageTypesDigest, isObjectDelete, type IssueAttachment, magicImageType, NOT_IMAGE_REASON, observeIssue, observePage, observeRestComment, type PreparedContext, preparation, type Preparation, readBackEvidence, readBackPlan, type ReadBack, resolveMediaAttachments, type RevisionMatch, transitionTo, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
+import { ATTACHMENT_AUTHOR_GUARD_REASON, AUTHOR_GUARD_REASON, accountIdOf, attachmentDigest, attachmentReferences, baselineFromReply, bindAttachment, commentSources, descriptionSource, effectKindOf, effectsFromReply, imageTypesDigest, isObjectDelete, type IssueAttachment, magicImageType, NOT_IMAGE_REASON, observeIssue, observePage, observeRestComment, type PreparedContext, preparation, type Preparation, readBackEvidence, readBackPlan, type ReadBack, resolveMediaAttachments, type RevisionMatch, transitionTo, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
 
 export interface Outcome {
 	cause: CauseCode;
@@ -212,28 +212,76 @@ async function verifiedImageTypes(route: Route, types: Record<string, string>, u
 	return { types: verified };
 }
 
+// One REST issue read that must name the requested issue; the raw reply is
+// kept for readers that need more than the observation.
+async function readRestIssue(route: Route, tool: string, issueKey: string): Promise<{ data: unknown; issue: ReturnType<typeof observeIssue> } | { outcome: Outcome }> {
+	const read = await route.call(tool, { issue_key: issueKey });
+	if (read.cause !== "success") return { outcome: failed(read) };
+	const issue = observeIssue(read.data);
+	if (issue.key === undefined) return { outcome: refusal("capability-unavailable", "the preparatory Jira read names no issue key") };
+	if (issue.key !== issueKey) return { outcome: refusal("capability-unavailable", "the preparatory Jira read names a different issue") };
+	return { data: read.data, issue };
+}
+
+// The principal's account id through the REST route, for an author guard.
+async function readPrincipal(route: Route): Promise<{ principal: string } | { outcome: Outcome }> {
+	const me = await route.call("jira_rest_myself", {});
+	if (me.cause !== "success") return { outcome: failed(me) };
+	const principal = accountIdOf(me.data);
+	if (principal === undefined) return { outcome: refusal("capability-unavailable", "the principal read exposes no account id for the author guard") };
+	return { principal };
+}
+
 async function prepareMedia(route: Route, ctx: PreparedContext, step: Extract<Preparation, { kind: "media" | "media-comment" }>): Promise<Prepared> {
-	const listed = await route.call("jira_rest_issue_attachments", { issue_key: step.issueKey });
-	if (listed.cause !== "success") return { outcome: failed(listed) };
-	const issue = observeIssue(listed.data);
-	if (issue.key !== step.issueKey) return { outcome: refusal("capability-unavailable", "the preparatory Jira read names a different issue") };
-	const resolved = resolveMediaAttachments(issue.attachments, step.images);
+	const listed = await readRestIssue(route, "jira_rest_issue_attachments", step.issueKey);
+	if ("outcome" in listed) return listed;
+	const resolved = resolveMediaAttachments(listed.issue.attachments, step.images);
 	if (!resolved.ok) return { outcome: refusal(resolved.cause, resolved.reason) };
 	const verified = await verifiedImageTypes(route, resolved.types, resolved.untyped);
 	if ("outcome" in verified) return verified;
 	const prepared: PreparedContext = { ...ctx, imageTypes: verified.types, baseline: { ...ctx.baseline, effectIds: resolved.ids, revision: imageTypesDigest(verified.types) } };
 	if (step.kind === "media") return { ctx: prepared };
-	const me = await route.call("jira_rest_myself", {});
-	if (me.cause !== "success") return { outcome: failed(me) };
-	const principal = accountIdOf(me.data);
-	if (principal === undefined) return { outcome: refusal("capability-unavailable", "the principal read exposes no account id for the author guard") };
+	const me = await readPrincipal(route);
+	if ("outcome" in me) return me;
 	const read = await route.call("jira_rest_comment_get", { issue_key: step.issueKey, comment_id: step.commentId });
 	if (read.cause !== "success") return { outcome: failed(read) };
 	const comment = observeRestComment(read.data);
 	if (comment.id !== step.commentId) return { outcome: refusal("capability-unavailable", "the comment read names a different comment") };
-	if (comment.authorAccountId !== principal) return { outcome: refusal("input-invalid", AUTHOR_GUARD_REASON) };
+	if (comment.authorAccountId !== me.principal) return { outcome: refusal("input-invalid", AUTHOR_GUARD_REASON) };
 	if (comment.updated === undefined) return { outcome: refusal("capability-unavailable", "the comment read exposes no updated timestamp to bind the revision") };
 	return { ctx: { ...prepared, revision: comment.updated } };
+}
+
+// The attachment-delete exception, through the owned REST route. One context
+// read binds the issue (`updated`), the attachment (id, filename, size,
+// author, created) and yields the description; the principal read runs the
+// author guard before any comment body is read; the comment list runs the
+// reference guard. Any guard failing refuses before a preview is recorded and
+// again at apply, where the same reads are repeated.
+async function prepareAttachmentDelete(route: Route, ctx: PreparedContext, step: Extract<Preparation, { kind: "attachment-delete" }>): Promise<Prepared> {
+	const read = await readRestIssue(route, "jira_rest_issue_attachment_context", step.issueKey);
+	if ("outcome" in read) return read;
+	if (read.issue.revision === null) return { outcome: refusal("capability-unavailable", "the Jira reply exposes no revision or updated timestamp") };
+	const bound = bindAttachment(read.data, step.attachmentId);
+	if (!bound.ok) return { outcome: refusal(bound.cause, bound.reason) };
+	const me = await readPrincipal(route);
+	if ("outcome" in me) return me;
+	if (bound.attachment.authorAccountId !== me.principal) return { outcome: refusal("input-invalid", ATTACHMENT_AUTHOR_GUARD_REASON) };
+	const listed = await route.call("jira_rest_comments_list", { issue_key: step.issueKey });
+	if (listed.cause !== "success") return { outcome: failed(listed) };
+	const comments = commentSources(listed.data);
+	if (!comments.ok) return { outcome: refusal("capability-unavailable", comments.reason) };
+	const references = attachmentReferences(bound.attachment, [descriptionSource(read.data), ...comments.sources]);
+	if (references.length > 0) return { outcome: refusal("input-invalid", `the attachment is still referenced by ${references.join(", ")}; remove the reference first`) };
+	return {
+		ctx: {
+			...ctx,
+			revision: read.issue.revision,
+			attachment: bound.attachment,
+			referenceCheck: { description: true, commentsRead: comments.sources.length, commentsTotal: comments.total, references },
+			baseline: { ...ctx.baseline, effectIds: [step.attachmentId], revision: attachmentDigest(bound.attachment) },
+		},
+	};
 }
 
 async function bindBaseline(route: Route, operation: WriteOperation, input: WriteInput, ctx: PreparedContext): Promise<Prepared> {
@@ -276,6 +324,9 @@ async function prepare(route: Route, operation: WriteOperation, input: WriteInpu
 		case "media":
 		case "media-comment":
 			prepared = await prepareMedia(route, ctx, step);
+			break;
+		case "attachment-delete":
+			prepared = await prepareAttachmentDelete(route, ctx, step);
 			break;
 	}
 	if ("outcome" in prepared) return prepared;
@@ -362,6 +413,8 @@ export async function previewFlow(session: Session, spec: OperationSpec, input: 
 			revision: context.ctx.revision,
 			baseline: context.ctx.baseline,
 			imageTypes: context.ctx.imageTypes,
+			attachment: context.ctx.attachment,
+			referenceCheck: context.ctx.referenceCheck,
 			expiresAt: preview.expiresAt,
 			input: context.input,
 			arguments: context.bound,

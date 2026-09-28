@@ -1,6 +1,6 @@
 ---
 name: atlassian
-description: Read, search, create, update, transition, assign, comment, attach files to, or delete Jira issues and Confluence pages for one named tenant through the skill's Bun dispatcher over the Atlassian Community Provider. Use for Jira tickets, Confluence pages, Atlassian links, JQL, or CQL. Comment deletion and administration are outside this skill.
+description: Read, search, create, update, transition, assign, comment, attach files to, remove an attachment from, or delete Jira issues and Confluence pages for one named tenant through the skill's Bun dispatcher over the Atlassian Community Provider. Use for Jira tickets, Confluence pages, Atlassian links, JQL, or CQL. Comment deletion and administration are outside this skill.
 ---
 
 # Atlassian
@@ -8,7 +8,8 @@ description: Read, search, create, update, transition, assign, comment, attach f
 The dispatcher is the only supported entrypoint. It owns tenant selection, the
 trusted-origin binding, live schema confirmation, the one Community route per
 product, the owned REST route that serves only the two `issue.comment.media`
-operations, the private upload outbox, and the write journal. Keep native
+operations and `issue.attachment.delete`, the private upload outbox, and the
+write journal. Keep native
 Harness MCP tools, direct REST calls, other Jira CLIs, raw MCPorter calls, and
 browser automation outside this route.
 
@@ -89,6 +90,7 @@ bun "$DISPATCH" --tenant <tenant> issue.comment --input '{"issueKey":"PROJ-1","b
 | `issue.comment.media` | `issueKey`, `body` (wiki markup), `images` (attached file names the body references) | attachment ids |
 | `issue.comment.media.update` | `issueKey`, `commentId` (the principal's own comment), `body` (wiki markup), `images` | comment `updated`, attachment ids |
 | `issue.attach` | `issueKey`, `file` (absolute local path) | issue `updated` |
+| `issue.attachment.delete` | `issueKey`, `attachmentId` (numeric, from the issue's attachments; the principal's own unreferenced upload) | issue `updated`, attachment filename, size, author, created |
 | `issue.transition` | `issueKey`, `toStatus` (a status named by `issue.transitions`) | issue `updated` |
 | `issue.assign` | `issueKey`, `assignee?` (email, name, or account id; omitted unassigns) | issue `updated` |
 | `issue.delete` | `issueKey` | issue `updated` |
@@ -158,6 +160,42 @@ fallback: a Community operation that fails stays failed.
   same day by a direct REST prototype outside this route; that is separate
   evidence. A wiki mention's notification delivery is not confirmed.
 
+### Removing a superseded attachment
+
+`issue.attachment.delete` removes one attachment, named by its numeric id,
+from one issue through the same owned REST route (`provider: "rest"`), which
+the ADR 0001 second amendment admits because the Community Provider exposes no
+Jira attachment delete. It exists to clear screenshots that later evidence
+comments replaced, and nothing else; it is never a fallback.
+
+- One attachment per call. Take the id from `issue.get` with
+  `fields: ["attachment"]` or from an `issue.attach` effect. There is no
+  filename, glob, or list form; each refuses with `input-invalid` before any
+  read.
+- The preview binds the issue `updated` and the attachment's filename, size,
+  author account id, and created time, and reports them under
+  `result.data.attachment`. An apply whose reads show any of them moved
+  refuses (`refused-preview`) before any send.
+- Author guard: only an attachment the tenant principal uploaded
+  (`input-invalid` otherwise), checked in the dispatcher at preview and apply
+  and again inside the REST Provider before the request leaves.
+- Reference guard: the description and every comment are read; any that still
+  names the file (a wiki macro, a link, alt text, or prose) or carries the
+  attachment id on a Jira attachment route refuses with `input-invalid` and
+  names the source. `result.data.referenceCheck` reports how many comments
+  were read against the issue total; an issue with more comments than the
+  guard reads (100) refuses with `capability-unavailable` rather than clear
+  the attachment. Edit or remove the referencing comment first, for the
+  principal's own comments with `issue.comment.media.update` or
+  `issue.comment.update`.
+- Jira answers the delete with no body, so the reply never settles it: apply
+  completes only when the issue's attachment list, read back through the same
+  route, no longer carries the id; a list that still carries it settles
+  `unchanged`; a failed read-back leaves `outcome-unknown` for `adjudicate`.
+- Proof state: fixture-tested. No live delete has run through this route yet;
+  the first live qualification is one unreferenced attachment the principal
+  uploaded on a ticket the operator names.
+
 Check authorization before `--apply`. An explicit request for one named create,
 update, comment, attachment, or delete authorizes that operation. For an
 inferred target, ambiguous content, or a batch, show the preview envelope and
@@ -189,8 +227,9 @@ Dispatcher-enforced behavior; state a refusal when it occurs:
   `not-found`, or, for an attachment, no longer lists it; a target still
   present at the same revision settles `unchanged`. `issue.delete` needs the
   Delete Issues project permission (`refused-auth` otherwise).
-This route has no comment-delete operation, Jira attachment-delete operation,
-or operations for links or watchers. The registry has no dedicated label tool.
+This route has no comment-delete operation or operations for links or
+watchers, and `issue.attachment.delete` removes only the principal's own
+unreferenced uploads. The registry has no dedicated label tool.
 `issue.update` accepts flat string-list fields, but label changes are not
 live-qualified. Report unavailable operations and unqualified label changes;
 do not reach for REST.
@@ -210,9 +249,11 @@ bun "$DISPATCH" --tenant <tenant> adjudicate --run <runId> --input '<the identic
 Adjudicate reads the object back through the receipt's own Provider route: the
 product's Community route, or the owned REST route (`provider: "rest"`) for an
 `issue.comment.media` receipt, whose read-back is the comment list or the
-comment itself with rendered HTML. It settles `completed` only when a new
-stable effect id, the requested values, or a not-found after a delete is
-observed against the preview baseline. A
+comment itself with rendered HTML, and for an `issue.attachment.delete`
+receipt, whose read-back is the issue's attachment list. It settles
+`completed` only when a new stable effect id, the requested values, a
+not-found after a delete, or an attachment no longer listed is observed
+against the preview baseline. A
 historical matching title, summary, or comment is not an effect. `unchanged`
 needs a revision that did not move or an unsent receipt; plain absence after a
 possible send remains unknown. It never marks success by hand.
@@ -242,7 +283,8 @@ flows this route does not expose.
   `issue.comment` with the decision.
 - Work an issue: `issue.get`, `issue.assign`, `issue.transitions` then
   `issue.transition` to move it, `issue.comment` or `issue.comment.update`,
-  `issue.attach` for evidence files, `issue.update` for other fields.
+  `issue.attach` for evidence files, `issue.attachment.delete` for a
+  superseded one of your own, `issue.update` for other fields.
 - Document: `page.search` to find the parent and check the title is free,
   `page.create` with `parentId`, `page.update` for revisions, `page.comment`,
   `page.attach`, `page.attachment.delete` to replace a stale file.

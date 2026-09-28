@@ -1,5 +1,5 @@
-// The owned Jira REST v2 route for the wiki-comment capability exception
-// (ADR 0001 amendment): the exact request each REST tool makes, the static
+// The owned Jira REST v2 route for the wiki-comment and attachment-delete
+// capability exceptions (ADR 0001 amendments): the exact request each REST tool makes, the static
 // schema the dispatcher confirms arguments against, and the reply shape the
 // REST Provider hands back. Pure and I/O free; the Provider script performs
 // the request and the runtime transport translates the status.
@@ -14,7 +14,7 @@ const BODY_LIMIT = 200_000;
 const RENDERED = "expand=renderedBody";
 
 export interface RestRequest {
-	method: "GET" | "POST" | "PUT";
+	method: "GET" | "POST" | "PUT" | "DELETE";
 	// Path and query relative to the Trusted Site Origin; the Provider joins
 	// them to the origin its own credential item names, never to an argument.
 	path: string;
@@ -99,6 +99,10 @@ export function restRequest(tool: string, args: unknown): RestRequest | null {
 			// redirect=false makes Jira serve the bytes itself instead of a 303 to
 			// the media store, which the Provider refuses to follow.
 			return { method: "GET", path: `/rest/api/2/attachment/content/${args.attachment_id as string}?redirect=false`, range: `bytes=0-${HEAD_BYTES - 1}` };
+		case "jira_rest_issue_attachment_context":
+			return { method: "GET", path: `${issue}?fields=attachment,updated,description&expand=renderedFields` };
+		case "jira_rest_attachment_delete":
+			return { method: "DELETE", path: `/rest/api/2/attachment/${args.attachment_id as string}` };
 	}
 }
 
@@ -119,12 +123,39 @@ export function editGuardRequests(args: unknown): EditGuard | null {
 	return myself && comment ? { myself, comment } : null;
 }
 
+// The author guard the REST Provider enforces itself before any attachment
+// delete, mirroring the edit guard: the principal, and the issue's attachment
+// list, so the attachment is proven to be on the named issue and the
+// principal proven to be its author before the DELETE is shaped.
+export interface DeleteGuard {
+	myself: RestRequest;
+	attachments: RestRequest;
+}
+
+export function deleteGuardRequests(args: unknown): DeleteGuard | null {
+	if (!isRecord(args) || !issueKey(args.issue_key) || !attachmentId(args.attachment_id)) return null;
+	const myself = restRequest("jira_rest_myself", {});
+	const attachments = restRequest("jira_rest_issue_attachments", { issue_key: args.issue_key });
+	return myself && attachments ? { myself, attachments } : null;
+}
+
+// The attachment record with the given id on an issue reply's attachment
+// field, or undefined when the reply lists no such attachment. Only the REST
+// shape (fields.attachment, each with its own id) is read here.
+export function attachmentOnIssue(issue: unknown, id: string): Record<string, unknown> | undefined {
+	const fields = isRecord(issue) && isRecord(issue.fields) ? issue.fields : undefined;
+	const attachments = fields !== undefined && Array.isArray(fields.attachment) ? fields.attachment : [];
+	return attachments.find((entry): entry is Record<string, unknown> => isRecord(entry) && (entry.id === id || (typeof entry.id === "number" && String(entry.id) === id)));
+}
+
 export type AuthorVerdict = "match" | "mismatch" | "unverifiable";
 
 // Both account ids must be present to decide; a missing one is never a match.
-export function authorGuardVerdict(myself: unknown, comment: unknown): AuthorVerdict {
+// The authored record is a comment or an attachment; both name their author
+// the same way.
+export function authorGuardVerdict(myself: unknown, authored: unknown): AuthorVerdict {
 	const principal = isRecord(myself) && typeof myself.accountId === "string" && myself.accountId.length > 0 ? myself.accountId : undefined;
-	const author = isRecord(comment) && isRecord(comment.author) && typeof comment.author.accountId === "string" && comment.author.accountId.length > 0 ? comment.author.accountId : undefined;
+	const author = isRecord(authored) && isRecord(authored.author) && typeof authored.author.accountId === "string" && authored.author.accountId.length > 0 ? authored.author.accountId : undefined;
 	if (principal === undefined || author === undefined) return "unverifiable";
 	return principal === author ? "match" : "mismatch";
 }
