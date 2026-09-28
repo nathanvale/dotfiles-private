@@ -10,6 +10,7 @@
     "config/agents/skills/personal/last30days/scripts/lib/vendor/**",
     "config/agents/plugins/my-second-brain-playground/packages/cli-design-check/fixtures/**",
     "config/agents/plugins/my-second-brain-playground/runtime/**",
+    "config/agents/plugins/personal/skills/xero-cash-coding/helper/dist/**",
     "config/agents/skills/third-party/**",
     ".agents/**",
     "config/agents/plugins/connectors/bin/connectors"
@@ -67,6 +68,7 @@
     "config/agents/skills/personal/mcp-doctor/scripts/mcp-doctor.ts",
     "config/agents/skills/personal/session-picker/scripts/archived-sessions.ts",
     "config/agents/skills/personal/xero/scripts/quarter-ledger.ts",
+    "config/agents/plugins/personal/skills/xero-cash-coding/helper/src/cli.ts",
     "config/agents/plugins/**/tests/**/*.{js,mjs,cjs,ts}",
     "**/test-fixtures/**/*.{js,mjs,cjs,ts}",
     "config/crossnote/**/*.{js,less}",
