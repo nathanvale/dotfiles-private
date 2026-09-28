@@ -158,9 +158,16 @@
     "proof@personal": true,
     "my-second-brain-playground@personal": true,
     "personal@personal": true,
-    "connectors@personal": true
+    "connectors@personal": true,
+    "monash-tools@monash-plugins": true
   },
   "extraKnownMarketplaces": {
+    "monash-plugins": {
+      "source": {
+        "source": "git",
+        "url": "git@github.com:nathanvale/monash-plugins.git"
+      }
+    },
     "my-second-brain": {
       "source": {
         "source": "github",
