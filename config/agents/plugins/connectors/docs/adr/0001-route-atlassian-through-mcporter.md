@@ -186,7 +186,8 @@ already on the same issue, through an owned REST v2 Provider
 (`scripts/atlassian-rest-provider.ts`, server `atlassian-rest-jira`,
 persisted Provider name `rest`).
 
-- Comments only. The REST Provider's vocabulary is seven fixed requests:
+- Comments only. The REST Provider's vocabulary is seven fixed requests
+  (nine after the attachment-delete amendment below):
   read the principal, read an issue's attachments, read the leading bytes of
   one attachment's content (a bounded, cancelled stream on the Trusted Site
   Origin with redirects refused, to establish an image type Jira did not
@@ -248,6 +249,107 @@ REST prototype of the same day proved the wiki mechanism outside the route
 and is distinct from this evidence. Remaining before acceptance: Nathan's
 decision on the status. Revisit trigger: an upstream mcp-atlassian release
 that emits ADF media nodes from Markdown, which would retire this route.
+
+### Amendment: Jira attachment-delete capability exception (28 September 2026)
+
+Authority: Nathan, 28 September 2026 (a guarded Jira attachment delete for
+the connector, with this amendment, an independent review, and a PR).
+
+Problem. Evidence rounds before the wiki-comment route left superseded
+screenshots in the Attachments section of the tickets a reviewer reads. No
+comment references them, and the route had no way to remove one: the
+Community Provider (mcp-atlassian 0.23.1, and upstream `main` on the same
+date) exposes attachment download and upload for Jira and a delete for
+Confluence attachments only. No allow-listed tool, and no argument to one,
+deletes a Jira attachment, so the one-Provider route cannot serve this need.
+
+Decision. Admit a second narrow exception on the same owned REST v2 Provider
+(`atlassian-rest-provider.ts`, server `atlassian-rest-jira`, persisted
+Provider name `rest`): the operation `issue.attachment.delete`, which removes
+one attachment, named by its numeric id, from one issue.
+
+- One attachment per call, by stable id. No filename, glob, list, or bulk
+  form; each is refused as `input-invalid` before any read.
+- Two requests join the REST vocabulary, which is now nine fixed requests:
+  read an issue's attachments with the description in wiki text and rendered
+  HTML, and delete one attachment by id (`DELETE /rest/api/2/attachment/{id}`).
+  The delete request carries the issue key as an argument so the Provider can
+  prove the attachment is on that issue before the request is shaped.
+- Preview binds the issue key, the attachment id, its filename, size, author
+  account id, and created time (digested into the baseline revision), and the
+  issue `updated` (the journal revision). Apply repeats every read and refuses
+  when any of them moved.
+- Author guard. The dispatcher reads the principal and refuses an attachment
+  another account uploaded before any comment body is read; the REST Provider
+  runs the same guard again at the credential boundary, mirroring the comment
+  edit guard, and also refuses an attachment the issue does not list.
+- Reference guard. The preview reads the description and every comment (the
+  comment list is bounded to 100 and refused when the issue's total exceeds
+  what was read) and refuses when any still references the attachment by file
+  name as a whole word, in wiki text, ADF text, or rendered HTML; by id on a
+  Jira attachment route; or through an ADF media node whose attributes (id,
+  alt, url, collection) name it. A source whose content was not read (no
+  description field in the reply, a comment with neither body nor rendered
+  body) refuses rather than counts as clear; an explicitly empty or null
+  description was read. The preview reports what it checked.
+- Read-back completion. Jira answers the delete with no body, and the reply
+  never settles the write: completion needs the issue's attachment list, read
+  back through the same route, to no longer carry the id, as
+  `page.attachment.delete` already settles. A list that still carries it
+  settles `unchanged` only when the issue's `updated` is the bound one; a
+  moved issue or a failed read-back leaves the receipt `outcome-unknown` for
+  `adjudicate`, never a success by hand.
+- Not a fallback, same custody, same journal. As the first amendment: the
+  operation is named by the caller; no Community failure is re-shaped onto
+  it; the credential exists only in the Provider process and its
+  Authorization header; the site origin is the item's Trusted Site Origin.
+
+Consequences.
+
+- Negative: the owned REST vocabulary grows from seven to nine requests, and
+  the DELETE endpoint and the issue attachment record shape must be
+  re-qualified when Jira changes them; the Community Provider's upgrades do
+  not cover them.
+- Negative: the reference guard reads rendered HTML and wiki text as Jira
+  returns them today; a reference form neither carries (a media URL that
+  names neither the file nor the attachment id) would not be seen. The guard
+  refuses on the file name as a whole word, so plain prose naming the file
+  also blocks a delete until the prose is edited.
+- Neutral: a delete of an attachment referenced only by comments the
+  principal cannot edit needs the reference removed by its author first; the
+  route offers no override.
+- Positive: superseded evidence leaves the ticket through the same preview,
+  journal, read-back, and adjudication posture as every other write, and
+  cannot remove another account's upload or one still in use.
+
+Confirmation. Fixture-proven in the plugin suite (28 September 2026): the
+contract names the operation on the REST server; the input refuses every
+non-id form; preview binds the issue `updated` and the attachment facts and
+reports the reference check; a resized attachment or a moved issue refuses
+the apply before any send; the author guard refuses at preview and at apply
+before any comment is read; the reference guard refuses on a wiki macro, a
+rendered id, the description in text or HTML, an ADF media node naming the
+attachment in a description or a comment without rendered HTML, a reply with
+no description field, a comment with no body form, and an incomplete comment
+list, and clears a containing file name, another id, a bare number, and an
+empty or null description; the delete reply never counts and read-back
+absence completes; a lost reply with a successful read-back settles
+`unchanged` only at the bound issue `updated`, stays `outcome-unknown` when
+the issue moved, and completes once the id is gone; a lost reply with a
+failed read-back settles `outcome-unknown`, blocks the issue, and adjudicates
+to `unchanged` at the bound `updated` or to `completed` once the id is gone;
+the REST Provider refuses a delete without its issue key or by file name
+before any request, with no secret on any stream; and the spawned public
+dispatcher refuses a file-name input, an unreadable item, and an unknown
+preview with the documented envelope, exit code, empty stderr, and no
+journal effect.
+
+Live: not yet run. The first live qualification is one preview, apply, and
+read-back on one unreferenced attachment the principal uploaded to SMSTX-364,
+run by the coordinator under Nathan's authorization; until then the
+operation's proof state is fixture-tested. Revisit trigger: an upstream
+mcp-atlassian release that exposes a Jira attachment delete tool, which would
+move this operation onto the Community route.
 
 The Connectors plugin was selected for a credential-safe repair on
 21 September 2026. Nathan approved the one-Provider direction on 23 September

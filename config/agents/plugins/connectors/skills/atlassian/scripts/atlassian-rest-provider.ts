@@ -1,18 +1,19 @@
 #!/usr/bin/env bun
-// Owned Jira REST v2 Provider for the wiki-comment capability exception
-// (ADR 0001 amendment). One process per request: recovers the invocation from
+// Owned Jira REST v2 Provider for the wiki-comment and attachment-delete
+// capability exceptions (ADR 0001 amendments). One process per request: recovers the invocation from
 // the dispatcher's internal channel, re-reads the bound Jira item inside this
 // process, reads exactly one {tool, args} request from stdin, makes that one
 // HTTPS request against the item's Trusted Site Origin, and writes one
 // {status, body} line. The credential exists only in this process's memory
 // and in the Authorization header; it is never printed and never an argument.
 import { boundItem, providerInvocation } from "./custody/index.ts";
-import { authorGuardVerdict, editGuardRequests, HEAD_BYTES, readLeadingBytes, type RestReply, type RestRequest, restRequest } from "./dispatch/rest.ts";
+import { attachmentOnIssue, authorGuardVerdict, deleteGuardRequests, editGuardRequests, HEAD_BYTES, readLeadingBytes, type RestReply, type RestRequest, restRequest } from "./dispatch/rest.ts";
 import { atlassianProcess, singleLine } from "./provider-process.ts";
 
 const TIMEOUT_MS = 30_000;
 const REQUEST_LIMIT = 300_000;
 const EDIT_TOOL = "jira_rest_comment_edit";
+const DELETE_TOOL = "jira_rest_attachment_delete";
 
 interface StdinRequest {
 	tool: string;
@@ -95,6 +96,24 @@ async function guardEdit(origin: string, authorization: string, args: unknown): 
 	if (verdict === "unverifiable") atlassianProcess.fail("author-unverifiable", "the principal or the comment author could not be read", 3);
 }
 
+// The delete guard at the credential boundary: read the principal and the
+// issue's attachments first; an attachment the issue does not list refuses,
+// another author or an unreadable id refuses, and only a match reaches the
+// DELETE.
+async function guardDelete(origin: string, authorization: string, args: unknown): Promise<void> {
+	const guard = deleteGuardRequests(args);
+	if (!guard) atlassianProcess.fail("arguments-invalid", "the delete names no issue and attachment to guard", 2);
+	const myself = await perform(origin, authorization, guard.myself);
+	if (!succeeded(myself)) emit(myself);
+	const issue = await perform(origin, authorization, guard.attachments);
+	if (!succeeded(issue)) emit(issue);
+	const attachment = attachmentOnIssue(issue.body, (args as { attachment_id: string }).attachment_id);
+	if (attachment === undefined) atlassianProcess.fail("attachment-not-on-issue", "the issue lists no attachment with that id", 3);
+	const verdict = authorGuardVerdict(myself.body, attachment);
+	if (verdict === "mismatch") atlassianProcess.fail("attachment-author-mismatch", "the attachment was uploaded by another account", 3);
+	if (verdict === "unverifiable") atlassianProcess.fail("attachment-author-unverifiable", "the principal or the attachment author could not be read", 3);
+}
+
 export async function runRestProvider(argv: readonly string[]): Promise<never> {
 	atlassianProcess.refuseArguments([...argv]);
 	const invocation = providerInvocation();
@@ -109,6 +128,7 @@ export async function runRestProvider(argv: readonly string[]): Promise<never> {
 	const { tool, args, request } = requestFromStdin(stdin);
 	const authorization = `Basic ${Buffer.from(`${item.principal}:${item.credential}`).toString("base64")}`;
 	if (tool === EDIT_TOOL) await guardEdit(item.origin, authorization, args);
+	if (tool === DELETE_TOOL) await guardDelete(item.origin, authorization, args);
 	return emit(await perform(item.origin, authorization, request));
 }
 

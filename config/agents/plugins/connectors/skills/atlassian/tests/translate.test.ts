@@ -57,6 +57,9 @@ describe("translateFailure", () => {
 			["exec-failed", "inspect the Provider executable and runtime"],
 			["author-mismatch", "the comment was authored by another account; the media update edits only the principal's own comments"],
 			["author-unverifiable", "the principal or the comment author could not be read before the edit; nothing was sent"],
+			["attachment-author-mismatch", "the attachment was uploaded by another account; the attachment delete removes only the principal's own uploads"],
+			["attachment-author-unverifiable", "the principal or the attachment author could not be read before the delete; nothing was sent"],
+			["attachment-not-on-issue", "the issue lists no attachment with that id; nothing was sent"],
 		] as const) {
 			expect(translateFailure(process_(`atlassian-provider:error:${code}:untrusted provider detail`, "", 4))).toEqual({ cause: "refused-precondition", hint });
 		}

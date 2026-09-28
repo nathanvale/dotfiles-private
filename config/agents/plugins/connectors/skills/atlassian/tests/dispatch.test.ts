@@ -61,7 +61,7 @@ function testCanonical(value: unknown): string {
 }
 
 const testDigest = (value: unknown): string => new Bun.CryptoHasher("sha256").update(testCanonical(value)).digest("hex");
-const EXPECTED_OPERATIONS = ["issue.get", "issue.search", "issue.transitions", "issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.comment.media", "issue.comment.media.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete", "page.get", "page.search", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"] as const;
+const EXPECTED_OPERATIONS = ["issue.get", "issue.search", "issue.transitions", "issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.comment.media", "issue.comment.media.update", "issue.attach", "issue.attachment.delete", "issue.transition", "issue.assign", "issue.delete", "page.get", "page.search", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"] as const;
 const EXPECTED_COMMANDS = ["receipts", "receipt", "adjudicate", "unlock"];
 const EXPECTED_PATHS = [...EXPECTED_OPERATIONS, ...EXPECTED_COMMANDS].map((entry) => `atlassian.${entry}`).sort();
 const WRITE_OPERATIONS = EXPECTED_OPERATIONS.filter((id) => !id.endsWith(".get") && !id.endsWith(".search") && id !== "issue.transitions");
@@ -79,6 +79,7 @@ const EXPECTED_TOOLS: Record<string, [string, "read" | "write", "jira" | "conflu
 	"issue.comment.media": ["jira_rest_comment_add", "write", "jira"],
 	"issue.comment.media.update": ["jira_rest_comment_edit", "write", "jira"],
 	"issue.attach": ["jira_update_issue", "write", "jira"],
+	"issue.attachment.delete": ["jira_rest_attachment_delete", "write", "jira"],
 	"issue.transition": ["jira_transition_issue", "write", "jira"],
 	"issue.assign": ["jira_assign_issue", "write", "jira"],
 	"issue.delete": ["jira_delete_issue", "write", "jira"],
@@ -115,7 +116,7 @@ const SCHEMAS: Record<string, SchemaTool[]> = {
 		tool("jira_assign_issue", ["issue_key"], ["assignee"]),
 		tool("jira_delete_issue", ["issue_key"]),
 	],
-	[RJ]: [tool("jira_rest_myself", []), tool("jira_rest_issue_attachments", ["issue_key"]), tool("jira_rest_comments_list", ["issue_key"]), tool("jira_rest_comment_get", ["issue_key", "comment_id"]), tool("jira_rest_comment_add", ["issue_key", "body"]), tool("jira_rest_comment_edit", ["issue_key", "comment_id", "body"]), tool("jira_rest_attachment_head", ["attachment_id"])],
+	[RJ]: [tool("jira_rest_myself", []), tool("jira_rest_issue_attachments", ["issue_key"]), tool("jira_rest_comments_list", ["issue_key"]), tool("jira_rest_comment_get", ["issue_key", "comment_id"]), tool("jira_rest_comment_add", ["issue_key", "body"]), tool("jira_rest_comment_edit", ["issue_key", "comment_id", "body"]), tool("jira_rest_attachment_head", ["attachment_id"]), tool("jira_rest_issue_attachment_context", ["issue_key"]), tool("jira_rest_attachment_delete", ["issue_key", "attachment_id"])],
 	[CC]: [
 		tool("confluence_get_page", [], ["page_id", "title", "space_key", "include_metadata", "convert_to_markdown"]),
 		tool("confluence_search", ["query"], ["limit", "spaces_filter"]),
@@ -207,10 +208,10 @@ describe("operation contract and routes", () => {
 		expect(PROVIDER).toBe("community");
 	});
 
-	test("only the two wiki-comment operations name the rest Provider on the owned REST server; every other operation is Community on its product route", () => {
+	test("only the two wiki-comment operations and the attachment delete name the rest Provider on the owned REST server; every other operation is Community on its product route", () => {
 		expect(REST_SERVER).toBe(RJ);
 		const routes = Object.values(OPERATION_SPECS).map((spec) => [spec.id, spec.provider, spec.server]);
-		expect(routes.filter(([, provider]) => provider === "rest")).toEqual([["issue.comment.media", "rest", RJ], ["issue.comment.media.update", "rest", RJ]]);
+		expect(routes.filter(([, provider]) => provider === "rest")).toEqual([["issue.comment.media", "rest", RJ], ["issue.comment.media.update", "rest", RJ], ["issue.attachment.delete", "rest", RJ]]);
 		expect(routes.filter(([, provider]) => provider !== "rest").every(([id, , server]) => server === serverFor(EXPECTED_TOOLS[id as string]?.[2] as "jira" | "confluence"))).toBe(true);
 	});
 
@@ -1368,6 +1369,242 @@ describe("wiki media comments through the owned REST route", () => {
 	});
 });
 
+// The attachment-delete exception: one attachment by id through the owned
+// REST route. The preview binds the issue's updated, the attachment's
+// filename, size, author, and created time; the author and reference guards
+// refuse before any preview or send; completion comes only from the issue's
+// attachment list no longer carrying the id. Reply shapes are Jira REST v2
+// issue and comment reads as the media route observed them.
+describe("attachment delete through the owned REST route", () => {
+	const DELETE = { issueKey: "PROJ-1", attachmentId: "202456" };
+	const ME = "712020:00000000-0000-4000-8000-00000000000a";
+	const OTHER = "712020:00000000-0000-4000-8000-00000000000b";
+	const record = (overrides: Record<string, unknown> = {}) => ({ id: "202456", filename: "before.png", size: 48123, mimeType: "image/png", created: "2026-09-28T01:02:03.000+1000", author: { accountId: ME, displayName: "Service" }, ...overrides });
+	const other = { id: "202457", filename: "after.png", size: 10, created: "c2", author: { accountId: ME } };
+	type IssueShape = { updated?: string; attachments?: unknown[]; description?: unknown; renderedDescription?: string | undefined; omitDescription?: boolean };
+	const issue = ({ updated = "t1", attachments = [record(), other], description = "Plain description.", renderedDescription = "<p>Plain description.</p>", omitDescription = false }: IssueShape = {}) => ({
+		ok: true as const,
+		data: { key: "PROJ-1", fields: omitDescription ? { updated, attachment: attachments } : { updated, attachment: attachments, description }, ...(renderedDescription === undefined ? {} : { renderedFields: { description: renderedDescription } }) },
+	});
+	const comments = (...entries: Record<string, unknown>[]) => ({ ok: true as const, data: { startAt: 0, maxResults: 100, total: entries.length, comments: entries } });
+	const myself = { ok: true as const, data: { accountId: ME, emailAddress: PRINCIPAL } };
+	const CONTEXT_READ = { server: RJ, tool: "jira_rest_issue_attachment_context", args: { issue_key: "PROJ-1" } };
+	const ME_READ = { server: RJ, tool: "jira_rest_myself", args: {} };
+	const LIST_READ = { server: RJ, tool: "jira_rest_comments_list", args: { issue_key: "PROJ-1" } };
+	const ATTACH_READ = { server: RJ, tool: "jira_rest_issue_attachments", args: { issue_key: "PROJ-1" } };
+	const SEND = { server: RJ, tool: "jira_rest_attachment_delete", args: { issue_key: "PROJ-1", attachment_id: "202456" } };
+	const attachmentsOf = (data: { data: { key: string; fields: { updated: string; attachment: unknown[] } } }) => ({ ok: true as const, data: { key: data.data.key, fields: { updated: data.data.fields.updated, attachment: data.data.fields.attachment } } });
+
+	test("preview binds the issue's updated and the attachment's facts, reports the reference check, and sends nothing; apply refuses when the attachment or the issue moved, then completes only from a read-back that no longer lists the id", async () => {
+		let live = issue();
+		const { transport, calls } = fakeTransport({
+			[`${RJ}.jira_rest_issue_attachment_context`]: () => live,
+			[`${RJ}.jira_rest_issue_attachments`]: () => attachmentsOf(live),
+			[`${RJ}.jira_rest_myself`]: myself,
+			[`${RJ}.jira_rest_comments_list`]: comments({ id: "900", body: "Looks fine.", renderedBody: "<p>Looks fine.</p>" }),
+			// Jira answers a delete with 204 and no body; the reply proves nothing on its own.
+			[`${RJ}.jira_rest_attachment_delete`]: () => {
+				live = issue({ updated: "t2", attachments: [other] });
+				return { ok: true, data: null };
+			},
+		});
+		const dependencies = deps({ transport });
+		const envelope = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies);
+		expect([envelope.result.outcome, envelope.result.effectClass, envelope.result.commandIdentity]).toEqual(["success", "repository-local", "atlassian.issue.attachment.delete.preview"]);
+		const preview = previewData(envelope);
+		expect([preview.provider, preview.server, preview.tool, preview.objectIdentity, preview.revision, preview.arguments]).toEqual(["rest", RJ, "jira_rest_attachment_delete", "issue:PROJ-1", "t1", { issue_key: "PROJ-1", attachment_id: "202456" }]);
+		expect(preview.baseline).toMatchObject({ effectIds: ["202456"], commentIds: [] });
+		expect(preview.baseline.revision).toMatch(/^[0-9a-f]{64}$/);
+		const data = envelope.result.data as { attachment: unknown; referenceCheck: unknown };
+		expect(data.attachment).toEqual({ id: "202456", filename: "before.png", size: 48123, authorAccountId: ME, created: "2026-09-28T01:02:03.000+1000" });
+		expect(data.referenceCheck).toEqual({ description: true, commentsRead: 1, commentsTotal: 1, references: [] });
+		expect(calls).toEqual([CONTEXT_READ, ME_READ, LIST_READ, ATTACH_READ]);
+		expect(readJsonDir(previewsDir()).map((entry) => [entry.provider, entry.status, entry.baseline])).toEqual([["rest", "open", preview.baseline]]);
+		// The attachment was replaced under the same id with other bytes: a bound fact moved, so nothing is sent.
+		live = issue({ attachments: [record({ size: 99 }), other] });
+		const resized = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", preview.previewId], dependencies);
+		expect([resized.result.causeCode, resized.result.repairAction?.endsWith("preview-baseline-changed")]).toEqual(["refused-preview", true]);
+		// The issue moved (another edit): the bound updated moved, so nothing is sent.
+		live = issue({ updated: "t1b" });
+		const movedIssue = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", preview.previewId], dependencies);
+		expect([movedIssue.result.causeCode, movedIssue.result.repairAction?.endsWith("preview-revision-changed")]).toEqual(["refused-preview", true]);
+		expect(calls.filter((call) => call.tool === "jira_rest_attachment_delete")).toEqual([]);
+		expect(readJsonDir(receiptsDir())).toEqual([]);
+		live = issue();
+		const applied = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", preview.previewId], dependencies);
+		expect([applied.result.outcome, applied.result.effectClass, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "external", "completed", ["jira-attachment:202456"]]);
+		expect(calls.filter((call) => call.tool === "jira_rest_attachment_delete")).toEqual([SEND]);
+		// The delete reply never settles the write; the read-back after it did.
+		expect(calls.slice(-2)).toEqual([SEND, ATTACH_READ]);
+		expect(readJsonDir(receiptsDir()).map((entry) => [entry.provider, entry.status, entry.effects])).toEqual([["rest", "completed", [{ kind: "jira-attachment", id: "202456" }]]]);
+		expect(applied.result.provenance.every((entry) => entry.provider === RJ)).toBe(true);
+	});
+
+	test("an attachment another account uploaded is refused before any comment is read, at preview and at apply, and no preview or receipt is recorded", async () => {
+		let author = OTHER;
+		const { transport, calls } = fakeTransport({
+			[`${RJ}.jira_rest_issue_attachment_context`]: () => issue({ attachments: [record({ author: { accountId: author } }), other] }),
+			[`${RJ}.jira_rest_issue_attachments`]: () => issue({ attachments: [record({ author: { accountId: author } }), other] }),
+			[`${RJ}.jira_rest_myself`]: myself,
+			[`${RJ}.jira_rest_comments_list`]: comments(),
+		});
+		const dependencies = deps({ transport });
+		const guarded = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies);
+		expect([guarded.result.causeCode, guarded.result.exitCode, guarded.result.repairAction]).toEqual(["input-invalid", 4, "attachmentId names an attachment another account uploaded; the attachment delete removes only the principal's own uploads"]);
+		expect(calls).toEqual([CONTEXT_READ, ME_READ]);
+		expect(readJsonDir(previewsDir())).toEqual([]);
+		// The upload is the principal's at preview, then Jira reports another author at apply: refused again, before any send.
+		author = ME;
+		const preview = previewData(await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies));
+		author = OTHER;
+		const applied = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", preview.previewId], dependencies);
+		expect(applied.result.causeCode).toBe("input-invalid");
+		expect(calls.filter((call) => call.tool === "jira_rest_attachment_delete")).toEqual([]);
+		expect(readJsonDir(receiptsDir())).toEqual([]);
+		// A principal read without an account id cannot decide; nothing is sent.
+		const unverifiable = fakeTransport({ [`${RJ}.jira_rest_issue_attachment_context`]: issue(), [`${RJ}.jira_rest_myself`]: { ok: true, data: { emailAddress: PRINCIPAL } } });
+		const undecided = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], deps({ transport: unverifiable.transport }));
+		expect([undecided.result.causeCode, undecided.result.repairAction]).toEqual(["capability-unavailable", "the principal read exposes no account id for the author guard"]);
+	});
+
+	test("an attachment still referenced by the description or a comment, by file name or by id, refuses before any send; an incomplete comment list refuses rather than clears", async () => {
+		const attempt = async (shape: IssueShape, ...listed: Record<string, unknown>[]) => {
+			const { transport, calls } = fakeTransport({ [`${RJ}.jira_rest_issue_attachment_context`]: issue(shape), [`${RJ}.jira_rest_issue_attachments`]: attachmentsOf(issue(shape)), [`${RJ}.jira_rest_myself`]: myself, [`${RJ}.jira_rest_comments_list`]: comments(...listed) });
+			const envelope = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], deps({ transport }));
+			return [envelope.result.causeCode, envelope.result.repairAction, calls.map((call) => call.tool)];
+		};
+		const clean = { id: "900", body: "Looks fine.", renderedBody: "<p>Looks fine.</p>" };
+		const reads = ["jira_rest_issue_attachment_context", "jira_rest_myself", "jira_rest_comments_list"];
+		// A wiki image macro in a comment names the file.
+		expect(await attempt({}, clean, { id: "901", body: "Before:\n\n!before.png|width=600!", renderedBody: '<p>Before:</p><p><img src="/rest/api/3/attachment/content/202456" alt="before.png"></p>' })).toEqual(["input-invalid", "the attachment is still referenced by comment 901; remove the reference first", reads]);
+		// A rendered ADF media reference carries the id but not the name.
+		expect(await attempt({}, { id: "902", body: "See the shot.", renderedBody: '<p>See the shot.</p><span class="image-wrap"><img src="https://example.atlassian.net/secure/attachment/202456/x"></span>' })).toEqual(["input-invalid", "the attachment is still referenced by comment 902; remove the reference first", reads]);
+		// The description in wiki text, and every referencing source is named.
+		expect(await attempt({ description: "Repro: [^before.png]" }, clean, { id: "903", body: "!before.png!", renderedBody: "" })).toEqual(["input-invalid", "the attachment is still referenced by description, comment 903; remove the reference first", reads]);
+		// The rendered description alone counts too.
+		expect(await attempt({ renderedDescription: '<a href="/secure/attachment/202456/before.png">shot</a>' })).toEqual(["input-invalid", "the attachment is still referenced by description; remove the reference first", reads]);
+		// Another file's name that merely contains this one, another id, and the bare number in prose are not references.
+		expect((await attempt({}, { id: "904", body: "See !new-before.png! and !before.png.bak! (build 202456 passed; /rest/api/3/attachment/content/2024567)", renderedBody: '<img src="/rest/api/3/attachment/content/202457">' }))[0]).toBe("success");
+		// Repair round 1, finding 1: an ADF media node in the description or a comment, with no rendered HTML, still names the attachment.
+		const adf = (attrs: Record<string, unknown>) => ({ type: "doc", version: 1, content: [{ type: "mediaSingle", attrs: { layout: "center" }, content: [{ type: "media", attrs }] }] });
+		expect(await attempt({ description: adf({ id: "202456", type: "file", collection: "jira-10001" }), renderedDescription: undefined }, clean)).toEqual(["input-invalid", "the attachment is still referenced by description; remove the reference first", reads]);
+		expect(await attempt({}, clean, { id: "905", body: adf({ id: "9f1b3f0a-0000-4000-8000-000000000001", type: "file", collection: "jira-10001", alt: "before.png" }) })).toEqual(["input-invalid", "the attachment is still referenced by comment 905; remove the reference first", reads]);
+		expect((await attempt({ description: adf({ id: "202457", type: "file", collection: "jira-10001", alt: "after.png" }), renderedDescription: undefined }, { id: "906", body: adf({ id: "1", type: "file", collection: "c" }) }))[0]).toBe("success");
+		// Repair round 1, finding 2: content that was not read never counts as checked.
+		expect(await attempt({ omitDescription: true, renderedDescription: undefined }, clean)).toEqual(["capability-unavailable", "the issue read exposes no description field; the reference guard cannot clear the attachment", ["jira_rest_issue_attachment_context"]]);
+		expect(await attempt({}, clean, { id: "907", updated: "u1" })).toEqual(["capability-unavailable", "comment 907 carries no body; the reference guard cannot clear the attachment", reads]);
+		expect((await attempt({ description: null, renderedDescription: undefined }, clean, { id: "908", body: "" }))[0]).toBe("success");
+		// More comments than the guard read: it cannot clear the attachment.
+		const truncated = fakeTransport({ [`${RJ}.jira_rest_issue_attachment_context`]: issue(), [`${RJ}.jira_rest_myself`]: myself, [`${RJ}.jira_rest_comments_list`]: { ok: true, data: { startAt: 0, maxResults: 100, total: 101, comments: Array.from({ length: 100 }, (_entry, index) => ({ id: String(1000 + index), body: "x", renderedBody: "<p>x</p>" })) } } });
+		const incomplete = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], deps({ transport: truncated.transport }));
+		expect([incomplete.result.causeCode, incomplete.result.repairAction]).toEqual(["capability-unavailable", "the issue has 101 comments and the reference guard read 100; it cannot clear the attachment"]);
+		expect(readJsonDir(previewsDir()).map((entry) => entry.objectIdentity)).toEqual(["issue:PROJ-1", "issue:PROJ-1", "issue:PROJ-1"]);
+	});
+
+	test("an attachment the issue does not carry refuses as not-found; a record missing a bound fact refuses before any guard read; a filename or bulk form is an input refusal before any read", async () => {
+		const { transport, calls } = fakeTransport({ [`${RJ}.jira_rest_issue_attachment_context`]: issue({ attachments: [other, { id: "202456", filename: "before.png" }] }), [`${RJ}.jira_rest_myself`]: myself });
+		const dependencies = deps({ transport });
+		const missing = await dispatch(["issue.attachment.delete", "--input", JSON.stringify({ issueKey: "PROJ-1", attachmentId: "999" }), "--preview"], dependencies);
+		expect([missing.result.outcome, missing.result.causeCode, missing.result.repairAction]).toEqual(["failed", "not-found", "the issue has no attachment with that id"]);
+		const unbound = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies);
+		expect([unbound.result.causeCode, unbound.result.repairAction]).toEqual(["capability-unavailable", "the attachment record exposes no filename, size, author account id, or created time to bind"]);
+		expect(calls.map((call) => call.tool)).toEqual(["jira_rest_issue_attachment_context", "jira_rest_issue_attachment_context"]);
+		for (const input of [{ issueKey: "PROJ-1", filename: "before.png" }, { issueKey: "PROJ-1", attachmentId: ["202456", "202457"] }, { issueKey: "PROJ-1", attachmentId: "*" }, { issueKey: "PROJ-1" }, { attachmentId: "202456" }]) {
+			const refused = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(input), "--preview"], dependencies);
+			expect([input, refused.result.causeCode, refused.result.exitCode]).toEqual([input, "input-invalid", 4]);
+		}
+		expect(calls).toHaveLength(2);
+		expect(readJsonDir(previewsDir())).toEqual([]);
+	});
+
+	// Repair round 1, finding 3: a lost reply whose read-back succeeds settles
+	// unchanged only when the attachment is still listed and the issue's
+	// updated is the bound one; a moved issue keeps the receipt open for
+	// adjudication, and a vanished attachment completes it.
+	test("a lost reply with a successful read-back settles unchanged only at the bound issue updated, stays unknown when the issue moved, and completes when the attachment is gone", async () => {
+		let updated = "t1";
+		let listed = true;
+		const { transport, calls } = fakeTransport({
+			[`${RJ}.jira_rest_issue_attachment_context`]: () => issue({ updated }),
+			[`${RJ}.jira_rest_issue_attachments`]: () => attachmentsOf(issue({ updated, attachments: listed ? [record(), other] : [other] })),
+			[`${RJ}.jira_rest_myself`]: myself,
+			[`${RJ}.jira_rest_comments_list`]: comments(),
+			[`${RJ}.jira_rest_attachment_delete`]: failure("failed-transport"),
+		});
+		const dependencies = deps({ transport });
+		// Still listed at the bound updated: nothing landed, and the receipt closes.
+		const first = previewData(await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies));
+		const unchanged = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", first.previewId], dependencies);
+		expect([unchanged.result.causeCode, unchanged.result.transactionState, unchanged.result.effects.uncertain]).toEqual(["failed-transport", "unchanged", []]);
+		const closed = await dispatch(["receipt", "--run", (unchanged.result.data as { runId: string }).runId], dependencies);
+		expect([(closed.result.data as { status: string; basis: string; send: string }).status, (closed.result.data as { basis: string }).basis, (closed.result.data as { send: string }).send]).toEqual(["unchanged", "revision-unchanged", "possible"]);
+		expect((await dispatch(["receipts"], dependencies)).result.data).toEqual({ open: [] });
+		// Still listed but the issue moved during the send: presence alone is not proof, so the receipt stays open and blocks the issue.
+		const second = previewData(await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies));
+		const { transport: moving } = fakeTransport({
+			[`${RJ}.jira_rest_issue_attachment_context`]: () => issue({ updated }),
+			[`${RJ}.jira_rest_issue_attachments`]: () => attachmentsOf(issue({ updated, attachments: listed ? [record(), other] : [other] })),
+			[`${RJ}.jira_rest_myself`]: myself,
+			[`${RJ}.jira_rest_comments_list`]: comments(),
+			[`${RJ}.jira_rest_attachment_delete`]: () => {
+				updated = "t2";
+				return failure("failed-transport");
+			},
+		});
+		const moved = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", second.previewId], deps({ transport: moving }));
+		expect([moved.result.causeCode, moved.result.transactionState, moved.result.effects.uncertain]).toEqual(["outcome-unknown", "unknown", ["issue:PROJ-1"]]);
+		const runId = (moved.result.data as { runId: string }).runId;
+		const stillMoved = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(DELETE)], dependencies);
+		expect([stillMoved.result.causeCode, stillMoved.result.repairAction?.endsWith("evidence-insufficient")]).toEqual(["refused-evidence", true]);
+		expect((await dispatch(["receipts"], dependencies)).result.data).toEqual({ open: [expect.objectContaining({ runId, status: "unknown" })] });
+		// The attachment is gone on a later read: the effect is found and the receipt completes.
+		listed = false;
+		const resolved = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(DELETE)], dependencies);
+		expect([resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["completed", ["jira-attachment:202456"]]);
+		expect(calls.filter((call) => call.tool === "jira_rest_attachment_delete")).toHaveLength(1);
+	});
+
+	test("a lost reply with a failed read-back blocks the issue as outcome-unknown; adjudication completes only when the attachment list no longer carries the id, and settles unchanged while it still does", async () => {
+		let listed = true;
+		// The transport drops from the delete onward: the delete reply is lost and the immediate read-back fails too.
+		let dropped = false;
+		const { transport, calls } = fakeTransport({
+			[`${RJ}.jira_rest_issue_attachment_context`]: () => issue(),
+			[`${RJ}.jira_rest_issue_attachments`]: () => (dropped ? failure("failed-transport") : attachmentsOf(issue({ attachments: listed ? [record(), other] : [other] }))),
+			[`${RJ}.jira_rest_myself`]: myself,
+			[`${RJ}.jira_rest_comments_list`]: comments(),
+			[`${RJ}.jira_rest_attachment_delete`]: () => {
+				dropped = true;
+				return failure("failed-transport");
+			},
+		});
+		const dependencies = deps({ transport });
+		const preview = previewData(await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies));
+		const applied = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", preview.previewId], dependencies);
+		expect([applied.result.causeCode, applied.result.transactionState, applied.result.effects.uncertain]).toEqual(["outcome-unknown", "unknown", ["issue:PROJ-1"]]);
+		const runId = (applied.result.data as { runId: string }).runId;
+		// Every write on the issue is blocked while the receipt is open.
+		const blocked = await dispatch(["issue.comment.media", "--input", JSON.stringify({ issueKey: "PROJ-1", body: "!after.png!", images: ["after.png"] }), "--preview"], dependencies);
+		expect(blocked.result.causeCode).not.toBe("outcome-unknown");
+		const stillOpen = await dispatch(["receipts"], dependencies);
+		expect((stillOpen.result.data as { open: { runId: string }[] }).open.map((entry) => entry.runId)).toEqual([runId]);
+		// The list still carries the id: the delete did not land, and the receipt settles unchanged.
+		dropped = false;
+		const unchanged = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(DELETE)], dependencies);
+		expect([unchanged.result.transactionState, unchanged.result.effects.completed, (unchanged.result.data as { basis: string }).basis]).toEqual(["unchanged", [], "revision-unchanged"]);
+		// A second lost delete, then the list no longer carries the id: adjudication completes it.
+		const again = previewData(await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--preview"], dependencies));
+		const lost = await dispatch(["issue.attachment.delete", "--input", JSON.stringify(DELETE), "--apply", again.previewId], dependencies);
+		expect(lost.result.causeCode).toBe("outcome-unknown");
+		dropped = false;
+		listed = false;
+		const resolved = await dispatch(["adjudicate", "--run", (lost.result.data as { runId: string }).runId, "--input", JSON.stringify(DELETE)], dependencies);
+		expect([resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["completed", ["jira-attachment:202456"]]);
+		expect(calls.filter((call) => call.tool === "jira_rest_attachment_delete")).toHaveLength(2);
+		expect(readJsonDir(receiptsDir()).map((entry) => entry.status).sort()).toEqual(["completed", "unchanged"]);
+	});
+});
+
 describe("historical records from the retired Official route", () => {
 	const COMMENT = { issueKey: "PROJ-1", body: "recorded through the retired route" };
 	const OFFICIAL_ARGS = { cloudId: "cloud-example", issueIdOrKey: "PROJ-1", commentBody: COMMENT.body };
@@ -1496,7 +1733,7 @@ describe("production adapters", () => {
 		const binding = { principal: PRINCIPAL, itemVersion: ITEM_VERSION, origin: ORIGIN, item: ITEM_ID };
 		const transport = routeTransport(env(), "example");
 		const listed = await transport.listTools(binding, RJ);
-		expect(listed.ok && (listed.data as { name: string }[]).map((tool) => tool.name)).toEqual(["jira_rest_myself", "jira_rest_issue_attachments", "jira_rest_comments_list", "jira_rest_comment_get", "jira_rest_comment_add", "jira_rest_comment_edit", "jira_rest_attachment_head"]);
+		expect(listed.ok && (listed.data as { name: string }[]).map((tool) => tool.name)).toEqual(["jira_rest_myself", "jira_rest_issue_attachments", "jira_rest_comments_list", "jira_rest_comment_get", "jira_rest_comment_add", "jira_rest_comment_edit", "jira_rest_attachment_head", "jira_rest_issue_attachment_context", "jira_rest_attachment_delete"]);
 		expect(fixture.lines("op-calls.jsonl")).toEqual([]);
 		// No item: the Provider's own item read fails closed before stdin is consumed.
 		expect(await transport.call(binding, RJ, "jira_rest_myself", {})).toEqual({ ok: false, cause: "refused-precondition", hint: "the product credential item is not in 1Password; its owner must create and store it" });
@@ -1506,6 +1743,27 @@ describe("production adapters", () => {
 		expect(await transport.call(binding, RJ, "jira_delete_comment", { issue_key: "PROJ-1" })).toEqual({ ok: false, cause: "refused-precondition", hint: "the provider was invoked with unexpected arguments" });
 		expect(JSON.stringify(fixture.lines("op-calls.jsonl"))).not.toContain(secret);
 		expect(existsSync(path.join(fixture.state, "connectors", "mcporter"))).toBe(false);
+	});
+
+	// The packaged front door owns the public process boundary; the retired Bun
+	// dispatcher cannot prove this refusal or write-journal behavior.
+	test("the packaged front door refuses invalid attachment deletes before any journal effect", async () => {
+		const command = (attachmentId: string, phase: string[]) => fixture.frontDoor(["run", "atlassian", "--select", "tenant=example", "issue.attachment.delete", "--input", JSON.stringify({ issueKey: "PROJ-1", attachmentId }), ...phase]);
+		const resultOf = (stdout: string) => (JSON.parse(stdout) as { result: { outcome: string; causeCode: string; data?: { connectorCause?: string }; repairAction?: string; effects: { completed: string[] } } }).result;
+		const byName = await command("before.png", ["--preview"]);
+		const invalid = resultOf(byName.stdout);
+		expect([byName.code, byName.stderr, invalid.outcome, invalid.causeCode, invalid.data?.connectorCause]).toEqual([4, "", "refused", "SCHEMA_ADAPTER_REFUSED", "input-invalid"]);
+		expect(fixture.lines("op-calls.jsonl")).toEqual([]);
+
+		fixture.writeItem({ username: PRINCIPAL, site_url: ORIGIN });
+		const unreadable = await command("202456", ["--preview"]);
+		const refusedItem = resultOf(unreadable.stdout);
+		expect([unreadable.code, unreadable.stderr, refusedItem.outcome, refusedItem.data?.connectorCause]).toEqual([3, "", "refused", "refused-precondition"]);
+		const applied = await command("202456", ["--apply", "00000000-0000-4000-8000-000000000000"]);
+		const refusedApply = resultOf(applied.stdout);
+		expect([applied.code, applied.stderr, refusedApply.outcome, refusedApply.data?.connectorCause, refusedApply.effects.completed]).toEqual([3, "", "refused", "refused-preview", []]);
+		expect([readJsonDir(path.join(fixture.state, "connectors", "atlassian", "example", "previews")), readJsonDir(path.join(fixture.state, "connectors", "atlassian", "example", "receipts"))]).toEqual([[], []]);
+		for (const stream of [byName.stdout, unreadable.stdout, applied.stdout]) expect(stream).not.toContain(OP_TOKEN_SENTINEL);
 	});
 
 	test("staging copies an upload into the tenant's 0700 outbox under its content digest and refuses a missing or non-regular file", async () => {

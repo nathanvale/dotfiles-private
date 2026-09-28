@@ -225,7 +225,7 @@ function isWriteOperation(operation: string): operation is WriteOperation {
 // duplicating an object after an unknown outcome.
 // Writes on an existing object take that object's identity; creates take a
 // container-scoped identity built below.
-const ISSUE_SCOPED: ReadonlySet<WriteOperation> = new Set<WriteOperation>(["issue.update", "issue.comment", "issue.comment.update", "issue.comment.media", "issue.comment.media.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete"]);
+const ISSUE_SCOPED: ReadonlySet<WriteOperation> = new Set<WriteOperation>(["issue.update", "issue.comment", "issue.comment.update", "issue.comment.media", "issue.comment.media.update", "issue.attach", "issue.attachment.delete", "issue.transition", "issue.assign", "issue.delete"]);
 const PAGE_SCOPED: ReadonlySet<WriteOperation> = new Set<WriteOperation>(["page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"]);
 
 function createIdentity(operation: "issue.create" | "page.create", canonicalInput: Record<string, unknown>): string {
@@ -334,6 +334,7 @@ const IDENTITY_SHAPES: Record<WriteOperation, RegExp> = {
 	"issue.comment.media": ISSUE_IDENTITY,
 	"issue.comment.media.update": ISSUE_IDENTITY,
 	"issue.attach": ISSUE_IDENTITY,
+	"issue.attachment.delete": ISSUE_IDENTITY,
 	"issue.transition": ISSUE_IDENTITY,
 	"issue.assign": ISSUE_IDENTITY,
 	"issue.delete": ISSUE_IDENTITY,

@@ -58,6 +58,9 @@ const WRITE_INPUTS: Record<WriteOperation, Record<string, Field>> = {
 	"issue.comment.media": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, body: { kind: "body", required: true }, images: { kind: "images", required: true } },
 	"issue.comment.media.update": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, commentId: { kind: "text", required: true, pattern: NUMERIC_ID }, body: { kind: "body", required: true }, images: { kind: "images", required: true } },
 	"issue.attach": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, file: { kind: "path", required: true } },
+	// The attachment-delete exception: one attachment, named by its numeric
+	// Jira id, on one issue. There is no filename, glob, or bulk form.
+	"issue.attachment.delete": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, attachmentId: { kind: "text", required: true, pattern: NUMERIC_ID } },
 	// toStatus names the status the issue must reach; the transition that leads
 	// there is resolved from the live transition list at preview and apply.
 	"issue.transition": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, toStatus: { kind: "text", required: true } },
@@ -160,7 +163,8 @@ export type Preparation =
 	| { kind: "transition"; issueKey: string; toStatus: string }
 	| { kind: "page"; pageId: string }
 	| { kind: "media"; issueKey: string; images: string[] }
-	| { kind: "media-comment"; issueKey: string; commentId: string; images: string[] };
+	| { kind: "media-comment"; issueKey: string; commentId: string; images: string[] }
+	| { kind: "attachment-delete"; issueKey: string; attachmentId: string };
 
 export function preparation(operation: WriteOperation, input: WriteInput): Preparation {
 	switch (operation) {
@@ -172,6 +176,8 @@ export function preparation(operation: WriteOperation, input: WriteInput): Prepa
 			return { kind: "media", issueKey: input.issueKey as string, images: input.images as string[] };
 		case "issue.comment.media.update":
 			return { kind: "media-comment", issueKey: input.issueKey as string, commentId: input.commentId as string, images: input.images as string[] };
+		case "issue.attachment.delete":
+			return { kind: "attachment-delete", issueKey: input.issueKey as string, attachmentId: input.attachmentId as string };
 		case "issue.update":
 		case "issue.attach":
 		case "issue.assign":
@@ -205,6 +211,10 @@ export interface PreparedContext {
 	// The image type established for each attachment a media comment
 	// references, by Jira's reported type or by its first bytes.
 	imageTypes?: Record<string, string>;
+	// The attachment an attachment delete bound, and what the reference guard
+	// read to clear it; both are reported in the preview.
+	attachment?: BoundAttachment;
+	referenceCheck?: ReferenceCheck;
 	// Provider identifiers and stable revisions observed before the write. This
 	// is persisted with the preview and compared by read-back, not inferred from
 	// text that may have existed before the preview.
@@ -259,6 +269,12 @@ function jiraArguments(operation: WriteOperation, input: WriteInput, ctx: Prepar
 			assign(args, "issue_key", input.issueKey);
 			args.fields = "{}";
 			assign(args, "attachments", ctx.stagedFile ?? input.file);
+			break;
+		case "issue.attachment.delete":
+			// The REST Provider proves the attachment is on this issue and the
+			// principal's own before the DELETE leaves its process.
+			assign(args, "issue_key", input.issueKey);
+			assign(args, "attachment_id", input.attachmentId);
 			break;
 		case "issue.transition":
 			assign(args, "issue_key", input.issueKey);
@@ -334,6 +350,7 @@ const EFFECT_KIND: Record<WriteOperation, Effect["kind"]> = {
 	"issue.comment.media": "jira-comment",
 	"issue.comment.media.update": "jira-comment",
 	"issue.attach": "jira-attachment",
+	"issue.attachment.delete": "jira-attachment",
 	"issue.transition": "jira-issue",
 	"issue.assign": "jira-issue",
 	"page.create": "confluence-content",
@@ -649,7 +666,7 @@ function effectFromRecord(operation: WriteOperation, input: WriteInput, kind: Ef
 // Provider's explicit success message.
 // The object an update or delete names in its own input.
 function targetOf(operation: WriteOperation, input: WriteInput): string {
-	if (operation === "page.attachment.delete") return input.attachmentId as string;
+	if (operation === "page.attachment.delete" || operation === "issue.attachment.delete") return input.attachmentId as string;
 	return (operation.startsWith("issue.") ? input.issueKey : input.pageId) as string;
 }
 
@@ -664,6 +681,9 @@ export function effectsFromReply(operation: WriteOperation, input: WriteInput, r
 	const kind = EFFECT_KIND[operation];
 	if (!replyNamesRequestedObject(operation, input, reply)) return [];
 	const data = unwrapReply(reply);
+	// The attachment delete answers 204 with no body; whatever a reply says,
+	// only the issue's attachment list proves it.
+	if (operation === "issue.attachment.delete") return [];
 	if (operation.endsWith(".delete")) return deleteEffect(operation, input, kind, data);
 	if (TARGET_OPERATIONS.has(operation)) return [{ kind, id: targetOf(operation, input) }];
 	for (const record of records(data)) {
@@ -801,6 +821,9 @@ export function readBackPlan(operation: WriteOperation, input: WriteInput): Read
 			return { tool: "jira_rest_comment_get", args: { issue_key: input.issueKey, comment_id: input.commentId } };
 		case "issue.attach":
 			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "attachment,updated" } };
+		case "issue.attachment.delete":
+			// Read back through the same owned route the delete went through.
+			return { tool: "jira_rest_issue_attachments", args: { issue_key: input.issueKey } };
 		case "issue.transition":
 			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "status,updated" } };
 		case "issue.assign":
@@ -1107,6 +1130,31 @@ function issueAttachEvidence(input: WriteInput, revisionMatches: RevisionMatch, 
 	return { kind: "absent", revisionUnchanged: issue.revision !== null && revisionMatches(issue.revision) };
 }
 
+// The REST issue reply must carry the attachment field as a list for an
+// attachment delete to be judged at all; an issue read that omits it proves
+// neither presence nor absence.
+function restAttachmentList(reply: unknown): unknown[] | undefined {
+	const data = unwrapReply(reply);
+	const fields = isRecord(data) && isRecord(data.fields) ? data.fields : undefined;
+	return fields !== undefined && Array.isArray(fields.attachment) ? fields.attachment : undefined;
+}
+
+// Removal is proven only by the issue's own attachment list no longer
+// carrying the id; a list that still carries it proves the delete did not
+// land, whatever the reply said.
+// A list that still carries the id proves no effect only while the issue's
+// own `updated` is the one the preview bound; a moved issue leaves a
+// possibly-sent delete unknown for adjudication.
+function issueAttachmentDeleteEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown): ReadBack {
+	const issue = observeIssue(reply);
+	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply names no issue key" };
+	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
+	if (restAttachmentList(reply) === undefined) return { kind: "indeterminate", reason: "the read-back reply carries no attachment list" };
+	const present = issue.attachments.some((entry) => entry.id === input.attachmentId);
+	if (!present) return { kind: "found", effects: [{ kind: "jira-attachment", id: input.attachmentId as string }] };
+	return { kind: "absent", revisionUnchanged: issue.revision !== null && revisionMatches(issue.revision) };
+}
+
 // The Community update tool reports a failed upload inside an otherwise
 // successful reply; the issue is then untouched.
 export function uploadFailed(reply: unknown): boolean {
@@ -1238,6 +1286,8 @@ export function readBackEvidence(operation: WriteOperation, input: WriteInput, r
 			return mediaCommentUpdateEvidence(input, revisionMatches, reply, baseline);
 		case "issue.attach":
 			return issueAttachEvidence(input, revisionMatches, reply, baseline);
+		case "issue.attachment.delete":
+			return issueAttachmentDeleteEvidence(input, revisionMatches, reply);
 		case "issue.transition":
 			return issueStateEvidence(input, revisionMatches, reply, baseline, statusHolds(input));
 		case "issue.assign":
@@ -1364,6 +1414,16 @@ function pageAttachmentDeleteBaseline(input: WriteInput, reply: unknown): Baseli
 	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [input.attachmentId as string] } };
 }
 
+// The attachment must still be listed at the baseline read; the preparation
+// already bound its facts as the baseline revision, which this read keeps.
+function issueAttachmentDeleteBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+	const issue = issueFor(input, reply);
+	if (isIndeterminate(issue)) return issue;
+	if (restAttachmentList(reply) === undefined) return { kind: "indeterminate", reason: "the Jira reply carries no attachment list" };
+	if (!issue.attachments.some((entry) => entry.id === input.attachmentId)) return { kind: "refused", reason: "the issue has no attachment with that id" };
+	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [input.attachmentId as string] } };
+}
+
 function issueDeleteBaseline(input: WriteInput, reply: unknown): BaselineObservation {
 	const issue = issueFor(input, reply);
 	if (isIndeterminate(issue)) return issue;
@@ -1399,6 +1459,8 @@ export function baselineFromReply(operation: WriteOperation, input: WriteInput, 
 			return mediaCommentUpdateBaseline(input, reply);
 		case "issue.attach":
 			return baselineWithEffectIds(issueAttachEvidence(input, () => false, reply, EMPTY_BASELINE));
+		case "issue.attachment.delete":
+			return issueAttachmentDeleteBaseline(input, reply);
 		case "issue.transition":
 			return issueStateBaseline(input, reply, statusHolds(input), "status", "status");
 		case "issue.assign":
@@ -1427,4 +1489,163 @@ export function baselineFromReply(operation: WriteOperation, input: WriteInput, 
 		case "page.attachment.delete":
 			return pageAttachmentDeleteBaseline(input, reply);
 	}
+}
+
+// The attachment-delete exception binds what the preview saw of the one
+// attachment it will remove: every fact below is read from the issue's own
+// attachment list and digested into the baseline revision, so an apply whose
+// read shows any of them moved is refused by the journal before any send.
+export interface BoundAttachment {
+	id: string;
+	filename: string;
+	size: number;
+	authorAccountId: string;
+	created: string;
+}
+
+export type AttachmentBinding = { ok: true; attachment: BoundAttachment } | { ok: false; cause: "not-found" | "capability-unavailable"; reason: string };
+
+// The one attachment with the given id from a REST issue reply, with every
+// bound fact present; a record missing a fact cannot be bound, so it refuses.
+export function bindAttachment(reply: unknown, attachmentId: string): AttachmentBinding {
+	const list = restAttachmentList(reply);
+	if (list === undefined) return { ok: false, cause: "capability-unavailable", reason: "the Jira reply carries no attachment list" };
+	const record = list.find((entry): entry is Record<string, unknown> => isRecord(entry) && stringAt(entry, "id") === attachmentId);
+	if (record === undefined) return { ok: false, cause: "not-found", reason: "the issue has no attachment with that id" };
+	const filename = stringAt(record, "filename");
+	const created = stringAt(record, "created");
+	const size = typeof record.size === "number" && Number.isInteger(record.size) && record.size >= 0 ? record.size : undefined;
+	const authorAccountId = isRecord(record.author) ? stringAt(record.author, "accountId") : undefined;
+	if (filename === undefined || created === undefined || size === undefined || authorAccountId === undefined) {
+		return { ok: false, cause: "capability-unavailable", reason: "the attachment record exposes no filename, size, author account id, or created time to bind" };
+	}
+	return { ok: true, attachment: { id: attachmentId, filename, size, authorAccountId, created } };
+}
+
+export const attachmentDigest = (attachment: BoundAttachment): string => digest(JSON.stringify([attachment.id, attachment.filename, attachment.size, attachment.authorAccountId, attachment.created]));
+
+export const ATTACHMENT_AUTHOR_GUARD_REASON = "attachmentId names an attachment another account uploaded; the attachment delete removes only the principal's own uploads";
+
+// One text the reference guard inspects: where it came from, every string
+// the stored body holds (wiki markup, or each string leaf of an ADF document,
+// including node attributes), the rendered HTML when Jira supplied it, and
+// the attribute values of every ADF media node, which name an attachment by
+// id, alt, url, or collection rather than in any text node.
+export interface ReferenceSource {
+	source: string;
+	text: string;
+	rendered: string;
+	mediaAttributes: string[];
+}
+
+// The ADF nodes whose attributes identify a file: media and mediaInline carry
+// id, type, collection, alt, and url; their mediaSingle and mediaGroup
+// wrappers carry layout only and are walked for their children.
+const MEDIA_NODE_TYPES: ReadonlySet<string> = new Set(["media", "mediaInline"]);
+
+// Every string leaf of a stored body, whatever its shape, plus the attribute
+// values of its ADF media nodes. Unlike bodyText, which flattens prose for
+// comment matching, this walk descends into every key so that link marks and
+// media attributes are seen; missing a reference would clear a delete.
+function referenceContent(value: unknown, into: { text: string[]; mediaAttributes: string[] }, depth = 0): void {
+	if (depth > 12) return;
+	if (typeof value === "string") {
+		into.text.push(value);
+		return;
+	}
+	if (Array.isArray(value)) {
+		for (const entry of value) referenceContent(entry, into, depth + 1);
+		return;
+	}
+	if (!isRecord(value)) return;
+	if (typeof value.type === "string" && MEDIA_NODE_TYPES.has(value.type) && isRecord(value.attrs)) {
+		for (const attribute of Object.values(value.attrs)) if (typeof attribute === "string") into.mediaAttributes.push(attribute);
+	}
+	for (const entry of Object.values(value)) referenceContent(entry, into, depth + 1);
+}
+
+function referenceSource(source: string, body: unknown, rendered: unknown): ReferenceSource {
+	const into = { text: [] as string[], mediaAttributes: [] as string[] };
+	referenceContent(body, into);
+	return { source, text: into.text.join(" "), rendered: typeof rendered === "string" ? rendered : "", mediaAttributes: into.mediaAttributes };
+}
+
+// A body was read when it is a string (wiki text or plain text) or a record
+// (an ADF document or a Confluence body object). Null, a number, or an
+// absent body was not read.
+const bodyRead = (body: unknown): boolean => typeof body === "string" || isRecord(body);
+
+// What the guard inspected and where it found the attachment, reported in
+// the preview so the operator can see the check was complete.
+export interface ReferenceCheck {
+	description: boolean;
+	commentsRead: number;
+	commentsTotal: number;
+	references: string[];
+}
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// A reference by id is any Jira attachment route naming the id as its own
+// segment (REST content or thumbnail, the /secure attachment or thumbnail
+// pages, or an attachmentId query parameter), in stored text or rendered
+// HTML. A reference by name is the file name as a whole word, so a wiki
+// macro (!name!, [^name]), a rendered alt or link text, and plain prose that
+// names the file all count; a longer name that merely contains this one
+// (new-name.png, name.png.bak) does not, while a full stop after the name is
+// prose. Prose that happens to contain the bare number is not an id reference.
+function referencePatterns(attachment: { id: string; filename: string }): RegExp[] {
+	const id = escapeRegExp(attachment.id);
+	const name = escapeRegExp(attachment.filename);
+	return [new RegExp(`(?:/attachment/(?:content/|thumbnail/)?|/secure/(?:attachment|thumbnail)/|attachmentId=)${id}(?![0-9])`, "i"), new RegExp(`(?:^|[^A-Za-z0-9_.-])${name}(?![A-Za-z0-9_]|\\.[A-Za-z0-9])`, "iu")];
+}
+
+// The sources that still reference the attachment, in the order given. An
+// ADF media attribute equal to the attachment id is a reference on its own.
+export function attachmentReferences(attachment: { id: string; filename: string }, sources: readonly ReferenceSource[]): string[] {
+	const patterns = referencePatterns(attachment);
+	return sources.filter((entry) => entry.mediaAttributes.includes(attachment.id) || patterns.some((pattern) => pattern.test(entry.text) || pattern.test(entry.rendered))).map((entry) => entry.source);
+}
+
+export type DescriptionSource = { ok: true; source: ReferenceSource } | { ok: false; reason: string };
+
+const UNREAD = "the reference guard cannot clear the attachment";
+
+// The issue description as the context read exposes it: the stored text or
+// ADF and the rendered HTML (expand=renderedFields). The description field
+// must be present in the reply, so an unread description never counts as
+// checked; an explicitly empty or null description was read.
+export function descriptionSource(reply: unknown): DescriptionSource {
+	const data = unwrapReply(reply);
+	const top = isRecord(data) ? data : {};
+	const fields = isRecord(top.fields) ? top.fields : undefined;
+	if (fields === undefined || !Object.hasOwn(fields, "description")) return { ok: false, reason: `the issue read exposes no description field; ${UNREAD}` };
+	const description = fields.description;
+	if (description !== null && !bodyRead(description)) return { ok: false, reason: `the issue description could not be read; ${UNREAD}` };
+	const rendered = isRecord(top.renderedFields) ? top.renderedFields.description : undefined;
+	return { ok: true, source: referenceSource("description", description ?? "", rendered) };
+}
+
+export type CommentSources = { ok: true; sources: ReferenceSource[]; total: number } | { ok: false; reason: string };
+
+// Every comment in a REST comment list, as a reference source. The list must
+// be complete: a total beyond the comments returned means the guard could not
+// see every comment, so it refuses rather than clear the attachment. Each
+// comment must carry a body that was read (a string or an ADF document) or a
+// rendered body; a comment with neither was not read and refuses too.
+export function commentSources(reply: unknown): CommentSources {
+	const data = unwrapReply(reply);
+	const top = isRecord(data) ? data : {};
+	if (!Array.isArray(top.comments) || typeof top.total !== "number" || !Number.isInteger(top.total)) return { ok: false, reason: "the comment list exposes no comments and total" };
+	const sources: ReferenceSource[] = [];
+	for (const entry of top.comments) {
+		if (!isRecord(entry)) return { ok: false, reason: "the comment list carries a malformed comment" };
+		const id = stringAt(entry, "id");
+		if (id === undefined) return { ok: false, reason: "a listed comment carries no id" };
+		const renderedRead = typeof entry.renderedBody === "string";
+		if (!bodyRead(entry.body) && !renderedRead) return { ok: false, reason: `comment ${id} carries no body; ${UNREAD}` };
+		sources.push(referenceSource(`comment ${id}`, bodyRead(entry.body) ? entry.body : "", entry.renderedBody));
+	}
+	if (top.total > sources.length) return { ok: false, reason: `the issue has ${top.total} comments and the reference guard read ${sources.length}; it cannot clear the attachment` };
+	return { ok: true, sources, total: top.total };
 }
