@@ -14,7 +14,9 @@ lodgment, payroll, and payments are separate workflows.
 Use the native Harness browser selected by Nathan. In Codex, use the existing
 in-app Xero tab when requested; inspect its actual login state. Nathan completes
 sign-in challenges. Keep using that tab and confirm the organisation and bank
-account from the live page. Carry forward the selected quarter or date range.
+account from the live page. Record `organisation.id` verbatim from the Xero
+web-app organisation route shown in its URL; do not infer a GUID. Carry forward
+the selected quarter or date range.
 
 Open Cash coding through the account's visible navigation. Read its pending rows
 and available filters. If it reports no statement lines to reconcile, report that

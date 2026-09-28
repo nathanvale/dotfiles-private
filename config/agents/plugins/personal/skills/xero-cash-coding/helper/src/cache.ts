@@ -2,15 +2,15 @@ import { createHash, randomUUID } from "node:crypto";
 import { closeSync, existsSync, fchmodSync, fstatSync, fsyncSync, lstatSync, mkdirSync, openSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { lstat, readFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, parse, resolve, sep } from "node:path";
-import { CacheDocument, Observation, PreviewDocument } from "./command-contract.ts";
+import { BANK_ACCOUNT_ID_PATTERN, CacheDocument, Observation, ORGANISATION_ROUTE_CODE_PATTERN, PreviewDocument } from "./command-contract.ts";
 import type { CacheDocument as Cache, Observation as Observed, PreviewDocument as Preview } from "./command-contract.ts";
 
 export class CacheProblem extends Error {
   constructor(readonly kind: "malformed" | "unsafe" | "locked" | "busy" | "pending" | "stale" | "missing" | "invalid", message: string, readonly effectId?: string) { super(message); }
 }
 function digest(value: string): string { return createHash("sha256").update(value).digest("hex"); }
-function key(value: string): string {
-  if (!/^[A-Za-z0-9-]+$/.test(value)) throw new CacheProblem("invalid", "Verified IDs must contain only letters, digits, and hyphens.");
+function key(value: string, pattern: RegExp, label: string): string {
+  if (!pattern.test(value)) throw new CacheProblem("invalid", `Invalid ${label}.`);
   // A case-insensitive filesystem must still keep case-distinct Xero IDs apart.
   return `id-${Buffer.from(value, "utf8").toString("hex")}`;
 }
@@ -21,7 +21,7 @@ function stateRoot(env: NodeJS.ProcessEnv = process.env): string {
   return join(base, "xero-cash-coding");
 }
 export function accountPath(organisationId: string, accountId: string): string {
-  return join(stateRoot(), key(organisationId), key(accountId), "history.json");
+  return join(stateRoot(), key(organisationId, ORGANISATION_ROUTE_CODE_PATTERN, "organisation route code"), key(accountId, BANK_ACCOUNT_ID_PATTERN, "bank account ID"), "history.json");
 }
 function pathParts(path: string): string[] {
   const absolute = resolve(path);

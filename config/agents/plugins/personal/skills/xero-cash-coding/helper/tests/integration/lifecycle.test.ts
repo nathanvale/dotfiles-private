@@ -9,7 +9,7 @@ async function withRoot(run: (root: string) => Promise<void>) {
   try { await run(root); } finally { await rm(root, { force: true, recursive: true }); }
 }
 function spawnStatus(root: string, extraEnv: Record<string, string> = {}, stdin: "ignore" | "pipe" = "ignore") {
-  return Bun.spawn([process.execPath, "run", "src/cli.ts", "status", "--organisation-id", "synthetic-org", "--account-id", "synthetic-account", "--json"], {
+  return Bun.spawn([process.execPath, "run", "src/cli.ts", "status", "--organisation-id", "!Ab12c", "--account-id", "synthetic-account", "--json"], {
     cwd: PACKAGE, env: { ...process.env, HOME: root, XDG_STATE_HOME: root, NODE_ENV: "test", ...extraEnv },
     stdin, stdout: "pipe", stderr: "pipe",
   });

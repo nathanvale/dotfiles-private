@@ -18,10 +18,10 @@ function call(root: string, ...args: string[]) {
   });
   return { exitCode: child.exitCode, stdout: child.stdout.toString(), stderr: child.stderr.toString(), envelope: JSON.parse(child.stdout.toString()) };
 }
-const ids = ["--organisation-id", "org-123", "--account-id", "account-456"];
+const ids = ["--organisation-id", "!Ab12c", "--account-id", "account-456"];
 function observation(id: string, amountMinor = -1250) {
   return {
-    organisation: { id: "org-123", name: "Synthetic Organisation" },
+    organisation: { id: "!Ab12c", name: "Synthetic Organisation" },
     bankAccount: { id: "account-456", name: "Synthetic Account" },
     coverage: [{ from: "2026-04-01", to: "2026-04-30", query: "Synthetic", observedAt: "2026-09-28T00:00:00.000Z", complete: true }],
     transactions: [{
@@ -46,7 +46,39 @@ async function preview(root: string, data: unknown) {
 }
 function apply(root: string, previewId: string) { return call(root, "apply", ...ids, "--preview-id", previewId, "--approve"); }
 function key(id: string) { return `id-${Buffer.from(id, "utf8").toString("hex")}`; }
-function cachePath(root: string, account = "account-456") { return join(root, "xero-cash-coding", key("org-123"), key(account), "history.json"); }
+function cachePath(root: string, account = "account-456", organisation = "!Ab12c") { return join(root, "xero-cash-coding", key(organisation), key(account), "history.json"); }
+
+test("route-code organisation persists verbatim in case-distinct partitions and rejects unsafe IDs", async () => {
+  const root = await fixture();
+  const upper = observation("upper-transaction");
+  const upperId = await preview(root, upper);
+  expect(apply(root, upperId).exitCode).toBe(0);
+  const lower = { ...observation("lower-transaction"), organisation: { id: "!ab12c", name: "Synthetic Organisation" } };
+  const lowerId = await preview(root, lower);
+  const lowerApply = call(root, "apply", "--organisation-id", "!ab12c", "--account-id", "account-456", "--preview-id", lowerId, "--approve");
+  expect(lowerApply.exitCode).toBe(0);
+  expect(cachePath(root)).not.toBe(cachePath(root, "account-456", "!ab12c"));
+  const upperCache = JSON.parse(await readFile(cachePath(root), "utf8"));
+  const lowerCache = JSON.parse(await readFile(cachePath(root, "account-456", "!ab12c"), "utf8"));
+  expect(upperCache.organisation.id).toBe("!Ab12c");
+  expect(lowerCache.organisation.id).toBe("!ab12c");
+  expect(Object.keys(upperCache.transactions)).toEqual(["upper-transaction"]);
+  expect(Object.keys(lowerCache.transactions)).toEqual(["lower-transaction"]);
+  expect(call(root, "status", ...ids).envelope.result.data).toMatchObject({ available: true, count: 1 });
+  expect(call(root, "status", "--organisation-id", "!ab12c", "--account-id", "account-456").envelope.result.data).toMatchObject({ available: true, count: 1 });
+  for (const invalid of ["!Ab/12c", "!Ab 12c", "!Ab..12c"]) {
+    const input = join(root, `invalid-${crypto.randomUUID()}.json`);
+    await writeFile(input, JSON.stringify({ ...observation("rejected"), organisation: { id: invalid, name: "Synthetic Organisation" } }));
+    const refusedPreview = call(root, "preview", "--input", input);
+    expect(refusedPreview.exitCode).toBe(4);
+    expect(refusedPreview.stderr).toBe("");
+    expect(refusedPreview.envelope.result.causeCode).toBe("SCHEMA_INVALID_INPUT");
+    const refusedStatus = call(root, "status", "--organisation-id", invalid, "--account-id", "account-456");
+    expect(refusedStatus.exitCode).toBe(4);
+    expect(refusedStatus.stderr).toBe("");
+    expect(refusedStatus.envelope.result.causeCode).toBe("SCHEMA_INVALID_INPUT");
+  }
+});
 
 test("split observation persists and reloads equal with owner-only custody", async () => {
   const root = await fixture();
@@ -65,8 +97,8 @@ test("split observation persists and reloads equal with owner-only custody", asy
   expect(file.transactions["transaction-1"].lines).toHaveLength(2);
   expect(file.transactions["transaction-1"].lines.map((line: { amountBasis: string }) => line.amountBasis)).toEqual(["tax-inclusive", "no-tax"]);
   expect((await lstat(join(root, "xero-cash-coding"))).mode & 0o777).toBe(0o700);
-  expect((await lstat(join(root, "xero-cash-coding", key("org-123")))).mode & 0o777).toBe(0o700);
-  expect((await lstat(join(root, "xero-cash-coding", key("org-123"), key("account-456")))).mode & 0o777).toBe(0o700);
+  expect((await lstat(join(root, "xero-cash-coding", key("!Ab12c")))).mode & 0o777).toBe(0o700);
+  expect((await lstat(join(root, "xero-cash-coding", key("!Ab12c"), key("account-456")))).mode & 0o777).toBe(0o700);
   expect((await lstat(cachePath(root))).mode & 0o777).toBe(0o600);
   expect((await lstat(`${cachePath(root)}.journal.jsonl`)).mode & 0o777).toBe(0o600);
   const status = call(root, "status", ...ids);
@@ -88,7 +120,7 @@ test("symlinked cache ancestry is refused without reading its target", async () 
   expect(status.exitCode).toBe(3);
   expect(lookup.exitCode).toBe(3);
   expect(status.envelope.result.causeCode).toBe("DOMAIN_PRECONDITION_UNMET");
-  expect(await Bun.file(join(foreign, key("org-123"), key("account-456"), "history.json")).exists()).toBe(false);
+  expect(await Bun.file(join(foreign, key("!Ab12c"), key("account-456"), "history.json")).exists()).toBe(false);
 });
 
 test("refresh replaces one ID while preserving unrelated records in both partitions", async () => {
@@ -97,7 +129,7 @@ test("refresh replaces one ID while preserving unrelated records in both partiti
   apply(root, await preview(root, observation("transaction-2")));
   const other = { ...observation("other-account"), bankAccount: { id: "ACCOUNT-456", name: "Other Synthetic Account" } };
   const otherId = await preview(root, other);
-  const otherApply = call(root, "apply", "--organisation-id", "org-123", "--account-id", "ACCOUNT-456", "--preview-id", otherId, "--approve");
+  const otherApply = call(root, "apply", "--organisation-id", "!Ab12c", "--account-id", "ACCOUNT-456", "--preview-id", otherId, "--approve");
   expect(otherApply.exitCode).toBe(0);
   apply(root, await preview(root, observation("transaction-1", -1300)));
   const first = JSON.parse(await readFile(cachePath(root), "utf8"));
@@ -180,8 +212,8 @@ test("malformed cache is a named cache miss and remains byte-for-byte untouched"
   const root = await fixture();
   const path = cachePath(root);
   await mkdir(join(root, "xero-cash-coding"), { mode: 0o700 });
-  await mkdir(join(root, "xero-cash-coding", key("org-123")), { mode: 0o700 });
-  await mkdir(join(root, "xero-cash-coding", key("org-123"), key("account-456")), { mode: 0o700 });
+  await mkdir(join(root, "xero-cash-coding", key("!Ab12c")), { mode: 0o700 });
+  await mkdir(join(root, "xero-cash-coding", key("!Ab12c"), key("account-456")), { mode: 0o700 });
   await writeFile(path, "{broken", { mode: 0o600 });
   const status = call(root, "status", ...ids);
   expect(status.exitCode).toBe(0);

@@ -3,7 +3,7 @@ import { CacheDocument, Observation } from "../../src/command-contract.ts";
 
 test("line amount basis remains observed and required", () => {
   const input = {
-    organisation: { id: "org-1", name: "Synthetic" },
+    organisation: { id: "!Ab12c", name: "Synthetic" },
     bankAccount: { id: "bank-1", name: "Synthetic" },
     coverage: [],
     transactions: [{ id: "t-1", date: "2026-04-01", direction: "out", currency: "AUD", amountMinor: -100,

@@ -2,10 +2,13 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { OperationResult } from "./model.ts";
 
+export const ORGANISATION_ROUTE_CODE_PATTERN = /^![A-Za-z0-9]+$/;
+export const BANK_ACCOUNT_ID_PATTERN = /^[A-Za-z0-9-]+$/;
 const identity = z.strictObject({
-  id: z.string().regex(/^[A-Za-z0-9-]+$/),
+  id: z.string().regex(BANK_ACCOUNT_ID_PATTERN),
   name: z.string().min(1).max(256),
 });
+const organisationIdentity = identity.extend({ id: z.string().regex(ORGANISATION_ROUTE_CODE_PATTERN) });
 const nullable = z.string().max(2000).nullable();
 const line = z.strictObject({
   accountCode: nullable,
@@ -36,7 +39,7 @@ const coverage = z.strictObject({
   complete: z.boolean(),
 });
 export const Observation = z.strictObject({
-  organisation: identity,
+  organisation: organisationIdentity,
   bankAccount: identity,
   coverage: z.array(coverage),
   transactions: z.array(transaction),

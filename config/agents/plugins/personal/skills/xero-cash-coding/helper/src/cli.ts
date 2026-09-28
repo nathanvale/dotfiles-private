@@ -20,7 +20,7 @@ Commands:
   recover  Inspect an interrupted apply without replay.
 
 Options:
-  --organisation-id ID   Verified Xero organisation ID.
+  --organisation-id ID   Xero web-app organisation route code, including '!'.
   --account-id ID        Verified Xero bank account ID.
   --query TEXT           Payee or description search for lookup.
   --direction in|out     Pending bank movement direction for ranking.

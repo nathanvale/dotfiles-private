@@ -7,8 +7,10 @@ cached examples suggest coding and never authorize a write.
 
 Resolve an absolute `XDG_STATE_HOME`, falling back to `$HOME/.local/state` when
 unset or relative. Use `xero-cash-coding/<organisation-key>/<account-key>/history.json`
-beneath it. Derive directory keys from verified stable Xero identifiers using only
-letters, digits, and hyphens; store the observed display names inside the file.
+beneath it. Record `organisation.id` verbatim from Xero's web-app organisation
+route (for example the synthetic `!Ab12c` in `/app/!Ab12c/...`); it is a route
+code, not a GUID or an inferred identifier. Use the verified bank account ID for
+the other partition; store observed display names inside the file.
 The helper encodes each exact verified ID as `id-<lowercase UTF-8 hex>` so IDs
 that differ by case have distinct keys on case-insensitive filesystems. Beside
 `history.json`, it keeps `history.json.preview.json`,
@@ -35,7 +37,7 @@ account numbers. Keep only the history needed for coding and source references.
 Store these top-level fields:
 
 - `schemaVersion`: `1`.
-- `organisation`: verified `id` and `name`.
+- `organisation`: verbatim Xero web-app organisation route code and observed `name`.
 - `bankAccount`: verified `id` and `name`.
 - `updatedAt`: ISO timestamp of the cache update.
 - `coverage`: an array of observed date intervals or search scopes, each with
