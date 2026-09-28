@@ -33,6 +33,9 @@ config/google-chrome-devtools
 
 node_modules/
 dist/
+!config/agents/plugins/personal/skills/xero-cash-coding/helper/dist/
+config/agents/plugins/personal/skills/xero-cash-coding/helper/dist/*
+!config/agents/plugins/personal/skills/xero-cash-coding/helper/dist/xero-history.js
 
 # Karabiner automatic backups (generated)
 config/karabiner/automatic_backups/

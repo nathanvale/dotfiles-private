@@ -28,10 +28,11 @@ prove all bank activity has been imported or the BAS has been lodged.
 
 Read [the cache contract](references/history-cache.md) before using local history.
 From `config/agents/plugins/personal/skills/xero-cash-coding/helper/`, run
-`bun run --silent xero-history <command> [options]`. Single-quote the route code
-in shell commands, for example `--organisation-id '!Ab12c'`, to keep `!`
-literal. Use `status` and `lookup` for
-cached examples, and `recover` to inspect an interrupted update. Feed only
+`bun --no-install dist/xero-history.js <command> [options]`. In the repository,
+`bun run --silent xero-history <command> [options]` uses the same committed
+bundle. Single-quote the route code in shell commands, for example
+`--organisation-id '!Ab12c'`, to keep `!` literal. Use `status` and `lookup`
+for cached examples, and `recover` to inspect an interrupted update. Feed only
 verified browser observations to `preview`, review its added and replaced
 transaction IDs, then use `apply --approve` for that exact preview. Use cached
 examples to identify likely matches, then inspect Account transactions

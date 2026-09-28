@@ -10,6 +10,7 @@
     "config/agents/skills/personal/last30days/scripts/lib/vendor/**",
     "config/agents/plugins/my-second-brain-playground/packages/cli-design-check/fixtures/**",
     "config/agents/plugins/my-second-brain-playground/runtime/**",
+    "config/agents/plugins/personal/skills/xero-cash-coding/helper/dist/**",
     "config/agents/skills/third-party/**",
     ".agents/**",
     "config/agents/plugins/connectors/bin/connectors"
