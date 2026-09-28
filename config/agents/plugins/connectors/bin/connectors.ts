@@ -1547,7 +1547,7 @@ async function installSetupDependencies(root: string, completed: string[]): Prom
 	return true;
 }
 
-async function completeSetup(terminal: number | null): Promise<void> {
+async function completeSetup(terminal: number | null, keychain: string | null): Promise<void> {
 	const root = pluginRoot();
 	if (!readValidatedUvSources(path.join(root, "requirements.json"), path.join(root, "config", "mise.toml"), path.join(root, "config", "mise.lock"))) {
 		emitSetup("SCHEMA_SETUP_CONFIG_INVALID", [], "connectors: packaged setup configuration is invalid");
@@ -1558,7 +1558,7 @@ async function completeSetup(terminal: number | null): Promise<void> {
 	setupCompleted = completed;
 	if (!await installSetupDependencies(root, completed)) return;
 	if (setupInteractive) {
-		if (!storeServiceToken(terminal!, process.env.HOME!)) {
+		if (!storeServiceToken(terminal!, process.env.HOME!, keychain!)) {
 			emitSetup("INTERNAL_SETUP_UNKNOWN", completed, "connectors: Keychain write could not be confirmed");
 			return;
 		}
@@ -1585,7 +1585,7 @@ async function handleSetup(args: readonly string[]): Promise<void> {
 		return;
 	}
 	try {
-		await completeSetup(terminal);
+		await completeSetup(terminal, keychain);
 	} finally {
 		if (terminal !== null) closeSync(terminal);
 	}

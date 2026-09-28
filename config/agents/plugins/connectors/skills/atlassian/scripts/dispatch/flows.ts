@@ -360,7 +360,7 @@ export async function previewFlow(session: Session, spec: OperationSpec, input: 
 			objectIdentity: preview.objectIdentity,
 			revision: context.ctx.revision,
 			baseline: context.ctx.baseline,
-			imageTypes: context.ctx.imageTypes,
+			...(context.ctx.imageTypes === undefined ? {} : { imageTypes: context.ctx.imageTypes }),
 			expiresAt: preview.expiresAt,
 			input: context.input,
 			arguments: context.bound,

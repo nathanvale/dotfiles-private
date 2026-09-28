@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { realpathSync } from "node:fs";
 import path from "node:path";
-import { SERVICE_TOKEN_ACCOUNT, SERVICE_TOKEN_SERVICE } from "../one-password-custody.ts";
 
 const SECURITY_TOOL = "/usr/bin/security";
 
@@ -24,11 +23,11 @@ export function loginKeychain(home: string | undefined): string | null {
 	}
 }
 
-// macOS security reads the value directly from the user's terminal. This
-// process receives only an exit status; no credential enters its argv,
-// environment, buffers, or result.
-export function storeServiceToken(terminal: number, home: string): boolean {
-	const result = spawnSync(SECURITY_TOOL, ["add-generic-password", "-U", "-s", SERVICE_TOKEN_SERVICE, "-a", SERVICE_TOKEN_ACCOUNT, "-w"], {
+// The packaged native helper owns terminal input and the Security framework
+// write/readback. The front door receives only its exit status.
+export function storeServiceToken(terminal: number, home: string, keychain: string): boolean {
+	const helper = path.join(path.dirname(process.execPath), "connectors-keychain-setup");
+	const result = spawnSync(helper, [keychain], {
 		env: { HOME: home, PATH: "/usr/bin:/bin" },
 		stdio: [terminal, terminal, terminal],
 		timeout: 600_000,

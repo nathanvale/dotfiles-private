@@ -180,6 +180,7 @@ export function createBundle(): Bundle {
 	}
 	cpSync(FRONT_DOOR, binary);
 	chmodSync(binary, 0o755);
+	cpSync(path.join(PLUGIN_ROOT, "bin", "connectors-keychain-setup"), path.join(root, "bin", "connectors-keychain-setup"));
 	cpSync(path.join(PLUGIN_ROOT, "requirements.json"), path.join(root, "requirements.json"));
 	cpSync(path.join(PLUGIN_ROOT, "config"), path.join(root, "config"), { recursive: true });
 	const skillsRoot = path.join(root, "skills");

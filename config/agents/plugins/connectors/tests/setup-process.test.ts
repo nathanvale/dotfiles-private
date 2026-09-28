@@ -182,23 +182,22 @@ test.skipIf(fixtures === null)("attended setup keeps the Keychain write below th
   printf '    "%s"\\n' "$HOME/Library/Keychains/login.keychain-db"
   exit 0
 }
-[ "$#" -eq 7 ] || exit 11
-[ "$1" = "add-generic-password" ] || exit 11
-[ "$2" = "-U" ] || exit 11
-[ "$3" = "-s" ] || exit 11
-[ "$4" = "connectors.1password.service-account" ] || exit 11
-[ "$5" = "-a" ] || exit 11
-[ "$6" = "connectors" ] || exit 11
-[ "$7" = "-w" ] || exit 11
+exit 11
+`);
+		chmodSync(fakeSecurity, 0o755);
+		const fakeHelper = path.join(bundle.root, "bin", "connectors-keychain-setup");
+		writeFileSync(fakeHelper, `#!/bin/sh
+[ "$#" -eq 1 ] || exit 11
+[ "$1" = "$HOME/Library/Keychains/login.keychain-db" ] || exit 11
 [ "$PATH" = "/usr/bin:/bin" ] || exit 11
 [ -z "\${OP_SERVICE_ACCOUNT_TOKEN+x}" ] || exit 11
 [ -t 0 ] && [ -t 1 ] && [ -t 2 ] || exit 11
-printf 'fixture security prompt\\n'
+printf 'fixture native helper prompt\\n'
 printf 'called\\n' >> "$HOME/security-invocations"
 [ ! -f "$HOME/security-fail" ] || exit 9
 exit 0
 `);
-		chmodSync(fakeSecurity, 0o755);
+		chmodSync(fakeHelper, 0o755);
 		buildFaultedFrontDoor(bundle.root, bundle.binary, { file: "bin/setup/keychain.ts", find: 'const SECURITY_TOOL = "/usr/bin/security"', replace: `const SECURITY_TOOL = ${JSON.stringify(fakeSecurity)}` });
 		const invoke = () => runInteractiveBundle(bundle, ["setup", "--interactive"], { home, timeoutMs: 180_000, extraEnv: {
 			XDG_STATE_HOME: path.join(realpathSync(bundle.root), "state"),
@@ -223,7 +222,7 @@ exit 0
 		expect(successful.result.data).toEqual({ installed: ["op", "mise", "uv"], keychainServiceToken: "stored" });
 		expect(successful.result.effects).toEqual({ completed: ["op", "mise", "uv", "keychain-service-token"], remaining: [], uncertain: [], inventoryComplete: true });
 		expect(success.stderr).toBe("");
-		expect(success.terminal).toContain("fixture security prompt");
+		expect(success.terminal).toContain("fixture native helper prompt");
 		expect(success.terminal).not.toContain("\"envelopeVersion\"");
 		expect(success.stdout + success.stderr + success.terminal).not.toContain("SENTINEL_PRIVATE_VALUE");
 		expect(readFileSync(path.join(home, "security-invocations"), "utf8")).toBe("called\n");
@@ -237,7 +236,7 @@ exit 0
 		expect(uncertain.result.nextAction).toBe("connectors.setup.interactive");
 		expect(uncertain.result.effects).toEqual({ completed: ["op", "mise", "uv"], remaining: [], uncertain: ["keychain-service-token"], inventoryComplete: true });
 		expect(failure.stderr).toBe("");
-		expect(failure.terminal).toContain("fixture security prompt");
+		expect(failure.terminal).toContain("fixture native helper prompt");
 		expect(failure.terminal).not.toContain("\"envelopeVersion\"");
 		expect(failure.stdout + failure.stderr + failure.terminal).not.toContain("SENTINEL_PRIVATE_VALUE");
 		expect(readFileSync(path.join(home, "security-invocations"), "utf8")).toBe("called\ncalled\n");

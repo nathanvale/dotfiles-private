@@ -8,10 +8,10 @@ const BUILD_ENTRY = "./bin/connectors.ts";
 const BUILD_OUTFILE = "bin/connectors";
 
 function buildArgv(entry: string, outfile: string): string[] {
-	const manifest = JSON.parse(readFileSync(path.join(import.meta.dir, "..", "package.json"), "utf8")) as { scripts: { build: string } };
-	const [runner, ...args] = manifest.scripts.build.split(" ");
+	const manifest = JSON.parse(readFileSync(path.join(import.meta.dir, "..", "package.json"), "utf8")) as { scripts: { "build:cli": string } };
+	const [runner, ...args] = manifest.scripts["build:cli"].split(" ");
 	const outfileAt = args.indexOf("--outfile") + 1;
-	if (runner !== "bun" || args[0] !== "build" || args[1] !== BUILD_ENTRY || outfileAt === 0 || args[outfileAt] !== BUILD_OUTFILE) throw new Error("package.json scripts.build no longer has the shape the test compile reuses");
+	if (runner !== "bun" || args[0] !== "build" || args[1] !== BUILD_ENTRY || outfileAt === 0 || args[outfileAt] !== BUILD_OUTFILE) throw new Error("package.json scripts.build:cli no longer has the shape the test compile reuses");
 	return [process.execPath, ...args.map((arg, index) => (index === 1 ? entry : index === outfileAt ? outfile : arg))];
 }
 
