@@ -66,7 +66,10 @@ test("route-code organisation persists verbatim in case-distinct partitions and 
   expect(Object.keys(lowerCache.transactions)).toEqual(["lower-transaction"]);
   expect(call(root, "status", ...ids).envelope.result.data).toMatchObject({ available: true, count: 1 });
   expect(call(root, "status", "--organisation-id", "!ab12c", "--account-id", "account-456").envelope.result.data).toMatchObject({ available: true, count: 1 });
-  for (const invalid of ["!Ab/12c", "!Ab 12c", "!Ab..12c"]) {
+  for (const invalid of [
+    "!Ab/12c", "!Ab 12c", "!Ab..12c", "Ab12c", "!Ab%2F", "!Ab?x", "!Ab#x", "!Ab&x",
+    `!${"A".repeat(126)}`,
+  ]) {
     const input = join(root, `invalid-${crypto.randomUUID()}.json`);
     await writeFile(input, JSON.stringify({ ...observation("rejected"), organisation: { id: invalid, name: "Synthetic Organisation" } }));
     const refusedPreview = call(root, "preview", "--input", input);
@@ -78,6 +81,18 @@ test("route-code organisation persists verbatim in case-distinct partitions and 
     expect(refusedStatus.stderr).toBe("");
     expect(refusedStatus.envelope.result.causeCode).toBe("SCHEMA_INVALID_INPUT");
   }
+  const overlongAccount = "a".repeat(127);
+  const accountInput = join(root, "invalid-account.json");
+  await writeFile(accountInput, JSON.stringify({ ...observation("rejected"), bankAccount: { id: overlongAccount, name: "Synthetic Account" } }));
+  const refusedAccountPreview = call(root, "preview", "--input", accountInput);
+  expect(refusedAccountPreview.exitCode).toBe(4);
+  expect(refusedAccountPreview.envelope.result.causeCode).toBe("SCHEMA_INVALID_INPUT");
+  const refusedAccountStatus = call(root, "status", "--organisation-id", "!Ab12c", "--account-id", overlongAccount);
+  expect(refusedAccountStatus.exitCode).toBe(4);
+  expect(refusedAccountStatus.envelope.result.causeCode).toBe("SCHEMA_INVALID_INPUT");
+  const maximumIds = call(root, "status", "--organisation-id", `!${"A".repeat(125)}`, "--account-id", "a".repeat(126));
+  expect(maximumIds.exitCode).toBe(0);
+  expect(maximumIds.envelope.result.data).toMatchObject({ available: false, count: 0 });
 });
 
 test("split observation persists and reloads equal with owner-only custody", async () => {

@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { OperationResult } from "./model.ts";
 
-export const ORGANISATION_ROUTE_CODE_PATTERN = /^![A-Za-z0-9]+$/;
-export const BANK_ACCOUNT_ID_PATTERN = /^[A-Za-z0-9-]+$/;
+// id- plus UTF-8 hex of these ASCII IDs must fit a 255-byte path component.
+export const ORGANISATION_ROUTE_CODE_PATTERN = /^![A-Za-z0-9]{1,125}$/;
+export const BANK_ACCOUNT_ID_PATTERN = /^[A-Za-z0-9-]{1,126}$/;
 const identity = z.strictObject({
   id: z.string().regex(BANK_ACCOUNT_ID_PATTERN),
   name: z.string().min(1).max(256),
