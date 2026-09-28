@@ -7,7 +7,7 @@
     "lint": "biome check --diagnostic-level=error .",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "bun test tests --timeout=30000",
-    "build:bundle": "NODE_ENV=production bun build --target bun src/cli.ts --outfile dist/xero-history.js",
+    "build:bundle": "NODE_ENV=production bun build --target bun --minify-whitespace src/cli.ts --outfile dist/xero-history.js",
     "xero-history": "bun --no-install dist/xero-history.js"
   },
   "dependencies": {
