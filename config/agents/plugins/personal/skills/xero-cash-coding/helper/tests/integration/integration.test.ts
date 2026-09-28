@@ -211,23 +211,34 @@ test("intent interrupted before rename is unchanged, read-only recover names rep
   const journalBefore = await readFile(`${cachePath(root)}.journal.jsonl`);
   const recovery = call(root, "recover", ...ids);
   expect(recovery.exitCode).toBe(3);
-  expect(recovery.envelope.result).toMatchObject({ outcome: "refused", transactionState: "unchanged", retryable: false,
-    data: { state: "unchanged", pending: true, repair: expect.stringContaining("history.json.journal.jsonl") } });
+  expect(recovery.envelope.result).toMatchObject({ outcome: "refused", effectClass: "inspect", transactionState: "unchanged", retryable: false,
+    data: null, effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true } });
+  expect(recovery.envelope.result.repairAction).toContain("Observed state: unchanged.");
+  expect(recovery.envelope.result.repairAction).toContain("history.json.journal.jsonl");
   expect(recovery.envelope.result.repairAction).toContain(`${cachePath(root)}.lock`);
   expect(await readFile(`${cachePath(root)}.journal.jsonl`)).toEqual(journalBefore);
   expect(await Bun.file(cachePath(root)).exists()).toBe(false);
+  await unlink(`${cachePath(root)}.lock`); // Synthetic dead-writer residue cleared to reach the pending-intent refusal.
   const replay = apply(root, id);
   expect(replay.exitCode).toBe(3);
+  expect(replay.envelope.result).toMatchObject({ outcome: "refused", transactionState: "unchanged", data: null,
+    effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+    handoff: { owner: "operator", reason: expect.stringContaining("Run recover") } });
   const pendingInput = join(root, "pending-observation.json");
   await writeFile(pendingInput, JSON.stringify(observation("transaction-2")));
   const pendingPreview = call(root, "preview", "--input", pendingInput);
   expect(pendingPreview.exitCode).toBe(3);
+  expect(pendingPreview.envelope.result).toMatchObject({ outcome: "refused", transactionState: "unchanged", data: null,
+    effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true },
+    handoff: { owner: "operator", reason: expect.stringContaining("Run recover") } });
   const damaged = JSON.parse(await readFile(`${cachePath(root)}.preview.json`, "utf8")).proposed;
   damaged.updatedAt = "2026-09-29T00:00:00.000Z";
   await writeFile(cachePath(root), `${JSON.stringify(damaged)}\n`, { mode: 0o600 });
   const uncertain = call(root, "recover", ...ids);
-  expect(uncertain.exitCode).toBe(1);
-  expect(uncertain.envelope.result).toMatchObject({ transactionState: "unknown", data: { state: "unknown", pending: true } });
+  expect(uncertain.exitCode).toBe(3);
+  expect(uncertain.envelope.result).toMatchObject({ outcome: "refused", effectClass: "inspect", transactionState: "unchanged", data: null,
+    effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true } });
+  expect(uncertain.envelope.result.repairAction).toContain("Observed state: unknown.");
 });
 
 test.each(["SIGINT", "SIGTERM"] as const)("%s before intent releases its lock and permits a fresh preview", async (signal) => {
@@ -248,7 +259,7 @@ test.each(["SIGINT", "SIGTERM"] as const)("%s before intent releases its lock an
   await preview(root, observation("transaction-2"));
 });
 
-test("intent followed by rename remains blocked with completed effect and an operator repair", async () => {
+test("intent followed by rename reports observed completion in repair without claiming a recover effect", async () => {
   const root = await fixture();
   const id = await preview(root, observation("transaction-1"));
   const marker = join(root, "after-rename");
@@ -264,9 +275,10 @@ test("intent followed by rename remains blocked with completed effect and an ope
   const before = await readFile(cachePath(root));
   const recovery = call(root, "recover", ...ids);
   expect(recovery.exitCode).toBe(3);
-  expect(recovery.envelope.result).toMatchObject({ outcome: "refused", transactionState: "completed",
-    data: { state: "completed", pending: true, repair: expect.stringContaining("journal") } });
-  expect(recovery.envelope.result.effects.completed).toEqual([`cache:${id}`]);
+  expect(recovery.envelope.result).toMatchObject({ outcome: "refused", effectClass: "inspect", transactionState: "unchanged", data: null,
+    effects: { completed: [], remaining: [], uncertain: [], inventoryComplete: true } });
+  expect(recovery.envelope.result.repairAction).toContain("Observed state: completed.");
+  expect(recovery.envelope.result.repairAction).toContain("journal");
   expect(await readFile(cachePath(root))).toEqual(before);
   expect(apply(root, id).exitCode).toBe(3);
   await rename(`${cachePath(root)}.journal.jsonl`, `${cachePath(root)}.journal.reviewed`);
@@ -282,7 +294,8 @@ test("dead writer lock without an intent has an exact read-only repair path", as
   await writeFile(`${cachePath(root)}.lock`, '{"pid":99999999}\n', { mode: 0o600 });
   const recovery = call(root, "recover", ...ids);
   expect(recovery.exitCode).toBe(3);
-  expect(recovery.envelope.result.data).toMatchObject({ state: "lock-residue", pending: false });
+  expect(recovery.envelope.result.data).toBeNull();
+  expect(recovery.envelope.result.repairAction).toContain("Observed state: lock-residue.");
   expect(recovery.envelope.result.repairAction).toContain(`${cachePath(root)}.lock`);
   expect(await readFile(`${cachePath(root)}.lock`, "utf8")).toBe('{"pid":99999999}\n');
   const input = join(root, "fresh.json");
@@ -298,7 +311,8 @@ test("completion before preview consumption is recovered without a second cache 
     stdin: "ignore", stdout: "pipe", stderr: "pipe",
   });
   expect(interrupted.exitCode).toBe(3);
-  expect(JSON.parse(interrupted.stdout.toString()).result.transactionState).toBe("unknown");
+  expect(JSON.parse(interrupted.stdout.toString()).result).toMatchObject({ outcome: "failed", transactionState: "unknown", data: null,
+    effects: { completed: [], remaining: [], uncertain: [`cache:${id}`], inventoryComplete: true } });
   const before = await readFile(cachePath(root));
   const recovery = call(root, "recover", ...ids);
   expect(recovery.envelope.result).toMatchObject({ causeCode: "SUCCESS_COMPLETED", transactionState: "completed" });
@@ -320,7 +334,8 @@ test("two concurrent applies yield one effect and one bounded busy refusal", asy
   expect(await Bun.file(marker).exists()).toBe(true);
   const recovery = call(root, "recover", ...ids);
   expect(recovery.exitCode).toBe(75);
-  expect(recovery.envelope.result.data.state).toBe("writer-active");
+  expect(recovery.envelope.result.data).toBeNull();
+  expect(recovery.envelope.result.repairAction).toContain("Observed state: writer-active.");
   const second = apply(root, id);
   expect(second.exitCode).toBe(75);
   expect(second.envelope.result).toMatchObject({ outcome: "refused", failureClass: "transient", retryable: true, retryDelayMilliseconds: 250 });

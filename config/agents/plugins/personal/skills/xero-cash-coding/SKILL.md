@@ -25,7 +25,8 @@ prove all bank activity has been imported or the BAS has been lodged.
 ## Learn only what the batch needs
 
 Read [the cache contract](references/history-cache.md) before using local history.
-Run the local `xero-history` helper from `helper/`: use `status` and `lookup` for
+From `config/agents/plugins/personal/skills/xero-cash-coding/helper/`, run
+`bun run xero-history <command> [options]`. Use `status` and `lookup` for
 cached examples, and `recover` to inspect an interrupted update. Feed only
 verified browser observations to `preview`, review its added and replaced
 transaction IDs, then use `apply --approve` for that exact preview. Use cached

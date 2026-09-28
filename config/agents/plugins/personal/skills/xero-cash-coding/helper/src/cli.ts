@@ -136,7 +136,7 @@ function causeFor(problem: CacheProblem): string {
   return "DOMAIN_PRECONDITION_UNMET";
 }
 function failure(commandIdentity: string, effectClass: "inspect" | "repository-local", problem: CacheProblem): OperationResult {
-  const unknown = problem.kind === "pending";
+  const unknown = problem.kind === "pending" && problem.effectId !== undefined;
   const busy = problem.kind === "busy";
   const schema = problem.kind === "invalid" || problem.kind === "malformed";
   const value: OperationResult = {
@@ -144,9 +144,9 @@ function failure(commandIdentity: string, effectClass: "inspect" | "repository-l
     outcome: unknown ? "failed" : "refused", transactionState: unknown ? "unknown" : "unchanged",
     failureClass: busy ? "transient" : schema ? "schema" : "domain",
     exitCode: busy ? 75 : schema ? 4 : 3, retryable: busy, repairAction: problem.message,
-    effects: effects([], unknown ? ["cache:update"] : []),
+    effects: effects([], unknown && problem.effectId ? [problem.effectId] : []),
   };
-  if (unknown) value.handoff = { owner: "operator", reason: problem.message, inspect: ["journal", "cache"] };
+  if (problem.kind === "pending") value.handoff = { owner: "operator", reason: problem.message, inspect: ["journal", "cache"] };
   else value.nextAction = problem.message;
   if (busy) value.retryDelayMilliseconds = 250;
   return value;
@@ -223,28 +223,24 @@ async function applyResult(options: Options): Promise<OperationResult> {
   return value;
 }
 function activeWriterResult(observation: Recovery): OperationResult {
-  const value = result("xero-history.recover", "inspect", observation, "Active writer inspected.");
+  const value = result("xero-history.recover", "inspect", null, "Active writer inspected.");
   value.causeCode = "TRANSIENT_NOT_STARTED";
   value.outcome = "refused";
   value.failureClass = "transient";
   value.exitCode = 75;
   value.retryable = true;
   value.retryDelayMilliseconds = 250;
-  value.repairAction = required(observation.repair ?? undefined);
+  value.repairAction = `Observed state: ${observation.state}. ${required(observation.repair ?? undefined)}`;
   value.nextAction = value.repairAction;
   return value;
 }
 function blockedRecoveryResult(observation: Recovery): OperationResult {
-  const uncertain = observation.state === "unknown";
-  const value = result("xero-history.recover", observation.effectId ? "repository-local" : "inspect", observation, "Interrupted update needs operator repair.");
-  value.causeCode = uncertain ? "INTERNAL_RESULT_UNKNOWN" : "DOMAIN_RECOVERY_HANDOFF_REQUIRED";
-  value.outcome = uncertain ? "failed" : "refused";
-  value.transactionState = observation.state === "completed" ? "completed" : uncertain ? "unknown" : "unchanged";
-  value.failureClass = uncertain ? "internal" : "domain";
-  value.exitCode = uncertain ? 1 : 3;
-  value.repairAction = required(observation.repair ?? undefined);
-  value.effects = effects(observation.state === "completed" && observation.effectId ? [observation.effectId] : [],
-    uncertain && observation.effectId ? [observation.effectId] : []);
+  const value = result("xero-history.recover", "inspect", null, "Interrupted update needs operator repair.");
+  value.causeCode = "DOMAIN_RECOVERY_HANDOFF_REQUIRED";
+  value.outcome = "refused";
+  value.failureClass = "domain";
+  value.exitCode = 3;
+  value.repairAction = `Observed state: ${observation.state}. ${required(observation.repair ?? undefined)}`;
   value.handoff = { owner: "operator", reason: value.repairAction, inspect: ["journal", "cache", "lock"] };
   return value;
 }

@@ -12,13 +12,17 @@ test("all five public commands disclose distinct relevant stations", () => {
     expect(stations.length).toBeGreaterThan(0);
     expect(stations.every((station) => station.commandIdentity === item.commandIdentity)).toBe(true);
   }
-  expect(stationsFor("xero-history.recover").map((station) => [station.causeCode, station.transactionState])).toEqual([
-    ["SUCCESS_UNCHANGED", "unchanged"],
-    ["SUCCESS_COMPLETED", "completed"],
-    ["TRANSIENT_NOT_STARTED", "unchanged"],
-    ["DOMAIN_RECOVERY_HANDOFF_REQUIRED", "unchanged"],
-    ["DOMAIN_RECOVERY_HANDOFF_REQUIRED", "unchanged"],
-    ["DOMAIN_RECOVERY_HANDOFF_REQUIRED", "completed"],
-    ["INTERNAL_RESULT_UNKNOWN", "unknown"],
+  expect(stationsFor("xero-history.recover").map((station) => [station.causeCode, station.outcome, station.effectClass, station.transactionState])).toEqual([
+    ["SUCCESS_UNCHANGED", "success", "inspect", "unchanged"],
+    ["SUCCESS_COMPLETED", "success", "repository-local", "completed"],
+    ["TRANSIENT_NOT_STARTED", "refused", "inspect", "unchanged"],
+    ["DOMAIN_RECOVERY_HANDOFF_REQUIRED", "refused", "inspect", "unchanged"],
+    ["DOMAIN_RECOVERY_HANDOFF_REQUIRED", "refused", "inspect", "unchanged"],
+    ["DOMAIN_RECOVERY_HANDOFF_REQUIRED", "refused", "inspect", "unchanged"],
+    ["DOMAIN_RECOVERY_HANDOFF_REQUIRED", "refused", "inspect", "unchanged"],
   ]);
+  for (const command of ["preview", "apply"] as const) {
+    const pending = stationsFor(`xero-history.${command}`).find((station) => station.trigger === "Previous apply pending.");
+    expect(pending).toMatchObject({ causeCode: "DOMAIN_RECOVERY_HANDOFF_REQUIRED", outcome: "refused", transactionState: "unchanged" });
+  }
 });

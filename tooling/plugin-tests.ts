@@ -3,12 +3,12 @@ import path from "node:path";
 
 // Independent plugin packages keep their own lockfiles outside root workspaces,
 // so this script runs their declared test and typecheck routes. `proof` is a
-// direct root workspace; `personal` owns a nested root workspace helper. Their
-// tests already run under `bun run --filter '*' test`.
+// direct root workspace; the personal plugin has no package manifest, while
+// its helper is a root workspace. Their tests run under `bun run --filter '*' test`.
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 const pluginsRoot = path.join(repoRoot, "config/agents/plugins");
-const SKIP = new Set(["personal", "proof"]);
+const SKIP = new Set(["proof"]);
 
 interface Step {
 	plugin: string;

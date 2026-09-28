@@ -6,7 +6,7 @@ import { CacheDocument, Observation, PreviewDocument } from "./command-contract.
 import type { CacheDocument as Cache, Observation as Observed, PreviewDocument as Preview } from "./command-contract.ts";
 
 export class CacheProblem extends Error {
-  constructor(readonly kind: "malformed" | "unsafe" | "locked" | "busy" | "pending" | "stale" | "missing" | "invalid", message: string) { super(message); }
+  constructor(readonly kind: "malformed" | "unsafe" | "locked" | "busy" | "pending" | "stale" | "missing" | "invalid", message: string, readonly effectId?: string) { super(message); }
 }
 function digest(value: string): string { return createHash("sha256").update(value).digest("hex"); }
 function key(value: string): string {
@@ -283,7 +283,7 @@ export async function apply(organisationId: string, accountId: string, previewId
     await publishPreview(path, preview, effectId);
     return effectId;
   } catch (error) {
-    if (attemptedEffect !== null) throw new CacheProblem("pending", `Apply ${attemptedEffect} may have changed the cache. Run recover and inspect it before another apply.`);
+    if (attemptedEffect !== null) throw new CacheProblem("pending", `Apply ${attemptedEffect} may have changed the cache. Run recover and inspect it before another apply.`, attemptedEffect);
     throw error;
   } finally {
     release();
