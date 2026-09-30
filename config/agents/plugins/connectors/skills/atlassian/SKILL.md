@@ -183,7 +183,8 @@ completed apply answers `SUCCESS_RUN_APPLIED`; its receipt, with `runId` and
   find and reuse it with `issue.search`
   `project = KEY AND parent = PARENT AND summary ~ "..."`. A search that
   returned only part of its matches fails `capability-unavailable`.
-- Apply refuses when the parent was replaced or retyped since the preview.
+- Apply rereads the parent before any send: a deleted parent fails
+  `not-found`, and a replaced or retyped one refuses `refused-preview`.
   It completes only when a read of the new issue shows the requested summary,
   type, and `parent.key`. Any other result is `outcome-unknown`: settle it
   with `adjudicate` and the identical input once `issue.search` shows the
