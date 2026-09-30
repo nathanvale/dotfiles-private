@@ -26,8 +26,9 @@ Each project keeps `projects/<slug>/resources.md`, linked from its README. The
 index has a human-curated shared block and a generated block that lists every
 note the project owns: every note the contract routes to `reference` or
 `decision` at any depth, except packet files, governed `specs/`, `tickets/` and
-`proofs/` notes, notes in a directory `routing.projectDirectories` routes to
-another type, folder READMEs and the index itself. The generated block also
+`proofs/` notes, notes the contract routes to any other type (a routed
+project directory, a packet file name below the project root, or a repository
+file or prefix route), folder READMEs and the index itself. The generated block also
 links each folder map (nested READMEs and governed-folder READMEs).
 `src/resources-index.ts` owns the rules; ownership and roles come from the
 Vault Catalogue placement, never from `related`, topics or links.

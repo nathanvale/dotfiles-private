@@ -14,9 +14,9 @@ const ARTIFACT_FOLDERS = ["specs", "tickets", "proofs"] as const;
  * - `folder-map`: a README below the project root, either a nested navigation README or a governed artifact
  *   folder's own map;
  * - `artifact`: any other note inside a governed artifact folder;
- * - `routed`: a note in a project directory that `routing.projectDirectories` routes to a type outside
- *   `routing.projectLocalTypes`;
- * - `note`: every other project note, which the contract routes to its project-local types.
+ * - `note`: any other project note whose routed types (`expectedTypes`) are all project-local types;
+ * - `routed`: any other project note the contract routes elsewhere or not at all, for example a routed
+ *   project directory, a packet file name below the project root, or a repository file or prefix route.
  */
 export type ProjectRole = "packet" | "folder-map" | "artifact" | "routed" | "note";
 
@@ -168,7 +168,8 @@ function placeNote(relativePath: string, contract: VaultContract): NotePlacement
     projectPath: projectSegments?.join("/") ?? null,
     projectFolder: projectSegments?.slice(0, -1).join("/") ?? null,
     get projectRole() {
-      return projectSegments === null ? null : projectRoleFor(projectSegments, artifactFolder, contract);
+      if (projectSegments === null) return null;
+      return projectRoleFor(projectSegments, artifactFolder, contract, () => routeTypes(relativePath, segments, artifactFolder, contract));
     },
     get isIndex() {
       return (
@@ -187,18 +188,15 @@ function projectRoleFor(
   projectSegments: string[],
   artifactFolder: NotePlacement["artifactFolder"],
   contract: VaultContract,
+  routedTypes: () => string[],
 ): ProjectRole {
   const filename = projectSegments.at(-1) ?? "";
-  if (projectSegments.length === 1) return Object.hasOwn(contract.routing.projectFiles, filename) ? "packet" : "note";
-  const isReadme = filename === "README.md";
-  if (artifactFolder === null) {
-    if (isReadme) return "folder-map";
-    const folder = projectSegments[0] ?? "";
-    const { projectDirectories, projectLocalTypes } = contract.routing;
-    const directoryType = Object.hasOwn(projectDirectories, folder) ? projectDirectories[folder] : undefined;
-    return directoryType === undefined || projectLocalTypes.includes(directoryType) ? "note" : "routed";
-  }
-  return isReadme && projectSegments.length === 2 ? "folder-map" : "artifact";
+  const nested = projectSegments.length > 1;
+  if (!nested && Object.hasOwn(contract.routing.projectFiles, filename)) return "packet";
+  if (artifactFolder !== null) return filename === "README.md" && projectSegments.length === 2 ? "folder-map" : "artifact";
+  if (nested && filename === "README.md") return "folder-map";
+  const types = routedTypes();
+  return types.length > 0 && types.every((type) => contract.routing.projectLocalTypes.includes(type)) ? "note" : "routed";
 }
 
 /** Resolve the note types the contract's routing allows at a path. */

@@ -44,10 +44,14 @@ const PROJECTS: Record<string, string> = {
 
 const ACTIVE_CONTRACT = JSON.stringify({ ...JSON.parse(CONTRACT), projectResources: { indexFile: "resources.md" } });
 
-/** The active contract plus two routed project directories: `meetings` to its own type, `notes` to `reference`. */
+/**
+ * The active contract plus other routes into a project: `meetings` to its own type, `notes` to `reference`, and a
+ * repository prefix route for gamma's `log/` folder.
+ */
 function contractWithDirectories(): string {
   const parsed = JSON.parse(ACTIVE_CONTRACT);
   parsed.routing.projectDirectories = { ...parsed.routing.projectDirectories, meetings: "meeting", notes: "reference" };
+  parsed.routing.repositoryPrefixes = { ...parsed.routing.repositoryPrefixes, "projects/gamma/log/": "capture" };
   parsed.statusesByType = { ...parsed.statusesByType, meeting: ["active"] };
   return JSON.stringify(parsed);
 }
@@ -280,12 +284,16 @@ describe("generation", () => {
     );
   });
 
-  test("a project directory the contract routes to its own type is not owned; one routed to reference is", async () => {
+  test("only notes routed to reference or decision are owned: other directory, packet-name and prefix routes are not", async () => {
+    const related = (content: string) => content.replace("---\n\n#", "related:\n  - ../README.md\n---\n\n#");
     const root = await vault(
       {
         ...PROJECTS,
         "projects/gamma/meetings/weekly.md": note("Weekly", "meeting", "active", "A meeting record."),
         "projects/gamma/notes/idea.md": note("Idea", "reference", "active", "A routed reference note."),
+        "projects/gamma/research/GOAL.md": related(note("Research Goal", "project-goal", "active", "A nested goal file.")),
+        "projects/gamma/research/result.md": related(note("Research Result", "project-result", "final", "A nested result file.")),
+        "projects/gamma/log/entry.md": note("Log Entry", "capture", "triage", "A prefix-routed capture."),
       },
       contractWithDirectories(),
     );

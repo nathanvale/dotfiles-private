@@ -409,7 +409,9 @@ function placeNote(relativePath, contract) {
     projectPath: projectSegments?.join("/") ?? null,
     projectFolder: projectSegments?.slice(0, -1).join("/") ?? null,
     get projectRole() {
-      return projectSegments === null ? null : projectRoleFor(projectSegments, artifactFolder, contract);
+      if (projectSegments === null)
+        return null;
+      return projectRoleFor(projectSegments, artifactFolder, contract, () => routeTypes(relativePath, segments, artifactFolder, contract));
     },
     get isIndex() {
       return relativePath === "README.md" || Object.keys(contract.routing.familyReadmes).some((name) => relativePath === `${name}/README.md`);
@@ -419,20 +421,17 @@ function placeNote(relativePath, contract) {
     }
   };
 }
-function projectRoleFor(projectSegments, artifactFolder, contract) {
+function projectRoleFor(projectSegments, artifactFolder, contract, routedTypes) {
   const filename = projectSegments.at(-1) ?? "";
-  if (projectSegments.length === 1)
-    return Object.hasOwn(contract.routing.projectFiles, filename) ? "packet" : "note";
-  const isReadme = filename === "README.md";
-  if (artifactFolder === null) {
-    if (isReadme)
-      return "folder-map";
-    const folder = projectSegments[0] ?? "";
-    const { projectDirectories, projectLocalTypes } = contract.routing;
-    const directoryType = Object.hasOwn(projectDirectories, folder) ? projectDirectories[folder] : undefined;
-    return directoryType === undefined || projectLocalTypes.includes(directoryType) ? "note" : "routed";
-  }
-  return isReadme && projectSegments.length === 2 ? "folder-map" : "artifact";
+  const nested = projectSegments.length > 1;
+  if (!nested && Object.hasOwn(contract.routing.projectFiles, filename))
+    return "packet";
+  if (artifactFolder !== null)
+    return filename === "README.md" && projectSegments.length === 2 ? "folder-map" : "artifact";
+  if (nested && filename === "README.md")
+    return "folder-map";
+  const types = routedTypes();
+  return types.length > 0 && types.every((type) => contract.routing.projectLocalTypes.includes(type)) ? "note" : "routed";
 }
 function routeTypes(relativePath, segments, artifactFolder, contract) {
   const repositoryTypes = repositoryTypesForPath(relativePath, contract);

@@ -111,19 +111,33 @@ test("placement names the owning project, the note's role and folder in it, and 
   });
 });
 
-test("a project directory routed to a type outside the project-local types is its own role, not an owned note", async () => {
+test("a project note routed to any type outside the project-local types is routed, not an owned note", async () => {
   const parsed = JSON.parse(contract);
   parsed.routing.projectDirectories = { ...parsed.routing.projectDirectories, meetings: "meeting", notes: "reference" };
+  parsed.routing.repositoryPrefixes = { ...parsed.routing.repositoryPrefixes, "projects/alpha/log/": "capture" };
   const catalogue = await openCatalogue(
-    await vault(["projects/alpha/meetings/weekly.md", "projects/alpha/meetings/README.md", "projects/alpha/notes/idea.md"], JSON.stringify(parsed)),
+    await vault(
+      [
+        "projects/alpha/meetings/weekly.md",
+        "projects/alpha/meetings/README.md",
+        "projects/alpha/notes/idea.md",
+        "projects/alpha/research/GOAL.md",
+        "projects/alpha/research/result.md",
+        "projects/alpha/log/entry.md",
+      ],
+      JSON.stringify(parsed),
+    ),
   );
 
   const roles = (await catalogue.notes()).map((note) => [note.relativePath, note.placement.projectRole, note.placement.expectedTypes]);
 
   expect(roles).toEqual([
+    ["projects/alpha/log/entry.md", "routed", ["capture"]],
     ["projects/alpha/meetings/README.md", "folder-map", ["decision", "reference"]],
     ["projects/alpha/meetings/weekly.md", "routed", ["meeting"]],
     ["projects/alpha/notes/idea.md", "note", ["reference"]],
+    ["projects/alpha/research/GOAL.md", "routed", ["project-goal"]],
+    ["projects/alpha/research/result.md", "routed", ["project-result"]],
   ]);
 });
 
