@@ -7,35 +7,73 @@ supported-path guard, not filesystem isolation.
 ## Command
 
 ```sh
-source-intake-dispatch --help
-source-intake-dispatch --redacted status
-source-intake-dispatch --redacted evaluation
-source-intake-dispatch <private-grant.json> <private-request.json>
+source-intake-dispatch GRANT REQUEST [--json]
+source-intake-dispatch --redacted status [--json]
+source-intake-dispatch --redacted evaluation [--json]
+source-intake-dispatch --help | --discover | --discover-command COMMAND_IDENTITY [--json]
 ```
 
-The grant and request stay in private runtime state. The grant has exactly
-`opaqueItemRef`, `provider`, `purpose`, `allowedFields`, and `receiptPath`.
-The request has exactly `opaqueItemRef`, `provider`, `purpose`, and
-`requestedFields`. The opaque reference is a lowercase letter or number plus
-hyphens, and identifies the sole receipt location:
+`--help --json`, `--discover --json` and `--discover-command` are the
+machine-readable contract: Contract Core 2.0, profile `complex` (the projection
+checks an exact-item approval grant). Every command has effect class `inspect`
+and writes nothing. Human mode prints one concise line or block; `--json`
+prints one validated 2.0 envelope on stdout with empty stderr.
+
+## Grant, request and receipt
+
+The grant and request are private runtime JSON files. Keep them outside the
+item receipts tree, out of Git and out of Beads; a grant or request path that
+resolves inside the items tree is denied.
+
+- The grant has exactly `opaqueItemRef`, `provider`, `purpose`,
+  `allowedFields`, and `receiptPath`.
+- The request has exactly `opaqueItemRef`, `provider`, `purpose`, and
+  `requestedFields`.
+- `opaqueItemRef` is a lowercase letter or number followed by up to 63
+  lowercase letters, numbers or hyphens. It identifies the sole receipt
+  location:
 
 ```text
 ${XDG_STATE_HOME:-$HOME/.local/state}/my-second-brain-playground/drive-inbox-filing/items/<opaqueItemRef>/classification-metadata.json
 ```
 
-Only `luna` with purpose `classification` is supported. Grant and requested
-fields must come from this closed metadata list: `displayName`, `mimeType`,
-`modifiedTime`, and `sizeBytes`. The metadata file is one flat JSON object;
-each projected value is a string or finite number.
+Only provider `luna` with purpose `classification` is supported. Granted and
+requested fields come from this closed metadata list: `displayName`,
+`mimeType`, `modifiedTime`, and `sizeBytes`. The metadata file is one flat
+JSON object; each projected value is a string or finite number.
 
-On success, exit 0 and emit one JSON projection containing exactly the
-requested fields. Status and evaluation emit the fixed redacted projection.
-Every invalid, mismatched, missing, or unsupported request exits 3 with this
-fixed JSON refusal and empty stderr:
+## Outcomes
 
-```json
-{"message":"Request denied. Stage Manager must verify the private grant before retrying.","nextAction":"Ask Stage Manager to verify the private grant and issue a matching request.","outcome":"refused"}
+The command validates the grant and the request completely before it touches
+the receipt.
+
+| Exit | Cause | When |
+| --- | --- | --- |
+| 0 | `SUCCESS_UNCHANGED` | The projection holds exactly the requested granted fields; `--redacted` returns `{"receipt":"[REDACTED]"}`. |
+| 2 | `USAGE_INVALID_INVOCATION` | Wrong operand count, unknown option or unknown recipient. |
+| 3 | `DOMAIN_PRECONDITION_UNMET` | The fixed denial below. |
+| 4 | `SCHEMA_INVALID_INPUT` | The grant or request is not JSON, has other keys, or has a malformed value. |
+| 75 | `TRANSIENT_NOT_STARTED` | A file-descriptor limit stopped the grant or request from opening; retry after 1000 ms. |
+| 1 | `INTERNAL_UNEXPECTED` | The grant or request path, outside the items tree, is not a readable regular file. |
+| 1 | `INTERNAL_RESULT_UNCHANGED` | An unexpected failure, or the result failed envelope validation. |
+
+The denial is byte-identical for every authority mismatch and for every
+outcome that depends on the receipt: a missing grant, request or receipt; an
+unreadable, symlinked, malformed or incomplete receipt; and any receipt I/O
+error. It never names a path, receipt value, source label or raw error, so it
+is no existence oracle. Human mode prints this one line on stderr:
+
+```text
+Request denied. Stage Manager must verify the private grant before retrying. Next: Ask Stage Manager to verify the private grant and issue a matching request.
 ```
+
+`--json` prints the same refusal as a 2.0 envelope with `causeCode`
+`DOMAIN_PRECONDITION_UNMET`, exit 3, and that `nextAction`. The run identity
+is fixed per command because the command keeps no journal to correlate; this
+keeps the denial byte-identical.
+
+When stdout cannot be written the command exits 1 without a replacement
+envelope; human mode adds one repair line on stderr.
 
 Vault Steward is not a command recipient. It receives only Nathan-approved
 note content from the foreground Steward or Stage Manager.
