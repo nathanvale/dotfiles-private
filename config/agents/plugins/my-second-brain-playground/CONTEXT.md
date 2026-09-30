@@ -174,3 +174,17 @@ _Avoid_: Context dump, dashboard, memory
 The recovery transition that reconstructs a Resume Panel from current owners
 after a Harness compacts conversation context.
 _Avoid_: Session summary, transcript replay, memory restore
+
+## Vault notes
+
+**Vault Catalogue**:
+The single authority on which vault files are governed notes and where each
+note sits: its family, owning project, project role, and routed note types.
+Rules: [vault-notes README](packages/vault-notes/README.md#vault-catalogue).
+_Avoid_: Note index, note walker, discovery rules
+
+**Resources Index**:
+A project's rebuildable note, linked from its README, that lists every note the
+project owns plus a human-curated block of shared references. Rules:
+[vault-notes README](packages/vault-notes/README.md#resources-index).
+_Avoid_: Resources view, Resources family, catalog
