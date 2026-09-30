@@ -1,9 +1,5 @@
 import path from "node:path";
-import {
-  discoverMarkdownFiles,
-  loadContract,
-  readMarkdownNote,
-} from "./vault-contract";
+import { openCatalogue } from "./vault-catalogue";
 
 /** Counts that let humans and agents inspect the vault without reading every note. */
 export interface VaultInventory {
@@ -15,21 +11,16 @@ export interface VaultInventory {
 
 /** Count governed notes by family, type, and status. */
 export async function inventoryVault(root: string): Promise<VaultInventory> {
-  const contract = await loadContract(root);
-  const files = await discoverMarkdownFiles(root, contract);
+  const notes = await (await openCatalogue(root)).notes();
   const inventory: VaultInventory = {
-    total: files.length,
+    total: notes.length,
     byFamily: {},
     byType: {},
     byStatus: {},
   };
 
-  for (const file of files) {
-    const note = await readMarkdownNote(root, file);
-    const family = note.relativePath.includes("/")
-      ? note.relativePath.split("/")[0] ?? "root"
-      : "root";
-    increment(inventory.byFamily, family);
+  for (const note of notes) {
+    increment(inventory.byFamily, note.placement.family ?? "root");
     if (typeof note.frontmatter?.type === "string") increment(inventory.byType, note.frontmatter.type);
     if (typeof note.frontmatter?.status === "string") increment(inventory.byStatus, note.frontmatter.status);
   }

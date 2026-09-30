@@ -1,33 +1,61 @@
 // @bun
 // packages/vault-notes/src/check.ts
 import { spawnSync } from "child_process";
-import { access, readFile as readFile2 } from "fs/promises";
+import { access, readFile as readFile3 } from "fs/promises";
 import { homedir } from "os";
+import path3 from "path";
+
+// packages/vault-notes/src/vault-catalogue.ts
+import { readdir, readFile as readFile2 } from "fs/promises";
 import path2 from "path";
 
 // packages/vault-notes/src/vault-contract.ts
-import { readdir, readFile } from "fs/promises";
+import { readFile } from "fs/promises";
 import path from "path";
-async function discoverRepositoryMarkdownFiles(root, contract) {
-  return collectMarkdownFiles(root, (_relativePath, name, isDirectory) => isDirectory && contract.markdownFilenames.ignoredDirectories.includes(name));
-}
 async function loadContract(root) {
   const source = await readFile(path.join(root, "schemas", "frontmatter-contract.json"), "utf8");
   return JSON.parse(source);
 }
-async function discoverMarkdownFiles(root, contract) {
-  return collectMarkdownFiles(root, (relativePath, name) => {
-    const firstSegment = relativePath.split(path.sep)[0];
-    return name === ".git" || contract.ignored.includes(name) || contract.ignored.includes(firstSegment ?? "");
-  });
+function isEmptyValue(value) {
+  if (value === null || value === undefined || value === "")
+    return true;
+  if (Array.isArray(value))
+    return value.length === 0;
+  if (typeof value === "object")
+    return Object.keys(value).length === 0;
+  return false;
+}
+
+// packages/vault-notes/src/vault-catalogue.ts
+var ARTIFACT_FOLDERS = ["specs", "tickets", "proofs"];
+async function openCatalogue(root) {
+  const contract = await loadContract(root);
+  return {
+    contract,
+    async notes(include = () => true) {
+      const selected = (await collectMarkdownFiles(root, (relativePath, name) => isIgnoredNotePath(relativePath, name, contract))).map((absolutePath) => ({ absolutePath, relativePath: toVaultPath(root, absolutePath) })).map((file) => ({ ...file, placement: placeNote(file.relativePath, contract) })).filter((file) => include(file.placement));
+      return Promise.all(selected.map((file) => readNote(file.absolutePath, file.relativePath, file.placement)));
+    },
+    async filenamePolicyPaths() {
+      const files = await collectMarkdownFiles(root, (_relativePath, name, isDirectory) => isDirectory && contract.markdownFilenames.ignoredDirectories.includes(name));
+      return files.map((absolutePath) => toVaultPath(root, absolutePath));
+    }
+  };
+}
+function isIgnoredNotePath(relativePath, name, contract) {
+  const firstSegment = relativePath.split(path2.sep)[0];
+  return name === ".git" || contract.ignored.includes(name) || contract.ignored.includes(firstSegment ?? "");
+}
+function toVaultPath(root, absolutePath) {
+  return path2.relative(root, absolutePath).split(path2.sep).join("/");
 }
 async function collectMarkdownFiles(root, shouldSkip) {
   const found = [];
   async function visit(directory) {
     const entries = await readdir(directory, { withFileTypes: true });
     for (const entry of entries) {
-      const absolutePath = path.join(directory, entry.name);
-      const relativePath = path.relative(root, absolutePath);
+      const absolutePath = path2.join(directory, entry.name);
+      const relativePath = path2.relative(root, absolutePath);
       if (shouldSkip(relativePath, entry.name, entry.isDirectory())) {
         continue;
       }
@@ -41,45 +69,19 @@ async function collectMarkdownFiles(root, shouldSkip) {
   await visit(root);
   return found.sort();
 }
-async function readMarkdownNote(root, absolutePath) {
-  const content = await readFile(absolutePath, "utf8");
-  const relativePath = path.relative(root, absolutePath).split(path.sep).join("/");
-  const match = content.match(/^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/);
-  if (!match?.[1]) {
-    return { absolutePath, relativePath, content, frontmatter: null };
-  }
-  try {
-    const parsed = Bun.YAML.parse(match[1]);
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-      return {
-        absolutePath,
-        relativePath,
-        content,
-        frontmatter: null,
-        frontmatterError: "frontmatter must be a YAML object"
-      };
-    }
-    return {
-      absolutePath,
-      relativePath,
-      content,
-      frontmatter: parsed
-    };
-  } catch (error) {
-    return {
-      absolutePath,
-      relativePath,
-      content,
-      frontmatter: null,
-      frontmatterError: error instanceof Error ? error.message : String(error)
-    };
-  }
+function placeNote(relativePath, contract) {
+  const segments = relativePath.split("/");
+  const family = relativePath.includes("/") ? segments[0] ?? null : null;
+  const project = segments[0] === "projects" && segments.length >= 3 ? segments[1] ?? null : null;
+  const folder = project !== null && segments.length >= 4 ? segments[2] : undefined;
+  const artifactFolder = ARTIFACT_FOLDERS.find((name) => name === folder) ?? null;
+  const isIndex = relativePath === "README.md" || Object.keys(contract.routing.familyReadmes).some((name) => relativePath === `${name}/README.md`);
+  return { family, project, artifactFolder, isIndex, expectedTypes: routeTypes(relativePath, segments, artifactFolder, contract) };
 }
-function expectedTypesForPath(relativePath, contract) {
+function routeTypes(relativePath, segments, artifactFolder, contract) {
   const repositoryTypes = repositoryTypesForPath(relativePath, contract);
   if (repositoryTypes)
     return repositoryTypes;
-  const segments = relativePath.split("/");
   const family = segments[0];
   const filename = segments.at(-1);
   if (!family || !filename)
@@ -89,7 +91,7 @@ function expectedTypesForPath(relativePath, contract) {
     return type2 ? [type2] : [];
   }
   if (family === "projects" && segments.length >= 3) {
-    return projectTypesForPath(segments, filename, contract);
+    return projectTypesForPath(segments, filename, artifactFolder, contract);
   }
   const type = contract.routing.familyNotes[family];
   return type ? [type] : [];
@@ -105,8 +107,8 @@ function repositoryTypesForPath(relativePath, contract) {
   }
   return relativePath === "README.md" ? [contract.routing.rootReadme] : undefined;
 }
-function projectTypesForPath(segments, filename, contract) {
-  if (segments.length === 4 && filename === "README.md" && ["specs", "tickets", "proofs"].includes(segments[2] ?? ""))
+function projectTypesForPath(segments, filename, artifactFolder, contract) {
+  if (segments.length === 4 && filename === "README.md" && artifactFolder)
     return ["reference"];
   if (filename === "README.md" && segments.length > 3)
     return contract.routing.projectLocalTypes;
@@ -116,14 +118,22 @@ function projectTypesForPath(segments, filename, contract) {
   const directoryType = contract.routing.projectDirectories[segments[2] ?? ""];
   return directoryType ? [directoryType] : contract.routing.projectLocalTypes;
 }
-function isEmptyValue(value) {
-  if (value === null || value === undefined || value === "")
-    return true;
-  if (Array.isArray(value))
-    return value.length === 0;
-  if (typeof value === "object")
-    return Object.keys(value).length === 0;
-  return false;
+async function readNote(absolutePath, relativePath, placement) {
+  const content = await readFile2(absolutePath, "utf8");
+  const note = { absolutePath, relativePath, content, placement };
+  const match = content.match(/^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/);
+  if (!match?.[1]) {
+    return { ...note, frontmatter: null };
+  }
+  try {
+    const parsed = Bun.YAML.parse(match[1]);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { ...note, frontmatter: null, frontmatterError: "frontmatter must be a YAML object" };
+    }
+    return { ...note, frontmatter: parsed };
+  } catch (error) {
+    return { ...note, frontmatter: null, frontmatterError: error instanceof Error ? error.message : String(error) };
+  }
 }
 
 // packages/vault-notes/src/check.ts
@@ -150,14 +160,11 @@ var VAULT_FINDING_IDS = [
 ];
 var DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 async function checkVault(root, options = {}) {
-  const canonicalRoot = path2.resolve(options.canonicalRoot ?? root);
-  const contract = await loadContract(root);
-  const [files, repositoryMarkdownFiles] = await Promise.all([
-    discoverMarkdownFiles(root, contract),
-    discoverRepositoryMarkdownFiles(root, contract)
-  ]);
-  const notes = await Promise.all(files.map((file) => readMarkdownNote(root, file)));
-  const issues = validateMarkdownFilenames(root, repositoryMarkdownFiles, contract);
+  const canonicalRoot = path3.resolve(options.canonicalRoot ?? root);
+  const catalogue = await openCatalogue(root);
+  const { contract } = catalogue;
+  const [notes, filenamePolicyPaths] = await Promise.all([catalogue.notes(), catalogue.filenamePolicyPaths()]);
+  const issues = validateMarkdownFilenames(filenamePolicyPaths, contract);
   for (const note of notes) {
     issues.push(...validateFrontmatter(note, contract));
     issues.push(...validateBodySecrets(note, contract));
@@ -171,11 +178,10 @@ async function checkVault(root, options = {}) {
 function validateArtifactMaps(notes) {
   const paths = new Set(notes.map((note) => note.relativePath));
   const missing = new Set;
-  for (const note of notes) {
-    const parts = note.relativePath.split("/");
-    if (parts[0] !== "projects" || parts.length < 4 || !["specs", "tickets", "proofs"].includes(parts[2] ?? ""))
+  for (const { placement } of notes) {
+    if (!placement.artifactFolder)
       continue;
-    const map = parts.slice(0, 3).join("/") + "/README.md";
+    const map = `projects/${placement.project}/${placement.artifactFolder}/README.md`;
     if (!paths.has(map))
       missing.add(map);
   }
@@ -193,7 +199,7 @@ function validateTicketOwnership(notes) {
       continue;
     const parts = note.relativePath.split("/");
     const specPath = note.frontmatter.spec_path;
-    const spec = typeof specPath === "string" ? byPath.get(path2.resolve(path2.dirname(note.absolutePath), specPath)) : undefined;
+    const spec = typeof specPath === "string" ? byPath.get(path3.resolve(path3.dirname(note.absolutePath), specPath)) : undefined;
     const specParts = spec?.relativePath.split("/");
     const validSpec = spec?.frontmatter?.type === "project-spec" && specParts?.length === 4 && specParts[0] === "projects" && specParts[1] === parts[1] && specParts[2] === "specs";
     if (!validSpec)
@@ -202,7 +208,7 @@ function validateTicketOwnership(notes) {
         id: "ticket-spec-invalid",
         message: "set spec_path to an existing project-spec in this project's specs folder"
       });
-    if (parts.length !== 5 || parts[0] !== "projects" || parts[2] !== "tickets" || validSpec && parts[3] !== path2.basename(spec.relativePath, ".md")) {
+    if (parts.length !== 5 || parts[0] !== "projects" || parts[2] !== "tickets" || validSpec && parts[3] !== path3.basename(spec.relativePath, ".md")) {
       issues.push({
         file: note.relativePath,
         id: "ticket-placement-invalid",
@@ -212,14 +218,14 @@ function validateTicketOwnership(notes) {
   }
   return issues;
 }
-function validateMarkdownFilenames(root, files, contract) {
+function validateMarkdownFilenames(files, contract) {
   const allowlist = new Set(contract.markdownFilenames.uppercaseBasenameAllowlist);
-  return files.flatMap((absolutePath) => {
-    const basename = path2.basename(absolutePath);
+  return files.flatMap((file) => {
+    const basename = path3.posix.basename(file);
     if (!/[A-Z]/.test(basename) || allowlist.has(basename))
       return [];
     return [{
-      file: path2.relative(root, absolutePath).split(path2.sep).join("/"),
+      file,
       id: "filename-uppercase",
       message: `rename Markdown filename to '${basename.toLowerCase()}'; uppercase is reserved for ${Array.from(allowlist).map((value) => `'${value}'`).join(", ")}`
     }];
@@ -261,7 +267,7 @@ function validateFrontmatter(note, contract) {
   const type = typeof metadata.type === "string" ? metadata.type : "";
   validateRequiredFields(metadata, type, contract, add);
   validateTypeStatus(metadata, type, contract, add);
-  validatePathRoute(note.relativePath, type, contract, add);
+  validatePathRoute(note.placement.expectedTypes, type, add);
   validateEmptyAndForbiddenFields(metadata, contract, add);
   validateFieldShapes(metadata, contract, (field, message) => issues.push({
     file: note.relativePath,
@@ -294,8 +300,7 @@ function validateTypeStatus(metadata, type, contract, add) {
     add("status-invalid", `use a valid status for '${type}': ${allowedStatuses.map((value) => `'${value}'`).join(", ")}`);
   }
 }
-function validatePathRoute(relativePath, type, contract, add) {
-  const expectedTypes = expectedTypesForPath(relativePath, contract);
+function validatePathRoute(expectedTypes, type, add) {
   if (expectedTypes.length === 0) {
     add("path-unrouted", "move this note into a routed family or add an approved routing contract");
   } else if (type && !expectedTypes.includes(type)) {
@@ -393,7 +398,7 @@ async function validateLinks(note, root, canonicalRoot) {
     if (!target)
       continue;
     const decodedTarget = decodeURIComponent(target);
-    if (await linkTargetFound(path2.dirname(note.absolutePath), decodedTarget, root, canonicalRoot))
+    if (await linkTargetFound(path3.dirname(note.absolutePath), decodedTarget, root, canonicalRoot))
       continue;
     issues.push({
       file: note.relativePath,
@@ -404,17 +409,17 @@ async function validateLinks(note, root, canonicalRoot) {
   return issues;
 }
 async function linkTargetFound(noteDirectory, decodedTarget, root, canonicalRoot) {
-  const resolved = path2.resolve(noteDirectory, decodedTarget);
+  const resolved = path3.resolve(noteDirectory, decodedTarget);
   if (await exists(resolved))
     return true;
-  if (canonicalRoot === path2.resolve(root))
+  if (canonicalRoot === path3.resolve(root))
     return false;
-  const canonicalDirectory = path2.resolve(canonicalRoot, path2.relative(root, noteDirectory));
-  const canonicalTarget = path2.resolve(canonicalDirectory, decodedTarget);
+  const canonicalDirectory = path3.resolve(canonicalRoot, path3.relative(root, noteDirectory));
+  const canonicalTarget = path3.resolve(canonicalDirectory, decodedTarget);
   if (escapesRoot(root, resolved)) {
     return exists(canonicalTarget);
   }
-  return await exists(canonicalTarget) && isGitIgnored(canonicalRoot, path2.relative(canonicalRoot, canonicalTarget));
+  return await exists(canonicalTarget) && isGitIgnored(canonicalRoot, path3.relative(canonicalRoot, canonicalTarget));
 }
 async function exists(file) {
   try {
@@ -432,28 +437,28 @@ function isGitIgnored(canonicalRoot, relativePath) {
   return result.status === 0;
 }
 function escapesRoot(root, resolved) {
-  const relative = path2.relative(path2.resolve(root), resolved);
-  return relative.startsWith("..") || path2.isAbsolute(relative);
+  const relative = path3.relative(path3.resolve(root), resolved);
+  return relative.startsWith("..") || path3.isAbsolute(relative);
 }
 function parseRoot(args) {
   const value = args[args.indexOf("--root") + 1];
-  return args.includes("--root") && value ? path2.resolve(value) : process.cwd();
+  return args.includes("--root") && value ? path3.resolve(value) : process.cwd();
 }
 async function resolveCanonicalRoot(args, env, root) {
   const flagIndex = args.indexOf("--canonical-root");
   const flag = flagIndex >= 0 ? args[flagIndex + 1] : undefined;
   if (flag)
-    return path2.resolve(flag);
+    return path3.resolve(flag);
   if (env.VAULT_CANONICAL_ROOT)
-    return path2.resolve(env.VAULT_CANONICAL_ROOT);
-  const configHome = env.XDG_CONFIG_HOME ?? path2.join(env.HOME ?? homedir(), ".config");
+    return path3.resolve(env.VAULT_CANONICAL_ROOT);
+  const configHome = env.XDG_CONFIG_HOME ?? path3.join(env.HOME ?? homedir(), ".config");
   try {
-    const config = JSON.parse(await readFile2(path2.join(configHome, "my-second-brain-playground", "vault.json"), "utf8"));
-    if (config.schemaVersion === 1 && typeof config.vault === "string" && path2.isAbsolute(config.vault)) {
+    const config = JSON.parse(await readFile3(path3.join(configHome, "my-second-brain-playground", "vault.json"), "utf8"));
+    if (config.schemaVersion === 1 && typeof config.vault === "string" && path3.isAbsolute(config.vault)) {
       return config.vault;
     }
   } catch {}
-  return path2.resolve(root);
+  return path3.resolve(root);
 }
 function toJsonResult(issues) {
   return {
@@ -776,20 +781,17 @@ function isCommandIdentity(value) {
 }
 
 // packages/vault-notes/src/inventory.ts
-import path3 from "path";
+import path4 from "path";
 async function inventoryVault(root) {
-  const contract = await loadContract(root);
-  const files = await discoverMarkdownFiles(root, contract);
+  const notes = await (await openCatalogue(root)).notes();
   const inventory = {
-    total: files.length,
+    total: notes.length,
     byFamily: {},
     byType: {},
     byStatus: {}
   };
-  for (const file of files) {
-    const note = await readMarkdownNote(root, file);
-    const family = note.relativePath.includes("/") ? note.relativePath.split("/")[0] ?? "root" : "root";
-    increment(inventory.byFamily, family);
+  for (const note of notes) {
+    increment(inventory.byFamily, note.placement.family ?? "root");
     if (typeof note.frontmatter?.type === "string")
       increment(inventory.byType, note.frontmatter.type);
     if (typeof note.frontmatter?.status === "string")
@@ -820,7 +822,7 @@ function renderInventory(inventory) {
 }
 function parseRoot2(args) {
   const value = args[args.indexOf("--root") + 1];
-  return args.includes("--root") && value ? path3.resolve(value) : process.cwd();
+  return args.includes("--root") && value ? path4.resolve(value) : process.cwd();
 }
 async function runInventory(args) {
   const inventory = await inventoryVault(parseRoot2(args));
@@ -828,7 +830,7 @@ async function runInventory(args) {
 }
 
 // packages/vault-notes/src/list.ts
-import path4 from "path";
+import path5 from "path";
 var usage = `List current vault notes from their metadata. This command writes nothing.
 
 Usage: bun run list [--family <name>] [--root <path>] [--json]
@@ -867,32 +869,27 @@ function parse(args) {
     }
     seen.add(flag);
     if (flag === "--root")
-      options.root = path4.resolve(value);
+      options.root = path5.resolve(value);
     else
       options.family = value;
   }
   return options;
 }
 async function listNotes(root, family) {
-  const contract = await loadContract(root);
-  if (family && !Object.hasOwn(contract.routing.familyReadmes, family)) {
-    throw new ListingError("INVALID_USAGE", `Choose a family: ${Object.keys(contract.routing.familyReadmes).join(", ")}.`);
+  const catalogue = await openCatalogue(root);
+  const families = catalogue.contract.routing.familyReadmes;
+  if (family && !Object.hasOwn(families, family)) {
+    throw new ListingError("INVALID_USAGE", `Choose a family: ${Object.keys(families).join(", ")}.`);
   }
   const notes = [];
   const invalid = [];
-  for (const file of await discoverMarkdownFiles(root, contract)) {
-    const relative = path4.relative(root, file).split(path4.sep).join("/");
-    if (family && !relative.startsWith(`${family}/`))
-      continue;
-    if (relative === "README.md" || Object.keys(contract.routing.familyReadmes).some((name) => relative === `${name}/README.md`))
-      continue;
-    const note = await readMarkdownNote(root, file);
+  for (const note of await catalogue.notes((placement) => !placement.isIndex && (!family || placement.family === family))) {
     const { title, type, status, summary } = note.frontmatter ?? {};
     if (typeof title !== "string" || !title.trim() || typeof type !== "string" || !type.trim() || typeof status !== "string" || !status.trim() || typeof summary !== "string" || !summary.trim()) {
-      invalid.push(relative);
+      invalid.push(note.relativePath);
       continue;
     }
-    notes.push({ path: relative, title, type, status, summary });
+    notes.push({ path: note.relativePath, title, type, status, summary });
   }
   if (invalid.length) {
     throw new ListingError("INVALID_NOTES", "Run bun run check and repair the named files before relying on a complete listing.", invalid);

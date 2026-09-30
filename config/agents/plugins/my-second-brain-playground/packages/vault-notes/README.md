@@ -18,6 +18,16 @@ stderr and exit code match the vault script it replaces. They emit no 2.0
 envelope; `--discover-command` declares their outcomes instead of 2.0 stations.
 Unifying the three legacy JSON shapes is a later, versioned decision.
 
+## Vault Catalogue
+
+`src/vault-catalogue.ts` is the one owner of which Markdown files are vault
+notes and where each note sits. `openCatalogue(root)` reads the contract;
+`notes(include?)` returns governed notes with their placement (family, owning
+project, artifact folder, index role, routed types), selecting before any note
+is read; `filenamePolicyPaths()` returns the files the uppercase-filename rule
+governs, under its own exclusion list. check, list and inventory read notes
+only through it.
+
 ## Fixture contract
 
 `tests/fixtures/frontmatter-contract.json` is a snapshot of the vault's
@@ -36,6 +46,6 @@ each needs its own finding identifier and an explicit decision.
 - An in-root target under a directory whose name starts with `..` (for example
   `..notes/`) is classified as escaping the root, so a canonical copy hides a
   missing link (`escapesRoot`).
-- The `proofs` folder is routed only in code (`projectTypesForPath`,
-  `validateArtifactMaps`); the vault contract's `projectDirectories` lists only
-  `specs` and `tickets`.
+- The `proofs` folder is routed only in code (`ARTIFACT_FOLDERS` in the Vault
+  Catalogue); the vault contract's `projectDirectories` lists only `specs` and
+  `tickets`.

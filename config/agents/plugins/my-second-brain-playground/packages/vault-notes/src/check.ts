@@ -2,17 +2,8 @@ import { spawnSync } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
-import {
-  discoverMarkdownFiles,
-  discoverRepositoryMarkdownFiles,
-  expectedTypesForPath,
-  isEmptyValue,
-  loadContract,
-  readMarkdownNote,
-  type Frontmatter,
-  type MarkdownNote,
-  type VaultContract,
-} from "./vault-contract";
+import { type MarkdownNote, openCatalogue } from "./vault-catalogue";
+import { type Frontmatter, isEmptyValue, type VaultContract } from "./vault-contract";
 
 /** Stable machine-readable finding identifiers. Consumers match on these, never on message text. */
 export const VAULT_FINDING_IDS = [
@@ -62,17 +53,10 @@ export interface CheckVaultOptions {
 
 export async function checkVault(root: string, options: CheckVaultOptions = {}): Promise<ValidationIssue[]> {
   const canonicalRoot = path.resolve(options.canonicalRoot ?? root);
-  const contract = await loadContract(root);
-  const [files, repositoryMarkdownFiles] = await Promise.all([
-    discoverMarkdownFiles(root, contract),
-    discoverRepositoryMarkdownFiles(root, contract),
-  ]);
-  const notes = await Promise.all(files.map((file) => readMarkdownNote(root, file)));
-  const issues: ValidationIssue[] = validateMarkdownFilenames(
-    root,
-    repositoryMarkdownFiles,
-    contract,
-  );
+  const catalogue = await openCatalogue(root);
+  const { contract } = catalogue;
+  const [notes, filenamePolicyPaths] = await Promise.all([catalogue.notes(), catalogue.filenamePolicyPaths()]);
+  const issues: ValidationIssue[] = validateMarkdownFilenames(filenamePolicyPaths, contract);
 
   for (const note of notes) {
     issues.push(...validateFrontmatter(note, contract));
@@ -89,11 +73,9 @@ export async function checkVault(root: string, options: CheckVaultOptions = {}):
 function validateArtifactMaps(notes: MarkdownNote[]): ValidationIssue[] {
   const paths = new Set(notes.map((note) => note.relativePath));
   const missing = new Set<string>();
-  for (const note of notes) {
-    const parts = note.relativePath.split("/");
-    if (parts[0] !== "projects" || parts.length < 4
-      || !["specs", "tickets", "proofs"].includes(parts[2] ?? "")) continue;
-    const map = parts.slice(0, 3).join("/") + "/README.md";
+  for (const { placement } of notes) {
+    if (!placement.artifactFolder) continue;
+    const map = `projects/${placement.project}/${placement.artifactFolder}/README.md`;
     if (!paths.has(map)) missing.add(map);
   }
   return [...missing].map((file) => ({ file, id: "artifact-map-missing",
@@ -126,16 +108,15 @@ function validateTicketOwnership(notes: MarkdownNote[]): ValidationIssue[] {
 }
 
 function validateMarkdownFilenames(
-  root: string,
   files: string[],
   contract: VaultContract,
 ): ValidationIssue[] {
   const allowlist = new Set(contract.markdownFilenames.uppercaseBasenameAllowlist);
-  return files.flatMap((absolutePath) => {
-    const basename = path.basename(absolutePath);
+  return files.flatMap((file) => {
+    const basename = path.posix.basename(file);
     if (!/[A-Z]/.test(basename) || allowlist.has(basename)) return [];
     return [{
-      file: path.relative(root, absolutePath).split(path.sep).join("/"),
+      file,
       id: "filename-uppercase" as const,
       message: `rename Markdown filename to '${basename.toLowerCase()}'; uppercase is reserved for ${Array.from(allowlist).map((value) => `'${value}'`).join(", ")}`,
     }];
@@ -207,7 +188,7 @@ function validateFrontmatter(
   const type = typeof metadata.type === "string" ? metadata.type : "";
   validateRequiredFields(metadata, type, contract, add);
   validateTypeStatus(metadata, type, contract, add);
-  validatePathRoute(note.relativePath, type, contract, add);
+  validatePathRoute(note.placement.expectedTypes, type, add);
   validateEmptyAndForbiddenFields(metadata, contract, add);
 
   validateFieldShapes(metadata, contract, (field, message) =>
@@ -270,12 +251,10 @@ function validateTypeStatus(
 }
 
 function validatePathRoute(
-  relativePath: string,
+  expectedTypes: string[],
   type: string,
-  contract: VaultContract,
   add: AddIssue,
 ): void {
-  const expectedTypes = expectedTypesForPath(relativePath, contract);
   if (expectedTypes.length === 0) {
     add(
       "path-unrouted",

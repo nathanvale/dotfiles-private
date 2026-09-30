@@ -1,5 +1,5 @@
 import path from "node:path";
-import { discoverMarkdownFiles, loadContract, readMarkdownNote } from "./vault-contract";
+import { openCatalogue } from "./vault-catalogue";
 
 const usage = `List current vault notes from their metadata. This command writes nothing.
 
@@ -47,24 +47,21 @@ function parse(args: string[]) {
 }
 
 async function listNotes(root: string, family?: string): Promise<NoteSummary[]> {
-  const contract = await loadContract(root);
-  if (family && !Object.hasOwn(contract.routing.familyReadmes, family)) {
-    throw new ListingError("INVALID_USAGE", `Choose a family: ${Object.keys(contract.routing.familyReadmes).join(", ")}.`);
+  const catalogue = await openCatalogue(root);
+  const families = catalogue.contract.routing.familyReadmes;
+  if (family && !Object.hasOwn(families, family)) {
+    throw new ListingError("INVALID_USAGE", `Choose a family: ${Object.keys(families).join(", ")}.`);
   }
   const notes: NoteSummary[] = [];
   const invalid: string[] = [];
-  for (const file of await discoverMarkdownFiles(root, contract)) {
-    const relative = path.relative(root, file).split(path.sep).join("/");
-    if (family && !relative.startsWith(`${family}/`)) continue;
-    if (relative === "README.md" || Object.keys(contract.routing.familyReadmes).some((name) => relative === `${name}/README.md`)) continue;
-    const note = await readMarkdownNote(root, file);
+  for (const note of await catalogue.notes((placement) => !placement.isIndex && (!family || placement.family === family))) {
     const { title, type, status, summary } = note.frontmatter ?? {};
     if (typeof title !== "string" || !title.trim() || typeof type !== "string" || !type.trim() ||
         typeof status !== "string" || !status.trim() || typeof summary !== "string" || !summary.trim()) {
-      invalid.push(relative);
+      invalid.push(note.relativePath);
       continue;
     }
-    notes.push({ path: relative, title, type, status, summary });
+    notes.push({ path: note.relativePath, title, type, status, summary });
   }
   if (invalid.length) {
     throw new ListingError("INVALID_NOTES", "Run bun run check and repair the named files before relying on a complete listing.", invalid);
