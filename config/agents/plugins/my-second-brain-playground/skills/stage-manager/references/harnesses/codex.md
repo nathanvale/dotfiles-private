@@ -25,13 +25,18 @@ do not dump credentials. A worker's inherited `HERDR_PANE_ID` does not grant the
 Stage Manager role.
 
 For that agent PID, compare `CODEX_VERSION` from the current agent's
-environment with `session_meta.cli_version` from the exact current session.
+environment with `session_meta.cli_version` from its open rollout JSONL.
+Locate the rollout with `lsof -p <pid>`, rather than choosing the newest file
+by timestamp. If `CODEX_SESSION_ID` is present, require `session_meta.id` to
+equal it. Without a unique PID-bound rollout and matching metadata, treat the
+session version as unavailable.
 When both are available and agree, record that version. If they disagree,
 record `unknown` and refuse at step 2. When only one is available, use
-`lsof -a -p <pid> -d txt` to find the mapped Codex executable and run that
-absolute path with `--version`; record the version only if the direct result
-agrees. With neither current value, or without the required agreement, record
-`unknown`.
+`lsof -a -p <pid> -d txt` to select the mapped Codex executable entry, not a
+library or Node entry, and run that absolute path with `--version`. An
+ambiguous executable entry makes this direct source unavailable. Record the
+version only if the direct result agrees. With neither current value, or
+without the required agreement, record `unknown`.
 
 Check the mapped executable's direct version when possible even if both
 current values agree. Its path may have been deleted or replaced after the
