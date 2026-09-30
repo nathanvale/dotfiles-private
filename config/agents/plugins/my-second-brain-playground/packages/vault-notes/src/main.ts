@@ -1,12 +1,11 @@
 // vault-notes public entry point. check, list and inventory receive their remaining arguments unchanged and keep
-// their frozen legacy output; every other invocation is a Contract Core 2.0 control path (help, discovery, refusal).
+// their frozen legacy output; resources and every control path (help, discovery, refusal) speak Contract Core 2.0.
 // Every command is inspect-only; see contract.ts for the typed catalogue and effect exclusions.
 import { runCheck } from "./check";
 import {
   COMMANDS,
   commandDiscovery,
   discoveryData,
-  type Envelope,
   isCommandIdentity,
   type LegacyCommand,
   STATIONS,
@@ -16,6 +15,7 @@ import {
 } from "./contract";
 import { runInventory } from "./inventory";
 import { runList } from "./list";
+import { type Output, runResources } from "./resources-command";
 
 const LEGACY_RUNNERS = new Map<string, (args: string[]) => Promise<void>>([
   ["check", (args) => runCheck(args, process.env)],
@@ -28,6 +28,7 @@ const USAGE = [
   "  vault-notes check [--root PATH] [--canonical-root PATH] [--json]",
   "  vault-notes list [--family NAME] [--root PATH] [--json] [--help]",
   "  vault-notes inventory [--root PATH] [--json]",
+  "  vault-notes resources [--project SLUG]... [--root PATH] [--updated YYYY-MM-DD] [--json]",
   "  vault-notes --help [--json] | --discover [--json] | --discover-command COMMAND_IDENTITY [--json]",
 ];
 
@@ -39,7 +40,13 @@ const OPTIONS = [
     summary: "check only: canonical checkout for escaping or gitignored link targets; else VAULT_CANONICAL_ROOT, else vault.json.",
   },
   { name: "--family", valueName: "NAME", summary: "list only: one family from the vault contract." },
-  { name: "--json", valueName: null, summary: "Machine output: legacy JSON for commands, one 2.0 envelope for control paths." },
+  { name: "--project", valueName: "SLUG", summary: "resources only: a project folder under projects/; repeatable; default every project." },
+  {
+    name: "--updated",
+    valueName: "YYYY-MM-DD",
+    summary: "resources only: the 'updated' date of a newly created index; default today. Existing indexes keep theirs.",
+  },
+  { name: "--json", valueName: null, summary: "Machine output: legacy JSON for check, list and inventory; one 2.0 envelope otherwise." },
   { name: "--discover", valueName: null, summary: "Describe the contract, commands and effect exclusions." },
   { name: "--discover-command", valueName: "COMMAND_IDENTITY", summary: "Describe one command's possible outcomes." },
   { name: "--help", valueName: null, summary: "Show this help." },
@@ -51,7 +58,8 @@ const HUMAN_HELP = [
   ...USAGE,
   "",
   "check, list and inventory keep the vault's legacy output byte-for-byte and emit no",
-  "Contract Core 2.0 envelope; help and discovery do.",
+  "Contract Core 2.0 envelope; resources, help and discovery do. resources proposes each",
+  "project's complete Resources Index (resources.md) and its findings; it writes nothing.",
   "",
   "Options:",
   ...OPTIONS.map((option) => `  ${option.name}${option.valueName === null ? "" : ` ${option.valueName}`}  ${option.summary}`),
@@ -59,15 +67,11 @@ const HUMAN_HELP = [
   "Examples:",
   "  vault-notes check --root ~/code/my-second-brain-playground",
   "  vault-notes list --family projects --json",
+  "  vault-notes resources --project my-second-brain --root ~/code/my-second-brain-playground --json",
   "  vault-notes --discover-command vault-notes.check --json",
 ].join("\n");
 
 class UsageError extends Error {}
-
-interface Output {
-  envelope: Envelope;
-  human: string;
-}
 
 type ControlSelection = { kind: "help" } | { kind: "discover" } | { kind: "discover-command"; selector: string };
 
@@ -84,7 +88,7 @@ function selectControl(args: string[]): ControlSelection {
 function control(selection: ControlSelection): Output {
   if (selection.kind === "help") {
     const data = {
-      summary: "Inspect-only vault notes: check, list and inventory.",
+      summary: "Inspect-only vault notes: check, list, inventory and resources.",
       usage: USAGE.slice(1).map((line) => line.trim()),
       commands: COMMANDS,
       options: OPTIONS,
@@ -92,13 +96,15 @@ function control(selection: ControlSelection): Output {
     return { envelope: success("vault-notes.help", data, "Show help.", "Choose a command from the usage lines."), human: HUMAN_HELP };
   }
   if (selection.kind === "discover") {
-    const human = "Commands: check (inspect, legacy output), list (inspect, legacy output), inventory (inspect, legacy output)";
+    const human =
+      "Commands: check (inspect, legacy output), list (inspect, legacy output), inventory (inspect, legacy output), resources (inspect, 2.0)";
     return { envelope: success("vault-notes.discovery", discoveryData(), "Describe commands.", "Choose a command to run."), human };
   }
   const { selector } = selection;
   if (!isCommandIdentity(selector)) throw new UsageError("--discover-command needs a listed command identity.");
   const data = commandDiscovery(selector);
-  const human = `${selector}: ${data.outcomes.map((outcome) => `${outcome.id}/exit ${outcome.exitCode}`).join(", ")}`;
+  const rows = "stations" in data ? data.stations.map((row) => `${row.causeCode}/exit ${row.exitCode}`) : data.outcomes.map((row) => `${row.id}/exit ${row.exitCode}`);
+  const human = `${selector}: ${rows.join(", ")}`;
   return {
     envelope: success("vault-notes.command-discovery", data, `Describe ${selector}.`, "Read the outcomes; discovery reports no live state."),
     human,
@@ -158,7 +164,23 @@ function runControl(args: string[]): number {
   return emit(output, json);
 }
 
-const argv = process.argv.slice(2);
-const legacy = LEGACY_RUNNERS.get(argv[0] ?? "");
-if (legacy) await legacy(argv.slice(1));
-else process.exitCode = runControl(argv);
+/** Today's date in the process time zone, YYYY-MM-DD. */
+function localDate(now = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
+}
+
+async function dispatch(argv: string[]): Promise<void> {
+  const [command, ...rest] = argv;
+  const legacy = LEGACY_RUNNERS.get(command ?? "");
+  if (legacy) return legacy(rest);
+  const control = ["--help", "-h", "--discover", "--discover-command"];
+  if (command === "resources" && !rest.some((arg) => control.includes(arg))) {
+    process.exitCode = emit(await runResources(rest, process.cwd(), localDate()), rest.includes("--json"));
+    return;
+  }
+  // Help and discovery read the same after the resources command word as before it.
+  process.exitCode = runControl(command === "resources" ? rest : argv);
+}
+
+await dispatch(process.argv.slice(2));

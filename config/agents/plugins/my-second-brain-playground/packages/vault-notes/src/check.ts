@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { access, readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import path from "node:path";
+import { RESOURCES_FINDING_IDS, resourcesFindings } from "./resources-index";
 import { type MarkdownNote, openCatalogue } from "./vault-catalogue";
 import { type Frontmatter, isEmptyValue, type VaultContract } from "./vault-contract";
 
@@ -26,6 +27,7 @@ export const VAULT_FINDING_IDS = [
   "ticket-placement-invalid",
   "ticket-spec-invalid",
   "artifact-map-missing",
+  ...RESOURCES_FINDING_IDS,
 ] as const;
 
 /** Stable finding identifier. */
@@ -66,6 +68,7 @@ export async function checkVault(root: string, options: CheckVaultOptions = {}):
   issues.push(...validateUniqueIdentities(notes, contract));
   issues.push(...validateTicketOwnership(notes));
   issues.push(...validateArtifactMaps(notes));
+  issues.push(...resourcesFindings(notes, contract));
 
   return issues;
 }

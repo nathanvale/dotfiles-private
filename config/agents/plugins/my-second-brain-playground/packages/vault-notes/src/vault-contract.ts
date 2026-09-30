@@ -50,6 +50,12 @@ export interface VaultContract {
     projectLocalTypes: string[];
   };
   ignored: string[];
+  /**
+   * Resources Index activation, read from disk as unknown and validated by the Resources Index before use.
+   * Absent: every resources rule is inactive and check output is unchanged. Accepted shape:
+   * `{ "indexFile": "resources.md" }`.
+   */
+  projectResources?: unknown;
 }
 
 /** Load the vault's machine-readable frontmatter and routing contract. */

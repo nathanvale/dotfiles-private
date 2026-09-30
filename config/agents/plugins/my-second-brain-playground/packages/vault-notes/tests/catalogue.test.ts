@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { checkVault } from "../src/check";
 import { inventoryVault } from "../src/inventory";
-import { openCatalogue } from "../src/vault-catalogue";
+import { openCatalogue, type ProjectRole } from "../src/vault-catalogue";
 
 const contract = await Bun.file(path.join(import.meta.dir, "fixtures", "frontmatter-contract.json")).text();
 const CLI = path.join(import.meta.dir, "..", "src", "main.ts");
@@ -51,7 +51,7 @@ test("governed notes and the filename policy apply their own exclusions", async 
   ]);
 });
 
-test("placement names the owning project at any depth and the types routed to each path", async () => {
+test("placement names the owning project, the note's role and folder in it, and the types routed to each path", async () => {
   const catalogue = await openCatalogue(
     await vault([
       "README.md",
@@ -60,40 +60,54 @@ test("placement names the owning project at any depth and the types routed to ea
       "projects/README.md",
       "projects/loose.md",
       "projects/alpha/README.md",
+      "projects/alpha/plan.md",
       "projects/alpha/research/deep/finding.md",
       "projects/alpha/research/README.md",
       "projects/alpha/specs/README.md",
       "projects/alpha/tickets/feature/implement.md",
+      "projects/alpha/tickets/feature/README.md",
       "projects/alpha/proofs/run.md",
     ]),
   );
   const placements = Object.fromEntries((await catalogue.notes()).map((note) => [note.relativePath, note.placement]));
   const projectLocal = ["decision", "reference"];
+  const outside = { project: null, artifactFolder: null, projectPath: null, projectFolder: null, projectRole: null };
+  const alpha = (projectPath: string, projectFolder: string, projectRole: ProjectRole) => ({ family: "projects", project: "alpha", projectPath, projectFolder, projectRole });
 
   expect(placements).toEqual({
-    "README.md": { family: null, project: null, artifactFolder: null, isIndex: true, expectedTypes: ["vault-index"] },
-    "stray.md": { family: null, project: null, artifactFolder: null, isIndex: false, expectedTypes: [] },
-    "docs/README.md": { family: "docs", project: null, artifactFolder: null, isIndex: false, expectedTypes: [] },
-    "projects/README.md": { family: "projects", project: null, artifactFolder: null, isIndex: true, expectedTypes: ["family-index"] },
-    "projects/loose.md": { family: "projects", project: null, artifactFolder: null, isIndex: false, expectedTypes: [] },
-    "projects/alpha/README.md": { family: "projects", project: "alpha", artifactFolder: null, isIndex: false, expectedTypes: ["project"] },
+    "README.md": { ...outside, family: null, isIndex: true, expectedTypes: ["vault-index"] },
+    "stray.md": { ...outside, family: null, isIndex: false, expectedTypes: [] },
+    "docs/README.md": { ...outside, family: "docs", isIndex: false, expectedTypes: [] },
+    "projects/README.md": { ...outside, family: "projects", isIndex: true, expectedTypes: ["family-index"] },
+    "projects/loose.md": { ...outside, family: "projects", isIndex: false, expectedTypes: [] },
+    "projects/alpha/README.md": { ...alpha("README.md", "", "packet"), artifactFolder: null, isIndex: false, expectedTypes: ["project"] },
+    "projects/alpha/plan.md": { ...alpha("plan.md", "", "note"), artifactFolder: null, isIndex: false, expectedTypes: projectLocal },
     "projects/alpha/research/deep/finding.md": {
-      family: "projects",
-      project: "alpha",
+      ...alpha("research/deep/finding.md", "research/deep", "note"),
       artifactFolder: null,
       isIndex: false,
       expectedTypes: projectLocal,
     },
-    "projects/alpha/research/README.md": { family: "projects", project: "alpha", artifactFolder: null, isIndex: false, expectedTypes: projectLocal },
-    "projects/alpha/specs/README.md": { family: "projects", project: "alpha", artifactFolder: "specs", isIndex: false, expectedTypes: ["reference"] },
+    "projects/alpha/research/README.md": {
+      ...alpha("research/README.md", "research", "folder-map"),
+      artifactFolder: null,
+      isIndex: false,
+      expectedTypes: projectLocal,
+    },
+    "projects/alpha/specs/README.md": { ...alpha("specs/README.md", "specs", "folder-map"), artifactFolder: "specs", isIndex: false, expectedTypes: ["reference"] },
     "projects/alpha/tickets/feature/implement.md": {
-      family: "projects",
-      project: "alpha",
+      ...alpha("tickets/feature/implement.md", "tickets/feature", "artifact"),
       artifactFolder: "tickets",
       isIndex: false,
       expectedTypes: ["project-ticket"],
     },
-    "projects/alpha/proofs/run.md": { family: "projects", project: "alpha", artifactFolder: "proofs", isIndex: false, expectedTypes: projectLocal },
+    "projects/alpha/tickets/feature/README.md": {
+      ...alpha("tickets/feature/README.md", "tickets/feature", "artifact"),
+      artifactFolder: "tickets",
+      isIndex: false,
+      expectedTypes: projectLocal,
+    },
+    "projects/alpha/proofs/run.md": { ...alpha("proofs/run.md", "proofs", "artifact"), artifactFolder: "proofs", isIndex: false, expectedTypes: projectLocal },
   });
 });
 

@@ -196,6 +196,7 @@ describe("Contract Core 2.0 control paths", () => {
     "vault-notes.help",
     "vault-notes.inventory",
     "vault-notes.list",
+    "vault-notes.resources",
   ];
 
   function envelope(args: string[]) {
@@ -213,6 +214,7 @@ describe("Contract Core 2.0 control paths", () => {
       "  vault-notes check [--root PATH] [--canonical-root PATH] [--json]",
       "  vault-notes list [--family NAME] [--root PATH] [--json] [--help]",
       "  vault-notes inventory [--root PATH] [--json]",
+      "  vault-notes resources [--project SLUG]... [--root PATH] [--updated YYYY-MM-DD] [--json]",
       "  vault-notes --help [--json] | --discover [--json] | --discover-command COMMAND_IDENTITY [--json]",
       "  vault-notes --discover-command vault-notes.check --json",
     ]) {
@@ -258,6 +260,7 @@ describe("Contract Core 2.0 control paths", () => {
       "vault-notes.check",
       "vault-notes.list",
       "vault-notes.inventory",
+      "vault-notes.resources",
     ]);
     expect(new Set(data.commands.map((command: { effectClass: string }) => command.effectClass))).toEqual(new Set(["inspect"]));
     expect(data.effectExclusions.length).toBe(3);
@@ -297,7 +300,7 @@ describe("Contract Core 2.0 control paths", () => {
     }
   });
 
-  test("check discovery lists the nineteen finding identifiers", () => {
+  test("check discovery lists the nineteen legacy and eight resources finding identifiers", () => {
     const { body } = envelope(["--discover-command", "vault-notes.check", "--json"]);
     expect(body.result.data.findingIds).toEqual([
       "frontmatter-invalid-yaml",
@@ -319,6 +322,14 @@ describe("Contract Core 2.0 control paths", () => {
       "ticket-placement-invalid",
       "ticket-spec-invalid",
       "artifact-map-missing",
+      "resources-contract-invalid",
+      "resources-route-missing",
+      "resources-index-missing",
+      "resources-block-invalid",
+      "resources-entry-missing",
+      "resources-entry-stale",
+      "resources-entry-foreign",
+      "resources-entry-duplicate",
     ]);
   });
 
@@ -357,7 +368,7 @@ describe("Contract Core 2.0 control paths", () => {
       expect(human.exit).toBe(2);
       expect(human.stdout).toBe("");
       expect(human.stderr).toEndWith(
-        "Repair: Choose check, list, inventory, --help, --discover or --discover-command COMMAND_IDENTITY and retry.\n",
+        "Repair: Choose check, list, inventory, resources, --help, --discover or --discover-command COMMAND_IDENTITY with its listed options and retry.\n",
       );
       const { exit, body } = envelope([...args, "--json"]);
       expect(exit).toBe(2);
@@ -373,7 +384,7 @@ describe("Contract Core 2.0 control paths", () => {
       });
     }
     expect(run([]).stderr).toBe(
-      "Choose a command. Repair: Choose check, list, inventory, --help, --discover or --discover-command COMMAND_IDENTITY and retry.\n",
+      "Choose a command. Repair: Choose check, list, inventory, resources, --help, --discover or --discover-command COMMAND_IDENTITY with its listed options and retry.\n",
     );
   });
 
@@ -393,6 +404,9 @@ test("bin/vault-notes runs the committed runtime with the same observable result
   for (const args of [["check", "--root", root], ["list", "--root", root, "--json"], ["inventory", "--root", root], ["--discover-command", "vault-notes.check"]]) {
     expect(run(args, [BIN])).toEqual(run(args));
   }
+  const withoutRunId = (result: ReturnType<typeof run>) => ({ ...result, stdout: result.stdout.replace(/"runId":"[^"]*"/, "") });
+  const resources = ["resources", "--root", root, "--updated", "2026-10-01", "--json"];
+  expect(withoutRunId(run(resources, [BIN]))).toEqual(withoutRunId(run(resources)));
 });
 
 describe("bin/vault-notes through symlinks", () => {

@@ -1,18 +1,21 @@
 // The one typed owner for vault-notes command identities, routes, stations and the Contract Core 2.0 envelope.
-// Help and discovery speak 2.0. check, list and inventory keep their frozen legacy output; discovery declares
-// those legacy outcomes instead of 2.0 stations, because those commands never emit an envelope.
+// Help, discovery and resources speak 2.0. check, list and inventory keep their frozen legacy output; discovery
+// declares those legacy outcomes instead of 2.0 stations, because those commands never emit an envelope.
 import { randomUUID } from "node:crypto";
 import { VAULT_FINDING_IDS } from "./check";
+import { RESOURCES_FINDING_IDS } from "./resources-index";
 
 const CONTRACT_VERSION = "2.0.0";
 
 export type LegacyCommand = "check" | "list" | "inventory";
-export type CommandIdentity = `vault-notes.${LegacyCommand}`;
+export type CommandIdentity = `vault-notes.${LegacyCommand}` | "vault-notes.resources";
 export type ControlIdentity =
   | "vault-notes.help"
   | "vault-notes.discovery"
   | "vault-notes.command-discovery"
   | "vault-notes.dispatch";
+/** Every identity that emits a Contract Core 2.0 envelope. */
+export type EnvelopeIdentity = ControlIdentity | "vault-notes.resources";
 
 /** One observable result of a legacy command: its exit, trigger and exact output channel. */
 interface LegacyOutcome {
@@ -23,7 +26,7 @@ interface LegacyOutcome {
   machine: string;
 }
 
-const LEGACY_OUTCOMES: Record<CommandIdentity, readonly LegacyOutcome[]> = {
+const LEGACY_OUTCOMES: Record<Exclude<CommandIdentity, "vault-notes.resources">, readonly LegacyOutcome[]> = {
   "vault-notes.check": [
     {
       id: "check.passed",
@@ -145,6 +148,12 @@ export const COMMANDS = [
     route: ["inventory"],
     summary: "Count governed notes by family, type and status.",
   },
+  {
+    commandIdentity: "vault-notes.resources",
+    effectClass: "inspect",
+    route: ["resources"],
+    summary: "Propose each project's complete Resources Index and report its findings; writes nothing.",
+  },
 ] as const satisfies readonly {
   commandIdentity: CommandIdentity | ControlIdentity;
   effectClass: "inspect";
@@ -162,8 +171,8 @@ export type Guidance = { nextAction: string };
 export interface Station {
   causeCode: string;
   outcome: "refused" | "failed";
-  failureClass: "usage" | "internal";
-  exitCode: 1 | 2;
+  failureClass: "usage" | "domain" | "schema" | "internal";
+  exitCode: 1 | 2 | 3 | 4;
   trigger: string;
   repairAction: string;
   guidance: Guidance;
@@ -175,9 +184,54 @@ export const STATIONS = {
     outcome: "refused",
     failureClass: "usage",
     exitCode: 2,
-    trigger: "The arguments name no supported command, or a control option is repeated, combined or lacks its value.",
-    repairAction: "Choose check, list, inventory, --help, --discover or --discover-command COMMAND_IDENTITY and retry.",
+    trigger: "The arguments name no supported command, or an option is unknown, repeated, combined or lacks its value.",
+    repairAction: "Choose check, list, inventory, resources, --help, --discover or --discover-command COMMAND_IDENTITY with its listed options and retry.",
     guidance: { nextAction: "Run vault-notes --help and choose a listed command." },
+  },
+  optionInvalid: {
+    causeCode: "SCHEMA_INVALID_INPUT",
+    outcome: "refused",
+    failureClass: "schema",
+    exitCode: 4,
+    trigger: "resources: --project is not a lowercase project slug, or --updated is not a real YYYY-MM-DD date.",
+    repairAction: "Pass --project as a folder name under projects/ and --updated as YYYY-MM-DD, then retry.",
+    guidance: { nextAction: "Correct the option value and retry." },
+  },
+  contractMissing: {
+    causeCode: "DOMAIN_VAULT_NOT_FOUND",
+    outcome: "refused",
+    failureClass: "domain",
+    exitCode: 3,
+    trigger: "resources: the selected root has no schemas/frontmatter-contract.json, so it is not a vault root.",
+    repairAction: "Pass --root as a vault checkout or Vault Steward candidate root, then retry.",
+    guidance: { nextAction: "Select the vault root with --root and retry." },
+  },
+  projectUnknown: {
+    causeCode: "DOMAIN_PRECONDITION_UNMET",
+    outcome: "refused",
+    failureClass: "domain",
+    exitCode: 3,
+    trigger: "resources: a --project names no folder of notes under projects/.",
+    repairAction: "Name existing project folders with --project, or omit it to propose every project, then retry.",
+    guidance: { nextAction: "List projects with vault-notes list --family projects and retry." },
+  },
+  contractInvalid: {
+    causeCode: "SCHEMA_CONFIG_INVALID",
+    outcome: "refused",
+    failureClass: "schema",
+    exitCode: 4,
+    trigger: "resources: schemas/frontmatter-contract.json is not JSON, or its projectResources key is not {\"indexFile\": \"<name>.md\"}.",
+    repairAction: "Repair schemas/frontmatter-contract.json through a Vault Steward candidate, then retry.",
+    guidance: { nextAction: "Read the message for the contract problem and repair it." },
+  },
+  inspectionFailed: {
+    causeCode: "INTERNAL_PREPARATION",
+    outcome: "refused",
+    failureClass: "internal",
+    exitCode: 1,
+    trigger: "resources: a vault folder or note cannot be read, or the inspection stopped unexpectedly.",
+    repairAction: "Restore read access to the named path, or inspect the runtime error, then retry.",
+    guidance: { nextAction: "Read the message for the failing path and retry after repairing it." },
   },
   serialization: {
     causeCode: "INTERNAL_RESULT_SERIALIZATION",
@@ -205,7 +259,7 @@ const INSPECT_EFFECTS = { completed: [], inventoryComplete: true, remaining: [],
 
 export interface ResultBase {
   runId: string;
-  commandIdentity: CommandIdentity | ControlIdentity;
+  commandIdentity: EnvelopeIdentity;
   effectClass: "inspect";
   transactionState: "unchanged";
   effects: typeof INSPECT_EFFECTS;
@@ -244,7 +298,7 @@ function envelope(message: string, result: SuccessResult | StationResult): Envel
   return { envelopeVersion: 2, contractVersion: CONTRACT_VERSION, message, availablePaths: AVAILABLE_PATHS, result };
 }
 
-export function success(commandIdentity: ControlIdentity, data: unknown, message: string, nextAction: string): Envelope {
+export function success(commandIdentity: EnvelopeIdentity, data: unknown, message: string, nextAction: string): Envelope {
   return envelope(message, {
     runId: randomUUID(),
     commandIdentity,
@@ -262,7 +316,7 @@ export function success(commandIdentity: ControlIdentity, data: unknown, message
   });
 }
 
-export function stationResult(commandIdentity: ControlIdentity, key: StationKey, message: string): Envelope {
+export function stationResult(commandIdentity: EnvelopeIdentity, key: StationKey, message: string): Envelope {
   const station: Station = STATIONS[key];
   return envelope(message, {
     runId: randomUUID(),
@@ -372,7 +426,52 @@ const LEGACY_OUTPUT_CONTRACT = {
   exitMeanings: { "0": "success", "1": "findings, refusal or failure; read the outcomes" },
 };
 
+/** The stations `vault-notes resources` can reach, in the order a run meets them. */
+const RESOURCES_STATIONS: readonly StationKey[] = [
+  "usage",
+  "optionInvalid",
+  "contractMissing",
+  "contractInvalid",
+  "projectUnknown",
+  "inspectionFailed",
+  "serialization",
+  "emission",
+];
+
+/** The Resources Index contract key: its presence activates the resources rules in check. */
+const RESOURCES_CONTRACT_KEY = {
+  file: "schemas/frontmatter-contract.json",
+  key: "projectResources",
+  shape: { indexFile: "resources.md" },
+  absent: "Resources rules are inactive: check output is unchanged, and resources proposes with indexFile resources.md.",
+  invalid: "Any other value, including an unknown key, is a resources-contract-invalid finding and a SCHEMA_CONFIG_INVALID refusal.",
+};
+
+function resourcesDiscovery() {
+  return {
+    command: COMMANDS.find((entry) => entry.commandIdentity === "vault-notes.resources"),
+    semantics: "possible-stations",
+    outputContract: { kind: "contract-core", envelope: true, contractVersion: CONTRACT_VERSION },
+    stations: [
+      {
+        causeCode: "SUCCESS_UNCHANGED",
+        outcome: "success",
+        failureClass: null,
+        exitCode: 0,
+        trigger: "Every selected project has a proposal: create, update, current or blocked (markers to repair by hand).",
+      },
+      ...RESOURCES_STATIONS.map((key) => {
+        const { causeCode, outcome, failureClass, exitCode, trigger } = STATIONS[key];
+        return { causeCode, outcome, failureClass, exitCode, trigger };
+      }),
+    ],
+    findingIds: RESOURCES_FINDING_IDS,
+    contractKey: RESOURCES_CONTRACT_KEY,
+  };
+}
+
 export function commandDiscovery(commandIdentity: CommandIdentity) {
+  if (commandIdentity === "vault-notes.resources") return resourcesDiscovery();
   return {
     command: COMMANDS.find((entry) => entry.commandIdentity === commandIdentity),
     semantics: "possible-outcomes",
@@ -383,5 +482,10 @@ export function commandDiscovery(commandIdentity: CommandIdentity) {
 }
 
 export function isCommandIdentity(value: string | undefined): value is CommandIdentity {
-  return value === "vault-notes.check" || value === "vault-notes.list" || value === "vault-notes.inventory";
+  return (
+    value === "vault-notes.check" ||
+    value === "vault-notes.list" ||
+    value === "vault-notes.inventory" ||
+    value === "vault-notes.resources"
+  );
 }

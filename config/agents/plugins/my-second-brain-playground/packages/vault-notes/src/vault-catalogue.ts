@@ -9,6 +9,16 @@ import { type Frontmatter, loadContract, type VaultContract } from "./vault-cont
 const ARTIFACT_FOLDERS = ["specs", "tickets", "proofs"] as const;
 
 /**
+ * What a note is to its owning project:
+ * - `packet`: a project file the contract routes by name at the project root (README, GOAL, result);
+ * - `folder-map`: a README below the project root, either a nested navigation README or a governed artifact
+ *   folder's own map;
+ * - `artifact`: any other note inside a governed artifact folder;
+ * - `note`: every other project note, which the contract routes to its project-local types.
+ */
+export type ProjectRole = "packet" | "folder-map" | "artifact" | "note";
+
+/**
  * Where a note sits in the vault, derived from its path alone. `isIndex` and `expectedTypes` read the contract's
  * routing only when accessed, so a consumer that never reads them never depends on `contract.routing`.
  */
@@ -19,6 +29,12 @@ export interface NotePlacement {
   project: string | null;
   /** Governed artifact folder directly under the owning project that holds this note, at any depth; null elsewhere. */
   artifactFolder: (typeof ARTIFACT_FOLDERS)[number] | null;
+  /** Path inside the owning project's folder, for example `research/deep/finding.md`; null outside a project. */
+  projectPath: string | null;
+  /** Folder of `projectPath`, `""` at the project root; it groups a project's notes. Null outside a project. */
+  projectFolder: string | null;
+  /** The note's role in its owning project; null outside a project. Reads `contract.routing` only when accessed. */
+  readonly projectRole: ProjectRole | null;
   /** True for the vault root README and each contract family's README. */
   readonly isIndex: boolean;
   /** Note types the contract routes to this path; empty when the path is unrouted. */
@@ -142,10 +158,16 @@ function placeNote(relativePath: string, contract: VaultContract): NotePlacement
   const project = segments[0] === "projects" && segments.length >= 3 ? (segments[1] ?? null) : null;
   const folder = project !== null && segments.length >= 4 ? segments[2] : undefined;
   const artifactFolder = ARTIFACT_FOLDERS.find((name) => name === folder) ?? null;
+  const projectSegments = project === null ? null : segments.slice(2);
   return {
     family,
     project,
     artifactFolder,
+    projectPath: projectSegments?.join("/") ?? null,
+    projectFolder: projectSegments?.slice(0, -1).join("/") ?? null,
+    get projectRole() {
+      return projectSegments === null ? null : projectRoleFor(projectSegments, artifactFolder, contract);
+    },
     get isIndex() {
       return (
         relativePath === "README.md" ||
@@ -156,6 +178,19 @@ function placeNote(relativePath: string, contract: VaultContract): NotePlacement
       return routeTypes(relativePath, segments, artifactFolder, contract);
     },
   };
+}
+
+/** Role of a note from its path inside the project folder; see `ProjectRole`. */
+function projectRoleFor(
+  projectSegments: string[],
+  artifactFolder: NotePlacement["artifactFolder"],
+  contract: VaultContract,
+): ProjectRole {
+  const filename = projectSegments.at(-1) ?? "";
+  if (projectSegments.length === 1) return Object.hasOwn(contract.routing.projectFiles, filename) ? "packet" : "note";
+  const isReadme = filename === "README.md";
+  if (artifactFolder === null) return isReadme ? "folder-map" : "note";
+  return isReadme && projectSegments.length === 2 ? "folder-map" : "artifact";
 }
 
 /** Resolve the note types the contract's routing allows at a path. */
