@@ -1,0 +1,33 @@
+#!/bin/bash
+# ddc-switch — switch the U4025QW input via DDC, resolving its system UUID locally.
+#
+# Why: m1ddc's display indices shift when virtual displays appear/disappear,
+# and the system UUID for a given monitor differs per Mac. Resolving by
+# product name on each invocation makes one Karabiner config work everywhere.
+#
+# Usage:
+#   ddc-switch 27   # Thunderbolt / USB-C (MacBook Pro on port 6)
+#   ddc-switch 15   # DisplayPort        (Mac mini on port 4)
+#   ddc-switch 17   # HDMI               (work laptop on port 3)
+
+set -euo pipefail
+
+INPUT="${1:?usage: ddc-switch <input-code>}"
+M1DDC="/opt/homebrew/bin/m1ddc"
+MONITOR_NAME="U4025QW"
+
+UUID=$("$M1DDC" display list \
+  | grep -i "$MONITOR_NAME" \
+  | head -1 \
+  | sed -nE 's/.*\(([0-9A-Fa-f-]{36})\).*/\1/p')
+
+if [ -z "${UUID:-}" ]; then
+  echo "ddc-switch: could not resolve UUID for $MONITOR_NAME" >&2
+  exit 1
+fi
+
+# Retry once on failure — DDC channel can be stale right after sleep/wake.
+"$M1DDC" display "$UUID" set input "$INPUT" 2>/dev/null || {
+  sleep 1
+  "$M1DDC" display "$UUID" set input "$INPUT"
+}

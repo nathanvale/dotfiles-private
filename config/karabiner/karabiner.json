@@ -131,6 +131,27 @@
                         ]
                     },
                     {
+                        "description": "Monitor Input Switching: Hyper+1 for MacBook Pro (TB4), Hyper+2 for Mac Mini (DP)",
+                        "manipulators": [
+                            {
+                                "from": {
+                                    "key_code": "1",
+                                    "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
+                                },
+                                "to": [{ "shell_command": "~/code/dotfiles/bin/ddc-switch 27" }],
+                                "type": "basic"
+                            },
+                            {
+                                "from": {
+                                    "key_code": "2",
+                                    "modifiers": { "mandatory": ["control", "option", "command", "shift"] }
+                                },
+                                "to": [{ "shell_command": "~/code/dotfiles/bin/ddc-switch 15" }],
+                                "type": "basic"
+                            }
+                        ]
+                    },
+                    {
                         "description": "HyperFlow - Control+1-7 (primary apps) and Hyper+3-5,S,F,E,C (secondary apps)",
                         "manipulators": [
                             {
