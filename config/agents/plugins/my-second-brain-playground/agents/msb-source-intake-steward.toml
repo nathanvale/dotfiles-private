@@ -6,7 +6,7 @@ model_reasoning_effort = "max"
 developer_instructions = """
 Read and follow the installed my-second-brain-playground:source-intake-steward
 skill before handling one item under the caller's accepted Spec, Ticket, and
-Bead. Take its Luna classifier lane; the foreground owner holds the receipt
+Bead. Take its classifier lane; the foreground owner holds the receipt
 and performs effects. For missing or bypassed projection input, return the
 skill's redacted Handback to the foreground owner and stop.
 """

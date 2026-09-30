@@ -1,165 +1,226 @@
 #!/usr/bin/env bun
-import { lstatSync, readFileSync, realpathSync } from "node:fs"
-import { homedir } from "node:os"
-import { dirname, isAbsolute, join, resolve } from "node:path"
+// Source Intake dispatch public entry point: strict argv parsing, dispatch, and the validated Contract Core 2.0 output
+// path. See contract.ts for the typed catalogue and gate.ts for the exact-item grant gate.
+import {
+	COMMANDS,
+	type CommandIdentity,
+	commandDiscovery,
+	discoveryData,
+	EMISSION_FAILURE,
+	type Envelope,
+	type Identity,
+	isCommandIdentity,
+	type StationKey,
+	serializeEnvelope,
+	stationResult,
+	success,
+} from "./contract.ts"
+import { isatty } from "node:tty"
+import { descriptorLimitReached, isDescriptorLimit, runGate } from "./gate.ts"
 
-const REFUSAL = {
-	message: "Request denied. Stage Manager must verify the private grant before retrying.",
-	nextAction: "Ask Stage Manager to verify the private grant and issue a matching request.",
-	outcome: "refused",
-} as const
+const USAGE = [
+	"Usage:",
+	"  source-intake-dispatch project [--json] < GRANT_AND_REQUEST.json",
+	"  source-intake-dispatch --redacted RECIPIENT [--json]",
+	"  source-intake-dispatch --discover [--json] | --discover-command COMMAND_IDENTITY [--json] | --help [--json]",
+]
 
-const REDACTED_PROJECTION = { outcome: "redacted", projection: { receipt: "[REDACTED]" } } as const
-const CLASSIFICATION_FIELDS = new Set(["displayName", "mimeType", "modifiedTime", "sizeBytes"])
-const GRANT_KEYS = ["allowedFields", "opaqueItemRef", "provider", "purpose", "receiptPath"] as const
-const REQUEST_KEYS = ["opaqueItemRef", "provider", "purpose", "requestedFields"] as const
-const OPAQUE_ITEM_REF = /^[a-z0-9][a-z0-9-]{0,63}$/
-const USAGE = `Usage:
-  source-intake-dispatch --help
-  source-intake-dispatch --redacted <status|evaluation>
-  source-intake-dispatch <private-grant.json> <private-request.json>
+const OPTIONS = [
+	{ name: "--json", valueName: null, summary: "Emit one Contract Core 2.0 envelope on stdout." },
+	{ name: "--redacted", valueName: "RECIPIENT", summary: "Return the fixed redacted projection for status or evaluation." },
+	{ name: "--discover", valueName: null, summary: "Describe the contract, commands and effect exclusions." },
+	{ name: "--discover-command", valueName: "COMMAND_IDENTITY", summary: "Describe one command's possible stations." },
+	{ name: "--help", valueName: null, summary: "Show this help." },
+]
 
-The manifest and request are private JSON. A matching Luna classification request
-returns only its granted flat metadata projection. A mismatch exits 3 with the
-fixed redacted refusal. Status and evaluation receive the fixed redacted result.
-`
+const REDACTED_RECIPIENTS = new Set(["status", "evaluation"])
+// A grant and request are a few hundred bytes; the bound keeps a runaway pipe from growing memory without limit.
+const INPUT_LIMIT_BYTES = 64 * 1024
 
-type Grant = {
-	readonly opaqueItemRef: string
-	readonly provider: string
-	readonly purpose: string
-	readonly allowedFields: readonly string[]
-	readonly receiptPath: string
+// Fixed, value-free messages. None names a path, receipt value, source label or raw error.
+const MESSAGES: Record<Exclude<StationKey, "usage" | "serialization">, string> = {
+	denied: "Request denied. Stage Manager must verify the private grant before retrying.",
+	inputBusy: "A file-descriptor limit was reached before input was read; no receipt was touched.",
+	inputInvalid: "Standard input is not a valid grant and request.",
+	inputUnreadable: "Standard input cannot be read.",
 }
 
-type Request = Omit<Grant, "allowedFields" | "receiptPath"> & { readonly requestedFields: readonly string[] }
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === "object" && value !== null && !Array.isArray(value)
+interface Output {
+	envelope: Envelope
+	human: string
 }
 
-function isNonEmptyString(value: unknown): value is string {
-	return typeof value === "string" && value.length > 0
-}
-
-function isFieldList(value: unknown): value is readonly string[] {
-	return Array.isArray(value) && value.length > 0 && value.every(isNonEmptyString) && new Set(value).size === value.length
-}
-
-function hasOnlyKeys(record: Record<string, unknown>, keys: readonly string[]): boolean {
-	return Object.keys(record).length === keys.length && keys.every((key) => Object.hasOwn(record, key))
-}
-
-function asGrant(value: unknown): Grant | null {
-	if (!isRecord(value) || !hasOnlyKeys(value, GRANT_KEYS)) return null
-	if (
-		!isNonEmptyString(value.opaqueItemRef) ||
-		!OPAQUE_ITEM_REF.test(value.opaqueItemRef) ||
-		!isNonEmptyString(value.provider) ||
-		!isNonEmptyString(value.purpose) ||
-		!isNonEmptyString(value.receiptPath) ||
-		!isFieldList(value.allowedFields) ||
-		!value.allowedFields.every((field) => CLASSIFICATION_FIELDS.has(field))
+class UsageError extends Error {
+	constructor(
+		readonly identity: Identity,
+		message: string,
 	) {
-		return null
-	}
-	return {
-		allowedFields: value.allowedFields,
-		opaqueItemRef: value.opaqueItemRef,
-		provider: value.provider,
-		purpose: value.purpose,
-		receiptPath: value.receiptPath,
+		super(message)
 	}
 }
 
-function asRequest(value: unknown): Request | null {
-	if (!isRecord(value) || !hasOnlyKeys(value, REQUEST_KEYS)) return null
-	if (
-		!isNonEmptyString(value.opaqueItemRef) ||
-		!OPAQUE_ITEM_REF.test(value.opaqueItemRef) ||
-		!isNonEmptyString(value.provider) ||
-		!isNonEmptyString(value.purpose) ||
-		!isFieldList(value.requestedFields)
-	) {
-		return null
-	}
-	return {
-		opaqueItemRef: value.opaqueItemRef,
-		provider: value.provider,
-		purpose: value.purpose,
-		requestedFields: value.requestedFields,
-	}
+function helpOutput(): Output {
+	const data = { summary: "Project exactly granted Source Intake metadata, or a fixed redacted result.", usage: USAGE.slice(1).map((line) => line.trim()), commands: COMMANDS, options: OPTIONS }
+	const human = [...USAGE, "", "Options:", ...OPTIONS.map((option) => `  ${option.name}${option.valueName === null ? "" : ` ${option.valueName}`}  ${option.summary}`)].join("\n")
+	return { envelope: success("source-intake-dispatch.help", data, "Show help.", "Choose an invocation from the usage lines."), human }
 }
 
-function parseJson(path: string): unknown {
-	return JSON.parse(readFileSync(path, "utf8"))
+function discoverOutput(): Output {
+	const human = "Profile complex. Commands: project (inspect, reads standard input), --redacted RECIPIENT (inspect)."
+	return { envelope: success("source-intake-dispatch.discovery", discoveryData(), "Describe commands.", "Choose a command to run."), human }
 }
 
-function expectedReceiptPath(opaqueItemRef: string): string | null {
-	const stateHome = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state")
-	if (!isAbsolute(stateHome)) return null
-	return join(realpathSync(stateHome), "my-second-brain-playground", "drive-inbox-filing", "items", opaqueItemRef, "classification-metadata.json")
+function discoverCommandOutput(selector: string): Output {
+	if (!isCommandIdentity(selector)) throw new UsageError("source-intake-dispatch.command-discovery", "--discover-command needs a listed command identity.")
+	const data = commandDiscovery(selector)
+	const human = `${selector}: ${data.stations.map((station) => `${station.causeCode}/${station.outcome}`).join(", ")}`
+	return { envelope: success("source-intake-dispatch.command-discovery", data, `Describe ${selector}.`, "Read the stations; discovery reports no live state or grant."), human }
 }
 
-function isBoundReceiptPath(grant: Grant): boolean {
-	const expected = expectedReceiptPath(grant.opaqueItemRef)
-	if (expected === null || resolve(grant.receiptPath) !== expected) return false
-	const expectedParent = dirname(expected)
-	return (
-		!lstatSync(expected).isSymbolicLink() &&
-		realpathSync(expectedParent) === expectedParent &&
-		realpathSync(grant.receiptPath) === expected
-	)
+function redactedOutput(recipient: string): Output {
+	if (!REDACTED_RECIPIENTS.has(recipient)) throw new UsageError("source-intake-dispatch.redacted", "--redacted needs status or evaluation.")
+	const data = { recipient, projection: { receipt: "[REDACTED]" } }
+	return { envelope: success("source-intake-dispatch.redacted", data, `Redacted projection for ${recipient}.`, "Use only the redacted projection."), human: `${recipient}: receipt [REDACTED]` }
 }
 
-function isAuthorized(grant: Grant, request: Request): boolean {
-	return (
-		grant.provider === "luna" &&
-		grant.purpose === "classification" &&
-		grant.opaqueItemRef === request.opaqueItemRef &&
-		grant.provider === request.provider &&
-		grant.purpose === request.purpose &&
-		request.requestedFields.every((field) => grant.allowedFields.includes(field))
-	)
-}
+type InputRead = { kind: "text"; text: string } | { kind: "inputBusy" | "inputInvalid" | "inputUnreadable" }
 
-function isMetadataScalar(value: unknown): value is string | number {
-	return typeof value === "string" || (typeof value === "number" && Number.isFinite(value))
-}
-
-function project(receipt: unknown, requestedFields: readonly string[]): Record<string, string | number> | null {
-	if (!isRecord(receipt) || !requestedFields.every((field) => Object.hasOwn(receipt, field) && isMetadataScalar(receipt[field]))) return null
-	return Object.fromEntries(requestedFields.map((field) => [field, receipt[field] as string | number]))
-}
-
-function refuse(): number {
-	process.stdout.write(`${JSON.stringify(REFUSAL)}\n`)
-	return 3
-}
-
-function runSourceIntakeDispatch(args: readonly string[]): number {
-	if (args.length === 1 && (args[0] === "--help" || args[0] === "-h")) {
-		process.stdout.write(USAGE)
-		return 0
-	}
-	if (args.length === 2 && args[0] === "--redacted" && (args[1] === "status" || args[1] === "evaluation")) {
-		process.stdout.write(`${JSON.stringify(REDACTED_PROJECTION)}\n`)
-		return 0
-	}
-	if (args.length !== 2) return refuse()
-	const [grantPath, requestPath] = args
-	if (grantPath === undefined || requestPath === undefined) return refuse()
+/** Reads standard input to end of file, bounded. It is the only source of the grant and request. */
+async function readInput(): Promise<InputRead> {
+	const chunks: Uint8Array[] = []
+	let size = 0
 	try {
-		const grant = asGrant(parseJson(grantPath))
-		const request = asRequest(parseJson(requestPath))
-		if (grant === null || request === null || !isBoundReceiptPath(grant) || !isAuthorized(grant, request)) return refuse()
-		const projection = project(parseJson(grant.receiptPath), request.requestedFields)
-		if (projection === null) return refuse()
-		process.stdout.write(`${JSON.stringify({ outcome: "allowed", projection })}\n`)
-		return 0
+		const reader = Bun.stdin.stream().getReader()
+		for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+			size += chunk.value.byteLength
+			if (size > INPUT_LIMIT_BYTES) {
+				// Release standard input so a producer that keeps writing cannot hold the process open.
+				await reader.cancel()
+				return { kind: "inputInvalid" }
+			}
+			chunks.push(chunk.value)
+		}
+	} catch (error) {
+		return { kind: isDescriptorLimit(error) ? "inputBusy" : "inputUnreadable" }
+	}
+	return { kind: "text", text: Buffer.concat(chunks).toString("utf8") }
+}
+
+function refusalOutput(identity: CommandIdentity, key: keyof typeof MESSAGES): Output {
+	return { envelope: stationResult(identity, key, MESSAGES[key]), human: "" }
+}
+
+async function projectOutput(): Promise<Output> {
+	const identity: CommandIdentity = "source-intake-dispatch.project"
+	if (isatty(0)) throw new UsageError(identity, "Pipe the grant and request on standard input; the command never prompts.")
+	if (descriptorLimitReached()) return refusalOutput(identity, "inputBusy")
+	const input = await readInput()
+	if (input.kind !== "text") return refusalOutput(identity, input.kind)
+	const outcome = runGate(input.text)
+	if (outcome.kind !== "allowed") return refusalOutput(identity, outcome.kind)
+	const fields = Object.keys(outcome.projection)
+	const envelope = success(identity, { opaqueItemRef: outcome.opaqueItemRef, projection: outcome.projection }, `Projected ${fields.length} granted fields.`, "Pass the projection to its granted recipient only.")
+	const human = [`Granted projection for ${outcome.opaqueItemRef}:`, ...Object.entries(outcome.projection).map(([field, value]) => `  ${field}: ${value}`)].join("\n")
+	return { envelope, human }
+}
+
+/** Routes selected by a leading option, or null when the first argument is not a route option. */
+function optionRoute(args: readonly string[]): Output | null {
+	const [first, second, ...rest] = args
+	if (args.length === 1 && (first === "--help" || first === "-h")) return helpOutput()
+	if (args.length === 1 && first === "--discover") return discoverOutput()
+	const valued = first === "--discover-command" || first === "--redacted"
+	if (!valued) return null
+	const identity = first === "--redacted" ? "source-intake-dispatch.redacted" : "source-intake-dispatch.command-discovery"
+	if (second === undefined || rest.length > 0) throw new UsageError(identity, `${first} needs exactly one value.`)
+	return first === "--redacted" ? redactedOutput(second) : discoverCommandOutput(second)
+}
+
+async function dispatch(args: readonly string[]): Promise<Output> {
+	const routed = optionRoute(args)
+	if (routed !== null) return routed
+	if (args.some((arg) => arg.startsWith("-"))) throw new UsageError("source-intake-dispatch.dispatch", "An option is not recognised.")
+	if (args.length === 0) throw new UsageError("source-intake-dispatch.dispatch", "Choose a supported invocation.")
+	if (args[0] !== "project") throw new UsageError("source-intake-dispatch.dispatch", "Choose a supported invocation.")
+	if (args.length > 1) throw new UsageError("source-intake-dispatch.project", "project takes no operands; pipe the grant and request on standard input.")
+	return projectOutput()
+}
+
+let humanFailureReported = false
+let transportFailed = false
+
+function guidanceLine(envelope: Envelope): string {
+	const result = envelope.result
+	return "nextAction" in result ? `Next: ${result.nextAction}` : `Repair: ${String(result.repairAction)}`
+}
+
+/** Human mode only: one line on stderr. Machine mode never writes stderr. */
+function reportToStderr(line: string): void {
+	if (humanFailureReported) return
+	humanFailureReported = true
+	process.stderr.write(`${line}\n`)
+}
+
+/**
+ * A transport failure (stdout cannot be written, including a closed pipe) is not a serialization failure: machine
+ * mode keeps stderr empty, preserves whatever was observed and never emits a replacement envelope.
+ */
+function transportFailure(json: boolean): number {
+	transportFailed = true
+	if (!json) reportToStderr(EMISSION_FAILURE)
+	return 1
+}
+
+function write(text: string, json: boolean): number | null {
+	try {
+		process.stdout.write(text)
+		return null
 	} catch {
-		return refuse()
+		return transportFailure(json)
 	}
 }
 
-if (import.meta.main) process.exitCode = runSourceIntakeDispatch(process.argv.slice(2))
+/** Machine output: the validated envelope, else the validated internal fallback, else nothing. */
+function emitMachine(envelope: Envelope): number {
+	const text = serializeEnvelope(envelope)
+	if (text !== null) return write(text, true) ?? envelope.result.exitCode
+	const fallback = serializeEnvelope(stationResult(envelope.result.commandIdentity, "serialization", "The result could not be emitted safely."))
+	if (fallback === null) return 1
+	return write(fallback, true) ?? 1
+}
+
+function emit(output: Output, json: boolean): number {
+	if (json) return emitMachine(output.envelope)
+	const exitCode = output.envelope.result.exitCode
+	if (exitCode !== 0) {
+		reportToStderr(`${output.envelope.message} ${guidanceLine(output.envelope)}`)
+		return exitCode
+	}
+	return write(`${output.human}\n`, false) ?? exitCode
+}
+
+async function main(argv: readonly string[]): Promise<number> {
+	const json = argv.includes("--json")
+	const args = argv.filter((value) => value !== "--json")
+	// A pipe error can arrive after main() returned and the exit status was assigned; it must still fail the run.
+	process.stdout.on("error", () => {
+		transportFailure(json)
+		if (process.exitCode === undefined || process.exitCode === 0) process.exitCode = 1
+	})
+	let output: Output
+	try {
+		output = await dispatch(args)
+	} catch (error) {
+		// An unexpected failure keeps a fixed message: a raw error could quote private input.
+		const envelope = error instanceof UsageError ? stationResult(error.identity, "usage", error.message) : stationResult("source-intake-dispatch.dispatch", "serialization", "The command failed unexpectedly.")
+		output = { envelope, human: "" }
+	}
+	return emit(output, json)
+}
+
+// Contract Core bounded stop. The command keeps no diagnostics to flush, so a signal exits at once and writes nothing.
+process.on("SIGINT", () => process.exit(130))
+process.on("SIGTERM", () => process.exit(143))
+
+const exitCode = await main(process.argv.slice(2))
+process.exitCode = transportFailed ? 1 : exitCode
