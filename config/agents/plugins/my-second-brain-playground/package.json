@@ -1,6 +1,6 @@
 {
   "name": "my-second-brain-playground-plugin",
-  "version": "0.16.6",
+  "version": "0.16.7",
   "private": true,
   "type": "module",
   "workspaces": [
