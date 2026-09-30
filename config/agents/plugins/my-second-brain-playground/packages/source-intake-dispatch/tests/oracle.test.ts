@@ -5,13 +5,15 @@
 // arrive on standard input, so the grant's receiptPath is the only caller-named path.
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import { chmodSync, linkSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs"
-import { join } from "node:path"
+import { join, relative } from "node:path"
 import {
 	createFifo,
 	createFixture,
 	DESCRIPTOR_LIMIT_PRELOAD,
 	EXHAUST_DESCRIPTORS,
+	envelope,
 	type Fixture,
+	type FixtureOptions,
 	grant,
 	type InvokeOptions,
 	input,
@@ -84,11 +86,11 @@ function piped(grantValue: unknown, requestValue: unknown): Invocation {
 }
 
 /** Runs one invocation under a fresh fixture per receipt state and returns each state's outputs. */
-function probe(states: Record<string, ReceiptState>, build: (target: Fixture) => Invocation): Record<string, Outputs> {
+function probe(states: Record<string, ReceiptState>, build: (target: Fixture) => Invocation, options: FixtureOptions = {}): Record<string, Outputs> {
 	const observed: Record<string, Outputs> = {}
 	for (const [name, state] of Object.entries(states)) {
 		removeFixture(fixture)
-		fixture = createFixture()
+		fixture = createFixture(options)
 		const invocation = build(fixture)
 		state(fixture)
 		observed[name] = both(invocation)
@@ -164,11 +166,67 @@ const RECEIPT_PATH_ALIASES: Record<string, (target: Fixture) => string> = {
 	},
 	"a case-variant spelling": (target) => target.receiptPath.replace("/drive-inbox-filing/", "/DRIVE-INBOX-FILING/"),
 	"the item directory": (target) => target.itemDirectory,
+	// Textual aliases that normalize to the exact path. The grant names the path as exact text, so a gate that
+	// normalizes the caller's spelling (path.resolve) before comparing would allow each of these with a receipt present.
+	// Raw strings: path.join would normalize them back to the exact path.
+	"a dot-segment spelling": (target) => `${target.itemDirectory}/../synthetic-item-001/classification-metadata.json`,
+	"a current-directory segment": (target) => `${target.itemDirectory}/./classification-metadata.json`,
+	"a doubled slash": (target) => target.receiptPath.replace("/items/", "/items//"),
+	"a trailing slash": (target) => `${target.receiptPath}/`,
+	"a path relative to the caller's working directory": (target) => relative(target.root, target.receiptPath),
 }
 
 for (const [name, receiptPath] of Object.entries(RECEIPT_PATH_ALIASES)) {
 	test(`receiptPath as ${name}: refused identically whether the receipt is present or absent`, () => {
 		expectAllRefused(probe({ present, absent }, (target) => piped(grant(target, { receiptPath: receiptPath(target) }), request())))
+	})
+}
+
+// A configured state root reached through a symbolic link (a linked ~/.local/state, or macOS /tmp). The grant names
+// the receipt under the configured spelling, as the README tells the caller to. A gate that builds the expected path
+// from the physical root denies this exact grant; a gate that accepts any spelling of the file allows the physical one.
+const LINKED_STATE_HOME: FixtureOptions = { linkedStateHome: true }
+
+test("with a linked state root, the exact configured receiptPath projects the granted fields in both modes", () => {
+	const observed = probe({ present }, (target) => piped(grant(target), request()), LINKED_STATE_HOME)
+	expect(observed.present?.machine.exitCode).toBe(0)
+	expect(envelope(observed.present?.machine as ProcessResult).result.data).toEqual({
+		opaqueItemRef: "synthetic-item-001",
+		projection: { displayName: "Fictional planning note", mimeType: "text/plain" },
+	})
+	expect(observed.present?.human.exitCode).toBe(0)
+	expect(observed.present?.human.stdout).not.toContain(SENTINEL)
+})
+
+test("with a linked state root, the physical spelling of the receipt path is refused identically present or absent", () => {
+	const physical = (target: Fixture) => join(target.root, "physical-state", relative(target.stateHome, target.receiptPath))
+	expectAllRefused(probe({ present, absent }, (target) => piped(grant(target, { receiptPath: physical(target) }), request()), LINKED_STATE_HOME))
+})
+
+// The README names the root as ${XDG_STATE_HOME:-$HOME/.local/state}: an empty value falls back to HOME. A gate that
+// treats the empty string as a configured (relative) root denies this exact grant.
+test("with an empty XDG_STATE_HOME, the exact receiptPath under HOME projects the granted fields", () => {
+	const homeReceiptPath = (target: Fixture) => join(target.root, "home", ".local", "state", relative(target.stateHome, target.receiptPath))
+	const observed = probe(
+		{
+			present: (target) => {
+				mkdirSync(join(homeReceiptPath(target), ".."), { recursive: true })
+				writeJson(homeReceiptPath(target), receipt())
+			},
+		},
+		(target) => {
+			target.env.HOME = join(target.root, "home")
+			target.env.XDG_STATE_HOME = ""
+			return piped(grant(target, { receiptPath: homeReceiptPath(target) }), request())
+		},
+	)
+	expect(observed.present?.machine.exitCode).toBe(0)
+	expect(observed.present?.human.exitCode).toBe(0)
+})
+
+for (const [name, receiptPath] of Object.entries(RECEIPT_PATH_ALIASES)) {
+	test(`with a linked state root, receiptPath as ${name}: refused identically whether the receipt is present or absent`, () => {
+		expectAllRefused(probe({ present, absent }, (target) => piped(grant(target, { receiptPath: receiptPath(target) }), request()), LINKED_STATE_HOME))
 	})
 }
 

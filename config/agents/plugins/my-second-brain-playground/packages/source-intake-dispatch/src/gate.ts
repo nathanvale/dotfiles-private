@@ -3,7 +3,7 @@
 // outcome that depends on receipt existence, readability or content collapses into the one fixed denial.
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
-import { isAbsolute, join, resolve } from "node:path"
+import { isAbsolute, join } from "node:path"
 
 export type GateOutcome =
 	| { kind: "allowed"; opaqueItemRef: string; projection: Record<string, string | number> }
@@ -71,10 +71,11 @@ function asRequest(value: unknown): Request {
 	return value as Request
 }
 
-function stateHome(): string {
-	const configured = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state")
+/** The configured state root as the caller spells it; an empty XDG_STATE_HOME counts as unset. */
+function configuredStateHome(): string {
+	const configured = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state")
 	if (!isAbsolute(configured)) throw new Error("relative state home")
-	return realpathSync(configured)
+	return configured
 }
 
 function parseInput(text: string): { grant: Grant; request: Request } {
@@ -102,11 +103,13 @@ function isAuthorized(grant: Grant, request: Request): boolean {
 
 /**
  * The grant's receiptPath is the only caller-named path. It must equal the exact receipt path under the configured
- * state root as text; nothing is touched before this comparison. Returns the item directory to read from.
+ * state root as raw text, with no normalization of the caller's spelling; nothing is touched before this comparison.
+ * Returns the physical item directory to pin, under the state root's real path, so a linked root still matches.
  */
-function boundItemDirectory(grant: Grant, home: string): string | null {
-	const itemDirectory = join(home, ...ITEMS_PATH, grant.opaqueItemRef)
-	return resolve(grant.receiptPath) === join(itemDirectory, RECEIPT_FILE) ? itemDirectory : null
+function boundItemDirectory(grant: Grant): string | null {
+	const configured = configuredStateHome()
+	if (grant.receiptPath !== join(configured, ...ITEMS_PATH, grant.opaqueItemRef, RECEIPT_FILE)) return null
+	return join(realpathSync(configured), ...ITEMS_PATH, grant.opaqueItemRef)
 }
 
 /**
@@ -145,7 +148,7 @@ function project(receipt: unknown, requestedFields: readonly string[]): Record<s
 /** Runs only after authorization. Any receipt failure, including I/O and a missing state root, is the same denial. */
 function projectReceipt(grant: Grant, request: Request): GateOutcome {
 	try {
-		const itemDirectory = boundItemDirectory(grant, stateHome())
+		const itemDirectory = boundItemDirectory(grant)
 		const text = itemDirectory === null ? null : readBoundReceipt(itemDirectory)
 		if (text === null) return { kind: "denied" }
 		const projection = project(JSON.parse(text), request.requestedFields)

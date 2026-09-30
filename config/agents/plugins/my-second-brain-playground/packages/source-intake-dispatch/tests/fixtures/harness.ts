@@ -1,7 +1,7 @@
 // Process seam for Source Intake dispatch tests. Each fixture is a private synthetic root with its own XDG_STATE_HOME,
 // one opaque item directory, and a scratch directory outside the items tree. The grant and request reach the command
 // on standard input. Every value is fictional. Nothing here imports the modules under test.
-import { chmodSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
@@ -45,9 +45,21 @@ export interface Fixture {
 	env: Record<string, string>
 }
 
-export function createFixture(): Fixture {
+export interface FixtureOptions {
+	/**
+	 * Configures XDG_STATE_HOME as a symbolic link to the physical state root, as a linked ~/.local/state or macOS /tmp
+	 * would be. stateHome, itemDirectory and receiptPath then keep the configured (linked) spelling.
+	 */
+	linkedStateHome?: boolean
+}
+
+export function createFixture(options: FixtureOptions = {}): Fixture {
 	const root = realpathSync(mkdtempSync(join(tmpdir(), "source-intake-dispatch-")))
 	const stateHome = join(root, "state")
+	if (options.linkedStateHome) {
+		mkdirSync(join(root, "physical-state"))
+		symlinkSync(join(root, "physical-state"), stateHome)
+	}
 	const itemDirectory = join(stateHome, "my-second-brain-playground", "drive-inbox-filing", "items", OPAQUE_ITEM_REF)
 	const inputs = join(root, "inputs")
 	mkdirSync(itemDirectory, { recursive: true })

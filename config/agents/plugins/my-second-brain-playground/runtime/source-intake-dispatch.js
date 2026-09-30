@@ -294,7 +294,7 @@ import { isatty } from "tty";
 // packages/source-intake-dispatch/src/gate.ts
 import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from "fs";
 import { homedir } from "os";
-import { isAbsolute, join, resolve } from "path";
+import { isAbsolute, join } from "path";
 var CLASSIFICATION_FIELDS = new Set(["displayName", "mimeType", "modifiedTime", "sizeBytes"]);
 var INPUT_KEYS = ["grant", "request"];
 var GRANT_KEYS = ["allowedFields", "opaqueItemRef", "provider", "purpose", "receiptPath"];
@@ -338,11 +338,11 @@ function asRequest(value) {
   }
   return value;
 }
-function stateHome() {
-  const configured = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
+function configuredStateHome() {
+  const configured = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
   if (!isAbsolute(configured))
     throw new Error("relative state home");
-  return realpathSync(configured);
+  return configured;
 }
 function parseInput(text) {
   let value;
@@ -358,9 +358,11 @@ function parseInput(text) {
 function isAuthorized(grant, request) {
   return grant.provider === "luna" && grant.purpose === "classification" && grant.allowedFields.every((field) => CLASSIFICATION_FIELDS.has(field)) && grant.opaqueItemRef === request.opaqueItemRef && grant.provider === request.provider && grant.purpose === request.purpose && request.requestedFields.every((field) => grant.allowedFields.includes(field));
 }
-function boundItemDirectory(grant, home) {
-  const itemDirectory = join(home, ...ITEMS_PATH, grant.opaqueItemRef);
-  return resolve(grant.receiptPath) === join(itemDirectory, RECEIPT_FILE) ? itemDirectory : null;
+function boundItemDirectory(grant) {
+  const configured = configuredStateHome();
+  if (grant.receiptPath !== join(configured, ...ITEMS_PATH, grant.opaqueItemRef, RECEIPT_FILE))
+    return null;
+  return join(realpathSync(configured), ...ITEMS_PATH, grant.opaqueItemRef);
 }
 function readBoundReceipt(itemDirectory) {
   process.chdir(itemDirectory);
@@ -388,7 +390,7 @@ function project(receipt, requestedFields) {
 }
 function projectReceipt(grant, request) {
   try {
-    const itemDirectory = boundItemDirectory(grant, stateHome());
+    const itemDirectory = boundItemDirectory(grant);
     const text = itemDirectory === null ? null : readBoundReceipt(itemDirectory);
     if (text === null)
       return { kind: "denied" };
