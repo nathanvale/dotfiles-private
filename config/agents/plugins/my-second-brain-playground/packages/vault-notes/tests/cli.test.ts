@@ -1,7 +1,7 @@
 // Public front door: frozen legacy goldens for check, list and inventory, and the Contract Core 2.0 control paths
 // (help, discovery, refusal). Every expected value below is a test-owned literal, never read back from src/.
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 
@@ -393,4 +393,41 @@ test("bin/vault-notes runs the committed runtime with the same observable result
   for (const args of [["check", "--root", root], ["list", "--root", root, "--json"], ["inventory", "--root", root], ["--discover-command", "vault-notes.check"]]) {
     expect(run(args, [BIN])).toEqual(run(args));
   }
+});
+
+describe("bin/vault-notes through symlinks", () => {
+  /** Runs a launcher path (or a bare name found on PATH) with only that directory, bun and the system on PATH. */
+  function discover(launcher: string, pathDirectory?: string) {
+    const bunDirectory = path.dirname(process.execPath);
+    const result = Bun.spawnSync([launcher, "--discover", "--json"], {
+      env: { PATH: [pathDirectory, bunDirectory, "/usr/bin", "/bin"].filter(Boolean).join(":"), HOME: tmpdir() },
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    return { exit: result.exitCode, stderr: result.stderr.toString(), identity: result.exitCode === 0 ? JSON.parse(result.stdout.toString()).result.commandIdentity : null };
+  }
+
+  test("absolute, relative, chained and directory symlinks all reach the plugin's own runtime", async () => {
+    const scratch = await mkdtemp(path.join(tmpdir(), "vault-notes-links-"));
+    roots.push(scratch);
+    const home = path.join(scratch, "home", ".local", "bin");
+    const hop = path.join(scratch, "hop");
+    await mkdir(home, { recursive: true });
+    await mkdir(hop);
+    // ~/.local/bin/vault-notes -> absolute launcher (the planned dotfiles link shape).
+    await symlink(BIN, path.join(home, "vault-notes"));
+    // Chain: relative link -> relative link -> absolute link -> launcher.
+    await symlink(BIN, path.join(hop, "absolute"));
+    await symlink("absolute", path.join(hop, "relative"));
+    await symlink(path.relative(home, path.join(hop, "relative")), path.join(home, "chained"));
+    // A symlinked directory in front of the real bin/.
+    await symlink(path.dirname(BIN), path.join(scratch, "bin-dir"));
+
+    const expected = { exit: 0, stderr: "", identity: "vault-notes.discovery" };
+    expect(discover(path.join(home, "vault-notes"))).toEqual(expected);
+    expect(discover(path.join(home, "chained"))).toEqual(expected);
+    expect(discover(path.join(scratch, "bin-dir", "vault-notes"))).toEqual(expected);
+    expect(discover("vault-notes", home)).toEqual(expected);
+  });
 });
