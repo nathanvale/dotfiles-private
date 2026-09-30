@@ -81,9 +81,10 @@ export function createFifo(path: string): void {
 /**
  * A FIFO that detects a reader open, blocking or not, made while a background writer is blocked in its write-only
  * open: that open returns only once some reader opens the FIFO, and the writer then marks it. fifoSentinel resolves
- * only after the writer marks itself ready to open, or throws. A reader open made before the writer blocks goes
- * unseen, and a writer that never blocks sees nothing, so each test asserts opened() is false, then proves the
- * sentinel could fire (openAsReader(), then opened() is true), and calls stop() in a finally block.
+ * only after the writer marks itself ready to open and a timing margin passes, or throws. A reader open made before
+ * the writer blocks goes unseen. Each test asserts opened() is false, then proves the sentinel can fire
+ * (openAsReader(), then opened() is true), and calls stop() in a finally block. That control catches a writer that
+ * never blocks, not one that stalls past the margin: such a stall can still hide an early open.
  */
 export interface FifoSentinel {
 	/** Waits up to a short settle for the writer's marker. */
@@ -96,7 +97,7 @@ export interface FifoSentinel {
 const FIFO_WRITER =
 	'const fs = require("node:fs"); fs.writeFileSync(process.argv[3], "ready"); const fd = fs.openSync(process.argv[1], "w"); fs.writeFileSync(process.argv[2], "opened"); fs.closeSync(fd)'
 const SENTINEL_READY_BOUND_MS = 3000
-// Covers the gap between the writer's ready mark and its entry into the blocking open.
+// A 25 ms margin for the writer to enter its open; a longer stall can hide an early open while the positive control still passes.
 const SENTINEL_BLOCK_SETTLE_MS = 25
 const SENTINEL_OPENED_SETTLE_MS = 150
 
