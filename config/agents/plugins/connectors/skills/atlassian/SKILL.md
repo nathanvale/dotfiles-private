@@ -156,7 +156,7 @@ completed apply answers `SUCCESS_RUN_APPLIED`; its receipt, with `runId` and
 
 | Operation | Input keys | Revision bound |
 | --- | --- | --- |
-| `issue.create` | `projectKey`, `issueType`, `summary`, `description?`, `assignee?` | none |
+| `issue.create` | `projectKey`, `issueType`, `summary`, `description?`, `assignee?`, `parentKey?` (existing parent issue key, such as the Epic) | parent key, id, and type, when `parentKey` is set |
 | `issue.update` | `issueKey`, `fields` (flat object; `assignee` takes an email, name, or account id) | issue `updated` |
 | `issue.comment` | `issueKey`, `body` | none |
 | `issue.comment.update` | `issueKey`, `commentId`, `body` | comment `updated` |
@@ -173,6 +173,21 @@ completed apply answers `SUCCESS_RUN_APPLIED`; its receipt, with `runId` and
 | `page.attach` | `pageId`, `file` (absolute local path) | page version |
 | `page.attachment.delete` | `pageId`, `attachmentId` (from the attach effect or the page's attachments) | page version |
 | `page.delete` | `pageId` | page version |
+
+### Create under a parent
+
+- Put the parent's issue key in `parentKey`. It sends only Jira's `parent`
+  field. `epicKey`, Epic Link, and raw `fields` refuse as unknown keys.
+- Preview reads the parent; a missing one fails `not-found`. It then searches
+  the parent for the same summary and type. A match refuses `input-invalid`:
+  find and reuse it with `issue.search`
+  `project = KEY AND parent = PARENT AND summary ~ "..."`. A search that
+  returned only part of its matches fails `capability-unavailable`.
+- Apply refuses when the parent was replaced or retyped since the preview.
+  It completes only when a read of the new issue shows the requested summary,
+  type, and `parent.key`. Any other result is `outcome-unknown`: settle it
+  with `adjudicate` and the identical input once `issue.search` shows the
+  issue under the parent.
 
 ### Jira comment formatting and mentions
 
