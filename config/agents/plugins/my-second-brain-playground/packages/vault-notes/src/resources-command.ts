@@ -69,9 +69,9 @@ function readOptionValues(args: string[]): { root?: string; updated?: string; pr
   const values: { root?: string; updated?: string; projects: string[] } = { projects: [] };
   for (let index = 0; index < args.length; index += 2) {
     const [name, value] = [String(args[index]), args[index + 1]];
-    if (value === undefined || value.startsWith("--")) throw new Refusal("usage", `${name} needs a value.`);
     const key = OPTION_KEYS.get(name);
     if (key === undefined) throw new Refusal("usage", `resources does not accept '${name}'.`);
+    if (value === undefined || value.startsWith("--")) throw new Refusal("usage", `${name} needs a value.`);
     if (key === "projects") values.projects.push(value);
     else if (values[key] !== undefined) throw new Refusal("usage", `${name} is given more than once.`);
     else values[key] = value;

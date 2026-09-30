@@ -462,7 +462,11 @@ describe("vault-notes resources front door", () => {
       stderr:
         "resources does not accept '--frobnicate'. Repair: Choose check, list, inventory, resources, --help, --discover or --discover-command COMMAND_IDENTITY with its listed options and retry.\n",
     });
+    // An unknown flag or stray operand is named as unaccepted even with nothing after it.
+    expect(human(["--frobnicate"]).stderr).toStartWith("resources does not accept '--frobnicate'. Repair:");
+    expect(human(["--project", "alpha", "extra"]).stderr).toStartWith("resources does not accept 'extra'. Repair:");
     expect(human(["--project"]).stderr).toStartWith("--project needs a value. Repair:");
+    expect(human(["--project", "--updated", "2026-01-01"]).stderr).toStartWith("--project needs a value. Repair:");
     expect(human(["--project", "alpha", "--project", "alpha"]).stderr).toStartWith("Name each --project once. Repair:");
     expect(human(["--project", "Alpha/../x"])).toEqual({
       exit: 4,
