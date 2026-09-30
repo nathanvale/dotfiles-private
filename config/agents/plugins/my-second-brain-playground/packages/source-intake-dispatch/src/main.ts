@@ -184,5 +184,9 @@ function main(argv: readonly string[]): number {
 	return emit(output, json)
 }
 
+// Contract Core bounded stop. The command keeps no diagnostics to flush, so a signal exits at once and writes nothing.
+process.on("SIGINT", () => process.exit(130))
+process.on("SIGTERM", () => process.exit(143))
+
 const exitCode = main(process.argv.slice(2))
 process.exitCode = transportFailed ? 1 : exitCode

@@ -11,6 +11,10 @@ export const RUNTIME = join(PLUGIN_ROOT, "runtime/source-intake-dispatch.js")
 export const CHECKER = join(PLUGIN_ROOT, "bin/cli-design-check")
 /** Opens descriptors until the process limit when an argument names busy-grant.json, so the next open hits EMFILE. */
 export const DESCRIPTOR_LIMIT_PRELOAD = join(import.meta.dir, "descriptor-limit.ts")
+/** Answers the OS account-record lookup with SOURCE_INTAKE_TEST_ACCOUNT_HOME. */
+export const ACCOUNT_RECORD_PRELOAD = join(import.meta.dir, "account-record.ts")
+/** Holds the first stdout write undelivered and marks SOURCE_INTAKE_TEST_READY. */
+export const STDOUT_HOLD_PRELOAD = join(import.meta.dir, "stdout-hold.ts")
 
 export const OPAQUE_ITEM_REF = "synthetic-item-001"
 export const SENTINEL = "RECEIPT_SENTINEL_MUST_NOT_LEAK"

@@ -23,7 +23,7 @@ prints one validated 2.0 envelope on stdout with empty stderr.
 
 The grant and request are private runtime JSON files. Keep them outside the
 item receipts tree, out of Git and out of Beads; a grant or request path that
-resolves inside the items tree is denied.
+reaches an items tree is denied (see Privacy boundary).
 
 - The grant has exactly `opaqueItemRef`, `provider`, `purpose`,
   `allowedFields`, and `receiptPath`.
@@ -41,6 +41,25 @@ Only provider `luna` with purpose `classification` is supported. Granted and
 requested fields come from this closed metadata list: `displayName`,
 `mimeType`, `modifiedTime`, and `sizeBytes`. The metadata file is one flat
 JSON object; each projected value is a string or finite number.
+
+## Privacy boundary
+
+- `HOME` and `XDG_STATE_HOME` are trusted configuration set by the granted
+  foreground caller (Nathan, 2026-09-30). They select the receipt root above.
+- The account's default receipt root stays guarded regardless of both
+  variables. The command reads the account's home from the operating-system
+  account record (`/usr/bin/id -P` on macOS, `getent passwd` on Linux; Bun's
+  `os.userInfo().homedir` follows `HOME`, so it is not used) and denies any
+  caller path that reaches
+  `<home>/.local/state/my-second-brain-playground/drive-inbox-filing/items`.
+  An unreadable account record denies every request.
+- A caller who controls those variables and moves the receipt root to a
+  non-default location is outside this supported-path guard, as Ticket #136
+  scopes it.
+- Grant and request paths resolve one component at a time. A link target is
+  normalized lexically, so its `..` never visits the directory before it. A
+  path that reaches either items tree, by spelling or by directory identity,
+  is denied before it is touched.
 
 ## Outcomes
 
@@ -73,7 +92,8 @@ is fixed per command because the command keeps no journal to correlate; this
 keeps the denial byte-identical.
 
 When stdout cannot be written the command exits 1 without a replacement
-envelope; human mode adds one repair line on stderr.
+envelope; human mode adds one repair line on stderr. SIGINT exits 130 and
+SIGTERM exits 143 without writing anything.
 
 Vault Steward is not a command recipient. It receives only Nathan-approved
 note content from the foreground Steward or Stage Manager.

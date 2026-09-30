@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { chmodSync, existsSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import {
+	ACCOUNT_RECORD_PRELOAD,
 	createFixture,
 	DESCRIPTOR_LIMIT_PRELOAD,
 	type Fixture,
@@ -179,4 +180,56 @@ test("an absent XDG state home is refused identically to an absent receipt", () 
 		return inputs
 	})
 	expect(observed.absent).toEqual(refused)
+})
+
+// A link outside the items tree whose target walks into the item directory and back out. Resolving it physically would
+// succeed only when the item directory exists, so the outcome must not depend on that directory.
+const itemDirectoryPresent: ReceiptState = present
+const itemDirectoryAbsent: ReceiptState = (target) => renameSync(target.itemDirectory, join(target.root, "moved-item"))
+
+const WALK_BACK_OUT: Record<string, { exitCode: number; create: (path: string) => void }> = {
+	schema: { exitCode: 4, create: (path) => writeFileSync(path, "{broken") },
+	internal: { exitCode: 1, create: (path) => mkdirSync(path) },
+}
+
+for (const [name, row] of Object.entries(WALK_BACK_OUT)) {
+	test(`${name}: a grant link whose target walks through the item directory and back out is identical with the item directory present or absent`, () => {
+		const observed = probe({ itemDirectoryPresent, itemDirectoryAbsent }, (target) => {
+			row.create(join(target.inputs, "walk-target"))
+			const link = join(target.inputs, "walk-grant.json")
+			// A raw string: path.join would collapse the dot segments and the target would never enter the item directory.
+			symlinkSync(`${target.itemDirectory}/../../../../../inputs/walk-target`, link)
+			return [link, writeInputs(target, grant(target), request())[1]]
+		})
+		expect(Object.keys(observed)).toEqual(["itemDirectoryPresent", "itemDirectoryAbsent"])
+		expect(observed.itemDirectoryPresent?.machine.exitCode).toBe(row.exitCode)
+		expect(observed.itemDirectoryPresent).toEqual(observed.itemDirectoryAbsent as ReturnType<typeof both>)
+	})
+}
+
+// Trusted configuration boundary: the account's default receipt root, read from the OS account record, stays guarded
+// even when HOME and XDG_STATE_HOME point at a decoy. The preload substitutes a synthetic account record.
+function accountReceiptPath(target: Fixture): string {
+	return join(target.root, "account", ".local", "state", "my-second-brain-playground", "drive-inbox-filing", "items", "synthetic-item-001", "classification-metadata.json")
+}
+
+const accountReceiptPresent: ReceiptState = (target) => {
+	mkdirSync(join(accountReceiptPath(target), ".."), { recursive: true })
+	writeJson(accountReceiptPath(target), receipt())
+}
+
+test("a default-root receipt named as the grant is refused identically when HOME and XDG_STATE_HOME point at a decoy", () => {
+	const observed = probe(
+		{ present: accountReceiptPresent, absent },
+		(target) => {
+			const decoy = join(target.root, "decoy")
+			mkdirSync(join(decoy, "state"), { recursive: true })
+			target.env.HOME = decoy
+			target.env.XDG_STATE_HOME = join(decoy, "state")
+			target.env.SOURCE_INTAKE_TEST_ACCOUNT_HOME = join(target.root, "account")
+			return [accountReceiptPath(target), writeInputs(target, grant(target), request())[1]]
+		},
+		ACCOUNT_RECORD_PRELOAD,
+	)
+	expectAllRefused(observed)
 })

@@ -288,7 +288,7 @@ function isCommandIdentity(value) {
 }
 
 // packages/source-intake-dispatch/src/gate.ts
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from "fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, statSync } from "fs";
 import { homedir } from "os";
 import { dirname, isAbsolute, join, resolve } from "path";
 var CLASSIFICATION_FIELDS = new Set(["displayName", "mimeType", "modifiedTime", "sizeBytes"]);
@@ -297,6 +297,11 @@ var REQUEST_KEYS = ["opaqueItemRef", "provider", "purpose", "requestedFields"];
 var OPAQUE_ITEM_REF = /^[a-z0-9][a-z0-9-]{0,63}$/;
 var DESCRIPTOR_LIMIT_CODES = new Set(["EAGAIN", "EMFILE", "ENFILE"]);
 var ITEMS_PATH = ["my-second-brain-playground", "drive-inbox-filing", "items"];
+var MAX_LINK_HOPS = 40;
+var ACCOUNT_RECORD_COMMANDS = {
+  darwin: () => ["/usr/bin/id", "-P"],
+  linux: (uid) => ["/usr/bin/getent", "passwd", String(uid)]
+};
 
 class GateRefusal extends Error {
   outcome;
@@ -341,29 +346,77 @@ function stateHome() {
 function fold(path) {
   return path.normalize("NFC").toLowerCase();
 }
-function itemsRoots(home) {
-  const lexical = join(home, ...ITEMS_PATH);
+function accountStateRoot() {
+  const uid = process.getuid?.();
+  const command = ACCOUNT_RECORD_COMMANDS[process.platform];
+  if (uid === undefined || command === undefined)
+    throw new GateRefusal({ kind: "denied" });
+  const record = Bun.spawnSync({ cmd: command(uid), env: {}, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
+  const home = new TextDecoder().decode(record.stdout).trim().split(":").at(-2);
+  if (record.exitCode !== 0 || home === undefined || !isAbsolute(home))
+    throw new GateRefusal({ kind: "denied" });
+  return join(home, ".local", "state");
+}
+function identity(stat) {
+  return `${stat.dev}:${stat.ino}`;
+}
+function spellings(stateRoot) {
+  const lexical = join(stateRoot, ...ITEMS_PATH);
   try {
     return [lexical, realpathSync(lexical)];
   } catch {
     return [lexical];
   }
 }
+function itemsGuard(stateRoots) {
+  const roots = stateRoots.flatMap(spellings);
+  const identities = new Set;
+  for (const root of roots) {
+    try {
+      identities.add(identity(statSync(root)));
+    } catch {}
+  }
+  return { roots, identities };
+}
 function isInside(path, roots) {
   return roots.some((root) => fold(path) === fold(root) || fold(path).startsWith(`${fold(root)}/`));
 }
-function readCallerJson(path, roots) {
+function components(path) {
+  return path.split("/").filter((part) => part !== "");
+}
+function canonicalCallerPath(path, guard) {
+  let pending = components(resolve(path));
+  let current = "/";
+  let hops = 0;
+  for (let next = pending.shift();next !== undefined; next = pending.shift()) {
+    const candidate = join(current, next);
+    if (isInside(candidate, guard.roots))
+      throw new GateRefusal({ kind: "denied" });
+    const stat = lstatSync(candidate);
+    if (guard.identities.has(identity(stat)))
+      throw new GateRefusal({ kind: "denied" });
+    if (!stat.isSymbolicLink()) {
+      current = candidate;
+      continue;
+    }
+    hops += 1;
+    if (hops > MAX_LINK_HOPS)
+      throw new GateRefusal({ kind: "denied" });
+    pending = [...components(resolve(current, readlinkSync(candidate))), ...pending];
+    current = "/";
+  }
+  return current;
+}
+function readCallerJson(path, guard) {
   let canonical;
   try {
-    canonical = realpathSync(path);
+    canonical = canonicalCallerPath(path, guard);
   } catch {
     throw new GateRefusal({ kind: "denied" });
   }
-  if (isInside(canonical, roots))
-    throw new GateRefusal({ kind: "denied" });
   let text;
   try {
-    const descriptor = openSync(canonical, constants.O_RDONLY | constants.O_NONBLOCK);
+    const descriptor = openSync(canonical, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
     try {
       if (!fstatSync(descriptor).isFile())
         throw new GateRefusal({ kind: "inputUnreadable" });
@@ -430,9 +483,9 @@ function runGate(grantPath, requestPath) {
   let home;
   try {
     home = stateHome();
-    const roots = itemsRoots(home);
-    grant = asGrant(readCallerJson(grantPath, roots));
-    request = asRequest(readCallerJson(requestPath, roots));
+    const guard = itemsGuard([home, accountStateRoot()]);
+    grant = asGrant(readCallerJson(grantPath, guard));
+    request = asRequest(readCallerJson(requestPath, guard));
   } catch (error) {
     return error instanceof GateRefusal ? error.outcome : { kind: "denied" };
   }
@@ -465,9 +518,9 @@ var MESSAGES = {
 
 class UsageError extends Error {
   identity;
-  constructor(identity, message) {
+  constructor(identity2, message) {
     super(message);
-    this.identity = identity;
+    this.identity = identity2;
   }
 }
 function helpOutput() {
@@ -494,12 +547,12 @@ function redactedOutput(recipient) {
   return { envelope: success("source-intake-dispatch.redacted", data, `Redacted projection for ${recipient}.`, "Use only the redacted projection."), human: `${recipient}: receipt [REDACTED]` };
 }
 function projectOutput(grantPath, requestPath) {
-  const identity = "source-intake-dispatch.project";
+  const identity2 = "source-intake-dispatch.project";
   const outcome = runGate(grantPath, requestPath);
   if (outcome.kind !== "allowed")
-    return { envelope: stationResult(identity, outcome.kind, MESSAGES[outcome.kind]), human: "" };
+    return { envelope: stationResult(identity2, outcome.kind, MESSAGES[outcome.kind]), human: "" };
   const fields = Object.keys(outcome.projection);
-  const envelope = success(identity, { opaqueItemRef: outcome.opaqueItemRef, projection: outcome.projection }, `Projected ${fields.length} granted fields.`, "Pass the projection to its granted recipient only.");
+  const envelope = success(identity2, { opaqueItemRef: outcome.opaqueItemRef, projection: outcome.projection }, `Projected ${fields.length} granted fields.`, "Pass the projection to its granted recipient only.");
   const human = [`Granted projection for ${outcome.opaqueItemRef}:`, ...Object.entries(outcome.projection).map(([field, value]) => `  ${field}: ${value}`)].join(`
 `);
   return { envelope, human };
@@ -513,9 +566,9 @@ function optionRoute(args) {
   const valued = first === "--discover-command" || first === "--redacted";
   if (!valued)
     return null;
-  const identity = first === "--redacted" ? "source-intake-dispatch.redacted" : "source-intake-dispatch.command-discovery";
+  const identity2 = first === "--redacted" ? "source-intake-dispatch.redacted" : "source-intake-dispatch.command-discovery";
   if (second === undefined || rest.length > 0)
-    throw new UsageError(identity, `${first} needs exactly one value.`);
+    throw new UsageError(identity2, `${first} needs exactly one value.`);
   return first === "--redacted" ? redactedOutput(second) : discoverCommandOutput(second);
 }
 function dispatch(args) {
@@ -595,5 +648,7 @@ function main(argv) {
   }
   return emit(output, json);
 }
+process.on("SIGINT", () => process.exit(130));
+process.on("SIGTERM", () => process.exit(143));
 var exitCode = main(process.argv.slice(2));
 process.exitCode = transportFailed ? 1 : exitCode;

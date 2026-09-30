@@ -2,7 +2,7 @@
 // failure and the strict CLI Design checker. Expected stations are a test-owned table, not the production catalogue:
 // every declared station must be reached and every reached station must be declared.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { mkdirSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import {
 	CHECKER,
@@ -17,6 +17,7 @@ import {
 	removeFixture,
 	request,
 	SENTINEL,
+	STDOUT_HOLD_PRELOAD,
 	writeInputs,
 	writeJson,
 } from "./fixtures/harness.ts"
@@ -190,6 +191,34 @@ describe("validated output and transport failure", () => {
 		expect(exitCode).toBe(0)
 	})
 })
+
+// Contract Core bounded stop: a signal before any output exits 130 or 143 and leaves both streams empty. Wrong behavior
+// caught: no handler (the process dies by signal with no exit code) or a handler that writes a replacement result.
+for (const [signal, exitCode] of [
+	["SIGINT", 130],
+	["SIGTERM", 143],
+] as const) {
+	test(`${signal} before any output exits ${exitCode} with empty streams in both output modes`, async () => {
+		for (const mode of [[], ["--json"]]) {
+			const ready = join(fixture.root, `ready-${signal}-${mode.length}`)
+			const child = Bun.spawn([process.execPath, "--preload", STDOUT_HOLD_PRELOAD, RUNTIME, ...valid, ...mode], {
+				cwd: fixture.root,
+				env: { ...fixture.env, SOURCE_INTAKE_TEST_READY: ready },
+				stdin: "ignore",
+				stdout: "pipe",
+				stderr: "pipe",
+			})
+			const stdout = new Response(child.stdout).text()
+			const stderr = new Response(child.stderr).text()
+			for (let attempt = 0; attempt < 5_000 && !existsSync(ready); attempt += 1) await Bun.sleep(1)
+			expect(existsSync(ready)).toBe(true)
+			child.kill(signal)
+			expect(await child.exited).toBe(exitCode)
+			expect(child.signalCode).toBeNull()
+			expect({ stdout: await stdout, stderr: await stderr }).toEqual({ stdout: "", stderr: "" })
+		}
+	})
+}
 
 test("the strict CLI Design checker passes every applicable row", () => {
 	const args = (paths: readonly string[]) => paths.join(" ")

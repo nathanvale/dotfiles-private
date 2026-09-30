@@ -1,6 +1,6 @@
 // The exact-item grant gate. Caller input (grant and request) is fully validated before any receipt is touched, and
 // every outcome that depends on receipt existence, readability or content collapses into the one fixed denial.
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from "node:fs"
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, type Stats, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 
@@ -19,6 +19,12 @@ const REQUEST_KEYS = ["opaqueItemRef", "provider", "purpose", "requestedFields"]
 const OPAQUE_ITEM_REF = /^[a-z0-9][a-z0-9-]{0,63}$/
 const DESCRIPTOR_LIMIT_CODES = new Set(["EAGAIN", "EMFILE", "ENFILE"])
 const ITEMS_PATH = ["my-second-brain-playground", "drive-inbox-filing", "items"] as const
+const MAX_LINK_HOPS = 40
+// The account record, read by absolute path with an empty environment so $HOME cannot redirect it.
+const ACCOUNT_RECORD_COMMANDS: Partial<Record<NodeJS.Platform, (uid: number) => string[]>> = {
+	darwin: () => ["/usr/bin/id", "-P"],
+	linux: (uid) => ["/usr/bin/getent", "passwd", String(uid)],
+}
 
 type Grant = {
 	readonly opaqueItemRef: string
@@ -81,9 +87,32 @@ function fold(path: string): string {
 	return path.normalize("NFC").toLowerCase()
 }
 
-/** Every spelling of the private items tree that a caller path could resolve into. */
-function itemsRoots(home: string): string[] {
-	const lexical = join(home, ...ITEMS_PATH)
+/**
+ * The account's default state root from the OS account record, never $HOME, so a caller who redirects
+ * XDG_STATE_HOME and HOME still cannot name the account's own receipts. An unreadable record is a denial.
+ */
+function accountStateRoot(): string {
+	const uid = process.getuid?.()
+	const command = ACCOUNT_RECORD_COMMANDS[process.platform]
+	if (uid === undefined || command === undefined) throw new GateRefusal({ kind: "denied" })
+	const record = Bun.spawnSync({ cmd: command(uid), env: {}, stdin: "ignore", stdout: "pipe", stderr: "ignore" })
+	const home = new TextDecoder().decode(record.stdout).trim().split(":").at(-2)
+	if (record.exitCode !== 0 || home === undefined || !isAbsolute(home)) throw new GateRefusal({ kind: "denied" })
+	return join(home, ".local", "state")
+}
+
+/** Every spelling and directory identity of the private items trees that a caller path could reach. */
+interface ItemsGuard {
+	readonly roots: readonly string[]
+	readonly identities: ReadonlySet<string>
+}
+
+function identity(stat: Stats): string {
+	return `${stat.dev}:${stat.ino}`
+}
+
+function spellings(stateRoot: string): string[] {
+	const lexical = join(stateRoot, ...ITEMS_PATH)
 	try {
 		return [lexical, realpathSync(lexical)]
 	} catch {
@@ -91,26 +120,69 @@ function itemsRoots(home: string): string[] {
 	}
 }
 
+function itemsGuard(stateRoots: readonly string[]): ItemsGuard {
+	const roots = stateRoots.flatMap(spellings)
+	const identities = new Set<string>()
+	for (const root of roots) {
+		try {
+			identities.add(identity(statSync(root)))
+		} catch {
+			// An absent items root holds no receipt to protect.
+		}
+	}
+	return { roots, identities }
+}
+
 function isInside(path: string, roots: readonly string[]): boolean {
 	return roots.some((root) => fold(path) === fold(root) || fold(path).startsWith(`${fold(root)}/`))
 }
 
+function components(path: string): string[] {
+	return path.split("/").filter((part) => part !== "")
+}
+
 /**
- * Reads one caller-supplied JSON file. A path that cannot be resolved, or that resolves into the items tree, is a
- * denial: otherwise a caller could name a receipt as its grant or request and learn whether it exists.
+ * Resolves a caller path one component at a time and never follows a link physically: each link target is
+ * normalized lexically. The walk denies as soon as a path is inside an items root, by spelling before it is touched
+ * and by directory identity after lstat, so resolution never depends on whether an item directory exists.
  */
-function readCallerJson(path: string, roots: readonly string[]): unknown {
+function canonicalCallerPath(path: string, guard: ItemsGuard): string {
+	let pending = components(resolve(path))
+	let current = "/"
+	let hops = 0
+	for (let next = pending.shift(); next !== undefined; next = pending.shift()) {
+		const candidate = join(current, next)
+		if (isInside(candidate, guard.roots)) throw new GateRefusal({ kind: "denied" })
+		const stat = lstatSync(candidate)
+		if (guard.identities.has(identity(stat))) throw new GateRefusal({ kind: "denied" })
+		if (!stat.isSymbolicLink()) {
+			current = candidate
+			continue
+		}
+		hops += 1
+		if (hops > MAX_LINK_HOPS) throw new GateRefusal({ kind: "denied" })
+		pending = [...components(resolve(current, readlinkSync(candidate))), ...pending]
+		current = "/"
+	}
+	return current
+}
+
+/**
+ * Reads one caller-supplied JSON file. A path that cannot be resolved, or that reaches an items tree, is a denial:
+ * otherwise a caller could name a receipt as its grant or request and learn whether it exists.
+ */
+function readCallerJson(path: string, guard: ItemsGuard): unknown {
 	let canonical: string
 	try {
-		canonical = realpathSync(path)
+		canonical = canonicalCallerPath(path, guard)
 	} catch {
 		throw new GateRefusal({ kind: "denied" })
 	}
-	if (isInside(canonical, roots)) throw new GateRefusal({ kind: "denied" })
 	let text: string
 	try {
-		// Nonblocking so a FIFO caller path cannot hang the command; a regular file ignores the flag.
-		const descriptor = openSync(canonical, constants.O_RDONLY | constants.O_NONBLOCK)
+		// Nonblocking so a FIFO caller path cannot hang the command; a regular file ignores the flag. The canonical
+		// path holds no link, so a link swapped in after the walk fails to open instead of being followed.
+		const descriptor = openSync(canonical, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW)
 		try {
 			if (!fstatSync(descriptor).isFile()) throw new GateRefusal({ kind: "inputUnreadable" })
 			text = readFileSync(descriptor, "utf8")
@@ -192,9 +264,9 @@ export function runGate(grantPath: string, requestPath: string): GateOutcome {
 	let home: string
 	try {
 		home = stateHome()
-		const roots = itemsRoots(home)
-		grant = asGrant(readCallerJson(grantPath, roots))
-		request = asRequest(readCallerJson(requestPath, roots))
+		const guard = itemsGuard([home, accountStateRoot()])
+		grant = asGrant(readCallerJson(grantPath, guard))
+		request = asRequest(readCallerJson(requestPath, guard))
 	} catch (error) {
 		return error instanceof GateRefusal ? error.outcome : { kind: "denied" }
 	}

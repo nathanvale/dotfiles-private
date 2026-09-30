@@ -163,6 +163,7 @@ test("refuses an extra grant or request key as invalid input before a private re
 	}
 })
 
+// Independent oracle: restated from the README grant and request shapes, not imported from src/gate.ts.
 const GRANT_KEYS = "allowedFields,opaqueItemRef,provider,purpose,receiptPath"
 const REQUEST_KEYS = "opaqueItemRef,provider,purpose,requestedFields"
 
