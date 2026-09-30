@@ -163,8 +163,9 @@ export function laneConfigArgs(profile: string): string[] {
 	return [...settings.flatMap((setting) => ["-c", setting]), ...DISABLED_FEATURES.flatMap((feature) => ["--disable", feature])]
 }
 
-export function profileHash(profile: string): string {
-	return createHash("sha256").update(profile).digest("hex")
+/** SHA-256 over every lane configuration argument (profile, settings, instructions and disabled features), in order. */
+export function configHash(configArgs: readonly string[]): string {
+	return createHash("sha256").update(JSON.stringify(configArgs)).digest("hex")
 }
 
 export function schemaPathFor(lane: Lane): string {

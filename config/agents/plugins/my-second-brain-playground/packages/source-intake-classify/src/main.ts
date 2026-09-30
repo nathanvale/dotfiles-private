@@ -5,6 +5,7 @@
 import { closeSync, constants, openSync, rmdirSync } from "node:fs"
 import { isatty } from "node:tty"
 import {
+	classifySuccess,
 	COMMANDS,
 	commandDiscovery,
 	discoveryData,
@@ -19,7 +20,7 @@ import {
 	success,
 } from "./contract.ts"
 import { type LaneInput, parseLaneInput } from "./input.ts"
-import { createWorkspace, LANE_MODEL, LANE_REASONING_EFFORT, type Lane, prepareLane, profileHash } from "./lane.ts"
+import { createWorkspace, LANE_MODEL, LANE_REASONING_EFFORT, type Lane, prepareLane, configHash } from "./lane.ts"
 import { codexVersion, runPreflight } from "./preflight.ts"
 import { runLane, stopLane } from "./run.ts"
 
@@ -132,7 +133,7 @@ async function classifyInLane(lane: Lane, input: LaneInput): Promise<Output> {
 		if (version === null || !runPreflight(lane, workspace)) return refusalOutput("laneUnproven")
 		const outcome = await runLane(lane, workspace, input)
 		if (outcome.kind !== "classified") return refusalOutput(outcome.kind)
-		const evidence = { codexVersion: version, profileSha256: profileHash(lane.profile), model: LANE_MODEL, reasoningEffort: LANE_REASONING_EFFORT, threadId: outcome.threadId }
+		const evidence = { codexVersion: version, laneConfigSha256: configHash(lane.configArgs), model: LANE_MODEL, reasoningEffort: LANE_REASONING_EFFORT, threadId: outcome.threadId }
 		const data = { opaqueItemRef: input.dispatch.opaqueItemRef, classification: outcome.classification, lane: evidence }
 		const { classification } = outcome
 		const human = [
@@ -143,8 +144,7 @@ async function classifyInLane(lane: Lane, input: LaneInput): Promise<Output> {
 			`  decision question: ${classification.decisionQuestion}`,
 			`  lane: codex ${version}, ${LANE_MODEL} ${LANE_REASONING_EFFORT}, thread ${outcome.threadId}`,
 		].join("\n")
-		const envelope = success("source-intake-classify.classify", data, "Classified one granted projection in the read-denied lane.", "Hand the classification to the granted foreground Steward; record the lane evidence in the private receipt.")
-		return { envelope, human }
+		return { envelope: classifySuccess(data), human }
 	} finally {
 		// The workspace is read-only to the lane, so it is still empty; a non-empty one is left for inspection.
 		try {

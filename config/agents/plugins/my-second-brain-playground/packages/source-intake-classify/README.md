@@ -58,11 +58,24 @@ codex exec <lane configuration> --ignore-user-config --ignore-rules
   [`src/lane-instructions.md`](src/lane-instructions.md), passed as
   `developer_instructions`. The rollout stays here (no `--ephemeral`) for DIS-7
   `turn_context` evidence; the profile denies it to later lanes.
+- Credential link: a Codex token refresh writes through the link into the
+  caller's `auth.json` and leaves the link in place (proved with synthetic
+  tokens and a local refresh endpoint in `tests/auth-link.test.ts`). If a later
+  Codex replaces the link with a file, the next run gets the lane refusal
+  (`auth.json` is no longer the expected link). Recovery: the foreground
+  Steward checks `codex login status` for the caller, deletes only
+  `<lane Codex home>/auth.json` (a stale token copy), runs `codex login` if the
+  caller's refresh token was rotated by the copy, and reruns.
+- Retention: rollouts, `logs_*.sqlite`, `state_*.sqlite` and other Codex files
+  in the lane home hold the lane input, including the granted projection,
+  verbatim. They fall under the item receipt's 30-day retention review in the
+  `source-intake-steward` skill; nothing deletes them automatically.
 - Configuration, every value passed with `-c` or `--disable` per invocation:
   `approval_policy="never"`, `web_search="disabled"`,
   `shell_environment_policy.inherit="none"`, `allow_login_shell=false`,
   `agents.enabled=false` (Codex 0.159.2 keeps multi-agent collaboration on
-  without it), skill and app instructions off, and the features `apps`, `plugins`, `browser_use`,
+  without it), skill and app instructions off, and the features `apps`,
+  `plugins`, `browser_use`,
   `browser_use_external`, `in_app_browser`, `computer_use`, `multi_agent`,
   `multi_agent_v2`, `hooks`, `memories`, `shell_snapshot` and the other
   outward features in [`src/lane.ts`](src/lane.ts) disabled.
@@ -98,22 +111,43 @@ Before the model starts, every run proves with the lane's exact configuration:
 1. `codex --version` names the running binary.
 2. Positive control: `codex sandbox` echoes a nonce, so denials below are the
    profile, not a broken sandbox.
-3. A synthetic sentinel written under a throwaway directory in the configured
-   private root: `cat`, `stat` and `ls` are each denied.
-4. Every spelling of both private roots: `cat` and `ls` are each denied. A
+3. The sandbox sets `CODEX_SANDBOX_NETWORK_DISABLED=1` for the lane's
+   commands.
+4. A synthetic receipt at the real layout,
+   `drive-inbox-filing/items/preflight-<nonce>/classification-metadata.json`
+   under the configured private root: `cat`, `stat` and `ls` are each denied.
+   The command removes it, and any directory it created for it, afterwards.
+5. Every spelling of both private roots: `cat` and `ls` are each denied. A
    missing root answers "No such file or directory", which is not a denial, so
    both roots must exist.
-5. The caller's Codex credential: `cat` is denied.
-6. `codex debug prompt-input` renders the session without a model call: it
+6. The caller's Codex credential: `cat` is denied.
+7. `codex debug prompt-input` renders the session without a model call: it
    carries the lane instructions, no `AGENTS.md` instructions, no multi-agent
-   role, approval `never`, and a deny entry for `:root` and every private root spelling.
+   role, approval `never`, restricted network, no write entry, a deny entry for
+   `:root`, `:tmpdir`, `:slash_tmp` and every private root spelling, and no
+   read entry under a denied root except Codex's own `<lane Codex home>/tmp/arg0/`.
+   A more specific read entry overrides a deny, so this is what proves the rest
+   of the subtree the sentinel cannot reach.
 
 "Denied" means a non-zero exit, empty stdout, and "Operation not permitted" on
 stderr. Any other result, error or timeout gives one fixed, value-free refusal
 and no model start. Probe output never leaves the command. The success result
-reports the Codex version, the profile's SHA-256, the model, the effort and the
-rollout thread identity; the foreground Steward records them in the item's
-private receipt.
+reports the Codex version, `laneConfigSha256` (SHA-256 over every lane
+configuration argument: profile, settings, instructions and disabled features),
+the model, the effort and the rollout thread identity; the foreground Steward
+records them in the item's private receipt.
+
+With `XDG_STATE_HOME` pointing away from the default, the account default
+private root must still exist: a missing one fails the pre-flight with the same
+fixed refusal. Create it (mode `0700`) before the first run.
+
+## Writes
+
+The command writes only under the configured private root: the lane Codex home
+with its classification schema and `auth.json` link, Codex's own rollouts, logs
+and caches there, and the pre-flight sentinel item it removes. Outside it, Codex
+may write refreshed tokens through the link into the caller's `auth.json`. It
+never writes a receipt, grant, Beads record, vault note or Codex `config.toml`.
 
 ## Threat boundary
 
@@ -158,13 +192,14 @@ names no path, projection value or probe output. Human mode prints this one
 line on stderr:
 
 ```text
-Classifier lane not started. Its read-prevention pre-flight did not pass. Next: Ask Stage Manager to inspect the classifier lane pre-flight before any retry.
+Classifier lane not started. Its read-prevention pre-flight did not pass. Next: Ask the granted foreground Steward to inspect the classifier lane pre-flight before any retry.
 ```
 
 ## Proof
 
-`bun run test:source-intake-classify` from the plugin root. Process tests need
+`bun run test:source-intake-classify` from the plugin root. Lane proofs need
 macOS, an installed `codex` and the account default private root; without them
-they skip with that rationale. Enforcement evidence comes from `codex sandbox`
+they skip. Each test file's ledger asserts the skip rationale and pins how many
+lane proofs ran and skipped in this environment. Enforcement evidence comes from `codex sandbox`
 probes on synthetic files; a fake `codex` records the spawned lane's
 descriptors, environment, arguments and input without calling a model.

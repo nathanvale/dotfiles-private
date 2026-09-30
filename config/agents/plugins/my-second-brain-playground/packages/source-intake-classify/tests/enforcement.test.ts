@@ -2,11 +2,11 @@
 // receipt, whichever root selects it. Evidence comes from `codex sandbox` processes on synthetic files, never from a
 // model. A positive control proves the sandbox runs permitted commands, and a weakened-profile control proves each
 // probe can fail, so a denial here is the profile's doing.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test"
+import { afterAll, beforeAll, describe, expect } from "bun:test"
 import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 import { type Lane, laneConfigArgs, PROFILE_NAME, prepareLane } from "../src/lane.ts"
-import { ACCOUNT_DEFAULT_ROOT, createFixture, type Fixture, LANE_READY, LANE_SKIP_RATIONALE, OPAQUE_ITEM_REF, REAL_CODEX, removeFixture, SENTINEL } from "./fixtures/harness.ts"
+import { ACCOUNT_DEFAULT_ROOT, createFixture, type Fixture, LANE_READY, laneLedger, OPAQUE_ITEM_REF, REAL_CODEX, removeFixture, SENTINEL } from "./fixtures/harness.ts"
 
 const PERMISSION_DENIAL = "Operation not permitted"
 
@@ -16,6 +16,7 @@ interface Probe {
 	stderr: string
 }
 
+const proofs = laneLedger()
 let fixture: Fixture
 
 /** Resolves the lane as the command does, from a process environment the test sets and then restores. */
@@ -73,12 +74,13 @@ const SELECTIONS = [
 ]
 
 for (const selection of SELECTIONS) {
-	describe.skipIf(!LANE_READY)(`receipt root selected by ${selection.name} (${LANE_SKIP_RATIONALE})`, () => {
+	describe(`receipt root selected by ${selection.name}`, () => {
 		let lane: Lane
 		let receipt: string
-		let workspace: string
+		let workspace = ""
 
 		beforeAll(() => {
+			if (!LANE_READY) return
 			receipt = writeReceipt(selection.stateHome())
 			lane = laneFor({ ...selection.env(), CODEX_HOME: join(fixture.root, "codex-home"), PATH: codexPath, TMPDIR: process.env.TMPDIR })
 			workspace = workspaceFor(selection.name.replaceAll(" ", "-"))
@@ -87,30 +89,33 @@ for (const selection of SELECTIONS) {
 		})
 
 		afterAll(() => {
-			rmSync(workspace, { recursive: true, force: true })
+			if (workspace !== "") rmSync(workspace, { recursive: true, force: true })
 		})
 
-		test("the lane denies both roots: the selected one and the account default", () => {
+		proofs.test("the lane denies both roots: the selected one and the account default", () => {
 			expect(lane.deniedRoots).toContain(join(selection.stateHome(), "my-second-brain-playground"))
 			expect(lane.deniedRoots).toContain(ACCOUNT_DEFAULT_ROOT as string)
 		})
 
-		test("positive control: the sandbox runs a permitted read in the workspace", () => {
+		proofs.test("positive control: the sandbox runs a permitted read in the workspace", () => {
 			expect(sandboxed(lane, workspace, ["/bin/cat", join(workspace, "control.txt")])).toMatchObject({ exitCode: 0, stdout: "PERMITTED_CONTROL\n" })
 		})
 
-		test("weakened-profile control: without the denies the same read returns the sentinel", () => {
+		proofs.test("weakened-profile control: without the denies the same read returns the sentinel", () => {
 			const weak = `{filesystem={":root"="read", ":minimal"="read", ":workspace_roots"={"."="read"}}, network={enabled=false}}`
 			expect(sandboxed(lane, workspace, ["/bin/cat", receipt], laneConfigArgs(weak)).stdout).toContain(SENTINEL)
 		})
 
-		test("cat of the receipt is denied", () => expectDenied(sandboxed(lane, workspace, ["/bin/cat", receipt])))
-		test("ls of the item directory is denied", () => expectDenied(sandboxed(lane, workspace, ["/bin/ls", dirname(receipt)])))
-		test("cp of the receipt is denied", () => expectDenied(sandboxed(lane, workspace, ["/bin/cp", receipt, join(workspace, "copy")])))
-		test("stat of the receipt is denied", () => expectDenied(sandboxed(lane, workspace, ["/usr/bin/stat", receipt])))
-		test("a read through a workspace symlink is denied", () => expectDenied(sandboxed(lane, workspace, ["/bin/cat", join(workspace, "receipt-link")])))
-		test("the lane cannot plant a hard link to the receipt in its workspace", () => expectDenied(sandboxed(lane, workspace, ["/bin/ln", receipt, join(workspace, "receipt-hard")])))
-		test("ls of the account default root is denied", () => expectDenied(sandboxed(lane, workspace, ["/bin/ls", ACCOUNT_DEFAULT_ROOT as string])))
-		test("the caller's Codex credential is denied", () => expectDenied(sandboxed(lane, workspace, ["/bin/cat", lane.authTarget])))
+		proofs.test("cat of the receipt is denied", () => expectDenied(sandboxed(lane, workspace, ["/bin/cat", receipt])))
+		proofs.test("ls of the item directory is denied", () => expectDenied(sandboxed(lane, workspace, ["/bin/ls", dirname(receipt)])))
+		proofs.test("cp of the receipt is denied", () => expectDenied(sandboxed(lane, workspace, ["/bin/cp", receipt, join(workspace, "copy")])))
+		proofs.test("stat of the receipt is denied", () => expectDenied(sandboxed(lane, workspace, ["/usr/bin/stat", receipt])))
+		proofs.test("a read through a workspace symlink is denied", () => expectDenied(sandboxed(lane, workspace, ["/bin/cat", join(workspace, "receipt-link")])))
+		proofs.test("the lane cannot plant a hard link to the receipt in its workspace", () => expectDenied(sandboxed(lane, workspace, ["/bin/ln", receipt, join(workspace, "receipt-hard")])))
+		proofs.test("ls of the account default root is denied", () => expectDenied(sandboxed(lane, workspace, ["/bin/ls", ACCOUNT_DEFAULT_ROOT as string])))
+		proofs.test("the caller's Codex credential is denied", () => expectDenied(sandboxed(lane, workspace, ["/bin/cat", lane.authTarget])))
 	})
 }
+
+// Eleven proofs for each of the two root selections.
+proofs.pin(22)

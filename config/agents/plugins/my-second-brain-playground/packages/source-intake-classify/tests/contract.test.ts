@@ -15,9 +15,8 @@ import {
 	createFixture,
 	invoke,
 	LANE_ADAPTER,
-	LANE_READY,
-	LANE_SKIP_RATIONALE,
 	laneInput,
+	laneLedger,
 	RUNTIME,
 	removeFixture,
 	SENTINEL,
@@ -26,6 +25,7 @@ import {
 	writeInput,
 } from "./fixtures/harness.ts"
 
+const proofs = laneLedger()
 let fixture: Fixture
 let validInput: string
 let validPath: string
@@ -150,7 +150,7 @@ test("classify declares exactly the expected stations", () => {
 	expect(stations.map(projection).sort()).toEqual(EXPECTED_STATIONS)
 })
 
-test.skipIf(!LANE_READY)(`classify reaches every declared station (${LANE_SKIP_RATIONALE})`, () => {
+proofs.test("classify reaches every declared station", () => {
 	const observed = REACHING_ROWS.map((row) => {
 		setFake(fixture, "honest")
 		row.setup?.()
@@ -161,7 +161,17 @@ test.skipIf(!LANE_READY)(`classify reaches every declared station (${LANE_SKIP_R
 	expect(observed.sort()).toEqual(EXPECTED_STATIONS)
 }, 120_000)
 
-test.skipIf(!LANE_READY)(`effects follow the transaction state on every model-side station (${LANE_SKIP_RATIONALE})`, () => {
+// Wrong behavior caught: discovery promising one next step while the command emits another.
+proofs.test("the emitted success guidance is the guidance discovery declares", () => {
+	const declared = envelope(invoke(fixture, ["--discover-command", "source-intake-classify.classify", "--json"])).result.data.stations.find((station: { causeCode: string }) => station.causeCode === "SUCCESS_COMPLETED")
+	const emitted = envelope(invoke(fixture, ["classify", "--json"], { stdin: validInput }))
+	expect(emitted.result.causeCode).toBe("SUCCESS_COMPLETED")
+	expect(emitted.result.nextAction).toBe(declared.guidance.nextAction)
+	// Independent oracle: the success message restated from the package README.
+	expect(emitted.message).toBe("Classified one granted projection in the read-denied lane.")
+}, 60_000)
+
+proofs.test("effects follow the transaction state on every model-side station", () => {
 	const success = envelope(invoke(fixture, ["classify", "--json"], { stdin: validInput })).result
 	expect(success.effects).toEqual({ completed: ["classifier-model-call"], inventoryComplete: true, remaining: [], uncertain: [] })
 	setFake(fixture, "honest", events({ thread: false }))
@@ -172,7 +182,7 @@ test.skipIf(!LANE_READY)(`effects follow the transaction state on every model-si
 
 describe("validated output and transport failure", () => {
 	// Wrong behavior caught: a fallback that reports "unchanged" after the model call completed would invite a replay.
-	test.skipIf(!LANE_READY)(`a completed run whose result cannot be emitted keeps its completed effect (${LANE_SKIP_RATIONALE})`, () => {
+	proofs.test("a completed run whose result cannot be emitted keeps its completed effect", () => {
 		const result = invoke(fixture, ["classify", "--json"], { stdin: validInput, preload: preload("success", serializerThrowsOn("success")) })
 		expect(result.exitCode).toBe(1)
 		expect(envelope(result).result).toMatchObject({ causeCode: "INTERNAL_RESULT_COMPLETED", transactionState: "completed", data: null })
@@ -255,7 +265,7 @@ for (const [signal, exitCode] of [
 	})
 }
 
-test.skipIf(!LANE_READY)(`the strict CLI Design checker passes every applicable row (${LANE_SKIP_RATIONALE})`, () => {
+proofs.test("the strict CLI Design checker passes every applicable row", () => {
 	// The checker passes argv only and gives every row /dev/null as stdin, so a test adapter maps stdin=FILE onto
 	// standard input and lane=DIR onto PATH. Missing input: no codex on PATH. Unauthorized effect: a weakened lane.
 	// The lane writes only under the fixture state root, so the checker watches a separate empty directory.
@@ -288,3 +298,5 @@ test.skipIf(!LANE_READY)(`the strict CLI Design checker passes every applicable 
 	expect(report.result.data.skippedRows).toEqual(["large-envelope"])
 	expect(result.exitCode).toBe(0)
 }, 240_000)
+
+proofs.pin(5)

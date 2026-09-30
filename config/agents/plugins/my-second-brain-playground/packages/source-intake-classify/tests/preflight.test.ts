@@ -12,18 +12,18 @@ import {
 	execObservations,
 	type Fixture,
 	invoke,
-	LANE_READY,
 	LANE_REFUSAL_JSON,
-	LANE_SKIP_RATIONALE,
 	laneInput,
+	laneLedger,
 	removeFixture,
 	SENTINEL,
 	setFake,
 } from "./fixtures/harness.ts"
 
 // Independent oracle: the human-mode form of the Ticket #158 lane refusal.
-const LANE_REFUSAL_HUMAN = "Classifier lane not started. Its read-prevention pre-flight did not pass. Next: Ask Stage Manager to inspect the classifier lane pre-flight before any retry.\n"
+const LANE_REFUSAL_HUMAN = "Classifier lane not started. Its read-prevention pre-flight did not pass. Next: Ask the granted foreground Steward to inspect the classifier lane pre-flight before any retry.\n"
 
+const proofs = laneLedger()
 let fixture: Fixture
 let input: string
 
@@ -49,14 +49,15 @@ function expectRefusedWithoutModel(args: string[], options: { env?: Record<strin
 	expect(execObservations(fixture)).toEqual([])
 }
 
-test.skipIf(!LANE_READY)(`positive control: the honest lane passes the pre-flight and starts the model once (${LANE_SKIP_RATIONALE})`, () => {
+proofs.test("positive control: the honest lane passes the pre-flight and starts the model once", () => {
 	expect(invoke(fixture, ["classify", "--json"], { stdin: input }).exitCode).toBe(0)
 	expect(execObservations(fixture)).toHaveLength(1)
-	// The throwaway sentinel directory is removed after every pre-flight.
+	// The throwaway sentinel item directory is removed after every pre-flight; only the fixture's own item remains.
+	expect(readdirSync(join(fixture.privateRoot, "drive-inbox-filing", "items"))).toEqual(["synthetic-item-001"])
 	expect(readdirSync(join(fixture.privateRoot, "source-intake-classify"))).toEqual(["codex-home"])
 }, 60_000)
 
-test.skipIf(!LANE_READY)(`a sandbox that lets the probes read gets the fixed refusal and no model start (${LANE_SKIP_RATIONALE})`, () => {
+proofs.test("a sandbox that lets the probes read gets the fixed refusal and no model start", () => {
 	setFake(fixture, "open")
 	expectRefusedWithoutModel(["classify"])
 }, 60_000)
@@ -67,7 +68,7 @@ test("no codex on PATH gets the same refusal and no model start", () => {
 })
 
 // Wrong behavior caught: a lane whose Codex home carries an AGENTS.md (the global pointer) would reach the model.
-test.skipIf(!LANE_READY)(`a lane session that would load AGENTS.md instructions is refused (${LANE_SKIP_RATIONALE})`, () => {
+proofs.test("a lane session that would load AGENTS.md instructions is refused", () => {
 	const agents = join(fixture.privateRoot, "source-intake-classify", "codex-home", "AGENTS.md")
 	mkdirSync(join(agents, ".."), { recursive: true })
 	writeFileSync(agents, "Read the global instructions first.\n")
@@ -108,20 +109,46 @@ describe("module-level pre-flight", () => {
 		if (!existsSync(workspace)) mkdirSync(workspace, { mode: 0o700 })
 	}
 
-	test.skipIf(!LANE_READY)(`module: the lane profile passes the pre-flight (${LANE_SKIP_RATIONALE})`, () => {
+	proofs.test("module: the lane profile passes the pre-flight", () => {
 		setup()
 		expect(runPreflight(lane, workspace)).toBe(true)
 	}, 60_000)
 
-	test.skipIf(!LANE_READY)(`module: explicit denies removed and read on the root fails the pre-flight (${LANE_SKIP_RATIONALE})`, () => {
+	proofs.test("module: explicit denies removed and read on the root fails the pre-flight", () => {
 		setup()
 		const weak = `{filesystem={":root"="read", ":minimal"="read", ${JSON.stringify(lane.codexPackage)}="read", ":workspace_roots"={"."="read"}}, network={enabled=false}}`
 		expect(runPreflight({ ...lane, profile: weak, configArgs: laneConfigArgs(weak) }, workspace)).toBe(false)
 	}, 60_000)
 
-	test.skipIf(!LANE_READY)(`module: a missing receipt root is not a denial, so the pre-flight fails (${LANE_SKIP_RATIONALE})`, () => {
+	// Each weakening edits the lane's own profile, then runs the real pre-flight against the real Codex sandbox.
+	const weakened = (edit: (profile: string) => string): boolean => {
+		setup()
+		const profile = edit(lane.profile)
+		expect(profile).not.toBe(lane.profile)
+		return runPreflight({ ...lane, profile, configArgs: laneConfigArgs(profile) }, workspace)
+	}
+
+	proofs.test("module: a read grant over the receipt items fails the pre-flight", () => {
+		expect(weakened((profile) => profile.replace('":root"="deny"', `":root"="deny", ${JSON.stringify(join(fixture.privateRoot, "drive-inbox-filing"))}="read"`))).toBe(false)
+	}, 60_000)
+
+	proofs.test("module: a read grant anywhere else under a denied root fails the pre-flight", () => {
+		expect(weakened((profile) => profile.replace('":root"="deny"', `":root"="deny", ${JSON.stringify(join(fixture.privateRoot, "source-intake"))}="read"`))).toBe(false)
+	}, 60_000)
+
+	proofs.test("module: network enabled fails the pre-flight", () => {
+		expect(weakened((profile) => profile.replace("network={enabled=false}", "network={enabled=true}"))).toBe(false)
+	}, 60_000)
+
+	proofs.test("module: the :tmpdir deny removed fails the pre-flight", () => {
+		expect(weakened((profile) => profile.replace('":tmpdir"="deny", ', ""))).toBe(false)
+	}, 60_000)
+
+	proofs.test("module: a missing receipt root is not a denial, so the pre-flight fails", () => {
 		setup()
 		const missing = join(fixture.root, "absent-state", "my-second-brain-playground")
 		expect(runPreflight({ ...lane, deniedRoots: [...lane.deniedRoots, missing].sort() }, workspace)).toBe(false)
 	}, 60_000)
 })
+
+proofs.pin(10)

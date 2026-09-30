@@ -22,6 +22,11 @@ var COMMANDS = [
 ];
 var AVAILABLE_PATHS = ["source-intake-classify.classify", "source-intake-classify.command-discovery", "source-intake-classify.discovery", "source-intake-classify.help"];
 var INPUT_RETRY_DELAY_MILLISECONDS = 1000;
+var CLASSIFY_SUCCESS = {
+  message: "Classified one granted projection in the read-denied lane.",
+  nextAction: "Hand the classification to the granted foreground Steward; record the lane evidence in the item's private receipt.",
+  trigger: "The pre-flight passed and the model turn completed with a valid classification."
+};
 var STATIONS = {
   usage: {
     causeCode: "USAGE_INVALID_INVOCATION",
@@ -41,7 +46,7 @@ var STATIONS = {
     exitCode: 3,
     trigger: "The classifier lane could not be prepared, or its pre-flight did not prove that the lane denies both private receipt roots.",
     repairAction: "Inspect the Codex install, the lane profile and both receipt roots, then retry.",
-    guidance: { nextAction: "Ask Stage Manager to inspect the classifier lane pre-flight before any retry." }
+    guidance: { nextAction: "Ask the granted foreground Steward to inspect the classifier lane pre-flight before any retry." }
   },
   inputInvalid: {
     causeCode: "SCHEMA_INVALID_INPUT",
@@ -167,6 +172,9 @@ function success(commandIdentity, data, message, nextAction) {
     }
   };
 }
+function classifySuccess(data) {
+  return success("source-intake-classify.classify", data, CLASSIFY_SUCCESS.message, CLASSIFY_SUCCESS.nextAction);
+}
 function stationResult(commandIdentity, key, message) {
   const station = STATIONS[key];
   const retry = station.retryDelayMilliseconds === undefined ? { retryable: false } : { retryable: true, retryDelayMilliseconds: station.retryDelayMilliseconds };
@@ -281,7 +289,8 @@ function discoveryData() {
       "Never reads a private receipt; it passes on only the granted dispatch projection, owner notes and Bead state.",
       "Never starts the classifier model unless the per-run pre-flight proves the lane profile denies both private receipt roots.",
       "Never forwards pre-flight probe output or lane tool output.",
-      "Never writes a receipt, grant, Beads record, vault note or Codex user configuration.",
+      "Never writes outside the configured private root, except that Codex may write refreshed tokens through the lane's auth.json link into the caller's auth.json. Inside that root it writes the lane Codex home (the classification schema, the auth.json link, and Codex's own rollouts, logs and caches) and a pre-flight sentinel item it removes.",
+      "Never writes a receipt, grant, Beads record, vault note or Codex config.toml.",
       "Never reads Google Drive."
     ]
   };
@@ -321,8 +330,8 @@ function commandDiscovery(commandIdentity) {
         retryable: false,
         retryDelayPolicy: { kind: "none" },
         repairAction: null,
-        guidance: { nextAction: "Hand the classification back to the granted foreground Steward; record the lane evidence in the private receipt." },
-        trigger: "The pre-flight passed and the model turn completed with a valid classification.",
+        guidance: { nextAction: CLASSIFY_SUCCESS.nextAction },
+        trigger: CLASSIFY_SUCCESS.trigger,
         reachability: "required",
         unreachableRationale: null
       },
@@ -570,8 +579,8 @@ function laneConfigArgs(profile) {
   ];
   return [...settings.flatMap((setting) => ["-c", setting]), ...DISABLED_FEATURES.flatMap((feature) => ["--disable", feature])];
 }
-function profileHash(profile) {
-  return createHash("sha256").update(profile).digest("hex");
+function configHash(configArgs) {
+  return createHash("sha256").update(JSON.stringify(configArgs)).digest("hex");
 }
 function schemaPathFor(lane) {
   return join(lane.laneHome, SCHEMA_FILE);
@@ -616,7 +625,7 @@ function createWorkspace() {
 // packages/source-intake-classify/src/preflight.ts
 import { randomBytes } from "crypto";
 import { existsSync as existsSync2, mkdirSync as mkdirSync2, rmdirSync, unlinkSync, writeFileSync as writeFileSync2 } from "fs";
-import { join as join2 } from "path";
+import { dirname as dirname2, join as join2 } from "path";
 var PROBE_TIMEOUT_MS = 15000;
 var PERMISSION_DENIAL = "Operation not permitted";
 var INSTRUCTIONS_HEADING = "# Source Intake classifier lane";
@@ -646,11 +655,20 @@ function controlHolds(lane, workspace) {
   return result.exitCode === 0 && result.stdout === `${nonce}
 `;
 }
+function removeCreated(directory, firstCreated) {
+  for (let path = directory;firstCreated !== undefined && path.startsWith(firstCreated); path = dirname2(path)) {
+    try {
+      rmdirSync(path);
+    } catch {
+      return;
+    }
+  }
+}
 function sentinelDenied(lane, workspace) {
   const nonce = randomBytes(16).toString("hex");
-  const directory = join2(lane.privateRoot, "source-intake-classify", `preflight-${nonce}`);
-  const sentinel = join2(directory, "sentinel");
-  mkdirSync2(directory, { mode: 448 });
+  const directory = join2(lane.privateRoot, "drive-inbox-filing", "items", `preflight-${nonce}`);
+  const sentinel = join2(directory, "classification-metadata.json");
+  const firstCreated = mkdirSync2(directory, { recursive: true, mode: 448 });
   try {
     writeFileSync2(sentinel, `${nonce}
 `, { mode: 384, flag: "wx" });
@@ -659,8 +677,13 @@ function sentinelDenied(lane, workspace) {
   } finally {
     if (existsSync2(sentinel))
       unlinkSync(sentinel);
-    rmdirSync(directory);
+    removeCreated(directory, firstCreated);
   }
+}
+function networkDisabled(lane, workspace) {
+  const result = sandboxed(lane, workspace, ["/usr/bin/env"]);
+  return result.exitCode === 0 && result.stdout.split(`
+`).includes("CODEX_SANDBOX_NETWORK_DISABLED=1");
 }
 function rootsDenied(lane, workspace) {
   const rootsHold = lane.deniedRoots.every((root) => denied(sandboxed(lane, workspace, ["/bin/cat", root])) && denied(sandboxed(lane, workspace, ["/bin/ls", root])));
@@ -678,19 +701,27 @@ function promptText(stdout) {
     return null;
   }
 }
+function contains2(ancestor, path) {
+  return path === ancestor || path.startsWith(`${ancestor}/`);
+}
+function readEntriesHold(lane, text) {
+  const helperLinks = join2(lane.laneHome, "tmp", "arg0");
+  const reads = [...text.matchAll(/<entry access="read"><path>([^<]*)<\/path><\/entry>/g)].map((match) => match[1] ?? "");
+  return reads.every((path) => !lane.deniedRoots.some((root) => contains2(root, path)) || contains2(helperLinks, path));
+}
 function sessionHolds(lane, workspace) {
   const result = capture(lane, [lane.codex, "debug", "prompt-input", ...lane.configArgs, "pre-flight"], workspace);
   const text = result.exitCode === 0 ? promptText(result.stdout) : null;
   if (text === null || text.includes("# AGENTS.md instructions") || text.includes("<multi_agent_role>") || !text.includes(INSTRUCTIONS_HEADING))
     return false;
-  if (!text.includes("Approval policy is currently never."))
+  if (!text.includes("Approval policy is currently never.") || !text.includes("Network access is restricted.") || text.includes('<entry access="write"'))
     return false;
-  const entries = ["<special>:root</special>", ...lane.deniedRoots.map((root) => `<path>${root}</path>`)];
-  return entries.every((entry) => text.includes(`<entry access="deny" escalatable="false">${entry}</entry>`));
+  const entries = ["<special>:root</special>", "<special>:tmpdir</special>", "<special>:slash_tmp</special>", ...lane.deniedRoots.map((root) => `<path>${root}</path>`)];
+  return entries.every((entry) => text.includes(`<entry access="deny" escalatable="false">${entry}</entry>`)) && readEntriesHold(lane, text);
 }
 function runPreflight(lane, workspace) {
   try {
-    return controlHolds(lane, workspace) && sentinelDenied(lane, workspace) && rootsDenied(lane, workspace) && sessionHolds(lane, workspace);
+    return controlHolds(lane, workspace) && networkDisabled(lane, workspace) && sentinelDenied(lane, workspace) && rootsDenied(lane, workspace) && sessionHolds(lane, workspace);
   } catch {
     return false;
   }
@@ -847,7 +878,7 @@ async function classifyInLane(lane, input) {
     const outcome = await runLane(lane, workspace, input);
     if (outcome.kind !== "classified")
       return refusalOutput(outcome.kind);
-    const evidence = { codexVersion: version, profileSha256: profileHash(lane.profile), model: LANE_MODEL, reasoningEffort: LANE_REASONING_EFFORT, threadId: outcome.threadId };
+    const evidence = { codexVersion: version, laneConfigSha256: configHash(lane.configArgs), model: LANE_MODEL, reasoningEffort: LANE_REASONING_EFFORT, threadId: outcome.threadId };
     const data = { opaqueItemRef: input.dispatch.opaqueItemRef, classification: outcome.classification, lane: evidence };
     const { classification } = outcome;
     const human = [
@@ -859,8 +890,7 @@ async function classifyInLane(lane, input) {
       `  lane: codex ${version}, ${LANE_MODEL} ${LANE_REASONING_EFFORT}, thread ${outcome.threadId}`
     ].join(`
 `);
-    const envelope = success("source-intake-classify.classify", data, "Classified one granted projection in the read-denied lane.", "Hand the classification to the granted foreground Steward; record the lane evidence in the private receipt.");
-    return { envelope, human };
+    return { envelope: classifySuccess(data), human };
   } finally {
     try {
       rmdirSync2(workspace);

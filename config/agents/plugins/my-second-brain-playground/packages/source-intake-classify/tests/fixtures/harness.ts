@@ -2,6 +2,7 @@
 // XDG_STATE_HOME, CODEX_HOME and a fake codex release first on PATH. The fake never calls a model: `exec` records what
 // it inherited and prints a scripted event stream; other subcommands run a hard link of the installed codex, so every
 // pre-flight probe meets the real Seatbelt sandbox. Every value is fictional. Nothing here imports the modules under test.
+import { expect, test } from "bun:test"
 import { chmodSync, copyFileSync, existsSync, linkSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -56,10 +57,46 @@ export const ACCOUNT_DEFAULT_ROOT: string | null = (() => {
 export const LANE_READY = process.platform === "darwin" && REAL_CODEX !== null && ACCOUNT_DEFAULT_ROOT !== null && existsSync(ACCOUNT_DEFAULT_ROOT)
 export const LANE_SKIP_RATIONALE = "needs macOS, an installed codex and the account default receipt root; the pre-flight fails closed without them"
 
+export interface LaneLedger {
+	/** A lane proof: it runs only where the lane can run, and the ledger counts whether it ran. */
+	test(name: string, body: () => void | Promise<void>, timeout?: number): void
+	/** Declared last in a file: asserts the skip rationale and pins the covered and skipped counts for this environment. */
+	pin(expected: number): void
+}
+
+/**
+ * One ledger per test file. A proof downgraded to a silent skip, or a lane that stops being ready on a machine that
+ * should run it, changes the observed covered and skipped counts and fails the pin.
+ */
+export function laneLedger(): LaneLedger {
+	let registered = 0
+	let covered = 0
+	return {
+		test(name, body, timeout) {
+			registered += 1
+			test.skipIf(!LANE_READY)(
+				name,
+				async () => {
+					covered += 1
+					await body()
+				},
+				timeout,
+			)
+		},
+		pin(expected) {
+			test("lane proof ledger: the skip rationale is stated and covered and skipped counts are pinned", () => {
+				expect(LANE_SKIP_RATIONALE.trim()).not.toBe("")
+				expect(registered).toBe(expected)
+				expect({ covered, skipped: registered - covered }).toEqual(LANE_READY ? { covered: expected, skipped: 0 } : { covered: 0, skipped: expected })
+			})
+		},
+	}
+}
+
 // Independent oracle: restated from the Ticket #158 lane refusal and the published Contract Core 2.0 envelope, not
 // imported from src, so a change to the production refusal fails these tests instead of redefining them.
 export const LANE_REFUSAL_JSON =
-	'{"envelopeVersion":2,"contractVersion":"2.0.0","message":"Classifier lane not started. Its read-prevention pre-flight did not pass.","availablePaths":["source-intake-classify.classify","source-intake-classify.command-discovery","source-intake-classify.discovery","source-intake-classify.help"],"result":{"runId":"run-source-intake-classify.classify","commandIdentity":"source-intake-classify.classify","outcome":"refused","effectClass":"external","transactionState":"unchanged","causeCode":"DOMAIN_PRECONDITION_UNMET","failureClass":"domain","exitCode":3,"data":null,"retryable":false,"repairAction":"Inspect the Codex install, the lane profile and both receipt roots, then retry.","effects":{"completed":[],"inventoryComplete":true,"remaining":[],"uncertain":[]},"nextAction":"Ask Stage Manager to inspect the classifier lane pre-flight before any retry."}}\n'
+	'{"envelopeVersion":2,"contractVersion":"2.0.0","message":"Classifier lane not started. Its read-prevention pre-flight did not pass.","availablePaths":["source-intake-classify.classify","source-intake-classify.command-discovery","source-intake-classify.discovery","source-intake-classify.help"],"result":{"runId":"run-source-intake-classify.classify","commandIdentity":"source-intake-classify.classify","outcome":"refused","effectClass":"external","transactionState":"unchanged","causeCode":"DOMAIN_PRECONDITION_UNMET","failureClass":"domain","exitCode":3,"data":null,"retryable":false,"repairAction":"Inspect the Codex install, the lane profile and both receipt roots, then retry.","effects":{"completed":[],"inventoryComplete":true,"remaining":[],"uncertain":[]},"nextAction":"Ask the granted foreground Steward to inspect the classifier lane pre-flight before any retry."}}\n'
 
 export interface ProcessResult {
 	exitCode: number | null

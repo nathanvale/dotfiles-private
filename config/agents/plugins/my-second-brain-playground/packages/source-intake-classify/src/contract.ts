@@ -50,6 +50,13 @@ export interface Station {
 
 const INPUT_RETRY_DELAY_MILLISECONDS = 1_000
 
+/** The classify success station: its message and guidance are emitted and discovered from this one entry. */
+const CLASSIFY_SUCCESS = {
+	message: "Classified one granted projection in the read-denied lane.",
+	nextAction: "Hand the classification to the granted foreground Steward; record the lane evidence in the item's private receipt.",
+	trigger: "The pre-flight passed and the model turn completed with a valid classification.",
+} as const
+
 const STATIONS = {
 	usage: {
 		causeCode: "USAGE_INVALID_INVOCATION",
@@ -70,7 +77,7 @@ const STATIONS = {
 		exitCode: 3,
 		trigger: "The classifier lane could not be prepared, or its pre-flight did not prove that the lane denies both private receipt roots.",
 		repairAction: "Inspect the Codex install, the lane profile and both receipt roots, then retry.",
-		guidance: { nextAction: "Ask Stage Manager to inspect the classifier lane pre-flight before any retry." },
+		guidance: { nextAction: "Ask the granted foreground Steward to inspect the classifier lane pre-flight before any retry." },
 	},
 	inputInvalid: {
 		causeCode: "SCHEMA_INVALID_INPUT",
@@ -247,6 +254,11 @@ export function success(commandIdentity: Identity, data: unknown, message: strin
 	}
 }
 
+/** The classify success envelope, from the same catalogue entry discovery reports. */
+export function classifySuccess(data: unknown): Envelope {
+	return success("source-intake-classify.classify", data, CLASSIFY_SUCCESS.message, CLASSIFY_SUCCESS.nextAction)
+}
+
 export function stationResult(commandIdentity: Identity, key: StationKey, message: string): Envelope {
 	const station: Station = STATIONS[key]
 	const retry = station.retryDelayMilliseconds === undefined ? { retryable: false as const } : { retryable: true as const, retryDelayMilliseconds: station.retryDelayMilliseconds }
@@ -368,7 +380,8 @@ export function discoveryData() {
 			"Never reads a private receipt; it passes on only the granted dispatch projection, owner notes and Bead state.",
 			"Never starts the classifier model unless the per-run pre-flight proves the lane profile denies both private receipt roots.",
 			"Never forwards pre-flight probe output or lane tool output.",
-			"Never writes a receipt, grant, Beads record, vault note or Codex user configuration.",
+			"Never writes outside the configured private root, except that Codex may write refreshed tokens through the lane's auth.json link into the caller's auth.json. Inside that root it writes the lane Codex home (the classification schema, the auth.json link, and Codex's own rollouts, logs and caches) and a pre-flight sentinel item it removes.",
+			"Never writes a receipt, grant, Beads record, vault note or Codex config.toml.",
 			"Never reads Google Drive.",
 		],
 	}
@@ -410,8 +423,8 @@ export function commandDiscovery(commandIdentity: CommandIdentity) {
 				retryable: false,
 				retryDelayPolicy: { kind: "none" },
 				repairAction: null,
-				guidance: { nextAction: "Hand the classification back to the granted foreground Steward; record the lane evidence in the private receipt." },
-				trigger: "The pre-flight passed and the model turn completed with a valid classification.",
+				guidance: { nextAction: CLASSIFY_SUCCESS.nextAction },
+				trigger: CLASSIFY_SUCCESS.trigger,
 				reachability: "required",
 				unreachableRationale: null,
 			},
