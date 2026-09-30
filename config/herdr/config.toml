@@ -22,6 +22,12 @@ command = 'tab_id="$("$HERDR_BIN_PATH" tab list --workspace "$HERDR_ACTIVE_WORKS
 description = "Switch to tab 10"
 
 [[keys.command]]
+key = "prefix+shift+e"
+type = "shell"
+command = 'dir="${HERDR_ACTIVE_PANE_CWD:-$PWD}"; root="$(git -C "$dir" rev-parse --show-toplevel 2>/dev/null || printf %s "$dir")"; /opt/homebrew/bin/code "$root"'
+description = "Open worktree in VS Code"
+
+[[keys.command]]
 key = "prefix+shift+l"
 type = "popup"
 command = "lazygit"
@@ -58,4 +64,4 @@ agent_panel_sort = "spaces"
 kitty_graphics = true
 
 [ui.sound]
-enabled = true
+enabled = false

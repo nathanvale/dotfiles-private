@@ -1,0 +1,5 @@
+{
+	"defaultProvider": "loopback-fixture-skill",
+	"selectors": { "account": "FIXTURE_ACCOUNT" },
+	"dispatcherOwned": true
+}

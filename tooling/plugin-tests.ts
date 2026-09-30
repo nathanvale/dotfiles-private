@@ -1,13 +1,10 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 
-// Invariant: config/agents/plugins/* keep their own lockfiles and stay out of
-// root `workspaces` (they will be uplifted into their own repositories
-// later), so `bun run --filter '*' test` never reaches them. This script is
-// the bridge: every plugin directory that declares `scripts.test` runs here.
-// `proof` is skipped because it already is a root workspace member and its
-// tests already run under `bun run --filter '*' test`; running it again here
-// would duplicate that work.
+// Independent plugin packages keep their own lockfiles outside root workspaces,
+// so this script runs their declared test and typecheck routes. `proof` is a
+// direct root workspace; the personal plugin has no package manifest, while
+// its helper is a root workspace. Their tests run under `bun run --filter '*' test`.
 
 const repoRoot = path.resolve(import.meta.dir, "..");
 const pluginsRoot = path.join(repoRoot, "config/agents/plugins");

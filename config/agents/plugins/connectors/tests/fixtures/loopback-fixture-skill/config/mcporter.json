@@ -1,0 +1,10 @@
+{
+	"imports": [],
+	"mcpServers": {
+		"loopback-fixture-skill": {
+			"description": "Test-only keyless MCP stub; the process test replaces this unreachable port with its own loopback stub's",
+			"baseUrl": "http://127.0.0.1:1/mcp",
+			"allowedTools": ["probe"]
+		}
+	}
+}

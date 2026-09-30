@@ -1,34 +1,48 @@
-#!/usr/bin/env bun
 // The custody child. This is the only dispatcher-adjacent process allowed to
 // read a complete 1Password item; its stdout is one nonsecret binding line and
-// its stderr codes are internal to the custody module.
+// its stderr codes are internal to the custody module. It runs only as the
+// Atlassian adapter's internal custody role of the compiled front door, takes
+// no arguments, and reads its tenant, product, and the configured item ID from
+// the internal invocation context the custody module sets. It reads exactly
+// that ID and refuses an item whose returned id differs.
+import { type EnvironmentSource, INTERNAL_INVOCATION_CONTEXT_ENV } from "../../../../bin/safe-environment.ts";
 import { encodeBinding } from "./channel.ts";
-import { type BindingFailure, isProduct, type ItemReadFailure, itemBinding, type Product, productItemTitle, readItem, TENANT_PATTERN } from "./item.ts";
+import { type BindingFailure, isItemId, isProduct, itemBinding, type Product, TENANT_PATTERN } from "./item.ts";
+import { type OnePasswordFailure, readAtlassianItem } from "./one-password.ts";
 
-function fail(cause: "arguments-invalid" | ItemReadFailure | BindingFailure, repair?: string): never {
-	process.stderr.write(`atlassian-credential-binding:error:${cause}${repair ? `:${repair}` : ""}\n`);
+function fail(cause: "arguments-invalid" | OnePasswordFailure | Exclude<BindingFailure, "item-id-mismatch">): never {
+	process.stderr.write(`atlassian-credential-binding:error:${cause}\n`);
 	process.exit(3);
 }
 
-function argumentValue(name: "--tenant" | "--product", argv: string[]): string | undefined {
-	const position = argv.indexOf(name);
-	if (position === -1 || argv.filter((value) => value === name).length !== 1) return undefined;
-	const value = argv[position + 1];
-	return value !== undefined && !value.startsWith("--") ? value : undefined;
+// The one context shape: exactly {"tenant","product","item"} in this order.
+export function custodyContext(tenant: string, product: Product, item: string): string {
+	return JSON.stringify({ tenant, product, item });
 }
 
-function parseInvocation(argv: string[]): { tenant: string; product: Product } {
-	if (argv.length !== 4) fail("arguments-invalid");
-	const tenant = argumentValue("--tenant", argv);
-	const product = argumentValue("--product", argv);
-	if (!tenant || !TENANT_PATTERN.test(tenant) || product === undefined || !isProduct(product)) fail("arguments-invalid");
-	return { tenant, product };
+function parseInvocation(argv: readonly string[], env: EnvironmentSource): { tenant: string; product: Product; item: string } {
+	if (argv.length !== 0) fail("arguments-invalid");
+	let parsed: unknown;
+	try {
+		parsed = JSON.parse(env[INTERNAL_INVOCATION_CONTEXT_ENV] ?? "");
+	} catch {
+		fail("arguments-invalid");
+	}
+	const record = typeof parsed === "object" && parsed !== null && !Array.isArray(parsed) ? (parsed as Record<string, unknown>) : null;
+	const tenant = record?.tenant;
+	const product = record?.product;
+	const item = record?.item;
+	if (!record || Object.keys(record).join(",") !== "tenant,product,item" || typeof tenant !== "string" || !TENANT_PATTERN.test(tenant) || typeof product !== "string" || !isProduct(product) || !isItemId(item)) fail("arguments-invalid");
+	return { tenant, product, item };
 }
 
-const invocation = parseInvocation(process.argv.slice(2));
-if (!process.env.HOME) fail("credential-unavailable");
-const read = readItem(productItemTitle(invocation.product, invocation.tenant), process.env);
-if (!read.ok) fail(read.cause, read.cause === "credential-wrapper-missing" ? "restore the dotfiles 1Password wrapper" : undefined);
-const resolved = itemBinding(read.item);
-if ("cause" in resolved) fail(resolved.cause);
-process.stdout.write(`${encodeBinding(resolved.binding)}\n`);
+export function runCustodyChild(argv: readonly string[], env: EnvironmentSource = process.env): void {
+	const invocation = parseInvocation(argv, env);
+	if (!env.HOME) fail("credential-unavailable");
+	const read = readAtlassianItem(invocation.item, env);
+	if (!read.ok) fail(read.cause);
+	const resolved = itemBinding(read.item, invocation.item);
+	// A returned item that is not the one requested is an invalid credential.
+	if ("cause" in resolved) fail(resolved.cause === "item-id-mismatch" ? "credential-invalid" : resolved.cause);
+	process.stdout.write(`${encodeBinding(resolved.binding)}\n`);
+}

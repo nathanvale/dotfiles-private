@@ -1,10 +1,12 @@
 {
 	"name": "connectors-plugin",
 	"private": true,
-	"version": "0.4.0",
+	"version": "0.5.0",
 	"type": "module",
 	"scripts": {
-		"build": "bun build ./bin/connectors.ts --compile --target=bun-darwin-arm64 --outfile bin/connectors --minify",
+		"build": "bun run build:cli && bun run build:helper",
+		"build:cli": "bun build ./bin/connectors.ts --compile --target=bun-darwin-arm64 --outfile bin/connectors --minify",
+		"build:helper": "xcrun clang -arch arm64 -O2 -Wall -Wextra -Werror -Wno-deprecated-declarations -framework Security -framework CoreFoundation bin/setup/keychain-helper.c -o bin/connectors-keychain-setup",
 		"test": "bun run build && bun test",
 		"typecheck": "../../../../node_modules/.bin/tsc --noEmit -p tsconfig.json"
 	}

@@ -1,0 +1,10 @@
+{
+	"imports": [],
+	"mcpServers": {
+		"adapter-fixture-skill": {
+			"description": "Test-only stdio probe used to prove packaged auth adapter extensibility",
+			"command": "../../stdio-probe-server.ts",
+			"allowedTools": ["probe"]
+		}
+	}
+}

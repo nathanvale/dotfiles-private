@@ -1,0 +1,10 @@
+{
+	"imports": [],
+	"mcpServers": {
+		"challenge-fixture-skill": {
+			"description": "Test-only transport registry for the stdin challenge adapter",
+			"command": "../../stdio-probe-server.ts",
+			"allowedTools": ["probe"]
+		}
+	}
+}

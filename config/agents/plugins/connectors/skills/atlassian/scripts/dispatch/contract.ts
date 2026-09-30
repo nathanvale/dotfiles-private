@@ -6,24 +6,28 @@
 
 import { PRODUCTS, type Product } from "../custody/index.ts";
 
-export { PRODUCTS, type Product } from "../custody/index.ts";
+export type { Product } from "../custody/index.ts";
 
-import { readFileSync } from "node:fs";
-import path from "node:path";
+// Bundled at compile time: inside the packaged front door this module's own
+// directory is virtual, so the registry cannot be read from disk beside it.
+// MCPorter still enforces the on-disk allow-list, so the effective set is the
+// intersection of the two.
+import registry from "../../config/mcporter.json" with { type: "json" };
 
 // The active Providers. Community is the one Atlassian Provider; `rest` is the
-// owned Jira REST v2 transport that exists for the wiki-comment capability
-// exception only (ADR 0001 amendment, 28 September 2026). The journal persists
+// owned Jira REST v2 transport that exists for the wiki-comment and the
+// attachment-delete capability exceptions only (ADR 0001 amendments,
+// 28 September 2026). The journal persists
 // the name on every preview and receipt so a record from a retired Provider
 // is recognised, never reinterpreted.
 export const PROVIDER = "community" as const;
-export const REST_PROVIDER = "rest" as const;
+const REST_PROVIDER = "rest" as const;
 export const PROVIDERS = [PROVIDER, REST_PROVIDER] as const;
 export type ProviderName = (typeof PROVIDERS)[number];
 
 // The owned REST route: one static server name and the exact request shapes
-// the wiki-comment exception may make, with the arguments each requires. The
-// REST Provider script refuses any other tool or argument.
+// the two capability exceptions may make, with the arguments each requires.
+// The REST Provider script refuses any other tool or argument.
 export const REST_SERVER = "atlassian-rest-jira" as const;
 export const REST_TOOLS = Object.freeze({
 	jira_rest_myself: Object.freeze([] as string[]),
@@ -35,6 +39,14 @@ export const REST_TOOLS = Object.freeze({
 	// A bounded read of an attachment's first bytes, to establish the image
 	// type of an attachment Jira reports no MIME type for.
 	jira_rest_attachment_head: Object.freeze(["attachment_id"]),
+	// The attachment-delete exception (ADR 0001, second amendment): the issue's
+	// attachments with author, size, and created time beside the description in
+	// wiki text and rendered HTML, so one read binds the attachment and checks
+	// the description for a reference; and the delete of one attachment by id,
+	// with the issue key so the Provider proves the attachment is on that issue
+	// before the request.
+	jira_rest_issue_attachment_context: Object.freeze(["issue_key"]),
+	jira_rest_attachment_delete: Object.freeze(["issue_key", "attachment_id"]),
 });
 export type RestTool = keyof typeof REST_TOOLS;
 export const isRestTool = (tool: string): tool is RestTool => Object.hasOwn(REST_TOOLS, tool);
@@ -68,15 +80,7 @@ export function registryToolVocabulary(registry: unknown): ToolVocabulary {
 	return Object.freeze(vocabulary);
 }
 
-function registrySource(): unknown {
-	try {
-		return JSON.parse(readFileSync(path.resolve(import.meta.dir, "..", "..", "config", "mcporter.json"), "utf8"));
-	} catch {
-		return registryInvalid();
-	}
-}
-
-export const ALLOWED_TOOLS = registryToolVocabulary(registrySource());
+export const ALLOWED_TOOLS = registryToolVocabulary(registry);
 
 // This is the operation descriptor registry: product, write policy admission,
 // Provider, and exact provider tool identity live behind this one interface.
@@ -106,6 +110,10 @@ const OPERATION_REGISTRY = [
 	{ id: "issue.comment.media", kind: "write", product: "jira", provider: REST_PROVIDER, tool: "jira_rest_comment_add" },
 	{ id: "issue.comment.media.update", kind: "write", product: "jira", provider: REST_PROVIDER, tool: "jira_rest_comment_edit" },
 	{ id: "issue.attach", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_update_issue" },
+	// The attachment-delete capability exception (ADR 0001, second amendment):
+	// one attachment by id, through the owned REST route, because the Community
+	// Provider exposes no Jira attachment delete. Never a fallback.
+	{ id: "issue.attachment.delete", kind: "write", product: "jira", provider: REST_PROVIDER, tool: "jira_rest_attachment_delete" },
 	{ id: "issue.transition", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_transition_issue" },
 	{ id: "issue.assign", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_assign_issue" },
 	{ id: "issue.delete", kind: "write", product: "jira", provider: PROVIDER, tool: "jira_delete_issue" },
@@ -183,17 +191,18 @@ export type CauseCode =
 	| "refused-evidence"
 	| "not-found"
 	| "refused-precondition"
+	| "refused-credential-unconfigured"
 	| "capability-unavailable"
 	| "failed-transport"
 	| "failed-unknown"
 	| "outcome-unknown";
 
-export type Outcome = "success" | "refused" | "failed";
+export type OutcomeKind = "success" | "refused" | "failed";
 export type FailureClass = "usage" | "domain" | "schema" | "internal" | null;
 export type TransactionState = "unchanged" | "completed" | "unknown";
 
 export interface CauseRow {
-	outcome: Outcome;
+	outcome: OutcomeKind;
 	failureClass: FailureClass;
 	exitCode: 0 | 2 | 3 | 4;
 }
@@ -211,6 +220,7 @@ export const CAUSES: Record<CauseCode, CauseRow> = {
 	"refused-evidence": { outcome: "refused", failureClass: "domain", exitCode: 3 },
 	"not-found": { outcome: "failed", failureClass: "domain", exitCode: 3 },
 	"refused-precondition": { outcome: "refused", failureClass: "domain", exitCode: 3 },
+	"refused-credential-unconfigured": { outcome: "refused", failureClass: "domain", exitCode: 3 },
 	"capability-unavailable": { outcome: "failed", failureClass: "domain", exitCode: 3 },
 	"failed-transport": { outcome: "failed", failureClass: "domain", exitCode: 3 },
 	"failed-unknown": { outcome: "failed", failureClass: "domain", exitCode: 3 },
@@ -233,7 +243,7 @@ export interface Envelope {
 	result: {
 		runId: string;
 		commandIdentity: string;
-		outcome: Outcome;
+		outcome: OutcomeKind;
 		// inspect reads; repository-local changes only private journal state;
 		// external reaches the provider with a write.
 		effectClass: "inspect" | "repository-local" | "external";

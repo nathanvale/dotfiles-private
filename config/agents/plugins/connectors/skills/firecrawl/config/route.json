@@ -1,3 +1,4 @@
 {
-	"defaultProvider": "firecrawl"
+	"defaultProvider": "firecrawl",
+	"dispatcherOwned": true
 }

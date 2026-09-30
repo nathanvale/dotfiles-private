@@ -48,6 +48,9 @@ const WRITE_INPUTS: Record<WriteOperation, Record<string, Field>> = {
 		summary: { kind: "text", required: true },
 		description: { kind: "body", required: false },
 		assignee: { kind: "text", required: false },
+		// The one parent the new issue is created under, sent as the provider's
+		// `parent` field; the dated ADR 0001 note owns this contract.
+		parentKey: { kind: "text", required: false, pattern: ISSUE_KEY },
 	},
 	"issue.update": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, fields: { kind: "fields", required: true } },
 	"issue.comment": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, body: { kind: "body", required: true } },
@@ -58,6 +61,9 @@ const WRITE_INPUTS: Record<WriteOperation, Record<string, Field>> = {
 	"issue.comment.media": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, body: { kind: "body", required: true }, images: { kind: "images", required: true } },
 	"issue.comment.media.update": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, commentId: { kind: "text", required: true, pattern: NUMERIC_ID }, body: { kind: "body", required: true }, images: { kind: "images", required: true } },
 	"issue.attach": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, file: { kind: "path", required: true } },
+	// The attachment-delete exception: one attachment, named by its numeric
+	// Jira id, on one issue. There is no filename, glob, or bulk form.
+	"issue.attachment.delete": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, attachmentId: { kind: "text", required: true, pattern: NUMERIC_ID } },
 	// toStatus names the status the issue must reach; the transition that leads
 	// there is resolved from the live transition list at preview and apply.
 	"issue.transition": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, toStatus: { kind: "text", required: true } },
@@ -128,7 +134,7 @@ export function wikiImageReferences(body: string): string[] {
 }
 
 const MEDIA_OPERATIONS: ReadonlySet<WriteOperation> = new Set<WriteOperation>(["issue.comment.media", "issue.comment.media.update"]);
-export const isMediaComment = (operation: WriteOperation): boolean => MEDIA_OPERATIONS.has(operation);
+const isMediaComment = (operation: WriteOperation): boolean => MEDIA_OPERATIONS.has(operation);
 
 // `images` must be exactly the set the body references, so the preview binds
 // every attachment the comment will render and read-back can prove each one.
@@ -152,19 +158,23 @@ export function writeInput(operation: WriteOperation, raw: unknown): WriteValida
 // revision because an upload moves it, which lets an unchanged revision prove
 // that a possibly-sent upload never landed.
 // A media comment binds the attachment ids its images name; a media edit also
-// binds the comment's `updated` and the author guard.
+// binds the comment's `updated` and the author guard. A create under a parent
+// binds the parent's key, id, and issue type.
 export type Preparation =
 	| { kind: "none" }
+	| { kind: "parent"; parentKey: string }
 	| { kind: "issue"; issueKey: string }
 	| { kind: "comment"; issueKey: string; commentId: string }
 	| { kind: "transition"; issueKey: string; toStatus: string }
 	| { kind: "page"; pageId: string }
 	| { kind: "media"; issueKey: string; images: string[] }
-	| { kind: "media-comment"; issueKey: string; commentId: string; images: string[] };
+	| { kind: "media-comment"; issueKey: string; commentId: string; images: string[] }
+	| { kind: "attachment-delete"; issueKey: string; attachmentId: string };
 
 export function preparation(operation: WriteOperation, input: WriteInput): Preparation {
 	switch (operation) {
 		case "issue.create":
+			return input.parentKey === undefined ? { kind: "none" } : { kind: "parent", parentKey: input.parentKey as string };
 		case "issue.comment":
 		case "page.create":
 			return { kind: "none" };
@@ -172,6 +182,8 @@ export function preparation(operation: WriteOperation, input: WriteInput): Prepa
 			return { kind: "media", issueKey: input.issueKey as string, images: input.images as string[] };
 		case "issue.comment.media.update":
 			return { kind: "media-comment", issueKey: input.issueKey as string, commentId: input.commentId as string, images: input.images as string[] };
+		case "issue.attachment.delete":
+			return { kind: "attachment-delete", issueKey: input.issueKey as string, attachmentId: input.attachmentId as string };
 		case "issue.update":
 		case "issue.attach":
 		case "issue.assign":
@@ -205,6 +217,12 @@ export interface PreparedContext {
 	// The image type established for each attachment a media comment
 	// references, by Jira's reported type or by its first bytes.
 	imageTypes?: Record<string, string>;
+	// The attachment an attachment delete bound, and what the reference guard
+	// read to clear it; both are reported in the preview.
+	attachment?: BoundAttachment;
+	// The parent a create under a parent bound; reported in the preview.
+	parent?: BoundParent;
+	referenceCheck?: ReferenceCheck;
 	// Provider identifiers and stable revisions observed before the write. This
 	// is persisted with the preview and compared by read-back, not inferred from
 	// text that may have existed before the preview.
@@ -229,6 +247,10 @@ function jiraArguments(operation: WriteOperation, input: WriteInput, ctx: Prepar
 			assign(args, "project_key", input.projectKey);
 			assign(args, "issue_type", input.issueType);
 			for (const key of ["summary", "description", "assignee"]) assign(args, key, input[key]);
+			// Only the parent crosses the provider's additional_fields seam; the
+			// provider maps it to fields.parent = {key}. Without a parent the
+			// arguments are exactly the pre-parent ones.
+			if (input.parentKey !== undefined) args.additional_fields = JSON.stringify({ parent: input.parentKey });
 			break;
 		case "issue.update":
 			assign(args, "issue_key", input.issueKey);
@@ -259,6 +281,12 @@ function jiraArguments(operation: WriteOperation, input: WriteInput, ctx: Prepar
 			assign(args, "issue_key", input.issueKey);
 			args.fields = "{}";
 			assign(args, "attachments", ctx.stagedFile ?? input.file);
+			break;
+		case "issue.attachment.delete":
+			// The REST Provider proves the attachment is on this issue and the
+			// principal's own before the DELETE leaves its process.
+			assign(args, "issue_key", input.issueKey);
+			assign(args, "attachment_id", input.attachmentId);
 			break;
 		case "issue.transition":
 			assign(args, "issue_key", input.issueKey);
@@ -334,6 +362,7 @@ const EFFECT_KIND: Record<WriteOperation, Effect["kind"]> = {
 	"issue.comment.media": "jira-comment",
 	"issue.comment.media.update": "jira-comment",
 	"issue.attach": "jira-attachment",
+	"issue.attachment.delete": "jira-attachment",
 	"issue.transition": "jira-issue",
 	"issue.assign": "jira-issue",
 	"page.create": "confluence-content",
@@ -385,7 +414,7 @@ function parsedJson(text: string): unknown | undefined {
 // under result (observed live, MCPorter 0.13.13), otherwise as text blocks.
 // A JSON string is unwrapped once so provider replies serialised as text still
 // yield records.
-export function unwrapReply(data: unknown): unknown {
+function unwrapReply(data: unknown): unknown {
 	if (!isRecord(data)) return data;
 	if (typeof data.result === "string" && Object.keys(data).length === 1) return parsedJson(data.result) ?? data;
 	if (!Array.isArray(data.content)) return data;
@@ -444,6 +473,8 @@ function pageIdentity(reply: unknown, includePlainId: boolean): string | undefin
 	}
 	return undefined;
 }
+
+const isParentCreate = (operation: WriteOperation, input: WriteInput): boolean => operation === "issue.create" && input.parentKey !== undefined;
 
 const issueScoped = (operation: WriteOperation) => operation.startsWith("issue.") && operation !== "issue.create";
 const pageScoped = (operation: WriteOperation) => operation.startsWith("page.") && operation !== "page.create";
@@ -649,7 +680,7 @@ function effectFromRecord(operation: WriteOperation, input: WriteInput, kind: Ef
 // Provider's explicit success message.
 // The object an update or delete names in its own input.
 function targetOf(operation: WriteOperation, input: WriteInput): string {
-	if (operation === "page.attachment.delete") return input.attachmentId as string;
+	if (operation === "page.attachment.delete" || operation === "issue.attachment.delete") return input.attachmentId as string;
 	return (operation.startsWith("issue.") ? input.issueKey : input.pageId) as string;
 }
 
@@ -664,6 +695,12 @@ export function effectsFromReply(operation: WriteOperation, input: WriteInput, r
 	const kind = EFFECT_KIND[operation];
 	if (!replyNamesRequestedObject(operation, input, reply)) return [];
 	const data = unwrapReply(reply);
+	// The attachment delete answers 204 with no body; whatever a reply says,
+	// only the issue's attachment list proves it.
+	if (operation === "issue.attachment.delete") return [];
+	// A create reply can name a key without proving the parent landed; only
+	// the created issue's own read proves it (createdIssueEvidence).
+	if (isParentCreate(operation, input)) return [];
 	if (operation.endsWith(".delete")) return deleteEffect(operation, input, kind, data);
 	if (TARGET_OPERATIONS.has(operation)) return [{ kind, id: targetOf(operation, input) }];
 	for (const record of records(data)) {
@@ -675,7 +712,7 @@ export function effectsFromReply(operation: WriteOperation, input: WriteInput, r
 
 // Flatten a body that may be a string, a Confluence body object, or an ADF
 // document into plain text.
-export function bodyText(value: unknown, depth = 0): string {
+function bodyText(value: unknown, depth = 0): string {
 	if (depth > 12) return "";
 	if (typeof value === "string") return value;
 	if (Array.isArray(value)) return value.map((entry) => bodyText(entry, depth + 1)).join(" ");
@@ -787,6 +824,10 @@ const cqlString = jqlString;
 export function readBackPlan(operation: WriteOperation, input: WriteInput): ReadBackPlan {
 	switch (operation) {
 		case "issue.create": {
+			if (input.parentKey !== undefined) {
+				const jql = `project = ${jqlString(input.projectKey as string)} AND parent = ${jqlString(input.parentKey as string)} AND summary ~ ${jqlString(input.summary as string)} ORDER BY created DESC`;
+				return { tool: "jira_search", args: { jql, limit: 20, fields: "summary,issuetype,created,parent" } };
+			}
 			const jql = `project = ${jqlString(input.projectKey as string)} AND summary ~ ${jqlString(input.summary as string)} ORDER BY created DESC`;
 			return { tool: "jira_search", args: { jql, limit: 20, fields: "summary,issuetype,created" } };
 		}
@@ -801,6 +842,9 @@ export function readBackPlan(operation: WriteOperation, input: WriteInput): Read
 			return { tool: "jira_rest_comment_get", args: { issue_key: input.issueKey, comment_id: input.commentId } };
 		case "issue.attach":
 			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "attachment,updated" } };
+		case "issue.attachment.delete":
+			// Read back through the same owned route the delete went through.
+			return { tool: "jira_rest_issue_attachments", args: { issue_key: input.issueKey } };
 		case "issue.transition":
 			return { tool: "jira_get_issue", args: { issue_key: input.issueKey, fields: "status,updated" } };
 		case "issue.assign":
@@ -895,6 +939,12 @@ function issueCreateMatch(record: Record<string, unknown>, wanted: string, wante
 }
 
 function issueCreateEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
+	if (input.parentKey !== undefined) {
+		// Unread matches may hold the new issue, so a partial list never proves
+		// it absent; a new key on the page read still proves the write.
+		const { evidence, complete } = parentCreateEvidence(input, reply, baseline);
+		return !complete && evidence.kind === "absent" ? { kind: "indeterminate", reason: "the parent's issue search returned only part of its matches; it cannot prove the issue absent" } : evidence;
+	}
 	const wanted = normalised(input.summary as string);
 	if (wanted.length === 0) return { kind: "indeterminate", reason: "the requested issue summary has no stable read-back representation" };
 	const wantedType = normalised(input.issueType as string);
@@ -906,6 +956,93 @@ function issueCreateEvidence(input: WriteInput, reply: unknown, baseline: WriteB
 		else if (match !== undefined) return { kind: "indeterminate", reason: match.reason };
 	}
 	return newEffects("jira-issue", ids, baseline.effectIds);
+}
+
+// A create under a parent. The parent-scoped search is read as its issue
+// list only, so the parent record nested in each result is never mistaken for
+// a candidate; a summary and type match must name the requested parent.
+const parentKeyOf = (fields: Record<string, unknown>): string | undefined => (isRecord(fields.parent) ? stringAt(fields.parent, "key") : undefined);
+
+type SearchIssues = { issues: Record<string, unknown>[]; complete: boolean } | undefined;
+
+// Cloud's search reports total -1 and pages by next_page_token (v0.23.1); a
+// token, or a known total beyond the list, means matches were left unread.
+function searchIssues(reply: unknown): SearchIssues {
+	const data = unwrapReply(reply);
+	if (!isRecord(data) || !Array.isArray(data.issues)) return undefined;
+	const issues = data.issues.filter(isRecord);
+	const token = stringAt(data, "next_page_token", "nextPageToken");
+	const total = typeof data.total === "number" && Number.isInteger(data.total) ? data.total : -1;
+	return { issues, complete: token === undefined && total <= issues.length };
+}
+
+function parentMismatch(record: Record<string, unknown>, parentKey: string): string | undefined {
+	const observed = parentKeyOf(isRecord(record.fields) ? record.fields : record);
+	if (observed === undefined) return "a matching issue search result carries no parent key";
+	return observed === parentKey ? undefined : "a matching issue search result names a different parent";
+}
+
+// The evidence plus the list's completeness, which only the duplicate check
+// needs: a read-back that finds a new key is proof whatever it left unread.
+function parentCreateEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): { evidence: ReadBack; complete: boolean } {
+	const listed = searchIssues(reply);
+	if (listed === undefined) return { evidence: { kind: "indeterminate", reason: "the parent's issue search reply carries no issue list" }, complete: false };
+	const wanted = normalised(input.summary as string);
+	const wantedType = normalised(input.issueType as string);
+	const ids = new Set<string>();
+	for (const record of listed.issues) {
+		const match = wanted.length === 0 || wantedType.length === 0 ? { reason: "the requested issue summary or type has no stable read-back representation" } : issueCreateMatch(record, wanted, wantedType, input.projectKey as string);
+		if (match === undefined) continue;
+		const reason = typeof match === "string" ? parentMismatch(record, input.parentKey as string) : match.reason;
+		if (reason !== undefined) return { evidence: { kind: "indeterminate", reason }, complete: listed.complete };
+		ids.add(match as string);
+	}
+	return { evidence: newEffects("jira-issue", ids, baseline.effectIds), complete: listed.complete };
+}
+
+// A create without a parent keeps every existing match as a baseline id. Under
+// a parent, an exact match refuses by its key so the caller reuses it, and a
+// partial list cannot clear the create.
+function issueCreateBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+	if (input.parentKey === undefined) return baselineWithEffectIds(issueCreateEvidence(input, reply, EMPTY_BASELINE));
+	const { evidence, complete } = parentCreateEvidence(input, reply, EMPTY_BASELINE);
+	if (evidence.kind === "indeterminate") return evidence;
+	if (!complete) return { kind: "indeterminate", reason: "the parent's issue search returned only part of its matches; the duplicate check cannot clear the create" };
+	const existing = evidenceIds(evidence);
+	if (existing.length > 0) return { kind: "refused", reason: `the parent already has a ${input.issueType as string} with this summary: ${existing.join(", ")}; reuse it instead of creating a duplicate` };
+	return { kind: "observed", baseline: EMPTY_BASELINE };
+}
+
+// The key a parent create's reply names: the first issue key in the project
+// that is not the parent. It is only a candidate for createdIssueEvidence.
+export function createdIssueKey(input: WriteInput, reply: unknown): string | undefined {
+	for (const record of records(unwrapReply(reply))) {
+		const key = stringAt(record, "key");
+		if (key !== undefined && ISSUE_KEY.test(key) && key !== input.parentKey && key.startsWith(`${input.projectKey as string}-`)) return key;
+	}
+	return undefined;
+}
+
+// Read the created issue by key: an issue read is current where a JQL search
+// may not yet index an issue created a moment ago.
+export const createdIssuePlan = (issueKey: string): ReadBackPlan => ({ tool: "jira_get_issue", args: { issue_key: issueKey, fields: "summary,issuetype,project,parent" } });
+
+// The created issue proves the write only with the requested summary, type,
+// and parent key. Any other state is indeterminate, never absence: the issue
+// exists, so the receipt stays open and blocks the object for recovery.
+export function createdIssueEvidence(input: WriteInput, issueKey: string, reply: unknown): ReadBack {
+	const issue = observeIssue(reply);
+	if (issue.key !== issueKey) return { kind: "indeterminate", reason: "the created issue read names a different issue" };
+	const summary = stringAt(issue.fields, "summary");
+	const type = issueTypeName(issue.fields.issuetype ?? issue.fields.issue_type);
+	const wanted = normalised(input.summary as string);
+	if (wanted.length === 0 || summary === undefined || normalised(summary) !== wanted || type === undefined || normalised(type) !== normalised(input.issueType as string)) {
+		return { kind: "indeterminate", reason: "the created issue does not carry the requested summary and issue type" };
+	}
+	const parent = parentKeyOf(issue.fields);
+	if (parent === undefined) return { kind: "indeterminate", reason: "the created issue carries no parent" };
+	if (parent !== input.parentKey) return { kind: "indeterminate", reason: "the created issue names a different parent" };
+	return { kind: "found", effects: [{ kind: "jira-issue", id: issueKey }] };
 }
 
 // A wanted value matches an observed scalar, list, or record. A record matches
@@ -1107,6 +1244,31 @@ function issueAttachEvidence(input: WriteInput, revisionMatches: RevisionMatch, 
 	return { kind: "absent", revisionUnchanged: issue.revision !== null && revisionMatches(issue.revision) };
 }
 
+// The REST issue reply must carry the attachment field as a list for an
+// attachment delete to be judged at all; an issue read that omits it proves
+// neither presence nor absence.
+function restAttachmentList(reply: unknown): unknown[] | undefined {
+	const data = unwrapReply(reply);
+	const fields = isRecord(data) && isRecord(data.fields) ? data.fields : undefined;
+	return fields !== undefined && Array.isArray(fields.attachment) ? fields.attachment : undefined;
+}
+
+// Removal is proven only by the issue's own attachment list no longer
+// carrying the id; a list that still carries it proves the delete did not
+// land, whatever the reply said.
+// A list that still carries the id proves no effect only while the issue's
+// own `updated` is the one the preview bound; a moved issue leaves a
+// possibly-sent delete unknown for adjudication.
+function issueAttachmentDeleteEvidence(input: WriteInput, revisionMatches: RevisionMatch, reply: unknown): ReadBack {
+	const issue = observeIssue(reply);
+	if (issue.key === undefined) return { kind: "indeterminate", reason: "the read-back reply names no issue key" };
+	if (issue.key !== input.issueKey) return { kind: "indeterminate", reason: "the read-back reply names a different issue" };
+	if (restAttachmentList(reply) === undefined) return { kind: "indeterminate", reason: "the read-back reply carries no attachment list" };
+	const present = issue.attachments.some((entry) => entry.id === input.attachmentId);
+	if (!present) return { kind: "found", effects: [{ kind: "jira-attachment", id: input.attachmentId as string }] };
+	return { kind: "absent", revisionUnchanged: issue.revision !== null && revisionMatches(issue.revision) };
+}
+
 // The Community update tool reports a failed upload inside an otherwise
 // successful reply; the issue is then untouched.
 export function uploadFailed(reply: unknown): boolean {
@@ -1238,6 +1400,8 @@ export function readBackEvidence(operation: WriteOperation, input: WriteInput, r
 			return mediaCommentUpdateEvidence(input, revisionMatches, reply, baseline);
 		case "issue.attach":
 			return issueAttachEvidence(input, revisionMatches, reply, baseline);
+		case "issue.attachment.delete":
+			return issueAttachmentDeleteEvidence(input, revisionMatches, reply);
 		case "issue.transition":
 			return issueStateEvidence(input, revisionMatches, reply, baseline, statusHolds(input));
 		case "issue.assign":
@@ -1364,6 +1528,16 @@ function pageAttachmentDeleteBaseline(input: WriteInput, reply: unknown): Baseli
 	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [input.attachmentId as string] } };
 }
 
+// The attachment must still be listed at the baseline read; the preparation
+// already bound its facts as the baseline revision, which this read keeps.
+function issueAttachmentDeleteBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+	const issue = issueFor(input, reply);
+	if (isIndeterminate(issue)) return issue;
+	if (restAttachmentList(reply) === undefined) return { kind: "indeterminate", reason: "the Jira reply carries no attachment list" };
+	if (!issue.attachments.some((entry) => entry.id === input.attachmentId)) return { kind: "refused", reason: "the issue has no attachment with that id" };
+	return { kind: "observed", baseline: { ...EMPTY_BASELINE, effectIds: [input.attachmentId as string] } };
+}
+
 function issueDeleteBaseline(input: WriteInput, reply: unknown): BaselineObservation {
 	const issue = issueFor(input, reply);
 	if (isIndeterminate(issue)) return issue;
@@ -1386,7 +1560,7 @@ function pageRevisionBaseline(input: WriteInput, reply: unknown): BaselineObserv
 export function baselineFromReply(operation: WriteOperation, input: WriteInput, reply: unknown, trustedOrigin?: string, bound: WriteBaseline = EMPTY_BASELINE): BaselineObservation {
 	switch (operation) {
 		case "issue.create":
-			return baselineWithEffectIds(issueCreateEvidence(input, reply, EMPTY_BASELINE));
+			return issueCreateBaseline(input, reply);
 		case "issue.update":
 			return issueUpdateBaseline(input, reply);
 		case "issue.comment":
@@ -1399,6 +1573,8 @@ export function baselineFromReply(operation: WriteOperation, input: WriteInput, 
 			return mediaCommentUpdateBaseline(input, reply);
 		case "issue.attach":
 			return baselineWithEffectIds(issueAttachEvidence(input, () => false, reply, EMPTY_BASELINE));
+		case "issue.attachment.delete":
+			return issueAttachmentDeleteBaseline(input, reply);
 		case "issue.transition":
 			return issueStateBaseline(input, reply, statusHolds(input), "status", "status");
 		case "issue.assign":
@@ -1427,4 +1603,186 @@ export function baselineFromReply(operation: WriteOperation, input: WriteInput, 
 		case "page.attachment.delete":
 			return pageAttachmentDeleteBaseline(input, reply);
 	}
+}
+
+// The parent a create under a parent binds: its key, id, and issue type, read
+// before the preview and again at apply. The parent's `updated` is not bound,
+// so an unrelated edit to the parent never refuses the apply; a parent that
+// was replaced, retyped, or deleted does.
+export interface BoundParent {
+	key: string;
+	id: string;
+	issueType: string;
+}
+
+export type ParentBinding = { ok: true; parent: BoundParent } | { ok: false; reason: string };
+
+export function bindParent(reply: unknown, parentKey: string): ParentBinding {
+	const issue = observeIssue(reply);
+	if (issue.key !== parentKey) return { ok: false, reason: "the parent read names a different issue" };
+	const id = stringAt(issue.fields, "id");
+	const issueType = issueTypeName(issue.fields.issuetype ?? issue.fields.issue_type);
+	if (id === undefined || issueType === undefined || issueType.length === 0) return { ok: false, reason: "the parent read exposes no issue id or issue type to bind" };
+	return { ok: true, parent: { key: parentKey, id, issueType } };
+}
+
+export const parentDigest = (parent: BoundParent): string => digest(JSON.stringify([parent.key, parent.id, parent.issueType]));
+
+// The attachment-delete exception binds what the preview saw of the one
+// attachment it will remove: every fact below is read from the issue's own
+// attachment list and digested into the baseline revision, so an apply whose
+// read shows any of them moved is refused by the journal before any send.
+export interface BoundAttachment {
+	id: string;
+	filename: string;
+	size: number;
+	authorAccountId: string;
+	created: string;
+}
+
+export type AttachmentBinding = { ok: true; attachment: BoundAttachment } | { ok: false; cause: "not-found" | "capability-unavailable"; reason: string };
+
+// The one attachment with the given id from a REST issue reply, with every
+// bound fact present; a record missing a fact cannot be bound, so it refuses.
+export function bindAttachment(reply: unknown, attachmentId: string): AttachmentBinding {
+	const list = restAttachmentList(reply);
+	if (list === undefined) return { ok: false, cause: "capability-unavailable", reason: "the Jira reply carries no attachment list" };
+	const record = list.find((entry): entry is Record<string, unknown> => isRecord(entry) && stringAt(entry, "id") === attachmentId);
+	if (record === undefined) return { ok: false, cause: "not-found", reason: "the issue has no attachment with that id" };
+	const filename = stringAt(record, "filename");
+	const created = stringAt(record, "created");
+	const size = typeof record.size === "number" && Number.isInteger(record.size) && record.size >= 0 ? record.size : undefined;
+	const authorAccountId = isRecord(record.author) ? stringAt(record.author, "accountId") : undefined;
+	if (filename === undefined || created === undefined || size === undefined || authorAccountId === undefined) {
+		return { ok: false, cause: "capability-unavailable", reason: "the attachment record exposes no filename, size, author account id, or created time to bind" };
+	}
+	return { ok: true, attachment: { id: attachmentId, filename, size, authorAccountId, created } };
+}
+
+export const attachmentDigest = (attachment: BoundAttachment): string => digest(JSON.stringify([attachment.id, attachment.filename, attachment.size, attachment.authorAccountId, attachment.created]));
+
+export const ATTACHMENT_AUTHOR_GUARD_REASON = "attachmentId names an attachment another account uploaded; the attachment delete removes only the principal's own uploads";
+
+// One text the reference guard inspects: where it came from, every string
+// the stored body holds (wiki markup, or each string leaf of an ADF document,
+// including node attributes), the rendered HTML when Jira supplied it, and
+// the attribute values of every ADF media node, which name an attachment by
+// id, alt, url, or collection rather than in any text node.
+export interface ReferenceSource {
+	source: string;
+	text: string;
+	rendered: string;
+	mediaAttributes: string[];
+}
+
+// The ADF nodes whose attributes identify a file: media and mediaInline carry
+// id, type, collection, alt, and url; their mediaSingle and mediaGroup
+// wrappers carry layout only and are walked for their children.
+const MEDIA_NODE_TYPES: ReadonlySet<string> = new Set(["media", "mediaInline"]);
+
+// Every string leaf of a stored body, whatever its shape, plus the attribute
+// values of its ADF media nodes. Unlike bodyText, which flattens prose for
+// comment matching, this walk descends into every key so that link marks and
+// media attributes are seen; missing a reference would clear a delete.
+function referenceContent(value: unknown, into: { text: string[]; mediaAttributes: string[] }, depth = 0): void {
+	if (depth > 12) return;
+	if (typeof value === "string") {
+		into.text.push(value);
+		return;
+	}
+	if (Array.isArray(value)) {
+		for (const entry of value) referenceContent(entry, into, depth + 1);
+		return;
+	}
+	if (!isRecord(value)) return;
+	if (typeof value.type === "string" && MEDIA_NODE_TYPES.has(value.type) && isRecord(value.attrs)) {
+		for (const attribute of Object.values(value.attrs)) if (typeof attribute === "string") into.mediaAttributes.push(attribute);
+	}
+	for (const entry of Object.values(value)) referenceContent(entry, into, depth + 1);
+}
+
+function referenceSource(source: string, body: unknown, rendered: unknown): ReferenceSource {
+	const into = { text: [] as string[], mediaAttributes: [] as string[] };
+	referenceContent(body, into);
+	return { source, text: into.text.join(" "), rendered: typeof rendered === "string" ? rendered : "", mediaAttributes: into.mediaAttributes };
+}
+
+// A body was read when it is a string (wiki text or plain text) or a record
+// (an ADF document or a Confluence body object). Null, a number, or an
+// absent body was not read.
+const bodyRead = (body: unknown): boolean => typeof body === "string" || isRecord(body);
+
+// What the guard inspected and where it found the attachment, reported in
+// the preview so the operator can see the check was complete.
+export interface ReferenceCheck {
+	description: boolean;
+	commentsRead: number;
+	commentsTotal: number;
+	references: string[];
+}
+
+const escapeRegExp = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+// A reference by id is any Jira attachment route naming the id as its own
+// segment (REST content or thumbnail, the /secure attachment or thumbnail
+// pages, or an attachmentId query parameter), in stored text or rendered
+// HTML. A reference by name is the file name as a whole word, so a wiki
+// macro (!name!, [^name]), a rendered alt or link text, and plain prose that
+// names the file all count; a longer name that merely contains this one
+// (new-name.png, name.png.bak) does not, while a full stop after the name is
+// prose. Prose that happens to contain the bare number is not an id reference.
+function referencePatterns(attachment: { id: string; filename: string }): RegExp[] {
+	const id = escapeRegExp(attachment.id);
+	const name = escapeRegExp(attachment.filename);
+	return [new RegExp(`(?:/attachment/(?:content/|thumbnail/)?|/secure/(?:attachment|thumbnail)/|attachmentId=)${id}(?![0-9])`, "i"), new RegExp(`(?:^|[^A-Za-z0-9_.-])${name}(?![A-Za-z0-9_]|\\.[A-Za-z0-9])`, "iu")];
+}
+
+// The sources that still reference the attachment, in the order given. An
+// ADF media attribute equal to the attachment id is a reference on its own.
+export function attachmentReferences(attachment: { id: string; filename: string }, sources: readonly ReferenceSource[]): string[] {
+	const patterns = referencePatterns(attachment);
+	return sources.filter((entry) => entry.mediaAttributes.includes(attachment.id) || patterns.some((pattern) => pattern.test(entry.text) || pattern.test(entry.rendered))).map((entry) => entry.source);
+}
+
+export type DescriptionSource = { ok: true; source: ReferenceSource } | { ok: false; reason: string };
+
+const UNREAD = "the reference guard cannot clear the attachment";
+
+// The issue description as the context read exposes it: the stored text or
+// ADF and the rendered HTML (expand=renderedFields). The description field
+// must be present in the reply, so an unread description never counts as
+// checked; an explicitly empty or null description was read.
+export function descriptionSource(reply: unknown): DescriptionSource {
+	const data = unwrapReply(reply);
+	const top = isRecord(data) ? data : {};
+	const fields = isRecord(top.fields) ? top.fields : undefined;
+	if (fields === undefined || !Object.hasOwn(fields, "description")) return { ok: false, reason: `the issue read exposes no description field; ${UNREAD}` };
+	const description = fields.description;
+	if (description !== null && !bodyRead(description)) return { ok: false, reason: `the issue description could not be read; ${UNREAD}` };
+	const rendered = isRecord(top.renderedFields) ? top.renderedFields.description : undefined;
+	return { ok: true, source: referenceSource("description", description ?? "", rendered) };
+}
+
+export type CommentSources = { ok: true; sources: ReferenceSource[]; total: number } | { ok: false; reason: string };
+
+// Every comment in a REST comment list, as a reference source. The list must
+// be complete: a total beyond the comments returned means the guard could not
+// see every comment, so it refuses rather than clear the attachment. Each
+// comment must carry a body that was read (a string or an ADF document) or a
+// rendered body; a comment with neither was not read and refuses too.
+export function commentSources(reply: unknown): CommentSources {
+	const data = unwrapReply(reply);
+	const top = isRecord(data) ? data : {};
+	if (!Array.isArray(top.comments) || typeof top.total !== "number" || !Number.isInteger(top.total)) return { ok: false, reason: "the comment list exposes no comments and total" };
+	const sources: ReferenceSource[] = [];
+	for (const entry of top.comments) {
+		if (!isRecord(entry)) return { ok: false, reason: "the comment list carries a malformed comment" };
+		const id = stringAt(entry, "id");
+		if (id === undefined) return { ok: false, reason: "a listed comment carries no id" };
+		const renderedRead = typeof entry.renderedBody === "string";
+		if (!bodyRead(entry.body) && !renderedRead) return { ok: false, reason: `comment ${id} carries no body; ${UNREAD}` };
+		sources.push(referenceSource(`comment ${id}`, bodyRead(entry.body) ? entry.body : "", entry.renderedBody));
+	}
+	if (top.total > sources.length) return { ok: false, reason: `the issue has ${top.total} comments and the reference guard read ${sources.length}; it cannot clear the attachment` };
+	return { ok: true, sources, total: top.total };
 }

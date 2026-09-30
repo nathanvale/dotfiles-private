@@ -1,0 +1,9 @@
+{
+	"schemaVersion": 1,
+	"id": "firecrawl",
+	"transport": { "registry": "./mcporter.json" },
+	"selectors": {},
+	"requirements": ["mcporter", "op"],
+	"adapter": "firecrawl",
+	"credentials": { "reference": "1Password:API Credentials" }
+}

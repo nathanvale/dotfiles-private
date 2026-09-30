@@ -4,7 +4,7 @@
 // 22 September 2026 and reply shapes observed live on 23 September 2026.
 import { describe, expect, test } from "bun:test";
 import { OPERATION_SPECS } from "../scripts/dispatch/contract.ts";
-import { accountIdOf, baselineFromReply, effectsFromReply, normalised, observeRestComment, preparation, readBackEvidence, readBackPlan, magicImageType, renderedImagesPresent, resolveMediaAttachments, sameWikiBody, transitionTo, uploadFailed, wikiImageReferences, wikiParts, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
+import { accountIdOf, attachmentDigest, attachmentReferences, baselineFromReply, bindAttachment, bindParent, createdIssueEvidence, createdIssueKey, createdIssuePlan, parentDigest, commentSources, descriptionSource, effectsFromReply, normalised, observeRestComment, preparation, readBackEvidence, readBackPlan, magicImageType, renderedImagesPresent, resolveMediaAttachments, sameWikiBody, transitionTo, uploadFailed, wikiImageReferences, wikiParts, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
 
 const never = () => false;
 const CREATE = { projectKey: "PROJ", issueType: "Bug", summary: "Billing broken", description: "first\nsecond" };
@@ -17,7 +17,7 @@ const wrapped = (value: unknown) => ({ result: JSON.stringify(value) });
 
 describe("neutral write inputs", () => {
 	test("every write operation has a contract; unknown keys, bad shapes, and missing required keys refuse", () => {
-		expect(WRITE_OPERATIONS).toEqual(["issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.comment.media", "issue.comment.media.update", "issue.attach", "issue.transition", "issue.assign", "issue.delete", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"]);
+		expect(WRITE_OPERATIONS).toEqual(["issue.create", "issue.update", "issue.comment", "issue.comment.update", "issue.comment.media", "issue.comment.media.update", "issue.attach", "issue.attachment.delete", "issue.transition", "issue.assign", "issue.delete", "page.create", "page.update", "page.comment", "page.attach", "page.attachment.delete", "page.delete"]);
 		expect(writeInput("issue.transition", { issueKey: "PROJ-1", toStatus: "In Progress" })).toEqual({ ok: true, input: { issueKey: "PROJ-1", toStatus: "In Progress" } });
 		expect(writeInput("issue.transition", { issueKey: "PROJ-1", transitionId: "31" }).ok).toBe(false);
 		expect(writeInput("issue.assign", { issueKey: "PROJ-1" })).toEqual({ ok: true, input: { issueKey: "PROJ-1" } });
@@ -519,5 +519,241 @@ describe("wiki media comments", () => {
 		expect(editBaseline).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: ["454771"], revision: null } });
 		expect(baselineFromReply("issue.comment.media.update", MEDIA_UPDATE, { id: "454771", renderedBody: "<p>old</p>" })).toEqual({ kind: "indeterminate", reason: "the comment read exposes no updated timestamp to bind the revision" });
 		expect(baselineFromReply("issue.comment.media.update", MEDIA_UPDATE, { id: "1", updated: "u1" })).toEqual({ kind: "indeterminate", reason: "the comment read names a different comment" });
+	});
+});
+
+// The attachment-delete exception: one attachment by numeric id on one issue,
+// bound by the facts the REST issue read exposes, cleared by the reference
+// guard, and proven only by the issue's attachment list.
+describe("attachment delete", () => {
+	const DELETE = { issueKey: "PROJ-1", attachmentId: "202456" };
+	const ME = "712020:me";
+	const record = { id: "202456", filename: "before.png", size: 48123, mimeType: "image/png", created: "2026-09-28T01:02:03.000+1000", author: { accountId: ME, displayName: "Service" } };
+	const other = { id: "202457", filename: "after.png", size: 10, created: "c2", author: { accountId: ME } };
+	const issue = (attachments: unknown[] = [record, other], updated = "t1") => ({ key: "PROJ-1", fields: { updated, attachment: attachments, description: "Plain." }, renderedFields: { description: "<p>Plain.</p>" } });
+
+	test("the input is one issue key and one numeric attachment id; a filename, glob, list, or unknown key refuses", () => {
+		expect(writeInput("issue.attachment.delete", DELETE)).toEqual({ ok: true, input: DELETE });
+		for (const attachmentId of ["before.png", "*", "202456,202457", "att900", "", 202456, ["202456"]]) expect([attachmentId, writeInput("issue.attachment.delete", { issueKey: "PROJ-1", attachmentId }).ok]).toEqual([attachmentId, false]);
+		expect(writeInput("issue.attachment.delete", { issueKey: "PROJ-1", filename: "before.png" })).toEqual({ ok: false, reason: "unknown input key filename" });
+		expect(writeInput("issue.attachment.delete", { attachmentId: "202456" })).toEqual({ ok: false, reason: "input key issueKey is required" });
+		expect(preparation("issue.attachment.delete", DELETE)).toEqual({ kind: "attachment-delete", issueKey: "PROJ-1", attachmentId: "202456" });
+		const ctx = { revision: "t1", baseline: { effectIds: ["202456"], commentIds: [], revision: null } };
+		expect(writeArguments(OPERATION_SPECS["issue.attachment.delete"], DELETE, ctx)).toEqual({ args: { issue_key: "PROJ-1", attachment_id: "202456" }, bound: { issue_key: "PROJ-1", attachment_id: "202456" } });
+		expect(readBackPlan("issue.attachment.delete", DELETE)).toEqual({ tool: "jira_rest_issue_attachments", args: { issue_key: "PROJ-1" } });
+	});
+
+	test("the bound attachment is the one record with every fact; its digest changes with any fact; a missing fact or list cannot be bound", () => {
+		expect(bindAttachment(issue(), "202456")).toEqual({ ok: true, attachment: { id: "202456", filename: "before.png", size: 48123, authorAccountId: ME, created: "2026-09-28T01:02:03.000+1000" } });
+		expect(bindAttachment(issue(), "999")).toEqual({ ok: false, cause: "not-found", reason: "the issue has no attachment with that id" });
+		expect(bindAttachment({ key: "PROJ-1", fields: { updated: "t1" } }, "202456")).toEqual({ ok: false, cause: "capability-unavailable", reason: "the Jira reply carries no attachment list" });
+		for (const partial of [{ ...record, size: undefined }, { ...record, author: {} }, { ...record, created: undefined }, { ...record, filename: undefined }, { ...record, size: "48123" }]) {
+			expect(bindAttachment(issue([partial]), "202456")).toEqual({ ok: false, cause: "capability-unavailable", reason: "the attachment record exposes no filename, size, author account id, or created time to bind" });
+		}
+		const bound = { id: "202456", filename: "before.png", size: 48123, authorAccountId: ME, created: "c1" };
+		expect(attachmentDigest(bound)).toMatch(/^[0-9a-f]{64}$/);
+		for (const moved of [{ ...bound, filename: "Before.png" }, { ...bound, size: 48124 }, { ...bound, authorAccountId: "712020:other" }, { ...bound, created: "c2" }, { ...bound, id: "202457" }]) expect(attachmentDigest(moved)).not.toBe(attachmentDigest(bound));
+	});
+
+	test("a reference is the file name as a whole word or the id on a Jira attachment route, in stored text or rendered HTML; a containing name, another id, or the bare number is not", () => {
+		const target = { id: "202456", filename: "before.png" };
+		const sources = [
+			{ source: "description", text: "Repro: [^before.png]", rendered: "" },
+			{ source: "comment 1", text: "!before.png|width=600!", rendered: "" },
+			{ source: "comment 2", text: "See the shot.", rendered: '<img src="/rest/api/3/attachment/content/202456" alt="x">' },
+			{ source: "comment 3", text: "", rendered: '<a href="https://example.atlassian.net/secure/attachment/202456/before.png">x</a>' },
+			{ source: "comment 4", text: "https://example.atlassian.net/secure/thumbnail/202456/_thumb.png", rendered: "" },
+			{ source: "comment 5", text: "", rendered: '<img alt="BEFORE.PNG" src="/x">' },
+			{ source: "comment 6", text: "Compare before.png.", rendered: "" },
+			{ source: "comment 7", text: "?attachmentId=202456&x=1", rendered: "" },
+			{ source: "clean 1", text: "See !new-before.png! and !before.png.bak!", rendered: "" },
+			{ source: "clean 2", text: "build 202456 passed", rendered: '<img src="/rest/api/3/attachment/content/2024567"><img src="/rest/api/3/attachment/content/202457">' },
+			{ source: "clean 3", text: "Looks fine.", rendered: "<p>Looks fine.</p>" },
+			{ source: "clean 4", text: "", rendered: '<img src="https://cdn.example/202456/before-png">' },
+		];
+		const plain = (entries: { source: string; text: string; rendered: string }[]) => entries.map((entry) => ({ ...entry, mediaAttributes: [] }));
+		expect(attachmentReferences(target, plain(sources))).toEqual(["description", "comment 1", "comment 2", "comment 3", "comment 4", "comment 5", "comment 6", "comment 7"]);
+		expect(attachmentReferences({ id: "1", filename: "a+b (1).png" }, plain([{ source: "c", text: "see a+b (1).png here", rendered: "" }, { source: "d", text: "see a+b (1) png here", rendered: "" }]))).toEqual(["c"]);
+		expect(attachmentReferences(target, [])).toEqual([]);
+	});
+
+	test("the description source carries the stored text and rendered HTML; comment sources need a complete list with ids", () => {
+		expect(descriptionSource(issue())).toEqual({ ok: true, source: { source: "description", text: "Plain.", rendered: "<p>Plain.</p>", mediaAttributes: [] } });
+		expect(descriptionSource({ key: "PROJ-1", fields: { description: null } })).toEqual({ ok: true, source: { source: "description", text: "", rendered: "", mediaAttributes: [] } });
+		const list = (total: number, ...comments: Record<string, unknown>[]) => ({ startAt: 0, maxResults: 100, total, comments });
+		expect(commentSources(list(2, { id: "1", body: "a", renderedBody: "<p>a</p>" }, { id: "2", body: "b" }))).toEqual({ ok: true, total: 2, sources: [{ source: "comment 1", text: "a", rendered: "<p>a</p>", mediaAttributes: [] }, { source: "comment 2", text: "b", rendered: "", mediaAttributes: [] }] });
+		expect(commentSources(list(0))).toEqual({ ok: true, total: 0, sources: [] });
+		expect(commentSources(list(3, { id: "1", body: "a" }))).toEqual({ ok: false, reason: "the issue has 3 comments and the reference guard read 1; it cannot clear the attachment" });
+		expect(commentSources(list(1, { body: "a" }))).toEqual({ ok: false, reason: "a listed comment carries no id" });
+		expect(commentSources({ comments: [] })).toEqual({ ok: false, reason: "the comment list exposes no comments and total" });
+		expect(commentSources({ errorMessages: ["gone"] })).toEqual({ ok: false, reason: "the comment list exposes no comments and total" });
+	});
+
+	// Repair round 1, finding 2: a source whose content was not read is never
+	// a clear source. An explicitly empty or null description is read.
+	test("a missing description field, an unreadable description, and a comment with neither body form refuse rather than count as checked", () => {
+		expect(descriptionSource({ key: "PROJ-1", fields: { updated: "t1" } })).toEqual({ ok: false, reason: "the issue read exposes no description field; the reference guard cannot clear the attachment" });
+		expect(descriptionSource({ key: "PROJ-1" })).toEqual({ ok: false, reason: "the issue read exposes no description field; the reference guard cannot clear the attachment" });
+		expect(descriptionSource({ key: "PROJ-1", fields: { description: 42 } })).toEqual({ ok: false, reason: "the issue description could not be read; the reference guard cannot clear the attachment" });
+		expect(descriptionSource({ key: "PROJ-1", fields: { description: "" } })).toEqual({ ok: true, source: { source: "description", text: "", rendered: "", mediaAttributes: [] } });
+		expect(descriptionSource({ key: "PROJ-1", fields: { description: null }, renderedFields: { description: "" } })).toEqual({ ok: true, source: { source: "description", text: "", rendered: "", mediaAttributes: [] } });
+		const list = (...comments: Record<string, unknown>[]) => ({ startAt: 0, maxResults: 100, total: comments.length, comments });
+		expect(commentSources(list({ id: "1", body: "a" }, { id: "2", updated: "u1" }))).toEqual({ ok: false, reason: "comment 2 carries no body; the reference guard cannot clear the attachment" });
+		expect(commentSources(list({ id: "3", body: null }))).toEqual({ ok: false, reason: "comment 3 carries no body; the reference guard cannot clear the attachment" });
+		expect(commentSources(list({ id: "4", body: 7 }))).toEqual({ ok: false, reason: "comment 4 carries no body; the reference guard cannot clear the attachment" });
+		// An empty body was read; a rendered body alone was read.
+		expect(commentSources(list({ id: "5", body: "" }))).toEqual({ ok: true, total: 1, sources: [{ source: "comment 5", text: "", rendered: "", mediaAttributes: [] }] });
+		expect(commentSources(list({ id: "6", renderedBody: "<p>x</p>" }))).toEqual({ ok: true, total: 1, sources: [{ source: "comment 6", text: "", rendered: "<p>x</p>", mediaAttributes: [] }] });
+	});
+
+	// Repair round 1, finding 1: an ADF media node names the attachment in its
+	// attributes, not in any text node, and rendered HTML may be absent.
+	test("an ADF media node referencing the attachment by id, alt, url, or collection is a reference, in a description or a comment, without rendered HTML", () => {
+		const target = { id: "202456", filename: "before.png" };
+		const media = (attrs: Record<string, unknown>, type = "media") => ({ type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "text", text: "See the shot." }] }, { type: "mediaSingle", attrs: { layout: "center" }, content: [{ type, attrs }] }] });
+		const byId = descriptionSource({ key: "PROJ-1", fields: { description: media({ id: "202456", type: "file", collection: "jira-10001" }) } });
+		expect(byId.ok && byId.source.mediaAttributes).toEqual(["202456", "file", "jira-10001"]);
+		expect(byId.ok && attachmentReferences(target, [byId.source])).toEqual(["description"]);
+		const byAlt = descriptionSource({ key: "PROJ-1", fields: { description: media({ id: "9f1b3f0a-0000-4000-8000-000000000001", type: "file", collection: "jira-10001", alt: "before.png" }) } });
+		expect(byAlt.ok && attachmentReferences(target, [byAlt.source])).toEqual(["description"]);
+		const byUrl = descriptionSource({ key: "PROJ-1", fields: { description: media({ type: "external", url: "https://example.atlassian.net/secure/attachment/202456/x" }) } });
+		expect(byUrl.ok && attachmentReferences(target, [byUrl.source])).toEqual(["description"]);
+		const inline = descriptionSource({ key: "PROJ-1", fields: { description: { type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "mediaInline", attrs: { id: "202456", type: "file", collection: "c" } }] }] } } });
+		expect(inline.ok && attachmentReferences(target, [inline.source])).toEqual(["description"]);
+		const other = descriptionSource({ key: "PROJ-1", fields: { description: media({ id: "202457", type: "file", collection: "jira-10001", alt: "after.png" }) } });
+		expect(other.ok && attachmentReferences(target, [other.source])).toEqual([]);
+		// The bare number in an ADF text node is still prose, not an id reference.
+		const prose = descriptionSource({ key: "PROJ-1", fields: { description: { type: "doc", version: 1, content: [{ type: "paragraph", content: [{ type: "text", text: "build 202456 passed" }] }] } } });
+		expect(prose.ok && attachmentReferences(target, [prose.source])).toEqual([]);
+		const comments = commentSources({ startAt: 0, maxResults: 100, total: 2, comments: [{ id: "900", body: media({ id: "202456", type: "file", collection: "c" }) }, { id: "901", body: media({ id: "1", type: "file", collection: "c", alt: "other.png" }) }] });
+		expect(comments.ok && comments.sources.map((entry) => entry.mediaAttributes)).toEqual([["202456", "file", "c"], ["1", "file", "c", "other.png"]]);
+		expect(comments.ok && attachmentReferences(target, comments.sources)).toEqual(["comment 900"]);
+	});
+
+	test("the 204 reply proves nothing; removal is proven only by the issue's attachment list no longer carrying the id; a list that still does proves no effect only while the issue's updated is the bound one", () => {
+		expect(effectsFromReply("issue.attachment.delete", DELETE, null)).toEqual([]);
+		expect(effectsFromReply("issue.attachment.delete", DELETE, { message: "Attachment deleted successfully" })).toEqual([]);
+		expect(readBackEvidence("issue.attachment.delete", DELETE, never, issue([other]))).toEqual({ kind: "found", effects: [{ kind: "jira-attachment", id: "202456" }] });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, never, issue([]))).toEqual({ kind: "found", effects: [{ kind: "jira-attachment", id: "202456" }] });
+		// Repair round 1, finding 3: revisionUnchanged comes from the observed issue updated against the bound one, never from presence alone.
+		const boundT1 = (observed: string) => observed === "t1";
+		expect(readBackEvidence("issue.attachment.delete", DELETE, boundT1, issue([record, other], "t1"))).toEqual({ kind: "absent", revisionUnchanged: true });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, boundT1, issue([record, other], "t2"))).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, never, issue())).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, boundT1, { key: "PROJ-1", fields: { attachment: [record] } })).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, never, { key: "PROJ-1", fields: { updated: "t2" } })).toEqual({ kind: "indeterminate", reason: "the read-back reply carries no attachment list" });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, never, { key: "PROJ-2", fields: { attachment: [] } })).toEqual({ kind: "indeterminate", reason: "the read-back reply names a different issue" });
+		expect(readBackEvidence("issue.attachment.delete", DELETE, never, { errorMessages: ["gone"] })).toEqual({ kind: "indeterminate", reason: "the read-back reply names no issue key" });
+		// The baseline read must still list the attachment; the preparation's digest is kept as the baseline revision.
+		expect(baselineFromReply("issue.attachment.delete", DELETE, issue())).toEqual({ kind: "observed", baseline: { effectIds: ["202456"], commentIds: [], revision: null } });
+		expect(baselineFromReply("issue.attachment.delete", DELETE, issue([other]))).toEqual({ kind: "refused", reason: "the issue has no attachment with that id" });
+		expect(baselineFromReply("issue.attachment.delete", DELETE, { key: "PROJ-1", fields: { updated: "t1" } })).toEqual({ kind: "indeterminate", reason: "the Jira reply carries no attachment list" });
+	});
+});
+
+describe("issue.create under a parent", () => {
+	// Independent oracles: literals from the mcp-atlassian v0.23.1 source
+	// (jira_create_issue additional_fields {"parent": KEY}; jira_search on Cloud
+	// reports total -1 and pages by next_page_token) read on 30 September 2026.
+	const CHILD = { projectKey: "PROJ", issueType: "Story", summary: "Path Design System Components/ErrorBanner", parentKey: "PROJ-546" };
+	const { parentKey: _omitted, ...PLAIN } = CHILD;
+	const epic = { id: "10546", key: "PROJ-546", fields: { summary: "Path Design System", issuetype: { name: "Epic" } } };
+	const child = (key: string, parent: unknown = epic, extra: Record<string, unknown> = {}) => ({ id: "1", key, summary: CHILD.summary, issue_type: { name: "Story" }, ...(parent === null ? {} : { parent }), ...extra });
+	const search = (issues: unknown[], page: Record<string, unknown> = {}) => ({ total: -1, start_at: 0, max_results: 20, issues, ...page });
+	const SENTINEL = "ops_sentinel_parent_0000000000000000000000";
+
+	test("parentKey is one optional Jira issue key; every other spelling of a parent or a provider field refuses without echoing the value", () => {
+		expect(writeInput("issue.create", CHILD)).toEqual({ ok: true, input: CHILD });
+		expect(writeInput("issue.create", PLAIN)).toEqual({ ok: true, input: PLAIN });
+		for (const parentKey of ["proj-546", "PROJ-546 ", " PROJ-546", "https://example.atlassian.net/browse/PROJ-546", "10546", "PROJ", "", { key: "PROJ-546" }, ["PROJ-546"], 546, SENTINEL]) {
+			const refused = writeInput("issue.create", { ...PLAIN, parentKey });
+			expect([parentKey, refused]).toEqual([parentKey, { ok: false, reason: "input key parentKey is invalid" }]);
+			expect(JSON.stringify(refused)).not.toContain(SENTINEL);
+		}
+		for (const key of ["epicKey", "epic_link", "additional_fields", "fields", "components", "parent"]) expect(writeInput("issue.create", { ...PLAIN, [key]: "PROJ-546" })).toEqual({ ok: false, reason: `unknown input key ${key}` });
+	});
+
+	test("a parent create reads its parent first and sends exactly additional_fields {\"parent\": KEY}; without parentKey nothing changes", () => {
+		expect(preparation("issue.create", CHILD)).toEqual({ kind: "parent", parentKey: "PROJ-546" });
+		expect(preparation("issue.create", PLAIN)).toEqual({ kind: "none" });
+		const ctx = { revision: null, baseline: { effectIds: [], commentIds: [], revision: null } };
+		expect(writeArguments(OPERATION_SPECS["issue.create"], CHILD, ctx).args).toEqual({ project_key: "PROJ", issue_type: "Story", summary: CHILD.summary, additional_fields: '{"parent":"PROJ-546"}' });
+		// Negative control: the arguments without a parent are byte-identical to the pre-parent adapter.
+		expect(JSON.stringify(writeArguments(OPERATION_SPECS["issue.create"], PLAIN, ctx).args)).toBe(JSON.stringify({ project_key: "PROJ", issue_type: "Story", summary: CHILD.summary }));
+	});
+
+	test("the duplicate search and read-back are scoped to the parent and request its parent field; without parentKey the search is unchanged", () => {
+		expect(readBackPlan("issue.create", CHILD)).toEqual({ tool: "jira_search", args: { jql: 'project = "PROJ" AND parent = "PROJ-546" AND summary ~ "Path Design System Components/ErrorBanner" ORDER BY created DESC', limit: 20, fields: "summary,issuetype,created,parent" } });
+		expect(readBackPlan("issue.create", PLAIN)).toEqual({ tool: "jira_search", args: { jql: 'project = "PROJ" AND summary ~ "Path Design System Components/ErrorBanner" ORDER BY created DESC', limit: 20, fields: "summary,issuetype,created" } });
+		expect(createdIssuePlan("PROJ-9")).toEqual({ tool: "jira_get_issue", args: { issue_key: "PROJ-9", fields: "summary,issuetype,project,parent" } });
+	});
+
+	test("the parent read binds the parent's key, id, and issue type from either reply shape and refuses a reply that cannot bind them", () => {
+		const community = { id: "10546", key: "PROJ-546", summary: "Path Design System", issue_type: { name: "Epic" }, project: { key: "PROJ" }, updated: "t1" };
+		const rest = { id: "10546", key: "PROJ-546", fields: { summary: "Path Design System", issuetype: { name: "Epic" }, updated: "t2" } };
+		expect(bindParent(community, "PROJ-546")).toEqual({ ok: true, parent: { key: "PROJ-546", id: "10546", issueType: "Epic" } });
+		expect(bindParent(wrapped(rest), "PROJ-546")).toEqual({ ok: true, parent: { key: "PROJ-546", id: "10546", issueType: "Epic" } });
+		expect(bindParent({ ...community, key: "PROJ-547" }, "PROJ-546")).toEqual({ ok: false, reason: "the parent read names a different issue" });
+		expect(bindParent({ key: "PROJ-546", issue_type: { name: "Epic" } }, "PROJ-546")).toEqual({ ok: false, reason: "the parent read exposes no issue id or issue type to bind" });
+		expect(bindParent({ id: "10546", key: "PROJ-546" }, "PROJ-546")).toEqual({ ok: false, reason: "the parent read exposes no issue id or issue type to bind" });
+		const bound = { key: "PROJ-546", id: "10546", issueType: "Epic" };
+		// The digest moves with the id or the type; the parent's own updated is never bound.
+		expect(parentDigest(bound)).toMatch(/^[0-9a-f]{64}$/);
+		expect(parentDigest(bound)).toBe(parentDigest({ ...bound }));
+		expect(parentDigest({ ...bound, issueType: "Story" })).not.toBe(parentDigest(bound));
+		expect(parentDigest({ ...bound, id: "10547" })).not.toBe(parentDigest(bound));
+	});
+
+	test("the baseline refuses a same-parent duplicate by key, refuses a truncated or unreadable search, and clears a search with no match", () => {
+		const duplicate = { kind: "refused", reason: "the parent already has a Story with this summary: PROJ-12; reuse it instead of creating a duplicate" } as const;
+		expect(baselineFromReply("issue.create", CHILD, search([child("PROJ-12")]))).toEqual(duplicate);
+		expect(baselineFromReply("issue.create", CHILD, wrapped(search([child("PROJ-12")])))).toEqual(duplicate);
+		// Controls: another summary or type under the parent is no duplicate; Cloud's total -1 without a next page is complete.
+		expect(baselineFromReply("issue.create", CHILD, search([{ ...child("PROJ-13"), summary: "Path Design System Components/Snackbar" }, { ...child("PROJ-14"), issue_type: { name: "Task" } }]))).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: [], revision: null } });
+		expect(baselineFromReply("issue.create", CHILD, search([]))).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: [], revision: null } });
+		const truncated = { kind: "indeterminate", reason: "the parent's issue search returned only part of its matches; the duplicate check cannot clear the create" } as const;
+		expect(baselineFromReply("issue.create", CHILD, search([], { next_page_token: "abc" }))).toEqual(truncated);
+		expect(baselineFromReply("issue.create", CHILD, search([child("PROJ-13", epic, { summary: "Other" })], { total: 21 }))).toEqual(truncated);
+		expect(baselineFromReply("issue.create", CHILD, { message: "no list" })).toEqual({ kind: "indeterminate", reason: "the parent's issue search reply carries no issue list" });
+		// A match the scoped search returned without the parent, or under another one, is not trusted either way.
+		expect(baselineFromReply("issue.create", CHILD, search([child("PROJ-12", null)]))).toEqual({ kind: "indeterminate", reason: "a matching issue search result carries no parent key" });
+		expect(baselineFromReply("issue.create", CHILD, search([child("PROJ-12", { key: "PROJ-600" })]))).toEqual({ kind: "indeterminate", reason: "a matching issue search result names a different parent" });
+	});
+
+	test("a create reply never proves a parent: it only names the key the read-back must verify", () => {
+		const reply = { message: "Issue created successfully", issue: { id: "10009", key: "PROJ-9", summary: CHILD.summary, issue_type: { name: "Story" }, parent: { key: "PROJ-546" } } };
+		expect(effectsFromReply("issue.create", CHILD, reply)).toEqual([]);
+		// Control: the same reply completes a create without a parent.
+		expect(effectsFromReply("issue.create", PLAIN, reply)).toEqual([{ kind: "jira-issue", id: "PROJ-9" }]);
+		expect(createdIssueKey(CHILD, reply)).toBe("PROJ-9");
+		expect(createdIssueKey(CHILD, wrapped(reply))).toBe("PROJ-9");
+		expect(createdIssueKey(CHILD, { message: "Issue created successfully", issue: { parent: { key: "PROJ-546" } } })).toBeUndefined();
+		expect(createdIssueKey(CHILD, { issue: { key: "OTHER-9" } })).toBeUndefined();
+		expect(createdIssueKey(CHILD, { result: "not json" })).toBeUndefined();
+	});
+
+	test("the created issue's own read completes only with its summary, type, and parent key; anything else is indeterminate", () => {
+		const read = (fields: Record<string, unknown>, key = "PROJ-9") => ({ id: "10009", key, summary: CHILD.summary, issue_type: { name: "Story" }, project: { key: "PROJ" }, parent: epic, ...fields });
+		const found = { kind: "found" as const, effects: [{ kind: "jira-issue" as const, id: "PROJ-9" }] };
+		expect(createdIssueEvidence(CHILD, "PROJ-9", read({}))).toEqual(found);
+		expect(createdIssueEvidence(CHILD, "PROJ-9", wrapped({ id: "10009", key: "PROJ-9", fields: { summary: CHILD.summary, issuetype: { name: "Story" }, parent: { key: "PROJ-546" } } }))).toEqual(found);
+		expect(createdIssueEvidence(CHILD, "PROJ-9", read({ parent: undefined }))).toEqual({ kind: "indeterminate", reason: "the created issue carries no parent" });
+		expect(createdIssueEvidence(CHILD, "PROJ-9", read({ parent: { key: "PROJ-600" } }))).toEqual({ kind: "indeterminate", reason: "the created issue names a different parent" });
+		expect(createdIssueEvidence(CHILD, "PROJ-9", read({ summary: "Other" }))).toEqual({ kind: "indeterminate", reason: "the created issue does not carry the requested summary and issue type" });
+		expect(createdIssueEvidence(CHILD, "PROJ-9", read({ issue_type: { name: "Task" } }))).toEqual({ kind: "indeterminate", reason: "the created issue does not carry the requested summary and issue type" });
+		expect(createdIssueEvidence(CHILD, "PROJ-9", read({}, "PROJ-10"))).toEqual({ kind: "indeterminate", reason: "the created issue read names a different issue" });
+	});
+
+	test("the parent-scoped search read-back completes only from a new key under the requested parent", () => {
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9")]))).toEqual({ kind: "found", effects: [{ kind: "jira-issue", id: "PROJ-9" }] });
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9")]), { effectIds: ["PROJ-9"], commentIds: [], revision: null })).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.create", CHILD, never, search([]))).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9", null)]))).toEqual({ kind: "indeterminate", reason: "a matching issue search result carries no parent key" });
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9", { key: "PROJ-600" })]))).toEqual({ kind: "indeterminate", reason: "a matching issue search result names a different parent" });
+		// A list with unread matches never proves absence; a new key on the page read still proves the write.
+		const partial = { kind: "indeterminate" as const, reason: "the parent's issue search returned only part of its matches; it cannot prove the issue absent" };
+		expect(readBackEvidence("issue.create", CHILD, never, search([], { next_page_token: "next" }))).toEqual(partial);
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9")], { next_page_token: "next" }), { effectIds: ["PROJ-9"], commentIds: [], revision: null })).toEqual(partial);
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9")], { next_page_token: "next" }))).toEqual({ kind: "found", effects: [{ kind: "jira-issue", id: "PROJ-9" }] });
 	});
 });

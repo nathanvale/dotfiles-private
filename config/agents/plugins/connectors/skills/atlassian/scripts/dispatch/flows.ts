@@ -8,7 +8,7 @@ import type { BindResult, CredentialBinding } from "../custody/index.ts";
 import { type CauseCode, OPERATION_SPECS, type OperationSpec, type Product, type Provenance, type TransactionState } from "./contract.ts";
 import { confirmSchema, type Dependencies, type Input, providerArguments, REPAIR_TEXT, readSchema, type SchemaTool, type TransportFailure, type TransportResult } from "./engine.ts";
 import { canonicalDigest, type Effect, type Evidence, JournalError, type Receipt, type WriteOperation } from "./journal.ts";
-import { AUTHOR_GUARD_REASON, accountIdOf, baselineFromReply, effectKindOf, effectsFromReply, imageTypesDigest, isObjectDelete, type IssueAttachment, magicImageType, NOT_IMAGE_REASON, observeIssue, observePage, observeRestComment, type PreparedContext, preparation, type Preparation, readBackEvidence, readBackPlan, type ReadBack, resolveMediaAttachments, type RevisionMatch, transitionTo, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
+import { ATTACHMENT_AUTHOR_GUARD_REASON, AUTHOR_GUARD_REASON, accountIdOf, attachmentDigest, attachmentReferences, baselineFromReply, bindAttachment, bindParent, commentSources, createdIssueEvidence, createdIssueKey, createdIssuePlan, descriptionSource, effectKindOf, effectsFromReply, imageTypesDigest, isObjectDelete, type IssueAttachment, magicImageType, NOT_IMAGE_REASON, observeIssue, observePage, observeRestComment, parentDigest, type PreparedContext, preparation, type Preparation, readBackEvidence, readBackPlan, type ReadBack, resolveMediaAttachments, type RevisionMatch, transitionTo, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
 
 export interface Outcome {
 	cause: CauseCode;
@@ -19,7 +19,7 @@ export interface Outcome {
 	uncertain: string[];
 }
 
-export interface Attempt {
+interface Attempt {
 	cause: CauseCode;
 	data: unknown;
 	detail: string | null;
@@ -52,16 +52,15 @@ export class Session {
 		return bound;
 	}
 
-	route(spec: OperationSpec, binding: CredentialBinding): Route {
-		return new Route(this, spec.product, binding, spec.server);
-	}
 }
+
+const routeFor = (session: Session, spec: OperationSpec, binding: CredentialBinding): Route => new Route(session, spec.product, binding, spec.server);
 
 // One route server for one call sequence: lists the schema once and confirms
 // every tool against it before the tool is called. The server is the spec's:
 // a Community product route, or the owned REST route for the wiki-comment
 // exception.
-export class Route {
+class Route {
 	private tools: SchemaTool[] | undefined;
 
 	constructor(
@@ -129,7 +128,7 @@ export class Route {
 export async function readFlow(session: Session, spec: OperationSpec, input: Input): Promise<Outcome> {
 	const bound = await session.binding(spec.product);
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
-	const route = session.route(spec, bound.binding);
+	const route = routeFor(session, spec, bound.binding);
 	const args = providerArguments(spec, input);
 	const attempt = (await route.ready({ tool: spec.tool, args })) ?? (await route.call(spec.tool, args));
 	return attempt.cause === "success" ? success(attempt.data) : failed(attempt);
@@ -212,28 +211,92 @@ async function verifiedImageTypes(route: Route, types: Record<string, string>, u
 	return { types: verified };
 }
 
+// One REST issue read that must name the requested issue; the raw reply is
+// kept for readers that need more than the observation.
+async function readRestIssue(route: Route, tool: string, issueKey: string): Promise<{ data: unknown; issue: ReturnType<typeof observeIssue> } | { outcome: Outcome }> {
+	const read = await route.call(tool, { issue_key: issueKey });
+	if (read.cause !== "success") return { outcome: failed(read) };
+	const issue = observeIssue(read.data);
+	if (issue.key === undefined) return { outcome: refusal("capability-unavailable", "the preparatory Jira read names no issue key") };
+	if (issue.key !== issueKey) return { outcome: refusal("capability-unavailable", "the preparatory Jira read names a different issue") };
+	return { data: read.data, issue };
+}
+
+// The principal's account id through the REST route, for an author guard.
+async function readPrincipal(route: Route): Promise<{ principal: string } | { outcome: Outcome }> {
+	const me = await route.call("jira_rest_myself", {});
+	if (me.cause !== "success") return { outcome: failed(me) };
+	const principal = accountIdOf(me.data);
+	if (principal === undefined) return { outcome: refusal("capability-unavailable", "the principal read exposes no account id for the author guard") };
+	return { principal };
+}
+
 async function prepareMedia(route: Route, ctx: PreparedContext, step: Extract<Preparation, { kind: "media" | "media-comment" }>): Promise<Prepared> {
-	const listed = await route.call("jira_rest_issue_attachments", { issue_key: step.issueKey });
-	if (listed.cause !== "success") return { outcome: failed(listed) };
-	const issue = observeIssue(listed.data);
-	if (issue.key !== step.issueKey) return { outcome: refusal("capability-unavailable", "the preparatory Jira read names a different issue") };
-	const resolved = resolveMediaAttachments(issue.attachments, step.images);
+	const listed = await readRestIssue(route, "jira_rest_issue_attachments", step.issueKey);
+	if ("outcome" in listed) return listed;
+	const resolved = resolveMediaAttachments(listed.issue.attachments, step.images);
 	if (!resolved.ok) return { outcome: refusal(resolved.cause, resolved.reason) };
 	const verified = await verifiedImageTypes(route, resolved.types, resolved.untyped);
 	if ("outcome" in verified) return verified;
 	const prepared: PreparedContext = { ...ctx, imageTypes: verified.types, baseline: { ...ctx.baseline, effectIds: resolved.ids, revision: imageTypesDigest(verified.types) } };
 	if (step.kind === "media") return { ctx: prepared };
-	const me = await route.call("jira_rest_myself", {});
-	if (me.cause !== "success") return { outcome: failed(me) };
-	const principal = accountIdOf(me.data);
-	if (principal === undefined) return { outcome: refusal("capability-unavailable", "the principal read exposes no account id for the author guard") };
+	const me = await readPrincipal(route);
+	if ("outcome" in me) return me;
 	const read = await route.call("jira_rest_comment_get", { issue_key: step.issueKey, comment_id: step.commentId });
 	if (read.cause !== "success") return { outcome: failed(read) };
 	const comment = observeRestComment(read.data);
 	if (comment.id !== step.commentId) return { outcome: refusal("capability-unavailable", "the comment read names a different comment") };
-	if (comment.authorAccountId !== principal) return { outcome: refusal("input-invalid", AUTHOR_GUARD_REASON) };
+	if (comment.authorAccountId !== me.principal) return { outcome: refusal("input-invalid", AUTHOR_GUARD_REASON) };
 	if (comment.updated === undefined) return { outcome: refusal("capability-unavailable", "the comment read exposes no updated timestamp to bind the revision") };
 	return { ctx: { ...prepared, revision: comment.updated } };
+}
+
+// The attachment-delete exception, through the owned REST route. One context
+// read binds the issue (`updated`), the attachment (id, filename, size,
+// author, created) and yields the description; the principal read runs the
+// author guard before any comment body is read; the comment list runs the
+// reference guard. Any guard failing refuses before a preview is recorded and
+// again at apply, where the same reads are repeated.
+async function prepareAttachmentDelete(route: Route, ctx: PreparedContext, step: Extract<Preparation, { kind: "attachment-delete" }>): Promise<Prepared> {
+	const read = await readRestIssue(route, "jira_rest_issue_attachment_context", step.issueKey);
+	if ("outcome" in read) return read;
+	if (read.issue.revision === null) return { outcome: refusal("capability-unavailable", "the Jira reply exposes no revision or updated timestamp") };
+	const bound = bindAttachment(read.data, step.attachmentId);
+	if (!bound.ok) return { outcome: refusal(bound.cause, bound.reason) };
+	// The description must have been read before anything else is; a reply
+	// without it can never clear the attachment.
+	const description = descriptionSource(read.data);
+	if (!description.ok) return { outcome: refusal("capability-unavailable", description.reason) };
+	const me = await readPrincipal(route);
+	if ("outcome" in me) return me;
+	if (bound.attachment.authorAccountId !== me.principal) return { outcome: refusal("input-invalid", ATTACHMENT_AUTHOR_GUARD_REASON) };
+	const listed = await route.call("jira_rest_comments_list", { issue_key: step.issueKey });
+	if (listed.cause !== "success") return { outcome: failed(listed) };
+	const comments = commentSources(listed.data);
+	if (!comments.ok) return { outcome: refusal("capability-unavailable", comments.reason) };
+	const references = attachmentReferences(bound.attachment, [description.source, ...comments.sources]);
+	if (references.length > 0) return { outcome: refusal("input-invalid", `the attachment is still referenced by ${references.join(", ")}; remove the reference first`) };
+	return {
+		ctx: {
+			...ctx,
+			revision: read.issue.revision,
+			attachment: bound.attachment,
+			referenceCheck: { description: true, commentsRead: comments.sources.length, commentsTotal: comments.total, references },
+			baseline: { ...ctx.baseline, effectIds: [step.attachmentId], revision: attachmentDigest(bound.attachment) },
+		},
+	};
+}
+
+// A create under a parent reads the parent first: a missing parent refuses as
+// not-found before any search or preview, and the parent's key, id, and type
+// are digested into the baseline so an apply refuses when it was replaced or
+// retyped. Jira itself enforces the hierarchy at create.
+async function prepareParent(route: Route, ctx: PreparedContext, parentKey: string): Promise<Prepared> {
+	const read = await route.call("jira_get_issue", { issue_key: parentKey, fields: "summary,issuetype,project" });
+	if (read.cause !== "success") return { outcome: failed(read) };
+	const bound = bindParent(read.data, parentKey);
+	if (!bound.ok) return { outcome: refusal("capability-unavailable", bound.reason) };
+	return { ctx: { ...ctx, parent: bound.parent, baseline: { ...ctx.baseline, revision: parentDigest(bound.parent) } } };
 }
 
 async function bindBaseline(route: Route, operation: WriteOperation, input: WriteInput, ctx: PreparedContext): Promise<Prepared> {
@@ -261,6 +324,9 @@ async function prepare(route: Route, operation: WriteOperation, input: WriteInpu
 		case "none":
 			prepared = { ctx };
 			break;
+		case "parent":
+			prepared = await prepareParent(route, ctx, step.parentKey);
+			break;
 		case "issue":
 			prepared = await prepareIssue(route, ctx, step.issueKey);
 			break;
@@ -276,6 +342,9 @@ async function prepare(route: Route, operation: WriteOperation, input: WriteInpu
 		case "media":
 		case "media-comment":
 			prepared = await prepareMedia(route, ctx, step);
+			break;
+		case "attachment-delete":
+			prepared = await prepareAttachmentDelete(route, ctx, step);
 			break;
 	}
 	if ("outcome" in prepared) return prepared;
@@ -323,7 +392,7 @@ interface WriteContext {
 async function writeContext(session: Session, spec: OperationSpec, input: WriteInput): Promise<WriteContext | Outcome> {
 	const bound = await session.binding(spec.product);
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
-	const route = session.route(spec, bound.binding);
+	const route = routeFor(session, spec, bound.binding);
 	const placeholder: PreparedContext = { revision: null, baseline: { effectIds: [], commentIds: [], revision: null }, currentTitle: "pending", transitionId: "pending" };
 	const ready = await route.ready({ tool: spec.tool, args: writeArguments(spec, input, placeholder).args });
 	if (ready) return failed(ready);
@@ -361,7 +430,10 @@ export async function previewFlow(session: Session, spec: OperationSpec, input: 
 			objectIdentity: preview.objectIdentity,
 			revision: context.ctx.revision,
 			baseline: context.ctx.baseline,
-			imageTypes: context.ctx.imageTypes,
+			...(context.ctx.imageTypes === undefined ? {} : { imageTypes: context.ctx.imageTypes }),
+			...(context.ctx.attachment === undefined ? {} : { attachment: context.ctx.attachment }),
+			...(context.ctx.referenceCheck === undefined ? {} : { referenceCheck: context.ctx.referenceCheck }),
+			...(context.ctx.parent === undefined ? {} : { parent: context.ctx.parent }),
 			expiresAt: preview.expiresAt,
 			input: context.input,
 			arguments: context.bound,
@@ -380,10 +452,28 @@ function replyEffectIsNew(operation: WriteOperation, id: string, context: WriteC
 	return false;
 }
 
+// A create under a parent never completes from its reply. The key the reply
+// names is read directly, because a search may not yet index the new issue:
+// the requested summary, type, and parent complete it; an issue that exists
+// without them is unknown and keeps the object blocked. A failed read, or a
+// reply naming no key, falls through to the parent-scoped search.
+async function createdIssueRead(context: WriteContext, attempt: Attempt): Promise<Evidence | null> {
+	const key = createdIssueKey(context.input, attempt.data);
+	if (key === undefined || context.ctx.baseline.effectIds.includes(key)) return null;
+	const plan = createdIssuePlan(key);
+	const read = await context.route.call(plan.tool, plan.args);
+	if (read.cause !== "success") return null;
+	const evidence = createdIssueEvidence(context.input, key, read.data);
+	return evidence.kind === "found" ? { proof: "completed", effects: evidence.effects } : { proof: "unknown" };
+}
+
 // Evidence from the provider reply, else from an immediate read-back.
 async function settleEvidence(context: WriteContext, attempt: Attempt): Promise<Evidence> {
 	const operation = context.spec.id as WriteOperation;
-	if (attempt.cause === "success") {
+	if (attempt.cause === "success" && context.ctx.parent !== undefined) {
+		const direct = await createdIssueRead(context, attempt);
+		if (direct !== null) return direct;
+	} else if (attempt.cause === "success") {
 		const effects = effectsFromReply(operation, context.input, attempt.data, context.ctx.baseline);
 		if (effects.length > 0 && effects.every((effect) => replyEffectIsNew(operation, effect.id, context))) return { proof: "completed", effects };
 	}
@@ -406,8 +496,15 @@ async function readBackFor(route: Route, operation: WriteOperation, input: Write
 	return readBackEvidence(operation, input, revisionMatches, read.data, baseline, route.trustedOrigin);
 }
 
+// An open receipt that never reached the send mark: the journal recorded the
+// write but could not release or settle it, so nothing was sent and the
+// object stays blocked until recovery.
+const RECORDED_UNSENT =
+	"the write was recorded but never sent, and its receipt stays open and blocks the object; once no connectors process is running, remove any leftover journal meta-lock by hand, then unlock and adjudicate this run with the same input";
+
 function receiptOutcome(receipt: Receipt, attempt: Attempt | null): Outcome {
 	const base = { runId: receipt.runId, previewId: receipt.previewId, operation: receipt.operation, provider: receipt.provider, objectIdentity: receipt.objectIdentity, status: receipt.status, send: receipt.send, effects: receipt.effects };
+	if (receipt.status === "intent" && receipt.send === "unsent") return { cause: "refused-state", data: base, detail: RECORDED_UNSENT, transactionState: "unchanged", effects: [], uncertain: [] };
 	switch (receipt.status) {
 		case "completed":
 			return { cause: "success", data: { ...base, reply: attempt?.data ?? null }, detail: null, transactionState: "completed", effects: receipt.effects.map(effectId), uncertain: [] };
@@ -472,7 +569,8 @@ export function receiptFlow(session: Session, runId: string): Outcome {
 	}
 }
 
-// Operator lock recovery through a receipt or its preview. A record from a
+// Operator lock recovery through a receipt or its preview; unlocked says
+// whether a lock was actually removed. A record from a
 // retired Provider is refused here as everywhere else: its object stays
 // blocked until an operator resolves it by hand, never through this route.
 export function unlockFlow(session: Session, runId: string): Outcome {
@@ -481,14 +579,12 @@ export function unlockFlow(session: Session, runId: string): Outcome {
 		try {
 			const receipt = journal.receipt(runId);
 			if (receipt.provider !== providerOf(receipt.operation)) return refusal("refused-state", `${REPAIR_TEXT["refused-state"]}; receipt-provider-retired`);
-			journal.unlock(receipt.objectIdentity);
-			return success({ runId, objectIdentity: receipt.objectIdentity, unlocked: true });
+			return success({ runId, objectIdentity: receipt.objectIdentity, unlocked: journal.unlock(receipt.objectIdentity) });
 		} catch (error) {
 			if (!(error instanceof JournalError) || error.code !== "receipt-unknown") throw error;
 			const preview = journal.preview(runId);
 			if (preview.provider !== providerOf(preview.operation)) return refusal("refused-preview", `${REPAIR_TEXT["refused-preview"]}; preview-provider-retired`);
-			journal.unlock(preview.objectIdentity);
-			return success({ previewId: preview.previewId, objectIdentity: preview.objectIdentity, unlocked: true });
+			return success({ previewId: preview.previewId, objectIdentity: preview.objectIdentity, unlocked: journal.unlock(preview.objectIdentity) });
 		}
 	} catch (error) {
 		return journalRefusal(error);
@@ -522,14 +618,16 @@ export async function adjudicateFlow(session: Session, runId: string, rawInput: 
 	}
 	if (receipt.status === "completed" || receipt.status === "unchanged") return refusal("refused-evidence", `${REPAIR_TEXT["refused-evidence"]}; receipt-already-resolved`);
 	if (receipt.provider !== providerOf(receipt.operation)) return refusal("refused-state", `${REPAIR_TEXT["refused-state"]}; receipt-provider-retired`);
+	// The input is checked against the receipt before any credential or
+	// Provider capability, so a wrong input starts nothing.
+	const canonical = canonicalAdjudicationInput(receipt, rawInput);
+	if (isOutcome(canonical)) return canonical;
 	const spec = OPERATION_SPECS[receipt.operation];
 	const bound = await session.binding(spec.product);
 	if (!bound.ok) return refusal(bound.cause, bound.detail);
-	const route = session.route(spec, bound.binding);
+	const route = routeFor(session, spec, bound.binding);
 	const ready = await route.ready();
 	if (ready) return failed(ready);
-	const canonical = canonicalAdjudicationInput(receipt, rawInput);
-	if (isOutcome(canonical)) return canonical;
 	const digestOf = (observed: string) => new Bun.CryptoHasher("sha256").update(observed).digest("hex");
 	const readBack = await readBackFor(route, receipt.operation, canonical, (observed) => receipt.revisionDigest !== null && digestOf(observed) === receipt.revisionDigest, receipt.baseline);
 	if (readBack.kind === "indeterminate") return refusal("refused-evidence", `${REPAIR_TEXT["refused-evidence"]}; ${readBack.reason}`);

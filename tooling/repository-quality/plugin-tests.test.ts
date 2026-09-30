@@ -260,6 +260,7 @@ test("every plugin with tests is a workspace member or declares scripts.test", (
 		.map((entry) => entry.name);
 
 	const violations = pluginNames
+		.filter((name) => name !== "personal") // Its helper is a root workspace and runs under bun run test.
 		.map((name) =>
 			violationForDirectory(
 				path.join(pluginsRoot, name),
