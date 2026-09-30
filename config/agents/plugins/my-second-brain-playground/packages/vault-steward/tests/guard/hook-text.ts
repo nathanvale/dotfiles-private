@@ -20,7 +20,7 @@ while read -r old new ref; do
         0) ;;
         1)
           printf 'VAULT_GUARD_BRANCH_CREATE_DENIED %s\n' "$ref" >&2
-          printf 'This vault is main-only. Commit notes with: vault-note-commits begin --path <file> --json\n' >&2
+          printf 'This vault is main-only. Commit notes with: vault-steward begin --path <file> --json\n' >&2
           printf 'Owner: docs/agents/git-guardrails.md\n' >&2
           exit 1 ;;
         *)
