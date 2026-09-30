@@ -18152,7 +18152,7 @@ function canonicalRoot(rt, manifest) {
 }
 var checkerDeadlineMs = 120000;
 function vaultNotesBin(rt) {
-  return rt.env.VAULT_NOTES_BIN || join3(rt.pluginRoot, "bin", "vault-notes");
+  return join3(rt.pluginRoot, "bin", "vault-notes");
 }
 function runChecker(rt, manifest, afterRebase) {
   const result = started(rt.spawn([rt.execPath, "run", "check"], {
@@ -18163,7 +18163,7 @@ function runChecker(rt, manifest, afterRebase) {
   if (result.exitCode !== 0) {
     const diagnosticsPath = join3(stateRoot(rt), "diagnostics", `${manifest.runId}.json`);
     rt.atomicPrivateJson(diagnosticsPath, { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, ...result.timedOut ? { timedOut: true } : {} });
-    refuse(afterRebase ? "rebased-check-failed" : "check-failed", { ...candidateFacts(manifest), diagnosticsPath, afterRebase, ...result.timedOut ? { detail: "the checker was stopped at its deadline" } : {} });
+    refuse(afterRebase ? "rebased-check-failed" : "check-failed", { ...candidateFacts(manifest), diagnosticsPath, afterRebase, ...result.timedOut ? { detail: "the checker run was abandoned at its deadline; its child processes may still be running" } : {} });
   }
 }
 function checkWhitespace(rt, manifest, range, facts) {

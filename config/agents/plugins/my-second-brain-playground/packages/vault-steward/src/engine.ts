@@ -373,13 +373,14 @@ function canonicalRoot(rt: Runtime, manifest: Manifest): string {
 	}
 }
 
-// A hung checker must never hold the integration lock; reaching the deadline is a checker failure.
+// A hung checker must never hold the integration lock; reaching the deadline is a checker failure. Only the direct
+// `bun run check` child is killed, so the run is abandoned: its descendants may outlive the refusal.
 const checkerDeadlineMs = 120_000
 
-// The vault-notes the vault checker may call: the caller's explicit choice, else this plugin copy's own launcher, so a
-// candidate is checked by the same plugin copy that integrates it.
+// The vault-notes the vault checker may call is always this plugin copy's own launcher, replacing any caller value, so
+// a candidate is checked by the same plugin copy that integrates it.
 function vaultNotesBin(rt: Runtime): string {
-	return rt.env.VAULT_NOTES_BIN || join(rt.pluginRoot, "bin", "vault-notes")
+	return join(rt.pluginRoot, "bin", "vault-notes")
 }
 
 // `bun run check` inside the candidate. VAULT_CANONICAL_ROOT lets the vault checker resolve sibling links from a
@@ -393,7 +394,7 @@ function runChecker(rt: Runtime, manifest: Manifest, afterRebase: boolean): void
 	if (result.exitCode !== 0) {
 		const diagnosticsPath = join(stateRoot(rt), "diagnostics", `${manifest.runId}.json`)
 		rt.atomicPrivateJson(diagnosticsPath, { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, ...(result.timedOut ? { timedOut: true } : {}) })
-		refuse(afterRebase ? "rebased-check-failed" : "check-failed", { ...candidateFacts(manifest), diagnosticsPath, afterRebase, ...(result.timedOut ? { detail: "the checker was stopped at its deadline" } : {}) })
+		refuse(afterRebase ? "rebased-check-failed" : "check-failed", { ...candidateFacts(manifest), diagnosticsPath, afterRebase, ...(result.timedOut ? { detail: "the checker run was abandoned at its deadline; its child processes may still be running" } : {}) })
 	}
 }
 
