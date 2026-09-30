@@ -12,6 +12,7 @@ import {
 	DESCRIPTOR_LIMIT_PRELOAD,
 	EXHAUST_DESCRIPTORS,
 	envelope,
+	fifoSentinel,
 	type Fixture,
 	type FixtureOptions,
 	grant,
@@ -313,6 +314,60 @@ for (const [mode, fallback] of Object.entries(XDG_FALLBACK)) {
 			})
 		}
 	}
+}
+
+// With HOME unset or empty and XDG_STATE_HOME unset, the root is the home in the operating system's account record
+// plus /.local/state, which these tests never touch. A grant naming a synthetic root is denied before anything is
+// read: the fixture's own state root, or <working directory>/.local/state, which a gate resolving an empty HOME
+// against the working directory would accept with a receipt present.
+const ABSENT_HOME: Record<string, (env: Record<string, string>) => void> = {
+	unset: (env) => {
+		delete env.HOME
+	},
+	empty: (env) => {
+		env.HOME = ""
+	},
+}
+
+const SYNTHETIC_ROOT_RECEIPTS: readonly ((target: Fixture) => string)[] = [(target) => target.receiptPath, (target) => homeReceiptPath(target, "")]
+
+const syntheticReceiptsPresent: ReceiptState = (target) => {
+	for (const receiptPath of SYNTHETIC_ROOT_RECEIPTS) {
+		mkdirSync(join(receiptPath(target), ".."), { recursive: true })
+		writeJson(receiptPath(target), receipt())
+	}
+}
+
+for (const [mode, absentHome] of Object.entries(ABSENT_HOME)) {
+	const configure = (target: Fixture) => {
+		absentHome(target.env)
+		delete target.env.XDG_STATE_HOME
+	}
+
+	test(`with HOME ${mode} and XDG_STATE_HOME unset, a receiptPath under a synthetic root is refused identically present or absent`, () => {
+		for (const receiptPath of SYNTHETIC_ROOT_RECEIPTS) {
+			expectAllRefused(
+				probe({ present: syntheticReceiptsPresent, absent }, (target) => {
+					configure(target)
+					return piped(grant(target, { receiptPath: receiptPath(target) }), request())
+				}),
+			)
+		}
+	})
+
+	test(`with HOME ${mode} and XDG_STATE_HOME unset, a receiptPath under a synthetic root never opens its receipt`, async () => {
+		configure(fixture)
+		mkdirSync(join(homeReceiptPath(fixture, ""), ".."), { recursive: true })
+		const sentinels = await Promise.all(SYNTHETIC_ROOT_RECEIPTS.map((receiptPath) => fifoSentinel(fixture, receiptPath(fixture))))
+		try {
+			for (const receiptPath of SYNTHETIC_ROOT_RECEIPTS) expect(both(piped(grant(fixture, { receiptPath: receiptPath(fixture) }), request()))).toEqual(refused)
+			expect(await Promise.all(sentinels.map((sentinel) => sentinel.opened()))).toEqual([false, false])
+			for (const sentinel of sentinels) sentinel.openAsReader()
+			expect(await Promise.all(sentinels.map((sentinel) => sentinel.opened()))).toEqual([true, true])
+		} finally {
+			await Promise.all(sentinels.map((sentinel) => sentinel.stop()))
+		}
+	})
 }
 
 for (const [name, receiptPath] of Object.entries(RECEIPT_PATH_ALIASES)) {

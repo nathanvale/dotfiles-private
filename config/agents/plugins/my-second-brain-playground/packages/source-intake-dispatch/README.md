@@ -46,9 +46,12 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/my-second-brain-playground/drive-inbox-fil
 The state root (`XDG_STATE_HOME`, or `$HOME/.local/state` when it is unset or
 empty) must be written as its canonical physical absolute path: no symbolic
 link in it, no trailing or doubled slash, and no `.` or `..` segment. For the
-fallback, the root is `HOME` exactly as spelled followed by `/.local/state`, so
-`HOME` must be canonical too. Any other spelling, even one naming the same
-directory, gets the fixed denial.
+fallback, when `HOME` is set and non-empty the root is `HOME` exactly as
+spelled followed by `/.local/state`, so `HOME` must be canonical too. When
+`HOME` is unset or empty, the root is the home directory in the operating
+system's account record followed by `/.local/state` (not the shell expansion
+`/.local/state`). The physical-root rule applies either way. Any other
+spelling, even one naming the same directory, gets the fixed denial.
 
 Only provider `luna` with purpose `classification` is supported. Granted and
 requested fields come from this closed metadata list: `displayName`,

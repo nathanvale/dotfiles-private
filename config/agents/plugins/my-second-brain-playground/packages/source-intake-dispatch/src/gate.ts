@@ -71,7 +71,11 @@ function asRequest(value: unknown): Request {
 	return value as Request
 }
 
-/** The configured state root as the caller spells it, unnormalized; an empty XDG_STATE_HOME counts as unset. */
+/**
+ * The configured state root, unnormalized: XDG_STATE_HOME as the caller spells it, else HOME as spelled plus
+ * /.local/state. An empty XDG_STATE_HOME counts as unset. With HOME unset or empty, homedir() returns the home in the
+ * operating system's account record instead, so the root is that home plus /.local/state.
+ */
 function configuredStateHome(): string {
 	const configured = process.env.XDG_STATE_HOME || `${homedir()}/.local/state`
 	if (!isAbsolute(configured)) throw new Error("relative state home")
