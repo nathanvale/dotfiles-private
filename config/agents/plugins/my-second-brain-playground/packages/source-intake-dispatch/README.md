@@ -58,8 +58,19 @@ JSON object; each projected value is a string or finite number.
   scopes it.
 - Grant and request paths resolve one component at a time. A link target is
   normalized lexically, so its `..` never visits the directory before it. A
-  path that reaches either items tree, by spelling or by directory identity,
-  is denied before it is touched.
+  static path that reaches either items tree, by spelling or by directory
+  identity, is denied before it is touched. At open, the final component is
+  not followed.
+- Concurrent caller mutation is outside the supported-path guarantee
+  (Nathan, 2026-09-30): a caller that swaps, relinks or otherwise mutates its
+  own path components while the command runs is out of scope, as Ticket #136
+  already scopes a caller with filesystem access. The no-existence-oracle
+  guarantee holds for caller paths that do not change during the invocation.
+  This relaxes nothing else: exact-item grants, the fixed value-free denial,
+  the guarded account default root, and the classifier read prevention (T-2)
+  required before any exact-item filing all stand.
+- Known residual: a hardlink to a receipt placed outside the items tree is
+  not detected.
 
 ## Outcomes
 

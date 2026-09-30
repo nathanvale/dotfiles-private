@@ -180,8 +180,9 @@ function readCallerJson(path: string, guard: ItemsGuard): unknown {
 	}
 	let text: string
 	try {
-		// Nonblocking so a FIFO caller path cannot hang the command; a regular file ignores the flag. The canonical
-		// path holds no link, so a link swapped in after the walk fails to open instead of being followed.
+		// Nonblocking so a FIFO caller path cannot hang the command; a regular file ignores the flag. The walk denies a
+		// static path before it is touched; O_NOFOLLOW refuses a link at the final component only. A caller that mutates
+		// its own path components during the run is outside the guarantee (README, Privacy boundary).
 		const descriptor = openSync(canonical, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW)
 		try {
 			if (!fstatSync(descriptor).isFile()) throw new GateRefusal({ kind: "inputUnreadable" })
