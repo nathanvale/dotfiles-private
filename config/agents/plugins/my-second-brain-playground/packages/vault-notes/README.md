@@ -21,12 +21,14 @@ Unifying the three legacy JSON shapes is a later, versioned decision.
 ## Vault Catalogue
 
 `src/vault-catalogue.ts` is the one owner of which Markdown files are vault
-notes and where each note sits. `openCatalogue(root)` reads the contract;
+notes and where each note sits. `openCatalogue(root)` reads the contract.
 `notes(include?)` returns governed notes with their placement (family, owning
-project, artifact folder, index role, routed types), selecting before any note
-is read; `filenamePolicyPaths()` returns the files the uppercase-filename rule
-governs, under its own exclusion list. check, list and inventory read notes
-only through it.
+project, artifact folder, index role, routed types); it selects before any note
+is read and reads one note at a time in path order (list, inventory).
+`notesWithFilenamePolicy()` also returns the files the uppercase-filename rule
+governs, under its own exclusion list; both walks finish before any note is
+read (check). The index role and routed types read `contract.routing` only when
+accessed, so list and inventory keep working with an incomplete routing block.
 
 ## Fixture contract
 

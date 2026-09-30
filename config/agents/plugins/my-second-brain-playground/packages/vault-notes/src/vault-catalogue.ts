@@ -5,18 +5,24 @@ import { readdir, readFile } from "node:fs/promises";
 import path from "node:path";
 import { type Frontmatter, loadContract, type VaultContract } from "./vault-contract";
 
-/** Where a note sits in the vault, derived from its path alone. */
+/** Project folders whose notes follow a governed document contract and need a stable folder map. */
+const ARTIFACT_FOLDERS = ["specs", "tickets", "proofs"] as const;
+
+/**
+ * Where a note sits in the vault, derived from its path alone. `isIndex` and `expectedTypes` read the contract's
+ * routing only when accessed, so a consumer that never reads them never depends on `contract.routing`.
+ */
 export interface NotePlacement {
   /** First path segment of a nested note; null for a file at the vault root. */
   family: string | null;
   /** Owning project slug for a note inside `projects/<slug>/`, at any depth; null elsewhere. */
   project: string | null;
   /** Governed artifact folder directly under the owning project that holds this note, at any depth; null elsewhere. */
-  artifactFolder: "specs" | "tickets" | "proofs" | null;
+  artifactFolder: (typeof ARTIFACT_FOLDERS)[number] | null;
   /** True for the vault root README and each contract family's README. */
-  isIndex: boolean;
+  readonly isIndex: boolean;
   /** Note types the contract routes to this path; empty when the path is unrouted. */
-  expectedTypes: string[];
+  readonly expectedTypes: string[];
 }
 
 /** One governed Markdown file, its parsed frontmatter, and its placement. */
@@ -29,23 +35,23 @@ export interface MarkdownNote {
   placement: NotePlacement;
 }
 
-/** Project folders whose notes follow a governed document contract and need a stable folder map. */
-const ARTIFACT_FOLDERS: NonNullable<NotePlacement["artifactFolder"]>[] = ["specs", "tickets", "proofs"];
-
 /** The vault's contract-bound view of its notes. Only the contract is read when the catalogue opens. */
 export interface VaultCatalogue {
   contract: VaultContract;
   /**
    * Governed notes, sorted by path. The walk skips `.git` and every name in the contract's `ignored` list, at any
    * depth and as a first path segment. `include` selects by placement before any note is read, so an excluded note
-   * can never fail the read.
+   * can never fail the read. Notes are read one at a time in path order, so the first unreadable selected note is
+   * the one reported.
    */
   notes(include?: (placement: NotePlacement) => boolean): Promise<MarkdownNote[]>;
   /**
-   * Vault-relative paths of every Markdown file the filename policy governs, sorted. This deliberately differs from
-   * the governed notes: only the contract's `markdownFilenames.ignoredDirectories` are skipped.
+   * Every governed note plus the vault-relative paths the filename policy governs, both sorted. That policy
+   * deliberately differs: it skips only the contract's `markdownFilenames.ignoredDirectories`. Both walks finish
+   * before any note is read, so a folder-read error is reported ahead of a note-read error; notes are then read
+   * concurrently.
    */
-  filenamePolicyPaths(): Promise<string[]>;
+  notesWithFilenamePolicy(): Promise<{ notes: MarkdownNote[]; filenamePolicyPaths: string[] }>;
 }
 
 /** Open the catalogue of the vault at `root`. Rejects when the contract is missing or unreadable. */
@@ -54,20 +60,44 @@ export async function openCatalogue(root: string): Promise<VaultCatalogue> {
   return {
     contract,
     async notes(include = () => true) {
-      const selected = (await collectMarkdownFiles(root, (relativePath, name) => isIgnoredNotePath(relativePath, name, contract)))
-        .map((absolutePath) => ({ absolutePath, relativePath: toVaultPath(root, absolutePath) }))
-        .map((file) => ({ ...file, placement: placeNote(file.relativePath, contract) }))
-        .filter((file) => include(file.placement));
-      return Promise.all(selected.map((file) => readNote(file.absolutePath, file.relativePath, file.placement)));
+      const notes: MarkdownNote[] = [];
+      for (const file of placeNotes(root, await walkNotes(root, contract), contract)) {
+        if (include(file.placement)) notes.push(await readNote(file));
+      }
+      return notes;
     },
-    async filenamePolicyPaths() {
-      const files = await collectMarkdownFiles(
-        root,
-        (_relativePath, name, isDirectory) => isDirectory && contract.markdownFilenames.ignoredDirectories.includes(name),
-      );
-      return files.map((absolutePath) => toVaultPath(root, absolutePath));
+    async notesWithFilenamePolicy() {
+      const [noteFiles, policyFiles] = await Promise.all([walkNotes(root, contract), walkFilenamePolicy(root, contract)]);
+      return {
+        notes: await Promise.all(placeNotes(root, noteFiles, contract).map(readNote)),
+        filenamePolicyPaths: policyFiles.map((absolutePath) => toVaultPath(root, absolutePath)),
+      };
     },
   };
+}
+
+interface PlacedFile {
+  absolutePath: string;
+  relativePath: string;
+  placement: NotePlacement;
+}
+
+function walkNotes(root: string, contract: VaultContract): Promise<string[]> {
+  return collectMarkdownFiles(root, (relativePath, name) => isIgnoredNotePath(relativePath, name, contract));
+}
+
+function walkFilenamePolicy(root: string, contract: VaultContract): Promise<string[]> {
+  return collectMarkdownFiles(
+    root,
+    (_relativePath, name, isDirectory) => isDirectory && contract.markdownFilenames.ignoredDirectories.includes(name),
+  );
+}
+
+function placeNotes(root: string, files: string[], contract: VaultContract): PlacedFile[] {
+  return files.map((absolutePath) => {
+    const relativePath = toVaultPath(root, absolutePath);
+    return { absolutePath, relativePath, placement: placeNote(relativePath, contract) };
+  });
 }
 
 function isIgnoredNotePath(relativePath: string, name: string, contract: VaultContract): boolean {
@@ -112,10 +142,20 @@ function placeNote(relativePath: string, contract: VaultContract): NotePlacement
   const project = segments[0] === "projects" && segments.length >= 3 ? (segments[1] ?? null) : null;
   const folder = project !== null && segments.length >= 4 ? segments[2] : undefined;
   const artifactFolder = ARTIFACT_FOLDERS.find((name) => name === folder) ?? null;
-  const isIndex =
-    relativePath === "README.md" ||
-    Object.keys(contract.routing.familyReadmes).some((name) => relativePath === `${name}/README.md`);
-  return { family, project, artifactFolder, isIndex, expectedTypes: routeTypes(relativePath, segments, artifactFolder, contract) };
+  return {
+    family,
+    project,
+    artifactFolder,
+    get isIndex() {
+      return (
+        relativePath === "README.md" ||
+        Object.keys(contract.routing.familyReadmes).some((name) => relativePath === `${name}/README.md`)
+      );
+    },
+    get expectedTypes() {
+      return routeTypes(relativePath, segments, artifactFolder, contract);
+    },
+  };
 }
 
 /** Resolve the note types the contract's routing allows at a path. */
@@ -175,7 +215,7 @@ function projectTypesForPath(
 }
 
 /** Read one Markdown file and parse its YAML frontmatter. */
-async function readNote(absolutePath: string, relativePath: string, placement: NotePlacement): Promise<MarkdownNote> {
+async function readNote({ absolutePath, relativePath, placement }: PlacedFile): Promise<MarkdownNote> {
   const content = await readFile(absolutePath, "utf8");
   const note = { absolutePath, relativePath, content, placement };
   const match = content.match(/^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/);

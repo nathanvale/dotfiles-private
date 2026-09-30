@@ -55,7 +55,7 @@ export async function checkVault(root: string, options: CheckVaultOptions = {}):
   const canonicalRoot = path.resolve(options.canonicalRoot ?? root);
   const catalogue = await openCatalogue(root);
   const { contract } = catalogue;
-  const [notes, filenamePolicyPaths] = await Promise.all([catalogue.notes(), catalogue.filenamePolicyPaths()]);
+  const { notes, filenamePolicyPaths } = await catalogue.notesWithFilenamePolicy();
   const issues: ValidationIssue[] = validateMarkdownFilenames(filenamePolicyPaths, contract);
 
   for (const note of notes) {

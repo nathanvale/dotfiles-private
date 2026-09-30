@@ -33,14 +33,33 @@ async function openCatalogue(root) {
   return {
     contract,
     async notes(include = () => true) {
-      const selected = (await collectMarkdownFiles(root, (relativePath, name) => isIgnoredNotePath(relativePath, name, contract))).map((absolutePath) => ({ absolutePath, relativePath: toVaultPath(root, absolutePath) })).map((file) => ({ ...file, placement: placeNote(file.relativePath, contract) })).filter((file) => include(file.placement));
-      return Promise.all(selected.map((file) => readNote(file.absolutePath, file.relativePath, file.placement)));
+      const notes = [];
+      for (const file of placeNotes(root, await walkNotes(root, contract), contract)) {
+        if (include(file.placement))
+          notes.push(await readNote(file));
+      }
+      return notes;
     },
-    async filenamePolicyPaths() {
-      const files = await collectMarkdownFiles(root, (_relativePath, name, isDirectory) => isDirectory && contract.markdownFilenames.ignoredDirectories.includes(name));
-      return files.map((absolutePath) => toVaultPath(root, absolutePath));
+    async notesWithFilenamePolicy() {
+      const [noteFiles, policyFiles] = await Promise.all([walkNotes(root, contract), walkFilenamePolicy(root, contract)]);
+      return {
+        notes: await Promise.all(placeNotes(root, noteFiles, contract).map(readNote)),
+        filenamePolicyPaths: policyFiles.map((absolutePath) => toVaultPath(root, absolutePath))
+      };
     }
   };
+}
+function walkNotes(root, contract) {
+  return collectMarkdownFiles(root, (relativePath, name) => isIgnoredNotePath(relativePath, name, contract));
+}
+function walkFilenamePolicy(root, contract) {
+  return collectMarkdownFiles(root, (_relativePath, name, isDirectory) => isDirectory && contract.markdownFilenames.ignoredDirectories.includes(name));
+}
+function placeNotes(root, files, contract) {
+  return files.map((absolutePath) => {
+    const relativePath = toVaultPath(root, absolutePath);
+    return { absolutePath, relativePath, placement: placeNote(relativePath, contract) };
+  });
 }
 function isIgnoredNotePath(relativePath, name, contract) {
   const firstSegment = relativePath.split(path2.sep)[0];
@@ -75,8 +94,17 @@ function placeNote(relativePath, contract) {
   const project = segments[0] === "projects" && segments.length >= 3 ? segments[1] ?? null : null;
   const folder = project !== null && segments.length >= 4 ? segments[2] : undefined;
   const artifactFolder = ARTIFACT_FOLDERS.find((name) => name === folder) ?? null;
-  const isIndex = relativePath === "README.md" || Object.keys(contract.routing.familyReadmes).some((name) => relativePath === `${name}/README.md`);
-  return { family, project, artifactFolder, isIndex, expectedTypes: routeTypes(relativePath, segments, artifactFolder, contract) };
+  return {
+    family,
+    project,
+    artifactFolder,
+    get isIndex() {
+      return relativePath === "README.md" || Object.keys(contract.routing.familyReadmes).some((name) => relativePath === `${name}/README.md`);
+    },
+    get expectedTypes() {
+      return routeTypes(relativePath, segments, artifactFolder, contract);
+    }
+  };
 }
 function routeTypes(relativePath, segments, artifactFolder, contract) {
   const repositoryTypes = repositoryTypesForPath(relativePath, contract);
@@ -118,7 +146,7 @@ function projectTypesForPath(segments, filename, artifactFolder, contract) {
   const directoryType = contract.routing.projectDirectories[segments[2] ?? ""];
   return directoryType ? [directoryType] : contract.routing.projectLocalTypes;
 }
-async function readNote(absolutePath, relativePath, placement) {
+async function readNote({ absolutePath, relativePath, placement }) {
   const content = await readFile2(absolutePath, "utf8");
   const note = { absolutePath, relativePath, content, placement };
   const match = content.match(/^---\s*\n([\s\S]*?)\n---(?:\s*\n|$)/);
@@ -163,7 +191,7 @@ async function checkVault(root, options = {}) {
   const canonicalRoot = path3.resolve(options.canonicalRoot ?? root);
   const catalogue = await openCatalogue(root);
   const { contract } = catalogue;
-  const [notes, filenamePolicyPaths] = await Promise.all([catalogue.notes(), catalogue.filenamePolicyPaths()]);
+  const { notes, filenamePolicyPaths } = await catalogue.notesWithFilenamePolicy();
   const issues = validateMarkdownFilenames(filenamePolicyPaths, contract);
   for (const note of notes) {
     issues.push(...validateFrontmatter(note, contract));
@@ -883,7 +911,7 @@ async function listNotes(root, family) {
   }
   const notes = [];
   const invalid = [];
-  for (const note of await catalogue.notes((placement) => !placement.isIndex && (!family || placement.family === family))) {
+  for (const note of await catalogue.notes((placement) => (!family || placement.family === family) && !placement.isIndex)) {
     const { title, type, status, summary } = note.frontmatter ?? {};
     if (typeof title !== "string" || !title.trim() || typeof type !== "string" || !type.trim() || typeof status !== "string" || !status.trim() || typeof summary !== "string" || !summary.trim()) {
       invalid.push(note.relativePath);

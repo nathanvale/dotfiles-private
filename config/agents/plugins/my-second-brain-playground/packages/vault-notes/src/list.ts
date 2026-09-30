@@ -54,7 +54,7 @@ async function listNotes(root: string, family?: string): Promise<NoteSummary[]> 
   }
   const notes: NoteSummary[] = [];
   const invalid: string[] = [];
-  for (const note of await catalogue.notes((placement) => !placement.isIndex && (!family || placement.family === family))) {
+  for (const note of await catalogue.notes((placement) => (!family || placement.family === family) && !placement.isIndex)) {
     const { title, type, status, summary } = note.frontmatter ?? {};
     if (typeof title !== "string" || !title.trim() || typeof type !== "string" || !type.trim() ||
         typeof status !== "string" || !status.trim() || typeof summary !== "string" || !summary.trim()) {
