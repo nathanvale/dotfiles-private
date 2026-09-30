@@ -1,5 +1,5 @@
-// Ticket #136 and Ticket #155 privacy invariants 1, 2, 4 and 5 through the public process. Invariant 3 (no existence
-// oracle) lives in oracle.test.ts. Every value is synthetic.
+// Ticket #136 and Ticket #155 privacy invariants 1, 2, 4 and 5 through the public process, with the grant and request
+// piped on standard input. Invariant 3 (no existence oracle) lives in oracle.test.ts. Every value is synthetic.
 import { afterEach, beforeEach, expect, test } from "bun:test"
 import { mkdirSync, readdirSync, readFileSync, statSync, symlinkSync } from "node:fs"
 import { join, resolve } from "node:path"
@@ -9,6 +9,7 @@ import {
 	envelope,
 	type Fixture,
 	grant,
+	input,
 	invoke,
 	OPAQUE_ITEM_REF,
 	REFUSAL_HUMAN,
@@ -17,7 +18,6 @@ import {
 	removeFixture,
 	request,
 	SENTINEL,
-	writeInputs,
 	writeJson,
 } from "./fixtures/harness.ts"
 
@@ -38,9 +38,9 @@ const refusedHuman = { exitCode: 3, stderr: REFUSAL_HUMAN, stdout: "" }
 // receiptSummary or any unrequested field.
 test("projects exactly the requested granted fields in machine and human mode", () => {
 	writeJson(fixture.receiptPath, receipt())
-	const [grantPath, requestPath] = writeInputs(fixture, grant(fixture), request())
+	const piped = input(grant(fixture), request())
 
-	const machine = invoke(fixture, [grantPath, requestPath, "--json"])
+	const machine = invoke(fixture, ["project", "--json"], { stdin: piped })
 	expect(machine.exitCode).toBe(0)
 	expect(machine.stderr).toBe("")
 	expect(envelope(machine).result).toMatchObject({
@@ -52,7 +52,7 @@ test("projects exactly the requested granted fields in machine and human mode", 
 	expect(Object.keys(envelope(machine).result.data.projection)).toEqual(["displayName", "mimeType"])
 	expect(machine.stdout).not.toContain(SENTINEL)
 
-	expect(invoke(fixture, [grantPath, requestPath])).toEqual({
+	expect(invoke(fixture, ["project"], { stdin: piped })).toEqual({
 		exitCode: 0,
 		stderr: "",
 		stdout: "Granted projection for synthetic-item-001:\n  displayName: Fictional planning note\n  mimeType: text/plain\n",
@@ -61,8 +61,8 @@ test("projects exactly the requested granted fields in machine and human mode", 
 
 test("projects a requested subset of the grant and keeps a numeric size", () => {
 	writeJson(fixture.receiptPath, receipt())
-	const [grantPath, requestPath] = writeInputs(fixture, grant(fixture, { allowedFields: ["displayName", "sizeBytes"] }), request({ requestedFields: ["sizeBytes"] }))
-	expect(envelope(invoke(fixture, [grantPath, requestPath, "--json"])).result.data).toEqual({ opaqueItemRef: OPAQUE_ITEM_REF, projection: { sizeBytes: 1234 } })
+	const piped = input(grant(fixture, { allowedFields: ["displayName", "sizeBytes"] }), request({ requestedFields: ["sizeBytes"] }))
+	expect(envelope(invoke(fixture, ["project", "--json"], { stdin: piped })).result.data).toEqual({ opaqueItemRef: OPAQUE_ITEM_REF, projection: { sizeBytes: 1234 } })
 })
 
 // Invariant 4: status and evaluation outputs stay fixed and never read a receipt.
@@ -97,9 +97,9 @@ test("refuses every sampled authority mismatch with identical bytes before a pri
 		["outside receipt path", { ...base, receiptPath: outsideReceiptPath }, request({ requestedFields: ["displayName"] })],
 	]
 	for (const [name, caseGrant, caseRequest] of cases) {
-		const [grantPath, requestPath] = writeInputs(fixture, caseGrant, caseRequest)
-		expect(invoke(fixture, [grantPath, requestPath, "--json"]), name).toEqual(refusedJson)
-		expect(invoke(fixture, [grantPath, requestPath]), name).toEqual(refusedHuman)
+		const piped = input(caseGrant, caseRequest)
+		expect(invoke(fixture, ["project", "--json"], { stdin: piped }), name).toEqual(refusedJson)
+		expect(invoke(fixture, ["project"], { stdin: piped }), name).toEqual(refusedHuman)
 	}
 })
 
@@ -111,8 +111,8 @@ test("refuses a symlinked private item directory before its receipt FIFO can ope
 	const linkedItem = join(itemsDirectory, "synthetic-item-003")
 	symlinkSync(redirected, linkedItem)
 	const receiptPath = join(linkedItem, "classification-metadata.json")
-	const [grantPath, requestPath] = writeInputs(fixture, grant(fixture, { opaqueItemRef: "synthetic-item-003", receiptPath }), request({ opaqueItemRef: "synthetic-item-003" }))
-	expect(invoke(fixture, [grantPath, requestPath, "--json"])).toEqual(refusedJson)
+	const piped = input(grant(fixture, { opaqueItemRef: "synthetic-item-003", receiptPath }), request({ opaqueItemRef: "synthetic-item-003" }))
+	expect(invoke(fixture, ["project", "--json"], { stdin: piped })).toEqual(refusedJson)
 })
 
 test("refuses a matching unsupported provider or purpose even with valid metadata", () => {
@@ -121,8 +121,8 @@ test("refuses a matching unsupported provider or purpose even with valid metadat
 		[{ provider: "opus" }, "provider"],
 		[{ purpose: "status-repair" }, "purpose"],
 	] as const) {
-		const [grantPath, requestPath] = writeInputs(fixture, grant(fixture, overrides), request(overrides))
-		expect(invoke(fixture, [grantPath, requestPath, "--json"]), name).toEqual(refusedJson)
+		const piped = input(grant(fixture, overrides), request(overrides))
+		expect(invoke(fixture, ["project", "--json"], { stdin: piped }), name).toEqual(refusedJson)
 	}
 })
 
@@ -139,24 +139,29 @@ test("a grant covers only its exact item, provider, purpose and listed fields", 
 		["grant receipt for another item", grant(fixture, { receiptPath: join(otherItem, "classification-metadata.json") }), request()],
 	]
 	for (const [name, caseGrant, caseRequest] of refusals) {
-		const [grantPath, requestPath] = writeInputs(fixture, caseGrant, caseRequest)
-		expect(invoke(fixture, [grantPath, requestPath, "--json"]), name).toEqual(refusedJson)
+		const piped = input(caseGrant, caseRequest)
+		expect(invoke(fixture, ["project", "--json"], { stdin: piped }), name).toEqual(refusedJson)
 	}
 	const { allowedFields: _omitted, ...withoutFields } = grant(fixture)
-	const [grantPath, requestPath] = writeInputs(fixture, withoutFields, request())
-	expect(envelope(invoke(fixture, [grantPath, requestPath, "--json"])).result).toMatchObject({ causeCode: "SCHEMA_INVALID_INPUT", exitCode: 4 })
+	const piped = input(withoutFields, request())
+	expect(envelope(invoke(fixture, ["project", "--json"], { stdin: piped })).result).toMatchObject({ causeCode: "SCHEMA_INVALID_INPUT", exitCode: 4 })
 })
 
-// Invariant 1 for the new schema class: a shape refusal is decided from caller input alone, so it still never opens
-// the receipt FIFO.
-test("refuses an extra grant or request key as invalid input before a private receipt FIFO can open", () => {
+// Invariant 1 for the schema class: a shape refusal is decided from piped caller input alone, so it never opens the
+// receipt FIFO.
+test("refuses a malformed piped document as invalid input before a private receipt FIFO can open", () => {
 	createFifo(fixture.receiptPath)
-	for (const [name, caseGrant, caseRequest] of [
-		["extra grant key", { ...grant(fixture), extra: true }, request()],
-		["extra request key", grant(fixture), { ...request(), extra: true }],
-	] as const) {
-		const [grantPath, requestPath] = writeInputs(fixture, caseGrant, caseRequest)
-		const result = invoke(fixture, [grantPath, requestPath, "--json"])
+	const cases: readonly [string, string][] = [
+		["extra grant key", input({ ...grant(fixture), extra: true }, request())],
+		["extra request key", input(grant(fixture), { ...request(), extra: true })],
+		["extra top-level key", JSON.stringify({ grant: grant(fixture), request: request(), extra: true })],
+		["missing request", JSON.stringify({ grant: grant(fixture) })],
+		["a JSON array", JSON.stringify([grant(fixture), request()])],
+		["empty input", ""],
+		["input over 64 KiB", input(grant(fixture), request({ padding: "x".repeat(70 * 1024) }))],
+	]
+	for (const [name, piped] of cases) {
+		const result = invoke(fixture, ["project", "--json"], { stdin: piped })
 		expect(result.exitCode, name).toBe(4)
 		expect(result.stderr, name).toBe("")
 		expect(envelope(result).result, name).toMatchObject({ causeCode: "SCHEMA_INVALID_INPUT", data: null })
@@ -166,6 +171,7 @@ test("refuses an extra grant or request key as invalid input before a private re
 // Independent oracle: restated from the README grant and request shapes, not imported from src/gate.ts.
 const GRANT_KEYS = "allowedFields,opaqueItemRef,provider,purpose,receiptPath"
 const REQUEST_KEYS = "opaqueItemRef,provider,purpose,requestedFields"
+const INPUT_KEYS = "grant,request"
 
 function jsonFiles(directory: string): string[] {
 	return readdirSync(directory).flatMap((name) => {
@@ -176,8 +182,8 @@ function jsonFiles(directory: string): string[] {
 	})
 }
 
-// Invariant 5: grant and request files stay in private runtime state. Wrong behavior caught: a committed fixture or
-// example grant or request anywhere in the plugin source tree.
+// Invariant 5: grants and requests stay in private runtime state. Wrong behavior caught: a committed fixture or
+// example grant, request or piped input document anywhere in the plugin source tree.
 test("the plugin tree stores no grant or request manifest", () => {
 	const files = jsonFiles(resolve(import.meta.dir, "../../.."))
 	expect(files.length).toBeGreaterThan(10)
@@ -185,7 +191,7 @@ test("the plugin tree stores no grant or request manifest", () => {
 		try {
 			const value: unknown = JSON.parse(readFileSync(path, "utf8"))
 			const keys = typeof value === "object" && value !== null ? Object.keys(value).sort().join(",") : ""
-			return keys === GRANT_KEYS || keys === REQUEST_KEYS
+			return keys === GRANT_KEYS || keys === REQUEST_KEYS || keys === INPUT_KEYS
 		} catch {
 			return false
 		}

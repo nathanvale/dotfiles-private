@@ -19,8 +19,8 @@ export const COMMANDS = [
 	{
 		commandIdentity: "source-intake-dispatch.project",
 		effectClass: "inspect",
-		route: ["GRANT", "REQUEST"],
-		summary: "Project only the granted classification metadata fields after validating a private grant and request.",
+		route: ["project"],
+		summary: "Project only the granted classification metadata fields after validating a grant and request piped on standard input.",
 	},
 	{ commandIdentity: "source-intake-dispatch.redacted", effectClass: "inspect", route: ["--redacted"], summary: "Return the fixed redacted projection for status or evaluation." },
 ] as const satisfies readonly { commandIdentity: Identity; effectClass: "inspect"; route: string[]; summary: string }[]
@@ -75,9 +75,9 @@ const STATIONS = {
 		outcome: "refused",
 		failureClass: "schema",
 		exitCode: 4,
-		trigger: "The grant or request file is not JSON or does not match its declared shape.",
-		repairAction: "Rewrite the grant and request with exactly the keys and value formats in the package README.",
-		guidance: { nextAction: "Fix the grant or request file against the package README, then retry." },
+		trigger: "Standard input is not one JSON object holding a grant and a request of the declared shape.",
+		repairAction: "Pipe exactly one JSON object with the grant and request keys and value formats in the package README.",
+		guidance: { nextAction: "Fix the piped grant and request against the package README, then retry." },
 	},
 	inputBusy: {
 		causeCode: "TRANSIENT_NOT_STARTED",
@@ -85,7 +85,7 @@ const STATIONS = {
 		failureClass: "transient",
 		exitCode: 75,
 		retryDelayMilliseconds: INPUT_RETRY_DELAY_MILLISECONDS,
-		trigger: "The grant or request file could not be opened because a file-descriptor limit was reached; no receipt was touched.",
+		trigger: "A file-descriptor limit was reached before input was read; no receipt was touched.",
 		repairAction: "Wait for open files to be released, then retry the same command.",
 		guidance: { nextAction: "Retry the same command after the stated delay." },
 	},
@@ -94,13 +94,13 @@ const STATIONS = {
 		outcome: "failed",
 		failureClass: "internal",
 		exitCode: 1,
-		trigger: "The grant or request path exists outside the item receipts but is not a readable regular file.",
-		repairAction: "Pass a readable regular file for the grant and the request.",
+		trigger: "Standard input cannot be read.",
+		repairAction: "Pipe the grant and request from a readable file or stream.",
 		guidance: {
 			handoff: {
 				owner: "human",
-				reason: "A private input file is present but unreadable, which the command cannot repair.",
-				inspect: ["ls -l on the grant and request paths"],
+				reason: "Standard input could not be read, which the command cannot repair.",
+				inspect: ["the standard input redirection of the calling command"],
 			},
 		},
 	},
@@ -129,7 +129,7 @@ const COMMAND_STATIONS: Record<CommandIdentity, readonly StationKey[]> = {
 }
 
 const SUCCESS_TRIGGERS: Record<CommandIdentity, string> = {
-	"source-intake-dispatch.project": "A matching grant and request yield exactly the requested granted fields from the bound receipt.",
+	"source-intake-dispatch.project": "A matching piped grant and request yield exactly the requested granted fields from the bound receipt.",
 	"source-intake-dispatch.redacted": "The recipient is status or evaluation; the fixed redacted projection is returned.",
 }
 
@@ -318,6 +318,7 @@ export function discoveryData() {
 			"Never reads Google Drive or any network resource.",
 			"Never discloses a receipt value, source label, path or raw error in a refusal.",
 			"Never opens a private receipt before the grant and request match.",
+			"Never opens a caller-supplied input path; the grant and request arrive on standard input.",
 			"Never approves a grant; it only checks one the Stage Manager prepared.",
 		],
 	}

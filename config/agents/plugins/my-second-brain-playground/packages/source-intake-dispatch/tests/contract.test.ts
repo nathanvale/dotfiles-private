@@ -8,37 +8,43 @@ import {
 	CHECKER,
 	createFixture,
 	DESCRIPTOR_LIMIT_PRELOAD,
+	EXHAUST_DESCRIPTORS,
 	envelope,
 	type Fixture,
 	grant,
+	type InvokeOptions,
+	input,
 	invoke,
 	RUNTIME,
 	receipt,
 	removeFixture,
 	request,
 	SENTINEL,
+	STDIN_ADAPTER,
 	STDOUT_HOLD_PRELOAD,
-	writeInputs,
+	writeInput,
 	writeJson,
 } from "./fixtures/harness.ts"
 
 let fixture: Fixture
-let valid: [string, string]
-let mismatched: [string, string]
-let invalidGrant: string
+let validInput: string
+let validPath: string
+let mismatchedInput: string
+let mismatchedPath: string
+let invalidPath: string
 let directory: string
-let busyGrant: string
 
 beforeAll(() => {
 	fixture = createFixture()
 	writeJson(fixture.receiptPath, receipt())
-	valid = writeInputs(fixture, grant(fixture), request(), "valid")
-	mismatched = writeInputs(fixture, grant(fixture), request({ provider: "opus" }), "mismatched")
-	invalidGrant = join(fixture.inputs, "invalid-grant.json")
-	writeFileSync(invalidGrant, "{broken")
+	validInput = input(grant(fixture), request())
+	validPath = writeInput(fixture, grant(fixture), request(), "valid")
+	mismatchedInput = input(grant(fixture), request({ provider: "opus" }))
+	mismatchedPath = writeInput(fixture, grant(fixture), request({ provider: "opus" }), "mismatched")
+	invalidPath = join(fixture.inputs, "invalid-input.json")
+	writeFileSync(invalidPath, "{broken")
 	directory = join(fixture.inputs, "a-directory")
 	mkdirSync(directory)
-	busyGrant = writeJson(join(fixture.inputs, "busy-grant.json"), grant(fixture))
 })
 
 afterAll(() => {
@@ -82,7 +88,7 @@ describe("help and discovery", () => {
 		const result = invoke(fixture, ["--help"])
 		expect(result.exitCode).toBe(0)
 		expect(result.stderr).toBe("")
-		expect(result.stdout).toContain("source-intake-dispatch GRANT REQUEST [--json]")
+		expect(result.stdout).toContain("source-intake-dispatch project [--json] < GRANT_AND_REQUEST.json")
 		expect(result.stdout).toContain("source-intake-dispatch --redacted RECIPIENT [--json]")
 	})
 
@@ -106,7 +112,7 @@ describe("help and discovery", () => {
 	})
 
 	test("human discovery is a concise line, not JSON", () => {
-		expect(invoke(fixture, ["--discover"])).toEqual({ exitCode: 0, stderr: "", stdout: "Profile complex. Commands: GRANT REQUEST (inspect), --redacted RECIPIENT (inspect).\n" })
+		expect(invoke(fixture, ["--discover"])).toEqual({ exitCode: 0, stderr: "", stdout: "Profile complex. Commands: project (inspect, reads standard input), --redacted RECIPIENT (inspect).\n" })
 	})
 
 	test("an unknown discovery selector is a usage refusal", () => {
@@ -119,8 +125,8 @@ const EXPECTED_STATIONS: Record<"project" | "redacted", string[]> = {
 	project: [
 		"DOMAIN_PRECONDITION_UNMET|refused|3|domain|false|Verify the private grant, then issue a request that matches it exactly.",
 		"INTERNAL_RESULT_UNCHANGED|failed|1|internal|false|Inspect the serialization failure before retrying.",
-		"INTERNAL_UNEXPECTED|failed|1|internal|false|Pass a readable regular file for the grant and the request.",
-		"SCHEMA_INVALID_INPUT|refused|4|schema|false|Rewrite the grant and request with exactly the keys and value formats in the package README.",
+		"INTERNAL_UNEXPECTED|failed|1|internal|false|Pipe the grant and request from a readable file or stream.",
+		"SCHEMA_INVALID_INPUT|refused|4|schema|false|Pipe exactly one JSON object with the grant and request keys and value formats in the package README.",
 		"SUCCESS_UNCHANGED|success|0||false|",
 		"TRANSIENT_NOT_STARTED|refused|75|transient|true|Wait for open files to be released, then retry the same command.",
 		"USAGE_INVALID_INVOCATION|refused|2|usage|false|Choose one listed invocation with its required operands and retry.",
@@ -133,22 +139,26 @@ const EXPECTED_STATIONS: Record<"project" | "redacted", string[]> = {
 }
 
 interface Row {
-	args: () => string[]
-	preload?: () => string
+	args: string[]
+	options?: () => InvokeOptions
 }
 
 // One invocation per reachable station.
 const REACHING_ROWS: Record<"project" | "redacted", Row[]> = {
 	project: [
-		{ args: () => [...valid] },
-		{ args: () => [valid[0]] },
-		{ args: () => [...mismatched] },
-		{ args: () => [invalidGrant, valid[1]] },
-		{ args: () => [directory, valid[1]] },
-		{ args: () => [busyGrant, valid[1]], preload: () => DESCRIPTOR_LIMIT_PRELOAD },
-		{ args: () => [...valid], preload: () => preload("throws", SERIALIZER_THROWS) },
+		{ args: ["project"], options: () => ({ stdin: validInput }) },
+		{ args: ["project", "extra"], options: () => ({ stdin: validInput }) },
+		{ args: ["project"], options: () => ({ stdin: mismatchedInput }) },
+		{ args: ["project"], options: () => ({ stdin: "{broken" }) },
+		{ args: ["project"], options: () => ({ stdinPath: directory }) },
+		{ args: ["project"], options: () => ({ stdin: validInput, preload: DESCRIPTOR_LIMIT_PRELOAD, env: EXHAUST_DESCRIPTORS }) },
+		{ args: ["project"], options: () => ({ stdin: validInput, preload: preload("throws", SERIALIZER_THROWS) }) },
 	],
-	redacted: [{ args: () => ["--redacted", "status"] }, { args: () => ["--redacted", "nobody"] }, { args: () => ["--redacted", "evaluation"], preload: () => preload("throws", SERIALIZER_THROWS) }],
+	redacted: [
+		{ args: ["--redacted", "status"] },
+		{ args: ["--redacted", "nobody"] },
+		{ args: ["--redacted", "evaluation"], options: () => ({ preload: preload("throws", SERIALIZER_THROWS) }) },
+	],
 }
 
 function projection(value: { causeCode: string; outcome: string; exitCode: number; failureClass: string | null; retryable: boolean; repairAction: string | null }): string {
@@ -160,7 +170,7 @@ for (const command of ["project", "redacted"] as const) {
 		const stations = envelope(invoke(fixture, ["--discover-command", `source-intake-dispatch.${command}`, "--json"])).result.data.stations
 		expect(stations.map(projection).sort()).toEqual(EXPECTED_STATIONS[command])
 		const observed = REACHING_ROWS[command].map((row) => {
-			const result = envelope(invoke(fixture, [...row.args(), "--json"], row.preload?.())).result
+			const result = envelope(invoke(fixture, [...row.args, "--json"], row.options?.())).result
 			expect(result.commandIdentity).toBe(`source-intake-dispatch.${command}`)
 			return projection(result)
 		})
@@ -170,25 +180,38 @@ for (const command of ["project", "redacted"] as const) {
 
 describe("validated output and transport failure", () => {
 	test("a serializable result that fails envelope validation is replaced by the internal fallback", () => {
-		const result = invoke(fixture, [...valid, "--json"], preload("drop", SERIALIZER_DROPS_FIELD))
+		const result = invoke(fixture, ["project", "--json"], { stdin: validInput, preload: preload("drop", SERIALIZER_DROPS_FIELD) })
 		expect(result.exitCode).toBe(1)
 		expect(envelope(result).result).toMatchObject({ causeCode: "INTERNAL_RESULT_UNCHANGED", outcome: "failed", data: null })
 		expect(result.stdout).not.toContain(SENTINEL)
 	})
 
 	test("machine mode: a failed stdout write leaves stderr empty and emits no replacement envelope", () => {
-		expect(invoke(fixture, [...valid, "--json"], preload("stdout", STDOUT_THROWS))).toEqual({ exitCode: 1, stdout: "", stderr: "" })
+		expect(invoke(fixture, ["project", "--json"], { stdin: validInput, preload: preload("stdout", STDOUT_THROWS) })).toEqual({ exitCode: 1, stdout: "", stderr: "" })
 	})
 
 	test("human mode: a failed stdout write prints one repair line on stderr", () => {
-		expect(invoke(fixture, [...valid], preload("stdout", STDOUT_THROWS))).toEqual({ exitCode: 1, stdout: "", stderr: "stdout cannot be written. Inspect the output stream before retrying.\n" })
+		expect(invoke(fixture, ["project"], { stdin: validInput, preload: preload("stdout", STDOUT_THROWS) })).toEqual({ exitCode: 1, stdout: "", stderr: "stdout cannot be written. Inspect the output stream before retrying.\n" })
 	})
 
-	test("non-TTY stdin is never read: a held-open pipe does not block the command", async () => {
-		const child = Bun.spawn([process.execPath, RUNTIME, ...valid, "--json"], { cwd: fixture.root, env: fixture.env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
-		const exitCode = await Promise.race([child.exited, Bun.sleep(5000).then(() => "timeout")])
-		child.stdin.end()
-		expect(exitCode).toBe(0)
+	test("held-open stdin: other commands never read it, and project waits for end of input", async () => {
+		const redacted = Bun.spawn([process.execPath, RUNTIME, "--redacted", "status", "--json"], { cwd: fixture.root, env: fixture.env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+		expect(await Promise.race([redacted.exited, Bun.sleep(5000).then(() => "timeout")])).toBe(0)
+		redacted.stdin.end()
+		const project = Bun.spawn([process.execPath, RUNTIME, "project", "--json"], { cwd: fixture.root, env: fixture.env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+		expect(await Promise.race([project.exited, Bun.sleep(300).then(() => "waiting")])).toBe("waiting")
+		project.stdin.write(validInput)
+		project.stdin.end()
+		expect(await Promise.race([project.exited, Bun.sleep(5000).then(() => "timeout")])).toBe(0)
+		expect(JSON.parse(await new Response(project.stdout).text()).result.causeCode).toBe("SUCCESS_UNCHANGED")
+	})
+
+	// A terminal on stdin is refused as usage instead of waiting for typed input. script(1) supplies the terminal; its
+	// arguments differ on Linux, so this proof runs on macOS only.
+	test.skipIf(process.platform !== "darwin")("a terminal on stdin is a usage refusal, never a prompt", () => {
+		const child = Bun.spawnSync(["/usr/bin/script", "-q", "/dev/null", process.execPath, RUNTIME, "project", "--json"], { cwd: fixture.root, env: fixture.env, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5000 })
+		expect(child.exitCode).toBe(2)
+		expect(new TextDecoder().decode(child.stdout)).toContain('"causeCode":"USAGE_INVALID_INVOCATION"')
 	})
 })
 
@@ -201,10 +224,10 @@ for (const [signal, exitCode] of [
 	test(`${signal} before any output exits ${exitCode} with empty streams in both output modes`, async () => {
 		for (const mode of [[], ["--json"]]) {
 			const ready = join(fixture.root, `ready-${signal}-${mode.length}`)
-			const child = Bun.spawn([process.execPath, "--preload", STDOUT_HOLD_PRELOAD, RUNTIME, ...valid, ...mode], {
+			const child = Bun.spawn([process.execPath, "--preload", STDOUT_HOLD_PRELOAD, RUNTIME, "project", ...mode], {
 				cwd: fixture.root,
 				env: { ...fixture.env, SOURCE_INTAKE_TEST_READY: ready },
-				stdin: "ignore",
+				stdin: new Blob([validInput]),
 				stdout: "pipe",
 				stderr: "pipe",
 			})
@@ -221,20 +244,23 @@ for (const [signal, exitCode] of [
 }
 
 test("the strict CLI Design checker passes every applicable row", () => {
-	const args = (paths: readonly string[]) => paths.join(" ")
+	// The checker passes argv only and gives every row /dev/null as stdin, so a test adapter maps stdin=FILE onto the
+	// command's standard input. The missing-input row pipes a matching grant for an item that has no receipt.
+	const missingPath = writeInput(fixture, grant(fixture, { opaqueItemRef: "synthetic-item-404", receiptPath: fixture.receiptPath.replace("synthetic-item-001", "synthetic-item-404") }), request({ opaqueItemRef: "synthetic-item-404" }), "missing")
+	const malformedPath = writeInput(fixture, grant(fixture), request({ opaqueItemRef: "Not_An_Item" }), "malformed")
 	const result = Bun.spawnSync(
 		[
 			CHECKER,
 			"--cwd", fixture.root,
-			"--command", `${process.execPath} --preload ${DESCRIPTOR_LIMIT_PRELOAD} ${RUNTIME}`,
-			"--success-args", args(valid),
-			"--missing-args", args([join(fixture.inputs, "absent-grant.json"), valid[1]]),
-			"--internal-args", args([directory, valid[1]]),
-			"--schema-args", args([invalidGrant, valid[1]]),
-			"--transient-args", args([busyGrant, valid[1]]),
-			"--effect-args", args(mismatched),
-			"--malformed-args", args(writeInputs(fixture, grant(fixture), request({ opaqueItemRef: "Not_An_Item" }), "malformed")),
-			"--secret-args", args(valid),
+			"--command", `/bin/sh ${STDIN_ADAPTER} ${process.execPath} ${RUNTIME}`,
+			"--success-args", `stdin=${validPath} project`,
+			"--missing-args", `stdin=${missingPath} project`,
+			"--internal-args", `stdin=${directory} project`,
+			"--schema-args", `stdin=${invalidPath} project`,
+			"--transient-args", `stdin-busy=${validPath} project`,
+			"--effect-args", `stdin=${mismatchedPath} project`,
+			"--malformed-args", `stdin=${malformedPath} project`,
+			"--secret-args", `stdin=${validPath} project`,
 			"--secret-marker", SENTINEL,
 			"--timeout-ms", "30000",
 			"--json",

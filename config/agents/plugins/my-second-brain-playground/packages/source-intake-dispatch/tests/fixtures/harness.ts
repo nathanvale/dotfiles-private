@@ -1,6 +1,6 @@
 // Process seam for Source Intake dispatch tests. Each fixture is a private synthetic root with its own XDG_STATE_HOME,
-// one opaque item directory, and an input directory outside the items tree for grants and requests. Every value is
-// fictional. Nothing here imports the modules under test.
+// one opaque item directory, and a scratch directory outside the items tree. The grant and request reach the command
+// on standard input. Every value is fictional. Nothing here imports the modules under test.
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
@@ -9,10 +9,11 @@ const PLUGIN_ROOT = resolve(import.meta.dir, "../../../..")
 export const COMMAND = join(PLUGIN_ROOT, "bin/source-intake-dispatch")
 export const RUNTIME = join(PLUGIN_ROOT, "runtime/source-intake-dispatch.js")
 export const CHECKER = join(PLUGIN_ROOT, "bin/cli-design-check")
-/** Opens descriptors until the process limit when an argument names busy-grant.json, so the next open hits EMFILE. */
+/** With SOURCE_INTAKE_TEST_EXHAUST_DESCRIPTORS set, opens descriptors until the process limit before the command runs. */
 export const DESCRIPTOR_LIMIT_PRELOAD = join(import.meta.dir, "descriptor-limit.ts")
-/** Answers the OS account-record lookup with SOURCE_INTAKE_TEST_ACCOUNT_HOME. */
-export const ACCOUNT_RECORD_PRELOAD = join(import.meta.dir, "account-record.ts")
+export const EXHAUST_DESCRIPTORS = { SOURCE_INTAKE_TEST_EXHAUST_DESCRIPTORS: "1" }
+/** Checker adapter: maps a leading stdin=FILE or stdin-busy=FILE argument onto the command's standard input. */
+export const STDIN_ADAPTER = join(import.meta.dir, "stdin-adapter.sh")
 /** Holds the first stdout write undelivered and marks SOURCE_INTAKE_TEST_READY. */
 export const STDOUT_HOLD_PRELOAD = join(import.meta.dir, "stdout-hold.ts")
 
@@ -87,15 +88,34 @@ export function request(overrides: Record<string, unknown> = {}): Record<string,
 	return { opaqueItemRef: OPAQUE_ITEM_REF, provider: "luna", purpose: "classification", requestedFields: ["displayName", "mimeType"], ...overrides }
 }
 
-/** Writes one grant and one request under the fixture's input directory and returns their paths. */
-export function writeInputs(fixture: Fixture, grantValue: unknown, requestValue: unknown, name = "case"): [string, string] {
-	return [writeJson(join(fixture.inputs, `${name}-grant.json`), grantValue), writeJson(join(fixture.inputs, `${name}-request.json`), requestValue)]
+/** The one piped input document: the grant and the request. */
+export function input(grantValue: unknown, requestValue: unknown): string {
+	return JSON.stringify({ grant: grantValue, request: requestValue })
 }
 
-/** Runs the public command. A preload runs the committed runtime under that preload instead of the bin wrapper. */
-export function invoke(fixture: Fixture, args: readonly string[], preload?: string): ProcessResult {
-	const cmd = preload === undefined ? [COMMAND, ...args] : [process.execPath, "--preload", preload, RUNTIME, ...args]
-	const child = Bun.spawnSync({ cmd, cwd: fixture.root, env: fixture.env, stdin: "ignore", stderr: "pipe", stdout: "pipe", timeout: 5000 })
+/** Writes one piped input document under the fixture's scratch directory and returns its path. */
+export function writeInput(fixture: Fixture, grantValue: unknown, requestValue: unknown, name = "case"): string {
+	const path = join(fixture.inputs, `${name}-input.json`)
+	writeFileSync(path, input(grantValue, requestValue))
+	return path
+}
+
+export interface InvokeOptions {
+	/** Text piped to standard input. */
+	stdin?: string
+	/** A path redirected onto standard input by the shell, so a directory or FIFO can stand in for a pipe. */
+	stdinPath?: string
+	/** Runs the committed runtime under this preload instead of the bin wrapper. */
+	preload?: string
+	env?: Record<string, string>
+}
+
+/** Runs the public command. Standard input is empty unless a test pipes text or redirects a path. */
+export function invoke(fixture: Fixture, args: readonly string[], options: InvokeOptions = {}): ProcessResult {
+	const target = options.preload === undefined ? [COMMAND, ...args] : [process.execPath, "--preload", options.preload, RUNTIME, ...args]
+	const cmd = options.stdinPath === undefined ? target : ["/bin/sh", "-c", 'file=$1; shift; exec "$@" < "$file"', "sh", options.stdinPath, ...target]
+	const stdin = options.stdin === undefined ? "ignore" : new TextEncoder().encode(options.stdin)
+	const child = Bun.spawnSync({ cmd, cwd: fixture.root, env: { ...fixture.env, ...options.env }, stdin, stderr: "pipe", stdout: "pipe", timeout: 5000 })
 	return { exitCode: child.exitCode, stderr: new TextDecoder().decode(child.stderr), stdout: new TextDecoder().decode(child.stdout) }
 }
 

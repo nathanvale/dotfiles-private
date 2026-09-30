@@ -1,16 +1,20 @@
 // Ticket #155 invariant 3: no existence oracle. Each probe runs the same invocation against a present and an absent
 // (or otherwise unusable) receipt and requires byte-identical exit, stdout and stderr in both output modes. Outcomes
 // that depend on the receipt must equal the fixed authority refusal; the usage, schema, internal and transient
-// classes must come from caller input alone and so must not vary with the receipt either.
+// classes must come from piped caller input alone and so must not vary with the receipt either. The grant and request
+// arrive on standard input, so the grant's receiptPath is the only caller-named path.
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { chmodSync, existsSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import {
-	ACCOUNT_RECORD_PRELOAD,
+	createFifo,
 	createFixture,
 	DESCRIPTOR_LIMIT_PRELOAD,
+	EXHAUST_DESCRIPTORS,
 	type Fixture,
 	grant,
+	type InvokeOptions,
+	input,
 	invoke,
 	type ProcessResult,
 	REFUSAL_HUMAN,
@@ -19,7 +23,6 @@ import {
 	removeFixture,
 	request,
 	SENTINEL,
-	writeInputs,
 	writeJson,
 } from "./fixtures/harness.ts"
 
@@ -64,107 +67,170 @@ const UNUSABLE: Record<string, ReceiptState> = {
 	"with no item directory": (target) => renameSync(target.itemDirectory, join(target.root, "moved-item")),
 }
 
-function both(args: readonly string[], preload?: string): { machine: ProcessResult; human: ProcessResult } {
-	return { machine: invoke(fixture, [...args, "--json"], preload), human: invoke(fixture, args, preload) }
+type Outputs = { machine: ProcessResult; human: ProcessResult }
+type Invocation = { args: readonly string[]; options?: InvokeOptions }
+
+function both(invocation: Invocation): Outputs {
+	return { machine: invoke(fixture, [...invocation.args, "--json"], invocation.options), human: invoke(fixture, invocation.args, invocation.options) }
+}
+
+function piped(grantValue: unknown, requestValue: unknown): Invocation {
+	return { args: ["project"], options: { stdin: input(grantValue, requestValue) } }
 }
 
 /** Runs one invocation under a fresh fixture per receipt state and returns each state's outputs. */
-function probe(states: Record<string, ReceiptState>, args: (target: Fixture) => readonly string[], preload?: string): Record<string, ReturnType<typeof both>> {
-	const observed: Record<string, ReturnType<typeof both>> = {}
+function probe(states: Record<string, ReceiptState>, build: (target: Fixture) => Invocation): Record<string, Outputs> {
+	const observed: Record<string, Outputs> = {}
 	for (const [name, state] of Object.entries(states)) {
 		removeFixture(fixture)
 		fixture = createFixture()
-		const argv = args(fixture)
+		const invocation = build(fixture)
 		state(fixture)
-		observed[name] = both(argv, preload)
+		observed[name] = both(invocation)
 	}
 	return observed
 }
 
 const refused = { machine: { exitCode: 3, stderr: "", stdout: REFUSAL_JSON }, human: { exitCode: 3, stderr: REFUSAL_HUMAN, stdout: "" } }
 
-function expectAllRefused(observed: Record<string, ReturnType<typeof both>>): void {
+function expectAllRefused(observed: Record<string, Outputs>): void {
 	expect(Object.keys(observed).length).toBeGreaterThan(1)
 	for (const [name, outputs] of Object.entries(observed)) expect(outputs, name).toEqual(refused)
 }
 
 test("a mismatched request is refused identically whether the receipt is present or absent", () => {
-	expectAllRefused(probe({ present, absent }, (target) => writeInputs(target, grant(target), request({ provider: "opus" }))))
+	expectAllRefused(probe({ present, absent }, (target) => piped(grant(target), request({ provider: "opus" }))))
 })
 
 test("a matching request against any unusable receipt is refused identically to an absent one", () => {
-	expectAllRefused(probe(UNUSABLE, (target) => writeInputs(target, grant(target), request())))
+	expectAllRefused(probe(UNUSABLE, (target) => piped(grant(target), request())))
 })
 
 test("a present, usable receipt is the only state that changes the outcome", () => {
-	const observed = probe({ present }, (target) => writeInputs(target, grant(target), request()))
+	const observed = probe({ present }, (target) => piped(grant(target), request()))
 	expect(observed.present?.machine.exitCode).toBe(0)
 	expect(observed.present?.machine.stdout).not.toContain(SENTINEL)
 })
 
-// A caller that names a receipt as its own grant or request must not learn whether that receipt exists or parses.
-const ALIASES: Record<string, (target: Fixture) => readonly string[]> = {
-	"request path is the receipt": (target) => [writeInputs(target, grant(target), request())[0], target.receiptPath],
-	"grant path is the receipt": (target) => [target.receiptPath, writeInputs(target, grant(target), request())[1]],
-	"request path is a symlink to the receipt": (target) => {
-		const link = join(target.inputs, "linked-request.json")
-		symlinkSync(target.receiptPath, link)
-		return [writeInputs(target, grant(target), request())[0], link]
+// The path-open surface is gone: an operand is never read as input. A FIFO operand would hang the command if opened.
+// Wrong behavior caught: reading a grant or request from a caller-supplied path.
+const OPERANDS: Record<string, (target: Fixture) => readonly string[]> = {
+	"the receipt as a project operand": (target) => ["project", target.receiptPath],
+	"a FIFO as a project operand": (target) => {
+		const fifo = join(target.inputs, "operand.fifo")
+		createFifo(fifo)
+		return ["project", fifo]
 	},
-	"request path goes through a symlinked directory into the item": (target) => {
-		const link = join(target.inputs, "linked-item")
-		symlinkSync(target.itemDirectory, link)
-		return [writeInputs(target, grant(target), request())[0], join(link, "classification-metadata.json")]
+	"the former GRANT REQUEST form naming the receipt and a FIFO": (target) => {
+		const fifo = join(target.inputs, "request.fifo")
+		createFifo(fifo)
+		return [target.receiptPath, fifo]
 	},
-	"request path uses dot segments into the item": (target) => [writeInputs(target, grant(target), request())[0], join(target.inputs, "..", "state", "my-second-brain-playground", "drive-inbox-filing", "items", "synthetic-item-001", "classification-metadata.json")],
-	"request path is the item directory": (target) => [writeInputs(target, grant(target), request())[0], target.itemDirectory],
 }
 
-for (const [name, args] of Object.entries(ALIASES)) {
-	test(`${name}: refused identically whether the receipt is present or absent`, () => {
-		expectAllRefused(probe({ present, absent }, args))
+for (const [name, args] of Object.entries(OPERANDS)) {
+	test(`${name}: a usage refusal, identical present or absent, and never opened`, () => {
+		const observed = probe({ present, absent }, (target) => ({ args: args(target), options: { stdin: input(grant(target), request()) } }))
+		expect(observed.present?.machine.exitCode).toBe(2)
+		expect(observed.present?.human.stdout).toBe("")
+		expect(observed.present).toEqual(observed.absent as Outputs)
 	})
 }
 
-test("a case-variant spelling of the receipt path is refused on a case-insensitive volume", () => {
-	const upper = (target: Fixture) => target.receiptPath.replace("/drive-inbox-filing/", "/DRIVE-INBOX-FILING/")
-	present(fixture)
-	if (!existsSync(upper(fixture))) return // A case-sensitive volume cannot resolve the variant, so there is no alias.
-	expectAllRefused(probe({ present, absent }, (target) => [writeInputs(target, grant(target), request())[0], upper(target)]))
+// The grant's receiptPath is the only caller-named path. With an authorized request, every spelling other than the
+// exact receipt path under the configured root is refused before it is touched, present or absent.
+const RECEIPT_PATH_ALIASES: Record<string, (target: Fixture) => string> = {
+	"a symlink to the receipt": (target) => {
+		const link = join(target.inputs, "linked-receipt.json")
+		symlinkSync(target.receiptPath, link)
+		return link
+	},
+	"a path through a symlinked directory into the item": (target) => {
+		const link = join(target.inputs, "linked-item")
+		symlinkSync(target.itemDirectory, link)
+		return join(link, "classification-metadata.json")
+	},
+	"a link target that walks through the item directory and back out": (target) => {
+		writeJson(join(target.inputs, "walk-target.json"), receipt())
+		const link = join(target.inputs, "walk-receipt.json")
+		// A raw string: path.join would collapse the dot segments and the target would never enter the item directory.
+		symlinkSync(`${target.itemDirectory}/../../../../../inputs/walk-target.json`, link)
+		return link
+	},
+	"a case-variant spelling": (target) => target.receiptPath.replace("/drive-inbox-filing/", "/DRIVE-INBOX-FILING/"),
+	"the item directory": (target) => target.itemDirectory,
+}
+
+for (const [name, receiptPath] of Object.entries(RECEIPT_PATH_ALIASES)) {
+	test(`receiptPath as ${name}: refused identically whether the receipt is present or absent`, () => {
+		expectAllRefused(probe({ present, absent }, (target) => piped(grant(target, { receiptPath: receiptPath(target) }), request())))
+	})
+}
+
+// Trusted configuration boundary: with HOME and XDG_STATE_HOME at a decoy, a receipt under any other root, such as
+// the account's default root, cannot be reached, whether named directly or linked into the decoy tree.
+function otherRootReceipt(target: Fixture): string {
+	return join(target.root, "account", ".local", "state", "my-second-brain-playground", "drive-inbox-filing", "items", "synthetic-item-001", "classification-metadata.json")
+}
+
+const otherRootPresent: ReceiptState = (target) => {
+	mkdirSync(join(otherRootReceipt(target), ".."), { recursive: true })
+	writeJson(otherRootReceipt(target), receipt())
+}
+
+function decoyState(target: Fixture): string {
+	const decoy = join(target.root, "decoy")
+	target.env.HOME = decoy
+	target.env.XDG_STATE_HOME = join(decoy, "state")
+	return join(decoy, "state")
+}
+
+test("with a decoy HOME and XDG_STATE_HOME, a receipt under another root named as receiptPath is refused identically", () => {
+	expectAllRefused(
+		probe({ present: otherRootPresent, absent }, (target) => {
+			mkdirSync(decoyState(target), { recursive: true })
+			return piped(grant(target, { receiptPath: otherRootReceipt(target) }), request())
+		}),
+	)
 })
 
-// The new classes read caller input only. Each must give the same bytes with a present or an absent receipt.
-const CALLER_CLASSES: Record<string, { args: (target: Fixture) => readonly string[]; exitCode: number; preload?: string }> = {
-	"usage: one operand": { args: (target) => [writeInputs(target, grant(target), request())[0]], exitCode: 2 },
-	"schema: grant is not JSON": {
-		args: (target) => {
-			const grantPath = join(target.inputs, "invalid-grant.json")
-			writeFileSync(grantPath, "{broken")
-			return [grantPath, writeInputs(target, grant(target), request())[1]]
-		},
-		exitCode: 4,
-	},
-	"schema: malformed opaque reference": { args: (target) => writeInputs(target, grant(target), request({ opaqueItemRef: "Not_An_Item" })), exitCode: 4 },
-	"internal: grant is a directory outside the items tree": {
-		args: (target) => {
+test("with a decoy HOME and XDG_STATE_HOME, a decoy items tree linked to another root is refused identically", () => {
+	expectAllRefused(
+		probe({ present: otherRootPresent, absent }, (target) => {
+			const decoyItems = join(decoyState(target), "my-second-brain-playground", "drive-inbox-filing", "items")
+			const otherItems = join(otherRootReceipt(target), "..", "..")
+			mkdirSync(otherItems, { recursive: true })
+			mkdirSync(join(decoyItems, ".."), { recursive: true })
+			symlinkSync(otherItems, decoyItems)
+			return piped(grant(target, { receiptPath: join(decoyItems, "synthetic-item-001", "classification-metadata.json") }), request())
+		}),
+	)
+})
+
+// The other classes read piped caller input only. Each must give the same bytes with a present or an absent receipt.
+const CALLER_CLASSES: Record<string, { build: (target: Fixture) => Invocation; exitCode: number }> = {
+	"usage: an operand after project": { build: (target) => ({ args: ["project", "extra"], options: { stdin: input(grant(target), request()) } }), exitCode: 2 },
+	"schema: input is not JSON": { build: () => ({ args: ["project"], options: { stdin: "{broken" } }), exitCode: 4 },
+	"schema: malformed opaque reference": { build: (target) => piped(grant(target), request({ opaqueItemRef: "Not_An_Item" })), exitCode: 4 },
+	"internal: standard input is a directory": {
+		build: (target) => {
 			const directory = join(target.inputs, "a-directory")
 			mkdirSync(directory)
-			return [directory, writeInputs(target, grant(target), request())[1]]
+			return { args: ["project"], options: { stdinPath: directory } }
 		},
 		exitCode: 1,
 	},
-	"transient: descriptor limit before the grant opens": {
-		args: (target) => [writeJson(join(target.inputs, "busy-grant.json"), grant(target)), writeInputs(target, grant(target), request())[1]],
+	"transient: descriptor limit before input is read": {
+		build: (target) => ({ args: ["project"], options: { stdin: input(grant(target), request()), preload: DESCRIPTOR_LIMIT_PRELOAD, env: EXHAUST_DESCRIPTORS } }),
 		exitCode: 75,
-		preload: DESCRIPTOR_LIMIT_PRELOAD,
 	},
 }
 
 for (const [name, row] of Object.entries(CALLER_CLASSES)) {
 	test(`${name}: identical with a present or absent receipt`, () => {
-		const observed = probe({ present, absent }, row.args, row.preload)
+		const observed = probe({ present, absent }, row.build)
 		expect(observed.present?.machine.exitCode).toBe(row.exitCode)
-		expect(observed.present).toEqual(observed.absent as ReturnType<typeof both>)
+		expect(observed.present).toEqual(observed.absent as Outputs)
 		for (const outputs of Object.values(observed)) {
 			expect(`${outputs.machine.stdout}${outputs.machine.stderr}${outputs.human.stdout}${outputs.human.stderr}`).not.toContain(SENTINEL)
 			expect(outputs.machine.stdout).not.toContain(fixture.root)
@@ -175,61 +241,8 @@ for (const [name, row] of Object.entries(CALLER_CLASSES)) {
 
 test("an absent XDG state home is refused identically to an absent receipt", () => {
 	const observed = probe({ absent }, (target) => {
-		const inputs = writeInputs(target, grant(target), request())
 		target.env.XDG_STATE_HOME = join(target.root, "missing-state")
-		return inputs
+		return piped(grant(target), request())
 	})
 	expect(observed.absent).toEqual(refused)
-})
-
-// A link outside the items tree whose target walks into the item directory and back out. Resolving it physically would
-// succeed only when the item directory exists, so the outcome must not depend on that directory.
-const itemDirectoryPresent: ReceiptState = present
-const itemDirectoryAbsent: ReceiptState = (target) => renameSync(target.itemDirectory, join(target.root, "moved-item"))
-
-const WALK_BACK_OUT: Record<string, { exitCode: number; create: (path: string) => void }> = {
-	schema: { exitCode: 4, create: (path) => writeFileSync(path, "{broken") },
-	internal: { exitCode: 1, create: (path) => mkdirSync(path) },
-}
-
-for (const [name, row] of Object.entries(WALK_BACK_OUT)) {
-	test(`${name}: a grant link whose target walks through the item directory and back out is identical with the item directory present or absent`, () => {
-		const observed = probe({ itemDirectoryPresent, itemDirectoryAbsent }, (target) => {
-			row.create(join(target.inputs, "walk-target"))
-			const link = join(target.inputs, "walk-grant.json")
-			// A raw string: path.join would collapse the dot segments and the target would never enter the item directory.
-			symlinkSync(`${target.itemDirectory}/../../../../../inputs/walk-target`, link)
-			return [link, writeInputs(target, grant(target), request())[1]]
-		})
-		expect(Object.keys(observed)).toEqual(["itemDirectoryPresent", "itemDirectoryAbsent"])
-		expect(observed.itemDirectoryPresent?.machine.exitCode).toBe(row.exitCode)
-		expect(observed.itemDirectoryPresent).toEqual(observed.itemDirectoryAbsent as ReturnType<typeof both>)
-	})
-}
-
-// Trusted configuration boundary: the account's default receipt root, read from the OS account record, stays guarded
-// even when HOME and XDG_STATE_HOME point at a decoy. The preload substitutes a synthetic account record.
-function accountReceiptPath(target: Fixture): string {
-	return join(target.root, "account", ".local", "state", "my-second-brain-playground", "drive-inbox-filing", "items", "synthetic-item-001", "classification-metadata.json")
-}
-
-const accountReceiptPresent: ReceiptState = (target) => {
-	mkdirSync(join(accountReceiptPath(target), ".."), { recursive: true })
-	writeJson(accountReceiptPath(target), receipt())
-}
-
-test("a default-root receipt named as the grant is refused identically when HOME and XDG_STATE_HOME point at a decoy", () => {
-	const observed = probe(
-		{ present: accountReceiptPresent, absent },
-		(target) => {
-			const decoy = join(target.root, "decoy")
-			mkdirSync(join(decoy, "state"), { recursive: true })
-			target.env.HOME = decoy
-			target.env.XDG_STATE_HOME = join(decoy, "state")
-			target.env.SOURCE_INTAKE_TEST_ACCOUNT_HOME = join(target.root, "account")
-			return [accountReceiptPath(target), writeInputs(target, grant(target), request())[1]]
-		},
-		ACCOUNT_RECORD_PRELOAD,
-	)
-	expectAllRefused(observed)
 })

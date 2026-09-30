@@ -31,21 +31,21 @@ Task's binding. Reuse this run's Bead and private receipt on resume.
 
 Before the classifier lane is cast, Stage Manager verifies Nathan's recorded
 grant for the exact item, provider `luna`, classification purpose, and every
-metadata field in the dispatch. Stage Manager prepares the private grant and
-request according to the command contract in
-[`source-intake-dispatch`](../../packages/source-intake-dispatch/README.md): it
-validates both before opening the classification metadata. Only its allowed
-projection reaches the classifier lane; a refusal is final until Stage Manager
-verifies a matching grant. Do not give the classifier lane a receipt path or raw
-item receipt. Status and evaluation use the command's fixed redacted projection
-by default. When an exact user grant expressly authorizes the DIS-7
-fresh-evaluator route, that foreground evaluator may inspect the private receipt
-and exact Drive readback; it is a separate route and never a classifier-lane
-input. Vault Steward receives only Nathan-approved note content. This Cast
-Member receives the projection, public owner notes, and redacted Bead state for
-its one-item judgments. Another provider needs its own supported lane and
-recorded grant. For a foreground invocation, obtain the same grant before the
-model receives source details. Require an exact account alias mapped to the
+metadata field in the dispatch. Stage Manager pipes the private grant and
+request to the command as the contract in
+[`source-intake-dispatch`](../../packages/source-intake-dispatch/README.md)
+describes; it validates both before opening the classification metadata. Only
+its allowed projection reaches the classifier lane; a refusal is final until
+Stage Manager verifies a matching grant. Do not give the classifier lane a
+receipt path or raw item receipt. Status and evaluation use the command's fixed
+redacted projection by default. When an exact user grant expressly authorizes
+the DIS-7 fresh-evaluator route, that foreground evaluator may inspect the
+private receipt and exact Drive readback; it is a separate route and never a
+classifier-lane input. Vault Steward receives only Nathan-approved note content.
+This Cast Member receives the projection, public owner notes, and redacted Bead
+state for its one-item judgments. Another provider needs its own supported lane
+and recorded grant. For a foreground invocation, obtain the same grant before
+the model receives source details. Require an exact account alias mapped to the
 account or drive outside Git, the original file ID, and permitted reads. Verify
 the scoped ID is currently under `00 Inbox` before a new filing. A verified
 Drive-complete receipt resumes at step 5 after the step 6 inspection. Already
@@ -71,8 +71,8 @@ states `proposed`, `drive-complete`, `vault-pending`, and `complete`;
 distinguish an unknown effect explicitly. Set retention review for 30 days after
 creation; Stage Manager reviews and owns any later deletion. No automatic
 deletion. Keep raw account email, permission list, access-bearing links or keys,
-source bytes, personal filename, and dispatch grant and request files out of Git
-and Beads.
+source bytes, personal filename, and live dispatch grant and request input out
+of Git and Beads.
 
 Keep the command's classification metadata input separate from this receipt's
 action and readback records. Use the linked command contract for its fields.

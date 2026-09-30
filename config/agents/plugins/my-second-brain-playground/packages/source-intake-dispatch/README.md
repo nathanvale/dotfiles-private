@@ -7,7 +7,7 @@ supported-path guard, not filesystem isolation.
 ## Command
 
 ```sh
-source-intake-dispatch GRANT REQUEST [--json]
+source-intake-dispatch project [--json] < GRANT_AND_REQUEST.json
 source-intake-dispatch --redacted status [--json]
 source-intake-dispatch --redacted evaluation [--json]
 source-intake-dispatch --help | --discover | --discover-command COMMAND_IDENTITY [--json]
@@ -19,11 +19,17 @@ checks an exact-item approval grant). Every command has effect class `inspect`
 and writes nothing. Human mode prints one concise line or block; `--json`
 prints one validated 2.0 envelope on stdout with empty stderr.
 
+`project` reads its grant and request only from standard input, to end of
+input, and takes no operands. It waits until the caller closes standard input;
+SIGINT exits 130 and SIGTERM exits 143 while it waits. Empty input is invalid
+input. A terminal on standard input is refused as usage; the command never
+prompts. No other command reads standard input.
+
 ## Grant, request and receipt
 
-The grant and request are private runtime JSON files. Keep them outside the
-item receipts tree, out of Git and out of Beads; a grant or request path that
-reaches an items tree is denied (see Privacy boundary).
+Pipe one JSON object of at most 64 KiB with exactly two keys, `grant` and
+`request`. Live grant and request input stays in private runtime state, out of
+Git and out of Beads.
 
 - The grant has exactly `opaqueItemRef`, `provider`, `purpose`,
   `allowedFields`, and `receiptPath`.
@@ -31,7 +37,7 @@ reaches an items tree is denied (see Privacy boundary).
   `requestedFields`.
 - `opaqueItemRef` is a lowercase letter or number followed by up to 63
   lowercase letters, numbers or hyphens. It identifies the sole receipt
-  location:
+  location, and `receiptPath` must be exactly this path:
 
 ```text
 ${XDG_STATE_HOME:-$HOME/.local/state}/my-second-brain-playground/drive-inbox-filing/items/<opaqueItemRef>/classification-metadata.json
@@ -44,33 +50,32 @@ JSON object; each projected value is a string or finite number.
 
 ## Privacy boundary
 
+- The command opens no caller-supplied input path. The grant and request
+  arrive on standard input; an operand after `project` is a usage refusal and
+  is never read.
+- The grant's `receiptPath` is the only caller-named path, and it is only
+  compared as text. Unless it equals the exact receipt path under the
+  configured root, the request is denied before anything is touched. The
+  receipt is read only after authorization, only through that computed path,
+  and never through a link.
 - `HOME` and `XDG_STATE_HOME` are trusted configuration set by the granted
   foreground caller (Nathan, 2026-09-30). They select the receipt root above.
 - The account's default receipt root stays guarded regardless of both
-  variables. The command reads the account's home from the operating-system
-  account record (`/usr/bin/id -P` on macOS, `getent passwd` on Linux; Bun's
-  `os.userInfo().homedir` follows `HOME`, so it is not used) and denies any
-  caller path that reaches
-  `<home>/.local/state/my-second-brain-playground/drive-inbox-filing/items`.
-  An unreadable account record denies every request.
+  variables: when they select another root, a receipt under the account's
+  default root cannot be named as `receiptPath`, and a configured tree that
+  links into it is denied.
 - A caller who controls those variables and moves the receipt root to a
   non-default location is outside this supported-path guard, as Ticket #136
   scopes it.
-- Grant and request paths resolve one component at a time. A link target is
-  normalized lexically, so its `..` never visits the directory before it. A
-  static path that reaches either items tree, by spelling or by directory
-  identity, is denied before it is touched. At open, the final component is
-  not followed.
-- Concurrent caller mutation is outside the supported-path guarantee
-  (Nathan, 2026-09-30): a caller that swaps, relinks or otherwise mutates its
-  own path components while the command runs is out of scope, as Ticket #136
-  already scopes a caller with filesystem access. The no-existence-oracle
-  guarantee holds for caller paths that do not change during the invocation.
-  This relaxes nothing else: exact-item grants, the fixed value-free denial,
-  the guarded account default root, and the classifier read prevention (T-2)
-  required before any exact-item filing all stand.
-- Known residual: a hardlink to a receipt placed outside the items tree is
-  not detected.
+- Piped input (Nathan, 2026-09-30) replaces the earlier exclusion for callers
+  that mutate their own path components during a run: no caller-owned path is
+  opened, so there is none to swap. Nothing else relaxes: exact-item grants,
+  the fixed value-free denial, the guarded account default root, and the
+  classifier read prevention (T-2) required before any exact-item filing all
+  stand.
+- Known residual: the receipt link checks and the receipt read are separate
+  calls, so a change inside the configured receipt tree between them is not
+  detected. Making that change needs write access inside that tree.
 
 ## Outcomes
 
@@ -79,18 +84,18 @@ the receipt.
 
 | Exit | Cause | When |
 | --- | --- | --- |
-| 0 | `SUCCESS_UNCHANGED` | The projection holds exactly the requested granted fields; `--redacted` returns `{"receipt":"[REDACTED]"}`. |
-| 2 | `USAGE_INVALID_INVOCATION` | Wrong operand count, unknown option or unknown recipient. |
+| 0 | `SUCCESS_UNCHANGED` | The projection holds exactly the requested granted fields; `--redacted` returns `{"recipient":"status","projection":{"receipt":"[REDACTED]"}}` (or `evaluation`). |
+| 2 | `USAGE_INVALID_INVOCATION` | An operand after `project`, a terminal on standard input, an unknown option, or an unknown recipient. |
 | 3 | `DOMAIN_PRECONDITION_UNMET` | The fixed denial below. |
-| 4 | `SCHEMA_INVALID_INPUT` | The grant or request is not JSON, has other keys, or has a malformed value. |
-| 75 | `TRANSIENT_NOT_STARTED` | A file-descriptor limit stopped the grant or request from opening; retry after 1000 ms. |
-| 1 | `INTERNAL_UNEXPECTED` | The grant or request path, outside the items tree, is not a readable regular file. |
+| 4 | `SCHEMA_INVALID_INPUT` | Standard input is empty, not JSON, over 64 KiB, has other keys, or has a malformed value. |
+| 75 | `TRANSIENT_NOT_STARTED` | A file-descriptor limit was reached before input was read; retry after 1000 ms. |
+| 1 | `INTERNAL_UNEXPECTED` | Standard input cannot be read, for example a directory. |
 | 1 | `INTERNAL_RESULT_UNCHANGED` | An unexpected failure, or the result failed envelope validation. |
 
 The denial is byte-identical for every authority mismatch and for every
-outcome that depends on the receipt: a missing grant, request or receipt; an
-unreadable, symlinked, malformed or incomplete receipt; and any receipt I/O
-error. It never names a path, receipt value, source label or raw error, so it
+outcome that depends on the receipt: a missing receipt or state root; a
+`receiptPath` other than the exact bound path; an unreadable, symlinked,
+malformed or incomplete receipt; and any receipt I/O error. It never names a path, receipt value, source label or raw error, so it
 is no existence oracle. Human mode prints this one line on stderr:
 
 ```text

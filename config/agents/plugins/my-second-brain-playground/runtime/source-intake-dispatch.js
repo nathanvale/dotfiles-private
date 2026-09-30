@@ -11,8 +11,8 @@ var COMMANDS = [
   {
     commandIdentity: "source-intake-dispatch.project",
     effectClass: "inspect",
-    route: ["GRANT", "REQUEST"],
-    summary: "Project only the granted classification metadata fields after validating a private grant and request."
+    route: ["project"],
+    summary: "Project only the granted classification metadata fields after validating a grant and request piped on standard input."
   },
   { commandIdentity: "source-intake-dispatch.redacted", effectClass: "inspect", route: ["--redacted"], summary: "Return the fixed redacted projection for status or evaluation." }
 ];
@@ -48,9 +48,9 @@ var STATIONS = {
     outcome: "refused",
     failureClass: "schema",
     exitCode: 4,
-    trigger: "The grant or request file is not JSON or does not match its declared shape.",
-    repairAction: "Rewrite the grant and request with exactly the keys and value formats in the package README.",
-    guidance: { nextAction: "Fix the grant or request file against the package README, then retry." }
+    trigger: "Standard input is not one JSON object holding a grant and a request of the declared shape.",
+    repairAction: "Pipe exactly one JSON object with the grant and request keys and value formats in the package README.",
+    guidance: { nextAction: "Fix the piped grant and request against the package README, then retry." }
   },
   inputBusy: {
     causeCode: "TRANSIENT_NOT_STARTED",
@@ -58,7 +58,7 @@ var STATIONS = {
     failureClass: "transient",
     exitCode: 75,
     retryDelayMilliseconds: INPUT_RETRY_DELAY_MILLISECONDS,
-    trigger: "The grant or request file could not be opened because a file-descriptor limit was reached; no receipt was touched.",
+    trigger: "A file-descriptor limit was reached before input was read; no receipt was touched.",
     repairAction: "Wait for open files to be released, then retry the same command.",
     guidance: { nextAction: "Retry the same command after the stated delay." }
   },
@@ -67,13 +67,13 @@ var STATIONS = {
     outcome: "failed",
     failureClass: "internal",
     exitCode: 1,
-    trigger: "The grant or request path exists outside the item receipts but is not a readable regular file.",
-    repairAction: "Pass a readable regular file for the grant and the request.",
+    trigger: "Standard input cannot be read.",
+    repairAction: "Pipe the grant and request from a readable file or stream.",
     guidance: {
       handoff: {
         owner: "human",
-        reason: "A private input file is present but unreadable, which the command cannot repair.",
-        inspect: ["ls -l on the grant and request paths"]
+        reason: "Standard input could not be read, which the command cannot repair.",
+        inspect: ["the standard input redirection of the calling command"]
       }
     }
   },
@@ -98,7 +98,7 @@ var COMMAND_STATIONS = {
   "source-intake-dispatch.redacted": ["usage", "serialization"]
 };
 var SUCCESS_TRIGGERS = {
-  "source-intake-dispatch.project": "A matching grant and request yield exactly the requested granted fields from the bound receipt.",
+  "source-intake-dispatch.project": "A matching piped grant and request yield exactly the requested granted fields from the bound receipt.",
   "source-intake-dispatch.redacted": "The recipient is status or evaluation; the fixed redacted projection is returned."
 };
 var EMISSION_FAILURE = "stdout cannot be written. Inspect the output stream before retrying.";
@@ -234,6 +234,7 @@ function discoveryData() {
       "Never reads Google Drive or any network resource.",
       "Never discloses a receipt value, source label, path or raw error in a refusal.",
       "Never opens a private receipt before the grant and request match.",
+      "Never opens a caller-supplied input path; the grant and request arrive on standard input.",
       "Never approves a grant; it only checks one the Stage Manager prepared."
     ]
   };
@@ -287,21 +288,20 @@ function isCommandIdentity(value) {
   return value === "source-intake-dispatch.project" || value === "source-intake-dispatch.redacted";
 }
 
+// packages/source-intake-dispatch/src/main.ts
+import { isatty } from "tty";
+
 // packages/source-intake-dispatch/src/gate.ts
-import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, readlinkSync, realpathSync, statSync } from "fs";
+import { closeSync, constants, lstatSync, openSync, readFileSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { dirname, isAbsolute, join, resolve } from "path";
 var CLASSIFICATION_FIELDS = new Set(["displayName", "mimeType", "modifiedTime", "sizeBytes"]);
+var INPUT_KEYS = ["grant", "request"];
 var GRANT_KEYS = ["allowedFields", "opaqueItemRef", "provider", "purpose", "receiptPath"];
 var REQUEST_KEYS = ["opaqueItemRef", "provider", "purpose", "requestedFields"];
 var OPAQUE_ITEM_REF = /^[a-z0-9][a-z0-9-]{0,63}$/;
 var DESCRIPTOR_LIMIT_CODES = new Set(["EAGAIN", "EMFILE", "ENFILE"]);
 var ITEMS_PATH = ["my-second-brain-playground", "drive-inbox-filing", "items"];
-var MAX_LINK_HOPS = 40;
-var ACCOUNT_RECORD_COMMANDS = {
-  darwin: () => ["/usr/bin/id", "-P"],
-  linux: (uid) => ["/usr/bin/getent", "passwd", String(uid)]
-};
 
 class GateRefusal extends Error {
   outcome;
@@ -340,110 +340,30 @@ function asRequest(value) {
 function stateHome() {
   const configured = process.env.XDG_STATE_HOME ?? join(homedir(), ".local", "state");
   if (!isAbsolute(configured))
-    throw new GateRefusal({ kind: "denied" });
+    throw new Error("relative state home");
   return realpathSync(configured);
 }
-function fold(path) {
-  return path.normalize("NFC").toLowerCase();
-}
-function accountStateRoot() {
-  const uid = process.getuid?.();
-  const command = ACCOUNT_RECORD_COMMANDS[process.platform];
-  if (uid === undefined || command === undefined)
-    throw new GateRefusal({ kind: "denied" });
-  const record = Bun.spawnSync({ cmd: command(uid), env: {}, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
-  const home = new TextDecoder().decode(record.stdout).trim().split(":").at(-2);
-  if (record.exitCode !== 0 || home === undefined || !isAbsolute(home))
-    throw new GateRefusal({ kind: "denied" });
-  return join(home, ".local", "state");
-}
-function identity(stat) {
-  return `${stat.dev}:${stat.ino}`;
-}
-function spellings(stateRoot) {
-  const lexical = join(stateRoot, ...ITEMS_PATH);
+function parseInput(text) {
+  let value;
   try {
-    return [lexical, realpathSync(lexical)];
-  } catch {
-    return [lexical];
-  }
-}
-function itemsGuard(stateRoots) {
-  const roots = stateRoots.flatMap(spellings);
-  const identities = new Set;
-  for (const root of roots) {
-    try {
-      identities.add(identity(statSync(root)));
-    } catch {}
-  }
-  return { roots, identities };
-}
-function isInside(path, roots) {
-  return roots.some((root) => fold(path) === fold(root) || fold(path).startsWith(`${fold(root)}/`));
-}
-function components(path) {
-  return path.split("/").filter((part) => part !== "");
-}
-function canonicalCallerPath(path, guard) {
-  let pending = components(resolve(path));
-  let current = "/";
-  let hops = 0;
-  for (let next = pending.shift();next !== undefined; next = pending.shift()) {
-    const candidate = join(current, next);
-    if (isInside(candidate, guard.roots))
-      throw new GateRefusal({ kind: "denied" });
-    const stat = lstatSync(candidate);
-    if (guard.identities.has(identity(stat)))
-      throw new GateRefusal({ kind: "denied" });
-    if (!stat.isSymbolicLink()) {
-      current = candidate;
-      continue;
-    }
-    hops += 1;
-    if (hops > MAX_LINK_HOPS)
-      throw new GateRefusal({ kind: "denied" });
-    pending = [...components(resolve(current, readlinkSync(candidate))), ...pending];
-    current = "/";
-  }
-  return current;
-}
-function readCallerJson(path, guard) {
-  let canonical;
-  try {
-    canonical = canonicalCallerPath(path, guard);
-  } catch {
-    throw new GateRefusal({ kind: "denied" });
-  }
-  let text;
-  try {
-    const descriptor = openSync(canonical, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW);
-    try {
-      if (!fstatSync(descriptor).isFile())
-        throw new GateRefusal({ kind: "inputUnreadable" });
-      text = readFileSync(descriptor, "utf8");
-    } finally {
-      closeSync(descriptor);
-    }
-  } catch (error) {
-    if (error instanceof GateRefusal)
-      throw error;
-    throw new GateRefusal({ kind: isDescriptorLimit(error) ? "inputBusy" : "inputUnreadable" });
-  }
-  try {
-    return JSON.parse(text);
+    value = JSON.parse(text);
   } catch {
     throw new GateRefusal({ kind: "inputInvalid" });
   }
+  if (!isRecord2(value) || !hasOnlyKeys(value, INPUT_KEYS))
+    throw new GateRefusal({ kind: "inputInvalid" });
+  return { grant: asGrant(value.grant), request: asRequest(value.request) };
 }
 function isAuthorized(grant, request) {
   return grant.provider === "luna" && grant.purpose === "classification" && grant.allowedFields.every((field) => CLASSIFICATION_FIELDS.has(field)) && grant.opaqueItemRef === request.opaqueItemRef && grant.provider === request.provider && grant.purpose === request.purpose && request.requestedFields.every((field) => grant.allowedFields.includes(field));
 }
-function isBoundReceiptPath(grant, home) {
+function boundReceiptPath(grant, home) {
   const expected = join(home, ...ITEMS_PATH, grant.opaqueItemRef, "classification-metadata.json");
   if (resolve(grant.receiptPath) !== expected)
-    return false;
+    return null;
   const expectedParent = dirname(expected);
-  return !lstatSync(expected).isSymbolicLink() && realpathSync(expectedParent) === expectedParent && realpathSync(grant.receiptPath) === expected;
+  const unlinked = !lstatSync(expected).isSymbolicLink() && realpathSync(expectedParent) === expectedParent && realpathSync(expected) === expected;
+  return unlinked ? expected : null;
 }
 function isMetadataScalar(value) {
   return typeof value === "string" || typeof value === "number" && Number.isFinite(value);
@@ -453,11 +373,12 @@ function project(receipt, requestedFields) {
     return null;
   return Object.fromEntries(requestedFields.map((field) => [field, receipt[field]]));
 }
-function projectReceipt(grant, request, home) {
+function projectReceipt(grant, request) {
   try {
-    if (!isBoundReceiptPath(grant, home))
+    const receiptPath = boundReceiptPath(grant, stateHome());
+    if (receiptPath === null)
       return { kind: "denied" };
-    const projection = project(JSON.parse(readFileSync(grant.receiptPath, "utf8")), request.requestedFields);
+    const projection = project(JSON.parse(readFileSync(receiptPath, "utf8")), request.requestedFields);
     return projection === null ? { kind: "denied" } : { kind: "allowed", opaqueItemRef: grant.opaqueItemRef, projection };
   } catch {
     return { kind: "denied" };
@@ -475,29 +396,22 @@ function descriptorLimitReached() {
     return isDescriptorLimit(error);
   }
 }
-function runGate(grantPath, requestPath) {
-  if (descriptorLimitReached())
-    return { kind: "inputBusy" };
-  let grant;
-  let request;
-  let home;
+function runGate(text) {
+  let input;
   try {
-    home = stateHome();
-    const guard = itemsGuard([home, accountStateRoot()]);
-    grant = asGrant(readCallerJson(grantPath, guard));
-    request = asRequest(readCallerJson(requestPath, guard));
+    input = parseInput(text);
   } catch (error) {
-    return error instanceof GateRefusal ? error.outcome : { kind: "denied" };
+    return error instanceof GateRefusal ? error.outcome : { kind: "inputInvalid" };
   }
-  if (!isAuthorized(grant, request))
+  if (!isAuthorized(input.grant, input.request))
     return { kind: "denied" };
-  return projectReceipt(grant, request, home);
+  return projectReceipt(input.grant, input.request);
 }
 
 // packages/source-intake-dispatch/src/main.ts
 var USAGE = [
   "Usage:",
-  "  source-intake-dispatch GRANT REQUEST [--json]",
+  "  source-intake-dispatch project [--json] < GRANT_AND_REQUEST.json",
   "  source-intake-dispatch --redacted RECIPIENT [--json]",
   "  source-intake-dispatch --discover [--json] | --discover-command COMMAND_IDENTITY [--json] | --help [--json]"
 ];
@@ -509,18 +423,19 @@ var OPTIONS = [
   { name: "--help", valueName: null, summary: "Show this help." }
 ];
 var REDACTED_RECIPIENTS = new Set(["status", "evaluation"]);
+var INPUT_LIMIT_BYTES = 64 * 1024;
 var MESSAGES = {
   denied: "Request denied. Stage Manager must verify the private grant before retrying.",
-  inputBusy: "The grant or request could not be opened yet; no receipt was touched.",
-  inputInvalid: "The grant or request is not valid for this command.",
-  inputUnreadable: "The grant or request is not a readable regular file."
+  inputBusy: "A file-descriptor limit was reached before input was read; no receipt was touched.",
+  inputInvalid: "Standard input is not a valid grant and request.",
+  inputUnreadable: "Standard input cannot be read."
 };
 
 class UsageError extends Error {
   identity;
-  constructor(identity2, message) {
+  constructor(identity, message) {
     super(message);
-    this.identity = identity2;
+    this.identity = identity;
   }
 }
 function helpOutput() {
@@ -530,7 +445,7 @@ function helpOutput() {
   return { envelope: success("source-intake-dispatch.help", data, "Show help.", "Choose an invocation from the usage lines."), human };
 }
 function discoverOutput() {
-  const human = "Profile complex. Commands: GRANT REQUEST (inspect), --redacted RECIPIENT (inspect).";
+  const human = "Profile complex. Commands: project (inspect, reads standard input), --redacted RECIPIENT (inspect).";
   return { envelope: success("source-intake-dispatch.discovery", discoveryData(), "Describe commands.", "Choose a command to run."), human };
 }
 function discoverCommandOutput(selector) {
@@ -546,13 +461,39 @@ function redactedOutput(recipient) {
   const data = { recipient, projection: { receipt: "[REDACTED]" } };
   return { envelope: success("source-intake-dispatch.redacted", data, `Redacted projection for ${recipient}.`, "Use only the redacted projection."), human: `${recipient}: receipt [REDACTED]` };
 }
-function projectOutput(grantPath, requestPath) {
-  const identity2 = "source-intake-dispatch.project";
-  const outcome = runGate(grantPath, requestPath);
+async function readInput() {
+  const chunks = [];
+  let size = 0;
+  try {
+    const reader = Bun.stdin.stream().getReader();
+    for (let chunk = await reader.read();!chunk.done; chunk = await reader.read()) {
+      size += chunk.value.byteLength;
+      if (size > INPUT_LIMIT_BYTES)
+        return { kind: "inputInvalid" };
+      chunks.push(chunk.value);
+    }
+  } catch (error) {
+    return { kind: isDescriptorLimit(error) ? "inputBusy" : "inputUnreadable" };
+  }
+  return { kind: "text", text: Buffer.concat(chunks).toString("utf8") };
+}
+function refusalOutput(identity, key) {
+  return { envelope: stationResult(identity, key, MESSAGES[key]), human: "" };
+}
+async function projectOutput() {
+  const identity = "source-intake-dispatch.project";
+  if (isatty(0))
+    throw new UsageError(identity, "Pipe the grant and request on standard input; the command never prompts.");
+  if (descriptorLimitReached())
+    return refusalOutput(identity, "inputBusy");
+  const input = await readInput();
+  if (input.kind !== "text")
+    return refusalOutput(identity, input.kind);
+  const outcome = runGate(input.text);
   if (outcome.kind !== "allowed")
-    return { envelope: stationResult(identity2, outcome.kind, MESSAGES[outcome.kind]), human: "" };
+    return refusalOutput(identity, outcome.kind);
   const fields = Object.keys(outcome.projection);
-  const envelope = success(identity2, { opaqueItemRef: outcome.opaqueItemRef, projection: outcome.projection }, `Projected ${fields.length} granted fields.`, "Pass the projection to its granted recipient only.");
+  const envelope = success(identity, { opaqueItemRef: outcome.opaqueItemRef, projection: outcome.projection }, `Projected ${fields.length} granted fields.`, "Pass the projection to its granted recipient only.");
   const human = [`Granted projection for ${outcome.opaqueItemRef}:`, ...Object.entries(outcome.projection).map(([field, value]) => `  ${field}: ${value}`)].join(`
 `);
   return { envelope, human };
@@ -566,23 +507,24 @@ function optionRoute(args) {
   const valued = first === "--discover-command" || first === "--redacted";
   if (!valued)
     return null;
-  const identity2 = first === "--redacted" ? "source-intake-dispatch.redacted" : "source-intake-dispatch.command-discovery";
+  const identity = first === "--redacted" ? "source-intake-dispatch.redacted" : "source-intake-dispatch.command-discovery";
   if (second === undefined || rest.length > 0)
-    throw new UsageError(identity2, `${first} needs exactly one value.`);
+    throw new UsageError(identity, `${first} needs exactly one value.`);
   return first === "--redacted" ? redactedOutput(second) : discoverCommandOutput(second);
 }
-function dispatch(args) {
+async function dispatch(args) {
   const routed = optionRoute(args);
   if (routed !== null)
     return routed;
-  const [first, second, ...rest] = args;
   if (args.some((arg) => arg.startsWith("-")))
     throw new UsageError("source-intake-dispatch.dispatch", "An option is not recognised.");
   if (args.length === 0)
     throw new UsageError("source-intake-dispatch.dispatch", "Choose a supported invocation.");
-  if (first === undefined || second === undefined || rest.length > 0)
-    throw new UsageError("source-intake-dispatch.project", "Pass exactly one grant path and one request path.");
-  return projectOutput(first, second);
+  if (args[0] !== "project")
+    throw new UsageError("source-intake-dispatch.dispatch", "Choose a supported invocation.");
+  if (args.length > 1)
+    throw new UsageError("source-intake-dispatch.project", "project takes no operands; pipe the grant and request on standard input.");
+  return projectOutput();
 }
 var humanFailureReported = false;
 var transportFailed = false;
@@ -631,7 +573,7 @@ function emit(output, json) {
   return write(`${output.human}
 `, false) ?? exitCode;
 }
-function main(argv) {
+async function main(argv) {
   const json = argv.includes("--json");
   const args = argv.filter((value) => value !== "--json");
   process.stdout.on("error", () => {
@@ -641,7 +583,7 @@ function main(argv) {
   });
   let output;
   try {
-    output = dispatch(args);
+    output = await dispatch(args);
   } catch (error) {
     const envelope = error instanceof UsageError ? stationResult(error.identity, "usage", error.message) : stationResult("source-intake-dispatch.dispatch", "serialization", "The command failed unexpectedly.");
     output = { envelope, human: "" };
@@ -650,5 +592,5 @@ function main(argv) {
 }
 process.on("SIGINT", () => process.exit(130));
 process.on("SIGTERM", () => process.exit(143));
-var exitCode = main(process.argv.slice(2));
+var exitCode = await main(process.argv.slice(2));
 process.exitCode = transportFailed ? 1 : exitCode;

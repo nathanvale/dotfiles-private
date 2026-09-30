@@ -15,11 +15,12 @@ import {
 	stationResult,
 	success,
 } from "./contract.ts"
-import { runGate } from "./gate.ts"
+import { isatty } from "node:tty"
+import { descriptorLimitReached, isDescriptorLimit, runGate } from "./gate.ts"
 
 const USAGE = [
 	"Usage:",
-	"  source-intake-dispatch GRANT REQUEST [--json]",
+	"  source-intake-dispatch project [--json] < GRANT_AND_REQUEST.json",
 	"  source-intake-dispatch --redacted RECIPIENT [--json]",
 	"  source-intake-dispatch --discover [--json] | --discover-command COMMAND_IDENTITY [--json] | --help [--json]",
 ]
@@ -33,13 +34,15 @@ const OPTIONS = [
 ]
 
 const REDACTED_RECIPIENTS = new Set(["status", "evaluation"])
+// A grant and request are a few hundred bytes; the bound keeps a runaway pipe from growing memory without limit.
+const INPUT_LIMIT_BYTES = 64 * 1024
 
 // Fixed, value-free messages. None names a path, receipt value, source label or raw error.
 const MESSAGES: Record<Exclude<StationKey, "usage" | "serialization">, string> = {
 	denied: "Request denied. Stage Manager must verify the private grant before retrying.",
-	inputBusy: "The grant or request could not be opened yet; no receipt was touched.",
-	inputInvalid: "The grant or request is not valid for this command.",
-	inputUnreadable: "The grant or request is not a readable regular file.",
+	inputBusy: "A file-descriptor limit was reached before input was read; no receipt was touched.",
+	inputInvalid: "Standard input is not a valid grant and request.",
+	inputUnreadable: "Standard input cannot be read.",
 }
 
 interface Output {
@@ -63,7 +66,7 @@ function helpOutput(): Output {
 }
 
 function discoverOutput(): Output {
-	const human = "Profile complex. Commands: GRANT REQUEST (inspect), --redacted RECIPIENT (inspect)."
+	const human = "Profile complex. Commands: project (inspect, reads standard input), --redacted RECIPIENT (inspect)."
 	return { envelope: success("source-intake-dispatch.discovery", discoveryData(), "Describe commands.", "Choose a command to run."), human }
 }
 
@@ -80,10 +83,37 @@ function redactedOutput(recipient: string): Output {
 	return { envelope: success("source-intake-dispatch.redacted", data, `Redacted projection for ${recipient}.`, "Use only the redacted projection."), human: `${recipient}: receipt [REDACTED]` }
 }
 
-function projectOutput(grantPath: string, requestPath: string): Output {
+type InputRead = { kind: "text"; text: string } | { kind: "inputBusy" | "inputInvalid" | "inputUnreadable" }
+
+/** Reads standard input to end of file, bounded. It is the only source of the grant and request. */
+async function readInput(): Promise<InputRead> {
+	const chunks: Uint8Array[] = []
+	let size = 0
+	try {
+		const reader = Bun.stdin.stream().getReader()
+		for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
+			size += chunk.value.byteLength
+			if (size > INPUT_LIMIT_BYTES) return { kind: "inputInvalid" }
+			chunks.push(chunk.value)
+		}
+	} catch (error) {
+		return { kind: isDescriptorLimit(error) ? "inputBusy" : "inputUnreadable" }
+	}
+	return { kind: "text", text: Buffer.concat(chunks).toString("utf8") }
+}
+
+function refusalOutput(identity: CommandIdentity, key: keyof typeof MESSAGES): Output {
+	return { envelope: stationResult(identity, key, MESSAGES[key]), human: "" }
+}
+
+async function projectOutput(): Promise<Output> {
 	const identity: CommandIdentity = "source-intake-dispatch.project"
-	const outcome = runGate(grantPath, requestPath)
-	if (outcome.kind !== "allowed") return { envelope: stationResult(identity, outcome.kind, MESSAGES[outcome.kind]), human: "" }
+	if (isatty(0)) throw new UsageError(identity, "Pipe the grant and request on standard input; the command never prompts.")
+	if (descriptorLimitReached()) return refusalOutput(identity, "inputBusy")
+	const input = await readInput()
+	if (input.kind !== "text") return refusalOutput(identity, input.kind)
+	const outcome = runGate(input.text)
+	if (outcome.kind !== "allowed") return refusalOutput(identity, outcome.kind)
 	const fields = Object.keys(outcome.projection)
 	const envelope = success(identity, { opaqueItemRef: outcome.opaqueItemRef, projection: outcome.projection }, `Projected ${fields.length} granted fields.`, "Pass the projection to its granted recipient only.")
 	const human = [`Granted projection for ${outcome.opaqueItemRef}:`, ...Object.entries(outcome.projection).map(([field, value]) => `  ${field}: ${value}`)].join("\n")
@@ -102,14 +132,14 @@ function optionRoute(args: readonly string[]): Output | null {
 	return first === "--redacted" ? redactedOutput(second) : discoverCommandOutput(second)
 }
 
-function dispatch(args: readonly string[]): Output {
+async function dispatch(args: readonly string[]): Promise<Output> {
 	const routed = optionRoute(args)
 	if (routed !== null) return routed
-	const [first, second, ...rest] = args
 	if (args.some((arg) => arg.startsWith("-"))) throw new UsageError("source-intake-dispatch.dispatch", "An option is not recognised.")
 	if (args.length === 0) throw new UsageError("source-intake-dispatch.dispatch", "Choose a supported invocation.")
-	if (first === undefined || second === undefined || rest.length > 0) throw new UsageError("source-intake-dispatch.project", "Pass exactly one grant path and one request path.")
-	return projectOutput(first, second)
+	if (args[0] !== "project") throw new UsageError("source-intake-dispatch.dispatch", "Choose a supported invocation.")
+	if (args.length > 1) throw new UsageError("source-intake-dispatch.project", "project takes no operands; pipe the grant and request on standard input.")
+	return projectOutput()
 }
 
 let humanFailureReported = false
@@ -165,7 +195,7 @@ function emit(output: Output, json: boolean): number {
 	return write(`${output.human}\n`, false) ?? exitCode
 }
 
-function main(argv: readonly string[]): number {
+async function main(argv: readonly string[]): Promise<number> {
 	const json = argv.includes("--json")
 	const args = argv.filter((value) => value !== "--json")
 	// A pipe error can arrive after main() returned and the exit status was assigned; it must still fail the run.
@@ -175,7 +205,7 @@ function main(argv: readonly string[]): number {
 	})
 	let output: Output
 	try {
-		output = dispatch(args)
+		output = await dispatch(args)
 	} catch (error) {
 		// An unexpected failure keeps a fixed message: a raw error could quote private input.
 		const envelope = error instanceof UsageError ? stationResult(error.identity, "usage", error.message) : stationResult("source-intake-dispatch.dispatch", "serialization", "The command failed unexpectedly.")
@@ -188,5 +218,5 @@ function main(argv: readonly string[]): number {
 process.on("SIGINT", () => process.exit(130))
 process.on("SIGTERM", () => process.exit(143))
 
-const exitCode = main(process.argv.slice(2))
+const exitCode = await main(process.argv.slice(2))
 process.exitCode = transportFailed ? 1 : exitCode

@@ -1,8 +1,8 @@
-// Test-only preload: when an argument names busy-grant.json, exhaust this process's file descriptors just before the
-// command reads its arguments, so its first grant open meets a real EMFILE from the operating system.
+// Test-only preload: with SOURCE_INTAKE_TEST_EXHAUST_DESCRIPTORS set, exhaust this process's file descriptors just
+// before the command reads its arguments, so its first open meets a real EMFILE from the operating system.
 import { openSync } from "node:fs"
 
-if (process.argv.some((argument) => argument.endsWith("/busy-grant.json"))) {
+if (process.env.SOURCE_INTAKE_TEST_EXHAUST_DESCRIPTORS !== undefined) {
 	const argv = process.argv
 	const slice = argv.slice.bind(argv)
 	argv.slice = ((...range: Parameters<typeof argv.slice>) => {
