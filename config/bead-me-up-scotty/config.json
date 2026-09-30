@@ -10,7 +10,42 @@
       "path": "/Users/nathanvale/.local/state/my-second-brain-playground/connectors-portable-cli/store",
       "name": "store",
       "addedAt": "2026-09-24T09:56:49.638Z",
-      "lastOpened": "2026-09-24T22:59:00.932Z"
+      "lastOpened": "2026-09-30T00:13:46.566Z"
+    },
+    {
+      "id": "store-vja5",
+      "path": "/Users/nathanvale/.local/state/my-second-brain-playground/gr10-study-away/store",
+      "name": "GR10 Study Away",
+      "addedAt": "2026-09-29T10:27:56.866774Z",
+      "lastOpened": "2026-09-29T10:38:34.645Z"
+    },
+    {
+      "id": "herdr-projects",
+      "path": "/Users/nathanvale/.local/share/my-second-brain-playground/beads/herdr-projects",
+      "name": "Herdr Projects",
+      "addedAt": "2026-09-29T10:27:56.866774Z",
+      "lastOpened": "2026-09-29T23:39:05.238Z"
+    },
+    {
+      "id": "drive-inbox-filing",
+      "path": "/Users/nathanvale/.local/share/my-second-brain-playground/beads/drive-inbox-filing",
+      "name": "Drive Inbox Filing",
+      "addedAt": "2026-09-29T10:27:56.866774Z",
+      "lastOpened": "2026-09-29T10:38:35.714Z"
+    },
+    {
+      "id": "browser-automation-quiet-profile",
+      "path": "/Users/nathanvale/.local/share/my-second-brain-playground/beads/browser-automation-quiet-profile",
+      "name": "Browser Automation Quiet Profile (paused)",
+      "addedAt": "2026-09-29T10:27:56.866774Z",
+      "lastOpened": "2026-09-29T10:38:36.179Z"
+    },
+    {
+      "id": "agent-routing-and-handoffs",
+      "name": "Agent Routing and Handoffs",
+      "path": "/Users/nathanvale/.local/state/bead-me-up-scotty/remote/agent-routing-and-handoffs",
+      "addedAt": "2026-09-29T23:38:29.796Z",
+      "lastOpened": "2026-09-29T23:38:38.649Z"
     }
   ],
   "orders": {},
