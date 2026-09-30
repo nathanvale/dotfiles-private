@@ -61,13 +61,15 @@ function removeCreated(directory: string, firstCreated: string | undefined): voi
 }
 
 /**
- * A synthetic receipt at the real receipt layout, `drive-inbox-filing/items/preflight-<nonce>/`, under the configured
+ * A synthetic receipt at the real receipt layout, `drive-inbox-filing/items/.preflight-<nonce>/`, under the configured
  * private root: cat, stat and ls must all be denied. The stat probe fails a root where the sandbox still answers file
- * metadata (Codex does under the per-user temporary directory), so file size and times stay closed too.
+ * metadata (Codex does under the per-user temporary directory), so file size and times stay closed too. The leading
+ * dot makes the directory name an invalid opaque item ref, so a pre-flight killed before its cleanup (SIGKILL) leaves
+ * nothing dispatch could accept as an item.
  */
 function sentinelDenied(lane: Lane, workspace: string): boolean {
 	const nonce = randomBytes(16).toString("hex")
-	const directory = join(lane.privateRoot, "drive-inbox-filing", "items", `preflight-${nonce}`)
+	const directory = join(lane.privateRoot, "drive-inbox-filing", "items", `.preflight-${nonce}`)
 	const sentinel = join(directory, "classification-metadata.json")
 	const firstCreated = mkdirSync(directory, { recursive: true, mode: 0o700 })
 	try {
@@ -107,29 +109,55 @@ function contains(ancestor: string, path: string): boolean {
 	return path === ancestor || path.startsWith(`${ancestor}/`)
 }
 
+// The permission entry formats Codex 0.159.2 renders. Any other entry fails the check, so a format change fails closed.
+const KNOWN_ENTRY = /^<entry access="(read|deny)"( escalatable="false")?><(path|special)>([^<]*)<\/\3><\/entry>$/
+
+interface RenderedEntry {
+	access: "read" | "deny"
+	kind: "path" | "special"
+	value: string
+}
+
+/** Every rendered permission entry, or null when any entry has a format this check does not recognise. */
+function renderedEntries(text: string): RenderedEntry[] | null {
+	const raw = [...text.matchAll(/<entry[\s>][\s\S]*?<\/entry>/g)].map((match) => match[0])
+	if (raw.length !== [...text.matchAll(/<entry/g)].length) return null
+	const entries: RenderedEntry[] = []
+	for (const entry of raw) {
+		const match = KNOWN_ENTRY.exec(entry)
+		// A read entry never carries the escalatable attribute; a deny entry always does.
+		if (match === null || (match[1] === "read") !== (match[2] === undefined)) return null
+		entries.push({ access: match[1] as RenderedEntry["access"], kind: match[3] as RenderedEntry["kind"], value: match[4] ?? "" })
+	}
+	return entries
+}
+
 /**
  * Every read entry under a denied root must be Codex's own helper-link directory. A more specific read entry overrides
  * a deny, so any other one would open part of a receipt root that the sentinel probe cannot see.
  */
-function readEntriesHold(lane: Lane, text: string): boolean {
+function readEntriesHold(lane: Lane, entries: readonly RenderedEntry[]): boolean {
 	const helperLinks = join(lane.laneHome, "tmp", "arg0")
-	const reads = [...text.matchAll(/<entry access="read"><path>([^<]*)<\/path><\/entry>/g)].map((match) => match[1] ?? "")
+	const reads = entries.filter((entry) => entry.access === "read" && entry.kind === "path").map((entry) => entry.value)
 	return reads.every((path) => !lane.deniedRoots.some((root) => contains(root, path)) || contains(helperLinks, path))
 }
 
 /**
  * The model session's own configuration: rendered without a model call, it must carry the dedicated instructions, no
- * AGENTS.md instructions, no multi-agent role, approval never, restricted network, no write entry, no extra read entry
- * under a denied root, and a deny entry for the filesystem root, both temporary directories and every receipt root
- * spelling.
+ * AGENTS.md instructions, no multi-agent role, approval never, restricted network, only recognised read and deny
+ * entries (a write entry or any other format fails), no extra read entry under a denied root, and a deny entry for the
+ * filesystem root, both temporary directories and every receipt root spelling.
  */
 function sessionHolds(lane: Lane, workspace: string): boolean {
 	const result = capture(lane, [lane.codex, "debug", "prompt-input", ...lane.configArgs, "pre-flight"], workspace)
 	const text = result.exitCode === 0 ? promptText(result.stdout) : null
 	if (text === null || text.includes("# AGENTS.md instructions") || text.includes("<multi_agent_role>") || !text.includes(INSTRUCTIONS_HEADING)) return false
-	if (!text.includes("Approval policy is currently never.") || !text.includes("Network access is restricted.") || text.includes('<entry access="write"')) return false
-	const entries = ["<special>:root</special>", "<special>:tmpdir</special>", "<special>:slash_tmp</special>", ...lane.deniedRoots.map((root) => `<path>${root}</path>`)]
-	return entries.every((entry) => text.includes(`<entry access="deny" escalatable="false">${entry}</entry>`)) && readEntriesHold(lane, text)
+	if (!text.includes("Approval policy is currently never.") || !text.includes("Network access is restricted.")) return false
+	const entries = renderedEntries(text)
+	if (entries === null || entries.length === 0) return false
+	const denies = new Set(entries.filter((entry) => entry.access === "deny").map((entry) => `${entry.kind}:${entry.value}`))
+	const required = ["special::root", "special::tmpdir", "special::slash_tmp", ...lane.deniedRoots.map((root) => `path:${root}`)]
+	return required.every((entry) => denies.has(entry)) && readEntriesHold(lane, entries)
 }
 
 /** True only when every probe passes. Any error, timeout or unexpected output fails closed. */

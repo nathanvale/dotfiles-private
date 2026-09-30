@@ -57,24 +57,26 @@ export const ACCOUNT_DEFAULT_ROOT: string | null = (() => {
 export const LANE_READY = process.platform === "darwin" && REAL_CODEX !== null && ACCOUNT_DEFAULT_ROOT !== null && existsSync(ACCOUNT_DEFAULT_ROOT)
 export const LANE_SKIP_RATIONALE = "needs macOS, an installed codex and the account default receipt root; the pre-flight fails closed without them"
 
-export interface LaneLedger {
-	/** A lane proof: it runs only where the lane can run, and the ledger counts whether it ran. */
+export interface ProofLedger {
+	/** A proof that runs only where its environment allows; the ledger counts whether it ran. */
 	test(name: string, body: () => void | Promise<void>, timeout?: number): void
 	/** Declared last in a file: asserts the skip rationale and pins the covered and skipped counts for this environment. */
 	pin(expected: number): void
 }
 
 /**
- * One ledger per test file. A proof downgraded to a silent skip, or a lane that stops being ready on a machine that
- * should run it, changes the observed covered and skipped counts and fails the pin.
+ * One ledger per environment condition and test file. Where the condition holds, every registered proof must run, so
+ * a proof downgraded to a silent skip or dropped from the file fails the pin. Where it does not hold, every proof
+ * skips visibly and the pin expects exactly that many skips: the ledger does not detect an environment that should
+ * have been ready.
  */
-export function laneLedger(): LaneLedger {
+export function proofLedger(ready: boolean, rationale: string): ProofLedger {
 	let registered = 0
 	let covered = 0
 	return {
 		test(name, body, timeout) {
 			registered += 1
-			test.skipIf(!LANE_READY)(
+			test.skipIf(!ready)(
 				name,
 				async () => {
 					covered += 1
@@ -84,13 +86,18 @@ export function laneLedger(): LaneLedger {
 			)
 		},
 		pin(expected) {
-			test("lane proof ledger: the skip rationale is stated and covered and skipped counts are pinned", () => {
-				expect(LANE_SKIP_RATIONALE.trim()).not.toBe("")
+			test(`proof ledger (${rationale}): the skip rationale is stated and covered and skipped counts are pinned`, () => {
+				expect(rationale.trim()).not.toBe("")
 				expect(registered).toBe(expected)
-				expect({ covered, skipped: registered - covered }).toEqual(LANE_READY ? { covered: expected, skipped: 0 } : { covered: 0, skipped: expected })
+				expect({ covered, skipped: registered - covered }).toEqual(ready ? { covered: expected, skipped: 0 } : { covered: 0, skipped: expected })
 			})
 		},
 	}
+}
+
+/** The ledger for lane proofs, which need macOS, an installed codex and the account default receipt root. */
+export function laneLedger(): ProofLedger {
+	return proofLedger(LANE_READY, LANE_SKIP_RATIONALE)
 }
 
 // Independent oracle: restated from the Ticket #158 lane refusal and the published Contract Core 2.0 envelope, not
@@ -104,7 +111,7 @@ export interface ProcessResult {
 	stdout: string
 }
 
-export type FakeMode = "honest" | "open"
+export type FakeMode = "honest" | "open" | "slow-probe" | "render-variant"
 
 export interface Fixture {
 	root: string

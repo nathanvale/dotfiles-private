@@ -2,7 +2,9 @@
 # Test-only stand-in for codex, installed as <fake root>/bin/codex. `exec` never calls a model: it records the
 # descriptor table and environment it inherited (before opening anything), its argv and its standard input, then
 # prints the scripted event stream. Other subcommands go to the real codex, except `sandbox` in mode "open", which runs
-# the probe command with no sandbox at all: the weakened-lane double.
+# the probe command with no sandbox at all: the weakened-lane double. Mode "slow-probe" marks probe-waiting and pauses
+# before a sandboxed read of a receipt-named file, so a test can signal the command mid pre-flight. Mode
+# "render-variant" adds an attribute to every rendered read entry, a permission format the pre-flight does not know.
 use strict;
 use warnings;
 use POSIX ();
@@ -37,5 +39,18 @@ if ($command eq "sandbox" && $mode eq "open") {
 	shift @ARGV while @ARGV && $ARGV[0] ne "--";
 	shift @ARGV;
 	exec { $ARGV[0] } @ARGV or die "fake codex: open probe";
+}
+if ($command eq "sandbox" && $mode eq "slow-probe" && ($ARGV[-1] // "") =~ /classification-metadata\.json$/) {
+	spill("$root/probe-waiting", "waiting");
+	sleep 3;
+}
+if ($command eq "debug" && $mode eq "render-variant") {
+	open(my $render, "-|", $real, @ARGV) or die "fake codex: render";
+	local $/;
+	my $text = <$render> // "";
+	close $render;
+	$text =~ s/<entry access=\\"read\\"><path>/<entry access=\\"read\\" scope=\\"subtree\\"><path>/g;
+	print $text;
+	exit($? >> 8);
 }
 exec { $real } $real, @ARGV or die "fake codex: real codex";

@@ -17,6 +17,7 @@ import {
 	LANE_ADAPTER,
 	laneInput,
 	laneLedger,
+	proofLedger,
 	RUNTIME,
 	removeFixture,
 	SENTINEL,
@@ -26,6 +27,8 @@ import {
 } from "./fixtures/harness.ts"
 
 const proofs = laneLedger()
+// script(1) supplies the terminal; its arguments differ on Linux.
+const terminalProofs = proofLedger(process.platform === "darwin", "needs macOS script(1) to put a terminal on standard input")
 let fixture: Fixture
 let validInput: string
 let validPath: string
@@ -231,7 +234,7 @@ describe("validated output and transport failure", () => {
 		expect(await Promise.race([classify.exited, Bun.sleep(5000).then(() => "timeout")])).toBe(4)
 	})
 
-	test.skipIf(process.platform !== "darwin")("a terminal on stdin is a usage refusal, never a prompt", () => {
+	terminalProofs.test("a terminal on stdin is a usage refusal, never a prompt", () => {
 		const child = Bun.spawnSync(["/usr/bin/script", "-q", "/dev/null", process.execPath, RUNTIME, "classify", "--json"], { cwd: fixture.root, env: fixture.env, stdin: "ignore", stdout: "pipe", stderr: "pipe", timeout: 5000 })
 		expect(child.exitCode).toBe(2)
 		expect(new TextDecoder().decode(child.stdout)).toContain('"causeCode":"USAGE_INVALID_INVOCATION"')
@@ -300,3 +303,4 @@ proofs.test("the strict CLI Design checker passes every applicable row", () => {
 }, 240_000)
 
 proofs.pin(5)
+terminalProofs.pin(1)

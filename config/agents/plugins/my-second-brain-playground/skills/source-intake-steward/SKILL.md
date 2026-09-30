@@ -21,8 +21,20 @@ owner, competing owners, uncertainty, a draft decision question, and one next
 action. It sees only the allowed projection, public owner notes, and redacted
 Bead state, and never receives a receipt path or pointer, raw metadata, or a
 Drive or Vault tool. Stage Manager holds no item values: it gets only
-`source-intake-dispatch --redacted status`, redacted Bead state, and a redacted
-decision question, never the projection, the receipt, or the private proposal.
+`source-intake-dispatch --redacted status` and redacted Bead state, never the
+projection, the receipt, the private proposal, or any lane output. The lane's
+decision question, its uncertainty, and the recovery choice stay with the
+granted foreground and reach Nathan only through it.
+
+**Redacted** means value-free: only the opaque item ref, the item state
+(`proposed`, `drive-complete`, `vault-pending`, `complete`, or an unknown
+effect), and fixed or enumerated fields, such as a check name with pass or
+fail, whether a decision is pending, and one next step from this list: await
+Nathan's decision, apply approved effects, resume the note step, inspect an
+unknown effect, retention review. It never holds a projection value or any lane
+free text: the summary, owner name, decision question, uncertainty, rationale,
+or recovery wording. The foreground writes redacted state from its own fields;
+it never passes lane text through as redacted.
 
 Run the classifier lane only through
 [`source-intake-classify`](../../packages/source-intake-classify/README.md),
@@ -121,9 +133,10 @@ lane without a separate exact-item grant. Preserve the extension and evidenced
 title, date, model or revision. Use a document date only when authorized
 evidence supports it. The foreground Steward presents the decision question
 with the private proposal to Nathan itself and records his exact-item decision
-for each initial Drive and vault effect. Stage Manager may carry only the
-redacted decision question and redacted Bead state, for example to bring Nathan
-back to the foreground run; it never reads or presents the private proposal.
+for each initial Drive and vault effect. Stage Manager may carry only redacted
+Bead state, such as a pending decision for the opaque ref, for example to bring
+Nathan back to the foreground run; it never reads or presents the private
+proposal or the lane's decision question.
 The foreground Steward applies effects on this same Bead and receipt only after
 Nathan's recorded decision. Ambiguity, suspected duplicates, unclear
 access, or missing approval leaves the file in `00 Inbox` with the proposal and
@@ -164,15 +177,17 @@ at its destination, inspect the same ID and vault target, then resume only the
 missing note step. Inspect uncertain folder or note creation before repeating
 it. If content changed or access was lost, retain the last reviewed summary
 marked for review and put the decision question to Nathan in the foreground
-run; Stage Manager carries only the redacted question. Never create a
+run; Stage Manager learns only the redacted state that a decision is pending. Never create a
 second Task or duplicate file, folder, or note to recover a lost response.
 
 The foreground Steward owns Handback. It records the lane evidence
 `source-intake-classify` reports (Codex version, lane configuration hash, model,
 effort, rollout thread) in the private receipt, and keeps private account
-mapping, raw readbacks, and personal identifiers there. It hands Stage Manager
-only redacted Bead state, proposal or decision state, recovery choice, checks,
-unresolved uncertainty, and one safe next action. Report source candidate, installed
+mapping, raw readbacks, and personal identifiers there, with the recovery
+choice, unresolved uncertainty, and the lane's decision question. It hands Stage
+Manager only redacted Bead state: the opaque ref, the item state, check names
+with pass or fail, whether a decision is pending, and one next step from the
+fixed list above. Report source candidate, installed
 version, fresh invocation, and live filing as separate evidence. Close the Bead
 only through its owner after independent acceptance; a role declaration or
 synthetic canary does not prove a personal filing.

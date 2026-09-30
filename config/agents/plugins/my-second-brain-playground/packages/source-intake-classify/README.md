@@ -31,7 +31,10 @@ Pipe one JSON object of at most 256 KiB with exactly these keys:
   the closed list `displayName`, `mimeType`, `modifiedTime`, `sizeBytes`; each
   value is a string or finite number.
 - `ownerNotes`: up to 50 public owner notes, each exactly `title` and `text`.
-- `beadState`: redacted Bead state as one string.
+- `beadState`: redacted Bead state as one string. Redacted means value-free:
+  only the opaque ref, the item state, and fixed or enumerated fields, never a
+  projection value or lane free text (the definition is in the
+  `source-intake-steward` skill).
 
 Only provider `luna` is supported, as in the dispatch grant: the lane runs
 model `gpt-6-luna` at reasoning effort `medium` (the guided `codex-safe`
@@ -114,18 +117,22 @@ Before the model starts, every run proves with the lane's exact configuration:
 3. The sandbox sets `CODEX_SANDBOX_NETWORK_DISABLED=1` for the lane's
    commands.
 4. A synthetic receipt at the real layout,
-   `drive-inbox-filing/items/preflight-<nonce>/classification-metadata.json`
+   `drive-inbox-filing/items/.preflight-<nonce>/classification-metadata.json`
    under the configured private root: `cat`, `stat` and `ls` are each denied.
    The command removes it, and any directory it created for it, afterwards.
+   The leading dot makes the name an invalid opaque ref, so a pre-flight killed
+   before cleanup (SIGKILL) leaves nothing dispatch could accept as an item.
 5. Every spelling of both private roots: `cat` and `ls` are each denied. A
    missing root answers "No such file or directory", which is not a denial, so
    both roots must exist.
 6. The caller's Codex credential: `cat` is denied.
 7. `codex debug prompt-input` renders the session without a model call: it
    carries the lane instructions, no `AGENTS.md` instructions, no multi-agent
-   role, approval `never`, restricted network, no write entry, a deny entry for
-   `:root`, `:tmpdir`, `:slash_tmp` and every private root spelling, and no
-   read entry under a denied root except Codex's own `<lane Codex home>/tmp/arg0/`.
+   role, approval `never`, restricted network, only the read and deny entry
+   formats it recognises (a write entry or any unknown format refuses), a deny
+   entry for `:root`, `:tmpdir`, `:slash_tmp` and every private root spelling,
+   and no read entry under a denied root except Codex's own
+   `<lane Codex home>/tmp/arg0/`.
    A more specific read entry overrides a deny, so this is what proves the rest
    of the subtree the sentinel cannot reach.
 

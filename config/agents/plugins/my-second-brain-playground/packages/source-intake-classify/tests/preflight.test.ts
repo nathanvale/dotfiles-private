@@ -8,6 +8,7 @@ import { type Lane, laneConfigArgs, prepareLane } from "../src/lane.ts"
 import { runPreflight } from "../src/preflight.ts"
 import {
 	clearObservations,
+	COMMAND,
 	createFixture,
 	execObservations,
 	type Fixture,
@@ -77,6 +78,55 @@ proofs.test("a lane session that would load AGENTS.md instructions is refused", 
 	} finally {
 		rmSync(agents)
 	}
+}, 60_000)
+
+// Wrong behavior caught: a permission entry in a format the check does not parse passing as if it were absent.
+proofs.test("a rendered permission entry in an unrecognised format is refused", () => {
+	setFake(fixture, "render-variant")
+	expectRefusedWithoutModel(["classify"])
+}, 60_000)
+
+// Independent oracle: the opaque item ref shape restated from the source-intake-dispatch README.
+const OPAQUE_ITEM_REF_SHAPE = /^[a-z0-9][a-z0-9-]{0,63}$/
+
+/** Starts classify with the slow-probe fake and resolves once the pre-flight is paused at a sandboxed receipt read. */
+async function classifyPausedInPreflight(): Promise<Bun.Subprocess<"pipe", "pipe", "pipe">> {
+	setFake(fixture, "slow-probe")
+	const marker = join(fixture.fakeRoot, "probe-waiting")
+	rmSync(marker, { force: true })
+	const child = Bun.spawn({ cmd: [COMMAND, "classify", "--json"], cwd: fixture.root, env: { ...fixture.env, PATH: `${fixture.env.PATH}:${dirname(process.execPath)}` }, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+	child.stdin.write(input)
+	await child.stdin.end()
+	for (let attempt = 0; attempt < 600 && !existsSync(marker); attempt += 1) await Bun.sleep(50)
+	expect(existsSync(marker)).toBe(true)
+	return child
+}
+
+function itemsBesideFixture(): string[] {
+	return readdirSync(join(fixture.privateRoot, "drive-inbox-filing", "items")).filter((name) => name !== "synthetic-item-001")
+}
+
+// Wrong behavior caught: a killed pre-flight leaving a sentinel that dispatch would accept as a real item directory.
+proofs.test("a pre-flight killed mid-probe leaves nothing shaped like a receipt item", async () => {
+	const child = await classifyPausedInPreflight()
+	child.kill("SIGKILL")
+	await child.exited
+	const leftovers = itemsBesideFixture()
+	try {
+		expect(leftovers.length).toBeGreaterThan(0)
+		for (const name of leftovers) expect(OPAQUE_ITEM_REF_SHAPE.test(name)).toBe(false)
+	} finally {
+		for (const name of leftovers) rmSync(join(fixture.privateRoot, "drive-inbox-filing", "items", name), { recursive: true, force: true })
+	}
+}, 60_000)
+
+// Wrong behavior caught: a SIGTERM during the synchronous pre-flight handled only after the model process started.
+proofs.test("SIGTERM mid pre-flight exits 143, starts no model and leaves no sentinel", async () => {
+	const child = await classifyPausedInPreflight()
+	child.kill("SIGTERM")
+	expect(await child.exited).toBe(143)
+	expect(execObservations(fixture)).toEqual([])
+	expect(itemsBesideFixture()).toEqual([])
 }, 60_000)
 
 test("the refusal names no path, sentinel or probe output", () => {
@@ -151,4 +201,4 @@ describe("module-level pre-flight", () => {
 	}, 60_000)
 })
 
-proofs.pin(10)
+proofs.pin(13)

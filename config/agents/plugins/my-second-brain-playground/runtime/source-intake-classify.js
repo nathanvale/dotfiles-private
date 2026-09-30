@@ -666,7 +666,7 @@ function removeCreated(directory, firstCreated) {
 }
 function sentinelDenied(lane, workspace) {
   const nonce = randomBytes(16).toString("hex");
-  const directory = join2(lane.privateRoot, "drive-inbox-filing", "items", `preflight-${nonce}`);
+  const directory = join2(lane.privateRoot, "drive-inbox-filing", "items", `.preflight-${nonce}`);
   const sentinel = join2(directory, "classification-metadata.json");
   const firstCreated = mkdirSync2(directory, { recursive: true, mode: 448 });
   try {
@@ -704,9 +704,23 @@ function promptText(stdout) {
 function contains2(ancestor, path) {
   return path === ancestor || path.startsWith(`${ancestor}/`);
 }
-function readEntriesHold(lane, text) {
+var KNOWN_ENTRY = /^<entry access="(read|deny)"( escalatable="false")?><(path|special)>([^<]*)<\/\3><\/entry>$/;
+function renderedEntries(text) {
+  const raw = [...text.matchAll(/<entry[\s>][\s\S]*?<\/entry>/g)].map((match) => match[0]);
+  if (raw.length !== [...text.matchAll(/<entry/g)].length)
+    return null;
+  const entries = [];
+  for (const entry of raw) {
+    const match = KNOWN_ENTRY.exec(entry);
+    if (match === null || match[1] === "read" !== (match[2] === undefined))
+      return null;
+    entries.push({ access: match[1], kind: match[3], value: match[4] ?? "" });
+  }
+  return entries;
+}
+function readEntriesHold(lane, entries) {
   const helperLinks = join2(lane.laneHome, "tmp", "arg0");
-  const reads = [...text.matchAll(/<entry access="read"><path>([^<]*)<\/path><\/entry>/g)].map((match) => match[1] ?? "");
+  const reads = entries.filter((entry) => entry.access === "read" && entry.kind === "path").map((entry) => entry.value);
   return reads.every((path) => !lane.deniedRoots.some((root) => contains2(root, path)) || contains2(helperLinks, path));
 }
 function sessionHolds(lane, workspace) {
@@ -714,10 +728,14 @@ function sessionHolds(lane, workspace) {
   const text = result.exitCode === 0 ? promptText(result.stdout) : null;
   if (text === null || text.includes("# AGENTS.md instructions") || text.includes("<multi_agent_role>") || !text.includes(INSTRUCTIONS_HEADING))
     return false;
-  if (!text.includes("Approval policy is currently never.") || !text.includes("Network access is restricted.") || text.includes('<entry access="write"'))
+  if (!text.includes("Approval policy is currently never.") || !text.includes("Network access is restricted."))
     return false;
-  const entries = ["<special>:root</special>", "<special>:tmpdir</special>", "<special>:slash_tmp</special>", ...lane.deniedRoots.map((root) => `<path>${root}</path>`)];
-  return entries.every((entry) => text.includes(`<entry access="deny" escalatable="false">${entry}</entry>`)) && readEntriesHold(lane, text);
+  const entries = renderedEntries(text);
+  if (entries === null || entries.length === 0)
+    return false;
+  const denies = new Set(entries.filter((entry) => entry.access === "deny").map((entry) => `${entry.kind}:${entry.value}`));
+  const required = ["special::root", "special::tmpdir", "special::slash_tmp", ...lane.deniedRoots.map((root) => `path:${root}`)];
+  return required.every((entry) => denies.has(entry)) && readEntriesHold(lane, entries);
 }
 function runPreflight(lane, workspace) {
   try {
