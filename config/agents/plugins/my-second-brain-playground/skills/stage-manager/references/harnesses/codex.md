@@ -16,8 +16,8 @@ describe API use; neither documents Codex CLI self-evidence.
 | Harness | Own agent process argv0 is `codex`; `CODEX_VERSION` was present | **Observed, undocumented.** Together these identify a Codex CLI process. Environment alone may be inherited by a child. |
 | Version | The coordinator's mapped executable, `CODEX_VERSION`, and own-session `session_meta.cli_version` reported 0.159.0 while `codex` on `PATH` reported 0.159.1. A `codex resume` process mapped a 0.159.2 executable while its session kept `cli_version` 0.159.1 | **Observed, undocumented.** `session_meta.cli_version` records the version that created the session, so it is current only for a session this process created. Agreeing `CODEX_VERSION` and current session version establish the running version; otherwise the mapped executable's direct `--version` must agree with the one current value. Disk and `PATH` differences are warnings. |
 | Launch selection | Own process argv contained `codex --model gpt-6-sol` | **Observed, undocumented.** `--model <id>` or `-m <id>` names the launch request, not necessarily the serving model after a change or fallback. An omitted flag leaves launch selection unknown. |
-| Serving model | `model` in the latest `turn_context` record of your own rollout (see [Turn context reading](#turn-context-reading)). On 2026-09-29 all 20 `turn_context` records of a coordinator launched with `--model gpt-6-sol` read `gpt-6-sol`. Codex 0.158.0 put no model statement in the session context | **Observed, undocumented.** It is the model the client applied to the turn, not a server attestation; it follows `/model` switches. Record `unknown` when no rollout matches `CODEX_SESSION_ID`, when `model` is null or missing, when a `model_reroute` event follows that `turn_context`, or when a `thread_settings_applied` record exists and the latest one's `model` differs. No `thread_settings_applied` record: skip the comparison; the latest `turn_context` alone decides. A generic `GPT-6` value does not establish `gpt-6-sol`, `gpt-6-luna`, or `gpt-6-astra`. Neither argv nor a model list proves current serving identity. |
-| Effort | `effort` in the same latest `turn_context` record | **Observed, undocumented.** Record `unknown` when no rollout matches `CODEX_SESSION_ID`, when `effort` is null or missing, when a `model_reroute` event follows that `turn_context`, or when a `thread_settings_applied` record exists and the latest one's `reasoning_effort` differs. No `thread_settings_applied` record: skip the comparison; the latest `turn_context` alone decides. A CLI flag or config describes a requested value; do not infer a default. |
+| Serving model | `model` in the latest `turn_context` record of your own rollout (see [Turn context reading](#turn-context-reading)). On 2026-09-29 all 20 `turn_context` records of a coordinator launched with `--model gpt-6-sol` read `gpt-6-sol`. Codex 0.158.0 put no model statement in the session context | **Observed, undocumented.** It is the model the client applied to the turn, not a server attestation; it follows `/model` switches. Record `unknown` when the rollout selection yields no single non-subagent `CODEX_SESSION_ID` match, when `model` is null or missing, when a `model_reroute` event follows that `turn_context`, or when a `thread_settings_applied` record exists and the latest one's `model` differs. No `thread_settings_applied` record: skip the comparison; the latest `turn_context` alone decides. A generic `GPT-6` value does not establish `gpt-6-sol`, `gpt-6-luna`, or `gpt-6-astra`. Neither argv nor a model list proves current serving identity. |
+| Effort | `effort` in the same latest `turn_context` record | **Observed, undocumented.** Record `unknown` when the rollout selection yields no single non-subagent `CODEX_SESSION_ID` match, when `effort` is null or missing, when a `model_reroute` event follows that `turn_context`, or when a `thread_settings_applied` record exists and the latest one's `reasoning_effort` differs. No `thread_settings_applied` record: skip the comparison; the latest `turn_context` alone decides. A CLI flag or config describes a requested value; do not infer a default. |
 | Native session | `CODEX_SESSION_ID` and `CODEX_THREAD_ID` were present in this worker | **Observed, undocumented.** Useful for authorship and receipts, not proof of model, effort, or coordinator role. |
 
 To inspect argv, walk the parent chain from the shell's `$PPID` using
@@ -29,6 +29,8 @@ Stage Manager role.
 
 For that agent PID, compare `CODEX_VERSION` from the current agent's
 environment with the current session version from its own rollout JSONL.
+Read `CODEX_SESSION_ID` and `CODEX_VERSION` in your own command shell; the
+agent process's launch environment lacks them.
 
 Find its own rollout among the `rollout-*.jsonl` files that `lsof -p <pid>`
 shows open, rather than choosing the newest file by timestamp. One PID also
@@ -104,9 +106,10 @@ jq -c 'select(.type == "turn_context"
 
 Read the lines in file order:
 
-1. Take the last `turn_context` line. An empty model or effort cell means the
+1. Any non-zero `jq` exit: record model and effort `unknown`.
+2. Take the last `turn_context` line. An empty model or effort cell means the
    value is null or missing: record that value `unknown`.
-2. A `model_reroute` line after it: record `unknown`.
-3. Compare it with the last `thread_settings_applied` line when one exists; a
+3. A `model_reroute` line after it: record `unknown`.
+4. Compare it with the last `thread_settings_applied` line when one exists; a
    differing model or effort is `unknown`. No `thread_settings_applied`
    record: skip the comparison; the latest `turn_context` alone decides.
