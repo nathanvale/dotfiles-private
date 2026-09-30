@@ -63,17 +63,23 @@ Sources fall into three kinds; keep them apart when applying a rule:
   `--agent-arg --model --agent-arg claude-haiku-4-5-20251001`.
 - Plan mode can change the serving model. By default a Haiku session "would
   normally upgrade to Sonnet in plan mode" (model-config, `opusplan` model
-  setting; changelog, 2.0.17). model-config documents exceptions. On the
-  Anthropic API and Claude Platform on AWS, when `availableModels` excludes
-  the newest Sonnet, the session uses the newest permitted Sonnet and "stays
-  on Haiku only when every Sonnet is excluded". On Amazon Bedrock, Google
-  Cloud's Agent Platform, Microsoft Foundry and Mantle, "plan mode stays on
-  the session's model whenever the upgrade model is excluded" (model-config,
-  `opusplan` model setting). So a plan-mode turn may
-  be served by Sonnet or by Haiku. Attribute a plan to a model only after
-  observing its serving model, as startup step 2 observes it (local Stage
-  Manager rule). Local rule, extrapolated: keep Haiku workers out of plan
-  mode.
+  setting; changelog, 2.0.17). model-config documents exceptions when
+  `availableModels` excludes the newest Sonnet:
+  - From v2.1.205, on the Anthropic API and Claude Platform on AWS, the
+    session uses the newest permitted Sonnet and "stays on Haiku only when
+    every Sonnet is excluded".
+  - Before v2.1.205, "plan mode stayed on the session's model whenever the
+    newest version of the upgrade family was excluded, even when the
+    allowlist permitted an older one". This guide's minimum, v2.0.17, falls
+    in that range.
+  - On Amazon Bedrock, Google Cloud's Agent Platform, Microsoft Foundry and
+    Mantle, "plan mode stays on the session's model whenever the upgrade
+    model is excluded".
+
+  (model-config, `opusplan` model setting.) So a plan-mode turn may be served
+  by Sonnet or by Haiku. Attribute a plan to a model only after observing its
+  serving model, as startup step 2 observes it (local Stage Manager rule).
+  Local rule, extrapolated: keep Haiku workers out of plan mode.
 - Limits that shape a brief: 200K token context window, 64K max output,
   reliable knowledge cutoff February 2025 (Haiku 4.5 overview, Capabilities).
 
@@ -85,10 +91,15 @@ Sources fall into three kinds; keep them apart when applying a rule:
 - Claude Code's effort controls are the `CLAUDE_CODE_EFFORT_LEVEL`
   environment variable, the `--effort` launch flag, `/effort`, and the
   `modelSettings` or `effortLevel` settings (model-config, Adjust effort
-  level; Set the effort level). A value set through one of them is a launch
-  or session setting, not evidence that Haiku uses it. Extrapolated: record an
-  observed value in the startup receipt as a launch fact, not as a depth
-  control, and leave `--effort` out of a Haiku cast.
+  level; Set the effort level). Their values arrive at different times.
+  `--effort` sets a level "when launching Claude Code", while `/effort`, run
+  even "while Claude is working", and a Remote Control effort pick change the
+  current session after launch (model-config, Set the effort level). So a
+  launch selection can differ from the session's later value, and neither
+  shows that Haiku uses effort. Extrapolated: record each observed value in
+  the startup receipt with its control and when it was set (launch argv,
+  launch environment, settings, or a later session change), never as a
+  depth control; and leave `--effort` out of a Haiku cast.
 - Thinking is manual extended thinking with a token budget, not adaptive
   thinking (Haiku 4.5 overview, Good to know). The migration guide suggests
   enabling it "for significant performance improvements on coding and
