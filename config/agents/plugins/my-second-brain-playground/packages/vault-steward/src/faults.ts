@@ -7,10 +7,16 @@
 //   pause=<fault point>:<ms>         sleep at the named fault point (two-process tests)
 //   barrier=<fault point>:<path>     at the named fault point, create <path>.arrived, then wait until the test creates
 //                                    <path>; the arrival file lets a test order another process after this one
+//   checker-deadline=<ms>            the candidate checker (`bun run check`) is stopped after <ms> instead of its deadline
 import { existsSync, writeFileSync } from "node:fs"
 import type { Runtime, SpawnOptions, SpawnOutcome } from "./runtime.ts"
 
-export type Fault = { kind: "git-failure" | "unexpected"; occurrence: number; fragment: string } | { kind: "halt"; point: string } | { kind: "pause"; point: string; milliseconds: number } | { kind: "barrier"; point: string; path: string }
+export type Fault =
+	| { kind: "git-failure" | "unexpected"; occurrence: number; fragment: string }
+	| { kind: "halt"; point: string }
+	| { kind: "pause"; point: string; milliseconds: number }
+	| { kind: "barrier"; point: string; path: string }
+	| { kind: "checker-deadline"; milliseconds: number }
 
 export function parseFaults(value: string | undefined): Fault[] | null {
 	if (value === undefined || value === "") return []
@@ -20,10 +26,12 @@ export function parseFaults(value: string | undefined): Fault[] | null {
 		const halt = /^halt=([a-z-]+)$/.exec(part)
 		const pause = /^pause=([a-z-]+):([1-9][0-9]*)$/.exec(part)
 		const barrier = /^barrier=([a-z-]+):(.+)$/.exec(part)
+		const deadline = /^checker-deadline=([1-9][0-9]*)$/.exec(part)
 		if (spawn?.[1] !== undefined && spawn[3] !== undefined) faults.push({ kind: spawn[1] as "git-failure" | "unexpected", occurrence: Number(spawn[2] ?? "1"), fragment: spawn[3] })
 		else if (halt?.[1] !== undefined) faults.push({ kind: "halt", point: halt[1] })
 		else if (pause?.[1] !== undefined && pause[2] !== undefined) faults.push({ kind: "pause", point: pause[1], milliseconds: Number(pause[2]) })
 		else if (barrier?.[1] !== undefined && barrier[2] !== undefined) faults.push({ kind: "barrier", point: barrier[1], path: barrier[2] })
+		else if (deadline?.[1] !== undefined) faults.push({ kind: "checker-deadline", milliseconds: Number(deadline[1]) })
 		else return null
 	}
 	return faults
@@ -52,11 +60,15 @@ export function withFaults(rt: Runtime, faults: readonly Fault[]): Runtime {
 			seen.set(key, count)
 			return count === fault.occurrence
 		})
+	const deadline = faults.find((fault) => fault.kind === "checker-deadline")
+	// The candidate checker is the one `run check` spawn; only its deadline is replaced.
+	const bounded = (command: string[], options: SpawnOptions): SpawnOptions =>
+		deadline !== undefined && command[1] === "run" && command[2] === "check" && options.timeoutMs !== undefined ? { ...options, timeoutMs: deadline.milliseconds } : options
 	return {
 		...rt,
 		spawn(command: string[], options: SpawnOptions): SpawnOutcome {
 			const fault = command[0] === "git" ? firing(command.slice(1).join(" ")) : undefined
-			if (fault === undefined) return rt.spawn(command, options)
+			if (fault === undefined) return rt.spawn(command, bounded(command, options))
 			if (fault.kind === "unexpected") throw new Error(`injected unexpected failure at ${fault.fragment}`)
 			return { exitCode: 128, timedOut: false, spawnError: null, stdout: "", stderr: `fatal: injected git failure at ${fault.fragment}` }
 		},
