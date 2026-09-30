@@ -1,0 +1,9 @@
+{
+  "name": "vault-notes",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "vault-notes": "src/main.ts"
+  }
+}

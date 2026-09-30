@@ -42,6 +42,14 @@ card for the Herdr Projects goal. It never launches an agent.
 [`packages/agent-router/README.md`](packages/agent-router/README.md) owns the
 routes-file schema, gates and evidence owners; `--help` owns the syntax.
 
+## Vault Notes
+
+`bin/vault-notes` is the inspect-only front door for the vault's `check`,
+`list` and `inventory` commands, ported with byte-identical output. The vault's
+`package.json` scripts still run their own copies until the planned cutover.
+[`packages/vault-notes/README.md`](packages/vault-notes/README.md) owns the
+command map and known inherited defects; `--help` owns the syntax.
+
 ## Compaction recovery
 
 Both hook manifests (`hooks/claude/hooks.json`, `hooks/codex/hooks.json`)
