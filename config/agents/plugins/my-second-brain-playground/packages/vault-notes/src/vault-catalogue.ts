@@ -14,9 +14,11 @@ const ARTIFACT_FOLDERS = ["specs", "tickets", "proofs"] as const;
  * - `folder-map`: a README below the project root, either a nested navigation README or a governed artifact
  *   folder's own map;
  * - `artifact`: any other note inside a governed artifact folder;
+ * - `routed`: a note in a project directory that `routing.projectDirectories` routes to a type outside
+ *   `routing.projectLocalTypes`;
  * - `note`: every other project note, which the contract routes to its project-local types.
  */
-export type ProjectRole = "packet" | "folder-map" | "artifact" | "note";
+export type ProjectRole = "packet" | "folder-map" | "artifact" | "routed" | "note";
 
 /**
  * Where a note sits in the vault, derived from its path alone. `isIndex` and `expectedTypes` read the contract's
@@ -189,7 +191,13 @@ function projectRoleFor(
   const filename = projectSegments.at(-1) ?? "";
   if (projectSegments.length === 1) return Object.hasOwn(contract.routing.projectFiles, filename) ? "packet" : "note";
   const isReadme = filename === "README.md";
-  if (artifactFolder === null) return isReadme ? "folder-map" : "note";
+  if (artifactFolder === null) {
+    if (isReadme) return "folder-map";
+    const folder = projectSegments[0] ?? "";
+    const { projectDirectories, projectLocalTypes } = contract.routing;
+    const directoryType = Object.hasOwn(projectDirectories, folder) ? projectDirectories[folder] : undefined;
+    return directoryType === undefined || projectLocalTypes.includes(directoryType) ? "note" : "routed";
+  }
   return isReadme && projectSegments.length === 2 ? "folder-map" : "artifact";
 }
 

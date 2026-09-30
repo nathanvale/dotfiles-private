@@ -26,7 +26,8 @@ Each project keeps `projects/<slug>/resources.md`, linked from its README. The
 index has a human-curated shared block and a generated block that lists every
 note the project owns: every note the contract routes to `reference` or
 `decision` at any depth, except packet files, governed `specs/`, `tickets/` and
-`proofs/` notes, folder READMEs and the index itself. The generated block also
+`proofs/` notes, notes in a directory `routing.projectDirectories` routes to
+another type, folder READMEs and the index itself. The generated block also
 links each folder map (nested READMEs and governed-folder READMEs).
 `src/resources-index.ts` owns the rules; ownership and roles come from the
 Vault Catalogue placement, never from `related`, topics or links.
@@ -45,6 +46,8 @@ Vault Catalogue placement, never from `related`, topics or links.
   the generated block, frontmatter and label lines included, is preserved.
 - **Entries.** `- [<title>](<path>)`, then `_(archived)_` or `_(superseded)_`
   for historical notes, then `: <summary>`, all from the note's frontmatter.
+  A Markdown link inside a title or summary is reduced to its label, so the
+  copied text never forms a link that would resolve from the index.
   Folder maps come first, then the project root, then folders in path order.
 - **Findings.** `check` reports `resources-route-missing`,
   `resources-index-missing`, `resources-block-invalid`, and, per generated
@@ -52,7 +55,8 @@ Vault Catalogue placement, never from `related`, topics or links.
   Entry text may drift from frontmatter without a finding; only the entry set
   is checked, so a summary edit does not force an index edit. Broken links stay
   with `link-missing-target`.
-- **Route.** Any local link to the index anywhere in the project README counts.
+- **Route.** Any visible local link to the index anywhere in the project README
+  counts; links inside HTML comments or fenced code blocks do not.
 - **Writes.** `vault-notes resources --json` returns each proposal's complete
   `content` and `state` (`create`, `update`, `current`, or `blocked` when block
   markers need a hand repair). Write it inside a Vault Steward candidate;
@@ -71,7 +75,7 @@ index role, routed types); it selects before any note
 is read and reads one note at a time in path order (list, inventory).
 `notesWithFilenamePolicy()` also returns the files the uppercase-filename rule
 governs, under its own exclusion list; both walks finish before any note is
-read (check). The project role (`packet`, `folder-map`, `artifact` or `note`), the index role
+read (check). The project role (`packet`, `folder-map`, `artifact`, `routed` or `note`), the index role
 and routed types read `contract.routing` only when accessed, so list and
 inventory keep working with an incomplete routing block.
 

@@ -44,6 +44,14 @@ const PROJECTS: Record<string, string> = {
 
 const ACTIVE_CONTRACT = JSON.stringify({ ...JSON.parse(CONTRACT), projectResources: { indexFile: "resources.md" } });
 
+/** The active contract plus two routed project directories: `meetings` to its own type, `notes` to `reference`. */
+function contractWithDirectories(): string {
+  const parsed = JSON.parse(ACTIVE_CONTRACT);
+  parsed.routing.projectDirectories = { ...parsed.routing.projectDirectories, meetings: "meeting", notes: "reference" };
+  parsed.statusesByType = { ...parsed.statusesByType, meeting: ["active"] };
+  return JSON.stringify(parsed);
+}
+
 async function vault(files: Record<string, string>, contract = ACTIVE_CONTRACT): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "vault-resources-"));
   roots.push(root);
@@ -271,6 +279,43 @@ describe("generation", () => {
       `${note("Beta resources", "reference", "active", "Hand-written index.")}\n## Project-owned notes\n\n${EMPTY_BLOCK}`,
     );
   });
+
+  test("a project directory the contract routes to its own type is not owned; one routed to reference is", async () => {
+    const root = await vault(
+      {
+        ...PROJECTS,
+        "projects/gamma/meetings/weekly.md": note("Weekly", "meeting", "active", "A meeting record."),
+        "projects/gamma/notes/idea.md": note("Idea", "reference", "active", "A routed reference note."),
+      },
+      contractWithDirectories(),
+    );
+    const [gamma] = propose(root, "gamma").projects as [Proposal];
+    expect(gamma.notes).toEqual(["projects/gamma/notes/idea.md", "projects/gamma/research/x.md"]);
+
+    await migrate(root);
+    expect(await checkVault(root)).toEqual([]);
+  });
+
+  test("links inside a note's title or summary become plain labels, so the generated index passes check", async () => {
+    const root = await vault({
+      ...PROJECTS,
+      // Each link resolves from the source note's folder; copied verbatim into resources.md, each would break.
+      "projects/gamma/research/x.md": note(
+        "Gamma [draft](chart.png) Research",
+        "reference",
+        "active",
+        "Moved from [the old note](../../alpha/proof.md), see [site](https://example.com) and ![a chart](chart.png); odd ](text.",
+      ),
+      "projects/gamma/research/chart.png": "not a note",
+    });
+    const [gamma] = propose(root, "gamma").projects as [Proposal];
+    expect(gamma.content).toContain(
+      "\n- [Gamma draft Research](research/x.md): Moved from the old note, see site and a chart; odd ] (text.\n",
+    );
+
+    await migrate(root);
+    expect(await checkVault(root)).toEqual([]);
+  });
 });
 
 describe("entry rules", () => {
@@ -311,6 +356,24 @@ describe("entry rules", () => {
       ["resources-entry-stale", "projects/alpha/resources.md", { project: "alpha", target: "README.md" }],
       ["resources-entry-foreign", "projects/alpha/resources.md", { project: "alpha", target: "../gamma/research/x.md" }],
       ["resources-entry-foreign", "projects/alpha/resources.md", { project: "alpha", target: "https://example.com" }],
+    ]);
+  });
+
+  test("a route hidden in an HTML comment or a fenced code block does not count; one after a closed fence does", async () => {
+    const root = await vault(PROJECTS);
+    await migrate(root);
+    const hidden = {
+      alpha: "\n<!--\n- [Resources index](resources.md)\n-->\n",
+      beta: "\n```markdown\n- [Resources index](resources.md)\n```\n",
+      gamma: "\n~~~~\n~~~\n- [Code](resources.md)\n~~~~\n\nAfter the fence: [Resources index](resources.md).\n",
+    };
+    for (const [project, text] of Object.entries(hidden)) {
+      await edit(root, `projects/${project}/README.md`, (content) => content.replace(ROUTE, text));
+    }
+
+    expect(await findings(root)).toEqual([
+      ["resources-route-missing", "projects/alpha/README.md", { project: "alpha", target: "resources.md" }],
+      ["resources-route-missing", "projects/beta/README.md", { project: "beta", target: "resources.md" }],
     ]);
   });
 

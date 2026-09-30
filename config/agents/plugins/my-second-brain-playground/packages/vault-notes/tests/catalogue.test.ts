@@ -111,6 +111,22 @@ test("placement names the owning project, the note's role and folder in it, and 
   });
 });
 
+test("a project directory routed to a type outside the project-local types is its own role, not an owned note", async () => {
+  const parsed = JSON.parse(contract);
+  parsed.routing.projectDirectories = { ...parsed.routing.projectDirectories, meetings: "meeting", notes: "reference" };
+  const catalogue = await openCatalogue(
+    await vault(["projects/alpha/meetings/weekly.md", "projects/alpha/meetings/README.md", "projects/alpha/notes/idea.md"], JSON.stringify(parsed)),
+  );
+
+  const roles = (await catalogue.notes()).map((note) => [note.relativePath, note.placement.projectRole, note.placement.expectedTypes]);
+
+  expect(roles).toEqual([
+    ["projects/alpha/meetings/README.md", "folder-map", ["decision", "reference"]],
+    ["projects/alpha/meetings/weekly.md", "routed", ["meeting"]],
+    ["projects/alpha/notes/idea.md", "note", ["reference"]],
+  ]);
+});
+
 test("a selection is made before any note is read, so an unselected unreadable note cannot fail it", async () => {
   const root = await vault(["products/widget.md", "people/locked.md"]);
   await chmod(path.join(root, "people", "locked.md"), 0o000);

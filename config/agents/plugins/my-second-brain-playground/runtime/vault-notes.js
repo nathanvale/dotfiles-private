@@ -92,7 +92,7 @@ function analyseProject(notes, project, indexFile) {
   return analysis;
 }
 function routeFindings({ project, readme }, indexFile) {
-  if (readme !== undefined && localTargets(readme.content).some((target) => target === indexFile))
+  if (readme !== undefined && localTargets(visibleMarkdown(readme.content)).some((target) => target === indexFile))
     return [];
   return [
     {
@@ -169,6 +169,22 @@ function overlaps(left, right) {
 function entryTarget(line) {
   const target = /^\s*[-*+]\s+\[(?:\\.|[^\]\\])*\]\(([^)]*)\)/.exec(line)?.[1];
   return target === undefined ? [] : [linkPath(target)];
+}
+function visibleMarkdown(content) {
+  let fence = null;
+  const lines = [];
+  for (const line of content.replace(/<!--[\s\S]*?-->/g, "").split(`
+`)) {
+    const opener = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence === null && opener !== undefined)
+      fence = opener;
+    else if (fence !== null && opener !== undefined && opener[0] === fence[0] && opener.length >= fence.length && line.trim() === opener)
+      fence = null;
+    else if (fence === null)
+      lines.push(line);
+  }
+  return lines.join(`
+`);
 }
 function localTargets(content) {
   return [...content.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)].flatMap((match) => {
@@ -250,7 +266,14 @@ function renderEntry(note) {
 }
 function frontmatterText(note, field) {
   const value = note.frontmatter?.[field];
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  if (typeof value !== "string")
+    return "";
+  let text = value.replace(/\s+/g, " ").trim();
+  for (let previous = "";previous !== text; ) {
+    previous = text;
+    text = text.replace(/!?\[([^\]]*)\]\(([^)]*)\)/g, "$1");
+  }
+  return text.replaceAll("](", "] (");
 }
 function encodePath(projectPath) {
   return projectPath.split("/").map((segment) => encodeURIComponent(segment).replace(/[()]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`)).join("/");
@@ -401,8 +424,14 @@ function projectRoleFor(projectSegments, artifactFolder, contract) {
   if (projectSegments.length === 1)
     return Object.hasOwn(contract.routing.projectFiles, filename) ? "packet" : "note";
   const isReadme = filename === "README.md";
-  if (artifactFolder === null)
-    return isReadme ? "folder-map" : "note";
+  if (artifactFolder === null) {
+    if (isReadme)
+      return "folder-map";
+    const folder = projectSegments[0] ?? "";
+    const { projectDirectories, projectLocalTypes } = contract.routing;
+    const directoryType = Object.hasOwn(projectDirectories, folder) ? projectDirectories[folder] : undefined;
+    return directoryType === undefined || projectLocalTypes.includes(directoryType) ? "note" : "routed";
+  }
   return isReadme && projectSegments.length === 2 ? "folder-map" : "artifact";
 }
 function routeTypes(relativePath, segments, artifactFolder, contract) {

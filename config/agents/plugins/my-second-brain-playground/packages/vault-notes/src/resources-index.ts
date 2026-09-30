@@ -163,7 +163,7 @@ function analyseProject(notes: readonly MarkdownNote[], project: string, indexFi
 }
 
 function routeFindings({ project, readme }: ProjectAnalysis, indexFile: string): ResourcesFinding[] {
-  if (readme !== undefined && localTargets(readme.content).some((target) => target === indexFile)) return [];
+  if (readme !== undefined && localTargets(visibleMarkdown(readme.content)).some((target) => target === indexFile)) return [];
   return [
     {
       id: "resources-route-missing",
@@ -253,6 +253,19 @@ function entryTarget(line: string): string[] {
   return target === undefined ? [] : [linkPath(target)];
 }
 
+/** Markdown a reader sees: the content without HTML comments and without fenced code blocks. */
+function visibleMarkdown(content: string): string {
+  let fence: string | null = null;
+  const lines: string[] = [];
+  for (const line of content.replace(/<!--[\s\S]*?-->/g, "").split("\n")) {
+    const opener = /^ {0,3}(`{3,}|~{3,})/.exec(line)?.[1];
+    if (fence === null && opener !== undefined) fence = opener;
+    else if (fence !== null && opener !== undefined && opener[0] === fence[0] && opener.length >= fence.length && line.trim() === opener) fence = null;
+    else if (fence === null) lines.push(line);
+  }
+  return lines.join("\n");
+}
+
 /** Every inline local link target in a note, resolved against the note's own folder and stripped of any fragment. */
 function localTargets(content: string): string[] {
   return [...content.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)].flatMap((match) => {
@@ -333,9 +346,19 @@ function renderEntry(note: MarkdownNote): string {
   return `- [${title.replace(/[[\]\\]/g, "\\$&")}](${encodePath(projectPath)})${mark}${summary === "" ? "" : `: ${summary}`}`;
 }
 
+/**
+ * A frontmatter field as one line of display text. Any Markdown link in it becomes its label, and a leftover `](`
+ * is spaced apart, so no text the generator copies can form a link that `check` would resolve from the index.
+ */
 function frontmatterText(note: MarkdownNote, field: string): string {
   const value = note.frontmatter?.[field];
-  return typeof value === "string" ? value.replace(/\s+/g, " ").trim() : "";
+  if (typeof value !== "string") return "";
+  let text = value.replace(/\s+/g, " ").trim();
+  for (let previous = ""; previous !== text; ) {
+    previous = text;
+    text = text.replace(/!?\[([^\]]*)\]\(([^)]*)\)/g, "$1");
+  }
+  return text.replaceAll("](", "] (");
 }
 
 function encodePath(projectPath: string): string {
