@@ -939,7 +939,12 @@ function issueCreateMatch(record: Record<string, unknown>, wanted: string, wante
 }
 
 function issueCreateEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
-	if (input.parentKey !== undefined) return parentCreateEvidence(input, reply, baseline).evidence;
+	if (input.parentKey !== undefined) {
+		// Unread matches may hold the new issue, so a partial list never proves
+		// it absent; a new key on the page read still proves the write.
+		const { evidence, complete } = parentCreateEvidence(input, reply, baseline);
+		return !complete && evidence.kind === "absent" ? { kind: "indeterminate", reason: "the parent's issue search returned only part of its matches; it cannot prove the issue absent" } : evidence;
+	}
 	const wanted = normalised(input.summary as string);
 	if (wanted.length === 0) return { kind: "indeterminate", reason: "the requested issue summary has no stable read-back representation" };
 	const wantedType = normalised(input.issueType as string);

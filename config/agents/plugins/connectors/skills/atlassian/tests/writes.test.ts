@@ -750,5 +750,10 @@ describe("issue.create under a parent", () => {
 		expect(readBackEvidence("issue.create", CHILD, never, search([]))).toEqual({ kind: "absent", revisionUnchanged: false });
 		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9", null)]))).toEqual({ kind: "indeterminate", reason: "a matching issue search result carries no parent key" });
 		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9", { key: "PROJ-600" })]))).toEqual({ kind: "indeterminate", reason: "a matching issue search result names a different parent" });
+		// A list with unread matches never proves absence; a new key on the page read still proves the write.
+		const partial = { kind: "indeterminate" as const, reason: "the parent's issue search returned only part of its matches; it cannot prove the issue absent" };
+		expect(readBackEvidence("issue.create", CHILD, never, search([], { next_page_token: "next" }))).toEqual(partial);
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9")], { next_page_token: "next" }), { effectIds: ["PROJ-9"], commentIds: [], revision: null })).toEqual(partial);
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9")], { next_page_token: "next" }))).toEqual({ kind: "found", effects: [{ kind: "jira-issue", id: "PROJ-9" }] });
 	});
 });
