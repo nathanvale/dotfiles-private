@@ -18,6 +18,8 @@ interface PausePoint {
 	anchor: string
 	placement: "after" | "before"
 }
+// After the exact-text bind and before the configured state root is resolved (review t-0025 pause Z).
+const BEFORE_RESOLVE: PausePoint = { name: "resolve", anchor: "const physical = realpathSync(configured);", placement: "before" }
 // The start of the receipt read, after the exact-text bind and authorization: the old check-then-read window.
 const BEFORE_READ: PausePoint = { name: "read", anchor: "function readBoundReceipt(itemDirectory) {", placement: "after" }
 // Between the open of the receipt and the fstat of that descriptor.
@@ -40,7 +42,9 @@ afterEach(() => {
 })
 
 interface Trees {
+	decoyState: string
 	decoyItem: string
+	otherState: string
 	otherItem: string
 	piped: string
 }
@@ -48,20 +52,28 @@ interface Trees {
 /** Redirects HOME and XDG_STATE_HOME to a decoy tree with its own receipt, beside another root's item directory. */
 function trees(target: Fixture, otherPresent: boolean): Trees {
 	const decoy = join(target.root, "decoy")
-	const decoyItem = join(decoy, "state", ...ITEMS)
-	const otherItem = join(target.root, "other", ".local", "state", ...ITEMS)
+	const decoyState = join(decoy, "state")
+	const decoyItem = join(decoyState, ...ITEMS)
+	const otherState = join(target.root, "other", ".local", "state")
+	const otherItem = join(otherState, ...ITEMS)
 	mkdirSync(decoyItem, { recursive: true })
 	mkdirSync(otherItem, { recursive: true })
 	writeFileSync(join(decoyItem, "classification-metadata.json"), JSON.stringify({ displayName: DECOY_VALUE, mimeType: "text/plain" }))
 	if (otherPresent) writeFileSync(join(otherItem, "classification-metadata.json"), JSON.stringify({ displayName: OTHER_ROOT_VALUE, mimeType: "text/plain" }))
 	target.env.HOME = decoy
-	target.env.XDG_STATE_HOME = join(decoy, "state")
-	return { decoyItem, otherItem, piped: input(grant(target, { receiptPath: join(decoyItem, "classification-metadata.json") }), request()) }
+	target.env.XDG_STATE_HOME = decoyState
+	return { decoyState, decoyItem, otherState, otherItem, piped: input(grant(target, { receiptPath: join(decoyItem, "classification-metadata.json") }), request()) }
 }
 
 function swapIntoOtherRoot(paths: Trees): void {
 	renameSync(paths.decoyItem, `${paths.decoyItem}.original`)
 	symlinkSync(paths.otherItem, paths.decoyItem)
+}
+
+/** Replaces the configured state root node itself with a link to another root's state root. */
+function swapRootIntoOtherRoot(paths: Trees): void {
+	renameSync(paths.decoyState, `${paths.decoyState}.original`)
+	symlinkSync(paths.otherState, paths.decoyState)
 }
 
 function pausedRuntime(target: Fixture, points: readonly PausePoint[]): string {
@@ -108,12 +120,13 @@ async function raced(target: Fixture, piped: string, cmd: string[], steps: reado
 type Window = (target: Fixture, mode: string[]) => string[]
 
 const WINDOWS: Record<string, Window> = {
+	"after the bind and before the root is resolved": (target, mode) => [process.execPath, pausedRuntime(target, [BEFORE_RESOLVE]), "project", ...mode],
 	"after the bind and before the read": (target, mode) => [process.execPath, pausedRuntime(target, [BEFORE_READ]), "project", ...mode],
 	"after the item directory is pinned": (_target, mode) => [process.execPath, "--preload", PIN_PAUSE_PRELOAD, RUNTIME, "project", ...mode],
 }
 
 // Every probe reaches its pause in every run (the decoy receipt exists), so a pause that never fires fails the probe.
-async function probe(window: Window, point: string): Promise<Record<string, ProcessResult>> {
+async function probe(window: Window, point: string, swap: (paths: Trees) => void = swapIntoOtherRoot): Promise<Record<string, ProcessResult>> {
 	const observed: Record<string, ProcessResult> = {}
 	const fired: string[] = []
 	for (const otherPresent of [true, false]) {
@@ -121,7 +134,7 @@ async function probe(window: Window, point: string): Promise<Record<string, Proc
 			removeFixture(fixture)
 			fixture = createFixture()
 			const paths = trees(fixture, otherPresent)
-			const steps = [{ point, act: () => swapIntoOtherRoot(paths) }]
+			const steps = [{ point, act: () => swap(paths) }]
 			observed[`${otherPresent ? "present" : "absent"} ${mode.length === 0 ? "human" : "json"}`] = await raced(fixture, paths.piped, window(fixture, mode), steps, fired)
 		}
 	}
@@ -135,6 +148,14 @@ const REFUSED_ALL = {
 	"absent json": { exitCode: 3, stderr: "", stdout: REFUSAL_JSON },
 	"absent human": { exitCode: 3, stderr: REFUSAL_HUMAN, stdout: "" },
 }
+
+// Physical state root (Nathan, 2026-09-30, option 1). Wrong behavior caught: resolving the configured root after the
+// exact-text bind and pinning under whatever the root node then points at, which projects the other root's value.
+test("the state root node swapped for a link to another root before it is resolved is refused identically, present or absent", async () => {
+	const observed = await probe(WINDOWS["after the bind and before the root is resolved"] as Window, BEFORE_RESOLVE.name, swapRootIntoOtherRoot)
+	expect(observed).toEqual(REFUSED_ALL)
+	for (const result of Object.values(observed)) expect(`${result.stdout}${result.stderr}`).not.toContain(OTHER_ROOT_VALUE)
+})
 
 test("a swap into another root after the bind and before the read is refused identically, present or absent", async () => {
 	const observed = await probe(WINDOWS["after the bind and before the read"] as Window, BEFORE_READ.name)

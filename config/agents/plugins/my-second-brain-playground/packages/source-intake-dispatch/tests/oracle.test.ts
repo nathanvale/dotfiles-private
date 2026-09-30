@@ -182,20 +182,14 @@ for (const [name, receiptPath] of Object.entries(RECEIPT_PATH_ALIASES)) {
 	})
 }
 
-// A configured state root reached through a symbolic link (a linked ~/.local/state, or macOS /tmp). The grant names
-// the receipt under the configured spelling, as the README tells the caller to. A gate that builds the expected path
-// from the physical root denies this exact grant; a gate that accepts any spelling of the file allows the physical one.
+// Physical state root (Nathan, 2026-09-30, option 1): the configured root must be its own physical path. A root reached
+// through a symbolic link (a linked ~/.local/state, or macOS /tmp) gets the fixed denial even for the exact configured
+// spelling the README names, so the root node cannot redirect the read to whatever it points at. A gate that resolves
+// the root and pins the item directory under its real path allows this grant with a receipt present.
 const LINKED_STATE_HOME: FixtureOptions = { linkedStateHome: true }
 
-test("with a linked state root, the exact configured receiptPath projects the granted fields in both modes", () => {
-	const observed = probe({ present }, (target) => piped(grant(target), request()), LINKED_STATE_HOME)
-	expect(observed.present?.machine.exitCode).toBe(0)
-	expect(envelope(observed.present?.machine as ProcessResult).result.data).toEqual({
-		opaqueItemRef: "synthetic-item-001",
-		projection: { displayName: "Fictional planning note", mimeType: "text/plain" },
-	})
-	expect(observed.present?.human.exitCode).toBe(0)
-	expect(observed.present?.human.stdout).not.toContain(SENTINEL)
+test("with a linked state root, the exact configured receiptPath is refused identically present or absent", () => {
+	expectAllRefused(probe({ present, absent }, (target) => piped(grant(target), request()), LINKED_STATE_HOME))
 })
 
 test("with a linked state root, the physical spelling of the receipt path is refused identically present or absent", () => {
@@ -203,8 +197,35 @@ test("with a linked state root, the physical spelling of the receipt path is ref
 	expectAllRefused(probe({ present, absent }, (target) => piped(grant(target, { receiptPath: physical(target) }), request()), LINKED_STATE_HOME))
 })
 
+// The configured root must be written as its canonical physical absolute path. For each non-canonical spelling of the
+// same physical root, neither the README's literal expansion nor the normalized path is accepted. A gate that
+// normalizes the configured root (path.join) accepts the normalized spelling with a receipt present.
+const NON_CANONICAL_STATE_HOME: Record<string, (target: Fixture) => string> = {
+	"a trailing slash": (target) => `${target.stateHome}/`,
+	"a doubled slash": (target) => target.stateHome.replace(/\/state$/, "//state"),
+	"a dot-dot segment": (target) => `${target.stateHome}/../state`,
+}
+
+for (const [name, spelling] of Object.entries(NON_CANONICAL_STATE_HOME)) {
+	const grantedAs: Record<string, (target: Fixture) => string> = {
+		"the README's literal expansion": (target) => `${spelling(target)}/${relative(target.stateHome, target.receiptPath)}`,
+		"the normalized path": (target) => target.receiptPath,
+	}
+	for (const [form, receiptPath] of Object.entries(grantedAs)) {
+		test(`with XDG_STATE_HOME spelled with ${name}, receiptPath as ${form}: refused identically present or absent`, () => {
+			expectAllRefused(
+				probe({ present, absent }, (target) => {
+					target.env.XDG_STATE_HOME = spelling(target)
+					return piped(grant(target, { receiptPath: receiptPath(target) }), request())
+				}),
+			)
+		})
+	}
+}
+
 // The README names the root as ${XDG_STATE_HOME:-$HOME/.local/state}: an empty value falls back to HOME. A gate that
-// treats the empty string as a configured (relative) root denies this exact grant.
+// treats the empty string as a configured (relative) root denies this exact grant; one that reads the fixture's own
+// state root instead of HOME's projects its sentinel value.
 test("with an empty XDG_STATE_HOME, the exact receiptPath under HOME projects the granted fields", () => {
 	const homeReceiptPath = (target: Fixture) => join(target.root, "home", ".local", "state", relative(target.stateHome, target.receiptPath))
 	const observed = probe(
@@ -212,6 +233,7 @@ test("with an empty XDG_STATE_HOME, the exact receiptPath under HOME projects th
 			present: (target) => {
 				mkdirSync(join(homeReceiptPath(target), ".."), { recursive: true })
 				writeJson(homeReceiptPath(target), receipt())
+				writeJson(target.receiptPath, { displayName: SENTINEL, mimeType: SENTINEL })
 			},
 		},
 		(target) => {
@@ -221,7 +243,16 @@ test("with an empty XDG_STATE_HOME, the exact receiptPath under HOME projects th
 		},
 	)
 	expect(observed.present?.machine.exitCode).toBe(0)
-	expect(observed.present?.human.exitCode).toBe(0)
+	expect(envelope(observed.present?.machine as ProcessResult).result.data).toEqual({
+		opaqueItemRef: "synthetic-item-001",
+		projection: { displayName: "Fictional planning note", mimeType: "text/plain" },
+	})
+	expect(observed.present?.human).toEqual({
+		exitCode: 0,
+		stderr: "",
+		stdout: "Granted projection for synthetic-item-001:\n  displayName: Fictional planning note\n  mimeType: text/plain\n",
+	})
+	expect(observed.present?.machine.stdout).not.toContain(SENTINEL)
 })
 
 for (const [name, receiptPath] of Object.entries(RECEIPT_PATH_ALIASES)) {

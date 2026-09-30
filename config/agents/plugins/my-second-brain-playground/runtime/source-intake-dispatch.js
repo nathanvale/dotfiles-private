@@ -362,7 +362,10 @@ function boundItemDirectory(grant) {
   const configured = configuredStateHome();
   if (grant.receiptPath !== join(configured, ...ITEMS_PATH, grant.opaqueItemRef, RECEIPT_FILE))
     return null;
-  return join(realpathSync(configured), ...ITEMS_PATH, grant.opaqueItemRef);
+  const physical = realpathSync(configured);
+  if (physical !== configured)
+    return null;
+  return join(physical, ...ITEMS_PATH, grant.opaqueItemRef);
 }
 function readBoundReceipt(itemDirectory) {
   process.chdir(itemDirectory);

@@ -71,7 +71,7 @@ function asRequest(value: unknown): Request {
 	return value as Request
 }
 
-/** The configured state root as the caller spells it; an empty XDG_STATE_HOME counts as unset. */
+/** The configured state root as the caller spells it, unnormalized; an empty XDG_STATE_HOME counts as unset. */
 function configuredStateHome(): string {
 	const configured = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state")
 	if (!isAbsolute(configured)) throw new Error("relative state home")
@@ -104,12 +104,16 @@ function isAuthorized(grant: Grant, request: Request): boolean {
 /**
  * The grant's receiptPath is the only caller-named path. It must equal the exact receipt path under the configured
  * state root as raw text, with no normalization of the caller's spelling; nothing is touched before this comparison.
- * Returns the physical item directory to pin, under the state root's real path, so a linked root still matches.
+ * The configured root must then be its own canonical physical path (Nathan, 2026-09-30, option 1): a linked root, a
+ * root under a linked ancestor, or a non-canonical spelling is denied, so replacing the root node with a link before
+ * it is resolved cannot redirect the read. Returns the physical item directory to pin.
  */
 function boundItemDirectory(grant: Grant): string | null {
 	const configured = configuredStateHome()
 	if (grant.receiptPath !== join(configured, ...ITEMS_PATH, grant.opaqueItemRef, RECEIPT_FILE)) return null
-	return join(realpathSync(configured), ...ITEMS_PATH, grant.opaqueItemRef)
+	const physical = realpathSync(configured)
+	if (physical !== configured) return null
+	return join(physical, ...ITEMS_PATH, grant.opaqueItemRef)
 }
 
 /**

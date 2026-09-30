@@ -43,6 +43,11 @@ Git and out of Beads.
 ${XDG_STATE_HOME:-$HOME/.local/state}/my-second-brain-playground/drive-inbox-filing/items/<opaqueItemRef>/classification-metadata.json
 ```
 
+The state root (`XDG_STATE_HOME`, or `$HOME/.local/state` when it is unset or
+empty) must be written as its canonical physical absolute path: no symbolic
+link in it, no trailing or doubled slash, and no `.` or `..` segment. Any other
+spelling, even one naming the same directory, gets the fixed denial.
+
 Only provider `luna` with purpose `classification` is supported. Granted and
 requested fields come from this closed metadata list: `displayName`,
 `mimeType`, `modifiedTime`, and `sizeBytes`. The metadata file is one flat
@@ -68,6 +73,12 @@ JSON object; each projected value is a string or finite number.
   Every failure is the fixed denial.
 - `HOME` and `XDG_STATE_HOME` are trusted configuration set by the granted
   foreground caller (Nathan, 2026-09-30). They select the receipt root above.
+- The configured state root must be its own physical path (Nathan,
+  2026-09-30, option 1). After the text comparison the command resolves the
+  root and denies unless the result equals the configured text exactly. So a
+  root that is, or becomes, a symbolic link (or sits under one) gets the fixed
+  denial, and the root node cannot redirect the read. Linked state roots are
+  not supported.
 - No configuration of those variables, and no change to the configured tree
   during a run, reads or reveals a receipt outside the configured root. That
   includes the account's default receipt root, regardless of both variables. A
@@ -101,9 +112,10 @@ the receipt.
 
 The denial is byte-identical for every authority mismatch and for every
 outcome that depends on the receipt: a missing receipt or state root; a
-`receiptPath` other than the exact bound path; an unreadable, symlinked,
-malformed or incomplete receipt; and any receipt I/O error. It never names a path, receipt value, source label or raw error, so it
-is no existence oracle. Human mode prints this one line on stderr:
+`receiptPath` other than the exact bound path; a linked or non-canonical state
+root; an unreadable, symlinked, malformed or incomplete receipt; and any
+receipt I/O error. It never names a path, receipt value, source label or raw
+error, so it is no existence oracle. Human mode prints this one line on stderr:
 
 ```text
 Request denied. Stage Manager must verify the private grant before retrying. Next: Ask Stage Manager to verify the private grant and issue a matching request.
