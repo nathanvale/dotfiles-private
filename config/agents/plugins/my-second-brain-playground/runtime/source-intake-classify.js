@@ -563,6 +563,7 @@ function laneConfigArgs(profile) {
     "allow_login_shell=false",
     "skills.include_instructions=false",
     "include_apps_instructions=false",
+    "agents.enabled=false",
     `developer_instructions=${toml(lane_instructions_default)}`,
     `permissions.${PROFILE_NAME}=${profile}`,
     `default_permissions=${toml(PROFILE_NAME)}`
@@ -680,7 +681,7 @@ function promptText(stdout) {
 function sessionHolds(lane, workspace) {
   const result = capture(lane, [lane.codex, "debug", "prompt-input", ...lane.configArgs, "pre-flight"], workspace);
   const text = result.exitCode === 0 ? promptText(result.stdout) : null;
-  if (text === null || text.includes("# AGENTS.md instructions") || !text.includes(INSTRUCTIONS_HEADING))
+  if (text === null || text.includes("# AGENTS.md instructions") || text.includes("<multi_agent_role>") || !text.includes(INSTRUCTIONS_HEADING))
     return false;
   if (!text.includes("Approval policy is currently never."))
     return false;

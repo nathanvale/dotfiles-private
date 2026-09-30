@@ -154,6 +154,8 @@ export function laneConfigArgs(profile: string): string[] {
 		"allow_login_shell=false",
 		"skills.include_instructions=false",
 		"include_apps_instructions=false",
+		// Codex 0.159.2 keeps multi-agent v2 collaboration on with both multi_agent features disabled; this turns it off.
+		"agents.enabled=false",
 		`developer_instructions=${toml(instructions)}`,
 		`permissions.${PROFILE_NAME}=${profile}`,
 		`default_permissions=${toml(PROFILE_NAME)}`,

@@ -86,7 +86,7 @@ lane(`the run is a top-level exec with the required configuration and a kept rol
 	expect(argv).not.toContain("--ephemeral")
 	expect(flagValue(argv, "-m")).toBe("gpt-6-luna")
 	const values = settings(argv)
-	for (const setting of ['approval_policy="never"', 'web_search="disabled"', 'shell_environment_policy.inherit="none"', 'default_permissions="msb_source_intake_classify"']) expect(values).toContain(setting)
+	for (const setting of ['approval_policy="never"', 'web_search="disabled"', 'shell_environment_policy.inherit="none"', "agents.enabled=false", 'default_permissions="msb_source_intake_classify"']) expect(values).toContain(setting)
 	const disabled = argv.flatMap((value, index) => (argv[index - 1] === "--disable" ? [value] : []))
 	for (const feature of REQUIRED_DISABLED) expect(disabled).toContain(feature)
 	const profile = values.find((value) => value.startsWith("permissions.msb_source_intake_classify="))

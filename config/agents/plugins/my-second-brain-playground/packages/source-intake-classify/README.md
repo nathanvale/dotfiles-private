@@ -60,8 +60,9 @@ codex exec <lane configuration> --ignore-user-config --ignore-rules
   `turn_context` evidence; the profile denies it to later lanes.
 - Configuration, every value passed with `-c` or `--disable` per invocation:
   `approval_policy="never"`, `web_search="disabled"`,
-  `shell_environment_policy.inherit="none"`, `allow_login_shell=false`, skill
-  and app instructions off, and the features `apps`, `plugins`, `browser_use`,
+  `shell_environment_policy.inherit="none"`, `allow_login_shell=false`,
+  `agents.enabled=false` (Codex 0.159.2 keeps multi-agent collaboration on
+  without it), skill and app instructions off, and the features `apps`, `plugins`, `browser_use`,
   `browser_use_external`, `in_app_browser`, `computer_use`, `multi_agent`,
   `multi_agent_v2`, `hooks`, `memories`, `shell_snapshot` and the other
   outward features in [`src/lane.ts`](src/lane.ts) disabled.
@@ -104,8 +105,8 @@ Before the model starts, every run proves with the lane's exact configuration:
    both roots must exist.
 5. The caller's Codex credential: `cat` is denied.
 6. `codex debug prompt-input` renders the session without a model call: it
-   carries the lane instructions, no `AGENTS.md` instructions, approval
-   `never`, and a deny entry for `:root` and every private root spelling.
+   carries the lane instructions, no `AGENTS.md` instructions, no multi-agent
+   role, approval `never`, and a deny entry for `:root` and every private root spelling.
 
 "Denied" means a non-zero exit, empty stdout, and "Operation not permitted" on
 stderr. Any other result, error or timeout gives one fixed, value-free refusal

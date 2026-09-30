@@ -88,12 +88,13 @@ function promptText(stdout: string): string | null {
 
 /**
  * The model session's own configuration: rendered without a model call, it must carry the dedicated instructions, no
- * AGENTS.md instructions, approval never, and a deny entry for the filesystem root and every receipt root spelling.
+ * AGENTS.md instructions, no multi-agent role, approval never, and a deny entry for the filesystem root and every
+ * receipt root spelling.
  */
 function sessionHolds(lane: Lane, workspace: string): boolean {
 	const result = capture(lane, [lane.codex, "debug", "prompt-input", ...lane.configArgs, "pre-flight"], workspace)
 	const text = result.exitCode === 0 ? promptText(result.stdout) : null
-	if (text === null || text.includes("# AGENTS.md instructions") || !text.includes(INSTRUCTIONS_HEADING)) return false
+	if (text === null || text.includes("# AGENTS.md instructions") || text.includes("<multi_agent_role>") || !text.includes(INSTRUCTIONS_HEADING)) return false
 	if (!text.includes("Approval policy is currently never.")) return false
 	const entries = ['<special>:root</special>', ...lane.deniedRoots.map((root) => `<path>${root}</path>`)]
 	return entries.every((entry) => text.includes(`<entry access="deny" escalatable="false">${entry}</entry>`))
