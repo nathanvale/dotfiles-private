@@ -4,9 +4,9 @@ import { afterEach, beforeEach, expect, test } from "bun:test"
 import { mkdirSync, readdirSync, readFileSync, statSync, symlinkSync } from "node:fs"
 import { join, resolve } from "node:path"
 import {
-	createFifo,
 	createFixture,
 	envelope,
+	fifoSentinel,
 	type Fixture,
 	grant,
 	input,
@@ -66,8 +66,8 @@ test("projects a requested subset of the grant and keeps a numeric size", () => 
 })
 
 // Invariant 4: status and evaluation outputs stay fixed and never read a receipt.
-test("status and evaluation receive the fixed redacted projection", () => {
-	createFifo(fixture.receiptPath)
+test("status and evaluation receive the fixed redacted projection and never open the receipt", async () => {
+	const sentinel = fifoSentinel(fixture, fixture.receiptPath)
 	for (const recipient of ["status", "evaluation"]) {
 		const machine = invoke(fixture, ["--redacted", recipient, "--json"])
 		expect(machine.exitCode).toBe(0)
@@ -75,15 +75,18 @@ test("status and evaluation receive the fixed redacted projection", () => {
 		expect(envelope(machine).result).toMatchObject({ commandIdentity: "source-intake-dispatch.redacted", data: { recipient, projection: { receipt: "[REDACTED]" } } })
 		expect(invoke(fixture, ["--redacted", recipient])).toEqual({ exitCode: 0, stderr: "", stdout: `${recipient}: receipt [REDACTED]\n` })
 	}
+	const opened = await sentinel.opened()
+	await sentinel.stop()
+	expect(opened).toBe(false)
 })
 
-// Invariants 1 and 2: every authority mismatch is decided before the receipt FIFO opens (opening it would hang and
-// time out), and every one emits the same fixed bytes. Wrong behavior caught: opening the receipt first, or a refusal
-// that varies with the mismatch.
-test("refuses every sampled authority mismatch with identical bytes before a private receipt FIFO can open", () => {
-	createFifo(fixture.receiptPath)
+// Invariants 1 and 2: every authority mismatch is decided before the receipt is opened, and every one emits the same
+// fixed bytes. The FIFO sentinels report any open, blocking or not. Wrong behavior caught: opening or reading the
+// receipt before authorization (even with the result discarded), or a refusal that varies with the mismatch.
+test("refuses every sampled authority mismatch with identical bytes and never opens the receipt", async () => {
+	const receiptSentinel = fifoSentinel(fixture, fixture.receiptPath)
 	const outsideReceiptPath = join(fixture.root, "outside.json")
-	createFifo(outsideReceiptPath)
+	const outsideSentinel = fifoSentinel(fixture, outsideReceiptPath)
 	const base = grant(fixture, { allowedFields: ["displayName"] })
 	const cases: readonly [string, unknown, unknown][] = [
 		["wrong item", base, request({ opaqueItemRef: "synthetic-item-002", requestedFields: ["displayName"] })],
@@ -101,18 +104,25 @@ test("refuses every sampled authority mismatch with identical bytes before a pri
 		expect(invoke(fixture, ["project", "--json"], { stdin: piped }), name).toEqual(refusedJson)
 		expect(invoke(fixture, ["project"], { stdin: piped }), name).toEqual(refusedHuman)
 	}
+	const opened = { receipt: await receiptSentinel.opened(), outside: await outsideSentinel.opened() }
+	await receiptSentinel.stop()
+	await outsideSentinel.stop()
+	expect(opened).toEqual({ receipt: false, outside: false })
 })
 
-test("refuses a symlinked private item directory before its receipt FIFO can open", () => {
+test("refuses a symlinked private item directory and never opens the receipt behind it", async () => {
 	const redirected = join(fixture.root, "redirected-item")
 	mkdirSync(redirected)
-	createFifo(join(redirected, "classification-metadata.json"))
+	const sentinel = fifoSentinel(fixture, join(redirected, "classification-metadata.json"))
 	const itemsDirectory = resolve(fixture.itemDirectory, "..")
 	const linkedItem = join(itemsDirectory, "synthetic-item-003")
 	symlinkSync(redirected, linkedItem)
 	const receiptPath = join(linkedItem, "classification-metadata.json")
 	const piped = input(grant(fixture, { opaqueItemRef: "synthetic-item-003", receiptPath }), request({ opaqueItemRef: "synthetic-item-003" }))
 	expect(invoke(fixture, ["project", "--json"], { stdin: piped })).toEqual(refusedJson)
+	const opened = await sentinel.opened()
+	await sentinel.stop()
+	expect(opened).toBe(false)
 })
 
 test("refuses a matching unsupported provider or purpose even with valid metadata", () => {
@@ -148,9 +158,9 @@ test("a grant covers only its exact item, provider, purpose and listed fields", 
 })
 
 // Invariant 1 for the schema class: a shape refusal is decided from piped caller input alone, so it never opens the
-// receipt FIFO.
-test("refuses a malformed piped document as invalid input before a private receipt FIFO can open", () => {
-	createFifo(fixture.receiptPath)
+// receipt.
+test("refuses a malformed piped document as invalid input and never opens the receipt", async () => {
+	const sentinel = fifoSentinel(fixture, fixture.receiptPath)
 	const cases: readonly [string, string][] = [
 		["extra grant key", input({ ...grant(fixture), extra: true }, request())],
 		["extra request key", input(grant(fixture), { ...request(), extra: true })],
@@ -166,6 +176,9 @@ test("refuses a malformed piped document as invalid input before a private recei
 		expect(result.stderr, name).toBe("")
 		expect(envelope(result).result, name).toMatchObject({ causeCode: "SCHEMA_INVALID_INPUT", data: null })
 	}
+	const opened = await sentinel.opened()
+	await sentinel.stop()
+	expect(opened).toBe(false)
 })
 
 // Independent oracle: restated from the README grant and request shapes, not imported from src/gate.ts.

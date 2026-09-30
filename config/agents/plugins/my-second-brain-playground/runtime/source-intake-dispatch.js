@@ -292,7 +292,7 @@ function isCommandIdentity(value) {
 import { isatty } from "tty";
 
 // packages/source-intake-dispatch/src/gate.ts
-import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from "fs";
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from "fs";
 import { homedir } from "os";
 import { isAbsolute, join, resolve } from "path";
 var CLASSIFICATION_FIELDS = new Set(["displayName", "mimeType", "modifiedTime", "sizeBytes"]);
@@ -369,7 +369,11 @@ function readBoundReceipt(itemDirectory) {
   const descriptor = openSync(RECEIPT_FILE, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = fstatSync(descriptor);
-    return stat.isFile() && stat.nlink === 1 ? readFileSync(descriptor, "utf8") : null;
+    if (!stat.isFile() || stat.nlink !== 1)
+      return null;
+    const text = readFileSync(descriptor, "utf8");
+    const named = lstatSync(RECEIPT_FILE);
+    return named.dev === stat.dev && named.ino === stat.ino && named.nlink === 1 ? text : null;
   } finally {
     closeSync(descriptor);
   }

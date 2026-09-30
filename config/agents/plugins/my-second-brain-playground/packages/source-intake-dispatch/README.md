@@ -59,16 +59,19 @@ JSON object; each projected value is a string or finite number.
 - The receipt is read only after authorization, relative to its pinned item
   directory: the command enters that directory, denies unless it is
   physically the expected one, then opens the receipt without following a
-  link. The receipt must be a regular file with one link, so a FIFO, a
-  directory, a symbolic link or a hard link planted from another root is
-  denied. Every failure is the fixed denial.
+  link. The opened receipt must be a regular file with one link, and after
+  the read its name must still be that same file with one link. So a FIFO, a
+  directory, a symbolic link, or a hard link planted from another root,
+  including one unlinked or relinked around the open, is denied. Every
+  failure is the fixed denial.
 - `HOME` and `XDG_STATE_HOME` are trusted configuration set by the granted
   foreground caller (Nathan, 2026-09-30). They select the receipt root above.
 - No configuration of those variables, and no change to the configured tree
   during a run, reads or reveals a receipt outside the configured root. That
   includes the account's default receipt root, regardless of both variables. A
-  change that redirects the item directory before it is pinned is denied;
-  after the pin, the read stays inside the pinned directory.
+  change that moves the item directory off its expected physical path before
+  it is pinned is denied; after the pin, the read stays inside the pinned
+  directory.
 - A caller who controls those variables and moves the receipt root to a
   non-default location is outside this supported-path guard, as Ticket #136
   scopes it.

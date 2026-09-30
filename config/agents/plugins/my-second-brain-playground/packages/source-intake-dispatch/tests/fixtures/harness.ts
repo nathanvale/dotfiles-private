@@ -78,6 +78,34 @@ export function createFifo(path: string): void {
 	if (result.exitCode !== 0) throw new Error("mkfifo failed")
 }
 
+/**
+ * A FIFO that reports whether anything opened it, blocking or not. A background writer's blocking write-only open
+ * returns only once some reader opens the FIFO, and then marks it. Tests assert opened() is false and always stop().
+ */
+export interface FifoSentinel {
+	opened(): Promise<boolean>
+	stop(): Promise<void>
+}
+
+const FIFO_WRITER = 'const fs = require("node:fs"); const fd = fs.openSync(process.argv[1], "w"); fs.writeFileSync(process.argv[2], "opened"); fs.closeSync(fd)'
+
+export function fifoSentinel(fixture: Fixture, path: string): FifoSentinel {
+	createFifo(path)
+	const marker = join(fixture.root, `fifo-opened-${Bun.hash(path).toString(16)}`)
+	const writer = Bun.spawn([process.execPath, "-e", FIFO_WRITER, path, marker], { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
+	return {
+		// A short settle lets a writer released by a late open record its marker before the check.
+		opened: async () => {
+			await Bun.sleep(150)
+			return existsSync(marker)
+		},
+		stop: async () => {
+			writer.kill()
+			await writer.exited
+		},
+	}
+}
+
 export function receipt(): Record<string, string | number> {
 	return { displayName: "Fictional planning note", mimeType: "text/plain", modifiedTime: "2026-01-02T03:04:05Z", sizeBytes: 1234, receiptSummary: SENTINEL }
 }

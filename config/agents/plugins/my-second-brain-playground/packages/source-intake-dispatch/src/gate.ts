@@ -1,7 +1,7 @@
 // The exact-item grant gate. The grant and request arrive as one piped JSON document, so the command opens no
 // caller-supplied input path. Caller input is fully validated and authorized before any receipt is touched, and every
 // outcome that depends on receipt existence, readability or content collapses into the one fixed denial.
-import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from "node:fs"
+import { closeSync, constants, fstatSync, lstatSync, openSync, readFileSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { isAbsolute, join, resolve } from "node:path"
 
@@ -112,8 +112,9 @@ function boundItemDirectory(grant: Grant, home: string): string | null {
 /**
  * Reads the receipt through its pinned item directory, so no change to the configured tree during the run can move
  * the read into another root. The pinned directory must physically be the expected one; the receipt is opened
- * relative to it without following a link, must be a regular file (a FIFO cannot hang the read), and must have one
- * link (a hard link planted from another root is refused). Null means the fixed denial.
+ * relative to it without following a link and must be a regular file (a FIFO cannot hang the read) with one link.
+ * After the read, the name must still be that same single-link file: a hard link planted from another root and
+ * unlinked or relinked around the open is refused. Null means the fixed denial.
  */
 function readBoundReceipt(itemDirectory: string): string | null {
 	process.chdir(itemDirectory)
@@ -121,7 +122,10 @@ function readBoundReceipt(itemDirectory: string): string | null {
 	const descriptor = openSync(RECEIPT_FILE, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
 	try {
 		const stat = fstatSync(descriptor)
-		return stat.isFile() && stat.nlink === 1 ? readFileSync(descriptor, "utf8") : null
+		if (!stat.isFile() || stat.nlink !== 1) return null
+		const text = readFileSync(descriptor, "utf8")
+		const named = lstatSync(RECEIPT_FILE)
+		return named.dev === stat.dev && named.ino === stat.ino && named.nlink === 1 ? text : null
 	} finally {
 		closeSync(descriptor)
 	}
