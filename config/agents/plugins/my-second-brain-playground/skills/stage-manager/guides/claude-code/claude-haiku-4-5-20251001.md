@@ -39,9 +39,11 @@ Sources fall into three kinds; keep them apart when applying a rule:
 
 - Covers: Claude Code sessions reporting model ID
   `claude-haiku-4-5-20251001`, the Claude API ID (Haiku 4.5 overview, Model
-  IDs). model-config states no minimum Claude Code version for this model;
-  `harness_min_version` records v2.0.17, the release that "Added Haiku 4.5 to
-  model selector" (changelog, 2.0.17).
+  IDs). model-config does not specify a minimum Claude Code version for this
+  model. `harness_min_version` records v2.0.17, chosen because that changelog
+  release "Added Haiku 4.5 to model selector" (changelog, 2.0.17). Whether
+  v2.0.17 accepts the exact ID `claude-haiku-4-5-20251001` is unobserved; the
+  changelog entry names the selector, not that ID.
 - Excludes every other spelling of the same model, because startup step 3
   matches IDs character for character (local Stage Manager rule): the alias
   `claude-haiku-4-5`, which the Claude API resolves to this snapshot and
@@ -59,12 +61,19 @@ Sources fall into three kinds; keep them apart when applying a rule:
   Model aliases; Environment variables). Cast with the exact ID, in the local
   cast form (`SKILL.md`, Cast a worker):
   `--agent-arg --model --agent-arg claude-haiku-4-5-20251001`.
-- Plan mode changes the serving model. "Haiku 4.5 automatically uses Sonnet
-  in plan mode, and Haiku for execution" (changelog, 2.0.17), and model-config
-  still describes "A Haiku session that would normally upgrade to Sonnet in
-  plan mode" (model-config, `opusplan` model setting). This guide does not
-  cover plan-mode turns. Extrapolated: keep Haiku workers out of plan mode, or
-  treat a plan they produce as Sonnet's work.
+- Plan mode can change the serving model. By default a Haiku session "would
+  normally upgrade to Sonnet in plan mode" (model-config, `opusplan` model
+  setting; changelog, 2.0.17). model-config documents exceptions. On the
+  Anthropic API and Claude Platform on AWS, when `availableModels` excludes
+  the newest Sonnet, the session uses the newest permitted Sonnet and "stays
+  on Haiku only when every Sonnet is excluded". On Amazon Bedrock, Google
+  Cloud's Agent Platform, Microsoft Foundry and Mantle, "plan mode stays on
+  the session's model whenever the upgrade model is excluded" (model-config,
+  `opusplan` model setting). So a plan-mode turn may
+  be served by Sonnet or by Haiku. Attribute a plan to a model only after
+  observing its serving model, as startup step 2 observes it (local Stage
+  Manager rule). Local rule, extrapolated: keep Haiku workers out of plan
+  mode.
 - Limits that shape a brief: 200K token context window, 64K max output,
   reliable knowledge cutoff February 2025 (Haiku 4.5 overview, Capabilities).
 
@@ -73,9 +82,13 @@ Sources fall into three kinds; keep them apart when applying a rule:
 - Haiku 4.5 has no effort parameter. The overview lists default effort as "Not
   supported", and model-config's effort table omits it: "Models not listed
   here do not support effort" (model-config, Adjust effort level).
-  Extrapolated: record an observed `CLAUDE_EFFORT` or `--effort` value in the
-  startup receipt as a launch fact, not as a depth control, and leave
-  `--effort` out of a Haiku cast.
+- Claude Code's effort controls are the `CLAUDE_CODE_EFFORT_LEVEL`
+  environment variable, the `--effort` launch flag, `/effort`, and the
+  `modelSettings` or `effortLevel` settings (model-config, Adjust effort
+  level; Set the effort level). A value set through one of them is a launch
+  or session setting, not evidence that Haiku uses it. Extrapolated: record an
+  observed value in the startup receipt as a launch fact, not as a depth
+  control, and leave `--effort` out of a Haiku cast.
 - Thinking is manual extended thinking with a token budget, not adaptive
   thinking (Haiku 4.5 overview, Good to know). The migration guide suggests
   enabling it "for significant performance improvements on coding and
@@ -153,9 +166,9 @@ Sources fall into three kinds; keep them apart when applying a rule:
   source's fix is a fresh session with "a better initial prompt
   incorporating what you learned" (best practices, Avoid common failure
   patterns). In Herdr Projects that is a new brief (local practice).
-- Watch for a serving-model change. Plan mode serves turns on Sonnet (see
-  Boundary). A configured fallback chain can serve a turn on another model and
-  "the switch lasts for the current turn only", with a notice (model-config,
-  Fallback model chains). Apply another guide only after observing the change
-  as startup step 2 observes it, then record it with the Handback (local
-  Stage Manager rule).
+- Watch for a serving-model change. Plan mode can serve turns on Sonnet or
+  stay on Haiku (see Boundary). A configured fallback chain can serve a turn
+  on another model and "the switch lasts for the current turn only", with a
+  notice (model-config, Fallback model chains). Apply another guide only
+  after observing the change as startup step 2 observes it, then record it
+  with the Handback (local Stage Manager rule).
