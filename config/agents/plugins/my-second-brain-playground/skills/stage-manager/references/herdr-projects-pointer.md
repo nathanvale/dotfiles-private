@@ -36,6 +36,24 @@ session that inherited its `HERDR_PANE_ID`.
 Before the plugin is installed, name the skill file instead of the skill:
 `<plugin source>/skills/stage-manager/SKILL.md`, read in full.
 
+## Restart
+
+Without `--new`, `herdr-projects open <slug>` only refocuses a coordinator
+that is still running, so that agent keeps the Harness binary it launched
+with and misses any update (observed in Herdr Projects 0.2.25,
+`src/coordinator.rs`, on 2026-09-30).
+
+1. Quit the coordinator agent in its pane.
+2. Run `herdr-projects open <slug>`, adding `--profile <name>` to change
+   profile. It launches the agent from `PATH` and resumes the recorded session
+   only when the recorded profile equals the requested one. Leave out
+   `--new`: it starts a second coordinator beside the first instead of
+   restarting it.
+3. Send `/my-second-brain-playground:stage-manager` as the first prompt;
+   `open` sends none.
+4. Record a fresh startup receipt. The previous receipt covers the previous
+   process only.
+
 ## Check
 
 - The coordinator's first prompt was the explicit skill invocation.
