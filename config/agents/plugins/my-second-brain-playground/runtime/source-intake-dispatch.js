@@ -339,7 +339,7 @@ function asRequest(value) {
   return value;
 }
 function configuredStateHome() {
-  const configured = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state");
+  const configured = process.env.XDG_STATE_HOME || `${homedir()}/.local/state`;
   if (!isAbsolute(configured))
     throw new Error("relative state home");
   return configured;

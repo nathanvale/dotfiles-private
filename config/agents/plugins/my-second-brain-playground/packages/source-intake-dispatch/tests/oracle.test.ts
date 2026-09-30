@@ -223,37 +223,97 @@ for (const [name, spelling] of Object.entries(NON_CANONICAL_STATE_HOME)) {
 	}
 }
 
-// The README names the root as ${XDG_STATE_HOME:-$HOME/.local/state}: an empty value falls back to HOME. A gate that
-// treats the empty string as a configured (relative) root denies this exact grant; one that reads the fixture's own
-// state root instead of HOME's projects its sentinel value.
-test("with an empty XDG_STATE_HOME, the exact receiptPath under HOME projects the granted fields", () => {
-	const homeReceiptPath = (target: Fixture) => join(target.root, "home", ".local", "state", relative(target.stateHome, target.receiptPath))
-	const observed = probe(
-		{
-			present: (target) => {
-				mkdirSync(join(homeReceiptPath(target), ".."), { recursive: true })
-				writeJson(homeReceiptPath(target), receipt())
-				writeJson(target.receiptPath, { displayName: SENTINEL, mimeType: SENTINEL })
+// The README names the root as ${XDG_STATE_HOME:-$HOME/.local/state}: an unset or empty value falls back to HOME.
+const XDG_FALLBACK: Record<string, (env: Record<string, string>) => void> = {
+	unset: (env) => {
+		delete env.XDG_STATE_HOME
+	},
+	empty: (env) => {
+		env.XDG_STATE_HOME = ""
+	},
+}
+
+function homeReceiptPath(target: Fixture, home: string): string {
+	return join(target.root, home, ".local", "state", relative(target.stateHome, target.receiptPath))
+}
+
+// A gate that treats the empty string as a configured (relative) root denies this exact grant; one that reads the
+// fixture's own state root instead of HOME's projects its sentinel value.
+for (const [mode, fallback] of Object.entries(XDG_FALLBACK)) {
+	test(`with XDG_STATE_HOME ${mode}, the exact receiptPath under HOME projects the granted fields`, () => {
+		const observed = probe(
+			{
+				present: (target) => {
+					mkdirSync(join(homeReceiptPath(target, "home"), ".."), { recursive: true })
+					writeJson(homeReceiptPath(target, "home"), receipt())
+					writeJson(target.receiptPath, { displayName: SENTINEL, mimeType: SENTINEL })
+				},
 			},
-		},
-		(target) => {
-			target.env.HOME = join(target.root, "home")
-			target.env.XDG_STATE_HOME = ""
-			return piped(grant(target, { receiptPath: homeReceiptPath(target) }), request())
-		},
-	)
-	expect(observed.present?.machine.exitCode).toBe(0)
-	expect(envelope(observed.present?.machine as ProcessResult).result.data).toEqual({
-		opaqueItemRef: "synthetic-item-001",
-		projection: { displayName: "Fictional planning note", mimeType: "text/plain" },
+			(target) => {
+				target.env.HOME = join(target.root, "home")
+				fallback(target.env)
+				return piped(grant(target, { receiptPath: homeReceiptPath(target, "home") }), request())
+			},
+		)
+		expect(observed.present?.machine.exitCode).toBe(0)
+		expect(envelope(observed.present?.machine as ProcessResult).result.data).toEqual({
+			opaqueItemRef: "synthetic-item-001",
+			projection: { displayName: "Fictional planning note", mimeType: "text/plain" },
+		})
+		expect(observed.present?.human).toEqual({
+			exitCode: 0,
+			stderr: "",
+			stdout: "Granted projection for synthetic-item-001:\n  displayName: Fictional planning note\n  mimeType: text/plain\n",
+		})
+		expect(observed.present?.machine.stdout).not.toContain(SENTINEL)
 	})
-	expect(observed.present?.human).toEqual({
-		exitCode: 0,
-		stderr: "",
-		stdout: "Granted projection for synthetic-item-001:\n  displayName: Fictional planning note\n  mimeType: text/plain\n",
-	})
-	expect(observed.present?.machine.stdout).not.toContain(SENTINEL)
-})
+}
+
+// The HOME fallback is the root as HOME spells it, so it must be canonical too. Each spelling below names <root>/home
+// lexically; through lnk/.. the kernel instead resolves HOME to <root>/other, so a receipt sits under both. A gate that
+// normalizes HOME (path.join) accepts the normalized spelling with a receipt present, and in the lnk/.. case reads a
+// root other than the one HOME physically names.
+const NON_CANONICAL_HOME: Record<string, (target: Fixture) => string> = {
+	"a trailing slash": (target) => `${join(target.root, "home")}/`,
+	"a doubled slash": (target) => `${target.root}//home`,
+	"a dot-dot segment": (target) => {
+		mkdirSync(join(target.root, "home", "x"), { recursive: true })
+		return `${join(target.root, "home")}/x/..`
+	},
+	"a link then a dot-dot segment": (target) => {
+		mkdirSync(join(target.root, "other", "sub"), { recursive: true })
+		mkdirSync(join(target.root, "home"), { recursive: true })
+		symlinkSync(join(target.root, "other", "sub"), join(target.root, "home", "lnk"))
+		return `${join(target.root, "home")}/lnk/..`
+	},
+}
+
+const homeReceiptsPresent: ReceiptState = (target) => {
+	for (const home of ["home", "other"]) {
+		mkdirSync(join(homeReceiptPath(target, home), ".."), { recursive: true })
+		writeJson(homeReceiptPath(target, home), receipt())
+	}
+}
+
+for (const [mode, fallback] of Object.entries(XDG_FALLBACK)) {
+	for (const [name, spelling] of Object.entries(NON_CANONICAL_HOME)) {
+		const grantedAs: Record<string, (target: Fixture, home: string) => string> = {
+			"the README's literal expansion": (target, home) => `${home}/.local/state/${relative(target.stateHome, target.receiptPath)}`,
+			"the normalized path": (target) => homeReceiptPath(target, "home"),
+		}
+		for (const [form, receiptPath] of Object.entries(grantedAs)) {
+			test(`with XDG_STATE_HOME ${mode} and HOME spelled with ${name}, receiptPath as ${form}: refused identically present or absent`, () => {
+				expectAllRefused(
+					probe({ present: homeReceiptsPresent, absent }, (target) => {
+						target.env.HOME = spelling(target)
+						fallback(target.env)
+						return piped(grant(target, { receiptPath: receiptPath(target, target.env.HOME) }), request())
+					}),
+				)
+			})
+		}
+	}
+}
 
 for (const [name, receiptPath] of Object.entries(RECEIPT_PATH_ALIASES)) {
 	test(`with a linked state root, receiptPath as ${name}: refused identically whether the receipt is present or absent`, () => {

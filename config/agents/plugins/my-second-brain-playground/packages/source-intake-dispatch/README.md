@@ -45,8 +45,10 @@ ${XDG_STATE_HOME:-$HOME/.local/state}/my-second-brain-playground/drive-inbox-fil
 
 The state root (`XDG_STATE_HOME`, or `$HOME/.local/state` when it is unset or
 empty) must be written as its canonical physical absolute path: no symbolic
-link in it, no trailing or doubled slash, and no `.` or `..` segment. Any other
-spelling, even one naming the same directory, gets the fixed denial.
+link in it, no trailing or doubled slash, and no `.` or `..` segment. For the
+fallback, the root is `HOME` exactly as spelled followed by `/.local/state`, so
+`HOME` must be canonical too. Any other spelling, even one naming the same
+directory, gets the fixed denial.
 
 Only provider `luna` with purpose `classification` is supported. Granted and
 requested fields come from this closed metadata list: `displayName`,
@@ -76,9 +78,10 @@ JSON object; each projected value is a string or finite number.
 - The configured state root must be its own physical path (Nathan,
   2026-09-30, option 1). After the text comparison the command resolves the
   root and denies unless the result equals the configured text exactly. So a
-  root that is, or becomes, a symbolic link (or sits under one) gets the fixed
-  denial, and the root node cannot redirect the read. Linked state roots are
-  not supported.
+  root that is a symbolic link, sits under one, is spelled non-canonically, or
+  becomes a link before the item directory is pinned gets the fixed denial.
+  After the pin, the read stays in the pinned directory, so the root node
+  cannot redirect it. Linked state roots are not supported.
 - No configuration of those variables, and no change to the configured tree
   during a run, reads or reveals a receipt outside the configured root. That
   includes the account's default receipt root, regardless of both variables. A

@@ -73,7 +73,7 @@ function asRequest(value: unknown): Request {
 
 /** The configured state root as the caller spells it, unnormalized; an empty XDG_STATE_HOME counts as unset. */
 function configuredStateHome(): string {
-	const configured = process.env.XDG_STATE_HOME || join(homedir(), ".local", "state")
+	const configured = process.env.XDG_STATE_HOME || `${homedir()}/.local/state`
 	if (!isAbsolute(configured)) throw new Error("relative state home")
 	return configured
 }
