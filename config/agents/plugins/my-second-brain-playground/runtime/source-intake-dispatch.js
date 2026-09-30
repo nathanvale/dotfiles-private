@@ -292,9 +292,9 @@ function isCommandIdentity(value) {
 import { isatty } from "tty";
 
 // packages/source-intake-dispatch/src/gate.ts
-import { closeSync, constants, lstatSync, openSync, readFileSync, realpathSync } from "fs";
+import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from "fs";
 import { homedir } from "os";
-import { dirname, isAbsolute, join, resolve } from "path";
+import { isAbsolute, join, resolve } from "path";
 var CLASSIFICATION_FIELDS = new Set(["displayName", "mimeType", "modifiedTime", "sizeBytes"]);
 var INPUT_KEYS = ["grant", "request"];
 var GRANT_KEYS = ["allowedFields", "opaqueItemRef", "provider", "purpose", "receiptPath"];
@@ -302,6 +302,7 @@ var REQUEST_KEYS = ["opaqueItemRef", "provider", "purpose", "requestedFields"];
 var OPAQUE_ITEM_REF = /^[a-z0-9][a-z0-9-]{0,63}$/;
 var DESCRIPTOR_LIMIT_CODES = new Set(["EAGAIN", "EMFILE", "ENFILE"]);
 var ITEMS_PATH = ["my-second-brain-playground", "drive-inbox-filing", "items"];
+var RECEIPT_FILE = "classification-metadata.json";
 
 class GateRefusal extends Error {
   outcome;
@@ -357,13 +358,21 @@ function parseInput(text) {
 function isAuthorized(grant, request) {
   return grant.provider === "luna" && grant.purpose === "classification" && grant.allowedFields.every((field) => CLASSIFICATION_FIELDS.has(field)) && grant.opaqueItemRef === request.opaqueItemRef && grant.provider === request.provider && grant.purpose === request.purpose && request.requestedFields.every((field) => grant.allowedFields.includes(field));
 }
-function boundReceiptPath(grant, home) {
-  const expected = join(home, ...ITEMS_PATH, grant.opaqueItemRef, "classification-metadata.json");
-  if (resolve(grant.receiptPath) !== expected)
+function boundItemDirectory(grant, home) {
+  const itemDirectory = join(home, ...ITEMS_PATH, grant.opaqueItemRef);
+  return resolve(grant.receiptPath) === join(itemDirectory, RECEIPT_FILE) ? itemDirectory : null;
+}
+function readBoundReceipt(itemDirectory) {
+  process.chdir(itemDirectory);
+  if (process.cwd() !== itemDirectory)
     return null;
-  const expectedParent = dirname(expected);
-  const unlinked = !lstatSync(expected).isSymbolicLink() && realpathSync(expectedParent) === expectedParent && realpathSync(expected) === expected;
-  return unlinked ? expected : null;
+  const descriptor = openSync(RECEIPT_FILE, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  try {
+    const stat = fstatSync(descriptor);
+    return stat.isFile() && stat.nlink === 1 ? readFileSync(descriptor, "utf8") : null;
+  } finally {
+    closeSync(descriptor);
+  }
 }
 function isMetadataScalar(value) {
   return typeof value === "string" || typeof value === "number" && Number.isFinite(value);
@@ -375,10 +384,11 @@ function project(receipt, requestedFields) {
 }
 function projectReceipt(grant, request) {
   try {
-    const receiptPath = boundReceiptPath(grant, stateHome());
-    if (receiptPath === null)
+    const itemDirectory = boundItemDirectory(grant, stateHome());
+    const text = itemDirectory === null ? null : readBoundReceipt(itemDirectory);
+    if (text === null)
       return { kind: "denied" };
-    const projection = project(JSON.parse(readFileSync(receiptPath, "utf8")), request.requestedFields);
+    const projection = project(JSON.parse(text), request.requestedFields);
     return projection === null ? { kind: "denied" } : { kind: "allowed", opaqueItemRef: grant.opaqueItemRef, projection };
   } catch {
     return { kind: "denied" };
@@ -468,8 +478,10 @@ async function readInput() {
     const reader = Bun.stdin.stream().getReader();
     for (let chunk = await reader.read();!chunk.done; chunk = await reader.read()) {
       size += chunk.value.byteLength;
-      if (size > INPUT_LIMIT_BYTES)
+      if (size > INPUT_LIMIT_BYTES) {
+        await reader.cancel();
         return { kind: "inputInvalid" };
+      }
       chunks.push(chunk.value);
     }
   } catch (error) {

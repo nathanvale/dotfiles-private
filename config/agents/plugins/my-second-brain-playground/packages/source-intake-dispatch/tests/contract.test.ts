@@ -194,6 +194,31 @@ describe("validated output and transport failure", () => {
 		expect(invoke(fixture, ["project"], { stdin: validInput, preload: preload("stdout", STDOUT_THROWS) })).toEqual({ exitCode: 1, stdout: "", stderr: "stdout cannot be written. Inspect the output stream before retrying.\n" })
 	})
 
+	// Wrong behavior caught: returning the exit 4 envelope while standard input stays open, so a producer that keeps
+	// writing holds the process forever.
+	test("a streaming producer past 64 KiB gets exit 4 and the process ends", async () => {
+		const child = Bun.spawn([process.execPath, RUNTIME, "project", "--json"], { cwd: fixture.root, env: fixture.env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
+		const stdout = new Response(child.stdout).text()
+		let exited = false
+		void child.exited.then(() => {
+			exited = true
+		})
+		const chunk = new Uint8Array(64 * 1024).fill(0x20)
+		const deadline = Date.now() + 3_000
+		while (!exited && Date.now() < deadline) {
+			try {
+				child.stdin.write(chunk)
+				await Promise.race([child.stdin.flush(), Bun.sleep(20)])
+			} catch {
+				break
+			}
+		}
+		const exitCode = await Promise.race([child.exited, Bun.sleep(1_000).then(() => "still running")])
+		if (!exited) child.kill("SIGKILL")
+		expect(exitCode).toBe(4)
+		expect(JSON.parse(await stdout).result.causeCode).toBe("SCHEMA_INVALID_INPUT")
+	}, 10_000)
+
 	test("held-open stdin: other commands never read it, and project waits for end of input", async () => {
 		const redacted = Bun.spawn([process.execPath, RUNTIME, "--redacted", "status", "--json"], { cwd: fixture.root, env: fixture.env, stdin: "pipe", stdout: "pipe", stderr: "pipe" })
 		expect(await Promise.race([redacted.exited, Bun.sleep(5000).then(() => "timeout")])).toBe(0)

@@ -93,7 +93,11 @@ async function readInput(): Promise<InputRead> {
 		const reader = Bun.stdin.stream().getReader()
 		for (let chunk = await reader.read(); !chunk.done; chunk = await reader.read()) {
 			size += chunk.value.byteLength
-			if (size > INPUT_LIMIT_BYTES) return { kind: "inputInvalid" }
+			if (size > INPUT_LIMIT_BYTES) {
+				// Release standard input so a producer that keeps writing cannot hold the process open.
+				await reader.cancel()
+				return { kind: "inputInvalid" }
+			}
 			chunks.push(chunk.value)
 		}
 	} catch (error) {

@@ -14,6 +14,8 @@ export const DESCRIPTOR_LIMIT_PRELOAD = join(import.meta.dir, "descriptor-limit.
 export const EXHAUST_DESCRIPTORS = { SOURCE_INTAKE_TEST_EXHAUST_DESCRIPTORS: "1" }
 /** Checker adapter: maps a leading stdin=FILE or stdin-busy=FILE argument onto the command's standard input. */
 export const STDIN_ADAPTER = join(import.meta.dir, "stdin-adapter.sh")
+/** Pauses after the item directory is pinned and before the receipt is opened; marks SOURCE_INTAKE_TEST_PAUSE_MARKER. */
+export const PIN_PAUSE_PRELOAD = join(import.meta.dir, "pin-pause.ts")
 /** Holds the first stdout write undelivered and marks SOURCE_INTAKE_TEST_READY. */
 export const STDOUT_HOLD_PRELOAD = join(import.meta.dir, "stdout-hold.ts")
 

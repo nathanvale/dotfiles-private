@@ -4,7 +4,7 @@
 // classes must come from piped caller input alone and so must not vary with the receipt either. The grant and request
 // arrive on standard input, so the grant's receiptPath is the only caller-named path.
 import { afterEach, beforeEach, expect, test } from "bun:test"
-import { chmodSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs"
+import { chmodSync, linkSync, mkdirSync, renameSync, symlinkSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import {
 	createFifo,
@@ -65,6 +65,11 @@ const UNUSABLE: Record<string, ReceiptState> = {
 		chmodSync(target.itemDirectory, 0o000)
 	},
 	"with no item directory": (target) => renameSync(target.itemDirectory, join(target.root, "moved-item")),
+	"a FIFO": (target) => createFifo(target.receiptPath),
+	"with a second hard link": (target) => {
+		writeJson(target.receiptPath, receipt())
+		linkSync(target.receiptPath, join(target.root, "second-link.json"))
+	},
 }
 
 type Outputs = { machine: ProcessResult; human: ProcessResult }

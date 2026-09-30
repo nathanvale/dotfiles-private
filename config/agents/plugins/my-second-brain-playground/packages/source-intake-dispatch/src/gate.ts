@@ -1,9 +1,9 @@
 // The exact-item grant gate. The grant and request arrive as one piped JSON document, so the command opens no
 // caller-supplied input path. Caller input is fully validated and authorized before any receipt is touched, and every
 // outcome that depends on receipt existence, readability or content collapses into the one fixed denial.
-import { closeSync, constants, lstatSync, openSync, readFileSync, realpathSync } from "node:fs"
+import { closeSync, constants, fstatSync, openSync, readFileSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
-import { dirname, isAbsolute, join, resolve } from "node:path"
+import { isAbsolute, join, resolve } from "node:path"
 
 export type GateOutcome =
 	| { kind: "allowed"; opaqueItemRef: string; projection: Record<string, string | number> }
@@ -19,6 +19,7 @@ const REQUEST_KEYS = ["opaqueItemRef", "provider", "purpose", "requestedFields"]
 const OPAQUE_ITEM_REF = /^[a-z0-9][a-z0-9-]{0,63}$/
 const DESCRIPTOR_LIMIT_CODES = new Set(["EAGAIN", "EMFILE", "ENFILE"])
 const ITEMS_PATH = ["my-second-brain-playground", "drive-inbox-filing", "items"] as const
+const RECEIPT_FILE = "classification-metadata.json"
 
 type Grant = {
 	readonly opaqueItemRef: string
@@ -101,14 +102,29 @@ function isAuthorized(grant: Grant, request: Request): boolean {
 
 /**
  * The grant's receiptPath is the only caller-named path. It must equal the exact receipt path under the configured
- * state root before anything is touched, and that receipt must not be reached through a link.
+ * state root as text; nothing is touched before this comparison. Returns the item directory to read from.
  */
-function boundReceiptPath(grant: Grant, home: string): string | null {
-	const expected = join(home, ...ITEMS_PATH, grant.opaqueItemRef, "classification-metadata.json")
-	if (resolve(grant.receiptPath) !== expected) return null
-	const expectedParent = dirname(expected)
-	const unlinked = !lstatSync(expected).isSymbolicLink() && realpathSync(expectedParent) === expectedParent && realpathSync(expected) === expected
-	return unlinked ? expected : null
+function boundItemDirectory(grant: Grant, home: string): string | null {
+	const itemDirectory = join(home, ...ITEMS_PATH, grant.opaqueItemRef)
+	return resolve(grant.receiptPath) === join(itemDirectory, RECEIPT_FILE) ? itemDirectory : null
+}
+
+/**
+ * Reads the receipt through its pinned item directory, so no change to the configured tree during the run can move
+ * the read into another root. The pinned directory must physically be the expected one; the receipt is opened
+ * relative to it without following a link, must be a regular file (a FIFO cannot hang the read), and must have one
+ * link (a hard link planted from another root is refused). Null means the fixed denial.
+ */
+function readBoundReceipt(itemDirectory: string): string | null {
+	process.chdir(itemDirectory)
+	if (process.cwd() !== itemDirectory) return null
+	const descriptor = openSync(RECEIPT_FILE, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK)
+	try {
+		const stat = fstatSync(descriptor)
+		return stat.isFile() && stat.nlink === 1 ? readFileSync(descriptor, "utf8") : null
+	} finally {
+		closeSync(descriptor)
+	}
 }
 
 function isMetadataScalar(value: unknown): value is string | number {
@@ -123,9 +139,10 @@ function project(receipt: unknown, requestedFields: readonly string[]): Record<s
 /** Runs only after authorization. Any receipt failure, including I/O and a missing state root, is the same denial. */
 function projectReceipt(grant: Grant, request: Request): GateOutcome {
 	try {
-		const receiptPath = boundReceiptPath(grant, stateHome())
-		if (receiptPath === null) return { kind: "denied" }
-		const projection = project(JSON.parse(readFileSync(receiptPath, "utf8")), request.requestedFields)
+		const itemDirectory = boundItemDirectory(grant, stateHome())
+		const text = itemDirectory === null ? null : readBoundReceipt(itemDirectory)
+		if (text === null) return { kind: "denied" }
+		const projection = project(JSON.parse(text), request.requestedFields)
 		return projection === null ? { kind: "denied" } : { kind: "allowed", opaqueItemRef: grant.opaqueItemRef, projection }
 	} catch {
 		return { kind: "denied" }
