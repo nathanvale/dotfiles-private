@@ -20,6 +20,13 @@ proposal persistence, Drive reads and effects, readbacks, and Vault Steward
 routing. The classifier lane never receives a receipt path or pointer, raw
 metadata, or a Drive or Vault tool.
 
+Run the classifier lane only through
+[`source-intake-classify`](../../packages/source-intake-classify/README.md),
+which starts one read-denied top-level `codex exec` after a fail-closed
+pre-flight. A plugin subagent or a Herdr cast inherits its parent's sandbox and
+can read the receipt root, so neither is a classifier route for an item-bearing
+run. A lane refusal means no model call; report it instead of switching route.
+
 ## 1. Foreground custody: recover the exact run
 
 Read the project packet's README and Goal, the accepted Source Intake Steward
@@ -35,8 +42,10 @@ metadata field in the dispatch. Stage Manager pipes the private grant and
 request to the command as the contract in
 [`source-intake-dispatch`](../../packages/source-intake-dispatch/README.md)
 describes; it validates both before opening the classification metadata. Only
-its allowed projection reaches the classifier lane; a refusal is final until
-Stage Manager verifies a matching grant. Do not give the classifier lane a
+its allowed projection reaches the classifier lane, piped with public owner
+notes and redacted Bead state into `source-intake-classify`; a refusal is final
+until Stage Manager verifies a matching grant. Stage Manager itself receives
+only `source-intake-dispatch --redacted status`. Do not give the classifier lane a
 receipt path or raw item receipt. Status and evaluation use the command's fixed
 redacted projection by default. When an exact user grant expressly authorizes
 the DIS-7 fresh-evaluator route, that foreground evaluator may inspect the
@@ -156,7 +165,9 @@ second Task or duplicate file, folder, or note to recover a lost response.
 
 The classifier lane hands back the redacted Bead state, proposal or decision
 state, recovery choice, checks, unresolved uncertainty, and one safe next action
-to Stage Manager. The foreground retains private account mapping, raw readbacks,
+to the granted foreground Steward, never to Stage Manager. The foreground
+records the lane evidence `source-intake-classify` reports (Codex version,
+profile hash, model, effort, rollout thread) in the private receipt. The foreground retains private account mapping, raw readbacks,
 and personal identifiers in the receipt. Report source candidate, installed
 version, fresh invocation, and live filing as separate evidence. Close the Bead
 only through its owner after independent acceptance; a role declaration or
