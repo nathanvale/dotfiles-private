@@ -260,10 +260,41 @@ describe("Contract Core 2.0 control paths", () => {
       "vault-notes.inventory",
     ]);
     expect(new Set(data.commands.map((command: { effectClass: string }) => command.effectClass))).toEqual(new Set(["inspect"]));
-    expect(
-      data.commands.filter((command: { outputContract: string }) => command.outputContract === "legacy").map((command: { route: string[] }) => command.route),
-    ).toEqual([["check"], ["list"], ["inventory"]]);
     expect(data.effectExclusions.length).toBe(3);
+  });
+
+  test("discovery data and every command summary carry exactly the Contract Core 2.0 keys", () => {
+    const { data } = envelope(["--discover", "--json"]).body.result;
+    expect(Object.keys(data).sort()).toEqual([
+      "commands",
+      "contractVersion",
+      "effectExclusions",
+      "exitMeanings",
+      "generationConventionVersion",
+      "profile",
+      "signalExits",
+    ]);
+    for (const command of data.commands) {
+      expect(Object.keys(command).sort()).toEqual(["commandIdentity", "effectClass", "route", "summary"]);
+    }
+  });
+
+  test("command discovery carries the legacy output contract with exact keys", () => {
+    for (const identity of ["vault-notes.check", "vault-notes.list", "vault-notes.inventory"]) {
+      const { data } = envelope(["--discover-command", identity, "--json"]).body.result;
+      const keys = ["command", "outcomes", "outputContract", "semantics"];
+      expect(Object.keys(data).sort()).toEqual(identity === "vault-notes.check" ? ["command", "findingIds", "outcomes", "outputContract", "semantics"] : keys);
+      expect(data.semantics).toBe("possible-outcomes");
+      expect(data.command.commandIdentity).toBe(identity);
+      expect(data.outputContract).toEqual({
+        kind: "legacy",
+        envelope: false,
+        exitMeanings: { "0": "success", "1": "findings, refusal or failure; read the outcomes" },
+      });
+      for (const outcome of data.outcomes) {
+        expect(Object.keys(outcome).sort()).toEqual(["exitCode", "human", "id", "machine", "trigger"]);
+      }
+    }
   });
 
   test("check discovery lists the nineteen finding identifiers", () => {

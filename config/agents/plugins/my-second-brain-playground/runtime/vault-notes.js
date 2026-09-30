@@ -507,7 +507,7 @@ var LEGACY_OUTCOMES = {
     {
       id: "check.unreadable",
       exitCode: 1,
-      trigger: "schemas/frontmatter-contract.json or a note cannot be read.",
+      trigger: "schemas/frontmatter-contract.json or a note cannot be read, or a local link holds a malformed % escape (inherited URIError).",
       human: "stderr: the uncaught runtime error; no result",
       machine: "stderr: the uncaught runtime error; stdout empty"
     }
@@ -571,49 +571,42 @@ var COMMANDS = [
     commandIdentity: "vault-notes.dispatch",
     effectClass: "inspect",
     route: [],
-    outputContract: "2.0.0",
     summary: "Refuse a missing, unknown or malformed command selection."
   },
   {
     commandIdentity: "vault-notes.help",
     effectClass: "inspect",
     route: ["--help"],
-    outputContract: "2.0.0",
     summary: "Show usage, commands and options."
   },
   {
     commandIdentity: "vault-notes.discovery",
     effectClass: "inspect",
     route: ["--discover"],
-    outputContract: "2.0.0",
     summary: "Describe the contract, commands and effect exclusions."
   },
   {
     commandIdentity: "vault-notes.command-discovery",
     effectClass: "inspect",
     route: ["--discover-command"],
-    outputContract: "2.0.0",
     summary: "Describe the possible outcomes of one command."
   },
   {
     commandIdentity: "vault-notes.check",
     effectClass: "inspect",
     route: ["check"],
-    outputContract: "legacy",
     summary: "Validate governed notes: frontmatter, routing, identities, body secrets, local links, tickets and folder maps."
   },
   {
     commandIdentity: "vault-notes.list",
     effectClass: "inspect",
     route: ["list"],
-    outputContract: "legacy",
     summary: "List current notes from their metadata, optionally for one family."
   },
   {
     commandIdentity: "vault-notes.inventory",
     effectClass: "inspect",
     route: ["inventory"],
-    outputContract: "legacy",
     summary: "Count governed notes by family, type and status."
   }
 ];
@@ -756,7 +749,6 @@ function discoveryData() {
     profile: "simple",
     commands: COMMANDS,
     exitMeanings: { "0": "success", "1": "internal", "2": "usage", "3": "domain", "4": "schema", "75": "transient" },
-    legacyExitMeanings: { "0": "success", "1": "findings, refusal or failure; read the command's outcomes" },
     signalExits: { "130": "SIGINT", "143": "SIGTERM" },
     effectExclusions: [
       "Never writes, moves or deletes a vault note, schema, script or configuration file.",
@@ -765,11 +757,16 @@ function discoveryData() {
     ]
   };
 }
+var LEGACY_OUTPUT_CONTRACT = {
+  kind: "legacy",
+  envelope: false,
+  exitMeanings: { "0": "success", "1": "findings, refusal or failure; read the outcomes" }
+};
 function commandDiscovery(commandIdentity) {
   return {
     command: COMMANDS.find((entry) => entry.commandIdentity === commandIdentity),
     semantics: "possible-outcomes",
-    outputContract: "legacy",
+    outputContract: LEGACY_OUTPUT_CONTRACT,
     outcomes: LEGACY_OUTCOMES[commandIdentity],
     ...commandIdentity === "vault-notes.check" ? { findingIds: VAULT_FINDING_IDS } : {}
   };
