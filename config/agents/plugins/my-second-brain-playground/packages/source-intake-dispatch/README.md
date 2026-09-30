@@ -61,9 +61,11 @@ JSON object; each projected value is a string or finite number.
   physically the expected one, then opens the receipt without following a
   link. The opened receipt must be a regular file with one link, and after
   the read its name must still be that same file with one link. So a FIFO, a
-  directory, a symbolic link, or a hard link planted from another root,
-  including one unlinked or relinked around the open, is denied. Every
-  failure is the fixed denial.
+  directory, a symbolic link, or a hard link that another root still names is
+  denied, including one unlinked or relinked around the open. Moving a receipt
+  into the configured tree from outside it (by rename, or by linking and then
+  unlinking the original) changes that other root and is outside this guard.
+  Every failure is the fixed denial.
 - `HOME` and `XDG_STATE_HOME` are trusted configuration set by the granted
   foreground caller (Nathan, 2026-09-30). They select the receipt root above.
 - No configuration of those variables, and no change to the configured tree

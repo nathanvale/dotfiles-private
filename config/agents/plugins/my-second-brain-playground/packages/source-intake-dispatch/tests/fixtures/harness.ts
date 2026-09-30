@@ -1,7 +1,7 @@
 // Process seam for Source Intake dispatch tests. Each fixture is a private synthetic root with its own XDG_STATE_HOME,
 // one opaque item directory, and a scratch directory outside the items tree. The grant and request reach the command
 // on standard input. Every value is fictional. Nothing here imports the modules under test.
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { chmodSync, closeSync, constants, existsSync, mkdirSync, mkdtempSync, openSync, realpathSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
@@ -79,30 +79,55 @@ export function createFifo(path: string): void {
 }
 
 /**
- * A FIFO that reports whether anything opened it, blocking or not. A background writer's blocking write-only open
- * returns only once some reader opens the FIFO, and then marks it. Tests assert opened() is false and always stop().
+ * A FIFO that detects a reader open, blocking or not, made while a background writer is blocked in its write-only
+ * open: that open returns only once some reader opens the FIFO, and the writer then marks it. fifoSentinel resolves
+ * only after the writer marks itself ready to open, or throws. A reader open made before the writer blocks goes
+ * unseen, and a writer that never blocks sees nothing, so each test asserts opened() is false, then proves the
+ * sentinel could fire (openAsReader(), then opened() is true), and calls stop() in a finally block.
  */
 export interface FifoSentinel {
+	/** Waits up to a short settle for the writer's marker. */
 	opened(): Promise<boolean>
+	/** Positive control: opens and closes the FIFO without blocking, as the command under test would. */
+	openAsReader(): void
 	stop(): Promise<void>
 }
 
-const FIFO_WRITER = 'const fs = require("node:fs"); const fd = fs.openSync(process.argv[1], "w"); fs.writeFileSync(process.argv[2], "opened"); fs.closeSync(fd)'
+const FIFO_WRITER =
+	'const fs = require("node:fs"); fs.writeFileSync(process.argv[3], "ready"); const fd = fs.openSync(process.argv[1], "w"); fs.writeFileSync(process.argv[2], "opened"); fs.closeSync(fd)'
+const SENTINEL_READY_BOUND_MS = 3000
+// Covers the gap between the writer's ready mark and its entry into the blocking open.
+const SENTINEL_BLOCK_SETTLE_MS = 25
+const SENTINEL_OPENED_SETTLE_MS = 150
 
-export function fifoSentinel(fixture: Fixture, path: string): FifoSentinel {
+async function waitFor(path: string, boundMs: number): Promise<boolean> {
+	const deadline = Date.now() + boundMs
+	while (!existsSync(path)) {
+		if (Date.now() >= deadline) return false
+		await Bun.sleep(5)
+	}
+	return true
+}
+
+export async function fifoSentinel(fixture: Fixture, path: string): Promise<FifoSentinel> {
 	createFifo(path)
-	const marker = join(fixture.root, `fifo-opened-${Bun.hash(path).toString(16)}`)
-	const writer = Bun.spawn([process.execPath, "-e", FIFO_WRITER, path, marker], { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
+	const id = Bun.hash(path).toString(16)
+	const marker = join(fixture.root, `fifo-opened-${id}`)
+	const ready = join(fixture.root, `fifo-ready-${id}`)
+	const writer = Bun.spawn([process.execPath, "-e", FIFO_WRITER, path, marker, ready], { stdin: "ignore", stdout: "ignore", stderr: "ignore" })
+	const stop = async () => {
+		writer.kill()
+		await writer.exited
+	}
+	if (!(await waitFor(ready, SENTINEL_READY_BOUND_MS))) {
+		await stop()
+		throw new Error(`FIFO sentinel writer not ready within ${SENTINEL_READY_BOUND_MS} ms`)
+	}
+	await Bun.sleep(SENTINEL_BLOCK_SETTLE_MS)
 	return {
-		// A short settle lets a writer released by a late open record its marker before the check.
-		opened: async () => {
-			await Bun.sleep(150)
-			return existsSync(marker)
-		},
-		stop: async () => {
-			writer.kill()
-			await writer.exited
-		},
+		opened: () => waitFor(marker, SENTINEL_OPENED_SETTLE_MS),
+		openAsReader: () => closeSync(openSync(path, constants.O_RDONLY | constants.O_NONBLOCK)),
+		stop,
 	}
 }
 

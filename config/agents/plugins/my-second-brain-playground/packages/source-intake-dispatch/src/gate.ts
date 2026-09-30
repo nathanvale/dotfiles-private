@@ -113,8 +113,10 @@ function boundItemDirectory(grant: Grant, home: string): string | null {
  * Reads the receipt through its pinned item directory, so no change to the configured tree during the run can move
  * the read into another root. The pinned directory must physically be the expected one; the receipt is opened
  * relative to it without following a link and must be a regular file (a FIFO cannot hang the read) with one link.
- * After the read, the name must still be that same single-link file: a hard link planted from another root and
- * unlinked or relinked around the open is refused. Null means the fixed denial.
+ * After the read, the name must still be that same single-link file: a hard link that another root still names is
+ * refused, including one unlinked or relinked around the open. Moving a receipt into the configured tree from outside
+ * it (by rename, or by linking and then unlinking the original) changes that other root and is outside this guard.
+ * Null means the fixed denial.
  */
 function readBoundReceipt(itemDirectory: string): string | null {
 	process.chdir(itemDirectory)
