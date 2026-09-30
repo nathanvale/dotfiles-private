@@ -43,7 +43,7 @@ Status labels in the tables are deliberately narrow:
 
 ## Top-level commands
 
-These 46 executable files are exposed as `TOP` through the managed `HOME/bin`
+These 47 executable files are exposed as `TOP` through the managed `HOME/bin`
 directory. The command column shows the basename after activation; the direct
 path remains valid when a caller has not activated the managed tree.
 
@@ -60,6 +60,7 @@ path remains valid when a caller has not activated the managed tree.
 | unqualified | `bin/claude-migrate-native` | `bin/claude-migrate-native` | Source: self. It is an effectful migration route; current tracked caller and dedicated covering test are unverified. |
 | public | `bin/cloudflare-access-headers` | `bin/cloudflare-access-headers` | Source: self. Owner doc: `.claude/skills/dotfiles/references/sensitive-material-access.md:96`; covering command: `bin/test/cloudflare-access-headers-test.sh`. |
 | helper | `bin/colour_log.sh` | `source bin/colour_log.sh` | Source owner: sourced logger. Consumers: `bin/dotfiles/symlinks/symlinks_manage.sh`, `bin/system/fonts/nerd_fonts_manage.sh`, `config/macos/defaults.common.sh`; covering commands: `bin/test/symlinks-manage-test.sh` and `bin/test/symlinks-real-directory-test.sh`. |
+| public | `bin/ddc-switch` | `ddc-switch <input-code>` | Source: self, restored from `nathanvale/dotfiles-private-archive`. Route: `config/karabiner/karabiner.json` Hyper+1 and Hyper+2; DDC reselected MacBook input 27, while Mini input and shortcut activation remain unproved. |
 | unqualified | `bin/downloads` | `downloads <recent\|search\|clear\|apps\|week\|today\|month\|stats>` | Source: self help. Current tracked caller and dedicated covering test are unverified. |
 | unqualified | `bin/filevault-check` | `filevault-check` | Source: self help. Current tracked caller and dedicated covering test are unverified. |
 | public | `bin/ghh` | `ghh exec --account LOGIN -- <gh arguments...>` | Source: self. Covering command: `bin/test/ghh-test.sh`. |

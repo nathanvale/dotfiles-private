@@ -48,6 +48,9 @@ const WRITE_INPUTS: Record<WriteOperation, Record<string, Field>> = {
 		summary: { kind: "text", required: true },
 		description: { kind: "body", required: false },
 		assignee: { kind: "text", required: false },
+		// The one parent the new issue is created under, sent as the provider's
+		// `parent` field; the dated ADR 0001 note owns this contract.
+		parentKey: { kind: "text", required: false, pattern: ISSUE_KEY },
 	},
 	"issue.update": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, fields: { kind: "fields", required: true } },
 	"issue.comment": { issueKey: { kind: "text", required: true, pattern: ISSUE_KEY }, body: { kind: "body", required: true } },
@@ -155,9 +158,11 @@ export function writeInput(operation: WriteOperation, raw: unknown): WriteValida
 // revision because an upload moves it, which lets an unchanged revision prove
 // that a possibly-sent upload never landed.
 // A media comment binds the attachment ids its images name; a media edit also
-// binds the comment's `updated` and the author guard.
+// binds the comment's `updated` and the author guard. A create under a parent
+// binds the parent's key, id, and issue type.
 export type Preparation =
 	| { kind: "none" }
+	| { kind: "parent"; parentKey: string }
 	| { kind: "issue"; issueKey: string }
 	| { kind: "comment"; issueKey: string; commentId: string }
 	| { kind: "transition"; issueKey: string; toStatus: string }
@@ -169,6 +174,7 @@ export type Preparation =
 export function preparation(operation: WriteOperation, input: WriteInput): Preparation {
 	switch (operation) {
 		case "issue.create":
+			return input.parentKey === undefined ? { kind: "none" } : { kind: "parent", parentKey: input.parentKey as string };
 		case "issue.comment":
 		case "page.create":
 			return { kind: "none" };
@@ -214,6 +220,8 @@ export interface PreparedContext {
 	// The attachment an attachment delete bound, and what the reference guard
 	// read to clear it; both are reported in the preview.
 	attachment?: BoundAttachment;
+	// The parent a create under a parent bound; reported in the preview.
+	parent?: BoundParent;
 	referenceCheck?: ReferenceCheck;
 	// Provider identifiers and stable revisions observed before the write. This
 	// is persisted with the preview and compared by read-back, not inferred from
@@ -239,6 +247,10 @@ function jiraArguments(operation: WriteOperation, input: WriteInput, ctx: Prepar
 			assign(args, "project_key", input.projectKey);
 			assign(args, "issue_type", input.issueType);
 			for (const key of ["summary", "description", "assignee"]) assign(args, key, input[key]);
+			// Only the parent crosses the provider's additional_fields seam; the
+			// provider maps it to fields.parent = {key}. Without a parent the
+			// arguments are exactly the pre-parent ones.
+			if (input.parentKey !== undefined) args.additional_fields = JSON.stringify({ parent: input.parentKey });
 			break;
 		case "issue.update":
 			assign(args, "issue_key", input.issueKey);
@@ -462,6 +474,8 @@ function pageIdentity(reply: unknown, includePlainId: boolean): string | undefin
 	return undefined;
 }
 
+const isParentCreate = (operation: WriteOperation, input: WriteInput): boolean => operation === "issue.create" && input.parentKey !== undefined;
+
 const issueScoped = (operation: WriteOperation) => operation.startsWith("issue.") && operation !== "issue.create";
 const pageScoped = (operation: WriteOperation) => operation.startsWith("page.") && operation !== "page.create";
 
@@ -684,6 +698,9 @@ export function effectsFromReply(operation: WriteOperation, input: WriteInput, r
 	// The attachment delete answers 204 with no body; whatever a reply says,
 	// only the issue's attachment list proves it.
 	if (operation === "issue.attachment.delete") return [];
+	// A create reply can name a key without proving the parent landed; only
+	// the created issue's own read proves it (createdIssueEvidence).
+	if (isParentCreate(operation, input)) return [];
 	if (operation.endsWith(".delete")) return deleteEffect(operation, input, kind, data);
 	if (TARGET_OPERATIONS.has(operation)) return [{ kind, id: targetOf(operation, input) }];
 	for (const record of records(data)) {
@@ -807,6 +824,10 @@ const cqlString = jqlString;
 export function readBackPlan(operation: WriteOperation, input: WriteInput): ReadBackPlan {
 	switch (operation) {
 		case "issue.create": {
+			if (input.parentKey !== undefined) {
+				const jql = `project = ${jqlString(input.projectKey as string)} AND parent = ${jqlString(input.parentKey as string)} AND summary ~ ${jqlString(input.summary as string)} ORDER BY created DESC`;
+				return { tool: "jira_search", args: { jql, limit: 20, fields: "summary,issuetype,created,parent" } };
+			}
 			const jql = `project = ${jqlString(input.projectKey as string)} AND summary ~ ${jqlString(input.summary as string)} ORDER BY created DESC`;
 			return { tool: "jira_search", args: { jql, limit: 20, fields: "summary,issuetype,created" } };
 		}
@@ -918,6 +939,12 @@ function issueCreateMatch(record: Record<string, unknown>, wanted: string, wante
 }
 
 function issueCreateEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): ReadBack {
+	if (input.parentKey !== undefined) {
+		// Unread matches may hold the new issue, so a partial list never proves
+		// it absent; a new key on the page read still proves the write.
+		const { evidence, complete } = parentCreateEvidence(input, reply, baseline);
+		return !complete && evidence.kind === "absent" ? { kind: "indeterminate", reason: "the parent's issue search returned only part of its matches; it cannot prove the issue absent" } : evidence;
+	}
 	const wanted = normalised(input.summary as string);
 	if (wanted.length === 0) return { kind: "indeterminate", reason: "the requested issue summary has no stable read-back representation" };
 	const wantedType = normalised(input.issueType as string);
@@ -929,6 +956,93 @@ function issueCreateEvidence(input: WriteInput, reply: unknown, baseline: WriteB
 		else if (match !== undefined) return { kind: "indeterminate", reason: match.reason };
 	}
 	return newEffects("jira-issue", ids, baseline.effectIds);
+}
+
+// A create under a parent. The parent-scoped search is read as its issue
+// list only, so the parent record nested in each result is never mistaken for
+// a candidate; a summary and type match must name the requested parent.
+const parentKeyOf = (fields: Record<string, unknown>): string | undefined => (isRecord(fields.parent) ? stringAt(fields.parent, "key") : undefined);
+
+type SearchIssues = { issues: Record<string, unknown>[]; complete: boolean } | undefined;
+
+// Cloud's search reports total -1 and pages by next_page_token (v0.23.1); a
+// token, or a known total beyond the list, means matches were left unread.
+function searchIssues(reply: unknown): SearchIssues {
+	const data = unwrapReply(reply);
+	if (!isRecord(data) || !Array.isArray(data.issues)) return undefined;
+	const issues = data.issues.filter(isRecord);
+	const token = stringAt(data, "next_page_token", "nextPageToken");
+	const total = typeof data.total === "number" && Number.isInteger(data.total) ? data.total : -1;
+	return { issues, complete: token === undefined && total <= issues.length };
+}
+
+function parentMismatch(record: Record<string, unknown>, parentKey: string): string | undefined {
+	const observed = parentKeyOf(isRecord(record.fields) ? record.fields : record);
+	if (observed === undefined) return "a matching issue search result carries no parent key";
+	return observed === parentKey ? undefined : "a matching issue search result names a different parent";
+}
+
+// The evidence plus the list's completeness, which only the duplicate check
+// needs: a read-back that finds a new key is proof whatever it left unread.
+function parentCreateEvidence(input: WriteInput, reply: unknown, baseline: WriteBaseline): { evidence: ReadBack; complete: boolean } {
+	const listed = searchIssues(reply);
+	if (listed === undefined) return { evidence: { kind: "indeterminate", reason: "the parent's issue search reply carries no issue list" }, complete: false };
+	const wanted = normalised(input.summary as string);
+	const wantedType = normalised(input.issueType as string);
+	const ids = new Set<string>();
+	for (const record of listed.issues) {
+		const match = wanted.length === 0 || wantedType.length === 0 ? { reason: "the requested issue summary or type has no stable read-back representation" } : issueCreateMatch(record, wanted, wantedType, input.projectKey as string);
+		if (match === undefined) continue;
+		const reason = typeof match === "string" ? parentMismatch(record, input.parentKey as string) : match.reason;
+		if (reason !== undefined) return { evidence: { kind: "indeterminate", reason }, complete: listed.complete };
+		ids.add(match as string);
+	}
+	return { evidence: newEffects("jira-issue", ids, baseline.effectIds), complete: listed.complete };
+}
+
+// A create without a parent keeps every existing match as a baseline id. Under
+// a parent, an exact match refuses by its key so the caller reuses it, and a
+// partial list cannot clear the create.
+function issueCreateBaseline(input: WriteInput, reply: unknown): BaselineObservation {
+	if (input.parentKey === undefined) return baselineWithEffectIds(issueCreateEvidence(input, reply, EMPTY_BASELINE));
+	const { evidence, complete } = parentCreateEvidence(input, reply, EMPTY_BASELINE);
+	if (evidence.kind === "indeterminate") return evidence;
+	if (!complete) return { kind: "indeterminate", reason: "the parent's issue search returned only part of its matches; the duplicate check cannot clear the create" };
+	const existing = evidenceIds(evidence);
+	if (existing.length > 0) return { kind: "refused", reason: `the parent already has a ${input.issueType as string} with this summary: ${existing.join(", ")}; reuse it instead of creating a duplicate` };
+	return { kind: "observed", baseline: EMPTY_BASELINE };
+}
+
+// The key a parent create's reply names: the first issue key in the project
+// that is not the parent. It is only a candidate for createdIssueEvidence.
+export function createdIssueKey(input: WriteInput, reply: unknown): string | undefined {
+	for (const record of records(unwrapReply(reply))) {
+		const key = stringAt(record, "key");
+		if (key !== undefined && ISSUE_KEY.test(key) && key !== input.parentKey && key.startsWith(`${input.projectKey as string}-`)) return key;
+	}
+	return undefined;
+}
+
+// Read the created issue by key: an issue read is current where a JQL search
+// may not yet index an issue created a moment ago.
+export const createdIssuePlan = (issueKey: string): ReadBackPlan => ({ tool: "jira_get_issue", args: { issue_key: issueKey, fields: "summary,issuetype,project,parent" } });
+
+// The created issue proves the write only with the requested summary, type,
+// and parent key. Any other state is indeterminate, never absence: the issue
+// exists, so the receipt stays open and blocks the object for recovery.
+export function createdIssueEvidence(input: WriteInput, issueKey: string, reply: unknown): ReadBack {
+	const issue = observeIssue(reply);
+	if (issue.key !== issueKey) return { kind: "indeterminate", reason: "the created issue read names a different issue" };
+	const summary = stringAt(issue.fields, "summary");
+	const type = issueTypeName(issue.fields.issuetype ?? issue.fields.issue_type);
+	const wanted = normalised(input.summary as string);
+	if (wanted.length === 0 || summary === undefined || normalised(summary) !== wanted || type === undefined || normalised(type) !== normalised(input.issueType as string)) {
+		return { kind: "indeterminate", reason: "the created issue does not carry the requested summary and issue type" };
+	}
+	const parent = parentKeyOf(issue.fields);
+	if (parent === undefined) return { kind: "indeterminate", reason: "the created issue carries no parent" };
+	if (parent !== input.parentKey) return { kind: "indeterminate", reason: "the created issue names a different parent" };
+	return { kind: "found", effects: [{ kind: "jira-issue", id: issueKey }] };
 }
 
 // A wanted value matches an observed scalar, list, or record. A record matches
@@ -1446,7 +1560,7 @@ function pageRevisionBaseline(input: WriteInput, reply: unknown): BaselineObserv
 export function baselineFromReply(operation: WriteOperation, input: WriteInput, reply: unknown, trustedOrigin?: string, bound: WriteBaseline = EMPTY_BASELINE): BaselineObservation {
 	switch (operation) {
 		case "issue.create":
-			return baselineWithEffectIds(issueCreateEvidence(input, reply, EMPTY_BASELINE));
+			return issueCreateBaseline(input, reply);
 		case "issue.update":
 			return issueUpdateBaseline(input, reply);
 		case "issue.comment":
@@ -1490,6 +1604,29 @@ export function baselineFromReply(operation: WriteOperation, input: WriteInput, 
 			return pageAttachmentDeleteBaseline(input, reply);
 	}
 }
+
+// The parent a create under a parent binds: its key, id, and issue type, read
+// before the preview and again at apply. The parent's `updated` is not bound,
+// so an unrelated edit to the parent never refuses the apply; a parent that
+// was replaced, retyped, or deleted does.
+export interface BoundParent {
+	key: string;
+	id: string;
+	issueType: string;
+}
+
+export type ParentBinding = { ok: true; parent: BoundParent } | { ok: false; reason: string };
+
+export function bindParent(reply: unknown, parentKey: string): ParentBinding {
+	const issue = observeIssue(reply);
+	if (issue.key !== parentKey) return { ok: false, reason: "the parent read names a different issue" };
+	const id = stringAt(issue.fields, "id");
+	const issueType = issueTypeName(issue.fields.issuetype ?? issue.fields.issue_type);
+	if (id === undefined || issueType === undefined || issueType.length === 0) return { ok: false, reason: "the parent read exposes no issue id or issue type to bind" };
+	return { ok: true, parent: { key: parentKey, id, issueType } };
+}
+
+export const parentDigest = (parent: BoundParent): string => digest(JSON.stringify([parent.key, parent.id, parent.issueType]));
 
 // The attachment-delete exception binds what the preview saw of the one
 // attachment it will remove: every fact below is read from the issue's own

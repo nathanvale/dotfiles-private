@@ -153,7 +153,8 @@ _Avoid_: Automated login, headless login, OAuth flow
 The stable name of the Jira or Confluence object a write acts on, derived only
 from the request: the issue key or page id for an update or comment, and the
 destination container plus subject for a create, whose object does not yet
-exist.
+exist. A Jira create under a parent keeps that create identity; the preview
+binds the parent instead.
 _Avoid_: Page title alone, provider-assigned id, target
 
 **Write Preview**:

@@ -33,3 +33,11 @@ model = "gpt-6-luna"
 effort = "ultra"
 description = "GPT-6-Luna at max effort: Figma and Chrome parity checks"
 args = ["--sandbox", "workspace-write", "-c", "sandbox_workspace_write.network_access=true", "-c", 'sandbox_workspace_write.writable_roots=["/Users/nathanvale/.local/share/my-second-brain-playground/herdr-projects-root"]', "--ask-for-approval", "never", "--search"]
+
+[profiles.claude-haik]
+agent = "claude"
+model = "claude-haiku-4-5-20251001"
+
+[profiles.claude-haiku]
+agent = "claude"
+model = "claude-haiku-4-5-20251001"

@@ -8,7 +8,7 @@ import type { BindResult, CredentialBinding } from "../custody/index.ts";
 import { type CauseCode, OPERATION_SPECS, type OperationSpec, type Product, type Provenance, type TransactionState } from "./contract.ts";
 import { confirmSchema, type Dependencies, type Input, providerArguments, REPAIR_TEXT, readSchema, type SchemaTool, type TransportFailure, type TransportResult } from "./engine.ts";
 import { canonicalDigest, type Effect, type Evidence, JournalError, type Receipt, type WriteOperation } from "./journal.ts";
-import { ATTACHMENT_AUTHOR_GUARD_REASON, AUTHOR_GUARD_REASON, accountIdOf, attachmentDigest, attachmentReferences, baselineFromReply, bindAttachment, commentSources, descriptionSource, effectKindOf, effectsFromReply, imageTypesDigest, isObjectDelete, type IssueAttachment, magicImageType, NOT_IMAGE_REASON, observeIssue, observePage, observeRestComment, type PreparedContext, preparation, type Preparation, readBackEvidence, readBackPlan, type ReadBack, resolveMediaAttachments, type RevisionMatch, transitionTo, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
+import { ATTACHMENT_AUTHOR_GUARD_REASON, AUTHOR_GUARD_REASON, accountIdOf, attachmentDigest, attachmentReferences, baselineFromReply, bindAttachment, bindParent, commentSources, createdIssueEvidence, createdIssueKey, createdIssuePlan, descriptionSource, effectKindOf, effectsFromReply, imageTypesDigest, isObjectDelete, type IssueAttachment, magicImageType, NOT_IMAGE_REASON, observeIssue, observePage, observeRestComment, parentDigest, type PreparedContext, preparation, type Preparation, readBackEvidence, readBackPlan, type ReadBack, resolveMediaAttachments, type RevisionMatch, transitionTo, uploadFailed, type WriteInput, writeArguments, writeInput } from "./writes.ts";
 
 export interface Outcome {
 	cause: CauseCode;
@@ -287,6 +287,18 @@ async function prepareAttachmentDelete(route: Route, ctx: PreparedContext, step:
 	};
 }
 
+// A create under a parent reads the parent first: a missing parent refuses as
+// not-found before any search or preview, and the parent's key, id, and type
+// are digested into the baseline so an apply refuses when it was replaced or
+// retyped. Jira itself enforces the hierarchy at create.
+async function prepareParent(route: Route, ctx: PreparedContext, parentKey: string): Promise<Prepared> {
+	const read = await route.call("jira_get_issue", { issue_key: parentKey, fields: "summary,issuetype,project" });
+	if (read.cause !== "success") return { outcome: failed(read) };
+	const bound = bindParent(read.data, parentKey);
+	if (!bound.ok) return { outcome: refusal("capability-unavailable", bound.reason) };
+	return { ctx: { ...ctx, parent: bound.parent, baseline: { ...ctx.baseline, revision: parentDigest(bound.parent) } } };
+}
+
 async function bindBaseline(route: Route, operation: WriteOperation, input: WriteInput, ctx: PreparedContext): Promise<Prepared> {
 	const plan = readBackPlan(operation, input);
 	const read = await route.call(plan.tool, plan.args);
@@ -311,6 +323,9 @@ async function prepare(route: Route, operation: WriteOperation, input: WriteInpu
 	switch (step.kind) {
 		case "none":
 			prepared = { ctx };
+			break;
+		case "parent":
+			prepared = await prepareParent(route, ctx, step.parentKey);
 			break;
 		case "issue":
 			prepared = await prepareIssue(route, ctx, step.issueKey);
@@ -418,6 +433,7 @@ export async function previewFlow(session: Session, spec: OperationSpec, input: 
 			...(context.ctx.imageTypes === undefined ? {} : { imageTypes: context.ctx.imageTypes }),
 			...(context.ctx.attachment === undefined ? {} : { attachment: context.ctx.attachment }),
 			...(context.ctx.referenceCheck === undefined ? {} : { referenceCheck: context.ctx.referenceCheck }),
+			...(context.ctx.parent === undefined ? {} : { parent: context.ctx.parent }),
 			expiresAt: preview.expiresAt,
 			input: context.input,
 			arguments: context.bound,
@@ -436,10 +452,28 @@ function replyEffectIsNew(operation: WriteOperation, id: string, context: WriteC
 	return false;
 }
 
+// A create under a parent never completes from its reply. The key the reply
+// names is read directly, because a search may not yet index the new issue:
+// the requested summary, type, and parent complete it; an issue that exists
+// without them is unknown and keeps the object blocked. A failed read, or a
+// reply naming no key, falls through to the parent-scoped search.
+async function createdIssueRead(context: WriteContext, attempt: Attempt): Promise<Evidence | null> {
+	const key = createdIssueKey(context.input, attempt.data);
+	if (key === undefined || context.ctx.baseline.effectIds.includes(key)) return null;
+	const plan = createdIssuePlan(key);
+	const read = await context.route.call(plan.tool, plan.args);
+	if (read.cause !== "success") return null;
+	const evidence = createdIssueEvidence(context.input, key, read.data);
+	return evidence.kind === "found" ? { proof: "completed", effects: evidence.effects } : { proof: "unknown" };
+}
+
 // Evidence from the provider reply, else from an immediate read-back.
 async function settleEvidence(context: WriteContext, attempt: Attempt): Promise<Evidence> {
 	const operation = context.spec.id as WriteOperation;
-	if (attempt.cause === "success") {
+	if (attempt.cause === "success" && context.ctx.parent !== undefined) {
+		const direct = await createdIssueRead(context, attempt);
+		if (direct !== null) return direct;
+	} else if (attempt.cause === "success") {
 		const effects = effectsFromReply(operation, context.input, attempt.data, context.ctx.baseline);
 		if (effects.length > 0 && effects.every((effect) => replyEffectIsNew(operation, effect.id, context))) return { proof: "completed", effects };
 	}
