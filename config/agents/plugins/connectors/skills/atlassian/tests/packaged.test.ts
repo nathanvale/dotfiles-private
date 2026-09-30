@@ -1136,7 +1136,7 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 	const READ_TOOLS = new Set(["jira_get_issue", "jira_search", "jira_get_transitions", "confluence_get_page", "confluence_search", "confluence_get_comments", "confluence_get_attachments"]);
 	const WRITE_JIRA_TOOLS = [
 		...JIRA_TOOLS,
-		tool("jira_create_issue", ["project_key", "summary", "issue_type"], ["description", "assignee"]),
+		tool("jira_create_issue", ["project_key", "summary", "issue_type"], ["description", "assignee", "components", "additional_fields"]),
 		tool("jira_edit_comment", ["issue_key", "comment_id", "body"], ["visibility"]),
 		tool("jira_transition_issue", ["issue_key", "transition_id"], ["fields", "comment"]),
 		tool("jira_assign_issue", ["issue_key"], ["assignee"]),
@@ -1435,6 +1435,78 @@ describe.skipIf(!OFFICIAL_MCPORTER)("reads, writes, and recovery through the ver
 		expect(readdirSync(outbox()).sort()).toEqual([upload.digest, createHash("sha256").update(changed).digest("hex")].sort());
 		expectNoSecret(fixture, [preview.stdout, preview.stderr, apply.stdout, apply.stderr]);
 	}, 90_000);
+
+	// issue.create with parentKey through the packaged front door. The parent
+	// read and the created-issue read share jira_get_issue, so the fake's
+	// post-write reply stands for the created issue.
+	describe("issue.create under a parent", () => {
+		const CHILD = { projectKey: "EX", issueType: "Story", summary: "Path Design System Components/ErrorBanner", parentKey: "EX-546" };
+		// Independent oracle: the exact provider arguments from the v0.23.1 source.
+		const CHILD_ARGS = { project_key: "EX", issue_type: "Story", summary: CHILD.summary, additional_fields: '{"parent":"EX-546"}' };
+		const EPIC = { id: "10546", key: "EX-546", summary: "Path Design System", issue_type: { name: "Epic" }, project: { key: "EX" } };
+		const created = (parent: unknown) => ({ id: "10009", key: "EX-9", summary: CHILD.summary, issue_type: { name: "Story" }, project: { key: "EX" }, parent });
+		function freshParent(search: unknown[], after: unknown): void {
+			fresh();
+			fixture.canned("jira", "list", WRITE_JIRA_TOOLS);
+			fixture.canned("jira", "jira_get_issue", EPIC);
+			fixture.canned("jira", "jira_search", { total: -1, start_at: 0, max_results: 20, issues: search });
+			fixture.canned("jira", "jira_create_issue", { message: "Issue created successfully", issue: { id: "10009", key: "EX-9", summary: CHILD.summary } });
+			fixture.canned("jira", "jira_get_issue.after.jira_create_issue", after);
+		}
+
+		test("a parent create previews its bound parent without sending, then applies once and completes from the created issue's read", async () => {
+			freshParent([], created({ id: "10546", key: "EX-546" }));
+			const preview = await write("issue.create", CHILD, ["--preview"]);
+			expect([preview.code, preview.stderr]).toEqual([0, ""]);
+			const bound = record<{ previewId: string; arguments: unknown; parent: unknown }>(parse(preview.stdout).result);
+			expect([bound.arguments, bound.parent]).toEqual([CHILD_ARGS, { key: "EX-546", id: "10546", issueType: "Epic" }]);
+			expect(writeCalls()).toEqual([]);
+			const apply = await write("issue.create", CHILD, ["--apply", bound.previewId]);
+			expect([apply.code, apply.stderr]).toEqual([0, ""]);
+			const applied = parse(apply.stdout).result;
+			expect(station(applied)).toEqual(["connectors.run.apply", "success", "SUCCESS_RUN_APPLIED", "external", "completed", ["write-receipt", "provider-write"], []]);
+			expect(writeCalls()).toEqual([{ product: "jira", tool: "jira_create_issue", args: CHILD_ARGS }]);
+			const calls = fixture.lines<{ tool: string }>("effects.jsonl").map((call) => call.tool);
+			expect(calls.slice(calls.indexOf("jira_create_issue") + 1)).toEqual(["jira_get_issue"]);
+			expect([record(applied).status, record(applied).effects]).toEqual(["completed", [{ kind: "jira-issue", id: "EX-9" }]]);
+			expectNoSecret(fixture, [preview.stdout, preview.stderr, apply.stdout, apply.stderr]);
+		}, 90_000);
+
+		test("a created issue under another parent is an unknown outcome whose receipt stays open for recovery", async () => {
+			freshParent([], created({ key: "EX-600" }));
+			const preview = record<{ previewId: string }>(parse((await write("issue.create", CHILD, ["--preview"])).stdout).result);
+			const apply = await write("issue.create", CHILD, ["--apply", preview.previewId]);
+			expect([apply.code, apply.stderr]).toEqual([3, ""]);
+			const unknown = parse(apply.stdout).result;
+			expect(station(unknown)).toEqual(["connectors.run.apply", "failed", "DOMAIN_RUN_EFFECT_UNKNOWN", "external", "unknown", ["write-receipt"], ["provider-write"]]);
+			const listed = record<{ open: JournalRecord[] }>(parse((await recover()).stdout).result);
+			expect(listed.open.map((entry) => [entry.runId, entry.status, entry.send])).toEqual([[record(unknown).runId, "unknown", "possible"]]);
+			expectNoSecret(fixture, [apply.stdout, apply.stderr]);
+		}, 90_000);
+
+		test("a same-parent duplicate, a missing parent, and a malformed parentKey refuse the preview with one envelope, no preview, and no write", async () => {
+			const sentinel = "EX-parent-sentinel-must-not-echo";
+			freshParent([{ id: "10012", key: "EX-12", summary: CHILD.summary, issue_type: { name: "Story" }, parent: { key: "EX-546" } }], null);
+			const duplicate = await write("issue.create", CHILD, ["--preview"]);
+			const malformed = await write("issue.create", { ...CHILD, parentKey: sentinel }, ["--preview"]);
+			fixture.canned("jira", "jira_get_issue", { toolErrorText: "Issue EX-546 does not exist" });
+			const missing = await write("issue.create", CHILD, ["--preview"]);
+			const rows = [duplicate, malformed, missing].map((result) => {
+				const envelope = parse(result.stdout).result;
+				return [result.code, result.stderr, envelope.commandIdentity, envelope.outcome, envelope.causeCode, envelope.transactionState];
+			});
+			// Independent oracle: the accepted station for a schema refusal and a Provider read failure.
+			expect(rows).toEqual([
+				[4, "", "connectors.run.preview", "refused", "SCHEMA_ADAPTER_REFUSED", "unchanged"],
+				[4, "", "connectors.run.preview", "refused", "SCHEMA_ADAPTER_REFUSED", "unchanged"],
+				[3, "", "connectors.run.preview", "failed", "DOMAIN_PROVIDER_CALL_FAILED", "unchanged"],
+			]);
+			for (const stream of [malformed.stdout, malformed.stderr]) expect(stream).not.toContain(sentinel);
+			expect(writeCalls()).toEqual([]);
+			expect(atlassianFiles(fixture).filter((file) => file.startsWith("example/previews/") || file.startsWith("example/receipts/"))).toEqual([]);
+			expectNoSecret(fixture, [duplicate.stdout, duplicate.stderr, malformed.stdout, malformed.stderr, missing.stdout, missing.stderr]);
+		}, 90_000);
+	});
 
 	// T5 U3b-1d (Spec AC10 and AC11): one fixture, one cumulative cycle through
 	// every command and effect class. Every spawn holds its own token-shaped

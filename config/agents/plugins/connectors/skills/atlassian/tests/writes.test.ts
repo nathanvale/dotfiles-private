@@ -4,7 +4,7 @@
 // 22 September 2026 and reply shapes observed live on 23 September 2026.
 import { describe, expect, test } from "bun:test";
 import { OPERATION_SPECS } from "../scripts/dispatch/contract.ts";
-import { accountIdOf, attachmentDigest, attachmentReferences, baselineFromReply, bindAttachment, commentSources, descriptionSource, effectsFromReply, normalised, observeRestComment, preparation, readBackEvidence, readBackPlan, magicImageType, renderedImagesPresent, resolveMediaAttachments, sameWikiBody, transitionTo, uploadFailed, wikiImageReferences, wikiParts, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
+import { accountIdOf, attachmentDigest, attachmentReferences, baselineFromReply, bindAttachment, bindParent, createdIssueEvidence, createdIssueKey, createdIssuePlan, parentDigest, commentSources, descriptionSource, effectsFromReply, normalised, observeRestComment, preparation, readBackEvidence, readBackPlan, magicImageType, renderedImagesPresent, resolveMediaAttachments, sameWikiBody, transitionTo, uploadFailed, wikiImageReferences, wikiParts, WRITE_OPERATIONS, writeArguments, writeInput } from "../scripts/dispatch/writes.ts";
 
 const never = () => false;
 const CREATE = { projectKey: "PROJ", issueType: "Bug", summary: "Billing broken", description: "first\nsecond" };
@@ -648,5 +648,112 @@ describe("attachment delete", () => {
 		expect(baselineFromReply("issue.attachment.delete", DELETE, issue())).toEqual({ kind: "observed", baseline: { effectIds: ["202456"], commentIds: [], revision: null } });
 		expect(baselineFromReply("issue.attachment.delete", DELETE, issue([other]))).toEqual({ kind: "refused", reason: "the issue has no attachment with that id" });
 		expect(baselineFromReply("issue.attachment.delete", DELETE, { key: "PROJ-1", fields: { updated: "t1" } })).toEqual({ kind: "indeterminate", reason: "the Jira reply carries no attachment list" });
+	});
+});
+
+describe("issue.create under a parent", () => {
+	// Independent oracles: literals from the mcp-atlassian v0.23.1 source
+	// (jira_create_issue additional_fields {"parent": KEY}; jira_search on Cloud
+	// reports total -1 and pages by next_page_token) read on 30 September 2026.
+	const CHILD = { projectKey: "PROJ", issueType: "Story", summary: "Path Design System Components/ErrorBanner", parentKey: "PROJ-546" };
+	const { parentKey: _omitted, ...PLAIN } = CHILD;
+	const epic = { id: "10546", key: "PROJ-546", fields: { summary: "Path Design System", issuetype: { name: "Epic" } } };
+	const child = (key: string, parent: unknown = epic, extra: Record<string, unknown> = {}) => ({ id: "1", key, summary: CHILD.summary, issue_type: { name: "Story" }, ...(parent === null ? {} : { parent }), ...extra });
+	const search = (issues: unknown[], page: Record<string, unknown> = {}) => ({ total: -1, start_at: 0, max_results: 20, issues, ...page });
+	const SENTINEL = "ops_sentinel_parent_0000000000000000000000";
+
+	test("parentKey is one optional Jira issue key; every other spelling of a parent or a provider field refuses without echoing the value", () => {
+		expect(writeInput("issue.create", CHILD)).toEqual({ ok: true, input: CHILD });
+		expect(writeInput("issue.create", PLAIN)).toEqual({ ok: true, input: PLAIN });
+		for (const parentKey of ["proj-546", "PROJ-546 ", " PROJ-546", "https://example.atlassian.net/browse/PROJ-546", "10546", "PROJ", "", { key: "PROJ-546" }, ["PROJ-546"], 546, SENTINEL]) {
+			const refused = writeInput("issue.create", { ...PLAIN, parentKey });
+			expect([parentKey, refused]).toEqual([parentKey, { ok: false, reason: "input key parentKey is invalid" }]);
+			expect(JSON.stringify(refused)).not.toContain(SENTINEL);
+		}
+		for (const key of ["epicKey", "epic_link", "additional_fields", "fields", "components", "parent"]) expect(writeInput("issue.create", { ...PLAIN, [key]: "PROJ-546" })).toEqual({ ok: false, reason: `unknown input key ${key}` });
+	});
+
+	test("a parent create reads its parent first and sends exactly additional_fields {\"parent\": KEY}; without parentKey nothing changes", () => {
+		expect(preparation("issue.create", CHILD)).toEqual({ kind: "parent", parentKey: "PROJ-546" });
+		expect(preparation("issue.create", PLAIN)).toEqual({ kind: "none" });
+		const ctx = { revision: null, baseline: { effectIds: [], commentIds: [], revision: null } };
+		expect(writeArguments(OPERATION_SPECS["issue.create"], CHILD, ctx).args).toEqual({ project_key: "PROJ", issue_type: "Story", summary: CHILD.summary, additional_fields: '{"parent":"PROJ-546"}' });
+		// Negative control: the arguments without a parent are byte-identical to the pre-parent adapter.
+		expect(JSON.stringify(writeArguments(OPERATION_SPECS["issue.create"], PLAIN, ctx).args)).toBe(JSON.stringify({ project_key: "PROJ", issue_type: "Story", summary: CHILD.summary }));
+	});
+
+	test("the duplicate search and read-back are scoped to the parent and request its parent field; without parentKey the search is unchanged", () => {
+		expect(readBackPlan("issue.create", CHILD)).toEqual({ tool: "jira_search", args: { jql: 'project = "PROJ" AND parent = "PROJ-546" AND summary ~ "Path Design System Components/ErrorBanner" ORDER BY created DESC', limit: 20, fields: "summary,issuetype,created,parent" } });
+		expect(readBackPlan("issue.create", PLAIN)).toEqual({ tool: "jira_search", args: { jql: 'project = "PROJ" AND summary ~ "Path Design System Components/ErrorBanner" ORDER BY created DESC', limit: 20, fields: "summary,issuetype,created" } });
+		expect(createdIssuePlan("PROJ-9")).toEqual({ tool: "jira_get_issue", args: { issue_key: "PROJ-9", fields: "summary,issuetype,project,parent" } });
+	});
+
+	test("the parent read binds the parent's key, id, and issue type from either reply shape and refuses a reply that cannot bind them", () => {
+		const community = { id: "10546", key: "PROJ-546", summary: "Path Design System", issue_type: { name: "Epic" }, project: { key: "PROJ" }, updated: "t1" };
+		const rest = { id: "10546", key: "PROJ-546", fields: { summary: "Path Design System", issuetype: { name: "Epic" }, updated: "t2" } };
+		expect(bindParent(community, "PROJ-546")).toEqual({ ok: true, parent: { key: "PROJ-546", id: "10546", issueType: "Epic" } });
+		expect(bindParent(wrapped(rest), "PROJ-546")).toEqual({ ok: true, parent: { key: "PROJ-546", id: "10546", issueType: "Epic" } });
+		expect(bindParent({ ...community, key: "PROJ-547" }, "PROJ-546")).toEqual({ ok: false, reason: "the parent read names a different issue" });
+		expect(bindParent({ key: "PROJ-546", issue_type: { name: "Epic" } }, "PROJ-546")).toEqual({ ok: false, reason: "the parent read exposes no issue id or issue type to bind" });
+		expect(bindParent({ id: "10546", key: "PROJ-546" }, "PROJ-546")).toEqual({ ok: false, reason: "the parent read exposes no issue id or issue type to bind" });
+		const bound = { key: "PROJ-546", id: "10546", issueType: "Epic" };
+		// The digest moves with the id or the type; the parent's own updated is never bound.
+		expect(parentDigest(bound)).toMatch(/^[0-9a-f]{64}$/);
+		expect(parentDigest(bound)).toBe(parentDigest({ ...bound }));
+		expect(parentDigest({ ...bound, issueType: "Story" })).not.toBe(parentDigest(bound));
+		expect(parentDigest({ ...bound, id: "10547" })).not.toBe(parentDigest(bound));
+	});
+
+	test("the baseline refuses a same-parent duplicate by key, refuses a truncated or unreadable search, and clears a search with no match", () => {
+		const duplicate = { kind: "refused", reason: "the parent already has a Story with this summary: PROJ-12; reuse it instead of creating a duplicate" } as const;
+		expect(baselineFromReply("issue.create", CHILD, search([child("PROJ-12")]))).toEqual(duplicate);
+		expect(baselineFromReply("issue.create", CHILD, wrapped(search([child("PROJ-12")])))).toEqual(duplicate);
+		// Controls: another summary or type under the parent is no duplicate; Cloud's total -1 without a next page is complete.
+		expect(baselineFromReply("issue.create", CHILD, search([{ ...child("PROJ-13"), summary: "Path Design System Components/Snackbar" }, { ...child("PROJ-14"), issue_type: { name: "Task" } }]))).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: [], revision: null } });
+		expect(baselineFromReply("issue.create", CHILD, search([]))).toEqual({ kind: "observed", baseline: { effectIds: [], commentIds: [], revision: null } });
+		const truncated = { kind: "indeterminate", reason: "the parent's issue search returned only part of its matches; the duplicate check cannot clear the create" } as const;
+		expect(baselineFromReply("issue.create", CHILD, search([], { next_page_token: "abc" }))).toEqual(truncated);
+		expect(baselineFromReply("issue.create", CHILD, search([child("PROJ-13", epic, { summary: "Other" })], { total: 21 }))).toEqual(truncated);
+		expect(baselineFromReply("issue.create", CHILD, { message: "no list" })).toEqual({ kind: "indeterminate", reason: "the parent's issue search reply carries no issue list" });
+		// A match the scoped search returned without the parent, or under another one, is not trusted either way.
+		expect(baselineFromReply("issue.create", CHILD, search([child("PROJ-12", null)]))).toEqual({ kind: "indeterminate", reason: "a matching issue search result carries no parent key" });
+		expect(baselineFromReply("issue.create", CHILD, search([child("PROJ-12", { key: "PROJ-600" })]))).toEqual({ kind: "indeterminate", reason: "a matching issue search result names a different parent" });
+	});
+
+	test("a create reply never proves a parent: it only names the key the read-back must verify", () => {
+		const reply = { message: "Issue created successfully", issue: { id: "10009", key: "PROJ-9", summary: CHILD.summary, issue_type: { name: "Story" }, parent: { key: "PROJ-546" } } };
+		expect(effectsFromReply("issue.create", CHILD, reply)).toEqual([]);
+		// Control: the same reply completes a create without a parent.
+		expect(effectsFromReply("issue.create", PLAIN, reply)).toEqual([{ kind: "jira-issue", id: "PROJ-9" }]);
+		expect(createdIssueKey(CHILD, reply)).toBe("PROJ-9");
+		expect(createdIssueKey(CHILD, wrapped(reply))).toBe("PROJ-9");
+		expect(createdIssueKey(CHILD, { message: "Issue created successfully", issue: { parent: { key: "PROJ-546" } } })).toBeUndefined();
+		expect(createdIssueKey(CHILD, { issue: { key: "OTHER-9" } })).toBeUndefined();
+		expect(createdIssueKey(CHILD, { result: "not json" })).toBeUndefined();
+	});
+
+	test("the created issue's own read completes only with its summary, type, and parent key; anything else is indeterminate", () => {
+		const read = (fields: Record<string, unknown>, key = "PROJ-9") => ({ id: "10009", key, summary: CHILD.summary, issue_type: { name: "Story" }, project: { key: "PROJ" }, parent: epic, ...fields });
+		const found = { kind: "found" as const, effects: [{ kind: "jira-issue" as const, id: "PROJ-9" }] };
+		expect(createdIssueEvidence(CHILD, "PROJ-9", read({}))).toEqual(found);
+		expect(createdIssueEvidence(CHILD, "PROJ-9", wrapped({ id: "10009", key: "PROJ-9", fields: { summary: CHILD.summary, issuetype: { name: "Story" }, parent: { key: "PROJ-546" } } }))).toEqual(found);
+		expect(createdIssueEvidence(CHILD, "PROJ-9", read({ parent: undefined }))).toEqual({ kind: "indeterminate", reason: "the created issue carries no parent" });
+		expect(createdIssueEvidence(CHILD, "PROJ-9", read({ parent: { key: "PROJ-600" } }))).toEqual({ kind: "indeterminate", reason: "the created issue names a different parent" });
+		expect(createdIssueEvidence(CHILD, "PROJ-9", read({ summary: "Other" }))).toEqual({ kind: "indeterminate", reason: "the created issue does not carry the requested summary and issue type" });
+		expect(createdIssueEvidence(CHILD, "PROJ-9", read({ issue_type: { name: "Task" } }))).toEqual({ kind: "indeterminate", reason: "the created issue does not carry the requested summary and issue type" });
+		expect(createdIssueEvidence(CHILD, "PROJ-9", read({}, "PROJ-10"))).toEqual({ kind: "indeterminate", reason: "the created issue read names a different issue" });
+	});
+
+	test("the parent-scoped search read-back completes only from a new key under the requested parent", () => {
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9")]))).toEqual({ kind: "found", effects: [{ kind: "jira-issue", id: "PROJ-9" }] });
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9")]), { effectIds: ["PROJ-9"], commentIds: [], revision: null })).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.create", CHILD, never, search([]))).toEqual({ kind: "absent", revisionUnchanged: false });
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9", null)]))).toEqual({ kind: "indeterminate", reason: "a matching issue search result carries no parent key" });
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9", { key: "PROJ-600" })]))).toEqual({ kind: "indeterminate", reason: "a matching issue search result names a different parent" });
+		// A list with unread matches never proves absence; a new key on the page read still proves the write.
+		const partial = { kind: "indeterminate" as const, reason: "the parent's issue search returned only part of its matches; it cannot prove the issue absent" };
+		expect(readBackEvidence("issue.create", CHILD, never, search([], { next_page_token: "next" }))).toEqual(partial);
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9")], { next_page_token: "next" }), { effectIds: ["PROJ-9"], commentIds: [], revision: null })).toEqual(partial);
+		expect(readBackEvidence("issue.create", CHILD, never, search([child("PROJ-9")], { next_page_token: "next" }))).toEqual({ kind: "found", effects: [{ kind: "jira-issue", id: "PROJ-9" }] });
 	});
 });

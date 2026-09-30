@@ -351,6 +351,39 @@ operation's proof state is fixture-tested. Revisit trigger: an upstream
 mcp-atlassian release that exposes a Jira attachment delete tool, which would
 move this operation onto the Community route.
 
+### Note: Jira create under a parent (30 September 2026)
+
+Authority: Nathan, accepting the Design System Feedback Uplift plan (thread
+t-0078) to create Path Stories under their Epic.
+
+`issue.create` gains an optional `parentKey`. It stays on the Community route:
+the dispatcher sends mcp-atlassian 0.23.1's documented `additional_fields`
+argument as exactly `{"parent":"<KEY>"}`, which the Provider maps to
+`fields.parent = {key}`, Atlassian's replacement for the deprecated Epic Link
+and Parent Link fields. No REST request, tool, registry entry, or custody
+change is added, so this is a note rather than an amendment.
+
+- Preview reads the parent and binds its key, id, and issue type into the
+  baseline; the parent's `updated` is not bound. A parent-scoped search
+  refuses an exact summary and type match, and refuses a search whose next
+  page token or total shows unread matches (Cloud reports total -1).
+- The create reply never completes the write. The key it names is read with
+  `jira_get_issue`, which is current where a JQL search may lag indexing; the
+  requested summary, type, and `parent.key` complete it, and any other state
+  leaves the receipt `outcome-unknown` with its object blocked. `adjudicate`
+  reads the parent-scoped search.
+- Object Identity and the journal record shape are unchanged. A build without
+  this note refuses `parentKey` as an unknown key, so before a rollback,
+  confirm that no open receipt carries it.
+
+Confirmation. Fixture-proven in the plugin suite (30 September 2026): input
+refusals, exact arguments with and without a parent, parent binding and its
+apply refusal, duplicate and truncation refusals, reply distrust, read-back
+completion, and outcome-unknown on an absent or different parent, through the
+dispatcher and the spawned `bin/connectors`. Live: not yet run; the first
+live qualification is one previewed Story under SMSTX-546, applied by the
+coordinator under Nathan's authorization.
+
 The Connectors plugin was selected for a credential-safe repair on
 21 September 2026. Nathan approved the one-Provider direction on 23 September
 2026. This ADR remains proposed until the Community route is live-qualified.

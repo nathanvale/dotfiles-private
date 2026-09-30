@@ -107,7 +107,7 @@ const SCHEMAS: Record<string, SchemaTool[]> = {
 	[CJ]: [
 		tool("jira_get_issue", ["issue_key"], ["fields", "comment_limit"]),
 		tool("jira_search", ["jql"], ["limit", "fields"]),
-		tool("jira_create_issue", ["project_key", "summary", "issue_type"], ["description", "assignee"]),
+		tool("jira_create_issue", ["project_key", "summary", "issue_type"], ["description", "assignee", "components", "additional_fields"]),
 		tool("jira_update_issue", ["issue_key", "fields"], ["additional_fields", "components", "attachments", "return_fields"]),
 		tool("jira_add_comment", ["issue_key", "body"], ["visibility", "public"]),
 		tool("jira_edit_comment", ["issue_key", "comment_id", "body"], ["visibility"]),
@@ -1602,6 +1602,141 @@ describe("attachment delete through the owned REST route", () => {
 		expect([resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["completed", ["jira-attachment:202456"]]);
 		expect(calls.filter((call) => call.tool === "jira_rest_attachment_delete")).toHaveLength(2);
 		expect(readJsonDir(receiptsDir()).map((entry) => entry.status).sort()).toEqual(["completed", "unchanged"]);
+	});
+});
+
+describe("issue.create under a parent", () => {
+	const CHILD = { projectKey: "PROJ", issueType: "Story", summary: "Path Design System Components/ErrorBanner", parentKey: "PROJ-546" };
+	// Independent oracles: the literal provider arguments, reads, and bound parent.
+	const PARENT_READ = { issue_key: "PROJ-546", fields: "summary,issuetype,project" };
+	const SCOPED_SEARCH = { jql: 'project = "PROJ" AND parent = "PROJ-546" AND summary ~ "Path Design System Components/ErrorBanner" ORDER BY created DESC', limit: 20, fields: "summary,issuetype,created,parent" };
+	const CREATE_ARGS = { project_key: "PROJ", issue_type: "Story", summary: CHILD.summary, additional_fields: '{"parent":"PROJ-546"}' };
+	const CREATED_READ = { issue_key: "PROJ-9", fields: "summary,issuetype,project,parent" };
+	const BOUND = { key: "PROJ-546", id: "10546", issueType: "Epic" };
+	const BOUND_DIGEST = new Bun.CryptoHasher("sha256").update(JSON.stringify(["PROJ-546", "10546", "Epic"])).digest("hex");
+	const epic = (type = "Epic") => ({ ok: true as const, data: { id: "10546", key: "PROJ-546", summary: "Path Design System", issue_type: { name: type }, project: { key: "PROJ" } } });
+	const created = (parent: unknown) => ({ ok: true as const, data: { id: "10009", key: "PROJ-9", summary: CHILD.summary, issue_type: { name: "Story" }, project: { key: "PROJ" }, ...(parent === null ? {} : { parent }) } });
+	const search = (issues: unknown[], page: Record<string, unknown> = {}) => ({ ok: true as const, data: { total: -1, start_at: 0, max_results: 20, issues, ...page } });
+	const listed = (parent: unknown) => ({ id: "10009", key: "PROJ-9", summary: CHILD.summary, issue_type: { name: "Story" }, ...(parent === null ? {} : { parent }) });
+	const CREATE_REPLY = { ok: true as const, data: { message: "Issue created successfully", issue: { id: "10009", key: "PROJ-9", summary: CHILD.summary, issue_type: { name: "Story" }, parent: { key: "PROJ-546" } } } };
+	const byKey = (replies: Record<string, TransportResult | (() => TransportResult)>) => (args: Record<string, unknown>): TransportResult => {
+		const reply = replies[args.issue_key as string];
+		if (reply === undefined) return failure("not-found");
+		return typeof reply === "function" ? reply() : reply;
+	};
+	const create = (argv: string[], dependencies: Dependencies, input: unknown = CHILD) => dispatch(["issue.create", "--input", JSON.stringify(input), ...argv], dependencies);
+
+	test("preview reads and binds the parent, runs the parent-scoped duplicate search, keeps the unchanged create identity, and sends nothing", async () => {
+		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({ "PROJ-546": epic() }), [`${CJ}.jira_search`]: search([]) });
+		const envelope = await create(["--preview"], deps({ transport }));
+		expect([envelope.result.outcome, envelope.result.causeCode]).toEqual(["success", "success"]);
+		const data = previewData(envelope) as ReturnType<typeof previewData> & { parent: unknown };
+		expect([data.tool, data.arguments, data.parent, data.baseline]).toEqual(["jira_create_issue", CREATE_ARGS, BOUND, { effectIds: [], commentIds: [], revision: BOUND_DIGEST }]);
+		// The Object Identity is the pre-parent create identity: parent is not part of it.
+		const { parentKey: _omitted, ...plain } = CHILD;
+		expect(data.objectIdentity).toBe(`project:PROJ:create:story:${new Bun.CryptoHasher("sha256").update("path design system components/errorbanner").digest("hex").slice(0, 16)}`);
+		expect(data.objectIdentity).toBe(previewData(await create(["--preview"], deps({ transport: fakeTransport({ [`${CJ}.jira_search`]: { ok: true, data: { issues: [] } } }).transport }), plain)).objectIdentity);
+		expect(calls).toEqual([{ server: CJ, tool: "jira_get_issue", args: PARENT_READ }, { server: CJ, tool: "jira_search", args: SCOPED_SEARCH }]);
+		expect(readJsonDir(receiptsDir())).toEqual([]);
+	});
+
+	test("apply sends the parent once and completes only from the created issue's own read showing its summary, type, and parent", async () => {
+		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({ "PROJ-546": epic(), "PROJ-9": created({ id: "10546", key: "PROJ-546" }) }), [`${CJ}.jira_search`]: search([]), [`${CJ}.jira_create_issue`]: CREATE_REPLY });
+		const dependencies = deps({ transport });
+		const preview = previewData(await create(["--preview"], dependencies));
+		const applied = await create(["--apply", preview.previewId], dependencies);
+		expect([applied.result.outcome, applied.result.transactionState, applied.result.effects.completed]).toEqual(["success", "completed", ["jira-issue:PROJ-9"]]);
+		const tools = calls.map((call) => call.tool);
+		expect(calls.filter((call) => call.tool === "jira_create_issue")).toEqual([{ server: CJ, tool: "jira_create_issue", args: CREATE_ARGS }]);
+		expect(calls.slice(tools.indexOf("jira_create_issue") + 1)).toEqual([{ server: CJ, tool: "jira_get_issue", args: CREATED_READ }]);
+		expect(readJsonDir(receiptsDir()).map((entry) => [entry.status, entry.send, entry.effects])).toEqual([["completed", "possible", [{ kind: "jira-issue", id: "PROJ-9" }]]]);
+	});
+
+	test("a reply that names no key settles from the parent-scoped search read-back", async () => {
+		let searches = 0;
+		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({ "PROJ-546": epic() }), [`${CJ}.jira_search`]: () => (searches++ >= 2 ? search([listed({ key: "PROJ-546" })]) : search([])), [`${CJ}.jira_create_issue`]: { ok: true, data: { message: "Issue created successfully" } } });
+		const dependencies = deps({ transport });
+		const preview = previewData(await create(["--preview"], dependencies));
+		const applied = await create(["--apply", preview.previewId], dependencies);
+		expect([applied.result.transactionState, applied.result.effects.completed]).toEqual(["completed", ["jira-issue:PROJ-9"]]);
+		const tools = calls.map((call) => call.tool);
+		expect(calls.slice(tools.indexOf("jira_create_issue") + 1)).toEqual([{ server: CJ, tool: "jira_search", args: SCOPED_SEARCH }]);
+	});
+
+	test.each([
+		["carries no parent", null],
+		["names another parent", { key: "PROJ-600" }],
+	])("a created issue that %s leaves the receipt outcome-unknown, blocks a retry, and adjudicates only once the scoped search shows the parent", async (_case, parent) => {
+		let adjudicating = false;
+		const { transport, calls } = fakeTransport({
+			[`${CJ}.jira_get_issue`]: byKey({ "PROJ-546": epic(), "PROJ-9": created(parent) }),
+			[`${CJ}.jira_search`]: () => (adjudicating ? search([listed({ key: "PROJ-546" })]) : search([])),
+			[`${CJ}.jira_create_issue`]: CREATE_REPLY,
+		});
+		const dependencies = deps({ transport });
+		const preview = previewData(await create(["--preview"], dependencies));
+		const applied = await create(["--apply", preview.previewId], dependencies);
+		expect([applied.result.causeCode, applied.result.transactionState, applied.result.effects.completed]).toEqual(["outcome-unknown", "unknown", []]);
+		const runId = (applied.result.data as { runId: string }).runId;
+		expect((await dispatch(["receipt", "--run", runId], dependencies)).result.data).toMatchObject({ status: "unknown", send: "possible" });
+		// A retry of the same create is refused before any second send.
+		const retry = previewData(await create(["--preview"], dependencies));
+		const blocked = await create(["--apply", retry.previewId], dependencies);
+		expect([blocked.result.causeCode, blocked.result.repairAction?.endsWith("write-blocked-open-receipt")]).toEqual(["refused-write-blocked", true]);
+		expect(calls.filter((call) => call.tool === "jira_create_issue")).toHaveLength(1);
+		// Adjudication without the parent in the scoped search leaves the object blocked.
+		const unresolved = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(CHILD)], dependencies);
+		expect(unresolved.result.causeCode).toBe("refused-evidence");
+		adjudicating = true;
+		const resolved = await dispatch(["adjudicate", "--run", runId, "--input", JSON.stringify(CHILD)], dependencies);
+		expect([resolved.result.transactionState, resolved.result.effects.completed]).toEqual(["completed", ["jira-issue:PROJ-9"]]);
+	});
+
+	test("a missing parent refuses as not-found before any search, preview, or send", async () => {
+		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({}) });
+		const refused = await create(["--preview"], deps({ transport }));
+		expect([refused.result.outcome, refused.result.causeCode, refused.result.repairAction]).toEqual(["failed", "not-found", REPAIR["not-found"]]);
+		expect(calls).toEqual([{ server: CJ, tool: "jira_get_issue", args: PARENT_READ }]);
+		expect([readJsonDir(previewsDir()), readJsonDir(receiptsDir())]).toEqual([[], []]);
+	});
+
+	test("a parent retyped or deleted between preview and apply refuses the apply before any send", async () => {
+		let parent: TransportResult = epic();
+		const { transport, calls } = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({ "PROJ-546": () => parent }), [`${CJ}.jira_search`]: search([]), [`${CJ}.jira_create_issue`]: CREATE_REPLY });
+		const dependencies = deps({ transport });
+		const preview = previewData(await create(["--preview"], dependencies));
+		parent = epic("Feature");
+		const retyped = await create(["--apply", preview.previewId], dependencies);
+		expect([retyped.result.causeCode, retyped.result.repairAction?.endsWith("preview-baseline-changed")]).toEqual(["refused-preview", true]);
+		parent = failure("not-found");
+		const deleted = await create(["--apply", preview.previewId], dependencies);
+		expect(deleted.result.causeCode).toBe("not-found");
+		expect(calls.filter((call) => call.tool === "jira_create_issue")).toEqual([]);
+		expect(readJsonDir(receiptsDir())).toEqual([]);
+	});
+
+	test("the duplicate check refuses a same-parent match by key and a truncated search; a match elsewhere in the project does not refuse", async () => {
+		const duplicate = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({ "PROJ-546": epic() }), [`${CJ}.jira_search`]: search([{ ...listed({ key: "PROJ-546" }), key: "PROJ-12" }]) });
+		const refused = await create(["--preview"], deps({ transport: duplicate.transport }));
+		expect([refused.result.causeCode, refused.result.repairAction]).toEqual(["input-invalid", "the parent already has a Story with this summary: PROJ-12; reuse it instead of creating a duplicate"]);
+		const truncated = fakeTransport({ [`${CJ}.jira_get_issue`]: byKey({ "PROJ-546": epic() }), [`${CJ}.jira_search`]: search([], { next_page_token: "next" }) });
+		const partial = await create(["--preview"], deps({ transport: truncated.transport }));
+		expect([partial.result.causeCode, partial.result.repairAction?.startsWith("the parent's issue search returned only part of its matches")]).toEqual(["capability-unavailable", true]);
+		expect([...duplicate.calls, ...truncated.calls].filter((call) => call.tool === "jira_create_issue")).toEqual([]);
+		expect(readJsonDir(previewsDir())).toEqual([]);
+		// Control: the scoped search is the Provider's filter; without a parent the same project match is only a baseline id.
+		const { parentKey: _omitted, ...plain } = CHILD;
+		const project = fakeTransport({ [`${CJ}.jira_search`]: search([{ ...listed(null), key: "PROJ-12" }]) });
+		const planned = previewData(await create(["--preview"], deps({ transport: project.transport }), plain));
+		expect(planned.baseline.effectIds).toEqual(["PROJ-12"]);
+	});
+
+	test("a live schema without additional_fields refuses a parent create before any call", async () => {
+		const withoutParent = SCHEMAS[CJ]!.map((entry) => (entry.name === "jira_create_issue" ? tool("jira_create_issue", ["project_key", "summary", "issue_type"], ["description", "assignee"]) : entry));
+		const { transport, calls } = fakeTransport({}, { [CJ]: withoutParent });
+		const refused = await create(["--preview"], deps({ transport }));
+		expect([refused.result.causeCode, refused.result.repairAction]).toEqual(["capability-unavailable", REPAIR["capability-unavailable"]]);
+		expect(calls).toEqual([]);
 	});
 });
 
