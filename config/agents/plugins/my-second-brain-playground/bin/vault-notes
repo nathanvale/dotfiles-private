@@ -1,6 +1,6 @@
 #!/bin/sh
 set -eu
-# Follow a symlinked launcher (for example ~/.local/bin/vault-notes), including relative and chained
+# Follow a symlinked launcher (for example a link on your PATH), including relative and chained
 # links, to this real file before deriving the plugin root. `cd -P` then resolves symlinked directories.
 launcher=$0
 while [ -L "$launcher" ]; do

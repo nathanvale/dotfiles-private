@@ -429,7 +429,7 @@ describe("bin/vault-notes through symlinks", () => {
     const hop = path.join(scratch, "hop");
     await mkdir(home, { recursive: true });
     await mkdir(hop);
-    // ~/.local/bin/vault-notes -> absolute launcher (the planned dotfiles link shape).
+    // A PATH-style link -> absolute launcher.
     await symlink(BIN, path.join(home, "vault-notes"));
     // Chain: relative link -> relative link -> absolute link -> launcher.
     await symlink(BIN, path.join(hop, "absolute"));

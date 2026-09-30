@@ -64,9 +64,6 @@ common_symlinks=(
 	"${HOME}/bin|${DOTFILES}/bin"
 	"${HOME}/Scripts|${DOTFILES}/Scripts"
 
-	# Local bin scripts (My Second Brain Playground plugin commands)
-	"${HOME}/.local/bin/vault-notes|${DOTFILES}/config/agents/plugins/my-second-brain-playground/bin/vault-notes"
-
 	# Tmux (doesn't follow XDG, needs explicit symlink)
 	"${HOME}/.tmux.conf|${DOTFILES}/config/tmux/tmux.conf"
 
