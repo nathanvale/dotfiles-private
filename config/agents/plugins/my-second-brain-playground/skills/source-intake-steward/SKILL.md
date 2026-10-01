@@ -62,15 +62,15 @@ Drive-complete receipt resumes at step 5 after the step 6 inspection. Already
 filed Wöhr and Virgin Australia items are outside this route.
 
 Each private source read, model disclosure, Drive effect, and vault note effect
-follows its own recorded exact-item grant or decision; one grant never widens
-another.
+follows its own recorded exact-item grant or decision. One grant never widens
+another, so the Classifier grant never covers this foreground.
 
 - **Foreground grant.** This foreground is itself a model. Before it receives
-  any source detail, obtain Nathan's recorded grant for its own disclosure and
-  for each source read it makes. The classifier grant does not cover it.
-  Require an exact account alias mapped to the account or drive outside Git,
-  the original file ID, and permitted reads; keep that grant and its values in
-  the private receipt.
+  any source detail, obtain Nathan's recorded grant naming the exact item, this
+  foreground's model, its purpose, the fields disclosed to it, and each source
+  read it may make. Require an exact account alias mapped to the account or
+  drive outside Git, and the original file ID; keep that grant and its values
+  in the private receipt.
 - **Classifier grant.** Before classification, Stage Manager verifies Nathan's
   recorded grant for the exact item, provider `luna`, classification purpose,
   and every metadata field in the dispatch; this grant names fields and paths,
@@ -79,10 +79,10 @@ another.
 - **Content grant.** Any content read or content disclosure needs a separate
   exact-item grant.
 
-Done when the Bead is claimed under your own binding and the grants for step 2
-and classification are recorded. Any later read or disclosure first gets its
-own grant. A missing grant stops the run before that read or disclosure; hand
-back `await Nathan's decision` in redacted state.
+Done when the Bead is claimed under your own binding and the **Foreground
+grant** for step 2 is recorded. Record the **Classifier grant**, or its absence,
+for step 3. A missing Foreground grant stops the run before any source read;
+hand back `await Nathan's decision` in redacted state.
 
 ## 2. Foreground: observe and keep a private receipt
 
@@ -100,23 +100,24 @@ Create the item directory named in the linked command contract at mode `0700`
 and keep substantive receipt files at mode `0600`. Record the exact account
 mapping and scoped original ID, observed fields and time, parent, available
 content marker, sharing observation, duplicate candidates, grants, proposal and
-decision, effect attempts and readbacks, state, and one next action. Use the
+decision, effect attempts and readbacks, state, one next action, and this
+foreground's session identity with the location of each session log,
+transcript, or pane scrollback that carried item values. Use the
 states `proposed`, `drive-complete`, `vault-pending`, and `complete`;
 distinguish an unknown effect explicitly. Set retention review for 30 days after
 creation, covering the receipt, this item's lane rollouts and Codex logs (named
-in the `source-intake-classify` README), and this foreground's session log and
-any transcript or pane scrollback that carried item values. A granted
-foreground run performs the review and deletes only with Nathan's approval;
-Stage Manager tracks it from redacted status. No automatic deletion. Keep raw
-account email, permission list, access-bearing links or keys, source bytes,
-personal filename, and live dispatch grant and request input out of Git and
-Beads.
+in the `source-intake-classify` README), and each foreground location recorded
+above. A granted foreground run performs the review and deletes only with
+Nathan's approval; Stage Manager tracks it from redacted status. No automatic
+deletion. Keep raw account email, permission list, access-bearing links or
+keys, source bytes, personal filename, and live dispatch grant and request
+input out of Git and Beads.
 
 Keep the command's classification metadata input separate from this receipt's
 action and readback records. Use the linked command contract for its fields.
 
-Done when the receipt holds every observation above for the scoped ID and
-names its retention review date.
+Done when the receipt holds every observation above for the scoped ID, the
+foreground session identity and locations, and its retention review date.
 
 ## 3. Prepare evidence and draft the proposal
 
@@ -128,19 +129,20 @@ needs an earned owner. Check the proposed folder's account scope, ID, displayed
 name, and access. Resolve competing owners, duplicates, or a sharing boundary
 as a Nathan decision before effects.
 
-Classify only after the classifier grant is verified. Pipe the private grant
-and request to `source-intake-dispatch project` as its
+Classify only after the step 1 **Classifier grant** is verified. Pipe the
+private grant and request to `source-intake-dispatch project` as its
 [contract](../../packages/source-intake-dispatch/README.md) describes; the
 command validates both before opening the classification metadata. A dispatch
 refusal is final until Stage Manager verifies a matching grant. Then pipe the
 classify contract's lane input into `source-intake-classify`: the successful
-dispatch result's `data`, public owner notes, and redacted Bead state, within
-the lane limits above. Nothing from the private owner check or proposal enters
-that input. The lane returns its classification, competing owners,
-uncertainty, a draft decision question, and one next action. Keep the lane's
-classification separate from the Steward's private owner check. A missing or
-refused grant, or a lane refusal, means no model call and an honestly unproved
-model criterion.
+dispatch result's `data`, public owner notes, and redacted Bead state, exactly
+as its [Lane input](../../packages/source-intake-classify/README.md#lane-input)
+defines. Nothing from the private owner check or proposal enters that input.
+The lane returns its classification, competing owners, uncertainty, a draft
+decision question, and one next action. Keep the lane's classification
+separate from the Steward's private owner check. A missing or refused grant,
+or a lane refusal, means no model call and an honestly unproved model
+criterion.
 
 The foreground assembles and persists the consolidated private proposal before
 effects. Combine the lane's classification, uncertainty, and draft decision
@@ -174,9 +176,10 @@ an accepted necessary folder; read back its ID and parent before use. Follow
 dry run where supported. Apply only the approved one-item sequence. A move and
 rename are separate effects. After each effect, read the original file ID
 back under the exact account and record its parent, name, available content
-marker, and effective access. Stop on an access change or unexpected readback;
-do not repair permissions or repeat the effect. Mark `drive-complete` only
-when every approved Drive effect is verified.
+marker, and effective access. On an access change or unexpected readback, stop:
+record that readback with the effect marked unknown, then recover through
+step 6 without repairing permissions or repeating the effect. Mark
+`drive-complete` only when every approved Drive effect is verified.
 
 ## 5. Foreground: write the linked artifact
 
@@ -212,7 +215,11 @@ mapping, raw readbacks, and personal identifiers there, with the recovery
 choice, unresolved uncertainty, and the lane's decision question. It hands Stage
 Manager only redacted Bead state: the opaque ref, the item state, check names
 with pass or fail, whether a decision is pending, and one next step from the
-**Redacted** list above. Report source
-candidate, installed version, fresh invocation, and live filing as separate
-evidence. Close the Bead only through its owner after independent acceptance;
-a role declaration or synthetic canary does not prove a personal filing.
+next-step list in **Redacted**. Report source candidate, installed version,
+fresh invocation, and live filing as separate evidence. Close the Bead only
+through its owner after independent acceptance; a role declaration or
+synthetic canary does not prove a personal filing.
+
+Done when the receipt holds the lane evidence, the recovery choice, and the
+current item state, and Stage Manager has received only redacted Bead state
+with one next step from the next-step list in **Redacted**.

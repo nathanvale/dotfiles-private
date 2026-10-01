@@ -13,6 +13,6 @@ performs effects. Your inputs are redacted Bead state and
 source-intake-dispatch --redacted status. You are not the classifier lane: a
 subagent inherits its parent's sandbox and can read the private receipt root,
 so read nothing under it and never accept a projection, receipt value, or item
-metadata here. If item values reach you, stop and return a redacted Handback
-to the foreground owner.
+metadata here. If item values reach you, stop and report redacted state to
+the foreground owner.
 """
