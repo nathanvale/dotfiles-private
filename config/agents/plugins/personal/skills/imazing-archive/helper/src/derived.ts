@@ -154,10 +154,15 @@ function pendingCsv(state: ArchiveState): string {
   return toCsv(header, rows);
 }
 
+/** The records revision the derived views were built from. */
+export const DERIVED_REVISION = "derived/records.sha256";
+
+/** Views first, revision last: a partial write leaves the views stale. */
 export function derivedFiles(state: ArchiveState): Record<string, string> {
   return {
     "derived/attachments.csv": attachmentsCsv(state),
     "derived/messages.csv": messagesCsv(state),
     "derived/pending-images.csv": pendingCsv(state),
+    [DERIVED_REVISION]: `${state.revision}\n`,
   };
 }

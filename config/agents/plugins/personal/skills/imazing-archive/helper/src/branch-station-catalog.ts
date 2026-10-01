@@ -97,7 +97,7 @@ const ROWS: Row[] = [
   ["imazing-archive.import", "DOMAIN_PREVIEW_STALE", "The plan digest no longer matches the archive and sources.", { nextAction: "Run --preview again and review the new plan." }, "Run --preview again and review the new plan."],
   ["imazing-archive.import", "DOMAIN_RECOVERY_UNPROVABLE", "An earlier write intent has no verified completion proof.", RECOVERY_HANDOFF, "Reconcile records written by the interrupted run without replaying it."],
   ["imazing-archive.import", "TRANSIENT_NOT_STARTED", "A live writer holds the archive lock.", { nextAction: "Retry after the active writer finishes." }, "Wait for the active writer, then retry."],
-  ["imazing-archive.import", "INTERNAL_RESULT_UNCHANGED", "An archive record file is invalid.", INVALID_RECORDS, "Inspect or restore the named archive record file."],
+  ["imazing-archive.import", "INTERNAL_RESULT_UNCHANGED", "An archive record file is invalid or torn, or an unchanged import cannot regenerate stale derived views.", { handoff: { ...INVALID_RECORDS.handoff, inspect: ["derived/", "records/"] } }, "Inspect or restore the named archive record file, or make derived/ writable."],
   ["imazing-archive.import", "INTERNAL_RESULT_UNKNOWN", "Writing failed after the journal intent.", RECOVERY_HANDOFF, "Run recover and reconcile the archive; do not replay."],
   ["imazing-archive.status", "SUCCESS_UNCHANGED", "The archive is inspected.", NO_FOLLOW_UP, null],
   PRECONDITION("imazing-archive.status", "The archive is missing or is not an imazing archive."),
@@ -110,7 +110,7 @@ const ROWS: Row[] = [
   PRECONDITION("imazing-archive.decide", "The archive or item is missing, or a dead writer left its lock."),
   ["imazing-archive.decide", "DOMAIN_RECOVERY_UNPROVABLE", "An earlier write intent has no verified completion proof.", RECOVERY_HANDOFF, "Reconcile records written by the interrupted run without replaying it."],
   ["imazing-archive.decide", "TRANSIENT_NOT_STARTED", "A live writer holds the archive lock.", { nextAction: "Retry after the active writer finishes." }, "Wait for the active writer, then retry."],
-  ["imazing-archive.decide", "INTERNAL_RESULT_UNCHANGED", "An archive record file is invalid.", INVALID_RECORDS, "Inspect or restore the named archive record file."],
+  ["imazing-archive.decide", "INTERNAL_RESULT_UNCHANGED", "An archive record file is invalid or torn.", INVALID_RECORDS, "Inspect or restore the named archive record file."],
   ["imazing-archive.decide", "INTERNAL_RESULT_UNKNOWN", "Writing failed after the decision's journal intent.", RECOVERY_HANDOFF, "Run recover and reconcile the archive; do not replay."],
 ];
 

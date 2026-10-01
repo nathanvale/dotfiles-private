@@ -1,6 +1,7 @@
 import { afterEach, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import {
+  chmod,
   mkdir,
   mkdtemp,
   readdir,
@@ -460,6 +461,96 @@ test("a decision whose derived output is obstructed returns an unknown effect th
   const unproven = invoke(env, "recover", "--archive", archive, "--json");
   expect(unproven.exitCode).toBe(3);
   expect(unproven.json().result.causeCode).toBe("DOMAIN_RECOVERY_UNPROVABLE");
+});
+
+/** Removes the final newline so the last record line is unterminated. */
+async function tearTail(path: string): Promise<void> {
+  const text = await readFile(path, "utf8");
+  await writeFile(path, text.slice(0, -1));
+}
+
+test("recover refuses a pending decision whose record line is unterminated", async () => {
+  const { archive, env, root } = await workspace("decide-torn");
+  const newRoot = join(root, "new");
+  importExport(env, archive, await writeNewExport(newRoot), newRoot);
+  const [item] = await csvRows(join(archive, "derived/messages.csv"));
+  await rm(join(archive, "derived"), { recursive: true });
+  await writeFile(join(archive, "derived"), "obstruction");
+  const decided = invoke(env, "decide", "--archive", archive, "--item", item?.item_key ?? "", "--album", "selected", "--json");
+  expect(decided.json().result.transactionState).toBe("unknown");
+  await tearTail(join(archive, "records/decisions.jsonl"));
+  const recovered = invoke(env, "recover", "--archive", archive, "--json");
+  expect(recovered.exitCode).toBe(3);
+  expect(recovered.json().result.causeCode).toBe("DOMAIN_RECOVERY_UNPROVABLE");
+});
+
+test.each(["decide", "import"] as const)("%s refuses to append onto an unterminated record file before its intent", async (command) => {
+  const { archive, env, root } = await workspace("append-torn");
+  const newRoot = join(root, "new");
+  const csv = await writeNewExport(newRoot);
+  importExport(env, archive, csv, newRoot);
+  const [item] = await csvRows(join(archive, "derived/messages.csv"));
+  const decide = () => invoke(env, "decide", "--archive", archive, "--item", item?.item_key ?? "", "--album", "selected", "--json");
+  const tornPath = command === "decide" ? "records/decisions.jsonl" : "records/associations.jsonl";
+  const torn = join(archive, tornPath);
+  if (command === "decide") expect(decide().exitCode).toBe(0);
+  await tearTail(torn);
+  const before = await readFile(torn, "utf8");
+  const journal = await readFile(join(archive, "archive.journal.jsonl"), "utf8");
+  let result: { causeCode: string; exitCode: number; handoff?: { reason: string }; transactionState: string };
+  if (command === "decide") {
+    result = decide().json().result;
+  } else {
+    await writeFile(join(newRoot, "2023-10-27 07 00 00 - Robin Example - lost.heic"), "late-bytes");
+    result = importExport(env, archive, csv, newRoot).apply;
+  }
+  expect(result).toMatchObject({ causeCode: "INTERNAL_RESULT_UNCHANGED", exitCode: 1, transactionState: "unchanged" });
+  expect(result.handoff?.reason).toContain(tornPath);
+  expect(await readFile(torn, "utf8")).toBe(before);
+  expect(await readFile(join(archive, "archive.journal.jsonl"), "utf8")).toBe(journal);
+});
+
+test("a rerun lists held ambiguous rows again without minting items or writing records", async () => {
+  const { archive, env, root } = await workspace("held-rerun");
+  const old = await writeOldExport(join(root, "old"));
+  const first = importExport(env, archive, old.csv, old.attachments);
+  expect(first.apply.data.listSizes.ambiguousMessages).toBe(2);
+  const held = ["records/items.jsonl", "records/observations.jsonl", "records/associations.jsonl", "records/blobs.jsonl"];
+  const before = await snapshot(archive, held);
+  const rerun = importExport(env, archive, old.csv, old.attachments);
+  expect(rerun.preview.data.listSizes.ambiguousMessages).toBe(2);
+  expect(rerun.apply).toMatchObject({ causeCode: "SUCCESS_UNCHANGED", transactionState: "unchanged" });
+  expect(rerun.apply.data.listSizes.ambiguousMessages).toBe(2);
+  expect(rerun.apply.data.planned.items).toBe(0);
+  const receipt = JSON.parse(await readFile(rerun.apply.data.receiptPath, "utf8"));
+  // Independent oracle: the old fixture's two "ha" rows are rows 7 and 11.
+  expect(receipt.summary.lists.ambiguousMessages.map((entry: { row: number }) => entry.row)).toEqual([7, 11]);
+  expect(await snapshot(archive, held)).toEqual(before);
+});
+
+test("an unchanged import regenerates derived views left stale by a recovered decision", async () => {
+  const { archive, env, root } = await workspace("derived-stale");
+  const newRoot = join(root, "new");
+  const csv = await writeNewExport(newRoot);
+  importExport(env, archive, csv, newRoot);
+  const pending = join(archive, "derived/pending-images.csv");
+  const [image] = await csvRows(pending);
+  expect(await csvRows(pending)).toHaveLength(5);
+  await chmod(join(archive, "derived"), 0o500);
+  try {
+    const decided = invoke(env, "decide", "--archive", archive, "--item", image?.item_key ?? "", "--reviewed", "--json");
+    expect(decided.json().result.transactionState).toBe("unknown");
+    expect(invoke(env, "recover", "--archive", archive, "--json").json().result.data.state).toBe("completed");
+    const blocked = importExport(env, archive, csv, newRoot).apply;
+    expect(blocked).toMatchObject({ causeCode: "INTERNAL_RESULT_UNCHANGED", exitCode: 1, transactionState: "unchanged" });
+  } finally {
+    await chmod(join(archive, "derived"), 0o700);
+  }
+  const repeat = importExport(env, archive, csv, newRoot);
+  expect(repeat.apply).toMatchObject({ causeCode: "SUCCESS_UNCHANGED", transactionState: "unchanged" });
+  const rows = await csvRows(pending);
+  expect(rows).toHaveLength(4);
+  expect(rows.map((row) => row.item_key)).not.toContain(image?.item_key);
 });
 
 async function waitFor(path: string): Promise<void> {

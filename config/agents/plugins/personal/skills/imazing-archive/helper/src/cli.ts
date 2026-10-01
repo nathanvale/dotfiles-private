@@ -5,6 +5,7 @@ import { COMMANDS, DecideInput, envelope } from "./command-contract.ts";
 import { ExportFormatError } from "./csv.ts";
 import { attemptEmergencyDiagnostic, recordDiagnostic } from "./diagnostics.ts";
 import {
+  derivedUnwritable,
   effectUnknown,
   invalidArchive,
   lockResidue,
@@ -24,6 +25,7 @@ import {
   archiveStatus,
   checkArchive,
   DECISION_EFFECT,
+  DerivedWriteError,
   EffectUncertainError,
   IMPORT_EFFECT,
   type ImportSource,
@@ -328,6 +330,9 @@ async function guarded(
     }
     if (error instanceof ExportFormatError) {
       return refused(commandIdentity, "SCHEMA_INVALID_INPUT", error.message, "Pass an unmodified iMazing CSV export.");
+    }
+    if (error instanceof DerivedWriteError) {
+      return derivedUnwritable(commandIdentity, error.message);
     }
     if (error instanceof InvalidArchiveError) {
       return invalidArchive(commandIdentity, error.message);

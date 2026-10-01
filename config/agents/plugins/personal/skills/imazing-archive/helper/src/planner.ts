@@ -436,6 +436,11 @@ function planItems(
     if (seen === undefined) fresh.push(row);
     // Seen rows keep their item so unresolved attachments can resolve later.
     else if (seen !== null) planner.result.rowItems.set(row.row, seen);
+    // A held row stays held and is reported again; no identity is minted.
+    else {
+      const candidates = planner.candidates(row);
+      planner.result.ambiguousMessages.push({ candidates, row: row.row });
+    }
   }
   planner.result.counts.alreadyObserved = parsed.rows.length - fresh.length;
   if (parsed.variant === "imazing-18") planIdRows(planner, state, fresh, rowSha);

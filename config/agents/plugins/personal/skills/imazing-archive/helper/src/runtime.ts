@@ -25,7 +25,7 @@ import {
   ReceiptMarker,
 } from "./command-contract.ts";
 import { readExport } from "./csv.ts";
-import { derivedFiles, pendingImages } from "./derived.ts";
+import { DERIVED_REVISION, derivedFiles, pendingImages } from "./derived.ts";
 import {
   acquireJournalLock,
   appendJournal,
@@ -64,6 +64,8 @@ export class InvalidArchiveError extends Error {}
 export class PreconditionError extends Error {}
 /** An archive file already exists with bytes other than the plan's. */
 export class ArchiveConflictError extends Error {}
+/** Derived views could not be rebuilt; records are unchanged. */
+export class DerivedWriteError extends Error {}
 /** Raised after the journal intent: archive effects may be partial. */
 export class EffectUncertainError extends Error {
   constructor(
@@ -457,6 +459,16 @@ function recordLines(records: unknown[]): string {
   return records.map((record) => `${JSON.stringify(record)}\n`).join("");
 }
 
+/** Refuses a record file whose last line has no terminating newline. */
+async function checkRecordTail(archive: string, path: string): Promise<void> {
+  const file = Bun.file(join(archive, path));
+  if (!(await file.exists()) || file.size === 0) return;
+  if ((await file.slice(file.size - 1).text()) === "\n") return;
+  throw new InvalidArchiveError(
+    `${path} does not end in a newline; its last record is torn.`,
+  );
+}
+
 /** Appends records and returns the byte span they occupy. */
 async function appendRecords(
   archive: string,
@@ -464,6 +476,7 @@ async function appendRecords(
   records: unknown[],
 ): Promise<RecordSpan[]> {
   if (records.length === 0) return [];
+  await checkRecordTail(archive, path);
   const target = join(archive, path);
   await mkdir(dirname(target), { recursive: true });
   const text = recordLines(records);
@@ -473,10 +486,26 @@ async function appendRecords(
   return [{ length, offset, path, sha256: sha256Of(text) }];
 }
 
-async function regenerateDerived(archive: string): Promise<void> {
-  const state = await loadArchive(archive);
+async function regenerateDerived(
+  archive: string,
+  loaded?: ArchiveState,
+): Promise<void> {
+  const state = loaded ?? (await loadArchive(archive));
   for (const [path, text] of Object.entries(derivedFiles(state))) {
     await writePrivate(join(archive, path), text);
+  }
+}
+
+/** Rebuilds derived views built from an older records revision. */
+async function refreshDerived(archive: string, state: ArchiveState): Promise<void> {
+  const built = await readFile(join(archive, DERIVED_REVISION), "utf8").catch(
+    () => null,
+  );
+  if (built?.trim() === state.revision) return;
+  try {
+    await regenerateDerived(archive, state);
+  } catch (error) {
+    throw new DerivedWriteError(String(error));
   }
 }
 
@@ -588,16 +617,21 @@ export async function applyImport(
 ): Promise<ApplyOutcome> {
   const runId = lockToken();
   return withWriter(source.archive, runId, async (): Promise<ApplyOutcome> => {
-    const prepared = await prepareImport(source, await loadArchive(source.archive));
+    const state = await loadArchive(source.archive);
+    const prepared = await prepareImport(source, state);
     if (prepared.digest !== expectedDigest) {
       return { digest: prepared.digest, status: "stale" };
     }
     const receipt = { ...receiptFor(source, prepared, "apply"), runId };
     if (planIsEmpty(prepared.plan)) {
+      await refreshDerived(source.archive, state);
       receipt.mode = "unchanged";
       return { prepared, receiptPath: await writeReceipt(receipt), status: "unchanged" };
     }
     await checkExistingTargets(source, prepared);
+    for (const path of Object.values(RECORDS)) {
+      await checkRecordTail(source.archive, path);
+    }
     const record = { effectId: IMPORT_EFFECT, expectedValueHash: prepared.digest, journalVersion: 1 as const, runId };
     if ((await readMarker(source.archive))?.chatIdentity === undefined) {
       const marker = { archiveVersion: 1, chatIdentity: { senderIds: prepared.senderIds } };
@@ -634,6 +668,7 @@ export async function recordDecision(
   return withWriter(archive, runId, async (): Promise<DecideOutcome> => {
     const state = await loadArchive(archive);
     if (!state.items.has(decision.itemKey)) return { status: "unknown-item" };
+    await checkRecordTail(archive, RECORDS.decisions);
     const record = {
       effectId: DECISION_EFFECT,
       expectedValueHash: sha256Of(recordLines([decision])),
@@ -719,7 +754,10 @@ async function importProven(
   return false;
 }
 
-/** The exact decision line the intent hashed is in the decision records. */
+/**
+ * The exact newline-terminated decision line the intent hashed is in the
+ * decision records; an unterminated tail never proves the write.
+ */
 async function decisionProven(
   archive: string,
   pending: JournalRecord,
@@ -727,9 +765,14 @@ async function decisionProven(
   const text = await readFile(join(archive, RECORDS.decisions), "utf8").catch(
     () => "",
   );
-  return text
-    .split("\n")
-    .some((line) => sha256Of(`${line}\n`) === pending.expectedValueHash);
+  let start = 0;
+  for (let end = text.indexOf("\n"); end !== -1; end = text.indexOf("\n", start)) {
+    if (sha256Of(text.slice(start, end + 1)) === pending.expectedValueHash) {
+      return true;
+    }
+    start = end + 1;
+  }
+  return false;
 }
 
 export type RecoveryObservation =

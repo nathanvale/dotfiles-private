@@ -1,7 +1,11 @@
 # Archive format
 
-Records are append-only JSONL and the durable truth. Everything under
-`derived/` is regenerated from them after each apply or decision.
+Records are append-only JSONL and the durable truth. Every record line ends in a
+newline; a writer refuses to append to a file whose last line does not. Everything
+under `derived/` is regenerated from the records after each apply or decision.
+`derived/records.sha256` holds the records revision the views were built from
+and is written last; an import that finds nothing new regenerates the views
+when that revision differs from the current records.
 
 ## Layout
 
@@ -21,6 +25,7 @@ ARCHIVE/
   derived/messages.csv          one row per item, latest decisions applied
   derived/attachments.csv       one row per association
   derived/pending-images.csv    resolved images without a reviewed decision
+  derived/records.sha256        records revision the derived views were built from
   imports/<time>-apply-<run>.json  receipt copy per applied import
 ```
 
@@ -56,7 +61,8 @@ non-empty Sender IDs. It must equal the set in `archive.json`.
   export. A unique fingerprint with zero candidates creates a new item. Anything
   else, including a fingerprint repeated within one export, is held as an
   ambiguous message: no item is created and the receipt lists the row under
-  `ambiguousMessages`.
+  `ambiguousMessages`. A rerun of that export lists the held row there again
+  without creating an item or writing a record.
 - `nearMatches` lists new items sharing a Message Date and direction with an
   existing item. They may be edited duplicates; nothing merges them.
 
@@ -99,11 +105,16 @@ A `decide` writes a journal intent holding the SHA-256 of its decision line,
 appends the line, regenerates derived files, then writes the completion record.
 A failure after the intent returns `INTERNAL_RESULT_UNKNOWN`.
 
+A decision intent is written only after `records/decisions.jsonl` is checked to
+end in a newline.
+
 `recover` reports a pending import intent as complete only when a receipt with
 the same run ID, effect ID, and plan digest exists and every file and record
 span it names reads back with matching SHA-256. A pending decision intent is
-complete when its exact line is in `records/decisions.jsonl`; derived files may
-be stale until the next import or decision regenerates them. Later writes then
+complete when its exact newline-terminated line is in `records/decisions.jsonl`;
+an unterminated last line proves nothing. Derived files may be stale until the
+next decision or import, including an import that finds nothing new,
+regenerates them. Later writes then
 proceed. Anything else is unproven: later writes refuse.
 
 To reconcile an unproven write, with Nathan's approval:

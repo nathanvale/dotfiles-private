@@ -147,6 +147,31 @@ export function invalidArchive(
   };
 }
 
+export function derivedUnwritable(
+  commandIdentity: string,
+  detail: string,
+): OperationResult {
+  return {
+    causeCode: "INTERNAL_RESULT_UNCHANGED",
+    commandIdentity,
+    data: null,
+    effectClass: effectClassOf(commandIdentity),
+    effects: emptyEffects(),
+    exitCode: 1,
+    failureClass: "internal",
+    handoff: {
+      inspect: ["derived/", "records/"],
+      owner: "operator",
+      reason: detail,
+    },
+    message: "Derived views could not be regenerated; records are unchanged.",
+    outcome: "failed",
+    repairAction: "Make derived/ writable, then rerun the import.",
+    retryable: false,
+    transactionState: "unchanged",
+  };
+}
+
 export function effectUnknown(
   commandIdentity: string,
   effectId: string,
