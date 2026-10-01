@@ -114,7 +114,10 @@ that already exists; different bytes refuse with `DOMAIN_ARCHIVE_CONFLICT`
 naming the path. An apply then writes a journal intent, originals, blobs,
 records, derived files, and the receipt, then the completion record. The receipt
 in `imports/` carries the intent's run ID, effect ID, and plan digest, plus the
-SHA-256 of each file written and of each appended record span.
+SHA-256 of each file written and of each appended record span. `effectId` is a
+kind label (`effect.import` or `effect.decision`) shared by every write of that
+kind; `runId` is the unique key that joins an apply result, its receipt, and its
+journal lines.
 
 A `decide` writes a journal intent holding the SHA-256 of its decision line,
 appends the line, regenerates derived files, then writes the completion record.
@@ -135,8 +138,8 @@ span it names reads back with matching SHA-256. A pending decision intent is
 complete when its exact newline-terminated line is in `records/decisions.jsonl`;
 an unterminated last line proves nothing. Derived files may be stale until the
 next decision or import, including an import that finds nothing new,
-regenerates them. Later writes then
-proceed. Anything else is unproven: later writes refuse.
+regenerates them. The next write appends the proven intent's completion record
+under the lock, then proceeds. Anything else is unproven: later writes refuse.
 
 To reconcile an unproven write, with Nathan's approval:
 

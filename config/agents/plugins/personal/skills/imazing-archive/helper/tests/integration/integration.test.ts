@@ -294,6 +294,22 @@ test("a non-empty folder without the archive marker is refused", async () => {
   expect(await readdir(archive)).toEqual(["someone-elses.png"]);
 });
 
+type PathKindRoute = (paths: { archive: string; csv: string; dir: string }) => { args: string[]; named: string };
+
+test.each([
+  ["status --archive names a file", ({ csv }) => ({ args: ["status", "--archive", csv], named: csv })],
+  ["import --csv names a directory", ({ archive, dir }) => ({ args: ["import", "--archive", archive, "--csv", dir, "--attachments", dir, "--preview"], named: dir })],
+  ["import --archive names a file", ({ csv, dir }) => ({ args: ["import", "--archive", csv, "--csv", csv, "--attachments", dir, "--preview"], named: csv })],
+] as [string, PathKindRoute][])("a wrong path kind refuses with an envelope naming the path: %s", async (_case, route) => {
+  const { archive, env, root } = await workspace("path-kind");
+  const dir = join(root, "new");
+  const { args, named } = route({ archive, csv: await writeNewExport(dir), dir });
+  const result = invoke(env, ...args, "--json");
+  expect(result.exitCode).toBe(3);
+  expect(result.json().result).toMatchObject({ causeCode: "DOMAIN_PRECONDITION_UNMET", outcome: "refused" });
+  expect(result.json().message).toContain(named);
+});
+
 test("status reports invalid records as a deterministic internal failure", async () => {
   const { archive, env } = await workspace("invalid");
   await mkdir(join(archive, "records"), { recursive: true });
@@ -410,6 +426,27 @@ test.each([
     expect(recovered.json().result).toMatchObject({ causeCode: "DOMAIN_RECOVERY_UNPROVABLE", handoff: { owner: "operator" } });
   }
   expect((await readFile(journal, "utf8")).trim().split("\n")).toHaveLength(1);
+});
+
+test("the next write closes an intent its receipt proves complete", async () => {
+  const { archive, env, root } = await workspace("recover-close");
+  const newRoot = join(root, "new");
+  importExport(env, archive, await writeNewExport(newRoot), newRoot);
+  const journal = join(archive, "archive.journal.jsonl");
+  const [intent = ""] = (await readFile(journal, "utf8")).trim().split("\n");
+  await writeFile(journal, `${intent}\n`);
+  const [item] = await csvRows(join(archive, "derived/messages.csv"));
+  const decided = invoke(env, "decide", "--archive", archive, "--item", item?.item_key ?? "", "--album", "selected", "--json");
+  expect(decided.json().result.causeCode).toBe("SUCCESS_COMPLETED");
+  const entries = (await readFile(journal, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+  expect(entries.map((entry) => `${entry.effectId}:${entry.phase}`)).toEqual([
+    "effect.import:intent",
+    "effect.import:completed",
+    "effect.decision:intent",
+    "effect.decision:completed",
+  ]);
+  expect(entries[1]).toEqual({ ...JSON.parse(intent), phase: "completed" });
+  expect(invoke(env, "status", "--archive", archive, "--json").json().result.data.recovery).toBe("none");
 });
 
 test.each(["blob", "original"] as const)("an existing %s with other bytes refuses the apply before its intent", async (target) => {
@@ -614,6 +651,7 @@ test("rows dated before the start date are left out and counted in preview, appl
   expect(imported.apply.data).toMatchObject({ beforeStart: 1, messageRows: 16, planned: { items: 15 } });
   const receipt = JSON.parse(await readFile(imported.apply.data.receiptPath, "utf8"));
   expect(receipt).toMatchObject({ startDate: "2023-10-15", summary: { beforeStart: 1 } });
+  expect(imported.apply.data.runId).toBe(receipt.runId);
   expect(receipt.summary.lists.unreferencedFiles).toEqual(["2024-03-01 00 00 00 - Robin Example - stray.png"]);
   expect(JSON.parse(await readFile(join(archive, "archive.json"), "utf8")).startDate).toBe("2023-10-15");
   const messages = await csvRows(join(archive, "derived/messages.csv"));
@@ -621,6 +659,22 @@ test("rows dated before the start date are left out and counted in preview, appl
   expect(messages).toHaveLength(15);
   const status = invoke(env, "status", "--archive", archive, "--json").json().result.data;
   expect(status).toMatchObject({ beforeStart: 1, items: 15, startDate: "2023-10-15" });
+});
+
+test("a first apply whose rows all precede the start date imports nothing and leaves the folder empty", async () => {
+  const { archive, env, root } = await workspace("all-before-start");
+  const newRoot = join(root, "new");
+  const csv = await writeNewExport(newRoot);
+  const source = ["import", "--archive", archive, "--csv", csv, "--attachments", newRoot, "--start-date", "2025-01-01"];
+  const digest = invoke(env, ...source, "--preview", "--json").json().result.data.planDigest;
+  const apply = invoke(env, ...source, "--plan", digest, "--json");
+  expect(apply.exitCode).toBe(0);
+  expect(apply.json()).toMatchObject({
+    message: "No rows fall on or after the start date; nothing was imported.",
+    result: { causeCode: "SUCCESS_UNCHANGED", data: { beforeStart: 15, planned: { items: 0 } } },
+  });
+  expect(await readdir(archive)).toEqual([]);
+  expect(invoke(env, ...source, "--preview", "--json").exitCode).toBe(0);
 });
 
 test("the start date is fixed at creation: a differing later --start-date refuses and a malformed one is invalid", async () => {
@@ -713,13 +767,15 @@ test("a repeated termination exits immediately during diagnostic flush", async (
   expect(result).toEqual({ exitCode: 130, stderr: "", stdout: "" });
 });
 
-test.each(["uncaught", "unhandled"] as const)("%s crash makes one silent emergency exit", async (crash) => {
+test.each(["uncaught", "unhandled"] as const)("%s crash makes one emergency exit with one stderr line", async (crash) => {
   const { archive, env, root } = await workspace("crash");
   await markerArchive(archive);
   const ready = join(root, "ready");
   const child = spawnStatus(archive, { ...env, IMAZING_ARCHIVE_TEST_CRASH: crash, IMAZING_ARCHIVE_TEST_READY_PATH: ready });
   await waitFor(ready);
-  expect(await finished(child)).toEqual({ exitCode: 1, stderr: "", stdout: "" });
+  const result = await finished(child);
+  expect(result).toMatchObject({ exitCode: 1, stdout: "" });
+  expect(result.stderr).toMatch(/^imazing-archive: [^\n]+\n$/);
 });
 
 test("consumer disappearance before a large stdout drain exits internal", async () => {

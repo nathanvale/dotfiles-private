@@ -326,6 +326,10 @@ export async function prepareImport(
   }
   const bytes = await readFile(source.csv).catch((error: unknown) => {
     if (isMissing(error)) throw new PreconditionError("The CSV does not exist.");
+    // Bun's read error carries no path; name the CSV here.
+    if (error instanceof Error && "code" in error && error.code === "EISDIR") {
+      throw new PreconditionError(`The CSV path ${source.csv} is a directory.`);
+    }
     throw error;
   });
   if (!(await stat(source.attachments).catch(() => null))?.isDirectory()) {
@@ -587,9 +591,10 @@ async function writeEffects(
 }
 
 export type ApplyOutcome =
-  | { status: "applied"; prepared: PreparedImport; receiptPath: string }
+  | { status: "applied"; prepared: PreparedImport; receiptPath: string; runId: string }
   | Blocked
   | { status: "busy" }
+  | { status: "empty"; prepared: PreparedImport; receiptPath: string }
   | { status: "residue" }
   | { status: "stale"; digest: string }
   | { status: "unchanged"; prepared: PreparedImport; receiptPath: string };
@@ -639,6 +644,9 @@ async function withWriter<T>(
     if (pending.state === "unknown") {
       return { effectId: pending.effectId, reason: pending.reason, status: "blocked" };
     }
+    if (pending.state === "completed") {
+      await appendJournal(journalState(archive), { ...pending.intent, phase: "completed" });
+    }
     return await work();
   } finally {
     release();
@@ -658,8 +666,12 @@ export async function applyImport(
     }
     const receipt = { ...receiptFor(source, prepared, "apply"), runId };
     if (planIsEmpty(prepared.plan)) {
-      await refreshDerived(source.archive, state);
       receipt.mode = "unchanged";
+      // Derived views alone would make a new archive a foreign folder.
+      if (state.items.size === 0 && (await readMarker(source.archive)) === null) {
+        return { prepared, receiptPath: await writeReceipt(receipt), status: "empty" };
+      }
+      await refreshDerived(source.archive, state);
       return { prepared, receiptPath: await writeReceipt(receipt), status: "unchanged" };
     }
     await checkExistingTargets(source, prepared);
@@ -683,7 +695,7 @@ export async function applyImport(
     } catch (error) {
       throw new EffectUncertainError(IMPORT_EFFECT, String(error));
     }
-    return { prepared, receiptPath, status: "applied" };
+    return { prepared, receiptPath, runId, status: "applied" };
   });
 }
 
@@ -814,7 +826,8 @@ async function decisionProven(
 
 export type RecoveryObservation =
   | { effectId: null; reason?: undefined; state: "none" }
-  | { effectId: string; reason?: string; state: "completed" | "unknown" };
+  | { effectId: string; intent: JournalRecord; state: "completed" }
+  | { effectId: string; reason?: string; state: "unknown" };
 
 /** Read-only: a pending intent is complete only when its effects read back. */
 export async function inspectRecovery(
@@ -832,7 +845,9 @@ export async function inspectRecovery(
     pending.effectId === DECISION_EFFECT
       ? await decisionProven(archive, pending)
       : pending.effectId === IMPORT_EFFECT && (await importProven(archive, pending));
-  return { effectId: pending.effectId, state: proven ? "completed" : "unknown" };
+  return proven
+    ? { effectId: pending.effectId, intent: pending, state: "completed" }
+    : { effectId: pending.effectId, state: "unknown" };
 }
 
 /** Rows left out before the start date, counted once per applied export. */

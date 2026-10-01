@@ -255,7 +255,9 @@ function appliedResult(outcome: ApplyOutcome): OperationResult {
   const identity = "imazing-archive.import";
   switch (outcome.status) {
     case "applied":
-      return succeeded(identity, "Export imported.", publicSummary(outcome.prepared, outcome.receiptPath), IMPORT_EFFECT, "Review the receipt's missing and ambiguous lists.");
+      return succeeded(identity, "Export imported.", { ...publicSummary(outcome.prepared, outcome.receiptPath), runId: outcome.runId }, IMPORT_EFFECT, "Review the receipt's missing and ambiguous lists.");
+    case "empty":
+      return succeeded(identity, "No rows fall on or after the start date; nothing was imported.", publicSummary(outcome.prepared, outcome.receiptPath));
     case "unchanged":
       return succeeded(identity, "Export already imported; nothing changed.", publicSummary(outcome.prepared, outcome.receiptPath));
     case "stale":
@@ -342,29 +344,56 @@ async function guarded(
   try {
     return await run();
   } catch (error) {
-    if (error instanceof ArchiveConflictError) {
-      return refused(commandIdentity, "DOMAIN_ARCHIVE_CONFLICT", error.message, "Inspect the named archive file; restore or move it aside, then preview again.");
-    }
-    if (error instanceof PreconditionError) {
-      return refused(commandIdentity, "DOMAIN_PRECONDITION_UNMET", error.message, "Check the archive, CSV, and attachments paths.");
-    }
-    if (error instanceof ExportFormatError) {
-      return refused(commandIdentity, "SCHEMA_INVALID_INPUT", error.message, "Pass an unmodified iMazing CSV export.");
-    }
-    if (error instanceof JournalIntegrityError) {
-      return recoveryRequired(commandIdentity, JOURNAL_ENTRY, error.message);
-    }
-    if (error instanceof DerivedWriteError) {
-      return derivedUnwritable(commandIdentity, error.message);
-    }
-    if (error instanceof InvalidArchiveError) {
-      return invalidArchive(commandIdentity, error.message);
-    }
-    if (error instanceof EffectUncertainError) {
-      return effectUnknown(commandIdentity, error.effectId);
-    }
-    throw error;
+    const result = knownFailure(commandIdentity, error);
+    if (result === null) throw error;
+    return result;
   }
+}
+
+/** The envelope for an expected failure; null for an unexpected one. */
+function knownFailure(commandIdentity: string, error: unknown): OperationResult | null {
+  if (error instanceof ArchiveConflictError) {
+    return refused(commandIdentity, "DOMAIN_ARCHIVE_CONFLICT", error.message, "Inspect the named archive file; restore or move it aside, then preview again.");
+  }
+  if (error instanceof PreconditionError) {
+    return refused(commandIdentity, "DOMAIN_PRECONDITION_UNMET", error.message, "Check the archive, CSV, and attachments paths.");
+  }
+  if (error instanceof ExportFormatError) {
+    return refused(commandIdentity, "SCHEMA_INVALID_INPUT", error.message, "Pass an unmodified iMazing CSV export.");
+  }
+  if (error instanceof JournalIntegrityError) {
+    return recoveryRequired(commandIdentity, JOURNAL_ENTRY, error.message);
+  }
+  if (error instanceof DerivedWriteError) {
+    return derivedUnwritable(commandIdentity, error.message);
+  }
+  if (error instanceof InvalidArchiveError) {
+    return invalidArchive(commandIdentity, error.message);
+  }
+  if (error instanceof EffectUncertainError) {
+    return effectUnknown(commandIdentity, error.effectId);
+  }
+  const unusable = unusablePath(error);
+  if (unusable !== null) {
+    return refused(commandIdentity, "DOMAIN_PRECONDITION_UNMET", unusable, "Check the archive, CSV, and attachments paths.");
+  }
+  return null;
+}
+
+const PATH_KIND_ERRORS: Record<string, string> = {
+  EACCES: "is not accessible",
+  EISDIR: "is a directory where a file is expected",
+  ENOTDIR: "is not a directory where one is expected",
+  EPERM: "is not permitted",
+};
+
+/** A wrong path kind or permission, named with the offending path. */
+function unusablePath(error: unknown): string | null {
+  if (!(error instanceof Error) || !("code" in error)) return null;
+  const problem = PATH_KIND_ERRORS[String(error.code)];
+  if (problem === undefined) return null;
+  const path = "path" in error ? String(error.path) : error.message;
+  return `The path ${path} ${problem} (${String(error.code)}).`;
 }
 
 /** Help and discovery; null means human help was already written. */

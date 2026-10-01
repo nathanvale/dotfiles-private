@@ -97,6 +97,13 @@ function createProcessLifecycle(
       if (terminal) return;
       stopping = true;
       try {
+        dependencies.writeStderr(
+          "imazing-archive: internal failure; no result was written.\n",
+        );
+      } catch {
+        // The exit code still reports the failure.
+      }
+      try {
         dependencies.attemptEmergencyDiagnostics();
       } catch {
         // Emergency diagnostics remain best-effort.

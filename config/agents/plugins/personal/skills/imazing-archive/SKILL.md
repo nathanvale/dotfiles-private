@@ -1,6 +1,6 @@
 ---
 name: imazing-archive
-description: Append iMazing iMessage CSV exports and their attachment folders into a private, deduplicated message archive, then record image review and album decisions. Use for importing a new iMazing export, checking what an export would add, finding missing or ambiguous attachments, recording Luna's image classification, or recovering an interrupted import.
+description: Append iMazing iMessage CSV exports and their attachment folders into a private, deduplicated message archive, then record image review and album decisions. Use for importing a new iMazing export, checking what an export would add, finding missing or ambiguous attachments, recording image classification from the recommended classifier lane, or recovering an interrupted import.
 ---
 
 # iMazing Archive
@@ -64,7 +64,7 @@ with Nathan.
 ## Review images
 
 `derived/pending-images.csv` lists resolved images with no `reviewed` decision.
-After Luna's visual review, record it against the row's `item_key`:
+After the recommended classifier lane's visual review, record it against the row's `item_key`:
 
 ```bash
 decide --archive DIR --item KEY --image-type screenshot --contains-meme true --reviewed
@@ -78,8 +78,16 @@ survive later imports.
 
 - Every run writes a private receipt to
   `${XDG_STATE_HOME:-~/.local/state}/imazing-archive/receipts/`; an apply also
-  copies it to the archive's `imports/`.
+  copies it to the archive's `imports/`. The apply result's `data.runId` is the
+  receipt's and journal's `runId`.
 - A `TRANSIENT_NOT_STARTED` result means another writer is active; retry later.
+- Run a long apply under `caffeinate -dimsu` so the Mac cannot sleep mid-copy.
+- An interrupted apply (Ctrl-C, a closed pane, or sleep) leaves
+  `archive.journal.lock` and an open journal intent. Writes then refuse with
+  `DOMAIN_PRECONDITION_UNMET` for the lock, and `recover` returns
+  `DOMAIN_RECOVERY_UNPROVABLE`. Leave the lock in place and follow the
+  [recovery steps](references/archive-format.md#recovery) with Nathan; deleting
+  the lock and retrying hits the same open intent and refuses again.
 - After an interrupted apply, run `recover --archive DIR`. It inspects and
   never replays; follow [archive format](references/archive-format.md#recovery)
   for an unproven import.
