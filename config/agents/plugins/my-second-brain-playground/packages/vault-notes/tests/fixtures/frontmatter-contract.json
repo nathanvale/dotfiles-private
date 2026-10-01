@@ -1,0 +1,194 @@
+{
+  "version": 1,
+  "required": ["title", "type", "status", "updated", "summary"],
+  "optional": ["aliases", "last_verified", "related", "sources", "source_handles"],
+  "identityFields": ["person_id", "organization_id", "product_id", "system_id", "project_id", "decision_id", "spec_id", "ticket_id", "task_identity"],
+  "fieldShapes": {
+    "title": "non-empty-string",
+    "type": "non-empty-string",
+    "status": "non-empty-string",
+    "updated": "date",
+    "summary": "non-empty-string",
+    "aliases": "non-empty-string-list",
+    "last_verified": "date",
+    "related": "non-empty-string-list",
+    "sources": "non-empty-string-list",
+    "source_handles": "non-empty-string-map",
+    "person_id": "non-empty-string",
+    "organization_id": "non-empty-string",
+    "product_id": "non-empty-string",
+    "system_id": "non-empty-string",
+    "project_id": "non-empty-string",
+    "decision_id": "non-empty-string",
+    "spec_id": "non-empty-string",
+    "ticket_id": "non-empty-string",
+    "task_identity": "non-empty-string",
+    "spec_path": "non-empty-string",
+    "spec_revision": "non-empty-string",
+    "criteria": "non-empty-string-list",
+    "slug": "non-empty-string",
+    "relationship_type": "non-empty-string"
+  },
+  "forbiddenFields": ["password", "secret", "token", "access_token", "api_key", "cookie", "booking_reference", "candidate_id"],
+  "unknownFieldsPolicy": {
+    "validation": "allow",
+    "scopedUpdate": "preserve",
+    "migration": "preserve"
+  },
+  "conditionalRequirements": {
+    "sources": {
+      "requiredWhen": ["imported", "promoted", "evidence-derived"],
+      "exemptWhen": ["self-authored", "routing-only", "lifecycle-only"],
+      "enforcement": "semantic-review"
+    },
+    "last_verified": {
+      "requiredWhen": ["time-sensitive-claim-can-change-decision-or-safe-action"],
+      "exemptWhen": ["stable-claim", "no-current-truth-claim"],
+      "enforcement": "semantic-review"
+    }
+  },
+  "markdownFilenames": {
+    "uppercaseBasenameAllowlist": ["AGENTS.md", "CLAUDE.md", "CONTEXT.md", "GOAL.md", "README.md", "SKILL.md"],
+    "ignoredDirectories": [".git", ".agents", ".worktrees", ".agent-worktree", ".playwright-cli", ".skill-feedback", ".herdr-project", "my-second-brain-playgroud"]
+  },
+  "summaryMaxLength": 280,
+  "statusesByType": {
+    "vault-index": ["active"],
+    "family-index": ["active"],
+    "capture": ["triage"],
+    "person": ["active", "inactive", "deceased"],
+    "organization": ["active", "inactive"],
+    "product": ["active", "retired", "sold", "returned"],
+    "system": ["active", "disabled", "migrated", "retired"],
+    "project": ["experimental", "planned", "active", "paused", "completed", "archived"],
+    "project-goal": ["active", "completed", "superseded"],
+    "project-result": ["final"],
+    "project-spec": ["draft", "accepted", "superseded"],
+    "project-ticket": ["adopted", "superseded"],
+    "area": ["active", "paused", "ended"],
+    "decision": ["accepted", "superseded"],
+    "reference": ["active", "archived"],
+    "source-artifact": ["active", "archived"],
+    "archive": ["archived"]
+  },
+  "requiredByType": {
+    "vault-index": [],
+    "family-index": [],
+    "capture": [],
+    "person": ["person_id", "slug", "relationship_type", "aliases"],
+    "organization": [],
+    "product": [],
+    "system": [],
+    "project": [],
+    "project-goal": ["related"],
+    "project-result": ["related"],
+    "project-spec": ["spec_id", "spec_revision", "criteria"],
+    "project-ticket": ["ticket_id", "spec_path", "spec_revision", "criteria", "task_identity"],
+    "area": [],
+    "decision": [],
+    "reference": [],
+    "source-artifact": ["sources", "source_handles"],
+    "archive": ["related"]
+  },
+  "typeExtensions": {
+    "vault-index": { "required": [], "optional": [], "identity": [] },
+    "family-index": { "required": [], "optional": [], "identity": [] },
+    "capture": { "required": [], "optional": [], "identity": [] },
+    "person": {
+      "required": ["person_id", "slug", "relationship_type", "aliases"],
+      "optional": ["source_handles"],
+      "identity": ["person_id"]
+    },
+    "organization": {
+      "required": [],
+      "optional": ["organization_id", "source_handles"],
+      "identity": ["organization_id"]
+    },
+    "product": {
+      "required": [],
+      "optional": ["product_id", "source_handles"],
+      "identity": ["product_id"]
+    },
+    "system": {
+      "required": [],
+      "optional": ["system_id", "source_handles"],
+      "identity": ["system_id"]
+    },
+    "project": {
+      "required": [],
+      "optional": ["project_id"],
+      "identity": ["project_id"]
+    },
+    "project-goal": { "required": ["related"], "optional": [], "identity": [] },
+    "project-result": { "required": ["related"], "optional": [], "identity": [] },
+    "project-spec": {
+      "required": ["spec_id", "spec_revision", "criteria"],
+      "optional": ["sources"],
+      "identity": ["spec_id"]
+    },
+    "project-ticket": {
+      "required": ["ticket_id", "spec_path", "spec_revision", "criteria", "task_identity"],
+      "optional": [],
+      "identity": ["ticket_id", "task_identity"]
+    },
+    "area": { "required": [], "optional": [], "identity": [] },
+    "decision": {
+      "required": [],
+      "optional": ["decision_id"],
+      "identity": ["decision_id"]
+    },
+    "reference": { "required": [], "optional": [], "identity": [] },
+    "source-artifact": {
+      "required": ["sources", "source_handles"],
+      "optional": ["last_verified", "related"],
+      "identity": []
+    },
+    "archive": { "required": ["related"], "optional": [], "identity": [] }
+  },
+  "routing": {
+    "repositoryFiles": {
+      "CONTEXT.md": "reference"
+    },
+    "repositoryPrefixes": {
+      "docs/agents/": "reference",
+      "docs/adr/": "decision"
+    },
+    "rootReadme": "vault-index",
+    "familyReadmes": {
+      "inbox": "family-index",
+      "people": "family-index",
+      "organizations": "family-index",
+      "products": "family-index",
+      "systems": "family-index",
+      "projects": "family-index",
+      "areas": "family-index",
+      "decisions": "family-index",
+      "reference": "family-index",
+      "source-artifacts": "family-index",
+      "archive": "family-index"
+    },
+    "familyNotes": {
+      "inbox": "capture",
+      "people": "person",
+      "organizations": "organization",
+      "products": "product",
+      "systems": "system",
+      "areas": "area",
+      "decisions": "decision",
+      "reference": "reference",
+      "source-artifacts": "source-artifact",
+      "archive": "archive"
+    },
+    "projectFiles": {
+      "README.md": "project",
+      "GOAL.md": "project-goal",
+      "result.md": "project-result"
+    },
+    "projectDirectories": {
+      "specs": "project-spec",
+      "tickets": "project-ticket"
+    },
+    "projectLocalTypes": ["decision", "reference"]
+  },
+  "ignored": ["AGENTS.md", "templates", ".agents", ".codex", ".worktrees", ".agent-worktree", ".herdr-project", "my-second-brain-playgroud"]
+}

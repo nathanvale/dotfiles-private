@@ -18,7 +18,7 @@ var __export = (target, all) => {
 import { randomUUID as randomUUID3 } from "crypto";
 
 // packages/vault-steward/src/cli.ts
-import { isAbsolute as isAbsolute3, resolve as resolve3 } from "path";
+import { isAbsolute as isAbsolute3, resolve as resolve4 } from "path";
 import { parseArgs } from "util";
 
 // node_modules/.bun/zod@4.4.3/node_modules/zod/v4/classic/external.js
@@ -18150,15 +18150,20 @@ function canonicalRoot(rt, manifest) {
     return manifest.vault;
   }
 }
+var checkerDeadlineMs = 120000;
+function vaultNotesBin(rt) {
+  return join3(rt.pluginRoot, "bin", "vault-notes");
+}
 function runChecker(rt, manifest, afterRebase) {
   const result = started(rt.spawn([rt.execPath, "run", "check"], {
     cwd: manifest.worktree,
-    env: { ...rt.env, GIT_TERMINAL_PROMPT: "0", VAULT_CANONICAL_ROOT: canonicalRoot(rt, manifest) }
+    env: { ...rt.env, GIT_TERMINAL_PROMPT: "0", VAULT_CANONICAL_ROOT: canonicalRoot(rt, manifest), VAULT_NOTES_BIN: vaultNotesBin(rt) },
+    timeoutMs: checkerDeadlineMs
   }));
   if (result.exitCode !== 0) {
     const diagnosticsPath = join3(stateRoot(rt), "diagnostics", `${manifest.runId}.json`);
-    rt.atomicPrivateJson(diagnosticsPath, { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr });
-    refuse(afterRebase ? "rebased-check-failed" : "check-failed", { ...candidateFacts(manifest), diagnosticsPath, afterRebase });
+    rt.atomicPrivateJson(diagnosticsPath, { exitCode: result.exitCode, stdout: result.stdout, stderr: result.stderr, ...result.timedOut ? { timedOut: true } : {} });
+    refuse(afterRebase ? "rebased-check-failed" : "check-failed", { ...candidateFacts(manifest), diagnosticsPath, afterRebase, ...result.timedOut ? { detail: "the checker run was abandoned at its deadline; its child processes may still be running" } : {} });
   }
 }
 function checkWhitespace(rt, manifest, range, facts) {
@@ -18517,6 +18522,7 @@ function parseFaults(value) {
     const halt = /^halt=([a-z-]+)$/.exec(part);
     const pause2 = /^pause=([a-z-]+):([1-9][0-9]*)$/.exec(part);
     const barrier = /^barrier=([a-z-]+):(.+)$/.exec(part);
+    const deadline = /^checker-deadline=([1-9][0-9]*)$/.exec(part);
     if (spawn?.[1] !== undefined && spawn[3] !== undefined)
       faults.push({ kind: spawn[1], occurrence: Number(spawn[2] ?? "1"), fragment: spawn[3] });
     else if (halt?.[1] !== undefined)
@@ -18525,6 +18531,8 @@ function parseFaults(value) {
       faults.push({ kind: "pause", point: pause2[1], milliseconds: Number(pause2[2]) });
     else if (barrier?.[1] !== undefined && barrier[2] !== undefined)
       faults.push({ kind: "barrier", point: barrier[1], path: barrier[2] });
+    else if (deadline?.[1] !== undefined)
+      faults.push({ kind: "checker-deadline", milliseconds: Number(deadline[1]) });
     else
       return null;
   }
@@ -18551,12 +18559,14 @@ function withFaults(rt, faults) {
     seen.set(key, count);
     return count === fault.occurrence;
   });
+  const deadline = faults.find((fault) => fault.kind === "checker-deadline");
+  const bounded = (command, options) => deadline !== undefined && command[1] === "run" && command[2] === "check" && options.timeoutMs !== undefined ? { ...options, timeoutMs: deadline.milliseconds } : options;
   return {
     ...rt,
     spawn(command, options) {
       const fault = command[0] === "git" ? firing(command.slice(1).join(" ")) : undefined;
       if (fault === undefined)
-        return rt.spawn(command, options);
+        return rt.spawn(command, bounded(command, options));
       if (fault.kind === "unexpected")
         throw new Error(`injected unexpected failure at ${fault.fragment}`);
       return { exitCode: 128, timedOut: false, spawnError: null, stdout: "", stderr: `fatal: injected git failure at ${fault.fragment}` };
@@ -18737,7 +18747,11 @@ import {
   rmSync as rmSync2,
   writeFileSync as writeFileSync2
 } from "fs";
-import { dirname as dirname2 } from "path";
+import { dirname as dirname2, join as join5, resolve as resolve3 } from "path";
+function pluginRoot() {
+  const sourceRoot = resolve3(import.meta.dir, "../../..");
+  return join5(sourceRoot, "packages", "vault-steward", "src") === import.meta.dir ? sourceRoot : resolve3(import.meta.dir, "..");
+}
 function decode3(bytes) {
   return bytes ? new TextDecoder().decode(bytes) : "";
 }
@@ -18745,6 +18759,7 @@ function createRuntime() {
   return {
     env: process.env,
     execPath: process.execPath,
+    pluginRoot: pluginRoot(),
     pid: process.pid,
     now: () => Date.now(),
     spawn(command, options) {
@@ -19000,7 +19015,7 @@ function knownCandidateCommit(rt, manifest) {
   return view.committed && view.head !== null ? view.head : undefined;
 }
 function requireAbsoluteWorktree(input) {
-  if (typeof input !== "string" || !isAbsolute3(input) || resolve3(input) !== input)
+  if (typeof input !== "string" || !isAbsolute3(input) || resolve4(input) !== input)
     throw new Refusal("input-invalid", { detail: "--worktree must be the exact absolute path returned by begin" });
   return input;
 }
@@ -19633,7 +19648,7 @@ function createProcessLifecycle(dependencies) {
     outputFinished = outputFinished.then(() => {
       if (stopping || terminal)
         return;
-      return new Promise((resolve4) => {
+      return new Promise((resolve5) => {
         let settled = false;
         const finish = (error51) => {
           if (settled)
@@ -19642,7 +19657,7 @@ function createProcessLifecycle(dependencies) {
           activeWriteDone = null;
           if (error51 != null)
             outputFailed = true;
-          resolve4();
+          resolve5();
         };
         activeWriteDone = finish;
         try {

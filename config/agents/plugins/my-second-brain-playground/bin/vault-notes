@@ -1,0 +1,21 @@
+#!/bin/sh
+set -eu
+# Follow a symlinked launcher (for example a link on your PATH), including relative and chained
+# links, to this real file before deriving the plugin root. `cd -P` then resolves symlinked directories.
+launcher=$0
+while [ -L "$launcher" ]; do
+target=$(readlink -- "$launcher")
+case "$target" in
+/*) launcher=$target ;;
+*) case "$launcher" in
+*/*) launcher=${launcher%/*}/$target ;;
+*) launcher=$target ;;
+esac ;;
+esac
+done
+case "$launcher" in
+*/*) launcher_dir=${launcher%/*} ;;
+*) launcher_dir=. ;;
+esac
+plugin_root=$(CDPATH='' cd -P -- "$launcher_dir/.." && pwd -P)
+exec bun "$plugin_root/runtime/vault-notes.js" "$@"

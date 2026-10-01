@@ -63,6 +63,28 @@ never sees it). The candidate is unchanged and `inspect` reports
 `not-started`; once `main` is fixed, a new `finish --preview` plans the
 rebase again and the apply integrates.
 
+## Candidate checker
+
+`finish --preview`, and `finish --apply` after a rebase, run `bun run check`
+inside the candidate with:
+
+- `VAULT_CANONICAL_ROOT`: the canonical vault checkout, for sibling links.
+- `VAULT_NOTES_BIN`: always `<plugin root>/bin/vault-notes` of the plugin copy
+  running Vault Steward. A caller's value is replaced, so the copy that
+  integrates the candidate also checks it.
+- A 120 s deadline, so a hung checker cannot hold the integration lock.
+
+At the deadline the CLI kills only the direct `bun run check` child and
+abandons the run. It refuses `DOMAIN_CHECK_FAILED` (`DOMAIN_REBASED_CHECK_FAILED`
+under the lock, which it releases), and the private diagnostics carry
+`timedOut: true`. A missing `vault-notes` refuses the same way with exit `127`
+in the diagnostics.
+
+Residual: the checker's own descendants can outlive the refusal and keep
+running in the candidate; each retry can add another. Before rerunning
+`finish --preview`, find survivors with `lsof -d cwd | grep <candidate>` and
+stop them.
+
 ## One state home
 
 Candidates, receipts, and previews live under

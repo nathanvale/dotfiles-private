@@ -86,6 +86,8 @@ test("the fault channel grammar is closed", () => {
 	expect(parseFaults("unexpected=--git-common-dir")).toEqual([{ kind: "unexpected", occurrence: 1, fragment: "--git-common-dir" }])
 	expect(parseFaults("explode")).toBeNull()
 	expect(parseFaults("pause=after-lock:0")).toBeNull()
+	expect(parseFaults("checker-deadline=1500")).toEqual([{ kind: "checker-deadline", milliseconds: 1500 }])
+	expect(parseFaults("checker-deadline=0")).toBeNull()
 })
 
 test("the envelope schema accepts a minimal valid result and rejects a malformed one", () => {

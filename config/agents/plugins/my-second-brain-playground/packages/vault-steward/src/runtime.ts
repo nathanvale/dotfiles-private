@@ -15,7 +15,7 @@ import {
 	rmSync,
 	writeFileSync,
 } from "node:fs"
-import { dirname } from "node:path"
+import { dirname, join, resolve } from "node:path"
 
 export interface SpawnOptions {
 	cwd: string
@@ -45,6 +45,8 @@ export interface FileFacts {
 export interface Runtime {
 	env: Record<string, string | undefined>
 	execPath: string
+	// The plugin copy this code runs from; the candidate checker is pointed at the same copy's tools.
+	pluginRoot: string
 	pid: number
 	now(): number
 	spawn(command: string[], options: SpawnOptions): SpawnOutcome
@@ -67,6 +69,12 @@ export interface Runtime {
 	faultPoint(name: string): void
 }
 
+// Source runs from packages/vault-steward/src; the shipped bundle runs from runtime/.
+function pluginRoot(): string {
+	const sourceRoot = resolve(import.meta.dir, "../../..")
+	return join(sourceRoot, "packages", "vault-steward", "src") === import.meta.dir ? sourceRoot : resolve(import.meta.dir, "..")
+}
+
 function decode(bytes: Uint8Array | null | undefined): string {
 	return bytes ? new TextDecoder().decode(bytes) : ""
 }
@@ -75,6 +83,7 @@ export function createRuntime(): Runtime {
 	return {
 		env: process.env,
 		execPath: process.execPath,
+		pluginRoot: pluginRoot(),
 		pid: process.pid,
 		now: () => Date.now(),
 		spawn(command, options) {
