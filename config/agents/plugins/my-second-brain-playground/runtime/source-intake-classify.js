@@ -897,6 +897,9 @@ function removeWorkspace() {
     rmdirSync2(workspace);
   } catch {}
 }
+function handlePendingSignals() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 async function classifyInLane(lane, input) {
   const workspace = createWorkspace();
   activeWorkspace = workspace;
@@ -904,6 +907,7 @@ async function classifyInLane(lane, input) {
     const version = codexVersion(lane);
     if (version === null || !runPreflight(lane, workspace))
       return refusalOutput("laneUnproven");
+    await handlePendingSignals();
     const outcome = await runLane(lane, workspace, input);
     if (outcome.kind !== "classified")
       return refusalOutput(outcome.kind);

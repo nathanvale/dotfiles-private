@@ -138,6 +138,14 @@ function removeWorkspace(): void {
 	} catch {}
 }
 
+/**
+ * Bun runs signal handlers on the event loop, and the pre-flight is a chain of blocking spawnSync calls. One macrotask
+ * turn lets a SIGINT or SIGTERM that arrived during the pre-flight exit before the lane is spawned; a microtask does not.
+ */
+function handlePendingSignals(): Promise<void> {
+	return new Promise((resolve) => setImmediate(resolve))
+}
+
 /** The pre-flight gates the model: only a passing proof on this run's workspace starts it. */
 async function classifyInLane(lane: Lane, input: LaneInput): Promise<Output> {
 	const workspace = createWorkspace()
@@ -145,6 +153,7 @@ async function classifyInLane(lane: Lane, input: LaneInput): Promise<Output> {
 	try {
 		const version = codexVersion(lane)
 		if (version === null || !runPreflight(lane, workspace)) return refusalOutput("laneUnproven")
+		await handlePendingSignals()
 		const outcome = await runLane(lane, workspace, input)
 		if (outcome.kind !== "classified") return refusalOutput(outcome.kind)
 		const evidence = { codexVersion: version, laneConfigSha256: configHash(lane.configArgs), model: LANE_MODEL, reasoningEffort: LANE_REASONING_EFFORT, threadId: outcome.threadId }
