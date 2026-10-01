@@ -92,8 +92,9 @@ survive later imports.
   - `state: completed`: the receipt proves the write. Once no helper process
     runs, delete the stale lock; the next write records the completion and
     proceeds.
-  - `DOMAIN_RECOVERY_UNPROVABLE` with transaction state `unknown`: the write is
-    unproven. Leave the lock in place and follow the
+  - `DOMAIN_RECOVERY_UNPROVABLE`, exit 3, transaction state `unchanged`
+    because `recover` writes nothing: the interrupted import stays unproven.
+    Leave the lock in place and follow the
     [recovery steps](references/archive-format.md#recovery) with Nathan.
     Deleting the lock and retrying hits the same open intent and refuses again.
 
