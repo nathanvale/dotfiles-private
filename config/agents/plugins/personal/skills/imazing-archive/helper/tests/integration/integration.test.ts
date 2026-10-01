@@ -666,8 +666,9 @@ test("a first apply whose rows all precede the start date imports nothing and le
   const newRoot = join(root, "new");
   const csv = await writeNewExport(newRoot);
   const source = ["import", "--archive", archive, "--csv", csv, "--attachments", newRoot, "--start-date", "2025-01-01"];
-  const digest = invoke(env, ...source, "--preview", "--json").json().result.data.planDigest;
-  const apply = invoke(env, ...source, "--plan", digest, "--json");
+  const preview = invoke(env, ...source, "--preview", "--json").json();
+  expect(preview.message).toBe("No rows fall on or after the start date; nothing was imported.");
+  const apply = invoke(env, ...source, "--plan", preview.result.data.planDigest, "--json");
   expect(apply.exitCode).toBe(0);
   expect(apply.json()).toMatchObject({
     message: "No rows fall on or after the start date; nothing was imported.",

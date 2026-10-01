@@ -16,7 +16,7 @@ import {
   writerBusy,
 } from "./engine.ts";
 import { JournalIntegrityError } from "./journal.ts";
-import { DEFAULT_START_DATE, type OperationResult } from "./model.ts";
+import { type ArchiveState, DEFAULT_START_DATE, type OperationResult } from "./model.ts";
 import { type PlannedImport, planIsEmpty } from "./planner.ts";
 import { systemProcessLifecycle } from "./process-lifecycle.ts";
 import {
@@ -33,6 +33,7 @@ import {
   type ImportSource,
   InvalidArchiveError,
   inspectRecovery,
+  isNewArchive,
   loadArchive,
   PreconditionError,
   prepareImport,
@@ -271,19 +272,25 @@ function appliedResult(outcome: ApplyOutcome): OperationResult {
   }
 }
 
+async function previewMessage(archive: string, prepared: PlannedImport, state: ArchiveState): Promise<string> {
+  if (!planIsEmpty(prepared.plan)) return "Preview: nothing was written to the archive.";
+  return (await isNewArchive(archive, state))
+    ? "No rows fall on or after the start date; nothing was imported."
+    : "Preview: export already imported; nothing would change.";
+}
+
 async function importCommand(args: string[]): Promise<OperationResult> {
   const parsed = importSource(args);
   if ("commandIdentity" in parsed) return parsed;
   const { plan, source } = parsed;
   await checkArchive(source.archive, false);
   if (plan !== null) return appliedResult(await applyImport(source, plan));
-  const prepared = await prepareImport(source, await loadArchive(source.archive));
+  const state = await loadArchive(source.archive);
+  const prepared = await prepareImport(source, state);
   const receiptPath = await writeReceipt(receiptFor(source, prepared, "preview"));
   return succeeded(
     "imazing-archive.import",
-    planIsEmpty(prepared.plan)
-      ? "Preview: export already imported; nothing would change."
-      : "Preview: nothing was written to the archive.",
+    await previewMessage(source.archive, prepared, state),
     publicSummary(prepared, receiptPath),
     null,
     `Review the receipt, then rerun with --plan ${prepared.digest} to apply.`,

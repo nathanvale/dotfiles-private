@@ -653,6 +653,11 @@ async function withWriter<T>(
   }
 }
 
+/** True for an archive with no marker and no items, which an empty apply leaves unwritten. */
+export async function isNewArchive(archive: string, state: ArchiveState): Promise<boolean> {
+  return state.items.size === 0 && (await readMarker(archive)) === null;
+}
+
 export async function applyImport(
   source: ImportSource,
   expectedDigest: string,
@@ -668,7 +673,7 @@ export async function applyImport(
     if (planIsEmpty(prepared.plan)) {
       receipt.mode = "unchanged";
       // Derived views alone would make a new archive a foreign folder.
-      if (state.items.size === 0 && (await readMarker(source.archive)) === null) {
+      if (await isNewArchive(source.archive, state)) {
         return { prepared, receiptPath: await writeReceipt(receipt), status: "empty" };
       }
       await refreshDerived(source.archive, state);

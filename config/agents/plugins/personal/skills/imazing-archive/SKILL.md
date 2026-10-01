@@ -76,21 +76,26 @@ survive later imports.
 
 ## Receipts and recovery
 
-- Every run writes a private receipt to
-  `${XDG_STATE_HOME:-~/.local/state}/imazing-archive/receipts/`; an apply also
-  copies it to the archive's `imports/`. The apply result's `data.runId` is the
-  receipt's and journal's `runId`.
+- An import preview or apply writes a private receipt to
+  `${XDG_STATE_HOME:-~/.local/state}/imazing-archive/receipts/`. Only an apply
+  that imports something also copies it to the archive's `imports/`; an empty
+  or unchanged apply does not. `status`, `recover`, and `decide` write no
+  receipt.
+- After an apply that imports something, `data.runId` is the receipt's and
+  journal's `runId`.
 - A `TRANSIENT_NOT_STARTED` result means another writer is active; retry later.
 - Run a long apply under `caffeinate -dimsu` so the Mac cannot sleep mid-copy.
 - An interrupted apply (Ctrl-C, a closed pane, or sleep) leaves
-  `archive.journal.lock` and an open journal intent. Writes then refuse with
-  `DOMAIN_PRECONDITION_UNMET` for the lock, and `recover` returns
-  `DOMAIN_RECOVERY_UNPROVABLE`. Leave the lock in place and follow the
-  [recovery steps](references/archive-format.md#recovery) with Nathan; deleting
-  the lock and retrying hits the same open intent and refuses again.
-- After an interrupted apply, run `recover --archive DIR`. It inspects and
-  never replays; follow [archive format](references/archive-format.md#recovery)
-  for an unproven import.
+  `archive.journal.lock` and an open journal intent. Writes refuse with
+  `DOMAIN_PRECONDITION_UNMET` while the lock remains. Run
+  `recover --archive DIR`; it inspects and never replays. Act on its result:
+  - `state: completed`: the receipt proves the write. Once no helper process
+    runs, delete the stale lock; the next write records the completion and
+    proceeds.
+  - `DOMAIN_RECOVERY_UNPROVABLE` with transaction state `unknown`: the write is
+    unproven. Leave the lock in place and follow the
+    [recovery steps](references/archive-format.md#recovery) with Nathan.
+    Deleting the lock and retrying hits the same open intent and refuses again.
 
 Read [archive format](references/archive-format.md) before editing archive
 files by hand or explaining identity, fingerprints, or exported-name rules.
