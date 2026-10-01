@@ -63,3 +63,23 @@ Reviewed the entire guide at commit `ea81ee7e51e21e684e101c1a64bfe436dd6593e9` a
 The full guide has no U+2013 or U+2014. These two findings prevent acceptance of the new bytes. This verdict does not qualify a serving route, invocation, or `.review.md` record.
 
 GUIDE_VERDICT: reject guide_sha256=6ef49dd63c969a55c32afd1d2a986fb6c2854a489e13a485987d70030adc4838 reason=missing fallback marking and unknown-state rule
+
+## Re-review, round 3, 2026-10-02
+
+Reviewed the complete guide at commit `15b8c67696a2bb0f473cb6958c1b00963431b9c4` against the same four official sources. The committed bytes and worktree bytes both hash to `255b0c7d163cb581fb1f116881a98a27315d27841a77745c6f8ef794b3371e19`. The reviewer session and pane remain those in the front matter.
+
+### Prior findings
+
+- Lines 41 to 50: Resolved. The guide now marks its content-fallback identity application as extrapolated from `SKILL.md` startup step 2. The fallback conditions agree with [Claude Code model configuration](https://code.claude.com/docs/en/model-config#automatic-model-fallback).
+- Lines 106 to 113: Resolved. A notice requires fresh exact serving evidence. Unknown or conflicting evidence leaves this guide unapplied and refuses casting, as `SKILL.md` requires. The guide distinguishes one-turn availability fallback from persistent content fallback.
+
+### Complete guide check
+
+- Lines 2 to 16 and 21 to 40: Required front matter, independent author identity, exact model and Harness boundary, v2.1.284 minimum, provider IDs, alias distinctions and exact-ID cast form pass against the [Sonnet 5.5 overview](https://platform.claude.com/docs/en/models/sonnet-5-5/overview), [models overview](https://platform.claude.com/docs/en/models/overview) and [model configuration](https://code.claude.com/docs/en/model-config#model-aliases). The omitted route-qualification bullet is not a defect because the guide claims no qualified serving route.
+- Lines 54 to 68: The documented `medium` Claude Code default and `high` Claude API default remain separate from observed effort. The remaining effort advice matches the [Sonnet 5.5 prompting guide](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5#calibrate-effort). No Opus-only rule was carried over.
+- Lines 72 to 92: The brief rules are marked as adaptations of system-prompt guidance. Verbatim passages are quoted and match the prompting source.
+- Lines 96 to 119: Local Handback rules are labelled or cite `SKILL.md`; the real-check list matches the prompting source; fallback, mid-task message and reminder guidance retain their source or extrapolation labels. No further finding.
+
+The guide has no U+2013 or U+2014. Acceptance covers this guide hash only. It does not establish a current serving route, invocation, installed plugin or `.review.md` record.
+
+GUIDE_VERDICT: accept guide_sha256=255b0c7d163cb581fb1f116881a98a27315d27841a77745c6f8ef794b3371e19
