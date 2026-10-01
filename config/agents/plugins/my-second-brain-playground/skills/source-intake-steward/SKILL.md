@@ -57,7 +57,9 @@ Spec revision, the Ticket, and the named Bead. Follow
 [`beads-workflow`](../beads-workflow/SKILL.md) for the dispatched native `bd`
 store gate, claim, checkpoint, and session binding. Use only your actual session
 identity; report a missing or inherited binding instead of replacing another
-Task's binding. Reuse this run's Bead and private receipt on resume. A verified
+Task's binding. On resume, reuse this run's Bead and private receipt, and
+append this session's identity and item-bearing log locations (as step 2
+records them) to the receipt before resuming any step. A verified
 Drive-complete receipt resumes at step 5 after the step 6 inspection. Already
 filed Wöhr and Virgin Australia items are outside this route.
 
@@ -220,6 +222,7 @@ fresh invocation, and live filing as separate evidence. Close the Bead only
 through its owner after independent acceptance; a role declaration or
 synthetic canary does not prove a personal filing.
 
-Done when the receipt holds the lane evidence, the recovery choice, and the
-current item state, and Stage Manager has received only redacted Bead state
-with one next step from the next-step list in **Redacted**.
+Done when the receipt holds the lane evidence or the recorded no-call
+outcome, any recovery choice, and the current item state, and Stage Manager
+has received only redacted Bead state with one next step from the next-step
+list in **Redacted**.
