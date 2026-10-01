@@ -62,6 +62,7 @@ const PATHS = COMMANDS.map((command) => command.commandIdentity);
 type CommandIdentity = (typeof PATHS)[number];
 
 const CAUSES = [
+  "DOMAIN_ARCHIVE_CONFLICT",
   "DOMAIN_PRECONDITION_UNMET",
   "DOMAIN_PREVIEW_STALE",
   "DOMAIN_RECOVERY_UNPROVABLE",
@@ -183,7 +184,25 @@ export const DecideInput = DecisionRecordSchema.omit({
   "Pass at least one decision field.",
 );
 
-export const ReceiptMarker = z.object({ planDigest: SHA256 });
+/** An apply receipt bound to its journal run and effect, with read-back proof. */
+export const ReceiptMarker = z.object({
+  effectId: z.string().min(1),
+  effects: z.strictObject({
+    files: z.array(z.strictObject({ path: z.string().min(1), sha256: SHA256 })),
+    records: z
+      .array(
+        z.strictObject({
+          length: z.number().int().positive(),
+          offset: z.number().int().nonnegative(),
+          path: z.string().min(1),
+          sha256: SHA256,
+        }),
+      )
+      .min(1),
+  }),
+  planDigest: SHA256,
+  runId: z.string().min(1),
+});
 
 const resultSchema = z
   .strictObject({

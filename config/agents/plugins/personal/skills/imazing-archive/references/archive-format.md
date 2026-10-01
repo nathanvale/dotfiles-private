@@ -8,7 +8,7 @@ Records are append-only JSONL and the durable truth. Everything under
 ```text
 ARCHIVE/
   archive.json                  marker plus the chat identity (Sender IDs)
-  archive.journal.jsonl         import intent and completion records
+  archive.journal.jsonl         import and decision intent and completion records
   archive.journal.lock          present only while a writer runs, or as crash residue
   originals/<sha256>-<name>.csv byte-identical copy of each imported CSV
   blobs/<aa>/<sha256>.<ext>     content-addressed attachment bytes
@@ -33,7 +33,7 @@ ARCHIVE/
 
 The header must match a variant exactly. A leading BOM is ignored. One CSV
 holds one Chat Session. Session names differ between exports of one chat
-("Melanie" and "Melanie Strang"), so chat identity is the sorted set of
+("Robin" and "Robin Example"), so chat identity is the sorted set of
 non-empty Sender IDs. It must equal the set in `archive.json`.
 
 ## Item identity
@@ -44,15 +44,19 @@ non-empty Sender IDs. It must equal the set in `archive.json`.
 - A later export row whose part is new but whose resolved bytes match exactly
   one existing cell of the same Message ID is the same item (a renamed file).
 - The fingerprint is SHA-256 of Message Date, direction, Text, and Attachment.
-  Text is normalised first: LF line endings, NFC, no trailing whitespace.
+  Text is normalised first: LF line endings, Unicode NFC, leading and
+  trailing whitespace trimmed from the text, and trailing whitespace trimmed
+  from each line.
 - An ID row links to an earlier fingerprint-only item only when exactly one
   unlinked candidate exists and no other row in the export shares the
   fingerprint. Otherwise it becomes its own item; `records/ambiguities.jsonl`
   and the receipt's `ambiguousMessageLinks` record both sides for a later
   explicit reconciliation.
 - A fingerprint row matches only one candidate with a unique fingerprint in its
-  export. Zero candidates create a new item; anything else is held as an
-  ambiguous message.
+  export. A unique fingerprint with zero candidates creates a new item. Anything
+  else, including a fingerprint repeated within one export, is held as an
+  ambiguous message: no item is created and the receipt lists the row under
+  `ambiguousMessages`.
 - `nearMatches` lists new items sharing a Message Date and direction with an
   existing item. They may be edited duplicates; nothing merges them.
 
@@ -84,12 +88,25 @@ detection: `url`, `gif`, `other` for non-images, else `unknown`.
 
 ## Recovery
 
-An apply writes a journal intent, then originals, blobs, records, derived files,
-and the receipt, then the completion record. `recover` reports a pending intent
-as complete when a receipt in `imports/` carries its plan digest; later imports
-proceed. Without that receipt the import is unproven: later writes refuse.
+Before its journal intent, an apply hashes any original or blob it would write
+that already exists; different bytes refuse with `DOMAIN_ARCHIVE_CONFLICT`
+naming the path. An apply then writes a journal intent, originals, blobs,
+records, derived files, and the receipt, then the completion record. The receipt
+in `imports/` carries the intent's run ID, effect ID, and plan digest, plus the
+SHA-256 of each file written and of each appended record span.
 
-To reconcile an unproven import, with Nathan's approval:
+A `decide` writes a journal intent holding the SHA-256 of its decision line,
+appends the line, regenerates derived files, then writes the completion record.
+A failure after the intent returns `INTERNAL_RESULT_UNKNOWN`.
+
+`recover` reports a pending import intent as complete only when a receipt with
+the same run ID, effect ID, and plan digest exists and every file and record
+span it names reads back with matching SHA-256. A pending decision intent is
+complete when its exact line is in `records/decisions.jsonl`; derived files may
+be stale until the next import or decision regenerates them. Later writes then
+proceed. Anything else is unproven: later writes refuse.
+
+To reconcile an unproven write, with Nathan's approval:
 
 1. Copy the archive aside.
 2. Remove record lines after the last line that belonged to a completed import

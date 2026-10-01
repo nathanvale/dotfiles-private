@@ -30,6 +30,7 @@ import {
   acquireJournalLock,
   appendJournal,
   JournalLockHeld,
+  type JournalRecord,
   pendingJournalIntent,
 } from "./journal.ts";
 import type {
@@ -61,8 +62,20 @@ const EXPORT_PREFIX = /^(\d{4}-\d\d-\d\d \d\d \d\d \d\d) - /;
 
 export class InvalidArchiveError extends Error {}
 export class PreconditionError extends Error {}
+/** An archive file already exists with bytes other than the plan's. */
+export class ArchiveConflictError extends Error {}
 /** Raised after the journal intent: archive effects may be partial. */
-export class EffectUncertainError extends Error {}
+export class EffectUncertainError extends Error {
+  constructor(
+    readonly effectId: string,
+    detail: string,
+  ) {
+    super(detail);
+  }
+}
+
+export const IMPORT_EFFECT = "effect.import";
+export const DECISION_EFFECT = "effect.decision";
 
 function isMissing(error: unknown): boolean {
   return error instanceof Error && "code" in error && error.code === "ENOENT";
@@ -314,9 +327,24 @@ function stateDirectory(): string {
   return join(base, "imazing-archive");
 }
 
+/** Durable effects an apply wrote: whole files and appended record spans. */
+export interface EffectManifest {
+  files: { path: string; sha256: string }[];
+  records: RecordSpan[];
+}
+
+export interface RecordSpan {
+  length: number;
+  offset: number;
+  path: string;
+  sha256: string;
+}
+
 export interface Receipt {
   attachmentsRoot: { chatFiles: number; path: string; totalFiles: number };
   csv: { chatSession: string; path: string; sha256: string };
+  effectId?: string;
+  effects?: EffectManifest;
   mode: "apply" | "preview" | "unchanged";
   planDigest: string;
   receiptVersion: 1;
@@ -372,13 +400,49 @@ export async function writeReceipt(receipt: Receipt): Promise<string> {
   return runtimePath;
 }
 
+function sha256Of(value: string | Uint8Array): string {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+/** False when absent; refuses an existing file whose bytes differ. */
+async function existingMatches(
+  archive: string,
+  path: string,
+  sha256: string,
+): Promise<boolean> {
+  const target = join(archive, path);
+  if ((await stat(target).catch(() => null)) === null) return false;
+  if ((await hashFile(target)) === sha256) return true;
+  throw new ArchiveConflictError(
+    `The archive file ${path} already exists with bytes that do not match sha256 ${sha256}.`,
+  );
+}
+
+function originalPath(source: ImportSource, prepared: PreparedImport): string {
+  return join("originals", `${prepared.exportSha256}-${basename(source.csv)}`);
+}
+
+/** Hashes every existing target before the journal intent. */
+async function checkExistingTargets(
+  source: ImportSource,
+  prepared: PreparedImport,
+): Promise<void> {
+  if (prepared.plan.copyOriginal) {
+    const path = originalPath(source, prepared);
+    await existingMatches(source.archive, path, prepared.exportSha256);
+  }
+  for (const blob of prepared.plan.blobs) {
+    await existingMatches(source.archive, blob.path, blob.sha256);
+  }
+}
+
 async function copyBlob(
   archive: string,
   attachments: string,
   blob: ImportPlan["blobs"][number],
 ): Promise<void> {
+  if (await existingMatches(archive, blob.path, blob.sha256)) return;
   const target = join(archive, blob.path);
-  if ((await stat(target).catch(() => null)) !== null) return;
   await mkdir(dirname(target), { recursive: true });
   const temporary = `${target}.${process.pid}.tmp`;
   await copyFile(join(attachments, blob.sourcePath), temporary);
@@ -389,11 +453,24 @@ async function copyBlob(
   await rename(temporary, target);
 }
 
-async function appendRecords(path: string, records: unknown[]): Promise<void> {
-  if (records.length === 0) return;
-  await mkdir(dirname(path), { recursive: true });
-  const lines = records.map((record) => `${JSON.stringify(record)}\n`);
-  await appendFile(path, lines.join(""), "utf8");
+function recordLines(records: unknown[]): string {
+  return records.map((record) => `${JSON.stringify(record)}\n`).join("");
+}
+
+/** Appends records and returns the byte span they occupy. */
+async function appendRecords(
+  archive: string,
+  path: string,
+  records: unknown[],
+): Promise<RecordSpan[]> {
+  if (records.length === 0) return [];
+  const target = join(archive, path);
+  await mkdir(dirname(target), { recursive: true });
+  const text = recordLines(records);
+  const offset = (await stat(target).catch(() => null))?.size ?? 0;
+  await appendFile(target, text, "utf8");
+  const length = Buffer.byteLength(text);
+  return [{ length, offset, path, sha256: sha256Of(text) }];
 }
 
 async function regenerateDerived(archive: string): Promise<void> {
@@ -408,12 +485,9 @@ async function writeOriginal(
   source: ImportSource,
   prepared: PreparedImport,
 ): Promise<void> {
-  const target = join(
-    source.archive,
-    "originals",
-    `${prepared.exportSha256}-${basename(source.csv)}`,
-  );
-  if ((await stat(target).catch(() => null)) !== null) return;
+  const path = originalPath(source, prepared);
+  if (await existingMatches(source.archive, path, prepared.exportSha256)) return;
+  const target = join(source.archive, path);
   await mkdir(dirname(target), { recursive: true });
   const temporary = `${target}.${process.pid}.tmp`;
   await writeFile(temporary, prepared.bytes, { flag: "wx" });
@@ -427,17 +501,27 @@ async function writeOriginal(
 async function writeEffects(
   source: ImportSource,
   prepared: PreparedImport,
-): Promise<void> {
+): Promise<EffectManifest> {
   const { archive } = source;
   const { plan } = prepared;
-  if (plan.copyOriginal) await writeOriginal(source, prepared);
-  for (const blob of plan.blobs) await copyBlob(archive, source.attachments, blob);
-  await appendRecords(join(archive, RECORDS.items), plan.items);
-  await appendRecords(join(archive, RECORDS.observations), plan.observations);
-  await appendRecords(join(archive, RECORDS.associations), plan.associations);
-  await appendRecords(join(archive, RECORDS.blobs), plan.blobs);
-  await appendRecords(join(archive, RECORDS.ambiguities), plan.ambiguities);
+  const files: EffectManifest["files"] = [];
+  if (plan.copyOriginal) {
+    await writeOriginal(source, prepared);
+    files.push({ path: originalPath(source, prepared), sha256: prepared.exportSha256 });
+  }
+  for (const blob of plan.blobs) {
+    await copyBlob(archive, source.attachments, blob);
+    files.push({ path: blob.path, sha256: blob.sha256 });
+  }
+  const records = [
+    ...(await appendRecords(archive, RECORDS.items, plan.items)),
+    ...(await appendRecords(archive, RECORDS.observations, plan.observations)),
+    ...(await appendRecords(archive, RECORDS.associations, plan.associations)),
+    ...(await appendRecords(archive, RECORDS.blobs, plan.blobs)),
+    ...(await appendRecords(archive, RECORDS.ambiguities, plan.ambiguities)),
+  ];
   await regenerateDerived(archive);
+  return { files, records };
 }
 
 export type ApplyOutcome =
@@ -447,8 +531,6 @@ export type ApplyOutcome =
   | { status: "residue" }
   | { status: "stale"; digest: string }
   | { status: "unchanged"; prepared: PreparedImport; receiptPath: string };
-
-const IMPORT_EFFECT = "effect.import";
 
 function lockToken(): string {
   return process.env.NODE_ENV === "test" &&
@@ -510,11 +592,12 @@ export async function applyImport(
     if (prepared.digest !== expectedDigest) {
       return { digest: prepared.digest, status: "stale" };
     }
-    const receipt = receiptFor(source, prepared, "apply");
+    const receipt = { ...receiptFor(source, prepared, "apply"), runId };
     if (planIsEmpty(prepared.plan)) {
       receipt.mode = "unchanged";
       return { prepared, receiptPath: await writeReceipt(receipt), status: "unchanged" };
     }
+    await checkExistingTargets(source, prepared);
     const record = { effectId: IMPORT_EFFECT, expectedValueHash: prepared.digest, journalVersion: 1 as const, runId };
     if ((await readMarker(source.archive))?.chatIdentity === undefined) {
       const marker = { archiveVersion: 1, chatIdentity: { senderIds: prepared.senderIds } };
@@ -524,10 +607,11 @@ export async function applyImport(
     let receiptPath: string;
     try {
       await testPauseAfterIntent();
-      await writeEffects(source, prepared);
+      receipt.effects = await writeEffects(source, prepared);
+      receipt.effectId = IMPORT_EFFECT;
       receiptPath = await writeReceipt(receipt);
     } catch (error) {
-      throw new EffectUncertainError(String(error));
+      throw new EffectUncertainError(IMPORT_EFFECT, String(error));
     }
     await appendJournal(journalState(source.archive), { ...record, phase: "completed" });
     return { prepared, receiptPath, status: "applied" };
@@ -541,45 +625,128 @@ export type DecideOutcome =
   | { status: "residue" }
   | { status: "unknown-item" };
 
+/** Journals the decision so an interrupted write is provable by its line. */
 export async function recordDecision(
   archive: string,
   decision: DecisionRecord,
 ): Promise<DecideOutcome> {
-  return withWriter(archive, lockToken(), async (): Promise<DecideOutcome> => {
+  const runId = lockToken();
+  return withWriter(archive, runId, async (): Promise<DecideOutcome> => {
     const state = await loadArchive(archive);
     if (!state.items.has(decision.itemKey)) return { status: "unknown-item" };
-    await appendRecords(join(archive, RECORDS.decisions), [decision]);
-    await regenerateDerived(archive);
+    const record = {
+      effectId: DECISION_EFFECT,
+      expectedValueHash: sha256Of(recordLines([decision])),
+      journalVersion: 1 as const,
+      runId,
+    };
+    await appendJournal(journalState(archive), { ...record, phase: "intent" });
+    try {
+      await appendRecords(archive, RECORDS.decisions, [decision]);
+      await regenerateDerived(archive);
+    } catch (error) {
+      throw new EffectUncertainError(DECISION_EFFECT, String(error));
+    }
+    await appendJournal(journalState(archive), { ...record, phase: "completed" });
     return { status: "recorded" };
   });
 }
 
-async function receiptDigests(archive: string): Promise<Set<string>> {
+type ReceiptProof = z.infer<typeof ReceiptMarker>;
+
+async function archiveReceipts(archive: string): Promise<ReceiptProof[]> {
   const names = await readdir(join(archive, "imports")).catch(() => []);
-  const digests = new Set<string>();
+  const receipts: ReceiptProof[] = [];
   for (const name of names.filter((entry) => entry.endsWith(".json"))) {
     const text = await readFile(join(archive, "imports", name), "utf8");
-    const parsed = ReceiptMarker.safeParse(JSON.parse(text));
-    if (parsed.success) digests.add(parsed.data.planDigest);
+    let value: unknown;
+    try {
+      value = JSON.parse(text);
+    } catch {
+      continue;
+    }
+    const parsed = ReceiptMarker.safeParse(value);
+    if (parsed.success) receipts.push(parsed.data);
   }
-  return digests;
+  return receipts;
+}
+
+async function spanPresent(archive: string, span: RecordSpan): Promise<boolean> {
+  const target = join(archive, span.path);
+  if (!inside(target, archive)) return false;
+  const bytes = await readFile(target).catch(() => null);
+  const chunk = bytes?.subarray(span.offset, span.offset + span.length);
+  return chunk?.length === span.length && sha256Of(chunk) === span.sha256;
+}
+
+async function filePresent(
+  archive: string,
+  file: EffectManifest["files"][number],
+): Promise<boolean> {
+  const target = join(archive, file.path);
+  if (!inside(target, archive)) return false;
+  return (await hashFile(target).catch(() => null)) === file.sha256;
+}
+
+async function effectsPresent(
+  archive: string,
+  effects: EffectManifest,
+): Promise<boolean> {
+  for (const span of effects.records) {
+    if (!(await spanPresent(archive, span))) return false;
+  }
+  for (const file of effects.files) {
+    if (!(await filePresent(archive, file))) return false;
+  }
+  return true;
+}
+
+/** A receipt for this run and effect whose durable effects all read back. */
+async function importProven(
+  archive: string,
+  pending: JournalRecord,
+): Promise<boolean> {
+  for (const receipt of await archiveReceipts(archive)) {
+    if (
+      receipt.runId === pending.runId &&
+      receipt.effectId === pending.effectId &&
+      receipt.planDigest === pending.expectedValueHash &&
+      (await effectsPresent(archive, receipt.effects))
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** The exact decision line the intent hashed is in the decision records. */
+async function decisionProven(
+  archive: string,
+  pending: JournalRecord,
+): Promise<boolean> {
+  const text = await readFile(join(archive, RECORDS.decisions), "utf8").catch(
+    () => "",
+  );
+  return text
+    .split("\n")
+    .some((line) => sha256Of(`${line}\n`) === pending.expectedValueHash);
 }
 
 export type RecoveryObservation =
   | { effectId: null; state: "none" }
   | { effectId: string; state: "completed" | "unknown" };
 
-/** Read-only: a pending intent is complete only when its receipt exists. */
+/** Read-only: a pending intent is complete only when its effects read back. */
 export async function inspectRecovery(
   archive: string,
 ): Promise<RecoveryObservation> {
   const pending = await pendingJournalIntent(journalState(archive));
   if (pending === null) return { effectId: null, state: "none" };
-  const digests = await receiptDigests(archive);
-  return {
-    effectId: pending.effectId,
-    state: digests.has(pending.expectedValueHash) ? "completed" : "unknown",
-  };
+  const proven =
+    pending.effectId === DECISION_EFFECT
+      ? await decisionProven(archive, pending)
+      : pending.effectId === IMPORT_EFFECT && (await importProven(archive, pending));
+  return { effectId: pending.effectId, state: proven ? "completed" : "unknown" };
 }
 
 export async function archiveStatus(archive: string) {

@@ -35,6 +35,7 @@ const CAUSES: Record<
   string,
   [Outcome, TransactionState, number, FailureClass]
 > = {
+  DOMAIN_ARCHIVE_CONFLICT: ["refused", "unchanged", 3, "domain"],
   DOMAIN_PRECONDITION_UNMET: ["refused", "unchanged", 3, "domain"],
   DOMAIN_PREVIEW_STALE: ["refused", "unchanged", 3, "domain"],
   DOMAIN_RECOVERY_UNPROVABLE: ["refused", "unchanged", 3, "domain"],
@@ -52,7 +53,7 @@ const RECOVERY_HANDOFF = {
   handoff: {
     inspect: ["archive.journal.jsonl", "imports/", "records/"],
     owner: "operator" as const,
-    reason: "An interrupted import has no completion receipt.",
+    reason: "An interrupted archive write has no verified completion proof.",
   },
 };
 const INVALID_RECORDS = {
@@ -92,23 +93,25 @@ const ROWS: Row[] = [
   ["imazing-archive.import", "SUCCESS_COMPLETED", "The previewed plan is written and its receipt recorded.", { nextAction: "Review the receipt's missing and ambiguous lists." }, null],
   ["imazing-archive.import", "SCHEMA_INVALID_INPUT", "The CSV is not a supported iMazing export, or the digest is malformed.", { nextAction: "Pass an unmodified iMazing CSV export and a previewed digest." }, "Pass an unmodified iMazing CSV export and a previewed digest."],
   PRECONDITION("imazing-archive.import", "A source path is missing, the archive is a foreign folder or inside the attachments root, or a dead writer left its lock."),
+  ["imazing-archive.import", "DOMAIN_ARCHIVE_CONFLICT", "A blob or original the plan writes already exists with other bytes.", { nextAction: "Inspect the named archive file; restore or move it aside, then preview again." }, "Inspect the named archive file; restore or move it aside, then preview again."],
   ["imazing-archive.import", "DOMAIN_PREVIEW_STALE", "The plan digest no longer matches the archive and sources.", { nextAction: "Run --preview again and review the new plan." }, "Run --preview again and review the new plan."],
-  ["imazing-archive.import", "DOMAIN_RECOVERY_UNPROVABLE", "An earlier import intent has no completion receipt.", RECOVERY_HANDOFF, "Reconcile records written by the interrupted run without replaying it."],
+  ["imazing-archive.import", "DOMAIN_RECOVERY_UNPROVABLE", "An earlier write intent has no verified completion proof.", RECOVERY_HANDOFF, "Reconcile records written by the interrupted run without replaying it."],
   ["imazing-archive.import", "TRANSIENT_NOT_STARTED", "A live writer holds the archive lock.", { nextAction: "Retry after the active writer finishes." }, "Wait for the active writer, then retry."],
   ["imazing-archive.import", "INTERNAL_RESULT_UNCHANGED", "An archive record file is invalid.", INVALID_RECORDS, "Inspect or restore the named archive record file."],
   ["imazing-archive.import", "INTERNAL_RESULT_UNKNOWN", "Writing failed after the journal intent.", RECOVERY_HANDOFF, "Run recover and reconcile the archive; do not replay."],
   ["imazing-archive.status", "SUCCESS_UNCHANGED", "The archive is inspected.", NO_FOLLOW_UP, null],
   PRECONDITION("imazing-archive.status", "The archive is missing or is not an imazing archive."),
   ["imazing-archive.status", "INTERNAL_RESULT_UNCHANGED", "An archive record file is invalid.", INVALID_RECORDS, "Inspect or restore the named archive record file."],
-  ["imazing-archive.recover", "SUCCESS_UNCHANGED", "No intent is pending, or its completion receipt exists.", NO_FOLLOW_UP, null],
+  ["imazing-archive.recover", "SUCCESS_UNCHANGED", "No intent is pending, or its durable effects read back complete.", NO_FOLLOW_UP, null],
   PRECONDITION("imazing-archive.recover", "The archive is missing or is not an imazing archive."),
-  ["imazing-archive.recover", "DOMAIN_RECOVERY_UNPROVABLE", "A pending intent has no completion receipt.", RECOVERY_HANDOFF, "Reconcile records written by the interrupted run without replaying it."],
+  ["imazing-archive.recover", "DOMAIN_RECOVERY_UNPROVABLE", "A pending intent has no verified completion proof.", RECOVERY_HANDOFF, "Reconcile records written by the interrupted run without replaying it."],
   ["imazing-archive.decide", "SUCCESS_COMPLETED", "The decision is appended and derived files regenerated.", NO_FOLLOW_UP, null],
   ["imazing-archive.decide", "SCHEMA_INVALID_INPUT", "The item key or a decision value is invalid.", { nextAction: "Pass --item KEY and at least one valid decision field." }, "Pass --item KEY and at least one valid decision field."],
   PRECONDITION("imazing-archive.decide", "The archive or item is missing, or a dead writer left its lock."),
-  ["imazing-archive.decide", "DOMAIN_RECOVERY_UNPROVABLE", "An earlier import intent has no completion receipt.", RECOVERY_HANDOFF, "Reconcile records written by the interrupted run without replaying it."],
+  ["imazing-archive.decide", "DOMAIN_RECOVERY_UNPROVABLE", "An earlier write intent has no verified completion proof.", RECOVERY_HANDOFF, "Reconcile records written by the interrupted run without replaying it."],
   ["imazing-archive.decide", "TRANSIENT_NOT_STARTED", "A live writer holds the archive lock.", { nextAction: "Retry after the active writer finishes." }, "Wait for the active writer, then retry."],
   ["imazing-archive.decide", "INTERNAL_RESULT_UNCHANGED", "An archive record file is invalid.", INVALID_RECORDS, "Inspect or restore the named archive record file."],
+  ["imazing-archive.decide", "INTERNAL_RESULT_UNKNOWN", "Writing failed after the decision's journal intent.", RECOVERY_HANDOFF, "Run recover and reconcile the archive; do not replay."],
 ];
 
 function station([command, causeCode, trigger, guidance, repairAction]: Row): Station {

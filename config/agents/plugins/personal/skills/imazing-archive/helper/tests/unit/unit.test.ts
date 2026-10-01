@@ -1,8 +1,13 @@
 import { expect, test } from "bun:test";
 import { ExportFormatError, parseCsv, readExport } from "../../src/csv.ts";
 import { parseOptions } from "../../src/engine.ts";
-import type { AttachmentFile, ExportRow } from "../../src/model.ts";
-import { resolveAttachments } from "../../src/planner.ts";
+import type { AttachmentFile, ExportRow, ParsedExport } from "../../src/model.ts";
+import {
+  emptyState,
+  foldRecords,
+  planImport,
+  resolveAttachments,
+} from "../../src/planner.ts";
 
 test("quoted CSV fields keep commas, vertical bars, quotes, and newlines", () => {
   const text = 'a,b\r\n"x, y | z","line one\nline ""two"""\r\n';
@@ -39,6 +44,15 @@ test.each([
   ],
 ])("%s refuses as an export format error", (_case, text) => {
   expect(() => readExport(text)).toThrow(ExportFormatError);
+});
+
+test.each([
+  ["a quote after unquoted text", 'a,b\nfoo"bar",x\n', "Row 1 column 1"],
+  ["text after a closing quote", 'a,b\nx,"foo"bar\n', "Row 1 column 2"],
+  ["a space after a closing quote", 'a,b\r\n"x" ,y\r\n', "Row 1 column 1"],
+])("%s refuses with its row and column instead of altering the text", (_case, text, where) => {
+  expect(() => parseCsv(text)).toThrow(ExportFormatError);
+  expect(() => parseCsv(text)).toThrow(where);
 });
 
 function row(number: number, attachment: string, text = ""): ExportRow {
@@ -141,4 +155,55 @@ test.each([
   [["extra"]],
 ] as const)("options reject an unsupported shape %#", (args) => {
   expect(parseOptions(args, ["archive"], ["preview"])).toBeNull();
+});
+
+function oldExport(rows: ExportRow[]): ParsedExport {
+  return { chatSession: "Robin", rows, variant: "imazing-15" };
+}
+
+test("a fingerprint repeated within one old-variant export is held, not minted", () => {
+  const planned = planImport(
+    emptyState(),
+    oldExport([row(1, "", "ha"), row(2, "", "ha")]),
+    "a".repeat(64),
+    [],
+  );
+  expect(planned.plan.items).toEqual([]);
+  expect(planned.summary.observations).toMatchObject({
+    "ambiguous-fingerprint": 2,
+    "fingerprint-new": 0,
+  });
+  expect(planned.summary.lists.ambiguousMessages).toEqual([
+    { candidates: [], row: 1 },
+    { candidates: [], row: 2 },
+  ]);
+});
+
+test("text differing only in line endings, Unicode form, or surrounding whitespace keeps one identity", () => {
+  const first = planImport(
+    emptyState(),
+    oldExport([row(1, "", "caf\u00e9\nok")]),
+    "a".repeat(64),
+    [],
+  );
+  expect(first.plan.items).toHaveLength(1);
+  const state = foldRecords(emptyState(), {
+    ambiguities: [],
+    associations: [],
+    blobs: [],
+    decisions: [],
+    items: first.plan.items,
+    observations: first.plan.observations,
+  });
+  const later = planImport(
+    state,
+    oldExport([row(1, "", " \tcafe\u0301 \r\nok\t\n")]),
+    "b".repeat(64),
+    [],
+  );
+  expect(later.summary.observations).toMatchObject({
+    "fingerprint-match": 1,
+    "fingerprint-new": 0,
+  });
+  expect(later.plan.items).toEqual([]);
 });

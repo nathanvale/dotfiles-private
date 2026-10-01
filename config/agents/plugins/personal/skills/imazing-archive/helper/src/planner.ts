@@ -34,7 +34,10 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-/** LF line endings, NFC, and no trailing whitespace on any line. */
+/**
+ * LF line endings, NFC, leading and trailing whitespace trimmed from the text,
+ * and trailing whitespace trimmed from each line.
+ */
 function normaliseText(value: string): string {
   return value
     .replace(/\r\n?/g, "\n")
@@ -42,7 +45,7 @@ function normaliseText(value: string): string {
     .split("\n")
     .map((line) => line.trimEnd())
     .join("\n")
-    .trimEnd();
+    .trim();
 }
 
 function fingerprint(row: ExportRow): string {
@@ -399,24 +402,19 @@ function planIdRows(
   }
 }
 
+/** A fingerprint repeated within the export is held: no identity is minted. */
 function planFingerprintRows(planner: ItemPlanner, rows: ExportRow[]): void {
   const fingerprintCounts = countBy(rows, fingerprint);
-  const occurrences = new Map<string, number>();
   for (const row of rows) {
     const print = fingerprint(row);
-    const occurrence = occurrences.get(print) ?? 0;
-    occurrences.set(print, occurrence + 1);
     const candidates = planner.candidates(row);
     const [match] = candidates;
-    if (candidates.length === 0) {
-      const itemKey = itemKeyFor("fp", print, String(occurrence));
+    const unique = fingerprintCounts.get(print) === 1;
+    if (unique && match === undefined) {
+      const itemKey = itemKeyFor("fp", print, "0");
       planner.create(row, itemKey, null);
       planner.observe(row, "fingerprint-new", itemKey, null);
-    } else if (
-      match !== undefined &&
-      candidates.length === 1 &&
-      fingerprintCounts.get(print) === 1
-    ) {
+    } else if (unique && match !== undefined && candidates.length === 1) {
       planner.observe(row, "fingerprint-match", match, null);
     } else {
       planner.observe(row, "ambiguous-fingerprint", null, null, candidates);

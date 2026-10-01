@@ -13,7 +13,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseCsv, toCsv } from "../../src/csv.ts";
 import { appendJournal } from "../../src/journal.ts";
-import { MEME, writeNewExport, writeOldExport } from "../fixtures/exports.ts";
+import { BYTES, MEME, writeNewExport, writeOldExport } from "../fixtures/exports.ts";
 
 const ROOT = resolve(import.meta.dir, "../..");
 const roots: string[] = [];
@@ -200,20 +200,22 @@ test("an old export imported first links later Message IDs by unique fingerprint
   const old = await writeOldExport(join(root, "old"));
 
   const first = importExport(env, archive, old.csv, old.attachments);
-  expect(first.apply.data.observations).toMatchObject({ "fingerprint-new": 11 });
+  // The old export's two identical "ha" rows are held, not minted.
+  expect(first.apply.data.observations).toMatchObject({ "ambiguous-fingerprint": 2, "fingerprint-new": 9 });
+  expect(first.apply.data.listSizes.ambiguousMessages).toBe(2);
+  expect(first.apply.data.planned.items).toBe(9);
   const second = importExport(env, archive, newCsv, newRoot);
   expect(second.apply.data.observations).toMatchObject({
     "message-id-linked-fingerprint": 7,
     "message-id-new": 8,
   });
-  expect(second.apply.data.listSizes.ambiguousMessageLinks).toBe(3);
+  expect(second.apply.data.listSizes.ambiguousMessageLinks).toBe(2);
   expect(second.apply.data.planned.associations).toEqual({ ambiguous: 1, missing: 0, resolved: 5 });
   // Both sides of each unresolved link name each other; nothing merges.
   const messages = await csvRows(join(archive, "derived/messages.csv"));
   const flagged = messages.filter((row) => row.ambiguous_with !== "[]");
-  expect(flagged.filter((row) => row.text === "ha")).toHaveLength(3);
   expect(flagged.filter((row) => row.attachment_name === "IMG_0001.PNG")).toHaveLength(3);
-  expect(flagged).toHaveLength(6);
+  expect(flagged).toHaveLength(3);
 });
 
 test("a rerun retries unresolved attachments for rows it has already seen", async () => {
@@ -363,17 +365,101 @@ test("an interrupted apply leaves an unproven intent that recover reports withou
   expect(await Bun.file(join(archive, "records/items.jsonl")).exists()).toBe(false);
 });
 
-test("recover treats a pending intent with its receipt as complete without replay", async () => {
-  const { archive, env } = await workspace("recover");
+test("recover rejects a receipt that only carries the plan digest", async () => {
+  const { archive, env } = await workspace("recover-forged");
   await markerArchive(archive);
   const digest = "a".repeat(64);
   await appendJournal(join(archive, "archive"), { effectId: "effect.import", expectedValueHash: digest, journalVersion: 1, phase: "intent", runId: "interrupted" });
   await mkdir(join(archive, "imports"));
   await writeFile(join(archive, "imports", "receipt.json"), JSON.stringify({ planDigest: digest }));
   const recovered = invoke(env, "recover", "--archive", archive, "--json");
-  expect(recovered.exitCode).toBe(0);
-  expect(recovered.json().result.data).toEqual({ pendingEffect: "effect.import", state: "completed" });
+  expect(recovered.exitCode).toBe(3);
+  expect(recovered.json().result.causeCode).toBe("DOMAIN_RECOVERY_UNPROVABLE");
   expect((await readFile(join(archive, "archive.journal.jsonl"), "utf8")).trim().split("\n")).toHaveLength(1);
+});
+
+/** Removes one appended line so a record span no longer reads back. */
+async function dropLastLine(path: string): Promise<void> {
+  const lines = (await readFile(path, "utf8")).trim().split("\n");
+  await writeFile(path, `${lines.slice(0, -1).join("\n")}\n`);
+}
+
+test.each([
+  ["every effect reads back", null, 0, "completed"],
+  ["a written blob is missing", "blob", 3, "unknown"],
+  ["an appended record span changed", "records", 3, "unknown"],
+] as const)("recover proves a receipted import whose completion line was lost only when %s", async (_case, tamper, exitCode, state) => {
+  const { archive, env, root } = await workspace("recover");
+  const newRoot = join(root, "new");
+  importExport(env, archive, await writeNewExport(newRoot), newRoot);
+  const journal = join(archive, "archive.journal.jsonl");
+  const [intent] = (await readFile(journal, "utf8")).trim().split("\n");
+  await writeFile(journal, `${intent}\n`);
+  if (tamper === "blob") {
+    const [blob = ""] = (await readFile(join(archive, "records/blobs.jsonl"), "utf8")).trim().split("\n");
+    await rm(join(archive, JSON.parse(blob).path));
+  }
+  if (tamper === "records") await dropLastLine(join(archive, "records/items.jsonl"));
+  const recovered = invoke(env, "recover", "--archive", archive, "--json");
+  expect(recovered.exitCode).toBe(exitCode);
+  if (state === "completed") {
+    expect(recovered.json().result.data).toEqual({ pendingEffect: "effect.import", state: "completed" });
+  } else {
+    expect(recovered.json().result).toMatchObject({ causeCode: "DOMAIN_RECOVERY_UNPROVABLE", handoff: { owner: "operator" } });
+  }
+  expect((await readFile(journal, "utf8")).trim().split("\n")).toHaveLength(1);
+});
+
+test.each(["blob", "original"] as const)("an existing %s with other bytes refuses the apply before its intent", async (target) => {
+  const { archive, env, root } = await workspace("conflict");
+  const newRoot = join(root, "new");
+  const csv = await writeNewExport(newRoot);
+  await mkdir(archive, { recursive: true });
+  await writeFile(join(archive, "archive.json"), '{"archiveVersion":1}\n');
+  const source = ["--archive", archive, "--csv", csv, "--attachments", newRoot];
+  const digest = invoke(env, "import", ...source, "--preview", "--json").json().result.data.planDigest;
+  const sha = (bytes: string | Buffer) => createHash("sha256").update(bytes).digest("hex");
+  const meme = sha(BYTES.meme);
+  const path =
+    target === "blob"
+      ? `blobs/${meme.slice(0, 2)}/${meme}.png`
+      : `originals/${sha(await readFile(csv))}-Messages - Robin Example.csv`;
+  await mkdir(join(archive, path, ".."), { recursive: true });
+  await writeFile(join(archive, path), "wrong bytes");
+  const apply = invoke(env, "import", ...source, "--plan", digest, "--json");
+  expect(apply.exitCode).toBe(3);
+  expect(apply.json().message).toContain(path);
+  expect(apply.json().result).toMatchObject({ causeCode: "DOMAIN_ARCHIVE_CONFLICT", outcome: "refused", transactionState: "unchanged" });
+  expect(await readFile(join(archive, path), "utf8")).toBe("wrong bytes");
+  expect(await Bun.file(join(archive, "archive.journal.jsonl")).exists()).toBe(false);
+  expect(await Bun.file(join(archive, "records/items.jsonl")).exists()).toBe(false);
+});
+
+test("a decision whose derived output is obstructed returns an unknown effect that recover can prove", async () => {
+  const { archive, env, root } = await workspace("decide-unknown");
+  const newRoot = join(root, "new");
+  importExport(env, archive, await writeNewExport(newRoot), newRoot);
+  const [item] = await csvRows(join(archive, "derived/messages.csv"));
+  await rm(join(archive, "derived"), { recursive: true });
+  await writeFile(join(archive, "derived"), "obstruction");
+  const decided = invoke(env, "decide", "--archive", archive, "--item", item?.item_key ?? "", "--album", "selected", "--json");
+  expect(decided.exitCode).toBe(1);
+  expect(decided.stderr).toBe("");
+  expect(decided.json().result).toMatchObject({
+    causeCode: "INTERNAL_RESULT_UNKNOWN",
+    commandIdentity: "imazing-archive.decide",
+    effects: { uncertain: ["effect.decision"] },
+    handoff: { owner: "operator" },
+    transactionState: "unknown",
+  });
+  expect((await readFile(join(archive, "records/decisions.jsonl"), "utf8")).trim().split("\n")).toHaveLength(1);
+  const proven = invoke(env, "recover", "--archive", archive, "--json");
+  expect(proven.exitCode).toBe(0);
+  expect(proven.json().result.data).toEqual({ pendingEffect: "effect.decision", state: "completed" });
+  await writeFile(join(archive, "records/decisions.jsonl"), "");
+  const unproven = invoke(env, "recover", "--archive", archive, "--json");
+  expect(unproven.exitCode).toBe(3);
+  expect(unproven.json().result.causeCode).toBe("DOMAIN_RECOVERY_UNPROVABLE");
 });
 
 async function waitFor(path: string): Promise<void> {

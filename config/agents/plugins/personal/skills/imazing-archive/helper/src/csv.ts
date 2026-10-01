@@ -38,17 +38,25 @@ class CsvReader {
   private record: string[] = [];
   private field = "";
   private quoted = false;
+  /** A quoted field has closed; only a delimiter may follow. */
+  private closed = false;
 
   /** Consumes one character; returns how many extra characters it used. */
   read(character: string, next: string): number {
     if (this.quoted) return this.readQuoted(character, next);
-    if (character === '"') this.quoted = true;
-    else if (character === ",") this.endField();
+    if (character === ",") this.endField();
     else if (character === "\n" || character === "\r") {
       this.endRecord();
       return character === "\r" && next === "\n" ? 1 : 0;
-    } else this.field += character;
+    } else this.readUnquoted(character);
     return 0;
+  }
+
+  private readUnquoted(character: string): void {
+    if (this.closed) this.malformed("text follows a closing quote");
+    if (character !== '"') this.field += character;
+    else if (this.field === "") this.quoted = true;
+    else this.malformed("a quote follows unquoted text");
   }
 
   private readQuoted(character: string, next: string): number {
@@ -61,12 +69,21 @@ class CsvReader {
       return 1;
     }
     this.quoted = false;
+    this.closed = true;
     return 0;
+  }
+
+  /** Rows count from 0 for the header, matching data-row numbering. */
+  private malformed(detail: string): never {
+    throw new ExportFormatError(
+      `Row ${this.records.length} column ${this.record.length + 1} has malformed quoting: ${detail}.`,
+    );
   }
 
   private endField(): void {
     this.record.push(this.field);
     this.field = "";
+    this.closed = false;
   }
 
   private endRecord(): void {

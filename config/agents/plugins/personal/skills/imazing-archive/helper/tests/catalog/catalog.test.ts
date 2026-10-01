@@ -24,6 +24,7 @@ test("the catalogue declares the exact routed tuple vocabulary", () => {
   expect(identities.sort()).toEqual([
     "imazing-archive.command-discovery|success|SUCCESS_UNCHANGED",
     "imazing-archive.decide|failed|INTERNAL_RESULT_UNCHANGED",
+    "imazing-archive.decide|failed|INTERNAL_RESULT_UNKNOWN",
     "imazing-archive.decide|refused|DOMAIN_PRECONDITION_UNMET",
     "imazing-archive.decide|refused|DOMAIN_RECOVERY_UNPROVABLE",
     "imazing-archive.decide|refused|SCHEMA_INVALID_INPUT",
@@ -35,6 +36,7 @@ test("the catalogue declares the exact routed tuple vocabulary", () => {
     "imazing-archive.help|success|SUCCESS_UNCHANGED",
     "imazing-archive.import|failed|INTERNAL_RESULT_UNCHANGED",
     "imazing-archive.import|failed|INTERNAL_RESULT_UNKNOWN",
+    "imazing-archive.import|refused|DOMAIN_ARCHIVE_CONFLICT",
     "imazing-archive.import|refused|DOMAIN_PRECONDITION_UNMET",
     "imazing-archive.import|refused|DOMAIN_PREVIEW_STALE",
     "imazing-archive.import|refused|DOMAIN_RECOVERY_UNPROVABLE",
@@ -100,7 +102,7 @@ test("selected-command discovery returns the same catalogue the tests use", () =
   expect(data.stations).toEqual(
     JSON.parse(JSON.stringify(stationsFor("imazing-archive.import"))),
   );
-  expect(data.stations).toHaveLength(10);
+  expect(data.stations).toHaveLength(11);
 });
 
 test("the committed imazing-archive bundle matches its source", async () => {

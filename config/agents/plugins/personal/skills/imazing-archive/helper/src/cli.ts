@@ -19,10 +19,13 @@ import { type PlannedImport, planIsEmpty } from "./planner.ts";
 import { systemProcessLifecycle } from "./process-lifecycle.ts";
 import {
   type ApplyOutcome,
+  ArchiveConflictError,
   applyImport,
   archiveStatus,
   checkArchive,
+  DECISION_EFFECT,
   EffectUncertainError,
+  IMPORT_EFFECT,
   type ImportSource,
   InvalidArchiveError,
   inspectRecovery,
@@ -58,9 +61,6 @@ Discovery:
   imazing-archive --discover
   imazing-archive --discover-command COMMAND_IDENTITY
 `;
-
-const IMPORT_EFFECT = "effect.import";
-const DECISION_EFFECT = "effect.decision";
 
 function hasJson(argv: string[]): boolean {
   const separator = argv.indexOf("--");
@@ -185,7 +185,7 @@ async function recover(args: string[]): Promise<OperationResult> {
   return succeeded(
     "imazing-archive.recover",
     observation.state === "completed"
-      ? "The interrupted import has its completion receipt; it was not replayed."
+      ? "The interrupted write's durable effects read back complete; it was not replayed."
       : "No interrupted import needs recovery.",
     { pendingEffect: observation.effectId, state: observation.state },
   );
@@ -320,6 +320,9 @@ async function guarded(
   try {
     return await run();
   } catch (error) {
+    if (error instanceof ArchiveConflictError) {
+      return refused(commandIdentity, "DOMAIN_ARCHIVE_CONFLICT", error.message, "Inspect the named archive file; restore or move it aside, then preview again.");
+    }
     if (error instanceof PreconditionError) {
       return refused(commandIdentity, "DOMAIN_PRECONDITION_UNMET", error.message, "Check the archive, CSV, and attachments paths.");
     }
@@ -330,7 +333,7 @@ async function guarded(
       return invalidArchive(commandIdentity, error.message);
     }
     if (error instanceof EffectUncertainError) {
-      return effectUnknown(commandIdentity, IMPORT_EFFECT);
+      return effectUnknown(commandIdentity, error.effectId);
     }
     throw error;
   }

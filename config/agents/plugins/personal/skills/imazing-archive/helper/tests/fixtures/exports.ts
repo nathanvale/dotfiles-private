@@ -82,7 +82,7 @@ function exported(chat: string, date: string, name: string): string {
   return `${date.replaceAll(":", " ")} - ${chat} - ${name}`;
 }
 
-const BYTES = {
+export const BYTES = {
   dupA: "dup-bytes-one",
   dupB: "dup-bytes-two",
   img: "same-bytes-sent-twice",

@@ -39,6 +39,7 @@ export function succeeded(
 }
 
 const REFUSALS = {
+  DOMAIN_ARCHIVE_CONFLICT: { exitCode: 3, failureClass: "domain" },
   DOMAIN_PRECONDITION_UNMET: { exitCode: 3, failureClass: "domain" },
   DOMAIN_PREVIEW_STALE: { exitCode: 3, failureClass: "domain" },
   SCHEMA_INVALID_INPUT: { exitCode: 4, failureClass: "schema" },
@@ -110,9 +111,9 @@ export function recoveryRequired(
     handoff: {
       inspect: ["archive.journal.jsonl", "imports/", "records/"],
       owner: "operator",
-      reason: `An interrupted ${effectId} has no completion receipt; its effects are unproven.`,
+      reason: `An interrupted ${effectId} has no verified completion proof; its effects are unproven.`,
     },
-    message: "An earlier import was interrupted and cannot be proven complete.",
+    message: "An earlier archive write was interrupted and cannot be proven complete.",
     outcome: "refused",
     repairAction:
       "Reconcile records written by the interrupted run without replaying it.",
@@ -150,6 +151,7 @@ export function effectUnknown(
   commandIdentity: string,
   effectId: string,
 ): OperationResult {
+  const work = commandIdentity.endsWith(".decide") ? "decision" : "import";
   return {
     causeCode: "INTERNAL_RESULT_UNKNOWN",
     commandIdentity,
@@ -161,9 +163,9 @@ export function effectUnknown(
     handoff: {
       inspect: ["archive.journal.jsonl", "imports/", "records/"],
       owner: "operator",
-      reason: "The import failed after recording its journal intent.",
+      reason: `The ${work} failed after recording its journal intent.`,
     },
-    message: "The import stopped part way; archive effects are unknown.",
+    message: `The ${work} stopped part way; archive effects are unknown.`,
     outcome: "failed",
     repairAction: "Run recover and reconcile the archive; do not replay.",
     retryable: false,
