@@ -82,6 +82,7 @@ export const ItemRecordSchema = z.strictObject({
   attachment: z
     .strictObject({ originalName: z.string(), type: z.string() })
     .nullable(),
+  chatSession: z.string(),
   deletedDate: z.string().nullable(),
   deliveredDate: z.string(),
   direction: DIRECTION,
@@ -99,10 +100,26 @@ export const ItemRecordSchema = z.strictObject({
   readDate: z.string(),
   recordVersion: z.literal(1),
   replyingTo: z.string(),
+  senderId: z.string(),
   senderName: z.string(),
   service: z.string(),
   status: z.string(),
   text: z.string(),
+});
+
+export const AmbiguityRecordSchema = z.strictObject({
+  exportSha256: SHA256,
+  itemKeys: z.array(ITEM_KEY).min(2),
+  reason: z.literal("message-id-fingerprint"),
+  recordVersion: z.literal(1),
+  row: z.number().int().positive(),
+});
+
+export const ArchiveMarker = z.object({
+  archiveVersion: z.literal(1),
+  chatIdentity: z
+    .strictObject({ senderIds: z.array(z.string().min(1)).min(1) })
+    .optional(),
 });
 
 export const ObservationRecordSchema = z.strictObject({

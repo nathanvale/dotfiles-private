@@ -68,6 +68,7 @@ export interface ExportRow {
   readDate: string;
   replyingTo: string;
   row: number;
+  senderId: string;
   senderName: string;
   service: string;
   status: string;
@@ -92,6 +93,7 @@ export interface AttachmentFile {
 
 export interface ItemRecord {
   attachment: { originalName: string; type: string } | null;
+  chatSession: string;
   deletedDate: string | null;
   deliveredDate: string;
   direction: Direction;
@@ -106,10 +108,20 @@ export interface ItemRecord {
   readDate: string;
   recordVersion: 1;
   replyingTo: string;
+  senderId: string;
   senderName: string;
   service: string;
   status: string;
   text: string;
+}
+
+/** Both sides of an unresolved Message ID to fingerprint link. */
+export interface AmbiguityRecord {
+  exportSha256: string;
+  itemKeys: string[];
+  reason: "message-id-fingerprint";
+  recordVersion: 1;
+  row: number;
 }
 
 export type ObservationStrategy =
@@ -169,6 +181,7 @@ export interface DecisionRecord {
 }
 
 export interface ArchiveState {
+  ambiguities: Map<string, Set<string>>;
   associations: Map<string, AssociationRecord>;
   blobs: Map<string, BlobRecord>;
   decisions: Map<string, DecisionRecord>;
@@ -176,12 +189,14 @@ export interface ArchiveState {
   idIndex: Map<string, string>;
   items: Map<string, ItemRecord>;
   linkedItems: Set<string>;
-  observedRows: Set<string>;
+  /** `<export sha>:<row>` to the row's item key, or null when held. */
+  observedRows: Map<string, string | null>;
   originals: Set<string>;
   revision: string;
 }
 
 export interface ImportPlan {
+  ambiguities: AmbiguityRecord[];
   associations: AssociationRecord[];
   blobs: BlobRecord[];
   copyOriginal: boolean;

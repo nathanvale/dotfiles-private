@@ -55,6 +55,7 @@ function messagesCsv(state: ArchiveState): string {
     "attachment_name",
     "attachment_status",
     "blob_path",
+    "ambiguous_with",
     ...REVIEW_HEADER,
   ];
   const rows = sortedItems(state).map((item) => {
@@ -75,6 +76,7 @@ function messagesCsv(state: ArchiveState): string {
       item.attachment?.originalName ?? "",
       cell?.status ?? "",
       blobPathFor(state, cell?.sha256 ?? null),
+      JSON.stringify([...(state.ambiguities.get(item.itemKey) ?? [])].sort()),
       ...reviewColumns(state.decisions.get(item.itemKey), cell),
     ];
   });

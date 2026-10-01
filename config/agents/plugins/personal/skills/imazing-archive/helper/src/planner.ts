@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type {
+  AmbiguityRecord,
   ArchiveState,
   AssociationRecord,
   AttachmentFile,
@@ -33,11 +34,26 @@ function sha256(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+/** LF line endings, NFC, and no trailing whitespace on any line. */
+function normaliseText(value: string): string {
+  return value
+    .replace(/\r\n?/g, "\n")
+    .normalize("NFC")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .join("\n")
+    .trimEnd();
+}
+
 function fingerprint(row: ExportRow): string {
   return sha256(
-    ["v1", row.messageDate, row.direction, row.text, row.attachment].join(
-      SEPARATOR,
-    ),
+    [
+      "v1",
+      row.messageDate,
+      row.direction,
+      normaliseText(row.text),
+      row.attachment.normalize("NFC"),
+    ].join(SEPARATOR),
   );
 }
 
@@ -57,6 +73,7 @@ function extensionOf(name: string): string {
 
 export function emptyState(): ArchiveState {
   return {
+    ambiguities: new Map(),
     associations: new Map(),
     blobs: new Map(),
     decisions: new Map(),
@@ -64,13 +81,14 @@ export function emptyState(): ArchiveState {
     idIndex: new Map(),
     items: new Map(),
     linkedItems: new Set(),
-    observedRows: new Set(),
+    observedRows: new Map(),
     originals: new Set(),
     revision: "empty",
   };
 }
 
 export interface ArchiveRecords {
+  ambiguities: AmbiguityRecord[];
   associations: AssociationRecord[];
   blobs: BlobRecord[];
   decisions: DecisionRecord[];
@@ -85,7 +103,10 @@ function addItem(state: ArchiveState, item: ItemRecord): void {
 }
 
 function addObservation(state: ArchiveState, record: ObservationRecord): void {
-  state.observedRows.add(`${record.exportSha256}:${record.row}`);
+  state.observedRows.set(
+    `${record.exportSha256}:${record.row}`,
+    record.itemKey,
+  );
   state.originals.add(record.exportSha256);
   if (record.itemKey === null) return;
   if (record.messageId !== null && record.part !== null) {
@@ -109,6 +130,14 @@ function addAssociation(
   }
 }
 
+function addAmbiguity(state: ArchiveState, record: AmbiguityRecord): void {
+  for (const itemKey of record.itemKeys) {
+    const others = state.ambiguities.get(itemKey) ?? new Set<string>();
+    for (const other of record.itemKeys) if (other !== itemKey) others.add(other);
+    state.ambiguities.set(itemKey, others);
+  }
+}
+
 function addDecision(state: ArchiveState, record: DecisionRecord): void {
   const previous = state.decisions.get(record.itemKey);
   state.decisions.set(record.itemKey, { ...previous, ...record });
@@ -127,13 +156,15 @@ export function foldRecords(
     addAssociation(state, association);
   }
   for (const blob of records.blobs) state.blobs.set(blob.sha256, blob);
+  for (const ambiguity of records.ambiguities) addAmbiguity(state, ambiguity);
   for (const decision of records.decisions) addDecision(state, decision);
   return state;
 }
 
 interface ItemPlanning {
+  ambiguities: AmbiguityRecord[];
   ambiguousMessages: { candidates: string[]; row: number }[];
-  ambiguousLinks: { candidates: string[]; row: number }[];
+  ambiguousLinks: { candidates: string[]; itemKey: string; row: number }[];
   counts: Record<ObservationStrategy | "alreadyObserved", number>;
   items: ItemRecord[];
   nearMatches: { itemKeys: string[]; row: number }[];
@@ -143,6 +174,7 @@ interface ItemPlanning {
 
 function newItem(
   row: ExportRow,
+  parsed: ParsedExport,
   exportSha256: string,
   itemKey: string,
   part: string | null,
@@ -152,6 +184,7 @@ function newItem(
       row.attachment === ""
         ? null
         : { originalName: row.attachment, type: row.attachmentType },
+    chatSession: parsed.chatSession,
     deletedDate: row.deletedDate,
     deliveredDate: row.deliveredDate,
     direction: row.direction,
@@ -166,6 +199,7 @@ function newItem(
     readDate: row.readDate,
     recordVersion: 1,
     replyingTo: row.replyingTo,
+    senderId: row.senderId,
     senderName: row.senderName,
     service: row.service,
     status: row.status,
@@ -173,15 +207,29 @@ function newItem(
   };
 }
 
-function partKeys(rows: ExportRow[]): Map<number, string> {
-  const seen = new Map<string, number>();
-  const parts = new Map<number, string>();
+/**
+ * Part keys independent of row order: `text` or `att:<name>`, numbered
+ * within the message after sorting by content hash, then fingerprint.
+ */
+function partKeys(
+  rows: ExportRow[],
+  rowSha: Map<number, string>,
+): Map<number, string> {
+  const groups = new Map<string, ExportRow[]>();
+  const kindOf = (row: ExportRow) =>
+    row.attachment === "" ? "text" : `att:${row.attachment.normalize("NFC")}`;
   for (const row of rows) {
-    const kind = row.attachment === "" ? "text" : `att:${row.attachment}`;
-    const groupKey = `${row.messageId}${SEPARATOR}${kind}`;
-    const occurrence = seen.get(groupKey) ?? 0;
-    seen.set(groupKey, occurrence + 1);
-    parts.set(row.row, `${kind}#${occurrence}`);
+    const key = `${row.messageId}${SEPARATOR}${kindOf(row)}`;
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  const parts = new Map<number, string>();
+  const order = (row: ExportRow) =>
+    `${rowSha.get(row.row) ?? "~"}${SEPARATOR}${fingerprint(row)}`;
+  for (const group of groups.values()) {
+    group.sort((left, right) => order(left).localeCompare(order(right)));
+    group.forEach((row, index) => {
+      parts.set(row.row, `${kindOf(row)}#${index}`);
+    });
   }
   return parts;
 }
@@ -194,8 +242,26 @@ function countBy<T>(values: T[], key: (value: T) => string) {
   return counts;
 }
 
+/** `<message id><sep><sha>` to items holding those bytes as a cell. */
+function contentIndex(state: ArchiveState): Map<string, string[]> {
+  const messageIds = new Map<string, string>();
+  for (const [key, itemKey] of state.idIndex) {
+    messageIds.set(itemKey, key.slice(0, key.indexOf(SEPARATOR)));
+  }
+  const index = new Map<string, string[]>();
+  for (const record of state.associations.values()) {
+    const messageId = messageIds.get(record.itemKey);
+    if (record.source !== "attachment-cell" || record.sha256 === null) continue;
+    if (messageId === undefined) continue;
+    const key = `${messageId}${SEPARATOR}${record.sha256}`;
+    index.set(key, [...(index.get(key) ?? []), record.itemKey]);
+  }
+  return index;
+}
+
 class ItemPlanner {
   readonly result: ItemPlanning = {
+    ambiguities: [],
     ambiguousLinks: [],
     ambiguousMessages: [],
     counts: {
@@ -216,6 +282,7 @@ class ItemPlanner {
 
   constructor(
     private readonly state: ArchiveState,
+    private readonly parsed: ParsedExport,
     private readonly exportSha256: string,
   ) {
     this.dateDirection = new Map();
@@ -256,7 +323,21 @@ class ItemPlanner {
     if (prior !== undefined) {
       this.result.nearMatches.push({ itemKeys: prior, row: row.row });
     }
-    this.result.items.push(newItem(row, this.exportSha256, itemKey, part));
+    this.result.items.push(
+      newItem(row, this.parsed, this.exportSha256, itemKey, part),
+    );
+  }
+
+  /** Records both sides of an unresolved link so neither is a silent duplicate. */
+  ambiguous(row: ExportRow, itemKey: string, candidates: string[]): void {
+    this.result.ambiguousLinks.push({ candidates, itemKey, row: row.row });
+    this.result.ambiguities.push({
+      exportSha256: this.exportSha256,
+      itemKeys: [itemKey, ...candidates].sort(),
+      reason: "message-id-fingerprint",
+      recordVersion: 1,
+      row: row.row,
+    });
   }
 
   candidates(row: ExportRow): string[] {
@@ -264,17 +345,35 @@ class ItemPlanner {
   }
 }
 
+function knownIdItem(
+  state: ArchiveState,
+  content: Map<string, string[]>,
+  row: ExportRow,
+  part: string,
+  sha: string | undefined,
+): string | undefined {
+  const byPart = state.idIndex.get(`${row.messageId}${SEPARATOR}${part}`);
+  if (byPart !== undefined || sha === undefined) return byPart;
+  const byContent = content.get(`${row.messageId}${SEPARATOR}${sha}`) ?? [];
+  return byContent.length === 1 ? byContent[0] : undefined;
+}
+
 function planIdRows(
   planner: ItemPlanner,
   state: ArchiveState,
   rows: ExportRow[],
+  rowSha: Map<number, string>,
 ): void {
-  const parts = partKeys(rows);
+  const parts = partKeys(rows, rowSha);
+  const content = contentIndex(state);
+  const used = new Set<string>();
   const pending = rows.filter((row) => {
     const part = parts.get(row.row) ?? "";
-    const known = state.idIndex.get(`${row.messageId}${SEPARATOR}${part}`);
-    if (known !== undefined) planner.observe(row, "message-id-match", known, part);
-    return known === undefined;
+    const known = knownIdItem(state, content, row, part, rowSha.get(row.row));
+    if (known === undefined || used.has(known)) return true;
+    used.add(known);
+    planner.observe(row, "message-id-match", known, part);
+    return false;
   });
   const fingerprintCounts = countBy(pending, fingerprint);
   for (const row of pending) {
@@ -296,12 +395,7 @@ function planIdRows(
     const itemKey = itemKeyFor("id", row.messageId ?? "", part);
     planner.create(row, itemKey, part);
     planner.observe(row, "message-id-new", itemKey, part, eligible);
-    if (eligible.length > 0) {
-      planner.result.ambiguousLinks.push({
-        candidates: eligible,
-        row: row.row,
-      });
-    }
+    if (eligible.length > 0) planner.ambiguous(row, itemKey, eligible);
   }
 }
 
@@ -335,13 +429,18 @@ function planItems(
   state: ArchiveState,
   parsed: ParsedExport,
   exportSha256: string,
+  rowSha: Map<number, string>,
 ): ItemPlanning {
-  const planner = new ItemPlanner(state, exportSha256);
-  const fresh = parsed.rows.filter(
-    (row) => !state.observedRows.has(`${exportSha256}:${row.row}`),
-  );
+  const planner = new ItemPlanner(state, parsed, exportSha256);
+  const fresh: ExportRow[] = [];
+  for (const row of parsed.rows) {
+    const seen = state.observedRows.get(`${exportSha256}:${row.row}`);
+    if (seen === undefined) fresh.push(row);
+    // Seen rows keep their item so unresolved attachments can resolve later.
+    else if (seen !== null) planner.result.rowItems.set(row.row, seen);
+  }
   planner.result.counts.alreadyObserved = parsed.rows.length - fresh.length;
-  if (parsed.variant === "imazing-18") planIdRows(planner, state, fresh);
+  if (parsed.variant === "imazing-18") planIdRows(planner, state, fresh, rowSha);
   else planFingerprintRows(planner, fresh);
   return planner.result;
 }
@@ -606,7 +705,7 @@ export interface ImportSummary {
   chatFiles: number;
   lists: {
     ambiguousAttachments: { candidates: string[]; row: number }[];
-    ambiguousMessageLinks: { candidates: string[]; row: number }[];
+    ambiguousMessageLinks: { candidates: string[]; itemKey: string; row: number }[];
     ambiguousMessages: { candidates: string[]; row: number }[];
     ambiguousWebLinks: { file: string; rows: number[] }[];
     missingAttachments: { cell: string; row: number; sameTimestampFiles: string[] }[];
@@ -619,6 +718,7 @@ export interface ImportSummary {
     associations: { ambiguous: number; missing: number; resolved: number };
     blobs: number;
     blobBytes: number;
+    ambiguities: number;
     copyOriginal: boolean;
     items: number;
     observations: number;
@@ -649,11 +749,16 @@ export function planImport(
   exportSha256: string,
   files: AttachmentFile[],
 ): PlannedImport {
-  const items = planItems(state, parsed, exportSha256);
   const resolution = resolveAttachments(parsed.rows, files);
+  const rowSha = new Map<number, string>();
+  for (const [row, cell] of resolution.cells) {
+    if (cell.file !== null) rowSha.set(row, cell.file.sha256);
+  }
+  const items = planItems(state, parsed, exportSha256, rowSha);
   const inputs = associationInputs(parsed.rows, items.rowItems, resolution);
   const planned = planAssociations(state, inputs, exportSha256);
   const plan: ImportPlan = {
+    ambiguities: items.ambiguities,
     associations: planned.associations,
     blobs: planned.blobs,
     copyOriginal: !state.originals.has(exportSha256),
@@ -680,6 +785,7 @@ export function planImport(
       associations: countStatuses(plan.associations),
       blobBytes: plan.blobs.reduce((total, blob) => total + blob.size, 0),
       blobs: plan.blobs.length,
+      ambiguities: plan.ambiguities.length,
       copyOriginal: plan.copyOriginal,
       items: plan.items.length,
       observations: plan.observations.length,
@@ -699,6 +805,7 @@ export function planImport(
 export function planIsEmpty(plan: ImportPlan): boolean {
   return (
     plan.items.length === 0 &&
+    plan.ambiguities.length === 0 &&
     plan.observations.length === 0 &&
     plan.associations.length === 0 &&
     plan.blobs.length === 0

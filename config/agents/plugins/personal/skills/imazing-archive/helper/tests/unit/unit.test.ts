@@ -55,6 +55,7 @@ function row(number: number, attachment: string, text = ""): ExportRow {
     readDate: "",
     replyingTo: "",
     row: number,
+    senderId: "",
     senderName: "",
     service: "iMessage",
     status: "",

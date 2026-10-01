@@ -1,5 +1,4 @@
 import { createHash, randomUUID } from "node:crypto";
-import { constants } from "node:fs";
 import {
   appendFile,
   chmod,
@@ -16,6 +15,8 @@ import { homedir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import type { z } from "zod";
 import {
+  AmbiguityRecordSchema,
+  ArchiveMarker,
   AssociationRecordSchema,
   BlobRecordSchema,
   DecisionRecordSchema,
@@ -49,6 +50,7 @@ import {
 
 const MARKER = "archive.json";
 const RECORDS = {
+  ambiguities: "records/ambiguities.jsonl",
   associations: "records/associations.jsonl",
   blobs: "records/blobs.jsonl",
   decisions: "records/decisions.jsonl",
@@ -107,6 +109,10 @@ async function revisionOf(archive: string): Promise<string> {
 
 export async function loadArchive(archive: string): Promise<ArchiveState> {
   const state = foldRecords(emptyState(), {
+    ambiguities: await readJsonl(
+      join(archive, RECORDS.ambiguities),
+      AmbiguityRecordSchema,
+    ),
     associations: await readJsonl(
       join(archive, RECORDS.associations),
       AssociationRecordSchema,
@@ -210,6 +216,53 @@ async function scanAttachments(
   return { files, totalFiles: paths.length };
 }
 
+async function readMarker(archive: string) {
+  const text = await readFile(join(archive, MARKER), "utf8").catch(
+    (error: unknown) => {
+      if (isMissing(error)) return null;
+      throw error;
+    },
+  );
+  if (text === null) return null;
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    throw new InvalidArchiveError(`${MARKER} is not JSON.`);
+  }
+  const parsed = ArchiveMarker.safeParse(value);
+  if (!parsed.success) throw new InvalidArchiveError(`${MARKER} is invalid.`);
+  return parsed.data;
+}
+
+/**
+ * One archive holds one chat. Its identity is the export's set of Sender IDs
+ * (Chat Session names differ between exports of the same chat).
+ */
+async function checkChatIdentity(
+  archive: string,
+  parsed: ParsedExport,
+  state: ArchiveState,
+): Promise<string[]> {
+  const senderIds = [
+    ...new Set(parsed.rows.map((row) => row.senderId).filter(Boolean)),
+  ].sort();
+  if (senderIds.length === 0) {
+    throw new PreconditionError("The export has no Sender ID to identify its chat.");
+  }
+  const recorded = (await readMarker(archive))?.chatIdentity?.senderIds;
+  if (recorded === undefined) {
+    if (state.items.size === 0) return senderIds;
+    throw new PreconditionError("The archive records no chat identity to compare.");
+  }
+  if (JSON.stringify(recorded) !== JSON.stringify(senderIds)) {
+    throw new PreconditionError(
+      "The export's Sender IDs differ from the archive's chat identity.",
+    );
+  }
+  return senderIds;
+}
+
 export interface ImportSource {
   archive: string;
   attachments: string;
@@ -217,7 +270,9 @@ export interface ImportSource {
 }
 
 export interface PreparedImport extends PlannedImport {
+  bytes: Buffer;
   exportSha256: string;
+  senderIds: string[];
   parsed: ParsedExport;
   scan: AttachmentScan;
 }
@@ -240,13 +295,14 @@ export async function prepareImport(
   }
   const exportSha256 = createHash("sha256").update(bytes).digest("hex");
   const parsed = readExport(bytes.toString("utf8"));
+  const senderIds = await checkChatIdentity(source.archive, parsed, state);
   const scan = await scanAttachments(
     source.attachments,
     parsed.chatSession,
     source.csv,
   );
   const planned = planImport(state, parsed, exportSha256, scan.files);
-  return { ...planned, exportSha256, parsed, scan };
+  return { ...planned, bytes, exportSha256, parsed, scan, senderIds };
 }
 
 function stateDirectory(): string {
@@ -347,32 +403,40 @@ async function regenerateDerived(archive: string): Promise<void> {
   }
 }
 
+/** Writes the hashed bytes, re-hashes the copy, and refuses a mismatch. */
+async function writeOriginal(
+  source: ImportSource,
+  prepared: PreparedImport,
+): Promise<void> {
+  const target = join(
+    source.archive,
+    "originals",
+    `${prepared.exportSha256}-${basename(source.csv)}`,
+  );
+  if ((await stat(target).catch(() => null)) !== null) return;
+  await mkdir(dirname(target), { recursive: true });
+  const temporary = `${target}.${process.pid}.tmp`;
+  await writeFile(temporary, prepared.bytes, { flag: "wx" });
+  if ((await hashFile(temporary)) !== prepared.exportSha256) {
+    await rm(temporary, { force: true });
+    throw new Error("The original CSV copy does not match its recorded sha256.");
+  }
+  await rename(temporary, target);
+}
+
 async function writeEffects(
   source: ImportSource,
   prepared: PreparedImport,
 ): Promise<void> {
   const { archive } = source;
   const { plan } = prepared;
-  if (plan.copyOriginal) {
-    const original = join(
-      archive,
-      "originals",
-      `${prepared.exportSha256}-${basename(source.csv)}`,
-    );
-    await mkdir(dirname(original), { recursive: true });
-    await copyFile(source.csv, original, constants.COPYFILE_EXCL).catch(
-      (error: unknown) => {
-        if (!(error instanceof Error && "code" in error && error.code === "EEXIST")) {
-          throw error;
-        }
-      },
-    );
-  }
+  if (plan.copyOriginal) await writeOriginal(source, prepared);
   for (const blob of plan.blobs) await copyBlob(archive, source.attachments, blob);
   await appendRecords(join(archive, RECORDS.items), plan.items);
   await appendRecords(join(archive, RECORDS.observations), plan.observations);
   await appendRecords(join(archive, RECORDS.associations), plan.associations);
   await appendRecords(join(archive, RECORDS.blobs), plan.blobs);
+  await appendRecords(join(archive, RECORDS.ambiguities), plan.ambiguities);
   await regenerateDerived(archive);
 }
 
@@ -452,9 +516,9 @@ export async function applyImport(
       return { prepared, receiptPath: await writeReceipt(receipt), status: "unchanged" };
     }
     const record = { effectId: IMPORT_EFFECT, expectedValueHash: prepared.digest, journalVersion: 1 as const, runId };
-    const marker = join(source.archive, MARKER);
-    if ((await stat(marker).catch(() => null)) === null) {
-      await writeFile(marker, `${JSON.stringify({ archiveVersion: 1 })}\n`);
+    if ((await readMarker(source.archive))?.chatIdentity === undefined) {
+      const marker = { archiveVersion: 1, chatIdentity: { senderIds: prepared.senderIds } };
+      await writePrivate(join(source.archive, MARKER), `${JSON.stringify(marker)}\n`);
     }
     await appendJournal(journalState(source.archive), { ...record, phase: "intent" });
     let receiptPath: string;
@@ -525,6 +589,7 @@ export async function archiveStatus(archive: string) {
     associations[record.status] += 1;
   }
   return {
+    ambiguousItems: state.ambiguities.size,
     associations,
     blobs: state.blobs.size,
     decisions: state.decisions.size,

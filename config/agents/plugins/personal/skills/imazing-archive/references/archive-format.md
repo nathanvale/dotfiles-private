@@ -7,7 +7,7 @@ Records are append-only JSONL and the durable truth. Everything under
 
 ```text
 ARCHIVE/
-  archive.json                  marker; required before any write
+  archive.json                  marker plus the chat identity (Sender IDs)
   archive.journal.jsonl         import intent and completion records
   archive.journal.lock          present only while a writer runs, or as crash residue
   originals/<sha256>-<name>.csv byte-identical copy of each imported CSV
@@ -17,6 +17,7 @@ ARCHIVE/
   records/associations.jsonl    message-to-attachment links
   records/blobs.jsonl           blob path, size, and source file
   records/decisions.jsonl       image type, meme, review, and album decisions
+  records/ambiguities.jsonl     item sets an unresolved Message ID link could join
   derived/messages.csv          one row per item, latest decisions applied
   derived/attachments.csv       one row per association
   derived/pending-images.csv    resolved images without a reviewed decision
@@ -31,18 +32,24 @@ ARCHIVE/
 | `imazing-15` | No Message ID | Fingerprint |
 
 The header must match a variant exactly. A leading BOM is ignored. One CSV
-holds one Chat Session.
+holds one Chat Session. Session names differ between exports of one chat
+("Melanie" and "Melanie Strang"), so chat identity is the sorted set of
+non-empty Sender IDs. It must equal the set in `archive.json`.
 
 ## Item identity
 
 - One Message ID can span several rows: a text row and one row per attachment.
-  Each row is an item. Its part is `text#N` or `att:<name>#N`, where `N` counts
-  repeats of that part inside the message.
+  Each row is an item. Its part is `text#N` or `att:<name>#N`; `N` numbers
+  same-name parts after sorting by content hash, so row order does not matter.
+- A later export row whose part is new but whose resolved bytes match exactly
+  one existing cell of the same Message ID is the same item (a renamed file).
 - The fingerprint is SHA-256 of Message Date, direction, Text, and Attachment.
+  Text is normalised first: LF line endings, NFC, no trailing whitespace.
 - An ID row links to an earlier fingerprint-only item only when exactly one
   unlinked candidate exists and no other row in the export shares the
-  fingerprint. Otherwise it becomes its own item and the receipt lists the
-  candidates under `ambiguousMessageLinks`.
+  fingerprint. Otherwise it becomes its own item; `records/ambiguities.jsonl`
+  and the receipt's `ambiguousMessageLinks` record both sides for a later
+  explicit reconciliation.
 - A fingerprint row matches only one candidate with a unique fingerprint in its
   export. Zero candidates create a new item; anything else is held as an
   ambiguous message.
@@ -64,8 +71,8 @@ holds a URL. Files with the chat prefix that nothing claims are
 `unreferencedFiles`; files for other chats are ignored.
 
 Same bytes sent in two messages make two associations and one blob. A later
-export may resolve an association an earlier export left missing; the
-resolved record supersedes it.
+export, or a rerun of the same export after files arrive, may resolve an
+association left missing; the resolved record supersedes it.
 
 ## Decisions
 

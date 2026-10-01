@@ -131,6 +131,7 @@ function normalise(
     readDate: cell("Read Date"),
     replyingTo: cell("Replying to"),
     row,
+    senderId: cell("Sender ID"),
     senderName: cell("Sender Name"),
     service: cell("Service"),
     status: cell("Status"),

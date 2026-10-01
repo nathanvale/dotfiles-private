@@ -11,7 +11,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { parseCsv } from "../../src/csv.ts";
+import { parseCsv, toCsv } from "../../src/csv.ts";
 import { appendJournal } from "../../src/journal.ts";
 import { MEME, writeNewExport, writeOldExport } from "../fixtures/exports.ts";
 
@@ -110,12 +110,12 @@ test("preview writes nothing to the archive and its private receipt counts the n
     attachmentRowResolution: { ambiguous: 1, missing: 1, resolved: 6 },
     attachmentRows: 8,
     chatFiles: 10,
-    messageRows: 14,
+    messageRows: 15,
     planned: {
       associations: { ambiguous: 1, missing: 1, resolved: 7 },
       blobs: 5,
       copyOriginal: true,
-      items: 14,
+      items: 15,
     },
     variant: "imazing-18",
     webLinks: { ambiguous: 0, resolved: 1 },
@@ -127,7 +127,7 @@ test("preview writes nothing to the archive and its private receipt counts the n
   expect(receipt.summary.lists.unreferencedFiles).toEqual(["2024-03-01 00 00 00 - Robin Example - stray.png"]);
   expect(receipt.summary.lists.missingAttachments).toEqual([{ cell: "lost.heic", row: 9, sameTimestampFiles: [] }]);
   expect(receipt.summary.lists.ambiguousAttachments).toEqual([
-    { candidates: ["2024-02-05 09 00 00 - Robin Example - dup 1.png", "2024-02-05 09 00 00 - Robin Example - dup.png"], row: 14 },
+    { candidates: ["2024-02-05 09 00 00 - Robin Example - dup 1.png", "2024-02-05 09 00 00 - Robin Example - dup.png"], row: 15 },
   ]);
 });
 
@@ -170,7 +170,7 @@ test("import, decide, and repeat imports of both variants preserve decisions and
   const cross = importExport(env, archive, old.csv, old.attachments);
   expect(cross.preview.data.observations).toMatchObject({
     "ambiguous-fingerprint": 3,
-    "fingerprint-match": 6,
+    "fingerprint-match": 7,
     "fingerprint-new": 1,
   });
   expect(cross.apply.data.planned).toMatchObject({
@@ -190,7 +190,7 @@ test("import, decide, and repeat imports of both variants preserve decisions and
     visual_review: "reviewed",
   });
   expect(finalMessages.find((row) => row.attachment_name === "lost.heic")?.attachment_status).toBe("resolved");
-  expect(finalMessages).toHaveLength(15);
+  expect(finalMessages).toHaveLength(16);
 });
 
 test("an old export imported first links later Message IDs by unique fingerprint only", async () => {
@@ -200,14 +200,74 @@ test("an old export imported first links later Message IDs by unique fingerprint
   const old = await writeOldExport(join(root, "old"));
 
   const first = importExport(env, archive, old.csv, old.attachments);
-  expect(first.apply.data.observations).toMatchObject({ "fingerprint-new": 10 });
+  expect(first.apply.data.observations).toMatchObject({ "fingerprint-new": 11 });
   const second = importExport(env, archive, newCsv, newRoot);
   expect(second.apply.data.observations).toMatchObject({
-    "message-id-linked-fingerprint": 6,
+    "message-id-linked-fingerprint": 7,
     "message-id-new": 8,
   });
   expect(second.apply.data.listSizes.ambiguousMessageLinks).toBe(3);
   expect(second.apply.data.planned.associations).toEqual({ ambiguous: 1, missing: 0, resolved: 5 });
+  // Both sides of each unresolved link name each other; nothing merges.
+  const messages = await csvRows(join(archive, "derived/messages.csv"));
+  const flagged = messages.filter((row) => row.ambiguous_with !== "[]");
+  expect(flagged.filter((row) => row.text === "ha")).toHaveLength(3);
+  expect(flagged.filter((row) => row.attachment_name === "IMG_0001.PNG")).toHaveLength(3);
+  expect(flagged).toHaveLength(6);
+});
+
+test("a rerun retries unresolved attachments for rows it has already seen", async () => {
+  const { archive, env, root } = await workspace("retry");
+  const newRoot = join(root, "new");
+  const csv = await writeNewExport(newRoot);
+  importExport(env, archive, csv, newRoot);
+  await writeFile(join(newRoot, "2023-10-27 07 00 00 - Robin Example - lost.heic"), "late-bytes");
+  const retry = importExport(env, archive, csv, newRoot);
+  expect(retry.preview.data.planned).toMatchObject({
+    associations: { ambiguous: 0, missing: 0, resolved: 1 },
+    blobs: 1,
+    items: 0,
+    observations: 0,
+  });
+  expect(retry.apply.causeCode).toBe("SUCCESS_COMPLETED");
+  const messages = await csvRows(join(archive, "derived/messages.csv"));
+  expect(messages.find((row) => row.attachment_name === "lost.heic")?.attachment_status).toBe("resolved");
+  expect(importExport(env, archive, csv, newRoot).apply.causeCode).toBe("SUCCESS_UNCHANGED");
+});
+
+test("a reordered later export with a renamed attachment keeps the same items", async () => {
+  const { archive, env, root } = await workspace("reorder");
+  const newRoot = join(root, "new");
+  const csv = await writeNewExport(newRoot);
+  importExport(env, archive, csv, newRoot);
+  const [header = [], ...rows] = parseCsv((await readFile(csv, "utf8")).slice(1));
+  const reordered = toCsv(header, rows.reverse()).replace("again.png", "again renamed.png");
+  const laterRoot = join(root, "later");
+  await mkdir(laterRoot);
+  for (const name of await readdir(newRoot, { recursive: true })) {
+    if (name.endsWith(".csv") || !name.includes(" - ")) continue;
+    const target = join(laterRoot, name.replace("again.png", "again renamed.png"));
+    await mkdir(join(target, ".."), { recursive: true });
+    await writeFile(target, await readFile(join(newRoot, name)));
+  }
+  const laterCsv = join(laterRoot, "Messages - Robin Example.csv");
+  await writeFile(laterCsv, reordered);
+  const later = importExport(env, archive, laterCsv, laterRoot);
+  expect(later.apply.data.observations).toMatchObject({ "message-id-match": 15, "message-id-new": 0 });
+  expect(later.apply.data.planned.items).toBe(0);
+});
+
+test("an export from a different chat identity is refused", async () => {
+  const { archive, env, root } = await workspace("identity");
+  const newRoot = join(root, "new");
+  importExport(env, archive, await writeNewExport(newRoot), newRoot);
+  const other = await writeOldExport(join(root, "old"), "someone@example.test");
+  const result = invoke(env, "import", "--archive", archive, "--csv", other.csv, "--attachments", other.attachments, "--preview", "--json");
+  expect(result.exitCode).toBe(3);
+  expect(result.json()).toMatchObject({
+    message: "The export's Sender IDs differ from the archive's chat identity.",
+    result: { causeCode: "DOMAIN_PRECONDITION_UNMET" },
+  });
 });
 
 test("a stale plan digest refuses and writes nothing", async () => {

@@ -15,7 +15,7 @@ import {
   writerBusy,
 } from "./engine.ts";
 import type { OperationResult } from "./model.ts";
-import type { PlannedImport } from "./planner.ts";
+import { type PlannedImport, planIsEmpty } from "./planner.ts";
 import { systemProcessLifecycle } from "./process-lifecycle.ts";
 import {
   type ApplyOutcome,
@@ -257,7 +257,7 @@ async function importCommand(args: string[]): Promise<OperationResult> {
   const receiptPath = await writeReceipt(receiptFor(source, prepared, "preview"));
   return succeeded(
     "imazing-archive.import",
-    prepared.plan.observations.length === 0
+    planIsEmpty(prepared.plan)
       ? "Preview: export already imported; nothing would change."
       : "Preview: nothing was written to the archive.",
     publicSummary(prepared, receiptPath),

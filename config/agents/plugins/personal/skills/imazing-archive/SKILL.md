@@ -20,7 +20,9 @@ envelope. `--help` prints the exact usage.
 
 1. Name the archive with `--archive DIR`: a new or existing archive folder,
    never the existing meme corpus or a folder inside the attachments root.
-   The helper refuses a non-empty folder that lacks `archive.json`.
+   The helper refuses a non-empty folder that lacks `archive.json`. One archive
+   holds one chat: the first apply records the export's Sender IDs, and an
+   export with different Sender IDs is refused.
 2. Name the attachments root with `--attachments DIR`: the folder holding the
    export's exported files (files at depth one or two). For a new-style export
    it is the CSV's own folder; for the 2025 archive export it is
@@ -36,7 +38,8 @@ envelope. `--help` prints the exact usage.
 
 Done when the apply result is `SUCCESS_COMPLETED`, or `SUCCESS_UNCHANGED` for an
 export that is already imported, and the receipt's unresolved lists are
-reported.
+reported. Re-importing a seen export retries its missing attachment links, so
+add late files to the attachments root and import again.
 
 ## Ambiguous and missing
 
@@ -47,6 +50,9 @@ reported.
 - **Ambiguous message**: an export without Message IDs has a row whose
   fingerprint (date, direction, text, attachment name) matches more than one
   archive item, or repeats inside the export. The row is held, not merged.
+- **Ambiguous link**: a Message ID row matches fingerprint-only items, but not
+  one-to-one. Both sides are kept and name each other in
+  `derived/messages.csv` column `ambiguous_with`.
 
 The helper never picks among candidates. Report these lists; resolve them only
 with Nathan.

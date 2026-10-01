@@ -33,6 +33,7 @@ const MESSAGES: Message[] = [
   { attachment: "IMG_0001.PNG", attachmentType: "Image", date: "2023-10-24 12:00:00", id: "ID-E", type: "Outgoing" },
   { date: "2023-10-26 08:00:00", id: "ID-L", text: "ha", type: "Incoming" },
   { attachment: "lost.heic", attachmentType: "Image", date: "2023-10-27 07:00:00", id: "ID-I", type: "Incoming" },
+  { date: "2023-10-28 06:00:00", id: "ID-M", text: "line one\nline two", type: "Outgoing" },
 ];
 
 const NEW_ONLY: Message[] = [
@@ -52,16 +53,27 @@ function quote(value: string): string {
   return /[",\r\n]/.test(value) ? `"${value.replaceAll('"', '""')}"` : value;
 }
 
+const ROBIN = "robin@example.test";
+
+function senderOf(message: Message, senderId: string): string {
+  return message.type === "Incoming" ? senderId : "";
+}
+
+// The new exporter writes CRLF inside texts and keeps trailing spaces.
+function newText(text: string | undefined): string {
+  return text?.includes("\n") ? `${text.replaceAll("\n", "\r\n")}  ` : (text ?? "");
+}
+
 function newRow(chat: string, message: Message): string {
   const sender = message.type === "Incoming" ? chat : "";
-  return [chat, message.id, message.date, "", "", "", message.deleted ?? "", "iMessage", message.type, "", sender, "Read", "", "", message.text ?? "", message.reactions ?? "", message.attachment ?? "", message.attachmentType ?? ""]
+  return [chat, message.id, message.date, "", "", "", message.deleted ?? "", "iMessage", message.type, senderOf(message, ROBIN), sender, "Read", "", "", newText(message.text), message.reactions ?? "", message.attachment ?? "", message.attachmentType ?? ""]
     .map(quote)
     .join(",");
 }
 
-function oldRow(chat: string, message: Message): string {
+function oldRow(chat: string, message: Message, senderId: string): string {
   const sender = message.type === "Incoming" ? chat : "";
-  return [chat, message.date, "", "", "", "iMessage", message.type, "", sender, "Read", "", "", message.text ?? "", message.attachment ?? "", message.attachmentType ?? ""]
+  return [chat, message.date, "", "", "", "iMessage", message.type, senderOf(message, senderId), sender, "Read", "", "", message.text ?? "", message.attachment ?? "", message.attachmentType ?? ""]
     .map(quote)
     .join(",");
 }
@@ -111,12 +123,13 @@ export async function writeNewExport(root: string): Promise<string> {
 /** Old 15-column export: BOM, LF, no Message ID, separate attachments root. */
 export async function writeOldExport(
   root: string,
+  senderId = ROBIN,
 ): Promise<{ attachments: string; csv: string }> {
   const chat = "Robin";
   // One IMG_0001.PNG row against the new export's two: a fingerprint with two
   // archive candidates must stay ambiguous.
   const shared = MESSAGES.filter((_message, index) => index !== 6);
-  const rows = [...shared, ...OLD_ONLY].map((message) => oldRow(chat, message));
+  const rows = [...shared, ...OLD_ONLY].map((message) => oldRow(chat, message, senderId));
   const csv = join(root, "csv", "Messages - Robin.csv");
   const attachments = join(root, "Attachments");
   await mkdir(join(root, "csv"), { recursive: true });
