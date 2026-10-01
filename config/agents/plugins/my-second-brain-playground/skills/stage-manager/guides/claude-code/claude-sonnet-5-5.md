@@ -20,9 +20,8 @@ sources:
 
 Apply this guide only to a performer whose observed Harness is Claude Code at
 `harness_min_version` or later and whose observed model ID is exactly
-`claude-sonnet-5-5`. Each rule below restates a cited source unless it is
-marked observed or extrapolated. The Anthropic pages are authoritative; re-read
-them when this guide and they disagree.
+`claude-sonnet-5-5`. Rules restate a cited source unless marked observed or
+extrapolated; the Anthropic pages win when they disagree with this guide.
 
 ## Boundary
 
@@ -39,16 +38,16 @@ them when this guide and they disagree.
   Foundry (model-config, Model aliases and Version history). Cast with the
   exact ID, in the local cast form (`SKILL.md`, Cast a worker):
   `--agent-arg --model --agent-arg claude-sonnet-5-5`.
-- Content fallback can change the identity. A biology-flagged request ends
-  with a refusal. A cybersecurity-flagged request re-runs on Sonnet 5 with a
-  notice and the session stays there, unless `availableModels` blocks the
-  target (model-config, Automatic model fallback). With **Switch models when
-  a message is flagged** off, the session asks instead, and non-interactive
-  or SDK runs end the turn with a refusal (model-config, Ask before
-  switching). On Agent Platform and Foundry the target is
-  `ANTHROPIC_DEFAULT_SONNET_MODEL` or a Sonnet 5 entry, and unidentifiable
-  models mean no switch (model-config, Enable fallback on Bedrock, Agent
-  Platform, and Foundry).
+- Content fallback can change the serving identity (extrapolated from
+  `SKILL.md` startup step 2). A biology-flagged request ends with a refusal.
+  A cybersecurity-flagged request re-runs on Sonnet 5 with a notice and the
+  session stays there, unless `availableModels` blocks the target
+  (model-config, Automatic model fallback). With **Switch models when a
+  message is flagged** off, the session asks instead, and non-interactive or
+  SDK runs end the turn with a refusal (model-config, Ask before switching).
+  On Agent Platform and Foundry the target is `ANTHROPIC_DEFAULT_SONNET_MODEL`
+  or a Sonnet 5 entry, and unidentifiable models mean no switch
+  (model-config, Enable fallback on Bedrock, Agent Platform, and Foundry).
 
 ## Effort
 
@@ -74,9 +73,8 @@ Each line adapts a source system-prompt line to a brief (extrapolated).
 
 - For an unattended worker at `low` or `medium`, include: "Keep working until
   everything the user asked for is done, and only stop to ask when you can't
-  go on without the user or before a risky step." It does not replace rules
-  about risky or irreversible actions, so keep the brief's stop boundary
-  (prompting guide, Steer initiative and scope).
+  go on without the user or before a risky step." It does not replace risk
+  rules; keep the stop boundary (prompting guide, Steer initiative and scope).
 - The model adds unrequested tests, docs and small files at every effort
   level. When the brief limits the files a worker may touch, include the
   paragraph that starts "When the work the user asked for is done and
@@ -103,14 +101,16 @@ Each line adapts a source system-prompt line to a brief (extrapolated).
   type-checker or build, or the changed command itself) or a stated reason
   none could run (prompting guide, Verification on coding tasks). Otherwise
   request Repair (`SKILL.md`, Handback).
-- Unrequested tests or docs in the diff are documented behavior (prompting
-  guide, Steer initiative and scope); keeping them is a scope decision
-  (extrapolated).
-- A fallback notice does not prove which model did later work. Availability
-  fallback tries configured models for one turn (model-config, Fallback model
-  chains); content fallback persists (see Boundary). Record the notice's
-  target on the Bead. Only an observed serving-model change (`SKILL.md`,
-  startup step 2) changes the applied guide.
+- Unrequested tests or docs are documented behavior (prompting guide, Steer
+  initiative and scope); keeping them is a scope decision (extrapolated).
+- A fallback notice does not prove which model did later work: availability
+  fallback lasts one turn (model-config, Fallback model chains), content
+  fallback persists (see Boundary). After a notice, require fresh exact
+  serving evidence (`SKILL.md`, startup step 2). While it is unknown or
+  conflicts, leave this guide unapplied and refuse casting ("Casting refused:
+  identity conflict ...") until identity is observed or Nathan confirms it
+  (`SKILL.md`, Refuse on a miss). Apply another guide only after an observed
+  serving-model change.
 - The model can read a genuine mid-task message as possible injection
   (prompting guide, Mid-turn user messages); resend such a nudge after the
   turn ends (extrapolated).
