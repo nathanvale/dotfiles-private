@@ -43,7 +43,7 @@ Status labels in the tables are deliberately narrow:
 
 ## Top-level commands
 
-These 47 executable files are exposed as `TOP` through the managed `HOME/bin`
+These 39 executable files are exposed as `TOP` through the managed `HOME/bin`
 directory. The command column shows the basename after activation; the direct
 path remains valid when a caller has not activated the managed tree.
 
@@ -80,8 +80,6 @@ path remains valid when a caller has not activated the managed tree.
 | unqualified | `bin/superwhisper-default` | `bin/superwhisper-default` | Source: self. The script documents a Karabiner trigger, but the current tracked route is unverified. |
 | unqualified | `bin/superwhisper-email` | `bin/superwhisper-email` | Source: self. The script documents a Karabiner trigger; the current tracked route is unverified. |
 | public | `bin/superwhisper-email-complete` | `bin/superwhisper-email-complete` | Source: self. Route: `config/macrowhisper/macrowhisper.json:78`; no dedicated test is recorded. |
-| public | `bin/taskdock` | `taskdock <subcommand>` | Source owner: `apps/taskdock/bin/taskdock` through the wrapper. Covering commands: `apps/taskdock/tests/integration-test.sh` and `apps/taskdock/scripts/shellcheck-all.sh`. |
-| public | `bin/taskdock-vscode` | `taskdock-vscode` | Source owner: `apps/taskdock/ux/vscode-next.sh` through the wrapper. Route: `apps/taskdock/setup.sh:31`; no dedicated bin test is recorded. |
 | public | `bin/teams-reply` | `teams-reply <search-text> <file\|->` | Source: self plus `bin/lib/teams-automation.sh`. Owner doc: `config/agents/skills/personal/teams/SKILL.md:297`; no dedicated test is recorded. |
 | public | `bin/teams-send` | `teams-send <conversation> <file\|-> [--send]` | Source: self plus `bin/lib/teams-automation.sh`. Owner doc: `config/agents/skills/personal/teams/SKILL.md:297`; no dedicated test is recorded. |
 | unqualified | `bin/test-plugin-without-symlink.sh` | `bin/test-plugin-without-symlink.sh <setup\|restore\|status>` | Source: self. It is a manual, effectful test with hard-coded machine paths; current tracked caller and covering route are unverified. |
@@ -174,7 +172,7 @@ invocation map and describes the process and qualification boundaries.
 
 ## Non-executable support files
 
-These 44 tracked files have mode 100644. They are listed so a mode change,
+These 30 tracked support files have mode 100644. They are listed so a mode change,
 new caller, or retirement does not disappear from the ownership map. A
 non-executable shell file must be sourced, interpreted explicitly, or copied;
 it is not a public basename command.
@@ -183,16 +181,9 @@ it is not a public basename command.
 | --- | --- | --- | --- |
 | unqualified | `bin/check_shell.sh` | `bash bin/check_shell.sh` if manually repaired | Source: self. Mode is non-executable; current caller and test are unverified. |
 | unqualified | `bin/dotfiles/preferences/preferences_backup.sh` | `bash bin/dotfiles/preferences/preferences_backup.sh` | Source: self. Mode is non-executable; current caller and test are unverified. |
-| unqualified | `bin/dotfiles/preferences/preferences_restore.sh` | `bash bin/dotfiles/preferences/preferences_restore.sh BACKUP_DIR` | Source: self. Mode is non-executable; current caller and test are unverified. |
-| helper | `bin/dotfiles/symlinks/symlinks_install.sh` | `bash .../symlinks_install.sh` delegates `--link` | Source owner: `bin/dotfiles/symlinks/symlinks_manage.sh`; covering command: `bin/dotfiles/symlinks/symlinks_manage.sh --link`. Mode is non-executable. |
-| helper | `bin/dotfiles/symlinks/symlinks_uninstall.sh` | `bash .../symlinks_uninstall.sh` delegates `--unlink` | Source owner: `bin/dotfiles/symlinks/symlinks_manage.sh`; covering command: `bin/dotfiles/symlinks/symlinks_manage.sh --unlink`. Mode is non-executable. |
 | unqualified | `bin/kill-all-zombies.sh` | `bash bin/kill-all-zombies.sh` | Source: self. Mode is non-executable; it has no current tracked caller or test verified. |
 | helper | `bin/lib/teams-automation.sh` | sourced by `bin/teams-send` and `bin/teams-reply` | Source owner: the two Teams commands; no dedicated covering test is recorded. |
 | unqualified | `bin/superwhisper-minimize-on-startup.sh` | `bash bin/superwhisper-minimize-on-startup.sh` | Source: self. Mode is non-executable; current tracked caller and test are unverified. |
-| helper | `bin/system/fonts/nerd_fonts_install.sh` | `bash .../nerd_fonts_install.sh` delegates `nerd_fonts_manage.sh --add` | Source owner: `bin/system/fonts/nerd_fonts_manage.sh`; no external covering route is verified. |
-| helper | `bin/system/fonts/nerd_fonts_uninstall.sh` | `bash .../nerd_fonts_uninstall.sh` delegates `nerd_fonts_manage.sh --remove` | Source owner: `bin/system/fonts/nerd_fonts_manage.sh`; no external covering route is verified. |
-| helper | `bin/system/iterm/iterm_preferences_install.sh` | `bash .../iterm_preferences_install.sh` delegates `--import` | Source owner: `bin/system/iterm/iterm_preferences_manage.sh`; no external covering route is verified. |
-| helper | `bin/system/iterm/iterm_preferences_uninstall.sh` | `bash .../iterm_preferences_uninstall.sh` delegates `--delete` | Source owner: `bin/system/iterm/iterm_preferences_manage.sh`; no external covering route is verified. |
 | unqualified | `bin/teams-meeting-helper.sh` | `bash bin/teams-meeting-helper.sh [--help\|--monitor\|--check]` | Source: self. Mode is non-executable; current tracked caller and test are unverified. |
 | helper | `bin/teams/lib/lines.ts` | imported by `bin/teams/teams-scraper.ts` | Source owner: `bin/teams/teams-scraper.ts`; covering command: `bun test bin/test/teams-scraper.test.ts`. |
 | helper | `bin/teams/lib/message.ts` | imported by `bin/teams/teams-scraper.ts` | Source owner: `bin/teams/teams-scraper.ts`; covering command: `bun test bin/test/teams-scraper.test.ts`. |
@@ -208,9 +199,7 @@ it is not a public basename command.
 | test-support | `bin/test/fixtures/teams/malformed.{expected.json,stdout.txt,txt}` | fixtures for `bin/test/teams-scraper.test.ts` | Source owner: the Teams scraper test; no direct command. |
 | test-support | `bin/test/fixtures/teams/plain-messages.{expected.json,stdout.txt,txt}` | fixtures for `bin/test/teams-scraper.test.ts` | Source owner: the Teams scraper test; no direct command. |
 | test-support | `bin/test/fixtures/teams/replies.{expected.json,stdout.txt,txt}` | fixtures for `bin/test/teams-scraper.test.ts` | Source owner: the Teams scraper test; no direct command. |
-| helper | `bin/tmux/monitor-locks.sh` | `bash bin/tmux/monitor-locks.sh` | Source owner: `apps/taskdock/bin/taskdock` lock listing; current tracked route and test are unverified. Mode is non-executable. |
 | helper | `bin/tmux/sidequest-common.sh` | `source bin/tmux/sidequest-common.sh` | Source owner: `bin/tmux/worktree-ai.sh`, `bin/tmux/worktree-delete.sh`, and `bin/tmux/test-migration.sh`; covering commands are those three consumers. |
-| helper | `bin/tmux/task-monitor.sh` | `bash bin/tmux/task-monitor.sh [REFRESH_INTERVAL]` | Source owner: TaskDock lock state; current tracked route and test are unverified. Mode is non-executable. |
 
 ## Updating this inventory
 

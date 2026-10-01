@@ -571,11 +571,10 @@ bun run typecheck
   launcher, `bun` on the `PATH` the Harness gives its hooks is an operational
   precondition of every registered hook event; if `bun` is missing, the shell
   exits `127` before the helper runs and that event delivers nothing.
-- `src/cli.ts` is the production entry with the accepted bd pin and the
-  bundle entry; `src/main.ts` is the unconditional entry that always runs
-  `main()`; `tests/fixtures/checker/cli.ts` is the shim-lane entry the tests
-  and the checker spawn with the fixture `bd`. All four paths run the same
-  `main()`.
+- `src/cli.ts` is the production source and bundle entry with the accepted
+  bd pin. `tests/fixtures/checker/cli.ts` is the shim-lane entry the tests
+  and the checker spawn with the fixture `bd`. Both source entries and the
+  generated bundle run the same `main()`.
 - `bun run test:workflow-cli` runs the three complex-profile layers: `tests/unit`,
   `tests/integration` (real processes through the shim-lane entry against the
   fixture `bd` with a reset private state root per scenario, plus one row
@@ -606,7 +605,7 @@ bun run typecheck
 
 | Owner | File |
 | --- | --- |
-| CLI: parsing, mode, dispatch, exit | `src/cli.ts`, `src/main.ts` |
+| CLI: parsing, mode, dispatch, exit | `src/cli.ts` |
 | Contract: envelope, discovery, exits, redaction, human rendering | `src/command-contract.ts` |
 | Model: closed types | `src/model.ts` |
 | Recovery: schema-v3 validation, owner comparison, panel, next safe action | `src/recovery.ts` |

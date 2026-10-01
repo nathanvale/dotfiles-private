@@ -38,7 +38,7 @@ All symlinks are created automatically by the dotfiles installation script:
 
 ```bash
 cd ~/code/dotfiles/bin/dotfiles/symlinks
-./symlinks_install.sh
+./symlinks_manage.sh --link
 ```
 
 This creates symlinks for:
