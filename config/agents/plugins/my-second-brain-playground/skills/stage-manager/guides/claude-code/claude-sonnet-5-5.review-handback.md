@@ -39,3 +39,27 @@ Reviewed the guide at commit `6726a188` against all four cited official pages. T
 The guide has no U+2013 or U+2014. The four findings above prevent acceptance of these exact bytes. This review does not assess route readiness, invocation behavior or a `.review.md` record.
 
 GUIDE_VERDICT: reject guide_sha256=c3e8e714178738f41441d98bf1f12bfe91683666c0fe69e0ad8d818f758bdf1e reason=unqualified fallback and verification rules
+
+## Re-review, 2026-10-02
+
+Reviewed the entire guide at commit `ea81ee7e51e21e684e101c1a64bfe436dd6593e9` against the four cited official pages. The committed bytes and worktree bytes both hash to `6ef49dd63c969a55c32afd1d2a986fb6c2854a489e13a485987d70030adc4838`. The reviewer session and pane remain those in the front matter.
+
+### Front matter and boundary
+
+- Lines 2 to 16 and 29 to 41: Pass. The required fields, v2.1.284 minimum, provider IDs, alias boundary and exact-ID cast form remain supported. The omitted route-qualification bullet still does not claim a qualified serving route.
+- Lines 42 to 51: The previous unconditional fallback claim is repaired by the allowlist, switch-setting and provider conditions in [model configuration](https://code.claude.com/docs/en/model-config#automatic-model-fallback). **Finding:** The content-fallback rule no longer carries the `extrapolated` marking required by this review's acceptance brief. Mark the identity application as extrapolated from `SKILL.md` startup step 2.
+
+### Effort and worker brief
+
+- Lines 55 to 69: Pass. Claude Code's documented `medium` effort default remains distinct from the Claude API's `high` default and from observed effort. The advice follows the [prompting guide](https://platform.claude.com/docs/en/build-with-claude/prompt-engineering/prompting-claude-sonnet-5-5#calibrate-effort).
+- Lines 73 to 94: Pass. Brief instructions are marked as adaptations of system-prompt guidance, and verbatim passages are quoted.
+
+### Read a handback
+
+- Lines 98 to 105: The earlier local-adaptation and verification findings are repaired. The local rule is labelled, and the check list now includes a type-checker, build, tests, the changed command, or an explained inability to run one.
+- Lines 109 to 113: The distinction between one-turn availability fallback and persistent content fallback repairs the old generic-notice claim. **Finding:** The statement that only an observed serving-model change changes the applied guide omits the unknown state. `SKILL.md` lines 116 to 121 require casting to be refused when serving evidence is missing after a fallback notice; `references/harnesses/claude-code.md` lines 12 to 18 say the prior identity statement may be stale. Require fresh exact serving evidence after the notice and leave the guide unapplied if it is unavailable or conflicting.
+- Lines 106 to 108 and 114 to 119: No further finding. The source-based claims and local extrapolations remain distinguished.
+
+The full guide has no U+2013 or U+2014. These two findings prevent acceptance of the new bytes. This verdict does not qualify a serving route, invocation, or `.review.md` record.
+
+GUIDE_VERDICT: reject guide_sha256=6ef49dd63c969a55c32afd1d2a986fb6c2854a489e13a485987d70030adc4838 reason=missing fallback marking and unknown-state rule
