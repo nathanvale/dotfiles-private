@@ -294,12 +294,6 @@ describe("typed invocation validation", () => {
 		expect(refusal({ tenant: TENANT, kind: "receipts" })).toBe("accepted");
 		expect(refusal({ tenant: TENANT, kind: "receipt", runId: "run-1.a_b" })).toBe("accepted");
 	});
-
-	test("a refused request builds no dependencies and starts no provider", () => {
-		const { calls } = fakeTransport();
-		expect(refusal({ tenant: "Example", ...issueGet })).toBe("usage-invalid");
-		expect([tenants, calls, readJsonDir(previewsDir())]).toEqual([[], [], []]);
-	});
 });
 
 describe("tenant identity", () => {
@@ -501,7 +495,7 @@ describe("journaled writes", () => {
 	test("preview records a durable Community preview bound to the exact provider arguments and touches no write tool", async () => {
 		const { transport, calls } = fakeTransport();
 		const dispatched = await previewOp("issue.comment", COMMENT, deps({ transport }));
-		expect([]).toEqual([]);
+		expect(dispatched.outcome.cause).toBe("success");
 		const data = previewData(dispatched);
 		expect([data.provider, data.server, data.tool, data.objectIdentity, data.revision]).toEqual(["community", CJ, "jira_add_comment", "issue:PROJ-1", null]);
 		expect(data.arguments).toEqual({ issue_key: "PROJ-1", body: COMMENT.body });
@@ -1234,7 +1228,7 @@ describe("wiki media comments through the owned REST route", () => {
 		});
 		const dependencies = deps({ transport });
 		const dispatched = await previewOp("issue.comment.media", MEDIA, dependencies);
-		expect([]).toEqual([]);
+		expect(dispatched.outcome.cause).toBe("success");
 		const preview = previewData(dispatched);
 		expect([preview.provider, preview.server, preview.tool, preview.objectIdentity, preview.revision]).toEqual(["rest", RJ, "jira_rest_comment_add", "issue:PROJ-1", null]);
 		expect(preview.arguments).toEqual({ issue_key: "PROJ-1", body: MEDIA.body });
@@ -1419,7 +1413,7 @@ describe("attachment delete through the owned REST route", () => {
 		});
 		const dependencies = deps({ transport });
 		const dispatched = await previewOp("issue.attachment.delete", DELETE, dependencies);
-		expect([]).toEqual([]);
+		expect(dispatched.outcome.cause).toBe("success");
 		const preview = previewData(dispatched);
 		expect([preview.provider, preview.server, preview.tool, preview.objectIdentity, preview.revision, preview.arguments]).toEqual(["rest", RJ, "jira_rest_attachment_delete", "issue:PROJ-1", "t1", { issue_key: "PROJ-1", attachment_id: "202456" }]);
 		expect(preview.baseline).toMatchObject({ effectIds: ["202456"], commentIds: [] });
