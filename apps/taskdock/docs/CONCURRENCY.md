@@ -46,18 +46,18 @@ In multi-agent workflows, several operations can conflict:
 ```bash
 # Protected: Task lock creation
 try_create_task_lock() {
-  # Uses with_repo_flock to ensure only one agent can check/create lock
-  with_repo_flock "task-lock-${task_id}" _try_create_task_lock_impl "$task_id" "$lock_path"
+  # Uses with_flock to ensure only one agent can check/create lock
+  with_flock "task-lock-${task_id}" _try_create_task_lock_impl "$task_id" "$lock_path"
 }
 
 # Protected: Lock heartbeat update
 update_lock_heartbeat() {
-  with_repo_flock "task-lock-${task_id}" _update_lock_heartbeat_impl "$task_id"
+  with_flock "task-lock-${task_id}" _update_lock_heartbeat_impl "$task_id"
 }
 
 # Protected: Lock deletion
 delete_lock() {
-  with_repo_flock "task-lock-${task_id}" _delete_lock_impl "$task_id"
+  with_flock "task-lock-${task_id}" _delete_lock_impl "$task_id"
 }
 ```
 
@@ -74,7 +74,7 @@ delete_lock() {
 ```bash
 # Protected: Config file writes
 cmd_set() {
-  with_repo_flock "config-write" _update_config_impl "$repo_config" "$key" "$value"
+  with_flock "config-write" _update_config_impl "$repo_config" "$key" "$value"
 }
 ```
 
@@ -94,7 +94,7 @@ log_entry() {
   with_flock "log-write" bash -c "echo '$log_entry' >> '$TASKDOCK_LOG_DIR/taskdock.log'"
 
   # Repo logs
-  with_repo_flock "log-write" bash -c "echo '$log_entry' >> '$repo_log_dir/taskdock.log'"
+  with_flock "log-write" bash -c "echo '$log_entry' >> '$repo_log_dir/taskdock.log'"
 }
 ```
 
@@ -109,26 +109,14 @@ log_entry() {
 
 #### `with_flock <resource> <command> [args...]`
 
-Acquire exclusive lock on user-level resource, execute command, release lock.
+Acquire an exclusive lock on a repository resource shared across worktrees, execute the command, and release the lock.
 
 ```bash
 with_flock "my-resource" ./my-script.sh arg1 arg2
 ```
 
 - **Timeout**: 30 seconds (configurable)
-- **Scope**: User-level (~/.taskdock/locks/)
-- **Returns**: Command exit code or EXIT_LOCK_TIMEOUT (70)
-
-#### `with_repo_flock <resource> <command> [args...]`
-
-Acquire exclusive lock on repo-level resource (shared across worktrees).
-
-```bash
-with_repo_flock "task-selection" ./select-task.sh
-```
-
-- **Timeout**: 30 seconds (configurable)
-- **Scope**: Repository-level (.git/taskdock-locks/)
+- **Scope**: Repository-level (the Git common directory's `taskdock-locks/`); outside Git, `${TMPDIR:-/tmp}/taskdock-locks`.
 - **Returns**: Command exit code or EXIT_LOCK_TIMEOUT (70)
 
 #### `with_flock_timeout <timeout> <resource> <command> [args...]`
@@ -265,10 +253,10 @@ The following operations do **not** have flock protection:
 1. **Use repo locks for shared resources**:
 
    ```bash
-   with_repo_flock "my-resource" ./my-command.sh
+   with_flock "my-resource" ./my-command.sh
    ```
 
-2. **Use user locks for local resources**:
+2. **Use distinct resource names for unrelated work**:
 
    ```bash
    with_flock "my-cache" ./update-cache.sh

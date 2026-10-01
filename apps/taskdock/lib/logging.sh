@@ -84,7 +84,7 @@ log_entry() {
   repo_log_dir="$(get_repo_log_dir)"
   if [[ -n "$repo_log_dir" ]]; then
     ensure_log_dir "$repo_log_dir"
-    with_repo_flock "log-write" bash -c "echo '$log_entry' >> '$repo_log_dir/taskdock.log'"
+    with_flock "log-write" bash -c "echo '$log_entry' >> '$repo_log_dir/taskdock.log'"
   fi
 }
 

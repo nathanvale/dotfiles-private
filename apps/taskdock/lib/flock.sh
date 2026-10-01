@@ -117,29 +117,3 @@ cleanup_stale_flocks() {
 
   find "$lock_dir" -name "*.lock" -type d -mmin +60 -exec rm -rf {} + 2>/dev/null || true
 }
-
-# Get repo-specific flock path for shared git resources
-# Alias for get_flock_path since all locks are now repo-local
-get_repo_flock_path() {
-  get_flock_path "$@"
-}
-
-# Acquire lock on repo-specific resource
-# Alias for with_flock since all locks are now repo-local
-with_repo_flock() {
-  with_flock "$@"
-}
-
-# Function to run critical section with lock
-# Usage: critical_section "lock-name" <<'EOF'
-#   # your critical code here
-# EOF
-critical_section() {
-  local lock_name="$1"
-  local code
-
-  # Read code from stdin
-  code=$(cat)
-
-  with_flock "$lock_name" bash -c "$code"
-}

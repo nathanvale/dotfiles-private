@@ -299,5 +299,4 @@ export function main(context: CommandContext = productionContext(process.env, pr
 
 // This file is the process entry on both production paths: the checker's frozen smoke command runs it directly, and the
 // plugin build bundles it into runtime/msb-workflow.js, which bin/msb-workflow execs. The guard runs main() once on each.
-// src/main.ts is an unconditional alternate source entry that imports main from here; no launcher, bundle, or test runs it.
 if (import.meta.main) main()

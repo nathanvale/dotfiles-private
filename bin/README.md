@@ -174,7 +174,7 @@ invocation map and describes the process and qualification boundaries.
 
 ## Non-executable support files
 
-These 44 tracked files have mode 100644. They are listed so a mode change,
+These 37 tracked files have mode 100644. They are listed so a mode change,
 new caller, or retirement does not disappear from the ownership map. A
 non-executable shell file must be sourced, interpreted explicitly, or copied;
 it is not a public basename command.
@@ -183,16 +183,9 @@ it is not a public basename command.
 | --- | --- | --- | --- |
 | unqualified | `bin/check_shell.sh` | `bash bin/check_shell.sh` if manually repaired | Source: self. Mode is non-executable; current caller and test are unverified. |
 | unqualified | `bin/dotfiles/preferences/preferences_backup.sh` | `bash bin/dotfiles/preferences/preferences_backup.sh` | Source: self. Mode is non-executable; current caller and test are unverified. |
-| unqualified | `bin/dotfiles/preferences/preferences_restore.sh` | `bash bin/dotfiles/preferences/preferences_restore.sh BACKUP_DIR` | Source: self. Mode is non-executable; current caller and test are unverified. |
-| helper | `bin/dotfiles/symlinks/symlinks_install.sh` | `bash .../symlinks_install.sh` delegates `--link` | Source owner: `bin/dotfiles/symlinks/symlinks_manage.sh`; covering command: `bin/dotfiles/symlinks/symlinks_manage.sh --link`. Mode is non-executable. |
-| helper | `bin/dotfiles/symlinks/symlinks_uninstall.sh` | `bash .../symlinks_uninstall.sh` delegates `--unlink` | Source owner: `bin/dotfiles/symlinks/symlinks_manage.sh`; covering command: `bin/dotfiles/symlinks/symlinks_manage.sh --unlink`. Mode is non-executable. |
 | unqualified | `bin/kill-all-zombies.sh` | `bash bin/kill-all-zombies.sh` | Source: self. Mode is non-executable; it has no current tracked caller or test verified. |
 | helper | `bin/lib/teams-automation.sh` | sourced by `bin/teams-send` and `bin/teams-reply` | Source owner: the two Teams commands; no dedicated covering test is recorded. |
 | unqualified | `bin/superwhisper-minimize-on-startup.sh` | `bash bin/superwhisper-minimize-on-startup.sh` | Source: self. Mode is non-executable; current tracked caller and test are unverified. |
-| helper | `bin/system/fonts/nerd_fonts_install.sh` | `bash .../nerd_fonts_install.sh` delegates `nerd_fonts_manage.sh --add` | Source owner: `bin/system/fonts/nerd_fonts_manage.sh`; no external covering route is verified. |
-| helper | `bin/system/fonts/nerd_fonts_uninstall.sh` | `bash .../nerd_fonts_uninstall.sh` delegates `nerd_fonts_manage.sh --remove` | Source owner: `bin/system/fonts/nerd_fonts_manage.sh`; no external covering route is verified. |
-| helper | `bin/system/iterm/iterm_preferences_install.sh` | `bash .../iterm_preferences_install.sh` delegates `--import` | Source owner: `bin/system/iterm/iterm_preferences_manage.sh`; no external covering route is verified. |
-| helper | `bin/system/iterm/iterm_preferences_uninstall.sh` | `bash .../iterm_preferences_uninstall.sh` delegates `--delete` | Source owner: `bin/system/iterm/iterm_preferences_manage.sh`; no external covering route is verified. |
 | unqualified | `bin/teams-meeting-helper.sh` | `bash bin/teams-meeting-helper.sh [--help\|--monitor\|--check]` | Source: self. Mode is non-executable; current tracked caller and test are unverified. |
 | helper | `bin/teams/lib/lines.ts` | imported by `bin/teams/teams-scraper.ts` | Source owner: `bin/teams/teams-scraper.ts`; covering command: `bun test bin/test/teams-scraper.test.ts`. |
 | helper | `bin/teams/lib/message.ts` | imported by `bin/teams/teams-scraper.ts` | Source owner: `bin/teams/teams-scraper.ts`; covering command: `bun test bin/test/teams-scraper.test.ts`. |

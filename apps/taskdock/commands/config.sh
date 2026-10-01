@@ -127,7 +127,7 @@ cmd_set() {
   fi
 
   # Update config using yq or simple append (protected by flock)
-  with_repo_flock "config-write" _update_config_impl "$repo_config" "$key" "$value"
+  with_flock "config-write" _update_config_impl "$repo_config" "$key" "$value"
 
   local update_result=$?
   if [[ $update_result -ne 0 ]]; then

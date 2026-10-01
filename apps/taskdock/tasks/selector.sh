@@ -91,7 +91,7 @@ try_create_task_lock() {
 
   # Use flock to protect this critical section
   # This ensures only one agent can check/create the lock at a time
-  with_repo_flock "task-lock-${task_id}" _try_create_task_lock_impl "$task_id" "$lock_path"
+  with_flock "task-lock-${task_id}" _try_create_task_lock_impl "$task_id" "$lock_path"
 }
 
 # Implementation of lock creation (called under flock protection)

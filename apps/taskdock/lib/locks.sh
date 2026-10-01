@@ -84,7 +84,7 @@ get_lock_field() {
 update_lock_heartbeat() {
   local task_id="$1"
 
-  with_repo_flock "task-lock-${task_id}" _update_lock_heartbeat_impl "$task_id"
+  with_flock "task-lock-${task_id}" _update_lock_heartbeat_impl "$task_id"
 }
 
 # Implementation of heartbeat update (called under flock protection)
@@ -162,7 +162,7 @@ list_locks() {
 delete_lock() {
   local task_id="$1"
 
-  with_repo_flock "task-lock-${task_id}" _delete_lock_impl "$task_id"
+  with_flock "task-lock-${task_id}" _delete_lock_impl "$task_id"
 }
 
 # Implementation of lock deletion (called under flock protection)
