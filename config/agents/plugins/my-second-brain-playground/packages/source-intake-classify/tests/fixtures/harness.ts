@@ -19,6 +19,8 @@ export const LANE_ADAPTER = join(import.meta.dir, "lane-adapter.sh")
 /** With SOURCE_INTAKE_TEST_EXHAUST_DESCRIPTORS set, opens descriptors until the process limit before the command runs. */
 export const DESCRIPTOR_LIMIT_PRELOAD = join(SHARED_FIXTURES, "descriptor-limit.ts")
 export const EXHAUST_DESCRIPTORS = { SOURCE_INTAKE_TEST_EXHAUST_DESCRIPTORS: "1" }
+/** Records each `codex exec` spawn from the parent side into SOURCE_INTAKE_TEST_SPAWN_LOG, before the process exists. */
+export const SPAWN_RECORDER_PRELOAD = join(import.meta.dir, "spawn-recorder.ts")
 /** Holds the first stdout write undelivered and marks SOURCE_INTAKE_TEST_READY. */
 export const STDOUT_HOLD_PRELOAD = join(SHARED_FIXTURES, "stdout-hold.ts")
 
@@ -225,7 +227,12 @@ export function execObservations(fixture: Fixture): ExecObservation[] {
 }
 
 export function clearObservations(fixture: Fixture): void {
-	for (const name of readdirSync(fixture.fakeRoot).filter((entry) => /^exec-\d+\.json$/.test(entry))) rmSync(join(fixture.fakeRoot, name))
+	for (const name of readdirSync(fixture.fakeRoot).filter((entry) => /^exec-\d+\.json$/.test(entry) || entry === "exec-started")) rmSync(join(fixture.fakeRoot, name))
+}
+
+/** True when any fake `codex exec` began, even one killed before it recorded an observation. */
+export function execStarted(fixture: Fixture): boolean {
+	return existsSync(join(fixture.fakeRoot, "exec-started"))
 }
 
 /** A valid lane input: the dispatch projection, public owner notes and redacted Bead state. */
